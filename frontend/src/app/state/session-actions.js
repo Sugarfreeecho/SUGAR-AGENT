@@ -6,6 +6,9 @@ function applySessionSnapshot(snapshot) {
         sessionStore.seq = Number(snapshot.seq);
     }
     sessionStore.applySnapshot(sessions, archivedCount);
+    if (sessionStore.archivedLoaded && (snapshot.include_archived || snapshot.includeArchived)) {
+        sessionStore.setArchivedLoaded(sessions);
+    }
     if (snapshot.current_session_id || snapshot.currentSessionId) {
         sessionStore.setCurrentSession(snapshot.current_session_id || snapshot.currentSessionId);
     }

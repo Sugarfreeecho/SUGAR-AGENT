@@ -405,6 +405,7 @@ const sessionListCache = {
 };
 
 let sessionListLoadEpoch = 0;
+let sessionListRenderKey = '';
 let createNewSessionQueue = Promise.resolve();
 let archivedSessionsLoaded = false;
 let archivedSessionsCache = null;
@@ -414,6 +415,57 @@ function syncArchivedSessionStateFromStore() {
     archivedSessionsLoaded = !!sessionStore.archivedLoaded;
     archivedSessionsCache = sessionStore.archivedSessions;
     archivedSessionsCount = sessionStore.archivedCount;
+}
+
+function computeSessionListRenderKey() {
+    const sessions = sessionStore.list();
+    const parts = [
+        'cur=' + String(currentSessionId || ''),
+        'archivedLoaded=' + (sessionStore.archivedLoaded ? '1' : '0'),
+        'archivedCount=' + String(sessionStore.archivedCount || 0),
+    ];
+    for (let i = 0; i < sessions.length; i += 1) {
+        const s = sessions[i];
+        if (!s || !s.id) continue;
+        parts.push([
+            s.id,
+            s.name || '',
+            s.pinned ? 'p' : '',
+            s.archived ? 'a' : '',
+            s.stream_active ? 'r' : '',
+            s.last_activity_at || s.updated_at || '',
+            s.last_user_preview || '',
+            s.subagent_running || 0,
+            s.subagent_pending_continue || 0,
+            s.subagent_can_continue ? 'c' : '',
+        ].join('\u001f'));
+    }
+    const archived = sessionStore.archivedList();
+    for (let j = 0; j < archived.length; j += 1) {
+        const a = archived[j];
+        if (!a || !a.id) continue;
+        parts.push('arch=' + [
+            a.id,
+            a.name || '',
+            a.pinned ? 'p' : '',
+            a.last_activity_at || a.updated_at || '',
+            a.last_user_preview || '',
+        ].join('\u001f'));
+    }
+    return parts.join('\u001e');
+}
+
+function renderSessionListIfChanged(force) {
+    const nextKey = computeSessionListRenderKey();
+    if (!force && nextKey === sessionListRenderKey) {
+        syncSessionListIndicatorClasses();
+        renderSessionTitleFromStore();
+        return;
+    }
+    sessionListRenderKey = nextKey;
+    const nextStreamMap = renderSessionListFromStore();
+    applyServerStreamActiveMap(nextStreamMap);
+    renderSessionTitleFromStore();
 }
 
 // 事件计数缓存，用于乐观更新
@@ -448,6 +500,7 @@ async function fetchSessionsStateSnapshot(opts) {
     if (!snapshot || !Array.isArray(snapshot.sessions)) {
         throw new Error('invalid sessions state response');
     }
+    snapshot.include_archived = !!opts.includeArchived;
     return snapshot;
 }
 
@@ -460,12 +513,12 @@ async function loadSessions(opts) {
         let snapshot = null;
         
         try {
-            snapshot = await fetchSessionsStateSnapshot();
+            snapshot = await fetchSessionsStateSnapshot({ includeArchived: sessionStore.archivedLoaded });
             if (loadEpoch !== sessionListLoadEpoch) return;
             allSessions = Array.isArray(snapshot.sessions) ? snapshot.sessions : [];
         } catch (stateErr) {
             console.error('加载会话状态快照失败，回退旧接口:', stateErr);
-            const response = await fetch('/sessions');
+            const response = await fetch('/sessions' + (sessionStore.archivedLoaded ? '?include_archived=true' : ''));
             const archivedCountHeader = response.headers.get('X-Archived-Count');
             if (archivedCountHeader != null && archivedCountHeader !== '') {
                 const parsedArchivedCount = Number(archivedCountHeader);
@@ -477,13 +530,20 @@ async function loadSessions(opts) {
             const sessions = await response.json();
             if (loadEpoch !== sessionListLoadEpoch) return;
             allSessions = Array.isArray(sessions) ? sessions : [];
-            snapshot = { sessions: allSessions, archived_count: archivedSessionsCount };
+            if (sessionStore.archivedLoaded) {
+                sessionStore.setArchivedLoaded(allSessions);
+                syncArchivedSessionStateFromStore();
+            }
+            snapshot = {
+                sessions: allSessions,
+                archived_count: archivedSessionsCount,
+                include_archived: sessionStore.archivedLoaded,
+            };
         }
         applySessionSnapshot(snapshot || { sessions: allSessions, archived_count: archivedSessionsCount });
         syncArchivedSessionStateFromStore();
         allSessions = sessionStore.list();
         
-        let nextStreamMap = Object.create(null);
         const idSet = new Set();
         for (let si = 0; si < allSessions.length; si += 1) {
             if (allSessions[si] && allSessions[si].id) idSet.add(allSessions[si].id);
@@ -493,9 +553,7 @@ async function loadSessions(opts) {
         });
         persistSessionUnread();
 
-        nextStreamMap = renderSessionListFromStore();
-        applyServerStreamActiveMap(nextStreamMap);
-        renderSessionTitleFromStore();
+        renderSessionListIfChanged(!!opts.forceRender);
         sessionStore.ui.loadingSessions = false;
         return;
 
@@ -771,9 +829,7 @@ async function createNewSessionInner() {
         replayingMessages = false;
         if (data && data.session) {
             syncArchivedSessionStateFromStore();
-            const nextStreamMap = renderSessionListFromStore();
-            applyServerStreamActiveMap(nextStreamMap);
-            renderSessionTitleFromStore();
+            renderSessionListIfChanged(true);
             void loadSessions({ force: true });
         } else {
             sessionListCache.invalidate();
