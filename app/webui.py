@@ -780,7 +780,7 @@ async def truncate_session_events(
     并重建主对话/上下文。使用 query 传参，避免 form 解析失败。
     """
     try:
-        if int(before_index) <= 0:
+        if int(before_index) < 0:
             return JSONResponse(
                 content={"ok": False, "error": "invalid before_index"},
                 status_code=400,

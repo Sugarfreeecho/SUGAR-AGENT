@@ -2302,6 +2302,15 @@ function describeServerSyncFailure(res, fallback) {
     return base + '\\n原因：' + friendly;
 }
 
+function hasPreviousUserMessageBefore(wrap) {
+    var node = wrap ? wrap.previousElementSibling : null;
+    while (node) {
+        if (node.classList && node.classList.contains('msg-wrap--user')) return true;
+        node = node.previousElementSibling;
+    }
+    return false;
+}
+
 async function branchSessionOnServer(beforeIndex) {
     if (!currentSessionId) return { ok: false, error: 'no_session' };
     const url = '/sessions/' + encodeURIComponent(currentSessionId) + '/branch'
@@ -2402,8 +2411,8 @@ function onMessageToolbarClick(wrap, role, act) {
         return;
     }
     if (act === 'delete') {
-        if (!Number.isFinite(before) || before <= 0) {
-            if (Number.isFinite(before) && before <= 0) {
+        if (!Number.isFinite(before) || before < 0 || (before === 0 && hasPreviousUserMessageBefore(wrap))) {
+            if (Number.isFinite(before) && (before < 0 || (before === 0 && hasPreviousUserMessageBefore(wrap)))) {
                 showUiAlert({
                     title: '无法删除该条',
                     message: '消息索引异常，已阻止清空整个会话。请刷新后再试。',
@@ -2445,6 +2454,14 @@ function onMessageToolbarClick(wrap, role, act) {
     if (act === 'rewrite' && role === 'user') {
         const raw = messageRawMarkdown.get(wrap);
         const toFill = raw !== undefined ? String(raw) : plain;
+        if (Number.isFinite(before) && before === 0 && hasPreviousUserMessageBefore(wrap)) {
+            showUiAlert({
+                title: '无法改写该条',
+                message: '消息索引异常，已阻止从错误位置清空会话。请刷新后再试。',
+                variant: 'error'
+            });
+            return;
+        }
         if (!Number.isFinite(before)) {
             const prev = messageInput.value;
             messageInput.value = toFill;
