@@ -243,7 +243,7 @@ function buildAndBindSessionRow(sess, allSessions, nextStreamMap) {
                 const formData = new FormData();
                 formData.append('archived', sess.archived ? 'false' : 'true');
                 await fetch('/sessions/' + encodeURIComponent(sess.id) + '/archive', { method: 'PUT', body: formData });
-                const wasArchivedLoaded = sessionStore.archivedLoaded || shouldAutoLoadArchivedSessions();
+                const wasArchivedLoaded = sessionStore.archivedLoaded;
                 sessionListCache.invalidate();
                 await loadSessions({ skipArchivedRefresh: true });
                 if (wasArchivedLoaded) void loadArchivedSessions({ background: true });
@@ -264,7 +264,7 @@ function buildAndBindSessionRow(sess, allSessions, nextStreamMap) {
                 cancelText: '取消',
             });
             if (!okDel) return;
-            const wasArchivedLoaded = sessionStore.archivedLoaded || shouldAutoLoadArchivedSessions();
+            const wasArchivedLoaded = sessionStore.archivedLoaded;
             await requestInterrupt(sess.id);
             if (isSessionRunning(sess.id)) {
                 const r = getSessionRunState(sess.id);
@@ -280,7 +280,6 @@ function buildAndBindSessionRow(sess, allSessions, nextStreamMap) {
                 sessionStore.setArchivedLoaded((sessionStore.archivedSessions || []).filter(function (s) {
                     return s && s.id !== sess.id;
                 }));
-                persistArchivedSessionsLoaded(true);
                 syncArchivedSessionStateFromStore();
             }
             sessionListCache.invalidate();
@@ -423,27 +422,11 @@ let archivedSessionsLoaded = false;
 let archivedSessionsCache = null;
 let archivedSessionsCount = 0;
 let archivedSessionsLoadEpoch = 0;
-const LS_ARCHIVED_SESSIONS_LOADED = 'myagent-archived-sessions-loaded';
 
 function syncArchivedSessionStateFromStore() {
     archivedSessionsLoaded = !!sessionStore.archivedLoaded;
     archivedSessionsCache = sessionStore.archivedSessions;
     archivedSessionsCount = sessionStore.archivedCount;
-}
-
-function persistArchivedSessionsLoaded(loaded) {
-    try {
-        if (loaded) localStorage.setItem(LS_ARCHIVED_SESSIONS_LOADED, '1');
-        else localStorage.removeItem(LS_ARCHIVED_SESSIONS_LOADED);
-    } catch (e) { /* ignore */ }
-}
-
-function shouldAutoLoadArchivedSessions() {
-    try {
-        return localStorage.getItem(LS_ARCHIVED_SESSIONS_LOADED) === '1';
-    } catch (e) {
-        return false;
-    }
 }
 
 function computeSessionListRenderKey() {
@@ -542,7 +525,6 @@ async function loadArchivedSessions(opts) {
         if (loadEpoch !== archivedSessionsLoadEpoch) return;
         const all = Array.isArray(sessions) ? sessions : [];
         sessionStore.setArchivedLoaded(all);
-        persistArchivedSessionsLoaded(true);
         syncArchivedSessionStateFromStore();
         renderSessionListIfChanged(!!opts.forceRender);
     } catch (err) {
@@ -597,7 +579,7 @@ async function loadSessions(opts) {
 
         renderSessionListIfChanged(!!opts.forceRender);
         sessionStore.ui.loadingSessions = false;
-        if (!opts.skipArchivedRefresh && (sessionStore.archivedLoaded || shouldAutoLoadArchivedSessions())) {
+        if (!opts.skipArchivedRefresh && sessionStore.archivedLoaded) {
             void loadArchivedSessions({ background: true });
         }
         return;
