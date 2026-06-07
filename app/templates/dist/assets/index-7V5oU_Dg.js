@@ -154,7 +154,7 @@ function initUiSettingsControls() {
 }
 initUiSettingsControls();
 
-`,C=`let currentSessionId = null;
+`,I=`let currentSessionId = null;
 const contextTokensBySession = Object.create(null);
 const runningBySession = Object.create(null);
 /** 阻塞连击发送：在写入 runningBySession 之前的 await 空隙内仍会因 isSessionRunning 为假而误判可发 */
@@ -320,7 +320,7 @@ function showUiAlert(opts) {
     }
     return p;
 }
-`,I=`const sessionStore = {
+`,C=`const sessionStore = {
     sessionsById: new Map(),
     order: [],
     archivedCount: 0,
@@ -7459,6 +7459,10 @@ async function loadSessionMessages(sessionId, scrollBehavior, opts) {
                 if (loadToken !== messageLoadEpoch || sessionId !== currentSessionId) return;
             }
         }
+        if (!opts.full && opts.preloadOlderIfShort && pageMeta && pageMeta.has_older && events.length <= 2) {
+            await loadOlderHistoryChunk({ keepTocStable: true });
+            if (loadToken !== messageLoadEpoch || sessionId !== currentSessionId) return;
+        }
         if (historyLoadScrollsToBottom(sessionId, scrollBehavior)) {
             tocScrollBottomOnNextBuild = true;
         }
@@ -7531,7 +7535,7 @@ async function switchSession(sessionId) {
     showLoading();
     setTimeout(async () => {
         if (switchToken !== switchSessionEpoch || sessionId !== currentSessionId) return;
-        await loadSessionMessages(sessionId);
+        await loadSessionMessages(sessionId, undefined, { preloadOlderIfShort: isServerStreamActive(sessionId) });
         if (switchToken !== switchSessionEpoch || sessionId !== currentSessionId) return;
         hideLoading();
         /* loadSessionMessages 内部已发起 rebuildToc()；这里再延后一帧调用 subagent panel
@@ -7784,7 +7788,7 @@ async function attachSessionEventStream(sessionId, opts) {
     try {
         if (runSessionId !== currentSessionId) return;
         if (!opts.skipInitialLoad) {
-            await loadSessionMessages(runSessionId, 'saved-or-bottom');
+            await loadSessionMessages(runSessionId, 'saved-or-bottom', { preloadOlderIfShort: true });
             if (runSessionId !== currentSessionId) return;
         }
         if (!getVisibleChatStream()) ensureVisibleChatStreamSlot();
@@ -8315,7 +8319,7 @@ if (typeof globalThis !== 'undefined') {
     globalThis.toggleTocPanel = toggleTocPanel;
 }
 
-`,A=[x,C,I,w,T,E,L,k,_,P,B];Function(`"use strict";
+`,A=[x,I,C,w,T,E,L,k,_,P,B];Function(`"use strict";
 `+A.join(`
 
 `)+`

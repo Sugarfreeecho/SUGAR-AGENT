@@ -633,6 +633,10 @@ async function loadSessionMessages(sessionId, scrollBehavior, opts) {
                 if (loadToken !== messageLoadEpoch || sessionId !== currentSessionId) return;
             }
         }
+        if (!opts.full && opts.preloadOlderIfShort && pageMeta && pageMeta.has_older && events.length <= 2) {
+            await loadOlderHistoryChunk({ keepTocStable: true });
+            if (loadToken !== messageLoadEpoch || sessionId !== currentSessionId) return;
+        }
         if (historyLoadScrollsToBottom(sessionId, scrollBehavior)) {
             tocScrollBottomOnNextBuild = true;
         }
@@ -705,7 +709,7 @@ async function switchSession(sessionId) {
     showLoading();
     setTimeout(async () => {
         if (switchToken !== switchSessionEpoch || sessionId !== currentSessionId) return;
-        await loadSessionMessages(sessionId);
+        await loadSessionMessages(sessionId, undefined, { preloadOlderIfShort: isServerStreamActive(sessionId) });
         if (switchToken !== switchSessionEpoch || sessionId !== currentSessionId) return;
         hideLoading();
         /* loadSessionMessages 内部已发起 rebuildToc()；这里再延后一帧调用 subagent panel

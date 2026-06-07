@@ -197,7 +197,7 @@ async function attachSessionEventStream(sessionId, opts) {
     try {
         if (runSessionId !== currentSessionId) return;
         if (!opts.skipInitialLoad) {
-            await loadSessionMessages(runSessionId, 'saved-or-bottom');
+            await loadSessionMessages(runSessionId, 'saved-or-bottom', { preloadOlderIfShort: true });
             if (runSessionId !== currentSessionId) return;
         }
         if (!getVisibleChatStream()) ensureVisibleChatStreamSlot();
