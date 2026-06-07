@@ -7440,12 +7440,10 @@ async function refreshSingleSessionRow(sessionId) {
     try {
         const response = await fetch('/sessions/' + encodeURIComponent(sessionId));
         if (!response.ok) {
-            await loadSessions();
             return;
         }
         const sess = await response.json();
         if (!sess || !sess.id) {
-            await loadSessions();
             return;
         }
         sessionStore.upsert(sess);
@@ -7454,7 +7452,7 @@ async function refreshSingleSessionRow(sessionId) {
         const item = sessionsList.querySelector('.session-name[data-id="' + sess.id + '"]');
         const div = item && item.closest('.session-item');
         if (!div) {
-            await loadSessions();
+            renderSessionListIfChanged(false);
             return;
         }
         const nameSpan = div.querySelector('.session-name[data-id]');
@@ -7482,7 +7480,6 @@ async function refreshSingleSessionRow(sessionId) {
         updateSessionTitle();
     } catch (e) {
         console.error('刷新会话摘要失败:', e);
-        void loadSessions();
     }
 }
 
@@ -8179,7 +8176,7 @@ async function startContinueAfterSubagents(sessionId) {
             if (getSessionRunState(runSessionId)) clearSessionRunState(runSessionId);
             setSendButtonState();
             syncSessionListIndicatorClasses();
-            await refreshSingleSessionRow(runSessionId);
+            void refreshSingleSessionRow(runSessionId);
             await refreshContextTokensFromServer(runSessionId);
         }
         hideSubagentContinueBanner();
@@ -8241,7 +8238,7 @@ async function attachSessionEventStream(sessionId, opts) {
         }
         setSendButtonState();
         syncSessionListIndicatorClasses();
-        await refreshSingleSessionRow(runSessionId);
+        void refreshSingleSessionRow(runSessionId);
         await refreshContextTokensFromServer(runSessionId);
         if (runSessionId === currentSessionId) updateSubagentContinueBanner(runSessionId);
     }
@@ -8402,7 +8399,7 @@ async function sendMessage() {
         }
         setSendButtonState();
         syncSessionListIndicatorClasses();
-        await refreshSingleSessionRow(runSessionId);
+        void refreshSingleSessionRow(runSessionId);
         await refreshContextTokensFromServer(runSessionId);
         if (runSessionId === currentSessionId && countRunningSubagentCards() > 0) {
             scheduleSubagentIncrementalSync();

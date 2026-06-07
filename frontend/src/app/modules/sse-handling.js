@@ -190,7 +190,7 @@ async function startContinueAfterSubagents(sessionId) {
             if (getSessionRunState(runSessionId)) clearSessionRunState(runSessionId);
             setSendButtonState();
             syncSessionListIndicatorClasses();
-            await refreshSingleSessionRow(runSessionId);
+            void refreshSingleSessionRow(runSessionId);
             await refreshContextTokensFromServer(runSessionId);
         }
         hideSubagentContinueBanner();
@@ -252,7 +252,7 @@ async function attachSessionEventStream(sessionId, opts) {
         }
         setSendButtonState();
         syncSessionListIndicatorClasses();
-        await refreshSingleSessionRow(runSessionId);
+        void refreshSingleSessionRow(runSessionId);
         await refreshContextTokensFromServer(runSessionId);
         if (runSessionId === currentSessionId) updateSubagentContinueBanner(runSessionId);
     }
@@ -413,7 +413,7 @@ async function sendMessage() {
         }
         setSendButtonState();
         syncSessionListIndicatorClasses();
-        await refreshSingleSessionRow(runSessionId);
+        void refreshSingleSessionRow(runSessionId);
         await refreshContextTokensFromServer(runSessionId);
         if (runSessionId === currentSessionId && countRunningSubagentCards() > 0) {
             scheduleSubagentIncrementalSync();
