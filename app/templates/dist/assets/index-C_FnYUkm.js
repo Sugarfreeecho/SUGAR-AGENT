@@ -324,6 +324,8 @@ function showUiAlert(opts) {
     sessionsById: new Map(),
     order: [],
     archivedCount: 0,
+    archivedLoaded: false,
+    archivedSessions: null,
     streamActiveById: Object.create(null),
 
     applySnapshot(sessions, archivedCount) {
@@ -382,6 +384,24 @@ function showUiAlert(opts) {
         if (Number.isFinite(Number(count)) && Number(count) >= 0) {
             this.archivedCount = Number(count);
         }
+    },
+
+    setArchivedLoaded(sessions) {
+        const list = Array.isArray(sessions)
+            ? sessions.filter(function (s) { return s && s.id && !!s.archived; })
+            : [];
+        this.archivedLoaded = true;
+        this.archivedSessions = list;
+        this.archivedCount = list.length;
+    },
+
+    clearArchivedLoaded() {
+        this.archivedLoaded = false;
+        this.archivedSessions = null;
+    },
+
+    archivedList() {
+        return this.archivedLoaded && Array.isArray(this.archivedSessions) ? this.archivedSessions : [];
     },
 
     isStreamActive(sessionId) {
@@ -7070,8 +7090,8 @@ function buildAndBindSessionRow(sess, allSessions, nextStreamMap) {
                 formData.append('archived', sess.archived ? 'false' : 'true');
                 await fetch('/sessions/' + encodeURIComponent(sess.id) + '/archive', { method: 'PUT', body: formData });
                 sessionListCache.invalidate();
-                archivedSessionsLoaded = false;
-                archivedSessionsCache = null;
+                sessionStore.clearArchivedLoaded();
+                syncArchivedSessionStateFromStore();
                 await loadSessions();
             } catch (err) { console.error('归档失败', err); }
         });
@@ -7238,6 +7258,12 @@ let archivedSessionsLoaded = false;
 let archivedSessionsCache = null;
 let archivedSessionsCount = 0;
 
+function syncArchivedSessionStateFromStore() {
+    archivedSessionsLoaded = !!sessionStore.archivedLoaded;
+    archivedSessionsCache = sessionStore.archivedSessions;
+    archivedSessionsCount = sessionStore.archivedCount;
+}
+
 // 事件计数缓存，用于乐观更新
 const uiEventCountCache = {
     cache: new Map(),
@@ -7279,8 +7305,8 @@ async function loadSessions(opts) {
             if (archivedCountHeader != null && archivedCountHeader !== '') {
                 const parsedArchivedCount = Number(archivedCountHeader);
                 if (Number.isFinite(parsedArchivedCount) && parsedArchivedCount >= 0) {
-                    archivedSessionsCount = parsedArchivedCount;
                     sessionStore.setArchivedCount(parsedArchivedCount);
+                    syncArchivedSessionStateFromStore();
                 }
             }
             const sessions = await response.json();
@@ -7291,6 +7317,7 @@ async function loadSessions(opts) {
             sessionListCache.set(allSessions);
         }
         sessionStore.applySnapshot(allSessions, archivedSessionsCount);
+        syncArchivedSessionStateFromStore();
         allSessions = sessionStore.list();
         
         const nextStreamMap = Object.create(null);
@@ -7305,7 +7332,7 @@ async function loadSessions(opts) {
 
         const pinnedList = [];
         const normalList = [];
-        const archivedList = archivedSessionsLoaded && Array.isArray(archivedSessionsCache) ? archivedSessionsCache : [];
+        const archivedList = sessionStore.archivedList();
         for (let i = 0; i < allSessions.length; i += 1) {
             const s = allSessions[i];
             if (!s || !s.id) continue;
@@ -7359,9 +7386,8 @@ async function loadSessions(opts) {
                         const response = await fetch('/sessions?include_archived=true');
                         const sessions = await response.json();
                         const all = Array.isArray(sessions) ? sessions : [];
-                        archivedSessionsLoaded = true;
-                        archivedSessionsCache = all.filter(function (s) { return s && s.id && !!s.archived; });
-                        archivedSessionsCount = archivedSessionsCache.length;
+                        sessionStore.setArchivedLoaded(all);
+                        syncArchivedSessionStateFromStore();
                         sessionListCache.set(all.filter(function (s) { return s && s.id && !s.archived; }));
                         await loadSessions();
                     } catch (err) {
@@ -8080,7 +8106,7 @@ sendBtn.addEventListener('click', function () {
     });
 })();
 initUiHoverTips(document);
-`,B=`newSessionBtn.addEventListener('click', async () => { await createNewSession(); });
+`,A=`newSessionBtn.addEventListener('click', async () => { await createNewSession(); });
 
 function initSidebarSash() {
     const side = document.getElementById('sidebar');
@@ -8319,8 +8345,8 @@ if (typeof globalThis !== 'undefined') {
     globalThis.toggleTocPanel = toggleTocPanel;
 }
 
-`,A=[x,I,C,w,T,E,L,k,_,P,B];Function(`"use strict";
-`+A.join(`
+`,B=[x,I,C,w,T,E,L,k,_,P,A];Function(`"use strict";
+`+B.join(`
 
 `)+`
 //# sourceURL=myagent-ui.js`)();

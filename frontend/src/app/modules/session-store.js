@@ -2,6 +2,8 @@ const sessionStore = {
     sessionsById: new Map(),
     order: [],
     archivedCount: 0,
+    archivedLoaded: false,
+    archivedSessions: null,
     streamActiveById: Object.create(null),
 
     applySnapshot(sessions, archivedCount) {
@@ -60,6 +62,24 @@ const sessionStore = {
         if (Number.isFinite(Number(count)) && Number(count) >= 0) {
             this.archivedCount = Number(count);
         }
+    },
+
+    setArchivedLoaded(sessions) {
+        const list = Array.isArray(sessions)
+            ? sessions.filter(function (s) { return s && s.id && !!s.archived; })
+            : [];
+        this.archivedLoaded = true;
+        this.archivedSessions = list;
+        this.archivedCount = list.length;
+    },
+
+    clearArchivedLoaded() {
+        this.archivedLoaded = false;
+        this.archivedSessions = null;
+    },
+
+    archivedList() {
+        return this.archivedLoaded && Array.isArray(this.archivedSessions) ? this.archivedSessions : [];
     },
 
     isStreamActive(sessionId) {

@@ -244,8 +244,8 @@ function buildAndBindSessionRow(sess, allSessions, nextStreamMap) {
                 formData.append('archived', sess.archived ? 'false' : 'true');
                 await fetch('/sessions/' + encodeURIComponent(sess.id) + '/archive', { method: 'PUT', body: formData });
                 sessionListCache.invalidate();
-                archivedSessionsLoaded = false;
-                archivedSessionsCache = null;
+                sessionStore.clearArchivedLoaded();
+                syncArchivedSessionStateFromStore();
                 await loadSessions();
             } catch (err) { console.error('归档失败', err); }
         });
@@ -412,6 +412,12 @@ let archivedSessionsLoaded = false;
 let archivedSessionsCache = null;
 let archivedSessionsCount = 0;
 
+function syncArchivedSessionStateFromStore() {
+    archivedSessionsLoaded = !!sessionStore.archivedLoaded;
+    archivedSessionsCache = sessionStore.archivedSessions;
+    archivedSessionsCount = sessionStore.archivedCount;
+}
+
 // 事件计数缓存，用于乐观更新
 const uiEventCountCache = {
     cache: new Map(),
@@ -453,8 +459,8 @@ async function loadSessions(opts) {
             if (archivedCountHeader != null && archivedCountHeader !== '') {
                 const parsedArchivedCount = Number(archivedCountHeader);
                 if (Number.isFinite(parsedArchivedCount) && parsedArchivedCount >= 0) {
-                    archivedSessionsCount = parsedArchivedCount;
                     sessionStore.setArchivedCount(parsedArchivedCount);
+                    syncArchivedSessionStateFromStore();
                 }
             }
             const sessions = await response.json();
@@ -465,6 +471,7 @@ async function loadSessions(opts) {
             sessionListCache.set(allSessions);
         }
         sessionStore.applySnapshot(allSessions, archivedSessionsCount);
+        syncArchivedSessionStateFromStore();
         allSessions = sessionStore.list();
         
         const nextStreamMap = Object.create(null);
@@ -479,7 +486,7 @@ async function loadSessions(opts) {
 
         const pinnedList = [];
         const normalList = [];
-        const archivedList = archivedSessionsLoaded && Array.isArray(archivedSessionsCache) ? archivedSessionsCache : [];
+        const archivedList = sessionStore.archivedList();
         for (let i = 0; i < allSessions.length; i += 1) {
             const s = allSessions[i];
             if (!s || !s.id) continue;
@@ -533,9 +540,8 @@ async function loadSessions(opts) {
                         const response = await fetch('/sessions?include_archived=true');
                         const sessions = await response.json();
                         const all = Array.isArray(sessions) ? sessions : [];
-                        archivedSessionsLoaded = true;
-                        archivedSessionsCache = all.filter(function (s) { return s && s.id && !!s.archived; });
-                        archivedSessionsCount = archivedSessionsCache.length;
+                        sessionStore.setArchivedLoaded(all);
+                        syncArchivedSessionStateFromStore();
                         sessionListCache.set(all.filter(function (s) { return s && s.id && !s.archived; }));
                         await loadSessions();
                     } catch (err) {
