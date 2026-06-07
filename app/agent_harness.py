@@ -2115,12 +2115,11 @@ class SessionManager:
         if ok is False:
             status = "interrupted" if "interrupt" in error.lower() else "failed"
             return {"status": status, "ok": False, "error": error or preview}
-        if ok is True or preview:
-            return {"status": "completed", "ok": True, "error": ""}
         if preview and re.search(r"(?i)^error:|失败|异常|interrupt", preview):
             return {"status": "failed", "ok": False, "error": preview}
         if bool(meta.get("interrupt_requested")):
             return {"status": "interrupted", "ok": False, "error": "interrupted"}
+        has_final = False
         try:
             events = self._load_ui_events(cid)
             has_final = any(
@@ -2135,8 +2134,14 @@ class SessionManager:
             )
             if has_activity and not has_final:
                 return {"status": "interrupted", "ok": False, "error": "interrupted"}
+            if ok is True and not has_final and not preview:
+                return {"status": "failed", "ok": False, "error": "missing final"}
         except Exception:
             pass
+        if preview and not has_final:
+            return {"status": "failed", "ok": False, "error": preview}
+        if ok is True and has_final:
+            return {"status": "completed", "ok": True, "error": ""}
         return {"status": "completed", "ok": True, "error": ""}
 
     def _resolve_subagent_status_lite(
@@ -2157,10 +2162,12 @@ class SessionManager:
         if bool(meta.get("interrupt_requested")):
             return {"status": "interrupted", "ok": False, "error": error or "interrupted"}
         preview = str(result_preview or "").strip()
-        if ok_raw is True or (preview and has_final):
+        if ok_raw is True and (has_final or preview):
             return {"status": "completed", "ok": True, "error": ""}
         if preview and not has_final:
             return {"status": "failed", "ok": False, "error": preview}
+        if ok_raw is True and not has_final:
+            return {"status": "failed", "ok": False, "error": "missing final"}
         return {"status": "failed", "ok": False, "error": "missing final"}
 
     def list_subagent_descendants(self, root_session_id: str) -> List[str]:
@@ -2290,6 +2297,7 @@ class SessionManager:
                     "ok": status_info.get("ok"),
                     "status": status_info.get("status"),
                     "error": status_info.get("error"),
+                    "has_final": has_final,
                     "result_preview": result_preview,
                     "dialogue_turns": dialogue_turns,
                     "session_metrics": session_metrics,

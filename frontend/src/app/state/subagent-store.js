@@ -72,10 +72,13 @@ const subagentStore = {
             st.runningIds.add(id);
             st.pendingResultIds.delete(id);
         } else if (event.type === 'subagent_finish' || event.type === 'subagent_finished') {
+            const preview = String(event.result_preview || prev.result_preview || '').trim();
+            const hasFinal = Object.prototype.hasOwnProperty.call(event, 'has_final') ? !!event.has_final : !!preview;
             next.running = false;
-            next.status = event.ok === false ? 'failed' : 'finished';
+            next.has_final = hasFinal;
+            next.status = (event.ok === false || !hasFinal) ? 'failed' : 'finished';
             if (event.result_preview) next.result_preview = String(event.result_preview);
-            if (event.error) next.error = String(event.error);
+            if (event.error || !hasFinal) next.error = String(event.error || 'missing final');
             st.runningIds.delete(id);
             st.pendingResultIds.add(id);
         }

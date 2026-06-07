@@ -866,10 +866,13 @@ function applyMessageEvent(sessionId, event, eventIndex, source) {
             st.runningIds.add(id);
             st.pendingResultIds.delete(id);
         } else if (event.type === 'subagent_finish' || event.type === 'subagent_finished') {
+            const preview = String(event.result_preview || prev.result_preview || '').trim();
+            const hasFinal = Object.prototype.hasOwnProperty.call(event, 'has_final') ? !!event.has_final : !!preview;
             next.running = false;
-            next.status = event.ok === false ? 'failed' : 'finished';
+            next.has_final = hasFinal;
+            next.status = (event.ok === false || !hasFinal) ? 'failed' : 'finished';
             if (event.result_preview) next.result_preview = String(event.result_preview);
-            if (event.error) next.error = String(event.error);
+            if (event.error || !hasFinal) next.error = String(event.error || 'missing final');
             st.runningIds.delete(id);
             st.pendingResultIds.add(id);
         }
@@ -5963,6 +5966,7 @@ function applySubagentNodeMetaToCard(card, n) {
     card.dataset.subagentRunning = running ? '1' : '0';
     card.dataset.description = String(n.description || id.slice(0, 8) || '');
     if (n.result_preview) card.dataset.resultPreview = String(n.result_preview);
+    if (Object.prototype.hasOwnProperty.call(n, 'has_final')) card.dataset.hasFinal = n.has_final ? '1' : '0';
     if (n.session_metrics) applySubagentSessionMetricsToCard(card, n.session_metrics);
     var st = subagentStatusFromNode(n);
     var dot = card.querySelector('.subagent-status-dot');
@@ -6129,11 +6133,15 @@ function upsertSubagentCardFromStartEvent(event) {
 
 function applySubagentFinishToCard(card, event) {
     if (!card || !event) return;
-    markSubagentCardCompleted(card, event.ok !== false, String(event.error || '').trim());
     card.dataset.subagentRunning = '0';
     var aidFin = card.getAttribute('data-agent-id') || '';
     var preview = String(event.result_preview || card.dataset.resultPreview || '').trim();
     if (preview) card.dataset.resultPreview = preview;
+    if (Object.prototype.hasOwnProperty.call(event, 'has_final')) card.dataset.hasFinal = event.has_final ? '1' : '0';
+    var hasFinal = card.dataset.hasFinal === '1'
+        || !!card.querySelector('.subagent-turn-final-slot .msg-wrap--assistant, .message.assistant');
+    var ok = event.ok !== false && (hasFinal || !!preview);
+    markSubagentCardCompleted(card, ok, ok ? '' : String(event.error || 'missing final').trim());
     var body = card.querySelector('.subagent-card-body');
     if (currentSessionId && aidFin) forgetSubagentBodyCache(currentSessionId, aidFin);
     if (body && aidFin) {
@@ -6295,6 +6303,7 @@ function appendSubagentStreamEvent(agentId, event, eventIndex) {
         var ctxSummary = getSubagentCardStreamCtx(body, card, agentId);
         dispatchSubagentCardEvent(ctxSummary, card, event, eventIndex, agentId);
         if (t === 'final') {
+            card.dataset.hasFinal = '1';
             finalizeLlmStreamChunks(ctxSummary);
             markSubagentCardCompleted(card, true);
             refreshFeedChunksInCtx(ctxSummary);
@@ -6905,11 +6914,14 @@ function bindSubagentGridActions(grid, sessionId) {
 
 function subagentStatusFromNode(n) {
     var taskStatus = String((n && (n.task_status || n.status)) || '').toLowerCase();
+    var hasPreview = !!String((n && n.result_preview) || '').trim();
+    var hasFinal = !n || !Object.prototype.hasOwnProperty.call(n, 'has_final') ? hasPreview : !!n.has_final;
     if (n && n.running) {
         return { label: n.background ? '后台运行' : '运行中', dotCls: 'is-running' };
     }
     if (taskStatus === 'running') return { label: '后台运行', dotCls: 'is-running' };
-    if (taskStatus === 'completed') return { label: '完成', dotCls: 'is-done' };
+    if (taskStatus === 'completed' && (hasFinal || hasPreview || (n && n.virtual_task))) return { label: '完成', dotCls: 'is-done' };
+    if (taskStatus === 'completed') return { label: '缺少 final 结果', dotCls: 'is-error' };
     if (taskStatus === 'failed') return { label: '失败', dotCls: 'is-error' };
     if (taskStatus === 'interrupted') return { label: '已中断', dotCls: 'is-error' };
     if (n && n.ok === false) {
@@ -6965,6 +6977,7 @@ function buildSubagentGridHtml(flat) {
         if (n.executor_model) html += ' data-executor-model="' + escapeHtml(String(n.executor_model)) + '"';
         if (n.output_file) html += ' data-output-file="1"';
         if (n.task_status || n.status) html += ' data-task-status="' + escapeHtml(String(n.task_status || n.status)) + '"';
+        if (Object.prototype.hasOwnProperty.call(n, 'has_final')) html += ' data-has-final="' + (n.has_final ? '1' : '0') + '"';
         html += ' data-subagent-running="' + (running ? '1' : '0') + '"';
         html += ' data-description="' + escapeHtml(String(name || '')) + '"';
         html += '>';
@@ -7596,7 +7609,24 @@ function buildAndBindSessionRow(sess, allSessions, nextStreamMap) {
             });
             if (!okDel) return;
             const wasArchivedLoaded = sessionStore.archivedLoaded;
-            await requestInterrupt(sess.id);
+            const deletedSessionId = String(sess.id || '');
+            const nextSession = sessionStore.list().find(function (s) {
+                return s && s.id && String(s.id) !== deletedSessionId && !s.archived;
+            }) || null;
+            sessionStore.remove(deletedSessionId);
+            if (wasArchivedLoaded) {
+                sessionStore.setArchivedLoaded((sessionStore.archivedSessions || []).filter(function (s) {
+                    return s && String(s.id) !== deletedSessionId;
+                }));
+                syncArchivedSessionStateFromStore();
+            }
+            renderSessionListIfChanged(true);
+            if (div && div.parentNode) div.remove();
+            sessionUnreadComplete.delete(deletedSessionId);
+            persistSessionUnread();
+            delete draftBySession[deletedSessionId];
+            delete lastUserMessageBySession[deletedSessionId];
+            delete contextTokensBySession[deletedSessionId];
             if (isSessionRunning(sess.id)) {
                 const r = getSessionRunState(sess.id);
                 try { if (r && r.controller) r.controller.abort(); } catch (err) { /* ignore */ }
@@ -7605,28 +7635,22 @@ function buildAndBindSessionRow(sess, allSessions, nextStreamMap) {
                 setSendButtonState();
                 syncSessionListIndicatorClasses();
             }
-            await fetch('/sessions/' + sess.id, { method: 'DELETE' });
-            sessionStore.remove(sess.id);
-            if (wasArchivedLoaded) {
-                sessionStore.setArchivedLoaded((sessionStore.archivedSessions || []).filter(function (s) {
-                    return s && s.id !== sess.id;
-                }));
-                syncArchivedSessionStateFromStore();
-            }
             sessionListCache.invalidate();
-            if (div && div.parentNode) div.remove();
-            sessionUnreadComplete.delete(sess.id);
-            persistSessionUnread();
-            delete draftBySession[sess.id];
-            delete lastUserMessageBySession[sess.id];
-            delete contextTokensBySession[sess.id];
-            if (currentSessionId === sess.id) {
-                const remaining = allSessions.filter(function (s) { return s && s.id && s.id !== sess.id; });
-                if (remaining.length > 0) await switchSession(remaining[0].id);
+            if (currentSessionId === deletedSessionId) {
+                if (nextSession) await switchSession(nextSession.id);
                 else await createNewSession();
-            } else if (div && div.parentNode) div.remove();
+            }
+            void requestInterrupt(deletedSessionId);
+            void fetch('/sessions/' + encodeURIComponent(deletedSessionId), { method: 'DELETE' })
+                .then(function (resp) {
+                    if (!resp.ok) throw new Error('delete failed: ' + resp.status);
+                })
+                .catch(function (err) {
+                    console.error('删除会话失败:', err);
+                    void loadSessions({ force: true, skipArchivedRefresh: true });
+                    if (wasArchivedLoaded) void loadArchivedSessions({ background: true });
+                });
             if (wasArchivedLoaded) {
-                renderSessionListIfChanged(true);
                 void loadArchivedSessions({ background: true });
             }
         });

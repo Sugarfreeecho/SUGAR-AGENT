@@ -841,8 +841,9 @@ async def _execute_subagent_run(
         )
         interrupted = _is_subagent_user_interrupt_final(final_response)
         limit_reached = bool(state_out.get("react_limit_reached"))
-        pending_status = "interrupted" if interrupted else ("failed" if limit_reached else "completed")
-        subagent_error = "max_react_iter" if limit_reached else ("interrupted" if interrupted else "")
+        missing_final = not bool(final_response)
+        pending_status = "interrupted" if interrupted else ("failed" if (limit_reached or missing_final) else "completed")
+        subagent_error = "max_react_iter" if limit_reached else ("interrupted" if interrupted else ("missing_final" if missing_final else ""))
         result_text = _format_subagent_result(
             child_session_id=child_id,
             description=description,
@@ -859,7 +860,7 @@ async def _execute_subagent_run(
             output_file=output_file,
             write_pending=background,
         )
-        if interrupted or limit_reached:
+        if interrupted or limit_reached or missing_final:
             session_manager.patch_subagent_metadata(
                 child_id, {"subagent_ok": False, "subagent_error": subagent_error}
             )
@@ -873,7 +874,7 @@ async def _execute_subagent_run(
                     "type": "subagent_finish",
                     "agent_id": child_id,
                     "description": description,
-                    "ok": not (interrupted or limit_reached),
+                    "ok": not (interrupted or limit_reached or missing_final),
                     "subagent_type": subagent_type,
                     "result_preview": final_response[:500],
                     **({"error": subagent_error} if subagent_error else {}),
@@ -1160,6 +1161,7 @@ async def _run_best_of_n(
                             "description": description,
                             "ok": True,
                             "subagent_type": "best-of-n-runner",
+                            "result_preview": combined[:500],
                         }
                     )
                     if hasattr(r, "__await__"):

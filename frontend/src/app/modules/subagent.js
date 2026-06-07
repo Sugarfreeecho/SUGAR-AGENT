@@ -1016,6 +1016,7 @@ function applySubagentNodeMetaToCard(card, n) {
     card.dataset.subagentRunning = running ? '1' : '0';
     card.dataset.description = String(n.description || id.slice(0, 8) || '');
     if (n.result_preview) card.dataset.resultPreview = String(n.result_preview);
+    if (Object.prototype.hasOwnProperty.call(n, 'has_final')) card.dataset.hasFinal = n.has_final ? '1' : '0';
     if (n.session_metrics) applySubagentSessionMetricsToCard(card, n.session_metrics);
     var st = subagentStatusFromNode(n);
     var dot = card.querySelector('.subagent-status-dot');
@@ -1182,11 +1183,15 @@ function upsertSubagentCardFromStartEvent(event) {
 
 function applySubagentFinishToCard(card, event) {
     if (!card || !event) return;
-    markSubagentCardCompleted(card, event.ok !== false, String(event.error || '').trim());
     card.dataset.subagentRunning = '0';
     var aidFin = card.getAttribute('data-agent-id') || '';
     var preview = String(event.result_preview || card.dataset.resultPreview || '').trim();
     if (preview) card.dataset.resultPreview = preview;
+    if (Object.prototype.hasOwnProperty.call(event, 'has_final')) card.dataset.hasFinal = event.has_final ? '1' : '0';
+    var hasFinal = card.dataset.hasFinal === '1'
+        || !!card.querySelector('.subagent-turn-final-slot .msg-wrap--assistant, .message.assistant');
+    var ok = event.ok !== false && (hasFinal || !!preview);
+    markSubagentCardCompleted(card, ok, ok ? '' : String(event.error || 'missing final').trim());
     var body = card.querySelector('.subagent-card-body');
     if (currentSessionId && aidFin) forgetSubagentBodyCache(currentSessionId, aidFin);
     if (body && aidFin) {
@@ -1348,6 +1353,7 @@ function appendSubagentStreamEvent(agentId, event, eventIndex) {
         var ctxSummary = getSubagentCardStreamCtx(body, card, agentId);
         dispatchSubagentCardEvent(ctxSummary, card, event, eventIndex, agentId);
         if (t === 'final') {
+            card.dataset.hasFinal = '1';
             finalizeLlmStreamChunks(ctxSummary);
             markSubagentCardCompleted(card, true);
             refreshFeedChunksInCtx(ctxSummary);
@@ -1958,11 +1964,14 @@ function bindSubagentGridActions(grid, sessionId) {
 
 function subagentStatusFromNode(n) {
     var taskStatus = String((n && (n.task_status || n.status)) || '').toLowerCase();
+    var hasPreview = !!String((n && n.result_preview) || '').trim();
+    var hasFinal = !n || !Object.prototype.hasOwnProperty.call(n, 'has_final') ? hasPreview : !!n.has_final;
     if (n && n.running) {
         return { label: n.background ? '后台运行' : '运行中', dotCls: 'is-running' };
     }
     if (taskStatus === 'running') return { label: '后台运行', dotCls: 'is-running' };
-    if (taskStatus === 'completed') return { label: '完成', dotCls: 'is-done' };
+    if (taskStatus === 'completed' && (hasFinal || hasPreview || (n && n.virtual_task))) return { label: '完成', dotCls: 'is-done' };
+    if (taskStatus === 'completed') return { label: '缺少 final 结果', dotCls: 'is-error' };
     if (taskStatus === 'failed') return { label: '失败', dotCls: 'is-error' };
     if (taskStatus === 'interrupted') return { label: '已中断', dotCls: 'is-error' };
     if (n && n.ok === false) {
@@ -2018,6 +2027,7 @@ function buildSubagentGridHtml(flat) {
         if (n.executor_model) html += ' data-executor-model="' + escapeHtml(String(n.executor_model)) + '"';
         if (n.output_file) html += ' data-output-file="1"';
         if (n.task_status || n.status) html += ' data-task-status="' + escapeHtml(String(n.task_status || n.status)) + '"';
+        if (Object.prototype.hasOwnProperty.call(n, 'has_final')) html += ' data-has-final="' + (n.has_final ? '1' : '0') + '"';
         html += ' data-subagent-running="' + (running ? '1' : '0') + '"';
         html += ' data-description="' + escapeHtml(String(name || '')) + '"';
         html += '>';

@@ -277,7 +277,24 @@ function buildAndBindSessionRow(sess, allSessions, nextStreamMap) {
             });
             if (!okDel) return;
             const wasArchivedLoaded = sessionStore.archivedLoaded;
-            await requestInterrupt(sess.id);
+            const deletedSessionId = String(sess.id || '');
+            const nextSession = sessionStore.list().find(function (s) {
+                return s && s.id && String(s.id) !== deletedSessionId && !s.archived;
+            }) || null;
+            sessionStore.remove(deletedSessionId);
+            if (wasArchivedLoaded) {
+                sessionStore.setArchivedLoaded((sessionStore.archivedSessions || []).filter(function (s) {
+                    return s && String(s.id) !== deletedSessionId;
+                }));
+                syncArchivedSessionStateFromStore();
+            }
+            renderSessionListIfChanged(true);
+            if (div && div.parentNode) div.remove();
+            sessionUnreadComplete.delete(deletedSessionId);
+            persistSessionUnread();
+            delete draftBySession[deletedSessionId];
+            delete lastUserMessageBySession[deletedSessionId];
+            delete contextTokensBySession[deletedSessionId];
             if (isSessionRunning(sess.id)) {
                 const r = getSessionRunState(sess.id);
                 try { if (r && r.controller) r.controller.abort(); } catch (err) { /* ignore */ }
@@ -286,28 +303,22 @@ function buildAndBindSessionRow(sess, allSessions, nextStreamMap) {
                 setSendButtonState();
                 syncSessionListIndicatorClasses();
             }
-            await fetch('/sessions/' + sess.id, { method: 'DELETE' });
-            sessionStore.remove(sess.id);
-            if (wasArchivedLoaded) {
-                sessionStore.setArchivedLoaded((sessionStore.archivedSessions || []).filter(function (s) {
-                    return s && s.id !== sess.id;
-                }));
-                syncArchivedSessionStateFromStore();
-            }
             sessionListCache.invalidate();
-            if (div && div.parentNode) div.remove();
-            sessionUnreadComplete.delete(sess.id);
-            persistSessionUnread();
-            delete draftBySession[sess.id];
-            delete lastUserMessageBySession[sess.id];
-            delete contextTokensBySession[sess.id];
-            if (currentSessionId === sess.id) {
-                const remaining = allSessions.filter(function (s) { return s && s.id && s.id !== sess.id; });
-                if (remaining.length > 0) await switchSession(remaining[0].id);
+            if (currentSessionId === deletedSessionId) {
+                if (nextSession) await switchSession(nextSession.id);
                 else await createNewSession();
-            } else if (div && div.parentNode) div.remove();
+            }
+            void requestInterrupt(deletedSessionId);
+            void fetch('/sessions/' + encodeURIComponent(deletedSessionId), { method: 'DELETE' })
+                .then(function (resp) {
+                    if (!resp.ok) throw new Error('delete failed: ' + resp.status);
+                })
+                .catch(function (err) {
+                    console.error('删除会话失败:', err);
+                    void loadSessions({ force: true, skipArchivedRefresh: true });
+                    if (wasArchivedLoaded) void loadArchivedSessions({ background: true });
+                });
             if (wasArchivedLoaded) {
-                renderSessionListIfChanged(true);
                 void loadArchivedSessions({ background: true });
             }
         });
