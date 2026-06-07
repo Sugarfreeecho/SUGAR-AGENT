@@ -481,8 +481,19 @@ async def delete_subagent(parent_id: str, child_id: str):
 @fastapi_app.post("/sessions")
 async def create_session():
     # get_or_create_session 现在返回6个值，我们只需要 session_id
-    session_id, _, _, _, _, _ = session_manager.get_or_create_session()
-    session = session_manager.get_session_summary(session_id) or {"id": session_id}
+    session_id, _, _, _, _, metadata = session_manager.get_or_create_session()
+    session = {
+        "id": session_id,
+        "name": (metadata or {}).get("name") or "新会话",
+        "created_at": (metadata or {}).get("created_at"),
+        "updated_at": (metadata or {}).get("updated_at") or (metadata or {}).get("created_at"),
+        "last_activity_at": (metadata or {}).get("updated_at") or (metadata or {}).get("created_at"),
+        "archived": bool((metadata or {}).get("archived", False)),
+        "pinned": bool((metadata or {}).get("pinned", False)),
+        "pinned_at": (metadata or {}).get("pinned_at") if (metadata or {}).get("pinned") else None,
+        "last_user_preview": "",
+        "stream_active": False,
+    }
     return JSONResponse(content={"session_id": session_id, "session": session})
 
 @fastapi_app.delete("/sessions/{session_id}")

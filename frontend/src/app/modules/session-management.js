@@ -228,10 +228,16 @@ function buildAndBindSessionRow(sess, allSessions, nextStreamMap) {
             closeAllSessionMenus();
             try {
                 const formData = new FormData();
-                formData.append('pinned', sess.pinned ? 'false' : 'true');
-                await fetch('/sessions/' + encodeURIComponent(sess.id) + '/pin', { method: 'PUT', body: formData });
+                const nextPinned = !sess.pinned;
+                const previous = applyOptimisticSessionUpdate(sess.id, { pinned: nextPinned });
+                formData.append('pinned', nextPinned ? 'true' : 'false');
+                const response = await fetch('/sessions/' + encodeURIComponent(sess.id) + '/pin', { method: 'PUT', body: formData });
+                if (!response.ok) {
+                    if (previous) applyOptimisticSessionUpdate(sess.id, previous);
+                    throw new Error('pin failed: ' + response.status);
+                }
                 sessionListCache.invalidate();
-                await loadSessions();
+                void loadSessions({ force: true });
             } catch (err) { console.error('置顶失败', err); }
         });
     }
@@ -241,11 +247,17 @@ function buildAndBindSessionRow(sess, allSessions, nextStreamMap) {
             closeAllSessionMenus();
             try {
                 const formData = new FormData();
-                formData.append('archived', sess.archived ? 'false' : 'true');
-                await fetch('/sessions/' + encodeURIComponent(sess.id) + '/archive', { method: 'PUT', body: formData });
+                const nextArchived = !sess.archived;
+                const previous = applyOptimisticSessionUpdate(sess.id, { archived: nextArchived });
+                formData.append('archived', nextArchived ? 'true' : 'false');
+                const response = await fetch('/sessions/' + encodeURIComponent(sess.id) + '/archive', { method: 'PUT', body: formData });
+                if (!response.ok) {
+                    if (previous) applyOptimisticSessionUpdate(sess.id, previous);
+                    throw new Error('archive failed: ' + response.status);
+                }
                 const wasArchivedLoaded = sessionStore.archivedLoaded;
                 sessionListCache.invalidate();
-                await loadSessions({ skipArchivedRefresh: true });
+                void loadSessions({ force: true, skipArchivedRefresh: true });
                 if (wasArchivedLoaded) void loadArchivedSessions({ background: true });
             } catch (err) { console.error('归档失败', err); }
         });
@@ -478,6 +490,30 @@ function renderSessionListIfChanged(force) {
     const nextStreamMap = renderSessionListFromStore();
     applyServerStreamActiveMap(nextStreamMap);
     renderSessionTitleFromStore();
+}
+
+function applyOptimisticSessionUpdate(sessionId, patch) {
+    const sid = String(sessionId || '');
+    const current = sessionStore.get(sid);
+    if (!current) return null;
+    const prev = Object.assign({}, current);
+    const next = Object.assign({}, current, patch || {});
+    if (Object.prototype.hasOwnProperty.call(patch || {}, 'pinned')) {
+        next.pinned_at = next.pinned ? (next.pinned_at || new Date().toISOString()) : null;
+    }
+    sessionStore.upsert(next);
+    if (prev.archived || next.archived) {
+        const archivedList = (sessionStore.archivedSessions || []).filter(function (s) {
+            return s && s.id !== sid;
+        });
+        if (next.archived && sessionStore.archivedLoaded) archivedList.unshift(next);
+        if (sessionStore.archivedLoaded) {
+            sessionStore.setArchivedLoaded(archivedList);
+            syncArchivedSessionStateFromStore();
+        }
+    }
+    renderSessionListIfChanged(true);
+    return prev;
 }
 
 // 事件计数缓存，用于乐观更新
