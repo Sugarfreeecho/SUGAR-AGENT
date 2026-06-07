@@ -612,6 +612,7 @@ async function loadSessionMessages(sessionId, scrollBehavior, opts) {
                 range_end: Number(raw.range_end) || 0,
                 has_older: !!raw.has_older,
             };
+            uiEventCountCache.updateFromServer(sessionId, pageMeta.total);
         } else {
             events = [];
         }

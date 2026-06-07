@@ -312,7 +312,16 @@ async function sendMessage() {
         sendPipelineLockSessionId = submitSessionId;
     }
     // 使用缓存的事件计数，实现乐观更新
-    const preCount = uiEventCountCache.get(submitSessionId);
+    let preCount = uiEventCountCache.get(submitSessionId);
+    try {
+        const serverCountBeforeSend = await getUiEventCount(submitSessionId);
+        if (Number.isFinite(Number(serverCountBeforeSend))) {
+            preCount = Math.max(preCount, Number(serverCountBeforeSend));
+            uiEventCountCache.updateFromServer(submitSessionId, preCount);
+        }
+    } catch (err) {
+        console.error('获取事件计数失败:', err);
+    }
     const runSessionId = submitSessionId;
 
     /* 用户在 createNewSession / getUiEventCount 期间切走：
