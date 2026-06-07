@@ -1964,13 +1964,15 @@ function bindSubagentGridActions(grid, sessionId) {
 
 function subagentStatusFromNode(n) {
     var taskStatus = String((n && (n.task_status || n.status)) || '').toLowerCase();
+    var hasFinalKnown = !!(n && Object.prototype.hasOwnProperty.call(n, 'has_final'));
     var hasPreview = !!String((n && n.result_preview) || '').trim();
-    var hasFinal = !n || !Object.prototype.hasOwnProperty.call(n, 'has_final') ? hasPreview : !!n.has_final;
+    var hasFinal = !n || !hasFinalKnown ? hasPreview : !!n.has_final;
+    var canTreatCompleted = hasFinal || (!hasFinalKnown && hasPreview) || (n && n.virtual_task && hasPreview && !hasFinalKnown);
     if (n && n.running) {
         return { label: n.background ? '后台运行' : '运行中', dotCls: 'is-running' };
     }
     if (taskStatus === 'running') return { label: '后台运行', dotCls: 'is-running' };
-    if (taskStatus === 'completed' && (hasFinal || hasPreview || (n && n.virtual_task))) return { label: '完成', dotCls: 'is-done' };
+    if (taskStatus === 'completed' && canTreatCompleted) return { label: '完成', dotCls: 'is-done' };
     if (taskStatus === 'completed') return { label: '缺少 final 结果', dotCls: 'is-error' };
     if (taskStatus === 'failed') return { label: '失败', dotCls: 'is-error' };
     if (taskStatus === 'interrupted') return { label: '已中断', dotCls: 'is-error' };

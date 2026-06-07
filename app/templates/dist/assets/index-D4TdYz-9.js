@@ -329,6 +329,7 @@ function showUiAlert(opts) {
     archivedSessions: null,
     unreadComplete: new Set(),
     sseSeqBySession: new Map(),
+    deletedSessionTombstones: new Map(),
     ui: {
         loadingSessions: false,
         loadingMessages: false,
@@ -336,6 +337,7 @@ function showUiAlert(opts) {
     streamActiveById: Object.create(null),
 
     applySnapshot(sessions, archivedCount) {
+        this.pruneDeletedSessionTombstones();
         const nextById = new Map();
         const nextOrder = [];
         const nextStreamActive = Object.create(null);
@@ -344,6 +346,7 @@ function showUiAlert(opts) {
             const s = list[i];
             if (!s || !s.id) continue;
             const sid = String(s.id);
+            if (this.isDeletedSessionTombstoned(sid)) continue;
             nextById.set(sid, s);
             nextOrder.push(sid);
             nextStreamActive[sid] = !!s.stream_active;
@@ -359,6 +362,7 @@ function showUiAlert(opts) {
     upsert(session) {
         if (!session || !session.id) return;
         const sid = String(session.id);
+        if (this.isDeletedSessionTombstoned(sid)) return;
         this.sessionsById.set(sid, session);
         if (this.sessionOrder.indexOf(sid) < 0) this.sessionOrder.unshift(sid);
         if (Object.prototype.hasOwnProperty.call(session, 'stream_active')) {
@@ -374,6 +378,32 @@ function showUiAlert(opts) {
         this.runsBySession.delete(sid);
         this.unreadComplete.delete(sid);
         this.sessionOrder = this.sessionOrder.filter(function (id) { return id !== sid; });
+    },
+
+    markDeletedSession(sessionId) {
+        const sid = String(sessionId || '');
+        if (!sid) return;
+        this.deletedSessionTombstones.set(sid, Date.now());
+        this.remove(sid);
+    },
+
+    clearDeletedSessionTombstone(sessionId) {
+        const sid = String(sessionId || '');
+        if (!sid) return;
+        this.deletedSessionTombstones.delete(sid);
+    },
+
+    pruneDeletedSessionTombstones() {
+        const now = Date.now();
+        const ttl = 120000;
+        this.deletedSessionTombstones.forEach(function (createdAt, sid, map) {
+            if (now - Number(createdAt || 0) > ttl) map.delete(sid);
+        });
+    },
+
+    isDeletedSessionTombstoned(sessionId) {
+        this.pruneDeletedSessionTombstones();
+        return this.deletedSessionTombstones.has(String(sessionId || ''));
     },
 
     list() {
@@ -6914,13 +6944,15 @@ function bindSubagentGridActions(grid, sessionId) {
 
 function subagentStatusFromNode(n) {
     var taskStatus = String((n && (n.task_status || n.status)) || '').toLowerCase();
+    var hasFinalKnown = !!(n && Object.prototype.hasOwnProperty.call(n, 'has_final'));
     var hasPreview = !!String((n && n.result_preview) || '').trim();
-    var hasFinal = !n || !Object.prototype.hasOwnProperty.call(n, 'has_final') ? hasPreview : !!n.has_final;
+    var hasFinal = !n || !hasFinalKnown ? hasPreview : !!n.has_final;
+    var canTreatCompleted = hasFinal || (!hasFinalKnown && hasPreview) || (n && n.virtual_task && hasPreview && !hasFinalKnown);
     if (n && n.running) {
         return { label: n.background ? '后台运行' : '运行中', dotCls: 'is-running' };
     }
     if (taskStatus === 'running') return { label: '后台运行', dotCls: 'is-running' };
-    if (taskStatus === 'completed' && (hasFinal || hasPreview || (n && n.virtual_task))) return { label: '完成', dotCls: 'is-done' };
+    if (taskStatus === 'completed' && canTreatCompleted) return { label: '完成', dotCls: 'is-done' };
     if (taskStatus === 'completed') return { label: '缺少 final 结果', dotCls: 'is-error' };
     if (taskStatus === 'failed') return { label: '失败', dotCls: 'is-error' };
     if (taskStatus === 'interrupted') return { label: '已中断', dotCls: 'is-error' };
@@ -7613,7 +7645,7 @@ function buildAndBindSessionRow(sess, allSessions, nextStreamMap) {
             const nextSession = sessionStore.list().find(function (s) {
                 return s && s.id && String(s.id) !== deletedSessionId && !s.archived;
             }) || null;
-            sessionStore.remove(deletedSessionId);
+            sessionStore.markDeletedSession(deletedSessionId);
             if (wasArchivedLoaded) {
                 sessionStore.setArchivedLoaded((sessionStore.archivedSessions || []).filter(function (s) {
                     return s && String(s.id) !== deletedSessionId;
@@ -7647,6 +7679,7 @@ function buildAndBindSessionRow(sess, allSessions, nextStreamMap) {
                 })
                 .catch(function (err) {
                     console.error('删除会话失败:', err);
+                    sessionStore.clearDeletedSessionTombstone(deletedSessionId);
                     void loadSessions({ force: true, skipArchivedRefresh: true });
                     if (wasArchivedLoaded) void loadArchivedSessions({ background: true });
                 });

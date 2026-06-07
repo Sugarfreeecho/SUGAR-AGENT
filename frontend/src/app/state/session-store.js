@@ -9,6 +9,7 @@ const sessionStore = {
     archivedSessions: null,
     unreadComplete: new Set(),
     sseSeqBySession: new Map(),
+    deletedSessionTombstones: new Map(),
     ui: {
         loadingSessions: false,
         loadingMessages: false,
@@ -16,6 +17,7 @@ const sessionStore = {
     streamActiveById: Object.create(null),
 
     applySnapshot(sessions, archivedCount) {
+        this.pruneDeletedSessionTombstones();
         const nextById = new Map();
         const nextOrder = [];
         const nextStreamActive = Object.create(null);
@@ -24,6 +26,7 @@ const sessionStore = {
             const s = list[i];
             if (!s || !s.id) continue;
             const sid = String(s.id);
+            if (this.isDeletedSessionTombstoned(sid)) continue;
             nextById.set(sid, s);
             nextOrder.push(sid);
             nextStreamActive[sid] = !!s.stream_active;
@@ -39,6 +42,7 @@ const sessionStore = {
     upsert(session) {
         if (!session || !session.id) return;
         const sid = String(session.id);
+        if (this.isDeletedSessionTombstoned(sid)) return;
         this.sessionsById.set(sid, session);
         if (this.sessionOrder.indexOf(sid) < 0) this.sessionOrder.unshift(sid);
         if (Object.prototype.hasOwnProperty.call(session, 'stream_active')) {
@@ -54,6 +58,32 @@ const sessionStore = {
         this.runsBySession.delete(sid);
         this.unreadComplete.delete(sid);
         this.sessionOrder = this.sessionOrder.filter(function (id) { return id !== sid; });
+    },
+
+    markDeletedSession(sessionId) {
+        const sid = String(sessionId || '');
+        if (!sid) return;
+        this.deletedSessionTombstones.set(sid, Date.now());
+        this.remove(sid);
+    },
+
+    clearDeletedSessionTombstone(sessionId) {
+        const sid = String(sessionId || '');
+        if (!sid) return;
+        this.deletedSessionTombstones.delete(sid);
+    },
+
+    pruneDeletedSessionTombstones() {
+        const now = Date.now();
+        const ttl = 120000;
+        this.deletedSessionTombstones.forEach(function (createdAt, sid, map) {
+            if (now - Number(createdAt || 0) > ttl) map.delete(sid);
+        });
+    },
+
+    isDeletedSessionTombstoned(sessionId) {
+        this.pruneDeletedSessionTombstones();
+        return this.deletedSessionTombstones.has(String(sessionId || ''));
     },
 
     list() {

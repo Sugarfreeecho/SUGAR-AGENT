@@ -281,7 +281,7 @@ function buildAndBindSessionRow(sess, allSessions, nextStreamMap) {
             const nextSession = sessionStore.list().find(function (s) {
                 return s && s.id && String(s.id) !== deletedSessionId && !s.archived;
             }) || null;
-            sessionStore.remove(deletedSessionId);
+            sessionStore.markDeletedSession(deletedSessionId);
             if (wasArchivedLoaded) {
                 sessionStore.setArchivedLoaded((sessionStore.archivedSessions || []).filter(function (s) {
                     return s && String(s.id) !== deletedSessionId;
@@ -315,6 +315,7 @@ function buildAndBindSessionRow(sess, allSessions, nextStreamMap) {
                 })
                 .catch(function (err) {
                     console.error('删除会话失败:', err);
+                    sessionStore.clearDeletedSessionTombstone(deletedSessionId);
                     void loadSessions({ force: true, skipArchivedRefresh: true });
                     if (wasArchivedLoaded) void loadArchivedSessions({ background: true });
                 });

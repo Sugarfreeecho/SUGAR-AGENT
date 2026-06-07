@@ -375,6 +375,18 @@ async def list_session_subagents(
         for tid, task in task_by_id.items():
             if not tid or tid in node_ids:
                 continue
+            task_status = str(task.get("status") or "")
+            output_file = str(task.get("output_file") or "")
+            has_output = False
+            if output_file:
+                try:
+                    has_output = Path(output_file).expanduser().resolve().is_file()
+                except Exception:
+                    has_output = False
+            virtual_error = str(task.get("error") or "")
+            if task_status == "completed" and not has_output:
+                task_status = "failed"
+                virtual_error = virtual_error or "missing final/output"
             nodes.append(
                 {
                     "id": tid,
@@ -388,13 +400,14 @@ async def list_session_subagents(
                     "started_at": task.get("started_at"),
                     "finished_at": task.get("finished_at"),
                     "background": bool(task.get("background")),
-                    "running": str(task.get("status") or "") == "running",
-                    "ok": False if task.get("error") else None,
-                    "status": str(task.get("status") or ""),
-                    "task_status": str(task.get("status") or ""),
-                    "error": str(task.get("error") or ""),
+                    "running": task_status == "running",
+                    "ok": True if task_status == "completed" else (None if task_status == "running" else False),
+                    "status": task_status,
+                    "task_status": task_status,
+                    "error": virtual_error,
+                    "has_final": has_output,
                     "result_preview": str(task.get("result_preview") or "")[:1200],
-                    "output_file": str(task.get("output_file") or ""),
+                    "output_file": output_file if has_output else "",
                     "dialogue_turns": [],
                     "session_metrics": {},
                     "virtual_task": True,
