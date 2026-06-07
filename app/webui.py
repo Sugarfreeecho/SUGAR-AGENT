@@ -71,6 +71,39 @@ def _is_session_stream_active(sid: str) -> bool:
     x = str(sid or "").strip()
     return bool(x) and (_active_chat_by_session.get(x, 0) > 0 or is_run_active(x))
 
+
+def _build_sessions_state_snapshot(include_archived: bool = False) -> dict:
+    import time as _time
+
+    sessions = session_manager.list_sessions(include_archived=include_archived)
+    archived_count = session_manager.archived_session_count()
+    _cleanup_stale_active_chat()
+    active_runs = []
+    pending_subagents = {}
+    for s in sessions:
+        sid = s.get("id")
+        if not sid:
+            s["stream_active"] = False
+            continue
+        sid = str(sid)
+        active = _is_session_stream_active(sid)
+        s["stream_active"] = active
+        if active:
+            active_runs.append({"session_id": sid})
+        try:
+            pending = session_manager.count_actionable_pending_subagent_results(sid)
+        except Exception:
+            pending = 0
+        if pending:
+            pending_subagents[sid] = pending
+    return {
+        "seq": int(_time.time() * 1000),
+        "sessions": sessions,
+        "archived_count": archived_count,
+        "active_runs": active_runs,
+        "pending_subagents": pending_subagents,
+    }
+
 def get_index_html():
     """读取并返回 Vite 构建产物 templates/dist/index.html。"""
     import agent_harness as _ui_ah
@@ -266,6 +299,16 @@ async def list_sessions(include_archived: bool = Query(False)):
         content=sessions,
         headers={"X-Archived-Count": str(archived_count)},
     )
+
+
+@fastapi_app.get("/sessions/state")
+async def sessions_state(include_archived: bool = Query(False)):
+    return JSONResponse(content=_build_sessions_state_snapshot(include_archived=include_archived))
+
+
+@fastapi_app.get("/state")
+async def app_state(include_archived: bool = Query(False)):
+    return JSONResponse(content=_build_sessions_state_snapshot(include_archived=include_archived))
 
 @fastapi_app.get("/sessions/{session_id}")
 async def get_session_detail(

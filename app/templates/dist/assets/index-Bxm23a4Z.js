@@ -1,4 +1,4 @@
-(function(){const c=document.createElement("link").relList;if(c&&c.supports&&c.supports("modulepreload"))return;for(const o of document.querySelectorAll('link[rel="modulepreload"]'))p(o);new MutationObserver(o=>{for(const l of o)if(l.type==="childList")for(const u of l.addedNodes)u.tagName==="LINK"&&u.rel==="modulepreload"&&p(u)}).observe(document,{childList:!0,subtree:!0});function f(o){const l={};return o.integrity&&(l.integrity=o.integrity),o.referrerPolicy&&(l.referrerPolicy=o.referrerPolicy),o.crossOrigin==="use-credentials"?l.credentials="include":o.crossOrigin==="anonymous"?l.credentials="omit":l.credentials="same-origin",l}function p(o){if(o.ep)return;o.ep=!0;const l=f(o);fetch(o.href,l)}})();(function(g){var c='<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"></path></svg>';function f(){if(!document.getElementById("myagent-path-picker-styles")){var n=document.createElement("style");n.id="myagent-path-picker-styles",n.textContent='.path-input-row{display:flex;align-items:stretch;gap:0.35rem;width:100%;}.path-input-row>.ip,.path-input-row>.tx,.path-input-row>input[type="text"],.path-input-row>input:not([type]){flex:1;min-width:0;}.path-browse-btn{flex-shrink:0;width:2.35rem;padding:0;border:1px solid var(--border-glass,rgba(255,255,255,.08));border-radius:var(--radius-sm,8px);background:var(--surface-glass2,rgba(40,40,60,.94));color:var(--text-secondary,#a6adc8);cursor:pointer;display:inline-flex;align-items:center;justify-content:center;transition:color .18s,border-color .18s,background .18s;}.path-browse-btn:hover{color:var(--text-primary,#cdd6f4);border-color:var(--border-brand-accent,rgba(124,111,247,.35));background:rgba(108,92,231,.12);}.path-browse-btn:disabled{opacity:.45;cursor:not-allowed;}.path-browse-btn--ghost{background:transparent;border-color:transparent;box-shadow:none;width:2.1rem;}.path-browse-btn--ghost:hover{background:rgba(108,92,231,.1);border-color:transparent;color:var(--accent-2,#d4b8fc);}.input-wrapper .path-browse-btn--ghost{align-self:center;margin-right:-0.15rem;}',document.head.appendChild(n)}}async function p(n,e,i){var a=typeof AbortController<"u"?new AbortController:null,s=a?setTimeout(function(){a.abort()},5e4):null,t;try{t=await fetch("/api/pick-path",{method:"POST",headers:{"Content-Type":"application/json"},credentials:"same-origin",body:JSON.stringify({kind:n||"directory",initial:e||"",multiple:!!i}),signal:a?a.signal:void 0})}finally{s&&clearTimeout(s)}var r=await t.json().catch(function(){return{ok:!1,error:"请求失败"}});if(!t.ok||!r.ok){if(r&&r.cancelled)return null;var d=r&&r.error||"无法打开选择对话框";if(/取消|cancelled|800704c7|2147023673/i.test(d))return null;throw new Error(d)}return i?Array.isArray(r.paths)?r.paths:r.path?[r.path]:[]:r.path||null}async function o(n,e,i,a,s){n.disabled=!0;try{var t=await p(e,i||"",!!s);a&&a(t)}catch{return}finally{n.disabled=!1}}function l(n){var e=String(n||"").trim();return e?((e.charAt(0)==='"'&&e.charAt(e.length-1)==='"'||e.charAt(0)==="'"&&e.charAt(e.length-1)==="'")&&(e=e.slice(1,-1)),'"'+e.replace(/"/g,'\\"')+'"'):""}function u(n,e,i){if(!n||n.dataset.pathBrowseWrapped==="1")return n;f();var a=document.createElement("div");a.className="path-input-row";var s=n.parentNode;if(!s)return n;s.insertBefore(a,n),a.appendChild(n);var t=document.createElement("button");t.type="button",t.className="path-browse-btn",t.innerHTML=c;var r=i||"浏览路径";return t.setAttribute("aria-label",r),typeof bindUiHoverTip=="function"?(t.setAttribute("data-ui-tip",r),t.removeAttribute("title"),bindUiHoverTip(t)):t.title=r,t.addEventListener("click",function(d){d.stopPropagation();var m=n.getAttribute("data-path-kind")||e;m!=="file"&&m!=="directory"&&(m="directory"),o(t,m,n.value||"",function(v){if(v){var h=Array.isArray(v)?v[0]||"":String(v);h&&(n.value=h,n.dispatchEvent(new Event("input",{bubbles:!0})),n.dispatchEvent(new Event("change",{bubbles:!0})))}})}),a.appendChild(t),n.dataset.pathBrowseWrapped="1",n}function S(n,e){var i=n.selectionStart,a=n.selectionEnd,s=n.value.slice(0,i),t=n.value.slice(a),r=String(e||"");s.length&&!/\s$/.test(s)&&(r=" "+r),t.length&&!/^\s/.test(t)&&(r=r+" "),n.value=s+r+t;var d=s.length+r.length;n.selectionStart=n.selectionEnd=d,n.dispatchEvent(new Event("input",{bubbles:!0})),n.focus()}function y(n,e){!n||!e||(f(),n.classList.add("path-browse-btn","path-browse-btn--ghost"),n.innerHTML=c,n.setAttribute("aria-label","选择文件"),n.setAttribute("data-ui-tip","选择文件"),n.dataset.silentPickerUnavailable="1",n.removeAttribute("title"),n.addEventListener("click",function(i){i.stopPropagation();var a=g&&typeof g.__WORK_DIR__=="string"?g.__WORK_DIR__:"";o(n,"file",a,function(s){var t=Array.isArray(s)?s:s?[s]:[];if(t.length){var r=t.map(function(d){return l(d)}).join(" ");S(e,r)}},!0)}))}function b(n){n=n||document;var e=n.querySelectorAll("[data-path-kind]"),i;for(i=0;i<e.length;i++){var a=e[i],s=a.getAttribute("data-path-kind");(s==="file"||s==="directory")&&u(a,s)}}g.MyAgentPathPicker={pickPath:p,wrapInputWithBrowse:u,attachChatPicker:y,scan:b},document.readyState==="loading"?document.addEventListener("DOMContentLoaded",function(){b(document)}):b(document)})(typeof window<"u"?window:globalThis);const x=`// ═══════════════════════════════════════════════════════════
+(function(){const c=document.createElement("link").relList;if(c&&c.supports&&c.supports("modulepreload"))return;for(const o of document.querySelectorAll('link[rel="modulepreload"]'))p(o);new MutationObserver(o=>{for(const l of o)if(l.type==="childList")for(const u of l.addedNodes)u.tagName==="LINK"&&u.rel==="modulepreload"&&p(u)}).observe(document,{childList:!0,subtree:!0});function f(o){const l={};return o.integrity&&(l.integrity=o.integrity),o.referrerPolicy&&(l.referrerPolicy=o.referrerPolicy),o.crossOrigin==="use-credentials"?l.credentials="include":o.crossOrigin==="anonymous"?l.credentials="omit":l.credentials="same-origin",l}function p(o){if(o.ep)return;o.ep=!0;const l=f(o);fetch(o.href,l)}})();(function(g){var c='<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"></path></svg>';function f(){if(!document.getElementById("myagent-path-picker-styles")){var n=document.createElement("style");n.id="myagent-path-picker-styles",n.textContent='.path-input-row{display:flex;align-items:stretch;gap:0.35rem;width:100%;}.path-input-row>.ip,.path-input-row>.tx,.path-input-row>input[type="text"],.path-input-row>input:not([type]){flex:1;min-width:0;}.path-browse-btn{flex-shrink:0;width:2.35rem;padding:0;border:1px solid var(--border-glass,rgba(255,255,255,.08));border-radius:var(--radius-sm,8px);background:var(--surface-glass2,rgba(40,40,60,.94));color:var(--text-secondary,#a6adc8);cursor:pointer;display:inline-flex;align-items:center;justify-content:center;transition:color .18s,border-color .18s,background .18s;}.path-browse-btn:hover{color:var(--text-primary,#cdd6f4);border-color:var(--border-brand-accent,rgba(124,111,247,.35));background:rgba(108,92,231,.12);}.path-browse-btn:disabled{opacity:.45;cursor:not-allowed;}.path-browse-btn--ghost{background:transparent;border-color:transparent;box-shadow:none;width:2.1rem;}.path-browse-btn--ghost:hover{background:rgba(108,92,231,.1);border-color:transparent;color:var(--accent-2,#d4b8fc);}.input-wrapper .path-browse-btn--ghost{align-self:center;margin-right:-0.15rem;}',document.head.appendChild(n)}}async function p(n,e,i){var a=typeof AbortController<"u"?new AbortController:null,s=a?setTimeout(function(){a.abort()},5e4):null,t;try{t=await fetch("/api/pick-path",{method:"POST",headers:{"Content-Type":"application/json"},credentials:"same-origin",body:JSON.stringify({kind:n||"directory",initial:e||"",multiple:!!i}),signal:a?a.signal:void 0})}finally{s&&clearTimeout(s)}var r=await t.json().catch(function(){return{ok:!1,error:"请求失败"}});if(!t.ok||!r.ok){if(r&&r.cancelled)return null;var d=r&&r.error||"无法打开选择对话框";if(/取消|cancelled|800704c7|2147023673/i.test(d))return null;throw new Error(d)}return i?Array.isArray(r.paths)?r.paths:r.path?[r.path]:[]:r.path||null}async function o(n,e,i,a,s){n.disabled=!0;try{var t=await p(e,i||"",!!s);a&&a(t)}catch{return}finally{n.disabled=!1}}function l(n){var e=String(n||"").trim();return e?((e.charAt(0)==='"'&&e.charAt(e.length-1)==='"'||e.charAt(0)==="'"&&e.charAt(e.length-1)==="'")&&(e=e.slice(1,-1)),'"'+e.replace(/"/g,'\\"')+'"'):""}function u(n,e,i){if(!n||n.dataset.pathBrowseWrapped==="1")return n;f();var a=document.createElement("div");a.className="path-input-row";var s=n.parentNode;if(!s)return n;s.insertBefore(a,n),a.appendChild(n);var t=document.createElement("button");t.type="button",t.className="path-browse-btn",t.innerHTML=c;var r=i||"浏览路径";return t.setAttribute("aria-label",r),typeof bindUiHoverTip=="function"?(t.setAttribute("data-ui-tip",r),t.removeAttribute("title"),bindUiHoverTip(t)):t.title=r,t.addEventListener("click",function(d){d.stopPropagation();var m=n.getAttribute("data-path-kind")||e;m!=="file"&&m!=="directory"&&(m="directory"),o(t,m,n.value||"",function(v){if(v){var b=Array.isArray(v)?v[0]||"":String(v);b&&(n.value=b,n.dispatchEvent(new Event("input",{bubbles:!0})),n.dispatchEvent(new Event("change",{bubbles:!0})))}})}),a.appendChild(t),n.dataset.pathBrowseWrapped="1",n}function S(n,e){var i=n.selectionStart,a=n.selectionEnd,s=n.value.slice(0,i),t=n.value.slice(a),r=String(e||"");s.length&&!/\s$/.test(s)&&(r=" "+r),t.length&&!/^\s/.test(t)&&(r=r+" "),n.value=s+r+t;var d=s.length+r.length;n.selectionStart=n.selectionEnd=d,n.dispatchEvent(new Event("input",{bubbles:!0})),n.focus()}function y(n,e){!n||!e||(f(),n.classList.add("path-browse-btn","path-browse-btn--ghost"),n.innerHTML=c,n.setAttribute("aria-label","选择文件"),n.setAttribute("data-ui-tip","选择文件"),n.dataset.silentPickerUnavailable="1",n.removeAttribute("title"),n.addEventListener("click",function(i){i.stopPropagation();var a=g&&typeof g.__WORK_DIR__=="string"?g.__WORK_DIR__:"";o(n,"file",a,function(s){var t=Array.isArray(s)?s:s?[s]:[];if(t.length){var r=t.map(function(d){return l(d)}).join(" ");S(e,r)}},!0)}))}function h(n){n=n||document;var e=n.querySelectorAll("[data-path-kind]"),i;for(i=0;i<e.length;i++){var a=e[i],s=a.getAttribute("data-path-kind");(s==="file"||s==="directory")&&u(a,s)}}g.MyAgentPathPicker={pickPath:p,wrapInputWithBrowse:u,attachChatPicker:y,scan:h},document.readyState==="loading"?document.addEventListener("DOMContentLoaded",function(){h(document)}):h(document)})(typeof window<"u"?window:globalThis);const x=`// ═══════════════════════════════════════════════════════════
 // MyAgent · 智能会话 — 完整逻辑
 // ═══════════════════════════════════════════════════════════
 
@@ -7524,6 +7524,18 @@ const uiEventCountCache = {
     }
 };
 
+async function fetchSessionsStateSnapshot(opts) {
+    opts = opts || {};
+    const url = '/sessions/state' + (opts.includeArchived ? '?include_archived=true' : '');
+    const response = await fetch(url);
+    if (!response.ok) throw new Error('sessions state failed: ' + response.status);
+    const snapshot = await response.json();
+    if (!snapshot || !Array.isArray(snapshot.sessions)) {
+        throw new Error('invalid sessions state response');
+    }
+    return snapshot;
+}
+
 async function loadSessions(opts) {
     opts = opts || {};
     const loadEpoch = ++sessionListLoadEpoch;
@@ -7532,29 +7544,38 @@ async function loadSessions(opts) {
         // 检查缓存
         const cachedData = opts.force ? null : sessionListCache.get();
         let allSessions;
+        let snapshot = null;
         
         if (cachedData) {
             // 使用缓存数据
             allSessions = cachedData;
         } else {
             // 从服务器获取数据
-            const response = await fetch('/sessions');
-            const archivedCountHeader = response.headers.get('X-Archived-Count');
-            if (archivedCountHeader != null && archivedCountHeader !== '') {
-                const parsedArchivedCount = Number(archivedCountHeader);
-                if (Number.isFinite(parsedArchivedCount) && parsedArchivedCount >= 0) {
-                    sessionStore.setArchivedCount(parsedArchivedCount);
-                    syncArchivedSessionStateFromStore();
+            try {
+                snapshot = await fetchSessionsStateSnapshot();
+                if (loadEpoch !== sessionListLoadEpoch) return;
+                allSessions = Array.isArray(snapshot.sessions) ? snapshot.sessions : [];
+            } catch (stateErr) {
+                console.error('加载会话状态快照失败，回退旧接口:', stateErr);
+                const response = await fetch('/sessions');
+                const archivedCountHeader = response.headers.get('X-Archived-Count');
+                if (archivedCountHeader != null && archivedCountHeader !== '') {
+                    const parsedArchivedCount = Number(archivedCountHeader);
+                    if (Number.isFinite(parsedArchivedCount) && parsedArchivedCount >= 0) {
+                        sessionStore.setArchivedCount(parsedArchivedCount);
+                        syncArchivedSessionStateFromStore();
+                    }
                 }
+                const sessions = await response.json();
+                if (loadEpoch !== sessionListLoadEpoch) return;
+                allSessions = Array.isArray(sessions) ? sessions : [];
+                snapshot = { sessions: allSessions, archived_count: archivedSessionsCount };
             }
-            const sessions = await response.json();
-            if (loadEpoch !== sessionListLoadEpoch) return;
-            allSessions = Array.isArray(sessions) ? sessions : [];
             
             // 更新缓存
             sessionListCache.set(allSessions);
         }
-        applySessionSnapshot({ sessions: allSessions, archived_count: archivedSessionsCount });
+        applySessionSnapshot(snapshot || { sessions: allSessions, archived_count: archivedSessionsCount });
         syncArchivedSessionStateFromStore();
         allSessions = sessionStore.list();
         

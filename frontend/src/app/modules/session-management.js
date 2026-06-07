@@ -441,6 +441,18 @@ const uiEventCountCache = {
     }
 };
 
+async function fetchSessionsStateSnapshot(opts) {
+    opts = opts || {};
+    const url = '/sessions/state' + (opts.includeArchived ? '?include_archived=true' : '');
+    const response = await fetch(url);
+    if (!response.ok) throw new Error('sessions state failed: ' + response.status);
+    const snapshot = await response.json();
+    if (!snapshot || !Array.isArray(snapshot.sessions)) {
+        throw new Error('invalid sessions state response');
+    }
+    return snapshot;
+}
+
 async function loadSessions(opts) {
     opts = opts || {};
     const loadEpoch = ++sessionListLoadEpoch;
@@ -449,29 +461,38 @@ async function loadSessions(opts) {
         // 检查缓存
         const cachedData = opts.force ? null : sessionListCache.get();
         let allSessions;
+        let snapshot = null;
         
         if (cachedData) {
             // 使用缓存数据
             allSessions = cachedData;
         } else {
             // 从服务器获取数据
-            const response = await fetch('/sessions');
-            const archivedCountHeader = response.headers.get('X-Archived-Count');
-            if (archivedCountHeader != null && archivedCountHeader !== '') {
-                const parsedArchivedCount = Number(archivedCountHeader);
-                if (Number.isFinite(parsedArchivedCount) && parsedArchivedCount >= 0) {
-                    sessionStore.setArchivedCount(parsedArchivedCount);
-                    syncArchivedSessionStateFromStore();
+            try {
+                snapshot = await fetchSessionsStateSnapshot();
+                if (loadEpoch !== sessionListLoadEpoch) return;
+                allSessions = Array.isArray(snapshot.sessions) ? snapshot.sessions : [];
+            } catch (stateErr) {
+                console.error('加载会话状态快照失败，回退旧接口:', stateErr);
+                const response = await fetch('/sessions');
+                const archivedCountHeader = response.headers.get('X-Archived-Count');
+                if (archivedCountHeader != null && archivedCountHeader !== '') {
+                    const parsedArchivedCount = Number(archivedCountHeader);
+                    if (Number.isFinite(parsedArchivedCount) && parsedArchivedCount >= 0) {
+                        sessionStore.setArchivedCount(parsedArchivedCount);
+                        syncArchivedSessionStateFromStore();
+                    }
                 }
+                const sessions = await response.json();
+                if (loadEpoch !== sessionListLoadEpoch) return;
+                allSessions = Array.isArray(sessions) ? sessions : [];
+                snapshot = { sessions: allSessions, archived_count: archivedSessionsCount };
             }
-            const sessions = await response.json();
-            if (loadEpoch !== sessionListLoadEpoch) return;
-            allSessions = Array.isArray(sessions) ? sessions : [];
             
             // 更新缓存
             sessionListCache.set(allSessions);
         }
-        applySessionSnapshot({ sessions: allSessions, archived_count: archivedSessionsCount });
+        applySessionSnapshot(snapshot || { sessions: allSessions, archived_count: archivedSessionsCount });
         syncArchivedSessionStateFromStore();
         allSessions = sessionStore.list();
         
