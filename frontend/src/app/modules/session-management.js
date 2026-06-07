@@ -274,6 +274,8 @@ function buildAndBindSessionRow(sess, allSessions, nextStreamMap) {
                 syncSessionListIndicatorClasses();
             }
             await fetch('/sessions/' + sess.id, { method: 'DELETE' });
+            sessionStore.remove(sess.id);
+            sessionListCache.invalidate();
             if (div && div.parentNode) div.remove();
             sessionUnreadComplete.delete(sess.id);
             persistSessionUnread();
@@ -342,6 +344,8 @@ async function refreshSingleSessionRow(sessionId) {
             await loadSessions();
             return;
         }
+        sessionStore.upsert(sess);
+        sessionListCache.invalidate();
         serverStreamActiveBySession[sess.id] = !!sess.stream_active;
         const item = sessionsList.querySelector('.session-name[data-id="' + sess.id + '"]');
         const div = item && item.closest('.session-item');
@@ -449,6 +453,7 @@ async function loadSessions() {
                 const parsedArchivedCount = Number(archivedCountHeader);
                 if (Number.isFinite(parsedArchivedCount) && parsedArchivedCount >= 0) {
                     archivedSessionsCount = parsedArchivedCount;
+                    sessionStore.setArchivedCount(parsedArchivedCount);
                 }
             }
             const sessions = await response.json();
@@ -458,6 +463,8 @@ async function loadSessions() {
             // 更新缓存
             sessionListCache.set(allSessions);
         }
+        sessionStore.applySnapshot(allSessions, archivedSessionsCount);
+        allSessions = sessionStore.list();
         
         const nextStreamMap = Object.create(null);
         const idSet = new Set();
@@ -724,6 +731,7 @@ async function createNewSessionInner() {
         prepareStashLeaving(currentSessionId);
         const response = await fetch('/sessions', { method: 'POST' });
         const data = await response.json();
+        if (data && data.session) sessionStore.upsert(data.session);
         resetSubagentPanelForSession();
         switchSessionEpoch += 1;
         messageLoadEpoch += 1;

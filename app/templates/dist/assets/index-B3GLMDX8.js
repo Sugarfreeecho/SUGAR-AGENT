@@ -320,7 +320,62 @@ function showUiAlert(opts) {
     }
     return p;
 }
-`,I=`function formatTokenCompact(n) {
+`,I=`const sessionStore = {
+    sessionsById: new Map(),
+    order: [],
+    archivedCount: 0,
+
+    applySnapshot(sessions, archivedCount) {
+        const nextById = new Map();
+        const nextOrder = [];
+        const list = Array.isArray(sessions) ? sessions : [];
+        for (let i = 0; i < list.length; i += 1) {
+            const s = list[i];
+            if (!s || !s.id) continue;
+            nextById.set(String(s.id), s);
+            nextOrder.push(String(s.id));
+        }
+        this.sessionsById = nextById;
+        this.order = nextOrder;
+        if (Number.isFinite(Number(archivedCount)) && Number(archivedCount) >= 0) {
+            this.archivedCount = Number(archivedCount);
+        }
+    },
+
+    upsert(session) {
+        if (!session || !session.id) return;
+        const sid = String(session.id);
+        this.sessionsById.set(sid, session);
+        if (this.order.indexOf(sid) < 0) this.order.unshift(sid);
+    },
+
+    remove(sessionId) {
+        const sid = String(sessionId || '');
+        if (!sid) return;
+        this.sessionsById.delete(sid);
+        this.order = this.order.filter(function (id) { return id !== sid; });
+    },
+
+    list() {
+        const out = [];
+        for (let i = 0; i < this.order.length; i += 1) {
+            const s = this.sessionsById.get(this.order[i]);
+            if (s) out.push(s);
+        }
+        return out;
+    },
+
+    get(sessionId) {
+        return this.sessionsById.get(String(sessionId || '')) || null;
+    },
+
+    setArchivedCount(count) {
+        if (Number.isFinite(Number(count)) && Number(count) >= 0) {
+            this.archivedCount = Number(count);
+        }
+    },
+};
+`,w=`function formatTokenCompact(n) {
     if (n == null || !Number.isFinite(Number(n))) return '—';
     const x = Math.max(0, Math.round(Number(n)));
     if (x >= 1000000) return (x / 1000000).toFixed(1).replace(/\\.0$/, '') + 'M';
@@ -1496,7 +1551,7 @@ async function scrollToUserTurnOrLoadOlder(eventIndex) {
         });
     }
 }
-`,w=`function ensureUiHoverTooltipEl() {
+`,T=`function ensureUiHoverTooltipEl() {
     if (uiHoverTooltipEl) return uiHoverTooltipEl;
     uiHoverTooltipEl = document.getElementById('ui-hover-tooltip');
     if (!uiHoverTooltipEl) {
@@ -1882,7 +1937,7 @@ async function refreshTodoPlanPanel() {
     }
 }
 
-`,T=`function removeMessagesFromNode(startWrap) {
+`,E=`function removeMessagesFromNode(startWrap) {
     const stream = getVisibleChatStream() || chatContainer;
     if (!stream) return;
     const kids = Array.from(stream.children);
@@ -4259,7 +4314,7 @@ function finalizeProgressStreamForType(ctx, logType) {
 }
 
 /* ── Subagent 浮层 / 过程块 ── */
-`,E=`var subagentCardSyncTimer = null;
+`,L=`var subagentCardSyncTimer = null;
 var subagentCardEventCount = Object.create(null);
 var subagentPanelOpen = false;
 var subagentPanelBound = false;
@@ -6615,7 +6670,7 @@ function updateSubagentBlockFinish(ctx, event) {
         if (fallbackContent.trim()) appendLog(ctx, fallbackContent, 'log-entry', runSessionId);
     }
 }
-`,L=`function setSendButtonState() {
+`,_=`function setSendButtonState() {
     sendBtn.disabled = false;
     if (isSessionRunning(currentSessionId)) {
         sendBtn.innerHTML = '停止 <span class="loader" aria-hidden="true"></span>';
@@ -6891,6 +6946,8 @@ function buildAndBindSessionRow(sess, allSessions, nextStreamMap) {
                 syncSessionListIndicatorClasses();
             }
             await fetch('/sessions/' + sess.id, { method: 'DELETE' });
+            sessionStore.remove(sess.id);
+            sessionListCache.invalidate();
             if (div && div.parentNode) div.remove();
             sessionUnreadComplete.delete(sess.id);
             persistSessionUnread();
@@ -6959,6 +7016,8 @@ async function refreshSingleSessionRow(sessionId) {
             await loadSessions();
             return;
         }
+        sessionStore.upsert(sess);
+        sessionListCache.invalidate();
         serverStreamActiveBySession[sess.id] = !!sess.stream_active;
         const item = sessionsList.querySelector('.session-name[data-id="' + sess.id + '"]');
         const div = item && item.closest('.session-item');
@@ -7066,6 +7125,7 @@ async function loadSessions() {
                 const parsedArchivedCount = Number(archivedCountHeader);
                 if (Number.isFinite(parsedArchivedCount) && parsedArchivedCount >= 0) {
                     archivedSessionsCount = parsedArchivedCount;
+                    sessionStore.setArchivedCount(parsedArchivedCount);
                 }
             }
             const sessions = await response.json();
@@ -7075,6 +7135,8 @@ async function loadSessions() {
             // 更新缓存
             sessionListCache.set(allSessions);
         }
+        sessionStore.applySnapshot(allSessions, archivedSessionsCount);
+        allSessions = sessionStore.list();
         
         const nextStreamMap = Object.create(null);
         const idSet = new Set();
@@ -7341,6 +7403,7 @@ async function createNewSessionInner() {
         prepareStashLeaving(currentSessionId);
         const response = await fetch('/sessions', { method: 'POST' });
         const data = await response.json();
+        if (data && data.session) sessionStore.upsert(data.session);
         resetSubagentPanelForSession();
         switchSessionEpoch += 1;
         messageLoadEpoch += 1;
@@ -7360,7 +7423,7 @@ async function createNewSessionInner() {
         appendLogVisible('创建新会话失败', 'error-log');
     }
 }
-`,_=`async function consumeAgentSseResponse(response, runCtx, runSessionId, streamEventIdx) {
+`,P=`async function consumeAgentSseResponse(response, runCtx, runSessionId, streamEventIdx) {
     if (!response || !response.body) return streamEventIdx;
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
@@ -7842,7 +7905,7 @@ sendBtn.addEventListener('click', function () {
     });
 })();
 initUiHoverTips(document);
-`,P=`newSessionBtn.addEventListener('click', async () => { await createNewSession(); });
+`,B=`newSessionBtn.addEventListener('click', async () => { await createNewSession(); });
 
 function initSidebarSash() {
     const side = document.getElementById('sidebar');
@@ -8081,8 +8144,8 @@ if (typeof globalThis !== 'undefined') {
     globalThis.toggleTocPanel = toggleTocPanel;
 }
 
-`,B=[x,C,I,w,T,E,k,L,_,P];Function(`"use strict";
-`+B.join(`
+`,A=[x,C,I,w,T,E,L,k,_,P,B];Function(`"use strict";
+`+A.join(`
 
 `)+`
 //# sourceURL=myagent-ui.js`)();

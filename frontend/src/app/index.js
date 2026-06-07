@@ -1,5 +1,6 @@
 import settingsSource from './modules/settings.js?raw';
 import sharedStateAndDialogsSource from './modules/shared-state-and-dialogs.js?raw';
+import sessionStoreSource from './modules/session-store.js?raw';
 import sessionScrollHistorySource from './modules/session-scroll-history.js?raw';
 import tocTodoSource from './modules/toc-todo.js?raw';
 import messageRenderingSource from './modules/message-rendering.js?raw';
@@ -12,6 +13,7 @@ import layoutPanelsSource from './modules/layout-panels.js?raw';
 const uiSources = [
     settingsSource,
     sharedStateAndDialogsSource,
+    sessionStoreSource,
     sessionScrollHistorySource,
     tocTodoSource,
     messageRenderingSource,
