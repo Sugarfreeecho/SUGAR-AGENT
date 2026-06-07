@@ -8,6 +8,7 @@ const sessionStore = {
     archivedLoaded: false,
     archivedSessions: null,
     unreadComplete: new Set(),
+    sseSeqBySession: new Map(),
     ui: {
         loadingSessions: false,
         loadingMessages: false,
@@ -139,6 +140,17 @@ const sessionStore = {
 
     hasRun(sessionId) {
         return this.runsBySession.has(String(sessionId || ''));
+    },
+
+    shouldAcceptSseEvent(sessionId, seq) {
+        const sid = String(sessionId || '');
+        const n = Number(seq);
+        if (!sid || !Number.isFinite(n) || n <= 0) return true;
+        const prev = Number(this.sseSeqBySession.get(sid) || 0);
+        if (n <= prev) return false;
+        this.sseSeqBySession.set(sid, n);
+        if (Number.isFinite(Number(this.seq)) && n > Number(this.seq)) this.seq = n;
+        return true;
     },
 };
 

@@ -7,6 +7,7 @@ from typing import Any, AsyncGenerator, Deque, Dict, Set
 
 _subscribers: Dict[str, Set[asyncio.Queue]] = defaultdict(set)
 _recent_ephemeral: Dict[str, Deque[dict]] = defaultdict(lambda: deque(maxlen=400))
+_seq_by_session: Dict[str, int] = defaultdict(int)
 _lock = asyncio.Lock()
 
 
@@ -19,6 +20,11 @@ async def publish_session_event(session_id: str, event: Dict[str, Any]) -> None:
     if not sid or not isinstance(event, dict):
         return
     async with _lock:
+        if not event.get("session_id"):
+            event["session_id"] = sid
+        if event.get("seq") is None:
+            _seq_by_session[sid] += 1
+            event["seq"] = _seq_by_session[sid]
         if event.get("ephemeral"):
             _recent_ephemeral[sid].append(dict(event))
         elif event.get("type") == "tool_call" and str(event.get("tool_call_id") or "").strip():

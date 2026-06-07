@@ -23,6 +23,18 @@ async function consumeAgentSseResponse(response, runCtx, runSessionId, streamEve
             }
             try {
                 const parsed = JSON.parse(data);
+                const eventSessionId = parsed.session_id || parsed.sessionId || runSessionId;
+                if (!sessionStore.shouldAcceptSseEvent(eventSessionId, parsed.seq)) continue;
+                if (parsed.type === 'run_started' || parsed.type === 'run_attached') {
+                    setSessionServerStreamActive(eventSessionId, true);
+                    syncSessionListIndicatorClasses();
+                    continue;
+                }
+                if (parsed.type === 'run_finished' || parsed.type === 'run_interrupted' || parsed.type === 'run_failed') {
+                    setSessionServerStreamActive(eventSessionId, false);
+                    syncSessionListIndicatorClasses();
+                    continue;
+                }
                 if (parsed.ephemeral) {
                     /* 任何携带 agent_id 的 ephemeral 都属于子 agent；无论投递成功与否都不能 fall-through
                        到父 ctx 的 appendLlmStreamDelta，否则会污染主对话区。 */

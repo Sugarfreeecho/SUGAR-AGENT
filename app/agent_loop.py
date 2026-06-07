@@ -2289,6 +2289,7 @@ async def astream_events(
         nonlocal state
         try:
             # 用户气泡由前端已画；此处只写入与流顺序一致的持久化，供刷新与 SSE 同源
+            await emit({"type": "run_started", "ephemeral": True})
             session_manager.append_ui_event(session_id, {"type": "user", "content": user_input})
             await emit({"type": "status", "content": "New Agent Loop Start"})
             state = await react_node(state, emit=emit)
@@ -2304,6 +2305,7 @@ async def astream_events(
                 if evt.get("type") in ("status", "validate_final", "final"):
                     await emit(evt)
         finally:
+            await emit({"type": "run_finished", "ephemeral": True})
             await close_session_stream(session_id)
             await queue.put(None)
 
@@ -2394,6 +2396,7 @@ async def astream_events_continuation(
     async def runner():
         nonlocal state
         try:
+            await emit({"type": "run_started", "ephemeral": True})
             await emit({"type": "status", "content": "Subagent Continuation Start"})
             state = await react_node(state, emit=emit)
             await emit({"type": "status", "content": "Loop finished"})
@@ -2408,6 +2411,7 @@ async def astream_events_continuation(
                 if evt.get("type") in ("status", "validate_final", "final"):
                     await emit(evt)
         finally:
+            await emit({"type": "run_finished", "ephemeral": True})
             await close_session_stream(session_id)
             await queue.put(None)
 
