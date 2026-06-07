@@ -2811,7 +2811,7 @@ class SessionManager:
         try:
             events = self._load_ui_events(session_id)
             n = len(events)
-            if before_index < 0:
+            if before_index <= 0:
                 return False
             if before_index > n:
                 before_index = n

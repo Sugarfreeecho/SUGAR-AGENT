@@ -2402,7 +2402,15 @@ function onMessageToolbarClick(wrap, role, act) {
         return;
     }
     if (act === 'delete') {
-        if (!Number.isFinite(before)) {
+        if (!Number.isFinite(before) || before <= 0) {
+            if (Number.isFinite(before) && before <= 0) {
+                showUiAlert({
+                    title: '无法删除该条',
+                    message: '消息索引异常，已阻止清空整个会话。请刷新后再试。',
+                    variant: 'error'
+                });
+                return;
+            }
             removeMessagesFromNode(wrap);
             syncDisconnectedProcessGroups();
             rebuildToc();
