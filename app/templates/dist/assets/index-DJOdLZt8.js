@@ -827,6 +827,24 @@ function renderSessionTitleFromStore() {
     getSession(sessionId) {
         return this.sessions.get(String(sessionId || '')) || null;
     },
+
+    listEvents(sessionId) {
+        const st = this.getSession(sessionId);
+        return st ? st.events.slice() : [];
+    },
+
+    listEventsInRange(sessionId, startIndex, endIndex) {
+        const start = Number.isFinite(Number(startIndex)) ? Number(startIndex) : -Infinity;
+        const end = Number.isFinite(Number(endIndex)) ? Number(endIndex) : Infinity;
+        return this.listEvents(sessionId).filter(function (record) {
+            return record.index >= start && record.index < end;
+        });
+    },
+
+    eventCount(sessionId) {
+        const st = this.getSession(sessionId);
+        return st ? st.events.length : 0;
+    },
 };
 
 function beginMessageReplay(sessionId, meta) {
@@ -839,6 +857,18 @@ function clearMessageStateForSession(sessionId) {
 
 function applyMessageEvent(sessionId, event, eventIndex, source) {
     return messageStore.applyEvent(sessionId, event, eventIndex, source);
+}
+
+function selectMessageEvents(sessionId) {
+    return messageStore.listEvents(sessionId);
+}
+
+function selectMessageEventsInRange(sessionId, startIndex, endIndex) {
+    return messageStore.listEventsInRange(sessionId, startIndex, endIndex);
+}
+
+function selectMessageEventCount(sessionId) {
+    return messageStore.eventCount(sessionId);
 }
 `,k=`const subagentStore = {
     sessions: new Map(),
@@ -959,6 +989,22 @@ function applyMessageEvent(sessionId, event, eventIndex, source) {
     getSession(sessionId) {
         return this.sessions.get(String(sessionId || '')) || null;
     },
+
+    list(sessionId) {
+        const st = this.getSession(sessionId);
+        if (!st) return [];
+        const out = [];
+        st.order.forEach(function (id) {
+            const item = st.itemsById.get(id);
+            if (item) out.push(item);
+        });
+        return out;
+    },
+
+    runningCount(sessionId) {
+        const st = this.getSession(sessionId);
+        return st ? st.runningIds.size : 0;
+    },
 };
 
 function applySubagentSnapshot(sessionId, flat) {
@@ -971,6 +1017,14 @@ function applySubagentLifecycleToStore(sessionId, event) {
 
 function clearSubagentStateForSession(sessionId) {
     subagentStore.clearSession(sessionId);
+}
+
+function selectSubagentList(sessionId) {
+    return subagentStore.list(sessionId);
+}
+
+function selectSubagentRunningCount(sessionId) {
+    return subagentStore.runningCount(sessionId);
 }
 `,_=`function markUiEventStoreApplied(event) {
     if (!event || typeof event !== 'object') return;
@@ -7229,6 +7283,7 @@ async function refreshSubagentTreePanelInner(sessionId) {
         var data = await resp.json();
         var flat = (data && data.subagents) ? data.subagents : [];
         applySubagentSnapshot(sessionId, flat);
+        flat = selectSubagentList(sessionId);
         if (!flat.length) {
             if (toggleBtn) toggleBtn.classList.add('hidden');
             closeSubagentPanel();
@@ -7259,7 +7314,7 @@ async function refreshSubagentTreePanelInner(sessionId) {
                 }
             });
         }
-        var runningN = flat.filter(function (n) { return n.running; }).length;
+        var runningN = selectSubagentRunningCount(sessionId);
         if (runningN > 0 && subagentPanelOpen) scheduleSubagentIncrementalSync();
         else {
             stopSubagentIncrementalSync();
@@ -8211,7 +8266,14 @@ async function loadSessionMessages(sessionId, scrollBehavior, opts) {
         const batchSize = opts.full ? 64 : 512;
         for (let evi = 0; evi < events.length; evi += 1) {
             const ev = events[evi];
-            if (ev && typeof ev === 'object' && ev.type) renderEvent(loadCtx, ev, indexBase + evi, sessionId);
+            if (ev && typeof ev === 'object' && ev.type) {
+                applySessionEvent(ev, {
+                    sessionId: sessionId,
+                    eventIndex: indexBase + evi,
+                    source: 'history',
+                });
+                renderEvent(loadCtx, ev, indexBase + evi, sessionId);
+            }
             if (evi > 0 && evi % batchSize === 0) {
                 await new Promise(function (resolve) { setTimeout(resolve, 0); });
                 if (loadToken !== messageLoadEpoch || sessionId !== currentSessionId) return;
@@ -8705,6 +8767,11 @@ async function sendMessage() {
     setSessionRunState(runSessionId, { controller: ac, ctx: runCtx });
     setSendButtonState();
     syncSessionListIndicatorClasses();
+    applySessionEvent({ type: 'user', content: rawMessage }, {
+        sessionId: runSessionId,
+        eventIndex: preCount,
+        source: 'local-send',
+    });
     if (!switchedAway) {
         liveAutoFollow = true;
         streamChatNearBottom = true;

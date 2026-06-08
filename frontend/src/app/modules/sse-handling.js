@@ -356,6 +356,11 @@ async function sendMessage() {
     setSessionRunState(runSessionId, { controller: ac, ctx: runCtx });
     setSendButtonState();
     syncSessionListIndicatorClasses();
+    applySessionEvent({ type: 'user', content: rawMessage }, {
+        sessionId: runSessionId,
+        eventIndex: preCount,
+        source: 'local-send',
+    });
     if (!switchedAway) {
         liveAutoFollow = true;
         streamChatNearBottom = true;

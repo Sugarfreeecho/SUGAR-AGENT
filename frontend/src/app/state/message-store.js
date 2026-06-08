@@ -78,6 +78,24 @@ const messageStore = {
     getSession(sessionId) {
         return this.sessions.get(String(sessionId || '')) || null;
     },
+
+    listEvents(sessionId) {
+        const st = this.getSession(sessionId);
+        return st ? st.events.slice() : [];
+    },
+
+    listEventsInRange(sessionId, startIndex, endIndex) {
+        const start = Number.isFinite(Number(startIndex)) ? Number(startIndex) : -Infinity;
+        const end = Number.isFinite(Number(endIndex)) ? Number(endIndex) : Infinity;
+        return this.listEvents(sessionId).filter(function (record) {
+            return record.index >= start && record.index < end;
+        });
+    },
+
+    eventCount(sessionId) {
+        const st = this.getSession(sessionId);
+        return st ? st.events.length : 0;
+    },
 };
 
 function beginMessageReplay(sessionId, meta) {
@@ -90,4 +108,16 @@ function clearMessageStateForSession(sessionId) {
 
 function applyMessageEvent(sessionId, event, eventIndex, source) {
     return messageStore.applyEvent(sessionId, event, eventIndex, source);
+}
+
+function selectMessageEvents(sessionId) {
+    return messageStore.listEvents(sessionId);
+}
+
+function selectMessageEventsInRange(sessionId, startIndex, endIndex) {
+    return messageStore.listEventsInRange(sessionId, startIndex, endIndex);
+}
+
+function selectMessageEventCount(sessionId) {
+    return messageStore.eventCount(sessionId);
 }

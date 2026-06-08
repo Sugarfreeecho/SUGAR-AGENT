@@ -2186,6 +2186,7 @@ async function refreshSubagentTreePanelInner(sessionId) {
         var data = await resp.json();
         var flat = (data && data.subagents) ? data.subagents : [];
         applySubagentSnapshot(sessionId, flat);
+        flat = selectSubagentList(sessionId);
         if (!flat.length) {
             if (toggleBtn) toggleBtn.classList.add('hidden');
             closeSubagentPanel();
@@ -2216,7 +2217,7 @@ async function refreshSubagentTreePanelInner(sessionId) {
                 }
             });
         }
-        var runningN = flat.filter(function (n) { return n.running; }).length;
+        var runningN = selectSubagentRunningCount(sessionId);
         if (runningN > 0 && subagentPanelOpen) scheduleSubagentIncrementalSync();
         else {
             stopSubagentIncrementalSync();

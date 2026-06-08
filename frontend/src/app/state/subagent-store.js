@@ -117,6 +117,22 @@ const subagentStore = {
     getSession(sessionId) {
         return this.sessions.get(String(sessionId || '')) || null;
     },
+
+    list(sessionId) {
+        const st = this.getSession(sessionId);
+        if (!st) return [];
+        const out = [];
+        st.order.forEach(function (id) {
+            const item = st.itemsById.get(id);
+            if (item) out.push(item);
+        });
+        return out;
+    },
+
+    runningCount(sessionId) {
+        const st = this.getSession(sessionId);
+        return st ? st.runningIds.size : 0;
+    },
 };
 
 function applySubagentSnapshot(sessionId, flat) {
@@ -129,4 +145,12 @@ function applySubagentLifecycleToStore(sessionId, event) {
 
 function clearSubagentStateForSession(sessionId) {
     subagentStore.clearSession(sessionId);
+}
+
+function selectSubagentList(sessionId) {
+    return subagentStore.list(sessionId);
+}
+
+function selectSubagentRunningCount(sessionId) {
+    return subagentStore.runningCount(sessionId);
 }
