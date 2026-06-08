@@ -131,7 +131,7 @@ body {
 
 .sidebar-brand { padding: 1.2rem 1rem 0.7rem; border-bottom: 1px solid var(--border-glass); }
 .sidebar-brand-line { display: flex; align-items: center; gap: 0.7rem; }
-.sidebar-brand-copy { flex: 1; min-width: 0; }
+.sidebar-brand-copy { flex: 1; min-width: 0; overflow: hidden; }
 
 .sidebar-settings-btn {
     flex-shrink: 0; width: 34px; height: 34px; padding: 0;
@@ -170,6 +170,9 @@ body {
     background: linear-gradient(135deg, #f0eff5 0%, #c8c6d6 100%);
     -webkit-background-clip: text; -webkit-text-fill-color: transparent;
     background-clip: text;
+    user-select: none;
+    -webkit-user-select: none;
+    cursor: default;
 }
 :root.theme-light .sidebar-brand-text {
     background: linear-gradient(135deg, #1f1f2e 0%, #4f46e5 55%, #6366f1 100%);
@@ -177,8 +180,34 @@ body {
     -webkit-text-fill-color: transparent;
 }
 .sidebar-brand-sub {
-    font-size: 0.62rem; color: var(--text-tertiary);
-    letter-spacing: 0.07em; text-transform: uppercase; margin-top: 0.05rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+    margin-top: 0.1rem;
+    color: #7f8699;
+    text-transform: none;
+    letter-spacing: 0.01em;
+    line-height: 1.4;
+    font-size: 0.62rem;
+    font-family: var(--sans);
+    user-select: none;
+    -webkit-user-select: none;
+    cursor: default;
+}
+.sidebar-brand-sub-line {
+    display: block;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 100%;
+}
+.sidebar-brand-sub-line--en {
+    font-size: inherit;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+}
+.sidebar-brand-sub-line--zh {
+    font-size: inherit;
 }
 
 /* 介于 MyAgent 下沿与「置顶目录」上沿之间的条带，垂直居中「新建对话」 */

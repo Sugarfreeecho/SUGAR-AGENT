@@ -2103,7 +2103,7 @@ function createProcessFeedRow(ctx, type, initialText, streamOpts, runSessionId, 
     if (type === 'error-log') {
         var errHint = document.createElement('div');
         errHint.className = 'feed-error-contact-hint';
-        errHint.textContent = '如需帮助或反馈，请到 GitHub 提交 issue';
+        errHint.textContent = '如需帮助或反馈，请联系GitHub @sugarfreeecho';
         body.appendChild(errHint);
     }
     const agg = body.closest('.process-aggregate');

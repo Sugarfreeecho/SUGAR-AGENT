@@ -37,3 +37,7 @@ const uiSources = [
 ];
 
 Function('"use strict";\n' + uiSources.join('\n\n') + '\n//# sourceURL=myagent-ui.js')();
+
+if (typeof initUiHoverTips === 'function') {
+    initUiHoverTips(document);
+}

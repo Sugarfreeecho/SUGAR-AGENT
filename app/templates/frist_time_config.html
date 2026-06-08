@@ -156,13 +156,50 @@
     -webkit-background-clip: text;
     background-clip: text;
     -webkit-text-fill-color: transparent;
+    user-select: none;
+    -webkit-user-select: none;
+    cursor: default;
   }
   :root.theme-light .logo h1 {
     background: linear-gradient(135deg, #1f1f2e 0%, #4f46e5 55%, #6366f1 100%);
     -webkit-background-clip: text;
     background-clip: text;
   }
-  .logo p { color: var(--text-secondary); font-size: 0.88rem; font-weight: 500; }
+  .logo p {
+    color: var(--text-secondary);
+    font-size: 0.74rem;
+    font-weight: 500;
+    line-height: 1.18;
+  }
+  .brand-sub {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+    margin-top: 0.1rem;
+    color: #7f8699;
+    letter-spacing: 0.01em;
+    line-height: 1.4;
+    font-size: 0.62rem;
+    font-family: var(--sans);
+    user-select: none;
+    -webkit-user-select: none;
+    cursor: default;
+  }
+  .brand-sub-line {
+    display: block;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 100%;
+  }
+  .brand-sub-line--en {
+    font-size: inherit;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+  .brand-sub-line--zh {
+    font-size: inherit;
+  }
 
   .form-row-2 {
     display: grid;
@@ -380,11 +417,14 @@
     <div class="logo">
       <div class="logo-icon" aria-hidden="true"><svg viewBox="0 0 40 32" fill="none" xmlns="http://www.w3.org/2000/svg"><text x="20" y="21" text-anchor="middle" font-family="'Brush Script MT','Segoe Script','Pacifico','Dancing Script',cursive" font-size="15" font-style="italic" fill="white" stroke="none" transform="rotate(-6 20 16)">Sugar</text></svg></div>
       <h1>WaveMate</h1>
-      <p>Wireless Analyzer &amp; Virtual Expert - 无线分析虚拟专家Agent</p>
+      <p class="brand-sub" title="Wireless Analyzer &amp; Virtual Expert - 无线分析虚拟专家Agent">
+        <span class="brand-sub-line brand-sub-line--en">Wireless Analyzer &amp; Virtual Expert</span>
+        <span class="brand-sub-line brand-sub-line--zh">无线分析虚拟专家Agent</span>
+      </p>
     </div>
 
     <div id="status" class="status"></div>
-    <div id="wizard-status-help" class="wizard-status-help" aria-live="polite">如需帮助或反馈，请到 GitHub 提交 issue</div>
+    <div id="wizard-status-help" class="wizard-status-help" aria-live="polite">如需帮助或反馈，请联系GitHub @sugarfreeecho</div>
 
     <form id="configForm">
       <div class="form-row-2">
@@ -462,7 +502,7 @@
     <div class="footer">
       <a href="#" id="footer-advanced-link" class="footer-advanced-link">高级设置（与聊天共用命名窗口，可回到原标签）</a>
       <div style="margin-top:8px;font-size:11px;color:var(--text-tertiary);">配置写入本地 .env；修改 WORK_DIR 后需重启服务生效。</div>
-      <div style="margin-top:6px;font-size:11px;color:var(--text-tertiary);">如需帮助或反馈，请到 GitHub 提交 issue</div>
+      <div style="margin-top:6px;font-size:11px;color:var(--text-tertiary);">如需帮助或反馈，请联系GitHub @sugarfreeecho</div>
     </div>
   </div>
 </div>
