@@ -930,7 +930,7 @@ def _load_config_wizard_html() -> str:
     # 极简兜底（完整 UI：templates/frist_time_config.html）
     return """<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8"><title>首次配置</title></head>
 <body style="font-family:sans-serif;max-width:480px;margin:2rem auto;padding:1rem;">
-<h1>WaveMate · 首次配置</h1>
+<h1>WAVE Agent · 首次配置</h1>
 <p>缺少 <code>templates/frist_time_config.html</code>，使用简易表单。</p>
 <form id="f"><label>OPENAI_API_KEY<input id="k" type="password" style="width:100%;margin:.5rem 0"></label>
 <label>OPENAI_BASE_URL<input id="u" type="text" placeholder="https://api.deepseek.com" style="width:100%;margin:.5rem 0"></label>
