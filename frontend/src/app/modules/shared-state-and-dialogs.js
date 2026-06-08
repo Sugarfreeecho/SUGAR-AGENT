@@ -1,5 +1,6 @@
 let currentSessionId = null;
 const contextTokensBySession = Object.create(null);
+/* Legacy compatibility holder. Active run state lives in sessionStore.runsBySession. */
 const runningBySession = Object.create(null);
 /** 阻塞连击发送：在写入 runningBySession 之前的 await 空隙内仍会因 isSessionRunning 为假而误判可发 */
 let sendPipelineLock = false;

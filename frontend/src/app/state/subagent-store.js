@@ -108,6 +108,19 @@ const subagentStore = {
         st.eventCountsById.set(id, Math.max(0, n));
     },
 
+    deleteEventCount(sessionId, agentId) {
+        const st = this.sessions.get(String(sessionId || ''));
+        const id = String(agentId || '');
+        if (!st || !id) return;
+        st.eventCountsById.delete(id);
+    },
+
+    clearEventCounts(sessionId) {
+        const st = this.sessions.get(String(sessionId || ''));
+        if (!st) return;
+        st.eventCountsById.clear();
+    },
+
     getEventCount(sessionId, agentId) {
         const st = this.sessions.get(String(sessionId || ''));
         if (!st) return 0;

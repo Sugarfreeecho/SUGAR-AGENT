@@ -1,5 +1,4 @@
 var subagentCardSyncTimer = null;
-var subagentCardEventCount = Object.create(null);
 var subagentPanelOpen = false;
 var subagentPanelBound = false;
 var subagentDockExpanded = false;
@@ -269,17 +268,17 @@ function setSubagentCardEventCount(agentId, count) {
     var n = Number(count);
     if (!aid || !Number.isFinite(n)) return;
     n = Math.max(0, n);
-    subagentCardEventCount[aid] = n;
     if (currentSessionId) subagentStore.setEventCount(currentSessionId, aid, n);
 }
 
 function bumpSubagentCardEventCount(agentId, eventIndex, increment) {
     var aid = String(agentId || '');
     if (!aid) return;
+    var prev = currentSessionId ? subagentStore.getEventCount(currentSessionId, aid) : 0;
     if (typeof eventIndex === 'number' && eventIndex >= 0) {
-        setSubagentCardEventCount(aid, Math.max(subagentCardEventCount[aid] || 0, eventIndex + 1));
+        setSubagentCardEventCount(aid, Math.max(prev, eventIndex + 1));
     } else if (increment) {
-        setSubagentCardEventCount(aid, (subagentCardEventCount[aid] || 0) + 1);
+        setSubagentCardEventCount(aid, prev + 1);
     }
 }
 
@@ -606,7 +605,6 @@ function resetSubagentPanelForSession() {
     }
     hideSubagentContinueBanner();
     subagentPanelRefreshSeq += 1;
-    subagentCardEventCount = Object.create(null);
     closeSubagentPanel();
     stopSubagentIncrementalSync();
     var grid = document.getElementById('subagent-grid');
@@ -897,6 +895,11 @@ function appendSubagentFinalToTurn(ctx, content, eventIndex) {
 function dispatchSubagentCardEvent(ctx, card, event, eventIndex, agentId) {
     if (!event || typeof event !== 'object') return;
     if (shouldSkipSubagentProcessEvent(event)) return;
+    applySessionEvent(event, {
+        sessionId: agentId,
+        eventIndex: eventIndex,
+        source: 'subagent-stream',
+    });
     var t = event.type;
     if (t === 'subagent_start' || t === 'subagent_finish') return;
     if (t === 'user') {
@@ -1082,7 +1085,6 @@ function syncSubagentGridFromFlat(flat, sessionId) {
     if (!grid) return;
     if (grid.dataset.sessionId && grid.dataset.sessionId !== sessionId) {
         grid.innerHTML = '';
-        subagentCardEventCount = Object.create(null);
         disconnectSubagentCardViewportObserver();
     }
     grid.dataset.sessionId = sessionId;
@@ -1103,7 +1105,7 @@ function syncSubagentGridFromFlat(flat, sessionId) {
     grid.querySelectorAll('.subagent-grid-card').forEach(function (card) {
         var id = card.getAttribute('data-agent-id');
         if (id && !existingIds.has(id)) {
-            delete subagentCardEventCount[id];
+            subagentStore.deleteEventCount(sessionId, id);
             delete subagentCardLoadQueued[id];
             card.remove();
         }
@@ -1455,7 +1457,7 @@ async function incrementalSyncSubagentCard(agentId, card) {
     /* 父会话仍在 SSE 推流：转发的 subagent 事件已实时画到卡片，再用 /messages 全量回填
        会把正在 streaming 的 llm-* 块切碎（finalize → 新开行）。轮询此时降级为仅状态校准。 */
     var parentRunning = isSessionRunning(currentSessionId);
-    var prevCount = subagentCardEventCount[agentId] || 0;
+    var prevCount = currentSessionId ? subagentStore.getEventCount(currentSessionId, agentId) : 0;
     var summaryOnly = !shouldStreamSubagentProcessDom(card);
     try {
         var countResp = await fetch('/sessions/' + encodeURIComponent(agentId) + '/messages/count');
@@ -1895,7 +1897,6 @@ function bindSubagentGridActions(grid, sessionId) {
                 }
                 forgetSubagentBodyCache(sessionId, aid);
                 subagentStore.remove(sessionId, aid);
-                delete subagentCardEventCount[aid];
                 delete subagentCardLoadQueued[aid];
                 var card = btn.closest('.subagent-grid-card');
                 if (card) card.remove();
@@ -2177,7 +2178,7 @@ async function refreshSubagentTreePanelInner(sessionId) {
     }
     if (grid.dataset.sessionId && grid.dataset.sessionId !== sessionId) {
         grid.innerHTML = '';
-        subagentCardEventCount = Object.create(null);
+        subagentStore.clearEventCounts(sessionId);
     }
     grid.dataset.sessionId = sessionId;
     try {
@@ -2192,7 +2193,7 @@ async function refreshSubagentTreePanelInner(sessionId) {
             closeSubagentPanel();
             grid.innerHTML = '';
             grid.dataset.sessionId = sessionId;
-            subagentCardEventCount = Object.create(null);
+            subagentStore.clearEventCounts(sessionId);
             stopSubagentIncrementalSync();
             return;
         }

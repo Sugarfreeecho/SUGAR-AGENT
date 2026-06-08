@@ -1,4 +1,4 @@
-(function(){const c=document.createElement("link").relList;if(c&&c.supports&&c.supports("modulepreload"))return;for(const o of document.querySelectorAll('link[rel="modulepreload"]'))p(o);new MutationObserver(o=>{for(const d of o)if(d.type==="childList")for(const u of d.addedNodes)u.tagName==="LINK"&&u.rel==="modulepreload"&&p(u)}).observe(document,{childList:!0,subtree:!0});function f(o){const d={};return o.integrity&&(d.integrity=o.integrity),o.referrerPolicy&&(d.referrerPolicy=o.referrerPolicy),o.crossOrigin==="use-credentials"?d.credentials="include":o.crossOrigin==="anonymous"?d.credentials="omit":d.credentials="same-origin",d}function p(o){if(o.ep)return;o.ep=!0;const d=f(o);fetch(o.href,d)}})();(function(g){var c='<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"></path></svg>';function f(){if(!document.getElementById("myagent-path-picker-styles")){var n=document.createElement("style");n.id="myagent-path-picker-styles",n.textContent='.path-input-row{display:flex;align-items:stretch;gap:0.35rem;width:100%;}.path-input-row>.ip,.path-input-row>.tx,.path-input-row>input[type="text"],.path-input-row>input:not([type]){flex:1;min-width:0;}.path-browse-btn{flex-shrink:0;width:2.35rem;padding:0;border:1px solid var(--border-glass,rgba(255,255,255,.08));border-radius:var(--radius-sm,8px);background:var(--surface-glass2,rgba(40,40,60,.94));color:var(--text-secondary,#a6adc8);cursor:pointer;display:inline-flex;align-items:center;justify-content:center;transition:color .18s,border-color .18s,background .18s;}.path-browse-btn:hover{color:var(--text-primary,#cdd6f4);border-color:var(--border-brand-accent,rgba(124,111,247,.35));background:rgba(108,92,231,.12);}.path-browse-btn:disabled{opacity:.45;cursor:not-allowed;}.path-browse-btn--ghost{background:transparent;border-color:transparent;box-shadow:none;width:2.1rem;}.path-browse-btn--ghost:hover{background:rgba(108,92,231,.1);border-color:transparent;color:var(--accent-2,#d4b8fc);}.input-wrapper .path-browse-btn--ghost{align-self:center;margin-right:-0.15rem;}',document.head.appendChild(n)}}async function p(n,e,i){var a=typeof AbortController<"u"?new AbortController:null,r=a?setTimeout(function(){a.abort()},5e4):null,t;try{t=await fetch("/api/pick-path",{method:"POST",headers:{"Content-Type":"application/json"},credentials:"same-origin",body:JSON.stringify({kind:n||"directory",initial:e||"",multiple:!!i}),signal:a?a.signal:void 0})}finally{r&&clearTimeout(r)}var s=await t.json().catch(function(){return{ok:!1,error:"请求失败"}});if(!t.ok||!s.ok){if(s&&s.cancelled)return null;var l=s&&s.error||"无法打开选择对话框";if(/取消|cancelled|800704c7|2147023673/i.test(l))return null;throw new Error(l)}return i?Array.isArray(s.paths)?s.paths:s.path?[s.path]:[]:s.path||null}async function o(n,e,i,a,r){n.disabled=!0;try{var t=await p(e,i||"",!!r);a&&a(t)}catch{return}finally{n.disabled=!1}}function d(n){var e=String(n||"").trim();return e?((e.charAt(0)==='"'&&e.charAt(e.length-1)==='"'||e.charAt(0)==="'"&&e.charAt(e.length-1)==="'")&&(e=e.slice(1,-1)),'"'+e.replace(/"/g,'\\"')+'"'):""}function u(n,e,i){if(!n||n.dataset.pathBrowseWrapped==="1")return n;f();var a=document.createElement("div");a.className="path-input-row";var r=n.parentNode;if(!r)return n;r.insertBefore(a,n),a.appendChild(n);var t=document.createElement("button");t.type="button",t.className="path-browse-btn",t.innerHTML=c;var s=i||"浏览路径";return t.setAttribute("aria-label",s),typeof bindUiHoverTip=="function"?(t.setAttribute("data-ui-tip",s),t.removeAttribute("title"),bindUiHoverTip(t)):t.title=s,t.addEventListener("click",function(l){l.stopPropagation();var m=n.getAttribute("data-path-kind")||e;m!=="file"&&m!=="directory"&&(m="directory"),o(t,m,n.value||"",function(v){if(v){var S=Array.isArray(v)?v[0]||"":String(v);S&&(n.value=S,n.dispatchEvent(new Event("input",{bubbles:!0})),n.dispatchEvent(new Event("change",{bubbles:!0})))}})}),a.appendChild(t),n.dataset.pathBrowseWrapped="1",n}function b(n,e){var i=n.selectionStart,a=n.selectionEnd,r=n.value.slice(0,i),t=n.value.slice(a),s=String(e||"");r.length&&!/\s$/.test(r)&&(s=" "+s),t.length&&!/^\s/.test(t)&&(s=s+" "),n.value=r+s+t;var l=r.length+s.length;n.selectionStart=n.selectionEnd=l,n.dispatchEvent(new Event("input",{bubbles:!0})),n.focus()}function y(n,e){!n||!e||(f(),n.classList.add("path-browse-btn","path-browse-btn--ghost"),n.innerHTML=c,n.setAttribute("aria-label","选择文件"),n.setAttribute("data-ui-tip","选择文件"),n.dataset.silentPickerUnavailable="1",n.removeAttribute("title"),n.addEventListener("click",function(i){i.stopPropagation();var a=g&&typeof g.__WORK_DIR__=="string"?g.__WORK_DIR__:"";o(n,"file",a,function(r){var t=Array.isArray(r)?r:r?[r]:[];if(t.length){var s=t.map(function(l){return d(l)}).join(" ");b(e,s)}},!0)}))}function h(n){n=n||document;var e=n.querySelectorAll("[data-path-kind]"),i;for(i=0;i<e.length;i++){var a=e[i],r=a.getAttribute("data-path-kind");(r==="file"||r==="directory")&&u(a,r)}}g.MyAgentPathPicker={pickPath:p,wrapInputWithBrowse:u,attachChatPicker:y,scan:h},document.readyState==="loading"?document.addEventListener("DOMContentLoaded",function(){h(document)}):h(document)})(typeof window<"u"?window:globalThis);const x=`// ═══════════════════════════════════════════════════════════
+(function(){const c=document.createElement("link").relList;if(c&&c.supports&&c.supports("modulepreload"))return;for(const o of document.querySelectorAll('link[rel="modulepreload"]'))p(o);new MutationObserver(o=>{for(const d of o)if(d.type==="childList")for(const u of d.addedNodes)u.tagName==="LINK"&&u.rel==="modulepreload"&&p(u)}).observe(document,{childList:!0,subtree:!0});function f(o){const d={};return o.integrity&&(d.integrity=o.integrity),o.referrerPolicy&&(d.referrerPolicy=o.referrerPolicy),o.crossOrigin==="use-credentials"?d.credentials="include":o.crossOrigin==="anonymous"?d.credentials="omit":d.credentials="same-origin",d}function p(o){if(o.ep)return;o.ep=!0;const d=f(o);fetch(o.href,d)}})();(function(g){var c='<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"></path></svg>';function f(){if(!document.getElementById("myagent-path-picker-styles")){var n=document.createElement("style");n.id="myagent-path-picker-styles",n.textContent='.path-input-row{display:flex;align-items:stretch;gap:0.35rem;width:100%;}.path-input-row>.ip,.path-input-row>.tx,.path-input-row>input[type="text"],.path-input-row>input:not([type]){flex:1;min-width:0;}.path-browse-btn{flex-shrink:0;width:2.35rem;padding:0;border:1px solid var(--border-glass,rgba(255,255,255,.08));border-radius:var(--radius-sm,8px);background:var(--surface-glass2,rgba(40,40,60,.94));color:var(--text-secondary,#a6adc8);cursor:pointer;display:inline-flex;align-items:center;justify-content:center;transition:color .18s,border-color .18s,background .18s;}.path-browse-btn:hover{color:var(--text-primary,#cdd6f4);border-color:var(--border-brand-accent,rgba(124,111,247,.35));background:rgba(108,92,231,.12);}.path-browse-btn:disabled{opacity:.45;cursor:not-allowed;}.path-browse-btn--ghost{background:transparent;border-color:transparent;box-shadow:none;width:2.1rem;}.path-browse-btn--ghost:hover{background:rgba(108,92,231,.1);border-color:transparent;color:var(--accent-2,#d4b8fc);}.input-wrapper .path-browse-btn--ghost{align-self:center;margin-right:-0.15rem;}',document.head.appendChild(n)}}async function p(n,e,i){var a=typeof AbortController<"u"?new AbortController:null,r=a?setTimeout(function(){a.abort()},5e4):null,t;try{t=await fetch("/api/pick-path",{method:"POST",headers:{"Content-Type":"application/json"},credentials:"same-origin",body:JSON.stringify({kind:n||"directory",initial:e||"",multiple:!!i}),signal:a?a.signal:void 0})}finally{r&&clearTimeout(r)}var s=await t.json().catch(function(){return{ok:!1,error:"请求失败"}});if(!t.ok||!s.ok){if(s&&s.cancelled)return null;var l=s&&s.error||"无法打开选择对话框";if(/取消|cancelled|800704c7|2147023673/i.test(l))return null;throw new Error(l)}return i?Array.isArray(s.paths)?s.paths:s.path?[s.path]:[]:s.path||null}async function o(n,e,i,a,r){n.disabled=!0;try{var t=await p(e,i||"",!!r);a&&a(t)}catch{return}finally{n.disabled=!1}}function d(n){var e=String(n||"").trim();return e?((e.charAt(0)==='"'&&e.charAt(e.length-1)==='"'||e.charAt(0)==="'"&&e.charAt(e.length-1)==="'")&&(e=e.slice(1,-1)),'"'+e.replace(/"/g,'\\"')+'"'):""}function u(n,e,i){if(!n||n.dataset.pathBrowseWrapped==="1")return n;f();var a=document.createElement("div");a.className="path-input-row";var r=n.parentNode;if(!r)return n;r.insertBefore(a,n),a.appendChild(n);var t=document.createElement("button");t.type="button",t.className="path-browse-btn",t.innerHTML=c;var s=i||"浏览路径";return t.setAttribute("aria-label",s),typeof bindUiHoverTip=="function"?(t.setAttribute("data-ui-tip",s),t.removeAttribute("title"),bindUiHoverTip(t)):t.title=s,t.addEventListener("click",function(l){l.stopPropagation();var m=n.getAttribute("data-path-kind")||e;m!=="file"&&m!=="directory"&&(m="directory"),o(t,m,n.value||"",function(v){if(v){var S=Array.isArray(v)?v[0]||"":String(v);S&&(n.value=S,n.dispatchEvent(new Event("input",{bubbles:!0})),n.dispatchEvent(new Event("change",{bubbles:!0})))}})}),a.appendChild(t),n.dataset.pathBrowseWrapped="1",n}function b(n,e){var i=n.selectionStart,a=n.selectionEnd,r=n.value.slice(0,i),t=n.value.slice(a),s=String(e||"");r.length&&!/\s$/.test(r)&&(s=" "+s),t.length&&!/^\s/.test(t)&&(s=s+" "),n.value=r+s+t;var l=r.length+s.length;n.selectionStart=n.selectionEnd=l,n.dispatchEvent(new Event("input",{bubbles:!0})),n.focus()}function y(n,e){!n||!e||(f(),n.classList.add("path-browse-btn","path-browse-btn--ghost"),n.innerHTML=c,n.setAttribute("aria-label","选择文件"),n.setAttribute("data-ui-tip","选择文件"),n.dataset.silentPickerUnavailable="1",n.removeAttribute("title"),n.addEventListener("click",function(i){i.stopPropagation();var a=g&&typeof g.__WORK_DIR__=="string"?g.__WORK_DIR__:"";o(n,"file",a,function(r){var t=Array.isArray(r)?r:r?[r]:[];if(t.length){var s=t.map(function(l){return d(l)}).join(" ");b(e,s)}},!0)}))}function h(n){n=n||document;var e=n.querySelectorAll("[data-path-kind]"),i;for(i=0;i<e.length;i++){var a=e[i],r=a.getAttribute("data-path-kind");(r==="file"||r==="directory")&&u(a,r)}}g.MyAgentPathPicker={pickPath:p,wrapInputWithBrowse:u,attachChatPicker:y,scan:h},document.readyState==="loading"?document.addEventListener("DOMContentLoaded",function(){h(document)}):h(document)})(typeof window<"u"?window:globalThis);const I=`// ═══════════════════════════════════════════════════════════
 // MyAgent · 智能会话 — 完整逻辑
 // ═══════════════════════════════════════════════════════════
 
@@ -154,8 +154,9 @@ function initUiSettingsControls() {
 }
 initUiSettingsControls();
 
-`,I=`let currentSessionId = null;
+`,x=`let currentSessionId = null;
 const contextTokensBySession = Object.create(null);
+/* Legacy compatibility holder. Active run state lives in sessionStore.runsBySession. */
 const runningBySession = Object.create(null);
 /** 阻塞连击发送：在写入 runningBySession 之前的 await 空隙内仍会因 isSessionRunning 为假而误判可发 */
 let sendPipelineLock = false;
@@ -660,14 +661,12 @@ function setSessionRunState(sessionId, run) {
     const sid = String(sessionId || '');
     if (!sid) return;
     sessionStore.setRun(sid, run || null);
-    if (run) runningBySession[sid] = run;
-    else delete runningBySession[sid];
 }
 
 function getSessionRunState(sessionId) {
     const sid = String(sessionId || '');
     if (!sid) return null;
-    return sessionStore.getRun(sid) || runningBySession[sid] || null;
+    return sessionStore.getRun(sid) || null;
 }
 
 function clearSessionRunState(sessionId) {
@@ -978,6 +977,19 @@ function selectMessageEventCount(sessionId) {
         const n = Number(count);
         if (!st || !id || !Number.isFinite(n)) return;
         st.eventCountsById.set(id, Math.max(0, n));
+    },
+
+    deleteEventCount(sessionId, agentId) {
+        const st = this.sessions.get(String(sessionId || ''));
+        const id = String(agentId || '');
+        if (!st || !id) return;
+        st.eventCountsById.delete(id);
+    },
+
+    clearEventCounts(sessionId) {
+        const st = this.sessions.get(String(sessionId || ''));
+        if (!st) return;
+        st.eventCountsById.clear();
     },
 
     getEventCount(sessionId, agentId) {
@@ -1347,6 +1359,11 @@ function hydrateSubagentTurnProcess(turn, ctx, agentId) {
             }
             return;
         }
+        applySessionEvent(ev, {
+            sessionId: agentId,
+            eventIndex: item.eventIndex,
+            source: 'subagent-history',
+        });
         renderEvent(ctx, ev, item.eventIndex, agentId);
     }
     var index = 0;
@@ -1711,7 +1728,14 @@ async function loadOlderHistoryChunk(opts) {
         var rs = typeof data.range_start === 'number' ? data.range_start : 0;
         for (var i = 0; i < events.length; i += 1) {
             var ev = events[i];
-            if (ev && typeof ev === 'object' && ev.type) renderEvent(tmpCtx, ev, rs + i, sid);
+            if (ev && typeof ev === 'object' && ev.type) {
+                applySessionEvent(ev, {
+                    sessionId: sid,
+                    eventIndex: rs + i,
+                    source: 'history-older',
+                });
+                renderEvent(tmpCtx, ev, rs + i, sid);
+            }
         }
         var sen = stream && stream.querySelector('#history-load-sentinel');
         if (stream && frag.childNodes.length) {
@@ -5096,7 +5120,6 @@ function finalizeProgressStreamForType(ctx, logType) {
 
 /* ── Subagent 浮层 / 过程块 ── */
 `,R=`var subagentCardSyncTimer = null;
-var subagentCardEventCount = Object.create(null);
 var subagentPanelOpen = false;
 var subagentPanelBound = false;
 var subagentDockExpanded = false;
@@ -5366,17 +5389,17 @@ function setSubagentCardEventCount(agentId, count) {
     var n = Number(count);
     if (!aid || !Number.isFinite(n)) return;
     n = Math.max(0, n);
-    subagentCardEventCount[aid] = n;
     if (currentSessionId) subagentStore.setEventCount(currentSessionId, aid, n);
 }
 
 function bumpSubagentCardEventCount(agentId, eventIndex, increment) {
     var aid = String(agentId || '');
     if (!aid) return;
+    var prev = currentSessionId ? subagentStore.getEventCount(currentSessionId, aid) : 0;
     if (typeof eventIndex === 'number' && eventIndex >= 0) {
-        setSubagentCardEventCount(aid, Math.max(subagentCardEventCount[aid] || 0, eventIndex + 1));
+        setSubagentCardEventCount(aid, Math.max(prev, eventIndex + 1));
     } else if (increment) {
-        setSubagentCardEventCount(aid, (subagentCardEventCount[aid] || 0) + 1);
+        setSubagentCardEventCount(aid, prev + 1);
     }
 }
 
@@ -5703,7 +5726,6 @@ function resetSubagentPanelForSession() {
     }
     hideSubagentContinueBanner();
     subagentPanelRefreshSeq += 1;
-    subagentCardEventCount = Object.create(null);
     closeSubagentPanel();
     stopSubagentIncrementalSync();
     var grid = document.getElementById('subagent-grid');
@@ -5994,6 +6016,11 @@ function appendSubagentFinalToTurn(ctx, content, eventIndex) {
 function dispatchSubagentCardEvent(ctx, card, event, eventIndex, agentId) {
     if (!event || typeof event !== 'object') return;
     if (shouldSkipSubagentProcessEvent(event)) return;
+    applySessionEvent(event, {
+        sessionId: agentId,
+        eventIndex: eventIndex,
+        source: 'subagent-stream',
+    });
     var t = event.type;
     if (t === 'subagent_start' || t === 'subagent_finish') return;
     if (t === 'user') {
@@ -6179,7 +6206,6 @@ function syncSubagentGridFromFlat(flat, sessionId) {
     if (!grid) return;
     if (grid.dataset.sessionId && grid.dataset.sessionId !== sessionId) {
         grid.innerHTML = '';
-        subagentCardEventCount = Object.create(null);
         disconnectSubagentCardViewportObserver();
     }
     grid.dataset.sessionId = sessionId;
@@ -6200,7 +6226,7 @@ function syncSubagentGridFromFlat(flat, sessionId) {
     grid.querySelectorAll('.subagent-grid-card').forEach(function (card) {
         var id = card.getAttribute('data-agent-id');
         if (id && !existingIds.has(id)) {
-            delete subagentCardEventCount[id];
+            subagentStore.deleteEventCount(sessionId, id);
             delete subagentCardLoadQueued[id];
             card.remove();
         }
@@ -6552,7 +6578,7 @@ async function incrementalSyncSubagentCard(agentId, card) {
     /* 父会话仍在 SSE 推流：转发的 subagent 事件已实时画到卡片，再用 /messages 全量回填
        会把正在 streaming 的 llm-* 块切碎（finalize → 新开行）。轮询此时降级为仅状态校准。 */
     var parentRunning = isSessionRunning(currentSessionId);
-    var prevCount = subagentCardEventCount[agentId] || 0;
+    var prevCount = currentSessionId ? subagentStore.getEventCount(currentSessionId, agentId) : 0;
     var summaryOnly = !shouldStreamSubagentProcessDom(card);
     try {
         var countResp = await fetch('/sessions/' + encodeURIComponent(agentId) + '/messages/count');
@@ -6992,7 +7018,6 @@ function bindSubagentGridActions(grid, sessionId) {
                 }
                 forgetSubagentBodyCache(sessionId, aid);
                 subagentStore.remove(sessionId, aid);
-                delete subagentCardEventCount[aid];
                 delete subagentCardLoadQueued[aid];
                 var card = btn.closest('.subagent-grid-card');
                 if (card) card.remove();
@@ -7274,7 +7299,7 @@ async function refreshSubagentTreePanelInner(sessionId) {
     }
     if (grid.dataset.sessionId && grid.dataset.sessionId !== sessionId) {
         grid.innerHTML = '';
-        subagentCardEventCount = Object.create(null);
+        subagentStore.clearEventCounts(sessionId);
     }
     grid.dataset.sessionId = sessionId;
     try {
@@ -7289,7 +7314,7 @@ async function refreshSubagentTreePanelInner(sessionId) {
             closeSubagentPanel();
             grid.innerHTML = '';
             grid.dataset.sessionId = sessionId;
-            subagentCardEventCount = Object.create(null);
+            subagentStore.clearEventCounts(sessionId);
             stopSubagentIncrementalSync();
             return;
         }
@@ -9164,7 +9189,7 @@ if (typeof globalThis !== 'undefined') {
     globalThis.toggleTocPanel = toggleTocPanel;
 }
 
-`,H=[x,I,C,w,T,E,L,k,_,P,A,B,R,F,M,N,O];Function(`"use strict";
+`,H=[I,x,C,w,T,E,L,k,_,P,A,B,R,F,M,N,O];Function(`"use strict";
 `+H.join(`
 
 `)+`

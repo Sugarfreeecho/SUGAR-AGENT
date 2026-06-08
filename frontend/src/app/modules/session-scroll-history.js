@@ -274,6 +274,11 @@ function hydrateSubagentTurnProcess(turn, ctx, agentId) {
             }
             return;
         }
+        applySessionEvent(ev, {
+            sessionId: agentId,
+            eventIndex: item.eventIndex,
+            source: 'subagent-history',
+        });
         renderEvent(ctx, ev, item.eventIndex, agentId);
     }
     var index = 0;
@@ -638,7 +643,14 @@ async function loadOlderHistoryChunk(opts) {
         var rs = typeof data.range_start === 'number' ? data.range_start : 0;
         for (var i = 0; i < events.length; i += 1) {
             var ev = events[i];
-            if (ev && typeof ev === 'object' && ev.type) renderEvent(tmpCtx, ev, rs + i, sid);
+            if (ev && typeof ev === 'object' && ev.type) {
+                applySessionEvent(ev, {
+                    sessionId: sid,
+                    eventIndex: rs + i,
+                    source: 'history-older',
+                });
+                renderEvent(tmpCtx, ev, rs + i, sid);
+            }
         }
         var sen = stream && stream.querySelector('#history-load-sentinel');
         if (stream && frag.childNodes.length) {

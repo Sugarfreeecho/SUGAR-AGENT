@@ -51,14 +51,12 @@ function setSessionRunState(sessionId, run) {
     const sid = String(sessionId || '');
     if (!sid) return;
     sessionStore.setRun(sid, run || null);
-    if (run) runningBySession[sid] = run;
-    else delete runningBySession[sid];
 }
 
 function getSessionRunState(sessionId) {
     const sid = String(sessionId || '');
     if (!sid) return null;
-    return sessionStore.getRun(sid) || runningBySession[sid] || null;
+    return sessionStore.getRun(sid) || null;
 }
 
 function clearSessionRunState(sessionId) {
