@@ -35,6 +35,11 @@ python/
 *.7z
 *.rar
 
+# Local planning / changelog notes that should stay out of the repo
+优化计划.txt
+日志 20260529.txt
+更新日志 202605.md
+
 # OS and editor files
 .DS_Store
 Thumbs.db

@@ -812,7 +812,7 @@ def _classify_api_error(exc: BaseException) -> dict:
                 "retry": 3}
     return {"code": "OTHER", "title": "LLM 调用异常",
             "msg": "发生未知错误。",
-            "solution": "请检查模型配置，或联系 @wushuge 00612259。",
+            "solution": "请先检查模型配置，或到 GitHub 提交 issue 反馈。",
             "retry": 0}
 
 

@@ -1,4 +1,4 @@
-﻿"""
+"""
 基于 FastAPI + SSE 的 Web 壳：聊天流、会话 CRUD、历史加载。
 
 大事件在 agent_loop.astream_events 中产生；本模块负责 JSON 行协议与分块刷出（sleep(0)）。
@@ -930,7 +930,7 @@ def _load_config_wizard_html() -> str:
     # 极简兜底（完整 UI：templates/frist_time_config.html）
     return """<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8"><title>首次配置</title></head>
 <body style="font-family:sans-serif;max-width:480px;margin:2rem auto;padding:1rem;">
-<h1>General Agent · 首次配置</h1>
+<h1>WaveMate · 首次配置</h1>
 <p>缺少 <code>templates/frist_time_config.html</code>，使用简易表单。</p>
 <form id="f"><label>OPENAI_API_KEY<input id="k" type="password" style="width:100%;margin:.5rem 0"></label>
 <label>OPENAI_BASE_URL<input id="u" type="text" placeholder="https://api.deepseek.com" style="width:100%;margin:.5rem 0"></label>

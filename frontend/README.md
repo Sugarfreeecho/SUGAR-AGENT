@@ -1,4 +1,4 @@
-# MyAgent UI (Vite)
+# WaveMate UI (Vite)
 
 The main chat UI lives in `frontend/` and is built by Vite into `app/templates/dist/`.
 
