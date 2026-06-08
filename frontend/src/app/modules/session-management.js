@@ -785,12 +785,11 @@ async function loadSessionMessages(sessionId, scrollBehavior, opts) {
         for (let evi = 0; evi < events.length; evi += 1) {
             const ev = events[evi];
             if (ev && typeof ev === 'object' && ev.type) {
-                applySessionEvent(ev, {
+                reduceAndRenderMessageEvent(loadCtx, ev, {
                     sessionId: sessionId,
                     eventIndex: indexBase + evi,
                     source: 'history',
                 });
-                renderEvent(loadCtx, ev, indexBase + evi, sessionId);
             }
             if (evi > 0 && evi % batchSize === 0) {
                 await new Promise(function (resolve) { setTimeout(resolve, 0); });

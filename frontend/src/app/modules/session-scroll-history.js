@@ -270,12 +270,11 @@ function hydrateSubagentTurnProcess(turn, ctx, agentId) {
             }
             return;
         }
-        applySessionEvent(ev, {
+        reduceAndRenderMessageEvent(ctx, ev, {
             sessionId: agentId,
             eventIndex: item.eventIndex,
             source: 'subagent-history',
         });
-        renderEvent(ctx, ev, item.eventIndex, agentId);
     }
     var index = 0;
     turn.dataset.processLoading = '1';
@@ -640,12 +639,11 @@ async function loadOlderHistoryChunk(opts) {
         for (var i = 0; i < events.length; i += 1) {
             var ev = events[i];
             if (ev && typeof ev === 'object' && ev.type) {
-                applySessionEvent(ev, {
+                reduceAndRenderMessageEvent(tmpCtx, ev, {
                     sessionId: sid,
                     eventIndex: rs + i,
                     source: 'history-older',
                 });
-                renderEvent(tmpCtx, ev, rs + i, sid);
             }
         }
         var sen = stream && stream.querySelector('#history-load-sentinel');

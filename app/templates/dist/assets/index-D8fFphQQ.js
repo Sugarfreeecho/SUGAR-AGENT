@@ -866,7 +866,37 @@ function selectMessageEventsInRange(sessionId, startIndex, endIndex) {
 function selectMessageEventCount(sessionId) {
     return messageStore.eventCount(sessionId);
 }
-`,k=`const subagentStore = {
+`,k=`function renderMessageRecord(ctx, record, sessionId) {
+    if (!ctx || !record || !record.event) return null;
+    const sid = sessionId || record.sessionId || currentSessionId;
+    renderEvent(ctx, record.event, record.index, sid);
+    return record;
+}
+
+function reduceAndRenderMessageEvent(ctx, event, opts) {
+    opts = opts || {};
+    if (!event || typeof event !== 'object') return { handled: false };
+    const reduced = applySessionEvent(event, opts);
+    if (!opts.skipRender && !(reduced && reduced.handled)) {
+        const record = reduced && reduced.messageRecord
+            ? reduced.messageRecord
+            : {
+                index: opts.eventIndex,
+                event: event,
+                source: opts.source || 'render',
+            };
+        renderMessageRecord(ctx, record, opts.sessionId || event.session_id || event.sessionId);
+    }
+    return reduced || { handled: false };
+}
+
+function renderMessageRecords(ctx, records, sessionId) {
+    const list = Array.isArray(records) ? records : [];
+    for (let i = 0; i < list.length; i += 1) {
+        renderMessageRecord(ctx, list[i], sessionId);
+    }
+}
+`,_=`const subagentStore = {
     sessions: new Map(),
 
     ensureSession(sessionId) {
@@ -1035,7 +1065,7 @@ function selectSubagentList(sessionId) {
 function selectSubagentRunningCount(sessionId) {
     return subagentStore.runningCount(sessionId);
 }
-`,_=`const contextStore = {
+`,P=`const contextStore = {
     tokensBySession: new Map(),
     todoBySession: new Map(),
     progressBySession: new Map(),
@@ -1155,7 +1185,7 @@ function appendContextProgressForSession(sessionId, kind, delta) {
 function selectContextProgress(sessionId) {
     return contextStore.progressBySession.get(String(sessionId || '')) || null;
 }
-`,P=`function markUiEventStoreApplied(event) {
+`,A=`function markUiEventStoreApplied(event) {
     if (!event || typeof event !== 'object') return;
     try {
         Object.defineProperty(event, '__storeApplied', {
@@ -1181,42 +1211,43 @@ function applySessionEvent(event, opts) {
     const eventIndex = opts.eventIndex;
     const source = opts.source || 'event';
     const type = String(event.type || '');
+    let messageRecord = null;
     if (sessionId) {
-        applyMessageEvent(sessionId, event, eventIndex, source);
+        messageRecord = applyMessageEvent(sessionId, event, eventIndex, source);
         markUiEventStoreApplied(event);
     }
     if (type === 'run_started' || type === 'run_attached') {
         setSessionServerStreamActive(sessionId, true);
-        return { handled: true, runStateChanged: true };
+        return { handled: true, runStateChanged: true, messageRecord: messageRecord };
     }
     if (type === 'run_finished' || type === 'run_interrupted' || type === 'run_failed') {
         setSessionServerStreamActive(sessionId, false);
-        return { handled: true, runStateChanged: true };
+        return { handled: true, runStateChanged: true, messageRecord: messageRecord };
     }
     if (type === 'context_tokens') {
         setContextTokensForSession(sessionId, event.estimated, event.threshold);
-        return { handled: false, contextStateChanged: true };
+        return { handled: false, contextStateChanged: true, messageRecord: messageRecord };
     }
     if (type === 'context_summary_delta') {
         appendContextProgressForSession(sessionId, 'context-summary', event.delta);
-        return { handled: false, contextStateChanged: true };
+        return { handled: false, contextStateChanged: true, messageRecord: messageRecord };
     }
     if (type === 'key_context_delta') {
         appendContextProgressForSession(sessionId, 'key-context', event.delta);
-        return { handled: false, contextStateChanged: true };
+        return { handled: false, contextStateChanged: true, messageRecord: messageRecord };
     }
     if (type === 'todo_plan') {
         applyTodoPlanToStore(sessionId, event);
-        return { handled: false, contextStateChanged: true };
+        return { handled: false, contextStateChanged: true, messageRecord: messageRecord };
     }
     if (type === 'subagent_start' || type === 'subagent_finish'
         || type === 'subagent_started' || type === 'subagent_finished') {
         applySubagentLifecycleToStore(sessionId, event);
-        return { handled: false, subagentStateChanged: true };
+        return { handled: false, subagentStateChanged: true, messageRecord: messageRecord };
     }
-    return { handled: false };
+    return { handled: false, messageRecord: messageRecord };
 }
-`,A=`function formatTokenCompact(n) {
+`,B=`function formatTokenCompact(n) {
     if (n == null || !Number.isFinite(Number(n))) return '—';
     const x = Math.max(0, Math.round(Number(n)));
     if (x >= 1000000) return (x / 1000000).toFixed(1).replace(/\\.0$/, '') + 'M';
@@ -1488,12 +1519,11 @@ function hydrateSubagentTurnProcess(turn, ctx, agentId) {
             }
             return;
         }
-        applySessionEvent(ev, {
+        reduceAndRenderMessageEvent(ctx, ev, {
             sessionId: agentId,
             eventIndex: item.eventIndex,
             source: 'subagent-history',
         });
-        renderEvent(ctx, ev, item.eventIndex, agentId);
     }
     var index = 0;
     turn.dataset.processLoading = '1';
@@ -1858,12 +1888,11 @@ async function loadOlderHistoryChunk(opts) {
         for (var i = 0; i < events.length; i += 1) {
             var ev = events[i];
             if (ev && typeof ev === 'object' && ev.type) {
-                applySessionEvent(ev, {
+                reduceAndRenderMessageEvent(tmpCtx, ev, {
                     sessionId: sid,
                     eventIndex: rs + i,
                     source: 'history-older',
                 });
-                renderEvent(tmpCtx, ev, rs + i, sid);
             }
         }
         var sen = stream && stream.querySelector('#history-load-sentinel');
@@ -2401,7 +2430,7 @@ async function scrollToUserTurnOrLoadOlder(eventIndex) {
         });
     }
 }
-`,B=`function ensureUiHoverTooltipEl() {
+`,R=`function ensureUiHoverTooltipEl() {
     if (uiHoverTooltipEl) return uiHoverTooltipEl;
     uiHoverTooltipEl = document.getElementById('ui-hover-tooltip');
     if (!uiHoverTooltipEl) {
@@ -2796,7 +2825,7 @@ async function refreshTodoPlanPanel() {
         hideTodoPlanPanel();
     }
 }
-`,R=`function removeMessagesFromNode(startWrap) {
+`,F=`function removeMessagesFromNode(startWrap) {
     const stream = getVisibleChatStream() || chatContainer;
     if (!stream) return;
     const kids = Array.from(stream.children);
@@ -5257,7 +5286,7 @@ function finalizeProgressStreamForType(ctx, logType) {
 }
 
 /* ── Subagent 浮层 / 过程块 ── */
-`,F=`var subagentCardSyncTimer = null;
+`,M=`var subagentCardSyncTimer = null;
 var subagentPanelOpen = false;
 var subagentPanelBound = false;
 var subagentDockExpanded = false;
@@ -7553,7 +7582,7 @@ function updateSubagentBlockFinish(ctx, event) {
     }
     handleSubagentLifecycleEvent(event);
 }
-`,M=`function renderEvent(ctx, event, eventIndex, runSessionId) {
+`,N=`function renderEvent(ctx, event, eventIndex, runSessionId) {
     if (!event || typeof event !== 'object') return;
     var eventSessionId = runSessionId || currentSessionId || '';
     if (eventSessionId && !event.__storeApplied) {
@@ -7643,7 +7672,7 @@ function updateSubagentBlockFinish(ctx, event) {
         if (fallbackContent.trim()) appendLog(ctx, fallbackContent, 'log-entry', runSessionId);
     }
 }
-`,N=`function setSendButtonState() {
+`,O=`function setSendButtonState() {
     sendBtn.disabled = false;
     if (isSessionRunning(currentSessionId)) {
         sendBtn.innerHTML = '停止 <span class="loader" aria-hidden="true"></span>';
@@ -8430,12 +8459,11 @@ async function loadSessionMessages(sessionId, scrollBehavior, opts) {
         for (let evi = 0; evi < events.length; evi += 1) {
             const ev = events[evi];
             if (ev && typeof ev === 'object' && ev.type) {
-                applySessionEvent(ev, {
+                reduceAndRenderMessageEvent(loadCtx, ev, {
                     sessionId: sessionId,
                     eventIndex: indexBase + evi,
                     source: 'history',
                 });
-                renderEvent(loadCtx, ev, indexBase + evi, sessionId);
             }
             if (evi > 0 && evi % batchSize === 0) {
                 await new Promise(function (resolve) { setTimeout(resolve, 0); });
@@ -8572,7 +8600,7 @@ async function createNewSessionInner() {
         appendLogVisible('创建新会话失败', 'error-log');
     }
 }
-`,O=`async function consumeAgentSseResponse(response, runCtx, runSessionId, streamEventIdx) {
+`,H=`async function consumeAgentSseResponse(response, runCtx, runSessionId, streamEventIdx) {
     if (!response || !response.body) return streamEventIdx;
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
@@ -8690,7 +8718,11 @@ async function createNewSessionInner() {
                     streamEventIdx += 1;
                     continue;
                 }
-                renderEvent(runCtx, parsed, streamEventIdx, runSessionId);
+                renderMessageRecord(runCtx, reduced.messageRecord || {
+                    index: streamEventIdx,
+                    event: parsed,
+                    source: 'sse',
+                }, runSessionId);
                 streamEventIdx += 1;
             } catch (e) { console.error('解析事件失败:', e); }
         }
@@ -9093,7 +9125,7 @@ sendBtn.addEventListener('click', function () {
     });
 })();
 initUiHoverTips(document);
-`,H=`newSessionBtn.addEventListener('click', async () => { await createNewSession(); });
+`,D=`newSessionBtn.addEventListener('click', async () => { await createNewSession(); });
 
 function initSidebarSash() {
     const side = document.getElementById('sidebar');
@@ -9336,8 +9368,8 @@ if (typeof globalThis !== 'undefined') {
     globalThis.toggleTodoPlanPanel = toggleTodoPlanPanel;
     globalThis.toggleTocPanel = toggleTocPanel;
 }
-`,D=[I,x,C,w,T,E,L,k,_,P,A,B,R,F,M,N,O,H];Function(`"use strict";
-`+D.join(`
+`,q=[I,x,C,w,T,E,L,k,_,P,A,B,R,F,M,N,O,H,D];Function(`"use strict";
+`+q.join(`
 
 `)+`
 //# sourceURL=myagent-ui.js`)();typeof initUiHoverTips=="function"&&initUiHoverTips(document);

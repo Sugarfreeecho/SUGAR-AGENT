@@ -116,7 +116,11 @@ async function consumeAgentSseResponse(response, runCtx, runSessionId, streamEve
                     streamEventIdx += 1;
                     continue;
                 }
-                renderEvent(runCtx, parsed, streamEventIdx, runSessionId);
+                renderMessageRecord(runCtx, reduced.messageRecord || {
+                    index: streamEventIdx,
+                    event: parsed,
+                    source: 'sse',
+                }, runSessionId);
                 streamEventIdx += 1;
             } catch (e) { console.error('解析事件失败:', e); }
         }
