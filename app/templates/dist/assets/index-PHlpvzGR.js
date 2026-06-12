@@ -1571,6 +1571,42 @@ function renderSubagentLatestFinalOnly(bodyEl, hostEl, events, agentId) {
     });
     return Promise.resolve();
 }
+
+function createSubagentBlockElement(event) {
+    event = event || {};
+    var aid = String(event.agent_id || event.run_id || '');
+    if (!aid) return null;
+    var blk = document.createElement('div');
+    blk.className = 'subagent-block';
+    blk.dataset.agentId = aid;
+    var status = event.background ? '后台运行' : '运行中';
+    blk.innerHTML = '<div class="subagent-block-head" role="button" tabindex="0">'
+        + '<span class="subagent-block-badge is-running">' + escapeHtml(status) + '</span>'
+        + '<strong>' + escapeHtml(event.description || 'subagent') + '</strong>'
+        + '<span class="subagent-block-meta">' + escapeHtml(event.subagent_type || '') + '</span>'
+        + '<span class="subagent-block-id">' + escapeHtml(aid.slice(0, 8)) + '…</span>'
+        + '</div>'
+        + '<div class="subagent-block-preview"></div>'
+        + '<div class="subagent-block-body process-aggregate-body"></div>';
+    return blk;
+}
+
+function applySubagentBlockFinish(blk, event) {
+    if (!blk || !event) return;
+    var badge = blk.querySelector('.subagent-block-badge');
+    var preview = blk.querySelector('.subagent-block-preview');
+    var ok = event.ok !== false;
+    if (badge) {
+        badge.textContent = ok ? '完成' : '失败';
+        badge.classList.remove('is-running');
+        badge.classList.toggle('is-done', ok);
+        badge.classList.toggle('is-error', !ok);
+    }
+    if (preview) {
+        var txt = event.result_preview || event.error || '';
+        preview.textContent = txt ? String(txt).slice(0, 500) : '';
+    }
+}
 `,A=`const contextStore = {
     tokensBySession: new Map(),
     todoBySession: new Map(),
@@ -7677,18 +7713,8 @@ function ensureSubagentBlock(ctx, event) {
     if (!ctx.subagentBlocks) ctx.subagentBlocks = {};
     var blk = ctx.subagentBlocks[aid];
     if (blk && blk.isConnected) return blk;
-    blk = document.createElement('div');
-    blk.className = 'subagent-block';
-    blk.dataset.agentId = aid;
-    var status = event.background ? '后台运行' : '运行中';
-    blk.innerHTML = '<div class="subagent-block-head" role="button" tabindex="0">'
-        + '<span class="subagent-block-badge is-running">' + escapeHtml(status) + '</span>'
-        + '<strong>' + escapeHtml(event.description || 'subagent') + '</strong>'
-        + '<span class="subagent-block-meta">' + escapeHtml(event.subagent_type || '') + '</span>'
-        + '<span class="subagent-block-id">' + escapeHtml(aid.slice(0, 8)) + '…</span>'
-        + '</div>'
-        + '<div class="subagent-block-preview"></div>'
-        + '<div class="subagent-block-body process-aggregate-body"></div>';
+    blk = createSubagentBlockElement(event);
+    if (!blk) return null;
     body.appendChild(blk);
     var head = blk.querySelector('.subagent-block-head');
     if (head) {
@@ -7717,19 +7743,7 @@ function updateSubagentBlockFinish(ctx, event) {
         handleSubagentLifecycleEvent(event);
         return;
     }
-    var badge = blk.querySelector('.subagent-block-badge');
-    var preview = blk.querySelector('.subagent-block-preview');
-    var ok = event.ok !== false;
-    if (badge) {
-        badge.textContent = ok ? '完成' : '失败';
-        badge.classList.remove('is-running');
-        badge.classList.toggle('is-done', ok);
-        badge.classList.toggle('is-error', !ok);
-    }
-    if (preview) {
-        var txt = event.result_preview || event.error || '';
-        preview.textContent = txt ? String(txt).slice(0, 500) : '';
-    }
+    applySubagentBlockFinish(blk, event);
     handleSubagentLifecycleEvent(event);
 }
 `,O=`function renderEvent(ctx, event, eventIndex, runSessionId) {
