@@ -90,6 +90,8 @@ def _build_sessions_state_snapshot(include_archived: bool = False) -> dict:
         run_active = bool(is_run_active(sid))
         active = bool(stream_connections > 0 or run_active)
         s["stream_active"] = active
+        s["run_active"] = run_active
+        s["run_started_at"] = get_run_started_at(sid)
         if active:
             active_runs.append({
                 "session_id": sid,
@@ -299,9 +301,15 @@ async def list_sessions(include_archived: bool = Query(False)):
     for s in sessions:
         sid = s.get("id")
         if sid:
-            s["stream_active"] = _is_session_stream_active(str(sid))
+            sid = str(sid)
+            run_active = bool(is_run_active(sid))
+            s["stream_active"] = _is_session_stream_active(sid)
+            s["run_active"] = run_active
+            s["run_started_at"] = get_run_started_at(sid)
         else:
             s["stream_active"] = False
+            s["run_active"] = False
+            s["run_started_at"] = None
     return JSONResponse(
         content=sessions,
         headers={"X-Archived-Count": str(archived_count)},

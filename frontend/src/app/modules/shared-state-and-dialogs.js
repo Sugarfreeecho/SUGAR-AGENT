@@ -7,6 +7,7 @@ const sessionUnreadComplete = new Set();
 const LS_SESSION_UNREAD = 'myagent-session-unread';
 /** 每个会话独立的输入草稿（切换会话恢复） */
 const draftBySession = Object.create(null);
+const LS_INPUT_DRAFT_PREFIX = 'myagent-input-draft-';
 const inputPathTokenMap = Object.create(null);
 let inputPathRewriteGuard = false;
 /** 本会话最近一次成功点击「发送」的用户消息全文（供工具确认失败后「重新发送」） */

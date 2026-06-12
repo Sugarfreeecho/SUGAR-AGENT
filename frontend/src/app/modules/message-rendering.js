@@ -864,6 +864,9 @@ function autoResizeTextarea() {
 }
 messageInput.addEventListener('input', autoResizeTextarea);
 messageInput.addEventListener('input', rewriteInputWorkspacePaths);
+messageInput.addEventListener('input', function () {
+    if (currentSessionId) persistInputDraft(currentSessionId, messageInput.value);
+});
 autoResizeTextarea();
 refreshInputPathChips();
 
@@ -1502,8 +1505,21 @@ function quotePromptPath(p) {
     return '"' + t.replace(/"/g, '\\"') + '"';
 }
 
-function getInputAbsolutePathRegex() {
-    return /(["']?)([A-Za-z]:(?:\\|\/)(?:(?:[^\\/:*?"<>|\r\n]+)(?:\\|\/))*[^\\/:*?"<>|\r\n]+)\1/g;
+function inputQuotedWindowsPathRegex() {
+    return /(["'])([A-Za-z]:[\\/][^"'\r\n]+)\1/g;
+}
+
+var _inputKnownExtWinPathRe = null;
+function inputKnownExtWindowsPathRegex() {
+    if (!_inputKnownExtWinPathRe) {
+        _inputKnownExtWinPathRe = new RegExp('(^|[\\s(（\\[])([A-Za-z]:[\\\\/][^\\r\\n"\\\'<>|]+?\\.(' + LINKIFY_EXT_FRAGMENT + '))(?=$|[\\s,，。;；:：)）\\]】])', 'gi');
+    }
+    _inputKnownExtWinPathRe.lastIndex = 0;
+    return _inputKnownExtWinPathRe;
+}
+
+function inputSimpleWindowsPathRegex() {
+    return /(^|[\s(（\[])([A-Za-z]:(?:\\|\/)(?:(?:[^\\/:*?"<>|\s\r\n]+)(?:\\|\/))*[^\\/:*?"<>|\s\r\n]+)(?=$|[\s,，。;；:：)）\]】])/g;
 }
 
 function ensureInputPathChipHost() {
@@ -1582,14 +1598,23 @@ function rewriteInputWorkspacePaths() {
     if (!messageInput || inputPathRewriteGuard) return;
     var raw = String(messageInput.value || '');
     var changed = false;
-    var next = raw.replace(getInputAbsolutePathRegex(), function (match, q, path) {
+    function replacePathToken(match, prefix, path) {
         var rel = pathTokenToWorkspaceOpenRel(path);
         if (!rel) return match;
         var label = workspaceOpenDisplayLabel(path, rel);
         if (!label) return match;
         inputPathTokenMap[label] = stripPathWrappingQuotes(path);
         changed = true;
-        return label;
+        return (prefix || '') + label;
+    }
+    var next = raw.replace(inputQuotedWindowsPathRegex(), function (match, q, path) {
+        return replacePathToken(match, '', path);
+    });
+    next = next.replace(inputKnownExtWindowsPathRegex(), function (match, prefix, path) {
+        return replacePathToken(match, prefix, path);
+    });
+    next = next.replace(inputSimpleWindowsPathRegex(), function (match, prefix, path) {
+        return replacePathToken(match, prefix, path);
     });
     if (changed && next !== raw) {
         var wasFocused = document.activeElement === messageInput;

@@ -31,6 +31,16 @@ async function consumeAgentSseResponse(response, runCtx, runSessionId, streamEve
                     source: 'sse',
                 });
                 if (reduced.runStateChanged) {
+                    if (parsed.type === 'run_finished' || parsed.type === 'run_interrupted' || parsed.type === 'run_failed') {
+                        finalizeLlmStreamChunks(runCtx);
+                        finalizeProgressStreamChunks(runCtx);
+                        if (eventSessionId === runSessionId && getSessionRunState(runSessionId)) {
+                            clearSessionRunState(runSessionId);
+                        }
+                        syncSessionListIndicatorClasses();
+                        setSendButtonState();
+                        return streamEventIdx;
+                    }
                     syncSessionListIndicatorClasses();
                     continue;
                 }
@@ -183,7 +193,9 @@ async function startContinueAfterSubagents(sessionId) {
         try {
             await consumeAgentSseResponse(response, runCtx, runSessionId, streamEventIdx);
         } catch (error) {
-            if (error.name === 'AbortError') appendLog(runCtx, '任务已中断', 'status', runSessionId);
+            if (error.name === 'AbortError') {
+                if (getRunAbortReason(runSessionId, runCtx) === 'user') appendLog(runCtx, '任务已中断', 'status', runSessionId);
+            }
             else {
                 console.error('续接 subagent 失败:', error);
                 const msg = (error && error.message) ? String(error.message) : String(error);
@@ -384,6 +396,7 @@ async function sendMessage() {
         streamProcNearBottom = true;
         appendMessage(runCtx, 'user', rawMessage, { eventIndex: preCount, turnTruncateIdx: preCount }, runSessionId);
         messageInput.value = '';
+        persistInputDraft(runSessionId, '');
         clearInputPathTokens();
         autoResizeTextarea();
     }
@@ -406,7 +419,9 @@ async function sendMessage() {
         const response = await fetch('/chat', { method: 'POST', body: formData, signal: ac.signal });
         streamEventIdx = await consumeAgentSseResponse(response, runCtx, runSessionId, streamEventIdx);
     } catch (error) {
-        if (error.name === 'AbortError') appendLog(runCtx, '任务已中断', 'status', runSessionId);
+        if (error.name === 'AbortError') {
+            if (getRunAbortReason(runSessionId, runCtx) === 'user') appendLog(runCtx, '任务已中断', 'status', runSessionId);
+        }
         else {
             console.error('请求失败:', error);
             const msg = (error && error.message) ? String(error.message) : String(error);
@@ -427,10 +442,10 @@ async function sendMessage() {
         }
         if (getSessionRunState(runSessionId)) {
             clearSessionRunState(runSessionId);
-            if (runSessionId !== currentSessionId) {
-                const el = runCtx.stream;
-                if (el && el.parentNode) el.remove();
-            }
+        }
+        if (runSessionId !== currentSessionId) {
+            const el = runCtx.stream;
+            if (el && el.parentNode) el.remove();
         }
         setSendButtonState();
         syncSessionListIndicatorClasses();

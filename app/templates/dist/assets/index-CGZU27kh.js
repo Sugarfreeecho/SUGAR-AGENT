@@ -163,6 +163,7 @@ const sessionUnreadComplete = new Set();
 const LS_SESSION_UNREAD = 'myagent-session-unread';
 /** 每个会话独立的输入草稿（切换会话恢复） */
 const draftBySession = Object.create(null);
+const LS_INPUT_DRAFT_PREFIX = 'myagent-input-draft-';
 const inputPathTokenMap = Object.create(null);
 let inputPathRewriteGuard = false;
 /** 本会话最近一次成功点击「发送」的用户消息全文（供工具确认失败后「重新发送」） */
@@ -609,7 +610,11 @@ function selectIsSessionRunning(sessionId) {
     if (info && Object.prototype.hasOwnProperty.call(info, 'run_active')) {
         return !!info.run_active;
     }
-    return !!isServerStreamActive(sessionId);
+    const sess = sessionStore.get(sessionId);
+    if (sess && Object.prototype.hasOwnProperty.call(sess, 'run_active')) {
+        return !!sess.run_active;
+    }
+    return false;
 }
 
 function selectRunForSession(sessionId) {
@@ -678,6 +683,28 @@ function getSessionRunState(sessionId) {
 
 function clearSessionRunState(sessionId) {
     setSessionRunState(sessionId, null);
+}
+
+function markRunAbortReason(run, reason) {
+    if (!run) return;
+    var r = reason || 'cleanup';
+    run.abortReason = r;
+    if (run.ctx) run.ctx.abortReason = r;
+}
+
+function getRunAbortReason(sessionId, ctx) {
+    const run = getSessionRunState(sessionId);
+    return (run && run.abortReason) || (ctx && ctx.abortReason) || '';
+}
+
+function abortSessionRun(sessionId, reason, opts) {
+    opts = opts || {};
+    const run = getSessionRunState(sessionId);
+    if (!run) return null;
+    markRunAbortReason(run, reason || 'cleanup');
+    try { if (run.controller) run.controller.abort(); } catch (e) { /* ignore */ }
+    if (opts.clear !== false) clearSessionRunState(sessionId);
+    return run;
 }
 `,E=`function renderSessionListFromStore() {
     if (!sessionsList) return Object.create(null);
@@ -1228,10 +1255,21 @@ function applySessionEvent(event, opts) {
     }
     if (type === 'run_started' || type === 'run_attached') {
         setSessionServerStreamActive(sessionId, true);
+        const sess = sessionStore.get(sessionId);
+        if (sess) {
+            sess.run_active = true;
+            sess.run_started_at = event.started_at || event.startedAt || sess.run_started_at || new Date().toISOString();
+        }
         return { handled: true, runStateChanged: true, messageRecord: messageRecord };
     }
     if (type === 'run_finished' || type === 'run_interrupted' || type === 'run_failed') {
         setSessionServerStreamActive(sessionId, false);
+        sessionStore.activeRunInfoBySession.delete(String(sessionId || ''));
+        const sess = sessionStore.get(sessionId);
+        if (sess) {
+            sess.run_active = false;
+            sess.run_started_at = null;
+        }
         return { handled: true, runStateChanged: true, messageRecord: messageRecord };
     }
     if (type === 'context_tokens') {
@@ -2308,16 +2346,47 @@ function persistSessionUnread() {
 function stashInputDraft(sessionId) {
     if (!messageInput || !sessionId) return;
     draftBySession[sessionId] = messageInput.value;
+    persistInputDraft(sessionId, messageInput.value);
 }
 
 function restoreInputDraft(sessionId) {
     if (!messageInput) return;
     const v = (sessionId && Object.prototype.hasOwnProperty.call(draftBySession, sessionId))
         ? draftBySession[sessionId]
-        : '';
+        : readStoredInputDraft(sessionId);
     messageInput.value = v != null ? String(v) : '';
     rewriteInputWorkspacePaths();
     autoResizeTextarea();
+}
+
+function inputDraftStorageKey(sessionId) {
+    return LS_INPUT_DRAFT_PREFIX + String(sessionId || '');
+}
+
+function persistInputDraft(sessionId, value) {
+    if (!sessionId) return;
+    const text = String(value || '');
+    draftBySession[sessionId] = text;
+    try {
+        const key = inputDraftStorageKey(sessionId);
+        if (text) localStorage.setItem(key, text);
+        else localStorage.removeItem(key);
+    } catch (e) { /* ignore */ }
+}
+
+function readStoredInputDraft(sessionId) {
+    if (!sessionId) return '';
+    try {
+        return localStorage.getItem(inputDraftStorageKey(sessionId)) || '';
+    } catch (e) {
+        return '';
+    }
+}
+
+function removeStoredInputDraft(sessionId) {
+    if (!sessionId) return;
+    delete draftBySession[sessionId];
+    try { localStorage.removeItem(inputDraftStorageKey(sessionId)); } catch (e) { /* ignore */ }
 }
 
 function clearStreamPoll() {
@@ -2347,7 +2416,7 @@ function maybeStartStreamPollForSession(sid, opts) {
     opts = opts || {};
     clearStreamPoll();
     if (!sid) return;
-    if (!isServerStreamActive(sid)) return;
+    if (!isSessionRunning(sid)) return;
     if (!getSessionRunState(sid) && typeof attachSessionEventStream === 'function') {
         void attachSessionEventStream(sid, { skipInitialLoad: !!opts.skipInitialLoad });
     }
@@ -3702,6 +3771,9 @@ function autoResizeTextarea() {
 }
 messageInput.addEventListener('input', autoResizeTextarea);
 messageInput.addEventListener('input', rewriteInputWorkspacePaths);
+messageInput.addEventListener('input', function () {
+    if (currentSessionId) persistInputDraft(currentSessionId, messageInput.value);
+});
 autoResizeTextarea();
 refreshInputPathChips();
 
@@ -4340,8 +4412,21 @@ function quotePromptPath(p) {
     return '"' + t.replace(/"/g, '\\\\"') + '"';
 }
 
-function getInputAbsolutePathRegex() {
-    return /(["']?)([A-Za-z]:(?:\\\\|\\/)(?:(?:[^\\\\/:*?"<>|\\r\\n]+)(?:\\\\|\\/))*[^\\\\/:*?"<>|\\r\\n]+)\\1/g;
+function inputQuotedWindowsPathRegex() {
+    return /(["'])([A-Za-z]:[\\\\/][^"'\\r\\n]+)\\1/g;
+}
+
+var _inputKnownExtWinPathRe = null;
+function inputKnownExtWindowsPathRegex() {
+    if (!_inputKnownExtWinPathRe) {
+        _inputKnownExtWinPathRe = new RegExp('(^|[\\\\s(（\\\\[])([A-Za-z]:[\\\\\\\\/][^\\\\r\\\\n"\\\\\\'<>|]+?\\\\.(' + LINKIFY_EXT_FRAGMENT + '))(?=$|[\\\\s,，。;；:：)）\\\\]】])', 'gi');
+    }
+    _inputKnownExtWinPathRe.lastIndex = 0;
+    return _inputKnownExtWinPathRe;
+}
+
+function inputSimpleWindowsPathRegex() {
+    return /(^|[\\s(（\\[])([A-Za-z]:(?:\\\\|\\/)(?:(?:[^\\\\/:*?"<>|\\s\\r\\n]+)(?:\\\\|\\/))*[^\\\\/:*?"<>|\\s\\r\\n]+)(?=$|[\\s,，。;；:：)）\\]】])/g;
 }
 
 function ensureInputPathChipHost() {
@@ -4420,14 +4505,23 @@ function rewriteInputWorkspacePaths() {
     if (!messageInput || inputPathRewriteGuard) return;
     var raw = String(messageInput.value || '');
     var changed = false;
-    var next = raw.replace(getInputAbsolutePathRegex(), function (match, q, path) {
+    function replacePathToken(match, prefix, path) {
         var rel = pathTokenToWorkspaceOpenRel(path);
         if (!rel) return match;
         var label = workspaceOpenDisplayLabel(path, rel);
         if (!label) return match;
         inputPathTokenMap[label] = stripPathWrappingQuotes(path);
         changed = true;
-        return label;
+        return (prefix || '') + label;
+    }
+    var next = raw.replace(inputQuotedWindowsPathRegex(), function (match, q, path) {
+        return replacePathToken(match, '', path);
+    });
+    next = next.replace(inputKnownExtWindowsPathRegex(), function (match, prefix, path) {
+        return replacePathToken(match, prefix, path);
+    });
+    next = next.replace(inputSimpleWindowsPathRegex(), function (match, prefix, path) {
+        return replacePathToken(match, prefix, path);
     });
     if (changed && next !== raw) {
         var wasFocused = document.activeElement === messageInput;
@@ -7746,8 +7840,7 @@ function pauseCurrentRun() {
     const ctx = run.ctx;
     /* 先同步 abort 本地 fetch 与从 sessionStore 摘除，UI 立刻反映为「已停止」状态。
        后端 interrupt 走 fire-and-forget，避免被主线程阻塞时按钮响应迟滞。 */
-    try { run.controller.abort(); } catch (e) { /* ignore */ }
-    clearSessionRunState(sid);
+    abortSessionRun(sid, 'user');
     setSendButtonState();
     syncSessionListIndicatorClasses();
     appendLog(ctx, '已请求停止当前任务', 'status', sid);
@@ -7803,12 +7896,11 @@ function hideLoading() { const loader = document.getElementById('chat-loading');
 /** 根据 sessionStore / 服务端 stream_active / sessionUnreadComplete 更新黄点、绿点 */
 function applySessionItemIndicators(itemDiv, sessionId, opts) {
     opts = opts || {};
-    const serverStreamActive = opts.serverStreamActive === true || isServerStreamActive(sessionId);
     if (!itemDiv || !sessionId) return;
     itemDiv.classList.remove('is-generating', 'is-unread-result');
     var nameEl = itemDiv.querySelector('.session-name');
     if (nameEl) nameEl.removeAttribute('data-ui-tip');
-    if (isSessionRunning(sessionId) || serverStreamActive) {
+    if (isSessionRunning(sessionId)) {
         itemDiv.classList.add('is-generating');
         if (nameEl) nameEl.setAttribute('data-ui-tip', '生成中…');
     } else if (sessionUnreadComplete.has(sessionId)) {
@@ -8010,13 +8102,12 @@ function buildAndBindSessionRow(sess, allSessions, nextStreamMap) {
             sessionUnreadComplete.delete(deletedSessionId);
             persistSessionUnread();
             delete draftBySession[deletedSessionId];
+            removeStoredInputDraft(deletedSessionId);
             delete lastUserMessageBySession[deletedSessionId];
             clearContextStateForSession(deletedSessionId);
             if (isSessionRunning(sess.id)) {
-                const r = getSessionRunState(sess.id);
-                try { if (r && r.controller) r.controller.abort(); } catch (err) { /* ignore */ }
+                const r = abortSessionRun(sess.id, 'delete');
                 if (r && r.ctx && r.ctx.stream && r.ctx.stream.parentNode) r.ctx.stream.remove();
-                clearSessionRunState(sess.id);
                 setSendButtonState();
                 syncSessionListIndicatorClasses();
             }
@@ -8061,13 +8152,23 @@ function buildAndBindSessionRow(sess, allSessions, nextStreamMap) {
             nameSpan.contentEditable = 'false';
             const newName = nameSpan.innerText.trim();
             if (newName && newName !== nameSpan.dataset.original) {
+                const oldName = nameSpan.dataset.original;
+                const previous = applyOptimisticSessionUpdate(sess.id, { name: newName });
+                nameSpan.dataset.original = newName;
+                if (currentSessionId === sess.id) updateSessionTitle();
                 try {
                     const formData = new FormData();
                     formData.append('name', newName);
-                    await fetch('/sessions/' + sess.id + '/name', { method: 'PUT', body: formData });
-                    nameSpan.dataset.original = newName;
+                    const response = await fetch('/sessions/' + encodeURIComponent(sess.id) + '/name', { method: 'PUT', body: formData });
+                    if (!response.ok) throw new Error('rename failed: ' + response.status);
                     if (currentSessionId === sess.id) updateSessionTitle();
-                } catch (err) { console.error('重命名失败', err); nameSpan.innerText = nameSpan.dataset.original; }
+                } catch (err) {
+                    console.error('重命名失败', err);
+                    if (previous) applyOptimisticSessionUpdate(sess.id, previous);
+                    nameSpan.innerText = oldName;
+                    nameSpan.dataset.original = oldName;
+                    if (currentSessionId === sess.id) updateSessionTitle();
+                }
             } else nameSpan.innerText = nameSpan.dataset.original;
         });
         nameSpan.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); nameSpan.blur(); } });
@@ -8437,7 +8538,10 @@ async function reconcileRunStateFromServer(opts) {
     opts = opts || {};
     let snapshot = null;
     try {
-        snapshot = await fetchSessionsStateSnapshot();
+        const cur = currentSessionId ? sessionStore.get(currentSessionId) : null;
+        snapshot = await fetchSessionsStateSnapshot({
+            includeArchived: !!(sessionStore.archivedLoaded || (cur && cur.archived)),
+        });
     } catch (e) {
         if (!opts.silent) console.error('reconcile run state failed:', e);
         return;
@@ -8453,9 +8557,7 @@ async function reconcileRunStateFromServer(opts) {
     });
     localIds.forEach(function (sid) {
         if (!active.has(sid)) {
-            const run = getSessionRunState(sid);
-            try { if (run && run.controller) run.controller.abort(); } catch (err) { /* ignore */ }
-            clearSessionRunState(sid);
+            abortSessionRun(sid, 'reconcile-finished');
         }
     });
     if (currentSessionId && active.has(currentSessionId)) {
@@ -8715,6 +8817,16 @@ async function createNewSessionInner() {
                     source: 'sse',
                 });
                 if (reduced.runStateChanged) {
+                    if (parsed.type === 'run_finished' || parsed.type === 'run_interrupted' || parsed.type === 'run_failed') {
+                        finalizeLlmStreamChunks(runCtx);
+                        finalizeProgressStreamChunks(runCtx);
+                        if (eventSessionId === runSessionId && getSessionRunState(runSessionId)) {
+                            clearSessionRunState(runSessionId);
+                        }
+                        syncSessionListIndicatorClasses();
+                        setSendButtonState();
+                        return streamEventIdx;
+                    }
                     syncSessionListIndicatorClasses();
                     continue;
                 }
@@ -8867,7 +8979,9 @@ async function startContinueAfterSubagents(sessionId) {
         try {
             await consumeAgentSseResponse(response, runCtx, runSessionId, streamEventIdx);
         } catch (error) {
-            if (error.name === 'AbortError') appendLog(runCtx, '任务已中断', 'status', runSessionId);
+            if (error.name === 'AbortError') {
+                if (getRunAbortReason(runSessionId, runCtx) === 'user') appendLog(runCtx, '任务已中断', 'status', runSessionId);
+            }
             else {
                 console.error('续接 subagent 失败:', error);
                 const msg = (error && error.message) ? String(error.message) : String(error);
@@ -9068,6 +9182,7 @@ async function sendMessage() {
         streamProcNearBottom = true;
         appendMessage(runCtx, 'user', rawMessage, { eventIndex: preCount, turnTruncateIdx: preCount }, runSessionId);
         messageInput.value = '';
+        persistInputDraft(runSessionId, '');
         clearInputPathTokens();
         autoResizeTextarea();
     }
@@ -9090,7 +9205,9 @@ async function sendMessage() {
         const response = await fetch('/chat', { method: 'POST', body: formData, signal: ac.signal });
         streamEventIdx = await consumeAgentSseResponse(response, runCtx, runSessionId, streamEventIdx);
     } catch (error) {
-        if (error.name === 'AbortError') appendLog(runCtx, '任务已中断', 'status', runSessionId);
+        if (error.name === 'AbortError') {
+            if (getRunAbortReason(runSessionId, runCtx) === 'user') appendLog(runCtx, '任务已中断', 'status', runSessionId);
+        }
         else {
             console.error('请求失败:', error);
             const msg = (error && error.message) ? String(error.message) : String(error);
@@ -9111,10 +9228,10 @@ async function sendMessage() {
         }
         if (getSessionRunState(runSessionId)) {
             clearSessionRunState(runSessionId);
-            if (runSessionId !== currentSessionId) {
-                const el = runCtx.stream;
-                if (el && el.parentNode) el.remove();
-            }
+        }
+        if (runSessionId !== currentSessionId) {
+            const el = runCtx.stream;
+            if (el && el.parentNode) el.remove();
         }
         setSendButtonState();
         syncSessionListIndicatorClasses();

@@ -1049,16 +1049,47 @@ function persistSessionUnread() {
 function stashInputDraft(sessionId) {
     if (!messageInput || !sessionId) return;
     draftBySession[sessionId] = messageInput.value;
+    persistInputDraft(sessionId, messageInput.value);
 }
 
 function restoreInputDraft(sessionId) {
     if (!messageInput) return;
     const v = (sessionId && Object.prototype.hasOwnProperty.call(draftBySession, sessionId))
         ? draftBySession[sessionId]
-        : '';
+        : readStoredInputDraft(sessionId);
     messageInput.value = v != null ? String(v) : '';
     rewriteInputWorkspacePaths();
     autoResizeTextarea();
+}
+
+function inputDraftStorageKey(sessionId) {
+    return LS_INPUT_DRAFT_PREFIX + String(sessionId || '');
+}
+
+function persistInputDraft(sessionId, value) {
+    if (!sessionId) return;
+    const text = String(value || '');
+    draftBySession[sessionId] = text;
+    try {
+        const key = inputDraftStorageKey(sessionId);
+        if (text) localStorage.setItem(key, text);
+        else localStorage.removeItem(key);
+    } catch (e) { /* ignore */ }
+}
+
+function readStoredInputDraft(sessionId) {
+    if (!sessionId) return '';
+    try {
+        return localStorage.getItem(inputDraftStorageKey(sessionId)) || '';
+    } catch (e) {
+        return '';
+    }
+}
+
+function removeStoredInputDraft(sessionId) {
+    if (!sessionId) return;
+    delete draftBySession[sessionId];
+    try { localStorage.removeItem(inputDraftStorageKey(sessionId)); } catch (e) { /* ignore */ }
 }
 
 function clearStreamPoll() {
@@ -1088,7 +1119,7 @@ function maybeStartStreamPollForSession(sid, opts) {
     opts = opts || {};
     clearStreamPoll();
     if (!sid) return;
-    if (!isServerStreamActive(sid)) return;
+    if (!isSessionRunning(sid)) return;
     if (!getSessionRunState(sid) && typeof attachSessionEventStream === 'function') {
         void attachSessionEventStream(sid, { skipInitialLoad: !!opts.skipInitialLoad });
     }

@@ -29,8 +29,7 @@ function pauseCurrentRun() {
     const ctx = run.ctx;
     /* 先同步 abort 本地 fetch 与从 sessionStore 摘除，UI 立刻反映为「已停止」状态。
        后端 interrupt 走 fire-and-forget，避免被主线程阻塞时按钮响应迟滞。 */
-    try { run.controller.abort(); } catch (e) { /* ignore */ }
-    clearSessionRunState(sid);
+    abortSessionRun(sid, 'user');
     setSendButtonState();
     syncSessionListIndicatorClasses();
     appendLog(ctx, '已请求停止当前任务', 'status', sid);
@@ -86,12 +85,11 @@ function hideLoading() { const loader = document.getElementById('chat-loading');
 /** 根据 sessionStore / 服务端 stream_active / sessionUnreadComplete 更新黄点、绿点 */
 function applySessionItemIndicators(itemDiv, sessionId, opts) {
     opts = opts || {};
-    const serverStreamActive = opts.serverStreamActive === true || isServerStreamActive(sessionId);
     if (!itemDiv || !sessionId) return;
     itemDiv.classList.remove('is-generating', 'is-unread-result');
     var nameEl = itemDiv.querySelector('.session-name');
     if (nameEl) nameEl.removeAttribute('data-ui-tip');
-    if (isSessionRunning(sessionId) || serverStreamActive) {
+    if (isSessionRunning(sessionId)) {
         itemDiv.classList.add('is-generating');
         if (nameEl) nameEl.setAttribute('data-ui-tip', '生成中…');
     } else if (sessionUnreadComplete.has(sessionId)) {
@@ -293,13 +291,12 @@ function buildAndBindSessionRow(sess, allSessions, nextStreamMap) {
             sessionUnreadComplete.delete(deletedSessionId);
             persistSessionUnread();
             delete draftBySession[deletedSessionId];
+            removeStoredInputDraft(deletedSessionId);
             delete lastUserMessageBySession[deletedSessionId];
             clearContextStateForSession(deletedSessionId);
             if (isSessionRunning(sess.id)) {
-                const r = getSessionRunState(sess.id);
-                try { if (r && r.controller) r.controller.abort(); } catch (err) { /* ignore */ }
+                const r = abortSessionRun(sess.id, 'delete');
                 if (r && r.ctx && r.ctx.stream && r.ctx.stream.parentNode) r.ctx.stream.remove();
-                clearSessionRunState(sess.id);
                 setSendButtonState();
                 syncSessionListIndicatorClasses();
             }
@@ -344,13 +341,23 @@ function buildAndBindSessionRow(sess, allSessions, nextStreamMap) {
             nameSpan.contentEditable = 'false';
             const newName = nameSpan.innerText.trim();
             if (newName && newName !== nameSpan.dataset.original) {
+                const oldName = nameSpan.dataset.original;
+                const previous = applyOptimisticSessionUpdate(sess.id, { name: newName });
+                nameSpan.dataset.original = newName;
+                if (currentSessionId === sess.id) updateSessionTitle();
                 try {
                     const formData = new FormData();
                     formData.append('name', newName);
-                    await fetch('/sessions/' + sess.id + '/name', { method: 'PUT', body: formData });
-                    nameSpan.dataset.original = newName;
+                    const response = await fetch('/sessions/' + encodeURIComponent(sess.id) + '/name', { method: 'PUT', body: formData });
+                    if (!response.ok) throw new Error('rename failed: ' + response.status);
                     if (currentSessionId === sess.id) updateSessionTitle();
-                } catch (err) { console.error('重命名失败', err); nameSpan.innerText = nameSpan.dataset.original; }
+                } catch (err) {
+                    console.error('重命名失败', err);
+                    if (previous) applyOptimisticSessionUpdate(sess.id, previous);
+                    nameSpan.innerText = oldName;
+                    nameSpan.dataset.original = oldName;
+                    if (currentSessionId === sess.id) updateSessionTitle();
+                }
             } else nameSpan.innerText = nameSpan.dataset.original;
         });
         nameSpan.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); nameSpan.blur(); } });
@@ -720,7 +727,10 @@ async function reconcileRunStateFromServer(opts) {
     opts = opts || {};
     let snapshot = null;
     try {
-        snapshot = await fetchSessionsStateSnapshot();
+        const cur = currentSessionId ? sessionStore.get(currentSessionId) : null;
+        snapshot = await fetchSessionsStateSnapshot({
+            includeArchived: !!(sessionStore.archivedLoaded || (cur && cur.archived)),
+        });
     } catch (e) {
         if (!opts.silent) console.error('reconcile run state failed:', e);
         return;
@@ -736,9 +746,7 @@ async function reconcileRunStateFromServer(opts) {
     });
     localIds.forEach(function (sid) {
         if (!active.has(sid)) {
-            const run = getSessionRunState(sid);
-            try { if (run && run.controller) run.controller.abort(); } catch (err) { /* ignore */ }
-            clearSessionRunState(sid);
+            abortSessionRun(sid, 'reconcile-finished');
         }
     });
     if (currentSessionId && active.has(currentSessionId)) {

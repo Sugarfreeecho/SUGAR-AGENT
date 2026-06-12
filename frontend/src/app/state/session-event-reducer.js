@@ -31,10 +31,21 @@ function applySessionEvent(event, opts) {
     }
     if (type === 'run_started' || type === 'run_attached') {
         setSessionServerStreamActive(sessionId, true);
+        const sess = sessionStore.get(sessionId);
+        if (sess) {
+            sess.run_active = true;
+            sess.run_started_at = event.started_at || event.startedAt || sess.run_started_at || new Date().toISOString();
+        }
         return { handled: true, runStateChanged: true, messageRecord: messageRecord };
     }
     if (type === 'run_finished' || type === 'run_interrupted' || type === 'run_failed') {
         setSessionServerStreamActive(sessionId, false);
+        sessionStore.activeRunInfoBySession.delete(String(sessionId || ''));
+        const sess = sessionStore.get(sessionId);
+        if (sess) {
+            sess.run_active = false;
+            sess.run_started_at = null;
+        }
         return { handled: true, runStateChanged: true, messageRecord: messageRecord };
     }
     if (type === 'context_tokens') {

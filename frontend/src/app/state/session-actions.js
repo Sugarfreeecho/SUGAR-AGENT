@@ -62,3 +62,25 @@ function getSessionRunState(sessionId) {
 function clearSessionRunState(sessionId) {
     setSessionRunState(sessionId, null);
 }
+
+function markRunAbortReason(run, reason) {
+    if (!run) return;
+    var r = reason || 'cleanup';
+    run.abortReason = r;
+    if (run.ctx) run.ctx.abortReason = r;
+}
+
+function getRunAbortReason(sessionId, ctx) {
+    const run = getSessionRunState(sessionId);
+    return (run && run.abortReason) || (ctx && ctx.abortReason) || '';
+}
+
+function abortSessionRun(sessionId, reason, opts) {
+    opts = opts || {};
+    const run = getSessionRunState(sessionId);
+    if (!run) return null;
+    markRunAbortReason(run, reason || 'cleanup');
+    try { if (run.controller) run.controller.abort(); } catch (e) { /* ignore */ }
+    if (opts.clear !== false) clearSessionRunState(sessionId);
+    return run;
+}

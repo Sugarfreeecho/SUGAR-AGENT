@@ -38,7 +38,11 @@ function selectIsSessionRunning(sessionId) {
     if (info && Object.prototype.hasOwnProperty.call(info, 'run_active')) {
         return !!info.run_active;
     }
-    return !!isServerStreamActive(sessionId);
+    const sess = sessionStore.get(sessionId);
+    if (sess && Object.prototype.hasOwnProperty.call(sess, 'run_active')) {
+        return !!sess.run_active;
+    }
+    return false;
 }
 
 function selectRunForSession(sessionId) {
