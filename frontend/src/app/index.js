@@ -7,6 +7,7 @@ import sessionRenderersSource from './state/session-renderers.js?raw';
 import messageStoreSource from './state/message-store.js?raw';
 import messageRenderersSource from './state/message-renderers.js?raw';
 import subagentStoreSource from './state/subagent-store.js?raw';
+import subagentRenderersSource from './state/subagent-renderers.js?raw';
 import contextStoreSource from './state/context-store.js?raw';
 import sessionEventReducerSource from './state/session-event-reducer.js?raw';
 import sessionScrollHistorySource from './modules/session-scroll-history.js?raw';
@@ -28,6 +29,7 @@ const uiSources = [
     messageStoreSource,
     messageRenderersSource,
     subagentStoreSource,
+    subagentRenderersSource,
     contextStoreSource,
     sessionEventReducerSource,
     sessionScrollHistorySource,

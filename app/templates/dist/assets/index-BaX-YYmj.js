@@ -1102,7 +1102,118 @@ function selectSubagentList(sessionId) {
 function selectSubagentRunningCount(sessionId) {
     return subagentStore.runningCount(sessionId);
 }
-`,P=`const contextStore = {
+`,P=`function subagentMoreDotsHtml() {
+    return '<span class="session-more-dots" aria-hidden="true"><span></span><span></span><span></span></span>';
+}
+
+function subagentSortKey(n) {
+    var t = Date.parse(String((n && (n.updated_at || n.created_at)) || ''));
+    return isNaN(t) ? 0 : t;
+}
+
+function sortSubagentsByUpdated(flat) {
+    return (flat || []).slice().sort(function (a, b) {
+        return subagentSortKey(b) - subagentSortKey(a);
+    });
+}
+
+function subagentStatusFromNode(n) {
+    var taskStatus = String((n && (n.task_status || n.status)) || '').toLowerCase();
+    var hasFinalKnown = !!(n && Object.prototype.hasOwnProperty.call(n, 'has_final'));
+    var hasPreview = !!String((n && n.result_preview) || '').trim();
+    var hasFinal = !n || !hasFinalKnown ? hasPreview : !!n.has_final;
+    var canTreatCompleted = hasFinal || (!hasFinalKnown && hasPreview) || (n && n.virtual_task && hasPreview && !hasFinalKnown);
+    if (n && n.running) {
+        return { label: n.background ? '后台运行' : '运行中', dotCls: 'is-running' };
+    }
+    if (taskStatus === 'running') return { label: '后台运行', dotCls: 'is-running' };
+    if (taskStatus === 'completed' && canTreatCompleted) return { label: '完成', dotCls: 'is-done' };
+    if (taskStatus === 'completed') return { label: '缺少 final 结果', dotCls: 'is-error' };
+    if (taskStatus === 'failed') return { label: '失败', dotCls: 'is-error' };
+    if (taskStatus === 'interrupted') return { label: '已中断', dotCls: 'is-error' };
+    if (n && n.ok === false) {
+        var err = String(n.error || n.result_preview || '').trim();
+        if (/interrupt/i.test(err)) return { label: '已中断', dotCls: 'is-error' };
+        return { label: '失败', dotCls: 'is-error' };
+    }
+    if (n && n.status === 'interrupted') return { label: '已中断', dotCls: 'is-error' };
+    if (n && n.status === 'failed') return { label: '失败', dotCls: 'is-error' };
+    var prev = String((n && n.result_preview) || '').trim();
+    if (/^Error:|^错误|失败|异常|interrupt/i.test(prev)) {
+        return { label: '失败', dotCls: 'is-error' };
+    }
+    return { label: '完成', dotCls: 'is-done' };
+}
+
+function subagentCardViewModel(n) {
+    n = n || {};
+    var id = String(n.id || '');
+    var running = !!n.running && !n.virtual_task;
+    var name = n.description || id.slice(0, 8);
+    return {
+        id: id,
+        running: running,
+        name: name,
+        idShort: id.length > 5 ? id.slice(0, 5) + '...' : id,
+        typeLabel: n.subagent_type || 'subagent',
+        status: subagentStatusFromNode(n),
+        resultPreview: String(n.result_preview || '').trim(),
+        outputFile: !!n.output_file,
+        taskStatus: n.task_status || n.status || '',
+        hasFinalKnown: Object.prototype.hasOwnProperty.call(n, 'has_final'),
+        hasFinal: !!n.has_final,
+        executorModel: n.executor_model || '',
+    };
+}
+
+function renderSubagentCardHtml(n) {
+    var vm = subagentCardViewModel(n);
+    if (!vm.id) return '';
+    var stopBtn = vm.running ? '<button type="button" class="subagent-card-menu-item subagent-card-stop" role="menuitem" data-agent-id="' + escapeHtml(vm.id) + '">停止</button>' : '';
+    var outputBtn = vm.outputFile ? '<button type="button" class="subagent-card-menu-item subagent-card-output" role="menuitem" data-agent-id="' + escapeHtml(vm.id) + '">查看输出</button>' : '';
+    var html = '<div class="process-aggregate subagent-grid-card" data-agent-id="' + escapeHtml(vm.id) + '"';
+    if (vm.executorModel) html += ' data-executor-model="' + escapeHtml(String(vm.executorModel)) + '"';
+    if (vm.outputFile) html += ' data-output-file="1"';
+    if (vm.taskStatus) html += ' data-task-status="' + escapeHtml(String(vm.taskStatus)) + '"';
+    if (vm.hasFinalKnown) html += ' data-has-final="' + (vm.hasFinal ? '1' : '0') + '"';
+    html += ' data-subagent-running="' + (vm.running ? '1' : '0') + '"';
+    html += ' data-description="' + escapeHtml(String(vm.name || '')) + '"';
+    html += '>';
+    html += '<div class="subagent-card-head">';
+    html += '<div class="subagent-card-head-line">';
+    html += '<span class="process-aggregate-title-wrap">';
+    html += '<div class="subagent-card-title-row">';
+    html += '<span class="subagent-status"><span class="subagent-status-dot ' + vm.status.dotCls + '" data-ui-tip="' + escapeHtml(vm.status.label) + '"></span></span>';
+    html += '<span class="subagent-card-name">' + escapeHtml(vm.name) + '</span>';
+    html += '<span class="subagent-card-type">' + escapeHtml(vm.typeLabel) + '</span>';
+    html += '<span class="subagent-card-id">' + escapeHtml(vm.idShort) + '</span>';
+    html += '</div>';
+    html += '<span class="process-aggregate-stats" aria-live="polite"></span>';
+    html += '</span>';
+    html += '<span class="subagent-card-head-actions">';
+    html += '<button type="button" class="subagent-card-expand" data-agent-id="' + escapeHtml(vm.id) + '" aria-label="放大显示" aria-pressed="false" data-ui-tip="在浮窗内全屏显示"><svg class="subagent-card-expand-icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M3 6V3h3M10 3h3v3M13 10v3h-3M6 13H3v-3" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"/></svg></button>';
+    html += '<span class="subagent-card-menu">'
+        + '<button type="button" class="subagent-card-menu-btn" aria-label="更多操作" aria-expanded="false" data-ui-tip="更多操作">' + subagentMoreDotsHtml() + '</button>'
+        + '<span class="subagent-card-menu-pop" role="menu">'
+        + outputBtn
+        + stopBtn
+        + '<button type="button" class="subagent-card-menu-item subagent-card-delete" role="menuitem" data-agent-id="' + escapeHtml(vm.id) + '">删除</button>'
+        + '</span></span>';
+    html += '</span>';
+    html += '</div></div>';
+    html += '<div class="subagent-card-body subagent-dialogue-body" data-agent-id="' + escapeHtml(vm.id) + '"'
+        + (vm.resultPreview ? ' data-result-preview="' + escapeHtml(vm.resultPreview.slice(0, 400)) + '"' : '')
+        + '></div>';
+    html += '</div>';
+    return html;
+}
+
+function buildSubagentGridHtml(flat) {
+    var sorted = sortSubagentsByUpdated(flat);
+    if (!sorted.length) return '<div class="subagent-grid-empty">无 Subagent</div>';
+    return sorted.map(renderSubagentCardHtml).join('');
+}
+`,A=`const contextStore = {
     tokensBySession: new Map(),
     todoBySession: new Map(),
     progressBySession: new Map(),
@@ -1222,7 +1333,7 @@ function appendContextProgressForSession(sessionId, kind, delta) {
 function selectContextProgress(sessionId) {
     return contextStore.progressBySession.get(String(sessionId || '')) || null;
 }
-`,A=`function markUiEventStoreApplied(event) {
+`,B=`function markUiEventStoreApplied(event) {
     if (!event || typeof event !== 'object') return;
     try {
         Object.defineProperty(event, '__storeApplied', {
@@ -1295,7 +1406,7 @@ function applySessionEvent(event, opts) {
     }
     return { handled: false, messageRecord: messageRecord };
 }
-`,B=`function formatTokenCompact(n) {
+`,R=`function formatTokenCompact(n) {
     if (n == null || !Number.isFinite(Number(n))) return '—';
     const x = Math.max(0, Math.round(Number(n)));
     if (x >= 1000000) return (x / 1000000).toFixed(1).replace(/\\.0$/, '') + 'M';
@@ -2510,7 +2621,7 @@ async function scrollToUserTurnOrLoadOlder(eventIndex) {
         });
     }
 }
-`,R=`function ensureUiHoverTooltipEl() {
+`,F=`function ensureUiHoverTooltipEl() {
     if (uiHoverTooltipEl) return uiHoverTooltipEl;
     uiHoverTooltipEl = document.getElementById('ui-hover-tooltip');
     if (!uiHoverTooltipEl) {
@@ -2905,7 +3016,7 @@ async function refreshTodoPlanPanel() {
         hideTodoPlanPanel();
     }
 }
-`,F=`function removeMessagesFromNode(startWrap) {
+`,M=`function removeMessagesFromNode(startWrap) {
     const stream = getVisibleChatStream() || chatContainer;
     if (!stream) return;
     const kids = Array.from(stream.children);
@@ -5423,7 +5534,7 @@ function finalizeProgressStreamForType(ctx, logType) {
 }
 
 /* ── Subagent 浮层 / 过程块 ── */
-`,M=`var subagentCardSyncTimer = null;
+`,N=`var subagentCardSyncTimer = null;
 var subagentPanelOpen = false;
 var subagentPanelBound = false;
 var subagentDockExpanded = false;
@@ -5558,10 +5669,6 @@ function buildSubagentCardSummaryHtml(previewText, muted) {
     }
     if (t.length > 1200) t = t.slice(0, 1199) + '\\u2026';
     return '<div class="subagent-card-summary">' + escapeHtml(t) + '</div>';
-}
-
-function subagentMoreDotsHtml() {
-    return '<span class="session-more-dots" aria-hidden="true"><span></span><span></span><span></span></span>';
 }
 
 function formatSubagentSummaryText(text) {
@@ -6059,17 +6166,6 @@ function closeSubagentPanel() {
         btn.classList.remove('is-active');
         btn.setAttribute('aria-expanded', 'false');
     }
-}
-
-function subagentSortKey(n) {
-    var t = Date.parse(String((n && (n.updated_at || n.created_at)) || ''));
-    return isNaN(t) ? 0 : t;
-}
-
-function sortSubagentsByUpdated(flat) {
-    return (flat || []).slice().sort(function (a, b) {
-        return subagentSortKey(b) - subagentSortKey(a);
-    });
 }
 
 function stopSubagentIncrementalSync() {
@@ -7388,34 +7484,6 @@ function bindSubagentGridActions(grid, sessionId) {
     initUiHoverTips(grid);
 }
 
-function subagentStatusFromNode(n) {
-    var taskStatus = String((n && (n.task_status || n.status)) || '').toLowerCase();
-    var hasFinalKnown = !!(n && Object.prototype.hasOwnProperty.call(n, 'has_final'));
-    var hasPreview = !!String((n && n.result_preview) || '').trim();
-    var hasFinal = !n || !hasFinalKnown ? hasPreview : !!n.has_final;
-    var canTreatCompleted = hasFinal || (!hasFinalKnown && hasPreview) || (n && n.virtual_task && hasPreview && !hasFinalKnown);
-    if (n && n.running) {
-        return { label: n.background ? '后台运行' : '运行中', dotCls: 'is-running' };
-    }
-    if (taskStatus === 'running') return { label: '后台运行', dotCls: 'is-running' };
-    if (taskStatus === 'completed' && canTreatCompleted) return { label: '完成', dotCls: 'is-done' };
-    if (taskStatus === 'completed') return { label: '缺少 final 结果', dotCls: 'is-error' };
-    if (taskStatus === 'failed') return { label: '失败', dotCls: 'is-error' };
-    if (taskStatus === 'interrupted') return { label: '已中断', dotCls: 'is-error' };
-    if (n && n.ok === false) {
-        var err = String(n.error || n.result_preview || '').trim();
-        if (/interrupt/i.test(err)) return { label: '已中断', dotCls: 'is-error' };
-        return { label: '失败', dotCls: 'is-error' };
-    }
-    if (n && n.status === 'interrupted') return { label: '已中断', dotCls: 'is-error' };
-    if (n && n.status === 'failed') return { label: '失败', dotCls: 'is-error' };
-    var prev = String((n && n.result_preview) || '').trim();
-    if (/^Error:|^错误|失败|异常|interrupt/i.test(prev)) {
-        return { label: '失败', dotCls: 'is-error' };
-    }
-    return { label: '完成', dotCls: 'is-done' };
-}
-
 async function refreshSubagentContextForCard(card, agentId, force) {
     if (!card || !agentId) return;
     if (!force && !subagentPanelOpen) return;
@@ -7436,58 +7504,6 @@ async function refreshSubagentContextForCard(card, agentId, force) {
         }
     })();
     return subagentContextFetchInFlight[agentId];
-}
-
-function buildSubagentGridHtml(flat) {
-    var sorted = sortSubagentsByUpdated(flat);
-    if (!sorted.length) return '<div class="subagent-grid-empty">无 Subagent</div>';
-    var html = '';
-    sorted.forEach(function (n, idx) {
-        var id = String(n.id || '');
-        var running = !!n.running && !n.virtual_task;
-        var name = n.description || id.slice(0, 8);
-        var idShort = id.length > 5 ? id.slice(0, 5) + '...' : id;
-        var typeLabel = n.subagent_type || 'subagent';
-        var st = subagentStatusFromNode(n);
-        var stopBtn = running ? '<button type="button" class="subagent-card-menu-item subagent-card-stop" role="menuitem" data-agent-id="' + escapeHtml(id) + '">停止</button>' : '';
-        var outputBtn = n.output_file ? '<button type="button" class="subagent-card-menu-item subagent-card-output" role="menuitem" data-agent-id="' + escapeHtml(id) + '">查看输出</button>' : '';
-        html += '<div class="process-aggregate subagent-grid-card" data-agent-id="' + escapeHtml(id) + '"';
-        if (n.executor_model) html += ' data-executor-model="' + escapeHtml(String(n.executor_model)) + '"';
-        if (n.output_file) html += ' data-output-file="1"';
-        if (n.task_status || n.status) html += ' data-task-status="' + escapeHtml(String(n.task_status || n.status)) + '"';
-        if (Object.prototype.hasOwnProperty.call(n, 'has_final')) html += ' data-has-final="' + (n.has_final ? '1' : '0') + '"';
-        html += ' data-subagent-running="' + (running ? '1' : '0') + '"';
-        html += ' data-description="' + escapeHtml(String(name || '')) + '"';
-        html += '>';
-        html += '<div class="subagent-card-head">';
-        html += '<div class="subagent-card-head-line">';
-        html += '<span class="process-aggregate-title-wrap">';
-        html += '<div class="subagent-card-title-row">';
-        html += '<span class="subagent-status"><span class="subagent-status-dot ' + st.dotCls + '" data-ui-tip="' + escapeHtml(st.label) + '"></span></span>';
-        html += '<span class="subagent-card-name">' + escapeHtml(name) + '</span>';
-        html += '<span class="subagent-card-type">' + escapeHtml(typeLabel) + '</span>';
-        html += '<span class="subagent-card-id">' + escapeHtml(idShort) + '</span>';
-        html += '</div>';
-        html += '<span class="process-aggregate-stats" aria-live="polite"></span>';
-        html += '</span>';
-        html += '<span class="subagent-card-head-actions">';
-        html += '<button type="button" class="subagent-card-expand" data-agent-id="' + escapeHtml(id) + '" aria-label="放大显示" aria-pressed="false" data-ui-tip="在浮窗内全屏显示"><svg class="subagent-card-expand-icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M3 6V3h3M10 3h3v3M13 10v3h-3M6 13H3v-3" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"/></svg></button>';
-        html += '<span class="subagent-card-menu">'
-            + '<button type="button" class="subagent-card-menu-btn" aria-label="更多操作" aria-expanded="false" data-ui-tip="更多操作">' + subagentMoreDotsHtml() + '</button>'
-            + '<span class="subagent-card-menu-pop" role="menu">'
-            + outputBtn
-            + stopBtn
-            + '<button type="button" class="subagent-card-menu-item subagent-card-delete" role="menuitem" data-agent-id="' + escapeHtml(id) + '">删除</button>'
-            + '</span></span>';
-        html += '</span>';
-        html += '</div></div>';
-        var rp = String(n.result_preview || '').trim();
-        html += '<div class="subagent-card-body subagent-dialogue-body" data-agent-id="' + escapeHtml(id) + '"'
-            + (rp ? ' data-result-preview="' + escapeHtml(rp.slice(0, 400)) + '"' : '')
-            + '></div>';
-        html += '</div>';
-    });
-    return html;
 }
 
 function loadVisibleSubagentCardBodies(grid, sessionIdOpt) {
@@ -7719,7 +7735,7 @@ function updateSubagentBlockFinish(ctx, event) {
     }
     handleSubagentLifecycleEvent(event);
 }
-`,N=`function renderEvent(ctx, event, eventIndex, runSessionId) {
+`,O=`function renderEvent(ctx, event, eventIndex, runSessionId) {
     if (!event || typeof event !== 'object') return;
     var eventSessionId = runSessionId || currentSessionId || '';
     if (eventSessionId && !event.__storeApplied) {
@@ -7809,7 +7825,7 @@ function updateSubagentBlockFinish(ctx, event) {
         if (fallbackContent.trim()) appendLog(ctx, fallbackContent, 'log-entry', runSessionId);
     }
 }
-`,O=`function setSendButtonState() {
+`,D=`function setSendButtonState() {
     sendBtn.disabled = false;
     if (isSessionRunning(currentSessionId)) {
         sendBtn.innerHTML = '停止 <span class="loader" aria-hidden="true"></span>';
@@ -8784,7 +8800,7 @@ async function createNewSessionInner() {
         appendLogVisible('创建新会话失败', 'error-log');
     }
 }
-`,D=`async function consumeAgentSseResponse(response, runCtx, runSessionId, streamEventIdx) {
+`,H=`async function consumeAgentSseResponse(response, runCtx, runSessionId, streamEventIdx) {
     if (!response || !response.body) return streamEventIdx;
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
@@ -9332,7 +9348,7 @@ sendBtn.addEventListener('click', function () {
     });
 })();
 initUiHoverTips(document);
-`,H=`newSessionBtn.addEventListener('click', async () => { await createNewSession(); });
+`,q=`newSessionBtn.addEventListener('click', async () => { await createNewSession(); });
 
 function initSidebarSash() {
     const side = document.getElementById('sidebar');
@@ -9575,8 +9591,8 @@ if (typeof globalThis !== 'undefined') {
     globalThis.toggleTodoPlanPanel = toggleTodoPlanPanel;
     globalThis.toggleTocPanel = toggleTocPanel;
 }
-`,q=[I,x,C,w,T,E,L,k,_,P,A,B,R,F,M,N,O,D,H];Function(`"use strict";
-`+q.join(`
+`,U=[I,x,C,w,T,E,L,k,_,P,A,B,R,F,M,N,O,D,H,q];Function(`"use strict";
+`+U.join(`
 
 `)+`
 //# sourceURL=myagent-ui.js`)();typeof initUiHoverTips=="function"&&initUiHoverTips(document);
