@@ -1213,6 +1213,157 @@ function buildSubagentGridHtml(flat) {
     if (!sorted.length) return '<div class="subagent-grid-empty">无 Subagent</div>';
     return sorted.map(renderSubagentCardHtml).join('');
 }
+
+function ensureSubagentActionMenu(actions, id) {
+    if (!actions) return null;
+    var menu = actions.querySelector('.subagent-card-menu');
+    if (menu) return menu;
+    menu = document.createElement('span');
+    menu.className = 'subagent-card-menu';
+    menu.innerHTML = '<button type="button" class="subagent-card-menu-btn" aria-label="更多操作" aria-expanded="false" data-ui-tip="更多操作">'
+        + subagentMoreDotsHtml() + '</button>'
+        + '<span class="subagent-card-menu-pop" role="menu"></span>';
+    actions.appendChild(menu);
+    return menu;
+}
+
+function ensureSubagentMenuButton(menu, cls, label, agentId) {
+    if (!menu) return null;
+    var pop = menu.querySelector('.subagent-card-menu-pop');
+    if (!pop) return null;
+    var btn = pop.querySelector('.' + cls);
+    if (btn) {
+        btn.setAttribute('data-agent-id', agentId);
+        return btn;
+    }
+    btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'subagent-card-menu-item ' + cls;
+    btn.setAttribute('data-agent-id', agentId);
+    btn.setAttribute('role', 'menuitem');
+    btn.textContent = label;
+    pop.appendChild(btn);
+    return btn;
+}
+
+function applySubagentNodeMetaToCard(card, n) {
+    if (!card || !n) return;
+    var id = String(n.id || '');
+    var running = !!n.running && !n.virtual_task;
+    card.dataset.subagentRunning = running ? '1' : '0';
+    card.dataset.description = String(n.description || id.slice(0, 8) || '');
+    if (n.result_preview) card.dataset.resultPreview = String(n.result_preview);
+    if (Object.prototype.hasOwnProperty.call(n, 'has_final')) card.dataset.hasFinal = n.has_final ? '1' : '0';
+    if (n.session_metrics) applySubagentSessionMetricsToCard(card, n.session_metrics);
+    var st = subagentStatusFromNode(n);
+    var dot = card.querySelector('.subagent-status-dot');
+    if (dot) {
+        dot.className = 'subagent-status-dot ' + st.dotCls;
+        dot.setAttribute('data-ui-tip', st.label);
+    }
+    var actions = card.querySelector('.subagent-card-head-actions');
+    if (actions) {
+        var menu = ensureSubagentActionMenu(actions, id);
+        var stopExisting = actions.querySelector('.subagent-card-stop');
+        if (running && !stopExisting) {
+            ensureSubagentMenuButton(menu, 'subagent-card-stop', '停止', id);
+        } else if (!running && stopExisting) {
+            stopExisting.remove();
+        }
+        var outputExisting = actions.querySelector('.subagent-card-output');
+        var hasOutput = !!n.output_file;
+        if (hasOutput) {
+            card.dataset.outputFile = '1';
+            if (!outputExisting) {
+                ensureSubagentMenuButton(menu, 'subagent-card-output', '查看输出', id);
+            }
+        } else {
+            delete card.dataset.outputFile;
+            if (outputExisting) outputExisting.remove();
+            var panel = card.querySelector('.subagent-output-panel');
+            if (panel) panel.remove();
+        }
+        ensureSubagentMenuButton(menu, 'subagent-card-delete', '删除', id);
+    }
+    if (n.task_status || n.status) card.dataset.taskStatus = String(n.task_status || n.status);
+    if (n.executor_model) {
+        card.dataset.executorModel = String(n.executor_model);
+        if (!card.dataset.procCacheModel) card.dataset.procCacheModel = String(n.executor_model);
+    }
+    if (running && !card.dataset.procStartedAt) card.dataset.procStartedAt = String(procNow());
+    if (!running) {
+        card.dataset.procEndedAt = String(procNow());
+        if (id) void refreshSubagentContextForCard(card, id, true);
+        if (!card.classList.contains('is-expanded')) {
+            updateSubagentCardSummaryOnly(card, n.result_preview);
+        }
+    }
+    refreshSubagentCardStats(card);
+}
+
+function appendSubagentGridCardFromNode(grid, n) {
+    if (!grid || !n) return null;
+    var html = buildSubagentGridHtml([n]);
+    if (html.indexOf('subagent-grid-empty') >= 0) return null;
+    var tmp = document.createElement('div');
+    tmp.innerHTML = html;
+    var card = tmp.firstElementChild;
+    if (!card) return null;
+    grid.appendChild(card);
+    if (n.result_preview) card.dataset.resultPreview = String(n.result_preview);
+    return card;
+}
+
+function syncSubagentGridFromFlat(flat, sessionId) {
+    var grid = document.getElementById('subagent-grid');
+    if (!grid) return;
+    if (grid.dataset.sessionId && grid.dataset.sessionId !== sessionId) {
+        grid.innerHTML = '';
+        disconnectSubagentCardViewportObserver();
+    }
+    grid.dataset.sessionId = sessionId;
+    var sorted = sortSubagentsByUpdated(flat);
+    var existingIds = new Set();
+    sorted.forEach(function (n) {
+        var id = String(n.id || '');
+        if (!id) return;
+        existingIds.add(id);
+        var card = grid.querySelector('.subagent-grid-card[data-agent-id="' + id + '"]');
+        if (!card) {
+            card = appendSubagentGridCardFromNode(grid, n);
+            if (card && subagentPanelOpen) observeSubagentCardViewport(card);
+        } else {
+            applySubagentNodeMetaToCard(card, n);
+        }
+    });
+    grid.querySelectorAll('.subagent-grid-card').forEach(function (card) {
+        var id = card.getAttribute('data-agent-id');
+        if (id && !existingIds.has(id)) {
+            subagentStore.deleteEventCount(sessionId, id);
+            delete subagentCardLoadQueued[id];
+            card.remove();
+        }
+    });
+    bindSubagentGridActions(grid, sessionId);
+    if (shouldLoadSubagentCardBodies()) {
+        loadVisibleSubagentCardBodies(grid, sessionId);
+    }
+}
+
+function refreshSubagentToggleFromGrid(flat) {
+    var toggleBtn = document.getElementById('subagent-toggle-btn');
+    var toggleBadge = document.getElementById('subagent-toggle-badge');
+    if (!toggleBtn) return;
+    var list = flat || [];
+    var runningN = list.filter(function (n) { return n.running; }).length;
+    if (!list.length) {
+        toggleBtn.classList.add('hidden');
+        return;
+    }
+    toggleBtn.classList.remove('hidden');
+    if (toggleBadge) toggleBadge.textContent = String(list.length) + (runningN ? (' · ' + runningN) : '');
+    toggleBtn.classList.toggle('is-running', runningN > 0);
+}
 `,A=`const contextStore = {
     tokensBySession: new Map(),
     todoBySession: new Map(),
@@ -6499,159 +6650,6 @@ function finalizeSubagentCardStream(agentId, card) {
     var ctx = getSubagentCardStreamCtx(body, card, agentId);
     finalizeLlmStreamChunks(ctx);
     finalizeProgressStreamChunks(ctx);
-}
-
-function ensureSubagentActionMenu(actions, id) {
-    if (!actions) return null;
-    var menu = actions.querySelector('.subagent-card-menu');
-    if (menu) return menu;
-    menu = document.createElement('span');
-    menu.className = 'subagent-card-menu';
-    menu.innerHTML = '<button type="button" class="subagent-card-menu-btn" aria-label="更多操作" aria-expanded="false" data-ui-tip="更多操作">'
-        + subagentMoreDotsHtml() + '</button>'
-        + '<span class="subagent-card-menu-pop" role="menu"></span>';
-    actions.appendChild(menu);
-    return menu;
-}
-
-function ensureSubagentMenuButton(menu, cls, label, agentId) {
-    if (!menu) return null;
-    var pop = menu.querySelector('.subagent-card-menu-pop');
-    if (!pop) return null;
-    var btn = pop.querySelector('.' + cls);
-    if (btn) {
-        btn.setAttribute('data-agent-id', agentId);
-        return btn;
-    }
-    btn = document.createElement('button');
-    btn.type = 'button';
-    btn.className = 'subagent-card-menu-item ' + cls;
-    btn.setAttribute('data-agent-id', agentId);
-    btn.setAttribute('role', 'menuitem');
-    btn.textContent = label;
-    pop.appendChild(btn);
-    return btn;
-}
-
-function applySubagentNodeMetaToCard(card, n) {
-    if (!card || !n) return;
-    var id = String(n.id || '');
-    var running = !!n.running && !n.virtual_task;
-    card.dataset.subagentRunning = running ? '1' : '0';
-    card.dataset.description = String(n.description || id.slice(0, 8) || '');
-    if (n.result_preview) card.dataset.resultPreview = String(n.result_preview);
-    if (Object.prototype.hasOwnProperty.call(n, 'has_final')) card.dataset.hasFinal = n.has_final ? '1' : '0';
-    if (n.session_metrics) applySubagentSessionMetricsToCard(card, n.session_metrics);
-    var st = subagentStatusFromNode(n);
-    var dot = card.querySelector('.subagent-status-dot');
-    if (dot) {
-        dot.className = 'subagent-status-dot ' + st.dotCls;
-        dot.setAttribute('data-ui-tip', st.label);
-    }
-    var actions = card.querySelector('.subagent-card-head-actions');
-    if (actions) {
-        var menu = ensureSubagentActionMenu(actions, id);
-        var stopExisting = actions.querySelector('.subagent-card-stop');
-        if (running && !stopExisting) {
-            ensureSubagentMenuButton(menu, 'subagent-card-stop', '停止', id);
-        } else if (!running && stopExisting) {
-            stopExisting.remove();
-        }
-        var outputExisting = actions.querySelector('.subagent-card-output');
-        var hasOutput = !!n.output_file;
-        if (hasOutput) {
-            card.dataset.outputFile = '1';
-            if (!outputExisting) {
-                ensureSubagentMenuButton(menu, 'subagent-card-output', '查看输出', id);
-            }
-        } else {
-            delete card.dataset.outputFile;
-            if (outputExisting) outputExisting.remove();
-            var panel = card.querySelector('.subagent-output-panel');
-            if (panel) panel.remove();
-        }
-        ensureSubagentMenuButton(menu, 'subagent-card-delete', '删除', id);
-    }
-    if (n.task_status || n.status) card.dataset.taskStatus = String(n.task_status || n.status);
-    if (n.executor_model) {
-        card.dataset.executorModel = String(n.executor_model);
-        if (!card.dataset.procCacheModel) card.dataset.procCacheModel = String(n.executor_model);
-    }
-    if (running && !card.dataset.procStartedAt) card.dataset.procStartedAt = String(procNow());
-    if (!running) {
-        card.dataset.procEndedAt = String(procNow());
-        if (id) void refreshSubagentContextForCard(card, id, true);
-        if (!card.classList.contains('is-expanded')) {
-            updateSubagentCardSummaryOnly(card, n.result_preview);
-        }
-    }
-    refreshSubagentCardStats(card);
-}
-
-function appendSubagentGridCardFromNode(grid, n) {
-    if (!grid || !n) return null;
-    var html = buildSubagentGridHtml([n]);
-    if (html.indexOf('subagent-grid-empty') >= 0) return null;
-    var tmp = document.createElement('div');
-    tmp.innerHTML = html;
-    var card = tmp.firstElementChild;
-    if (!card) return null;
-    grid.appendChild(card);
-    if (n.result_preview) card.dataset.resultPreview = String(n.result_preview);
-    return card;
-}
-
-function syncSubagentGridFromFlat(flat, sessionId) {
-    var grid = document.getElementById('subagent-grid');
-    if (!grid) return;
-    if (grid.dataset.sessionId && grid.dataset.sessionId !== sessionId) {
-        grid.innerHTML = '';
-        disconnectSubagentCardViewportObserver();
-    }
-    grid.dataset.sessionId = sessionId;
-    var sorted = sortSubagentsByUpdated(flat);
-    var existingIds = new Set();
-    sorted.forEach(function (n) {
-        var id = String(n.id || '');
-        if (!id) return;
-        existingIds.add(id);
-        var card = grid.querySelector('.subagent-grid-card[data-agent-id="' + id + '"]');
-        if (!card) {
-            card = appendSubagentGridCardFromNode(grid, n);
-            if (card && subagentPanelOpen) observeSubagentCardViewport(card);
-        } else {
-            applySubagentNodeMetaToCard(card, n);
-        }
-    });
-    grid.querySelectorAll('.subagent-grid-card').forEach(function (card) {
-        var id = card.getAttribute('data-agent-id');
-        if (id && !existingIds.has(id)) {
-            subagentStore.deleteEventCount(sessionId, id);
-            delete subagentCardLoadQueued[id];
-            card.remove();
-        }
-    });
-    if (!shouldLoadSubagentCardBodies()) {
-        bindSubagentGridActions(grid, sessionId);
-        return;
-    }
-    bindSubagentGridActions(grid, sessionId);
-    loadVisibleSubagentCardBodies(grid, sessionId);
-}
-
-function refreshSubagentToggleFromGrid(flat) {
-    var toggleBtn = document.getElementById('subagent-toggle-btn');
-    var toggleBadge = document.getElementById('subagent-toggle-badge');
-    if (!toggleBtn) return;
-    var list = flat || [];
-    var runningN = list.filter(function (n) { return n.running; }).length;
-    if (!list.length) {
-        toggleBtn.classList.add('hidden');
-        return;
-    }
-    toggleBtn.classList.remove('hidden');
-    if (toggleBadge) toggleBadge.textContent = String(list.length) + (runningN ? (' · ' + runningN) : '');
-    toggleBtn.classList.toggle('is-running', runningN > 0);
 }
 
 function ensureSubagentCardStreamReady(card, aid) {
