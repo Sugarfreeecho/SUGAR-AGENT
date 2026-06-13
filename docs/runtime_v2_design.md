@@ -194,6 +194,14 @@ app/runtime_v2/
 - 对照旧系统和 V2 的运行终态。
 - 找出异常、停止、刷新不一致来源。
 
+当前接入范围：
+
+- `SessionManager.append_ui_event()` 会把旧 `user`、`final`、context/todo、subagent、tool 等事件镜像为 Runtime V2 事件。
+- `agent_loop.astream_events()` 会把主对话 run started / finished / failed / interrupted 镜像为 Runtime V2 run 事件。
+- `agent_loop.astream_events_continuation()` 会把续接 run started / finished / failed / interrupted 镜像为 Runtime V2 run 事件。
+- Runtime V2 镜像失败只写 debug，不影响旧流程。
+- Runtime V2 镜像日志写在现有 session 目录下的 `events.jsonl`，快照写在 `snapshots/latest.json`。
+
 ### 阶段 C：只读调试接口
 
 新增：

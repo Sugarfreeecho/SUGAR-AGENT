@@ -28,6 +28,7 @@ CORE_EVENT_TYPES = {
     "context_summary_started",
     "context_summary_finished",
     "todo_updated",
+    "legacy_ui_event",
 }
 
 

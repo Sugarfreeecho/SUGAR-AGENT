@@ -15,6 +15,7 @@ import queue
 import re
 import time
 import asyncio
+import uuid
 from datetime import datetime
 import inspect
 from typing import TypedDict, List, Dict, Any, AsyncGenerator, Callable, Optional
@@ -2276,6 +2277,29 @@ async def astream_events(
     session_manager.clear_interrupt(session_id)
 
     queue: asyncio.Queue = asyncio.Queue()
+    runtime_v2_run_id = str(uuid.uuid4())
+    runtime_v2_terminal_mirrored = False
+
+    def mirror_runtime_v2(event_type: str, payload: Optional[Dict[str, Any]] = None) -> None:
+        nonlocal runtime_v2_terminal_mirrored
+        if event_type in {"run_finished", "run_interrupted", "run_failed"}:
+            if runtime_v2_terminal_mirrored:
+                return
+            runtime_v2_terminal_mirrored = True
+        try:
+            from runtime_v2.mirror import RuntimeMirror
+
+            mirror = RuntimeMirror(session_manager.sessions_dir)
+            if event_type == "run_started":
+                mirror.mirror_run_started(session_id, runtime_v2_run_id, payload)
+            elif event_type == "run_finished":
+                mirror.mirror_run_finished(session_id, runtime_v2_run_id, payload)
+            elif event_type == "run_interrupted":
+                mirror.mirror_run_interrupted(session_id, runtime_v2_run_id, payload)
+            elif event_type == "run_failed":
+                mirror.mirror_run_failed(session_id, str((payload or {}).get("error") or "unknown error"), runtime_v2_run_id, payload)
+        except Exception as mirror_error:
+            logger.debug("Runtime V2 mirror run event failed: %s", mirror_error)
 
     async def emit(ev: Dict[str, Any]) -> None:
         # 与浏览器 SSE 一致；ephemeral（如 llm_*_delta）仅实时推送，不写入 ui_events
@@ -2287,8 +2311,10 @@ async def astream_events(
 
     async def runner():
         nonlocal state
+        completed = False
         try:
             # 用户气泡由前端已画；此处只写入与流顺序一致的持久化，供刷新与 SSE 同源
+            mirror_runtime_v2("run_started", {"mode": "chat"})
             await emit({"type": "run_started", "ephemeral": True})
             session_manager.append_ui_event(session_id, {"type": "user", "content": user_input})
             await emit({"type": "status", "content": "New Agent Loop Start"})
@@ -2304,7 +2330,16 @@ async def astream_events(
             for evt in state["stream_events"][stream_event_count_after_validate:]:
                 if evt.get("type") in ("status", "validate_final", "final"):
                     await emit(evt)
+            completed = True
+        except asyncio.CancelledError:
+            mirror_runtime_v2("run_interrupted", {"reason": "cancelled"})
+            raise
+        except Exception as exc:
+            mirror_runtime_v2("run_failed", {"error": str(exc)})
+            raise
         finally:
+            if completed:
+                mirror_runtime_v2("run_finished", {"mode": "chat"})
             await emit({"type": "run_finished", "ephemeral": True})
             await close_session_stream(session_id)
             await queue.put(None)
@@ -2318,6 +2353,7 @@ async def astream_events(
             if should_stop and should_stop(session_id):
                 ev1 = {"type": "status", "content": "任务已由用户中断"}
                 ev2 = {"type": "final", "content": "任务已由用户中断。"}
+                mirror_runtime_v2("run_interrupted", {"reason": "user"})
                 session_manager.append_ui_event(session_id, ev1)
                 session_manager.append_ui_event(session_id, ev2)
                 yield ev1
@@ -2386,6 +2422,29 @@ async def astream_events_continuation(
     session_manager.clear_interrupt(session_id)
 
     queue: asyncio.Queue = asyncio.Queue()
+    runtime_v2_run_id = str(uuid.uuid4())
+    runtime_v2_terminal_mirrored = False
+
+    def mirror_runtime_v2(event_type: str, payload: Optional[Dict[str, Any]] = None) -> None:
+        nonlocal runtime_v2_terminal_mirrored
+        if event_type in {"run_finished", "run_interrupted", "run_failed"}:
+            if runtime_v2_terminal_mirrored:
+                return
+            runtime_v2_terminal_mirrored = True
+        try:
+            from runtime_v2.mirror import RuntimeMirror
+
+            mirror = RuntimeMirror(session_manager.sessions_dir)
+            if event_type == "run_started":
+                mirror.mirror_run_started(session_id, runtime_v2_run_id, payload)
+            elif event_type == "run_finished":
+                mirror.mirror_run_finished(session_id, runtime_v2_run_id, payload)
+            elif event_type == "run_interrupted":
+                mirror.mirror_run_interrupted(session_id, runtime_v2_run_id, payload)
+            elif event_type == "run_failed":
+                mirror.mirror_run_failed(session_id, str((payload or {}).get("error") or "unknown error"), runtime_v2_run_id, payload)
+        except Exception as mirror_error:
+            logger.debug("Runtime V2 mirror continuation run event failed: %s", mirror_error)
 
     async def emit(ev: Dict[str, Any]) -> None:
         if should_persist_ui_event(ev):
@@ -2395,7 +2454,9 @@ async def astream_events_continuation(
 
     async def runner():
         nonlocal state
+        completed = False
         try:
+            mirror_runtime_v2("run_started", {"mode": "continuation"})
             await emit({"type": "run_started", "ephemeral": True})
             await emit({"type": "status", "content": "Subagent Continuation Start"})
             state = await react_node(state, emit=emit)
@@ -2410,7 +2471,16 @@ async def astream_events_continuation(
             for evt in state["stream_events"][stream_event_count_after_validate:]:
                 if evt.get("type") in ("status", "validate_final", "final"):
                     await emit(evt)
+            completed = True
+        except asyncio.CancelledError:
+            mirror_runtime_v2("run_interrupted", {"reason": "cancelled"})
+            raise
+        except Exception as exc:
+            mirror_runtime_v2("run_failed", {"error": str(exc)})
+            raise
         finally:
+            if completed:
+                mirror_runtime_v2("run_finished", {"mode": "continuation"})
             await emit({"type": "run_finished", "ephemeral": True})
             await close_session_stream(session_id)
             await queue.put(None)
@@ -2424,6 +2494,7 @@ async def astream_events_continuation(
             if should_stop and should_stop(session_id):
                 ev1 = {"type": "status", "content": "任务已由用户中断"}
                 ev2 = {"type": "final", "content": "任务已由用户中断。"}
+                mirror_runtime_v2("run_interrupted", {"reason": "user"})
                 session_manager.append_ui_event(session_id, ev1)
                 session_manager.append_ui_event(session_id, ev2)
                 yield ev1

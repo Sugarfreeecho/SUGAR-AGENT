@@ -12,6 +12,7 @@ from .stream_publisher import StreamPublisher
 from .gateway import RuntimeGateway
 from .projector import RuntimeProjector
 from .snapshot_store import SnapshotStore
+from .mirror import RuntimeMirror
 
 __all__ = [
     "RuntimeEvent",
@@ -22,4 +23,5 @@ __all__ = [
     "RuntimeGateway",
     "RuntimeProjector",
     "SnapshotStore",
+    "RuntimeMirror",
 ]

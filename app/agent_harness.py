@@ -2513,6 +2513,12 @@ class SessionManager:
             event_copy = json.loads(json.dumps(event, ensure_ascii=False))
             events.append(event_copy)
             self._save_ui_events(session_id, events)
+            try:
+                from runtime_v2.mirror import RuntimeMirror
+
+                RuntimeMirror(self.repository.sessions_dir).mirror_ui_event(session_id, event_copy)
+            except Exception as mirror_error:
+                logger.debug("Runtime V2 mirror ui_event failed: %s", mirror_error)
             if (
                 event_copy.get("type") == "user"
                 and not event_copy.get("_subagent_forward")
