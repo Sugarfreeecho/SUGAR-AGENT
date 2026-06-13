@@ -10,6 +10,7 @@ import subagentStoreSource from './state/subagent-store.js?raw';
 import subagentRenderersSource from './state/subagent-renderers.js?raw';
 import subagentCacheSource from './state/subagent-cache.js?raw';
 import subagentActionsSource from './state/subagent-actions.js?raw';
+import subagentDockSource from './state/subagent-dock.js?raw';
 import contextStoreSource from './state/context-store.js?raw';
 import sessionEventReducerSource from './state/session-event-reducer.js?raw';
 import sessionScrollHistorySource from './modules/session-scroll-history.js?raw';
@@ -34,6 +35,7 @@ const uiSources = [
     subagentRenderersSource,
     subagentCacheSource,
     subagentActionsSource,
+    subagentDockSource,
     contextStoreSource,
     sessionEventReducerSource,
     sessionScrollHistorySource,

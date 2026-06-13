@@ -1796,7 +1796,113 @@ function bindSubagentGridActions(grid, sessionId) {
     syncSubagentExpandButtons(grid);
     initUiHoverTips(grid);
 }
-`,R=`const contextStore = {
+`,R=`function onSubagentDockWheel(e) {
+    var dock = document.getElementById('subagent-dock');
+    if (!dock || dock.classList.contains('hidden') || !dock.contains(e.target)) return;
+    var dy = e.deltaY;
+    var eps = 2;
+    var node = e.target;
+    while (node && node !== dock) {
+        if (node.nodeType === 1) {
+            var style = window.getComputedStyle(node);
+            var scrollable = node.classList && (
+                node.classList.contains('subagent-grid') ||
+                node.classList.contains('process-aggregate-body') ||
+                node.classList.contains('process-aggregate-brief') ||
+                node.classList.contains('feed-chunk-scroller')
+            );
+            if (scrollable || /(auto|scroll|overlay)/.test(style.overflowY)) {
+                if (node.scrollHeight > node.clientHeight + eps) {
+                    var st = node.scrollTop;
+                    var max = node.scrollHeight - node.clientHeight;
+                    if (dy < 0 && st > eps) {
+                        e.stopPropagation();
+                        return;
+                    }
+                    if (dy > 0 && st < max - eps) {
+                        e.stopPropagation();
+                        return;
+                    }
+                }
+            }
+        }
+        node = node.parentElement;
+    }
+    var grid = dock.querySelector('.subagent-grid');
+    if (grid && grid.scrollHeight > grid.clientHeight + eps) {
+        var gst = grid.scrollTop;
+        var gmax = grid.scrollHeight - grid.clientHeight;
+        var next = Math.max(0, Math.min(gmax, gst + dy));
+        if (next !== gst) grid.scrollTop = next;
+    }
+    e.preventDefault();
+    e.stopPropagation();
+}
+
+function syncSubagentDockResizeUi() {
+    var dock = document.getElementById('subagent-dock');
+    var resizeBtn = document.getElementById('subagent-dock-resize');
+    if (!dock || !resizeBtn) return;
+    dock.classList.toggle('is-expanded', subagentDockExpanded);
+    resizeBtn.setAttribute('aria-label', subagentDockExpanded ? '收起 Subagent 面板' : '展开 Subagent 面板');
+}
+
+function toggleSubagentDockExpand() {
+    var grid = document.getElementById('subagent-grid');
+    if (grid) {
+        grid.classList.add('is-resizing');
+        stashSubagentInactiveBodies(grid, grid.querySelector('.subagent-grid-card.is-expanded'));
+    }
+    subagentDockExpanded = !subagentDockExpanded;
+    syncSubagentDockResizeUi();
+    if (grid) {
+        requestAnimationFrame(function () {
+            grid.classList.remove('is-resizing');
+            loadVisibleSubagentCardBodies(grid, currentSessionId);
+        });
+    }
+}
+
+function bindSubagentPanelOnce() {
+    if (subagentPanelBound) return;
+    subagentPanelBound = true;
+    var dock = document.getElementById('subagent-dock');
+    var panel = dock && dock.querySelector('.subagent-panel');
+    if (dock) dock.addEventListener('wheel', onSubagentDockWheel, { passive: false, capture: true });
+    if (panel) panel.addEventListener('wheel', onSubagentDockWheel, { passive: false, capture: true });
+    var btn = document.getElementById('subagent-toggle-btn');
+    if (btn) {
+        btn.addEventListener('click', function (e) {
+            e.stopPropagation();
+            if (subagentPanelOpen) closeSubagentPanel();
+            else openSubagentPanel();
+        });
+    }
+    var resizeBtn = document.getElementById('subagent-dock-resize');
+    if (resizeBtn && !resizeBtn.dataset.subagentBound) {
+        resizeBtn.dataset.subagentBound = '1';
+        resizeBtn.addEventListener('click', function (e) {
+            e.stopPropagation();
+            toggleSubagentDockExpand();
+        });
+    }
+    document.addEventListener('mousedown', function (e) {
+        if (!subagentPanelOpen) return;
+        if (!(e.target && e.target.closest && e.target.closest('.subagent-card-menu'))) {
+            document.querySelectorAll('.subagent-card-menu.is-open').forEach(function (menu) {
+                menu.classList.remove('is-open');
+                var mb = menu.querySelector('.subagent-card-menu-btn');
+                if (mb) mb.setAttribute('aria-expanded', 'false');
+            });
+        }
+        var dock = document.getElementById('subagent-dock');
+        var btnEl = document.getElementById('subagent-toggle-btn');
+        if (dock && dock.contains(e.target)) return;
+        if (btnEl && btnEl.contains(e.target)) return;
+        closeSubagentPanel();
+    });
+}
+`,F=`const contextStore = {
     tokensBySession: new Map(),
     todoBySession: new Map(),
     progressBySession: new Map(),
@@ -1916,7 +2022,7 @@ function appendContextProgressForSession(sessionId, kind, delta) {
 function selectContextProgress(sessionId) {
     return contextStore.progressBySession.get(String(sessionId || '')) || null;
 }
-`,F=`function markUiEventStoreApplied(event) {
+`,M=`function markUiEventStoreApplied(event) {
     if (!event || typeof event !== 'object') return;
     try {
         Object.defineProperty(event, '__storeApplied', {
@@ -1989,7 +2095,7 @@ function applySessionEvent(event, opts) {
     }
     return { handled: false, messageRecord: messageRecord };
 }
-`,M=`function formatTokenCompact(n) {
+`,N=`function formatTokenCompact(n) {
     if (n == null || !Number.isFinite(Number(n))) return '—';
     const x = Math.max(0, Math.round(Number(n)));
     if (x >= 1000000) return (x / 1000000).toFixed(1).replace(/\\.0$/, '') + 'M';
@@ -3204,7 +3310,7 @@ async function scrollToUserTurnOrLoadOlder(eventIndex) {
         });
     }
 }
-`,N=`function ensureUiHoverTooltipEl() {
+`,O=`function ensureUiHoverTooltipEl() {
     if (uiHoverTooltipEl) return uiHoverTooltipEl;
     uiHoverTooltipEl = document.getElementById('ui-hover-tooltip');
     if (!uiHoverTooltipEl) {
@@ -3599,7 +3705,7 @@ async function refreshTodoPlanPanel() {
         hideTodoPlanPanel();
     }
 }
-`,O=`function removeMessagesFromNode(startWrap) {
+`,D=`function removeMessagesFromNode(startWrap) {
     const stream = getVisibleChatStream() || chatContainer;
     if (!stream) return;
     const kids = Array.from(stream.children);
@@ -6117,7 +6223,7 @@ function finalizeProgressStreamForType(ctx, logType) {
 }
 
 /* ── Subagent 浮层 / 过程块 ── */
-`,D=`var subagentCardSyncTimer = null;
+`,H=`var subagentCardSyncTimer = null;
 var subagentPanelOpen = false;
 var subagentPanelBound = false;
 var subagentDockExpanded = false;
@@ -6539,113 +6645,6 @@ function cancelScheduledSubagentTreeRefresh() {
 
 function shouldLoadSubagentCardBodies() {
     return !!subagentPanelOpen;
-}
-
-function onSubagentDockWheel(e) {
-    var dock = document.getElementById('subagent-dock');
-    if (!dock || dock.classList.contains('hidden') || !dock.contains(e.target)) return;
-    var dy = e.deltaY;
-    var eps = 2;
-    var node = e.target;
-    while (node && node !== dock) {
-        if (node.nodeType === 1) {
-            var style = window.getComputedStyle(node);
-            var scrollable = node.classList && (
-                node.classList.contains('subagent-grid') ||
-                node.classList.contains('process-aggregate-body') ||
-                node.classList.contains('process-aggregate-brief') ||
-                node.classList.contains('feed-chunk-scroller')
-            );
-            if (scrollable || /(auto|scroll|overlay)/.test(style.overflowY)) {
-                if (node.scrollHeight > node.clientHeight + eps) {
-                    var st = node.scrollTop;
-                    var max = node.scrollHeight - node.clientHeight;
-                    if (dy < 0 && st > eps) {
-                        e.stopPropagation();
-                        return;
-                    }
-                    if (dy > 0 && st < max - eps) {
-                        e.stopPropagation();
-                        return;
-                    }
-                }
-            }
-        }
-        node = node.parentElement;
-    }
-    var grid = dock.querySelector('.subagent-grid');
-    if (grid && grid.scrollHeight > grid.clientHeight + eps) {
-        var gst = grid.scrollTop;
-        var gmax = grid.scrollHeight - grid.clientHeight;
-        var next = Math.max(0, Math.min(gmax, gst + dy));
-        if (next !== gst) grid.scrollTop = next;
-    }
-    e.preventDefault();
-    e.stopPropagation();
-}
-
-function syncSubagentDockResizeUi() {
-    var dock = document.getElementById('subagent-dock');
-    var resizeBtn = document.getElementById('subagent-dock-resize');
-    if (!dock || !resizeBtn) return;
-    dock.classList.toggle('is-expanded', subagentDockExpanded);
-    resizeBtn.setAttribute('aria-label', subagentDockExpanded ? '收起 Subagent 面板' : '展开 Subagent 面板');
-}
-
-function toggleSubagentDockExpand() {
-    var grid = document.getElementById('subagent-grid');
-    if (grid) {
-        grid.classList.add('is-resizing');
-        stashSubagentInactiveBodies(grid, grid.querySelector('.subagent-grid-card.is-expanded'));
-    }
-    subagentDockExpanded = !subagentDockExpanded;
-    syncSubagentDockResizeUi();
-    if (grid) {
-        requestAnimationFrame(function () {
-            grid.classList.remove('is-resizing');
-            loadVisibleSubagentCardBodies(grid, currentSessionId);
-        });
-    }
-}
-
-function bindSubagentPanelOnce() {
-    if (subagentPanelBound) return;
-    subagentPanelBound = true;
-    var dock = document.getElementById('subagent-dock');
-    var panel = dock && dock.querySelector('.subagent-panel');
-    if (dock) dock.addEventListener('wheel', onSubagentDockWheel, { passive: false, capture: true });
-    if (panel) panel.addEventListener('wheel', onSubagentDockWheel, { passive: false, capture: true });
-    var btn = document.getElementById('subagent-toggle-btn');
-    if (btn) {
-        btn.addEventListener('click', function (e) {
-            e.stopPropagation();
-            if (subagentPanelOpen) closeSubagentPanel();
-            else openSubagentPanel();
-        });
-    }
-    var resizeBtn = document.getElementById('subagent-dock-resize');
-    if (resizeBtn && !resizeBtn.dataset.subagentBound) {
-        resizeBtn.dataset.subagentBound = '1';
-        resizeBtn.addEventListener('click', function (e) {
-            e.stopPropagation();
-            toggleSubagentDockExpand();
-        });
-    }
-    document.addEventListener('mousedown', function (e) {
-        if (!subagentPanelOpen) return;
-        if (!(e.target && e.target.closest && e.target.closest('.subagent-card-menu'))) {
-            document.querySelectorAll('.subagent-card-menu.is-open').forEach(function (menu) {
-                menu.classList.remove('is-open');
-                var mb = menu.querySelector('.subagent-card-menu-btn');
-                if (mb) mb.setAttribute('aria-expanded', 'false');
-            });
-        }
-        var dock = document.getElementById('subagent-dock');
-        var btnEl = document.getElementById('subagent-toggle-btn');
-        if (dock && dock.contains(e.target)) return;
-        if (btnEl && btnEl.contains(e.target)) return;
-        closeSubagentPanel();
-    });
 }
 
 function openSubagentPanel() {
@@ -7745,7 +7744,7 @@ function updateSubagentBlockFinish(ctx, event) {
     applySubagentBlockFinish(blk, event);
     handleSubagentLifecycleEvent(event);
 }
-`,H=`function renderEvent(ctx, event, eventIndex, runSessionId) {
+`,q=`function renderEvent(ctx, event, eventIndex, runSessionId) {
     if (!event || typeof event !== 'object') return;
     var eventSessionId = runSessionId || currentSessionId || '';
     if (eventSessionId && !event.__storeApplied) {
@@ -7835,7 +7834,7 @@ function updateSubagentBlockFinish(ctx, event) {
         if (fallbackContent.trim()) appendLog(ctx, fallbackContent, 'log-entry', runSessionId);
     }
 }
-`,q=`function setSendButtonState() {
+`,U=`function setSendButtonState() {
     sendBtn.disabled = false;
     if (isSessionRunning(currentSessionId)) {
         sendBtn.innerHTML = '停止 <span class="loader" aria-hidden="true"></span>';
@@ -8810,7 +8809,7 @@ async function createNewSessionInner() {
         appendLogVisible('创建新会话失败', 'error-log');
     }
 }
-`,U=`async function consumeAgentSseResponse(response, runCtx, runSessionId, streamEventIdx) {
+`,j=`async function consumeAgentSseResponse(response, runCtx, runSessionId, streamEventIdx) {
     if (!response || !response.body) return streamEventIdx;
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
@@ -9358,7 +9357,7 @@ sendBtn.addEventListener('click', function () {
     });
 })();
 initUiHoverTips(document);
-`,j=`newSessionBtn.addEventListener('click', async () => { await createNewSession(); });
+`,W=`newSessionBtn.addEventListener('click', async () => { await createNewSession(); });
 
 function initSidebarSash() {
     const side = document.getElementById('sidebar');
@@ -9601,8 +9600,8 @@ if (typeof globalThis !== 'undefined') {
     globalThis.toggleTodoPlanPanel = toggleTodoPlanPanel;
     globalThis.toggleTocPanel = toggleTocPanel;
 }
-`,W=[I,x,C,w,T,E,L,k,_,P,A,B,R,F,M,N,O,D,H,q,U,j];Function(`"use strict";
-`+W.join(`
+`,G=[I,x,C,w,T,E,L,k,_,P,A,B,R,F,M,N,O,D,H,q,U,j,W];Function(`"use strict";
+`+G.join(`
 
 `)+`
 //# sourceURL=myagent-ui.js`)();typeof initUiHoverTips=="function"&&initUiHoverTips(document);
