@@ -153,14 +153,16 @@ body {
     user-select: none;
     -webkit-user-select: none;
     width: 38px; height: 38px; border-radius: 12px;
-    background: var(--accent-brand-gradient);
-    box-shadow: 0 2px 22px var(--accent-brand-glow);
+    background: transparent;
+    box-shadow: none;
     position: relative; display: flex;
     align-items: center; justify-content: center;
     flex-shrink: 0;
+    overflow: hidden;
 }
-.sidebar-brand-icon svg {
-    width: 28px; height: 28px;
+.sidebar-brand-icon img {
+    width: 100%; height: 100%;
+    display: block;
     user-select: none;
     -webkit-user-select: none;
     pointer-events: none;
@@ -588,7 +590,7 @@ body {
     position: relative; flex: 1; min-height: 0; min-width: 0;
     display: flex; flex-direction: column; align-items: stretch;
     /* 与 .chat-todo-plan / .chat-toc 贴边一致，供折叠把手定位（展开时偏移面板宽度） */
-    --panel-edge-dock-left: max(0.45rem, calc(0.2rem + 12px + env(safe-area-inset-left, 0px)));
+    --panel-edge-dock-left: max(0.225rem, calc(0.1rem + 6px + env(safe-area-inset-left, 0px)));
     --panel-edge-dock-right: max(0.45rem, calc(0.2rem + 12px + env(safe-area-inset-right, 0px)));
     --panel-edge-slide-width: 9.5rem;
 }
@@ -1018,15 +1020,19 @@ body {
 }
 .welcome-icon {
     display: inline-flex; width: 56px; height: 56px;
-    border-radius: 16px; background: var(--accent-brand-gradient);
-    box-shadow: 0 4px 32px var(--accent-brand-glow);
+    border-radius: 16px; background: transparent;
+    box-shadow: none;
     align-items: center; justify-content: center;
     font-size: 1.8rem; margin-bottom: 1.2rem;
     animation: welcomePulse 3.5s ease-in-out infinite;
     user-select: none;
     -webkit-user-select: none;
+    overflow: hidden;
 }
-.welcome-icon svg {
+.welcome-icon img {
+    width: 100%;
+    height: 100%;
+    display: block;
     user-select: none;
     -webkit-user-select: none;
     pointer-events: none;
@@ -2398,7 +2404,7 @@ body {
 @media (max-width: 720px) {
     .sidebar { min-width: 100px; max-width: min(480px, 60vw); }
     .chat-stage {
-        --panel-edge-dock-left: max(0.35rem, calc(0.15rem + 12px + env(safe-area-inset-left, 0px)));
+        --panel-edge-dock-left: max(0.175rem, calc(0.075rem + 6px + env(safe-area-inset-left, 0px)));
         --panel-edge-dock-right: max(0.35rem, calc(0.15rem + 12px + env(safe-area-inset-right, 0px)));
         --panel-edge-slide-width: 7rem;
     }

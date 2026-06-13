@@ -6,7 +6,6 @@ import argparse
 import os
 import socket
 import subprocess
-import tempfile
 import time
 import webbrowser
 from pathlib import Path
@@ -16,7 +15,6 @@ import win32con
 import win32event
 import win32gui
 import winerror
-from PIL import Image, ImageDraw, ImageFont
 
 
 APP_NAME = "Agent \u667a\u80fd\u4f1a\u8bdd\u52a9\u624b"
@@ -66,6 +64,7 @@ LOG_DIR = ROOT / "logs"
 LOG_FILE = LOG_DIR / "agent_terminal.log"
 PYTHONW_EXE = ROOT / "python" / "pythonw.exe"
 COLORED_LOG_VIEWER = ROOT / "app" / "colored_log_viewer.ps1"
+TRAY_ICON_FILE = ROOT / "app" / "assets" / "sugar_tray.ico"
 
 
 def _append_log(line: str = "") -> None:
@@ -244,93 +243,17 @@ class TrayLauncher:
         win32gui.Shell_NotifyIcon(win32gui.NIM_ADD, nid)
 
     def _create_icon(self) -> int:
-        icon_path = Path(tempfile.gettempdir()) / "myagent_sugar_tray_v8.ico"
-        if not icon_path.exists():
-            image = self._create_sugar_icon_image(256)
-            sizes = [(16, 16), (20, 20), (24, 24), (32, 32), (40, 40), (48, 48), (64, 64), (256, 256)]
-            image.save(icon_path, sizes=sizes)
+        if not TRAY_ICON_FILE.exists():
+            _append_log(f"Missing tray icon: {TRAY_ICON_FILE}")
+            return win32gui.LoadIcon(0, win32con.IDI_APPLICATION)
         return win32gui.LoadImage(
             0,
-            str(icon_path),
+            str(TRAY_ICON_FILE),
             win32con.IMAGE_ICON,
             0,
             0,
             win32con.LR_LOADFROMFILE | win32con.LR_DEFAULTSIZE,
         )
-
-    def _create_sugar_icon_image(self, size: int) -> Image.Image:
-        image = Image.new("RGBA", (size, size), (0, 0, 0, 0))
-        draw = ImageDraw.Draw(image)
-
-        margin = int(size * 0.082)
-        radius = int(size * 0.18)
-        rect = (margin, margin, size - margin, size - margin)
-
-        # Match the WebUI brand gradient: #6366f1 -> #8b5cf6 -> #a78bfa.
-        top = (99, 102, 241)
-        mid = (139, 92, 246)
-        bottom = (167, 139, 250)
-        grad = Image.new("RGBA", (size, size), (0, 0, 0, 0))
-        gdraw = ImageDraw.Draw(grad)
-        for y in range(size):
-            t = y / max(1, size - 1)
-            if t < 0.5:
-                k = t / 0.5
-                c = tuple(int(top[i] * (1 - k) + mid[i] * k) for i in range(3))
-            else:
-                k = (t - 0.5) / 0.5
-                c = tuple(int(mid[i] * (1 - k) + bottom[i] * k) for i in range(3))
-            gdraw.line((0, y, size, y), fill=(*c, 255))
-
-        mask = Image.new("L", (size, size), 0)
-        mdraw = ImageDraw.Draw(mask)
-        mdraw.rounded_rectangle(rect, radius=radius, fill=255)
-        image.alpha_composite(Image.composite(grad, Image.new("RGBA", (size, size), (0, 0, 0, 0)), mask))
-
-        shadow = Image.new("RGBA", (size, size), (0, 0, 0, 0))
-        sdraw = ImageDraw.Draw(shadow)
-        sdraw.rounded_rectangle(rect, radius=radius, outline=(255, 255, 255, 54), width=max(2, size // 48))
-        image.alpha_composite(shadow)
-
-        font = self._load_sugar_font(size)
-        text = "Sugar"
-        bbox = draw.textbbox((0, 0), text, font=font)
-        tw = bbox[2] - bbox[0]
-        th = bbox[3] - bbox[1]
-        x = (size - tw) / 2 - bbox[0]
-        x = x + size * 0.01
-        y = (size - th) / 2 - bbox[1] + size * 0.015
-        pad = int(size * 0.35)
-        canvas_size = size + pad * 2
-        txt = Image.new("RGBA", (canvas_size, canvas_size), (0, 0, 0, 0))
-        tdraw = ImageDraw.Draw(txt)
-        tx = x + pad
-        ty = y + pad
-        tdraw.text((tx + size * 0.012, ty + size * 0.014), text, font=font, fill=(58, 42, 120, 82))
-        stroke = max(1, size // 96)
-        for dx in range(-stroke, stroke + 1):
-            for dy in range(-stroke, stroke + 1):
-                if dx * dx + dy * dy <= stroke * stroke:
-                    tdraw.text((tx + dx, ty + dy), text, font=font, fill=(255, 255, 255, 248))
-        txt = txt.rotate(6, resample=Image.Resampling.BICUBIC, center=(canvas_size / 2, canvas_size / 2))
-        image.alpha_composite(txt, dest=(-pad, -pad))
-        return image
-
-    def _load_sugar_font(self, size: int) -> ImageFont.ImageFont:
-        font_size = max(16, int(size * 0.342))
-        candidates = [
-            Path(os.environ.get("WINDIR", r"C:\Windows")) / "Fonts" / "segoesc.ttf",
-            Path(os.environ.get("WINDIR", r"C:\Windows")) / "Fonts" / "segoescb.ttf",
-            Path(os.environ.get("WINDIR", r"C:\Windows")) / "Fonts" / "seguisbi.ttf",
-            Path(os.environ.get("WINDIR", r"C:\Windows")) / "Fonts" / "ariali.ttf",
-        ]
-        for path in candidates:
-            if path.exists():
-                try:
-                    return ImageFont.truetype(str(path), font_size)
-                except OSError:
-                    pass
-        return ImageFont.load_default()
 
     def _start_agent(self) -> None:
         LOG_DIR.mkdir(parents=True, exist_ok=True)
