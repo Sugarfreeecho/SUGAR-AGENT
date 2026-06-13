@@ -1607,7 +1607,47 @@ function applySubagentBlockFinish(blk, event) {
         preview.textContent = txt ? String(txt).slice(0, 500) : '';
     }
 }
-`,A=`const contextStore = {
+`,A=`var subagentBodyHtmlCache = Object.create(null);
+
+function subagentBodyCacheKey(sessionId, agentId) {
+    return String(sessionId || '') + ':' + String(agentId || '');
+}
+
+function isSubagentDetailPendingHtml(html) {
+    return !html || html.indexOf('加载中') >= 0;
+}
+
+function forgetSubagentBodyCache(sessionId, agentId) {
+    if (sessionId && agentId) {
+        delete subagentBodyHtmlCache[subagentBodyCacheKey(sessionId, agentId)];
+        return;
+    }
+    if (sessionId) {
+        var prefix = String(sessionId) + ':';
+        Object.keys(subagentBodyHtmlCache).forEach(function (k) {
+            if (k.indexOf(prefix) === 0) delete subagentBodyHtmlCache[k];
+        });
+    }
+}
+
+function isSubagentBodyCacheComplete(html) {
+    if (!html || isSubagentDetailPendingHtml(html)) return false;
+    if (html.indexOf('subagent-detail-empty') >= 0) return false;
+    if (html.indexOf('subagent-turn-process') < 0) {
+        return html.indexOf('subagent-turn') >= 0 || html.indexOf('msg-wrap--assistant') >= 0;
+    }
+    return html.indexOf('msg-wrap--user') >= 0;
+}
+
+function rememberSubagentBodyCache(sessionId, agentId, html) {
+    if (!sessionId || !agentId || !html || !isSubagentBodyCacheComplete(html)) return;
+    subagentBodyHtmlCache[subagentBodyCacheKey(sessionId, agentId)] = html;
+}
+
+function readSubagentBodyCache(sessionId, agentId) {
+    return subagentBodyHtmlCache[subagentBodyCacheKey(sessionId, agentId)] || '';
+}
+`,B=`const contextStore = {
     tokensBySession: new Map(),
     todoBySession: new Map(),
     progressBySession: new Map(),
@@ -1727,7 +1767,7 @@ function appendContextProgressForSession(sessionId, kind, delta) {
 function selectContextProgress(sessionId) {
     return contextStore.progressBySession.get(String(sessionId || '')) || null;
 }
-`,B=`function markUiEventStoreApplied(event) {
+`,R=`function markUiEventStoreApplied(event) {
     if (!event || typeof event !== 'object') return;
     try {
         Object.defineProperty(event, '__storeApplied', {
@@ -1800,7 +1840,7 @@ function applySessionEvent(event, opts) {
     }
     return { handled: false, messageRecord: messageRecord };
 }
-`,R=`function formatTokenCompact(n) {
+`,F=`function formatTokenCompact(n) {
     if (n == null || !Number.isFinite(Number(n))) return '—';
     const x = Math.max(0, Math.round(Number(n)));
     if (x >= 1000000) return (x / 1000000).toFixed(1).replace(/\\.0$/, '') + 'M';
@@ -3015,7 +3055,7 @@ async function scrollToUserTurnOrLoadOlder(eventIndex) {
         });
     }
 }
-`,F=`function ensureUiHoverTooltipEl() {
+`,M=`function ensureUiHoverTooltipEl() {
     if (uiHoverTooltipEl) return uiHoverTooltipEl;
     uiHoverTooltipEl = document.getElementById('ui-hover-tooltip');
     if (!uiHoverTooltipEl) {
@@ -3410,7 +3450,7 @@ async function refreshTodoPlanPanel() {
         hideTodoPlanPanel();
     }
 }
-`,M=`function removeMessagesFromNode(startWrap) {
+`,N=`function removeMessagesFromNode(startWrap) {
     const stream = getVisibleChatStream() || chatContainer;
     if (!stream) return;
     const kids = Array.from(stream.children);
@@ -5928,7 +5968,7 @@ function finalizeProgressStreamForType(ctx, logType) {
 }
 
 /* ── Subagent 浮层 / 过程块 ── */
-`,N=`var subagentCardSyncTimer = null;
+`,O=`var subagentCardSyncTimer = null;
 var subagentPanelOpen = false;
 var subagentPanelBound = false;
 var subagentDockExpanded = false;
@@ -5937,7 +5977,6 @@ var subagentContinueInFlight = false;
 var subagentContinueBannerTimer = null;
 var subagentContinueDismissedForSession = Object.create(null);
 var subagentPanelRefreshSeq = 0;
-var subagentBodyHtmlCache = Object.create(null);
 var subagentContextFetchInFlight = Object.create(null);
 var subagentTreeRefreshTimer = null;
 var subagentTreeRefreshTarget = null;
@@ -6347,45 +6386,6 @@ function cancelScheduledSubagentTreeRefresh() {
     }
     subagentTreeRefreshTarget = null;
     subagentTreeRefreshQueued = false;
-}
-
-function subagentBodyCacheKey(sessionId, agentId) {
-    return String(sessionId || '') + ':' + String(agentId || '');
-}
-
-function isSubagentDetailPendingHtml(html) {
-    return !html || html.indexOf('加载中') >= 0;
-}
-
-function forgetSubagentBodyCache(sessionId, agentId) {
-    if (sessionId && agentId) {
-        delete subagentBodyHtmlCache[subagentBodyCacheKey(sessionId, agentId)];
-        return;
-    }
-    if (sessionId) {
-        var prefix = String(sessionId) + ':';
-        Object.keys(subagentBodyHtmlCache).forEach(function (k) {
-            if (k.indexOf(prefix) === 0) delete subagentBodyHtmlCache[k];
-        });
-    }
-}
-
-function isSubagentBodyCacheComplete(html) {
-    if (!html || isSubagentDetailPendingHtml(html)) return false;
-    if (html.indexOf('subagent-detail-empty') >= 0) return false;
-    if (html.indexOf('subagent-turn-process') < 0) {
-        return html.indexOf('subagent-turn') >= 0 || html.indexOf('msg-wrap--assistant') >= 0;
-    }
-    return html.indexOf('msg-wrap--user') >= 0;
-}
-
-function rememberSubagentBodyCache(sessionId, agentId, html) {
-    if (!sessionId || !agentId || !html || !isSubagentBodyCacheComplete(html)) return;
-    subagentBodyHtmlCache[subagentBodyCacheKey(sessionId, agentId)] = html;
-}
-
-function readSubagentBodyCache(sessionId, agentId) {
-    return subagentBodyHtmlCache[subagentBodyCacheKey(sessionId, agentId)] || '';
 }
 
 function shouldLoadSubagentCardBodies() {
@@ -7746,7 +7746,7 @@ function updateSubagentBlockFinish(ctx, event) {
     applySubagentBlockFinish(blk, event);
     handleSubagentLifecycleEvent(event);
 }
-`,O=`function renderEvent(ctx, event, eventIndex, runSessionId) {
+`,D=`function renderEvent(ctx, event, eventIndex, runSessionId) {
     if (!event || typeof event !== 'object') return;
     var eventSessionId = runSessionId || currentSessionId || '';
     if (eventSessionId && !event.__storeApplied) {
@@ -7836,7 +7836,7 @@ function updateSubagentBlockFinish(ctx, event) {
         if (fallbackContent.trim()) appendLog(ctx, fallbackContent, 'log-entry', runSessionId);
     }
 }
-`,D=`function setSendButtonState() {
+`,H=`function setSendButtonState() {
     sendBtn.disabled = false;
     if (isSessionRunning(currentSessionId)) {
         sendBtn.innerHTML = '停止 <span class="loader" aria-hidden="true"></span>';
@@ -8811,7 +8811,7 @@ async function createNewSessionInner() {
         appendLogVisible('创建新会话失败', 'error-log');
     }
 }
-`,H=`async function consumeAgentSseResponse(response, runCtx, runSessionId, streamEventIdx) {
+`,q=`async function consumeAgentSseResponse(response, runCtx, runSessionId, streamEventIdx) {
     if (!response || !response.body) return streamEventIdx;
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
@@ -9359,7 +9359,7 @@ sendBtn.addEventListener('click', function () {
     });
 })();
 initUiHoverTips(document);
-`,q=`newSessionBtn.addEventListener('click', async () => { await createNewSession(); });
+`,U=`newSessionBtn.addEventListener('click', async () => { await createNewSession(); });
 
 function initSidebarSash() {
     const side = document.getElementById('sidebar');
@@ -9602,8 +9602,8 @@ if (typeof globalThis !== 'undefined') {
     globalThis.toggleTodoPlanPanel = toggleTodoPlanPanel;
     globalThis.toggleTocPanel = toggleTocPanel;
 }
-`,U=[I,x,C,w,T,E,L,k,_,P,A,B,R,F,M,N,O,D,H,q];Function(`"use strict";
-`+U.join(`
+`,j=[I,x,C,w,T,E,L,k,_,P,A,B,R,F,M,N,O,D,H,q,U];Function(`"use strict";
+`+j.join(`
 
 `)+`
 //# sourceURL=myagent-ui.js`)();typeof initUiHoverTips=="function"&&initUiHoverTips(document);
