@@ -74,6 +74,7 @@ function clearSessionUnreadState(sessionId, opts) {
         if (sess) {
             sess.unread_result = false;
             delete sess.unread_result_at;
+            delete sess.unread_result_status;
         }
     }
     if (typeof syncSessionListIndicatorClasses === 'function') syncSessionListIndicatorClasses();

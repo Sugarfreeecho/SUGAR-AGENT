@@ -90,7 +90,7 @@ function hideLoading() { const loader = document.getElementById('chat-loading');
 function applySessionItemIndicators(itemDiv, sessionId, opts) {
     opts = opts || {};
     if (!itemDiv || !sessionId) return;
-    itemDiv.classList.remove('is-generating', 'is-unread-result');
+    itemDiv.classList.remove('is-generating', 'is-unread-result', 'is-unread-failed');
     var nameEl = itemDiv.querySelector('.session-name');
     if (nameEl) nameEl.removeAttribute('data-ui-tip');
     if (isSessionRunning(sessionId)) {
@@ -100,8 +100,9 @@ function applySessionItemIndicators(itemDiv, sessionId, opts) {
         var sess = sessionStore.get(sessionId);
         var hasUnreadResult = sessionUnreadComplete.has(sessionId) || !!(sess && sess.unread_result);
         if (!hasUnreadResult) return;
-        itemDiv.classList.add('is-unread-result');
-        if (nameEl) nameEl.setAttribute('data-ui-tip', '有新回复，点击查看');
+        var failed = !!(sess && sess.unread_result_status === 'failed');
+        itemDiv.classList.add(failed ? 'is-unread-failed' : 'is-unread-result');
+        if (nameEl) nameEl.setAttribute('data-ui-tip', failed ? '任务失败，点击查看' : '有新回复，点击查看');
     }
     if (nameEl) bindUiHoverTip(nameEl);
 }
@@ -410,7 +411,7 @@ function computeSessionListRenderKey() {
             s.pinned ? 'p' : '',
             s.archived ? 'a' : '',
             s.stream_active ? 'r' : '',
-            s.unread_result ? 'u' : '',
+            s.unread_result ? ('u:' + (s.unread_result_status || 'success')) : '',
             s.last_activity_at || s.updated_at || '',
             s.last_user_preview || '',
             s.subagent_running || 0,
@@ -426,7 +427,7 @@ function computeSessionListRenderKey() {
             a.id,
             a.name || '',
             a.pinned ? 'p' : '',
-            a.unread_result ? 'u' : '',
+            a.unread_result ? ('u:' + (a.unread_result_status || 'success')) : '',
             a.last_activity_at || a.updated_at || '',
             a.last_user_preview || '',
         ].join('\u001f'));

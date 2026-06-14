@@ -414,6 +414,12 @@ body {
     margin-right: 5px; box-shadow: 0 0 8px rgba(166,227,161,0.4);
     vertical-align: 0.08em;
 }
+.session-item.is-unread-failed .session-name::before {
+    content: ''; display: inline-block; width: 6px; height: 6px;
+    border-radius: 50%; background: var(--red-accent);
+    margin-right: 5px; box-shadow: 0 0 8px rgba(243,139,168,0.45);
+    vertical-align: 0.08em;
+}
 @keyframes pulse-dot {
     0%,100% { opacity: 1; transform: scale(1); }
     50% { opacity: 0.45; transform: scale(0.8); }

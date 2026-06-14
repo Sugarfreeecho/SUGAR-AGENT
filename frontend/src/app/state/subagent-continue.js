@@ -79,6 +79,9 @@ async function tryMarkSessionUnreadComplete(sessionId) {
         var j = await r.json();
         if (j.stream_active || Number(j.subagent_running || 0) > 0) return;
         sessionUnreadComplete.add(sessionId);
+        var sess = sessionStore.get(sessionId);
+        if (sess && j.unread_result_status) sess.unread_result_status = j.unread_result_status;
+        if (sess && Object.prototype.hasOwnProperty.call(j, 'unread_result')) sess.unread_result = !!j.unread_result;
         persistSessionUnread();
         syncSessionListIndicatorClasses();
     } catch (e) { /* ignore */ }

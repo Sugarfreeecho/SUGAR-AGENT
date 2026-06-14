@@ -168,7 +168,7 @@
         if (!paths.length) return;
         var text = paths.map(function (item) { return quotePickedPath(item); }).join(' ');
         insertTextAtCursor(textarea, text);
-      }, true);
+      }, false);
     });
   }
 

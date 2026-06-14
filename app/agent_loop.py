@@ -2367,9 +2367,11 @@ async def astream_events(
             completed = True
         except asyncio.CancelledError:
             mirror_runtime_v2("run_interrupted", {"reason": "cancelled"})
+            session_manager.mark_session_unread_result(session_id, status="failed")
             raise
         except Exception as exc:
             mirror_runtime_v2("run_failed", {"error": str(exc)})
+            session_manager.mark_session_unread_result(session_id, status="failed")
             raise
         finally:
             if completed:
@@ -2508,9 +2510,11 @@ async def astream_events_continuation(
             completed = True
         except asyncio.CancelledError:
             mirror_runtime_v2("run_interrupted", {"reason": "cancelled"})
+            session_manager.mark_session_unread_result(session_id, status="failed")
             raise
         except Exception as exc:
             mirror_runtime_v2("run_failed", {"error": str(exc)})
+            session_manager.mark_session_unread_result(session_id, status="failed")
             raise
         finally:
             if completed:

@@ -1554,6 +1554,7 @@ class SessionManager:
                     "pinned_at": pinned_at if pinned else None,
                     "unread_result": bool(meta.get("unread_result", False)),
                     "unread_result_at": meta.get("unread_result_at"),
+                    "unread_result_status": str(meta.get("unread_result_status") or "success"),
                     "last_user_preview": str(meta.get("last_user_preview") or ""),
                 }
         except FileNotFoundError:
@@ -2545,8 +2546,11 @@ class SessionManager:
                 if changed:
                     self._save_index()
                 self.clear_session_unread_result(session_id)
+            elif event_copy.get("type") == "error":
+                self.mark_session_unread_result(session_id, status="failed")
             elif event_copy.get("type") == "final":
-                self.mark_session_unread_result(session_id)
+                final_status = "failed" if self._ui_event_final_is_failure(event_copy) else "success"
+                self.mark_session_unread_result(session_id, status=final_status)
         except Exception as e:
             logger.warning(f"append_ui_event 失败: {e}")
 
@@ -3685,6 +3689,7 @@ class SessionManager:
         d.setdefault("archived", False)
         d.setdefault("pinned", False)
         d["unread_result"] = bool(d.get("unread_result", False))
+        d["unread_result_status"] = str(d.get("unread_result_status") or "success")
         if d.get("pinned") and not d.get("pinned_at"):
             d["pinned_at"] = d.get("updated_at") or d.get("created_at")
         sid = d.get("id")
@@ -3829,25 +3834,49 @@ class SessionManager:
                 break
         self._save_index()
 
-    def mark_session_unread_result(self, session_id: str) -> None:
+    @staticmethod
+    def _ui_event_final_is_failure(event: Dict[str, Any]) -> bool:
+        text = str((event or {}).get("content") or "").strip()
+        if not text:
+            return True
+        failure_markers = (
+            "任务已由用户中断",
+            "调用失败",
+            "请求失败",
+            "执行步骤达到最大迭代",
+            "检测到连续重复行为",
+            "No result",
+            "工具执行异常",
+            "missing final",
+        )
+        return any(marker in text for marker in failure_markers)
+
+    def mark_session_unread_result(self, session_id: str, status: str = "success") -> None:
         sid = self._normalize_session_id(session_id)
         meta_path = self._get_metadata_path(sid)
         if not meta_path.exists():
             return
+        result_status = "failed" if str(status or "").lower() == "failed" else "success"
         now = datetime.now().isoformat()
         with self._session_metadata_lock(sid):
             metadata = self._load_metadata_unlocked(sid)
             if not isinstance(metadata, dict):
                 metadata = {}
+            if metadata.get("unread_result_status") == "failed" and result_status == "success":
+                result_status = "failed"
             metadata["unread_result"] = True
             metadata["unread_result_at"] = now
+            metadata["unread_result_status"] = result_status
             self._save_metadata_unlocked(sid, metadata)
         changed = False
         with self._lock:
             for sess in self.index:
                 if sess.get("id") == sid:
+                    if sess.get("unread_result_status") == "failed" and result_status == "success":
+                        result_status = "failed"
                     sess["unread_result"] = True
                     sess["unread_result_at"] = now
+                    sess["unread_result_status"] = result_status
                     changed = True
                     break
         if changed:
@@ -3864,6 +3893,7 @@ class SessionManager:
                 metadata = {}
             metadata["unread_result"] = False
             metadata.pop("unread_result_at", None)
+            metadata.pop("unread_result_status", None)
             self._save_metadata_unlocked(sid, metadata)
         changed = False
         with self._lock:
@@ -3871,6 +3901,7 @@ class SessionManager:
                 if sess.get("id") == sid:
                     sess["unread_result"] = False
                     sess.pop("unread_result_at", None)
+                    sess.pop("unread_result_status", None)
                     changed = True
                     break
         if changed:
