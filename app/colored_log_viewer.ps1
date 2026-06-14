@@ -6,7 +6,7 @@ param(
 chcp 65001 > $null
 [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new()
 $OutputEncoding = [System.Text.UTF8Encoding]::new()
-$Host.UI.RawUI.WindowTitle = 'Agent 终端信息'
+$Host.UI.RawUI.WindowTitle = [string]::Concat('Agent ', [char]0x7ec8, [char]0x7aef, [char]0x4fe1, [char]0x606f)
 
 function Write-AgentLogLine {
   param([AllowNull()][string]$Line)
