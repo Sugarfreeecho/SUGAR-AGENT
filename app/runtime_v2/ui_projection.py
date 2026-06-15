@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Callable, Dict, Iterable, List, Optional
 
 from .event_log import SessionEventLog
 from .event_schema import RuntimeEvent
@@ -34,7 +34,9 @@ class RuntimeUiProjection:
                 count += 1
         return count
 
-    def read_ui_events(self, session_id: str) -> List[dict]:
+    def read_ui_events(self, session_id: str, legacy_loader: Optional[Callable[[], Iterable[dict]]] = None) -> List[dict]:
+        if legacy_loader is not None and self.needs_legacy_backfill(session_id):
+            self.ensure_backfilled_from_legacy(session_id, legacy_loader())
         return self.events_to_ui(self.event_log.read_all(session_id))
 
     def needs_legacy_backfill(self, session_id: str) -> bool:
@@ -56,8 +58,9 @@ class RuntimeUiProjection:
         limit: int = 200,
         before_index: Optional[int] = None,
         turns: Optional[int] = None,
+        legacy_loader: Optional[Callable[[], Iterable[dict]]] = None,
     ) -> dict:
-        events = self.read_ui_events(session_id)
+        events = self.read_ui_events(session_id, legacy_loader=legacy_loader)
         return self._page_events(events, limit=limit, before_index=before_index, turns=turns)
 
     @classmethod

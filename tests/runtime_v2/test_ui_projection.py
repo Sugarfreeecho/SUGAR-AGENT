@@ -33,6 +33,18 @@ class RuntimeUiProjectionTests(unittest.TestCase):
             self.assertEqual(count, 3)
             self.assertEqual([ev["type"] for ev in events], ["user", "validate_final", "final"])
 
+    def test_read_ui_events_backfills_with_loader(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            projection = RuntimeUiProjection(tmp)
+
+            events = projection.read_ui_events("s1", legacy_loader=lambda: [
+                {"type": "user", "content": "hello"},
+                {"type": "final", "content": "done"},
+            ])
+
+            self.assertEqual([ev["type"] for ev in events], ["user", "final"])
+            self.assertFalse(projection.needs_legacy_backfill("s1"))
+
     def test_pages_by_turns_from_runtime_projection(self):
         with tempfile.TemporaryDirectory() as tmp:
             mirror = RuntimeMirror(tmp)
