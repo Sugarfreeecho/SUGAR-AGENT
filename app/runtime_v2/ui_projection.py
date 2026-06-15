@@ -6,6 +6,7 @@ from typing import Any, Dict, Iterable, List, Optional
 from .event_log import SessionEventLog
 from .event_schema import RuntimeEvent
 from .mirror import RuntimeMirror
+from .config import runtime_v2_enabled
 
 
 class RuntimeUiProjection:
@@ -20,6 +21,8 @@ class RuntimeUiProjection:
         self.event_log = SessionEventLog(self.sessions_dir)
 
     def ensure_backfilled_from_legacy(self, session_id: str, legacy_events: Iterable[dict]) -> int:
+        if not runtime_v2_enabled():
+            return 0
         if self.event_log.event_path(session_id).exists() and self._has_ui_projectable_events(session_id):
             return 0
         mirror = RuntimeMirror(self.sessions_dir)
@@ -33,6 +36,9 @@ class RuntimeUiProjection:
 
     def read_ui_events(self, session_id: str) -> List[dict]:
         return self.events_to_ui(self.event_log.read_all(session_id))
+
+    def needs_legacy_backfill(self, session_id: str) -> bool:
+        return runtime_v2_enabled() and not self._has_ui_projectable_events(session_id)
 
     def _has_ui_projectable_events(self, session_id: str) -> bool:
         for event in self.event_log.iter_events(session_id):

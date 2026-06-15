@@ -852,10 +852,11 @@ async def get_session_messages(
         from runtime_v2.ui_projection import RuntimeUiProjection
 
         projection = RuntimeUiProjection(session_manager.repository.sessions_dir)
-        projection.ensure_backfilled_from_legacy(
-            session_id,
-            session_manager.get_ui_events_for_display(session_id),
-        )
+        if projection.needs_legacy_backfill(session_id):
+            projection.ensure_backfilled_from_legacy(
+                session_id,
+                session_manager.get_ui_events_for_display(session_id),
+            )
         if limit is None and turns is None:
             return JSONResponse(content=projection.read_ui_events(session_id))
         lim = int(limit) if limit is not None else 200
@@ -885,10 +886,11 @@ async def get_session_message_count(session_id: str):
         from runtime_v2.ui_projection import RuntimeUiProjection
 
         projection = RuntimeUiProjection(session_manager.repository.sessions_dir)
-        projection.ensure_backfilled_from_legacy(
-            session_id,
-            session_manager.get_ui_events_for_display(session_id),
-        )
+        if projection.needs_legacy_backfill(session_id):
+            projection.ensure_backfilled_from_legacy(
+                session_id,
+                session_manager.get_ui_events_for_display(session_id),
+            )
         return JSONResponse(content={"count": projection.count_ui_events(session_id), "source": "runtime_v2"})
     except Exception as exc:
         logger.warning("Runtime V2 message count failed for %s: %s", session_id, exc)

@@ -310,6 +310,28 @@ def _load_runtime_v2_model_history_dicts(session_id: str) -> List[Dict[str, Any]
         return []
 
 
+def _load_model_history_dicts_v2_primary(session_id: str, *, reconcile_legacy: bool) -> List[Dict[str, Any]]:
+    runtime_v2_messages = _load_runtime_v2_model_history_dicts(session_id)
+    if runtime_v2_messages:
+        return runtime_v2_messages
+    if reconcile_legacy:
+        session_manager.reconcile_llm_work_to_ui_user_count(session_id, include_work=False)
+    legacy_messages = session_manager._load_llm_history(session_id)
+    try:
+        from runtime_v2 import RuntimeModelProjection
+
+        RuntimeModelProjection(session_manager.sessions_dir).ensure_backfilled_from_legacy(
+            session_id,
+            legacy_messages,
+        )
+        backfilled = _load_runtime_v2_model_history_dicts(session_id)
+        if backfilled:
+            return backfilled
+    except Exception as exc:
+        logger.debug("Runtime V2 model legacy backfill failed: %s", exc)
+    return legacy_messages
+
+
 def _runtime_v2_append_model_message(state: State, msg: Any) -> None:
     sid = str(state.get("session_id") or "").strip()
     if not sid:
@@ -2354,11 +2376,7 @@ async def astream_events(
             session_manager.get_or_create_session(session_id)
         )
     setup_logging(user_input, session_id or "")
-    session_manager.reconcile_llm_work_to_ui_user_count(session_id, include_work=False)
-    llm_history_dicts = session_manager._load_llm_history(session_id)
-    runtime_v2_llm_history_dicts = _load_runtime_v2_model_history_dicts(session_id)
-    if runtime_v2_llm_history_dicts:
-        llm_history_dicts = runtime_v2_llm_history_dicts
+    llm_history_dicts = _load_model_history_dicts_v2_primary(session_id, reconcile_legacy=True)
     work_messages_dicts = session_manager._load_work_messages(session_id)
 
     prev_work_messages = [_dict_to_message(m) for m in work_messages_dicts]
@@ -2505,11 +2523,12 @@ async def astream_events_continuation(
     key_context = session_manager._load_key_context(session_id)
     key_context = session_manager.migrate_todo_plan_off_key_context(session_id, key_context)
     setup_logging("[subagent-continuation]", session_id)
-    session_manager.reconcile_llm_work_to_ui_user_count(session_id)
-    llm_history_dicts = session_manager._load_llm_history(session_id)
     runtime_v2_llm_history_dicts = _load_runtime_v2_model_history_dicts(session_id)
     if runtime_v2_llm_history_dicts:
         llm_history_dicts = runtime_v2_llm_history_dicts
+    else:
+        session_manager.reconcile_llm_work_to_ui_user_count(session_id)
+        llm_history_dicts = _load_model_history_dicts_v2_primary(session_id, reconcile_legacy=False)
     work_messages_dicts = session_manager._load_work_messages(session_id)
 
     prev_work_messages = [_dict_to_message(m) for m in work_messages_dicts]

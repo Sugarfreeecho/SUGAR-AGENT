@@ -3,6 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Dict, List
 
+from .config import runtime_v2_enabled
+from .history_ops import RuntimeHistoryOps
 from .snapshot_store import SnapshotStore
 
 
@@ -10,9 +12,12 @@ class RuntimeModelProjection:
     """Read model-facing messages from the Runtime V2 snapshot."""
 
     def __init__(self, sessions_dir: str | Path):
+        self.sessions_dir = Path(sessions_dir)
         self.snapshots = SnapshotStore(sessions_dir)
 
     def read_message_dicts(self, session_id: str) -> List[Dict[str, Any]]:
+        if not runtime_v2_enabled():
+            return []
         snapshot = self.snapshots.read(session_id)
         rows = snapshot.get("model_messages") if isinstance(snapshot, dict) else None
         if not isinstance(rows, list):
@@ -50,3 +55,18 @@ class RuntimeModelProjection:
                 out.append({"type": "system", "content": content})
         return out
 
+    def has_model_messages(self, session_id: str) -> bool:
+        return bool(self.read_message_dicts(session_id))
+
+    def ensure_backfilled_from_legacy(self, session_id: str, legacy_messages: List[Dict[str, Any]]) -> int:
+        if not runtime_v2_enabled() or self.has_model_messages(session_id):
+            return 0
+        clean = [dict(item) for item in list(legacy_messages or []) if isinstance(item, dict)]
+        if not clean:
+            return 0
+        RuntimeHistoryOps(self.sessions_dir).replace_model_history(
+            session_id,
+            clean,
+            reason="legacy_model_backfill",
+        )
+        return len(clean)

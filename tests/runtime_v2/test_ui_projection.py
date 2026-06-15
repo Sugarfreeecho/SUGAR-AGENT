@@ -81,6 +81,22 @@ class RuntimeUiProjectionTests(unittest.TestCase):
             self.assertEqual(count, 2)
             self.assertEqual([ev["content"] for ev in events], ["u1", "a1"])
 
+    def test_does_not_backfill_when_runtime_has_projectable_events(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            mirror = RuntimeMirror(tmp)
+            mirror.mirror_ui_event("s1", {"type": "user", "content": "runtime"})
+            projection = RuntimeUiProjection(tmp)
+
+            self.assertFalse(projection.needs_legacy_backfill("s1"))
+            count = projection.ensure_backfilled_from_legacy("s1", [
+                {"type": "user", "content": "legacy"},
+            ])
+
+            events = projection.read_ui_events("s1")
+
+            self.assertEqual(count, 0)
+            self.assertEqual([ev["content"] for ev in events], ["runtime"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -87,6 +87,23 @@ class RuntimeProjectorTests(unittest.TestCase):
             self.assertEqual(messages[1]["additional_kwargs"]["reasoning_content"], "why")
             self.assertEqual(messages[2]["tool_call_id"], "tc1")
 
+    def test_model_projection_backfills_legacy_once(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            projection = RuntimeModelProjection(tmp)
+
+            count = projection.ensure_backfilled_from_legacy("s1", [
+                {"type": "user", "content": "legacy"},
+                {"type": "assistant", "content": "answer", "metadata": {"is_final": True}},
+            ])
+            second = projection.ensure_backfilled_from_legacy("s1", [
+                {"type": "user", "content": "ignored"},
+            ])
+            messages = projection.read_message_dicts("s1")
+
+            self.assertEqual(count, 2)
+            self.assertEqual(second, 0)
+            self.assertEqual([m["content"] for m in messages], ["legacy", "answer"])
+
 
 if __name__ == "__main__":
     unittest.main()

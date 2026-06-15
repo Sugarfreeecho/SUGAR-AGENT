@@ -18,6 +18,7 @@ from .blob_store import BlobStore
 from .subagent_store import RuntimeSubagentStore
 from .ui_projection import RuntimeUiProjection
 from .model_projection import RuntimeModelProjection
+from .config import runtime_v2_enabled, runtime_v2_strict
 
 __all__ = [
     "RuntimeEvent",
@@ -34,4 +35,6 @@ __all__ = [
     "RuntimeSubagentStore",
     "RuntimeUiProjection",
     "RuntimeModelProjection",
+    "runtime_v2_enabled",
+    "runtime_v2_strict",
 ]
