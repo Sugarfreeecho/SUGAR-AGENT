@@ -72,6 +72,69 @@ def _is_session_stream_active(sid: str) -> bool:
     return bool(x) and (_active_chat_by_session.get(x, 0) > 0 or is_run_active(x))
 
 
+def _runtime_v2_active_run_info(sid: str) -> dict:
+    sid = str(sid or "").strip()
+    if not sid:
+        return {}
+    try:
+        from runtime_v2.snapshot_store import SnapshotStore
+
+        snapshot = SnapshotStore(session_manager.repository.sessions_dir).read(sid)
+        active_runs = snapshot.get("active_runs") if isinstance(snapshot, dict) else None
+        if not isinstance(active_runs, list) or not active_runs:
+            return {}
+        first = active_runs[0] if isinstance(active_runs[0], dict) else {}
+        started_at = first.get("started_at") or first.get("heartbeat_at")
+        return {
+            "session_id": sid,
+            "run_active": True,
+            "started_at": started_at,
+            "runtime_v2": True,
+            "active_run_count": len(active_runs),
+        }
+    except Exception as exc:
+        logger.debug("Runtime V2 active run read failed for %s: %s", sid, exc)
+        return {}
+
+
+def _session_run_state_fields(sid: str) -> dict:
+    sid = str(sid or "").strip()
+    if not sid:
+        return {
+            "stream_active": False,
+            "run_active": False,
+            "run_started_at": None,
+            "active_run": None,
+        }
+    stream_connections = int(_active_chat_by_session.get(sid, 0) or 0)
+    v2_info = _runtime_v2_active_run_info(sid)
+    if v2_info:
+        started_at = v2_info.get("started_at")
+        return {
+            "stream_active": True,
+            "run_active": True,
+            "run_started_at": started_at,
+            "stream_connections": stream_connections,
+            "active_run": dict(v2_info, stream_connections=stream_connections),
+        }
+    legacy_run_active = bool(is_run_active(sid))
+    active = bool(stream_connections > 0 or legacy_run_active)
+    started_at = get_run_started_at(sid)
+    return {
+        "stream_active": active,
+        "run_active": legacy_run_active,
+        "run_started_at": started_at,
+        "stream_connections": stream_connections,
+        "active_run": {
+            "session_id": sid,
+            "stream_connections": stream_connections,
+            "run_active": legacy_run_active,
+            "started_at": started_at,
+            "runtime_v2": False,
+        } if active else None,
+    }
+
+
 def _build_sessions_state_snapshot(include_archived: bool = False) -> dict:
     import time as _time
 
@@ -86,19 +149,12 @@ def _build_sessions_state_snapshot(include_archived: bool = False) -> dict:
             s["stream_active"] = False
             continue
         sid = str(sid)
-        stream_connections = int(_active_chat_by_session.get(sid, 0) or 0)
-        run_active = bool(is_run_active(sid))
-        active = bool(stream_connections > 0 or run_active)
-        s["stream_active"] = active
-        s["run_active"] = run_active
-        s["run_started_at"] = get_run_started_at(sid)
-        if active:
-            active_runs.append({
-                "session_id": sid,
-                "stream_connections": stream_connections,
-                "run_active": run_active,
-                "started_at": get_run_started_at(sid),
-            })
+        run_state = _session_run_state_fields(sid)
+        s["stream_active"] = bool(run_state["stream_active"])
+        s["run_active"] = bool(run_state["run_active"])
+        s["run_started_at"] = run_state["run_started_at"]
+        if run_state.get("active_run"):
+            active_runs.append(run_state["active_run"])
         try:
             pending = session_manager.count_actionable_pending_subagent_results(sid)
         except Exception:
@@ -302,10 +358,10 @@ async def list_sessions(include_archived: bool = Query(False)):
         sid = s.get("id")
         if sid:
             sid = str(sid)
-            run_active = bool(is_run_active(sid))
-            s["stream_active"] = _is_session_stream_active(sid)
-            s["run_active"] = run_active
-            s["run_started_at"] = get_run_started_at(sid)
+            run_state = _session_run_state_fields(sid)
+            s["stream_active"] = bool(run_state["stream_active"])
+            s["run_active"] = bool(run_state["run_active"])
+            s["run_started_at"] = run_state["run_started_at"]
         else:
             s["stream_active"] = False
             s["run_active"] = False
@@ -337,11 +393,16 @@ async def get_session_detail(
         return JSONResponse(content={"error": "not found"}, status_code=404)
     sid = s.get("id")
     if sid:
-        s["stream_active"] = _is_session_stream_active(str(sid))
+        run_state = _session_run_state_fields(str(sid))
+        s["stream_active"] = bool(run_state["stream_active"])
+        s["run_active"] = bool(run_state["run_active"])
+        s["run_started_at"] = run_state["run_started_at"]
         if include_subagents:
             _attach_subagent_sidebar_fields(s, str(sid))
     else:
         s["stream_active"] = False
+        s["run_active"] = False
+        s["run_started_at"] = None
     return JSONResponse(content=s)
 
 
