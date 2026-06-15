@@ -18,6 +18,11 @@ async function consumeAgentSseResponse(response, runCtx, runSessionId, streamEve
             const data = line.slice(6);
             if (data === '[DONE]') {
                 finalizeLlmStreamChunks(runCtx);
+                finalizeProgressStreamChunks(runCtx);
+                markSessionRunInactive(runSessionId);
+                if (getSessionRunState(runSessionId)) clearSessionRunState(runSessionId);
+                syncSessionListIndicatorClasses();
+                setSendButtonState();
                 void refreshTodoPlanPanel();
                 if (liveAutoFollow) {
                     scrollProcessBodyToBottom(runCtx, runSessionId);
@@ -135,6 +140,14 @@ async function consumeAgentSseResponse(response, runCtx, runSessionId, streamEve
                     event: parsed,
                     source: 'sse',
                 }, runSessionId);
+                if (parsed.type === 'final' && eventSessionId === runSessionId) {
+                    finalizeLlmStreamChunks(runCtx);
+                    finalizeProgressStreamChunks(runCtx);
+                    markSessionRunInactive(runSessionId);
+                    if (getSessionRunState(runSessionId)) clearSessionRunState(runSessionId);
+                    syncSessionListIndicatorClasses();
+                    setSendButtonState();
+                }
                 streamEventIdx += 1;
             } catch (e) { console.error('解析事件失败:', e); }
         }
@@ -362,7 +375,7 @@ async function sendMessage() {
     // 使用缓存的事件计数，实现乐观更新
     let preCount = uiEventCountCache.get(submitSessionId);
     try {
-        const serverCountBeforeSend = await getUiEventCount(submitSessionId);
+        const serverCountBeforeSend = preCount;
         if (Number.isFinite(Number(serverCountBeforeSend))) {
             preCount = Math.max(preCount, Number(serverCountBeforeSend));
             uiEventCountCache.updateFromServer(submitSessionId, preCount);

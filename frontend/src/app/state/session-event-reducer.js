@@ -30,23 +30,25 @@ function applySessionEvent(event, opts) {
         markUiEventStoreApplied(event);
     }
     if (type === 'run_started' || type === 'run_attached') {
+        const suppressed = typeof isSessionStreamStopSuppressed === 'function'
+            && isSessionStreamStopSuppressed(sessionId);
         setSessionServerStreamActive(sessionId, true);
         const sess = sessionStore.get(sessionId);
         if (sess) {
-            sess.run_active = true;
-            sess.run_started_at = event.started_at || event.startedAt || sess.run_started_at || new Date().toISOString();
+            sess.run_active = !suppressed;
+            sess.run_started_at = suppressed
+                ? null
+                : (event.started_at || event.startedAt || sess.run_started_at || new Date().toISOString());
         }
         return { handled: true, runStateChanged: true, messageRecord: messageRecord };
     }
     if (type === 'run_finished' || type === 'run_interrupted' || type === 'run_failed') {
-        setSessionServerStreamActive(sessionId, false);
-        sessionStore.activeRunInfoBySession.delete(String(sessionId || ''));
-        const sess = sessionStore.get(sessionId);
-        if (sess) {
-            sess.run_active = false;
-            sess.run_started_at = null;
-        }
+        markSessionRunInactive(sessionId);
         return { handled: true, runStateChanged: true, messageRecord: messageRecord };
+    }
+    if (type === 'final' && source === 'sse') {
+        markSessionRunInactive(sessionId);
+        return { handled: false, finalStateChanged: true, messageRecord: messageRecord };
     }
     if (type === 'context_tokens') {
         setContextTokensForSession(sessionId, event.estimated, event.threshold);

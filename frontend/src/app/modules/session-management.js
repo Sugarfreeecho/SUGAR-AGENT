@@ -229,7 +229,7 @@ function buildAndBindSessionRow(sess, allSessions, nextStreamMap) {
                     if (previous) applyOptimisticSessionUpdate(sess.id, previous);
                     throw new Error('pin failed: ' + response.status);
                 }
-                void loadSessions({ force: true });
+                void loadSessions();
             } catch (err) { console.error('置顶失败', err); }
         });
     }
@@ -248,7 +248,7 @@ function buildAndBindSessionRow(sess, allSessions, nextStreamMap) {
                     throw new Error('archive failed: ' + response.status);
                 }
                 const wasArchivedLoaded = sessionStore.archivedLoaded;
-                void loadSessions({ force: true, skipArchivedRefresh: true });
+                void loadSessions({ skipArchivedRefresh: true });
                 if (wasArchivedLoaded) void loadArchivedSessions({ background: true });
             } catch (err) { console.error('归档失败', err); }
         });
@@ -305,7 +305,7 @@ function buildAndBindSessionRow(sess, allSessions, nextStreamMap) {
                 .catch(function (err) {
                     console.error('删除会话失败:', err);
                     sessionStore.clearDeletedSessionTombstone(deletedSessionId);
-                    void loadSessions({ force: true, skipArchivedRefresh: true });
+                    void loadSessions({ skipArchivedRefresh: true });
                     if (wasArchivedLoaded) void loadArchivedSessions({ background: true });
                 });
             if (wasArchivedLoaded) {
@@ -733,7 +733,7 @@ async function loadSessionMessages(sessionId, scrollBehavior, opts) {
         bindExistingLogs();
         scheduleTocActiveUpdate();
         scheduleContextTokensAfterPaint(sessionId);
-        await refreshTodoPlanPanel();
+        void refreshTodoPlanPanel();
     } catch (error) {
         console.error('加载会话消息失败:', error);
         document.getElementById('chat-loading')?.remove();
@@ -772,7 +772,7 @@ async function switchSession(sessionId) {
         updateSessionTitle();
         scheduleContextTokensAfterPaint(sessionId);
         applyChatScrollAfterHistoryLoad(sessionId, 'saved-or-bottom');
-        await refreshTodoPlanPanel();
+        void refreshTodoPlanPanel();
         if (switchToken !== switchSessionEpoch || sessionId !== currentSessionId) return;
         /* 让 rebuildToc 的 /user_turns fetch 先发出，subagent 面板（含 N 个 /messages）延后一帧
            避免抢占带宽与主线程，导致目录最后才就绪。 */
@@ -842,9 +842,9 @@ async function createNewSessionInner() {
         if (data && data.session) {
             syncArchivedSessionStateFromStore();
             renderSessionListIfChanged(true);
-            void loadSessions({ force: true });
+            void loadSessions();
         } else {
-            await loadSessions({ force: true });
+            await loadSessions();
         }
         setSendButtonState();
         maybeStartStreamPollForSession(currentSessionId);

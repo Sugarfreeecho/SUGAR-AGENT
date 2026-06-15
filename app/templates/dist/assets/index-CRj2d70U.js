@@ -804,6 +804,19 @@ function clearSessionRunState(sessionId) {
     setSessionRunState(sessionId, null);
 }
 
+function markSessionRunInactive(sessionId) {
+    const sid = String(sessionId || '');
+    if (!sid) return;
+    setSessionServerStreamActive(sid, false);
+    sessionStore.activeRunInfoBySession.delete(sid);
+    const sess = sessionStore.get(sid);
+    if (sess) {
+        sess.run_active = false;
+        sess.run_started_at = null;
+        sess.stream_active = false;
+    }
+}
+
 function markRunAbortReason(run, reason) {
     if (!run) return;
     var r = reason || 'cleanup';
@@ -1022,7 +1035,7 @@ function selectMessageEventsInRange(sessionId, startIndex, endIndex) {
 function selectMessageEventCount(sessionId) {
     return messageStore.eventCount(sessionId);
 }
-`,k=`function renderMessageRecord(ctx, record, sessionId) {
+`,L=`function renderMessageRecord(ctx, record, sessionId) {
     if (!ctx || !record || !record.event) return null;
     const sid = sessionId || record.sessionId || currentSessionId;
     renderEvent(ctx, record.event, record.index, sid);
@@ -1052,7 +1065,7 @@ function renderMessageRecords(ctx, records, sessionId) {
         renderMessageRecord(ctx, list[i], sessionId);
     }
 }
-`,L=`const subagentStore = {
+`,k=`const subagentStore = {
     sessions: new Map(),
 
     ensureSession(sessionId) {
@@ -2857,23 +2870,25 @@ function applySessionEvent(event, opts) {
         markUiEventStoreApplied(event);
     }
     if (type === 'run_started' || type === 'run_attached') {
+        const suppressed = typeof isSessionStreamStopSuppressed === 'function'
+            && isSessionStreamStopSuppressed(sessionId);
         setSessionServerStreamActive(sessionId, true);
         const sess = sessionStore.get(sessionId);
         if (sess) {
-            sess.run_active = true;
-            sess.run_started_at = event.started_at || event.startedAt || sess.run_started_at || new Date().toISOString();
+            sess.run_active = !suppressed;
+            sess.run_started_at = suppressed
+                ? null
+                : (event.started_at || event.startedAt || sess.run_started_at || new Date().toISOString());
         }
         return { handled: true, runStateChanged: true, messageRecord: messageRecord };
     }
     if (type === 'run_finished' || type === 'run_interrupted' || type === 'run_failed') {
-        setSessionServerStreamActive(sessionId, false);
-        sessionStore.activeRunInfoBySession.delete(String(sessionId || ''));
-        const sess = sessionStore.get(sessionId);
-        if (sess) {
-            sess.run_active = false;
-            sess.run_started_at = null;
-        }
+        markSessionRunInactive(sessionId);
         return { handled: true, runStateChanged: true, messageRecord: messageRecord };
+    }
+    if (type === 'final' && source === 'sse') {
+        markSessionRunInactive(sessionId);
+        return { handled: false, finalStateChanged: true, messageRecord: messageRecord };
     }
     if (type === 'context_tokens') {
         setContextTokensForSession(sessionId, event.estimated, event.threshold);
@@ -4929,16 +4944,6 @@ function bindFeedChunkScrollChain(sc) {
     sc.addEventListener('wheel', onFeedChunkScrollerWheel, { passive: false });
 }
 
-function scrollFeedScrollerToBottom(sc) {
-    if (!sc) return;
-    requestAnimationFrame(function () {
-        sc.scrollTop = sc.scrollHeight;
-        requestAnimationFrame(function () {
-            sc.scrollTop = sc.scrollHeight;
-        });
-    });
-}
-
 function onFeedChunkScrollerWheel(e) {
     const sc = e.currentTarget;
     const chunk = sc.closest && sc.closest('.feed-chunk');
@@ -5075,10 +5080,7 @@ function bindProcessAggregate(agg) {
             } else {
                 requestAnimationFrame(function () {
                     requestAnimationFrame(function () {
-                        agg.querySelectorAll('.process-aggregate-body .feed-chunk').forEach(function (chunk) {
-                            refreshFeedChunkOverflow(chunk);
-                            scrollFeedScrollerToBottom(chunk.querySelector('.feed-chunk-scroller'));
-                        });
+                        agg.querySelectorAll('.process-aggregate-body .feed-chunk').forEach(refreshFeedChunkOverflow);
                         registerMermaidLazy(agg);
                     });
                 });
@@ -5413,8 +5415,6 @@ function ensureProcessGroup(ctx) {
     }
     delete wrap.dataset.maxReactIter;
     (ctx.stream || chatContainer).appendChild(wrap);
-    var titleEl = wrap.querySelector('.process-aggregate-title');
-    if (titleEl) titleEl.textContent = '执行过程';
     bindProcessAggregate(wrap);
     ctx.currentProcessGroup = wrap;
     refreshProcessAggregateStats(wrap);
@@ -6481,19 +6481,6 @@ const TRACE_ROW = {
     'status':      { label: '状态', c: 'feed--st' },
 };
 
-Object.assign(TRACE_ROW, {
-    'log-entry':   { label: '信息', c: 'feed--log' },
-    'tool-call':   { label: '工具', c: 'feed--tool' },
-    'error-log':   { label: '错误', c: 'feed--err' },
-    'llm-response':{ label: '回复', c: 'feed--llm2' },
-    'llm-reasoning':{ label: '思考', c: 'feed--llm' },
-    'compact-summary': { label: '压缩', c: 'feed--cmp' },
-    'context-trim': { label: '裁剪', c: 'feed--trim' },
-    'context-summary': { label: '压缩', c: 'feed--cmp' },
-    'key-context': { label: '要点', c: 'feed--key' },
-    'status':      { label: '状态', c: 'feed--st' },
-});
-
 const envKeepLines = Number(window.__UI_LOG_TRUNCATE_KEEP_LINES__);
 const LOG_TRUNCATE_KEEP_LINES = Number.isFinite(envKeepLines) && envKeepLines > 0 ? Math.floor(envKeepLines) : 100;
 const LOG_TRUNCATE_HEAD_LINES = LOG_TRUNCATE_KEEP_LINES;
@@ -6518,10 +6505,7 @@ function findToolDraftRow(ctx, parsed) {
 function setToolRowText(row, text, ctx, runSessionId) {
     if (!row) return;
     var sc = row.querySelector('.feed-chunk-scroller');
-    if (sc) {
-        sc.textContent = truncateLogTextForUi(text);
-        scrollFeedScrollerToBottom(sc);
-    }
+    if (sc) sc.textContent = truncateLogTextForUi(text);
     var ch = row.querySelector('.feed-chunk');
     if (ch) {
         // 工具条目流式生成时也放开高度限制
@@ -6674,10 +6658,7 @@ function appendToolCommandDelta(ctx, parsed, runSessionId) {
     row.dataset.commandPreview = (row.dataset.commandPreview || '') + String(parsed.delta || '');
     var text = formatToolPendingLine(parsed.tool, parsed.args, row.dataset.commandPreview);
     var sc = row.querySelector('.feed-chunk-scroller');
-    if (sc) {
-        sc.textContent = truncateLogTextForUi(text);
-        scrollFeedScrollerToBottom(sc);
-    }
+    if (sc) sc.textContent = truncateLogTextForUi(text);
     var ch = row.querySelector('.feed-chunk');
     if (ch) refreshFeedChunkOverflow(ch);
     if (!replayingMessages) scrollContentAreaIfFollow(ctx, runSessionId);
@@ -6698,10 +6679,7 @@ function upsertToolCallResult(ctx, parsed, runSessionId) {
         row.removeAttribute('data-tool-draft-key');
         row.dataset.commandPreview = cmdPreview != null ? String(cmdPreview) : '';
         var sc = row.querySelector('.feed-chunk-scroller');
-        if (sc) {
-            sc.textContent = truncateLogTextForUi(text);
-            scrollFeedScrollerToBottom(sc);
-        }
+        if (sc) sc.textContent = truncateLogTextForUi(text);
         var ch = row.querySelector('.feed-chunk');
         if (ch) refreshFeedChunkOverflow(ch);
         var agg = body.closest('.process-aggregate');
@@ -6765,7 +6743,6 @@ function createProcessFeedRow(ctx, type, initialText, streamOpts, runSessionId, 
     var txtForUi = initialText;
     if (type === 'llm-reasoning' || type === 'llm-response') txtForUi = trimSurroundingBlankLines(txtForUi);
     sc.textContent = truncateLogTextForUi(txtForUi);
-    scrollFeedScrollerToBottom(sc);
     if (streamOpts.streaming && (type === 'llm-reasoning' || type === 'llm-response')) chunk.classList.add('is-streaming');
     bindFeedChunkInteraction(chunk);
     bindFeedChunkScrollChain(sc);
@@ -6843,10 +6820,7 @@ function upsertLlmFeedRow(ctx, content, logType, runSessionId, reactIter) {
         if (existing) {
             var sc = existing.querySelector('.feed-chunk-scroller');
             var ch = existing.querySelector('.feed-chunk');
-            if (sc) {
-                sc.textContent = txt;
-                scrollFeedScrollerToBottom(sc);
-            }
+            if (sc) sc.textContent = txt;
             if (ch) {
                 ch.classList.remove('is-streaming');
                 scheduleFeedChunkOverflowRefresh(ch);
@@ -6946,9 +6920,6 @@ function handleTraceChunkClick(e) {
     var self = this;
     requestAnimationFrame(function () {
         refreshFeedChunkOverflow(self);
-        if (self.classList.contains('expanded')) {
-            scrollFeedScrollerToBottom(self.querySelector('.feed-chunk-scroller'));
-        }
         registerMermaidLazy(self);
     });
 }
@@ -6995,7 +6966,6 @@ function flushProgressDeltaText(ctx, logType) {
     if (st.pending && st.scroller && st.scroller.isConnected) {
         var merged = (st.scroller.textContent || '') + st.pending;
         st.scroller.textContent = truncateLogTextForUi(merged);
-        scrollFeedScrollerToBottom(st.scroller);
         var ch = st.scroller.closest('.feed-chunk');
         if (ch) refreshFeedChunkOverflow(ch);
     }
@@ -7059,7 +7029,6 @@ function applyProgressPersistedBody(ctx, content, logType, runSessionId) {
         merged = text;
     }
     sc.textContent = truncateLogTextForUi(merged);
-    scrollFeedScrollerToBottom(sc);
     var chSet = sc.closest('.feed-chunk');
     if (chSet) {
         chSet.classList.remove('is-streaming');
@@ -7106,7 +7075,6 @@ function appendProgressLog(ctx, content, logType, runSessionId) {
     if (prev && prev.isConnected) {
         var prevTxt = prev.textContent || '';
         prev.textContent = truncateLogTextForUi(prevTxt ? (prevTxt + '\\n' + line) : line);
-        scrollFeedScrollerToBottom(prev);
         var chMerge = prev.closest('.feed-chunk');
         if (chMerge) {
             refreshFeedChunkOverflow(chMerge);
@@ -7118,7 +7086,6 @@ function appendProgressLog(ctx, content, logType, runSessionId) {
     var sc = ensureProgressScroller(ctx, logType, runSessionId);
     if (!sc) return;
     sc.textContent = truncateLogTextForUi(line);
-    scrollFeedScrollerToBottom(sc);
     var chNew = sc.closest('.feed-chunk');
     if (chNew) {
         refreshFeedChunkOverflow(chNew);
@@ -8254,7 +8221,7 @@ function buildAndBindSessionRow(sess, allSessions, nextStreamMap) {
                     if (previous) applyOptimisticSessionUpdate(sess.id, previous);
                     throw new Error('pin failed: ' + response.status);
                 }
-                void loadSessions({ force: true });
+                void loadSessions();
             } catch (err) { console.error('置顶失败', err); }
         });
     }
@@ -8273,7 +8240,7 @@ function buildAndBindSessionRow(sess, allSessions, nextStreamMap) {
                     throw new Error('archive failed: ' + response.status);
                 }
                 const wasArchivedLoaded = sessionStore.archivedLoaded;
-                void loadSessions({ force: true, skipArchivedRefresh: true });
+                void loadSessions({ skipArchivedRefresh: true });
                 if (wasArchivedLoaded) void loadArchivedSessions({ background: true });
             } catch (err) { console.error('归档失败', err); }
         });
@@ -8330,7 +8297,7 @@ function buildAndBindSessionRow(sess, allSessions, nextStreamMap) {
                 .catch(function (err) {
                     console.error('删除会话失败:', err);
                     sessionStore.clearDeletedSessionTombstone(deletedSessionId);
-                    void loadSessions({ force: true, skipArchivedRefresh: true });
+                    void loadSessions({ skipArchivedRefresh: true });
                     if (wasArchivedLoaded) void loadArchivedSessions({ background: true });
                 });
             if (wasArchivedLoaded) {
@@ -8758,7 +8725,7 @@ async function loadSessionMessages(sessionId, scrollBehavior, opts) {
         bindExistingLogs();
         scheduleTocActiveUpdate();
         scheduleContextTokensAfterPaint(sessionId);
-        await refreshTodoPlanPanel();
+        void refreshTodoPlanPanel();
     } catch (error) {
         console.error('加载会话消息失败:', error);
         document.getElementById('chat-loading')?.remove();
@@ -8797,7 +8764,7 @@ async function switchSession(sessionId) {
         updateSessionTitle();
         scheduleContextTokensAfterPaint(sessionId);
         applyChatScrollAfterHistoryLoad(sessionId, 'saved-or-bottom');
-        await refreshTodoPlanPanel();
+        void refreshTodoPlanPanel();
         if (switchToken !== switchSessionEpoch || sessionId !== currentSessionId) return;
         /* 让 rebuildToc 的 /user_turns fetch 先发出，subagent 面板（含 N 个 /messages）延后一帧
            避免抢占带宽与主线程，导致目录最后才就绪。 */
@@ -8867,9 +8834,9 @@ async function createNewSessionInner() {
         if (data && data.session) {
             syncArchivedSessionStateFromStore();
             renderSessionListIfChanged(true);
-            void loadSessions({ force: true });
+            void loadSessions();
         } else {
-            await loadSessions({ force: true });
+            await loadSessions();
         }
         setSendButtonState();
         maybeStartStreamPollForSession(currentSessionId);
@@ -8899,6 +8866,11 @@ async function createNewSessionInner() {
             const data = line.slice(6);
             if (data === '[DONE]') {
                 finalizeLlmStreamChunks(runCtx);
+                finalizeProgressStreamChunks(runCtx);
+                markSessionRunInactive(runSessionId);
+                if (getSessionRunState(runSessionId)) clearSessionRunState(runSessionId);
+                syncSessionListIndicatorClasses();
+                setSendButtonState();
                 void refreshTodoPlanPanel();
                 if (liveAutoFollow) {
                     scrollProcessBodyToBottom(runCtx, runSessionId);
@@ -9016,6 +8988,14 @@ async function createNewSessionInner() {
                     event: parsed,
                     source: 'sse',
                 }, runSessionId);
+                if (parsed.type === 'final' && eventSessionId === runSessionId) {
+                    finalizeLlmStreamChunks(runCtx);
+                    finalizeProgressStreamChunks(runCtx);
+                    markSessionRunInactive(runSessionId);
+                    if (getSessionRunState(runSessionId)) clearSessionRunState(runSessionId);
+                    syncSessionListIndicatorClasses();
+                    setSendButtonState();
+                }
                 streamEventIdx += 1;
             } catch (e) { console.error('解析事件失败:', e); }
         }
@@ -9243,7 +9223,7 @@ async function sendMessage() {
     // 使用缓存的事件计数，实现乐观更新
     let preCount = uiEventCountCache.get(submitSessionId);
     try {
-        const serverCountBeforeSend = await getUiEventCount(submitSessionId);
+        const serverCountBeforeSend = preCount;
         if (Number.isFinite(Number(serverCountBeforeSend))) {
             preCount = Math.max(preCount, Number(serverCountBeforeSend));
             uiEventCountCache.updateFromServer(submitSessionId, preCount);
@@ -9677,7 +9657,7 @@ if (typeof globalThis !== 'undefined') {
     globalThis.toggleTodoPlanPanel = toggleTodoPlanPanel;
     globalThis.toggleTocPanel = toggleTocPanel;
 }
-`,X=[I,x,C,w,T,E,_,k,L,P,A,R,B,F,M,N,O,H,D,U,q,j,W,G,z,K,V];Function(`"use strict";
+`,X=[I,x,C,w,T,E,_,L,k,P,A,R,B,F,M,N,O,H,D,U,q,j,W,G,z,K,V];Function(`"use strict";
 `+X.join(`
 
 `)+`

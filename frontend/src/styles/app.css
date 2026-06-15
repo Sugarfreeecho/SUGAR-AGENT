@@ -328,6 +328,9 @@ body {
     border: 1px solid transparent;
     transition: all 0.18s var(--ease-out-expo); position: relative;
 }
+.session-item:has(.session-more-wrap.is-open) {
+    z-index: 30;
+}
 .session-item::after {
     content: '';
     position: absolute; top: 0; right: 0; bottom: 0;
@@ -430,6 +433,9 @@ body {
     z-index: 4; display: flex; align-items: center;
     pointer-events: none;
 }
+.session-more-wrap.is-open {
+    z-index: 120;
+}
 .session-more-btn {
     background: none; border: none; color: var(--text-tertiary);
     cursor: pointer; padding: 0; width: 26px; height: 26px;
@@ -468,7 +474,7 @@ body {
     background: var(--session-more-menu-bg);
     border: 1px solid var(--border-glass); border-radius: var(--radius-sm);
     box-shadow: 0 12px 32px rgba(0,0,0,0.45);
-    z-index: 90; visibility: hidden; opacity: 0;
+    z-index: 130; visibility: hidden; opacity: 0;
     transform: translateY(-5px);
     transition: opacity 0.16s var(--ease-out-expo), transform 0.16s var(--ease-out-expo), visibility 0.16s;
     pointer-events: auto;
