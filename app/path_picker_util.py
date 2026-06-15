@@ -1,4 +1,4 @@
-﻿"""本机文件/目录选择对话框，供 Web UI 配置项与聊天输入使用。"""
+"""本机文件/目录选择对话框，供 Web UI 配置项与聊天输入使用。"""
 
 from __future__ import annotations
 
