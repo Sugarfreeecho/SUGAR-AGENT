@@ -20,7 +20,7 @@ class RuntimeUiProjection:
         self.event_log = SessionEventLog(self.sessions_dir)
 
     def ensure_backfilled_from_legacy(self, session_id: str, legacy_events: Iterable[dict]) -> int:
-        if self.event_log.event_path(session_id).exists():
+        if self.event_log.event_path(session_id).exists() and self._has_ui_projectable_events(session_id):
             return 0
         mirror = RuntimeMirror(self.sessions_dir)
         count = 0
@@ -33,6 +33,12 @@ class RuntimeUiProjection:
 
     def read_ui_events(self, session_id: str) -> List[dict]:
         return self.events_to_ui(self.event_log.read_all(session_id))
+
+    def _has_ui_projectable_events(self, session_id: str) -> bool:
+        for event in self.event_log.iter_events(session_id):
+            if self.event_to_ui(event) is not None:
+                return True
+        return False
 
     def count_ui_events(self, session_id: str) -> int:
         return len(self.read_ui_events(session_id))
@@ -52,6 +58,16 @@ class RuntimeUiProjection:
     def events_to_ui(cls, events: Iterable[RuntimeEvent]) -> List[dict]:
         out: List[dict] = []
         for event in events:
+            if event.type == "legacy_truncate_observed":
+                payload = dict(event.payload or {})
+                new_count = payload.get("new_event_count")
+                if new_count is None:
+                    new_count = payload.get("before_index")
+                try:
+                    out = out[:max(0, int(new_count))]
+                except (TypeError, ValueError):
+                    pass
+                continue
             ui = cls.event_to_ui(event)
             if ui is not None:
                 out.append(ui)

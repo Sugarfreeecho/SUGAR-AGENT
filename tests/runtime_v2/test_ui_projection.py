@@ -46,6 +46,41 @@ class RuntimeUiProjectionTests(unittest.TestCase):
             self.assertTrue(page["has_older"])
             self.assertEqual([ev["content"] for ev in page["events"]], ["u2", "a2", "u3", "a3"])
 
+    def test_legacy_truncate_observation_limits_projected_ui_events(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            mirror = RuntimeMirror(tmp)
+            mirror.mirror_ui_event("s1", {"type": "user", "content": "u1"})
+            mirror.mirror_ui_event("s1", {"type": "final", "content": "a1"})
+            mirror.mirror_ui_event("s1", {"type": "user", "content": "u2"})
+            mirror.mirror_ui_event("s1", {"type": "final", "content": "a2"})
+            mirror.append("s1", "legacy_truncate_observed", {
+                "before_index": 2,
+                "old_event_count": 4,
+                "new_event_count": 2,
+            })
+
+            events = RuntimeUiProjection(tmp).read_ui_events("s1")
+
+            self.assertEqual([ev["content"] for ev in events], ["u1", "a1"])
+
+    def test_backfills_when_runtime_log_has_only_history_ops(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            mirror = RuntimeMirror(tmp)
+            mirror.append("branch", "history_branch_created", {
+                "source_session_id": "source",
+                "branch_from_seq": 2,
+            })
+            projection = RuntimeUiProjection(tmp)
+            count = projection.ensure_backfilled_from_legacy("branch", [
+                {"type": "user", "content": "u1"},
+                {"type": "final", "content": "a1"},
+            ])
+
+            events = projection.read_ui_events("branch")
+
+            self.assertEqual(count, 2)
+            self.assertEqual([ev["content"] for ev in events], ["u1", "a1"])
+
 
 if __name__ == "__main__":
     unittest.main()

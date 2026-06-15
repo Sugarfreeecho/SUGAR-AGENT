@@ -3185,6 +3185,14 @@ class SessionManager:
             self._save_dialogue_history(
                 session_id, self.dialogue_dicts_from_ui_events_file(session_id)
             )
+            try:
+                from runtime_v2.mirror import RuntimeMirror
+
+                mirror = RuntimeMirror(self.repository.sessions_dir)
+                for event_copy in clean:
+                    mirror.mirror_ui_event(session_id, event_copy)
+            except Exception as mirror_error:
+                logger.debug("Runtime V2 mirror restored ui_events tail failed: %s", mirror_error)
             self._observe_runtime_v2_history(
                 "observe_legacy_tail_restored",
                 session_id,
