@@ -107,7 +107,7 @@ class RuntimeMirror:
             mapped_type = "tool_finished" if event_type == "tool_result" else "tool_started"
             return {"type": mapped_type, "payload": self._externalize_large_text_payload(str(self.sessions_dir / str(session_id)), dict(event))}
         if event_type in {"status", "process_metrics", "cache_stats", "validate_final"}:
-            return None
+            return {"type": "legacy_ui_event", "payload": dict(event)}
         return {"type": "legacy_ui_event", "payload": self._externalize_large_text_payload(str(self.sessions_dir / str(session_id)), dict(event))}
 
     def _mirror_subagent_event(self, session_id: str, event: Dict[str, Any]) -> Optional[RuntimeEvent]:
