@@ -300,6 +300,65 @@ def _persist_state(state: State):
         logger.warning(f"实时持久化失败: {e}")
 
 
+def _load_runtime_v2_model_history_dicts(session_id: str) -> List[Dict[str, Any]]:
+    try:
+        from runtime_v2 import RuntimeModelProjection
+
+        return RuntimeModelProjection(session_manager.sessions_dir).read_message_dicts(session_id)
+    except Exception as exc:
+        logger.debug("Runtime V2 model projection read failed: %s", exc)
+        return []
+
+
+def _runtime_v2_append_model_message(state: State, msg: Any) -> None:
+    sid = str(state.get("session_id") or "").strip()
+    if not sid:
+        return
+    try:
+        from runtime_v2 import RuntimeHistoryOps
+
+        data = _message_to_dict(msg)
+        msg_type = str(data.get("type") or "").strip()
+        role = {
+            "human": "user",
+            "llm": "assistant",
+            "ai": "assistant",
+            "agent": "assistant",
+        }.get(msg_type, msg_type)
+        if role not in {"user", "assistant", "tool", "system"}:
+            return
+        payload = dict(data)
+        content = str(payload.pop("content", "") or "")
+        payload.pop("type", None)
+        run_id = str(state.get("_runtime_v2_run_id") or "").strip()
+        if run_id:
+            payload["run_id"] = run_id
+        RuntimeHistoryOps(session_manager.sessions_dir).append_model_message(
+            sid,
+            role,
+            content,
+            **payload,
+        )
+    except Exception as exc:
+        logger.debug("Runtime V2 model append failed: %s", exc)
+
+
+def _runtime_v2_replace_model_history(state: State, messages: List[Any], reason: str) -> None:
+    sid = str(state.get("session_id") or "").strip()
+    if not sid:
+        return
+    try:
+        from runtime_v2 import RuntimeHistoryOps
+
+        RuntimeHistoryOps(session_manager.sessions_dir).replace_model_history(
+            sid,
+            [_message_to_dict(m) for m in list(messages or [])],
+            reason=reason,
+        )
+    except Exception as exc:
+        logger.debug("Runtime V2 model replace failed: %s", exc)
+
+
 def _materialize_lazy_work_messages(state: State) -> None:
     if not state.pop("_lazy_prepend_work_messages", False):
         return
@@ -867,6 +926,7 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
         llm_history.append(start_msg)
         state["llm_history"] = llm_history
         _persist_state(state)
+        _runtime_v2_append_model_message(state, start_msg)
 
 
     # ========== 2. 循环变量初始化 ==========
@@ -917,6 +977,7 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
             state["llm_history"] = llm_history
             state["work_messages"] = work_messages
             _persist_state(state)
+            _runtime_v2_append_model_message(state, note)
 
     try:
         while iter_count < max_react_iter:
@@ -1046,6 +1107,7 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
                 work_messages.append(SystemMessage(content=_wm_compact_note))
                 state["work_messages"] = work_messages
                 _persist_state(state)
+                _runtime_v2_replace_model_history(state, nl, "auto_context_policy")
                 state["_compress_skip_next"] = True
                 _st = auto_length_strategy_status_line(
                     _st_base,
@@ -1085,6 +1147,7 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
                         llm_history = new_llm_history
                         state["llm_history"] = llm_history
                         _persist_state(state)
+                        _runtime_v2_replace_model_history(state, new_llm_history, "emergency_truncate")
                         logger.info(
                             "已按 CONTEXT_COMPRESS_FAILURE_MAX_TOKENS（与压缩失败兜底同款）裁剪对话尾部并继续本步"
                         )
@@ -1418,6 +1481,7 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
             state["llm_history"] = llm_history
             state["work_messages"] = work_messages
             _persist_state(state)
+            _runtime_v2_append_model_message(state, interim_msg)
 
             # 记录 LLM 调用详情（可选；与实际上送内容一致，已剥历史 reasoning）
             request_msgs = [_serialize_message(msg) for msg in llm_messages_to_send]
@@ -1889,6 +1953,7 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
                         error_msg = ToolMessage(content=f"工具执行异常: {str(res)}", tool_call_id="unknown")
                         work_messages.append(error_msg)
                         llm_history.append(error_msg)
+                        _runtime_v2_append_model_message(state, error_msg)
                         # 追加流式事件
                         await _push_stream_event(state, {"type": "error", "content": f"工具执行异常: {str(res)}"}, emit=emit)
                         continue
@@ -1916,6 +1981,7 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
                             _status = "【context_manage·compact】已完成上下文裁剪"
                         work_messages.append(SystemMessage(content=_compact_note))
                         state["work_messages"] = work_messages
+                        _runtime_v2_replace_model_history(state, llm_history, "manual_context_manage")
                         await _push_stream_event(
                             state,
                             {"type": "status", "content": _status},
@@ -1949,6 +2015,7 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
                     tool_msg_llm = ToolMessage(content=res["tool_detail_llm"], tool_call_id=res["tool_id"])
                     work_messages.append(tool_msg_ui)
                     llm_history.append(tool_msg_llm)
+                    _runtime_v2_append_model_message(state, tool_msg_llm)
                     state["llm_history"] = llm_history
                     state["work_messages"] = work_messages
 
@@ -2016,6 +2083,7 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
                     )
                     llm_history.append(reminder_msg)
                     work_messages.append(reminder_msg)
+                    _runtime_v2_append_model_message(state, reminder_msg)
                     state["llm_history"] = llm_history
                     state["work_messages"] = work_messages
                     _persist_state(state)
@@ -2056,6 +2124,7 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
                     )
                     llm_history.append(retry_msg)
                     work_messages.append(retry_msg)
+                    _runtime_v2_append_model_message(state, retry_msg)
                     state["llm_history"] = llm_history
                     state["work_messages"] = work_messages
                     _persist_state(state)
@@ -2113,6 +2182,7 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
         llm_history.append(end_msg)
         work_messages = list(state.get("work_messages", []))
         work_messages.append(end_msg)
+        _runtime_v2_append_model_message(state, end_msg)
         state["llm_history"] = llm_history
         state["work_messages"] = work_messages
         _persist_state(state)
@@ -2249,6 +2319,7 @@ def finish(state: State) -> State:
     if need_wm:
         state["work_messages"].append(AssistantMessage(**_final_ai_kw))
     _persist_session_messages(state)
+    _runtime_v2_replace_model_history(state, state["llm_history"], "finish")
     state["final_printed"] = True
     return state
 
@@ -2285,6 +2356,9 @@ async def astream_events(
     setup_logging(user_input, session_id or "")
     session_manager.reconcile_llm_work_to_ui_user_count(session_id, include_work=False)
     llm_history_dicts = session_manager._load_llm_history(session_id)
+    runtime_v2_llm_history_dicts = _load_runtime_v2_model_history_dicts(session_id)
+    if runtime_v2_llm_history_dicts:
+        llm_history_dicts = runtime_v2_llm_history_dicts
     work_messages_dicts = session_manager._load_work_messages(session_id)
 
     prev_work_messages = [_dict_to_message(m) for m in work_messages_dicts]
@@ -2294,6 +2368,7 @@ async def astream_events(
 
     new_work_messages = prev_work_messages + [user_message]
     new_llm_history = prev_llm_history + [user_message]
+    runtime_v2_run_id = str(uuid.uuid4())
 
     state: State = {
         "dialogue": derive_dialogue_from_assistant_history(new_llm_history),
@@ -2306,12 +2381,12 @@ async def astream_events(
         "session_id": session_id,
         "llm_calls": [],
         "key_context": key_context,
+        "_runtime_v2_run_id": runtime_v2_run_id,
     }
     todo_manager.sync_session_from_key_context(session_id, key_context or "")
     session_manager.clear_interrupt(session_id)
 
     queue: asyncio.Queue = asyncio.Queue()
-    runtime_v2_run_id = str(uuid.uuid4())
     runtime_v2_terminal_mirrored = False
 
     def mirror_runtime_v2(event_type: str, payload: Optional[Dict[str, Any]] = None) -> None:
@@ -2349,6 +2424,7 @@ async def astream_events(
         try:
             # 用户气泡由前端已画；此处只写入与流顺序一致的持久化，供刷新与 SSE 同源
             mirror_runtime_v2("run_started", {"mode": "chat"})
+            _runtime_v2_append_model_message(state, user_message)
             await emit({"type": "run_started", "ephemeral": True})
             session_manager.append_ui_event(session_id, {"type": "user", "content": user_input})
             await emit({"type": "status", "content": "New Agent Loop Start"})
@@ -2431,6 +2507,9 @@ async def astream_events_continuation(
     setup_logging("[subagent-continuation]", session_id)
     session_manager.reconcile_llm_work_to_ui_user_count(session_id)
     llm_history_dicts = session_manager._load_llm_history(session_id)
+    runtime_v2_llm_history_dicts = _load_runtime_v2_model_history_dicts(session_id)
+    if runtime_v2_llm_history_dicts:
+        llm_history_dicts = runtime_v2_llm_history_dicts
     work_messages_dicts = session_manager._load_work_messages(session_id)
 
     prev_work_messages = [_dict_to_message(m) for m in work_messages_dicts]
@@ -2441,6 +2520,8 @@ async def astream_events_continuation(
         if isinstance(msg, UserMessage):
             user_input = msg.content
             break
+
+    runtime_v2_run_id = str(uuid.uuid4())
 
     state: State = {
         "dialogue": derive_dialogue_from_assistant_history(prev_llm_history),
@@ -2453,12 +2534,12 @@ async def astream_events_continuation(
         "session_id": session_id,
         "llm_calls": [],
         "key_context": key_context,
+        "_runtime_v2_run_id": runtime_v2_run_id,
     }
     todo_manager.sync_session_from_key_context(session_id, key_context or "")
     session_manager.clear_interrupt(session_id)
 
     queue: asyncio.Queue = asyncio.Queue()
-    runtime_v2_run_id = str(uuid.uuid4())
     runtime_v2_terminal_mirrored = False
 
     def mirror_runtime_v2(event_type: str, payload: Optional[Dict[str, Any]] = None) -> None:

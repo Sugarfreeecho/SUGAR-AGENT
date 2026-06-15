@@ -2,7 +2,7 @@ import asyncio
 import tempfile
 import unittest
 
-from app.runtime_v2 import RuntimeGateway, RuntimeProjector
+from app.runtime_v2 import RuntimeGateway, RuntimeHistoryOps, RuntimeModelProjection, RuntimeProjector
 from app.runtime_v2.event_schema import RuntimeEvent
 
 
@@ -37,6 +37,55 @@ class RuntimeProjectorTests(unittest.TestCase):
                 self.assertEqual(cached["runs"]["r1"]["status"], "finished")
 
         asyncio.run(scenario())
+
+    def test_projects_native_model_messages_with_tool_order(self):
+        projector = RuntimeProjector()
+        events = [
+            RuntimeEvent(seq=1, type="message_user", session_id="s1", payload={"content": "visible"}),
+            RuntimeEvent(seq=2, type="model_user", session_id="s1", payload={"role": "user", "content": "model u"}),
+            RuntimeEvent(seq=3, type="model_assistant", session_id="s1", payload={
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [{"name": "read_file", "args": {"path": "a"}, "id": "tc1"}],
+            }),
+            RuntimeEvent(seq=4, type="model_tool", session_id="s1", payload={
+                "role": "tool",
+                "content": "tool result",
+                "tool_call_id": "tc1",
+            }),
+            RuntimeEvent(seq=5, type="model_assistant", session_id="s1", payload={
+                "role": "assistant",
+                "content": "done",
+                "metadata": {"is_final": True},
+            }),
+        ]
+
+        snapshot = projector.project(events)
+
+        self.assertEqual(len(snapshot["visible_messages"]), 1)
+        self.assertEqual([m["role"] for m in snapshot["model_messages"]], ["user", "assistant", "tool", "assistant"])
+        self.assertEqual(snapshot["model_messages"][1]["payload"]["tool_calls"][0]["id"], "tc1")
+        self.assertEqual(snapshot["model_messages"][2]["payload"]["tool_call_id"], "tc1")
+
+    def test_model_projection_reads_message_dicts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ops = RuntimeHistoryOps(tmp)
+            ops.append_model_message("s1", "user", "hello")
+            ops.append_model_message(
+                "s1",
+                "assistant",
+                "",
+                tool_calls=[{"name": "read_file", "args": {"path": "a"}, "id": "tc1"}],
+                additional_kwargs={"reasoning_content": "why"},
+            )
+            ops.append_model_message("s1", "tool", "result", tool_call_id="tc1")
+
+            messages = RuntimeModelProjection(tmp).read_message_dicts("s1")
+
+            self.assertEqual([m["type"] for m in messages], ["user", "assistant", "tool"])
+            self.assertEqual(messages[1]["tool_calls"][0]["id"], "tc1")
+            self.assertEqual(messages[1]["additional_kwargs"]["reasoning_content"], "why")
+            self.assertEqual(messages[2]["tool_call_id"], "tc1")
 
 
 if __name__ == "__main__":

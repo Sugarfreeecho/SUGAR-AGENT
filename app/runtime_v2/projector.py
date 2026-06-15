@@ -23,6 +23,7 @@ class RuntimeProjector:
             "runs": {},
             "active_runs": [],
             "messages": [],
+            "raw_model_messages": [],
             "visible_messages": [],
             "model_messages": [],
             "subagents": {},
@@ -76,6 +77,10 @@ class RuntimeProjector:
             self._append_message(snapshot, event, "user")
         elif event_type in {"message_assistant_delta", "message_assistant_final"}:
             self._append_or_update_assistant(snapshot, event)
+        elif event_type in {"model_user", "model_assistant", "model_tool", "model_system"}:
+            self._append_model_message(snapshot, event)
+        elif event_type == "model_history_replaced":
+            self._replace_model_messages(snapshot, event)
         elif event_type == "run_started":
             self._upsert_run(snapshot, event, "running")
         elif event_type == "run_heartbeat":
@@ -132,6 +137,60 @@ class RuntimeProjector:
                 "streaming": True,
                 "payload": {"content": delta},
             })
+
+    def _append_model_message(self, snapshot: dict, event: RuntimeEvent) -> None:
+        payload = dict(event.payload or {})
+        role = str(payload.get("role") or "").strip()
+        if not role:
+            role = {
+                "model_user": "user",
+                "model_assistant": "assistant",
+                "model_tool": "tool",
+                "model_system": "system",
+            }.get(event.type, "")
+        if not role:
+            return
+        row = {
+            "seq": event.seq,
+            "timestamp": event.timestamp,
+            "role": role,
+            "run_id": event.run_id,
+            "payload": payload,
+        }
+        row["payload"]["role"] = role
+        snapshot["raw_model_messages"].append(row)
+
+    def _replace_model_messages(self, snapshot: dict, event: RuntimeEvent) -> None:
+        payload = dict(event.payload or {})
+        messages = payload.get("messages")
+        if not isinstance(messages, list):
+            return
+        rows = []
+        for index, item in enumerate(messages):
+            if not isinstance(item, dict):
+                continue
+            msg_type = str(item.get("type") or item.get("role") or "").strip()
+            role = {
+                "human": "user",
+                "llm": "assistant",
+                "ai": "assistant",
+                "agent": "assistant",
+            }.get(msg_type, msg_type)
+            if role not in {"user", "assistant", "tool", "system"}:
+                continue
+            msg_payload = dict(item)
+            msg_payload["role"] = role
+            msg_payload["content"] = str(item.get("content") or "")
+            rows.append({
+                "seq": event.seq,
+                "timestamp": event.timestamp,
+                "role": role,
+                "run_id": event.run_id,
+                "payload": msg_payload,
+                "replacement_index": index,
+                "replaced_by_seq": event.seq,
+            })
+        snapshot["raw_model_messages"] = rows
 
     def _apply_history_op(self, snapshot: dict, event: RuntimeEvent) -> None:
         payload = dict(event.payload or {})
@@ -220,8 +279,9 @@ class RuntimeProjector:
                 next_message["rewritten"] = True
             projected.append(next_message)
 
+        model_source = snapshot.get("raw_model_messages") or projected
         model_messages = []
-        for message in projected:
+        for message in model_source:
             seq = self._int_or_none(message.get("seq"))
             if seq is None:
                 continue

@@ -61,6 +61,28 @@ class RuntimeHistoryOpsTests(unittest.TestCase):
             self.assertEqual(len(snapshot["visible_messages"]), 1)
             self.assertEqual(snapshot["visible_messages"][0]["payload"]["content"], "u2")
 
+    def test_model_history_replace_changes_model_projection_only(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            mirror = RuntimeMirror(tmp)
+            mirror.mirror_ui_event("s1", {"type": "user", "content": "visible user"})
+            mirror.mirror_ui_event("s1", {"type": "final", "content": "visible final"})
+
+            ops = RuntimeHistoryOps(tmp)
+            ops.append_model_message("s1", "user", "old model")
+            ops.replace_model_history("s1", [
+                {"type": "system", "content": "summary"},
+                {"type": "user", "content": "recent user"},
+            ], reason="compact")
+
+            snapshot = ops.snapshots.read("s1")
+
+            self.assertEqual([m["payload"]["content"] for m in snapshot["visible_messages"]], [
+                "visible user",
+                "visible final",
+            ])
+            self.assertEqual([m["role"] for m in snapshot["model_messages"]], ["system", "user"])
+            self.assertEqual(snapshot["model_messages"][1]["payload"]["content"], "recent user")
+
     def test_legacy_observation_does_not_change_projected_messages(self):
         with tempfile.TemporaryDirectory() as tmp:
             mirror = RuntimeMirror(tmp)

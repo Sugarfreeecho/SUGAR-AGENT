@@ -77,6 +77,29 @@ class RuntimeHistoryOps:
             payload["to_seq"] = int(to_seq)
         return self._append_and_snapshot(session_id, "model_window_changed", payload)
 
+    def append_model_message(self, session_id: str, role: str, content: str = "", **payload) -> RuntimeEvent:
+        role = str(role or "").strip()
+        event_type_by_role = {
+            "user": "model_user",
+            "assistant": "model_assistant",
+            "tool": "model_tool",
+            "system": "model_system",
+        }
+        event_type = event_type_by_role.get(role)
+        if not event_type:
+            raise ValueError(f"unsupported model role: {role}")
+        data = dict(payload or {})
+        run_id = data.pop("run_id", None)
+        data["role"] = role
+        data["content"] = content
+        return self._append_and_snapshot(session_id, event_type, data, run_id=run_id)
+
+    def replace_model_history(self, session_id: str, messages: list[dict], reason: str = "") -> RuntimeEvent:
+        return self._append_and_snapshot(session_id, "model_history_replaced", {
+            "messages": list(messages or []),
+            "reason": reason,
+        })
+
     def observe_legacy_truncate(
         self,
         session_id: str,
@@ -161,8 +184,8 @@ class RuntimeHistoryOps:
             payload["source_seq"] = int(source_seq)
         return self._append_and_snapshot(session_id, "legacy_compress_observed", payload)
 
-    def _append_and_snapshot(self, session_id: str, event_type: str, payload: dict) -> RuntimeEvent:
-        event = self.event_log.append(session_id, event_type, payload=payload)
+    def _append_and_snapshot(self, session_id: str, event_type: str, payload: dict, run_id: Optional[str] = None) -> RuntimeEvent:
+        event = self.event_log.append(session_id, event_type, payload=payload, run_id=run_id)
         snapshot = self.projector.project_incremental(self.snapshots.read(session_id), event)
         self.snapshots.write(session_id, snapshot)
         return event
