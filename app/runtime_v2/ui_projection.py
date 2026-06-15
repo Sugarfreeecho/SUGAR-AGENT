@@ -34,9 +34,38 @@ class RuntimeUiProjection:
                 count += 1
         return count
 
+    def replace_from_legacy(self, session_id: str, legacy_events: Iterable[dict], reason: str = "legacy_ui_backfill_replace") -> int:
+        if not runtime_v2_enabled():
+            return 0
+        mirror = RuntimeMirror(self.sessions_dir)
+        mirror.append(session_id, "legacy_truncate_observed", {
+            "before_index": 0,
+            "old_event_count": len(self.read_ui_events(session_id)),
+            "new_event_count": 0,
+            "reason": reason,
+        })
+        count = 0
+        for event in legacy_events or []:
+            if not isinstance(event, dict):
+                continue
+            if mirror.mirror_ui_event(session_id, event) is not None:
+                count += 1
+        return count
+
     def read_ui_events(self, session_id: str, legacy_loader: Optional[Callable[[], Iterable[dict]]] = None) -> List[dict]:
-        if legacy_loader is not None and self.needs_legacy_backfill(session_id):
-            self.ensure_backfilled_from_legacy(session_id, legacy_loader())
+        projected = self.events_to_ui(self.event_log.read_all(session_id))
+        if legacy_loader is not None:
+            if not projected:
+                self.ensure_backfilled_from_legacy(session_id, legacy_loader())
+                projected = self.events_to_ui(self.event_log.read_all(session_id))
+            else:
+                legacy = [event for event in list(legacy_loader() or []) if isinstance(event, dict)]
+                if len(legacy) > len(projected):
+                    self.replace_from_legacy(session_id, legacy)
+                    projected = self.events_to_ui(self.event_log.read_all(session_id))
+        return projected
+
+    def read_ui_events_fast(self, session_id: str) -> List[dict]:
         return self.events_to_ui(self.event_log.read_all(session_id))
 
     def needs_legacy_backfill(self, session_id: str) -> bool:
