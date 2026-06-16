@@ -23,7 +23,7 @@ async function consumeAgentSseResponse(response, runCtx, runSessionId, streamEve
                 if (getSessionRunState(runSessionId)) clearSessionRunState(runSessionId);
                 syncSessionListIndicatorClasses();
                 setSendButtonState();
-                void refreshTodoPlanPanel();
+                if (runSessionId === currentSessionId) renderTodoPlanForCurrentSession();
                 if (liveAutoFollow) {
                     scrollProcessBodyToBottom(runCtx, runSessionId);
                     scrollChatToBottomIfFollow(runSessionId, {});
@@ -221,7 +221,7 @@ async function startContinueAfterSubagents(sessionId) {
         } finally {
             finalizeLlmStreamChunks(runCtx);
             finalizeProgressStreamChunks(runCtx);
-            void refreshTodoPlanPanel();
+            if (runSessionId === currentSessionId) renderTodoPlanForCurrentSession();
             if (liveAutoFollow) {
                 scrollProcessBodyToBottom(runCtx, runSessionId);
                 scrollChatToBottomIfFollow(runSessionId, {});
@@ -230,7 +230,7 @@ async function startContinueAfterSubagents(sessionId) {
             setSendButtonState();
             syncSessionListIndicatorClasses();
             void refreshSingleSessionRow(runSessionId);
-            await refreshContextTokensFromServer(runSessionId);
+            applyContextTokenLabelForCurrentSession();
         }
         hideSubagentContinueBanner();
         if (!subagentContinueDismissedForSession[sessionId]) updateSubagentContinueBanner(sessionId);
@@ -298,7 +298,7 @@ async function attachSessionEventStream(sessionId, opts) {
         syncSessionListIndicatorClasses();
         void refreshSingleSessionRow(runSessionId);
         setTimeout(function () { reconcileRunStateFromServer({ silent: true }); }, 800);
-        await refreshContextTokensFromServer(runSessionId);
+        applyContextTokenLabelForCurrentSession();
         if (runSessionId === currentSessionId) {
             clearSessionUnreadState(runSessionId);
             updateSubagentContinueBanner(runSessionId);
@@ -459,7 +459,7 @@ async function sendMessage() {
     } finally {
         finalizeLlmStreamChunks(runCtx);
         finalizeProgressStreamChunks(runCtx);
-        void refreshTodoPlanPanel();
+        if (runSessionId === currentSessionId) renderTodoPlanForCurrentSession();
         if (liveAutoFollow && !switchedAway) {
             scrollProcessBodyToBottom(runCtx, runSessionId);
             scrollChatToBottomIfFollow(runSessionId, {});
@@ -480,7 +480,7 @@ async function sendMessage() {
         setSendButtonState();
         syncSessionListIndicatorClasses();
         void refreshSingleSessionRow(runSessionId);
-        await refreshContextTokensFromServer(runSessionId);
+        applyContextTokenLabelForCurrentSession();
         if (runSessionId === currentSessionId && countRunningSubagentCards() > 0) {
             scheduleSubagentIncrementalSync();
         }

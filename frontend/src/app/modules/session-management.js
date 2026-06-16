@@ -229,7 +229,7 @@ function buildAndBindSessionRow(sess, allSessions, nextStreamMap) {
                     if (previous) applyOptimisticSessionUpdate(sess.id, previous);
                     throw new Error('pin failed: ' + response.status);
                 }
-                void loadSessions();
+                void refreshSingleSessionRow(sess.id);
             } catch (err) { console.error('置顶失败', err); }
         });
     }
@@ -247,9 +247,7 @@ function buildAndBindSessionRow(sess, allSessions, nextStreamMap) {
                     if (previous) applyOptimisticSessionUpdate(sess.id, previous);
                     throw new Error('archive failed: ' + response.status);
                 }
-                const wasArchivedLoaded = sessionStore.archivedLoaded;
-                void loadSessions({ skipArchivedRefresh: true });
-                if (wasArchivedLoaded) void loadArchivedSessions({ background: true });
+                void refreshSingleSessionRow(sess.id);
             } catch (err) { console.error('归档失败', err); }
         });
     }
@@ -308,9 +306,6 @@ function buildAndBindSessionRow(sess, allSessions, nextStreamMap) {
                     void loadSessions({ skipArchivedRefresh: true });
                     if (wasArchivedLoaded) void loadArchivedSessions({ background: true });
                 });
-            if (wasArchivedLoaded) {
-                void loadArchivedSessions({ background: true });
-            }
         });
     }
     const nameSpan = div.querySelector('.session-name');
@@ -585,7 +580,7 @@ async function loadSessions(opts) {
 
         renderSessionListIfChanged(!!opts.forceRender);
         sessionStore.ui.loadingSessions = false;
-        if (!opts.skipArchivedRefresh && sessionStore.archivedLoaded) {
+        if (opts.refreshArchived && !opts.skipArchivedRefresh && sessionStore.archivedLoaded) {
             void loadArchivedSessions({ background: true });
         }
         return;
@@ -733,7 +728,7 @@ async function loadSessionMessages(sessionId, scrollBehavior, opts) {
         bindExistingLogs();
         scheduleTocActiveUpdate();
         scheduleContextTokensAfterPaint(sessionId);
-        void refreshTodoPlanPanel();
+        renderTodoPlanForCurrentSession();
     } catch (error) {
         console.error('加载会话消息失败:', error);
         document.getElementById('chat-loading')?.remove();
@@ -772,7 +767,7 @@ async function switchSession(sessionId) {
         updateSessionTitle();
         scheduleContextTokensAfterPaint(sessionId);
         applyChatScrollAfterHistoryLoad(sessionId, 'saved-or-bottom');
-        void refreshTodoPlanPanel();
+        renderTodoPlanForCurrentSession();
         if (switchToken !== switchSessionEpoch || sessionId !== currentSessionId) return;
         /* 让 rebuildToc 的 /user_turns fetch 先发出，subagent 面板（含 N 个 /messages）延后一帧
            避免抢占带宽与主线程，导致目录最后才就绪。 */
@@ -842,7 +837,7 @@ async function createNewSessionInner() {
         if (data && data.session) {
             syncArchivedSessionStateFromStore();
             renderSessionListIfChanged(true);
-            void loadSessions();
+            void refreshSingleSessionRow(data.session_id);
         } else {
             await loadSessions();
         }

@@ -1035,7 +1035,7 @@ function selectMessageEventsInRange(sessionId, startIndex, endIndex) {
 function selectMessageEventCount(sessionId) {
     return messageStore.eventCount(sessionId);
 }
-`,_=`function renderMessageRecord(ctx, record, sessionId) {
+`,k=`function renderMessageRecord(ctx, record, sessionId) {
     if (!ctx || !record || !record.event) return null;
     const sid = sessionId || record.sessionId || currentSessionId;
     renderEvent(ctx, record.event, record.index, sid);
@@ -1065,7 +1065,7 @@ function renderMessageRecords(ctx, records, sessionId) {
         renderMessageRecord(ctx, list[i], sessionId);
     }
 }
-`,k=`const subagentStore = {
+`,_=`const subagentStore = {
     sessions: new Map(),
 
     ensureSession(sessionId) {
@@ -2718,7 +2718,7 @@ function bindSubagentPanelOnce() {
         closeSubagentPanel();
     });
 }
-`,H=`const contextStore = {
+`,D=`const contextStore = {
     tokensBySession: new Map(),
     todoBySession: new Map(),
     progressBySession: new Map(),
@@ -2838,7 +2838,7 @@ function appendContextProgressForSession(sessionId, kind, delta) {
 function selectContextProgress(sessionId) {
     return contextStore.progressBySession.get(String(sessionId || '')) || null;
 }
-`,D=`function markUiEventStoreApplied(event) {
+`,H=`function markUiEventStoreApplied(event) {
     if (!event || typeof event !== 'object') return;
     try {
         Object.defineProperty(event, '__storeApplied', {
@@ -5763,7 +5763,7 @@ function setWelcome() {
         else chatContainer.innerHTML = WELCOME_HTML;
     }
     rebuildToc();
-    void refreshTodoPlanPanel();
+    renderTodoPlanForCurrentSession();
 }
 
 function stripWelcome(ctx) {
@@ -5826,6 +5826,17 @@ function stripPathWrappingQuotes(s) {
         }
     }
     return t;
+}
+
+function cleanPathTokenForLink(s) {
+    var t = linkifyNormalizePathToken(String(s || '').trim());
+    if (!t) return '';
+    var a = t.charAt(0);
+    var b = t.charAt(t.length - 1);
+    if (t.length >= 2 && ((a === '"' && b === '"') || (a === "'" && b === "'"))) {
+        return trimTrailingPathPunct(t.slice(1, -1).trim());
+    }
+    return stripPathWrappingQuotes(trimTrailingPathPunct(t));
 }
 
 /** 统一全角标点/数字等，便于识别「．xlsx」「路径：／」等变体 */
@@ -6068,7 +6079,7 @@ function isBareWorkspaceFilenameForLink(t) {
 }
 
 function makeHrefFromAutoLinkToken(s) {
-    var t = trimTrailingPathPunct(linkifyNormalizePathToken(String(s).trim()));
+    var t = cleanPathTokenForLink(s);
     if (!t) return null;
     if (/^https?:\\/\\//i.test(t)) return t;
     var m = /^([A-Za-z]):[\\\\/](.*)$/.exec(t);
@@ -6101,7 +6112,7 @@ function makeHrefFromAutoLinkToken(s) {
  * 解析为可交给 /api/open-workspace-file 的路径：工作区相对、Windows/UNC 绝对路径（均由服务端校验须在 WORK_DIR 内）。
  */
 function pathTokenToWorkspaceOpenRel(token) {
-    var t = stripPathWrappingQuotes(trimTrailingPathPunct(linkifyNormalizePathToken(String(token || '').trim())));
+    var t = cleanPathTokenForLink(token);
     if (!t || /^https?:\\/\\//i.test(t)) return null;
     var w = (typeof window.__WORK_DIR__ === 'string') ? window.__WORK_DIR__ : '';
     var uncFlat = t.replace(/\\//g, '\\\\');
@@ -6326,7 +6337,8 @@ function getAssistMsgLinkifyRegex() {
     if (!_assistMsgLinkifyRe) {
         // 「/路径」前仅排除 ASCII 字母，避免 2023/文件、中文后接 / 等无法匹配；仍可抑制 ARPU/DOU（U 为字母）
         _assistMsgLinkifyRe = new RegExp(
-            '(https?:\\\\/\\\\/[^\\\\s<>\\'"]+|' +
+            '((["\\'])(?:[A-Za-z]:(?:\\\\\\\\|\\\\/)|\\\\\\\\\\\\\\\\|\\\\/(?![\\\\s\\\\/]))[^"\\'\\\\r\\\\n]+?\\\\.(?:' + LINKIFY_EXT_FRAGMENT + ')\\\\b\\\\2|' +
+            'https?:\\\\/\\\\/[^\\\\s<>\\'"]+|' +
             '\\\\\\\\\\\\\\\\(?:(?:[^\\\\\\\\\\\\/:*?"<>|\\\\r\\\\n]+)\\\\\\\\)+(?:[^\\\\\\\\\\\\/:*?"<>|\\\\r\\\\n]+)|' +
             '[A-Za-z]:(?:\\\\\\\\|\\\\/)(?:(?:[^\\\\\\\\/:*?"<>|\\\\r\\\\n]+)(?:\\\\\\\\|\\\\/))*[^\\\\\\\\/:*?"<>|\\\\r\\\\n]+|' +
             '(?<![A-Za-z])\\\\/(?![\\\\s\\\\/])[^\\\\s<>\\'"]+|' +
@@ -6374,7 +6386,7 @@ function linkifySingleTextNode(textNode) {
         if (p.k === 't') frag.appendChild(document.createTextNode(p.s));
         else {
             var wsRel = pathTokenToWorkspaceOpenRel(p.s);
-            var show = trimTrailingPathPunct(p.s);
+            var show = cleanPathTokenForLink(p.s);
             if (wsRel) {
                 var aw = document.createElement('a');
                 aw.href = '#';
@@ -6408,8 +6420,32 @@ function linkifySingleTextNode(textNode) {
     textNode.parentNode.replaceChild(frag, textNode);
 }
 
+function upgradeWorkspacePathMarkdownLinks(root) {
+    if (!root) return;
+    root.querySelectorAll('a[href]').forEach(function (a) {
+        if (!a || a.classList.contains('msg-link-workspace-open')) return;
+        var href = a.getAttribute('href') || '';
+        var raw = href;
+        try { raw = decodeURI(raw); } catch (e) {}
+        var rel = pathTokenToWorkspaceOpenRel(raw);
+        if (!rel && /^file:\\/\\//i.test(raw)) {
+            var fsPath = raw.replace(/^file:\\/\\/\\/?/i, '');
+            try { fsPath = decodeURIComponent(fsPath); } catch (e2) {}
+            if (/^[A-Za-z]:\\//.test(fsPath)) rel = pathTokenToWorkspaceOpenRel(fsPath);
+            else rel = pathTokenToWorkspaceOpenRel('/' + fsPath.replace(/^\\/+/, ''));
+        }
+        if (!rel) return;
+        a.href = '#';
+        a.setAttribute('data-workspace-open', rel);
+        a.classList.add('msg-link-workspace-open');
+        a.setAttribute('data-ui-tip', '在本机打开（工作区文件）');
+        bindUiHoverTip(a);
+    });
+}
+
 function linkifyAssistantTextNodes(root) {
     if (!root) return;
+    upgradeWorkspacePathMarkdownLinks(root);
     var walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
     var batch = [];
     var n;
@@ -6419,7 +6455,7 @@ function linkifyAssistantTextNodes(root) {
         if (p.closest('code') && !isEntireTextNodeWindowsPath(n.nodeValue) && !isEntireBareFilenameLinkable(n.nodeValue) && !isEntireWorkspaceSlashPathLinkable(n.nodeValue) && !isEntireWorkspaceRelativePathLinkable(n.nodeValue) && !isEntireTextNodeUncPath(n.nodeValue)) continue;
         var nv = n.nodeValue;
         var nvNorm = linkifyNormalizePathToken(nv);
-        if (!nv || (!/https?:\\/\\/|[A-Za-z]:[\\\\/]|\\/\\S/.test(nvNorm) && !nvNorm.startsWith('\\\\\\\\') && !linkifyKnownExtRegex().test(nvNorm))) continue;
+        if (!nv || (!/https?:\\/\\/|["'][A-Za-z]:[\\\\/]|[A-Za-z]:[\\\\/]|\\/\\S/.test(nvNorm) && !nvNorm.startsWith('\\\\\\\\') && !linkifyKnownExtRegex().test(nvNorm))) continue;
         batch.push(n);
     }
     batch.forEach(linkifySingleTextNode);
@@ -6513,6 +6549,15 @@ function enhanceAssistantMessageContent(div) {
 }
 
 let markedOptionsApplied = false;
+function encodeMarkdownWorkspacePathLinks(text) {
+    return String(text || '').replace(/\\[([^\\]\\r\\n]+)\\]\\(([^)\\r\\n]+)\\)/g, function (match, label, dest) {
+        var rawDest = String(dest || '').trim();
+        if (!rawDest || /^https?:\\/\\//i.test(rawDest)) return match;
+        if (!pathTokenToWorkspaceOpenRel(rawDest)) return match;
+        return '[' + label + '](' + encodeURI(rawDest) + ')';
+    });
+}
+
 function renderMarkdown(text) {
     if (!text) return '';
     if (typeof marked !== 'undefined' && !markedOptionsApplied) {
@@ -6521,7 +6566,7 @@ function renderMarkdown(text) {
             marked.setOptions({ breaks: true, mangle: false, headerIds: false });
         } catch (e) { /* ignore */ }
     }
-    return marked.parse(text, { mangle: false, headerIds: false });
+    return marked.parse(encodeMarkdownWorkspacePathLinks(text), { mangle: false, headerIds: false });
 }
 
 const TRACE_ROW = {
@@ -8277,7 +8322,7 @@ function buildAndBindSessionRow(sess, allSessions, nextStreamMap) {
                     if (previous) applyOptimisticSessionUpdate(sess.id, previous);
                     throw new Error('pin failed: ' + response.status);
                 }
-                void loadSessions();
+                void refreshSingleSessionRow(sess.id);
             } catch (err) { console.error('置顶失败', err); }
         });
     }
@@ -8295,9 +8340,7 @@ function buildAndBindSessionRow(sess, allSessions, nextStreamMap) {
                     if (previous) applyOptimisticSessionUpdate(sess.id, previous);
                     throw new Error('archive failed: ' + response.status);
                 }
-                const wasArchivedLoaded = sessionStore.archivedLoaded;
-                void loadSessions({ skipArchivedRefresh: true });
-                if (wasArchivedLoaded) void loadArchivedSessions({ background: true });
+                void refreshSingleSessionRow(sess.id);
             } catch (err) { console.error('归档失败', err); }
         });
     }
@@ -8356,9 +8399,6 @@ function buildAndBindSessionRow(sess, allSessions, nextStreamMap) {
                     void loadSessions({ skipArchivedRefresh: true });
                     if (wasArchivedLoaded) void loadArchivedSessions({ background: true });
                 });
-            if (wasArchivedLoaded) {
-                void loadArchivedSessions({ background: true });
-            }
         });
     }
     const nameSpan = div.querySelector('.session-name');
@@ -8633,7 +8673,7 @@ async function loadSessions(opts) {
 
         renderSessionListIfChanged(!!opts.forceRender);
         sessionStore.ui.loadingSessions = false;
-        if (!opts.skipArchivedRefresh && sessionStore.archivedLoaded) {
+        if (opts.refreshArchived && !opts.skipArchivedRefresh && sessionStore.archivedLoaded) {
             void loadArchivedSessions({ background: true });
         }
         return;
@@ -8781,7 +8821,7 @@ async function loadSessionMessages(sessionId, scrollBehavior, opts) {
         bindExistingLogs();
         scheduleTocActiveUpdate();
         scheduleContextTokensAfterPaint(sessionId);
-        void refreshTodoPlanPanel();
+        renderTodoPlanForCurrentSession();
     } catch (error) {
         console.error('加载会话消息失败:', error);
         document.getElementById('chat-loading')?.remove();
@@ -8820,7 +8860,7 @@ async function switchSession(sessionId) {
         updateSessionTitle();
         scheduleContextTokensAfterPaint(sessionId);
         applyChatScrollAfterHistoryLoad(sessionId, 'saved-or-bottom');
-        void refreshTodoPlanPanel();
+        renderTodoPlanForCurrentSession();
         if (switchToken !== switchSessionEpoch || sessionId !== currentSessionId) return;
         /* 让 rebuildToc 的 /user_turns fetch 先发出，subagent 面板（含 N 个 /messages）延后一帧
            避免抢占带宽与主线程，导致目录最后才就绪。 */
@@ -8890,7 +8930,7 @@ async function createNewSessionInner() {
         if (data && data.session) {
             syncArchivedSessionStateFromStore();
             renderSessionListIfChanged(true);
-            void loadSessions();
+            void refreshSingleSessionRow(data.session_id);
         } else {
             await loadSessions();
         }
@@ -8927,7 +8967,7 @@ async function createNewSessionInner() {
                 if (getSessionRunState(runSessionId)) clearSessionRunState(runSessionId);
                 syncSessionListIndicatorClasses();
                 setSendButtonState();
-                void refreshTodoPlanPanel();
+                if (runSessionId === currentSessionId) renderTodoPlanForCurrentSession();
                 if (liveAutoFollow) {
                     scrollProcessBodyToBottom(runCtx, runSessionId);
                     scrollChatToBottomIfFollow(runSessionId, {});
@@ -9125,7 +9165,7 @@ async function startContinueAfterSubagents(sessionId) {
         } finally {
             finalizeLlmStreamChunks(runCtx);
             finalizeProgressStreamChunks(runCtx);
-            void refreshTodoPlanPanel();
+            if (runSessionId === currentSessionId) renderTodoPlanForCurrentSession();
             if (liveAutoFollow) {
                 scrollProcessBodyToBottom(runCtx, runSessionId);
                 scrollChatToBottomIfFollow(runSessionId, {});
@@ -9134,7 +9174,7 @@ async function startContinueAfterSubagents(sessionId) {
             setSendButtonState();
             syncSessionListIndicatorClasses();
             void refreshSingleSessionRow(runSessionId);
-            await refreshContextTokensFromServer(runSessionId);
+            applyContextTokenLabelForCurrentSession();
         }
         hideSubagentContinueBanner();
         if (!subagentContinueDismissedForSession[sessionId]) updateSubagentContinueBanner(sessionId);
@@ -9202,7 +9242,7 @@ async function attachSessionEventStream(sessionId, opts) {
         syncSessionListIndicatorClasses();
         void refreshSingleSessionRow(runSessionId);
         setTimeout(function () { reconcileRunStateFromServer({ silent: true }); }, 800);
-        await refreshContextTokensFromServer(runSessionId);
+        applyContextTokenLabelForCurrentSession();
         if (runSessionId === currentSessionId) {
             clearSessionUnreadState(runSessionId);
             updateSubagentContinueBanner(runSessionId);
@@ -9363,7 +9403,7 @@ async function sendMessage() {
     } finally {
         finalizeLlmStreamChunks(runCtx);
         finalizeProgressStreamChunks(runCtx);
-        void refreshTodoPlanPanel();
+        if (runSessionId === currentSessionId) renderTodoPlanForCurrentSession();
         if (liveAutoFollow && !switchedAway) {
             scrollProcessBodyToBottom(runCtx, runSessionId);
             scrollChatToBottomIfFollow(runSessionId, {});
@@ -9384,7 +9424,7 @@ async function sendMessage() {
         setSendButtonState();
         syncSessionListIndicatorClasses();
         void refreshSingleSessionRow(runSessionId);
-        await refreshContextTokensFromServer(runSessionId);
+        applyContextTokenLabelForCurrentSession();
         if (runSessionId === currentSessionId && countRunningSubagentCards() > 0) {
             scheduleSubagentIncrementalSync();
         }
@@ -9713,7 +9753,7 @@ if (typeof globalThis !== 'undefined') {
     globalThis.toggleTodoPlanPanel = toggleTodoPlanPanel;
     globalThis.toggleTocPanel = toggleTocPanel;
 }
-`,X=[I,x,C,w,T,E,L,_,k,P,A,R,B,F,M,N,O,H,D,U,q,j,W,G,z,K,V];Function(`"use strict";
+`,X=[I,x,C,w,T,E,L,k,_,P,A,R,B,F,M,N,O,D,H,U,q,j,W,G,z,K,V];Function(`"use strict";
 `+X.join(`
 
 `)+`
