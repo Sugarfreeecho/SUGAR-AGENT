@@ -25,7 +25,7 @@ function pauseCurrentRun() {
         syncSessionListIndicatorClasses();
         renderSessionListIfChanged(false);
         void requestInterrupt(sid);
-        setTimeout(function () { reconcileRunStateFromServer({ silent: true }); }, 800);
+        setTimeout(function () { reconcileRunStateFromServer({ silent: true, respectStopSuppress: true }); }, 3000);
         return;
     }
     const ctx = run.ctx;
@@ -38,7 +38,7 @@ function pauseCurrentRun() {
     appendLog(ctx, '已请求停止当前任务', 'status', sid);
     sealProcessGroup(ctx);
     void requestInterrupt(sid);
-    setTimeout(function () { reconcileRunStateFromServer({ silent: true }); }, 800);
+    setTimeout(function () { reconcileRunStateFromServer({ silent: true, respectStopSuppress: true }); }, 3000);
 }
 
 /** 在当前对话中定位最近一条用户消息并重新发送。返回 true 表示已触发展开发送。 */
@@ -593,6 +593,15 @@ async function loadSessions(opts) {
 
 async function reconcileRunStateFromServer(opts) {
     opts = opts || {};
+    const suppressedBeforeFetch = new Set();
+    if (opts.respectStopSuppress) {
+        sessionStore.sessionOrder.forEach(function (sid) {
+            if (isSessionStreamStopSuppressed(sid)) suppressedBeforeFetch.add(String(sid));
+        });
+        if (currentSessionId && isSessionStreamStopSuppressed(currentSessionId)) {
+            suppressedBeforeFetch.add(String(currentSessionId));
+        }
+    }
     let snapshot = null;
     try {
         const cur = currentSessionId ? sessionStore.get(currentSessionId) : null;
@@ -604,6 +613,20 @@ async function reconcileRunStateFromServer(opts) {
         return;
     }
     applySessionSnapshot(snapshot);
+    if (opts.respectStopSuppress) {
+        suppressedBeforeFetch.forEach(function (sid) {
+            if (isSessionStreamStopSuppressed(sid)) {
+                sessionStore.setStreamActive(sid, false);
+                const sess = sessionStore.get(sid);
+                if (sess) {
+                    sess.stream_active = false;
+                    sess.run_active = false;
+                    sess.run_started_at = null;
+                }
+                sessionStore.activeRunInfoBySession.delete(sid);
+            }
+        });
+    }
     const active = new Set();
     sessionStore.activeRunInfoBySession.forEach(function (info, sid) {
         if (info && info.run_active === true) active.add(String(sid));

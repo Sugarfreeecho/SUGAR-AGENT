@@ -215,7 +215,7 @@ const sessionStore = {
     },
 };
 
-const SESSION_STREAM_STOP_SUPPRESS_MS = 15000;
+const SESSION_STREAM_STOP_SUPPRESS_MS = 60000;
 const sessionStreamStopSuppressUntil = Object.create(null);
 
 function isSessionStreamStopSuppressed(sessionId) {

@@ -61,15 +61,9 @@ class RuntimeUiProjection:
 
     def read_ui_events(self, session_id: str, legacy_loader: Optional[Callable[[], Iterable[dict]]] = None) -> List[dict]:
         projected = self._projected_ui_events_cached(session_id)
-        if legacy_loader is not None:
-            if not projected:
-                self.ensure_backfilled_from_legacy(session_id, legacy_loader())
-                projected = self._projected_ui_events_cached(session_id)
-            else:
-                legacy = [event for event in list(legacy_loader() or []) if isinstance(event, dict)]
-                if len(legacy) > len(projected):
-                    self.replace_from_legacy(session_id, legacy)
-                    projected = self._projected_ui_events_cached(session_id)
+        if legacy_loader is not None and not projected:
+            self.ensure_backfilled_from_legacy(session_id, legacy_loader())
+            projected = self._projected_ui_events_cached(session_id)
         return projected
 
     def read_ui_events_fast(self, session_id: str) -> List[dict]:
