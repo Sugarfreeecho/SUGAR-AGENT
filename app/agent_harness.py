@@ -1751,12 +1751,37 @@ class SessionManager:
     def _get_subagent_tasks_path(self, session_id: str) -> Path:
         return self.repository.subagent_tasks_path(session_id)
 
-    def list_subagent_tasks(self, parent_session_id: str) -> List[dict]:
-        """读取父会话下的 subagent task 状态索引。"""
+    def _runtime_v2_primary(self) -> bool:
+        try:
+            from runtime_v2 import runtime_v2_primary
+
+            return runtime_v2_primary()
+        except Exception:
+            return True
+
+    def _runtime_subagent_store(self):
+        from runtime_v2.subagent_store import RuntimeSubagentStore
+
+        return RuntimeSubagentStore(self.repository.sessions_dir)
+
+    def _list_subagent_tasks_v1(self, parent_session_id: str) -> List[dict]:
         return self.repository.load_json_list(self._get_subagent_tasks_path(parent_session_id))
 
-    def upsert_subagent_task(self, parent_session_id: str, task_id: str, patch: Dict[str, Any]) -> None:
-        """维护父会话下 subagent task 状态索引，供 UI/恢复/调试使用。"""
+    def _list_subagent_tasks_v2(self, parent_session_id: str) -> List[dict]:
+        try:
+            return self._runtime_subagent_store().list_tasks(parent_session_id)
+        except Exception as exc:
+            logger.debug("Runtime V2 list subagent tasks failed: %s", exc)
+            return []
+
+    def list_subagent_tasks(self, parent_session_id: str) -> List[dict]:
+        """读取父会话下的 subagent task 状态索引。"""
+        if self._runtime_v2_primary():
+            rows = self._list_subagent_tasks_v2(parent_session_id)
+            return rows if rows else self._list_subagent_tasks_v1(parent_session_id)
+        return self._list_subagent_tasks_v1(parent_session_id)
+
+    def _upsert_subagent_task_v1(self, parent_session_id: str, task_id: str, patch: Dict[str, Any]) -> None:
         tid = str(task_id or "").strip()
         if not tid:
             return
@@ -1777,6 +1802,24 @@ class SessionManager:
             rows.append(row)
         self.repository.save_json_list(path, rows)
 
+    def _upsert_subagent_task_v2(self, parent_session_id: str, task_id: str, patch: Dict[str, Any]) -> None:
+        try:
+            self._runtime_subagent_store().upsert_task(parent_session_id, task_id, patch)
+        except Exception as exc:
+            logger.debug("Runtime V2 upsert subagent task failed: %s", exc)
+
+    def upsert_subagent_task(self, parent_session_id: str, task_id: str, patch: Dict[str, Any]) -> None:
+        """维护父会话下 subagent task 状态索引，供 UI/恢复/调试使用。"""
+        tid = str(task_id or "").strip()
+        if not tid:
+            return
+        if self._runtime_v2_primary():
+            self._upsert_subagent_task_v2(parent_session_id, tid, patch)
+            self._upsert_subagent_task_v1(parent_session_id, tid, patch)
+        else:
+            self._upsert_subagent_task_v1(parent_session_id, tid, patch)
+            self._upsert_subagent_task_v2(parent_session_id, tid, patch)
+
     def write_subagent_output(self, child_session_id: str, text: str) -> str:
         """将 subagent 最终可读输出写入子会话 output.md，返回路径。"""
         path = self._get_session_path(child_session_id) / "output.md"
@@ -1786,6 +1829,13 @@ class SessionManager:
 
     def read_subagent_task_output(self, parent_session_id: str, task_id: str) -> Dict[str, Any]:
         """读取父会话下某个 subagent/task 的可读输出文件。"""
+        if self._runtime_v2_primary():
+            try:
+                result = self._runtime_subagent_store().read_task_output(parent_session_id, task_id)
+                if result.get("ok"):
+                    return result
+            except Exception as exc:
+                logger.debug("Runtime V2 read subagent task output failed: %s", exc)
         tid = str(task_id or "").strip()
         if not tid:
             return {"ok": False, "error": "missing task_id"}
@@ -1835,28 +1885,62 @@ class SessionManager:
 
     def write_subagent_task_output(self, parent_session_id: str, task_id: str, text: str) -> str:
         """将虚拟 subagent task（如 best-of-n runner）输出写入父会话 outputs 目录。"""
+        if self._runtime_v2_primary():
+            try:
+                v2_path = self._runtime_subagent_store().write_task_output(parent_session_id, task_id, text)
+                tid = str(task_id or "").strip() or "subagent"
+                safe = re.sub(r"[^A-Za-z0-9_.-]+", "_", tid)
+                v1_path = self._get_session_path(parent_session_id) / "subagent_outputs" / f"{safe}.md"
+                v1_path.parent.mkdir(parents=True, exist_ok=True)
+                v1_path.write_text(str(text or ""), encoding="utf-8")
+                return v2_path
+            except Exception as exc:
+                logger.debug("Runtime V2 write subagent task output failed: %s", exc)
         tid = str(task_id or "").strip() or "subagent"
         safe = re.sub(r"[^A-Za-z0-9_.-]+", "_", tid)
         path = self._get_session_path(parent_session_id) / "subagent_outputs" / f"{safe}.md"
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(str(text or ""), encoding="utf-8")
+        try:
+            self._runtime_subagent_store().write_task_output(parent_session_id, task_id, text)
+        except Exception as exc:
+            logger.debug("Runtime V2 mirror subagent task output failed: %s", exc)
         return str(path)
 
     def append_pending_subagent_result(self, parent_session_id: str, entry: Dict[str, Any]) -> None:
-        path = self._get_pending_subagent_results_path(parent_session_id)
-        rows: List[dict] = self.repository.load_json_list(path)
         row = dict(entry)
         if row.get("after_final_index") is None:
             events = self._load_ui_events(parent_session_id)
             anchor = self._latest_final_index_without_later_user(events)
             if anchor >= 0:
                 row["after_final_index"] = anchor
+        path = self._get_pending_subagent_results_path(parent_session_id)
+        rows: List[dict] = self.repository.load_json_list(path)
         rows.append(row)
-        self.repository.save_json_list(path, rows)
+        if self._runtime_v2_primary():
+            try:
+                self._runtime_subagent_store().append_pending_result(parent_session_id, row)
+            except Exception as exc:
+                logger.debug("Runtime V2 append pending subagent result failed: %s", exc)
+            self.repository.save_json_list(path, rows)
+        else:
+            self.repository.save_json_list(path, rows)
+            try:
+                self._runtime_subagent_store().append_pending_result(parent_session_id, row)
+            except Exception as exc:
+                logger.debug("Runtime V2 mirror pending subagent result failed: %s", exc)
 
     def _load_pending_subagent_results(self, session_id: str) -> List[dict]:
-        path = self._get_pending_subagent_results_path(session_id)
-        rows = self.repository.load_json_list(path)
+        if self._runtime_v2_primary():
+            try:
+                rows = self._runtime_subagent_store().list_pending_results(session_id)
+                if not rows:
+                    rows = self.repository.load_json_list(self._get_pending_subagent_results_path(session_id))
+            except Exception as exc:
+                logger.debug("Runtime V2 load pending subagent results failed: %s", exc)
+                rows = self.repository.load_json_list(self._get_pending_subagent_results_path(session_id))
+        else:
+            rows = self.repository.load_json_list(self._get_pending_subagent_results_path(session_id))
         try:
             meta = self._load_metadata(session_id)
             created_at = str((meta or {}).get("created_at") or "")
@@ -1869,6 +1953,22 @@ class SessionManager:
         except Exception:
             pass
         return rows
+
+    def _save_pending_subagent_results(self, session_id: str, rows: List[dict]) -> None:
+        rows = [x for x in (rows or []) if isinstance(x, dict)]
+        path = self._get_pending_subagent_results_path(session_id)
+        if self._runtime_v2_primary():
+            try:
+                self._runtime_subagent_store().save_pending_results(session_id, rows)
+            except Exception as exc:
+                logger.debug("Runtime V2 save pending subagent results failed: %s", exc)
+            self.repository.save_json_list(path, rows)
+        else:
+            self.repository.save_json_list(path, rows)
+            try:
+                self._runtime_subagent_store().save_pending_results(session_id, rows)
+            except Exception as exc:
+                logger.debug("Runtime V2 mirror pending subagent results failed: %s", exc)
 
     def has_pending_subagent_notifications(self, session_id: str) -> bool:
         """父会话是否有尚未注入模型的后台 subagent 完成结果。"""
@@ -1958,7 +2058,6 @@ class SessionManager:
         """读取并消费可注入的后台 subagent 通知，供父 react_node 注入。"""
         rows = self._load_pending_subagent_results(session_id)
         events = self._load_ui_events(session_id)
-        path = self._get_pending_subagent_results_path(session_id)
         last_idx = self._latest_final_index_without_later_user(events)
         if not rows or not events or last_idx < 0:
             return []
@@ -1978,7 +2077,7 @@ class SessionManager:
                 lines.append(line)
             else:
                 keep.append(item)
-        self.repository.save_json_list(path, keep)
+        self._save_pending_subagent_results(session_id, keep)
         return lines
 
     def clear_pending_subagent_results_by_agent_ids(self, session_id: str, agent_ids: List[str]) -> int:
@@ -1998,8 +2097,7 @@ class SessionManager:
                 continue
             keep.append(item)
         if removed:
-            path = self._get_pending_subagent_results_path(session_id)
-            self.repository.save_json_list(path, keep)
+            self._save_pending_subagent_results(session_id, keep)
         return removed
 
     def dismiss_pending_subagent_notifications(self, session_id: str) -> int:
@@ -2018,8 +2116,7 @@ class SessionManager:
         actionable_keys = {_pending_key(x) for x in actionable}
         keep = [x for x in rows if _pending_key(x) not in actionable_keys]
         removed = len(rows) - len(keep)
-        path = self._get_pending_subagent_results_path(session_id)
-        self.repository.save_json_list(path, keep)
+        self._save_pending_subagent_results(session_id, keep)
         return removed
 
     def _extract_subagent_dialogue_turns(
@@ -3563,6 +3660,10 @@ class SessionManager:
         child_id = str(child_session_id or "").strip()
         if not child_id:
             return
+        try:
+            self._runtime_subagent_store().remove_parent_rows(parent_session_id, child_id)
+        except Exception as exc:
+            logger.debug("Runtime V2 remove subagent parent rows failed: %s", exc)
         for path_getter in (self._get_pending_subagent_results_path, self._get_subagent_tasks_path):
             path = path_getter(parent_session_id)
             if not path.is_file():
