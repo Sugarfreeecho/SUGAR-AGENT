@@ -2,17 +2,20 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Callable, Dict, Optional
 
 
 class SnapshotStore:
     """Rebuildable snapshot cache for faster refresh/debug reads."""
 
-    def __init__(self, root: str | Path):
+    def __init__(self, root: str | Path, path_resolver: Optional[Callable[[str], str | Path]] = None):
         self.root = Path(root)
+        self._path_resolver = path_resolver
 
     def path(self, session_id: str) -> Path:
         safe_id = self._safe_id(session_id)
+        if self._path_resolver is not None:
+            return Path(self._path_resolver(safe_id)) / "snapshots" / "latest.json"
         return self.root / safe_id / "snapshots" / "latest.json"
 
     def read(self, session_id: str) -> Dict[str, Any]:

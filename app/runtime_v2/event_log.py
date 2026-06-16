@@ -5,7 +5,7 @@ import os
 import threading
 from collections import deque
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional
+from typing import Callable, Dict, Iterable, List, Optional
 
 from .event_schema import RuntimeEvent
 
@@ -17,13 +17,16 @@ class SessionEventLog:
     treated as rebuildable projections.
     """
 
-    def __init__(self, root: os.PathLike[str] | str):
+    def __init__(self, root: os.PathLike[str] | str, path_resolver: Optional[Callable[[str], os.PathLike[str] | str]] = None):
         self.root = Path(root)
+        self._path_resolver = path_resolver
         self._locks: Dict[str, threading.Lock] = {}
         self._locks_guard = threading.Lock()
 
     def session_dir(self, session_id: str) -> Path:
         safe_id = self._validate_session_id(session_id)
+        if self._path_resolver is not None:
+            return Path(self._path_resolver(safe_id))
         return self.root / safe_id
 
     def event_path(self, session_id: str) -> Path:

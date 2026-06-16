@@ -1769,6 +1769,11 @@ class SessionManager:
 
         return RuntimeSubagentStore(self.repository.sessions_dir)
 
+    def _runtime_mirror(self):
+        from runtime_v2.mirror import RuntimeMirror
+
+        return RuntimeMirror(self.repository.sessions_dir, path_resolver=self._resolve_session_path)
+
     def _list_subagent_tasks_v1(self, parent_session_id: str) -> List[dict]:
         return self.repository.load_json_list(self._get_subagent_tasks_path(parent_session_id))
 
@@ -2656,27 +2661,31 @@ class SessionManager:
             event_copy = json.loads(json.dumps(event, ensure_ascii=False))
             try:
                 from runtime_v2 import runtime_v2_primary, runtime_v2_strict
-                from runtime_v2.mirror import RuntimeMirror
 
                 if runtime_v2_primary():
-                    mirrored = RuntimeMirror(self.repository.sessions_dir).mirror_ui_event(session_id, event_copy)
+                    mirrored = self._runtime_mirror().mirror_ui_event(session_id, event_copy)
                     if mirrored is None and runtime_v2_strict():
                         raise RuntimeError("Runtime V2 did not accept ui_event")
             except Exception as mirror_error:
                 if "runtime_v2_strict" in locals() and runtime_v2_strict():
                     raise
-                logger.debug("Runtime V2 mirror ui_event failed: %s", mirror_error)
+                logger.warning("Runtime V2 mirror ui_event failed for %s: %s", session_id, mirror_error)
             events = self._load_ui_events(session_id)
             events.append(event_copy)
             self._save_ui_events(session_id, events)
             try:
                 from runtime_v2 import runtime_v1_primary
-                from runtime_v2.mirror import RuntimeMirror
 
                 if runtime_v1_primary():
-                    RuntimeMirror(self.repository.sessions_dir).mirror_ui_event(session_id, event_copy)
+                    mirrored = self._runtime_mirror().mirror_ui_event(session_id, event_copy)
+                    if mirrored is None and str(event_copy.get("type") or "") in {"user", "final"}:
+                        logger.warning(
+                            "Runtime V2 mirror returned no event for %s type=%s",
+                            session_id,
+                            event_copy.get("type"),
+                        )
             except Exception as mirror_error:
-                logger.debug("Runtime V2 mirror ui_event after V1 write failed: %s", mirror_error)
+                logger.warning("Runtime V2 mirror ui_event after V1 write failed for %s: %s", session_id, mirror_error)
             if (
                 event_copy.get("type") == "user"
                 and not event_copy.get("_subagent_forward")
@@ -3370,13 +3379,11 @@ class SessionManager:
                 session_id, self.dialogue_dicts_from_ui_events_file(session_id)
             )
             try:
-                from runtime_v2.mirror import RuntimeMirror
-
-                mirror = RuntimeMirror(self.repository.sessions_dir)
+                mirror = self._runtime_mirror()
                 for event_copy in clean:
                     mirror.mirror_ui_event(session_id, event_copy)
             except Exception as mirror_error:
-                logger.debug("Runtime V2 mirror restored ui_events tail failed: %s", mirror_error)
+                logger.warning("Runtime V2 mirror restored ui_events tail failed for %s: %s", session_id, mirror_error)
             self._observe_runtime_v2_history(
                 "observe_legacy_tail_restored",
                 session_id,

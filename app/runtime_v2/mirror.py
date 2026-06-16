@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, Optional
 
 from .blob_store import BlobStore
 from .event_log import SessionEventLog
@@ -17,11 +17,12 @@ logger = logging.getLogger(__name__)
 class RuntimeMirror:
     """Synchronous compatibility bridge from legacy events to Runtime V2."""
 
-    def __init__(self, sessions_dir: str | Path):
+    def __init__(self, sessions_dir: str | Path, path_resolver: Optional[Callable[[str], str | Path]] = None):
         self.sessions_dir = Path(sessions_dir)
-        self.event_log = SessionEventLog(self.sessions_dir)
+        self._path_resolver = path_resolver
+        self.event_log = SessionEventLog(self.sessions_dir, path_resolver=path_resolver)
         self.projector = RuntimeProjector()
-        self.snapshots = SnapshotStore(self.sessions_dir)
+        self.snapshots = SnapshotStore(self.sessions_dir, path_resolver=path_resolver)
         self.subagents = RuntimeSubagentStore(self.sessions_dir)
 
     def mirror_ui_event(self, session_id: str, event: Dict[str, Any]) -> Optional[RuntimeEvent]:
@@ -54,7 +55,7 @@ class RuntimeMirror:
             self._apply_snapshot_event(session_id, event)
             return event
         except Exception as exc:
-            logger.debug("Runtime V2 mirror append failed for session %s: %s", session_id, exc)
+            logger.warning("Runtime V2 mirror append failed for session %s: %s", session_id, exc)
             return None
 
     def _apply_snapshot_event(self, session_id: str, event: RuntimeEvent) -> None:
