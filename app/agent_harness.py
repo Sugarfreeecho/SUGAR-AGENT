@@ -1468,6 +1468,10 @@ class SessionManager:
         self._lock = threading.Lock()
         self._metadata_session_locks: Dict[str, threading.Lock] = {}
         self._metadata_session_locks_guard = threading.Lock()
+        self._ui_events_cache_lock = threading.Lock()
+        self._ui_events_cache: Dict[str, Tuple[Tuple[bool, int, int], List[dict]]] = {}
+        self._ui_events_cache_order: List[str] = []
+        self._ui_events_cache_max = 128
         self._ui_user_turns_cache: Dict[str, Tuple[Tuple[bool, int, int], List[dict]]] = {}
         self._load_index()
         self.refresh_sessions_index_from_disk()
@@ -2562,7 +2566,36 @@ class SessionManager:
         return self.repository.ui_events_path(session_id)
 
     def _load_ui_events(self, session_id: str) -> List[dict]:
-        return self.event_log.load(session_id)
+        sig = self._ui_events_file_signature(session_id)
+        key = str(self._get_ui_events_path(session_id).resolve())
+        with self._ui_events_cache_lock:
+            cached = self._ui_events_cache.get(key)
+            if cached and cached[0] == sig:
+                return [dict(row) for row in cached[1]]
+        events = self.event_log.load(session_id)
+        with self._ui_events_cache_lock:
+            self._ui_events_cache[key] = (sig, [dict(row) for row in events])
+            if key in self._ui_events_cache_order:
+                self._ui_events_cache_order.remove(key)
+            self._ui_events_cache_order.append(key)
+            while len(self._ui_events_cache_order) > self._ui_events_cache_max:
+                old = self._ui_events_cache_order.pop(0)
+                self._ui_events_cache.pop(old, None)
+        return [dict(row) for row in events]
+
+    def _invalidate_ui_events_cache(self, session_id: str) -> None:
+        try:
+            key = str(self._get_ui_events_path(session_id).resolve())
+        except Exception:
+            key = ""
+        if not key:
+            return
+        with self._ui_events_cache_lock:
+            self._ui_events_cache.pop(key, None)
+            try:
+                self._ui_events_cache_order.remove(key)
+            except ValueError:
+                pass
 
     def _ui_events_file_signature(self, session_id: str) -> Tuple[bool, int, int]:
         path = self._get_ui_events_path(session_id)
@@ -2581,6 +2614,7 @@ class SessionManager:
         except Exception:
             pass
         self.event_log.save(session_id, events)
+        self._invalidate_ui_events_cache(session_id)
         self._ui_user_turns_cache.pop(session_id, None)
         self._sync_ui_event_count_in_metadata(session_id, len(events))
 
