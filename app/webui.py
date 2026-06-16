@@ -97,6 +97,25 @@ def _runtime_v2_active_run_info(sid: str) -> dict:
         return {}
 
 
+def _runtime_v2_snapshot(sid: str) -> dict:
+    sid = str(sid or "").strip()
+    if not sid:
+        return {}
+    try:
+        from runtime_v2.snapshot_store import SnapshotStore
+
+        return SnapshotStore(session_manager.repository.sessions_dir).read(sid)
+    except Exception as exc:
+        logger.debug("Runtime V2 snapshot read failed for %s: %s", sid, exc)
+        return {}
+
+
+def _runtime_v2_context_snapshot(sid: str) -> dict:
+    snapshot = _runtime_v2_snapshot(sid)
+    context = snapshot.get("context") if isinstance(snapshot, dict) else None
+    return context if isinstance(context, dict) else {}
+
+
 def _session_run_state_fields(sid: str) -> dict:
     sid = str(sid or "").strip()
     if not sid:
@@ -937,6 +956,15 @@ async def get_session_user_turns(session_id: str):
 @fastapi_app.get("/sessions/{session_id}/todo_plan")
 async def get_session_todo_plan(session_id: str):
     """当前会话 Todo 计划快照（todo_plan.md），供左侧「当前计划」面板。"""
+    try:
+        from runtime_v2 import runtime_v2_primary
+
+        if runtime_v2_primary():
+            todo = _runtime_v2_context_snapshot(session_id).get("todo")
+            if isinstance(todo, dict):
+                return JSONResponse(content=todo)
+    except Exception as exc:
+        logger.debug("Runtime V2 todo snapshot read failed for %s: %s", session_id, exc)
     return JSONResponse(content=session_manager.get_todo_plan_snapshot(session_id))
 
 
@@ -953,6 +981,18 @@ async def get_session_context_tokens(session_id: str):
     按当前落盘 llm_history / key_context 现算整包输入 token 估算（与主循环一致）。
     在线程池执行，避免阻塞事件循环；CPU 重计算不挡其它轻量 API。
     """
+    try:
+        from runtime_v2 import runtime_v2_primary
+
+        if runtime_v2_primary():
+            tokens = _runtime_v2_context_snapshot(session_id).get("tokens")
+            if isinstance(tokens, dict) and tokens.get("estimated") is not None:
+                out = dict(tokens)
+                out["ok"] = True
+                out["source"] = "runtime_v2_snapshot"
+                return JSONResponse(content=out)
+    except Exception as exc:
+        logger.debug("Runtime V2 context token snapshot read failed for %s: %s", session_id, exc)
     out = await run_in_threadpool(compute_context_tokens_for_session, session_id)
     if not out.get("ok"):
         return JSONResponse(content=out, status_code=400)

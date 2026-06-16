@@ -90,9 +90,20 @@ class RuntimeProjector:
         elif event_type.startswith("subagent_"):
             self._apply_subagent(snapshot, event)
         elif event_type == "context_tokens":
-            snapshot["context"]["tokens"] = dict(event.payload or {})
+            payload = dict(event.payload or {})
+            payload["updated_at"] = event.timestamp
+            payload["seq"] = event.seq
+            snapshot["context"]["tokens"] = payload
         elif event_type == "todo_updated":
-            snapshot["todo"] = event.payload.get("todo") if isinstance(event.payload, dict) else event.payload
+            payload = dict(event.payload or {}) if isinstance(event.payload, dict) else {}
+            if "todo" in payload and isinstance(payload.get("todo"), dict):
+                todo = dict(payload.get("todo") or {})
+            else:
+                todo = payload
+            todo["updated_at"] = event.timestamp
+            todo["seq"] = event.seq
+            snapshot["todo"] = todo
+            snapshot["context"]["todo"] = todo
         elif event_type in {
             "message_deleted",
             "message_rewritten",

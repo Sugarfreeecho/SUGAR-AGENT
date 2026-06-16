@@ -20,6 +20,26 @@ class RuntimeProjectorTests(unittest.TestCase):
         self.assertEqual(snapshot["runs"]["r1"]["error"], "boom")
         self.assertEqual(snapshot["active_runs"], [])
 
+    def test_projects_context_tokens_and_todo_snapshot(self):
+        projector = RuntimeProjector()
+        events = [
+            RuntimeEvent(seq=1, type="context_tokens", session_id="s1", payload={"estimated": 123, "threshold": 1000}),
+            RuntimeEvent(seq=2, type="todo_updated", session_id="s1", payload={
+                "has_plan": True,
+                "items": [{"id": "t1", "text": "Do it", "status": "pending"}],
+                "done": 0,
+                "total": 1,
+            }),
+        ]
+
+        snapshot = projector.project(events)
+
+        self.assertEqual(snapshot["context"]["tokens"]["estimated"], 123)
+        self.assertEqual(snapshot["context"]["tokens"]["seq"], 1)
+        self.assertEqual(snapshot["todo"]["total"], 1)
+        self.assertEqual(snapshot["todo"]["seq"], 2)
+        self.assertEqual(snapshot["context"]["todo"]["items"][0]["id"], "t1")
+
     def test_gateway_rebuilds_and_reads_snapshot(self):
         async def scenario():
             with tempfile.TemporaryDirectory() as tmp:
