@@ -322,3 +322,103 @@ Runtime V2 完整接入后，应满足：
 - 子 Agent 是否完成、是否有 final、结果是否读取过都有明确事件。
 - 事件日志能重放出当前会话状态。
 - metadata/index/snapshot 损坏时可重建。
+
+## 当前切换与兼容状态
+
+### Runtime 版本选择
+
+当前运行时通过环境变量选择主读写路径：
+
+```text
+RUNTIME_VERSION=2
+  read  = Runtime V2
+  write = Runtime V2 first, Runtime V1 mirror
+
+RUNTIME_VERSION=1
+  read  = Runtime V1
+  write = Runtime V1 first, Runtime V2 mirror
+```
+
+兼容旧变量：
+
+```text
+RUNTIME_V2_ENABLED=1  # 未设置 RUNTIME_VERSION 时等价于 RUNTIME_VERSION=2
+RUNTIME_V2_ENABLED=0  # 未设置 RUNTIME_VERSION 时等价于 RUNTIME_VERSION=1
+```
+
+明确设置 `RUNTIME_VERSION` 时，它优先于 `RUNTIME_V2_ENABLED`。
+
+### 当前已经接管的 V2 能力
+
+- UI 历史读取：`/sessions/{id}/messages` 在 V2 模式下读取 Runtime V2 投影，必要时从旧 `ui_events.json` 回填。
+- 模型历史读取：V2 模式下模型输入读取 `model_messages` 投影；V1 模式仍读旧 `llm_history.json`，同时镜像 V2。
+- 运行状态：V2 模式下会话黄点、发送按钮运行态读取 `snapshots/latest.json.active_runs`。
+- Subagent 状态：V2 模式下 task index、pending result、task output 从 `subagents/` 目录读取；V1 文件仍同步镜像。
+- Context/Todo/Token：V2 snapshot 记录 `context.tokens`、`context.todo`、`context.summary`，API 优先读 snapshot，失败再回退旧路径。
+- UI 投影性能：`RuntimeUiProjection` 按 `events.jsonl` 的 `mtime_ns + size` 缓存投影，减少重复切会话时的全量 JSONL 解析。
+- 前端状态：Context token 请求已按 session 去重并短时复用；Todo 面板已短时复用 store，减少 SSE 后重复 fetch。
+
+### 当前仍保留的兼容文件
+
+这些文件仍会写入，用于 V1/V2 对比和回退：
+
+- `ui_events.json`
+- `llm_history.json`
+- `work_messages.json`
+- `metadata.json`
+- `key_context.md`
+- `todo_plan.md`
+- `subagent_tasks.json`
+- `pending_subagent_results.json`
+- `subagent_outputs/*.md`
+
+这些文件是 Runtime V2 的事实源和投影：
+
+- `events.jsonl`
+- `snapshots/latest.json`
+- `blobs/{sha256}.txt`
+- `subagents/{agent_id}/events.jsonl`
+- `subagents/{agent_id}/snapshots/latest.json`
+- `subagents/{agent_id}/metadata.json`
+- `subagents/{agent_id}/output.md`
+- `subagents/tasks.json`
+- `subagents/pending_results.json`
+
+### 审计与修复命令
+
+对比旧 UI/model 文件与 Runtime V2 投影：
+
+```text
+python scripts/audit_runtime_versions.py --only-mismatches
+```
+
+修复 UI/model 投影不一致：
+
+```text
+python scripts/audit_runtime_versions.py --repair-ui --repair-model --only-mismatches
+```
+
+检查并清理 V2 僵尸 active run：
+
+```text
+python scripts/audit_runtime_versions.py --only-mismatches
+python scripts/audit_runtime_versions.py --repair-runs --only-mismatches
+```
+
+注意：`--repair-runs` 会给 V2 active run 追加 `run_interrupted` 事件。只应在确认没有真实任务仍在执行时使用。
+
+对比读取性能：
+
+```text
+python scripts/benchmark_runtime_versions.py --session-id <session_id>
+```
+
+### 后续可删除或降级的兼容项
+
+等 V2 连续稳定并完成历史迁移后，可以分批删除：
+
+1. V1 UI/model 主读路径：`ui_events.json`、`llm_history.json` 只保留导入工具，不再作为在线读路径。
+2. V1 subagent 状态文件：`subagent_tasks.json`、`pending_subagent_results.json`、`subagent_outputs/`。
+3. API fallback：`/todo_plan`、`/context_tokens` 中对旧文件和即时重算的兜底。
+4. Legacy mirror：当 `RUNTIME_VERSION=2` 稳定后，可把 V1 mirror 从在线路径降级成离线导出。
+5. 前端重复拉取兜底：SSE/store 覆盖完全后，Todo/token 面板只需后台校正，不需要每次完成都主动 fetch。
