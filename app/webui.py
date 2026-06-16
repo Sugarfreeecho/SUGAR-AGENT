@@ -849,6 +849,22 @@ async def get_session_messages(
     turns：按「用户提问」轮次分页（每页若干完整对话）；优先于 limit。
     """
     try:
+        from runtime_v2 import runtime_v1_primary
+
+        if runtime_v1_primary():
+            if limit is None and turns is None:
+                return JSONResponse(content=session_manager.get_ui_events_for_display(session_id))
+            lim = int(limit) if limit is not None else 200
+            tv = int(turns) if turns is not None else None
+            return JSONResponse(content=session_manager.get_ui_events_page(
+                session_id,
+                limit=lim,
+                before_index=before_index,
+                turns=tv,
+            ))
+    except Exception as exc:
+        logger.warning("Runtime version check failed for messages %s: %s", session_id, exc)
+    try:
         from runtime_v2.ui_projection import RuntimeUiProjection
 
         projection = RuntimeUiProjection(session_manager.repository.sessions_dir)
@@ -879,6 +895,13 @@ async def get_session_messages(
 @fastapi_app.get("/sessions/{session_id}/messages/count")
 async def get_session_message_count(session_id: str):
     """仅返回 ui_events 条数，供发送前对齐 eventIndex，避免下载整份 JSON。"""
+    try:
+        from runtime_v2 import runtime_v1_primary
+
+        if runtime_v1_primary():
+            return JSONResponse(content={"count": session_manager.get_ui_event_count(session_id), "source": "runtime_v1"})
+    except Exception as exc:
+        logger.warning("Runtime version check failed for message count %s: %s", session_id, exc)
     try:
         from runtime_v2.ui_projection import RuntimeUiProjection
 

@@ -311,6 +311,15 @@ def _load_runtime_v2_model_history_dicts(session_id: str) -> List[Dict[str, Any]
 
 
 def _load_model_history_dicts_v2_primary(session_id: str, *, reconcile_legacy: bool) -> List[Dict[str, Any]]:
+    try:
+        from runtime_v2 import runtime_v1_primary
+
+        if runtime_v1_primary():
+            if reconcile_legacy:
+                session_manager.reconcile_llm_work_to_ui_user_count(session_id, include_work=False)
+            return session_manager._load_llm_history(session_id)
+    except Exception as exc:
+        logger.debug("Runtime version check failed for model history: %s", exc)
     runtime_v2_messages = _load_runtime_v2_model_history_dicts(session_id)
     if runtime_v2_messages:
         return runtime_v2_messages
@@ -379,6 +388,42 @@ def _runtime_v2_replace_model_history(state: State, messages: List[Any], reason:
         )
     except Exception as exc:
         logger.debug("Runtime V2 model replace failed: %s", exc)
+
+
+def _runtime_v2_is_primary() -> bool:
+    try:
+        from runtime_v2 import runtime_v2_primary
+
+        return runtime_v2_primary()
+    except Exception:
+        return True
+
+
+def _persist_state_with_model_append(state: State, msg: Any) -> None:
+    if _runtime_v2_is_primary():
+        _runtime_v2_append_model_message(state, msg)
+        _persist_state(state)
+    else:
+        _persist_state(state)
+        _runtime_v2_append_model_message(state, msg)
+
+
+def _persist_state_with_model_replace(state: State, messages: List[Any], reason: str) -> None:
+    if _runtime_v2_is_primary():
+        _runtime_v2_replace_model_history(state, messages, reason)
+        _persist_state(state)
+    else:
+        _persist_state(state)
+        _runtime_v2_replace_model_history(state, messages, reason)
+
+
+def _persist_session_messages_with_model_replace(state: State, messages: List[Any], reason: str) -> None:
+    if _runtime_v2_is_primary():
+        _runtime_v2_replace_model_history(state, messages, reason)
+        _persist_session_messages(state)
+    else:
+        _persist_session_messages(state)
+        _runtime_v2_replace_model_history(state, messages, reason)
 
 
 def _materialize_lazy_work_messages(state: State) -> None:
@@ -947,8 +992,7 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
         start_msg = SystemMessage(content="New Agent Loop Start")
         llm_history.append(start_msg)
         state["llm_history"] = llm_history
-        _persist_state(state)
-        _runtime_v2_append_model_message(state, start_msg)
+        _persist_state_with_model_append(state, start_msg)
 
 
     # ========== 2. 循环变量初始化 ==========
@@ -998,8 +1042,7 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
             work_messages.append(note)
             state["llm_history"] = llm_history
             state["work_messages"] = work_messages
-            _persist_state(state)
-            _runtime_v2_append_model_message(state, note)
+            _persist_state_with_model_append(state, note)
 
     try:
         while iter_count < max_react_iter:
@@ -1128,8 +1171,7 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
                     _st_base = "【自动·长度策略】已完成上下文裁剪以控制长度"
                 work_messages.append(SystemMessage(content=_wm_compact_note))
                 state["work_messages"] = work_messages
-                _persist_state(state)
-                _runtime_v2_replace_model_history(state, nl, "auto_context_policy")
+                _persist_state_with_model_replace(state, nl, "auto_context_policy")
                 state["_compress_skip_next"] = True
                 _st = auto_length_strategy_status_line(
                     _st_base,
@@ -1168,8 +1210,7 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
                     ) < old_tok:
                         llm_history = new_llm_history
                         state["llm_history"] = llm_history
-                        _persist_state(state)
-                        _runtime_v2_replace_model_history(state, new_llm_history, "emergency_truncate")
+                        _persist_state_with_model_replace(state, new_llm_history, "emergency_truncate")
                         logger.info(
                             "已按 CONTEXT_COMPRESS_FAILURE_MAX_TOKENS（与压缩失败兜底同款）裁剪对话尾部并继续本步"
                         )
@@ -1502,8 +1543,7 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
             work_messages.append(interim_msg)
             state["llm_history"] = llm_history
             state["work_messages"] = work_messages
-            _persist_state(state)
-            _runtime_v2_append_model_message(state, interim_msg)
+            _persist_state_with_model_append(state, interim_msg)
 
             # 记录 LLM 调用详情（可选；与实际上送内容一致，已剥历史 reasoning）
             request_msgs = [_serialize_message(msg) for msg in llm_messages_to_send]
@@ -2340,8 +2380,7 @@ def finish(state: State) -> State:
     state["work_messages"] = wm2
     if need_wm:
         state["work_messages"].append(AssistantMessage(**_final_ai_kw))
-    _persist_session_messages(state)
-    _runtime_v2_replace_model_history(state, state["llm_history"], "finish")
+    _persist_session_messages_with_model_replace(state, state["llm_history"], "finish")
     state["final_printed"] = True
     return state
 

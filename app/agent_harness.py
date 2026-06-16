@@ -2514,10 +2514,10 @@ class SessionManager:
         try:
             event_copy = json.loads(json.dumps(event, ensure_ascii=False))
             try:
-                from runtime_v2 import runtime_v2_enabled, runtime_v2_strict
+                from runtime_v2 import runtime_v2_primary, runtime_v2_strict
                 from runtime_v2.mirror import RuntimeMirror
 
-                if runtime_v2_enabled():
+                if runtime_v2_primary():
                     mirrored = RuntimeMirror(self.repository.sessions_dir).mirror_ui_event(session_id, event_copy)
                     if mirrored is None and runtime_v2_strict():
                         raise RuntimeError("Runtime V2 did not accept ui_event")
@@ -2528,6 +2528,14 @@ class SessionManager:
             events = self._load_ui_events(session_id)
             events.append(event_copy)
             self._save_ui_events(session_id, events)
+            try:
+                from runtime_v2 import runtime_v1_primary
+                from runtime_v2.mirror import RuntimeMirror
+
+                if runtime_v1_primary():
+                    RuntimeMirror(self.repository.sessions_dir).mirror_ui_event(session_id, event_copy)
+            except Exception as mirror_error:
+                logger.debug("Runtime V2 mirror ui_event after V1 write failed: %s", mirror_error)
             if (
                 event_copy.get("type") == "user"
                 and not event_copy.get("_subagent_forward")
