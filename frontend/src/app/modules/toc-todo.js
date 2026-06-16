@@ -377,6 +377,8 @@ function renderTodoPlanForCurrentSession() {
     renderTodoPlanSnapshot(selectTodoPlan(currentSessionId));
 }
 
+const TODO_PLAN_CACHE_TTL_MS = 2000;
+
 async function refreshTodoPlanPanel() {
     const sid = currentSessionId;
     const epoch = ++todoRefreshEpoch;
@@ -388,6 +390,11 @@ async function refreshTodoPlanPanel() {
         if (statsEl) statsEl.textContent = '';
         if (listEl) listEl.textContent = '';
         notifyPanelContentChanged();
+        return;
+    }
+    const cached = selectTodoPlan(sid);
+    if (cached && cached.updatedAt && (Date.now() - cached.updatedAt) < TODO_PLAN_CACHE_TTL_MS) {
+        renderTodoPlanSnapshot(cached);
         return;
     }
     try {

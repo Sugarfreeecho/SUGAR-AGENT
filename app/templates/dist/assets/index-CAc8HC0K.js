@@ -912,7 +912,7 @@ function appendArchiveLoadButton(body) {
 function renderSessionTitleFromStore() {
     updateSessionTitle();
 }
-`,_=`const messageStore = {
+`,L=`const messageStore = {
     sessions: new Map(),
 
     ensureSession(sessionId) {
@@ -1035,7 +1035,7 @@ function selectMessageEventsInRange(sessionId, startIndex, endIndex) {
 function selectMessageEventCount(sessionId) {
     return messageStore.eventCount(sessionId);
 }
-`,L=`function renderMessageRecord(ctx, record, sessionId) {
+`,_=`function renderMessageRecord(ctx, record, sessionId) {
     if (!ctx || !record || !record.event) return null;
     const sid = sessionId || record.sessionId || currentSessionId;
     renderEvent(ctx, record.event, record.index, sid);
@@ -2959,9 +2959,18 @@ function setContextTokenLabel(estimated, threshold) {
 }
 
 let contextTokenRequestSeq = 0;
+const contextTokenInFlightBySession = Object.create(null);
+const CONTEXT_TOKEN_CACHE_TTL_MS = 3000;
 
 async function refreshContextTokensFromServer(sid, seq) {
     if (!sid) return;
+    const cached = selectContextTokens(sid);
+    if (cached && cached.updatedAt && (Date.now() - cached.updatedAt) < CONTEXT_TOKEN_CACHE_TTL_MS) {
+        if (sid === currentSessionId) setContextTokenLabel(cached.estimated, cached.threshold);
+        return;
+    }
+    if (contextTokenInFlightBySession[sid]) return;
+    contextTokenInFlightBySession[sid] = true;
     try {
         const r = await fetch('/sessions/' + encodeURIComponent(sid) + '/context_tokens');
         const j = await r.json();
@@ -2972,6 +2981,9 @@ async function refreshContextTokensFromServer(sid, seq) {
             return;
         }
     } catch (e) { /* ignore */ }
+    finally {
+        delete contextTokenInFlightBySession[sid];
+    }
     applyContextTokenLabelForCurrentSession();
 }
 
@@ -4558,6 +4570,8 @@ function renderTodoPlanForCurrentSession() {
     renderTodoPlanSnapshot(selectTodoPlan(currentSessionId));
 }
 
+const TODO_PLAN_CACHE_TTL_MS = 2000;
+
 async function refreshTodoPlanPanel() {
     const sid = currentSessionId;
     const epoch = ++todoRefreshEpoch;
@@ -4569,6 +4583,11 @@ async function refreshTodoPlanPanel() {
         if (statsEl) statsEl.textContent = '';
         if (listEl) listEl.textContent = '';
         notifyPanelContentChanged();
+        return;
+    }
+    const cached = selectTodoPlan(sid);
+    if (cached && cached.updatedAt && (Date.now() - cached.updatedAt) < TODO_PLAN_CACHE_TTL_MS) {
+        renderTodoPlanSnapshot(cached);
         return;
     }
     try {
@@ -5098,6 +5117,36 @@ function procNow() {
     return (typeof performance !== 'undefined' && typeof performance.now === 'function') ? performance.now() : Date.now();
 }
 
+var processAggregateStatsTimer = null;
+
+function processAggregateNeedsLiveStats(agg) {
+    if (!agg || !agg.isConnected || !agg.dataset) return false;
+    if (!agg.dataset.procStartedAt || agg.dataset.procEndedAt) return false;
+    return !(agg.dataset.procDurationMs != null && agg.dataset.procDurationMs !== '');
+}
+
+function refreshLiveProcessAggregateStats() {
+    if (typeof document === 'undefined') return false;
+    var live = Array.from(document.querySelectorAll('.process-aggregate[data-proc-started-at]'))
+        .filter(processAggregateNeedsLiveStats);
+    live.forEach(refreshAggregateStatsSmart);
+    return live.length > 0;
+}
+
+function stopLiveProcessAggregateStats() {
+    if (!processAggregateStatsTimer) return;
+    clearInterval(processAggregateStatsTimer);
+    processAggregateStatsTimer = null;
+}
+
+function scheduleLiveProcessAggregateStats() {
+    if (processAggregateStatsTimer) return;
+    if (!refreshLiveProcessAggregateStats()) return;
+    processAggregateStatsTimer = setInterval(function () {
+        if (!refreshLiveProcessAggregateStats()) stopLiveProcessAggregateStats();
+    }, 250);
+}
+
 function formatProcDurationMs(ms) {
     if (ms == null || !Number.isFinite(ms) || ms < 0) return null;
     if (ms < 800) return Math.max(0, Math.round(ms)) + 'ms';
@@ -5124,6 +5173,7 @@ function applyRunStartedAtToProcessGroup(agg, startedAt) {
     agg.dataset.procStartedAt = String(t0);
     delete agg.dataset.procEndedAt;
     if (!agg.dataset.procDurationMs) refreshProcessAggregateStats(agg);
+    scheduleLiveProcessAggregateStats();
 }
 
 function bumpAggregateMaxReactIter(agg, reactIter) {
@@ -5255,6 +5305,8 @@ function applyProcessMetricsFromEvent(ctx, event) {
         agg.dataset.procToolFails = String(Math.max(0, Math.floor(Number(event.tool_failures))));
     }
     refreshAggregateStatsSmart(agg);
+    if (processAggregateNeedsLiveStats(agg)) scheduleLiveProcessAggregateStats();
+    else if (!refreshLiveProcessAggregateStats()) stopLiveProcessAggregateStats();
 }
 
 function refreshAggregateStatsSmart(agg) {
@@ -5411,13 +5463,16 @@ function ensureProcessGroup(ctx) {
         + '<div class="process-aggregate-body"></div>';
     if (!replayingMessages) {
         if (ctx.runStartedAt) applyRunStartedAtToProcessGroup(wrap, ctx.runStartedAt);
-        else wrap.dataset.procStartedAt = String(procNow());
+        else {
+            wrap.dataset.procStartedAt = String(procNow());
+        }
     }
     delete wrap.dataset.maxReactIter;
     (ctx.stream || chatContainer).appendChild(wrap);
     bindProcessAggregate(wrap);
     ctx.currentProcessGroup = wrap;
     refreshProcessAggregateStats(wrap);
+    if (processAggregateNeedsLiveStats(wrap)) scheduleLiveProcessAggregateStats();
     return wrap;
 }
 
@@ -5429,6 +5484,7 @@ function sealProcessGroup(ctx) {
         updateProcessBrief(agg);
         if (agg.dataset.procStartedAt) agg.dataset.procEndedAt = String(procNow());
         refreshProcessAggregateStats(agg);
+        if (!refreshLiveProcessAggregateStats()) stopLiveProcessAggregateStats();
     }
     ctx.currentProcessGroup = null;
     ctx.progressScrollers = {};
@@ -9657,7 +9713,7 @@ if (typeof globalThis !== 'undefined') {
     globalThis.toggleTodoPlanPanel = toggleTodoPlanPanel;
     globalThis.toggleTocPanel = toggleTocPanel;
 }
-`,X=[I,x,C,w,T,E,_,L,k,P,A,R,B,F,M,N,O,H,D,U,q,j,W,G,z,K,V];Function(`"use strict";
+`,X=[I,x,C,w,T,E,L,_,k,P,A,R,B,F,M,N,O,H,D,U,q,j,W,G,z,K,V];Function(`"use strict";
 `+X.join(`
 
 `)+`

@@ -1110,7 +1110,7 @@ body {
 .process-aggregate.is-collapsed .process-chev { transform: rotate(-90deg); }
 .process-aggregate-body {
     padding: 0.45rem 0.45rem 0.55rem;
-    max-height: min(90vh, 52rem); min-height: 2.2rem;
+    max-height: min(72vh, 41.6rem); min-height: 2.2rem;
     overflow-y: auto; overflow-x: hidden;
     border-top: 1px solid var(--border-glass);
     overscroll-behavior: auto;

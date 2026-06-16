@@ -44,9 +44,18 @@ function setContextTokenLabel(estimated, threshold) {
 }
 
 let contextTokenRequestSeq = 0;
+const contextTokenInFlightBySession = Object.create(null);
+const CONTEXT_TOKEN_CACHE_TTL_MS = 3000;
 
 async function refreshContextTokensFromServer(sid, seq) {
     if (!sid) return;
+    const cached = selectContextTokens(sid);
+    if (cached && cached.updatedAt && (Date.now() - cached.updatedAt) < CONTEXT_TOKEN_CACHE_TTL_MS) {
+        if (sid === currentSessionId) setContextTokenLabel(cached.estimated, cached.threshold);
+        return;
+    }
+    if (contextTokenInFlightBySession[sid]) return;
+    contextTokenInFlightBySession[sid] = true;
     try {
         const r = await fetch('/sessions/' + encodeURIComponent(sid) + '/context_tokens');
         const j = await r.json();
@@ -57,6 +66,9 @@ async function refreshContextTokensFromServer(sid, seq) {
             return;
         }
     } catch (e) { /* ignore */ }
+    finally {
+        delete contextTokenInFlightBySession[sid];
+    }
     applyContextTokenLabelForCurrentSession();
 }
 
