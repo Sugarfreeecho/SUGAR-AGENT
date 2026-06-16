@@ -42,6 +42,22 @@ class RuntimeAuditToolTests(unittest.TestCase):
 
             self.assertEqual(load_json_list(path), [{"type": "user"}])
 
+    def test_audit_reports_and_repairs_runtime_v2_active_runs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            sid = "s1"
+            (root / sid).mkdir()
+            RuntimeMirror(root).mirror_run_started(sid, "r1")
+
+            before = audit_session(root, sid)
+
+            self.assertEqual(before.runtime_v2_active_run_count, 1)
+
+            after = audit_session(root, sid, repair_runs=True)
+
+            self.assertEqual(after.repaired_runs, 1)
+            self.assertEqual(after.runtime_v2_active_run_count, 0)
+
 
 if __name__ == "__main__":
     unittest.main()

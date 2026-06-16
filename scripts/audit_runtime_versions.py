@@ -15,7 +15,8 @@ if str(ROOT) not in sys.path:
 
 os.environ.setdefault("RUNTIME_VERSION", "2")
 
-from app.runtime_v2 import RuntimeHistoryOps, RuntimeModelProjection, RuntimeUiProjection  # noqa: E402
+from app.runtime_v2 import RuntimeHistoryOps, RuntimeMirror, RuntimeModelProjection, RuntimeUiProjection  # noqa: E402
+from app.runtime_v2.snapshot_store import SnapshotStore  # noqa: E402
 
 
 @dataclass
@@ -27,8 +28,11 @@ class SessionAudit:
     runtime_v2_model_count: int
     ui_ok: bool
     model_ok: bool
+    runtime_v2_active_run_count: int = 0
+    runtime_v2_active_runs: List[dict] | None = None
     repaired_ui: int = 0
     repaired_model: int = 0
+    repaired_runs: int = 0
     error: str = ""
 
     def to_dict(self) -> Dict[str, Any]:
@@ -40,8 +44,11 @@ class SessionAudit:
             "runtime_v2_model_count": self.runtime_v2_model_count,
             "ui_ok": self.ui_ok,
             "model_ok": self.model_ok,
+            "runtime_v2_active_run_count": self.runtime_v2_active_run_count,
+            "runtime_v2_active_runs": self.runtime_v2_active_runs or [],
             "repaired_ui": self.repaired_ui,
             "repaired_model": self.repaired_model,
+            "repaired_runs": self.repaired_runs,
             "error": self.error,
         }
 
@@ -89,6 +96,7 @@ def audit_session(
     *,
     repair_ui: bool = False,
     repair_model: bool = False,
+    repair_runs: bool = False,
 ) -> SessionAudit:
     session_dir = sessions_dir / session_id
     legacy_ui = load_json_list(session_dir / "ui_events.json")
@@ -104,6 +112,7 @@ def audit_session(
 
         repaired_ui = 0
         repaired_model = 0
+        repaired_runs = 0
         if repair_ui and legacy_ui and not ui_ok:
             repaired_ui = ui_projection.replace_from_legacy(session_id, legacy_ui, reason="runtime_audit_repair")
             v2_ui = ui_projection.read_ui_events_fast(session_id)
@@ -117,6 +126,24 @@ def audit_session(
             repaired_model = len(legacy_model)
             v2_model = model_projection.read_message_dicts(session_id)
             model_ok = len(legacy_model) == len(v2_model) and signatures_match(legacy_model, v2_model, kind="model")
+        snapshot = SnapshotStore(sessions_dir).read(session_id)
+        active_runs = snapshot.get("active_runs") if isinstance(snapshot, dict) else []
+        if not isinstance(active_runs, list):
+            active_runs = []
+        if repair_runs and active_runs:
+            mirror = RuntimeMirror(sessions_dir)
+            for run in active_runs:
+                run_id = str((run or {}).get("run_id") or "").strip() if isinstance(run, dict) else ""
+                mirror.mirror_run_interrupted(
+                    session_id,
+                    run_id or None,
+                    {"reason": "runtime_audit_repair", "previous_status": (run or {}).get("status") if isinstance(run, dict) else ""},
+                )
+                repaired_runs += 1
+            snapshot = SnapshotStore(sessions_dir).read(session_id)
+            active_runs = snapshot.get("active_runs") if isinstance(snapshot, dict) else []
+            if not isinstance(active_runs, list):
+                active_runs = []
 
         return SessionAudit(
             session_id=session_id,
@@ -126,8 +153,11 @@ def audit_session(
             runtime_v2_model_count=len(v2_model),
             ui_ok=ui_ok,
             model_ok=model_ok,
+            runtime_v2_active_run_count=len(active_runs),
+            runtime_v2_active_runs=[dict(run) for run in active_runs if isinstance(run, dict)],
             repaired_ui=repaired_ui,
             repaired_model=repaired_model,
+            repaired_runs=repaired_runs,
         )
     except Exception as exc:
         return SessionAudit(
@@ -138,6 +168,8 @@ def audit_session(
             runtime_v2_model_count=0,
             ui_ok=False,
             model_ok=False,
+            runtime_v2_active_run_count=0,
+            runtime_v2_active_runs=[],
             error=f"{type(exc).__name__}: {exc}",
         )
 
@@ -155,9 +187,12 @@ def summarize(rows: List[SessionAudit]) -> Dict[str, Any]:
         "checked": len(rows),
         "ui_mismatch": sum(1 for row in rows if not row.ui_ok),
         "model_mismatch": sum(1 for row in rows if not row.model_ok),
+        "runtime_v2_active_run_sessions": sum(1 for row in rows if row.runtime_v2_active_run_count > 0),
+        "runtime_v2_active_runs": sum(row.runtime_v2_active_run_count for row in rows),
         "errors": sum(1 for row in rows if row.error),
         "repaired_ui": sum(row.repaired_ui for row in rows),
         "repaired_model": sum(row.repaired_model for row in rows),
+        "repaired_runs": sum(row.repaired_runs for row in rows),
     }
 
 
@@ -167,6 +202,7 @@ def main() -> int:
     parser.add_argument("--session-id", default="")
     parser.add_argument("--repair-ui", action="store_true")
     parser.add_argument("--repair-model", action="store_true")
+    parser.add_argument("--repair-runs", action="store_true", help="Append interrupted run events for Runtime V2 active runs.")
     parser.add_argument("--only-mismatches", action="store_true")
     parser.add_argument("--output", default="")
     args = parser.parse_args()
@@ -178,12 +214,16 @@ def main() -> int:
             session_id,
             repair_ui=bool(args.repair_ui),
             repair_model=bool(args.repair_model),
+            repair_runs=bool(args.repair_runs),
         )
         for session_id in iter_session_ids(sessions_dir, args.session_id.strip() or None)
     ]
     output_rows = rows
     if args.only_mismatches:
-        output_rows = [row for row in rows if row.error or not row.ui_ok or not row.model_ok]
+        output_rows = [
+            row for row in rows
+            if row.error or not row.ui_ok or not row.model_ok or row.runtime_v2_active_run_count > 0
+        ]
     payload = {
         "sessions_dir": str(sessions_dir),
         "summary": summarize(rows),
