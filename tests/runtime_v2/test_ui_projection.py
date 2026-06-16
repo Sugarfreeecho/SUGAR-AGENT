@@ -128,6 +128,19 @@ class RuntimeUiProjectionTests(unittest.TestCase):
             self.assertEqual(count, 0)
             self.assertEqual([ev["content"] for ev in events], ["runtime"])
 
+    def test_ui_projection_cache_invalidates_when_log_changes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            mirror = RuntimeMirror(tmp)
+            projection = RuntimeUiProjection(tmp)
+            mirror.mirror_ui_event("s1", {"type": "user", "content": "first"})
+
+            first = projection.read_ui_events_fast("s1")
+            mirror.mirror_ui_event("s1", {"type": "final", "content": "second"})
+            second = projection.read_ui_events_fast("s1")
+
+            self.assertEqual([ev["content"] for ev in first], ["first"])
+            self.assertEqual([ev["content"] for ev in second], ["first", "second"])
+
 
 if __name__ == "__main__":
     unittest.main()

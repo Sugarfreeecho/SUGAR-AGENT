@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional
 
@@ -15,6 +16,11 @@ class RuntimeUiProjection:
     This lets the existing frontend switch read paths before the visual
     renderer is rewritten to consume native Runtime V2 events.
     """
+
+    _cache_lock = threading.Lock()
+    _events_cache: Dict[str, tuple[tuple[bool, int, int], List[dict]]] = {}
+    _events_cache_order: List[str] = []
+    _events_cache_max = 64
 
     def __init__(self, sessions_dir: str | Path):
         self.sessions_dir = Path(sessions_dir)
@@ -50,23 +56,24 @@ class RuntimeUiProjection:
                 continue
             if mirror.mirror_ui_event(session_id, event) is not None:
                 count += 1
+        self.invalidate_cache(session_id)
         return count
 
     def read_ui_events(self, session_id: str, legacy_loader: Optional[Callable[[], Iterable[dict]]] = None) -> List[dict]:
-        projected = self.events_to_ui(self.event_log.read_all(session_id))
+        projected = self._projected_ui_events_cached(session_id)
         if legacy_loader is not None:
             if not projected:
                 self.ensure_backfilled_from_legacy(session_id, legacy_loader())
-                projected = self.events_to_ui(self.event_log.read_all(session_id))
+                projected = self._projected_ui_events_cached(session_id)
             else:
                 legacy = [event for event in list(legacy_loader() or []) if isinstance(event, dict)]
                 if len(legacy) > len(projected):
                     self.replace_from_legacy(session_id, legacy)
-                    projected = self.events_to_ui(self.event_log.read_all(session_id))
+                    projected = self._projected_ui_events_cached(session_id)
         return projected
 
     def read_ui_events_fast(self, session_id: str) -> List[dict]:
-        return self.events_to_ui(self.event_log.read_all(session_id))
+        return self._projected_ui_events_cached(session_id)
 
     def needs_legacy_backfill(self, session_id: str) -> bool:
         return runtime_v2_enabled() and not self._has_ui_projectable_events(session_id)
@@ -79,6 +86,44 @@ class RuntimeUiProjection:
 
     def count_ui_events(self, session_id: str) -> int:
         return len(self.read_ui_events(session_id))
+
+    def invalidate_cache(self, session_id: str) -> None:
+        key = self._cache_key(session_id)
+        with self._cache_lock:
+            self._events_cache.pop(key, None)
+            try:
+                self._events_cache_order.remove(key)
+            except ValueError:
+                pass
+
+    def _projected_ui_events_cached(self, session_id: str) -> List[dict]:
+        key = self._cache_key(session_id)
+        signature = self._event_log_signature(session_id)
+        with self._cache_lock:
+            cached = self._events_cache.get(key)
+            if cached and cached[0] == signature:
+                return [dict(event) for event in cached[1]]
+        projected = self.events_to_ui(self.event_log.read_all(session_id))
+        with self._cache_lock:
+            self._events_cache[key] = (signature, projected)
+            if key in self._events_cache_order:
+                self._events_cache_order.remove(key)
+            self._events_cache_order.append(key)
+            while len(self._events_cache_order) > self._events_cache_max:
+                old_key = self._events_cache_order.pop(0)
+                self._events_cache.pop(old_key, None)
+        return [dict(event) for event in projected]
+
+    def _event_log_signature(self, session_id: str) -> tuple[bool, int, int]:
+        path = self.event_log.event_path(session_id)
+        try:
+            stat = path.stat()
+        except FileNotFoundError:
+            return (False, 0, 0)
+        return (True, int(stat.st_mtime_ns), int(stat.st_size))
+
+    def _cache_key(self, session_id: str) -> str:
+        return f"{self.sessions_dir.resolve()}::{session_id}"
 
     def read_ui_page(
         self,
