@@ -69,7 +69,7 @@ def _cleanup_stale_active_chat():
 
 def _is_session_stream_active(sid: str) -> bool:
     x = str(sid or "").strip()
-    return bool(x) and (_active_chat_by_session.get(x, 0) > 0 or is_run_active(x))
+    return bool(x) and bool(_session_run_state_fields(x).get("stream_active"))
 
 
 def _runtime_v2_active_run_info(sid: str) -> dict:
@@ -107,8 +107,20 @@ def _session_run_state_fields(sid: str) -> dict:
             "active_run": None,
         }
     stream_connections = int(_active_chat_by_session.get(sid, 0) or 0)
-    v2_info = _runtime_v2_active_run_info(sid)
-    if v2_info:
+    try:
+        from runtime_v2 import runtime_v2_primary
+    except Exception:
+        runtime_v2_primary = lambda: True
+    if runtime_v2_primary():
+        v2_info = _runtime_v2_active_run_info(sid)
+        if not v2_info:
+            return {
+                "stream_active": False,
+                "run_active": False,
+                "run_started_at": None,
+                "stream_connections": stream_connections,
+                "active_run": None,
+            }
         started_at = v2_info.get("started_at")
         return {
             "stream_active": True,
