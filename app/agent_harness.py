@@ -1774,6 +1774,15 @@ class SessionManager:
 
         return RuntimeMirror(self.repository.sessions_dir, path_resolver=self._resolve_session_path)
 
+    def _mirror_ui_event_to_runtime_v2(self, session_id: str, event: Dict[str, Any]):
+        mirror = self._runtime_mirror()
+        mirrored = mirror.mirror_ui_event(session_id, event)
+        if mirrored is not None:
+            return mirrored
+        # Guarantee the V2 event log exists for legacy-only or newly introduced
+        # UI events instead of silently skipping the mirror.
+        return mirror.append(session_id, "legacy_ui_event", dict(event or {}))
+
     def _list_subagent_tasks_v1(self, parent_session_id: str) -> List[dict]:
         return self.repository.load_json_list(self._get_subagent_tasks_path(parent_session_id))
 
@@ -2663,7 +2672,7 @@ class SessionManager:
                 from runtime_v2 import runtime_v2_primary, runtime_v2_strict
 
                 if runtime_v2_primary():
-                    mirrored = self._runtime_mirror().mirror_ui_event(session_id, event_copy)
+                    mirrored = self._mirror_ui_event_to_runtime_v2(session_id, event_copy)
                     if mirrored is None and runtime_v2_strict():
                         raise RuntimeError("Runtime V2 did not accept ui_event")
             except Exception as mirror_error:
@@ -2677,7 +2686,7 @@ class SessionManager:
                 from runtime_v2 import runtime_v1_primary
 
                 if runtime_v1_primary():
-                    mirrored = self._runtime_mirror().mirror_ui_event(session_id, event_copy)
+                    mirrored = self._mirror_ui_event_to_runtime_v2(session_id, event_copy)
                     if mirrored is None and str(event_copy.get("type") or "") in {"user", "final"}:
                         logger.warning(
                             "Runtime V2 mirror returned no event for %s type=%s",

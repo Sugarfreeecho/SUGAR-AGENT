@@ -55,7 +55,17 @@ class RuntimeMirror:
             self._apply_snapshot_event(session_id, event)
             return event
         except Exception as exc:
-            logger.warning("Runtime V2 mirror append failed for session %s: %s", session_id, exc)
+            try:
+                path = str(self.event_log.event_path(session_id))
+            except Exception:
+                path = "<unresolved>"
+            logger.warning(
+                "Runtime V2 mirror append failed for session %s path=%s type=%s: %s",
+                session_id,
+                path,
+                event_type,
+                exc,
+            )
             return None
 
     def _apply_snapshot_event(self, session_id: str, event: RuntimeEvent) -> None:
