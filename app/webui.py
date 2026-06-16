@@ -206,12 +206,6 @@ def _build_sessions_state_snapshot(include_archived: bool = False) -> dict:
         s["run_started_at"] = run_state["run_started_at"]
         if run_state.get("active_run"):
             active_runs.append(run_state["active_run"])
-        try:
-            pending = session_manager.count_actionable_pending_subagent_results(sid)
-        except Exception:
-            pending = 0
-        if pending:
-            pending_subagents[sid] = pending
     return {
         "seq": int(_time.time() * 1000),
         "sessions": sessions,
