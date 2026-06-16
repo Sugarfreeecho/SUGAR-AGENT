@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import threading
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional
@@ -110,6 +111,31 @@ class RuntimeUiProjection:
     def count_ui_events(self, session_id: str) -> int:
         return len(self.read_ui_events(session_id))
 
+    def count_ui_events_light(self, session_id: str) -> tuple[int, int]:
+        """Return projected UI count and latest truncate seq.
+
+        This is still a linear pass when metadata is unavailable, but it does
+        not materialize every UI payload into a list. It keeps paged V2 reads
+        compatible with the legacy event-index contract.
+        """
+        count = 0
+        latest_truncate_seq = 0
+        for event in self.event_log.iter_events(session_id):
+            if event.type == "legacy_truncate_observed":
+                payload = dict(event.payload or {})
+                new_count = payload.get("new_event_count")
+                if new_count is None:
+                    new_count = payload.get("before_index")
+                try:
+                    count = max(0, int(new_count))
+                    latest_truncate_seq = int(event.seq)
+                except (TypeError, ValueError):
+                    pass
+                continue
+            if self.event_to_ui(event) is not None:
+                count += 1
+        return count, latest_truncate_seq
+
     def invalidate_cache(self, session_id: str) -> None:
         key = self._cache_key(session_id)
         with self._cache_lock:
@@ -157,8 +183,91 @@ class RuntimeUiProjection:
         turns: Optional[int] = None,
         legacy_loader: Optional[Callable[[], Iterable[dict]]] = None,
     ) -> dict:
+        if legacy_loader is None and before_index is None and turns is not None:
+            page = self._read_recent_turns_from_tail(session_id, turns=int(turns))
+            if page is not None:
+                return page
         events = self.read_ui_events(session_id, legacy_loader=legacy_loader)
         return self._page_events(events, limit=limit, before_index=before_index, turns=turns)
+
+    def _read_recent_turns_from_tail(self, session_id: str, *, turns: int) -> Optional[dict]:
+        turn_count = max(1, min(int(turns), 50))
+        max_bytes_limit = max(
+            64 * 1024,
+            int(os.getenv("RUNTIME_V2_TAIL_MAX_BYTES", str(8 * 1024 * 1024))),
+        )
+        window = max(
+            64 * 1024,
+            int(os.getenv("RUNTIME_V2_TAIL_INITIAL_BYTES", str(512 * 1024))),
+        )
+        max_events = max(500, int(os.getenv("RUNTIME_V2_TAIL_MAX_EVENTS", "8000")))
+        total, latest_truncate_seq = self.count_ui_events_light(session_id)
+        if total <= 0:
+            return {
+                "events": [],
+                "total": 0,
+                "range_start": 0,
+                "range_end": 0,
+                "has_older": False,
+                "has_newer": False,
+                "source": "runtime_v2_tail",
+            }
+        while window <= max_bytes_limit:
+            runtime_events, reached_start = self.event_log.read_tail_window(
+                session_id,
+                max_bytes=window,
+                max_events=max_events,
+            )
+            if not runtime_events:
+                return None
+            if any(event.type == "legacy_truncate_observed" for event in runtime_events):
+                return None
+            ui_events: List[dict] = []
+            for event in runtime_events:
+                if latest_truncate_seq and event.seq <= latest_truncate_seq:
+                    continue
+                ui = self.event_to_ui(event)
+                if ui is not None:
+                    ui_events.append(ui)
+            if not ui_events:
+                if reached_start:
+                    return {
+                        "events": [],
+                        "total": total,
+                        "range_start": total,
+                        "range_end": total,
+                        "has_older": total > 0,
+                        "has_newer": False,
+                        "source": "runtime_v2_tail",
+                    }
+                window *= 2
+                continue
+            user_indices = [
+                i for i, ev in enumerate(ui_events)
+                if isinstance(ev, dict) and ev.get("type") == "user"
+            ]
+            if len(user_indices) >= turn_count or reached_start or window >= max_bytes_limit:
+                if not user_indices:
+                    start = 0
+                elif len(user_indices) <= turn_count:
+                    start = 0
+                else:
+                    start = user_indices[len(user_indices) - turn_count]
+                selected = ui_events[start:]
+                range_end = total
+                range_start = max(0, range_end - len(selected))
+                return {
+                    "events": selected,
+                    "total": total,
+                    "range_start": range_start,
+                    "range_end": range_end,
+                    "has_older": range_start > 0,
+                    "has_newer": False,
+                    "source": "runtime_v2_tail",
+                    "tail_reached_start": bool(reached_start),
+                }
+            window *= 2
+        return None
 
     @classmethod
     def events_to_ui(cls, events: Iterable[RuntimeEvent]) -> List[dict]:

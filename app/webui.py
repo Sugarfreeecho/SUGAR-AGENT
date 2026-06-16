@@ -10,7 +10,7 @@ import logging
 import os
 import re
 import threading
-from collections import defaultdict
+from collections import defaultdict, deque
 from typing import Optional
 
 from pathlib import Path
@@ -60,6 +60,136 @@ _CHAT_ACTIVE_TIMEOUT_SEC = int(os.getenv("CHAT_ACTIVE_TIMEOUT_SEC", "300"))
 logger = logging.getLogger(__name__)
 _STATIC_TEXT_CACHE_LOCK = threading.Lock()
 _STATIC_TEXT_CACHE: dict[str, tuple[tuple[bool, int, int], str]] = {}
+
+_RUNTIME_SYNC_LOCK = threading.Lock()
+_RUNTIME_SYNC_QUEUE: deque[str] = deque()
+_RUNTIME_SYNC_STATUS: dict[str, dict] = {}
+_RUNTIME_SYNC_WORKER: Optional[threading.Thread] = None
+_RUNTIME_SYNC_CANCEL = threading.Event()
+_RUNTIME_SYNC_SLEEP_SEC = float(os.getenv("RUNTIME_SYNC_QUEUE_SLEEP_SEC", "0.2"))
+
+
+def _runtime_sync_file_sig(path: Path) -> tuple[bool, int, int]:
+    try:
+        st = path.stat()
+        return True, int(st.st_mtime_ns), int(st.st_size)
+    except OSError:
+        return False, 0, 0
+
+
+def _runtime_sync_paths(session_id: str) -> tuple[Path, Path]:
+    legacy_path = session_manager._get_ui_events_path(session_id)
+    from runtime_v2.ui_projection import RuntimeUiProjection
+
+    projection = RuntimeUiProjection(
+        session_manager.repository.sessions_dir,
+        path_resolver=session_manager._resolve_session_path,
+    )
+    return legacy_path, projection.event_log.event_path(session_id)
+
+
+def _runtime_sync_needed(session_id: str) -> tuple[bool, str, dict]:
+    try:
+        legacy_path, runtime_path = _runtime_sync_paths(session_id)
+        legacy_sig = _runtime_sync_file_sig(legacy_path)
+        runtime_sig = _runtime_sync_file_sig(runtime_path)
+        detail = {"legacy": legacy_sig, "runtime": runtime_sig}
+        if legacy_sig[0] and not runtime_sig[0]:
+            return True, "runtime_missing", detail
+        if runtime_sig[0] and not legacy_sig[0]:
+            return True, "legacy_missing", detail
+        if not legacy_sig[0] and not runtime_sig[0]:
+            return False, "none", detail
+        if legacy_sig[1] > runtime_sig[1] + 1_000_000:
+            return True, "runtime_older", detail
+        if runtime_sig[1] > legacy_sig[1] + 1_000_000:
+            return True, "legacy_older", detail
+        return False, "fresh", detail
+    except Exception as exc:
+        return False, f"check_failed:{exc}", {}
+
+
+def _runtime_sync_worker_loop() -> None:
+    import time as _time
+
+    while not _RUNTIME_SYNC_CANCEL.is_set():
+        with _RUNTIME_SYNC_LOCK:
+            if not _RUNTIME_SYNC_QUEUE:
+                return
+            sid = _RUNTIME_SYNC_QUEUE.popleft()
+            status = dict(_RUNTIME_SYNC_STATUS.get(sid) or {})
+            status.update({
+                "state": "running",
+                "started_at": _time.time(),
+                "queued": False,
+            })
+            _RUNTIME_SYNC_STATUS[sid] = status
+        t0 = _time.perf_counter()
+        try:
+            result = _sync_runtime_session(sid)
+            state = "done" if result.get("ok") else "failed"
+            error = result.get("error")
+        except Exception as exc:
+            result = {"ok": False, "session_id": sid, "error": str(exc)}
+            state = "failed"
+            error = str(exc)
+            logger.warning("background runtime sync failed for %s: %s", sid, exc)
+        elapsed_ms = int((_time.perf_counter() - t0) * 1000)
+        with _RUNTIME_SYNC_LOCK:
+            status = dict(_RUNTIME_SYNC_STATUS.get(sid) or {})
+            status.update({
+                "state": state,
+                "queued": False,
+                "finished_at": _time.time(),
+                "elapsed_ms": elapsed_ms,
+                "result": result,
+            })
+            if error:
+                status["error"] = error
+            else:
+                status.pop("error", None)
+            _RUNTIME_SYNC_STATUS[sid] = status
+        if _RUNTIME_SYNC_SLEEP_SEC > 0:
+            _time.sleep(_RUNTIME_SYNC_SLEEP_SEC)
+
+
+def _ensure_runtime_sync_worker_locked() -> None:
+    global _RUNTIME_SYNC_WORKER
+    if _RUNTIME_SYNC_WORKER is not None and _RUNTIME_SYNC_WORKER.is_alive():
+        return
+    _RUNTIME_SYNC_CANCEL.clear()
+    _RUNTIME_SYNC_WORKER = threading.Thread(
+        target=_runtime_sync_worker_loop,
+        name="runtime-sync-worker",
+        daemon=True,
+    )
+    _RUNTIME_SYNC_WORKER.start()
+
+
+def _enqueue_runtime_sync(session_id: str, reason: str = "manual", *, check_needed: bool = False) -> dict:
+    sid = str(session_id or "").strip()
+    if not sid:
+        return {"ok": False, "error": "missing session_id"}
+    detail = {}
+    needed = True
+    check_reason = reason
+    if check_needed:
+        needed, check_reason, detail = _runtime_sync_needed(sid)
+        if not needed:
+            return {"ok": True, "session_id": sid, "queued": False, "reason": check_reason, "detail": detail}
+    with _RUNTIME_SYNC_LOCK:
+        existing = _RUNTIME_SYNC_STATUS.get(sid) or {}
+        if existing.get("state") == "running" or sid in _RUNTIME_SYNC_QUEUE:
+            return {"ok": True, "session_id": sid, "queued": True, "deduped": True, "reason": existing.get("reason") or reason}
+        _RUNTIME_SYNC_QUEUE.append(sid)
+        _RUNTIME_SYNC_STATUS[sid] = {
+            "state": "queued",
+            "queued": True,
+            "reason": check_reason,
+            "detail": detail,
+        }
+        _ensure_runtime_sync_worker_locked()
+    return {"ok": True, "session_id": sid, "queued": True, "reason": check_reason, "detail": detail}
 
 
 def _read_text_cached(path: Path, fallback: str = "") -> str:
@@ -906,6 +1036,10 @@ async def get_session_messages(
     t0 = _time.perf_counter()
     projection = None
     try:
+        _enqueue_runtime_sync(session_id, "messages_open", check_needed=True)
+    except Exception as exc:
+        logger.debug("runtime sync enqueue check failed for %s: %s", session_id, exc)
+    try:
         from runtime_v2 import runtime_v1_primary
 
         if runtime_v1_primary():
@@ -998,8 +1132,8 @@ async def get_session_message_count(session_id: str):
             session_manager.repository.sessions_dir,
             path_resolver=session_manager._resolve_session_path,
         )
-        events = projection.read_ui_events_fast(session_id)
-        return JSONResponse(content={"count": len(events), "source": "runtime_v2"})
+        count, _ = projection.count_ui_events_light(session_id)
+        return JSONResponse(content={"count": count, "source": "runtime_v2"})
     except Exception as exc:
         logger.warning("Runtime V2 message count failed for %s: %s", session_id, exc)
     return JSONResponse(content={"count": session_manager.get_ui_event_count(session_id)})
@@ -1031,6 +1165,69 @@ def _sync_runtime_session(session_id: str) -> dict:
         "v2_from_v1": v2_from_v1,
         "v1_from_v2": v1_from_v2,
     }
+
+
+@fastapi_app.post("/sessions/{session_id}/runtime/sync/enqueue")
+async def enqueue_session_runtime_sync(session_id: str):
+    result = _enqueue_runtime_sync(session_id, "manual", check_needed=False)
+    status_code = 200 if result.get("ok") else 400
+    return JSONResponse(content=result, status_code=status_code)
+
+
+@fastapi_app.post("/sessions/runtime/sync-all/enqueue")
+async def enqueue_all_runtime_sync(limit: int = Query(0, ge=0, le=10000), check_needed: bool = Query(True)):
+    rows = session_manager.list_sessions(include_archived=True)
+    if limit and limit > 0:
+        rows = rows[:limit]
+    queued = 0
+    skipped = 0
+    results = []
+    for row in rows:
+        sid = str((row or {}).get("id") or "").strip()
+        if not sid:
+            continue
+        result = _enqueue_runtime_sync(sid, "manual_all", check_needed=bool(check_needed))
+        results.append(result)
+        if result.get("queued"):
+            queued += 1
+        else:
+            skipped += 1
+    return JSONResponse(content={
+        "ok": True,
+        "session_count": len(results),
+        "queued": queued,
+        "skipped": skipped,
+        "results": results[:200],
+        "truncated_results": len(results) > 200,
+    })
+
+
+@fastapi_app.get("/sessions/runtime/sync/status")
+async def get_runtime_sync_status():
+    with _RUNTIME_SYNC_LOCK:
+        queue = list(_RUNTIME_SYNC_QUEUE)
+        statuses = {sid: dict(status) for sid, status in _RUNTIME_SYNC_STATUS.items()}
+        worker_alive = _RUNTIME_SYNC_WORKER is not None and _RUNTIME_SYNC_WORKER.is_alive()
+    return JSONResponse(content={
+        "ok": True,
+        "worker_alive": worker_alive,
+        "queue_length": len(queue),
+        "queue": queue[:200],
+        "statuses": statuses,
+    })
+
+
+@fastapi_app.post("/sessions/runtime/sync/cancel")
+async def cancel_runtime_sync_queue():
+    with _RUNTIME_SYNC_LOCK:
+        cleared = len(_RUNTIME_SYNC_QUEUE)
+        _RUNTIME_SYNC_QUEUE.clear()
+        for sid, status in list(_RUNTIME_SYNC_STATUS.items()):
+            if status.get("state") == "queued":
+                next_status = dict(status)
+                next_status.update({"state": "cancelled", "queued": False})
+                _RUNTIME_SYNC_STATUS[sid] = next_status
+    return JSONResponse(content={"ok": True, "cleared": cleared})
 
 
 @fastapi_app.post("/sessions/{session_id}/runtime/sync")
