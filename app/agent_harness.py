@@ -1474,7 +1474,10 @@ class SessionManager:
         self._ui_events_cache_max = 128
         self._ui_user_turns_cache: Dict[str, Tuple[Tuple[bool, int, int], List[dict]]] = {}
         self._load_index()
-        self.refresh_sessions_index_from_disk()
+        if os.getenv("REPAIR_SESSIONS_INDEX_ON_START", "0").strip().lower() in {"1", "true", "yes", "on"}:
+            self.refresh_sessions_index_from_disk()
+        elif not self.index_file.exists():
+            self.refresh_sessions_index_from_disk()
 
     @staticmethod
     def _normalize_session_id(session_id: str) -> str:

@@ -189,6 +189,7 @@ def _session_run_state_fields(sid: str) -> dict:
 def _build_sessions_state_snapshot(include_archived: bool = False) -> dict:
     import time as _time
 
+    t0 = _time.perf_counter()
     sessions = session_manager.list_sessions(include_archived=include_archived)
     archived_count = session_manager.archived_session_count()
     _cleanup_stale_active_chat()
@@ -206,13 +207,22 @@ def _build_sessions_state_snapshot(include_archived: bool = False) -> dict:
         s["run_started_at"] = run_state["run_started_at"]
         if run_state.get("active_run"):
             active_runs.append(run_state["active_run"])
-    return {
+    out = {
         "seq": int(_time.time() * 1000),
         "sessions": sessions,
         "archived_count": archived_count,
         "active_runs": active_runs,
         "pending_subagents": pending_subagents,
     }
+    elapsed_ms = int((_time.perf_counter() - t0) * 1000)
+    if elapsed_ms >= 500:
+        logger.warning(
+            "/sessions/state slow include_archived=%s sessions=%s elapsed_ms=%s",
+            include_archived,
+            len(sessions),
+            elapsed_ms,
+        )
+    return out
 
 def get_index_html():
     """读取并返回 Vite 构建产物 templates/dist/index.html。"""
@@ -892,26 +902,19 @@ async def get_session_messages(
     传入 limit 或 turns 时返回分页对象。
     turns：按「用户提问」轮次分页（每页若干完整对话）；优先于 limit。
     """
-    runtime_sync: dict = {"checked": False}
+    import time as _time
+    t0 = _time.perf_counter()
     projection = None
-    legacy_loader = lambda: session_manager.get_ui_events_for_display(session_id)
-    try:
-        from runtime_v2.ui_projection import RuntimeUiProjection
-
-        projection = RuntimeUiProjection(
-            session_manager.repository.sessions_dir,
-            path_resolver=session_manager._resolve_session_path,
-        )
-        runtime_sync = projection.sync_from_legacy_if_needed(session_id, legacy_loader)
-    except Exception as exc:
-        runtime_sync = {"checked": True, "error": str(exc)}
-        logger.warning("Runtime V2 sync-on-open failed for %s: %s", session_id, exc)
     try:
         from runtime_v2 import runtime_v1_primary
 
         if runtime_v1_primary():
             if limit is None and turns is None:
-                return JSONResponse(content=session_manager.get_ui_events_for_display(session_id))
+                payload = session_manager.get_ui_events_for_display(session_id)
+                elapsed_ms = int((_time.perf_counter() - t0) * 1000)
+                if elapsed_ms >= 500:
+                    logger.warning("/messages slow runtime=1 session=%s full=1 elapsed_ms=%s", session_id, elapsed_ms)
+                return JSONResponse(content=payload)
             lim = int(limit) if limit is not None else 200
             tv = int(turns) if turns is not None else None
             payload = session_manager.get_ui_events_page(
@@ -920,7 +923,16 @@ async def get_session_messages(
                 before_index=before_index,
                 turns=tv,
             )
-            payload["runtime_sync"] = runtime_sync
+            elapsed_ms = int((_time.perf_counter() - t0) * 1000)
+            if elapsed_ms >= 500:
+                logger.warning(
+                    "/messages slow runtime=1 session=%s turns=%s limit=%s before=%s elapsed_ms=%s",
+                    session_id,
+                    tv,
+                    lim,
+                    before_index,
+                    elapsed_ms,
+                )
             return JSONResponse(content=payload)
     except Exception as exc:
         logger.warning("Runtime version check failed for messages %s: %s", session_id, exc)
@@ -933,7 +945,11 @@ async def get_session_messages(
                 path_resolver=session_manager._resolve_session_path,
             )
         if limit is None and turns is None:
-            return JSONResponse(content=projection.read_ui_events_fast(session_id))
+            payload = projection.read_ui_events_fast(session_id)
+            elapsed_ms = int((_time.perf_counter() - t0) * 1000)
+            if elapsed_ms >= 500:
+                logger.warning("/messages slow runtime=2 session=%s full=1 elapsed_ms=%s", session_id, elapsed_ms)
+            return JSONResponse(content=payload)
         lim = int(limit) if limit is not None else 200
         tv = int(turns) if turns is not None else None
         payload = projection.read_ui_page(
@@ -942,7 +958,16 @@ async def get_session_messages(
             before_index=before_index,
             turns=tv,
         )
-        payload["runtime_sync"] = runtime_sync
+        elapsed_ms = int((_time.perf_counter() - t0) * 1000)
+        if elapsed_ms >= 500:
+            logger.warning(
+                "/messages slow runtime=2 session=%s turns=%s limit=%s before=%s elapsed_ms=%s",
+                session_id,
+                tv,
+                lim,
+                before_index,
+                elapsed_ms,
+            )
         return JSONResponse(content=payload)
     except Exception as exc:
         logger.warning("Runtime V2 messages projection failed for %s: %s", session_id, exc)
@@ -969,15 +994,108 @@ async def get_session_message_count(session_id: str):
     try:
         from runtime_v2.ui_projection import RuntimeUiProjection
 
-        projection = RuntimeUiProjection(session_manager.repository.sessions_dir)
-        events = projection.read_ui_events(
-            session_id,
-            legacy_loader=lambda: session_manager.get_ui_events_for_display(session_id),
+        projection = RuntimeUiProjection(
+            session_manager.repository.sessions_dir,
+            path_resolver=session_manager._resolve_session_path,
         )
+        events = projection.read_ui_events_fast(session_id)
         return JSONResponse(content={"count": len(events), "source": "runtime_v2"})
     except Exception as exc:
         logger.warning("Runtime V2 message count failed for %s: %s", session_id, exc)
     return JSONResponse(content={"count": session_manager.get_ui_event_count(session_id)})
+
+
+def _sync_runtime_session(session_id: str) -> dict:
+    from runtime_v2.ui_projection import RuntimeUiProjection
+
+    projection = RuntimeUiProjection(
+        session_manager.repository.sessions_dir,
+        path_resolver=session_manager._resolve_session_path,
+    )
+    legacy_events = session_manager.get_ui_events_for_display(session_id)
+    v2_from_v1 = projection.sync_from_legacy_if_needed(session_id, lambda: legacy_events)
+    projected = projection.read_ui_events_fast(session_id)
+    v1_from_v2 = {"checked": True, "action": "none", "legacy_count": len(legacy_events), "projected_count": len(projected)}
+    if len(projected) > len(legacy_events):
+        session_manager._save_ui_events(session_id, projected)
+        v1_from_v2 = {
+            "checked": True,
+            "action": "replace",
+            "legacy_count": len(legacy_events),
+            "projected_count": len(projected),
+            "written": len(projected),
+        }
+    return {
+        "ok": True,
+        "session_id": session_id,
+        "v2_from_v1": v2_from_v1,
+        "v1_from_v2": v1_from_v2,
+    }
+
+
+@fastapi_app.post("/sessions/{session_id}/runtime/sync")
+async def sync_session_runtime(session_id: str):
+    import time as _time
+
+    t0 = _time.perf_counter()
+    try:
+        result = await run_in_threadpool(_sync_runtime_session, session_id)
+    except Exception as exc:
+        logger.warning("runtime sync failed for %s: %s", session_id, exc)
+        return JSONResponse(content={"ok": False, "session_id": session_id, "error": str(exc)}, status_code=500)
+    result["elapsed_ms"] = int((_time.perf_counter() - t0) * 1000)
+    return JSONResponse(content=result)
+
+
+def _sync_all_runtime_sessions(limit: int = 0) -> dict:
+    rows = session_manager.list_sessions(include_archived=True)
+    if limit and limit > 0:
+        rows = rows[:limit]
+    results = []
+    ok_count = 0
+    fail_count = 0
+    for row in rows:
+        sid = str((row or {}).get("id") or "").strip()
+        if not sid:
+            continue
+        try:
+            result = _sync_runtime_session(sid)
+            ok_count += 1
+        except Exception as exc:
+            result = {"ok": False, "session_id": sid, "error": str(exc)}
+            fail_count += 1
+        results.append(result)
+    return {
+        "ok": fail_count == 0,
+        "session_count": len(results),
+        "ok_count": ok_count,
+        "fail_count": fail_count,
+        "results": results,
+    }
+
+
+@fastapi_app.post("/sessions/runtime/sync-all")
+async def sync_all_runtime_sessions(limit: int = Query(0, ge=0, le=10000)):
+    import time as _time
+
+    t0 = _time.perf_counter()
+    result = await run_in_threadpool(_sync_all_runtime_sessions, int(limit or 0))
+    result["elapsed_ms"] = int((_time.perf_counter() - t0) * 1000)
+    return JSONResponse(content=result)
+
+
+@fastapi_app.post("/sessions/index/repair")
+async def repair_sessions_index():
+    import time as _time
+
+    t0 = _time.perf_counter()
+    await run_in_threadpool(session_manager.refresh_sessions_index_from_disk)
+    elapsed_ms = int((_time.perf_counter() - t0) * 1000)
+    return JSONResponse(content={
+        "ok": True,
+        "session_count": len(session_manager.index),
+        "elapsed_ms": elapsed_ms,
+    })
 
 
 @fastapi_app.get("/sessions/{session_id}/user_turns")
