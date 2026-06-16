@@ -898,6 +898,20 @@ async def get_session_messages(
     传入 limit 或 turns 时返回分页对象。
     turns：按「用户提问」轮次分页（每页若干完整对话）；优先于 limit。
     """
+    runtime_sync: dict = {"checked": False}
+    projection = None
+    legacy_loader = lambda: session_manager.get_ui_events_for_display(session_id)
+    try:
+        from runtime_v2.ui_projection import RuntimeUiProjection
+
+        projection = RuntimeUiProjection(
+            session_manager.repository.sessions_dir,
+            path_resolver=session_manager._resolve_session_path,
+        )
+        runtime_sync = projection.sync_from_legacy_if_needed(session_id, legacy_loader)
+    except Exception as exc:
+        runtime_sync = {"checked": True, "error": str(exc)}
+        logger.warning("Runtime V2 sync-on-open failed for %s: %s", session_id, exc)
     try:
         from runtime_v2 import runtime_v1_primary
 
@@ -906,30 +920,36 @@ async def get_session_messages(
                 return JSONResponse(content=session_manager.get_ui_events_for_display(session_id))
             lim = int(limit) if limit is not None else 200
             tv = int(turns) if turns is not None else None
-            return JSONResponse(content=session_manager.get_ui_events_page(
+            payload = session_manager.get_ui_events_page(
                 session_id,
                 limit=lim,
                 before_index=before_index,
                 turns=tv,
-            ))
+            )
+            payload["runtime_sync"] = runtime_sync
+            return JSONResponse(content=payload)
     except Exception as exc:
         logger.warning("Runtime version check failed for messages %s: %s", session_id, exc)
     try:
-        from runtime_v2.ui_projection import RuntimeUiProjection
+        if projection is None:
+            from runtime_v2.ui_projection import RuntimeUiProjection
 
-        projection = RuntimeUiProjection(session_manager.repository.sessions_dir)
-        legacy_loader = lambda: session_manager.get_ui_events_for_display(session_id)
+            projection = RuntimeUiProjection(
+                session_manager.repository.sessions_dir,
+                path_resolver=session_manager._resolve_session_path,
+            )
         if limit is None and turns is None:
-            return JSONResponse(content=projection.read_ui_events(session_id, legacy_loader=legacy_loader))
+            return JSONResponse(content=projection.read_ui_events_fast(session_id))
         lim = int(limit) if limit is not None else 200
         tv = int(turns) if turns is not None else None
-        return JSONResponse(content=projection.read_ui_page(
+        payload = projection.read_ui_page(
             session_id,
             limit=lim,
             before_index=before_index,
             turns=tv,
-            legacy_loader=legacy_loader,
-        ))
+        )
+        payload["runtime_sync"] = runtime_sync
+        return JSONResponse(content=payload)
     except Exception as exc:
         logger.warning("Runtime V2 messages projection failed for %s: %s", session_id, exc)
     if limit is None and turns is None:
