@@ -9,6 +9,7 @@ import json
 import logging
 import os
 import re
+import threading
 from collections import defaultdict
 from typing import Optional
 
@@ -57,6 +58,25 @@ _active_chat_last_seen: dict[str, float] = {}
 
 _CHAT_ACTIVE_TIMEOUT_SEC = int(os.getenv("CHAT_ACTIVE_TIMEOUT_SEC", "300"))
 logger = logging.getLogger(__name__)
+_STATIC_TEXT_CACHE_LOCK = threading.Lock()
+_STATIC_TEXT_CACHE: dict[str, tuple[tuple[bool, int, int], str]] = {}
+
+
+def _read_text_cached(path: Path, fallback: str = "") -> str:
+    try:
+        st = path.stat()
+        sig = (True, int(st.st_mtime_ns), int(st.st_size))
+    except OSError:
+        sig = (False, 0, 0)
+        return fallback
+    key = str(path.resolve())
+    with _STATIC_TEXT_CACHE_LOCK:
+        cached = _STATIC_TEXT_CACHE.get(key)
+        if cached and cached[0] == sig:
+            return cached[1]
+        text = path.read_text(encoding="utf-8")
+        _STATIC_TEXT_CACHE[key] = (sig, text)
+        return text
 
 def _cleanup_stale_active_chat():
     import time as _t
@@ -311,9 +331,8 @@ def _html_with_path_picker_script(body: str) -> str:
 
 @fastapi_app.get("/static/myagent_path_picker.js")
 async def serve_path_picker_js():
-    try:
-        content = _PATH_PICKER_JS_PATH.read_text(encoding="utf-8")
-    except OSError:
+    content = _read_text_cached(_PATH_PICKER_JS_PATH, "")
+    if not content:
         return JSONResponse({"error": "not found"}, status_code=404)
     return Response(content=content, media_type="application/javascript")
 
@@ -1333,7 +1352,7 @@ _MCP_CONFIG_HTML_PATH = _Path(__file__).resolve().parent / "templates" / "mcp_co
 
 def _load_mcp_config_html() -> str:
     if _MCP_CONFIG_HTML_PATH.is_file():
-        return _MCP_CONFIG_HTML_PATH.read_text(encoding="utf-8")
+        return _read_text_cached(_MCP_CONFIG_HTML_PATH, "")
     return "<!DOCTYPE html><html><body><p>缺少 templates/mcp_config.html</p><a href='/'>返回</a></body></html>"
 
 
@@ -1628,7 +1647,7 @@ def _apply_env_updates(text: str, updates: dict[str, str]) -> str:
 
 def _load_env_advanced_html() -> str:
     if _ENV_ADVANCED_PATH.is_file():
-        return _ENV_ADVANCED_PATH.read_text(encoding="utf-8")
+        return _read_text_cached(_ENV_ADVANCED_PATH, "")
     return "<!DOCTYPE html><html><body><p>缺少 templates/advance_config.html</p><a href='/'>返回</a></body></html>"
 
 

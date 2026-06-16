@@ -181,7 +181,10 @@ function clearTodoForSessionLoad() {
     notifyPanelContentChanged();
 }
 
-function rebuildToc() {
+const tocTurnsCacheBySession = new Map();
+
+function rebuildToc(options) {
+    options = options || {};
     const toc = document.getElementById('chat-toc');
     const list = document.getElementById('chat-toc-list');
     if (!toc || !list) return;
@@ -199,14 +202,23 @@ function rebuildToc() {
     (async function () {
         let turns = [];
         if (sid) {
-            try {
-                const r = await fetch('/sessions/' + encodeURIComponent(sid) + '/user_turns');
-                if (epoch !== tocRebuildEpoch || sid !== currentSessionId) return;
-                if (r.ok) {
-                    const j = await r.json();
-                    if (Array.isArray(j)) turns = j;
+            if (options.localOnly) {
+                turns = tocTurnsCacheBySession.get(sid) || [];
+            } else {
+                try {
+                    const r = await fetch('/sessions/' + encodeURIComponent(sid) + '/user_turns');
+                    if (epoch !== tocRebuildEpoch || sid !== currentSessionId) return;
+                    if (r.ok) {
+                        const j = await r.json();
+                        if (Array.isArray(j)) {
+                            turns = j;
+                            tocTurnsCacheBySession.set(sid, j);
+                        }
+                    }
+                } catch (e) {
+                    turns = tocTurnsCacheBySession.get(sid) || [];
                 }
-            } catch (e) { /* ignore */ }
+            }
         }
         if (epoch !== tocRebuildEpoch || sid !== currentSessionId) return;
         /** event_index → 预览（服务端与当前 DOM 合并：刚发出的提问尚未写入 ui_events，由气泡补上） */

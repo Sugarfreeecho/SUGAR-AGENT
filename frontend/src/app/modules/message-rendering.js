@@ -205,16 +205,13 @@ function onMessageToolbarClick(wrap, role, act) {
             showRewriteUndoToast('input', { prev: prev });
             return;
         }
-        pendingRewriteTruncate = {
-            sessionId: currentSessionId,
-            before: before,
-            prevInput: messageInput.value,
-        };
+        const prev = messageInput.value;
+        pendingRewriteTruncate = null;
         messageInput.value = toFill;
         rewriteInputWorkspacePaths();
         autoResizeTextarea();
         messageInput.focus();
-        showRewriteUndoToast('rewrite_pending', pendingRewriteTruncate);
+        showRewriteUndoToast('input', { prev: prev });
         return;
     }
     if (act === 'branch' && role === 'assistant') {
@@ -1730,7 +1727,7 @@ function getAssistMsgLinkifyRegex() {
     if (!_assistMsgLinkifyRe) {
         // 「/路径」前仅排除 ASCII 字母，避免 2023/文件、中文后接 / 等无法匹配；仍可抑制 ARPU/DOU（U 为字母）
         _assistMsgLinkifyRe = new RegExp(
-            '((["\'])(?:[A-Za-z]:(?:\\\\|\\/)|\\\\\\\\|\\/(?![\\s\\/]))[^"\'\\r\\n]+?\\.(?:' + LINKIFY_EXT_FRAGMENT + ')\\b\\2|' +
+            '((["\'])(?:(?:[A-Za-z]:(?:\\\\|\\/)|\\\\\\\\|\\/(?![\\s\\/]))|(?=[^"\'\\r\\n]*[\\\\/]))[^"\'\\r\\n]+?\\.(?:' + LINKIFY_EXT_FRAGMENT + ')\\b\\2|' +
             'https?:\\/\\/[^\\s<>\'"]+|' +
             '\\\\\\\\(?:(?:[^\\\\\\/:*?"<>|\\r\\n]+)\\\\)+(?:[^\\\\\\/:*?"<>|\\r\\n]+)|' +
             '[A-Za-z]:(?:\\\\|\\/)(?:(?:[^\\\\/:*?"<>|\\r\\n]+)(?:\\\\|\\/))*[^\\\\/:*?"<>|\\r\\n]+|' +
@@ -1743,12 +1740,39 @@ function getAssistMsgLinkifyRegex() {
     return _assistMsgLinkifyRe;
 }
 
+function tryLinkifyEntirePathTextNode(textNode, raw) {
+    var token = String(raw || '').trim();
+    if (!token) return false;
+    var wsRel = pathTokenToWorkspaceOpenRel(token);
+    var href = wsRel ? null : makeHrefFromAutoLinkToken(token);
+    if (!wsRel && !href) return false;
+    var a = document.createElement('a');
+    a.className = wsRel ? 'msg-link-auto msg-link-workspace-open' : 'msg-link-auto';
+    a.textContent = cleanPathTokenForLink(token) || token;
+    if (wsRel) {
+        a.href = '#';
+        a.setAttribute('data-workspace-open', wsRel);
+        a.setAttribute('data-ui-tip', '在本机打开（工作区文件）');
+        bindUiHoverTip(a);
+    } else {
+        a.href = href;
+        a.target = '_blank';
+        a.rel = 'noopener noreferrer';
+    }
+    textNode.parentNode.replaceChild(a, textNode);
+    return true;
+}
+
 function linkifySingleTextNode(textNode) {
     var raw = textNode.nodeValue;
     if (!raw) return;
     var parent = textNode.parentElement;
     if (!parent || parent.closest('a, pre, script, style, textarea, svg')) return;
-    if (parent.closest('code') && !isEntireTextNodeWindowsPath(raw) && !isEntireBareFilenameLinkable(raw) && !isEntireWorkspaceSlashPathLinkable(raw) && !isEntireWorkspaceRelativePathLinkable(raw) && !isEntireTextNodeUncPath(raw)) return;
+    var inInlineCode = !!parent.closest('code');
+    if (inInlineCode) {
+        if (!isEntireTextNodeWindowsPath(raw) && !isEntireBareFilenameLinkable(raw) && !isEntireWorkspaceSlashPathLinkable(raw) && !isEntireWorkspaceRelativePathLinkable(raw) && !isEntireTextNodeUncPath(raw)) return;
+        if (tryLinkifyEntirePathTextNode(textNode, raw)) return;
+    }
     var rawForLink = linkifyNormalizePathToken(raw);
     var re = getAssistMsgLinkifyRegex();
     re.lastIndex = 0;
@@ -2401,7 +2425,7 @@ function appendMessage(ctx, role, content, meta, runSessionId) {
         }
         sealProcessGroup(ctx);
     }
-    if (role === 'user' && !replayingMessages) rebuildToc();
+    if (role === 'user' && !replayingMessages) rebuildToc({ localOnly: true });
     if (!replayingMessages) {
         if (role === 'user') scrollChatToBottomIfFollow(runSessionId, { force: true });
         else scrollChatToBottomIfFollow(runSessionId, {});

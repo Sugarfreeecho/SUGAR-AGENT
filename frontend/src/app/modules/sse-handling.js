@@ -355,9 +355,6 @@ async function sendMessage() {
     try {
 
     if (pendingRewriteTruncate && pendingRewriteTruncate.sessionId === submitSessionIdInitial) {
-        const pr = pendingRewriteTruncate;
-        const rewriteTruncated = await processRewriteTruncateAsync(pr);
-        if (!rewriteTruncated) return;
         pendingRewriteTruncate = null;
     }
     hideRewriteUndoToast();

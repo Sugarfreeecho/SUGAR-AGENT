@@ -1468,6 +1468,7 @@ class SessionManager:
         self._lock = threading.Lock()
         self._metadata_session_locks: Dict[str, threading.Lock] = {}
         self._metadata_session_locks_guard = threading.Lock()
+        self._ui_user_turns_cache: Dict[str, Tuple[Tuple[bool, int, int], List[dict]]] = {}
         self._load_index()
         self.refresh_sessions_index_from_disk()
 
@@ -2563,6 +2564,14 @@ class SessionManager:
     def _load_ui_events(self, session_id: str) -> List[dict]:
         return self.event_log.load(session_id)
 
+    def _ui_events_file_signature(self, session_id: str) -> Tuple[bool, int, int]:
+        path = self._get_ui_events_path(session_id)
+        try:
+            st = path.stat()
+            return True, int(st.st_mtime_ns), int(st.st_size)
+        except OSError:
+            return False, 0, 0
+
     def _save_ui_events(self, session_id: str, events: List[dict]) -> None:
         try:
             from session_lifecycle import is_session_deleted
@@ -2572,6 +2581,7 @@ class SessionManager:
         except Exception:
             pass
         self.event_log.save(session_id, events)
+        self._ui_user_turns_cache.pop(session_id, None)
         self._sync_ui_event_count_in_metadata(session_id, len(events))
 
     def _sync_ui_event_count_in_metadata(self, session_id: str, count: int) -> None:
@@ -2763,6 +2773,10 @@ class SessionManager:
         """
         侧栏「历史记录」目录：遍历 ui_events，列出每条用户消息的 event_index 与预览文案（轻量 JSON）。
         """
+        sig = self._ui_events_file_signature(session_id)
+        cached = self._ui_user_turns_cache.get(session_id)
+        if cached and cached[0] == sig:
+            return [dict(row) for row in cached[1]]
         events = self._load_ui_events(session_id)
         out: List[dict] = []
         for i, ev in enumerate(events):
@@ -2774,6 +2788,7 @@ class SessionManager:
             if len(one_line) > 200:
                 one_line = one_line[:197] + "..."
             out.append({"event_index": i, "preview": one_line})
+        self._ui_user_turns_cache[session_id] = (sig, [dict(row) for row in out])
         return out
 
     def get_todo_plan_snapshot(self, session_id: str) -> dict:
