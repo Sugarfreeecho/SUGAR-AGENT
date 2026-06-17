@@ -8,13 +8,16 @@ function removeMessagesFromNode(startWrap) {
     syncDisconnectedProcessGroups();
 }
 
-async function truncateSessionOnServer(beforeIndex) {
-    if (!currentSessionId) return { ok: false, error: 'no_session' };
+async function truncateSessionOnServer(beforeIndex, options) {
+    options = options || {};
+    const sid = options.sessionId || currentSessionId;
+    if (!sid) return { ok: false, error: 'no_session' };
     if (!Number.isFinite(Number(beforeIndex)) || Number(beforeIndex) < 0) {
         return { ok: false, error: 'invalid_before_index' };
     }
-    const url = '/sessions/' + encodeURIComponent(currentSessionId) + '/truncate'
-        + '?before_index=' + encodeURIComponent(String(beforeIndex));
+    const url = '/sessions/' + encodeURIComponent(sid) + '/truncate'
+        + '?before_index=' + encodeURIComponent(String(beforeIndex))
+        + '&backup=' + (options.backup ? '1' : '0');
     try {
         const r = await fetch(url, { method: 'POST' });
         const j = await r.json().catch(function () { return {}; });
@@ -43,6 +46,132 @@ function hasPreviousUserMessageBefore(wrap) {
         node = node.previousElementSibling;
     }
     return false;
+}
+
+let activeInlineRewriteWrap = null;
+
+function restoreUserMessageBubble(wrap, rawText) {
+    if (!wrap) return;
+    const div = wrap.querySelector('.message.user');
+    if (!div) return;
+    wrap.classList.remove('is-inline-rewriting', 'user-msg-expanded', 'has-turn-process');
+    div.className = 'message user';
+    div.textContent = '';
+    messageRawMarkdown.set(wrap, String(rawText || ''));
+    renderUserMessageContent(wrap, div, String(rawText || ''), linkifyAssistantTextNodes);
+}
+
+function closeInlineRewriteEditor(wrap, rawText) {
+    restoreUserMessageBubble(wrap, rawText);
+    if (activeInlineRewriteWrap === wrap) activeInlineRewriteWrap = null;
+}
+
+function autoResizeInlineRewriteTextarea(textarea) {
+    if (!textarea) return;
+    textarea.style.height = 'auto';
+    textarea.style.height = Math.min(Math.max(textarea.scrollHeight, 84), 260) + 'px';
+}
+
+function openInlineRewriteEditor(wrap, rawText, beforeIndex) {
+    if (!wrap) return;
+    if (activeInlineRewriteWrap && activeInlineRewriteWrap !== wrap) {
+        const prevRaw = messageRawMarkdown.get(activeInlineRewriteWrap) || '';
+        closeInlineRewriteEditor(activeInlineRewriteWrap, prevRaw);
+    }
+    const div = wrap.querySelector('.message.user');
+    if (!div) return;
+    activeInlineRewriteWrap = wrap;
+    wrap.classList.add('is-inline-rewriting');
+    wrap.classList.remove('user-msg-expanded', 'has-turn-process');
+    div.className = 'message user user-inline-rewrite';
+    div.textContent = '';
+
+    const editor = document.createElement('div');
+    editor.className = 'user-inline-rewrite-box';
+    const textarea = document.createElement('textarea');
+    textarea.className = 'user-inline-rewrite-input';
+    textarea.value = String(rawText || '');
+    textarea.rows = 3;
+    const actions = document.createElement('div');
+    actions.className = 'user-inline-rewrite-actions';
+    const cancelBtn = document.createElement('button');
+    cancelBtn.type = 'button';
+    cancelBtn.className = 'user-inline-rewrite-btn user-inline-rewrite-btn--ghost';
+    cancelBtn.textContent = '取消';
+    const confirmBtn = document.createElement('button');
+    confirmBtn.type = 'button';
+    confirmBtn.className = 'user-inline-rewrite-btn user-inline-rewrite-btn--primary';
+    confirmBtn.textContent = '确认';
+    actions.appendChild(cancelBtn);
+    actions.appendChild(confirmBtn);
+    editor.appendChild(textarea);
+    editor.appendChild(actions);
+    div.appendChild(editor);
+
+    function cancel() {
+        closeInlineRewriteEditor(wrap, rawText);
+    }
+
+    async function confirm() {
+        const nextText = String(textarea.value || '');
+        if (!nextText.trim()) {
+            showUiAlert({
+                title: '无法改写',
+                message: '改写内容不能为空。',
+                variant: 'warning',
+            });
+            return;
+        }
+        if (!currentSessionId || !Number.isFinite(Number(beforeIndex))) return;
+        confirmBtn.disabled = true;
+        cancelBtn.disabled = true;
+        pendingRewriteTruncate = {
+            sessionId: currentSessionId,
+            before: Number(beforeIndex),
+            prevInput: ''
+        };
+        try {
+            await sendMessage({
+                message: nextText,
+                sessionId: currentSessionId,
+                preserveInput: true,
+                fromInlineRewrite: true,
+            });
+        } finally {
+            if (wrap.isConnected) {
+                confirmBtn.disabled = false;
+                cancelBtn.disabled = false;
+            }
+        }
+    }
+
+    textarea.addEventListener('input', function () {
+        autoResizeInlineRewriteTextarea(textarea);
+    });
+    textarea.addEventListener('keydown', function (e) {
+        if (e.key === 'Escape') {
+            e.preventDefault();
+            cancel();
+            return;
+        }
+        if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+            e.preventDefault();
+            void confirm();
+        }
+    });
+    cancelBtn.addEventListener('click', function (e) {
+        e.preventDefault();
+        cancel();
+    });
+    confirmBtn.addEventListener('click', function (e) {
+        e.preventDefault();
+        void confirm();
+    });
+    autoResizeInlineRewriteTextarea(textarea);
+    textarea.focus();
+    try {
+        textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+    } catch (e) { /* ignore */ }
 }
 
 async function branchSessionOnServer(beforeIndex) {
@@ -197,21 +326,14 @@ function onMessageToolbarClick(wrap, role, act) {
             return;
         }
         if (!Number.isFinite(before)) {
-            const prev = messageInput.value;
-            messageInput.value = toFill;
-            rewriteInputWorkspacePaths();
-            autoResizeTextarea();
-            messageInput.focus();
-            showRewriteUndoToast('input', { prev: prev });
+            showUiAlert({
+                title: '无法改写该条',
+                message: '该消息尚未与服务器索引对齐，请刷新当前会话后再试。',
+                variant: 'warning',
+            });
             return;
         }
-        const prev = messageInput.value;
-        pendingRewriteTruncate = null;
-        messageInput.value = toFill;
-        rewriteInputWorkspacePaths();
-        autoResizeTextarea();
-        messageInput.focus();
-        showRewriteUndoToast('input', { prev: prev });
+        openInlineRewriteEditor(wrap, toFill, before);
         return;
     }
     if (act === 'branch' && role === 'assistant') {
@@ -842,6 +964,7 @@ function ensureProcessGroup(ctx) {
     wrap.className = 'process-aggregate';
     var replayCollapsed = !!replayingMessages;
     if (replayCollapsed) wrap.classList.add('is-collapsed');
+    if (!replayingMessages) wrap.classList.add('is-running');
     wrap.innerHTML = '<div class="process-aggregate-top" role="button" tabindex="0" aria-expanded="' + (replayCollapsed ? 'false' : 'true') + '">'
         + '<div class="process-aggregate-top-line">'
         + '<span class="process-aggregate-title-wrap">'
@@ -871,6 +994,7 @@ function sealProcessGroup(ctx) {
     if (!ctx.currentProcessGroup) return;
     const agg = ctx.currentProcessGroup;
     if (agg.isConnected) {
+        agg.classList.remove('is-running');
         updateProcessBrief(agg);
         if (agg.dataset.procStartedAt) agg.dataset.procEndedAt = String(procNow());
         refreshProcessAggregateStats(agg);
@@ -905,6 +1029,7 @@ messageInput.addEventListener('input', autoResizeTextarea);
 messageInput.addEventListener('input', rewriteInputWorkspacePaths);
 messageInput.addEventListener('input', function () {
     if (currentSessionId) persistInputDraft(currentSessionId, messageInput.value);
+    if (typeof setSendButtonState === 'function') setSendButtonState();
 });
 autoResizeTextarea();
 refreshInputPathChips();
@@ -1996,6 +2121,7 @@ const TRACE_ROW = {
     'context-trim': { label: '裁剪', c: 'feed--trim' },
     'context-summary': { label: '压缩', c: 'feed--cmp' },
     'key-context': { label: '要点', c: 'feed--key' },
+    'user-steer':  { label: '追问', c: 'feed--answer' },
     'status':      { label: '状态', c: 'feed--st' },
 };
 

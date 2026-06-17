@@ -36,6 +36,7 @@ function initSidebarSash() {
 async function init() {
     loadUnreadFromStorage();
     initSidebarSash();
+    showLoading();
     await loadSessions();
     const sessions = sessionStore.list();
     let lastSessionId = localStorage.getItem('lastSessionId');

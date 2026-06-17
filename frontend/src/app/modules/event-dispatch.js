@@ -12,6 +12,8 @@ function renderEvent(ctx, event, eventIndex, runSessionId) {
         if (typeof eventIndex === 'number') ctx.lastUserEventIndex = eventIndex;
         sealProcessGroup(ctx);
         appendMessage(ctx, 'user', event.content || '', { eventIndex: eventIndex, turnTruncateIdx: eventIndex }, runSessionId);
+    } else if (event.type === 'user_steer') {
+        appendLog(ctx, event.content || '', 'user-steer', runSessionId);
     } else if (event.type === 'final') {
         appendMessage(ctx, 'assistant', event.content || '', { eventIndex: eventIndex, turnTruncateIdx: ctx.lastUserEventIndex }, runSessionId);
     } else if (event.type === 'process_metrics') {

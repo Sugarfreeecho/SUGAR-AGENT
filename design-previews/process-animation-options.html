@@ -1,0 +1,299 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>执行过程块条目配色 20 组</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --text: #cdd6f4;
+      --muted: #7f849c;
+      --line: rgba(205, 214, 244, 0.08);
+      --radius: 10px;
+      font-family: "Plus Jakarta Sans", Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      padding: 28px;
+      color: var(--text);
+      background:
+        radial-gradient(circle at 12% 0%, rgba(203, 166, 247, 0.16), transparent 32rem),
+        radial-gradient(circle at 90% 12%, rgba(96, 165, 250, 0.12), transparent 30rem),
+        linear-gradient(145deg, #171827, #10111c 62%, #171827);
+    }
+    header {
+      max-width: 1380px;
+      margin: 0 auto 22px;
+    }
+    h1 { margin: 0; font-size: 20px; letter-spacing: 0; }
+    .hint { margin: 7px 0 0; color: var(--muted); font-size: 13px; line-height: 1.6; }
+    .grid {
+      max-width: 1380px;
+      margin: 0 auto;
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 18px;
+    }
+    .option {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .option-title {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      align-items: center;
+      color: #bac2de;
+      font-size: 13px;
+      font-weight: 750;
+    }
+    .option-title span:last-child {
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 500;
+    }
+    .process {
+      position: relative;
+      overflow: hidden;
+      border-radius: var(--radius);
+      border: 1px solid rgba(203, 166, 247, 0.15);
+      background: rgba(38, 39, 60, 0.72);
+      box-shadow: 0 18px 48px rgba(0, 0, 0, 0.24), inset 0 1px 0 rgba(255,255,255,0.04);
+      backdrop-filter: blur(18px);
+      min-height: 300px;
+    }
+    /* 固定动画 B：内侧低对比流光 */
+    .process::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(105deg, transparent 0%, rgba(203,166,247,0.12) 36%, rgba(96,165,250,0.10) 50%, transparent 66%);
+      background-size: 260% 100%;
+      animation: bSheen 2.7s linear infinite;
+      opacity: 0.72;
+      pointer-events: none;
+    }
+    @keyframes bSheen {
+      from { background-position: 130% 0; }
+      to { background-position: -130% 0; }
+    }
+    .top {
+      position: relative;
+      z-index: 2;
+      padding: 11px 13px;
+      border-bottom: 1px solid var(--line);
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      background: rgba(0,0,0,0.12);
+    }
+    .name { font-size: 12px; color: #bac2de; font-weight: 700; }
+    .stats { font-size: 11px; color: var(--muted); }
+    .body {
+      position: relative;
+      z-index: 2;
+      padding: 8px;
+      display: flex;
+      flex-direction: column;
+    }
+    .feed {
+      display: grid;
+      grid-template-columns: 46px minmax(0, 1fr);
+      gap: 8px;
+      padding: 8px 9px;
+      border-left: 3px solid #45475a;
+      background: rgba(42, 42, 62, 0.85);
+      border-top: 1px solid rgba(255,255,255,0.045);
+      min-height: 42px;
+    }
+    .feed:first-child { border-top: none; border-top-left-radius: 7px; border-top-right-radius: 7px; }
+    .feed:last-child { border-bottom-left-radius: 7px; border-bottom-right-radius: 7px; }
+    .label { font-size: 11px; color: #858ba5; font-weight: 700; line-height: 1.45; }
+    .content { font-size: 12px; color: #aeb6d3; line-height: 1.48; white-space: pre-wrap; }
+
+    /* 01 默认稳妥：深色低饱和 */
+    .p01 .reason { border-left-color:#89b4fa; background:#2a3348; }
+    .p01 .answer { border-left-color:#3b82f6; background:#232d42; }
+    .p01 .steer { border-left-color:#cba6f7; background:#302e48; }
+    .p01 .tool { border-left-color:#7f849c; background:#2c2d40; }
+    .p01 .status { border-left-color:#6c7086; background:#28283c; }
+
+    /* 02 默认浅一档 */
+    .p02 .reason { border-left-color:#93c5fd; background:#303a52; }
+    .p02 .answer { border-left-color:#60a5fa; background:#2b3751; }
+    .p02 .steer { border-left-color:#d8b4fe; background:#393451; }
+    .p02 .tool { border-left-color:#94a3b8; background:#333547; }
+    .p02 .status { border-left-color:#818cf8; background:#2f3045; }
+
+    /* 03 更深、更专业 */
+    .p03 .reason { border-left-color:#4f8edb; background:#20283a; }
+    .p03 .answer { border-left-color:#2563eb; background:#1d2639; }
+    .p03 .steer { border-left-color:#9f7aea; background:#28243d; }
+    .p03 .tool { border-left-color:#64748b; background:#242837; }
+    .p03 .status { border-left-color:#475569; background:#222433; }
+
+    /* 04 冷蓝科技 */
+    .p04 .reason { border-left-color:#7dd3fc; background:#203244; }
+    .p04 .answer { border-left-color:#38bdf8; background:#1d2d42; }
+    .p04 .steer { border-left-color:#a78bfa; background:#2d2845; }
+    .p04 .tool { border-left-color:#94a3b8; background:#283044; }
+    .p04 .status { border-left-color:#67e8f9; background:#23313e; }
+
+    /* 05 紫蓝强化 */
+    .p05 .reason { border-left-color:#8ab4ff; background:#28304b; }
+    .p05 .answer { border-left-color:#4f7cff; background:#252c49; }
+    .p05 .steer { border-left-color:#e0b3ff; background:#382e4f; }
+    .p05 .tool { border-left-color:#9aa3c7; background:#2c2f46; }
+    .p05 .status { border-left-color:#7c83a6; background:#292b3f; }
+
+    /* 06 柔和低对比 */
+    .p06 .reason { border-left-color:#7ea6d9; background:#293142; }
+    .p06 .answer { border-left-color:#5d86c8; background:#283044; }
+    .p06 .steer { border-left-color:#b796d7; background:#302d43; }
+    .p06 .tool { border-left-color:#7f879d; background:#2d2f3d; }
+    .p06 .status { border-left-color:#6f768c; background:#2a2b39; }
+
+    /* 07 高区分度 */
+    .p07 .reason { border-left-color:#74c7ec; background:#213141; }
+    .p07 .answer { border-left-color:#3b82f6; background:#1f2b45; }
+    .p07 .steer { border-left-color:#f5c2e7; background:#3b2d43; }
+    .p07 .tool { border-left-color:#a6e3a1; background:#283a34; }
+    .p07 .status { border-left-color:#f9e2af; background:#3a3427; }
+
+    /* 08 条目更亮 */
+    .p08 .reason { border-left-color:#b7d7ff; background:#33405a; }
+    .p08 .answer { border-left-color:#83b4ff; background:#2f3c58; }
+    .p08 .steer { border-left-color:#e8c7ff; background:#443a5c; }
+    .p08 .tool { border-left-color:#b8c0d8; background:#3b3d50; }
+    .p08 .status { border-left-color:#a9b2cc; background:#36384b; }
+
+    /* 09 条目更暗 */
+    .p09 .reason { border-left-color:#5d8fd6; background:#1d2433; }
+    .p09 .answer { border-left-color:#2d65c8; background:#1a2131; }
+    .p09 .steer { border-left-color:#9b73d0; background:#241f34; }
+    .p09 .tool { border-left-color:#667085; background:#202331; }
+    .p09 .status { border-left-color:#525a6f; background:#1f2130; }
+
+    /* 10 Slate 中性 */
+    .p10 .reason { border-left-color:#8fb4d8; background:#2b3442; }
+    .p10 .answer { border-left-color:#6da2df; background:#273244; }
+    .p10 .steer { border-left-color:#b9a1db; background:#332f42; }
+    .p10 .tool { border-left-color:#8c96aa; background:#30323d; }
+    .p10 .status { border-left-color:#737d90; background:#2c2e38; }
+
+    /* 11 蓝绿清爽 */
+    .p11 .reason { border-left-color:#7dd3fc; background:#213342; }
+    .p11 .answer { border-left-color:#2dd4bf; background:#1f343b; }
+    .p11 .steer { border-left-color:#c084fc; background:#332844; }
+    .p11 .tool { border-left-color:#94a3b8; background:#2a3040; }
+    .p11 .status { border-left-color:#5eead4; background:#243837; }
+
+    /* 12 靛蓝方案 */
+    .p12 .reason { border-left-color:#93c5fd; background:#29324a; }
+    .p12 .answer { border-left-color:#818cf8; background:#292b4a; }
+    .p12 .steer { border-left-color:#c4b5fd; background:#332f4e; }
+    .p12 .tool { border-left-color:#94a3b8; background:#2b2f42; }
+    .p12 .status { border-left-color:#a5b4fc; background:#2a2d46; }
+
+    /* 13 蓝紫高亮边 */
+    .p13 .reason { border-left-color:#60a5fa; background:#263146; }
+    .p13 .answer { border-left-color:#1d4ed8; background:#222b42; }
+    .p13 .steer { border-left-color:#a855f7; background:#34264a; }
+    .p13 .tool { border-left-color:#64748b; background:#2b2e3d; }
+    .p13 .status { border-left-color:#475569; background:#282a38; }
+
+    /* 14 近黑高级 */
+    .p14 .reason { border-left-color:#4d7fc3; background:#1b2030; }
+    .p14 .answer { border-left-color:#315da8; background:#191e2d; }
+    .p14 .steer { border-left-color:#7d58b4; background:#211b2e; }
+    .p14 .tool { border-left-color:#566174; background:#1f2230; }
+    .p14 .status { border-left-color:#444b5a; background:#1d1f2b; }
+
+    /* 15 偏浅玻璃 */
+    .p15 .reason { border-left-color:#a9cdfa; background:rgba(57,68,88,.88); }
+    .p15 .answer { border-left-color:#75a7f0; background:rgba(50,62,84,.9); }
+    .p15 .steer { border-left-color:#d7b7f8; background:rgba(62,54,84,.88); }
+    .p15 .tool { border-left-color:#aeb7ce; background:rgba(56,59,75,.88); }
+    .p15 .status { border-left-color:#98a2ba; background:rgba(51,53,69,.88); }
+
+    /* 16 暖灰辅助 */
+    .p16 .reason { border-left-color:#7fb4e8; background:#293242; }
+    .p16 .answer { border-left-color:#4a8de8; background:#253044; }
+    .p16 .steer { border-left-color:#c7a0e8; background:#352f43; }
+    .p16 .tool { border-left-color:#c0a98a; background:#342f29; }
+    .p16 .status { border-left-color:#9a8f81; background:#302d28; }
+
+    /* 17 极简只区分边线 */
+    .p17 .reason { border-left-color:#7aa2f7; background:#2a2d3f; }
+    .p17 .answer { border-left-color:#3d7ae8; background:#2a2d3f; }
+    .p17 .steer { border-left-color:#bb9af7; background:#2a2d3f; }
+    .p17 .tool { border-left-color:#7f849c; background:#2a2d3f; }
+    .p17 .status { border-left-color:#565f89; background:#2a2d3f; }
+
+    /* 18 彩色但克制 */
+    .p18 .reason { border-left-color:#89dceb; background:#253541; }
+    .p18 .answer { border-left-color:#74c7ec; background:#223044; }
+    .p18 .steer { border-left-color:#cba6f7; background:#332d48; }
+    .p18 .tool { border-left-color:#a6e3a1; background:#2b3a31; }
+    .p18 .status { border-left-color:#fab387; background:#3a3028; }
+
+    /* 19 内容阅读优先 */
+    .p19 .reason { border-left-color:#86aee8; background:#273044; }
+    .p19 .answer { border-left-color:#528ee8; background:#242e43; }
+    .p19 .steer { border-left-color:#be9ee7; background:#302c44; }
+    .p19 .tool { border-left-color:#8791a8; background:#2a2d3c; }
+    .p19 .status { border-left-color:#727b92; background:#272a38; }
+    .p19 .content { color:#c2c9df; }
+
+    /* 20 明显但不刺眼 */
+    .p20 .reason { border-left-color:#89b4fa; background:#2b3650; }
+    .p20 .answer { border-left-color:#2563eb; background:#263451; }
+    .p20 .steer { border-left-color:#cba6f7; background:#3a3152; }
+    .p20 .tool { border-left-color:#94a3b8; background:#33364a; }
+    .p20 .status { border-left-color:#f9e2af; background:#3d362b; }
+
+    @media (max-width: 900px) {
+      body { padding: 18px; }
+      .grid { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>执行过程块条目配色 20 组</h1>
+    <p class="hint">框背景动画统一使用“动画 B · 内侧低对比流光”。每张卡展示同样的执行过程条目：思考、工具、追问、回复、状态。</p>
+  </header>
+  <main class="grid" id="grid"></main>
+  <script>
+    const names = [
+      '01 默认稳妥', '02 默认浅一档', '03 更深更专业', '04 冷蓝科技', '05 紫蓝强化',
+      '06 柔和低对比', '07 高区分度', '08 条目更亮', '09 条目更暗', '10 Slate 中性',
+      '11 蓝绿清爽', '12 靛蓝方案', '13 蓝紫高亮边', '14 近黑高级', '15 偏浅玻璃',
+      '16 暖灰辅助', '17 极简边线', '18 彩色克制', '19 阅读优先', '20 明显不刺眼'
+    ];
+    const grid = document.getElementById('grid');
+    names.forEach((name, i) => {
+      const n = String(i + 1).padStart(2, '0');
+      const section = document.createElement('section');
+      section.className = 'option';
+      section.innerHTML = `
+        <div class="option-title"><span>${name}</span><span>Palette ${n}</span></div>
+        <div class="process p${n}">
+          <div class="top"><span class="name">执行过程</span><span class="stats">工具 4 · 1m 36s</span></div>
+          <div class="body">
+            <div class="feed reason"><span class="label">思考</span><span class="content">分析输入、规划步骤，并判断是否需要调用工具。</span></div>
+            <div class="feed tool"><span class="label">工具</span><span class="content">read_file("workspace/report.md") → 读取成功</span></div>
+            <div class="feed steer"><span class="label">追问</span><span class="content">同时检查图表是否存在异常值。</span></div>
+            <div class="feed answer"><span class="label">回复</span><span class="content">已定位 3 个需要确认的数据点，继续整理结果。</span></div>
+            <div class="feed status"><span class="label">状态</span><span class="content">验证: PASS</span></div>
+          </div>
+        </div>`;
+      grid.appendChild(section);
+    });
+  </script>
+</body>
+</html>

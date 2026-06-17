@@ -1,11 +1,16 @@
 function setSendButtonState() {
     sendBtn.disabled = false;
     if (isSessionRunning(currentSessionId)) {
-        sendBtn.innerHTML = '停止 <span class="loader" aria-hidden="true"></span>';
+        const hasDraft = (typeof inputHasSendableText === 'function')
+            ? inputHasSendableText()
+            : !!(messageInput && String(messageInput.value || '').trim());
+        sendBtn.innerHTML = hasDraft ? '追问' : '停止 <span class="loader" aria-hidden="true"></span>';
         sendBtn.classList.add('is-stop');
+        sendBtn.classList.toggle('is-followup', hasDraft);
     } else {
         sendBtn.textContent = '发送';
         sendBtn.classList.remove('is-stop');
+        sendBtn.classList.remove('is-followup');
     }
 }
 
@@ -77,7 +82,12 @@ function showLoading() {
     box.className = 'skeleton';
     box.id = 'chat-loading';
     box.setAttribute('role', 'status');
-    box.innerHTML = '<div class="skeleton-line" style="width:38%"></div><div class="skeleton-line" style="width:72%"></div><div class="skeleton-line" style="width:55%"></div><div class="skeleton-line" style="width:64%"></div>';
+    box.innerHTML = ''
+        + '<div class="skeleton-page" aria-hidden="true">'
+        + '<div class="skeleton-mast"><span></span><span></span></div>'
+        + '<div class="skeleton-hero"><div class="skeleton-image"></div><div class="skeleton-column"><span></span><span></span><span></span><span></span></div></div>'
+        + '<div class="skeleton-grid"><div><span></span><span></span><span></span></div><div><span></span><span></span><span></span></div><div><span></span><span></span><span></span></div></div>'
+        + '</div><div class="skeleton-copy">加载中</div>';
     box.setAttribute('data-ui-tip', '加载会话');
     bindUiHoverTip(box);
     (getVisibleChatStream() || chatContainer).appendChild(box);

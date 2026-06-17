@@ -2,6 +2,9 @@ let currentSessionId = null;
 /** Blocks repeat sends while the async send pipeline is claiming a sessionStore run slot. */
 let sendPipelineLock = false;
 let sendPipelineLockSessionId = null;
+const followupQueueBySession = Object.create(null);
+let followupQueueSeq = 1;
+const followupQueueDraining = Object.create(null);
 /** 会话在后台跑完后未点开过：侧栏绿点，点开即清除（localStorage 持久化，刷新不丢） */
 const sessionUnreadComplete = new Set();
 const LS_SESSION_UNREAD = 'myagent-session-unread';

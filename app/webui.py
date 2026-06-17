@@ -16,14 +16,14 @@ from typing import Optional
 from pathlib import Path
 from urllib.parse import unquote
 
-from fastapi import FastAPI, Form, Query, Request
+from fastapi import FastAPI, File, Form, Query, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
 
 from agent import astream_events, astream_events_continuation, session_manager
 from agent_harness import PROJECT_ROOT, WORK_DIR, dotenv_file_path, refresh_executor_client_from_env
-from agent_loop import compute_context_tokens_for_session
+from agent_loop import compute_context_tokens_for_session, enqueue_session_steer
 from session_lifecycle import get_run_started_at, is_run_active
 from session_event_bus import subscribe_session_events
 import agent_mcp
@@ -471,6 +471,152 @@ async def serve_path_picker_js():
     return Response(content=content, media_type="application/javascript")
 
 
+def _safe_upload_filename(name: str) -> str:
+    raw = Path(str(name or "upload.bin")).name.strip()
+    if not raw or raw in (".", ".."):
+        raw = "upload.bin"
+    safe = re.sub(r'[<>:"/\\|?*\x00-\x1f]+', "_", raw).strip(" .")
+    return safe or "upload.bin"
+
+
+def _dedupe_upload_path(dest: Path) -> Path:
+    if not dest.exists():
+        return dest
+    stem = dest.stem or "upload"
+    suffix = dest.suffix
+    parent = dest.parent
+    for i in range(2, 10000):
+        cand = parent / f"{stem}_{i}{suffix}"
+        if not cand.exists():
+            return cand
+    raise RuntimeError("too many duplicate upload filenames")
+
+
+_WORKSPACE_FILE_SKIP_DIRS = {
+    ".git",
+    ".hg",
+    ".svn",
+    ".trash",
+    ".tool_results",
+    "__pycache__",
+    ".pytest_cache",
+    ".mypy_cache",
+    ".ruff_cache",
+    "node_modules",
+    "sessions",
+    "skills",
+}
+
+
+def _workspace_file_item(path: Path, root: Path) -> dict:
+    st = path.stat()
+    rel = str(path.relative_to(root)).replace("\\", "/")
+    return {
+        "name": path.name,
+        "path": str(path),
+        "rel": rel,
+        "size": int(st.st_size),
+        "mtime": float(st.st_mtime),
+    }
+
+
+def _scan_workspace_files(query: str, limit: int) -> list[dict]:
+    root = WORK_DIR.resolve()
+    q = (query or "").strip().lower()
+    terms = [x for x in re.split(r"\s+", q) if x]
+    matches: list[dict] = []
+    scanned = 0
+    scan_limit = 30000
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [
+            d for d in dirnames
+            if d not in _WORKSPACE_FILE_SKIP_DIRS and not d.startswith(".venv")
+        ]
+        base = Path(dirpath)
+        for filename in filenames:
+            scanned += 1
+            if scanned > scan_limit:
+                break
+            path = base / filename
+            try:
+                rel = str(path.relative_to(root)).replace("\\", "/")
+                hay = rel.lower()
+                if terms and not all(term in hay for term in terms):
+                    continue
+                matches.append(_workspace_file_item(path, root))
+            except OSError:
+                continue
+        if scanned > scan_limit:
+            break
+    if terms:
+        def score(item: dict) -> tuple[int, int, str]:
+            rel = str(item.get("rel") or "").lower()
+            name = str(item.get("name") or "").lower()
+            first = terms[0] if terms else ""
+            rank = 0
+            if name.startswith(first):
+                rank = -3
+            elif rel.startswith(first):
+                rank = -2
+            elif first and first in name:
+                rank = -1
+            return rank, len(rel), rel
+        matches.sort(key=score)
+    else:
+        matches.sort(key=lambda item: float(item.get("mtime") or 0), reverse=True)
+    return matches[:limit]
+
+
+@fastapi_app.get("/api/workspace-files")
+async def list_workspace_files(
+    q: str = Query("", max_length=200),
+    limit: int = Query(80, ge=1, le=500),
+):
+    try:
+        files = await run_in_threadpool(_scan_workspace_files, q, limit)
+        return JSONResponse({"ok": True, "root": str(WORK_DIR.resolve()), "files": files})
+    except Exception as exc:
+        logger.warning("workspace file scan failed: %s", exc)
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
+
+
+@fastapi_app.post("/api/upload-chat-files")
+async def upload_chat_files(files: list[UploadFile] = File(...)):
+    if not files:
+        return JSONResponse({"ok": False, "error": "no files"}, status_code=400)
+    import datetime
+    upload_root = (WORK_DIR / "uploads" / "chat" / datetime.datetime.now().strftime("%Y%m%d")).resolve()
+    upload_root.mkdir(parents=True, exist_ok=True)
+    saved = []
+    try:
+        for uf in files:
+            filename = _safe_upload_filename(uf.filename or "")
+            dest = _dedupe_upload_path((upload_root / filename).resolve())
+            try:
+                dest.relative_to(upload_root)
+            except ValueError:
+                return JSONResponse({"ok": False, "error": "invalid filename"}, status_code=400)
+            with dest.open("wb") as out:
+                while True:
+                    chunk = await uf.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    out.write(chunk)
+            saved.append({
+                "name": filename,
+                "path": str(dest),
+                "rel": str(dest.relative_to(WORK_DIR.resolve())).replace("\\", "/"),
+                "size": dest.stat().st_size,
+            })
+    finally:
+        for uf in files:
+            try:
+                await uf.close()
+            except Exception:
+                pass
+    return JSONResponse({"ok": True, "files": saved})
+
+
 @fastapi_app.post("/api/pick-path")
 async def api_pick_path(request: Request):
     try:
@@ -831,6 +977,25 @@ async def post_tool_approval(session_id: str, request: Request):
 
     matched = resolve_tool_approval(session_id, aid, approve)
     return JSONResponse(content={"ok": matched})
+
+
+@fastapi_app.post("/sessions/{session_id}/steer")
+async def post_session_steer(session_id: str, request: Request):
+    sid = (session_id or "").strip()
+    if not sid:
+        return JSONResponse(content={"ok": False, "error": "missing session_id"}, status_code=400)
+    if not _is_session_stream_active(sid):
+        return JSONResponse(content={"ok": False, "error": "session is not running"}, status_code=409)
+    try:
+        data = await request.json()
+    except Exception:
+        return JSONResponse(content={"ok": False, "error": "invalid json"}, status_code=400)
+    message = str((data or {}).get("message") or "").strip()
+    client_id = str((data or {}).get("client_id") or "").strip()
+    result = enqueue_session_steer(sid, message, client_id=client_id)
+    if not result.get("ok"):
+        return JSONResponse(content=result, status_code=400)
+    return JSONResponse(content=result)
 
 
 @fastapi_app.post("/chat")
@@ -1375,6 +1540,7 @@ async def clear_session_unread_result(session_id: str):
 async def truncate_session_events(
     session_id: str,
     before_index: int = Query(..., description="保留事件区间 [0, before_index)"),
+    backup: bool = Query(False, description="whether to create truncate_backups before truncating"),
 ):
     """
     仅保留 ui_events[0:before_index]（下标 before_index 及之后丢弃），
@@ -1386,7 +1552,11 @@ async def truncate_session_events(
                 content={"ok": False, "error": "invalid before_index"},
                 status_code=400,
             )
-        ok = session_manager.truncate_session_at_event_index(session_id, int(before_index))
+        ok = session_manager.truncate_session_at_event_index(
+            session_id,
+            int(before_index),
+            create_backup=bool(backup),
+        )
     except (TypeError, ValueError):
         return JSONResponse(content={"ok": False, "error": "invalid before_index"}, status_code=400)
     if not ok:
@@ -2196,6 +2366,8 @@ async def _config_check(req: _Request, call_next):
         "/api/env",
         "/api/mcp_config",
         "/api/pick-path",
+        "/api/upload-chat-files",
+        "/api/workspace-files",
     ) or p.startswith("/static/"):
         return await call_next(req)
     if not _is_configured():

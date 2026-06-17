@@ -1,4 +1,4 @@
-"""
+﻿"""
 agent_loop — ReAct 主循环与 SSE 事件源。
 
 流程（单轮用户消息）
@@ -16,6 +16,7 @@ import re
 import time
 import asyncio
 import uuid
+import threading
 from datetime import datetime
 import inspect
 from typing import TypedDict, List, Dict, Any, AsyncGenerator, Callable, Optional
@@ -103,6 +104,39 @@ from session_event_bus import close_session_stream, prune_session_ephemeral, pub
 from tool_approval_gate import new_approval_id, wait_tool_ui_approval_after_emit
 
 EXECUTOR_STREAM = os.getenv("EXECUTOR_STREAM", "true").lower() in ("1", "true", "yes")
+
+_STEER_LOCK = threading.Lock()
+_STEER_QUEUES: Dict[str, List[Dict[str, Any]]] = {}
+
+
+def enqueue_session_steer(session_id: str, content: str, client_id: str = "") -> Dict[str, Any]:
+    sid = str(session_id or "").strip()
+    text = str(content or "").strip()
+    if not sid:
+        return {"ok": False, "error": "missing session_id"}
+    if not text:
+        return {"ok": False, "error": "empty message"}
+    item = {
+        "id": str(uuid.uuid4()),
+        "content": text,
+        "client_id": str(client_id or "").strip(),
+        "created_at": time.time(),
+    }
+    with _STEER_LOCK:
+        q = _STEER_QUEUES.setdefault(sid, [])
+        q.append(item)
+        depth = len(q)
+    return {"ok": True, "item": item, "queued": depth}
+
+
+def _pop_session_steers(session_id: str) -> List[Dict[str, Any]]:
+    sid = str(session_id or "").strip()
+    if not sid:
+        return []
+    with _STEER_LOCK:
+        items = list(_STEER_QUEUES.get(sid) or [])
+        _STEER_QUEUES.pop(sid, None)
+    return items
 
 # ---------------------------------------------------------------------------
 # 压缩兜底（agent_memory：compress_tail_fallback）
@@ -464,6 +498,44 @@ async def _push_stream_event(
                 await r
         except Exception:
             pass
+
+
+async def _consume_steer_messages(
+    state: State,
+    emit: Optional[Callable[[Dict[str, Any]], Any]] = None,
+) -> bool:
+    sid = str(state.get("session_id") or "").strip()
+    items = _pop_session_steers(sid)
+    if not items:
+        return False
+    work_messages = list(state.get("work_messages", []))
+    llm_history = list(state.get("llm_history", []))
+    changed = False
+    for item in items:
+        text = str((item or {}).get("content") or "").strip()
+        if not text:
+            continue
+        msg = UserMessage(content=text)
+        work_messages.append(msg)
+        llm_history.append(msg)
+        state["user_input"] = text
+        state["dialogue"] = derive_dialogue_from_assistant_history(llm_history)
+        state["work_messages"] = work_messages
+        state["llm_history"] = llm_history
+        _persist_state_with_model_append(state, msg)
+        await _push_stream_event(
+            state,
+            {
+                "type": "user_steer",
+                "content": text,
+                "steer": True,
+                "steer_id": str((item or {}).get("id") or ""),
+                "client_id": str((item or {}).get("client_id") or ""),
+            },
+            emit=emit,
+        )
+        changed = True
+    return changed
 
 
 def _progress_hint_to_stream_event(item: Any) -> Dict[str, Any]:
@@ -2109,6 +2181,13 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
                 state["llm_history"] = llm_history
                 state["work_messages"] = work_messages
                 _persist_state(state)
+                if await _consume_steer_messages(state, emit=emit):
+                    llm_history = list(state["llm_history"])
+                    work_messages = list(state["work_messages"])
+                    final_result_retries = 0
+                    state["final_result_retries"] = 0
+                    state["empty_final_retries"] = 0
+                    continue
 
             # ---------- 2.8 重复检测（须在工具结果写入 llm_history 之后，避免 OpenAI 报 tool_calls 顺序错误） ----------
             # 文本重复检测只对比「正文」；思考单独存在于 reasoning 字段，不参与与 last_response 的混比
@@ -2173,22 +2252,18 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
 
             if not tool_calls_list:
                 # 没有工具调用 → 终稿只取正文；仅有思考、无正文时由前端 llm_reasoning 展示，不当作最终回答文本
+                if await _consume_steer_messages(state, emit=emit):
+                    llm_history = list(state["llm_history"])
+                    work_messages = list(state["work_messages"])
+                    final_result_retries = 0
+                    state["final_result_retries"] = 0
+                    state["empty_final_retries"] = 0
+                    continue
                 final_content = (response_text or "").strip()
                 if not final_content and final_result_retries < final_result_retry_max:
                     final_result_retries += 1
                     state["final_result_retries"] = final_result_retries
                     state["empty_final_retries"] = final_result_retries
-                    retry_msg = SystemMessage(
-                        content=(
-                            "[系统重试] 上一轮模型没有产生可见最终回答。"
-                            "请基于已有上下文直接给出最终结果；如果无法完成，请明确说明原因。"
-                        )
-                    )
-                    llm_history.append(retry_msg)
-                    work_messages.append(retry_msg)
-                    _runtime_v2_append_model_message(state, retry_msg)
-                    state["llm_history"] = llm_history
-                    state["work_messages"] = work_messages
                     _persist_state(state)
                     await _push_stream_event(
                         state,

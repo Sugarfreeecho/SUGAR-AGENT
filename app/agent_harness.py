@@ -2725,6 +2725,8 @@ class SessionManager:
             elif event_copy.get("type") == "final":
                 final_status = "failed" if self._ui_event_final_is_failure(event_copy) else "success"
                 self.mark_session_unread_result(session_id, status=final_status)
+            elif event_copy.get("type") in ("run_interrupted", "run_failed"):
+                self.mark_session_unread_result(session_id, status="failed")
         except Exception as e:
             logger.warning(f"append_ui_event 失败: {e}")
 
@@ -3065,6 +3067,7 @@ class SessionManager:
         before_index: int,
         *,
         boundary_for_branch: bool = False,
+        create_backup: bool = True,
     ) -> bool:
         """
         保留 ui_events[0:before_index]（下标为 before_index 及之后均丢弃），
@@ -3080,11 +3083,12 @@ class SessionManager:
             if before_index > n:
                 before_index = n
             new_events = events[:before_index]
-            self._backup_session_before_truncate(
-                session_id,
-                before_index,
-                event_count=n,
-            )
+            if create_backup:
+                self._backup_session_before_truncate(
+                    session_id,
+                    before_index,
+                    event_count=n,
+                )
             self._save_ui_events(session_id, new_events)
             new_llm, new_work, consumed_cprefix = self._rebuild_llm_work_from_ui(
                 session_id,

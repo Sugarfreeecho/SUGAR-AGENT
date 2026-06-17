@@ -44,6 +44,12 @@ function applySessionEvent(event, opts) {
     }
     if (type === 'run_finished' || type === 'run_interrupted' || type === 'run_failed') {
         markSessionRunInactive(sessionId);
+        const sess = sessionStore.get(sessionId);
+        if (sess && (type === 'run_interrupted' || type === 'run_failed')) {
+            sess.unread_result = true;
+            sess.unread_result_status = 'failed';
+            sess.unread_result_at = new Date().toISOString();
+        }
         return { handled: true, runStateChanged: true, messageRecord: messageRecord };
     }
     if (type === 'final' && source === 'sse') {
