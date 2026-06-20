@@ -1164,15 +1164,15 @@ body {
 }
 .process-aggregate.is-running:before {
     opacity: 0.72;
-    animation: processInnerSheen 2.7s linear infinite;
+    animation: processInnerSheen 4.2s ease-in-out infinite alternate;
 }
 .process-aggregate.is-running:after {
     opacity: 0;
     animation: none;
 }
 @keyframes processInnerSheen {
-    from { background-position: 130% 0; }
-    to { background-position: -130% 0; }
+    from { background-position: 115% 0; }
+    to { background-position: -115% 0; }
 }
 :root.theme-light .process-aggregate {
     background:

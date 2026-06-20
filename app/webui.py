@@ -512,6 +512,7 @@ def _workspace_file_item(path: Path, root: Path) -> dict:
     st = path.stat()
     rel = str(path.relative_to(root)).replace("\\", "/")
     return {
+        "kind": "file",
         "name": path.name,
         "path": str(path),
         "rel": rel,
@@ -520,23 +521,72 @@ def _workspace_file_item(path: Path, root: Path) -> dict:
     }
 
 
-def _scan_workspace_files(query: str, limit: int) -> list[dict]:
+def _workspace_dir_item(path: Path, root: Path) -> dict:
+    rel = str(path.relative_to(root)).replace("\\", "/")
+    return {
+        "kind": "directory",
+        "name": path.name,
+        "path": str(path),
+        "rel": rel,
+    }
+
+
+def _is_workspace_visible_dir(name: str) -> bool:
+    return name not in _WORKSPACE_FILE_SKIP_DIRS and not name.startswith(".venv")
+
+
+def _resolve_workspace_rel_dir(rel_dir: str) -> Path:
+    root = WORK_DIR.resolve()
+    rel = str(rel_dir or "").strip().replace("\\", "/").strip("/")
+    target = (root / rel).resolve() if rel else root
+    target.relative_to(root)
+    if not target.is_dir():
+        raise FileNotFoundError(rel or ".")
+    return target
+
+
+def _list_workspace_dir(rel_dir: str) -> list[dict]:
+    root = WORK_DIR.resolve()
+    target = _resolve_workspace_rel_dir(rel_dir)
+    dirs: list[dict] = []
+    files: list[dict] = []
+    with os.scandir(target) as it:
+        for entry in it:
+            try:
+                if entry.is_dir(follow_symlinks=False):
+                    if _is_workspace_visible_dir(entry.name):
+                        dirs.append(_workspace_dir_item(Path(entry.path), root))
+                elif entry.is_file(follow_symlinks=False):
+                    files.append(_workspace_file_item(Path(entry.path), root))
+            except OSError:
+                continue
+    dirs.sort(key=lambda item: str(item.get("name") or "").lower())
+    files.sort(key=lambda item: str(item.get("name") or "").lower())
+    return dirs + files
+
+
+def _scan_workspace_files(query: str) -> list[dict]:
     root = WORK_DIR.resolve()
     q = (query or "").strip().lower()
     terms = [x for x in re.split(r"\s+", q) if x]
     matches: list[dict] = []
-    scanned = 0
-    scan_limit = 30000
     for dirpath, dirnames, filenames in os.walk(root):
         dirnames[:] = [
             d for d in dirnames
-            if d not in _WORKSPACE_FILE_SKIP_DIRS and not d.startswith(".venv")
+            if _is_workspace_visible_dir(d)
         ]
         base = Path(dirpath)
+        if terms:
+            for dirname in dirnames:
+                path = base / dirname
+                try:
+                    rel = str(path.relative_to(root)).replace("\\", "/")
+                    hay = rel.lower()
+                    if all(term in hay for term in terms):
+                        matches.append(_workspace_dir_item(path, root))
+                except OSError:
+                    continue
         for filename in filenames:
-            scanned += 1
-            if scanned > scan_limit:
-                break
             path = base / filename
             try:
                 rel = str(path.relative_to(root)).replace("\\", "/")
@@ -546,8 +596,6 @@ def _scan_workspace_files(query: str, limit: int) -> list[dict]:
                 matches.append(_workspace_file_item(path, root))
             except OSError:
                 continue
-        if scanned > scan_limit:
-            break
     if terms:
         def score(item: dict) -> tuple[int, int, str]:
             rel = str(item.get("rel") or "").lower()
@@ -564,16 +612,20 @@ def _scan_workspace_files(query: str, limit: int) -> list[dict]:
         matches.sort(key=score)
     else:
         matches.sort(key=lambda item: float(item.get("mtime") or 0), reverse=True)
-    return matches[:limit]
+    return matches
 
 
 @fastapi_app.get("/api/workspace-files")
 async def list_workspace_files(
     q: str = Query("", max_length=200),
-    limit: int = Query(80, ge=1, le=500),
+    dir: str = Query("", max_length=1000),
 ):
     try:
-        files = await run_in_threadpool(_scan_workspace_files, q, limit)
+        query = (q or "").strip()
+        if query:
+            files = await run_in_threadpool(_scan_workspace_files, query)
+        else:
+            files = await run_in_threadpool(_list_workspace_dir, dir)
         return JSONResponse({"ok": True, "root": str(WORK_DIR.resolve()), "files": files})
     except Exception as exc:
         logger.warning("workspace file scan failed: %s", exc)

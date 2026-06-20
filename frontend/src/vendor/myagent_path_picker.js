@@ -155,9 +155,11 @@
     return Math.round(n / 107374182.4) / 10 + ' GB';
   }
 
-  async function fetchWorkspaceFiles(query, signal) {
-    var url = '/api/workspace-files?limit=200';
-    if (query) url += '&q=' + encodeURIComponent(query);
+  async function fetchWorkspaceFiles(query, dir, signal) {
+    var params = [];
+    if (query) params.push('q=' + encodeURIComponent(query));
+    else if (dir) params.push('dir=' + encodeURIComponent(dir));
+    var url = '/api/workspace-files' + (params.length ? ('?' + params.join('&')) : '');
     var r = await fetch(url, { credentials: 'same-origin', signal: signal });
     var j = await r.json().catch(function () { return { ok: false, error: '读取工作区文件失败' }; });
     if (!r.ok || !j.ok) throw new Error((j && j.error) || '读取工作区文件失败');
@@ -195,6 +197,8 @@
       controller: null,
       selected: Object.create(null),
       expanded: Object.create(null),
+      loadedDirs: Object.create(null),
+      itemMap: Object.create(null),
     };
 
     function positionPanel() {
@@ -353,7 +357,7 @@
     }
 
     function makeDir(name, rel, root) {
-      return { type: 'dir', name: name, rel: rel, root: !!root, path: '', dirs: Object.create(null), files: [], children: [], fileCount: 0 };
+      return { type: 'dir', name: name, rel: rel, root: !!root, path: '', dirs: Object.create(null), files: [], children: [], loaded: false };
     }
 
     function nativeRootFromItem(item, relPath) {
@@ -385,22 +389,34 @@
     function buildTree(items) {
       var root = makeDir(workspaceRootName(), '', true);
       root.path = String(global.__WORK_DIR__ || '').replace(/[\\/]+$/, '');
-      (items || []).forEach(function (item) {
-        var relPath = String(item.rel || item.path || item.name || '').replace(/\\/g, '/');
-        var parts = relPath.split('/').filter(Boolean);
-        if (!parts.length) return;
-        var rootPath = nativeRootFromItem(item, relPath);
-        if (!root.path && rootPath) root.path = rootPath;
+      root.loaded = !!state.loadedDirs.__root__;
+      function ensureDir(parts, rootPath) {
         var node = root;
         var pathParts = [];
-        for (var i = 0; i < parts.length - 1; i++) {
+        for (var i = 0; i < parts.length; i++) {
           pathParts.push(parts[i]);
           if (!node.dirs[parts[i]]) {
             node.dirs[parts[i]] = makeDir(parts[i], pathParts.join('/'), false);
             node.dirs[parts[i]].path = joinNativePath(rootPath || root.path, pathParts.join('/'));
           }
           node = node.dirs[parts[i]];
+          node.loaded = !!state.loadedDirs[node.rel || '__root__'];
         }
+        return node;
+      }
+      (items || []).forEach(function (item) {
+        var relPath = String(item.rel || item.path || item.name || '').replace(/\\/g, '/');
+        var parts = relPath.split('/').filter(Boolean);
+        if (!parts.length) return;
+        var rootPath = nativeRootFromItem(item, relPath);
+        if (!root.path && rootPath) root.path = rootPath;
+        if (item.kind === 'directory') {
+          var dirNode = ensureDir(parts, rootPath || root.path);
+          dirNode.name = item.name || dirNode.name;
+          dirNode.path = item.path || dirNode.path;
+          return;
+        }
+        var node = ensureDir(parts.slice(0, -1), rootPath || root.path);
         node.files.push({ type: 'file', name: item.name || parts[parts.length - 1] || relPath, rel: relPath, item: item });
       });
       function finish(dir) {
@@ -412,7 +428,6 @@
           return a.name.localeCompare(b.name, undefined, { sensitivity: 'base' });
         });
         dir.children = dirs.concat(dir.files);
-        dir.fileCount = dir.files.length + dirs.reduce(function (sum, child) { return sum + child.fileCount; }, 0);
       }
       finish(root);
       return root;
@@ -424,7 +439,7 @@
       var key = dir.rel || '__root__';
       if (force) state.expanded[key] = true;
       else if (typeof state.expanded[key] === 'undefined') state.expanded[key] = depth === 0;
-      dir.children.forEach(function (child) {
+      if (force) dir.children.forEach(function (child) {
         if (child.type === 'dir') expandKnownDirs(child, force, depth + 1);
       });
     }
@@ -443,11 +458,27 @@
       return rows;
     }
 
+    function itemMapKey(item) {
+      return String((item && (item.kind || 'file')) || 'file') + ':' + String((item && (item.rel || item.path || item.name)) || '');
+    }
+
+    function mergeLoadedItems(items) {
+      (items || []).forEach(function (item) {
+        var key = itemMapKey(item);
+        if (key !== ':') state.itemMap[key] = item;
+      });
+      state.items = Object.keys(state.itemMap).map(function (key) { return state.itemMap[key]; });
+      state.items.sort(function (a, b) {
+        return String(a.rel || '').localeCompare(String(b.rel || ''), undefined, { sensitivity: 'base' });
+      });
+    }
+
     function toggleDir(node) {
       if (!node) return;
       var key = node.rel || '__root__';
       state.expanded[key] = !state.expanded[key];
       render(state.items, false);
+      if (state.expanded[key] && !search.value && !state.loadedDirs[key]) loadDir(node.rel || '');
     }
 
     function render(items, loading, error) {
@@ -501,7 +532,7 @@
         name.textContent = node.name || node.rel || '';
         var meta = document.createElement('div');
         meta.className = 'workspace-file-meta';
-        meta.textContent = row.type === 'dir' ? (node.fileCount + ' 个文件') : formatBytes(node.item.size);
+        meta.textContent = row.type === 'dir' ? '' : formatBytes(node.item.size);
 
         tree.appendChild(indent);
         tree.appendChild(chevron);
@@ -530,11 +561,35 @@
       if (state.controller) state.controller.abort();
       state.controller = (typeof AbortController !== 'undefined') ? new AbortController() : null;
       render(state.items, true);
-      fetchWorkspaceFiles(q, state.controller ? state.controller.signal : undefined)
-        .then(function (items) { if (state.open) render(items, false); })
+      fetchWorkspaceFiles(q, '', state.controller ? state.controller.signal : undefined)
+        .then(function (items) {
+          if (!state.open) return;
+          if (q) {
+            render(items, false);
+          } else {
+            state.loadedDirs.__root__ = true;
+            mergeLoadedItems(items);
+            render(state.items, false);
+          }
+        })
         .catch(function (err) {
           if (err && err.name === 'AbortError') return;
           if (state.open) render([], false, (err && err.message) || '读取失败');
+        });
+    }
+
+    function loadDir(rel) {
+      var key = rel || '__root__';
+      if (state.loadedDirs[key]) return;
+      state.loadedDirs[key] = true;
+      fetchWorkspaceFiles('', rel || '', undefined)
+        .then(function (items) {
+          if (!state.open || search.value) return;
+          mergeLoadedItems(items);
+          render(state.items, false);
+        })
+        .catch(function () {
+          delete state.loadedDirs[key];
         });
     }
 
@@ -550,6 +605,9 @@
       panel.setAttribute('aria-hidden', 'false');
       search.value = '';
       state.expanded = Object.create(null);
+      state.loadedDirs = Object.create(null);
+      state.itemMap = Object.create(null);
+      state.items = [];
       render([], true);
       positionPanel();
       loadNow();
