@@ -661,7 +661,7 @@ async function sendMessage(options) {
     setSessionRunState(runSessionId, { controller: ac, ctx: runCtx });
     setSendButtonState();
     syncSessionListIndicatorClasses();
-    applySessionEvent({ type: 'user', content: rawMessage }, {
+    applySessionEvent({ type: 'user', content: rawMessage, created_at: userSentAt }, {
         sessionId: runSessionId,
         eventIndex: preCount,
         source: 'local-send',
@@ -670,7 +670,7 @@ async function sendMessage(options) {
         liveAutoFollow = true;
         streamChatNearBottom = true;
         streamProcNearBottom = true;
-        appendMessage(runCtx, 'user', rawMessage, { eventIndex: preCount, turnTruncateIdx: preCount }, runSessionId);
+        appendMessage(runCtx, 'user', rawMessage, { eventIndex: preCount, turnTruncateIdx: preCount, createdAt: userSentAt }, runSessionId);
         if (!options.fromQueue && !options.preserveInput) {
             messageInput.value = '';
             persistInputDraft(runSessionId, '');

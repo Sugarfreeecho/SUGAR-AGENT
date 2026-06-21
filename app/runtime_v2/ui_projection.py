@@ -292,41 +292,48 @@ class RuntimeUiProjection:
     def event_to_ui(event: RuntimeEvent) -> Optional[dict]:
         payload = dict(event.payload or {})
         if event.type == "message_user":
-            return {"type": "user", "content": payload.get("content") or ""}
+            return {"type": "user", "content": payload.get("content") or "", "created_at": event.timestamp}
         if event.type == "message_assistant_final":
-            return {"type": "final", "content": payload.get("content") or ""}
+            return {"type": "final", "content": payload.get("content") or "", "created_at": event.timestamp}
         if event.type == "tool_started":
             data = dict(payload)
             data["type"] = data.get("type") or "tool_call"
+            data.setdefault("created_at", event.timestamp)
             return data
         if event.type == "tool_finished":
             data = dict(payload)
             data["type"] = data.get("type") or "tool_call"
+            data.setdefault("created_at", event.timestamp)
             return data
         if event.type == "context_summary_committed":
             return {
                 "type": "context_summary_body",
                 "content": payload.get("summary") or "",
+                "created_at": event.timestamp,
             }
         if event.type == "todo_updated":
             data = dict(payload)
             data["type"] = data.get("type") or "todo_plan"
+            data.setdefault("created_at", event.timestamp)
             return data
         if event.type == "context_tokens":
             data = dict(payload)
             data["type"] = data.get("type") or "context_tokens"
+            data.setdefault("created_at", event.timestamp)
             return data
         if event.type == "legacy_ui_event":
             data = dict(payload)
             if data.get("type"):
+                data.setdefault("created_at", event.timestamp)
                 return data
             content = data.get("content") or data.get("message") or data.get("text")
             if content:
-                return {"type": "log", "content": str(content)}
+                return {"type": "log", "content": str(content), "created_at": event.timestamp}
             return None
         if event.type.startswith("subagent_"):
             data = dict(payload)
             data["type"] = data.get("type") or event.type
+            data.setdefault("created_at", event.timestamp)
             return data
         return None
 

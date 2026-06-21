@@ -2478,8 +2478,56 @@ function upsertLlmFeedRow(ctx, content, logType, runSessionId, reactIter) {
     return appendLog(ctx, content, logType, runSessionId, ri);
 }
 
+function parseMessageTimestamp(value) {
+    if (value == null || value === '') return null;
+    if (typeof value === 'number' && isFinite(value)) {
+        return new Date(value > 100000000000 ? value : value * 1000);
+    }
+    var d = new Date(String(value));
+    return isNaN(d.getTime()) ? null : d;
+}
+
+function formatUserMessageTimestamp(value) {
+    var d = parseMessageTimestamp(value);
+    if (!d) return '';
+    try {
+        return new Intl.DateTimeFormat(undefined, {
+            year: 'numeric',
+            month: '2-digit',
+            day: '2-digit',
+            hour: '2-digit',
+            minute: '2-digit',
+            timeZoneName: 'short',
+            hour12: false,
+        }).format(d);
+    } catch (e) {
+        return d.toLocaleString();
+    }
+}
+
+function refreshUserMessageTimes(root) {
+    var scope = root || document;
+    if (!scope || !scope.querySelectorAll) return;
+    scope.querySelectorAll('.user-message-time[data-created-at]').forEach(function (el) {
+        var raw = el.getAttribute('data-created-at') || '';
+        var txt = formatUserMessageTimestamp(raw);
+        if (txt) el.textContent = txt;
+    });
+}
+
+function ensureUserMessageTimeAutoRefresh() {
+    if (window.__userMessageTimeAutoRefreshBound) return;
+    window.__userMessageTimeAutoRefreshBound = true;
+    window.addEventListener('focus', function () { refreshUserMessageTimes(document); });
+    document.addEventListener('visibilitychange', function () {
+        if (!document.hidden) refreshUserMessageTimes(document);
+    });
+    setInterval(function () { refreshUserMessageTimes(document); }, 60000);
+}
+
 function appendMessage(ctx, role, content, meta, runSessionId) {
     meta = meta || {};
+    ensureUserMessageTimeAutoRefresh();
     stripWelcome(ctx);
     const wrap = document.createElement('div');
     wrap.className = 'msg-wrap msg-wrap--' + (role === 'user' ? 'user' : 'assistant');
@@ -2537,6 +2585,16 @@ function appendMessage(ctx, role, content, meta, runSessionId) {
         enhanceAssistantMessageContent(div);
     }
     wrap.appendChild(div);
+    if (role === 'user') {
+        var createdAt = meta.createdAt || meta.created_at || meta.timestamp || new Date().toISOString();
+        wrap.setAttribute('data-created-at', String(createdAt));
+        var timeEl = document.createElement('div');
+        timeEl.className = 'user-message-time';
+        timeEl.setAttribute('data-created-at', String(createdAt));
+        timeEl.title = String(createdAt);
+        timeEl.textContent = formatUserMessageTimestamp(createdAt);
+        wrap.appendChild(timeEl);
+    }
     if (role === 'user' && !div.classList.contains('is-collapsible')) {
         renderUserMessageContent(wrap, div, rawStr, linkifyAssistantTextNodes);
     }

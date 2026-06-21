@@ -912,6 +912,23 @@ body {
 
 .msg-wrap--user .message { max-width: 88%; }
 .msg-wrap--assistant .message { max-width: 100%; }
+.user-message-time {
+    align-self: flex-end;
+    max-width: 88%;
+    margin-top: 0.22rem;
+    padding-right: 0.18rem;
+    color: var(--text-tertiary);
+    font-size: 0.66rem;
+    line-height: 1.25;
+    font-family: var(--sans);
+    white-space: nowrap;
+    opacity: 0.78;
+    user-select: text;
+}
+:root.theme-light .user-message-time {
+    color: var(--text-subtle);
+    opacity: 0.82;
+}
 
 .msg-wrap--assistant.msg-wrap--answer-frame {
     align-items: stretch; padding: 0.2rem 0 0.1rem;

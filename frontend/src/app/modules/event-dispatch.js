@@ -11,7 +11,11 @@ function renderEvent(ctx, event, eventIndex, runSessionId) {
     if (event.type === 'user') {
         if (typeof eventIndex === 'number') ctx.lastUserEventIndex = eventIndex;
         sealProcessGroup(ctx);
-        appendMessage(ctx, 'user', event.content || '', { eventIndex: eventIndex, turnTruncateIdx: eventIndex }, runSessionId);
+        appendMessage(ctx, 'user', event.content || '', {
+            eventIndex: eventIndex,
+            turnTruncateIdx: eventIndex,
+            createdAt: event.created_at || event.createdAt || event.timestamp,
+        }, runSessionId);
     } else if (event.type === 'user_steer') {
         appendLog(ctx, event.content || '', 'user-steer', runSessionId);
     } else if (event.type === 'final') {

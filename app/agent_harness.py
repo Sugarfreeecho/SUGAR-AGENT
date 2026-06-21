@@ -2671,6 +2671,10 @@ class SessionManager:
             pass
         try:
             event_copy = json.loads(json.dumps(event, ensure_ascii=False))
+            event_copy.setdefault(
+                "created_at",
+                datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z"),
+            )
             try:
                 from runtime_v2 import runtime_v2_primary, runtime_v2_strict
 
