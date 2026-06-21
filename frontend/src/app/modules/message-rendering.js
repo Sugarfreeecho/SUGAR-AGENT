@@ -388,13 +388,24 @@ function onMessageToolbarClick(wrap, role, act) {
 function attachMessageToolbar(wrap, role) {
     const bar = document.createElement('div');
     bar.className = 'msg-toolbar';
+    if (role === 'user') {
+        var createdAt = wrap && wrap.dataset ? (wrap.dataset.createdAt || '') : '';
+        if (createdAt) {
+            var timeEl = document.createElement('span');
+            timeEl.className = 'user-message-time';
+            timeEl.setAttribute('data-created-at', createdAt);
+            timeEl.title = createdAt;
+            timeEl.textContent = formatUserMessageTimestamp(createdAt);
+            bar.appendChild(timeEl);
+        }
+    }
     var html = '<button type="button" class="msg-tb" data-act="copy" data-ui-tip="复制">复制</button>'
         + '<button type="button" class="msg-tb" data-act="delete" data-ui-tip="删除">删除</button>';
     if (role === 'assistant') {
         html += '<button type="button" class="msg-tb" data-act="branch" data-ui-tip="分支">分支</button>';
     }
     if (role === 'user') html += '<button type="button" class="msg-tb" data-act="rewrite" data-ui-tip="改写">改写</button>';
-    bar.innerHTML = html;
+    bar.insertAdjacentHTML('beforeend', html);
     bar.querySelectorAll('.msg-tb').forEach(bindUiHoverTip);
     bar.addEventListener('click', function (e) {
         var t = e.target;
@@ -2588,12 +2599,6 @@ function appendMessage(ctx, role, content, meta, runSessionId) {
     if (role === 'user') {
         var createdAt = meta.createdAt || meta.created_at || meta.timestamp || new Date().toISOString();
         wrap.setAttribute('data-created-at', String(createdAt));
-        var timeEl = document.createElement('div');
-        timeEl.className = 'user-message-time';
-        timeEl.setAttribute('data-created-at', String(createdAt));
-        timeEl.title = String(createdAt);
-        timeEl.textContent = formatUserMessageTimestamp(createdAt);
-        wrap.appendChild(timeEl);
     }
     if (role === 'user' && !div.classList.contains('is-collapsible')) {
         renderUserMessageContent(wrap, div, rawStr, linkifyAssistantTextNodes);

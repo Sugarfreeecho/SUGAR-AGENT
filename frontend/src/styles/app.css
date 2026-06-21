@@ -913,16 +913,15 @@ body {
 .msg-wrap--user .message { max-width: 88%; }
 .msg-wrap--assistant .message { max-width: 100%; }
 .user-message-time {
-    align-self: flex-end;
-    max-width: 88%;
-    margin-top: 0.22rem;
-    padding-right: 0.18rem;
+    display: inline-flex;
+    align-items: center;
+    margin-right: 0.22rem;
     color: var(--text-tertiary);
     font-size: 0.66rem;
     line-height: 1.25;
     font-family: var(--sans);
     white-space: nowrap;
-    opacity: 0.78;
+    opacity: 0.82;
     user-select: text;
 }
 :root.theme-light .user-message-time {

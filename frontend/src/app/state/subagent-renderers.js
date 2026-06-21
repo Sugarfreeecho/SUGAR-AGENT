@@ -277,15 +277,9 @@ function createSubagentMiniMessage(role, content, eventIndex, createdAt) {
         enhanceAssistantMessageContent(div);
     }
     wrap.appendChild(div);
-    if (role === 'user' && typeof formatUserMessageTimestamp === 'function') {
+    if (role === 'user') {
         var ts = createdAt || new Date().toISOString();
         wrap.setAttribute('data-created-at', String(ts));
-        var timeEl = document.createElement('div');
-        timeEl.className = 'user-message-time';
-        timeEl.setAttribute('data-created-at', String(ts));
-        timeEl.title = String(ts);
-        timeEl.textContent = formatUserMessageTimestamp(ts);
-        wrap.appendChild(timeEl);
     }
     return wrap;
 }
