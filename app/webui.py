@@ -23,7 +23,7 @@ from starlette.concurrency import run_in_threadpool
 
 from agent import astream_events, astream_events_continuation, session_manager
 from agent_harness import PROJECT_ROOT, WORK_DIR, dotenv_file_path, refresh_executor_client_from_env
-from agent_loop import compute_context_tokens_for_session, enqueue_session_steer
+from agent_loop import compute_context_tokens_for_session, enqueue_session_steer, remove_session_steer
 from session_lifecycle import get_run_started_at, is_run_active
 from session_event_bus import subscribe_session_events
 import agent_mcp
@@ -1160,6 +1160,23 @@ async def post_session_steer(session_id: str, request: Request):
     result = enqueue_session_steer(sid, message, client_id=client_id)
     if not result.get("ok"):
         return JSONResponse(content=result, status_code=400)
+    return JSONResponse(content=result)
+
+
+@fastapi_app.delete("/sessions/{session_id}/steer")
+async def delete_session_steer(session_id: str, request: Request):
+    sid = (session_id or "").strip()
+    if not sid:
+        return JSONResponse(content={"ok": False, "error": "missing session_id"}, status_code=400)
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    steer_id = str((data or {}).get("steer_id") or "").strip()
+    client_id = str((data or {}).get("client_id") or "").strip()
+    result = remove_session_steer(sid, steer_id=steer_id, client_id=client_id)
+    if not result.get("ok"):
+        return JSONResponse(content=result, status_code=409)
     return JSONResponse(content=result)
 
 

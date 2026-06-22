@@ -129,6 +129,34 @@ def enqueue_session_steer(session_id: str, content: str, client_id: str = "") ->
     return {"ok": True, "item": item, "queued": depth}
 
 
+def remove_session_steer(session_id: str, steer_id: str = "", client_id: str = "") -> Dict[str, Any]:
+    sid = str(session_id or "").strip()
+    target_id = str(steer_id or "").strip()
+    target_client = str(client_id or "").strip()
+    if not sid:
+        return {"ok": False, "error": "missing session_id"}
+    if not target_id and not target_client:
+        return {"ok": False, "error": "missing steer id"}
+    with _STEER_LOCK:
+        q = list(_STEER_QUEUES.get(sid) or [])
+        keep: List[Dict[str, Any]] = []
+        removed: Optional[Dict[str, Any]] = None
+        for item in q:
+            same_id = target_id and str(item.get("id") or "") == target_id
+            same_client = target_client and str(item.get("client_id") or "") == target_client
+            if removed is None and (same_id or same_client):
+                removed = item
+                continue
+            keep.append(item)
+        if removed is None:
+            return {"ok": False, "error": "steer not pending"}
+        if keep:
+            _STEER_QUEUES[sid] = keep
+        else:
+            _STEER_QUEUES.pop(sid, None)
+    return {"ok": True, "item": removed, "queued": len(keep)}
+
+
 def _pop_session_steers(session_id: str) -> List[Dict[str, Any]]:
     sid = str(session_id or "").strip()
     if not sid:

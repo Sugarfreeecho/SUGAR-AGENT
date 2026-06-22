@@ -417,7 +417,7 @@ function renderFollowupQueue() {
         undo.type = 'button';
         undo.className = 'followup-queue-action followup-queue-undo';
         undo.textContent = '撤回';
-        undo.disabled = item.status === 'sending' || item.status === 'sent';
+        undo.disabled = item.status === 'sent' || item.status === 'withdrawing';
         sendNow.addEventListener('click', function (ev) {
             ev.preventDefault();
             sendFollowupNow(String(item.id));
@@ -438,6 +438,7 @@ function renderFollowupQueue() {
 
 function getFollowupStatusText(item) {
     var status = item && item.status ? String(item.status) : '';
+    if (status === 'withdrawing') return '撤回中';
     if (status === 'sending') return '发送中';
     if (status === 'sent') return '已发送';
     return '待发送';
@@ -474,8 +475,30 @@ function takeFollowupItem(sessionId, itemId) {
 
 function withdrawFollowup(itemId) {
     const sid = currentSessionId;
+    var q = getFollowupQueue(sid);
+    var pendingItem = q.find(function (entry) { return String(entry.id) === String(itemId); });
+    if (pendingItem && pendingItem.status === 'sending') {
+        pendingItem.cancelRequested = true;
+        pendingItem.status = 'withdrawing';
+        renderFollowupQueue();
+        if (pendingItem.steerInFlight && !pendingItem.steerId) return;
+        cancelSteerMessage(sid, pendingItem).then(function () {
+            var item = takeFollowupItem(sid, itemId);
+            if (item) returnFollowupToInput(sid, item);
+        }).catch(function (e) {
+            var item = q.find(function (entry) { return String(entry.id) === String(itemId); });
+            if (item) item.status = 'sending';
+            renderFollowupQueue();
+            appendLogVisible('追问已被接收，无法撤回: ' + ((e && e.message) || String(e)), 'error-log');
+        });
+        return;
+    }
     const item = takeFollowupItem(sid, itemId);
     if (!item) return;
+    returnFollowupToInput(sid, item);
+}
+
+function returnFollowupToInput(sid, item) {
     const existing = String(messageInput.value || '');
     const returned = String(item.display || item.text || '');
     messageInput.value = existing.trim() ? (returned + '\n' + existing) : returned;
@@ -497,6 +520,22 @@ async function sendSteerMessage(sessionId, text, clientId) {
         return { ok: false, error: 'steer failed' };
     });
     if (!r.ok || !j.ok) throw new Error((j && j.error) || 'steer failed');
+    return j;
+}
+
+async function cancelSteerMessage(sessionId, item) {
+    var r = await fetch('/sessions/' + encodeURIComponent(sessionId) + '/steer', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            steer_id: (item && item.steerId) || '',
+            client_id: (item && item.clientId) || '',
+        }),
+    });
+    var j = await r.json().catch(function () {
+        return { ok: false, error: 'cancel steer failed' };
+    });
+    if (!r.ok || !j.ok) throw new Error((j && j.error) || 'cancel steer failed');
     return j;
 }
 
@@ -527,16 +566,33 @@ async function sendFollowupNow(itemId) {
     if (idx < 0) return;
     const item = q[idx];
     if (!item) return;
+    var runningNow = isSessionRunning(sid) || (sendPipelineLock && sendPipelineLockSessionId === sid);
+    if (runningNow) item.clientId = item.clientId || ('followup-' + item.id + '-' + Date.now());
     item.status = 'sending';
     renderFollowupQueue();
-    if (isSessionRunning(sid) || (sendPipelineLock && sendPipelineLockSessionId === sid)) {
+    if (runningNow) {
         try {
-            item.clientId = item.clientId || ('followup-' + item.id + '-' + Date.now());
+            item.steerInFlight = true;
             var steerResult = await sendSteerMessage(sid, item.text, item.clientId);
+            item.steerInFlight = false;
             item.steerId = steerResult && steerResult.item && steerResult.item.id ? String(steerResult.item.id) : '';
+            if (item.cancelRequested) {
+                await cancelSteerMessage(sid, item);
+                var withdrawn = takeFollowupItem(sid, item.id);
+                if (withdrawn) returnFollowupToInput(sid, withdrawn);
+                return;
+            }
             item.status = 'sending';
             renderFollowupQueue();
         } catch (e) {
+            item.steerInFlight = false;
+            if (item.cancelRequested) {
+                item.status = 'sending';
+                item.cancelRequested = false;
+                renderFollowupQueue();
+                appendLogVisible('追问已被接收，无法撤回: ' + ((e && e.message) || String(e)), 'error-log');
+                return;
+            }
             item.status = '';
             renderFollowupQueue();
             appendLogVisible('追问插入失败: ' + ((e && e.message) || String(e)), 'error-log');
@@ -637,6 +693,9 @@ async function sendMessage(options) {
     }
     const runSessionId = submitSessionId;
     submittedRunSessionId = runSessionId;
+    const clientRunId = (window.crypto && window.crypto.randomUUID)
+        ? window.crypto.randomUUID()
+        : ('run-' + Date.now() + '-' + Math.random().toString(16).slice(2));
 
     /* 用户在 createNewSession / getUiEventCount 期间切走：
        后台仍然发起 /chat（消息已属于 runSessionId），但不要往当前可见 stream 画用户气泡。 */
@@ -658,7 +717,8 @@ async function sendMessage(options) {
     finalizeLlmStreamChunks(runCtx);
     sealProcessGroup(runCtx);
     const ac = new AbortController();
-    setSessionRunState(runSessionId, { controller: ac, ctx: runCtx });
+    if (typeof clearSessionStreamStopSuppress === 'function') clearSessionStreamStopSuppress(runSessionId);
+    setSessionRunState(runSessionId, { controller: ac, ctx: runCtx, runId: clientRunId });
     setSendButtonState();
     syncSessionListIndicatorClasses();
     applySessionEvent({ type: 'user', content: rawMessage, created_at: userSentAt }, {
@@ -684,6 +744,7 @@ async function sendMessage(options) {
     const formData = new FormData();
     formData.append('message', rawMessage);
     formData.append('session_id', runSessionId);
+    formData.append('client_run_id', clientRunId);
     /* 保留右上角 token 进度条上一快照，直至 SSE /context_tokens 推送新估值，避免每次发送闪零 */
     if (!switchedAway) scheduleContextTokensAfterPaint(runSessionId);
     let streamEventIdx = preCount + 1;
