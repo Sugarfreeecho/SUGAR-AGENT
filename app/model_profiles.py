@@ -1,0 +1,354 @@
+from __future__ import annotations
+
+import hashlib
+import json
+import time
+import uuid
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+
+import httpx
+
+
+KNOWN_MODEL_LIMITS: list[tuple[str, int, int]] = [
+    ("gpt-5.5-pro", 1050000, 128000),
+    ("gpt-5.5", 1050000, 128000),
+    ("gpt-5.4-mini", 400000, 128000),
+    ("gpt-5.4-nano", 400000, 128000),
+    ("gpt-5.4", 1050000, 128000),
+    ("gpt-5.2", 400000, 128000),
+    ("gpt-5-mini", 400000, 128000),
+    ("gpt-5-nano", 400000, 128000),
+    ("gpt-5", 400000, 128000),
+    ("gpt-4.1", 1047576, 32768),
+    ("gpt-4o", 128000, 16384),
+    ("gpt-4-turbo", 128000, 4096),
+    ("gpt-4", 128000, 8192),
+    ("gpt-3.5", 16385, 4096),
+    ("o4-mini", 200000, 100000),
+    ("o3", 200000, 100000),
+    ("o1", 200000, 100000),
+    ("deepseek-v4", 1000000, 384000),
+    ("deepseek-reasoner", 1000000, 384000),
+    ("deepseek-chat", 1000000, 384000),
+    ("deepseek", 1000000, 384000),
+    ("claude-fable-5", 1000000, 128000),
+    ("claude-mythos-5", 1000000, 128000),
+    ("claude-opus-4.8", 1000000, 128000),
+    ("claude-opus-4.7", 1000000, 128000),
+    ("claude-opus-4.6", 1000000, 128000),
+    ("claude-sonnet-4.5", 1000000, 64000),
+    ("claude-haiku-4.5", 200000, 64000),
+    ("claude", 200000, 64000),
+    ("qwen", 128000, 8192),
+    ("glm-4", 128000, 8192),
+]
+
+
+def _now() -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%S%z")
+
+
+def _safe_int(value: Any, default: int = 0) -> int:
+    try:
+        n = int(value)
+        return n if n > 0 else default
+    except (TypeError, ValueError):
+        return default
+
+
+def _clean_reasoning_effort(value: Any) -> str:
+    # UI provides max/high/medium/low, but keep custom provider values possible.
+    return str(value or "").strip().lower()
+
+
+def _clean_thinking_mode(value: Any) -> str:
+    # UI provides enabled/disabled, but keep custom provider values possible.
+    return str(value or "").strip().lower()
+
+
+def infer_model_limits(model_id: str, raw: Optional[dict] = None) -> dict[str, int]:
+    raw = raw or {}
+    candidates = [
+        raw.get("context_window"),
+        raw.get("context_length"),
+        raw.get("max_context_length"),
+        raw.get("max_model_len"),
+        raw.get("max_sequence_length"),
+        raw.get("input_token_limit"),
+    ]
+    raw_ctx = next((_safe_int(v) for v in candidates if _safe_int(v) > 0), 0)
+    ctx = raw_ctx
+    output_candidates = [
+        raw.get("max_output_tokens"),
+        raw.get("output_token_limit"),
+        raw.get("max_completion_tokens"),
+    ]
+    raw_out = next((_safe_int(v) for v in output_candidates if _safe_int(v) > 0), 0)
+    out = raw_out
+    mid = str(model_id or "").lower()
+    if ctx <= 0 or out <= 0:
+        for prefix, known_ctx, known_out in KNOWN_MODEL_LIMITS:
+            if mid.startswith(prefix):
+                ctx = ctx or known_ctx
+                out = out or known_out
+                break
+    if raw_ctx <= 0:
+        ctx = max(ctx or 128000, 128000)
+    if raw_out <= 0:
+        out = max(out or 8192, 8192)
+    return {
+        "context_window": ctx,
+        "max_output_tokens": out,
+    }
+
+
+def _normalize_base_url(base_url: str) -> str:
+    url = str(base_url or "").strip().rstrip("/")
+    if not url:
+        return ""
+    if url.endswith("/models"):
+        return url[: -len("/models")]
+    return url
+
+
+def models_url_for_base(base_url: str) -> str:
+    base = _normalize_base_url(base_url)
+    if not base:
+        return ""
+    return base + "/models"
+
+
+def profile_store_path(project_root: Path) -> Path:
+    return Path(project_root).resolve() / "app" / "model_profiles.json"
+
+
+def load_store(project_root: Path) -> dict:
+    path = profile_store_path(project_root)
+    if not path.is_file():
+        return {"profiles": []}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {"profiles": []}
+    if not isinstance(data, dict):
+        return {"profiles": []}
+    profiles = data.get("profiles")
+    if not isinstance(profiles, list):
+        data["profiles"] = []
+    return data
+
+
+def save_store(project_root: Path, data: dict) -> None:
+    path = profile_store_path(project_root)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    out = {
+        "profiles": [p for p in data.get("profiles", []) if isinstance(p, dict)],
+    }
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(out, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    tmp.replace(path)
+
+
+def public_profile(profile: dict) -> dict:
+    out = dict(profile)
+    out.pop("api_key", None)
+    out["api_key_set"] = bool(str(profile.get("api_key") or "").strip())
+    return out
+
+
+def default_profile_from_env(env: dict[str, str]) -> dict:
+    model = str(env.get("EXECUTOR_LLM") or "").strip()
+    limits = infer_model_limits(model)
+    return {
+        "id": "__env__",
+        "name": "当前 .env 默认配置",
+        "model": model,
+        "llm_type": str(env.get("EXECUTOR_LLM_TYPE") or "openai").strip().lower() or "openai",
+        "base_url": str(env.get("OPENAI_BASE_URL") or "").strip(),
+        "context_window": _safe_int(env.get("CONTEXT_WINDOW"), limits["context_window"]),
+        "max_output_tokens": _safe_int(env.get("MAX_OUTPUT_TOKENS"), limits["max_output_tokens"]),
+        "model_context_window": limits["context_window"],
+        "thinking_mode": _clean_thinking_mode(env.get("LLM_THINKING_MODE")),
+        "reasoning_effort": _clean_reasoning_effort(env.get("LLM_REASONING_EFFORT")),
+        "temperature": str(env.get("EXECUTOR_TEMPERATURE") or "").strip(),
+        "extra_body_json": str(env.get("LLM_EXTRA_BODY_JSON") or "").strip(),
+        "priority": 0,
+        "api_key_set": bool(str(env.get("OPENAI_API_KEY") or "").strip()),
+        "readonly": True,
+    }
+
+
+def upsert_profile(project_root: Path, payload: dict) -> dict:
+    data = load_store(project_root)
+    profiles = data.setdefault("profiles", [])
+    pid = str(payload.get("id") or "").strip()
+    if not pid or pid == "__env__":
+        pid = uuid.uuid4().hex
+    old_index = next((i for i, p in enumerate(profiles) if isinstance(p, dict) and p.get("id") == pid), -1)
+    old = profiles[old_index] if old_index >= 0 else None
+    now = _now()
+    profile = dict(old or {})
+    priority_default = _safe_int((old or {}).get("priority"), len(profiles) + 1)
+    profile.update(
+        {
+            "id": pid,
+            "name": str(payload.get("name") or payload.get("model") or "未命名模型").strip(),
+            "model": str(payload.get("model") or "").strip(),
+            "llm_type": str(payload.get("llm_type") or "openai").strip().lower() or "openai",
+            "base_url": _normalize_base_url(str(payload.get("base_url") or "")),
+            "context_window": _safe_int(payload.get("context_window"), 128000),
+            "max_output_tokens": _safe_int(payload.get("max_output_tokens"), 8192),
+            "model_context_window": _safe_int(payload.get("model_context_window"), 0),
+            "thinking_mode": _clean_thinking_mode(payload.get("thinking_mode")),
+            "reasoning_effort": _clean_reasoning_effort(payload.get("reasoning_effort")),
+            "temperature": str(payload.get("temperature") or "").strip(),
+            "extra_body_json": str(payload.get("extra_body_json") or "").strip(),
+            "priority": _safe_int(payload.get("priority"), priority_default),
+            "updated_at": now,
+        }
+    )
+    if "api_key" in payload:
+        profile["api_key"] = str(payload.get("api_key") or "").strip()
+    if not profile.get("created_at"):
+        profile["created_at"] = now
+    if old_index >= 0:
+        profiles[old_index] = profile
+    else:
+        profiles.append(profile)
+    save_store(project_root, data)
+    return profile
+
+
+def sorted_profiles(project_root: Path) -> list[dict]:
+    profiles = [p for p in load_store(project_root).get("profiles", []) if isinstance(p, dict)]
+    return sorted(
+        profiles,
+        key=lambda p: (
+            _safe_int(p.get("priority"), 999999),
+            str(p.get("updated_at") or ""),
+            str(p.get("id") or ""),
+        ),
+    )
+
+
+def top_profile(project_root: Path) -> Optional[dict]:
+    profiles = sorted_profiles(project_root)
+    return dict(profiles[0]) if profiles else None
+
+
+def reorder_profiles(project_root: Path, ordered_ids: list[str]) -> list[dict]:
+    data = load_store(project_root)
+    profiles = [p for p in data.get("profiles", []) if isinstance(p, dict)]
+    rank = {str(pid): idx + 1 for idx, pid in enumerate(ordered_ids) if str(pid).strip()}
+    next_rank = len(rank) + 1
+    for p in profiles:
+        pid = str(p.get("id") or "")
+        if pid in rank:
+            p["priority"] = rank[pid]
+        else:
+            p["priority"] = next_rank
+            next_rank += 1
+    data["profiles"] = profiles
+    save_store(project_root, data)
+    return sorted_profiles(project_root)
+
+
+def delete_profile(project_root: Path, profile_id: str) -> bool:
+    if profile_id == "__env__":
+        return False
+    data = load_store(project_root)
+    before = len(data.get("profiles", []))
+    data["profiles"] = [p for p in data.get("profiles", []) if p.get("id") != profile_id]
+    save_store(project_root, data)
+    return len(data["profiles"]) != before
+
+
+def get_profile(project_root: Path, profile_id: str) -> Optional[dict]:
+    if not profile_id or profile_id == "__env__":
+        return None
+    for profile in load_store(project_root).get("profiles", []):
+        if isinstance(profile, dict) and profile.get("id") == profile_id:
+            return dict(profile)
+    return None
+
+
+def fallback_chain(project_root: Path, selected_profile_id: str = "") -> list[dict]:
+    selected = get_profile(project_root, selected_profile_id)
+    chain: list[dict] = []
+    seen: set[str] = set()
+    if selected:
+        chain.append(selected)
+        seen.add(str(selected.get("id") or ""))
+    for profile in sorted_profiles(project_root):
+        pid = str(profile.get("id") or "")
+        if pid and pid not in seen:
+            chain.append(dict(profile))
+            seen.add(pid)
+    return chain
+
+
+def profile_cache_key(profile: dict) -> str:
+    body = json.dumps(
+        {
+            "id": profile.get("id"),
+            "model": profile.get("model"),
+            "llm_type": profile.get("llm_type"),
+            "base_url": profile.get("base_url"),
+            "api_key": profile.get("api_key"),
+            "thinking_mode": profile.get("thinking_mode"),
+            "reasoning_effort": profile.get("reasoning_effort"),
+            "temperature": profile.get("temperature"),
+            "extra_body_json": profile.get("extra_body_json"),
+        },
+        sort_keys=True,
+        ensure_ascii=False,
+    )
+    return hashlib.sha256(body.encode("utf-8")).hexdigest()
+
+
+def discover_models(base_url: str, api_key: str, timeout: float = 20.0) -> List[Dict[str, Any]]:
+    url = models_url_for_base(base_url)
+    if not url:
+        raise ValueError("missing base_url")
+    headers = {}
+    if str(api_key or "").strip():
+        headers["Authorization"] = "Bearer " + str(api_key).strip()
+    with httpx.Client(timeout=timeout) as client:
+        resp = client.get(url, headers=headers)
+        resp.raise_for_status()
+        data = resp.json()
+    items = data.get("data") if isinstance(data, dict) else data
+    if not isinstance(items, list):
+        raise ValueError("models response is not a list")
+    out: List[Dict[str, Any]] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        mid = str(item.get("id") or item.get("name") or "").strip()
+        if not mid:
+            continue
+        limits = infer_model_limits(mid, item)
+        out.append(
+            {
+                "id": mid,
+                "owned_by": item.get("owned_by") or item.get("owner") or "",
+                "created": item.get("created") or None,
+                "context_window": limits["context_window"],
+                "model_context_window": limits["context_window"],
+                "max_output_tokens": limits["max_output_tokens"],
+                "raw_has_limits": any(
+                    k in item
+                    for k in (
+                        "context_window",
+                        "context_length",
+                        "max_context_length",
+                        "max_model_len",
+                        "max_output_tokens",
+                        "output_token_limit",
+                    )
+                ),
+            }
+        )
+    out.sort(key=lambda row: row["id"].lower())
+    return out

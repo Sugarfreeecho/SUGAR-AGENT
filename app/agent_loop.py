@@ -56,7 +56,7 @@ from agent_harness import (
     truncate_tool_result_for_llm,
     MAX_PARALLEL_TOOLS,
     strip_reasoning_for_api_request,
-    resolve_executor_for_session,
+    resolve_executor_config_for_session,
     EXECUTOR_REASONING_EFFORT,
     UserMessage,
     AssistantMessage,
@@ -307,10 +307,14 @@ def compute_context_tokens_for_session(session_id: str) -> Dict[str, Any]:
         llm_history,
         key_context or "",
     )
+    _client, active_model, _max_out, active_context_window = resolve_executor_config_for_session(
+        str(session_id).strip()
+    )
     return {
         "ok": True,
         "estimated": int(full_input_est),
-        "threshold": int(CONTEXT_WINDOW),
+        "threshold": int(active_context_window),
+        "model": active_model,
     }
 
 # ==================== 辅助函数：实时持久化 ====================
@@ -1166,13 +1170,17 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
                 llm_history,
                 state.get("key_context", "") or "",
             )
+            iter_client, iter_model, iter_max_output_tokens, iter_context_window = resolve_executor_config_for_session(
+                state["session_id"]
+            )
             if emit:
                 await _push_stream_event(
                     state,
                     {
                         "type": "context_tokens",
                         "estimated": int(full_input_est),
-                        "threshold": int(CONTEXT_WINDOW),
+                        "threshold": int(iter_context_window),
+                        "model": iter_model,
                         "ephemeral": True,
                     },
                     emit=emit,
@@ -1183,40 +1191,38 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
             if not _skip_compress:
                 kcur = state.get("key_context", "") or ""
                 sid = state["session_id"]
-                if emit and context_will_attempt_compress(
-                    llm_history,
-                    sid,
-                    force_user_compact=False,
-                    key_context=kcur,
-                ):
-                    await _push_stream_event(
+                if full_input_est > iter_context_window:
+                    if emit:
+                        await _push_stream_event(
+                            state,
+                            {
+                                "type": "status",
+                                "content": "【自动·长度策略】正在进行上下文裁剪以控制 token（可能需数秒，请稍候）…",
+                            },
+                            emit=emit,
+                        )
+                        # 让出事件循环，避免同步压缩阻塞时「开始」提示迟迟刷不到界面
+                        await asyncio.sleep(0)
+                    _hint_q: queue.Queue = queue.Queue()
+
+                    def _compress_hint_emit(item: Any) -> None:
+                        _hint_q.put(_progress_hint_to_stream_event(item))
+
+                    # 压缩内为同步 LLM 调用，放线程执行以免阻塞 SSE；hint_sink 实时灌入队列由上层 drain
+                    nl, nk, chg, _, used_llm_summary, new_recap = await _await_thread_with_sse_keepalive(
+                        lambda: run_context_policy(
+                            llm_history,
+                            kcur,
+                            sid,
+                            force_user_compact=False,
+                            hint_sink=_compress_hint_emit,
+                        ),
                         state,
-                        {
-                            "type": "status",
-                            "content": "【自动·长度策略】正在进行上下文裁剪以控制 token（可能需数秒，请稍候）…",
-                        },
-                        emit=emit,
+                        emit,
+                        thread_hint_queue=_hint_q,
                     )
-                    # 让出事件循环，避免同步压缩阻塞时「开始」提示迟迟刷不到界面
-                    await asyncio.sleep(0)
-                _hint_q: queue.Queue = queue.Queue()
-
-                def _compress_hint_emit(item: Any) -> None:
-                    _hint_q.put(_progress_hint_to_stream_event(item))
-
-                # 压缩内为同步 LLM 调用，放线程执行以免阻塞 SSE；hint_sink 实时灌入队列由上层 drain
-                nl, nk, chg, _, used_llm_summary, new_recap = await _await_thread_with_sse_keepalive(
-                    lambda: run_context_policy(
-                        llm_history,
-                        kcur,
-                        sid,
-                        force_user_compact=False,
-                        hint_sink=_compress_hint_emit,
-                    ),
-                    state,
-                    emit,
-                    thread_hint_queue=_hint_q,
-                )
+                else:
+                    nl, nk, chg, used_llm_summary, new_recap = llm_history, kcur, False, False, None
             else:
                 nl, nk, chg = llm_history, (state.get("key_context", "") or ""), False
             if chg:
@@ -1258,13 +1264,13 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
                 )
                 compress_attempts = 0
                 continue
-            if full_input_est > CONTEXT_WINDOW:
+            if full_input_est > iter_context_window:
                 compress_attempts += 1
                 if compress_attempts > CONTEXT_EMERGENCY_SHRINK_MAX_RETRIES:
                     logger.warning(
                         "自动应急截断已重试 %s 次仍可能超过整包阈值；将直接请求主模型。可新建会话或调低环境变量 CONTEXT_WINDOW（当前 %s）",
                         CONTEXT_EMERGENCY_SHRINK_MAX_RETRIES,
-                        CONTEXT_WINDOW,
+                        iter_context_window,
                     )
                 else:
                     old_tok = estimate_full_input_tokens_for_llm_history(
@@ -1290,8 +1296,6 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
                         continue
             else:
                 compress_attempts = 0
-
-            iter_client, iter_model = resolve_executor_for_session(state["session_id"])
 
             combined_tools: List[Dict[str, Any]] = list(OPENAI_TOOL_DEFINITIONS)
             try:
@@ -1337,7 +1341,7 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
                         llm_messages_to_send,
                         tools=combined_tools,
                         temperature=EXECUTOR_TEMPERATURE,
-                        max_tokens=MAX_OUTPUT_TOKENS,
+                        max_tokens=iter_max_output_tokens,
                         extra_body=EXECUTOR_EXTRA_BODY,
                         parallel_tool_calls=True,
                         reasoning_effort=EXECUTOR_REASONING_EFFORT,
@@ -1474,7 +1478,7 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
                         llm_messages_to_send,
                         tools=combined_tools,
                         temperature=EXECUTOR_TEMPERATURE,
-                        max_tokens=MAX_OUTPUT_TOKENS,
+                        max_tokens=iter_max_output_tokens,
                         extra_body=EXECUTOR_EXTRA_BODY,
                         parallel_tool_calls=True,
                         reasoning_effort=EXECUTOR_REASONING_EFFORT,
@@ -2553,6 +2557,7 @@ async def astream_events(
     async def runner():
         nonlocal state
         completed = False
+        terminal_event = {"type": "run_interrupted", "ephemeral": True}
         try:
             # 用户气泡由前端已画；此处只写入与流顺序一致的持久化，供刷新与 SSE 同源
             mirror_runtime_v2("run_started", {"mode": "chat"})
@@ -2574,17 +2579,20 @@ async def astream_events(
                     await emit(evt)
             completed = True
         except asyncio.CancelledError:
+            terminal_event = {"type": "run_interrupted", "ephemeral": True}
             mirror_runtime_v2("run_interrupted", {"reason": "cancelled"})
             session_manager.mark_session_unread_result(session_id, status="failed")
             raise
         except Exception as exc:
+            terminal_event = {"type": "run_failed", "error": str(exc), "ephemeral": True}
             mirror_runtime_v2("run_failed", {"error": str(exc)})
             session_manager.mark_session_unread_result(session_id, status="failed")
             raise
         finally:
             if completed:
                 mirror_runtime_v2("run_finished", {"mode": "chat"})
-            await emit({"type": "run_finished", "ephemeral": True})
+                terminal_event = {"type": "run_finished", "ephemeral": True}
+            await emit(terminal_event)
             await close_session_stream(session_id)
             await queue.put(None)
 
@@ -2705,6 +2713,7 @@ async def astream_events_continuation(
     async def runner():
         nonlocal state
         completed = False
+        terminal_event = {"type": "run_interrupted", "ephemeral": True}
         try:
             mirror_runtime_v2("run_started", {"mode": "continuation"})
             await emit({"type": "run_started", "ephemeral": True})
@@ -2723,17 +2732,20 @@ async def astream_events_continuation(
                     await emit(evt)
             completed = True
         except asyncio.CancelledError:
+            terminal_event = {"type": "run_interrupted", "ephemeral": True}
             mirror_runtime_v2("run_interrupted", {"reason": "cancelled"})
             session_manager.mark_session_unread_result(session_id, status="failed")
             raise
         except Exception as exc:
+            terminal_event = {"type": "run_failed", "error": str(exc), "ephemeral": True}
             mirror_runtime_v2("run_failed", {"error": str(exc)})
             session_manager.mark_session_unread_result(session_id, status="failed")
             raise
         finally:
             if completed:
                 mirror_runtime_v2("run_finished", {"mode": "continuation"})
-            await emit({"type": "run_finished", "ephemeral": True})
+                terminal_event = {"type": "run_finished", "ephemeral": True}
+            await emit(terminal_event)
             await close_session_stream(session_id)
             await queue.put(None)
 

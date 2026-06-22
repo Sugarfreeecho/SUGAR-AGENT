@@ -515,6 +515,9 @@ body {
     margin: 0; padding: 0; flex: 1; min-height: 0;
     display: flex; flex-direction: column;
     container-type: inline-size; container-name: main;
+    --panel-edge-dock-left: max(0.225rem, calc(0.1rem + 6px + env(safe-area-inset-left, 0px)));
+    --panel-edge-dock-right: max(0.45rem, calc(0.2rem + 12px + env(safe-area-inset-right, 0px)));
+    --panel-edge-slide-width: 9.5rem;
 }
 
 /* ── 标题栏 ── */
@@ -2146,6 +2149,8 @@ body {
 
 /* ═══════════════ 输入面板 ═══════════════ */
 .panel {
+    position: relative;
+    z-index: 300;
     border-top: 1px solid var(--border-glass);
     background: var(--surface-glass);
     backdrop-filter: blur(22px); -webkit-backdrop-filter: blur(22px);
@@ -2287,8 +2292,15 @@ body {
     background: rgba(34,40,58,0.035);
 }
 
+.composer-row {
+    display: block;
+    width: 100%;
+}
+
 .input-wrapper {
     display: flex; align-items: center; gap: 0.5rem;
+    flex: 1 1 auto;
+    min-width: 0;
     background: var(--surface-glass2);
     border: 1px solid var(--border-glass); border-radius: 18px;
     padding: 0.4rem 0.5rem 0.4rem 1rem;
@@ -2309,6 +2321,134 @@ body {
     max-height: 120px; resize: none; outline: none;
 }
 #message-input::placeholder { color: var(--text-placeholder); opacity: 1; }
+
+.composer-model-bar {
+    position: absolute;
+    right: var(--panel-edge-dock-right);
+    top: 50%;
+    transform: translateY(-50%);
+    display: flex;
+    width: var(--panel-edge-slide-width);
+    flex: none;
+    min-width: 0;
+    max-width: var(--panel-edge-slide-width);
+    z-index: 340;
+}
+.composer-model-trigger {
+    display: inline-grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 0.34rem;
+    width: 100%;
+    min-height: 30px;
+    padding: 0.22rem 0.48rem;
+    border: 1px solid var(--border-glass);
+    border-radius: 10px;
+    background: rgba(255,255,255,0.035);
+    color: var(--text-secondary);
+    font-family: var(--sans);
+    cursor: pointer;
+    text-align: left;
+}
+.composer-model-trigger:hover,
+.composer-model-trigger.is-open {
+    border-color: rgba(203,166,247,0.26);
+    background: rgba(255,255,255,0.075);
+    color: var(--text-primary);
+}
+.composer-model-k {
+    display: none;
+}
+.composer-model-v {
+    display: block;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: inherit;
+    font-size: 0.68rem;
+    font-weight: 700;
+}
+.composer-model-caret {
+    width: 0;
+    height: 0;
+    border-left: 4px solid transparent;
+    border-right: 4px solid transparent;
+    border-top: 5px solid currentColor;
+    opacity: 0.72;
+}
+.composer-model-menu {
+    position: absolute;
+    right: 0;
+    bottom: calc(100% + 0.35rem);
+    width: min(17rem, calc(100vw - 2rem));
+    max-height: 13rem;
+    overflow: auto;
+    display: none;
+    padding: 0.35rem;
+    border: 1px solid var(--border-glass);
+    border-radius: var(--radius-sm);
+    background: var(--surface-glass2);
+    box-shadow: var(--shadow-soft);
+    z-index: 360;
+}
+.composer-model-menu.is-open { display: grid; gap: 0.28rem; }
+.composer-model-option {
+    width: 100%;
+    padding: 0.46rem 0.55rem;
+    border: 1px solid transparent;
+    border-radius: 8px;
+    background: transparent;
+    color: var(--text-secondary);
+    font-family: var(--sans);
+    cursor: pointer;
+    text-align: left;
+}
+.composer-model-option:hover,
+.composer-model-option.is-active {
+    color: var(--text-primary);
+    background: rgba(203,166,247,0.14);
+    border-color: rgba(203,166,247,0.24);
+}
+.composer-model-option-name {
+    display: block;
+    font-size: 0.75rem;
+    font-weight: 800;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.composer-model-option-meta {
+    display: block;
+    margin-top: 0.12rem;
+    color: var(--text-tertiary);
+    font-family: var(--mono);
+    font-size: 0.62rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+:root.theme-light .composer-model-trigger {
+    background: rgba(0,0,0,0.025);
+    border-color: rgba(0,0,0,0.08);
+}
+:root.theme-light .composer-model-menu {
+    background: rgba(255,255,255,0.99);
+}
+
+@media (max-width: 760px) {
+    .main-center {
+        --panel-edge-dock-left: max(0.175rem, calc(0.075rem + 6px + env(safe-area-inset-left, 0px)));
+        --panel-edge-dock-right: max(0.35rem, calc(0.15rem + 12px + env(safe-area-inset-right, 0px)));
+        --panel-edge-slide-width: 7rem;
+    }
+    .composer-model-bar {
+        width: var(--panel-edge-slide-width);
+        min-width: 0;
+        max-width: var(--panel-edge-slide-width);
+        bottom: 1.1rem;
+    }
+}
 
 #send-btn {
     background: var(--accent-brand-gradient); border: none;

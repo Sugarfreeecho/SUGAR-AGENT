@@ -3,6 +3,7 @@
 *.env
 app/.env
 app/mcp_servers.json
+app/model_profiles.json
 
 # Python caches and virtual environments
 __pycache__/

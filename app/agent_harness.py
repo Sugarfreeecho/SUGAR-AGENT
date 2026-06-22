@@ -30,6 +30,7 @@ import dotenv
 import httpx
 from openai import OpenAI
 import threading
+import model_profiles
 
 from agent_messages import UserMessage, AssistantMessage, ToolMessage, SystemMessage
 from agent_openai import (
@@ -248,6 +249,10 @@ def _openai_base_url_likely_deepseek() -> bool:
     return "deepseek" in (os.getenv("OPENAI_BASE_URL") or "").lower()
 
 
+def _base_url_likely_deepseek(base_url: str) -> bool:
+    return "deepseek" in str(base_url or "").lower()
+
+
 def _load_executor_extra_body() -> Optional[Dict[str, Any]]:
     raw = os.getenv("LLM_EXTRA_BODY_JSON", "").strip()
     if raw:
@@ -294,6 +299,46 @@ def _executor_reasoning_effort() -> Optional[str]:
 
 # 主模型：思考开时带 reasoning_effort，关时为 None
 EXECUTOR_REASONING_EFFORT: Optional[str] = _executor_reasoning_effort()
+
+
+def _profile_extra_body(profile: dict) -> Optional[Dict[str, Any]]:
+    raw_extra = str(profile.get("extra_body_json") or "").strip()
+    thinking_mode = str(profile.get("thinking_mode") or "").strip().lower()
+    if raw_extra:
+        try:
+            data = json.loads(raw_extra)
+        except json.JSONDecodeError:
+            logging.getLogger(__name__).warning("模型配置 LLM_EXTRA_BODY_JSON 不是合法 JSON，已忽略")
+            return None
+        if not isinstance(data, dict):
+            logging.getLogger(__name__).warning("模型配置 LLM_EXTRA_BODY_JSON 须为 JSON 对象，已忽略")
+            return None
+        return _sanitize_extra_body_drop_reasoning_when_thinking_off(data)
+    if not thinking_mode:
+        thinking_mode = "enabled"
+    if thinking_mode == "enabled":
+        return _sanitize_extra_body_drop_reasoning_when_thinking_off({"thinking": {"type": "enabled"}})
+    if thinking_mode == "disabled" and _base_url_likely_deepseek(str(profile.get("base_url") or "")):
+        return _sanitize_extra_body_drop_reasoning_when_thinking_off({"thinking": {"type": "disabled"}})
+    return None
+
+
+def _profile_reasoning_effort(profile: dict, extra_body: Optional[Dict[str, Any]]) -> Optional[str]:
+    if not _thinking_enabled_from_extra_dict(extra_body):
+        return None
+    v = str(profile.get("reasoning_effort") or "").strip()
+    return v if v else "high"
+
+
+def _profile_temperature(profile: dict) -> float:
+    raw = str(profile.get("temperature") or "").strip()
+    if not raw:
+        return float(EXECUTOR_TEMPERATURE)
+    try:
+        return float(raw)
+    except ValueError:
+        logging.getLogger(__name__).warning("模型配置 EXECUTOR_TEMPERATURE=%r 非数字，已使用默认值", raw)
+        return float(EXECUTOR_TEMPERATURE)
 
 
 def strip_reasoning_for_api_request(messages: List[Any]) -> List[Any]:
@@ -630,6 +675,84 @@ def create_openai_client(
             timeout=OPENAI_HTTP_TIMEOUT,
         )
         return client, resolved
+
+
+def create_openai_client_for_profile(
+    profile: dict,
+    role: str,
+    http_client: Optional[httpx.Client] = None,
+) -> Tuple[OpenAI, str]:
+    """Create an OpenAI-compatible client from a saved model profile."""
+    model_name = str(profile.get("model") or "").strip()
+    model_type = str(profile.get("llm_type") or "openai").strip().lower()
+    if model_type == "local":
+        return create_openai_client(model_name, "local", role, http_client=http_client)
+    base_url = str(profile.get("base_url") or "").strip().rstrip("/") or None
+    api_key = str(profile.get("api_key") or "").strip() or OPENAI_API_KEY or ""
+    logger.info(
+        "创建 %s 客户端 (模型档案): model=%s, base_url=%s",
+        role,
+        _masked_model_label(model_name),
+        _masked_base_label(base_url),
+    )
+    client = OpenAI(
+        api_key=api_key,
+        base_url=base_url,
+        http_client=http_client,
+        timeout=OPENAI_HTTP_TIMEOUT,
+    )
+    return client, model_name
+
+
+class _FallbackCompletions:
+    def __init__(self, candidates: List[Dict[str, Any]]):
+        self._candidates = candidates
+
+    def create(self, **kwargs: Any) -> Any:
+        last_error: Optional[BaseException] = None
+        for idx, item in enumerate(self._candidates):
+            call_kwargs = dict(kwargs)
+            call_kwargs["model"] = item["model"]
+            call_kwargs["max_tokens"] = int(item.get("max_output_tokens") or call_kwargs.get("max_tokens") or MAX_OUTPUT_TOKENS)
+            call_kwargs["temperature"] = float(item.get("temperature", EXECUTOR_TEMPERATURE))
+            if item.get("extra_body") is not None:
+                call_kwargs["extra_body"] = item.get("extra_body")
+            else:
+                call_kwargs.pop("extra_body", None)
+            if item.get("reasoning_effort"):
+                call_kwargs["reasoning_effort"] = item.get("reasoning_effort")
+            else:
+                call_kwargs.pop("reasoning_effort", None)
+            try:
+                if idx > 0:
+                    logger.warning(
+                        "当前模型故障，按优先级切换到备用模型: %s",
+                        _masked_model_label(str(item.get("model") or "")),
+                    )
+                return item["client"].chat.completions.create(**call_kwargs)
+            except Exception as exc:
+                last_error = exc
+                logger.warning(
+                    "模型调用失败: model=%s error=%s",
+                    _masked_model_label(str(item.get("model") or "")),
+                    _redact_runtime_log_text(exc),
+                )
+        if last_error is not None:
+            raise last_error
+        raise RuntimeError("no model candidates configured")
+
+
+class _FallbackChat:
+    def __init__(self, candidates: List[Dict[str, Any]]):
+        self.completions = _FallbackCompletions(candidates)
+
+
+class FallbackOpenAIClient:
+    """OpenAI-compatible facade that retries model profiles in priority order."""
+
+    def __init__(self, candidates: List[Dict[str, Any]]):
+        self.candidates = candidates
+        self.chat = _FallbackChat(candidates)
 
 
 executor_client, executor_model = create_openai_client(
@@ -4142,6 +4265,11 @@ class SessionManager:
             metadata = self._load_metadata_unlocked(sid)
             if not isinstance(metadata, dict):
                 metadata = {}
+            if result_status == "success" and (
+                metadata.get("unread_result_status") == "failed"
+                or bool(metadata.get("interrupt_requested"))
+            ):
+                result_status = "failed"
             metadata["unread_result"] = True
             metadata["unread_result_at"] = now
             metadata["unread_result_status"] = result_status
@@ -4150,6 +4278,8 @@ class SessionManager:
         with self._lock:
             for sess in self.index:
                 if sess.get("id") == sid:
+                    if result_status == "success" and sess.get("unread_result_status") == "failed":
+                        result_status = "failed"
                     sess["unread_result"] = True
                     sess["unread_result_at"] = now
                     sess["unread_result_status"] = result_status
@@ -4225,26 +4355,115 @@ session_manager = SessionManager(SESSIONS_DIR, INDEX_FILE)
 _executor_override_cache: Dict[str, Tuple[Any, str]] = {}
 
 
+def _profile_candidate(profile: dict) -> Dict[str, Any]:
+    cache_key = "profile:" + model_profiles.profile_cache_key(profile)
+    cached = _executor_override_cache.get(cache_key)
+    if cached is None:
+        cached = create_openai_client_for_profile(
+            profile,
+            f"profile:{str(profile.get('name') or profile.get('id') or '')[:32]}",
+            http_client=executor_http_client,
+        )
+        _executor_override_cache[cache_key] = cached
+    extra_body = _profile_extra_body(profile)
+    return {
+        "profile_id": str(profile.get("id") or ""),
+        "client": cached[0],
+        "model": cached[1],
+        "max_output_tokens": int(profile.get("max_output_tokens") or MAX_OUTPUT_TOKENS),
+        "context_window": int(profile.get("context_window") or CONTEXT_WINDOW),
+        "temperature": _profile_temperature(profile),
+        "extra_body": extra_body,
+        "reasoning_effort": _profile_reasoning_effort(profile, extra_body),
+    }
+
+
+def _env_candidate() -> Dict[str, Any]:
+    return {
+        "profile_id": "__env__",
+        "client": executor_client,
+        "model": executor_model,
+        "max_output_tokens": int(MAX_OUTPUT_TOKENS),
+        "context_window": int(CONTEXT_WINDOW),
+        "temperature": float(EXECUTOR_TEMPERATURE),
+        "extra_body": EXECUTOR_EXTRA_BODY,
+        "reasoning_effort": EXECUTOR_REASONING_EFFORT,
+    }
+
+
+def resolve_executor_candidates_for_session(session_id: str) -> List[Dict[str, Any]]:
+    sid = (session_id or "").strip()
+    profile_id = ""
+    if sid:
+        try:
+            meta = session_manager._load_metadata(sid)
+        except Exception:
+            meta = {}
+        if isinstance(meta, dict):
+            profile_id = str(meta.get("model_profile_id") or "").strip()
+    if profile_id == "__env__":
+        chain = []
+    else:
+        chain = model_profiles.fallback_chain(PROJECT_ROOT, profile_id)
+    candidates = [_profile_candidate(profile) for profile in chain]
+    if profile_id == "__env__":
+        candidates.append(_env_candidate())
+        for profile in model_profiles.sorted_profiles(PROJECT_ROOT):
+            candidates.append(_profile_candidate(profile))
+    elif not candidates:
+        candidates.append(_env_candidate())
+    else:
+        candidates.append(_env_candidate())
+    return candidates
+
+
 def resolve_executor_for_session(session_id: str) -> Tuple[Any, str]:
     """子会话可经 metadata.executor_model 覆盖默认 executor 模型。"""
+    client, model, _max_out, _ctx = resolve_executor_config_for_session(session_id)
+    return client, model
+
+
+def resolve_executor_config_for_session(session_id: str) -> Tuple[Any, str, int, int]:
+    """Resolve executor client/model plus per-session model limits."""
     sid = (session_id or "").strip()
     if not sid:
-        return executor_client, executor_model
+        return executor_client, executor_model, int(MAX_OUTPUT_TOKENS), int(CONTEXT_WINDOW)
     try:
         meta = session_manager._load_metadata(sid)
     except Exception:
         meta = {}
+    profile_id = ""
     override = ""
     llm_type = EXECUTOR_LLM_TYPE
     if isinstance(meta, dict):
+        profile_id = str(meta.get("model_profile_id") or "").strip()
         override = str(meta.get("executor_model") or "").strip()
         llm_type = str(meta.get("executor_llm_type") or EXECUTOR_LLM_TYPE).strip().lower()
+    if profile_id:
+        candidates = resolve_executor_candidates_for_session(sid)
+        first = candidates[0]
+        return (
+            FallbackOpenAIClient(candidates),
+            str(first.get("model") or executor_model),
+            int(first.get("max_output_tokens") or MAX_OUTPUT_TOKENS),
+            int(first.get("context_window") or CONTEXT_WINDOW),
+        )
+    top = model_profiles.top_profile(PROJECT_ROOT)
+    if top and not override:
+        candidates = resolve_executor_candidates_for_session(sid)
+        first = candidates[0]
+        return (
+            FallbackOpenAIClient(candidates),
+            str(first.get("model") or executor_model),
+            int(first.get("max_output_tokens") or MAX_OUTPUT_TOKENS),
+            int(first.get("context_window") or CONTEXT_WINDOW),
+        )
     if not override:
-        return executor_client, executor_model
+        return executor_client, executor_model, int(MAX_OUTPUT_TOKENS), int(CONTEXT_WINDOW)
     cache_key = f"{llm_type}:{override}"
     cached = _executor_override_cache.get(cache_key)
     if cached is not None:
-        return cached
+        return cached[0], cached[1], int(MAX_OUTPUT_TOKENS), int(CONTEXT_WINDOW)
     client, model = create_openai_client(
         override,
         llm_type or EXECUTOR_LLM_TYPE,
@@ -4252,7 +4471,7 @@ def resolve_executor_for_session(session_id: str) -> Tuple[Any, str]:
         http_client=executor_http_client,
     )
     _executor_override_cache[cache_key] = (client, model)
-    return client, model
+    return client, model, int(MAX_OUTPUT_TOKENS), int(CONTEXT_WINDOW)
 
 # ==================== Todo 计划（todo_plan.md）与 key_context 兼容 ====================
 _TODO_SECTION_LINE_RE = re.compile(r"^## Todo 计划\s*$", re.MULTILINE)

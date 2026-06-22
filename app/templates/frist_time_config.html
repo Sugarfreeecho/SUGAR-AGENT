@@ -232,6 +232,9 @@
     .form-row-search-pair.search-key-collapsed .form-group:first-child {
       margin-bottom: 0;
     }
+    .model-row { grid-template-columns: 1fr; }
+    .model-row__side, .model-row__meta { text-align: left; }
+    .model-row__limits { white-space: normal; }
   }
 
   .form-group { margin-bottom: 1.1rem; }
@@ -320,6 +323,101 @@
   .form-hint a { color: #9388fa; text-decoration: none; font-weight: 500; }
   .form-hint a:hover { text-decoration: underline; }
   :root.theme-light .form-hint a { color: #4338ca; }
+
+  .model-discovery {
+    margin: -0.35rem 0 1.1rem;
+  }
+  .model-discovery-row {
+    display: flex;
+    align-items: center;
+    gap: 0.55rem;
+    flex-wrap: wrap;
+  }
+  .model-fetch-btn {
+    border: 1px solid var(--border-glass);
+    background: rgba(255,255,255,0.045);
+    color: var(--text-secondary);
+    border-radius: var(--radius-sm);
+    padding: 0.52rem 0.8rem;
+    font-family: var(--sans);
+    font-size: 0.74rem;
+    font-weight: 700;
+    cursor: pointer;
+  }
+  .model-fetch-btn:hover:not(:disabled) {
+    border-color: rgba(99,102,241,0.36);
+    color: var(--text-primary);
+    background: rgba(99,102,241,0.1);
+  }
+  .model-fetch-btn:disabled { opacity: 0.55; cursor: not-allowed; }
+  .model-discovery-status {
+    flex: 1;
+    min-width: 12rem;
+    color: var(--text-tertiary);
+    font-size: 0.72rem;
+    line-height: 1.4;
+  }
+  .model-list {
+    display: grid;
+    gap: 0.45rem;
+    margin-top: 0.65rem;
+    max-height: 12rem;
+    overflow: auto;
+    padding-right: 0.15rem;
+  }
+  .model-row {
+    width: 100%;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 0.55rem;
+    padding: 0.56rem 0.65rem;
+    border: 1px solid var(--border-glass);
+    border-radius: var(--radius-sm);
+    background: rgba(255,255,255,0.04);
+    color: var(--text-primary);
+    text-align: left;
+    cursor: pointer;
+    font-family: var(--sans);
+  }
+  .model-row:hover {
+    border-color: rgba(99,102,241,0.36);
+    background: rgba(99,102,241,0.1);
+  }
+  .model-row__main { min-width: 0; }
+  .model-row__id {
+    display: block;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-family: var(--mono);
+    font-size: 0.76rem;
+    font-weight: 700;
+  }
+  .model-row__side { align-self: center; text-align: right; }
+  .model-row__meta {
+    display: block;
+    margin-bottom: 0.14rem;
+    color: var(--text-tertiary);
+    font-size: 0.66rem;
+    text-align: right;
+  }
+  .model-row__limits {
+    display: block;
+    color: var(--text-secondary);
+    font-family: var(--mono);
+    font-size: 0.66rem;
+    white-space: nowrap;
+  }
+  :root.theme-light .model-fetch-btn,
+  :root.theme-light .model-row {
+    background: rgba(0,0,0,0.025);
+    border-color: rgba(0,0,0,0.1);
+  }
+  @media (max-width: 480px) {
+    .model-row { grid-template-columns: 1fr; }
+    .model-row__side, .model-row__meta { text-align: left; }
+    .model-row__limits { white-space: normal; }
+  }
 
   .btn {
     width: 100%;
@@ -466,6 +564,14 @@
         <input type="text" id="baseUrl" placeholder="https://api.deepseek.com" autocomplete="off">
       </div>
 
+      <div class="model-discovery" aria-label="模型发现">
+        <div class="model-discovery-row">
+          <button type="button" class="model-fetch-btn" id="modelFetchBtn">获取模型列表</button>
+          <span class="model-discovery-status" id="modelDiscoveryStatus"></span>
+        </div>
+        <div id="modelDiscoveryList" class="model-list"></div>
+      </div>
+
       <div class="form-row-2">
         <div class="form-group">
           <label>上下文门限（tokens）</label>
@@ -563,8 +669,98 @@
   }
   const contextWindowEl = document.getElementById('contextWindow');
   const maxOutputTokensEl = document.getElementById('maxOutputTokens');
+  const modelFetchBtn = document.getElementById('modelFetchBtn');
+  const modelDiscoveryStatus = document.getElementById('modelDiscoveryStatus');
+  const modelDiscoveryList = document.getElementById('modelDiscoveryList');
 
   let lastProvider = llmProvider.value;
+  let modelFetchTimer = null;
+  let lastModelFetchKey = '';
+  let setupReady = false;
+
+  function wizardEsc(value) {
+    return String(value == null ? '' : value)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
+  function setModelDiscoveryStatus(message) {
+    if (modelDiscoveryStatus) modelDiscoveryStatus.textContent = message || '';
+  }
+
+  function applyDiscoveredModel(model) {
+    model = model || {};
+    if (modelName) modelName.value = model.id || model.model || '';
+    if (contextWindowEl) contextWindowEl.value = model.context_window || '128000';
+    if (maxOutputTokensEl) maxOutputTokensEl.value = model.max_output_tokens || '8192';
+    setModelDiscoveryStatus('已填入模型和窗口参数。');
+  }
+
+  function renderDiscoveredModels(items) {
+    if (!modelDiscoveryList) return;
+    items = items || [];
+    if (!items.length) {
+      modelDiscoveryList.innerHTML = '';
+      return;
+    }
+    let html = '';
+    for (const model of items) {
+      const raw = wizardEsc(JSON.stringify(model));
+      html += "<button type='button' class='model-row' data-model='" + raw + "'>"
+        + "<span class='model-row__main'><span class='model-row__id'>" + wizardEsc(model.id) + "</span></span>"
+        + "<span class='model-row__side'><span class='model-row__meta'>" + (model.raw_has_limits ? 'API 返回窗口信息' : '使用内置常见模型窗口推断') + "</span>"
+        + "<span class='model-row__limits'>" + wizardEsc(model.context_window) + " ctx / " + wizardEsc(model.max_output_tokens) + " out</span></span>"
+        + "</button>";
+    }
+    modelDiscoveryList.innerHTML = html;
+    modelDiscoveryList.querySelectorAll('.model-row').forEach((row) => {
+      row.addEventListener('click', () => {
+        try {
+          applyDiscoveredModel(JSON.parse(row.getAttribute('data-model') || '{}'));
+        } catch (err) {}
+      });
+    });
+  }
+
+  async function fetchDiscoveredModels() {
+    const url = baseUrl.value.trim();
+    if (!url || url.length < 8) {
+      setModelDiscoveryStatus('填写 API 地址后可获取模型列表。');
+      return;
+    }
+    if (modelFetchBtn) modelFetchBtn.disabled = true;
+    setModelDiscoveryStatus('正在获取模型列表...');
+    try {
+      const resp = await fetch('/api/model_profiles/discover', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify({ base_url: url, api_key: apiKey.value.trim() }),
+      });
+      const result = await resp.json();
+      if (!result.ok) throw new Error(result.error || '获取失败');
+      renderDiscoveredModels(result.models || []);
+      setModelDiscoveryStatus('已获取 ' + ((result.models || []).length) + ' 个模型。');
+    } catch (err) {
+      setModelDiscoveryStatus('获取失败：' + String(err.message || err));
+    } finally {
+      if (modelFetchBtn) modelFetchBtn.disabled = false;
+    }
+  }
+
+  function scheduleModelDiscovery() {
+    const url = baseUrl.value.trim();
+    if (!url || url.length < 8) return;
+    if (modelFetchTimer) clearTimeout(modelFetchTimer);
+    modelFetchTimer = setTimeout(() => {
+      const key = url + '|' + apiKey.value.trim().slice(0, 8);
+      if (key === lastModelFetchKey) return;
+      lastModelFetchKey = key;
+      fetchDiscoveredModels();
+    }, 850);
+  }
 
   function syncProviderUi(provider) {
     const p = providerMap[provider];
@@ -584,6 +780,7 @@
     if (forceModel || !cur || (prevDef && cur === prevDef)) {
       baseUrl.value = p.baseUrl;
       modelName.value = p.defaultModel;
+      if (setupReady) scheduleModelDiscovery();
     }
     lastProvider = provider;
   }
@@ -624,8 +821,13 @@
   if (workDirInput && !workDirInput.value.trim()) workDirInput.value = './workspace';
   if (contextWindowEl && !String(contextWindowEl.value).trim()) contextWindowEl.value = '128000';
   if (maxOutputTokensEl && !String(maxOutputTokensEl.value).trim()) maxOutputTokensEl.value = '8192';
+  setupReady = true;
 
   llmProvider.addEventListener('change', () => applyProvider(llmProvider.value, false));
+  baseUrl.addEventListener('input', scheduleModelDiscovery);
+  baseUrl.addEventListener('change', scheduleModelDiscovery);
+  apiKey.addEventListener('input', scheduleModelDiscovery);
+  if (modelFetchBtn) modelFetchBtn.addEventListener('click', fetchDiscoveredModels);
 
   searchProvider.addEventListener('change', syncSearchPairVisibility);
 

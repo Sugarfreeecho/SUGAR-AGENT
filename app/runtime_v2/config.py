@@ -11,7 +11,7 @@ def runtime_version() -> int:
         return 2 if str(raw).strip() == "2" else 1
     legacy = os.getenv("RUNTIME_V2_ENABLED")
     if legacy is None:
-        return 2
+        return 1
     return 1 if str(legacy).strip().lower() in {"0", "false", "no", "off"} else 2
 
 

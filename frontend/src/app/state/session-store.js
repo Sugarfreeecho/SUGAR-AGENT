@@ -228,6 +228,12 @@ function isSessionStreamStopSuppressed(sessionId) {
     return false;
 }
 
+function clearSessionStreamStopSuppress(sessionId) {
+    const sid = String(sessionId || '');
+    if (!sid) return;
+    delete sessionStreamStopSuppressUntil[sid];
+}
+
 function suppressSessionServerStreamActive(sessionId, ms) {
     const sid = String(sessionId || '');
     if (!sid) return;
@@ -245,7 +251,6 @@ function suppressSessionServerStreamActive(sessionId, ms) {
 function setSessionServerStreamActive(sessionId, active) {
     const sid = String(sessionId || '');
     if (!sid) return;
-    if (!active) delete sessionStreamStopSuppressUntil[sid];
     if (active && isSessionStreamStopSuppressed(sid)) active = false;
     sessionStore.setStreamActive(sid, !!active);
 }

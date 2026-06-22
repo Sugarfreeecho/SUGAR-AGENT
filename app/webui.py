@@ -27,6 +27,7 @@ from agent_loop import compute_context_tokens_for_session, enqueue_session_steer
 from session_lifecycle import get_run_started_at, is_run_active
 from session_event_bus import subscribe_session_events
 import agent_mcp
+import model_profiles
 from path_picker_util import pick_native_path
 
 _PATH_PICKER_JS_PATH = Path(__file__).resolve().parent / "templates" / "static" / "myagent_path_picker.js"
@@ -299,10 +300,9 @@ def _session_run_state_fields(sid: str) -> dict:
             "active_run": dict(v2_info, stream_connections=stream_connections),
         }
     legacy_run_active = bool(is_run_active(sid))
-    active = bool(stream_connections > 0 or legacy_run_active)
     started_at = get_run_started_at(sid)
     return {
-        "stream_active": active,
+        "stream_active": legacy_run_active,
         "run_active": legacy_run_active,
         "run_started_at": started_at,
         "stream_connections": stream_connections,
@@ -312,7 +312,7 @@ def _session_run_state_fields(sid: str) -> dict:
             "run_active": legacy_run_active,
             "started_at": started_at,
             "runtime_v2": False,
-        } if active else None,
+        } if legacy_run_active else None,
     }
 
 
@@ -966,6 +966,119 @@ async def create_session():
         "stream_active": False,
     }
     return JSONResponse(content={"session_id": session_id, "session": session})
+
+
+def _current_env_profile() -> dict:
+    vals = _dotenv_last_non_empty_assignments(dotenv_file_path())
+    return model_profiles.default_profile_from_env(vals)
+
+
+@fastapi_app.get("/api/model_profiles")
+async def get_model_profiles():
+    profiles = [model_profiles.public_profile(p) for p in model_profiles.sorted_profiles(PROJECT_ROOT)]
+    default_profile = _current_env_profile()
+    top = profiles[0] if profiles else default_profile
+    return JSONResponse(
+        {
+            "ok": True,
+            "default_profile": default_profile,
+            "new_session_default_profile_id": top.get("id") or "__env__",
+            "profiles": profiles,
+        }
+    )
+
+
+@fastapi_app.post("/api/model_profiles")
+async def save_model_profile(req: Request):
+    try:
+        data = await req.json()
+    except Exception:
+        return JSONResponse({"ok": False, "error": "invalid json"}, status_code=400)
+    if not isinstance(data, dict):
+        return JSONResponse({"ok": False, "error": "body must be object"}, status_code=400)
+    if not str(data.get("model") or "").strip():
+        return JSONResponse({"ok": False, "error": "missing model"}, status_code=400)
+    if str(data.get("llm_type") or "openai").strip().lower() != "local" and not str(data.get("base_url") or "").strip():
+        return JSONResponse({"ok": False, "error": "missing base_url"}, status_code=400)
+    try:
+        profile = model_profiles.upsert_profile(PROJECT_ROOT, data)
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+    return JSONResponse({"ok": True, "profile": model_profiles.public_profile(profile)})
+
+
+@fastapi_app.post("/api/model_profiles/reorder")
+async def reorder_model_profiles(req: Request):
+    try:
+        data = await req.json()
+    except Exception:
+        return JSONResponse({"ok": False, "error": "invalid json"}, status_code=400)
+    ids = (data or {}).get("ordered_ids") or []
+    if not isinstance(ids, list):
+        return JSONResponse({"ok": False, "error": "ordered_ids must be list"}, status_code=400)
+    profiles = model_profiles.reorder_profiles(PROJECT_ROOT, [str(x) for x in ids])
+    return JSONResponse({"ok": True, "profiles": [model_profiles.public_profile(p) for p in profiles]})
+
+
+@fastapi_app.delete("/api/model_profiles/{profile_id}")
+async def delete_model_profile(profile_id: str):
+    ok = model_profiles.delete_profile(PROJECT_ROOT, (profile_id or "").strip())
+    return JSONResponse({"ok": ok})
+
+
+@fastapi_app.post("/api/model_profiles/discover")
+async def discover_model_profiles(req: Request):
+    try:
+        data = await req.json()
+    except Exception:
+        return JSONResponse({"ok": False, "error": "invalid json"}, status_code=400)
+    base_url = str((data or {}).get("base_url") or "").strip()
+    api_key = str((data or {}).get("api_key") or "").strip()
+    if not api_key:
+        api_key = _dotenv_last_non_empty_assignments(dotenv_file_path()).get("OPENAI_API_KEY", "")
+    try:
+        models = await run_in_threadpool(model_profiles.discover_models, base_url, api_key)
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+    return JSONResponse({"ok": True, "models": models})
+
+
+@fastapi_app.get("/sessions/{session_id}/model_profile")
+async def get_session_model_profile(session_id: str):
+    sid = (session_id or "").strip()
+    if not sid:
+        return JSONResponse({"ok": False, "error": "missing session_id"}, status_code=400)
+    try:
+        meta = session_manager._load_metadata(sid)
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=404)
+    pid = str((meta or {}).get("model_profile_id") or "").strip()
+    if not pid:
+        top = model_profiles.top_profile(PROJECT_ROOT)
+        pid = str((top or {}).get("id") or "__env__").strip() or "__env__"
+    return JSONResponse({"ok": True, "profile_id": pid})
+
+
+@fastapi_app.post("/sessions/{session_id}/model_profile")
+async def set_session_model_profile(session_id: str, req: Request):
+    sid = (session_id or "").strip()
+    if not sid:
+        return JSONResponse({"ok": False, "error": "missing session_id"}, status_code=400)
+    try:
+        data = await req.json()
+    except Exception:
+        return JSONResponse({"ok": False, "error": "invalid json"}, status_code=400)
+    pid = str((data or {}).get("profile_id") or "__env__").strip() or "__env__"
+    if pid != "__env__" and not model_profiles.get_profile(PROJECT_ROOT, pid):
+        return JSONResponse({"ok": False, "error": "unknown profile_id"}, status_code=404)
+    with session_manager._session_metadata_lock(sid):
+        meta = session_manager._load_metadata_unlocked(sid)
+        if not isinstance(meta, dict):
+            meta = {}
+        meta["model_profile_id"] = pid
+        meta["updated_at"] = __import__("datetime").datetime.now().isoformat()
+        session_manager._save_metadata_unlocked(sid, meta)
+    return JSONResponse({"ok": True, "profile_id": pid})
 
 @fastapi_app.delete("/sessions/{session_id}")
 async def delete_session(session_id: str):
@@ -2417,10 +2530,12 @@ async def _config_check(req: _Request, call_next):
         "/api/save_config",
         "/api/env",
         "/api/mcp_config",
+        "/api/model_profiles",
+        "/api/model_profiles/discover",
         "/api/pick-path",
         "/api/upload-chat-files",
         "/api/workspace-files",
-    ) or p.startswith("/static/"):
+    ) or p.startswith("/static/") or p.startswith("/api/model_profiles/"):
         return await call_next(req)
     if not _is_configured():
         return _RedirectResponse(url="/setup")

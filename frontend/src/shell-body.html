@@ -95,11 +95,21 @@
                             <span class="rewrite-undo-msg"></span>
                             <button type="button" class="rewrite-undo-btn">撤销</button>
                         </div>
-                        <div class="input-wrapper">
-                            <textarea id="message-input" rows="1" placeholder="说说你想做什么…" spellcheck="false" autocomplete="off"></textarea>
-                            <button type="button" id="pick-path-btn" class="path-browse-btn path-browse-btn--ghost" aria-label="选择文件" data-ui-tip="选择文件"></button>
-                            <button type="button" id="send-btn" data-ui-tip="发送 / 停止">发送</button>
+                        <div class="composer-row">
+                            <div class="input-wrapper">
+                                <textarea id="message-input" rows="1" placeholder="说说你想做什么…" spellcheck="false" autocomplete="off"></textarea>
+                                <button type="button" id="pick-path-btn" class="path-browse-btn path-browse-btn--ghost" aria-label="选择文件" data-ui-tip="选择文件"></button>
+                                <button type="button" id="send-btn" data-ui-tip="发送 / 停止">发送</button>
+                            </div>
                         </div>
+                    </div>
+                    <div class="composer-model-bar" id="model-profile-control">
+                        <button type="button" class="composer-model-trigger" id="model-profile-trigger" aria-haspopup="listbox" aria-expanded="false">
+                            <span class="composer-model-k">模型</span>
+                            <span class="composer-model-v" id="model-profile-current">正在加载模型配置</span>
+                            <span class="composer-model-caret" aria-hidden="true"></span>
+                        </button>
+                        <div class="composer-model-menu" id="model-profile-menu" role="listbox" aria-label="模型配置"></div>
                     </div>
                 </div>
 
