@@ -10,6 +10,10 @@ from typing import Any, Dict, List, Optional
 import httpx
 
 
+DEFAULT_UNKNOWN_CONTEXT_WINDOW = 1_000_000
+DEFAULT_UNKNOWN_OUTPUT_TOKENS = 8_192
+
+
 KNOWN_MODEL_LIMITS: list[tuple[str, int, int]] = [
     ("gpt-5.5-pro", 1050000, 128000),
     ("gpt-5.5", 1050000, 128000),
@@ -93,10 +97,10 @@ def infer_model_limits(model_id: str, raw: Optional[dict] = None) -> dict[str, i
                 ctx = ctx or known_ctx
                 out = out or known_out
                 break
-    if raw_ctx <= 0:
-        ctx = max(ctx or 128000, 128000)
+    if raw_ctx <= 0 and ctx <= 0:
+        ctx = DEFAULT_UNKNOWN_CONTEXT_WINDOW
     if raw_out <= 0:
-        out = max(out or 8192, 8192)
+        out = max(out or DEFAULT_UNKNOWN_OUTPUT_TOKENS, DEFAULT_UNKNOWN_OUTPUT_TOKENS)
     return {
         "context_window": ctx,
         "max_output_tokens": out,
@@ -188,16 +192,26 @@ def upsert_profile(project_root: Path, payload: dict) -> dict:
     old_index = next((i for i, p in enumerate(profiles) if isinstance(p, dict) and p.get("id") == pid), -1)
     old = profiles[old_index] if old_index >= 0 else None
     now = _now()
+    name = str(payload.get("name") or "").strip()
+    base_url = _normalize_base_url(str(payload.get("base_url") or ""))
+    incoming_api_key = str(payload.get("api_key") or "").strip() if "api_key" in payload else ""
+    existing_api_key = str((old or {}).get("api_key") or "").strip()
+    if not name:
+        raise ValueError("missing name")
+    if not base_url:
+        raise ValueError("missing base_url")
+    if not incoming_api_key and not existing_api_key:
+        raise ValueError("missing api_key")
     profile = dict(old or {})
     priority_default = _safe_int((old or {}).get("priority"), len(profiles) + 1)
     profile.update(
         {
             "id": pid,
-            "name": str(payload.get("name") or payload.get("model") or "未命名模型").strip(),
+            "name": name,
             "model": str(payload.get("model") or "").strip(),
             "llm_type": str(payload.get("llm_type") or "openai").strip().lower() or "openai",
-            "base_url": _normalize_base_url(str(payload.get("base_url") or "")),
-            "context_window": _safe_int(payload.get("context_window"), 128000),
+            "base_url": base_url,
+            "context_window": _safe_int(payload.get("context_window"), DEFAULT_UNKNOWN_CONTEXT_WINDOW),
             "max_output_tokens": _safe_int(payload.get("max_output_tokens"), 8192),
             "model_context_window": _safe_int(payload.get("model_context_window"), 0),
             "thinking_mode": _clean_thinking_mode(payload.get("thinking_mode")),
@@ -208,8 +222,8 @@ def upsert_profile(project_root: Path, payload: dict) -> dict:
             "updated_at": now,
         }
     )
-    if "api_key" in payload:
-        profile["api_key"] = str(payload.get("api_key") or "").strip()
+    if incoming_api_key:
+        profile["api_key"] = incoming_api_key
     if not profile.get("created_at"):
         profile["created_at"] = now
     if old_index >= 0:

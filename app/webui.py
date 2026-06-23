@@ -996,10 +996,14 @@ async def save_model_profile(req: Request):
         return JSONResponse({"ok": False, "error": "invalid json"}, status_code=400)
     if not isinstance(data, dict):
         return JSONResponse({"ok": False, "error": "body must be object"}, status_code=400)
-    if not str(data.get("model") or "").strip():
-        return JSONResponse({"ok": False, "error": "missing model"}, status_code=400)
-    if str(data.get("llm_type") or "openai").strip().lower() != "local" and not str(data.get("base_url") or "").strip():
+    if not str(data.get("name") or "").strip():
+        return JSONResponse({"ok": False, "error": "missing name"}, status_code=400)
+    if not str(data.get("base_url") or "").strip():
         return JSONResponse({"ok": False, "error": "missing base_url"}, status_code=400)
+    old_profile = model_profiles.get_profile(PROJECT_ROOT, str(data.get("id") or "").strip())
+    incoming_key = str(data.get("api_key") or "").strip() if "api_key" in data else ""
+    if not incoming_key and not str((old_profile or {}).get("api_key") or "").strip():
+        return JSONResponse({"ok": False, "error": "missing api_key"}, status_code=400)
     try:
         profile = model_profiles.upsert_profile(PROJECT_ROOT, data)
     except Exception as e:
@@ -2500,11 +2504,11 @@ async def save_config(req: _Request):
 
         ctx_raw = data.get("context_window", "")
         try:
-            ctx_w = int(str(ctx_raw).strip()) if str(ctx_raw).strip() != "" else 128000
+            ctx_w = int(str(ctx_raw).strip()) if str(ctx_raw).strip() != "" else 1000000
         except ValueError:
-            ctx_w = 128000
+            ctx_w = 1000000
         if ctx_w <= 0:
-            ctx_w = 128000
+            ctx_w = 1000000
         updates["CONTEXT_WINDOW"] = str(ctx_w)
 
         mot_raw = data.get("max_output_tokens", "")

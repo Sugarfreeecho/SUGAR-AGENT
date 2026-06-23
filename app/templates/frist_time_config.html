@@ -575,7 +575,7 @@
       <div class="form-row-2">
         <div class="form-group">
           <label>上下文门限（tokens）</label>
-          <input type="text" id="contextWindow" inputmode="numeric" autocomplete="off" spellcheck="false" placeholder="128000">
+          <input type="text" id="contextWindow" inputmode="numeric" autocomplete="off" spellcheck="false" placeholder="1000000">
         </div>
         <div class="form-group">
           <label>单次回复上限（tokens）</label>
@@ -693,7 +693,7 @@
   function applyDiscoveredModel(model) {
     model = model || {};
     if (modelName) modelName.value = model.id || model.model || '';
-    if (contextWindowEl) contextWindowEl.value = model.context_window || '128000';
+    if (contextWindowEl) contextWindowEl.value = model.context_window || '1000000';
     if (maxOutputTokensEl) maxOutputTokensEl.value = model.max_output_tokens || '8192';
     setModelDiscoveryStatus('已填入模型和窗口参数。');
   }
@@ -819,7 +819,7 @@
   syncSearchPairVisibility();
 
   if (workDirInput && !workDirInput.value.trim()) workDirInput.value = './workspace';
-  if (contextWindowEl && !String(contextWindowEl.value).trim()) contextWindowEl.value = '128000';
+  if (contextWindowEl && !String(contextWindowEl.value).trim()) contextWindowEl.value = '1000000';
   if (maxOutputTokensEl && !String(maxOutputTokensEl.value).trim()) maxOutputTokensEl.value = '8192';
   setupReady = true;
 
@@ -869,7 +869,7 @@
           api_key: key,
           model_name: model,
           work_dir: workDirInput ? workDirInput.value.trim() : '',
-          context_window: contextWindowEl ? contextWindowEl.value.trim() : '128000',
+          context_window: contextWindowEl ? contextWindowEl.value.trim() : '1000000',
           max_output_tokens: maxOutputTokensEl ? maxOutputTokensEl.value.trim() : '8192',
           search_provider: searchProvider.value,
           search_api_key: searchKey.value.trim(),
