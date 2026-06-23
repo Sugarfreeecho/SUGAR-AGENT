@@ -394,8 +394,8 @@
 <div class="fd"><div class="fk is-required">OPENAI_API_KEY</div><input id="model-api-key" class="ip" type="password" autocomplete="off" aria-required="true" placeholder="模型API密钥未填写"></div>
 </div>
 <div class="model-grid model-grid--basics">
-<div class="fd"><div class="fk is-required">方案名称</div><input id="model-profile-name" class="ip" type="text" autocomplete="off" aria-required="true" placeholder="模型配置方案名，可自行编辑"></div>
-<div class="fd"><div class="fk">模型 ID / API 模型名</div><input id="model-id" class="ip" type="text" autocomplete="off" placeholder="实际发送给 API 的 model，例如 deepseek-v4-flash"></div>
+<div class="fd"><div class="fk">方案名称</div><input id="model-profile-name" class="ip" type="text" autocomplete="off" placeholder="模型配置方案名，可自行编辑"></div>
+<div class="fd"><div class="fk is-required">模型 ID / API 模型名</div><input id="model-id" class="ip" type="text" autocomplete="off" aria-required="true" placeholder="实际发送给 API 的 model，例如 deepseek-v4-flash"></div>
 <div class="fd"><div class="fk">EXECUTOR_LLM_TYPE</div><input id="model-llm-type" class="ip" type="text" autocomplete="off" value="openai"></div>
 </div>
 <div class="model-grid model-grid--limits">
@@ -464,7 +464,7 @@ function setFieldWarn(el,on){if(el)el.classList.toggle("limit-warn",!!on);}
 function currentMaxContext(){return intv(modelEls.maxctx&&modelEls.maxctx.value);}
 function setMaxContext(v){if(modelEls.maxctx)modelEls.maxctx.value=v?String(v):"";}
 function validateModelLimits(){var max=currentMaxContext(),ctx=intv(modelEls.ctx&&modelEls.ctx.value),out=intv(modelEls.out&&modelEls.out.value),bad=!!(max&&ctx&&out&&ctx+out>max);if(modelEls.ctx)modelEls.ctx.classList.toggle("limit-warn",bad);if(modelEls.out)modelEls.out.classList.toggle("limit-warn",bad);if(modelEls.limitHelp){modelEls.limitHelp.textContent=bad?("CONTEXT_WINDOW + MAX_OUTPUT_TOKENS 不能超过模型最大上下文 "+max+"。当前合计 "+(ctx+out)+"。"):"";modelEls.limitHelp.classList.toggle("is-on",bad);}return !bad;}
-function validateModelRequiredFields(){var editing=!!(modelEls.save&&modelEls.save.getAttribute("data-edit-id")),storedKey=!!(editing&&modelEls.key&&modelEls.key.getAttribute("data-key-set")==="1"),missing=[];setFieldWarn(modelEls.base,!fieldValue(modelEls.base));setFieldWarn(modelEls.name,!fieldValue(modelEls.name));setFieldWarn(modelEls.key,!fieldValue(modelEls.key)&&!storedKey);if(!fieldValue(modelEls.base))missing.push("OPENAI_BASE_URL");if(!fieldValue(modelEls.key)&&!storedKey)missing.push("OPENAI_API_KEY");if(!fieldValue(modelEls.name))missing.push("方案名称");if(missing.length){modelStatus("请填写必填项："+missing.join("、")+"。");return false;}return true;}
+function validateModelRequiredFields(){var editing=!!(modelEls.save&&modelEls.save.getAttribute("data-edit-id")),storedKey=!!(editing&&modelEls.key&&modelEls.key.getAttribute("data-key-set")==="1"),missing=[];setFieldWarn(modelEls.base,!fieldValue(modelEls.base));setFieldWarn(modelEls.key,!fieldValue(modelEls.key)&&!storedKey);setFieldWarn(modelEls.id,!fieldValue(modelEls.id));setFieldWarn(modelEls.name,false);if(!fieldValue(modelEls.base))missing.push("OPENAI_BASE_URL");if(!fieldValue(modelEls.key)&&!storedKey)missing.push("OPENAI_API_KEY");if(!fieldValue(modelEls.id))missing.push("模型名称");if(missing.length){modelStatus("请填写必填项："+missing.join("、")+"。");return false;}return true;}
 function setSaveMode(pid){if(!modelEls.save)return;if(pid){modelEls.save.setAttribute("data-edit-id",pid);modelEls.save.textContent="保存修改";}else{modelEls.save.removeAttribute("data-edit-id");modelEls.save.textContent="保存为新模型配置";}}
 function setEditingHighlight(pid){var rows=document.querySelectorAll(".profile-row[data-id]"),i;for(i=0;i<rows.length;i++)rows[i].classList.toggle("is-editing",pid&&rows[i].getAttribute("data-id")===pid);}
 function hasAdvancedModelFields(m){return !!(m&&(String(m.temperature||"").trim()||String(m.thinking_mode||"").trim()||String(m.reasoning_effort||"").trim()||String(m.extra_body_json||"").trim()));}
@@ -538,7 +538,7 @@ if(modelEls.base)modelEls.base.addEventListener("change",scheduleModelFetch);
 if(modelEls.key)modelEls.key.addEventListener("input",scheduleModelFetch);
 if(modelEls.base)modelEls.base.addEventListener("input",validateModelRequiredFields);
 if(modelEls.key)modelEls.key.addEventListener("input",validateModelRequiredFields);
-if(modelEls.name)modelEls.name.addEventListener("input",validateModelRequiredFields);
+if(modelEls.id)modelEls.id.addEventListener("input",validateModelRequiredFields);
 if(modelEls.maxctx)modelEls.maxctx.addEventListener("input",validateModelLimits);
 if(modelEls.ctx)modelEls.ctx.addEventListener("input",validateModelLimits);
 if(modelEls.out)modelEls.out.addEventListener("input",validateModelLimits);

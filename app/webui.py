@@ -996,8 +996,8 @@ async def save_model_profile(req: Request):
         return JSONResponse({"ok": False, "error": "invalid json"}, status_code=400)
     if not isinstance(data, dict):
         return JSONResponse({"ok": False, "error": "body must be object"}, status_code=400)
-    if not str(data.get("name") or "").strip():
-        return JSONResponse({"ok": False, "error": "missing name"}, status_code=400)
+    if not str(data.get("model") or "").strip():
+        return JSONResponse({"ok": False, "error": "missing model"}, status_code=400)
     if not str(data.get("base_url") or "").strip():
         return JSONResponse({"ok": False, "error": "missing base_url"}, status_code=400)
     old_profile = model_profiles.get_profile(PROJECT_ROOT, str(data.get("id") or "").strip())

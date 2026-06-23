@@ -192,12 +192,13 @@ def upsert_profile(project_root: Path, payload: dict) -> dict:
     old_index = next((i for i, p in enumerate(profiles) if isinstance(p, dict) and p.get("id") == pid), -1)
     old = profiles[old_index] if old_index >= 0 else None
     now = _now()
-    name = str(payload.get("name") or "").strip()
+    model = str(payload.get("model") or "").strip()
+    name = str(payload.get("name") or model).strip()
     base_url = _normalize_base_url(str(payload.get("base_url") or ""))
     incoming_api_key = str(payload.get("api_key") or "").strip() if "api_key" in payload else ""
     existing_api_key = str((old or {}).get("api_key") or "").strip()
-    if not name:
-        raise ValueError("missing name")
+    if not model:
+        raise ValueError("missing model")
     if not base_url:
         raise ValueError("missing base_url")
     if not incoming_api_key and not existing_api_key:
@@ -208,7 +209,7 @@ def upsert_profile(project_root: Path, payload: dict) -> dict:
         {
             "id": pid,
             "name": name,
-            "model": str(payload.get("model") or "").strip(),
+            "model": model,
             "llm_type": str(payload.get("llm_type") or "openai").strip().lower() or "openai",
             "base_url": base_url,
             "context_window": _safe_int(payload.get("context_window"), DEFAULT_UNKNOWN_CONTEXT_WINDOW),
