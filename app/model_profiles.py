@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import time
 import uuid
 from pathlib import Path
@@ -12,6 +13,29 @@ import httpx
 
 DEFAULT_UNKNOWN_CONTEXT_WINDOW = 1_000_000
 DEFAULT_UNKNOWN_OUTPUT_TOKENS = 8_192
+CONTEXT_PROBE_TOKEN_COUNT = 300_000
+CONTEXT_PROBE_MAX_MODELS = 8
+CONTEXT_PROBE_TIMEOUT = 8.0
+
+CONTEXT_LIMIT_FIELDS = (
+    "context_window",
+    "context_length",
+    "max_context_length",
+    "max_model_len",
+    "max_sequence_length",
+    "input_token_limit",
+)
+OUTPUT_LIMIT_FIELDS = (
+    "max_output_tokens",
+    "output_token_limit",
+    "max_completion_tokens",
+)
+_TOKEN_COUNT_PATTERN = r"([0-9][0-9,._ ]*(?:\.[0-9]+)?\s*[kKmM]?)"
+CONTEXT_LIMIT_ERROR_PATTERNS = (
+    re.compile(r"maximum context length is\s*" + _TOKEN_COUNT_PATTERN + r"\s*tokens?", re.I),
+    re.compile(r"max(?:imum)?(?: model)? context(?: length| window)?(?: is|:)?\s*" + _TOKEN_COUNT_PATTERN + r"\s*tokens?", re.I),
+    re.compile(r"context(?: length| window)? limit(?: is|:)?\s*" + _TOKEN_COUNT_PATTERN + r"\s*tokens?", re.I),
+)
 
 
 KNOWN_MODEL_LIMITS: list[tuple[str, int, int]] = [
@@ -61,6 +85,23 @@ def _safe_int(value: Any, default: int = 0) -> int:
         return default
 
 
+def _parse_token_count(value: Any) -> int:
+    text = str(value or "").strip().lower().replace(",", "").replace("_", "").replace(" ", "")
+    if not text:
+        return 0
+    multiplier = 1
+    if text.endswith("k"):
+        multiplier = 1_000
+        text = text[:-1]
+    elif text.endswith("m"):
+        multiplier = 1_000_000
+        text = text[:-1]
+    try:
+        return int(float(text) * multiplier)
+    except (TypeError, ValueError):
+        return 0
+
+
 def _clean_reasoning_effort(value: Any) -> str:
     # UI provides max/high/medium/low, but keep custom provider values possible.
     return str(value or "").strip().lower()
@@ -71,39 +112,45 @@ def _clean_thinking_mode(value: Any) -> str:
     return str(value or "").strip().lower()
 
 
-def infer_model_limits(model_id: str, raw: Optional[dict] = None) -> dict[str, int]:
+def _known_limits_for_model(model_id: str) -> tuple[int, int] | None:
+    mid = str(model_id or "").lower()
+    for prefix, known_ctx, known_out in KNOWN_MODEL_LIMITS:
+        if mid.startswith(prefix):
+            return known_ctx, known_out
+    return None
+
+
+def infer_model_limits(model_id: str, raw: Optional[dict] = None) -> dict[str, Any]:
     raw = raw or {}
-    candidates = [
-        raw.get("context_window"),
-        raw.get("context_length"),
-        raw.get("max_context_length"),
-        raw.get("max_model_len"),
-        raw.get("max_sequence_length"),
-        raw.get("input_token_limit"),
-    ]
+    candidates = [raw.get(key) for key in CONTEXT_LIMIT_FIELDS]
     raw_ctx = next((_safe_int(v) for v in candidates if _safe_int(v) > 0), 0)
     ctx = raw_ctx
-    output_candidates = [
-        raw.get("max_output_tokens"),
-        raw.get("output_token_limit"),
-        raw.get("max_completion_tokens"),
-    ]
+    ctx_source = "api" if raw_ctx > 0 else ""
+    output_candidates = [raw.get(key) for key in OUTPUT_LIMIT_FIELDS]
     raw_out = next((_safe_int(v) for v in output_candidates if _safe_int(v) > 0), 0)
     out = raw_out
-    mid = str(model_id or "").lower()
+    out_source = "api" if raw_out > 0 else ""
     if ctx <= 0 or out <= 0:
-        for prefix, known_ctx, known_out in KNOWN_MODEL_LIMITS:
-            if mid.startswith(prefix):
-                ctx = ctx or known_ctx
-                out = out or known_out
-                break
+        known_limits = _known_limits_for_model(model_id)
+        if known_limits:
+            known_ctx, known_out = known_limits
+            if ctx <= 0:
+                ctx = known_ctx
+                ctx_source = "known"
+            if out <= 0:
+                out = known_out
+                out_source = "known"
     if raw_ctx <= 0 and ctx <= 0:
         ctx = DEFAULT_UNKNOWN_CONTEXT_WINDOW
+        ctx_source = "default"
     if raw_out <= 0:
         out = max(out or DEFAULT_UNKNOWN_OUTPUT_TOKENS, DEFAULT_UNKNOWN_OUTPUT_TOKENS)
+        out_source = out_source or "default"
     return {
         "context_window": ctx,
         "max_output_tokens": out,
+        "context_source": ctx_source or "default",
+        "output_source": out_source or "default",
     }
 
 
@@ -121,6 +168,63 @@ def models_url_for_base(base_url: str) -> str:
     if not base:
         return ""
     return base + "/models"
+
+
+def chat_completions_url_for_base(base_url: str) -> str:
+    base = _normalize_base_url(base_url)
+    if not base:
+        return ""
+    return base + "/chat/completions"
+
+
+def extract_context_window_from_error(error_body: Any) -> int:
+    if isinstance(error_body, (dict, list)):
+        text = json.dumps(error_body, ensure_ascii=False)
+    else:
+        text = str(error_body or "")
+    for pattern in CONTEXT_LIMIT_ERROR_PATTERNS:
+        match = pattern.search(text)
+        if not match:
+            continue
+        tokens = _parse_token_count(match.group(1))
+        if tokens > 0:
+            return tokens
+    return 0
+
+
+def probe_context_window_from_error(
+    client: httpx.Client,
+    base_url: str,
+    headers: dict[str, str],
+    model_id: str,
+    timeout: float = CONTEXT_PROBE_TIMEOUT,
+) -> int:
+    url = chat_completions_url_for_base(base_url)
+    if not url or not str(model_id or "").strip():
+        return 0
+    probe_text = "x " * CONTEXT_PROBE_TOKEN_COUNT
+    payload = {
+        "model": model_id,
+        "messages": [{"role": "user", "content": probe_text}],
+        "max_tokens": 1,
+        "stream": False,
+    }
+    try:
+        resp = client.post(url, headers=headers, json=payload, timeout=timeout)
+    except httpx.HTTPError:
+        return 0
+    if resp.status_code != 400:
+        return 0
+    bodies: list[Any] = [resp.text]
+    try:
+        bodies.append(resp.json())
+    except ValueError:
+        pass
+    for body in bodies:
+        context_window = extract_context_window_from_error(body)
+        if context_window > 0:
+            return context_window
+    return 0
 
 
 def profile_store_path(project_root: Path) -> Path:
@@ -333,37 +437,46 @@ def discover_models(base_url: str, api_key: str, timeout: float = 20.0) -> List[
         resp = client.get(url, headers=headers)
         resp.raise_for_status()
         data = resp.json()
-    items = data.get("data") if isinstance(data, dict) else data
-    if not isinstance(items, list):
-        raise ValueError("models response is not a list")
-    out: List[Dict[str, Any]] = []
-    for item in items:
-        if not isinstance(item, dict):
-            continue
-        mid = str(item.get("id") or item.get("name") or "").strip()
-        if not mid:
-            continue
-        limits = infer_model_limits(mid, item)
-        out.append(
-            {
-                "id": mid,
-                "owned_by": item.get("owned_by") or item.get("owner") or "",
-                "created": item.get("created") or None,
-                "context_window": limits["context_window"],
-                "model_context_window": limits["context_window"],
-                "max_output_tokens": limits["max_output_tokens"],
-                "raw_has_limits": any(
-                    k in item
-                    for k in (
-                        "context_window",
-                        "context_length",
-                        "max_context_length",
-                        "max_model_len",
-                        "max_output_tokens",
-                        "output_token_limit",
-                    )
-                ),
-            }
-        )
+        items = data.get("data") if isinstance(data, dict) else data
+        if not isinstance(items, list):
+            raise ValueError("models response is not a list")
+        out: List[Dict[str, Any]] = []
+        probe_count = 0
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            mid = str(item.get("id") or item.get("name") or "").strip()
+            if not mid:
+                continue
+            raw_has_context = any(k in item for k in CONTEXT_LIMIT_FIELDS)
+            raw_has_limits = raw_has_context or any(k in item for k in OUTPUT_LIMIT_FIELDS)
+            limits = infer_model_limits(mid, item)
+            if (
+                not raw_has_context
+                and headers.get("Authorization")
+                and probe_count < CONTEXT_PROBE_MAX_MODELS
+            ):
+                probe_count += 1
+                probed_context = probe_context_window_from_error(client, base_url, headers, mid)
+                if probed_context > 0:
+                    limits["context_window"] = probed_context
+                    limits["context_source"] = "probe"
+                    if int(limits["max_output_tokens"]) >= probed_context:
+                        limits["max_output_tokens"] = min(DEFAULT_UNKNOWN_OUTPUT_TOKENS, max(1, probed_context - 1))
+                        limits["output_source"] = "default"
+            out.append(
+                {
+                    "id": mid,
+                    "owned_by": item.get("owned_by") or item.get("owner") or "",
+                    "created": item.get("created") or None,
+                    "context_window": limits["context_window"],
+                    "model_context_window": limits["context_window"],
+                    "max_output_tokens": limits["max_output_tokens"],
+                    "raw_has_limits": raw_has_limits,
+                    "limit_source": limits["context_source"],
+                    "context_window_source": limits["context_source"],
+                    "output_limit_source": limits["output_source"],
+                }
+            )
     out.sort(key=lambda row: row["id"].lower())
     return out

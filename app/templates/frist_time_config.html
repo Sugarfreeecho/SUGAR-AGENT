@@ -689,6 +689,14 @@
     if (modelDiscoveryStatus) modelDiscoveryStatus.textContent = message || '';
   }
 
+  function modelLimitSource(model) {
+    const source = String((model && (model.limit_source || model.context_window_source)) || '');
+    if (source === 'api') return 'API 返回窗口信息';
+    if (source === 'probe') return 'HTTP 400 错误消息探测';
+    if (source === 'default') return '默认 1m 上下文';
+    return '使用内置常见模型窗口推断';
+  }
+
   function applyDiscoveredModel(model) {
     model = model || {};
     if (modelName) modelName.value = model.id || model.model || '';
@@ -709,7 +717,7 @@
       const raw = wizardEsc(JSON.stringify(model));
       html += "<button type='button' class='model-row' data-model='" + raw + "'>"
         + "<span class='model-row__main'><span class='model-row__id'>" + wizardEsc(model.id) + "</span></span>"
-        + "<span class='model-row__side'><span class='model-row__meta'>" + (model.raw_has_limits ? 'API 返回窗口信息' : '使用内置常见模型窗口推断') + "</span>"
+        + "<span class='model-row__side'><span class='model-row__meta'>" + wizardEsc(modelLimitSource(model)) + "</span>"
         + "<span class='model-row__limits'>" + wizardEsc(model.context_window) + " ctx / " + wizardEsc(model.max_output_tokens) + " out</span></span>"
         + "</button>";
     }
