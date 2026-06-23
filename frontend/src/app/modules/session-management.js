@@ -293,6 +293,7 @@ function buildAndBindSessionRow(sess, allSessions, nextStreamMap) {
             persistSessionUnread();
             delete draftBySession[deletedSessionId];
             removeStoredInputDraft(deletedSessionId);
+            if (typeof removeStoredFollowupQueue === 'function') removeStoredFollowupQueue(deletedSessionId);
             delete lastUserMessageBySession[deletedSessionId];
             clearContextStateForSession(deletedSessionId);
             if (isSessionRunning(sess.id)) {
@@ -791,6 +792,7 @@ async function switchSession(sessionId) {
     setCurrentSessionState(sessionId);
     localStorage.setItem('lastSessionId', sessionId);
     restoreInputDraft(sessionId);
+    if (typeof renderFollowupQueue === 'function') renderFollowupQueue();
     if (typeof refreshModelProfileSelector === 'function') refreshModelProfileSelector(sessionId);
     syncSessionListIndicatorClasses();
     setSendButtonState();
@@ -865,6 +867,7 @@ async function createNewSessionInner() {
         setCurrentSessionState(data.session_id);
         localStorage.setItem('lastSessionId', currentSessionId);
         restoreInputDraft(currentSessionId);
+        if (typeof renderFollowupQueue === 'function') renderFollowupQueue();
         if (typeof refreshModelProfileSelector === 'function') refreshModelProfileSelector(currentSessionId);
         if (!getVisibleChatStream()) ensureVisibleChatStreamSlot();
         setWelcome();

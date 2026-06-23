@@ -154,7 +154,10 @@
     letter-spacing: 0;
     font-family: var(--sans);
     margin-bottom: 0.25rem;
-    color: #f4f7fb;
+    background: linear-gradient(135deg, #f0eff5 0%, #c8c6d6 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
     user-select: none;
     -webkit-user-select: none;
     cursor: default;
@@ -166,7 +169,10 @@
     text-overflow: clip;
   }
   :root.theme-light .logo h1 {
-    color: #111827;
+    background: linear-gradient(135deg, #1f1f2e 0%, #4f46e5 55%, #6366f1 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
   }
   .logo p {
     color: var(--text-secondary);
@@ -842,7 +848,6 @@
     if (prefill.model_name) modelName.value = prefill.model_name;
     if (prefill.llm_base_url) baseUrl.value = prefill.llm_base_url;
     if (prefill.api_key !== undefined && prefill.api_key !== null) apiKey.value = prefill.api_key;
-    if (prefill.api_key_set) apiKey.placeholder = 'API已设置，如需修改请直接输入并保存设置';
     if (prefill.work_dir && workDirInput) workDirInput.value = prefill.work_dir;
     if (prefill.context_window && contextWindowEl) contextWindowEl.value = prefill.context_window;
     if (prefill.max_output_tokens && maxOutputTokensEl) maxOutputTokensEl.value = prefill.max_output_tokens;
@@ -850,7 +855,6 @@
       searchProvider.value = prefill.search_provider;
     }
     if (prefill.search_api_key) searchKey.value = prefill.search_api_key;
-    if (prefill.search_api_key_set) searchKey.placeholder = 'API已设置，如需修改请直接输入并保存设置';
     var pSel = llmProvider.value;
     var pm = providerMap[pSel];
     if (pm) {
@@ -901,7 +905,7 @@
       return;
     }
 
-    if (provider !== 'local' && !key && !(prefill && prefill.api_key_set)) {
+    if (provider !== 'local' && !key) {
       showStatus('请填写 API Key', 'error');
       return;
     }

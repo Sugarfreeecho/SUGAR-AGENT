@@ -3,6 +3,7 @@ let currentSessionId = null;
 let sendPipelineLock = false;
 let sendPipelineLockSessionId = null;
 const followupQueueBySession = Object.create(null);
+const followupQueueLoadedBySession = Object.create(null);
 let followupQueueSeq = 1;
 const followupQueueDraining = Object.create(null);
 /** 会话在后台跑完后未点开过：侧栏绿点，点开即清除（localStorage 持久化，刷新不丢） */
@@ -12,6 +13,7 @@ const sessionUnreadClearInFlight = Object.create(null);
 /** 每个会话独立的输入草稿（切换会话恢复） */
 const draftBySession = Object.create(null);
 const LS_INPUT_DRAFT_PREFIX = 'myagent-input-draft-';
+const LS_FOLLOWUP_QUEUE_PREFIX = 'myagent-followup-queue-';
 const inputPathTokenMap = Object.create(null);
 let inputPathRewriteGuard = false;
 /** 本会话最近一次成功点击「发送」的用户消息全文（供工具确认失败后「重新发送」） */

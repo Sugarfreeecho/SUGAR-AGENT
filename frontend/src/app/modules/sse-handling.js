@@ -349,8 +349,76 @@ async function processRewriteTruncateAsync(pr) {
 function getFollowupQueue(sessionId) {
     const sid = String(sessionId || '');
     if (!sid) return [];
+    if (!followupQueueLoadedBySession[sid]) {
+        followupQueueBySession[sid] = readStoredFollowupQueue(sid);
+        followupQueueLoadedBySession[sid] = true;
+    }
     if (!followupQueueBySession[sid]) followupQueueBySession[sid] = [];
     return followupQueueBySession[sid];
+}
+
+function followupQueueStorageKey(sessionId) {
+    return LS_FOLLOWUP_QUEUE_PREFIX + String(sessionId || '');
+}
+
+function normalizeStoredFollowupItem(item) {
+    if (!item || typeof item !== 'object') return null;
+    var text = String(item.text || '').trim();
+    if (!text) return null;
+    var display = String(item.display || item.text || '').trim();
+    return {
+        id: item.id || ('stored-followup-' + (followupQueueSeq++)),
+        text: text,
+        display: display || text,
+        createdAt: Number(item.createdAt) || Date.now(),
+    };
+}
+
+function readStoredFollowupQueue(sessionId) {
+    try {
+        var raw = localStorage.getItem(followupQueueStorageKey(sessionId));
+        if (!raw) return [];
+        var arr = JSON.parse(raw);
+        if (!Array.isArray(arr)) return [];
+        var out = arr.map(normalizeStoredFollowupItem).filter(Boolean);
+        out.forEach(function (item) {
+            var n = Number(item.id);
+            if (Number.isFinite(n)) followupQueueSeq = Math.max(followupQueueSeq, Math.floor(n) + 1);
+        });
+        return out;
+    } catch (e) {
+        return [];
+    }
+}
+
+function persistFollowupQueue(sessionId) {
+    const sid = String(sessionId || '');
+    if (!sid) return;
+    var q = followupQueueBySession[sid] || [];
+    var pending = q.filter(function (item) {
+        var status = item && item.status ? String(item.status) : '';
+        return item && item.text && !status;
+    }).map(function (item) {
+        return {
+            id: item.id,
+            text: item.text,
+            display: item.display || item.text,
+            createdAt: item.createdAt || Date.now(),
+        };
+    });
+    try {
+        var key = followupQueueStorageKey(sid);
+        if (pending.length) localStorage.setItem(key, JSON.stringify(pending));
+        else localStorage.removeItem(key);
+    } catch (e) { /* ignore */ }
+}
+
+function removeStoredFollowupQueue(sessionId) {
+    const sid = String(sessionId || '');
+    if (!sid) return;
+    delete followupQueueBySession[sid];
+    delete followupQueueLoadedBySession[sid];
+    try { localStorage.removeItem(followupQueueStorageKey(sid)); } catch (e) { /* ignore */ }
 }
 
 function inputHasSendableText() {
@@ -457,6 +525,7 @@ function enqueueCurrentInputAsFollowup() {
         display: visibleMessage,
         createdAt: Date.now(),
     });
+    persistFollowupQueue(sid);
     messageInput.value = '';
     persistInputDraft(sid, '');
     clearInputPathTokens();
@@ -470,7 +539,9 @@ function takeFollowupItem(sessionId, itemId) {
     var q = getFollowupQueue(sessionId);
     var idx = q.findIndex(function (item) { return String(item.id) === String(itemId); });
     if (idx < 0) return null;
-    return q.splice(idx, 1)[0] || null;
+    var item = q.splice(idx, 1)[0] || null;
+    persistFollowupQueue(sessionId);
+    return item;
 }
 
 function withdrawFollowup(itemId) {
@@ -480,6 +551,7 @@ function withdrawFollowup(itemId) {
     if (pendingItem && pendingItem.status === 'sending') {
         pendingItem.cancelRequested = true;
         pendingItem.status = 'withdrawing';
+        persistFollowupQueue(sid);
         renderFollowupQueue();
         if (pendingItem.steerInFlight && !pendingItem.steerId) return;
         cancelSteerMessage(sid, pendingItem).then(function () {
@@ -488,6 +560,7 @@ function withdrawFollowup(itemId) {
         }).catch(function (e) {
             var item = q.find(function (entry) { return String(entry.id) === String(itemId); });
             if (item) item.status = 'sending';
+            persistFollowupQueue(sid);
             renderFollowupQueue();
             appendLogVisible('追问已被接收，无法撤回: ' + ((e && e.message) || String(e)), 'error-log');
         });
@@ -569,6 +642,7 @@ async function sendFollowupNow(itemId) {
     var runningNow = isSessionRunning(sid) || (sendPipelineLock && sendPipelineLockSessionId === sid);
     if (runningNow) item.clientId = item.clientId || ('followup-' + item.id + '-' + Date.now());
     item.status = 'sending';
+    persistFollowupQueue(sid);
     renderFollowupQueue();
     if (runningNow) {
         try {
@@ -583,23 +657,27 @@ async function sendFollowupNow(itemId) {
                 return;
             }
             item.status = 'sending';
+            persistFollowupQueue(sid);
             renderFollowupQueue();
         } catch (e) {
             item.steerInFlight = false;
             if (item.cancelRequested) {
                 item.status = 'sending';
                 item.cancelRequested = false;
+                persistFollowupQueue(sid);
                 renderFollowupQueue();
                 appendLogVisible('追问已被接收，无法撤回: ' + ((e && e.message) || String(e)), 'error-log');
                 return;
             }
             item.status = '';
+            persistFollowupQueue(sid);
             renderFollowupQueue();
             appendLogVisible('追问插入失败: ' + ((e && e.message) || String(e)), 'error-log');
         }
         return;
     }
     item.status = 'sent';
+    persistFollowupQueue(sid);
     renderFollowupQueue();
     setTimeout(function () {
         takeFollowupItem(sid, itemId);
@@ -623,6 +701,7 @@ function drainFollowupQueue(sessionId) {
         return;
     }
     var item = q.splice(nextIdx, 1)[0];
+    persistFollowupQueue(sid);
     renderFollowupQueue();
     followupQueueDraining[sid] = true;
     Promise.resolve(sendMessage({ message: item.text, fromQueue: true, sessionId: sid }))

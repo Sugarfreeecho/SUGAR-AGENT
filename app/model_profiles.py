@@ -300,7 +300,6 @@ def save_store(project_root: Path, data: dict) -> None:
 
 def public_profile(profile: dict) -> dict:
     out = dict(profile)
-    out.pop("api_key", None)
     out["api_key_set"] = bool(str(profile.get("api_key") or "").strip())
     return out
 
@@ -314,6 +313,7 @@ def default_profile_from_env(env: dict[str, str]) -> dict:
         "model": model,
         "llm_type": str(env.get("EXECUTOR_LLM_TYPE") or "openai").strip().lower() or "openai",
         "base_url": str(env.get("OPENAI_BASE_URL") or "").strip(),
+        "api_key": str(env.get("OPENAI_API_KEY") or "").strip(),
         "context_window": _safe_int(env.get("CONTEXT_WINDOW"), limits["context_window"]),
         "max_output_tokens": _safe_int(env.get("MAX_OUTPUT_TOKENS"), limits["max_output_tokens"]),
         "model_context_window": limits["context_window"],

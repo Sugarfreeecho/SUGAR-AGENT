@@ -2025,9 +2025,9 @@ def _wizard_prefill_from_dotenv() -> dict[str, str]:
         if v is not None and str(v).strip() != "":
             out[js_k] = str(v).strip()
     if vals.get("OPENAI_API_KEY"):
-        out["api_key_set"] = "1"
+        out["api_key"] = str(vals.get("OPENAI_API_KEY") or "").strip()
     if vals.get("TAVILY_API_KEY"):
-        out["search_api_key_set"] = "1"
+        out["search_api_key"] = str(vals.get("TAVILY_API_KEY") or "").strip()
     out["llm_provider"] = _infer_llm_provider_for_wizard(vals)
     return out
 
@@ -2307,7 +2307,7 @@ def _parse_env_entries(text: str) -> list[dict]:
         entries.append(
             {
                 "key": key,
-                "value": "" if sensitive else parsed_val,
+                "value": parsed_val,
                 "has_value": bool(parsed_val),
                 "hint": merged_hint,
                 "sensitive": sensitive,
