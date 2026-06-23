@@ -246,8 +246,7 @@
     margin-bottom: 0.35rem;
     letter-spacing: 0.02em;
   }
-  .form-group label .required { color: #9388fa; margin-left: 2px; }
-  :root.theme-light .form-group label .required { color: #6366f1; }
+  .form-group label .required { color: var(--red-accent); margin-left: 2px; font-weight: 900; }
 
   .form-group input,
   .form-group select {
@@ -532,6 +531,28 @@
     <div id="wizard-status-help" class="wizard-status-help" aria-live="polite">如需帮助或反馈，请联系GitHub @sugarfreeecho</div>
 
     <form id="configForm">
+      <div class="form-group" id="apiKeyGroup">
+        <label>API Key <span class="required">*</span></label>
+        <input type="password" id="apiKey" placeholder="sk-..." autocomplete="off">
+        <div class="form-hint">
+          DeepSeek: <a href="https://platform.deepseek.com/api_keys" target="_blank" rel="noopener">platform.deepseek.com</a>
+          · OpenAI: <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener">platform.openai.com</a>
+        </div>
+      </div>
+
+      <div class="form-group" id="baseUrlGroup">
+        <label>API 地址 <span class="required">*</span></label>
+        <input type="text" id="baseUrl" placeholder="https://api.deepseek.com" autocomplete="off" aria-required="true">
+      </div>
+
+      <div class="model-discovery" aria-label="模型发现">
+        <div class="model-discovery-row">
+          <button type="button" class="model-fetch-btn" id="modelFetchBtn">获取模型列表</button>
+          <span class="model-discovery-status" id="modelDiscoveryStatus"></span>
+        </div>
+        <div id="modelDiscoveryList" class="model-list"></div>
+      </div>
+
       <div class="form-row-2">
         <div class="form-group">
           <label>LLM 供应商（支持OpenAI SDK） <span class="required">*</span></label>
@@ -548,29 +569,7 @@
           <input type="text" id="modelName" placeholder="deepseek-v4-flash" autocomplete="off">
         </div>
       </div>
-      <div class="form-hint model-hint-below" id="modelHint">切换上方供应商时会自动填入推荐模型，也可自行修改。</div>
-
-      <div class="form-group" id="apiKeyGroup">
-        <label>API Key <span class="required">*</span></label>
-        <input type="password" id="apiKey" placeholder="sk-..." autocomplete="off">
-        <div class="form-hint">
-          DeepSeek: <a href="https://platform.deepseek.com/api_keys" target="_blank" rel="noopener">platform.deepseek.com</a>
-          · OpenAI: <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener">platform.openai.com</a>
-        </div>
-      </div>
-
-      <div class="form-group" id="baseUrlGroup">
-        <label>API 地址</label>
-        <input type="text" id="baseUrl" placeholder="https://api.deepseek.com" autocomplete="off">
-      </div>
-
-      <div class="model-discovery" aria-label="模型发现">
-        <div class="model-discovery-row">
-          <button type="button" class="model-fetch-btn" id="modelFetchBtn">获取模型列表</button>
-          <span class="model-discovery-status" id="modelDiscoveryStatus"></span>
-        </div>
-        <div id="modelDiscoveryList" class="model-list"></div>
-      </div>
+      <div class="form-hint model-hint-below" id="modelHint">切换供应商时会自动填入推荐模型，也可自行修改。</div>
 
       <div class="form-row-2">
         <div class="form-group">
@@ -851,6 +850,11 @@
       return;
     }
 
+    if (!url) {
+      showStatus('请填写 API 地址', 'error');
+      return;
+    }
+
     if (provider !== 'local' && !key && !(prefill && prefill.api_key_set)) {
       showStatus('请填写 API Key', 'error');
       return;
@@ -865,7 +869,7 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           llm_provider: provider,
-          llm_base_url: url || providerMap[provider].baseUrl,
+          llm_base_url: url,
           api_key: key,
           model_name: model,
           work_dir: workDirInput ? workDirInput.value.trim() : '',
