@@ -1357,6 +1357,7 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
             api_resp: Any = None
             llm_call_usage: Optional[Dict[str, int]] = None
             llm_call_finish: Dict[str, Any] = {"finish_reason": None, "stop_reason": None}
+            actual_response_model = ""
             if EXECUTOR_STREAM and emit:
                 t_llm_start = time.monotonic()
                 sync_q: queue.Queue = queue.Queue()
@@ -1387,6 +1388,7 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
                             continue
                         if tag == "usage":
                             llm_call_usage = payload
+                            actual_response_model = str((payload or {}).get("model") or actual_response_model or "").strip()
                             ch = int((payload or {}).get("prompt_cache_hit_tokens", 0) or 0)
                             cm = int((payload or {}).get("prompt_cache_miss_tokens", 0) or 0)
                             if ch + cm > 0:
@@ -1404,15 +1406,17 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
                                     "input_tokens": int((payload or {}).get("prompt_tokens", 0) or 0),
                                     "output_tokens": int((payload or {}).get("completion_tokens", 0) or 0),
                                     "tokens_per_sec": round(int((payload or {}).get("completion_tokens", 0) or 0) / max(0.001, time.monotonic() - t_llm_start), 1),
-                                    "model": iter_model,
+                                    "model": actual_response_model or iter_model,
                                 })
                                 await r
                                 await asyncio.sleep(0)
                             continue
                         if tag == "finish" and isinstance(payload, dict):
+                            actual_response_model = str(payload.get("model") or actual_response_model or "").strip()
                             llm_call_finish = {
                                 "finish_reason": payload.get("finish_reason"),
                                 "stop_reason": payload.get("stop_reason"),
+                                "model": actual_response_model or None,
                             }
                             continue
                         if tag == "turn":
@@ -1512,10 +1516,12 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
                         reasoning_effort=EXECUTOR_REASONING_EFFORT,
                     )
                     choice0 = api_resp.choices[0]
+                    actual_response_model = str(getattr(api_resp, "model", None) or actual_response_model or "").strip()
                     turn = parse_assistant_message(choice0.message)
                     llm_call_finish = {
                         "finish_reason": getattr(choice0, "finish_reason", None),
                         "stop_reason": getattr(choice0, "stop_reason", None),
+                        "model": actual_response_model or None,
                     }
                     u = getattr(api_resp, "usage", None)
                     if u is not None and not llm_call_usage:
@@ -1539,7 +1545,7 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
                                     "input_tokens": llm_call_usage.get("prompt_tokens", 0),
                                     "output_tokens": llm_call_usage.get("completion_tokens", 0),
                                     "tokens_per_sec": round(llm_call_usage.get("completion_tokens", 0) / max(0.001, time.monotonic() - t_llm_fallback_start), 1),
-                                    "model": iter_model,
+                                    "model": actual_response_model or iter_model,
                                 },
                                 emit=emit,
                             )
@@ -1652,7 +1658,8 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
             # 记录 LLM 调用详情（可选；与实际上送内容一致，已剥历史 reasoning）
             request_msgs = [_serialize_message(msg) for msg in llm_messages_to_send]
             call_record = {
-                "model": iter_model,
+                "model": actual_response_model or iter_model,
+                "requested_model": iter_model,
                 "request": request_msgs,
                 "response": {
                     "content": response_text if response_text else None,

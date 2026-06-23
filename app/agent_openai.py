@@ -670,8 +670,12 @@ def run_chat_completion_stream_worker(
         content_buf = ""
         tool_acc: Dict[int, Dict[str, str]] = {}
         last_usage: Optional[Dict[str, int]] = None
+        actual_model = ""
         finish_meta: Dict[str, Any] = {"finish_reason": None, "stop_reason": None}
         for chunk in stream:
+            chunk_model = str(getattr(chunk, "model", None) or "").strip()
+            if chunk_model:
+                actual_model = chunk_model
             uo = getattr(chunk, "usage", None)
             if uo is not None:
                 last_usage = extract_usage_dict(uo)
@@ -709,16 +713,21 @@ def run_chat_completion_stream_worker(
             reasoning_content=reasoning_final,
         )
         if last_usage:
-            sync_q.put(("usage", last_usage))
+            usage_payload: Dict[str, Any] = dict(last_usage)
+            if actual_model:
+                usage_payload["model"] = actual_model
+            sync_q.put(("usage", usage_payload))
             logger.info(
                 "chat.completions stream usage model=%s prompt_tokens=%s completion_tokens=%s "
                 "prompt_cache_hit_tokens=%s prompt_cache_miss_tokens=%s",
-                _masked_model_label(model),
+                _masked_model_label(actual_model or model),
                 last_usage.get("prompt_tokens", 0),
                 last_usage.get("completion_tokens", 0),
                 last_usage.get("prompt_cache_hit_tokens", 0),
                 last_usage.get("prompt_cache_miss_tokens", 0),
             )
+        if actual_model:
+            finish_meta["model"] = actual_model
         sync_q.put(("finish", finish_meta))
         sync_q.put(("turn", turn))
     except Exception as e:
