@@ -14,7 +14,6 @@ import httpx
 DEFAULT_UNKNOWN_CONTEXT_WINDOW = 1_000_000
 DEFAULT_UNKNOWN_OUTPUT_TOKENS = 8_192
 CONTEXT_PROBE_TOKEN_COUNT = 300_000
-CONTEXT_PROBE_MAX_MODELS = 8
 CONTEXT_PROBE_TIMEOUT = 8.0
 
 CONTEXT_LIMIT_FIELDS = (
@@ -225,6 +224,47 @@ def probe_context_window_from_error(
         if context_window > 0:
             return context_window
     return 0
+
+
+def probe_model_context(
+    base_url: str,
+    api_key: str,
+    model_id: str,
+    fallback: Optional[dict] = None,
+    timeout: float = 20.0,
+) -> Dict[str, Any]:
+    base = _normalize_base_url(base_url)
+    if not base:
+        raise ValueError("missing base_url")
+    mid = str(model_id or "").strip()
+    if not mid:
+        raise ValueError("missing model")
+    fallback = fallback if isinstance(fallback, dict) else {}
+    limits = infer_model_limits(mid, fallback)
+    headers = {}
+    if str(api_key or "").strip():
+        headers["Authorization"] = "Bearer " + str(api_key).strip()
+    probed_context = 0
+    if headers.get("Authorization"):
+        with httpx.Client(timeout=timeout) as client:
+            probed_context = probe_context_window_from_error(client, base, headers, mid)
+    if probed_context > 0:
+        limits["context_window"] = probed_context
+        limits["context_source"] = "probe"
+        if int(limits["max_output_tokens"]) >= probed_context:
+            limits["max_output_tokens"] = min(DEFAULT_UNKNOWN_OUTPUT_TOKENS, max(1, probed_context - 1))
+            limits["output_source"] = "default"
+    return {
+        "id": mid,
+        "context_window": limits["context_window"],
+        "model_context_window": limits["context_window"],
+        "max_output_tokens": limits["max_output_tokens"],
+        "limit_source": limits["context_source"],
+        "context_window_source": limits["context_source"],
+        "output_limit_source": limits["output_source"],
+        "probe_attempted": bool(headers.get("Authorization")),
+        "probe_succeeded": probed_context > 0,
+    }
 
 
 def profile_store_path(project_root: Path) -> Path:
@@ -441,7 +481,6 @@ def discover_models(base_url: str, api_key: str, timeout: float = 20.0) -> List[
         if not isinstance(items, list):
             raise ValueError("models response is not a list")
         out: List[Dict[str, Any]] = []
-        probe_count = 0
         for item in items:
             if not isinstance(item, dict):
                 continue
@@ -451,19 +490,6 @@ def discover_models(base_url: str, api_key: str, timeout: float = 20.0) -> List[
             raw_has_context = any(k in item for k in CONTEXT_LIMIT_FIELDS)
             raw_has_limits = raw_has_context or any(k in item for k in OUTPUT_LIMIT_FIELDS)
             limits = infer_model_limits(mid, item)
-            if (
-                not raw_has_context
-                and headers.get("Authorization")
-                and probe_count < CONTEXT_PROBE_MAX_MODELS
-            ):
-                probe_count += 1
-                probed_context = probe_context_window_from_error(client, base_url, headers, mid)
-                if probed_context > 0:
-                    limits["context_window"] = probed_context
-                    limits["context_source"] = "probe"
-                    if int(limits["max_output_tokens"]) >= probed_context:
-                        limits["max_output_tokens"] = min(DEFAULT_UNKNOWN_OUTPUT_TOKENS, max(1, probed_context - 1))
-                        limits["output_source"] = "default"
             out.append(
                 {
                     "id": mid,

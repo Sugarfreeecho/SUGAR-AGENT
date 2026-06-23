@@ -1047,6 +1047,27 @@ async def discover_model_profiles(req: Request):
     return JSONResponse({"ok": True, "models": models})
 
 
+@fastapi_app.post("/api/model_profiles/probe")
+async def probe_model_profile(req: Request):
+    try:
+        data = await req.json()
+    except Exception:
+        return JSONResponse({"ok": False, "error": "invalid json"}, status_code=400)
+    if not isinstance(data, dict):
+        return JSONResponse({"ok": False, "error": "body must be object"}, status_code=400)
+    base_url = str(data.get("base_url") or "").strip()
+    api_key = str(data.get("api_key") or "").strip()
+    if not api_key:
+        api_key = _dotenv_last_non_empty_assignments(dotenv_file_path()).get("OPENAI_API_KEY", "")
+    model_id = str(data.get("model") or data.get("id") or "").strip()
+    fallback = data.get("metadata") if isinstance(data.get("metadata"), dict) else data
+    try:
+        model = await run_in_threadpool(model_profiles.probe_model_context, base_url, api_key, model_id, fallback)
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+    return JSONResponse({"ok": True, "model": model})
+
+
 @fastapi_app.get("/sessions/{session_id}/model_profile")
 async def get_session_model_profile(session_id: str):
     sid = (session_id or "").strip()

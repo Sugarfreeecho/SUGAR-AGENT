@@ -707,6 +707,42 @@
     setModelDiscoveryStatus('已填入模型和窗口参数。');
   }
 
+  async function probeAndApplyDiscoveredModel(model, row) {
+    model = model || {};
+    const modelId = String(model.id || model.model || '').trim();
+    if (!modelId) {
+      applyDiscoveredModel(model);
+      return;
+    }
+    if (row) row.disabled = true;
+    setModelDiscoveryStatus('正在探测 ' + modelId + ' 的真实上下文窗口...');
+    try {
+      const resp = await fetch('/api/model_profiles/probe', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify({
+          base_url: baseUrl.value.trim(),
+          api_key: apiKey.value.trim(),
+          model: modelId,
+          metadata: model,
+        }),
+      });
+      const result = await resp.json();
+      if (!result.ok) throw new Error(result.error || '探测失败');
+      const merged = Object.assign({}, model, result.model || {});
+      applyDiscoveredModel(merged);
+      setModelDiscoveryStatus(result.model && result.model.probe_succeeded
+        ? '已通过 HTTP 400 错误消息探测真实上下文窗口。'
+        : '未从错误消息取得真实上下文窗口，已使用列表/默认窗口。');
+    } catch (err) {
+      applyDiscoveredModel(model);
+      setModelDiscoveryStatus('上下文探测失败，已使用列表/默认窗口：' + String(err.message || err));
+    } finally {
+      if (row) row.disabled = false;
+    }
+  }
+
   function renderDiscoveredModels(items) {
     if (!modelDiscoveryList) return;
     items = items || [];
@@ -727,7 +763,7 @@
     modelDiscoveryList.querySelectorAll('.model-row').forEach((row) => {
       row.addEventListener('click', () => {
         try {
-          applyDiscoveredModel(JSON.parse(row.getAttribute('data-model') || '{}'));
+          probeAndApplyDiscoveredModel(JSON.parse(row.getAttribute('data-model') || '{}'), row);
         } catch (err) {}
       });
     });
