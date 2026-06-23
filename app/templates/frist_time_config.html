@@ -532,7 +532,7 @@
 
     <form id="configForm">
       <div class="form-group" id="baseUrlGroup">
-        <label>API Base URL <span class="required">*</span></label>
+        <label>API BASE URL <span class="required">*</span></label>
         <input type="text" id="baseUrl" placeholder="https://api.deepseek.com" autocomplete="off" aria-required="true">
       </div>
 
@@ -741,7 +741,7 @@
   async function fetchDiscoveredModels() {
     const url = baseUrl.value.trim();
     if (!url || url.length < 8) {
-      setModelDiscoveryStatus('填写 API Base URL 后可获取模型列表。');
+      setModelDiscoveryStatus('填写 API BASE URL 后可获取模型列表。');
       return;
     }
     if (modelFetchBtn) modelFetchBtn.disabled = true;
@@ -866,7 +866,7 @@
     }
 
     if (!url) {
-      showStatus('请填写 API Base URL', 'error');
+      showStatus('请填写 API BASE URL', 'error');
       return;
     }
 
