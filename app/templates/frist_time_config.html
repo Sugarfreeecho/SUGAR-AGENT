@@ -531,6 +531,11 @@
     <div id="wizard-status-help" class="wizard-status-help" aria-live="polite">如需帮助或反馈，请联系GitHub @sugarfreeecho</div>
 
     <form id="configForm">
+      <div class="form-group" id="baseUrlGroup">
+        <label>API Base URL <span class="required">*</span></label>
+        <input type="text" id="baseUrl" placeholder="https://api.deepseek.com" autocomplete="off" aria-required="true">
+      </div>
+
       <div class="form-group" id="apiKeyGroup">
         <label>API Key <span class="required">*</span></label>
         <input type="password" id="apiKey" placeholder="sk-..." autocomplete="off">
@@ -538,11 +543,6 @@
           DeepSeek: <a href="https://platform.deepseek.com/api_keys" target="_blank" rel="noopener">platform.deepseek.com</a>
           · OpenAI: <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener">platform.openai.com</a>
         </div>
-      </div>
-
-      <div class="form-group" id="baseUrlGroup">
-        <label>API 地址 <span class="required">*</span></label>
-        <input type="text" id="baseUrl" placeholder="https://api.deepseek.com" autocomplete="off" aria-required="true">
       </div>
 
       <div class="model-discovery" aria-label="模型发现">
@@ -697,11 +697,18 @@
     return '使用内置常见模型窗口推断';
   }
 
+  function positiveInt(value, fallback) {
+    const n = parseInt(value, 10);
+    return Number.isFinite(n) && n > 0 ? n : fallback;
+  }
+
   function applyDiscoveredModel(model) {
     model = model || {};
+    const modelMaxContext = positiveInt(model.model_context_window || model.context_window, 1000000);
+    const maxOutputTokens = positiveInt(model.max_output_tokens, 8192);
     if (modelName) modelName.value = model.id || model.model || '';
-    if (contextWindowEl) contextWindowEl.value = model.context_window || '1000000';
-    if (maxOutputTokensEl) maxOutputTokensEl.value = model.max_output_tokens || '8192';
+    if (contextWindowEl) contextWindowEl.value = String(Math.max(1, modelMaxContext - maxOutputTokens));
+    if (maxOutputTokensEl) maxOutputTokensEl.value = String(maxOutputTokens);
     setModelDiscoveryStatus('已填入模型和窗口参数。');
   }
 
@@ -734,7 +741,7 @@
   async function fetchDiscoveredModels() {
     const url = baseUrl.value.trim();
     if (!url || url.length < 8) {
-      setModelDiscoveryStatus('填写 API 地址后可获取模型列表。');
+      setModelDiscoveryStatus('填写 API Base URL 后可获取模型列表。');
       return;
     }
     if (modelFetchBtn) modelFetchBtn.disabled = true;
@@ -859,7 +866,7 @@
     }
 
     if (!url) {
-      showStatus('请填写 API 地址', 'error');
+      showStatus('请填写 API Base URL', 'error');
       return;
     }
 
