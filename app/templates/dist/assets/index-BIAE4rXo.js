@@ -427,6 +427,7 @@ function showUiAlert(opts) {
     sessionOrder: [],
     currentSessionId: null,
     runsBySession: new Map(),
+    terminalRunIdsBySession: new Map(),
     activeRunInfoBySession: new Map(),
     archivedCount: 0,
     archivedLoaded: false,
@@ -489,6 +490,7 @@ function showUiAlert(opts) {
         this.sessionsById.delete(sid);
         delete this.streamActiveById[sid];
         this.runsBySession.delete(sid);
+        this.terminalRunIdsBySession.delete(sid);
         this.activeRunInfoBySession.delete(sid);
         this.unreadComplete.delete(sid);
         this.sessionOrder = this.sessionOrder.filter(function (id) { return id !== sid; });
@@ -588,6 +590,8 @@ function showUiAlert(opts) {
         this.streamActiveById = next;
         this.sessionsById.forEach(function (sess, sid) {
             sess.stream_active = !!next[sid];
+            sess.run_active = !!next[sid];
+            if (!next[sid]) sess.run_started_at = null;
         });
     },
 
@@ -606,15 +610,37 @@ function showUiAlert(opts) {
         return this.runsBySession.has(String(sessionId || ''));
     },
 
+    markTerminalRun(sessionId, runId) {
+        const sid = String(sessionId || '');
+        const rid = String(runId || '').trim();
+        if (!sid || !rid) return;
+        let bucket = this.terminalRunIdsBySession.get(sid);
+        if (!bucket) {
+            bucket = new Set();
+            this.terminalRunIdsBySession.set(sid, bucket);
+        }
+        bucket.add(rid);
+    },
+
+    isTerminalRun(sessionId, runId) {
+        const sid = String(sessionId || '');
+        const rid = String(runId || '').trim();
+        if (!sid || !rid) return false;
+        const bucket = this.terminalRunIdsBySession.get(sid);
+        return !!(bucket && bucket.has(rid));
+    },
+
     applyActiveRuns(activeRuns) {
         const next = new Map();
         const list = Array.isArray(activeRuns) ? activeRuns : [];
         list.forEach(function (run) {
             const sid = typeof run === 'string' ? run : (run && run.session_id);
             if (!sid) return;
+            const runId = typeof run === 'string' ? '' : String((run && (run.run_id || run.runId)) || '').trim();
+            if (runId && this.isTerminalRun(sid, runId)) return;
             if (typeof isSessionStreamStopSuppressed === 'function' && isSessionStreamStopSuppressed(sid)) return;
             next.set(String(sid), typeof run === 'string' ? { session_id: String(sid) } : Object.assign({}, run));
-        });
+        }, this);
         this.activeRunInfoBySession = next;
     },
 
@@ -690,7 +716,6 @@ function applyServerStreamActiveMap(activeMap) {
     const m = Object.create(null);
     Object.keys(src).forEach(function (sid) {
         var active = !!src[sid];
-        if (!active) delete sessionStreamStopSuppressUntil[sid];
         if (active && isSessionStreamStopSuppressed(sid)) active = false;
         m[sid] = active;
     });
@@ -764,8 +789,7 @@ function selectRunForSession(sessionId) {
     if (Array.isArray(snapshot.active_runs)) {
         sessionStore.applyActiveRuns(snapshot.active_runs);
         const active = Object.create(null);
-        snapshot.active_runs.forEach(function (run) {
-            const sid = typeof run === 'string' ? run : (run && run.session_id);
+        sessionStore.activeRunInfoBySession.forEach(function (_run, sid) {
             if (sid) active[String(sid)] = true;
         });
         applyServerStreamActiveMap(active);
@@ -2876,12 +2900,17 @@ function applySessionEvent(event, opts) {
     const eventIndex = opts.eventIndex;
     const source = opts.source || 'event';
     const type = String(event.type || '');
+    const runId = String(event.run_id || event.runId || '').trim();
     let messageRecord = null;
     if (sessionId) {
         messageRecord = applyMessageEvent(sessionId, event, eventIndex, source);
         markUiEventStoreApplied(event);
     }
     if (type === 'run_started' || type === 'run_attached') {
+        if (runId && sessionStore.isTerminalRun(sessionId, runId)) {
+            markSessionRunInactive(sessionId);
+            return { handled: true, runStateChanged: true, messageRecord: messageRecord };
+        }
         const suppressed = typeof isSessionStreamStopSuppressed === 'function'
             && isSessionStreamStopSuppressed(sessionId);
         setSessionServerStreamActive(sessionId, !suppressed);
@@ -2895,7 +2924,8 @@ function applySessionEvent(event, opts) {
         return { handled: true, runStateChanged: true, messageRecord: messageRecord };
     }
     if (type === 'run_finished' || type === 'run_interrupted' || type === 'run_failed') {
-        if (typeof clearSessionStreamStopSuppress === 'function') clearSessionStreamStopSuppress(sessionId);
+        if (runId) sessionStore.markTerminalRun(sessionId, runId);
+        if (type === 'run_finished' && typeof clearSessionStreamStopSuppress === 'function') clearSessionStreamStopSuppress(sessionId);
         markSessionRunInactive(sessionId);
         const sess = sessionStore.get(sessionId);
         if (sess) {
@@ -6023,7 +6053,7 @@ window.addEventListener('focus', function () {
     }
 });
 
-const WELCOME_HTML = \`<div class="welcome" role="status"><div class="welcome-icon" aria-hidden="true"><img src="/assets/sugar-logo.png" alt="" draggable="false"></div><strong>开始一段新的对话</strong><p>在左侧侧栏新建或选择会话。Enter 发送，Ctrl+Enter / Shift+Enter 换行。</p></div>\`;
+const WELCOME_HTML = \`<div class="welcome" role="status"><div class="welcome-icon" aria-hidden="true"><img src="/assets/wave-logo.svg" alt="" draggable="false"></div><strong>开始一段新的对话</strong><p>在左侧侧栏新建或选择会话。Enter 发送，Ctrl+Enter / Shift+Enter 换行。</p></div>\`;
 
 function historyLoadScrollsToBottom(sessionId, mode) {
     return true;
@@ -8529,9 +8559,15 @@ function updateSubagentBlockFinish(ctx, event) {
     }
 }
 
-async function requestInterrupt(sessionId) {
+async function requestInterrupt(sessionId, runId) {
     if (!sessionId) return;
-    try { await fetch('/sessions/' + sessionId + '/interrupt', { method: 'POST' }); }
+    try {
+        await fetch('/sessions/' + sessionId + '/interrupt', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ run_id: runId || '' }),
+        });
+    }
     catch (e) { /* ignore */ }
 }
 
@@ -8539,12 +8575,14 @@ function pauseCurrentRun() {
     if (!currentSessionId) return;
     const run = getSessionRunState(currentSessionId);
     const sid = currentSessionId;
+    const activeInfo = sessionStore.getActiveRunInfo(sid) || {};
+    const runId = run && run.runId ? run.runId : (activeInfo.run_id || activeInfo.runId || '');
     suppressSessionServerStreamActive(sid);
     if (!run) {
         setSendButtonState();
         syncSessionListIndicatorClasses();
         renderSessionListIfChanged(false);
-        void requestInterrupt(sid);
+        void requestInterrupt(sid, runId);
         setTimeout(function () { reconcileRunStateFromServer({ silent: true, respectStopSuppress: true }); }, 3000);
         return;
     }
@@ -8557,7 +8595,7 @@ function pauseCurrentRun() {
     renderSessionListIfChanged(false);
     appendLog(ctx, '已请求停止当前任务', 'status', sid);
     sealProcessGroup(ctx);
-    void requestInterrupt(sid);
+    void requestInterrupt(sid, runId);
     setTimeout(function () { reconcileRunStateFromServer({ silent: true, respectStopSuppress: true }); }, 3000);
 }
 
