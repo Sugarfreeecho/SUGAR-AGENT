@@ -304,6 +304,7 @@
   .profile-mini-btn:hover { color: var(--text-primary); border-color: rgba(99,102,241,0.35); background: rgba(99,102,241,0.1); }
   .profile-mini-btn.is-editing { color: #111827; border-color: rgba(249,226,175,0.9); background: rgba(249,226,175,0.9); }
   .select-ip { position: relative; }
+  .fk.is-required::after { content: " *"; color: var(--red-accent); font-weight: 900; }
   .limit-warn { border-color: rgba(243,139,168,0.68) !important; box-shadow: 0 0 0 3px rgba(243,139,168,0.14) !important; }
   .limit-help { margin-top: 0.25rem; font-size: 0.68rem; color: var(--red-accent); display: none; }
   .limit-help.is-on { display: block; }
@@ -389,11 +390,11 @@
 <div><div class="model-panel__title">模型配置档案</div><div class="model-panel__hint">从 OpenAI 兼容 API 获取模型列表，选择后可自动填入模型名、上下文窗口和输出上限，并保存为对话页可切换配置。</div></div>
 </div>
 <div class="model-grid">
-<div class="fd"><div class="fk">OPENAI_BASE_URL</div><input id="model-base-url" class="ip" type="text" autocomplete="off" required aria-required="true" placeholder="https://api.openai.com/v1"></div>
-<div class="fd"><div class="fk">OPENAI_API_KEY</div><input id="model-api-key" class="ip" type="password" autocomplete="off" required aria-required="true" placeholder="模型API密钥未填写"></div>
+<div class="fd"><div class="fk is-required">OPENAI_BASE_URL</div><input id="model-base-url" class="ip" type="text" autocomplete="off" aria-required="true" placeholder="https://api.openai.com/v1"></div>
+<div class="fd"><div class="fk is-required">OPENAI_API_KEY</div><input id="model-api-key" class="ip" type="password" autocomplete="off" aria-required="true" placeholder="模型API密钥未填写"></div>
 </div>
 <div class="model-grid model-grid--basics">
-<div class="fd"><div class="fk">方案名称</div><input id="model-profile-name" class="ip" type="text" autocomplete="off" required aria-required="true" placeholder="模型配置方案名，可自行编辑"></div>
+<div class="fd"><div class="fk is-required">方案名称</div><input id="model-profile-name" class="ip" type="text" autocomplete="off" aria-required="true" placeholder="模型配置方案名，可自行编辑"></div>
 <div class="fd"><div class="fk">模型 ID / API 模型名</div><input id="model-id" class="ip" type="text" autocomplete="off" placeholder="实际发送给 API 的 model，例如 deepseek-v4-flash"></div>
 <div class="fd"><div class="fk">EXECUTOR_LLM_TYPE</div><input id="model-llm-type" class="ip" type="text" autocomplete="off" value="openai"></div>
 </div>
