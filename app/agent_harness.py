@@ -4423,18 +4423,29 @@ def resolve_executor_candidates_for_session(session_id: str) -> List[Dict[str, A
             meta = {}
         if isinstance(meta, dict):
             profile_id = str(meta.get("model_profile_id") or "").strip()
-    if profile_id == "__env__":
-        chain = []
-    else:
-        chain = model_profiles.fallback_chain(PROJECT_ROOT, profile_id)
-    candidates = [_profile_candidate(profile) for profile in chain]
-    if profile_id == "__env__":
-        candidates.append(_env_candidate())
-        for profile in model_profiles.sorted_profiles(PROJECT_ROOT):
+    profiles = {str(p.get("id") or ""): p for p in model_profiles.sorted_profiles(PROJECT_ROOT)}
+    ordered_ids = model_profiles.sorted_profile_ids_with_env(PROJECT_ROOT)
+    candidates: List[Dict[str, Any]] = []
+    seen: set[str] = set()
+
+    def add_candidate(pid: str) -> None:
+        pid = str(pid or "").strip() or "__env__"
+        if pid in seen:
+            return
+        if pid == "__env__":
+            candidates.append(_env_candidate())
+            seen.add(pid)
+            return
+        profile = profiles.get(pid)
+        if profile:
             candidates.append(_profile_candidate(profile))
-    elif not candidates:
-        candidates.append(_env_candidate())
-    else:
+            seen.add(pid)
+
+    if profile_id:
+        add_candidate(profile_id)
+    for pid in ordered_ids:
+        add_candidate(pid)
+    if not candidates:
         candidates.append(_env_candidate())
     return candidates
 
@@ -4470,8 +4481,8 @@ def resolve_executor_config_for_session(session_id: str) -> Tuple[Any, str, int,
             int(first.get("max_output_tokens") or MAX_OUTPUT_TOKENS),
             int(first.get("context_window") or CONTEXT_WINDOW),
         )
-    top = model_profiles.top_profile(PROJECT_ROOT)
-    if top and not override:
+    top_profile_id = model_profiles.top_profile_id_with_env(PROJECT_ROOT)
+    if top_profile_id and not override:
         candidates = resolve_executor_candidates_for_session(sid)
         first = candidates[0]
         return (

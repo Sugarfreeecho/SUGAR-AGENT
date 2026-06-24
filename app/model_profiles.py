@@ -274,23 +274,31 @@ def profile_store_path(project_root: Path) -> Path:
 def load_store(project_root: Path) -> dict:
     path = profile_store_path(project_root)
     if not path.is_file():
-        return {"profiles": []}
+        return {"profiles": [], "env_profile": {}}
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except Exception:
-        return {"profiles": []}
+        return {"profiles": [], "env_profile": {}}
     if not isinstance(data, dict):
-        return {"profiles": []}
+        return {"profiles": [], "env_profile": {}}
     profiles = data.get("profiles")
     if not isinstance(profiles, list):
         data["profiles"] = []
+    env_profile = data.get("env_profile")
+    if not isinstance(env_profile, dict):
+        env_profile = {}
+    if "env_priority" in data and "priority" not in env_profile:
+        env_profile["priority"] = data.get("env_priority")
+    data["env_profile"] = env_profile
     return data
 
 
 def save_store(project_root: Path, data: dict) -> None:
     path = profile_store_path(project_root)
     path.parent.mkdir(parents=True, exist_ok=True)
+    env_profile = data.get("env_profile")
     out = {
+        "env_profile": dict(env_profile) if isinstance(env_profile, dict) else {},
         "profiles": [p for p in data.get("profiles", []) if isinstance(p, dict)],
     }
     tmp = path.with_suffix(path.suffix + ".tmp")
@@ -304,27 +312,69 @@ def public_profile(profile: dict) -> dict:
     return out
 
 
-def default_profile_from_env(env: dict[str, str]) -> dict:
+def env_profile_meta(project_root: Path) -> dict:
+    return dict(load_store(project_root).get("env_profile") or {})
+
+
+def env_profile_priority(project_root: Path) -> int:
+    data = load_store(project_root)
+    meta = data.get("env_profile") if isinstance(data.get("env_profile"), dict) else {}
+    explicit = _safe_int((meta or {}).get("priority"), 0)
+    if explicit > 0:
+        return explicit
+    saved_ranks = [
+        _safe_int(p.get("priority"), idx + 1)
+        for idx, p in enumerate(data.get("profiles", []))
+        if isinstance(p, dict)
+    ]
+    return max(saved_ranks) + 1 if saved_ranks else 1
+
+
+def save_env_profile_meta(project_root: Path, payload: dict) -> dict:
+    data = load_store(project_root)
+    meta = dict(data.get("env_profile") or {})
+    if "name" in payload:
+        meta["name"] = str(payload.get("name") or "").strip()
+    if "model_context_window" in payload:
+        meta["model_context_window"] = _safe_int(payload.get("model_context_window"), 0)
+    if "priority" in payload:
+        meta["priority"] = _safe_int(payload.get("priority"), env_profile_priority(project_root))
+    data["env_profile"] = meta
+    save_store(project_root, data)
+    return meta
+
+
+def default_profile_from_env(env: dict[str, str], meta: Optional[dict] = None) -> dict:
+    meta = meta or {}
     model = str(env.get("EXECUTOR_LLM") or "").strip()
     limits = infer_model_limits(model)
+    model_context_window = _safe_int(meta.get("model_context_window"), limits["context_window"])
     return {
         "id": "__env__",
-        "name": model,
+        "name": str(meta.get("name") or model).strip(),
         "model": model,
         "llm_type": str(env.get("EXECUTOR_LLM_TYPE") or "openai").strip().lower() or "openai",
         "base_url": str(env.get("OPENAI_BASE_URL") or "").strip(),
         "api_key": str(env.get("OPENAI_API_KEY") or "").strip(),
         "context_window": _safe_int(env.get("CONTEXT_WINDOW"), limits["context_window"]),
         "max_output_tokens": _safe_int(env.get("MAX_OUTPUT_TOKENS"), limits["max_output_tokens"]),
-        "model_context_window": limits["context_window"],
+        "model_context_window": model_context_window,
         "thinking_mode": _clean_thinking_mode(env.get("LLM_THINKING_MODE")),
         "reasoning_effort": _clean_reasoning_effort(env.get("LLM_REASONING_EFFORT")),
         "temperature": str(env.get("EXECUTOR_TEMPERATURE") or "").strip(),
         "extra_body_json": str(env.get("LLM_EXTRA_BODY_JSON") or "").strip(),
-        "priority": 0,
+        "priority": _safe_int(meta.get("priority"), 0),
         "api_key_set": bool(str(env.get("OPENAI_API_KEY") or "").strip()),
-        "readonly": True,
+        "source": "env",
+        "readonly": False,
+        "deletable": False,
     }
+
+
+def env_profile_from_env(project_root: Path, env: dict[str, str]) -> dict:
+    meta = env_profile_meta(project_root)
+    meta["priority"] = env_profile_priority(project_root)
+    return default_profile_from_env(env, meta)
 
 
 def upsert_profile(project_root: Path, payload: dict) -> dict:
@@ -391,6 +441,33 @@ def sorted_profiles(project_root: Path) -> list[dict]:
     )
 
 
+def sorted_profiles_with_env(project_root: Path, env_profile: dict) -> list[dict]:
+    profiles = [dict(p) for p in load_store(project_root).get("profiles", []) if isinstance(p, dict)]
+    env = dict(env_profile)
+    env["id"] = "__env__"
+    env["priority"] = _safe_int(env.get("priority"), env_profile_priority(project_root))
+    rows = [env] + profiles
+    return sorted(
+        rows,
+        key=lambda p: (
+            _safe_int(p.get("priority"), 999999),
+            0 if str(p.get("id") or "") == "__env__" else 1,
+            str(p.get("updated_at") or ""),
+            str(p.get("id") or ""),
+        ),
+    )
+
+
+def sorted_profile_ids_with_env(project_root: Path) -> list[str]:
+    env = {"id": "__env__", "priority": env_profile_priority(project_root)}
+    return [str(p.get("id") or "") for p in sorted_profiles_with_env(project_root, env) if str(p.get("id") or "")]
+
+
+def top_profile_id_with_env(project_root: Path) -> str:
+    ids = sorted_profile_ids_with_env(project_root)
+    return ids[0] if ids else "__env__"
+
+
 def top_profile(project_root: Path) -> Optional[dict]:
     profiles = sorted_profiles(project_root)
     return dict(profiles[0]) if profiles else None
@@ -400,6 +477,10 @@ def reorder_profiles(project_root: Path, ordered_ids: list[str]) -> list[dict]:
     data = load_store(project_root)
     profiles = [p for p in data.get("profiles", []) if isinstance(p, dict)]
     rank = {str(pid): idx + 1 for idx, pid in enumerate(ordered_ids) if str(pid).strip()}
+    if "__env__" in rank:
+        meta = dict(data.get("env_profile") or {})
+        meta["priority"] = rank["__env__"]
+        data["env_profile"] = meta
     next_rank = len(rank) + 1
     for p in profiles:
         pid = str(p.get("id") or "")

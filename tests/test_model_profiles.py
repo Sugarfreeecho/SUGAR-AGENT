@@ -96,3 +96,40 @@ def test_probe_model_context_uses_context_probe_for_one_selected_model(monkeypat
     assert model["max_output_tokens"] == 8192
     assert model["limit_source"] == "probe"
     assert model["probe_succeeded"] is True
+
+
+def test_env_profile_participates_in_model_order(tmp_path):
+    saved = model_profiles.upsert_profile(
+        tmp_path,
+        {
+            "name": "saved",
+            "model": "saved-model",
+            "base_url": "https://api.example.com/v1",
+            "api_key": "test-key",
+            "context_window": 128000,
+            "max_output_tokens": 8192,
+        },
+    )
+    env = model_profiles.env_profile_from_env(
+        tmp_path,
+        {
+            "EXECUTOR_LLM": "env-model",
+            "OPENAI_BASE_URL": "https://api.example.com/v1",
+            "OPENAI_API_KEY": "env-key",
+        },
+    )
+
+    assert [p["id"] for p in model_profiles.sorted_profiles_with_env(tmp_path, env)] == [saved["id"], "__env__"]
+
+    model_profiles.reorder_profiles(tmp_path, ["__env__", saved["id"]])
+    env = model_profiles.env_profile_from_env(
+        tmp_path,
+        {
+            "EXECUTOR_LLM": "env-model",
+            "OPENAI_BASE_URL": "https://api.example.com/v1",
+            "OPENAI_API_KEY": "env-key",
+        },
+    )
+
+    assert [p["id"] for p in model_profiles.sorted_profiles_with_env(tmp_path, env)] == ["__env__", saved["id"]]
+    assert model_profiles.top_profile_id_with_env(tmp_path) == "__env__"

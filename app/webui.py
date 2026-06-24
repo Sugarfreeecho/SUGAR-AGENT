@@ -1034,22 +1034,55 @@ async def create_session():
 
 def _current_env_profile() -> dict:
     vals = _dotenv_last_non_empty_assignments(dotenv_file_path())
-    return model_profiles.default_profile_from_env(vals)
+    return model_profiles.env_profile_from_env(PROJECT_ROOT, vals)
+
+
+def _model_profiles_response() -> dict:
+    default_profile = _current_env_profile()
+    profiles = [
+        model_profiles.public_profile(p)
+        for p in model_profiles.sorted_profiles_with_env(PROJECT_ROOT, default_profile)
+    ]
+    top = profiles[0] if profiles else default_profile
+    return {
+        "ok": True,
+        "default_profile": default_profile,
+        "new_session_default_profile_id": top.get("id") or "__env__",
+        "profiles": profiles,
+    }
+
+
+def _save_env_model_profile(data: dict) -> dict:
+    env_path = dotenv_file_path()
+    prev = env_path.read_text(encoding="utf-8") if env_path.is_file() else ""
+    updates = {
+        "EXECUTOR_LLM": str(data.get("model") or "").strip(),
+        "EXECUTOR_LLM_TYPE": str(data.get("llm_type") or "openai").strip().lower() or "openai",
+        "OPENAI_BASE_URL": model_profiles._normalize_base_url(str(data.get("base_url") or "")),
+        "OPENAI_API_KEY": str(data.get("api_key") or "").strip(),
+        "CONTEXT_WINDOW": str(data.get("context_window") or "").strip(),
+        "MAX_OUTPUT_TOKENS": str(data.get("max_output_tokens") or "").strip(),
+        "LLM_THINKING_MODE": str(data.get("thinking_mode") or "").strip(),
+        "LLM_REASONING_EFFORT": str(data.get("reasoning_effort") or "").strip(),
+        "EXECUTOR_TEMPERATURE": str(data.get("temperature") or "").strip(),
+        "LLM_EXTRA_BODY_JSON": str(data.get("extra_body_json") or "").strip(),
+    }
+    env_path.parent.mkdir(parents=True, exist_ok=True)
+    env_path.write_text(_apply_env_updates(prev, updates), encoding="utf-8")
+    model_profiles.save_env_profile_meta(
+        PROJECT_ROOT,
+        {
+            "name": str(data.get("name") or "").strip(),
+            "model_context_window": data.get("model_context_window"),
+        },
+    )
+    refresh_executor_client_from_env()
+    return _current_env_profile()
 
 
 @fastapi_app.get("/api/model_profiles")
 async def get_model_profiles():
-    profiles = [model_profiles.public_profile(p) for p in model_profiles.sorted_profiles(PROJECT_ROOT)]
-    default_profile = _current_env_profile()
-    top = profiles[0] if profiles else default_profile
-    return JSONResponse(
-        {
-            "ok": True,
-            "default_profile": default_profile,
-            "new_session_default_profile_id": top.get("id") or "__env__",
-            "profiles": profiles,
-        }
-    )
+    return JSONResponse(_model_profiles_response())
 
 
 @fastapi_app.post("/api/model_profiles")
@@ -1064,6 +1097,14 @@ async def save_model_profile(req: Request):
         return JSONResponse({"ok": False, "error": "missing model"}, status_code=400)
     if not str(data.get("base_url") or "").strip():
         return JSONResponse({"ok": False, "error": "missing base_url"}, status_code=400)
+    if str(data.get("id") or "").strip() == "__env__":
+        if not str(data.get("api_key") or "").strip():
+            return JSONResponse({"ok": False, "error": "missing api_key"}, status_code=400)
+        try:
+            profile = _save_env_model_profile(data)
+        except Exception as e:
+            return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+        return JSONResponse({"ok": True, "profile": model_profiles.public_profile(profile)})
     old_profile = model_profiles.get_profile(PROJECT_ROOT, str(data.get("id") or "").strip())
     incoming_key = str(data.get("api_key") or "").strip() if "api_key" in data else ""
     if not incoming_key and not str((old_profile or {}).get("api_key") or "").strip():
@@ -1084,8 +1125,8 @@ async def reorder_model_profiles(req: Request):
     ids = (data or {}).get("ordered_ids") or []
     if not isinstance(ids, list):
         return JSONResponse({"ok": False, "error": "ordered_ids must be list"}, status_code=400)
-    profiles = model_profiles.reorder_profiles(PROJECT_ROOT, [str(x) for x in ids])
-    return JSONResponse({"ok": True, "profiles": [model_profiles.public_profile(p) for p in profiles]})
+    model_profiles.reorder_profiles(PROJECT_ROOT, [str(x) for x in ids])
+    return JSONResponse(_model_profiles_response())
 
 
 @fastapi_app.delete("/api/model_profiles/{profile_id}")
@@ -1143,8 +1184,7 @@ async def get_session_model_profile(session_id: str):
         return JSONResponse({"ok": False, "error": str(e)}, status_code=404)
     pid = str((meta or {}).get("model_profile_id") or "").strip()
     if not pid:
-        top = model_profiles.top_profile(PROJECT_ROOT)
-        pid = str((top or {}).get("id") or "__env__").strip() or "__env__"
+        pid = model_profiles.top_profile_id_with_env(PROJECT_ROOT)
     return JSONResponse({"ok": True, "profile_id": pid})
 
 

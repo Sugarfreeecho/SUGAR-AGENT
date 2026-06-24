@@ -3010,7 +3010,8 @@ async function loadModelProfilesForSwitcher() {
 function allProfiles() {
     if (!modelProfilesCache) return [];
     var defaultProfile = modelProfilesCache.default_profile || { id: '__env__', name: '', model: '' };
-    return [defaultProfile].concat(modelProfilesCache.profiles || []);
+    var profiles = modelProfilesCache.profiles || [];
+    return profiles.length ? profiles : [defaultProfile];
 }
 
 function activeProfile() {
