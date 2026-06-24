@@ -1583,6 +1583,8 @@ class SessionManager:
     - metadata.json: 会话元数据（名称、创建时间等）
     """
 
+    AUTO_ARCHIVE_AFTER_DAYS = 14
+
     def __init__(self, sessions_dir: Path, index_file: Path):
         self.sessions_dir = sessions_dir
         self.index_file = index_file
@@ -1623,6 +1625,40 @@ class SessionManager:
         except ValueError:
             return False
 
+    def _is_deleted_session(self, session_id: str) -> bool:
+        sid = str(session_id or "").strip()
+        if not sid:
+            return False
+        try:
+            from session_lifecycle import is_session_deleted
+
+            return bool(is_session_deleted(sid))
+        except Exception:
+            return False
+
+    @staticmethod
+    def _has_session_payload_files(session_path: Path) -> bool:
+        payload_files = (
+            "ui_events.json",
+            "dialogue_history.json",
+            SESSION_WORK_MESSAGES_FILE,
+            "llm_history.json",
+            "events.jsonl",
+            "key_context.md",
+            "todo_plan.md",
+        )
+        return any((session_path / name).exists() for name in payload_files) or (
+            session_path / "snapshots" / "latest.json"
+        ).exists()
+
+    def _is_metadata_only_delete_remnant(self, session_path: Path, metadata: dict) -> bool:
+        if self._has_session_payload_files(session_path):
+            return False
+        if not isinstance(metadata, dict):
+            return False
+        durable_fields = ("name", "created_at", "updated_at", "last_user_preview", "model_profile_id")
+        return not any(str(metadata.get(k) or "").strip() for k in durable_fields)
+
     def _session_metadata_lock(self, session_id: str) -> threading.Lock:
         sid = str(session_id or "").strip() or "__empty__"
         with self._metadata_session_locks_guard:
@@ -1661,6 +1697,8 @@ class SessionManager:
                 if not isinstance(meta, dict):
                     meta = {}
                 if meta.get("is_subagent"):
+                    continue
+                if self._is_deleted_session(sid) or self._is_metadata_only_delete_remnant(p, meta):
                     continue
                 name = meta.get("name") or "新会话"
                 created_at = meta.get("created_at")
@@ -3682,12 +3720,16 @@ class SessionManager:
             logger.warning("append_key_context_history 失败: %s", e)
 
     def _save_metadata_unlocked(self, session_id: str, metadata: dict) -> None:
+        if self._is_deleted_session(session_id):
+            return
         self.repository.save_metadata_atomic(session_id, metadata)
 
     def _load_metadata_unlocked(self, session_id: str) -> dict:
         return self.repository.load_metadata(session_id)
 
     def _save_metadata(self, session_id: str, metadata: dict) -> None:
+        if self._is_deleted_session(session_id):
+            return
         with self._session_metadata_lock(session_id):
             self._save_metadata_unlocked(session_id, metadata)
 
@@ -4044,6 +4086,12 @@ class SessionManager:
 
     def delete_session(self, session_id: str):
         sid = self._normalize_session_id(session_id)
+        try:
+            from session_lifecycle import mark_session_deleted
+
+            mark_session_deleted(sid)
+        except Exception:
+            pass
         idx = self._load_subagent_index()
         children = [cid for cid, pid in idx.items() if pid == sid]
         for cid in children:
@@ -4133,28 +4181,57 @@ class SessionManager:
             d["last_user_preview"] = ""
         return d
 
+    @staticmethod
+    def _iso_ts(raw: Any) -> float:
+        if not raw:
+            return 0.0
+        try:
+            iso = str(raw).replace("Z", "+00:00")
+            return datetime.fromisoformat(iso).timestamp()
+        except Exception:
+            return 0.0
+
+    def _auto_archive_stale_sessions(self) -> None:
+        cutoff = datetime.now(timezone.utc).timestamp() - (self.AUTO_ARCHIVE_AFTER_DAYS * 86400)
+        changed = False
+        for sess in list(self.index):
+            sid = str(sess.get("id") or "").strip()
+            if not sid or sess.get("archived") or sess.get("pinned"):
+                continue
+            row = self._session_entry_with_activity(dict(sess))
+            activity_ts = self._iso_ts(row.get("last_activity_at") or row.get("updated_at") or row.get("created_at"))
+            if not activity_ts or activity_ts >= cutoff:
+                continue
+            meta_path = self._get_metadata_path(sid)
+            if not meta_path.exists():
+                continue
+            with self._session_metadata_lock(sid):
+                metadata = self._load_metadata_unlocked(sid)
+                if not isinstance(metadata, dict):
+                    metadata = {}
+                metadata["archived"] = True
+                metadata["auto_archived"] = True
+                metadata["auto_archived_at"] = datetime.now(timezone.utc).isoformat()
+                self._save_metadata_unlocked(sid, metadata)
+            sess["archived"] = True
+            changed = True
+        if changed:
+            self._save_index()
+
     def list_sessions(self, include_archived: bool = False) -> List[dict]:
         """返回会话列表；每条含 last_activity_at。置顶在前，其余按最近活动时间倒序。"""
+        self._auto_archive_stale_sessions()
         if not include_archived:
             base_rows = [dict(s) for s in self.index if not s.get("archived")]
         else:
             base_rows = [dict(s) for s in self.index]
         rows = [self._session_entry_with_activity(s) for s in base_rows]
 
-        def _iso_ts(raw: Any) -> float:
-            if not raw:
-                return 0.0
-            try:
-                iso = str(raw).replace("Z", "+00:00")
-                return datetime.fromisoformat(iso).timestamp()
-            except Exception:
-                return 0.0
-
         def sort_key(r: dict) -> Tuple[int, float, float]:
             pinned = bool(r.get("pinned"))
-            pt = _iso_ts(r.get("pinned_at"))
+            pt = self._iso_ts(r.get("pinned_at"))
             la = r.get("last_activity_at") or r.get("updated_at") or r.get("created_at")
-            lt = _iso_ts(la)
+            lt = self._iso_ts(la)
             return (0 if pinned else 1, -pt if pinned else 0.0, -lt)
 
         rows.sort(key=sort_key)
@@ -4162,6 +4239,7 @@ class SessionManager:
 
     def archived_session_count(self) -> int:
         """Return the number of archived sessions without materializing session details."""
+        self._auto_archive_stale_sessions()
         return sum(1 for s in self.index if s.get("archived"))
 
     def get_session_summary(self, session_id: str) -> Optional[dict]:
@@ -4256,6 +4334,8 @@ class SessionManager:
 
     def mark_session_unread_result(self, session_id: str, status: str = "success") -> None:
         sid = self._normalize_session_id(session_id)
+        if self._is_deleted_session(sid):
+            return
         meta_path = self._get_metadata_path(sid)
         if not meta_path.exists():
             return
@@ -4290,6 +4370,8 @@ class SessionManager:
 
     def clear_session_unread_result(self, session_id: str) -> None:
         sid = self._normalize_session_id(session_id)
+        if self._is_deleted_session(sid):
+            return
         meta_path = self._get_metadata_path(sid)
         if not meta_path.exists():
             return
@@ -4313,17 +4395,21 @@ class SessionManager:
         if changed:
             self._save_index()
 
-    def request_interrupt(self, session_id: str, run_id: str = ""):
+    def request_interrupt(self, session_id: str, run_id: str = "", reason: str = "user"):
         """请求中断指定会话当前执行。"""
         sid = (session_id or "").strip()
         rid = str(run_id or "").strip()
+        interrupt_reason = str(reason or "user").strip() or "user"
         if not sid:
+            return
+        if self._is_deleted_session(sid):
             return
         with self._session_metadata_lock(sid):
             metadata = self._load_metadata_unlocked(sid)
             if not isinstance(metadata, dict):
                 metadata = {}
             metadata["interrupt_requested"] = True
+            metadata["interrupt_reason"] = interrupt_reason
             if rid:
                 metadata["interrupt_run_id"] = rid
             elif metadata.get("active_run_id"):
@@ -4348,6 +4434,7 @@ class SessionManager:
                     return
             metadata["interrupt_requested"] = False
             metadata.pop("interrupt_run_id", None)
+            metadata.pop("interrupt_reason", None)
             self._save_metadata_unlocked(sid, metadata)
 
     def is_interrupt_requested(self, session_id: str, run_id: str = "") -> bool:
@@ -4370,6 +4457,15 @@ class SessionManager:
             return True
         interrupt_run_id = str(metadata.get("interrupt_run_id") or "").strip()
         return not interrupt_run_id or interrupt_run_id == rid
+
+    def get_interrupt_reason(self, session_id: str) -> str:
+        sid = (session_id or "").strip()
+        if not sid:
+            return ""
+        metadata = self._load_metadata(sid)
+        if not bool(metadata.get("interrupt_requested", False)):
+            return ""
+        return str(metadata.get("interrupt_reason") or "user").strip() or "user"
 
 
 session_manager = SessionManager(SESSIONS_DIR, INDEX_FILE)

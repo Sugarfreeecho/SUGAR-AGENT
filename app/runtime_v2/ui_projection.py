@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import json
 import threading
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional
@@ -91,9 +92,14 @@ class RuntimeUiProjection:
 
     def read_ui_events(self, session_id: str, legacy_loader: Optional[Callable[[], Iterable[dict]]] = None) -> List[dict]:
         projected = self._projected_ui_events_cached(session_id)
-        if legacy_loader is not None and not projected:
-            self.ensure_backfilled_from_legacy(session_id, legacy_loader())
-            projected = self._projected_ui_events_cached(session_id)
+        if legacy_loader is not None:
+            legacy = [event for event in list(legacy_loader() or []) if isinstance(event, dict)]
+            if legacy and not projected:
+                self.ensure_backfilled_from_legacy(session_id, legacy)
+                projected = self._projected_ui_events_cached(session_id)
+            elif legacy and len(projected) < len(legacy):
+                self.replace_from_legacy(session_id, legacy, reason="legacy_ui_sync_on_read")
+                projected = self._projected_ui_events_cached(session_id)
         return projected
 
     def read_ui_events_fast(self, session_id: str) -> List[dict]:
@@ -118,6 +124,12 @@ class RuntimeUiProjection:
         not materialize every UI payload into a list. It keeps paged V2 reads
         compatible with the legacy event-index contract.
         """
+        index = self._read_or_build_ui_index(session_id)
+        if index:
+            return int(index.get("total") or 0), int(index.get("latest_truncate_seq") or 0)
+        return self._count_ui_events_linear(session_id)
+
+    def _count_ui_events_linear(self, session_id: str) -> tuple[int, int]:
         count = 0
         latest_truncate_seq = 0
         for event in self.event_log.iter_events(session_id):
@@ -136,6 +148,66 @@ class RuntimeUiProjection:
                 count += 1
         return count, latest_truncate_seq
 
+    def _ui_index_path(self, session_id: str) -> Path:
+        return self.event_log.session_dir(session_id) / "snapshots" / "ui_projection_index.json"
+
+    def _read_or_build_ui_index(self, session_id: str) -> dict:
+        signature = self._event_log_signature(session_id)
+        path = self._ui_index_path(session_id)
+        try:
+            with path.open("r", encoding="utf-8") as fh:
+                data = json.load(fh)
+            if isinstance(data, dict) and tuple(data.get("signature") or ()) == signature:
+                return data
+        except Exception:
+            pass
+        try:
+            return self._build_ui_index(session_id, signature)
+        except Exception:
+            return {}
+
+    def _build_ui_index(self, session_id: str, signature: Optional[tuple[bool, int, int]] = None) -> dict:
+        if signature is None:
+            signature = self._event_log_signature(session_id)
+        total = 0
+        latest_truncate_seq = 0
+        user_indices: List[int] = []
+        for event in self.event_log.iter_events(session_id):
+            if event.type == "legacy_truncate_observed":
+                payload = dict(event.payload or {})
+                new_count = payload.get("new_event_count")
+                if new_count is None:
+                    new_count = payload.get("before_index")
+                try:
+                    total = max(0, int(new_count))
+                    user_indices = [idx for idx in user_indices if idx < total]
+                    latest_truncate_seq = int(event.seq)
+                except (TypeError, ValueError):
+                    pass
+                continue
+            ui = self.event_to_ui(event)
+            if ui is None:
+                continue
+            if ui.get("type") == "user":
+                user_indices.append(total)
+            total += 1
+        data = {
+            "signature": list(signature),
+            "total": total,
+            "latest_truncate_seq": latest_truncate_seq,
+            "user_indices": user_indices,
+        }
+        path = self._ui_index_path(session_id)
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = path.with_suffix(".json.tmp")
+            with tmp.open("w", encoding="utf-8") as fh:
+                json.dump(data, fh, ensure_ascii=False, separators=(",", ":"))
+            tmp.replace(path)
+        except Exception:
+            pass
+        return data
+
     def invalidate_cache(self, session_id: str) -> None:
         key = self._cache_key(session_id)
         with self._cache_lock:
@@ -144,6 +216,10 @@ class RuntimeUiProjection:
                 self._events_cache_order.remove(key)
             except ValueError:
                 pass
+        try:
+            self._ui_index_path(session_id).unlink(missing_ok=True)
+        except Exception:
+            pass
 
     def _projected_ui_events_cached(self, session_id: str) -> List[dict]:
         key = self._cache_key(session_id)
@@ -201,7 +277,9 @@ class RuntimeUiProjection:
             int(os.getenv("RUNTIME_V2_TAIL_INITIAL_BYTES", str(512 * 1024))),
         )
         max_events = max(500, int(os.getenv("RUNTIME_V2_TAIL_MAX_EVENTS", "8000")))
-        total, latest_truncate_seq = self.count_ui_events_light(session_id)
+        index = self._read_or_build_ui_index(session_id)
+        total = int(index.get("total") or 0) if index else 0
+        latest_truncate_seq = int(index.get("latest_truncate_seq") or 0) if index else 0
         if total <= 0:
             return {
                 "events": [],
@@ -212,6 +290,16 @@ class RuntimeUiProjection:
                 "has_newer": False,
                 "source": "runtime_v2_tail",
             }
+        user_indices_index = list(index.get("user_indices") or []) if index else []
+        if user_indices_index:
+            if len(user_indices_index) <= turn_count:
+                wanted_start = 0
+            else:
+                wanted_start = int(user_indices_index[len(user_indices_index) - turn_count])
+            wanted_len = max(0, total - wanted_start)
+        else:
+            wanted_start = 0
+            wanted_len = total
         while window <= max_bytes_limit:
             runtime_events, reached_start = self.event_log.read_tail_window(
                 session_id,
@@ -242,6 +330,18 @@ class RuntimeUiProjection:
                     }
                 window *= 2
                 continue
+            if len(ui_events) >= wanted_len:
+                selected = ui_events[-wanted_len:] if wanted_len > 0 else []
+                return {
+                    "events": selected,
+                    "total": total,
+                    "range_start": wanted_start,
+                    "range_end": total,
+                    "has_older": wanted_start > 0,
+                    "has_newer": False,
+                    "source": "runtime_v2_tail_index",
+                    "tail_reached_start": bool(reached_start),
+                }
             user_indices = [
                 i for i, ev in enumerate(ui_events)
                 if isinstance(ev, dict) and ev.get("type") == "user"

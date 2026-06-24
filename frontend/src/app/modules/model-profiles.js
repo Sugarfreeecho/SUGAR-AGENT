@@ -1,4 +1,5 @@
 let modelProfilesCache = null;
+let modelProfilesRefreshPromise = null;
 let modelProfileBusy = false;
 let activeModelProfileId = '__env__';
 
@@ -65,6 +66,14 @@ function closeModelMenu() {
     }
 }
 
+function openModelMenu() {
+    var e = els();
+    if (!e.menu || !e.trigger) return;
+    e.menu.classList.add('is-open');
+    e.trigger.classList.add('is-open');
+    e.trigger.setAttribute('aria-expanded', 'true');
+}
+
 function renderModelProfileControl() {
     var e = els();
     if (!e.trigger || !e.current || !e.menu) return;
@@ -99,6 +108,15 @@ function renderModelProfileControl() {
     });
 }
 
+function renderModelProfileLoadingMenu() {
+    var e = els();
+    if (!e.menu) return;
+    e.menu.innerHTML = '<button type="button" class="composer-model-option" disabled>'
+        + '<span class="composer-model-option-name">正在加载模型配置</span>'
+        + '<span class="composer-model-option-meta">请稍候</span>'
+        + '</button>';
+}
+
 async function refreshModelProfileSelector(sessionId, opts) {
     var sid = sessionId || currentSessionId;
     var e = els();
@@ -118,6 +136,18 @@ async function refreshModelProfileSelector(sessionId, opts) {
         if (e.current) e.current.textContent = '模型配置加载失败';
         if (e.menu) e.menu.innerHTML = '<button type="button" class="composer-model-option" disabled><span class="composer-model-option-name">模型配置加载失败</span><span class="composer-model-option-meta">' + h(err.message || err) + '</span></button>';
     }
+}
+
+function refreshModelProfileSelectorInBackground(sessionId, opts) {
+    if (modelProfilesRefreshPromise) return modelProfilesRefreshPromise;
+    modelProfilesRefreshPromise = refreshModelProfileSelector(sessionId, opts)
+        .catch(function (err) {
+            console.error('refresh model profiles failed:', err);
+        })
+        .finally(function () {
+            modelProfilesRefreshPromise = null;
+        });
+    return modelProfilesRefreshPromise;
 }
 
 async function setCurrentSessionModelProfile(profileId) {
@@ -153,10 +183,9 @@ function initModelProfileSwitcher() {
             return;
         }
         if (modelProfilesCache) renderModelProfileControl();
-        await refreshModelProfileSelector(currentSessionId, { silent: true });
-        e.menu.classList.add('is-open');
-        e.trigger.classList.add('is-open');
-        e.trigger.setAttribute('aria-expanded', 'true');
+        else renderModelProfileLoadingMenu();
+        openModelMenu();
+        refreshModelProfileSelectorInBackground(currentSessionId, { silent: true });
     });
     document.addEventListener('click', (ev) => {
         if (!e.control.contains(ev.target)) closeModelMenu();
@@ -164,7 +193,7 @@ function initModelProfileSwitcher() {
     document.addEventListener('keydown', (ev) => {
         if (ev.key === 'Escape') closeModelMenu();
     });
-    refreshModelProfileSelector(currentSessionId);
+    refreshModelProfileSelectorInBackground(currentSessionId);
 }
 
 initModelProfileSwitcher();

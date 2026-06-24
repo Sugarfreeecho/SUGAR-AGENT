@@ -107,6 +107,43 @@ EXECUTOR_STREAM = os.getenv("EXECUTOR_STREAM", "true").lower() in ("1", "true", 
 
 _STEER_LOCK = threading.Lock()
 _STEER_QUEUES: Dict[str, List[Dict[str, Any]]] = {}
+_CONTEXT_POLICY_LOCKS_LOCK = threading.Lock()
+_CONTEXT_POLICY_LOCKS: Dict[str, threading.Lock] = {}
+
+
+def _context_policy_lock_for_session(session_id: str) -> threading.Lock:
+    sid = str(session_id or "").strip()
+    with _CONTEXT_POLICY_LOCKS_LOCK:
+        lock = _CONTEXT_POLICY_LOCKS.get(sid)
+        if lock is None:
+            lock = threading.Lock()
+            _CONTEXT_POLICY_LOCKS[sid] = lock
+        return lock
+
+
+def _run_context_policy_serialized(
+    llm_history: List,
+    key_context: str,
+    session_id: str,
+    *,
+    force_user_compact: bool,
+    hint_sink: Optional[Callable[[Any], None]] = None,
+):
+    lock = _context_policy_lock_for_session(session_id)
+    with lock:
+        return run_context_policy(
+            llm_history,
+            key_context,
+            session_id,
+            force_user_compact=force_user_compact,
+            hint_sink=hint_sink,
+        )
+
+
+def _wait_context_policy_idle(session_id: str) -> None:
+    lock = _context_policy_lock_for_session(session_id)
+    lock.acquire()
+    lock.release()
 
 
 def enqueue_session_steer(session_id: str, content: str, client_id: str = "") -> Dict[str, Any]:
@@ -165,6 +202,13 @@ def _pop_session_steers(session_id: str) -> List[Dict[str, Any]]:
         items = list(_STEER_QUEUES.get(sid) or [])
         _STEER_QUEUES.pop(sid, None)
     return items
+
+
+def _is_followup_interrupt(session_id: str) -> bool:
+    try:
+        return session_manager.get_interrupt_reason(session_id) == "followup"
+    except Exception:
+        return False
 
 # ---------------------------------------------------------------------------
 # 压缩兜底（agent_memory：compress_tail_fallback）
@@ -665,6 +709,33 @@ async def _await_thread_with_sse_keepalive(
                 pass
 
 
+async def _await_context_policy_idle_for_session(
+    state: State,
+    emit: Optional[Callable[[Dict[str, Any]], Any]],
+) -> None:
+    sid = str(state.get("session_id") or "").strip()
+    if not sid:
+        return
+    lock = _context_policy_lock_for_session(sid)
+    if lock.acquire(blocking=False):
+        lock.release()
+        return
+    await _push_stream_event(
+        state,
+        {
+            "type": "status",
+            "content": "检测到同会话仍有未结束的上下文压缩，等待其完成后再继续 ReAct。",
+        },
+        emit=emit,
+    )
+    await _await_thread_with_sse_keepalive(
+        lambda: _wait_context_policy_idle(sid),
+        state,
+        emit,
+        interval_sec=5.0,
+    )
+
+
 async def _emit_tool_pending_sse(
     emit: Optional[Callable],
     tool_name: str,
@@ -1151,6 +1222,8 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
     try:
         while iter_count < max_react_iter:
             if session_manager.is_interrupt_requested(state["session_id"]):
+                if _is_followup_interrupt(state["session_id"]):
+                    raise asyncio.CancelledError()
                 final_content = "任务已由用户中断。"
                 await _push_stream_event(state, {"type": "status", "content": "任务已由用户中断"}, emit=emit)
                 break
@@ -1162,6 +1235,7 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
                     emit=emit,
                 )
                 break
+            await _await_context_policy_idle_for_session(state, emit)
             iter_count += 1
 
             # ---------- 2.2 构建 LLM 输入（静态 system 多段 + key_context，优化前缀缓存与维护） ----------
@@ -1238,7 +1312,7 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
 
                     # 压缩内为同步 LLM 调用，放线程执行以免阻塞 SSE；hint_sink 实时灌入队列由上层 drain
                     nl, nk, chg, _, used_llm_summary, new_recap = await _await_thread_with_sse_keepalive(
-                        lambda: run_context_policy(
+                        lambda: _run_context_policy_serialized(
                             llm_history,
                             kcur,
                             sid,
@@ -1338,7 +1412,10 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
                 logger.warning("subagent 工具过滤失败（忽略）: %s", _sub_ex)
 
             # ---------- 2.6 调用 LLM ----------
+            await _await_context_policy_idle_for_session(state, emit)
             if session_manager.is_interrupt_requested(state["session_id"]):
+                if _is_followup_interrupt(state["session_id"]):
+                    raise asyncio.CancelledError()
                 final_content = "任务已由用户中断。"
                 await _push_stream_event(state, {"type": "status", "content": "任务已由用户中断"}, emit=emit)
                 break
@@ -1759,7 +1836,7 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
                                 _cq.put(_progress_hint_to_stream_event(item))
 
                             nl, nk, chg, _, used_llm_c, new_recap_c = await _await_thread_with_sse_keepalive(
-                                lambda: run_context_policy(
+                                lambda: _run_context_policy_serialized(
                                     llm_history,
                                     state.get("key_context", ""),
                                     state["session_id"],
@@ -2104,6 +2181,8 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
 
                 for tool_call in tool_calls_list:
                     if session_manager.is_interrupt_requested(state["session_id"]):
+                        if _is_followup_interrupt(state["session_id"]):
+                            raise asyncio.CancelledError()
                         break
                     if is_read_only_tool(tool_call):
                         pending_read_only.append(tool_call)
@@ -2639,9 +2718,14 @@ async def astream_events(
     try:
         while True:
             if should_stop and should_stop(session_id):
+                reason = session_manager.get_interrupt_reason(session_id) or "user"
+                if reason == "followup":
+                    mirror_runtime_v2("run_interrupted", {"reason": reason})
+                    task.cancel()
+                    break
                 ev1 = {"type": "status", "content": "任务已由用户中断"}
                 ev2 = {"type": "final", "content": "任务已由用户中断。"}
-                mirror_runtime_v2("run_interrupted", {"reason": "user"})
+                mirror_runtime_v2("run_interrupted", {"reason": reason})
                 session_manager.mark_session_unread_result(session_id, status="failed")
                 session_manager.append_ui_event(session_id, ev1)
                 session_manager.append_ui_event(session_id, ev2)
@@ -2793,9 +2877,14 @@ async def astream_events_continuation(
     try:
         while True:
             if should_stop and should_stop(session_id):
+                reason = session_manager.get_interrupt_reason(session_id) or "user"
+                if reason == "followup":
+                    mirror_runtime_v2("run_interrupted", {"reason": reason})
+                    task.cancel()
+                    break
                 ev1 = {"type": "status", "content": "任务已由用户中断"}
                 ev2 = {"type": "final", "content": "任务已由用户中断。"}
-                mirror_runtime_v2("run_interrupted", {"reason": "user"})
+                mirror_runtime_v2("run_interrupted", {"reason": reason})
                 session_manager.mark_session_unread_result(session_id, status="failed")
                 session_manager.append_ui_event(session_id, ev1)
                 session_manager.append_ui_event(session_id, ev2)

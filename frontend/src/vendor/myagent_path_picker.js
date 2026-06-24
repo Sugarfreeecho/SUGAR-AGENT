@@ -57,6 +57,8 @@
       '.workspace-file-dir{grid-column:2/-1;color:var(--text-muted,#6c7086);font-size:.68rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}' +
       '.workspace-file-meta{color:var(--text-muted,#6c7086);font-size:.68rem;white-space:nowrap;}' +
       '.workspace-file-footer{position:relative;display:flex;align-items:center;justify-content:space-between;gap:.5rem;padding:.42rem .52rem;border-top:1px solid rgba(255,255,255,.08);background:rgba(255,255,255,.035);font-size:.72rem;color:var(--text-muted,#6c7086);}' +
+      '.workspace-file-outside{flex-shrink:0;border:1px solid rgba(203,166,247,.24);border-radius:8px;padding:.28rem .58rem;background:rgba(203,166,247,.1);color:var(--text-primary,#cdd6f4);font:inherit;font-size:.7rem;font-weight:700;cursor:pointer;transition:background .16s,border-color .16s,color .16s;}' +
+      '.workspace-file-outside:hover{background:rgba(203,166,247,.18);border-color:rgba(203,166,247,.42);color:#fff;}' +
       '.workspace-file-insert{border:0;border-radius:8px;padding:.34rem .62rem;background:linear-gradient(135deg,#6366f1,#8b5cf6);color:#fff;font-size:.72rem;font-weight:700;cursor:pointer;}' +
       '.workspace-file-insert:disabled{opacity:.45;cursor:not-allowed;}' +
       '.workspace-file-empty{padding:1rem;text-align:center;color:var(--text-muted,#6c7086);font-size:.78rem;}' +
@@ -175,19 +177,20 @@
     });
   }
 
-  function createWorkspaceFilePanel(textarea) {
+  function createWorkspaceFilePanel(textarea, uploadOutsideFiles) {
     var panel = document.createElement('div');
     panel.className = 'workspace-file-popover';
     panel.setAttribute('aria-hidden', 'true');
     panel.innerHTML =
       '<input class="workspace-file-search" type="text" autocomplete="off" spellcheck="false" placeholder="搜索工作区文件">' +
       '<div class="workspace-file-list" role="listbox"></div>' +
-      '<div class="workspace-file-footer"><span class="workspace-file-count">未选择文件</span></div>';
+      '<div class="workspace-file-footer"><span class="workspace-file-count">未选择文件</span><button type="button" class="workspace-file-outside">选择工作目录外文件</button></div>';
     document.body.appendChild(panel);
 
     var search = panel.querySelector('.workspace-file-search');
     var list = panel.querySelector('.workspace-file-list');
     var countLabel = panel.querySelector('.workspace-file-count');
+    var outsideBtn = panel.querySelector('.workspace-file-outside');
     var state = {
       items: [],
       visible: [],
@@ -349,6 +352,13 @@
     }
 
     textarea.addEventListener('input', syncSelectionUiFromTextarea);
+    if (outsideBtn) {
+      outsideBtn.addEventListener('click', function (ev) {
+        ev.preventDefault();
+        ev.stopPropagation();
+        if (typeof uploadOutsideFiles === 'function') uploadOutsideFiles();
+      });
+    }
 
     function workspaceRootName() {
       var root = String(global.__WORK_DIR__ || 'workspace');
@@ -730,7 +740,9 @@
       });
     });
 
-    var panelApi = createWorkspaceFilePanel(textarea);
+    var panelApi = createWorkspaceFilePanel(textarea, function () {
+      fileInput.click();
+    });
     button.addEventListener('click', function (ev) {
       ev.stopPropagation();
       ev.preventDefault();

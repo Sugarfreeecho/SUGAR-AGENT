@@ -7,6 +7,7 @@
 import asyncio
 import json
 import logging
+import mimetypes
 import os
 import re
 import threading
@@ -17,7 +18,7 @@ from pathlib import Path
 from urllib.parse import unquote
 
 from fastapi import FastAPI, File, Form, Query, Request, UploadFile
-from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
 
@@ -34,6 +35,20 @@ _PATH_PICKER_JS_PATH = Path(__file__).resolve().parent / "templates" / "static" 
 _TEMPLATES_DIR = Path(__file__).resolve().parent / "templates"
 _DIST_INDEX = _TEMPLATES_DIR / "dist" / "index.html"
 _DIST_ASSETS = _TEMPLATES_DIR / "dist" / "assets"
+_VIEWABLE_IMAGE_SUFFIXES = {
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".gif",
+    ".webp",
+    ".bmp",
+    ".svg",
+    ".ico",
+    ".tif",
+    ".tiff",
+    ".avif",
+    ".jfif",
+}
 
 # SSE 响应头：降低反向代理/浏览器对小块的缓冲
 _SSE_HEADERS = {
@@ -58,6 +73,8 @@ _active_chat_by_session: dict[str, int] = {}
 _active_chat_last_seen: dict[str, float] = {}
 
 _CHAT_ACTIVE_TIMEOUT_SEC = int(os.getenv("CHAT_ACTIVE_TIMEOUT_SEC", "300"))
+_chat_start_lock = threading.Lock()
+_chat_starting_by_session: dict[str, float] = {}
 logger = logging.getLogger(__name__)
 _STATIC_TEXT_CACHE_LOCK = threading.Lock()
 _STATIC_TEXT_CACHE: dict[str, tuple[tuple[bool, int, int], str]] = {}
@@ -216,11 +233,45 @@ def _cleanup_stale_active_chat():
     for sid in stale:
         _active_chat_by_session.pop(sid, None)
         _active_chat_last_seen.pop(sid, None)
+    with _chat_start_lock:
+        stale_starting = [
+            sid for sid, ts in list(_chat_starting_by_session.items())
+            if now - float(ts or 0.0) > _CHAT_ACTIVE_TIMEOUT_SEC
+        ]
+        for sid in stale_starting:
+            _chat_starting_by_session.pop(sid, None)
 
 
 def _is_session_stream_active(sid: str) -> bool:
     x = str(sid or "").strip()
-    return bool(x) and bool(_session_run_state_fields(x).get("stream_active"))
+    if not x:
+        return False
+    with _chat_start_lock:
+        if x in _chat_starting_by_session:
+            return True
+    return bool(_session_run_state_fields(x).get("stream_active"))
+
+
+def _reserve_session_chat_start(sid: str) -> bool:
+    x = str(sid or "").strip()
+    if not x:
+        return True
+    with _chat_start_lock:
+        if x in _chat_starting_by_session:
+            return False
+        if bool(_session_run_state_fields(x).get("stream_active")):
+            return False
+        import time as _t
+        _chat_starting_by_session[x] = _t.time()
+        return True
+
+
+def _release_session_chat_start(sid: str) -> None:
+    x = str(sid or "").strip()
+    if not x:
+        return
+    with _chat_start_lock:
+        _chat_starting_by_session.pop(x, None)
 
 
 def _runtime_v2_active_run_info(sid: str) -> dict:
@@ -315,17 +366,18 @@ def _runtime_v2_active_run_ids(sid: str) -> list[str]:
     return out
 
 
-def _interrupt_runtime_v2_active_runs(sid: str, run_id: str = "") -> list[str]:
+def _interrupt_runtime_v2_active_runs(sid: str, run_id: str = "", reason: str = "user") -> list[str]:
     targets = [str(run_id or "").strip()] if str(run_id or "").strip() else _runtime_v2_active_run_ids(sid)
     targets = [rid for rid in targets if rid]
     if not targets:
         return []
+    reason = str(reason or "user").strip() or "user"
     try:
         from runtime_v2.mirror import RuntimeMirror
 
         mirror = RuntimeMirror(session_manager.sessions_dir)
         for rid in targets:
-            mirror.mirror_run_interrupted(sid, rid, {"reason": "user"})
+            mirror.mirror_run_interrupted(sid, rid, {"reason": reason})
     except Exception as e:
         logger.debug("mirror interrupt failed for %s: %s", sid, e)
     return targets
@@ -477,10 +529,22 @@ async def open_workspace_file(
     app_root = Path(__file__).resolve().parent.resolve()
     if len(raw) >= 2 and raw[1] == ":":
         cand = Path(raw)
+        if not cand.exists():
+            parts = Path(raw).parts
+            lowered = [p.lower() for p in parts]
+            work_name = WORK_DIR.name.lower()
+            if work_name in lowered:
+                idx = len(lowered) - 1 - lowered[::-1].index(work_name)
+                suffix = Path(*parts[idx + 1 :]) if idx + 1 < len(parts) else Path()
+                cand = (WORK_DIR / suffix).resolve()
     elif raw.startswith("\\\\"):
         cand = Path(raw)
     else:
-        cand = (WORK_DIR / raw.lstrip("/")).resolve()
+        rel_raw = raw.lstrip("/\\")
+        cand = (WORK_DIR / rel_raw).resolve()
+        first = rel_raw.replace("\\", "/").split("/", 1)[0]
+        if first and first.lower() == WORK_DIR.name.lower() and not cand.exists():
+            cand = (WORK_DIR.parent / rel_raw).resolve()
     try:
         cand = cand.resolve()
     except OSError:
@@ -512,6 +576,71 @@ async def open_workspace_file(
 
     await run_in_threadpool(_open)
     return JSONResponse({"ok": True, "path": str(cand)})
+
+
+def _resolve_workspace_view_path(raw_value: str) -> Path:
+    raw = unquote(raw_value or "").strip().strip('"').strip("'")
+    if not raw:
+        raise ValueError("empty path")
+    wd = WORK_DIR.resolve()
+    app_root = Path(__file__).resolve().parent.resolve()
+    if len(raw) >= 2 and raw[1] == ":":
+        cand = Path(raw)
+        if not cand.exists():
+            parts = Path(raw).parts
+            lowered = [p.lower() for p in parts]
+            work_name = WORK_DIR.name.lower()
+            if work_name in lowered:
+                idx = len(lowered) - 1 - lowered[::-1].index(work_name)
+                suffix = Path(*parts[idx + 1 :]) if idx + 1 < len(parts) else Path()
+                cand = (WORK_DIR / suffix).resolve()
+    elif raw.startswith("\\\\"):
+        cand = Path(raw)
+    else:
+        rel_raw = raw.lstrip("/\\")
+        cand = (WORK_DIR / rel_raw).resolve()
+        first = rel_raw.replace("\\", "/").split("/", 1)[0]
+        if first and first.lower() == WORK_DIR.name.lower() and not cand.exists():
+            cand = (WORK_DIR.parent / rel_raw).resolve()
+    cand = cand.resolve()
+    allowed = False
+    for root in (wd, app_root):
+        try:
+            cand.relative_to(root)
+            allowed = True
+            break
+        except ValueError:
+            continue
+    if not allowed:
+        raise PermissionError("path outside allowed roots")
+    if not cand.is_file():
+        raise FileNotFoundError(raw)
+    return cand
+
+
+@fastapi_app.get("/api/workspace-image")
+async def workspace_image(
+    rel: str = Query("", description="Image path relative to workspace, or an allowed absolute path"),
+):
+    try:
+        cand = await run_in_threadpool(_resolve_workspace_view_path, rel)
+    except ValueError:
+        return JSONResponse({"ok": False, "error": "path is empty"}, status_code=400)
+    except PermissionError:
+        return JSONResponse({"ok": False, "error": "path outside allowed roots"}, status_code=403)
+    except FileNotFoundError:
+        return JSONResponse({"ok": False, "error": "image not found"}, status_code=404)
+    except Exception as exc:
+        logger.warning("workspace image resolve failed: %s", exc)
+        return JSONResponse({"ok": False, "error": "invalid image path"}, status_code=400)
+    if cand.suffix.lower() not in _VIEWABLE_IMAGE_SUFFIXES:
+        return JSONResponse({"ok": False, "error": "not a supported image"}, status_code=415)
+    media_type = mimetypes.guess_type(str(cand))[0] or "application/octet-stream"
+    return FileResponse(
+        str(cand),
+        media_type=media_type,
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 def _html_with_path_picker_script(body: str) -> str:
@@ -1236,29 +1365,34 @@ async def interrupt_session(session_id: str, request: Request):
     if not sid:
         return JSONResponse(content={"error": "missing session_id"}, status_code=400)
     run_id = ""
+    reason = "user"
     try:
         ctype = (request.headers.get("content-type") or "").lower()
         if "application/json" in ctype:
             data = await request.json()
             run_id = str((data or {}).get("run_id") or (data or {}).get("client_run_id") or "").strip()
+            reason = str((data or {}).get("reason") or reason).strip() or reason
         elif "form" in ctype:
             form = await request.form()
             run_id = str(form.get("run_id") or form.get("client_run_id") or "").strip()
+            reason = str(form.get("reason") or reason).strip() or reason
     except Exception:
         run_id = ""
-    session_manager.request_interrupt(sid, run_id)
-    session_manager.mark_session_unread_result(sid, status="failed")
+        reason = "user"
+    session_manager.request_interrupt(sid, run_id, reason=reason)
+    if reason != "followup":
+        session_manager.mark_session_unread_result(sid, status="failed")
     _active_chat_by_session.pop(sid, None)
     _active_chat_last_seen.pop(sid, None)
-    interrupted_run_ids = _interrupt_runtime_v2_active_runs(sid, run_id)
+    interrupted_run_ids = _interrupt_runtime_v2_active_runs(sid, run_id, reason=reason)
     try:
         from session_event_bus import publish_session_event
 
         if interrupted_run_ids:
             for rid in interrupted_run_ids:
-                await publish_session_event(sid, {"type": "run_interrupted", "run_id": rid, "ephemeral": True})
+                await publish_session_event(sid, {"type": "run_interrupted", "run_id": rid, "reason": reason, "ephemeral": True})
         else:
-            await publish_session_event(sid, {"type": "run_interrupted", "run_id": run_id, "ephemeral": True})
+            await publish_session_event(sid, {"type": "run_interrupted", "run_id": run_id, "reason": reason, "ephemeral": True})
     except Exception as e:
         logger.debug("publish interrupt failed for %s: %s", sid, e)
     try:
@@ -1344,6 +1478,8 @@ async def chat(
     sid = (session_id or "").strip() or None
     run_id = str(client_run_id or "").strip()
     if sid:
+        if not _reserve_session_chat_start(sid):
+            return JSONResponse(content={"ok": False, "reason": "busy"}, status_code=409)
         session_manager.clear_interrupt(sid, run_id)
 
     def should_stop(sid_: str) -> bool:
@@ -1371,6 +1507,8 @@ async def chat(
                 # 浏览器主动断开 SSE 连接属于正常情况，避免打印冗长异常栈
                 return
         finally:
+            if sid:
+                _release_session_chat_start(sid)
             if sid:
                 n = _active_chat_by_session.get(sid, 1) - 1
                 if n <= 0:
@@ -1539,10 +1677,11 @@ async def get_session_messages(
     import time as _time
     t0 = _time.perf_counter()
     projection = None
-    try:
-        _enqueue_runtime_sync(session_id, "messages_open", check_needed=True)
-    except Exception as exc:
-        logger.debug("runtime sync enqueue check failed for %s: %s", session_id, exc)
+    if os.getenv("RUNTIME_SYNC_ON_MESSAGES_OPEN", "0").strip().lower() in {"1", "true", "yes", "on"}:
+        try:
+            _enqueue_runtime_sync(session_id, "messages_open", check_needed=True)
+        except Exception as exc:
+            logger.debug("runtime sync enqueue check failed for %s: %s", session_id, exc)
     try:
         from runtime_v2 import runtime_v1_primary
 

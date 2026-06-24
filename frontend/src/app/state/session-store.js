@@ -24,6 +24,7 @@ const sessionStore = {
         const nextOrder = [];
         const nextStreamActive = Object.create(null);
         const list = Array.isArray(sessions) ? sessions : [];
+        let unreadChanged = false;
         for (let i = 0; i < list.length; i += 1) {
             const s = list[i];
             if (!s || !s.id) continue;
@@ -35,8 +36,15 @@ const sessionStore = {
                 nextSession.run_active = false;
                 nextSession.run_started_at = null;
             }
-            if (nextSession.unread_result && typeof sessionUnreadComplete !== 'undefined') {
-                sessionUnreadComplete.add(sid);
+            if (typeof sessionUnreadComplete !== 'undefined') {
+                if (nextSession.unread_result) {
+                    if (!sessionUnreadComplete.has(sid)) {
+                        sessionUnreadComplete.add(sid);
+                        unreadChanged = true;
+                    }
+                } else if (sessionUnreadComplete.delete(sid)) {
+                    unreadChanged = true;
+                }
             }
             nextById.set(sid, nextSession);
             nextOrder.push(sid);
@@ -48,6 +56,7 @@ const sessionStore = {
         if (Number.isFinite(Number(archivedCount)) && Number(archivedCount) >= 0) {
             this.archivedCount = Number(archivedCount);
         }
+        if (unreadChanged && typeof persistSessionUnread === 'function') persistSessionUnread();
     },
 
     upsert(session) {

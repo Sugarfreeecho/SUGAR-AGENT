@@ -1,0 +1,58 @@
+{
+  "profiles": [
+    {
+      "id": "ce07fd03bde14abaa00f0bae9f1c1339",
+      "name": "deepseek-v4-pro",
+      "model": "deepseek-v4-pro",
+      "llm_type": "openai",
+      "base_url": "https://api.deepseek.com",
+      "context_window": 256000,
+      "max_output_tokens": 50000,
+      "thinking_mode": "",
+      "reasoning_effort": "",
+      "temperature": "",
+      "extra_body_json": "",
+      "priority": 3,
+      "updated_at": "2026-06-24T11:14:56+0200",
+      "api_key": "sk-8e433dde33e24887ac5784917b614626",
+      "created_at": "2026-06-21T22:08:20+0200",
+      "model_context_window": 1000000
+    },
+    {
+      "id": "a045ef8bc1ef4503bdf38ae61e73659f",
+      "name": "deepseek-v4-flash",
+      "model": "deepseek-v4-flash",
+      "llm_type": "openai",
+      "base_url": "https://api.deepseek.com",
+      "context_window": 256000,
+      "max_output_tokens": 50000,
+      "thinking_mode": "enabled",
+      "reasoning_effort": "high",
+      "temperature": "",
+      "extra_body_json": "",
+      "priority": 2,
+      "updated_at": "2026-06-24T11:14:33+0200",
+      "api_key": "sk-8e433dde33e24887ac5784917b614626",
+      "created_at": "2026-06-21T22:08:40+0200",
+      "model_context_window": 0
+    },
+    {
+      "id": "8e86009700f1488f837aa5baf9a6da49",
+      "name": "mimo-v2.5-pro",
+      "model": "mimo-v2.5-pro",
+      "llm_type": "openai",
+      "base_url": "https://token-plan-cn.xiaomimimo.com/v1",
+      "context_window": 256000,
+      "max_output_tokens": 50000,
+      "thinking_mode": "",
+      "reasoning_effort": "",
+      "temperature": "",
+      "extra_body_json": "",
+      "priority": 1,
+      "updated_at": "2026-06-24T11:13:57+0200",
+      "api_key": "tp-c0s3paf2eic58zrgmat0ivfluq7q4i2xmeqjiiasxmcu223r",
+      "created_at": "2026-06-21T22:15:22+0200",
+      "model_context_window": 0
+    }
+  ]
+}

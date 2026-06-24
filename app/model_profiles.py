@@ -268,11 +268,19 @@ def probe_model_context(
 
 
 def profile_store_path(project_root: Path) -> Path:
+    return Path(project_root).resolve() / "model_profiles.json"
+
+
+def legacy_profile_store_path(project_root: Path) -> Path:
     return Path(project_root).resolve() / "app" / "model_profiles.json"
 
 
 def load_store(project_root: Path) -> dict:
     path = profile_store_path(project_root)
+    if not path.is_file():
+        legacy_path = legacy_profile_store_path(project_root)
+        if legacy_path.is_file():
+            path = legacy_path
     if not path.is_file():
         return {"profiles": [], "env_profile": {}}
     try:

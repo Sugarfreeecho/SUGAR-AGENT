@@ -14,13 +14,13 @@ function setSendButtonState() {
     }
 }
 
-async function requestInterrupt(sessionId, runId) {
+async function requestInterrupt(sessionId, runId, reason) {
     if (!sessionId) return;
     try {
         await fetch('/sessions/' + sessionId + '/interrupt', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ run_id: runId || '' }),
+            body: JSON.stringify({ run_id: runId || '', reason: reason || '' }),
         });
     }
     catch (e) { /* ignore */ }
@@ -116,7 +116,8 @@ function applySessionItemIndicators(itemDiv, sessionId, opts) {
         if (nameEl) nameEl.setAttribute('data-ui-tip', '生成中…');
     } else {
         var sess = sessionStore.get(sessionId);
-        var hasUnreadResult = sessionUnreadComplete.has(sessionId) || !!(sess && sess.unread_result);
+        var localUnreadResult = sessionUnreadComplete.has(sessionId);
+        var hasUnreadResult = sess ? !!sess.unread_result : localUnreadResult;
         if (!hasUnreadResult) return;
         var failed = !!(sess && sess.unread_result_status === 'failed');
         itemDiv.classList.add(failed ? 'is-unread-failed' : 'is-unread-result');
@@ -385,6 +386,14 @@ async function refreshSingleSessionRow(sessionId) {
             stream_active: !!sess.stream_active,
         });
         setSessionServerStreamActive(sess.id, !!sess.stream_active);
+        if (sess.unread_result) {
+            if (!sessionUnreadComplete.has(sess.id)) {
+                sessionUnreadComplete.add(sess.id);
+                persistSessionUnread();
+            }
+        } else if (sessionUnreadComplete.delete(sess.id)) {
+            persistSessionUnread();
+        }
         if (Number(sess.subagent_running || 0) > 0) {
             sessionUnreadComplete.delete(sess.id);
             persistSessionUnread();
@@ -688,6 +697,7 @@ async function loadSessionMessages(sessionId, scrollBehavior, opts) {
         if (!response.ok) throw new Error('messages failed: ' + response.status);
         const raw = await response.json();
         if (loadToken !== messageLoadEpoch || sessionId !== currentSessionId) return;
+        if (getSessionRunState(sessionId)) return;
         document.getElementById('chat-loading')?.remove();
         if (!getVisibleChatStream()) ensureVisibleChatStreamSlot();
         const vis = getVisibleChatStream();

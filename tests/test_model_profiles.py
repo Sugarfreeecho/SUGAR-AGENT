@@ -1,4 +1,5 @@
 import sys
+import json
 from pathlib import Path
 
 import httpx
@@ -7,6 +8,21 @@ import httpx
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "app"))
 
 import model_profiles
+
+
+def test_profile_store_defaults_to_project_root(tmp_path):
+    assert model_profiles.profile_store_path(tmp_path) == tmp_path / "model_profiles.json"
+
+
+def test_load_store_reads_legacy_app_location_when_default_missing(tmp_path):
+    legacy_dir = tmp_path / "app"
+    legacy_dir.mkdir()
+    (legacy_dir / "model_profiles.json").write_text(
+        json.dumps({"profiles": [{"id": "legacy"}], "env_profile": {}}),
+        encoding="utf-8",
+    )
+
+    assert model_profiles.load_store(tmp_path)["profiles"][0]["id"] == "legacy"
 
 
 def test_extract_context_window_from_error_message():

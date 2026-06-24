@@ -723,6 +723,29 @@ async function sendFollowupNow(itemId) {
     const item = q[idx];
     if (!item) return;
     var runningNow = isSessionRunning(sid) || (sendPipelineLock && sendPipelineLockSessionId === sid);
+    if (runningNow) {
+        if (idx > 0) {
+            q.splice(idx, 1);
+            q.unshift(item);
+        }
+        item.status = 'interrupting';
+        item.clientId = item.clientId || ('followup-' + item.id + '-' + Date.now());
+        persistFollowupQueue(sid);
+        renderFollowupQueue(sid);
+        var run = getSessionRunState(sid);
+        var activeInfo = sessionStore.getActiveRunInfo(sid) || {};
+        var runId = run && run.runId ? run.runId : (activeInfo.run_id || activeInfo.runId || '');
+        if (typeof suppressSessionServerStreamActive === 'function') suppressSessionServerStreamActive(sid, 8000);
+        if (run) {
+            var ctx = run.ctx;
+            abortSessionRun(sid, 'followup');
+            if (ctx) sealProcessGroup(ctx);
+        }
+        void requestInterrupt(sid, runId, 'followup');
+        setTimeout(function () { drainFollowupQueue(sid); }, 0);
+        setTimeout(function () { reconcileRunStateFromServer({ silent: true, respectStopSuppress: true }); }, 3000);
+        return;
+    }
     if (runningNow) item.clientId = item.clientId || ('followup-' + item.id + '-' + Date.now());
     item.status = 'sending';
     persistFollowupQueue(sid);
@@ -778,7 +801,7 @@ function drainFollowupQueue(sessionId) {
         renderFollowupQueue(sid);
         return;
     }
-    var nextIdx = q.findIndex(function (item) { return !item.status; });
+    var nextIdx = q.findIndex(function (item) { return !item.status || item.status === 'interrupting'; });
     if (nextIdx < 0) {
         renderFollowupQueue(sid);
         return;
@@ -796,6 +819,7 @@ function drainFollowupQueue(sessionId) {
 
 async function sendMessage(options) {
     options = options || {};
+    messageLoadEpoch += 1;
     /* 立即快照「提交会话」：之后所有 await 都不能改变它，避免用户在 await 空隙切走后消息发到新会话。
        关键不变式：runSessionId === submitSessionId 全程恒等。 */
     const submitSessionIdInitial = options.sessionId || currentSessionId;
