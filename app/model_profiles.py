@@ -309,7 +309,7 @@ def default_profile_from_env(env: dict[str, str]) -> dict:
     limits = infer_model_limits(model)
     return {
         "id": "__env__",
-        "name": "系统内置模型配置",
+        "name": model,
         "model": model,
         "llm_type": str(env.get("EXECUTOR_LLM_TYPE") or "openai").strip().lower() or "openai",
         "base_url": str(env.get("OPENAI_BASE_URL") or "").strip(),
