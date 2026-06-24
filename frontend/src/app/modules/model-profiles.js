@@ -43,7 +43,7 @@ async function loadModelProfilesForSwitcher() {
 
 function allProfiles() {
     if (!modelProfilesCache) return [];
-    var defaultProfile = modelProfilesCache.default_profile || { id: '__env__', name: '当前 .env 默认配置' };
+    var defaultProfile = modelProfilesCache.default_profile || { id: '__env__', name: '系统内置模型配置' };
     return [defaultProfile].concat(modelProfilesCache.profiles || []);
 }
 
@@ -83,7 +83,7 @@ function renderModelProfileControl() {
         var activeCls = id === String(activeModelProfileId || '__env__') ? ' is-active' : '';
         html += '<button type="button" class="composer-model-option' + activeCls + '" role="option" data-profile-id="' + h(id) + '">'
             + '<span class="composer-model-option-name">' + h(profileLabel(p)) + '</span>'
-            + '<span class="composer-model-option-meta">' + h(profileMeta(p) || (id === '__env__' ? '当前 .env 默认配置' : '')) + '</span>'
+            + '<span class="composer-model-option-meta">' + h(profileMeta(p) || (id === '__env__' ? '系统内置模型配置' : '')) + '</span>'
             + '</button>';
     }
     if (!(modelProfilesCache.profiles || []).length) {
