@@ -321,6 +321,19 @@ class RuntimeProjector:
             return
         runs = snapshot["runs"]
         run = runs.get(run_id)
+        terminal_statuses = {"finished", "failed", "interrupted"}
+        if status == "running" and not heartbeat_only:
+            for existing_id, existing in list(runs.items()):
+                if existing_id == run_id or not isinstance(existing, dict):
+                    continue
+                if existing.get("session_id") != event.session_id:
+                    continue
+                if existing.get("status") in terminal_statuses:
+                    continue
+                existing["status"] = "interrupted"
+                existing["finished_at"] = event.timestamp
+                existing["heartbeat_at"] = event.timestamp
+                existing["error"] = existing.get("error") or "superseded by a newer run"
         if not run:
             run = {
                 "run_id": run_id,
@@ -330,13 +343,18 @@ class RuntimeProjector:
                 "heartbeat_at": event.timestamp,
                 "finished_at": None,
                 "error": None,
+                "started_seq": event.seq,
             }
             runs[run_id] = run
+        if run.get("status") in terminal_statuses and status not in terminal_statuses:
+            return
         run["heartbeat_at"] = event.timestamp
+        run["heartbeat_seq"] = event.seq
         if not heartbeat_only:
             run["status"] = status
-        if status in {"finished", "failed", "interrupted"}:
+        if status in terminal_statuses:
             run["finished_at"] = event.timestamp
+            run["finished_seq"] = event.seq
         if status == "failed":
             run["error"] = str((event.payload or {}).get("error") or "")
 

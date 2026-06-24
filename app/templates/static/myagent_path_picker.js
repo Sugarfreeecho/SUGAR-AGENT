@@ -1,5 +1,5 @@
 /**
- * MyAgent 本机路径选择：调用 /api/pick-path，为配置项与聊天输入附加浏览按钮。
+ * General Agent 本机路径选择：调用 /api/pick-path，为配置项与聊天输入附加浏览按钮。
  */
 (function (global) {
   'use strict';

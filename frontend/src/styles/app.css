@@ -220,7 +220,7 @@ body {
     font-size: inherit;
 }
 
-/* 介于 MyAgent 下沿与「置顶目录」上沿之间的条带，垂直居中「新建对话」 */
+/* 介于 General Agent 下沿与「置顶目录」上沿之间的条带，垂直居中「新建对话」 */
 .sidebar-new-chat-wrap {
     flex-shrink: 0;
     display: flex;
@@ -2195,16 +2195,22 @@ body {
 }
 
 .followup-queue-panel {
-    position: fixed;
+    position: relative;
     display: none;
-    z-index: 255;
-    max-height: min(16rem, calc(100vh - 1.2rem));
+    z-index: 2;
+    width: 100%;
+    max-width: 100%;
+    max-height: min(11rem, 28vh);
     overflow: auto;
+    overscroll-behavior: contain;
+    align-self: center;
+    box-sizing: border-box;
+    margin: 0 0 0.45rem;
     padding: 0.34rem;
     border: 1px solid rgba(203,166,247,0.24);
-    border-radius: 14px;
+    border-radius: var(--radius-sm);
     background: linear-gradient(145deg, rgba(31,31,49,0.88), rgba(19,20,31,0.78));
-    box-shadow: 0 24px 70px rgba(0,0,0,0.34), 0 0 0 1px rgba(255,255,255,0.045) inset, 0 0 28px rgba(139,92,246,0.14);
+    box-shadow: 0 10px 32px rgba(0,0,0,0.24), 0 0 0 1px rgba(255,255,255,0.045) inset, 0 0 20px rgba(139,92,246,0.1);
     backdrop-filter: blur(22px);
     -webkit-backdrop-filter: blur(22px);
 }
@@ -2288,7 +2294,7 @@ body {
 }
 :root.theme-light .followup-queue-panel {
     background: linear-gradient(145deg, rgba(255,255,255,0.94), rgba(244,247,252,0.86));
-    box-shadow: 0 24px 64px rgba(31,35,52,0.16), 0 0 28px rgba(99,102,241,0.12);
+    box-shadow: 0 10px 26px rgba(31,35,52,0.12), 0 0 20px rgba(99,102,241,0.1);
 }
 :root.theme-light .followup-queue-row {
     background: rgba(34,40,58,0.035);

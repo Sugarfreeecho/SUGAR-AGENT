@@ -2504,6 +2504,7 @@ async def astream_events(
     user_input: str,
     session_id: str = None,
     should_stop: Optional[Callable[[str], bool]] = None,
+    run_id: Optional[str] = None,
 ) -> AsyncGenerator[Dict[str, Any], None]:
     """
     顺序执行 react_node → validate_final（无独立校验 LLM）→ finish，通过队列实时向前端推送事件。
@@ -2539,7 +2540,7 @@ async def astream_events(
 
     new_work_messages = prev_work_messages + [user_message]
     new_llm_history = prev_llm_history + [user_message]
-    runtime_v2_run_id = str(uuid.uuid4())
+    runtime_v2_run_id = str(run_id or "").strip() or str(uuid.uuid4())
 
     state: State = {
         "dialogue": derive_dialogue_from_assistant_history(new_llm_history),
@@ -2555,7 +2556,7 @@ async def astream_events(
         "_runtime_v2_run_id": runtime_v2_run_id,
     }
     todo_manager.sync_session_from_key_context(session_id, key_context or "")
-    session_manager.clear_interrupt(session_id)
+    session_manager.clear_interrupt(session_id, runtime_v2_run_id)
 
     queue: asyncio.Queue = asyncio.Queue()
     runtime_v2_terminal_mirrored = False
@@ -2597,7 +2598,7 @@ async def astream_events(
             # 用户气泡由前端已画；此处只写入与流顺序一致的持久化，供刷新与 SSE 同源
             mirror_runtime_v2("run_started", {"mode": "chat"})
             _runtime_v2_append_model_message(state, user_message)
-            await emit({"type": "run_started", "ephemeral": True})
+            await emit({"type": "run_started", "run_id": runtime_v2_run_id, "ephemeral": True})
             session_manager.append_ui_event(session_id, {"type": "user", "content": user_input})
             await emit({"type": "status", "content": "New Agent Loop Start"})
             state = await react_node(state, emit=emit)
@@ -2614,19 +2615,19 @@ async def astream_events(
                     await emit(evt)
             completed = True
         except asyncio.CancelledError:
-            terminal_event = {"type": "run_interrupted", "ephemeral": True}
+            terminal_event = {"type": "run_interrupted", "run_id": runtime_v2_run_id, "ephemeral": True}
             mirror_runtime_v2("run_interrupted", {"reason": "cancelled"})
             session_manager.mark_session_unread_result(session_id, status="failed")
             raise
         except Exception as exc:
-            terminal_event = {"type": "run_failed", "error": str(exc), "ephemeral": True}
+            terminal_event = {"type": "run_failed", "run_id": runtime_v2_run_id, "error": str(exc), "ephemeral": True}
             mirror_runtime_v2("run_failed", {"error": str(exc)})
             session_manager.mark_session_unread_result(session_id, status="failed")
             raise
         finally:
             if completed:
                 mirror_runtime_v2("run_finished", {"mode": "chat"})
-                terminal_event = {"type": "run_finished", "ephemeral": True}
+                terminal_event = {"type": "run_finished", "run_id": runtime_v2_run_id, "ephemeral": True}
             await emit(terminal_event)
             await close_session_stream(session_id)
             await queue.put(None)
@@ -2641,6 +2642,7 @@ async def astream_events(
                 ev1 = {"type": "status", "content": "任务已由用户中断"}
                 ev2 = {"type": "final", "content": "任务已由用户中断。"}
                 mirror_runtime_v2("run_interrupted", {"reason": "user"})
+                session_manager.mark_session_unread_result(session_id, status="failed")
                 session_manager.append_ui_event(session_id, ev1)
                 session_manager.append_ui_event(session_id, ev2)
                 yield ev1
@@ -2794,6 +2796,7 @@ async def astream_events_continuation(
                 ev1 = {"type": "status", "content": "任务已由用户中断"}
                 ev2 = {"type": "final", "content": "任务已由用户中断。"}
                 mirror_runtime_v2("run_interrupted", {"reason": "user"})
+                session_manager.mark_session_unread_result(session_id, status="failed")
                 session_manager.append_ui_event(session_id, ev1)
                 session_manager.append_ui_event(session_id, ev2)
                 yield ev1

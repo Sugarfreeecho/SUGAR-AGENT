@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Install local Git hooks for WAVE-Mate development."""
+"""Install local Git hooks for General Agent development."""
 
 from __future__ import annotations
 
@@ -18,7 +18,7 @@ python scripts/check_frontend_commit_policy.py
 
 def main() -> int:
     if not (ROOT / ".git").exists():
-        print("Not inside the WAVE-Mate Git worktree.")
+        print("Not inside the General Agent Git worktree.")
         return 2
     HOOKS.mkdir(parents=True, exist_ok=True)
     for name in ("pre-commit", "pre-push"):

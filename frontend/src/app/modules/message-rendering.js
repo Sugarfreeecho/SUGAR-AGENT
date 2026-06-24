@@ -244,7 +244,10 @@ function onMessageToolbarClick(wrap, role, act) {
     const msg = wrap.querySelector('.message');
     const plain = msg ? (msg.innerText || '') : '';
     const tf = wrap.dataset.truncateFrom;
-    const before = tf !== undefined && tf !== '' ? parseInt(tf, 10) : NaN;
+    const eiRaw = wrap.dataset.eventIndex;
+    const eventIndex = eiRaw !== undefined && eiRaw !== '' ? parseInt(eiRaw, 10) : NaN;
+    const truncateFrom = tf !== undefined && tf !== '' ? parseInt(tf, 10) : NaN;
+    const before = role === 'user' ? eventIndex : truncateFrom;
     if ((act === 'delete' || act === 'rewrite') && isSessionRunning(currentSessionId)) {
         showUiAlert({
             title: '生成中不可操作',
@@ -1354,8 +1357,21 @@ function stripPathWrappingQuotes(s) {
     return t;
 }
 
+function decodePathPercentEscapes(s) {
+    var t = String(s || '');
+    if (t.indexOf('%') < 0) return t;
+    return t.replace(/(?:%[0-9A-Fa-f]{2})+/g, function (part) {
+        try {
+            return decodeURIComponent(part);
+        } catch (e) {
+            return part;
+        }
+    });
+}
+
 function cleanPathTokenForLink(s) {
     var t = linkifyNormalizePathToken(String(s || '').trim());
+    if (!/^https?:\/\//i.test(t)) t = decodePathPercentEscapes(t);
     if (!t) return '';
     var a = t.charAt(0);
     var b = t.charAt(t.length - 1);
@@ -1421,12 +1437,24 @@ function workspaceRelativePathAutoLinkOk(slashPath) {
 
 function workspaceRelativePathNoSlashAutoLinkOk(relPath) {
     var t = linkifyNormalizePathToken(String(relPath || '').trim());
-    if (!t || t.charAt(0) === '/' || /^https?:\/\//i.test(t)) return false;
+    if (!t || t.charAt(0) === '/' || t.charAt(0) === '\\' || /^https?:\/\//i.test(t)) return false;
     if (/^([A-Za-z]):[\\/]/.test(t) || /^\\\\/.test(t)) return false;
     if (!/[\\/]/.test(t)) return false;
     if (/[<>:'"|\r\n]/.test(t)) return false;
     if (/(^|[\\/])\.{1,2}([\\/]|$)/.test(t)) return false;
     return linkifyKnownExtRegex().test(t);
+}
+
+function workspaceRelFromNormalizedAbs(absNorm, workDir) {
+    if (!absNorm || !workDir) return null;
+    var base = String(workDir).replace(/\\/g, '/').replace(/\/+$/, '');
+    var absLower = absNorm.toLowerCase();
+    var baseLower = base.toLowerCase();
+    if (absLower === baseLower) return '';
+    if (absLower.indexOf(baseLower + '/') === 0) {
+        return absNorm.slice(base.length).replace(/^\/+/, '');
+    }
+    return null;
 }
 
 function getCurrentSessionDataPath() {
@@ -1650,25 +1678,57 @@ function pathTokenToWorkspaceOpenRel(token) {
         var rest = (win[2] || '').replace(/\\/g, '/');
         var absNorm = (win[1].toUpperCase() + ':/' + rest).replace(/\/+/g, '/');
         if (w) {
-            var base = String(w).replace(/\\/g, '/').replace(/\/+$/, '');
-            var absLower = absNorm.toLowerCase();
-            var baseLower = base.toLowerCase();
-            if (absLower.length >= baseLower.length && absLower.indexOf(baseLower) === 0) {
-                return absNorm.slice(base.length).replace(/^\/+/, '');
-            }
+            var absRel = workspaceRelFromNormalizedAbs(absNorm, w);
+            if (absRel != null) return absRel;
         }
         return absNorm;
     }
     if (!w) return null;
-    if (t.charAt(0) === '/' && t.charAt(1) !== '/') {
-        if (!workspaceRelativePathAutoLinkOk(t)) return null;
-        return t.replace(/^\/+/, '').replace(/\\/g, '/');
+    var slashRooted = t.replace(/\\/g, '/');
+    if (slashRooted.charAt(0) === '/' && slashRooted.charAt(1) !== '/') {
+        var wDrive = /^([A-Za-z]):[\\/]/.exec(String(w || ''));
+        if (wDrive) {
+            var rootedAbs = (wDrive[1].toUpperCase() + ':' + slashRooted).replace(/\/+/g, '/');
+            var rootedRel = workspaceRelFromNormalizedAbs(rootedAbs, w);
+            if (rootedRel != null) return rootedRel;
+        }
+        if (!workspaceRelativePathAutoLinkOk(slashRooted)) return null;
+        return slashRooted.replace(/^\/+/, '');
     }
     if (t === '.env' && typeof window.__APP_DOTENV_PATH__ === 'string' && window.__APP_DOTENV_PATH__) {
         return window.__APP_DOTENV_PATH__;
     }
     if (workspaceRelativePathNoSlashAutoLinkOk(t)) return t.replace(/\\/g, '/');
     if (isBareWorkspaceFilenameForLink(t)) return t.replace(/\\/g, '/');
+    return null;
+}
+
+function decodeMarkdownHrefPathTarget(href) {
+    var raw = String(href || '').trim();
+    if (!raw) return '';
+    try { raw = decodeURI(raw); } catch (e) { /* keep raw */ }
+    raw = decodePathPercentEscapes(raw);
+    try { raw = decodeURIComponent(raw); } catch (e2) { /* keep partially decoded raw */ }
+    return stripPathWrappingQuotes(trimTrailingPathPunct(raw));
+}
+
+function markdownHrefToWorkspaceOpenRel(href) {
+    var raw = decodeMarkdownHrefPathTarget(href);
+    if (!raw || raw.charAt(0) === '#') return null;
+    if (/^(https?|mailto|tel|javascript|data|blob):/i.test(raw)) return null;
+    if (/^[A-Za-z][A-Za-z0-9+.-]*:/i.test(raw) && !/^[A-Za-z]:[\\/]/.test(raw) && !/^file:\/\//i.test(raw)) {
+        return null;
+    }
+    var rel = pathTokenToWorkspaceOpenRel(raw);
+    if (rel) return rel;
+    if (/^file:\/\//i.test(raw)) {
+        var fsPath = raw.replace(/^file:\/\/\/?/i, '');
+        fsPath = decodePathPercentEscapes(fsPath);
+        if (/^[A-Za-z]:[\\/]/.test(fsPath)) return fsPath.replace(/\\/g, '/');
+        return '/' + fsPath.replace(/^\/+/, '').replace(/\\/g, '/');
+    }
+    if (/^[A-Za-z]:[\\/]/.test(raw) || /^\\\\/.test(raw)) return raw.replace(/\\/g, '/');
+    if (/[\\/]/.test(raw)) return raw.replace(/^[/\\]+/, '').replace(/\\/g, '/');
     return null;
 }
 
@@ -1980,7 +2040,7 @@ function upgradeWorkspacePathMarkdownLinks(root) {
         var href = a.getAttribute('href') || '';
         var raw = href;
         try { raw = decodeURI(raw); } catch (e) {}
-        var rel = pathTokenToWorkspaceOpenRel(raw);
+        var rel = markdownHrefToWorkspaceOpenRel(href);
         if (!rel && /^file:\/\//i.test(raw)) {
             var fsPath = raw.replace(/^file:\/\/\/?/i, '');
             try { fsPath = decodeURIComponent(fsPath); } catch (e2) {}
@@ -2111,6 +2171,51 @@ function encodeMarkdownWorkspacePathLinks(text) {
     });
 }
 
+function escapeMarkdownSingleTildes(text) {
+    var src = String(text || '');
+    var out = '';
+    var inFence = false;
+    var fenceMarker = '';
+    var inCode = false;
+    var lineStart = true;
+    for (var i = 0; i < src.length; i += 1) {
+        var ch = src.charAt(i);
+        var rest = src.slice(i);
+        if (lineStart) {
+            var fence = /^([ \t]{0,3})(`{3,}|~{3,})/.exec(rest);
+            if (fence) {
+                var marker = fence[2].charAt(0);
+                if (!inFence) {
+                    inFence = true;
+                    fenceMarker = marker;
+                } else if (marker === fenceMarker) {
+                    inFence = false;
+                    fenceMarker = '';
+                }
+            }
+        }
+        if (!inFence && ch === '`') {
+            var tickEnd = i + 1;
+            while (tickEnd < src.length && src.charAt(tickEnd) === '`') tickEnd += 1;
+            out += src.slice(i, tickEnd);
+            i = tickEnd - 1;
+            inCode = !inCode;
+            lineStart = false;
+            continue;
+        }
+        if (!inFence && !inCode && ch === '~') {
+            var prev = i > 0 ? src.charAt(i - 1) : '';
+            var next = i + 1 < src.length ? src.charAt(i + 1) : '';
+            if (prev !== '\\' && prev !== '~' && next !== '~') out += '\\~';
+            else out += ch;
+        } else {
+            out += ch;
+        }
+        lineStart = ch === '\n' || ch === '\r';
+    }
+    return out;
+}
+
 function renderMarkdown(text) {
     if (!text) return '';
     if (typeof marked !== 'undefined' && !markedOptionsApplied) {
@@ -2119,7 +2224,7 @@ function renderMarkdown(text) {
             marked.setOptions({ breaks: true, mangle: false, headerIds: false });
         } catch (e) { /* ignore */ }
     }
-    return marked.parse(encodeMarkdownWorkspacePathLinks(text), { mangle: false, headerIds: false });
+    return marked.parse(escapeMarkdownSingleTildes(encodeMarkdownWorkspacePathLinks(text)), { mangle: false, headerIds: false });
 }
 
 const TRACE_ROW = {

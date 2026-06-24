@@ -1,10 +1,10 @@
-# MyAgent Developer 工程规格说明
+# General Agent 工程规格说明
 
 版本日期：2026-06-07
 
 ## 1. 项目定位
 
-MyAgent Developer 是一个本地运行的 AI Agent 开发与使用平台。系统通过浏览器 Web UI 提供会话式交互，由 Python FastAPI 后端驱动 ReAct 推理循环、工具调用、子 Agent 编排、上下文压缩、MCP 扩展和会话持久化。
+General Agent 是一个本地运行的 AI Agent 开发与使用平台。系统通过浏览器 Web UI 提供会话式交互，由 Python FastAPI 后端驱动 ReAct 推理循环、工具调用、子 Agent 编排、上下文压缩、MCP 扩展和会话持久化。
 
 本工程的目标是让用户在本机完成代码开发、文件处理、联网检索、研究分析、文档生成和多步骤自动化任务，同时保留可审计的会话记录、工具过程和运行日志。
 

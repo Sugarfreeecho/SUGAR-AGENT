@@ -19,6 +19,7 @@ async function consumeAgentSseResponse(response, runCtx, runSessionId, streamEve
             if (data === '[DONE]') {
                 finalizeLlmStreamChunks(runCtx);
                 finalizeProgressStreamChunks(runCtx);
+                await ensureFinalVisibleAfterRun(runSessionId, runCtx, { delayMs: 80 });
                 sealProcessGroup(runCtx);
                 markSessionRunInactive(runSessionId);
                 if (getSessionRunState(runSessionId)) clearSessionRunState(runSessionId);
@@ -44,6 +45,9 @@ async function consumeAgentSseResponse(response, runCtx, runSessionId, streamEve
                     if (parsed.type === 'run_finished' || parsed.type === 'run_interrupted' || parsed.type === 'run_failed') {
                         finalizeLlmStreamChunks(runCtx);
                         finalizeProgressStreamChunks(runCtx);
+                        if (parsed.type === 'run_finished') {
+                            await ensureFinalVisibleAfterRun(eventSessionId, runCtx, { delayMs: 80 });
+                        }
                         sealProcessGroup(runCtx);
                         if (eventSessionId === runSessionId && getSessionRunState(runSessionId)) {
                             clearSessionRunState(runSessionId);
@@ -158,7 +162,70 @@ async function consumeAgentSseResponse(response, runCtx, runSessionId, streamEve
             } catch (e) { console.error('解析事件失败:', e); }
         }
     }
+    await ensureFinalVisibleAfterRun(runSessionId, runCtx, { delayMs: 120 });
     return streamEventIdx;
+}
+
+function latestVisibleUserEventIndex(stream) {
+    var maxIdx = -1;
+    if (!stream || !stream.querySelectorAll) return maxIdx;
+    stream.querySelectorAll('.msg-wrap--user[data-event-index]').forEach(function (wrap) {
+        var n = Number(wrap.getAttribute('data-event-index'));
+        if (Number.isFinite(n)) maxIdx = Math.max(maxIdx, Math.floor(n));
+    });
+    return maxIdx;
+}
+
+function hasVisibleFinalAfterUser(stream, userEventIndex) {
+    if (!stream || !stream.querySelectorAll) return false;
+    var found = false;
+    stream.querySelectorAll('.msg-wrap--assistant[data-event-index]').forEach(function (wrap) {
+        if (found) return;
+        var n = Number(wrap.getAttribute('data-event-index'));
+        if (Number.isFinite(n) && Math.floor(n) > userEventIndex) found = true;
+    });
+    return found;
+}
+
+function findStoredFinalAfterUser(sessionId, userEventIndex) {
+    var events = [];
+    try { events = selectMessageEvents(sessionId) || []; } catch (e) { events = []; }
+    for (var i = events.length - 1; i >= 0; i -= 1) {
+        var rec = events[i];
+        if (!rec || rec.type !== 'final') continue;
+        if (Number.isFinite(Number(rec.index)) && Number(rec.index) > userEventIndex) return rec;
+    }
+    return null;
+}
+
+async function ensureFinalVisibleAfterRun(sessionId, ctx, opts) {
+    opts = opts || {};
+    var sid = String(sessionId || '');
+    if (!sid || sid !== currentSessionId) return false;
+    var stream = (ctx && ctx.stream && ctx.stream.isConnected) ? ctx.stream : getVisibleChatStream();
+    if (!stream) return false;
+    var lastUserIdx = latestVisibleUserEventIndex(stream);
+    if (hasVisibleFinalAfterUser(stream, lastUserIdx)) return true;
+    var storedFinal = findStoredFinalAfterUser(sid, lastUserIdx);
+    if (storedFinal) {
+        var renderCtx = ctx || newDomContext(stream);
+        renderCtx.stream = stream;
+        renderCtx.lastUserEventIndex = Math.max(renderCtx.lastUserEventIndex || -1, lastUserIdx);
+        renderMessageRecord(renderCtx, storedFinal, sid);
+        if (hasVisibleFinalAfterUser(stream, lastUserIdx)) return true;
+    }
+    var delayMs = Math.max(0, Number(opts.delayMs) || 0);
+    if (delayMs) await new Promise(function (resolve) { setTimeout(resolve, delayMs); });
+    if (sid !== currentSessionId) return false;
+    stream = getVisibleChatStream();
+    if (!stream || hasVisibleFinalAfterUser(stream, lastUserIdx)) return true;
+    try {
+        await loadSessionMessages(sid, 'bottom', { full: true });
+        return true;
+    } catch (e) {
+        console.error('final visibility reconcile failed:', e);
+        return false;
+    }
 }
 
 async function startContinueAfterSubagents(sessionId) {
@@ -227,6 +294,9 @@ async function startContinueAfterSubagents(sessionId) {
         } finally {
             finalizeLlmStreamChunks(runCtx);
             finalizeProgressStreamChunks(runCtx);
+            if (runSessionId === currentSessionId && getRunAbortReason(runSessionId, runCtx) !== 'user') {
+                await ensureFinalVisibleAfterRun(runSessionId, runCtx, { delayMs: 120 });
+            }
             if (runSessionId === currentSessionId) renderTodoPlanForCurrentSession();
             if (liveAutoFollow) {
                 scrollProcessBodyToBottom(runCtx, runSessionId);
@@ -297,6 +367,9 @@ async function attachSessionEventStream(sessionId, opts) {
         if (runCtx) {
             finalizeLlmStreamChunks(runCtx);
             finalizeProgressStreamChunks(runCtx);
+        }
+        if (runSessionId === currentSessionId && getRunAbortReason(runSessionId, runCtx) !== 'user') {
+            await ensureFinalVisibleAfterRun(runSessionId, runCtx, { delayMs: 120 });
         }
         if (getSessionRunState(runSessionId) && getSessionRunState(runSessionId).reattached) {
             clearSessionRunState(runSessionId);
@@ -433,34 +506,41 @@ function ensureFollowupQueueHost() {
     panel.id = 'followup-queue-panel';
     panel.className = 'followup-queue-panel';
     panel.setAttribute('aria-live', 'polite');
-    document.body.appendChild(panel);
+    var anchor = messageInput && messageInput.closest ? messageInput.closest('.composer-row') : null;
+    var host = anchor && anchor.parentNode ? anchor.parentNode : null;
+    if (host && anchor) host.insertBefore(panel, anchor);
+    else document.body.appendChild(panel);
     return panel;
 }
 
 function positionFollowupQueuePanel() {
     var panel = document.getElementById('followup-queue-panel');
-    if (!panel || !panel.classList.contains('is-visible')) return;
-    var anchor = messageInput && messageInput.closest ? messageInput.closest('.input-wrapper') : messageInput;
-    if (!anchor) return;
-    var rect = anchor.getBoundingClientRect();
-    var gap = 8;
-    var width = Math.min(Math.max(rect.width, 520), window.innerWidth - 16);
-    var left = Math.max(8, Math.min(rect.left, window.innerWidth - width - 8));
-    var height = panel.offsetHeight || 160;
-    var top = rect.top - height - gap;
-    if (top < 8) top = Math.min(window.innerHeight - height - 8, rect.bottom + gap);
-    panel.style.left = left + 'px';
-    panel.style.top = Math.max(8, top) + 'px';
-    panel.style.width = width + 'px';
+    if (!panel) return;
+    panel.style.left = '';
+    panel.style.top = '';
+    panel.style.width = '';
 }
 
-function renderFollowupQueue() {
+function renderFollowupQueue(sessionId) {
+    var sid = String(sessionId != null ? sessionId : (currentSessionId || ''));
     var panel = ensureFollowupQueueHost();
     if (!panel) return;
-    var q = getFollowupQueue(currentSessionId);
+    if (!sid || sid !== currentSessionId) {
+        if (!currentSessionId) {
+            panel.innerHTML = '';
+            panel.classList.remove('is-visible');
+            panel.removeAttribute('data-session-id');
+        }
+        return;
+    }
+    var q = getFollowupQueue(sid);
     panel.innerHTML = '';
+    panel.dataset.sessionId = sid;
     panel.classList.toggle('is-visible', !!q.length);
-    if (!q.length) return;
+    if (!q.length) {
+        positionFollowupQueuePanel();
+        return;
+    }
     q.forEach(function (item, idx) {
         var row = document.createElement('div');
         row.className = 'followup-queue-row';
@@ -502,6 +582,9 @@ function renderFollowupQueue() {
         panel.appendChild(row);
     });
     positionFollowupQueuePanel();
+    if (typeof scrollChatToBottomIfFollow === 'function') {
+        scrollChatToBottomIfFollow(sid, {});
+    }
 }
 
 function getFollowupStatusText(item) {
@@ -530,7 +613,7 @@ function enqueueCurrentInputAsFollowup() {
     persistInputDraft(sid, '');
     clearInputPathTokens();
     autoResizeTextarea();
-    renderFollowupQueue();
+    renderFollowupQueue(sid);
     setSendButtonState();
     return true;
 }
@@ -552,7 +635,7 @@ function withdrawFollowup(itemId) {
         pendingItem.cancelRequested = true;
         pendingItem.status = 'withdrawing';
         persistFollowupQueue(sid);
-        renderFollowupQueue();
+        renderFollowupQueue(sid);
         if (pendingItem.steerInFlight && !pendingItem.steerId) return;
         cancelSteerMessage(sid, pendingItem).then(function () {
             var item = takeFollowupItem(sid, itemId);
@@ -561,7 +644,7 @@ function withdrawFollowup(itemId) {
             var item = q.find(function (entry) { return String(entry.id) === String(itemId); });
             if (item) item.status = 'sending';
             persistFollowupQueue(sid);
-            renderFollowupQueue();
+            renderFollowupQueue(sid);
             appendLogVisible('追问已被接收，无法撤回: ' + ((e && e.message) || String(e)), 'error-log');
         });
         return;
@@ -578,7 +661,7 @@ function returnFollowupToInput(sid, item) {
     rewriteInputWorkspacePaths();
     persistInputDraft(sid, messageInput.value);
     autoResizeTextarea();
-    renderFollowupQueue();
+    renderFollowupQueue(sid);
     setSendButtonState();
     messageInput.focus();
 }
@@ -626,7 +709,7 @@ function removeConsumedFollowupSteer(sessionId, ev) {
     if (!item) return false;
     setTimeout(function () {
         takeFollowupItem(sid, item.id);
-        renderFollowupQueue();
+        renderFollowupQueue(sid);
     }, 700);
     return true;
 }
@@ -643,7 +726,7 @@ async function sendFollowupNow(itemId) {
     if (runningNow) item.clientId = item.clientId || ('followup-' + item.id + '-' + Date.now());
     item.status = 'sending';
     persistFollowupQueue(sid);
-    renderFollowupQueue();
+    renderFollowupQueue(sid);
     if (runningNow) {
         try {
             item.steerInFlight = true;
@@ -658,30 +741,30 @@ async function sendFollowupNow(itemId) {
             }
             item.status = 'sending';
             persistFollowupQueue(sid);
-            renderFollowupQueue();
+            renderFollowupQueue(sid);
         } catch (e) {
             item.steerInFlight = false;
             if (item.cancelRequested) {
                 item.status = 'sending';
                 item.cancelRequested = false;
                 persistFollowupQueue(sid);
-                renderFollowupQueue();
+                renderFollowupQueue(sid);
                 appendLogVisible('追问已被接收，无法撤回: ' + ((e && e.message) || String(e)), 'error-log');
                 return;
             }
             item.status = '';
             persistFollowupQueue(sid);
-            renderFollowupQueue();
+            renderFollowupQueue(sid);
             appendLogVisible('追问插入失败: ' + ((e && e.message) || String(e)), 'error-log');
         }
         return;
     }
     item.status = 'sent';
     persistFollowupQueue(sid);
-    renderFollowupQueue();
+    renderFollowupQueue(sid);
     setTimeout(function () {
         takeFollowupItem(sid, itemId);
-        renderFollowupQueue();
+        renderFollowupQueue(sid);
     }, 1200);
     void sendMessage({ message: item.text, fromQueue: true });
 }
@@ -692,17 +775,17 @@ function drainFollowupQueue(sessionId) {
     if (isSessionRunning(sid) || (sendPipelineLock && sendPipelineLockSessionId === sid)) return;
     var q = getFollowupQueue(sid);
     if (!q.length) {
-        renderFollowupQueue();
+        renderFollowupQueue(sid);
         return;
     }
     var nextIdx = q.findIndex(function (item) { return !item.status; });
     if (nextIdx < 0) {
-        renderFollowupQueue();
+        renderFollowupQueue(sid);
         return;
     }
     var item = q.splice(nextIdx, 1)[0];
     persistFollowupQueue(sid);
-    renderFollowupQueue();
+    renderFollowupQueue(sid);
     followupQueueDraining[sid] = true;
     Promise.resolve(sendMessage({ message: item.text, fromQueue: true, sessionId: sid }))
         .finally(function () {
@@ -849,6 +932,9 @@ async function sendMessage(options) {
     } finally {
         finalizeLlmStreamChunks(runCtx);
         finalizeProgressStreamChunks(runCtx);
+        if (!switchedAway && runSessionId === currentSessionId && getRunAbortReason(runSessionId, runCtx) !== 'user') {
+            await ensureFinalVisibleAfterRun(runSessionId, runCtx, { delayMs: 120 });
+        }
         if (runSessionId === currentSessionId) renderTodoPlanForCurrentSession();
         if (liveAutoFollow && !switchedAway) {
             scrollProcessBodyToBottom(runCtx, runSessionId);

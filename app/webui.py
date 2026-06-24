@@ -228,16 +228,15 @@ def _runtime_v2_active_run_info(sid: str) -> dict:
     if not sid:
         return {}
     try:
-        from runtime_v2.snapshot_store import SnapshotStore
-
-        snapshot = SnapshotStore(session_manager.repository.sessions_dir).read(sid)
-        active_runs = snapshot.get("active_runs") if isinstance(snapshot, dict) else None
-        if not isinstance(active_runs, list) or not active_runs:
+        active_runs = _runtime_v2_filtered_active_runs(sid)
+        if not active_runs:
             return {}
         first = active_runs[0] if isinstance(active_runs[0], dict) else {}
+        run_id = str(first.get("run_id") or "").strip()
         started_at = first.get("started_at") or first.get("heartbeat_at")
         return {
             "session_id": sid,
+            "run_id": run_id,
             "run_active": True,
             "started_at": started_at,
             "runtime_v2": True,
@@ -261,10 +260,75 @@ def _runtime_v2_snapshot(sid: str) -> dict:
         return {}
 
 
+def _runtime_v2_filtered_active_runs(sid: str) -> list[dict]:
+    snapshot = _runtime_v2_snapshot(sid)
+    active_runs = snapshot.get("active_runs") if isinstance(snapshot, dict) else None
+    if not isinstance(active_runs, list) or not active_runs:
+        return []
+    runs = snapshot.get("runs") if isinstance(snapshot, dict) else None
+    latest_started = ""
+    latest_started_seq = 0
+    if isinstance(runs, dict):
+        for run in runs.values():
+            if not isinstance(run, dict):
+                continue
+            try:
+                seq = int(run.get("started_seq") or 0)
+            except (TypeError, ValueError):
+                seq = 0
+            if seq > latest_started_seq:
+                latest_started_seq = seq
+            started = str(run.get("started_at") or "")
+            if started > latest_started:
+                latest_started = started
+    filtered = []
+    for run in active_runs:
+        if not isinstance(run, dict):
+            continue
+        try:
+            run_seq = int(run.get("started_seq") or 0)
+        except (TypeError, ValueError):
+            run_seq = 0
+        if latest_started_seq and run_seq and run_seq < latest_started_seq:
+            continue
+        if latest_started and str(run.get("started_at") or "") < latest_started:
+            continue
+        filtered.append(run)
+    return filtered
+
+
 def _runtime_v2_context_snapshot(sid: str) -> dict:
     snapshot = _runtime_v2_snapshot(sid)
     context = snapshot.get("context") if isinstance(snapshot, dict) else None
     return context if isinstance(context, dict) else {}
+
+
+def _runtime_v2_active_run_ids(sid: str) -> list[str]:
+    active_runs = _runtime_v2_filtered_active_runs(sid)
+    out: list[str] = []
+    for run in active_runs:
+        if not isinstance(run, dict):
+            continue
+        run_id = str(run.get("run_id") or "").strip()
+        if run_id:
+            out.append(run_id)
+    return out
+
+
+def _interrupt_runtime_v2_active_runs(sid: str, run_id: str = "") -> list[str]:
+    targets = [str(run_id or "").strip()] if str(run_id or "").strip() else _runtime_v2_active_run_ids(sid)
+    targets = [rid for rid in targets if rid]
+    if not targets:
+        return []
+    try:
+        from runtime_v2.mirror import RuntimeMirror
+
+        mirror = RuntimeMirror(session_manager.sessions_dir)
+        for rid in targets:
+            mirror.mirror_run_interrupted(sid, rid, {"reason": "user"})
+    except Exception as e:
+        logger.debug("mirror interrupt failed for %s: %s", sid, e)
+    return targets
 
 
 def _session_run_state_fields(sid: str) -> dict:
@@ -1127,11 +1191,36 @@ async def delete_session(session_id: str):
 
 
 @fastapi_app.post("/sessions/{session_id}/interrupt")
-async def interrupt_session(session_id: str):
+async def interrupt_session(session_id: str, request: Request):
     sid = (session_id or "").strip()
     if not sid:
         return JSONResponse(content={"error": "missing session_id"}, status_code=400)
-    session_manager.request_interrupt(sid)
+    run_id = ""
+    try:
+        ctype = (request.headers.get("content-type") or "").lower()
+        if "application/json" in ctype:
+            data = await request.json()
+            run_id = str((data or {}).get("run_id") or (data or {}).get("client_run_id") or "").strip()
+        elif "form" in ctype:
+            form = await request.form()
+            run_id = str(form.get("run_id") or form.get("client_run_id") or "").strip()
+    except Exception:
+        run_id = ""
+    session_manager.request_interrupt(sid, run_id)
+    session_manager.mark_session_unread_result(sid, status="failed")
+    _active_chat_by_session.pop(sid, None)
+    _active_chat_last_seen.pop(sid, None)
+    interrupted_run_ids = _interrupt_runtime_v2_active_runs(sid, run_id)
+    try:
+        from session_event_bus import publish_session_event
+
+        if interrupted_run_ids:
+            for rid in interrupted_run_ids:
+                await publish_session_event(sid, {"type": "run_interrupted", "run_id": rid, "ephemeral": True})
+        else:
+            await publish_session_event(sid, {"type": "run_interrupted", "run_id": run_id, "ephemeral": True})
+    except Exception as e:
+        logger.debug("publish interrupt failed for %s: %s", sid, e)
     try:
         from agent_subagent import subagent_registry
         from session_lifecycle import cancel_run_tasks
@@ -1210,13 +1299,15 @@ async def chat(
     request: Request,
     message: str = Form(...),
     session_id: str = Form(None),
+    client_run_id: str = Form(None),
 ):
     sid = (session_id or "").strip() or None
+    run_id = str(client_run_id or "").strip()
     if sid:
-        session_manager.clear_interrupt(sid)
+        session_manager.clear_interrupt(sid, run_id)
 
     def should_stop(sid_: str) -> bool:
-        return session_manager.is_interrupt_requested(sid_)
+        return session_manager.is_interrupt_requested(sid_, run_id)
 
     async def event_generator():
         if sid:
@@ -1228,6 +1319,7 @@ async def chat(
                     message,
                     session_id=sid,
                     should_stop=should_stop,
+                    run_id=run_id,
                 ):
                     if sid and await request.is_disconnected():
                         break
@@ -1835,7 +1927,7 @@ def _load_config_wizard_html() -> str:
     # 极简兜底（完整 UI：templates/frist_time_config.html）
     return """<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8"><title>首次配置</title></head>
 <body style="font-family:sans-serif;max-width:480px;margin:2rem auto;padding:1rem;">
-<h1>WAVE Agent · 首次配置</h1>
+<h1>General Agent · 首次配置</h1>
 <p>缺少 <code>templates/frist_time_config.html</code>，使用简易表单。</p>
 <form id="f"><label>OPENAI_API_KEY<input id="k" type="password" style="width:100%;margin:.5rem 0"></label>
 <label>OPENAI_BASE_URL<input id="u" type="text" placeholder="https://api.deepseek.com" style="width:100%;margin:.5rem 0"></label>
@@ -2582,4 +2674,3 @@ async def _config_check(req: _Request, call_next):
     if not _is_configured():
         return _RedirectResponse(url="/setup")
     return await call_next(req)
-

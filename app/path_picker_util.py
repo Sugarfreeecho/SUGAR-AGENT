@@ -545,7 +545,7 @@ def pick_native_path(
 
     hint = (
         "无法打开本机文件选择对话框。"
-        " Windows：请从桌面正常启动 MyAgent；或重装 Python 时勾选 tcl/tk。"
+        " Windows：请从桌面正常启动 General Agent；或重装 Python 时勾选 tcl/tk。"
         f" 详情：{' | '.join(failures)}"
     )
     raise RuntimeError(hint)

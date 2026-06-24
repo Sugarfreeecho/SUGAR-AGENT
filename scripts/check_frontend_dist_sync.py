@@ -60,7 +60,7 @@ def main() -> int:
         _copy_tree_without_noise(DIST, backup_dist)
 
         env = os.environ.copy()
-        env["WAVEMATE_DIST_DIR"] = str(expected_dist)
+        env["GENERAL_AGENT_DIST_DIR"] = str(expected_dist)
         cmd = ["npm.cmd" if os.name == "nt" else "npm", "run", "build"]
         proc = subprocess.run(cmd, cwd=FRONTEND, env=env, text=True)
         if proc.returncode != 0:

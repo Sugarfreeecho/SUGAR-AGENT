@@ -1,8 +1,8 @@
-# MyAgent Runtime V2 Design
+# General Agent Runtime V2 Design
 
 ## 目标
 
-Runtime V2 是一套旁路运行时内核，目标是在不直接拆改现有 MyAgent 主流程的前提下，吸收 Claude Code、OpenClaw 和 Codex 本地会话落盘方式的经验，先建立一套可测试、可镜像、可逐步接管的运行状态与事件系统。
+Runtime V2 是一套旁路运行时内核，目标是在不直接拆改现有 General Agent 主流程的前提下，吸收 Claude Code、OpenClaw 和 Codex 本地会话落盘方式的经验，先建立一套可测试、可镜像、可逐步接管的运行状态与事件系统。
 
 它不替换现有 Agent loop、工具系统、技能系统和前端 UI。第一阶段只新增独立模块和测试，等稳定后再通过镜像写入、只读调试接口、局部替换等方式逐步接入。
 
@@ -192,11 +192,11 @@ app/runtime_v2/
 - 已完成第一版阶段 A 旁路内核。
 - 已覆盖 run finished / failed / interrupted 投影。
 - 已覆盖坏行 repair、并发 append seq 单调性、publisher 收事件、snapshot rebuild。
-- 尚未接入现有 MyAgent 主流程。
+- 尚未接入现有 General Agent 主流程。
 
 ### 阶段 B：镜像写入
 
-现有 MyAgent 继续照旧写 `ui_events.json` 和 SSE，同时 Runtime V2 旁路写 `events.jsonl`。
+现有 General Agent 继续照旧写 `ui_events.json` 和 SSE，同时 Runtime V2 旁路写 `events.jsonl`。
 
 目标：
 

@@ -141,6 +141,86 @@ class AssistantTurn:
     reasoning_content: Optional[str]
 
 
+_THINK_OPEN_TAG = "<think>"
+_THINK_CLOSE_TAG = "</think>"
+_THINK_BLOCK_RE = re.compile(r"(?is)<think>(.*?)</think>")
+
+
+def _merge_reasoning_text(existing: Optional[str], extracted: str) -> Optional[str]:
+    parts: List[str] = []
+    if existing and str(existing).strip():
+        parts.append(str(existing).strip())
+    if extracted and str(extracted).strip():
+        parts.append(str(extracted).strip())
+    return "\n\n".join(parts) if parts else None
+
+
+def split_think_tags_from_content(content: str, reasoning: Optional[str] = None) -> Tuple[str, Optional[str]]:
+    """Move inline <think>...</think> blocks out of assistant content and into reasoning."""
+    text = str(content or "")
+    extracted: List[str] = []
+
+    def repl(match: re.Match[str]) -> str:
+        part = match.group(1).strip()
+        if part:
+            extracted.append(part)
+        return ""
+
+    cleaned = _THINK_BLOCK_RE.sub(repl, text)
+    open_idx = cleaned.lower().find(_THINK_OPEN_TAG)
+    if open_idx >= 0:
+        tail = cleaned[open_idx + len(_THINK_OPEN_TAG):].strip()
+        if tail:
+            extracted.append(tail)
+        cleaned = cleaned[:open_idx]
+    return cleaned.strip(), _merge_reasoning_text(reasoning, "\n\n".join(extracted))
+
+
+def _tag_suffix_prefix_len(text: str, tag: str) -> int:
+    max_n = min(len(text), len(tag) - 1)
+    for n in range(max_n, 0, -1):
+        if tag.startswith(text[-n:]):
+            return n
+    return 0
+
+
+class ThinkTagStreamSplitter:
+    """Incrementally split content deltas that contain inline <think> tags."""
+
+    def __init__(self) -> None:
+        self._mode = "content"
+        self._buf = ""
+
+    def feed(self, piece: str) -> List[Tuple[str, str]]:
+        self._buf += str(piece or "")
+        out: List[Tuple[str, str]] = []
+        while self._buf:
+            tag = _THINK_OPEN_TAG if self._mode == "content" else _THINK_CLOSE_TAG
+            lower = self._buf.lower()
+            idx = lower.find(tag)
+            if idx >= 0:
+                before = self._buf[:idx]
+                if before:
+                    out.append((self._mode, before))
+                self._buf = self._buf[idx + len(tag):]
+                self._mode = "reasoning" if self._mode == "content" else "content"
+                continue
+            keep = _tag_suffix_prefix_len(lower, tag)
+            emit_text = self._buf[: len(self._buf) - keep] if keep else self._buf
+            self._buf = self._buf[len(emit_text):]
+            if emit_text:
+                out.append((self._mode, emit_text))
+            break
+        return out
+
+    def finish(self) -> List[Tuple[str, str]]:
+        if not self._buf:
+            return []
+        out = [(self._mode, self._buf)]
+        self._buf = ""
+        return out
+
+
 def normalize_content_text(content: Any) -> str:
     """将 API 返回的 content（str / dict / 多模态 list）统一成纯文本。"""
     if content is None:
@@ -400,6 +480,7 @@ def parse_assistant_message(msg: Any) -> AssistantTurn:
     """解析 chat.completions 返回的 assistant message（content、tool_calls、reasoning_content）。"""
     content = _normalize_content_text(getattr(msg, "content", None))
     reasoning = _extract_reasoning_text(msg)
+    content, reasoning = split_think_tags_from_content(content, reasoning)
 
     raw_calls = getattr(msg, "tool_calls", None)
     tool_calls: Optional[List[Dict[str, Any]]] = None
@@ -668,6 +749,7 @@ def run_chat_completion_stream_worker(
             raise RuntimeError("stream 创建失败")
         reasoning_buf = ""
         content_buf = ""
+        think_splitter = ThinkTagStreamSplitter()
         tool_acc: Dict[int, Dict[str, str]] = {}
         last_usage: Optional[Dict[str, int]] = None
         actual_model = ""
@@ -699,16 +781,28 @@ def run_chat_completion_stream_worker(
             ct = getattr(delta, "content", None)
             if ct:
                 piece = ct if isinstance(ct, str) else str(ct)
-                content_buf += piece
-                sync_q.put(("content", piece))
+                for part, text in think_splitter.feed(piece):
+                    if part == "reasoning":
+                        reasoning_buf += text
+                        sync_q.put(("reasoning", text))
+                    else:
+                        content_buf += text
+                        sync_q.put(("content", text))
             delta_tool_calls = getattr(delta, "tool_calls", None)
             for payload in _tool_call_delta_payloads(delta_tool_calls):
                 sync_q.put(("tool_call_delta", payload))
             _accumulate_tool_call_delta(tool_acc, delta_tool_calls)
+        for part, text in think_splitter.finish():
+            if part == "reasoning":
+                reasoning_buf += text
+                sync_q.put(("reasoning", text))
+            else:
+                content_buf += text
+                sync_q.put(("content", text))
         tool_calls_list = _tool_acc_to_parsed_list(tool_acc)
-        reasoning_final = reasoning_buf.strip() or None
+        content_final, reasoning_final = split_think_tags_from_content(content_buf or "", reasoning_buf.strip() or None)
         turn = AssistantTurn(
-            content=content_buf or "",
+            content=content_final,
             tool_calls=tool_calls_list,
             reasoning_content=reasoning_final,
         )

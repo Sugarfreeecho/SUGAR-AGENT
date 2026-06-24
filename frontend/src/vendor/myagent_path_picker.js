@@ -1,5 +1,5 @@
 /**
- * MyAgent local path picker.
+ * General Agent local path picker.
  */
 (function (global) {
   'use strict';

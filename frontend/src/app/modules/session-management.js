@@ -14,9 +14,15 @@ function setSendButtonState() {
     }
 }
 
-async function requestInterrupt(sessionId) {
+async function requestInterrupt(sessionId, runId) {
     if (!sessionId) return;
-    try { await fetch('/sessions/' + sessionId + '/interrupt', { method: 'POST' }); }
+    try {
+        await fetch('/sessions/' + sessionId + '/interrupt', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ run_id: runId || '' }),
+        });
+    }
     catch (e) { /* ignore */ }
 }
 
@@ -24,12 +30,14 @@ function pauseCurrentRun() {
     if (!currentSessionId) return;
     const run = getSessionRunState(currentSessionId);
     const sid = currentSessionId;
+    const activeInfo = sessionStore.getActiveRunInfo(sid) || {};
+    const runId = run && run.runId ? run.runId : (activeInfo.run_id || activeInfo.runId || '');
     suppressSessionServerStreamActive(sid);
     if (!run) {
         setSendButtonState();
         syncSessionListIndicatorClasses();
         renderSessionListIfChanged(false);
-        void requestInterrupt(sid);
+        void requestInterrupt(sid, runId);
         setTimeout(function () { reconcileRunStateFromServer({ silent: true, respectStopSuppress: true }); }, 3000);
         return;
     }
@@ -42,7 +50,7 @@ function pauseCurrentRun() {
     renderSessionListIfChanged(false);
     appendLog(ctx, '已请求停止当前任务', 'status', sid);
     sealProcessGroup(ctx);
-    void requestInterrupt(sid);
+    void requestInterrupt(sid, runId);
     setTimeout(function () { reconcileRunStateFromServer({ silent: true, respectStopSuppress: true }); }, 3000);
 }
 
@@ -792,7 +800,7 @@ async function switchSession(sessionId) {
     setCurrentSessionState(sessionId);
     localStorage.setItem('lastSessionId', sessionId);
     restoreInputDraft(sessionId);
-    if (typeof renderFollowupQueue === 'function') renderFollowupQueue();
+    if (typeof renderFollowupQueue === 'function') renderFollowupQueue(sessionId);
     if (typeof refreshModelProfileSelector === 'function') refreshModelProfileSelector(sessionId);
     syncSessionListIndicatorClasses();
     setSendButtonState();
@@ -867,7 +875,7 @@ async function createNewSessionInner() {
         setCurrentSessionState(data.session_id);
         localStorage.setItem('lastSessionId', currentSessionId);
         restoreInputDraft(currentSessionId);
-        if (typeof renderFollowupQueue === 'function') renderFollowupQueue();
+        if (typeof renderFollowupQueue === 'function') renderFollowupQueue(currentSessionId);
         if (typeof refreshModelProfileSelector === 'function') refreshModelProfileSelector(currentSessionId);
         if (!getVisibleChatStream()) ensureVisibleChatStreamSlot();
         setWelcome();

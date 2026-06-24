@@ -15,8 +15,7 @@ function applySessionSnapshot(snapshot) {
     if (Array.isArray(snapshot.active_runs)) {
         sessionStore.applyActiveRuns(snapshot.active_runs);
         const active = Object.create(null);
-        snapshot.active_runs.forEach(function (run) {
-            const sid = typeof run === 'string' ? run : (run && run.session_id);
+        sessionStore.activeRunInfoBySession.forEach(function (_run, sid) {
             if (sid) active[String(sid)] = true;
         });
         applyServerStreamActiveMap(active);

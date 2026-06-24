@@ -1,5 +1,5 @@
 // ═══════════════════════════════════════════════════════════
-// MyAgent · 智能会话 — 完整逻辑
+// General Agent · 智能会话 — 完整逻辑
 // ═══════════════════════════════════════════════════════════
 
 const chatContainer = document.getElementById('chat-container');
@@ -153,4 +153,3 @@ function initUiSettingsControls() {
     }
 }
 initUiSettingsControls();
-

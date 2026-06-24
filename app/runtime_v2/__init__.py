@@ -1,6 +1,6 @@
 """Runtime V2 sidecar components.
 
-This package is intentionally not wired into the existing MyAgent request path
+This package is intentionally not wired into the existing General Agent request path
 yet. It provides a tested event-log and run-state core that can be mirrored
 from the old runtime before taking over selected endpoints.
 """

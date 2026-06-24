@@ -24,12 +24,17 @@ function applySessionEvent(event, opts) {
     const eventIndex = opts.eventIndex;
     const source = opts.source || 'event';
     const type = String(event.type || '');
+    const runId = String(event.run_id || event.runId || '').trim();
     let messageRecord = null;
     if (sessionId) {
         messageRecord = applyMessageEvent(sessionId, event, eventIndex, source);
         markUiEventStoreApplied(event);
     }
     if (type === 'run_started' || type === 'run_attached') {
+        if (runId && sessionStore.isTerminalRun(sessionId, runId)) {
+            markSessionRunInactive(sessionId);
+            return { handled: true, runStateChanged: true, messageRecord: messageRecord };
+        }
         const suppressed = typeof isSessionStreamStopSuppressed === 'function'
             && isSessionStreamStopSuppressed(sessionId);
         setSessionServerStreamActive(sessionId, !suppressed);
@@ -43,7 +48,8 @@ function applySessionEvent(event, opts) {
         return { handled: true, runStateChanged: true, messageRecord: messageRecord };
     }
     if (type === 'run_finished' || type === 'run_interrupted' || type === 'run_failed') {
-        if (typeof clearSessionStreamStopSuppress === 'function') clearSessionStreamStopSuppress(sessionId);
+        if (runId) sessionStore.markTerminalRun(sessionId, runId);
+        if (type === 'run_finished' && typeof clearSessionStreamStopSuppress === 'function') clearSessionStreamStopSuppress(sessionId);
         markSessionRunInactive(sessionId);
         const sess = sessionStore.get(sessionId);
         if (sess) {

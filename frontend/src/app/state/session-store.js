@@ -4,6 +4,7 @@ const sessionStore = {
     sessionOrder: [],
     currentSessionId: null,
     runsBySession: new Map(),
+    terminalRunIdsBySession: new Map(),
     activeRunInfoBySession: new Map(),
     archivedCount: 0,
     archivedLoaded: false,
@@ -66,6 +67,7 @@ const sessionStore = {
         this.sessionsById.delete(sid);
         delete this.streamActiveById[sid];
         this.runsBySession.delete(sid);
+        this.terminalRunIdsBySession.delete(sid);
         this.activeRunInfoBySession.delete(sid);
         this.unreadComplete.delete(sid);
         this.sessionOrder = this.sessionOrder.filter(function (id) { return id !== sid; });
@@ -165,6 +167,8 @@ const sessionStore = {
         this.streamActiveById = next;
         this.sessionsById.forEach(function (sess, sid) {
             sess.stream_active = !!next[sid];
+            sess.run_active = !!next[sid];
+            if (!next[sid]) sess.run_started_at = null;
         });
     },
 
@@ -183,15 +187,37 @@ const sessionStore = {
         return this.runsBySession.has(String(sessionId || ''));
     },
 
+    markTerminalRun(sessionId, runId) {
+        const sid = String(sessionId || '');
+        const rid = String(runId || '').trim();
+        if (!sid || !rid) return;
+        let bucket = this.terminalRunIdsBySession.get(sid);
+        if (!bucket) {
+            bucket = new Set();
+            this.terminalRunIdsBySession.set(sid, bucket);
+        }
+        bucket.add(rid);
+    },
+
+    isTerminalRun(sessionId, runId) {
+        const sid = String(sessionId || '');
+        const rid = String(runId || '').trim();
+        if (!sid || !rid) return false;
+        const bucket = this.terminalRunIdsBySession.get(sid);
+        return !!(bucket && bucket.has(rid));
+    },
+
     applyActiveRuns(activeRuns) {
         const next = new Map();
         const list = Array.isArray(activeRuns) ? activeRuns : [];
         list.forEach(function (run) {
             const sid = typeof run === 'string' ? run : (run && run.session_id);
             if (!sid) return;
+            const runId = typeof run === 'string' ? '' : String((run && (run.run_id || run.runId)) || '').trim();
+            if (runId && this.isTerminalRun(sid, runId)) return;
             if (typeof isSessionStreamStopSuppressed === 'function' && isSessionStreamStopSuppressed(sid)) return;
             next.set(String(sid), typeof run === 'string' ? { session_id: String(sid) } : Object.assign({}, run));
-        });
+        }, this);
         this.activeRunInfoBySession = next;
     },
 
@@ -267,7 +293,6 @@ function applyServerStreamActiveMap(activeMap) {
     const m = Object.create(null);
     Object.keys(src).forEach(function (sid) {
         var active = !!src[sid];
-        if (!active) delete sessionStreamStopSuppressUntil[sid];
         if (active && isSessionStreamStopSuppressed(sid)) active = false;
         m[sid] = active;
     });

@@ -4313,28 +4313,44 @@ class SessionManager:
         if changed:
             self._save_index()
 
-    def request_interrupt(self, session_id: str):
+    def request_interrupt(self, session_id: str, run_id: str = ""):
         """请求中断指定会话当前执行。"""
-        with self._session_metadata_lock(session_id):
-            metadata = self._load_metadata_unlocked(session_id)
-            if not isinstance(metadata, dict):
-                metadata = {}
-            metadata["interrupt_requested"] = True
-            self._save_metadata_unlocked(session_id, metadata)
-
-    def clear_interrupt(self, session_id: str):
-        """清除会话中断标记（新任务启动前调用）。始终写回 False，避免残留 true。"""
         sid = (session_id or "").strip()
+        rid = str(run_id or "").strip()
         if not sid:
             return
         with self._session_metadata_lock(sid):
             metadata = self._load_metadata_unlocked(sid)
-            if not metadata:
-                return
-            metadata["interrupt_requested"] = False
+            if not isinstance(metadata, dict):
+                metadata = {}
+            metadata["interrupt_requested"] = True
+            if rid:
+                metadata["interrupt_run_id"] = rid
+            elif metadata.get("active_run_id"):
+                metadata["interrupt_run_id"] = str(metadata.get("active_run_id") or "")
             self._save_metadata_unlocked(sid, metadata)
 
-    def is_interrupt_requested(self, session_id: str) -> bool:
+    def clear_interrupt(self, session_id: str, run_id: str = ""):
+        """清除会话中断标记（新任务启动前调用）。始终写回 False，避免残留 true。"""
+        sid = (session_id or "").strip()
+        if not sid:
+            return
+        rid = str(run_id or "").strip()
+        with self._session_metadata_lock(sid):
+            metadata = self._load_metadata_unlocked(sid)
+            if not metadata:
+                return
+            if rid:
+                metadata["active_run_id"] = rid
+                interrupt_run_id = str(metadata.get("interrupt_run_id") or "").strip()
+                if bool(metadata.get("interrupt_requested")) and interrupt_run_id == rid:
+                    self._save_metadata_unlocked(sid, metadata)
+                    return
+            metadata["interrupt_requested"] = False
+            metadata.pop("interrupt_run_id", None)
+            self._save_metadata_unlocked(sid, metadata)
+
+    def is_interrupt_requested(self, session_id: str, run_id: str = "") -> bool:
         """判断会话是否被请求中断。"""
         sid = (session_id or "").strip()
         if not sid:
@@ -4347,7 +4363,13 @@ class SessionManager:
         except Exception:
             pass
         metadata = self._load_metadata(session_id)
-        return bool(metadata.get("interrupt_requested", False))
+        if not bool(metadata.get("interrupt_requested", False)):
+            return False
+        rid = str(run_id or "").strip()
+        if not rid:
+            return True
+        interrupt_run_id = str(metadata.get("interrupt_run_id") or "").strip()
+        return not interrupt_run_id or interrupt_run_id == rid
 
 
 session_manager = SessionManager(SESSIONS_DIR, INDEX_FILE)
