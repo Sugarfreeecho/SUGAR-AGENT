@@ -478,6 +478,79 @@ def _persist_state(state: State):
         logger.warning(f"实时持久化失败: {e}")
 
 
+def _assistant_tool_call_ids(msg: Any) -> List[str]:
+    if not isinstance(msg, AssistantMessage):
+        return []
+    tool_calls = getattr(msg, "tool_calls", None)
+    if not isinstance(tool_calls, list) or not tool_calls:
+        return []
+    ids: List[str] = []
+    for idx, tc in enumerate(tool_calls):
+        if isinstance(tc, dict):
+            raw = tc.get("id") or tc.get("tool_call_id") or ""
+        else:
+            raw = getattr(tc, "id", "") or getattr(tc, "tool_call_id", "") or ""
+        tid = str(raw or "").strip()
+        ids.append(tid or f"__missing_tool_call_id_{idx}")
+    return ids
+
+
+def _first_unclosed_tool_call_index(messages: List[Any]) -> Optional[int]:
+    i = 0
+    n = len(messages)
+    while i < n:
+        ids = _assistant_tool_call_ids(messages[i])
+        if not ids:
+            i += 1
+            continue
+        required = set(ids)
+        seen: List[str] = []
+        j = i + 1
+        while j < n and isinstance(messages[j], ToolMessage):
+            seen.append(str(getattr(messages[j], "tool_call_id", "") or "").strip())
+            j += 1
+        if len(seen) < len(ids) or not required.issubset(set(seen)):
+            return i
+        i = j
+    return None
+
+
+def _truncate_unclosed_tool_call_tail(messages: List[Any]) -> tuple[List[Any], Optional[int]]:
+    idx = _first_unclosed_tool_call_index(list(messages or []))
+    if idx is None:
+        return list(messages or []), None
+    return list(messages or [])[:idx], idx
+
+
+def _sanitize_loaded_histories_for_new_run(
+    session_id: str,
+    work_messages: List[Any],
+    llm_history: List[Any],
+    key_context: str,
+    reason: str,
+) -> tuple[List[Any], List[Any]]:
+    clean_llm, llm_cut = _truncate_unclosed_tool_call_tail(llm_history)
+    clean_work, work_cut = _truncate_unclosed_tool_call_tail(work_messages)
+    if llm_cut is None and work_cut is None:
+        return work_messages, llm_history
+    state: State = {
+        "session_id": session_id,
+        "work_messages": clean_work,
+        "llm_history": clean_llm,
+        "key_context": key_context or "",
+        "dialogue": derive_dialogue_from_assistant_history(clean_llm),
+    }
+    logger.warning(
+        "Sanitized unclosed tool_call tail before run: session=%s reason=%s llm_cut=%s work_cut=%s",
+        session_id,
+        reason,
+        llm_cut,
+        work_cut,
+    )
+    _persist_state_with_model_replace(state, clean_llm, reason)
+    return clean_work, clean_llm
+
+
 def _load_runtime_v2_model_history_dicts(session_id: str) -> List[Dict[str, Any]]:
     try:
         from runtime_v2 import RuntimeModelProjection
@@ -2991,6 +3064,13 @@ async def astream_events(
 
     prev_work_messages = [_dict_to_message(m) for m in work_messages_dicts]
     prev_llm_history = [_dict_to_message(m) for m in llm_history_dicts]
+    prev_work_messages, prev_llm_history = _sanitize_loaded_histories_for_new_run(
+        session_id,
+        prev_work_messages,
+        prev_llm_history,
+        key_context,
+        "sanitize_unclosed_tool_calls_before_chat",
+    )
 
     user_message = UserMessage(content=user_input)
 
@@ -3156,6 +3236,13 @@ async def astream_events_continuation(
 
     prev_work_messages = [_dict_to_message(m) for m in work_messages_dicts]
     prev_llm_history = [_dict_to_message(m) for m in llm_history_dicts]
+    prev_work_messages, prev_llm_history = _sanitize_loaded_histories_for_new_run(
+        session_id,
+        prev_work_messages,
+        prev_llm_history,
+        key_context,
+        "sanitize_unclosed_tool_calls_before_continuation",
+    )
 
     user_input = ""
     for msg in reversed(prev_llm_history):
