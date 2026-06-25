@@ -294,7 +294,9 @@ GET /runtime-v2/events?session_id=...&after_seq=...
 
 - 已提供 `/runtime-v2/events?session_id=...&after_seq=...`，可按 `after_seq` 只读拉取 V2 events。
 - 前端主 SSE 仍消费 `/chat` / `/sessions/{id}/stream`，但流结束、自然断开、重连后会按旧 UI `eventIndex` 从 `/sessions/{id}/messages?after_index=...` 拉取 Runtime V2 UI 投影增量补漏。
-- 完整接管仍需要把主实时流切到 Runtime V2 原生 `seq` 事件，而不是只在收尾阶段做投影补漏。
+- `/runtime-v2/sessions/{id}/stream?after_seq=...` 已提供 Runtime V2 原生 `seq` 事件 SSE。
+- `/sessions/{id}/stream?after_index=...` 在 V2 模式下已切到 RuntimeUiProjection 增量流，用于前端 reattach 恢复。
+- 完整接管仍需要把 `/chat` 主实时响应本身切到 Runtime V2 原生 `seq` 事件，而不是只在 reattach/收尾阶段做投影补漏。
 
 ### 阶段 F：接管消息历史
 
@@ -380,9 +382,9 @@ RUNTIME_V2_ENABLED=0  # 未设置 RUNTIME_VERSION 时等价于 RUNTIME_VERSION=1
 | 消息计数 `/messages/count` | 读 V1 `ui_event_count`/ui_events | 读 RuntimeUiProjection index | 已接入 |
 | 模型历史 | 读 `llm_history.json`，镜像 V2 | 读 `model_messages` 投影；旧会话 partial projection 会按需用 legacy 同步 | 已接入，需覆盖更多双向测试 |
 | 运行态 | legacy active run + chat connection | V2 `active_runs` snapshot + 本地活动证据过滤 | 已接入 |
-| SSE | 现有 `/stream` / `/chat` 事件 | `/runtime-v2/events?after_seq=...` + UI 投影增量补漏 | 部分接管，主实时流尚未切 raw V2 seq |
+| SSE | 现有 `/stream` / `/chat` 事件 | `/runtime-v2/events?after_seq=...`、`/runtime-v2/sessions/{id}/stream`、V2 模式 `/sessions/{id}/stream` 投影增量流 | reattach 已接管，主 `/chat` 实时流尚未切 raw V2 seq |
 | 历史操作：删除/改写/截断 | 改写 V1 文件，追加 V2 observation/history event | 应追加 V2 原生事件并镜像 V1 | 部分完成，需补 V2-first 写路径 |
-| 分支 | V1 创建新会话文件，镜像 V2 | 应 V2 创建事件流并镜像 V1 | 部分完成，需补 V2-first 写路径 |
+| 分支 | V1 创建新会话文件，镜像 V2 | V2 seed 分支事件流，并用源 Runtime seq 记录 branch point | 部分完成，仍需进一步减少 V1-first 外壳 |
 | Context/Todo/Token | 读旧文件/即时计算，镜像 V2 | 读 snapshot，失败回退旧路径 | 部分完成 |
 | Subagent | 读 V1 subagent 文件 | 读 V2 `subagents/` task/output/pending | 部分完成，需补端到端审计 |
 | 调试接口 | 不影响 V1 | `/runtime-v2/state`、`events`、`runs` | 已实现 |
