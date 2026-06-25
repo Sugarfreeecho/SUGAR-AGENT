@@ -1089,6 +1089,60 @@ async def runtime_v2_events(
     })
 
 
+@fastapi_app.get("/runtime-v2/sessions/{session_id}/stream")
+async def runtime_v2_session_stream(
+    session_id: str,
+    request: Request,
+    after_seq: int = Query(0, ge=0),
+    poll_ms: int = Query(250, ge=50, le=5000),
+):
+    """Runtime V2-native SSE stream backed by events.jsonl seq reads."""
+    sid = (session_id or "").strip()
+    if not sid:
+        return JSONResponse(content={"error": "missing session_id"}, status_code=400)
+
+    async def event_generator():
+        cursor = int(after_seq or 0)
+        idle_ticks = 0
+        poll_seconds = max(0.05, min(float(poll_ms or 250) / 1000.0, 5.0))
+        while True:
+            if await request.is_disconnected():
+                break
+            try:
+                events = _runtime_v2_event_dicts(sid, after_seq=cursor, limit=100)
+            except Exception as exc:
+                payload = {
+                    "type": "runtime_v2_stream_error",
+                    "session_id": sid,
+                    "error": str(exc),
+                }
+                yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+                break
+            if events:
+                idle_ticks = 0
+                for event in events:
+                    try:
+                        cursor = max(cursor, int(event.get("seq") or cursor))
+                    except (TypeError, ValueError):
+                        pass
+                    yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+                    await asyncio.sleep(0)
+                continue
+            if not _session_run_state_fields(sid).get("run_active"):
+                yield "data: [DONE]\n\n"
+                break
+            idle_ticks += 1
+            if idle_ticks % max(1, int(15000 / max(50, int(poll_ms or 250)))) == 0:
+                yield f": runtime-v2 keepalive {cursor}\n\n"
+            await asyncio.sleep(poll_seconds)
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers=_SSE_HEADERS,
+    )
+
+
 @fastapi_app.get("/runtime-v2/runs")
 async def runtime_v2_runs(include_archived: bool = Query(True)):
     """Read-only Runtime V2 active run view."""
