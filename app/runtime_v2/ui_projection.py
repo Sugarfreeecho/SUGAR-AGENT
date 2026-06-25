@@ -144,6 +144,15 @@ class RuntimeUiProjection:
                 except (TypeError, ValueError):
                     pass
                 continue
+            if event.type == "visible_range_changed":
+                payload = dict(event.payload or {})
+                if payload.get("to_ui_index") is not None:
+                    try:
+                        count = max(0, int(payload.get("to_ui_index")))
+                        latest_truncate_seq = int(event.seq)
+                    except (TypeError, ValueError):
+                        pass
+                    continue
             if self.event_to_ui(event) is not None:
                 count += 1
         return count, latest_truncate_seq
@@ -185,6 +194,16 @@ class RuntimeUiProjection:
                 except (TypeError, ValueError):
                     pass
                 continue
+            if event.type == "visible_range_changed":
+                payload = dict(event.payload or {})
+                if payload.get("to_ui_index") is not None:
+                    try:
+                        total = max(0, int(payload.get("to_ui_index")))
+                        user_indices = [idx for idx in user_indices if idx < total]
+                        latest_truncate_seq = int(event.seq)
+                    except (TypeError, ValueError):
+                        pass
+                    continue
             ui = self.event_to_ui(event)
             if ui is None:
                 continue
@@ -308,7 +327,14 @@ class RuntimeUiProjection:
             )
             if not runtime_events:
                 return None
-            if any(event.type == "legacy_truncate_observed" for event in runtime_events):
+            if any(
+                event.type == "legacy_truncate_observed"
+                or (
+                    event.type == "visible_range_changed"
+                    and dict(event.payload or {}).get("to_ui_index") is not None
+                )
+                for event in runtime_events
+            ):
                 return None
             ui_events: List[dict] = []
             for event in runtime_events:
@@ -383,6 +409,14 @@ class RuntimeUiProjection:
                 except (TypeError, ValueError):
                     pass
                 continue
+            if event.type == "visible_range_changed":
+                payload = dict(event.payload or {})
+                if payload.get("to_ui_index") is not None:
+                    try:
+                        out = out[:max(0, int(payload.get("to_ui_index")))]
+                    except (TypeError, ValueError):
+                        pass
+                    continue
             ui = cls.event_to_ui(event)
             if ui is not None:
                 out.append(ui)

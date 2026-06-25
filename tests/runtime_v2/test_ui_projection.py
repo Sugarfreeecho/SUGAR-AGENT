@@ -94,6 +94,28 @@ class RuntimeUiProjectionTests(unittest.TestCase):
 
             self.assertEqual([ev["content"] for ev in events], ["u1", "a1"])
 
+    def test_native_visible_range_ui_index_limits_projected_ui_events(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            mirror = RuntimeMirror(tmp)
+            mirror.mirror_ui_event("s1", {"type": "user", "content": "u1"})
+            mirror.mirror_ui_event("s1", {"type": "final", "content": "a1"})
+            mirror.mirror_ui_event("s1", {"type": "user", "content": "u2"})
+            mirror.mirror_ui_event("s1", {"type": "final", "content": "a2"})
+            mirror.append("s1", "visible_range_changed", {
+                "to_ui_index": 2,
+                "reason": "test",
+            })
+            projection = RuntimeUiProjection(tmp)
+
+            events = projection.read_ui_events("s1")
+            count, latest_seq = projection.count_ui_events_light("s1")
+            page = projection.read_ui_page("s1", turns=2)
+
+            self.assertEqual([ev["content"] for ev in events], ["u1", "a1"])
+            self.assertEqual(count, 2)
+            self.assertGreater(latest_seq, 0)
+            self.assertEqual([ev["content"] for ev in page["events"]], ["u1", "a1"])
+
     def test_backfills_when_runtime_log_has_only_history_ops(self):
         with tempfile.TemporaryDirectory() as tmp:
             mirror = RuntimeMirror(tmp)

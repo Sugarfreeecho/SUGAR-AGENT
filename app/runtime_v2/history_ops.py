@@ -69,6 +69,13 @@ class RuntimeHistoryOps:
             payload["to_seq"] = int(to_seq)
         return self._append_and_snapshot(session_id, "visible_range_changed", payload)
 
+    def truncate_ui_history(self, session_id: str, before_index: int, reason: str = "") -> RuntimeEvent:
+        """Record a UI-index truncation without rewriting the Runtime V2 log."""
+        return self._append_and_snapshot(session_id, "visible_range_changed", {
+            "to_ui_index": max(0, int(before_index)),
+            "reason": reason or "ui_truncate",
+        })
+
     def change_model_window(self, session_id: str, *, from_seq: Optional[int] = None, to_seq: Optional[int] = None, reason: str = "") -> RuntimeEvent:
         payload = {"reason": reason}
         if from_seq is not None:

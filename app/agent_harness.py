@@ -3274,6 +3274,13 @@ class SessionManager:
                     before_index,
                     event_count=n,
                 )
+            if self._runtime_v2_primary():
+                self._observe_runtime_v2_history(
+                    "truncate_ui_history",
+                    session_id,
+                    before_index=before_index,
+                    reason="runtime_v2_truncate",
+                )
             self._save_ui_events(session_id, new_events)
             new_llm, new_work, consumed_cprefix = self._rebuild_llm_work_from_ui(
                 session_id,
