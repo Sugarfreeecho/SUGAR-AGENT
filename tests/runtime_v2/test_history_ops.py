@@ -2,6 +2,7 @@ import tempfile
 import unittest
 
 from app.runtime_v2 import RuntimeHistoryOps, RuntimeMirror, RuntimeUiProjection
+from app.runtime_v2.blob_store import BlobStore
 
 
 class RuntimeHistoryOpsTests(unittest.TestCase):
@@ -152,6 +153,22 @@ class RuntimeHistoryOpsTests(unittest.TestCase):
             branch_events = RuntimeUiProjection(tmp).read_ui_events("branch")
 
             self.assertEqual([ev["content"] for ev in branch_events], ["u1", "a1"])
+
+    def test_branch_copies_blob_refs_for_seeded_tool_results(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ref = BlobStore(f"{tmp}/source").put_text("large result")
+            mirror = RuntimeMirror(tmp)
+            mirror.append("source", "tool_finished", {
+                "type": "tool_call",
+                "tool": "read_file",
+                "result_ref": ref,
+            })
+
+            RuntimeHistoryOps(tmp).create_branch("branch", source_session_id="source", branch_from_seq=1)
+
+            branch_events = RuntimeUiProjection(tmp).read_ui_events("branch")
+
+            self.assertEqual(branch_events[0]["result"], "large result")
 
 
 if __name__ == "__main__":

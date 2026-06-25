@@ -2,6 +2,7 @@ import tempfile
 import unittest
 
 from app.runtime_v2 import RuntimeMirror, RuntimeUiProjection
+from app.runtime_v2.blob_store import BlobStore
 
 
 class RuntimeUiProjectionTests(unittest.TestCase):
@@ -193,6 +194,20 @@ class RuntimeUiProjectionTests(unittest.TestCase):
 
             self.assertEqual([ev["content"] for ev in first], ["first"])
             self.assertEqual([ev["content"] for ev in second], ["first", "second"])
+
+    def test_hydrates_blob_refs_for_large_tool_results(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ref = BlobStore(f"{tmp}/s1").put_text("large result")
+            mirror = RuntimeMirror(tmp)
+            mirror.append("s1", "tool_finished", {
+                "type": "tool_call",
+                "tool": "read_file",
+                "result_ref": ref,
+            })
+
+            events = RuntimeUiProjection(tmp).read_ui_events("s1")
+
+            self.assertEqual(events[0]["result"], "large result")
 
 
 if __name__ == "__main__":

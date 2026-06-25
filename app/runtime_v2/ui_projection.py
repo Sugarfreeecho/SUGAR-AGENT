@@ -8,6 +8,7 @@ from typing import Any, Callable, Dict, Iterable, List, Optional
 
 from .event_log import SessionEventLog
 from .event_schema import RuntimeEvent
+from .blob_store import BlobStore
 from .mirror import RuntimeMirror
 from .config import runtime_v2_enabled
 
@@ -277,7 +278,7 @@ class RuntimeUiProjection:
             cached = self._events_cache.get(key)
             if cached and cached[0] == signature:
                 return [dict(event) for event in cached[1]]
-        projected = self.events_to_ui(self.event_log.read_all(session_id))
+        projected = self._events_to_ui(session_id, self.event_log.read_all(session_id))
         with self._cache_lock:
             self._events_cache[key] = (signature, projected)
             if key in self._events_cache_order:
@@ -371,7 +372,7 @@ class RuntimeUiProjection:
             for event in runtime_events:
                 if latest_truncate_seq and event.seq <= latest_truncate_seq:
                     continue
-                ui = self.event_to_ui(event)
+                ui = self._event_to_ui(session_id, event)
                 if ui is not None:
                     ui_events.append(ui)
             if not ui_events:
@@ -452,6 +453,58 @@ class RuntimeUiProjection:
             if ui is not None:
                 out.append(ui)
         return out
+
+    def _events_to_ui(self, session_id: str, events: Iterable[RuntimeEvent]) -> List[dict]:
+        out: List[dict] = []
+        for event in events:
+            if event.type == "legacy_truncate_observed":
+                payload = dict(event.payload or {})
+                new_count = payload.get("new_event_count")
+                if new_count is None:
+                    new_count = payload.get("before_index")
+                try:
+                    out = out[:max(0, int(new_count))]
+                except (TypeError, ValueError):
+                    pass
+                continue
+            if event.type == "visible_range_changed":
+                payload = dict(event.payload or {})
+                if payload.get("to_ui_index") is not None:
+                    try:
+                        out = out[:max(0, int(payload.get("to_ui_index")))]
+                    except (TypeError, ValueError):
+                        pass
+                    continue
+            ui = self._event_to_ui(session_id, event)
+            if ui is not None:
+                out.append(ui)
+        return out
+
+    def _event_to_ui(self, session_id: str, event: RuntimeEvent) -> Optional[dict]:
+        ui = self.event_to_ui(event)
+        if ui is None:
+            return None
+        return self._hydrate_blob_refs(session_id, ui)
+
+    def _hydrate_blob_refs(self, session_id: str, event: dict) -> dict:
+        hydrated = dict(event)
+        store = None
+        for key, value in list(hydrated.items()):
+            if not key.endswith("_ref") or not isinstance(value, dict):
+                continue
+            target_key = key[:-4]
+            if target_key in hydrated:
+                continue
+            blob_ref = value.get("blob_ref")
+            if not blob_ref:
+                continue
+            try:
+                if store is None:
+                    store = BlobStore(self.event_log.session_dir(session_id))
+                hydrated[target_key] = store.read_text(str(blob_ref))
+            except Exception:
+                continue
+        return hydrated
 
     @staticmethod
     def event_to_ui(event: RuntimeEvent) -> Optional[dict]:

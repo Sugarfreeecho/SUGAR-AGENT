@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 from typing import Optional
 
@@ -211,7 +212,7 @@ class RuntimeHistoryOps:
             copied = self._append_and_snapshot(
                 session_id,
                 source_event.type,
-                dict(source_event.payload or {}),
+                self._copy_blob_refs(source_session_id, session_id, dict(source_event.payload or {})),
                 run_id=source_event.run_id,
             )
             count += 1 if copied is not None else 0
@@ -219,6 +220,29 @@ class RuntimeHistoryOps:
 
     def _has_projectable_ui_events(self, session_id: str) -> bool:
         return any(self._is_branch_seed_event(event) for event in self.event_log.iter_events(session_id))
+
+    def _copy_blob_refs(self, source_session_id: str, target_session_id: str, payload: dict) -> dict:
+        source_dir = self.event_log.session_dir(source_session_id)
+        target_dir = self.event_log.session_dir(target_session_id)
+        copied = dict(payload or {})
+        for value in copied.values():
+            if not isinstance(value, dict):
+                continue
+            blob_ref = value.get("blob_ref")
+            if not blob_ref:
+                continue
+            rel = Path(str(blob_ref))
+            if rel.is_absolute() or ".." in rel.parts:
+                continue
+            source = source_dir / rel
+            target = target_dir / rel
+            try:
+                if source.exists() and not target.exists():
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(source, target)
+            except Exception:
+                continue
+        return copied
 
     @staticmethod
     def _is_branch_seed_event(event: RuntimeEvent) -> bool:
