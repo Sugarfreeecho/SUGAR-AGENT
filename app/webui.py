@@ -310,6 +310,16 @@ def _has_local_run_activity(sid: str) -> bool:
         return sid in _chat_starting_by_session
 
 
+def _has_local_worker_activity(sid: str) -> bool:
+    sid = str(sid or "").strip()
+    if not sid:
+        return False
+    if bool(is_run_active(sid)):
+        return True
+    with _chat_start_lock:
+        return sid in _chat_starting_by_session
+
+
 def _runtime_v2_snapshot(sid: str) -> dict:
     sid = str(sid or "").strip()
     if not sid:
@@ -1128,7 +1138,7 @@ async def runtime_v2_session_stream(
                     yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
                     await asyncio.sleep(0)
                 continue
-            if not _session_run_state_fields(sid).get("run_active"):
+            if not _has_local_worker_activity(sid):
                 yield "data: [DONE]\n\n"
                 break
             idle_ticks += 1
@@ -1721,10 +1731,70 @@ async def chat(
 
 
 @fastapi_app.get("/sessions/{session_id}/stream")
-async def stream_session_events(session_id: str, request: Request):
+async def stream_session_events(
+    session_id: str,
+    request: Request,
+    after_index: Optional[int] = Query(None, ge=-1),
+):
     sid = (session_id or "").strip()
     if not sid:
         return JSONResponse(content={"error": "missing session_id"}, status_code=400)
+
+    async def runtime_v2_event_generator():
+        _active_chat_by_session[sid] = _active_chat_by_session.get(sid, 0) + 1
+        import time as _time_stamp
+        _active_chat_last_seen[sid] = _time_stamp.time()
+        cursor = int(after_index) if after_index is not None else -1
+        try:
+            try:
+                from runtime_v2.ui_projection import RuntimeUiProjection
+
+                projection = RuntimeUiProjection(
+                    session_manager.repository.sessions_dir,
+                    path_resolver=session_manager._resolve_session_path,
+                )
+                while True:
+                    if await request.is_disconnected():
+                        break
+                    page = projection.read_ui_page(sid, after_index=cursor, limit=100)
+                    events = page.get("events") if isinstance(page, dict) else []
+                    if isinstance(events, list) and events:
+                        start = int(page.get("range_start") or (cursor + 1))
+                        for offset, event in enumerate(events):
+                            if not isinstance(event, dict):
+                                continue
+                            event_index = start + offset
+                            payload = dict(event)
+                            payload["session_id"] = sid
+                            payload["seq"] = event_index + 1
+                            yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+                            cursor = max(cursor, event_index)
+                            await asyncio.sleep(0)
+                        continue
+                    if not _has_local_worker_activity(sid):
+                        yield "data: [DONE]\n\n"
+                        break
+                    await asyncio.sleep(0.25)
+            except asyncio.CancelledError:
+                return
+        finally:
+            n = _active_chat_by_session.get(sid, 1) - 1
+            if n <= 0:
+                _active_chat_by_session.pop(sid, None)
+            else:
+                _active_chat_by_session[sid] = n
+
+    try:
+        from runtime_v2 import runtime_v2_primary
+
+        if runtime_v2_primary():
+            return StreamingResponse(
+                runtime_v2_event_generator(),
+                media_type="text/event-stream",
+                headers=_SSE_HEADERS,
+            )
+    except Exception as exc:
+        logger.debug("Runtime V2 stream path check failed for %s: %s", sid, exc)
 
     async def event_generator():
         _active_chat_by_session[sid] = _active_chat_by_session.get(sid, 0) + 1

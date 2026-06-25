@@ -412,7 +412,9 @@ async function attachSessionEventStream(sessionId, opts) {
         liveAutoFollow = true;
         streamProcNearBottom = true;
         const preCount = await getUiEventCount(runSessionId);
-        const response = await fetch('/sessions/' + encodeURIComponent(runSessionId) + '/stream', { signal: ac.signal });
+        const streamUrl = '/sessions/' + encodeURIComponent(runSessionId)
+            + '/stream?after_index=' + encodeURIComponent(String(preCount - 1));
+        const response = await fetch(streamUrl, { signal: ac.signal });
         await consumeAgentSseResponse(response, runCtx, runSessionId, preCount);
     } catch (error) {
         if (error && error.name === 'AbortError') return;
