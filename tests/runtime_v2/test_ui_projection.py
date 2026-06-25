@@ -131,6 +131,22 @@ class RuntimeUiProjectionTests(unittest.TestCase):
             self.assertGreater(latest_seq, 0)
             self.assertEqual([ev["content"] for ev in page["events"]], ["u1", "a1"])
 
+    def test_maps_visible_ui_index_to_runtime_seq(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            mirror = RuntimeMirror(tmp)
+            e1 = mirror.mirror_ui_event("s1", {"type": "user", "content": "u1"})
+            e2 = mirror.mirror_ui_event("s1", {"type": "final", "content": "a1"})
+            mirror.mirror_ui_event("s1", {"type": "user", "content": "u2"})
+            mirror.append("s1", "visible_range_changed", {
+                "to_ui_index": 2,
+                "reason": "test",
+            })
+            projection = RuntimeUiProjection(tmp)
+
+            self.assertEqual(projection.ui_index_to_runtime_seq("s1", 0), e1.seq)
+            self.assertEqual(projection.ui_index_to_runtime_seq("s1", 1), e2.seq)
+            self.assertIsNone(projection.ui_index_to_runtime_seq("s1", 2))
+
     def test_backfills_when_runtime_log_has_only_history_ops(self):
         with tempfile.TemporaryDirectory() as tmp:
             mirror = RuntimeMirror(tmp)

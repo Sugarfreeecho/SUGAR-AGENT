@@ -117,6 +117,36 @@ class RuntimeUiProjection:
     def count_ui_events(self, session_id: str) -> int:
         return len(self.read_ui_events(session_id))
 
+    def ui_index_to_runtime_seq(self, session_id: str, ui_index: int) -> Optional[int]:
+        target = int(ui_index)
+        if target < 0:
+            return None
+        mapped: List[int] = []
+        for event in self.event_log.iter_events(session_id):
+            if event.type == "legacy_truncate_observed":
+                payload = dict(event.payload or {})
+                new_count = payload.get("new_event_count")
+                if new_count is None:
+                    new_count = payload.get("before_index")
+                try:
+                    mapped = mapped[:max(0, int(new_count))]
+                except (TypeError, ValueError):
+                    pass
+                continue
+            if event.type == "visible_range_changed":
+                payload = dict(event.payload or {})
+                if payload.get("to_ui_index") is not None:
+                    try:
+                        mapped = mapped[:max(0, int(payload.get("to_ui_index")))]
+                    except (TypeError, ValueError):
+                        pass
+                    continue
+            if self.event_to_ui(event) is not None:
+                mapped.append(int(event.seq))
+        if target >= len(mapped):
+            return None
+        return mapped[target]
+
     def count_ui_events_light(self, session_id: str) -> tuple[int, int]:
         """Return projected UI count and latest truncate seq.
 
