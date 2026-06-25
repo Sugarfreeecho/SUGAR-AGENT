@@ -354,6 +354,58 @@ def _runtime_v2_context_snapshot(sid: str) -> dict:
     return context if isinstance(context, dict) else {}
 
 
+def _runtime_v2_event_dicts(session_id: str, *, after_seq: int = 0, before_seq: Optional[int] = None, limit: int = 200) -> list[dict]:
+    from runtime_v2.event_log import SessionEventLog
+
+    log = SessionEventLog(
+        session_manager.repository.sessions_dir,
+        path_resolver=session_manager._resolve_session_path,
+    )
+    lim = max(1, min(int(limit or 200), 1000))
+    if before_seq is not None:
+        events = log.read_before_seq(session_id, int(before_seq), lim)
+    elif int(after_seq or 0) > 0:
+        events = log.read_after_seq(session_id, int(after_seq or 0))[:lim]
+    else:
+        events = log.read_latest(session_id, lim)
+    return [ev.to_dict() for ev in events]
+
+
+def _runtime_v2_debug_state(include_archived: bool = True) -> dict:
+    try:
+        from runtime_v2.config import runtime_version
+    except Exception:
+        runtime_version = lambda: 1
+    sessions = session_manager.list_sessions(include_archived=include_archived)
+    active_runs: list[dict] = []
+    session_rows: list[dict] = []
+    for item in sessions:
+        sid = str((item or {}).get("id") or "").strip()
+        if not sid:
+            continue
+        snapshot = _runtime_v2_snapshot(sid)
+        snapshot_active = snapshot.get("active_runs") if isinstance(snapshot, dict) else []
+        filtered_active = _runtime_v2_filtered_active_runs(sid)
+        if filtered_active:
+            active_runs.extend([dict(run, session_id=sid) for run in filtered_active if isinstance(run, dict)])
+        session_rows.append({
+            "id": sid,
+            "name": item.get("name"),
+            "archived": bool(item.get("archived")),
+            "snapshot_seq": int(snapshot.get("last_seq") or 0) if isinstance(snapshot, dict) else 0,
+            "snapshot_active_run_count": len(snapshot_active) if isinstance(snapshot_active, list) else 0,
+            "active_run_count": len(filtered_active),
+            "updated_at": snapshot.get("updated_at") if isinstance(snapshot, dict) else None,
+        })
+    return {
+        "runtime_version": int(runtime_version()),
+        "session_count": len(session_rows),
+        "active_run_count": len(active_runs),
+        "active_runs": active_runs,
+        "sessions": session_rows,
+    }
+
+
 def _runtime_v2_active_run_ids(sid: str) -> list[str]:
     active_runs = _runtime_v2_filtered_active_runs(sid)
     out: list[str] = []
@@ -955,6 +1007,83 @@ async def sessions_state(include_archived: bool = Query(False)):
 @fastapi_app.get("/state")
 async def app_state(include_archived: bool = Query(False)):
     return JSONResponse(content=_build_sessions_state_snapshot(include_archived=include_archived))
+
+
+@fastapi_app.get("/runtime-v2/state")
+async def runtime_v2_state(include_archived: bool = Query(True)):
+    """Read-only Runtime V2 debug state built from snapshots."""
+    return JSONResponse(content=_runtime_v2_debug_state(include_archived=include_archived))
+
+
+@fastapi_app.get("/runtime-v2/sessions/{session_id}/events")
+async def runtime_v2_session_events(
+    session_id: str,
+    after_seq: int = Query(0, ge=0),
+    before_seq: Optional[int] = Query(None, ge=1),
+    limit: int = Query(200, ge=1, le=1000),
+):
+    """Read-only Runtime V2 event log page for debugging and audit."""
+    try:
+        events = _runtime_v2_event_dicts(
+            session_id,
+            after_seq=int(after_seq or 0),
+            before_seq=before_seq,
+            limit=int(limit or 200),
+        )
+    except ValueError as exc:
+        return JSONResponse(content={"ok": False, "error": str(exc)}, status_code=400)
+    return JSONResponse(content={
+        "ok": True,
+        "session_id": session_id,
+        "events": events,
+        "count": len(events),
+        "after_seq": int(after_seq or 0),
+        "before_seq": before_seq,
+        "limit": int(limit or 200),
+    })
+
+
+@fastapi_app.get("/runtime-v2/events")
+async def runtime_v2_events(
+    session_id: str = Query(..., min_length=1),
+    after_seq: int = Query(0, ge=0),
+    limit: int = Query(200, ge=1, le=1000),
+):
+    """Read-only Runtime V2 after-seq event page for reconnect/debug clients."""
+    try:
+        events = _runtime_v2_event_dicts(
+            session_id,
+            after_seq=int(after_seq or 0),
+            limit=int(limit or 200),
+        )
+    except ValueError as exc:
+        return JSONResponse(content={"ok": False, "error": str(exc)}, status_code=400)
+    latest_seq = 0
+    if events:
+        try:
+            latest_seq = int(events[-1].get("seq") or 0)
+        except (TypeError, ValueError):
+            latest_seq = 0
+    return JSONResponse(content={
+        "ok": True,
+        "session_id": session_id,
+        "events": events,
+        "count": len(events),
+        "after_seq": int(after_seq or 0),
+        "latest_seq": latest_seq,
+        "limit": int(limit or 200),
+    })
+
+
+@fastapi_app.get("/runtime-v2/runs")
+async def runtime_v2_runs(include_archived: bool = Query(True)):
+    """Read-only Runtime V2 active run view."""
+    state = _runtime_v2_debug_state(include_archived=include_archived)
+    return JSONResponse(content={
+        "runtime_version": state.get("runtime_version"),
+        "active_run_count": state.get("active_run_count", 0),
+        "active_runs": state.get("active_runs", []),
+    })
 
 @fastapi_app.get("/sessions/{session_id}")
 async def get_session_detail(
