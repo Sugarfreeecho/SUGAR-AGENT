@@ -3015,21 +3015,28 @@ class SessionManager:
         """
         侧栏「历史记录」目录：遍历 ui_events，列出每条用户消息的 event_index 与预览文案（轻量 JSON）。
         """
+        def _rows_from_events(events: List[dict]) -> List[dict]:
+            out: List[dict] = []
+            for i, ev in enumerate(events):
+                if not isinstance(ev, dict) or ev.get("type") != "user":
+                    continue
+                raw = ev.get("content")
+                text = (raw if isinstance(raw, str) else str(raw or "")).strip()
+                one_line = " ".join(text.split())
+                if len(one_line) > 200:
+                    one_line = one_line[:197] + "..."
+                out.append({"event_index": i, "preview": one_line})
+            return out
+
+        if self._runtime_v2_primary():
+            return _rows_from_events(self._load_ui_events_for_active_runtime(session_id))
+
         sig = self._ui_events_file_signature(session_id)
         cached = self._ui_user_turns_cache.get(session_id)
         if cached and cached[0] == sig:
             return [dict(row) for row in cached[1]]
         events = self._load_ui_events(session_id)
-        out: List[dict] = []
-        for i, ev in enumerate(events):
-            if not isinstance(ev, dict) or ev.get("type") != "user":
-                continue
-            raw = ev.get("content")
-            text = (raw if isinstance(raw, str) else str(raw or "")).strip()
-            one_line = " ".join(text.split())
-            if len(one_line) > 200:
-                one_line = one_line[:197] + "..."
-            out.append({"event_index": i, "preview": one_line})
+        out = _rows_from_events(events)
         self._ui_user_turns_cache[session_id] = (sig, [dict(row) for row in out])
         return out
 
