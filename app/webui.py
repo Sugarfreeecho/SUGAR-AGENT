@@ -298,6 +298,18 @@ def _runtime_v2_active_run_info(sid: str) -> dict:
         return {}
 
 
+def _has_local_run_activity(sid: str) -> bool:
+    sid = str(sid or "").strip()
+    if not sid:
+        return False
+    if bool(is_run_active(sid)):
+        return True
+    if int(_active_chat_by_session.get(sid, 0) or 0) > 0:
+        return True
+    with _chat_start_lock:
+        return sid in _chat_starting_by_session
+
+
 def _runtime_v2_snapshot(sid: str) -> dict:
     sid = str(sid or "").strip()
     if not sid:
@@ -315,6 +327,8 @@ def _runtime_v2_filtered_active_runs(sid: str) -> list[dict]:
     snapshot = _runtime_v2_snapshot(sid)
     active_runs = snapshot.get("active_runs") if isinstance(snapshot, dict) else None
     if not isinstance(active_runs, list) or not active_runs:
+        return []
+    if not _has_local_run_activity(sid):
         return []
     runs = snapshot.get("runs") if isinstance(snapshot, dict) else None
     latest_started = ""
