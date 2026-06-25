@@ -1,7 +1,7 @@
 import tempfile
 import unittest
 
-from app.runtime_v2 import RuntimeHistoryOps, RuntimeMirror
+from app.runtime_v2 import RuntimeHistoryOps, RuntimeMirror, RuntimeUiProjection
 
 
 class RuntimeHistoryOpsTests(unittest.TestCase):
@@ -109,28 +109,49 @@ class RuntimeHistoryOpsTests(unittest.TestCase):
             self.assertEqual(len(snapshot["visible_messages"]), 2)
             self.assertEqual(snapshot["legacy_observations"][0]["type"], "legacy_truncate_observed")
 
-    def test_legacy_branch_records_source_and_new_session_without_copying_messages(self):
+    def test_branch_records_source_and_seeds_visible_history(self):
         with tempfile.TemporaryDirectory() as tmp:
             mirror = RuntimeMirror(tmp)
             mirror.mirror_ui_event("source", {"type": "user", "content": "u1"})
+            mirror.mirror_ui_event("source", {"type": "final", "content": "a1"})
+            mirror.mirror_ui_event("source", {"type": "user", "content": "u2"})
 
             ops = RuntimeHistoryOps(tmp)
             ops.observe_legacy_branch(
                 "source",
                 source_session_id="source",
                 new_session_id="branch",
-                before_index=1,
-                new_event_count=1,
+                before_index=2,
+                new_event_count=2,
                 name="branch name",
             )
-            ops.create_branch("branch", source_session_id="source", branch_from_seq=1, name="branch name")
+            ops.create_branch("branch", source_session_id="source", branch_from_seq=2, name="branch name")
 
             source_snapshot = ops.snapshots.read("source")
             branch_snapshot = ops.snapshots.read("branch")
+            branch_events = RuntimeUiProjection(tmp).read_ui_events("branch")
 
             self.assertEqual(source_snapshot["legacy_observations"][0]["payload"]["new_session_id"], "branch")
             self.assertEqual(branch_snapshot["history_ops"][0]["type"], "history_branch_created")
-            self.assertEqual(branch_snapshot["messages"], [])
+            self.assertEqual([m["payload"]["content"] for m in branch_snapshot["visible_messages"]], ["u1", "a1"])
+            self.assertEqual([ev["content"] for ev in branch_events], ["u1", "a1"])
+
+    def test_branch_does_not_duplicate_existing_legacy_seed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            mirror = RuntimeMirror(tmp)
+            mirror.mirror_ui_event("source", {"type": "user", "content": "u1"})
+            mirror.mirror_ui_event("source", {"type": "final", "content": "a1"})
+            projection = RuntimeUiProjection(tmp)
+            projection.replace_from_legacy("branch", [
+                {"type": "user", "content": "u1"},
+                {"type": "final", "content": "a1"},
+            ], reason="legacy_branch_seed")
+
+            RuntimeHistoryOps(tmp).create_branch("branch", source_session_id="source", branch_from_seq=2)
+
+            branch_events = RuntimeUiProjection(tmp).read_ui_events("branch")
+
+            self.assertEqual([ev["content"] for ev in branch_events], ["u1", "a1"])
 
 
 if __name__ == "__main__":

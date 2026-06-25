@@ -3394,16 +3394,17 @@ class SessionManager:
                 new_id,
                 [_message_to_dict(m) for m in rebuild_core_messages_from_ui_events(new_events)],
             )
-            try:
-                from runtime_v2.ui_projection import RuntimeUiProjection
+            if not self._runtime_v2_primary():
+                try:
+                    from runtime_v2.ui_projection import RuntimeUiProjection
 
-                branch_projection = RuntimeUiProjection(
-                    self.repository.sessions_dir,
-                    path_resolver=self._resolve_session_path,
-                )
-                branch_projection.replace_from_legacy(new_id, new_events, reason="legacy_branch_seed")
-            except Exception as exc:
-                logger.debug("Runtime V2 branch UI seed failed for %s: %s", new_id, exc)
+                    branch_projection = RuntimeUiProjection(
+                        self.repository.sessions_dir,
+                        path_resolver=self._resolve_session_path,
+                    )
+                    branch_projection.replace_from_legacy(new_id, new_events, reason="legacy_branch_seed")
+                except Exception as exc:
+                    logger.debug("Runtime V2 branch UI seed failed for %s: %s", new_id, exc)
             meta = self._load_metadata(sid)
             if not isinstance(meta, dict):
                 meta = {}

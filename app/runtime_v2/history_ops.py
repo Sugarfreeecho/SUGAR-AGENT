@@ -35,11 +35,13 @@ class RuntimeHistoryOps:
         })
 
     def create_branch(self, session_id: str, source_session_id: str, branch_from_seq: int, name: str = "") -> RuntimeEvent:
-        return self._append_and_snapshot(session_id, "history_branch_created", {
+        event = self._append_and_snapshot(session_id, "history_branch_created", {
             "source_session_id": source_session_id,
             "branch_from_seq": int(branch_from_seq),
             "name": name,
         })
+        self._seed_branch_visible_history(session_id, source_session_id, int(branch_from_seq))
+        return event
 
     def compact_history(
         self,
@@ -196,3 +198,39 @@ class RuntimeHistoryOps:
         snapshot = self.projector.project_incremental(self.snapshots.read(session_id), event)
         self.snapshots.write(session_id, snapshot)
         return event
+
+    def _seed_branch_visible_history(self, session_id: str, source_session_id: str, branch_from_seq: int) -> int:
+        if self._has_projectable_ui_events(session_id):
+            return 0
+        count = 0
+        for source_event in self.event_log.iter_events(source_session_id):
+            if int(source_event.seq) > int(branch_from_seq):
+                break
+            if not self._is_branch_seed_event(source_event):
+                continue
+            copied = self._append_and_snapshot(
+                session_id,
+                source_event.type,
+                dict(source_event.payload or {}),
+                run_id=source_event.run_id,
+            )
+            count += 1 if copied is not None else 0
+        return count
+
+    def _has_projectable_ui_events(self, session_id: str) -> bool:
+        return any(self._is_branch_seed_event(event) for event in self.event_log.iter_events(session_id))
+
+    @staticmethod
+    def _is_branch_seed_event(event: RuntimeEvent) -> bool:
+        if event.type in {
+            "message_user",
+            "message_assistant_final",
+            "tool_started",
+            "tool_finished",
+            "context_summary_committed",
+            "todo_updated",
+            "context_tokens",
+            "legacy_ui_event",
+        }:
+            return True
+        return event.type.startswith("subagent_")
