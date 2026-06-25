@@ -175,6 +175,26 @@ class RuntimeProjectorTests(unittest.TestCase):
             self.assertEqual(result["written"], 2)
             self.assertEqual([m["content"] for m in messages], ["legacy", "answer"])
 
+    def test_model_projection_sync_does_not_overwrite_longer_projection(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ops = RuntimeHistoryOps(tmp)
+            ops.replace_model_history("s1", [
+                {"type": "user", "content": "v2 user"},
+                {"type": "assistant", "content": "v2 answer"},
+                {"type": "tool", "content": "v2 tool"},
+            ])
+            projection = RuntimeModelProjection(tmp)
+
+            result = projection.sync_from_legacy_if_needed("s1", [
+                {"type": "user", "content": "legacy user"},
+                {"type": "assistant", "content": "legacy answer"},
+            ])
+            messages = projection.read_message_dicts("s1")
+
+            self.assertEqual(result["action"], "mismatch")
+            self.assertEqual(result["written"], 0)
+            self.assertEqual([m["content"] for m in messages], ["v2 user", "v2 answer", "v2 tool"])
+
 
 if __name__ == "__main__":
     unittest.main()

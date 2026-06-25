@@ -92,6 +92,14 @@ class RuntimeModelProjection:
                 "projected_count": len(projected),
                 "written": 0,
             }
+        if len(projected) >= len(clean):
+            return {
+                "checked": True,
+                "action": "mismatch",
+                "legacy_count": len(clean),
+                "projected_count": len(projected),
+                "written": 0,
+            }
         RuntimeHistoryOps(self.sessions_dir).replace_model_history(
             session_id,
             clean,
