@@ -5098,10 +5098,11 @@ function openInlineRewriteEditor(wrap, rawText, beforeIndex) {\r
     } catch (e) { /* ignore */ }\r
 }\r
 \r
-async function branchSessionOnServer(beforeIndex) {\r
-    if (!currentSessionId) return { ok: false, error: 'no_session' };\r
-    const url = '/sessions/' + encodeURIComponent(currentSessionId) + '/branch'\r
-        + '?before_index=' + encodeURIComponent(String(beforeIndex));\r
+async function branchSessionOnServer(beforeIndex, sessionId) {
+    const sid = sessionId || currentSessionId;
+    if (!sid) return { ok: false, error: 'no_session' };
+    const url = '/sessions/' + encodeURIComponent(sid) + '/branch'
+        + '?before_index=' + encodeURIComponent(String(beforeIndex));
     try {\r
         const r = await fetch(url, { method: 'POST' });\r
         const j = await r.json().catch(function () { return {}; });\r
@@ -5263,9 +5264,10 @@ function onMessageToolbarClick(wrap, role, act) {\r
         openInlineRewriteEditor(wrap, toFill, before);\r
         return;\r
     }\r
-    if (act === 'branch' && role === 'assistant') {\r
-        const eiRaw = wrap.dataset.eventIndex;\r
-        const eventIdx = eiRaw !== undefined && eiRaw !== '' ? parseInt(eiRaw, 10) : NaN;\r
+    if (act === 'branch' && role === 'assistant') {
+        const sourceSessionId = currentSessionId;
+        const eiRaw = wrap.dataset.eventIndex;
+        const eventIdx = eiRaw !== undefined && eiRaw !== '' ? parseInt(eiRaw, 10) : NaN;
         if (!Number.isFinite(eventIdx) || eventIdx < 0) {\r
             showUiAlert({\r
                 title: '无法分支',\r
@@ -5282,21 +5284,24 @@ function onMessageToolbarClick(wrap, role, act) {\r
             confirmText: '创建分支',\r
             cancelText: '取消',\r
         }).then(function (ok) {\r
-            if (!ok) return;\r
-            (async function () {\r
-                var rawExpected = messageRawMarkdown.get(wrap);\r
-                var expectedText = rawExpected !== undefined ? String(rawExpected) : plain;\r
-                var ready = await waitForBranchFinalPersisted(currentSessionId, branchBefore, expectedText);\r
-                if (!ready || !ready.ready) {\r
-                    showUiAlert({\r
+            if (!ok) return;
+            (async function () {
+                var rawExpected = messageRawMarkdown.get(wrap);
+                var expectedText = rawExpected !== undefined ? String(rawExpected) : plain;
+                var ready = { ready: true, beforeIndex: branchBefore };
+                if (!isSessionRunning(sourceSessionId)) {
+                    ready = await waitForBranchFinalPersisted(sourceSessionId, branchBefore, expectedText);
+                }
+                if (!ready || !ready.ready) {
+                    showUiAlert({
                         title: '分支稍后再试',\r
                         message: '最终回答仍在写入会话记录，请稍等一两秒后再次分支。',\r
                         variant: 'warning',\r
-                    });\r
-                    return;\r
-                }\r
-                var res = await branchSessionOnServer(ready.beforeIndex || branchBefore);\r
-                if (!res || !res.ok || !res.session_id) {\r
+                    });
+                    return;
+                }
+                var res = await branchSessionOnServer(ready.beforeIndex || branchBefore, sourceSessionId);
+                if (!res || !res.ok || !res.session_id) {
                     showUiAlert({\r
                         title: '创建失败',\r
                         message: describeServerSyncFailure(res, '创建分支未生效。'),\r

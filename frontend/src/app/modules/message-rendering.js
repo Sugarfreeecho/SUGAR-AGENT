@@ -174,9 +174,10 @@ function openInlineRewriteEditor(wrap, rawText, beforeIndex) {
     } catch (e) { /* ignore */ }
 }
 
-async function branchSessionOnServer(beforeIndex) {
-    if (!currentSessionId) return { ok: false, error: 'no_session' };
-    const url = '/sessions/' + encodeURIComponent(currentSessionId) + '/branch'
+async function branchSessionOnServer(beforeIndex, sessionId) {
+    const sid = sessionId || currentSessionId;
+    if (!sid) return { ok: false, error: 'no_session' };
+    const url = '/sessions/' + encodeURIComponent(sid) + '/branch'
         + '?before_index=' + encodeURIComponent(String(beforeIndex));
     try {
         const r = await fetch(url, { method: 'POST' });
@@ -340,6 +341,7 @@ function onMessageToolbarClick(wrap, role, act) {
         return;
     }
     if (act === 'branch' && role === 'assistant') {
+        const sourceSessionId = currentSessionId;
         const eiRaw = wrap.dataset.eventIndex;
         const eventIdx = eiRaw !== undefined && eiRaw !== '' ? parseInt(eiRaw, 10) : NaN;
         if (!Number.isFinite(eventIdx) || eventIdx < 0) {
@@ -362,7 +364,10 @@ function onMessageToolbarClick(wrap, role, act) {
             (async function () {
                 var rawExpected = messageRawMarkdown.get(wrap);
                 var expectedText = rawExpected !== undefined ? String(rawExpected) : plain;
-                var ready = await waitForBranchFinalPersisted(currentSessionId, branchBefore, expectedText);
+                var ready = { ready: true, beforeIndex: branchBefore };
+                if (!isSessionRunning(sourceSessionId)) {
+                    ready = await waitForBranchFinalPersisted(sourceSessionId, branchBefore, expectedText);
+                }
                 if (!ready || !ready.ready) {
                     showUiAlert({
                         title: '分支稍后再试',
@@ -371,7 +376,7 @@ function onMessageToolbarClick(wrap, role, act) {
                     });
                     return;
                 }
-                var res = await branchSessionOnServer(ready.beforeIndex || branchBefore);
+                var res = await branchSessionOnServer(ready.beforeIndex || branchBefore, sourceSessionId);
                 if (!res || !res.ok || !res.session_id) {
                     showUiAlert({
                         title: '创建失败',
