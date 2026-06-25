@@ -3,7 +3,7 @@ import unittest
 from pathlib import Path
 
 from app.runtime_v2 import RuntimeHistoryOps, RuntimeMirror
-from scripts.audit_runtime_versions import audit_session, load_json_list
+from scripts.audit_runtime_versions import audit_session, load_json_list, signatures_match
 
 
 class RuntimeAuditToolTests(unittest.TestCase):
@@ -41,6 +41,13 @@ class RuntimeAuditToolTests(unittest.TestCase):
             path.write_text('\ufeff[{"type":"user"}]', encoding="utf-8")
 
             self.assertEqual(load_json_list(path), [{"type": "user"}])
+
+    def test_model_signatures_normalize_legacy_langchain_roles(self):
+        self.assertTrue(signatures_match(
+            [{"type": "human", "content": "u"}, {"type": "llm", "content": "a"}],
+            [{"type": "user", "content": "u"}, {"type": "assistant", "content": "a"}],
+            kind="model",
+        ))
 
     def test_audit_reports_and_repairs_runtime_v2_active_runs(self):
         with tempfile.TemporaryDirectory() as tmp:

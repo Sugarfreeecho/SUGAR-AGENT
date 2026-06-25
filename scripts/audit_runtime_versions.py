@@ -75,6 +75,12 @@ def normalize_event_signature(event: dict) -> tuple[str, str]:
 
 def normalize_message_signature(message: dict) -> tuple[str, str, str]:
     msg_type = str(message.get("type") or message.get("role") or "")
+    msg_type = {
+        "human": "user",
+        "llm": "assistant",
+        "ai": "assistant",
+        "agent": "assistant",
+    }.get(msg_type, msg_type)
     content = str(message.get("content") or "")[:500]
     tool_call_id = str(message.get("tool_call_id") or "")
     return msg_type, content, tool_call_id
