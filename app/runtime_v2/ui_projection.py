@@ -275,15 +275,16 @@ class RuntimeUiProjection:
         *,
         limit: int = 200,
         before_index: Optional[int] = None,
+        after_index: Optional[int] = None,
         turns: Optional[int] = None,
         legacy_loader: Optional[Callable[[], Iterable[dict]]] = None,
     ) -> dict:
-        if legacy_loader is None and before_index is None and turns is not None:
+        if legacy_loader is None and before_index is None and after_index is None and turns is not None:
             page = self._read_recent_turns_from_tail(session_id, turns=int(turns))
             if page is not None:
                 return page
         events = self.read_ui_events(session_id, legacy_loader=legacy_loader)
-        return self._page_events(events, limit=limit, before_index=before_index, turns=turns)
+        return self._page_events(events, limit=limit, before_index=before_index, after_index=after_index, turns=turns)
 
     def _read_recent_turns_from_tail(self, session_id: str, *, turns: int) -> Optional[dict]:
         turn_count = max(1, min(int(turns), 50))
@@ -477,6 +478,7 @@ class RuntimeUiProjection:
         *,
         limit: int = 200,
         before_index: Optional[int] = None,
+        after_index: Optional[int] = None,
         turns: Optional[int] = None,
     ) -> dict:
         total = len(events)
@@ -484,6 +486,19 @@ class RuntimeUiProjection:
             i for i, ev in enumerate(events)
             if isinstance(ev, dict) and ev.get("type") == "user"
         ]
+        lim = max(1, min(int(limit), 500))
+
+        if after_index is not None:
+            start = max(0, min(int(after_index) + 1, total))
+            end = min(total, start + lim)
+            return {
+                "events": events[start:end],
+                "total": total,
+                "range_start": start,
+                "range_end": end,
+                "has_older": start > 0,
+                "has_newer": end < total,
+            }
 
         def turn_start(end_exclusive: int, turn_count: int) -> int:
             end_exclusive = max(0, min(int(end_exclusive), total))
@@ -508,7 +523,6 @@ class RuntimeUiProjection:
                 "has_newer": end < total,
             }
 
-        lim = max(1, min(int(limit), 500))
         end = total if before_index is None else max(0, min(int(before_index), total))
         start = max(0, end - lim)
         return {

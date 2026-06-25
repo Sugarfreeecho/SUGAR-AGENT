@@ -1796,6 +1796,7 @@ async def get_session_messages(
     session_id: str,
     limit: Optional[int] = Query(None, ge=1, le=500),
     before_index: Optional[int] = Query(None, ge=0),
+    after_index: Optional[int] = Query(None, ge=-1),
     turns: Optional[int] = Query(None, ge=1, le=50),
 ):
     """
@@ -1815,6 +1816,21 @@ async def get_session_messages(
         from runtime_v2 import runtime_v1_primary
 
         if runtime_v1_primary():
+            if after_index is not None:
+                events = session_manager.get_ui_events_for_display(session_id)
+                total = len(events)
+                start = max(0, min(int(after_index) + 1, total))
+                lim = int(limit) if limit is not None else 500
+                end = min(total, start + max(1, min(lim, 500)))
+                return JSONResponse(content={
+                    "events": events[start:end],
+                    "total": total,
+                    "range_start": start,
+                    "range_end": end,
+                    "has_older": start > 0,
+                    "has_newer": end < total,
+                    "source": "runtime_v1_after_index",
+                })
             if limit is None and turns is None:
                 payload = session_manager.get_ui_events_for_display(session_id)
                 elapsed_ms = int((_time.perf_counter() - t0) * 1000)
@@ -1862,6 +1878,7 @@ async def get_session_messages(
             session_id,
             limit=lim,
             before_index=before_index,
+            after_index=after_index,
             turns=tv,
         )
         elapsed_ms = int((_time.perf_counter() - t0) * 1000)

@@ -77,6 +77,21 @@ class RuntimeUiProjectionTests(unittest.TestCase):
             self.assertTrue(page["has_older"])
             self.assertEqual([ev["content"] for ev in page["events"]], ["u2", "a2", "u3", "a3"])
 
+    def test_pages_after_ui_index_from_runtime_projection(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            mirror = RuntimeMirror(tmp)
+            for index in range(3):
+                mirror.mirror_ui_event("s1", {"type": "user", "content": f"u{index}"})
+                mirror.mirror_ui_event("s1", {"type": "final", "content": f"a{index}"})
+
+            page = RuntimeUiProjection(tmp).read_ui_page("s1", after_index=1, limit=3)
+
+            self.assertEqual(page["total"], 6)
+            self.assertEqual(page["range_start"], 2)
+            self.assertEqual(page["range_end"], 5)
+            self.assertTrue(page["has_newer"])
+            self.assertEqual([ev["content"] for ev in page["events"]], ["u1", "a1", "u2"])
+
     def test_legacy_truncate_observation_limits_projected_ui_events(self):
         with tempfile.TemporaryDirectory() as tmp:
             mirror = RuntimeMirror(tmp)

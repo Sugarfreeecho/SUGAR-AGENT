@@ -20,6 +20,7 @@ async function consumeAgentSseResponse(response, runCtx, runSessionId, streamEve
                 finalizeLlmStreamChunks(runCtx);
                 finalizeProgressStreamChunks(runCtx);
                 await ensureFinalVisibleAfterRun(runSessionId, runCtx, { delayMs: 80 });
+                streamEventIdx = await reconcileProjectedMessagesAfter(runSessionId, runCtx, streamEventIdx - 1);
                 sealProcessGroup(runCtx);
                 markSessionRunInactive(runSessionId);
                 if (getSessionRunState(runSessionId)) clearSessionRunState(runSessionId);
@@ -163,6 +164,7 @@ async function consumeAgentSseResponse(response, runCtx, runSessionId, streamEve
         }
     }
     await ensureFinalVisibleAfterRun(runSessionId, runCtx, { delayMs: 120 });
+    streamEventIdx = await reconcileProjectedMessagesAfter(runSessionId, runCtx, streamEventIdx - 1);
     return streamEventIdx;
 }
 
@@ -226,6 +228,60 @@ async function ensureFinalVisibleAfterRun(sessionId, ctx, opts) {
         console.error('final visibility reconcile failed:', e);
         return false;
     }
+}
+
+async function reconcileProjectedMessagesAfter(sessionId, ctx, afterIndex) {
+    var sid = String(sessionId || '');
+    var idx = Number(afterIndex);
+    if (!sid || !Number.isFinite(idx)) return Number.isFinite(idx) ? idx + 1 : 0;
+    var nextIndex = Math.max(0, Math.floor(idx) + 1);
+    var renderCtx = ctx || null;
+    var pageAfter = Math.floor(idx);
+    var safety = 0;
+    while (safety < 6) {
+        safety += 1;
+        try {
+            var url = '/sessions/' + encodeURIComponent(sid)
+                + '/messages?after_index=' + encodeURIComponent(String(pageAfter))
+                + '&limit=500';
+            var response = await fetch(url);
+            var data = await response.json().catch(function () { return null; });
+            if (!response.ok || !data || typeof data !== 'object') break;
+            var events = Array.isArray(data.events) ? data.events : [];
+            var rangeStart = Number.isFinite(Number(data.range_start)) ? Math.floor(Number(data.range_start)) : (pageAfter + 1);
+            for (var i = 0; i < events.length; i += 1) {
+                var ev = events[i];
+                var eventIndex = rangeStart + i;
+                nextIndex = Math.max(nextIndex, eventIndex + 1);
+                if (!ev || typeof ev !== 'object' || !ev.type) continue;
+                var existing = selectMessageEventsInRange(sid, eventIndex, eventIndex + 1);
+                if (existing && existing.length) continue;
+                if (!renderCtx) {
+                    var stream = sid === currentSessionId ? getVisibleChatStream() : null;
+                    if (stream) renderCtx = newDomContext(stream);
+                }
+                if (renderCtx && renderCtx.stream && renderCtx.stream.isConnected) {
+                    reduceAndRenderMessageEvent(renderCtx, ev, {
+                        sessionId: sid,
+                        eventIndex: eventIndex,
+                        source: 'projected-reconcile',
+                    });
+                } else {
+                    applySessionEvent(ev, {
+                        sessionId: sid,
+                        eventIndex: eventIndex,
+                        source: 'projected-reconcile',
+                    });
+                }
+            }
+            if (!data.has_newer || !events.length) break;
+            pageAfter = nextIndex - 1;
+        } catch (e) {
+            console.error('projected message reconcile failed:', e);
+            break;
+        }
+    }
+    return nextIndex;
 }
 
 async function startContinueAfterSubagents(sessionId) {
