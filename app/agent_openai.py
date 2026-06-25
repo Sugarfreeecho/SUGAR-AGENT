@@ -19,7 +19,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from queue import Queue
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from openai import OpenAI
 from openai.types.chat import ChatCompletion
@@ -686,6 +686,7 @@ def run_chat_completion_stream_worker(
     parallel_tool_calls: bool = True,
     reasoning_effort: Optional[str] = None,
     omit_temperature: bool = False,
+    should_abort: Optional[Callable[[], bool]] = None,
 ) -> None:
     """
     在后台线程中跑 chat.completions(stream=True)。
@@ -712,8 +713,27 @@ def run_chat_completion_stream_worker(
             kwargs["reasoning_effort"] = reasoning_effort
         # include_usage 使末包返回 usage；部分兼容端会忽略或报错
         stream = None
+
+        def abort_requested() -> bool:
+            if should_abort is None:
+                return False
+            try:
+                return bool(should_abort())
+            except Exception:
+                return False
+
+        def close_stream_quietly() -> None:
+            close_fn = getattr(stream, "close", None)
+            if callable(close_fn):
+                try:
+                    close_fn()
+                except Exception:
+                    pass
+
         _image_fallback_done = False
         for attempt in range(OPENAI_MAX_RETRIES):
+            if abort_requested():
+                return
             try:
                 try:
                     stream = client.chat.completions.create(
@@ -755,6 +775,9 @@ def run_chat_completion_stream_worker(
         actual_model = ""
         finish_meta: Dict[str, Any] = {"finish_reason": None, "stop_reason": None}
         for chunk in stream:
+            if abort_requested():
+                close_stream_quietly()
+                return
             chunk_model = str(getattr(chunk, "model", None) or "").strip()
             if chunk_model:
                 actual_model = chunk_model
@@ -792,6 +815,9 @@ def run_chat_completion_stream_worker(
             for payload in _tool_call_delta_payloads(delta_tool_calls):
                 sync_q.put(("tool_call_delta", payload))
             _accumulate_tool_call_delta(tool_acc, delta_tool_calls)
+        if abort_requested():
+            close_stream_quietly()
+            return
         for part, text in think_splitter.finish():
             if part == "reasoning":
                 reasoning_buf += text

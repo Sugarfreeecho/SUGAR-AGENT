@@ -24,7 +24,7 @@ from starlette.concurrency import run_in_threadpool
 
 from agent import astream_events, astream_events_continuation, session_manager
 from agent_harness import PROJECT_ROOT, WORK_DIR, dotenv_file_path, refresh_executor_client_from_env
-from agent_loop import compute_context_tokens_for_session, enqueue_session_steer, remove_session_steer
+from agent_loop import abort_session_steer_run, compute_context_tokens_for_session, enqueue_session_steer, remove_session_steer
 from session_lifecycle import get_run_started_at, is_run_active
 from session_event_bus import subscribe_session_events
 import agent_mcp
@@ -1194,6 +1194,10 @@ async def list_session_subagents(
     lite: bool = Query(False, description="为 true 时不加载 dialogue_turns，减轻列表刷新开销"),
 ):
     """返回当前会话下 subagent 扁平列表（含嵌套），供 UI 树展示。"""
+    return await asyncio.to_thread(_build_session_subagents_response, session_id, lite)
+
+
+def _build_session_subagents_response(session_id: str, lite: bool) -> JSONResponse:
     try:
         from agent_subagent import subagent_registry
 
@@ -1655,6 +1659,15 @@ async def post_session_steer(session_id: str, request: Request):
     result = enqueue_session_steer(sid, message, client_id=client_id)
     if not result.get("ok"):
         return JSONResponse(content=result, status_code=400)
+    result["aborted"] = abort_session_steer_run(sid, reason="steer")
+    if not result["aborted"]:
+        item = result.get("item") if isinstance(result.get("item"), dict) else {}
+        remove_session_steer(
+            sid,
+            steer_id=str(item.get("id") or ""),
+            client_id=str(item.get("client_id") or client_id or ""),
+        )
+        return JSONResponse(content={"ok": False, "error": "session is not running"}, status_code=409)
     return JSONResponse(content=result)
 
 
@@ -1950,43 +1963,82 @@ async def get_session_messages(
             _enqueue_runtime_sync(session_id, "messages_open", check_needed=True)
         except Exception as exc:
             logger.debug("runtime sync enqueue check failed for %s: %s", session_id, exc)
-    try:
-        from runtime_v2 import runtime_v1_primary
 
-        if runtime_v1_primary():
-            if after_index is not None:
-                events = session_manager.get_ui_events_for_display(session_id)
-                total = len(events)
-                start = max(0, min(int(after_index) + 1, total))
-                lim = int(limit) if limit is not None else 500
-                end = min(total, start + max(1, min(lim, 500)))
-                return JSONResponse(content={
-                    "events": events[start:end],
-                    "total": total,
-                    "range_start": start,
-                    "range_end": end,
-                    "has_older": start > 0,
-                    "has_newer": end < total,
-                    "source": "runtime_v1_after_index",
-                })
-            if limit is None and turns is None:
-                payload = session_manager.get_ui_events_for_display(session_id)
+    def _build_messages_response() -> JSONResponse:
+        nonlocal projection
+        try:
+            from runtime_v2 import runtime_v1_primary
+
+            if runtime_v1_primary():
+                if after_index is not None:
+                    events = session_manager.get_ui_events_for_display(session_id)
+                    total = len(events)
+                    start = max(0, min(int(after_index) + 1, total))
+                    lim = int(limit) if limit is not None else 500
+                    end = min(total, start + max(1, min(lim, 500)))
+                    return JSONResponse(content={
+                        "events": events[start:end],
+                        "total": total,
+                        "range_start": start,
+                        "range_end": end,
+                        "has_older": start > 0,
+                        "has_newer": end < total,
+                        "source": "runtime_v1_after_index",
+                    })
+                if limit is None and turns is None:
+                    payload = session_manager.get_ui_events_for_display(session_id)
+                    elapsed_ms = int((_time.perf_counter() - t0) * 1000)
+                    if elapsed_ms >= 500:
+                        logger.warning("/messages slow runtime=1 session=%s full=1 elapsed_ms=%s", session_id, elapsed_ms)
+                    return JSONResponse(content=payload)
+                lim = int(limit) if limit is not None else 200
+                tv = int(turns) if turns is not None else None
+                payload = session_manager.get_ui_events_page(
+                    session_id,
+                    limit=lim,
+                    before_index=before_index,
+                    turns=tv,
+                )
                 elapsed_ms = int((_time.perf_counter() - t0) * 1000)
                 if elapsed_ms >= 500:
-                    logger.warning("/messages slow runtime=1 session=%s full=1 elapsed_ms=%s", session_id, elapsed_ms)
+                    logger.warning(
+                        "/messages slow runtime=1 session=%s turns=%s limit=%s before=%s elapsed_ms=%s",
+                        session_id,
+                        tv,
+                        lim,
+                        before_index,
+                        elapsed_ms,
+                    )
+                return JSONResponse(content=payload)
+        except Exception as exc:
+            logger.warning("Runtime version check failed for messages %s: %s", session_id, exc)
+        try:
+            if projection is None:
+                from runtime_v2.ui_projection import RuntimeUiProjection
+
+                projection = RuntimeUiProjection(
+                    session_manager.repository.sessions_dir,
+                    path_resolver=session_manager._resolve_session_path,
+                )
+            if limit is None and turns is None:
+                payload = projection.read_ui_events_fast(session_id)
+                elapsed_ms = int((_time.perf_counter() - t0) * 1000)
+                if elapsed_ms >= 500:
+                    logger.warning("/messages slow runtime=2 session=%s full=1 elapsed_ms=%s", session_id, elapsed_ms)
                 return JSONResponse(content=payload)
             lim = int(limit) if limit is not None else 200
             tv = int(turns) if turns is not None else None
-            payload = session_manager.get_ui_events_page(
+            payload = projection.read_ui_page(
                 session_id,
                 limit=lim,
                 before_index=before_index,
+                after_index=after_index,
                 turns=tv,
             )
             elapsed_ms = int((_time.perf_counter() - t0) * 1000)
             if elapsed_ms >= 500:
                 logger.warning(
-                    "/messages slow runtime=1 session=%s turns=%s limit=%s before=%s elapsed_ms=%s",
+                    "/messages slow runtime=2 session=%s turns=%s limit=%s before=%s elapsed_ms=%s",
                     session_id,
                     tv,
                     lim,
@@ -1994,76 +2046,45 @@ async def get_session_messages(
                     elapsed_ms,
                 )
             return JSONResponse(content=payload)
-    except Exception as exc:
-        logger.warning("Runtime version check failed for messages %s: %s", session_id, exc)
-    try:
-        if projection is None:
+        except Exception as exc:
+            logger.warning("Runtime V2 messages projection failed for %s: %s", session_id, exc)
+        if limit is None and turns is None:
+            return JSONResponse(content=session_manager.get_ui_events_for_display(session_id))
+        lim = int(limit) if limit is not None else 200
+        tv = int(turns) if turns is not None else None
+        payload = session_manager.get_ui_events_page(
+            session_id, limit=lim, before_index=before_index, turns=tv
+        )
+        return JSONResponse(content=payload)
+
+    return await asyncio.to_thread(_build_messages_response)
+
+
+@fastapi_app.get("/sessions/{session_id}/messages/count")
+async def get_session_message_count(session_id: str):
+    def _build_count_response() -> JSONResponse:
+        try:
+            from runtime_v2 import runtime_v1_primary
+
+            if runtime_v1_primary():
+                return JSONResponse(content={"count": session_manager.get_ui_event_count(session_id), "source": "runtime_v1"})
+        except Exception as exc:
+            logger.warning("Runtime version check failed for message count %s: %s", session_id, exc)
+        try:
             from runtime_v2.ui_projection import RuntimeUiProjection
 
             projection = RuntimeUiProjection(
                 session_manager.repository.sessions_dir,
                 path_resolver=session_manager._resolve_session_path,
             )
-        if limit is None and turns is None:
-            payload = projection.read_ui_events_fast(session_id)
-            elapsed_ms = int((_time.perf_counter() - t0) * 1000)
-            if elapsed_ms >= 500:
-                logger.warning("/messages slow runtime=2 session=%s full=1 elapsed_ms=%s", session_id, elapsed_ms)
-            return JSONResponse(content=payload)
-        lim = int(limit) if limit is not None else 200
-        tv = int(turns) if turns is not None else None
-        payload = projection.read_ui_page(
-            session_id,
-            limit=lim,
-            before_index=before_index,
-            after_index=after_index,
-            turns=tv,
-        )
-        elapsed_ms = int((_time.perf_counter() - t0) * 1000)
-        if elapsed_ms >= 500:
-            logger.warning(
-                "/messages slow runtime=2 session=%s turns=%s limit=%s before=%s elapsed_ms=%s",
-                session_id,
-                tv,
-                lim,
-                before_index,
-                elapsed_ms,
-            )
-        return JSONResponse(content=payload)
-    except Exception as exc:
-        logger.warning("Runtime V2 messages projection failed for %s: %s", session_id, exc)
-    if limit is None and turns is None:
-        return JSONResponse(content=session_manager.get_ui_events_for_display(session_id))
-    lim = int(limit) if limit is not None else 200
-    tv = int(turns) if turns is not None else None
-    payload = session_manager.get_ui_events_page(
-        session_id, limit=lim, before_index=before_index, turns=tv
-    )
-    return JSONResponse(content=payload)
+            count, _ = projection.count_ui_events_light(session_id)
+            return JSONResponse(content={"count": count, "source": "runtime_v2"})
+        except Exception as exc:
+            logger.warning("Runtime V2 message count failed for %s: %s", session_id, exc)
+        return JSONResponse(content={"count": session_manager.get_ui_event_count(session_id)})
 
-
-@fastapi_app.get("/sessions/{session_id}/messages/count")
-async def get_session_message_count(session_id: str):
+    return await asyncio.to_thread(_build_count_response)
     """仅返回 ui_events 条数，供发送前对齐 eventIndex，避免下载整份 JSON。"""
-    try:
-        from runtime_v2 import runtime_v1_primary
-
-        if runtime_v1_primary():
-            return JSONResponse(content={"count": session_manager.get_ui_event_count(session_id), "source": "runtime_v1"})
-    except Exception as exc:
-        logger.warning("Runtime version check failed for message count %s: %s", session_id, exc)
-    try:
-        from runtime_v2.ui_projection import RuntimeUiProjection
-
-        projection = RuntimeUiProjection(
-            session_manager.repository.sessions_dir,
-            path_resolver=session_manager._resolve_session_path,
-        )
-        count, _ = projection.count_ui_events_light(session_id)
-        return JSONResponse(content={"count": count, "source": "runtime_v2"})
-    except Exception as exc:
-        logger.warning("Runtime V2 message count failed for %s: %s", session_id, exc)
-    return JSONResponse(content={"count": session_manager.get_ui_event_count(session_id)})
 
 
 def _sync_runtime_session(session_id: str) -> dict:
@@ -2225,7 +2246,8 @@ async def repair_sessions_index():
 @fastapi_app.get("/sessions/{session_id}/user_turns")
 async def get_session_user_turns(session_id: str):
     """列出会话内全部用户消息的 event_index 与预览（供右侧「历史记录」目录，与消息是否分页加载无关）。"""
-    return JSONResponse(content=session_manager.get_ui_user_turns_for_toc(session_id))
+    payload = await asyncio.to_thread(session_manager.get_ui_user_turns_for_toc, session_id)
+    return JSONResponse(content=payload)
 
 
 @fastapi_app.get("/sessions/{session_id}/todo_plan")
@@ -2350,6 +2372,11 @@ async def branch_session_events(
     if not result:
         return JSONResponse(
             content={"ok": False, "error": "branch failed"},
+            status_code=400,
+        )
+    if result.get("ok") is False:
+        return JSONResponse(
+            content=result,
             status_code=400,
         )
     return JSONResponse(content={"ok": True, **result})

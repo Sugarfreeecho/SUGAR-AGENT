@@ -37,6 +37,18 @@ async function consumeAgentSseResponse(response, runCtx, runSessionId, streamEve
                 const parsed = JSON.parse(data);
                 const eventSessionId = parsed.session_id || parsed.sessionId || runSessionId;
                 if (!sessionStore.shouldAcceptSseEvent(eventSessionId, parsed.seq)) continue;
+                if (parsed.type === 'user_steer' && parsed.steer) {
+                    var steerEventIndex = parsed.ephemeral && Number.isFinite(Number(parsed.seq)) ? Number(parsed.seq) : streamEventIdx;
+                    try {
+                        applyMessageEvent(eventSessionId, parsed, steerEventIndex, 'sse');
+                    } catch (eStoreSteer) {
+                        console.error('store user steer event failed:', eStoreSteer);
+                    }
+                    removeConsumedFollowupSteer(eventSessionId, parsed);
+                    appendLog(runCtx, parsed.content || '', 'user-steer', runSessionId);
+                    streamEventIdx += 1;
+                    continue;
+                }
                 const reduced = applySessionEvent(parsed, {
                     sessionId: eventSessionId,
                     eventIndex: parsed.ephemeral && Number.isFinite(Number(parsed.seq)) ? Number(parsed.seq) : streamEventIdx,
@@ -66,13 +78,15 @@ async function consumeAgentSseResponse(response, runCtx, runSessionId, streamEve
                     else if (parsed.type === 'todo_plan') renderTodoPlanForCurrentSession();
                     if (parsed.type === 'context_tokens' || parsed.type === 'todo_plan') continue;
                 }
-                if (parsed.type === 'user_steer' && parsed.steer) {
-                    removeConsumedFollowupSteer(eventSessionId, parsed);
-                }
                 if (parsed.ephemeral) {
                     /* 任何携带 agent_id 的 ephemeral 都属于子 agent；无论投递成功与否都不能 fall-through
                        到父 ctx 的 appendLlmStreamDelta，否则会污染主对话区。 */
                     if (parsed.agent_id) { handleSubagentStreamEvent(parsed, streamEventIdx, runSessionId); continue; }
+                    if (parsed.type === 'llm_stream_aborted') {
+                        removeTemporaryStatus(runCtx);
+                        discardLlmStreamChunks(runCtx, parsed);
+                        continue;
+                    }
                     if (parsed.type === 'tool_approval_required') {
                         finalizeLlmStreamChunks(runCtx);
                         var aidApr = parsed.approval_id != null ? String(parsed.approval_id) : '';
@@ -330,6 +344,9 @@ async function startContinueAfterSubagents(sessionId) {
         }
         const ac = new AbortController();
         setSessionRunState(runSessionId, { controller: ac, ctx: runCtx });
+        if (sessionStore && typeof sessionStore.resetSseSeq === 'function') {
+            sessionStore.resetSseSeq(runSessionId);
+        }
         setSendButtonState();
         syncSessionListIndicatorClasses();
         liveAutoFollow = true;
@@ -780,65 +797,44 @@ async function sendFollowupNow(itemId) {
     if (idx < 0) return;
     const item = q[idx];
     if (!item) return;
-    var runningNow = isSessionRunning(sid) || (sendPipelineLock && sendPipelineLockSessionId === sid);
-    if (runningNow) {
-        if (idx > 0) {
-            q.splice(idx, 1);
-            q.unshift(item);
-        }
-        item.status = 'interrupting';
-        item.clientId = item.clientId || ('followup-' + item.id + '-' + Date.now());
-        persistFollowupQueue(sid);
-        renderFollowupQueue(sid);
-        var run = getSessionRunState(sid);
-        var activeInfo = sessionStore.getActiveRunInfo(sid) || {};
-        var runId = run && run.runId ? run.runId : (activeInfo.run_id || activeInfo.runId || '');
-        if (typeof suppressSessionServerStreamActive === 'function') suppressSessionServerStreamActive(sid, 8000);
-        if (run) {
-            var ctx = run.ctx;
-            abortSessionRun(sid, 'followup');
-            if (ctx) sealProcessGroup(ctx);
-        }
-        void requestInterrupt(sid, runId, 'followup');
-        setTimeout(function () { drainFollowupQueue(sid); }, 0);
-        setTimeout(function () { reconcileRunStateFromServer({ silent: true, respectStopSuppress: true }); }, 3000);
-        return;
-    }
-    if (runningNow) item.clientId = item.clientId || ('followup-' + item.id + '-' + Date.now());
+    item.clientId = item.clientId || ('followup-' + item.id + '-' + Date.now());
     item.status = 'sending';
     persistFollowupQueue(sid);
     renderFollowupQueue(sid);
-    if (runningNow) {
-        try {
-            item.steerInFlight = true;
-            var steerResult = await sendSteerMessage(sid, item.text, item.clientId);
-            item.steerInFlight = false;
-            item.steerId = steerResult && steerResult.item && steerResult.item.id ? String(steerResult.item.id) : '';
-            if (item.cancelRequested) {
-                await cancelSteerMessage(sid, item);
-                var withdrawn = takeFollowupItem(sid, item.id);
-                if (withdrawn) returnFollowupToInput(sid, withdrawn);
-                return;
-            }
-            item.status = 'sending';
-            persistFollowupQueue(sid);
-            renderFollowupQueue(sid);
-        } catch (e) {
-            item.steerInFlight = false;
+    try {
+        item.steerInFlight = true;
+        var steerResult = await sendSteerMessage(sid, item.text, item.clientId);
+        item.steerInFlight = false;
+        item.steerId = steerResult && steerResult.item && steerResult.item.id ? String(steerResult.item.id) : '';
+        if (item.cancelRequested) {
+            await cancelSteerMessage(sid, item);
+            var withdrawn = takeFollowupItem(sid, item.id);
+            if (withdrawn) returnFollowupToInput(sid, withdrawn);
+            return;
+        }
+        item.status = 'sending';
+        persistFollowupQueue(sid);
+        renderFollowupQueue(sid);
+        return;
+    } catch (e) {
+        item.steerInFlight = false;
+        var msg = (e && e.message) ? String(e.message) : String(e);
+        var canFallbackToChat = /session is not running/i.test(msg);
+        if (!canFallbackToChat) {
             if (item.cancelRequested) {
                 item.status = 'sending';
                 item.cancelRequested = false;
                 persistFollowupQueue(sid);
                 renderFollowupQueue(sid);
-                appendLogVisible('追问已被接收，无法撤回: ' + ((e && e.message) || String(e)), 'error-log');
+                appendLogVisible('追问已被接收，无法撤回: ' + msg, 'error-log');
                 return;
             }
             item.status = '';
             persistFollowupQueue(sid);
             renderFollowupQueue(sid);
-            appendLogVisible('追问插入失败: ' + ((e && e.message) || String(e)), 'error-log');
+            appendLogVisible('追问插入失败: ' + msg, 'error-log');
+            return;
         }
-        return;
     }
     item.status = 'sent';
     persistFollowupQueue(sid);
@@ -859,19 +855,23 @@ function drainFollowupQueue(sessionId) {
         renderFollowupQueue(sid);
         return;
     }
-    var nextIdx = q.findIndex(function (item) { return !item.status || item.status === 'interrupting'; });
+    var nextIdx = q.findIndex(function (item) { return !item.status; });
     if (nextIdx < 0) {
         renderFollowupQueue(sid);
         return;
     }
-    var item = q.splice(nextIdx, 1)[0];
-    persistFollowupQueue(sid);
-    renderFollowupQueue(sid);
+    var item = q[nextIdx];
     followupQueueDraining[sid] = true;
-    Promise.resolve(sendMessage({ message: item.text, fromQueue: true, sessionId: sid }))
+    var attemptedId = String(item.id);
+    Promise.resolve(sendFollowupNow(item.id))
         .finally(function () {
             delete followupQueueDraining[sid];
-            if (getFollowupQueue(sid).length) setTimeout(function () { drainFollowupQueue(sid); }, 0);
+            var q2 = getFollowupQueue(sid);
+            var same = q2.find(function (entry) { return String(entry.id) === attemptedId; });
+            if (same && !same.status) return;
+            if (q2.some(function (entry) { return !entry.status; })) {
+                setTimeout(function () { drainFollowupQueue(sid); }, 0);
+            }
         });
 }
 
@@ -937,6 +937,9 @@ async function sendMessage(options) {
     }
     const runSessionId = submitSessionId;
     submittedRunSessionId = runSessionId;
+    if (sessionStore && typeof sessionStore.resetSseSeq === 'function') {
+        sessionStore.resetSseSeq(runSessionId);
+    }
     const clientRunId = (window.crypto && window.crypto.randomUUID)
         ? window.crypto.randomUUID()
         : ('run-' + Date.now() + '-' + Math.random().toString(16).slice(2));

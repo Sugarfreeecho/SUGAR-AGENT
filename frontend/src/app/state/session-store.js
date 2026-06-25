@@ -248,6 +248,12 @@ const sessionStore = {
         if (Number.isFinite(Number(this.seq)) && n > Number(this.seq)) this.seq = n;
         return true;
     },
+
+    resetSseSeq(sessionId) {
+        const sid = String(sessionId || '');
+        if (!sid) return;
+        this.sseSeqBySession.delete(sid);
+    },
 };
 
 const SESSION_STREAM_STOP_SUPPRESS_MS = 60000;

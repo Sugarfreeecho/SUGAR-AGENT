@@ -186,6 +186,7 @@ async function branchSessionOnServer(beforeIndex, sessionId) {
             ok: r.ok,
             session_id: j && j.session_id,
             name: j && j.name,
+            session: j && j.session,
             error: (j && j.error) ? String(j.error) : '',
         };
     } catch (e) {
@@ -362,21 +363,7 @@ function onMessageToolbarClick(wrap, role, act) {
         }).then(function (ok) {
             if (!ok) return;
             (async function () {
-                var rawExpected = messageRawMarkdown.get(wrap);
-                var expectedText = rawExpected !== undefined ? String(rawExpected) : plain;
-                var ready = { ready: true, beforeIndex: branchBefore };
-                if (!isSessionRunning(sourceSessionId)) {
-                    ready = await waitForBranchFinalPersisted(sourceSessionId, branchBefore, expectedText);
-                }
-                if (!ready || !ready.ready) {
-                    showUiAlert({
-                        title: '分支稍后再试',
-                        message: '最终回答仍在写入会话记录，请稍等一两秒后再次分支。',
-                        variant: 'warning',
-                    });
-                    return;
-                }
-                var res = await branchSessionOnServer(ready.beforeIndex || branchBefore, sourceSessionId);
+                var res = await branchSessionOnServer(branchBefore, sourceSessionId);
                 if (!res || !res.ok || !res.session_id) {
                     showUiAlert({
                         title: '创建失败',
@@ -385,8 +372,12 @@ function onMessageToolbarClick(wrap, role, act) {
                     });
                     return;
                 }
+                if (res.session && typeof sessionStore !== 'undefined') {
+                    sessionStore.upsert(res.session);
+                    renderSessionListIfChanged(true);
+                }
                 await switchSession(res.session_id);
-                void loadSessions();
+                setTimeout(function () { void loadSessions({ forceRender: true }); }, 0);
             })();
         });
         return;
@@ -2594,13 +2585,17 @@ function appendToolPendingRow(ctx, parsed, runSessionId) {
     if (draft) {
         if (parsed.tool_call_id != null && String(parsed.tool_call_id) !== '') draft.setAttribute('data-tool-call-id', String(parsed.tool_call_id));
         draft.removeAttribute('data-tool-draft-key');
+        draft.setAttribute('data-tool-pending', '1');
         draft.dataset.commandPreview = parsed.command_preview != null ? String(parsed.command_preview) : '';
         setToolRowText(draft, line, ctx, runSessionId);
         return;
     }
     var sc = createProcessFeedRow(ctx, 'tool-call', line, so, runSessionId, parsed.tool_call_id);
     var row = sc && sc.closest ? sc.closest('.feed-item') : null;
-    if (row) row.dataset.commandPreview = parsed.command_preview != null ? String(parsed.command_preview) : '';
+    if (row) {
+        row.setAttribute('data-tool-pending', '1');
+        row.dataset.commandPreview = parsed.command_preview != null ? String(parsed.command_preview) : '';
+    }
 }
 
 function appendToolCommandDelta(ctx, parsed, runSessionId) {
@@ -2641,6 +2636,7 @@ function upsertToolCallResult(ctx, parsed, runSessionId) {
     if (row) {
         if (tid) row.setAttribute('data-tool-call-id', tid);
         row.removeAttribute('data-tool-draft-key');
+        row.removeAttribute('data-tool-pending');
         row.dataset.commandPreview = cmdPreview != null ? String(cmdPreview) : '';
         var sc = row.querySelector('.feed-chunk-scroller');
         if (sc) sc.textContent = truncateLogTextForUi(text);

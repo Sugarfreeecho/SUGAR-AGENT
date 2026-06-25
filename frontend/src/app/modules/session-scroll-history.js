@@ -942,6 +942,56 @@ function finalizeLlmStreamChunks(ctx) {
     });
 }
 
+function discardLlmStreamChunks(ctx, ev) {
+    if (!ctx) return;
+    if (ctx.llm) {
+        const l = ctx.llm;
+        if (l.llmDeltaFlushRaf) {
+            cancelAnimationFrame(l.llmDeltaFlushRaf);
+            l.llmDeltaFlushRaf = 0;
+        }
+        l.llmPendingReasoningDelta = '';
+        l.llmPendingResponseDelta = '';
+        l.llmStreamReasoningIter = null;
+        l.llmStreamResponseIter = null;
+        l.llmStreamReasoningScroller = null;
+        l.llmStreamResponseScroller = null;
+        l.llmDeltaLastSeq = null;
+    }
+    var bodies = [];
+    if (ctx.currentProcessGroup && !isSubagentStreamCtx(ctx)) {
+        var mainBody = ctx.currentProcessGroup.querySelector('.process-aggregate-body');
+        if (mainBody) bodies.push(mainBody);
+    }
+    if (ctx._subagentTurnProcess && ctx._subagentTurnProcess.isConnected) {
+        bodies.push(ctx._subagentTurnProcess);
+    }
+    var reactIter = ev && ev.react_iter != null && Number.isFinite(Number(ev.react_iter))
+        ? String(Math.max(1, Math.floor(Number(ev.react_iter))))
+        : '';
+    bodies.forEach(function (body) {
+        body.querySelectorAll('.feed-item.feed--llm, .feed-item.feed--llm2').forEach(function (el) {
+            var ch = el.querySelector('.feed-chunk');
+            if (ch && ch.classList.contains('is-streaming')) el.remove();
+        });
+        body.querySelectorAll('.feed-item.feed--tool[data-tool-pending="1"]').forEach(function (el) {
+            el.remove();
+        });
+        if (reactIter) {
+            var sel = '.feed-item[data-react-iter="' + reactIter + '"]';
+            body.querySelectorAll(sel).forEach(function (el) {
+                if (
+                    el.classList.contains('feed--tool')
+                    || el.classList.contains('feed--llm')
+                    || el.classList.contains('feed--llm2')
+                ) {
+                    el.remove();
+                }
+            });
+        }
+    });
+}
+
 function flushLlmDeltaText(ctx) {
     if (!ctx || !ctx.llm) return;
     const l = ctx.llm;
