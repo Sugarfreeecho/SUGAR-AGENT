@@ -2909,6 +2909,26 @@ class SessionManager:
         """返回与流式接口相同结构的事件列表，供前端仅调用 renderEvent 重放。"""
         return self._load_ui_events(session_id)
 
+    def _load_ui_events_for_active_runtime(self, session_id: str) -> List[dict]:
+        """Load UI-visible history from the selected runtime, with V1 as fallback."""
+        if self._runtime_v2_primary():
+            try:
+                from runtime_v2.ui_projection import RuntimeUiProjection
+
+                projection = RuntimeUiProjection(
+                    self.repository.sessions_dir,
+                    path_resolver=self._resolve_session_path,
+                )
+                events = projection.read_ui_events(
+                    session_id,
+                    legacy_loader=lambda: self._load_ui_events(session_id),
+                )
+                if events:
+                    return events
+            except Exception as exc:
+                logger.debug("Runtime V2 UI history read failed for %s: %s", session_id, exc)
+        return self._load_ui_events(session_id)
+
     def get_ui_events_page(
         self,
         session_id: str,
@@ -3241,7 +3261,7 @@ class SessionManager:
         boundary_for_branch=True 时按「分支点 final 前 user」取锚点，且不裁掉该 user 轮。
         """
         try:
-            events = self._load_ui_events(session_id)
+            events = self._load_ui_events_for_active_runtime(session_id)
             n = len(events)
             if before_index < 0:
                 return False
@@ -3325,12 +3345,12 @@ class SessionManager:
             src_path = self._get_session_path(sid)
             if not src_path.is_dir():
                 return None
-            events = self._load_ui_events(sid)
+            events = self._load_ui_events_for_active_runtime(sid)
             n = len(events)
             if before_index < 0:
                 return None
             if before_index > n:
-                before_index = n
+                return None
             new_id = str(uuid.uuid4())
             dst_path = self._get_session_path(new_id)
             if dst_path.exists():
@@ -3338,6 +3358,8 @@ class SessionManager:
             branch_name = self._next_branch_session_name(sid)
             now_iso = datetime.now().isoformat()
             new_events = events[:before_index]
+            if not new_events or not isinstance(new_events[-1], dict) or new_events[-1].get("type") != "final":
+                return None
             src_llm = self._load_llm_history(sid)
             src_work = self._load_work_messages(sid)
             new_llm, new_work, _ = self._rebuild_llm_work_from_ui(
@@ -3358,6 +3380,15 @@ class SessionManager:
                 new_id,
                 [_message_to_dict(m) for m in rebuild_core_messages_from_ui_events(new_events)],
             )
+            try:
+                from runtime_v2.ui_projection import RuntimeUiProjection
+
+                RuntimeUiProjection(
+                    self.repository.sessions_dir,
+                    path_resolver=self._resolve_session_path,
+                ).replace_from_legacy(new_id, new_events, reason="legacy_branch_seed")
+            except Exception as exc:
+                logger.debug("Runtime V2 branch UI seed failed for %s: %s", new_id, exc)
             meta = self._load_metadata(sid)
             if not isinstance(meta, dict):
                 meta = {}
