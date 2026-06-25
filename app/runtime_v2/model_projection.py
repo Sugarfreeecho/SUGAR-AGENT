@@ -70,3 +70,50 @@ class RuntimeModelProjection:
             reason="legacy_model_backfill",
         )
         return len(clean)
+
+    def sync_from_legacy_if_needed(self, session_id: str, legacy_messages: List[Dict[str, Any]], reason: str = "legacy_model_sync") -> dict:
+        if not runtime_v2_enabled():
+            return {"checked": True, "action": "disabled", "legacy_count": 0, "projected_count": 0, "written": 0}
+        clean = [dict(item) for item in list(legacy_messages or []) if isinstance(item, dict)]
+        projected = self.read_message_dicts(session_id)
+        if not clean:
+            return {
+                "checked": True,
+                "action": "none",
+                "legacy_count": 0,
+                "projected_count": len(projected),
+                "written": 0,
+            }
+        if self._messages_equal(projected, clean):
+            return {
+                "checked": True,
+                "action": "none",
+                "legacy_count": len(clean),
+                "projected_count": len(projected),
+                "written": 0,
+            }
+        RuntimeHistoryOps(self.sessions_dir).replace_model_history(
+            session_id,
+            clean,
+            reason=reason,
+        )
+        return {
+            "checked": True,
+            "action": "replace",
+            "legacy_count": len(clean),
+            "projected_count": len(projected),
+            "written": len(clean),
+        }
+
+    @classmethod
+    def _messages_equal(cls, left: List[Dict[str, Any]], right: List[Dict[str, Any]]) -> bool:
+        return [cls._message_signature(item) for item in left if isinstance(item, dict)] == [
+            cls._message_signature(item) for item in right if isinstance(item, dict)
+        ]
+
+    @staticmethod
+    def _message_signature(message: Dict[str, Any]) -> tuple[str, str, str]:
+        msg_type = str(message.get("type") or message.get("role") or "")
+        content = str(message.get("content") or "")
+        tool_call_id = str(message.get("tool_call_id") or "")
+        return msg_type, content, tool_call_id

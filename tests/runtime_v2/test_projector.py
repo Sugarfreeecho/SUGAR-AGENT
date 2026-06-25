@@ -159,6 +159,22 @@ class RuntimeProjectorTests(unittest.TestCase):
             self.assertEqual(second, 0)
             self.assertEqual([m["content"] for m in messages], ["legacy", "answer"])
 
+    def test_model_projection_sync_replaces_partial_projection(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ops = RuntimeHistoryOps(tmp)
+            ops.append_model_message("s1", "user", "partial")
+            projection = RuntimeModelProjection(tmp)
+
+            result = projection.sync_from_legacy_if_needed("s1", [
+                {"type": "user", "content": "legacy"},
+                {"type": "assistant", "content": "answer"},
+            ])
+            messages = projection.read_message_dicts("s1")
+
+            self.assertEqual(result["action"], "replace")
+            self.assertEqual(result["written"], 2)
+            self.assertEqual([m["content"] for m in messages], ["legacy", "answer"])
+
 
 if __name__ == "__main__":
     unittest.main()

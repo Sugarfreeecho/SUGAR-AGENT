@@ -430,12 +430,22 @@ def _load_model_history_dicts_v2_primary(session_id: str, *, reconcile_legacy: b
             return session_manager._load_llm_history(session_id)
     except Exception as exc:
         logger.debug("Runtime version check failed for model history: %s", exc)
-    runtime_v2_messages = _load_runtime_v2_model_history_dicts(session_id)
-    if runtime_v2_messages:
-        return runtime_v2_messages
     if reconcile_legacy:
         session_manager.reconcile_llm_work_to_ui_user_count(session_id, include_work=False)
     legacy_messages = session_manager._load_llm_history(session_id)
+    try:
+        from runtime_v2 import RuntimeModelProjection
+
+        RuntimeModelProjection(session_manager.sessions_dir).sync_from_legacy_if_needed(
+            session_id,
+            legacy_messages,
+            reason="legacy_model_sync_on_read" if reconcile_legacy else "legacy_model_sync_on_continuation",
+        )
+    except Exception as exc:
+        logger.debug("Runtime V2 model legacy sync failed: %s", exc)
+    runtime_v2_messages = _load_runtime_v2_model_history_dicts(session_id)
+    if runtime_v2_messages:
+        return runtime_v2_messages
     try:
         from runtime_v2 import RuntimeModelProjection
 
