@@ -3397,10 +3397,11 @@ class SessionManager:
             try:
                 from runtime_v2.ui_projection import RuntimeUiProjection
 
-                RuntimeUiProjection(
+                branch_projection = RuntimeUiProjection(
                     self.repository.sessions_dir,
                     path_resolver=self._resolve_session_path,
-                ).replace_from_legacy(new_id, new_events, reason="legacy_branch_seed")
+                )
+                branch_projection.replace_from_legacy(new_id, new_events, reason="legacy_branch_seed")
             except Exception as exc:
                 logger.debug("Runtime V2 branch UI seed failed for %s: %s", new_id, exc)
             meta = self._load_metadata(sid)
@@ -3453,11 +3454,24 @@ class SessionManager:
                 new_event_count=len(new_events),
                 name=branch_name,
             )
+            branch_from_seq = before_index
+            if self._runtime_v2_primary():
+                try:
+                    from runtime_v2.ui_projection import RuntimeUiProjection
+
+                    mapped_seq = RuntimeUiProjection(
+                        self.repository.sessions_dir,
+                        path_resolver=self._resolve_session_path,
+                    ).ui_index_to_runtime_seq(sid, before_index - 1)
+                    if mapped_seq is not None:
+                        branch_from_seq = int(mapped_seq)
+                except Exception as exc:
+                    logger.debug("Runtime V2 branch source seq mapping failed for %s: %s", sid, exc)
             self._observe_runtime_v2_history(
                 "create_branch",
                 new_id,
                 source_session_id=sid,
-                branch_from_seq=before_index,
+                branch_from_seq=branch_from_seq,
                 name=branch_name,
             )
             self._observe_runtime_v2_history(
