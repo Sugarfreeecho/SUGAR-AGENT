@@ -27,6 +27,7 @@ async function consumeAgentSseResponse(response, runCtx, runSessionId, streamEve
                 syncSessionListIndicatorClasses();
                 setSendButtonState();
                 if (runSessionId === currentSessionId) renderTodoPlanForCurrentSession();
+                scheduleFollowupQueueDrain(runSessionId, 0);
                 if (liveAutoFollow) {
                     scrollProcessBodyToBottom(runCtx, runSessionId);
                     scrollChatToBottomIfFollow(runSessionId, {});
@@ -67,6 +68,7 @@ async function consumeAgentSseResponse(response, runCtx, runSessionId, streamEve
                         }
                         syncSessionListIndicatorClasses();
                         setSendButtonState();
+                        if (eventSessionId === runSessionId) scheduleFollowupQueueDrain(runSessionId, 0);
                         streamEventIdx += 1;
                         continue;
                     }
@@ -172,6 +174,7 @@ async function consumeAgentSseResponse(response, runCtx, runSessionId, streamEve
                     if (getSessionRunState(runSessionId)) clearSessionRunState(runSessionId);
                     syncSessionListIndicatorClasses();
                     setSendButtonState();
+                    scheduleFollowupQueueDrain(runSessionId, 250);
                 }
                 streamEventIdx += 1;
             } catch (e) { console.error('解析事件失败:', e); }
@@ -789,6 +792,12 @@ function removeConsumedFollowupSteer(sessionId, ev) {
     return true;
 }
 
+function scheduleFollowupQueueDrain(sessionId, delayMs) {
+    const sid = String(sessionId || '');
+    if (!sid) return;
+    setTimeout(function () { drainFollowupQueue(sid); }, Math.max(0, Number(delayMs) || 0));
+}
+
 async function sendFollowupNow(itemId) {
     const sid = currentSessionId;
     if (!sid) return;
@@ -843,7 +852,7 @@ async function sendFollowupNow(itemId) {
         takeFollowupItem(sid, itemId);
         renderFollowupQueue(sid);
     }, 1200);
-    void sendMessage({ message: item.text, fromQueue: true });
+    return sendMessage({ message: item.text, fromQueue: true });
 }
 
 function drainFollowupQueue(sessionId) {
@@ -868,9 +877,10 @@ function drainFollowupQueue(sessionId) {
             delete followupQueueDraining[sid];
             var q2 = getFollowupQueue(sid);
             var same = q2.find(function (entry) { return String(entry.id) === attemptedId; });
+            if (same && same.status && same.status !== 'sent') return;
             if (same && !same.status) return;
             if (q2.some(function (entry) { return !entry.status; })) {
-                setTimeout(function () { drainFollowupQueue(sid); }, 0);
+                scheduleFollowupQueueDrain(sid, 0);
             }
         });
 }
