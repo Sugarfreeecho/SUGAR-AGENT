@@ -1,5 +1,5 @@
-(function(){const c=document.createElement("link").relList;if(c&&c.supports&&c.supports("modulepreload"))return;for(const o of document.querySelectorAll('link[rel="modulepreload"]'))p(o);new MutationObserver(o=>{for(const d of o)if(d.type==="childList")for(const u of d.addedNodes)u.tagName==="LINK"&&u.rel==="modulepreload"&&p(u)}).observe(document,{childList:!0,subtree:!0});function f(o){const d={};return o.integrity&&(d.integrity=o.integrity),o.referrerPolicy&&(d.referrerPolicy=o.referrerPolicy),o.crossOrigin==="use-credentials"?d.credentials="include":o.crossOrigin==="anonymous"?d.credentials="omit":d.credentials="same-origin",d}function p(o){if(o.ep)return;o.ep=!0;const d=f(o);fetch(o.href,d)}})();(function(g){var c='<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"></path></svg>';function f(){if(!document.getElementById("myagent-path-picker-styles")){var n=document.createElement("style");n.id="myagent-path-picker-styles",n.textContent='.path-input-row{display:flex;align-items:stretch;gap:0.35rem;width:100%;}.path-input-row>.ip,.path-input-row>.tx,.path-input-row>input[type="text"],.path-input-row>input:not([type]){flex:1;min-width:0;}.path-browse-btn{flex-shrink:0;width:2.35rem;padding:0;border:1px solid var(--border-glass,rgba(255,255,255,.08));border-radius:var(--radius-sm,8px);background:var(--surface-glass2,rgba(40,40,60,.94));color:var(--text-secondary,#a6adc8);cursor:pointer;display:inline-flex;align-items:center;justify-content:center;transition:color .18s,border-color .18s,background .18s;}.path-browse-btn:hover{color:var(--text-primary,#cdd6f4);border-color:var(--border-brand-accent,rgba(124,111,247,.35));background:rgba(108,92,231,.12);}.path-browse-btn:disabled{opacity:.45;cursor:not-allowed;}.path-browse-btn--ghost{background:transparent;border-color:transparent;box-shadow:none;width:2.1rem;}.path-browse-btn--ghost:hover{background:rgba(108,92,231,.1);border-color:transparent;color:var(--accent-2,#d4b8fc);}.input-wrapper .path-browse-btn--ghost{align-self:center;margin-right:-0.15rem;}',document.head.appendChild(n)}}async function p(n,e,i){var a=typeof AbortController<"u"?new AbortController:null,r=a?setTimeout(function(){a.abort()},5e4):null,t;try{t=await fetch("/api/pick-path",{method:"POST",headers:{"Content-Type":"application/json"},credentials:"same-origin",body:JSON.stringify({kind:n||"directory",initial:e||"",multiple:!!i}),signal:a?a.signal:void 0})}finally{r&&clearTimeout(r)}var s=await t.json().catch(function(){return{ok:!1,error:"请求失败"}});if(!t.ok||!s.ok){if(s&&s.cancelled)return null;var l=s&&s.error||"无法打开选择对话框";if(/取消|cancelled|800704c7|2147023673/i.test(l))return null;throw new Error(l)}return i?Array.isArray(s.paths)?s.paths:s.path?[s.path]:[]:s.path||null}async function o(n,e,i,a,r){n.disabled=!0;try{var t=await p(e,i||"",!!r);a&&a(t)}catch{return}finally{n.disabled=!1}}function d(n){var e=String(n||"").trim();return e?((e.charAt(0)==='"'&&e.charAt(e.length-1)==='"'||e.charAt(0)==="'"&&e.charAt(e.length-1)==="'")&&(e=e.slice(1,-1)),'"'+e.replace(/"/g,'\\"')+'"'):""}function u(n,e,i){if(!n||n.dataset.pathBrowseWrapped==="1")return n;f();var a=document.createElement("div");a.className="path-input-row";var r=n.parentNode;if(!r)return n;r.insertBefore(a,n),a.appendChild(n);var t=document.createElement("button");t.type="button",t.className="path-browse-btn",t.innerHTML=c;var s=i||"浏览路径";return t.setAttribute("aria-label",s),typeof bindUiHoverTip=="function"?(t.setAttribute("data-ui-tip",s),t.removeAttribute("title"),bindUiHoverTip(t)):t.title=s,t.addEventListener("click",function(l){l.stopPropagation();var m=n.getAttribute("data-path-kind")||e;m!=="file"&&m!=="directory"&&(m="directory"),o(t,m,n.value||"",function(v){if(v){var h=Array.isArray(v)?v[0]||"":String(v);h&&(n.value=h,n.dispatchEvent(new Event("input",{bubbles:!0})),n.dispatchEvent(new Event("change",{bubbles:!0})))}})}),a.appendChild(t),n.dataset.pathBrowseWrapped="1",n}function b(n,e){var i=n.selectionStart,a=n.selectionEnd,r=n.value.slice(0,i),t=n.value.slice(a),s=String(e||"");r.length&&!/\s$/.test(r)&&(s=" "+s),t.length&&!/^\s/.test(t)&&(s=s+" "),n.value=r+s+t;var l=r.length+s.length;n.selectionStart=n.selectionEnd=l,n.dispatchEvent(new Event("input",{bubbles:!0})),n.focus()}function y(n,e){!n||!e||(f(),n.classList.add("path-browse-btn","path-browse-btn--ghost"),n.innerHTML=c,n.setAttribute("aria-label","选择文件"),n.setAttribute("data-ui-tip","选择文件"),n.dataset.silentPickerUnavailable="1",n.removeAttribute("title"),n.addEventListener("click",function(i){i.stopPropagation();var a=g&&typeof g.__WORK_DIR__=="string"?g.__WORK_DIR__:"";o(n,"file",a,function(r){var t=Array.isArray(r)?r:r?[r]:[];if(t.length){var s=t.map(function(l){return d(l)}).join(" ");b(e,s)}},!0)}))}function S(n){n=n||document;var e=n.querySelectorAll("[data-path-kind]"),i;for(i=0;i<e.length;i++){var a=e[i],r=a.getAttribute("data-path-kind");(r==="file"||r==="directory")&&u(a,r)}}g.MyAgentPathPicker={pickPath:p,wrapInputWithBrowse:u,attachChatPicker:y,scan:S},document.readyState==="loading"?document.addEventListener("DOMContentLoaded",function(){S(document)}):S(document)})(typeof window<"u"?window:globalThis);const I=`// ═══════════════════════════════════════════════════════════
-// MyAgent · 智能会话 — 完整逻辑
+(function(){const w=document.createElement("link").relList;if(w&&w.supports&&w.supports("modulepreload"))return;for(const h of document.querySelectorAll('link[rel="modulepreload"]'))E(h);new MutationObserver(h=>{for(const S of h)if(S.type==="childList")for(const _ of S.addedNodes)_.tagName==="LINK"&&_.rel==="modulepreload"&&E(_)}).observe(document,{childList:!0,subtree:!0});function P(h){const S={};return h.integrity&&(S.integrity=h.integrity),h.referrerPolicy&&(S.referrerPolicy=h.referrerPolicy),h.crossOrigin==="use-credentials"?S.credentials="include":h.crossOrigin==="anonymous"?S.credentials="omit":S.credentials="same-origin",S}function E(h){if(h.ep)return;h.ep=!0;const S=P(h);fetch(h.href,S)}})();(function(y){var w='<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"></path></svg>';function P(){if(!document.getElementById("myagent-path-picker-styles")){var t=document.createElement("style");t.id="myagent-path-picker-styles",t.textContent='.path-input-row{display:flex;align-items:stretch;gap:.35rem;width:100%;}.path-input-row>.ip,.path-input-row>.tx,.path-input-row>input[type="text"],.path-input-row>input:not([type]){flex:1;min-width:0;}.path-browse-btn{flex-shrink:0;width:2.35rem;padding:0;border:1px solid var(--border-glass,rgba(255,255,255,.08));border-radius:var(--radius-sm,8px);background:var(--surface-glass2,rgba(40,40,60,.94));color:var(--text-secondary,#a6adc8);cursor:pointer;display:inline-flex;align-items:center;justify-content:center;transition:color .18s,border-color .18s,background .18s;}.path-browse-btn:hover{color:var(--text-primary,#cdd6f4);border-color:var(--border-brand-accent,rgba(124,111,247,.35));background:rgba(108,92,231,.12);}.path-browse-btn:disabled{opacity:.45;cursor:not-allowed;}.path-browse-btn--ghost{background:transparent;border-color:transparent;box-shadow:none;width:2.1rem;}.path-browse-btn--ghost:hover{background:rgba(108,92,231,.1);border-color:transparent;color:var(--accent-2,#d4b8fc);}.input-wrapper .path-browse-btn--ghost{align-self:center;margin-right:-.15rem;}.input-wrapper.is-drag-over{border-color:rgba(203,166,247,.62);box-shadow:0 0 0 3px rgba(203,166,247,.12),0 0 28px rgba(139,92,246,.18);}.workspace-file-popover{position:fixed;display:none;z-index:260;width:min(46rem,calc(100vw - 1.2rem));height:min(32rem,calc(100vh - 1.2rem));border:1px solid rgba(203,166,247,.24);border-radius:14px;background:linear-gradient(145deg,rgba(31,31,49,.88),rgba(19,20,31,.78));box-shadow:0 24px 70px rgba(0,0,0,.38),0 0 0 1px rgba(255,255,255,.045) inset,0 0 34px rgba(139,92,246,.16);overflow:hidden;backdrop-filter:blur(22px);-webkit-backdrop-filter:blur(22px);}.workspace-file-popover:before{content:"";position:absolute;inset:0;pointer-events:none;background:radial-gradient(circle at 18% 0%,rgba(203,166,247,.18),transparent 30%),radial-gradient(circle at 92% 18%,rgba(99,102,241,.16),transparent 28%);}.workspace-file-popover.is-open{display:flex;flex-direction:column;}.workspace-file-search{position:relative;width:100%;box-sizing:border-box;border:0;border-bottom:1px solid rgba(255,255,255,.08);background:rgba(255,255,255,.055);color:var(--text-primary,#cdd6f4);padding:.56rem .72rem;font:inherit;font-size:.78rem;outline:none;}.workspace-file-search::placeholder{color:var(--text-muted,#6c7086);}.workspace-file-list{position:relative;flex:1;min-height:0;overflow:auto;padding:.36rem .38rem .2rem;}.workspace-file-item{width:100%;display:grid;grid-template-columns:1.05rem minmax(0,1fr) auto;gap:.2rem .38rem;align-items:center;text-align:left;border:0;border-radius:8px;background:transparent;color:var(--text-secondary,#a6adc8);padding:.22rem .36rem;cursor:pointer;font:inherit;font-size:.74rem;}.workspace-file-item:hover,.workspace-file-item.is-active{background:rgba(139,92,246,.13);color:var(--text-primary,#cdd6f4);}.workspace-file-item.is-selected{background:rgba(99,102,241,.18);color:var(--text-primary,#cdd6f4);}.workspace-file-check{width:.82rem;height:.82rem;border:1px solid rgba(203,166,247,.38);border-radius:4px;display:inline-flex;align-items:center;justify-content:center;color:#fff;font-size:.62rem;line-height:1;background:transparent;}.workspace-file-item.is-selected .workspace-file-check{background:linear-gradient(135deg,#6366f1,#a78bfa);border-color:transparent;color:#fff;}.workspace-file-dir-row{grid-template-columns:1.05rem minmax(0,1fr) auto;color:var(--text-primary,#cdd6f4);font-weight:650;}.workspace-file-dir-row .workspace-file-tree{grid-column:2/3;}.workspace-file-file-row{grid-template-columns:1.05rem minmax(0,1fr) auto;}.workspace-file-tree{min-width:0;display:flex;align-items:center;gap:.24rem;}.workspace-file-indent{flex:0 0 auto;width:var(--indent,0);}.workspace-file-chevron{width:.8rem;min-width:.8rem;color:var(--text-muted,#6c7086);font-size:.72rem;text-align:center;border:0;background:transparent;padding:0;cursor:pointer;}.workspace-file-icon{position:relative;width:.98rem;min-width:.98rem;height:.74rem;margin-top:.04rem;border-radius:3px;border:1px solid rgba(203,166,247,.28);background:linear-gradient(135deg,rgba(203,166,247,.18),rgba(99,102,241,.1));box-shadow:inset 0 .12rem .26rem rgba(255,255,255,.08);}.workspace-file-icon:before{content:"";position:absolute;left:.06rem;right:.06rem;top:.12rem;height:.16rem;border-radius:999px;background:rgba(203,166,247,.34);}.workspace-file-icon:after{content:"";position:absolute;left:.06rem;right:.06rem;bottom:.11rem;height:.24rem;border-radius:2px;background:rgba(99,102,241,.16);}.workspace-file-icon.is-file{width:.82rem;min-width:.82rem;height:1rem;margin-top:0;border-radius:3px;background:transparent;border:1.5px solid rgba(166,173,200,.58);box-shadow:none;color:var(--text-muted,#6c7086);}.workspace-file-icon.is-file:before{left:auto;right:-1.5px;top:-1.5px;width:.3rem;height:.3rem;border:0;border-left:1.5px solid rgba(166,173,200,.58);border-bottom:1.5px solid rgba(166,173,200,.58);border-radius:0 3px 0 3px;background:var(--surface-glass2,rgba(40,40,60,.94));}.workspace-file-icon.is-file:after{display:none;}.workspace-file-icon.is-folder-svg{width:1rem;min-width:1rem;height:1rem;margin-top:0;border:0;background:transparent;box-shadow:none;color:var(--text-muted,#6c7086);display:inline-flex;align-items:center;justify-content:center;}.workspace-file-icon.is-folder-svg:before,.workspace-file-icon.is-folder-svg:after{display:none;}.workspace-file-icon.is-folder-svg svg{width:1rem;height:1rem;display:block;}.workspace-file-icon.is-image{border-color:rgba(45,212,191,.72);}.workspace-file-icon.is-image:after{display:block;left:.12rem;right:.12rem;bottom:.15rem;height:.24rem;clip-path:polygon(0 100%,38% 38%,56% 66%,76% 24%,100% 100%);background:rgba(45,212,191,.72);}.workspace-file-icon.is-audio{border-color:rgba(251,191,36,.76);}.workspace-file-icon.is-audio:after{display:block;left:.17rem;right:auto;bottom:.18rem;width:.36rem;height:.4rem;border-radius:0;background:rgba(251,191,36,.76);clip-path:polygon(0 32%,45% 32%,100% 0,100% 100%,45% 68%,0 68%);}.workspace-file-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:.74rem;}.workspace-file-dir{grid-column:2/-1;color:var(--text-muted,#6c7086);font-size:.68rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}.workspace-file-meta{color:var(--text-muted,#6c7086);font-size:.68rem;white-space:nowrap;}.workspace-file-footer{position:relative;display:flex;align-items:center;justify-content:space-between;gap:.5rem;padding:.42rem .52rem;border-top:1px solid rgba(255,255,255,.08);background:rgba(255,255,255,.035);font-size:.72rem;color:var(--text-muted,#6c7086);}.workspace-file-outside{flex-shrink:0;border:1px solid rgba(203,166,247,.24);border-radius:8px;padding:.28rem .58rem;background:rgba(203,166,247,.1);color:var(--text-primary,#cdd6f4);font:inherit;font-size:.7rem;font-weight:700;cursor:pointer;transition:background .16s,border-color .16s,color .16s;}.workspace-file-outside:hover{background:rgba(203,166,247,.18);border-color:rgba(203,166,247,.42);color:#fff;}.workspace-file-insert{border:0;border-radius:8px;padding:.34rem .62rem;background:linear-gradient(135deg,#6366f1,#8b5cf6);color:#fff;font-size:.72rem;font-weight:700;cursor:pointer;}.workspace-file-insert:disabled{opacity:.45;cursor:not-allowed;}.workspace-file-empty{padding:1rem;text-align:center;color:var(--text-muted,#6c7086);font-size:.78rem;}.theme-light .workspace-file-popover{background:linear-gradient(145deg,rgba(255,255,255,.93),rgba(244,247,252,.86));box-shadow:0 24px 64px rgba(31,35,52,.16),0 0 28px rgba(99,102,241,.12);}.theme-light .workspace-file-search,.theme-light .workspace-file-footer{background:rgba(34,40,58,.035);}',document.head.appendChild(t)}}async function E(t,d,o){var c=typeof AbortController<"u"?new AbortController:null,u=c?setTimeout(function(){c.abort()},5e4):null,f;try{f=await fetch("/api/pick-path",{method:"POST",headers:{"Content-Type":"application/json"},credentials:"same-origin",body:JSON.stringify({kind:t||"directory",initial:d||"",multiple:!!o}),signal:c?c.signal:void 0})}finally{u&&clearTimeout(u)}var p=await f.json().catch(function(){return{ok:!1,error:"请求失败"}});if(!f.ok||!p.ok){if(p&&p.cancelled)return null;var r=p&&p.error||"无法打开选择对话框";if(/取消|cancelled|800704c7|2147023673/i.test(r))return null;throw new Error(r)}return o?Array.isArray(p.paths)?p.paths:p.path?[p.path]:[]:p.path||null}async function h(t,d,o,c,u){t.disabled=!0;try{var f=await E(d,o||"",!!u);c&&c(f)}catch{return}finally{t.disabled=!1}}function S(t){var d=String(t||"").trim();return d?((d.charAt(0)==='"'&&d.charAt(d.length-1)==='"'||d.charAt(0)==="'"&&d.charAt(d.length-1)==="'")&&(d=d.slice(1,-1)),'"'+d.replace(/"/g,'\\"')+'"'):""}function _(t){var d=String(t||"").toLowerCase().split(".").pop()||"";return/^(png|jpe?g|gif|webp|bmp|svg|tiff?|ico|avif)$/.test(d)?"is-image":/^(mp3|wav|flac|aac|m4a|ogg|oga|opus|wma|aiff?)$/.test(d)?"is-audio":""}function F(t,d){var o=t.selectionStart,c=t.selectionEnd,u=t.value.slice(0,o),f=t.value.slice(c),p=String(d||"");u.length&&!/\s$/.test(u)&&(p=" "+p),f.length&&!/^\s/.test(f)&&(p=p+" "),t.value=u+p+f;var r=u.length+p.length;t.selectionStart=t.selectionEnd=r,t.dispatchEvent(new Event("input",{bubbles:!0})),t.focus()}async function J(t){var d=Array.prototype.slice.call(t||[]).filter(Boolean);if(!d.length)return[];var o=new FormData;d.forEach(function(f){o.append("files",f,f.name||"upload.bin")});var c=await fetch("/api/upload-chat-files",{method:"POST",credentials:"same-origin",body:o}),u=await c.json().catch(function(){return{ok:!1,error:"上传失败"}});if(!c.ok||!u.ok)throw new Error(u&&u.error||"上传失败");return Array.isArray(u.files)?u.files:[]}function ee(t){return t=Number(t||0),!isFinite(t)||t<=0?"":t<1024?t+" B":t<1024*1024?Math.round(t/102.4)/10+" KB":t<1024*1024*1024?Math.round(t/104857.6)/10+" MB":Math.round(t/1073741824e-1)/10+" GB"}async function q(t,d,o){var c=[];t?c.push("q="+encodeURIComponent(t)):d&&c.push("dir="+encodeURIComponent(d));var u="/api/workspace-files"+(c.length?"?"+c.join("&"):""),f=await fetch(u,{credentials:"same-origin",signal:o}),p=await f.json().catch(function(){return{ok:!1,error:"读取工作区文件失败"}});if(!f.ok||!p.ok)throw new Error(p&&p.error||"读取工作区文件失败");return Array.isArray(p.files)?p.files:[]}function H(t,d){return J(d).then(function(o){var c=o.map(function(u){return S(u.path||u.rel||u.name)}).join(" ");c&&F(t,c)})}function ne(t,d){var o=document.createElement("div");o.className="workspace-file-popover",o.setAttribute("aria-hidden","true"),o.innerHTML='<input class="workspace-file-search" type="text" autocomplete="off" spellcheck="false" placeholder="搜索工作区文件"><div class="workspace-file-list" role="listbox"></div><div class="workspace-file-footer"><span class="workspace-file-count">未选择文件</span><button type="button" class="workspace-file-outside">选择工作目录外文件</button></div>',document.body.appendChild(o);var c=o.querySelector(".workspace-file-search"),u=o.querySelector(".workspace-file-list"),f=o.querySelector(".workspace-file-count"),p=o.querySelector(".workspace-file-outside"),r={items:[],visible:[],active:0,open:!1,debounce:null,controller:null,selected:Object.create(null),expanded:Object.create(null),loadedDirs:Object.create(null),itemMap:Object.create(null)};function b(){var e=t.closest?t.closest(".input-wrapper"):t,n=e.getBoundingClientRect(),s=8,l=Math.min(Math.max(n.width,520),window.innerWidth-16),a=Math.max(8,Math.min(n.left,window.innerWidth-l-8)),g=o.offsetHeight||384,i=n.top-g-s;i<8&&(i=Math.min(window.innerHeight-g-8,n.bottom+s)),o.style.left=a+"px",o.style.top=Math.max(8,i)+"px",o.style.width=l+"px"}function I(){var e=Object.keys(r.selected).length;f.textContent=e?"已选择 "+e+" 项":"未选择文件",u.querySelectorAll(".workspace-file-item").forEach(function(n){var s=n.getAttribute("data-path-key")||"",l=!!r.selected[s];n.classList.toggle("is-selected",l);var a=n.querySelector(".workspace-file-check");a&&(a.textContent=l?"✓":"")})}function C(e){var n=u.querySelectorAll(".workspace-file-item");if(!n.length){r.active=0;return}r.active=Math.max(0,Math.min(e,n.length-1));for(var s=0;s<n.length;s++)n[s].classList.toggle("is-active",s===r.active),n[s].setAttribute("aria-selected",s===r.active?"true":"false");var l=n[r.active];l&&typeof l.scrollIntoView=="function"&&l.scrollIntoView({block:"nearest"})}function R(){r.open=!1,o.classList.remove("is-open"),o.setAttribute("aria-hidden","true"),r.debounce&&clearTimeout(r.debounce),r.controller&&r.controller.abort()}function N(e){return e&&(e.path||e.rel||e.name)||""}function W(e){return S(N(e))}function se(e,n){var s=N(e);if(!s)return!1;var l=String(e&&e.rel||"");return n.indexOf(W(e))>=0||n.indexOf(s)>=0||l&&n.indexOf(S(l))>=0||l&&n.indexOf(l)>=0}function ae(e,n){e=String(e||""),n=String(n||"");for(var s=0;s<e.length&&s<n.length&&e.charAt(s)===n.charAt(s);)s++;for(var l=e.length-1,a=n.length-1;l>=s&&a>=s&&e.charAt(l)===n.charAt(a);)l--,a--;return n.slice(s,a+1).trim()}function oe(e,n){if(n){var s=String(t.value||"");if(!(s.indexOf(n)>=0)){var l=t.value;F(t,n);var a=ae(l,t.value);e&&a&&(e._inputToken=a)}}}function ie(e,n){if(!n&&!e)return;var s=String(t.value||""),l=[];function a(i){i=String(i||"").trim(),i&&l.indexOf(i)<0&&l.push(i)}a(e&&e._inputToken),a(n),a(e&&e.path),a(e&&e.rel),a(e&&e.path&&S(e.path)),a(e&&e.rel&&S(e.rel));var g=s;l.sort(function(i,m){return m.length-i.length}).forEach(function(i){var m=i.replace(/[.*+?^${}()|[\]\\]/g,"\\$&"),v=new RegExp("(?:^|\\s)"+m+"(?=\\s|$)","g");g=g.replace(v,function(x){return x.charAt(0)&&/\s/.test(x.charAt(0))?" ":""})}),g=g.replace(/[ \t]{2,}/g," ").trim(),g!==s&&(t.value=g,t.selectionStart=t.selectionEnd=t.value.length,t.dispatchEvent(new Event("input",{bubbles:!0})))}function B(e){if(e){var n=N(e);if(n){var s=W(e);if(r.selected[n]){var l=r.selected[n];delete r.selected[n],ie(l,s)}else r.selected[n]=e,oe(e,s);I()}}}function z(){var e=String(t.value||"");Object.keys(r.selected).forEach(function(n){var s=r.selected[n];se(s,e)||delete r.selected[n]})}function de(){z(),I()}t.addEventListener("input",de),p&&p.addEventListener("click",function(e){e.preventDefault(),e.stopPropagation(),typeof d=="function"&&d()});function G(){var e=String(y.__WORK_DIR__||"workspace"),n=e.split(/[\\/]+/).filter(Boolean);return n[n.length-1]||"workspace"}function K(e,n,s){return{type:"dir",name:e,rel:n,root:!!s,path:"",dirs:Object.create(null),files:[],children:[],loaded:!1}}function le(e,n){var s=String(e&&e.path||""),l=String(n||"").replace(/\//g,"\\");return s&&l&&s.toLowerCase().slice(-l.length)===l.toLowerCase()?s.slice(0,Math.max(0,s.length-l.length)).replace(/[\\/]+$/,""):String(y.__WORK_DIR__||"").replace(/[\\/]+$/,"")}function V(e,n){var s=String(e||"").replace(/[\\/]+$/,""),l=String(n||"").replace(/[\\/]+/g,"/");if(!l)return s;var a=s.indexOf("\\")>=0?"\\":"/";return s?s+a+l.replace(/\//g,a):l}function L(e){return{kind:"directory",name:e.name||e.rel||G(),rel:e.rel||"",path:e.path||V(String(y.__WORK_DIR__||""),e.rel||"")}}function ce(e){var n=K(G(),"",!0);n.path=String(y.__WORK_DIR__||"").replace(/[\\/]+$/,""),n.loaded=!!r.loadedDirs.__root__;function s(a,g){for(var i=n,m=[],v=0;v<a.length;v++)m.push(a[v]),i.dirs[a[v]]||(i.dirs[a[v]]=K(a[v],m.join("/"),!1),i.dirs[a[v]].path=V(g||n.path,m.join("/"))),i=i.dirs[a[v]],i.loaded=!!r.loadedDirs[i.rel||"__root__"];return i}(e||[]).forEach(function(a){var g=String(a.rel||a.path||a.name||"").replace(/\\/g,"/"),i=g.split("/").filter(Boolean);if(i.length){var m=le(a,g);if(!n.path&&m&&(n.path=m),a.kind==="directory"){var v=s(i,m||n.path);v.name=a.name||v.name,v.path=a.path||v.path;return}var x=s(i.slice(0,-1),m||n.path);x.files.push({type:"file",name:a.name||i[i.length-1]||g,rel:g,item:a})}});function l(a){var g=Object.keys(a.dirs).map(function(i){return a.dirs[i]}).sort(function(i,m){return i.name.localeCompare(m.name,void 0,{sensitivity:"base"})});g.forEach(l),a.files.sort(function(i,m){return i.name.localeCompare(m.name,void 0,{sensitivity:"base"})}),a.children=g.concat(a.files)}return l(n),n}function Q(e,n,s){if(!(!e||e.type!=="dir")){s=Number(s||0);var l=e.rel||"__root__";n?r.expanded[l]=!0:typeof r.expanded[l]>"u"&&(r.expanded[l]=s===0),n&&e.children.forEach(function(a){a.type==="dir"&&Q(a,n,s+1)})}}function ue(e){var n=[];function s(l,a){n.push({type:"dir",node:l,depth:a}),r.expanded[l.rel||"__root__"]&&l.children.forEach(function(g){g.type==="dir"?s(g,a+1):n.push({type:"file",node:g,depth:a+1})})}return s(e,0),n}function pe(e){return String(e&&(e.kind||"file")||"file")+":"+String(e&&(e.rel||e.path||e.name)||"")}function $(e){(e||[]).forEach(function(n){var s=pe(n);s!==":"&&(r.itemMap[s]=n)}),r.items=Object.keys(r.itemMap).map(function(n){return r.itemMap[n]}),r.items.sort(function(n,s){return String(n.rel||"").localeCompare(String(s.rel||""),void 0,{sensitivity:"base"})})}function fe(e){if(e){var n=e.rel||"__root__";r.expanded[n]=!r.expanded[n],k(r.items,!1),r.expanded[n]&&!c.value&&!r.loadedDirs[n]&&ge(e.rel||"")}}function k(e,n,s){if(z(),r.items=(e||[]).slice().sort(function(a,g){return String(a.rel||"").localeCompare(String(g.rel||""),void 0,{sensitivity:"base"})}),u.innerHTML="",r.visible=[],n){u.innerHTML='<div class="workspace-file-empty">加载中</div>';return}if(s){u.innerHTML='<div class="workspace-file-empty">'+String(s)+"</div>";return}if(!r.items.length){u.innerHTML='<div class="workspace-file-empty">没有匹配文件</div>';return}var l=ce(r.items);Q(l,!!c.value),r.visible=ue(l),r.visible.forEach(function(a,g){var i=a.node,m=document.createElement("button");m.type="button",m.className="workspace-file-item "+(a.type==="dir"?"workspace-file-dir-row":"workspace-file-file-row"),m.setAttribute("role","option"),m.setAttribute("data-row-index",String(g)),m.setAttribute("data-path-key",a.type==="dir"?L(i).path||L(i).rel||L(i).name||"":i.item.path||i.item.rel||i.item.name||"");var v=document.createElement("div");v.className="workspace-file-tree";var x=document.createElement("span");x.className="workspace-file-indent",x.style.setProperty("--indent",Math.min(a.depth,10)*.86+"rem");var T=document.createElement("span");T.className="workspace-file-chevron",T.textContent=a.type==="dir"?r.expanded[i.rel||"__root__"]?"▾":"▸":"",a.type==="dir"?(T.setAttribute("aria-label",r.expanded[i.rel||"__root__"]?"折叠文件夹":"展开文件夹"),T.setAttribute("role","button"),T.addEventListener("click",function(A){A.preventDefault(),A.stopPropagation(),fe(i)})):T.setAttribute("tabindex","-1");var O=document.createElement("span");O.className="workspace-file-icon"+(a.type==="file"?" is-file "+_(i.item&&i.item.name):" is-folder-svg"),a.type==="dir"&&(O.innerHTML=w);var D=document.createElement("div");D.className="workspace-file-name",D.textContent=i.name||i.rel||"";var U=document.createElement("div");U.className="workspace-file-meta",U.textContent=a.type==="dir"?"":ee(i.item.size),v.appendChild(x),v.appendChild(T),v.appendChild(O),v.appendChild(D);var Z=document.createElement("span");Z.className="workspace-file-check",m.appendChild(Z),m.appendChild(v),m.appendChild(U),m.addEventListener("mouseenter",function(){C(g)}),m.addEventListener("click",function(A){A.preventDefault(),A.stopPropagation(),a.type==="dir"?B(L(i)):B(i.item)}),u.appendChild(m)}),C(0),I()}function X(){var e=c.value||"";r.controller&&r.controller.abort(),r.controller=typeof AbortController<"u"?new AbortController:null,k(r.items,!0),q(e,"",r.controller?r.controller.signal:void 0).then(function(n){r.open&&(e?k(n,!1):(r.loadedDirs.__root__=!0,$(n),k(r.items,!1)))}).catch(function(n){n&&n.name==="AbortError"||r.open&&k([],!1,n&&n.message||"读取失败")})}function ge(e){var n=e||"__root__";r.loadedDirs[n]||(r.loadedDirs[n]=!0,q("",e||"",void 0).then(function(s){!r.open||c.value||($(s),k(r.items,!1))}).catch(function(){delete r.loadedDirs[n]}))}function me(){r.debounce&&clearTimeout(r.debounce),r.debounce=setTimeout(X,120)}function Y(){if(r.open){b();try{c.focus(),c.select()}catch{}return}r.open=!0,o.classList.add("is-open"),o.setAttribute("aria-hidden","false"),c.value="",r.expanded=Object.create(null),r.loadedDirs=Object.create(null),r.itemMap=Object.create(null),r.items=[],k([],!0),b(),X(),setTimeout(function(){b();try{c.focus()}catch{}},0)}function ve(){r.open?R():Y()}return c.addEventListener("input",me),c.addEventListener("keydown",function(e){if(e.key==="ArrowDown")e.preventDefault(),C(r.active+1);else if(e.key==="ArrowUp")e.preventDefault(),C(r.active-1);else if(e.key==="Enter"){e.preventDefault();var n=r.visible[r.active];n&&n.type==="dir"?B(L(n.node)):n&&n.type==="file"&&B(n.node.item)}else e.key==="Escape"&&(e.preventDefault(),R(),t.focus())}),document.addEventListener("click",function(e){r.open&&(o.contains(e.target)||R())}),window.addEventListener("resize",function(){r.open&&b()}),window.addEventListener("scroll",function(){r.open&&b()},!0),{panel:o,open:Y,close:R,toggle:ve}}function j(t,d,o){if(!t||t.dataset.pathBrowseWrapped==="1")return t;P();var c=document.createElement("div");c.className="path-input-row";var u=t.parentNode;if(!u)return t;u.insertBefore(c,t),c.appendChild(t);var f=document.createElement("button");f.type="button",f.className="path-browse-btn",f.innerHTML=w;var p=o||"浏览路径";return f.setAttribute("aria-label",p),typeof bindUiHoverTip=="function"?(f.setAttribute("data-ui-tip",p),f.removeAttribute("title"),bindUiHoverTip(f)):f.title=p,f.addEventListener("click",function(r){r.stopPropagation();var b=t.getAttribute("data-path-kind")||d;b!=="file"&&b!=="directory"&&(b="directory"),h(f,b,t.value||"",function(I){if(I){var C=Array.isArray(I)?I[0]||"":String(I);C&&(t.value=C,t.dispatchEvent(new Event("input",{bubbles:!0})),t.dispatchEvent(new Event("change",{bubbles:!0})))}})}),c.appendChild(f),t.dataset.pathBrowseWrapped="1",t}function te(t){var d=t.closest?t.closest(".input-wrapper"):t;!d||d.dataset.fileDropBound==="1"||(d.dataset.fileDropBound="1",["dragenter","dragover"].forEach(function(o){d.addEventListener(o,function(c){!c.dataTransfer||!c.dataTransfer.files||!c.dataTransfer.files.length||(c.preventDefault(),d.classList.add("is-drag-over"))})}),["dragleave","drop"].forEach(function(o){d.addEventListener(o,function(){d.classList.remove("is-drag-over")})}),d.addEventListener("drop",function(o){!o.dataTransfer||!o.dataTransfer.files||!o.dataTransfer.files.length||(o.preventDefault(),H(t,o.dataTransfer.files).catch(function(){}))}))}function re(t,d){if(!(!t||!d)){P(),te(d),t.classList.add("path-browse-btn","path-browse-btn--ghost"),t.innerHTML=w,t.setAttribute("aria-label","工作区文件"),t.setAttribute("data-ui-tip","工作区文件"),t.dataset.silentPickerUnavailable="1",t.removeAttribute("title");var o=document.createElement("input");o.type="file",o.multiple=!0,o.style.display="none",o.setAttribute("aria-hidden","true"),document.body.appendChild(o),o.addEventListener("change",function(){var u=o.files;!u||!u.length||(t.disabled=!0,H(d,u).finally(function(){o.value="",t.disabled=!1}))});var c=ne(d,function(){o.click()});t.addEventListener("click",function(u){if(u.stopPropagation(),u.preventDefault(),u.altKey){o.click();return}if(!u.shiftKey){c.toggle();return}var f=y&&typeof y.__WORK_DIR__=="string"?y.__WORK_DIR__:"";h(t,"file",f,function(p){var r=Array.isArray(p)?p:p?[p]:[];r.length&&F(d,r.map(function(b){return S(b)}).join(" "))},!1)})}}function M(t){t=t||document;for(var d=t.querySelectorAll("[data-path-kind]"),o=0;o<d.length;o++){var c=d[o],u=c.getAttribute("data-path-kind");(u==="file"||u==="directory")&&j(c,u)}}y.MyAgentPathPicker={pickPath:E,wrapInputWithBrowse:j,attachChatPicker:re,scan:M},document.readyState==="loading"?document.addEventListener("DOMContentLoaded",function(){M(document)}):M(document)})(typeof window<"u"?window:globalThis);const he=`// ═══════════════════════════════════════════════════════════
+// General Agent · 智能会话 — 完整逻辑
 // ═══════════════════════════════════════════════════════════
 
 const chatContainer = document.getElementById('chat-container');
@@ -153,17 +153,22 @@ function initUiSettingsControls() {
     }
 }
 initUiSettingsControls();
-
-`,x=`let currentSessionId = null;
+`,Se=`let currentSessionId = null;
 /** Blocks repeat sends while the async send pipeline is claiming a sessionStore run slot. */
 let sendPipelineLock = false;
 let sendPipelineLockSessionId = null;
+const followupQueueBySession = Object.create(null);
+const followupQueueLoadedBySession = Object.create(null);
+let followupQueueSeq = 1;
+const followupQueueDraining = Object.create(null);
 /** 会话在后台跑完后未点开过：侧栏绿点，点开即清除（localStorage 持久化，刷新不丢） */
 const sessionUnreadComplete = new Set();
 const LS_SESSION_UNREAD = 'myagent-session-unread';
+const sessionUnreadClearInFlight = Object.create(null);
 /** 每个会话独立的输入草稿（切换会话恢复） */
 const draftBySession = Object.create(null);
 const LS_INPUT_DRAFT_PREFIX = 'myagent-input-draft-';
+const LS_FOLLOWUP_QUEUE_PREFIX = 'myagent-followup-queue-';
 const inputPathTokenMap = Object.create(null);
 let inputPathRewriteGuard = false;
 /** 本会话最近一次成功点击「发送」的用户消息全文（供工具确认失败后「重新发送」） */
@@ -213,8 +218,108 @@ let streamScrollFollowRaf = 0;
 let subagentScrollFollowRaf = 0;
 var subagentCardNearBottom = Object.create(null);
 const SUBAGENT_CARD_NEAR_BOTTOM_PX = 48;
+const USER_MESSAGE_COLLAPSE_LINES = 10;
+const USER_MESSAGE_VIRTUAL_LINE_CHARS = 100;
 
 var uiModalKeyHandler = null;
+
+function clearSessionUnreadState(sessionId, opts) {
+    var sid = String(sessionId || '');
+    if (!sid) return;
+    opts = opts || {};
+    sessionUnreadComplete.delete(sid);
+    persistSessionUnread();
+    if (typeof sessionStore !== 'undefined') {
+        var sess = sessionStore.get(sid);
+        if (sess) {
+            sess.unread_result = false;
+            delete sess.unread_result_at;
+            delete sess.unread_result_status;
+        }
+    }
+    if (typeof syncSessionListIndicatorClasses === 'function') syncSessionListIndicatorClasses();
+    if (opts.server === false || sessionUnreadClearInFlight[sid]) return;
+    sessionUnreadClearInFlight[sid] = true;
+    fetch('/sessions/' + encodeURIComponent(sid) + '/unread-result/clear', { method: 'POST' })
+        .catch(function () { /* ignore */ })
+        .finally(function () { delete sessionUnreadClearInFlight[sid]; });
+}
+
+function splitUserMessageVisualLines(text) {
+    var raw = text == null ? '' : String(text);
+    var physical = raw.split('\\n');
+    var out = [];
+    for (var i = 0; i < physical.length; i += 1) {
+        var line = physical[i];
+        if (line.length === 0) {
+            out.push('');
+            continue;
+        }
+        for (var j = 0; j < line.length; j += USER_MESSAGE_VIRTUAL_LINE_CHARS) {
+            out.push(line.slice(j, j + USER_MESSAGE_VIRTUAL_LINE_CHARS));
+        }
+    }
+    return out;
+}
+
+function buildUserMessageSummary(text) {
+    var lines = splitUserMessageVisualLines(text);
+    return lines.slice(0, USER_MESSAGE_COLLAPSE_LINES).join('\\n') + '\\n...';
+}
+
+function userMessageShouldCollapse(text) {
+    return false;
+}
+
+function renderUserMessageContent(wrap, div, rawStr, linkifier) {
+    var applyLinks = typeof linkifier === 'function' ? linkifier : null;
+
+    function setPlain() {
+        div.textContent = rawStr;
+        if (applyLinks) applyLinks(div);
+    }
+
+    function setCollapsed() {
+        if (div.classList.contains('is-collapsible')) return;
+        wrap.classList.add('has-turn-process');
+        div.classList.add('is-collapsible');
+        div.textContent = '';
+        var sum = document.createElement('div');
+        sum.className = 'user-msg-summary';
+        sum.textContent = buildUserMessageSummary(rawStr);
+        if (applyLinks) applyLinks(sum);
+        var ful = document.createElement('div');
+        ful.className = 'user-msg-full';
+        ful.textContent = rawStr;
+        if (applyLinks) applyLinks(ful);
+        var ch = document.createElement('div');
+        ch.className = 'user-msg-chevron';
+        var arrow = document.createElement('span');
+        arrow.className = 'chevron-arrow';
+        ch.appendChild(arrow);
+        ch.addEventListener('click', function(e) {
+            e.stopPropagation();
+            wrap.classList.toggle('user-msg-expanded');
+        });
+        div.appendChild(sum);
+        div.appendChild(ful);
+        div.appendChild(ch);
+    }
+
+    setPlain();
+    requestAnimationFrame(function () {
+        if (!div.isConnected || div.classList.contains('is-collapsible')) return;
+        var cs = window.getComputedStyle ? window.getComputedStyle(div) : null;
+        var lineHeight = cs ? parseFloat(cs.lineHeight) : NaN;
+        if (!Number.isFinite(lineHeight) || lineHeight <= 0) {
+            var fontSize = cs ? parseFloat(cs.fontSize) : NaN;
+            lineHeight = Number.isFinite(fontSize) && fontSize > 0 ? fontSize * 1.65 : 18;
+        }
+        if (div.scrollHeight > lineHeight * USER_MESSAGE_COLLAPSE_LINES + 1) {
+            setCollapsed();
+        }
+    });
+}
 
 function closeUiModal(result) {
     var root = document.getElementById('ui-modal-root');
@@ -317,12 +422,13 @@ function showUiAlert(opts) {
     }
     return p;
 }
-`,C=`const sessionStore = {
+`,be=`const sessionStore = {
     seq: 0,
     sessionsById: new Map(),
     sessionOrder: [],
     currentSessionId: null,
     runsBySession: new Map(),
+    terminalRunIdsBySession: new Map(),
     activeRunInfoBySession: new Map(),
     archivedCount: 0,
     archivedLoaded: false,
@@ -342,6 +448,7 @@ function showUiAlert(opts) {
         const nextOrder = [];
         const nextStreamActive = Object.create(null);
         const list = Array.isArray(sessions) ? sessions : [];
+        let unreadChanged = false;
         for (let i = 0; i < list.length; i += 1) {
             const s = list[i];
             if (!s || !s.id) continue;
@@ -353,6 +460,16 @@ function showUiAlert(opts) {
                 nextSession.run_active = false;
                 nextSession.run_started_at = null;
             }
+            if (typeof sessionUnreadComplete !== 'undefined') {
+                if (nextSession.unread_result) {
+                    if (!sessionUnreadComplete.has(sid)) {
+                        sessionUnreadComplete.add(sid);
+                        unreadChanged = true;
+                    }
+                } else if (sessionUnreadComplete.delete(sid)) {
+                    unreadChanged = true;
+                }
+            }
             nextById.set(sid, nextSession);
             nextOrder.push(sid);
             nextStreamActive[sid] = !!nextSession.stream_active;
@@ -363,6 +480,7 @@ function showUiAlert(opts) {
         if (Number.isFinite(Number(archivedCount)) && Number(archivedCount) >= 0) {
             this.archivedCount = Number(archivedCount);
         }
+        if (unreadChanged && typeof persistSessionUnread === 'function') persistSessionUnread();
     },
 
     upsert(session) {
@@ -382,6 +500,7 @@ function showUiAlert(opts) {
         this.sessionsById.delete(sid);
         delete this.streamActiveById[sid];
         this.runsBySession.delete(sid);
+        this.terminalRunIdsBySession.delete(sid);
         this.activeRunInfoBySession.delete(sid);
         this.unreadComplete.delete(sid);
         this.sessionOrder = this.sessionOrder.filter(function (id) { return id !== sid; });
@@ -481,6 +600,8 @@ function showUiAlert(opts) {
         this.streamActiveById = next;
         this.sessionsById.forEach(function (sess, sid) {
             sess.stream_active = !!next[sid];
+            sess.run_active = !!next[sid];
+            if (!next[sid]) sess.run_started_at = null;
         });
     },
 
@@ -499,15 +620,37 @@ function showUiAlert(opts) {
         return this.runsBySession.has(String(sessionId || ''));
     },
 
+    markTerminalRun(sessionId, runId) {
+        const sid = String(sessionId || '');
+        const rid = String(runId || '').trim();
+        if (!sid || !rid) return;
+        let bucket = this.terminalRunIdsBySession.get(sid);
+        if (!bucket) {
+            bucket = new Set();
+            this.terminalRunIdsBySession.set(sid, bucket);
+        }
+        bucket.add(rid);
+    },
+
+    isTerminalRun(sessionId, runId) {
+        const sid = String(sessionId || '');
+        const rid = String(runId || '').trim();
+        if (!sid || !rid) return false;
+        const bucket = this.terminalRunIdsBySession.get(sid);
+        return !!(bucket && bucket.has(rid));
+    },
+
     applyActiveRuns(activeRuns) {
         const next = new Map();
         const list = Array.isArray(activeRuns) ? activeRuns : [];
         list.forEach(function (run) {
             const sid = typeof run === 'string' ? run : (run && run.session_id);
             if (!sid) return;
+            const runId = typeof run === 'string' ? '' : String((run && (run.run_id || run.runId)) || '').trim();
+            if (runId && this.isTerminalRun(sid, runId)) return;
             if (typeof isSessionStreamStopSuppressed === 'function' && isSessionStreamStopSuppressed(sid)) return;
             next.set(String(sid), typeof run === 'string' ? { session_id: String(sid) } : Object.assign({}, run));
-        });
+        }, this);
         this.activeRunInfoBySession = next;
     },
 
@@ -529,9 +672,15 @@ function showUiAlert(opts) {
         if (Number.isFinite(Number(this.seq)) && n > Number(this.seq)) this.seq = n;
         return true;
     },
+
+    resetSseSeq(sessionId) {
+        const sid = String(sessionId || '');
+        if (!sid) return;
+        this.sseSeqBySession.delete(sid);
+    },
 };
 
-const SESSION_STREAM_STOP_SUPPRESS_MS = 15000;
+const SESSION_STREAM_STOP_SUPPRESS_MS = 60000;
 const sessionStreamStopSuppressUntil = Object.create(null);
 
 function isSessionStreamStopSuppressed(sessionId) {
@@ -542,6 +691,12 @@ function isSessionStreamStopSuppressed(sessionId) {
     if (Date.now() <= until) return true;
     delete sessionStreamStopSuppressUntil[sid];
     return false;
+}
+
+function clearSessionStreamStopSuppress(sessionId) {
+    const sid = String(sessionId || '');
+    if (!sid) return;
+    delete sessionStreamStopSuppressUntil[sid];
 }
 
 function suppressSessionServerStreamActive(sessionId, ms) {
@@ -561,7 +716,6 @@ function suppressSessionServerStreamActive(sessionId, ms) {
 function setSessionServerStreamActive(sessionId, active) {
     const sid = String(sessionId || '');
     if (!sid) return;
-    if (!active) delete sessionStreamStopSuppressUntil[sid];
     if (active && isSessionStreamStopSuppressed(sid)) active = false;
     sessionStore.setStreamActive(sid, !!active);
 }
@@ -578,13 +732,12 @@ function applyServerStreamActiveMap(activeMap) {
     const m = Object.create(null);
     Object.keys(src).forEach(function (sid) {
         var active = !!src[sid];
-        if (!active) delete sessionStreamStopSuppressUntil[sid];
         if (active && isSessionStreamStopSuppressed(sid)) active = false;
         m[sid] = active;
     });
     sessionStore.applyStreamActiveMap(m);
 }
-`,w=`function selectCurrentSession() {
+`,ye=`function selectCurrentSession() {
     return sessionStore.get(sessionStore.currentSessionId);
 }
 
@@ -594,6 +747,36 @@ function selectAllSessions() {
 
 function selectArchivedSessions() {
     return sessionStore.archivedList();
+}
+
+function sessionActivityTimeMs(session) {
+    if (!session) return 0;
+    var raw = session.last_activity_at || session.updated_at || session.created_at || '';
+    var t = Date.parse(String(raw || ''));
+    return Number.isFinite(t) ? t : 0;
+}
+
+function selectNormalSessionTimeGroups(normalList) {
+    var groups = [
+        { key: 'today', title: '今天', sessions: [] },
+        { key: 'yesterday', title: '昨天', sessions: [] },
+        { key: 'week', title: '近7天', sessions: [] },
+        { key: 'fortnight', title: '近14天', sessions: [] },
+    ];
+    var now = new Date();
+    var startToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+    var startYesterday = startToday - 86400000;
+    var sevenDaysAgo = Date.now() - (7 * 86400000);
+    var fourteenDaysAgo = Date.now() - (14 * 86400000);
+    for (var i = 0; i < normalList.length; i += 1) {
+        var s = normalList[i];
+        var t = sessionActivityTimeMs(s);
+        if (t >= startToday) groups[0].sessions.push(s);
+        else if (t >= startYesterday) groups[1].sessions.push(s);
+        else if (t >= sevenDaysAgo) groups[2].sessions.push(s);
+        else if (t >= fourteenDaysAgo) groups[3].sessions.push(s);
+    }
+    return groups.filter(function (g) { return g.sessions.length > 0; });
 }
 
 function selectSessionSections() {
@@ -609,6 +792,7 @@ function selectSessionSections() {
     return {
         pinned: pinnedList,
         normal: normalList,
+        normalGroups: selectNormalSessionTimeGroups(normalList),
         archived: selectArchivedSessions(),
     };
 }
@@ -635,7 +819,7 @@ function selectIsSessionRunning(sessionId) {
 function selectRunForSession(sessionId) {
     return sessionStore.getRun(sessionId);
 }
-`,T=`function applySessionSnapshot(snapshot) {
+`,Ie=`function applySessionSnapshot(snapshot) {
     snapshot = snapshot || {};
     const sessions = Array.isArray(snapshot.sessions) ? snapshot.sessions : [];
     const archivedCount = snapshot.archived_count != null ? snapshot.archived_count : snapshot.archivedCount;
@@ -652,8 +836,7 @@ function selectRunForSession(sessionId) {
     if (Array.isArray(snapshot.active_runs)) {
         sessionStore.applyActiveRuns(snapshot.active_runs);
         const active = Object.create(null);
-        snapshot.active_runs.forEach(function (run) {
-            const sid = typeof run === 'string' ? run : (run && run.session_id);
+        sessionStore.activeRunInfoBySession.forEach(function (_run, sid) {
             if (sid) active[String(sid)] = true;
         });
         applyServerStreamActiveMap(active);
@@ -700,6 +883,19 @@ function clearSessionRunState(sessionId) {
     setSessionRunState(sessionId, null);
 }
 
+function markSessionRunInactive(sessionId) {
+    const sid = String(sessionId || '');
+    if (!sid) return;
+    setSessionServerStreamActive(sid, false);
+    sessionStore.activeRunInfoBySession.delete(sid);
+    const sess = sessionStore.get(sid);
+    if (sess) {
+        sess.run_active = false;
+        sess.run_started_at = null;
+        sess.stream_active = false;
+    }
+}
+
 function markRunAbortReason(run, reason) {
     if (!run) return;
     var r = reason || 'cleanup';
@@ -721,7 +917,7 @@ function abortSessionRun(sessionId, reason, opts) {
     if (opts.clear !== false) clearSessionRunState(sessionId);
     return run;
 }
-`,E=`function renderSessionListFromStore() {
+`,xe=`function renderSessionListFromStore() {
     if (!sessionsList) return Object.create(null);
     const nextStreamMap = Object.create(null);
     const sections = selectSessionSections();
@@ -757,8 +953,21 @@ function abortSessionRun(sessionId, reason, opts) {
         var body = document.createElement('div');
         body.className = 'session-section-body';
         if (sectionKey === 'archived') appendArchiveLoadButton(body);
-        for (let j = 0; j < list.length; j += 1) {
-            body.appendChild(buildAndBindSessionRow(list[j], allSessions, nextStreamMap));
+        if (sectionKey === 'normal' && Array.isArray(sections.normalGroups) && sections.normalGroups.length) {
+            for (let g = 0; g < sections.normalGroups.length; g += 1) {
+                var group = sections.normalGroups[g];
+                var groupTitle = document.createElement('div');
+                groupTitle.className = 'session-time-group-title';
+                groupTitle.textContent = group.title;
+                body.appendChild(groupTitle);
+                for (let k = 0; k < group.sessions.length; k += 1) {
+                    body.appendChild(buildAndBindSessionRow(group.sessions[k], allSessions, nextStreamMap));
+                }
+            }
+        } else {
+            for (let j = 0; j < list.length; j += 1) {
+                body.appendChild(buildAndBindSessionRow(list[j], allSessions, nextStreamMap));
+            }
         }
         sec.appendChild(toggle);
         sec.appendChild(body);
@@ -795,7 +1004,7 @@ function appendArchiveLoadButton(body) {
 function renderSessionTitleFromStore() {
     updateSessionTitle();
 }
-`,k=`const messageStore = {
+`,we=`const messageStore = {
     sessions: new Map(),
 
     ensureSession(sessionId) {
@@ -918,7 +1127,7 @@ function selectMessageEventsInRange(sessionId, startIndex, endIndex) {
 function selectMessageEventCount(sessionId) {
     return messageStore.eventCount(sessionId);
 }
-`,L=`function renderMessageRecord(ctx, record, sessionId) {
+`,Ce=`function renderMessageRecord(ctx, record, sessionId) {
     if (!ctx || !record || !record.event) return null;
     const sid = sessionId || record.sessionId || currentSessionId;
     renderEvent(ctx, record.event, record.index, sid);
@@ -948,7 +1157,7 @@ function renderMessageRecords(ctx, records, sessionId) {
         renderMessageRecord(ctx, list[i], sessionId);
     }
 }
-`,_=`const subagentStore = {
+`,ke=`const subagentStore = {
     sessions: new Map(),
 
     ensureSession(sessionId) {
@@ -1117,7 +1326,7 @@ function selectSubagentList(sessionId) {
 function selectSubagentRunningCount(sessionId) {
     return subagentStore.runningCount(sessionId);
 }
-`,P=`var subagentContinueInFlight = false;
+`,Te=`var subagentContinueInFlight = false;
 var subagentContinueBannerTimer = null;
 var subagentContinueDismissedForSession = Object.create(null);
 
@@ -1198,11 +1407,14 @@ async function tryMarkSessionUnreadComplete(sessionId) {
         var j = await r.json();
         if (j.stream_active || Number(j.subagent_running || 0) > 0) return;
         sessionUnreadComplete.add(sessionId);
+        var sess = sessionStore.get(sessionId);
+        if (sess && j.unread_result_status) sess.unread_result_status = j.unread_result_status;
+        if (sess && Object.prototype.hasOwnProperty.call(j, 'unread_result')) sess.unread_result = !!j.unread_result;
         persistSessionUnread();
         syncSessionListIndicatorClasses();
     } catch (e) { /* ignore */ }
 }
-`,A=`function setSubagentCardEventCount(agentId, count) {
+`,Ee=`function setSubagentCardEventCount(agentId, count) {
     var aid = String(agentId || '');
     var n = Number(count);
     if (!aid || !Number.isFinite(n)) return;
@@ -1239,7 +1451,7 @@ function trackSubagentStreamEventLightweight(card, agentId, event, eventIndex) {
     if (event.react_iter != null) bumpAggregateMaxReactIter(card, event.react_iter);
     scheduleSubagentCardStats(card);
 }
-`,R=`function subagentMoreDotsHtml() {
+`,_e=`function subagentMoreDotsHtml() {
     return '<span class="session-more-dots" aria-hidden="true"><span></span><span></span><span></span></span>';
 }
 
@@ -1502,7 +1714,7 @@ function refreshSubagentToggleFromGrid(flat) {
     toggleBtn.classList.toggle('is-running', runningN > 0);
 }
 
-function createSubagentMiniMessage(role, content, eventIndex) {
+function createSubagentMiniMessage(role, content, eventIndex, createdAt) {
     var wrap = document.createElement('div');
     wrap.className = 'msg-wrap msg-wrap--' + (role === 'user' ? 'user' : 'assistant');
     if (role === 'assistant') wrap.classList.add('msg-wrap--answer-frame');
@@ -1511,45 +1723,25 @@ function createSubagentMiniMessage(role, content, eventIndex) {
     div.className = 'message ' + (role === 'user' ? 'user' : 'assistant');
     var rawStr = content == null ? '' : String(content);
     if (role === 'user') {
-        var lineCount = rawStr.split('\\n').length;
-        if (lineCount > 10) {
-            wrap.classList.add('has-turn-process');
-            div.classList.add('is-collapsible');
-            var sum = document.createElement('div');
-            sum.className = 'user-msg-summary';
-            sum.textContent = rawStr.split('\\n').slice(0, 10).join('\\n') + '\\n...';
-            var ful = document.createElement('div');
-            ful.className = 'user-msg-full';
-            ful.textContent = rawStr;
-            var ch = document.createElement('div');
-            ch.className = 'user-msg-chevron';
-            var arrow = document.createElement('span');
-            arrow.className = 'chevron-arrow';
-            ch.appendChild(arrow);
-            ch.addEventListener('click', function(e) {
-                e.stopPropagation();
-                wrap.classList.toggle('user-msg-expanded');
-            });
-            div.appendChild(sum);
-            div.appendChild(ful);
-            div.appendChild(ch);
-        } else {
-            div.textContent = rawStr;
-        }
+        renderUserMessageContent(wrap, div, rawStr);
     }
     else {
         div.innerHTML = renderMarkdown(rawStr);
         enhanceAssistantMessageContent(div);
     }
     wrap.appendChild(div);
+    if (role === 'user') {
+        var ts = createdAt || new Date().toISOString();
+        wrap.setAttribute('data-created-at', String(ts));
+    }
     return wrap;
 }
 
-function openSubagentTurn(ctx, userContent, eventIndex) {
+function openSubagentTurn(ctx, userContent, eventIndex, createdAt) {
     if (!ctx || !ctx._subagentBody) return null;
     var userRaw = userContent == null ? '' : String(userContent);
     if (userRaw.trim() && ctx.currentTurn && !ctx.currentTurn.querySelector('.msg-wrap--user')) {
-        var userWrap0 = createSubagentMiniMessage('user', userRaw, eventIndex);
+        var userWrap0 = createSubagentMiniMessage('user', userRaw, eventIndex, createdAt);
         ctx.currentTurn.insertBefore(userWrap0, ctx.currentTurn.firstChild);
         bindSubagentTurnUserToggle(ctx.currentTurn, userWrap0);
         markSubagentTurnHasProcess(ctx.currentTurn);
@@ -1559,7 +1751,7 @@ function openSubagentTurn(ctx, userContent, eventIndex) {
     sealSubagentTurn(ctx);
     var turn = document.createElement('div');
     turn.className = 'subagent-turn';
-    var userWrap = userRaw.trim() ? createSubagentMiniMessage('user', userRaw, eventIndex) : null;
+    var userWrap = userRaw.trim() ? createSubagentMiniMessage('user', userRaw, eventIndex, createdAt) : null;
     var processEl = document.createElement('div');
     processEl.className = 'subagent-turn-process';
     var finalSlot = document.createElement('div');
@@ -1744,7 +1936,7 @@ function applySubagentBlockFinish(blk, event) {
         preview.textContent = txt ? String(txt).slice(0, 500) : '';
     }
 }
-`,B=`var subagentBodyHtmlCache = Object.create(null);
+`,Le=`var subagentBodyHtmlCache = Object.create(null);
 
 function subagentBodyCacheKey(sessionId, agentId) {
     return String(sessionId || '') + ':' + String(agentId || '');
@@ -1784,7 +1976,7 @@ function rememberSubagentBodyCache(sessionId, agentId, html) {
 function readSubagentBodyCache(sessionId, agentId) {
     return subagentBodyHtmlCache[subagentBodyCacheKey(sessionId, agentId)] || '';
 }
-`,F=`var subagentCardViewportObserver = null;
+`,Ae=`var subagentCardViewportObserver = null;
 var subagentCardLoadQueue = [];
 var subagentCardLoadInflight = 0;
 var subagentCardLoadQueued = Object.create(null);
@@ -2070,7 +2262,7 @@ async function loadSubagentDetailInto(el, agentId, hostEl, sessionIdOpt) {
         delete el.dataset.loading;
     }
 }
-`,M=`var subagentCardSyncTimer = null;
+`,Pe=`var subagentCardSyncTimer = null;
 var subagentContextFetchInFlight = Object.create(null);
 var subagentTreeRefreshTimer = null;
 var subagentTreeRefreshTarget = null;
@@ -2367,7 +2559,7 @@ async function refreshSubagentTreePanelInner(sessionId) {
         stopSubagentIncrementalSync();
     }
 }
-`,N=`async function toggleSubagentOutputPanel(card, sessionId) {
+`,Re=`async function toggleSubagentOutputPanel(card, sessionId) {
     if (!card || !sessionId) return;
     var agentId = card.getAttribute('data-agent-id') || '';
     if (!agentId) return;
@@ -2516,7 +2708,7 @@ function bindSubagentGridActions(grid, sessionId) {
     syncSubagentExpandButtons(grid);
     initUiHoverTips(grid);
 }
-`,O=`function onSubagentDockWheel(e) {
+`,Be=`function onSubagentDockWheel(e) {
     var dock = document.getElementById('subagent-dock');
     if (!dock || dock.classList.contains('hidden') || !dock.contains(e.target)) return;
     var dy = e.deltaY;
@@ -2622,7 +2814,7 @@ function bindSubagentPanelOnce() {
         closeSubagentPanel();
     });
 }
-`,D=`const contextStore = {
+`,Fe=`const contextStore = {
     tokensBySession: new Map(),
     todoBySession: new Map(),
     progressBySession: new Map(),
@@ -2742,7 +2934,7 @@ function appendContextProgressForSession(sessionId, kind, delta) {
 function selectContextProgress(sessionId) {
     return contextStore.progressBySession.get(String(sessionId || '')) || null;
 }
-`,H=`function markUiEventStoreApplied(event) {
+`,Me=`function markUiEventStoreApplied(event) {
     if (!event || typeof event !== 'object') return;
     try {
         Object.defineProperty(event, '__storeApplied', {
@@ -2768,29 +2960,45 @@ function applySessionEvent(event, opts) {
     const eventIndex = opts.eventIndex;
     const source = opts.source || 'event';
     const type = String(event.type || '');
+    const runId = String(event.run_id || event.runId || '').trim();
     let messageRecord = null;
     if (sessionId) {
         messageRecord = applyMessageEvent(sessionId, event, eventIndex, source);
         markUiEventStoreApplied(event);
     }
     if (type === 'run_started' || type === 'run_attached') {
-        setSessionServerStreamActive(sessionId, true);
+        if (runId && sessionStore.isTerminalRun(sessionId, runId)) {
+            markSessionRunInactive(sessionId);
+            return { handled: true, runStateChanged: true, messageRecord: messageRecord };
+        }
+        const suppressed = typeof isSessionStreamStopSuppressed === 'function'
+            && isSessionStreamStopSuppressed(sessionId);
+        setSessionServerStreamActive(sessionId, !suppressed);
         const sess = sessionStore.get(sessionId);
         if (sess) {
-            sess.run_active = true;
-            sess.run_started_at = event.started_at || event.startedAt || sess.run_started_at || new Date().toISOString();
+            sess.run_active = !suppressed;
+            sess.run_started_at = suppressed
+                ? null
+                : (event.started_at || event.startedAt || sess.run_started_at || new Date().toISOString());
         }
         return { handled: true, runStateChanged: true, messageRecord: messageRecord };
     }
     if (type === 'run_finished' || type === 'run_interrupted' || type === 'run_failed') {
-        setSessionServerStreamActive(sessionId, false);
-        sessionStore.activeRunInfoBySession.delete(String(sessionId || ''));
+        if (runId) sessionStore.markTerminalRun(sessionId, runId);
+        if (type === 'run_finished' && typeof clearSessionStreamStopSuppress === 'function') clearSessionStreamStopSuppress(sessionId);
+        markSessionRunInactive(sessionId);
         const sess = sessionStore.get(sessionId);
         if (sess) {
-            sess.run_active = false;
-            sess.run_started_at = null;
+            const keepFailed = sess.unread_result_status === 'failed';
+            sess.unread_result = true;
+            sess.unread_result_status = (keepFailed || type === 'run_interrupted' || type === 'run_failed') ? 'failed' : 'success';
+            sess.unread_result_at = new Date().toISOString();
         }
         return { handled: true, runStateChanged: true, messageRecord: messageRecord };
+    }
+    if (type === 'final' && source === 'sse') {
+        markSessionRunInactive(sessionId);
+        return { handled: false, finalStateChanged: true, messageRecord: messageRecord };
     }
     if (type === 'context_tokens') {
         setContextTokensForSession(sessionId, event.estimated, event.threshold);
@@ -2815,7 +3023,208 @@ function applySessionEvent(event, opts) {
     }
     return { handled: false, messageRecord: messageRecord };
 }
-`,q=`function formatTokenCompact(n) {
+`,Ne=`let modelProfilesCache = null;
+let modelProfilesRefreshPromise = null;
+let modelProfileBusy = false;
+let activeModelProfileId = '__env__';
+
+function h(str) {
+    return String(str == null ? '' : str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+}
+
+function profileLabel(profile) {
+    if (!profile) return '默认方案';
+    return String(profile.name || profile.model || '未命名方案');
+}
+
+function profileMeta(profile) {
+    if (!profile) return '';
+    var model = profile.model || '';
+    var ctx = profile.context_window ? profile.context_window + ' ctx' : '';
+    var out = profile.max_output_tokens ? profile.max_output_tokens + ' out' : '';
+    return [model, ctx, out].filter(Boolean).join(' · ');
+}
+
+function els() {
+    return {
+        control: document.getElementById('model-profile-control'),
+        trigger: document.getElementById('model-profile-trigger'),
+        current: document.getElementById('model-profile-current'),
+        menu: document.getElementById('model-profile-menu'),
+    };
+}
+
+async function loadModelProfilesForSwitcher() {
+    const response = await fetch('/api/model_profiles', { credentials: 'same-origin' });
+    const data = await response.json();
+    if (!data || !data.ok) throw new Error((data && data.error) || '模型配置加载失败');
+    modelProfilesCache = data;
+    return data;
+}
+
+function allProfiles() {
+    if (!modelProfilesCache) return [];
+    var defaultProfile = modelProfilesCache.default_profile || { id: '__env__', name: '', model: '' };
+    var profiles = modelProfilesCache.profiles || [];
+    return profiles.length ? profiles : [defaultProfile];
+}
+
+function activeProfile() {
+    var list = allProfiles();
+    for (var i = 0; i < list.length; i += 1) {
+        if (String(list[i].id || '__env__') === String(activeModelProfileId || '__env__')) return list[i];
+    }
+    return list[0] || null;
+}
+
+function closeModelMenu() {
+    var e = els();
+    if (e.menu) e.menu.classList.remove('is-open');
+    if (e.trigger) {
+        e.trigger.classList.remove('is-open');
+        e.trigger.setAttribute('aria-expanded', 'false');
+    }
+}
+
+function openModelMenu() {
+    var e = els();
+    if (!e.menu || !e.trigger) return;
+    e.menu.classList.add('is-open');
+    e.trigger.classList.add('is-open');
+    e.trigger.setAttribute('aria-expanded', 'true');
+}
+
+function renderModelProfileControl() {
+    var e = els();
+    if (!e.trigger || !e.current || !e.menu) return;
+    var active = activeProfile();
+    e.current.textContent = active ? profileLabel(active) : '未加载模型配置';
+    e.trigger.removeAttribute('title');
+    e.trigger.removeAttribute('data-ui-tip');
+    var profiles = allProfiles();
+    if (!profiles.length) {
+        e.menu.innerHTML = '<button type="button" class="composer-model-option" disabled><span class="composer-model-option-name">没有可用模型配置</span></button>';
+        return;
+    }
+    var html = '';
+    for (var i = 0; i < profiles.length; i += 1) {
+        var p = profiles[i] || {};
+        var id = String(p.id || '__env__');
+        var activeCls = id === String(activeModelProfileId || '__env__') ? ' is-active' : '';
+        html += '<button type="button" class="composer-model-option' + activeCls + '" role="option" data-profile-id="' + h(id) + '">'
+            + '<span class="composer-model-option-name">' + h(profileLabel(p)) + '</span>'
+            + '<span class="composer-model-option-meta">' + h(profileMeta(p) || (id === '__env__' ? (p.model || '') : '')) + '</span>'
+            + '</button>';
+    }
+    if (!(modelProfilesCache.profiles || []).length) {
+        html += '<button type="button" class="composer-model-option" disabled><span class="composer-model-option-meta">暂无已保存模型配置，可到高级设置中保存</span></button>';
+    }
+    e.menu.innerHTML = html;
+    e.menu.querySelectorAll('[data-profile-id]').forEach((btn) => {
+        btn.addEventListener('click', () => {
+            setCurrentSessionModelProfile(btn.getAttribute('data-profile-id') || '__env__');
+            closeModelMenu();
+        });
+    });
+}
+
+function renderModelProfileLoadingMenu() {
+    var e = els();
+    if (!e.menu) return;
+    e.menu.innerHTML = '<button type="button" class="composer-model-option" disabled>'
+        + '<span class="composer-model-option-name">正在加载模型配置</span>'
+        + '<span class="composer-model-option-meta">请稍候</span>'
+        + '</button>';
+}
+
+async function refreshModelProfileSelector(sessionId, opts) {
+    var sid = sessionId || currentSessionId;
+    var e = els();
+    opts = opts || {};
+    if (!e.control) return;
+    if (!opts.silent && e.current) e.current.textContent = '正在加载模型配置';
+    try {
+        await loadModelProfilesForSwitcher();
+        activeModelProfileId = modelProfilesCache.new_session_default_profile_id || '__env__';
+        if (sid) {
+            var r = await fetch('/sessions/' + encodeURIComponent(sid) + '/model_profile', { credentials: 'same-origin' });
+            var j = await r.json();
+            if (j && j.ok && j.profile_id) activeModelProfileId = j.profile_id;
+        }
+        renderModelProfileControl();
+    } catch (err) {
+        if (e.current) e.current.textContent = '模型配置加载失败';
+        if (e.menu) e.menu.innerHTML = '<button type="button" class="composer-model-option" disabled><span class="composer-model-option-name">模型配置加载失败</span><span class="composer-model-option-meta">' + h(err.message || err) + '</span></button>';
+    }
+}
+
+function refreshModelProfileSelectorInBackground(sessionId, opts) {
+    if (modelProfilesRefreshPromise) return modelProfilesRefreshPromise;
+    modelProfilesRefreshPromise = refreshModelProfileSelector(sessionId, opts)
+        .catch(function (err) {
+            console.error('refresh model profiles failed:', err);
+        })
+        .finally(function () {
+            modelProfilesRefreshPromise = null;
+        });
+    return modelProfilesRefreshPromise;
+}
+
+async function setCurrentSessionModelProfile(profileId) {
+    if (!currentSessionId || modelProfileBusy) return;
+    modelProfileBusy = true;
+    try {
+        var response = await fetch('/sessions/' + encodeURIComponent(currentSessionId) + '/model_profile', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'same-origin',
+            body: JSON.stringify({ profile_id: profileId || '__env__' }),
+        });
+        var data = await response.json();
+        if (!data || !data.ok) throw new Error((data && data.error) || '切换失败');
+        activeModelProfileId = profileId || '__env__';
+        renderModelProfileControl();
+        scheduleContextTokensAfterPaint(currentSessionId);
+    } catch (err) {
+        appendLogVisible('模型配置切换失败: ' + String(err.message || err), 'error-log');
+        await refreshModelProfileSelector(currentSessionId);
+    } finally {
+        modelProfileBusy = false;
+    }
+}
+
+function initModelProfileSwitcher() {
+    var e = els();
+    if (!e.control || !e.trigger || !e.menu) return;
+    e.trigger.addEventListener('click', async () => {
+        var willOpen = !e.menu.classList.contains('is-open');
+        if (!willOpen) {
+            closeModelMenu();
+            return;
+        }
+        if (modelProfilesCache) renderModelProfileControl();
+        else renderModelProfileLoadingMenu();
+        openModelMenu();
+        refreshModelProfileSelectorInBackground(currentSessionId, { silent: true });
+    });
+    document.addEventListener('click', (ev) => {
+        if (!e.control.contains(ev.target)) closeModelMenu();
+    });
+    document.addEventListener('keydown', (ev) => {
+        if (ev.key === 'Escape') closeModelMenu();
+    });
+    refreshModelProfileSelectorInBackground(currentSessionId);
+}
+
+initModelProfileSwitcher();
+window.refreshModelProfileSelector = refreshModelProfileSelector;
+window.loadModelProfilesForSwitcher = loadModelProfilesForSwitcher;
+`,Oe=`function formatTokenCompact(n) {
     if (n == null || !Number.isFinite(Number(n))) return '—';
     const x = Math.max(0, Math.round(Number(n)));
     if (x >= 1000000) return (x / 1000000).toFixed(1).replace(/\\.0$/, '') + 'M';
@@ -2861,9 +3270,18 @@ function setContextTokenLabel(estimated, threshold) {
 }
 
 let contextTokenRequestSeq = 0;
+const contextTokenInFlightBySession = Object.create(null);
+const CONTEXT_TOKEN_CACHE_TTL_MS = 3000;
 
 async function refreshContextTokensFromServer(sid, seq) {
     if (!sid) return;
+    const cached = selectContextTokens(sid);
+    if (cached && cached.updatedAt && (Date.now() - cached.updatedAt) < CONTEXT_TOKEN_CACHE_TTL_MS) {
+        if (sid === currentSessionId) setContextTokenLabel(cached.estimated, cached.threshold);
+        return;
+    }
+    if (contextTokenInFlightBySession[sid]) return;
+    contextTokenInFlightBySession[sid] = true;
     try {
         const r = await fetch('/sessions/' + encodeURIComponent(sid) + '/context_tokens');
         const j = await r.json();
@@ -2874,6 +3292,9 @@ async function refreshContextTokensFromServer(sid, seq) {
             return;
         }
     } catch (e) { /* ignore */ }
+    finally {
+        delete contextTokenInFlightBySession[sid];
+    }
     applyContextTokenLabelForCurrentSession();
 }
 
@@ -3376,6 +3797,45 @@ function emptyChatStreamKeepingStrip(streamEl) {
     });
 }
 
+function persistHistoryPagingToStream(streamEl, paging) {
+    if (!streamEl) return;
+    if (!paging || paging.sessionId !== currentSessionId) {
+        delete streamEl.dataset.historyPaging;
+        return;
+    }
+    streamEl.dataset.historyPaging = JSON.stringify({
+        sessionId: paging.sessionId,
+        total: Number(paging.total) || 0,
+        range_start: Number(paging.range_start) || 0,
+        range_end: Number(paging.range_end) || 0,
+        has_older: !!paging.has_older,
+    });
+}
+
+function restoreHistoryPagingFromStream(streamEl) {
+    if (!streamEl || !streamEl.dataset.historyPaging) return null;
+    try {
+        var raw = JSON.parse(streamEl.dataset.historyPaging);
+        if (!raw || raw.sessionId !== currentSessionId) return null;
+        return {
+            sessionId: raw.sessionId,
+            total: Number(raw.total) || 0,
+            range_start: Number(raw.range_start) || 0,
+            range_end: Number(raw.range_end) || 0,
+            has_older: !!raw.has_older,
+        };
+    } catch (_e) {
+        delete streamEl.dataset.historyPaging;
+        return null;
+    }
+}
+
+function setSessionHistoryPaging(paging) {
+    sessionHistoryPaging = paging || null;
+    persistHistoryPagingToStream(getVisibleChatStream(), sessionHistoryPaging);
+    updateHistorySentinelVisibility();
+}
+
 function ensureHistorySentinel(streamEl) {
     if (!streamEl) return null;
     var el = streamEl.querySelector('#history-load-sentinel');
@@ -3424,7 +3884,7 @@ function updateHistorySentinelVisibility() {
 }
 
 function resetSessionHistoryPaging() {
-    sessionHistoryPaging = null;
+    setSessionHistoryPaging(null);
     historyOlderLoading = false;
     updateHistorySentinelVisibility();
 }
@@ -3432,13 +3892,17 @@ function resetSessionHistoryPaging() {
 async function loadOlderHistoryChunk(opts) {
     opts = opts || {};
     var sid = currentSessionId;
+    var stream = getVisibleChatStream();
     var ph = sessionHistoryPaging;
+    if ((!ph || ph.sessionId !== sid) && stream) {
+        ph = restoreHistoryPagingFromStream(stream);
+        if (ph) sessionHistoryPaging = ph;
+    }
     if (!sid || !ph || ph.sessionId !== sid || !ph.has_older || historyOlderLoading) return;
     historyOlderLoading = true;
     var prevReplaying = replayingMessages;
     replayingMessages = true;
     updateHistorySentinelVisibility();
-    var stream = getVisibleChatStream();
     var cc = chatContainer;
     var prevScrollTop = cc ? cc.scrollTop : 0;
     var anchor = getHistoryScrollAnchor(cc);
@@ -3450,7 +3914,7 @@ async function loadOlderHistoryChunk(opts) {
         if (!response.ok || !data || typeof data !== 'object') return;
         var events = data.events;
         if (!Array.isArray(events) || events.length === 0) {
-            sessionHistoryPaging = Object.assign({}, ph, { has_older: !!data.has_older });
+            setSessionHistoryPaging(Object.assign({}, ph, { has_older: !!data.has_older }));
             return;
         }
         ensureHistorySentinel(stream);
@@ -3473,13 +3937,13 @@ async function loadOlderHistoryChunk(opts) {
             stream.insertBefore(frag, sen ? sen.nextSibling : stream.firstChild);
         }
         loadedOlder = true;
-        sessionHistoryPaging = {
+        setSessionHistoryPaging({
             sessionId: sid,
             total: typeof data.total === 'number' ? data.total : ph.total,
             range_start: typeof data.range_start === 'number' ? data.range_start : ph.range_start,
             range_end: ph.range_end,
             has_older: !!data.has_older,
-        };
+        });
     } catch (e) {
         console.error('加载更早消息失败:', e);
     } finally {
@@ -3537,6 +4001,9 @@ function restoreStreamForRunningSession(enteringId) {
     st.id = 'chat-stream';
     st.setAttribute('aria-label', '消息');
     chatContainer.appendChild(st);
+    var restoredPaging = restoreHistoryPagingFromStream(st);
+    if (restoredPaging) sessionHistoryPaging = restoredPaging;
+    updateHistorySentinelVisibility();
     bindExistingLogs(st);
     return true;
 }
@@ -3698,6 +4165,56 @@ function finalizeLlmStreamChunks(ctx) {
             }
             if (!getFeedItemText(el).trim()) el.remove();
         });
+    });
+}
+
+function discardLlmStreamChunks(ctx, ev) {
+    if (!ctx) return;
+    if (ctx.llm) {
+        const l = ctx.llm;
+        if (l.llmDeltaFlushRaf) {
+            cancelAnimationFrame(l.llmDeltaFlushRaf);
+            l.llmDeltaFlushRaf = 0;
+        }
+        l.llmPendingReasoningDelta = '';
+        l.llmPendingResponseDelta = '';
+        l.llmStreamReasoningIter = null;
+        l.llmStreamResponseIter = null;
+        l.llmStreamReasoningScroller = null;
+        l.llmStreamResponseScroller = null;
+        l.llmDeltaLastSeq = null;
+    }
+    var bodies = [];
+    if (ctx.currentProcessGroup && !isSubagentStreamCtx(ctx)) {
+        var mainBody = ctx.currentProcessGroup.querySelector('.process-aggregate-body');
+        if (mainBody) bodies.push(mainBody);
+    }
+    if (ctx._subagentTurnProcess && ctx._subagentTurnProcess.isConnected) {
+        bodies.push(ctx._subagentTurnProcess);
+    }
+    var reactIter = ev && ev.react_iter != null && Number.isFinite(Number(ev.react_iter))
+        ? String(Math.max(1, Math.floor(Number(ev.react_iter))))
+        : '';
+    bodies.forEach(function (body) {
+        body.querySelectorAll('.feed-item.feed--llm, .feed-item.feed--llm2').forEach(function (el) {
+            var ch = el.querySelector('.feed-chunk');
+            if (ch && ch.classList.contains('is-streaming')) el.remove();
+        });
+        body.querySelectorAll('.feed-item.feed--tool[data-tool-pending="1"]').forEach(function (el) {
+            el.remove();
+        });
+        if (reactIter) {
+            var sel = '.feed-item[data-react-iter="' + reactIter + '"]';
+            body.querySelectorAll(sel).forEach(function (el) {
+                if (
+                    el.classList.contains('feed--tool')
+                    || el.classList.contains('feed--llm')
+                    || el.classList.contains('feed--llm2')
+                ) {
+                    el.remove();
+                }
+            });
+        }
     });
 }
 
@@ -4035,7 +4552,7 @@ async function scrollToUserTurnOrLoadOlder(eventIndex) {
         });
     }
 }
-`,U=`function ensureUiHoverTooltipEl() {
+`,De=`function ensureUiHoverTooltipEl() {
     if (uiHoverTooltipEl) return uiHoverTooltipEl;
     uiHoverTooltipEl = document.getElementById('ui-hover-tooltip');
     if (!uiHoverTooltipEl) {
@@ -4218,7 +4735,10 @@ function clearTodoForSessionLoad() {
     notifyPanelContentChanged();
 }
 
-function rebuildToc() {
+const tocTurnsCacheBySession = new Map();
+
+function rebuildToc(options) {
+    options = options || {};
     const toc = document.getElementById('chat-toc');
     const list = document.getElementById('chat-toc-list');
     if (!toc || !list) return;
@@ -4236,14 +4756,23 @@ function rebuildToc() {
     (async function () {
         let turns = [];
         if (sid) {
-            try {
-                const r = await fetch('/sessions/' + encodeURIComponent(sid) + '/user_turns');
-                if (epoch !== tocRebuildEpoch || sid !== currentSessionId) return;
-                if (r.ok) {
-                    const j = await r.json();
-                    if (Array.isArray(j)) turns = j;
+            if (options.localOnly) {
+                turns = tocTurnsCacheBySession.get(sid) || [];
+            } else {
+                try {
+                    const r = await fetch('/sessions/' + encodeURIComponent(sid) + '/user_turns');
+                    if (epoch !== tocRebuildEpoch || sid !== currentSessionId) return;
+                    if (r.ok) {
+                        const j = await r.json();
+                        if (Array.isArray(j)) {
+                            turns = j;
+                            tocTurnsCacheBySession.set(sid, j);
+                        }
+                    }
+                } catch (e) {
+                    turns = tocTurnsCacheBySession.get(sid) || [];
                 }
-            } catch (e) { /* ignore */ }
+            }
         }
         if (epoch !== tocRebuildEpoch || sid !== currentSessionId) return;
         /** event_index → 预览（服务端与当前 DOM 合并：刚发出的提问尚未写入 ui_events，由气泡补上） */
@@ -4414,6 +4943,8 @@ function renderTodoPlanForCurrentSession() {
     renderTodoPlanSnapshot(selectTodoPlan(currentSessionId));
 }
 
+const TODO_PLAN_CACHE_TTL_MS = 2000;
+
 async function refreshTodoPlanPanel() {
     const sid = currentSessionId;
     const epoch = ++todoRefreshEpoch;
@@ -4425,6 +4956,11 @@ async function refreshTodoPlanPanel() {
         if (statsEl) statsEl.textContent = '';
         if (listEl) listEl.textContent = '';
         notifyPanelContentChanged();
+        return;
+    }
+    const cached = selectTodoPlan(sid);
+    if (cached && cached.updatedAt && (Date.now() - cached.updatedAt) < TODO_PLAN_CACHE_TTL_MS) {
+        renderTodoPlanSnapshot(cached);
         return;
     }
     try {
@@ -4442,2525 +4978,3132 @@ async function refreshTodoPlanPanel() {
         hideTodoPlanPanel();
     }
 }
-`,j=`function removeMessagesFromNode(startWrap) {
-    const stream = getVisibleChatStream() || chatContainer;
-    if (!stream) return;
-    const kids = Array.from(stream.children);
-    const i = kids.indexOf(startWrap);
-    if (i < 0) return;
-    for (let j = kids.length - 1; j >= i; j--) kids[j].remove();
-    syncDisconnectedProcessGroups();
-}
-
-async function truncateSessionOnServer(beforeIndex) {
-    if (!currentSessionId) return { ok: false, error: 'no_session' };
-    if (!Number.isFinite(Number(beforeIndex)) || Number(beforeIndex) < 0) {
-        return { ok: false, error: 'invalid_before_index' };
-    }
-    const url = '/sessions/' + encodeURIComponent(currentSessionId) + '/truncate'
+`,Ue=`function removeMessagesFromNode(startWrap) {
+    const stream = getVisibleChatStream() || chatContainer;\r
+    if (!stream) return;\r
+    const kids = Array.from(stream.children);\r
+    const i = kids.indexOf(startWrap);\r
+    if (i < 0) return;\r
+    for (let j = kids.length - 1; j >= i; j--) kids[j].remove();\r
+    syncDisconnectedProcessGroups();\r
+}\r
+\r
+async function truncateSessionOnServer(beforeIndex, options) {\r
+    options = options || {};\r
+    const sid = options.sessionId || currentSessionId;\r
+    if (!sid) return { ok: false, error: 'no_session' };\r
+    if (!Number.isFinite(Number(beforeIndex)) || Number(beforeIndex) < 0) {\r
+        return { ok: false, error: 'invalid_before_index' };\r
+    }\r
+    const url = '/sessions/' + encodeURIComponent(sid) + '/truncate'\r
+        + '?before_index=' + encodeURIComponent(String(beforeIndex))\r
+        + '&backup=' + (options.backup ? '1' : '0');\r
+    try {\r
+        const r = await fetch(url, { method: 'POST' });\r
+        const j = await r.json().catch(function () { return {}; });\r
+        return { ok: r.ok, error: (j && j.error) ? String(j.error) : '' };\r
+    } catch (e) {\r
+        return { ok: false, error: (e && e.message) || String(e) };\r
+    }\r
+}\r
+\r
+function describeServerSyncFailure(res, fallback) {\r
+    var base = fallback || '无法同步服务器。';\r
+    var err = res && res.error ? String(res.error).trim() : '';\r
+    if (!err) return base;\r
+    var friendly = err;\r
+    if (err === 'no_session') friendly = '当前没有选中的会话。';\r
+    else if (err === 'invalid_before_index' || err === 'invalid before_index') friendly = '消息定位索引无效，可能需要刷新当前会话。';\r
+    else if (err === 'refuse empty truncation') friendly = '服务端拒绝清空整个会话。';\r
+    else if (err === 'truncation failed') friendly = '服务端裁剪历史失败，可能是历史索引已变化或会话文件暂时不一致。';\r
+    return base + '\\n原因：' + friendly;\r
+}\r
+\r
+function hasPreviousUserMessageBefore(wrap) {\r
+    var node = wrap ? wrap.previousElementSibling : null;\r
+    while (node) {\r
+        if (node.classList && node.classList.contains('msg-wrap--user')) return true;\r
+        node = node.previousElementSibling;\r
+    }\r
+    return false;\r
+}\r
+\r
+let activeInlineRewriteWrap = null;\r
+\r
+function restoreUserMessageBubble(wrap, rawText) {\r
+    if (!wrap) return;\r
+    const div = wrap.querySelector('.message.user');\r
+    if (!div) return;\r
+    wrap.classList.remove('is-inline-rewriting', 'user-msg-expanded', 'has-turn-process');\r
+    div.className = 'message user';\r
+    div.textContent = '';\r
+    messageRawMarkdown.set(wrap, String(rawText || ''));\r
+    renderUserMessageContent(wrap, div, String(rawText || ''), linkifyAssistantTextNodes);\r
+}\r
+\r
+function closeInlineRewriteEditor(wrap, rawText) {\r
+    restoreUserMessageBubble(wrap, rawText);\r
+    if (activeInlineRewriteWrap === wrap) activeInlineRewriteWrap = null;\r
+}\r
+\r
+function autoResizeInlineRewriteTextarea(textarea) {\r
+    if (!textarea) return;\r
+    textarea.style.height = 'auto';\r
+    textarea.style.height = Math.min(Math.max(textarea.scrollHeight, 84), 260) + 'px';\r
+}\r
+\r
+function openInlineRewriteEditor(wrap, rawText, beforeIndex) {\r
+    if (!wrap) return;\r
+    if (activeInlineRewriteWrap && activeInlineRewriteWrap !== wrap) {\r
+        const prevRaw = messageRawMarkdown.get(activeInlineRewriteWrap) || '';\r
+        closeInlineRewriteEditor(activeInlineRewriteWrap, prevRaw);\r
+    }\r
+    const div = wrap.querySelector('.message.user');\r
+    if (!div) return;\r
+    activeInlineRewriteWrap = wrap;\r
+    wrap.classList.add('is-inline-rewriting');\r
+    wrap.classList.remove('user-msg-expanded', 'has-turn-process');\r
+    div.className = 'message user user-inline-rewrite';\r
+    div.textContent = '';\r
+\r
+    const editor = document.createElement('div');\r
+    editor.className = 'user-inline-rewrite-box';\r
+    const textarea = document.createElement('textarea');\r
+    textarea.className = 'user-inline-rewrite-input';\r
+    textarea.value = String(rawText || '');\r
+    textarea.rows = 3;\r
+    const actions = document.createElement('div');\r
+    actions.className = 'user-inline-rewrite-actions';\r
+    const cancelBtn = document.createElement('button');\r
+    cancelBtn.type = 'button';\r
+    cancelBtn.className = 'user-inline-rewrite-btn user-inline-rewrite-btn--ghost';\r
+    cancelBtn.textContent = '取消';\r
+    const confirmBtn = document.createElement('button');\r
+    confirmBtn.type = 'button';\r
+    confirmBtn.className = 'user-inline-rewrite-btn user-inline-rewrite-btn--primary';\r
+    confirmBtn.textContent = '确认';\r
+    actions.appendChild(cancelBtn);\r
+    actions.appendChild(confirmBtn);\r
+    editor.appendChild(textarea);\r
+    editor.appendChild(actions);\r
+    div.appendChild(editor);\r
+\r
+    function cancel() {\r
+        closeInlineRewriteEditor(wrap, rawText);\r
+    }\r
+\r
+    async function confirm() {\r
+        const nextText = String(textarea.value || '');\r
+        if (!nextText.trim()) {\r
+            showUiAlert({\r
+                title: '无法改写',\r
+                message: '改写内容不能为空。',\r
+                variant: 'warning',\r
+            });\r
+            return;\r
+        }\r
+        if (!currentSessionId || !Number.isFinite(Number(beforeIndex))) return;\r
+        confirmBtn.disabled = true;\r
+        cancelBtn.disabled = true;\r
+        pendingRewriteTruncate = {\r
+            sessionId: currentSessionId,\r
+            before: Number(beforeIndex),\r
+            prevInput: ''\r
+        };\r
+        try {\r
+            await sendMessage({\r
+                message: nextText,\r
+                sessionId: currentSessionId,\r
+                preserveInput: true,\r
+                fromInlineRewrite: true,\r
+            });\r
+        } finally {\r
+            if (wrap.isConnected) {\r
+                confirmBtn.disabled = false;\r
+                cancelBtn.disabled = false;\r
+            }\r
+        }\r
+    }\r
+\r
+    textarea.addEventListener('input', function () {\r
+        autoResizeInlineRewriteTextarea(textarea);\r
+    });\r
+    textarea.addEventListener('keydown', function (e) {\r
+        if (e.key === 'Escape') {\r
+            e.preventDefault();\r
+            cancel();\r
+            return;\r
+        }\r
+        if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {\r
+            e.preventDefault();\r
+            void confirm();\r
+        }\r
+    });\r
+    cancelBtn.addEventListener('click', function (e) {\r
+        e.preventDefault();\r
+        cancel();\r
+    });\r
+    confirmBtn.addEventListener('click', function (e) {\r
+        e.preventDefault();\r
+        void confirm();\r
+    });\r
+    autoResizeInlineRewriteTextarea(textarea);\r
+    textarea.focus();\r
+    try {\r
+        textarea.setSelectionRange(textarea.value.length, textarea.value.length);\r
+    } catch (e) { /* ignore */ }\r
+}\r
+\r
+async function branchSessionOnServer(beforeIndex, sessionId) {
+    const sid = sessionId || currentSessionId;
+    if (!sid) return { ok: false, error: 'no_session' };
+    const url = '/sessions/' + encodeURIComponent(sid) + '/branch'
         + '?before_index=' + encodeURIComponent(String(beforeIndex));
-    try {
-        const r = await fetch(url, { method: 'POST' });
-        const j = await r.json().catch(function () { return {}; });
-        return { ok: r.ok, error: (j && j.error) ? String(j.error) : '' };
-    } catch (e) {
-        return { ok: false, error: (e && e.message) || String(e) };
-    }
-}
-
-function describeServerSyncFailure(res, fallback) {
-    var base = fallback || '无法同步服务器。';
-    var err = res && res.error ? String(res.error).trim() : '';
-    if (!err) return base;
-    var friendly = err;
-    if (err === 'no_session') friendly = '当前没有选中的会话。';
-    else if (err === 'invalid_before_index' || err === 'invalid before_index') friendly = '消息定位索引无效，可能需要刷新当前会话。';
-    else if (err === 'refuse empty truncation') friendly = '服务端拒绝清空整个会话。';
-    else if (err === 'truncation failed') friendly = '服务端裁剪历史失败，可能是历史索引已变化或会话文件暂时不一致。';
-    return base + '\\n原因：' + friendly;
-}
-
-function hasPreviousUserMessageBefore(wrap) {
-    var node = wrap ? wrap.previousElementSibling : null;
-    while (node) {
-        if (node.classList && node.classList.contains('msg-wrap--user')) return true;
-        node = node.previousElementSibling;
-    }
-    return false;
-}
-
-async function branchSessionOnServer(beforeIndex) {
-    if (!currentSessionId) return { ok: false, error: 'no_session' };
-    const url = '/sessions/' + encodeURIComponent(currentSessionId) + '/branch'
-        + '?before_index=' + encodeURIComponent(String(beforeIndex));
-    try {
-        const r = await fetch(url, { method: 'POST' });
-        const j = await r.json().catch(function () { return {}; });
-        return {
+    try {\r
+        const r = await fetch(url, { method: 'POST' });\r
+        const j = await r.json().catch(function () { return {}; });\r
+        return {\r
             ok: r.ok,
             session_id: j && j.session_id,
             name: j && j.name,
+            session: j && j.session,
             error: (j && j.error) ? String(j.error) : '',
         };
-    } catch (e) {
-        return { ok: false, error: (e && e.message) || String(e) };
-    }
-}
-
-function normalizeBranchFinalText(text) {
-    return String(text || '').replace(/\\s+/g, ' ').trim();
-}
-
-function branchFinalTextMatches(eventContent, expectedText) {
-    var a = normalizeBranchFinalText(eventContent);
-    var b = normalizeBranchFinalText(expectedText);
-    if (!a || !b) return false;
-    if (a === b) return true;
-    if (a.length > 80 && b.length > 80) {
-        return a.indexOf(b.slice(0, 80)) >= 0 || b.indexOf(a.slice(0, 80)) >= 0;
-    }
-    return false;
-}
-
-async function waitForBranchFinalPersisted(sessionId, beforeIndex, expectedText) {
-    if (!sessionId || !Number.isFinite(beforeIndex) || beforeIndex <= 0) {
-        return { ready: true, beforeIndex: beforeIndex };
-    }
-    var deadline = Date.now() + 2600;
-    while (Date.now() < deadline) {
-        try {
-            var url = '/sessions/' + encodeURIComponent(sessionId)
-                + '/messages?limit=1&before_index=' + encodeURIComponent(String(beforeIndex));
-            var r = await fetch(url);
-            var j = await r.json().catch(function () { return null; });
-            var events = Array.isArray(j) ? j : (j && Array.isArray(j.events) ? j.events : []);
-            if (events.length && events[events.length - 1] && events[events.length - 1].type === 'final') {
-                return { ready: true, beforeIndex: beforeIndex };
-            }
-            var recentUrl = '/sessions/' + encodeURIComponent(sessionId) + '/messages?limit=80';
-            var rr = await fetch(recentUrl);
-            var jj = await rr.json().catch(function () { return null; });
-            var recent = Array.isArray(jj) ? jj : (jj && Array.isArray(jj.events) ? jj.events : []);
-            var base = jj && typeof jj.range_start === 'number' ? jj.range_start : 0;
-            for (var i = recent.length - 1; i >= 0; i -= 1) {
-                var ev = recent[i];
-                if (!ev || ev.type !== 'final') continue;
-                if (branchFinalTextMatches(ev.content, expectedText)) {
-                    return { ready: true, beforeIndex: base + i + 1 };
-                }
-            }
-        } catch (e) { /* retry */ }
-        await new Promise(function (resolve) { setTimeout(resolve, 180); });
-    }
-    return { ready: false, beforeIndex: beforeIndex };
-}
-
-function onMessageToolbarClick(wrap, role, act) {
-    const msg = wrap.querySelector('.message');
-    const plain = msg ? (msg.innerText || '') : '';
-    const tf = wrap.dataset.truncateFrom;
-    const before = tf !== undefined && tf !== '' ? parseInt(tf, 10) : NaN;
-    if ((act === 'delete' || act === 'rewrite') && isSessionRunning(currentSessionId)) {
-        showUiAlert({
-            title: '生成中不可操作',
-            message: '当前会话仍在生成。请等待完成或停止后再修改历史。',
-            variant: 'warning',
-        });
-        return;
-    }
-    if (act === 'copy') {
-        const raw = messageRawMarkdown.get(wrap);
-        const toCopy = raw !== undefined ? String(raw) : plain;
-        const done = function () { showCopyFeedback(); };
-        if (navigator.clipboard && navigator.clipboard.writeText) {
-            navigator.clipboard.writeText(toCopy).then(done).catch(function () {
-                try {
-                    const ta = document.createElement('textarea');
-                    ta.value = toCopy;
-                    ta.setAttribute('readonly', 'readonly');
-                    document.body.appendChild(ta);
-                    ta.select();
-                    document.execCommand('copy');
-                    document.body.removeChild(ta);
-                    done();
-                } catch (e) { /* ignore */ }
-            });
-        }
-        return;
-    }
-    if (act === 'delete') {
-        if (!Number.isFinite(before) || before < 0 || (before === 0 && hasPreviousUserMessageBefore(wrap))) {
-            if (Number.isFinite(before) && (before < 0 || (before === 0 && hasPreviousUserMessageBefore(wrap)))) {
-                showUiAlert({
-                    title: '无法删除该条',
-                    message: '消息索引异常，已阻止清空整个会话。请刷新后再试。',
-                    variant: 'error'
-                });
-                return;
-            }
-            removeMessagesFromNode(wrap);
-            syncDisconnectedProcessGroups();
-            rebuildToc();
-            return;
-        }
-        openUiModal({
-            title: '删除消息',
-            subtitle: '将同步到服务器',
-            message: '确定删除本条及之后的所有对话内容吗？',
-            danger: true,
-            confirmText: '删除',
-            cancelText: '取消',
-        }).then(function (ok) {
-            if (!ok) return;
-            truncateSessionOnServer(before).then(function (res) {
-                if (!res || !res.ok) {
-                    showUiAlert({
-                        title: '同步失败',
-                        message: describeServerSyncFailure(res, '删除未生效。'),
-                        variant: 'error'
-                    });
-                    return;
-                }
-                removeMessagesFromNode(wrap);
-                syncDisconnectedProcessGroups();
-                rebuildToc();
-                scheduleContextTokensAfterPaint(currentSessionId);
-            });
-        });
-        return;
-    }
-    if (act === 'rewrite' && role === 'user') {
-        const raw = messageRawMarkdown.get(wrap);
-        const toFill = raw !== undefined ? String(raw) : plain;
-        if (Number.isFinite(before) && before === 0 && hasPreviousUserMessageBefore(wrap)) {
-            showUiAlert({
-                title: '无法改写该条',
-                message: '消息索引异常，已阻止从错误位置清空会话。请刷新后再试。',
-                variant: 'error'
-            });
-            return;
-        }
-        if (!Number.isFinite(before)) {
-            const prev = messageInput.value;
-            messageInput.value = toFill;
-            rewriteInputWorkspacePaths();
-            autoResizeTextarea();
-            messageInput.focus();
-            showRewriteUndoToast('input', { prev: prev });
-            return;
-        }
-        pendingRewriteTruncate = {
-            sessionId: currentSessionId,
-            before: before,
-            prevInput: messageInput.value,
-        };
-        messageInput.value = toFill;
-        rewriteInputWorkspacePaths();
-        autoResizeTextarea();
-        messageInput.focus();
-        showRewriteUndoToast('rewrite_pending', pendingRewriteTruncate);
-        return;
-    }
+    } catch (e) {\r
+        return { ok: false, error: (e && e.message) || String(e) };\r
+    }\r
+}\r
+\r
+function normalizeBranchFinalText(text) {\r
+    return String(text || '').replace(/\\s+/g, ' ').trim();\r
+}\r
+\r
+function branchFinalTextMatches(eventContent, expectedText) {\r
+    var a = normalizeBranchFinalText(eventContent);\r
+    var b = normalizeBranchFinalText(expectedText);\r
+    if (!a || !b) return false;\r
+    if (a === b) return true;\r
+    if (a.length > 80 && b.length > 80) {\r
+        return a.indexOf(b.slice(0, 80)) >= 0 || b.indexOf(a.slice(0, 80)) >= 0;\r
+    }\r
+    return false;\r
+}\r
+\r
+async function waitForBranchFinalPersisted(sessionId, beforeIndex, expectedText) {\r
+    if (!sessionId || !Number.isFinite(beforeIndex) || beforeIndex <= 0) {\r
+        return { ready: true, beforeIndex: beforeIndex };\r
+    }\r
+    var deadline = Date.now() + 2600;\r
+    while (Date.now() < deadline) {\r
+        try {\r
+            var url = '/sessions/' + encodeURIComponent(sessionId)\r
+                + '/messages?limit=1&before_index=' + encodeURIComponent(String(beforeIndex));\r
+            var r = await fetch(url);\r
+            var j = await r.json().catch(function () { return null; });\r
+            var events = Array.isArray(j) ? j : (j && Array.isArray(j.events) ? j.events : []);\r
+            if (events.length && events[events.length - 1] && events[events.length - 1].type === 'final') {\r
+                return { ready: true, beforeIndex: beforeIndex };\r
+            }\r
+            var recentUrl = '/sessions/' + encodeURIComponent(sessionId) + '/messages?limit=80';\r
+            var rr = await fetch(recentUrl);\r
+            var jj = await rr.json().catch(function () { return null; });\r
+            var recent = Array.isArray(jj) ? jj : (jj && Array.isArray(jj.events) ? jj.events : []);\r
+            var base = jj && typeof jj.range_start === 'number' ? jj.range_start : 0;\r
+            for (var i = recent.length - 1; i >= 0; i -= 1) {\r
+                var ev = recent[i];\r
+                if (!ev || ev.type !== 'final') continue;\r
+                if (branchFinalTextMatches(ev.content, expectedText)) {\r
+                    return { ready: true, beforeIndex: base + i + 1 };\r
+                }\r
+            }\r
+        } catch (e) { /* retry */ }\r
+        await new Promise(function (resolve) { setTimeout(resolve, 180); });\r
+    }\r
+    return { ready: false, beforeIndex: beforeIndex };\r
+}\r
+\r
+function onMessageToolbarClick(wrap, role, act) {\r
+    const msg = wrap.querySelector('.message');\r
+    const plain = msg ? (msg.innerText || '') : '';\r
+    const tf = wrap.dataset.truncateFrom;\r
+    const eiRaw = wrap.dataset.eventIndex;\r
+    const eventIndex = eiRaw !== undefined && eiRaw !== '' ? parseInt(eiRaw, 10) : NaN;\r
+    const truncateFrom = tf !== undefined && tf !== '' ? parseInt(tf, 10) : NaN;\r
+    const before = role === 'user' ? eventIndex : truncateFrom;\r
+    if ((act === 'delete' || act === 'rewrite') && isSessionRunning(currentSessionId)) {\r
+        showUiAlert({\r
+            title: '生成中不可操作',\r
+            message: '当前会话仍在生成。请等待完成或停止后再修改历史。',\r
+            variant: 'warning',\r
+        });\r
+        return;\r
+    }\r
+    if (act === 'copy') {\r
+        const raw = messageRawMarkdown.get(wrap);\r
+        const toCopy = raw !== undefined ? String(raw) : plain;\r
+        const done = function () { showCopyFeedback(); };\r
+        if (navigator.clipboard && navigator.clipboard.writeText) {\r
+            navigator.clipboard.writeText(toCopy).then(done).catch(function () {\r
+                try {\r
+                    const ta = document.createElement('textarea');\r
+                    ta.value = toCopy;\r
+                    ta.setAttribute('readonly', 'readonly');\r
+                    document.body.appendChild(ta);\r
+                    ta.select();\r
+                    document.execCommand('copy');\r
+                    document.body.removeChild(ta);\r
+                    done();\r
+                } catch (e) { /* ignore */ }\r
+            });\r
+        }\r
+        return;\r
+    }\r
+    if (act === 'delete') {\r
+        if (!Number.isFinite(before) || before < 0 || (before === 0 && hasPreviousUserMessageBefore(wrap))) {\r
+            if (Number.isFinite(before) && (before < 0 || (before === 0 && hasPreviousUserMessageBefore(wrap)))) {\r
+                showUiAlert({\r
+                    title: '无法删除该条',\r
+                    message: '消息索引异常，已阻止清空整个会话。请刷新后再试。',\r
+                    variant: 'error'\r
+                });\r
+                return;\r
+            }\r
+            removeMessagesFromNode(wrap);\r
+            syncDisconnectedProcessGroups();\r
+            rebuildToc();\r
+            return;\r
+        }\r
+        openUiModal({\r
+            title: '删除消息',\r
+            subtitle: '将同步到服务器',\r
+            message: '确定删除本条及之后的所有对话内容吗？',\r
+            danger: true,\r
+            confirmText: '删除',\r
+            cancelText: '取消',\r
+        }).then(function (ok) {\r
+            if (!ok) return;\r
+            truncateSessionOnServer(before).then(function (res) {\r
+                if (!res || !res.ok) {\r
+                    showUiAlert({\r
+                        title: '同步失败',\r
+                        message: describeServerSyncFailure(res, '删除未生效。'),\r
+                        variant: 'error'\r
+                    });\r
+                    return;\r
+                }\r
+                removeMessagesFromNode(wrap);\r
+                syncDisconnectedProcessGroups();\r
+                rebuildToc();\r
+                scheduleContextTokensAfterPaint(currentSessionId);\r
+            });\r
+        });\r
+        return;\r
+    }\r
+    if (act === 'rewrite' && role === 'user') {\r
+        const raw = messageRawMarkdown.get(wrap);\r
+        const toFill = raw !== undefined ? String(raw) : plain;\r
+        if (Number.isFinite(before) && before === 0 && hasPreviousUserMessageBefore(wrap)) {\r
+            showUiAlert({\r
+                title: '无法改写该条',\r
+                message: '消息索引异常，已阻止从错误位置清空会话。请刷新后再试。',\r
+                variant: 'error'\r
+            });\r
+            return;\r
+        }\r
+        if (!Number.isFinite(before)) {\r
+            showUiAlert({\r
+                title: '无法改写该条',\r
+                message: '该消息尚未与服务器索引对齐，请刷新当前会话后再试。',\r
+                variant: 'warning',\r
+            });\r
+            return;\r
+        }\r
+        openInlineRewriteEditor(wrap, toFill, before);\r
+        return;\r
+    }\r
     if (act === 'branch' && role === 'assistant') {
+        const sourceSessionId = currentSessionId;
         const eiRaw = wrap.dataset.eventIndex;
         const eventIdx = eiRaw !== undefined && eiRaw !== '' ? parseInt(eiRaw, 10) : NaN;
-        if (!Number.isFinite(eventIdx) || eventIdx < 0) {
-            showUiAlert({
-                title: '无法分支',
-                message: '该回答尚未与服务器同步，请刷新页面后重试。',
-                variant: 'error',
-            });
-            return;
-        }
-        const branchBefore = eventIdx + 1;
-        openUiModal({
-            title: '创建分支会话',
-            subtitle: '原会话不会被修改',
-            message: '将在当前回答之后创建独立分支会话。分支点之前的内容与原会话相同，可在分支中继续提问且不影响原会话。',
-            confirmText: '创建分支',
-            cancelText: '取消',
-        }).then(function (ok) {
+        if (!Number.isFinite(eventIdx) || eventIdx < 0) {\r
+            showUiAlert({\r
+                title: '无法分支',\r
+                message: '该回答尚未与服务器同步，请刷新页面后重试。',\r
+                variant: 'error',\r
+            });\r
+            return;\r
+        }\r
+        const branchBefore = eventIdx + 1;\r
+        openUiModal({\r
+            title: '创建分支会话',\r
+            subtitle: '原会话不会被修改',\r
+            message: '将在当前回答之后创建独立分支会话。分支点之前的内容与原会话相同，可在分支中继续提问且不影响原会话。',\r
+            confirmText: '创建分支',\r
+            cancelText: '取消',\r
+        }).then(function (ok) {\r
             if (!ok) return;
             (async function () {
-                var rawExpected = messageRawMarkdown.get(wrap);
-                var expectedText = rawExpected !== undefined ? String(rawExpected) : plain;
-                var ready = await waitForBranchFinalPersisted(currentSessionId, branchBefore, expectedText);
-                if (!ready || !ready.ready) {
-                    showUiAlert({
-                        title: '分支稍后再试',
-                        message: '最终回答仍在写入会话记录，请稍等一两秒后再次分支。',
-                        variant: 'warning',
-                    });
-                    return;
-                }
-                var res = await branchSessionOnServer(ready.beforeIndex || branchBefore);
+                var res = await branchSessionOnServer(branchBefore, sourceSessionId);
                 if (!res || !res.ok || !res.session_id) {
-                    showUiAlert({
-                        title: '创建失败',
-                        message: describeServerSyncFailure(res, '创建分支未生效。'),
-                        variant: 'error',
-                    });
-                    return;
+                    showUiAlert({\r
+                        title: '创建失败',\r
+                        message: describeServerSyncFailure(res, '创建分支未生效。'),\r
+                        variant: 'error',\r
+                    });\r
+                    return;\r
+                }\r
+                if (res.session && typeof sessionStore !== 'undefined') {
+                    sessionStore.upsert(res.session);
+                    renderSessionListIfChanged(true);
                 }
                 await switchSession(res.session_id);
-                void loadSessions();
-            })();
-        });
-        return;
-    }
-}
-
-function attachMessageToolbar(wrap, role) {
-    const bar = document.createElement('div');
-    bar.className = 'msg-toolbar';
-    var html = '<button type="button" class="msg-tb" data-act="copy" data-ui-tip="复制">复制</button>'
-        + '<button type="button" class="msg-tb" data-act="delete" data-ui-tip="删除">删除</button>';
-    if (role === 'assistant') {
-        html += '<button type="button" class="msg-tb" data-act="branch" data-ui-tip="分支">分支</button>';
-    }
-    if (role === 'user') html += '<button type="button" class="msg-tb" data-act="rewrite" data-ui-tip="改写">改写</button>';
-    bar.innerHTML = html;
-    bar.querySelectorAll('.msg-tb').forEach(bindUiHoverTip);
-    bar.addEventListener('click', function (e) {
-        var t = e.target;
-        if (!t || t.tagName !== 'BUTTON' || !t.getAttribute) return;
-        e.preventDefault();
-        var a = t.getAttribute('data-act');
-        if (a) onMessageToolbarClick(wrap, role, a);
-    });
-    wrap.appendChild(bar);
-}
-
-function getFeedItemText(row) {
-    const sc = row.querySelector('.feed-chunk-scroller');
-    if (sc) return sc.textContent.trim();
-    const ch = row.querySelector('.feed-chunk');
-    return ch ? ch.textContent.trim() : '';
-}
-
-function extractToolNameFromLog(text) {
-    if (!text) return '工具';
-    const line = (text.split(/\\n/)[0] || text).trim();
-    var m = line.match(/^([A-Za-z_][\\w-]*)\\s*\\(/);
-    if (m) return m[1];
-    m = line.match(/^([^\\s(]+)\\s*\\(/);
-    if (m) return m[1];
-    m = line.match(/^(\\S+?)(?:\\(|：)/);
-    if (m) return m[1];
-    return '工具';
-}
-
-function pushBriefLine(lines, line) {
-    if (!line || !String(line).trim()) return;
-    var t = String(line);
-    if (lines.length && lines[lines.length - 1] === t) return;
-    lines.push(t);
-}
-
-function refreshFeedChunkOverflow(chunk) {
-    if (!chunk || !chunk.isConnected) return;
-    const sc = chunk.querySelector('.feed-chunk-scroller');
-    if (!sc) return;
-    if (feedChunkInHiddenSubagentProcess(chunk)) return;
-    if (chunk.classList.contains('expanded')) {
-        chunk.classList.remove('is-overflowing');
-        return;
-    }
-    function measure() {
-        if (!chunk.isConnected || chunk.classList.contains('expanded')) return;
-        var collapsedMax = feedChunkCollapsedMax(chunk);
-        var contentH = sc.scrollHeight;
-        if (contentH < 2) contentH = measureFeedChunkScrollerHeight(sc, chunk);
-        if (chunk.classList.contains('is-streaming') || sc.clientHeight < 2) {
-            chunk.classList.toggle('is-overflowing', contentH > collapsedMax + 1);
-            return;
-        }
-        chunk.classList.toggle('is-overflowing', sc.scrollHeight > sc.clientHeight + 1);
-    }
-    requestAnimationFrame(function () { requestAnimationFrame(measure); });
-}
-
-function scheduleFeedChunkOverflowRefresh(chunk) {
-    if (!chunk) return;
-    var card = chunk.closest && chunk.closest('.subagent-grid-card');
-    if (card && subagentPanelOpen && !card.classList.contains('is-expanded') && card.dataset.viewportVisible !== '1') return;
-    /* streaming 中的块每个 delta 都会触发本函数；measure 是 layout 重操作，
-       3 次 RAF × 每个 delta = 主线程灾难。streaming 时只 set class、不 measure。 */
-    if (chunk.classList && chunk.classList.contains('is-streaming')) {
-        refreshFeedChunkOverflow(chunk);
-        return;
-    }
-    refreshFeedChunkOverflow(chunk);
-    requestAnimationFrame(function () { refreshFeedChunkOverflow(chunk); });
-}
-
-function bindFeedChunkScrollChain(sc) {
-    if (!sc || sc._wheelScrollChainBound) return;
-    sc._wheelScrollChainBound = true;
-    sc.addEventListener('wheel', onFeedChunkScrollerWheel, { passive: false });
-}
-
-function onFeedChunkScrollerWheel(e) {
-    const sc = e.currentTarget;
-    const chunk = sc.closest && sc.closest('.feed-chunk');
-    if (!chunk || !chunk.classList.contains('expanded')) return;
-    const dy = e.deltaY;
-    const eps = 2;
-    const st = sc.scrollTop;
-    const ch = sc.clientHeight;
-    const sh = sc.scrollHeight;
-    const canScrollY = sh > ch + eps;
-    if (canScrollY) {
-        if (dy < 0 && st > eps) return;
-        if (dy > 0 && st < sh - ch - eps) return;
-    }
-    e.preventDefault();
-    e.stopPropagation();
-    const body = sc.closest('.process-aggregate-body');
-    const chat = document.getElementById('chat-container');
-    if (body) {
-        const bPrev = body.scrollTop;
-        const bMax = Math.max(0, body.scrollHeight - body.clientHeight);
-        var bt = bPrev + dy;
-        if (bt < 0) bt = 0;
-        if (bt > bMax) bt = bMax;
-        if (bt !== bPrev) { smoothScrollBy(body, dy); return; }
-    }
-    if (chat) smoothScrollBy(chat, dy);
-}
-
-function bindProcessBriefScrollChain(brief) {
-    if (!brief || brief._briefWheelBound) return;
-    brief._briefWheelBound = true;
-    brief.addEventListener('wheel', onProcessBriefWheel, { passive: false });
-}
-
-function onProcessBriefWheel(e) {
-    const brief = e.currentTarget;
-    const agg = brief.closest && brief.closest('.process-aggregate');
-    if (!agg || !agg.classList.contains('is-collapsed')) return;
-    const dy = e.deltaY;
-    const eps = 2;
-    const st = brief.scrollTop;
-    const ch = brief.clientHeight;
-    const sh = brief.scrollHeight;
-    const canScrollY = sh > ch + eps;
-    if (canScrollY) {
-        if (dy < 0 && st > eps) return;
-        if (dy > 0 && st < sh - ch - eps) return;
-    }
-    e.preventDefault();
-    e.stopPropagation();
-    const chat = document.getElementById('chat-container');
-    if (chat) smoothScrollBy(chat, dy);
-}
-
-function setBriefRows(brief, texts) {
-    brief.textContent = '';
-    texts.forEach(function (t) {
-        if (!t || !String(t).trim()) return;
-        const row = document.createElement('div');
-        row.className = 'process-brief-item';
-        row.textContent = t;
-        brief.appendChild(row);
-    });
-}
-
-function updateProcessBrief(agg) {
-    if (!agg || !agg.isConnected) return;
-    const body = agg.querySelector('.process-aggregate-body');
-    const brief = agg.querySelector('.process-aggregate-brief');
-    if (!body || !brief) return;
-    const items = Array.from(body.querySelectorAll('.feed-item'));
-    const lines = [];
-    var i = 0;
-    while (i < items.length) {
-        var el = items[i];
-        var raw = getFeedItemText(el);
-        if (el.classList.contains('feed--llm')) {
-            if (raw) pushBriefLine(lines, '思·' + raw);
-            i += 1;
-        } else if (el.classList.contains('feed--llm2')) {
-            if (raw) pushBriefLine(lines, '答·' + raw);
-            i += 1;
-        } else if (el.classList.contains('feed--tool')) {
-            var countMap = {};
-            var order = [];
-            while (i < items.length && items[i].classList.contains('feed--tool')) {
-                var tname = extractToolNameFromLog(getFeedItemText(items[i]));
-                if (countMap[tname] === undefined) { countMap[tname] = 0; order.push(tname); }
-                countMap[tname] += 1;
-                i += 1;
-            }
-            for (var oi = 0; oi < order.length; oi += 1) {
-                var nm = order[oi];
-                var n = countMap[nm] || 0;
-                if (n > 0) pushBriefLine(lines, '调用工具 ' + nm + ' ' + n + '次');
-            }
-        } else { i += 1; }
-    }
-    if (lines.length) setBriefRows(brief, lines);
-    else {
-        var st = body.querySelector('.feed-item.feed--st .feed-chunk-scroller, .feed-item.feed--st .feed-chunk');
-        var tSt = st ? st.textContent.trim() : '';
-        if (tSt) setBriefRows(brief, [tSt]);
-        else {
-            var any = body.querySelector('.feed-chunk-scroller, .feed-chunk');
-            var tAny = any ? any.textContent.trim() : '';
-            setBriefRows(brief, [tAny || '本段过程已折叠']);
-        }
-    }
-}
-
-function bindProcessAggregate(agg) {
-    const procBody = agg.querySelector('.process-aggregate-body, .subagent-card-body');
-    if (procBody && !procBody._streamFollowScrollBound) {
-        procBody._streamFollowScrollBound = true;
-        procBody.addEventListener('scroll', function () {
-            if (!isSessionRunning(currentSessionId)) return;
-            var active = getProcessBodyElForCurrentRun();
-            if (active !== procBody) return;
-            refreshLiveAutoFollowPins();
-        }, { passive: true });
-    }
-    if (agg.classList.contains('subagent-grid-card')) return;
-    const top = agg.querySelector('.process-aggregate-top');
-    if (top && !top.dataset.bound) {
-        top.dataset.bound = '1';
-        top.addEventListener('click', function () {
-            agg.classList.toggle('is-collapsed');
-            const expanded = !agg.classList.contains('is-collapsed');
-            top.setAttribute('aria-expanded', expanded ? 'true' : 'false');
-            if (agg.classList.contains('is-collapsed')) {
-                updateProcessBrief(agg);
-            } else {
-                requestAnimationFrame(function () {
-                    requestAnimationFrame(function () {
-                        agg.querySelectorAll('.process-aggregate-body .feed-chunk').forEach(refreshFeedChunkOverflow);
-                        registerMermaidLazy(agg);
-                    });
-                });
-            }
-        });
-        top.addEventListener('keydown', function (e) {
-            if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); top.click(); }
-        });
-    }
-    const briefEl = agg.querySelector('.process-aggregate-brief');
-    if (briefEl) bindProcessBriefScrollChain(briefEl);
-}
-
-function procNow() {
-    return (typeof performance !== 'undefined' && typeof performance.now === 'function') ? performance.now() : Date.now();
-}
-
-function formatProcDurationMs(ms) {
-    if (ms == null || !Number.isFinite(ms) || ms < 0) return null;
-    if (ms < 800) return Math.max(0, Math.round(ms)) + 'ms';
-    if (ms < 60000) {
-        var s = ms / 1000;
-        return (s < 10 ? s.toFixed(1) : Math.round(s)) + 's';
-    }
-    var mi = Math.floor(ms / 60000);
-    var sec = Math.round((ms % 60000) / 1000);
-    return mi + '分' + sec + '秒';
-}
-
-function processStartedAtToProcNow(startedAt) {
-    if (!startedAt) return null;
-    var startedMs = Date.parse(String(startedAt));
-    if (!Number.isFinite(startedMs)) return null;
-    return procNow() - Math.max(0, Date.now() - startedMs);
-}
-
-function applyRunStartedAtToProcessGroup(agg, startedAt) {
-    if (!agg || !startedAt) return;
-    var t0 = processStartedAtToProcNow(startedAt);
-    if (!Number.isFinite(Number(t0))) return;
-    agg.dataset.procStartedAt = String(t0);
-    delete agg.dataset.procEndedAt;
-    if (!agg.dataset.procDurationMs) refreshProcessAggregateStats(agg);
-}
-
-function bumpAggregateMaxReactIter(agg, reactIter) {
-    if (!agg) return;
-    var n = Number(reactIter);
-    if (!Number.isFinite(n) || n < 1) return;
-    var flo = Math.floor(n);
-    var cur = parseInt(agg.dataset.maxReactIter || '0', 10);
-    if (flo > cur) agg.dataset.maxReactIter = String(flo);
-}
-
-function resolveSubagentAggFromCtx(ctx) {
-    if (!ctx) return null;
-    if (ctx.currentProcessGroup && ctx.currentProcessGroup.isConnected
-        && ctx.currentProcessGroup.classList.contains('subagent-grid-card')) {
-        return ctx.currentProcessGroup;
-    }
-    if (ctx._subagentBody && ctx._subagentBody.isConnected) {
-        var card = ctx._subagentBody.closest('.subagent-grid-card');
-        if (card) return card;
-    }
-    return null;
-}
-
-function applySubagentSessionMetricsToCard(card, metrics) {
-    if (!card || !metrics || typeof metrics !== 'object') return;
-    if (metrics.duration_ms != null && Number.isFinite(Number(metrics.duration_ms))) {
-        card.dataset.procDurationMs = String(Math.max(0, Math.floor(Number(metrics.duration_ms))));
-    }
-    if (metrics.react_loops != null && Number.isFinite(Number(metrics.react_loops))) {
-        card.dataset.procReactLoops = String(Math.max(0, Math.floor(Number(metrics.react_loops))));
-    }
-    if (metrics.tool_calls != null && Number.isFinite(Number(metrics.tool_calls))) {
-        card.dataset.procToolCalls = String(Math.max(0, Math.floor(Number(metrics.tool_calls))));
-    }
-    if (metrics.tool_failures != null && Number.isFinite(Number(metrics.tool_failures))) {
-        card.dataset.procToolFails = String(Math.max(0, Math.floor(Number(metrics.tool_failures))));
-    }
-}
-
-function applySubagentProcessMetricsToCard(card, event) {
-    if (!card || !event) return;
-    var isRunEnd = event.duration_ms != null && Number.isFinite(Number(event.duration_ms));
-    if (isRunEnd) {
-        var runDur = Math.max(0, Math.round(Number(event.duration_ms)));
-        var runLoops = event.react_loops != null && Number.isFinite(Number(event.react_loops))
-            ? Math.max(0, Math.floor(Number(event.react_loops))) : 0;
-        var runTools = event.tool_calls != null && Number.isFinite(Number(event.tool_calls))
-            ? Math.max(0, Math.floor(Number(event.tool_calls))) : 0;
-        var runFails = event.tool_failures != null && Number.isFinite(Number(event.tool_failures))
-            ? Math.max(0, Math.floor(Number(event.tool_failures))) : 0;
-        card.dataset.procDurationMs = String((parseInt(card.dataset.procDurationMs || '0', 10) || 0) + runDur);
-        card.dataset.procReactLoops = String((parseInt(card.dataset.procReactLoops || '0', 10) || 0) + runLoops);
-        card.dataset.procToolCalls = String((parseInt(card.dataset.procToolCalls || '0', 10) || 0) + runTools);
-        card.dataset.procToolFails = String((parseInt(card.dataset.procToolFails || '0', 10) || 0) + runFails);
-        delete card.dataset.procLiveToolCalls;
-        delete card.dataset.procLiveToolFails;
-    } else {
-        if (event.tool_calls != null && Number.isFinite(Number(event.tool_calls))) {
-            var liveTools = Math.max(0, Math.floor(Number(event.tool_calls)));
-            var prevTools = parseInt(card.dataset.procLiveToolCalls || '0', 10) || 0;
-            card.dataset.procLiveToolCalls = String(Math.max(prevTools, liveTools));
-        }
-        if (event.tool_failures != null && Number.isFinite(Number(event.tool_failures))) {
-            var liveFails = Math.max(0, Math.floor(Number(event.tool_failures)));
-            var prevFails = parseInt(card.dataset.procLiveToolFails || '0', 10) || 0;
-            card.dataset.procLiveToolFails = String(Math.max(prevFails, liveFails));
-        }
-    }
-}
-
-function uiEventReactIter(ev) {
-    if (!ev || ev.react_iter == null) return null;
-    var n = Number(ev.react_iter);
-    if (!Number.isFinite(n) || n < 1) return null;
-    return n;
-}
-
-function applyCacheStatsFromEvent(ctx, event) {
-    if (!event || typeof event !== 'object') return;
-    var agg = resolveSubagentAggFromCtx(ctx);
-    if (!agg || !agg.isConnected) {
-        agg = ctx && ctx.currentProcessGroup;
-        if (!agg || !agg.isConnected) {
-            var st = (ctx && ctx.stream) ? ctx.stream : getVisibleChatStream();
-            if (st) agg = st.querySelector('.process-aggregate:last-of-type');
-        }
-    }
-    if (!agg) return;
-    if (event.cache_hit != null) agg.dataset.procCacheHit = String(Math.max(0, Math.floor(Number(event.cache_hit))));
-    if (event.cache_miss != null) agg.dataset.procCacheMiss = String(Math.max(0, Math.floor(Number(event.cache_miss))));
-    if (event.hit_rate != null) agg.dataset.procCacheRate = String(Math.max(0, Number(event.hit_rate)));
-    if (event.model != null) agg.dataset.procCacheModel = String(event.model);
-    if (event.input_tokens != null) agg.dataset.procCacheInput = String(Math.max(0, Math.floor(Number(event.input_tokens))));
-    if (event.output_tokens != null) agg.dataset.procCacheOutput = String(Math.max(0, Math.floor(Number(event.output_tokens))));
-    if (event.tokens_per_sec != null) agg.dataset.procCacheTps = String(Math.max(0, Number(event.tokens_per_sec)));
-    refreshAggregateStatsSmart(agg);
-}
-
-function applyProcessMetricsFromEvent(ctx, event) {
-    if (!event || typeof event !== 'object') return;
-    var subCard = resolveSubagentAggFromCtx(ctx);
-    if (subCard && subCard.isConnected) {
-        applySubagentProcessMetricsToCard(subCard, event);
-        scheduleSubagentCardStats(subCard);
-        return;
-    }
-    var agg = ctx && ctx.currentProcessGroup;
-    if (!agg || !agg.isConnected) {
-        var st = (ctx && ctx.stream) ? ctx.stream : getVisibleChatStream();
-        if (st) agg = st.querySelector('.process-aggregate:last-of-type');
-    }
-    if (!agg) return;
-    if (event.duration_ms != null && Number.isFinite(Number(event.duration_ms))) {
-        agg.dataset.procDurationMs = String(Math.max(0, Math.round(Number(event.duration_ms))));
-    }
-    if (event.react_loops != null && Number.isFinite(Number(event.react_loops))) {
-        agg.dataset.procReactLoops = String(Math.max(0, Math.floor(Number(event.react_loops))));
-    }
-    if (event.tool_calls != null && Number.isFinite(Number(event.tool_calls))) {
-        agg.dataset.procToolCalls = String(Math.max(0, Math.floor(Number(event.tool_calls))));
-    }
-    if (event.tool_failures != null && Number.isFinite(Number(event.tool_failures))) {
-        agg.dataset.procToolFails = String(Math.max(0, Math.floor(Number(event.tool_failures))));
-    }
-    refreshAggregateStatsSmart(agg);
-}
-
-function refreshAggregateStatsSmart(agg) {
-    if (agg && agg.classList && agg.classList.contains('subagent-grid-card')) refreshSubagentCardStats(agg);
-    else refreshProcessAggregateStats(agg);
-}
-
-function refreshSubagentCardStats(card) {
-    if (!card) return;
-    var el = card.querySelector('.process-aggregate-stats');
-    if (!el) return;
-    var body = card.querySelector('.subagent-card-body');
-    var pDur = card.dataset.procDurationMs != null && card.dataset.procDurationMs !== ''
-        ? parseInt(card.dataset.procDurationMs, 10) : NaN;
-    var pLoops = card.dataset.procReactLoops != null && card.dataset.procReactLoops !== ''
-        ? parseInt(card.dataset.procReactLoops, 10) : NaN;
-    var pTools = card.dataset.procToolCalls != null && card.dataset.procToolCalls !== ''
-        ? parseInt(card.dataset.procToolCalls, 10) : NaN;
-    var pFails = card.dataset.procToolFails != null && card.dataset.procToolFails !== ''
-        ? parseInt(card.dataset.procToolFails, 10) : NaN;
-    var maxFromRows = 0;
-    var bodyLoaded = subagentBodyIsLoaded(body) && body.dataset.stashed !== '1';
-    if (bodyLoaded) {
-        body.querySelectorAll('.subagent-turn-process .feed-item[data-react-iter]').forEach(function (row) {
-            var v = parseInt(row.getAttribute('data-react-iter'), 10);
-            if (Number.isFinite(v) && v > maxFromRows) maxFromRows = v;
-        });
-    }
-    var dsRi = card.dataset.maxReactIter ? parseInt(card.dataset.maxReactIter, 10) : 0;
-    var reactLoops = Math.max(maxFromRows, dsRi);
-    if (!reactLoops && bodyLoaded) {
-        reactLoops = body.querySelectorAll('.subagent-turn-process .feed-item[data-log-type="llm-response"]').length;
-    }
-    if (Number.isFinite(pLoops) && pLoops > 0) reactLoops = pLoops;
-    var sessionTools = Number.isFinite(pTools) && pTools >= 0 ? pTools : 0;
-    var liveTools = parseInt(card.dataset.procLiveToolCalls || '0', 10) || 0;
-    var toolN = sessionTools + liveTools;
-    if (!toolN && bodyLoaded) {
-        toolN = body.querySelectorAll('.subagent-turn-process .feed-item[data-log-type="tool-call"]').length;
-    }
-    var sessionFails = Number.isFinite(pFails) && pFails >= 0 ? pFails : 0;
-    var liveFails = parseInt(card.dataset.procLiveToolFails || '0', 10) || 0;
-    var failN = sessionFails + liveFails;
-    if (!failN && bodyLoaded) {
-        body.querySelectorAll('.subagent-turn-process .feed-item[data-log-type="tool-call"]').forEach(function (row) {
-            var sc = row.querySelector('.feed-chunk-scroller');
-            var txt = sc ? String(sc.textContent || '') : '';
-            if (/Error:|失败|异常|error executing command:/i.test(txt)) failN += 1;
-        });
-    }
-    var t0s = card.dataset.procStartedAt;
-    var t0 = (t0s != null && t0s !== '') ? Number(t0s) : NaN;
-    var parts = [];
-    var durStr = null;
-    if (Number.isFinite(pDur) && pDur >= 0) durStr = formatProcDurationMs(pDur);
-    else if (Number.isFinite(t0)) {
-        var t1s = card.dataset.procEndedAt;
-        var t1 = (t1s != null && t1s !== '') ? Number(t1s) : procNow();
-        durStr = formatProcDurationMs(t1 - t0);
-    }
-    if (durStr) parts.push(durStr);
-    parts.push(String(reactLoops) + ' 轮');
-    parts.push('工具 ' + String(toolN) + ' 次');
-    parts.push('失败 ' + String(failN) + ' 次');
-    var modelStr = card.dataset.procCacheModel || card.dataset.executorModel || '—';
-    var est = card.dataset.procCtxEstimated;
-    var thr = card.dataset.procCtxThreshold;
-    var pctStr = '—';
-    if (est != null && est !== '' && thr != null && thr !== '' && Number(thr) > 0) {
-        pctStr = (Math.round(Number(est) / Number(thr) * 1000) / 10) + '%';
-    }
-    el.innerHTML = '<span>' + parts.join(' · ') + '</span><span>' + escapeHtml(modelStr) + ' · ' + escapeHtml(pctStr) + '</span>';
-}
-
-function refreshProcessAggregateStats(agg) {
-    if (!agg) return;
-    var el = agg.querySelector('.process-aggregate-stats');
-    if (!el) return;
-    var body = agg.querySelector('.process-aggregate-body');
-    if (!body) { el.textContent = ''; return; }
-    var pDur = agg.dataset.procDurationMs != null && agg.dataset.procDurationMs !== ''
-        ? parseInt(agg.dataset.procDurationMs, 10) : NaN;
-    var pLoops = agg.dataset.procReactLoops != null && agg.dataset.procReactLoops !== ''
-        ? parseInt(agg.dataset.procReactLoops, 10) : NaN;
-    var pTools = agg.dataset.procToolCalls != null && agg.dataset.procToolCalls !== ''
-        ? parseInt(agg.dataset.procToolCalls, 10) : NaN;
-    var pFails = agg.dataset.procToolFails != null && agg.dataset.procToolFails !== ''
-        ? parseInt(agg.dataset.procToolFails, 10) : NaN;
-    var maxFromRows = 0;
-    body.querySelectorAll('.feed-item[data-react-iter]').forEach(function (row) {
-        var v = parseInt(row.getAttribute('data-react-iter'), 10);
-        if (Number.isFinite(v) && v > maxFromRows) maxFromRows = v;
-    });
-    var dsRi = agg.dataset.maxReactIter ? parseInt(agg.dataset.maxReactIter, 10) : 0;
-    var reactLoops = Math.max(maxFromRows, dsRi);
-    if (!reactLoops) {
-        reactLoops = body.querySelectorAll('.feed-item[data-log-type="llm-response"]').length;
-    }
-    if (Number.isFinite(pLoops) && pLoops >= 0) reactLoops = pLoops;
-    var toolN = body.querySelectorAll('.feed-item[data-log-type="tool-call"]').length;
-    if (Number.isFinite(pTools) && pTools >= 0) toolN = pTools;
-    var failN = 0;
-    if (Number.isFinite(pFails) && pFails >= 0) failN = pFails;
-    var t0s = agg.dataset.procStartedAt;
-    var t0 = (t0s != null && t0s !== '') ? Number(t0s) : NaN;
-    var parts = [];
-    var durStr = null;
-    if (Number.isFinite(pDur) && pDur >= 0) durStr = formatProcDurationMs(pDur);
-    else if (Number.isFinite(t0)) {
-        var t1s = agg.dataset.procEndedAt;
-        var t1 = (t1s != null && t1s !== '') ? Number(t1s) : procNow();
-        durStr = formatProcDurationMs(t1 - t0);
-    }
-    if (durStr) parts.push(durStr);
-    parts.push(String(reactLoops) + ' 轮');
-    parts.push('工具 ' + String(toolN) + ' 次');
-        parts.push('失败 ' + String(failN) + ' 次');
-    var ch = agg.dataset.procCacheHit != null && agg.dataset.procCacheHit !== '' ? parseInt(agg.dataset.procCacheHit, 10) : 0;
-    var cm = agg.dataset.procCacheMiss != null && agg.dataset.procCacheMiss !== '' ? parseInt(agg.dataset.procCacheMiss, 10) : 0;
-    var cr = agg.dataset.procCacheRate != null && agg.dataset.procCacheRate !== '' ? parseFloat(agg.dataset.procCacheRate) : 0;
-    var modelStr = agg.dataset.procCacheModel || '';
-    var inputStr = agg.dataset.procCacheInput || '0';
-    var outputStr = agg.dataset.procCacheOutput || '0';
-    var tps = agg.dataset.procCacheTps;
-    var cacheParts = [];
-    if (modelStr) cacheParts.push(modelStr);
-    cacheParts.push('input=' + inputStr);
-    cacheParts.push('output=' + outputStr);
-    if (tps && tps !== '0') cacheParts.push(tps + ' tok/s');
-    var rateStr = (ch + cm > 0) ? (cr % 1 === 0 ? cr.toFixed(0) : cr.toFixed(1)) + '%' : '0%';
-    cacheParts.push('hit_rate=' + rateStr);
-    var cacheLine = cacheParts.join(' · ');
-    el.innerHTML = '<span>' + parts.join(' · ') + '</span><span>' + cacheLine + '</span>';
-}
-
-function ensureProcessGroup(ctx) {
-    if (!ctx || !ctx.stream) return null;
-    /* DocumentFragment 或未挂上 document 的节点 isConnected 为 false；回放或「加载更早消息」预挂载时需保留同一执行过程框 */
-    if (ctx.currentProcessGroup && !ctx.currentProcessGroup.isConnected && !replayingMessages) ctx.currentProcessGroup = null;
-    if (ctx.currentProcessGroup) return ctx.currentProcessGroup;
-    stripWelcome(ctx);
-    const wrap = document.createElement('div');
-    wrap.className = 'process-aggregate';
-    var replayCollapsed = !!replayingMessages;
-    if (replayCollapsed) wrap.classList.add('is-collapsed');
-    wrap.innerHTML = '<div class="process-aggregate-top" role="button" tabindex="0" aria-expanded="' + (replayCollapsed ? 'false' : 'true') + '">'
-        + '<div class="process-aggregate-top-line">'
-        + '<span class="process-aggregate-title-wrap">'
-        + '<span class="process-aggregate-title">执行过程</span>'
-        + '<span class="process-aggregate-stats" aria-live="polite"></span>'
-        + '</span>'
-        + '<span class="process-chev" aria-hidden="true">▼</span></div>'
-        + '<div class="process-aggregate-brief"></div></div>'
-        + '<div class="process-aggregate-body"></div>';
-    if (!replayingMessages) {
-        if (ctx.runStartedAt) applyRunStartedAtToProcessGroup(wrap, ctx.runStartedAt);
-        else wrap.dataset.procStartedAt = String(procNow());
-    }
-    delete wrap.dataset.maxReactIter;
-    (ctx.stream || chatContainer).appendChild(wrap);
-    bindProcessAggregate(wrap);
-    ctx.currentProcessGroup = wrap;
-    refreshProcessAggregateStats(wrap);
-    return wrap;
-}
-
-function sealProcessGroup(ctx) {
-    if (!ctx) return;
-    if (!ctx.currentProcessGroup) return;
-    const agg = ctx.currentProcessGroup;
-    if (agg.isConnected) {
-        updateProcessBrief(agg);
-        if (agg.dataset.procStartedAt) agg.dataset.procEndedAt = String(procNow());
-        refreshProcessAggregateStats(agg);
-    }
-    ctx.currentProcessGroup = null;
-    ctx.progressScrollers = {};
-    resetKeyContextStreamFilter(ctx);
-    finalizeProgressStreamChunks(ctx);
-}
-
-function getProcessBody(ctx) {
-    if (ctx && ctx._subagentTurnProcess && ctx._subagentTurnProcess.isConnected) return ctx._subagentTurnProcess;
-    if (ctx && ctx.currentTurn && ctx.currentTurn.isConnected) {
-        var subProc = ctx.currentTurn.querySelector('.subagent-turn-process');
-        if (subProc) {
-            ctx._subagentTurnProcess = subProc;
-            return subProc;
-        }
-    }
-    if (ctx && ctx._subagentBody && ctx._subagentBody.isConnected) return null;
-    const w = ensureProcessGroup(ctx);
-    if (!w) return null;
-    return w.querySelector('.process-aggregate-body');
-}
-
-function autoResizeTextarea() {
-    messageInput.style.height = 'auto';
-    messageInput.style.height = Math.min(messageInput.scrollHeight, 120) + 'px';
-}
-messageInput.addEventListener('input', autoResizeTextarea);
-messageInput.addEventListener('input', rewriteInputWorkspacePaths);
-messageInput.addEventListener('input', function () {
-    if (currentSessionId) persistInputDraft(currentSessionId, messageInput.value);
-});
-autoResizeTextarea();
-refreshInputPathChips();
-
+                setTimeout(function () { void loadSessions({ forceRender: true }); }, 0);
+            })();\r
+        });\r
+        return;\r
+    }\r
+}\r
+\r
+function attachMessageToolbar(wrap, role) {\r
+    const bar = document.createElement('div');\r
+    bar.className = 'msg-toolbar';\r
+    if (role === 'user') {\r
+        var createdAt = wrap && wrap.dataset ? (wrap.dataset.createdAt || '') : '';\r
+        if (createdAt) {\r
+            var timeEl = document.createElement('span');\r
+            timeEl.className = 'user-message-time';\r
+            timeEl.setAttribute('data-created-at', createdAt);\r
+            timeEl.title = createdAt;\r
+            timeEl.textContent = formatUserMessageTimestamp(createdAt);\r
+            bar.appendChild(timeEl);\r
+        }\r
+    }\r
+    var html = '<button type="button" class="msg-tb" data-act="copy" data-ui-tip="复制">复制</button>'\r
+        + '<button type="button" class="msg-tb" data-act="delete" data-ui-tip="删除">删除</button>';\r
+    if (role === 'assistant') {\r
+        html += '<button type="button" class="msg-tb" data-act="branch" data-ui-tip="分支">分支</button>';\r
+    }\r
+    if (role === 'user') html += '<button type="button" class="msg-tb" data-act="rewrite" data-ui-tip="改写">改写</button>';\r
+    bar.insertAdjacentHTML('beforeend', html);\r
+    bar.querySelectorAll('.msg-tb').forEach(bindUiHoverTip);\r
+    bar.addEventListener('click', function (e) {\r
+        var t = e.target;\r
+        if (!t || t.tagName !== 'BUTTON' || !t.getAttribute) return;\r
+        e.preventDefault();\r
+        var a = t.getAttribute('data-act');\r
+        if (a) onMessageToolbarClick(wrap, role, a);\r
+    });\r
+    wrap.appendChild(bar);\r
+}\r
+\r
+function getFeedItemText(row) {\r
+    const sc = row.querySelector('.feed-chunk-scroller');\r
+    if (sc) return sc.textContent.trim();\r
+    const ch = row.querySelector('.feed-chunk');\r
+    return ch ? ch.textContent.trim() : '';\r
+}\r
+\r
+function extractToolNameFromLog(text) {\r
+    if (!text) return '工具';\r
+    const line = (text.split(/\\n/)[0] || text).trim();\r
+    var m = line.match(/^([A-Za-z_][\\w-]*)\\s*\\(/);\r
+    if (m) return m[1];\r
+    m = line.match(/^([^\\s(]+)\\s*\\(/);\r
+    if (m) return m[1];\r
+    m = line.match(/^(\\S+?)(?:\\(|：)/);\r
+    if (m) return m[1];\r
+    return '工具';\r
+}\r
+\r
+function pushBriefLine(lines, line) {\r
+    if (!line || !String(line).trim()) return;\r
+    var t = String(line);\r
+    if (lines.length && lines[lines.length - 1] === t) return;\r
+    lines.push(t);\r
+}\r
+\r
+function refreshFeedChunkOverflow(chunk) {\r
+    if (!chunk || !chunk.isConnected) return;\r
+    const sc = chunk.querySelector('.feed-chunk-scroller');\r
+    if (!sc) return;\r
+    if (feedChunkInHiddenSubagentProcess(chunk)) return;\r
+    if (chunk.classList.contains('expanded')) {\r
+        chunk.classList.remove('is-overflowing');\r
+        return;\r
+    }\r
+    function measure() {\r
+        if (!chunk.isConnected || chunk.classList.contains('expanded')) return;\r
+        var collapsedMax = feedChunkCollapsedMax(chunk);\r
+        var contentH = sc.scrollHeight;\r
+        if (contentH < 2) contentH = measureFeedChunkScrollerHeight(sc, chunk);\r
+        if (chunk.classList.contains('is-streaming') || sc.clientHeight < 2) {\r
+            chunk.classList.toggle('is-overflowing', contentH > collapsedMax + 1);\r
+            return;\r
+        }\r
+        chunk.classList.toggle('is-overflowing', sc.scrollHeight > sc.clientHeight + 1);\r
+    }\r
+    requestAnimationFrame(function () { requestAnimationFrame(measure); });\r
+}\r
+\r
+function scheduleFeedChunkOverflowRefresh(chunk) {\r
+    if (!chunk) return;\r
+    var card = chunk.closest && chunk.closest('.subagent-grid-card');\r
+    if (card && subagentPanelOpen && !card.classList.contains('is-expanded') && card.dataset.viewportVisible !== '1') return;\r
+    /* streaming 中的块每个 delta 都会触发本函数；measure 是 layout 重操作，\r
+       3 次 RAF × 每个 delta = 主线程灾难。streaming 时只 set class、不 measure。 */\r
+    if (chunk.classList && chunk.classList.contains('is-streaming')) {\r
+        refreshFeedChunkOverflow(chunk);\r
+        return;\r
+    }\r
+    refreshFeedChunkOverflow(chunk);\r
+    requestAnimationFrame(function () { refreshFeedChunkOverflow(chunk); });\r
+}\r
+\r
+function bindFeedChunkScrollChain(sc) {\r
+    if (!sc || sc._wheelScrollChainBound) return;\r
+    sc._wheelScrollChainBound = true;\r
+    sc.addEventListener('wheel', onFeedChunkScrollerWheel, { passive: false });\r
+}\r
+\r
+function onFeedChunkScrollerWheel(e) {\r
+    const sc = e.currentTarget;\r
+    const chunk = sc.closest && sc.closest('.feed-chunk');\r
+    if (!chunk || !chunk.classList.contains('expanded')) return;\r
+    const dy = e.deltaY;\r
+    const eps = 2;\r
+    const st = sc.scrollTop;\r
+    const ch = sc.clientHeight;\r
+    const sh = sc.scrollHeight;\r
+    const canScrollY = sh > ch + eps;\r
+    if (canScrollY) {\r
+        if (dy < 0 && st > eps) return;\r
+        if (dy > 0 && st < sh - ch - eps) return;\r
+    }\r
+    e.preventDefault();\r
+    e.stopPropagation();\r
+    const body = sc.closest('.process-aggregate-body');\r
+    const chat = document.getElementById('chat-container');\r
+    if (body) {\r
+        const bPrev = body.scrollTop;\r
+        const bMax = Math.max(0, body.scrollHeight - body.clientHeight);\r
+        var bt = bPrev + dy;\r
+        if (bt < 0) bt = 0;\r
+        if (bt > bMax) bt = bMax;\r
+        if (bt !== bPrev) { smoothScrollBy(body, dy); return; }\r
+    }\r
+    if (chat) smoothScrollBy(chat, dy);\r
+}\r
+\r
+function bindProcessBriefScrollChain(brief) {\r
+    if (!brief || brief._briefWheelBound) return;\r
+    brief._briefWheelBound = true;\r
+    brief.addEventListener('wheel', onProcessBriefWheel, { passive: false });\r
+}\r
+\r
+function onProcessBriefWheel(e) {\r
+    const brief = e.currentTarget;\r
+    const agg = brief.closest && brief.closest('.process-aggregate');\r
+    if (!agg || !agg.classList.contains('is-collapsed')) return;\r
+    const dy = e.deltaY;\r
+    const eps = 2;\r
+    const st = brief.scrollTop;\r
+    const ch = brief.clientHeight;\r
+    const sh = brief.scrollHeight;\r
+    const canScrollY = sh > ch + eps;\r
+    if (canScrollY) {\r
+        if (dy < 0 && st > eps) return;\r
+        if (dy > 0 && st < sh - ch - eps) return;\r
+    }\r
+    e.preventDefault();\r
+    e.stopPropagation();\r
+    const chat = document.getElementById('chat-container');\r
+    if (chat) smoothScrollBy(chat, dy);\r
+}\r
+\r
+function setBriefRows(brief, texts) {\r
+    brief.textContent = '';\r
+    texts.forEach(function (t) {\r
+        if (!t || !String(t).trim()) return;\r
+        const row = document.createElement('div');\r
+        row.className = 'process-brief-item';\r
+        row.textContent = t;\r
+        brief.appendChild(row);\r
+    });\r
+}\r
+\r
+function updateProcessBrief(agg) {\r
+    if (!agg || !agg.isConnected) return;\r
+    const body = agg.querySelector('.process-aggregate-body');\r
+    const brief = agg.querySelector('.process-aggregate-brief');\r
+    if (!body || !brief) return;\r
+    const items = Array.from(body.querySelectorAll('.feed-item'));\r
+    const lines = [];\r
+    var i = 0;\r
+    while (i < items.length) {\r
+        var el = items[i];\r
+        var raw = getFeedItemText(el);\r
+        if (el.classList.contains('feed--llm')) {\r
+            if (raw) pushBriefLine(lines, '思·' + raw);\r
+            i += 1;\r
+        } else if (el.classList.contains('feed--llm2')) {\r
+            if (raw) pushBriefLine(lines, '答·' + raw);\r
+            i += 1;\r
+        } else if (el.classList.contains('feed--tool')) {\r
+            var countMap = {};\r
+            var order = [];\r
+            while (i < items.length && items[i].classList.contains('feed--tool')) {\r
+                var tname = extractToolNameFromLog(getFeedItemText(items[i]));\r
+                if (countMap[tname] === undefined) { countMap[tname] = 0; order.push(tname); }\r
+                countMap[tname] += 1;\r
+                i += 1;\r
+            }\r
+            for (var oi = 0; oi < order.length; oi += 1) {\r
+                var nm = order[oi];\r
+                var n = countMap[nm] || 0;\r
+                if (n > 0) pushBriefLine(lines, '调用工具 ' + nm + ' ' + n + '次');\r
+            }\r
+        } else { i += 1; }\r
+    }\r
+    if (lines.length) setBriefRows(brief, lines);\r
+    else {\r
+        var st = body.querySelector('.feed-item.feed--st .feed-chunk-scroller, .feed-item.feed--st .feed-chunk');\r
+        var tSt = st ? st.textContent.trim() : '';\r
+        if (tSt) setBriefRows(brief, [tSt]);\r
+        else {\r
+            var any = body.querySelector('.feed-chunk-scroller, .feed-chunk');\r
+            var tAny = any ? any.textContent.trim() : '';\r
+            setBriefRows(brief, [tAny || '本段过程已折叠']);\r
+        }\r
+    }\r
+}\r
+\r
+function bindProcessAggregate(agg) {\r
+    const procBody = agg.querySelector('.process-aggregate-body, .subagent-card-body');\r
+    if (procBody && !procBody._streamFollowScrollBound) {\r
+        procBody._streamFollowScrollBound = true;\r
+        procBody.addEventListener('scroll', function () {\r
+            if (!isSessionRunning(currentSessionId)) return;\r
+            var active = getProcessBodyElForCurrentRun();\r
+            if (active !== procBody) return;\r
+            refreshLiveAutoFollowPins();\r
+        }, { passive: true });\r
+    }\r
+    if (agg.classList.contains('subagent-grid-card')) return;\r
+    const top = agg.querySelector('.process-aggregate-top');\r
+    if (top && !top.dataset.bound) {\r
+        top.dataset.bound = '1';\r
+        top.addEventListener('click', function () {\r
+            agg.classList.toggle('is-collapsed');\r
+            const expanded = !agg.classList.contains('is-collapsed');\r
+            top.setAttribute('aria-expanded', expanded ? 'true' : 'false');\r
+            if (agg.classList.contains('is-collapsed')) {\r
+                updateProcessBrief(agg);\r
+            } else {\r
+                requestAnimationFrame(function () {\r
+                    requestAnimationFrame(function () {\r
+                        agg.querySelectorAll('.process-aggregate-body .feed-chunk').forEach(refreshFeedChunkOverflow);\r
+                        registerMermaidLazy(agg);\r
+                    });\r
+                });\r
+            }\r
+        });\r
+        top.addEventListener('keydown', function (e) {\r
+            if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); top.click(); }\r
+        });\r
+    }\r
+    const briefEl = agg.querySelector('.process-aggregate-brief');\r
+    if (briefEl) bindProcessBriefScrollChain(briefEl);\r
+}\r
+\r
+function procNow() {\r
+    return (typeof performance !== 'undefined' && typeof performance.now === 'function') ? performance.now() : Date.now();\r
+}\r
+\r
+var processAggregateStatsTimer = null;\r
+\r
+function processAggregateNeedsLiveStats(agg) {\r
+    if (!agg || !agg.isConnected || !agg.dataset) return false;\r
+    if (!agg.dataset.procStartedAt || agg.dataset.procEndedAt) return false;\r
+    return !(agg.dataset.procDurationMs != null && agg.dataset.procDurationMs !== '');\r
+}\r
+\r
+function refreshLiveProcessAggregateStats() {\r
+    if (typeof document === 'undefined') return false;\r
+    var live = Array.from(document.querySelectorAll('.process-aggregate[data-proc-started-at]'))\r
+        .filter(processAggregateNeedsLiveStats);\r
+    live.forEach(refreshAggregateStatsSmart);\r
+    return live.length > 0;\r
+}\r
+\r
+function stopLiveProcessAggregateStats() {\r
+    if (!processAggregateStatsTimer) return;\r
+    clearInterval(processAggregateStatsTimer);\r
+    processAggregateStatsTimer = null;\r
+}\r
+\r
+function scheduleLiveProcessAggregateStats() {\r
+    if (processAggregateStatsTimer) return;\r
+    if (!refreshLiveProcessAggregateStats()) return;\r
+    processAggregateStatsTimer = setInterval(function () {\r
+        if (!refreshLiveProcessAggregateStats()) stopLiveProcessAggregateStats();\r
+    }, 250);\r
+}\r
+\r
+function formatProcDurationMs(ms) {\r
+    if (ms == null || !Number.isFinite(ms) || ms < 0) return null;\r
+    if (ms < 800) return Math.max(0, Math.round(ms)) + 'ms';\r
+    if (ms < 60000) {\r
+        var s = ms / 1000;\r
+        return (s < 10 ? s.toFixed(1) : Math.round(s)) + 's';\r
+    }\r
+    var mi = Math.floor(ms / 60000);\r
+    var sec = Math.round((ms % 60000) / 1000);\r
+    return mi + '分' + sec + '秒';\r
+}\r
+\r
+function processStartedAtToProcNow(startedAt) {\r
+    if (!startedAt) return null;\r
+    var startedMs = Date.parse(String(startedAt));\r
+    if (!Number.isFinite(startedMs)) return null;\r
+    return procNow() - Math.max(0, Date.now() - startedMs);\r
+}\r
+\r
+function applyRunStartedAtToProcessGroup(agg, startedAt) {\r
+    if (!agg || !startedAt) return;\r
+    var t0 = processStartedAtToProcNow(startedAt);\r
+    if (!Number.isFinite(Number(t0))) return;\r
+    agg.dataset.procStartedAt = String(t0);\r
+    delete agg.dataset.procEndedAt;\r
+    if (!agg.dataset.procDurationMs) refreshProcessAggregateStats(agg);\r
+    scheduleLiveProcessAggregateStats();\r
+}\r
+\r
+function bumpAggregateMaxReactIter(agg, reactIter) {\r
+    if (!agg) return;\r
+    var n = Number(reactIter);\r
+    if (!Number.isFinite(n) || n < 1) return;\r
+    var flo = Math.floor(n);\r
+    var cur = parseInt(agg.dataset.maxReactIter || '0', 10);\r
+    if (flo > cur) agg.dataset.maxReactIter = String(flo);\r
+}\r
+\r
+function resolveSubagentAggFromCtx(ctx) {\r
+    if (!ctx) return null;\r
+    if (ctx.currentProcessGroup && ctx.currentProcessGroup.isConnected\r
+        && ctx.currentProcessGroup.classList.contains('subagent-grid-card')) {\r
+        return ctx.currentProcessGroup;\r
+    }\r
+    if (ctx._subagentBody && ctx._subagentBody.isConnected) {\r
+        var card = ctx._subagentBody.closest('.subagent-grid-card');\r
+        if (card) return card;\r
+    }\r
+    return null;\r
+}\r
+\r
+function applySubagentSessionMetricsToCard(card, metrics) {\r
+    if (!card || !metrics || typeof metrics !== 'object') return;\r
+    if (metrics.duration_ms != null && Number.isFinite(Number(metrics.duration_ms))) {\r
+        card.dataset.procDurationMs = String(Math.max(0, Math.floor(Number(metrics.duration_ms))));\r
+    }\r
+    if (metrics.react_loops != null && Number.isFinite(Number(metrics.react_loops))) {\r
+        card.dataset.procReactLoops = String(Math.max(0, Math.floor(Number(metrics.react_loops))));\r
+    }\r
+    if (metrics.tool_calls != null && Number.isFinite(Number(metrics.tool_calls))) {\r
+        card.dataset.procToolCalls = String(Math.max(0, Math.floor(Number(metrics.tool_calls))));\r
+    }\r
+    if (metrics.tool_failures != null && Number.isFinite(Number(metrics.tool_failures))) {\r
+        card.dataset.procToolFails = String(Math.max(0, Math.floor(Number(metrics.tool_failures))));\r
+    }\r
+}\r
+\r
+function applySubagentProcessMetricsToCard(card, event) {\r
+    if (!card || !event) return;\r
+    var isRunEnd = event.duration_ms != null && Number.isFinite(Number(event.duration_ms));\r
+    if (isRunEnd) {\r
+        var runDur = Math.max(0, Math.round(Number(event.duration_ms)));\r
+        var runLoops = event.react_loops != null && Number.isFinite(Number(event.react_loops))\r
+            ? Math.max(0, Math.floor(Number(event.react_loops))) : 0;\r
+        var runTools = event.tool_calls != null && Number.isFinite(Number(event.tool_calls))\r
+            ? Math.max(0, Math.floor(Number(event.tool_calls))) : 0;\r
+        var runFails = event.tool_failures != null && Number.isFinite(Number(event.tool_failures))\r
+            ? Math.max(0, Math.floor(Number(event.tool_failures))) : 0;\r
+        card.dataset.procDurationMs = String((parseInt(card.dataset.procDurationMs || '0', 10) || 0) + runDur);\r
+        card.dataset.procReactLoops = String((parseInt(card.dataset.procReactLoops || '0', 10) || 0) + runLoops);\r
+        card.dataset.procToolCalls = String((parseInt(card.dataset.procToolCalls || '0', 10) || 0) + runTools);\r
+        card.dataset.procToolFails = String((parseInt(card.dataset.procToolFails || '0', 10) || 0) + runFails);\r
+        delete card.dataset.procLiveToolCalls;\r
+        delete card.dataset.procLiveToolFails;\r
+    } else {\r
+        if (event.tool_calls != null && Number.isFinite(Number(event.tool_calls))) {\r
+            var liveTools = Math.max(0, Math.floor(Number(event.tool_calls)));\r
+            var prevTools = parseInt(card.dataset.procLiveToolCalls || '0', 10) || 0;\r
+            card.dataset.procLiveToolCalls = String(Math.max(prevTools, liveTools));\r
+        }\r
+        if (event.tool_failures != null && Number.isFinite(Number(event.tool_failures))) {\r
+            var liveFails = Math.max(0, Math.floor(Number(event.tool_failures)));\r
+            var prevFails = parseInt(card.dataset.procLiveToolFails || '0', 10) || 0;\r
+            card.dataset.procLiveToolFails = String(Math.max(prevFails, liveFails));\r
+        }\r
+    }\r
+}\r
+\r
+function uiEventReactIter(ev) {\r
+    if (!ev || ev.react_iter == null) return null;\r
+    var n = Number(ev.react_iter);\r
+    if (!Number.isFinite(n) || n < 1) return null;\r
+    return n;\r
+}\r
+\r
+function applyCacheStatsFromEvent(ctx, event) {\r
+    if (!event || typeof event !== 'object') return;\r
+    var agg = resolveSubagentAggFromCtx(ctx);\r
+    if (!agg || !agg.isConnected) {\r
+        agg = ctx && ctx.currentProcessGroup;\r
+        if (!agg || !agg.isConnected) {\r
+            var st = (ctx && ctx.stream) ? ctx.stream : getVisibleChatStream();\r
+            if (st) agg = st.querySelector('.process-aggregate:last-of-type');\r
+        }\r
+    }\r
+    if (!agg) return;\r
+    if (event.cache_hit != null) agg.dataset.procCacheHit = String(Math.max(0, Math.floor(Number(event.cache_hit))));\r
+    if (event.cache_miss != null) agg.dataset.procCacheMiss = String(Math.max(0, Math.floor(Number(event.cache_miss))));\r
+    if (event.hit_rate != null) agg.dataset.procCacheRate = String(Math.max(0, Number(event.hit_rate)));\r
+    if (event.model != null) agg.dataset.procCacheModel = String(event.model);\r
+    if (event.input_tokens != null) agg.dataset.procCacheInput = String(Math.max(0, Math.floor(Number(event.input_tokens))));\r
+    if (event.output_tokens != null) agg.dataset.procCacheOutput = String(Math.max(0, Math.floor(Number(event.output_tokens))));\r
+    if (event.tokens_per_sec != null) agg.dataset.procCacheTps = String(Math.max(0, Number(event.tokens_per_sec)));\r
+    refreshAggregateStatsSmart(agg);\r
+}\r
+\r
+function applyProcessMetricsFromEvent(ctx, event) {\r
+    if (!event || typeof event !== 'object') return;\r
+    var subCard = resolveSubagentAggFromCtx(ctx);\r
+    if (subCard && subCard.isConnected) {\r
+        applySubagentProcessMetricsToCard(subCard, event);\r
+        scheduleSubagentCardStats(subCard);\r
+        return;\r
+    }\r
+    var agg = ctx && ctx.currentProcessGroup;\r
+    if (!agg || !agg.isConnected) {\r
+        var st = (ctx && ctx.stream) ? ctx.stream : getVisibleChatStream();\r
+        if (st) agg = st.querySelector('.process-aggregate:last-of-type');\r
+    }\r
+    if (!agg) return;\r
+    if (event.duration_ms != null && Number.isFinite(Number(event.duration_ms))) {\r
+        if (!replayingMessages && agg.dataset.procStartedAt) {\r
+            agg.dataset.procEndedAt = String(procNow());\r
+            delete agg.dataset.procDurationMs;\r
+        } else {\r
+            agg.dataset.procDurationMs = String(Math.max(0, Math.round(Number(event.duration_ms))));\r
+        }\r
+    }\r
+    if (event.react_loops != null && Number.isFinite(Number(event.react_loops))) {\r
+        agg.dataset.procReactLoops = String(Math.max(0, Math.floor(Number(event.react_loops))));\r
+    }\r
+    if (event.tool_calls != null && Number.isFinite(Number(event.tool_calls))) {\r
+        agg.dataset.procToolCalls = String(Math.max(0, Math.floor(Number(event.tool_calls))));\r
+    }\r
+    if (event.tool_failures != null && Number.isFinite(Number(event.tool_failures))) {\r
+        agg.dataset.procToolFails = String(Math.max(0, Math.floor(Number(event.tool_failures))));\r
+    }\r
+    refreshAggregateStatsSmart(agg);\r
+    if (processAggregateNeedsLiveStats(agg)) scheduleLiveProcessAggregateStats();\r
+    else if (!refreshLiveProcessAggregateStats()) stopLiveProcessAggregateStats();\r
+}\r
+\r
+function refreshAggregateStatsSmart(agg) {\r
+    if (agg && agg.classList && agg.classList.contains('subagent-grid-card')) refreshSubagentCardStats(agg);\r
+    else refreshProcessAggregateStats(agg);\r
+}\r
+\r
+function refreshSubagentCardStats(card) {\r
+    if (!card) return;\r
+    var el = card.querySelector('.process-aggregate-stats');\r
+    if (!el) return;\r
+    var body = card.querySelector('.subagent-card-body');\r
+    var pDur = card.dataset.procDurationMs != null && card.dataset.procDurationMs !== ''\r
+        ? parseInt(card.dataset.procDurationMs, 10) : NaN;\r
+    var pLoops = card.dataset.procReactLoops != null && card.dataset.procReactLoops !== ''\r
+        ? parseInt(card.dataset.procReactLoops, 10) : NaN;\r
+    var pTools = card.dataset.procToolCalls != null && card.dataset.procToolCalls !== ''\r
+        ? parseInt(card.dataset.procToolCalls, 10) : NaN;\r
+    var pFails = card.dataset.procToolFails != null && card.dataset.procToolFails !== ''\r
+        ? parseInt(card.dataset.procToolFails, 10) : NaN;\r
+    var maxFromRows = 0;\r
+    var bodyLoaded = subagentBodyIsLoaded(body) && body.dataset.stashed !== '1';\r
+    if (bodyLoaded) {\r
+        body.querySelectorAll('.subagent-turn-process .feed-item[data-react-iter]').forEach(function (row) {\r
+            var v = parseInt(row.getAttribute('data-react-iter'), 10);\r
+            if (Number.isFinite(v) && v > maxFromRows) maxFromRows = v;\r
+        });\r
+    }\r
+    var dsRi = card.dataset.maxReactIter ? parseInt(card.dataset.maxReactIter, 10) : 0;\r
+    var reactLoops = Math.max(maxFromRows, dsRi);\r
+    if (!reactLoops && bodyLoaded) {\r
+        reactLoops = body.querySelectorAll('.subagent-turn-process .feed-item[data-log-type="llm-response"]').length;\r
+    }\r
+    if (Number.isFinite(pLoops) && pLoops > 0) reactLoops = pLoops;\r
+    var sessionTools = Number.isFinite(pTools) && pTools >= 0 ? pTools : 0;\r
+    var liveTools = parseInt(card.dataset.procLiveToolCalls || '0', 10) || 0;\r
+    var toolN = sessionTools + liveTools;\r
+    if (!toolN && bodyLoaded) {\r
+        toolN = body.querySelectorAll('.subagent-turn-process .feed-item[data-log-type="tool-call"]').length;\r
+    }\r
+    var sessionFails = Number.isFinite(pFails) && pFails >= 0 ? pFails : 0;\r
+    var liveFails = parseInt(card.dataset.procLiveToolFails || '0', 10) || 0;\r
+    var failN = sessionFails + liveFails;\r
+    if (!failN && bodyLoaded) {\r
+        body.querySelectorAll('.subagent-turn-process .feed-item[data-log-type="tool-call"]').forEach(function (row) {\r
+            var sc = row.querySelector('.feed-chunk-scroller');\r
+            var txt = sc ? String(sc.textContent || '') : '';\r
+            if (/Error:|失败|异常|error executing command:/i.test(txt)) failN += 1;\r
+        });\r
+    }\r
+    var t0s = card.dataset.procStartedAt;\r
+    var t0 = (t0s != null && t0s !== '') ? Number(t0s) : NaN;\r
+    var parts = [];\r
+    var durStr = null;\r
+    if (Number.isFinite(pDur) && pDur >= 0) durStr = formatProcDurationMs(pDur);\r
+    else if (Number.isFinite(t0)) {\r
+        var t1s = card.dataset.procEndedAt;\r
+        var t1 = (t1s != null && t1s !== '') ? Number(t1s) : procNow();\r
+        durStr = formatProcDurationMs(t1 - t0);\r
+    }\r
+    if (durStr) parts.push(durStr);\r
+    parts.push(String(reactLoops) + ' 轮');\r
+    parts.push('工具 ' + String(toolN) + ' 次');\r
+    parts.push('失败 ' + String(failN) + ' 次');\r
+    var modelStr = card.dataset.procCacheModel || card.dataset.executorModel || '—';\r
+    var est = card.dataset.procCtxEstimated;\r
+    var thr = card.dataset.procCtxThreshold;\r
+    var pctStr = '—';\r
+    if (est != null && est !== '' && thr != null && thr !== '' && Number(thr) > 0) {\r
+        pctStr = (Math.round(Number(est) / Number(thr) * 1000) / 10) + '%';\r
+    }\r
+    el.innerHTML = '<span>' + parts.join(' · ') + '</span><span>' + escapeHtml(modelStr) + ' · ' + escapeHtml(pctStr) + '</span>';\r
+}\r
+\r
+function refreshProcessAggregateStats(agg) {\r
+    if (!agg) return;\r
+    var el = agg.querySelector('.process-aggregate-stats');\r
+    if (!el) return;\r
+    var body = agg.querySelector('.process-aggregate-body');\r
+    if (!body) { el.textContent = ''; return; }\r
+    var pDur = agg.dataset.procDurationMs != null && agg.dataset.procDurationMs !== ''\r
+        ? parseInt(agg.dataset.procDurationMs, 10) : NaN;\r
+    var pLoops = agg.dataset.procReactLoops != null && agg.dataset.procReactLoops !== ''\r
+        ? parseInt(agg.dataset.procReactLoops, 10) : NaN;\r
+    var pTools = agg.dataset.procToolCalls != null && agg.dataset.procToolCalls !== ''\r
+        ? parseInt(agg.dataset.procToolCalls, 10) : NaN;\r
+    var pFails = agg.dataset.procToolFails != null && agg.dataset.procToolFails !== ''\r
+        ? parseInt(agg.dataset.procToolFails, 10) : NaN;\r
+    var maxFromRows = 0;\r
+    body.querySelectorAll('.feed-item[data-react-iter]').forEach(function (row) {\r
+        var v = parseInt(row.getAttribute('data-react-iter'), 10);\r
+        if (Number.isFinite(v) && v > maxFromRows) maxFromRows = v;\r
+    });\r
+    var dsRi = agg.dataset.maxReactIter ? parseInt(agg.dataset.maxReactIter, 10) : 0;\r
+    var reactLoops = Math.max(maxFromRows, dsRi);\r
+    if (!reactLoops) {\r
+        reactLoops = body.querySelectorAll('.feed-item[data-log-type="llm-response"]').length;\r
+    }\r
+    if (Number.isFinite(pLoops) && pLoops >= 0) reactLoops = pLoops;\r
+    var toolN = body.querySelectorAll('.feed-item[data-log-type="tool-call"]').length;\r
+    if (Number.isFinite(pTools) && pTools >= 0) toolN = pTools;\r
+    var failN = 0;\r
+    if (Number.isFinite(pFails) && pFails >= 0) failN = pFails;\r
+    var t0s = agg.dataset.procStartedAt;\r
+    var t0 = (t0s != null && t0s !== '') ? Number(t0s) : NaN;\r
+    var parts = [];\r
+    var durStr = null;\r
+    if (Number.isFinite(pDur) && pDur >= 0) durStr = formatProcDurationMs(pDur);\r
+    else if (Number.isFinite(t0)) {\r
+        var t1s = agg.dataset.procEndedAt;\r
+        var t1 = (t1s != null && t1s !== '') ? Number(t1s) : procNow();\r
+        durStr = formatProcDurationMs(t1 - t0);\r
+    }\r
+    if (durStr) parts.push(durStr);\r
+    parts.push(String(reactLoops) + ' 轮');\r
+    parts.push('工具 ' + String(toolN) + ' 次');\r
+        parts.push('失败 ' + String(failN) + ' 次');\r
+    var ch = agg.dataset.procCacheHit != null && agg.dataset.procCacheHit !== '' ? parseInt(agg.dataset.procCacheHit, 10) : 0;\r
+    var cm = agg.dataset.procCacheMiss != null && agg.dataset.procCacheMiss !== '' ? parseInt(agg.dataset.procCacheMiss, 10) : 0;\r
+    var cr = agg.dataset.procCacheRate != null && agg.dataset.procCacheRate !== '' ? parseFloat(agg.dataset.procCacheRate) : 0;\r
+    var modelStr = agg.dataset.procCacheModel || '';\r
+    var inputStr = agg.dataset.procCacheInput || '0';\r
+    var outputStr = agg.dataset.procCacheOutput || '0';\r
+    var tps = agg.dataset.procCacheTps;\r
+    var cacheParts = [];\r
+    if (modelStr) cacheParts.push(modelStr);\r
+    cacheParts.push('input=' + inputStr);\r
+    cacheParts.push('output=' + outputStr);\r
+    if (tps && tps !== '0') cacheParts.push(tps + ' tok/s');\r
+    var rateStr = (ch + cm > 0) ? (cr % 1 === 0 ? cr.toFixed(0) : cr.toFixed(1)) + '%' : '0%';\r
+    cacheParts.push('hit_rate=' + rateStr);\r
+    var cacheLine = cacheParts.join(' · ');\r
+    el.innerHTML = '<span>' + parts.join(' · ') + '</span><span>' + cacheLine + '</span>';\r
+}\r
+\r
+function ensureProcessGroup(ctx) {\r
+    if (!ctx || !ctx.stream) return null;\r
+    /* DocumentFragment 或未挂上 document 的节点 isConnected 为 false；回放或「加载更早消息」预挂载时需保留同一执行过程框 */\r
+    if (ctx.currentProcessGroup && !ctx.currentProcessGroup.isConnected && !replayingMessages) ctx.currentProcessGroup = null;\r
+    if (ctx.currentProcessGroup) return ctx.currentProcessGroup;\r
+    stripWelcome(ctx);\r
+    const wrap = document.createElement('div');\r
+    wrap.className = 'process-aggregate';\r
+    var replayCollapsed = !!replayingMessages;\r
+    if (replayCollapsed) wrap.classList.add('is-collapsed');\r
+    if (!replayingMessages) wrap.classList.add('is-running');\r
+    wrap.innerHTML = '<div class="process-aggregate-top" role="button" tabindex="0" aria-expanded="' + (replayCollapsed ? 'false' : 'true') + '">'\r
+        + '<div class="process-aggregate-top-line">'\r
+        + '<span class="process-aggregate-title-wrap">'\r
+        + '<span class="process-aggregate-title">执行过程</span>'\r
+        + '<span class="process-aggregate-stats" aria-live="polite"></span>'\r
+        + '</span>'\r
+        + '<span class="process-chev" aria-hidden="true">▼</span></div>'\r
+        + '<div class="process-aggregate-brief"></div></div>'\r
+        + '<div class="process-aggregate-body"></div>';\r
+    if (!replayingMessages) {\r
+        if (ctx.runStartedAt) applyRunStartedAtToProcessGroup(wrap, ctx.runStartedAt);\r
+        else {\r
+            wrap.dataset.procStartedAt = String(procNow());\r
+        }\r
+    }\r
+    delete wrap.dataset.maxReactIter;\r
+    (ctx.stream || chatContainer).appendChild(wrap);\r
+    bindProcessAggregate(wrap);\r
+    ctx.currentProcessGroup = wrap;\r
+    refreshProcessAggregateStats(wrap);\r
+    if (processAggregateNeedsLiveStats(wrap)) scheduleLiveProcessAggregateStats();\r
+    return wrap;\r
+}\r
+\r
+function sealProcessGroup(ctx) {\r
+    if (!ctx) return;\r
+    if (!ctx.currentProcessGroup) return;\r
+    const agg = ctx.currentProcessGroup;\r
+    if (agg.isConnected) {\r
+        agg.classList.remove('is-running');\r
+        updateProcessBrief(agg);\r
+        if (agg.dataset.procStartedAt) agg.dataset.procEndedAt = String(procNow());\r
+        refreshProcessAggregateStats(agg);\r
+        if (!refreshLiveProcessAggregateStats()) stopLiveProcessAggregateStats();\r
+    }\r
+    ctx.currentProcessGroup = null;\r
+    ctx.progressScrollers = {};\r
+    resetKeyContextStreamFilter(ctx);\r
+    finalizeProgressStreamChunks(ctx);\r
+}\r
+\r
+function getProcessBody(ctx) {\r
+    if (ctx && ctx._subagentTurnProcess && ctx._subagentTurnProcess.isConnected) return ctx._subagentTurnProcess;\r
+    if (ctx && ctx.currentTurn && ctx.currentTurn.isConnected) {\r
+        var subProc = ctx.currentTurn.querySelector('.subagent-turn-process');\r
+        if (subProc) {\r
+            ctx._subagentTurnProcess = subProc;\r
+            return subProc;\r
+        }\r
+    }\r
+    if (ctx && ctx._subagentBody && ctx._subagentBody.isConnected) return null;\r
+    const w = ensureProcessGroup(ctx);\r
+    if (!w) return null;\r
+    return w.querySelector('.process-aggregate-body');\r
+}\r
+\r
+function autoResizeTextarea() {\r
+    messageInput.style.height = 'auto';\r
+    messageInput.style.height = Math.min(messageInput.scrollHeight, 120) + 'px';\r
+}\r
+messageInput.addEventListener('input', autoResizeTextarea);\r
+messageInput.addEventListener('input', rewriteInputWorkspacePaths);\r
+messageInput.addEventListener('input', function () {\r
+    if (currentSessionId) persistInputDraft(currentSessionId, messageInput.value);\r
+    if (typeof setSendButtonState === 'function') setSendButtonState();\r
+});\r
+autoResizeTextarea();\r
+refreshInputPathChips();\r
+\r
 function escapeHtml(str) {
     if (!str) return '';
     return str.replace(/[&<>]/g, function(m) {
         if (m === '&') return '&amp;';
         if (m === '<') return '&lt;';
-        if (m === '>') return '&gt;';
+        if (m === '>') return '&gt;';\r
         return m;
     });
 }
 
+function escapeHtmlAttr(str) {
+    return escapeHtml(String(str || '')).replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
 function scrollToBottom() {
-    requestAnimationFrame(function () {
-        requestAnimationFrame(function () {
-            if (chatContainer) chatContainer.scrollTop = chatContainer.scrollHeight;
-            requestAnimationFrame(function () {
-                if (chatContainer) chatContainer.scrollTop = chatContainer.scrollHeight;
-            });
-        });
-    });
+    requestAnimationFrame(function () {\r
+        requestAnimationFrame(function () {\r
+            if (chatContainer) chatContainer.scrollTop = chatContainer.scrollHeight;\r
+            requestAnimationFrame(function () {\r
+                if (chatContainer) chatContainer.scrollTop = chatContainer.scrollHeight;\r
+            });\r
+        });\r
+    });\r
+}\r
+\r
+// 滚动位置存储\r
+const LS_SCROLL_POSITION_PREFIX = 'myagent-scroll-';\r
+const LS_SCROLL_ANCHOR_PREFIX = 'myagent-scroll-anchor-';\r
+\r
+function getScrollPositionKey(sessionId) {\r
+    return LS_SCROLL_POSITION_PREFIX + sessionId;\r
+}\r
+\r
+function getScrollAnchorKey(sessionId) {\r
+    return LS_SCROLL_ANCHOR_PREFIX + sessionId;\r
+}\r
+\r
+function saveScrollPosition(sessionId, scrollTop) {\r
+    if (!sessionId) return;\r
+    try {\r
+        localStorage.setItem(getScrollPositionKey(sessionId), String(Math.round(scrollTop)));\r
+    } catch (e) { /* ignore */ }\r
+}\r
+\r
+function saveScrollAnchorPosition(sessionId) {\r
+    if (!chatContainer || !sessionId) return;\r
+    try {\r
+        if (isNearBottom(chatContainer, STREAM_CHAT_NEAR_BOTTOM_PX)) {\r
+            localStorage.removeItem(getScrollAnchorKey(sessionId));\r
+            return;\r
+        }\r
+        var rect = chatContainer.getBoundingClientRect();\r
+        var wraps = chatContainer.querySelectorAll('.msg-wrap--user[data-event-index]');\r
+        var best = null;\r
+        for (var i = 0; i < wraps.length; i += 1) {\r
+            var wr = wraps[i];\r
+            var ei = Number(wr.getAttribute('data-event-index'));\r
+            if (!Number.isFinite(ei)) continue;\r
+            var top = wr.getBoundingClientRect().top;\r
+            if (top <= rect.top + 8) best = ei;\r
+            else if (best == null) {\r
+                best = ei;\r
+                break;\r
+            }\r
+        }\r
+        if (best != null) localStorage.setItem(getScrollAnchorKey(sessionId), String(best));\r
+    } catch (e) { /* ignore */ }\r
+}\r
+\r
+function getSavedScrollAnchorPosition(sessionId) {\r
+    if (!sessionId) return null;\r
+    try {\r
+        var saved = localStorage.getItem(getScrollAnchorKey(sessionId));\r
+        if (saved == null || saved === '') return null;\r
+        var n = Number(saved);\r
+        return Number.isFinite(n) ? n : null;\r
+    } catch (e) { return null; }\r
+}\r
+\r
+function getSavedScrollPosition(sessionId) {\r
+    if (!sessionId) return null;\r
+    try {\r
+        var saved = localStorage.getItem(getScrollPositionKey(sessionId));\r
+        return saved ? parseInt(saved, 10) : null;\r
+    } catch (e) { return null; }\r
+}\r
+\r
+function saveChatScrollForSession(sid) {\r
+    if (!chatContainer || !sid) return;\r
+    saveScrollPosition(sid, chatContainer.scrollTop);\r
+    saveScrollAnchorPosition(sid);\r
+}\r
+\r
+function clampChatScrollTop(y) {\r
+    if (!chatContainer) return 0;\r
+    const max = Math.max(0, chatContainer.scrollHeight - chatContainer.clientHeight);\r
+    return Math.min(Math.max(0, y), max);\r
+}\r
+\r
+/**\r
+ * @param {string} sessionId\r
+ * @param {'saved-or-bottom'|'bottom'} mode — saved-or-bottom：有离开记录则恢复，否则置底；bottom：始终置底\r
+ */\r
+function applyChatScrollAfterHistoryLoad(sessionId, mode) {\r
+    if (!chatContainer || !sessionId) return;\r
+    \r
+    // 如果会话正在运行，执行过程块默认置底\r
+    if (isSessionRunning(sessionId)) {\r
+        var run = getSessionRunState(sessionId);\r
+        if (run && run.ctx && run.ctx.stream) {\r
+            var agg = run.ctx.stream.querySelector('.process-aggregate:last-of-type');\r
+            if (agg) {\r
+                var procBody = agg.querySelector('.process-aggregate-body');\r
+                if (procBody) {\r
+                    // 延迟一帧确保DOM已渲染\r
+                    requestAnimationFrame(function() {\r
+                        procBody.scrollTop = procBody.scrollHeight;\r
+                    });\r
+                }\r
+            }\r
+        }\r
+    }\r
+    \r
+    if (mode === 'saved-or-bottom') {\r
+        var savedAnchor = getSavedScrollAnchorPosition(sessionId);\r
+        if (savedAnchor != null && typeof scrollToUserTurnOrLoadOlder === 'function') {\r
+            requestAnimationFrame(function () {\r
+                if (sessionId === currentSessionId) void scrollToUserTurnOrLoadOlder(savedAnchor);\r
+            });\r
+            streamChatNearBottom = false;\r
+            streamProcNearBottom = true;\r
+            liveAutoFollow = false;\r
+            return;\r
+        }\r
+        var savedPosition = getSavedScrollPosition(sessionId);\r
+        if (savedPosition !== null && savedPosition > 0) {\r
+            // 恢复保存的滚动位置\r
+            chatContainer.scrollTop = savedPosition;\r
+            streamChatNearBottom = isNearBottom(chatContainer, STREAM_CHAT_NEAR_BOTTOM_PX);\r
+            streamProcNearBottom = true;\r
+            liveAutoFollow = streamChatNearBottom;\r
+            return;\r
+        }\r
+    }\r
+    \r
+    // 默认行为：滚动到底部\r
+    streamChatNearBottom = true;\r
+    streamProcNearBottom = true;\r
+    liveAutoFollow = true;\r
+    scrollToBottom();\r
+}\r
+\r
+window.addEventListener('beforeunload', function () {\r
+    saveChatScrollForSession(currentSessionId);\r
+});\r
+document.addEventListener('visibilitychange', function () {\r
+    if (document.visibilityState === 'hidden') saveChatScrollForSession(currentSessionId);\r
+    else if (typeof reconcileRunStateFromServer === 'function') {\r
+        void reconcileRunStateFromServer({ silent: true });\r
+    }\r
+});\r
+window.addEventListener('pageshow', function () {\r
+    if (typeof reconcileRunStateFromServer === 'function') {\r
+        void reconcileRunStateFromServer({ silent: true });\r
+    }\r
+});\r
+window.addEventListener('focus', function () {\r
+    if (typeof reconcileRunStateFromServer === 'function') {\r
+        void reconcileRunStateFromServer({ silent: true });\r
+    }\r
+});\r
+\r
+const WELCOME_HTML = \`<div class="welcome" role="status"><div class="welcome-icon" aria-hidden="true"><img src="/assets/sugar-logo.png" alt="" draggable="false"></div><strong>开始一段新的对话</strong><p>在左侧侧栏新建或选择会话。Enter 发送，Ctrl+Enter / Shift+Enter 换行。</p></div>\`;\r
+\r
+function historyLoadScrollsToBottom(sessionId, mode) {\r
+    return true;\r
+}\r
+\r
+function waitForChatScrollAfterHistoryLoad(sessionId, mode) {\r
+    if (!chatContainer || !sessionId) return Promise.resolve(false);\r
+    var toBottom = true;\r
+    var started = (window.performance && performance.now) ? performance.now() : Date.now();\r
+    var lastTop = -1;\r
+    var stableFrames = 0;\r
+    return new Promise(function (resolve) {\r
+        var done = false;\r
+        var cleanup = null;\r
+        function nowMs() {\r
+            return (window.performance && performance.now) ? performance.now() : Date.now();\r
+        }\r
+        function targetReached() {\r
+            if (!chatContainer) return true;\r
+            return isNearBottom(chatContainer, 24);\r
+        }\r
+        function finish(ok) {\r
+            if (done) return;\r
+            done = true;\r
+            if (cleanup) cleanup();\r
+            resolve(ok);\r
+        }\r
+        if ('onscrollend' in chatContainer) {\r
+            var onEnd = function () {\r
+                if (sessionId !== currentSessionId) {\r
+                    finish(false);\r
+                    return;\r
+                }\r
+                if (targetReached()) finish(true);\r
+            };\r
+            chatContainer.addEventListener('scrollend', onEnd, { passive: true });\r
+            cleanup = function () {\r
+                chatContainer.removeEventListener('scrollend', onEnd);\r
+            };\r
+        }\r
+        function step() {\r
+            if (done) return;\r
+            if (sessionId !== currentSessionId || !chatContainer) {\r
+                finish(false);\r
+                return;\r
+            }\r
+            var top = chatContainer.scrollTop;\r
+            var reached = targetReached();\r
+            if (Math.abs(top - lastTop) < 0.5) stableFrames += 1;\r
+            else stableFrames = 0;\r
+            lastTop = top;\r
+            if ((reached && stableFrames >= 2) || nowMs() - started > 2400) {\r
+                finish(reached);\r
+                return;\r
+            }\r
+            requestAnimationFrame(step);\r
+        }\r
+        requestAnimationFrame(step);\r
+    });\r
+}\r
+\r
+function setWelcome() {\r
+    resetSessionHistoryPaging();\r
+    const vs = getVisibleChatStream();\r
+    if (vs) {\r
+        emptyChatStreamKeepingStrip(vs);\r
+        vs.insertAdjacentHTML('beforeend', WELCOME_HTML);\r
+    } else {\r
+        chatContainer.innerHTML = '';\r
+        ensureVisibleChatStreamSlot();\r
+        const vs2 = getVisibleChatStream();\r
+        if (vs2) vs2.insertAdjacentHTML('beforeend', WELCOME_HTML);\r
+        else chatContainer.innerHTML = WELCOME_HTML;\r
+    }\r
+    rebuildToc();\r
+    renderTodoPlanForCurrentSession();\r
+}\r
+\r
+function stripWelcome(ctx) {\r
+    if (ctx && ctx._subagentBody) return;\r
+    const root = (ctx && ctx.stream) ? ctx.stream : (getVisibleChatStream() || chatContainer);\r
+    if (root) root.querySelector('.welcome')?.remove();\r
+}\r
+\r
+function clearChat() { setWelcome(); }\r
+\r
+function pathJoinBaseName(baseDir, name) {\r
+    if (!baseDir) return name || '';\r
+    if (!name) return baseDir;\r
+    var d = String(baseDir).replace(/[\\\\/]+$/, '');\r
+    var useBack = d.indexOf('\\\\') !== -1;\r
+    return d + (useBack ? '\\\\' : '/') + name;\r
+}\r
+\r
+/** 将「工作区绝对路径」转为 file:// URL（Windows / Unix）；分段编码以支持空格、中文等。 */\r
+function fileUrlFromFsPath(fsPath) {\r
+    var norm = String(fsPath || '').replace(/\\\\/g, '/');\r
+    if (/^\\/\\//.test(norm)) return 'file:' + norm.replace(/\\//g, '/');\r
+    var encRest = function (rel) {\r
+        if (!rel) return '';\r
+        return rel.split('/').map(function (seg) {\r
+            return encodeURIComponent(seg);\r
+        }).join('/');\r
+    };\r
+    if (/^[A-Za-z]:\\//.test(norm)) {\r
+        return 'file:///' + norm.slice(0, 3) + encRest(norm.slice(3));\r
+    }\r
+    return 'file:///' + encRest(norm.replace(/^\\/+/, ''));\r
+}\r
+\r
+/**\r
+ * 助手常写「保存至：📄 /报告.md」——以 / 开头表示相对工作区根目录的路径（非 URL）。\r
+ */\r
+function joinWorkDirAndRelativeSlashPath(workDir, slashPath) {\r
+    var rel = String(slashPath || '').replace(/^\\/+/, '');\r
+    if (!rel || !workDir) return null;\r
+    var d = String(workDir).replace(/[\\\\/]+$/, '');\r
+    var useBack = d.indexOf('\\\\') !== -1;\r
+    var segs = rel.split(/\\/+/).filter(Boolean);\r
+    if (!segs.length) return null;\r
+    var tail = segs.join(useBack ? '\\\\' : '/');\r
+    return d + (useBack ? '\\\\' : '/') + tail;\r
+}\r
+\r
+function trimTrailingPathPunct(s) {\r
+    return String(s || '').replace(/[，。、；：）】』」\\]\\)\\.,;:!?'"」]+$/g, '').trim();\r
+}\r
+\r
+function stripPathWrappingQuotes(s) {\r
+    var t = String(s || '').trim();\r
+    if (t.length >= 2) {\r
+        var a = t.charAt(0);\r
+        var b = t.charAt(t.length - 1);\r
+        if ((a === '"' && b === '"') || (a === "'" && b === "'")) {\r
+            return t.slice(1, -1).trim();\r
+        }\r
+    }\r
+    return t;\r
+}\r
+\r
+function decodePathPercentEscapes(s) {\r
+    var t = String(s || '');\r
+    if (t.indexOf('%') < 0) return t;\r
+    return t.replace(/(?:%[0-9A-Fa-f]{2})+/g, function (part) {\r
+        try {\r
+            return decodeURIComponent(part);\r
+        } catch (e) {\r
+            return part;\r
+        }\r
+    });\r
+}\r
+\r
+function cleanPathTokenForLink(s) {\r
+    var t = linkifyNormalizePathToken(String(s || '').trim());\r
+    if (!/^https?:\\/\\//i.test(t)) t = decodePathPercentEscapes(t);\r
+    if (!t) return '';\r
+    var a = t.charAt(0);\r
+    var b = t.charAt(t.length - 1);\r
+    if (t.length >= 2 && ((a === '"' && b === '"') || (a === "'" && b === "'"))) {\r
+        return trimTrailingPathPunct(t.slice(1, -1).trim());\r
+    }\r
+    return stripPathWrappingQuotes(trimTrailingPathPunct(t));\r
+}\r
+\r
+/** 统一全角标点/数字等，便于识别「．xlsx」「路径：／」等变体 */\r
+function linkifyNormalizePathToken(s) {\r
+    try {\r
+        return String(s || '').normalize('NFKC');\r
+    } catch (e) {\r
+        return String(s || '');\r
+    }\r
+}\r
+\r
+/** 可链转「工作区下文件」的已知后缀（与 linkify / 虚拟路径规则共用） */\r
+var LINKIFY_EXT_FRAGMENT = (\r
+    'md|markdown|txt|py|jsx?|tsx?|mjs|cjs|json|ya?ml|toml|xml|html?|htm|css|s?css|less|sass|scss|' +\r
+    'xlsx?|xlsm?|xlsb?|xlt|csv|tsv|ods|numbers|et|' +\r
+    'pdf|docx?|docm?|dotx?|rtf|odt|pages|' +\r
+    'pptx?|pptm?|potx?|odp|key|' +\r
+    'png|jpe?g|gif|webp|svg|ico|bmp|tiff?|heic|avif|jfif|raw|' +\r
+    'zip|7z|rar|gz|tgz|tar|bz2|xz|lz4|zst|' +\r
+    'mp3|mp4|m4a|aac|flac|wav|ogg|webm|mov|avi|mkv|' +\r
+    'log|ini|env|cfg|conf|properties|plist|' +\r
+    'sh|bash|zsh|fish|bat|cmd|ps1|' +\r
+    'rs|go|java|kt|kts|swift|scala|rb|php|pl|pm|' +\r
+    '[ch]pp?|cc|hh|mm|hpp|cs|fs|fsx|vb|' +\r
+    'vue|svelte|elm|dart|ex|exs|erl|hrl|' +\r
+    'ipynb|rmd|qmd|tex|bib|cls|sty|rst|adoc|org|' +\r
+    'sql|graphql|proto|thrift|cmake|gradle|mk|dockerfile|' +\r
+    'wasm|wat|lock|patch|diff|rej|har|drawio|vsix|' +\r
+    'sqlite3?|db|duckdb|mdb|accdb|parquet|feather|arrow|orc|ndjson|' +\r
+    'ttf|otf|woff2?|eot|apk|ipa|exe|msi|dmg|iso|pkg|deb|rpm|bin|so|dylib|dll|lib|o|a|map|' +\r
+    'epub|mobi|azw3|chm|cert|pem|crt|cer|pub|asc|p12|pfx|keystore'\r
+);\r
+\r
+var _linkifyKnownExtRe = null;\r
+function linkifyKnownExtRegex() {\r
+    if (!_linkifyKnownExtRe) {\r
+        _linkifyKnownExtRe = new RegExp('\\\\.(' + LINKIFY_EXT_FRAGMENT + ')\\\\b', 'i');\r
+    }\r
+    return _linkifyKnownExtRe;\r
+}\r
+\r
+/**\r
+ * 以 / 开头的「工作区相对路径」是否做成可点击链接。\r
+ * 仅允许带常见文件后缀的路径，避免 ARPU/DOU/MOU、日期 2024/01 等内联斜杠被当成目录。\r
+ * （仍排除明显的 POSIX/Git Bash 根路径，以免误链。）\r
+ */\r
+function workspaceRelativePathAutoLinkOk(slashPath) {\r
+    var t = linkifyNormalizePathToken(String(slashPath || '').trim());\r
+    if (!t || t.charAt(0) !== '/' || t.charAt(1) === '/') return false;\r
+    var posixTop = /^\\/(mingw\\d*|usr|bin|etc|proc|dev|sys|opt|var|run|lib|lib64|snap|sbin|boot|srv|tmp|media|mnt)(\\/|$)/i;\r
+    var msysDrive = /^\\/[a-z](\\/|$)/i;\r
+    var webish = /^\\/(api|v\\d+|static|assets|node_modules)(\\/|$)/i;\r
+    if (posixTop.test(t) || msysDrive.test(t) || webish.test(t)) return false;\r
+    return linkifyKnownExtRegex().test(t);\r
+}\r
+\r
+function workspaceRelativePathNoSlashAutoLinkOk(relPath) {\r
+    var t = linkifyNormalizePathToken(String(relPath || '').trim());\r
+    if (!t || t.charAt(0) === '/' || t.charAt(0) === '\\\\' || /^https?:\\/\\//i.test(t)) return false;\r
+    if (/^([A-Za-z]):[\\\\/]/.test(t) || /^\\\\\\\\/.test(t)) return false;\r
+    if (!/[\\\\/]/.test(t)) return false;\r
+    if (/[<>:'"|\\r\\n]/.test(t)) return false;\r
+    if (/(^|[\\\\/])\\.{1,2}([\\\\/]|$)/.test(t)) return false;\r
+    return linkifyKnownExtRegex().test(t);\r
+}\r
+\r
+function workspaceRelFromNormalizedAbs(absNorm, workDir) {
+    if (!absNorm || !workDir) return null;
+    var base = String(workDir).replace(/\\\\/g, '/').replace(/\\/+$/, '');
+    var absLower = absNorm.toLowerCase();
+    var baseLower = base.toLowerCase();
+    if (absLower === baseLower) return '';\r
+    if (absLower.indexOf(baseLower + '/') === 0) {\r
+        return absNorm.slice(base.length).replace(/^\\/+/, '');\r
+    }
+    return null;
 }
 
-// 滚动位置存储
-const LS_SCROLL_POSITION_PREFIX = 'myagent-scroll-';
-const LS_SCROLL_ANCHOR_PREFIX = 'myagent-scroll-anchor-';
-
-function getScrollPositionKey(sessionId) {
-    return LS_SCROLL_POSITION_PREFIX + sessionId;
-}
-
-function getScrollAnchorKey(sessionId) {
-    return LS_SCROLL_ANCHOR_PREFIX + sessionId;
-}
-
-function saveScrollPosition(sessionId, scrollTop) {
-    if (!sessionId) return;
-    try {
-        localStorage.setItem(getScrollPositionKey(sessionId), String(Math.round(scrollTop)));
-    } catch (e) { /* ignore */ }
-}
-
-function saveScrollAnchorPosition(sessionId) {
-    if (!chatContainer || !sessionId) return;
-    try {
-        if (isNearBottom(chatContainer, STREAM_CHAT_NEAR_BOTTOM_PX)) {
-            localStorage.removeItem(getScrollAnchorKey(sessionId));
-            return;
-        }
-        var rect = chatContainer.getBoundingClientRect();
-        var wraps = chatContainer.querySelectorAll('.msg-wrap--user[data-event-index]');
-        var best = null;
-        for (var i = 0; i < wraps.length; i += 1) {
-            var wr = wraps[i];
-            var ei = Number(wr.getAttribute('data-event-index'));
-            if (!Number.isFinite(ei)) continue;
-            var top = wr.getBoundingClientRect().top;
-            if (top <= rect.top + 8) best = ei;
-            else if (best == null) {
-                best = ei;
-                break;
-            }
-        }
-        if (best != null) localStorage.setItem(getScrollAnchorKey(sessionId), String(best));
-    } catch (e) { /* ignore */ }
-}
-
-function getSavedScrollAnchorPosition(sessionId) {
-    if (!sessionId) return null;
-    try {
-        var saved = localStorage.getItem(getScrollAnchorKey(sessionId));
-        if (saved == null || saved === '') return null;
-        var n = Number(saved);
-        return Number.isFinite(n) ? n : null;
-    } catch (e) { return null; }
-}
-
-function getSavedScrollPosition(sessionId) {
-    if (!sessionId) return null;
-    try {
-        var saved = localStorage.getItem(getScrollPositionKey(sessionId));
-        return saved ? parseInt(saved, 10) : null;
-    } catch (e) { return null; }
-}
-
-function saveChatScrollForSession(sid) {
-    if (!chatContainer || !sid) return;
-    saveScrollPosition(sid, chatContainer.scrollTop);
-    saveScrollAnchorPosition(sid);
-}
-
-function clampChatScrollTop(y) {
-    if (!chatContainer) return 0;
-    const max = Math.max(0, chatContainer.scrollHeight - chatContainer.clientHeight);
-    return Math.min(Math.max(0, y), max);
-}
-
-/**
- * @param {string} sessionId
- * @param {'saved-or-bottom'|'bottom'} mode — saved-or-bottom：有离开记录则恢复，否则置底；bottom：始终置底
- */
-function applyChatScrollAfterHistoryLoad(sessionId, mode) {
-    if (!chatContainer || !sessionId) return;
-    
-    // 如果会话正在运行，执行过程块默认置底
-    if (isSessionRunning(sessionId)) {
-        var run = getSessionRunState(sessionId);
-        if (run && run.ctx && run.ctx.stream) {
-            var agg = run.ctx.stream.querySelector('.process-aggregate:last-of-type');
-            if (agg) {
-                var procBody = agg.querySelector('.process-aggregate-body');
-                if (procBody) {
-                    // 延迟一帧确保DOM已渲染
-                    requestAnimationFrame(function() {
-                        procBody.scrollTop = procBody.scrollHeight;
-                    });
-                }
-            }
+function workspaceRelFromForeignWorkspaceAbs(absNorm, workDir) {
+    if (!absNorm || !workDir) return null;
+    var baseName = String(workDir || '').replace(/\\\\/g, '/').replace(/\\/+$/, '').split('/').filter(Boolean).pop();
+    if (!baseName) return null;
+    var parts = String(absNorm || '').replace(/\\\\/g, '/').split('/').filter(Boolean);
+    for (var i = parts.length - 2; i >= 0; i -= 1) {
+        if (parts[i].toLowerCase() === baseName.toLowerCase()) {
+            return parts.slice(i + 1).join('/');
         }
     }
-    
-    if (mode === 'saved-or-bottom') {
-        var savedAnchor = getSavedScrollAnchorPosition(sessionId);
-        if (savedAnchor != null && typeof scrollToUserTurnOrLoadOlder === 'function') {
-            requestAnimationFrame(function () {
-                if (sessionId === currentSessionId) void scrollToUserTurnOrLoadOlder(savedAnchor);
-            });
-            streamChatNearBottom = false;
-            streamProcNearBottom = true;
-            liveAutoFollow = false;
-            return;
-        }
-        var savedPosition = getSavedScrollPosition(sessionId);
-        if (savedPosition !== null && savedPosition > 0) {
-            // 恢复保存的滚动位置
-            chatContainer.scrollTop = savedPosition;
-            streamChatNearBottom = isNearBottom(chatContainer, STREAM_CHAT_NEAR_BOTTOM_PX);
-            streamProcNearBottom = true;
-            liveAutoFollow = streamChatNearBottom;
-            return;
-        }
-    }
-    
-    // 默认行为：滚动到底部
-    streamChatNearBottom = true;
-    streamProcNearBottom = true;
-    liveAutoFollow = true;
-    scrollToBottom();
+    return null;
 }
 
-window.addEventListener('beforeunload', function () {
-    saveChatScrollForSession(currentSessionId);
-});
-document.addEventListener('visibilitychange', function () {
-    if (document.visibilityState === 'hidden') saveChatScrollForSession(currentSessionId);
-    else if (typeof reconcileRunStateFromServer === 'function') {
-        void reconcileRunStateFromServer({ silent: true });
-    }
-});
-window.addEventListener('pageshow', function () {
-    if (typeof reconcileRunStateFromServer === 'function') {
-        void reconcileRunStateFromServer({ silent: true });
-    }
-});
-window.addEventListener('focus', function () {
-    if (typeof reconcileRunStateFromServer === 'function') {
-        void reconcileRunStateFromServer({ silent: true });
-    }
-});
-
-const WELCOME_HTML = \`<div class="welcome" role="status"><div class="welcome-icon" aria-hidden="true"><svg viewBox="0 0 44 22" fill="none" xmlns="http://www.w3.org/2000/svg" style="width:100%;height:100%;user-select:none;-webkit-user-select:none;pointer-events:none"><text x="22" y="16" text-anchor="middle" font-family="'Brush Script MT','Segoe Script','Pacifico','Dancing Script',cursive" font-size="14" font-style="italic" fill="white" stroke="none" transform="rotate(-6 22 11)">Sugar</text></svg></div><strong>开始一段新的对话</strong><p>在左侧侧栏新建或选择会话。Enter 发送，Ctrl+Enter / Shift+Enter 换行。</p></div>\`;
-
-function historyLoadScrollsToBottom(sessionId, mode) {
-    return true;
-}
-
-function waitForChatScrollAfterHistoryLoad(sessionId, mode) {
-    if (!chatContainer || !sessionId) return Promise.resolve(false);
-    var toBottom = true;
-    var started = (window.performance && performance.now) ? performance.now() : Date.now();
-    var lastTop = -1;
-    var stableFrames = 0;
-    return new Promise(function (resolve) {
-        var done = false;
-        var cleanup = null;
-        function nowMs() {
-            return (window.performance && performance.now) ? performance.now() : Date.now();
-        }
-        function targetReached() {
-            if (!chatContainer) return true;
-            return isNearBottom(chatContainer, 24);
-        }
-        function finish(ok) {
-            if (done) return;
-            done = true;
-            if (cleanup) cleanup();
-            resolve(ok);
-        }
-        if ('onscrollend' in chatContainer) {
-            var onEnd = function () {
-                if (sessionId !== currentSessionId) {
-                    finish(false);
-                    return;
-                }
-                if (targetReached()) finish(true);
-            };
-            chatContainer.addEventListener('scrollend', onEnd, { passive: true });
-            cleanup = function () {
-                chatContainer.removeEventListener('scrollend', onEnd);
-            };
-        }
-        function step() {
-            if (done) return;
-            if (sessionId !== currentSessionId || !chatContainer) {
-                finish(false);
-                return;
-            }
-            var top = chatContainer.scrollTop;
-            var reached = targetReached();
-            if (Math.abs(top - lastTop) < 0.5) stableFrames += 1;
-            else stableFrames = 0;
-            lastTop = top;
-            if ((reached && stableFrames >= 2) || nowMs() - started > 2400) {
-                finish(reached);
-                return;
-            }
-            requestAnimationFrame(step);
-        }
-        requestAnimationFrame(step);
-    });
-}
-
-function setWelcome() {
-    resetSessionHistoryPaging();
-    const vs = getVisibleChatStream();
-    if (vs) {
-        emptyChatStreamKeepingStrip(vs);
-        vs.insertAdjacentHTML('beforeend', WELCOME_HTML);
-    } else {
-        chatContainer.innerHTML = '';
-        ensureVisibleChatStreamSlot();
-        const vs2 = getVisibleChatStream();
-        if (vs2) vs2.insertAdjacentHTML('beforeend', WELCOME_HTML);
-        else chatContainer.innerHTML = WELCOME_HTML;
-    }
-    rebuildToc();
-    void refreshTodoPlanPanel();
-}
-
-function stripWelcome(ctx) {
-    if (ctx && ctx._subagentBody) return;
-    const root = (ctx && ctx.stream) ? ctx.stream : (getVisibleChatStream() || chatContainer);
-    if (root) root.querySelector('.welcome')?.remove();
-}
-
-function clearChat() { setWelcome(); }
-
-function pathJoinBaseName(baseDir, name) {
-    if (!baseDir) return name || '';
-    if (!name) return baseDir;
-    var d = String(baseDir).replace(/[\\\\/]+$/, '');
-    var useBack = d.indexOf('\\\\') !== -1;
-    return d + (useBack ? '\\\\' : '/') + name;
-}
-
-/** 将「工作区绝对路径」转为 file:// URL（Windows / Unix）；分段编码以支持空格、中文等。 */
-function fileUrlFromFsPath(fsPath) {
-    var norm = String(fsPath || '').replace(/\\\\/g, '/');
-    if (/^\\/\\//.test(norm)) return 'file:' + norm.replace(/\\//g, '/');
-    var encRest = function (rel) {
-        if (!rel) return '';
-        return rel.split('/').map(function (seg) {
-            return encodeURIComponent(seg);
-        }).join('/');
-    };
-    if (/^[A-Za-z]:\\//.test(norm)) {
-        return 'file:///' + norm.slice(0, 3) + encRest(norm.slice(3));
-    }
-    return 'file:///' + encRest(norm.replace(/^\\/+/, ''));
-}
-
-/**
- * 助手常写「保存至：📄 /报告.md」——以 / 开头表示相对工作区根目录的路径（非 URL）。
- */
-function joinWorkDirAndRelativeSlashPath(workDir, slashPath) {
-    var rel = String(slashPath || '').replace(/^\\/+/, '');
-    if (!rel || !workDir) return null;
-    var d = String(workDir).replace(/[\\\\/]+$/, '');
-    var useBack = d.indexOf('\\\\') !== -1;
-    var segs = rel.split(/\\/+/).filter(Boolean);
-    if (!segs.length) return null;
-    var tail = segs.join(useBack ? '\\\\' : '/');
-    return d + (useBack ? '\\\\' : '/') + tail;
-}
-
-function trimTrailingPathPunct(s) {
-    return String(s || '').replace(/[，。、；：）】』」\\]\\)\\.,;:!?'"」]+$/g, '').trim();
-}
-
-function stripPathWrappingQuotes(s) {
-    var t = String(s || '').trim();
-    if (t.length >= 2) {
-        var a = t.charAt(0);
-        var b = t.charAt(t.length - 1);
-        if ((a === '"' && b === '"') || (a === "'" && b === "'")) {
-            return t.slice(1, -1).trim();
-        }
+function stripWorkspaceRootPrefixFromRelPath(relPath) {
+    var t = String(relPath || '').replace(/\\\\/g, '/').replace(/^\\/+/, '');
+    var w = (typeof window.__WORK_DIR__ === 'string') ? window.__WORK_DIR__ : '';
+    var baseName = String(w || '').replace(/\\\\/g, '/').replace(/\\/+$/, '').split('/').filter(Boolean).pop();
+    if (baseName && t.toLowerCase().indexOf(baseName.toLowerCase() + '/') === 0) {
+        return t.slice(baseName.length + 1);
     }
     return t;
-}
-
-/** 统一全角标点/数字等，便于识别「．xlsx」「路径：／」等变体 */
-function linkifyNormalizePathToken(s) {
-    try {
-        return String(s || '').normalize('NFKC');
-    } catch (e) {
-        return String(s || '');
-    }
-}
-
-/** 可链转「工作区下文件」的已知后缀（与 linkify / 虚拟路径规则共用） */
-var LINKIFY_EXT_FRAGMENT = (
-    'md|markdown|txt|py|jsx?|tsx?|mjs|cjs|json|ya?ml|toml|xml|html?|htm|css|s?css|less|sass|scss|' +
-    'xlsx?|xlsm?|xlsb?|xlt|csv|tsv|ods|numbers|et|' +
-    'pdf|docx?|docm?|dotx?|rtf|odt|pages|' +
-    'pptx?|pptm?|potx?|odp|key|' +
-    'png|jpe?g|gif|webp|svg|ico|bmp|tiff?|heic|avif|jfif|raw|' +
-    'zip|7z|rar|gz|tgz|tar|bz2|xz|lz4|zst|' +
-    'mp3|mp4|m4a|aac|flac|wav|ogg|webm|mov|avi|mkv|' +
-    'log|ini|env|cfg|conf|properties|plist|' +
-    'sh|bash|zsh|fish|bat|cmd|ps1|' +
-    'rs|go|java|kt|kts|swift|scala|rb|php|pl|pm|' +
-    '[ch]pp?|cc|hh|mm|hpp|cs|fs|fsx|vb|' +
-    'vue|svelte|elm|dart|ex|exs|erl|hrl|' +
-    'ipynb|rmd|qmd|tex|bib|cls|sty|rst|adoc|org|' +
-    'sql|graphql|proto|thrift|cmake|gradle|mk|dockerfile|' +
-    'wasm|wat|lock|patch|diff|rej|har|drawio|vsix|' +
-    'sqlite3?|db|duckdb|mdb|accdb|parquet|feather|arrow|orc|ndjson|' +
-    'ttf|otf|woff2?|eot|apk|ipa|exe|msi|dmg|iso|pkg|deb|rpm|bin|so|dylib|dll|lib|o|a|map|' +
-    'epub|mobi|azw3|chm|cert|pem|crt|cer|pub|asc|p12|pfx|keystore'
-);
-
-var _linkifyKnownExtRe = null;
-function linkifyKnownExtRegex() {
-    if (!_linkifyKnownExtRe) {
-        _linkifyKnownExtRe = new RegExp('\\\\.(' + LINKIFY_EXT_FRAGMENT + ')\\\\b', 'i');
-    }
-    return _linkifyKnownExtRe;
-}
-
-/**
- * 以 / 开头的「工作区相对路径」是否做成可点击链接。
- * 仅允许带常见文件后缀的路径，避免 ARPU/DOU/MOU、日期 2024/01 等内联斜杠被当成目录。
- * （仍排除明显的 POSIX/Git Bash 根路径，以免误链。）
- */
-function workspaceRelativePathAutoLinkOk(slashPath) {
-    var t = linkifyNormalizePathToken(String(slashPath || '').trim());
-    if (!t || t.charAt(0) !== '/' || t.charAt(1) === '/') return false;
-    var posixTop = /^\\/(mingw\\d*|usr|bin|etc|proc|dev|sys|opt|var|run|lib|lib64|snap|sbin|boot|srv|tmp|media|mnt)(\\/|$)/i;
-    var msysDrive = /^\\/[a-z](\\/|$)/i;
-    var webish = /^\\/(api|v\\d+|static|assets|node_modules)(\\/|$)/i;
-    if (posixTop.test(t) || msysDrive.test(t) || webish.test(t)) return false;
-    return linkifyKnownExtRegex().test(t);
-}
-
-function workspaceRelativePathNoSlashAutoLinkOk(relPath) {
-    var t = linkifyNormalizePathToken(String(relPath || '').trim());
-    if (!t || t.charAt(0) === '/' || /^https?:\\/\\//i.test(t)) return false;
-    if (/^([A-Za-z]):[\\\\/]/.test(t) || /^\\\\\\\\/.test(t)) return false;
-    if (!/[\\\\/]/.test(t)) return false;
-    if (/[<>:'"|\\r\\n]/.test(t)) return false;
-    if (/(^|[\\\\/])\\.{1,2}([\\\\/]|$)/.test(t)) return false;
-    return linkifyKnownExtRegex().test(t);
 }
 
 function getCurrentSessionDataPath() {
-    var sdir = (typeof window.__SESSIONS_DIR__ === 'string') ? window.__SESSIONS_DIR__ : '';
-    if (sdir && currentSessionId) return pathJoinBaseName(sdir, currentSessionId);
-    var w = (typeof window.__WORK_DIR__ === 'string') ? window.__WORK_DIR__ : '';
-    if (w && currentSessionId) return pathJoinBaseName(pathJoinBaseName(w, 'sessions'), currentSessionId);
-    return '';
-}
-
-/** 标题栏与侧栏：工作目录绝对路径与会话 ID（与服务端 window.__WORK_DIR__ 一致） */
-function buildSessionWorkspaceSubtitle(sessionId) {
-    var w = (typeof window.__WORK_DIR__ === 'string') ? window.__WORK_DIR__ : '';
-    if (!sessionId) return w || '';
-    if (w) {
-        var workspaceLink = '<a href="#" data-workspace-open="' + w + '" class="msg-link-workspace-open" style="color:inherit;text-decoration:inherit;cursor:pointer;" data-ui-tip="打开工作目录">' + w + '</a>';
-        var sessionPath = 'sessions/' + sessionId;
-        var sessionLink = '<a href="#" data-workspace-open="' + sessionPath + '" class="msg-link-workspace-open" style="color:inherit;text-decoration:inherit;cursor:pointer;" data-ui-tip="打开会话目录">' + sessionId + '</a>';
-        return workspaceLink + ' | ' + sessionLink;
-    }
-    return String(sessionId);
-}
-
-/** 侧栏每条会话标题下方：最近一次用户提问（服务端字段 last_user_preview） */
-function formatSessionListSubtitle(sess) {
-    if (!sess) return '暂无提问';
-    var t = sess.last_user_preview != null ? String(sess.last_user_preview).trim() : '';
-    return t || '暂无提问';
-}
-
-/** 与服务端 _normalize_sidebar_preview_text 对齐：折叠空白、180 字符、省略号 */
-function normalizeSidebarPreviewText(text, maxLen) {
-    maxLen = maxLen || 180;
-    var s = String(text || '').trim();
-    if (!s) return '';
-    var oneLine = s.split(/\\s+/).join(' ');
-    if (oneLine.length > maxLen) return oneLine.slice(0, maxLen - 1) + '\\u2026';
-    return oneLine;
-}
-
-/** 发送后立即更新侧栏「最近提问」（与服务器摘要规则一致）；稍后 refreshSingleSessionRow 仍会校正 */
-function updateSidebarLastUserPreviewImmediate(sessionId, questionText) {
-    if (!sessionId || !sessionsList) return;
-    var nameEl = sessionsList.querySelector('.session-name[data-id="' + sessionId + '"]');
-    var div = nameEl && nameEl.closest('.session-item');
-    if (!div) return;
-    var wsEl = div.querySelector('.session-last-query');
-    if (!wsEl) return;
-    var line = normalizeSidebarPreviewText(questionText, 180);
-    if (!line) line = '暂无提问';
-    wsEl.textContent = line;
-    wsEl.setAttribute('data-ui-tip', line);
-    bindUiHoverTip(wsEl);
-}
-
-function updateSessionTitle() {
-    const br = document.getElementById('breadcrumb-text');
-    const sub = document.getElementById('breadcrumb-sub');
-    if (!br || !sub) return;
-    if (!currentSessionId) {
-        br.textContent = '未选择会话';
-        sub.textContent = '';
-        setContextTokenLabel(null, null);
-        return;
-    }
-    const sess = selectCurrentSession();
-    const el = document.querySelector('.session-name[data-id="' + currentSessionId + '"]');
-    const raw = sess && sess.name != null ? String(sess.name) : (el ? (el.getAttribute('data-original') || el.textContent || '') : '');
-    const name = (raw && raw.trim()) ? raw.trim() : 'Session';
-    br.textContent = name;
-    sub.innerHTML = buildSessionWorkspaceSubtitle(currentSessionId);
-    initUiHoverTips(sub);
-}
-
-function ensureMermaidInitialized() {
-    if (mermaidInitialized || !window.mermaid) return;
-    try {
-        var light = document.documentElement.classList.contains('theme-light');
-        mermaid.initialize({
-            startOnLoad: false,
-            theme: light ? 'neutral' : 'dark',
-            securityLevel: 'loose',
-            themeVariables: {
-                fontSize: '11px',
-                fontFamily: 'Plus Jakarta Sans, system-ui, sans-serif',
-            },
-            flowchart: { htmlLabels: true, curve: 'basis' },
-            sequence: { useMaxWidth: true },
-        });
-        mermaidInitialized = true;
-    } catch (e) { /* ignore */ }
-}
-
-/**
- * flowchart 节点 E[文本] 内若含 <br> 且又含裸引号 "，Mermaid 10.9 会报 got 'STR'。
- * 将此类标签整体包成 ["..."] 并转义内部 ASCII 引号。
- */
-function fixFlowchartBracketLabelsWithLineBreak(text) {
-    return text.replace(/\\[[^\\]\\n\\r]*<br\\s*\\/?[^\\]\\n\\r]*\\]/gi, function (match) {
-        var inner = match.slice(1, -1);
-        var s = inner.trim();
-        if (!s) return match;
-        if (s.charAt(0) === '"' && s.charAt(s.length - 1) === '"') return match;
-        var escaped = s.replace(/\\\\/g, '\\\\\\\\').replace(/"/g, '\\\\"');
-        return '["' + escaped + '"]';
-    });
-}
-
-/** 未用引号包裹的 [] 节点里出现裸 " 时同样会触发词法错误 */
-function fixFlowchartBracketLabelsWithRawQuotes(text) {
-    return text.replace(/\\[[^\\]\\n\\r]*"[^\\]\\n\\r]*\\]/g, function (match) {
-        var inner = match.slice(1, -1);
-        var s = inner.trim();
-        if (!s) return match;
-        if (s.charAt(0) === '"' && s.charAt(s.length - 1) === '"') return match;
-        var escaped = s.replace(/\\\\/g, '\\\\\\\\').replace(/"/g, '\\\\"');
-        return '["' + escaped + '"]';
-    });
-}
-
-/** 去除 LLM/粘贴带来的杂讯，减少 Mermaid 10.9+ 报 Syntax error in text */
-function normalizeMermaidSource(raw) {
-    var t = String(raw || '')
-        .replace(/^\\uFEFF/, '')
-        .replace(/\\u200b|\\u200c|\\u200d/g, '')
-        .replace(/\\r\\n/g, '\\n')
-        .replace(/\\r/g, '\\n');
-    t = t.replace(/^\\s*\`\`\`(?:mermaid)?\\s*\\n/i, '');
-    t = t.replace(/\\n\\s*\`\`\`\\s*$/i, '');
-    t = t.replace(/[\\u201C\\u201D\\u201E\\u00AB\\u00BB]/g, '"');
-    t = t.replace(/<br\\s*\\/?>/gi, '<br/>');
-    t = fixFlowchartBracketLabelsWithLineBreak(t);
-    t = fixFlowchartBracketLabelsWithRawQuotes(t);
-    var lines = t.split('\\n');
-    if (lines.length && lines[0]) {
-        lines[0] = lines[0].replace(/\\s*[\\uFF1A：]\\s*$/, '');
-    }
-    t = lines.map(function (line) { return line.replace(/\\s+$/g, ''); }).join('\\n').trim();
-    return t;
-}
-
-function showMermaidRenderError(el, source, err) {
-    el.classList.add('mermaid-error');
-    el.removeAttribute('data-processed');
-    var msg = 'Mermaid 无法解析此图';
-    if (err) {
-        if (typeof err === 'string') msg = err;
-        else if (err.str) msg = String(err.str);
-        else if (err.message) msg = String(err.message);
-    }
-    el.innerHTML = '<div class="mermaid-error-msg">' + escapeHtml(msg) + '</div>'
-        + '<pre class="mermaid-raw">' + escapeHtml(source) + '</pre>';
-}
-
-function upgradeMermaidBlocks(root) {
-    if (!root) return;
-    root.querySelectorAll('pre > code').forEach(function (codeEl) {
-        var cls = codeEl.getAttribute('class') || '';
-        if (!/\\bmermaid\\b/.test(cls)) return;
-        var pre = codeEl.parentNode;
-        if (!pre || pre.tagName !== 'PRE') return;
-        var div = document.createElement('div');
-        div.className = 'mermaid';
-        div.textContent = normalizeMermaidSource(codeEl.textContent || '');
-        pre.parentNode.replaceChild(div, pre);
-    });
-}
-
-/** 无盘符、无路径分隔符的「纯文件名 + 已知后缀」→ 相对工作区根解析 */
-function isBareWorkspaceFilenameForLink(t) {
-    var s = linkifyNormalizePathToken(String(t || '').trim());
-    if (!s || /[/\\\\:]/.test(s)) return false;
-    if (!/^[^\\s<>'"]+$/.test(s)) return false;
-    if (/^\\.\\.?$/.test(s)) return false;
-    return linkifyKnownExtRegex().test(s);
-}
-
-function makeHrefFromAutoLinkToken(s) {
-    var t = trimTrailingPathPunct(linkifyNormalizePathToken(String(s).trim()));
-    if (!t) return null;
-    if (/^https?:\\/\\//i.test(t)) return t;
-    var m = /^([A-Za-z]):[\\\\/](.*)$/.exec(t);
-    if (m) {
-        var rest = (m[2] || '').replace(/\\\\/g, '/');
-        return fileUrlFromFsPath(m[1].toUpperCase() + ':/' + rest);
-    }
-    if (t.charAt(0) === '/' && t.charAt(1) !== '/') {
-        if (!workspaceRelativePathAutoLinkOk(t)) return null;
-        var w = (typeof window.__WORK_DIR__ === 'string') ? window.__WORK_DIR__ : '';
-        var abs = joinWorkDirAndRelativeSlashPath(w, t);
-        if (abs) return fileUrlFromFsPath(abs);
-    }
-    if (workspaceRelativePathNoSlashAutoLinkOk(t)) {
-        var wr = (typeof window.__WORK_DIR__ === 'string') ? window.__WORK_DIR__ : '';
-        if (!wr) return null;
-        var absRel = pathJoinBaseName(wr, t.replace(/\\\\/g, '/'));
-        if (absRel) return fileUrlFromFsPath(absRel);
-    }
-    if (isBareWorkspaceFilenameForLink(t)) {
-        var wk = (typeof window.__WORK_DIR__ === 'string') ? window.__WORK_DIR__ : '';
-        if (!wk) return null;
-        var absBare = pathJoinBaseName(wk, t);
-        if (absBare) return fileUrlFromFsPath(absBare);
-    }
-    return null;
-}
-
-/**
- * 解析为可交给 /api/open-workspace-file 的路径：工作区相对、Windows/UNC 绝对路径（均由服务端校验须在 WORK_DIR 内）。
- */
-function pathTokenToWorkspaceOpenRel(token) {
-    var t = stripPathWrappingQuotes(trimTrailingPathPunct(linkifyNormalizePathToken(String(token || '').trim())));
-    if (!t || /^https?:\\/\\//i.test(t)) return null;
-    var w = (typeof window.__WORK_DIR__ === 'string') ? window.__WORK_DIR__ : '';
-    var uncFlat = t.replace(/\\//g, '\\\\');
-    if (/^\\\\\\\\([^\\\\]+)\\\\([^\\\\]+)/i.test(uncFlat)) {
-        return uncFlat;
-    }
-    var win = /^([A-Za-z]):[\\\\/](.*)$/.exec(t);
-    if (win) {
-        var rest = (win[2] || '').replace(/\\\\/g, '/');
-        var absNorm = (win[1].toUpperCase() + ':/' + rest).replace(/\\/+/g, '/');
+    var sdir = (typeof window.__SESSIONS_DIR__ === 'string') ? window.__SESSIONS_DIR__ : '';\r
+    if (sdir && currentSessionId) return pathJoinBaseName(sdir, currentSessionId);\r
+    var w = (typeof window.__WORK_DIR__ === 'string') ? window.__WORK_DIR__ : '';\r
+    if (w && currentSessionId) return pathJoinBaseName(pathJoinBaseName(w, 'sessions'), currentSessionId);\r
+    return '';\r
+}\r
+\r
+/** 标题栏与侧栏：工作目录绝对路径与会话 ID（与服务端 window.__WORK_DIR__ 一致） */\r
+function buildSessionWorkspaceSubtitle(sessionId) {\r
+    var w = (typeof window.__WORK_DIR__ === 'string') ? window.__WORK_DIR__ : '';\r
+    if (!sessionId) return w || '';\r
+    if (w) {\r
+        var workspaceLink = '<a href="#" data-workspace-open="' + w + '" class="msg-link-workspace-open" style="color:inherit;text-decoration:inherit;cursor:pointer;" data-ui-tip="打开工作目录">' + w + '</a>';\r
+        var sessionPath = 'sessions/' + sessionId;\r
+        var sessionLink = '<a href="#" data-workspace-open="' + sessionPath + '" class="msg-link-workspace-open" style="color:inherit;text-decoration:inherit;cursor:pointer;" data-ui-tip="打开会话目录">' + sessionId + '</a>';\r
+        return workspaceLink + ' | ' + sessionLink;\r
+    }\r
+    return String(sessionId);\r
+}\r
+\r
+/** 侧栏每条会话标题下方：最近一次用户提问（服务端字段 last_user_preview） */\r
+function formatSessionListSubtitle(sess) {\r
+    if (!sess) return '暂无提问';\r
+    var t = sess.last_user_preview != null ? String(sess.last_user_preview).trim() : '';\r
+    return t || '暂无提问';\r
+}\r
+\r
+/** 与服务端 _normalize_sidebar_preview_text 对齐：折叠空白、180 字符、省略号 */\r
+function normalizeSidebarPreviewText(text, maxLen) {\r
+    maxLen = maxLen || 180;\r
+    var s = String(text || '').trim();\r
+    if (!s) return '';\r
+    var oneLine = s.split(/\\s+/).join(' ');\r
+    if (oneLine.length > maxLen) return oneLine.slice(0, maxLen - 1) + '\\u2026';\r
+    return oneLine;\r
+}\r
+\r
+/** 发送后立即更新侧栏「最近提问」（与服务器摘要规则一致）；稍后 refreshSingleSessionRow 仍会校正 */\r
+function updateSidebarLastUserPreviewImmediate(sessionId, questionText) {\r
+    if (!sessionId || !sessionsList) return;\r
+    var nameEl = sessionsList.querySelector('.session-name[data-id="' + sessionId + '"]');\r
+    var div = nameEl && nameEl.closest('.session-item');\r
+    if (!div) return;\r
+    var wsEl = div.querySelector('.session-last-query');\r
+    if (!wsEl) return;\r
+    var line = normalizeSidebarPreviewText(questionText, 180);\r
+    if (!line) line = '暂无提问';\r
+    wsEl.textContent = line;\r
+    wsEl.setAttribute('data-ui-tip', line);\r
+    bindUiHoverTip(wsEl);\r
+}\r
+\r
+function updateSessionTitle() {\r
+    const br = document.getElementById('breadcrumb-text');\r
+    const sub = document.getElementById('breadcrumb-sub');\r
+    if (!br || !sub) return;\r
+    if (!currentSessionId) {\r
+        br.textContent = '未选择会话';\r
+        sub.textContent = '';\r
+        setContextTokenLabel(null, null);\r
+        return;\r
+    }\r
+    const sess = selectCurrentSession();\r
+    const el = document.querySelector('.session-name[data-id="' + currentSessionId + '"]');\r
+    const raw = sess && sess.name != null ? String(sess.name) : (el ? (el.getAttribute('data-original') || el.textContent || '') : '');\r
+    const name = (raw && raw.trim()) ? raw.trim() : 'Session';\r
+    br.textContent = name;\r
+    sub.innerHTML = buildSessionWorkspaceSubtitle(currentSessionId);\r
+    initUiHoverTips(sub);\r
+}\r
+\r
+function ensureMermaidInitialized() {\r
+    if (mermaidInitialized || !window.mermaid) return;\r
+    try {\r
+        var light = document.documentElement.classList.contains('theme-light');\r
+        mermaid.initialize({\r
+            startOnLoad: false,\r
+            theme: light ? 'neutral' : 'dark',\r
+            securityLevel: 'loose',\r
+            themeVariables: {\r
+                fontSize: '11px',\r
+                fontFamily: 'Plus Jakarta Sans, system-ui, sans-serif',\r
+            },\r
+            flowchart: { htmlLabels: true, curve: 'basis' },\r
+            sequence: { useMaxWidth: true },\r
+        });\r
+        mermaidInitialized = true;\r
+    } catch (e) { /* ignore */ }\r
+}\r
+\r
+/**\r
+ * flowchart 节点 E[文本] 内若含 <br> 且又含裸引号 "，Mermaid 10.9 会报 got 'STR'。\r
+ * 将此类标签整体包成 ["..."] 并转义内部 ASCII 引号。\r
+ */\r
+function fixFlowchartBracketLabelsWithLineBreak(text) {\r
+    return text.replace(/\\[[^\\]\\n\\r]*<br\\s*\\/?[^\\]\\n\\r]*\\]/gi, function (match) {\r
+        var inner = match.slice(1, -1);\r
+        var s = inner.trim();\r
+        if (!s) return match;\r
+        if (s.charAt(0) === '"' && s.charAt(s.length - 1) === '"') return match;\r
+        var escaped = s.replace(/\\\\/g, '\\\\\\\\').replace(/"/g, '\\\\"');\r
+        return '["' + escaped + '"]';\r
+    });\r
+}\r
+\r
+/** 未用引号包裹的 [] 节点里出现裸 " 时同样会触发词法错误 */\r
+function fixFlowchartBracketLabelsWithRawQuotes(text) {\r
+    return text.replace(/\\[[^\\]\\n\\r]*"[^\\]\\n\\r]*\\]/g, function (match) {\r
+        var inner = match.slice(1, -1);\r
+        var s = inner.trim();\r
+        if (!s) return match;\r
+        if (s.charAt(0) === '"' && s.charAt(s.length - 1) === '"') return match;\r
+        var escaped = s.replace(/\\\\/g, '\\\\\\\\').replace(/"/g, '\\\\"');\r
+        return '["' + escaped + '"]';\r
+    });\r
+}\r
+\r
+/** 去除 LLM/粘贴带来的杂讯，减少 Mermaid 10.9+ 报 Syntax error in text */\r
+function normalizeMermaidSource(raw) {\r
+    var t = String(raw || '')\r
+        .replace(/^\\uFEFF/, '')\r
+        .replace(/\\u200b|\\u200c|\\u200d/g, '')\r
+        .replace(/\\r\\n/g, '\\n')\r
+        .replace(/\\r/g, '\\n');\r
+    t = t.replace(/^\\s*\`\`\`(?:mermaid)?\\s*\\n/i, '');\r
+    t = t.replace(/\\n\\s*\`\`\`\\s*$/i, '');\r
+    t = t.replace(/[\\u201C\\u201D\\u201E\\u00AB\\u00BB]/g, '"');\r
+    t = t.replace(/<br\\s*\\/?>/gi, '<br/>');\r
+    t = fixFlowchartBracketLabelsWithLineBreak(t);\r
+    t = fixFlowchartBracketLabelsWithRawQuotes(t);\r
+    var lines = t.split('\\n');\r
+    if (lines.length && lines[0]) {\r
+        lines[0] = lines[0].replace(/\\s*[\\uFF1A：]\\s*$/, '');\r
+    }\r
+    t = lines.map(function (line) { return line.replace(/\\s+$/g, ''); }).join('\\n').trim();\r
+    return t;\r
+}\r
+\r
+function showMermaidRenderError(el, source, err) {\r
+    el.classList.add('mermaid-error');\r
+    el.removeAttribute('data-processed');\r
+    var msg = 'Mermaid 无法解析此图';\r
+    if (err) {\r
+        if (typeof err === 'string') msg = err;\r
+        else if (err.str) msg = String(err.str);\r
+        else if (err.message) msg = String(err.message);\r
+    }\r
+    el.innerHTML = '<div class="mermaid-error-msg">' + escapeHtml(msg) + '</div>'\r
+        + '<pre class="mermaid-raw">' + escapeHtml(source) + '</pre>';\r
+}\r
+\r
+function upgradeMermaidBlocks(root) {\r
+    if (!root) return;\r
+    root.querySelectorAll('pre > code').forEach(function (codeEl) {\r
+        var cls = codeEl.getAttribute('class') || '';\r
+        if (!/\\bmermaid\\b/.test(cls)) return;\r
+        var pre = codeEl.parentNode;\r
+        if (!pre || pre.tagName !== 'PRE') return;\r
+        var div = document.createElement('div');\r
+        div.className = 'mermaid';\r
+        div.textContent = normalizeMermaidSource(codeEl.textContent || '');\r
+        pre.parentNode.replaceChild(div, pre);\r
+    });\r
+}\r
+\r
+/** 无盘符、无路径分隔符的「纯文件名 + 已知后缀」→ 相对工作区根解析 */\r
+function isBareWorkspaceFilenameForLink(t) {\r
+    var s = linkifyNormalizePathToken(String(t || '').trim());\r
+    if (!s || /[/\\\\:]/.test(s)) return false;\r
+    if (!/^[^\\s<>'"]+$/.test(s)) return false;\r
+    if (/^\\.\\.?$/.test(s)) return false;\r
+    return linkifyKnownExtRegex().test(s);\r
+}\r
+\r
+function makeHrefFromAutoLinkToken(s) {\r
+    var t = cleanPathTokenForLink(s);\r
+    if (!t) return null;\r
+    if (/^https?:\\/\\//i.test(t)) return t;\r
+    var m = /^([A-Za-z]):[\\\\/](.*)$/.exec(t);\r
+    if (m) {\r
+        var rest = (m[2] || '').replace(/\\\\/g, '/');\r
+        return fileUrlFromFsPath(m[1].toUpperCase() + ':/' + rest);\r
+    }\r
+    if (t.charAt(0) === '/' && t.charAt(1) !== '/') {\r
+        if (!workspaceRelativePathAutoLinkOk(t)) return null;\r
+        var w = (typeof window.__WORK_DIR__ === 'string') ? window.__WORK_DIR__ : '';\r
+        var abs = joinWorkDirAndRelativeSlashPath(w, t);\r
+        if (abs) return fileUrlFromFsPath(abs);\r
+    }\r
+    if (workspaceRelativePathNoSlashAutoLinkOk(t)) {\r
+        var wr = (typeof window.__WORK_DIR__ === 'string') ? window.__WORK_DIR__ : '';\r
+        if (!wr) return null;\r
+        var absRel = pathJoinBaseName(wr, t.replace(/\\\\/g, '/'));\r
+        if (absRel) return fileUrlFromFsPath(absRel);\r
+    }\r
+    if (isBareWorkspaceFilenameForLink(t)) {\r
+        var wk = (typeof window.__WORK_DIR__ === 'string') ? window.__WORK_DIR__ : '';\r
+        if (!wk) return null;\r
+        var absBare = pathJoinBaseName(wk, t);\r
+        if (absBare) return fileUrlFromFsPath(absBare);\r
+    }\r
+    return null;\r
+}\r
+\r
+/**\r
+ * 解析为可交给 /api/open-workspace-file 的路径：工作区相对、Windows/UNC 绝对路径（均由服务端校验须在 WORK_DIR 内）。\r
+ */\r
+function pathTokenToWorkspaceOpenRel(token) {\r
+    var t = cleanPathTokenForLink(token);\r
+    if (!t || /^https?:\\/\\//i.test(t)) return null;\r
+    var w = (typeof window.__WORK_DIR__ === 'string') ? window.__WORK_DIR__ : '';\r
+    var uncFlat = t.replace(/\\//g, '\\\\');\r
+    if (/^\\\\\\\\([^\\\\]+)\\\\([^\\\\]+)/i.test(uncFlat)) {\r
+        return uncFlat;\r
+    }\r
+    var win = /^([A-Za-z]):[\\\\/](.*)$/.exec(t);\r
+    if (win) {\r
+        var rest = (win[2] || '').replace(/\\\\/g, '/');\r
+        var absNorm = (win[1].toUpperCase() + ':/' + rest).replace(/\\/+/g, '/');\r
         if (w) {
-            var base = String(w).replace(/\\\\/g, '/').replace(/\\/+$/, '');
-            var absLower = absNorm.toLowerCase();
-            var baseLower = base.toLowerCase();
-            if (absLower.length >= baseLower.length && absLower.indexOf(baseLower) === 0) {
-                return absNorm.slice(base.length).replace(/^\\/+/, '');
-            }
+            var absRel = workspaceRelFromNormalizedAbs(absNorm, w);
+            if (absRel != null) return absRel;
+            var foreignRel = workspaceRelFromForeignWorkspaceAbs(absNorm, w);
+            if (foreignRel != null) return foreignRel;
         }
         return absNorm;
-    }
-    if (!w) return null;
-    if (t.charAt(0) === '/' && t.charAt(1) !== '/') {
-        if (!workspaceRelativePathAutoLinkOk(t)) return null;
-        return t.replace(/^\\/+/, '').replace(/\\\\/g, '/');
-    }
-    if (t === '.env' && typeof window.__APP_DOTENV_PATH__ === 'string' && window.__APP_DOTENV_PATH__) {
-        return window.__APP_DOTENV_PATH__;
-    }
-    if (workspaceRelativePathNoSlashAutoLinkOk(t)) return t.replace(/\\\\/g, '/');
-    if (isBareWorkspaceFilenameForLink(t)) return t.replace(/\\\\/g, '/');
+    }\r
+    if (!w) return null;\r
+    var slashRooted = t.replace(/\\\\/g, '/');\r
+    if (slashRooted.charAt(0) === '/' && slashRooted.charAt(1) !== '/') {\r
+        var wDrive = /^([A-Za-z]):[\\\\/]/.exec(String(w || ''));\r
+        if (wDrive) {\r
+            var rootedAbs = (wDrive[1].toUpperCase() + ':' + slashRooted).replace(/\\/+/g, '/');\r
+            var rootedRel = workspaceRelFromNormalizedAbs(rootedAbs, w);\r
+            if (rootedRel != null) return rootedRel;\r
+        }\r
+        if (!workspaceRelativePathAutoLinkOk(slashRooted)) return null;\r
+        return slashRooted.replace(/^\\/+/, '');\r
+    }\r
+    if (t === '.env' && typeof window.__APP_DOTENV_PATH__ === 'string' && window.__APP_DOTENV_PATH__) {\r
+        return window.__APP_DOTENV_PATH__;\r
+    }\r
+    var relPath = stripWorkspaceRootPrefixFromRelPath(t);
+    if (workspaceRelativePathNoSlashAutoLinkOk(relPath)) return relPath;
+    if (isBareWorkspaceFilenameForLink(relPath)) return relPath;
     return null;
 }
-
-function workspaceOpenDisplayLabel(original, wsRel) {
-    var rel = String(wsRel || '').replace(/\\\\/g, '/').replace(/\\/+$/, '');
-    var name = rel.split('/').filter(Boolean).pop();
-    if (name) return '@' + name;
-    var raw = stripPathWrappingQuotes(trimTrailingPathPunct(original || ''));
-    name = raw.replace(/\\\\/g, '/').replace(/\\/+$/, '').split('/').filter(Boolean).pop();
-    return name ? ('@' + name) : raw;
+\r
+function decodeMarkdownHrefPathTarget(href) {\r
+    var raw = String(href || '').trim();\r
+    if (!raw) return '';\r
+    try { raw = decodeURI(raw); } catch (e) { /* keep raw */ }\r
+    raw = decodePathPercentEscapes(raw);\r
+    try { raw = decodeURIComponent(raw); } catch (e2) { /* keep partially decoded raw */ }\r
+    return stripPathWrappingQuotes(trimTrailingPathPunct(raw));\r
+}\r
+\r
+function markdownHrefToWorkspaceOpenRel(href) {\r
+    var raw = decodeMarkdownHrefPathTarget(href);\r
+    if (!raw || raw.charAt(0) === '#') return null;\r
+    if (/^(https?|mailto|tel|javascript|data|blob):/i.test(raw)) return null;\r
+    if (/^[A-Za-z][A-Za-z0-9+.-]*:/i.test(raw) && !/^[A-Za-z]:[\\\\/]/.test(raw) && !/^file:\\/\\//i.test(raw)) {\r
+        return null;\r
+    }\r
+    var rel = pathTokenToWorkspaceOpenRel(raw);\r
+    if (rel) return rel;\r
+    if (/^file:\\/\\//i.test(raw)) {\r
+        var fsPath = raw.replace(/^file:\\/\\/\\/?/i, '');\r
+        fsPath = decodePathPercentEscapes(fsPath);\r
+        if (/^[A-Za-z]:[\\\\/]/.test(fsPath)) return fsPath.replace(/\\\\/g, '/');\r
+        return '/' + fsPath.replace(/^\\/+/, '').replace(/\\\\/g, '/');\r
+    }\r
+    if (/^[A-Za-z]:[\\\\/]/.test(raw) || /^\\\\\\\\/.test(raw)) return raw.replace(/\\\\/g, '/');
+    if (/[\\\\/]/.test(raw)) return stripWorkspaceRootPrefixFromRelPath(raw);
+    return stripWorkspaceRootPrefixFromRelPath(raw);
+}
+\r
+function workspaceOpenDisplayLabel(original, wsRel) {\r
+    var rel = String(wsRel || '').replace(/\\\\/g, '/').replace(/\\/+$/, '');\r
+    var name = rel.split('/').filter(Boolean).pop();\r
+    if (name) return '@' + name;\r
+    var raw = stripPathWrappingQuotes(trimTrailingPathPunct(original || ''));\r
+    name = raw.replace(/\\\\/g, '/').replace(/\\/+$/, '').split('/').filter(Boolean).pop();\r
+    return name ? ('@' + name) : raw;\r
+}\r
+\r
+function escapeRegExpLiteral(s) {\r
+    return String(s || '').replace(/[.*+?^\${}()|[\\]\\\\]/g, '\\\\$&');\r
+}\r
+\r
+function quotePromptPath(p) {\r
+    var t = stripPathWrappingQuotes(String(p || '').trim());\r
+    if (!t) return '';\r
+    return '"' + t.replace(/"/g, '\\\\"') + '"';\r
+}\r
+\r
+function inputQuotedWindowsPathRegex() {\r
+    return /(["'])([A-Za-z]:[\\\\/][^"'\\r\\n]+)\\1/g;\r
+}\r
+\r
+var _inputKnownExtWinPathRe = null;\r
+function inputKnownExtWindowsPathRegex() {\r
+    if (!_inputKnownExtWinPathRe) {\r
+        _inputKnownExtWinPathRe = new RegExp('(^|[\\\\s(（\\\\[])([A-Za-z]:[\\\\\\\\/][^\\\\r\\\\n"\\\\\\'<>|]+?\\\\.(' + LINKIFY_EXT_FRAGMENT + '))(?=$|[\\\\s,，。;；:：)）\\\\]】])', 'gi');\r
+    }\r
+    _inputKnownExtWinPathRe.lastIndex = 0;\r
+    return _inputKnownExtWinPathRe;\r
+}\r
+\r
+function inputSimpleWindowsPathRegex() {\r
+    return /(^|[\\s(（\\[])([A-Za-z]:(?:\\\\|\\/)(?:(?:[^\\\\/:*?"<>|\\s\\r\\n]+)(?:\\\\|\\/))*[^\\\\/:*?"<>|\\s\\r\\n]+)(?=$|[\\s,，。;；:：)）\\]】])/g;\r
+}\r
+\r
+function ensureInputPathChipHost() {\r
+    var host = document.getElementById('input-path-chips');\r
+    if (host || !messageInput) return host;\r
+    var wrapper = messageInput.closest ? messageInput.closest('.input-wrapper') : null;\r
+    var panel = wrapper && wrapper.parentNode;\r
+    if (!panel || !wrapper) return null;\r
+    host = document.createElement('div');\r
+    host.id = 'input-path-chips';\r
+    host.className = 'input-path-chips';\r
+    panel.insertBefore(host, wrapper);\r
+    return host;\r
+}\r
+\r
+function clearInputPathTokens() {\r
+    Object.keys(inputPathTokenMap).forEach(function (k) { delete inputPathTokenMap[k]; });\r
+    refreshInputPathChips();\r
+}\r
+\r
+function removeInputPathToken(label) {\r
+    if (!label || !messageInput) return;\r
+    delete inputPathTokenMap[label];\r
+    var text = String(messageInput.value || '');\r
+    var re = new RegExp('(?:\\\\s*)' + escapeRegExpLiteral(label), 'g');\r
+    messageInput.value = text.replace(re, '').replace(/[ \\t]{2,}/g, ' ').trimStart();\r
+    refreshInputPathChips();\r
+    autoResizeTextarea();\r
+    try { messageInput.focus(); } catch (e) {}\r
+}\r
+\r
+function refreshInputPathChips() {\r
+    var host = ensureInputPathChipHost();\r
+    if (!host || !messageInput) return;\r
+    var text = String(messageInput.value || '');\r
+    var labels = Object.keys(inputPathTokenMap).filter(function (label) {\r
+        return label && text.indexOf(label) >= 0;\r
+    });\r
+    if (!labels.length) {\r
+        host.innerHTML = '';\r
+        host.classList.remove('is-visible');\r
+        return;\r
+    }\r
+    host.innerHTML = '';\r
+    labels.forEach(function (label) {\r
+        var stored = inputPathTokenMap[label];\r
+        var rel = pathTokenToWorkspaceOpenRel(stored);\r
+        if (!rel) return;\r
+        var chip = document.createElement('span');\r
+        chip.className = 'input-path-chip';\r
+        var a = document.createElement('a');\r
+        a.href = '#';\r
+        a.className = 'input-path-chip-link msg-link-workspace-open';\r
+        a.dataset.workspaceOpen = rel;\r
+        a.textContent = label;\r
+        a.setAttribute('data-ui-tip', String(stored || rel));\r
+        var rm = document.createElement('button');\r
+        rm.type = 'button';\r
+        rm.className = 'input-path-chip-remove';\r
+        rm.setAttribute('aria-label', '移除 ' + label);\r
+        rm.setAttribute('data-ui-tip', '移除文件路径');\r
+        rm.textContent = '×';\r
+        rm.addEventListener('click', function (ev) {\r
+            ev.preventDefault();\r
+            ev.stopPropagation();\r
+            removeInputPathToken(label);\r
+        });\r
+        chip.appendChild(a);\r
+        chip.appendChild(rm);\r
+        host.appendChild(chip);\r
+    });\r
+    host.classList.toggle('is-visible', !!host.children.length);\r
+}\r
+\r
+function rewriteInputWorkspacePaths() {\r
+    if (!messageInput || inputPathRewriteGuard) return;\r
+    var raw = String(messageInput.value || '');\r
+    var changed = false;\r
+    function replacePathToken(match, prefix, path) {\r
+        var rel = pathTokenToWorkspaceOpenRel(path);\r
+        if (!rel) return match;\r
+        var label = workspaceOpenDisplayLabel(path, rel);\r
+        if (!label) return match;\r
+        inputPathTokenMap[label] = stripPathWrappingQuotes(path);\r
+        changed = true;\r
+        return (prefix || '') + label;\r
+    }\r
+    var next = raw.replace(inputQuotedWindowsPathRegex(), function (match, q, path) {\r
+        return replacePathToken(match, '', path);\r
+    });\r
+    next = next.replace(inputKnownExtWindowsPathRegex(), function (match, prefix, path) {\r
+        return replacePathToken(match, prefix, path);\r
+    });\r
+    next = next.replace(inputSimpleWindowsPathRegex(), function (match, prefix, path) {\r
+        return replacePathToken(match, prefix, path);\r
+    });\r
+    if (changed && next !== raw) {\r
+        var wasFocused = document.activeElement === messageInput;\r
+        inputPathRewriteGuard = true;\r
+        messageInput.value = next;\r
+        if (wasFocused) {\r
+            var pos = next.length;\r
+            try { messageInput.setSelectionRange(pos, pos); } catch (e) {}\r
+        }\r
+        inputPathRewriteGuard = false;\r
+    }\r
+    refreshInputPathChips();\r
+}\r
+\r
+function expandInputPathTokens(text) {\r
+    var out = String(text || '');\r
+    Object.keys(inputPathTokenMap)\r
+        .sort(function (a, b) { return b.length - a.length; })\r
+        .forEach(function (label) {\r
+            var stored = inputPathTokenMap[label];\r
+            if (!stored || out.indexOf(label) < 0) return;\r
+            out = out.replace(new RegExp(escapeRegExpLiteral(label), 'g'), quotePromptPath(stored));\r
+        });\r
+    return out;\r
+}\r
+\r
+/** 整段文本是否仅为可链转的 Windows 绝对路径（用于行内 code 内路径） */\r
+function isEntireTextNodeWindowsPath(raw) {\r
+    var t = trimTrailingPathPunct(linkifyNormalizePathToken(String(raw || '').trim()));\r
+    if (!t) return false;\r
+    return /^([A-Za-z]):[\\\\/](?:(?:[^\\\\/:*?"<>|\\r\\n]+)(?:\\\\|\\/))*[^\\\\/:*?"<>|\\r\\n]+$/i.test(t);\r
+}\r
+\r
+function isEntireBareFilenameLinkable(raw) {\r
+    var t = trimTrailingPathPunct(linkifyNormalizePathToken(String(raw || '').trim()));\r
+    return isBareWorkspaceFilenameForLink(t);\r
+}\r
+\r
+/** 行内 code 内整段为 \`/工作区相对/路径.ext\` 时亦允许链转（否则反引号路径永不可点） */\r
+function isEntireWorkspaceSlashPathLinkable(raw) {\r
+    var t = trimTrailingPathPunct(linkifyNormalizePathToken(String(raw || '').trim()));\r
+    return workspaceRelativePathAutoLinkOk(t);\r
+}\r
+\r
+function isEntireWorkspaceRelativePathLinkable(raw) {\r
+    var t = trimTrailingPathPunct(linkifyNormalizePathToken(String(raw || '').trim()));\r
+    return workspaceRelativePathNoSlashAutoLinkOk(t);\r
+}\r
+\r
+/** 行内 code 内整段为 UNC \\\\server\\share\\... 时允许「本机打开」链转 */\r
+function isEntireTextNodeUncPath(raw) {\r
+    var t = trimTrailingPathPunct(linkifyNormalizePathToken(String(raw || '').trim()));\r
+    if (!t) return false;\r
+    var u = t.replace(/\\//g, '\\\\');\r
+    return /^\\\\\\\\[^\\\\]+\\\\[^\\\\]+(?:\\\\[^\\\\]*)*$/i.test(u);\r
+}\r
+\r
+var _assistMsgLinkifyRe = null;\r
+function getAssistMsgLinkifyRegex() {\r
+    if (!_assistMsgLinkifyRe) {\r
+        // 「/路径」前仅排除 ASCII 字母，避免 2023/文件、中文后接 / 等无法匹配；仍可抑制 ARPU/DOU（U 为字母）\r
+        _assistMsgLinkifyRe = new RegExp(\r
+            '((["\\'])(?:(?:[A-Za-z]:(?:\\\\\\\\|\\\\/)|\\\\\\\\\\\\\\\\|\\\\/(?![\\\\s\\\\/]))|(?=[^"\\'\\\\r\\\\n]*[\\\\\\\\/]))[^"\\'\\\\r\\\\n]+?\\\\.(?:' + LINKIFY_EXT_FRAGMENT + ')\\\\b\\\\2|' +\r
+            'https?:\\\\/\\\\/[^\\\\s<>\\'"]+|' +\r
+            '\\\\\\\\\\\\\\\\(?:(?:[^\\\\\\\\\\\\/:*?"<>|\\\\r\\\\n]+)\\\\\\\\)+(?:[^\\\\\\\\\\\\/:*?"<>|\\\\r\\\\n]+)|' +\r
+            '[A-Za-z]:(?:\\\\\\\\|\\\\/)(?:(?:[^\\\\\\\\/:*?"<>|\\\\r\\\\n]+)(?:\\\\\\\\|\\\\/))*[^\\\\\\\\/:*?"<>|\\\\r\\\\n]+|' +\r
+            '(?<![A-Za-z])\\\\/(?![\\\\s\\\\/])[^\\\\s<>\\'"]+|' +\r
+            '(?<![A-Za-z0-9./\\\\\\\\])(?:[^\\\\s<>\\'"/\\\\\\\\:]+(?:[\\\\\\\\/][^\\\\s<>\\'"/\\\\\\\\:]+)+\\\\.(' + LINKIFY_EXT_FRAGMENT + ')\\\\b)|' +\r
+            '(?<![A-Za-z0-9./\\\\\\\\])([^\\\\s<>\\'"/\\\\\\\\:]+?\\\\.(' + LINKIFY_EXT_FRAGMENT + ')\\\\b))',\r
+            'gi'\r
+        );\r
+    }\r
+    return _assistMsgLinkifyRe;\r
+}\r
+\r
+function tryLinkifyEntirePathTextNode(textNode, raw) {\r
+    var token = String(raw || '').trim();\r
+    if (!token) return false;\r
+    var wsRel = pathTokenToWorkspaceOpenRel(token);\r
+    var href = wsRel ? null : makeHrefFromAutoLinkToken(token);\r
+    if (!wsRel && !href) return false;\r
+    var a = document.createElement('a');\r
+    a.className = wsRel ? 'msg-link-auto msg-link-workspace-open' : 'msg-link-auto';\r
+    a.textContent = cleanPathTokenForLink(token) || token;\r
+    if (wsRel) {\r
+        a.href = '#';\r
+        a.setAttribute('data-workspace-open', wsRel);\r
+        a.setAttribute('data-ui-tip', '在本机打开（工作区文件）');\r
+        bindUiHoverTip(a);\r
+    } else {\r
+        a.href = href;\r
+        a.target = '_blank';\r
+        a.rel = 'noopener noreferrer';\r
+    }\r
+    textNode.parentNode.replaceChild(a, textNode);\r
+    return true;\r
+}\r
+\r
+function linkifySingleTextNode(textNode) {\r
+    var raw = textNode.nodeValue;\r
+    if (!raw) return;\r
+    var parent = textNode.parentElement;\r
+    if (!parent || parent.closest('a, pre, script, style, textarea, svg')) return;\r
+    var inInlineCode = !!parent.closest('code');\r
+    if (inInlineCode) {\r
+        if (!isEntireTextNodeWindowsPath(raw) && !isEntireBareFilenameLinkable(raw) && !isEntireWorkspaceSlashPathLinkable(raw) && !isEntireWorkspaceRelativePathLinkable(raw) && !isEntireTextNodeUncPath(raw)) return;\r
+        if (tryLinkifyEntirePathTextNode(textNode, raw)) return;\r
+    }\r
+    var rawForLink = linkifyNormalizePathToken(raw);\r
+    var re = getAssistMsgLinkifyRegex();\r
+    re.lastIndex = 0;\r
+    var parts = [];\r
+    var last = 0;\r
+    var m;\r
+    while ((m = re.exec(rawForLink)) !== null) {\r
+        var matchStart = m.index;\r
+        var matchEnd = m.index + m[0].length;\r
+        var qBefore = rawForLink.charAt(matchStart - 1);\r
+        var qAfter = rawForLink.charAt(matchEnd);\r
+        if ((qBefore === '"' || qBefore === "'") && qAfter === qBefore) {\r
+            matchStart -= 1;\r
+            matchEnd += 1;\r
+        }\r
+        if (matchStart > last) parts.push({ k: 't', s: rawForLink.slice(last, matchStart) });\r
+        parts.push({ k: 'l', s: m[0] });\r
+        last = matchEnd;\r
+    }\r
+    if (last < rawForLink.length) parts.push({ k: 't', s: rawForLink.slice(last) });\r
+    var hasLink = false;\r
+    for (var pi = 0; pi < parts.length; pi++) {\r
+        if (parts[pi].k === 'l') { hasLink = true; break; }\r
+    }\r
+    if (!hasLink) return;\r
+    var frag = document.createDocumentFragment();\r
+    parts.forEach(function (p) {\r
+        if (p.k === 't') frag.appendChild(document.createTextNode(p.s));\r
+        else {\r
+            var wsRel = pathTokenToWorkspaceOpenRel(p.s);\r
+            var show = cleanPathTokenForLink(p.s);\r
+            if (wsRel) {\r
+                var aw = document.createElement('a');\r
+                aw.href = '#';\r
+                aw.setAttribute('data-workspace-open', wsRel);\r
+                aw.className = 'msg-link-auto msg-link-workspace-open';\r
+                aw.setAttribute('data-ui-tip', '在本机打开（工作区文件）');\r
+                bindUiHoverTip(aw);\r
+                aw.textContent = show || p.s;\r
+                frag.appendChild(aw);\r
+                if (p.s.length > (show || '').length) {\r
+                    frag.appendChild(document.createTextNode(p.s.slice((show || '').length)));\r
+                }\r
+            } else {\r
+                var href = makeHrefFromAutoLinkToken(p.s);\r
+                if (!href) frag.appendChild(document.createTextNode(p.s));\r
+                else {\r
+                    var ah = document.createElement('a');\r
+                    ah.href = href;\r
+                    ah.target = '_blank';\r
+                    ah.rel = 'noopener noreferrer';\r
+                    ah.className = 'msg-link-auto';\r
+                    ah.textContent = show || p.s;\r
+                    frag.appendChild(ah);\r
+                    if (p.s.length > (show || '').length) {\r
+                        frag.appendChild(document.createTextNode(p.s.slice((show || '').length)));\r
+                    }\r
+                }\r
+            }\r
+        }\r
+    });\r
+    textNode.parentNode.replaceChild(frag, textNode);\r
+}\r
+\r
+function upgradeWorkspacePathMarkdownLinks(root) {
+    if (!root) return;\r
+    root.querySelectorAll('a[href]').forEach(function (a) {\r
+        if (!a || a.classList.contains('msg-link-workspace-open')) return;
+        var href = a.getAttribute('href') || '';
+        var marker = /^#ga-workspace-path=(.+)$/i.exec(href);
+        if (marker) {
+            try { href = decodeURIComponent(marker[1]); } catch (e0) { href = marker[1]; }
+        }
+        var raw = href;
+        try { raw = decodeURI(raw); } catch (e) {}
+        var rel = markdownHrefToWorkspaceOpenRel(href);\r
+        if (!rel && /^file:\\/\\//i.test(raw)) {\r
+            var fsPath = raw.replace(/^file:\\/\\/\\/?/i, '');\r
+            try { fsPath = decodeURIComponent(fsPath); } catch (e2) {}\r
+            if (/^[A-Za-z]:\\//.test(fsPath)) rel = pathTokenToWorkspaceOpenRel(fsPath);\r
+            else rel = pathTokenToWorkspaceOpenRel('/' + fsPath.replace(/^\\/+/, ''));\r
+        }\r
+        if (!rel) return;\r
+        a.href = '#';\r
+        a.setAttribute('data-workspace-open', rel);\r
+        a.classList.add('msg-link-workspace-open');\r
+        a.setAttribute('data-ui-tip', '在本机打开（工作区文件）');\r
+        bindUiHoverTip(a);\r
+    });
 }
 
-function escapeRegExpLiteral(s) {
-    return String(s || '').replace(/[.*+?^\${}()|[\\]\\\\]/g, '\\\\$&');
-}
-
-function quotePromptPath(p) {
-    var t = stripPathWrappingQuotes(String(p || '').trim());
-    if (!t) return '';
-    return '"' + t.replace(/"/g, '\\\\"') + '"';
-}
-
-function inputQuotedWindowsPathRegex() {
-    return /(["'])([A-Za-z]:[\\\\/][^"'\\r\\n]+)\\1/g;
-}
-
-var _inputKnownExtWinPathRe = null;
-function inputKnownExtWindowsPathRegex() {
-    if (!_inputKnownExtWinPathRe) {
-        _inputKnownExtWinPathRe = new RegExp('(^|[\\\\s(（\\\\[])([A-Za-z]:[\\\\\\\\/][^\\\\r\\\\n"\\\\\\'<>|]+?\\\\.(' + LINKIFY_EXT_FRAGMENT + '))(?=$|[\\\\s,，。;；:：)）\\\\]】])', 'gi');
+var _workspaceImageExtRe = null;
+function workspaceImageExtRegex() {
+    if (!_workspaceImageExtRe) {
+        _workspaceImageExtRe = /\\.(png|jpe?g|gif|webp|bmp|svg|ico|tiff?|avif|jfif)(?:[?#].*)?$/i;
     }
-    _inputKnownExtWinPathRe.lastIndex = 0;
-    return _inputKnownExtWinPathRe;
+    return _workspaceImageExtRe;
 }
 
-function inputSimpleWindowsPathRegex() {
-    return /(^|[\\s(（\\[])([A-Za-z]:(?:\\\\|\\/)(?:(?:[^\\\\/:*?"<>|\\s\\r\\n]+)(?:\\\\|\\/))*[^\\\\/:*?"<>|\\s\\r\\n]+)(?=$|[\\s,，。;；:：)）\\]】])/g;
+function workspaceImageRelFromMarker(value) {
+    var raw = String(value || '').trim();
+    var marker = /^#ga-workspace-path=(.+)$/i.exec(raw);
+    if (marker) {
+        try { raw = decodeURIComponent(marker[1]); } catch (e) { raw = marker[1]; }
+    }
+    var rel = markdownHrefToWorkspaceOpenRel(raw);
+    if (!rel || !workspaceImageExtRegex().test(String(rel).replace(/\\\\/g, '/'))) return '';
+    return rel;
 }
 
-function ensureInputPathChipHost() {
-    var host = document.getElementById('input-path-chips');
-    if (host || !messageInput) return host;
-    var wrapper = messageInput.closest ? messageInput.closest('.input-wrapper') : null;
-    var panel = wrapper && wrapper.parentNode;
-    if (!panel || !wrapper) return null;
-    host = document.createElement('div');
-    host.id = 'input-path-chips';
-    host.className = 'input-path-chips';
-    panel.insertBefore(host, wrapper);
+function workspaceImageUrl(rel) {
+    return '/api/workspace-image?rel=' + encodeURIComponent(String(rel || ''));
+}
+
+function wrapWorkspaceImageElement(img, rel) {
+    if (!img || !rel || img.dataset.workspaceImageReady === '1') return;
+    img.dataset.workspaceImageReady = '1';
+    img.classList.add('msg-workspace-image');
+    img.loading = 'lazy';
+    img.decoding = 'async';
+    img.src = workspaceImageUrl(rel);
+    img.setAttribute('data-workspace-open', rel);
+    img.setAttribute('data-ui-tip', '点击查看图片');
+    bindUiHoverTip(img);
+    var parent = img.parentElement;
+    if (!parent || (parent.tagName === 'A' && parent.classList.contains('msg-workspace-image-link'))) return;
+    var link = document.createElement('a');
+    link.href = workspaceImageUrl(rel);
+    link.target = '_blank';
+    link.rel = 'noopener noreferrer';
+    link.className = 'msg-workspace-image-link';
+    link.setAttribute('data-workspace-open', rel);
+    if (img.parentNode) img.parentNode.insertBefore(link, img);
+    link.appendChild(img);
+}
+
+function standaloneImageLinkHost(a) {
+    if (!a) return null;
+    var host = a.parentElement;
+    if (!host || !/^(P|DIV|LI)$/i.test(host.tagName || '')) return null;
+    var linkText = String(a.textContent || '').trim();
+    var hostText = String(host.textContent || '').trim();
+    if (!linkText || hostText !== linkText) return null;
     return host;
 }
 
-function clearInputPathTokens() {
-    Object.keys(inputPathTokenMap).forEach(function (k) { delete inputPathTokenMap[k]; });
-    refreshInputPathChips();
+function createWorkspaceImagePreview(rel, label) {
+    var figure = document.createElement('figure');
+    figure.className = 'msg-workspace-image-figure';
+    var link = document.createElement('a');
+    link.href = workspaceImageUrl(rel);
+    link.target = '_blank';
+    link.rel = 'noopener noreferrer';
+    link.className = 'msg-workspace-image-link';
+    link.setAttribute('data-workspace-open', rel);
+    var img = document.createElement('img');
+    img.className = 'msg-workspace-image';
+    img.src = workspaceImageUrl(rel);
+    img.loading = 'lazy';
+    img.decoding = 'async';
+    img.alt = String(label || rel || 'image');
+    link.appendChild(img);
+    figure.appendChild(link);
+    var caption = document.createElement('figcaption');
+    caption.textContent = String(label || rel || '');
+    figure.appendChild(caption);
+    return figure;
 }
 
-function removeInputPathToken(label) {
-    if (!label || !messageInput) return;
-    delete inputPathTokenMap[label];
-    var text = String(messageInput.value || '');
-    var re = new RegExp('(?:\\\\s*)' + escapeRegExpLiteral(label), 'g');
-    messageInput.value = text.replace(re, '').replace(/[ \\t]{2,}/g, ' ').trimStart();
-    refreshInputPathChips();
-    autoResizeTextarea();
-    try { messageInput.focus(); } catch (e) {}
-}
-
-function refreshInputPathChips() {
-    var host = ensureInputPathChipHost();
-    if (!host || !messageInput) return;
-    var text = String(messageInput.value || '');
-    var labels = Object.keys(inputPathTokenMap).filter(function (label) {
-        return label && text.indexOf(label) >= 0;
+function upgradeWorkspaceImages(root) {
+    if (!root) return;
+    root.querySelectorAll('img[src]').forEach(function (img) {
+        var rel = workspaceImageRelFromMarker(img.getAttribute('src') || '');
+        if (rel) wrapWorkspaceImageElement(img, rel);
     });
-    if (!labels.length) {
-        host.innerHTML = '';
-        host.classList.remove('is-visible');
-        return;
-    }
-    host.innerHTML = '';
-    labels.forEach(function (label) {
-        var stored = inputPathTokenMap[label];
-        var rel = pathTokenToWorkspaceOpenRel(stored);
-        if (!rel) return;
-        var chip = document.createElement('span');
-        chip.className = 'input-path-chip';
-        var a = document.createElement('a');
-        a.href = '#';
-        a.className = 'input-path-chip-link msg-link-workspace-open';
-        a.dataset.workspaceOpen = rel;
-        a.textContent = label;
-        a.setAttribute('data-ui-tip', String(stored || rel));
-        var rm = document.createElement('button');
-        rm.type = 'button';
-        rm.className = 'input-path-chip-remove';
-        rm.setAttribute('aria-label', '移除 ' + label);
-        rm.setAttribute('data-ui-tip', '移除文件路径');
-        rm.textContent = '×';
-        rm.addEventListener('click', function (ev) {
-            ev.preventDefault();
-            ev.stopPropagation();
-            removeInputPathToken(label);
-        });
-        chip.appendChild(a);
-        chip.appendChild(rm);
-        host.appendChild(chip);
+    root.querySelectorAll('a.msg-link-workspace-open[data-workspace-open]').forEach(function (a) {
+        if (a.dataset.workspaceImagePreview === '1') return;
+        var rel = a.getAttribute('data-workspace-open') || '';
+        if (!workspaceImageExtRegex().test(String(rel).replace(/\\\\/g, '/'))) return;
+        var host = standaloneImageLinkHost(a);
+        if (!host || host.querySelector('.msg-workspace-image-figure')) return;
+        a.dataset.workspaceImagePreview = '1';
+        var figure = createWorkspaceImagePreview(rel, a.textContent || rel);
+        host.parentNode.insertBefore(figure, host.nextSibling);
     });
-    host.classList.toggle('is-visible', !!host.children.length);
-}
-
-function rewriteInputWorkspacePaths() {
-    if (!messageInput || inputPathRewriteGuard) return;
-    var raw = String(messageInput.value || '');
-    var changed = false;
-    function replacePathToken(match, prefix, path) {
-        var rel = pathTokenToWorkspaceOpenRel(path);
-        if (!rel) return match;
-        var label = workspaceOpenDisplayLabel(path, rel);
-        if (!label) return match;
-        inputPathTokenMap[label] = stripPathWrappingQuotes(path);
-        changed = true;
-        return (prefix || '') + label;
-    }
-    var next = raw.replace(inputQuotedWindowsPathRegex(), function (match, q, path) {
-        return replacePathToken(match, '', path);
-    });
-    next = next.replace(inputKnownExtWindowsPathRegex(), function (match, prefix, path) {
-        return replacePathToken(match, prefix, path);
-    });
-    next = next.replace(inputSimpleWindowsPathRegex(), function (match, prefix, path) {
-        return replacePathToken(match, prefix, path);
-    });
-    if (changed && next !== raw) {
-        var wasFocused = document.activeElement === messageInput;
-        inputPathRewriteGuard = true;
-        messageInput.value = next;
-        if (wasFocused) {
-            var pos = next.length;
-            try { messageInput.setSelectionRange(pos, pos); } catch (e) {}
-        }
-        inputPathRewriteGuard = false;
-    }
-    refreshInputPathChips();
-}
-
-function expandInputPathTokens(text) {
-    var out = String(text || '');
-    Object.keys(inputPathTokenMap)
-        .sort(function (a, b) { return b.length - a.length; })
-        .forEach(function (label) {
-            var stored = inputPathTokenMap[label];
-            if (!stored || out.indexOf(label) < 0) return;
-            out = out.replace(new RegExp(escapeRegExpLiteral(label), 'g'), quotePromptPath(stored));
-        });
-    return out;
-}
-
-/** 整段文本是否仅为可链转的 Windows 绝对路径（用于行内 code 内路径） */
-function isEntireTextNodeWindowsPath(raw) {
-    var t = trimTrailingPathPunct(linkifyNormalizePathToken(String(raw || '').trim()));
-    if (!t) return false;
-    return /^([A-Za-z]):[\\\\/](?:(?:[^\\\\/:*?"<>|\\r\\n]+)(?:\\\\|\\/))*[^\\\\/:*?"<>|\\r\\n]+$/i.test(t);
-}
-
-function isEntireBareFilenameLinkable(raw) {
-    var t = trimTrailingPathPunct(linkifyNormalizePathToken(String(raw || '').trim()));
-    return isBareWorkspaceFilenameForLink(t);
-}
-
-/** 行内 code 内整段为 \`/工作区相对/路径.ext\` 时亦允许链转（否则反引号路径永不可点） */
-function isEntireWorkspaceSlashPathLinkable(raw) {
-    var t = trimTrailingPathPunct(linkifyNormalizePathToken(String(raw || '').trim()));
-    return workspaceRelativePathAutoLinkOk(t);
-}
-
-function isEntireWorkspaceRelativePathLinkable(raw) {
-    var t = trimTrailingPathPunct(linkifyNormalizePathToken(String(raw || '').trim()));
-    return workspaceRelativePathNoSlashAutoLinkOk(t);
-}
-
-/** 行内 code 内整段为 UNC \\\\server\\share\\... 时允许「本机打开」链转 */
-function isEntireTextNodeUncPath(raw) {
-    var t = trimTrailingPathPunct(linkifyNormalizePathToken(String(raw || '').trim()));
-    if (!t) return false;
-    var u = t.replace(/\\//g, '\\\\');
-    return /^\\\\\\\\[^\\\\]+\\\\[^\\\\]+(?:\\\\[^\\\\]*)*$/i.test(u);
-}
-
-var _assistMsgLinkifyRe = null;
-function getAssistMsgLinkifyRegex() {
-    if (!_assistMsgLinkifyRe) {
-        // 「/路径」前仅排除 ASCII 字母，避免 2023/文件、中文后接 / 等无法匹配；仍可抑制 ARPU/DOU（U 为字母）
-        _assistMsgLinkifyRe = new RegExp(
-            '(https?:\\\\/\\\\/[^\\\\s<>\\'"]+|' +
-            '\\\\\\\\\\\\\\\\(?:(?:[^\\\\\\\\\\\\/:*?"<>|\\\\r\\\\n]+)\\\\\\\\)+(?:[^\\\\\\\\\\\\/:*?"<>|\\\\r\\\\n]+)|' +
-            '[A-Za-z]:(?:\\\\\\\\|\\\\/)(?:(?:[^\\\\\\\\/:*?"<>|\\\\r\\\\n]+)(?:\\\\\\\\|\\\\/))*[^\\\\\\\\/:*?"<>|\\\\r\\\\n]+|' +
-            '(?<![A-Za-z])\\\\/(?![\\\\s\\\\/])[^\\\\s<>\\'"]+|' +
-            '(?<![A-Za-z0-9./\\\\\\\\])(?:[^\\\\s<>\\'"/\\\\\\\\:]+(?:[\\\\\\\\/][^\\\\s<>\\'"/\\\\\\\\:]+)+\\\\.(' + LINKIFY_EXT_FRAGMENT + ')\\\\b)|' +
-            '(?<![A-Za-z0-9./\\\\\\\\])([^\\\\s<>\\'"/\\\\\\\\:]+?\\\\.(' + LINKIFY_EXT_FRAGMENT + ')\\\\b))',
-            'gi'
-        );
-    }
-    return _assistMsgLinkifyRe;
-}
-
-function linkifySingleTextNode(textNode) {
-    var raw = textNode.nodeValue;
-    if (!raw) return;
-    var parent = textNode.parentElement;
-    if (!parent || parent.closest('a, pre, script, style, textarea, svg')) return;
-    if (parent.closest('code') && !isEntireTextNodeWindowsPath(raw) && !isEntireBareFilenameLinkable(raw) && !isEntireWorkspaceSlashPathLinkable(raw) && !isEntireWorkspaceRelativePathLinkable(raw) && !isEntireTextNodeUncPath(raw)) return;
-    var rawForLink = linkifyNormalizePathToken(raw);
-    var re = getAssistMsgLinkifyRegex();
-    re.lastIndex = 0;
-    var parts = [];
-    var last = 0;
-    var m;
-    while ((m = re.exec(rawForLink)) !== null) {
-        var matchStart = m.index;
-        var matchEnd = m.index + m[0].length;
-        var qBefore = rawForLink.charAt(matchStart - 1);
-        var qAfter = rawForLink.charAt(matchEnd);
-        if ((qBefore === '"' || qBefore === "'") && qAfter === qBefore) {
-            matchStart -= 1;
-            matchEnd += 1;
-        }
-        if (matchStart > last) parts.push({ k: 't', s: rawForLink.slice(last, matchStart) });
-        parts.push({ k: 'l', s: m[0] });
-        last = matchEnd;
-    }
-    if (last < rawForLink.length) parts.push({ k: 't', s: rawForLink.slice(last) });
-    var hasLink = false;
-    for (var pi = 0; pi < parts.length; pi++) {
-        if (parts[pi].k === 'l') { hasLink = true; break; }
-    }
-    if (!hasLink) return;
-    var frag = document.createDocumentFragment();
-    parts.forEach(function (p) {
-        if (p.k === 't') frag.appendChild(document.createTextNode(p.s));
-        else {
-            var wsRel = pathTokenToWorkspaceOpenRel(p.s);
-            var show = trimTrailingPathPunct(p.s);
-            if (wsRel) {
-                var aw = document.createElement('a');
-                aw.href = '#';
-                aw.setAttribute('data-workspace-open', wsRel);
-                aw.className = 'msg-link-auto msg-link-workspace-open';
-                aw.setAttribute('data-ui-tip', '在本机打开（工作区文件）');
-                bindUiHoverTip(aw);
-                aw.textContent = show || p.s;
-                frag.appendChild(aw);
-                if (p.s.length > (show || '').length) {
-                    frag.appendChild(document.createTextNode(p.s.slice((show || '').length)));
-                }
-            } else {
-                var href = makeHrefFromAutoLinkToken(p.s);
-                if (!href) frag.appendChild(document.createTextNode(p.s));
-                else {
-                    var ah = document.createElement('a');
-                    ah.href = href;
-                    ah.target = '_blank';
-                    ah.rel = 'noopener noreferrer';
-                    ah.className = 'msg-link-auto';
-                    ah.textContent = show || p.s;
-                    frag.appendChild(ah);
-                    if (p.s.length > (show || '').length) {
-                        frag.appendChild(document.createTextNode(p.s.slice((show || '').length)));
-                    }
-                }
-            }
-        }
-    });
-    textNode.parentNode.replaceChild(frag, textNode);
 }
 
 function linkifyAssistantTextNodes(root) {
     if (!root) return;
-    var walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
-    var batch = [];
-    var n;
-    while ((n = walker.nextNode())) {
-        var p = n.parentElement;
-        if (!p || p.closest('a, pre, script, style, textarea, .mermaid')) continue;
-        if (p.closest('code') && !isEntireTextNodeWindowsPath(n.nodeValue) && !isEntireBareFilenameLinkable(n.nodeValue) && !isEntireWorkspaceSlashPathLinkable(n.nodeValue) && !isEntireWorkspaceRelativePathLinkable(n.nodeValue) && !isEntireTextNodeUncPath(n.nodeValue)) continue;
-        var nv = n.nodeValue;
-        var nvNorm = linkifyNormalizePathToken(nv);
-        if (!nv || (!/https?:\\/\\/|[A-Za-z]:[\\\\/]|\\/\\S/.test(nvNorm) && !nvNorm.startsWith('\\\\\\\\') && !linkifyKnownExtRegex().test(nvNorm))) continue;
-        batch.push(n);
-    }
-    batch.forEach(linkifySingleTextNode);
-}
-
-function scheduleMermaidRun(root) {
-    registerMermaidLazy(root);
-}
-
-async function runMermaidElementOnce(el) {
-    if (!el || !window.mermaid || !el.isConnected) return;
-    if (el.getAttribute('data-processed') === 'true' || el.classList.contains('mermaid-error')) return;
-    ensureMermaidInitialized();
-    var cleaned = normalizeMermaidSource(el.textContent || '');
-    if (!cleaned) return;
-    el.textContent = cleaned;
-    if (!el.id) el.id = 'mermaid-embed-' + (++mermaidIdSeq);
-    try {
-        await mermaid.parse(cleaned);
-    } catch (errParse) {
-        showMermaidRenderError(el, cleaned, errParse);
-        return;
-    }
-    try {
-        await mermaid.run({ nodes: [el], suppressErrors: false });
-    } catch (errRun) {
-        showMermaidRenderError(el, cleaned, errRun);
-    }
-}
-
-function ensureMermaidIoObserver() {
-    if (mermaidIoObserver || typeof IntersectionObserver === 'undefined') return null;
-    mermaidIoObserver = new IntersectionObserver(function (entries) {
-        entries.forEach(function (en) {
-            if (!en.isIntersecting) return;
-            var el = en.target;
-            if (!el.classList.contains('mermaid') || el.getAttribute('data-processed') === 'true') {
-                if (mermaidIoObserver) mermaidIoObserver.unobserve(el);
-                return;
-            }
-            if (mermaidIoObserver) mermaidIoObserver.unobserve(el);
-            runMermaidElementOnce(el);
-        });
-    }, { root: null, rootMargin: '100px 0px 160px 0px', threshold: 0 });
-    return mermaidIoObserver;
-}
-
-function registerMermaidLazy(root) {
-    if (!root || !window.mermaid) return;
-    ensureMermaidInitialized();
-    var nodes = Array.from(root.querySelectorAll('.mermaid:not([data-processed]):not(.mermaid-error)'));
-    if (!nodes.length) return;
-    var obs = ensureMermaidIoObserver();
-    if (!obs) {
-        requestAnimationFrame(function () {
-            (async function () {
-                for (var i = 0; i < nodes.length; i += 1) {
-                    await runMermaidElementOnce(nodes[i]);
-                }
-            })();
-        });
-        return;
-    }
-    nodes.forEach(function (el) {
-        try {
-            obs.observe(el);
-        } catch (e) {
-            runMermaidElementOnce(el);
-        }
-    });
-}
-
+    upgradeWorkspacePathMarkdownLinks(root);
+    var walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);\r
+    var batch = [];\r
+    var n;\r
+    while ((n = walker.nextNode())) {\r
+        var p = n.parentElement;\r
+        if (!p || p.closest('a, pre, script, style, textarea, .mermaid')) continue;\r
+        if (p.closest('code') && !isEntireTextNodeWindowsPath(n.nodeValue) && !isEntireBareFilenameLinkable(n.nodeValue) && !isEntireWorkspaceSlashPathLinkable(n.nodeValue) && !isEntireWorkspaceRelativePathLinkable(n.nodeValue) && !isEntireTextNodeUncPath(n.nodeValue)) continue;\r
+        var nv = n.nodeValue;\r
+        var nvNorm = linkifyNormalizePathToken(nv);\r
+        if (!nv || (!/https?:\\/\\/|["'][A-Za-z]:[\\\\/]|[A-Za-z]:[\\\\/]|\\/\\S/.test(nvNorm) && !nvNorm.startsWith('\\\\\\\\') && !linkifyKnownExtRegex().test(nvNorm))) continue;\r
+        batch.push(n);\r
+    }\r
+    batch.forEach(linkifySingleTextNode);\r
+}\r
+\r
+function scheduleMermaidRun(root) {\r
+    registerMermaidLazy(root);\r
+}\r
+\r
+async function runMermaidElementOnce(el) {\r
+    if (!el || !window.mermaid || !el.isConnected) return;\r
+    if (el.getAttribute('data-processed') === 'true' || el.classList.contains('mermaid-error')) return;\r
+    ensureMermaidInitialized();\r
+    var cleaned = normalizeMermaidSource(el.textContent || '');\r
+    if (!cleaned) return;\r
+    el.textContent = cleaned;\r
+    if (!el.id) el.id = 'mermaid-embed-' + (++mermaidIdSeq);\r
+    try {\r
+        await mermaid.parse(cleaned);\r
+    } catch (errParse) {\r
+        showMermaidRenderError(el, cleaned, errParse);\r
+        return;\r
+    }\r
+    try {\r
+        await mermaid.run({ nodes: [el], suppressErrors: false });\r
+    } catch (errRun) {\r
+        showMermaidRenderError(el, cleaned, errRun);\r
+    }\r
+}\r
+\r
+function ensureMermaidIoObserver() {\r
+    if (mermaidIoObserver || typeof IntersectionObserver === 'undefined') return null;\r
+    mermaidIoObserver = new IntersectionObserver(function (entries) {\r
+        entries.forEach(function (en) {\r
+            if (!en.isIntersecting) return;\r
+            var el = en.target;\r
+            if (!el.classList.contains('mermaid') || el.getAttribute('data-processed') === 'true') {\r
+                if (mermaidIoObserver) mermaidIoObserver.unobserve(el);\r
+                return;\r
+            }\r
+            if (mermaidIoObserver) mermaidIoObserver.unobserve(el);\r
+            runMermaidElementOnce(el);\r
+        });\r
+    }, { root: null, rootMargin: '100px 0px 160px 0px', threshold: 0 });\r
+    return mermaidIoObserver;\r
+}\r
+\r
+function registerMermaidLazy(root) {\r
+    if (!root || !window.mermaid) return;\r
+    ensureMermaidInitialized();\r
+    var nodes = Array.from(root.querySelectorAll('.mermaid:not([data-processed]):not(.mermaid-error)'));\r
+    if (!nodes.length) return;\r
+    var obs = ensureMermaidIoObserver();\r
+    if (!obs) {\r
+        requestAnimationFrame(function () {\r
+            (async function () {\r
+                for (var i = 0; i < nodes.length; i += 1) {\r
+                    await runMermaidElementOnce(nodes[i]);\r
+                }\r
+            })();\r
+        });\r
+        return;\r
+    }\r
+    nodes.forEach(function (el) {\r
+        try {\r
+            obs.observe(el);\r
+        } catch (e) {\r
+            runMermaidElementOnce(el);\r
+        }\r
+    });\r
+}\r
+\r
 function wrapMessageTables(container) {
     if (!container) return;
     container.querySelectorAll('table').forEach(function (table) {
         var parent = table.parentElement;
         if (parent && parent.classList && parent.classList.contains('msg-table-scroll')) return;
-        var wrap = document.createElement('div');
-        wrap.className = 'msg-table-scroll';
-        if (table.parentNode) table.parentNode.insertBefore(wrap, table);
+        var wrap = document.createElement('div');\r
+        wrap.className = 'msg-table-scroll';\r
+        if (table.parentNode) table.parentNode.insertBefore(wrap, table);\r
         wrap.appendChild(table);
+    });
+}
+
+function unwrapMarkdownDelTags(container) {
+    if (!container) return;
+    container.querySelectorAll('del').forEach(function (el) {
+        var parent = el.parentNode;
+        if (!parent) return;
+        while (el.firstChild) parent.insertBefore(el.firstChild, el);
+        parent.removeChild(el);
     });
 }
 
 function enhanceAssistantMessageContent(div) {
     if (!div) return;
+    unwrapMarkdownDelTags(div);
     wrapMessageTables(div);
     upgradeMermaidBlocks(div);
     linkifyAssistantTextNodes(div);
+    upgradeWorkspaceImages(div);
     scheduleMermaidRun(div);
 }
-
+\r
 let markedOptionsApplied = false;
-function renderMarkdown(text) {
-    if (!text) return '';
-    if (typeof marked !== 'undefined' && !markedOptionsApplied) {
-        markedOptionsApplied = true;
-        try {
-            marked.setOptions({ breaks: true, mangle: false, headerIds: false });
-        } catch (e) { /* ignore */ }
-    }
-    return marked.parse(text, { mangle: false, headerIds: false });
+function encodeMarkdownWorkspacePathLinkMatch(match, label, dest) {
+    var rawDest = String(dest || '').trim();
+    if (!rawDest || rawDest.charAt(0) === '#') return match;
+    var decodedDest = decodeMarkdownHrefPathTarget(rawDest);
+    if (!decodedDest || /^(https?|mailto|tel|javascript|data|blob):/i.test(decodedDest)) return match;
+    if (/^[A-Za-z][A-Za-z0-9+.-]*:/i.test(decodedDest) && !/^[A-Za-z]:[\\\\/]/.test(decodedDest) && !/^file:\\/\\//i.test(decodedDest)) return match;
+    var rel = markdownHrefToWorkspaceOpenRel(decodedDest);
+    if (!rel) return match;
+    return '[' + label + '](#ga-workspace-path=' + encodeURIComponent(rel) + ')';
 }
 
-const TRACE_ROW = {
-    'log-entry':   { label: '信息', c: 'feed--log' },
-    'tool-call':   { label: '工具', c: 'feed--tool' },
-    'error-log':   { label: '错误', c: 'feed--err' },
-    'llm-response':{ label: '回复', c: 'feed--llm2' },
-    'llm-reasoning':{ label: '思考', c: 'feed--llm' },
-    'compact-summary': { label: '压缩', c: 'feed--cmp' },
-    'context-trim': { label: '裁剪', c: 'feed--trim' },
-    'context-summary': { label: '压缩', c: 'feed--cmp' },
-    'key-context': { label: '要点', c: 'feed--key' },
-    'status':      { label: '状态', c: 'feed--st' },
-};
-
-const envKeepLines = Number(window.__UI_LOG_TRUNCATE_KEEP_LINES__);
-const LOG_TRUNCATE_KEEP_LINES = Number.isFinite(envKeepLines) && envKeepLines > 0 ? Math.floor(envKeepLines) : 100;
-const LOG_TRUNCATE_HEAD_LINES = LOG_TRUNCATE_KEEP_LINES;
-const LOG_TRUNCATE_TAIL_LINES = LOG_TRUNCATE_KEEP_LINES;
-const LOG_TRUNCATE_HEAD_CHARS = 12000;
-const LOG_TRUNCATE_TAIL_CHARS = 12000;
-
-function toolCallDraftKey(parsed) {
-    var ri = parsed && parsed.react_iter != null ? String(parsed.react_iter) : '';
-    var idx = parsed && parsed.tool_call_index != null ? String(parsed.tool_call_index) : (parsed && parsed.index != null ? String(parsed.index) : '0');
-    return ri + ':' + idx;
+function encodeMarkdownWorkspacePathLinksInPlainText(text) {
+    return String(text || '').replace(/\\[([^\\]\\r\\n]+)\\]\\(([^)\\r\\n]+)\\)/g, encodeMarkdownWorkspacePathLinkMatch);
 }
 
-function findToolDraftRow(ctx, parsed) {
-    var key = toolCallDraftKey(parsed);
-    if (!key) return null;
-    var body = getProcessBody(ctx);
-    if (!body || typeof CSS === 'undefined' || !CSS.escape) return null;
-    try { return body.querySelector('.feed-item.feed--tool[data-tool-draft-key="' + CSS.escape(key) + '"]'); } catch (e) { return null; }
-}
-
-function setToolRowText(row, text, ctx, runSessionId) {
-    if (!row) return;
-    var sc = row.querySelector('.feed-chunk-scroller');
-    if (sc) sc.textContent = truncateLogTextForUi(text);
-    var ch = row.querySelector('.feed-chunk');
-    if (ch) {
-        // 工具条目流式生成时也放开高度限制
-        ch.classList.add('is-streaming');
-        refreshFeedChunkOverflow(ch);
+function encodeMarkdownWorkspacePathLinks(text) {
+    var src = String(text || '');
+    var out = '';
+    var buf = '';
+    var inFence = false;
+    var fenceMarker = '';
+    var inCode = false;
+    var lineStart = true;
+    function flushPlain() {
+        if (buf) {
+            out += encodeMarkdownWorkspacePathLinksInPlainText(buf);
+            buf = '';
+        }
     }
-    // 遵守自动跟随，不强制拖拽
-    if (!replayingMessages) scrollContentAreaIfFollow(ctx, runSessionId);
-}
-
-// 移除临时状态消息（移除整个 feed-item 条目）
-function removeTemporaryStatus(ctx) {
-    var body = getProcessBody(ctx);
-    if (!body) return;
-    var tempStatuses = body.querySelectorAll('[data-temporary-status="1"]');
-    tempStatuses.forEach(function(el) {
-        var row = el.closest ? el.closest('.feed-item') : null;
-        if (row) row.remove(); else el.remove();
-    });
-}
-
-function appendToolCallDelta(ctx, parsed, runSessionId) {
-    var key = toolCallDraftKey(parsed);
-    if (!key) return;
-    var row = findToolDraftRow(ctx, parsed);
-    if (!row) {
-        var so = null;
-        if (parsed.react_iter != null && Number.isFinite(Number(parsed.react_iter))) so = { reactIter: Number(parsed.react_iter) };
-        var scNew = createProcessFeedRow(ctx, 'tool-call', '工具调用生成中...', so, runSessionId, '');
-        row = scNew && scNew.closest ? scNew.closest('.feed-item') : null;
-        if (row) row.setAttribute('data-tool-draft-key', key);
-    }
-    if (!row) return;
-    if (parsed.id) row.dataset.pendingToolCallId = String(parsed.id);
-    
-    // 收到 tool_call_delta 时，移除临时状态，展开折叠的 process-aggregate
-    removeTemporaryStatus(ctx);
-    var agg = row.closest('.process-aggregate');
-    if (agg && agg.classList.contains('is-collapsed')) {
-        agg.classList.remove('is-collapsed');
-        var topN = agg.querySelector('.process-aggregate-top');
-        if (topN) topN.setAttribute('aria-expanded', 'true');
-    }
-    
-    // 累积工具名称和参数
-    if (parsed.name_delta) {
-        row.dataset.pendingToolName = (row.dataset.pendingToolName || '') + String(parsed.name_delta);
-    }
-    if (parsed.arguments_delta) {
-        row.dataset.pendingToolArgs = (row.dataset.pendingToolArgs || '') + String(parsed.arguments_delta);
-    }
-    
-    // 生成显示文本
-    var toolName = row.dataset.pendingToolName || '';
-    var argsRaw = row.dataset.pendingToolArgs || '';
-    var displayText = '工具调用生成中...';
-    
-    if (toolName) {
-        // 流式显示：工具名 + 参数原始文本（逐步增长）
-        var argsPreview = argsRaw;
-        displayText = toolName + '(' + argsPreview + '\\n生成中...';
-    }
-    setToolRowText(row, displayText, ctx, runSessionId);
-}
-function formatToolCommandLine(tool, args, commandPreview) {
-    if (commandPreview != null && String(commandPreview).trim()) return String(commandPreview).trim();
-    var name = String(tool || 'tool');
-    var a = args && typeof args === 'object' && !Array.isArray(args) ? args : {};
-    function j(v) { try { return JSON.stringify(v); } catch (e) { return String(v); } }
-    function pair(k, v) {
-        if ((k === 'content' || k === 'contents') && typeof v === 'string' && v.length > 240) v = '<' + v.length + ' chars>';
-        return j(k) + ': ' + j(v);
-    }
-    var preferred = ['path','target_directory','file_path','directory','root','command','args','url','start_line','end_line','pattern','query','search','replace','old_string','new_string','working_dir','timeout','temporary','content','contents'];
-    var keys = [];
-    // 路径参数去重：只保留第一个存在的路径参数
-    var pathKeys = ['path', 'target_directory', 'file_path', 'directory', 'root'];
-    var firstPathKey = null;
-    pathKeys.forEach(function (k) {
-        if (!firstPathKey && Object.prototype.hasOwnProperty.call(a, k)) firstPathKey = k;
-    });
-    preferred.forEach(function (k) {
-        if (Object.prototype.hasOwnProperty.call(a, k)) {
-            if (pathKeys.indexOf(k) >= 0) {
-                if (k === firstPathKey) keys.push(k);
-            } else {
-                keys.push(k);
+    for (var i = 0; i < src.length; i += 1) {
+        var ch = src.charAt(i);
+        var rest = src.slice(i);
+        if (lineStart) {
+            var fence = /^([ \\t]{0,3})(\`{3,}|~{3,})/.exec(rest);
+            if (fence) {
+                flushPlain();
+                var fenceText = fence[0];
+                var marker = fence[2].charAt(0);
+                if (!inFence) {
+                    inFence = true;
+                    fenceMarker = marker;
+                } else if (marker === fenceMarker) {
+                    inFence = false;
+                    fenceMarker = '';
+                }
+                out += fenceText;
+                i += fenceText.length - 1;
+                lineStart = false;
+                continue;
             }
         }
-    });
-    Object.keys(a).sort().forEach(function (k) { if (keys.indexOf(k) < 0) keys.push(k); });
-    if (name === 'run_shell') {
-        var b = {};
-        Object.keys(a).forEach(function (k) { b[k] = a[k]; });
-        var cmd = b.command != null ? String(b.command) : '';
-        if (Array.isArray(b.args) && b.args.length) cmd += ' ' + b.args.map(function (x) { return String(x); }).join(' ');
-        b.command = cmd.trim();
-        delete b.args;
-        a = b;
-        keys = [];
-        preferred.forEach(function (k) { if (Object.prototype.hasOwnProperty.call(a, k)) keys.push(k); });
-        Object.keys(a).sort().forEach(function (k) { if (keys.indexOf(k) < 0) keys.push(k); });
+        if (!inFence && ch === '\`') {
+            flushPlain();
+            var tickEnd = i + 1;
+            while (tickEnd < src.length && src.charAt(tickEnd) === '\`') tickEnd += 1;
+            out += src.slice(i, tickEnd);
+            i = tickEnd - 1;
+            inCode = !inCode;
+            lineStart = false;
+            continue;
+        }
+        if (inFence || inCode) out += ch;
+        else buf += ch;
+        lineStart = ch === '\\n' || ch === '\\r';
     }
-    return name + '(' + keys.map(function (k) { return pair(k, a[k]); }).join(', ') + ')';
+    flushPlain();
+    return out;
 }
-
-function formatToolPendingLine(tool, args, commandPreview) {
-    var cmd = commandPreview != null ? String(commandPreview).trim() : '';
-    if (!cmd) return '执行中...';
-    return cmd + '\\n执行中...';
-}
-
-function formatToolDoneLine(tool, args, result, commandPreview) {
-    return formatToolCommandLine(tool, args, commandPreview) + '\\n执行结果\\n' + String(result != null ? result : '');
-}
-
-function appendToolPendingRow(ctx, parsed, runSessionId) {
-    var line = formatToolPendingLine(parsed.tool, parsed.args, parsed.command_preview);
-    var so = null;
-    if (parsed.react_iter != null && Number.isFinite(Number(parsed.react_iter))) so = { reactIter: Number(parsed.react_iter) };
-    var draft = findToolDraftRow(ctx, parsed);
+\r
+function escapeMarkdownSingleTildes(text) {\r
+    var src = String(text || '');\r
+    var out = '';\r
+    var inFence = false;\r
+    var fenceMarker = '';\r
+    var inCode = false;\r
+    var lineStart = true;\r
+    for (var i = 0; i < src.length; i += 1) {\r
+        var ch = src.charAt(i);\r
+        var rest = src.slice(i);\r
+        if (lineStart) {\r
+            var fence = /^([ \\t]{0,3})(\`{3,}|~{3,})/.exec(rest);\r
+            if (fence) {\r
+                var marker = fence[2].charAt(0);\r
+                if (!inFence) {\r
+                    inFence = true;\r
+                    fenceMarker = marker;\r
+                } else if (marker === fenceMarker) {\r
+                    inFence = false;\r
+                    fenceMarker = '';\r
+                }\r
+            }\r
+        }\r
+        if (!inFence && ch === '\`') {\r
+            var tickEnd = i + 1;\r
+            while (tickEnd < src.length && src.charAt(tickEnd) === '\`') tickEnd += 1;\r
+            out += src.slice(i, tickEnd);\r
+            i = tickEnd - 1;\r
+            inCode = !inCode;\r
+            lineStart = false;\r
+            continue;\r
+        }
+        if (!inFence && !inCode && ch === '~') {
+            out += '&#126;';
+        } else {
+            out += ch;
+        }
+        lineStart = ch === '\\n' || ch === '\\r';\r
+    }\r
+    return out;\r
+}\r
+\r
+function renderMarkdown(text) {\r
+    if (!text) return '';\r
+    if (typeof marked !== 'undefined' && !markedOptionsApplied) {\r
+        markedOptionsApplied = true;\r
+        try {\r
+            marked.setOptions({ breaks: true, mangle: false, headerIds: false });\r
+        } catch (e) { /* ignore */ }\r
+    }\r
+    return marked.parse(escapeMarkdownSingleTildes(encodeMarkdownWorkspacePathLinks(text)), { mangle: false, headerIds: false });\r
+}\r
+\r
+const TRACE_ROW = {\r
+    'log-entry':   { label: '信息', c: 'feed--log' },\r
+    'tool-call':   { label: '工具', c: 'feed--tool' },\r
+    'error-log':   { label: '错误', c: 'feed--err' },\r
+    'llm-response':{ label: '回复', c: 'feed--llm2' },\r
+    'llm-reasoning':{ label: '思考', c: 'feed--llm' },\r
+    'compact-summary': { label: '压缩', c: 'feed--cmp' },\r
+    'context-trim': { label: '裁剪', c: 'feed--trim' },\r
+    'context-summary': { label: '压缩', c: 'feed--cmp' },\r
+    'key-context': { label: '要点', c: 'feed--key' },\r
+    'user-steer':  { label: '追问', c: 'feed--answer' },\r
+    'status':      { label: '状态', c: 'feed--st' },\r
+};\r
+\r
+const envKeepLines = Number(window.__UI_LOG_TRUNCATE_KEEP_LINES__);\r
+const LOG_TRUNCATE_KEEP_LINES = Number.isFinite(envKeepLines) && envKeepLines > 0 ? Math.floor(envKeepLines) : 100;\r
+const LOG_TRUNCATE_HEAD_LINES = LOG_TRUNCATE_KEEP_LINES;\r
+const LOG_TRUNCATE_TAIL_LINES = LOG_TRUNCATE_KEEP_LINES;\r
+const LOG_TRUNCATE_HEAD_CHARS = 12000;\r
+const LOG_TRUNCATE_TAIL_CHARS = 12000;\r
+\r
+function toolCallDraftKey(parsed) {\r
+    var ri = parsed && parsed.react_iter != null ? String(parsed.react_iter) : '';\r
+    var idx = parsed && parsed.tool_call_index != null ? String(parsed.tool_call_index) : (parsed && parsed.index != null ? String(parsed.index) : '0');\r
+    return ri + ':' + idx;\r
+}\r
+\r
+function findToolDraftRow(ctx, parsed) {\r
+    var key = toolCallDraftKey(parsed);\r
+    if (!key) return null;\r
+    var body = getProcessBody(ctx);\r
+    if (!body || typeof CSS === 'undefined' || !CSS.escape) return null;\r
+    try { return body.querySelector('.feed-item.feed--tool[data-tool-draft-key="' + CSS.escape(key) + '"]'); } catch (e) { return null; }\r
+}\r
+\r
+function setToolRowText(row, text, ctx, runSessionId) {\r
+    if (!row) return;\r
+    var sc = row.querySelector('.feed-chunk-scroller');\r
+    if (sc) sc.textContent = truncateLogTextForUi(text);\r
+    var ch = row.querySelector('.feed-chunk');\r
+    if (ch) {\r
+        // 工具条目流式生成时也放开高度限制\r
+        ch.classList.add('is-streaming');\r
+        refreshFeedChunkOverflow(ch);\r
+    }\r
+    // 遵守自动跟随，不强制拖拽\r
+    if (!replayingMessages) scrollContentAreaIfFollow(ctx, runSessionId);\r
+}\r
+\r
+// 移除临时状态消息（移除整个 feed-item 条目）\r
+function removeTemporaryStatus(ctx) {\r
+    var body = getProcessBody(ctx);\r
+    if (!body) return;\r
+    var tempStatuses = body.querySelectorAll('[data-temporary-status="1"]');\r
+    tempStatuses.forEach(function(el) {\r
+        var row = el.closest ? el.closest('.feed-item') : null;\r
+        if (row) row.remove(); else el.remove();\r
+    });\r
+}\r
+\r
+function appendToolCallDelta(ctx, parsed, runSessionId) {\r
+    var key = toolCallDraftKey(parsed);\r
+    if (!key) return;\r
+    var row = findToolDraftRow(ctx, parsed);\r
+    if (!row) {\r
+        var so = null;\r
+        if (parsed.react_iter != null && Number.isFinite(Number(parsed.react_iter))) so = { reactIter: Number(parsed.react_iter) };\r
+        var scNew = createProcessFeedRow(ctx, 'tool-call', '工具调用生成中...', so, runSessionId, '');\r
+        row = scNew && scNew.closest ? scNew.closest('.feed-item') : null;\r
+        if (row) row.setAttribute('data-tool-draft-key', key);\r
+    }\r
+    if (!row) return;\r
+    if (parsed.id) row.dataset.pendingToolCallId = String(parsed.id);\r
+    \r
+    // 收到 tool_call_delta 时，移除临时状态，展开折叠的 process-aggregate\r
+    removeTemporaryStatus(ctx);\r
+    var agg = row.closest('.process-aggregate');\r
+    if (agg && agg.classList.contains('is-collapsed')) {\r
+        agg.classList.remove('is-collapsed');\r
+        var topN = agg.querySelector('.process-aggregate-top');\r
+        if (topN) topN.setAttribute('aria-expanded', 'true');\r
+    }\r
+    \r
+    // 累积工具名称和参数\r
+    if (parsed.name_delta) {\r
+        row.dataset.pendingToolName = (row.dataset.pendingToolName || '') + String(parsed.name_delta);\r
+    }\r
+    if (parsed.arguments_delta) {\r
+        row.dataset.pendingToolArgs = (row.dataset.pendingToolArgs || '') + String(parsed.arguments_delta);\r
+    }\r
+    \r
+    // 生成显示文本\r
+    var toolName = row.dataset.pendingToolName || '';\r
+    var argsRaw = row.dataset.pendingToolArgs || '';\r
+    var displayText = '工具调用生成中...';\r
+    \r
+    if (toolName) {\r
+        // 流式显示：工具名 + 参数原始文本（逐步增长）\r
+        var argsPreview = argsRaw;\r
+        displayText = toolName + '(' + argsPreview + '\\n生成中...';\r
+    }\r
+    setToolRowText(row, displayText, ctx, runSessionId);\r
+}\r
+function formatToolCommandLine(tool, args, commandPreview) {\r
+    if (commandPreview != null && String(commandPreview).trim()) return String(commandPreview).trim();\r
+    var name = String(tool || 'tool');\r
+    var a = args && typeof args === 'object' && !Array.isArray(args) ? args : {};\r
+    function j(v) { try { return JSON.stringify(v); } catch (e) { return String(v); } }\r
+    function pair(k, v) {\r
+        if ((k === 'content' || k === 'contents') && typeof v === 'string' && v.length > 240) v = '<' + v.length + ' chars>';\r
+        return j(k) + ': ' + j(v);\r
+    }\r
+    var preferred = ['path','target_directory','file_path','directory','root','command','args','url','start_line','end_line','pattern','query','search','replace','old_string','new_string','working_dir','timeout','temporary','content','contents'];\r
+    var keys = [];\r
+    // 路径参数去重：只保留第一个存在的路径参数\r
+    var pathKeys = ['path', 'target_directory', 'file_path', 'directory', 'root'];\r
+    var firstPathKey = null;\r
+    pathKeys.forEach(function (k) {\r
+        if (!firstPathKey && Object.prototype.hasOwnProperty.call(a, k)) firstPathKey = k;\r
+    });\r
+    preferred.forEach(function (k) {\r
+        if (Object.prototype.hasOwnProperty.call(a, k)) {\r
+            if (pathKeys.indexOf(k) >= 0) {\r
+                if (k === firstPathKey) keys.push(k);\r
+            } else {\r
+                keys.push(k);\r
+            }\r
+        }\r
+    });\r
+    Object.keys(a).sort().forEach(function (k) { if (keys.indexOf(k) < 0) keys.push(k); });\r
+    if (name === 'run_shell') {\r
+        var b = {};\r
+        Object.keys(a).forEach(function (k) { b[k] = a[k]; });\r
+        var cmd = b.command != null ? String(b.command) : '';\r
+        if (Array.isArray(b.args) && b.args.length) cmd += ' ' + b.args.map(function (x) { return String(x); }).join(' ');\r
+        b.command = cmd.trim();\r
+        delete b.args;\r
+        a = b;\r
+        keys = [];\r
+        preferred.forEach(function (k) { if (Object.prototype.hasOwnProperty.call(a, k)) keys.push(k); });\r
+        Object.keys(a).sort().forEach(function (k) { if (keys.indexOf(k) < 0) keys.push(k); });\r
+    }\r
+    return name + '(' + keys.map(function (k) { return pair(k, a[k]); }).join(', ') + ')';\r
+}\r
+\r
+function formatToolPendingLine(tool, args, commandPreview) {\r
+    var cmd = commandPreview != null ? String(commandPreview).trim() : '';\r
+    if (!cmd) return '执行中...';\r
+    return cmd + '\\n执行中...';\r
+}\r
+\r
+function formatToolDoneLine(tool, args, result, commandPreview) {\r
+    return formatToolCommandLine(tool, args, commandPreview) + '\\n执行结果\\n' + String(result != null ? result : '');\r
+}\r
+\r
+function appendToolPendingRow(ctx, parsed, runSessionId) {\r
+    var line = formatToolPendingLine(parsed.tool, parsed.args, parsed.command_preview);\r
+    var so = null;\r
+    if (parsed.react_iter != null && Number.isFinite(Number(parsed.react_iter))) so = { reactIter: Number(parsed.react_iter) };\r
+    var draft = findToolDraftRow(ctx, parsed);\r
     if (draft) {
         if (parsed.tool_call_id != null && String(parsed.tool_call_id) !== '') draft.setAttribute('data-tool-call-id', String(parsed.tool_call_id));
         draft.removeAttribute('data-tool-draft-key');
+        draft.setAttribute('data-tool-pending', '1');
         draft.dataset.commandPreview = parsed.command_preview != null ? String(parsed.command_preview) : '';
         setToolRowText(draft, line, ctx, runSessionId);
         return;
-    }
+    }\r
     var sc = createProcessFeedRow(ctx, 'tool-call', line, so, runSessionId, parsed.tool_call_id);
     var row = sc && sc.closest ? sc.closest('.feed-item') : null;
-    if (row) row.dataset.commandPreview = parsed.command_preview != null ? String(parsed.command_preview) : '';
+    if (row) {
+        row.setAttribute('data-tool-pending', '1');
+        row.dataset.commandPreview = parsed.command_preview != null ? String(parsed.command_preview) : '';
+    }
 }
-
-function appendToolCommandDelta(ctx, parsed, runSessionId) {
-    var tid = parsed.tool_call_id != null ? String(parsed.tool_call_id) : '';
-    if (!tid) return;
-    var body = getProcessBody(ctx);
-    var row = null;
-    if (body && typeof CSS !== 'undefined' && CSS.escape) {
-        try { row = body.querySelector('.feed-item.feed--tool[data-tool-call-id="' + CSS.escape(tid) + '"]'); } catch (e) { row = null; }
-    }
-    if (!row) {
-        appendToolPendingRow(ctx, { tool_call_id: tid, command_preview: '', react_iter: parsed.react_iter }, runSessionId);
-        body = getProcessBody(ctx);
-        if (body && typeof CSS !== 'undefined' && CSS.escape) {
-            try { row = body.querySelector('.feed-item.feed--tool[data-tool-call-id="' + CSS.escape(tid) + '"]'); } catch (e2) { row = null; }
-        }
-    }
-    if (!row) return;
-    row.dataset.commandPreview = (row.dataset.commandPreview || '') + String(parsed.delta || '');
-    var text = formatToolPendingLine(parsed.tool, parsed.args, row.dataset.commandPreview);
-    var sc = row.querySelector('.feed-chunk-scroller');
-    if (sc) sc.textContent = truncateLogTextForUi(text);
-    var ch = row.querySelector('.feed-chunk');
-    if (ch) refreshFeedChunkOverflow(ch);
-    if (!replayingMessages) scrollContentAreaIfFollow(ctx, runSessionId);
-}
-function upsertToolCallResult(ctx, parsed, runSessionId) {
-    var tid = parsed.tool_call_id != null ? String(parsed.tool_call_id) : '';
-    var body = getProcessBody(ctx);
-    var row = null;
-    if (tid && body && typeof CSS !== 'undefined' && CSS.escape) {
-        try { row = body.querySelector('.feed-item.feed--tool[data-tool-call-id="' + CSS.escape(tid) + '"]'); } catch (e) { row = null; }
-    }
-    if (!row) row = findToolDraftRow(ctx, parsed);
-    var cmdPreview = parsed.command_preview;
-    if ((!cmdPreview || !String(cmdPreview).trim()) && row && row.dataset.commandPreview) cmdPreview = row.dataset.commandPreview;
-    var text = formatToolDoneLine(parsed.tool, parsed.args, parsed.result, cmdPreview);
+\r
+function appendToolCommandDelta(ctx, parsed, runSessionId) {\r
+    var tid = parsed.tool_call_id != null ? String(parsed.tool_call_id) : '';\r
+    if (!tid) return;\r
+    var body = getProcessBody(ctx);\r
+    var row = null;\r
+    if (body && typeof CSS !== 'undefined' && CSS.escape) {\r
+        try { row = body.querySelector('.feed-item.feed--tool[data-tool-call-id="' + CSS.escape(tid) + '"]'); } catch (e) { row = null; }\r
+    }\r
+    if (!row) {\r
+        appendToolPendingRow(ctx, { tool_call_id: tid, command_preview: '', react_iter: parsed.react_iter }, runSessionId);\r
+        body = getProcessBody(ctx);\r
+        if (body && typeof CSS !== 'undefined' && CSS.escape) {\r
+            try { row = body.querySelector('.feed-item.feed--tool[data-tool-call-id="' + CSS.escape(tid) + '"]'); } catch (e2) { row = null; }\r
+        }\r
+    }\r
+    if (!row) return;\r
+    row.dataset.commandPreview = (row.dataset.commandPreview || '') + String(parsed.delta || '');\r
+    var text = formatToolPendingLine(parsed.tool, parsed.args, row.dataset.commandPreview);\r
+    var sc = row.querySelector('.feed-chunk-scroller');\r
+    if (sc) sc.textContent = truncateLogTextForUi(text);\r
+    var ch = row.querySelector('.feed-chunk');\r
+    if (ch) refreshFeedChunkOverflow(ch);\r
+    if (!replayingMessages) scrollContentAreaIfFollow(ctx, runSessionId);\r
+}\r
+function upsertToolCallResult(ctx, parsed, runSessionId) {\r
+    var tid = parsed.tool_call_id != null ? String(parsed.tool_call_id) : '';\r
+    var body = getProcessBody(ctx);\r
+    var row = null;\r
+    if (tid && body && typeof CSS !== 'undefined' && CSS.escape) {\r
+        try { row = body.querySelector('.feed-item.feed--tool[data-tool-call-id="' + CSS.escape(tid) + '"]'); } catch (e) { row = null; }\r
+    }\r
+    if (!row) row = findToolDraftRow(ctx, parsed);\r
+    var cmdPreview = parsed.command_preview;\r
+    if ((!cmdPreview || !String(cmdPreview).trim()) && row && row.dataset.commandPreview) cmdPreview = row.dataset.commandPreview;\r
+    var text = formatToolDoneLine(parsed.tool, parsed.args, parsed.result, cmdPreview);\r
     if (row) {
         if (tid) row.setAttribute('data-tool-call-id', tid);
         row.removeAttribute('data-tool-draft-key');
+        row.removeAttribute('data-tool-pending');
         row.dataset.commandPreview = cmdPreview != null ? String(cmdPreview) : '';
-        var sc = row.querySelector('.feed-chunk-scroller');
-        if (sc) sc.textContent = truncateLogTextForUi(text);
-        var ch = row.querySelector('.feed-chunk');
-        if (ch) refreshFeedChunkOverflow(ch);
-        var agg = body.closest('.process-aggregate');
-        refreshAggregateStatsSmart(agg);
-        if (!replayingMessages) scrollContentAreaIfFollow(ctx, runSessionId);
-        return;
-    }
-    var ri = uiEventReactIter(parsed);
-    appendLog(ctx, text, 'tool-call', runSessionId, ri);
-}
-
-/** 去掉首尾「空白行」（整行仅空格/制表也不保留），保留首行正文缩进与中间空行 */
-function trimSurroundingBlankLines(raw) {
-    var text = (raw == null) ? '' : String(raw);
-    if (!text) return text;
-    var lines = text.split('\\n');
-    var start = 0;
-    var end = lines.length;
-    while (start < end && lines[start].trim() === '') start++;
-    while (end > start && lines[end - 1].trim() === '') end--;
-    if (start >= end) return '';
-    return lines.slice(start, end).join('\\n');
-}
-
-function truncateLogTextForUi(raw) {
-    const text = (raw == null) ? '' : String(raw);
-    if (!text) return text;
-    const lines = text.split('\\n');
-    if (lines.length > LOG_TRUNCATE_HEAD_LINES + LOG_TRUNCATE_TAIL_LINES) {
-        const head = lines.slice(0, LOG_TRUNCATE_HEAD_LINES).join('\\n');
-        const tail = lines.slice(-LOG_TRUNCATE_TAIL_LINES).join('\\n');
-        const omitted = lines.length - LOG_TRUNCATE_HEAD_LINES - LOG_TRUNCATE_TAIL_LINES;
-        return head + '\\n\\n... [中间省略 ' + omitted + ' 行] ...\\n\\n' + tail;
-    }
-    if (text.length > LOG_TRUNCATE_HEAD_CHARS + LOG_TRUNCATE_TAIL_CHARS) {
-        const head = text.slice(0, LOG_TRUNCATE_HEAD_CHARS);
-        const tail = text.slice(-LOG_TRUNCATE_TAIL_CHARS);
-        const omitted = text.length - LOG_TRUNCATE_HEAD_CHARS - LOG_TRUNCATE_TAIL_CHARS;
-        return head + '\\n\\n... [中间省略约 ' + omitted + ' 字符] ...\\n\\n' + tail;
-    }
-    return text;
-}
-
-function createProcessFeedRow(ctx, type, initialText, streamOpts, runSessionId, toolCallIdOpt) {
-    streamOpts = streamOpts || {};
-    if (type == null) type = 'log-entry';
-    stripWelcome(ctx);
-    const body = getProcessBody(ctx);
-    if (!body) return;
-    const meta = TRACE_ROW[type] || TRACE_ROW['log-entry'];
-    const row = document.createElement('div');
-    row.className = 'feed-item ' + meta.c;
-    row.setAttribute('data-log-type', type);
-    if (toolCallIdOpt != null && String(toolCallIdOpt) !== '') row.setAttribute('data-tool-call-id', String(toolCallIdOpt));
-    row.innerHTML = '<div class="feed-row">'
-        + '<span class="feed-label">' + meta.label + '</span>'
-        + '<div class="feed-chunk">'
-        + '<div class="feed-chunk-scroller"></div></div></div>';
-    const chunk = row.querySelector('.feed-chunk');
-    const sc = row.querySelector('.feed-chunk-scroller');
-    var txtForUi = initialText;
-    if (type === 'llm-reasoning' || type === 'llm-response') txtForUi = trimSurroundingBlankLines(txtForUi);
-    sc.textContent = truncateLogTextForUi(txtForUi);
-    if (streamOpts.streaming && (type === 'llm-reasoning' || type === 'llm-response')) chunk.classList.add('is-streaming');
-    bindFeedChunkInteraction(chunk);
-    bindFeedChunkScrollChain(sc);
-    body.appendChild(row);
-    if (ctx && ctx.currentTurn && body.classList && body.classList.contains('subagent-turn-process')) {
-        markSubagentTurnHasProcess(ctx.currentTurn);
-    }
-    if (type === 'error-log') {
-        var errHint = document.createElement('div');
-        errHint.className = 'feed-error-contact-hint';
-        errHint.textContent = '如需帮助或反馈，请联系GitHub @sugarfreeecho';
-        body.appendChild(errHint);
-    }
-    const agg = body.closest('.process-aggregate');
-    if (streamOpts.reactIter != null && Number.isFinite(Number(streamOpts.reactIter))) {
-        var ri = Math.max(1, Math.floor(Number(streamOpts.reactIter)));
-        row.setAttribute('data-react-iter', String(ri));
-        bumpAggregateMaxReactIter(agg, ri);
-    }
-    if (agg && agg.classList.contains('is-collapsed')) {
-        updateProcessBrief(agg);
-    }
-    else requestAnimationFrame(function () { scheduleFeedChunkOverflowRefresh(chunk); });
-    refreshAggregateStatsSmart(agg);
-    if (!streamOpts.streaming) scrollContentAreaIfFollow(ctx, runSessionId);
-    return sc;
-}
-
-function appendLlmStreamDelta(ctx, ev, runSessionId) {
-    if (!ctx || !ctx.llm) return;
-    // 收到 reasoning/content 增量时，移除"正在思考中..."条目
-    removeTemporaryStatus(ctx);
-    const l = ctx.llm;
-    const iter = ev.react_iter;
-    const seq = Number(ev.stream_seq || 0);
-    if (l.llmDeltaLastSeq !== null && seq !== l.llmDeltaLastSeq) finalizeLlmStreamChunks(ctx);
-    l.llmDeltaLastSeq = seq;
-    const part = ev.type === 'llm_reasoning_delta' ? 'reasoning' : 'response';
-    const delta = String(ev.delta || '');
-    if (!delta) return;
-    if (iter != null) {
-        var body0 = getProcessBody(ctx);
-        if (body0) bumpAggregateMaxReactIter(body0.closest('.process-aggregate'), iter);
-    }
-    const streamOpt = { streaming: true };
-    if (iter != null && Number.isFinite(Number(iter))) streamOpt.reactIter = Number(iter);
-    if (part === 'reasoning') {
-        if (l.llmStreamReasoningIter !== iter) {
-            flushLlmDeltaText(ctx);
-            l.llmStreamReasoningIter = iter;
-            l.llmStreamReasoningScroller = createProcessFeedRow(ctx, 'llm-reasoning', '', streamOpt, runSessionId);
-        }
-        if (!l.llmStreamReasoningScroller) return;
-        l.llmPendingReasoningDelta = (l.llmPendingReasoningDelta || '') + delta;
-    } else {
-        if (l.llmStreamResponseIter !== iter) {
-            flushLlmDeltaText(ctx);
-            l.llmStreamResponseIter = iter;
-            l.llmStreamResponseScroller = createProcessFeedRow(ctx, 'llm-response', '', streamOpt, runSessionId);
-        }
-        if (!l.llmStreamResponseScroller) return;
-        l.llmPendingResponseDelta = (l.llmPendingResponseDelta || '') + delta;
-    }
-    scheduleLlmDeltaFlush(ctx, runSessionId);
-}
-
-function upsertLlmFeedRow(ctx, content, logType, runSessionId, reactIter) {
-    if (!ctx) return null;
-    var ri = reactIter != null && Number.isFinite(Number(reactIter)) ? Math.max(1, Math.floor(Number(reactIter))) : null;
-    var body = getProcessBody(ctx);
-    var txt = truncateLogTextForUi(trimSurroundingBlankLines(String(content || '')));
-    if (!txt.trim()) return null;
-    if (body && ri != null) {
-        var existing = body.querySelector('.feed-item[data-log-type="' + logType + '"][data-react-iter="' + ri + '"]');
-        if (existing) {
-            var sc = existing.querySelector('.feed-chunk-scroller');
-            var ch = existing.querySelector('.feed-chunk');
-            if (sc) sc.textContent = txt;
-            if (ch) {
-                ch.classList.remove('is-streaming');
-                scheduleFeedChunkOverflowRefresh(ch);
-            }
-            if (ctx.llm) resetLlmState(ctx);
-            scrollContentAreaIfFollow(ctx, runSessionId);
-            return sc;
-        }
-    }
-    if (ctx.llm) resetLlmState(ctx);
-    return appendLog(ctx, content, logType, runSessionId, ri);
-}
-
-function appendMessage(ctx, role, content, meta, runSessionId) {
-    meta = meta || {};
-    stripWelcome(ctx);
-    const wrap = document.createElement('div');
-    wrap.className = 'msg-wrap msg-wrap--' + (role === 'user' ? 'user' : 'assistant');
-    if (role === 'assistant') wrap.classList.add('msg-wrap--answer-frame');
-    if (meta.eventIndex != null) wrap.setAttribute('data-event-index', String(meta.eventIndex));
-    var tTrunc = meta.turnTruncateIdx;
-    if (tTrunc == null) { if (role === 'user' && meta.eventIndex != null) tTrunc = meta.eventIndex; }
-    if (tTrunc != null && tTrunc >= 0) wrap.setAttribute('data-truncate-from', String(tTrunc));
-    if (role === 'user') {
-        if (meta.eventIndex != null && meta.eventIndex >= 0) {
-            wrap.id = 'user-msg-' + meta.eventIndex;
-        } else {
-            const n = (ctx.stream || chatContainer).querySelectorAll('.msg-wrap--user').length;
-            wrap.id = 'user-msg-' + n;
-        }
-    }
-    const div = document.createElement('div');
-    div.className = 'message ' + (role === 'user' ? 'user' : 'assistant');
-    var rawStr = content == null ? '' : String(content);
-    messageRawMarkdown.set(wrap, rawStr);
-    if (role === 'user') {
-        var lineCount = rawStr.split('\\n').length;
-        if (lineCount > 10) {
-            wrap.classList.add('has-turn-process');
-            div.classList.add('is-collapsible');
-            // 摘要
-            var sum = document.createElement('div');
-            sum.className = 'user-msg-summary';
-            sum.textContent = rawStr.split('\\n').slice(0, 10).join('\\n') + '\\n...';
-            linkifyAssistantTextNodes(sum);
-            // 完整
-            var ful = document.createElement('div');
-            ful.className = 'user-msg-full';
-            ful.textContent = rawStr;
-            linkifyAssistantTextNodes(ful);
-            // chevron
-            var ch = document.createElement('div');
-            ch.className = 'user-msg-chevron';
-            var arrow = document.createElement('span');
-            arrow.className = 'chevron-arrow';
-            ch.appendChild(arrow);
-            ch.addEventListener('click', function(e) {
-                e.stopPropagation();
-                wrap.classList.toggle('user-msg-expanded');
-            });
-            div.appendChild(sum);
-            div.appendChild(ful);
-            div.appendChild(ch);
-        } else {
-            div.textContent = rawStr;
-            linkifyAssistantTextNodes(div);
-        }
-    }
-        else {
-        div.innerHTML = renderMarkdown(rawStr);
-        enhanceAssistantMessageContent(div);
-    }
-    wrap.appendChild(div);
-    attachMessageToolbar(wrap, role);
-    (ctx.stream || chatContainer).appendChild(wrap);
-    if (role === 'assistant') {
-        if (ctx.currentProcessGroup && ctx.currentProcessGroup.isConnected) {
-            ctx.currentProcessGroup.classList.add('is-collapsed');
-            const ttop = ctx.currentProcessGroup.querySelector('.process-aggregate-top');
-            if (ttop) ttop.setAttribute('aria-expanded', 'false');
-            updateProcessBrief(ctx.currentProcessGroup);
-        }
-        sealProcessGroup(ctx);
-    }
-    if (role === 'user' && !replayingMessages) rebuildToc();
-    if (!replayingMessages) {
-        if (role === 'user') scrollChatToBottomIfFollow(runSessionId, { force: true });
-        else scrollChatToBottomIfFollow(runSessionId, {});
-    }
-}
-
-function handleTraceChunkClick(e) {
-    if (e) e.stopPropagation();
-    this.classList.toggle('expanded');
-    var self = this;
-    requestAnimationFrame(function () {
-        refreshFeedChunkOverflow(self);
-        registerMermaidLazy(self);
-    });
-}
-
-function bindFeedChunkInteraction(ch) {
-    ch.removeEventListener('click', handleTraceChunkClick);
-    ch.addEventListener('click', handleTraceChunkClick);
-}
-
-function bindExistingLogs(root) {
-    const el = root || getVisibleChatStream() || chatContainer;
-    if (!el) return;
-    el.querySelectorAll('.feed-chunk').forEach(function (ch) {
-        bindFeedChunkInteraction(ch);
-        scheduleFeedChunkOverflowRefresh(ch);
-        const sc = ch.querySelector('.feed-chunk-scroller');
-        if (sc) bindFeedChunkScrollChain(sc);
-    });
-    el.querySelectorAll('.process-aggregate').forEach(function (agg) {
-        bindProcessAggregate(agg);
-        if (agg.classList.contains('is-collapsed')) updateProcessBrief(agg);
-        refreshAggregateStatsSmart(agg);
-    });
-    el.querySelectorAll('.process-aggregate-brief').forEach(bindProcessBriefScrollChain);
-}
-
-function appendLog(ctx, content, type, runSessionId, reactIter) {
-    if (type == null) type = 'log-entry';
-    const tStr = (content == null) ? '' : String(content);
-    if ((type === 'llm-reasoning' || type === 'llm-response') && !trimSurroundingBlankLines(tStr).trim()) return null;
-    var so = null;
-    if (reactIter != null && Number.isFinite(Number(reactIter))) so = { reactIter: Number(reactIter) };
-    return createProcessFeedRow(ctx, type, tStr, so, runSessionId);
-}
-
-function flushProgressDeltaText(ctx, logType) {
-    if (!ctx || !ctx.progressStream) return;
-    var st = ctx.progressStream[logType];
-    if (!st) return;
-    if (st.flushRaf) {
-        cancelAnimationFrame(st.flushRaf);
-        st.flushRaf = 0;
-    }
-    if (st.pending && st.scroller && st.scroller.isConnected) {
-        var merged = (st.scroller.textContent || '') + st.pending;
-        st.scroller.textContent = truncateLogTextForUi(merged);
-        var ch = st.scroller.closest('.feed-chunk');
-        if (ch) refreshFeedChunkOverflow(ch);
-    }
-    st.pending = '';
-}
-
-function finalizeProgressStreamChunks(ctx) {
-    if (!ctx) return;
-    var types = ctx.progressStream ? Object.keys(ctx.progressStream) : [];
-    for (var i = 0; i < types.length; i += 1) flushProgressDeltaText(ctx, types[i]);
-    var streamRoot = (ctx._subagentBody && ctx._subagentBody.isConnected) ? ctx._subagentBody : ctx.stream;
-    if (streamRoot) {
-        streamRoot.querySelectorAll('.feed-item .feed-chunk.is-streaming').forEach(function (ch) {
-            ch.classList.remove('is-streaming');
-            refreshFeedChunkOverflow(ch);
-        });
-    }
-    ctx.progressStream = {};
-}
-
-function scheduleProgressDeltaFlush(ctx, runSessionId, logType) {
-    if (!ctx || !ctx.progressStream) return;
-    var st = ctx.progressStream[logType];
-    if (!st || st.flushRaf) return;
-    st.flushRaf = requestAnimationFrame(function () {
-        st.flushRaf = 0;
-        flushProgressDeltaText(ctx, logType);
-        followStreamProcessScroll(ctx, runSessionId);
-    });
-}
-
-/** 每个压缩阶段（裁剪/压缩/要点）共用一条 feed，状态行与正文在同一 scroller */
-function ensureProgressScroller(ctx, logType, runSessionId) {
-    if (!ctx) return null;
-    if (!ctx.progressScrollers) ctx.progressScrollers = {};
-    var sc = ctx.progressScrollers[logType];
-    if (sc && sc.isConnected) return sc;
-    sc = appendLog(ctx, '', logType, runSessionId);
-    if (sc) ctx.progressScrollers[logType] = sc;
-    return sc;
-}
-
-/** 落盘正文：替换流式段或追加到状态行后，与刷新后 ui_events 回放一致 */
-function applyProgressPersistedBody(ctx, content, logType, runSessionId) {
-    if (!ctx) return;
-    var text = String(content || '').trim();
-    if (!text) return;
-    var st = ctx.progressStream && ctx.progressStream[logType];
-    var bodyOffset = st && typeof st.bodyOffset === 'number' ? st.bodyOffset : null;
-    var hadStream = bodyOffset != null;
-    finalizeProgressStreamForType(ctx, logType);
-    var sc = ensureProgressScroller(ctx, logType, runSessionId);
-    if (!sc) return;
-    var prevTxt = sc.textContent || '';
-    var merged;
-    if (hadStream) {
-        merged = prevTxt.slice(0, bodyOffset).replace(/\\s+$/, '') + '\\n\\n' + text;
-    } else if (prevTxt.trim()) {
-        merged = prevTxt.trim() + '\\n\\n' + text;
-    } else {
-        merged = text;
-    }
-    sc.textContent = truncateLogTextForUi(merged);
-    var chSet = sc.closest('.feed-chunk');
-    if (chSet) {
-        chSet.classList.remove('is-streaming');
-        refreshFeedChunkOverflow(chSet);
-        requestAnimationFrame(function () { refreshFeedChunkOverflow(chSet); });
-    }
-    ctx.progressScrollers[logType] = sc;
-    scrollContentAreaIfFollow(ctx, runSessionId);
-}
-
-/** 压缩/要点执行端输出：在同一 feed 内流式追加正文（不另起 feed 块） */
-function appendProgressStreamDelta(ctx, delta, logType, runSessionId) {
-    if (!ctx || !delta) return;
-    if (!ctx.progressStream) ctx.progressStream = {};
-    var piece = String(delta);
-    if (!piece) return;
-    var sc = ensureProgressScroller(ctx, logType, runSessionId);
-    if (!sc) return;
-    var chunk = sc.closest('.feed-chunk');
-    if (chunk) chunk.classList.add('is-streaming');
-    var st = ctx.progressStream[logType];
-    if (!st) {
-        var head = (sc.textContent || '').trim();
-        var bodyOffset = sc.textContent.length;
-        if (head) {
-            sc.textContent = head + '\\n\\n';
-            bodyOffset = sc.textContent.length;
-        }
-        st = { scroller: sc, pending: '', flushRaf: 0, bodyOffset: bodyOffset };
-        ctx.progressStream[logType] = st;
-    }
-    st.pending += piece;
-    scheduleProgressDeltaFlush(ctx, runSessionId, logType);
-}
-
-/** 同类型进度行合并追加，实现裁剪/压缩/要点分轨流式展示 */
-function appendProgressLog(ctx, content, logType, runSessionId) {
-    if (!ctx) return;
-    finalizeProgressStreamForType(ctx, logType);
-    if (!ctx.progressScrollers) ctx.progressScrollers = {};
-    var line = String(content || '');
-    if (!line.trim()) return;
-    var prev = ctx.progressScrollers[logType];
-    if (prev && prev.isConnected) {
-        var prevTxt = prev.textContent || '';
-        prev.textContent = truncateLogTextForUi(prevTxt ? (prevTxt + '\\n' + line) : line);
-        var chMerge = prev.closest('.feed-chunk');
-        if (chMerge) {
-            refreshFeedChunkOverflow(chMerge);
-            requestAnimationFrame(function () { refreshFeedChunkOverflow(chMerge); });
-        }
-        scrollContentAreaIfFollow(ctx, runSessionId);
-        return;
-    }
-    var sc = ensureProgressScroller(ctx, logType, runSessionId);
-    if (!sc) return;
-    sc.textContent = truncateLogTextForUi(line);
-    var chNew = sc.closest('.feed-chunk');
-    if (chNew) {
-        refreshFeedChunkOverflow(chNew);
-        requestAnimationFrame(function () { refreshFeedChunkOverflow(chNew); });
-    }
-    scrollContentAreaIfFollow(ctx, runSessionId);
-}
-
-function finalizeProgressStreamForType(ctx, logType) {
-    if (!ctx || !logType) return;
-    flushProgressDeltaText(ctx, logType);
-    if (ctx.progressStream && ctx.progressStream[logType]) {
-        var st = ctx.progressStream[logType];
-        if (st.scroller && st.scroller.isConnected) {
-            var ch = st.scroller.closest('.feed-chunk');
-            if (ch) {
-                ch.classList.remove('is-streaming');
-                refreshFeedChunkOverflow(ch);
-            }
-        }
-        delete ctx.progressStream[logType];
-    }
-}
-
-/* ── Subagent 浮层 / 过程块 ── */
-`,W=`var subagentPanelOpen = false;
+        var sc = row.querySelector('.feed-chunk-scroller');\r
+        if (sc) sc.textContent = truncateLogTextForUi(text);\r
+        var ch = row.querySelector('.feed-chunk');\r
+        if (ch) refreshFeedChunkOverflow(ch);\r
+        var agg = body.closest('.process-aggregate');\r
+        refreshAggregateStatsSmart(agg);\r
+        if (!replayingMessages) scrollContentAreaIfFollow(ctx, runSessionId);\r
+        return;\r
+    }\r
+    var ri = uiEventReactIter(parsed);\r
+    appendLog(ctx, text, 'tool-call', runSessionId, ri);\r
+}\r
+\r
+/** 去掉首尾「空白行」（整行仅空格/制表也不保留），保留首行正文缩进与中间空行 */\r
+function trimSurroundingBlankLines(raw) {\r
+    var text = (raw == null) ? '' : String(raw);\r
+    if (!text) return text;\r
+    var lines = text.split('\\n');\r
+    var start = 0;\r
+    var end = lines.length;\r
+    while (start < end && lines[start].trim() === '') start++;\r
+    while (end > start && lines[end - 1].trim() === '') end--;\r
+    if (start >= end) return '';\r
+    return lines.slice(start, end).join('\\n');\r
+}\r
+\r
+function truncateLogTextForUi(raw) {\r
+    const text = (raw == null) ? '' : String(raw);\r
+    if (!text) return text;\r
+    const lines = text.split('\\n');\r
+    if (lines.length > LOG_TRUNCATE_HEAD_LINES + LOG_TRUNCATE_TAIL_LINES) {\r
+        const head = lines.slice(0, LOG_TRUNCATE_HEAD_LINES).join('\\n');\r
+        const tail = lines.slice(-LOG_TRUNCATE_TAIL_LINES).join('\\n');\r
+        const omitted = lines.length - LOG_TRUNCATE_HEAD_LINES - LOG_TRUNCATE_TAIL_LINES;\r
+        return head + '\\n\\n... [中间省略 ' + omitted + ' 行] ...\\n\\n' + tail;\r
+    }\r
+    if (text.length > LOG_TRUNCATE_HEAD_CHARS + LOG_TRUNCATE_TAIL_CHARS) {\r
+        const head = text.slice(0, LOG_TRUNCATE_HEAD_CHARS);\r
+        const tail = text.slice(-LOG_TRUNCATE_TAIL_CHARS);\r
+        const omitted = text.length - LOG_TRUNCATE_HEAD_CHARS - LOG_TRUNCATE_TAIL_CHARS;\r
+        return head + '\\n\\n... [中间省略约 ' + omitted + ' 字符] ...\\n\\n' + tail;\r
+    }\r
+    return text;\r
+}\r
+\r
+function createProcessFeedRow(ctx, type, initialText, streamOpts, runSessionId, toolCallIdOpt) {\r
+    streamOpts = streamOpts || {};\r
+    if (type == null) type = 'log-entry';\r
+    stripWelcome(ctx);\r
+    const body = getProcessBody(ctx);\r
+    if (!body) return;\r
+    const meta = TRACE_ROW[type] || TRACE_ROW['log-entry'];\r
+    const row = document.createElement('div');\r
+    row.className = 'feed-item ' + meta.c;\r
+    row.setAttribute('data-log-type', type);\r
+    if (toolCallIdOpt != null && String(toolCallIdOpt) !== '') row.setAttribute('data-tool-call-id', String(toolCallIdOpt));\r
+    row.innerHTML = '<div class="feed-row">'\r
+        + '<span class="feed-label">' + meta.label + '</span>'\r
+        + '<div class="feed-chunk">'\r
+        + '<div class="feed-chunk-scroller"></div></div></div>';\r
+    const chunk = row.querySelector('.feed-chunk');\r
+    const sc = row.querySelector('.feed-chunk-scroller');\r
+    var txtForUi = initialText;\r
+    if (type === 'llm-reasoning' || type === 'llm-response') txtForUi = trimSurroundingBlankLines(txtForUi);\r
+    sc.textContent = truncateLogTextForUi(txtForUi);\r
+    if (streamOpts.streaming && (type === 'llm-reasoning' || type === 'llm-response')) chunk.classList.add('is-streaming');\r
+    bindFeedChunkInteraction(chunk);\r
+    bindFeedChunkScrollChain(sc);\r
+    body.appendChild(row);\r
+    if (ctx && ctx.currentTurn && body.classList && body.classList.contains('subagent-turn-process')) {\r
+        markSubagentTurnHasProcess(ctx.currentTurn);\r
+    }\r
+    if (type === 'error-log') {\r
+        var errHint = document.createElement('div');\r
+        errHint.className = 'feed-error-contact-hint';\r
+        errHint.textContent = '如需帮助或反馈，请联系GitHub @sugarfreeecho';\r
+        body.appendChild(errHint);\r
+    }\r
+    const agg = body.closest('.process-aggregate');\r
+    if (streamOpts.reactIter != null && Number.isFinite(Number(streamOpts.reactIter))) {\r
+        var ri = Math.max(1, Math.floor(Number(streamOpts.reactIter)));\r
+        row.setAttribute('data-react-iter', String(ri));\r
+        bumpAggregateMaxReactIter(agg, ri);\r
+    }\r
+    if (agg && agg.classList.contains('is-collapsed')) {\r
+        updateProcessBrief(agg);\r
+    }\r
+    else requestAnimationFrame(function () { scheduleFeedChunkOverflowRefresh(chunk); });\r
+    refreshAggregateStatsSmart(agg);\r
+    if (!streamOpts.streaming) scrollContentAreaIfFollow(ctx, runSessionId);\r
+    return sc;\r
+}\r
+\r
+function appendLlmStreamDelta(ctx, ev, runSessionId) {\r
+    if (!ctx || !ctx.llm) return;\r
+    // 收到 reasoning/content 增量时，移除"正在思考中..."条目\r
+    removeTemporaryStatus(ctx);\r
+    const l = ctx.llm;\r
+    const iter = ev.react_iter;\r
+    const seq = Number(ev.stream_seq || 0);\r
+    if (l.llmDeltaLastSeq !== null && seq !== l.llmDeltaLastSeq) finalizeLlmStreamChunks(ctx);\r
+    l.llmDeltaLastSeq = seq;\r
+    const part = ev.type === 'llm_reasoning_delta' ? 'reasoning' : 'response';\r
+    const delta = String(ev.delta || '');\r
+    if (!delta) return;\r
+    if (iter != null) {\r
+        var body0 = getProcessBody(ctx);\r
+        if (body0) bumpAggregateMaxReactIter(body0.closest('.process-aggregate'), iter);\r
+    }\r
+    const streamOpt = { streaming: true };\r
+    if (iter != null && Number.isFinite(Number(iter))) streamOpt.reactIter = Number(iter);\r
+    if (part === 'reasoning') {\r
+        if (l.llmStreamReasoningIter !== iter) {\r
+            flushLlmDeltaText(ctx);\r
+            l.llmStreamReasoningIter = iter;\r
+            l.llmStreamReasoningScroller = createProcessFeedRow(ctx, 'llm-reasoning', '', streamOpt, runSessionId);\r
+        }\r
+        if (!l.llmStreamReasoningScroller) return;\r
+        l.llmPendingReasoningDelta = (l.llmPendingReasoningDelta || '') + delta;\r
+    } else {\r
+        if (l.llmStreamResponseIter !== iter) {\r
+            flushLlmDeltaText(ctx);\r
+            l.llmStreamResponseIter = iter;\r
+            l.llmStreamResponseScroller = createProcessFeedRow(ctx, 'llm-response', '', streamOpt, runSessionId);\r
+        }\r
+        if (!l.llmStreamResponseScroller) return;\r
+        l.llmPendingResponseDelta = (l.llmPendingResponseDelta || '') + delta;\r
+    }\r
+    scheduleLlmDeltaFlush(ctx, runSessionId);\r
+}\r
+\r
+function upsertLlmFeedRow(ctx, content, logType, runSessionId, reactIter) {\r
+    if (!ctx) return null;\r
+    var ri = reactIter != null && Number.isFinite(Number(reactIter)) ? Math.max(1, Math.floor(Number(reactIter))) : null;\r
+    var body = getProcessBody(ctx);\r
+    var txt = truncateLogTextForUi(trimSurroundingBlankLines(String(content || '')));\r
+    if (!txt.trim()) return null;\r
+    if (body && ri != null) {\r
+        var existing = body.querySelector('.feed-item[data-log-type="' + logType + '"][data-react-iter="' + ri + '"]');\r
+        if (existing) {\r
+            var sc = existing.querySelector('.feed-chunk-scroller');\r
+            var ch = existing.querySelector('.feed-chunk');\r
+            if (sc) sc.textContent = txt;\r
+            if (ch) {\r
+                ch.classList.remove('is-streaming');\r
+                scheduleFeedChunkOverflowRefresh(ch);\r
+            }\r
+            if (ctx.llm) resetLlmState(ctx);\r
+            scrollContentAreaIfFollow(ctx, runSessionId);\r
+            return sc;\r
+        }\r
+    }\r
+    if (ctx.llm) resetLlmState(ctx);\r
+    return appendLog(ctx, content, logType, runSessionId, ri);\r
+}\r
+\r
+function parseMessageTimestamp(value) {\r
+    if (value == null || value === '') return null;\r
+    if (typeof value === 'number' && isFinite(value)) {\r
+        return new Date(value > 100000000000 ? value : value * 1000);\r
+    }\r
+    var d = new Date(String(value));\r
+    return isNaN(d.getTime()) ? null : d;\r
+}\r
+\r
+function formatUserMessageTimestamp(value) {\r
+    var d = parseMessageTimestamp(value);\r
+    if (!d) return '';\r
+    try {\r
+        return new Intl.DateTimeFormat(undefined, {\r
+            year: 'numeric',\r
+            month: '2-digit',\r
+            day: '2-digit',\r
+            hour: '2-digit',\r
+            minute: '2-digit',\r
+            timeZoneName: 'short',\r
+            hour12: false,\r
+        }).format(d);\r
+    } catch (e) {\r
+        return d.toLocaleString();\r
+    }\r
+}\r
+\r
+function refreshUserMessageTimes(root) {\r
+    var scope = root || document;\r
+    if (!scope || !scope.querySelectorAll) return;\r
+    scope.querySelectorAll('.user-message-time[data-created-at]').forEach(function (el) {\r
+        var raw = el.getAttribute('data-created-at') || '';\r
+        var txt = formatUserMessageTimestamp(raw);\r
+        if (txt) el.textContent = txt;\r
+    });\r
+}\r
+\r
+function ensureUserMessageTimeAutoRefresh() {\r
+    if (window.__userMessageTimeAutoRefreshBound) return;\r
+    window.__userMessageTimeAutoRefreshBound = true;\r
+    window.addEventListener('focus', function () { refreshUserMessageTimes(document); });\r
+    document.addEventListener('visibilitychange', function () {\r
+        if (!document.hidden) refreshUserMessageTimes(document);\r
+    });\r
+    setInterval(function () { refreshUserMessageTimes(document); }, 60000);\r
+}\r
+\r
+function appendMessage(ctx, role, content, meta, runSessionId) {\r
+    meta = meta || {};\r
+    ensureUserMessageTimeAutoRefresh();\r
+    stripWelcome(ctx);\r
+    const wrap = document.createElement('div');\r
+    wrap.className = 'msg-wrap msg-wrap--' + (role === 'user' ? 'user' : 'assistant');\r
+    if (role === 'assistant') wrap.classList.add('msg-wrap--answer-frame');\r
+    if (meta.eventIndex != null) wrap.setAttribute('data-event-index', String(meta.eventIndex));\r
+    var tTrunc = meta.turnTruncateIdx;\r
+    if (tTrunc == null) { if (role === 'user' && meta.eventIndex != null) tTrunc = meta.eventIndex; }\r
+    if (tTrunc != null && tTrunc >= 0) wrap.setAttribute('data-truncate-from', String(tTrunc));\r
+    if (role === 'user') {\r
+        if (meta.eventIndex != null && meta.eventIndex >= 0) {\r
+            wrap.id = 'user-msg-' + meta.eventIndex;\r
+        } else {\r
+            const n = (ctx.stream || chatContainer).querySelectorAll('.msg-wrap--user').length;\r
+            wrap.id = 'user-msg-' + n;\r
+        }\r
+    }\r
+    const div = document.createElement('div');\r
+    div.className = 'message ' + (role === 'user' ? 'user' : 'assistant');\r
+    var rawStr = content == null ? '' : String(content);\r
+    messageRawMarkdown.set(wrap, rawStr);\r
+    if (role === 'user') {\r
+        if (userMessageShouldCollapse(rawStr)) {\r
+            wrap.classList.add('has-turn-process');\r
+            div.classList.add('is-collapsible');\r
+            // 摘要\r
+            var sum = document.createElement('div');\r
+            sum.className = 'user-msg-summary';\r
+            sum.textContent = buildUserMessageSummary(rawStr);\r
+            linkifyAssistantTextNodes(sum);\r
+            // 完整\r
+            var ful = document.createElement('div');\r
+            ful.className = 'user-msg-full';\r
+            ful.textContent = rawStr;\r
+            linkifyAssistantTextNodes(ful);\r
+            // chevron\r
+            var ch = document.createElement('div');\r
+            ch.className = 'user-msg-chevron';\r
+            var arrow = document.createElement('span');\r
+            arrow.className = 'chevron-arrow';\r
+            ch.appendChild(arrow);\r
+            ch.addEventListener('click', function(e) {\r
+                e.stopPropagation();\r
+                wrap.classList.toggle('user-msg-expanded');\r
+            });\r
+            div.appendChild(sum);\r
+            div.appendChild(ful);\r
+            div.appendChild(ch);\r
+        } else {\r
+            div.textContent = rawStr;\r
+            linkifyAssistantTextNodes(div);\r
+        }\r
+    }\r
+        else {\r
+        div.innerHTML = renderMarkdown(rawStr);\r
+        enhanceAssistantMessageContent(div);\r
+    }\r
+    wrap.appendChild(div);\r
+    if (role === 'user') {\r
+        var createdAt = meta.createdAt || meta.created_at || meta.timestamp || new Date().toISOString();\r
+        wrap.setAttribute('data-created-at', String(createdAt));\r
+    }\r
+    if (role === 'user' && !div.classList.contains('is-collapsible')) {\r
+        renderUserMessageContent(wrap, div, rawStr, linkifyAssistantTextNodes);\r
+    }\r
+    attachMessageToolbar(wrap, role);\r
+    (ctx.stream || chatContainer).appendChild(wrap);\r
+    if (role === 'assistant') {\r
+        if (ctx.currentProcessGroup && ctx.currentProcessGroup.isConnected) {\r
+            ctx.currentProcessGroup.classList.add('is-collapsed');\r
+            const ttop = ctx.currentProcessGroup.querySelector('.process-aggregate-top');\r
+            if (ttop) ttop.setAttribute('aria-expanded', 'false');\r
+            updateProcessBrief(ctx.currentProcessGroup);\r
+        }\r
+        sealProcessGroup(ctx);\r
+    }\r
+    if (role === 'user' && !replayingMessages) rebuildToc({ localOnly: true });\r
+    if (!replayingMessages) {\r
+        if (role === 'user') scrollChatToBottomIfFollow(runSessionId, { force: true });\r
+        else scrollChatToBottomIfFollow(runSessionId, {});\r
+    }\r
+}\r
+\r
+function handleTraceChunkClick(e) {\r
+    if (e) e.stopPropagation();\r
+    this.classList.toggle('expanded');\r
+    var self = this;\r
+    requestAnimationFrame(function () {\r
+        refreshFeedChunkOverflow(self);\r
+        registerMermaidLazy(self);\r
+    });\r
+}\r
+\r
+function bindFeedChunkInteraction(ch) {\r
+    ch.removeEventListener('click', handleTraceChunkClick);\r
+    ch.addEventListener('click', handleTraceChunkClick);\r
+}\r
+\r
+function bindExistingLogs(root) {\r
+    const el = root || getVisibleChatStream() || chatContainer;\r
+    if (!el) return;\r
+    el.querySelectorAll('.feed-chunk').forEach(function (ch) {\r
+        bindFeedChunkInteraction(ch);\r
+        scheduleFeedChunkOverflowRefresh(ch);\r
+        const sc = ch.querySelector('.feed-chunk-scroller');\r
+        if (sc) bindFeedChunkScrollChain(sc);\r
+    });\r
+    el.querySelectorAll('.process-aggregate').forEach(function (agg) {\r
+        bindProcessAggregate(agg);\r
+        if (agg.classList.contains('is-collapsed')) updateProcessBrief(agg);\r
+        refreshAggregateStatsSmart(agg);\r
+    });\r
+    el.querySelectorAll('.process-aggregate-brief').forEach(bindProcessBriefScrollChain);\r
+}\r
+\r
+function appendLog(ctx, content, type, runSessionId, reactIter) {\r
+    if (type == null) type = 'log-entry';\r
+    const tStr = (content == null) ? '' : String(content);\r
+    if ((type === 'llm-reasoning' || type === 'llm-response') && !trimSurroundingBlankLines(tStr).trim()) return null;\r
+    var so = null;\r
+    if (reactIter != null && Number.isFinite(Number(reactIter))) so = { reactIter: Number(reactIter) };\r
+    return createProcessFeedRow(ctx, type, tStr, so, runSessionId);\r
+}\r
+\r
+function flushProgressDeltaText(ctx, logType) {\r
+    if (!ctx || !ctx.progressStream) return;\r
+    var st = ctx.progressStream[logType];\r
+    if (!st) return;\r
+    if (st.flushRaf) {\r
+        cancelAnimationFrame(st.flushRaf);\r
+        st.flushRaf = 0;\r
+    }\r
+    if (st.pending && st.scroller && st.scroller.isConnected) {\r
+        var merged = (st.scroller.textContent || '') + st.pending;\r
+        st.scroller.textContent = truncateLogTextForUi(merged);\r
+        var ch = st.scroller.closest('.feed-chunk');\r
+        if (ch) refreshFeedChunkOverflow(ch);\r
+    }\r
+    st.pending = '';\r
+}\r
+\r
+function finalizeProgressStreamChunks(ctx) {\r
+    if (!ctx) return;\r
+    var types = ctx.progressStream ? Object.keys(ctx.progressStream) : [];\r
+    for (var i = 0; i < types.length; i += 1) flushProgressDeltaText(ctx, types[i]);\r
+    var streamRoot = (ctx._subagentBody && ctx._subagentBody.isConnected) ? ctx._subagentBody : ctx.stream;\r
+    if (streamRoot) {\r
+        streamRoot.querySelectorAll('.feed-item .feed-chunk.is-streaming').forEach(function (ch) {\r
+            ch.classList.remove('is-streaming');\r
+            refreshFeedChunkOverflow(ch);\r
+        });\r
+    }\r
+    ctx.progressStream = {};\r
+}\r
+\r
+function scheduleProgressDeltaFlush(ctx, runSessionId, logType) {\r
+    if (!ctx || !ctx.progressStream) return;\r
+    var st = ctx.progressStream[logType];\r
+    if (!st || st.flushRaf) return;\r
+    st.flushRaf = requestAnimationFrame(function () {\r
+        st.flushRaf = 0;\r
+        flushProgressDeltaText(ctx, logType);\r
+        followStreamProcessScroll(ctx, runSessionId);\r
+    });\r
+}\r
+\r
+/** 每个压缩阶段（裁剪/压缩/要点）共用一条 feed，状态行与正文在同一 scroller */\r
+function ensureProgressScroller(ctx, logType, runSessionId) {\r
+    if (!ctx) return null;\r
+    if (!ctx.progressScrollers) ctx.progressScrollers = {};\r
+    var sc = ctx.progressScrollers[logType];\r
+    if (sc && sc.isConnected) return sc;\r
+    sc = appendLog(ctx, '', logType, runSessionId);\r
+    if (sc) ctx.progressScrollers[logType] = sc;\r
+    return sc;\r
+}\r
+\r
+/** 落盘正文：替换流式段或追加到状态行后，与刷新后 ui_events 回放一致 */\r
+function applyProgressPersistedBody(ctx, content, logType, runSessionId) {\r
+    if (!ctx) return;\r
+    var text = String(content || '').trim();\r
+    if (!text) return;\r
+    var st = ctx.progressStream && ctx.progressStream[logType];\r
+    var bodyOffset = st && typeof st.bodyOffset === 'number' ? st.bodyOffset : null;\r
+    var hadStream = bodyOffset != null;\r
+    finalizeProgressStreamForType(ctx, logType);\r
+    var sc = ensureProgressScroller(ctx, logType, runSessionId);\r
+    if (!sc) return;\r
+    var prevTxt = sc.textContent || '';\r
+    var merged;\r
+    if (hadStream) {\r
+        merged = prevTxt.slice(0, bodyOffset).replace(/\\s+$/, '') + '\\n\\n' + text;\r
+    } else if (prevTxt.trim()) {\r
+        merged = prevTxt.trim() + '\\n\\n' + text;\r
+    } else {\r
+        merged = text;\r
+    }\r
+    sc.textContent = truncateLogTextForUi(merged);\r
+    var chSet = sc.closest('.feed-chunk');\r
+    if (chSet) {\r
+        chSet.classList.remove('is-streaming');\r
+        refreshFeedChunkOverflow(chSet);\r
+        requestAnimationFrame(function () { refreshFeedChunkOverflow(chSet); });\r
+    }\r
+    ctx.progressScrollers[logType] = sc;\r
+    scrollContentAreaIfFollow(ctx, runSessionId);\r
+}\r
+\r
+/** 压缩/要点执行端输出：在同一 feed 内流式追加正文（不另起 feed 块） */\r
+function appendProgressStreamDelta(ctx, delta, logType, runSessionId) {\r
+    if (!ctx || !delta) return;\r
+    if (!ctx.progressStream) ctx.progressStream = {};\r
+    var piece = String(delta);\r
+    if (!piece) return;\r
+    var sc = ensureProgressScroller(ctx, logType, runSessionId);\r
+    if (!sc) return;\r
+    var chunk = sc.closest('.feed-chunk');\r
+    if (chunk) chunk.classList.add('is-streaming');\r
+    var st = ctx.progressStream[logType];\r
+    if (!st) {\r
+        var head = (sc.textContent || '').trim();\r
+        var bodyOffset = sc.textContent.length;\r
+        if (head) {\r
+            sc.textContent = head + '\\n\\n';\r
+            bodyOffset = sc.textContent.length;\r
+        }\r
+        st = { scroller: sc, pending: '', flushRaf: 0, bodyOffset: bodyOffset };\r
+        ctx.progressStream[logType] = st;\r
+    }\r
+    st.pending += piece;\r
+    scheduleProgressDeltaFlush(ctx, runSessionId, logType);\r
+}\r
+\r
+/** 同类型进度行合并追加，实现裁剪/压缩/要点分轨流式展示 */\r
+function appendProgressLog(ctx, content, logType, runSessionId) {\r
+    if (!ctx) return;\r
+    finalizeProgressStreamForType(ctx, logType);\r
+    if (!ctx.progressScrollers) ctx.progressScrollers = {};\r
+    var line = String(content || '');\r
+    if (!line.trim()) return;\r
+    var prev = ctx.progressScrollers[logType];\r
+    if (prev && prev.isConnected) {\r
+        var prevTxt = prev.textContent || '';\r
+        prev.textContent = truncateLogTextForUi(prevTxt ? (prevTxt + '\\n' + line) : line);\r
+        var chMerge = prev.closest('.feed-chunk');\r
+        if (chMerge) {\r
+            refreshFeedChunkOverflow(chMerge);\r
+            requestAnimationFrame(function () { refreshFeedChunkOverflow(chMerge); });\r
+        }\r
+        scrollContentAreaIfFollow(ctx, runSessionId);\r
+        return;\r
+    }\r
+    var sc = ensureProgressScroller(ctx, logType, runSessionId);\r
+    if (!sc) return;\r
+    sc.textContent = truncateLogTextForUi(line);\r
+    var chNew = sc.closest('.feed-chunk');\r
+    if (chNew) {\r
+        refreshFeedChunkOverflow(chNew);\r
+        requestAnimationFrame(function () { refreshFeedChunkOverflow(chNew); });\r
+    }\r
+    scrollContentAreaIfFollow(ctx, runSessionId);\r
+}\r
+\r
+function finalizeProgressStreamForType(ctx, logType) {\r
+    if (!ctx || !logType) return;\r
+    flushProgressDeltaText(ctx, logType);\r
+    if (ctx.progressStream && ctx.progressStream[logType]) {\r
+        var st = ctx.progressStream[logType];\r
+        if (st.scroller && st.scroller.isConnected) {\r
+            var ch = st.scroller.closest('.feed-chunk');\r
+            if (ch) {\r
+                ch.classList.remove('is-streaming');\r
+                refreshFeedChunkOverflow(ch);\r
+            }\r
+        }\r
+        delete ctx.progressStream[logType];\r
+    }\r
+}\r
+\r
+/* ── Subagent 浮层 / 过程块 ── */\r
+`,qe=`var subagentPanelOpen = false;
 var subagentPanelBound = false;
 var subagentDockExpanded = false;
 
@@ -7230,7 +8373,7 @@ function dispatchSubagentCardEvent(ctx, card, event, eventIndex, agentId) {
     var t = event.type;
     if (t === 'subagent_start' || t === 'subagent_finish') return;
     if (t === 'user') {
-        openSubagentTurn(ctx, event.content || '', eventIndex);
+        openSubagentTurn(ctx, event.content || '', eventIndex, event.created_at || event.createdAt || event.timestamp);
         if (typeof eventIndex === 'number') ctx.lastUserEventIndex = eventIndex;
         return;
     }
@@ -7749,7 +8892,7 @@ function updateSubagentBlockFinish(ctx, event) {
     applySubagentBlockFinish(blk, event);
     handleSubagentLifecycleEvent(event);
 }
-`,G=`function renderEvent(ctx, event, eventIndex, runSessionId) {
+`,He=`function renderEvent(ctx, event, eventIndex, runSessionId) {
     if (!event || typeof event !== 'object') return;
     var eventSessionId = runSessionId || currentSessionId || '';
     if (eventSessionId && !event.__storeApplied) {
@@ -7762,7 +8905,13 @@ function updateSubagentBlockFinish(ctx, event) {
     if (event.type === 'user') {
         if (typeof eventIndex === 'number') ctx.lastUserEventIndex = eventIndex;
         sealProcessGroup(ctx);
-        appendMessage(ctx, 'user', event.content || '', { eventIndex: eventIndex, turnTruncateIdx: eventIndex }, runSessionId);
+        appendMessage(ctx, 'user', event.content || '', {
+            eventIndex: eventIndex,
+            turnTruncateIdx: eventIndex,
+            createdAt: event.created_at || event.createdAt || event.timestamp,
+        }, runSessionId);
+    } else if (event.type === 'user_steer') {
+        appendLog(ctx, event.content || '', 'user-steer', runSessionId);
     } else if (event.type === 'final') {
         appendMessage(ctx, 'assistant', event.content || '', { eventIndex: eventIndex, turnTruncateIdx: ctx.lastUserEventIndex }, runSessionId);
     } else if (event.type === 'process_metrics') {
@@ -7839,20 +8988,31 @@ function updateSubagentBlockFinish(ctx, event) {
         if (fallbackContent.trim()) appendLog(ctx, fallbackContent, 'log-entry', runSessionId);
     }
 }
-`,K=`function setSendButtonState() {
+`,je=`function setSendButtonState() {
     sendBtn.disabled = false;
     if (isSessionRunning(currentSessionId)) {
-        sendBtn.innerHTML = '停止 <span class="loader" aria-hidden="true"></span>';
+        const hasDraft = (typeof inputHasSendableText === 'function')
+            ? inputHasSendableText()
+            : !!(messageInput && String(messageInput.value || '').trim());
+        sendBtn.innerHTML = hasDraft ? '追问' : '停止 <span class="loader" aria-hidden="true"></span>';
         sendBtn.classList.add('is-stop');
+        sendBtn.classList.toggle('is-followup', hasDraft);
     } else {
         sendBtn.textContent = '发送';
         sendBtn.classList.remove('is-stop');
+        sendBtn.classList.remove('is-followup');
     }
 }
 
-async function requestInterrupt(sessionId) {
+async function requestInterrupt(sessionId, runId, reason) {
     if (!sessionId) return;
-    try { await fetch('/sessions/' + sessionId + '/interrupt', { method: 'POST' }); }
+    try {
+        await fetch('/sessions/' + sessionId + '/interrupt', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ run_id: runId || '', reason: reason || '' }),
+        });
+    }
     catch (e) { /* ignore */ }
 }
 
@@ -7860,13 +9020,15 @@ function pauseCurrentRun() {
     if (!currentSessionId) return;
     const run = getSessionRunState(currentSessionId);
     const sid = currentSessionId;
+    const activeInfo = sessionStore.getActiveRunInfo(sid) || {};
+    const runId = run && run.runId ? run.runId : (activeInfo.run_id || activeInfo.runId || '');
     suppressSessionServerStreamActive(sid);
     if (!run) {
         setSendButtonState();
         syncSessionListIndicatorClasses();
         renderSessionListIfChanged(false);
-        void requestInterrupt(sid);
-        setTimeout(function () { reconcileRunStateFromServer({ silent: true }); }, 800);
+        void requestInterrupt(sid, runId);
+        setTimeout(function () { reconcileRunStateFromServer({ silent: true, respectStopSuppress: true }); }, 3000);
         return;
     }
     const ctx = run.ctx;
@@ -7878,8 +9040,8 @@ function pauseCurrentRun() {
     renderSessionListIfChanged(false);
     appendLog(ctx, '已请求停止当前任务', 'status', sid);
     sealProcessGroup(ctx);
-    void requestInterrupt(sid);
-    setTimeout(function () { reconcileRunStateFromServer({ silent: true }); }, 800);
+    void requestInterrupt(sid, runId);
+    setTimeout(function () { reconcileRunStateFromServer({ silent: true, respectStopSuppress: true }); }, 3000);
 }
 
 /** 在当前对话中定位最近一条用户消息并重新发送。返回 true 表示已触发展开发送。 */
@@ -7918,7 +9080,12 @@ function showLoading() {
     box.className = 'skeleton';
     box.id = 'chat-loading';
     box.setAttribute('role', 'status');
-    box.innerHTML = '<div class="skeleton-line" style="width:38%"></div><div class="skeleton-line" style="width:72%"></div><div class="skeleton-line" style="width:55%"></div><div class="skeleton-line" style="width:64%"></div>';
+    box.innerHTML = ''
+        + '<div class="skeleton-page" aria-hidden="true">'
+        + '<div class="skeleton-mast"><span></span><span></span></div>'
+        + '<div class="skeleton-hero"><div class="skeleton-image"></div><div class="skeleton-column"><span></span><span></span><span></span><span></span></div></div>'
+        + '<div class="skeleton-grid"><div><span></span><span></span><span></span></div><div><span></span><span></span><span></span></div><div><span></span><span></span><span></span></div></div>'
+        + '</div><div class="skeleton-copy">加载中</div>';
     box.setAttribute('data-ui-tip', '加载会话');
     bindUiHoverTip(box);
     (getVisibleChatStream() || chatContainer).appendChild(box);
@@ -7931,15 +9098,20 @@ function hideLoading() { const loader = document.getElementById('chat-loading');
 function applySessionItemIndicators(itemDiv, sessionId, opts) {
     opts = opts || {};
     if (!itemDiv || !sessionId) return;
-    itemDiv.classList.remove('is-generating', 'is-unread-result');
+    itemDiv.classList.remove('is-generating', 'is-unread-result', 'is-unread-failed');
     var nameEl = itemDiv.querySelector('.session-name');
     if (nameEl) nameEl.removeAttribute('data-ui-tip');
     if (isSessionRunning(sessionId)) {
         itemDiv.classList.add('is-generating');
         if (nameEl) nameEl.setAttribute('data-ui-tip', '生成中…');
-    } else if (sessionUnreadComplete.has(sessionId)) {
-        itemDiv.classList.add('is-unread-result');
-        if (nameEl) nameEl.setAttribute('data-ui-tip', '有新回复，点击查看');
+    } else {
+        var sess = sessionStore.get(sessionId);
+        var localUnreadResult = sessionUnreadComplete.has(sessionId);
+        var hasUnreadResult = sess ? !!sess.unread_result : localUnreadResult;
+        if (!hasUnreadResult) return;
+        var failed = !!(sess && sess.unread_result_status === 'failed');
+        itemDiv.classList.add(failed ? 'is-unread-failed' : 'is-unread-result');
+        if (nameEl) nameEl.setAttribute('data-ui-tip', failed ? '任务失败，点击查看' : '有新回复，点击查看');
     }
     if (nameEl) bindUiHoverTip(nameEl);
 }
@@ -8066,7 +9238,7 @@ function buildAndBindSessionRow(sess, allSessions, nextStreamMap) {
                     if (previous) applyOptimisticSessionUpdate(sess.id, previous);
                     throw new Error('pin failed: ' + response.status);
                 }
-                void loadSessions({ force: true });
+                void refreshSingleSessionRow(sess.id);
             } catch (err) { console.error('置顶失败', err); }
         });
     }
@@ -8084,9 +9256,7 @@ function buildAndBindSessionRow(sess, allSessions, nextStreamMap) {
                     if (previous) applyOptimisticSessionUpdate(sess.id, previous);
                     throw new Error('archive failed: ' + response.status);
                 }
-                const wasArchivedLoaded = sessionStore.archivedLoaded;
-                void loadSessions({ force: true, skipArchivedRefresh: true });
-                if (wasArchivedLoaded) void loadArchivedSessions({ background: true });
+                void refreshSingleSessionRow(sess.id);
             } catch (err) { console.error('归档失败', err); }
         });
     }
@@ -8122,6 +9292,7 @@ function buildAndBindSessionRow(sess, allSessions, nextStreamMap) {
             persistSessionUnread();
             delete draftBySession[deletedSessionId];
             removeStoredInputDraft(deletedSessionId);
+            if (typeof removeStoredFollowupQueue === 'function') removeStoredFollowupQueue(deletedSessionId);
             delete lastUserMessageBySession[deletedSessionId];
             clearContextStateForSession(deletedSessionId);
             if (isSessionRunning(sess.id)) {
@@ -8142,12 +9313,9 @@ function buildAndBindSessionRow(sess, allSessions, nextStreamMap) {
                 .catch(function (err) {
                     console.error('删除会话失败:', err);
                     sessionStore.clearDeletedSessionTombstone(deletedSessionId);
-                    void loadSessions({ force: true, skipArchivedRefresh: true });
+                    void loadSessions({ skipArchivedRefresh: true });
                     if (wasArchivedLoaded) void loadArchivedSessions({ background: true });
                 });
-            if (wasArchivedLoaded) {
-                void loadArchivedSessions({ background: true });
-            }
         });
     }
     const nameSpan = div.querySelector('.session-name');
@@ -8208,6 +9376,14 @@ async function refreshSingleSessionRow(sessionId) {
             stream_active: !!sess.stream_active,
         });
         setSessionServerStreamActive(sess.id, !!sess.stream_active);
+        if (sess.unread_result) {
+            if (!sessionUnreadComplete.has(sess.id)) {
+                sessionUnreadComplete.add(sess.id);
+                persistSessionUnread();
+            }
+        } else if (sessionUnreadComplete.delete(sess.id)) {
+            persistSessionUnread();
+        }
         if (Number(sess.subagent_running || 0) > 0) {
             sessionUnreadComplete.delete(sess.id);
             persistSessionUnread();
@@ -8248,6 +9424,7 @@ function computeSessionListRenderKey() {
             s.pinned ? 'p' : '',
             s.archived ? 'a' : '',
             s.stream_active ? 'r' : '',
+            s.unread_result ? ('u:' + (s.unread_result_status || 'success')) : '',
             s.last_activity_at || s.updated_at || '',
             s.last_user_preview || '',
             s.subagent_running || 0,
@@ -8263,6 +9440,7 @@ function computeSessionListRenderKey() {
             a.id,
             a.name || '',
             a.pinned ? 'p' : '',
+            a.unread_result ? ('u:' + (a.unread_result_status || 'success')) : '',
             a.last_activity_at || a.updated_at || '',
             a.last_user_preview || '',
         ].join('\\u001f'));
@@ -8420,7 +9598,7 @@ async function loadSessions(opts) {
 
         renderSessionListIfChanged(!!opts.forceRender);
         sessionStore.ui.loadingSessions = false;
-        if (!opts.skipArchivedRefresh && sessionStore.archivedLoaded) {
+        if (opts.refreshArchived && !opts.skipArchivedRefresh && sessionStore.archivedLoaded) {
             void loadArchivedSessions({ background: true });
         }
         return;
@@ -8433,6 +9611,15 @@ async function loadSessions(opts) {
 
 async function reconcileRunStateFromServer(opts) {
     opts = opts || {};
+    const suppressedBeforeFetch = new Set();
+    if (opts.respectStopSuppress) {
+        sessionStore.sessionOrder.forEach(function (sid) {
+            if (isSessionStreamStopSuppressed(sid)) suppressedBeforeFetch.add(String(sid));
+        });
+        if (currentSessionId && isSessionStreamStopSuppressed(currentSessionId)) {
+            suppressedBeforeFetch.add(String(currentSessionId));
+        }
+    }
     let snapshot = null;
     try {
         const cur = currentSessionId ? sessionStore.get(currentSessionId) : null;
@@ -8444,6 +9631,20 @@ async function reconcileRunStateFromServer(opts) {
         return;
     }
     applySessionSnapshot(snapshot);
+    if (opts.respectStopSuppress) {
+        suppressedBeforeFetch.forEach(function (sid) {
+            if (isSessionStreamStopSuppressed(sid)) {
+                sessionStore.setStreamActive(sid, false);
+                const sess = sessionStore.get(sid);
+                if (sess) {
+                    sess.stream_active = false;
+                    sess.run_active = false;
+                    sess.run_started_at = null;
+                }
+                sessionStore.activeRunInfoBySession.delete(sid);
+            }
+        });
+    }
     const active = new Set();
     sessionStore.activeRunInfoBySession.forEach(function (info, sid) {
         if (info && info.run_active === true) active.add(String(sid));
@@ -8486,6 +9687,7 @@ async function loadSessionMessages(sessionId, scrollBehavior, opts) {
         if (!response.ok) throw new Error('messages failed: ' + response.status);
         const raw = await response.json();
         if (loadToken !== messageLoadEpoch || sessionId !== currentSessionId) return;
+        if (getSessionRunState(sessionId)) return;
         document.getElementById('chat-loading')?.remove();
         if (!getVisibleChatStream()) ensureVisibleChatStreamSlot();
         const vis = getVisibleChatStream();
@@ -8516,15 +9718,14 @@ async function loadSessionMessages(sessionId, scrollBehavior, opts) {
             range_end: events.length,
         });
         if (!opts.full && pageMeta) {
-            sessionHistoryPaging = {
+            setSessionHistoryPaging({
                 sessionId: sessionId,
                 total: pageMeta.total,
                 range_start: pageMeta.range_start,
                 range_end: pageMeta.range_end,
                 has_older: !!pageMeta.has_older,
-            };
+            });
             ensureHistorySentinel(getVisibleChatStream());
-            updateHistorySentinelVisibility();
         }
         if (events.length === 0) {
             suppressTocDuringSessionLoad = false;
@@ -8569,7 +9770,7 @@ async function loadSessionMessages(sessionId, scrollBehavior, opts) {
         bindExistingLogs();
         scheduleTocActiveUpdate();
         scheduleContextTokensAfterPaint(sessionId);
-        await refreshTodoPlanPanel();
+        renderTodoPlanForCurrentSession();
     } catch (error) {
         console.error('加载会话消息失败:', error);
         document.getElementById('chat-loading')?.remove();
@@ -8589,8 +9790,7 @@ async function switchSession(sessionId) {
     clearTodoForSessionLoad();
     pendingRewriteTruncate = null;
     hideRewriteUndoToast();
-    sessionUnreadComplete.delete(sessionId);
-    persistSessionUnread();
+    clearSessionUnreadState(sessionId);
     const leaving = currentSessionId;
     saveChatScrollForSession(leaving);
     stashInputDraft(leaving);
@@ -8600,6 +9800,8 @@ async function switchSession(sessionId) {
     setCurrentSessionState(sessionId);
     localStorage.setItem('lastSessionId', sessionId);
     restoreInputDraft(sessionId);
+    if (typeof renderFollowupQueue === 'function') renderFollowupQueue(sessionId);
+    if (typeof refreshModelProfileSelector === 'function') refreshModelProfileSelector(sessionId);
     syncSessionListIndicatorClasses();
     setSendButtonState();
     if (restoreStreamForRunningSession(sessionId)) {
@@ -8609,7 +9811,7 @@ async function switchSession(sessionId) {
         updateSessionTitle();
         scheduleContextTokensAfterPaint(sessionId);
         applyChatScrollAfterHistoryLoad(sessionId, 'saved-or-bottom');
-        await refreshTodoPlanPanel();
+        renderTodoPlanForCurrentSession();
         if (switchToken !== switchSessionEpoch || sessionId !== currentSessionId) return;
         /* 让 rebuildToc 的 /user_turns fetch 先发出，subagent 面板（含 N 个 /messages）延后一帧
            避免抢占带宽与主线程，导致目录最后才就绪。 */
@@ -8673,15 +9875,17 @@ async function createNewSessionInner() {
         setCurrentSessionState(data.session_id);
         localStorage.setItem('lastSessionId', currentSessionId);
         restoreInputDraft(currentSessionId);
+        if (typeof renderFollowupQueue === 'function') renderFollowupQueue(currentSessionId);
+        if (typeof refreshModelProfileSelector === 'function') refreshModelProfileSelector(currentSessionId);
         if (!getVisibleChatStream()) ensureVisibleChatStreamSlot();
         setWelcome();
         replayingMessages = false;
         if (data && data.session) {
             syncArchivedSessionStateFromStore();
             renderSessionListIfChanged(true);
-            void loadSessions({ force: true });
+            void refreshSingleSessionRow(data.session_id);
         } else {
-            await loadSessions({ force: true });
+            await loadSessions();
         }
         setSendButtonState();
         maybeStartStreamPollForSession(currentSessionId);
@@ -8691,7 +9895,7 @@ async function createNewSessionInner() {
         appendLogVisible('创建新会话失败', 'error-log');
     }
 }
-`,z=`async function consumeAgentSseResponse(response, runCtx, runSessionId, streamEventIdx) {
+`,We=`async function consumeAgentSseResponse(response, runCtx, runSessionId, streamEventIdx) {
     if (!response || !response.body) throw new Error('stream response missing body');
     var ct0 = (response.headers && response.headers.get ? (response.headers.get('content-type') || '') : '').toLowerCase();
     if (!response.ok || ct0.indexOf('text/event-stream') < 0) {
@@ -8711,7 +9915,16 @@ async function createNewSessionInner() {
             const data = line.slice(6);
             if (data === '[DONE]') {
                 finalizeLlmStreamChunks(runCtx);
-                void refreshTodoPlanPanel();
+                finalizeProgressStreamChunks(runCtx);
+                await ensureFinalVisibleAfterRun(runSessionId, runCtx, { delayMs: 80 });
+                streamEventIdx = await reconcileProjectedMessagesAfter(runSessionId, runCtx, streamEventIdx - 1);
+                sealProcessGroup(runCtx);
+                markSessionRunInactive(runSessionId);
+                if (getSessionRunState(runSessionId)) clearSessionRunState(runSessionId);
+                syncSessionListIndicatorClasses();
+                setSendButtonState();
+                if (runSessionId === currentSessionId) renderTodoPlanForCurrentSession();
+                scheduleFollowupQueueDrain(runSessionId, 0);
                 if (liveAutoFollow) {
                     scrollProcessBodyToBottom(runCtx, runSessionId);
                     scrollChatToBottomIfFollow(runSessionId, {});
@@ -8722,6 +9935,18 @@ async function createNewSessionInner() {
                 const parsed = JSON.parse(data);
                 const eventSessionId = parsed.session_id || parsed.sessionId || runSessionId;
                 if (!sessionStore.shouldAcceptSseEvent(eventSessionId, parsed.seq)) continue;
+                if (parsed.type === 'user_steer' && parsed.steer) {
+                    var steerEventIndex = parsed.ephemeral && Number.isFinite(Number(parsed.seq)) ? Number(parsed.seq) : streamEventIdx;
+                    try {
+                        applyMessageEvent(eventSessionId, parsed, steerEventIndex, 'sse');
+                    } catch (eStoreSteer) {
+                        console.error('store user steer event failed:', eStoreSteer);
+                    }
+                    removeConsumedFollowupSteer(eventSessionId, parsed);
+                    appendLog(runCtx, parsed.content || '', 'user-steer', runSessionId);
+                    streamEventIdx += 1;
+                    continue;
+                }
                 const reduced = applySessionEvent(parsed, {
                     sessionId: eventSessionId,
                     eventIndex: parsed.ephemeral && Number.isFinite(Number(parsed.seq)) ? Number(parsed.seq) : streamEventIdx,
@@ -8731,12 +9956,18 @@ async function createNewSessionInner() {
                     if (parsed.type === 'run_finished' || parsed.type === 'run_interrupted' || parsed.type === 'run_failed') {
                         finalizeLlmStreamChunks(runCtx);
                         finalizeProgressStreamChunks(runCtx);
+                        if (parsed.type === 'run_finished') {
+                            await ensureFinalVisibleAfterRun(eventSessionId, runCtx, { delayMs: 80 });
+                        }
+                        sealProcessGroup(runCtx);
                         if (eventSessionId === runSessionId && getSessionRunState(runSessionId)) {
                             clearSessionRunState(runSessionId);
                         }
                         syncSessionListIndicatorClasses();
                         setSendButtonState();
-                        return streamEventIdx;
+                        if (eventSessionId === runSessionId) scheduleFollowupQueueDrain(runSessionId, 0);
+                        streamEventIdx += 1;
+                        continue;
                     }
                     syncSessionListIndicatorClasses();
                     continue;
@@ -8750,6 +9981,11 @@ async function createNewSessionInner() {
                     /* 任何携带 agent_id 的 ephemeral 都属于子 agent；无论投递成功与否都不能 fall-through
                        到父 ctx 的 appendLlmStreamDelta，否则会污染主对话区。 */
                     if (parsed.agent_id) { handleSubagentStreamEvent(parsed, streamEventIdx, runSessionId); continue; }
+                    if (parsed.type === 'llm_stream_aborted') {
+                        removeTemporaryStatus(runCtx);
+                        discardLlmStreamChunks(runCtx, parsed);
+                        continue;
+                    }
                     if (parsed.type === 'tool_approval_required') {
                         finalizeLlmStreamChunks(runCtx);
                         var aidApr = parsed.approval_id != null ? String(parsed.approval_id) : '';
@@ -8828,11 +10064,138 @@ async function createNewSessionInner() {
                     event: parsed,
                     source: 'sse',
                 }, runSessionId);
+                if (parsed.type === 'final' && eventSessionId === runSessionId) {
+                    finalizeLlmStreamChunks(runCtx);
+                    finalizeProgressStreamChunks(runCtx);
+                    markSessionRunInactive(runSessionId);
+                    if (getSessionRunState(runSessionId)) clearSessionRunState(runSessionId);
+                    syncSessionListIndicatorClasses();
+                    setSendButtonState();
+                    scheduleFollowupQueueDrain(runSessionId, 250);
+                }
                 streamEventIdx += 1;
             } catch (e) { console.error('解析事件失败:', e); }
         }
     }
+    await ensureFinalVisibleAfterRun(runSessionId, runCtx, { delayMs: 120 });
+    streamEventIdx = await reconcileProjectedMessagesAfter(runSessionId, runCtx, streamEventIdx - 1);
     return streamEventIdx;
+}
+
+function latestVisibleUserEventIndex(stream) {
+    var maxIdx = -1;
+    if (!stream || !stream.querySelectorAll) return maxIdx;
+    stream.querySelectorAll('.msg-wrap--user[data-event-index]').forEach(function (wrap) {
+        var n = Number(wrap.getAttribute('data-event-index'));
+        if (Number.isFinite(n)) maxIdx = Math.max(maxIdx, Math.floor(n));
+    });
+    return maxIdx;
+}
+
+function hasVisibleFinalAfterUser(stream, userEventIndex) {
+    if (!stream || !stream.querySelectorAll) return false;
+    var found = false;
+    stream.querySelectorAll('.msg-wrap--assistant[data-event-index]').forEach(function (wrap) {
+        if (found) return;
+        var n = Number(wrap.getAttribute('data-event-index'));
+        if (Number.isFinite(n) && Math.floor(n) > userEventIndex) found = true;
+    });
+    return found;
+}
+
+function findStoredFinalAfterUser(sessionId, userEventIndex) {
+    var events = [];
+    try { events = selectMessageEvents(sessionId) || []; } catch (e) { events = []; }
+    for (var i = events.length - 1; i >= 0; i -= 1) {
+        var rec = events[i];
+        if (!rec || rec.type !== 'final') continue;
+        if (Number.isFinite(Number(rec.index)) && Number(rec.index) > userEventIndex) return rec;
+    }
+    return null;
+}
+
+async function ensureFinalVisibleAfterRun(sessionId, ctx, opts) {
+    opts = opts || {};
+    var sid = String(sessionId || '');
+    if (!sid || sid !== currentSessionId) return false;
+    var stream = (ctx && ctx.stream && ctx.stream.isConnected) ? ctx.stream : getVisibleChatStream();
+    if (!stream) return false;
+    var lastUserIdx = latestVisibleUserEventIndex(stream);
+    if (hasVisibleFinalAfterUser(stream, lastUserIdx)) return true;
+    var storedFinal = findStoredFinalAfterUser(sid, lastUserIdx);
+    if (storedFinal) {
+        var renderCtx = ctx || newDomContext(stream);
+        renderCtx.stream = stream;
+        renderCtx.lastUserEventIndex = Math.max(renderCtx.lastUserEventIndex || -1, lastUserIdx);
+        renderMessageRecord(renderCtx, storedFinal, sid);
+        if (hasVisibleFinalAfterUser(stream, lastUserIdx)) return true;
+    }
+    var delayMs = Math.max(0, Number(opts.delayMs) || 0);
+    if (delayMs) await new Promise(function (resolve) { setTimeout(resolve, delayMs); });
+    if (sid !== currentSessionId) return false;
+    stream = getVisibleChatStream();
+    if (!stream || hasVisibleFinalAfterUser(stream, lastUserIdx)) return true;
+    try {
+        await loadSessionMessages(sid, 'bottom', { full: true });
+        return true;
+    } catch (e) {
+        console.error('final visibility reconcile failed:', e);
+        return false;
+    }
+}
+
+async function reconcileProjectedMessagesAfter(sessionId, ctx, afterIndex) {
+    var sid = String(sessionId || '');
+    var idx = Number(afterIndex);
+    if (!sid || !Number.isFinite(idx)) return Number.isFinite(idx) ? idx + 1 : 0;
+    var nextIndex = Math.max(0, Math.floor(idx) + 1);
+    var renderCtx = ctx || null;
+    var pageAfter = Math.floor(idx);
+    var safety = 0;
+    while (safety < 6) {
+        safety += 1;
+        try {
+            var url = '/sessions/' + encodeURIComponent(sid)
+                + '/messages?after_index=' + encodeURIComponent(String(pageAfter))
+                + '&limit=500';
+            var response = await fetch(url);
+            var data = await response.json().catch(function () { return null; });
+            if (!response.ok || !data || typeof data !== 'object') break;
+            var events = Array.isArray(data.events) ? data.events : [];
+            var rangeStart = Number.isFinite(Number(data.range_start)) ? Math.floor(Number(data.range_start)) : (pageAfter + 1);
+            for (var i = 0; i < events.length; i += 1) {
+                var ev = events[i];
+                var eventIndex = rangeStart + i;
+                nextIndex = Math.max(nextIndex, eventIndex + 1);
+                if (!ev || typeof ev !== 'object' || !ev.type) continue;
+                var existing = selectMessageEventsInRange(sid, eventIndex, eventIndex + 1);
+                if (existing && existing.length) continue;
+                if (!renderCtx) {
+                    var stream = sid === currentSessionId ? getVisibleChatStream() : null;
+                    if (stream) renderCtx = newDomContext(stream);
+                }
+                if (renderCtx && renderCtx.stream && renderCtx.stream.isConnected) {
+                    reduceAndRenderMessageEvent(renderCtx, ev, {
+                        sessionId: sid,
+                        eventIndex: eventIndex,
+                        source: 'projected-reconcile',
+                    });
+                } else {
+                    applySessionEvent(ev, {
+                        sessionId: sid,
+                        eventIndex: eventIndex,
+                        source: 'projected-reconcile',
+                    });
+                }
+            }
+            if (!data.has_newer || !events.length) break;
+            pageAfter = nextIndex - 1;
+        } catch (e) {
+            console.error('projected message reconcile failed:', e);
+            break;
+        }
+    }
+    return nextIndex;
 }
 
 async function startContinueAfterSubagents(sessionId) {
@@ -8881,6 +10244,9 @@ async function startContinueAfterSubagents(sessionId) {
         }
         const ac = new AbortController();
         setSessionRunState(runSessionId, { controller: ac, ctx: runCtx });
+        if (sessionStore && typeof sessionStore.resetSseSeq === 'function') {
+            sessionStore.resetSseSeq(runSessionId);
+        }
         setSendButtonState();
         syncSessionListIndicatorClasses();
         liveAutoFollow = true;
@@ -8901,7 +10267,10 @@ async function startContinueAfterSubagents(sessionId) {
         } finally {
             finalizeLlmStreamChunks(runCtx);
             finalizeProgressStreamChunks(runCtx);
-            void refreshTodoPlanPanel();
+            if (runSessionId === currentSessionId && getRunAbortReason(runSessionId, runCtx) !== 'user') {
+                await ensureFinalVisibleAfterRun(runSessionId, runCtx, { delayMs: 120 });
+            }
+            if (runSessionId === currentSessionId) renderTodoPlanForCurrentSession();
             if (liveAutoFollow) {
                 scrollProcessBodyToBottom(runCtx, runSessionId);
                 scrollChatToBottomIfFollow(runSessionId, {});
@@ -8910,7 +10279,7 @@ async function startContinueAfterSubagents(sessionId) {
             setSendButtonState();
             syncSessionListIndicatorClasses();
             void refreshSingleSessionRow(runSessionId);
-            await refreshContextTokensFromServer(runSessionId);
+            applyContextTokenLabelForCurrentSession();
         }
         hideSubagentContinueBanner();
         if (!subagentContinueDismissedForSession[sessionId]) updateSubagentContinueBanner(sessionId);
@@ -8938,6 +10307,7 @@ async function attachSessionEventStream(sessionId, opts) {
         var existingProcessGroup = runCtx.stream.querySelector('.process-aggregate:last-of-type');
         if (existingProcessGroup) {
             runCtx.currentProcessGroup = existingProcessGroup;
+            existingProcessGroup.classList.add('is-running');
             bindProcessAggregate(existingProcessGroup);
             var activeInfo = sessionStore.getActiveRunInfo(runSessionId) || {};
             if (activeInfo.started_at) {
@@ -8959,7 +10329,9 @@ async function attachSessionEventStream(sessionId, opts) {
         liveAutoFollow = true;
         streamProcNearBottom = true;
         const preCount = await getUiEventCount(runSessionId);
-        const response = await fetch('/sessions/' + encodeURIComponent(runSessionId) + '/stream', { signal: ac.signal });
+        const streamUrl = '/sessions/' + encodeURIComponent(runSessionId)
+            + '/stream?after_index=' + encodeURIComponent(String(preCount - 1));
+        const response = await fetch(streamUrl, { signal: ac.signal });
         await consumeAgentSseResponse(response, runCtx, runSessionId, preCount);
     } catch (error) {
         if (error && error.name === 'AbortError') return;
@@ -8971,6 +10343,9 @@ async function attachSessionEventStream(sessionId, opts) {
             finalizeLlmStreamChunks(runCtx);
             finalizeProgressStreamChunks(runCtx);
         }
+        if (runSessionId === currentSessionId && getRunAbortReason(runSessionId, runCtx) !== 'user') {
+            await ensureFinalVisibleAfterRun(runSessionId, runCtx, { delayMs: 120 });
+        }
         if (getSessionRunState(runSessionId) && getSessionRunState(runSessionId).reattached) {
             clearSessionRunState(runSessionId);
         }
@@ -8978,15 +10353,18 @@ async function attachSessionEventStream(sessionId, opts) {
         syncSessionListIndicatorClasses();
         void refreshSingleSessionRow(runSessionId);
         setTimeout(function () { reconcileRunStateFromServer({ silent: true }); }, 800);
-        await refreshContextTokensFromServer(runSessionId);
-        if (runSessionId === currentSessionId) updateSubagentContinueBanner(runSessionId);
+        applyContextTokenLabelForCurrentSession();
+        if (runSessionId === currentSessionId) {
+            clearSessionUnreadState(runSessionId);
+            updateSubagentContinueBanner(runSessionId);
+        }
     }
 }
 
 async function processRewriteTruncateAsync(pr) {
     try {
         const anchor = document.querySelector('.msg-wrap--user[data-truncate-from="' + String(pr.before) + '"]');
-        const res = await truncateSessionOnServer(pr.before);
+        const res = await truncateSessionOnServer(pr.before, { sessionId: pr.sessionId, backup: false });
         if (!res || !res.ok) {
             showUiAlert({
                 title: '截断失败',
@@ -8999,6 +10377,7 @@ async function processRewriteTruncateAsync(pr) {
             scheduleContextTokensAfterPaint(pr.sessionId);
             if (anchor) {
                 removeMessagesFromNode(anchor);
+                if (activeInlineRewriteWrap === anchor) activeInlineRewriteWrap = null;
                 syncDisconnectedProcessGroups();
                 rebuildToc();
             }
@@ -9015,13 +10394,403 @@ async function processRewriteTruncateAsync(pr) {
     }
 }
 
-async function sendMessage() {
-    /* 立即快照「提交会话」：之后所有 await 都不能改变它，避免用户在 await 空隙切走后消息发到新会话。
-       关键不变式：runSessionId === submitSessionId 全程恒等。 */
-    const submitSessionIdInitial = currentSessionId;
+function getFollowupQueue(sessionId) {
+    const sid = String(sessionId || '');
+    if (!sid) return [];
+    if (!followupQueueLoadedBySession[sid]) {
+        followupQueueBySession[sid] = readStoredFollowupQueue(sid);
+        followupQueueLoadedBySession[sid] = true;
+    }
+    if (!followupQueueBySession[sid]) followupQueueBySession[sid] = [];
+    return followupQueueBySession[sid];
+}
+
+function followupQueueStorageKey(sessionId) {
+    return LS_FOLLOWUP_QUEUE_PREFIX + String(sessionId || '');
+}
+
+function normalizeStoredFollowupItem(item) {
+    if (!item || typeof item !== 'object') return null;
+    var text = String(item.text || '').trim();
+    if (!text) return null;
+    var display = String(item.display || item.text || '').trim();
+    return {
+        id: item.id || ('stored-followup-' + (followupQueueSeq++)),
+        text: text,
+        display: display || text,
+        createdAt: Number(item.createdAt) || Date.now(),
+    };
+}
+
+function readStoredFollowupQueue(sessionId) {
+    try {
+        var raw = localStorage.getItem(followupQueueStorageKey(sessionId));
+        if (!raw) return [];
+        var arr = JSON.parse(raw);
+        if (!Array.isArray(arr)) return [];
+        var out = arr.map(normalizeStoredFollowupItem).filter(Boolean);
+        out.forEach(function (item) {
+            var n = Number(item.id);
+            if (Number.isFinite(n)) followupQueueSeq = Math.max(followupQueueSeq, Math.floor(n) + 1);
+        });
+        return out;
+    } catch (e) {
+        return [];
+    }
+}
+
+function persistFollowupQueue(sessionId) {
+    const sid = String(sessionId || '');
+    if (!sid) return;
+    var q = followupQueueBySession[sid] || [];
+    var pending = q.filter(function (item) {
+        var status = item && item.status ? String(item.status) : '';
+        return item && item.text && !status;
+    }).map(function (item) {
+        return {
+            id: item.id,
+            text: item.text,
+            display: item.display || item.text,
+            createdAt: item.createdAt || Date.now(),
+        };
+    });
+    try {
+        var key = followupQueueStorageKey(sid);
+        if (pending.length) localStorage.setItem(key, JSON.stringify(pending));
+        else localStorage.removeItem(key);
+    } catch (e) { /* ignore */ }
+}
+
+function removeStoredFollowupQueue(sessionId) {
+    const sid = String(sessionId || '');
+    if (!sid) return;
+    delete followupQueueBySession[sid];
+    delete followupQueueLoadedBySession[sid];
+    try { localStorage.removeItem(followupQueueStorageKey(sid)); } catch (e) { /* ignore */ }
+}
+
+function inputHasSendableText() {
+    if (!messageInput) return false;
+    return String(messageInput.value || '').replace(/[\\u200B-\\u200D\\uFEFF]/g, '').trim().length > 0;
+}
+
+function ensureFollowupQueueHost() {
+    var existing = document.getElementById('followup-queue-panel');
+    if (existing) return existing;
+    var panel = document.createElement('div');
+    panel.id = 'followup-queue-panel';
+    panel.className = 'followup-queue-panel';
+    panel.setAttribute('aria-live', 'polite');
+    var anchor = messageInput && messageInput.closest ? messageInput.closest('.composer-row') : null;
+    var host = anchor && anchor.parentNode ? anchor.parentNode : null;
+    if (host && anchor) host.insertBefore(panel, anchor);
+    else document.body.appendChild(panel);
+    return panel;
+}
+
+function positionFollowupQueuePanel() {
+    var panel = document.getElementById('followup-queue-panel');
+    if (!panel) return;
+    panel.style.left = '';
+    panel.style.top = '';
+    panel.style.width = '';
+}
+
+function renderFollowupQueue(sessionId) {
+    var sid = String(sessionId != null ? sessionId : (currentSessionId || ''));
+    var panel = ensureFollowupQueueHost();
+    if (!panel) return;
+    if (!sid || sid !== currentSessionId) {
+        if (!currentSessionId) {
+            panel.innerHTML = '';
+            panel.classList.remove('is-visible');
+            panel.removeAttribute('data-session-id');
+        }
+        return;
+    }
+    var q = getFollowupQueue(sid);
+    panel.innerHTML = '';
+    panel.dataset.sessionId = sid;
+    panel.classList.toggle('is-visible', !!q.length);
+    if (!q.length) {
+        positionFollowupQueuePanel();
+        return;
+    }
+    q.forEach(function (item, idx) {
+        var row = document.createElement('div');
+        row.className = 'followup-queue-row';
+        row.classList.toggle('is-sending', item.status === 'sending');
+        row.classList.toggle('is-sent', item.status === 'sent');
+        row.dataset.id = String(item.id);
+        var order = document.createElement('div');
+        order.className = 'followup-queue-order';
+        order.textContent = String(idx + 1);
+        var text = document.createElement('div');
+        text.className = 'followup-queue-text';
+        text.textContent = item.display || item.text || '';
+        var status = document.createElement('div');
+        status.className = 'followup-queue-status';
+        status.textContent = getFollowupStatusText(item);
+        var sendNow = document.createElement('button');
+        sendNow.type = 'button';
+        sendNow.className = 'followup-queue-action followup-queue-send';
+        sendNow.textContent = '立即发送';
+        sendNow.disabled = !!item.status;
+        var undo = document.createElement('button');
+        undo.type = 'button';
+        undo.className = 'followup-queue-action followup-queue-undo';
+        undo.textContent = '撤回';
+        undo.disabled = item.status === 'sent' || item.status === 'withdrawing';
+        sendNow.addEventListener('click', function (ev) {
+            ev.preventDefault();
+            sendFollowupNow(String(item.id));
+        });
+        undo.addEventListener('click', function (ev) {
+            ev.preventDefault();
+            withdrawFollowup(String(item.id));
+        });
+        row.appendChild(order);
+        row.appendChild(text);
+        row.appendChild(status);
+        row.appendChild(sendNow);
+        row.appendChild(undo);
+        panel.appendChild(row);
+    });
+    positionFollowupQueuePanel();
+    if (typeof scrollChatToBottomIfFollow === 'function') {
+        scrollChatToBottomIfFollow(sid, {});
+    }
+}
+
+function getFollowupStatusText(item) {
+    var status = item && item.status ? String(item.status) : '';
+    if (status === 'withdrawing') return '撤回中';
+    if (status === 'sending') return '发送中';
+    if (status === 'sent') return '已发送';
+    return '待发送';
+}
+
+function enqueueCurrentInputAsFollowup() {
+    const sid = currentSessionId;
+    if (!sid) return false;
     rewriteInputWorkspacePaths();
     const visibleMessage = messageInput.value;
     const rawMessage = expandInputPathTokens(visibleMessage);
+    if (!String(rawMessage).trim()) return false;
+    getFollowupQueue(sid).push({
+        id: followupQueueSeq++,
+        text: rawMessage,
+        display: visibleMessage,
+        createdAt: Date.now(),
+    });
+    persistFollowupQueue(sid);
+    messageInput.value = '';
+    persistInputDraft(sid, '');
+    clearInputPathTokens();
+    autoResizeTextarea();
+    renderFollowupQueue(sid);
+    setSendButtonState();
+    return true;
+}
+
+function takeFollowupItem(sessionId, itemId) {
+    var q = getFollowupQueue(sessionId);
+    var idx = q.findIndex(function (item) { return String(item.id) === String(itemId); });
+    if (idx < 0) return null;
+    var item = q.splice(idx, 1)[0] || null;
+    persistFollowupQueue(sessionId);
+    return item;
+}
+
+function withdrawFollowup(itemId) {
+    const sid = currentSessionId;
+    var q = getFollowupQueue(sid);
+    var pendingItem = q.find(function (entry) { return String(entry.id) === String(itemId); });
+    if (pendingItem && pendingItem.status === 'sending') {
+        pendingItem.cancelRequested = true;
+        pendingItem.status = 'withdrawing';
+        persistFollowupQueue(sid);
+        renderFollowupQueue(sid);
+        if (pendingItem.steerInFlight && !pendingItem.steerId) return;
+        cancelSteerMessage(sid, pendingItem).then(function () {
+            var item = takeFollowupItem(sid, itemId);
+            if (item) returnFollowupToInput(sid, item);
+        }).catch(function (e) {
+            var item = q.find(function (entry) { return String(entry.id) === String(itemId); });
+            if (item) item.status = 'sending';
+            persistFollowupQueue(sid);
+            renderFollowupQueue(sid);
+            appendLogVisible('追问已被接收，无法撤回: ' + ((e && e.message) || String(e)), 'error-log');
+        });
+        return;
+    }
+    const item = takeFollowupItem(sid, itemId);
+    if (!item) return;
+    returnFollowupToInput(sid, item);
+}
+
+function returnFollowupToInput(sid, item) {
+    const existing = String(messageInput.value || '');
+    const returned = String(item.display || item.text || '');
+    messageInput.value = existing.trim() ? (returned + '\\n' + existing) : returned;
+    rewriteInputWorkspacePaths();
+    persistInputDraft(sid, messageInput.value);
+    autoResizeTextarea();
+    renderFollowupQueue(sid);
+    setSendButtonState();
+    messageInput.focus();
+}
+
+async function sendSteerMessage(sessionId, text, clientId) {
+    var r = await fetch('/sessions/' + encodeURIComponent(sessionId) + '/steer', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: text, client_id: clientId || '' }),
+    });
+    var j = await r.json().catch(function () {
+        return { ok: false, error: 'steer failed' };
+    });
+    if (!r.ok || !j.ok) throw new Error((j && j.error) || 'steer failed');
+    return j;
+}
+
+async function cancelSteerMessage(sessionId, item) {
+    var r = await fetch('/sessions/' + encodeURIComponent(sessionId) + '/steer', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            steer_id: (item && item.steerId) || '',
+            client_id: (item && item.clientId) || '',
+        }),
+    });
+    var j = await r.json().catch(function () {
+        return { ok: false, error: 'cancel steer failed' };
+    });
+    if (!r.ok || !j.ok) throw new Error((j && j.error) || 'cancel steer failed');
+    return j;
+}
+
+function removeConsumedFollowupSteer(sessionId, ev) {
+    const sid = String(sessionId || '');
+    if (!sid || !ev || !ev.steer) return false;
+    var steerId = String(ev.steer_id || '');
+    var clientId = String(ev.client_id || '');
+    if (!steerId && !clientId) return false;
+    var q = getFollowupQueue(sid);
+    var item = q.find(function (entry) {
+        return (clientId && String(entry.clientId || '') === clientId)
+            || (steerId && String(entry.steerId || '') === steerId);
+    });
+    if (!item) return false;
+    setTimeout(function () {
+        takeFollowupItem(sid, item.id);
+        renderFollowupQueue(sid);
+    }, 700);
+    return true;
+}
+
+function scheduleFollowupQueueDrain(sessionId, delayMs) {
+    const sid = String(sessionId || '');
+    if (!sid) return;
+    setTimeout(function () { drainFollowupQueue(sid); }, Math.max(0, Number(delayMs) || 0));
+}
+
+async function sendFollowupNow(itemId) {
+    const sid = currentSessionId;
+    if (!sid) return;
+    var q = getFollowupQueue(sid);
+    var idx = q.findIndex(function (item) { return String(item.id) === String(itemId); });
+    if (idx < 0) return;
+    const item = q[idx];
+    if (!item) return;
+    item.clientId = item.clientId || ('followup-' + item.id + '-' + Date.now());
+    item.status = 'sending';
+    persistFollowupQueue(sid);
+    renderFollowupQueue(sid);
+    try {
+        item.steerInFlight = true;
+        var steerResult = await sendSteerMessage(sid, item.text, item.clientId);
+        item.steerInFlight = false;
+        item.steerId = steerResult && steerResult.item && steerResult.item.id ? String(steerResult.item.id) : '';
+        if (item.cancelRequested) {
+            await cancelSteerMessage(sid, item);
+            var withdrawn = takeFollowupItem(sid, item.id);
+            if (withdrawn) returnFollowupToInput(sid, withdrawn);
+            return;
+        }
+        item.status = 'sending';
+        persistFollowupQueue(sid);
+        renderFollowupQueue(sid);
+        return;
+    } catch (e) {
+        item.steerInFlight = false;
+        var msg = (e && e.message) ? String(e.message) : String(e);
+        var canFallbackToChat = /session is not running/i.test(msg);
+        if (!canFallbackToChat) {
+            if (item.cancelRequested) {
+                item.status = 'sending';
+                item.cancelRequested = false;
+                persistFollowupQueue(sid);
+                renderFollowupQueue(sid);
+                appendLogVisible('追问已被接收，无法撤回: ' + msg, 'error-log');
+                return;
+            }
+            item.status = '';
+            persistFollowupQueue(sid);
+            renderFollowupQueue(sid);
+            appendLogVisible('追问插入失败: ' + msg, 'error-log');
+            return;
+        }
+    }
+    item.status = 'sent';
+    persistFollowupQueue(sid);
+    renderFollowupQueue(sid);
+    setTimeout(function () {
+        takeFollowupItem(sid, itemId);
+        renderFollowupQueue(sid);
+    }, 1200);
+    return sendMessage({ message: item.text, fromQueue: true });
+}
+
+function drainFollowupQueue(sessionId) {
+    const sid = String(sessionId || '');
+    if (!sid || followupQueueDraining[sid]) return;
+    if (isSessionRunning(sid) || (sendPipelineLock && sendPipelineLockSessionId === sid)) return;
+    var q = getFollowupQueue(sid);
+    if (!q.length) {
+        renderFollowupQueue(sid);
+        return;
+    }
+    var nextIdx = q.findIndex(function (item) { return !item.status; });
+    if (nextIdx < 0) {
+        renderFollowupQueue(sid);
+        return;
+    }
+    var item = q[nextIdx];
+    followupQueueDraining[sid] = true;
+    var attemptedId = String(item.id);
+    Promise.resolve(sendFollowupNow(item.id))
+        .finally(function () {
+            delete followupQueueDraining[sid];
+            var q2 = getFollowupQueue(sid);
+            var same = q2.find(function (entry) { return String(entry.id) === attemptedId; });
+            if (same && same.status && same.status !== 'sent') return;
+            if (same && !same.status) return;
+            if (q2.some(function (entry) { return !entry.status; })) {
+                scheduleFollowupQueueDrain(sid, 0);
+            }
+        });
+}
+
+async function sendMessage(options) {
+    options = options || {};
+    messageLoadEpoch += 1;
+    /* 立即快照「提交会话」：之后所有 await 都不能改变它，避免用户在 await 空隙切走后消息发到新会话。
+       关键不变式：runSessionId === submitSessionId 全程恒等。 */
+    const submitSessionIdInitial = options.sessionId || currentSessionId;
+    if (!options.fromQueue && !options.fromInlineRewrite) rewriteInputWorkspacePaths();
+    const visibleMessage = options.message != null ? String(options.message) : messageInput.value;
+    const rawMessage = (options.fromQueue || options.fromInlineRewrite) ? visibleMessage : expandInputPathTokens(visibleMessage);
     if (!String(rawMessage).trim()) return;
     if (isSessionRunning(submitSessionIdInitial)) return;
     if (sendPipelineLock && sendPipelineLockSessionId === submitSessionIdInitial) return;
@@ -9029,17 +10798,24 @@ async function sendMessage() {
     /* 立即上锁：阻止后续连击；锁的 key 是提交时的会话，而非当前会话。 */
     sendPipelineLock = true;
     sendPipelineLockSessionId = submitSessionIdInitial;
+    let submittedRunCtx = null;
+    let submittedRunSessionId = submitSessionIdInitial;
     try {
 
     if (pendingRewriteTruncate && pendingRewriteTruncate.sessionId === submitSessionIdInitial) {
-        const pr = pendingRewriteTruncate;
-        const rewriteTruncated = await processRewriteTruncateAsync(pr);
-        if (!rewriteTruncated) return;
+        const pendingRewrite = pendingRewriteTruncate;
+        const truncated = await processRewriteTruncateAsync(pendingRewrite);
+        if (!truncated) {
+            pendingRewriteTruncate = null;
+            return;
+        }
         pendingRewriteTruncate = null;
+        uiEventCountCache.updateFromServer(submitSessionIdInitial, pendingRewrite.before);
     }
     hideRewriteUndoToast();
 
     hideSubagentContinueBanner();
+    const userSentAt = new Date().toISOString();
 
     let submitSessionId = submitSessionIdInitial;
     if (!submitSessionId) {
@@ -9051,7 +10827,7 @@ async function sendMessage() {
     // 使用缓存的事件计数，实现乐观更新
     let preCount = uiEventCountCache.get(submitSessionId);
     try {
-        const serverCountBeforeSend = await getUiEventCount(submitSessionId);
+        const serverCountBeforeSend = preCount;
         if (Number.isFinite(Number(serverCountBeforeSend))) {
             preCount = Math.max(preCount, Number(serverCountBeforeSend));
             uiEventCountCache.updateFromServer(submitSessionId, preCount);
@@ -9059,7 +10835,21 @@ async function sendMessage() {
     } catch (err) {
         console.error('获取事件计数失败:', err);
     }
+    const existingStreamForIndex = (submitSessionId === currentSessionId) ? getVisibleChatStream() : null;
+    if (existingStreamForIndex) {
+        existingStreamForIndex.querySelectorAll('.msg-wrap--user[data-event-index]').forEach(function (wrap) {
+            const n = Number(wrap.getAttribute('data-event-index'));
+            if (Number.isFinite(n)) preCount = Math.max(preCount, Math.floor(n) + 1);
+        });
+    }
     const runSessionId = submitSessionId;
+    submittedRunSessionId = runSessionId;
+    if (sessionStore && typeof sessionStore.resetSseSeq === 'function') {
+        sessionStore.resetSseSeq(runSessionId);
+    }
+    const clientRunId = (window.crypto && window.crypto.randomUUID)
+        ? window.crypto.randomUUID()
+        : ('run-' + Date.now() + '-' + Math.random().toString(16).slice(2));
 
     /* 用户在 createNewSession / getUiEventCount 期间切走：
        后台仍然发起 /chat（消息已属于 runSessionId），但不要往当前可见 stream 画用户气泡。 */
@@ -9074,35 +10864,41 @@ async function sendMessage() {
         if (!getVisibleChatStream()) ensureVisibleChatStreamSlot();
         runCtx = newDomContext(getVisibleChatStream());
     }
-    runCtx.runStartedAt = new Date().toISOString();
+    submittedRunCtx = runCtx;
+    runCtx.runStartedAt = userSentAt;
     runCtx.lastUserEventIndex = preCount;
     resetLlmState(runCtx);
     finalizeLlmStreamChunks(runCtx);
     sealProcessGroup(runCtx);
     const ac = new AbortController();
-    setSessionRunState(runSessionId, { controller: ac, ctx: runCtx });
+    if (typeof clearSessionStreamStopSuppress === 'function') clearSessionStreamStopSuppress(runSessionId);
+    setSessionRunState(runSessionId, { controller: ac, ctx: runCtx, runId: clientRunId });
     setSendButtonState();
     syncSessionListIndicatorClasses();
-    applySessionEvent({ type: 'user', content: rawMessage }, {
+    applySessionEvent({ type: 'user', content: rawMessage, created_at: userSentAt }, {
         sessionId: runSessionId,
         eventIndex: preCount,
         source: 'local-send',
     });
-    if (!switchedAway) {
+        if (!switchedAway) {
         liveAutoFollow = true;
         streamChatNearBottom = true;
         streamProcNearBottom = true;
-        appendMessage(runCtx, 'user', rawMessage, { eventIndex: preCount, turnTruncateIdx: preCount }, runSessionId);
-        messageInput.value = '';
-        persistInputDraft(runSessionId, '');
-        clearInputPathTokens();
-        autoResizeTextarea();
+        appendMessage(runCtx, 'user', rawMessage, { eventIndex: preCount, turnTruncateIdx: preCount, createdAt: userSentAt }, runSessionId);
+        if (!options.fromQueue && !options.preserveInput) {
+            messageInput.value = '';
+            persistInputDraft(runSessionId, '');
+            clearInputPathTokens();
+            autoResizeTextarea();
+            setSendButtonState();
+        }
     }
     updateSidebarLastUserPreviewImmediate(runSessionId, rawMessage);
     lastUserMessageBySession[runSessionId] = rawMessage;
     const formData = new FormData();
     formData.append('message', rawMessage);
     formData.append('session_id', runSessionId);
+    formData.append('client_run_id', clientRunId);
     /* 保留右上角 token 进度条上一快照，直至 SSE /context_tokens 推送新估值，避免每次发送闪零 */
     if (!switchedAway) scheduleContextTokensAfterPaint(runSessionId);
     let streamEventIdx = preCount + 1;
@@ -9128,7 +10924,10 @@ async function sendMessage() {
     } finally {
         finalizeLlmStreamChunks(runCtx);
         finalizeProgressStreamChunks(runCtx);
-        void refreshTodoPlanPanel();
+        if (!switchedAway && runSessionId === currentSessionId && getRunAbortReason(runSessionId, runCtx) !== 'user') {
+            await ensureFinalVisibleAfterRun(runSessionId, runCtx, { delayMs: 120 });
+        }
+        if (runSessionId === currentSessionId) renderTodoPlanForCurrentSession();
         if (liveAutoFollow && !switchedAway) {
             scrollProcessBodyToBottom(runCtx, runSessionId);
             scrollChatToBottomIfFollow(runSessionId, {});
@@ -9136,6 +10935,7 @@ async function sendMessage() {
         if (runSessionId !== currentSessionId) {
             void tryMarkSessionUnreadComplete(runSessionId);
         } else {
+            clearSessionUnreadState(runSessionId);
             updateSubagentContinueBanner(runSessionId);
         }
         if (getSessionRunState(runSessionId)) {
@@ -9148,7 +10948,7 @@ async function sendMessage() {
         setSendButtonState();
         syncSessionListIndicatorClasses();
         void refreshSingleSessionRow(runSessionId);
-        await refreshContextTokensFromServer(runSessionId);
+        applyContextTokenLabelForCurrentSession();
         if (runSessionId === currentSessionId && countRunningSubagentCards() > 0) {
             scheduleSubagentIncrementalSync();
         }
@@ -9156,8 +10956,33 @@ async function sendMessage() {
     } finally {
         sendPipelineLock = false;
         sendPipelineLockSessionId = null;
+        var stoppedByUser = getRunAbortReason(submittedRunSessionId, submittedRunCtx) === 'user';
+        if (!stoppedByUser && (!options.fromQueue || getFollowupQueue(submittedRunSessionId).length)) {
+            setTimeout(function () { drainFollowupQueue(submittedRunSessionId); }, 0);
+        }
     }
 }
+
+messageInput.addEventListener('keydown', function onFollowupInputKeydown(e) {
+    if (e.key !== 'Enter') return;
+    e.stopImmediatePropagation();
+    if (e.ctrlKey && !e.shiftKey && !e.metaKey) {
+        const start = this.selectionStart;
+        const end = this.selectionEnd;
+        this.value = this.value.substring(0, start) + '\\n' + this.value.substring(end);
+        this.selectionStart = this.selectionEnd = start + 1;
+        e.preventDefault();
+        autoResizeTextarea();
+        return;
+    }
+    if (e.shiftKey) return;
+    e.preventDefault();
+    if (isSessionRunning(currentSessionId)) {
+        enqueueCurrentInputAsFollowup();
+        return;
+    }
+    sendMessage();
+}, true);
 
 messageInput.addEventListener('keydown', function onInputKeydown(e) {
     if (e.key !== 'Enter') return;
@@ -9182,10 +11007,21 @@ chatContainer.addEventListener('scroll', function () {
     refreshLiveAutoFollowPins();
     scheduleTocActiveUpdate();
 }, { passive: true });
+sendBtn.addEventListener('click', function (e) {
+    e.stopImmediatePropagation();
+    if (isSessionRunning(currentSessionId)) {
+        if (inputHasSendableText()) enqueueCurrentInputAsFollowup();
+        else pauseCurrentRun();
+        return;
+    }
+    sendMessage();
+}, true);
 sendBtn.addEventListener('click', function () {
     if (isSessionRunning(currentSessionId)) pauseCurrentRun();
     else sendMessage();
 });
+window.addEventListener('resize', positionFollowupQueuePanel);
+window.addEventListener('scroll', positionFollowupQueuePanel, true);
 (function bindRewriteUndo() {
     const toast = document.getElementById('rewrite-undo-toast');
     const btn = toast && toast.querySelector('.rewrite-undo-btn');
@@ -9247,7 +11083,7 @@ sendBtn.addEventListener('click', function () {
     });
 })();
 initUiHoverTips(document);
-`,V=`newSessionBtn.addEventListener('click', async () => { await createNewSession(); });
+`,ze=`newSessionBtn.addEventListener('click', async () => { await createNewSession(); });
 
 function initSidebarSash() {
     const side = document.getElementById('sidebar');
@@ -9285,10 +11121,9 @@ function initSidebarSash() {
 async function init() {
     loadUnreadFromStorage();
     initSidebarSash();
+    showLoading();
     await loadSessions();
-    const sessions = Array.from(document.querySelectorAll('.session-item')).map(item => ({
-        id: item.querySelector('.session-name').dataset.id
-    }));
+    const sessions = sessionStore.list();
     let lastSessionId = localStorage.getItem('lastSessionId');
     let targetSession = null;
     if (lastSessionId && sessions.some(s => s.id === lastSessionId)) targetSession = lastSessionId;
@@ -9296,7 +11131,6 @@ async function init() {
     if (targetSession) await switchSession(targetSession);
     else await createNewSession();
     bindExistingLogs();
-    rebuildToc();
 }
 init();
 function toggleTocPanel() {
@@ -9477,8 +11311,8 @@ if (typeof globalThis !== 'undefined') {
     globalThis.toggleTodoPlanPanel = toggleTodoPlanPanel;
     globalThis.toggleTocPanel = toggleTocPanel;
 }
-`,X=[I,x,C,w,T,E,k,L,_,P,A,R,B,F,M,N,O,D,H,q,U,j,W,G,K,z,V];Function(`"use strict";
-`+X.join(`
+`,Ge=[he,Se,be,ye,Ie,xe,we,Ce,ke,Te,Ee,_e,Le,Ae,Pe,Re,Be,Fe,Me,Ne,Oe,De,Ue,qe,He,je,We,ze];Function(`"use strict";
+`+Ge.join(`
 
 `)+`
 //# sourceURL=myagent-ui.js`)();typeof initUiHoverTips=="function"&&initUiHoverTips(document);

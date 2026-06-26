@@ -1,4 +1,4 @@
-﻿"""本机文件/目录选择对话框，供 Web UI 配置项与聊天输入使用。"""
+"""本机文件/目录选择对话框，供 Web UI 配置项与聊天输入使用。"""
 
 from __future__ import annotations
 
@@ -72,10 +72,11 @@ def _is_windows_network_path(path: str) -> bool:
 
 def _default_local_initial_dir() -> str:
     candidates = [
+        os.getenv("USERPROFILE", ""),
+        os.path.expanduser("~"),
+        os.path.join(os.getenv("USERPROFILE", ""), "Desktop") if os.getenv("USERPROFILE") else "",
         os.getenv("WORK_DIR", ""),
         str(Path(__file__).resolve().parent.parent / "workspace"),
-        os.path.expanduser("~"),
-        os.getenv("USERPROFILE", ""),
         os.getcwd(),
     ]
     for raw in candidates:
@@ -490,10 +491,9 @@ def _backends() -> list[tuple[str, Callable[[PathPickKind, str], Optional[str]]]
     sysname = platform.system()
     order: list[tuple[str, Callable[[PathPickKind, str], Optional[str]]]] = []
     if sysname == "Windows":
-        order.append(("windows-powershell", lambda kind, initial: _pick_windows_powershell(kind, initial, False)))  # type: ignore[arg-type]
+        order.append(("windows-ifiledialog", _pick_windows_ifiledialog))
         order.append(("tkinter", _pick_tkinter))
-        if os.getenv("MYAGENT_PATH_PICKER_USE_IFILEDIALOG", "").lower() in ("1", "true", "yes"):
-            order.append(("windows-ifiledialog", _pick_windows_ifiledialog))
+        order.append(("windows-powershell", lambda kind, initial: _pick_windows_powershell(kind, initial, False)))  # type: ignore[arg-type]
     else:
         order.append(("tkinter", _pick_tkinter))
         if sysname == "Darwin":
@@ -513,6 +513,12 @@ def pick_native_path(
         raise ValueError("multiple=true 仅支持 kind=file")
     if multiple:
         failures: list[str] = []
+        try:
+            return _pick_tkinter_multi_files(initial)
+        except Exception as e:
+            if _is_user_cancelled_exc(e):
+                return []
+            failures.append(f"tkinter: {e}")
         if platform.system() == "Windows":
             try:
                 result = _pick_windows_powershell("file", initial, True)
@@ -521,12 +527,6 @@ def pick_native_path(
                 if _is_user_cancelled_exc(e):
                     return []
                 failures.append(f"windows-powershell: {e}")
-        try:
-            return _pick_tkinter_multi_files(initial)
-        except Exception as e:
-            if _is_user_cancelled_exc(e):
-                return []
-            failures.append(f"tkinter: {e}")
         single = pick_native_path("file", initial, multiple=False)
         return [single] if single else []
 
@@ -545,7 +545,7 @@ def pick_native_path(
 
     hint = (
         "无法打开本机文件选择对话框。"
-        " Windows：请从桌面正常启动 MyAgent；或重装 Python 时勾选 tcl/tk。"
+        " Windows：请从桌面正常启动 General Agent；或重装 Python 时勾选 tcl/tk。"
         f" 详情：{' | '.join(failures)}"
     )
     raise RuntimeError(hint)

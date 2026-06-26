@@ -8,13 +8,16 @@ function removeMessagesFromNode(startWrap) {
     syncDisconnectedProcessGroups();
 }
 
-async function truncateSessionOnServer(beforeIndex) {
-    if (!currentSessionId) return { ok: false, error: 'no_session' };
+async function truncateSessionOnServer(beforeIndex, options) {
+    options = options || {};
+    const sid = options.sessionId || currentSessionId;
+    if (!sid) return { ok: false, error: 'no_session' };
     if (!Number.isFinite(Number(beforeIndex)) || Number(beforeIndex) < 0) {
         return { ok: false, error: 'invalid_before_index' };
     }
-    const url = '/sessions/' + encodeURIComponent(currentSessionId) + '/truncate'
-        + '?before_index=' + encodeURIComponent(String(beforeIndex));
+    const url = '/sessions/' + encodeURIComponent(sid) + '/truncate'
+        + '?before_index=' + encodeURIComponent(String(beforeIndex))
+        + '&backup=' + (options.backup ? '1' : '0');
     try {
         const r = await fetch(url, { method: 'POST' });
         const j = await r.json().catch(function () { return {}; });
@@ -45,9 +48,136 @@ function hasPreviousUserMessageBefore(wrap) {
     return false;
 }
 
-async function branchSessionOnServer(beforeIndex) {
-    if (!currentSessionId) return { ok: false, error: 'no_session' };
-    const url = '/sessions/' + encodeURIComponent(currentSessionId) + '/branch'
+let activeInlineRewriteWrap = null;
+
+function restoreUserMessageBubble(wrap, rawText) {
+    if (!wrap) return;
+    const div = wrap.querySelector('.message.user');
+    if (!div) return;
+    wrap.classList.remove('is-inline-rewriting', 'user-msg-expanded', 'has-turn-process');
+    div.className = 'message user';
+    div.textContent = '';
+    messageRawMarkdown.set(wrap, String(rawText || ''));
+    renderUserMessageContent(wrap, div, String(rawText || ''), linkifyAssistantTextNodes);
+}
+
+function closeInlineRewriteEditor(wrap, rawText) {
+    restoreUserMessageBubble(wrap, rawText);
+    if (activeInlineRewriteWrap === wrap) activeInlineRewriteWrap = null;
+}
+
+function autoResizeInlineRewriteTextarea(textarea) {
+    if (!textarea) return;
+    textarea.style.height = 'auto';
+    textarea.style.height = Math.min(Math.max(textarea.scrollHeight, 84), 260) + 'px';
+}
+
+function openInlineRewriteEditor(wrap, rawText, beforeIndex) {
+    if (!wrap) return;
+    if (activeInlineRewriteWrap && activeInlineRewriteWrap !== wrap) {
+        const prevRaw = messageRawMarkdown.get(activeInlineRewriteWrap) || '';
+        closeInlineRewriteEditor(activeInlineRewriteWrap, prevRaw);
+    }
+    const div = wrap.querySelector('.message.user');
+    if (!div) return;
+    activeInlineRewriteWrap = wrap;
+    wrap.classList.add('is-inline-rewriting');
+    wrap.classList.remove('user-msg-expanded', 'has-turn-process');
+    div.className = 'message user user-inline-rewrite';
+    div.textContent = '';
+
+    const editor = document.createElement('div');
+    editor.className = 'user-inline-rewrite-box';
+    const textarea = document.createElement('textarea');
+    textarea.className = 'user-inline-rewrite-input';
+    textarea.value = String(rawText || '');
+    textarea.rows = 3;
+    const actions = document.createElement('div');
+    actions.className = 'user-inline-rewrite-actions';
+    const cancelBtn = document.createElement('button');
+    cancelBtn.type = 'button';
+    cancelBtn.className = 'user-inline-rewrite-btn user-inline-rewrite-btn--ghost';
+    cancelBtn.textContent = '取消';
+    const confirmBtn = document.createElement('button');
+    confirmBtn.type = 'button';
+    confirmBtn.className = 'user-inline-rewrite-btn user-inline-rewrite-btn--primary';
+    confirmBtn.textContent = '确认';
+    actions.appendChild(cancelBtn);
+    actions.appendChild(confirmBtn);
+    editor.appendChild(textarea);
+    editor.appendChild(actions);
+    div.appendChild(editor);
+
+    function cancel() {
+        closeInlineRewriteEditor(wrap, rawText);
+    }
+
+    async function confirm() {
+        const nextText = String(textarea.value || '');
+        if (!nextText.trim()) {
+            showUiAlert({
+                title: '无法改写',
+                message: '改写内容不能为空。',
+                variant: 'warning',
+            });
+            return;
+        }
+        if (!currentSessionId || !Number.isFinite(Number(beforeIndex))) return;
+        confirmBtn.disabled = true;
+        cancelBtn.disabled = true;
+        pendingRewriteTruncate = {
+            sessionId: currentSessionId,
+            before: Number(beforeIndex),
+            prevInput: ''
+        };
+        try {
+            await sendMessage({
+                message: nextText,
+                sessionId: currentSessionId,
+                preserveInput: true,
+                fromInlineRewrite: true,
+            });
+        } finally {
+            if (wrap.isConnected) {
+                confirmBtn.disabled = false;
+                cancelBtn.disabled = false;
+            }
+        }
+    }
+
+    textarea.addEventListener('input', function () {
+        autoResizeInlineRewriteTextarea(textarea);
+    });
+    textarea.addEventListener('keydown', function (e) {
+        if (e.key === 'Escape') {
+            e.preventDefault();
+            cancel();
+            return;
+        }
+        if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+            e.preventDefault();
+            void confirm();
+        }
+    });
+    cancelBtn.addEventListener('click', function (e) {
+        e.preventDefault();
+        cancel();
+    });
+    confirmBtn.addEventListener('click', function (e) {
+        e.preventDefault();
+        void confirm();
+    });
+    autoResizeInlineRewriteTextarea(textarea);
+    textarea.focus();
+    try {
+        textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+    } catch (e) { /* ignore */ }
+}
+
+async function branchSessionOnServer(beforeIndex, sessionId) {
+    const sid = sessionId || currentSessionId;
+    if (!sid) return { ok: false, error: 'no_session' };
+    const url = '/sessions/' + encodeURIComponent(sid) + '/branch'
         + '?before_index=' + encodeURIComponent(String(beforeIndex));
     try {
         const r = await fetch(url, { method: 'POST' });
@@ -56,6 +186,7 @@ async function branchSessionOnServer(beforeIndex) {
             ok: r.ok,
             session_id: j && j.session_id,
             name: j && j.name,
+            session: j && j.session,
             error: (j && j.error) ? String(j.error) : '',
         };
     } catch (e) {
@@ -115,7 +246,10 @@ function onMessageToolbarClick(wrap, role, act) {
     const msg = wrap.querySelector('.message');
     const plain = msg ? (msg.innerText || '') : '';
     const tf = wrap.dataset.truncateFrom;
-    const before = tf !== undefined && tf !== '' ? parseInt(tf, 10) : NaN;
+    const eiRaw = wrap.dataset.eventIndex;
+    const eventIndex = eiRaw !== undefined && eiRaw !== '' ? parseInt(eiRaw, 10) : NaN;
+    const truncateFrom = tf !== undefined && tf !== '' ? parseInt(tf, 10) : NaN;
+    const before = role === 'user' ? eventIndex : truncateFrom;
     if ((act === 'delete' || act === 'rewrite') && isSessionRunning(currentSessionId)) {
         showUiAlert({
             title: '生成中不可操作',
@@ -197,27 +331,18 @@ function onMessageToolbarClick(wrap, role, act) {
             return;
         }
         if (!Number.isFinite(before)) {
-            const prev = messageInput.value;
-            messageInput.value = toFill;
-            rewriteInputWorkspacePaths();
-            autoResizeTextarea();
-            messageInput.focus();
-            showRewriteUndoToast('input', { prev: prev });
+            showUiAlert({
+                title: '无法改写该条',
+                message: '该消息尚未与服务器索引对齐，请刷新当前会话后再试。',
+                variant: 'warning',
+            });
             return;
         }
-        pendingRewriteTruncate = {
-            sessionId: currentSessionId,
-            before: before,
-            prevInput: messageInput.value,
-        };
-        messageInput.value = toFill;
-        rewriteInputWorkspacePaths();
-        autoResizeTextarea();
-        messageInput.focus();
-        showRewriteUndoToast('rewrite_pending', pendingRewriteTruncate);
+        openInlineRewriteEditor(wrap, toFill, before);
         return;
     }
     if (act === 'branch' && role === 'assistant') {
+        const sourceSessionId = currentSessionId;
         const eiRaw = wrap.dataset.eventIndex;
         const eventIdx = eiRaw !== undefined && eiRaw !== '' ? parseInt(eiRaw, 10) : NaN;
         if (!Number.isFinite(eventIdx) || eventIdx < 0) {
@@ -238,18 +363,7 @@ function onMessageToolbarClick(wrap, role, act) {
         }).then(function (ok) {
             if (!ok) return;
             (async function () {
-                var rawExpected = messageRawMarkdown.get(wrap);
-                var expectedText = rawExpected !== undefined ? String(rawExpected) : plain;
-                var ready = await waitForBranchFinalPersisted(currentSessionId, branchBefore, expectedText);
-                if (!ready || !ready.ready) {
-                    showUiAlert({
-                        title: '分支稍后再试',
-                        message: '最终回答仍在写入会话记录，请稍等一两秒后再次分支。',
-                        variant: 'warning',
-                    });
-                    return;
-                }
-                var res = await branchSessionOnServer(ready.beforeIndex || branchBefore);
+                var res = await branchSessionOnServer(branchBefore, sourceSessionId);
                 if (!res || !res.ok || !res.session_id) {
                     showUiAlert({
                         title: '创建失败',
@@ -258,8 +372,12 @@ function onMessageToolbarClick(wrap, role, act) {
                     });
                     return;
                 }
+                if (res.session && typeof sessionStore !== 'undefined') {
+                    sessionStore.upsert(res.session);
+                    renderSessionListIfChanged(true);
+                }
                 await switchSession(res.session_id);
-                void loadSessions();
+                setTimeout(function () { void loadSessions({ forceRender: true }); }, 0);
             })();
         });
         return;
@@ -269,13 +387,24 @@ function onMessageToolbarClick(wrap, role, act) {
 function attachMessageToolbar(wrap, role) {
     const bar = document.createElement('div');
     bar.className = 'msg-toolbar';
+    if (role === 'user') {
+        var createdAt = wrap && wrap.dataset ? (wrap.dataset.createdAt || '') : '';
+        if (createdAt) {
+            var timeEl = document.createElement('span');
+            timeEl.className = 'user-message-time';
+            timeEl.setAttribute('data-created-at', createdAt);
+            timeEl.title = createdAt;
+            timeEl.textContent = formatUserMessageTimestamp(createdAt);
+            bar.appendChild(timeEl);
+        }
+    }
     var html = '<button type="button" class="msg-tb" data-act="copy" data-ui-tip="复制">复制</button>'
         + '<button type="button" class="msg-tb" data-act="delete" data-ui-tip="删除">删除</button>';
     if (role === 'assistant') {
         html += '<button type="button" class="msg-tb" data-act="branch" data-ui-tip="分支">分支</button>';
     }
     if (role === 'user') html += '<button type="button" class="msg-tb" data-act="rewrite" data-ui-tip="改写">改写</button>';
-    bar.innerHTML = html;
+    bar.insertAdjacentHTML('beforeend', html);
     bar.querySelectorAll('.msg-tb').forEach(bindUiHoverTip);
     bar.addEventListener('click', function (e) {
         var t = e.target;
@@ -510,6 +639,36 @@ function procNow() {
     return (typeof performance !== 'undefined' && typeof performance.now === 'function') ? performance.now() : Date.now();
 }
 
+var processAggregateStatsTimer = null;
+
+function processAggregateNeedsLiveStats(agg) {
+    if (!agg || !agg.isConnected || !agg.dataset) return false;
+    if (!agg.dataset.procStartedAt || agg.dataset.procEndedAt) return false;
+    return !(agg.dataset.procDurationMs != null && agg.dataset.procDurationMs !== '');
+}
+
+function refreshLiveProcessAggregateStats() {
+    if (typeof document === 'undefined') return false;
+    var live = Array.from(document.querySelectorAll('.process-aggregate[data-proc-started-at]'))
+        .filter(processAggregateNeedsLiveStats);
+    live.forEach(refreshAggregateStatsSmart);
+    return live.length > 0;
+}
+
+function stopLiveProcessAggregateStats() {
+    if (!processAggregateStatsTimer) return;
+    clearInterval(processAggregateStatsTimer);
+    processAggregateStatsTimer = null;
+}
+
+function scheduleLiveProcessAggregateStats() {
+    if (processAggregateStatsTimer) return;
+    if (!refreshLiveProcessAggregateStats()) return;
+    processAggregateStatsTimer = setInterval(function () {
+        if (!refreshLiveProcessAggregateStats()) stopLiveProcessAggregateStats();
+    }, 250);
+}
+
 function formatProcDurationMs(ms) {
     if (ms == null || !Number.isFinite(ms) || ms < 0) return null;
     if (ms < 800) return Math.max(0, Math.round(ms)) + 'ms';
@@ -536,6 +695,7 @@ function applyRunStartedAtToProcessGroup(agg, startedAt) {
     agg.dataset.procStartedAt = String(t0);
     delete agg.dataset.procEndedAt;
     if (!agg.dataset.procDurationMs) refreshProcessAggregateStats(agg);
+    scheduleLiveProcessAggregateStats();
 }
 
 function bumpAggregateMaxReactIter(agg, reactIter) {
@@ -650,7 +810,12 @@ function applyProcessMetricsFromEvent(ctx, event) {
     }
     if (!agg) return;
     if (event.duration_ms != null && Number.isFinite(Number(event.duration_ms))) {
-        agg.dataset.procDurationMs = String(Math.max(0, Math.round(Number(event.duration_ms))));
+        if (!replayingMessages && agg.dataset.procStartedAt) {
+            agg.dataset.procEndedAt = String(procNow());
+            delete agg.dataset.procDurationMs;
+        } else {
+            agg.dataset.procDurationMs = String(Math.max(0, Math.round(Number(event.duration_ms))));
+        }
     }
     if (event.react_loops != null && Number.isFinite(Number(event.react_loops))) {
         agg.dataset.procReactLoops = String(Math.max(0, Math.floor(Number(event.react_loops))));
@@ -662,6 +827,8 @@ function applyProcessMetricsFromEvent(ctx, event) {
         agg.dataset.procToolFails = String(Math.max(0, Math.floor(Number(event.tool_failures))));
     }
     refreshAggregateStatsSmart(agg);
+    if (processAggregateNeedsLiveStats(agg)) scheduleLiveProcessAggregateStats();
+    else if (!refreshLiveProcessAggregateStats()) stopLiveProcessAggregateStats();
 }
 
 function refreshAggregateStatsSmart(agg) {
@@ -807,6 +974,7 @@ function ensureProcessGroup(ctx) {
     wrap.className = 'process-aggregate';
     var replayCollapsed = !!replayingMessages;
     if (replayCollapsed) wrap.classList.add('is-collapsed');
+    if (!replayingMessages) wrap.classList.add('is-running');
     wrap.innerHTML = '<div class="process-aggregate-top" role="button" tabindex="0" aria-expanded="' + (replayCollapsed ? 'false' : 'true') + '">'
         + '<div class="process-aggregate-top-line">'
         + '<span class="process-aggregate-title-wrap">'
@@ -818,13 +986,16 @@ function ensureProcessGroup(ctx) {
         + '<div class="process-aggregate-body"></div>';
     if (!replayingMessages) {
         if (ctx.runStartedAt) applyRunStartedAtToProcessGroup(wrap, ctx.runStartedAt);
-        else wrap.dataset.procStartedAt = String(procNow());
+        else {
+            wrap.dataset.procStartedAt = String(procNow());
+        }
     }
     delete wrap.dataset.maxReactIter;
     (ctx.stream || chatContainer).appendChild(wrap);
     bindProcessAggregate(wrap);
     ctx.currentProcessGroup = wrap;
     refreshProcessAggregateStats(wrap);
+    if (processAggregateNeedsLiveStats(wrap)) scheduleLiveProcessAggregateStats();
     return wrap;
 }
 
@@ -833,9 +1004,11 @@ function sealProcessGroup(ctx) {
     if (!ctx.currentProcessGroup) return;
     const agg = ctx.currentProcessGroup;
     if (agg.isConnected) {
+        agg.classList.remove('is-running');
         updateProcessBrief(agg);
         if (agg.dataset.procStartedAt) agg.dataset.procEndedAt = String(procNow());
         refreshProcessAggregateStats(agg);
+        if (!refreshLiveProcessAggregateStats()) stopLiveProcessAggregateStats();
     }
     ctx.currentProcessGroup = null;
     ctx.progressScrollers = {};
@@ -866,6 +1039,7 @@ messageInput.addEventListener('input', autoResizeTextarea);
 messageInput.addEventListener('input', rewriteInputWorkspacePaths);
 messageInput.addEventListener('input', function () {
     if (currentSessionId) persistInputDraft(currentSessionId, messageInput.value);
+    if (typeof setSendButtonState === 'function') setSendButtonState();
 });
 autoResizeTextarea();
 refreshInputPathChips();
@@ -878,6 +1052,10 @@ function escapeHtml(str) {
         if (m === '>') return '&gt;';
         return m;
     });
+}
+
+function escapeHtmlAttr(str) {
+    return escapeHtml(String(str || '')).replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 
 function scrollToBottom() {
@@ -1038,7 +1216,7 @@ window.addEventListener('focus', function () {
     }
 });
 
-const WELCOME_HTML = `<div class="welcome" role="status"><div class="welcome-icon" aria-hidden="true"><svg viewBox="0 0 44 22" fill="none" xmlns="http://www.w3.org/2000/svg" style="width:100%;height:100%;user-select:none;-webkit-user-select:none;pointer-events:none"><text x="22" y="16" text-anchor="middle" font-family="'Brush Script MT','Segoe Script','Pacifico','Dancing Script',cursive" font-size="14" font-style="italic" fill="white" stroke="none" transform="rotate(-6 22 11)">Sugar</text></svg></div><strong>开始一段新的对话</strong><p>在左侧侧栏新建或选择会话。Enter 发送，Ctrl+Enter / Shift+Enter 换行。</p></div>`;
+const WELCOME_HTML = `<div class="welcome" role="status"><div class="welcome-icon" aria-hidden="true"><img src="/assets/sugar-logo.png" alt="" draggable="false"></div><strong>开始一段新的对话</strong><p>在左侧侧栏新建或选择会话。Enter 发送，Ctrl+Enter / Shift+Enter 换行。</p></div>`;
 
 function historyLoadScrollsToBottom(sessionId, mode) {
     return true;
@@ -1114,7 +1292,7 @@ function setWelcome() {
         else chatContainer.innerHTML = WELCOME_HTML;
     }
     rebuildToc();
-    void refreshTodoPlanPanel();
+    renderTodoPlanForCurrentSession();
 }
 
 function stripWelcome(ctx) {
@@ -1179,6 +1357,30 @@ function stripPathWrappingQuotes(s) {
     return t;
 }
 
+function decodePathPercentEscapes(s) {
+    var t = String(s || '');
+    if (t.indexOf('%') < 0) return t;
+    return t.replace(/(?:%[0-9A-Fa-f]{2})+/g, function (part) {
+        try {
+            return decodeURIComponent(part);
+        } catch (e) {
+            return part;
+        }
+    });
+}
+
+function cleanPathTokenForLink(s) {
+    var t = linkifyNormalizePathToken(String(s || '').trim());
+    if (!/^https?:\/\//i.test(t)) t = decodePathPercentEscapes(t);
+    if (!t) return '';
+    var a = t.charAt(0);
+    var b = t.charAt(t.length - 1);
+    if (t.length >= 2 && ((a === '"' && b === '"') || (a === "'" && b === "'"))) {
+        return trimTrailingPathPunct(t.slice(1, -1).trim());
+    }
+    return stripPathWrappingQuotes(trimTrailingPathPunct(t));
+}
+
 /** 统一全角标点/数字等，便于识别「．xlsx」「路径：／」等变体 */
 function linkifyNormalizePathToken(s) {
     try {
@@ -1235,12 +1437,47 @@ function workspaceRelativePathAutoLinkOk(slashPath) {
 
 function workspaceRelativePathNoSlashAutoLinkOk(relPath) {
     var t = linkifyNormalizePathToken(String(relPath || '').trim());
-    if (!t || t.charAt(0) === '/' || /^https?:\/\//i.test(t)) return false;
+    if (!t || t.charAt(0) === '/' || t.charAt(0) === '\\' || /^https?:\/\//i.test(t)) return false;
     if (/^([A-Za-z]):[\\/]/.test(t) || /^\\\\/.test(t)) return false;
     if (!/[\\/]/.test(t)) return false;
     if (/[<>:'"|\r\n]/.test(t)) return false;
     if (/(^|[\\/])\.{1,2}([\\/]|$)/.test(t)) return false;
     return linkifyKnownExtRegex().test(t);
+}
+
+function workspaceRelFromNormalizedAbs(absNorm, workDir) {
+    if (!absNorm || !workDir) return null;
+    var base = String(workDir).replace(/\\/g, '/').replace(/\/+$/, '');
+    var absLower = absNorm.toLowerCase();
+    var baseLower = base.toLowerCase();
+    if (absLower === baseLower) return '';
+    if (absLower.indexOf(baseLower + '/') === 0) {
+        return absNorm.slice(base.length).replace(/^\/+/, '');
+    }
+    return null;
+}
+
+function workspaceRelFromForeignWorkspaceAbs(absNorm, workDir) {
+    if (!absNorm || !workDir) return null;
+    var baseName = String(workDir || '').replace(/\\/g, '/').replace(/\/+$/, '').split('/').filter(Boolean).pop();
+    if (!baseName) return null;
+    var parts = String(absNorm || '').replace(/\\/g, '/').split('/').filter(Boolean);
+    for (var i = parts.length - 2; i >= 0; i -= 1) {
+        if (parts[i].toLowerCase() === baseName.toLowerCase()) {
+            return parts.slice(i + 1).join('/');
+        }
+    }
+    return null;
+}
+
+function stripWorkspaceRootPrefixFromRelPath(relPath) {
+    var t = String(relPath || '').replace(/\\/g, '/').replace(/^\/+/, '');
+    var w = (typeof window.__WORK_DIR__ === 'string') ? window.__WORK_DIR__ : '';
+    var baseName = String(w || '').replace(/\\/g, '/').replace(/\/+$/, '').split('/').filter(Boolean).pop();
+    if (baseName && t.toLowerCase().indexOf(baseName.toLowerCase() + '/') === 0) {
+        return t.slice(baseName.length + 1);
+    }
+    return t;
 }
 
 function getCurrentSessionDataPath() {
@@ -1419,7 +1656,7 @@ function isBareWorkspaceFilenameForLink(t) {
 }
 
 function makeHrefFromAutoLinkToken(s) {
-    var t = trimTrailingPathPunct(linkifyNormalizePathToken(String(s).trim()));
+    var t = cleanPathTokenForLink(s);
     if (!t) return null;
     if (/^https?:\/\//i.test(t)) return t;
     var m = /^([A-Za-z]):[\\/](.*)$/.exec(t);
@@ -1452,7 +1689,7 @@ function makeHrefFromAutoLinkToken(s) {
  * 解析为可交给 /api/open-workspace-file 的路径：工作区相对、Windows/UNC 绝对路径（均由服务端校验须在 WORK_DIR 内）。
  */
 function pathTokenToWorkspaceOpenRel(token) {
-    var t = stripPathWrappingQuotes(trimTrailingPathPunct(linkifyNormalizePathToken(String(token || '').trim())));
+    var t = cleanPathTokenForLink(token);
     if (!t || /^https?:\/\//i.test(t)) return null;
     var w = (typeof window.__WORK_DIR__ === 'string') ? window.__WORK_DIR__ : '';
     var uncFlat = t.replace(/\//g, '\\');
@@ -1464,26 +1701,61 @@ function pathTokenToWorkspaceOpenRel(token) {
         var rest = (win[2] || '').replace(/\\/g, '/');
         var absNorm = (win[1].toUpperCase() + ':/' + rest).replace(/\/+/g, '/');
         if (w) {
-            var base = String(w).replace(/\\/g, '/').replace(/\/+$/, '');
-            var absLower = absNorm.toLowerCase();
-            var baseLower = base.toLowerCase();
-            if (absLower.length >= baseLower.length && absLower.indexOf(baseLower) === 0) {
-                return absNorm.slice(base.length).replace(/^\/+/, '');
-            }
+            var absRel = workspaceRelFromNormalizedAbs(absNorm, w);
+            if (absRel != null) return absRel;
+            var foreignRel = workspaceRelFromForeignWorkspaceAbs(absNorm, w);
+            if (foreignRel != null) return foreignRel;
         }
         return absNorm;
     }
     if (!w) return null;
-    if (t.charAt(0) === '/' && t.charAt(1) !== '/') {
-        if (!workspaceRelativePathAutoLinkOk(t)) return null;
-        return t.replace(/^\/+/, '').replace(/\\/g, '/');
+    var slashRooted = t.replace(/\\/g, '/');
+    if (slashRooted.charAt(0) === '/' && slashRooted.charAt(1) !== '/') {
+        var wDrive = /^([A-Za-z]):[\\/]/.exec(String(w || ''));
+        if (wDrive) {
+            var rootedAbs = (wDrive[1].toUpperCase() + ':' + slashRooted).replace(/\/+/g, '/');
+            var rootedRel = workspaceRelFromNormalizedAbs(rootedAbs, w);
+            if (rootedRel != null) return rootedRel;
+        }
+        if (!workspaceRelativePathAutoLinkOk(slashRooted)) return null;
+        return slashRooted.replace(/^\/+/, '');
     }
     if (t === '.env' && typeof window.__APP_DOTENV_PATH__ === 'string' && window.__APP_DOTENV_PATH__) {
         return window.__APP_DOTENV_PATH__;
     }
-    if (workspaceRelativePathNoSlashAutoLinkOk(t)) return t.replace(/\\/g, '/');
-    if (isBareWorkspaceFilenameForLink(t)) return t.replace(/\\/g, '/');
+    var relPath = stripWorkspaceRootPrefixFromRelPath(t);
+    if (workspaceRelativePathNoSlashAutoLinkOk(relPath)) return relPath;
+    if (isBareWorkspaceFilenameForLink(relPath)) return relPath;
     return null;
+}
+
+function decodeMarkdownHrefPathTarget(href) {
+    var raw = String(href || '').trim();
+    if (!raw) return '';
+    try { raw = decodeURI(raw); } catch (e) { /* keep raw */ }
+    raw = decodePathPercentEscapes(raw);
+    try { raw = decodeURIComponent(raw); } catch (e2) { /* keep partially decoded raw */ }
+    return stripPathWrappingQuotes(trimTrailingPathPunct(raw));
+}
+
+function markdownHrefToWorkspaceOpenRel(href) {
+    var raw = decodeMarkdownHrefPathTarget(href);
+    if (!raw || raw.charAt(0) === '#') return null;
+    if (/^(https?|mailto|tel|javascript|data|blob):/i.test(raw)) return null;
+    if (/^[A-Za-z][A-Za-z0-9+.-]*:/i.test(raw) && !/^[A-Za-z]:[\\/]/.test(raw) && !/^file:\/\//i.test(raw)) {
+        return null;
+    }
+    var rel = pathTokenToWorkspaceOpenRel(raw);
+    if (rel) return rel;
+    if (/^file:\/\//i.test(raw)) {
+        var fsPath = raw.replace(/^file:\/\/\/?/i, '');
+        fsPath = decodePathPercentEscapes(fsPath);
+        if (/^[A-Za-z]:[\\/]/.test(fsPath)) return fsPath.replace(/\\/g, '/');
+        return '/' + fsPath.replace(/^\/+/, '').replace(/\\/g, '/');
+    }
+    if (/^[A-Za-z]:[\\/]/.test(raw) || /^\\\\/.test(raw)) return raw.replace(/\\/g, '/');
+    if (/[\\/]/.test(raw)) return stripWorkspaceRootPrefixFromRelPath(raw);
+    return stripWorkspaceRootPrefixFromRelPath(raw);
 }
 
 function workspaceOpenDisplayLabel(original, wsRel) {
@@ -1677,7 +1949,8 @@ function getAssistMsgLinkifyRegex() {
     if (!_assistMsgLinkifyRe) {
         // 「/路径」前仅排除 ASCII 字母，避免 2023/文件、中文后接 / 等无法匹配；仍可抑制 ARPU/DOU（U 为字母）
         _assistMsgLinkifyRe = new RegExp(
-            '(https?:\\/\\/[^\\s<>\'"]+|' +
+            '((["\'])(?:(?:[A-Za-z]:(?:\\\\|\\/)|\\\\\\\\|\\/(?![\\s\\/]))|(?=[^"\'\\r\\n]*[\\\\/]))[^"\'\\r\\n]+?\\.(?:' + LINKIFY_EXT_FRAGMENT + ')\\b\\2|' +
+            'https?:\\/\\/[^\\s<>\'"]+|' +
             '\\\\\\\\(?:(?:[^\\\\\\/:*?"<>|\\r\\n]+)\\\\)+(?:[^\\\\\\/:*?"<>|\\r\\n]+)|' +
             '[A-Za-z]:(?:\\\\|\\/)(?:(?:[^\\\\/:*?"<>|\\r\\n]+)(?:\\\\|\\/))*[^\\\\/:*?"<>|\\r\\n]+|' +
             '(?<![A-Za-z])\\/(?![\\s\\/])[^\\s<>\'"]+|' +
@@ -1689,12 +1962,39 @@ function getAssistMsgLinkifyRegex() {
     return _assistMsgLinkifyRe;
 }
 
+function tryLinkifyEntirePathTextNode(textNode, raw) {
+    var token = String(raw || '').trim();
+    if (!token) return false;
+    var wsRel = pathTokenToWorkspaceOpenRel(token);
+    var href = wsRel ? null : makeHrefFromAutoLinkToken(token);
+    if (!wsRel && !href) return false;
+    var a = document.createElement('a');
+    a.className = wsRel ? 'msg-link-auto msg-link-workspace-open' : 'msg-link-auto';
+    a.textContent = cleanPathTokenForLink(token) || token;
+    if (wsRel) {
+        a.href = '#';
+        a.setAttribute('data-workspace-open', wsRel);
+        a.setAttribute('data-ui-tip', '在本机打开（工作区文件）');
+        bindUiHoverTip(a);
+    } else {
+        a.href = href;
+        a.target = '_blank';
+        a.rel = 'noopener noreferrer';
+    }
+    textNode.parentNode.replaceChild(a, textNode);
+    return true;
+}
+
 function linkifySingleTextNode(textNode) {
     var raw = textNode.nodeValue;
     if (!raw) return;
     var parent = textNode.parentElement;
     if (!parent || parent.closest('a, pre, script, style, textarea, svg')) return;
-    if (parent.closest('code') && !isEntireTextNodeWindowsPath(raw) && !isEntireBareFilenameLinkable(raw) && !isEntireWorkspaceSlashPathLinkable(raw) && !isEntireWorkspaceRelativePathLinkable(raw) && !isEntireTextNodeUncPath(raw)) return;
+    var inInlineCode = !!parent.closest('code');
+    if (inInlineCode) {
+        if (!isEntireTextNodeWindowsPath(raw) && !isEntireBareFilenameLinkable(raw) && !isEntireWorkspaceSlashPathLinkable(raw) && !isEntireWorkspaceRelativePathLinkable(raw) && !isEntireTextNodeUncPath(raw)) return;
+        if (tryLinkifyEntirePathTextNode(textNode, raw)) return;
+    }
     var rawForLink = linkifyNormalizePathToken(raw);
     var re = getAssistMsgLinkifyRegex();
     re.lastIndex = 0;
@@ -1725,7 +2025,7 @@ function linkifySingleTextNode(textNode) {
         if (p.k === 't') frag.appendChild(document.createTextNode(p.s));
         else {
             var wsRel = pathTokenToWorkspaceOpenRel(p.s);
-            var show = trimTrailingPathPunct(p.s);
+            var show = cleanPathTokenForLink(p.s);
             if (wsRel) {
                 var aw = document.createElement('a');
                 aw.href = '#';
@@ -1759,8 +2059,132 @@ function linkifySingleTextNode(textNode) {
     textNode.parentNode.replaceChild(frag, textNode);
 }
 
+function upgradeWorkspacePathMarkdownLinks(root) {
+    if (!root) return;
+    root.querySelectorAll('a[href]').forEach(function (a) {
+        if (!a || a.classList.contains('msg-link-workspace-open')) return;
+        var href = a.getAttribute('href') || '';
+        var marker = /^#ga-workspace-path=(.+)$/i.exec(href);
+        if (marker) {
+            try { href = decodeURIComponent(marker[1]); } catch (e0) { href = marker[1]; }
+        }
+        var raw = href;
+        try { raw = decodeURI(raw); } catch (e) {}
+        var rel = markdownHrefToWorkspaceOpenRel(href);
+        if (!rel && /^file:\/\//i.test(raw)) {
+            var fsPath = raw.replace(/^file:\/\/\/?/i, '');
+            try { fsPath = decodeURIComponent(fsPath); } catch (e2) {}
+            if (/^[A-Za-z]:\//.test(fsPath)) rel = pathTokenToWorkspaceOpenRel(fsPath);
+            else rel = pathTokenToWorkspaceOpenRel('/' + fsPath.replace(/^\/+/, ''));
+        }
+        if (!rel) return;
+        a.href = '#';
+        a.setAttribute('data-workspace-open', rel);
+        a.classList.add('msg-link-workspace-open');
+        a.setAttribute('data-ui-tip', '在本机打开（工作区文件）');
+        bindUiHoverTip(a);
+    });
+}
+
+var _workspaceImageExtRe = null;
+function workspaceImageExtRegex() {
+    if (!_workspaceImageExtRe) {
+        _workspaceImageExtRe = /\.(png|jpe?g|gif|webp|bmp|svg|ico|tiff?|avif|jfif)(?:[?#].*)?$/i;
+    }
+    return _workspaceImageExtRe;
+}
+
+function workspaceImageRelFromMarker(value) {
+    var raw = String(value || '').trim();
+    var marker = /^#ga-workspace-path=(.+)$/i.exec(raw);
+    if (marker) {
+        try { raw = decodeURIComponent(marker[1]); } catch (e) { raw = marker[1]; }
+    }
+    var rel = markdownHrefToWorkspaceOpenRel(raw);
+    if (!rel || !workspaceImageExtRegex().test(String(rel).replace(/\\/g, '/'))) return '';
+    return rel;
+}
+
+function workspaceImageUrl(rel) {
+    return '/api/workspace-image?rel=' + encodeURIComponent(String(rel || ''));
+}
+
+function wrapWorkspaceImageElement(img, rel) {
+    if (!img || !rel || img.dataset.workspaceImageReady === '1') return;
+    img.dataset.workspaceImageReady = '1';
+    img.classList.add('msg-workspace-image');
+    img.loading = 'lazy';
+    img.decoding = 'async';
+    img.src = workspaceImageUrl(rel);
+    img.setAttribute('data-workspace-open', rel);
+    img.setAttribute('data-ui-tip', '点击查看图片');
+    bindUiHoverTip(img);
+    var parent = img.parentElement;
+    if (!parent || (parent.tagName === 'A' && parent.classList.contains('msg-workspace-image-link'))) return;
+    var link = document.createElement('a');
+    link.href = workspaceImageUrl(rel);
+    link.target = '_blank';
+    link.rel = 'noopener noreferrer';
+    link.className = 'msg-workspace-image-link';
+    link.setAttribute('data-workspace-open', rel);
+    if (img.parentNode) img.parentNode.insertBefore(link, img);
+    link.appendChild(img);
+}
+
+function standaloneImageLinkHost(a) {
+    if (!a) return null;
+    var host = a.parentElement;
+    if (!host || !/^(P|DIV|LI)$/i.test(host.tagName || '')) return null;
+    var linkText = String(a.textContent || '').trim();
+    var hostText = String(host.textContent || '').trim();
+    if (!linkText || hostText !== linkText) return null;
+    return host;
+}
+
+function createWorkspaceImagePreview(rel, label) {
+    var figure = document.createElement('figure');
+    figure.className = 'msg-workspace-image-figure';
+    var link = document.createElement('a');
+    link.href = workspaceImageUrl(rel);
+    link.target = '_blank';
+    link.rel = 'noopener noreferrer';
+    link.className = 'msg-workspace-image-link';
+    link.setAttribute('data-workspace-open', rel);
+    var img = document.createElement('img');
+    img.className = 'msg-workspace-image';
+    img.src = workspaceImageUrl(rel);
+    img.loading = 'lazy';
+    img.decoding = 'async';
+    img.alt = String(label || rel || 'image');
+    link.appendChild(img);
+    figure.appendChild(link);
+    var caption = document.createElement('figcaption');
+    caption.textContent = String(label || rel || '');
+    figure.appendChild(caption);
+    return figure;
+}
+
+function upgradeWorkspaceImages(root) {
+    if (!root) return;
+    root.querySelectorAll('img[src]').forEach(function (img) {
+        var rel = workspaceImageRelFromMarker(img.getAttribute('src') || '');
+        if (rel) wrapWorkspaceImageElement(img, rel);
+    });
+    root.querySelectorAll('a.msg-link-workspace-open[data-workspace-open]').forEach(function (a) {
+        if (a.dataset.workspaceImagePreview === '1') return;
+        var rel = a.getAttribute('data-workspace-open') || '';
+        if (!workspaceImageExtRegex().test(String(rel).replace(/\\/g, '/'))) return;
+        var host = standaloneImageLinkHost(a);
+        if (!host || host.querySelector('.msg-workspace-image-figure')) return;
+        a.dataset.workspaceImagePreview = '1';
+        var figure = createWorkspaceImagePreview(rel, a.textContent || rel);
+        host.parentNode.insertBefore(figure, host.nextSibling);
+    });
+}
+
 function linkifyAssistantTextNodes(root) {
     if (!root) return;
+    upgradeWorkspacePathMarkdownLinks(root);
     var walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
     var batch = [];
     var n;
@@ -1770,7 +2194,7 @@ function linkifyAssistantTextNodes(root) {
         if (p.closest('code') && !isEntireTextNodeWindowsPath(n.nodeValue) && !isEntireBareFilenameLinkable(n.nodeValue) && !isEntireWorkspaceSlashPathLinkable(n.nodeValue) && !isEntireWorkspaceRelativePathLinkable(n.nodeValue) && !isEntireTextNodeUncPath(n.nodeValue)) continue;
         var nv = n.nodeValue;
         var nvNorm = linkifyNormalizePathToken(nv);
-        if (!nv || (!/https?:\/\/|[A-Za-z]:[\\/]|\/\S/.test(nvNorm) && !nvNorm.startsWith('\\\\') && !linkifyKnownExtRegex().test(nvNorm))) continue;
+        if (!nv || (!/https?:\/\/|["'][A-Za-z]:[\\/]|[A-Za-z]:[\\/]|\/\S/.test(nvNorm) && !nvNorm.startsWith('\\\\') && !linkifyKnownExtRegex().test(nvNorm))) continue;
         batch.push(n);
     }
     batch.forEach(linkifySingleTextNode);
@@ -1855,15 +2279,138 @@ function wrapMessageTables(container) {
     });
 }
 
+function unwrapMarkdownDelTags(container) {
+    if (!container) return;
+    container.querySelectorAll('del').forEach(function (el) {
+        var parent = el.parentNode;
+        if (!parent) return;
+        while (el.firstChild) parent.insertBefore(el.firstChild, el);
+        parent.removeChild(el);
+    });
+}
+
 function enhanceAssistantMessageContent(div) {
     if (!div) return;
+    unwrapMarkdownDelTags(div);
     wrapMessageTables(div);
     upgradeMermaidBlocks(div);
     linkifyAssistantTextNodes(div);
+    upgradeWorkspaceImages(div);
     scheduleMermaidRun(div);
 }
 
 let markedOptionsApplied = false;
+function encodeMarkdownWorkspacePathLinkMatch(match, label, dest) {
+    var rawDest = String(dest || '').trim();
+    if (!rawDest || rawDest.charAt(0) === '#') return match;
+    var decodedDest = decodeMarkdownHrefPathTarget(rawDest);
+    if (!decodedDest || /^(https?|mailto|tel|javascript|data|blob):/i.test(decodedDest)) return match;
+    if (/^[A-Za-z][A-Za-z0-9+.-]*:/i.test(decodedDest) && !/^[A-Za-z]:[\\/]/.test(decodedDest) && !/^file:\/\//i.test(decodedDest)) return match;
+    var rel = markdownHrefToWorkspaceOpenRel(decodedDest);
+    if (!rel) return match;
+    return '[' + label + '](#ga-workspace-path=' + encodeURIComponent(rel) + ')';
+}
+
+function encodeMarkdownWorkspacePathLinksInPlainText(text) {
+    return String(text || '').replace(/\[([^\]\r\n]+)\]\(([^)\r\n]+)\)/g, encodeMarkdownWorkspacePathLinkMatch);
+}
+
+function encodeMarkdownWorkspacePathLinks(text) {
+    var src = String(text || '');
+    var out = '';
+    var buf = '';
+    var inFence = false;
+    var fenceMarker = '';
+    var inCode = false;
+    var lineStart = true;
+    function flushPlain() {
+        if (buf) {
+            out += encodeMarkdownWorkspacePathLinksInPlainText(buf);
+            buf = '';
+        }
+    }
+    for (var i = 0; i < src.length; i += 1) {
+        var ch = src.charAt(i);
+        var rest = src.slice(i);
+        if (lineStart) {
+            var fence = /^([ \t]{0,3})(`{3,}|~{3,})/.exec(rest);
+            if (fence) {
+                flushPlain();
+                var fenceText = fence[0];
+                var marker = fence[2].charAt(0);
+                if (!inFence) {
+                    inFence = true;
+                    fenceMarker = marker;
+                } else if (marker === fenceMarker) {
+                    inFence = false;
+                    fenceMarker = '';
+                }
+                out += fenceText;
+                i += fenceText.length - 1;
+                lineStart = false;
+                continue;
+            }
+        }
+        if (!inFence && ch === '`') {
+            flushPlain();
+            var tickEnd = i + 1;
+            while (tickEnd < src.length && src.charAt(tickEnd) === '`') tickEnd += 1;
+            out += src.slice(i, tickEnd);
+            i = tickEnd - 1;
+            inCode = !inCode;
+            lineStart = false;
+            continue;
+        }
+        if (inFence || inCode) out += ch;
+        else buf += ch;
+        lineStart = ch === '\n' || ch === '\r';
+    }
+    flushPlain();
+    return out;
+}
+
+function escapeMarkdownSingleTildes(text) {
+    var src = String(text || '');
+    var out = '';
+    var inFence = false;
+    var fenceMarker = '';
+    var inCode = false;
+    var lineStart = true;
+    for (var i = 0; i < src.length; i += 1) {
+        var ch = src.charAt(i);
+        var rest = src.slice(i);
+        if (lineStart) {
+            var fence = /^([ \t]{0,3})(`{3,}|~{3,})/.exec(rest);
+            if (fence) {
+                var marker = fence[2].charAt(0);
+                if (!inFence) {
+                    inFence = true;
+                    fenceMarker = marker;
+                } else if (marker === fenceMarker) {
+                    inFence = false;
+                    fenceMarker = '';
+                }
+            }
+        }
+        if (!inFence && ch === '`') {
+            var tickEnd = i + 1;
+            while (tickEnd < src.length && src.charAt(tickEnd) === '`') tickEnd += 1;
+            out += src.slice(i, tickEnd);
+            i = tickEnd - 1;
+            inCode = !inCode;
+            lineStart = false;
+            continue;
+        }
+        if (!inFence && !inCode && ch === '~') {
+            out += '&#126;';
+        } else {
+            out += ch;
+        }
+        lineStart = ch === '\n' || ch === '\r';
+    }
+    return out;
+}
+
 function renderMarkdown(text) {
     if (!text) return '';
     if (typeof marked !== 'undefined' && !markedOptionsApplied) {
@@ -1872,7 +2419,7 @@ function renderMarkdown(text) {
             marked.setOptions({ breaks: true, mangle: false, headerIds: false });
         } catch (e) { /* ignore */ }
     }
-    return marked.parse(text, { mangle: false, headerIds: false });
+    return marked.parse(escapeMarkdownSingleTildes(encodeMarkdownWorkspacePathLinks(text)), { mangle: false, headerIds: false });
 }
 
 const TRACE_ROW = {
@@ -1885,6 +2432,7 @@ const TRACE_ROW = {
     'context-trim': { label: '裁剪', c: 'feed--trim' },
     'context-summary': { label: '压缩', c: 'feed--cmp' },
     'key-context': { label: '要点', c: 'feed--key' },
+    'user-steer':  { label: '追问', c: 'feed--answer' },
     'status':      { label: '状态', c: 'feed--st' },
 };
 
@@ -2037,13 +2585,17 @@ function appendToolPendingRow(ctx, parsed, runSessionId) {
     if (draft) {
         if (parsed.tool_call_id != null && String(parsed.tool_call_id) !== '') draft.setAttribute('data-tool-call-id', String(parsed.tool_call_id));
         draft.removeAttribute('data-tool-draft-key');
+        draft.setAttribute('data-tool-pending', '1');
         draft.dataset.commandPreview = parsed.command_preview != null ? String(parsed.command_preview) : '';
         setToolRowText(draft, line, ctx, runSessionId);
         return;
     }
     var sc = createProcessFeedRow(ctx, 'tool-call', line, so, runSessionId, parsed.tool_call_id);
     var row = sc && sc.closest ? sc.closest('.feed-item') : null;
-    if (row) row.dataset.commandPreview = parsed.command_preview != null ? String(parsed.command_preview) : '';
+    if (row) {
+        row.setAttribute('data-tool-pending', '1');
+        row.dataset.commandPreview = parsed.command_preview != null ? String(parsed.command_preview) : '';
+    }
 }
 
 function appendToolCommandDelta(ctx, parsed, runSessionId) {
@@ -2084,6 +2636,7 @@ function upsertToolCallResult(ctx, parsed, runSessionId) {
     if (row) {
         if (tid) row.setAttribute('data-tool-call-id', tid);
         row.removeAttribute('data-tool-draft-key');
+        row.removeAttribute('data-tool-pending');
         row.dataset.commandPreview = cmdPreview != null ? String(cmdPreview) : '';
         var sc = row.querySelector('.feed-chunk-scroller');
         if (sc) sc.textContent = truncateLogTextForUi(text);
@@ -2241,8 +2794,56 @@ function upsertLlmFeedRow(ctx, content, logType, runSessionId, reactIter) {
     return appendLog(ctx, content, logType, runSessionId, ri);
 }
 
+function parseMessageTimestamp(value) {
+    if (value == null || value === '') return null;
+    if (typeof value === 'number' && isFinite(value)) {
+        return new Date(value > 100000000000 ? value : value * 1000);
+    }
+    var d = new Date(String(value));
+    return isNaN(d.getTime()) ? null : d;
+}
+
+function formatUserMessageTimestamp(value) {
+    var d = parseMessageTimestamp(value);
+    if (!d) return '';
+    try {
+        return new Intl.DateTimeFormat(undefined, {
+            year: 'numeric',
+            month: '2-digit',
+            day: '2-digit',
+            hour: '2-digit',
+            minute: '2-digit',
+            timeZoneName: 'short',
+            hour12: false,
+        }).format(d);
+    } catch (e) {
+        return d.toLocaleString();
+    }
+}
+
+function refreshUserMessageTimes(root) {
+    var scope = root || document;
+    if (!scope || !scope.querySelectorAll) return;
+    scope.querySelectorAll('.user-message-time[data-created-at]').forEach(function (el) {
+        var raw = el.getAttribute('data-created-at') || '';
+        var txt = formatUserMessageTimestamp(raw);
+        if (txt) el.textContent = txt;
+    });
+}
+
+function ensureUserMessageTimeAutoRefresh() {
+    if (window.__userMessageTimeAutoRefreshBound) return;
+    window.__userMessageTimeAutoRefreshBound = true;
+    window.addEventListener('focus', function () { refreshUserMessageTimes(document); });
+    document.addEventListener('visibilitychange', function () {
+        if (!document.hidden) refreshUserMessageTimes(document);
+    });
+    setInterval(function () { refreshUserMessageTimes(document); }, 60000);
+}
+
 function appendMessage(ctx, role, content, meta, runSessionId) {
     meta = meta || {};
+    ensureUserMessageTimeAutoRefresh();
     stripWelcome(ctx);
     const wrap = document.createElement('div');
     wrap.className = 'msg-wrap msg-wrap--' + (role === 'user' ? 'user' : 'assistant');
@@ -2264,14 +2865,13 @@ function appendMessage(ctx, role, content, meta, runSessionId) {
     var rawStr = content == null ? '' : String(content);
     messageRawMarkdown.set(wrap, rawStr);
     if (role === 'user') {
-        var lineCount = rawStr.split('\n').length;
-        if (lineCount > 10) {
+        if (userMessageShouldCollapse(rawStr)) {
             wrap.classList.add('has-turn-process');
             div.classList.add('is-collapsible');
             // 摘要
             var sum = document.createElement('div');
             sum.className = 'user-msg-summary';
-            sum.textContent = rawStr.split('\n').slice(0, 10).join('\n') + '\n...';
+            sum.textContent = buildUserMessageSummary(rawStr);
             linkifyAssistantTextNodes(sum);
             // 完整
             var ful = document.createElement('div');
@@ -2301,6 +2901,13 @@ function appendMessage(ctx, role, content, meta, runSessionId) {
         enhanceAssistantMessageContent(div);
     }
     wrap.appendChild(div);
+    if (role === 'user') {
+        var createdAt = meta.createdAt || meta.created_at || meta.timestamp || new Date().toISOString();
+        wrap.setAttribute('data-created-at', String(createdAt));
+    }
+    if (role === 'user' && !div.classList.contains('is-collapsible')) {
+        renderUserMessageContent(wrap, div, rawStr, linkifyAssistantTextNodes);
+    }
     attachMessageToolbar(wrap, role);
     (ctx.stream || chatContainer).appendChild(wrap);
     if (role === 'assistant') {
@@ -2312,7 +2919,7 @@ function appendMessage(ctx, role, content, meta, runSessionId) {
         }
         sealProcessGroup(ctx);
     }
-    if (role === 'user' && !replayingMessages) rebuildToc();
+    if (role === 'user' && !replayingMessages) rebuildToc({ localOnly: true });
     if (!replayingMessages) {
         if (role === 'user') scrollChatToBottomIfFollow(runSessionId, { force: true });
         else scrollChatToBottomIfFollow(runSessionId, {});

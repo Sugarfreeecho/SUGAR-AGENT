@@ -17,6 +17,7 @@ import subagentActionsSource from './state/subagent-actions.js?raw';
 import subagentDockSource from './state/subagent-dock.js?raw';
 import contextStoreSource from './state/context-store.js?raw';
 import sessionEventReducerSource from './state/session-event-reducer.js?raw';
+import modelProfilesSource from './modules/model-profiles.js?raw';
 import sessionScrollHistorySource from './modules/session-scroll-history.js?raw';
 import tocTodoSource from './modules/toc-todo.js?raw';
 import messageRenderingSource from './modules/message-rendering.js?raw';
@@ -46,6 +47,7 @@ const uiSources = [
     subagentDockSource,
     contextStoreSource,
     sessionEventReducerSource,
+    modelProfilesSource,
     sessionScrollHistorySource,
     tocTodoSource,
     messageRenderingSource,

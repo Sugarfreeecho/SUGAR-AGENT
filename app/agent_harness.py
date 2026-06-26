@@ -30,6 +30,7 @@ import dotenv
 import httpx
 from openai import OpenAI
 import threading
+import model_profiles
 
 from agent_messages import UserMessage, AssistantMessage, ToolMessage, SystemMessage
 from agent_openai import (
@@ -248,6 +249,10 @@ def _openai_base_url_likely_deepseek() -> bool:
     return "deepseek" in (os.getenv("OPENAI_BASE_URL") or "").lower()
 
 
+def _base_url_likely_deepseek(base_url: str) -> bool:
+    return "deepseek" in str(base_url or "").lower()
+
+
 def _load_executor_extra_body() -> Optional[Dict[str, Any]]:
     raw = os.getenv("LLM_EXTRA_BODY_JSON", "").strip()
     if raw:
@@ -294,6 +299,46 @@ def _executor_reasoning_effort() -> Optional[str]:
 
 # 主模型：思考开时带 reasoning_effort，关时为 None
 EXECUTOR_REASONING_EFFORT: Optional[str] = _executor_reasoning_effort()
+
+
+def _profile_extra_body(profile: dict) -> Optional[Dict[str, Any]]:
+    raw_extra = str(profile.get("extra_body_json") or "").strip()
+    thinking_mode = str(profile.get("thinking_mode") or "").strip().lower()
+    if raw_extra:
+        try:
+            data = json.loads(raw_extra)
+        except json.JSONDecodeError:
+            logging.getLogger(__name__).warning("模型配置 LLM_EXTRA_BODY_JSON 不是合法 JSON，已忽略")
+            return None
+        if not isinstance(data, dict):
+            logging.getLogger(__name__).warning("模型配置 LLM_EXTRA_BODY_JSON 须为 JSON 对象，已忽略")
+            return None
+        return _sanitize_extra_body_drop_reasoning_when_thinking_off(data)
+    if not thinking_mode:
+        thinking_mode = "enabled"
+    if thinking_mode == "enabled":
+        return _sanitize_extra_body_drop_reasoning_when_thinking_off({"thinking": {"type": "enabled"}})
+    if thinking_mode == "disabled" and _base_url_likely_deepseek(str(profile.get("base_url") or "")):
+        return _sanitize_extra_body_drop_reasoning_when_thinking_off({"thinking": {"type": "disabled"}})
+    return None
+
+
+def _profile_reasoning_effort(profile: dict, extra_body: Optional[Dict[str, Any]]) -> Optional[str]:
+    if not _thinking_enabled_from_extra_dict(extra_body):
+        return None
+    v = str(profile.get("reasoning_effort") or "").strip()
+    return v if v else "high"
+
+
+def _profile_temperature(profile: dict) -> float:
+    raw = str(profile.get("temperature") or "").strip()
+    if not raw:
+        return float(EXECUTOR_TEMPERATURE)
+    try:
+        return float(raw)
+    except ValueError:
+        logging.getLogger(__name__).warning("模型配置 EXECUTOR_TEMPERATURE=%r 非数字，已使用默认值", raw)
+        return float(EXECUTOR_TEMPERATURE)
 
 
 def strip_reasoning_for_api_request(messages: List[Any]) -> List[Any]:
@@ -630,6 +675,84 @@ def create_openai_client(
             timeout=OPENAI_HTTP_TIMEOUT,
         )
         return client, resolved
+
+
+def create_openai_client_for_profile(
+    profile: dict,
+    role: str,
+    http_client: Optional[httpx.Client] = None,
+) -> Tuple[OpenAI, str]:
+    """Create an OpenAI-compatible client from a saved model profile."""
+    model_name = str(profile.get("model") or "").strip()
+    model_type = str(profile.get("llm_type") or "openai").strip().lower()
+    if model_type == "local":
+        return create_openai_client(model_name, "local", role, http_client=http_client)
+    base_url = str(profile.get("base_url") or "").strip().rstrip("/") or None
+    api_key = str(profile.get("api_key") or "").strip() or OPENAI_API_KEY or ""
+    logger.info(
+        "创建 %s 客户端 (模型档案): model=%s, base_url=%s",
+        role,
+        _masked_model_label(model_name),
+        _masked_base_label(base_url),
+    )
+    client = OpenAI(
+        api_key=api_key,
+        base_url=base_url,
+        http_client=http_client,
+        timeout=OPENAI_HTTP_TIMEOUT,
+    )
+    return client, model_name
+
+
+class _FallbackCompletions:
+    def __init__(self, candidates: List[Dict[str, Any]]):
+        self._candidates = candidates
+
+    def create(self, **kwargs: Any) -> Any:
+        last_error: Optional[BaseException] = None
+        for idx, item in enumerate(self._candidates):
+            call_kwargs = dict(kwargs)
+            call_kwargs["model"] = item["model"]
+            call_kwargs["max_tokens"] = int(item.get("max_output_tokens") or call_kwargs.get("max_tokens") or MAX_OUTPUT_TOKENS)
+            call_kwargs["temperature"] = float(item.get("temperature", EXECUTOR_TEMPERATURE))
+            if item.get("extra_body") is not None:
+                call_kwargs["extra_body"] = item.get("extra_body")
+            else:
+                call_kwargs.pop("extra_body", None)
+            if item.get("reasoning_effort"):
+                call_kwargs["reasoning_effort"] = item.get("reasoning_effort")
+            else:
+                call_kwargs.pop("reasoning_effort", None)
+            try:
+                if idx > 0:
+                    logger.warning(
+                        "当前模型故障，按优先级切换到备用模型: %s",
+                        _masked_model_label(str(item.get("model") or "")),
+                    )
+                return item["client"].chat.completions.create(**call_kwargs)
+            except Exception as exc:
+                last_error = exc
+                logger.warning(
+                    "模型调用失败: model=%s error=%s",
+                    _masked_model_label(str(item.get("model") or "")),
+                    _redact_runtime_log_text(exc),
+                )
+        if last_error is not None:
+            raise last_error
+        raise RuntimeError("no model candidates configured")
+
+
+class _FallbackChat:
+    def __init__(self, candidates: List[Dict[str, Any]]):
+        self.completions = _FallbackCompletions(candidates)
+
+
+class FallbackOpenAIClient:
+    """OpenAI-compatible facade that retries model profiles in priority order."""
+
+    def __init__(self, candidates: List[Dict[str, Any]]):
+        self.candidates = candidates
+        self.chat = _FallbackChat(candidates)
 
 
 executor_client, executor_model = create_openai_client(
@@ -1460,6 +1583,8 @@ class SessionManager:
     - metadata.json: 会话元数据（名称、创建时间等）
     """
 
+    AUTO_ARCHIVE_AFTER_DAYS = 14
+
     def __init__(self, sessions_dir: Path, index_file: Path):
         self.sessions_dir = sessions_dir
         self.index_file = index_file
@@ -1468,8 +1593,16 @@ class SessionManager:
         self._lock = threading.Lock()
         self._metadata_session_locks: Dict[str, threading.Lock] = {}
         self._metadata_session_locks_guard = threading.Lock()
+        self._ui_events_cache_lock = threading.Lock()
+        self._ui_events_cache: Dict[str, Tuple[Tuple[bool, int, int], List[dict]]] = {}
+        self._ui_events_cache_order: List[str] = []
+        self._ui_events_cache_max = 128
+        self._ui_user_turns_cache: Dict[str, Tuple[Tuple[bool, int, int], List[dict]]] = {}
         self._load_index()
-        self.refresh_sessions_index_from_disk()
+        if os.getenv("REPAIR_SESSIONS_INDEX_ON_START", "0").strip().lower() in {"1", "true", "yes", "on"}:
+            self.refresh_sessions_index_from_disk()
+        elif not self.index_file.exists():
+            self.refresh_sessions_index_from_disk()
 
     @staticmethod
     def _normalize_session_id(session_id: str) -> str:
@@ -1491,6 +1624,40 @@ class SessionManager:
             return True
         except ValueError:
             return False
+
+    def _is_deleted_session(self, session_id: str) -> bool:
+        sid = str(session_id or "").strip()
+        if not sid:
+            return False
+        try:
+            from session_lifecycle import is_session_deleted
+
+            return bool(is_session_deleted(sid))
+        except Exception:
+            return False
+
+    @staticmethod
+    def _has_session_payload_files(session_path: Path) -> bool:
+        payload_files = (
+            "ui_events.json",
+            "dialogue_history.json",
+            SESSION_WORK_MESSAGES_FILE,
+            "llm_history.json",
+            "events.jsonl",
+            "key_context.md",
+            "todo_plan.md",
+        )
+        return any((session_path / name).exists() for name in payload_files) or (
+            session_path / "snapshots" / "latest.json"
+        ).exists()
+
+    def _is_metadata_only_delete_remnant(self, session_path: Path, metadata: dict) -> bool:
+        if self._has_session_payload_files(session_path):
+            return False
+        if not isinstance(metadata, dict):
+            return False
+        durable_fields = ("name", "created_at", "updated_at", "last_user_preview", "model_profile_id")
+        return not any(str(metadata.get(k) or "").strip() for k in durable_fields)
 
     def _session_metadata_lock(self, session_id: str) -> threading.Lock:
         sid = str(session_id or "").strip() or "__empty__"
@@ -1531,6 +1698,8 @@ class SessionManager:
                     meta = {}
                 if meta.get("is_subagent"):
                     continue
+                if self._is_deleted_session(sid) or self._is_metadata_only_delete_remnant(p, meta):
+                    continue
                 name = meta.get("name") or "新会话"
                 created_at = meta.get("created_at")
                 if not created_at:
@@ -1552,6 +1721,9 @@ class SessionManager:
                     "archived": archived,
                     "pinned": pinned,
                     "pinned_at": pinned_at if pinned else None,
+                    "unread_result": bool(meta.get("unread_result", False)),
+                    "unread_result_at": meta.get("unread_result_at"),
+                    "unread_result_status": str(meta.get("unread_result_status") or "success"),
                     "last_user_preview": str(meta.get("last_user_preview") or ""),
                 }
         except FileNotFoundError:
@@ -1748,12 +1920,51 @@ class SessionManager:
     def _get_subagent_tasks_path(self, session_id: str) -> Path:
         return self.repository.subagent_tasks_path(session_id)
 
-    def list_subagent_tasks(self, parent_session_id: str) -> List[dict]:
-        """读取父会话下的 subagent task 状态索引。"""
+    def _runtime_v2_primary(self) -> bool:
+        try:
+            from runtime_v2 import runtime_v2_primary
+
+            return runtime_v2_primary()
+        except Exception:
+            return True
+
+    def _runtime_subagent_store(self):
+        from runtime_v2.subagent_store import RuntimeSubagentStore
+
+        return RuntimeSubagentStore(self.repository.sessions_dir)
+
+    def _runtime_mirror(self):
+        from runtime_v2.mirror import RuntimeMirror
+
+        return RuntimeMirror(self.repository.sessions_dir, path_resolver=self._resolve_session_path)
+
+    def _mirror_ui_event_to_runtime_v2(self, session_id: str, event: Dict[str, Any]):
+        mirror = self._runtime_mirror()
+        mirrored = mirror.mirror_ui_event(session_id, event)
+        if mirrored is not None:
+            return mirrored
+        # Guarantee the V2 event log exists for legacy-only or newly introduced
+        # UI events instead of silently skipping the mirror.
+        return mirror.append(session_id, "legacy_ui_event", dict(event or {}))
+
+    def _list_subagent_tasks_v1(self, parent_session_id: str) -> List[dict]:
         return self.repository.load_json_list(self._get_subagent_tasks_path(parent_session_id))
 
-    def upsert_subagent_task(self, parent_session_id: str, task_id: str, patch: Dict[str, Any]) -> None:
-        """维护父会话下 subagent task 状态索引，供 UI/恢复/调试使用。"""
+    def _list_subagent_tasks_v2(self, parent_session_id: str) -> List[dict]:
+        try:
+            return self._runtime_subagent_store().list_tasks(parent_session_id)
+        except Exception as exc:
+            logger.debug("Runtime V2 list subagent tasks failed: %s", exc)
+            return []
+
+    def list_subagent_tasks(self, parent_session_id: str) -> List[dict]:
+        """读取父会话下的 subagent task 状态索引。"""
+        if self._runtime_v2_primary():
+            rows = self._list_subagent_tasks_v2(parent_session_id)
+            return rows if rows else self._list_subagent_tasks_v1(parent_session_id)
+        return self._list_subagent_tasks_v1(parent_session_id)
+
+    def _upsert_subagent_task_v1(self, parent_session_id: str, task_id: str, patch: Dict[str, Any]) -> None:
         tid = str(task_id or "").strip()
         if not tid:
             return
@@ -1774,6 +1985,24 @@ class SessionManager:
             rows.append(row)
         self.repository.save_json_list(path, rows)
 
+    def _upsert_subagent_task_v2(self, parent_session_id: str, task_id: str, patch: Dict[str, Any]) -> None:
+        try:
+            self._runtime_subagent_store().upsert_task(parent_session_id, task_id, patch)
+        except Exception as exc:
+            logger.debug("Runtime V2 upsert subagent task failed: %s", exc)
+
+    def upsert_subagent_task(self, parent_session_id: str, task_id: str, patch: Dict[str, Any]) -> None:
+        """维护父会话下 subagent task 状态索引，供 UI/恢复/调试使用。"""
+        tid = str(task_id or "").strip()
+        if not tid:
+            return
+        if self._runtime_v2_primary():
+            self._upsert_subagent_task_v2(parent_session_id, tid, patch)
+            self._upsert_subagent_task_v1(parent_session_id, tid, patch)
+        else:
+            self._upsert_subagent_task_v1(parent_session_id, tid, patch)
+            self._upsert_subagent_task_v2(parent_session_id, tid, patch)
+
     def write_subagent_output(self, child_session_id: str, text: str) -> str:
         """将 subagent 最终可读输出写入子会话 output.md，返回路径。"""
         path = self._get_session_path(child_session_id) / "output.md"
@@ -1783,6 +2012,13 @@ class SessionManager:
 
     def read_subagent_task_output(self, parent_session_id: str, task_id: str) -> Dict[str, Any]:
         """读取父会话下某个 subagent/task 的可读输出文件。"""
+        if self._runtime_v2_primary():
+            try:
+                result = self._runtime_subagent_store().read_task_output(parent_session_id, task_id)
+                if result.get("ok"):
+                    return result
+            except Exception as exc:
+                logger.debug("Runtime V2 read subagent task output failed: %s", exc)
         tid = str(task_id or "").strip()
         if not tid:
             return {"ok": False, "error": "missing task_id"}
@@ -1832,28 +2068,62 @@ class SessionManager:
 
     def write_subagent_task_output(self, parent_session_id: str, task_id: str, text: str) -> str:
         """将虚拟 subagent task（如 best-of-n runner）输出写入父会话 outputs 目录。"""
+        if self._runtime_v2_primary():
+            try:
+                v2_path = self._runtime_subagent_store().write_task_output(parent_session_id, task_id, text)
+                tid = str(task_id or "").strip() or "subagent"
+                safe = re.sub(r"[^A-Za-z0-9_.-]+", "_", tid)
+                v1_path = self._get_session_path(parent_session_id) / "subagent_outputs" / f"{safe}.md"
+                v1_path.parent.mkdir(parents=True, exist_ok=True)
+                v1_path.write_text(str(text or ""), encoding="utf-8")
+                return v2_path
+            except Exception as exc:
+                logger.debug("Runtime V2 write subagent task output failed: %s", exc)
         tid = str(task_id or "").strip() or "subagent"
         safe = re.sub(r"[^A-Za-z0-9_.-]+", "_", tid)
         path = self._get_session_path(parent_session_id) / "subagent_outputs" / f"{safe}.md"
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(str(text or ""), encoding="utf-8")
+        try:
+            self._runtime_subagent_store().write_task_output(parent_session_id, task_id, text)
+        except Exception as exc:
+            logger.debug("Runtime V2 mirror subagent task output failed: %s", exc)
         return str(path)
 
     def append_pending_subagent_result(self, parent_session_id: str, entry: Dict[str, Any]) -> None:
-        path = self._get_pending_subagent_results_path(parent_session_id)
-        rows: List[dict] = self.repository.load_json_list(path)
         row = dict(entry)
         if row.get("after_final_index") is None:
             events = self._load_ui_events(parent_session_id)
             anchor = self._latest_final_index_without_later_user(events)
             if anchor >= 0:
                 row["after_final_index"] = anchor
+        path = self._get_pending_subagent_results_path(parent_session_id)
+        rows: List[dict] = self.repository.load_json_list(path)
         rows.append(row)
-        self.repository.save_json_list(path, rows)
+        if self._runtime_v2_primary():
+            try:
+                self._runtime_subagent_store().append_pending_result(parent_session_id, row)
+            except Exception as exc:
+                logger.debug("Runtime V2 append pending subagent result failed: %s", exc)
+            self.repository.save_json_list(path, rows)
+        else:
+            self.repository.save_json_list(path, rows)
+            try:
+                self._runtime_subagent_store().append_pending_result(parent_session_id, row)
+            except Exception as exc:
+                logger.debug("Runtime V2 mirror pending subagent result failed: %s", exc)
 
     def _load_pending_subagent_results(self, session_id: str) -> List[dict]:
-        path = self._get_pending_subagent_results_path(session_id)
-        rows = self.repository.load_json_list(path)
+        if self._runtime_v2_primary():
+            try:
+                rows = self._runtime_subagent_store().list_pending_results(session_id)
+                if not rows:
+                    rows = self.repository.load_json_list(self._get_pending_subagent_results_path(session_id))
+            except Exception as exc:
+                logger.debug("Runtime V2 load pending subagent results failed: %s", exc)
+                rows = self.repository.load_json_list(self._get_pending_subagent_results_path(session_id))
+        else:
+            rows = self.repository.load_json_list(self._get_pending_subagent_results_path(session_id))
         try:
             meta = self._load_metadata(session_id)
             created_at = str((meta or {}).get("created_at") or "")
@@ -1866,6 +2136,22 @@ class SessionManager:
         except Exception:
             pass
         return rows
+
+    def _save_pending_subagent_results(self, session_id: str, rows: List[dict]) -> None:
+        rows = [x for x in (rows or []) if isinstance(x, dict)]
+        path = self._get_pending_subagent_results_path(session_id)
+        if self._runtime_v2_primary():
+            try:
+                self._runtime_subagent_store().save_pending_results(session_id, rows)
+            except Exception as exc:
+                logger.debug("Runtime V2 save pending subagent results failed: %s", exc)
+            self.repository.save_json_list(path, rows)
+        else:
+            self.repository.save_json_list(path, rows)
+            try:
+                self._runtime_subagent_store().save_pending_results(session_id, rows)
+            except Exception as exc:
+                logger.debug("Runtime V2 mirror pending subagent results failed: %s", exc)
 
     def has_pending_subagent_notifications(self, session_id: str) -> bool:
         """父会话是否有尚未注入模型的后台 subagent 完成结果。"""
@@ -1955,7 +2241,6 @@ class SessionManager:
         """读取并消费可注入的后台 subagent 通知，供父 react_node 注入。"""
         rows = self._load_pending_subagent_results(session_id)
         events = self._load_ui_events(session_id)
-        path = self._get_pending_subagent_results_path(session_id)
         last_idx = self._latest_final_index_without_later_user(events)
         if not rows or not events or last_idx < 0:
             return []
@@ -1975,7 +2260,7 @@ class SessionManager:
                 lines.append(line)
             else:
                 keep.append(item)
-        self.repository.save_json_list(path, keep)
+        self._save_pending_subagent_results(session_id, keep)
         return lines
 
     def clear_pending_subagent_results_by_agent_ids(self, session_id: str, agent_ids: List[str]) -> int:
@@ -1995,8 +2280,7 @@ class SessionManager:
                 continue
             keep.append(item)
         if removed:
-            path = self._get_pending_subagent_results_path(session_id)
-            self.repository.save_json_list(path, keep)
+            self._save_pending_subagent_results(session_id, keep)
         return removed
 
     def dismiss_pending_subagent_notifications(self, session_id: str) -> int:
@@ -2015,8 +2299,7 @@ class SessionManager:
         actionable_keys = {_pending_key(x) for x in actionable}
         keep = [x for x in rows if _pending_key(x) not in actionable_keys]
         removed = len(rows) - len(keep)
-        path = self._get_pending_subagent_results_path(session_id)
-        self.repository.save_json_list(path, keep)
+        self._save_pending_subagent_results(session_id, keep)
         return removed
 
     def _extract_subagent_dialogue_turns(
@@ -2461,7 +2744,44 @@ class SessionManager:
         return self.repository.ui_events_path(session_id)
 
     def _load_ui_events(self, session_id: str) -> List[dict]:
-        return self.event_log.load(session_id)
+        sig = self._ui_events_file_signature(session_id)
+        key = str(self._get_ui_events_path(session_id).resolve())
+        with self._ui_events_cache_lock:
+            cached = self._ui_events_cache.get(key)
+            if cached and cached[0] == sig:
+                return [dict(row) for row in cached[1]]
+        events = self.event_log.load(session_id)
+        with self._ui_events_cache_lock:
+            self._ui_events_cache[key] = (sig, [dict(row) for row in events])
+            if key in self._ui_events_cache_order:
+                self._ui_events_cache_order.remove(key)
+            self._ui_events_cache_order.append(key)
+            while len(self._ui_events_cache_order) > self._ui_events_cache_max:
+                old = self._ui_events_cache_order.pop(0)
+                self._ui_events_cache.pop(old, None)
+        return [dict(row) for row in events]
+
+    def _invalidate_ui_events_cache(self, session_id: str) -> None:
+        try:
+            key = str(self._get_ui_events_path(session_id).resolve())
+        except Exception:
+            key = ""
+        if not key:
+            return
+        with self._ui_events_cache_lock:
+            self._ui_events_cache.pop(key, None)
+            try:
+                self._ui_events_cache_order.remove(key)
+            except ValueError:
+                pass
+
+    def _ui_events_file_signature(self, session_id: str) -> Tuple[bool, int, int]:
+        path = self._get_ui_events_path(session_id)
+        try:
+            st = path.stat()
+            return True, int(st.st_mtime_ns), int(st.st_size)
+        except OSError:
+            return False, 0, 0
 
     def _save_ui_events(self, session_id: str, events: List[dict]) -> None:
         try:
@@ -2472,6 +2792,8 @@ class SessionManager:
         except Exception:
             pass
         self.event_log.save(session_id, events)
+        self._invalidate_ui_events_cache(session_id)
+        self._ui_user_turns_cache.pop(session_id, None)
         self._sync_ui_event_count_in_metadata(session_id, len(events))
 
     def _sync_ui_event_count_in_metadata(self, session_id: str, count: int) -> None:
@@ -2509,16 +2831,38 @@ class SessionManager:
         except Exception:
             pass
         try:
-            events = self._load_ui_events(session_id)
             event_copy = json.loads(json.dumps(event, ensure_ascii=False))
+            event_copy.setdefault(
+                "created_at",
+                datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z"),
+            )
+            try:
+                from runtime_v2 import runtime_v2_primary, runtime_v2_strict
+
+                if runtime_v2_primary():
+                    mirrored = self._mirror_ui_event_to_runtime_v2(session_id, event_copy)
+                    if mirrored is None and runtime_v2_strict():
+                        raise RuntimeError("Runtime V2 did not accept ui_event")
+            except Exception as mirror_error:
+                if "runtime_v2_strict" in locals() and runtime_v2_strict():
+                    raise
+                logger.warning("Runtime V2 mirror ui_event failed for %s: %s", session_id, mirror_error)
+            events = self._load_ui_events(session_id)
             events.append(event_copy)
             self._save_ui_events(session_id, events)
             try:
-                from runtime_v2.mirror import RuntimeMirror
+                from runtime_v2 import runtime_v1_primary
 
-                RuntimeMirror(self.repository.sessions_dir).mirror_ui_event(session_id, event_copy)
+                if runtime_v1_primary():
+                    mirrored = self._mirror_ui_event_to_runtime_v2(session_id, event_copy)
+                    if mirrored is None and str(event_copy.get("type") or "") in {"user", "final"}:
+                        logger.warning(
+                            "Runtime V2 mirror returned no event for %s type=%s",
+                            session_id,
+                            event_copy.get("type"),
+                        )
             except Exception as mirror_error:
-                logger.debug("Runtime V2 mirror ui_event failed: %s", mirror_error)
+                logger.warning("Runtime V2 mirror ui_event after V1 write failed for %s: %s", session_id, mirror_error)
             if (
                 event_copy.get("type") == "user"
                 and not event_copy.get("_subagent_forward")
@@ -2542,11 +2886,47 @@ class SessionManager:
                             break
                 if changed:
                     self._save_index()
+                self.clear_session_unread_result(session_id)
+            elif event_copy.get("type") == "final":
+                final_status = "failed" if self._ui_event_final_is_failure(event_copy) else "success"
+                self.mark_session_unread_result(session_id, status=final_status)
+            elif event_copy.get("type") in ("run_interrupted", "run_failed"):
+                self.mark_session_unread_result(session_id, status="failed")
         except Exception as e:
             logger.warning(f"append_ui_event 失败: {e}")
 
+    def _observe_runtime_v2_history(self, method_name: str, session_id: str, **kwargs) -> None:
+        try:
+            from runtime_v2.history_ops import RuntimeHistoryOps
+
+            ops = RuntimeHistoryOps(self.repository.sessions_dir)
+            method = getattr(ops, method_name)
+            method(session_id, **kwargs)
+        except Exception as exc:
+            logger.debug("Runtime V2 observe %s failed for session %s: %s", method_name, session_id, exc)
+
     def get_ui_events_for_display(self, session_id: str) -> List[dict]:
         """返回与流式接口相同结构的事件列表，供前端仅调用 renderEvent 重放。"""
+        return self._load_ui_events(session_id)
+
+    def _load_ui_events_for_active_runtime(self, session_id: str) -> List[dict]:
+        """Load UI-visible history from the selected runtime, with V1 as fallback."""
+        if self._runtime_v2_primary():
+            try:
+                from runtime_v2.ui_projection import RuntimeUiProjection
+
+                projection = RuntimeUiProjection(
+                    self.repository.sessions_dir,
+                    path_resolver=self._resolve_session_path,
+                )
+                events = projection.read_ui_events(
+                    session_id,
+                    legacy_loader=lambda: self._load_ui_events(session_id),
+                )
+                if events:
+                    return events
+            except Exception as exc:
+                logger.debug("Runtime V2 UI history read failed for %s: %s", session_id, exc)
         return self._load_ui_events(session_id)
 
     def get_ui_events_page(
@@ -2635,17 +3015,29 @@ class SessionManager:
         """
         侧栏「历史记录」目录：遍历 ui_events，列出每条用户消息的 event_index 与预览文案（轻量 JSON）。
         """
+        def _rows_from_events(events: List[dict]) -> List[dict]:
+            out: List[dict] = []
+            for i, ev in enumerate(events):
+                if not isinstance(ev, dict) or ev.get("type") != "user":
+                    continue
+                raw = ev.get("content")
+                text = (raw if isinstance(raw, str) else str(raw or "")).strip()
+                one_line = " ".join(text.split())
+                if len(one_line) > 200:
+                    one_line = one_line[:197] + "..."
+                out.append({"event_index": i, "preview": one_line})
+            return out
+
+        if self._runtime_v2_primary():
+            return _rows_from_events(self._load_ui_events_for_active_runtime(session_id))
+
+        sig = self._ui_events_file_signature(session_id)
+        cached = self._ui_user_turns_cache.get(session_id)
+        if cached and cached[0] == sig:
+            return [dict(row) for row in cached[1]]
         events = self._load_ui_events(session_id)
-        out: List[dict] = []
-        for i, ev in enumerate(events):
-            if not isinstance(ev, dict) or ev.get("type") != "user":
-                continue
-            raw = ev.get("content")
-            text = (raw if isinstance(raw, str) else str(raw or "")).strip()
-            one_line = " ".join(text.split())
-            if len(one_line) > 200:
-                one_line = one_line[:197] + "..."
-            out.append({"event_index": i, "preview": one_line})
+        out = _rows_from_events(events)
+        self._ui_user_turns_cache[session_id] = (sig, [dict(row) for row in out])
         return out
 
     def get_todo_plan_snapshot(self, session_id: str) -> dict:
@@ -2867,6 +3259,7 @@ class SessionManager:
         before_index: int,
         *,
         boundary_for_branch: bool = False,
+        create_backup: bool = True,
     ) -> bool:
         """
         保留 ui_events[0:before_index]（下标为 before_index 及之后均丢弃），
@@ -2875,18 +3268,26 @@ class SessionManager:
         boundary_for_branch=True 时按「分支点 final 前 user」取锚点，且不裁掉该 user 轮。
         """
         try:
-            events = self._load_ui_events(session_id)
+            events = self._load_ui_events_for_active_runtime(session_id)
             n = len(events)
             if before_index < 0:
                 return False
             if before_index > n:
                 before_index = n
             new_events = events[:before_index]
-            self._backup_session_before_truncate(
-                session_id,
-                before_index,
-                event_count=n,
-            )
+            if create_backup:
+                self._backup_session_before_truncate(
+                    session_id,
+                    before_index,
+                    event_count=n,
+                )
+            if self._runtime_v2_primary():
+                self._observe_runtime_v2_history(
+                    "truncate_ui_history",
+                    session_id,
+                    before_index=before_index,
+                    reason="runtime_v2_truncate",
+                )
             self._save_ui_events(session_id, new_events)
             new_llm, new_work, consumed_cprefix = self._rebuild_llm_work_from_ui(
                 session_id,
@@ -2902,6 +3303,20 @@ class SessionManager:
             )
             if consumed_cprefix:
                 self.remove_llm_compress_prefix_backup(session_id, consumed_cprefix)
+            self._observe_runtime_v2_history(
+                "observe_legacy_truncate",
+                session_id,
+                before_index=before_index,
+                old_event_count=n,
+                new_event_count=len(new_events),
+                boundary_for_branch=boundary_for_branch,
+            )
+            self._observe_runtime_v2_history(
+                "replace_model_history",
+                session_id,
+                messages=new_llm,
+                reason="legacy_truncate",
+            )
             return True
         except Exception as e:
             logger.warning(f"truncate_session_at_event_index 失败: {e}")
@@ -2944,12 +3359,12 @@ class SessionManager:
             src_path = self._get_session_path(sid)
             if not src_path.is_dir():
                 return None
-            events = self._load_ui_events(sid)
+            events = self._load_ui_events_for_active_runtime(sid)
             n = len(events)
             if before_index < 0:
                 return None
             if before_index > n:
-                before_index = n
+                return None
             new_id = str(uuid.uuid4())
             dst_path = self._get_session_path(new_id)
             if dst_path.exists():
@@ -2957,6 +3372,8 @@ class SessionManager:
             branch_name = self._next_branch_session_name(sid)
             now_iso = datetime.now().isoformat()
             new_events = events[:before_index]
+            if not new_events or not isinstance(new_events[-1], dict) or new_events[-1].get("type") != "final":
+                return None
             src_llm = self._load_llm_history(sid)
             src_work = self._load_work_messages(sid)
             new_llm, new_work, _ = self._rebuild_llm_work_from_ui(
@@ -2977,6 +3394,17 @@ class SessionManager:
                 new_id,
                 [_message_to_dict(m) for m in rebuild_core_messages_from_ui_events(new_events)],
             )
+            if not self._runtime_v2_primary():
+                try:
+                    from runtime_v2.ui_projection import RuntimeUiProjection
+
+                    branch_projection = RuntimeUiProjection(
+                        self.repository.sessions_dir,
+                        path_resolver=self._resolve_session_path,
+                    )
+                    branch_projection.replace_from_legacy(new_id, new_events, reason="legacy_branch_seed")
+                except Exception as exc:
+                    logger.debug("Runtime V2 branch UI seed failed for %s: %s", new_id, exc)
             meta = self._load_metadata(sid)
             if not isinstance(meta, dict):
                 meta = {}
@@ -3017,6 +3445,41 @@ class SessionManager:
                 sid,
                 before_index,
                 branch_name,
+            )
+            self._observe_runtime_v2_history(
+                "observe_legacy_branch",
+                sid,
+                source_session_id=sid,
+                new_session_id=new_id,
+                before_index=before_index,
+                new_event_count=len(new_events),
+                name=branch_name,
+            )
+            branch_from_seq = before_index
+            if self._runtime_v2_primary():
+                try:
+                    from runtime_v2.ui_projection import RuntimeUiProjection
+
+                    mapped_seq = RuntimeUiProjection(
+                        self.repository.sessions_dir,
+                        path_resolver=self._resolve_session_path,
+                    ).ui_index_to_runtime_seq(sid, before_index - 1)
+                    if mapped_seq is not None:
+                        branch_from_seq = int(mapped_seq)
+                except Exception as exc:
+                    logger.debug("Runtime V2 branch source seq mapping failed for %s: %s", sid, exc)
+            self._observe_runtime_v2_history(
+                "create_branch",
+                new_id,
+                source_session_id=sid,
+                branch_from_seq=branch_from_seq,
+                name=branch_name,
+            )
+            self._observe_runtime_v2_history(
+                "replace_model_history",
+                new_id,
+                messages=new_llm,
+                reason="legacy_branch",
             )
             return {"session_id": new_id, "name": branch_name}
         except Exception as e:
@@ -3082,6 +3545,12 @@ class SessionManager:
             self._save_dialogue_history(
                 session_id, self.dialogue_dicts_from_ui_events_file(session_id)
             )
+            self._observe_runtime_v2_history(
+                "replace_model_history",
+                session_id,
+                messages=new_llm,
+                reason="legacy_repair",
+            )
             if consumed:
                 self.remove_llm_compress_prefix_backup(session_id, consumed)
             logger.info(
@@ -3121,6 +3590,12 @@ class SessionManager:
             self._save_llm_history(session_id, new_llm)
             if include_work:
                 self._save_work_messages(session_id, new_work)
+            self._observe_runtime_v2_history(
+                "replace_model_history",
+                session_id,
+                messages=new_llm,
+                reason="legacy_reconcile",
+            )
             return True
         except Exception as e:
             logger.warning(f"reconcile_llm_work_to_ui_user_count 失败: {e}")
@@ -3143,6 +3618,24 @@ class SessionManager:
             self._save_llm_history(session_id, new_llm)
             self._save_dialogue_history(
                 session_id, self.dialogue_dicts_from_ui_events_file(session_id)
+            )
+            try:
+                mirror = self._runtime_mirror()
+                for event_copy in clean:
+                    mirror.mirror_ui_event(session_id, event_copy)
+            except Exception as mirror_error:
+                logger.warning("Runtime V2 mirror restored ui_events tail failed for %s: %s", session_id, mirror_error)
+            self._observe_runtime_v2_history(
+                "observe_legacy_tail_restored",
+                session_id,
+                tail_count=len(clean),
+                merged_event_count=len(merged),
+            )
+            self._observe_runtime_v2_history(
+                "replace_model_history",
+                session_id,
+                messages=new_llm,
+                reason="legacy_tail_restored",
             )
             return True
         except Exception as e:
@@ -3287,12 +3780,16 @@ class SessionManager:
             logger.warning("append_key_context_history 失败: %s", e)
 
     def _save_metadata_unlocked(self, session_id: str, metadata: dict) -> None:
+        if self._is_deleted_session(session_id):
+            return
         self.repository.save_metadata_atomic(session_id, metadata)
 
     def _load_metadata_unlocked(self, session_id: str) -> dict:
         return self.repository.load_metadata(session_id)
 
     def _save_metadata(self, session_id: str, metadata: dict) -> None:
+        if self._is_deleted_session(session_id):
+            return
         with self._session_metadata_lock(session_id):
             self._save_metadata_unlocked(session_id, metadata)
 
@@ -3464,6 +3961,10 @@ class SessionManager:
         child_id = str(child_session_id or "").strip()
         if not child_id:
             return
+        try:
+            self._runtime_subagent_store().remove_parent_rows(parent_session_id, child_id)
+        except Exception as exc:
+            logger.debug("Runtime V2 remove subagent parent rows failed: %s", exc)
         for path_getter in (self._get_pending_subagent_results_path, self._get_subagent_tasks_path):
             path = path_getter(parent_session_id)
             if not path.is_file():
@@ -3511,6 +4012,11 @@ class SessionManager:
             except Exception:
                 pass
         logger.info("已删除虚拟 subagent/task %s ← parent=%s", tid, parent_id)
+        self._observe_runtime_v2_history(
+            "observe_legacy_virtual_subagent_deleted",
+            parent_id,
+            task_id=tid,
+        )
         return True
 
     def delete_subagent_session(self, parent_session_id: str, child_session_id: str) -> bool:
@@ -3533,6 +4039,12 @@ class SessionManager:
             if p and p.exists():
                 shutil.rmtree(p, ignore_errors=True)
         self._remove_subagent_parent_rows(parent_id, child_id)
+        self._observe_runtime_v2_history(
+            "observe_legacy_subagent_deleted",
+            parent_id,
+            child_session_id=child_id,
+            descendant_count=max(0, len(ids) - 1),
+        )
         logger.info(
             "已删除 subagent %s ← parent=%s（含 descendants=%s）",
             child_id,
@@ -3634,6 +4146,12 @@ class SessionManager:
 
     def delete_session(self, session_id: str):
         sid = self._normalize_session_id(session_id)
+        try:
+            from session_lifecycle import mark_session_deleted
+
+            mark_session_deleted(sid)
+        except Exception:
+            pass
         idx = self._load_subagent_index()
         children = [cid for cid, pid in idx.items() if pid == sid]
         for cid in children:
@@ -3679,6 +4197,8 @@ class SessionManager:
         d = dict(base)
         d.setdefault("archived", False)
         d.setdefault("pinned", False)
+        d["unread_result"] = bool(d.get("unread_result", False))
+        d["unread_result_status"] = str(d.get("unread_result_status") or "success")
         if d.get("pinned") and not d.get("pinned_at"):
             d["pinned_at"] = d.get("updated_at") or d.get("created_at")
         sid = d.get("id")
@@ -3721,28 +4241,57 @@ class SessionManager:
             d["last_user_preview"] = ""
         return d
 
+    @staticmethod
+    def _iso_ts(raw: Any) -> float:
+        if not raw:
+            return 0.0
+        try:
+            iso = str(raw).replace("Z", "+00:00")
+            return datetime.fromisoformat(iso).timestamp()
+        except Exception:
+            return 0.0
+
+    def _auto_archive_stale_sessions(self) -> None:
+        cutoff = datetime.now(timezone.utc).timestamp() - (self.AUTO_ARCHIVE_AFTER_DAYS * 86400)
+        changed = False
+        for sess in list(self.index):
+            sid = str(sess.get("id") or "").strip()
+            if not sid or sess.get("archived") or sess.get("pinned"):
+                continue
+            row = self._session_entry_with_activity(dict(sess))
+            activity_ts = self._iso_ts(row.get("last_activity_at") or row.get("updated_at") or row.get("created_at"))
+            if not activity_ts or activity_ts >= cutoff:
+                continue
+            meta_path = self._get_metadata_path(sid)
+            if not meta_path.exists():
+                continue
+            with self._session_metadata_lock(sid):
+                metadata = self._load_metadata_unlocked(sid)
+                if not isinstance(metadata, dict):
+                    metadata = {}
+                metadata["archived"] = True
+                metadata["auto_archived"] = True
+                metadata["auto_archived_at"] = datetime.now(timezone.utc).isoformat()
+                self._save_metadata_unlocked(sid, metadata)
+            sess["archived"] = True
+            changed = True
+        if changed:
+            self._save_index()
+
     def list_sessions(self, include_archived: bool = False) -> List[dict]:
         """返回会话列表；每条含 last_activity_at。置顶在前，其余按最近活动时间倒序。"""
+        self._auto_archive_stale_sessions()
         if not include_archived:
             base_rows = [dict(s) for s in self.index if not s.get("archived")]
         else:
             base_rows = [dict(s) for s in self.index]
         rows = [self._session_entry_with_activity(s) for s in base_rows]
 
-        def _iso_ts(raw: Any) -> float:
-            if not raw:
-                return 0.0
-            try:
-                iso = str(raw).replace("Z", "+00:00")
-                return datetime.fromisoformat(iso).timestamp()
-            except Exception:
-                return 0.0
-
         def sort_key(r: dict) -> Tuple[int, float, float]:
             pinned = bool(r.get("pinned"))
-            pt = _iso_ts(r.get("pinned_at"))
+            pt = self._iso_ts(r.get("pinned_at"))
             la = r.get("last_activity_at") or r.get("updated_at") or r.get("created_at")
-            lt = _iso_ts(la)
+            lt = self._iso_ts(la)
             return (0 if pinned else 1, -pt if pinned else 0.0, -lt)
 
         rows.sort(key=sort_key)
@@ -3750,6 +4299,7 @@ class SessionManager:
 
     def archived_session_count(self) -> int:
         """Return the number of archived sessions without materializing session details."""
+        self._auto_archive_stale_sessions()
         return sum(1 for s in self.index if s.get("archived"))
 
     def get_session_summary(self, session_id: str) -> Optional[dict]:
@@ -3823,28 +4373,131 @@ class SessionManager:
                 break
         self._save_index()
 
-    def request_interrupt(self, session_id: str):
+    @staticmethod
+    def _ui_event_final_is_failure(event: Dict[str, Any]) -> bool:
+        text = str((event or {}).get("content") or "").strip()
+        if not text:
+            return True
+        if "工具执行异常" in text:
+            return False
+        failure_markers = (
+            "任务已由用户中断",
+            "调用失败",
+            "请求失败",
+            "执行步骤达到最大迭代",
+            "检测到连续重复行为",
+            "No result",
+            "工具执行异常",
+            "missing final",
+        )
+        return any(marker in text for marker in failure_markers)
+
+    def mark_session_unread_result(self, session_id: str, status: str = "success") -> None:
+        sid = self._normalize_session_id(session_id)
+        if self._is_deleted_session(sid):
+            return
+        meta_path = self._get_metadata_path(sid)
+        if not meta_path.exists():
+            return
+        result_status = "failed" if str(status or "").lower() == "failed" else "success"
+        now = datetime.now().isoformat()
+        with self._session_metadata_lock(sid):
+            metadata = self._load_metadata_unlocked(sid)
+            if not isinstance(metadata, dict):
+                metadata = {}
+            if result_status == "success" and (
+                metadata.get("unread_result_status") == "failed"
+                or bool(metadata.get("interrupt_requested"))
+            ):
+                result_status = "failed"
+            metadata["unread_result"] = True
+            metadata["unread_result_at"] = now
+            metadata["unread_result_status"] = result_status
+            self._save_metadata_unlocked(sid, metadata)
+        changed = False
+        with self._lock:
+            for sess in self.index:
+                if sess.get("id") == sid:
+                    if result_status == "success" and sess.get("unread_result_status") == "failed":
+                        result_status = "failed"
+                    sess["unread_result"] = True
+                    sess["unread_result_at"] = now
+                    sess["unread_result_status"] = result_status
+                    changed = True
+                    break
+        if changed:
+            self._save_index()
+
+    def clear_session_unread_result(self, session_id: str) -> None:
+        sid = self._normalize_session_id(session_id)
+        if self._is_deleted_session(sid):
+            return
+        meta_path = self._get_metadata_path(sid)
+        if not meta_path.exists():
+            return
+        with self._session_metadata_lock(sid):
+            metadata = self._load_metadata_unlocked(sid)
+            if not isinstance(metadata, dict):
+                metadata = {}
+            metadata["unread_result"] = False
+            metadata.pop("unread_result_at", None)
+            metadata.pop("unread_result_status", None)
+            self._save_metadata_unlocked(sid, metadata)
+        changed = False
+        with self._lock:
+            for sess in self.index:
+                if sess.get("id") == sid:
+                    sess["unread_result"] = False
+                    sess.pop("unread_result_at", None)
+                    sess.pop("unread_result_status", None)
+                    changed = True
+                    break
+        if changed:
+            self._save_index()
+
+    def request_interrupt(self, session_id: str, run_id: str = "", reason: str = "user"):
         """请求中断指定会话当前执行。"""
-        with self._session_metadata_lock(session_id):
-            metadata = self._load_metadata_unlocked(session_id)
+        sid = (session_id or "").strip()
+        rid = str(run_id or "").strip()
+        interrupt_reason = str(reason or "user").strip() or "user"
+        if not sid:
+            return
+        if self._is_deleted_session(sid):
+            return
+        with self._session_metadata_lock(sid):
+            metadata = self._load_metadata_unlocked(sid)
             if not isinstance(metadata, dict):
                 metadata = {}
             metadata["interrupt_requested"] = True
-            self._save_metadata_unlocked(session_id, metadata)
+            metadata["interrupt_reason"] = interrupt_reason
+            if rid:
+                metadata["interrupt_run_id"] = rid
+            elif metadata.get("active_run_id"):
+                metadata["interrupt_run_id"] = str(metadata.get("active_run_id") or "")
+            self._save_metadata_unlocked(sid, metadata)
 
-    def clear_interrupt(self, session_id: str):
+    def clear_interrupt(self, session_id: str, run_id: str = ""):
         """清除会话中断标记（新任务启动前调用）。始终写回 False，避免残留 true。"""
         sid = (session_id or "").strip()
         if not sid:
             return
+        rid = str(run_id or "").strip()
         with self._session_metadata_lock(sid):
             metadata = self._load_metadata_unlocked(sid)
             if not metadata:
                 return
+            if rid:
+                metadata["active_run_id"] = rid
+                interrupt_run_id = str(metadata.get("interrupt_run_id") or "").strip()
+                if bool(metadata.get("interrupt_requested")) and interrupt_run_id == rid:
+                    self._save_metadata_unlocked(sid, metadata)
+                    return
             metadata["interrupt_requested"] = False
+            metadata.pop("interrupt_run_id", None)
+            metadata.pop("interrupt_reason", None)
             self._save_metadata_unlocked(sid, metadata)
 
-    def is_interrupt_requested(self, session_id: str) -> bool:
+    def is_interrupt_requested(self, session_id: str, run_id: str = "") -> bool:
         """判断会话是否被请求中断。"""
         sid = (session_id or "").strip()
         if not sid:
@@ -3857,7 +4510,22 @@ class SessionManager:
         except Exception:
             pass
         metadata = self._load_metadata(session_id)
-        return bool(metadata.get("interrupt_requested", False))
+        if not bool(metadata.get("interrupt_requested", False)):
+            return False
+        rid = str(run_id or "").strip()
+        if not rid:
+            return True
+        interrupt_run_id = str(metadata.get("interrupt_run_id") or "").strip()
+        return not interrupt_run_id or interrupt_run_id == rid
+
+    def get_interrupt_reason(self, session_id: str) -> str:
+        sid = (session_id or "").strip()
+        if not sid:
+            return ""
+        metadata = self._load_metadata(sid)
+        if not bool(metadata.get("interrupt_requested", False)):
+            return ""
+        return str(metadata.get("interrupt_reason") or "user").strip() or "user"
 
 
 session_manager = SessionManager(SESSIONS_DIR, INDEX_FILE)
@@ -3865,26 +4533,126 @@ session_manager = SessionManager(SESSIONS_DIR, INDEX_FILE)
 _executor_override_cache: Dict[str, Tuple[Any, str]] = {}
 
 
+def _profile_candidate(profile: dict) -> Dict[str, Any]:
+    cache_key = "profile:" + model_profiles.profile_cache_key(profile)
+    cached = _executor_override_cache.get(cache_key)
+    if cached is None:
+        cached = create_openai_client_for_profile(
+            profile,
+            f"profile:{str(profile.get('name') or profile.get('id') or '')[:32]}",
+            http_client=executor_http_client,
+        )
+        _executor_override_cache[cache_key] = cached
+    extra_body = _profile_extra_body(profile)
+    return {
+        "profile_id": str(profile.get("id") or ""),
+        "client": cached[0],
+        "model": cached[1],
+        "max_output_tokens": int(profile.get("max_output_tokens") or MAX_OUTPUT_TOKENS),
+        "context_window": int(profile.get("context_window") or CONTEXT_WINDOW),
+        "temperature": _profile_temperature(profile),
+        "extra_body": extra_body,
+        "reasoning_effort": _profile_reasoning_effort(profile, extra_body),
+    }
+
+
+def _env_candidate() -> Dict[str, Any]:
+    return {
+        "profile_id": "__env__",
+        "client": executor_client,
+        "model": executor_model,
+        "max_output_tokens": int(MAX_OUTPUT_TOKENS),
+        "context_window": int(CONTEXT_WINDOW),
+        "temperature": float(EXECUTOR_TEMPERATURE),
+        "extra_body": EXECUTOR_EXTRA_BODY,
+        "reasoning_effort": EXECUTOR_REASONING_EFFORT,
+    }
+
+
+def resolve_executor_candidates_for_session(session_id: str) -> List[Dict[str, Any]]:
+    sid = (session_id or "").strip()
+    profile_id = ""
+    if sid:
+        try:
+            meta = session_manager._load_metadata(sid)
+        except Exception:
+            meta = {}
+        if isinstance(meta, dict):
+            profile_id = str(meta.get("model_profile_id") or "").strip()
+    profiles = {str(p.get("id") or ""): p for p in model_profiles.sorted_profiles(PROJECT_ROOT)}
+    ordered_ids = model_profiles.sorted_profile_ids_with_env(PROJECT_ROOT)
+    candidates: List[Dict[str, Any]] = []
+    seen: set[str] = set()
+
+    def add_candidate(pid: str) -> None:
+        pid = str(pid or "").strip() or "__env__"
+        if pid in seen:
+            return
+        if pid == "__env__":
+            candidates.append(_env_candidate())
+            seen.add(pid)
+            return
+        profile = profiles.get(pid)
+        if profile:
+            candidates.append(_profile_candidate(profile))
+            seen.add(pid)
+
+    if profile_id:
+        add_candidate(profile_id)
+    for pid in ordered_ids:
+        add_candidate(pid)
+    if not candidates:
+        candidates.append(_env_candidate())
+    return candidates
+
+
 def resolve_executor_for_session(session_id: str) -> Tuple[Any, str]:
     """子会话可经 metadata.executor_model 覆盖默认 executor 模型。"""
+    client, model, _max_out, _ctx = resolve_executor_config_for_session(session_id)
+    return client, model
+
+
+def resolve_executor_config_for_session(session_id: str) -> Tuple[Any, str, int, int]:
+    """Resolve executor client/model plus per-session model limits."""
     sid = (session_id or "").strip()
     if not sid:
-        return executor_client, executor_model
+        return executor_client, executor_model, int(MAX_OUTPUT_TOKENS), int(CONTEXT_WINDOW)
     try:
         meta = session_manager._load_metadata(sid)
     except Exception:
         meta = {}
+    profile_id = ""
     override = ""
     llm_type = EXECUTOR_LLM_TYPE
     if isinstance(meta, dict):
+        profile_id = str(meta.get("model_profile_id") or "").strip()
         override = str(meta.get("executor_model") or "").strip()
         llm_type = str(meta.get("executor_llm_type") or EXECUTOR_LLM_TYPE).strip().lower()
+    if profile_id:
+        candidates = resolve_executor_candidates_for_session(sid)
+        first = candidates[0]
+        return (
+            FallbackOpenAIClient(candidates),
+            str(first.get("model") or executor_model),
+            int(first.get("max_output_tokens") or MAX_OUTPUT_TOKENS),
+            int(first.get("context_window") or CONTEXT_WINDOW),
+        )
+    top_profile_id = model_profiles.top_profile_id_with_env(PROJECT_ROOT)
+    if top_profile_id and not override:
+        candidates = resolve_executor_candidates_for_session(sid)
+        first = candidates[0]
+        return (
+            FallbackOpenAIClient(candidates),
+            str(first.get("model") or executor_model),
+            int(first.get("max_output_tokens") or MAX_OUTPUT_TOKENS),
+            int(first.get("context_window") or CONTEXT_WINDOW),
+        )
     if not override:
-        return executor_client, executor_model
+        return executor_client, executor_model, int(MAX_OUTPUT_TOKENS), int(CONTEXT_WINDOW)
     cache_key = f"{llm_type}:{override}"
     cached = _executor_override_cache.get(cache_key)
     if cached is not None:
-        return cached
+        return cached[0], cached[1], int(MAX_OUTPUT_TOKENS), int(CONTEXT_WINDOW)
     client, model = create_openai_client(
         override,
         llm_type or EXECUTOR_LLM_TYPE,
@@ -3892,7 +4660,7 @@ def resolve_executor_for_session(session_id: str) -> Tuple[Any, str]:
         http_client=executor_http_client,
     )
     _executor_override_cache[cache_key] = (client, model)
-    return client, model
+    return client, model, int(MAX_OUTPUT_TOKENS), int(CONTEXT_WINDOW)
 
 # ==================== Todo 计划（todo_plan.md）与 key_context 兼容 ====================
 _TODO_SECTION_LINE_RE = re.compile(r"^## Todo 计划\s*$", re.MULTILINE)

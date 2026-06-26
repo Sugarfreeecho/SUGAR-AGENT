@@ -15,8 +15,7 @@ function applySessionSnapshot(snapshot) {
     if (Array.isArray(snapshot.active_runs)) {
         sessionStore.applyActiveRuns(snapshot.active_runs);
         const active = Object.create(null);
-        snapshot.active_runs.forEach(function (run) {
-            const sid = typeof run === 'string' ? run : (run && run.session_id);
+        sessionStore.activeRunInfoBySession.forEach(function (_run, sid) {
             if (sid) active[String(sid)] = true;
         });
         applyServerStreamActiveMap(active);
@@ -61,6 +60,19 @@ function getSessionRunState(sessionId) {
 
 function clearSessionRunState(sessionId) {
     setSessionRunState(sessionId, null);
+}
+
+function markSessionRunInactive(sessionId) {
+    const sid = String(sessionId || '');
+    if (!sid) return;
+    setSessionServerStreamActive(sid, false);
+    sessionStore.activeRunInfoBySession.delete(sid);
+    const sess = sessionStore.get(sid);
+    if (sess) {
+        sess.run_active = false;
+        sess.run_started_at = null;
+        sess.stream_active = false;
+    }
 }
 
 function markRunAbortReason(run, reason) {

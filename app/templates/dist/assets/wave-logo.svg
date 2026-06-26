@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-label="General Agent">
+  <defs>
+    <linearGradient id="bg" x1="34" y1="26" x2="218" y2="230" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#17213d"/>
+      <stop offset="0.54" stop-color="#111827"/>
+      <stop offset="1" stop-color="#0a1020"/>
+    </linearGradient>
+    <linearGradient id="wave" x1="48" y1="96" x2="218" y2="168" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#8b5cf6"/>
+      <stop offset="0.48" stop-color="#38bdf8"/>
+      <stop offset="1" stop-color="#2dd4bf"/>
+    </linearGradient>
+    <linearGradient id="trace" x1="50" y1="80" x2="214" y2="112" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#c4b5fd"/>
+      <stop offset="0.56" stop-color="#7dd3fc"/>
+      <stop offset="1" stop-color="#99f6e4"/>
+    </linearGradient>
+    <filter id="glow" x="-35%" y="-35%" width="170%" height="170%">
+      <feGaussianBlur stdDeviation="5" result="blur"/>
+      <feColorMatrix in="blur" type="matrix" values="0 0 0 0 0.22 0 0 0 0 0.73 0 0 0 0 0.92 0 0 0 0.45 0" result="glow"/>
+      <feMerge>
+        <feMergeNode in="glow"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+  <rect x="18" y="18" width="220" height="220" rx="54" fill="url(#bg)"/>
+  <rect x="18" y="18" width="220" height="220" rx="54" fill="none" stroke="#fff" stroke-opacity="0.13" stroke-width="2"/>
+  <circle cx="128" cy="128" r="79" fill="none" stroke="#67e8f9" stroke-opacity="0.16" stroke-width="2"/>
+  <path d="M62 153a82 82 0 0 1 132-64" fill="none" stroke="#a78bfa" stroke-opacity="0.54" stroke-width="5" stroke-linecap="round"/>
+  <path d="M194 89a82 82 0 0 1-132 78" fill="none" stroke="#2dd4bf" stroke-opacity="0.54" stroke-width="5" stroke-linecap="round"/>
+  <path d="M50 101c30-25 69-25 103 0 20 15 42 14 63-3" fill="none" stroke="url(#trace)" stroke-width="9" stroke-linecap="round" opacity="0.9" filter="url(#glow)"/>
+  <path d="M48 148c21-45 43-45 64 0s43 45 64 0 23-45 43 0" fill="none" stroke="url(#wave)" stroke-width="17" stroke-linecap="round" stroke-linejoin="round" filter="url(#glow)"/>
+  <path d="M66 184h124" fill="none" stroke="#e0f2fe" stroke-opacity="0.34" stroke-width="5" stroke-linecap="round"/>
+  <circle cx="196" cy="90" r="7" fill="#99f6e4"/>
+</svg>

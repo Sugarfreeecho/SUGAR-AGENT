@@ -1,12 +1,21 @@
 import asyncio
+import os
 import tempfile
 import unittest
+from unittest.mock import patch
 
-from app.runtime_v2 import RuntimeGateway, RuntimeProjector
+from app.runtime_v2 import RuntimeGateway, RuntimeHistoryOps, RuntimeModelProjection, RuntimeProjector
 from app.runtime_v2.event_schema import RuntimeEvent
 
 
 class RuntimeProjectorTests(unittest.TestCase):
+    def setUp(self):
+        self._env = patch.dict(os.environ, {"RUNTIME_VERSION": "2"}, clear=False)
+        self._env.start()
+
+    def tearDown(self):
+        self._env.stop()
+
     def test_project_run_terminal_state(self):
         projector = RuntimeProjector()
         events = [
@@ -19,6 +28,52 @@ class RuntimeProjectorTests(unittest.TestCase):
         self.assertEqual(snapshot["runs"]["r1"]["status"], "failed")
         self.assertEqual(snapshot["runs"]["r1"]["error"], "boom")
         self.assertEqual(snapshot["active_runs"], [])
+
+    def test_terminal_run_is_not_reopened_by_late_started_event(self):
+        projector = RuntimeProjector()
+        events = [
+            RuntimeEvent(seq=1, type="run_interrupted", session_id="s1", run_id="r1"),
+            RuntimeEvent(seq=2, type="run_started", session_id="s1", run_id="r1"),
+        ]
+
+        snapshot = projector.project(events)
+
+        self.assertEqual(snapshot["runs"]["r1"]["status"], "interrupted")
+        self.assertEqual(snapshot["active_runs"], [])
+
+    def test_new_run_supersedes_previous_unfinished_run(self):
+        projector = RuntimeProjector()
+        events = [
+            RuntimeEvent(seq=1, type="run_started", session_id="s1", run_id="stale"),
+            RuntimeEvent(seq=2, type="run_started", session_id="s1", run_id="newer"),
+            RuntimeEvent(seq=3, type="run_finished", session_id="s1", run_id="newer"),
+        ]
+
+        snapshot = projector.project(events)
+
+        self.assertEqual(snapshot["runs"]["stale"]["status"], "interrupted")
+        self.assertEqual(snapshot["runs"]["newer"]["status"], "finished")
+        self.assertEqual(snapshot["active_runs"], [])
+
+    def test_projects_context_tokens_and_todo_snapshot(self):
+        projector = RuntimeProjector()
+        events = [
+            RuntimeEvent(seq=1, type="context_tokens", session_id="s1", payload={"estimated": 123, "threshold": 1000}),
+            RuntimeEvent(seq=2, type="todo_updated", session_id="s1", payload={
+                "has_plan": True,
+                "items": [{"id": "t1", "text": "Do it", "status": "pending"}],
+                "done": 0,
+                "total": 1,
+            }),
+        ]
+
+        snapshot = projector.project(events)
+
+        self.assertEqual(snapshot["context"]["tokens"]["estimated"], 123)
+        self.assertEqual(snapshot["context"]["tokens"]["seq"], 1)
+        self.assertEqual(snapshot["todo"]["total"], 1)
+        self.assertEqual(snapshot["todo"]["seq"], 2)
+        self.assertEqual(snapshot["context"]["todo"]["items"][0]["id"], "t1")
 
     def test_gateway_rebuilds_and_reads_snapshot(self):
         async def scenario():
@@ -37,6 +92,108 @@ class RuntimeProjectorTests(unittest.TestCase):
                 self.assertEqual(cached["runs"]["r1"]["status"], "finished")
 
         asyncio.run(scenario())
+
+    def test_projects_native_model_messages_with_tool_order(self):
+        projector = RuntimeProjector()
+        events = [
+            RuntimeEvent(seq=1, type="message_user", session_id="s1", payload={"content": "visible"}),
+            RuntimeEvent(seq=2, type="model_user", session_id="s1", payload={"role": "user", "content": "model u"}),
+            RuntimeEvent(seq=3, type="model_assistant", session_id="s1", payload={
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [{"name": "read_file", "args": {"path": "a"}, "id": "tc1"}],
+            }),
+            RuntimeEvent(seq=4, type="model_tool", session_id="s1", payload={
+                "role": "tool",
+                "content": "tool result",
+                "tool_call_id": "tc1",
+            }),
+            RuntimeEvent(seq=5, type="model_assistant", session_id="s1", payload={
+                "role": "assistant",
+                "content": "done",
+                "metadata": {"is_final": True},
+            }),
+        ]
+
+        snapshot = projector.project(events)
+
+        self.assertEqual(len(snapshot["visible_messages"]), 1)
+        self.assertEqual([m["role"] for m in snapshot["model_messages"]], ["user", "assistant", "tool", "assistant"])
+        self.assertEqual(snapshot["model_messages"][1]["payload"]["tool_calls"][0]["id"], "tc1")
+        self.assertEqual(snapshot["model_messages"][2]["payload"]["tool_call_id"], "tc1")
+
+    def test_model_projection_reads_message_dicts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ops = RuntimeHistoryOps(tmp)
+            ops.append_model_message("s1", "user", "hello")
+            ops.append_model_message(
+                "s1",
+                "assistant",
+                "",
+                tool_calls=[{"name": "read_file", "args": {"path": "a"}, "id": "tc1"}],
+                additional_kwargs={"reasoning_content": "why"},
+            )
+            ops.append_model_message("s1", "tool", "result", tool_call_id="tc1")
+
+            messages = RuntimeModelProjection(tmp).read_message_dicts("s1")
+
+            self.assertEqual([m["type"] for m in messages], ["user", "assistant", "tool"])
+            self.assertEqual(messages[1]["tool_calls"][0]["id"], "tc1")
+            self.assertEqual(messages[1]["additional_kwargs"]["reasoning_content"], "why")
+            self.assertEqual(messages[2]["tool_call_id"], "tc1")
+
+    def test_model_projection_backfills_legacy_once(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            projection = RuntimeModelProjection(tmp)
+
+            count = projection.ensure_backfilled_from_legacy("s1", [
+                {"type": "user", "content": "legacy"},
+                {"type": "assistant", "content": "answer", "metadata": {"is_final": True}},
+            ])
+            second = projection.ensure_backfilled_from_legacy("s1", [
+                {"type": "user", "content": "ignored"},
+            ])
+            messages = projection.read_message_dicts("s1")
+
+            self.assertEqual(count, 2)
+            self.assertEqual(second, 0)
+            self.assertEqual([m["content"] for m in messages], ["legacy", "answer"])
+
+    def test_model_projection_sync_replaces_partial_projection(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ops = RuntimeHistoryOps(tmp)
+            ops.append_model_message("s1", "user", "partial")
+            projection = RuntimeModelProjection(tmp)
+
+            result = projection.sync_from_legacy_if_needed("s1", [
+                {"type": "user", "content": "legacy"},
+                {"type": "assistant", "content": "answer"},
+            ])
+            messages = projection.read_message_dicts("s1")
+
+            self.assertEqual(result["action"], "replace")
+            self.assertEqual(result["written"], 2)
+            self.assertEqual([m["content"] for m in messages], ["legacy", "answer"])
+
+    def test_model_projection_sync_does_not_overwrite_longer_projection(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ops = RuntimeHistoryOps(tmp)
+            ops.replace_model_history("s1", [
+                {"type": "user", "content": "v2 user"},
+                {"type": "assistant", "content": "v2 answer"},
+                {"type": "tool", "content": "v2 tool"},
+            ])
+            projection = RuntimeModelProjection(tmp)
+
+            result = projection.sync_from_legacy_if_needed("s1", [
+                {"type": "user", "content": "legacy user"},
+                {"type": "assistant", "content": "legacy answer"},
+            ])
+            messages = projection.read_message_dicts("s1")
+
+            self.assertEqual(result["action"], "mismatch")
+            self.assertEqual(result["written"], 0)
+            self.assertEqual([m["content"] for m in messages], ["v2 user", "v2 answer", "v2 tool"])
 
 
 if __name__ == "__main__":

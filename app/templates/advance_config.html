@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>WAVE Agent · 高级设置</title>
+<title>General Agent · 高级设置</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:ital,wght@0,400;0,500;0,600;0,700;0,800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -249,6 +249,116 @@
     color: var(--text-tertiary); line-height: 1.5; cursor: default; opacity: 0.92;
   }
 
+  .model-panel { margin-bottom: 1rem; }
+  .model-panel__head { display: flex; justify-content: space-between; align-items: flex-start; gap: 1rem; margin-bottom: 0.85rem; }
+  .model-panel__title { font-size: 0.95rem; font-weight: 800; color: var(--text-primary); }
+  .model-panel__hint { margin-top: 0.25rem; font-size: 0.72rem; color: var(--text-tertiary); line-height: 1.45; }
+  .model-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0.65rem; }
+  .model-grid .fd { margin-bottom: 0; }
+  .model-grid--basics { grid-template-columns: 1fr 1fr 0.7fr; margin-top: 0.65rem; }
+  .model-grid--limits { grid-template-columns: repeat(3, minmax(0, 1fr)); margin-top: 0.65rem; }
+  .model-grid--advanced { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .model-grid--advanced .fd:last-child { grid-column: 1 / -1; }
+  .model-advanced-wrap {
+    margin-top: 0.65rem; border: 1px solid var(--border-glass); border-radius: var(--radius-sm);
+    background: rgba(255,255,255,0.035); overflow: visible;
+  }
+  :root.theme-light .model-advanced-wrap { background: rgba(0,0,0,0.02); }
+  .model-advanced-toggle {
+    list-style: none; display: flex; align-items: center; justify-content: space-between; gap: 0.75rem;
+    padding: 0.58rem 0.7rem; color: var(--text-secondary); font: 800 0.74rem var(--sans);
+    cursor: pointer; user-select: none;
+  }
+  .model-advanced-toggle::-webkit-details-marker { display: none; }
+  .model-advanced-toggle::marker { content: ""; }
+  .model-advanced-toggle:hover { color: var(--text-primary); background: rgba(99,102,241,0.08); }
+  .model-advanced-caret { font-size: 0.72rem; opacity: 0.78; transition: transform 0.16s ease; }
+  .model-advanced-wrap[open] .model-advanced-caret { transform: rotate(180deg); }
+  .model-advanced-body { padding: 0.65rem 0.7rem 0.75rem; border-top: 1px solid var(--border-glass); }
+  .model-actions { display: flex; flex-wrap: wrap; gap: 0.55rem; margin-top: 0.7rem; align-items: center; }
+  .model-status { font-size: 0.74rem; color: var(--text-tertiary); line-height: 1.4; }
+  .model-list { margin-top: 0.7rem; display: grid; gap: 0.45rem; max-height: 16rem; overflow: auto; padding-right: 0.2rem; }
+  .model-configured { margin-top: 0.95rem; padding-top: 0.85rem; border-top: 1px solid var(--border-glass); }
+  .model-configured__title { font-size: 0.78rem; font-weight: 800; color: var(--text-secondary); margin-bottom: 0.55rem; }
+  .profile-list { display: grid; gap: 0.45rem; }
+  .profile-row {
+    display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 0.65rem; align-items: center;
+    padding: 0.6rem 0.7rem; border-radius: var(--radius-sm);
+    border: 1px solid var(--border-glass); background: rgba(255,255,255,0.04);
+  }
+  .profile-row.is-editing {
+    border-color: rgba(249,226,175,0.55);
+    background: rgba(249,226,175,0.12);
+    box-shadow: 0 0 0 1px rgba(249,226,175,0.16) inset;
+  }
+  :root.theme-light .profile-row { background: rgba(0,0,0,0.025); }
+  .profile-row__name { font-family: var(--mono); font-size: 0.78rem; font-weight: 800; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .profile-row__meta { margin-top: 0.18rem; font-size: 0.68rem; color: var(--text-tertiary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .profile-row__meta + .profile-row__meta { margin-top: 0.12rem; }
+  .profile-row__actions { display: flex; flex-wrap: wrap; gap: 0.35rem; justify-content: flex-end; }
+  .profile-mini-btn {
+    padding: 0.32rem 0.5rem; border-radius: 7px; border: 1px solid var(--border-glass);
+    background: transparent; color: var(--text-secondary); font-size: 0.68rem; font-weight: 700;
+    font-family: var(--sans); cursor: pointer;
+  }
+  .profile-mini-btn:hover { color: var(--text-primary); border-color: rgba(99,102,241,0.35); background: rgba(99,102,241,0.1); }
+  .profile-mini-btn.is-editing { color: #111827; border-color: rgba(249,226,175,0.9); background: rgba(249,226,175,0.9); }
+  .select-ip { position: relative; }
+  .fk.is-required::after { content: " *"; color: var(--red-accent); font-weight: 900; }
+  .limit-warn { border-color: rgba(243,139,168,0.68) !important; box-shadow: 0 0 0 3px rgba(243,139,168,0.14) !important; }
+  .limit-help { margin-top: 0.25rem; font-size: 0.68rem; color: var(--red-accent); display: none; }
+  .limit-help.is-on { display: block; }
+  .combo-field { position: relative; display: flex; gap: 0.35rem; }
+  .combo-field .ip { min-width: 0; }
+  .combo-btn {
+    flex: 0 0 2.1rem; border-radius: var(--radius-sm); border: 1px solid var(--border-glass);
+    background: rgba(255,255,255,0.045); color: var(--text-secondary); cursor: pointer;
+    font-size: 0.78rem; line-height: 1; font-family: var(--sans);
+  }
+  .combo-btn:hover { border-color: rgba(99,102,241,0.35); color: var(--text-primary); background: rgba(99,102,241,0.1); }
+  .combo-menu {
+    position: absolute; right: 0; top: calc(100% + 0.25rem); z-index: 30;
+    display: none; min-width: 7.5rem; padding: 0.28rem; border: 1px solid var(--border-glass);
+    border-radius: var(--radius-sm); background: var(--surface-glass2); box-shadow: var(--shadow-soft);
+  }
+  .combo-menu.is-open { display: grid; gap: 0.18rem; }
+  .combo-menu button {
+    border: 0; border-radius: 7px; background: transparent; color: var(--text-secondary);
+    padding: 0.32rem 0.5rem; text-align: left; font: 700 0.72rem var(--sans); cursor: pointer;
+  }
+  .combo-menu button:hover { background: rgba(99,102,241,0.12); color: var(--text-primary); }
+  .confirm-mask {
+    position: fixed; inset: 0; z-index: 10000; display: none; align-items: center; justify-content: center;
+    padding: 1rem; background: rgba(8,8,14,0.48); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+  }
+  .confirm-mask.is-open { display: flex; }
+  .confirm-box {
+    width: min(92vw, 23rem); border: 1px solid var(--border-glass); border-radius: var(--radius-md);
+    background: var(--surface-glass2); box-shadow: var(--shadow-soft); padding: 1rem;
+  }
+  .confirm-title { font-size: 0.95rem; font-weight: 800; color: var(--text-primary); margin-bottom: 0.35rem; }
+  .confirm-body { font-size: 0.78rem; color: var(--text-secondary); line-height: 1.55; }
+  .confirm-actions { display: flex; justify-content: flex-end; gap: 0.5rem; margin-top: 1rem; }
+  .model-row {
+    width: 100%; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 0.55rem;
+    text-align: left; padding: 0.6rem 0.7rem; border-radius: var(--radius-sm);
+    border: 1px solid var(--border-glass); background: rgba(255,255,255,0.045);
+    color: var(--text-primary); cursor: pointer; font-family: var(--sans);
+  }
+  .model-row:hover { border-color: rgba(99,102,241,0.36); background: rgba(99,102,241,0.11); }
+  :root.theme-light .model-row { background: rgba(0,0,0,0.025); }
+  .model-row__main { min-width: 0; }
+  .model-row__side { text-align: right; align-self: center; }
+  .model-row__id { font-family: var(--mono); font-size: 0.78rem; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .model-row__meta { display: block; font-size: 0.68rem; color: var(--text-tertiary); margin-bottom: 0.18rem; text-align: right; }
+  .model-row__limits { display: block; font-family: var(--mono); font-size: 0.68rem; color: var(--text-secondary); white-space: nowrap; }
+  @media (max-width: 680px) {
+    .model-grid, .model-grid--basics, .model-grid--limits, .model-grid--advanced { grid-template-columns: 1fr; }
+    .model-row { grid-template-columns: 1fr; }
+    .model-row__side, .model-row__meta { text-align: left; }
+    .model-row__limits { white-space: normal; }
+  }
+
 .clr {
     color: #ff6b6b;
     border-color: rgba(255, 107, 107, 0.3);
@@ -275,6 +385,46 @@
 </div>
 <div class="cd">
 <div id="status" class="st"></div>
+<section class="model-panel" aria-label="模型配置档案">
+<div class="model-panel__head">
+<div><div class="model-panel__title">模型配置档案</div><div class="model-panel__hint">从 OpenAI 兼容 API 获取模型列表，选择后可自动填入模型名、上下文窗口和输出上限，并保存为对话页可切换配置。</div></div>
+</div>
+<div class="model-grid">
+<div class="fd"><div class="fk is-required">API BASE URL</div><input id="model-base-url" class="ip" type="text" autocomplete="off" aria-required="true" placeholder="https://api.openai.com/v1"></div>
+<div class="fd"><div class="fk is-required">OPENAI_API_KEY</div><input id="model-api-key" class="ip" type="password" autocomplete="off" aria-required="true" placeholder="模型密钥未填写"></div>
+</div>
+<div class="model-grid model-grid--basics">
+<div class="fd"><div class="fk">方案名称</div><input id="model-profile-name" class="ip" type="text" autocomplete="off" placeholder="模型配置方案名，可自行编辑"></div>
+<div class="fd"><div class="fk is-required">模型 ID / API 模型名</div><input id="model-id" class="ip" type="text" autocomplete="off" aria-required="true" placeholder="实际发送给 API 的 model，例如 deepseek-v4-flash"></div>
+<div class="fd"><div class="fk">EXECUTOR_LLM_TYPE</div><input id="model-llm-type" class="ip" type="text" autocomplete="off" value="openai"></div>
+</div>
+<div class="model-grid model-grid--limits">
+<div class="fd"><div class="fk">LLM MAX TOKENS</div><input id="model-max-context" class="ip" type="number" min="1" step="1" autocomplete="off" placeholder="模型最大上下文长度"></div>
+<div class="fd"><div class="fk">CONTEXT_WINDOW</div><input id="model-context-window" class="ip" type="number" min="1" step="1" autocomplete="off"><div id="model-limit-help" class="limit-help"></div></div>
+<div class="fd"><div class="fk">MAX_OUTPUT_TOKENS</div><input id="model-max-output" class="ip" type="number" min="1" step="1" autocomplete="off"></div>
+</div>
+<details class="model-advanced-wrap" id="model-advanced">
+<summary class="model-advanced-toggle"><span>高级配置</span><span class="model-advanced-caret">▾</span></summary>
+<div class="model-advanced-body">
+<div class="model-grid model-grid--advanced">
+<div class="fd"><div class="fk">EXECUTOR_TEMPERATURE</div><input id="model-temperature" class="ip" type="text" inputmode="decimal" autocomplete="off" placeholder="0.7"></div>
+<div class="fd"><div class="fk">LLM_THINKING_MODE</div><div class="combo-field"><input id="model-thinking-mode" class="ip" type="text" autocomplete="off" placeholder="enabled / disabled / 手动输入"><button type="button" class="combo-btn" data-combo="thinking">▾</button><div class="combo-menu" id="thinking-menu"><button type="button" data-value="enabled">enabled</button><button type="button" data-value="disabled">disabled</button></div></div></div>
+<div class="fd"><div class="fk">LLM_REASONING_EFFORT</div><div class="combo-field"><input id="model-reasoning-effort" class="ip" type="text" autocomplete="off" placeholder="max / high / medium / low / 手动输入"><button type="button" class="combo-btn" data-combo="reasoning">▾</button><div class="combo-menu" id="reasoning-menu"><button type="button" data-value="max">max</button><button type="button" data-value="high">high</button><button type="button" data-value="medium">medium</button><button type="button" data-value="low">low</button></div></div></div>
+<div class="fd"><div class="fk">LLM_EXTRA_BODY_JSON</div><input id="model-extra-body-json" class="ip" type="text" autocomplete="off" placeholder='{"thinking":{"type":"enabled"}}'></div>
+</div>
+</div>
+</details>
+<div class="model-actions">
+<button type="button" class="btn b2" id="model-fetch-btn">获取模型列表</button>
+<button type="button" class="btn b1" id="model-save-profile-btn">保存为新模型配置</button>
+<span class="model-status" id="model-status"></span>
+</div>
+<div id="model-list" class="model-list"></div>
+<div class="model-configured">
+<div class="model-configured__title">已配置模型（越靠上优先级越高，新会话默认使用第一项）</div>
+<div id="configured-model-list" class="profile-list"></div>
+</div>
+</section>
 <div id="root"><p class="hi">正在加载…</p></div>
 </div>
 <div class="ac env-toolbar env-toolbar--bottom" style="display:none">
@@ -288,24 +438,62 @@
 </div>
 <p class="env-page-help-footer"><button type="button" class="env-help-inline-btn" tabindex="-1">如需帮助或反馈，请联系GitHub @sugarfreeecho</button></p>
 </div>
+<div id="confirm-mask" class="confirm-mask" role="dialog" aria-modal="true" aria-labelledby="confirm-title" aria-hidden="true">
+<div class="confirm-box">
+<div class="confirm-title" id="confirm-title">确认操作</div>
+<div class="confirm-body" id="confirm-body"></div>
+<div class="confirm-actions"><button type="button" class="btn b2" id="confirm-cancel">取消</button><button type="button" class="btn b1" id="confirm-ok">确认删除</button></div>
+</div>
+</div>
 <script>
 (function(){function showToast(m){var el=document.getElementById('env-toast');if(!el)return;el.textContent=m||'';el.classList.add('show');if(el._tm)clearTimeout(el._tm);el._tm=setTimeout(function(){el.classList.remove('show');},2200);}
 var R=document.getElementById("root"),S=document.getElementById("status"),TBS=document.querySelectorAll(".env-toolbar");
+var modelEls={base:document.getElementById("model-base-url"),key:document.getElementById("model-api-key"),name:document.getElementById("model-profile-name"),id:document.getElementById("model-id"),type:document.getElementById("model-llm-type"),maxctx:document.getElementById("model-max-context"),ctx:document.getElementById("model-context-window"),out:document.getElementById("model-max-output"),advanced:document.getElementById("model-advanced"),temp:document.getElementById("model-temperature"),thinking:document.getElementById("model-thinking-mode"),reasoning:document.getElementById("model-reasoning-effort"),extra:document.getElementById("model-extra-body-json"),limitHelp:document.getElementById("model-limit-help"),fetch:document.getElementById("model-fetch-btn"),save:document.getElementById("model-save-profile-btn"),status:document.getElementById("model-status"),list:document.getElementById("model-list"),configured:document.getElementById("configured-model-list"),confirmMask:document.getElementById("confirm-mask"),confirmBody:document.getElementById("confirm-body"),confirmOk:document.getElementById("confirm-ok"),confirmCancel:document.getElementById("confirm-cancel")};
+var modelFetchTimer=null,lastModelFetchKey="",configuredProfiles=[];
 function setToolbarVis(on){var i;for(i=0;i<TBS.length;i++)TBS[i].style.display=on?"flex":"none";}
 function st(m,k){S.textContent=m||"";S.className=m?("st "+(k||"e")):"";S.style.display=m?"block":"none";}
 function esc(s){return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/"/g,"&quot;").replace(/'/g,"&#39;");}
+function modelStatus(m){if(modelEls.status)modelEls.status.textContent=m||"";}
+function nval(v,d){v=String(v==null?"":v).trim();return v||d;}
+function defaultThinking(v){return nval(v,"enabled");}
+function defaultReasoning(p){return nval(p&&p.reasoning_effort,"high");}
+function defaultTemp(v){return nval(v,"0.7");}
+function intv(v){var n=parseInt(v,10);return isFinite(n)?n:0;}
+function fieldValue(el){return String(el&&el.value||"").trim();}
+function setFieldWarn(el,on){if(el)el.classList.toggle("limit-warn",!!on);}
+function currentMaxContext(){return intv(modelEls.maxctx&&modelEls.maxctx.value);}
+function setMaxContext(v){if(modelEls.maxctx)modelEls.maxctx.value=v?String(v):"";}
+function validateModelLimits(){var max=currentMaxContext(),ctx=intv(modelEls.ctx&&modelEls.ctx.value),out=intv(modelEls.out&&modelEls.out.value),bad=!!(max&&ctx&&out&&ctx+out>max);if(modelEls.ctx)modelEls.ctx.classList.toggle("limit-warn",bad);if(modelEls.out)modelEls.out.classList.toggle("limit-warn",bad);if(modelEls.limitHelp){modelEls.limitHelp.textContent=bad?("CONTEXT_WINDOW + MAX_OUTPUT_TOKENS 不能超过模型最大上下文 "+max+"。当前合计 "+(ctx+out)+"。"):"";modelEls.limitHelp.classList.toggle("is-on",bad);}return !bad;}
+function validateModelRequiredFields(){var missing=[];setFieldWarn(modelEls.base,!fieldValue(modelEls.base));setFieldWarn(modelEls.key,!fieldValue(modelEls.key));setFieldWarn(modelEls.id,!fieldValue(modelEls.id));setFieldWarn(modelEls.name,false);if(!fieldValue(modelEls.base))missing.push("OPENAI_BASE_URL");if(!fieldValue(modelEls.key))missing.push("OPENAI_API_KEY");if(!fieldValue(modelEls.id))missing.push("模型名称");if(missing.length){modelStatus("请填写必填项："+missing.join("、")+"。");return false;}return true;}
+function setSaveMode(pid){if(!modelEls.save)return;if(pid){modelEls.save.setAttribute("data-edit-id",pid);modelEls.save.textContent="保存修改";}else{modelEls.save.removeAttribute("data-edit-id");modelEls.save.textContent="保存为新模型配置";}}
+function setEditingHighlight(pid){var rows=document.querySelectorAll(".profile-row[data-id]"),i;for(i=0;i<rows.length;i++)rows[i].classList.toggle("is-editing",pid&&rows[i].getAttribute("data-id")===pid);}
+function hasAdvancedModelFields(m){return !!(m&&(String(m.temperature||"").trim()||String(m.thinking_mode||"").trim()||String(m.reasoning_effort||"").trim()||String(m.extra_body_json||"").trim()));}
+function modelLimitSource(m){var s=String(m&&m.limit_source||m&&m.context_window_source||"");if(s==="api")return "API 返回窗口信息";if(s==="probe")return "HTTP 400 错误消息探测";if(s==="default")return "默认 1m 上下文";return "使用内置常见模型窗口推断";}
+function setModelFields(m,editing){m=m||{};var max=intv(m.model_context_window||m.raw_context_window);if(!max&&m.raw_has_limits)max=intv(m.context_window);if(modelEls.name)modelEls.name.value=m.name||m.id||m.model||"";if(modelEls.id)modelEls.id.value=m.model||m.id||"";if(modelEls.type)modelEls.type.value=m.llm_type||modelEls.type.value||"openai";if(modelEls.base&&m.base_url)modelEls.base.value=m.base_url;if(modelEls.key)modelEls.key.value=m.api_key||"";if(modelEls.out)modelEls.out.value=m.max_output_tokens||"";if(modelEls.maxctx)setMaxContext(max);if(modelEls.ctx){var ctx=intv(m.context_window);var out=intv(m.max_output_tokens);modelEls.ctx.value=(max&&!editing)?Math.max(1,max-out):(ctx||"");}if(modelEls.temp)modelEls.temp.value=m.temperature||"";if(modelEls.thinking)modelEls.thinking.value=m.thinking_mode||"";if(modelEls.reasoning)modelEls.reasoning.value=m.reasoning_effort||"";if(modelEls.extra)modelEls.extra.value=m.extra_body_json||"";if(modelEls.advanced)modelEls.advanced.open=!!(editing&&hasAdvancedModelFields(m));var editId=editing&&m.id?String(m.id):"";setSaveMode(editId);setEditingHighlight(editId);validateModelLimits();validateModelRequiredFields();}
+async function probeModelForSelection(m,row){m=m||{};var modelId=String(m.id||m.model||"").trim(),r,j,merged;if(!modelId){setModelFields(m,false);return;}if(row)row.disabled=true;modelStatus("正在探测 "+modelId+" 的真实上下文窗口…");try{r=await fetch("/api/model_profiles/probe",{method:"POST",headers:{"Content-Type":"application/json"},credentials:"same-origin",body:JSON.stringify({base_url:modelEls.base.value,api_key:modelEls.key.value,model:modelId,metadata:m})});j=await r.json();if(!j.ok)throw new Error(j.error||"探测失败");merged=Object.assign({},m,j.model||{});setModelFields(merged,false);modelStatus((j.model&&j.model.probe_succeeded)?"已通过 HTTP 400 错误消息探测真实上下文窗口；点击“保存为新模型配置”会新增一条。":"未从错误消息取得真实上下文窗口，已使用列表/默认窗口；点击“保存为新模型配置”会新增一条。");}catch(e){setModelFields(m,false);modelStatus("上下文探测失败，已使用列表/默认窗口："+String(e.message||e));}finally{if(row)row.disabled=false;}}
+function renderModels(items){var h="",i,m,raw;items=items||[];if(!items.length){modelEls.list.innerHTML="";return;}for(i=0;i<items.length;i++){m=items[i];raw=JSON.stringify(m).replace(/'/g,"&#39;");h+="<button type='button' class='model-row' data-model='"+esc(raw)+"'><span class='model-row__main'><span class='model-row__id'>"+esc(m.id)+"</span></span><span class='model-row__side'><span class='model-row__meta'>"+esc(modelLimitSource(m))+"</span><span class='model-row__limits'>"+esc(m.context_window)+" ctx / "+esc(m.max_output_tokens)+" out</span></span></button>";}modelEls.list.innerHTML=h;var rows=modelEls.list.querySelectorAll(".model-row");for(i=0;i<rows.length;i++)rows[i].addEventListener("click",function(ev){try{probeModelForSelection(JSON.parse(ev.currentTarget.getAttribute("data-model")||"{}"),ev.currentTarget);}catch(e){}});}
+async function fetchModels(){if(!modelEls.fetch)return;modelStatus("正在获取模型列表…");modelEls.fetch.disabled=true;try{var r=await fetch("/api/model_profiles/discover",{method:"POST",headers:{"Content-Type":"application/json"},credentials:"same-origin",body:JSON.stringify({base_url:modelEls.base.value,api_key:modelEls.key.value})});var j=await r.json();if(!j.ok)throw new Error(j.error||"获取失败");renderModels(j.models||[]);modelStatus("已获取 "+((j.models||[]).length)+" 个模型。");}catch(e){modelStatus("获取失败："+String(e.message||e));}finally{modelEls.fetch.disabled=false;}}
+function scheduleModelFetch(){if(!modelEls.base)return;var base=String(modelEls.base.value||"").trim();if(base.length<8)return;if(modelFetchTimer)clearTimeout(modelFetchTimer);modelFetchTimer=setTimeout(function(){var sig=base+"|"+String(modelEls.key&&modelEls.key.value||"").slice(0,8);if(sig===lastModelFetchKey)return;lastModelFetchKey=sig;fetchModels();},800);}
+function syncSwitcher(){try{if(window.refreshModelProfileSelector)window.refreshModelProfileSelector(window.currentSessionId);}catch(e){}}
+async function saveModelProfile(){var editing=!!modelEls.save.getAttribute("data-edit-id"),key=fieldValue(modelEls.key),body;if(!validateModelRequiredFields())return;if(!validateModelLimits()){modelStatus("上下文设置超出模型最大窗口，未保存。");return;}modelStatus(editing?"正在保存修改…":"正在新增模型配置…");try{body={id:modelEls.save.getAttribute("data-edit-id")||"",name:fieldValue(modelEls.name),base_url:fieldValue(modelEls.base),api_key:key,model:fieldValue(modelEls.id),llm_type:fieldValue(modelEls.type)||"openai",model_context_window:fieldValue(modelEls.maxctx),context_window:fieldValue(modelEls.ctx),max_output_tokens:fieldValue(modelEls.out),temperature:fieldValue(modelEls.temp),thinking_mode:fieldValue(modelEls.thinking),reasoning_effort:fieldValue(modelEls.reasoning),extra_body_json:fieldValue(modelEls.extra)};var r=await fetch("/api/model_profiles",{method:"POST",headers:{"Content-Type":"application/json"},credentials:"same-origin",body:JSON.stringify(body)});var j=await r.json();if(!j.ok)throw new Error(j.error||"保存失败");setSaveMode("");setEditingHighlight("");modelStatus(editing?"模型配置已修改。":"模型配置已新增，可在对话页面切换。");await loadConfiguredProfiles();syncSwitcher();}catch(e){modelStatus("保存失败："+String(e.message||e));}}
+function profileById(id){var i;for(i=0;i<configuredProfiles.length;i++){if(String(configuredProfiles[i].id||"")===String(id||""))return configuredProfiles[i];}return null;}
+function renderConfiguredProfiles(profiles){var h="",i,p,meta2,editingId,thinking,isEditing,deleteBtn;if(!modelEls.configured)return;profiles=profiles||[];editingId=modelEls.save?modelEls.save.getAttribute("data-edit-id")||"":"";if(!profiles.length){modelEls.configured.innerHTML="<div class='fh'>暂无模型配置。保存模型配置后，这里会显示可切换和可排序的模型。</div>";return;}for(i=0;i<profiles.length;i++){p=profiles[i]||{};isEditing=editingId&&editingId===String(p.id||"");thinking=defaultThinking(p.thinking_mode);meta2="thinking="+thinking+" · temp="+defaultTemp(p.temperature);if(String(thinking).toLowerCase()!=="disabled")meta2+=" · effort="+defaultReasoning(p);deleteBtn=String(p.id||"")==="__env__"?"":"<button type='button' class='profile-mini-btn' data-act='delete' data-id='"+esc(p.id||"")+"'>删除</button>";h+="<div class='profile-row"+(isEditing?" is-editing":"")+"' data-id='"+esc(p.id||"")+"'><div><div class='profile-row__name'>"+esc(p.name||p.model||"未命名模型")+"</div><div class='profile-row__meta'>#"+esc(i+1)+" · 模型ID "+esc(p.model||"")+" · max "+esc(p.model_context_window||"未设置")+" · "+esc(p.context_window||"")+" ctx / "+esc(p.max_output_tokens||"")+" out</div><div class='profile-row__meta'>"+esc(meta2)+"</div></div><div class='profile-row__actions'><button type='button' class='profile-mini-btn' data-act='up' data-id='"+esc(p.id||"")+"'>上移</button><button type='button' class='profile-mini-btn' data-act='down' data-id='"+esc(p.id||"")+"'>下移</button><button type='button' class='profile-mini-btn"+(isEditing?" is-editing":"")+"' data-act='edit' data-id='"+esc(p.id||"")+"'>编辑</button>"+deleteBtn+"</div></div>";}modelEls.configured.innerHTML=h;var btns=modelEls.configured.querySelectorAll("button");for(i=0;i<btns.length;i++)btns[i].addEventListener("click",function(ev){var b=ev.currentTarget,act=b.getAttribute("data-act"),id=b.getAttribute("data-id"),p;if(act==="edit"){p=profileById(id);if(p){setModelFields(p,true);modelStatus("正在编辑已有模型配置；点击“保存修改”会覆盖这条配置。");}return;}if(act==="delete"){deleteProfile(id);return;}if(act==="up"||act==="down"){moveProfile(id,act);}});}
+async function loadConfiguredProfiles(){try{var r=await fetch("/api/model_profiles",{credentials:"same-origin"}),j=await r.json();if(!j.ok)throw new Error(j.error||"加载失败");configuredProfiles=j.profiles||[];renderConfiguredProfiles(configuredProfiles);var d=j.default_profile||{};if(modelEls.base&&!modelEls.base.value)modelEls.base.value=d.base_url||"";if(modelEls.key&&!modelEls.key.value)modelEls.key.value=d.api_key||"";if(modelEls.id&&!modelEls.id.value)modelEls.id.value=d.model||"";if(modelEls.type&&!modelEls.type.value)modelEls.type.value=d.llm_type||"openai";if(modelEls.maxctx&&!modelEls.maxctx.value)modelEls.maxctx.value=d.model_context_window||"";if(modelEls.ctx&&!modelEls.ctx.value)modelEls.ctx.value=d.context_window||"";if(modelEls.out&&!modelEls.out.value)modelEls.out.value=d.max_output_tokens||"";if(modelEls.temp&&!modelEls.temp.value)modelEls.temp.value=d.temperature||"";if(modelEls.thinking&&!modelEls.thinking.value)modelEls.thinking.value=d.thinking_mode||"";if(modelEls.reasoning&&!modelEls.reasoning.value)modelEls.reasoning.value=d.reasoning_effort||"";if(modelEls.extra&&!modelEls.extra.value)modelEls.extra.value=d.extra_body_json||"";validateModelLimits();validateModelRequiredFields();}catch(e){if(modelEls.configured)modelEls.configured.innerHTML="<div class='fh'>模型配置加载失败："+esc(e.message||e)+"</div>";}}
+function askConfirmDelete(label){return new Promise(function(resolve){if(!modelEls.confirmMask){resolve(confirm("确定删除模型配置「"+label+"」吗？"));return;}modelEls.confirmBody.textContent="删除后该模型配置将从对话页下拉菜单中移除。确认删除「"+label+"」？";modelEls.confirmMask.classList.add("is-open");modelEls.confirmMask.setAttribute("aria-hidden","false");function done(v){modelEls.confirmMask.classList.remove("is-open");modelEls.confirmMask.setAttribute("aria-hidden","true");modelEls.confirmOk.onclick=null;modelEls.confirmCancel.onclick=null;resolve(v);}modelEls.confirmOk.onclick=function(){done(true);};modelEls.confirmCancel.onclick=function(){done(false);};});}
+async function deleteProfile(id){var p=profileById(id),label=p?(p.name||p.model||id):id;if(!id)return;if(!await askConfirmDelete(label))return;try{var r=await fetch("/api/model_profiles/"+encodeURIComponent(id),{method:"DELETE",credentials:"same-origin"}),j=await r.json();if(!j.ok)throw new Error("删除失败");if(modelEls.save&&modelEls.save.getAttribute("data-edit-id")===id)setSaveMode("");await loadConfiguredProfiles();syncSwitcher();}catch(e){modelStatus("删除失败："+String(e.message||e));}}
+async function moveProfile(id,dir){try{var r=await fetch("/api/model_profiles",{credentials:"same-origin"}),j=await r.json(),arr=(j.profiles||[]).map(function(p){return p.id;});var i=arr.indexOf(id),n=dir==="up"?i-1:i+1;if(i<0||n<0||n>=arr.length)return;var t=arr[i];arr[i]=arr[n];arr[n]=t;var rr=await fetch("/api/model_profiles/reorder",{method:"POST",headers:{"Content-Type":"application/json"},credentials:"same-origin",body:JSON.stringify({ordered_ids:arr})});var jj=await rr.json();if(!jj.ok)throw new Error(jj.error||"排序失败");await loadConfiguredProfiles();syncSwitcher();}catch(e){modelStatus("排序失败："+String(e.message||e));}}
 function show(groups){
 if(!groups||!groups.length){R.innerHTML="<p class='hi'>.env 中暂无可解析的 KEY=value 行。</p>";setToolbarVis(true);return;}
-var h="",i,j,g,v,sensitiveHasValue={};
+var h="",i,j,g,v;
 for(i=0;i<groups.length;i++){
 g=groups[i];
+if(g&&g.id==="llm")continue;
 h+="<section class='sec'><div class='tit'>"+esc(g.title)+"</div>";
 for(j=0;j<g.vars.length;j++){
 v=g.vars[j];
 h+="<div class='fd'><div class='fk'>"+esc(v.key)+"</div>";
 if(v.hint)h+="<div class='fh'>"+esc(v.hint)+"</div>";
 if(v.sensitive){
-if(v.has_value)sensitiveHasValue[v.key]=true;
 h+="<div class='pw'><input type='password' class='ip' data-k='"+esc(v.key)+"' value='"+esc(v.value)+"' autocomplete='off'><button type='button' class='tg clr' data-t='"+esc(v.key)+"'>清空</button></div>";
 }else if((v.value&&v.value.length>140)||v.key.indexOf("JSON")>=0||v.key.indexOf("BODY")>=0){
 var pk=v.path_kind?" data-path-kind='"+esc(v.path_kind)+"'":"";
@@ -320,7 +508,8 @@ h+="</section>";
 }
 R.innerHTML=h;setToolbarVis(true);
 if(window.MyAgentPathPicker)window.MyAgentPathPicker.scan(R);
-var P=R.querySelectorAll(".pw input[data-k]"),pidx,pkey;for(pidx=0;pidx<P.length;pidx++){pkey=P[pidx].getAttribute("data-k");if(sensitiveHasValue[pkey])P[pidx].placeholder="API已设置，如需修改请直接输入并保存设置";}
+var bu=R.querySelector("[data-k='OPENAI_BASE_URL']"),mn=R.querySelector("[data-k='EXECUTOR_LLM']"),lt=R.querySelector("[data-k='EXECUTOR_LLM_TYPE']"),cw=R.querySelector("[data-k='CONTEXT_WINDOW']"),mo=R.querySelector("[data-k='MAX_OUTPUT_TOKENS']");
+if(bu&&modelEls.base&&!modelEls.base.value)modelEls.base.value=bu.value||"";if(mn&&modelEls.id&&!modelEls.id.value)modelEls.id.value=mn.value||"";if(lt&&modelEls.type)modelEls.type.value=lt.value||"openai";if(cw&&modelEls.ctx&&!modelEls.ctx.value)modelEls.ctx.value=cw.value||"";if(mo&&modelEls.out&&!modelEls.out.value)modelEls.out.value=mo.value||"";
 var T=R.querySelectorAll(".tg"),t,btn,key,inp;
 for(t=0;t<T.length;t++){
 T[t].addEventListener("click",function(ev){
@@ -331,7 +520,7 @@ inp.value="";inp.type="password";inp.focus();
 });
 }
 }
-function coll(){var o={},els=R.querySelectorAll("[data-k]"),i,el;for(i=0;i<els.length;i++){el=els[i];if(el.type==="password"&&!el.value)continue;o[el.getAttribute("data-k")]=el.value;}return o;}
+function coll(){var o={},els=R.querySelectorAll("[data-k]"),i,el;for(i=0;i<els.length;i++){el=els[i];o[el.getAttribute("data-k")]=el.value;}return o;}
 async function load(){st("","");R.innerHTML="<p class='hi'>正在加载…</p>";setToolbarVis(false);
 try{var r=await fetch("/api/env",{credentials:"same-origin"}),j=await r.json();
 if(!j.ok)throw new Error(j.error||"加载失败");
@@ -343,6 +532,19 @@ if(j.ok&&j.restart_required){showToast("配置已保存；WORK_DIR 重启服务�
 if(!j.ok)throw new Error(j.error||"保存失败");showToast("配置已保存，已应用到当前运行进程；主界面进度条请刷新首页后同步。");}
 catch(e){st(String(e.message||e),"e");}finally{for(i=0;i<saves.length;i++)saves[i].disabled=false;}}
 var sv=R.ownerDocument.querySelectorAll(".js-save-env"),rv=R.ownerDocument.querySelectorAll(".js-reload-env"),ix;for(ix=0;ix<sv.length;ix++)sv[ix].addEventListener("click",sav);for(ix=0;ix<rv.length;ix++)rv[ix].addEventListener("click",load);load();
+if(modelEls.fetch)modelEls.fetch.addEventListener("click",fetchModels);
+if(modelEls.base)modelEls.base.addEventListener("input",scheduleModelFetch);
+if(modelEls.base)modelEls.base.addEventListener("change",scheduleModelFetch);
+if(modelEls.key)modelEls.key.addEventListener("input",scheduleModelFetch);
+if(modelEls.base)modelEls.base.addEventListener("input",validateModelRequiredFields);
+if(modelEls.key)modelEls.key.addEventListener("input",validateModelRequiredFields);
+if(modelEls.id)modelEls.id.addEventListener("input",validateModelRequiredFields);
+if(modelEls.maxctx)modelEls.maxctx.addEventListener("input",validateModelLimits);
+if(modelEls.ctx)modelEls.ctx.addEventListener("input",validateModelLimits);
+if(modelEls.out)modelEls.out.addEventListener("input",validateModelLimits);
+if(modelEls.save)modelEls.save.addEventListener("click",saveModelProfile);
+document.addEventListener("click",function(ev){var btn=ev.target&&ev.target.closest?ev.target.closest(".combo-btn"):null,menu,valueBtn;if(btn){menu=document.getElementById(btn.getAttribute("data-combo")==="thinking"?"thinking-menu":"reasoning-menu");if(menu)menu.classList.toggle("is-open");return;}valueBtn=ev.target&&ev.target.closest?ev.target.closest(".combo-menu button[data-value]"):null;if(valueBtn){menu=valueBtn.closest(".combo-menu");if(menu&&menu.id==="thinking-menu"&&modelEls.thinking)modelEls.thinking.value=valueBtn.getAttribute("data-value")||"";if(menu&&menu.id==="reasoning-menu"&&modelEls.reasoning)modelEls.reasoning.value=valueBtn.getAttribute("data-value")||"";if(menu)menu.classList.remove("is-open");return;}var menus=document.querySelectorAll(".combo-menu.is-open"),mi;for(mi=0;mi<menus.length;mi++)if(!menus[mi].contains(ev.target))menus[mi].classList.remove("is-open");});
+loadConfiguredProfiles();
 })();
 </script>
 <div id="env-toast" class="env-toast" role="status" aria-live="polite"></div>

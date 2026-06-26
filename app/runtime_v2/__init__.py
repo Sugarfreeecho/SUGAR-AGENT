@@ -1,6 +1,6 @@
 """Runtime V2 sidecar components.
 
-This package is intentionally not wired into the existing MyAgent request path
+This package is intentionally not wired into the existing General Agent request path
 yet. It provides a tested event-log and run-state core that can be mirrored
 from the old runtime before taking over selected endpoints.
 """
@@ -13,6 +13,12 @@ from .gateway import RuntimeGateway
 from .projector import RuntimeProjector
 from .snapshot_store import SnapshotStore
 from .mirror import RuntimeMirror
+from .history_ops import RuntimeHistoryOps
+from .blob_store import BlobStore
+from .subagent_store import RuntimeSubagentStore
+from .ui_projection import RuntimeUiProjection
+from .model_projection import RuntimeModelProjection
+from .config import runtime_v1_primary, runtime_v2_enabled, runtime_v2_primary, runtime_v2_strict, runtime_version
 
 __all__ = [
     "RuntimeEvent",
@@ -24,4 +30,14 @@ __all__ = [
     "RuntimeProjector",
     "SnapshotStore",
     "RuntimeMirror",
+    "RuntimeHistoryOps",
+    "BlobStore",
+    "RuntimeSubagentStore",
+    "RuntimeUiProjection",
+    "RuntimeModelProjection",
+    "runtime_version",
+    "runtime_v1_primary",
+    "runtime_v2_primary",
+    "runtime_v2_enabled",
+    "runtime_v2_strict",
 ]

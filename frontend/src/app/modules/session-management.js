@@ -1,17 +1,28 @@
 function setSendButtonState() {
     sendBtn.disabled = false;
     if (isSessionRunning(currentSessionId)) {
-        sendBtn.innerHTML = '停止 <span class="loader" aria-hidden="true"></span>';
+        const hasDraft = (typeof inputHasSendableText === 'function')
+            ? inputHasSendableText()
+            : !!(messageInput && String(messageInput.value || '').trim());
+        sendBtn.innerHTML = hasDraft ? '追问' : '停止 <span class="loader" aria-hidden="true"></span>';
         sendBtn.classList.add('is-stop');
+        sendBtn.classList.toggle('is-followup', hasDraft);
     } else {
         sendBtn.textContent = '发送';
         sendBtn.classList.remove('is-stop');
+        sendBtn.classList.remove('is-followup');
     }
 }
 
-async function requestInterrupt(sessionId) {
+async function requestInterrupt(sessionId, runId, reason) {
     if (!sessionId) return;
-    try { await fetch('/sessions/' + sessionId + '/interrupt', { method: 'POST' }); }
+    try {
+        await fetch('/sessions/' + sessionId + '/interrupt', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ run_id: runId || '', reason: reason || '' }),
+        });
+    }
     catch (e) { /* ignore */ }
 }
 
@@ -19,13 +30,15 @@ function pauseCurrentRun() {
     if (!currentSessionId) return;
     const run = getSessionRunState(currentSessionId);
     const sid = currentSessionId;
+    const activeInfo = sessionStore.getActiveRunInfo(sid) || {};
+    const runId = run && run.runId ? run.runId : (activeInfo.run_id || activeInfo.runId || '');
     suppressSessionServerStreamActive(sid);
     if (!run) {
         setSendButtonState();
         syncSessionListIndicatorClasses();
         renderSessionListIfChanged(false);
-        void requestInterrupt(sid);
-        setTimeout(function () { reconcileRunStateFromServer({ silent: true }); }, 800);
+        void requestInterrupt(sid, runId);
+        setTimeout(function () { reconcileRunStateFromServer({ silent: true, respectStopSuppress: true }); }, 3000);
         return;
     }
     const ctx = run.ctx;
@@ -37,8 +50,8 @@ function pauseCurrentRun() {
     renderSessionListIfChanged(false);
     appendLog(ctx, '已请求停止当前任务', 'status', sid);
     sealProcessGroup(ctx);
-    void requestInterrupt(sid);
-    setTimeout(function () { reconcileRunStateFromServer({ silent: true }); }, 800);
+    void requestInterrupt(sid, runId);
+    setTimeout(function () { reconcileRunStateFromServer({ silent: true, respectStopSuppress: true }); }, 3000);
 }
 
 /** 在当前对话中定位最近一条用户消息并重新发送。返回 true 表示已触发展开发送。 */
@@ -77,7 +90,12 @@ function showLoading() {
     box.className = 'skeleton';
     box.id = 'chat-loading';
     box.setAttribute('role', 'status');
-    box.innerHTML = '<div class="skeleton-line" style="width:38%"></div><div class="skeleton-line" style="width:72%"></div><div class="skeleton-line" style="width:55%"></div><div class="skeleton-line" style="width:64%"></div>';
+    box.innerHTML = ''
+        + '<div class="skeleton-page" aria-hidden="true">'
+        + '<div class="skeleton-mast"><span></span><span></span></div>'
+        + '<div class="skeleton-hero"><div class="skeleton-image"></div><div class="skeleton-column"><span></span><span></span><span></span><span></span></div></div>'
+        + '<div class="skeleton-grid"><div><span></span><span></span><span></span></div><div><span></span><span></span><span></span></div><div><span></span><span></span><span></span></div></div>'
+        + '</div><div class="skeleton-copy">加载中</div>';
     box.setAttribute('data-ui-tip', '加载会话');
     bindUiHoverTip(box);
     (getVisibleChatStream() || chatContainer).appendChild(box);
@@ -90,15 +108,20 @@ function hideLoading() { const loader = document.getElementById('chat-loading');
 function applySessionItemIndicators(itemDiv, sessionId, opts) {
     opts = opts || {};
     if (!itemDiv || !sessionId) return;
-    itemDiv.classList.remove('is-generating', 'is-unread-result');
+    itemDiv.classList.remove('is-generating', 'is-unread-result', 'is-unread-failed');
     var nameEl = itemDiv.querySelector('.session-name');
     if (nameEl) nameEl.removeAttribute('data-ui-tip');
     if (isSessionRunning(sessionId)) {
         itemDiv.classList.add('is-generating');
         if (nameEl) nameEl.setAttribute('data-ui-tip', '生成中…');
-    } else if (sessionUnreadComplete.has(sessionId)) {
-        itemDiv.classList.add('is-unread-result');
-        if (nameEl) nameEl.setAttribute('data-ui-tip', '有新回复，点击查看');
+    } else {
+        var sess = sessionStore.get(sessionId);
+        var localUnreadResult = sessionUnreadComplete.has(sessionId);
+        var hasUnreadResult = sess ? !!sess.unread_result : localUnreadResult;
+        if (!hasUnreadResult) return;
+        var failed = !!(sess && sess.unread_result_status === 'failed');
+        itemDiv.classList.add(failed ? 'is-unread-failed' : 'is-unread-result');
+        if (nameEl) nameEl.setAttribute('data-ui-tip', failed ? '任务失败，点击查看' : '有新回复，点击查看');
     }
     if (nameEl) bindUiHoverTip(nameEl);
 }
@@ -225,7 +248,7 @@ function buildAndBindSessionRow(sess, allSessions, nextStreamMap) {
                     if (previous) applyOptimisticSessionUpdate(sess.id, previous);
                     throw new Error('pin failed: ' + response.status);
                 }
-                void loadSessions({ force: true });
+                void refreshSingleSessionRow(sess.id);
             } catch (err) { console.error('置顶失败', err); }
         });
     }
@@ -243,9 +266,7 @@ function buildAndBindSessionRow(sess, allSessions, nextStreamMap) {
                     if (previous) applyOptimisticSessionUpdate(sess.id, previous);
                     throw new Error('archive failed: ' + response.status);
                 }
-                const wasArchivedLoaded = sessionStore.archivedLoaded;
-                void loadSessions({ force: true, skipArchivedRefresh: true });
-                if (wasArchivedLoaded) void loadArchivedSessions({ background: true });
+                void refreshSingleSessionRow(sess.id);
             } catch (err) { console.error('归档失败', err); }
         });
     }
@@ -281,6 +302,7 @@ function buildAndBindSessionRow(sess, allSessions, nextStreamMap) {
             persistSessionUnread();
             delete draftBySession[deletedSessionId];
             removeStoredInputDraft(deletedSessionId);
+            if (typeof removeStoredFollowupQueue === 'function') removeStoredFollowupQueue(deletedSessionId);
             delete lastUserMessageBySession[deletedSessionId];
             clearContextStateForSession(deletedSessionId);
             if (isSessionRunning(sess.id)) {
@@ -301,12 +323,9 @@ function buildAndBindSessionRow(sess, allSessions, nextStreamMap) {
                 .catch(function (err) {
                     console.error('删除会话失败:', err);
                     sessionStore.clearDeletedSessionTombstone(deletedSessionId);
-                    void loadSessions({ force: true, skipArchivedRefresh: true });
+                    void loadSessions({ skipArchivedRefresh: true });
                     if (wasArchivedLoaded) void loadArchivedSessions({ background: true });
                 });
-            if (wasArchivedLoaded) {
-                void loadArchivedSessions({ background: true });
-            }
         });
     }
     const nameSpan = div.querySelector('.session-name');
@@ -367,6 +386,14 @@ async function refreshSingleSessionRow(sessionId) {
             stream_active: !!sess.stream_active,
         });
         setSessionServerStreamActive(sess.id, !!sess.stream_active);
+        if (sess.unread_result) {
+            if (!sessionUnreadComplete.has(sess.id)) {
+                sessionUnreadComplete.add(sess.id);
+                persistSessionUnread();
+            }
+        } else if (sessionUnreadComplete.delete(sess.id)) {
+            persistSessionUnread();
+        }
         if (Number(sess.subagent_running || 0) > 0) {
             sessionUnreadComplete.delete(sess.id);
             persistSessionUnread();
@@ -407,6 +434,7 @@ function computeSessionListRenderKey() {
             s.pinned ? 'p' : '',
             s.archived ? 'a' : '',
             s.stream_active ? 'r' : '',
+            s.unread_result ? ('u:' + (s.unread_result_status || 'success')) : '',
             s.last_activity_at || s.updated_at || '',
             s.last_user_preview || '',
             s.subagent_running || 0,
@@ -422,6 +450,7 @@ function computeSessionListRenderKey() {
             a.id,
             a.name || '',
             a.pinned ? 'p' : '',
+            a.unread_result ? ('u:' + (a.unread_result_status || 'success')) : '',
             a.last_activity_at || a.updated_at || '',
             a.last_user_preview || '',
         ].join('\u001f'));
@@ -579,7 +608,7 @@ async function loadSessions(opts) {
 
         renderSessionListIfChanged(!!opts.forceRender);
         sessionStore.ui.loadingSessions = false;
-        if (!opts.skipArchivedRefresh && sessionStore.archivedLoaded) {
+        if (opts.refreshArchived && !opts.skipArchivedRefresh && sessionStore.archivedLoaded) {
             void loadArchivedSessions({ background: true });
         }
         return;
@@ -592,6 +621,15 @@ async function loadSessions(opts) {
 
 async function reconcileRunStateFromServer(opts) {
     opts = opts || {};
+    const suppressedBeforeFetch = new Set();
+    if (opts.respectStopSuppress) {
+        sessionStore.sessionOrder.forEach(function (sid) {
+            if (isSessionStreamStopSuppressed(sid)) suppressedBeforeFetch.add(String(sid));
+        });
+        if (currentSessionId && isSessionStreamStopSuppressed(currentSessionId)) {
+            suppressedBeforeFetch.add(String(currentSessionId));
+        }
+    }
     let snapshot = null;
     try {
         const cur = currentSessionId ? sessionStore.get(currentSessionId) : null;
@@ -603,6 +641,20 @@ async function reconcileRunStateFromServer(opts) {
         return;
     }
     applySessionSnapshot(snapshot);
+    if (opts.respectStopSuppress) {
+        suppressedBeforeFetch.forEach(function (sid) {
+            if (isSessionStreamStopSuppressed(sid)) {
+                sessionStore.setStreamActive(sid, false);
+                const sess = sessionStore.get(sid);
+                if (sess) {
+                    sess.stream_active = false;
+                    sess.run_active = false;
+                    sess.run_started_at = null;
+                }
+                sessionStore.activeRunInfoBySession.delete(sid);
+            }
+        });
+    }
     const active = new Set();
     sessionStore.activeRunInfoBySession.forEach(function (info, sid) {
         if (info && info.run_active === true) active.add(String(sid));
@@ -645,6 +697,7 @@ async function loadSessionMessages(sessionId, scrollBehavior, opts) {
         if (!response.ok) throw new Error('messages failed: ' + response.status);
         const raw = await response.json();
         if (loadToken !== messageLoadEpoch || sessionId !== currentSessionId) return;
+        if (getSessionRunState(sessionId)) return;
         document.getElementById('chat-loading')?.remove();
         if (!getVisibleChatStream()) ensureVisibleChatStreamSlot();
         const vis = getVisibleChatStream();
@@ -675,15 +728,14 @@ async function loadSessionMessages(sessionId, scrollBehavior, opts) {
             range_end: events.length,
         });
         if (!opts.full && pageMeta) {
-            sessionHistoryPaging = {
+            setSessionHistoryPaging({
                 sessionId: sessionId,
                 total: pageMeta.total,
                 range_start: pageMeta.range_start,
                 range_end: pageMeta.range_end,
                 has_older: !!pageMeta.has_older,
-            };
+            });
             ensureHistorySentinel(getVisibleChatStream());
-            updateHistorySentinelVisibility();
         }
         if (events.length === 0) {
             suppressTocDuringSessionLoad = false;
@@ -728,7 +780,7 @@ async function loadSessionMessages(sessionId, scrollBehavior, opts) {
         bindExistingLogs();
         scheduleTocActiveUpdate();
         scheduleContextTokensAfterPaint(sessionId);
-        await refreshTodoPlanPanel();
+        renderTodoPlanForCurrentSession();
     } catch (error) {
         console.error('加载会话消息失败:', error);
         document.getElementById('chat-loading')?.remove();
@@ -748,8 +800,7 @@ async function switchSession(sessionId) {
     clearTodoForSessionLoad();
     pendingRewriteTruncate = null;
     hideRewriteUndoToast();
-    sessionUnreadComplete.delete(sessionId);
-    persistSessionUnread();
+    clearSessionUnreadState(sessionId);
     const leaving = currentSessionId;
     saveChatScrollForSession(leaving);
     stashInputDraft(leaving);
@@ -759,6 +810,8 @@ async function switchSession(sessionId) {
     setCurrentSessionState(sessionId);
     localStorage.setItem('lastSessionId', sessionId);
     restoreInputDraft(sessionId);
+    if (typeof renderFollowupQueue === 'function') renderFollowupQueue(sessionId);
+    if (typeof refreshModelProfileSelector === 'function') refreshModelProfileSelector(sessionId);
     syncSessionListIndicatorClasses();
     setSendButtonState();
     if (restoreStreamForRunningSession(sessionId)) {
@@ -768,7 +821,7 @@ async function switchSession(sessionId) {
         updateSessionTitle();
         scheduleContextTokensAfterPaint(sessionId);
         applyChatScrollAfterHistoryLoad(sessionId, 'saved-or-bottom');
-        await refreshTodoPlanPanel();
+        renderTodoPlanForCurrentSession();
         if (switchToken !== switchSessionEpoch || sessionId !== currentSessionId) return;
         /* 让 rebuildToc 的 /user_turns fetch 先发出，subagent 面板（含 N 个 /messages）延后一帧
            避免抢占带宽与主线程，导致目录最后才就绪。 */
@@ -832,15 +885,17 @@ async function createNewSessionInner() {
         setCurrentSessionState(data.session_id);
         localStorage.setItem('lastSessionId', currentSessionId);
         restoreInputDraft(currentSessionId);
+        if (typeof renderFollowupQueue === 'function') renderFollowupQueue(currentSessionId);
+        if (typeof refreshModelProfileSelector === 'function') refreshModelProfileSelector(currentSessionId);
         if (!getVisibleChatStream()) ensureVisibleChatStreamSlot();
         setWelcome();
         replayingMessages = false;
         if (data && data.session) {
             syncArchivedSessionStateFromStore();
             renderSessionListIfChanged(true);
-            void loadSessions({ force: true });
+            void refreshSingleSessionRow(data.session_id);
         } else {
-            await loadSessions({ force: true });
+            await loadSessions();
         }
         setSendButtonState();
         maybeStartStreamPollForSession(currentSessionId);

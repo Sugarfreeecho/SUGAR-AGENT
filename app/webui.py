@@ -7,31 +7,48 @@
 import asyncio
 import json
 import logging
+import mimetypes
 import os
 import re
-from collections import defaultdict
-from typing import Optional
+import threading
+from collections import defaultdict, deque
+from typing import Any, Dict, Optional
 
 from pathlib import Path
 from urllib.parse import unquote
 
-from fastapi import FastAPI, Form, Query, Request
-from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
+from fastapi import FastAPI, File, Form, Query, Request, UploadFile
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
 
 from agent import astream_events, astream_events_continuation, session_manager
 from agent_harness import PROJECT_ROOT, WORK_DIR, dotenv_file_path, refresh_executor_client_from_env
-from agent_loop import compute_context_tokens_for_session
+from agent_loop import abort_session_steer_run, compute_context_tokens_for_session, enqueue_session_steer, remove_session_steer
 from session_lifecycle import get_run_started_at, is_run_active
 from session_event_bus import subscribe_session_events
 import agent_mcp
+import model_profiles
 from path_picker_util import pick_native_path
 
 _PATH_PICKER_JS_PATH = Path(__file__).resolve().parent / "templates" / "static" / "myagent_path_picker.js"
 _TEMPLATES_DIR = Path(__file__).resolve().parent / "templates"
 _DIST_INDEX = _TEMPLATES_DIR / "dist" / "index.html"
 _DIST_ASSETS = _TEMPLATES_DIR / "dist" / "assets"
+_VIEWABLE_IMAGE_SUFFIXES = {
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".gif",
+    ".webp",
+    ".bmp",
+    ".svg",
+    ".ico",
+    ".tif",
+    ".tiff",
+    ".avif",
+    ".jfif",
+}
 
 # SSE 响应头：降低反向代理/浏览器对小块的缓冲
 _SSE_HEADERS = {
@@ -56,7 +73,158 @@ _active_chat_by_session: dict[str, int] = {}
 _active_chat_last_seen: dict[str, float] = {}
 
 _CHAT_ACTIVE_TIMEOUT_SEC = int(os.getenv("CHAT_ACTIVE_TIMEOUT_SEC", "300"))
+_chat_start_lock = threading.RLock()
+_chat_starting_by_session: dict[str, float] = {}
 logger = logging.getLogger(__name__)
+_STATIC_TEXT_CACHE_LOCK = threading.Lock()
+_STATIC_TEXT_CACHE: dict[str, tuple[tuple[bool, int, int], str]] = {}
+
+_RUNTIME_SYNC_LOCK = threading.Lock()
+_RUNTIME_SYNC_QUEUE: deque[str] = deque()
+_RUNTIME_SYNC_STATUS: dict[str, dict] = {}
+_RUNTIME_SYNC_WORKER: Optional[threading.Thread] = None
+_RUNTIME_SYNC_CANCEL = threading.Event()
+_RUNTIME_SYNC_SLEEP_SEC = float(os.getenv("RUNTIME_SYNC_QUEUE_SLEEP_SEC", "0.2"))
+
+
+def _runtime_sync_file_sig(path: Path) -> tuple[bool, int, int]:
+    try:
+        st = path.stat()
+        return True, int(st.st_mtime_ns), int(st.st_size)
+    except OSError:
+        return False, 0, 0
+
+
+def _runtime_sync_paths(session_id: str) -> tuple[Path, Path]:
+    legacy_path = session_manager._get_ui_events_path(session_id)
+    from runtime_v2.ui_projection import RuntimeUiProjection
+
+    projection = RuntimeUiProjection(
+        session_manager.repository.sessions_dir,
+        path_resolver=session_manager._resolve_session_path,
+    )
+    return legacy_path, projection.event_log.event_path(session_id)
+
+
+def _runtime_sync_needed(session_id: str) -> tuple[bool, str, dict]:
+    try:
+        legacy_path, runtime_path = _runtime_sync_paths(session_id)
+        legacy_sig = _runtime_sync_file_sig(legacy_path)
+        runtime_sig = _runtime_sync_file_sig(runtime_path)
+        detail = {"legacy": legacy_sig, "runtime": runtime_sig}
+        if legacy_sig[0] and not runtime_sig[0]:
+            return True, "runtime_missing", detail
+        if runtime_sig[0] and not legacy_sig[0]:
+            return True, "legacy_missing", detail
+        if not legacy_sig[0] and not runtime_sig[0]:
+            return False, "none", detail
+        if legacy_sig[1] > runtime_sig[1] + 1_000_000:
+            return True, "runtime_older", detail
+        if runtime_sig[1] > legacy_sig[1] + 1_000_000:
+            return True, "legacy_older", detail
+        return False, "fresh", detail
+    except Exception as exc:
+        return False, f"check_failed:{exc}", {}
+
+
+def _runtime_sync_worker_loop() -> None:
+    import time as _time
+
+    while not _RUNTIME_SYNC_CANCEL.is_set():
+        with _RUNTIME_SYNC_LOCK:
+            if not _RUNTIME_SYNC_QUEUE:
+                return
+            sid = _RUNTIME_SYNC_QUEUE.popleft()
+            status = dict(_RUNTIME_SYNC_STATUS.get(sid) or {})
+            status.update({
+                "state": "running",
+                "started_at": _time.time(),
+                "queued": False,
+            })
+            _RUNTIME_SYNC_STATUS[sid] = status
+        t0 = _time.perf_counter()
+        try:
+            result = _sync_runtime_session(sid)
+            state = "done" if result.get("ok") else "failed"
+            error = result.get("error")
+        except Exception as exc:
+            result = {"ok": False, "session_id": sid, "error": str(exc)}
+            state = "failed"
+            error = str(exc)
+            logger.warning("background runtime sync failed for %s: %s", sid, exc)
+        elapsed_ms = int((_time.perf_counter() - t0) * 1000)
+        with _RUNTIME_SYNC_LOCK:
+            status = dict(_RUNTIME_SYNC_STATUS.get(sid) or {})
+            status.update({
+                "state": state,
+                "queued": False,
+                "finished_at": _time.time(),
+                "elapsed_ms": elapsed_ms,
+                "result": result,
+            })
+            if error:
+                status["error"] = error
+            else:
+                status.pop("error", None)
+            _RUNTIME_SYNC_STATUS[sid] = status
+        if _RUNTIME_SYNC_SLEEP_SEC > 0:
+            _time.sleep(_RUNTIME_SYNC_SLEEP_SEC)
+
+
+def _ensure_runtime_sync_worker_locked() -> None:
+    global _RUNTIME_SYNC_WORKER
+    if _RUNTIME_SYNC_WORKER is not None and _RUNTIME_SYNC_WORKER.is_alive():
+        return
+    _RUNTIME_SYNC_CANCEL.clear()
+    _RUNTIME_SYNC_WORKER = threading.Thread(
+        target=_runtime_sync_worker_loop,
+        name="runtime-sync-worker",
+        daemon=True,
+    )
+    _RUNTIME_SYNC_WORKER.start()
+
+
+def _enqueue_runtime_sync(session_id: str, reason: str = "manual", *, check_needed: bool = False) -> dict:
+    sid = str(session_id or "").strip()
+    if not sid:
+        return {"ok": False, "error": "missing session_id"}
+    detail = {}
+    needed = True
+    check_reason = reason
+    if check_needed:
+        needed, check_reason, detail = _runtime_sync_needed(sid)
+        if not needed:
+            return {"ok": True, "session_id": sid, "queued": False, "reason": check_reason, "detail": detail}
+    with _RUNTIME_SYNC_LOCK:
+        existing = _RUNTIME_SYNC_STATUS.get(sid) or {}
+        if existing.get("state") == "running" or sid in _RUNTIME_SYNC_QUEUE:
+            return {"ok": True, "session_id": sid, "queued": True, "deduped": True, "reason": existing.get("reason") or reason}
+        _RUNTIME_SYNC_QUEUE.append(sid)
+        _RUNTIME_SYNC_STATUS[sid] = {
+            "state": "queued",
+            "queued": True,
+            "reason": check_reason,
+            "detail": detail,
+        }
+        _ensure_runtime_sync_worker_locked()
+    return {"ok": True, "session_id": sid, "queued": True, "reason": check_reason, "detail": detail}
+
+
+def _read_text_cached(path: Path, fallback: str = "") -> str:
+    try:
+        st = path.stat()
+        sig = (True, int(st.st_mtime_ns), int(st.st_size))
+    except OSError:
+        sig = (False, 0, 0)
+        return fallback
+    key = str(path.resolve())
+    with _STATIC_TEXT_CACHE_LOCK:
+        cached = _STATIC_TEXT_CACHE.get(key)
+        if cached and cached[0] == sig:
+            return cached[1]
+        text = path.read_text(encoding="utf-8")
+        _STATIC_TEXT_CACHE[key] = (sig, text)
+        return text
 
 def _cleanup_stale_active_chat():
     import time as _t
@@ -65,16 +233,288 @@ def _cleanup_stale_active_chat():
     for sid in stale:
         _active_chat_by_session.pop(sid, None)
         _active_chat_last_seen.pop(sid, None)
+    with _chat_start_lock:
+        stale_starting = [
+            sid for sid, ts in list(_chat_starting_by_session.items())
+            if now - float(ts or 0.0) > _CHAT_ACTIVE_TIMEOUT_SEC
+        ]
+        for sid in stale_starting:
+            _chat_starting_by_session.pop(sid, None)
 
 
 def _is_session_stream_active(sid: str) -> bool:
     x = str(sid or "").strip()
-    return bool(x) and (_active_chat_by_session.get(x, 0) > 0 or is_run_active(x))
+    if not x:
+        return False
+    with _chat_start_lock:
+        if x in _chat_starting_by_session:
+            return True
+    return bool(_session_run_state_fields(x).get("stream_active"))
+
+
+def _reserve_session_chat_start(sid: str) -> bool:
+    x = str(sid or "").strip()
+    if not x:
+        return True
+    with _chat_start_lock:
+        if x in _chat_starting_by_session:
+            return False
+    if bool(_session_run_state_fields(x).get("stream_active")):
+        return False
+    with _chat_start_lock:
+        if x in _chat_starting_by_session:
+            return False
+        import time as _t
+        _chat_starting_by_session[x] = _t.time()
+        return True
+
+
+def _release_session_chat_start(sid: str) -> None:
+    x = str(sid or "").strip()
+    if not x:
+        return
+    with _chat_start_lock:
+        _chat_starting_by_session.pop(x, None)
+
+
+def _runtime_v2_active_run_info(sid: str) -> dict:
+    sid = str(sid or "").strip()
+    if not sid:
+        return {}
+    try:
+        active_runs = _runtime_v2_filtered_active_runs(sid)
+        if not active_runs:
+            return {}
+        first = active_runs[0] if isinstance(active_runs[0], dict) else {}
+        run_id = str(first.get("run_id") or "").strip()
+        started_at = first.get("started_at") or first.get("heartbeat_at")
+        return {
+            "session_id": sid,
+            "run_id": run_id,
+            "run_active": True,
+            "started_at": started_at,
+            "runtime_v2": True,
+            "active_run_count": len(active_runs),
+        }
+    except Exception as exc:
+        logger.debug("Runtime V2 active run read failed for %s: %s", sid, exc)
+        return {}
+
+
+def _has_local_run_activity(sid: str) -> bool:
+    sid = str(sid or "").strip()
+    if not sid:
+        return False
+    if bool(is_run_active(sid)):
+        return True
+    if int(_active_chat_by_session.get(sid, 0) or 0) > 0:
+        return True
+    with _chat_start_lock:
+        return sid in _chat_starting_by_session
+
+
+def _has_local_worker_activity(sid: str) -> bool:
+    sid = str(sid or "").strip()
+    if not sid:
+        return False
+    if bool(is_run_active(sid)):
+        return True
+    with _chat_start_lock:
+        return sid in _chat_starting_by_session
+
+
+def _runtime_v2_snapshot(sid: str) -> dict:
+    sid = str(sid or "").strip()
+    if not sid:
+        return {}
+    try:
+        from runtime_v2.snapshot_store import SnapshotStore
+
+        return SnapshotStore(session_manager.repository.sessions_dir).read(sid)
+    except Exception as exc:
+        logger.debug("Runtime V2 snapshot read failed for %s: %s", sid, exc)
+        return {}
+
+
+def _runtime_v2_filtered_active_runs(sid: str) -> list[dict]:
+    snapshot = _runtime_v2_snapshot(sid)
+    active_runs = snapshot.get("active_runs") if isinstance(snapshot, dict) else None
+    if not isinstance(active_runs, list) or not active_runs:
+        return []
+    if not _has_local_run_activity(sid):
+        return []
+    runs = snapshot.get("runs") if isinstance(snapshot, dict) else None
+    latest_started = ""
+    latest_started_seq = 0
+    if isinstance(runs, dict):
+        for run in runs.values():
+            if not isinstance(run, dict):
+                continue
+            try:
+                seq = int(run.get("started_seq") or 0)
+            except (TypeError, ValueError):
+                seq = 0
+            if seq > latest_started_seq:
+                latest_started_seq = seq
+            started = str(run.get("started_at") or "")
+            if started > latest_started:
+                latest_started = started
+    filtered = []
+    for run in active_runs:
+        if not isinstance(run, dict):
+            continue
+        try:
+            run_seq = int(run.get("started_seq") or 0)
+        except (TypeError, ValueError):
+            run_seq = 0
+        if latest_started_seq and run_seq and run_seq < latest_started_seq:
+            continue
+        if latest_started and str(run.get("started_at") or "") < latest_started:
+            continue
+        filtered.append(run)
+    return filtered
+
+
+def _runtime_v2_context_snapshot(sid: str) -> dict:
+    snapshot = _runtime_v2_snapshot(sid)
+    context = snapshot.get("context") if isinstance(snapshot, dict) else None
+    return context if isinstance(context, dict) else {}
+
+
+def _runtime_v2_event_dicts(session_id: str, *, after_seq: int = 0, before_seq: Optional[int] = None, limit: int = 200) -> list[dict]:
+    from runtime_v2.event_log import SessionEventLog
+
+    log = SessionEventLog(
+        session_manager.repository.sessions_dir,
+        path_resolver=session_manager._resolve_session_path,
+    )
+    lim = max(1, min(int(limit or 200), 1000))
+    if before_seq is not None:
+        events = log.read_before_seq(session_id, int(before_seq), lim)
+    elif int(after_seq or 0) > 0:
+        events = log.read_after_seq(session_id, int(after_seq or 0))[:lim]
+    else:
+        events = log.read_latest(session_id, lim)
+    return [ev.to_dict() for ev in events]
+
+
+def _runtime_v2_debug_state(include_archived: bool = True) -> dict:
+    try:
+        from runtime_v2.config import runtime_version
+    except Exception:
+        runtime_version = lambda: 1
+    sessions = session_manager.list_sessions(include_archived=include_archived)
+    active_runs: list[dict] = []
+    session_rows: list[dict] = []
+    for item in sessions:
+        sid = str((item or {}).get("id") or "").strip()
+        if not sid:
+            continue
+        snapshot = _runtime_v2_snapshot(sid)
+        snapshot_active = snapshot.get("active_runs") if isinstance(snapshot, dict) else []
+        filtered_active = _runtime_v2_filtered_active_runs(sid)
+        if filtered_active:
+            active_runs.extend([dict(run, session_id=sid) for run in filtered_active if isinstance(run, dict)])
+        session_rows.append({
+            "id": sid,
+            "name": item.get("name"),
+            "archived": bool(item.get("archived")),
+            "snapshot_seq": int(snapshot.get("last_seq") or 0) if isinstance(snapshot, dict) else 0,
+            "snapshot_active_run_count": len(snapshot_active) if isinstance(snapshot_active, list) else 0,
+            "active_run_count": len(filtered_active),
+            "updated_at": snapshot.get("updated_at") if isinstance(snapshot, dict) else None,
+        })
+    return {
+        "runtime_version": int(runtime_version()),
+        "session_count": len(session_rows),
+        "active_run_count": len(active_runs),
+        "active_runs": active_runs,
+        "sessions": session_rows,
+    }
+
+
+def _runtime_v2_active_run_ids(sid: str) -> list[str]:
+    active_runs = _runtime_v2_filtered_active_runs(sid)
+    out: list[str] = []
+    for run in active_runs:
+        if not isinstance(run, dict):
+            continue
+        run_id = str(run.get("run_id") or "").strip()
+        if run_id:
+            out.append(run_id)
+    return out
+
+
+def _interrupt_runtime_v2_active_runs(sid: str, run_id: str = "", reason: str = "user") -> list[str]:
+    targets = [str(run_id or "").strip()] if str(run_id or "").strip() else _runtime_v2_active_run_ids(sid)
+    targets = [rid for rid in targets if rid]
+    if not targets:
+        return []
+    reason = str(reason or "user").strip() or "user"
+    try:
+        from runtime_v2.mirror import RuntimeMirror
+
+        mirror = RuntimeMirror(session_manager.sessions_dir)
+        for rid in targets:
+            mirror.mirror_run_interrupted(sid, rid, {"reason": reason})
+    except Exception as e:
+        logger.debug("mirror interrupt failed for %s: %s", sid, e)
+    return targets
+
+
+def _session_run_state_fields(sid: str) -> dict:
+    sid = str(sid or "").strip()
+    if not sid:
+        return {
+            "stream_active": False,
+            "run_active": False,
+            "run_started_at": None,
+            "active_run": None,
+        }
+    stream_connections = int(_active_chat_by_session.get(sid, 0) or 0)
+    try:
+        from runtime_v2 import runtime_v2_primary
+    except Exception:
+        runtime_v2_primary = lambda: True
+    if runtime_v2_primary():
+        v2_info = _runtime_v2_active_run_info(sid)
+        if not v2_info:
+            return {
+                "stream_active": False,
+                "run_active": False,
+                "run_started_at": None,
+                "stream_connections": stream_connections,
+                "active_run": None,
+            }
+        started_at = v2_info.get("started_at")
+        return {
+            "stream_active": True,
+            "run_active": True,
+            "run_started_at": started_at,
+            "stream_connections": stream_connections,
+            "active_run": dict(v2_info, stream_connections=stream_connections),
+        }
+    legacy_run_active = bool(is_run_active(sid))
+    started_at = get_run_started_at(sid)
+    return {
+        "stream_active": legacy_run_active,
+        "run_active": legacy_run_active,
+        "run_started_at": started_at,
+        "stream_connections": stream_connections,
+        "active_run": {
+            "session_id": sid,
+            "stream_connections": stream_connections,
+            "run_active": legacy_run_active,
+            "started_at": started_at,
+            "runtime_v2": False,
+        } if legacy_run_active else None,
+    }
 
 
 def _build_sessions_state_snapshot(include_archived: bool = False) -> dict:
     import time as _time
 
+    t0 = _time.perf_counter()
     sessions = session_manager.list_sessions(include_archived=include_archived)
     archived_count = session_manager.archived_session_count()
     _cleanup_stale_active_chat()
@@ -86,32 +526,28 @@ def _build_sessions_state_snapshot(include_archived: bool = False) -> dict:
             s["stream_active"] = False
             continue
         sid = str(sid)
-        stream_connections = int(_active_chat_by_session.get(sid, 0) or 0)
-        run_active = bool(is_run_active(sid))
-        active = bool(stream_connections > 0 or run_active)
-        s["stream_active"] = active
-        s["run_active"] = run_active
-        s["run_started_at"] = get_run_started_at(sid)
-        if active:
-            active_runs.append({
-                "session_id": sid,
-                "stream_connections": stream_connections,
-                "run_active": run_active,
-                "started_at": get_run_started_at(sid),
-            })
-        try:
-            pending = session_manager.count_actionable_pending_subagent_results(sid)
-        except Exception:
-            pending = 0
-        if pending:
-            pending_subagents[sid] = pending
-    return {
+        run_state = _session_run_state_fields(sid)
+        s["stream_active"] = bool(run_state["stream_active"])
+        s["run_active"] = bool(run_state["run_active"])
+        s["run_started_at"] = run_state["run_started_at"]
+        if run_state.get("active_run"):
+            active_runs.append(run_state["active_run"])
+    out = {
         "seq": int(_time.time() * 1000),
         "sessions": sessions,
         "archived_count": archived_count,
         "active_runs": active_runs,
         "pending_subagents": pending_subagents,
     }
+    elapsed_ms = int((_time.perf_counter() - t0) * 1000)
+    if elapsed_ms >= 500:
+        logger.warning(
+            "/sessions/state slow include_archived=%s sessions=%s elapsed_ms=%s",
+            include_archived,
+            len(sessions),
+            elapsed_ms,
+        )
+    return out
 
 def get_index_html():
     """读取并返回 Vite 构建产物 templates/dist/index.html。"""
@@ -172,10 +608,22 @@ async def open_workspace_file(
     app_root = Path(__file__).resolve().parent.resolve()
     if len(raw) >= 2 and raw[1] == ":":
         cand = Path(raw)
+        if not cand.exists():
+            parts = Path(raw).parts
+            lowered = [p.lower() for p in parts]
+            work_name = WORK_DIR.name.lower()
+            if work_name in lowered:
+                idx = len(lowered) - 1 - lowered[::-1].index(work_name)
+                suffix = Path(*parts[idx + 1 :]) if idx + 1 < len(parts) else Path()
+                cand = (WORK_DIR / suffix).resolve()
     elif raw.startswith("\\\\"):
         cand = Path(raw)
     else:
-        cand = (WORK_DIR / raw.lstrip("/")).resolve()
+        rel_raw = raw.lstrip("/\\")
+        cand = (WORK_DIR / rel_raw).resolve()
+        first = rel_raw.replace("\\", "/").split("/", 1)[0]
+        if first and first.lower() == WORK_DIR.name.lower() and not cand.exists():
+            cand = (WORK_DIR.parent / rel_raw).resolve()
     try:
         cand = cand.resolve()
     except OSError:
@@ -209,6 +657,71 @@ async def open_workspace_file(
     return JSONResponse({"ok": True, "path": str(cand)})
 
 
+def _resolve_workspace_view_path(raw_value: str) -> Path:
+    raw = unquote(raw_value or "").strip().strip('"').strip("'")
+    if not raw:
+        raise ValueError("empty path")
+    wd = WORK_DIR.resolve()
+    app_root = Path(__file__).resolve().parent.resolve()
+    if len(raw) >= 2 and raw[1] == ":":
+        cand = Path(raw)
+        if not cand.exists():
+            parts = Path(raw).parts
+            lowered = [p.lower() for p in parts]
+            work_name = WORK_DIR.name.lower()
+            if work_name in lowered:
+                idx = len(lowered) - 1 - lowered[::-1].index(work_name)
+                suffix = Path(*parts[idx + 1 :]) if idx + 1 < len(parts) else Path()
+                cand = (WORK_DIR / suffix).resolve()
+    elif raw.startswith("\\\\"):
+        cand = Path(raw)
+    else:
+        rel_raw = raw.lstrip("/\\")
+        cand = (WORK_DIR / rel_raw).resolve()
+        first = rel_raw.replace("\\", "/").split("/", 1)[0]
+        if first and first.lower() == WORK_DIR.name.lower() and not cand.exists():
+            cand = (WORK_DIR.parent / rel_raw).resolve()
+    cand = cand.resolve()
+    allowed = False
+    for root in (wd, app_root):
+        try:
+            cand.relative_to(root)
+            allowed = True
+            break
+        except ValueError:
+            continue
+    if not allowed:
+        raise PermissionError("path outside allowed roots")
+    if not cand.is_file():
+        raise FileNotFoundError(raw)
+    return cand
+
+
+@fastapi_app.get("/api/workspace-image")
+async def workspace_image(
+    rel: str = Query("", description="Image path relative to workspace, or an allowed absolute path"),
+):
+    try:
+        cand = await run_in_threadpool(_resolve_workspace_view_path, rel)
+    except ValueError:
+        return JSONResponse({"ok": False, "error": "path is empty"}, status_code=400)
+    except PermissionError:
+        return JSONResponse({"ok": False, "error": "path outside allowed roots"}, status_code=403)
+    except FileNotFoundError:
+        return JSONResponse({"ok": False, "error": "image not found"}, status_code=404)
+    except Exception as exc:
+        logger.warning("workspace image resolve failed: %s", exc)
+        return JSONResponse({"ok": False, "error": "invalid image path"}, status_code=400)
+    if cand.suffix.lower() not in _VIEWABLE_IMAGE_SUFFIXES:
+        return JSONResponse({"ok": False, "error": "not a supported image"}, status_code=415)
+    media_type = mimetypes.guess_type(str(cand))[0] or "application/octet-stream"
+    return FileResponse(
+        str(cand),
+        media_type=media_type,
+        headers={"Cache-Control": "no-store"},
+    )
+
+
 def _html_with_path_picker_script(body: str) -> str:
     try:
         v = int(_PATH_PICKER_JS_PATH.stat().st_mtime)
@@ -224,11 +737,208 @@ def _html_with_path_picker_script(body: str) -> str:
 
 @fastapi_app.get("/static/myagent_path_picker.js")
 async def serve_path_picker_js():
-    try:
-        content = _PATH_PICKER_JS_PATH.read_text(encoding="utf-8")
-    except OSError:
+    content = _read_text_cached(_PATH_PICKER_JS_PATH, "")
+    if not content:
         return JSONResponse({"error": "not found"}, status_code=404)
     return Response(content=content, media_type="application/javascript")
+
+
+def _safe_upload_filename(name: str) -> str:
+    raw = Path(str(name or "upload.bin")).name.strip()
+    if not raw or raw in (".", ".."):
+        raw = "upload.bin"
+    safe = re.sub(r'[<>:"/\\|?*\x00-\x1f]+', "_", raw).strip(" .")
+    return safe or "upload.bin"
+
+
+def _dedupe_upload_path(dest: Path) -> Path:
+    if not dest.exists():
+        return dest
+    stem = dest.stem or "upload"
+    suffix = dest.suffix
+    parent = dest.parent
+    for i in range(2, 10000):
+        cand = parent / f"{stem}_{i}{suffix}"
+        if not cand.exists():
+            return cand
+    raise RuntimeError("too many duplicate upload filenames")
+
+
+_WORKSPACE_FILE_SKIP_DIRS = {
+    ".git",
+    ".hg",
+    ".svn",
+    ".trash",
+    ".tool_results",
+    "__pycache__",
+    ".pytest_cache",
+    ".mypy_cache",
+    ".ruff_cache",
+    "node_modules",
+    "sessions",
+    "skills",
+}
+
+
+def _workspace_file_item(path: Path, root: Path) -> dict:
+    st = path.stat()
+    rel = str(path.relative_to(root)).replace("\\", "/")
+    return {
+        "kind": "file",
+        "name": path.name,
+        "path": str(path),
+        "rel": rel,
+        "size": int(st.st_size),
+        "mtime": float(st.st_mtime),
+    }
+
+
+def _workspace_dir_item(path: Path, root: Path) -> dict:
+    rel = str(path.relative_to(root)).replace("\\", "/")
+    return {
+        "kind": "directory",
+        "name": path.name,
+        "path": str(path),
+        "rel": rel,
+    }
+
+
+def _is_workspace_visible_dir(name: str) -> bool:
+    return name not in _WORKSPACE_FILE_SKIP_DIRS and not name.startswith(".venv")
+
+
+def _resolve_workspace_rel_dir(rel_dir: str) -> Path:
+    root = WORK_DIR.resolve()
+    rel = str(rel_dir or "").strip().replace("\\", "/").strip("/")
+    target = (root / rel).resolve() if rel else root
+    target.relative_to(root)
+    if not target.is_dir():
+        raise FileNotFoundError(rel or ".")
+    return target
+
+
+def _list_workspace_dir(rel_dir: str) -> list[dict]:
+    root = WORK_DIR.resolve()
+    target = _resolve_workspace_rel_dir(rel_dir)
+    dirs: list[dict] = []
+    files: list[dict] = []
+    with os.scandir(target) as it:
+        for entry in it:
+            try:
+                if entry.is_dir(follow_symlinks=False):
+                    if _is_workspace_visible_dir(entry.name):
+                        dirs.append(_workspace_dir_item(Path(entry.path), root))
+                elif entry.is_file(follow_symlinks=False):
+                    files.append(_workspace_file_item(Path(entry.path), root))
+            except OSError:
+                continue
+    dirs.sort(key=lambda item: str(item.get("name") or "").lower())
+    files.sort(key=lambda item: str(item.get("name") or "").lower())
+    return dirs + files
+
+
+def _scan_workspace_files(query: str) -> list[dict]:
+    root = WORK_DIR.resolve()
+    q = (query or "").strip().lower()
+    terms = [x for x in re.split(r"\s+", q) if x]
+    matches: list[dict] = []
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [
+            d for d in dirnames
+            if _is_workspace_visible_dir(d)
+        ]
+        base = Path(dirpath)
+        if terms:
+            for dirname in dirnames:
+                path = base / dirname
+                try:
+                    rel = str(path.relative_to(root)).replace("\\", "/")
+                    hay = rel.lower()
+                    if all(term in hay for term in terms):
+                        matches.append(_workspace_dir_item(path, root))
+                except OSError:
+                    continue
+        for filename in filenames:
+            path = base / filename
+            try:
+                rel = str(path.relative_to(root)).replace("\\", "/")
+                hay = rel.lower()
+                if terms and not all(term in hay for term in terms):
+                    continue
+                matches.append(_workspace_file_item(path, root))
+            except OSError:
+                continue
+    if terms:
+        def score(item: dict) -> tuple[int, int, str]:
+            rel = str(item.get("rel") or "").lower()
+            name = str(item.get("name") or "").lower()
+            first = terms[0] if terms else ""
+            rank = 0
+            if name.startswith(first):
+                rank = -3
+            elif rel.startswith(first):
+                rank = -2
+            elif first and first in name:
+                rank = -1
+            return rank, len(rel), rel
+        matches.sort(key=score)
+    else:
+        matches.sort(key=lambda item: float(item.get("mtime") or 0), reverse=True)
+    return matches
+
+
+@fastapi_app.get("/api/workspace-files")
+async def list_workspace_files(
+    q: str = Query("", max_length=200),
+    dir: str = Query("", max_length=1000),
+):
+    try:
+        query = (q or "").strip()
+        if query:
+            files = await run_in_threadpool(_scan_workspace_files, query)
+        else:
+            files = await run_in_threadpool(_list_workspace_dir, dir)
+        return JSONResponse({"ok": True, "root": str(WORK_DIR.resolve()), "files": files})
+    except Exception as exc:
+        logger.warning("workspace file scan failed: %s", exc)
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
+
+
+@fastapi_app.post("/api/upload-chat-files")
+async def upload_chat_files(files: list[UploadFile] = File(...)):
+    if not files:
+        return JSONResponse({"ok": False, "error": "no files"}, status_code=400)
+    import datetime
+    upload_root = (WORK_DIR / "uploads" / "chat" / datetime.datetime.now().strftime("%Y%m%d")).resolve()
+    upload_root.mkdir(parents=True, exist_ok=True)
+    saved = []
+    try:
+        for uf in files:
+            filename = _safe_upload_filename(uf.filename or "")
+            dest = _dedupe_upload_path((upload_root / filename).resolve())
+            try:
+                dest.relative_to(upload_root)
+            except ValueError:
+                return JSONResponse({"ok": False, "error": "invalid filename"}, status_code=400)
+            with dest.open("wb") as out:
+                while True:
+                    chunk = await uf.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    out.write(chunk)
+            saved.append({
+                "name": filename,
+                "path": str(dest),
+                "rel": str(dest.relative_to(WORK_DIR.resolve())).replace("\\", "/"),
+                "size": dest.stat().st_size,
+            })
+    finally:
+        for uf in files:
+            try:
+                await uf.close()
+            except Exception:
+                pass
+    return JSONResponse({"ok": True, "files": saved})
 
 
 @fastapi_app.post("/api/pick-path")
@@ -295,35 +1005,171 @@ def _attach_subagent_sidebar_fields(s: dict, session_id: str) -> None:
 
 @fastapi_app.get("/sessions")
 async def list_sessions(include_archived: bool = Query(False)):
-    sessions = session_manager.list_sessions(include_archived=include_archived)
-    archived_count = session_manager.archived_session_count()
-    _cleanup_stale_active_chat()
-    for s in sessions:
-        sid = s.get("id")
-        if sid:
-            sid = str(sid)
-            run_active = bool(is_run_active(sid))
-            s["stream_active"] = _is_session_stream_active(sid)
-            s["run_active"] = run_active
-            s["run_started_at"] = get_run_started_at(sid)
-        else:
-            s["stream_active"] = False
-            s["run_active"] = False
-            s["run_started_at"] = None
-    return JSONResponse(
-        content=sessions,
-        headers={"X-Archived-Count": str(archived_count)},
-    )
+    def _build_response() -> JSONResponse:
+        sessions = session_manager.list_sessions(include_archived=include_archived)
+        archived_count = session_manager.archived_session_count()
+        _cleanup_stale_active_chat()
+        for s in sessions:
+            sid = s.get("id")
+            if sid:
+                sid = str(sid)
+                run_state = _session_run_state_fields(sid)
+                s["stream_active"] = bool(run_state["stream_active"])
+                s["run_active"] = bool(run_state["run_active"])
+                s["run_started_at"] = run_state["run_started_at"]
+            else:
+                s["stream_active"] = False
+                s["run_active"] = False
+                s["run_started_at"] = None
+        return JSONResponse(
+            content=sessions,
+            headers={"X-Archived-Count": str(archived_count)},
+        )
+
+    return await asyncio.to_thread(_build_response)
 
 
 @fastapi_app.get("/sessions/state")
 async def sessions_state(include_archived: bool = Query(False)):
-    return JSONResponse(content=_build_sessions_state_snapshot(include_archived=include_archived))
+    payload = await asyncio.to_thread(_build_sessions_state_snapshot, include_archived=include_archived)
+    return JSONResponse(content=payload)
 
 
 @fastapi_app.get("/state")
 async def app_state(include_archived: bool = Query(False)):
-    return JSONResponse(content=_build_sessions_state_snapshot(include_archived=include_archived))
+    payload = await asyncio.to_thread(_build_sessions_state_snapshot, include_archived=include_archived)
+    return JSONResponse(content=payload)
+
+
+@fastapi_app.get("/runtime-v2/state")
+async def runtime_v2_state(include_archived: bool = Query(True)):
+    """Read-only Runtime V2 debug state built from snapshots."""
+    return JSONResponse(content=_runtime_v2_debug_state(include_archived=include_archived))
+
+
+@fastapi_app.get("/runtime-v2/sessions/{session_id}/events")
+async def runtime_v2_session_events(
+    session_id: str,
+    after_seq: int = Query(0, ge=0),
+    before_seq: Optional[int] = Query(None, ge=1),
+    limit: int = Query(200, ge=1, le=1000),
+):
+    """Read-only Runtime V2 event log page for debugging and audit."""
+    try:
+        events = _runtime_v2_event_dicts(
+            session_id,
+            after_seq=int(after_seq or 0),
+            before_seq=before_seq,
+            limit=int(limit or 200),
+        )
+    except ValueError as exc:
+        return JSONResponse(content={"ok": False, "error": str(exc)}, status_code=400)
+    return JSONResponse(content={
+        "ok": True,
+        "session_id": session_id,
+        "events": events,
+        "count": len(events),
+        "after_seq": int(after_seq or 0),
+        "before_seq": before_seq,
+        "limit": int(limit or 200),
+    })
+
+
+@fastapi_app.get("/runtime-v2/events")
+async def runtime_v2_events(
+    session_id: str = Query(..., min_length=1),
+    after_seq: int = Query(0, ge=0),
+    limit: int = Query(200, ge=1, le=1000),
+):
+    """Read-only Runtime V2 after-seq event page for reconnect/debug clients."""
+    try:
+        events = _runtime_v2_event_dicts(
+            session_id,
+            after_seq=int(after_seq or 0),
+            limit=int(limit or 200),
+        )
+    except ValueError as exc:
+        return JSONResponse(content={"ok": False, "error": str(exc)}, status_code=400)
+    latest_seq = 0
+    if events:
+        try:
+            latest_seq = int(events[-1].get("seq") or 0)
+        except (TypeError, ValueError):
+            latest_seq = 0
+    return JSONResponse(content={
+        "ok": True,
+        "session_id": session_id,
+        "events": events,
+        "count": len(events),
+        "after_seq": int(after_seq or 0),
+        "latest_seq": latest_seq,
+        "limit": int(limit or 200),
+    })
+
+
+@fastapi_app.get("/runtime-v2/sessions/{session_id}/stream")
+async def runtime_v2_session_stream(
+    session_id: str,
+    request: Request,
+    after_seq: int = Query(0, ge=0),
+    poll_ms: int = Query(250, ge=50, le=5000),
+):
+    """Runtime V2-native SSE stream backed by events.jsonl seq reads."""
+    sid = (session_id or "").strip()
+    if not sid:
+        return JSONResponse(content={"error": "missing session_id"}, status_code=400)
+
+    async def event_generator():
+        cursor = int(after_seq or 0)
+        idle_ticks = 0
+        poll_seconds = max(0.05, min(float(poll_ms or 250) / 1000.0, 5.0))
+        while True:
+            if await request.is_disconnected():
+                break
+            try:
+                events = _runtime_v2_event_dicts(sid, after_seq=cursor, limit=100)
+            except Exception as exc:
+                payload = {
+                    "type": "runtime_v2_stream_error",
+                    "session_id": sid,
+                    "error": str(exc),
+                }
+                yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+                break
+            if events:
+                idle_ticks = 0
+                for event in events:
+                    try:
+                        cursor = max(cursor, int(event.get("seq") or cursor))
+                    except (TypeError, ValueError):
+                        pass
+                    yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+                    await asyncio.sleep(0)
+                continue
+            if not _has_local_worker_activity(sid):
+                yield "data: [DONE]\n\n"
+                break
+            idle_ticks += 1
+            if idle_ticks % max(1, int(15000 / max(50, int(poll_ms or 250)))) == 0:
+                yield f": runtime-v2 keepalive {cursor}\n\n"
+            await asyncio.sleep(poll_seconds)
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers=_SSE_HEADERS,
+    )
+
+
+@fastapi_app.get("/runtime-v2/runs")
+async def runtime_v2_runs(include_archived: bool = Query(True)):
+    """Read-only Runtime V2 active run view."""
+    state = _runtime_v2_debug_state(include_archived=include_archived)
+    return JSONResponse(content={
+        "runtime_version": state.get("runtime_version"),
+        "active_run_count": state.get("active_run_count", 0),
+        "active_runs": state.get("active_runs", []),
+    })
 
 @fastapi_app.get("/sessions/{session_id}")
 async def get_session_detail(
@@ -331,18 +1177,26 @@ async def get_session_detail(
     include_subagents: bool = Query(False, description="涓?true 鏃惰绠?subagent 渚ф爮鐘舵€佸瓧娈?"),
 ):
     """单条会话摘要（与列表项结构一致），供侧栏增量更新。"""
-    s = session_manager.get_session_summary(session_id)
-    _cleanup_stale_active_chat()
-    if not s:
-        return JSONResponse(content={"error": "not found"}, status_code=404)
-    sid = s.get("id")
-    if sid:
-        s["stream_active"] = _is_session_stream_active(str(sid))
-        if include_subagents:
-            _attach_subagent_sidebar_fields(s, str(sid))
-    else:
-        s["stream_active"] = False
-    return JSONResponse(content=s)
+    def _build_detail_response() -> JSONResponse:
+        s = session_manager.get_session_summary(session_id)
+        _cleanup_stale_active_chat()
+        if not s:
+            return JSONResponse(content={"error": "not found"}, status_code=404)
+        sid = s.get("id")
+        if sid:
+            run_state = _session_run_state_fields(str(sid))
+            s["stream_active"] = bool(run_state["stream_active"])
+            s["run_active"] = bool(run_state["run_active"])
+            s["run_started_at"] = run_state["run_started_at"]
+            if include_subagents:
+                _attach_subagent_sidebar_fields(s, str(sid))
+        else:
+            s["stream_active"] = False
+            s["run_active"] = False
+            s["run_started_at"] = None
+        return JSONResponse(content=s)
+
+    return await asyncio.to_thread(_build_detail_response)
 
 
 @fastapi_app.get("/sessions/{session_id}/subagents")
@@ -351,6 +1205,10 @@ async def list_session_subagents(
     lite: bool = Query(False, description="为 true 时不加载 dialogue_turns，减轻列表刷新开销"),
 ):
     """返回当前会话下 subagent 扁平列表（含嵌套），供 UI 树展示。"""
+    return await asyncio.to_thread(_build_session_subagents_response, session_id, lite)
+
+
+def _build_session_subagents_response(session_id: str, lite: bool) -> JSONResponse:
     try:
         from agent_subagent import subagent_registry
 
@@ -524,6 +1382,184 @@ async def create_session():
     }
     return JSONResponse(content={"session_id": session_id, "session": session})
 
+
+def _current_env_profile() -> dict:
+    vals = _dotenv_last_non_empty_assignments(dotenv_file_path())
+    return model_profiles.env_profile_from_env(PROJECT_ROOT, vals)
+
+
+def _model_profiles_response() -> dict:
+    default_profile = _current_env_profile()
+    profiles = [
+        model_profiles.public_profile(p)
+        for p in model_profiles.sorted_profiles_with_env(PROJECT_ROOT, default_profile)
+    ]
+    top = profiles[0] if profiles else default_profile
+    return {
+        "ok": True,
+        "default_profile": default_profile,
+        "new_session_default_profile_id": top.get("id") or "__env__",
+        "profiles": profiles,
+    }
+
+
+def _save_env_model_profile(data: dict) -> dict:
+    env_path = dotenv_file_path()
+    prev = env_path.read_text(encoding="utf-8") if env_path.is_file() else ""
+    updates = {
+        "EXECUTOR_LLM": str(data.get("model") or "").strip(),
+        "EXECUTOR_LLM_TYPE": str(data.get("llm_type") or "openai").strip().lower() or "openai",
+        "OPENAI_BASE_URL": model_profiles._normalize_base_url(str(data.get("base_url") or "")),
+        "OPENAI_API_KEY": str(data.get("api_key") or "").strip(),
+        "CONTEXT_WINDOW": str(data.get("context_window") or "").strip(),
+        "MAX_OUTPUT_TOKENS": str(data.get("max_output_tokens") or "").strip(),
+        "LLM_THINKING_MODE": str(data.get("thinking_mode") or "").strip(),
+        "LLM_REASONING_EFFORT": str(data.get("reasoning_effort") or "").strip(),
+        "EXECUTOR_TEMPERATURE": str(data.get("temperature") or "").strip(),
+        "LLM_EXTRA_BODY_JSON": str(data.get("extra_body_json") or "").strip(),
+    }
+    env_path.parent.mkdir(parents=True, exist_ok=True)
+    env_path.write_text(_apply_env_updates(prev, updates), encoding="utf-8")
+    model_profiles.save_env_profile_meta(
+        PROJECT_ROOT,
+        {
+            "name": str(data.get("name") or "").strip(),
+            "model_context_window": data.get("model_context_window"),
+        },
+    )
+    refresh_executor_client_from_env()
+    return _current_env_profile()
+
+
+@fastapi_app.get("/api/model_profiles")
+async def get_model_profiles():
+    return JSONResponse(_model_profiles_response())
+
+
+@fastapi_app.post("/api/model_profiles")
+async def save_model_profile(req: Request):
+    try:
+        data = await req.json()
+    except Exception:
+        return JSONResponse({"ok": False, "error": "invalid json"}, status_code=400)
+    if not isinstance(data, dict):
+        return JSONResponse({"ok": False, "error": "body must be object"}, status_code=400)
+    if not str(data.get("model") or "").strip():
+        return JSONResponse({"ok": False, "error": "missing model"}, status_code=400)
+    if not str(data.get("base_url") or "").strip():
+        return JSONResponse({"ok": False, "error": "missing base_url"}, status_code=400)
+    if str(data.get("id") or "").strip() == "__env__":
+        if not str(data.get("api_key") or "").strip():
+            return JSONResponse({"ok": False, "error": "missing api_key"}, status_code=400)
+        try:
+            profile = _save_env_model_profile(data)
+        except Exception as e:
+            return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+        return JSONResponse({"ok": True, "profile": model_profiles.public_profile(profile)})
+    old_profile = model_profiles.get_profile(PROJECT_ROOT, str(data.get("id") or "").strip())
+    incoming_key = str(data.get("api_key") or "").strip() if "api_key" in data else ""
+    if not incoming_key and not str((old_profile or {}).get("api_key") or "").strip():
+        return JSONResponse({"ok": False, "error": "missing api_key"}, status_code=400)
+    try:
+        profile = model_profiles.upsert_profile(PROJECT_ROOT, data)
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+    return JSONResponse({"ok": True, "profile": model_profiles.public_profile(profile)})
+
+
+@fastapi_app.post("/api/model_profiles/reorder")
+async def reorder_model_profiles(req: Request):
+    try:
+        data = await req.json()
+    except Exception:
+        return JSONResponse({"ok": False, "error": "invalid json"}, status_code=400)
+    ids = (data or {}).get("ordered_ids") or []
+    if not isinstance(ids, list):
+        return JSONResponse({"ok": False, "error": "ordered_ids must be list"}, status_code=400)
+    model_profiles.reorder_profiles(PROJECT_ROOT, [str(x) for x in ids])
+    return JSONResponse(_model_profiles_response())
+
+
+@fastapi_app.delete("/api/model_profiles/{profile_id}")
+async def delete_model_profile(profile_id: str):
+    ok = model_profiles.delete_profile(PROJECT_ROOT, (profile_id or "").strip())
+    return JSONResponse({"ok": ok})
+
+
+@fastapi_app.post("/api/model_profiles/discover")
+async def discover_model_profiles(req: Request):
+    try:
+        data = await req.json()
+    except Exception:
+        return JSONResponse({"ok": False, "error": "invalid json"}, status_code=400)
+    base_url = str((data or {}).get("base_url") or "").strip()
+    api_key = str((data or {}).get("api_key") or "").strip()
+    if not api_key:
+        api_key = _dotenv_last_non_empty_assignments(dotenv_file_path()).get("OPENAI_API_KEY", "")
+    try:
+        models = await run_in_threadpool(model_profiles.discover_models, base_url, api_key)
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+    return JSONResponse({"ok": True, "models": models})
+
+
+@fastapi_app.post("/api/model_profiles/probe")
+async def probe_model_profile(req: Request):
+    try:
+        data = await req.json()
+    except Exception:
+        return JSONResponse({"ok": False, "error": "invalid json"}, status_code=400)
+    if not isinstance(data, dict):
+        return JSONResponse({"ok": False, "error": "body must be object"}, status_code=400)
+    base_url = str(data.get("base_url") or "").strip()
+    api_key = str(data.get("api_key") or "").strip()
+    if not api_key:
+        api_key = _dotenv_last_non_empty_assignments(dotenv_file_path()).get("OPENAI_API_KEY", "")
+    model_id = str(data.get("model") or data.get("id") or "").strip()
+    fallback = data.get("metadata") if isinstance(data.get("metadata"), dict) else data
+    try:
+        model = await run_in_threadpool(model_profiles.probe_model_context, base_url, api_key, model_id, fallback)
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+    return JSONResponse({"ok": True, "model": model})
+
+
+@fastapi_app.get("/sessions/{session_id}/model_profile")
+async def get_session_model_profile(session_id: str):
+    sid = (session_id or "").strip()
+    if not sid:
+        return JSONResponse({"ok": False, "error": "missing session_id"}, status_code=400)
+    try:
+        meta = session_manager._load_metadata(sid)
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=404)
+    pid = str((meta or {}).get("model_profile_id") or "").strip()
+    if not pid:
+        pid = model_profiles.top_profile_id_with_env(PROJECT_ROOT)
+    return JSONResponse({"ok": True, "profile_id": pid})
+
+
+@fastapi_app.post("/sessions/{session_id}/model_profile")
+async def set_session_model_profile(session_id: str, req: Request):
+    sid = (session_id or "").strip()
+    if not sid:
+        return JSONResponse({"ok": False, "error": "missing session_id"}, status_code=400)
+    try:
+        data = await req.json()
+    except Exception:
+        return JSONResponse({"ok": False, "error": "invalid json"}, status_code=400)
+    pid = str((data or {}).get("profile_id") or "__env__").strip() or "__env__"
+    if pid != "__env__" and not model_profiles.get_profile(PROJECT_ROOT, pid):
+        return JSONResponse({"ok": False, "error": "unknown profile_id"}, status_code=404)
+    with session_manager._session_metadata_lock(sid):
+        meta = session_manager._load_metadata_unlocked(sid)
+        if not isinstance(meta, dict):
+            meta = {}
+        meta["model_profile_id"] = pid
+        meta["updated_at"] = __import__("datetime").datetime.now().isoformat()
+        session_manager._save_metadata_unlocked(sid, meta)
+    return JSONResponse({"ok": True, "profile_id": pid})
+
 @fastapi_app.delete("/sessions/{session_id}")
 async def delete_session(session_id: str):
     sid = (session_id or "").strip()
@@ -546,11 +1582,41 @@ async def delete_session(session_id: str):
 
 
 @fastapi_app.post("/sessions/{session_id}/interrupt")
-async def interrupt_session(session_id: str):
+async def interrupt_session(session_id: str, request: Request):
     sid = (session_id or "").strip()
     if not sid:
         return JSONResponse(content={"error": "missing session_id"}, status_code=400)
-    session_manager.request_interrupt(sid)
+    run_id = ""
+    reason = "user"
+    try:
+        ctype = (request.headers.get("content-type") or "").lower()
+        if "application/json" in ctype:
+            data = await request.json()
+            run_id = str((data or {}).get("run_id") or (data or {}).get("client_run_id") or "").strip()
+            reason = str((data or {}).get("reason") or reason).strip() or reason
+        elif "form" in ctype:
+            form = await request.form()
+            run_id = str(form.get("run_id") or form.get("client_run_id") or "").strip()
+            reason = str(form.get("reason") or reason).strip() or reason
+    except Exception:
+        run_id = ""
+        reason = "user"
+    session_manager.request_interrupt(sid, run_id, reason=reason)
+    if reason != "followup":
+        session_manager.mark_session_unread_result(sid, status="failed")
+    _active_chat_by_session.pop(sid, None)
+    _active_chat_last_seen.pop(sid, None)
+    interrupted_run_ids = _interrupt_runtime_v2_active_runs(sid, run_id, reason=reason)
+    try:
+        from session_event_bus import publish_session_event
+
+        if interrupted_run_ids:
+            for rid in interrupted_run_ids:
+                await publish_session_event(sid, {"type": "run_interrupted", "run_id": rid, "reason": reason, "ephemeral": True})
+        else:
+            await publish_session_event(sid, {"type": "run_interrupted", "run_id": run_id, "reason": reason, "ephemeral": True})
+    except Exception as e:
+        logger.debug("publish interrupt failed for %s: %s", sid, e)
     try:
         from agent_subagent import subagent_registry
         from session_lifecycle import cancel_run_tasks
@@ -588,40 +1654,152 @@ async def post_tool_approval(session_id: str, request: Request):
     return JSONResponse(content={"ok": matched})
 
 
+@fastapi_app.post("/sessions/{session_id}/steer")
+async def post_session_steer(session_id: str, request: Request):
+    sid = (session_id or "").strip()
+    if not sid:
+        return JSONResponse(content={"ok": False, "error": "missing session_id"}, status_code=400)
+    if not _is_session_stream_active(sid):
+        return JSONResponse(content={"ok": False, "error": "session is not running"}, status_code=409)
+    try:
+        data = await request.json()
+    except Exception:
+        return JSONResponse(content={"ok": False, "error": "invalid json"}, status_code=400)
+    message = str((data or {}).get("message") or "").strip()
+    client_id = str((data or {}).get("client_id") or "").strip()
+    result = enqueue_session_steer(sid, message, client_id=client_id)
+    if not result.get("ok"):
+        return JSONResponse(content=result, status_code=400)
+    result["aborted"] = abort_session_steer_run(sid, reason="steer")
+    if not result["aborted"]:
+        item = result.get("item") if isinstance(result.get("item"), dict) else {}
+        remove_session_steer(
+            sid,
+            steer_id=str(item.get("id") or ""),
+            client_id=str(item.get("client_id") or client_id or ""),
+        )
+        return JSONResponse(content={"ok": False, "error": "session is not running"}, status_code=409)
+    return JSONResponse(content=result)
+
+
+@fastapi_app.delete("/sessions/{session_id}/steer")
+async def delete_session_steer(session_id: str, request: Request):
+    sid = (session_id or "").strip()
+    if not sid:
+        return JSONResponse(content={"ok": False, "error": "missing session_id"}, status_code=400)
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    steer_id = str((data or {}).get("steer_id") or "").strip()
+    client_id = str((data or {}).get("client_id") or "").strip()
+    result = remove_session_steer(sid, steer_id=steer_id, client_id=client_id)
+    if not result.get("ok"):
+        return JSONResponse(content=result, status_code=409)
+    return JSONResponse(content=result)
+
+
 @fastapi_app.post("/chat")
 async def chat(
     request: Request,
     message: str = Form(...),
     session_id: str = Form(None),
+    client_run_id: str = Form(None),
 ):
     sid = (session_id or "").strip() or None
+    run_id = str(client_run_id or "").strip()
     if sid:
-        session_manager.clear_interrupt(sid)
+        if not _reserve_session_chat_start(sid):
+            return JSONResponse(content={"ok": False, "reason": "busy"}, status_code=409)
+        session_manager.clear_interrupt(sid, run_id)
 
     def should_stop(sid_: str) -> bool:
-        return session_manager.is_interrupt_requested(sid_)
+        return session_manager.is_interrupt_requested(sid_, run_id)
 
     async def event_generator():
         if sid:
             _active_chat_by_session[sid] = _active_chat_by_session.get(sid, 0) + 1
             import time as _time_stamp; _active_chat_last_seen[sid] = _time_stamp.time()
-        try:
+        main_loop = asyncio.get_running_loop()
+        event_queue: asyncio.Queue = asyncio.Queue()
+        stop_event = threading.Event()
+
+        def should_stop_worker(sid_: str) -> bool:
+            return stop_event.is_set() or should_stop(sid_)
+
+        def put_from_worker(item) -> None:
+            try:
+                asyncio.run_coroutine_threadsafe(event_queue.put(item), main_loop).result(timeout=5)
+            except Exception:
+                pass
+
+        async def consume_agent_stream() -> None:
             try:
                 async for event in astream_events(
                     message,
                     session_id=sid,
-                    should_stop=should_stop,
+                    should_stop=should_stop_worker,
+                    run_id=run_id,
                 ):
+                    put_from_worker(event)
+            except asyncio.CancelledError:
+                pass
+            except Exception as exc:
+                put_from_worker({"type": "error", "content": str(exc), "ephemeral": True})
+            finally:
+                put_from_worker(None)
+
+        def worker_main() -> None:
+            asyncio.run(consume_agent_stream())
+
+        threading.Thread(
+            target=worker_main,
+            name=f"chat-stream-{sid or 'new'}",
+            daemon=True,
+        ).start()
+        try:
+            try:
+                skip_worker_run_started = False
+                skip_worker_start_status = False
+                if sid:
+                    yield f"data: {json.dumps({'type': 'run_started', 'run_id': run_id, 'ephemeral': True}, ensure_ascii=False)}\n\n"
+                    yield f"data: {json.dumps({'type': 'status', 'content': 'New Agent Loop Start', 'ephemeral': True}, ensure_ascii=False)}\n\n"
+                    skip_worker_run_started = True
+                    skip_worker_start_status = True
+                while True:
                     if sid and await request.is_disconnected():
+                        stop_event.set()
+                        try:
+                            session_manager.request_interrupt(sid, run_id, reason="disconnect")
+                        except Exception:
+                            pass
                         break
+                    event = await event_queue.get()
+                    if event is None:
+                        break
+                    if skip_worker_run_started and isinstance(event, dict) and event.get("type") == "run_started":
+                        skip_worker_run_started = False
+                        continue
+                    if (
+                        skip_worker_start_status
+                        and isinstance(event, dict)
+                        and event.get("type") == "status"
+                        and str(event.get("content") or "") == "New Agent Loop Start"
+                    ):
+                        skip_worker_start_status = False
+                        continue
                     yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
                     await asyncio.sleep(0)  # 让 ASGI/uvicorn 尽快把分块刷到客户端，利于工具/LLM 分条显示
                 if not await request.is_disconnected():
                     yield "data: [DONE]\n\n"
             except asyncio.CancelledError:
                 # 浏览器主动断开 SSE 连接属于正常情况，避免打印冗长异常栈
+                stop_event.set()
                 return
         finally:
+            stop_event.set()
+            if sid:
+                _release_session_chat_start(sid)
             if sid:
                 n = _active_chat_by_session.get(sid, 1) - 1
                 if n <= 0:
@@ -637,10 +1815,70 @@ async def chat(
 
 
 @fastapi_app.get("/sessions/{session_id}/stream")
-async def stream_session_events(session_id: str, request: Request):
+async def stream_session_events(
+    session_id: str,
+    request: Request,
+    after_index: Optional[int] = Query(None, ge=-1),
+):
     sid = (session_id or "").strip()
     if not sid:
         return JSONResponse(content={"error": "missing session_id"}, status_code=400)
+
+    async def runtime_v2_event_generator():
+        _active_chat_by_session[sid] = _active_chat_by_session.get(sid, 0) + 1
+        import time as _time_stamp
+        _active_chat_last_seen[sid] = _time_stamp.time()
+        cursor = int(after_index) if after_index is not None else -1
+        try:
+            try:
+                from runtime_v2.ui_projection import RuntimeUiProjection
+
+                projection = RuntimeUiProjection(
+                    session_manager.repository.sessions_dir,
+                    path_resolver=session_manager._resolve_session_path,
+                )
+                while True:
+                    if await request.is_disconnected():
+                        break
+                    page = projection.read_ui_page(sid, after_index=cursor, limit=100)
+                    events = page.get("events") if isinstance(page, dict) else []
+                    if isinstance(events, list) and events:
+                        start = int(page.get("range_start") or (cursor + 1))
+                        for offset, event in enumerate(events):
+                            if not isinstance(event, dict):
+                                continue
+                            event_index = start + offset
+                            payload = dict(event)
+                            payload["session_id"] = sid
+                            payload["seq"] = event_index + 1
+                            yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+                            cursor = max(cursor, event_index)
+                            await asyncio.sleep(0)
+                        continue
+                    if not _has_local_worker_activity(sid):
+                        yield "data: [DONE]\n\n"
+                        break
+                    await asyncio.sleep(0.25)
+            except asyncio.CancelledError:
+                return
+        finally:
+            n = _active_chat_by_session.get(sid, 1) - 1
+            if n <= 0:
+                _active_chat_by_session.pop(sid, None)
+            else:
+                _active_chat_by_session[sid] = n
+
+    try:
+        from runtime_v2 import runtime_v2_primary
+
+        if runtime_v2_primary():
+            return StreamingResponse(
+                runtime_v2_event_generator(),
+                media_type="text/event-stream",
+                headers=_SSE_HEADERS,
+            )
+    except Exception as exc:
+        logger.debug("Runtime V2 stream path check failed for %s: %s", sid, exc)
 
     async def event_generator():
         _active_chat_by_session[sid] = _active_chat_by_session.get(sid, 0) + 1
@@ -780,6 +2018,7 @@ async def get_session_messages(
     session_id: str,
     limit: Optional[int] = Query(None, ge=1, le=500),
     before_index: Optional[int] = Query(None, ge=0),
+    after_index: Optional[int] = Query(None, ge=-1),
     turns: Optional[int] = Query(None, ge=1, le=50),
 ):
     """
@@ -787,32 +2026,317 @@ async def get_session_messages(
     传入 limit 或 turns 时返回分页对象。
     turns：按「用户提问」轮次分页（每页若干完整对话）；优先于 limit。
     """
-    if limit is None and turns is None:
-        return JSONResponse(content=session_manager.get_ui_events_for_display(session_id))
-    lim = int(limit) if limit is not None else 200
-    tv = int(turns) if turns is not None else None
-    payload = session_manager.get_ui_events_page(
-        session_id, limit=lim, before_index=before_index, turns=tv
-    )
-    return JSONResponse(content=payload)
+    import time as _time
+    t0 = _time.perf_counter()
+    projection = None
+    if os.getenv("RUNTIME_SYNC_ON_MESSAGES_OPEN", "0").strip().lower() in {"1", "true", "yes", "on"}:
+        try:
+            _enqueue_runtime_sync(session_id, "messages_open", check_needed=True)
+        except Exception as exc:
+            logger.debug("runtime sync enqueue check failed for %s: %s", session_id, exc)
+
+    def _build_messages_response() -> JSONResponse:
+        nonlocal projection
+        try:
+            from runtime_v2 import runtime_v1_primary
+
+            if runtime_v1_primary():
+                if after_index is not None:
+                    events = session_manager.get_ui_events_for_display(session_id)
+                    total = len(events)
+                    start = max(0, min(int(after_index) + 1, total))
+                    lim = int(limit) if limit is not None else 500
+                    end = min(total, start + max(1, min(lim, 500)))
+                    return JSONResponse(content={
+                        "events": events[start:end],
+                        "total": total,
+                        "range_start": start,
+                        "range_end": end,
+                        "has_older": start > 0,
+                        "has_newer": end < total,
+                        "source": "runtime_v1_after_index",
+                    })
+                if limit is None and turns is None:
+                    payload = session_manager.get_ui_events_for_display(session_id)
+                    elapsed_ms = int((_time.perf_counter() - t0) * 1000)
+                    if elapsed_ms >= 500:
+                        logger.warning("/messages slow runtime=1 session=%s full=1 elapsed_ms=%s", session_id, elapsed_ms)
+                    return JSONResponse(content=payload)
+                lim = int(limit) if limit is not None else 200
+                tv = int(turns) if turns is not None else None
+                payload = session_manager.get_ui_events_page(
+                    session_id,
+                    limit=lim,
+                    before_index=before_index,
+                    turns=tv,
+                )
+                elapsed_ms = int((_time.perf_counter() - t0) * 1000)
+                if elapsed_ms >= 500:
+                    logger.warning(
+                        "/messages slow runtime=1 session=%s turns=%s limit=%s before=%s elapsed_ms=%s",
+                        session_id,
+                        tv,
+                        lim,
+                        before_index,
+                        elapsed_ms,
+                    )
+                return JSONResponse(content=payload)
+        except Exception as exc:
+            logger.warning("Runtime version check failed for messages %s: %s", session_id, exc)
+        try:
+            if projection is None:
+                from runtime_v2.ui_projection import RuntimeUiProjection
+
+                projection = RuntimeUiProjection(
+                    session_manager.repository.sessions_dir,
+                    path_resolver=session_manager._resolve_session_path,
+                )
+            if limit is None and turns is None:
+                payload = projection.read_ui_events_fast(session_id)
+                elapsed_ms = int((_time.perf_counter() - t0) * 1000)
+                if elapsed_ms >= 500:
+                    logger.warning("/messages slow runtime=2 session=%s full=1 elapsed_ms=%s", session_id, elapsed_ms)
+                return JSONResponse(content=payload)
+            lim = int(limit) if limit is not None else 200
+            tv = int(turns) if turns is not None else None
+            payload = projection.read_ui_page(
+                session_id,
+                limit=lim,
+                before_index=before_index,
+                after_index=after_index,
+                turns=tv,
+            )
+            elapsed_ms = int((_time.perf_counter() - t0) * 1000)
+            if elapsed_ms >= 500:
+                logger.warning(
+                    "/messages slow runtime=2 session=%s turns=%s limit=%s before=%s elapsed_ms=%s",
+                    session_id,
+                    tv,
+                    lim,
+                    before_index,
+                    elapsed_ms,
+                )
+            return JSONResponse(content=payload)
+        except Exception as exc:
+            logger.warning("Runtime V2 messages projection failed for %s: %s", session_id, exc)
+        if limit is None and turns is None:
+            return JSONResponse(content=session_manager.get_ui_events_for_display(session_id))
+        lim = int(limit) if limit is not None else 200
+        tv = int(turns) if turns is not None else None
+        payload = session_manager.get_ui_events_page(
+            session_id, limit=lim, before_index=before_index, turns=tv
+        )
+        return JSONResponse(content=payload)
+
+    return await asyncio.to_thread(_build_messages_response)
 
 
 @fastapi_app.get("/sessions/{session_id}/messages/count")
 async def get_session_message_count(session_id: str):
+    def _build_count_response() -> JSONResponse:
+        try:
+            from runtime_v2 import runtime_v1_primary
+
+            if runtime_v1_primary():
+                return JSONResponse(content={"count": session_manager.get_ui_event_count(session_id), "source": "runtime_v1"})
+        except Exception as exc:
+            logger.warning("Runtime version check failed for message count %s: %s", session_id, exc)
+        try:
+            from runtime_v2.ui_projection import RuntimeUiProjection
+
+            projection = RuntimeUiProjection(
+                session_manager.repository.sessions_dir,
+                path_resolver=session_manager._resolve_session_path,
+            )
+            count, _ = projection.count_ui_events_light(session_id)
+            return JSONResponse(content={"count": count, "source": "runtime_v2"})
+        except Exception as exc:
+            logger.warning("Runtime V2 message count failed for %s: %s", session_id, exc)
+        return JSONResponse(content={"count": session_manager.get_ui_event_count(session_id)})
+
+    return await asyncio.to_thread(_build_count_response)
     """仅返回 ui_events 条数，供发送前对齐 eventIndex，避免下载整份 JSON。"""
-    return JSONResponse(content={"count": session_manager.get_ui_event_count(session_id)})
+
+
+def _sync_runtime_session(session_id: str) -> dict:
+    from runtime_v2.ui_projection import RuntimeUiProjection
+
+    projection = RuntimeUiProjection(
+        session_manager.repository.sessions_dir,
+        path_resolver=session_manager._resolve_session_path,
+    )
+    legacy_events = session_manager.get_ui_events_for_display(session_id)
+    v2_from_v1 = projection.sync_from_legacy_if_needed(session_id, lambda: legacy_events)
+    projected = projection.read_ui_events_fast(session_id)
+    v1_from_v2 = {"checked": True, "action": "none", "legacy_count": len(legacy_events), "projected_count": len(projected)}
+    if len(projected) > len(legacy_events):
+        session_manager._save_ui_events(session_id, projected)
+        v1_from_v2 = {
+            "checked": True,
+            "action": "replace",
+            "legacy_count": len(legacy_events),
+            "projected_count": len(projected),
+            "written": len(projected),
+        }
+    return {
+        "ok": True,
+        "session_id": session_id,
+        "v2_from_v1": v2_from_v1,
+        "v1_from_v2": v1_from_v2,
+    }
+
+
+@fastapi_app.post("/sessions/{session_id}/runtime/sync/enqueue")
+async def enqueue_session_runtime_sync(session_id: str):
+    result = _enqueue_runtime_sync(session_id, "manual", check_needed=False)
+    status_code = 200 if result.get("ok") else 400
+    return JSONResponse(content=result, status_code=status_code)
+
+
+@fastapi_app.post("/sessions/runtime/sync-all/enqueue")
+async def enqueue_all_runtime_sync(limit: int = Query(0, ge=0, le=10000), check_needed: bool = Query(True)):
+    rows = session_manager.list_sessions(include_archived=True)
+    if limit and limit > 0:
+        rows = rows[:limit]
+    queued = 0
+    skipped = 0
+    results = []
+    for row in rows:
+        sid = str((row or {}).get("id") or "").strip()
+        if not sid:
+            continue
+        result = _enqueue_runtime_sync(sid, "manual_all", check_needed=bool(check_needed))
+        results.append(result)
+        if result.get("queued"):
+            queued += 1
+        else:
+            skipped += 1
+    return JSONResponse(content={
+        "ok": True,
+        "session_count": len(results),
+        "queued": queued,
+        "skipped": skipped,
+        "results": results[:200],
+        "truncated_results": len(results) > 200,
+    })
+
+
+@fastapi_app.get("/sessions/runtime/sync/status")
+async def get_runtime_sync_status():
+    with _RUNTIME_SYNC_LOCK:
+        queue = list(_RUNTIME_SYNC_QUEUE)
+        statuses = {sid: dict(status) for sid, status in _RUNTIME_SYNC_STATUS.items()}
+        worker_alive = _RUNTIME_SYNC_WORKER is not None and _RUNTIME_SYNC_WORKER.is_alive()
+    return JSONResponse(content={
+        "ok": True,
+        "worker_alive": worker_alive,
+        "queue_length": len(queue),
+        "queue": queue[:200],
+        "statuses": statuses,
+    })
+
+
+@fastapi_app.post("/sessions/runtime/sync/cancel")
+async def cancel_runtime_sync_queue():
+    with _RUNTIME_SYNC_LOCK:
+        cleared = len(_RUNTIME_SYNC_QUEUE)
+        _RUNTIME_SYNC_QUEUE.clear()
+        for sid, status in list(_RUNTIME_SYNC_STATUS.items()):
+            if status.get("state") == "queued":
+                next_status = dict(status)
+                next_status.update({"state": "cancelled", "queued": False})
+                _RUNTIME_SYNC_STATUS[sid] = next_status
+    return JSONResponse(content={"ok": True, "cleared": cleared})
+
+
+@fastapi_app.post("/sessions/{session_id}/runtime/sync")
+async def sync_session_runtime(session_id: str):
+    import time as _time
+
+    t0 = _time.perf_counter()
+    try:
+        result = await run_in_threadpool(_sync_runtime_session, session_id)
+    except Exception as exc:
+        logger.warning("runtime sync failed for %s: %s", session_id, exc)
+        return JSONResponse(content={"ok": False, "session_id": session_id, "error": str(exc)}, status_code=500)
+    result["elapsed_ms"] = int((_time.perf_counter() - t0) * 1000)
+    return JSONResponse(content=result)
+
+
+def _sync_all_runtime_sessions(limit: int = 0) -> dict:
+    rows = session_manager.list_sessions(include_archived=True)
+    if limit and limit > 0:
+        rows = rows[:limit]
+    results = []
+    ok_count = 0
+    fail_count = 0
+    for row in rows:
+        sid = str((row or {}).get("id") or "").strip()
+        if not sid:
+            continue
+        try:
+            result = _sync_runtime_session(sid)
+            ok_count += 1
+        except Exception as exc:
+            result = {"ok": False, "session_id": sid, "error": str(exc)}
+            fail_count += 1
+        results.append(result)
+    return {
+        "ok": fail_count == 0,
+        "session_count": len(results),
+        "ok_count": ok_count,
+        "fail_count": fail_count,
+        "results": results,
+    }
+
+
+@fastapi_app.post("/sessions/runtime/sync-all")
+async def sync_all_runtime_sessions(limit: int = Query(0, ge=0, le=10000)):
+    import time as _time
+
+    t0 = _time.perf_counter()
+    result = await run_in_threadpool(_sync_all_runtime_sessions, int(limit or 0))
+    result["elapsed_ms"] = int((_time.perf_counter() - t0) * 1000)
+    return JSONResponse(content=result)
+
+
+@fastapi_app.post("/sessions/index/repair")
+async def repair_sessions_index():
+    import time as _time
+
+    t0 = _time.perf_counter()
+    await run_in_threadpool(session_manager.refresh_sessions_index_from_disk)
+    elapsed_ms = int((_time.perf_counter() - t0) * 1000)
+    return JSONResponse(content={
+        "ok": True,
+        "session_count": len(session_manager.index),
+        "elapsed_ms": elapsed_ms,
+    })
 
 
 @fastapi_app.get("/sessions/{session_id}/user_turns")
 async def get_session_user_turns(session_id: str):
     """列出会话内全部用户消息的 event_index 与预览（供右侧「历史记录」目录，与消息是否分页加载无关）。"""
-    return JSONResponse(content=session_manager.get_ui_user_turns_for_toc(session_id))
+    payload = await asyncio.to_thread(session_manager.get_ui_user_turns_for_toc, session_id)
+    return JSONResponse(content=payload)
 
 
 @fastapi_app.get("/sessions/{session_id}/todo_plan")
 async def get_session_todo_plan(session_id: str):
     """当前会话 Todo 计划快照（todo_plan.md），供左侧「当前计划」面板。"""
-    return JSONResponse(content=session_manager.get_todo_plan_snapshot(session_id))
+    def _build_todo_response() -> JSONResponse:
+        try:
+            from runtime_v2 import runtime_v2_primary
+
+            if runtime_v2_primary():
+                todo = _runtime_v2_context_snapshot(session_id).get("todo")
+                if isinstance(todo, dict):
+                    return JSONResponse(content=todo)
+        except Exception as exc:
+            logger.debug("Runtime V2 todo snapshot read failed for %s: %s", session_id, exc)
+        return JSONResponse(content=session_manager.get_todo_plan_snapshot(session_id))
+
+    return await asyncio.to_thread(_build_todo_response)
 
 
 @fastapi_app.delete("/sessions/{session_id}/todo_plan")
@@ -828,6 +2352,24 @@ async def get_session_context_tokens(session_id: str):
     按当前落盘 llm_history / key_context 现算整包输入 token 估算（与主循环一致）。
     在线程池执行，避免阻塞事件循环；CPU 重计算不挡其它轻量 API。
     """
+    def _read_snapshot_tokens() -> Optional[Dict[str, Any]]:
+        try:
+            from runtime_v2 import runtime_v2_primary
+
+            if runtime_v2_primary():
+                tokens = _runtime_v2_context_snapshot(session_id).get("tokens")
+                if isinstance(tokens, dict) and tokens.get("estimated") is not None:
+                    out = dict(tokens)
+                    out["ok"] = True
+                    out["source"] = "runtime_v2_snapshot"
+                    return out
+        except Exception as exc:
+            logger.debug("Runtime V2 context token snapshot read failed for %s: %s", session_id, exc)
+        return None
+
+    snap = await asyncio.to_thread(_read_snapshot_tokens)
+    if snap is not None:
+        return JSONResponse(content=snap)
     out = await run_in_threadpool(compute_context_tokens_for_session, session_id)
     if not out.get("ok"):
         return JSONResponse(content=out, status_code=400)
@@ -852,10 +2394,17 @@ async def pin_session(session_id: str, pinned: bool = Form(...)):
     return JSONResponse(content={"status": "ok"})
 
 
+@fastapi_app.post("/sessions/{session_id}/unread-result/clear")
+async def clear_session_unread_result(session_id: str):
+    session_manager.clear_session_unread_result(session_id)
+    return JSONResponse(content={"status": "ok"})
+
+
 @fastapi_app.post("/sessions/{session_id}/truncate")
 async def truncate_session_events(
     session_id: str,
     before_index: int = Query(..., description="保留事件区间 [0, before_index)"),
+    backup: bool = Query(False, description="whether to create truncate_backups before truncating"),
 ):
     """
     仅保留 ui_events[0:before_index]（下标 before_index 及之后丢弃），
@@ -867,7 +2416,11 @@ async def truncate_session_events(
                 content={"ok": False, "error": "invalid before_index"},
                 status_code=400,
             )
-        ok = session_manager.truncate_session_at_event_index(session_id, int(before_index))
+        ok = session_manager.truncate_session_at_event_index(
+            session_id,
+            int(before_index),
+            create_backup=bool(backup),
+        )
     except (TypeError, ValueError):
         return JSONResponse(content={"ok": False, "error": "invalid before_index"}, status_code=400)
     if not ok:
@@ -899,6 +2452,11 @@ async def branch_session_events(
     if not result:
         return JSONResponse(
             content={"ok": False, "error": "branch failed"},
+            status_code=400,
+        )
+    if result.get("ok") is False:
+        return JSONResponse(
+            content=result,
             status_code=400,
         )
     return JSONResponse(content={"ok": True, **result})
@@ -939,7 +2497,7 @@ def _load_config_wizard_html() -> str:
     # 极简兜底（完整 UI：templates/frist_time_config.html）
     return """<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8"><title>首次配置</title></head>
 <body style="font-family:sans-serif;max-width:480px;margin:2rem auto;padding:1rem;">
-<h1>WAVE Agent · 首次配置</h1>
+<h1>General Agent · 首次配置</h1>
 <p>缺少 <code>templates/frist_time_config.html</code>，使用简易表单。</p>
 <form id="f"><label>OPENAI_API_KEY<input id="k" type="password" style="width:100%;margin:.5rem 0"></label>
 <label>OPENAI_BASE_URL<input id="u" type="text" placeholder="https://api.deepseek.com" style="width:100%;margin:.5rem 0"></label>
@@ -1129,9 +2687,9 @@ def _wizard_prefill_from_dotenv() -> dict[str, str]:
         if v is not None and str(v).strip() != "":
             out[js_k] = str(v).strip()
     if vals.get("OPENAI_API_KEY"):
-        out["api_key_set"] = "1"
+        out["api_key"] = str(vals.get("OPENAI_API_KEY") or "").strip()
     if vals.get("TAVILY_API_KEY"):
-        out["search_api_key_set"] = "1"
+        out["search_api_key"] = str(vals.get("TAVILY_API_KEY") or "").strip()
     out["llm_provider"] = _infer_llm_provider_for_wizard(vals)
     return out
 
@@ -1162,7 +2720,7 @@ _MCP_CONFIG_HTML_PATH = _Path(__file__).resolve().parent / "templates" / "mcp_co
 
 def _load_mcp_config_html() -> str:
     if _MCP_CONFIG_HTML_PATH.is_file():
-        return _MCP_CONFIG_HTML_PATH.read_text(encoding="utf-8")
+        return _read_text_cached(_MCP_CONFIG_HTML_PATH, "")
     return "<!DOCTYPE html><html><body><p>缺少 templates/mcp_config.html</p><a href='/'>返回</a></body></html>"
 
 
@@ -1411,7 +2969,7 @@ def _parse_env_entries(text: str) -> list[dict]:
         entries.append(
             {
                 "key": key,
-                "value": "" if sensitive else parsed_val,
+                "value": parsed_val,
                 "has_value": bool(parsed_val),
                 "hint": merged_hint,
                 "sensitive": sensitive,
@@ -1457,7 +3015,7 @@ def _apply_env_updates(text: str, updates: dict[str, str]) -> str:
 
 def _load_env_advanced_html() -> str:
     if _ENV_ADVANCED_PATH.is_file():
-        return _ENV_ADVANCED_PATH.read_text(encoding="utf-8")
+        return _read_text_cached(_ENV_ADVANCED_PATH, "")
     return "<!DOCTYPE html><html><body><p>缺少 templates/advance_config.html</p><a href='/'>返回</a></body></html>"
 
 
@@ -1629,11 +3187,11 @@ async def save_config(req: _Request):
 
         ctx_raw = data.get("context_window", "")
         try:
-            ctx_w = int(str(ctx_raw).strip()) if str(ctx_raw).strip() != "" else 128000
+            ctx_w = int(str(ctx_raw).strip()) if str(ctx_raw).strip() != "" else 1000000
         except ValueError:
-            ctx_w = 128000
+            ctx_w = 1000000
         if ctx_w <= 0:
-            ctx_w = 128000
+            ctx_w = 1000000
         updates["CONTEXT_WINDOW"] = str(ctx_w)
 
         mot_raw = data.get("max_output_tokens", "")
@@ -1676,10 +3234,13 @@ async def _config_check(req: _Request, call_next):
         "/api/save_config",
         "/api/env",
         "/api/mcp_config",
+        "/api/model_profiles",
+        "/api/model_profiles/discover",
         "/api/pick-path",
-    ) or p.startswith("/static/"):
+        "/api/upload-chat-files",
+        "/api/workspace-files",
+    ) or p.startswith("/static/") or p.startswith("/api/model_profiles/"):
         return await call_next(req)
     if not _is_configured():
         return _RedirectResponse(url="/setup")
     return await call_next(req)
-

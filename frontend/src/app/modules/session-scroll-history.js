@@ -44,9 +44,18 @@ function setContextTokenLabel(estimated, threshold) {
 }
 
 let contextTokenRequestSeq = 0;
+const contextTokenInFlightBySession = Object.create(null);
+const CONTEXT_TOKEN_CACHE_TTL_MS = 3000;
 
 async function refreshContextTokensFromServer(sid, seq) {
     if (!sid) return;
+    const cached = selectContextTokens(sid);
+    if (cached && cached.updatedAt && (Date.now() - cached.updatedAt) < CONTEXT_TOKEN_CACHE_TTL_MS) {
+        if (sid === currentSessionId) setContextTokenLabel(cached.estimated, cached.threshold);
+        return;
+    }
+    if (contextTokenInFlightBySession[sid]) return;
+    contextTokenInFlightBySession[sid] = true;
     try {
         const r = await fetch('/sessions/' + encodeURIComponent(sid) + '/context_tokens');
         const j = await r.json();
@@ -57,6 +66,9 @@ async function refreshContextTokensFromServer(sid, seq) {
             return;
         }
     } catch (e) { /* ignore */ }
+    finally {
+        delete contextTokenInFlightBySession[sid];
+    }
     applyContextTokenLabelForCurrentSession();
 }
 
@@ -559,6 +571,45 @@ function emptyChatStreamKeepingStrip(streamEl) {
     });
 }
 
+function persistHistoryPagingToStream(streamEl, paging) {
+    if (!streamEl) return;
+    if (!paging || paging.sessionId !== currentSessionId) {
+        delete streamEl.dataset.historyPaging;
+        return;
+    }
+    streamEl.dataset.historyPaging = JSON.stringify({
+        sessionId: paging.sessionId,
+        total: Number(paging.total) || 0,
+        range_start: Number(paging.range_start) || 0,
+        range_end: Number(paging.range_end) || 0,
+        has_older: !!paging.has_older,
+    });
+}
+
+function restoreHistoryPagingFromStream(streamEl) {
+    if (!streamEl || !streamEl.dataset.historyPaging) return null;
+    try {
+        var raw = JSON.parse(streamEl.dataset.historyPaging);
+        if (!raw || raw.sessionId !== currentSessionId) return null;
+        return {
+            sessionId: raw.sessionId,
+            total: Number(raw.total) || 0,
+            range_start: Number(raw.range_start) || 0,
+            range_end: Number(raw.range_end) || 0,
+            has_older: !!raw.has_older,
+        };
+    } catch (_e) {
+        delete streamEl.dataset.historyPaging;
+        return null;
+    }
+}
+
+function setSessionHistoryPaging(paging) {
+    sessionHistoryPaging = paging || null;
+    persistHistoryPagingToStream(getVisibleChatStream(), sessionHistoryPaging);
+    updateHistorySentinelVisibility();
+}
+
 function ensureHistorySentinel(streamEl) {
     if (!streamEl) return null;
     var el = streamEl.querySelector('#history-load-sentinel');
@@ -607,7 +658,7 @@ function updateHistorySentinelVisibility() {
 }
 
 function resetSessionHistoryPaging() {
-    sessionHistoryPaging = null;
+    setSessionHistoryPaging(null);
     historyOlderLoading = false;
     updateHistorySentinelVisibility();
 }
@@ -615,13 +666,17 @@ function resetSessionHistoryPaging() {
 async function loadOlderHistoryChunk(opts) {
     opts = opts || {};
     var sid = currentSessionId;
+    var stream = getVisibleChatStream();
     var ph = sessionHistoryPaging;
+    if ((!ph || ph.sessionId !== sid) && stream) {
+        ph = restoreHistoryPagingFromStream(stream);
+        if (ph) sessionHistoryPaging = ph;
+    }
     if (!sid || !ph || ph.sessionId !== sid || !ph.has_older || historyOlderLoading) return;
     historyOlderLoading = true;
     var prevReplaying = replayingMessages;
     replayingMessages = true;
     updateHistorySentinelVisibility();
-    var stream = getVisibleChatStream();
     var cc = chatContainer;
     var prevScrollTop = cc ? cc.scrollTop : 0;
     var anchor = getHistoryScrollAnchor(cc);
@@ -633,7 +688,7 @@ async function loadOlderHistoryChunk(opts) {
         if (!response.ok || !data || typeof data !== 'object') return;
         var events = data.events;
         if (!Array.isArray(events) || events.length === 0) {
-            sessionHistoryPaging = Object.assign({}, ph, { has_older: !!data.has_older });
+            setSessionHistoryPaging(Object.assign({}, ph, { has_older: !!data.has_older }));
             return;
         }
         ensureHistorySentinel(stream);
@@ -656,13 +711,13 @@ async function loadOlderHistoryChunk(opts) {
             stream.insertBefore(frag, sen ? sen.nextSibling : stream.firstChild);
         }
         loadedOlder = true;
-        sessionHistoryPaging = {
+        setSessionHistoryPaging({
             sessionId: sid,
             total: typeof data.total === 'number' ? data.total : ph.total,
             range_start: typeof data.range_start === 'number' ? data.range_start : ph.range_start,
             range_end: ph.range_end,
             has_older: !!data.has_older,
-        };
+        });
     } catch (e) {
         console.error('加载更早消息失败:', e);
     } finally {
@@ -720,6 +775,9 @@ function restoreStreamForRunningSession(enteringId) {
     st.id = 'chat-stream';
     st.setAttribute('aria-label', '消息');
     chatContainer.appendChild(st);
+    var restoredPaging = restoreHistoryPagingFromStream(st);
+    if (restoredPaging) sessionHistoryPaging = restoredPaging;
+    updateHistorySentinelVisibility();
     bindExistingLogs(st);
     return true;
 }
@@ -881,6 +939,56 @@ function finalizeLlmStreamChunks(ctx) {
             }
             if (!getFeedItemText(el).trim()) el.remove();
         });
+    });
+}
+
+function discardLlmStreamChunks(ctx, ev) {
+    if (!ctx) return;
+    if (ctx.llm) {
+        const l = ctx.llm;
+        if (l.llmDeltaFlushRaf) {
+            cancelAnimationFrame(l.llmDeltaFlushRaf);
+            l.llmDeltaFlushRaf = 0;
+        }
+        l.llmPendingReasoningDelta = '';
+        l.llmPendingResponseDelta = '';
+        l.llmStreamReasoningIter = null;
+        l.llmStreamResponseIter = null;
+        l.llmStreamReasoningScroller = null;
+        l.llmStreamResponseScroller = null;
+        l.llmDeltaLastSeq = null;
+    }
+    var bodies = [];
+    if (ctx.currentProcessGroup && !isSubagentStreamCtx(ctx)) {
+        var mainBody = ctx.currentProcessGroup.querySelector('.process-aggregate-body');
+        if (mainBody) bodies.push(mainBody);
+    }
+    if (ctx._subagentTurnProcess && ctx._subagentTurnProcess.isConnected) {
+        bodies.push(ctx._subagentTurnProcess);
+    }
+    var reactIter = ev && ev.react_iter != null && Number.isFinite(Number(ev.react_iter))
+        ? String(Math.max(1, Math.floor(Number(ev.react_iter))))
+        : '';
+    bodies.forEach(function (body) {
+        body.querySelectorAll('.feed-item.feed--llm, .feed-item.feed--llm2').forEach(function (el) {
+            var ch = el.querySelector('.feed-chunk');
+            if (ch && ch.classList.contains('is-streaming')) el.remove();
+        });
+        body.querySelectorAll('.feed-item.feed--tool[data-tool-pending="1"]').forEach(function (el) {
+            el.remove();
+        });
+        if (reactIter) {
+            var sel = '.feed-item[data-react-iter="' + reactIter + '"]';
+            body.querySelectorAll(sel).forEach(function (el) {
+                if (
+                    el.classList.contains('feed--tool')
+                    || el.classList.contains('feed--llm')
+                    || el.classList.contains('feed--llm2')
+                ) {
+                    el.remove();
+                }
+            });
+        }
     });
 }
 

@@ -34,8 +34,21 @@ function renderSessionListFromStore() {
         var body = document.createElement('div');
         body.className = 'session-section-body';
         if (sectionKey === 'archived') appendArchiveLoadButton(body);
-        for (let j = 0; j < list.length; j += 1) {
-            body.appendChild(buildAndBindSessionRow(list[j], allSessions, nextStreamMap));
+        if (sectionKey === 'normal' && Array.isArray(sections.normalGroups) && sections.normalGroups.length) {
+            for (let g = 0; g < sections.normalGroups.length; g += 1) {
+                var group = sections.normalGroups[g];
+                var groupTitle = document.createElement('div');
+                groupTitle.className = 'session-time-group-title';
+                groupTitle.textContent = group.title;
+                body.appendChild(groupTitle);
+                for (let k = 0; k < group.sessions.length; k += 1) {
+                    body.appendChild(buildAndBindSessionRow(group.sessions[k], allSessions, nextStreamMap));
+                }
+            }
+        } else {
+            for (let j = 0; j < list.length; j += 1) {
+                body.appendChild(buildAndBindSessionRow(list[j], allSessions, nextStreamMap));
+            }
         }
         sec.appendChild(toggle);
         sec.appendChild(body);

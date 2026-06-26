@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>WAVE Agent · 首次配置</title>
+<title>General Agent · 首次配置</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:ital,wght@0,400;0,500;0,600;0,700;0,800&family=JetBrains+Mono:wght@400;500;600&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -130,18 +130,19 @@
     width: 56px;
     height: 56px;
     border-radius: var(--radius-md);
-    background: var(--accent-brand-gradient);
+    background: transparent;
     display: inline-flex;
     align-items: center;
     justify-content: center;
     margin-bottom: 0.85rem;
-    box-shadow: 0 8px 28px var(--accent-brand-glow);
+    box-shadow: none;
     user-select: none;
     -webkit-user-select: none;
+    overflow: hidden;
   }
-  .logo-icon svg {
-    width: 42px;
-    height: 34px;
+  .logo-icon img {
+    width: 100%;
+    height: 100%;
     display: block;
     user-select: none;
     -webkit-user-select: none;
@@ -149,9 +150,9 @@
   }
   .logo h1 {
     font-size: 1.35rem;
-    font-weight: 700;
-    letter-spacing: -0.02em;
-    font-family: 'Space Grotesk', var(--sans);
+    font-weight: 800;
+    letter-spacing: 0;
+    font-family: var(--sans);
     margin-bottom: 0.25rem;
     background: linear-gradient(135deg, #f0eff5 0%, #c8c6d6 100%);
     -webkit-background-clip: text;
@@ -171,6 +172,7 @@
     background: linear-gradient(135deg, #1f1f2e 0%, #4f46e5 55%, #6366f1 100%);
     -webkit-background-clip: text;
     background-clip: text;
+    -webkit-text-fill-color: transparent;
   }
   .logo p {
     color: var(--text-secondary);
@@ -231,6 +233,9 @@
     .form-row-search-pair.search-key-collapsed .form-group:first-child {
       margin-bottom: 0;
     }
+    .model-row { grid-template-columns: 1fr; }
+    .model-row__side, .model-row__meta { text-align: left; }
+    .model-row__limits { white-space: normal; }
   }
 
   .form-group { margin-bottom: 1.1rem; }
@@ -242,8 +247,7 @@
     margin-bottom: 0.35rem;
     letter-spacing: 0.02em;
   }
-  .form-group label .required { color: #9388fa; margin-left: 2px; }
-  :root.theme-light .form-group label .required { color: #6366f1; }
+  .form-group label .required { color: var(--red-accent); margin-left: 2px; font-weight: 900; }
 
   .form-group input,
   .form-group select {
@@ -319,6 +323,101 @@
   .form-hint a { color: #9388fa; text-decoration: none; font-weight: 500; }
   .form-hint a:hover { text-decoration: underline; }
   :root.theme-light .form-hint a { color: #4338ca; }
+
+  .model-discovery {
+    margin: -0.35rem 0 1.1rem;
+  }
+  .model-discovery-row {
+    display: flex;
+    align-items: center;
+    gap: 0.55rem;
+    flex-wrap: wrap;
+  }
+  .model-fetch-btn {
+    border: 1px solid var(--border-glass);
+    background: rgba(255,255,255,0.045);
+    color: var(--text-secondary);
+    border-radius: var(--radius-sm);
+    padding: 0.52rem 0.8rem;
+    font-family: var(--sans);
+    font-size: 0.74rem;
+    font-weight: 700;
+    cursor: pointer;
+  }
+  .model-fetch-btn:hover:not(:disabled) {
+    border-color: rgba(99,102,241,0.36);
+    color: var(--text-primary);
+    background: rgba(99,102,241,0.1);
+  }
+  .model-fetch-btn:disabled { opacity: 0.55; cursor: not-allowed; }
+  .model-discovery-status {
+    flex: 1;
+    min-width: 12rem;
+    color: var(--text-tertiary);
+    font-size: 0.72rem;
+    line-height: 1.4;
+  }
+  .model-list {
+    display: grid;
+    gap: 0.45rem;
+    margin-top: 0.65rem;
+    max-height: 12rem;
+    overflow: auto;
+    padding-right: 0.15rem;
+  }
+  .model-row {
+    width: 100%;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 0.55rem;
+    padding: 0.56rem 0.65rem;
+    border: 1px solid var(--border-glass);
+    border-radius: var(--radius-sm);
+    background: rgba(255,255,255,0.04);
+    color: var(--text-primary);
+    text-align: left;
+    cursor: pointer;
+    font-family: var(--sans);
+  }
+  .model-row:hover {
+    border-color: rgba(99,102,241,0.36);
+    background: rgba(99,102,241,0.1);
+  }
+  .model-row__main { min-width: 0; }
+  .model-row__id {
+    display: block;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-family: var(--mono);
+    font-size: 0.76rem;
+    font-weight: 700;
+  }
+  .model-row__side { align-self: center; text-align: right; }
+  .model-row__meta {
+    display: block;
+    margin-bottom: 0.14rem;
+    color: var(--text-tertiary);
+    font-size: 0.66rem;
+    text-align: right;
+  }
+  .model-row__limits {
+    display: block;
+    color: var(--text-secondary);
+    font-family: var(--mono);
+    font-size: 0.66rem;
+    white-space: nowrap;
+  }
+  :root.theme-light .model-fetch-btn,
+  :root.theme-light .model-row {
+    background: rgba(0,0,0,0.025);
+    border-color: rgba(0,0,0,0.1);
+  }
+  @media (max-width: 480px) {
+    .model-row { grid-template-columns: 1fr; }
+    .model-row__side, .model-row__meta { text-align: left; }
+    .model-row__limits { white-space: normal; }
+  }
 
   .btn {
     width: 100%;
@@ -421,11 +520,11 @@
 <div class="container">
   <div class="card">
     <div class="logo">
-      <div class="logo-icon" aria-hidden="true"><svg viewBox="0 0 40 32" fill="none" xmlns="http://www.w3.org/2000/svg"><text x="20" y="21" text-anchor="middle" font-family="'Brush Script MT','Segoe Script','Pacifico','Dancing Script',cursive" font-size="15" font-style="italic" fill="white" stroke="none" transform="rotate(-6 20 16)">Sugar</text></svg></div>
-      <h1>WAVE Agent</h1>
-      <p class="brand-sub" title="Wireless Analyzer &amp; Virtual Expert - 无线分析虚拟专家Agent">
-        <span class="brand-sub-line brand-sub-line--en">Wireless Analyzer &amp; Virtual Expert</span>
-        <span class="brand-sub-line brand-sub-line--zh">无线分析虚拟专家Agent</span>
+      <div class="logo-icon" aria-hidden="true"><img src="/assets/sugar-logo.png" alt="" draggable="false"></div>
+      <h1>General Agent</h1>
+      <p class="brand-sub" title="Self-Upgrade General Agent - 自优化通用智能平台">
+        <span class="brand-sub-line brand-sub-line--en">Self-Upgrade General Agent</span>
+        <span class="brand-sub-line brand-sub-line--zh">自优化通用智能平台</span>
       </p>
     </div>
 
@@ -433,6 +532,28 @@
     <div id="wizard-status-help" class="wizard-status-help" aria-live="polite">如需帮助或反馈，请联系GitHub @sugarfreeecho</div>
 
     <form id="configForm">
+      <div class="form-group" id="baseUrlGroup">
+        <label>API BASE URL <span class="required">*</span></label>
+        <input type="text" id="baseUrl" placeholder="https://api.deepseek.com" autocomplete="off" aria-required="true">
+      </div>
+
+      <div class="form-group" id="apiKeyGroup">
+        <label>API Key <span class="required">*</span></label>
+        <input type="password" id="apiKey" placeholder="sk-..." autocomplete="off">
+        <div class="form-hint">
+          DeepSeek: <a href="https://platform.deepseek.com/api_keys" target="_blank" rel="noopener">platform.deepseek.com</a>
+          · OpenAI: <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener">platform.openai.com</a>
+        </div>
+      </div>
+
+      <div class="model-discovery" aria-label="模型发现">
+        <div class="model-discovery-row">
+          <button type="button" class="model-fetch-btn" id="modelFetchBtn">获取模型列表</button>
+          <span class="model-discovery-status" id="modelDiscoveryStatus"></span>
+        </div>
+        <div id="modelDiscoveryList" class="model-list"></div>
+      </div>
+
       <div class="form-row-2">
         <div class="form-group">
           <label>LLM 供应商（支持OpenAI SDK） <span class="required">*</span></label>
@@ -449,26 +570,12 @@
           <input type="text" id="modelName" placeholder="deepseek-v4-flash" autocomplete="off">
         </div>
       </div>
-      <div class="form-hint model-hint-below" id="modelHint">切换上方供应商时会自动填入推荐模型，也可自行修改。</div>
-
-      <div class="form-group" id="apiKeyGroup">
-        <label>API Key <span class="required">*</span></label>
-        <input type="password" id="apiKey" placeholder="sk-..." autocomplete="off">
-        <div class="form-hint">
-          DeepSeek: <a href="https://platform.deepseek.com/api_keys" target="_blank" rel="noopener">platform.deepseek.com</a>
-          · OpenAI: <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener">platform.openai.com</a>
-        </div>
-      </div>
-
-      <div class="form-group" id="baseUrlGroup">
-        <label>API 地址</label>
-        <input type="text" id="baseUrl" placeholder="https://api.deepseek.com" autocomplete="off">
-      </div>
+      <div class="form-hint model-hint-below" id="modelHint">切换供应商时会自动填入推荐模型，也可自行修改。</div>
 
       <div class="form-row-2">
         <div class="form-group">
           <label>上下文门限（tokens）</label>
-          <input type="text" id="contextWindow" inputmode="numeric" autocomplete="off" spellcheck="false" placeholder="128000">
+          <input type="text" id="contextWindow" inputmode="numeric" autocomplete="off" spellcheck="false" placeholder="1000000">
         </div>
         <div class="form-group">
           <label>单次回复上限（tokens）</label>
@@ -562,8 +669,149 @@
   }
   const contextWindowEl = document.getElementById('contextWindow');
   const maxOutputTokensEl = document.getElementById('maxOutputTokens');
+  const modelFetchBtn = document.getElementById('modelFetchBtn');
+  const modelDiscoveryStatus = document.getElementById('modelDiscoveryStatus');
+  const modelDiscoveryList = document.getElementById('modelDiscoveryList');
 
   let lastProvider = llmProvider.value;
+  let modelFetchTimer = null;
+  let lastModelFetchKey = '';
+  let setupReady = false;
+
+  function wizardEsc(value) {
+    return String(value == null ? '' : value)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
+  function setModelDiscoveryStatus(message) {
+    if (modelDiscoveryStatus) modelDiscoveryStatus.textContent = message || '';
+  }
+
+  function modelLimitSource(model) {
+    const source = String((model && (model.limit_source || model.context_window_source)) || '');
+    if (source === 'api') return 'API 返回窗口信息';
+    if (source === 'probe') return 'HTTP 400 错误消息探测';
+    if (source === 'default') return '默认 1m 上下文';
+    return '使用内置常见模型窗口推断';
+  }
+
+  function positiveInt(value, fallback) {
+    const n = parseInt(value, 10);
+    return Number.isFinite(n) && n > 0 ? n : fallback;
+  }
+
+  function applyDiscoveredModel(model) {
+    model = model || {};
+    const modelMaxContext = positiveInt(model.model_context_window || model.context_window, 1000000);
+    const maxOutputTokens = positiveInt(model.max_output_tokens, 8192);
+    if (modelName) modelName.value = model.id || model.model || '';
+    if (contextWindowEl) contextWindowEl.value = String(Math.max(1, modelMaxContext - maxOutputTokens));
+    if (maxOutputTokensEl) maxOutputTokensEl.value = String(maxOutputTokens);
+    setModelDiscoveryStatus('已填入模型和窗口参数。');
+  }
+
+  async function probeAndApplyDiscoveredModel(model, row) {
+    model = model || {};
+    const modelId = String(model.id || model.model || '').trim();
+    if (!modelId) {
+      applyDiscoveredModel(model);
+      return;
+    }
+    if (row) row.disabled = true;
+    setModelDiscoveryStatus('正在探测 ' + modelId + ' 的真实上下文窗口...');
+    try {
+      const resp = await fetch('/api/model_profiles/probe', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify({
+          base_url: baseUrl.value.trim(),
+          api_key: apiKey.value.trim(),
+          model: modelId,
+          metadata: model,
+        }),
+      });
+      const result = await resp.json();
+      if (!result.ok) throw new Error(result.error || '探测失败');
+      const merged = Object.assign({}, model, result.model || {});
+      applyDiscoveredModel(merged);
+      setModelDiscoveryStatus(result.model && result.model.probe_succeeded
+        ? '已通过 HTTP 400 错误消息探测真实上下文窗口。'
+        : '未从错误消息取得真实上下文窗口，已使用列表/默认窗口。');
+    } catch (err) {
+      applyDiscoveredModel(model);
+      setModelDiscoveryStatus('上下文探测失败，已使用列表/默认窗口：' + String(err.message || err));
+    } finally {
+      if (row) row.disabled = false;
+    }
+  }
+
+  function renderDiscoveredModels(items) {
+    if (!modelDiscoveryList) return;
+    items = items || [];
+    if (!items.length) {
+      modelDiscoveryList.innerHTML = '';
+      return;
+    }
+    let html = '';
+    for (const model of items) {
+      const raw = wizardEsc(JSON.stringify(model));
+      html += "<button type='button' class='model-row' data-model='" + raw + "'>"
+        + "<span class='model-row__main'><span class='model-row__id'>" + wizardEsc(model.id) + "</span></span>"
+        + "<span class='model-row__side'><span class='model-row__meta'>" + wizardEsc(modelLimitSource(model)) + "</span>"
+        + "<span class='model-row__limits'>" + wizardEsc(model.context_window) + " ctx / " + wizardEsc(model.max_output_tokens) + " out</span></span>"
+        + "</button>";
+    }
+    modelDiscoveryList.innerHTML = html;
+    modelDiscoveryList.querySelectorAll('.model-row').forEach((row) => {
+      row.addEventListener('click', () => {
+        try {
+          probeAndApplyDiscoveredModel(JSON.parse(row.getAttribute('data-model') || '{}'), row);
+        } catch (err) {}
+      });
+    });
+  }
+
+  async function fetchDiscoveredModels() {
+    const url = baseUrl.value.trim();
+    if (!url || url.length < 8) {
+      setModelDiscoveryStatus('填写 API BASE URL 后可获取模型列表。');
+      return;
+    }
+    if (modelFetchBtn) modelFetchBtn.disabled = true;
+    setModelDiscoveryStatus('正在获取模型列表...');
+    try {
+      const resp = await fetch('/api/model_profiles/discover', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify({ base_url: url, api_key: apiKey.value.trim() }),
+      });
+      const result = await resp.json();
+      if (!result.ok) throw new Error(result.error || '获取失败');
+      renderDiscoveredModels(result.models || []);
+      setModelDiscoveryStatus('已获取 ' + ((result.models || []).length) + ' 个模型。');
+    } catch (err) {
+      setModelDiscoveryStatus('获取失败：' + String(err.message || err));
+    } finally {
+      if (modelFetchBtn) modelFetchBtn.disabled = false;
+    }
+  }
+
+  function scheduleModelDiscovery() {
+    const url = baseUrl.value.trim();
+    if (!url || url.length < 8) return;
+    if (modelFetchTimer) clearTimeout(modelFetchTimer);
+    modelFetchTimer = setTimeout(() => {
+      const key = url + '|' + apiKey.value.trim().slice(0, 8);
+      if (key === lastModelFetchKey) return;
+      lastModelFetchKey = key;
+      fetchDiscoveredModels();
+    }, 850);
+  }
 
   function syncProviderUi(provider) {
     const p = providerMap[provider];
@@ -583,6 +831,7 @@
     if (forceModel || !cur || (prevDef && cur === prevDef)) {
       baseUrl.value = p.baseUrl;
       modelName.value = p.defaultModel;
+      if (setupReady) scheduleModelDiscovery();
     }
     lastProvider = provider;
   }
@@ -599,7 +848,6 @@
     if (prefill.model_name) modelName.value = prefill.model_name;
     if (prefill.llm_base_url) baseUrl.value = prefill.llm_base_url;
     if (prefill.api_key !== undefined && prefill.api_key !== null) apiKey.value = prefill.api_key;
-    if (prefill.api_key_set) apiKey.placeholder = 'API已设置，如需修改请直接输入并保存设置';
     if (prefill.work_dir && workDirInput) workDirInput.value = prefill.work_dir;
     if (prefill.context_window && contextWindowEl) contextWindowEl.value = prefill.context_window;
     if (prefill.max_output_tokens && maxOutputTokensEl) maxOutputTokensEl.value = prefill.max_output_tokens;
@@ -607,7 +855,6 @@
       searchProvider.value = prefill.search_provider;
     }
     if (prefill.search_api_key) searchKey.value = prefill.search_api_key;
-    if (prefill.search_api_key_set) searchKey.placeholder = 'API已设置，如需修改请直接输入并保存设置';
     var pSel = llmProvider.value;
     var pm = providerMap[pSel];
     if (pm) {
@@ -621,10 +868,15 @@
   syncSearchPairVisibility();
 
   if (workDirInput && !workDirInput.value.trim()) workDirInput.value = './workspace';
-  if (contextWindowEl && !String(contextWindowEl.value).trim()) contextWindowEl.value = '128000';
+  if (contextWindowEl && !String(contextWindowEl.value).trim()) contextWindowEl.value = '1000000';
   if (maxOutputTokensEl && !String(maxOutputTokensEl.value).trim()) maxOutputTokensEl.value = '8192';
+  setupReady = true;
 
   llmProvider.addEventListener('change', () => applyProvider(llmProvider.value, false));
+  baseUrl.addEventListener('input', scheduleModelDiscovery);
+  baseUrl.addEventListener('change', scheduleModelDiscovery);
+  apiKey.addEventListener('input', scheduleModelDiscovery);
+  if (modelFetchBtn) modelFetchBtn.addEventListener('click', fetchDiscoveredModels);
 
   searchProvider.addEventListener('change', syncSearchPairVisibility);
 
@@ -648,7 +900,12 @@
       return;
     }
 
-    if (provider !== 'local' && !key && !(prefill && prefill.api_key_set)) {
+    if (!url) {
+      showStatus('请填写 API BASE URL', 'error');
+      return;
+    }
+
+    if (provider !== 'local' && !key) {
       showStatus('请填写 API Key', 'error');
       return;
     }
@@ -662,11 +919,11 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           llm_provider: provider,
-          llm_base_url: url || providerMap[provider].baseUrl,
+          llm_base_url: url,
           api_key: key,
           model_name: model,
           work_dir: workDirInput ? workDirInput.value.trim() : '',
-          context_window: contextWindowEl ? contextWindowEl.value.trim() : '128000',
+          context_window: contextWindowEl ? contextWindowEl.value.trim() : '1000000',
           max_output_tokens: maxOutputTokensEl ? maxOutputTokensEl.value.trim() : '8192',
           search_provider: searchProvider.value,
           search_api_key: searchKey.value.trim(),

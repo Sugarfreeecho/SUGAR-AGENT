@@ -36,10 +36,9 @@ function initSidebarSash() {
 async function init() {
     loadUnreadFromStorage();
     initSidebarSash();
+    showLoading();
     await loadSessions();
-    const sessions = Array.from(document.querySelectorAll('.session-item')).map(item => ({
-        id: item.querySelector('.session-name').dataset.id
-    }));
+    const sessions = sessionStore.list();
     let lastSessionId = localStorage.getItem('lastSessionId');
     let targetSession = null;
     if (lastSessionId && sessions.some(s => s.id === lastSessionId)) targetSession = lastSessionId;
@@ -47,7 +46,6 @@ async function init() {
     if (targetSession) await switchSession(targetSession);
     else await createNewSession();
     bindExistingLogs();
-    rebuildToc();
 }
 init();
 function toggleTocPanel() {

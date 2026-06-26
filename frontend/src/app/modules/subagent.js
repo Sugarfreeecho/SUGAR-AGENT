@@ -268,7 +268,7 @@ function dispatchSubagentCardEvent(ctx, card, event, eventIndex, agentId) {
     var t = event.type;
     if (t === 'subagent_start' || t === 'subagent_finish') return;
     if (t === 'user') {
-        openSubagentTurn(ctx, event.content || '', eventIndex);
+        openSubagentTurn(ctx, event.content || '', eventIndex, event.created_at || event.createdAt || event.timestamp);
         if (typeof eventIndex === 'number') ctx.lastUserEventIndex = eventIndex;
         return;
     }

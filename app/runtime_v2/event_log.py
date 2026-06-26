@@ -3,8 +3,9 @@ from __future__ import annotations
 import json
 import os
 import threading
+from collections import deque
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional
+from typing import Callable, Dict, Iterable, List, Optional
 
 from .event_schema import RuntimeEvent
 
@@ -16,13 +17,16 @@ class SessionEventLog:
     treated as rebuildable projections.
     """
 
-    def __init__(self, root: os.PathLike[str] | str):
+    def __init__(self, root: os.PathLike[str] | str, path_resolver: Optional[Callable[[str], os.PathLike[str] | str]] = None):
         self.root = Path(root)
+        self._path_resolver = path_resolver
         self._locks: Dict[str, threading.Lock] = {}
         self._locks_guard = threading.Lock()
 
     def session_dir(self, session_id: str) -> Path:
         safe_id = self._validate_session_id(session_id)
+        if self._path_resolver is not None:
+            return Path(self._path_resolver(safe_id))
         return self.root / safe_id
 
     def event_path(self, session_id: str) -> Path:
@@ -71,6 +75,69 @@ class SessionEventLog:
 
     def read_after_seq(self, session_id: str, after_seq: int) -> List[RuntimeEvent]:
         return [ev for ev in self.iter_events(session_id) if ev.seq > after_seq]
+
+    def read_latest(self, session_id: str, limit: int) -> List[RuntimeEvent]:
+        limit = max(0, int(limit))
+        if limit <= 0:
+            return []
+        rows = deque(maxlen=limit)
+        for ev in self.iter_events(session_id):
+            rows.append(ev)
+        return list(rows)
+
+    def read_tail_window(
+        self,
+        session_id: str,
+        *,
+        max_bytes: int = 1024 * 1024,
+        max_events: int = 5000,
+    ) -> tuple[List[RuntimeEvent], bool]:
+        """Read a suffix of the JSONL log without scanning from the beginning.
+
+        Returns ``(events, reached_start)`` with events in chronological order.
+        Bad trailing lines are skipped so a partially written line cannot make a
+        session unloadable.
+        """
+        max_bytes = max(4096, int(max_bytes))
+        max_events = max(1, int(max_events))
+        path = self.event_path(session_id)
+        if not path.exists():
+            return [], True
+        size = path.stat().st_size
+        if size <= 0:
+            return [], True
+        read_size = min(size, max_bytes)
+        reached_start = read_size >= size
+        with path.open("rb") as fh:
+            fh.seek(size - read_size)
+            data = fh.read(read_size)
+        if not reached_start:
+            first_newline = data.find(b"\n")
+            if first_newline >= 0:
+                data = data[first_newline + 1:]
+            else:
+                data = b""
+        rows: deque[RuntimeEvent] = deque(maxlen=max_events)
+        for raw_line in data.splitlines():
+            line = raw_line.strip()
+            if not line:
+                continue
+            try:
+                rows.append(RuntimeEvent.from_dict(json.loads(line.decode("utf-8"))))
+            except Exception:
+                continue
+        return list(rows), reached_start
+
+    def read_before_seq(self, session_id: str, before_seq: int, limit: int) -> List[RuntimeEvent]:
+        before = int(before_seq)
+        limit = max(0, int(limit))
+        if limit <= 0:
+            return []
+        rows = deque(maxlen=limit)
+        for ev in self.iter_events(session_id):
+            if ev.seq < before:
+                rows.append(ev)
+        return list(rows)
 
     def iter_events(self, session_id: str) -> Iterable[RuntimeEvent]:
         path = self.event_path(session_id)
