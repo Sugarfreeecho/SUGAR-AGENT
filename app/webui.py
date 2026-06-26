@@ -12,7 +12,7 @@ import os
 import re
 import threading
 from collections import defaultdict, deque
-from typing import Optional
+from typing import Any, Dict, Optional
 
 from pathlib import Path
 from urllib.parse import unquote
@@ -73,7 +73,7 @@ _active_chat_by_session: dict[str, int] = {}
 _active_chat_last_seen: dict[str, float] = {}
 
 _CHAT_ACTIVE_TIMEOUT_SEC = int(os.getenv("CHAT_ACTIVE_TIMEOUT_SEC", "300"))
-_chat_start_lock = threading.Lock()
+_chat_start_lock = threading.RLock()
 _chat_starting_by_session: dict[str, float] = {}
 logger = logging.getLogger(__name__)
 _STATIC_TEXT_CACHE_LOCK = threading.Lock()
@@ -259,7 +259,10 @@ def _reserve_session_chat_start(sid: str) -> bool:
     with _chat_start_lock:
         if x in _chat_starting_by_session:
             return False
-        if bool(_session_run_state_fields(x).get("stream_active")):
+    if bool(_session_run_state_fields(x).get("stream_active")):
+        return False
+    with _chat_start_lock:
+        if x in _chat_starting_by_session:
             return False
         import time as _t
         _chat_starting_by_session[x] = _t.time()
@@ -1002,35 +1005,40 @@ def _attach_subagent_sidebar_fields(s: dict, session_id: str) -> None:
 
 @fastapi_app.get("/sessions")
 async def list_sessions(include_archived: bool = Query(False)):
-    sessions = session_manager.list_sessions(include_archived=include_archived)
-    archived_count = session_manager.archived_session_count()
-    _cleanup_stale_active_chat()
-    for s in sessions:
-        sid = s.get("id")
-        if sid:
-            sid = str(sid)
-            run_state = _session_run_state_fields(sid)
-            s["stream_active"] = bool(run_state["stream_active"])
-            s["run_active"] = bool(run_state["run_active"])
-            s["run_started_at"] = run_state["run_started_at"]
-        else:
-            s["stream_active"] = False
-            s["run_active"] = False
-            s["run_started_at"] = None
-    return JSONResponse(
-        content=sessions,
-        headers={"X-Archived-Count": str(archived_count)},
-    )
+    def _build_response() -> JSONResponse:
+        sessions = session_manager.list_sessions(include_archived=include_archived)
+        archived_count = session_manager.archived_session_count()
+        _cleanup_stale_active_chat()
+        for s in sessions:
+            sid = s.get("id")
+            if sid:
+                sid = str(sid)
+                run_state = _session_run_state_fields(sid)
+                s["stream_active"] = bool(run_state["stream_active"])
+                s["run_active"] = bool(run_state["run_active"])
+                s["run_started_at"] = run_state["run_started_at"]
+            else:
+                s["stream_active"] = False
+                s["run_active"] = False
+                s["run_started_at"] = None
+        return JSONResponse(
+            content=sessions,
+            headers={"X-Archived-Count": str(archived_count)},
+        )
+
+    return await asyncio.to_thread(_build_response)
 
 
 @fastapi_app.get("/sessions/state")
 async def sessions_state(include_archived: bool = Query(False)):
-    return JSONResponse(content=_build_sessions_state_snapshot(include_archived=include_archived))
+    payload = await asyncio.to_thread(_build_sessions_state_snapshot, include_archived=include_archived)
+    return JSONResponse(content=payload)
 
 
 @fastapi_app.get("/state")
 async def app_state(include_archived: bool = Query(False)):
-    return JSONResponse(content=_build_sessions_state_snapshot(include_archived=include_archived))
+    payload = await asyncio.to_thread(_build_sessions_state_snapshot, include_archived=include_archived)
+    return JSONResponse(content=payload)
 
 
 @fastapi_app.get("/runtime-v2/state")
@@ -1169,23 +1177,26 @@ async def get_session_detail(
     include_subagents: bool = Query(False, description="涓?true 鏃惰绠?subagent 渚ф爮鐘舵€佸瓧娈?"),
 ):
     """单条会话摘要（与列表项结构一致），供侧栏增量更新。"""
-    s = session_manager.get_session_summary(session_id)
-    _cleanup_stale_active_chat()
-    if not s:
-        return JSONResponse(content={"error": "not found"}, status_code=404)
-    sid = s.get("id")
-    if sid:
-        run_state = _session_run_state_fields(str(sid))
-        s["stream_active"] = bool(run_state["stream_active"])
-        s["run_active"] = bool(run_state["run_active"])
-        s["run_started_at"] = run_state["run_started_at"]
-        if include_subagents:
-            _attach_subagent_sidebar_fields(s, str(sid))
-    else:
-        s["stream_active"] = False
-        s["run_active"] = False
-        s["run_started_at"] = None
-    return JSONResponse(content=s)
+    def _build_detail_response() -> JSONResponse:
+        s = session_manager.get_session_summary(session_id)
+        _cleanup_stale_active_chat()
+        if not s:
+            return JSONResponse(content={"error": "not found"}, status_code=404)
+        sid = s.get("id")
+        if sid:
+            run_state = _session_run_state_fields(str(sid))
+            s["stream_active"] = bool(run_state["stream_active"])
+            s["run_active"] = bool(run_state["run_active"])
+            s["run_started_at"] = run_state["run_started_at"]
+            if include_subagents:
+                _attach_subagent_sidebar_fields(s, str(sid))
+        else:
+            s["stream_active"] = False
+            s["run_active"] = False
+            s["run_started_at"] = None
+        return JSONResponse(content=s)
+
+    return await asyncio.to_thread(_build_detail_response)
 
 
 @fastapi_app.get("/sessions/{session_id}/subagents")
@@ -1709,24 +1720,84 @@ async def chat(
         if sid:
             _active_chat_by_session[sid] = _active_chat_by_session.get(sid, 0) + 1
             import time as _time_stamp; _active_chat_last_seen[sid] = _time_stamp.time()
-        try:
+        main_loop = asyncio.get_running_loop()
+        event_queue: asyncio.Queue = asyncio.Queue()
+        stop_event = threading.Event()
+
+        def should_stop_worker(sid_: str) -> bool:
+            return stop_event.is_set() or should_stop(sid_)
+
+        def put_from_worker(item) -> None:
+            try:
+                asyncio.run_coroutine_threadsafe(event_queue.put(item), main_loop).result(timeout=5)
+            except Exception:
+                pass
+
+        async def consume_agent_stream() -> None:
             try:
                 async for event in astream_events(
                     message,
                     session_id=sid,
-                    should_stop=should_stop,
+                    should_stop=should_stop_worker,
                     run_id=run_id,
                 ):
+                    put_from_worker(event)
+            except asyncio.CancelledError:
+                pass
+            except Exception as exc:
+                put_from_worker({"type": "error", "content": str(exc), "ephemeral": True})
+            finally:
+                put_from_worker(None)
+
+        def worker_main() -> None:
+            asyncio.run(consume_agent_stream())
+
+        threading.Thread(
+            target=worker_main,
+            name=f"chat-stream-{sid or 'new'}",
+            daemon=True,
+        ).start()
+        try:
+            try:
+                skip_worker_run_started = False
+                skip_worker_start_status = False
+                if sid:
+                    yield f"data: {json.dumps({'type': 'run_started', 'run_id': run_id, 'ephemeral': True}, ensure_ascii=False)}\n\n"
+                    yield f"data: {json.dumps({'type': 'status', 'content': 'New Agent Loop Start', 'ephemeral': True}, ensure_ascii=False)}\n\n"
+                    skip_worker_run_started = True
+                    skip_worker_start_status = True
+                while True:
                     if sid and await request.is_disconnected():
+                        stop_event.set()
+                        try:
+                            session_manager.request_interrupt(sid, run_id, reason="disconnect")
+                        except Exception:
+                            pass
                         break
+                    event = await event_queue.get()
+                    if event is None:
+                        break
+                    if skip_worker_run_started and isinstance(event, dict) and event.get("type") == "run_started":
+                        skip_worker_run_started = False
+                        continue
+                    if (
+                        skip_worker_start_status
+                        and isinstance(event, dict)
+                        and event.get("type") == "status"
+                        and str(event.get("content") or "") == "New Agent Loop Start"
+                    ):
+                        skip_worker_start_status = False
+                        continue
                     yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
                     await asyncio.sleep(0)  # 让 ASGI/uvicorn 尽快把分块刷到客户端，利于工具/LLM 分条显示
                 if not await request.is_disconnected():
                     yield "data: [DONE]\n\n"
             except asyncio.CancelledError:
                 # 浏览器主动断开 SSE 连接属于正常情况，避免打印冗长异常栈
+                stop_event.set()
                 return
         finally:
+            stop_event.set()
             if sid:
                 _release_session_chat_start(sid)
             if sid:
@@ -2253,16 +2324,19 @@ async def get_session_user_turns(session_id: str):
 @fastapi_app.get("/sessions/{session_id}/todo_plan")
 async def get_session_todo_plan(session_id: str):
     """当前会话 Todo 计划快照（todo_plan.md），供左侧「当前计划」面板。"""
-    try:
-        from runtime_v2 import runtime_v2_primary
+    def _build_todo_response() -> JSONResponse:
+        try:
+            from runtime_v2 import runtime_v2_primary
 
-        if runtime_v2_primary():
-            todo = _runtime_v2_context_snapshot(session_id).get("todo")
-            if isinstance(todo, dict):
-                return JSONResponse(content=todo)
-    except Exception as exc:
-        logger.debug("Runtime V2 todo snapshot read failed for %s: %s", session_id, exc)
-    return JSONResponse(content=session_manager.get_todo_plan_snapshot(session_id))
+            if runtime_v2_primary():
+                todo = _runtime_v2_context_snapshot(session_id).get("todo")
+                if isinstance(todo, dict):
+                    return JSONResponse(content=todo)
+        except Exception as exc:
+            logger.debug("Runtime V2 todo snapshot read failed for %s: %s", session_id, exc)
+        return JSONResponse(content=session_manager.get_todo_plan_snapshot(session_id))
+
+    return await asyncio.to_thread(_build_todo_response)
 
 
 @fastapi_app.delete("/sessions/{session_id}/todo_plan")
@@ -2278,18 +2352,24 @@ async def get_session_context_tokens(session_id: str):
     按当前落盘 llm_history / key_context 现算整包输入 token 估算（与主循环一致）。
     在线程池执行，避免阻塞事件循环；CPU 重计算不挡其它轻量 API。
     """
-    try:
-        from runtime_v2 import runtime_v2_primary
+    def _read_snapshot_tokens() -> Optional[Dict[str, Any]]:
+        try:
+            from runtime_v2 import runtime_v2_primary
 
-        if runtime_v2_primary():
-            tokens = _runtime_v2_context_snapshot(session_id).get("tokens")
-            if isinstance(tokens, dict) and tokens.get("estimated") is not None:
-                out = dict(tokens)
-                out["ok"] = True
-                out["source"] = "runtime_v2_snapshot"
-                return JSONResponse(content=out)
-    except Exception as exc:
-        logger.debug("Runtime V2 context token snapshot read failed for %s: %s", session_id, exc)
+            if runtime_v2_primary():
+                tokens = _runtime_v2_context_snapshot(session_id).get("tokens")
+                if isinstance(tokens, dict) and tokens.get("estimated") is not None:
+                    out = dict(tokens)
+                    out["ok"] = True
+                    out["source"] = "runtime_v2_snapshot"
+                    return out
+        except Exception as exc:
+            logger.debug("Runtime V2 context token snapshot read failed for %s: %s", session_id, exc)
+        return None
+
+    snap = await asyncio.to_thread(_read_snapshot_tokens)
+    if snap is not None:
+        return JSONResponse(content=snap)
     out = await run_in_threadpool(compute_context_tokens_for_session, session_id)
     if not out.get("ok"):
         return JSONResponse(content=out, status_code=400)

@@ -756,6 +756,27 @@ def _discard_task_result(task: asyncio.Task) -> None:
         logger.debug("background task finished after cancellation", exc_info=True)
 
 
+async def _await_maybe(awaitable_or_value):
+    if inspect.isawaitable(awaitable_or_value):
+        return await awaitable_or_value
+    return awaitable_or_value
+
+
+async def _run_react_node_off_loop(
+    state: State,
+    emit: Optional[Callable[[Dict[str, Any]], Any]],
+) -> State:
+    if emit is None:
+        return await asyncio.to_thread(lambda: asyncio.run(react_node(state, emit=None)))
+    main_loop = asyncio.get_running_loop()
+
+    async def bridged_emit(ev: Dict[str, Any]) -> None:
+        fut = asyncio.run_coroutine_threadsafe(_await_maybe(emit(ev)), main_loop)
+        await asyncio.wrap_future(fut)
+
+    return await asyncio.to_thread(lambda: asyncio.run(react_node(state, emit=bridged_emit)))
+
+
 def _steer_control_from_state(state: State) -> Optional[_SteerRunControl]:
     control = state.get("_steer_control") if isinstance(state, dict) else None
     if isinstance(control, _SteerRunControl):
@@ -3139,7 +3160,7 @@ async def astream_events(
             await emit({"type": "run_started", "run_id": runtime_v2_run_id, "ephemeral": True})
             session_manager.append_ui_event(session_id, {"type": "user", "content": user_input})
             await emit({"type": "status", "content": "New Agent Loop Start"})
-            state = await react_node(state, emit=emit)
+            state = await _run_react_node_off_loop(state, emit)
             await emit({"type": "status", "content": "Loop finished"})
             stream_event_count_after_react = len(state["stream_events"])
             state = validate_final(state)
@@ -3198,11 +3219,16 @@ async def astream_events(
                 break
             yield item
     finally:
-        if task.done():
+        if not task.done():
             try:
-                await task
-            except asyncio.CancelledError:
+                session_manager.request_interrupt(session_id, runtime_v2_run_id, reason="disconnect")
+            except Exception:
                 pass
+            task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
 
 
 async def astream_events_continuation(
@@ -3308,7 +3334,7 @@ async def astream_events_continuation(
             mirror_runtime_v2("run_started", {"mode": "continuation"})
             await emit({"type": "run_started", "ephemeral": True})
             await emit({"type": "status", "content": "Subagent Continuation Start"})
-            state = await react_node(state, emit=emit)
+            state = await _run_react_node_off_loop(state, emit)
             await emit({"type": "status", "content": "Loop finished"})
             stream_event_count_after_react = len(state["stream_events"])
             state = validate_final(state)
@@ -3367,8 +3393,13 @@ async def astream_events_continuation(
                 break
             yield item
     finally:
-        if task.done():
+        if not task.done():
             try:
-                await task
-            except asyncio.CancelledError:
+                session_manager.request_interrupt(session_id, runtime_v2_run_id, reason="disconnect")
+            except Exception:
                 pass
+            task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
