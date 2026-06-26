@@ -1809,7 +1809,7 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
                             stream_abort_event.set()
                             await _emit_steer_abort_event(state, emit, "llm_stream")
                             break
-                        item = await asyncio.to_thread(_queue_get_with_timeout, sync_q, 0.15)
+                        item = await asyncio.to_thread(_queue_get_with_timeout, sync_q, 0.03)
                         if item and item[0] == "__timeout__":
                             continue
                         if item is None:
@@ -2601,18 +2601,29 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
                     tasks = [asyncio.create_task(run_one_with_tc(tc)) for tc in group_calls]
                     by_id: Dict[str, Any] = {}
                     try:
-                        for done in asyncio.as_completed(tasks):
-                            tc, r = await done
-                            tid = (tc or {}).get("id", "")
-                            if tid is not None:
-                                by_id[tid] = r
-                            if (
-                                emit
-                                and isinstance(r, dict)
-                                and r.get("type") == "tool"
-                            ):
-                                r["_sse_emitted"] = True
-                                await _emit_tool_call_sse(emit, r, iter_count, state)
+                        pending_tasks = set(tasks)
+                        while pending_tasks:
+                            done_tasks, pending_tasks = await asyncio.wait(
+                                pending_tasks,
+                                timeout=0.03,
+                                return_when=asyncio.FIRST_COMPLETED,
+                            )
+                            if not done_tasks:
+                                await _raise_if_steer_requested(state, emit, "tool")
+                                continue
+                            for done in done_tasks:
+                                tc, r = await done
+                                tid = (tc or {}).get("id", "")
+                                if tid is not None:
+                                    by_id[tid] = r
+                                if (
+                                    emit
+                                    and isinstance(r, dict)
+                                    and r.get("type") == "tool"
+                                ):
+                                    r["_sse_emitted"] = True
+                                    await _emit_tool_call_sse(emit, r, iter_count, state)
+                            await _raise_if_steer_requested(state, emit, "tool")
                     except _SteerRestartRequested:
                         for task in tasks:
                             if not task.done():

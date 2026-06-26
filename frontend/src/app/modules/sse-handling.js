@@ -788,10 +788,8 @@ function removeConsumedFollowupSteer(sessionId, ev) {
             || (steerId && String(entry.steerId || '') === steerId);
     });
     if (!item) return false;
-    setTimeout(function () {
-        takeFollowupItem(sid, item.id);
-        renderFollowupQueue(sid);
-    }, 700);
+    takeFollowupItem(sid, item.id);
+    renderFollowupQueue(sid);
     return true;
 }
 
