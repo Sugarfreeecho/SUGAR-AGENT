@@ -427,6 +427,84 @@ def _runtime_v2_event_dicts(session_id: str, *, after_seq: int = 0, before_seq: 
     return [ev.to_dict() for ev in events]
 
 
+def _runtime_v2_chat_sse_payload(session_id: str, event_dict: dict) -> Optional[dict]:
+    try:
+        from runtime_v2.event_schema import RuntimeEvent
+        from runtime_v2.ui_projection import RuntimeUiProjection
+
+        event = RuntimeEvent.from_dict(event_dict)
+        runtime_seq = int(event.seq)
+        run_id = event.run_id or str((event.payload or {}).get("run_id") or "")
+        ui_event: Optional[dict] = None
+        skip_ui = False
+        if event.type == "run_started":
+            ui_event = {"type": "run_started", "run_id": run_id, "ephemeral": True}
+        elif event.type == "run_finished":
+            ui_event = {"type": "run_finished", "run_id": run_id, "ephemeral": True}
+        elif event.type == "run_interrupted":
+            ui_event = {"type": "run_interrupted", "run_id": run_id, "ephemeral": True}
+        elif event.type == "run_failed":
+            payload = dict(event.payload or {})
+            ui_event = {
+                "type": "run_failed",
+                "run_id": run_id,
+                "error": payload.get("error") or "",
+                "ephemeral": True,
+            }
+        elif event.type == "message_user":
+            skip_ui = True
+        else:
+            projection = RuntimeUiProjection(
+                session_manager.repository.sessions_dir,
+                path_resolver=session_manager._resolve_session_path,
+            )
+            ui_event = projection._event_to_ui(session_id, event)
+        payload = {
+            "protocol": "runtime_v2",
+            "type": "runtime_v2_event",
+            "session_id": session_id,
+            "seq": runtime_seq,
+            "runtime_seq": runtime_seq,
+            "runtime_event": event_dict,
+        }
+        if skip_ui:
+            payload["skip_ui"] = True
+        if ui_event is not None:
+            ui_event = dict(ui_event)
+            ui_event.setdefault("session_id", session_id)
+            ui_event["runtime_seq"] = runtime_seq
+            payload["ui_event"] = ui_event
+        return payload
+    except Exception as exc:
+        logger.debug("Runtime V2 chat SSE payload mapping failed for %s: %s", session_id, exc)
+        return None
+
+
+def _runtime_v2_ephemeral_sse_payload(session_id: str, event: dict) -> dict:
+    payload = {
+        "protocol": "runtime_v2",
+        "type": "runtime_v2_ephemeral",
+        "session_id": session_id,
+        "ui_event": dict(event or {}),
+    }
+    if isinstance(event, dict) and event.get("run_id"):
+        payload["run_id"] = event.get("run_id")
+    return payload
+
+
+def _runtime_v2_chat_protocol_enabled(requested: str, sid: Optional[str]) -> bool:
+    if str(requested or "").strip().lower() != "runtime_v2":
+        return False
+    if not sid:
+        return False
+    try:
+        from runtime_v2 import runtime_v2_primary
+
+        return bool(runtime_v2_primary())
+    except Exception:
+        return False
+
+
 def _runtime_v2_debug_state(include_archived: bool = True) -> dict:
     try:
         from runtime_v2.config import runtime_version
@@ -1735,9 +1813,11 @@ async def chat(
     message: str = Form(...),
     session_id: str = Form(None),
     client_run_id: str = Form(None),
+    stream_protocol: str = Form("legacy"),
 ):
     sid = (session_id or "").strip() or None
     run_id = str(client_run_id or "").strip()
+    use_runtime_v2_stream = _runtime_v2_chat_protocol_enabled(stream_protocol, sid)
     if sid:
         if not _reserve_session_chat_start(sid):
             return JSONResponse(content={"ok": False, "reason": "busy"}, status_code=409)
@@ -1753,6 +1833,12 @@ async def chat(
         main_loop = asyncio.get_running_loop()
         event_queue: asyncio.Queue = asyncio.Queue()
         stop_event = threading.Event()
+        runtime_v2_cursor = 0
+        if use_runtime_v2_stream and sid:
+            try:
+                runtime_v2_cursor = int((_runtime_v2_snapshot(sid) or {}).get("last_seq") or 0)
+            except Exception:
+                runtime_v2_cursor = 0
 
         def should_stop_worker(sid_: str) -> bool:
             return stop_event.is_set() or should_stop(sid_)
@@ -1791,11 +1877,27 @@ async def chat(
             try:
                 skip_worker_run_started = False
                 skip_worker_start_status = False
-                if sid:
+                if sid and not use_runtime_v2_stream:
                     yield f"data: {json.dumps({'type': 'run_started', 'run_id': run_id, 'ephemeral': True}, ensure_ascii=False)}\n\n"
                     yield f"data: {json.dumps({'type': 'status', 'content': 'New Agent Loop Start', 'ephemeral': True}, ensure_ascii=False)}\n\n"
                     skip_worker_run_started = True
                     skip_worker_start_status = True
+
+                async def iter_runtime_v2_chunks():
+                    nonlocal runtime_v2_cursor
+                    if not use_runtime_v2_stream or not sid:
+                        return
+                    for raw_event in _runtime_v2_event_dicts(sid, after_seq=runtime_v2_cursor, limit=200):
+                        try:
+                            runtime_v2_cursor = max(runtime_v2_cursor, int(raw_event.get("seq") or runtime_v2_cursor))
+                        except Exception:
+                            pass
+                        payload = _runtime_v2_chat_sse_payload(sid, raw_event)
+                        if payload is None:
+                            continue
+                        yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+                        await asyncio.sleep(0)
+
                 while True:
                     if sid and await request.is_disconnected():
                         stop_event.set()
@@ -1804,8 +1906,19 @@ async def chat(
                         except Exception:
                             pass
                         break
-                    event = await event_queue.get()
+                    if use_runtime_v2_stream:
+                        async for chunk in iter_runtime_v2_chunks():
+                            yield chunk
+                        try:
+                            event = await asyncio.wait_for(event_queue.get(), timeout=0.2)
+                        except asyncio.TimeoutError:
+                            continue
+                    else:
+                        event = await event_queue.get()
                     if event is None:
+                        if use_runtime_v2_stream:
+                            async for chunk in iter_runtime_v2_chunks():
+                                yield chunk
                         break
                     if skip_worker_run_started and isinstance(event, dict) and event.get("type") == "run_started":
                         skip_worker_run_started = False
@@ -1817,6 +1930,19 @@ async def chat(
                         and str(event.get("content") or "") == "New Agent Loop Start"
                     ):
                         skip_worker_start_status = False
+                        continue
+                    if use_runtime_v2_stream:
+                        if isinstance(event, dict) and event.get("ephemeral"):
+                            if event.get("type") in {"run_started", "run_finished", "run_interrupted", "run_failed"}:
+                                async for chunk in iter_runtime_v2_chunks():
+                                    yield chunk
+                                continue
+                            payload = _runtime_v2_ephemeral_sse_payload(sid or "", event)
+                            yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+                            await asyncio.sleep(0)
+                        else:
+                            async for chunk in iter_runtime_v2_chunks():
+                                yield chunk
                         continue
                     yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
                     await asyncio.sleep(0)  # 让 ASGI/uvicorn 尽快把分块刷到客户端，利于工具/LLM 分条显示

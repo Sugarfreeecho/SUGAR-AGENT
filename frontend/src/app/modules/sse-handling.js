@@ -35,9 +35,23 @@ async function consumeAgentSseResponse(response, runCtx, runSessionId, streamEve
                 return streamEventIdx;
             }
             try {
-                const parsed = JSON.parse(data);
+                let parsed = JSON.parse(data);
+                if (parsed && parsed.protocol === 'runtime_v2') {
+                    const envelopeSessionId = parsed.session_id || parsed.sessionId || runSessionId;
+                    if (!sessionStore.shouldAcceptSseEvent(envelopeSessionId, parsed.seq)) continue;
+                    if (parsed.skip_ui) continue;
+                    const uiEvent = parsed.ui_event && typeof parsed.ui_event === 'object' ? parsed.ui_event : null;
+                    if (!uiEvent) continue;
+                    const runtimeSeq = parsed.runtime_seq || parsed.seq;
+                    parsed = Object.assign({}, uiEvent, {
+                        protocol: 'runtime_v2',
+                        runtime_seq: runtimeSeq,
+                        seq: parsed.seq,
+                        session_id: uiEvent.session_id || envelopeSessionId,
+                    });
+                }
                 const eventSessionId = parsed.session_id || parsed.sessionId || runSessionId;
-                if (!sessionStore.shouldAcceptSseEvent(eventSessionId, parsed.seq)) continue;
+                if (parsed.protocol !== 'runtime_v2' && !sessionStore.shouldAcceptSseEvent(eventSessionId, parsed.seq)) continue;
                 if (parsed.type === 'user_steer' && parsed.steer) {
                     var steerEventIndex = parsed.ephemeral && Number.isFinite(Number(parsed.seq)) ? Number(parsed.seq) : streamEventIdx;
                     try {
@@ -1003,6 +1017,7 @@ async function sendMessage(options) {
     formData.append('message', rawMessage);
     formData.append('session_id', runSessionId);
     formData.append('client_run_id', clientRunId);
+    formData.append('stream_protocol', 'runtime_v2');
     /* 保留右上角 token 进度条上一快照，直至 SSE /context_tokens 推送新估值，避免每次发送闪零 */
     if (!switchedAway) scheduleContextTokensAfterPaint(runSessionId);
     let streamEventIdx = preCount + 1;
