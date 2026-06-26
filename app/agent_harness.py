@@ -705,11 +705,50 @@ def create_openai_client_for_profile(
 
 
 class _FallbackCompletions:
-    def __init__(self, candidates: List[Dict[str, Any]]):
+    def __init__(
+        self,
+        candidates: List[Dict[str, Any]],
+        status_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
+    ):
         self._candidates = candidates
+        self._status_callback = status_callback
+
+    def set_status_callback(
+        self,
+        status_callback: Optional[Callable[[Dict[str, Any]], None]],
+    ) -> None:
+        self._status_callback = status_callback
+
+    def _emit_model_switch_status(
+        self,
+        from_model: str,
+        to_model: str,
+        error: BaseException,
+    ) -> None:
+        error_text = _redact_runtime_log_text(error)
+        event = {
+            "type": "status",
+            "content": (
+                f"【模型自动切换】{_masked_model_label(from_model)} 调用失败，"
+                f"已切换到 {_masked_model_label(to_model)}。\n"
+                f"原模型错误：{error_text}"
+            ),
+            "model_switch": True,
+            "from_model": from_model,
+            "to_model": to_model,
+            "error": error_text,
+        }
+        cb = self._status_callback
+        if not cb:
+            return
+        try:
+            cb(event)
+        except Exception:
+            logger.debug("模型自动切换状态回调失败", exc_info=True)
 
     def create(self, **kwargs: Any) -> Any:
         last_error: Optional[BaseException] = None
+        last_model = ""
         for idx, item in enumerate(self._candidates):
             call_kwargs = dict(kwargs)
             call_kwargs["model"] = item["model"]
@@ -725,6 +764,12 @@ class _FallbackCompletions:
                 call_kwargs.pop("reasoning_effort", None)
             try:
                 if idx > 0:
+                    if last_error is not None:
+                        self._emit_model_switch_status(
+                            last_model,
+                            str(item.get("model") or ""),
+                            last_error,
+                        )
                     logger.warning(
                         "当前模型故障，按优先级切换到备用模型: %s",
                         _masked_model_label(str(item.get("model") or "")),
@@ -732,6 +777,7 @@ class _FallbackCompletions:
                 return item["client"].chat.completions.create(**call_kwargs)
             except Exception as exc:
                 last_error = exc
+                last_model = str(item.get("model") or "")
                 logger.warning(
                     "模型调用失败: model=%s error=%s",
                     _masked_model_label(str(item.get("model") or "")),
@@ -743,8 +789,18 @@ class _FallbackCompletions:
 
 
 class _FallbackChat:
-    def __init__(self, candidates: List[Dict[str, Any]]):
-        self.completions = _FallbackCompletions(candidates)
+    def __init__(
+        self,
+        candidates: List[Dict[str, Any]],
+        status_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
+    ):
+        self.completions = _FallbackCompletions(candidates, status_callback)
+
+    def set_status_callback(
+        self,
+        status_callback: Optional[Callable[[Dict[str, Any]], None]],
+    ) -> None:
+        self.completions.set_status_callback(status_callback)
 
 
 class FallbackOpenAIClient:
@@ -753,6 +809,12 @@ class FallbackOpenAIClient:
     def __init__(self, candidates: List[Dict[str, Any]]):
         self.candidates = candidates
         self.chat = _FallbackChat(candidates)
+
+    def set_status_callback(
+        self,
+        status_callback: Optional[Callable[[Dict[str, Any]], None]],
+    ) -> None:
+        self.chat.set_status_callback(status_callback)
 
 
 executor_client, executor_model = create_openai_client(
@@ -3358,22 +3420,30 @@ class SessionManager:
             sid = self._normalize_session_id(source_session_id)
             src_path = self._get_session_path(sid)
             if not src_path.is_dir():
-                return None
+                return {"ok": False, "error": "source_not_found"}
             events = self._load_ui_events_for_active_runtime(sid)
             n = len(events)
             if before_index < 0:
-                return None
+                return {"ok": False, "error": "invalid_before_index"}
             if before_index > n:
-                return None
+                return {"ok": False, "error": "before_index_after_end", "event_count": n}
             new_id = str(uuid.uuid4())
             dst_path = self._get_session_path(new_id)
             if dst_path.exists():
-                return None
+                return {"ok": False, "error": "destination_exists"}
             branch_name = self._next_branch_session_name(sid)
             now_iso = datetime.now().isoformat()
             new_events = events[:before_index]
             if not new_events or not isinstance(new_events[-1], dict) or new_events[-1].get("type") != "final":
-                return None
+                last_type = ""
+                if new_events and isinstance(new_events[-1], dict):
+                    last_type = str(new_events[-1].get("type") or "")
+                return {
+                    "ok": False,
+                    "error": "branch_target_not_final",
+                    "event_count": n,
+                    "last_type": last_type,
+                }
             src_llm = self._load_llm_history(sid)
             src_work = self._load_work_messages(sid)
             new_llm, new_work, _ = self._rebuild_llm_work_from_ui(
@@ -3481,10 +3551,19 @@ class SessionManager:
                 messages=new_llm,
                 reason="legacy_branch",
             )
-            return {"session_id": new_id, "name": branch_name}
+            summary = self.get_session_summary(new_id) or {
+                "id": new_id,
+                "name": branch_name,
+                "created_at": now_iso,
+                "updated_at": now_iso,
+                "archived": False,
+                "pinned": False,
+                "pinned_at": None,
+            }
+            return {"ok": True, "session_id": new_id, "name": branch_name, "session": summary}
         except Exception as e:
             logger.warning("branch_session_at_event_index 失败: %s", e)
-            return None
+            return {"ok": False, "error": "exception", "detail": str(e)}
 
     def repair_compacted_llm_history_from_ui(self, session_id: str) -> bool:
         """

@@ -717,6 +717,10 @@ body {
 .chat-toc-list a.is-current {
     background: rgba(203,166,247,0.1); border-color: rgba(203,166,247,0.18); color: var(--text-primary);
 }
+.chat-toc-list a.is-loading {
+    opacity: 0.68;
+    cursor: progress;
+}
 
 .chat-todo-plan {
     position: absolute;

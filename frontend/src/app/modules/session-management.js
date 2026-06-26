@@ -697,7 +697,7 @@ async function loadSessionMessages(sessionId, scrollBehavior, opts) {
         if (!response.ok) throw new Error('messages failed: ' + response.status);
         const raw = await response.json();
         if (loadToken !== messageLoadEpoch || sessionId !== currentSessionId) return;
-        if (getSessionRunState(sessionId)) return;
+        if (getSessionRunState(sessionId) && !opts.allowDuringRun) return;
         document.getElementById('chat-loading')?.remove();
         if (!getVisibleChatStream()) ensureVisibleChatStreamSlot();
         const vis = getVisibleChatStream();
@@ -842,7 +842,10 @@ async function switchSession(sessionId) {
     setTimeout(async () => {
         if (switchToken !== switchSessionEpoch || sessionId !== currentSessionId) return;
         try {
-            await loadSessionMessages(sessionId, undefined, { preloadOlderIfShort: isServerStreamActive(sessionId) });
+            await loadSessionMessages(sessionId, undefined, {
+                preloadOlderIfShort: isServerStreamActive(sessionId),
+                allowDuringRun: isServerStreamActive(sessionId),
+            });
         } catch (error) {
             console.error('切换会话加载失败:', error);
         } finally {

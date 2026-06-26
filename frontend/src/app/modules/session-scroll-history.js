@@ -682,7 +682,8 @@ async function loadOlderHistoryChunk(opts) {
     var anchor = getHistoryScrollAnchor(cc);
     var loadedOlder = false;
     try {
-        var url = '/sessions/' + encodeURIComponent(sid) + '/messages?turns=' + HISTORY_DIALOGUES_PER_PAGE + '&before_index=' + ph.range_start;
+        var pageTurns = Math.max(1, Math.min(Number(opts.turns) || HISTORY_DIALOGUES_PER_PAGE, 50));
+        var url = '/sessions/' + encodeURIComponent(sid) + '/messages?turns=' + encodeURIComponent(String(pageTurns)) + '&before_index=' + ph.range_start;
         var response = await fetch(url);
         var data = await response.json();
         if (!response.ok || !data || typeof data !== 'object') return;
@@ -1266,63 +1267,92 @@ function maybeStartStreamPollForSession(sid, opts) {
 async function scrollToUserTurnOrLoadOlder(eventIndex) {
     var ei = Number(eventIndex);
     if (!Number.isFinite(ei)) return;
+    function setTocJumpLoading(active) {
+        var list = document.getElementById('chat-toc-list');
+        var link = list && list.querySelector('a[data-event-index="' + ei + '"]');
+        if (!link) return;
+        link.classList.toggle('is-loading', !!active);
+        if (active) link.setAttribute('aria-busy', 'true');
+        else link.removeAttribute('aria-busy');
+    }
     function findWrap() {
-        return document.querySelector('.msg-wrap--user[data-event-index="' + ei + '"]')
-            || document.getElementById('user-msg-' + ei);
+        var stream = getVisibleChatStream();
+        if (!stream) return null;
+        return stream.querySelector('.msg-wrap--user[data-event-index="' + ei + '"]')
+            || stream.querySelector('#user-msg-' + ei);
     }
-    var wrap = findWrap();
-    if (wrap) {
-        wrap.scrollIntoView({ behavior: 'smooth', block: 'start' });
-        return;
-    }
-    var sid = currentSessionId;
-    var safety = 0;
-    var pagingCoveredTarget = false;
-    while (sid === currentSessionId && safety < 120) {
-        safety += 1;
-        wrap = findWrap();
-        if (wrap) {
-            wrap.scrollIntoView({ behavior: 'smooth', block: 'start' });
-            return;
-        }
-        var ph = sessionHistoryPaging;
-        if (!ph || ph.sessionId !== sid) break;
-        if (ei >= ph.range_start) {
-            pagingCoveredTarget = true;
-            break;
-        }
-        if (!ph.has_older) break;
-        while (historyOlderLoading && currentSessionId === sid) {
-            await new Promise(function (r) { setTimeout(r, 40); });
-        }
-        await loadOlderHistoryChunk({ keepTocStable: true });
-    }
-    wrap = findWrap();
-    if (wrap) {
-        wrap.scrollIntoView({ behavior: 'smooth', block: 'start' });
-        return;
-    }
-    if (sid === currentSessionId && pagingCoveredTarget && typeof loadSessionMessages === 'function') {
+    async function loadFullHistoryForTarget(sid) {
+        if (sid !== currentSessionId || typeof loadSessionMessages !== 'function') return;
         try {
-            await loadSessionMessages(sid, 'saved-or-bottom', { full: true });
+            await loadSessionMessages(sid, 'saved-or-bottom', {
+                full: true,
+                allowDuringRun: typeof isServerStreamActive === 'function' && isServerStreamActive(sid),
+            });
         } catch (e) {
             console.error('reload full history for toc target failed:', e);
         }
-        if (sid !== currentSessionId) return;
+    }
+    setTocJumpLoading(true);
+    try {
+        var wrap = findWrap();
+        if (wrap) {
+            wrap.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            return;
+        }
+        var sid = currentSessionId;
+        var safety = 0;
+        var pagingCoveredTarget = false;
+        while (sid === currentSessionId && safety < 120) {
+            safety += 1;
+            wrap = findWrap();
+            if (wrap) {
+                wrap.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                return;
+            }
+            var ph = sessionHistoryPaging;
+            if ((!ph || ph.sessionId !== sid) && getVisibleChatStream()) {
+                ph = restoreHistoryPagingFromStream(getVisibleChatStream());
+                if (ph) sessionHistoryPaging = ph;
+            }
+            if (!ph || ph.sessionId !== sid) {
+                await loadFullHistoryForTarget(sid);
+                break;
+            }
+            if (ei >= ph.range_start) {
+                pagingCoveredTarget = true;
+                break;
+            }
+            if (!ph.has_older) break;
+            while (historyOlderLoading && currentSessionId === sid) {
+                await new Promise(function (r) { setTimeout(r, 40); });
+            }
+            await loadOlderHistoryChunk({ keepTocStable: true, turns: 50 });
+        }
         wrap = findWrap();
         if (wrap) {
             wrap.scrollIntoView({ behavior: 'smooth', block: 'start' });
             return;
         }
-        rebuildToc();
-    }
-    if (wrap) wrap.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    else {
-        showUiAlert({
-            title: '无法定位该条',
-            message: '未能加载到对应的用户提问（可能索引不一致）。可刷新页面或使用「更早 ' + HISTORY_DIALOGUES_PER_PAGE + ' 轮对话」手动分页。',
-            showCancel: false,
-            confirmText: '知道了',
-        });
+        if (sid === currentSessionId && pagingCoveredTarget) {
+            await loadFullHistoryForTarget(sid);
+            if (sid !== currentSessionId) return;
+            wrap = findWrap();
+            if (wrap) {
+                wrap.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                return;
+            }
+            rebuildToc();
+        }
+        if (wrap) wrap.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        else {
+            showUiAlert({
+                title: '无法定位该条',
+                message: '未能加载到对应的用户提问（可能索引不一致）。可刷新页面或使用「更早 ' + HISTORY_DIALOGUES_PER_PAGE + ' 轮对话」手动分页。',
+                showCancel: false,
+                confirmText: '知道了',
+            });
+        }
+    } finally {
+        setTocJumpLoading(false);
     }
 }

@@ -6,7 +6,8 @@
       "command": "npx",
       "args": ["-y", "@modelcontextprotocol/server-filesystem", "."],
       "cwd": null,
-      "env": {}
+      "env": {},
+      "tool_timeout": 120
     },
     "remote_sse_example": {
       "transport": "sse",
@@ -15,7 +16,8 @@
         "Authorization": "Bearer REPLACE_ME"
       },
       "timeout": 30,
-      "sse_read_timeout": 300
+      "sse_read_timeout": 300,
+      "tool_timeout": 120
     },
     "remote_http_example": {
       "transport": "streamable-http",
@@ -23,6 +25,7 @@
       "headers": {},
       "timeout": 30,
       "sse_read_timeout": 300,
+      "tool_timeout": 120,
       "terminate_on_close": true
     }
   }

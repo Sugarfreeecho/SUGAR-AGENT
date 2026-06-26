@@ -254,10 +254,17 @@ def ui_approval_spec_for_mcp_tool(tool_name: str, tool_args: Any) -> Optional[Di
 class _PersistentMcpServer:
     """通用持久会话：由 connect_cm 提供 (read, write) 流。"""
 
-    def __init__(self, alias: str, transport_label: str, connect_cm: Callable[[], Any]):
+    def __init__(
+        self,
+        alias: str,
+        transport_label: str,
+        connect_cm: Callable[[], Any],
+        call_timeout_sec: float = 120.0,
+    ):
         self.alias = alias
         self.transport_label = transport_label
         self._connect_cm = connect_cm
+        self.call_timeout_sec = max(1.0, float(call_timeout_sec or 120.0))
         self._queue: asyncio.Queue = asyncio.Queue()
         self._task: Optional[asyncio.Task] = None
         self._ready = asyncio.Event()
@@ -308,9 +315,20 @@ class _PersistentMcpServer:
                         tname: str = req[1]
                         targs: Dict[str, Any] = req[2]
                         try:
-                            result = await session.call_tool(tname, targs)
+                            result = await asyncio.wait_for(
+                                session.call_tool(tname, targs),
+                                timeout=self.call_timeout_sec,
+                            )
                             if not fut.done():
                                 fut.set_result(result)
+                        except asyncio.TimeoutError:
+                            if not fut.done():
+                                fut.set_exception(
+                                    TimeoutError(
+                                        f"MCP tool `{self.alias}.{tname}` timed out after "
+                                        f"{self.call_timeout_sec:g}s"
+                                    )
+                                )
                         except BaseException as e:
                             if not fut.done():
                                 fut.set_exception(e)
@@ -409,7 +427,8 @@ def _make_stdio_connector(alias: str, cfg: dict) -> _PersistentMcpServer:
         async with stdio_client(params) as rw:
             yield rw
 
-    return _PersistentMcpServer(alias, "stdio", _cm)
+    call_timeout = float(cfg.get("tool_timeout", cfg.get("call_timeout", cfg.get("callTimeout", 120))))
+    return _PersistentMcpServer(alias, "stdio", _cm, call_timeout_sec=call_timeout)
 
 
 def _make_sse_connector(alias: str, cfg: dict) -> _PersistentMcpServer:
@@ -420,6 +439,7 @@ def _make_sse_connector(alias: str, cfg: dict) -> _PersistentMcpServer:
         headers = {str(k): str(v) for k, v in headers_raw.items()}
     timeout = float(cfg.get("timeout", 30))
     sse_read = float(cfg.get("sse_read_timeout", cfg.get("sseReadTimeout", 300)))
+    call_timeout = float(cfg.get("tool_timeout", cfg.get("call_timeout", cfg.get("callTimeout", 120))))
     verify = cfg.get("verify", True)
     skip_verify = verify is False
 
@@ -450,7 +470,7 @@ def _make_sse_connector(alias: str, cfg: dict) -> _PersistentMcpServer:
         ) as rw:
             yield rw
 
-    return _PersistentMcpServer(alias, "sse", _cm)
+    return _PersistentMcpServer(alias, "sse", _cm, call_timeout_sec=call_timeout)
 
 
 def _make_streamable_connector(alias: str, cfg: dict) -> _PersistentMcpServer:
@@ -461,6 +481,7 @@ def _make_streamable_connector(alias: str, cfg: dict) -> _PersistentMcpServer:
         headers = {str(k): str(v) for k, v in headers_raw.items()}
     timeout_sec = float(cfg.get("timeout", 30))
     read_sec = float(cfg.get("sse_read_timeout", cfg.get("read_timeout", 300)))
+    call_timeout = float(cfg.get("tool_timeout", cfg.get("call_timeout", cfg.get("callTimeout", 120))))
     terminate = bool(cfg.get("terminate_on_close", True))
 
     @asynccontextmanager
@@ -472,7 +493,7 @@ def _make_streamable_connector(alias: str, cfg: dict) -> _PersistentMcpServer:
                 read, write, _ = streams
                 yield (read, write)
 
-    return _PersistentMcpServer(alias, "streamable-http", _cm)
+    return _PersistentMcpServer(alias, "streamable-http", _cm, call_timeout_sec=call_timeout)
 
 
 async def _shutdown_servers_unlocked() -> None:

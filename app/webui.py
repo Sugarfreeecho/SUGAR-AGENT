@@ -375,6 +375,35 @@ def _runtime_v2_filtered_active_runs(sid: str) -> list[dict]:
     return filtered
 
 
+def _cleanup_orphan_runtime_v2_active_runs(sid: str, reason: str = "orphaned") -> int:
+    sid = str(sid or "").strip()
+    if not sid or _has_local_run_activity(sid):
+        return 0
+    snapshot = _runtime_v2_snapshot(sid)
+    active_runs = snapshot.get("active_runs") if isinstance(snapshot, dict) else None
+    if not isinstance(active_runs, list) or not active_runs:
+        return 0
+    cleaned = 0
+    try:
+        from runtime_v2.mirror import RuntimeMirror
+
+        mirror = RuntimeMirror(session_manager.sessions_dir)
+        for run in active_runs:
+            if not isinstance(run, dict):
+                continue
+            rid = str(run.get("run_id") or "").strip()
+            if not rid:
+                continue
+            mirror.mirror_run_interrupted(sid, rid, {"reason": reason})
+            cleaned += 1
+    except Exception as e:
+        logger.debug("cleanup orphan runtime v2 active runs failed for %s: %s", sid, e)
+        return 0
+    if cleaned:
+        logger.info("Cleaned %s orphan Runtime V2 active run(s) for session %s", cleaned, sid)
+    return cleaned
+
+
 def _runtime_v2_context_snapshot(sid: str) -> dict:
     snapshot = _runtime_v2_snapshot(sid)
     context = snapshot.get("context") if isinstance(snapshot, dict) else None
@@ -477,6 +506,7 @@ def _session_run_state_fields(sid: str) -> dict:
     except Exception:
         runtime_v2_primary = lambda: True
     if runtime_v2_primary():
+        _cleanup_orphan_runtime_v2_active_runs(sid, reason="no_local_activity")
         v2_info = _runtime_v2_active_run_info(sid)
         if not v2_info:
             return {
