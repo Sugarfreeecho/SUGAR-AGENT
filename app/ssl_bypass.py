@@ -52,4 +52,4 @@ for method_name in ('get', 'post', 'put', 'delete', 'head', 'options', 'patch'):
             return _patched
         setattr(requests, method_name, _make_patch(original))
 
-print("[ssl_bypass] ✅ SSL Passed")
+print("[ssl_bypass] SSL bypass enabled")
