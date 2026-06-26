@@ -622,7 +622,8 @@ function renderFollowupQueue(sessionId) {
     q.forEach(function (item, idx) {
         var row = document.createElement('div');
         row.className = 'followup-queue-row';
-        row.classList.toggle('is-sending', item.status === 'sending');
+        row.classList.toggle('is-sending', item.status === 'sending' || item.status === 'submitting');
+        row.classList.toggle('is-accepted', item.status === 'accepted');
         row.classList.toggle('is-sent', item.status === 'sent');
         row.dataset.id = String(item.id);
         var order = document.createElement('div');
@@ -668,6 +669,8 @@ function renderFollowupQueue(sessionId) {
 function getFollowupStatusText(item) {
     var status = item && item.status ? String(item.status) : '';
     if (status === 'withdrawing') return '撤回中';
+    if (status === 'submitting') return '提交中';
+    if (status === 'accepted') return '已接收，等待插入';
     if (status === 'sending') return '发送中';
     if (status === 'sent') return '已发送';
     return '待发送';
@@ -709,7 +712,7 @@ function withdrawFollowup(itemId) {
     const sid = currentSessionId;
     var q = getFollowupQueue(sid);
     var pendingItem = q.find(function (entry) { return String(entry.id) === String(itemId); });
-    if (pendingItem && pendingItem.status === 'sending') {
+    if (pendingItem && (pendingItem.status === 'sending' || pendingItem.status === 'submitting' || pendingItem.status === 'accepted')) {
         pendingItem.cancelRequested = true;
         pendingItem.status = 'withdrawing';
         persistFollowupQueue(sid);
@@ -807,7 +810,7 @@ async function sendFollowupNow(itemId) {
     const item = q[idx];
     if (!item) return;
     item.clientId = item.clientId || ('followup-' + item.id + '-' + Date.now());
-    item.status = 'sending';
+    item.status = 'submitting';
     persistFollowupQueue(sid);
     renderFollowupQueue(sid);
     try {
@@ -821,7 +824,7 @@ async function sendFollowupNow(itemId) {
             if (withdrawn) returnFollowupToInput(sid, withdrawn);
             return;
         }
-        item.status = 'sending';
+        item.status = 'accepted';
         persistFollowupQueue(sid);
         renderFollowupQueue(sid);
         return;

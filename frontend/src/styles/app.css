@@ -2329,6 +2329,12 @@ body {
 .followup-queue-row.is-sending {
     background: rgba(99,102,241,0.12);
 }
+.followup-queue-row.is-accepted {
+    background: rgba(45,212,191,0.1);
+}
+.followup-queue-row.is-accepted .followup-queue-status {
+    color: #5eead4;
+}
 .followup-queue-row.is-sent {
     background: rgba(74,222,128,0.1);
 }
