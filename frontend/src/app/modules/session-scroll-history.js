@@ -743,24 +743,68 @@ async function loadOlderHistoryChunk(opts) {
 
 function insertNewEmptyChatStream() { ensureVisibleChatStreamSlot(); }
 
+const SESSION_STREAM_CACHE_LIMIT = 6;
+const cachedSessionStreamOrder = [];
+
+function cssEscapeIdent(value) {
+    if (window.CSS && typeof window.CSS.escape === 'function') return window.CSS.escape(value);
+    return String(value || '').replace(/["\\]/g, '\\$&');
+}
+
+function cacheOrderTouch(sessionId) {
+    var sid = String(sessionId || '');
+    if (!sid) return;
+    var idx = cachedSessionStreamOrder.indexOf(sid);
+    if (idx >= 0) cachedSessionStreamOrder.splice(idx, 1);
+    cachedSessionStreamOrder.push(sid);
+}
+
+function discardCachedSessionStream(sessionId) {
+    var sid = String(sessionId || '');
+    if (!sid || !offscreenRoot) return;
+    var cached = offscreenRoot.querySelector('.chat-stream[data-cache-session-id="' + cssEscapeIdent(sid) + '"]');
+    if (cached && cached.parentNode) cached.remove();
+    var idx = cachedSessionStreamOrder.indexOf(sid);
+    if (idx >= 0) cachedSessionStreamOrder.splice(idx, 1);
+}
+
+function trimCachedSessionStreams() {
+    if (!offscreenRoot) return;
+    while (cachedSessionStreamOrder.length > SESSION_STREAM_CACHE_LIMIT) {
+        var sid = cachedSessionStreamOrder.shift();
+        var cached = offscreenRoot.querySelector('.chat-stream[data-cache-session-id="' + cssEscapeIdent(sid) + '"]');
+        if (cached && cached.parentNode) cached.remove();
+    }
+}
+
+function stashVisibleStreamForSession(sessionId, opts) {
+    opts = opts || {};
+    var sid = String(sessionId || '');
+    if (!sid || !offscreenRoot) return false;
+    const el = getVisibleChatStream();
+    if (!el || !el.parentNode) return false;
+    if (!opts.force && el.dataset.sessionLoadOk !== '1') return false;
+    if (el.dataset.sessionLoadFailed === '1') return false;
+    discardCachedSessionStream(sid);
+    el.remove();
+    el.removeAttribute('id');
+    el.removeAttribute('aria-label');
+    el.classList.add('is-offscreen');
+    el.setAttribute('data-cache-session-id', sid);
+    offscreenRoot.appendChild(el);
+    cacheOrderTouch(sid);
+    trimCachedSessionStreams();
+    return true;
+}
+
 function prepareStashLeaving(leavingId) {
     if (!leavingId) return;
     if (isSessionRunning(leavingId)) {
-        const el = getVisibleChatStream();
-        if (el && el.parentNode) {
-            el.remove();
-            el.removeAttribute('id');
-            el.removeAttribute('aria-label');
-            if (offscreenRoot) offscreenRoot.appendChild(el);
-        }
+        stashVisibleStreamForSession(leavingId, { force: true });
         insertNewEmptyChatStream();
     } else {
-        const v = getVisibleChatStream();
-        if (v) {
-            resetSessionHistoryPaging();
-            emptyChatStreamKeepingStrip(v);
-        }
-        else ensureVisibleChatStreamSlot();
+        if (!stashVisibleStreamForSession(leavingId)) ensureVisibleChatStreamSlot();
+        insertNewEmptyChatStream();
     }
 }
 
@@ -773,14 +817,76 @@ function restoreStreamForRunningSession(enteringId) {
     if (offscreenRoot && st.parentNode !== offscreenRoot) return false;
     const cur = getVisibleChatStream();
     if (cur && cur.parentNode === chatContainer) cur.remove();
+    st.classList.remove('is-offscreen');
+    st.removeAttribute('data-cache-session-id');
     st.id = 'chat-stream';
     st.setAttribute('aria-label', '消息');
     chatContainer.appendChild(st);
+    cacheOrderTouch(enteringId);
     var restoredPaging = restoreHistoryPagingFromStream(st);
     if (restoredPaging) sessionHistoryPaging = restoredPaging;
     updateHistorySentinelVisibility();
     bindExistingLogs(st);
     return true;
+}
+
+function restoreCachedSessionStream(enteringId) {
+    var sid = String(enteringId || '');
+    if (!sid || !offscreenRoot) return false;
+    var st = offscreenRoot.querySelector('.chat-stream[data-cache-session-id="' + cssEscapeIdent(sid) + '"]');
+    if (!st || !st.parentNode) return false;
+    if (st.dataset.sessionLoadOk !== '1' || st.dataset.sessionLoadFailed === '1') {
+        discardCachedSessionStream(sid);
+        return false;
+    }
+    const cur = getVisibleChatStream();
+    if (cur && cur.parentNode === chatContainer) cur.remove();
+    st.classList.remove('is-offscreen');
+    st.removeAttribute('data-cache-session-id');
+    st.id = 'chat-stream';
+    st.setAttribute('aria-label', '娑堟伅');
+    chatContainer.appendChild(st);
+    cacheOrderTouch(sid);
+    var restoredPaging = restoreHistoryPagingFromStream(st);
+    if (restoredPaging) sessionHistoryPaging = restoredPaging;
+    updateHistorySentinelVisibility();
+    bindExistingLogs(st);
+    return true;
+}
+
+function restoreCachedSessionScrollPosition(sessionId) {
+    if (!chatContainer || !sessionId) return;
+    requestAnimationFrame(function () {
+        if (sessionId !== currentSessionId) return;
+        var saved = (typeof getSavedScrollPosition === 'function') ? getSavedScrollPosition(sessionId) : null;
+        if (saved !== null && Number.isFinite(Number(saved)) && Number(saved) > 0) {
+            setScrollTopImmediate(chatContainer, Number(saved));
+        } else {
+            chatContainer.scrollTop = chatContainer.scrollHeight;
+        }
+        refreshLiveAutoFollowPins();
+        scheduleTocActiveUpdate();
+    });
+}
+
+function markVisibleSessionStreamLoadState(sessionId, state) {
+    var stream = getVisibleChatStream();
+    if (!stream) return;
+    stream.dataset.sessionId = String(sessionId || '');
+    if (state === 'ok') {
+        stream.dataset.sessionLoadOk = '1';
+        delete stream.dataset.sessionLoadFailed;
+        delete stream.dataset.sessionLoading;
+    } else if (state === 'failed') {
+        stream.dataset.sessionLoadFailed = '1';
+        delete stream.dataset.sessionLoadOk;
+        delete stream.dataset.sessionLoading;
+        discardCachedSessionStream(sessionId);
+    } else if (state === 'loading') {
+        stream.dataset.sessionLoading = '1';
+        delete stream.dataset.sessionLoadOk;
+        delete stream.dataset.sessionLoadFailed;
+    }
 }
 
 function appendLogVisible(msg, type) {
@@ -1065,8 +1171,11 @@ function showOpenFileFeedback(msg) {
         if (!a) return;
         ev.preventDefault();
         var rel = a.getAttribute('data-workspace-open') || '';
-        fetch('/api/open-workspace-file?rel=' + encodeURIComponent(rel))
+        var controller = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+        var timer = controller ? setTimeout(function () { controller.abort(); }, 8000) : null;
+        fetch('/api/open-workspace-file?rel=' + encodeURIComponent(rel), controller ? { signal: controller.signal } : undefined)
             .then(function (r) {
+                if (timer) clearTimeout(timer);
                 return r.json().catch(function () { return { ok: false, error: '响应异常' }; });
             })
             .then(function (j) {

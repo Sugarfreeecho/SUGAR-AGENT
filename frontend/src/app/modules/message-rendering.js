@@ -8,6 +8,31 @@ function removeMessagesFromNode(startWrap) {
     syncDisconnectedProcessGroups();
 }
 
+async function historyOperationJson(url, options, timeoutMs) {
+    options = options || {};
+    var ms = Number(timeoutMs) > 0 ? Number(timeoutMs) : 45000;
+    var controller = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+    var timer = null;
+    var requestOptions = Object.assign({}, options);
+    if (controller && !requestOptions.signal) {
+        requestOptions.signal = controller.signal;
+        timer = setTimeout(function () { controller.abort(); }, ms);
+    }
+    try {
+        var r = await fetch(url, requestOptions);
+        var j = await r.json().catch(function () { return {}; });
+        if (!j || typeof j !== 'object') j = {};
+        j.ok = !!r.ok && j.ok !== false;
+        if (!j.error && !r.ok) j.error = 'http_' + r.status;
+        return j;
+    } catch (e) {
+        var isAbort = e && (e.name === 'AbortError' || String(e.message || e).indexOf('aborted') >= 0);
+        return { ok: false, error: isAbort ? 'request_timeout' : ((e && e.message) || String(e)) };
+    } finally {
+        if (timer) clearTimeout(timer);
+    }
+}
+
 async function truncateSessionOnServer(beforeIndex, options) {
     options = options || {};
     const sid = options.sessionId || currentSessionId;
@@ -18,13 +43,7 @@ async function truncateSessionOnServer(beforeIndex, options) {
     const url = '/sessions/' + encodeURIComponent(sid) + '/truncate'
         + '?before_index=' + encodeURIComponent(String(beforeIndex))
         + '&backup=' + (options.backup ? '1' : '0');
-    try {
-        const r = await fetch(url, { method: 'POST' });
-        const j = await r.json().catch(function () { return {}; });
-        return { ok: r.ok, error: (j && j.error) ? String(j.error) : '' };
-    } catch (e) {
-        return { ok: false, error: (e && e.message) || String(e) };
-    }
+    return historyOperationJson(url, { method: 'POST' }, options.timeoutMs || 45000);
 }
 
 function describeServerSyncFailure(res, fallback) {
@@ -179,19 +198,7 @@ async function branchSessionOnServer(beforeIndex, sessionId) {
     if (!sid) return { ok: false, error: 'no_session' };
     const url = '/sessions/' + encodeURIComponent(sid) + '/branch'
         + '?before_index=' + encodeURIComponent(String(beforeIndex));
-    try {
-        const r = await fetch(url, { method: 'POST' });
-        const j = await r.json().catch(function () { return {}; });
-        return {
-            ok: r.ok,
-            session_id: j && j.session_id,
-            name: j && j.name,
-            session: j && j.session,
-            error: (j && j.error) ? String(j.error) : '',
-        };
-    } catch (e) {
-        return { ok: false, error: (e && e.message) || String(e) };
-    }
+    return historyOperationJson(url, { method: 'POST' }, 60000);
 }
 
 function normalizeBranchFinalText(text) {
@@ -342,6 +349,7 @@ function onMessageToolbarClick(wrap, role, act) {
         return;
     }
     if (act === 'branch' && role === 'assistant') {
+        if (wrap.dataset.branching === '1') return;
         const sourceSessionId = currentSessionId;
         const eiRaw = wrap.dataset.eventIndex;
         const eventIdx = eiRaw !== undefined && eiRaw !== '' ? parseInt(eiRaw, 10) : NaN;
@@ -362,6 +370,7 @@ function onMessageToolbarClick(wrap, role, act) {
             cancelText: '取消',
         }).then(function (ok) {
             if (!ok) return;
+            wrap.dataset.branching = '1';
             (async function () {
                 var res = await branchSessionOnServer(branchBefore, sourceSessionId);
                 if (!res || !res.ok || !res.session_id) {
@@ -376,9 +385,20 @@ function onMessageToolbarClick(wrap, role, act) {
                     sessionStore.upsert(res.session);
                     renderSessionListIfChanged(true);
                 }
-                await switchSession(res.session_id);
+                if (typeof discardCachedSessionStream === 'function') discardCachedSessionStream(res.session_id);
+                await switchSession(res.session_id, { forceReload: true });
                 setTimeout(function () { void loadSessions({ forceRender: true }); }, 0);
-            })();
+                delete wrap.dataset.branching;
+            })().catch(function (err) {
+                console.error('branch session failed:', err);
+                showUiAlert({
+                    title: '鍒涘缓澶辫触',
+                    message: String((err && err.message) || err || 'unknown error'),
+                    variant: 'error',
+                });
+            }).finally(function () {
+                delete wrap.dataset.branching;
+            });
         });
         return;
     }
@@ -1059,13 +1079,10 @@ function escapeHtmlAttr(str) {
 }
 
 function scrollToBottom() {
+    if (!chatContainer) return;
+    setScrollTopImmediate(chatContainer, chatContainer.scrollHeight);
     requestAnimationFrame(function () {
-        requestAnimationFrame(function () {
-            if (chatContainer) chatContainer.scrollTop = chatContainer.scrollHeight;
-            requestAnimationFrame(function () {
-                if (chatContainer) chatContainer.scrollTop = chatContainer.scrollHeight;
-            });
-        });
+        if (chatContainer) chatContainer.scrollTop = chatContainer.scrollHeight;
     });
 }
 
@@ -1224,58 +1241,12 @@ function historyLoadScrollsToBottom(sessionId, mode) {
 
 function waitForChatScrollAfterHistoryLoad(sessionId, mode) {
     if (!chatContainer || !sessionId) return Promise.resolve(false);
-    var toBottom = true;
-    var started = (window.performance && performance.now) ? performance.now() : Date.now();
-    var lastTop = -1;
-    var stableFrames = 0;
-    return new Promise(function (resolve) {
-        var done = false;
-        var cleanup = null;
-        function nowMs() {
-            return (window.performance && performance.now) ? performance.now() : Date.now();
-        }
-        function targetReached() {
-            if (!chatContainer) return true;
-            return isNearBottom(chatContainer, 24);
-        }
-        function finish(ok) {
-            if (done) return;
-            done = true;
-            if (cleanup) cleanup();
-            resolve(ok);
-        }
-        if ('onscrollend' in chatContainer) {
-            var onEnd = function () {
-                if (sessionId !== currentSessionId) {
-                    finish(false);
-                    return;
-                }
-                if (targetReached()) finish(true);
-            };
-            chatContainer.addEventListener('scrollend', onEnd, { passive: true });
-            cleanup = function () {
-                chatContainer.removeEventListener('scrollend', onEnd);
-            };
-        }
-        function step() {
-            if (done) return;
-            if (sessionId !== currentSessionId || !chatContainer) {
-                finish(false);
-                return;
-            }
-            var top = chatContainer.scrollTop;
-            var reached = targetReached();
-            if (Math.abs(top - lastTop) < 0.5) stableFrames += 1;
-            else stableFrames = 0;
-            lastTop = top;
-            if ((reached && stableFrames >= 2) || nowMs() - started > 2400) {
-                finish(reached);
-                return;
-            }
-            requestAnimationFrame(step);
-        }
-        requestAnimationFrame(step);
-    });
+    if (sessionId !== currentSessionId) return Promise.resolve(false);
+    if (historyLoadScrollsToBottom(sessionId, mode)) {
+        setScrollTopImmediate(chatContainer, chatContainer.scrollHeight);
+        return Promise.resolve(true);
+    }
+    return Promise.resolve(false);
 }
 
 function setWelcome() {

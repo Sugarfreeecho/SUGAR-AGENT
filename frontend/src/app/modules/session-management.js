@@ -305,6 +305,7 @@ function buildAndBindSessionRow(sess, allSessions, nextStreamMap) {
             if (typeof removeStoredFollowupQueue === 'function') removeStoredFollowupQueue(deletedSessionId);
             delete lastUserMessageBySession[deletedSessionId];
             clearContextStateForSession(deletedSessionId);
+            if (typeof discardCachedSessionStream === 'function') discardCachedSessionStream(deletedSessionId);
             if (isSessionRunning(sess.id)) {
                 const r = abortSessionRun(sess.id, 'delete');
                 if (r && r.ctx && r.ctx.stream && r.ctx.stream.parentNode) r.ctx.stream.remove();
@@ -682,6 +683,26 @@ async function reconcileRunStateFromServer(opts) {
     renderSessionListIfChanged(false);
 }
 
+function showSessionLoadRetry(sessionId) {
+    var sid = String(sessionId || '');
+    var stream = getVisibleChatStream();
+    if (!sid || !stream) return;
+    if (stream.querySelector('.session-load-retry')) return;
+    var row = document.createElement('div');
+    row.className = 'feed-item feed--err session-load-retry';
+    var btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'history-load-older-btn';
+    btn.textContent = '重新加载';
+    btn.addEventListener('click', function (e) {
+        e.preventDefault();
+        if (typeof discardCachedSessionStream === 'function') discardCachedSessionStream(sid);
+        void switchSession(sid, { forceReload: true });
+    });
+    row.appendChild(btn);
+    stream.appendChild(row);
+}
+
 async function loadSessionMessages(sessionId, scrollBehavior, opts) {
     scrollBehavior = scrollBehavior || 'saved-or-bottom';
     opts = opts || {};
@@ -706,6 +727,7 @@ async function loadSessionMessages(sessionId, scrollBehavior, opts) {
             chatContainer.innerHTML = '';
             ensureVisibleChatStreamSlot();
         }
+        markVisibleSessionStreamLoadState(sessionId, 'loading');
         let events;
         let pageMeta = null;
         if (Array.isArray(raw)) {
@@ -743,7 +765,8 @@ async function loadSessionMessages(sessionId, scrollBehavior, opts) {
             updateSessionTitle();
             scheduleContextTokensAfterPaint(sessionId);
             applyChatScrollAfterHistoryLoad(sessionId, scrollBehavior);
-            return;
+            markVisibleSessionStreamLoadState(sessionId, 'ok');
+            return true;
         }
         const loadCtx = newDomContext(getVisibleChatStream());
         loadCtx.lastUserEventIndex = -1;
@@ -781,10 +804,15 @@ async function loadSessionMessages(sessionId, scrollBehavior, opts) {
         scheduleTocActiveUpdate();
         scheduleContextTokensAfterPaint(sessionId);
         renderTodoPlanForCurrentSession();
+        markVisibleSessionStreamLoadState(sessionId, 'ok');
+        return true;
     } catch (error) {
         console.error('加载会话消息失败:', error);
         document.getElementById('chat-loading')?.remove();
         appendLogVisible('加载历史消息失败', 'error-log');
+        markVisibleSessionStreamLoadState(sessionId, 'failed');
+        showSessionLoadRetry(sessionId);
+        return false;
     } finally {
         if (loadToken === messageLoadEpoch) sessionStore.ui.loadingMessages = false;
         if (loadToken === messageLoadEpoch) suppressTocDuringSessionLoad = false;
@@ -792,8 +820,10 @@ async function loadSessionMessages(sessionId, scrollBehavior, opts) {
     }
 }
 
-async function switchSession(sessionId) {
-    if (currentSessionId === sessionId) return;
+async function switchSession(sessionId, opts) {
+    opts = opts || {};
+    if (currentSessionId === sessionId && !opts.forceReload) return;
+    if (opts.forceReload && typeof discardCachedSessionStream === 'function') discardCachedSessionStream(sessionId);
     const switchToken = ++switchSessionEpoch;
     suppressTocDuringSessionLoad = true;
     clearTocForSessionLoad();
@@ -814,13 +844,15 @@ async function switchSession(sessionId) {
     if (typeof refreshModelProfileSelector === 'function') refreshModelProfileSelector(sessionId);
     syncSessionListIndicatorClasses();
     setSendButtonState();
-    if (restoreStreamForRunningSession(sessionId)) {
+    var restoredFromCache = false;
+    if (!opts.forceReload && (restoreStreamForRunningSession(sessionId) || (restoredFromCache = restoreCachedSessionStream(sessionId)))) {
         suppressTocDuringSessionLoad = false;
         hideLoading();
         rebuildToc();
         updateSessionTitle();
         scheduleContextTokensAfterPaint(sessionId);
-        applyChatScrollAfterHistoryLoad(sessionId, 'saved-or-bottom');
+        if (restoredFromCache) restoreCachedSessionScrollPosition(sessionId);
+        else applyChatScrollAfterHistoryLoad(sessionId, 'saved-or-bottom');
         renderTodoPlanForCurrentSession();
         if (switchToken !== switchSessionEpoch || sessionId !== currentSessionId) return;
         /* 让 rebuildToc 的 /user_turns fetch 先发出，subagent 面板（含 N 个 /messages）延后一帧
@@ -839,15 +871,19 @@ async function switchSession(sessionId) {
         ensureVisibleChatStreamSlot();
     }
     showLoading();
-    setTimeout(async () => {
-        if (switchToken !== switchSessionEpoch || sessionId !== currentSessionId) return;
+    return new Promise(function (resolve) {
+        setTimeout(async function () {
+        if (switchToken !== switchSessionEpoch || sessionId !== currentSessionId) { resolve(false); return; }
         try {
-            await loadSessionMessages(sessionId, undefined, {
+            var loadedOk = await loadSessionMessages(sessionId, undefined, {
                 preloadOlderIfShort: isServerStreamActive(sessionId),
                 allowDuringRun: isServerStreamActive(sessionId),
             });
+            if (!loadedOk) { resolve(false); return; }
         } catch (error) {
             console.error('切换会话加载失败:', error);
+            resolve(false);
+            return;
         } finally {
             if (switchToken === switchSessionEpoch && sessionId === currentSessionId) {
                 hideLoading();
@@ -856,14 +892,16 @@ async function switchSession(sessionId) {
                 replayingMessages = false;
             }
         }
-        if (switchToken !== switchSessionEpoch || sessionId !== currentSessionId) return;
+        if (switchToken !== switchSessionEpoch || sessionId !== currentSessionId) { resolve(false); return; }
         /* loadSessionMessages 内部已发起 rebuildToc()；这里再延后一帧调用 subagent panel
            保证「目录 → 消息 → 子 agent 按钮」的稳定顺序（无 subagent 的会话表现一致）。 */
         setTimeout(function () { refreshSubagentTreePanel(sessionId); }, 0);
         void refreshSingleSessionRow(sessionId);
         setSendButtonState();
         maybeStartStreamPollForSession(sessionId, { skipInitialLoad: true });
-    }, 20);
+        resolve(true);
+        }, 20);
+    });
 }
 
 async function createNewSession() {

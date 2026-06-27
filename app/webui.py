@@ -12,6 +12,7 @@ import os
 import re
 import threading
 from collections import defaultdict, deque
+from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 from pathlib import Path
@@ -73,6 +74,7 @@ _active_chat_by_session: dict[str, int] = {}
 _active_chat_last_seen: dict[str, float] = {}
 
 _CHAT_ACTIVE_TIMEOUT_SEC = int(os.getenv("CHAT_ACTIVE_TIMEOUT_SEC", "300"))
+_RUNTIME_V2_ORPHAN_GRACE_SEC = int(os.getenv("RUNTIME_V2_ORPHAN_GRACE_SEC", "1800"))
 _chat_start_lock = threading.RLock()
 _chat_starting_by_session: dict[str, float] = {}
 logger = logging.getLogger(__name__)
@@ -83,8 +85,25 @@ _RUNTIME_SYNC_LOCK = threading.Lock()
 _RUNTIME_SYNC_QUEUE: deque[str] = deque()
 _RUNTIME_SYNC_STATUS: dict[str, dict] = {}
 _RUNTIME_SYNC_WORKER: Optional[threading.Thread] = None
+_history_op_locks: dict[str, threading.Lock] = {}
+_history_op_locks_guard = threading.Lock()
 _RUNTIME_SYNC_CANCEL = threading.Event()
 _RUNTIME_SYNC_SLEEP_SEC = float(os.getenv("RUNTIME_SYNC_QUEUE_SLEEP_SEC", "0.2"))
+
+
+def _history_op_lock(session_id: str) -> threading.Lock:
+    sid = str(session_id or "").strip() or "__empty__"
+    with _history_op_locks_guard:
+        lock = _history_op_locks.get(sid)
+        if lock is None:
+            lock = threading.Lock()
+            _history_op_locks[sid] = lock
+        return lock
+
+
+def _run_history_op_locked(session_id: str, fn, *args, **kwargs):
+    with _history_op_lock(session_id):
+        return fn(*args, **kwargs)
 
 
 def _runtime_sync_file_sig(path: Path) -> tuple[bool, int, int]:
@@ -323,6 +342,59 @@ def _has_local_worker_activity(sid: str) -> bool:
         return sid in _chat_starting_by_session
 
 
+def _runtime_v2_timestamp_age_seconds(value: Any) -> Optional[float]:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        if text.endswith("Z"):
+            text = text[:-1] + "+00:00"
+        dt = datetime.fromisoformat(text)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return max(0.0, (datetime.now(timezone.utc) - dt.astimezone(timezone.utc)).total_seconds())
+    except Exception:
+        return None
+
+
+def _runtime_v2_active_runs_are_recent(snapshot: dict, max_age_seconds: Optional[int] = None) -> bool:
+    if not isinstance(snapshot, dict):
+        return False
+    max_age = int(max_age_seconds if max_age_seconds is not None else _RUNTIME_V2_ORPHAN_GRACE_SEC)
+    if max_age <= 0:
+        return False
+    active_runs = snapshot.get("active_runs")
+    if not isinstance(active_runs, list) or not active_runs:
+        return False
+    for run in active_runs:
+        if not isinstance(run, dict):
+            continue
+        for key in ("heartbeat_at", "updated_at", "started_at"):
+            age = _runtime_v2_timestamp_age_seconds(run.get(key))
+            if age is not None and age <= max_age:
+                return True
+    age = _runtime_v2_timestamp_age_seconds(snapshot.get("updated_at"))
+    return bool(age is not None and age <= max_age)
+
+
+def _has_running_subagent_activity(sid: str) -> bool:
+    sid = str(sid or "").strip()
+    if not sid:
+        return False
+    try:
+        from agent_subagent import subagent_registry
+
+        flat = session_manager.list_subagents_flat(
+            sid,
+            running_checker=subagent_registry.is_running,
+            include_dialogue_turns=False,
+        )
+        return any(bool(n.get("running")) for n in flat if isinstance(n, dict))
+    except Exception as exc:
+        logger.debug("running subagent check failed for %s: %s", sid, exc)
+        return False
+
+
 def _runtime_v2_snapshot(sid: str) -> dict:
     sid = str(sid or "").strip()
     if not sid:
@@ -341,7 +413,11 @@ def _runtime_v2_filtered_active_runs(sid: str) -> list[dict]:
     active_runs = snapshot.get("active_runs") if isinstance(snapshot, dict) else None
     if not isinstance(active_runs, list) or not active_runs:
         return []
-    if not _has_local_run_activity(sid):
+    if (
+        not _has_local_run_activity(sid)
+        and not _runtime_v2_active_runs_are_recent(snapshot)
+        and not _has_running_subagent_activity(sid)
+    ):
         return []
     runs = snapshot.get("runs") if isinstance(snapshot, dict) else None
     latest_started = ""
@@ -377,11 +453,18 @@ def _runtime_v2_filtered_active_runs(sid: str) -> list[dict]:
 
 def _cleanup_orphan_runtime_v2_active_runs(sid: str, reason: str = "orphaned") -> int:
     sid = str(sid or "").strip()
-    if not sid or _has_local_run_activity(sid):
+    if not sid or _has_local_run_activity(sid) or _has_running_subagent_activity(sid):
         return 0
     snapshot = _runtime_v2_snapshot(sid)
     active_runs = snapshot.get("active_runs") if isinstance(snapshot, dict) else None
     if not isinstance(active_runs, list) or not active_runs:
+        return 0
+    if _runtime_v2_active_runs_are_recent(snapshot):
+        logger.debug(
+            "Skip orphan Runtime V2 cleanup for recent active run(s): session=%s grace=%ss",
+            sid,
+            _RUNTIME_V2_ORPHAN_GRACE_SEC,
+        )
         return 0
     cleaned = 0
     try:
@@ -712,6 +795,68 @@ async def open_workspace_file(
     raw = unquote(rel or "").strip().strip('"').strip("'")
     if not raw:
         return JSONResponse({"ok": False, "error": "路径为空"}, status_code=400)
+    if raw.startswith("\\\\"):
+        return JSONResponse({"ok": False, "error": "UNC network paths are not supported"}, status_code=403)
+
+    def _resolve_and_validate_open_path() -> Path:
+        wd = WORK_DIR.resolve()
+        app_root = Path(__file__).resolve().parent.resolve()
+        if len(raw) >= 2 and raw[1] == ":":
+            cand = Path(raw)
+        else:
+            rel_raw = raw.lstrip("/\\")
+            cand = WORK_DIR / rel_raw
+            first = rel_raw.replace("\\", "/").split("/", 1)[0]
+            if first and first.lower() == WORK_DIR.name.lower():
+                alt = WORK_DIR.parent / rel_raw
+                try:
+                    alt_abs = Path(os.path.abspath(str(alt)))
+                    alt_abs.relative_to(wd)
+                    cand = alt_abs
+                except ValueError:
+                    pass
+        resolved = Path(os.path.abspath(str(cand)))
+        allowed = False
+        for root in (wd, app_root):
+            try:
+                resolved.relative_to(root)
+                allowed = True
+                break
+            except ValueError:
+                continue
+        if not allowed:
+            raise PermissionError("path is outside allowed directories")
+        if not resolved.exists() or not (resolved.is_file() or resolved.is_dir()):
+            raise FileNotFoundError("file or directory does not exist")
+        return resolved
+
+    try:
+        safe_path = await asyncio.wait_for(
+            run_in_threadpool(_resolve_and_validate_open_path),
+            timeout=5.0,
+        )
+    except asyncio.TimeoutError:
+        return JSONResponse({"ok": False, "error": "path check timed out"}, status_code=504)
+    except PermissionError as exc:
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=403)
+    except FileNotFoundError as exc:
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=404)
+    except ValueError as exc:
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+
+    def _open_detached() -> None:
+        p = str(safe_path)
+        sysname = platform.system()
+        if sysname == "Windows":
+            os.startfile(p)  # type: ignore[attr-defined]
+        elif sysname == "Darwin":
+            subprocess.Popen(["open", p], close_fds=True)
+        else:
+            subprocess.Popen(["xdg-open", p], close_fds=True)
+
+    threading.Thread(target=_open_detached, name="open-workspace-file", daemon=True).start()
+    return JSONResponse({"ok": True, "path": str(safe_path)})
+
     wd = WORK_DIR.resolve()
     app_root = Path(__file__).resolve().parent.resolve()
     if len(raw) >= 2 and raw[1] == ":":
@@ -1683,7 +1828,7 @@ async def delete_session(session_id: str):
     _active_chat_by_session.pop(sid, None)
     _active_chat_last_seen.pop(sid, None)
     try:
-        session_manager.delete_session(sid)
+        await run_in_threadpool(_run_history_op_locked, sid, session_manager.delete_session, sid)
     except Exception as e:
         return JSONResponse(content={"error": str(e)}, status_code=500)
     return JSONResponse(content={"status": "ok"})
@@ -1833,6 +1978,7 @@ async def chat(
         main_loop = asyncio.get_running_loop()
         event_queue: asyncio.Queue = asyncio.Queue()
         stop_event = threading.Event()
+        client_disconnected = False
         runtime_v2_cursor = 0
         if use_runtime_v2_stream and sid:
             try:
@@ -1844,6 +1990,8 @@ async def chat(
             return stop_event.is_set() or should_stop(sid_)
 
         def put_from_worker(item) -> None:
+            if client_disconnected:
+                return
             try:
                 asyncio.run_coroutine_threadsafe(event_queue.put(item), main_loop).result(timeout=5)
             except Exception:
@@ -1900,11 +2048,8 @@ async def chat(
 
                 while True:
                     if sid and await request.is_disconnected():
-                        stop_event.set()
-                        try:
-                            session_manager.request_interrupt(sid, run_id, reason="disconnect")
-                        except Exception:
-                            pass
+                        client_disconnected = True
+                        logger.info("Chat stream disconnected for session %s; leaving run active", sid)
                         break
                     if use_runtime_v2_stream:
                         async for chunk in iter_runtime_v2_chunks():
@@ -1950,10 +2095,11 @@ async def chat(
                     yield "data: [DONE]\n\n"
             except asyncio.CancelledError:
                 # 浏览器主动断开 SSE 连接属于正常情况，避免打印冗长异常栈
-                stop_event.set()
+                client_disconnected = True
                 return
         finally:
-            stop_event.set()
+            if not client_disconnected:
+                stop_event.set()
             if sid:
                 _release_session_chat_start(sid)
             if sid:
@@ -2572,7 +2718,10 @@ async def truncate_session_events(
                 content={"ok": False, "error": "invalid before_index"},
                 status_code=400,
             )
-        ok = session_manager.truncate_session_at_event_index(
+        ok = await run_in_threadpool(
+            _run_history_op_locked,
+            session_id,
+            session_manager.truncate_session_at_event_index,
             session_id,
             int(before_index),
             create_backup=bool(backup),
@@ -2600,8 +2749,12 @@ async def branch_session_events(
     最终答案处分支时，前端应传 final 事件的 eventIndex + 1。
     """
     try:
-        result = session_manager.branch_session_at_event_index(
-            session_id, int(before_index)
+        result = await run_in_threadpool(
+            _run_history_op_locked,
+            session_id,
+            session_manager.branch_session_at_event_index,
+            session_id,
+            int(before_index),
         )
     except (TypeError, ValueError):
         return JSONResponse(content={"ok": False, "error": "invalid before_index"}, status_code=400)
@@ -2632,7 +2785,13 @@ async def append_ui_events_tail(session_id: str, request: Request):
     if not isinstance(tail, list):
         return JSONResponse(content={"ok": False, "error": "events must be array"}, status_code=400)
     try:
-        ok = session_manager.append_ui_events_tail(session_id, tail)
+        ok = await run_in_threadpool(
+            _run_history_op_locked,
+            session_id,
+            session_manager.append_ui_events_tail,
+            session_id,
+            tail,
+        )
     except Exception as e:
         return JSONResponse(content={"ok": False, "error": str(e)}, status_code=500)
     if not ok:

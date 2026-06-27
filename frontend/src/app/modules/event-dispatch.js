@@ -19,6 +19,9 @@ function renderEvent(ctx, event, eventIndex, runSessionId) {
     } else if (event.type === 'user_steer') {
         appendLog(ctx, event.content || '', 'user-steer', runSessionId);
     } else if (event.type === 'final') {
+        var finalStream = ctx && ctx.stream ? ctx.stream : getVisibleChatStream();
+        var userIdx = (ctx && Number.isFinite(Number(ctx.lastUserEventIndex))) ? Number(ctx.lastUserEventIndex) : latestVisibleUserEventIndex(finalStream);
+        if (typeof hasDuplicateVisibleFinal === 'function' && hasDuplicateVisibleFinal(finalStream, userIdx, event.content)) return;
         appendMessage(ctx, 'assistant', event.content || '', { eventIndex: eventIndex, turnTruncateIdx: ctx.lastUserEventIndex }, runSessionId);
     } else if (event.type === 'process_metrics') {
         applyProcessMetricsFromEvent(ctx, event);

@@ -623,6 +623,20 @@ def _masked_base_label(value: Optional[str]) -> str:
     return "configured" if str(value or "").strip() else "default"
 
 
+def _is_network_connectivity_error(exc: BaseException) -> bool:
+    msg = str(exc or "").lower()
+    if "timeout" in msg or "timed out" in msg:
+        return True
+    if "connection" in msg or "connect" in msg:
+        return True
+    try:
+        from openai import APIConnectionError, APITimeoutError
+
+        return isinstance(exc, (APIConnectionError, APITimeoutError))
+    except Exception:
+        return False
+
+
 def create_openai_client(
     model_name: str,
     model_type: str,
@@ -737,6 +751,7 @@ class _FallbackCompletions:
             "from_model": from_model,
             "to_model": to_model,
             "error": error_text,
+            "network_error": _is_network_connectivity_error(error),
         }
         cb = self._status_callback
         if not cb:

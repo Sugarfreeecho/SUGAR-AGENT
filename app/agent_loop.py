@@ -740,6 +740,14 @@ def _set_model_switch_status_callback(
         logger.debug("设置模型切换状态回调失败", exc_info=True)
 
 
+def _should_suppress_model_switch_status(state: State, event: Dict[str, Any]) -> bool:
+    if not isinstance(event, dict) or not event.get("model_switch"):
+        return False
+    if not event.get("network_error"):
+        return False
+    return int(state.get("_network_reconnect_attempts", 0) or 0) > 0
+
+
 def _queue_get_with_timeout(q: queue.Queue, timeout: float):
     try:
         return q.get(timeout=timeout)
@@ -864,6 +872,22 @@ async def _await_steerable(
             task.add_done_callback(_discard_task_result)
             task.cancel()
         raise
+
+
+async def _await_retry_delay_or_interrupt(
+    state: State,
+    emit: Optional[Callable[[Dict[str, Any]], Any]],
+    delay_sec: float,
+) -> bool:
+    """Return False when the current run should stop instead of retrying."""
+    sid = str(state.get("session_id") or "").strip()
+    deadline = time.monotonic() + max(0.0, float(delay_sec or 0.0))
+    while time.monotonic() < deadline:
+        await _raise_if_steer_requested(state, emit, "network_reconnect")
+        if sid and session_manager.is_interrupt_requested(sid):
+            return False
+        await asyncio.sleep(min(0.25, max(0.0, deadline - time.monotonic())))
+    return True
 
 
 def _rollback_steer_partial_turn(state: State) -> None:
@@ -1781,9 +1805,13 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
                 t_llm_start = time.monotonic()
                 sync_q: queue.Queue = queue.Queue()
                 stream_abort_event = threading.Event()
+                def _stream_model_switch_status(ev: Dict[str, Any]) -> None:
+                    if not _should_suppress_model_switch_status(state, ev):
+                        sync_q.put(("status", ev))
+
                 _set_model_switch_status_callback(
                     iter_client,
-                    lambda ev: sync_q.put(("status", ev)),
+                    _stream_model_switch_status,
                 )
                 stream_task = asyncio.create_task(
                     asyncio.to_thread(
@@ -1959,9 +1987,13 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
 
             if turn is None:
                 model_switch_status_events: List[Dict[str, Any]] = []
+                def _collect_model_switch_status(ev: Dict[str, Any]) -> None:
+                    if not _should_suppress_model_switch_status(state, ev):
+                        model_switch_status_events.append(dict(ev))
+
                 _set_model_switch_status_callback(
                     iter_client,
-                    lambda ev: model_switch_status_events.append(dict(ev)),
+                    _collect_model_switch_status,
                 )
                 try:
                     t_llm_fallback_start = time.monotonic()
@@ -2031,6 +2063,43 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
                     _cls = _classify_api_error(_llm_exc)
                     _err_detail = f"{type(_llm_exc).__name__}: {_llm_exc}"
                     logger.error("LLM 调用失败 [iter %s] %s %s: %s", iter_count, _cls["code"], _cls["title"], _err_detail)
+                    if _cls.get("code") == "NET":
+                        attempt = int(state.get("_network_reconnect_attempts", 0) or 0) + 1
+                        state["_network_reconnect_attempts"] = attempt
+                        delay = min(30.0, 2.0 * (2 ** min(attempt - 1, 4)))
+                        if emit:
+                            await _push_stream_event(
+                                state,
+                                {
+                                    "type": "llm_stream_aborted",
+                                    "reason": "network_reconnect",
+                                    "react_iter": int(iter_count),
+                                    "stream_seq": llm_stream_seq,
+                                    "ephemeral": True,
+                                },
+                                emit=emit,
+                            )
+                            await _push_stream_event(
+                                state,
+                                {
+                                    "type": "status",
+                                    "content": f"网络连接失败，正在重连（第 {attempt} 次，{delay:g}s 后重试）...",
+                                    "ephemeral": True,
+                                },
+                                emit=emit,
+                            )
+                        if not await _await_retry_delay_or_interrupt(state, emit, delay):
+                            final_content = "任务已由用户中断。"
+                            await _push_stream_event(
+                                state,
+                                {"type": "status", "content": "任务已由用户中断"},
+                                emit=emit,
+                            )
+                            break
+                        iter_count = max(0, iter_count - 1)
+                        state["_current_react_iter"] = int(iter_count)
+                        continue
+                    state.pop("_network_reconnect_attempts", None)
                     if emit:
                         import json as _json
                         _err_data = {"c": _cls["code"], "t": _cls["title"], "m": _cls["msg"], "s": _cls["solution"], "d": _err_detail}
@@ -2043,6 +2112,7 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
                     break
                 finally:
                     _set_model_switch_status_callback(iter_client, None)
+            state.pop("_network_reconnect_attempts", None)
             # 正文与思考严格分源
             response_text = turn.content or ""
             reasoning_text = (turn.reasoning_content or "").strip()

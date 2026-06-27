@@ -20,7 +20,6 @@ async function consumeAgentSseResponse(response, runCtx, runSessionId, streamEve
                 finalizeLlmStreamChunks(runCtx);
                 finalizeProgressStreamChunks(runCtx);
                 await ensureFinalVisibleAfterRun(runSessionId, runCtx, { delayMs: 80 });
-                streamEventIdx = await reconcileProjectedMessagesAfter(runSessionId, runCtx, streamEventIdx - 1);
                 sealProcessGroup(runCtx);
                 markSessionRunInactive(runSessionId);
                 if (getSessionRunState(runSessionId)) clearSessionRunState(runSessionId);
@@ -156,6 +155,7 @@ async function consumeAgentSseResponse(response, runCtx, runSessionId, streamEve
                     else if (parsed.type === 'status') {
                         var statusContent = String(parsed.content || '');
                         var isTemporaryStatus = statusContent.indexOf('正在思考中...') >= 0;
+                        isTemporaryStatus = isTemporaryStatus || !!parsed.ephemeral || statusContent.indexOf('正在重连') >= 0;
                         if (isTemporaryStatus) removeTemporaryStatus(runCtx);
                         var statusRow = appendLog(runCtx, statusContent, 'status', runSessionId);
                         if (isTemporaryStatus && statusRow) {
@@ -176,6 +176,14 @@ async function consumeAgentSseResponse(response, runCtx, runSessionId, streamEve
                     streamEventIdx += 1;
                     continue;
                 }
+                if (parsed.type === 'final') {
+                    var finalStream = runCtx && runCtx.stream && runCtx.stream.isConnected ? runCtx.stream : getVisibleChatStream();
+                    var finalLastUserIdx = latestVisibleUserEventIndex(finalStream);
+                    if (hasDuplicateVisibleFinal(finalStream, finalLastUserIdx, parsed.content)) {
+                        streamEventIdx += 1;
+                        continue;
+                    }
+                }
                 renderMessageRecord(runCtx, reduced.messageRecord || {
                     index: streamEventIdx,
                     event: parsed,
@@ -195,7 +203,6 @@ async function consumeAgentSseResponse(response, runCtx, runSessionId, streamEve
         }
     }
     await ensureFinalVisibleAfterRun(runSessionId, runCtx, { delayMs: 120 });
-    streamEventIdx = await reconcileProjectedMessagesAfter(runSessionId, runCtx, streamEventIdx - 1);
     return streamEventIdx;
 }
 
@@ -220,6 +227,22 @@ function hasVisibleFinalAfterUser(stream, userEventIndex) {
     return found;
 }
 
+function hasDuplicateVisibleFinal(stream, userEventIndex, content) {
+    if (!stream || !stream.querySelectorAll) return false;
+    var expected = String(content || '').replace(/\s+/g, ' ').trim();
+    if (!expected) return false;
+    var found = false;
+    stream.querySelectorAll('.msg-wrap--assistant[data-event-index]').forEach(function (wrap) {
+        if (found) return;
+        var n = Number(wrap.getAttribute('data-event-index'));
+        if (!Number.isFinite(n) || Math.floor(n) <= userEventIndex) return;
+        var raw = messageRawMarkdown.get(wrap);
+        var actual = String(raw != null ? raw : (wrap.textContent || '')).replace(/\s+/g, ' ').trim();
+        if (actual === expected) found = true;
+    });
+    return found;
+}
+
 function findStoredFinalAfterUser(sessionId, userEventIndex) {
     var events = [];
     try { events = selectMessageEvents(sessionId) || []; } catch (e) { events = []; }
@@ -227,6 +250,51 @@ function findStoredFinalAfterUser(sessionId, userEventIndex) {
         var rec = events[i];
         if (!rec || rec.type !== 'final') continue;
         if (Number.isFinite(Number(rec.index)) && Number(rec.index) > userEventIndex) return rec;
+    }
+    return null;
+}
+
+function renderFinalRecordIfMissing(sessionId, ctx, stream, finalRecord, userEventIndex) {
+    if (!finalRecord || !finalRecord.event || finalRecord.type !== 'final') return false;
+    var content = finalRecord.event.content || '';
+    if (hasVisibleFinalAfterUser(stream, userEventIndex)) return true;
+    if (hasDuplicateVisibleFinal(stream, userEventIndex, content)) return true;
+    var renderCtx = ctx || newDomContext(stream);
+    renderCtx.stream = stream;
+    renderCtx.lastUserEventIndex = Math.max(renderCtx.lastUserEventIndex || -1, userEventIndex);
+    renderMessageRecord(renderCtx, finalRecord, sessionId);
+    return hasVisibleFinalAfterUser(stream, userEventIndex);
+}
+
+async function fetchLatestStoredFinalRecord(sessionId) {
+    try {
+        var response = await fetch('/sessions/' + encodeURIComponent(sessionId) + '/messages?limit=120');
+        var data = await response.json().catch(function () { return null; });
+        if (!response.ok || !data) return null;
+        var events = Array.isArray(data) ? data : (Array.isArray(data.events) ? data.events : []);
+        if (!events.length) return null;
+        var base = Number.isFinite(Number(data.range_start)) ? Math.floor(Number(data.range_start)) : 0;
+        var lastUserOffset = -1;
+        for (var i = events.length - 1; i >= 0; i -= 1) {
+            if (events[i] && events[i].type === 'user') {
+                lastUserOffset = i;
+                break;
+            }
+        }
+        if (lastUserOffset < 0) return null;
+        for (var j = events.length - 1; j > lastUserOffset; j -= 1) {
+            var ev = events[j];
+            if (ev && ev.type === 'final') {
+                return {
+                    index: base + j,
+                    type: 'final',
+                    event: ev,
+                    source: 'final-reconcile',
+                };
+            }
+        }
+    } catch (e) {
+        console.error('final-only reconcile fetch failed:', e);
     }
     return null;
 }
@@ -241,24 +309,19 @@ async function ensureFinalVisibleAfterRun(sessionId, ctx, opts) {
     if (hasVisibleFinalAfterUser(stream, lastUserIdx)) return true;
     var storedFinal = findStoredFinalAfterUser(sid, lastUserIdx);
     if (storedFinal) {
-        var renderCtx = ctx || newDomContext(stream);
-        renderCtx.stream = stream;
-        renderCtx.lastUserEventIndex = Math.max(renderCtx.lastUserEventIndex || -1, lastUserIdx);
-        renderMessageRecord(renderCtx, storedFinal, sid);
-        if (hasVisibleFinalAfterUser(stream, lastUserIdx)) return true;
+        if (renderFinalRecordIfMissing(sid, ctx, stream, storedFinal, lastUserIdx)) return true;
     }
     var delayMs = Math.max(0, Number(opts.delayMs) || 0);
     if (delayMs) await new Promise(function (resolve) { setTimeout(resolve, delayMs); });
     if (sid !== currentSessionId) return false;
     stream = getVisibleChatStream();
     if (!stream || hasVisibleFinalAfterUser(stream, lastUserIdx)) return true;
-    try {
-        await loadSessionMessages(sid, 'bottom', { full: true });
-        return true;
-    } catch (e) {
-        console.error('final visibility reconcile failed:', e);
-        return false;
-    }
+    var latestFinal = await fetchLatestStoredFinalRecord(sid);
+    if (sid !== currentSessionId) return false;
+    stream = getVisibleChatStream();
+    if (!stream || hasVisibleFinalAfterUser(stream, lastUserIdx)) return true;
+    if (latestFinal) return renderFinalRecordIfMissing(sid, ctx, stream, latestFinal, lastUserIdx);
+    return false;
 }
 
 async function reconcileProjectedMessagesAfter(sessionId, ctx, afterIndex) {
@@ -1169,9 +1232,12 @@ window.addEventListener('scroll', positionFollowupQueuePanel, true);
         }
         if (s.type === 'tail' && s.data && s.data.sessionId && s.data.tail && s.data.tail.length) {
             try {
-                const r = await fetch('/sessions/' + encodeURIComponent(s.data.sessionId) + '/append_ui_events',
-                    { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ events: s.data.tail }) });
-                if (!r.ok) { alert('撤销失败，请重试。'); return; }
+                const r = await historyOperationJson(
+                    '/sessions/' + encodeURIComponent(s.data.sessionId) + '/append_ui_events',
+                    { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ events: s.data.tail }) },
+                    45000
+                );
+                if (!r || !r.ok) { alert('撤销失败，请重试。'); return; }
                 if (s.data.sessionId === currentSessionId) {
                     showLoading();
                     try {
