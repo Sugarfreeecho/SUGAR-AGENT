@@ -876,8 +876,8 @@ function scheduleFollowupQueueDrain(sessionId, delayMs) {
     setTimeout(function () { drainFollowupQueue(sid); }, Math.max(0, Number(delayMs) || 0));
 }
 
-async function sendFollowupNow(itemId) {
-    const sid = currentSessionId;
+async function sendFollowupNow(itemId, sessionId) {
+    const sid = String(sessionId || currentSessionId || '');
     if (!sid) return;
     var q = getFollowupQueue(sid);
     var idx = q.findIndex(function (item) { return String(item.id) === String(itemId); });
@@ -930,7 +930,7 @@ async function sendFollowupNow(itemId) {
         takeFollowupItem(sid, itemId);
         renderFollowupQueue(sid);
     }, 1200);
-    return sendMessage({ message: item.text, fromQueue: true });
+    return sendMessage({ message: item.text, fromQueue: true, sessionId: sid });
 }
 
 function drainFollowupQueue(sessionId) {
@@ -950,7 +950,7 @@ function drainFollowupQueue(sessionId) {
     var item = q[nextIdx];
     followupQueueDraining[sid] = true;
     var attemptedId = String(item.id);
-    Promise.resolve(sendFollowupNow(item.id))
+    Promise.resolve(sendFollowupNow(item.id, sid))
         .finally(function () {
             delete followupQueueDraining[sid];
             var q2 = getFollowupQueue(sid);
