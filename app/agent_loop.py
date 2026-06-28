@@ -458,8 +458,23 @@ def compute_context_tokens_for_session(session_id: str) -> Dict[str, Any]:
     }
 
 # ==================== 辅助函数：实时持久化 ====================
+def _state_run_is_current(state: State) -> bool:
+    sid = str(state.get("session_id") or "").strip() if isinstance(state, dict) else ""
+    run_id = str(state.get("_runtime_v2_run_id") or "").strip() if isinstance(state, dict) else ""
+    if not sid or not run_id:
+        return True
+    try:
+        metadata = session_manager._load_metadata(sid)
+    except Exception:
+        return True
+    active_run_id = str((metadata or {}).get("active_run_id") or "").strip()
+    return not active_run_id or active_run_id == run_id
+
+
 def _persist_session_messages(state: State) -> None:
     """work / llm / key_context 落盘；dialogue 由 llm 派生，dialogue_history 由 ui_events 派生。"""
+    if not _state_run_is_current(state):
+        return
     state["dialogue"] = derive_dialogue_from_assistant_history(state["llm_history"])
     session_manager.update_session(
         state["session_id"],
@@ -603,6 +618,8 @@ def _load_model_history_dicts_v2_primary(session_id: str, *, reconcile_legacy: b
 
 
 def _runtime_v2_append_model_message(state: State, msg: Any) -> None:
+    if not _state_run_is_current(state):
+        return
     sid = str(state.get("session_id") or "").strip()
     if not sid:
         return
@@ -636,6 +653,8 @@ def _runtime_v2_append_model_message(state: State, msg: Any) -> None:
 
 
 def _runtime_v2_replace_model_history(state: State, messages: List[Any], reason: str) -> None:
+    if not _state_run_is_current(state):
+        return
     sid = str(state.get("session_id") or "").strip()
     if not sid:
         return
@@ -717,6 +736,8 @@ async def _push_stream_event(
     emit: Optional[Callable[[Dict[str, Any]], Any]] = None,
 ):
     """追加 stream_events；若提供 emit（async 可调用），则同步推给前端。"""
+    if not _state_run_is_current(state):
+        return
     state["stream_events"].append(event)
     if emit:
         try:
@@ -920,6 +941,8 @@ async def _restart_react_after_steer(
     _rollback_steer_partial_turn(state)
     consumed = await _consume_steer_messages(state, emit=emit)
     _reset_steer_control(state)
+    if not consumed:
+        raise asyncio.CancelledError()
     if consumed:
         state["final_result_retries"] = 0
         state["empty_final_retries"] = 0
@@ -1379,7 +1402,7 @@ async def _emit_tool_call_sse(
             await r
         if state is not None:
             state["_react_ui_tool_count"] = int(state.get("_react_ui_tool_count", 0) or 0) + 1
-            if emit:
+            if emit and _state_run_is_current(state):
                 await _emit_live_metrics(state, emit)
         # 让事件循环把 chunk 刷到 ASGI/uvicorn，再跑后续工具
         await asyncio.sleep(0)
@@ -1977,6 +2000,7 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
                         state["empty_final_retries"] = 0
                         continue
                     _reset_steer_control(state)
+                    raise asyncio.CancelledError()
                 if stream_error is not None:
                     logger.warning("流式输出失败，降级为整段响应: %s", stream_error)
                     turn = None
@@ -2130,7 +2154,7 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
             )
 
             # 推送给前端：流式时已在 delta 中展示；非流式仍发整段事件（与持久化一致）
-            if emit:
+            if emit and _state_run_is_current(state):
                 if streamed_this_call:
                     sid = state["session_id"]
                     if (reasoning_text or "").strip():
@@ -3016,6 +3040,8 @@ def validate_final(state: State) -> State:
 
 def finish(state: State) -> State:
     """最终处理：生成会话标题、保存会话、输出最终结果"""
+    if not _state_run_is_current(state):
+        return state
     # 确保 user_input 存在
     if "user_input" not in state:
         for msg in reversed(state["dialogue"]):
@@ -3203,6 +3229,8 @@ async def astream_events(
 
     def mirror_runtime_v2(event_type: str, payload: Optional[Dict[str, Any]] = None) -> None:
         nonlocal runtime_v2_terminal_mirrored
+        if not _state_run_is_current(state):
+            return
         if event_type in {"run_finished", "run_interrupted", "run_failed"}:
             if runtime_v2_terminal_mirrored:
                 return
@@ -3225,6 +3253,8 @@ async def astream_events(
     async def emit(ev: Dict[str, Any]) -> None:
         # 与浏览器 SSE 一致；ephemeral（如 llm_*_delta）仅实时推送，不写入 ui_events
         # 子 agent 转发事件仅推 SSE，不写入父会话 ui_events
+        if not _state_run_is_current(state):
+            return
         if should_persist_ui_event(ev):
             session_manager.append_ui_event(session_id, ev)
         await publish_session_event(session_id, ev)
@@ -3239,7 +3269,8 @@ async def astream_events(
             mirror_runtime_v2("run_started", {"mode": "chat"})
             _runtime_v2_append_model_message(state, user_message)
             await emit({"type": "run_started", "run_id": runtime_v2_run_id, "ephemeral": True})
-            session_manager.append_ui_event(session_id, {"type": "user", "content": user_input})
+            if _state_run_is_current(state):
+                session_manager.append_ui_event(session_id, {"type": "user", "content": user_input})
             await emit({"type": "status", "content": "New Agent Loop Start"})
             state = await _run_react_node_off_loop(state, emit)
             await emit({"type": "status", "content": "Loop finished"})
@@ -3257,12 +3288,14 @@ async def astream_events(
         except asyncio.CancelledError:
             terminal_event = {"type": "run_interrupted", "run_id": runtime_v2_run_id, "ephemeral": True}
             mirror_runtime_v2("run_interrupted", {"reason": "cancelled"})
-            session_manager.mark_session_unread_result(session_id, status="failed")
+            if _state_run_is_current(state):
+                session_manager.mark_session_unread_result(session_id, status="failed")
             raise
         except Exception as exc:
             terminal_event = {"type": "run_failed", "run_id": runtime_v2_run_id, "error": str(exc), "ephemeral": True}
             mirror_runtime_v2("run_failed", {"error": str(exc)})
-            session_manager.mark_session_unread_result(session_id, status="failed")
+            if _state_run_is_current(state):
+                session_manager.mark_session_unread_result(session_id, status="failed")
             raise
         finally:
             _clear_steer_run_control(session_id, steer_control)
@@ -3270,7 +3303,8 @@ async def astream_events(
                 mirror_runtime_v2("run_finished", {"mode": "chat"})
                 terminal_event = {"type": "run_finished", "run_id": runtime_v2_run_id, "ephemeral": True}
             await emit(terminal_event)
-            await close_session_stream(session_id)
+            if _state_run_is_current(state):
+                await close_session_stream(session_id)
             await queue.put(None)
 
     task = asyncio.create_task(runner())
@@ -3288,9 +3322,10 @@ async def astream_events(
                 ev1 = {"type": "status", "content": "任务已由用户中断"}
                 ev2 = {"type": "final", "content": "任务已由用户中断。"}
                 mirror_runtime_v2("run_interrupted", {"reason": reason})
-                session_manager.mark_session_unread_result(session_id, status="failed")
-                session_manager.append_ui_event(session_id, ev1)
-                session_manager.append_ui_event(session_id, ev2)
+                if _state_run_is_current(state):
+                    session_manager.mark_session_unread_result(session_id, status="failed")
+                    session_manager.append_ui_event(session_id, ev1)
+                    session_manager.append_ui_event(session_id, ev2)
                 yield ev1
                 yield ev2
                 task.cancel()
@@ -3382,6 +3417,8 @@ async def astream_events_continuation(
 
     def mirror_runtime_v2(event_type: str, payload: Optional[Dict[str, Any]] = None) -> None:
         nonlocal runtime_v2_terminal_mirrored
+        if not _state_run_is_current(state):
+            return
         if event_type in {"run_finished", "run_interrupted", "run_failed"}:
             if runtime_v2_terminal_mirrored:
                 return
@@ -3402,6 +3439,8 @@ async def astream_events_continuation(
             logger.debug("Runtime V2 mirror continuation run event failed: %s", mirror_error)
 
     async def emit(ev: Dict[str, Any]) -> None:
+        if not _state_run_is_current(state):
+            return
         if should_persist_ui_event(ev):
             session_manager.append_ui_event(session_id, ev)
         await publish_session_event(session_id, ev)
@@ -3444,7 +3483,8 @@ async def astream_events_continuation(
                 mirror_runtime_v2("run_finished", {"mode": "continuation"})
                 terminal_event = {"type": "run_finished", "ephemeral": True}
             await emit(terminal_event)
-            await close_session_stream(session_id)
+            if _state_run_is_current(state):
+                await close_session_stream(session_id)
             await queue.put(None)
 
     task = asyncio.create_task(runner())

@@ -11,6 +11,7 @@ import mimetypes
 import os
 import re
 import threading
+import uuid
 from collections import defaultdict, deque
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
@@ -278,7 +279,12 @@ def _reserve_session_chat_start(sid: str) -> bool:
     with _chat_start_lock:
         if x in _chat_starting_by_session:
             return False
-    if bool(_session_run_state_fields(x).get("stream_active")):
+    followup_takeover = False
+    try:
+        followup_takeover = session_manager.get_interrupt_reason(x) == "followup"
+    except Exception:
+        followup_takeover = False
+    if bool(_session_run_state_fields(x).get("stream_active")) and not followup_takeover:
         return False
     with _chat_start_lock:
         if x in _chat_starting_by_session:
@@ -1920,19 +1926,39 @@ async def post_session_steer(session_id: str, request: Request):
         return JSONResponse(content={"ok": False, "error": "invalid json"}, status_code=400)
     message = str((data or {}).get("message") or "").strip()
     client_id = str((data or {}).get("client_id") or "").strip()
-    result = enqueue_session_steer(sid, message, client_id=client_id)
-    if not result.get("ok"):
-        return JSONResponse(content=result, status_code=400)
-    result["aborted"] = abort_session_steer_run(sid, reason="steer")
-    if not result["aborted"]:
-        item = result.get("item") if isinstance(result.get("item"), dict) else {}
-        remove_session_steer(
-            sid,
-            steer_id=str(item.get("id") or ""),
-            client_id=str(item.get("client_id") or client_id or ""),
-        )
-        return JSONResponse(content={"ok": False, "error": "session is not running"}, status_code=409)
-    return JSONResponse(content=result)
+    if not message:
+        return JSONResponse(content={"ok": False, "error": "empty steer"}, status_code=400)
+    steer_item = {
+        "id": str(uuid.uuid4()),
+        "content": message,
+        "client_id": client_id,
+    }
+    aborted = abort_session_steer_run(sid, reason="steer")
+    session_manager.request_interrupt(sid, reason="followup")
+    _active_chat_by_session.pop(sid, None)
+    _active_chat_last_seen.pop(sid, None)
+    with _chat_start_lock:
+        _chat_starting_by_session.pop(sid, None)
+    interrupted_run_ids = _interrupt_runtime_v2_active_runs(sid, reason="followup")
+    try:
+        from session_event_bus import close_session_stream, publish_session_event
+
+        for rid in interrupted_run_ids:
+            await publish_session_event(
+                sid,
+                {"type": "run_interrupted", "run_id": rid, "reason": "followup", "ephemeral": True},
+            )
+        await close_session_stream(sid)
+    except Exception as e:
+        logger.debug("publish steer restart interrupt failed for %s: %s", sid, e)
+    return JSONResponse(
+        content={
+            "ok": True,
+            "restart": True,
+            "aborted": bool(aborted or interrupted_run_ids),
+            "item": steer_item,
+        }
+    )
 
 
 @fastapi_app.delete("/sessions/{session_id}/steer")

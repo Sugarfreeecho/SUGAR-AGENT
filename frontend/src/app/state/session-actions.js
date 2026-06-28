@@ -62,6 +62,20 @@ function clearSessionRunState(sessionId) {
     setSessionRunState(sessionId, null);
 }
 
+function clearSessionRunStateIfMatch(sessionId, runId) {
+    const sid = String(sessionId || '');
+    if (!sid) return;
+    const expected = String(runId || '');
+    if (!expected) {
+        clearSessionRunState(sid);
+        return;
+    }
+    const run = getSessionRunState(sid);
+    if (!run || String(run.runId || '') === expected) {
+        clearSessionRunState(sid);
+    }
+}
+
 function markSessionRunInactive(sessionId) {
     const sid = String(sessionId || '');
     if (!sid) return;

@@ -22,7 +22,7 @@ async function consumeAgentSseResponse(response, runCtx, runSessionId, streamEve
                 await ensureFinalVisibleAfterRun(runSessionId, runCtx, { delayMs: 80 });
                 sealProcessGroup(runCtx);
                 markSessionRunInactive(runSessionId);
-                if (getSessionRunState(runSessionId)) clearSessionRunState(runSessionId);
+                if (getSessionRunState(runSessionId)) clearSessionRunStateIfMatch(runSessionId, runCtx && runCtx.runId);
                 syncSessionListIndicatorClasses();
                 setSendButtonState();
                 if (runSessionId === currentSessionId) renderTodoPlanForCurrentSession();
@@ -77,7 +77,7 @@ async function consumeAgentSseResponse(response, runCtx, runSessionId, streamEve
                         }
                         sealProcessGroup(runCtx);
                         if (eventSessionId === runSessionId && getSessionRunState(runSessionId)) {
-                            clearSessionRunState(runSessionId);
+                            clearSessionRunStateIfMatch(runSessionId, runCtx && runCtx.runId);
                         }
                         syncSessionListIndicatorClasses();
                         setSendButtonState();
@@ -193,7 +193,7 @@ async function consumeAgentSseResponse(response, runCtx, runSessionId, streamEve
                     finalizeLlmStreamChunks(runCtx);
                     finalizeProgressStreamChunks(runCtx);
                     markSessionRunInactive(runSessionId);
-                    if (getSessionRunState(runSessionId)) clearSessionRunState(runSessionId);
+                    if (getSessionRunState(runSessionId)) clearSessionRunStateIfMatch(runSessionId, runCtx && runCtx.runId);
                     syncSessionListIndicatorClasses();
                     setSendButtonState();
                     scheduleFollowupQueueDrain(runSessionId, 250);
@@ -455,7 +455,7 @@ async function startContinueAfterSubagents(sessionId) {
                 scrollProcessBodyToBottom(runCtx, runSessionId);
                 scrollChatToBottomIfFollow(runSessionId, {});
             }
-            if (getSessionRunState(runSessionId)) clearSessionRunState(runSessionId);
+            if (getSessionRunState(runSessionId)) clearSessionRunStateIfMatch(runSessionId, runCtx && runCtx.runId);
             setSendButtonState();
             syncSessionListIndicatorClasses();
             void refreshSingleSessionRow(runSessionId);
@@ -899,6 +899,22 @@ async function sendFollowupNow(itemId, sessionId) {
             if (withdrawn) returnFollowupToInput(sid, withdrawn);
             return;
         }
+        if (steerResult && steerResult.restart) {
+            item.status = 'sent';
+            persistFollowupQueue(sid);
+            renderFollowupQueue(sid);
+            setTimeout(function () {
+                takeFollowupItem(sid, itemId);
+                renderFollowupQueue(sid);
+            }, 1200);
+            return sendMessage({
+                message: item.text,
+                fromQueue: true,
+                sessionId: sid,
+                forceStart: true,
+                preserveInput: true,
+            });
+        }
         item.status = 'accepted';
         persistFollowupQueue(sid);
         renderFollowupQueue(sid);
@@ -973,8 +989,14 @@ async function sendMessage(options) {
     const visibleMessage = options.message != null ? String(options.message) : messageInput.value;
     const rawMessage = (options.fromQueue || options.fromInlineRewrite) ? visibleMessage : expandInputPathTokens(visibleMessage);
     if (!String(rawMessage).trim()) return;
-    if (isSessionRunning(submitSessionIdInitial)) return;
-    if (sendPipelineLock && sendPipelineLockSessionId === submitSessionIdInitial) return;
+    if (isSessionRunning(submitSessionIdInitial) && !options.forceStart) return;
+    if (sendPipelineLock && sendPipelineLockSessionId === submitSessionIdInitial && !options.forceStart) return;
+    if (options.forceStart && submitSessionIdInitial) {
+        var previousRun = getSessionRunState(submitSessionIdInitial);
+        if (previousRun && previousRun.controller) {
+            try { previousRun.controller.abort(); } catch (eAbortPrevious) { /* ignore */ }
+        }
+    }
 
     /* 立即上锁：阻止后续连击；锁的 key 是提交时的会话，而非当前会话。 */
     sendPipelineLock = true;
@@ -1046,6 +1068,7 @@ async function sendMessage(options) {
         runCtx = newDomContext(getVisibleChatStream());
     }
     submittedRunCtx = runCtx;
+    runCtx.runId = clientRunId;
     runCtx.runStartedAt = userSentAt;
     runCtx.lastUserEventIndex = preCount;
     resetLlmState(runCtx);
@@ -1121,7 +1144,7 @@ async function sendMessage(options) {
             updateSubagentContinueBanner(runSessionId);
         }
         if (getSessionRunState(runSessionId)) {
-            clearSessionRunState(runSessionId);
+            clearSessionRunStateIfMatch(runSessionId, clientRunId);
         }
         if (runSessionId !== currentSessionId) {
             const el = runCtx.stream;
