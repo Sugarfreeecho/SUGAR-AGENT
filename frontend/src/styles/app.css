@@ -257,6 +257,16 @@ body {
     flex: 1; overflow-y: auto;
     padding: 0.06rem 0.45rem 1rem;
 }
+.session-list-error {
+    margin: 0.45rem;
+    padding: 0.55rem 0.65rem;
+    border: 1px solid rgba(243, 139, 168, 0.24);
+    border-radius: var(--radius-sm);
+    background: rgba(243, 139, 168, 0.1);
+    color: var(--text-secondary);
+    font-size: 0.72rem;
+    line-height: 1.45;
+}
 .session-section { margin-bottom: 0.35rem; }
 .session-section-toggle {
     width: calc(100% - 0.9rem); margin: 0.28rem 0.45rem 0.12rem;

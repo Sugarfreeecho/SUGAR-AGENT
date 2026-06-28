@@ -9193,18 +9193,18 @@ function updateSubagentBlockFinish(ctx, event) {
         if (fallbackContent.trim()) appendLog(ctx, fallbackContent, 'log-entry', runSessionId);
     }
 }
-`,je=`function setSendButtonState() {
+`,je=`\uFEFFfunction setSendButtonState() {
     sendBtn.disabled = false;
     if (isSessionRunning(currentSessionId)) {
         const hasDraft = (typeof inputHasSendableText === 'function')
             ? inputHasSendableText()
             : !!(messageInput && String(messageInput.value || '').trim());
         const followupEnabled = (typeof isMyAgentFeatureEnabled === 'function') && isMyAgentFeatureEnabled('followupRestart', false);
-        sendBtn.innerHTML = (followupEnabled && hasDraft) ? '追问' : '停止 <span class="loader" aria-hidden="true"></span>';
+        sendBtn.innerHTML = (followupEnabled && hasDraft) ? '杩介棶' : '鍋滄 <span class="loader" aria-hidden="true"></span>';
         sendBtn.classList.add('is-stop');
         sendBtn.classList.toggle('is-followup', followupEnabled && hasDraft);
     } else {
-        sendBtn.textContent = '发送';
+        sendBtn.textContent = '鍙戦€?;
         sendBtn.classList.remove('is-stop');
         sendBtn.classList.remove('is-followup');
     }
@@ -9238,19 +9238,18 @@ function pauseCurrentRun() {
         return;
     }
     const ctx = run.ctx;
-    /* 先同步 abort 本地 fetch 与从 sessionStore 摘除，UI 立刻反映为「已停止」状态。
-       后端 interrupt 走 fire-and-forget，避免被主线程阻塞时按钮响应迟滞。 */
+    /* 鍏堝悓姝?abort 鏈湴 fetch 涓庝粠 sessionStore 鎽橀櫎锛孶I 绔嬪埢鍙嶆槧涓恒€屽凡鍋滄銆嶇姸鎬併€?       鍚庣 interrupt 璧?fire-and-forget锛岄伩鍏嶈涓荤嚎绋嬮樆濉炴椂鎸夐挳鍝嶅簲杩熸粸銆?*/
     abortSessionRun(sid, 'user');
     setSendButtonState();
     syncSessionListIndicatorClasses();
     renderSessionListIfChanged(false);
-    appendLog(ctx, '已请求停止当前任务', 'status', sid);
+    appendLog(ctx, '宸茶姹傚仠姝㈠綋鍓嶄换鍔?, 'status', sid);
     sealProcessGroup(ctx);
     void requestInterrupt(sid, runId);
     setTimeout(function () { reconcileRunStateFromServer({ silent: true, respectStopSuppress: true }); }, 3000);
 }
 
-/** 在当前对话中定位最近一条用户消息并重新发送。返回 true 表示已触发展开发送。 */
+/** 鍦ㄥ綋鍓嶅璇濅腑瀹氫綅鏈€杩戜竴鏉＄敤鎴锋秷鎭苟閲嶆柊鍙戦€併€傝繑鍥?true 琛ㄧず宸茶Е鍙戝睍寮€鍙戦€併€?*/
 function resendLastUserMessage() {
     if (!currentSessionId) return false;
     if (isSessionRunning(currentSessionId)) return false;
@@ -9291,8 +9290,8 @@ function showLoading() {
         + '<div class="skeleton-mast"><span></span><span></span></div>'
         + '<div class="skeleton-hero"><div class="skeleton-image"></div><div class="skeleton-column"><span></span><span></span><span></span><span></span></div></div>'
         + '<div class="skeleton-grid"><div><span></span><span></span><span></span></div><div><span></span><span></span><span></span></div><div><span></span><span></span><span></span></div></div>'
-        + '</div><div class="skeleton-copy">加载中</div>';
-    box.setAttribute('data-ui-tip', '加载会话');
+        + '</div><div class="skeleton-copy">鍔犺浇涓?/div>';
+    box.setAttribute('data-ui-tip', '鍔犺浇浼氳瘽');
     bindUiHoverTip(box);
     (getVisibleChatStream() || chatContainer).appendChild(box);
     scrollToBottom();
@@ -9300,7 +9299,7 @@ function showLoading() {
 
 function hideLoading() { const loader = document.getElementById('chat-loading'); if (loader) loader.remove(); }
 
-/** 根据 sessionStore / 服务端 stream_active / sessionUnreadComplete 更新黄点、绿点 */
+/** 鏍规嵁 sessionStore / 鏈嶅姟绔?stream_active / sessionUnreadComplete 鏇存柊榛勭偣銆佺豢鐐?*/
 function applySessionItemIndicators(itemDiv, sessionId, opts) {
     opts = opts || {};
     if (!itemDiv || !sessionId) return;
@@ -9309,7 +9308,7 @@ function applySessionItemIndicators(itemDiv, sessionId, opts) {
     if (nameEl) nameEl.removeAttribute('data-ui-tip');
     if (isSessionRunning(sessionId)) {
         itemDiv.classList.add('is-generating');
-        if (nameEl) nameEl.setAttribute('data-ui-tip', '生成中…');
+        if (nameEl) nameEl.setAttribute('data-ui-tip', '鐢熸垚涓€?);
     } else {
         var sess = sessionStore.get(sessionId);
         var localUnreadResult = sessionUnreadComplete.has(sessionId);
@@ -9317,12 +9316,12 @@ function applySessionItemIndicators(itemDiv, sessionId, opts) {
         if (!hasUnreadResult) return;
         var failed = !!(sess && sess.unread_result_status === 'failed');
         itemDiv.classList.add(failed ? 'is-unread-failed' : 'is-unread-result');
-        if (nameEl) nameEl.setAttribute('data-ui-tip', failed ? '任务失败，点击查看' : '有新回复，点击查看');
+        if (nameEl) nameEl.setAttribute('data-ui-tip', failed ? '浠诲姟澶辫触锛岀偣鍑绘煡鐪? : '鏈夋柊鍥炲锛岀偣鍑绘煡鐪?);
     }
     if (nameEl) bindUiHoverTip(nameEl);
 }
 
-/** 立即刷新侧栏全部指示点与当前选中项；不依赖 loadSessions 网络往返，与是否切换会话无关 */
+/** 绔嬪嵆鍒锋柊渚ф爮鍏ㄩ儴鎸囩ず鐐逛笌褰撳墠閫変腑椤癸紱涓嶄緷璧?loadSessions 缃戠粶寰€杩旓紝涓庢槸鍚﹀垏鎹細璇濇棤鍏?*/
 function syncSessionListIndicatorClasses() {
     if (!sessionsList) return;
     sessionsList.querySelectorAll('.session-item').forEach(function (div) {
@@ -9376,14 +9375,14 @@ function closeAllSessionMenus() {
         }
         if (sid && sid !== currentSessionId) {
             Promise.resolve(switchSession(sid)).catch(function (err) {
-                console.error('切换会话失败:', err);
+                console.error('鍒囨崲浼氳瘽澶辫触:', err);
             });
         }
     });
 })();
 
 /**
- * 创建并绑定单行会话（更多菜单：置顶 → 删除 → 归档在末位）
+ * 鍒涘缓骞剁粦瀹氬崟琛屼細璇濓紙鏇村鑿滃崟锛氱疆椤?鈫?鍒犻櫎 鈫?褰掓。鍦ㄦ湯浣嶏級
  */
 function buildAndBindSessionRow(sess, allSessions, nextStreamMap) {
     const div = document.createElement('div');
@@ -9394,19 +9393,19 @@ function buildAndBindSessionRow(sess, allSessions, nextStreamMap) {
     div.innerHTML = '<div class="session-item-head">'
         + '<span class="session-name" data-id="' + sess.id + '" data-original="' + escapeHtml(sess.name) + '">' + escapeHtml(sess.name) + '</span>'
         + '<div class="session-more-wrap">'
-        + '<button type="button" class="session-more-btn" aria-label="更多操作" aria-expanded="false" aria-haspopup="true" data-ui-tip="更多">'
+        + '<button type="button" class="session-more-btn" aria-label="鏇村鎿嶄綔" aria-expanded="false" aria-haspopup="true" data-ui-tip="鏇村">'
         + '<span class="session-more-dots" aria-hidden="true"><span></span><span></span><span></span></span></button>'
         + '<div class="session-more-menu" role="menu">'
         + '<button type="button" class="session-menu-pin" role="menuitem"></button>'
-        + '<button type="button" class="session-menu-delete" role="menuitem">删除</button>'
+        + '<button type="button" class="session-menu-delete" role="menuitem">鍒犻櫎</button>'
         + '<button type="button" class="session-menu-archive" role="menuitem"></button>'
         + '</div></div>'
         + '</div>'
         + '<div class="session-last-query"></div>';
     var pinMi = div.querySelector('.session-menu-pin');
     var archMi = div.querySelector('.session-menu-archive');
-    if (pinMi) pinMi.textContent = sess.pinned ? '取消置顶' : '置顶';
-    if (archMi) archMi.textContent = sess.archived ? '取消归档' : '归档';
+    if (pinMi) pinMi.textContent = sess.pinned ? '鍙栨秷缃《' : '缃《';
+    if (archMi) archMi.textContent = sess.archived ? '鍙栨秷褰掓。' : '褰掓。';
     var wsLine = formatSessionListSubtitle(sess);
     var wsEl = div.querySelector('.session-last-query');
     if (wsEl) {
@@ -9422,8 +9421,8 @@ function buildAndBindSessionRow(sess, allSessions, nextStreamMap) {
             e.stopPropagation();
             var wasOpen = moreWrap.classList.contains('is-open');
             closeAllSessionMenus();
-            if (pinMi) pinMi.textContent = sess.pinned ? '取消置顶' : '置顶';
-            if (archMi) archMi.textContent = sess.archived ? '取消归档' : '归档';
+            if (pinMi) pinMi.textContent = sess.pinned ? '鍙栨秷缃《' : '缃《';
+            if (archMi) archMi.textContent = sess.archived ? '鍙栨秷褰掓。' : '褰掓。';
             if (!wasOpen) {
                 moreWrap.classList.add('is-open');
                 moreBtn.setAttribute('aria-expanded', 'true');
@@ -9445,7 +9444,7 @@ function buildAndBindSessionRow(sess, allSessions, nextStreamMap) {
                     throw new Error('pin failed: ' + response.status);
                 }
                 void refreshSingleSessionRow(sess.id);
-            } catch (err) { console.error('置顶失败', err); }
+            } catch (err) { console.error('缃《澶辫触', err); }
         });
     }
     if (archMi) {
@@ -9463,7 +9462,7 @@ function buildAndBindSessionRow(sess, allSessions, nextStreamMap) {
                     throw new Error('archive failed: ' + response.status);
                 }
                 void refreshSingleSessionRow(sess.id);
-            } catch (err) { console.error('归档失败', err); }
+            } catch (err) { console.error('褰掓。澶辫触', err); }
         });
     }
     var delMi = div.querySelector('.session-menu-delete');
@@ -9472,12 +9471,12 @@ function buildAndBindSessionRow(sess, allSessions, nextStreamMap) {
             e.stopPropagation();
             closeAllSessionMenus();
             const okDel = await openUiModal({
-                title: '删除会话',
-                subtitle: '此操作不可恢复',
-                message: '确定删除会话「' + String(sess.name || '未命名') + '」吗？其中的消息与记录将被移除。',
+                title: '鍒犻櫎浼氳瘽',
+                subtitle: '姝ゆ搷浣滀笉鍙仮澶?,
+                message: '纭畾鍒犻櫎浼氳瘽銆? + String(sess.name || '鏈懡鍚?) + '銆嶅悧锛熷叾涓殑娑堟伅涓庤褰曞皢琚Щ闄ゃ€?,
                 danger: true,
-                confirmText: '删除会话',
-                cancelText: '取消',
+                confirmText: '鍒犻櫎浼氳瘽',
+                cancelText: '鍙栨秷',
             });
             if (!okDel) return;
             const wasArchivedLoaded = sessionStore.archivedLoaded;
@@ -9518,7 +9517,7 @@ function buildAndBindSessionRow(sess, allSessions, nextStreamMap) {
                     if (!resp.ok) throw new Error('delete failed: ' + resp.status);
                 })
                 .catch(function (err) {
-                    console.error('删除会话失败:', err);
+                    console.error('鍒犻櫎浼氳瘽澶辫触:', err);
                     sessionStore.clearDeletedSessionTombstone(deletedSessionId);
                     void loadSessions({ skipArchivedRefresh: true });
                     if (wasArchivedLoaded) void loadArchivedSessions({ background: true });
@@ -9556,7 +9555,7 @@ function buildAndBindSessionRow(sess, allSessions, nextStreamMap) {
                     if (!response.ok) throw new Error('rename failed: ' + response.status);
                     if (currentSessionId === sess.id) updateSessionTitle();
                 } catch (err) {
-                    console.error('重命名失败', err);
+                    console.error('閲嶅懡鍚嶅け璐?, err);
                     if (previous) applyOptimisticSessionUpdate(sess.id, previous);
                     nameSpan.innerText = oldName;
                     nameSpan.dataset.original = oldName;
@@ -9597,7 +9596,7 @@ async function refreshSingleSessionRow(sessionId) {
         }
         renderSessionListIfChanged(false);
     } catch (e) {
-        console.error('刷新会话摘要失败:', e);
+        console.error('鍒锋柊浼氳瘽鎽樿澶辫触:', e);
     }
 }
 
@@ -9668,6 +9667,25 @@ function renderSessionListIfChanged(force) {
     renderSessionTitleFromStore();
 }
 
+function clearSessionListError() {
+    if (!sessionsList) return;
+    sessionsList.classList.remove('sessions-list--error');
+    if (sessionsList.dataset.loadError === '1') delete sessionsList.dataset.loadError;
+}
+
+function renderSessionListError(message) {
+    if (!sessionsList) return;
+    sessionListRenderKey = '';
+    sessionsList.classList.add('sessions-list--error');
+    sessionsList.dataset.loadError = '1';
+    sessionsList.innerHTML = '';
+    const row = document.createElement('div');
+    row.className = 'session-list-error';
+    row.setAttribute('role', 'status');
+    row.textContent = message || '鍔犺浇浼氳瘽鍒楄〃澶辫触';
+    sessionsList.appendChild(row);
+}
+
 function applyOptimisticSessionUpdate(sessionId, patch) {
     const sid = String(sessionId || '');
     const current = sessionStore.get(sid);
@@ -9692,8 +9710,7 @@ function applyOptimisticSessionUpdate(sessionId, patch) {
     return prev;
 }
 
-// 事件计数缓存，用于乐观更新
-const uiEventCountCache = {
+// 浜嬩欢璁℃暟缂撳瓨锛岀敤浜庝箰瑙傛洿鏂?const uiEventCountCache = {
     cache: new Map(),
     
     get(sessionId) {
@@ -9753,8 +9770,9 @@ async function loadArchivedSessions(opts) {
         sessionStore.setArchivedLoaded(all);
         syncArchivedSessionStateFromStore();
         renderSessionListIfChanged(!!opts.forceRender);
+        clearSessionListError();
     } catch (err) {
-        console.error('加载归档目录失败:', err);
+        console.error('鍔犺浇褰掓。鐩綍澶辫触:', err);
         if (!opts.background) throw err;
     }
 }
@@ -9772,7 +9790,7 @@ async function loadSessions(opts) {
             if (loadEpoch !== sessionListLoadEpoch) return;
             allSessions = Array.isArray(snapshot.sessions) ? snapshot.sessions : [];
         } catch (stateErr) {
-            console.error('加载会话状态快照失败，回退旧接口:', stateErr);
+            console.error('鍔犺浇浼氳瘽鐘舵€佸揩鐓уけ璐ワ紝鍥為€€鏃ф帴鍙?', stateErr);
             const response = await fetchWithTimeout('/sessions', {}, 12000);
             const archivedCountHeader = response.headers.get('X-Archived-Count');
             if (archivedCountHeader != null && archivedCountHeader !== '') {
@@ -9804,6 +9822,7 @@ async function loadSessions(opts) {
         persistSessionUnread();
 
         renderSessionListIfChanged(!!opts.forceRender);
+        clearSessionListError();
         sessionStore.ui.loadingSessions = false;
         if (opts.refreshArchived && !opts.skipArchivedRefresh && sessionStore.archivedLoaded) {
             void loadArchivedSessions({ background: true });
@@ -9811,8 +9830,8 @@ async function loadSessions(opts) {
         return;
     } catch (error) {
         sessionStore.ui.loadingSessions = false;
-        console.error('加载会话列表失败:', error);
-        appendLogVisible('加载会话列表失败', 'error-log');
+        console.error('鍔犺浇浼氳瘽鍒楄〃澶辫触:', error);
+        renderSessionListError('加载会话列表失败');
     }
 }
 
@@ -9892,7 +9911,7 @@ function showSessionLoadRetry(sessionId) {
     var btn = document.createElement('button');
     btn.type = 'button';
     btn.className = 'history-load-older-btn';
-    btn.textContent = '重新加载';
+    btn.textContent = '閲嶆柊鍔犺浇';
     btn.addEventListener('click', function (e) {
         e.preventDefault();
         if (typeof discardCachedSessionStream === 'function') discardCachedSessionStream(sid);
@@ -10006,9 +10025,9 @@ async function loadSessionMessages(sessionId, scrollBehavior, opts) {
         markVisibleSessionStreamLoadState(sessionId, 'ok');
         return true;
     } catch (error) {
-        console.error('加载会话消息失败:', error);
+        console.error('鍔犺浇浼氳瘽娑堟伅澶辫触:', error);
         document.getElementById('chat-loading')?.remove();
-        appendLogVisible('加载历史消息失败', 'error-log');
+        appendLogVisible('鍔犺浇鍘嗗彶娑堟伅澶辫触', 'error-log');
         markVisibleSessionStreamLoadState(sessionId, 'failed');
         showSessionLoadRetry(sessionId);
         return false;
@@ -10054,8 +10073,7 @@ async function switchSession(sessionId, opts) {
         else applyChatScrollAfterHistoryLoad(sessionId, 'saved-or-bottom');
         renderTodoPlanForCurrentSession();
         if (switchToken !== switchSessionEpoch || sessionId !== currentSessionId) return;
-        /* 让 rebuildToc 的 /user_turns fetch 先发出，subagent 面板（含 N 个 /messages）延后一帧
-           避免抢占带宽与主线程，导致目录最后才就绪。 */
+        /* 璁?rebuildToc 鐨?/user_turns fetch 鍏堝彂鍑猴紝subagent 闈㈡澘锛堝惈 N 涓?/messages锛夊欢鍚庝竴甯?           閬垮厤鎶㈠崰甯﹀涓庝富绾跨▼锛屽鑷寸洰褰曟渶鍚庢墠灏辩华銆?*/
         setTimeout(function () { refreshSubagentTreePanel(sessionId); }, 0);
         void refreshSingleSessionRow(sessionId);
         setSendButtonState();
@@ -10082,7 +10100,7 @@ async function switchSession(sessionId, opts) {
             });
             if (!loadedOk) { resolve(false); return; }
         } catch (error) {
-            console.error('切换会话加载失败:', error);
+            console.error('鍒囨崲浼氳瘽鍔犺浇澶辫触:', error);
             resolve(false);
             return;
         } finally {
@@ -10094,8 +10112,8 @@ async function switchSession(sessionId, opts) {
             }
         }
         if (switchToken !== switchSessionEpoch || sessionId !== currentSessionId) { resolve(false); return; }
-        /* loadSessionMessages 内部已发起 rebuildToc()；这里再延后一帧调用 subagent panel
-           保证「目录 → 消息 → 子 agent 按钮」的稳定顺序（无 subagent 的会话表现一致）。 */
+        /* loadSessionMessages 鍐呴儴宸插彂璧?rebuildToc()锛涜繖閲屽啀寤跺悗涓€甯ц皟鐢?subagent panel
+           淇濊瘉銆岀洰褰?鈫?娑堟伅 鈫?瀛?agent 鎸夐挳銆嶇殑绋冲畾椤哄簭锛堟棤 subagent 鐨勪細璇濊〃鐜颁竴鑷达級銆?*/
         setTimeout(function () { refreshSubagentTreePanel(sessionId); }, 0);
         void refreshSingleSessionRow(sessionId);
         setSendButtonState();
@@ -10143,10 +10161,11 @@ async function createNewSessionInner() {
         maybeStartStreamPollForSession(currentSessionId);
         scheduleContextTokensAfterPaint(currentSessionId);
     } catch (error) {
-        console.error('创建新会话失败:', error);
-        appendLogVisible('创建新会话失败', 'error-log');
+        console.error('鍒涘缓鏂颁細璇濆け璐?', error);
+        appendLogVisible('鍒涘缓鏂颁細璇濆け璐?, 'error-log');
     }
 }
+\r
 `,We=`async function consumeAgentSseResponse(response, runCtx, runSessionId, streamEventIdx) {
     if (!response || !response.body) throw new Error('stream response missing body');
     var ct0 = (response.headers && response.headers.get ? (response.headers.get('content-type') || '') : '').toLowerCase();
