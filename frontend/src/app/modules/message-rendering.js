@@ -40,9 +40,12 @@ async function truncateSessionOnServer(beforeIndex, options) {
     if (!Number.isFinite(Number(beforeIndex)) || Number(beforeIndex) < 0) {
         return { ok: false, error: 'invalid_before_index' };
     }
-    const url = '/sessions/' + encodeURIComponent(sid) + '/truncate'
+    var url = '/sessions/' + encodeURIComponent(sid) + '/truncate'
         + '?before_index=' + encodeURIComponent(String(beforeIndex))
         + '&backup=' + (options.backup ? '1' : '0');
+    if (Number.isFinite(Number(options.beforeSeq)) && Number(options.beforeSeq) > 0) {
+        url += '&before_seq=' + encodeURIComponent(String(Math.floor(Number(options.beforeSeq))));
+    }
     return historyOperationJson(url, { method: 'POST' }, options.timeoutMs || 45000);
 }
 
@@ -147,6 +150,7 @@ function openInlineRewriteEditor(wrap, rawText, beforeIndex) {
         pendingRewriteTruncate = {
             sessionId: currentSessionId,
             before: Number(beforeIndex),
+            beforeSeq: Number.isFinite(Number(wrap.dataset.runtimeSeq)) ? Math.floor(Number(wrap.dataset.runtimeSeq)) : null,
             prevInput: ''
         };
         try {
@@ -193,11 +197,14 @@ function openInlineRewriteEditor(wrap, rawText, beforeIndex) {
     } catch (e) { /* ignore */ }
 }
 
-async function branchSessionOnServer(beforeIndex, sessionId) {
+async function branchSessionOnServer(beforeIndex, sessionId, afterSeq) {
     const sid = sessionId || currentSessionId;
     if (!sid) return { ok: false, error: 'no_session' };
-    const url = '/sessions/' + encodeURIComponent(sid) + '/branch'
+    var url = '/sessions/' + encodeURIComponent(sid) + '/branch'
         + '?before_index=' + encodeURIComponent(String(beforeIndex));
+    if (Number.isFinite(Number(afterSeq)) && Number(afterSeq) > 0) {
+        url += '&after_seq=' + encodeURIComponent(String(Math.floor(Number(afterSeq))));
+    }
     return historyOperationJson(url, { method: 'POST' }, 60000);
 }
 
@@ -254,9 +261,14 @@ function onMessageToolbarClick(wrap, role, act) {
     const plain = msg ? (msg.innerText || '') : '';
     const tf = wrap.dataset.truncateFrom;
     const eiRaw = wrap.dataset.eventIndex;
+    const runtimeSeqRaw = wrap.dataset.runtimeSeq;
+    const truncateBeforeSeqRaw = wrap.dataset.truncateBeforeSeq;
     const eventIndex = eiRaw !== undefined && eiRaw !== '' ? parseInt(eiRaw, 10) : NaN;
+    const runtimeSeq = runtimeSeqRaw !== undefined && runtimeSeqRaw !== '' ? parseInt(runtimeSeqRaw, 10) : NaN;
+    const truncateBeforeSeq = truncateBeforeSeqRaw !== undefined && truncateBeforeSeqRaw !== '' ? parseInt(truncateBeforeSeqRaw, 10) : NaN;
     const truncateFrom = tf !== undefined && tf !== '' ? parseInt(tf, 10) : NaN;
     const before = role === 'user' ? eventIndex : truncateFrom;
+    const beforeSeq = role === 'user' ? runtimeSeq : truncateBeforeSeq;
     if ((act === 'delete' || act === 'rewrite') && isSessionRunning(currentSessionId)) {
         showUiAlert({
             title: '生成中不可操作',
@@ -309,7 +321,7 @@ function onMessageToolbarClick(wrap, role, act) {
             cancelText: '取消',
         }).then(function (ok) {
             if (!ok) return;
-            truncateSessionOnServer(before).then(function (res) {
+            truncateSessionOnServer(before, { beforeSeq: beforeSeq }).then(function (res) {
                 if (!res || !res.ok) {
                     showUiAlert({
                         title: '同步失败',
@@ -372,7 +384,7 @@ function onMessageToolbarClick(wrap, role, act) {
             if (!ok) return;
             wrap.dataset.branching = '1';
             (async function () {
-                var res = await branchSessionOnServer(branchBefore, sourceSessionId);
+                var res = await branchSessionOnServer(branchBefore, sourceSessionId, runtimeSeq);
                 if (!res || !res.ok || !res.session_id) {
                     showUiAlert({
                         title: '创建失败',
@@ -1185,17 +1197,31 @@ function applyChatScrollAfterHistoryLoad(sessionId, mode) {
     }
     
     if (mode === 'saved-or-bottom') {
+        var savedPosition = getSavedScrollPosition(sessionId);
         var savedAnchor = getSavedScrollAnchorPosition(sessionId);
         if (savedAnchor != null && typeof scrollToUserTurnOrLoadOlder === 'function') {
             requestAnimationFrame(function () {
-                if (sessionId === currentSessionId) void scrollToUserTurnOrLoadOlder(savedAnchor);
+                if (sessionId !== currentSessionId) return;
+                void scrollToUserTurnOrLoadOlder(savedAnchor, {
+                    silent: true,
+                    allowFullReload: false,
+                    maxOlderLoads: 2,
+                }).then(function (ok) {
+                    if (ok || sessionId !== currentSessionId || !chatContainer) return;
+                    if (savedPosition !== null && savedPosition > 0) {
+                        chatContainer.scrollTop = clampChatScrollTop(savedPosition);
+                        streamChatNearBottom = isNearBottom(chatContainer, STREAM_CHAT_NEAR_BOTTOM_PX);
+                        liveAutoFollow = streamChatNearBottom;
+                    } else {
+                        scrollToBottom();
+                    }
+                });
             });
             streamChatNearBottom = false;
             streamProcNearBottom = true;
             liveAutoFollow = false;
             return;
         }
-        var savedPosition = getSavedScrollPosition(sessionId);
         if (savedPosition !== null && savedPosition > 0) {
             // 恢复保存的滚动位置
             chatContainer.scrollTop = savedPosition;
@@ -1236,6 +1262,13 @@ window.addEventListener('focus', function () {
 const WELCOME_HTML = `<div class="welcome" role="status"><div class="welcome-icon" aria-hidden="true"><img src="/assets/sugar-logo.png" alt="" draggable="false"></div><strong>开始一段新的对话</strong><p>在左侧侧栏新建或选择会话。Enter 发送，Ctrl+Enter / Shift+Enter 换行。</p></div>`;
 
 function historyLoadScrollsToBottom(sessionId, mode) {
+    if (mode === 'bottom') return true;
+    if (mode === 'saved-or-bottom') {
+        var savedAnchor = getSavedScrollAnchorPosition(sessionId);
+        if (savedAnchor != null) return false;
+        var savedPosition = getSavedScrollPosition(sessionId);
+        if (savedPosition !== null && savedPosition > 0) return false;
+    }
     return true;
 }
 
@@ -2820,6 +2853,12 @@ function appendMessage(ctx, role, content, meta, runSessionId) {
     wrap.className = 'msg-wrap msg-wrap--' + (role === 'user' ? 'user' : 'assistant');
     if (role === 'assistant') wrap.classList.add('msg-wrap--answer-frame');
     if (meta.eventIndex != null) wrap.setAttribute('data-event-index', String(meta.eventIndex));
+    if (meta.runtimeSeq != null && Number.isFinite(Number(meta.runtimeSeq)) && Number(meta.runtimeSeq) > 0) {
+        wrap.setAttribute('data-runtime-seq', String(Math.floor(Number(meta.runtimeSeq))));
+    }
+    if (meta.truncateBeforeSeq != null && Number.isFinite(Number(meta.truncateBeforeSeq)) && Number(meta.truncateBeforeSeq) > 0) {
+        wrap.setAttribute('data-truncate-before-seq', String(Math.floor(Number(meta.truncateBeforeSeq))));
+    }
     var tTrunc = meta.turnTruncateIdx;
     if (tTrunc == null) { if (role === 'user' && meta.eventIndex != null) tTrunc = meta.eventIndex; }
     if (tTrunc != null && tTrunc >= 0) wrap.setAttribute('data-truncate-from', String(tTrunc));

@@ -4,9 +4,10 @@ function setSendButtonState() {
         const hasDraft = (typeof inputHasSendableText === 'function')
             ? inputHasSendableText()
             : !!(messageInput && String(messageInput.value || '').trim());
-        sendBtn.innerHTML = hasDraft ? '追问' : '停止 <span class="loader" aria-hidden="true"></span>';
+        const followupEnabled = (typeof isMyAgentFeatureEnabled === 'function') && isMyAgentFeatureEnabled('followupRestart', false);
+        sendBtn.innerHTML = (followupEnabled && hasDraft) ? '追问' : '停止 <span class="loader" aria-hidden="true"></span>';
         sendBtn.classList.add('is-stop');
-        sendBtn.classList.toggle('is-followup', hasDraft);
+        sendBtn.classList.toggle('is-followup', followupEnabled && hasDraft);
     } else {
         sendBtn.textContent = '发送';
         sendBtn.classList.remove('is-stop');
@@ -666,7 +667,10 @@ async function reconcileRunStateFromServer(opts) {
     });
     localIds.forEach(function (sid) {
         if (!active.has(sid)) {
-            abortSessionRun(sid, 'reconcile-finished');
+            var run = getSessionRunState(sid);
+            if (run && run.reattached) {
+                abortSessionRun(sid, 'reconcile-finished');
+            }
         }
     });
     if (currentSessionId && active.has(currentSessionId)) {
@@ -794,7 +798,7 @@ async function loadSessionMessages(sessionId, scrollBehavior, opts) {
             tocScrollBottomOnNextBuild = true;
         }
         suppressTocDuringSessionLoad = false;
-        rebuildToc();
+        if (!opts.tocAlreadyStarted) rebuildToc();
         updateSessionTitle();
         updateHistorySentinelVisibility();
         applyChatScrollAfterHistoryLoad(sessionId, scrollBehavior);
@@ -871,6 +875,7 @@ async function switchSession(sessionId, opts) {
         ensureVisibleChatStreamSlot();
     }
     showLoading();
+    if (typeof startTocForSessionLoad === 'function') startTocForSessionLoad(sessionId);
     return new Promise(function (resolve) {
         setTimeout(async function () {
         if (switchToken !== switchSessionEpoch || sessionId !== currentSessionId) { resolve(false); return; }
@@ -878,6 +883,7 @@ async function switchSession(sessionId, opts) {
             var loadedOk = await loadSessionMessages(sessionId, undefined, {
                 preloadOlderIfShort: isServerStreamActive(sessionId),
                 allowDuringRun: isServerStreamActive(sessionId),
+                tocAlreadyStarted: true,
             });
             if (!loadedOk) { resolve(false); return; }
         } catch (error) {

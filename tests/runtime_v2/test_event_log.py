@@ -32,6 +32,19 @@ class SessionEventLogTests(unittest.TestCase):
             self.assertEqual(result["dropped"], 1)
             self.assertEqual([ev.seq for ev in events], [1, 2])
 
+    def test_reads_skip_bad_lines_without_repair(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            log = SessionEventLog(tmp)
+            log.append("s1", "message_user", {})
+            path = log.event_path("s1")
+            with path.open("a", encoding="utf-8") as fh:
+                fh.write("bad json\n")
+            log.append("s1", "run_finished", {})
+
+            events = log.read_all("s1")
+
+            self.assertEqual([ev.seq for ev in events], [1, 2])
+
     def test_concurrent_append_keeps_monotonic_seq(self):
         with tempfile.TemporaryDirectory() as tmp:
             log = SessionEventLog(tmp)

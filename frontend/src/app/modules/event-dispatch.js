@@ -10,10 +10,14 @@ function renderEvent(ctx, event, eventIndex, runSessionId) {
     }
     if (event.type === 'user') {
         if (typeof eventIndex === 'number') ctx.lastUserEventIndex = eventIndex;
+        if (Number.isFinite(Number(event.runtime_seq || event.runtimeSeq))) {
+            ctx.lastUserRuntimeSeq = Math.floor(Number(event.runtime_seq || event.runtimeSeq));
+        }
         sealProcessGroup(ctx);
         appendMessage(ctx, 'user', event.content || '', {
             eventIndex: eventIndex,
             turnTruncateIdx: eventIndex,
+            runtimeSeq: event.runtime_seq || event.runtimeSeq,
             createdAt: event.created_at || event.createdAt || event.timestamp,
         }, runSessionId);
     } else if (event.type === 'user_steer') {
@@ -22,7 +26,12 @@ function renderEvent(ctx, event, eventIndex, runSessionId) {
         var finalStream = ctx && ctx.stream ? ctx.stream : getVisibleChatStream();
         var userIdx = (ctx && Number.isFinite(Number(ctx.lastUserEventIndex))) ? Number(ctx.lastUserEventIndex) : latestVisibleUserEventIndex(finalStream);
         if (typeof hasDuplicateVisibleFinal === 'function' && hasDuplicateVisibleFinal(finalStream, userIdx, event.content)) return;
-        appendMessage(ctx, 'assistant', event.content || '', { eventIndex: eventIndex, turnTruncateIdx: ctx.lastUserEventIndex }, runSessionId);
+        appendMessage(ctx, 'assistant', event.content || '', {
+            eventIndex: eventIndex,
+            turnTruncateIdx: ctx.lastUserEventIndex,
+            runtimeSeq: event.runtime_seq || event.runtimeSeq,
+            truncateBeforeSeq: ctx.lastUserRuntimeSeq,
+        }, runSessionId);
     } else if (event.type === 'process_metrics') {
         applyProcessMetricsFromEvent(ctx, event);
     } else if (event.type === 'cache_stats') {

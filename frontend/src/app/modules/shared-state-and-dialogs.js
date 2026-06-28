@@ -68,6 +68,14 @@ const USER_MESSAGE_VIRTUAL_LINE_CHARS = 100;
 
 var uiModalKeyHandler = null;
 
+function isMyAgentFeatureEnabled(name, defaultValue) {
+    var features = (typeof window !== 'undefined' && window.__MYAGENT_FEATURES__ && typeof window.__MYAGENT_FEATURES__ === 'object')
+        ? window.__MYAGENT_FEATURES__
+        : {};
+    if (Object.prototype.hasOwnProperty.call(features, name)) return !!features[name];
+    return !!defaultValue;
+}
+
 function clearSessionUnreadState(sessionId, opts) {
     var sid = String(sessionId || '');
     if (!sid) return;

@@ -65,6 +65,20 @@ class RuntimeUiProjectionTests(unittest.TestCase):
             ])
             self.assertEqual(len(projection.read_ui_events_fast("s1")), 3)
 
+    def test_read_ui_events_replaces_expanded_runtime_projection(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            mirror = RuntimeMirror(tmp)
+            mirror.mirror_ui_event("s1", {"type": "user", "content": "duplicate user"})
+            mirror.mirror_ui_event("s1", {"type": "final", "content": "duplicate final"})
+            projection = RuntimeUiProjection(tmp)
+
+            events = projection.read_ui_events("s1", legacy_loader=lambda: [
+                {"type": "user", "content": "legacy user"},
+            ])
+
+            self.assertEqual(len(events), 1)
+            self.assertEqual(events[0]["content"], "legacy user")
+
     def test_pages_by_turns_from_runtime_projection(self):
         with tempfile.TemporaryDirectory() as tmp:
             mirror = RuntimeMirror(tmp)
@@ -77,6 +91,26 @@ class RuntimeUiProjectionTests(unittest.TestCase):
             self.assertEqual(page["total"], 8)
             self.assertTrue(page["has_older"])
             self.assertEqual([ev["content"] for ev in page["events"]], ["u2", "a2", "u3", "a3"])
+
+    def test_pages_by_turns_backfill_when_runtime_projection_is_empty(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            projection = RuntimeUiProjection(tmp)
+
+            page = projection.read_ui_page(
+                "s1",
+                turns=2,
+                legacy_loader=lambda: [
+                    {"type": "user", "content": "u0"},
+                    {"type": "final", "content": "a0"},
+                    {"type": "user", "content": "u1"},
+                    {"type": "final", "content": "a1"},
+                    {"type": "user", "content": "u2"},
+                    {"type": "final", "content": "a2"},
+                ],
+            )
+
+            self.assertEqual(page["total"], 6)
+            self.assertEqual([ev["content"] for ev in page["events"]], ["u1", "a1", "u2", "a2"])
 
     def test_pages_after_ui_index_from_runtime_projection(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -147,6 +181,45 @@ class RuntimeUiProjectionTests(unittest.TestCase):
             self.assertEqual(projection.ui_index_to_runtime_seq("s1", 0), e1.seq)
             self.assertEqual(projection.ui_index_to_runtime_seq("s1", 1), e2.seq)
             self.assertIsNone(projection.ui_index_to_runtime_seq("s1", 2))
+            self.assertEqual(projection.runtime_seq_to_ui_end_index("s1", e1.seq), 1)
+            self.assertEqual(projection.runtime_seq_to_ui_end_index("s1", e2.seq), 2)
+            self.assertIsNone(projection.runtime_seq_to_ui_end_index("s1", 3))
+
+    def test_projected_ui_events_include_runtime_seq(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            mirror = RuntimeMirror(tmp)
+            e1 = mirror.mirror_ui_event("s1", {"type": "user", "content": "u1"})
+            e2 = mirror.mirror_ui_event("s1", {"type": "final", "content": "a1"})
+
+            events = RuntimeUiProjection(tmp).read_ui_events("s1")
+
+            self.assertEqual(events[0]["runtime_seq"], e1.seq)
+            self.assertEqual(events[0]["runtime_event_type"], "message_user")
+            self.assertEqual(events[1]["runtime_seq"], e2.seq)
+            self.assertEqual(events[1]["runtime_event_type"], "message_assistant_final")
+
+    def test_visible_range_to_seq_limits_projected_ui_events(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            mirror = RuntimeMirror(tmp)
+            e1 = mirror.mirror_ui_event("s1", {"type": "user", "content": "u1"})
+            e2 = mirror.mirror_ui_event("s1", {"type": "final", "content": "a1"})
+            e3 = mirror.mirror_ui_event("s1", {"type": "user", "content": "u2"})
+            mirror.mirror_ui_event("s1", {"type": "final", "content": "a2"})
+            mirror.append("s1", "visible_range_changed", {
+                "to_seq": e2.seq,
+                "reason": "test",
+            })
+            projection = RuntimeUiProjection(tmp)
+
+            events = projection.read_ui_events("s1")
+            count, latest_seq = projection.count_ui_events_light("s1")
+
+            self.assertEqual([ev["content"] for ev in events], ["u1", "a1"])
+            self.assertEqual(count, 2)
+            self.assertGreater(latest_seq, e3.seq)
+            self.assertEqual(projection.previous_visible_runtime_seq_before("s1", e1.seq), 0)
+            self.assertEqual(projection.previous_visible_runtime_seq_before("s1", e2.seq), e1.seq)
+            self.assertIsNone(projection.previous_visible_runtime_seq_before("s1", e3.seq))
 
     def test_backfills_when_runtime_log_has_only_history_ops(self):
         with tempfile.TemporaryDirectory() as tmp:

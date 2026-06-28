@@ -183,6 +183,17 @@ function clearTodoForSessionLoad() {
 
 const tocTurnsCacheBySession = new Map();
 
+function startTocForSessionLoad(sessionId) {
+    if (!sessionId || sessionId !== currentSessionId) return;
+    var prevSuppress = suppressTocDuringSessionLoad;
+    suppressTocDuringSessionLoad = false;
+    try {
+        rebuildToc();
+    } finally {
+        suppressTocDuringSessionLoad = prevSuppress;
+    }
+}
+
 function rebuildToc(options) {
     options = options || {};
     const toc = document.getElementById('chat-toc');

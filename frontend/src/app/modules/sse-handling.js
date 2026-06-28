@@ -19,10 +19,10 @@ async function consumeAgentSseResponse(response, runCtx, runSessionId, streamEve
             if (data === '[DONE]') {
                 finalizeLlmStreamChunks(runCtx);
                 finalizeProgressStreamChunks(runCtx);
-                await ensureFinalVisibleAfterRun(runSessionId, runCtx, { delayMs: 80 });
+                await ensureFinalVisibleAfterRunIfEnabled(runSessionId, runCtx, { delayMs: 80 });
                 sealProcessGroup(runCtx);
                 markSessionRunInactive(runSessionId);
-                if (getSessionRunState(runSessionId)) clearSessionRunState(runSessionId);
+                if (getSessionRunState(runSessionId)) clearSessionRunStateIfMatch(runSessionId, runCtx && runCtx.runId);
                 syncSessionListIndicatorClasses();
                 setSendButtonState();
                 if (runSessionId === currentSessionId) renderTodoPlanForCurrentSession();
@@ -73,11 +73,11 @@ async function consumeAgentSseResponse(response, runCtx, runSessionId, streamEve
                         finalizeLlmStreamChunks(runCtx);
                         finalizeProgressStreamChunks(runCtx);
                         if (parsed.type === 'run_finished') {
-                            await ensureFinalVisibleAfterRun(eventSessionId, runCtx, { delayMs: 80 });
+                            await ensureFinalVisibleAfterRunIfEnabled(eventSessionId, runCtx, { delayMs: 80 });
                         }
                         sealProcessGroup(runCtx);
                         if (eventSessionId === runSessionId && getSessionRunState(runSessionId)) {
-                            clearSessionRunState(runSessionId);
+                            clearSessionRunStateIfMatch(runSessionId, runCtx && runCtx.runId);
                         }
                         syncSessionListIndicatorClasses();
                         setSendButtonState();
@@ -193,7 +193,7 @@ async function consumeAgentSseResponse(response, runCtx, runSessionId, streamEve
                     finalizeLlmStreamChunks(runCtx);
                     finalizeProgressStreamChunks(runCtx);
                     markSessionRunInactive(runSessionId);
-                    if (getSessionRunState(runSessionId)) clearSessionRunState(runSessionId);
+                    if (getSessionRunState(runSessionId)) clearSessionRunStateIfMatch(runSessionId, runCtx && runCtx.runId);
                     syncSessionListIndicatorClasses();
                     setSendButtonState();
                     scheduleFollowupQueueDrain(runSessionId, 250);
@@ -202,7 +202,7 @@ async function consumeAgentSseResponse(response, runCtx, runSessionId, streamEve
             } catch (e) { console.error('解析事件失败:', e); }
         }
     }
-    await ensureFinalVisibleAfterRun(runSessionId, runCtx, { delayMs: 120 });
+    await ensureFinalVisibleAfterRunIfEnabled(runSessionId, runCtx, { delayMs: 120 });
     return streamEventIdx;
 }
 
@@ -264,6 +264,11 @@ function renderFinalRecordIfMissing(sessionId, ctx, stream, finalRecord, userEve
     renderCtx.lastUserEventIndex = Math.max(renderCtx.lastUserEventIndex || -1, userEventIndex);
     renderMessageRecord(renderCtx, finalRecord, sessionId);
     return hasVisibleFinalAfterUser(stream, userEventIndex);
+}
+
+async function ensureFinalVisibleAfterRunIfEnabled(sessionId, ctx, opts) {
+    if (!isMyAgentFeatureEnabled('finalReconcile', true)) return false;
+    return ensureFinalVisibleAfterRun(sessionId, ctx, opts);
 }
 
 async function fetchLatestStoredFinalRecord(sessionId) {
@@ -448,7 +453,7 @@ async function startContinueAfterSubagents(sessionId) {
             finalizeLlmStreamChunks(runCtx);
             finalizeProgressStreamChunks(runCtx);
             if (runSessionId === currentSessionId && getRunAbortReason(runSessionId, runCtx) !== 'user') {
-                await ensureFinalVisibleAfterRun(runSessionId, runCtx, { delayMs: 120 });
+                await ensureFinalVisibleAfterRunIfEnabled(runSessionId, runCtx, { delayMs: 120 });
             }
             if (runSessionId === currentSessionId) renderTodoPlanForCurrentSession();
             if (liveAutoFollow) {
@@ -524,7 +529,7 @@ async function attachSessionEventStream(sessionId, opts) {
             finalizeProgressStreamChunks(runCtx);
         }
         if (runSessionId === currentSessionId && getRunAbortReason(runSessionId, runCtx) !== 'user') {
-            await ensureFinalVisibleAfterRun(runSessionId, runCtx, { delayMs: 120 });
+            await ensureFinalVisibleAfterRunIfEnabled(runSessionId, runCtx, { delayMs: 120 });
         }
         if (getSessionRunState(runSessionId) && getSessionRunState(runSessionId).reattached) {
             clearSessionRunState(runSessionId);
@@ -539,6 +544,28 @@ async function attachSessionEventStream(sessionId, opts) {
             updateSubagentContinueBanner(runSessionId);
         }
     }
+}
+
+function scheduleActiveSessionReconnect(sessionId, opts) {
+    if (!isMyAgentFeatureEnabled('streamReconnect', false)) return;
+    opts = opts || {};
+    var sid = String(sessionId || '');
+    if (!sid) return;
+    var delayMs = Math.max(0, Number(opts.delayMs) || 0);
+    setTimeout(async function () {
+        if (sid !== currentSessionId) return;
+        try {
+            if (typeof reconcileRunStateFromServer === 'function') {
+                await reconcileRunStateFromServer({ silent: true });
+            }
+            if (sid !== currentSessionId) return;
+            if ((isServerStreamActive(sid) || isSessionRunning(sid)) && typeof maybeStartStreamPollForSession === 'function') {
+                maybeStartStreamPollForSession(sid, { skipInitialLoad: true });
+            }
+        } catch (e) {
+            /* keep current UI state; normal polling or user action can retry later */
+        }
+    }, delayMs);
 }
 
 async function processRewriteTruncateAsync(pr) {
@@ -754,6 +781,7 @@ function getFollowupStatusText(item) {
 }
 
 function enqueueCurrentInputAsFollowup() {
+    if (!isMyAgentFeatureEnabled('followupRestart', false)) return false;
     const sid = currentSessionId;
     if (!sid) return false;
     rewriteInputWorkspacePaths();
@@ -899,6 +927,27 @@ async function sendFollowupNow(itemId, sessionId) {
             if (withdrawn) returnFollowupToInput(sid, withdrawn);
             return;
         }
+        if (steerResult && steerResult.restart && isMyAgentFeatureEnabled('followupRestart', false)) {
+            var previousRun = getSessionRunState(sid);
+            if (previousRun) abortSessionRun(sid, 'followup-restart');
+            markSessionRunInactive(sid);
+            item.status = 'sent';
+            persistFollowupQueue(sid);
+            renderFollowupQueue(sid);
+            setSendButtonState();
+            syncSessionListIndicatorClasses();
+            setTimeout(function () {
+                takeFollowupItem(sid, itemId);
+                renderFollowupQueue(sid);
+            }, 1200);
+            return sendMessage({
+                message: item.text,
+                fromQueue: true,
+                sessionId: sid,
+                forceStart: true,
+                preserveInput: true,
+            });
+        }
         item.status = 'accepted';
         persistFollowupQueue(sid);
         renderFollowupQueue(sid);
@@ -973,8 +1022,12 @@ async function sendMessage(options) {
     const visibleMessage = options.message != null ? String(options.message) : messageInput.value;
     const rawMessage = (options.fromQueue || options.fromInlineRewrite) ? visibleMessage : expandInputPathTokens(visibleMessage);
     if (!String(rawMessage).trim()) return;
-    if (isSessionRunning(submitSessionIdInitial)) return;
-    if (sendPipelineLock && sendPipelineLockSessionId === submitSessionIdInitial) return;
+    if (isSessionRunning(submitSessionIdInitial) && !options.forceStart) return;
+    if (sendPipelineLock && sendPipelineLockSessionId === submitSessionIdInitial && !options.forceStart) return;
+    if (options.forceStart && submitSessionIdInitial) {
+        var previousRun = getSessionRunState(submitSessionIdInitial);
+        if (previousRun) abortSessionRun(submitSessionIdInitial, 'followup-restart');
+    }
 
     /* 立即上锁：阻止后续连击；锁的 key 是提交时的会话，而非当前会话。 */
     sendPipelineLock = true;
@@ -1046,6 +1099,7 @@ async function sendMessage(options) {
         runCtx = newDomContext(getVisibleChatStream());
     }
     submittedRunCtx = runCtx;
+    runCtx.runId = clientRunId;
     runCtx.runStartedAt = userSentAt;
     runCtx.lastUserEventIndex = preCount;
     resetLlmState(runCtx);
@@ -1091,6 +1145,7 @@ async function sendMessage(options) {
     }).catch(function(err) {
         console.error('更新事件计数缓存失败:', err);
     });
+    let streamDisconnectedUnexpectedly = false;
     try {
         const response = await fetch('/chat', { method: 'POST', body: formData, signal: ac.signal });
         streamEventIdx = await consumeAgentSseResponse(response, runCtx, runSessionId, streamEventIdx);
@@ -1100,6 +1155,7 @@ async function sendMessage(options) {
         }
         else {
             console.error('请求失败:', error);
+            streamDisconnectedUnexpectedly = true;
             const msg = (error && error.message) ? String(error.message) : String(error);
             appendLog(runCtx, '请求失败: ' + msg, 'error-log', runSessionId);
         }
@@ -1107,7 +1163,7 @@ async function sendMessage(options) {
         finalizeLlmStreamChunks(runCtx);
         finalizeProgressStreamChunks(runCtx);
         if (!switchedAway && runSessionId === currentSessionId && getRunAbortReason(runSessionId, runCtx) !== 'user') {
-            await ensureFinalVisibleAfterRun(runSessionId, runCtx, { delayMs: 120 });
+            await ensureFinalVisibleAfterRunIfEnabled(runSessionId, runCtx, { delayMs: 120 });
         }
         if (runSessionId === currentSessionId) renderTodoPlanForCurrentSession();
         if (liveAutoFollow && !switchedAway) {
@@ -1121,7 +1177,11 @@ async function sendMessage(options) {
             updateSubagentContinueBanner(runSessionId);
         }
         if (getSessionRunState(runSessionId)) {
-            clearSessionRunState(runSessionId);
+            clearSessionRunStateIfMatch(runSessionId, clientRunId);
+        }
+        if (streamDisconnectedUnexpectedly && runSessionId === currentSessionId && getRunAbortReason(runSessionId, runCtx) !== 'user') {
+            scheduleActiveSessionReconnect(runSessionId, { delayMs: 500 });
+            scheduleActiveSessionReconnect(runSessionId, { delayMs: 2500 });
         }
         if (runSessionId !== currentSessionId) {
             const el = runCtx.stream;
@@ -1146,6 +1206,7 @@ async function sendMessage(options) {
 }
 
 messageInput.addEventListener('keydown', function onFollowupInputKeydown(e) {
+    if (!isMyAgentFeatureEnabled('followupRestart', false)) return;
     if (e.key !== 'Enter') return;
     e.stopImmediatePropagation();
     if (e.ctrlKey && !e.shiftKey && !e.metaKey) {
@@ -1192,7 +1253,7 @@ chatContainer.addEventListener('scroll', function () {
 sendBtn.addEventListener('click', function (e) {
     e.stopImmediatePropagation();
     if (isSessionRunning(currentSessionId)) {
-        if (inputHasSendableText()) enqueueCurrentInputAsFollowup();
+        if (isMyAgentFeatureEnabled('followupRestart', false) && inputHasSendableText()) enqueueCurrentInputAsFollowup();
         else pauseCurrentRun();
         return;
     }

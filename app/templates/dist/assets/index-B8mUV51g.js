@@ -1,4 +1,4 @@
-(function(){const w=document.createElement("link").relList;if(w&&w.supports&&w.supports("modulepreload"))return;for(const S of document.querySelectorAll('link[rel="modulepreload"]'))E(S);new MutationObserver(S=>{for(const h of S)if(h.type==="childList")for(const _ of h.addedNodes)_.tagName==="LINK"&&_.rel==="modulepreload"&&E(_)}).observe(document,{childList:!0,subtree:!0});function P(S){const h={};return S.integrity&&(h.integrity=S.integrity),S.referrerPolicy&&(h.referrerPolicy=S.referrerPolicy),S.crossOrigin==="use-credentials"?h.credentials="include":S.crossOrigin==="anonymous"?h.credentials="omit":h.credentials="same-origin",h}function E(S){if(S.ep)return;S.ep=!0;const h=P(S);fetch(S.href,h)}})();(function(y){var w='<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"></path></svg>';function P(){if(!document.getElementById("myagent-path-picker-styles")){var t=document.createElement("style");t.id="myagent-path-picker-styles",t.textContent='.path-input-row{display:flex;align-items:stretch;gap:.35rem;width:100%;}.path-input-row>.ip,.path-input-row>.tx,.path-input-row>input[type="text"],.path-input-row>input:not([type]){flex:1;min-width:0;}.path-browse-btn{flex-shrink:0;width:2.35rem;padding:0;border:1px solid var(--border-glass,rgba(255,255,255,.08));border-radius:var(--radius-sm,8px);background:var(--surface-glass2,rgba(40,40,60,.94));color:var(--text-secondary,#a6adc8);cursor:pointer;display:inline-flex;align-items:center;justify-content:center;transition:color .18s,border-color .18s,background .18s;}.path-browse-btn:hover{color:var(--text-primary,#cdd6f4);border-color:var(--border-brand-accent,rgba(124,111,247,.35));background:rgba(108,92,231,.12);}.path-browse-btn:disabled{opacity:.45;cursor:not-allowed;}.path-browse-btn--ghost{background:transparent;border-color:transparent;box-shadow:none;width:2.1rem;}.path-browse-btn--ghost:hover{background:rgba(108,92,231,.1);border-color:transparent;color:var(--accent-2,#d4b8fc);}.input-wrapper .path-browse-btn--ghost{align-self:center;margin-right:-.15rem;}.input-wrapper.is-drag-over{border-color:rgba(203,166,247,.62);box-shadow:0 0 0 3px rgba(203,166,247,.12),0 0 28px rgba(139,92,246,.18);}.workspace-file-popover{position:fixed;display:none;z-index:260;width:min(46rem,calc(100vw - 1.2rem));height:min(32rem,calc(100vh - 1.2rem));border:1px solid rgba(203,166,247,.24);border-radius:14px;background:linear-gradient(145deg,rgba(31,31,49,.88),rgba(19,20,31,.78));box-shadow:0 24px 70px rgba(0,0,0,.38),0 0 0 1px rgba(255,255,255,.045) inset,0 0 34px rgba(139,92,246,.16);overflow:hidden;backdrop-filter:blur(22px);-webkit-backdrop-filter:blur(22px);}.workspace-file-popover:before{content:"";position:absolute;inset:0;pointer-events:none;background:radial-gradient(circle at 18% 0%,rgba(203,166,247,.18),transparent 30%),radial-gradient(circle at 92% 18%,rgba(99,102,241,.16),transparent 28%);}.workspace-file-popover.is-open{display:flex;flex-direction:column;}.workspace-file-search{position:relative;width:100%;box-sizing:border-box;border:0;border-bottom:1px solid rgba(255,255,255,.08);background:rgba(255,255,255,.055);color:var(--text-primary,#cdd6f4);padding:.56rem .72rem;font:inherit;font-size:.78rem;outline:none;}.workspace-file-search::placeholder{color:var(--text-muted,#6c7086);}.workspace-file-list{position:relative;flex:1;min-height:0;overflow:auto;padding:.36rem .38rem .2rem;}.workspace-file-item{width:100%;display:grid;grid-template-columns:1.05rem minmax(0,1fr) auto;gap:.2rem .38rem;align-items:center;text-align:left;border:0;border-radius:8px;background:transparent;color:var(--text-secondary,#a6adc8);padding:.22rem .36rem;cursor:pointer;font:inherit;font-size:.74rem;}.workspace-file-item:hover,.workspace-file-item.is-active{background:rgba(139,92,246,.13);color:var(--text-primary,#cdd6f4);}.workspace-file-item.is-selected{background:rgba(99,102,241,.18);color:var(--text-primary,#cdd6f4);}.workspace-file-check{width:.82rem;height:.82rem;border:1px solid rgba(203,166,247,.38);border-radius:4px;display:inline-flex;align-items:center;justify-content:center;color:#fff;font-size:.62rem;line-height:1;background:transparent;}.workspace-file-item.is-selected .workspace-file-check{background:linear-gradient(135deg,#6366f1,#a78bfa);border-color:transparent;color:#fff;}.workspace-file-dir-row{grid-template-columns:1.05rem minmax(0,1fr) auto;color:var(--text-primary,#cdd6f4);font-weight:650;}.workspace-file-dir-row .workspace-file-tree{grid-column:2/3;}.workspace-file-file-row{grid-template-columns:1.05rem minmax(0,1fr) auto;}.workspace-file-tree{min-width:0;display:flex;align-items:center;gap:.24rem;}.workspace-file-indent{flex:0 0 auto;width:var(--indent,0);}.workspace-file-chevron{width:.8rem;min-width:.8rem;color:var(--text-muted,#6c7086);font-size:.72rem;text-align:center;border:0;background:transparent;padding:0;cursor:pointer;}.workspace-file-icon{position:relative;width:.98rem;min-width:.98rem;height:.74rem;margin-top:.04rem;border-radius:3px;border:1px solid rgba(203,166,247,.28);background:linear-gradient(135deg,rgba(203,166,247,.18),rgba(99,102,241,.1));box-shadow:inset 0 .12rem .26rem rgba(255,255,255,.08);}.workspace-file-icon:before{content:"";position:absolute;left:.06rem;right:.06rem;top:.12rem;height:.16rem;border-radius:999px;background:rgba(203,166,247,.34);}.workspace-file-icon:after{content:"";position:absolute;left:.06rem;right:.06rem;bottom:.11rem;height:.24rem;border-radius:2px;background:rgba(99,102,241,.16);}.workspace-file-icon.is-file{width:.82rem;min-width:.82rem;height:1rem;margin-top:0;border-radius:3px;background:transparent;border:1.5px solid rgba(166,173,200,.58);box-shadow:none;color:var(--text-muted,#6c7086);}.workspace-file-icon.is-file:before{left:auto;right:-1.5px;top:-1.5px;width:.3rem;height:.3rem;border:0;border-left:1.5px solid rgba(166,173,200,.58);border-bottom:1.5px solid rgba(166,173,200,.58);border-radius:0 3px 0 3px;background:var(--surface-glass2,rgba(40,40,60,.94));}.workspace-file-icon.is-file:after{display:none;}.workspace-file-icon.is-folder-svg{width:1rem;min-width:1rem;height:1rem;margin-top:0;border:0;background:transparent;box-shadow:none;color:var(--text-muted,#6c7086);display:inline-flex;align-items:center;justify-content:center;}.workspace-file-icon.is-folder-svg:before,.workspace-file-icon.is-folder-svg:after{display:none;}.workspace-file-icon.is-folder-svg svg{width:1rem;height:1rem;display:block;}.workspace-file-icon.is-image{border-color:rgba(45,212,191,.72);}.workspace-file-icon.is-image:after{display:block;left:.12rem;right:.12rem;bottom:.15rem;height:.24rem;clip-path:polygon(0 100%,38% 38%,56% 66%,76% 24%,100% 100%);background:rgba(45,212,191,.72);}.workspace-file-icon.is-audio{border-color:rgba(251,191,36,.76);}.workspace-file-icon.is-audio:after{display:block;left:.17rem;right:auto;bottom:.18rem;width:.36rem;height:.4rem;border-radius:0;background:rgba(251,191,36,.76);clip-path:polygon(0 32%,45% 32%,100% 0,100% 100%,45% 68%,0 68%);}.workspace-file-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:.74rem;}.workspace-file-dir{grid-column:2/-1;color:var(--text-muted,#6c7086);font-size:.68rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}.workspace-file-meta{color:var(--text-muted,#6c7086);font-size:.68rem;white-space:nowrap;}.workspace-file-footer{position:relative;display:flex;align-items:center;justify-content:space-between;gap:.5rem;padding:.42rem .52rem;border-top:1px solid rgba(255,255,255,.08);background:rgba(255,255,255,.035);font-size:.72rem;color:var(--text-muted,#6c7086);}.workspace-file-outside{flex-shrink:0;border:1px solid rgba(203,166,247,.24);border-radius:8px;padding:.28rem .58rem;background:rgba(203,166,247,.1);color:var(--text-primary,#cdd6f4);font:inherit;font-size:.7rem;font-weight:700;cursor:pointer;transition:background .16s,border-color .16s,color .16s;}.workspace-file-outside:hover{background:rgba(203,166,247,.18);border-color:rgba(203,166,247,.42);color:#fff;}.workspace-file-insert{border:0;border-radius:8px;padding:.34rem .62rem;background:linear-gradient(135deg,#6366f1,#8b5cf6);color:#fff;font-size:.72rem;font-weight:700;cursor:pointer;}.workspace-file-insert:disabled{opacity:.45;cursor:not-allowed;}.workspace-file-empty{padding:1rem;text-align:center;color:var(--text-muted,#6c7086);font-size:.78rem;}.theme-light .workspace-file-popover{background:linear-gradient(145deg,rgba(255,255,255,.93),rgba(244,247,252,.86));box-shadow:0 24px 64px rgba(31,35,52,.16),0 0 28px rgba(99,102,241,.12);}.theme-light .workspace-file-search,.theme-light .workspace-file-footer{background:rgba(34,40,58,.035);}',document.head.appendChild(t)}}async function E(t,d,o){var c=typeof AbortController<"u"?new AbortController:null,u=c?setTimeout(function(){c.abort()},5e4):null,f;try{f=await fetch("/api/pick-path",{method:"POST",headers:{"Content-Type":"application/json"},credentials:"same-origin",body:JSON.stringify({kind:t||"directory",initial:d||"",multiple:!!o}),signal:c?c.signal:void 0})}finally{u&&clearTimeout(u)}var p=await f.json().catch(function(){return{ok:!1,error:"请求失败"}});if(!f.ok||!p.ok){if(p&&p.cancelled)return null;var r=p&&p.error||"无法打开选择对话框";if(/取消|cancelled|800704c7|2147023673/i.test(r))return null;throw new Error(r)}return o?Array.isArray(p.paths)?p.paths:p.path?[p.path]:[]:p.path||null}async function S(t,d,o,c,u){t.disabled=!0;try{var f=await E(d,o||"",!!u);c&&c(f)}catch{return}finally{t.disabled=!1}}function h(t){var d=String(t||"").trim();return d?((d.charAt(0)==='"'&&d.charAt(d.length-1)==='"'||d.charAt(0)==="'"&&d.charAt(d.length-1)==="'")&&(d=d.slice(1,-1)),'"'+d.replace(/"/g,'\\"')+'"'):""}function _(t){var d=String(t||"").toLowerCase().split(".").pop()||"";return/^(png|jpe?g|gif|webp|bmp|svg|tiff?|ico|avif)$/.test(d)?"is-image":/^(mp3|wav|flac|aac|m4a|ogg|oga|opus|wma|aiff?)$/.test(d)?"is-audio":""}function B(t,d){var o=t.selectionStart,c=t.selectionEnd,u=t.value.slice(0,o),f=t.value.slice(c),p=String(d||"");u.length&&!/\s$/.test(u)&&(p=" "+p),f.length&&!/^\s/.test(f)&&(p=p+" "),t.value=u+p+f;var r=u.length+p.length;t.selectionStart=t.selectionEnd=r,t.dispatchEvent(new Event("input",{bubbles:!0})),t.focus()}async function Z(t){var d=Array.prototype.slice.call(t||[]).filter(Boolean);if(!d.length)return[];var o=new FormData;d.forEach(function(f){o.append("files",f,f.name||"upload.bin")});var c=await fetch("/api/upload-chat-files",{method:"POST",credentials:"same-origin",body:o}),u=await c.json().catch(function(){return{ok:!1,error:"上传失败"}});if(!c.ok||!u.ok)throw new Error(u&&u.error||"上传失败");return Array.isArray(u.files)?u.files:[]}function ee(t){return t=Number(t||0),!isFinite(t)||t<=0?"":t<1024?t+" B":t<1024*1024?Math.round(t/102.4)/10+" KB":t<1024*1024*1024?Math.round(t/104857.6)/10+" MB":Math.round(t/1073741824e-1)/10+" GB"}async function q(t,d,o){var c=[];t?c.push("q="+encodeURIComponent(t)):d&&c.push("dir="+encodeURIComponent(d));var u="/api/workspace-files"+(c.length?"?"+c.join("&"):""),f=await fetch(u,{credentials:"same-origin",signal:o}),p=await f.json().catch(function(){return{ok:!1,error:"读取工作区文件失败"}});if(!f.ok||!p.ok)throw new Error(p&&p.error||"读取工作区文件失败");return Array.isArray(p.files)?p.files:[]}function H(t,d){return Z(d).then(function(o){var c=o.map(function(u){return h(u.path||u.rel||u.name)}).join(" ");c&&B(t,c)})}function ne(t,d){var o=document.createElement("div");o.className="workspace-file-popover",o.setAttribute("aria-hidden","true"),o.innerHTML='<input class="workspace-file-search" type="text" autocomplete="off" spellcheck="false" placeholder="搜索工作区文件"><div class="workspace-file-list" role="listbox"></div><div class="workspace-file-footer"><span class="workspace-file-count">未选择文件</span><button type="button" class="workspace-file-outside">选择工作目录外文件</button></div>',document.body.appendChild(o);var c=o.querySelector(".workspace-file-search"),u=o.querySelector(".workspace-file-list"),f=o.querySelector(".workspace-file-count"),p=o.querySelector(".workspace-file-outside"),r={items:[],visible:[],active:0,open:!1,debounce:null,controller:null,selected:Object.create(null),expanded:Object.create(null),loadedDirs:Object.create(null),itemMap:Object.create(null)};function b(){var e=t.closest?t.closest(".input-wrapper"):t,n=e.getBoundingClientRect(),s=8,l=Math.min(Math.max(n.width,520),window.innerWidth-16),a=Math.max(8,Math.min(n.left,window.innerWidth-l-8)),g=o.offsetHeight||384,i=n.top-g-s;i<8&&(i=Math.min(window.innerHeight-g-8,n.bottom+s)),o.style.left=a+"px",o.style.top=Math.max(8,i)+"px",o.style.width=l+"px"}function I(){var e=Object.keys(r.selected).length;f.textContent=e?"已选择 "+e+" 项":"未选择文件",u.querySelectorAll(".workspace-file-item").forEach(function(n){var s=n.getAttribute("data-path-key")||"",l=!!r.selected[s];n.classList.toggle("is-selected",l);var a=n.querySelector(".workspace-file-check");a&&(a.textContent=l?"✓":"")})}function C(e){var n=u.querySelectorAll(".workspace-file-item");if(!n.length){r.active=0;return}r.active=Math.max(0,Math.min(e,n.length-1));for(var s=0;s<n.length;s++)n[s].classList.toggle("is-active",s===r.active),n[s].setAttribute("aria-selected",s===r.active?"true":"false");var l=n[r.active];l&&typeof l.scrollIntoView=="function"&&l.scrollIntoView({block:"nearest"})}function R(){r.open=!1,o.classList.remove("is-open"),o.setAttribute("aria-hidden","true"),r.debounce&&clearTimeout(r.debounce),r.controller&&r.controller.abort()}function N(e){return e&&(e.path||e.rel||e.name)||""}function W(e){return h(N(e))}function se(e,n){var s=N(e);if(!s)return!1;var l=String(e&&e.rel||"");return n.indexOf(W(e))>=0||n.indexOf(s)>=0||l&&n.indexOf(h(l))>=0||l&&n.indexOf(l)>=0}function ae(e,n){e=String(e||""),n=String(n||"");for(var s=0;s<e.length&&s<n.length&&e.charAt(s)===n.charAt(s);)s++;for(var l=e.length-1,a=n.length-1;l>=s&&a>=s&&e.charAt(l)===n.charAt(a);)l--,a--;return n.slice(s,a+1).trim()}function oe(e,n){if(n){var s=String(t.value||"");if(!(s.indexOf(n)>=0)){var l=t.value;B(t,n);var a=ae(l,t.value);e&&a&&(e._inputToken=a)}}}function ie(e,n){if(!n&&!e)return;var s=String(t.value||""),l=[];function a(i){i=String(i||"").trim(),i&&l.indexOf(i)<0&&l.push(i)}a(e&&e._inputToken),a(n),a(e&&e.path),a(e&&e.rel),a(e&&e.path&&h(e.path)),a(e&&e.rel&&h(e.rel));var g=s;l.sort(function(i,m){return m.length-i.length}).forEach(function(i){var m=i.replace(/[.*+?^${}()|[\]\\]/g,"\\$&"),v=new RegExp("(?:^|\\s)"+m+"(?=\\s|$)","g");g=g.replace(v,function(x){return x.charAt(0)&&/\s/.test(x.charAt(0))?" ":""})}),g=g.replace(/[ \t]{2,}/g," ").trim(),g!==s&&(t.value=g,t.selectionStart=t.selectionEnd=t.value.length,t.dispatchEvent(new Event("input",{bubbles:!0})))}function F(e){if(e){var n=N(e);if(n){var s=W(e);if(r.selected[n]){var l=r.selected[n];delete r.selected[n],ie(l,s)}else r.selected[n]=e,oe(e,s);I()}}}function V(){var e=String(t.value||"");Object.keys(r.selected).forEach(function(n){var s=r.selected[n];se(s,e)||delete r.selected[n]})}function de(){V(),I()}t.addEventListener("input",de),p&&p.addEventListener("click",function(e){e.preventDefault(),e.stopPropagation(),typeof d=="function"&&d()});function z(){var e=String(y.__WORK_DIR__||"workspace"),n=e.split(/[\\/]+/).filter(Boolean);return n[n.length-1]||"workspace"}function G(e,n,s){return{type:"dir",name:e,rel:n,root:!!s,path:"",dirs:Object.create(null),files:[],children:[],loaded:!1}}function le(e,n){var s=String(e&&e.path||""),l=String(n||"").replace(/\//g,"\\");return s&&l&&s.toLowerCase().slice(-l.length)===l.toLowerCase()?s.slice(0,Math.max(0,s.length-l.length)).replace(/[\\/]+$/,""):String(y.__WORK_DIR__||"").replace(/[\\/]+$/,"")}function K(e,n){var s=String(e||"").replace(/[\\/]+$/,""),l=String(n||"").replace(/[\\/]+/g,"/");if(!l)return s;var a=s.indexOf("\\")>=0?"\\":"/";return s?s+a+l.replace(/\//g,a):l}function L(e){return{kind:"directory",name:e.name||e.rel||z(),rel:e.rel||"",path:e.path||K(String(y.__WORK_DIR__||""),e.rel||"")}}function ce(e){var n=G(z(),"",!0);n.path=String(y.__WORK_DIR__||"").replace(/[\\/]+$/,""),n.loaded=!!r.loadedDirs.__root__;function s(a,g){for(var i=n,m=[],v=0;v<a.length;v++)m.push(a[v]),i.dirs[a[v]]||(i.dirs[a[v]]=G(a[v],m.join("/"),!1),i.dirs[a[v]].path=K(g||n.path,m.join("/"))),i=i.dirs[a[v]],i.loaded=!!r.loadedDirs[i.rel||"__root__"];return i}(e||[]).forEach(function(a){var g=String(a.rel||a.path||a.name||"").replace(/\\/g,"/"),i=g.split("/").filter(Boolean);if(i.length){var m=le(a,g);if(!n.path&&m&&(n.path=m),a.kind==="directory"){var v=s(i,m||n.path);v.name=a.name||v.name,v.path=a.path||v.path;return}var x=s(i.slice(0,-1),m||n.path);x.files.push({type:"file",name:a.name||i[i.length-1]||g,rel:g,item:a})}});function l(a){var g=Object.keys(a.dirs).map(function(i){return a.dirs[i]}).sort(function(i,m){return i.name.localeCompare(m.name,void 0,{sensitivity:"base"})});g.forEach(l),a.files.sort(function(i,m){return i.name.localeCompare(m.name,void 0,{sensitivity:"base"})}),a.children=g.concat(a.files)}return l(n),n}function Q(e,n,s){if(!(!e||e.type!=="dir")){s=Number(s||0);var l=e.rel||"__root__";n?r.expanded[l]=!0:typeof r.expanded[l]>"u"&&(r.expanded[l]=s===0),n&&e.children.forEach(function(a){a.type==="dir"&&Q(a,n,s+1)})}}function ue(e){var n=[];function s(l,a){n.push({type:"dir",node:l,depth:a}),r.expanded[l.rel||"__root__"]&&l.children.forEach(function(g){g.type==="dir"?s(g,a+1):n.push({type:"file",node:g,depth:a+1})})}return s(e,0),n}function pe(e){return String(e&&(e.kind||"file")||"file")+":"+String(e&&(e.rel||e.path||e.name)||"")}function $(e){(e||[]).forEach(function(n){var s=pe(n);s!==":"&&(r.itemMap[s]=n)}),r.items=Object.keys(r.itemMap).map(function(n){return r.itemMap[n]}),r.items.sort(function(n,s){return String(n.rel||"").localeCompare(String(s.rel||""),void 0,{sensitivity:"base"})})}function fe(e){if(e){var n=e.rel||"__root__";r.expanded[n]=!r.expanded[n],k(r.items,!1),r.expanded[n]&&!c.value&&!r.loadedDirs[n]&&ge(e.rel||"")}}function k(e,n,s){if(V(),r.items=(e||[]).slice().sort(function(a,g){return String(a.rel||"").localeCompare(String(g.rel||""),void 0,{sensitivity:"base"})}),u.innerHTML="",r.visible=[],n){u.innerHTML='<div class="workspace-file-empty">加载中</div>';return}if(s){u.innerHTML='<div class="workspace-file-empty">'+String(s)+"</div>";return}if(!r.items.length){u.innerHTML='<div class="workspace-file-empty">没有匹配文件</div>';return}var l=ce(r.items);Q(l,!!c.value),r.visible=ue(l),r.visible.forEach(function(a,g){var i=a.node,m=document.createElement("button");m.type="button",m.className="workspace-file-item "+(a.type==="dir"?"workspace-file-dir-row":"workspace-file-file-row"),m.setAttribute("role","option"),m.setAttribute("data-row-index",String(g)),m.setAttribute("data-path-key",a.type==="dir"?L(i).path||L(i).rel||L(i).name||"":i.item.path||i.item.rel||i.item.name||"");var v=document.createElement("div");v.className="workspace-file-tree";var x=document.createElement("span");x.className="workspace-file-indent",x.style.setProperty("--indent",Math.min(a.depth,10)*.86+"rem");var T=document.createElement("span");T.className="workspace-file-chevron",T.textContent=a.type==="dir"?r.expanded[i.rel||"__root__"]?"▾":"▸":"",a.type==="dir"?(T.setAttribute("aria-label",r.expanded[i.rel||"__root__"]?"折叠文件夹":"展开文件夹"),T.setAttribute("role","button"),T.addEventListener("click",function(A){A.preventDefault(),A.stopPropagation(),fe(i)})):T.setAttribute("tabindex","-1");var O=document.createElement("span");O.className="workspace-file-icon"+(a.type==="file"?" is-file "+_(i.item&&i.item.name):" is-folder-svg"),a.type==="dir"&&(O.innerHTML=w);var D=document.createElement("div");D.className="workspace-file-name",D.textContent=i.name||i.rel||"";var U=document.createElement("div");U.className="workspace-file-meta",U.textContent=a.type==="dir"?"":ee(i.item.size),v.appendChild(x),v.appendChild(T),v.appendChild(O),v.appendChild(D);var J=document.createElement("span");J.className="workspace-file-check",m.appendChild(J),m.appendChild(v),m.appendChild(U),m.addEventListener("mouseenter",function(){C(g)}),m.addEventListener("click",function(A){A.preventDefault(),A.stopPropagation(),a.type==="dir"?F(L(i)):F(i.item)}),u.appendChild(m)}),C(0),I()}function X(){var e=c.value||"";r.controller&&r.controller.abort(),r.controller=typeof AbortController<"u"?new AbortController:null,k(r.items,!0),q(e,"",r.controller?r.controller.signal:void 0).then(function(n){r.open&&(e?k(n,!1):(r.loadedDirs.__root__=!0,$(n),k(r.items,!1)))}).catch(function(n){n&&n.name==="AbortError"||r.open&&k([],!1,n&&n.message||"读取失败")})}function ge(e){var n=e||"__root__";r.loadedDirs[n]||(r.loadedDirs[n]=!0,q("",e||"",void 0).then(function(s){!r.open||c.value||($(s),k(r.items,!1))}).catch(function(){delete r.loadedDirs[n]}))}function me(){r.debounce&&clearTimeout(r.debounce),r.debounce=setTimeout(X,120)}function Y(){if(r.open){b();try{c.focus(),c.select()}catch{}return}r.open=!0,o.classList.add("is-open"),o.setAttribute("aria-hidden","false"),c.value="",r.expanded=Object.create(null),r.loadedDirs=Object.create(null),r.itemMap=Object.create(null),r.items=[],k([],!0),b(),X(),setTimeout(function(){b();try{c.focus()}catch{}},0)}function ve(){r.open?R():Y()}return c.addEventListener("input",me),c.addEventListener("keydown",function(e){if(e.key==="ArrowDown")e.preventDefault(),C(r.active+1);else if(e.key==="ArrowUp")e.preventDefault(),C(r.active-1);else if(e.key==="Enter"){e.preventDefault();var n=r.visible[r.active];n&&n.type==="dir"?F(L(n.node)):n&&n.type==="file"&&F(n.node.item)}else e.key==="Escape"&&(e.preventDefault(),R(),t.focus())}),document.addEventListener("click",function(e){r.open&&(o.contains(e.target)||R())}),window.addEventListener("resize",function(){r.open&&b()}),window.addEventListener("scroll",function(){r.open&&b()},!0),{panel:o,open:Y,close:R,toggle:ve}}function j(t,d,o){if(!t||t.dataset.pathBrowseWrapped==="1")return t;P();var c=document.createElement("div");c.className="path-input-row";var u=t.parentNode;if(!u)return t;u.insertBefore(c,t),c.appendChild(t);var f=document.createElement("button");f.type="button",f.className="path-browse-btn",f.innerHTML=w;var p=o||"浏览路径";return f.setAttribute("aria-label",p),typeof bindUiHoverTip=="function"?(f.setAttribute("data-ui-tip",p),f.removeAttribute("title"),bindUiHoverTip(f)):f.title=p,f.addEventListener("click",function(r){r.stopPropagation();var b=t.getAttribute("data-path-kind")||d;b!=="file"&&b!=="directory"&&(b="directory"),S(f,b,t.value||"",function(I){if(I){var C=Array.isArray(I)?I[0]||"":String(I);C&&(t.value=C,t.dispatchEvent(new Event("input",{bubbles:!0})),t.dispatchEvent(new Event("change",{bubbles:!0})))}})}),c.appendChild(f),t.dataset.pathBrowseWrapped="1",t}function te(t){var d=t.closest?t.closest(".input-wrapper"):t;!d||d.dataset.fileDropBound==="1"||(d.dataset.fileDropBound="1",["dragenter","dragover"].forEach(function(o){d.addEventListener(o,function(c){!c.dataTransfer||!c.dataTransfer.files||!c.dataTransfer.files.length||(c.preventDefault(),d.classList.add("is-drag-over"))})}),["dragleave","drop"].forEach(function(o){d.addEventListener(o,function(){d.classList.remove("is-drag-over")})}),d.addEventListener("drop",function(o){!o.dataTransfer||!o.dataTransfer.files||!o.dataTransfer.files.length||(o.preventDefault(),H(t,o.dataTransfer.files).catch(function(){}))}))}function re(t,d){if(!(!t||!d)){P(),te(d),t.classList.add("path-browse-btn","path-browse-btn--ghost"),t.innerHTML=w,t.setAttribute("aria-label","工作区文件"),t.setAttribute("data-ui-tip","工作区文件"),t.dataset.silentPickerUnavailable="1",t.removeAttribute("title");var o=document.createElement("input");o.type="file",o.multiple=!0,o.style.display="none",o.setAttribute("aria-hidden","true"),document.body.appendChild(o),o.addEventListener("change",function(){var u=o.files;!u||!u.length||(t.disabled=!0,H(d,u).finally(function(){o.value="",t.disabled=!1}))});var c=ne(d,function(){o.click()});t.addEventListener("click",function(u){if(u.stopPropagation(),u.preventDefault(),u.altKey){o.click();return}if(!u.shiftKey){c.toggle();return}var f=y&&typeof y.__WORK_DIR__=="string"?y.__WORK_DIR__:"";S(t,"file",f,function(p){var r=Array.isArray(p)?p:p?[p]:[];r.length&&B(d,r.map(function(b){return h(b)}).join(" "))},!1)})}}function M(t){t=t||document;for(var d=t.querySelectorAll("[data-path-kind]"),o=0;o<d.length;o++){var c=d[o],u=c.getAttribute("data-path-kind");(u==="file"||u==="directory")&&j(c,u)}}y.MyAgentPathPicker={pickPath:E,wrapInputWithBrowse:j,attachChatPicker:re,scan:M},document.readyState==="loading"?document.addEventListener("DOMContentLoaded",function(){M(document)}):M(document)})(typeof window<"u"?window:globalThis);const Se=`// ═══════════════════════════════════════════════════════════
+(function(){const w=document.createElement("link").relList;if(w&&w.supports&&w.supports("modulepreload"))return;for(const S of document.querySelectorAll('link[rel="modulepreload"]'))E(S);new MutationObserver(S=>{for(const h of S)if(h.type==="childList")for(const _ of h.addedNodes)_.tagName==="LINK"&&_.rel==="modulepreload"&&E(_)}).observe(document,{childList:!0,subtree:!0});function P(S){const h={};return S.integrity&&(h.integrity=S.integrity),S.referrerPolicy&&(h.referrerPolicy=S.referrerPolicy),S.crossOrigin==="use-credentials"?h.credentials="include":S.crossOrigin==="anonymous"?h.credentials="omit":h.credentials="same-origin",h}function E(S){if(S.ep)return;S.ep=!0;const h=P(S);fetch(S.href,h)}})();(function(y){var w='<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"></path></svg>';function P(){if(!document.getElementById("myagent-path-picker-styles")){var t=document.createElement("style");t.id="myagent-path-picker-styles",t.textContent='.path-input-row{display:flex;align-items:stretch;gap:.35rem;width:100%;}.path-input-row>.ip,.path-input-row>.tx,.path-input-row>input[type="text"],.path-input-row>input:not([type]){flex:1;min-width:0;}.path-browse-btn{flex-shrink:0;width:2.35rem;padding:0;border:1px solid var(--border-glass,rgba(255,255,255,.08));border-radius:var(--radius-sm,8px);background:var(--surface-glass2,rgba(40,40,60,.94));color:var(--text-secondary,#a6adc8);cursor:pointer;display:inline-flex;align-items:center;justify-content:center;transition:color .18s,border-color .18s,background .18s;}.path-browse-btn:hover{color:var(--text-primary,#cdd6f4);border-color:var(--border-brand-accent,rgba(124,111,247,.35));background:rgba(108,92,231,.12);}.path-browse-btn:disabled{opacity:.45;cursor:not-allowed;}.path-browse-btn--ghost{background:transparent;border-color:transparent;box-shadow:none;width:2.1rem;}.path-browse-btn--ghost:hover{background:rgba(108,92,231,.1);border-color:transparent;color:var(--accent-2,#d4b8fc);}.input-wrapper .path-browse-btn--ghost{align-self:center;margin-right:-.15rem;}.input-wrapper.is-drag-over{border-color:rgba(203,166,247,.62);box-shadow:0 0 0 3px rgba(203,166,247,.12),0 0 28px rgba(139,92,246,.18);}.workspace-file-popover{position:fixed;display:none;z-index:260;width:min(46rem,calc(100vw - 1.2rem));height:min(32rem,calc(100vh - 1.2rem));border:1px solid rgba(203,166,247,.24);border-radius:14px;background:linear-gradient(145deg,rgba(31,31,49,.88),rgba(19,20,31,.78));box-shadow:0 24px 70px rgba(0,0,0,.38),0 0 0 1px rgba(255,255,255,.045) inset,0 0 34px rgba(139,92,246,.16);overflow:hidden;backdrop-filter:blur(22px);-webkit-backdrop-filter:blur(22px);}.workspace-file-popover:before{content:"";position:absolute;inset:0;pointer-events:none;background:radial-gradient(circle at 18% 0%,rgba(203,166,247,.18),transparent 30%),radial-gradient(circle at 92% 18%,rgba(99,102,241,.16),transparent 28%);}.workspace-file-popover.is-open{display:flex;flex-direction:column;}.workspace-file-search{position:relative;width:100%;box-sizing:border-box;border:0;border-bottom:1px solid rgba(255,255,255,.08);background:rgba(255,255,255,.055);color:var(--text-primary,#cdd6f4);padding:.56rem .72rem;font:inherit;font-size:.78rem;outline:none;}.workspace-file-search::placeholder{color:var(--text-muted,#6c7086);}.workspace-file-list{position:relative;flex:1;min-height:0;overflow:auto;padding:.36rem .38rem .2rem;}.workspace-file-item{width:100%;display:grid;grid-template-columns:1.05rem minmax(0,1fr) auto;gap:.2rem .38rem;align-items:center;text-align:left;border:0;border-radius:8px;background:transparent;color:var(--text-secondary,#a6adc8);padding:.22rem .36rem;cursor:pointer;font:inherit;font-size:.74rem;}.workspace-file-item:hover,.workspace-file-item.is-active{background:rgba(139,92,246,.13);color:var(--text-primary,#cdd6f4);}.workspace-file-item.is-selected{background:rgba(99,102,241,.18);color:var(--text-primary,#cdd6f4);}.workspace-file-check{width:.82rem;height:.82rem;border:1px solid rgba(203,166,247,.38);border-radius:4px;display:inline-flex;align-items:center;justify-content:center;color:#fff;font-size:.62rem;line-height:1;background:transparent;}.workspace-file-item.is-selected .workspace-file-check{background:linear-gradient(135deg,#6366f1,#a78bfa);border-color:transparent;color:#fff;}.workspace-file-dir-row{grid-template-columns:1.05rem minmax(0,1fr) auto;color:var(--text-primary,#cdd6f4);font-weight:650;}.workspace-file-dir-row .workspace-file-tree{grid-column:2/3;}.workspace-file-file-row{grid-template-columns:1.05rem minmax(0,1fr) auto;}.workspace-file-tree{min-width:0;display:flex;align-items:center;gap:.24rem;}.workspace-file-indent{flex:0 0 auto;width:var(--indent,0);}.workspace-file-chevron{width:.8rem;min-width:.8rem;color:var(--text-muted,#6c7086);font-size:.72rem;text-align:center;border:0;background:transparent;padding:0;cursor:pointer;}.workspace-file-icon{position:relative;width:.98rem;min-width:.98rem;height:.74rem;margin-top:.04rem;border-radius:3px;border:1px solid rgba(203,166,247,.28);background:linear-gradient(135deg,rgba(203,166,247,.18),rgba(99,102,241,.1));box-shadow:inset 0 .12rem .26rem rgba(255,255,255,.08);}.workspace-file-icon:before{content:"";position:absolute;left:.06rem;right:.06rem;top:.12rem;height:.16rem;border-radius:999px;background:rgba(203,166,247,.34);}.workspace-file-icon:after{content:"";position:absolute;left:.06rem;right:.06rem;bottom:.11rem;height:.24rem;border-radius:2px;background:rgba(99,102,241,.16);}.workspace-file-icon.is-file{width:.82rem;min-width:.82rem;height:1rem;margin-top:0;border-radius:3px;background:transparent;border:1.5px solid rgba(166,173,200,.58);box-shadow:none;color:var(--text-muted,#6c7086);}.workspace-file-icon.is-file:before{left:auto;right:-1.5px;top:-1.5px;width:.3rem;height:.3rem;border:0;border-left:1.5px solid rgba(166,173,200,.58);border-bottom:1.5px solid rgba(166,173,200,.58);border-radius:0 3px 0 3px;background:var(--surface-glass2,rgba(40,40,60,.94));}.workspace-file-icon.is-file:after{display:none;}.workspace-file-icon.is-folder-svg{width:1rem;min-width:1rem;height:1rem;margin-top:0;border:0;background:transparent;box-shadow:none;color:var(--text-muted,#6c7086);display:inline-flex;align-items:center;justify-content:center;}.workspace-file-icon.is-folder-svg:before,.workspace-file-icon.is-folder-svg:after{display:none;}.workspace-file-icon.is-folder-svg svg{width:1rem;height:1rem;display:block;}.workspace-file-icon.is-image{border-color:rgba(45,212,191,.72);}.workspace-file-icon.is-image:after{display:block;left:.12rem;right:.12rem;bottom:.15rem;height:.24rem;clip-path:polygon(0 100%,38% 38%,56% 66%,76% 24%,100% 100%);background:rgba(45,212,191,.72);}.workspace-file-icon.is-audio{border-color:rgba(251,191,36,.76);}.workspace-file-icon.is-audio:after{display:block;left:.17rem;right:auto;bottom:.18rem;width:.36rem;height:.4rem;border-radius:0;background:rgba(251,191,36,.76);clip-path:polygon(0 32%,45% 32%,100% 0,100% 100%,45% 68%,0 68%);}.workspace-file-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:.74rem;}.workspace-file-dir{grid-column:2/-1;color:var(--text-muted,#6c7086);font-size:.68rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}.workspace-file-meta{color:var(--text-muted,#6c7086);font-size:.68rem;white-space:nowrap;}.workspace-file-footer{position:relative;display:flex;align-items:center;justify-content:space-between;gap:.5rem;padding:.42rem .52rem;border-top:1px solid rgba(255,255,255,.08);background:rgba(255,255,255,.035);font-size:.72rem;color:var(--text-muted,#6c7086);}.workspace-file-outside{flex-shrink:0;border:1px solid rgba(203,166,247,.24);border-radius:8px;padding:.28rem .58rem;background:rgba(203,166,247,.1);color:var(--text-primary,#cdd6f4);font:inherit;font-size:.7rem;font-weight:700;cursor:pointer;transition:background .16s,border-color .16s,color .16s;}.workspace-file-outside:hover{background:rgba(203,166,247,.18);border-color:rgba(203,166,247,.42);color:#fff;}.workspace-file-insert{border:0;border-radius:8px;padding:.34rem .62rem;background:linear-gradient(135deg,#6366f1,#8b5cf6);color:#fff;font-size:.72rem;font-weight:700;cursor:pointer;}.workspace-file-insert:disabled{opacity:.45;cursor:not-allowed;}.workspace-file-empty{padding:1rem;text-align:center;color:var(--text-muted,#6c7086);font-size:.78rem;}.theme-light .workspace-file-popover{background:linear-gradient(145deg,rgba(255,255,255,.93),rgba(244,247,252,.86));box-shadow:0 24px 64px rgba(31,35,52,.16),0 0 28px rgba(99,102,241,.12);}.theme-light .workspace-file-search,.theme-light .workspace-file-footer{background:rgba(34,40,58,.035);}',document.head.appendChild(t)}}async function E(t,d,o){var c=typeof AbortController<"u"?new AbortController:null,u=c?setTimeout(function(){c.abort()},5e4):null,f;try{f=await fetch("/api/pick-path",{method:"POST",headers:{"Content-Type":"application/json"},credentials:"same-origin",body:JSON.stringify({kind:t||"directory",initial:d||"",multiple:!!o}),signal:c?c.signal:void 0})}finally{u&&clearTimeout(u)}var p=await f.json().catch(function(){return{ok:!1,error:"请求失败"}});if(!f.ok||!p.ok){if(p&&p.cancelled)return null;var r=p&&p.error||"无法打开选择对话框";if(/取消|cancelled|800704c7|2147023673/i.test(r))return null;throw new Error(r)}return o?Array.isArray(p.paths)?p.paths:p.path?[p.path]:[]:p.path||null}async function S(t,d,o,c,u){t.disabled=!0;try{var f=await E(d,o||"",!!u);c&&c(f)}catch{return}finally{t.disabled=!1}}function h(t){var d=String(t||"").trim();return d?((d.charAt(0)==='"'&&d.charAt(d.length-1)==='"'||d.charAt(0)==="'"&&d.charAt(d.length-1)==="'")&&(d=d.slice(1,-1)),'"'+d.replace(/"/g,'\\"')+'"'):""}function _(t){var d=String(t||"").toLowerCase().split(".").pop()||"";return/^(png|jpe?g|gif|webp|bmp|svg|tiff?|ico|avif)$/.test(d)?"is-image":/^(mp3|wav|flac|aac|m4a|ogg|oga|opus|wma|aiff?)$/.test(d)?"is-audio":""}function B(t,d){var o=t.selectionStart,c=t.selectionEnd,u=t.value.slice(0,o),f=t.value.slice(c),p=String(d||"");u.length&&!/\s$/.test(u)&&(p=" "+p),f.length&&!/^\s/.test(f)&&(p=p+" "),t.value=u+p+f;var r=u.length+p.length;t.selectionStart=t.selectionEnd=r,t.dispatchEvent(new Event("input",{bubbles:!0})),t.focus()}async function Z(t){var d=Array.prototype.slice.call(t||[]).filter(Boolean);if(!d.length)return[];var o=new FormData;d.forEach(function(f){o.append("files",f,f.name||"upload.bin")});var c=await fetch("/api/upload-chat-files",{method:"POST",credentials:"same-origin",body:o}),u=await c.json().catch(function(){return{ok:!1,error:"上传失败"}});if(!c.ok||!u.ok)throw new Error(u&&u.error||"上传失败");return Array.isArray(u.files)?u.files:[]}function ee(t){return t=Number(t||0),!isFinite(t)||t<=0?"":t<1024?t+" B":t<1024*1024?Math.round(t/102.4)/10+" KB":t<1024*1024*1024?Math.round(t/104857.6)/10+" MB":Math.round(t/1073741824e-1)/10+" GB"}async function U(t,d,o){var c=[];t?c.push("q="+encodeURIComponent(t)):d&&c.push("dir="+encodeURIComponent(d));var u="/api/workspace-files"+(c.length?"?"+c.join("&"):""),f=await fetch(u,{credentials:"same-origin",signal:o}),p=await f.json().catch(function(){return{ok:!1,error:"读取工作区文件失败"}});if(!f.ok||!p.ok)throw new Error(p&&p.error||"读取工作区文件失败");return Array.isArray(p.files)?p.files:[]}function H(t,d){return Z(d).then(function(o){var c=o.map(function(u){return h(u.path||u.rel||u.name)}).join(" ");c&&B(t,c)})}function ne(t,d){var o=document.createElement("div");o.className="workspace-file-popover",o.setAttribute("aria-hidden","true"),o.innerHTML='<input class="workspace-file-search" type="text" autocomplete="off" spellcheck="false" placeholder="搜索工作区文件"><div class="workspace-file-list" role="listbox"></div><div class="workspace-file-footer"><span class="workspace-file-count">未选择文件</span><button type="button" class="workspace-file-outside">选择工作目录外文件</button></div>',document.body.appendChild(o);var c=o.querySelector(".workspace-file-search"),u=o.querySelector(".workspace-file-list"),f=o.querySelector(".workspace-file-count"),p=o.querySelector(".workspace-file-outside"),r={items:[],visible:[],active:0,open:!1,debounce:null,controller:null,selected:Object.create(null),expanded:Object.create(null),loadedDirs:Object.create(null),itemMap:Object.create(null)};function b(){var e=t.closest?t.closest(".input-wrapper"):t,n=e.getBoundingClientRect(),s=8,l=Math.min(Math.max(n.width,520),window.innerWidth-16),a=Math.max(8,Math.min(n.left,window.innerWidth-l-8)),g=o.offsetHeight||384,i=n.top-g-s;i<8&&(i=Math.min(window.innerHeight-g-8,n.bottom+s)),o.style.left=a+"px",o.style.top=Math.max(8,i)+"px",o.style.width=l+"px"}function I(){var e=Object.keys(r.selected).length;f.textContent=e?"已选择 "+e+" 项":"未选择文件",u.querySelectorAll(".workspace-file-item").forEach(function(n){var s=n.getAttribute("data-path-key")||"",l=!!r.selected[s];n.classList.toggle("is-selected",l);var a=n.querySelector(".workspace-file-check");a&&(a.textContent=l?"✓":"")})}function C(e){var n=u.querySelectorAll(".workspace-file-item");if(!n.length){r.active=0;return}r.active=Math.max(0,Math.min(e,n.length-1));for(var s=0;s<n.length;s++)n[s].classList.toggle("is-active",s===r.active),n[s].setAttribute("aria-selected",s===r.active?"true":"false");var l=n[r.active];l&&typeof l.scrollIntoView=="function"&&l.scrollIntoView({block:"nearest"})}function R(){r.open=!1,o.classList.remove("is-open"),o.setAttribute("aria-hidden","true"),r.debounce&&clearTimeout(r.debounce),r.controller&&r.controller.abort()}function N(e){return e&&(e.path||e.rel||e.name)||""}function W(e){return h(N(e))}function se(e,n){var s=N(e);if(!s)return!1;var l=String(e&&e.rel||"");return n.indexOf(W(e))>=0||n.indexOf(s)>=0||l&&n.indexOf(h(l))>=0||l&&n.indexOf(l)>=0}function ae(e,n){e=String(e||""),n=String(n||"");for(var s=0;s<e.length&&s<n.length&&e.charAt(s)===n.charAt(s);)s++;for(var l=e.length-1,a=n.length-1;l>=s&&a>=s&&e.charAt(l)===n.charAt(a);)l--,a--;return n.slice(s,a+1).trim()}function oe(e,n){if(n){var s=String(t.value||"");if(!(s.indexOf(n)>=0)){var l=t.value;B(t,n);var a=ae(l,t.value);e&&a&&(e._inputToken=a)}}}function ie(e,n){if(!n&&!e)return;var s=String(t.value||""),l=[];function a(i){i=String(i||"").trim(),i&&l.indexOf(i)<0&&l.push(i)}a(e&&e._inputToken),a(n),a(e&&e.path),a(e&&e.rel),a(e&&e.path&&h(e.path)),a(e&&e.rel&&h(e.rel));var g=s;l.sort(function(i,m){return m.length-i.length}).forEach(function(i){var m=i.replace(/[.*+?^${}()|[\]\\]/g,"\\$&"),v=new RegExp("(?:^|\\s)"+m+"(?=\\s|$)","g");g=g.replace(v,function(x){return x.charAt(0)&&/\s/.test(x.charAt(0))?" ":""})}),g=g.replace(/[ \t]{2,}/g," ").trim(),g!==s&&(t.value=g,t.selectionStart=t.selectionEnd=t.value.length,t.dispatchEvent(new Event("input",{bubbles:!0})))}function F(e){if(e){var n=N(e);if(n){var s=W(e);if(r.selected[n]){var l=r.selected[n];delete r.selected[n],ie(l,s)}else r.selected[n]=e,oe(e,s);I()}}}function V(){var e=String(t.value||"");Object.keys(r.selected).forEach(function(n){var s=r.selected[n];se(s,e)||delete r.selected[n]})}function de(){V(),I()}t.addEventListener("input",de),p&&p.addEventListener("click",function(e){e.preventDefault(),e.stopPropagation(),typeof d=="function"&&d()});function z(){var e=String(y.__WORK_DIR__||"workspace"),n=e.split(/[\\/]+/).filter(Boolean);return n[n.length-1]||"workspace"}function G(e,n,s){return{type:"dir",name:e,rel:n,root:!!s,path:"",dirs:Object.create(null),files:[],children:[],loaded:!1}}function le(e,n){var s=String(e&&e.path||""),l=String(n||"").replace(/\//g,"\\");return s&&l&&s.toLowerCase().slice(-l.length)===l.toLowerCase()?s.slice(0,Math.max(0,s.length-l.length)).replace(/[\\/]+$/,""):String(y.__WORK_DIR__||"").replace(/[\\/]+$/,"")}function K(e,n){var s=String(e||"").replace(/[\\/]+$/,""),l=String(n||"").replace(/[\\/]+/g,"/");if(!l)return s;var a=s.indexOf("\\")>=0?"\\":"/";return s?s+a+l.replace(/\//g,a):l}function L(e){return{kind:"directory",name:e.name||e.rel||z(),rel:e.rel||"",path:e.path||K(String(y.__WORK_DIR__||""),e.rel||"")}}function ce(e){var n=G(z(),"",!0);n.path=String(y.__WORK_DIR__||"").replace(/[\\/]+$/,""),n.loaded=!!r.loadedDirs.__root__;function s(a,g){for(var i=n,m=[],v=0;v<a.length;v++)m.push(a[v]),i.dirs[a[v]]||(i.dirs[a[v]]=G(a[v],m.join("/"),!1),i.dirs[a[v]].path=K(g||n.path,m.join("/"))),i=i.dirs[a[v]],i.loaded=!!r.loadedDirs[i.rel||"__root__"];return i}(e||[]).forEach(function(a){var g=String(a.rel||a.path||a.name||"").replace(/\\/g,"/"),i=g.split("/").filter(Boolean);if(i.length){var m=le(a,g);if(!n.path&&m&&(n.path=m),a.kind==="directory"){var v=s(i,m||n.path);v.name=a.name||v.name,v.path=a.path||v.path;return}var x=s(i.slice(0,-1),m||n.path);x.files.push({type:"file",name:a.name||i[i.length-1]||g,rel:g,item:a})}});function l(a){var g=Object.keys(a.dirs).map(function(i){return a.dirs[i]}).sort(function(i,m){return i.name.localeCompare(m.name,void 0,{sensitivity:"base"})});g.forEach(l),a.files.sort(function(i,m){return i.name.localeCompare(m.name,void 0,{sensitivity:"base"})}),a.children=g.concat(a.files)}return l(n),n}function Q(e,n,s){if(!(!e||e.type!=="dir")){s=Number(s||0);var l=e.rel||"__root__";n?r.expanded[l]=!0:typeof r.expanded[l]>"u"&&(r.expanded[l]=s===0),n&&e.children.forEach(function(a){a.type==="dir"&&Q(a,n,s+1)})}}function ue(e){var n=[];function s(l,a){n.push({type:"dir",node:l,depth:a}),r.expanded[l.rel||"__root__"]&&l.children.forEach(function(g){g.type==="dir"?s(g,a+1):n.push({type:"file",node:g,depth:a+1})})}return s(e,0),n}function pe(e){return String(e&&(e.kind||"file")||"file")+":"+String(e&&(e.rel||e.path||e.name)||"")}function $(e){(e||[]).forEach(function(n){var s=pe(n);s!==":"&&(r.itemMap[s]=n)}),r.items=Object.keys(r.itemMap).map(function(n){return r.itemMap[n]}),r.items.sort(function(n,s){return String(n.rel||"").localeCompare(String(s.rel||""),void 0,{sensitivity:"base"})})}function fe(e){if(e){var n=e.rel||"__root__";r.expanded[n]=!r.expanded[n],k(r.items,!1),r.expanded[n]&&!c.value&&!r.loadedDirs[n]&&ge(e.rel||"")}}function k(e,n,s){if(V(),r.items=(e||[]).slice().sort(function(a,g){return String(a.rel||"").localeCompare(String(g.rel||""),void 0,{sensitivity:"base"})}),u.innerHTML="",r.visible=[],n){u.innerHTML='<div class="workspace-file-empty">加载中</div>';return}if(s){u.innerHTML='<div class="workspace-file-empty">'+String(s)+"</div>";return}if(!r.items.length){u.innerHTML='<div class="workspace-file-empty">没有匹配文件</div>';return}var l=ce(r.items);Q(l,!!c.value),r.visible=ue(l),r.visible.forEach(function(a,g){var i=a.node,m=document.createElement("button");m.type="button",m.className="workspace-file-item "+(a.type==="dir"?"workspace-file-dir-row":"workspace-file-file-row"),m.setAttribute("role","option"),m.setAttribute("data-row-index",String(g)),m.setAttribute("data-path-key",a.type==="dir"?L(i).path||L(i).rel||L(i).name||"":i.item.path||i.item.rel||i.item.name||"");var v=document.createElement("div");v.className="workspace-file-tree";var x=document.createElement("span");x.className="workspace-file-indent",x.style.setProperty("--indent",Math.min(a.depth,10)*.86+"rem");var T=document.createElement("span");T.className="workspace-file-chevron",T.textContent=a.type==="dir"?r.expanded[i.rel||"__root__"]?"▾":"▸":"",a.type==="dir"?(T.setAttribute("aria-label",r.expanded[i.rel||"__root__"]?"折叠文件夹":"展开文件夹"),T.setAttribute("role","button"),T.addEventListener("click",function(A){A.preventDefault(),A.stopPropagation(),fe(i)})):T.setAttribute("tabindex","-1");var O=document.createElement("span");O.className="workspace-file-icon"+(a.type==="file"?" is-file "+_(i.item&&i.item.name):" is-folder-svg"),a.type==="dir"&&(O.innerHTML=w);var D=document.createElement("div");D.className="workspace-file-name",D.textContent=i.name||i.rel||"";var q=document.createElement("div");q.className="workspace-file-meta",q.textContent=a.type==="dir"?"":ee(i.item.size),v.appendChild(x),v.appendChild(T),v.appendChild(O),v.appendChild(D);var J=document.createElement("span");J.className="workspace-file-check",m.appendChild(J),m.appendChild(v),m.appendChild(q),m.addEventListener("mouseenter",function(){C(g)}),m.addEventListener("click",function(A){A.preventDefault(),A.stopPropagation(),a.type==="dir"?F(L(i)):F(i.item)}),u.appendChild(m)}),C(0),I()}function Y(){var e=c.value||"";r.controller&&r.controller.abort(),r.controller=typeof AbortController<"u"?new AbortController:null,k(r.items,!0),U(e,"",r.controller?r.controller.signal:void 0).then(function(n){r.open&&(e?k(n,!1):(r.loadedDirs.__root__=!0,$(n),k(r.items,!1)))}).catch(function(n){n&&n.name==="AbortError"||r.open&&k([],!1,n&&n.message||"读取失败")})}function ge(e){var n=e||"__root__";r.loadedDirs[n]||(r.loadedDirs[n]=!0,U("",e||"",void 0).then(function(s){!r.open||c.value||($(s),k(r.items,!1))}).catch(function(){delete r.loadedDirs[n]}))}function me(){r.debounce&&clearTimeout(r.debounce),r.debounce=setTimeout(Y,120)}function X(){if(r.open){b();try{c.focus(),c.select()}catch{}return}r.open=!0,o.classList.add("is-open"),o.setAttribute("aria-hidden","false"),c.value="",r.expanded=Object.create(null),r.loadedDirs=Object.create(null),r.itemMap=Object.create(null),r.items=[],k([],!0),b(),Y(),setTimeout(function(){b();try{c.focus()}catch{}},0)}function ve(){r.open?R():X()}return c.addEventListener("input",me),c.addEventListener("keydown",function(e){if(e.key==="ArrowDown")e.preventDefault(),C(r.active+1);else if(e.key==="ArrowUp")e.preventDefault(),C(r.active-1);else if(e.key==="Enter"){e.preventDefault();var n=r.visible[r.active];n&&n.type==="dir"?F(L(n.node)):n&&n.type==="file"&&F(n.node.item)}else e.key==="Escape"&&(e.preventDefault(),R(),t.focus())}),document.addEventListener("click",function(e){r.open&&(o.contains(e.target)||R())}),window.addEventListener("resize",function(){r.open&&b()}),window.addEventListener("scroll",function(){r.open&&b()},!0),{panel:o,open:X,close:R,toggle:ve}}function j(t,d,o){if(!t||t.dataset.pathBrowseWrapped==="1")return t;P();var c=document.createElement("div");c.className="path-input-row";var u=t.parentNode;if(!u)return t;u.insertBefore(c,t),c.appendChild(t);var f=document.createElement("button");f.type="button",f.className="path-browse-btn",f.innerHTML=w;var p=o||"浏览路径";return f.setAttribute("aria-label",p),typeof bindUiHoverTip=="function"?(f.setAttribute("data-ui-tip",p),f.removeAttribute("title"),bindUiHoverTip(f)):f.title=p,f.addEventListener("click",function(r){r.stopPropagation();var b=t.getAttribute("data-path-kind")||d;b!=="file"&&b!=="directory"&&(b="directory"),S(f,b,t.value||"",function(I){if(I){var C=Array.isArray(I)?I[0]||"":String(I);C&&(t.value=C,t.dispatchEvent(new Event("input",{bubbles:!0})),t.dispatchEvent(new Event("change",{bubbles:!0})))}})}),c.appendChild(f),t.dataset.pathBrowseWrapped="1",t}function te(t){var d=t.closest?t.closest(".input-wrapper"):t;!d||d.dataset.fileDropBound==="1"||(d.dataset.fileDropBound="1",["dragenter","dragover"].forEach(function(o){d.addEventListener(o,function(c){!c.dataTransfer||!c.dataTransfer.files||!c.dataTransfer.files.length||(c.preventDefault(),d.classList.add("is-drag-over"))})}),["dragleave","drop"].forEach(function(o){d.addEventListener(o,function(){d.classList.remove("is-drag-over")})}),d.addEventListener("drop",function(o){!o.dataTransfer||!o.dataTransfer.files||!o.dataTransfer.files.length||(o.preventDefault(),H(t,o.dataTransfer.files).catch(function(){}))}))}function re(t,d){if(!(!t||!d)){P(),te(d),t.classList.add("path-browse-btn","path-browse-btn--ghost"),t.innerHTML=w,t.setAttribute("aria-label","工作区文件"),t.setAttribute("data-ui-tip","工作区文件"),t.dataset.silentPickerUnavailable="1",t.removeAttribute("title");var o=document.createElement("input");o.type="file",o.multiple=!0,o.style.display="none",o.setAttribute("aria-hidden","true"),document.body.appendChild(o),o.addEventListener("change",function(){var u=o.files;!u||!u.length||(t.disabled=!0,H(d,u).finally(function(){o.value="",t.disabled=!1}))});var c=ne(d,function(){o.click()});t.addEventListener("click",function(u){if(u.stopPropagation(),u.preventDefault(),u.altKey){o.click();return}if(!u.shiftKey){c.toggle();return}var f=y&&typeof y.__WORK_DIR__=="string"?y.__WORK_DIR__:"";S(t,"file",f,function(p){var r=Array.isArray(p)?p:p?[p]:[];r.length&&B(d,r.map(function(b){return h(b)}).join(" "))},!1)})}}function M(t){t=t||document;for(var d=t.querySelectorAll("[data-path-kind]"),o=0;o<d.length;o++){var c=d[o],u=c.getAttribute("data-path-kind");(u==="file"||u==="directory")&&j(c,u)}}y.MyAgentPathPicker={pickPath:E,wrapInputWithBrowse:j,attachChatPicker:re,scan:M},document.readyState==="loading"?document.addEventListener("DOMContentLoaded",function(){M(document)}):M(document)})(typeof window<"u"?window:globalThis);const Se=`// ═══════════════════════════════════════════════════════════
 // General Agent · 智能会话 — 完整逻辑
 // ═══════════════════════════════════════════════════════════
 
@@ -222,6 +222,14 @@ const USER_MESSAGE_COLLAPSE_LINES = 10;
 const USER_MESSAGE_VIRTUAL_LINE_CHARS = 100;
 
 var uiModalKeyHandler = null;
+
+function isMyAgentFeatureEnabled(name, defaultValue) {
+    var features = (typeof window !== 'undefined' && window.__MYAGENT_FEATURES__ && typeof window.__MYAGENT_FEATURES__ === 'object')
+        ? window.__MYAGENT_FEATURES__
+        : {};
+    if (Object.prototype.hasOwnProperty.call(features, name)) return !!features[name];
+    return !!defaultValue;
+}
 
 function clearSessionUnreadState(sessionId, opts) {
     var sid = String(sessionId || '');
@@ -881,6 +889,20 @@ function getSessionRunState(sessionId) {
 
 function clearSessionRunState(sessionId) {
     setSessionRunState(sessionId, null);
+}
+
+function clearSessionRunStateIfMatch(sessionId, runId) {
+    const sid = String(sessionId || '');
+    if (!sid) return;
+    const expected = String(runId || '');
+    if (!expected) {
+        clearSessionRunState(sid);
+        return;
+    }
+    const run = getSessionRunState(sid);
+    if (!run || String(run.runId || '') === expected) {
+        clearSessionRunState(sid);
+    }
 }
 
 function markSessionRunInactive(sessionId) {
@@ -4599,9 +4621,15 @@ function maybeStartStreamPollForSession(sid, opts) {
     }, 15000);
 }
 
-async function scrollToUserTurnOrLoadOlder(eventIndex) {
+async function scrollToUserTurnOrLoadOlder(eventIndex, opts) {
+    opts = opts || {};
     var ei = Number(eventIndex);
-    if (!Number.isFinite(ei)) return;
+    if (!Number.isFinite(ei)) return false;
+    var silent = !!opts.silent;
+    var allowFullReload = opts.allowFullReload !== false && !silent;
+    var maxOlderLoads = Number.isFinite(Number(opts.maxOlderLoads))
+        ? Math.max(0, Number(opts.maxOlderLoads))
+        : 120;
     function setTocJumpLoading(active) {
         var list = document.getElementById('chat-toc-list');
         var link = list && list.querySelector('a[data-event-index="' + ei + '"]');
@@ -4617,6 +4645,7 @@ async function scrollToUserTurnOrLoadOlder(eventIndex) {
             || stream.querySelector('#user-msg-' + ei);
     }
     async function loadFullHistoryForTarget(sid) {
+        if (!allowFullReload) return;
         if (sid !== currentSessionId || typeof loadSessionMessages !== 'function') return;
         try {
             await loadSessionMessages(sid, 'saved-or-bottom', {
@@ -4632,17 +4661,18 @@ async function scrollToUserTurnOrLoadOlder(eventIndex) {
         var wrap = findWrap();
         if (wrap) {
             wrap.scrollIntoView({ behavior: 'smooth', block: 'start' });
-            return;
+            return true;
         }
         var sid = currentSessionId;
         var safety = 0;
+        var olderLoads = 0;
         var pagingCoveredTarget = false;
         while (sid === currentSessionId && safety < 120) {
             safety += 1;
             wrap = findWrap();
             if (wrap) {
                 wrap.scrollIntoView({ behavior: 'smooth', block: 'start' });
-                return;
+                return true;
             }
             var ph = sessionHistoryPaging;
             if ((!ph || ph.sessionId !== sid) && getVisibleChatStream()) {
@@ -4658,28 +4688,30 @@ async function scrollToUserTurnOrLoadOlder(eventIndex) {
                 break;
             }
             if (!ph.has_older) break;
+            if (olderLoads >= maxOlderLoads) break;
             while (historyOlderLoading && currentSessionId === sid) {
                 await new Promise(function (r) { setTimeout(r, 40); });
             }
+            olderLoads += 1;
             await loadOlderHistoryChunk({ keepTocStable: true, turns: 50 });
         }
         wrap = findWrap();
         if (wrap) {
             wrap.scrollIntoView({ behavior: 'smooth', block: 'start' });
-            return;
+            return true;
         }
-        if (sid === currentSessionId && pagingCoveredTarget) {
+        if (allowFullReload && sid === currentSessionId && pagingCoveredTarget) {
             await loadFullHistoryForTarget(sid);
-            if (sid !== currentSessionId) return;
+            if (sid !== currentSessionId) return false;
             wrap = findWrap();
             if (wrap) {
                 wrap.scrollIntoView({ behavior: 'smooth', block: 'start' });
-                return;
+                return true;
             }
             rebuildToc();
         }
         if (wrap) wrap.scrollIntoView({ behavior: 'smooth', block: 'start' });
-        else {
+        else if (!silent) {
             showUiAlert({
                 title: '无法定位该条',
                 message: '未能加载到对应的用户提问（可能索引不一致）。可刷新页面或使用「更早 ' + HISTORY_DIALOGUES_PER_PAGE + ' 轮对话」手动分页。',
@@ -4687,6 +4719,7 @@ async function scrollToUserTurnOrLoadOlder(eventIndex) {
                 confirmText: '知道了',
             });
         }
+        return !!wrap;
     } finally {
         setTocJumpLoading(false);
     }
@@ -4875,6 +4908,17 @@ function clearTodoForSessionLoad() {
 }
 
 const tocTurnsCacheBySession = new Map();
+
+function startTocForSessionLoad(sessionId) {
+    if (!sessionId || sessionId !== currentSessionId) return;
+    var prevSuppress = suppressTocDuringSessionLoad;
+    suppressTocDuringSessionLoad = false;
+    try {
+        rebuildToc();
+    } finally {
+        suppressTocDuringSessionLoad = prevSuppress;
+    }
+}
 
 function rebuildToc(options) {
     options = options || {};
@@ -5117,7 +5161,7 @@ async function refreshTodoPlanPanel() {
         hideTodoPlanPanel();
     }
 }
-`,Ue=`function removeMessagesFromNode(startWrap) {
+`,qe=`function removeMessagesFromNode(startWrap) {
     const stream = getVisibleChatStream() || chatContainer;
     if (!stream) return;
     const kids = Array.from(stream.children);
@@ -5159,9 +5203,12 @@ async function truncateSessionOnServer(beforeIndex, options) {
     if (!Number.isFinite(Number(beforeIndex)) || Number(beforeIndex) < 0) {
         return { ok: false, error: 'invalid_before_index' };
     }
-    const url = '/sessions/' + encodeURIComponent(sid) + '/truncate'
+    var url = '/sessions/' + encodeURIComponent(sid) + '/truncate'
         + '?before_index=' + encodeURIComponent(String(beforeIndex))
         + '&backup=' + (options.backup ? '1' : '0');
+    if (Number.isFinite(Number(options.beforeSeq)) && Number(options.beforeSeq) > 0) {
+        url += '&before_seq=' + encodeURIComponent(String(Math.floor(Number(options.beforeSeq))));
+    }
     return historyOperationJson(url, { method: 'POST' }, options.timeoutMs || 45000);
 }
 
@@ -5266,6 +5313,7 @@ function openInlineRewriteEditor(wrap, rawText, beforeIndex) {
         pendingRewriteTruncate = {
             sessionId: currentSessionId,
             before: Number(beforeIndex),
+            beforeSeq: Number.isFinite(Number(wrap.dataset.runtimeSeq)) ? Math.floor(Number(wrap.dataset.runtimeSeq)) : null,
             prevInput: ''
         };
         try {
@@ -5312,11 +5360,14 @@ function openInlineRewriteEditor(wrap, rawText, beforeIndex) {
     } catch (e) { /* ignore */ }
 }
 
-async function branchSessionOnServer(beforeIndex, sessionId) {
+async function branchSessionOnServer(beforeIndex, sessionId, afterSeq) {
     const sid = sessionId || currentSessionId;
     if (!sid) return { ok: false, error: 'no_session' };
-    const url = '/sessions/' + encodeURIComponent(sid) + '/branch'
+    var url = '/sessions/' + encodeURIComponent(sid) + '/branch'
         + '?before_index=' + encodeURIComponent(String(beforeIndex));
+    if (Number.isFinite(Number(afterSeq)) && Number(afterSeq) > 0) {
+        url += '&after_seq=' + encodeURIComponent(String(Math.floor(Number(afterSeq))));
+    }
     return historyOperationJson(url, { method: 'POST' }, 60000);
 }
 
@@ -5373,9 +5424,14 @@ function onMessageToolbarClick(wrap, role, act) {
     const plain = msg ? (msg.innerText || '') : '';
     const tf = wrap.dataset.truncateFrom;
     const eiRaw = wrap.dataset.eventIndex;
+    const runtimeSeqRaw = wrap.dataset.runtimeSeq;
+    const truncateBeforeSeqRaw = wrap.dataset.truncateBeforeSeq;
     const eventIndex = eiRaw !== undefined && eiRaw !== '' ? parseInt(eiRaw, 10) : NaN;
+    const runtimeSeq = runtimeSeqRaw !== undefined && runtimeSeqRaw !== '' ? parseInt(runtimeSeqRaw, 10) : NaN;
+    const truncateBeforeSeq = truncateBeforeSeqRaw !== undefined && truncateBeforeSeqRaw !== '' ? parseInt(truncateBeforeSeqRaw, 10) : NaN;
     const truncateFrom = tf !== undefined && tf !== '' ? parseInt(tf, 10) : NaN;
     const before = role === 'user' ? eventIndex : truncateFrom;
+    const beforeSeq = role === 'user' ? runtimeSeq : truncateBeforeSeq;
     if ((act === 'delete' || act === 'rewrite') && isSessionRunning(currentSessionId)) {
         showUiAlert({
             title: '生成中不可操作',
@@ -5428,7 +5484,7 @@ function onMessageToolbarClick(wrap, role, act) {
             cancelText: '取消',
         }).then(function (ok) {
             if (!ok) return;
-            truncateSessionOnServer(before).then(function (res) {
+            truncateSessionOnServer(before, { beforeSeq: beforeSeq }).then(function (res) {
                 if (!res || !res.ok) {
                     showUiAlert({
                         title: '同步失败',
@@ -5491,7 +5547,7 @@ function onMessageToolbarClick(wrap, role, act) {
             if (!ok) return;
             wrap.dataset.branching = '1';
             (async function () {
-                var res = await branchSessionOnServer(branchBefore, sourceSessionId);
+                var res = await branchSessionOnServer(branchBefore, sourceSessionId, runtimeSeq);
                 if (!res || !res.ok || !res.session_id) {
                     showUiAlert({
                         title: '创建失败',
@@ -6304,17 +6360,31 @@ function applyChatScrollAfterHistoryLoad(sessionId, mode) {
     }
     
     if (mode === 'saved-or-bottom') {
+        var savedPosition = getSavedScrollPosition(sessionId);
         var savedAnchor = getSavedScrollAnchorPosition(sessionId);
         if (savedAnchor != null && typeof scrollToUserTurnOrLoadOlder === 'function') {
             requestAnimationFrame(function () {
-                if (sessionId === currentSessionId) void scrollToUserTurnOrLoadOlder(savedAnchor);
+                if (sessionId !== currentSessionId) return;
+                void scrollToUserTurnOrLoadOlder(savedAnchor, {
+                    silent: true,
+                    allowFullReload: false,
+                    maxOlderLoads: 2,
+                }).then(function (ok) {
+                    if (ok || sessionId !== currentSessionId || !chatContainer) return;
+                    if (savedPosition !== null && savedPosition > 0) {
+                        chatContainer.scrollTop = clampChatScrollTop(savedPosition);
+                        streamChatNearBottom = isNearBottom(chatContainer, STREAM_CHAT_NEAR_BOTTOM_PX);
+                        liveAutoFollow = streamChatNearBottom;
+                    } else {
+                        scrollToBottom();
+                    }
+                });
             });
             streamChatNearBottom = false;
             streamProcNearBottom = true;
             liveAutoFollow = false;
             return;
         }
-        var savedPosition = getSavedScrollPosition(sessionId);
         if (savedPosition !== null && savedPosition > 0) {
             // 恢复保存的滚动位置
             chatContainer.scrollTop = savedPosition;
@@ -6355,6 +6425,13 @@ window.addEventListener('focus', function () {
 const WELCOME_HTML = \`<div class="welcome" role="status"><div class="welcome-icon" aria-hidden="true"><img src="/assets/sugar-logo.png" alt="" draggable="false"></div><strong>开始一段新的对话</strong><p>在左侧侧栏新建或选择会话。Enter 发送，Ctrl+Enter / Shift+Enter 换行。</p></div>\`;
 
 function historyLoadScrollsToBottom(sessionId, mode) {
+    if (mode === 'bottom') return true;
+    if (mode === 'saved-or-bottom') {
+        var savedAnchor = getSavedScrollAnchorPosition(sessionId);
+        if (savedAnchor != null) return false;
+        var savedPosition = getSavedScrollPosition(sessionId);
+        if (savedPosition !== null && savedPosition > 0) return false;
+    }
     return true;
 }
 
@@ -7939,6 +8016,12 @@ function appendMessage(ctx, role, content, meta, runSessionId) {
     wrap.className = 'msg-wrap msg-wrap--' + (role === 'user' ? 'user' : 'assistant');
     if (role === 'assistant') wrap.classList.add('msg-wrap--answer-frame');
     if (meta.eventIndex != null) wrap.setAttribute('data-event-index', String(meta.eventIndex));
+    if (meta.runtimeSeq != null && Number.isFinite(Number(meta.runtimeSeq)) && Number(meta.runtimeSeq) > 0) {
+        wrap.setAttribute('data-runtime-seq', String(Math.floor(Number(meta.runtimeSeq))));
+    }
+    if (meta.truncateBeforeSeq != null && Number.isFinite(Number(meta.truncateBeforeSeq)) && Number(meta.truncateBeforeSeq) > 0) {
+        wrap.setAttribute('data-truncate-before-seq', String(Math.floor(Number(meta.truncateBeforeSeq))));
+    }
     var tTrunc = meta.turnTruncateIdx;
     if (tTrunc == null) { if (role === 'user' && meta.eventIndex != null) tTrunc = meta.eventIndex; }
     if (tTrunc != null && tTrunc >= 0) wrap.setAttribute('data-truncate-from', String(tTrunc));
@@ -8213,7 +8296,7 @@ function finalizeProgressStreamForType(ctx, logType) {
 }
 
 /* ── Subagent 浮层 / 过程块 ── */
-`,qe=`var subagentPanelOpen = false;
+`,Ue=`var subagentPanelOpen = false;
 var subagentPanelBound = false;
 var subagentDockExpanded = false;
 
@@ -9014,10 +9097,14 @@ function updateSubagentBlockFinish(ctx, event) {
     }
     if (event.type === 'user') {
         if (typeof eventIndex === 'number') ctx.lastUserEventIndex = eventIndex;
+        if (Number.isFinite(Number(event.runtime_seq || event.runtimeSeq))) {
+            ctx.lastUserRuntimeSeq = Math.floor(Number(event.runtime_seq || event.runtimeSeq));
+        }
         sealProcessGroup(ctx);
         appendMessage(ctx, 'user', event.content || '', {
             eventIndex: eventIndex,
             turnTruncateIdx: eventIndex,
+            runtimeSeq: event.runtime_seq || event.runtimeSeq,
             createdAt: event.created_at || event.createdAt || event.timestamp,
         }, runSessionId);
     } else if (event.type === 'user_steer') {
@@ -9026,7 +9113,12 @@ function updateSubagentBlockFinish(ctx, event) {
         var finalStream = ctx && ctx.stream ? ctx.stream : getVisibleChatStream();
         var userIdx = (ctx && Number.isFinite(Number(ctx.lastUserEventIndex))) ? Number(ctx.lastUserEventIndex) : latestVisibleUserEventIndex(finalStream);
         if (typeof hasDuplicateVisibleFinal === 'function' && hasDuplicateVisibleFinal(finalStream, userIdx, event.content)) return;
-        appendMessage(ctx, 'assistant', event.content || '', { eventIndex: eventIndex, turnTruncateIdx: ctx.lastUserEventIndex }, runSessionId);
+        appendMessage(ctx, 'assistant', event.content || '', {
+            eventIndex: eventIndex,
+            turnTruncateIdx: ctx.lastUserEventIndex,
+            runtimeSeq: event.runtime_seq || event.runtimeSeq,
+            truncateBeforeSeq: ctx.lastUserRuntimeSeq,
+        }, runSessionId);
     } else if (event.type === 'process_metrics') {
         applyProcessMetricsFromEvent(ctx, event);
     } else if (event.type === 'cache_stats') {
@@ -9107,9 +9199,10 @@ function updateSubagentBlockFinish(ctx, event) {
         const hasDraft = (typeof inputHasSendableText === 'function')
             ? inputHasSendableText()
             : !!(messageInput && String(messageInput.value || '').trim());
-        sendBtn.innerHTML = hasDraft ? '追问' : '停止 <span class="loader" aria-hidden="true"></span>';
+        const followupEnabled = (typeof isMyAgentFeatureEnabled === 'function') && isMyAgentFeatureEnabled('followupRestart', false);
+        sendBtn.innerHTML = (followupEnabled && hasDraft) ? '追问' : '停止 <span class="loader" aria-hidden="true"></span>';
         sendBtn.classList.add('is-stop');
-        sendBtn.classList.toggle('is-followup', hasDraft);
+        sendBtn.classList.toggle('is-followup', followupEnabled && hasDraft);
     } else {
         sendBtn.textContent = '发送';
         sendBtn.classList.remove('is-stop');
@@ -9769,7 +9862,10 @@ async function reconcileRunStateFromServer(opts) {
     });
     localIds.forEach(function (sid) {
         if (!active.has(sid)) {
-            abortSessionRun(sid, 'reconcile-finished');
+            var run = getSessionRunState(sid);
+            if (run && run.reattached) {
+                abortSessionRun(sid, 'reconcile-finished');
+            }
         }
     });
     if (currentSessionId && active.has(currentSessionId)) {
@@ -9897,7 +9993,7 @@ async function loadSessionMessages(sessionId, scrollBehavior, opts) {
             tocScrollBottomOnNextBuild = true;
         }
         suppressTocDuringSessionLoad = false;
-        rebuildToc();
+        if (!opts.tocAlreadyStarted) rebuildToc();
         updateSessionTitle();
         updateHistorySentinelVisibility();
         applyChatScrollAfterHistoryLoad(sessionId, scrollBehavior);
@@ -9974,6 +10070,7 @@ async function switchSession(sessionId, opts) {
         ensureVisibleChatStreamSlot();
     }
     showLoading();
+    if (typeof startTocForSessionLoad === 'function') startTocForSessionLoad(sessionId);
     return new Promise(function (resolve) {
         setTimeout(async function () {
         if (switchToken !== switchSessionEpoch || sessionId !== currentSessionId) { resolve(false); return; }
@@ -9981,6 +10078,7 @@ async function switchSession(sessionId, opts) {
             var loadedOk = await loadSessionMessages(sessionId, undefined, {
                 preloadOlderIfShort: isServerStreamActive(sessionId),
                 allowDuringRun: isServerStreamActive(sessionId),
+                tocAlreadyStarted: true,
             });
             if (!loadedOk) { resolve(false); return; }
         } catch (error) {
@@ -10070,10 +10168,10 @@ async function createNewSessionInner() {
             if (data === '[DONE]') {
                 finalizeLlmStreamChunks(runCtx);
                 finalizeProgressStreamChunks(runCtx);
-                await ensureFinalVisibleAfterRun(runSessionId, runCtx, { delayMs: 80 });
+                await ensureFinalVisibleAfterRunIfEnabled(runSessionId, runCtx, { delayMs: 80 });
                 sealProcessGroup(runCtx);
                 markSessionRunInactive(runSessionId);
-                if (getSessionRunState(runSessionId)) clearSessionRunState(runSessionId);
+                if (getSessionRunState(runSessionId)) clearSessionRunStateIfMatch(runSessionId, runCtx && runCtx.runId);
                 syncSessionListIndicatorClasses();
                 setSendButtonState();
                 if (runSessionId === currentSessionId) renderTodoPlanForCurrentSession();
@@ -10124,11 +10222,11 @@ async function createNewSessionInner() {
                         finalizeLlmStreamChunks(runCtx);
                         finalizeProgressStreamChunks(runCtx);
                         if (parsed.type === 'run_finished') {
-                            await ensureFinalVisibleAfterRun(eventSessionId, runCtx, { delayMs: 80 });
+                            await ensureFinalVisibleAfterRunIfEnabled(eventSessionId, runCtx, { delayMs: 80 });
                         }
                         sealProcessGroup(runCtx);
                         if (eventSessionId === runSessionId && getSessionRunState(runSessionId)) {
-                            clearSessionRunState(runSessionId);
+                            clearSessionRunStateIfMatch(runSessionId, runCtx && runCtx.runId);
                         }
                         syncSessionListIndicatorClasses();
                         setSendButtonState();
@@ -10244,7 +10342,7 @@ async function createNewSessionInner() {
                     finalizeLlmStreamChunks(runCtx);
                     finalizeProgressStreamChunks(runCtx);
                     markSessionRunInactive(runSessionId);
-                    if (getSessionRunState(runSessionId)) clearSessionRunState(runSessionId);
+                    if (getSessionRunState(runSessionId)) clearSessionRunStateIfMatch(runSessionId, runCtx && runCtx.runId);
                     syncSessionListIndicatorClasses();
                     setSendButtonState();
                     scheduleFollowupQueueDrain(runSessionId, 250);
@@ -10253,7 +10351,7 @@ async function createNewSessionInner() {
             } catch (e) { console.error('解析事件失败:', e); }
         }
     }
-    await ensureFinalVisibleAfterRun(runSessionId, runCtx, { delayMs: 120 });
+    await ensureFinalVisibleAfterRunIfEnabled(runSessionId, runCtx, { delayMs: 120 });
     return streamEventIdx;
 }
 
@@ -10315,6 +10413,11 @@ function renderFinalRecordIfMissing(sessionId, ctx, stream, finalRecord, userEve
     renderCtx.lastUserEventIndex = Math.max(renderCtx.lastUserEventIndex || -1, userEventIndex);
     renderMessageRecord(renderCtx, finalRecord, sessionId);
     return hasVisibleFinalAfterUser(stream, userEventIndex);
+}
+
+async function ensureFinalVisibleAfterRunIfEnabled(sessionId, ctx, opts) {
+    if (!isMyAgentFeatureEnabled('finalReconcile', true)) return false;
+    return ensureFinalVisibleAfterRun(sessionId, ctx, opts);
 }
 
 async function fetchLatestStoredFinalRecord(sessionId) {
@@ -10499,7 +10602,7 @@ async function startContinueAfterSubagents(sessionId) {
             finalizeLlmStreamChunks(runCtx);
             finalizeProgressStreamChunks(runCtx);
             if (runSessionId === currentSessionId && getRunAbortReason(runSessionId, runCtx) !== 'user') {
-                await ensureFinalVisibleAfterRun(runSessionId, runCtx, { delayMs: 120 });
+                await ensureFinalVisibleAfterRunIfEnabled(runSessionId, runCtx, { delayMs: 120 });
             }
             if (runSessionId === currentSessionId) renderTodoPlanForCurrentSession();
             if (liveAutoFollow) {
@@ -10575,7 +10678,7 @@ async function attachSessionEventStream(sessionId, opts) {
             finalizeProgressStreamChunks(runCtx);
         }
         if (runSessionId === currentSessionId && getRunAbortReason(runSessionId, runCtx) !== 'user') {
-            await ensureFinalVisibleAfterRun(runSessionId, runCtx, { delayMs: 120 });
+            await ensureFinalVisibleAfterRunIfEnabled(runSessionId, runCtx, { delayMs: 120 });
         }
         if (getSessionRunState(runSessionId) && getSessionRunState(runSessionId).reattached) {
             clearSessionRunState(runSessionId);
@@ -10590,6 +10693,28 @@ async function attachSessionEventStream(sessionId, opts) {
             updateSubagentContinueBanner(runSessionId);
         }
     }
+}
+
+function scheduleActiveSessionReconnect(sessionId, opts) {
+    if (!isMyAgentFeatureEnabled('streamReconnect', false)) return;
+    opts = opts || {};
+    var sid = String(sessionId || '');
+    if (!sid) return;
+    var delayMs = Math.max(0, Number(opts.delayMs) || 0);
+    setTimeout(async function () {
+        if (sid !== currentSessionId) return;
+        try {
+            if (typeof reconcileRunStateFromServer === 'function') {
+                await reconcileRunStateFromServer({ silent: true });
+            }
+            if (sid !== currentSessionId) return;
+            if ((isServerStreamActive(sid) || isSessionRunning(sid)) && typeof maybeStartStreamPollForSession === 'function') {
+                maybeStartStreamPollForSession(sid, { skipInitialLoad: true });
+            }
+        } catch (e) {
+            /* keep current UI state; normal polling or user action can retry later */
+        }
+    }, delayMs);
 }
 
 async function processRewriteTruncateAsync(pr) {
@@ -10805,6 +10930,7 @@ function getFollowupStatusText(item) {
 }
 
 function enqueueCurrentInputAsFollowup() {
+    if (!isMyAgentFeatureEnabled('followupRestart', false)) return false;
     const sid = currentSessionId;
     if (!sid) return false;
     rewriteInputWorkspacePaths();
@@ -10950,6 +11076,27 @@ async function sendFollowupNow(itemId, sessionId) {
             if (withdrawn) returnFollowupToInput(sid, withdrawn);
             return;
         }
+        if (steerResult && steerResult.restart && isMyAgentFeatureEnabled('followupRestart', false)) {
+            var previousRun = getSessionRunState(sid);
+            if (previousRun) abortSessionRun(sid, 'followup-restart');
+            markSessionRunInactive(sid);
+            item.status = 'sent';
+            persistFollowupQueue(sid);
+            renderFollowupQueue(sid);
+            setSendButtonState();
+            syncSessionListIndicatorClasses();
+            setTimeout(function () {
+                takeFollowupItem(sid, itemId);
+                renderFollowupQueue(sid);
+            }, 1200);
+            return sendMessage({
+                message: item.text,
+                fromQueue: true,
+                sessionId: sid,
+                forceStart: true,
+                preserveInput: true,
+            });
+        }
         item.status = 'accepted';
         persistFollowupQueue(sid);
         renderFollowupQueue(sid);
@@ -11024,8 +11171,12 @@ async function sendMessage(options) {
     const visibleMessage = options.message != null ? String(options.message) : messageInput.value;
     const rawMessage = (options.fromQueue || options.fromInlineRewrite) ? visibleMessage : expandInputPathTokens(visibleMessage);
     if (!String(rawMessage).trim()) return;
-    if (isSessionRunning(submitSessionIdInitial)) return;
-    if (sendPipelineLock && sendPipelineLockSessionId === submitSessionIdInitial) return;
+    if (isSessionRunning(submitSessionIdInitial) && !options.forceStart) return;
+    if (sendPipelineLock && sendPipelineLockSessionId === submitSessionIdInitial && !options.forceStart) return;
+    if (options.forceStart && submitSessionIdInitial) {
+        var previousRun = getSessionRunState(submitSessionIdInitial);
+        if (previousRun) abortSessionRun(submitSessionIdInitial, 'followup-restart');
+    }
 
     /* 立即上锁：阻止后续连击；锁的 key 是提交时的会话，而非当前会话。 */
     sendPipelineLock = true;
@@ -11097,6 +11248,7 @@ async function sendMessage(options) {
         runCtx = newDomContext(getVisibleChatStream());
     }
     submittedRunCtx = runCtx;
+    runCtx.runId = clientRunId;
     runCtx.runStartedAt = userSentAt;
     runCtx.lastUserEventIndex = preCount;
     resetLlmState(runCtx);
@@ -11142,6 +11294,7 @@ async function sendMessage(options) {
     }).catch(function(err) {
         console.error('更新事件计数缓存失败:', err);
     });
+    let streamDisconnectedUnexpectedly = false;
     try {
         const response = await fetch('/chat', { method: 'POST', body: formData, signal: ac.signal });
         streamEventIdx = await consumeAgentSseResponse(response, runCtx, runSessionId, streamEventIdx);
@@ -11151,6 +11304,7 @@ async function sendMessage(options) {
         }
         else {
             console.error('请求失败:', error);
+            streamDisconnectedUnexpectedly = true;
             const msg = (error && error.message) ? String(error.message) : String(error);
             appendLog(runCtx, '请求失败: ' + msg, 'error-log', runSessionId);
         }
@@ -11158,7 +11312,7 @@ async function sendMessage(options) {
         finalizeLlmStreamChunks(runCtx);
         finalizeProgressStreamChunks(runCtx);
         if (!switchedAway && runSessionId === currentSessionId && getRunAbortReason(runSessionId, runCtx) !== 'user') {
-            await ensureFinalVisibleAfterRun(runSessionId, runCtx, { delayMs: 120 });
+            await ensureFinalVisibleAfterRunIfEnabled(runSessionId, runCtx, { delayMs: 120 });
         }
         if (runSessionId === currentSessionId) renderTodoPlanForCurrentSession();
         if (liveAutoFollow && !switchedAway) {
@@ -11172,7 +11326,11 @@ async function sendMessage(options) {
             updateSubagentContinueBanner(runSessionId);
         }
         if (getSessionRunState(runSessionId)) {
-            clearSessionRunState(runSessionId);
+            clearSessionRunStateIfMatch(runSessionId, clientRunId);
+        }
+        if (streamDisconnectedUnexpectedly && runSessionId === currentSessionId && getRunAbortReason(runSessionId, runCtx) !== 'user') {
+            scheduleActiveSessionReconnect(runSessionId, { delayMs: 500 });
+            scheduleActiveSessionReconnect(runSessionId, { delayMs: 2500 });
         }
         if (runSessionId !== currentSessionId) {
             const el = runCtx.stream;
@@ -11197,6 +11355,7 @@ async function sendMessage(options) {
 }
 
 messageInput.addEventListener('keydown', function onFollowupInputKeydown(e) {
+    if (!isMyAgentFeatureEnabled('followupRestart', false)) return;
     if (e.key !== 'Enter') return;
     e.stopImmediatePropagation();
     if (e.ctrlKey && !e.shiftKey && !e.metaKey) {
@@ -11243,7 +11402,7 @@ chatContainer.addEventListener('scroll', function () {
 sendBtn.addEventListener('click', function (e) {
     e.stopImmediatePropagation();
     if (isSessionRunning(currentSessionId)) {
-        if (inputHasSendableText()) enqueueCurrentInputAsFollowup();
+        if (isMyAgentFeatureEnabled('followupRestart', false) && inputHasSendableText()) enqueueCurrentInputAsFollowup();
         else pauseCurrentRun();
         return;
     }
@@ -11547,7 +11706,7 @@ if (typeof globalThis !== 'undefined') {
     globalThis.toggleTodoPlanPanel = toggleTodoPlanPanel;
     globalThis.toggleTocPanel = toggleTocPanel;
 }
-`,ze=[Se,he,be,ye,Ie,xe,we,Ce,ke,Te,Ee,_e,Le,Ae,Pe,Re,Fe,Be,Me,Ne,Oe,De,Ue,qe,He,je,We,Ve];Function(`"use strict";
+`,ze=[Se,he,be,ye,Ie,xe,we,Ce,ke,Te,Ee,_e,Le,Ae,Pe,Re,Fe,Be,Me,Ne,Oe,De,qe,Ue,He,je,We,Ve];Function(`"use strict";
 `+ze.join(`
 
 `)+`

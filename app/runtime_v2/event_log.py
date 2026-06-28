@@ -148,7 +148,10 @@ class SessionEventLog:
                 line = line.strip()
                 if not line:
                     continue
-                yield RuntimeEvent.from_dict(json.loads(line))
+                try:
+                    yield RuntimeEvent.from_dict(json.loads(line))
+                except Exception:
+                    continue
 
     def next_seq(self, session_id: str) -> int:
         last = 0

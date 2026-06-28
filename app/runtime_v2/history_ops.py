@@ -79,6 +79,21 @@ class RuntimeHistoryOps:
             "reason": reason or "ui_truncate",
         })
 
+    def truncate_visible_history_before_seq(
+        self,
+        session_id: str,
+        *,
+        target_seq: int,
+        keep_to_seq: int = 0,
+        reason: str = "",
+    ) -> RuntimeEvent:
+        """Hide visible history from ``target_seq`` onward without UI indexes."""
+        return self.change_visible_range(
+            session_id,
+            to_seq=max(0, int(keep_to_seq)),
+            reason=reason or f"truncate_before_seq:{int(target_seq)}",
+        )
+
     def change_model_window(self, session_id: str, *, from_seq: Optional[int] = None, to_seq: Optional[int] = None, reason: str = "") -> RuntimeEvent:
         payload = {"reason": reason}
         if from_seq is not None:

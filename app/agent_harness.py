@@ -2989,6 +2989,9 @@ class SessionManager:
     def _load_ui_events_for_active_runtime(self, session_id: str) -> List[dict]:
         """Load UI-visible history from the selected runtime, with V1 as fallback."""
         if self._runtime_v2_primary():
+            legacy_events = self._load_ui_events(session_id)
+            if legacy_events:
+                return legacy_events
             try:
                 from runtime_v2.ui_projection import RuntimeUiProjection
 
@@ -2998,7 +3001,6 @@ class SessionManager:
                 )
                 events = projection.read_ui_events(
                     session_id,
-                    legacy_loader=lambda: self._load_ui_events(session_id),
                 )
                 if events:
                     return events
@@ -3335,6 +3337,7 @@ class SessionManager:
         session_id: str,
         before_index: int,
         *,
+        truncate_before_seq: Optional[int] = None,
         boundary_for_branch: bool = False,
         create_backup: bool = True,
     ) -> bool:
@@ -3349,6 +3352,28 @@ class SessionManager:
             n = len(events)
             if before_index < 0:
                 return False
+            runtime_truncate_keep_seq: Optional[int] = None
+            runtime_seq_truncate = False
+            if self._runtime_v2_primary() and truncate_before_seq is not None:
+                try:
+                    from runtime_v2.ui_projection import RuntimeUiProjection
+
+                    projection = RuntimeUiProjection(
+                        self.repository.sessions_dir,
+                        path_resolver=self._resolve_session_path,
+                    )
+                    target_seq = int(truncate_before_seq)
+                    end_index = projection.runtime_seq_to_ui_end_index(session_id, target_seq)
+                    keep_seq = projection.previous_visible_runtime_seq_before(session_id, target_seq)
+                    if end_index is None or keep_seq is None:
+                        return False
+                    before_index = max(0, int(end_index) - 1)
+                    runtime_truncate_keep_seq = int(keep_seq)
+                    runtime_seq_truncate = True
+                    events = projection.read_ui_events_fast(session_id)
+                    n = len(events)
+                except (TypeError, ValueError):
+                    return False
             if before_index > n:
                 before_index = n
             new_events = events[:before_index]
@@ -3359,12 +3384,21 @@ class SessionManager:
                     event_count=n,
                 )
             if self._runtime_v2_primary():
-                self._observe_runtime_v2_history(
-                    "truncate_ui_history",
-                    session_id,
-                    before_index=before_index,
-                    reason="runtime_v2_truncate",
-                )
+                if truncate_before_seq is not None and runtime_truncate_keep_seq is not None:
+                    self._observe_runtime_v2_history(
+                        "truncate_visible_history_before_seq",
+                        session_id,
+                        target_seq=int(truncate_before_seq),
+                        keep_to_seq=runtime_truncate_keep_seq,
+                        reason="runtime_v2_truncate",
+                    )
+                else:
+                    self._observe_runtime_v2_history(
+                        "truncate_ui_history",
+                        session_id,
+                        before_index=before_index,
+                        reason="runtime_v2_truncate",
+                    )
             self._save_ui_events(session_id, new_events)
             new_llm, new_work, consumed_cprefix = self._rebuild_llm_work_from_ui(
                 session_id,
@@ -3380,14 +3414,15 @@ class SessionManager:
             )
             if consumed_cprefix:
                 self.remove_llm_compress_prefix_backup(session_id, consumed_cprefix)
-            self._observe_runtime_v2_history(
-                "observe_legacy_truncate",
-                session_id,
-                before_index=before_index,
-                old_event_count=n,
-                new_event_count=len(new_events),
-                boundary_for_branch=boundary_for_branch,
-            )
+            if not runtime_seq_truncate:
+                self._observe_runtime_v2_history(
+                    "observe_legacy_truncate",
+                    session_id,
+                    before_index=before_index,
+                    old_event_count=n,
+                    new_event_count=len(new_events),
+                    boundary_for_branch=boundary_for_branch,
+                )
             self._observe_runtime_v2_history(
                 "replace_model_history",
                 session_id,
@@ -3425,7 +3460,11 @@ class SessionManager:
         return f"({max_n + 1}){root}"
 
     def branch_session_at_event_index(
-        self, source_session_id: str, before_index: int
+        self,
+        source_session_id: str,
+        before_index: int,
+        *,
+        branch_after_seq: Optional[int] = None,
     ) -> Optional[dict]:
         """
         从 source 在 ui_events[0:before_index] 处复制出新会话（原会话不变）。
@@ -3440,8 +3479,45 @@ class SessionManager:
             n = len(events)
             if before_index < 0:
                 return {"ok": False, "error": "invalid_before_index"}
-            if before_index > n:
+            if before_index > n and not (self._runtime_v2_primary() and branch_after_seq is not None):
                 return {"ok": False, "error": "before_index_after_end", "event_count": n}
+            branch_from_seq: Optional[int] = None
+            if self._runtime_v2_primary() and branch_after_seq is not None:
+                try:
+                    from runtime_v2.ui_projection import RuntimeUiProjection
+
+                    projection = RuntimeUiProjection(
+                        self.repository.sessions_dir,
+                        path_resolver=self._resolve_session_path,
+                    )
+                    seq = int(branch_after_seq)
+                    source_event = None
+                    for candidate in projection.event_log.iter_events(sid):
+                        if int(candidate.seq) == seq:
+                            source_event = candidate
+                            break
+                    if source_event is None:
+                        return {"ok": False, "error": "runtime_seq_not_found"}
+                    source_ui = projection._event_to_ui(sid, source_event)
+                    if not source_ui or source_ui.get("type") != "final":
+                        return {
+                            "ok": False,
+                            "error": "branch_target_not_final",
+                            "event_count": n,
+                            "last_type": str(source_ui.get("type") if isinstance(source_ui, dict) else source_event.type),
+                            "runtime_seq": seq,
+                        }
+                    seq_before_index = projection.runtime_seq_to_ui_end_index(sid, seq)
+                    if seq_before_index is None:
+                        return {"ok": False, "error": "runtime_seq_not_visible", "runtime_seq": seq}
+                    before_index = int(seq_before_index)
+                    branch_from_seq = seq
+                    events = projection.read_ui_events_fast(sid)
+                    n = len(events)
+                    if before_index > n:
+                        return {"ok": False, "error": "before_index_after_end", "event_count": n}
+                except (TypeError, ValueError):
+                    return {"ok": False, "error": "invalid_runtime_seq"}
             new_id = str(uuid.uuid4())
             dst_path = self._get_session_path(new_id)
             if dst_path.exists():
@@ -3540,8 +3616,9 @@ class SessionManager:
                 new_event_count=len(new_events),
                 name=branch_name,
             )
-            branch_from_seq = before_index
-            if self._runtime_v2_primary():
+            if branch_from_seq is None:
+                branch_from_seq = before_index
+            if self._runtime_v2_primary() and branch_after_seq is None:
                 try:
                     from runtime_v2.ui_projection import RuntimeUiProjection
 

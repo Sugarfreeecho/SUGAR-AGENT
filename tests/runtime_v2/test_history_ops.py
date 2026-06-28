@@ -62,6 +62,24 @@ class RuntimeHistoryOpsTests(unittest.TestCase):
             self.assertEqual(len(snapshot["visible_messages"]), 1)
             self.assertEqual(snapshot["visible_messages"][0]["payload"]["content"], "u2")
 
+    def test_truncate_visible_history_before_seq_keeps_prior_visible_messages(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            mirror = RuntimeMirror(tmp)
+            e1 = mirror.mirror_ui_event("s1", {"type": "user", "content": "u1"})
+            e2 = mirror.mirror_ui_event("s1", {"type": "final", "content": "a1"})
+            e3 = mirror.mirror_ui_event("s1", {"type": "user", "content": "u2"})
+            mirror.mirror_ui_event("s1", {"type": "final", "content": "a2"})
+
+            ops = RuntimeHistoryOps(tmp)
+            op = ops.truncate_visible_history_before_seq("s1", target_seq=e3.seq, keep_to_seq=e2.seq)
+            snapshot = ops.snapshots.read("s1")
+            events = RuntimeUiProjection(tmp).read_ui_events("s1")
+
+            self.assertEqual(op.payload["to_seq"], e2.seq)
+            self.assertNotIn("to_ui_index", op.payload)
+            self.assertEqual([m["payload"]["content"] for m in snapshot["visible_messages"]], ["u1", "a1"])
+            self.assertEqual([ev["runtime_seq"] for ev in events], [e1.seq, e2.seq])
+
     def test_model_history_replace_changes_model_projection_only(self):
         with tempfile.TemporaryDirectory() as tmp:
             mirror = RuntimeMirror(tmp)

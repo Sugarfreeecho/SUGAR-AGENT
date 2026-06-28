@@ -1373,9 +1373,15 @@ function maybeStartStreamPollForSession(sid, opts) {
     }, 15000);
 }
 
-async function scrollToUserTurnOrLoadOlder(eventIndex) {
+async function scrollToUserTurnOrLoadOlder(eventIndex, opts) {
+    opts = opts || {};
     var ei = Number(eventIndex);
-    if (!Number.isFinite(ei)) return;
+    if (!Number.isFinite(ei)) return false;
+    var silent = !!opts.silent;
+    var allowFullReload = opts.allowFullReload !== false && !silent;
+    var maxOlderLoads = Number.isFinite(Number(opts.maxOlderLoads))
+        ? Math.max(0, Number(opts.maxOlderLoads))
+        : 120;
     function setTocJumpLoading(active) {
         var list = document.getElementById('chat-toc-list');
         var link = list && list.querySelector('a[data-event-index="' + ei + '"]');
@@ -1391,6 +1397,7 @@ async function scrollToUserTurnOrLoadOlder(eventIndex) {
             || stream.querySelector('#user-msg-' + ei);
     }
     async function loadFullHistoryForTarget(sid) {
+        if (!allowFullReload) return;
         if (sid !== currentSessionId || typeof loadSessionMessages !== 'function') return;
         try {
             await loadSessionMessages(sid, 'saved-or-bottom', {
@@ -1406,17 +1413,18 @@ async function scrollToUserTurnOrLoadOlder(eventIndex) {
         var wrap = findWrap();
         if (wrap) {
             wrap.scrollIntoView({ behavior: 'smooth', block: 'start' });
-            return;
+            return true;
         }
         var sid = currentSessionId;
         var safety = 0;
+        var olderLoads = 0;
         var pagingCoveredTarget = false;
         while (sid === currentSessionId && safety < 120) {
             safety += 1;
             wrap = findWrap();
             if (wrap) {
                 wrap.scrollIntoView({ behavior: 'smooth', block: 'start' });
-                return;
+                return true;
             }
             var ph = sessionHistoryPaging;
             if ((!ph || ph.sessionId !== sid) && getVisibleChatStream()) {
@@ -1432,28 +1440,30 @@ async function scrollToUserTurnOrLoadOlder(eventIndex) {
                 break;
             }
             if (!ph.has_older) break;
+            if (olderLoads >= maxOlderLoads) break;
             while (historyOlderLoading && currentSessionId === sid) {
                 await new Promise(function (r) { setTimeout(r, 40); });
             }
+            olderLoads += 1;
             await loadOlderHistoryChunk({ keepTocStable: true, turns: 50 });
         }
         wrap = findWrap();
         if (wrap) {
             wrap.scrollIntoView({ behavior: 'smooth', block: 'start' });
-            return;
+            return true;
         }
-        if (sid === currentSessionId && pagingCoveredTarget) {
+        if (allowFullReload && sid === currentSessionId && pagingCoveredTarget) {
             await loadFullHistoryForTarget(sid);
-            if (sid !== currentSessionId) return;
+            if (sid !== currentSessionId) return false;
             wrap = findWrap();
             if (wrap) {
                 wrap.scrollIntoView({ behavior: 'smooth', block: 'start' });
-                return;
+                return true;
             }
             rebuildToc();
         }
         if (wrap) wrap.scrollIntoView({ behavior: 'smooth', block: 'start' });
-        else {
+        else if (!silent) {
             showUiAlert({
                 title: '无法定位该条',
                 message: '未能加载到对应的用户提问（可能索引不一致）。可刷新页面或使用「更早 ' + HISTORY_DIALOGUES_PER_PAGE + ' 轮对话」手动分页。',
@@ -1461,6 +1471,7 @@ async function scrollToUserTurnOrLoadOlder(eventIndex) {
                 confirmText: '知道了',
             });
         }
+        return !!wrap;
     } finally {
         setTocJumpLoading(false);
     }

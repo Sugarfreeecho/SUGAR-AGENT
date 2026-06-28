@@ -11,6 +11,7 @@ import mimetypes
 import os
 import re
 import threading
+import uuid
 from collections import defaultdict, deque
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
@@ -278,7 +279,13 @@ def _reserve_session_chat_start(sid: str) -> bool:
     with _chat_start_lock:
         if x in _chat_starting_by_session:
             return False
-    if bool(_session_run_state_fields(x).get("stream_active")):
+    followup_takeover = False
+    if os.getenv("MYAGENT_ENABLE_FOLLOWUP_RESTART", "0").strip().lower() in {"1", "true", "yes", "on"}:
+        try:
+            followup_takeover = session_manager.get_interrupt_reason(x) == "followup"
+        except Exception:
+            followup_takeover = False
+    if bool(_session_run_state_fields(x).get("stream_active")) and not followup_takeover:
         return False
     with _chat_start_lock:
         if x in _chat_starting_by_session:
@@ -748,6 +755,11 @@ def get_index_html():
     sessions_dir = str((WORK_DIR / "sessions").resolve())
     app_dotenv = str(dotenv_file_path().resolve())
     ctx_thr = _ui_ah.CONTEXT_WINDOW
+    feature_flags = {
+        "followupRestart": os.getenv("MYAGENT_ENABLE_FOLLOWUP_RESTART", "0").strip().lower() in {"1", "true", "yes", "on"},
+        "streamReconnect": os.getenv("MYAGENT_ENABLE_STREAM_RECONNECT", "0").strip().lower() in {"1", "true", "yes", "on"},
+        "finalReconcile": os.getenv("MYAGENT_ENABLE_FINAL_RECONCILE", "1").strip().lower() in {"1", "true", "yes", "on"},
+    }
     inject = (
         "<script>"
         f"window.__UI_LOG_TRUNCATE_KEEP_LINES__={UI_LOG_TRUNCATE_KEEP_LINES};"
@@ -755,6 +767,7 @@ def get_index_html():
         f"window.__WORK_DIR__={json.dumps(work_dir)};"
         f"window.__SESSIONS_DIR__={json.dumps(sessions_dir)};"
         f"window.__APP_DOTENV_PATH__={json.dumps(app_dotenv)};"
+        f"window.__MYAGENT_FEATURES__={json.dumps(feature_flags)};"
         "</script>"
     )
     if _DIST_INDEX.is_file():
@@ -1920,19 +1933,54 @@ async def post_session_steer(session_id: str, request: Request):
         return JSONResponse(content={"ok": False, "error": "invalid json"}, status_code=400)
     message = str((data or {}).get("message") or "").strip()
     client_id = str((data or {}).get("client_id") or "").strip()
-    result = enqueue_session_steer(sid, message, client_id=client_id)
-    if not result.get("ok"):
-        return JSONResponse(content=result, status_code=400)
-    result["aborted"] = abort_session_steer_run(sid, reason="steer")
-    if not result["aborted"]:
-        item = result.get("item") if isinstance(result.get("item"), dict) else {}
-        remove_session_steer(
-            sid,
-            steer_id=str(item.get("id") or ""),
-            client_id=str(item.get("client_id") or client_id or ""),
-        )
-        return JSONResponse(content={"ok": False, "error": "session is not running"}, status_code=409)
-    return JSONResponse(content=result)
+    followup_restart_enabled = os.getenv("MYAGENT_ENABLE_FOLLOWUP_RESTART", "0").strip().lower() in {"1", "true", "yes", "on"}
+    if not followup_restart_enabled:
+        result = enqueue_session_steer(sid, message, client_id=client_id)
+        if not result.get("ok"):
+            return JSONResponse(content=result, status_code=400)
+        result["aborted"] = abort_session_steer_run(sid, reason="steer")
+        if not result["aborted"]:
+            item = result.get("item") if isinstance(result.get("item"), dict) else {}
+            remove_session_steer(
+                sid,
+                steer_id=str(item.get("id") or ""),
+                client_id=str(item.get("client_id") or client_id or ""),
+            )
+            return JSONResponse(content={"ok": False, "error": "session is not running"}, status_code=409)
+        return JSONResponse(content=result)
+    if not message:
+        return JSONResponse(content={"ok": False, "error": "empty steer"}, status_code=400)
+    steer_item = {
+        "id": str(uuid.uuid4()),
+        "content": message,
+        "client_id": client_id,
+    }
+    aborted = abort_session_steer_run(sid, reason="steer")
+    session_manager.request_interrupt(sid, reason="followup")
+    _active_chat_by_session.pop(sid, None)
+    _active_chat_last_seen.pop(sid, None)
+    with _chat_start_lock:
+        _chat_starting_by_session.pop(sid, None)
+    interrupted_run_ids = _interrupt_runtime_v2_active_runs(sid, reason="followup")
+    try:
+        from session_event_bus import close_session_stream, publish_session_event
+
+        for rid in interrupted_run_ids:
+            await publish_session_event(
+                sid,
+                {"type": "run_interrupted", "run_id": rid, "reason": "followup", "ephemeral": True},
+            )
+        await close_session_stream(sid)
+    except Exception as e:
+        logger.debug("publish steer restart interrupt failed for %s: %s", sid, e)
+    return JSONResponse(
+        content={
+            "ok": True,
+            "restart": True,
+            "aborted": bool(aborted or interrupted_run_ids),
+            "item": steer_item,
+        }
+    )
 
 
 @fastapi_app.delete("/sessions/{session_id}/steer")
@@ -2393,8 +2441,35 @@ async def get_session_messages(
                     session_manager.repository.sessions_dir,
                     path_resolver=session_manager._resolve_session_path,
                 )
+            legacy_count = session_manager.get_ui_event_count(session_id)
+            if legacy_count > 0:
+                if limit is None and turns is None:
+                    payload = session_manager.get_ui_events_for_display(session_id)
+                    elapsed_ms = int((_time.perf_counter() - t0) * 1000)
+                    if elapsed_ms >= 500:
+                        logger.warning("/messages slow legacy-ui session=%s full=1 elapsed_ms=%s", session_id, elapsed_ms)
+                    return JSONResponse(content=payload)
+                lim = int(limit) if limit is not None else 200
+                tv = int(turns) if turns is not None else None
+                payload = session_manager.get_ui_events_page(
+                    session_id,
+                    limit=lim,
+                    before_index=before_index,
+                    turns=tv,
+                )
+                elapsed_ms = int((_time.perf_counter() - t0) * 1000)
+                if elapsed_ms >= 500:
+                    logger.warning(
+                        "/messages slow legacy-ui session=%s turns=%s limit=%s before=%s elapsed_ms=%s",
+                        session_id,
+                        tv,
+                        lim,
+                        before_index,
+                        elapsed_ms,
+                    )
+                return JSONResponse(content=payload)
             if limit is None and turns is None:
-                payload = projection.read_ui_events_fast(session_id)
+                payload = projection.read_ui_events(session_id)
                 elapsed_ms = int((_time.perf_counter() - t0) * 1000)
                 if elapsed_ms >= 500:
                     logger.warning("/messages slow runtime=2 session=%s full=1 elapsed_ms=%s", session_id, elapsed_ms)
@@ -2450,6 +2525,9 @@ async def get_session_message_count(session_id: str):
                 session_manager.repository.sessions_dir,
                 path_resolver=session_manager._resolve_session_path,
             )
+            legacy_count = session_manager.get_ui_event_count(session_id)
+            if legacy_count > 0:
+                return JSONResponse(content={"count": legacy_count, "source": "legacy_ui"})
             count, _ = projection.count_ui_events_light(session_id)
             return JSONResponse(content={"count": count, "source": "runtime_v2"})
         except Exception as exc:
@@ -2706,6 +2784,7 @@ async def clear_session_unread_result(session_id: str):
 async def truncate_session_events(
     session_id: str,
     before_index: int = Query(..., description="保留事件区间 [0, before_index)"),
+    before_seq: Optional[int] = Query(None, ge=1, description="Runtime V2 visible event seq to truncate before"),
     backup: bool = Query(False, description="whether to create truncate_backups before truncating"),
 ):
     """
@@ -2724,6 +2803,7 @@ async def truncate_session_events(
             session_manager.truncate_session_at_event_index,
             session_id,
             int(before_index),
+            truncate_before_seq=before_seq,
             create_backup=bool(backup),
         )
     except (TypeError, ValueError):
@@ -2743,6 +2823,7 @@ async def branch_session_events(
         ...,
         description="新会话保留 ui_events[0:before_index]（与 truncate 语义一致）",
     ),
+    after_seq: Optional[int] = Query(None, ge=1),
 ):
     """
     在当前会话的 event 下标处复制出分支会话，原会话不变。
@@ -2755,6 +2836,7 @@ async def branch_session_events(
             session_manager.branch_session_at_event_index,
             session_id,
             int(before_index),
+            branch_after_seq=after_seq,
         )
     except (TypeError, ValueError):
         return JSONResponse(content={"ok": False, "error": "invalid before_index"}, status_code=400)
