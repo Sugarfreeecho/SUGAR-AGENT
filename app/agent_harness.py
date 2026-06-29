@@ -930,6 +930,7 @@ def refresh_executor_client_from_env() -> None:
     _agent_memory.CONTEXT_COMPRESS_MAX_ROUNDS = CONTEXT_COMPRESS_MAX_ROUNDS
     _agent_memory.CONTEXT_COMPRESS_ROUND3_MAX_REACT = CONTEXT_COMPRESS_ROUND3_MAX_REACT
     _agent_memory.CONTEXT_COMPRESS_TARGET_RATIO = CONTEXT_COMPRESS_TARGET_RATIO
+    _invalidate_executor_config_cache()
 
 
 def executor_text_complete(prompt: str) -> str:
@@ -4043,7 +4044,6 @@ class SessionManager:
         if self._is_deleted_session(session_id):
             return
         self.repository.save_metadata_atomic(session_id, metadata)
-        _invalidate_executor_config_cache(session_id)
         self._set_interrupt_cache_from_metadata(session_id, metadata)
 
     def _load_metadata_unlocked(self, session_id: str) -> dict:

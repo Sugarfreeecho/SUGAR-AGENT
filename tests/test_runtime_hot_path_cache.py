@@ -29,6 +29,32 @@ def test_resolve_executor_config_uses_session_cache(monkeypatch):
     assert calls["metadata"] == 1
 
 
+def test_metadata_sidecar_updates_do_not_invalidate_executor_config_cache(monkeypatch, tmp_path):
+    import agent_harness
+
+    agent_harness._invalidate_executor_config_cache()
+    calls = {"metadata": 0}
+    sid = str(uuid.uuid4())
+
+    def load_metadata(_sid):
+        calls["metadata"] += 1
+        return {}
+
+    monkeypatch.setattr(agent_harness.session_manager, "_load_metadata", load_metadata)
+    monkeypatch.setattr(agent_harness.model_profiles, "top_profile_id_with_env", lambda _root: "")
+
+    first = agent_harness.resolve_executor_config_for_session(sid)
+    manager = agent_harness.SessionManager(tmp_path / "sessions", tmp_path / "sessions.json")
+    manager._save_metadata(
+        sid,
+        {"ui_event_count": 10, "updated_at": "2026-06-29T19:20:00"},
+    )
+    second = agent_harness.resolve_executor_config_for_session(sid)
+
+    assert first == second
+    assert calls["metadata"] == 1
+
+
 def test_interrupt_check_uses_memory_cache(tmp_path):
     import agent_harness
 

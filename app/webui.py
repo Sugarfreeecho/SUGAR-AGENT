@@ -1867,6 +1867,7 @@ async def set_session_model_profile(session_id: str, req: Request):
         meta["model_profile_id"] = pid
         meta["updated_at"] = __import__("datetime").datetime.now().isoformat()
         session_manager._save_metadata_unlocked(sid, meta)
+        _invalidate_executor_config_cache(sid)
     return JSONResponse({"ok": True, "profile_id": pid})
 
 @fastapi_app.delete("/sessions/{session_id}")
