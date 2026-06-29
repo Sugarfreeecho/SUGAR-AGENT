@@ -19,7 +19,7 @@ async function consumeAgentSseResponse(response, runCtx, runSessionId, streamEve
             if (data === '[DONE]') {
                 finalizeLlmStreamChunks(runCtx);
                 finalizeProgressStreamChunks(runCtx);
-                await ensureFinalVisibleAfterRunIfEnabled(runSessionId, runCtx, { delayMs: 80 });
+                scheduleFinalVisibleAfterRunIfEnabled(runSessionId, runCtx, { delayMs: 80 });
                 sealProcessGroup(runCtx);
                 markSessionRunInactive(runSessionId);
                 if (getSessionRunState(runSessionId)) clearSessionRunStateIfMatch(runSessionId, runCtx && runCtx.runId);
@@ -73,7 +73,7 @@ async function consumeAgentSseResponse(response, runCtx, runSessionId, streamEve
                         finalizeLlmStreamChunks(runCtx);
                         finalizeProgressStreamChunks(runCtx);
                         if (parsed.type === 'run_finished') {
-                            await ensureFinalVisibleAfterRunIfEnabled(eventSessionId, runCtx, { delayMs: 80 });
+                            scheduleFinalVisibleAfterRunIfEnabled(eventSessionId, runCtx, { delayMs: 80 });
                         }
                         sealProcessGroup(runCtx);
                         if (eventSessionId === runSessionId && getSessionRunState(runSessionId)) {
@@ -202,7 +202,7 @@ async function consumeAgentSseResponse(response, runCtx, runSessionId, streamEve
             } catch (e) { console.error('解析事件失败:', e); }
         }
     }
-    await ensureFinalVisibleAfterRunIfEnabled(runSessionId, runCtx, { delayMs: 120 });
+    scheduleFinalVisibleAfterRunIfEnabled(runSessionId, runCtx, { delayMs: 120 });
     return streamEventIdx;
 }
 
@@ -269,6 +269,15 @@ function renderFinalRecordIfMissing(sessionId, ctx, stream, finalRecord, userEve
 async function ensureFinalVisibleAfterRunIfEnabled(sessionId, ctx, opts) {
     if (!isMyAgentFeatureEnabled('finalReconcile', true)) return false;
     return ensureFinalVisibleAfterRun(sessionId, ctx, opts);
+}
+
+function scheduleFinalVisibleAfterRunIfEnabled(sessionId, ctx, opts) {
+    if (!isMyAgentFeatureEnabled('finalReconcile', true)) return;
+    setTimeout(function () {
+        ensureFinalVisibleAfterRun(sessionId, ctx, opts).catch(function (e) {
+            console.error('final reconcile failed:', e);
+        });
+    }, 0);
 }
 
 async function fetchLatestStoredFinalRecord(sessionId) {
@@ -453,7 +462,7 @@ async function startContinueAfterSubagents(sessionId) {
             finalizeLlmStreamChunks(runCtx);
             finalizeProgressStreamChunks(runCtx);
             if (runSessionId === currentSessionId && getRunAbortReason(runSessionId, runCtx) !== 'user') {
-                await ensureFinalVisibleAfterRunIfEnabled(runSessionId, runCtx, { delayMs: 120 });
+                scheduleFinalVisibleAfterRunIfEnabled(runSessionId, runCtx, { delayMs: 120 });
             }
             if (runSessionId === currentSessionId) renderTodoPlanForCurrentSession();
             if (liveAutoFollow) {
@@ -529,7 +538,7 @@ async function attachSessionEventStream(sessionId, opts) {
             finalizeProgressStreamChunks(runCtx);
         }
         if (runSessionId === currentSessionId && getRunAbortReason(runSessionId, runCtx) !== 'user') {
-            await ensureFinalVisibleAfterRunIfEnabled(runSessionId, runCtx, { delayMs: 120 });
+            scheduleFinalVisibleAfterRunIfEnabled(runSessionId, runCtx, { delayMs: 120 });
         }
         if (getSessionRunState(runSessionId) && getSessionRunState(runSessionId).reattached) {
             clearSessionRunState(runSessionId);
@@ -1163,7 +1172,7 @@ async function sendMessage(options) {
         finalizeLlmStreamChunks(runCtx);
         finalizeProgressStreamChunks(runCtx);
         if (!switchedAway && runSessionId === currentSessionId && getRunAbortReason(runSessionId, runCtx) !== 'user') {
-            await ensureFinalVisibleAfterRunIfEnabled(runSessionId, runCtx, { delayMs: 120 });
+            scheduleFinalVisibleAfterRunIfEnabled(runSessionId, runCtx, { delayMs: 120 });
         }
         if (runSessionId === currentSessionId) renderTodoPlanForCurrentSession();
         if (liveAutoFollow && !switchedAway) {

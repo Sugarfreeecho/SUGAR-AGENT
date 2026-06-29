@@ -404,7 +404,7 @@ function onMessageToolbarClick(wrap, role, act) {
             })().catch(function (err) {
                 console.error('branch session failed:', err);
                 showUiAlert({
-                    title: '鍒涘缓澶辫触',
+                    title: '创建失败',
                     message: String((err && err.message) || err || 'unknown error'),
                     variant: 'error',
                 });

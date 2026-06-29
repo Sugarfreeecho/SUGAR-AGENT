@@ -24,6 +24,7 @@ class _FakeSessionManager:
         self.count_calls = 0
         self.truncate_calls: list[dict] = []
         self.branch_calls: list[dict] = []
+        self.list_calls: list[dict] = []
 
     def _resolve_session_path(self, session_id: str) -> Path:
         return self.repository.sessions_dir / session_id
@@ -82,6 +83,19 @@ class _FakeSessionManager:
             "branch_after_seq": branch_after_seq,
         })
         return {"ok": True, "session_id": "branch-1", "name": "branch"}
+
+    def list_sessions(self, include_archived: bool = False) -> list[dict]:
+        self.list_calls.append({"include_archived": include_archived})
+        return [{
+            "id": "s1",
+            "name": "Session 1",
+            "created_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-01T00:00:00Z",
+            "archived": False,
+        }]
+
+    def archived_session_count(self) -> int:
+        return 0
 
 
 def _json_response_payload(response) -> dict | list:
@@ -206,3 +220,27 @@ def test_branch_route_passes_runtime_seq_boundary(monkeypatch, tmp_path):
         "before_index": 10,
         "branch_after_seq": 123,
     }]
+
+
+def test_sessions_state_uses_lightweight_run_status(monkeypatch, tmp_path):
+    import webui
+
+    fake = _FakeSessionManager(tmp_path, [])
+    monkeypatch.setattr(webui, "session_manager", fake)
+    monkeypatch.setattr(webui, "is_run_active", lambda sid: sid == "s1")
+    monkeypatch.setattr(webui, "get_run_started_at", lambda sid: "2026-01-01T00:00:00Z")
+    monkeypatch.setattr(webui, "_active_chat_by_session", {})
+
+    def fail_snapshot(_sid):
+        raise AssertionError("/sessions/state must not read Runtime V2 snapshots")
+
+    monkeypatch.setattr(webui, "_runtime_v2_snapshot", fail_snapshot)
+
+    payload = webui._build_sessions_state_snapshot(include_archived=False)
+
+    assert fake.list_calls == [{"include_archived": False}]
+    assert payload["sessions"][0]["id"] == "s1"
+    assert payload["sessions"][0]["stream_active"] is True
+    assert payload["sessions"][0]["run_active"] is True
+    assert payload["active_runs"][0]["session_id"] == "s1"
+    assert payload["active_runs"][0]["lightweight"] is True

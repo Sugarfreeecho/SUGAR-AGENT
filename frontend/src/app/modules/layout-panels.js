@@ -37,11 +37,12 @@ async function init() {
     loadUnreadFromStorage();
     initSidebarSash();
     showLoading();
-    await loadSessions();
+    const sessionsLoaded = await loadSessions();
     const sessions = sessionStore.list();
     let lastSessionId = localStorage.getItem('lastSessionId');
     let targetSession = null;
     if (lastSessionId && sessions.some(s => s.id === lastSessionId)) targetSession = lastSessionId;
+    else if (!sessionsLoaded && lastSessionId) targetSession = lastSessionId;
     else if (sessions.length > 0) targetSession = sessions[0].id;
     if (targetSession) await switchSession(targetSession);
     else await createNewSession();

@@ -56,6 +56,8 @@ def test_frontend_feature_entrypoints_are_flag_guarded():
     assert "isMyAgentFeatureEnabled('followupRestart', false)" in sse
     assert "isMyAgentFeatureEnabled('streamReconnect', false)" in sse
     assert "isMyAgentFeatureEnabled('finalReconcile', true)" in sse
+    assert "function scheduleFinalVisibleAfterRunIfEnabled" in sse
+    assert "await ensureFinalVisibleAfterRunIfEnabled" not in sse
     assert "function enqueueCurrentInputAsFollowup()" in sse
     assert "if (!isMyAgentFeatureEnabled('followupRestart', false)) return false;" in sse
     assert "function onFollowupInputKeydown(e)" in sse

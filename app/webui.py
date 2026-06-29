@@ -709,6 +709,44 @@ def _session_run_state_fields(sid: str) -> dict:
     }
 
 
+def _session_run_state_fields_light(sid: str) -> dict:
+    sid = str(sid or "").strip()
+    stream_connections = int(_active_chat_by_session.get(sid, 0) or 0) if sid else 0
+    if not sid:
+        return {
+            "stream_active": False,
+            "run_active": False,
+            "run_started_at": None,
+            "stream_connections": stream_connections,
+            "active_run": None,
+        }
+    local_run_active = bool(is_run_active(sid))
+    starting = False
+    with _chat_start_lock:
+        starting = sid in _chat_starting_by_session
+    run_active = bool(local_run_active or starting or stream_connections > 0)
+    started_at = get_run_started_at(sid) if local_run_active else None
+    try:
+        from runtime_v2 import runtime_v2_primary
+        is_runtime_v2 = bool(runtime_v2_primary())
+    except Exception:
+        is_runtime_v2 = False
+    return {
+        "stream_active": run_active,
+        "run_active": run_active,
+        "run_started_at": started_at,
+        "stream_connections": stream_connections,
+        "active_run": {
+            "session_id": sid,
+            "stream_connections": stream_connections,
+            "run_active": run_active,
+            "started_at": started_at,
+            "runtime_v2": is_runtime_v2,
+            "lightweight": True,
+        } if run_active else None,
+    }
+
+
 def _build_sessions_state_snapshot(include_archived: bool = False) -> dict:
     import time as _time
 
@@ -724,7 +762,7 @@ def _build_sessions_state_snapshot(include_archived: bool = False) -> dict:
             s["stream_active"] = False
             continue
         sid = str(sid)
-        run_state = _session_run_state_fields(sid)
+        run_state = _session_run_state_fields_light(sid)
         s["stream_active"] = bool(run_state["stream_active"])
         s["run_active"] = bool(run_state["run_active"])
         s["run_started_at"] = run_state["run_started_at"]
@@ -1279,7 +1317,7 @@ async def list_sessions(include_archived: bool = Query(False)):
             sid = s.get("id")
             if sid:
                 sid = str(sid)
-                run_state = _session_run_state_fields(sid)
+                run_state = _session_run_state_fields_light(sid)
                 s["stream_active"] = bool(run_state["stream_active"])
                 s["run_active"] = bool(run_state["run_active"])
                 s["run_started_at"] = run_state["run_started_at"]
@@ -1440,7 +1478,7 @@ async def runtime_v2_runs(include_archived: bool = Query(True)):
 @fastapi_app.get("/sessions/{session_id}")
 async def get_session_detail(
     session_id: str,
-    include_subagents: bool = Query(False, description="涓?true 鏃惰绠?subagent 渚ф爮鐘舵€佸瓧娈?"),
+    include_subagents: bool = Query(False, description="为 true 时也聚合 subagent 面板中的状态字段"),
 ):
     """单条会话摘要（与列表项结构一致），供侧栏增量更新。"""
     def _build_detail_response() -> JSONResponse:

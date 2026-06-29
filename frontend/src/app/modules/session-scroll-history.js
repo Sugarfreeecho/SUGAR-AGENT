@@ -844,7 +844,7 @@ function restoreCachedSessionStream(enteringId) {
     st.classList.remove('is-offscreen');
     st.removeAttribute('data-cache-session-id');
     st.id = 'chat-stream';
-    st.setAttribute('aria-label', '娑堟伅');
+    st.setAttribute('aria-label', '消息');
     chatContainer.appendChild(st);
     cacheOrderTouch(sid);
     var restoredPaging = restoreHistoryPagingFromStream(st);

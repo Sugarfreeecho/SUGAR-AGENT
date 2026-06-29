@@ -323,6 +323,15 @@ MCP 扩展层，负责：
 | --- | --- | --- |
 | POST | `/sessions/{session_id}/tool-approval` | 提交用户对待审批工具调用的允许/拒绝决定 |
 
+### 7.8 Session List and UI Loading Rules
+
+- `/sessions` and `/sessions/state` are sidebar/navigation endpoints. They must stay lightweight and should return from in-memory/session-index data plus local active-run evidence only.
+- Sidebar refresh must not scan every session's full Runtime V2 snapshot, rebuild projections, read large `ui_events.json`, traverse subagent dialogue, or perform orphan cleanup. Deep Runtime V2 cleanup belongs in explicit single-session actions, debug endpoints, or background maintenance.
+- Session list refresh must not block current conversation rendering. Page startup should be able to open `lastSessionId` even when sidebar refresh is slow or temporarily unavailable.
+- Global/sidebar errors must not be appended to the active chat stream, `ui_events.json`, process aggregates, or replayable history. They should render in the owning UI surface only.
+- Frontend session-list fetches must be coalesced while one request is in flight. On refresh failure, keep the last usable sidebar state instead of clearing the list or blocking message history loading.
+- Manual user actions may show scoped errors. Background refresh, polling, reconnect, and lifecycle reconciliation should prefer silent degradation plus cached state.
+
 ## 8. SSE 事件规格
 
 SSE 是后端向前端展示 Agent 过程的主通道。事件至少应覆盖以下语义：
