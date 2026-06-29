@@ -2479,35 +2479,10 @@ async def get_session_messages(
                     session_manager.repository.sessions_dir,
                     path_resolver=session_manager._resolve_session_path,
                 )
-            legacy_count = session_manager.get_ui_event_count(session_id)
-            if legacy_count > 0:
-                if limit is None and turns is None:
-                    payload = session_manager.get_ui_events_for_display(session_id)
-                    elapsed_ms = int((_time.perf_counter() - t0) * 1000)
-                    if elapsed_ms >= 500:
-                        logger.warning("/messages slow legacy-ui session=%s full=1 elapsed_ms=%s", session_id, elapsed_ms)
-                    return JSONResponse(content=payload)
-                lim = int(limit) if limit is not None else 200
-                tv = int(turns) if turns is not None else None
-                payload = session_manager.get_ui_events_page(
-                    session_id,
-                    limit=lim,
-                    before_index=before_index,
-                    turns=tv,
-                )
-                elapsed_ms = int((_time.perf_counter() - t0) * 1000)
-                if elapsed_ms >= 500:
-                    logger.warning(
-                        "/messages slow legacy-ui session=%s turns=%s limit=%s before=%s elapsed_ms=%s",
-                        session_id,
-                        tv,
-                        lim,
-                        before_index,
-                        elapsed_ms,
-                    )
-                return JSONResponse(content=payload)
             if limit is None and turns is None:
                 payload = projection.read_ui_events(session_id)
+                if not payload and session_manager.get_ui_event_count(session_id) > 0:
+                    payload = session_manager.get_ui_events_for_display(session_id)
                 elapsed_ms = int((_time.perf_counter() - t0) * 1000)
                 if elapsed_ms >= 500:
                     logger.warning("/messages slow runtime=2 session=%s full=1 elapsed_ms=%s", session_id, elapsed_ms)
@@ -2521,6 +2496,13 @@ async def get_session_messages(
                 after_index=after_index,
                 turns=tv,
             )
+            if int(payload.get("total") or 0) <= 0 and session_manager.get_ui_event_count(session_id) > 0:
+                payload = session_manager.get_ui_events_page(
+                    session_id,
+                    limit=lim,
+                    before_index=before_index,
+                    turns=tv,
+                )
             elapsed_ms = int((_time.perf_counter() - t0) * 1000)
             if elapsed_ms >= 500:
                 logger.warning(
@@ -2563,10 +2545,12 @@ async def get_session_message_count(session_id: str):
                 session_manager.repository.sessions_dir,
                 path_resolver=session_manager._resolve_session_path,
             )
+            count, _ = projection.count_ui_events_light(session_id)
+            if count > 0:
+                return JSONResponse(content={"count": count, "source": "runtime_v2"})
             legacy_count = session_manager.get_ui_event_count(session_id)
             if legacy_count > 0:
                 return JSONResponse(content={"count": legacy_count, "source": "legacy_ui"})
-            count, _ = projection.count_ui_events_light(session_id)
             return JSONResponse(content={"count": count, "source": "runtime_v2"})
         except Exception as exc:
             logger.warning("Runtime V2 message count failed for %s: %s", session_id, exc)

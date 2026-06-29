@@ -102,16 +102,22 @@ def _json_response_payload(response) -> dict | list:
     return json.loads(response.body.decode("utf-8"))
 
 
-def test_messages_turn_page_prefers_legacy_ui_events(monkeypatch, tmp_path):
+def test_messages_turn_page_prefers_runtime_v2_projection(monkeypatch, tmp_path):
     import runtime_v2
+    from runtime_v2 import RuntimeMirror
     import webui
 
     monkeypatch.setattr(runtime_v2, "runtime_v1_primary", lambda: False)
-    fake = _FakeSessionManager(tmp_path, [
+    mirror = RuntimeMirror(tmp_path)
+    for event in [
         {"type": "user", "content": "u0"},
         {"type": "final", "content": "a0"},
         {"type": "user", "content": "u1"},
         {"type": "final", "content": "a1"},
+    ]:
+        mirror.mirror_ui_event("s1", event)
+    fake = _FakeSessionManager(tmp_path, [
+        {"type": "user", "content": "legacy"},
     ])
     monkeypatch.setattr(webui, "session_manager", fake)
 
@@ -124,25 +130,24 @@ def test_messages_turn_page_prefers_legacy_ui_events(monkeypatch, tmp_path):
     ))
     payload = _json_response_payload(response)
 
-    assert payload["source"] == "fake_legacy_page"
+    assert payload["source"] == "runtime_v2_tail_index"
     assert payload["total"] == 4
-    assert [event["content"] for event in payload["events"]] == ["u1", "a1"]
-    assert fake.page_calls == [{
-        "session_id": "s1",
-        "limit": 200,
-        "before_index": None,
-        "turns": 5,
-    }]
+    assert [event["content"] for event in payload["events"]] == ["u0", "a0", "u1", "a1"]
+    assert fake.page_calls == []
+    assert fake.display_calls == 0
 
 
-def test_messages_full_read_prefers_legacy_ui_events(monkeypatch, tmp_path):
+def test_messages_full_read_prefers_runtime_v2_projection(monkeypatch, tmp_path):
     import runtime_v2
+    from runtime_v2 import RuntimeMirror
     import webui
 
     monkeypatch.setattr(runtime_v2, "runtime_v1_primary", lambda: False)
+    mirror = RuntimeMirror(tmp_path)
+    mirror.mirror_ui_event("s1", {"type": "user", "content": "u0"})
+    mirror.mirror_ui_event("s1", {"type": "final", "content": "a0"})
     fake = _FakeSessionManager(tmp_path, [
-        {"type": "user", "content": "u0"},
-        {"type": "final", "content": "a0"},
+        {"type": "user", "content": "legacy"},
     ])
     monkeypatch.setattr(webui, "session_manager", fake)
 
@@ -156,26 +161,29 @@ def test_messages_full_read_prefers_legacy_ui_events(monkeypatch, tmp_path):
     payload = _json_response_payload(response)
 
     assert [event["content"] for event in payload] == ["u0", "a0"]
-    assert fake.display_calls == 1
+    assert fake.display_calls == 0
     assert fake.page_calls == []
 
 
-def test_message_count_prefers_legacy_ui_count(monkeypatch, tmp_path):
+def test_message_count_prefers_runtime_v2_projection(monkeypatch, tmp_path):
     import runtime_v2
+    from runtime_v2 import RuntimeMirror
     import webui
 
     monkeypatch.setattr(runtime_v2, "runtime_v1_primary", lambda: False)
+    mirror = RuntimeMirror(tmp_path)
+    mirror.mirror_ui_event("s1", {"type": "user", "content": "u0"})
+    mirror.mirror_ui_event("s1", {"type": "final", "content": "a0"})
     fake = _FakeSessionManager(tmp_path, [
-        {"type": "user", "content": "u0"},
-        {"type": "final", "content": "a0"},
+        {"type": "user", "content": "legacy"},
     ])
     monkeypatch.setattr(webui, "session_manager", fake)
 
     response = asyncio.run(webui.get_session_message_count("s1"))
     payload = _json_response_payload(response)
 
-    assert payload == {"count": 2, "source": "legacy_ui"}
-    assert fake.count_calls == 1
+    assert payload == {"count": 2, "source": "runtime_v2"}
+    assert fake.count_calls == 0
 
 
 def test_truncate_route_passes_runtime_seq_boundary(monkeypatch, tmp_path):
