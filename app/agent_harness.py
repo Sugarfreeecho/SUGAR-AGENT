@@ -3378,13 +3378,6 @@ class SessionManager:
                     return False
             if before_index > n:
                 before_index = n
-            new_events = events[:before_index]
-            if create_backup:
-                self._backup_session_before_truncate(
-                    session_id,
-                    before_index,
-                    event_count=n,
-                )
             if self._runtime_v2_primary():
                 if truncate_before_seq is not None and runtime_truncate_keep_seq is not None:
                     self._observe_runtime_v2_history(
@@ -3401,6 +3394,14 @@ class SessionManager:
                         before_index=before_index,
                         reason="runtime_v2_truncate",
                     )
+                return True
+            new_events = events[:before_index]
+            if create_backup:
+                self._backup_session_before_truncate(
+                    session_id,
+                    before_index,
+                    event_count=n,
+                )
             self._save_ui_events(session_id, new_events)
             new_llm, new_work, consumed_cprefix = self._rebuild_llm_work_from_ui(
                 session_id,

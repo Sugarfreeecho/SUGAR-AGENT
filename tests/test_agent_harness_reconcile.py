@@ -166,3 +166,45 @@ def test_runtime_v2_active_ui_events_empty_projection_does_not_fallback_legacy(t
     events = agent_harness.SessionManager._load_ui_events_for_active_runtime(mgr, "s1")
 
     assert events == []
+
+
+def test_runtime_v2_truncate_only_changes_visible_range_without_legacy_rebuild():
+    import agent_harness
+
+    observed = []
+
+    def fail_legacy(*args, **kwargs):
+        raise AssertionError("Runtime V2 truncate must not write or rebuild legacy history")
+
+    mgr = _manager_with(
+        _runtime_v2_primary=lambda: True,
+        _load_ui_events_for_active_runtime=lambda sid: [
+            {"type": "user", "content": "u1"},
+            {"type": "final", "content": "a1"},
+            {"type": "user", "content": "u2"},
+            {"type": "final", "content": "a2"},
+        ],
+        _backup_session_before_truncate=fail_legacy,
+        _save_ui_events=fail_legacy,
+        _rebuild_llm_work_from_ui=fail_legacy,
+        _save_llm_history=fail_legacy,
+        _save_work_messages=fail_legacy,
+        _save_dialogue_history=fail_legacy,
+        remove_llm_compress_prefix_backup=fail_legacy,
+        _observe_runtime_v2_history=lambda *args, **kwargs: observed.append((args, kwargs)),
+    )
+
+    changed = agent_harness.SessionManager.truncate_session_at_event_index(
+        mgr,
+        "s1",
+        2,
+        create_backup=True,
+    )
+
+    assert changed is True
+    assert observed == [
+        (
+            ("truncate_ui_history", "s1"),
+            {"before_index": 2, "reason": "runtime_v2_truncate"},
+        )
+    ]
