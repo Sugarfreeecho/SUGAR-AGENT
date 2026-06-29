@@ -2481,8 +2481,6 @@ async def get_session_messages(
                 )
             if limit is None and turns is None:
                 payload = projection.read_ui_events(session_id)
-                if not payload and session_manager.get_ui_event_count(session_id) > 0:
-                    payload = session_manager.get_ui_events_for_display(session_id)
                 elapsed_ms = int((_time.perf_counter() - t0) * 1000)
                 if elapsed_ms >= 500:
                     logger.warning("/messages slow runtime=2 session=%s full=1 elapsed_ms=%s", session_id, elapsed_ms)
@@ -2496,13 +2494,6 @@ async def get_session_messages(
                 after_index=after_index,
                 turns=tv,
             )
-            if int(payload.get("total") or 0) <= 0 and session_manager.get_ui_event_count(session_id) > 0:
-                payload = session_manager.get_ui_events_page(
-                    session_id,
-                    limit=lim,
-                    before_index=before_index,
-                    turns=tv,
-                )
             elapsed_ms = int((_time.perf_counter() - t0) * 1000)
             if elapsed_ms >= 500:
                 logger.warning(
@@ -2517,13 +2508,18 @@ async def get_session_messages(
         except Exception as exc:
             logger.warning("Runtime V2 messages projection failed for %s: %s", session_id, exc)
         if limit is None and turns is None:
-            return JSONResponse(content=session_manager.get_ui_events_for_display(session_id))
+            return JSONResponse(content=[])
         lim = int(limit) if limit is not None else 200
-        tv = int(turns) if turns is not None else None
-        payload = session_manager.get_ui_events_page(
-            session_id, limit=lim, before_index=before_index, turns=tv
-        )
-        return JSONResponse(content=payload)
+        return JSONResponse(content={
+            "events": [],
+            "total": 0,
+            "range_start": 0,
+            "range_end": 0,
+            "has_older": False,
+            "has_newer": False,
+            "source": "runtime_v2_projection_error",
+            "limit": lim,
+        })
 
     return await asyncio.to_thread(_build_messages_response)
 
@@ -2546,15 +2542,10 @@ async def get_session_message_count(session_id: str):
                 path_resolver=session_manager._resolve_session_path,
             )
             count, _ = projection.count_ui_events_light(session_id)
-            if count > 0:
-                return JSONResponse(content={"count": count, "source": "runtime_v2"})
-            legacy_count = session_manager.get_ui_event_count(session_id)
-            if legacy_count > 0:
-                return JSONResponse(content={"count": legacy_count, "source": "legacy_ui"})
             return JSONResponse(content={"count": count, "source": "runtime_v2"})
         except Exception as exc:
             logger.warning("Runtime V2 message count failed for %s: %s", session_id, exc)
-        return JSONResponse(content={"count": session_manager.get_ui_event_count(session_id)})
+        return JSONResponse(content={"count": 0, "source": "runtime_v2_projection_error"})
 
     return await asyncio.to_thread(_build_count_response)
     """仅返回 ui_events 条数，供发送前对齐 eventIndex，避免下载整份 JSON。"""

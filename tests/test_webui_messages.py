@@ -98,6 +98,17 @@ class _FakeSessionManager:
         return 0
 
 
+class _NoLegacyUiSessionManager(_FakeSessionManager):
+    def get_ui_event_count(self, session_id: str) -> int:
+        raise AssertionError("Runtime V2 messages path must not read legacy UI count")
+
+    def get_ui_events_for_display(self, session_id: str) -> list[dict]:
+        raise AssertionError("Runtime V2 messages path must not read legacy UI events")
+
+    def get_ui_events_page(self, session_id: str, limit: int = 200, before_index=None, turns=None) -> dict:
+        raise AssertionError("Runtime V2 messages path must not read legacy UI page")
+
+
 def _json_response_payload(response) -> dict | list:
     return json.loads(response.body.decode("utf-8"))
 
@@ -184,6 +195,86 @@ def test_message_count_prefers_runtime_v2_projection(monkeypatch, tmp_path):
 
     assert payload == {"count": 2, "source": "runtime_v2"}
     assert fake.count_calls == 0
+
+
+def test_messages_empty_runtime_v2_projection_does_not_fallback_legacy(monkeypatch, tmp_path):
+    import runtime_v2
+    import webui
+
+    monkeypatch.setattr(runtime_v2, "runtime_v1_primary", lambda: False)
+    fake = _NoLegacyUiSessionManager(tmp_path, [{"type": "user", "content": "legacy"}])
+    monkeypatch.setattr(webui, "session_manager", fake)
+
+    response = asyncio.run(webui.get_session_messages(
+        "s1",
+        limit=None,
+        before_index=None,
+        after_index=None,
+        turns=None,
+    ))
+    payload = _json_response_payload(response)
+
+    assert payload == []
+
+
+def test_message_count_empty_runtime_v2_projection_does_not_fallback_legacy(monkeypatch, tmp_path):
+    import runtime_v2
+    import webui
+
+    monkeypatch.setattr(runtime_v2, "runtime_v1_primary", lambda: False)
+    fake = _NoLegacyUiSessionManager(tmp_path, [{"type": "user", "content": "legacy"}])
+    monkeypatch.setattr(webui, "session_manager", fake)
+
+    response = asyncio.run(webui.get_session_message_count("s1"))
+    payload = _json_response_payload(response)
+
+    assert payload == {"count": 0, "source": "runtime_v2"}
+
+
+def test_messages_projection_error_does_not_fallback_legacy(monkeypatch, tmp_path):
+    import runtime_v2
+    import runtime_v2.ui_projection
+    import webui
+
+    class _BrokenProjection:
+        def __init__(self, *args, **kwargs):
+            raise RuntimeError("projection unavailable")
+
+    monkeypatch.setattr(runtime_v2, "runtime_v1_primary", lambda: False)
+    monkeypatch.setattr(runtime_v2.ui_projection, "RuntimeUiProjection", _BrokenProjection)
+    fake = _NoLegacyUiSessionManager(tmp_path, [{"type": "user", "content": "legacy"}])
+    monkeypatch.setattr(webui, "session_manager", fake)
+
+    response = asyncio.run(webui.get_session_messages(
+        "s1",
+        limit=None,
+        before_index=None,
+        after_index=None,
+        turns=None,
+    ))
+    payload = _json_response_payload(response)
+
+    assert payload == []
+
+
+def test_message_count_projection_error_does_not_fallback_legacy(monkeypatch, tmp_path):
+    import runtime_v2
+    import runtime_v2.ui_projection
+    import webui
+
+    class _BrokenProjection:
+        def __init__(self, *args, **kwargs):
+            raise RuntimeError("projection unavailable")
+
+    monkeypatch.setattr(runtime_v2, "runtime_v1_primary", lambda: False)
+    monkeypatch.setattr(runtime_v2.ui_projection, "RuntimeUiProjection", _BrokenProjection)
+    fake = _NoLegacyUiSessionManager(tmp_path, [{"type": "user", "content": "legacy"}])
+    monkeypatch.setattr(webui, "session_manager", fake)
+
+    response = asyncio.run(webui.get_session_message_count("s1"))
+    payload = _json_response_payload(response)
+
+    assert payload == {"count": 0, "source": "runtime_v2_projection_error"}
 
 
 def test_truncate_route_passes_runtime_seq_boundary(monkeypatch, tmp_path):
