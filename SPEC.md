@@ -626,6 +626,12 @@ SSE 是后端向前端展示 Agent 过程的主通道。事件至少应覆盖以
 - 修改工具安全策略时必须补充越界路径、危险命令、敏感信息和 SSRF 测试。
 - 修改上下文压缩策略时必须用长会话样例验证任务目标不丢失。
 
+## Runtime V2 收敛补充规范
+
+- API 返回的 `prompt_tokens` 必须可作为下一轮 API 前 token 估算的基线；当前缀请求包一致时，只允许估算新增尾部，禁止每轮重新扫描完整长历史。
+- Runtime V2 下 `/messages`、`/messages/count`、`/user_turns`、TOC/Todo/context snapshot 等 UI 读取必须优先来自 Runtime V2 projection/snapshot；不得因 TOC 或滚动恢复自动读取 legacy UI 历史。
+- `RUNTIME_SYNC_ON_MESSAGES_OPEN` 不得在 Runtime V2 primary 正常打开会话时触发 legacy sync；旧数据迁移只允许通过显式 runtime sync/migration 接口执行。
+
 ## 20. 已知工程特征
 
 - 工程包含内置 Python，因此可在未安装系统 Python 的 Windows 环境运行。

@@ -230,6 +230,19 @@ def _enqueue_runtime_sync(session_id: str, reason: str = "manual", *, check_need
     return {"ok": True, "session_id": sid, "queued": True, "reason": check_reason, "detail": detail}
 
 
+def _runtime_sync_on_messages_open_enabled() -> bool:
+    if os.getenv("RUNTIME_SYNC_ON_MESSAGES_OPEN", "0").strip().lower() not in {"1", "true", "yes", "on"}:
+        return False
+    try:
+        from runtime_v2 import runtime_v2_primary
+
+        if runtime_v2_primary():
+            return False
+    except Exception:
+        pass
+    return True
+
+
 def _read_text_cached(path: Path, fallback: str = "") -> str:
     try:
         st = path.stat()
@@ -580,6 +593,20 @@ def _runtime_v2_ephemeral_sse_payload(session_id: str, event: dict) -> dict:
     if isinstance(event, dict) and event.get("run_id"):
         payload["run_id"] = event.get("run_id")
     return payload
+
+
+def _user_turns_from_ui_events(events: list[dict]) -> list[dict]:
+    out: list[dict] = []
+    for idx, event in enumerate(events or []):
+        if not isinstance(event, dict) or event.get("type") != "user":
+            continue
+        raw = event.get("content")
+        text = raw if isinstance(raw, str) else str(raw or "")
+        preview = re.sub(r"\s+", " ", text).strip()
+        if len(preview) > 180:
+            preview = preview[:177] + "..."
+        out.append({"event_index": idx, "preview": preview})
+    return out
 
 
 def _runtime_v2_chat_protocol_enabled(requested: str, sid: Optional[str]) -> bool:
@@ -2423,7 +2450,7 @@ async def get_session_messages(
     import time as _time
     t0 = _time.perf_counter()
     projection = None
-    if os.getenv("RUNTIME_SYNC_ON_MESSAGES_OPEN", "0").strip().lower() in {"1", "true", "yes", "on"}:
+    if _runtime_sync_on_messages_open_enabled():
         try:
             _enqueue_runtime_sync(session_id, "messages_open", check_needed=True)
         except Exception as exc:
@@ -2716,6 +2743,21 @@ async def repair_sessions_index():
 @fastapi_app.get("/sessions/{session_id}/user_turns")
 async def get_session_user_turns(session_id: str):
     """列出会话内全部用户消息的 event_index 与预览（供右侧「历史记录」目录，与消息是否分页加载无关）。"""
+    try:
+        from runtime_v2 import runtime_v2_primary
+
+        if runtime_v2_primary():
+            from runtime_v2.ui_projection import RuntimeUiProjection
+
+            projection = RuntimeUiProjection(
+                session_manager.repository.sessions_dir,
+                path_resolver=session_manager._resolve_session_path,
+            )
+            events = await asyncio.to_thread(projection.read_ui_events_fast, session_id)
+            return JSONResponse(content=_user_turns_from_ui_events(events))
+    except Exception as exc:
+        logger.warning("Runtime V2 user turns failed for %s: %s", session_id, exc)
+        return JSONResponse(content=[])
     payload = await asyncio.to_thread(session_manager.get_ui_user_turns_for_toc, session_id)
     return JSONResponse(content=payload)
 

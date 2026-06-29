@@ -92,7 +92,9 @@ from agent_tools import (
     redact_sensitive_tool_text,
 )
 from agent_tokenizer import (
+    estimate_full_input_tokens_for_messages,
     estimate_full_input_tokens_for_llm_history,
+    record_prompt_tokens_for_messages,
     inject_missing_tool_messages,
     messages_for_openai_turns,
     build_env_static,
@@ -1665,10 +1667,9 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
             )
 
             # ---------- 2.1 上下文压缩：单轨 + key_context
-            full_input_est = estimate_full_input_tokens_for_llm_history(
+            full_input_est = estimate_full_input_tokens_for_messages(
                 state["session_id"],
-                llm_history,
-                state.get("key_context", "") or "",
+                llm_messages,
             )
             _pre_api_timing_mark(pre_api_timings, "token_estimate", _t_pre_api)
             _t_pre_api = time.perf_counter()
@@ -1923,6 +1924,11 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
                             continue
                         if tag == "usage":
                             llm_call_usage = payload
+                            record_prompt_tokens_for_messages(
+                                state["session_id"],
+                                llm_messages_to_send,
+                                int((payload or {}).get("prompt_tokens", 0) or 0),
+                            )
                             actual_response_model = str((payload or {}).get("model") or actual_response_model or "").strip()
                             ch = int((payload or {}).get("prompt_cache_hit_tokens", 0) or 0)
                             cm = int((payload or {}).get("prompt_cache_miss_tokens", 0) or 0)
@@ -2098,6 +2104,11 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
                     u = getattr(api_resp, "usage", None)
                     if u is not None and not llm_call_usage:
                         llm_call_usage = extract_usage_dict(u)
+                        record_prompt_tokens_for_messages(
+                            state["session_id"],
+                            llm_messages_to_send,
+                            int((llm_call_usage or {}).get("prompt_tokens", 0) or 0),
+                        )
                         ch = llm_call_usage.get("prompt_cache_hit_tokens", 0)
                         cm = llm_call_usage.get("prompt_cache_miss_tokens", 0)
                         if ch + cm > 0:

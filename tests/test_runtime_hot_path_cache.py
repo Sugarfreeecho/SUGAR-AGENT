@@ -103,3 +103,55 @@ def test_full_input_token_estimate_reuses_cache(monkeypatch):
     assert agent_tokenizer.estimate_full_input_tokens_for_llm_history("s1", messages, "") == 123
     assert agent_tokenizer.estimate_full_input_tokens_for_llm_history("s1", messages, "") == 123
     assert calls["estimate"] == 1
+
+
+def test_prebuilt_token_estimate_uses_exact_provider_usage(monkeypatch):
+    import agent_tokenizer
+    from agent_messages import SystemMessage, UserMessage
+
+    agent_tokenizer._PROMPT_USAGE_BASELINE_CACHE.clear()
+    agent_tokenizer._PROMPT_USAGE_EXACT_CACHE.clear()
+
+    import agent_harness
+
+    monkeypatch.setattr(
+        agent_harness,
+        "estimate_tokens",
+        lambda _messages: (_ for _ in ()).throw(
+            AssertionError("exact provider usage should avoid local token estimate")
+        ),
+    )
+    monkeypatch.setattr(agent_harness, "strip_reasoning_for_api_request", lambda messages: messages)
+
+    messages = [SystemMessage(content="sys"), UserMessage(content="hello")]
+    agent_tokenizer.record_prompt_tokens_for_messages("s1", messages, 88)
+
+    assert agent_tokenizer.estimate_full_input_tokens_for_messages("s1", messages) == 88
+
+
+def test_prebuilt_token_estimate_uses_provider_prefix_baseline(monkeypatch):
+    import agent_tokenizer
+    from agent_messages import AssistantMessage, SystemMessage, UserMessage
+
+    agent_tokenizer._PROMPT_USAGE_BASELINE_CACHE.clear()
+    agent_tokenizer._PROMPT_USAGE_EXACT_CACHE.clear()
+    calls = {"estimate": 0, "sizes": []}
+
+    def estimate_tokens(messages):
+        calls["estimate"] += 1
+        calls["sizes"].append(len(messages))
+        return 12
+
+    import agent_harness
+
+    monkeypatch.setattr(agent_harness, "estimate_tokens", estimate_tokens)
+    monkeypatch.setattr(agent_harness, "strip_reasoning_for_api_request", lambda messages: messages)
+
+    first = [SystemMessage(content="sys"), UserMessage(content="hello")]
+    second = [*first, AssistantMessage(content="answer")]
+    agent_tokenizer.record_prompt_tokens_for_messages("s1", first, 88)
+
+    estimated = agent_tokenizer.estimate_full_input_tokens_for_messages("s1", second)
+
+    assert estimated == 108
+    assert calls == {"estimate": 1, "sizes": [1]}

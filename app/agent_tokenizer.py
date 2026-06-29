@@ -35,6 +35,11 @@ _FULL_INPUT_TOKEN_CACHE: Dict[Tuple[str, int, str, str], Tuple[float, int]] = {}
 _FULL_INPUT_TOKEN_CACHE_LOCK = threading.Lock()
 _FULL_INPUT_TOKEN_CACHE_TTL_SEC = 30.0
 _FULL_INPUT_TOKEN_CACHE_MAX = 256
+_PROMPT_USAGE_BASELINE_CACHE: Dict[str, Dict[str, Any]] = {}
+_PROMPT_USAGE_EXACT_CACHE: Dict[Tuple[str, str], Tuple[float, int]] = {}
+_PROMPT_USAGE_CACHE_LOCK = threading.Lock()
+_PROMPT_USAGE_CACHE_TTL_SEC = 300.0
+_PROMPT_USAGE_EXACT_CACHE_MAX = 256
 
 
 def _token_cache_text_hash(text: Any) -> str:
@@ -58,6 +63,61 @@ def _full_input_token_cache_key(session_id: str, llm_history: List[Any], key_con
         _token_cache_text_hash(key_context or ""),
         _token_cache_text_hash("\n".join(last_parts)),
     )
+
+
+def _message_token_cache_repr(msg: Any) -> Dict[str, Any]:
+    additional_kwargs = getattr(msg, "additional_kwargs", None) or {}
+    if not isinstance(additional_kwargs, dict):
+        additional_kwargs = {}
+    data: Dict[str, Any] = {
+        "type": type(msg).__name__,
+        "content": str(getattr(msg, "content", "") or ""),
+    }
+    tool_call_id = getattr(msg, "tool_call_id", "")
+    if tool_call_id:
+        data["tool_call_id"] = str(tool_call_id)
+    name = getattr(msg, "name", "")
+    if name:
+        data["name"] = str(name)
+    tool_calls = getattr(msg, "tool_calls", None) or additional_kwargs.get("tool_calls")
+    if tool_calls:
+        data["tool_calls"] = tool_calls
+    return data
+
+
+def _message_token_cache_hash(msg: Any) -> str:
+    raw = json_dumps_stable(_message_token_cache_repr(msg))
+    return hashlib.sha1(raw.encode("utf-8", errors="ignore")).hexdigest()
+
+
+def json_dumps_stable(value: Any) -> str:
+    import json
+
+    try:
+        return json.dumps(value, ensure_ascii=False, sort_keys=True, default=str, separators=(",", ":"))
+    except Exception:
+        return str(value)
+
+
+def _messages_token_fingerprint_from_hashes(hashes: List[str]) -> str:
+    return hashlib.sha1("\n".join(hashes).encode("ascii", errors="ignore")).hexdigest()
+
+
+def _messages_token_hashes(messages: List[Any]) -> List[str]:
+    return [_message_token_cache_hash(m) for m in list(messages or [])]
+
+
+def _evict_prompt_usage_exact_cache_locked(now: float) -> None:
+    expired = [
+        key
+        for key, (ts, _tokens) in _PROMPT_USAGE_EXACT_CACHE.items()
+        if now - ts > _PROMPT_USAGE_CACHE_TTL_SEC
+    ]
+    for key in expired:
+        _PROMPT_USAGE_EXACT_CACHE.pop(key, None)
+    while len(_PROMPT_USAGE_EXACT_CACHE) > _PROMPT_USAGE_EXACT_CACHE_MAX:
+        oldest = min(_PROMPT_USAGE_EXACT_CACHE.items(), key=lambda item: item[1][0])[0]
+        _PROMPT_USAGE_EXACT_CACHE.pop(oldest, None)
 
 
 def _is_loop_marker_text(text: str) -> bool:
@@ -143,6 +203,87 @@ def count_text_tokens(text: str) -> int:
 
 def count_message_tokens(messages: List[Any]) -> int:
     return count_text_tokens(_flatten_messages_for_count(messages))
+
+
+def record_prompt_tokens_for_messages(
+    session_id: str,
+    messages: List[Any],
+    prompt_tokens: int,
+) -> None:
+    """Record provider-reported input tokens for an exact request package."""
+    sid = str(session_id or "").strip()
+    try:
+        tokens = int(prompt_tokens or 0)
+    except (TypeError, ValueError):
+        tokens = 0
+    if not sid or tokens <= 0:
+        return
+    from agent_harness import strip_reasoning_for_api_request
+
+    stripped = strip_reasoning_for_api_request(list(messages or []))
+    hashes = _messages_token_hashes(stripped)
+    fingerprint = _messages_token_fingerprint_from_hashes(hashes)
+    now = time.monotonic()
+    with _PROMPT_USAGE_CACHE_LOCK:
+        _PROMPT_USAGE_BASELINE_CACHE[sid] = {
+            "ts": now,
+            "hashes": hashes,
+            "fingerprint": fingerprint,
+            "count": len(hashes),
+            "tokens": tokens,
+        }
+        _PROMPT_USAGE_EXACT_CACHE[(sid, fingerprint)] = (now, tokens)
+        _evict_prompt_usage_exact_cache_locked(now)
+
+
+def estimate_full_input_tokens_for_messages(
+    session_id: str,
+    messages: List[Any],
+) -> int:
+    """
+    Estimate tokens for the already-built API request package.
+
+    Prefer exact provider usage from a previous identical request, then reuse a
+    provider-reported prefix baseline and estimate only the appended suffix.
+    """
+    from agent_harness import estimate_tokens, strip_reasoning_for_api_request
+
+    sid = str(session_id or "").strip()
+    stripped = strip_reasoning_for_api_request(list(messages or []))
+    hashes = _messages_token_hashes(stripped)
+    fingerprint = _messages_token_fingerprint_from_hashes(hashes)
+    now = time.monotonic()
+    with _PROMPT_USAGE_CACHE_LOCK:
+        exact = _PROMPT_USAGE_EXACT_CACHE.get((sid, fingerprint)) if sid else None
+        if exact and now - exact[0] <= _PROMPT_USAGE_CACHE_TTL_SEC:
+            return int(exact[1])
+        baseline = _PROMPT_USAGE_BASELINE_CACHE.get(sid) if sid else None
+        if baseline and now - float(baseline.get("ts") or 0) > _PROMPT_USAGE_CACHE_TTL_SEC:
+            _PROMPT_USAGE_BASELINE_CACHE.pop(sid, None)
+            baseline = None
+        if baseline:
+            base_count = int(baseline.get("count") or 0)
+            base_tokens = int(baseline.get("tokens") or 0)
+            base_fingerprint = str(baseline.get("fingerprint") or "")
+            if (
+                base_count > 0
+                and base_tokens > 0
+                and base_count <= len(hashes)
+                and _messages_token_fingerprint_from_hashes(hashes[:base_count]) == base_fingerprint
+            ):
+                suffix = stripped[base_count:]
+                suffix_tokens = int(estimate_tokens(suffix)) if suffix else 0
+                margin = max(8, len(suffix) * 4) if suffix else 0
+                estimated = base_tokens + suffix_tokens + margin
+                _PROMPT_USAGE_EXACT_CACHE[(sid, fingerprint)] = (now, estimated)
+                _evict_prompt_usage_exact_cache_locked(now)
+                return int(estimated)
+    estimated = int(estimate_tokens(stripped))
+    with _PROMPT_USAGE_CACHE_LOCK:
+        if sid:
+            _PROMPT_USAGE_EXACT_CACHE[(sid, fingerprint)] = (now, estimated)
+            _evict_prompt_usage_exact_cache_locked(now)
+    return estimated
 
 
 # ==================== 整包输入 token（与主模型上送一致）====================

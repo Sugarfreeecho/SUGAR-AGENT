@@ -108,6 +108,9 @@ class _NoLegacyUiSessionManager(_FakeSessionManager):
     def get_ui_events_page(self, session_id: str, limit: int = 200, before_index=None, turns=None) -> dict:
         raise AssertionError("Runtime V2 messages path must not read legacy UI page")
 
+    def get_ui_user_turns_for_toc(self, session_id: str) -> list[dict]:
+        raise AssertionError("Runtime V2 user turns must not read legacy TOC data")
+
 
 def _json_response_payload(response) -> dict | list:
     return json.loads(response.body.decode("utf-8"))
@@ -176,6 +179,38 @@ def test_messages_full_read_prefers_runtime_v2_projection(monkeypatch, tmp_path)
     assert fake.page_calls == []
 
 
+def test_messages_open_does_not_auto_sync_in_runtime_v2(monkeypatch, tmp_path):
+    import runtime_v2
+    from runtime_v2 import RuntimeMirror
+    import webui
+
+    monkeypatch.setenv("RUNTIME_SYNC_ON_MESSAGES_OPEN", "1")
+    monkeypatch.setattr(runtime_v2, "runtime_v1_primary", lambda: False)
+    monkeypatch.setattr(runtime_v2, "runtime_v2_primary", lambda: True)
+    monkeypatch.setattr(
+        webui,
+        "_enqueue_runtime_sync",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("Runtime V2 messages open must not auto-sync legacy history")
+        ),
+    )
+    mirror = RuntimeMirror(tmp_path)
+    mirror.mirror_ui_event("s1", {"type": "user", "content": "u0"})
+    fake = _FakeSessionManager(tmp_path, [])
+    monkeypatch.setattr(webui, "session_manager", fake)
+
+    response = asyncio.run(webui.get_session_messages(
+        "s1",
+        limit=None,
+        before_index=None,
+        after_index=None,
+        turns=None,
+    ))
+    payload = _json_response_payload(response)
+
+    assert [event["content"] for event in payload] == ["u0"]
+
+
 def test_message_count_prefers_runtime_v2_projection(monkeypatch, tmp_path):
     import runtime_v2
     from runtime_v2 import RuntimeMirror
@@ -195,6 +230,28 @@ def test_message_count_prefers_runtime_v2_projection(monkeypatch, tmp_path):
 
     assert payload == {"count": 2, "source": "runtime_v2"}
     assert fake.count_calls == 0
+
+
+def test_user_turns_prefers_runtime_v2_projection(monkeypatch, tmp_path):
+    import runtime_v2
+    from runtime_v2 import RuntimeMirror
+    import webui
+
+    monkeypatch.setattr(runtime_v2, "runtime_v2_primary", lambda: True)
+    mirror = RuntimeMirror(tmp_path)
+    mirror.mirror_ui_event("s1", {"type": "user", "content": "first question"})
+    mirror.mirror_ui_event("s1", {"type": "final", "content": "answer"})
+    mirror.mirror_ui_event("s1", {"type": "user", "content": "second question"})
+    fake = _NoLegacyUiSessionManager(tmp_path, [])
+    monkeypatch.setattr(webui, "session_manager", fake)
+
+    response = asyncio.run(webui.get_session_user_turns("s1"))
+    payload = _json_response_payload(response)
+
+    assert payload == [
+        {"event_index": 0, "preview": "first question"},
+        {"event_index": 2, "preview": "second question"},
+    ]
 
 
 def test_messages_empty_runtime_v2_projection_does_not_fallback_legacy(monkeypatch, tmp_path):
