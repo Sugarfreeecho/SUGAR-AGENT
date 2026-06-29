@@ -3724,6 +3724,9 @@ class SessionManager:
         若 llm 已被错误撑大且 metadata 有 branched_from，先尝试从源会话恢复 llm 再对齐。
         """
         try:
+            if self._runtime_v2_primary():
+                logger.info("skip legacy compacted llm repair in Runtime V2: session=%s", session_id)
+                return False
             events = self._load_ui_events(session_id)
             if not llm_history_dicts_appear_compacted(
                 [x for x in self._load_llm_history(session_id) or [] if isinstance(x, dict)]
@@ -3798,6 +3801,9 @@ class SessionManager:
         禁止在用户轮数未超出 ui_events 时重建 llm_history，避免把完整 ReAct 历史降级成 user/final 主对话。
         """
         try:
+            if self._runtime_v2_primary():
+                logger.info("skip legacy llm/work reconcile in Runtime V2: session=%s", session_id)
+                return False
             events = self._load_ui_events(session_id)
             llm_raw = self._load_llm_history(session_id)
             n_ui = _count_ui_user_events(events)
@@ -3852,6 +3858,21 @@ class SessionManager:
         try:
             clean = [deepcopy_json_dict(e) for e in tail if isinstance(e, dict)]
             if not clean:
+                return True
+            if self._runtime_v2_primary():
+                try:
+                    mirror = self._runtime_mirror()
+                    for event_copy in clean:
+                        mirror.mirror_ui_event(session_id, event_copy)
+                except Exception as mirror_error:
+                    logger.warning("Runtime V2 append ui_events tail failed for %s: %s", session_id, mirror_error)
+                    return False
+                self._observe_runtime_v2_history(
+                    "observe_legacy_tail_restored",
+                    session_id,
+                    tail_count=len(clean),
+                    merged_event_count=len(clean),
+                )
                 return True
             merged = list(self._load_ui_events(session_id)) + clean
             self._save_ui_events(session_id, merged)

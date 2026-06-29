@@ -48,6 +48,7 @@ def test_reconcile_does_not_rebuild_when_llm_user_count_matches_ui():
         raise AssertionError("reconcile must not rebuild llm_history when user counts match")
 
     mgr = _manager_with(
+        _runtime_v2_primary=lambda: False,
         _load_ui_events=lambda sid: ui_events,
         _load_llm_history=lambda sid: llm_history,
         _load_work_messages=lambda sid: [],
@@ -93,6 +94,7 @@ def test_reconcile_trims_only_extra_tail_turn_and_preserves_tools():
     observed = []
 
     mgr = _manager_with(
+        _runtime_v2_primary=lambda: False,
         _load_ui_events=lambda sid: ui_events,
         _load_llm_history=lambda sid: llm_history,
         _load_work_messages=lambda sid: [],
@@ -262,5 +264,75 @@ def test_runtime_v2_branch_creates_v2_branch_without_legacy_rebuild(tmp_path):
         (
             ("create_branch", new_id),
             {"source_session_id": source_id, "branch_from_seq": 2, "name": "(1)Source"},
+        )
+    ]
+
+
+def test_runtime_v2_repair_and_reconcile_skip_legacy_rebuilds():
+    import agent_harness
+
+    def fail_legacy(*args, **kwargs):
+        raise AssertionError("Runtime V2 repair/reconcile must not touch legacy history")
+
+    mgr = _manager_with(
+        _runtime_v2_primary=lambda: True,
+        _load_ui_events=fail_legacy,
+        _load_llm_history=fail_legacy,
+        _load_work_messages=fail_legacy,
+        _rebuild_llm_work_from_ui=fail_legacy,
+        _save_llm_history=fail_legacy,
+        _save_work_messages=fail_legacy,
+    )
+
+    repaired = agent_harness.SessionManager.repair_compacted_llm_history_from_ui(mgr, "s1")
+    reconciled = agent_harness.SessionManager.reconcile_llm_work_to_ui_user_count(mgr, "s1")
+
+    assert repaired is False
+    assert reconciled is False
+
+
+def test_runtime_v2_append_tail_mirrors_events_without_legacy_rebuild():
+    import agent_harness
+
+    mirrored = []
+    observed = []
+
+    class _Mirror:
+        def mirror_ui_event(self, session_id, event):
+            mirrored.append((session_id, dict(event)))
+
+    def fail_legacy(*args, **kwargs):
+        raise AssertionError("Runtime V2 append tail must not touch legacy history")
+
+    mgr = _manager_with(
+        _runtime_v2_primary=lambda: True,
+        _runtime_mirror=lambda: _Mirror(),
+        _observe_runtime_v2_history=lambda *args, **kwargs: observed.append((args, kwargs)),
+        _load_ui_events=fail_legacy,
+        _save_ui_events=fail_legacy,
+        _rebuild_llm_work_from_ui=fail_legacy,
+        _save_llm_history=fail_legacy,
+        _save_work_messages=fail_legacy,
+        _save_dialogue_history=fail_legacy,
+    )
+
+    changed = agent_harness.SessionManager.append_ui_events_tail(
+        mgr,
+        "s1",
+        [
+            {"type": "user", "content": "u1"},
+            {"type": "final", "content": "a1"},
+        ],
+    )
+
+    assert changed is True
+    assert mirrored == [
+        ("s1", {"type": "user", "content": "u1"}),
+        ("s1", {"type": "final", "content": "a1"}),
+    ]
+    assert observed == [
+        (
+            ("observe_legacy_tail_restored", "s1"),
+            {"tail_count": 2, "merged_event_count": 2},
         )
     ]
