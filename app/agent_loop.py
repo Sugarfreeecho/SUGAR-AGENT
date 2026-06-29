@@ -461,6 +461,15 @@ def compute_context_tokens_for_session(session_id: str) -> Dict[str, Any]:
 def _persist_session_messages(state: State) -> None:
     """work / llm / key_context 落盘；dialogue 由 llm 派生，dialogue_history 由 ui_events 派生。"""
     state["dialogue"] = derive_dialogue_from_assistant_history(state["llm_history"])
+    if _runtime_v2_is_primary() and hasattr(session_manager, "update_session_model_state"):
+        session_manager.update_session_model_state(
+            state["session_id"],
+            [_message_to_dict(m) for m in state["llm_history"]],
+            state.get("key_context", ""),
+            dialogue_history=session_manager.dialogue_dicts_from_ui_events_file(state["session_id"]),
+        )
+        return
+    _materialize_lazy_work_messages(state)
     session_manager.update_session(
         state["session_id"],
         [_message_to_dict(m) for m in state["work_messages"]],
@@ -604,6 +613,12 @@ def _load_model_history_dicts_v2_primary(session_id: str, *, reconcile_legacy: b
     except Exception as exc:
         logger.debug("Runtime V2 model legacy backfill failed: %s", exc)
     return legacy_messages
+
+
+def _load_work_history_dicts_for_run(session_id: str) -> List[Dict[str, Any]]:
+    if _runtime_v2_is_primary():
+        return []
+    return session_manager._load_work_messages(session_id)
 
 
 def _pre_api_timing_mark(timings: Dict[str, int], name: str, start: float) -> None:
@@ -1529,7 +1544,8 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
             state["user_input"] = ""
         logger.warning("user_input 缺失，已从对话记录中恢复")
 
-    _materialize_lazy_work_messages(state)
+    if not _runtime_v2_is_primary():
+        _materialize_lazy_work_messages(state)
     work_messages = list(state["work_messages"])
     llm_history = list(state["llm_history"])
 
@@ -3219,7 +3235,7 @@ async def astream_events(
     llm_history_dicts = _load_model_history_dicts_v2_primary(session_id, reconcile_legacy=True)
     _pre_api_timing_mark(pre_run_timings, "load_model_history", _t_pre)
     _t_pre = time.perf_counter()
-    work_messages_dicts = session_manager._load_work_messages(session_id)
+    work_messages_dicts = _load_work_history_dicts_for_run(session_id)
     _pre_api_timing_mark(pre_run_timings, "load_work_messages", _t_pre)
 
     _t_pre = time.perf_counter()
@@ -3406,7 +3422,7 @@ async def astream_events_continuation(
         llm_history_dicts = _load_model_history_dicts_v2_primary(session_id, reconcile_legacy=False)
     _pre_api_timing_mark(pre_run_timings, "load_model_history", _t_pre)
     _t_pre = time.perf_counter()
-    work_messages_dicts = session_manager._load_work_messages(session_id)
+    work_messages_dicts = _load_work_history_dicts_for_run(session_id)
     _pre_api_timing_mark(pre_run_timings, "load_work_messages", _t_pre)
 
     _t_pre = time.perf_counter()

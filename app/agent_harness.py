@@ -4315,6 +4315,36 @@ class SessionManager:
                     break
             self._save_index()
 
+    def update_session_model_state(
+        self,
+        session_id: str,
+        llm_history: List[dict],
+        key_context: str,
+        metadata: dict = None,
+        dialogue_history: List[dict] = None,
+    ):
+        """更新模型主链状态，不读写旧版 work_messages.json。"""
+        self._save_llm_history(session_id, llm_history)
+        self._save_key_context(session_id, key_context)
+        if dialogue_history is not None:
+            self._save_dialogue_history(session_id, dialogue_history)
+        if metadata:
+            self._save_metadata(session_id, metadata)
+            now_iso = datetime.now().isoformat()
+            for sess in self.index:
+                if sess["id"] == session_id:
+                    sess["updated_at"] = now_iso
+                    if "archived" in metadata:
+                        sess["archived"] = bool(metadata["archived"])
+                    if "pinned" in metadata:
+                        sess["pinned"] = bool(metadata["pinned"])
+                    if "pinned_at" in metadata:
+                        sess["pinned_at"] = metadata.get("pinned_at")
+                    elif metadata.get("pinned") is False:
+                        sess["pinned_at"] = None
+                    break
+            self._save_index()
+
     def delete_session(self, session_id: str):
         sid = self._normalize_session_id(session_id)
         try:
