@@ -824,6 +824,9 @@ function applyCacheStatsFromEvent(ctx, event) {
     if (event.input_tokens != null) agg.dataset.procCacheInput = String(Math.max(0, Math.floor(Number(event.input_tokens))));
     if (event.output_tokens != null) agg.dataset.procCacheOutput = String(Math.max(0, Math.floor(Number(event.output_tokens))));
     if (event.tokens_per_sec != null) agg.dataset.procCacheTps = String(Math.max(0, Number(event.tokens_per_sec)));
+    if (currentSessionId && event.input_tokens != null && Number.isFinite(Number(event.input_tokens))) {
+        recordContextTokens(currentSessionId, Math.max(0, Math.floor(Number(event.input_tokens))), event.threshold);
+    }
     refreshAggregateStatsSmart(agg);
 }
 
@@ -1771,6 +1774,16 @@ function workspaceOpenDisplayLabel(original, wsRel) {
     return name ? ('@' + name) : raw;
 }
 
+function workspaceOpenTipPath(original, wsRel) {
+    var raw = cleanPathTokenForLink(original || '');
+    if (/^[A-Za-z]:[\\/]/.test(raw) || /^\\\\/.test(raw)) return raw;
+    var rel = String(wsRel || raw || '').replace(/\\/g, '/').replace(/^\/+/, '');
+    if (/^[A-Za-z]:\//.test(rel) || /^\\\\/.test(rel)) return rel.replace(/\//g, '\\');
+    var w = (typeof window.__WORK_DIR__ === 'string') ? window.__WORK_DIR__ : '';
+    if (!w || !rel) return rel || raw;
+    return pathJoinBaseName(w, rel).replace(/\//g, '\\');
+}
+
 function escapeRegExpLiteral(s) {
     return String(s || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
@@ -1978,7 +1991,7 @@ function tryLinkifyEntirePathTextNode(textNode, raw) {
     if (wsRel) {
         a.href = '#';
         a.setAttribute('data-workspace-open', wsRel);
-        a.setAttribute('data-ui-tip', '在本机打开（工作区文件）');
+        a.setAttribute('data-ui-tip', workspaceOpenTipPath(token, wsRel));
         bindUiHoverTip(a);
     } else {
         a.href = href;
@@ -2035,13 +2048,10 @@ function linkifySingleTextNode(textNode) {
                 aw.href = '#';
                 aw.setAttribute('data-workspace-open', wsRel);
                 aw.className = 'msg-link-auto msg-link-workspace-open';
-                aw.setAttribute('data-ui-tip', '在本机打开（工作区文件）');
+                aw.setAttribute('data-ui-tip', workspaceOpenTipPath(p.s, wsRel));
                 bindUiHoverTip(aw);
                 aw.textContent = show || p.s;
                 frag.appendChild(aw);
-                if (p.s.length > (show || '').length) {
-                    frag.appendChild(document.createTextNode(p.s.slice((show || '').length)));
-                }
             } else {
                 var href = makeHrefFromAutoLinkToken(p.s);
                 if (!href) frag.appendChild(document.createTextNode(p.s));
@@ -2053,9 +2063,6 @@ function linkifySingleTextNode(textNode) {
                     ah.className = 'msg-link-auto';
                     ah.textContent = show || p.s;
                     frag.appendChild(ah);
-                    if (p.s.length > (show || '').length) {
-                        frag.appendChild(document.createTextNode(p.s.slice((show || '').length)));
-                    }
                 }
             }
         }
@@ -2068,9 +2075,19 @@ function upgradeWorkspacePathMarkdownLinks(root) {
     root.querySelectorAll('a[href]').forEach(function (a) {
         if (!a || a.classList.contains('msg-link-workspace-open')) return;
         var href = a.getAttribute('href') || '';
+        var originalPathForTip = '';
         var marker = /^#ga-workspace-path=(.+)$/i.exec(href);
         if (marker) {
-            try { href = decodeURIComponent(marker[1]); } catch (e0) { href = marker[1]; }
+            var markerValue = marker[1];
+            var rawIdx = markerValue.indexOf('&raw=');
+            if (rawIdx >= 0) {
+                var relPart = markerValue.slice(0, rawIdx);
+                var rawPart = markerValue.slice(rawIdx + 5);
+                try { href = decodeURIComponent(relPart); } catch (e0) { href = relPart; }
+                try { originalPathForTip = decodeURIComponent(rawPart); } catch (e1) { originalPathForTip = rawPart; }
+            } else {
+                try { href = decodeURIComponent(markerValue); } catch (e2) { href = markerValue; }
+            }
         }
         var raw = href;
         try { raw = decodeURI(raw); } catch (e) {}
@@ -2085,7 +2102,7 @@ function upgradeWorkspacePathMarkdownLinks(root) {
         a.href = '#';
         a.setAttribute('data-workspace-open', rel);
         a.classList.add('msg-link-workspace-open');
-        a.setAttribute('data-ui-tip', '在本机打开（工作区文件）');
+        a.setAttribute('data-ui-tip', workspaceOpenTipPath(originalPathForTip || raw, rel));
         bindUiHoverTip(a);
     });
 }
@@ -2102,7 +2119,10 @@ function workspaceImageRelFromMarker(value) {
     var raw = String(value || '').trim();
     var marker = /^#ga-workspace-path=(.+)$/i.exec(raw);
     if (marker) {
-        try { raw = decodeURIComponent(marker[1]); } catch (e) { raw = marker[1]; }
+        var markerValue = marker[1];
+        var rawIdx = markerValue.indexOf('&raw=');
+        if (rawIdx >= 0) markerValue = markerValue.slice(0, rawIdx);
+        try { raw = decodeURIComponent(markerValue); } catch (e) { raw = markerValue; }
     }
     var rel = markdownHrefToWorkspaceOpenRel(raw);
     if (!rel || !workspaceImageExtRegex().test(String(rel).replace(/\\/g, '/'))) return '';
@@ -2312,7 +2332,7 @@ function encodeMarkdownWorkspacePathLinkMatch(match, label, dest) {
     if (/^[A-Za-z][A-Za-z0-9+.-]*:/i.test(decodedDest) && !/^[A-Za-z]:[\\/]/.test(decodedDest) && !/^file:\/\//i.test(decodedDest)) return match;
     var rel = markdownHrefToWorkspaceOpenRel(decodedDest);
     if (!rel) return match;
-    return '[' + label + '](#ga-workspace-path=' + encodeURIComponent(rel) + ')';
+    return '[' + label + '](#ga-workspace-path=' + encodeURIComponent(rel) + '&raw=' + encodeURIComponent(decodedDest) + ')';
 }
 
 function encodeMarkdownWorkspacePathLinksInPlainText(text) {

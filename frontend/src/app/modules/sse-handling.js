@@ -1159,8 +1159,8 @@ async function sendMessage(options) {
     formData.append('session_id', runSessionId);
     formData.append('client_run_id', clientRunId);
     formData.append('stream_protocol', 'runtime_v2');
-    /* 保留右上角 token 进度条上一快照，直至 SSE /context_tokens 推送新估值，避免每次发送闪零 */
-    if (!switchedAway) scheduleContextTokensAfterPaint(runSessionId);
+    /* 发送后优先使用本轮 API usage/cache_stats 刷新 token；缺少 usage 时仍保留上一快照。 */
+    if (!switchedAway) applyContextTokenLabelForCurrentSession();
     let streamEventIdx = preCount + 1;
     
     // 异步更新事件计数缓存（从服务器获取真实计数）

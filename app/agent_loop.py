@@ -563,12 +563,16 @@ def _load_runtime_v2_model_history_dicts(session_id: str) -> List[Dict[str, Any]
 
 def _load_model_history_dicts_v2_primary(session_id: str, *, reconcile_legacy: bool) -> List[Dict[str, Any]]:
     try:
-        from runtime_v2 import runtime_v1_primary
+        from runtime_v2 import runtime_v1_primary, runtime_v2_primary
 
         if runtime_v1_primary():
             if reconcile_legacy:
                 session_manager.reconcile_llm_work_to_ui_user_count(session_id, include_work=False)
             return session_manager._load_llm_history(session_id)
+        if runtime_v2_primary():
+            runtime_v2_messages = _load_runtime_v2_model_history_dicts(session_id)
+            if runtime_v2_messages:
+                return runtime_v2_messages
     except Exception as exc:
         logger.debug("Runtime version check failed for model history: %s", exc)
     if reconcile_legacy:
@@ -600,6 +604,21 @@ def _load_model_history_dicts_v2_primary(session_id: str, *, reconcile_legacy: b
     except Exception as exc:
         logger.debug("Runtime V2 model legacy backfill failed: %s", exc)
     return legacy_messages
+
+
+def _pre_api_timing_mark(timings: Dict[str, int], name: str, start: float) -> None:
+    timings[name] = int(max(0.0, (time.perf_counter() - start) * 1000.0))
+
+
+def _pre_api_timing_log(session_id: str, timings: Dict[str, int], **extra: Any) -> None:
+    try:
+        total = int(sum(int(v or 0) for v in timings.values()))
+        parts = [f"{k}={int(v)}ms" for k, v in timings.items()]
+        for k, v in extra.items():
+            parts.append(f"{k}={v}")
+        logger.info("pre_api_timing session=%s total=%sms %s", session_id, total, " ".join(parts))
+    except Exception:
+        logger.debug("pre_api_timing log failed", exc_info=True)
 
 
 def _runtime_v2_append_model_message(state: State, msg: Any) -> None:
@@ -1573,6 +1592,8 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
 
     try:
         while iter_count < max_react_iter:
+            pre_api_timings: Dict[str, int] = dict(state.pop("_pre_run_timings", {}) or {})
+            _t_pre_api = time.perf_counter()
             await _raise_if_steer_requested(state, emit, "react")
             if session_manager.is_interrupt_requested(state["session_id"]):
                 if _is_followup_interrupt(state["session_id"]):
@@ -1588,7 +1609,11 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
                     emit=emit,
                 )
                 break
+            _pre_api_timing_mark(pre_api_timings, "early_interrupt_checks", _t_pre_api)
+            _t_pre_api = time.perf_counter()
             await _await_context_policy_idle_for_session(state, emit)
+            _pre_api_timing_mark(pre_api_timings, "context_policy_wait_prebuild", _t_pre_api)
+            _t_pre_api = time.perf_counter()
             await _raise_if_steer_requested(state, emit, "react")
             iter_count += 1
             state["_current_react_iter"] = int(iter_count)
@@ -1613,6 +1638,8 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
             if kc_body:
                 llm_messages.append(SystemMessage(content=kc_body))
             llm_messages.extend(turn_msgs)
+            _pre_api_timing_mark(pre_api_timings, "build_messages", _t_pre_api)
+            _t_pre_api = time.perf_counter()
 
             # 调试：仅记录多轮消息数量与首段截断（避免整段 XML 日志）
             logger.debug(
@@ -1627,9 +1654,12 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
                 llm_history,
                 state.get("key_context", "") or "",
             )
+            _pre_api_timing_mark(pre_api_timings, "token_estimate", _t_pre_api)
+            _t_pre_api = time.perf_counter()
             iter_client, iter_model, iter_max_output_tokens, iter_context_window = resolve_executor_config_for_session(
                 state["session_id"]
             )
+            _pre_api_timing_mark(pre_api_timings, "resolve_model_config", _t_pre_api)
             if emit:
                 await _push_stream_event(
                     state,
@@ -1649,6 +1679,7 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
                 kcur = state.get("key_context", "") or ""
                 sid = state["session_id"]
                 if full_input_est > iter_context_window:
+                    _t_pre_api = time.perf_counter()
                     if emit:
                         await _push_stream_event(
                             state,
@@ -1678,6 +1709,7 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
                         emit,
                         thread_hint_queue=_hint_q,
                     )
+                    _pre_api_timing_mark(pre_api_timings, "context_policy_run", _t_pre_api)
                 else:
                     nl, nk, chg, used_llm_summary, new_recap = llm_history, kcur, False, False, None
             else:
@@ -1755,6 +1787,7 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
                 compress_attempts = 0
 
             combined_tools: List[Dict[str, Any]] = list(OPENAI_TOOL_DEFINITIONS)
+            _t_pre_api = time.perf_counter()
             try:
                 combined_tools.extend(
                     await _await_steerable(
@@ -1764,19 +1797,27 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
                         "tool_definitions",
                     )
                 )
+                _pre_api_timing_mark(pre_api_timings, "mcp_tool_definitions", _t_pre_api)
             except _SteerRestartRequested:
                 raise
             except Exception as _mcp_ex:
+                _pre_api_timing_mark(pre_api_timings, "mcp_tool_definitions", _t_pre_api)
                 logger.warning("MCP 工具列表加载失败（忽略）: %s", _mcp_ex)
+            _t_pre_api = time.perf_counter()
             try:
                 from agent_subagent import filter_tools_for_session
 
                 combined_tools = filter_tools_for_session(combined_tools, session_meta)
+                _pre_api_timing_mark(pre_api_timings, "subagent_tool_filter", _t_pre_api)
             except Exception as _sub_ex:
+                _pre_api_timing_mark(pre_api_timings, "subagent_tool_filter", _t_pre_api)
                 logger.warning("subagent 工具过滤失败（忽略）: %s", _sub_ex)
 
             # ---------- 2.6 调用 LLM ----------
+            _t_pre_api = time.perf_counter()
             await _await_context_policy_idle_for_session(state, emit)
+            _pre_api_timing_mark(pre_api_timings, "context_policy_wait_pre_api", _t_pre_api)
+            _t_pre_api = time.perf_counter()
             await _raise_if_steer_requested(state, emit, "react")
             if session_manager.is_interrupt_requested(state["session_id"]):
                 if _is_followup_interrupt(state["session_id"]):
@@ -1784,6 +1825,16 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
                 final_content = "任务已由用户中断。"
                 await _push_stream_event(state, {"type": "status", "content": "任务已由用户中断"}, emit=emit)
                 break
+            _pre_api_timing_mark(pre_api_timings, "final_interrupt_checks", _t_pre_api)
+            _pre_api_timing_log(
+                state["session_id"],
+                pre_api_timings,
+                react_iter=int(iter_count),
+                messages=len(llm_messages),
+                tools=len(combined_tools),
+                estimated_tokens=int(full_input_est),
+                model=iter_model,
+            )
             # 通知前端：LLM 推理开始
             if emit:
                 await _push_stream_event(state, {"type": "status", "content": "正在思考中...", "ephemeral": True}, emit=emit)
@@ -1873,6 +1924,7 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
                                     "hit_rate": round(ch / (ch + cm) * 100, 1) if (ch + cm) > 0 else 0,
                                     "input_tokens": int((payload or {}).get("prompt_tokens", 0) or 0),
                                     "output_tokens": int((payload or {}).get("completion_tokens", 0) or 0),
+                                    "threshold": int(iter_context_window),
                                     "tokens_per_sec": round(int((payload or {}).get("completion_tokens", 0) or 0) / max(0.001, time.monotonic() - t_llm_start), 1),
                                     "model": actual_response_model or iter_model,
                                 })
@@ -2048,6 +2100,7 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
                                     "hit_rate": round(ch / (ch + cm) * 100, 1) if (ch + cm) > 0 else 0,
                                     "input_tokens": llm_call_usage.get("prompt_tokens", 0),
                                     "output_tokens": llm_call_usage.get("completion_tokens", 0),
+                                    "threshold": int(iter_context_window),
                                     "tokens_per_sec": round(llm_call_usage.get("completion_tokens", 0) / max(0.001, time.monotonic() - t_llm_fallback_start), 1),
                                     "model": actual_response_model or iter_model,
                                 },
@@ -3161,11 +3214,19 @@ async def astream_events(
             session_manager.get_or_create_session(session_id)
         )
     setup_logging(user_input, session_id or "")
+    pre_run_timings: Dict[str, int] = {}
+    _t_pre = time.perf_counter()
     llm_history_dicts = _load_model_history_dicts_v2_primary(session_id, reconcile_legacy=True)
+    _pre_api_timing_mark(pre_run_timings, "load_model_history", _t_pre)
+    _t_pre = time.perf_counter()
     work_messages_dicts = session_manager._load_work_messages(session_id)
+    _pre_api_timing_mark(pre_run_timings, "load_work_messages", _t_pre)
 
+    _t_pre = time.perf_counter()
     prev_work_messages = [_dict_to_message(m) for m in work_messages_dicts]
     prev_llm_history = [_dict_to_message(m) for m in llm_history_dicts]
+    _pre_api_timing_mark(pre_run_timings, "decode_histories", _t_pre)
+    _t_pre = time.perf_counter()
     prev_work_messages, prev_llm_history = _sanitize_loaded_histories_for_new_run(
         session_id,
         prev_work_messages,
@@ -3173,6 +3234,7 @@ async def astream_events(
         key_context,
         "sanitize_unclosed_tool_calls_before_chat",
     )
+    _pre_api_timing_mark(pre_run_timings, "sanitize_histories", _t_pre)
 
     user_message = UserMessage(content=user_input)
 
@@ -3192,6 +3254,7 @@ async def astream_events(
         "llm_calls": [],
         "key_context": key_context,
         "_runtime_v2_run_id": runtime_v2_run_id,
+        "_pre_run_timings": pre_run_timings,
     }
     todo_manager.sync_session_from_key_context(session_id, key_context or "")
     session_manager.clear_interrupt(session_id, runtime_v2_run_id)
@@ -3333,16 +3396,24 @@ async def astream_events_continuation(
     key_context = session_manager._load_key_context(session_id)
     key_context = session_manager.migrate_todo_plan_off_key_context(session_id, key_context)
     setup_logging("[subagent-continuation]", session_id)
+    pre_run_timings: Dict[str, int] = {}
+    _t_pre = time.perf_counter()
     runtime_v2_llm_history_dicts = _load_runtime_v2_model_history_dicts(session_id)
     if runtime_v2_llm_history_dicts:
         llm_history_dicts = runtime_v2_llm_history_dicts
     else:
         session_manager.reconcile_llm_work_to_ui_user_count(session_id)
         llm_history_dicts = _load_model_history_dicts_v2_primary(session_id, reconcile_legacy=False)
+    _pre_api_timing_mark(pre_run_timings, "load_model_history", _t_pre)
+    _t_pre = time.perf_counter()
     work_messages_dicts = session_manager._load_work_messages(session_id)
+    _pre_api_timing_mark(pre_run_timings, "load_work_messages", _t_pre)
 
+    _t_pre = time.perf_counter()
     prev_work_messages = [_dict_to_message(m) for m in work_messages_dicts]
     prev_llm_history = [_dict_to_message(m) for m in llm_history_dicts]
+    _pre_api_timing_mark(pre_run_timings, "decode_histories", _t_pre)
+    _t_pre = time.perf_counter()
     prev_work_messages, prev_llm_history = _sanitize_loaded_histories_for_new_run(
         session_id,
         prev_work_messages,
@@ -3350,6 +3421,7 @@ async def astream_events_continuation(
         key_context,
         "sanitize_unclosed_tool_calls_before_continuation",
     )
+    _pre_api_timing_mark(pre_run_timings, "sanitize_histories", _t_pre)
 
     user_input = ""
     for msg in reversed(prev_llm_history):
@@ -3371,6 +3443,7 @@ async def astream_events_continuation(
         "llm_calls": [],
         "key_context": key_context,
         "_runtime_v2_run_id": runtime_v2_run_id,
+        "_pre_run_timings": pre_run_timings,
     }
     todo_manager.sync_session_from_key_context(session_id, key_context or "")
     session_manager.clear_interrupt(session_id)
