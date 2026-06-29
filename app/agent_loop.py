@@ -579,9 +579,7 @@ def _load_model_history_dicts_v2_primary(session_id: str, *, reconcile_legacy: b
                 session_manager.reconcile_llm_work_to_ui_user_count(session_id, include_work=False)
             return session_manager._load_llm_history(session_id)
         if runtime_v2_primary():
-            runtime_v2_messages = _load_runtime_v2_model_history_dicts(session_id)
-            if runtime_v2_messages:
-                return runtime_v2_messages
+            return _load_runtime_v2_model_history_dicts(session_id)
     except Exception as exc:
         logger.debug("Runtime version check failed for model history: %s", exc)
     if reconcile_legacy:
@@ -3417,6 +3415,12 @@ async def astream_events_continuation(
     runtime_v2_llm_history_dicts = _load_runtime_v2_model_history_dicts(session_id)
     if runtime_v2_llm_history_dicts:
         llm_history_dicts = runtime_v2_llm_history_dicts
+    elif _runtime_v2_is_primary():
+        logger.warning(
+            "Runtime V2 continuation skipped because model projection is empty: session=%s",
+            session_id,
+        )
+        return
     else:
         session_manager.reconcile_llm_work_to_ui_user_count(session_id)
         llm_history_dicts = _load_model_history_dicts_v2_primary(session_id, reconcile_legacy=False)
