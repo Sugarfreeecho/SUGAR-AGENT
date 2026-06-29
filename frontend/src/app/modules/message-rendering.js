@@ -1662,14 +1662,6 @@ function upgradeMermaidBlocks(root) {
 }
 
 /** 无盘符、无路径分隔符的「纯文件名 + 已知后缀」→ 相对工作区根解析 */
-function isBareWorkspaceFilenameForLink(t) {
-    var s = linkifyNormalizePathToken(String(t || '').trim());
-    if (!s || /[/\\:]/.test(s)) return false;
-    if (!/^[^\s<>'"]+$/.test(s)) return false;
-    if (/^\.\.?$/.test(s)) return false;
-    return linkifyKnownExtRegex().test(s);
-}
-
 function makeHrefFromAutoLinkToken(s) {
     var t = cleanPathTokenForLink(s);
     if (!t) return null;
@@ -1690,12 +1682,6 @@ function makeHrefFromAutoLinkToken(s) {
         if (!wr) return null;
         var absRel = pathJoinBaseName(wr, t.replace(/\\/g, '/'));
         if (absRel) return fileUrlFromFsPath(absRel);
-    }
-    if (isBareWorkspaceFilenameForLink(t)) {
-        var wk = (typeof window.__WORK_DIR__ === 'string') ? window.__WORK_DIR__ : '';
-        if (!wk) return null;
-        var absBare = pathJoinBaseName(wk, t);
-        if (absBare) return fileUrlFromFsPath(absBare);
     }
     return null;
 }
@@ -1740,7 +1726,6 @@ function pathTokenToWorkspaceOpenRel(token) {
     }
     var relPath = stripWorkspaceRootPrefixFromRelPath(t);
     if (workspaceRelativePathNoSlashAutoLinkOk(relPath)) return relPath;
-    if (isBareWorkspaceFilenameForLink(relPath)) return relPath;
     return null;
 }
 
@@ -1945,10 +1930,6 @@ function isEntireTextNodeWindowsPath(raw) {
     return /^([A-Za-z]):[\\/](?:(?:[^\\/:*?"<>|\r\n]+)(?:\\|\/))*[^\\/:*?"<>|\r\n]+$/i.test(t);
 }
 
-function isEntireBareFilenameLinkable(raw) {
-    var t = trimTrailingPathPunct(linkifyNormalizePathToken(String(raw || '').trim()));
-    return isBareWorkspaceFilenameForLink(t);
-}
 
 /** 行内 code 内整段为 `/工作区相对/路径.ext` 时亦允许链转（否则反引号路径永不可点） */
 function isEntireWorkspaceSlashPathLinkable(raw) {
@@ -1979,8 +1960,7 @@ function getAssistMsgLinkifyRegex() {
             '\\\\\\\\(?:(?:[^\\\\\\/:*?"<>|\\r\\n]+)\\\\)+(?:[^\\\\\\/:*?"<>|\\r\\n]+)|' +
             '[A-Za-z]:(?:\\\\|\\/)(?:(?:[^\\\\/:*?"<>|\\r\\n]+)(?:\\\\|\\/))*[^\\\\/:*?"<>|\\r\\n]+|' +
             '(?<![A-Za-z])\\/(?![\\s\\/])[^\\s<>\'"]+|' +
-            '(?<![A-Za-z0-9./\\\\])(?:[^\\s<>\'"/\\\\:]+(?:[\\\\/][^\\s<>\'"/\\\\:]+)+\\.(' + LINKIFY_EXT_FRAGMENT + ')\\b)|' +
-            '(?<![A-Za-z0-9./\\\\])([^\\s<>\'"/\\\\:]+?\\.(' + LINKIFY_EXT_FRAGMENT + ')\\b))',
+            '(?<![A-Za-z0-9./\\\\])(?:[^\\s<>\'"/\\\\:]+(?:[\\\\/][^\\s<>\'"/\\\\:]+)+\\.(' + LINKIFY_EXT_FRAGMENT + ')\\b))',
             'gi'
         );
     }
@@ -2017,7 +1997,7 @@ function linkifySingleTextNode(textNode) {
     if (!parent || parent.closest('a, pre, script, style, textarea, svg')) return;
     var inInlineCode = !!parent.closest('code');
     if (inInlineCode) {
-        if (!isEntireTextNodeWindowsPath(raw) && !isEntireBareFilenameLinkable(raw) && !isEntireWorkspaceSlashPathLinkable(raw) && !isEntireWorkspaceRelativePathLinkable(raw) && !isEntireTextNodeUncPath(raw)) return;
+        if (!isEntireTextNodeWindowsPath(raw) && !isEntireWorkspaceSlashPathLinkable(raw) && !isEntireWorkspaceRelativePathLinkable(raw) && !isEntireTextNodeUncPath(raw)) return;
         if (tryLinkifyEntirePathTextNode(textNode, raw)) return;
     }
     var rawForLink = linkifyNormalizePathToken(raw);
@@ -2223,7 +2203,7 @@ function linkifyAssistantTextNodes(root) {
     while ((n = walker.nextNode())) {
         var p = n.parentElement;
         if (!p || p.closest('a, pre, script, style, textarea, .mermaid')) continue;
-        if (p.closest('code') && !isEntireTextNodeWindowsPath(n.nodeValue) && !isEntireBareFilenameLinkable(n.nodeValue) && !isEntireWorkspaceSlashPathLinkable(n.nodeValue) && !isEntireWorkspaceRelativePathLinkable(n.nodeValue) && !isEntireTextNodeUncPath(n.nodeValue)) continue;
+        if (p.closest('code') && !isEntireTextNodeWindowsPath(n.nodeValue) && !isEntireWorkspaceSlashPathLinkable(n.nodeValue) && !isEntireWorkspaceRelativePathLinkable(n.nodeValue) && !isEntireTextNodeUncPath(n.nodeValue)) continue;
         var nv = n.nodeValue;
         var nvNorm = linkifyNormalizePathToken(nv);
         if (!nv || (!/https?:\/\/|["'][A-Za-z]:[\\/]|[A-Za-z]:[\\/]|\/\S/.test(nvNorm) && !nvNorm.startsWith('\\\\') && !linkifyKnownExtRegex().test(nvNorm))) continue;
