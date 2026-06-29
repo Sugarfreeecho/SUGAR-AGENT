@@ -2991,11 +2991,8 @@ class SessionManager:
         return self._load_ui_events(session_id)
 
     def _load_ui_events_for_active_runtime(self, session_id: str) -> List[dict]:
-        """Load UI-visible history from the selected runtime, with V1 as fallback."""
+        """Load UI-visible history from the selected runtime."""
         if self._runtime_v2_primary():
-            legacy_events = self._load_ui_events(session_id)
-            if legacy_events:
-                return legacy_events
             try:
                 from runtime_v2.ui_projection import RuntimeUiProjection
 
@@ -3010,6 +3007,7 @@ class SessionManager:
                     return events
             except Exception as exc:
                 logger.debug("Runtime V2 UI history read failed for %s: %s", session_id, exc)
+            return []
         return self._load_ui_events(session_id)
 
     def get_ui_events_page(

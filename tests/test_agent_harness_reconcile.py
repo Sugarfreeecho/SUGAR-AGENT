@@ -17,6 +17,11 @@ def _manager_with(**attrs):
     return mgr
 
 
+class _Repository:
+    def __init__(self, sessions_dir: Path):
+        self.sessions_dir = sessions_dir
+
+
 def test_reconcile_does_not_rebuild_when_llm_user_count_matches_ui():
     import agent_harness
 
@@ -120,3 +125,44 @@ def test_legacy_rebuild_paths_do_not_replace_runtime_v2_model_history():
     ]
     for reason in forbidden_reasons:
         assert f'reason="{reason}"' not in source
+
+
+def test_runtime_v2_active_ui_events_read_projection_without_legacy(monkeypatch, tmp_path):
+    import agent_harness
+    from runtime_v2 import RuntimeMirror
+
+    mirror = RuntimeMirror(tmp_path)
+    mirror.mirror_ui_event("s1", {"type": "user", "content": "u1"})
+    mirror.mirror_ui_event("s1", {"type": "final", "content": "a1"})
+
+    def fail_legacy(_sid):
+        raise AssertionError("Runtime V2 active UI history must not read legacy ui_events")
+
+    mgr = _manager_with(
+        repository=_Repository(tmp_path),
+        _runtime_v2_primary=lambda: True,
+        _load_ui_events=fail_legacy,
+        _resolve_session_path=lambda sid: tmp_path / sid,
+    )
+
+    events = agent_harness.SessionManager._load_ui_events_for_active_runtime(mgr, "s1")
+
+    assert [event["content"] for event in events] == ["u1", "a1"]
+
+
+def test_runtime_v2_active_ui_events_empty_projection_does_not_fallback_legacy(tmp_path):
+    import agent_harness
+
+    def fail_legacy(_sid):
+        raise AssertionError("Runtime V2 active UI history must not fallback to legacy ui_events")
+
+    mgr = _manager_with(
+        repository=_Repository(tmp_path),
+        _runtime_v2_primary=lambda: True,
+        _load_ui_events=fail_legacy,
+        _resolve_session_path=lambda sid: tmp_path / sid,
+    )
+
+    events = agent_harness.SessionManager._load_ui_events_for_active_runtime(mgr, "s1")
+
+    assert events == []
