@@ -635,6 +635,7 @@ SSE 是后端向前端展示 Agent 过程的主通道。事件至少应覆盖以
 - 会话加载期间 TOC 可以提前启动，但后续被 suppress 的 `rebuildToc()` 必须是 no-op，不能再次清空 TOC、递增 TOC epoch 或作废已经发出的 `/user_turns` 请求。
 - Runtime V2 打开会话应优先使用 session history snapshot，一次返回首屏正文分页、消息总数和 TOC 用户轮次，减少 `/messages`、`/messages/count`、`/user_turns` 多请求竞争；snapshot 失败时才回退旧分页接口。
 - 首次加载且没有保存滚动位置/anchor 时，应保持 V1 体验的平滑滚到底部；存在保存位置/anchor 时必须立即恢复，避免历史分页和 TOC active 更新打断用户位置。
+- Runtime V2 的 TOC 用户轮次必须优先来自 projection index/cache；`/user_turns` 和 session history snapshot 不得为了 TOC 预览重新物化完整 UI events。
 
 ## 20. 已知工程特征
 

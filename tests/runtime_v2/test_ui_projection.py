@@ -166,6 +166,24 @@ class RuntimeUiProjectionTests(unittest.TestCase):
             self.assertGreater(latest_seq, 0)
             self.assertEqual([ev["content"] for ev in page["events"]], ["u1", "a1"])
 
+    def test_user_turns_are_available_from_projection_index(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            mirror = RuntimeMirror(tmp)
+            mirror.mirror_ui_event("s1", {"type": "user", "content": "first question"})
+            mirror.mirror_ui_event("s1", {"type": "final", "content": "answer"})
+            mirror.mirror_ui_event("s1", {"type": "user", "content": "second question"})
+            projection = RuntimeUiProjection(tmp)
+
+            self.assertEqual(projection.read_user_turns_light("s1"), [
+                {"event_index": 0, "preview": "first question"},
+                {"event_index": 2, "preview": "second question"},
+            ])
+            index = projection._read_or_build_ui_index("s1")
+            self.assertEqual(index["user_turns"], [
+                {"event_index": 0, "preview": "first question"},
+                {"event_index": 2, "preview": "second question"},
+            ])
+
     def test_maps_visible_ui_index_to_runtime_seq(self):
         with tempfile.TemporaryDirectory() as tmp:
             mirror = RuntimeMirror(tmp)

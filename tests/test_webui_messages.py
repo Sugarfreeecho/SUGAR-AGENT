@@ -311,6 +311,79 @@ def test_history_snapshot_combines_v2_messages_count_and_toc(monkeypatch, tmp_pa
     ]
 
 
+def test_history_snapshot_uses_lightweight_user_turns(monkeypatch, tmp_path):
+    import runtime_v2
+    import runtime_v2.ui_projection
+    import webui
+
+    class _Projection:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def read_ui_page(self, session_id, **kwargs):
+            return {
+                "events": [{"type": "user", "content": "u"}],
+                "total": 1,
+                "range_start": 0,
+                "range_end": 1,
+                "has_older": False,
+                "has_newer": False,
+                "source": "test",
+            }
+
+        def count_ui_events_light(self, session_id):
+            return 1, 0
+
+        def read_user_turns_light(self, session_id):
+            return [{"event_index": 0, "preview": "u"}]
+
+        def read_ui_events_fast(self, session_id):
+            raise AssertionError("history snapshot must not read full UI events for TOC")
+
+    monkeypatch.setattr(runtime_v2, "runtime_v2_primary", lambda: True)
+    monkeypatch.setattr(runtime_v2.ui_projection, "RuntimeUiProjection", _Projection)
+    fake = _NoLegacyUiSessionManager(tmp_path, [])
+    monkeypatch.setattr(webui, "session_manager", fake)
+
+    response = asyncio.run(webui.get_session_history_snapshot(
+        "s1",
+        limit=None,
+        before_index=None,
+        after_index=None,
+        turns=5,
+    ))
+    payload = _json_response_payload(response)
+
+    assert payload["ok"] is True
+    assert payload["user_turns"] == [{"event_index": 0, "preview": "u"}]
+
+
+def test_user_turns_uses_lightweight_projection_index(monkeypatch, tmp_path):
+    import runtime_v2
+    import runtime_v2.ui_projection
+    import webui
+
+    class _Projection:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def read_user_turns_light(self, session_id):
+            return [{"event_index": 7, "preview": "cached"}]
+
+        def read_ui_events_fast(self, session_id):
+            raise AssertionError("/user_turns must not read full UI events")
+
+    monkeypatch.setattr(runtime_v2, "runtime_v2_primary", lambda: True)
+    monkeypatch.setattr(runtime_v2.ui_projection, "RuntimeUiProjection", _Projection)
+    fake = _NoLegacyUiSessionManager(tmp_path, [])
+    monkeypatch.setattr(webui, "session_manager", fake)
+
+    response = asyncio.run(webui.get_session_user_turns("s1"))
+    payload = _json_response_payload(response)
+
+    assert payload == [{"event_index": 7, "preview": "cached"}]
+
+
 def test_manual_runtime_sync_exports_v2_model_projection_to_legacy(monkeypatch, tmp_path):
     import runtime_v2
     from runtime_v2 import RuntimeHistoryOps, RuntimeMirror

@@ -256,6 +256,33 @@ class RuntimeUiProjection:
             return 0
         return mapped[idx - 1]
 
+    @staticmethod
+    def _user_turn_preview(ui_event: dict) -> str:
+        return str((ui_event or {}).get("content") or "").strip().replace("\r\n", "\n").replace("\r", "\n")[:200]
+
+    def read_user_turns_light(self, session_id: str) -> List[dict]:
+        index = self._read_or_build_ui_index(session_id)
+        turns = index.get("user_turns") if isinstance(index, dict) else None
+        if isinstance(turns, list):
+            out: List[dict] = []
+            for row in turns:
+                if not isinstance(row, dict):
+                    continue
+                try:
+                    event_index = int(row.get("event_index"))
+                except (TypeError, ValueError):
+                    continue
+                out.append({
+                    "event_index": event_index,
+                    "preview": str(row.get("preview") or ""),
+                })
+            return out
+        return [
+            {"event_index": idx, "preview": self._user_turn_preview(event)}
+            for idx, event in enumerate(self.read_ui_events_fast(session_id))
+            if isinstance(event, dict) and event.get("type") == "user"
+        ]
+
     def count_ui_events_light(self, session_id: str) -> tuple[int, int]:
         """Return projected UI count and latest truncate seq.
 
@@ -313,7 +340,7 @@ class RuntimeUiProjection:
     def _build_ui_index(self, session_id: str, signature: Optional[tuple[bool, int, int]] = None) -> dict:
         if signature is None:
             signature = self._event_log_signature(session_id)
-        entries: List[tuple[int, str]] = []
+        entries: List[tuple[int, str, str]] = []
         latest_truncate_seq = 0
         for event in self.event_log.iter_events(session_id):
             if event.type == "legacy_truncate_observed":
@@ -329,21 +356,29 @@ class RuntimeUiProjection:
                 continue
             if event.type == "visible_range_changed":
                 payload = dict(event.payload or {})
-                visible_seqs = set(self._apply_visible_range_to_runtime_seqs([seq for seq, _ in entries], payload))
-                entries = [(seq, typ) for seq, typ in entries if seq in visible_seqs]
+                visible_seqs = set(self._apply_visible_range_to_runtime_seqs([seq for seq, _typ, _preview in entries], payload))
+                entries = [(seq, typ, preview) for seq, typ, preview in entries if seq in visible_seqs]
                 latest_truncate_seq = int(event.seq)
                 continue
             ui = self.event_to_ui(event)
             if ui is None:
                 continue
-            entries.append((int(event.seq), str(ui.get("type") or "")))
+            typ = str(ui.get("type") or "")
+            preview = self._user_turn_preview(ui) if typ == "user" else ""
+            entries.append((int(event.seq), typ, preview))
         total = len(entries)
-        user_indices = [idx for idx, (_seq, typ) in enumerate(entries) if typ == "user"]
+        user_turns = [
+            {"event_index": idx, "preview": preview}
+            for idx, (_seq, typ, preview) in enumerate(entries)
+            if typ == "user"
+        ]
+        user_indices = [int(row["event_index"]) for row in user_turns]
         data = {
             "signature": list(signature),
             "total": total,
             "latest_truncate_seq": latest_truncate_seq,
             "user_indices": user_indices,
+            "user_turns": user_turns,
         }
         path = self._ui_index_path(session_id)
         try:

@@ -2631,7 +2631,7 @@ async def get_session_history_snapshot(
                 turns=tv,
             )
             count, count_source = projection.count_ui_events_light(session_id)
-            events_for_toc = projection.read_ui_events_fast(session_id)
+            user_turns = projection.read_user_turns_light(session_id)
             elapsed_ms = int((_time.perf_counter() - t0) * 1000)
             if elapsed_ms >= 500:
                 logger.warning(
@@ -2649,7 +2649,7 @@ async def get_session_history_snapshot(
                 "messages": page,
                 "count": count,
                 "count_source": count_source,
-                "user_turns": _user_turns_from_ui_events(events_for_toc),
+                "user_turns": user_turns,
                 "elapsed_ms": elapsed_ms,
             })
         except Exception as exc:
@@ -2856,8 +2856,8 @@ async def get_session_user_turns(session_id: str):
                 session_manager.repository.sessions_dir,
                 path_resolver=session_manager._resolve_session_path,
             )
-            events = await asyncio.to_thread(projection.read_ui_events_fast, session_id)
-            return JSONResponse(content=_user_turns_from_ui_events(events))
+            turns = await asyncio.to_thread(projection.read_user_turns_light, session_id)
+            return JSONResponse(content=turns)
     except Exception as exc:
         logger.warning("Runtime V2 user turns failed for %s: %s", session_id, exc)
         return JSONResponse(content=[])
