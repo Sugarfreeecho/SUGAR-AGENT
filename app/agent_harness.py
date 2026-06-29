@@ -3532,6 +3532,76 @@ class SessionManager:
                     "event_count": n,
                     "last_type": last_type,
                 }
+            if self._runtime_v2_primary():
+                dst_path.mkdir(parents=True, exist_ok=False)
+                self._copy_branch_sidecar_files(sid, new_id)
+                meta = self._load_metadata(sid)
+                if not isinstance(meta, dict):
+                    meta = {}
+                meta["name"] = branch_name
+                meta["created_at"] = now_iso
+                meta["updated_at"] = now_iso
+                meta["archived"] = False
+                meta["pinned"] = False
+                meta.pop("pinned_at", None)
+                meta["branched_from"] = sid
+                meta["branch_before_index"] = before_index
+                meta["ui_event_count"] = len(new_events)
+                meta["last_user_preview"] = ""
+                for ev in reversed(new_events):
+                    if isinstance(ev, dict) and ev.get("type") == "user":
+                        meta["last_user_preview"] = _normalize_sidebar_preview_text(
+                            str(ev.get("content") or ""),
+                            180,
+                        )
+                        break
+                meta.pop("truncate_backups", None)
+                meta.pop("last_truncate_backup", None)
+                meta.pop("pending_subagent_notifications", None)
+                self._save_metadata(new_id, meta)
+                self.index.append({
+                    "id": new_id,
+                    "name": branch_name,
+                    "created_at": now_iso,
+                    "updated_at": now_iso,
+                    "archived": False,
+                    "pinned": False,
+                    "pinned_at": None,
+                })
+                self._save_index()
+                if branch_from_seq is None:
+                    try:
+                        from runtime_v2.ui_projection import RuntimeUiProjection
+
+                        mapped_seq = RuntimeUiProjection(
+                            self.repository.sessions_dir,
+                            path_resolver=self._resolve_session_path,
+                        ).ui_index_to_runtime_seq(sid, before_index - 1)
+                        branch_from_seq = int(mapped_seq) if mapped_seq is not None else before_index
+                    except Exception as exc:
+                        logger.debug("Runtime V2 branch source seq mapping failed for %s: %s", sid, exc)
+                        branch_from_seq = before_index
+                self._observe_runtime_v2_history(
+                    "create_branch",
+                    new_id,
+                    source_session_id=sid,
+                    branch_from_seq=branch_from_seq,
+                    name=branch_name,
+                )
+                return {
+                    "ok": True,
+                    "session_id": new_id,
+                    "name": branch_name,
+                    "session": {
+                        "id": new_id,
+                        "name": branch_name,
+                        "created_at": now_iso,
+                        "updated_at": now_iso,
+                        "archived": False,
+                        "pinned": False,
+                        "pinned_at": None,
+                    },
+                }
             src_llm = self._load_llm_history(sid)
             src_work = self._load_work_messages(sid)
             new_llm, new_work, _ = self._rebuild_llm_work_from_ui(

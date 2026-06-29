@@ -208,3 +208,59 @@ def test_runtime_v2_truncate_only_changes_visible_range_without_legacy_rebuild()
             {"before_index": 2, "reason": "runtime_v2_truncate"},
         )
     ]
+
+
+def test_runtime_v2_branch_creates_v2_branch_without_legacy_rebuild(tmp_path):
+    import agent_harness
+
+    source_id = "11111111-1111-4111-8111-111111111111"
+    source_dir = tmp_path / source_id
+    source_dir.mkdir(parents=True)
+    observed = []
+    saved_meta = []
+    saved_index = []
+
+    def fail_legacy(*args, **kwargs):
+        raise AssertionError("Runtime V2 branch must not read/write or rebuild legacy history")
+
+    mgr = _manager_with(
+        repository=_Repository(tmp_path),
+        index=[],
+        _runtime_v2_primary=lambda: True,
+        _resolve_session_path=lambda sid: tmp_path / sid,
+        _load_ui_events_for_active_runtime=lambda sid: [
+            {"type": "user", "content": "u1"},
+            {"type": "final", "content": "a1"},
+        ],
+        _load_metadata=lambda sid: {"name": "Source"},
+        _save_metadata=lambda sid, meta: saved_meta.append((sid, dict(meta))),
+        _save_index=lambda: saved_index.append(True),
+        _copy_branch_sidecar_files=lambda source, new: None,
+        _observe_runtime_v2_history=lambda *args, **kwargs: observed.append((args, kwargs)),
+        _load_llm_history=fail_legacy,
+        _load_work_messages=fail_legacy,
+        _rebuild_llm_work_from_ui=fail_legacy,
+        _save_ui_events=fail_legacy,
+        _save_llm_history=fail_legacy,
+        _save_work_messages=fail_legacy,
+        _save_dialogue_history=fail_legacy,
+    )
+
+    result = agent_harness.SessionManager.branch_session_at_event_index(
+        mgr,
+        source_id,
+        2,
+    )
+
+    assert result["ok"] is True
+    new_id = result["session_id"]
+    assert (tmp_path / new_id).is_dir()
+    assert saved_meta and saved_meta[0][0] == new_id
+    assert saved_meta[0][1]["branched_from"] == source_id
+    assert saved_index == [True]
+    assert observed == [
+        (
+            ("create_branch", new_id),
+            {"source_session_id": source_id, "branch_from_seq": 2, "name": "(1)Source"},
+        )
+    ]
