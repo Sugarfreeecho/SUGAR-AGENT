@@ -1472,6 +1472,10 @@ def _count_ui_user_events(events: List[dict]) -> int:
     return sum(1 for e in (events or []) if isinstance(e, dict) and e.get("type") == "user")
 
 
+def _count_session_user_dicts(msg_dicts: List[dict]) -> int:
+    return sum(1 for d in (msg_dicts or []) if _counts_toward_session_user_turns_dict(d))
+
+
 def _normalize_sidebar_preview_text(text: str, max_len: int = 180) -> str:
     """侧栏单行预览：折叠空白并限制长度。"""
     s = (text or "").strip()
@@ -3737,13 +3741,35 @@ class SessionManager:
 
     def reconcile_llm_work_to_ui_user_count(self, session_id: str, include_work: bool = True) -> bool:
         """
-        以 ui_events 中 type=user 条数为唯一事实源，裁剪 llm_history / work_messages 尾部。
+        以 ui_events 中 type=user 条数为边界，只裁剪 llm_history / work_messages 尾部多写盘回合。
         用于修复：请求在「已 append user、已写 New Agent Loop Start」后因 400/异常中止，下一轮又叠
         加 human，而 ui_events 因截断或未重复记录导致比 llm 少 user 条数的情况。
+        禁止在用户轮数未超出 ui_events 时重建 llm_history，避免把完整 ReAct 历史降级成 user/final 主对话。
         """
         try:
             events = self._load_ui_events(session_id)
             llm_raw = self._load_llm_history(session_id)
+            n_ui = _count_ui_user_events(events)
+            llm_users = _count_session_user_dicts([x for x in (llm_raw or []) if isinstance(x, dict)])
+            if llm_users <= n_ui:
+                if include_work:
+                    work_raw_check = self._load_work_messages(session_id)
+                    work_users = _count_session_user_dicts(
+                        [x for x in (work_raw_check or []) if isinstance(x, dict)]
+                    )
+                    if work_users > n_ui:
+                        new_work = trim_message_dicts_by_kept_user_turns(work_raw_check, n_ui)
+                        if new_work != work_raw_check:
+                            self._save_work_messages(session_id, new_work)
+                            logger.info(
+                                "已按 ui_events 用户数=%s 裁剪 work 尾部多写盘回合 work %s→%s；llm 用户数=%s 未超出，未重建 llm_history",
+                                n_ui,
+                                len(work_raw_check),
+                                len(new_work),
+                                llm_users,
+                            )
+                            return True
+                return False
             work_raw = self._load_work_messages(session_id) if include_work else []
             new_llm, new_work, _ = self._rebuild_llm_work_from_ui(
                 session_id, events, llm_raw=llm_raw, work_raw=work_raw
