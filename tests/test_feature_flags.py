@@ -95,8 +95,9 @@ def test_frontend_session_load_starts_toc_before_messages_finish():
     assert "startTocForSessionLoad(sessionId)" in sessions
     assert "tocAlreadyStarted: true" in sessions
     assert "if (!opts.tocAlreadyStarted) rebuildToc();" in sessions
-    switch_body = sessions[sessions.index("async function switchSession"):]
-    assert switch_body.index("startTocForSessionLoad(sessionId)") < switch_body.index("loadSessionMessages(sessionId")
+    assert "/history_snapshot?turns=" in sessions
+    assert "setTocTurnsForSession(sessionId, snapshot.user_turns)" in sessions
+    assert "if (opts.useSnapshot === false && typeof startTocForSessionLoad === 'function')" in sessions
 
 
 def test_frontend_suppressed_toc_rebuild_does_not_clear_started_toc():
@@ -111,6 +112,23 @@ def test_frontend_suppressed_toc_rebuild_does_not_clear_started_toc():
 
     assert "clearTocForSessionLoad" not in body
     assert re.search(r"\breturn\s*;", body), "suppressed TOC rebuild should be a no-op"
+
+
+def test_frontend_toc_supports_snapshot_turns_and_skips_empty_active_update():
+    toc = (ROOT / "frontend/src/app/modules/toc-todo.js").read_text(encoding="utf-8")
+
+    assert "function setTocTurnsForSession(sessionId, turns)" in toc
+    assert "Array.isArray(options.turns)" in toc
+    assert "tocTurnsCacheBySession.set(sid, turns)" in toc
+    assert "if (!list || !list.querySelector('a[data-event-index]')) return;" in toc
+
+
+def test_frontend_initial_bottom_scroll_remains_smooth_without_saved_position():
+    rendering = (ROOT / "frontend/src/app/modules/message-rendering.js").read_text(encoding="utf-8")
+
+    assert "function scrollToBottom(opts)" in rendering
+    assert "chatContainer.scrollTo({ top: chatContainer.scrollHeight, behavior: 'smooth' })" in rendering
+    assert "scrollToBottom({ smooth: mode === 'saved-or-bottom' });" in rendering
 
 
 def test_frontend_run_state_cleanup_is_run_id_scoped():

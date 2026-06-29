@@ -754,11 +754,38 @@ async function loadSessionMessages(sessionId, scrollBehavior, opts) {
     replayingMessages = true;
     resetSessionHistoryPaging();
     try {
-        let url = '/sessions/' + encodeURIComponent(sessionId) + '/messages';
-        if (!opts.full) url += '?turns=' + HISTORY_DIALOGUES_PER_PAGE;
-        const response = await fetchWithTimeout(url, {}, 15000);
-        if (!response.ok) throw new Error('messages failed: ' + response.status);
-        const raw = await response.json();
+        let raw;
+        let snapshotTocTurns = null;
+        const canUseSnapshot = !opts.full && opts.useSnapshot !== false && beforeSessionMessageSnapshotAvailable();
+        if (canUseSnapshot) {
+            try {
+                const snapshotUrl = '/sessions/' + encodeURIComponent(sessionId)
+                    + '/history_snapshot?turns=' + encodeURIComponent(String(HISTORY_DIALOGUES_PER_PAGE));
+                const snapshotResp = await fetchWithTimeout(snapshotUrl, {}, 15000);
+                if (snapshotResp.ok) {
+                    const snapshot = await snapshotResp.json();
+                    if (snapshot && snapshot.ok && snapshot.messages) {
+                        raw = snapshot.messages;
+                        if (typeof uiEventCountCache !== 'undefined' && typeof snapshot.count === 'number') {
+                            uiEventCountCache.updateFromServer(sessionId, snapshot.count);
+                        }
+                        if (Array.isArray(snapshot.user_turns)) {
+                            snapshotTocTurns = snapshot.user_turns;
+                            if (typeof setTocTurnsForSession === 'function') setTocTurnsForSession(sessionId, snapshot.user_turns);
+                        }
+                    }
+                }
+            } catch (snapshotErr) {
+                console.warn('history snapshot unavailable, falling back to messages:', snapshotErr);
+            }
+        }
+        if (!raw) {
+            let url = '/sessions/' + encodeURIComponent(sessionId) + '/messages';
+            if (!opts.full) url += '?turns=' + HISTORY_DIALOGUES_PER_PAGE;
+            const response = await fetchWithTimeout(url, {}, 15000);
+            if (!response.ok) throw new Error('messages failed: ' + response.status);
+            raw = await response.json();
+        }
         if (loadToken !== messageLoadEpoch || sessionId !== currentSessionId) return;
         if (getSessionRunState(sessionId) && !opts.allowDuringRun) return;
         document.getElementById('chat-loading')?.remove();
@@ -836,7 +863,8 @@ async function loadSessionMessages(sessionId, scrollBehavior, opts) {
             tocScrollBottomOnNextBuild = true;
         }
         suppressTocDuringSessionLoad = false;
-        if (!opts.tocAlreadyStarted) rebuildToc();
+        if (snapshotTocTurns) rebuildToc({ turns: snapshotTocTurns });
+        else if (!opts.tocAlreadyStarted) rebuildToc();
         updateSessionTitle();
         updateHistorySentinelVisibility();
         applyChatScrollAfterHistoryLoad(sessionId, scrollBehavior);
@@ -860,6 +888,10 @@ async function loadSessionMessages(sessionId, scrollBehavior, opts) {
         if (loadToken === messageLoadEpoch) suppressTocDuringSessionLoad = false;
         if (loadToken === messageLoadEpoch) replayingMessages = false;
     }
+}
+
+function beforeSessionMessageSnapshotAvailable() {
+    return true;
 }
 
 async function switchSession(sessionId, opts) {
@@ -913,7 +945,7 @@ async function switchSession(sessionId, opts) {
         ensureVisibleChatStreamSlot();
     }
     showLoading();
-    if (typeof startTocForSessionLoad === 'function') startTocForSessionLoad(sessionId);
+    if (opts.useSnapshot === false && typeof startTocForSessionLoad === 'function') startTocForSessionLoad(sessionId);
     return new Promise(function (resolve) {
         setTimeout(async function () {
         if (switchToken !== switchSessionEpoch || sessionId !== currentSessionId) { resolve(false); return; }

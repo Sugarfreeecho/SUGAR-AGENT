@@ -269,6 +269,48 @@ def test_user_turns_prefers_runtime_v2_projection(monkeypatch, tmp_path):
     ]
 
 
+def test_history_snapshot_combines_v2_messages_count_and_toc(monkeypatch, tmp_path):
+    import runtime_v2
+    from runtime_v2 import RuntimeMirror
+    import webui
+
+    monkeypatch.setattr(runtime_v2, "runtime_v2_primary", lambda: True)
+    mirror = RuntimeMirror(tmp_path)
+    for event in [
+        {"type": "user", "content": "first question"},
+        {"type": "final", "content": "first answer"},
+        {"type": "user", "content": "second question"},
+        {"type": "final", "content": "second answer"},
+    ]:
+        mirror.mirror_ui_event("s1", event)
+    fake = _NoLegacyUiSessionManager(tmp_path, [{"type": "user", "content": "legacy"}])
+    monkeypatch.setattr(webui, "session_manager", fake)
+
+    response = asyncio.run(webui.get_session_history_snapshot(
+        "s1",
+        limit=None,
+        before_index=None,
+        after_index=None,
+        turns=5,
+    ))
+    payload = _json_response_payload(response)
+
+    assert payload["ok"] is True
+    assert payload["source"] == "runtime_v2_snapshot"
+    assert payload["count"] == 4
+    assert payload["messages"]["source"] == "runtime_v2_tail_index"
+    assert [event["content"] for event in payload["messages"]["events"]] == [
+        "first question",
+        "first answer",
+        "second question",
+        "second answer",
+    ]
+    assert payload["user_turns"] == [
+        {"event_index": 0, "preview": "first question"},
+        {"event_index": 2, "preview": "second question"},
+    ]
+
+
 def test_manual_runtime_sync_exports_v2_model_projection_to_legacy(monkeypatch, tmp_path):
     import runtime_v2
     from runtime_v2 import RuntimeHistoryOps, RuntimeMirror

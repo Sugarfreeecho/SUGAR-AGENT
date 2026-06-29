@@ -1093,8 +1093,13 @@ function escapeHtmlAttr(str) {
     return escapeHtml(String(str || '')).replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 
-function scrollToBottom() {
+function scrollToBottom(opts) {
+    opts = opts || {};
     if (!chatContainer) return;
+    if (opts.smooth && typeof chatContainer.scrollTo === 'function') {
+        chatContainer.scrollTo({ top: chatContainer.scrollHeight, behavior: 'smooth' });
+        return;
+    }
     setScrollTopImmediate(chatContainer, chatContainer.scrollHeight);
     requestAnimationFrame(function () {
         if (chatContainer) chatContainer.scrollTop = chatContainer.scrollHeight;
@@ -1239,7 +1244,7 @@ function applyChatScrollAfterHistoryLoad(sessionId, mode) {
     streamChatNearBottom = true;
     streamProcNearBottom = true;
     liveAutoFollow = true;
-    scrollToBottom();
+    scrollToBottom({ smooth: mode === 'saved-or-bottom' });
 }
 
 window.addEventListener('beforeunload', function () {
@@ -1279,8 +1284,11 @@ function waitForChatScrollAfterHistoryLoad(sessionId, mode) {
     if (!chatContainer || !sessionId) return Promise.resolve(false);
     if (sessionId !== currentSessionId) return Promise.resolve(false);
     if (historyLoadScrollsToBottom(sessionId, mode)) {
-        setScrollTopImmediate(chatContainer, chatContainer.scrollHeight);
-        return Promise.resolve(true);
+        return new Promise(function (resolve) {
+            requestAnimationFrame(function () {
+                resolve(true);
+            });
+        });
     }
     return Promise.resolve(false);
 }

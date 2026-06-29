@@ -114,6 +114,8 @@ function initUiHoverTips(root) {
 }
 
 function scheduleTocActiveUpdate() {
+    var list = document.getElementById('chat-toc-list');
+    if (!list || !list.querySelector('a[data-event-index]')) return;
     if (tocActiveUpdateRaf) return;
     tocActiveUpdateRaf = requestAnimationFrame(function () {
         tocActiveUpdateRaf = 0;
@@ -183,6 +185,11 @@ function clearTodoForSessionLoad() {
 
 const tocTurnsCacheBySession = new Map();
 
+function setTocTurnsForSession(sessionId, turns) {
+    if (!sessionId || !Array.isArray(turns)) return;
+    tocTurnsCacheBySession.set(sessionId, turns);
+}
+
 function startTocForSessionLoad(sessionId) {
     if (!sessionId || sessionId !== currentSessionId) return;
     var prevSuppress = suppressTocDuringSessionLoad;
@@ -212,7 +219,10 @@ function rebuildToc(options) {
     (async function () {
         let turns = [];
         if (sid) {
-            if (options.localOnly) {
+            if (Array.isArray(options.turns)) {
+                turns = options.turns;
+                tocTurnsCacheBySession.set(sid, turns);
+            } else if (options.localOnly) {
                 turns = tocTurnsCacheBySession.get(sid) || [];
             } else {
                 try {

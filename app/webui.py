@@ -2584,6 +2584,86 @@ async def get_session_message_count(session_id: str):
     """仅返回 ui_events 条数，供发送前对齐 eventIndex，避免下载整份 JSON。"""
 
 
+@fastapi_app.get("/sessions/{session_id}/history_snapshot")
+async def get_session_history_snapshot(
+    session_id: str,
+    limit: Optional[int] = Query(None, ge=1, le=500),
+    before_index: Optional[int] = Query(None, ge=0),
+    after_index: Optional[int] = Query(None, ge=-1),
+    turns: Optional[int] = Query(5, ge=1, le=50),
+):
+    """Return the initial V2 history page plus TOC/count in one request."""
+    import time as _time
+
+    t0 = _time.perf_counter()
+
+    def _build_snapshot_response() -> JSONResponse:
+        try:
+            from runtime_v2 import runtime_v2_primary
+
+            if not runtime_v2_primary():
+                return JSONResponse(content={
+                    "ok": False,
+                    "source": "runtime_v1",
+                    "error": "runtime_v2_required",
+                }, status_code=409)
+        except Exception as exc:
+            logger.warning("Runtime version check failed for history snapshot %s: %s", session_id, exc)
+            return JSONResponse(content={
+                "ok": False,
+                "source": "runtime_unknown",
+                "error": "runtime_version_check_failed",
+            }, status_code=409)
+        try:
+            from runtime_v2.ui_projection import RuntimeUiProjection
+
+            projection = RuntimeUiProjection(
+                session_manager.repository.sessions_dir,
+                path_resolver=session_manager._resolve_session_path,
+            )
+            lim = int(limit) if limit is not None else 200
+            tv = int(turns) if turns is not None else None
+            page = projection.read_ui_page(
+                session_id,
+                limit=lim,
+                before_index=before_index,
+                after_index=after_index,
+                turns=tv,
+            )
+            count, count_source = projection.count_ui_events_light(session_id)
+            events_for_toc = projection.read_ui_events_fast(session_id)
+            elapsed_ms = int((_time.perf_counter() - t0) * 1000)
+            if elapsed_ms >= 500:
+                logger.warning(
+                    "/history_snapshot slow runtime=2 session=%s turns=%s limit=%s before=%s elapsed_ms=%s",
+                    session_id,
+                    tv,
+                    lim,
+                    before_index,
+                    elapsed_ms,
+                )
+            return JSONResponse(content={
+                "ok": True,
+                "source": "runtime_v2_snapshot",
+                "session_id": session_id,
+                "messages": page,
+                "count": count,
+                "count_source": count_source,
+                "user_turns": _user_turns_from_ui_events(events_for_toc),
+                "elapsed_ms": elapsed_ms,
+            })
+        except Exception as exc:
+            logger.warning("Runtime V2 history snapshot failed for %s: %s", session_id, exc)
+            return JSONResponse(content={
+                "ok": False,
+                "source": "runtime_v2_projection_error",
+                "session_id": session_id,
+                "error": str(exc),
+            }, status_code=500)
+
+    return await asyncio.to_thread(_build_snapshot_response)
+
+
 def _sync_runtime_session(session_id: str) -> dict:
     from runtime_v2.model_projection import RuntimeModelProjection
     from runtime_v2.ui_projection import RuntimeUiProjection
