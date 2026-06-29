@@ -49,6 +49,15 @@ def test_runtime_v2_model_history_empty_projection_does_not_fallback_legacy(monk
     assert messages == []
 
 
+def test_agent_loop_does_not_auto_backfill_v2_model_history_from_legacy():
+    source = (APP_DIR / "agent_loop.py").read_text(encoding="utf-8")
+
+    assert "legacy_model_sync_on_read" not in source
+    assert "legacy_model_sync_on_continuation" not in source
+    assert ".ensure_backfilled_from_legacy(" not in source
+    assert ".sync_from_legacy_if_needed(" not in source
+
+
 def test_runtime_v2_run_does_not_load_work_messages(monkeypatch):
     import agent_loop
 
