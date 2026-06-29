@@ -461,13 +461,15 @@ def compute_context_tokens_for_session(session_id: str) -> Dict[str, Any]:
 def _persist_session_messages(state: State) -> None:
     """work / llm / key_context 落盘；dialogue 由 llm 派生，dialogue_history 由 ui_events 派生。"""
     state["dialogue"] = derive_dialogue_from_assistant_history(state["llm_history"])
-    if _runtime_v2_is_primary() and hasattr(session_manager, "update_session_model_state"):
-        session_manager.update_session_model_state(
-            state["session_id"],
-            [_message_to_dict(m) for m in state["llm_history"]],
-            state.get("key_context", ""),
-            dialogue_history=session_manager.dialogue_dicts_from_ui_events_file(state["session_id"]),
-        )
+    if _runtime_v2_is_primary():
+        sid = state["session_id"]
+        if hasattr(session_manager, "_save_key_context"):
+            session_manager._save_key_context(sid, state.get("key_context", ""))
+        if hasattr(session_manager, "_save_dialogue_history"):
+            session_manager._save_dialogue_history(
+                sid,
+                session_manager.dialogue_dicts_from_ui_events_file(sid),
+            )
         return
     _materialize_lazy_work_messages(state)
     session_manager.update_session(

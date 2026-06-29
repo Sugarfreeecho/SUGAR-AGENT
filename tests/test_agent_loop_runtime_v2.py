@@ -62,7 +62,7 @@ def test_runtime_v2_run_does_not_load_work_messages(monkeypatch):
     assert agent_loop._load_work_history_dicts_for_run("s1") == []
 
 
-def test_runtime_v2_persist_does_not_save_work_messages(monkeypatch):
+def test_runtime_v2_persist_does_not_save_legacy_histories(monkeypatch):
     import agent_loop
 
     calls = []
@@ -72,7 +72,19 @@ def test_runtime_v2_persist_does_not_save_work_messages(monkeypatch):
             raise AssertionError("Runtime V2 persist must not write work_messages")
 
         def update_session_model_state(self, *args, **kwargs):
-            calls.append((args, kwargs))
+            raise AssertionError("Runtime V2 persist must not write legacy llm_history")
+
+        def _save_llm_history(self, *args, **kwargs):
+            raise AssertionError("Runtime V2 persist must not save legacy llm_history")
+
+        def _save_work_messages(self, *args, **kwargs):
+            raise AssertionError("Runtime V2 persist must not save legacy work_messages")
+
+        def _save_key_context(self, *args, **kwargs):
+            calls.append(("key_context", args, kwargs))
+
+        def _save_dialogue_history(self, *args, **kwargs):
+            calls.append(("dialogue", args, kwargs))
 
         def dialogue_dicts_from_ui_events_file(self, session_id):
             return []
@@ -89,8 +101,8 @@ def test_runtime_v2_persist_does_not_save_work_messages(monkeypatch):
         }
     )
 
-    assert len(calls) == 1
-    assert calls[0][0][0] == "s1"
+    assert [call[0] for call in calls] == ["key_context", "dialogue"]
+    assert calls[0][1][0] == "s1"
 
 
 def test_runtime_v2_continuation_empty_projection_does_not_reconcile(monkeypatch):
