@@ -25,7 +25,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
 
 from agent import astream_events, astream_events_continuation, session_manager
-from agent_harness import PROJECT_ROOT, WORK_DIR, dotenv_file_path, refresh_executor_client_from_env
+from agent_harness import PROJECT_ROOT, WORK_DIR, dotenv_file_path, refresh_executor_client_from_env, _invalidate_executor_config_cache
 from agent_loop import abort_session_steer_run, compute_context_tokens_for_session, enqueue_session_steer, remove_session_steer
 from session_lifecycle import get_run_started_at, is_run_active
 from session_event_bus import subscribe_session_events
@@ -1759,6 +1759,7 @@ async def save_model_profile(req: Request):
             profile = _save_env_model_profile(data)
         except Exception as e:
             return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+        _invalidate_executor_config_cache()
         return JSONResponse({"ok": True, "profile": model_profiles.public_profile(profile)})
     old_profile = model_profiles.get_profile(PROJECT_ROOT, str(data.get("id") or "").strip())
     incoming_key = str(data.get("api_key") or "").strip() if "api_key" in data else ""
@@ -1768,6 +1769,7 @@ async def save_model_profile(req: Request):
         profile = model_profiles.upsert_profile(PROJECT_ROOT, data)
     except Exception as e:
         return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+    _invalidate_executor_config_cache()
     return JSONResponse({"ok": True, "profile": model_profiles.public_profile(profile)})
 
 
@@ -1781,12 +1783,15 @@ async def reorder_model_profiles(req: Request):
     if not isinstance(ids, list):
         return JSONResponse({"ok": False, "error": "ordered_ids must be list"}, status_code=400)
     model_profiles.reorder_profiles(PROJECT_ROOT, [str(x) for x in ids])
+    _invalidate_executor_config_cache()
     return JSONResponse(_model_profiles_response())
 
 
 @fastapi_app.delete("/api/model_profiles/{profile_id}")
 async def delete_model_profile(profile_id: str):
     ok = model_profiles.delete_profile(PROJECT_ROOT, (profile_id or "").strip())
+    if ok:
+        _invalidate_executor_config_cache()
     return JSONResponse({"ok": ok})
 
 

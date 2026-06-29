@@ -15,12 +15,15 @@ agent_memory 与右上角占用一致；其中对 agent_harness / agent_tools �
 from __future__ import annotations
 
 import logging
+import hashlib
 import os
 import platform
 import re
+import threading
+import time
 from datetime import datetime
 from pathlib import Path
-from typing import Any, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from agent_messages import AssistantMessage, SystemMessage, ToolMessage, UserMessage
 
@@ -28,6 +31,33 @@ logger = logging.getLogger(__name__)
 
 _TOKENIZER: Any = None
 _LOAD_FAILED: bool = False
+_FULL_INPUT_TOKEN_CACHE: Dict[Tuple[str, int, str, str], Tuple[float, int]] = {}
+_FULL_INPUT_TOKEN_CACHE_LOCK = threading.Lock()
+_FULL_INPUT_TOKEN_CACHE_TTL_SEC = 30.0
+_FULL_INPUT_TOKEN_CACHE_MAX = 256
+
+
+def _token_cache_text_hash(text: Any) -> str:
+    return hashlib.sha1(str(text or "").encode("utf-8", errors="ignore")).hexdigest()
+
+
+def _full_input_token_cache_key(session_id: str, llm_history: List[Any], key_context: str) -> Tuple[str, int, str, str]:
+    last_parts: List[str] = []
+    for msg in list(llm_history or [])[-3:]:
+        last_parts.append(type(msg).__name__)
+        last_parts.append(str(getattr(msg, "content", "") or ""))
+        tool_call_id = getattr(msg, "tool_call_id", "")
+        if tool_call_id:
+            last_parts.append(str(tool_call_id))
+        additional_kwargs = getattr(msg, "additional_kwargs", None) or {}
+        if isinstance(additional_kwargs, dict) and additional_kwargs.get("tool_calls"):
+            last_parts.append(str(additional_kwargs.get("tool_calls")))
+    return (
+        str(session_id or "").strip(),
+        len(llm_history or []),
+        _token_cache_text_hash(key_context or ""),
+        _token_cache_text_hash("\n".join(last_parts)),
+    )
 
 
 def _is_loop_marker_text(text: str) -> bool:
@@ -267,6 +297,12 @@ def estimate_full_input_tokens_for_llm_history(
     from agent_tools import get_skills_catalog
 
     sid = str(session_id or "").strip()
+    cache_key = _full_input_token_cache_key(sid, llm_history, key_context or "")
+    now = time.monotonic()
+    with _FULL_INPUT_TOKEN_CACHE_LOCK:
+        cached = _FULL_INPUT_TOKEN_CACHE.get(cache_key)
+        if cached and now - cached[0] <= _FULL_INPUT_TOKEN_CACHE_TTL_SEC:
+            return int(cached[1])
     skills_catalog = get_skills_catalog()
     env_static = build_env_static(sid if sid else None)
     kc_body = key_context_body_for_system_prompt(key_context or "")
@@ -277,4 +313,10 @@ def estimate_full_input_tokens_for_llm_history(
         llm_messages.append(SystemMessage(content=kc_body))
     llm_messages.extend(turn_msgs)
     _for_est = strip_reasoning_for_api_request(llm_messages)
-    return int(estimate_tokens(_for_est))
+    estimated = int(estimate_tokens(_for_est))
+    with _FULL_INPUT_TOKEN_CACHE_LOCK:
+        if len(_FULL_INPUT_TOKEN_CACHE) >= _FULL_INPUT_TOKEN_CACHE_MAX:
+            oldest = min(_FULL_INPUT_TOKEN_CACHE.items(), key=lambda item: item[1][0])[0]
+            _FULL_INPUT_TOKEN_CACHE.pop(oldest, None)
+        _FULL_INPUT_TOKEN_CACHE[cache_key] = (now, estimated)
+    return estimated

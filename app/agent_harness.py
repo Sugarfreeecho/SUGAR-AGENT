@@ -22,6 +22,7 @@ import shutil
 import copy
 import uuid
 import tempfile
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
@@ -1674,6 +1675,8 @@ class SessionManager:
         self._lock = threading.Lock()
         self._metadata_session_locks: Dict[str, threading.Lock] = {}
         self._metadata_session_locks_guard = threading.Lock()
+        self._interrupt_cache: Dict[str, Tuple[bool, str, str]] = {}
+        self._interrupt_cache_lock = threading.Lock()
         self._ui_events_cache_lock = threading.Lock()
         self._ui_events_cache: Dict[str, Tuple[Tuple[bool, int, int], List[dict]]] = {}
         self._ui_events_cache_order: List[str] = []
@@ -4040,6 +4043,8 @@ class SessionManager:
         if self._is_deleted_session(session_id):
             return
         self.repository.save_metadata_atomic(session_id, metadata)
+        _invalidate_executor_config_cache(session_id)
+        self._set_interrupt_cache_from_metadata(session_id, metadata)
 
     def _load_metadata_unlocked(self, session_id: str) -> dict:
         return self.repository.load_metadata(session_id)
@@ -4053,6 +4058,23 @@ class SessionManager:
     def _load_metadata(self, session_id: str) -> dict:
         with self._session_metadata_lock(session_id):
             return self._load_metadata_unlocked(session_id)
+
+    def _set_interrupt_cache_from_metadata(self, session_id: str, metadata: dict) -> None:
+        sid = (session_id or "").strip()
+        if not sid:
+            return
+        requested = bool((metadata or {}).get("interrupt_requested", False))
+        run_id = str((metadata or {}).get("interrupt_run_id") or "").strip()
+        reason = str((metadata or {}).get("interrupt_reason") or "").strip()
+        with self._interrupt_cache_lock:
+            self._interrupt_cache[sid] = (requested, run_id, reason)
+
+    def _get_interrupt_cache(self, session_id: str) -> Optional[Tuple[bool, str, str]]:
+        sid = (session_id or "").strip()
+        if not sid:
+            return None
+        with self._interrupt_cache_lock:
+            return self._interrupt_cache.get(sid)
 
     def _copy_branch_sidecar_files(self, source_session_id: str, new_session_id: str) -> None:
         """Copy lightweight state files needed by a branch without cloning backups/history folders."""
@@ -4796,7 +4818,15 @@ class SessionManager:
                 return True
         except Exception:
             pass
+        cached = self._get_interrupt_cache(sid)
+        if cached is not None:
+            requested, interrupt_run_id, _reason = cached
+            if not requested:
+                return False
+            rid = str(run_id or "").strip()
+            return True if not rid else (not interrupt_run_id or interrupt_run_id == rid)
         metadata = self._load_metadata(session_id)
+        self._set_interrupt_cache_from_metadata(sid, metadata)
         if not bool(metadata.get("interrupt_requested", False)):
             return False
         rid = str(run_id or "").strip()
@@ -4809,7 +4839,14 @@ class SessionManager:
         sid = (session_id or "").strip()
         if not sid:
             return ""
+        cached = self._get_interrupt_cache(sid)
+        if cached is not None:
+            requested, _run_id, reason = cached
+            if not requested:
+                return ""
+            return reason or "user"
         metadata = self._load_metadata(sid)
+        self._set_interrupt_cache_from_metadata(sid, metadata)
         if not bool(metadata.get("interrupt_requested", False)):
             return ""
         return str(metadata.get("interrupt_reason") or "user").strip() or "user"
@@ -4818,6 +4855,18 @@ class SessionManager:
 session_manager = SessionManager(SESSIONS_DIR, INDEX_FILE)
 
 _executor_override_cache: Dict[str, Tuple[Any, str]] = {}
+_executor_config_cache: Dict[str, Tuple[float, Tuple[Any, str, int, int]]] = {}
+_executor_config_cache_lock = threading.Lock()
+_EXECUTOR_CONFIG_CACHE_TTL_SEC = 10.0
+
+
+def _invalidate_executor_config_cache(session_id: str = "") -> None:
+    sid = str(session_id or "").strip()
+    with _executor_config_cache_lock:
+        if sid:
+            _executor_config_cache.pop(sid, None)
+        else:
+            _executor_config_cache.clear()
 
 
 def _profile_candidate(profile: dict) -> Dict[str, Any]:
@@ -4904,6 +4953,11 @@ def resolve_executor_config_for_session(session_id: str) -> Tuple[Any, str, int,
     sid = (session_id or "").strip()
     if not sid:
         return executor_client, executor_model, int(MAX_OUTPUT_TOKENS), int(CONTEXT_WINDOW)
+    now = time.monotonic()
+    with _executor_config_cache_lock:
+        cached_config = _executor_config_cache.get(sid)
+        if cached_config and now - cached_config[0] <= _EXECUTOR_CONFIG_CACHE_TTL_SEC:
+            return cached_config[1]
     try:
         meta = session_manager._load_metadata(sid)
     except Exception:
@@ -4918,28 +4972,40 @@ def resolve_executor_config_for_session(session_id: str) -> Tuple[Any, str, int,
     if profile_id:
         candidates = resolve_executor_candidates_for_session(sid)
         first = candidates[0]
-        return (
+        result = (
             FallbackOpenAIClient(candidates),
             str(first.get("model") or executor_model),
             int(first.get("max_output_tokens") or MAX_OUTPUT_TOKENS),
             int(first.get("context_window") or CONTEXT_WINDOW),
         )
+        with _executor_config_cache_lock:
+            _executor_config_cache[sid] = (now, result)
+        return result
     top_profile_id = model_profiles.top_profile_id_with_env(PROJECT_ROOT)
     if top_profile_id and not override:
         candidates = resolve_executor_candidates_for_session(sid)
         first = candidates[0]
-        return (
+        result = (
             FallbackOpenAIClient(candidates),
             str(first.get("model") or executor_model),
             int(first.get("max_output_tokens") or MAX_OUTPUT_TOKENS),
             int(first.get("context_window") or CONTEXT_WINDOW),
         )
+        with _executor_config_cache_lock:
+            _executor_config_cache[sid] = (now, result)
+        return result
     if not override:
-        return executor_client, executor_model, int(MAX_OUTPUT_TOKENS), int(CONTEXT_WINDOW)
+        result = (executor_client, executor_model, int(MAX_OUTPUT_TOKENS), int(CONTEXT_WINDOW))
+        with _executor_config_cache_lock:
+            _executor_config_cache[sid] = (now, result)
+        return result
     cache_key = f"{llm_type}:{override}"
     cached = _executor_override_cache.get(cache_key)
     if cached is not None:
-        return cached[0], cached[1], int(MAX_OUTPUT_TOKENS), int(CONTEXT_WINDOW)
+        result = (cached[0], cached[1], int(MAX_OUTPUT_TOKENS), int(CONTEXT_WINDOW))
+        with _executor_config_cache_lock:
+            _executor_config_cache[sid] = (now, result)
+        return result
     client, model = create_openai_client(
         override,
         llm_type or EXECUTOR_LLM_TYPE,
@@ -4947,7 +5013,10 @@ def resolve_executor_config_for_session(session_id: str) -> Tuple[Any, str, int,
         http_client=executor_http_client,
     )
     _executor_override_cache[cache_key] = (client, model)
-    return client, model, int(MAX_OUTPUT_TOKENS), int(CONTEXT_WINDOW)
+    result = (client, model, int(MAX_OUTPUT_TOKENS), int(CONTEXT_WINDOW))
+    with _executor_config_cache_lock:
+        _executor_config_cache[sid] = (now, result)
+    return result
 
 # ==================== Todo 计划（todo_plan.md）与 key_context 兼容 ====================
 _TODO_SECTION_LINE_RE = re.compile(r"^## Todo 计划\s*$", re.MULTILINE)

@@ -632,3 +632,12 @@ SSE 是后端向前端展示 Agent 过程的主通道。事件至少应覆盖以
 - `workspace/` 同时承载默认工作区、会话、技能和用户产物，后续如要分离，需要迁移配置和历史路径。
 - 当前前端模块化仍处于渐进迁移状态，存在共享全局状态，重构时要特别注意加载顺序。
 - 旧文档中存在编码显示异常的内容，后续文档建议统一保存为 UTF-8。
+
+## Runtime V2 与 API 前热路径修改规范
+
+- Runtime V2 正常运行路径不得为了兼容旧文件而自动读取、重建或反写 legacy `work_messages.json` / legacy `llm_history.json`。旧数据迁移必须走显式 migration/export 流程，不能混在会话打开、发送消息、分支、截断、repair、reconcile 的正常路径里。
+- 会话历史的工具执行过程以 Runtime V2 event log / projection 为准。任何 `replace_model_history` 都必须保留 assistant tool call 与 tool result 的配对关系，禁止用 `user/final` 可见主链重建模型历史。
+- 修复历史错位、TOC、滚动、final 展示等前端问题时，优先修事件协议和 projection 边界，不得通过“重新拉全量历史并反写模型历史”兜底。
+- 发送 API 前的热路径不得重复读取大历史、重复解析 `work_messages`、重复扫描完整历史或重复解析模型配置。新增逻辑必须观察 `pre_api_timing`，并说明主要耗时项是否变化。
+- 模型配置、token 估算、中断状态等热路径允许使用短 TTL 或显式失效缓存；缓存必须在模型配置变更、会话模型 profile 变更、interrupt request/clear 等写路径同步失效或更新。
+- 新增优化必须配套回归测试，至少覆盖：V2 不 fallback legacy、工具过程不被 user/final 主链覆盖、API 前热路径不会重复读盘或重复计算。
