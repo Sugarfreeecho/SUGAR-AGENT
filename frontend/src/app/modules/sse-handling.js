@@ -177,6 +177,7 @@ async function consumeAgentSseResponse(response, runCtx, runSessionId, streamEve
                     continue;
                 }
                 if (parsed.type === 'final') {
+                    if (eventSessionId === runSessionId) markRunFinalSeen(runCtx);
                     var finalStream = runCtx && runCtx.stream && runCtx.stream.isConnected ? runCtx.stream : getVisibleChatStream();
                     var finalLastUserIdx = latestVisibleUserEventIndex(finalStream);
                     if (hasDuplicateVisibleFinal(finalStream, finalLastUserIdx, parsed.content)) {
@@ -271,9 +272,19 @@ async function ensureFinalVisibleAfterRunIfEnabled(sessionId, ctx, opts) {
     return ensureFinalVisibleAfterRun(sessionId, ctx, opts);
 }
 
+function markRunFinalSeen(ctx) {
+    if (ctx) ctx.seenFinal = true;
+}
+
+function initRunFinalTracking(ctx) {
+    if (ctx) ctx.seenFinal = false;
+}
+
 function scheduleFinalVisibleAfterRunIfEnabled(sessionId, ctx, opts) {
     if (!isMyAgentFeatureEnabled('finalReconcile', true)) return;
+    if (ctx && ctx.seenFinal === true) return;
     setTimeout(function () {
+        if (ctx && ctx.seenFinal === true) return;
         ensureFinalVisibleAfterRun(sessionId, ctx, opts).catch(function (e) {
             console.error('final reconcile failed:', e);
         });
@@ -427,9 +438,11 @@ async function startContinueAfterSubagents(sessionId) {
         const preCount = await getUiEventCount();
         if (!getVisibleChatStream()) ensureVisibleChatStreamSlot();
         runCtx = newDomContext(getVisibleChatStream());
+        initRunFinalTracking(runCtx);
         runCtx.runStartedAt = new Date().toISOString();
         if (getSessionRunState(runSessionId) && getSessionRunState(runSessionId).ctx) {
             runCtx = getSessionRunState(runSessionId).ctx;
+            initRunFinalTracking(runCtx);
             if (!runCtx.runStartedAt) runCtx.runStartedAt = new Date().toISOString();
         } else {
             runCtx.lastUserEventIndex = Math.max(0, preCount - 1);
@@ -515,6 +528,7 @@ async function attachSessionEventStream(sessionId, opts) {
             if (top) top.setAttribute('aria-expanded', 'true');
         }
         resetLlmState(runCtx);
+        initRunFinalTracking(runCtx);
         finalizeLlmStreamChunks(runCtx);
         const ac = new AbortController();
         setSessionRunState(runSessionId, { controller: ac, ctx: runCtx, reattached: true });
@@ -1109,6 +1123,7 @@ async function sendMessage(options) {
     }
     submittedRunCtx = runCtx;
     runCtx.runId = clientRunId;
+    initRunFinalTracking(runCtx);
     runCtx.runStartedAt = userSentAt;
     runCtx.lastUserEventIndex = preCount;
     resetLlmState(runCtx);

@@ -57,6 +57,10 @@ def test_frontend_feature_entrypoints_are_flag_guarded():
     assert "isMyAgentFeatureEnabled('streamReconnect', false)" in sse
     assert "isMyAgentFeatureEnabled('finalReconcile', true)" in sse
     assert "function scheduleFinalVisibleAfterRunIfEnabled" in sse
+    assert "function markRunFinalSeen(ctx)" in sse
+    assert "function initRunFinalTracking(ctx)" in sse
+    assert "if (ctx && ctx.seenFinal === true) return;" in sse
+    assert "if (eventSessionId === runSessionId) markRunFinalSeen(runCtx);" in sse
     assert "await ensureFinalVisibleAfterRunIfEnabled" not in sse
     assert "function enqueueCurrentInputAsFollowup()" in sse
     assert "if (!isMyAgentFeatureEnabled('followupRestart', false)) return false;" in sse
