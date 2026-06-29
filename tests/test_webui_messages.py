@@ -19,6 +19,9 @@ class _FakeSessionManager:
     def __init__(self, sessions_dir: Path, events: list[dict]):
         self.repository = _FakeRepository(sessions_dir)
         self.events = list(events)
+        self.llm_history: list[dict] = []
+        self.saved_llm_history: list[list[dict]] = []
+        self.saved_ui_events: list[list[dict]] = []
         self.page_calls: list[dict] = []
         self.display_calls = 0
         self.count_calls = 0
@@ -36,6 +39,18 @@ class _FakeSessionManager:
     def get_ui_events_for_display(self, session_id: str) -> list[dict]:
         self.display_calls += 1
         return [dict(event) for event in self.events]
+
+    def _save_ui_events(self, session_id: str, events: list[dict]) -> None:
+        self.saved_ui_events.append([dict(event) for event in events])
+        self.events = [dict(event) for event in events]
+
+    def _load_llm_history(self, session_id: str) -> list[dict]:
+        return [dict(item) for item in self.llm_history]
+
+    def _save_llm_history(self, session_id: str, llm_history: list[dict]) -> None:
+        saved = [dict(item) for item in llm_history]
+        self.saved_llm_history.append(saved)
+        self.llm_history = saved
 
     def get_ui_events_page(self, session_id: str, limit: int = 200, before_index=None, turns=None) -> dict:
         self.page_calls.append({
@@ -252,6 +267,36 @@ def test_user_turns_prefers_runtime_v2_projection(monkeypatch, tmp_path):
         {"event_index": 0, "preview": "first question"},
         {"event_index": 2, "preview": "second question"},
     ]
+
+
+def test_manual_runtime_sync_exports_v2_model_projection_to_legacy(monkeypatch, tmp_path):
+    import runtime_v2
+    from runtime_v2 import RuntimeHistoryOps, RuntimeMirror
+    import webui
+
+    monkeypatch.setenv("RUNTIME_VERSION", "2")
+    monkeypatch.setattr(runtime_v2, "runtime_v2_primary", lambda: True)
+    mirror = RuntimeMirror(tmp_path)
+    mirror.mirror_ui_event("s1", {"type": "user", "content": "visible"})
+    RuntimeHistoryOps(tmp_path).replace_model_history(
+        "s1",
+        [
+            {"type": "user", "content": "hello"},
+            {"type": "assistant", "content": "answer"},
+        ],
+        reason="test",
+    )
+    fake = _FakeSessionManager(tmp_path, [{"type": "user", "content": "visible"}])
+    monkeypatch.setattr(webui, "session_manager", fake)
+
+    result = webui._sync_runtime_session("s1")
+
+    assert result["model_v2_to_v1"]["action"] == "replace"
+    assert result["model_v2_to_v1"]["written"] == 2
+    assert fake.saved_llm_history == [[
+        {"type": "user", "content": "hello"},
+        {"type": "assistant", "content": "answer"},
+    ]]
 
 
 def test_messages_empty_runtime_v2_projection_does_not_fallback_legacy(monkeypatch, tmp_path):

@@ -378,7 +378,7 @@ RUNTIME_V2_ENABLED=0  # 未设置 RUNTIME_VERSION 时等价于 RUNTIME_VERSION=1
 | 能力 | V1 模式 | V2 模式 | 当前状态 |
 |---|---|---|---|
 | 会话列表与 state | 读 V1 metadata/index + legacy run state，镜像 V2 | 读 V2 snapshot active runs，并按本进程真实 task/SSE/start 占位过滤孤立 active run | 已接入，仍需继续端到端压测 |
-| 消息历史 `/messages` | 读 `ui_events.json` | 读 RuntimeUiProjection，必要时回填 legacy；TOC/user_turns 也读 active runtime | 已接入，需继续压测大历史与分支/改写 |
+| 消息历史 `/messages` | 读 `ui_events.json` | 读 RuntimeUiProjection；TOC/user_turns 也读 active runtime。普通打开、刷新、滚动恢复不得回填 legacy，legacy 导出只允许显式 sync/migration | 已接入，需继续压测大历史与分支/改写 |
 | 消息计数 `/messages/count` | 读 V1 `ui_event_count`/ui_events | 读 RuntimeUiProjection index | 已接入 |
 | 模型历史 | 读 `llm_history.json`，镜像 V2 | 读 `model_messages` 投影；旧会话 partial projection 会按需用 legacy 同步 | 已接入，需覆盖更多双向测试 |
 | 运行态 | legacy active run + chat connection | V2 `active_runs` snapshot + 本地活动证据过滤 | 已接入 |
