@@ -3427,12 +3427,6 @@ class SessionManager:
                     new_event_count=len(new_events),
                     boundary_for_branch=boundary_for_branch,
                 )
-            self._observe_runtime_v2_history(
-                "replace_model_history",
-                session_id,
-                messages=new_llm,
-                reason="legacy_truncate",
-            )
             return True
         except Exception as e:
             logger.warning(f"truncate_session_at_event_index 失败: {e}")
@@ -3641,12 +3635,6 @@ class SessionManager:
                 branch_from_seq=branch_from_seq,
                 name=branch_name,
             )
-            self._observe_runtime_v2_history(
-                "replace_model_history",
-                new_id,
-                messages=new_llm,
-                reason="legacy_branch",
-            )
             summary = self.get_session_summary(new_id) or {
                 "id": new_id,
                 "name": branch_name,
@@ -3720,12 +3708,6 @@ class SessionManager:
             self._save_dialogue_history(
                 session_id, self.dialogue_dicts_from_ui_events_file(session_id)
             )
-            self._observe_runtime_v2_history(
-                "replace_model_history",
-                session_id,
-                messages=new_llm,
-                reason="legacy_repair",
-            )
             if consumed:
                 self.remove_llm_compress_prefix_backup(session_id, consumed)
             logger.info(
@@ -3787,12 +3769,6 @@ class SessionManager:
             self._save_llm_history(session_id, new_llm)
             if include_work:
                 self._save_work_messages(session_id, new_work)
-            self._observe_runtime_v2_history(
-                "replace_model_history",
-                session_id,
-                messages=new_llm,
-                reason="legacy_reconcile",
-            )
             return True
         except Exception as e:
             logger.warning(f"reconcile_llm_work_to_ui_user_count 失败: {e}")
@@ -3827,12 +3803,6 @@ class SessionManager:
                 session_id,
                 tail_count=len(clean),
                 merged_event_count=len(merged),
-            )
-            self._observe_runtime_v2_history(
-                "replace_model_history",
-                session_id,
-                messages=new_llm,
-                reason="legacy_tail_restored",
             )
             return True
         except Exception as e:

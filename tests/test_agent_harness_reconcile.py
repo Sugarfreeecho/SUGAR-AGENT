@@ -106,4 +106,17 @@ def test_reconcile_trims_only_extra_tail_turn_and_preserves_tools():
     assert len(saved_llm) == 1
     assert saved_llm[0] == llm_history[:6]
     assert any(m.get("type") == "tool" for m in saved_llm[0])
-    assert observed
+    assert observed == []
+
+
+def test_legacy_rebuild_paths_do_not_replace_runtime_v2_model_history():
+    source = (ROOT / "app" / "agent_harness.py").read_text(encoding="utf-8")
+    forbidden_reasons = [
+        "legacy_truncate",
+        "legacy_branch",
+        "legacy_repair",
+        "legacy_reconcile",
+        "legacy_tail_restored",
+    ]
+    for reason in forbidden_reasons:
+        assert f'reason="{reason}"' not in source
