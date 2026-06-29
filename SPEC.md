@@ -632,6 +632,7 @@ SSE 是后端向前端展示 Agent 过程的主通道。事件至少应覆盖以
 - Runtime V2 下 `/messages`、`/messages/count`、`/user_turns`、TOC/Todo/context snapshot 等 UI 读取必须优先来自 Runtime V2 projection/snapshot；不得因 TOC 或滚动恢复自动读取 legacy UI 历史。
 - `RUNTIME_SYNC_ON_MESSAGES_OPEN` 不得在 Runtime V2 primary 正常打开会话时触发 legacy sync；旧数据迁移只允许通过显式 runtime sync/migration 接口执行。
 - 显式 runtime sync/migration 可以导出 Runtime V2 UI projection 与 model projection 到 legacy 文件，用于备份、兼容和人工迁移；该导出不得出现在普通打开、发送、刷新、TOC 或滚动恢复路径。
+- 会话加载期间 TOC 可以提前启动，但后续被 suppress 的 `rebuildToc()` 必须是 no-op，不能再次清空 TOC、递增 TOC epoch 或作废已经发出的 `/user_turns` 请求。
 
 ## 20. 已知工程特征
 

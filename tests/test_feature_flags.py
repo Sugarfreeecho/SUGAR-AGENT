@@ -17,12 +17,12 @@ def _extract_feature_flags(html: str) -> dict:
     return json.loads(match.group(1))
 
 
-def test_index_html_injects_conservative_feature_defaults(monkeypatch):
-    monkeypatch.delenv("MYAGENT_ENABLE_FOLLOWUP_RESTART", raising=False)
-    monkeypatch.delenv("MYAGENT_ENABLE_STREAM_RECONNECT", raising=False)
-    monkeypatch.delenv("MYAGENT_ENABLE_FINAL_RECONCILE", raising=False)
-
+def test_index_html_injects_conservative_feature_values(monkeypatch):
     import webui
+
+    monkeypatch.setenv("MYAGENT_ENABLE_FOLLOWUP_RESTART", "0")
+    monkeypatch.setenv("MYAGENT_ENABLE_STREAM_RECONNECT", "0")
+    monkeypatch.setenv("MYAGENT_ENABLE_FINAL_RECONCILE", "1")
 
     flags = _extract_feature_flags(str(webui.get_index_html()))
 
@@ -34,11 +34,11 @@ def test_index_html_injects_conservative_feature_defaults(monkeypatch):
 
 
 def test_index_html_injects_independent_feature_overrides(monkeypatch):
+    import webui
+
     monkeypatch.setenv("MYAGENT_ENABLE_FOLLOWUP_RESTART", "1")
     monkeypatch.setenv("MYAGENT_ENABLE_STREAM_RECONNECT", "true")
     monkeypatch.setenv("MYAGENT_ENABLE_FINAL_RECONCILE", "0")
-
-    import webui
 
     flags = _extract_feature_flags(str(webui.get_index_html()))
 
@@ -97,6 +97,20 @@ def test_frontend_session_load_starts_toc_before_messages_finish():
     assert "if (!opts.tocAlreadyStarted) rebuildToc();" in sessions
     switch_body = sessions[sessions.index("async function switchSession"):]
     assert switch_body.index("startTocForSessionLoad(sessionId)") < switch_body.index("loadSessionMessages(sessionId")
+
+
+def test_frontend_suppressed_toc_rebuild_does_not_clear_started_toc():
+    toc = (ROOT / "frontend/src/app/modules/toc-todo.js").read_text(encoding="utf-8")
+    suppress_block = re.search(
+        r"if\s*\(\s*suppressTocDuringSessionLoad\s*\)\s*\{(?P<body>.*?)\}",
+        toc,
+        re.S,
+    )
+    assert suppress_block, "rebuildToc must keep an explicit suppress guard"
+    body = suppress_block.group("body")
+
+    assert "clearTocForSessionLoad" not in body
+    assert re.search(r"\breturn\s*;", body), "suppressed TOC rebuild should be a no-op"
 
 
 def test_frontend_run_state_cleanup_is_run_id_scoped():

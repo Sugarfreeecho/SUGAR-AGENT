@@ -200,7 +200,6 @@ function rebuildToc(options) {
     const list = document.getElementById('chat-toc-list');
     if (!toc || !list) return;
     if (suppressTocDuringSessionLoad) {
-        clearTocForSessionLoad();
         return;
     }
     if (!list._tocTipScrollHide) {
