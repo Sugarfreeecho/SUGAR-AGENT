@@ -630,6 +630,7 @@ SSE 是后端向前端展示 Agent 过程的主通道。事件至少应覆盖以
 
 - API 返回的 `prompt_tokens` 必须可作为下一轮 API 前 token 估算的基线；当前缀请求包一致时，只允许估算新增尾部，禁止每轮重新扫描完整长历史。
 - Runtime V2 下 `/messages`、`/messages/count`、`/user_turns`、TOC/Todo/context snapshot 等 UI 读取必须优先来自 Runtime V2 projection/snapshot；不得因 TOC 或滚动恢复自动读取 legacy UI 历史。
+- Runtime V2 下 `/todo_plan` 必须只读 Runtime V2 context snapshot；snapshot 无 Todo 时返回空 Todo 快照，不得回退读取 legacy `todo_plan.md` 或 `key_context.md`。
 - Runtime V2 下 `/context_tokens` 必须优先读 Runtime V2 snapshot；snapshot 无缓存时只能用 Runtime V2 model projection 与 context summary 估算，不得调用 legacy session history 合并路径。
 - `RUNTIME_SYNC_ON_MESSAGES_OPEN` 不得在 Runtime V2 primary 正常打开会话时触发 legacy sync；旧数据迁移只允许通过显式 runtime sync/migration 接口执行。
 - 显式 runtime sync/migration 可以导出 Runtime V2 UI projection 与 model projection 到 legacy 文件，用于备份、兼容和人工迁移；该导出不得出现在普通打开、发送、刷新、TOC 或滚动恢复路径。

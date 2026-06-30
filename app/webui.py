@@ -2847,9 +2847,25 @@ async def get_session_todo_plan(session_id: str):
             if runtime_v2_primary():
                 todo = _runtime_v2_context_snapshot(session_id).get("todo")
                 if isinstance(todo, dict):
-                    return JSONResponse(content=todo)
+                    out = dict(todo)
+                    out.setdefault("source", "runtime_v2_snapshot")
+                    return JSONResponse(content=out)
+                return JSONResponse(content={
+                    "has_plan": False,
+                    "items": [],
+                    "done": 0,
+                    "total": 0,
+                    "source": "runtime_v2_snapshot",
+                })
         except Exception as exc:
             logger.debug("Runtime V2 todo snapshot read failed for %s: %s", session_id, exc)
+            return JSONResponse(content={
+                "has_plan": False,
+                "items": [],
+                "done": 0,
+                "total": 0,
+                "source": "runtime_v2_snapshot_error",
+            })
         return JSONResponse(content=session_manager.get_todo_plan_snapshot(session_id))
 
     return await asyncio.to_thread(_build_todo_response)
