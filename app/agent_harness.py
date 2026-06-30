@@ -2099,11 +2099,10 @@ class SessionManager:
         """读取父会话下某个 subagent/task 的可读输出文件。"""
         if self._runtime_v2_primary():
             try:
-                result = self._runtime_subagent_store().read_task_output(parent_session_id, task_id)
-                if result.get("ok"):
-                    return result
+                return self._runtime_subagent_store().read_task_output(parent_session_id, task_id)
             except Exception as exc:
                 logger.debug("Runtime V2 read subagent task output failed: %s", exc)
+                return {"ok": False, "error": str(exc)}
         tid = str(task_id or "").strip()
         if not tid:
             return {"ok": False, "error": "missing task_id"}
@@ -2178,20 +2177,19 @@ class SessionManager:
     def append_pending_subagent_result(self, parent_session_id: str, entry: Dict[str, Any]) -> None:
         row = dict(entry)
         if row.get("after_final_index") is None:
-            events = self._load_ui_events(parent_session_id)
+            events = self._load_ui_events_for_active_runtime(parent_session_id)
             anchor = self._latest_final_index_without_later_user(events)
             if anchor >= 0:
                 row["after_final_index"] = anchor
-        path = self._get_pending_subagent_results_path(parent_session_id)
-        rows: List[dict] = self.repository.load_json_list(path)
-        rows.append(row)
         if self._runtime_v2_primary():
             try:
                 self._runtime_subagent_store().append_pending_result(parent_session_id, row)
             except Exception as exc:
                 logger.debug("Runtime V2 append pending subagent result failed: %s", exc)
-            self.repository.save_json_list(path, rows)
         else:
+            path = self._get_pending_subagent_results_path(parent_session_id)
+            rows: List[dict] = self.repository.load_json_list(path)
+            rows.append(row)
             self.repository.save_json_list(path, rows)
             try:
                 self._runtime_subagent_store().append_pending_result(parent_session_id, row)
@@ -2202,11 +2200,9 @@ class SessionManager:
         if self._runtime_v2_primary():
             try:
                 rows = self._runtime_subagent_store().list_pending_results(session_id)
-                if not rows:
-                    rows = self.repository.load_json_list(self._get_pending_subagent_results_path(session_id))
             except Exception as exc:
                 logger.debug("Runtime V2 load pending subagent results failed: %s", exc)
-                rows = self.repository.load_json_list(self._get_pending_subagent_results_path(session_id))
+                rows = []
         else:
             rows = self.repository.load_json_list(self._get_pending_subagent_results_path(session_id))
         try:
@@ -2224,14 +2220,13 @@ class SessionManager:
 
     def _save_pending_subagent_results(self, session_id: str, rows: List[dict]) -> None:
         rows = [x for x in (rows or []) if isinstance(x, dict)]
-        path = self._get_pending_subagent_results_path(session_id)
         if self._runtime_v2_primary():
             try:
                 self._runtime_subagent_store().save_pending_results(session_id, rows)
             except Exception as exc:
                 logger.debug("Runtime V2 save pending subagent results failed: %s", exc)
-            self.repository.save_json_list(path, rows)
         else:
+            path = self._get_pending_subagent_results_path(session_id)
             self.repository.save_json_list(path, rows)
             try:
                 self._runtime_subagent_store().save_pending_results(session_id, rows)
@@ -2270,7 +2265,7 @@ class SessionManager:
         可注入父 Agent 的 pending 子任务行：terminal、有通知正文，且 after_final_index 与当前末条 final 对齐。
         """
         rows = self._load_pending_subagent_results(session_id)
-        events = self._load_ui_events(session_id)
+        events = self._load_ui_events_for_active_runtime(session_id)
         if not rows or not events:
             return []
         last_idx = self._latest_final_index_without_later_user(events)
@@ -2325,7 +2320,7 @@ class SessionManager:
     def consume_pending_subagent_notifications(self, session_id: str) -> List[str]:
         """读取并消费可注入的后台 subagent 通知，供父 react_node 注入。"""
         rows = self._load_pending_subagent_results(session_id)
-        events = self._load_ui_events(session_id)
+        events = self._load_ui_events_for_active_runtime(session_id)
         last_idx = self._latest_final_index_without_later_user(events)
         if not rows or not events or last_idx < 0:
             return []

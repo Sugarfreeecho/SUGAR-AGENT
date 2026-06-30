@@ -336,3 +336,147 @@ def test_runtime_v2_append_tail_mirrors_events_without_legacy_rebuild():
             {"tail_count": 2, "merged_event_count": 2},
         )
     ]
+
+
+def test_runtime_v2_subagent_output_does_not_fallback_legacy(tmp_path):
+    import agent_harness
+    from runtime_v2 import RuntimeSubagentStore
+
+    store = RuntimeSubagentStore(tmp_path)
+    store.upsert_task("parent", "agent1", {"status": "completed"})
+
+    def fail_legacy(*args, **kwargs):
+        raise AssertionError("Runtime V2 subagent output must not read legacy subagent files")
+
+    mgr = _manager_with(
+        repository=_Repository(tmp_path),
+        _runtime_v2_primary=lambda: True,
+        _runtime_subagent_store=lambda: store,
+        list_subagent_tasks=fail_legacy,
+        validate_subagent_resume=fail_legacy,
+        _get_session_path=fail_legacy,
+    )
+
+    result = agent_harness.SessionManager.read_subagent_task_output(mgr, "parent", "agent1")
+
+    assert result == {"ok": False, "error": "output not found"}
+
+
+def test_runtime_v2_subagent_output_reads_v2_store(tmp_path):
+    import agent_harness
+    from runtime_v2 import RuntimeSubagentStore
+
+    store = RuntimeSubagentStore(tmp_path)
+    store.write_task_output("parent", "agent1", "final text")
+
+    def fail_legacy(*args, **kwargs):
+        raise AssertionError("Runtime V2 subagent output must not read legacy subagent files")
+
+    mgr = _manager_with(
+        repository=_Repository(tmp_path),
+        _runtime_v2_primary=lambda: True,
+        _runtime_subagent_store=lambda: store,
+        list_subagent_tasks=fail_legacy,
+        validate_subagent_resume=fail_legacy,
+        _get_session_path=fail_legacy,
+    )
+
+    result = agent_harness.SessionManager.read_subagent_task_output(mgr, "parent", "agent1")
+
+    assert result["ok"] is True
+    assert result["content"] == "final text"
+
+
+def test_runtime_v2_pending_subagent_results_do_not_fallback_legacy(tmp_path):
+    import agent_harness
+    from runtime_v2 import RuntimeSubagentStore
+
+    store = RuntimeSubagentStore(tmp_path)
+
+    def fail_legacy(*args, **kwargs):
+        raise AssertionError("Runtime V2 pending subagent path must not read legacy pending files")
+
+    mgr = _manager_with(
+        repository=_Repository(tmp_path),
+        _runtime_v2_primary=lambda: True,
+        _runtime_subagent_store=lambda: store,
+        _load_metadata=lambda sid: {},
+        _get_pending_subagent_results_path=fail_legacy,
+    )
+    mgr.repository.load_json_list = fail_legacy
+
+    assert agent_harness.SessionManager._load_pending_subagent_results(mgr, "parent") == []
+
+
+def test_runtime_v2_pending_subagent_continue_uses_v2_ui_projection(tmp_path):
+    import agent_harness
+    from runtime_v2 import RuntimeMirror, RuntimeSubagentStore
+
+    mirror = RuntimeMirror(tmp_path)
+    mirror.mirror_ui_event("parent", {"type": "user", "content": "u"})
+    mirror.mirror_ui_event("parent", {"type": "final", "content": "a"})
+    store = RuntimeSubagentStore(tmp_path)
+    store.append_pending_result("parent", {
+        "agent_id": "agent1",
+        "description": "worker",
+        "status": "completed",
+        "result": "done",
+        "after_final_index": 1,
+    })
+
+    def fail_legacy(*args, **kwargs):
+        raise AssertionError("Runtime V2 pending continue must not read legacy ui/pending files")
+
+    mgr = _manager_with(
+        repository=_Repository(tmp_path),
+        _runtime_v2_primary=lambda: True,
+        _runtime_subagent_store=lambda: store,
+        _resolve_session_path=lambda sid: tmp_path / sid,
+        _load_metadata=lambda sid: {},
+        _load_ui_events=fail_legacy,
+        _get_pending_subagent_results_path=fail_legacy,
+        _save_pending_subagent_results=lambda sid, rows: store.save_pending_results(sid, rows),
+    )
+    mgr.repository.load_json_list = fail_legacy
+
+    assert agent_harness.SessionManager.can_continue_after_subagents(mgr, "parent") is True
+    lines = agent_harness.SessionManager.consume_pending_subagent_notifications(mgr, "parent")
+
+    assert len(lines) == 1
+    assert "Subagent agent1" in lines[0]
+    assert store.list_pending_results("parent") == []
+
+
+def test_runtime_v2_append_pending_subagent_result_writes_only_v2_store(tmp_path):
+    import agent_harness
+    from runtime_v2 import RuntimeMirror, RuntimeSubagentStore
+
+    mirror = RuntimeMirror(tmp_path)
+    mirror.mirror_ui_event("parent", {"type": "user", "content": "u"})
+    mirror.mirror_ui_event("parent", {"type": "final", "content": "a"})
+    store = RuntimeSubagentStore(tmp_path)
+
+    def fail_legacy(*args, **kwargs):
+        raise AssertionError("Runtime V2 append pending subagent result must not touch legacy files")
+
+    mgr = _manager_with(
+        repository=_Repository(tmp_path),
+        _runtime_v2_primary=lambda: True,
+        _runtime_subagent_store=lambda: store,
+        _resolve_session_path=lambda sid: tmp_path / sid,
+        _load_ui_events=fail_legacy,
+        _get_pending_subagent_results_path=fail_legacy,
+    )
+    mgr.repository.load_json_list = fail_legacy
+    mgr.repository.save_json_list = fail_legacy
+
+    agent_harness.SessionManager.append_pending_subagent_result(mgr, "parent", {
+        "agent_id": "agent1",
+        "status": "completed",
+        "result": "done",
+    })
+
+    rows = store.list_pending_results("parent")
+    assert len(rows) == 1
+    assert rows[0]["agent_id"] == "agent1"
+    assert rows[0]["after_final_index"] == 1
