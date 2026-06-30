@@ -65,6 +65,9 @@ def test_frontend_feature_entrypoints_are_flag_guarded():
     assert "function fetchLatestStoredFinalRecord" not in sse
     assert "var latestFinal = await fetchLatestStoredFinalRecord(sid);" not in sse
     assert "messages?limit=120" not in sse
+    assert "function reconcileProjectedMessagesAfter" not in sse
+    assert "projected-reconcile" not in sse
+    assert "messages?after_index=" not in sse
     assert "function enqueueCurrentInputAsFollowup()" in sse
     assert "if (!isMyAgentFeatureEnabled('followupRestart', false)) return false;" in sse
     assert "function onFollowupInputKeydown(e)" in sse
