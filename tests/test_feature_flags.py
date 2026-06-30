@@ -190,6 +190,27 @@ def test_frontend_toc_supports_snapshot_turns_and_skips_empty_active_update():
     assert "if (!list || !list.querySelector('a[data-event-index]')) return;" in toc
 
 
+def test_frontend_session_scoped_token_and_count_guards():
+    sessions = (ROOT / "frontend/src/app/modules/session-management.js").read_text(encoding="utf-8")
+    scroll = (ROOT / "frontend/src/app/modules/session-scroll-history.js").read_text(encoding="utf-8")
+    sse = (ROOT / "frontend/src/app/modules/sse-handling.js").read_text(encoding="utf-8")
+
+    assert "if (typeof applyContextTokenLabelForCurrentSession === 'function') applyContextTokenLabelForCurrentSession();" in sessions
+    assert "if (sid === currentSessionId) applyContextTokenLabelForCurrentSession();" in scroll
+    assert "isFresh(sessionId, maxAgeMs)" in sessions
+    assert "uiEventCountCache.isFresh(sid, opts.maxAgeMs)" in scroll
+    assert "await getUiEventCount(submitSessionId, { preferCache: true, maxAgeMs: 10000 })" in sse
+
+
+def test_frontend_llm_stream_rows_are_upserted_across_process_group_rebuilds():
+    rendering = (ROOT / "frontend/src/app/modules/message-rendering.js").read_text(encoding="utf-8")
+
+    assert "function findExistingLlmFeedRow(ctx, logType, reactIter)" in rendering
+    assert "findExistingLlmFeedRow(ctx, logType, ri)" in rendering
+    assert "findExistingLlmFeedRow(ctx, 'llm-response'" in rendering
+    assert "findExistingLlmFeedRow(ctx, 'llm-reasoning'" in rendering
+
+
 def test_frontend_initial_bottom_scroll_remains_smooth_without_saved_position():
     rendering = (ROOT / "frontend/src/app/modules/message-rendering.js").read_text(encoding="utf-8")
 
@@ -228,15 +249,27 @@ class _FakeSessionManagerForSteer:
         self.interrupts.append((session_id, reason))
 
 
-def test_followup_restart_enabled_steer_returns_restart(monkeypatch):
+def test_followup_restart_enabled_prefers_native_steer(monkeypatch):
     import webui
 
     fake_manager = _FakeSessionManagerForSteer()
     monkeypatch.setenv("MYAGENT_ENABLE_FOLLOWUP_RESTART", "1")
     monkeypatch.setattr(webui, "session_manager", fake_manager)
     monkeypatch.setattr(webui, "_is_session_stream_active", lambda sid: True)
+    monkeypatch.setattr(
+        webui,
+        "enqueue_session_steer",
+        lambda sid, message, client_id="": {
+            "ok": True,
+            "item": {"content": message, "client_id": client_id},
+        },
+    )
     monkeypatch.setattr(webui, "abort_session_steer_run", lambda sid, reason="": True)
-    monkeypatch.setattr(webui, "_interrupt_runtime_v2_active_runs", lambda sid, reason="": ["run-1"])
+    monkeypatch.setattr(
+        webui,
+        "_interrupt_runtime_v2_active_runs",
+        lambda sid, reason="": (_ for _ in ()).throw(AssertionError("native steer must not restart")),
+    )
 
     response = asyncio.run(webui.post_session_steer(
         "s1",
@@ -245,8 +278,8 @@ def test_followup_restart_enabled_steer_returns_restart(monkeypatch):
     payload = json.loads(response.body.decode("utf-8"))
 
     assert payload["ok"] is True
-    assert payload["restart"] is True
+    assert payload["restart"] is False
     assert payload["aborted"] is True
     assert payload["item"]["content"] == "continue now"
     assert payload["item"]["client_id"] == "cid-1"
-    assert fake_manager.interrupts == [("s1", "followup")]
+    assert fake_manager.interrupts == []

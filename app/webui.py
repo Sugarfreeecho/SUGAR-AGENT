@@ -2123,20 +2123,21 @@ async def post_session_steer(session_id: str, request: Request):
     message = str((data or {}).get("message") or "").strip()
     client_id = str((data or {}).get("client_id") or "").strip()
     followup_restart_enabled = os.getenv("MYAGENT_ENABLE_FOLLOWUP_RESTART", "0").strip().lower() in {"1", "true", "yes", "on"}
-    if not followup_restart_enabled:
-        result = enqueue_session_steer(sid, message, client_id=client_id)
-        if not result.get("ok"):
-            return JSONResponse(content=result, status_code=400)
-        result["aborted"] = abort_session_steer_run(sid, reason="steer")
-        if not result["aborted"]:
-            item = result.get("item") if isinstance(result.get("item"), dict) else {}
-            remove_session_steer(
-                sid,
-                steer_id=str(item.get("id") or ""),
-                client_id=str(item.get("client_id") or client_id or ""),
-            )
-            return JSONResponse(content={"ok": False, "error": "session is not running"}, status_code=409)
+    result = enqueue_session_steer(sid, message, client_id=client_id)
+    if not result.get("ok"):
+        return JSONResponse(content=result, status_code=400)
+    result["aborted"] = abort_session_steer_run(sid, reason="steer")
+    if result["aborted"]:
+        result["restart"] = False
         return JSONResponse(content=result)
+    item = result.get("item") if isinstance(result.get("item"), dict) else {}
+    remove_session_steer(
+        sid,
+        steer_id=str(item.get("id") or ""),
+        client_id=str(item.get("client_id") or client_id or ""),
+    )
+    if not followup_restart_enabled:
+        return JSONResponse(content={"ok": False, "error": "session is not running"}, status_code=409)
     if not message:
         return JSONResponse(content={"ok": False, "error": "empty steer"}, status_code=400)
     steer_item = {

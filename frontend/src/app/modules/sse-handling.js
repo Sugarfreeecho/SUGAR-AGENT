@@ -989,17 +989,8 @@ async function sendMessage(options) {
         if (!submitSessionId) return;
         sendPipelineLockSessionId = submitSessionId;
     }
-    // 使用缓存的事件计数，实现乐观更新
-    let preCount = uiEventCountCache.get(submitSessionId);
-    try {
-        const serverCountBeforeSend = preCount;
-        if (Number.isFinite(Number(serverCountBeforeSend))) {
-            preCount = Math.max(preCount, Number(serverCountBeforeSend));
-            uiEventCountCache.updateFromServer(submitSessionId, preCount);
-        }
-    } catch (err) {
-        console.error('获取事件计数失败:', err);
-    }
+    // 缓存过期时用轻量 count 校准，避免乐观 user index 和服务端 ui_events 分叉。
+    let preCount = await getUiEventCount(submitSessionId, { preferCache: true, maxAgeMs: 10000 });
     const existingStreamForIndex = (submitSessionId === currentSessionId) ? getVisibleChatStream() : null;
     if (existingStreamForIndex) {
         existingStreamForIndex.querySelectorAll('.msg-wrap--user[data-event-index]').forEach(function (wrap) {

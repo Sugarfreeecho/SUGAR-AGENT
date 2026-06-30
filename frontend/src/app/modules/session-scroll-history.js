@@ -75,6 +75,7 @@ async function refreshContextTokensFromServer(sid, seq) {
 /** 在浏览器完成首帧绘制后再请求 context_tokens，避免与切换会话/新建会话的 DOM 抢主线程。 */
 function scheduleContextTokensAfterPaint(sid) {
     if (!sid) return;
+    if (sid === currentSessionId) applyContextTokenLabelForCurrentSession();
     const seq = ++contextTokenRequestSeq;
     requestAnimationFrame(function () {
         requestAnimationFrame(function () {
@@ -1252,6 +1253,7 @@ async function getUiEventCount(sessionId, opts) {
         && typeof uiEventCountCache !== 'undefined'
         && typeof uiEventCountCache.has === 'function'
         && uiEventCountCache.has(sid)
+        && (typeof uiEventCountCache.isFresh !== 'function' || uiEventCountCache.isFresh(sid, opts.maxAgeMs))
     ) {
         return uiEventCountCache.get(sid);
     }

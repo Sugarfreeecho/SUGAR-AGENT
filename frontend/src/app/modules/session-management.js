@@ -520,17 +520,31 @@ function applyOptimisticSessionUpdate(sessionId, patch) {
 // Event count cache for optimistic UI updates.
 const uiEventCountCache = {
     cache: new Map(),
+    maxAgeMs: 10000,
     
     get(sessionId) {
-        return this.cache.get(sessionId) || 0;
+        var entry = this.cache.get(sessionId);
+        if (entry && typeof entry === 'object') return Number(entry.count) || 0;
+        return Number(entry) || 0;
     },
 
     has(sessionId) {
         return this.cache.has(sessionId);
     },
+
+    isFresh(sessionId, maxAgeMs) {
+        var entry = this.cache.get(sessionId);
+        if (!entry || typeof entry !== 'object') return false;
+        var age = Date.now() - Number(entry.updatedAt || 0);
+        var limit = Number(maxAgeMs) > 0 ? Number(maxAgeMs) : this.maxAgeMs;
+        return age >= 0 && age <= limit;
+    },
     
     set(sessionId, count) {
-        this.cache.set(sessionId, count);
+        this.cache.set(sessionId, {
+            count: Math.max(0, Number(count) || 0),
+            updatedAt: Date.now(),
+        });
     },
     
     increment(sessionId) {
@@ -964,6 +978,7 @@ async function switchSession(sessionId, opts) {
     resetSubagentPanelForSession();
     setCurrentSessionState(sessionId);
     localStorage.setItem('lastSessionId', sessionId);
+    if (typeof applyContextTokenLabelForCurrentSession === 'function') applyContextTokenLabelForCurrentSession();
     restoreInputDraft(sessionId);
     if (typeof renderFollowupQueue === 'function') renderFollowupQueue(sessionId);
     if (typeof refreshModelProfileSelector === 'function') refreshModelProfileSelector(sessionId);

@@ -2791,7 +2791,10 @@ function appendLlmStreamDelta(ctx, ev, runSessionId) {
         if (l.llmStreamReasoningIter !== iter) {
             flushLlmDeltaText(ctx);
             l.llmStreamReasoningIter = iter;
-            l.llmStreamReasoningScroller = createProcessFeedRow(ctx, 'llm-reasoning', '', streamOpt, runSessionId);
+            var existingReasoning = findExistingLlmFeedRow(ctx, 'llm-reasoning', Number.isFinite(Number(iter)) ? Math.max(1, Math.floor(Number(iter))) : null);
+            l.llmStreamReasoningScroller = existingReasoning
+                ? existingReasoning.querySelector('.feed-chunk-scroller')
+                : createProcessFeedRow(ctx, 'llm-reasoning', '', streamOpt, runSessionId);
         }
         if (!l.llmStreamReasoningScroller) return;
         l.llmPendingReasoningDelta = (l.llmPendingReasoningDelta || '') + delta;
@@ -2799,7 +2802,10 @@ function appendLlmStreamDelta(ctx, ev, runSessionId) {
         if (l.llmStreamResponseIter !== iter) {
             flushLlmDeltaText(ctx);
             l.llmStreamResponseIter = iter;
-            l.llmStreamResponseScroller = createProcessFeedRow(ctx, 'llm-response', '', streamOpt, runSessionId);
+            var existingResponse = findExistingLlmFeedRow(ctx, 'llm-response', Number.isFinite(Number(iter)) ? Math.max(1, Math.floor(Number(iter))) : null);
+            l.llmStreamResponseScroller = existingResponse
+                ? existingResponse.querySelector('.feed-chunk-scroller')
+                : createProcessFeedRow(ctx, 'llm-response', '', streamOpt, runSessionId);
         }
         if (!l.llmStreamResponseScroller) return;
         l.llmPendingResponseDelta = (l.llmPendingResponseDelta || '') + delta;
@@ -2810,26 +2816,41 @@ function appendLlmStreamDelta(ctx, ev, runSessionId) {
 function upsertLlmFeedRow(ctx, content, logType, runSessionId, reactIter) {
     if (!ctx) return null;
     var ri = reactIter != null && Number.isFinite(Number(reactIter)) ? Math.max(1, Math.floor(Number(reactIter))) : null;
-    var body = getProcessBody(ctx);
     var txt = truncateLogTextForUi(trimSurroundingBlankLines(String(content || '')));
     if (!txt.trim()) return null;
-    if (body && ri != null) {
-        var existing = body.querySelector('.feed-item[data-log-type="' + logType + '"][data-react-iter="' + ri + '"]');
-        if (existing) {
-            var sc = existing.querySelector('.feed-chunk-scroller');
-            var ch = existing.querySelector('.feed-chunk');
-            if (sc) sc.textContent = txt;
-            if (ch) {
-                ch.classList.remove('is-streaming');
-                scheduleFeedChunkOverflowRefresh(ch);
-            }
-            if (ctx.llm) resetLlmState(ctx);
-            scrollContentAreaIfFollow(ctx, runSessionId);
-            return sc;
+    var existing = findExistingLlmFeedRow(ctx, logType, ri);
+    if (existing) {
+        var sc = existing.querySelector('.feed-chunk-scroller');
+        var ch = existing.querySelector('.feed-chunk');
+        if (sc) sc.textContent = txt;
+        if (ch) {
+            ch.classList.remove('is-streaming');
+            scheduleFeedChunkOverflowRefresh(ch);
         }
+        if (ctx.llm) resetLlmState(ctx);
+        var agg = existing.closest && existing.closest('.process-aggregate');
+        if (agg) {
+            refreshAggregateStatsSmart(agg);
+            if (!ctx.currentProcessGroup || !ctx.currentProcessGroup.isConnected) ctx.currentProcessGroup = agg;
+        }
+        scrollContentAreaIfFollow(ctx, runSessionId);
+        return sc;
     }
     if (ctx.llm) resetLlmState(ctx);
     return appendLog(ctx, content, logType, runSessionId, ri);
+}
+
+function findExistingLlmFeedRow(ctx, logType, reactIter) {
+    if (!ctx || reactIter == null) return null;
+    var selector = '.feed-item[data-log-type="' + logType + '"][data-react-iter="' + reactIter + '"]';
+    var roots = [];
+    if (ctx.currentProcessGroup && ctx.currentProcessGroup.isConnected) roots.push(ctx.currentProcessGroup);
+    if (ctx.stream && ctx.stream.querySelectorAll) roots.push(ctx.stream);
+    for (var r = 0; r < roots.length; r += 1) {
+        var matches = roots[r].querySelectorAll(selector);
+        if (matches && matches.length) return matches[matches.length - 1];
+    }
+    return null;
 }
 
 function parseMessageTimestamp(value) {
