@@ -593,17 +593,8 @@ def _load_runtime_v2_context_summary(session_id: str) -> str:
 
 
 def _load_model_history_dicts_v2_primary(session_id: str, *, reconcile_legacy: bool) -> List[Dict[str, Any]]:
-    try:
-        from runtime_v2 import runtime_v1_primary, runtime_v2_primary
-
-        if runtime_v1_primary():
-            if reconcile_legacy:
-                session_manager.reconcile_llm_work_to_ui_user_count(session_id, include_work=False)
-            return session_manager._load_llm_history(session_id)
-        if runtime_v2_primary():
-            return _load_runtime_v2_model_history_dicts(session_id)
-    except Exception as exc:
-        logger.debug("Runtime version check failed for model history: %s", exc)
+    if _runtime_v2_is_primary():
+        return _load_runtime_v2_model_history_dicts(session_id)
     if reconcile_legacy:
         session_manager.reconcile_llm_work_to_ui_user_count(session_id, include_work=False)
     return session_manager._load_llm_history(session_id)

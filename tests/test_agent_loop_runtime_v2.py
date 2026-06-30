@@ -42,11 +42,34 @@ def test_runtime_v2_model_history_empty_projection_does_not_fallback_legacy(monk
     import agent_loop
 
     monkeypatch.setattr(agent_loop, "session_manager", _NoLegacySessionManager())
+    monkeypatch.setattr(agent_loop, "_runtime_v2_is_primary", lambda: True)
     monkeypatch.setattr(agent_loop, "_load_runtime_v2_model_history_dicts", lambda _sid: [])
 
     messages = agent_loop._load_model_history_dicts_v2_primary("s1", reconcile_legacy=True)
 
     assert messages == []
+
+
+def test_runtime_v1_model_history_keeps_legacy_fallback(monkeypatch):
+    import agent_loop
+
+    calls = []
+
+    class _SessionManager:
+        def reconcile_llm_work_to_ui_user_count(self, session_id, include_work=False):
+            calls.append(("reconcile", session_id, include_work))
+
+        def _load_llm_history(self, session_id):
+            calls.append(("load", session_id))
+            return [{"type": "user", "content": "legacy"}]
+
+    monkeypatch.setattr(agent_loop, "session_manager", _SessionManager())
+    monkeypatch.setattr(agent_loop, "_runtime_v2_is_primary", lambda: False)
+
+    messages = agent_loop._load_model_history_dicts_v2_primary("s1", reconcile_legacy=True)
+
+    assert messages == [{"type": "user", "content": "legacy"}]
+    assert calls == [("reconcile", "s1", False), ("load", "s1")]
 
 
 def test_runtime_v2_context_token_compute_uses_projection_not_legacy(monkeypatch):
