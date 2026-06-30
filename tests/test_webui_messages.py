@@ -307,6 +307,7 @@ def test_history_snapshot_combines_v2_messages_count_and_toc(monkeypatch, tmp_pa
     assert payload["ok"] is True
     assert payload["source"] == "runtime_v2_snapshot"
     assert payload["count"] == 4
+    assert payload["count_source"] == "runtime_v2_page"
     assert payload["elapsed_ms"] >= 0
     assert set(payload["timing"]) == {"read_page", "count", "user_turns", "total"}
     assert payload["timing"]["total"] >= 0
@@ -344,7 +345,7 @@ def test_history_snapshot_uses_lightweight_user_turns(monkeypatch, tmp_path):
             }
 
         def count_ui_events_light(self, session_id):
-            return 1, 0
+            raise AssertionError("history snapshot should reuse read_ui_page total when available")
 
         def read_user_turns_light(self, session_id):
             return [{"event_index": 0, "preview": "u"}]

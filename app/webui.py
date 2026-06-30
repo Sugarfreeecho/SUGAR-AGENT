@@ -2740,7 +2740,11 @@ async def get_session_history_snapshot(
             )
             timings["read_page"] = int((_time.perf_counter() - t_phase) * 1000)
             t_phase = _time.perf_counter()
-            count, count_source = projection.count_ui_events_light(session_id)
+            page_total = page.get("total") if isinstance(page, dict) else None
+            if isinstance(page_total, int):
+                count, count_source = page_total, "runtime_v2_page"
+            else:
+                count, count_source = projection.count_ui_events_light(session_id)
             timings["count"] = int((_time.perf_counter() - t_phase) * 1000)
             t_phase = _time.perf_counter()
             user_turns = projection.read_user_turns_light(session_id)

@@ -29,6 +29,7 @@ python scripts\audit_runtime_versions.py --repair-model --only-mismatches
 - Executor model configuration now reuses a short-lived profile catalog cache across sessions and avoids re-reading session metadata when building fallback candidates from already-loaded metadata.
 - MCP tool definition setup now reuses a short-lived config-signature cache, reducing repeated config stat/hash work across rapid ReAct iterations while preserving explicit reload.
 - Frontend session switching now lets the V2 `history_snapshot` response own the initial TOC build; the legacy early `/user_turns` TOC request is only started when snapshot loading is explicitly disabled.
+- V2 `history_snapshot` now reuses the `total` returned by its page read instead of issuing a second count pass when the page already carries total event count.
 
 ## Compatibility Boundary
 
@@ -42,3 +43,4 @@ python scripts\audit_runtime_versions.py --repair-model --only-mismatches
 - Profile/catalog cache invalidation remains tied to explicit model profile/env updates through `_invalidate_executor_config_cache()`.
 - MCP config signature cache is cleared by `force_reload()` so saved MCP settings still rebuild server connections immediately.
 - Snapshot-backed session loads must not mark TOC as already started before messages render; otherwise TOC can be skipped or rebuilt out of order. The old early TOC path remains a compatibility path for `useSnapshot === false`.
+- Snapshot count fallback remains available only for malformed/legacy projection page payloads that do not include `total`.
