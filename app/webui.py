@@ -1698,6 +1698,17 @@ def _runtime_v2_subagent_node(parent_id: str, task_id: str, task: dict, state: d
         depth = int(task.get("depth") or state.get("depth") or 1)
     except (TypeError, ValueError):
         depth = 1
+    event_count = 0
+    try:
+        from runtime_v2.ui_projection import RuntimeUiProjection
+
+        projection = RuntimeUiProjection(
+            session_manager.repository.sessions_dir,
+            path_resolver=session_manager._resolve_session_path,
+        )
+        event_count, _latest_truncate_seq = projection.count_ui_events_light(task_id)
+    except Exception as exc:
+        logger.debug("Runtime V2 subagent event count failed for %s: %s", task_id, exc)
     return {
         "id": task_id,
         "task_id": task_id,
@@ -1725,6 +1736,7 @@ def _runtime_v2_subagent_node(parent_id: str, task_id: str, task: dict, state: d
         "result_preview": str(task.get("result_preview") or state.get("result_preview") or "")[:1200],
         "output_file": output_file if has_output else "",
         "dialogue_turns": [] if lite else [],
+        "event_count": int(event_count or 0),
         "session_metrics": {},
         "source": "runtime_v2_subagents",
     }

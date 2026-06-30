@@ -136,25 +136,30 @@ async function incrementalSyncSubagentCard(agentId, card) {
     var prevCount = currentSessionId ? subagentStore.getEventCount(currentSessionId, agentId) : 0;
     var summaryOnly = !shouldStreamSubagentProcessDom(card);
     try {
-        var countResp = await fetch('/sessions/' + encodeURIComponent(agentId) + '/messages/count');
-        if (!countResp.ok) return;
-        var countData = await countResp.json();
-        var total = countData && countData.count != null ? Number(countData.count) : 0;
-        if (!Number.isFinite(total) || total <= prevCount) return;
+        var afterIndex = Math.max(-1, Math.floor(Number(prevCount) || 0) - 1);
+        var msgResp = await fetch('/sessions/' + encodeURIComponent(agentId)
+            + '/messages?after_index=' + encodeURIComponent(String(afterIndex))
+            + '&limit=500');
+        if (!msgResp.ok) return;
+        var msgData = await msgResp.json();
+        var events = normalizeSubagentMessagesPayload(msgData);
+        var rangeStart = msgData && Number.isFinite(Number(msgData.range_start))
+            ? Math.floor(Number(msgData.range_start))
+            : Math.max(0, afterIndex + 1);
+        var total = msgData && Number.isFinite(Number(msgData.total))
+            ? Math.floor(Number(msgData.total))
+            : Math.max(prevCount, rangeStart + events.length);
+        if (!events.length || total <= prevCount) {
+            if (total > prevCount) setSubagentCardEventCount(agentId, total);
+            return;
+        }
         if (parentRunning && body.dataset.loaded === '1') {
             setSubagentCardEventCount(agentId, total);
             return;
         }
-        var msgResp = await fetch('/sessions/' + encodeURIComponent(agentId) + '/messages');
-        if (!msgResp.ok) return;
-        var events = normalizeSubagentMessagesPayload(await msgResp.json());
         if (!body.isConnected) return;
-        if (events.length <= prevCount) {
-            setSubagentCardEventCount(agentId, events.length);
-            return;
-        }
         var gotFinal = false;
-        for (var fi = prevCount; fi < events.length; fi += 1) {
+        for (var fi = 0; fi < events.length; fi += 1) {
             if (events[fi] && events[fi].type === 'final') { gotFinal = true; break; }
         }
         if (body.dataset.loaded !== '1') {
@@ -162,29 +167,29 @@ async function incrementalSyncSubagentCard(agentId, card) {
             if (summaryOnly) {
                 ensureSubagentCardStreamReady(card, agentId);
                 var ctxNew = getSubagentCardStreamCtx(body, card, agentId);
-                for (var si = prevCount; si < events.length; si += 1) {
+                for (var si = 0; si < events.length; si += 1) {
                     var sev = events[si];
                     if (!sev || typeof sev !== 'object') continue;
                     if (sev.type !== 'user' && sev.type !== 'final') continue;
-                    dispatchSubagentCardEvent(ctxNew, card, sev, si, agentId);
+                    dispatchSubagentCardEvent(ctxNew, card, sev, rangeStart + si, agentId);
                 }
                 rebindSubagentCardBody(body, card, agentId);
             } else {
-                renderSubagentProcessEvents(body, card, events, agentId);
+                renderSubagentProcessEvents(body, card, events, agentId, rangeStart);
             }
-            setSubagentCardEventCount(agentId, events.length);
+            setSubagentCardEventCount(agentId, total);
             if (gotFinal) markSubagentCardCompleted(card, true);
             return;
         }
         var ctx = getSubagentCardStreamCtx(body, card, agentId);
-        for (var i = prevCount; i < events.length; i += 1) {
+        for (var i = 0; i < events.length; i += 1) {
             if (events[i] && typeof events[i] === 'object') {
                 if (summaryOnly && events[i].type !== 'user' && events[i].type !== 'final' && !events[i].ephemeral) continue;
-                dispatchSubagentCardEvent(ctx, card, events[i], i, agentId);
+                dispatchSubagentCardEvent(ctx, card, events[i], rangeStart + i, agentId);
             }
         }
         rebindSubagentCardBody(body, card, agentId);
-        setSubagentCardEventCount(agentId, events.length);
+        setSubagentCardEventCount(agentId, total);
         if (gotFinal) markSubagentCardCompleted(card, true);
     } catch (e) { /* ignore */ }
 }

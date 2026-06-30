@@ -42,6 +42,8 @@ const subagentStore = {
             const merged = Object.assign({}, prev, node, { id: id });
             nextById.set(id, merged);
             nextOrder.push(id);
+            const eventCount = Number(node.event_count != null ? node.event_count : node.eventCount);
+            if (Number.isFinite(eventCount) && eventCount >= 0) st.eventCountsById.set(id, Math.floor(eventCount));
             if (merged.running) nextRunning.add(id);
             if (merged.pending_continue || merged.pending_result || merged.can_continue) nextPending.add(id);
         });

@@ -444,11 +444,14 @@ def test_todo_plan_empty_runtime_v2_snapshot_does_not_fallback_legacy(monkeypatc
 
 def test_subagent_list_prefers_runtime_v2_store(monkeypatch, tmp_path):
     import runtime_v2
-    from runtime_v2 import RuntimeSubagentStore
+    from runtime_v2 import RuntimeMirror, RuntimeSubagentStore
     import webui
 
     monkeypatch.setattr(runtime_v2, "runtime_v2_primary", lambda: True)
     store = RuntimeSubagentStore(tmp_path)
+    mirror = RuntimeMirror(tmp_path)
+    mirror.mirror_ui_event("agent1", {"type": "user", "content": "task"})
+    mirror.mirror_ui_event("agent1", {"type": "final", "content": "done"})
     output_path = store.write_task_output("s1", "agent1", "final text")
     store.upsert_task("s1", "agent1", {
         "status": "completed",
@@ -470,6 +473,7 @@ def test_subagent_list_prefers_runtime_v2_store(monkeypatch, tmp_path):
     assert node["status"] == "completed"
     assert node["ok"] is True
     assert node["has_final"] is True
+    assert node["event_count"] == 2
     assert node["output_file"] == output_path
 
 

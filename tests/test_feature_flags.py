@@ -122,6 +122,8 @@ def test_frontend_send_and_reattach_reuse_event_count_cache():
     sessions = (ROOT / "frontend/src/app/modules/session-management.js").read_text(encoding="utf-8")
     scroll = (ROOT / "frontend/src/app/modules/session-scroll-history.js").read_text(encoding="utf-8")
     sse = (ROOT / "frontend/src/app/modules/sse-handling.js").read_text(encoding="utf-8")
+    subagent_sync = (ROOT / "frontend/src/app/state/subagent-sync.js").read_text(encoding="utf-8")
+    subagent_store = (ROOT / "frontend/src/app/state/subagent-store.js").read_text(encoding="utf-8")
 
     assert "has(sessionId)" in sessions
     assert "async function getUiEventCount(sessionId, opts)" in scroll
@@ -131,6 +133,9 @@ def test_frontend_send_and_reattach_reuse_event_count_cache():
     assert "getUiEventCount(runSessionId, { preferCache: true })" in sse
     assert "uiEventCountCache.updateFromServer(runSessionId, preCount + 1)" in sse
     assert "getUiEventCount(submitSessionId).then" not in sse
+    assert "/messages/count" not in subagent_sync
+    assert "node.event_count" in subagent_store
+    assert "messages?after_index=" in subagent_sync
 
 
 def test_frontend_llm_stream_seq_increments_do_not_split_chunks():
