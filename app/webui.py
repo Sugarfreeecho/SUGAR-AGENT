@@ -2729,6 +2729,8 @@ async def get_session_history_snapshot(
             )
             lim = int(limit) if limit is not None else 200
             tv = int(turns) if turns is not None else None
+            timings: dict[str, int] = {}
+            t_phase = _time.perf_counter()
             page = projection.read_ui_page(
                 session_id,
                 limit=lim,
@@ -2736,17 +2738,26 @@ async def get_session_history_snapshot(
                 after_index=after_index,
                 turns=tv,
             )
+            timings["read_page"] = int((_time.perf_counter() - t_phase) * 1000)
+            t_phase = _time.perf_counter()
             count, count_source = projection.count_ui_events_light(session_id)
+            timings["count"] = int((_time.perf_counter() - t_phase) * 1000)
+            t_phase = _time.perf_counter()
             user_turns = projection.read_user_turns_light(session_id)
+            timings["user_turns"] = int((_time.perf_counter() - t_phase) * 1000)
             elapsed_ms = int((_time.perf_counter() - t0) * 1000)
+            timings["total"] = elapsed_ms
             if elapsed_ms >= 500:
                 logger.warning(
-                    "/history_snapshot slow runtime=2 session=%s turns=%s limit=%s before=%s elapsed_ms=%s",
+                    "/history_snapshot slow runtime=2 session=%s turns=%s limit=%s before=%s elapsed_ms=%s read_page=%sms count=%sms user_turns=%sms",
                     session_id,
                     tv,
                     lim,
                     before_index,
                     elapsed_ms,
+                    timings["read_page"],
+                    timings["count"],
+                    timings["user_turns"],
                 )
             return JSONResponse(content={
                 "ok": True,
@@ -2757,6 +2768,7 @@ async def get_session_history_snapshot(
                 "count_source": count_source,
                 "user_turns": user_turns,
                 "elapsed_ms": elapsed_ms,
+                "timing": timings,
             })
         except Exception as exc:
             logger.warning("Runtime V2 history snapshot failed for %s: %s", session_id, exc)
