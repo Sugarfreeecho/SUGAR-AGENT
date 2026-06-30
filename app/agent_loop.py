@@ -2523,7 +2523,7 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
                                     state,
                                     {
                                         "type": "todo_plan",
-                                        "ephemeral": True,
+                                        "ephemeral": not _runtime_v2_is_primary(),
                                         "has_plan": len(titems) > 0,
                                         "items": [
                                             {
@@ -3067,10 +3067,11 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
         _td_items = todo_manager._by_session.get(state["session_id"], [])
         if _td_items and all(t.get("status") == "completed" for t in _td_items):
             todo_manager._by_session[state["session_id"]] = []
-            try:
-                session_manager.save_todo_plan(state["session_id"], "")
-            except Exception:
-                pass
+            if not _runtime_v2_is_primary():
+                try:
+                    session_manager.save_todo_plan(state["session_id"], "")
+                except Exception:
+                    pass
             _persist_state(state)
     if not (llm_history and isinstance(llm_history[-1], SystemMessage) and llm_history[-1].content == "Loop finished"):
         end_msg = SystemMessage(content="Loop finished")

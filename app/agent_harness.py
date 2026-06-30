@@ -5201,9 +5201,53 @@ class TodoManager:
         self.items: List[Dict] = []
         self._by_session: Dict[str, List[Dict]] = {}
 
+    def _runtime_v2_primary(self) -> bool:
+        try:
+            from runtime_v2 import runtime_v2_primary
+
+            return runtime_v2_primary()
+        except Exception:
+            return False
+
+    def _load_runtime_v2_items(self, session_id: str) -> List[Dict]:
+        try:
+            from runtime_v2 import SnapshotStore
+
+            snapshot = SnapshotStore(session_manager.sessions_dir).read(session_id)
+            todo = snapshot.get("todo") if isinstance(snapshot, dict) else {}
+            if not isinstance(todo, dict):
+                todo = {}
+            items = todo.get("items")
+            if not isinstance(items, list):
+                ctx = snapshot.get("context") if isinstance(snapshot, dict) else {}
+                ctodo = ctx.get("todo") if isinstance(ctx, dict) else {}
+                items = ctodo.get("items") if isinstance(ctodo, dict) else []
+            out: List[Dict] = []
+            for item in items or []:
+                if not isinstance(item, dict):
+                    continue
+                text = str(item.get("text") or "").strip()
+                status = str(item.get("status") or "pending").strip().lower()
+                if not text or status not in ("pending", "in_progress", "completed"):
+                    continue
+                out.append(
+                    {
+                        "id": str(item.get("id") or len(out) + 1),
+                        "text": text,
+                        "status": status,
+                    }
+                )
+            return out
+        except Exception as exc:
+            logger.debug("Runtime V2 todo snapshot read failed for %s: %s", session_id, exc)
+            return []
+
     def sync_session_from_key_context(self, session_id: str, key_context: str = "") -> None:
         """从 todo_plan.md 恢复该会话的待办列表到内存（key_context 参数保留兼容，忽略）。"""
         if not session_id:
+            return
+        if self._runtime_v2_primary():
+            self._by_session[session_id] = self._load_runtime_v2_items(session_id)
             return
         raw = session_manager.load_todo_plan(session_id)
         if not (raw or "").strip():
@@ -5226,10 +5270,11 @@ class TodoManager:
                 self.items = []
             else:
                 self._by_session[session_id] = []
-                try:
-                    session_manager.save_todo_plan(session_id, "")
-                except Exception as _se:
-                    logger.warning("save_todo_plan 失败: %s", _se)
+                if not self._runtime_v2_primary():
+                    try:
+                        session_manager.save_todo_plan(session_id, "")
+                    except Exception as _se:
+                        logger.warning("save_todo_plan 失败: %s", _se)
             return "当前没有待办事项。"
         if len(items) > TODO_MAX_ITEMS:
             raise ValueError(f"最多支持 {TODO_MAX_ITEMS} 个待办事项")
@@ -5252,10 +5297,11 @@ class TodoManager:
             # 计划全部完成：清空该会话待办
             if session_id not in ("__global__",):
                 self._by_session[session_id] = []
-                try:
-                    session_manager.save_todo_plan(session_id, "")
-                except Exception as _se:
-                    logger.warning("save_todo_plan 失败: %s", _se)
+                if not self._runtime_v2_primary():
+                    try:
+                        session_manager.save_todo_plan(session_id, "")
+                    except Exception as _se:
+                        logger.warning("save_todo_plan 失败: %s", _se)
             if session_id == "__global__":
                 self.items = []
             return "当前没有待办事项。"
@@ -5264,10 +5310,11 @@ class TodoManager:
             self.items = validated
         else:
             self._by_session[session_id] = validated
-            try:
-                session_manager.save_todo_plan(session_id, self.render_for_session(session_id))
-            except Exception as _se:
-                logger.warning("save_todo_plan 失败: %s", _se)
+            if not self._runtime_v2_primary():
+                try:
+                    session_manager.save_todo_plan(session_id, self.render_for_session(session_id))
+                except Exception as _se:
+                    logger.warning("save_todo_plan 失败: %s", _se)
         return self.render_for_session(session_id if session_id != "__global__" else "")
 
     def render(self) -> str:

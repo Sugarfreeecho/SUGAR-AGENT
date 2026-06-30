@@ -150,6 +150,13 @@ def test_stream_deltas_have_stable_dedupe_keys():
     assert "_seenStreamDeltaKeys: new Set()" in scroll
 
 
+def test_runtime_v2_todo_plan_events_are_persistable():
+    agent_loop = (ROOT / "app/agent_loop.py").read_text(encoding="utf-8")
+
+    assert '"type": "todo_plan"' in agent_loop
+    assert '"ephemeral": not _runtime_v2_is_primary()' in agent_loop
+
+
 def test_frontend_suppressed_toc_rebuild_does_not_clear_started_toc():
     toc = (ROOT / "frontend/src/app/modules/toc-todo.js").read_text(encoding="utf-8")
     suppress_block = re.search(

@@ -166,6 +166,63 @@ def test_runtime_v2_run_does_not_load_work_messages(monkeypatch):
     assert agent_loop._load_work_history_dicts_for_run("s1") == []
 
 
+def test_runtime_v2_todo_sync_uses_snapshot_not_legacy(monkeypatch, tmp_path):
+    import agent_harness
+    from runtime_v2 import RuntimeMirror
+
+    monkeypatch.setenv("RUNTIME_VERSION", "2")
+    RuntimeMirror(tmp_path).mirror_ui_event(
+        "s1",
+        {
+            "type": "todo_plan",
+            "items": [{"id": "1", "text": "from snapshot", "status": "in_progress"}],
+            "has_plan": True,
+            "done": 0,
+            "total": 1,
+        },
+    )
+
+    class _SessionManager:
+        sessions_dir = tmp_path
+
+        def load_todo_plan(self, session_id):
+            raise AssertionError("Runtime V2 todo sync must not read legacy todo_plan.md")
+
+    monkeypatch.setattr(agent_harness, "session_manager", _SessionManager())
+
+    manager = agent_harness.TodoManager()
+    manager.sync_session_from_key_context("s1", "")
+
+    assert manager._by_session["s1"] == [
+        {"id": "1", "text": "from snapshot", "status": "in_progress"}
+    ]
+
+
+def test_runtime_v2_todo_update_does_not_write_legacy_file(monkeypatch, tmp_path):
+    import agent_harness
+
+    monkeypatch.setenv("RUNTIME_VERSION", "2")
+
+    class _SessionManager:
+        sessions_dir = tmp_path
+
+        def save_todo_plan(self, *args, **kwargs):
+            raise AssertionError("Runtime V2 todo update must not write legacy todo_plan.md")
+
+    monkeypatch.setattr(agent_harness, "session_manager", _SessionManager())
+
+    manager = agent_harness.TodoManager()
+    result = manager.update_for_session(
+        "s1",
+        [{"id": "1", "text": "keep in runtime snapshot", "status": "pending"}],
+    )
+
+    assert "keep in runtime snapshot" in result
+    assert manager._by_session["s1"] == [
+        {"id": "1", "text": "keep in runtime snapshot", "status": "pending"}
+    ]
+
+
 def test_runtime_v2_persist_does_not_save_legacy_histories(monkeypatch, tmp_path):
     import agent_loop
     from runtime_v2 import SnapshotStore
