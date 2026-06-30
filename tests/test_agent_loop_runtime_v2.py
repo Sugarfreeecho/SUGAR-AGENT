@@ -19,10 +19,10 @@ class _NoLegacySessionManager:
         return True
 
     def _load_key_context(self, session_id):
-        return ""
+        raise AssertionError("Runtime V2 run setup must not load legacy key_context")
 
     def migrate_todo_plan_off_key_context(self, session_id, key_context):
-        return key_context
+        raise AssertionError("Runtime V2 run setup must not migrate legacy key_context")
 
 
 def test_runtime_v2_model_history_prefers_projection(monkeypatch):
@@ -110,6 +110,37 @@ def test_runtime_v2_context_token_compute_uses_projection_not_legacy(monkeypatch
     assert captured["session_id"] == "s1"
     assert captured["messages"][0].content == "hello"
     assert captured["key_context"] == "summary"
+
+
+def test_runtime_v2_run_key_context_uses_snapshot_not_legacy(monkeypatch):
+    import agent_loop
+
+    monkeypatch.setattr(agent_loop, "session_manager", _NoLegacySessionManager())
+    monkeypatch.setattr(agent_loop, "_runtime_v2_is_primary", lambda: True)
+    monkeypatch.setattr(agent_loop, "_load_runtime_v2_context_summary", lambda _sid: "summary")
+
+    assert agent_loop._load_key_context_for_run("s1") == "summary"
+
+
+def test_runtime_v1_run_key_context_keeps_legacy_migration(monkeypatch):
+    import agent_loop
+
+    calls = []
+
+    class _SessionManager:
+        def _load_key_context(self, session_id):
+            calls.append(("load", session_id))
+            return "legacy"
+
+        def migrate_todo_plan_off_key_context(self, session_id, key_context):
+            calls.append(("migrate", session_id, key_context))
+            return "migrated"
+
+    monkeypatch.setattr(agent_loop, "session_manager", _SessionManager())
+    monkeypatch.setattr(agent_loop, "_runtime_v2_is_primary", lambda: False)
+
+    assert agent_loop._load_key_context_for_run("s1") == "migrated"
+    assert calls == [("load", "s1"), ("migrate", "s1", "legacy")]
 
 
 def test_agent_loop_does_not_auto_backfill_v2_model_history_from_legacy():

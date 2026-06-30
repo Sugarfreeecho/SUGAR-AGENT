@@ -592,6 +592,13 @@ def _load_runtime_v2_context_summary(session_id: str) -> str:
     return ""
 
 
+def _load_key_context_for_run(session_id: str) -> str:
+    if _runtime_v2_is_primary():
+        return _load_runtime_v2_context_summary(session_id)
+    key_context = session_manager._load_key_context(session_id)
+    return session_manager.migrate_todo_plan_off_key_context(session_id, key_context)
+
+
 def _load_model_history_dicts_v2_primary(session_id: str, *, reconcile_legacy: bool) -> List[Dict[str, Any]]:
     if _runtime_v2_is_primary():
         return _load_runtime_v2_model_history_dicts(session_id)
@@ -3217,8 +3224,7 @@ async def astream_events(
         except Exception:
             pass
         session_id = sid_in
-        key_context = session_manager._load_key_context(session_id)
-        key_context = session_manager.migrate_todo_plan_off_key_context(session_id, key_context)
+        key_context = _load_key_context_for_run(session_id)
     else:
         session_id, _, _, _, key_context, _metadata = (
             session_manager.get_or_create_session(session_id)
@@ -3403,8 +3409,7 @@ async def astream_events_continuation(
         return
 
     session_id = sid
-    key_context = session_manager._load_key_context(session_id)
-    key_context = session_manager.migrate_todo_plan_off_key_context(session_id, key_context)
+    key_context = _load_key_context_for_run(session_id)
     setup_logging("[subagent-continuation]", session_id)
     pre_run_timings: Dict[str, int] = {}
     _t_pre = time.perf_counter()
