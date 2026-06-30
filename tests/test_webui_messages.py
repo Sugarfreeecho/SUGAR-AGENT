@@ -372,6 +372,37 @@ def test_history_snapshot_uses_lightweight_user_turns(monkeypatch, tmp_path):
     assert set(payload["timing"]) == {"read_page", "count", "user_turns", "total"}
 
 
+def test_context_tokens_snapshot_miss_uses_runtime_v2_compute_not_legacy(monkeypatch, tmp_path):
+    import runtime_v2
+    import webui
+
+    class _NoLegacyContextSessionManager:
+        def get_or_create_session(self, session_id):
+            raise AssertionError("/context_tokens V2 fallback must not read legacy session history")
+
+    monkeypatch.setattr(runtime_v2, "runtime_v2_primary", lambda: True)
+    monkeypatch.setattr(webui, "session_manager", _NoLegacyContextSessionManager())
+    monkeypatch.setattr(webui, "_runtime_v2_context_snapshot", lambda _sid: {})
+    monkeypatch.setattr(webui, "compute_context_tokens_for_session", lambda sid: {
+        "ok": True,
+        "estimated": 321,
+        "threshold": 4096,
+        "model": "m",
+        "source": "runtime_v2_projection",
+    })
+
+    response = asyncio.run(webui.get_session_context_tokens("s1"))
+    payload = _json_response_payload(response)
+
+    assert payload == {
+        "ok": True,
+        "estimated": 321,
+        "threshold": 4096,
+        "model": "m",
+        "source": "runtime_v2_projection",
+    }
+
+
 def test_user_turns_uses_lightweight_projection_index(monkeypatch, tmp_path):
     import runtime_v2
     import runtime_v2.ui_projection

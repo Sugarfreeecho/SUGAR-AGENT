@@ -39,6 +39,9 @@ python scripts\audit_runtime_versions.py --repair-model --only-mismatches
 - LLM reasoning/response stream chunks are merged across increasing `stream_seq` values instead of finalizing on every delta, preventing process blocks from fragmenting into many rows.
 - In V2 primary mode, todo state is restored from the Runtime V2 snapshot and updated through persistable `todo_plan`/`todo_updated` events; normal run setup and `update_todo` no longer read or write legacy `todo_plan.md`.
 - Runtime migration sync now defaults to migrating/backfilling V2 only; exporting Runtime V2 UI/model projections back to legacy files requires an explicit `export_legacy=true` request.
+- Live UI cache/stat updates now use the event's owning session id instead of `currentSessionId`, so background runs and recently switched-away sessions cannot overwrite the visible session's token label.
+- Follow-up restart messages are recorded and replayed as `user_steer` UI events while remaining normal user input for the model context, so immediate follow-up does not turn into a main user bubble after refresh.
+- `/sessions/{id}/context_tokens` is guarded so a Runtime V2 snapshot miss falls through to Runtime V2 projection-based computation, not legacy session history.
 
 ## Compatibility Boundary
 
@@ -59,3 +62,5 @@ python scripts\audit_runtime_versions.py --repair-model --only-mismatches
 - Legacy `todo_plan.md` reads/writes are reserved for V1 primary or explicit migration/export; V2 todo consumers should read Runtime V2 snapshots.
 - The frontend final reconcile path must not fetch `/messages` after run completion; final visibility should be driven by the live SSE final or already-cached message records.
 - Runtime sync queue and automatic open-session sync must not write legacy files; legacy compatibility export is a separate explicit action via `export_legacy=true`.
+- Frontend live event handlers must pass the run/session id into cache and metric reducers; reducers must not infer ownership from the currently selected session.
+- Follow-up restart is a UI event-type distinction only. It must not fork a separate model-history format or bypass the normal V2 model projection append path.
