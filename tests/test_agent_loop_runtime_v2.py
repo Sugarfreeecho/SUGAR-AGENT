@@ -166,6 +166,30 @@ def test_runtime_v2_run_does_not_load_work_messages(monkeypatch):
     assert agent_loop._load_work_history_dicts_for_run("s1") == []
 
 
+def test_runtime_v2_lazy_work_materialize_is_noop(monkeypatch):
+    import agent_loop
+
+    class _SessionManager:
+        def _load_work_messages(self, session_id):
+            raise AssertionError("Runtime V2 lazy materialize must not read work_messages")
+
+    msg = agent_loop.UserMessage(content="current")
+    state = {
+        "session_id": "s1",
+        "work_messages": [msg],
+        "_lazy_prepend_work_messages": True,
+    }
+
+    monkeypatch.setattr(agent_loop, "session_manager", _SessionManager())
+    monkeypatch.setattr(agent_loop, "_runtime_v2_is_primary", lambda: True)
+
+    agent_loop._materialize_lazy_work_messages(state)
+
+    assert state["work_messages"] == [msg]
+    assert state["work_messages"][0].content == "current"
+    assert "_lazy_prepend_work_messages" not in state
+
+
 def test_runtime_v2_todo_sync_uses_snapshot_not_legacy(monkeypatch, tmp_path):
     import agent_harness
     from runtime_v2 import RuntimeMirror

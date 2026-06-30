@@ -726,6 +726,8 @@ def _persist_session_messages_with_model_replace(state: State, messages: List[An
 def _materialize_lazy_work_messages(state: State) -> None:
     if not state.pop("_lazy_prepend_work_messages", False):
         return
+    if _runtime_v2_is_primary():
+        return
     sid = str(state.get("session_id") or "").strip()
     suffix = list(state.get("work_messages", []))
     if not sid:
