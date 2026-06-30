@@ -3114,8 +3114,7 @@ def finish(state: State) -> State:
 
     state["stream_events"].append({"type": "final", "content": state["final_response"]})
 
-    # Keep finish on the hot path. Do not call the model for title generation
-    # before the final event can be emitted.
+    # 先尝试生成标题（executor 用量计入下方 Total，避免「仅 HTTP 日志」在流式下恒为 0）
     title_usage: Optional[Dict[str, int]] = None
     metadata = session_manager._load_metadata(state["session_id"])
     if metadata.get("name") == "新会话":
@@ -3125,7 +3124,20 @@ def finish(state: State) -> State:
                 first_user = m.content
                 break
         if first_user:
-            title = str(first_user or "").strip().replace("\r\n", "\n").replace("\r", "\n").split("\n", 1)[0][:15]
+            try:
+                title_template = load_prompt_template("title_generator")
+                title_prompt = title_template.format(
+                    first_user=first_user,
+                    final_response=state.get("final_response") or "",
+                )
+                title, title_usage = executor_text_and_usage(title_prompt)
+                title = title.strip()[:20] if title else ""
+                if not title:
+                    title = first_user[:15]
+            except Exception as e:
+                logger.warning(f"生成会话标题失败: {e}")
+                title = first_user[:15]
+                title_usage = None
             if title:
                 session_manager.set_session_name(state["session_id"], title)
 

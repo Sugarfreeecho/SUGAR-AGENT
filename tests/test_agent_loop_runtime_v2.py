@@ -247,10 +247,11 @@ def test_runtime_v2_continuation_empty_projection_does_not_reconcile(monkeypatch
     assert asyncio.run(collect()) == []
 
 
-def test_finish_does_not_call_model_for_session_title(monkeypatch):
+def test_finish_uses_title_generator_for_new_session(monkeypatch):
     import agent_loop
 
     names = []
+    calls = []
 
     class _SessionManager:
         def _load_metadata(self, session_id):
@@ -259,14 +260,13 @@ def test_finish_does_not_call_model_for_session_title(monkeypatch):
         def set_session_name(self, session_id, title):
             names.append((session_id, title))
 
+    def fake_executor_text_and_usage(prompt):
+        calls.append((prompt, list(state["stream_events"])))
+        return "model title", {"prompt_tokens": 3, "completion_tokens": 2}
+
     monkeypatch.setattr(agent_loop, "session_manager", _SessionManager())
-    monkeypatch.setattr(
-        agent_loop,
-        "executor_text_and_usage",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            AssertionError("finish must not call model before final can be emitted")
-        ),
-    )
+    monkeypatch.setattr(agent_loop, "load_prompt_template", lambda name: "Q:{first_user}\nA:{final_response}")
+    monkeypatch.setattr(agent_loop, "executor_text_and_usage", fake_executor_text_and_usage)
     monkeypatch.setattr(agent_loop, "_persist_session_messages_with_model_replace", lambda *args, **kwargs: None)
 
     state = {
@@ -284,4 +284,5 @@ def test_finish_does_not_call_model_for_session_title(monkeypatch):
 
     assert out["final_printed"] is True
     assert out["stream_events"][-1] == {"type": "final", "content": "done"}
-    assert names == [("s1", "hello world fro")]
+    assert calls == [("Q:hello world from user\nA:done", [{"type": "final", "content": "done"}])]
+    assert names == [("s1", "model title")]

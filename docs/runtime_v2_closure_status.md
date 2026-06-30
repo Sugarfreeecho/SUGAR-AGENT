@@ -34,7 +34,7 @@ python scripts\audit_runtime_versions.py --repair-model --only-mismatches
 - In V2 primary mode, normal state persistence now commits key context to the Runtime V2 context snapshot and no longer writes legacy `key_context.md` or `dialogue_history` as an implicit side effect.
 - V2 branch creation no longer copies legacy sidecar context/todo/compress files into the new branch; branch visible history is seeded from Runtime V2 events only.
 - Session deletion now removes subagent descendants recursively from disk, subagent index, and session index so deleted branches/subtrees cannot reappear after refresh.
-- Final finish no longer calls a model to generate the session title before emitting final; new-session titles use a local first-user preview on the hot path.
+- Session title generation keeps the original executor `title_generator` behavior; final latency fixes must not change title semantics.
 - LLM reasoning/response stream chunks are merged across increasing `stream_seq` values instead of finalizing on every delta, preventing process blocks from fragmenting into many rows.
 
 ## Compatibility Boundary
