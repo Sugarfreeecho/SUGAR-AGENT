@@ -135,6 +135,21 @@ def test_frontend_llm_stream_seq_increments_do_not_split_chunks():
     assert "seq !== l.llmDeltaLastSeq" not in rendering
 
 
+def test_stream_deltas_have_stable_dedupe_keys():
+    agent_loop = (ROOT / "app/agent_loop.py").read_text(encoding="utf-8")
+    rendering = (ROOT / "frontend/src/app/modules/message-rendering.js").read_text(encoding="utf-8")
+    scroll = (ROOT / "frontend/src/app/modules/session-scroll-history.js").read_text(encoding="utf-8")
+
+    assert "llm_delta_seq = 0" in agent_loop
+    assert "tool_delta_seq = 0" in agent_loop
+    assert '"delta_seq": llm_delta_seq' in agent_loop
+    assert '"delta_seq": tool_delta_seq' in agent_loop
+    assert "function deltaDedupeKey(parsed, scope)" in rendering
+    assert "hasSeenStreamDelta(ctx, ev, 'llm_' + part)" in rendering
+    assert "hasSeenStreamDelta(ctx, parsed, 'tool_call_delta')" in rendering
+    assert "_seenStreamDeltaKeys: new Set()" in scroll
+
+
 def test_frontend_suppressed_toc_rebuild_does_not_clear_started_toc():
     toc = (ROOT / "frontend/src/app/modules/toc-todo.js").read_text(encoding="utf-8")
     suppress_block = re.search(

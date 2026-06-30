@@ -917,6 +917,7 @@ function newDomContext(streamEl) {
         progressStream: {},
         keyContextStreamFilter: { phase: 'seek', carry: '' },
         runStartedAt: null,
+        _seenStreamDeltaKeys: new Set(),
         llm: newLlmState(),
     };
 }

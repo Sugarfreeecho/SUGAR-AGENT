@@ -2469,6 +2469,27 @@ function findToolDraftRow(ctx, parsed) {
     try { return body.querySelector('.feed-item.feed--tool[data-tool-draft-key="' + CSS.escape(key) + '"]'); } catch (e) { return null; }
 }
 
+function deltaDedupeKey(parsed, scope) {
+    if (!parsed || parsed.delta_seq == null) return '';
+    var ds = Number(parsed.delta_seq);
+    if (!Number.isFinite(ds) || ds <= 0) return '';
+    var ss = Number(parsed.stream_seq || 0);
+    var ri = parsed.react_iter != null ? String(parsed.react_iter) : '';
+    var part = String(scope || parsed.type || '');
+    var id = String(parsed.tool_call_id || parsed.id || parsed.index || parsed.tool_call_index || '');
+    return part + ':' + (Number.isFinite(ss) ? Math.floor(ss) : 0) + ':' + ri + ':' + id + ':' + Math.floor(ds);
+}
+
+function hasSeenStreamDelta(ctx, parsed, scope) {
+    if (!ctx) return false;
+    var key = deltaDedupeKey(parsed, scope);
+    if (!key) return false;
+    if (!ctx._seenStreamDeltaKeys) ctx._seenStreamDeltaKeys = new Set();
+    if (ctx._seenStreamDeltaKeys.has(key)) return true;
+    ctx._seenStreamDeltaKeys.add(key);
+    return false;
+}
+
 function setToolRowText(row, text, ctx, runSessionId) {
     if (!row) return;
     var sc = row.querySelector('.feed-chunk-scroller');
@@ -2495,6 +2516,7 @@ function removeTemporaryStatus(ctx) {
 }
 
 function appendToolCallDelta(ctx, parsed, runSessionId) {
+    if (hasSeenStreamDelta(ctx, parsed, 'tool_call_delta')) return;
     var key = toolCallDraftKey(parsed);
     if (!key) return;
     var row = findToolDraftRow(ctx, parsed);
@@ -2611,6 +2633,7 @@ function appendToolPendingRow(ctx, parsed, runSessionId) {
 }
 
 function appendToolCommandDelta(ctx, parsed, runSessionId) {
+    if (hasSeenStreamDelta(ctx, parsed, 'tool_command_delta')) return;
     var tid = parsed.tool_call_id != null ? String(parsed.tool_call_id) : '';
     if (!tid) return;
     var body = getProcessBody(ctx);
@@ -2755,6 +2778,7 @@ function appendLlmStreamDelta(ctx, ev, runSessionId) {
         l.llmDeltaLastSeq = seq;
     }
     const part = ev.type === 'llm_reasoning_delta' ? 'reasoning' : 'response';
+    if (hasSeenStreamDelta(ctx, ev, 'llm_' + part)) return;
     const delta = String(ev.delta || '');
     if (!delta) return;
     if (iter != null) {

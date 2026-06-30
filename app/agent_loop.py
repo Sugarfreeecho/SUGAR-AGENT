@@ -1858,6 +1858,8 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
                 await asyncio.sleep(0)
             llm_messages_to_send = strip_reasoning_for_api_request(llm_messages)
             llm_stream_seq += 1
+            llm_delta_seq = 0
+            tool_delta_seq = 0
             turn = None
             streamed_this_call = False
             early_tool_detected = False
@@ -1965,6 +1967,7 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
                             turn = payload
                             continue
                         if tag == "tool_call_delta" and payload:
+                            tool_delta_seq += 1
                             # 取消定时器
                             if thinking_timer_task and not thinking_timer_task.done():
                                 thinking_timer_task.cancel()
@@ -1979,6 +1982,7 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
                                         "type": "tool_call_delta",
                                         "ephemeral": True,
                                         "stream_seq": llm_stream_seq,
+                                        "delta_seq": tool_delta_seq,
                                         "react_iter": iter_count,
                                         "index": payload_dict.get("index", 0),
                                         "id": payload_dict.get("id", ""),
@@ -1992,6 +1996,7 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
                             streamed_this_call = True
                             continue
                         if tag == "reasoning" and payload:
+                            llm_delta_seq += 1
                             # 启动/重置定时器
                             if thinking_timer_task and not thinking_timer_task.done():
                                 thinking_timer_task.cancel()
@@ -2002,6 +2007,7 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
                                     "delta": payload,
                                     "react_iter": iter_count,
                                     "stream_seq": llm_stream_seq,
+                                    "delta_seq": llm_delta_seq,
                                     "ephemeral": True,
                                 }
                             )
@@ -2010,6 +2016,7 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
                             await asyncio.sleep(0)
                             streamed_this_call = True
                         elif tag == "content" and payload:
+                            llm_delta_seq += 1
                             # 启动/重置定时器
                             if thinking_timer_task and not thinking_timer_task.done():
                                 thinking_timer_task.cancel()
@@ -2020,6 +2027,7 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
                                     "delta": payload,
                                     "react_iter": iter_count,
                                     "stream_seq": llm_stream_seq,
+                                    "delta_seq": llm_delta_seq,
                                     "ephemeral": True,
                                 }
                             )
