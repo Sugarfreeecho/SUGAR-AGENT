@@ -291,39 +291,6 @@ function scheduleFinalVisibleAfterRunIfEnabled(sessionId, ctx, opts) {
     }, 0);
 }
 
-async function fetchLatestStoredFinalRecord(sessionId) {
-    try {
-        var response = await fetch('/sessions/' + encodeURIComponent(sessionId) + '/messages?limit=120');
-        var data = await response.json().catch(function () { return null; });
-        if (!response.ok || !data) return null;
-        var events = Array.isArray(data) ? data : (Array.isArray(data.events) ? data.events : []);
-        if (!events.length) return null;
-        var base = Number.isFinite(Number(data.range_start)) ? Math.floor(Number(data.range_start)) : 0;
-        var lastUserOffset = -1;
-        for (var i = events.length - 1; i >= 0; i -= 1) {
-            if (events[i] && events[i].type === 'user') {
-                lastUserOffset = i;
-                break;
-            }
-        }
-        if (lastUserOffset < 0) return null;
-        for (var j = events.length - 1; j > lastUserOffset; j -= 1) {
-            var ev = events[j];
-            if (ev && ev.type === 'final') {
-                return {
-                    index: base + j,
-                    type: 'final',
-                    event: ev,
-                    source: 'final-reconcile',
-                };
-            }
-        }
-    } catch (e) {
-        console.error('final-only reconcile fetch failed:', e);
-    }
-    return null;
-}
-
 async function ensureFinalVisibleAfterRun(sessionId, ctx, opts) {
     opts = opts || {};
     var sid = String(sessionId || '');

@@ -62,7 +62,9 @@ def test_frontend_feature_entrypoints_are_flag_guarded():
     assert "if (ctx && ctx.seenFinal === true) return;" in sse
     assert "if (eventSessionId === runSessionId) markRunFinalSeen(runCtx);" in sse
     assert "await ensureFinalVisibleAfterRunIfEnabled" not in sse
+    assert "function fetchLatestStoredFinalRecord" not in sse
     assert "var latestFinal = await fetchLatestStoredFinalRecord(sid);" not in sse
+    assert "messages?limit=120" not in sse
     assert "function enqueueCurrentInputAsFollowup()" in sse
     assert "if (!isMyAgentFeatureEnabled('followupRestart', false)) return false;" in sse
     assert "function onFollowupInputKeydown(e)" in sse
