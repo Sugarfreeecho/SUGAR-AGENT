@@ -1541,6 +1541,24 @@ async def list_session_subagents(
 
 def _build_session_subagents_response(session_id: str, lite: bool) -> JSONResponse:
     try:
+        from runtime_v2 import runtime_v2_primary
+
+        if runtime_v2_primary():
+            try:
+                return _build_runtime_v2_session_subagents_response(session_id, lite)
+            except ValueError as exc:
+                return JSONResponse(content={"error": str(exc)}, status_code=400)
+            except Exception as exc:
+                logger.debug("Runtime V2 subagent response failed for %s: %s", session_id, exc)
+                return JSONResponse(content={
+                    "session_id": session_id,
+                    "subagents": [],
+                    "source": "runtime_v2_subagents_error",
+                    "error": str(exc),
+                }, status_code=500)
+    except Exception as exc:
+        logger.debug("Runtime V2 subagent response check failed for %s: %s", session_id, exc)
+    try:
         from agent_subagent import subagent_registry
 
         nodes = session_manager.list_subagents_flat(
@@ -1622,6 +1640,94 @@ def _build_session_subagents_response(session_id: str, lite: bool) -> JSONRespon
         return JSONResponse(content={"error": str(e)}, status_code=400)
     except Exception as e:
         return JSONResponse(content={"error": str(e)}, status_code=500)
+
+
+def _build_runtime_v2_session_subagents_response(session_id: str, lite: bool) -> JSONResponse:
+    from runtime_v2 import RuntimeSubagentStore
+
+    store = RuntimeSubagentStore(session_manager.repository.sessions_dir)
+    task_rows = store.list_tasks(session_id)
+    parent_snapshot = _runtime_v2_snapshot(session_id)
+    subagent_states = parent_snapshot.get("subagents") if isinstance(parent_snapshot, dict) else {}
+    if not isinstance(subagent_states, dict):
+        subagent_states = {}
+
+    nodes: list[dict] = []
+    seen: set[str] = set()
+    for task in task_rows:
+        if not isinstance(task, dict):
+            continue
+        tid = str(task.get("task_id") or task.get("agent_id") or task.get("id") or "").strip()
+        if not tid:
+            continue
+        state = subagent_states.get(tid) if isinstance(subagent_states.get(tid), dict) else {}
+        nodes.append(_runtime_v2_subagent_node(session_id, tid, task, state, lite))
+        seen.add(tid)
+
+    for tid, state in subagent_states.items():
+        sid = str(tid or "").strip()
+        if not sid or sid in seen or not isinstance(state, dict):
+            continue
+        nodes.append(_runtime_v2_subagent_node(session_id, sid, {}, state, lite))
+
+    return JSONResponse(content={
+        "session_id": session_id,
+        "subagents": nodes,
+        "source": "runtime_v2_subagents",
+    })
+
+
+def _runtime_v2_subagent_node(parent_id: str, task_id: str, task: dict, state: dict, lite: bool) -> dict:
+    raw_status = str(task.get("status") or state.get("status") or "").strip()
+    normalized_status = {
+        "finished": "completed",
+        "done": "completed",
+    }.get(raw_status, raw_status or "running")
+    output_file = str(task.get("output_file") or state.get("output_file") or "").strip()
+    has_output = False
+    if output_file:
+        try:
+            has_output = Path(output_file).expanduser().resolve().is_file()
+        except Exception:
+            has_output = False
+    error = str(task.get("error") or state.get("error") or "")
+    has_final = bool(task.get("has_final") or state.get("has_final") or has_output)
+    if normalized_status == "completed" and error:
+        normalized_status = "failed"
+    try:
+        depth = int(task.get("depth") or state.get("depth") or 1)
+    except (TypeError, ValueError):
+        depth = 1
+    return {
+        "id": task_id,
+        "task_id": task_id,
+        "parent_id": parent_id,
+        "description": str(
+            task.get("description")
+            or state.get("description")
+            or task.get("subagent_type")
+            or state.get("subagent_type")
+            or task_id[:8]
+        ),
+        "subagent_type": str(task.get("subagent_type") or state.get("subagent_type") or "subagent"),
+        "depth": depth,
+        "created_at": task.get("created_at") or state.get("started_at"),
+        "updated_at": task.get("updated_at") or state.get("finished_at") or task.get("finished_at") or task.get("started_at"),
+        "started_at": task.get("started_at") or state.get("started_at"),
+        "finished_at": task.get("finished_at") or state.get("finished_at"),
+        "background": bool(task.get("background") or state.get("background")),
+        "running": normalized_status == "running",
+        "ok": True if normalized_status == "completed" else (None if normalized_status == "running" else False),
+        "status": normalized_status,
+        "task_status": normalized_status,
+        "error": error,
+        "has_final": has_final,
+        "result_preview": str(task.get("result_preview") or state.get("result_preview") or "")[:1200],
+        "output_file": output_file if has_output else "",
+        "dialogue_turns": [] if lite else [],
+        "session_metrics": {},
+        "source": "runtime_v2_subagents",
+    }
 
 
 @fastapi_app.get("/sessions/{parent_id}/subagents/{task_id}/output")

@@ -129,6 +129,12 @@ class _NoLegacyUiSessionManager(_FakeSessionManager):
     def get_todo_plan_snapshot(self, session_id: str) -> dict:
         raise AssertionError("Runtime V2 todo plan path must not read legacy todo/key_context files")
 
+    def list_subagents_flat(self, *args, **kwargs) -> list[dict]:
+        raise AssertionError("Runtime V2 subagent list path must not read legacy subagent sessions")
+
+    def list_subagent_tasks(self, *args, **kwargs) -> list[dict]:
+        raise AssertionError("Runtime V2 subagent list path must not read legacy subagent task index")
+
 
 def _json_response_payload(response) -> dict | list:
     return json.loads(response.body.decode("utf-8"))
@@ -428,6 +434,55 @@ def test_todo_plan_empty_runtime_v2_snapshot_does_not_fallback_legacy(monkeypatc
         "done": 0,
         "total": 0,
         "source": "runtime_v2_snapshot",
+    }
+
+
+def test_subagent_list_prefers_runtime_v2_store(monkeypatch, tmp_path):
+    import runtime_v2
+    from runtime_v2 import RuntimeSubagentStore
+    import webui
+
+    monkeypatch.setattr(runtime_v2, "runtime_v2_primary", lambda: True)
+    store = RuntimeSubagentStore(tmp_path)
+    output_path = store.write_task_output("s1", "agent1", "final text")
+    store.upsert_task("s1", "agent1", {
+        "status": "completed",
+        "description": "worker",
+        "subagent_type": "generalPurpose",
+        "result_preview": "done",
+    })
+    fake = _NoLegacyUiSessionManager(tmp_path, [])
+    monkeypatch.setattr(webui, "session_manager", fake)
+
+    response = webui._build_session_subagents_response("s1", lite=True)
+    payload = _json_response_payload(response)
+
+    assert payload["source"] == "runtime_v2_subagents"
+    assert len(payload["subagents"]) == 1
+    node = payload["subagents"][0]
+    assert node["id"] == "agent1"
+    assert node["description"] == "worker"
+    assert node["status"] == "completed"
+    assert node["ok"] is True
+    assert node["has_final"] is True
+    assert node["output_file"] == output_path
+
+
+def test_empty_subagent_list_runtime_v2_does_not_fallback_legacy(monkeypatch, tmp_path):
+    import runtime_v2
+    import webui
+
+    monkeypatch.setattr(runtime_v2, "runtime_v2_primary", lambda: True)
+    fake = _NoLegacyUiSessionManager(tmp_path, [{"type": "user", "content": "legacy"}])
+    monkeypatch.setattr(webui, "session_manager", fake)
+
+    response = webui._build_session_subagents_response("s1", lite=True)
+    payload = _json_response_payload(response)
+
+    assert payload == {
+        "session_id": "s1",
+        "subagents": [],
+        "source": "runtime_v2_subagents",
     }
 
 
