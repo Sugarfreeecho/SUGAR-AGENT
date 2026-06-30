@@ -50,6 +50,8 @@ _servers: Dict[str, Any] = {}
 _defs_snapshot: List[Dict[str, Any]] = []
 _start_lock = asyncio.Lock()
 _loaded_signature: Optional[str] = None
+_signature_cache: Optional[Tuple[float, str]] = None
+_SIGNATURE_CACHE_TTL_SEC = 1.0
 _last_config_error: Optional[str] = None
 
 
@@ -114,6 +116,17 @@ def _compute_config_signature() -> str:
         return f"file:{path.resolve()}:{st.st_mtime_ns}:{st.st_size}"
     except OSError:
         return f"missing:{path.resolve()}"
+
+
+def _compute_config_signature_cached() -> str:
+    global _signature_cache
+    now = time.monotonic()
+    cached = _signature_cache
+    if cached and now - cached[0] <= _SIGNATURE_CACHE_TTL_SEC:
+        return cached[1]
+    sig = _compute_config_signature()
+    _signature_cache = (now, sig)
+    return sig
 
 
 def _load_servers_dict_from_config() -> Tuple[Optional[dict], Optional[str]]:
@@ -510,10 +523,11 @@ async def _shutdown_servers_unlocked() -> None:
 
 async def force_reload() -> None:
     """写入新配置后调用：关闭连接并于下次 ensure_started 重建。"""
-    global _loaded_signature
+    global _loaded_signature, _signature_cache
     async with _start_lock:
         await _shutdown_servers_unlocked()
         _loaded_signature = None
+        _signature_cache = None
 
 
 async def ensure_started() -> None:
@@ -521,7 +535,7 @@ async def ensure_started() -> None:
     if not _MCP_IMPORT_OK:
         return
     async with _start_lock:
-        sig = _compute_config_signature()
+        sig = _compute_config_signature_cached()
         if sig == _loaded_signature:
             return
 
