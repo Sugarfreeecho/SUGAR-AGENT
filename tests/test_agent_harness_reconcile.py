@@ -536,6 +536,82 @@ def test_runtime_v2_append_ui_event_writes_projection_not_legacy(monkeypatch):
     assert cleared == ["s1"]
 
 
+def test_runtime_v2_subagent_dialogue_turns_use_model_projection_not_legacy(tmp_path):
+    import agent_harness
+    from runtime_v2 import RuntimeHistoryOps
+
+    RuntimeHistoryOps(tmp_path).replace_model_history(
+        "child",
+        [
+            {"type": "user", "content": "question"},
+            {"type": "assistant", "content": "answer"},
+        ],
+        reason="test",
+    )
+
+    def fail_legacy(*args, **kwargs):
+        raise AssertionError("Runtime V2 subagent dialogue fallback must not read legacy llm_history")
+
+    mgr = _manager_with(
+        repository=_Repository(tmp_path),
+        _runtime_v2_primary=lambda: True,
+        _load_ui_events_for_active_runtime=lambda sid: [],
+        _get_llm_history_path=fail_legacy,
+    )
+
+    turns = agent_harness.SessionManager._extract_subagent_dialogue_turns(mgr, "child")
+
+    assert turns == [{"user": "question", "final": "answer"}]
+
+
+def test_runtime_v2_list_subagents_flat_reads_projection_not_legacy_ui(tmp_path):
+    import json
+    import agent_harness
+    from runtime_v2 import RuntimeMirror, RuntimeUiProjection
+
+    root_id = "11111111-1111-4111-8111-111111111111"
+    child_id = "22222222-2222-4222-8222-222222222222"
+    child_dir = tmp_path / root_id / "subagents" / child_id
+    child_dir.mkdir(parents=True)
+    (child_dir / "metadata.json").write_text(
+        json.dumps(
+            {
+                "name": "child",
+                "subagent_description": "desc",
+                "subagent_type": "generalPurpose",
+                "subagent_ok": True,
+            }
+        ),
+        encoding="utf-8",
+    )
+    mirror = RuntimeMirror(tmp_path)
+    mirror.mirror_ui_event(child_id, {"type": "user", "content": "u"})
+    mirror.mirror_ui_event(child_id, {"type": "final", "content": "a"})
+    mirror.mirror_ui_event(root_id, {"type": "subagent_finish", "agent_id": child_id, "ok": True})
+
+    def fail_legacy(*args, **kwargs):
+        raise AssertionError("Runtime V2 subagent list must not read legacy ui_events")
+
+    projection = RuntimeUiProjection(tmp_path, path_resolver=lambda sid: tmp_path / sid)
+    mgr = _manager_with(
+        repository=_Repository(tmp_path),
+        index=[],
+        _runtime_v2_primary=lambda: True,
+        _resolve_session_path=lambda sid: tmp_path / sid,
+        _get_session_path=lambda sid: tmp_path / sid,
+        _load_ui_events=fail_legacy,
+        _load_ui_events_for_active_runtime=lambda sid: projection.read_ui_events(sid),
+    )
+
+    rows = agent_harness.SessionManager.list_subagents_flat(mgr, root_id)
+
+    assert len(rows) == 1
+    assert rows[0]["id"] == child_id
+    assert rows[0]["status"] == "completed"
+    assert rows[0]["has_final"] is True
+    assert rows[0]["result_preview"] == "a"
+
+
 def test_runtime_v2_pending_subagent_results_do_not_fallback_legacy(tmp_path):
     import agent_harness
     from runtime_v2 import RuntimeSubagentStore

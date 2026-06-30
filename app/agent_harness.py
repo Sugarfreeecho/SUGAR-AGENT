@@ -2382,7 +2382,7 @@ class SessionManager:
         pending_user = ""
         last_response = ""
         try:
-            for ev in self._load_ui_events(session_id):
+            for ev in self._load_ui_events_for_active_runtime(session_id):
                 if not isinstance(ev, dict):
                     continue
                 et = str(ev.get("type") or "")
@@ -2420,11 +2420,16 @@ class SessionManager:
         """从 llm_history 还原 user/assistant 问答（subagent ui_events 缺 final 时的兜底）。"""
         turns: List[Dict[str, str]] = []
         try:
-            path = self._get_llm_history_path(session_id)
-            if not path.is_file():
-                return turns
-            with open(path, "r", encoding="utf-8") as f:
-                raw = json.load(f)
+            if self._runtime_v2_primary():
+                from runtime_v2.model_projection import RuntimeModelProjection
+
+                raw = RuntimeModelProjection(self.repository.sessions_dir).read_message_dicts(session_id)
+            else:
+                path = self._get_llm_history_path(session_id)
+                if not path.is_file():
+                    return turns
+                with open(path, "r", encoding="utf-8") as f:
+                    raw = json.load(f)
             if not isinstance(raw, list):
                 return turns
             pending_user = ""
@@ -2453,7 +2458,7 @@ class SessionManager:
     ) -> Optional[Dict[str, Any]]:
         """从父会话 ui_events 查找该 subagent 最近一次 finish 事件。"""
         try:
-            for ev in reversed(self._load_ui_events(parent_id)):
+            for ev in reversed(self._load_ui_events_for_active_runtime(parent_id)):
                 if not isinstance(ev, dict):
                     continue
                 if str(ev.get("type") or "") != "subagent_finish":
@@ -2477,7 +2482,7 @@ class SessionManager:
             "tool_failures": 0,
         }
         try:
-            for ev in self._load_ui_events(session_id):
+            for ev in self._load_ui_events_for_active_runtime(session_id):
                 if not isinstance(ev, dict) or str(ev.get("type") or "") != "process_metrics":
                     continue
                 if ev.get("duration_ms") is None:
@@ -2496,7 +2501,7 @@ class SessionManager:
 
     def _last_cache_model_from_ui(self, session_id: str) -> str:
         try:
-            for ev in reversed(self._load_ui_events(session_id)):
+            for ev in reversed(self._load_ui_events_for_active_runtime(session_id)):
                 if (
                     isinstance(ev, dict)
                     and str(ev.get("type") or "") == "cache_stats"
@@ -2540,7 +2545,7 @@ class SessionManager:
             return {"status": "interrupted", "ok": False, "error": "interrupted"}
         has_final = False
         try:
-            events = self._load_ui_events(cid)
+            events = self._load_ui_events_for_active_runtime(cid)
             has_final = any(
                 isinstance(e, dict) and str(e.get("type") or "") == "final"
                 for e in events
@@ -2655,13 +2660,13 @@ class SessionManager:
                     try:
                         has_final = any(
                             isinstance(ev, dict) and ev.get("type") == "final"
-                            for ev in self._load_ui_events(cid)
+                            for ev in self._load_ui_events_for_active_runtime(cid)
                         )
                     except Exception:
                         has_final = False
                 if not result_preview and not lite_mode:
                     try:
-                        for ev in reversed(self._load_ui_events(cid)):
+                        for ev in reversed(self._load_ui_events_for_active_runtime(cid)):
                             if isinstance(ev, dict) and ev.get("type") == "final":
                                 result_preview = str(ev.get("content") or "")[:1200]
                                 has_final = True
