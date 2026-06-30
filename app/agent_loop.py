@@ -3102,8 +3102,8 @@ def validate_final(state: State) -> State:
     return state
 
 
-def finish(state: State) -> State:
-    """最终处理：生成会话标题、保存会话、输出最终结果"""
+def prepare_final_event(state: State) -> State:
+    """Prepare the final UI event without running slower finish-side work."""
     # 确保 user_input 存在
     if "user_input" not in state:
         for msg in reversed(state["dialogue"]):
@@ -3120,7 +3120,18 @@ def finish(state: State) -> State:
     if not state.get("final_response"):
         state["final_response"] = "No result"
 
-    state["stream_events"].append({"type": "final", "content": state["final_response"]})
+    if not state.get("_final_event_prepared"):
+        state["stream_events"].append({"type": "final", "content": state["final_response"]})
+        state["_final_event_prepared"] = True
+    return state
+
+
+def finish(state: State) -> State:
+    """最终处理：生成会话标题、保存会话、输出最终结果"""
+    state = prepare_final_event(state)
+
+    if state.get("final_printed", False):
+        return state
 
     # 先尝试生成标题（executor 用量计入下方 Total，避免「仅 HTTP 日志」在流式下恒为 0）
     title_usage: Optional[Dict[str, int]] = None
@@ -3346,8 +3357,14 @@ async def astream_events(
                 if evt.get("type") in ("status", "validate_final", "final"):
                     await emit(evt)
             stream_event_count_after_validate = len(state["stream_events"])
-            state = finish(state)
+            state = prepare_final_event(state)
             for evt in state["stream_events"][stream_event_count_after_validate:]:
+                if evt.get("type") in ("status", "validate_final", "final"):
+                    await emit(evt)
+            await asyncio.sleep(0)
+            stream_event_count_after_final = len(state["stream_events"])
+            state = finish(state)
+            for evt in state["stream_events"][stream_event_count_after_final:]:
                 if evt.get("type") in ("status", "validate_final", "final"):
                     await emit(evt)
             completed = True
@@ -3535,8 +3552,14 @@ async def astream_events_continuation(
                 if evt.get("type") in ("status", "validate_final", "final"):
                     await emit(evt)
             stream_event_count_after_validate = len(state["stream_events"])
-            state = finish(state)
+            state = prepare_final_event(state)
             for evt in state["stream_events"][stream_event_count_after_validate:]:
+                if evt.get("type") in ("status", "validate_final", "final"):
+                    await emit(evt)
+            await asyncio.sleep(0)
+            stream_event_count_after_final = len(state["stream_events"])
+            state = finish(state)
+            for evt in state["stream_events"][stream_event_count_after_final:]:
                 if evt.get("type") in ("status", "validate_final", "final"):
                     await emit(evt)
             completed = True
