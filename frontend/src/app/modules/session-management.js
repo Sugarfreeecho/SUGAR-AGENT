@@ -746,6 +746,9 @@ function showSessionLoadRetry(sessionId) {
 }
 
 async function loadSessionMessages(sessionId, scrollBehavior, opts) {
+    const openSessionStartedAt = (typeof performance !== 'undefined' && performance.now)
+        ? performance.now()
+        : Date.now();
     scrollBehavior = scrollBehavior || 'saved-or-bottom';
     opts = opts || {};
     const loadToken = ++messageLoadEpoch;
@@ -756,6 +759,8 @@ async function loadSessionMessages(sessionId, scrollBehavior, opts) {
     try {
         let raw;
         let snapshotTocTurns = null;
+        let historySource = 'messages';
+        let snapshotTiming = null;
         const canUseSnapshot = !opts.full && opts.useSnapshot !== false && beforeSessionMessageSnapshotAvailable();
         if (canUseSnapshot) {
             try {
@@ -766,6 +771,10 @@ async function loadSessionMessages(sessionId, scrollBehavior, opts) {
                     const snapshot = await snapshotResp.json();
                     if (snapshot && snapshot.ok && snapshot.messages) {
                         raw = snapshot.messages;
+                        historySource = 'history_snapshot';
+                        snapshotTiming = snapshot.timing && typeof snapshot.timing === 'object'
+                            ? snapshot.timing
+                            : null;
                         if (typeof uiEventCountCache !== 'undefined' && typeof snapshot.count === 'number') {
                             uiEventCountCache.updateFromServer(sessionId, snapshot.count);
                         }
@@ -835,6 +844,12 @@ async function loadSessionMessages(sessionId, scrollBehavior, opts) {
             scheduleContextTokensAfterPaint(sessionId);
             applyChatScrollAfterHistoryLoad(sessionId, scrollBehavior);
             markVisibleSessionStreamLoadState(sessionId, 'ok');
+            logOpenSessionTiming(sessionId, {
+                source: historySource,
+                events: 0,
+                snapshotTiming: snapshotTiming,
+                totalMs: elapsedSince(openSessionStartedAt),
+            });
             return true;
         }
         const loadCtx = newDomContext(getVisibleChatStream());
@@ -875,6 +890,12 @@ async function loadSessionMessages(sessionId, scrollBehavior, opts) {
         scheduleContextTokensAfterPaint(sessionId);
         renderTodoPlanForCurrentSession();
         markVisibleSessionStreamLoadState(sessionId, 'ok');
+        logOpenSessionTiming(sessionId, {
+            source: historySource,
+            events: events.length,
+            snapshotTiming: snapshotTiming,
+            totalMs: elapsedSince(openSessionStartedAt),
+        });
         return true;
     } catch (error) {
         console.error('加载会话消息失败:', error);
@@ -888,6 +909,32 @@ async function loadSessionMessages(sessionId, scrollBehavior, opts) {
         if (loadToken === messageLoadEpoch) suppressTocDuringSessionLoad = false;
         if (loadToken === messageLoadEpoch) replayingMessages = false;
     }
+}
+
+function elapsedSince(startedAt) {
+    var now = (typeof performance !== 'undefined' && performance.now)
+        ? performance.now()
+        : Date.now();
+    return Math.max(0, Math.round(now - Number(startedAt || now)));
+}
+
+function logOpenSessionTiming(sessionId, data) {
+    data = data || {};
+    var timing = data.snapshotTiming && typeof data.snapshotTiming === 'object' ? data.snapshotTiming : {};
+    var backendTotal = Number(timing.total || 0);
+    var frontendTotal = Number(data.totalMs || 0);
+    if (frontendTotal < 500 && backendTotal < 500) return;
+    console.info(
+        'open_session_timing session=%s source=%s total=%sms events=%s backend_total=%sms read_page=%sms count=%sms user_turns=%sms',
+        sessionId,
+        data.source || 'unknown',
+        frontendTotal,
+        Number(data.events || 0),
+        backendTotal,
+        Number(timing.read_page || 0),
+        Number(timing.count || 0),
+        Number(timing.user_turns || 0)
+    );
 }
 
 function beforeSessionMessageSnapshotAvailable() {

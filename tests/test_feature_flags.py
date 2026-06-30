@@ -100,6 +100,16 @@ def test_frontend_session_load_starts_toc_before_messages_finish():
     assert "if (opts.useSnapshot === false && typeof startTocForSessionLoad === 'function')" in sessions
 
 
+def test_frontend_session_load_logs_open_session_timing_from_snapshot():
+    sessions = (ROOT / "frontend/src/app/modules/session-management.js").read_text(encoding="utf-8")
+
+    assert "let snapshotTiming = null;" in sessions
+    assert "snapshotTiming = snapshot.timing && typeof snapshot.timing === 'object'" in sessions
+    assert "function logOpenSessionTiming(sessionId, data)" in sessions
+    assert "'open_session_timing session=%s source=%s total=%sms events=%s backend_total=%sms read_page=%sms count=%sms user_turns=%sms'" in sessions
+    assert "logOpenSessionTiming(sessionId, {" in sessions
+
+
 def test_frontend_suppressed_toc_rebuild_does_not_clear_started_toc():
     toc = (ROOT / "frontend/src/app/modules/toc-todo.js").read_text(encoding="utf-8")
     suppress_block = re.search(
