@@ -18,6 +18,7 @@ from .blob_store import BlobStore
 from .subagent_store import RuntimeSubagentStore
 from .ui_projection import RuntimeUiProjection
 from .model_projection import RuntimeModelProjection
+from .migration import RuntimeV2MigrationService
 from .config import runtime_v1_primary, runtime_v2_enabled, runtime_v2_primary, runtime_v2_strict, runtime_version
 
 __all__ = [
@@ -35,6 +36,7 @@ __all__ = [
     "RuntimeSubagentStore",
     "RuntimeUiProjection",
     "RuntimeModelProjection",
+    "RuntimeV2MigrationService",
     "runtime_version",
     "runtime_v1_primary",
     "runtime_v2_primary",

@@ -2665,54 +2665,26 @@ async def get_session_history_snapshot(
 
 
 def _sync_runtime_session(session_id: str) -> dict:
-    from runtime_v2.model_projection import RuntimeModelProjection
-    from runtime_v2.ui_projection import RuntimeUiProjection
+    from runtime_v2.migration import RuntimeV2MigrationService
 
-    projection = RuntimeUiProjection(
+    service = RuntimeV2MigrationService(
         session_manager.repository.sessions_dir,
         path_resolver=session_manager._resolve_session_path,
     )
-    legacy_events = session_manager.get_ui_events_for_display(session_id)
-    v2_from_v1 = projection.sync_from_legacy_if_needed(session_id, lambda: legacy_events)
-    projected = projection.read_ui_events_fast(session_id)
-    v1_from_v2 = {"checked": True, "action": "none", "legacy_count": len(legacy_events), "projected_count": len(projected)}
-    if len(projected) > len(legacy_events):
-        session_manager._save_ui_events(session_id, projected)
-        v1_from_v2 = {
-            "checked": True,
-            "action": "replace",
-            "legacy_count": len(legacy_events),
-            "projected_count": len(projected),
-            "written": len(projected),
-        }
-    model_projection = RuntimeModelProjection(session_manager.repository.sessions_dir)
-    v2_model_messages = model_projection.read_message_dicts(session_id)
-    try:
-        legacy_model_messages = session_manager._load_llm_history(session_id)
-    except Exception:
-        legacy_model_messages = []
-    model_v2_to_v1 = {
-        "checked": True,
-        "action": "none",
-        "legacy_count": len(legacy_model_messages or []),
-        "projected_count": len(v2_model_messages or []),
-    }
-    if v2_model_messages and v2_model_messages != legacy_model_messages:
-        session_manager._save_llm_history(session_id, v2_model_messages)
-        model_v2_to_v1 = {
-            "checked": True,
-            "action": "replace",
-            "legacy_count": len(legacy_model_messages or []),
-            "projected_count": len(v2_model_messages),
-            "written": len(v2_model_messages),
-        }
-    return {
-        "ok": True,
-        "session_id": session_id,
-        "v2_from_v1": v2_from_v1,
-        "v1_from_v2": v1_from_v2,
-        "model_v2_to_v1": model_v2_to_v1,
-    }
+
+    def _load_legacy_model_messages() -> list[dict]:
+        try:
+            return session_manager._load_llm_history(session_id)
+        except Exception:
+            return []
+
+    return service.sync_session(
+        session_id,
+        load_legacy_ui_events=lambda: session_manager.get_ui_events_for_display(session_id),
+        save_legacy_ui_events=lambda events: session_manager._save_ui_events(session_id, events),
+        load_legacy_model_messages=_load_legacy_model_messages,
+        save_legacy_model_messages=lambda messages: session_manager._save_llm_history(session_id, messages),
+    )
 
 
 @fastapi_app.post("/sessions/{session_id}/runtime/sync/enqueue")
