@@ -68,6 +68,83 @@ SUBAGENT_RUN_INSTRUCTION = (
     "不要向用户追问；信息不足时在结论中说明缺口即可。"
 )
 
+
+def _runtime_v2_primary() -> bool:
+    try:
+        from runtime_v2 import runtime_v2_primary
+
+        return bool(runtime_v2_primary())
+    except Exception:
+        return True
+
+
+def _load_runtime_v2_context_summary(session_id: str) -> str:
+    try:
+        from runtime_v2 import SnapshotStore
+
+        snapshot = SnapshotStore(session_manager.sessions_dir).read(session_id)
+        context = snapshot.get("context") if isinstance(snapshot, dict) else {}
+        summary = context.get("summary") if isinstance(context, dict) else {}
+        if isinstance(summary, dict):
+            return str(summary.get("summary") or "")
+    except Exception as exc:
+        logger.debug("Runtime V2 subagent context read failed for %s: %s", session_id, exc)
+    return ""
+
+
+def _load_subagent_run_histories(child_id: str) -> tuple[List[Any], List[Any], str]:
+    if _runtime_v2_primary():
+        try:
+            from runtime_v2 import RuntimeModelProjection
+
+            llm_dicts = RuntimeModelProjection(session_manager.sessions_dir).read_message_dicts(child_id)
+        except Exception as exc:
+            logger.debug("Runtime V2 subagent model projection read failed for %s: %s", child_id, exc)
+            llm_dicts = []
+        prev_llm = [_dict_to_message(m) for m in llm_dicts if isinstance(m, dict)]
+        key_context = _load_runtime_v2_context_summary(child_id)
+        return [], prev_llm, key_context
+
+    _, _, work_dicts, llm_dicts, key_context, _meta = session_manager.get_or_create_session(child_id)
+    return (
+        [_dict_to_message(m) for m in work_dicts],
+        [_dict_to_message(m) for m in llm_dicts],
+        key_context,
+    )
+
+
+def _persist_subagent_run_state(child_id: str, state_out: Dict[str, Any]) -> None:
+    key_context = str(state_out.get("key_context") or "")
+    if _runtime_v2_primary():
+        try:
+            from runtime_v2 import RuntimeHistoryOps
+
+            llm_history = [_message_to_dict(m) for m in state_out.get("llm_history", [])]
+            ops = RuntimeHistoryOps(session_manager.sessions_dir)
+            ops.replace_model_history(child_id, llm_history, reason="subagent_run_finished")
+            if key_context.strip():
+                ops.commit_context_summary(child_id, key_context)
+        except Exception as exc:
+            logger.warning("Runtime V2 subagent state persist failed for %s: %s", child_id, exc)
+        return
+    work_messages = [_message_to_dict(m) for m in state_out.get("work_messages", [])]
+    llm_history = [_message_to_dict(m) for m in state_out.get("llm_history", [])]
+    session_manager.update_session(child_id, work_messages, llm_history, key_context)
+
+
+def _save_initial_subagent_key_context(child_id: str, key_context: str) -> None:
+    if not (key_context or "").strip():
+        return
+    if _runtime_v2_primary():
+        try:
+            from runtime_v2 import RuntimeHistoryOps
+
+            RuntimeHistoryOps(session_manager.sessions_dir).commit_context_summary(child_id, key_context)
+        except Exception as exc:
+            logger.warning("Runtime V2 subagent initial context persist failed for %s: %s", child_id, exc)
+        return
+    session_manager.save_key_context(child_id, key_context)
+
 _IMAGE_SUFFIXES = frozenset({".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"})
 _TEXT_SUFFIXES = frozenset(
     {".txt", ".md", ".json", ".py", ".js", ".ts", ".tsx", ".html", ".css", ".xml", ".yaml", ".yml", ".csv", ".log"}
@@ -299,7 +376,16 @@ def build_subagent_user_message(
 
 def _get_subagent_final_result(child_id: str) -> str:
     try:
-        for ev in reversed(session_manager._load_ui_events(child_id)):
+        if _runtime_v2_primary():
+            from runtime_v2 import RuntimeUiProjection
+
+            events = RuntimeUiProjection(
+                session_manager.sessions_dir,
+                path_resolver=getattr(session_manager, "_resolve_session_path", None),
+            ).read_ui_events(child_id)
+        else:
+            events = session_manager._load_ui_events(child_id)
+        for ev in reversed(events):
             if isinstance(ev, dict) and str(ev.get("type") or "") == "final":
                 return str(ev.get("content") or "").strip()
     except Exception:
@@ -655,9 +741,7 @@ async def _execute_subagent_run(
     """单次 subagent react_node 执行（可前台或后台）。"""
     session_manager.clear_interrupt(child_id)
 
-    _, _, work_dicts, llm_dicts, key_context, _meta = session_manager.get_or_create_session(child_id)
-    prev_work = [_dict_to_message(m) for m in work_dicts]
-    prev_llm = [_dict_to_message(m) for m in llm_dicts]
+    prev_work, prev_llm, key_context = _load_subagent_run_histories(child_id)
     user_message = UserMessage(content=user_text)
     new_work = prev_work + [user_message]
     new_llm = prev_llm + [user_message]
@@ -833,12 +917,7 @@ async def _execute_subagent_run(
         final_response = str(state_out.get("final_response") or "").strip()
         if final_response:
             session_manager.append_ui_event(child_id, {"type": "final", "content": final_response})
-        session_manager.update_session(
-            child_id,
-            [_message_to_dict(m) for m in state_out.get("work_messages", [])],
-            [_message_to_dict(m) for m in state_out.get("llm_history", [])],
-            state_out.get("key_context", ""),
-        )
+        _persist_subagent_run_state(child_id, state_out)
         interrupted = _is_subagent_user_interrupt_final(final_response)
         limit_reached = bool(state_out.get("react_limit_reached"))
         missing_final = not bool(final_response)
@@ -1023,8 +1102,7 @@ async def _run_single_subagent(
         )
 
         # 继承父 key_context 到子会话，使 subagent 在 SystemMessage 中自然获得上下文
-        if (parent_key_context or "").strip():
-            session_manager.save_key_context(child_id, parent_key_context)
+        _save_initial_subagent_key_context(child_id, parent_key_context)
 
     assert child_id
 

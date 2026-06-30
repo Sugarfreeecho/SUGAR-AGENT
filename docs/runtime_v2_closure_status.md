@@ -22,9 +22,11 @@ python scripts\audit_runtime_versions.py --repair-model --only-mismatches
 - Audit normalizes legacy LangChain role names (`human`, `llm`, `ai`, `agent`) to Runtime V2 roles before comparing model history.
 - In V2 primary mode, `SessionManager.append_ui_event()` now writes only the Runtime V2 event/projection path and no longer reads or writes `ui_events.json` on the normal UI append path.
 - The V2 append path still applies required UI side effects such as sidebar preview updates and unread-result state, so cutting the legacy file write does not remove visible session-list behavior.
+- In V2 primary mode, subagent execution now loads prior child history from `RuntimeModelProjection`, persists finished child model history through `RuntimeHistoryOps`, and reads collected final output through `RuntimeUiProjection` instead of child `llm_history.json`, `work_messages.json`, or `ui_events.json`.
 
 ## Compatibility Boundary
 
 - V1 and V2 paths are intentionally still both present. `RUNTIME_VERSION=1` remains supported.
 - The main `/chat` live response still emits the legacy UI-shaped stream, while V2 provides source events and projected reattach streams. This is compatible with the current frontend; raw-V2 `/chat` would be a protocol change, not a required data-consistency fix.
 - Legacy UI file writes from `append_ui_event()` are now limited to the V1 primary path. V2 compatibility export/migration must remain explicit service work rather than an implicit side effect of normal runtime execution.
+- Legacy child-session history reads and writes remain part of the V1 subagent path only. V2 subagent resume/collect paths should be guarded by projection-based tests.
