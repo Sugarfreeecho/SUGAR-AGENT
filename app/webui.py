@@ -2197,6 +2197,7 @@ async def chat(
     session_id: str = Form(None),
     client_run_id: str = Form(None),
     stream_protocol: str = Form("legacy"),
+    followup_steer: bool = Form(False),
 ):
     sid = (session_id or "").strip() or None
     run_id = str(client_run_id or "").strip()
@@ -2242,6 +2243,7 @@ async def chat(
                     session_id=sid,
                     should_stop=should_stop_worker,
                     run_id=run_id,
+                    ui_user_event_type="user_steer" if followup_steer else "user",
                 ):
                     put_from_worker(event)
             except asyncio.CancelledError:

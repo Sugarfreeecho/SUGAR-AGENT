@@ -806,7 +806,7 @@ function uiEventReactIter(ev) {
     return n;
 }
 
-function applyCacheStatsFromEvent(ctx, event) {
+function applyCacheStatsFromEvent(ctx, event, runSessionId) {
     if (!event || typeof event !== 'object') return;
     var agg = resolveSubagentAggFromCtx(ctx);
     if (!agg || !agg.isConnected) {
@@ -824,8 +824,9 @@ function applyCacheStatsFromEvent(ctx, event) {
     if (event.input_tokens != null) agg.dataset.procCacheInput = String(Math.max(0, Math.floor(Number(event.input_tokens))));
     if (event.output_tokens != null) agg.dataset.procCacheOutput = String(Math.max(0, Math.floor(Number(event.output_tokens))));
     if (event.tokens_per_sec != null) agg.dataset.procCacheTps = String(Math.max(0, Number(event.tokens_per_sec)));
-    if (currentSessionId && event.input_tokens != null && Number.isFinite(Number(event.input_tokens))) {
-        recordContextTokens(currentSessionId, Math.max(0, Math.floor(Number(event.input_tokens))), event.threshold);
+    var tokenSessionId = runSessionId || event.session_id || event.sessionId || '';
+    if (tokenSessionId && event.input_tokens != null && Number.isFinite(Number(event.input_tokens))) {
+        recordContextTokens(tokenSessionId, Math.max(0, Math.floor(Number(event.input_tokens))), event.threshold);
     }
     refreshAggregateStatsSmart(agg);
 }
@@ -2738,7 +2739,10 @@ function createProcessFeedRow(ctx, type, initialText, streamOpts, runSessionId, 
     var txtForUi = initialText;
     if (type === 'llm-reasoning' || type === 'llm-response') txtForUi = trimSurroundingBlankLines(txtForUi);
     sc.textContent = truncateLogTextForUi(txtForUi);
-    if (streamOpts.streaming && (type === 'llm-reasoning' || type === 'llm-response')) chunk.classList.add('is-streaming');
+    if (streamOpts.streaming && (type === 'llm-reasoning' || type === 'llm-response')) {
+        chunk.classList.add('is-streaming');
+        row.setAttribute('data-llm-live-row', '1');
+    }
     bindFeedChunkInteraction(chunk);
     bindFeedChunkScrollChain(sc);
     body.appendChild(row);
@@ -2827,6 +2831,7 @@ function upsertLlmFeedRow(ctx, content, logType, runSessionId, reactIter) {
             ch.classList.remove('is-streaming');
             scheduleFeedChunkOverflowRefresh(ch);
         }
+        existing.removeAttribute('data-llm-live-row');
         if (ctx.llm) resetLlmState(ctx);
         var agg = existing.closest && existing.closest('.process-aggregate');
         if (agg) {
@@ -2841,8 +2846,10 @@ function upsertLlmFeedRow(ctx, content, logType, runSessionId, reactIter) {
 }
 
 function findExistingLlmFeedRow(ctx, logType, reactIter) {
-    if (!ctx || reactIter == null) return null;
-    var selector = '.feed-item[data-log-type="' + logType + '"][data-react-iter="' + reactIter + '"]';
+    if (!ctx) return null;
+    var selector = '.feed-item[data-log-type="' + logType + '"]';
+    if (reactIter != null) selector += '[data-react-iter="' + reactIter + '"]';
+    else selector += '[data-llm-live-row="1"]';
     var roots = [];
     if (ctx.currentProcessGroup && ctx.currentProcessGroup.isConnected) roots.push(ctx.currentProcessGroup);
     if (ctx.stream && ctx.stream.querySelectorAll) roots.push(ctx.stream);
@@ -2904,6 +2911,33 @@ function appendMessage(ctx, role, content, meta, runSessionId) {
     meta = meta || {};
     ensureUserMessageTimeAutoRefresh();
     stripWelcome(ctx);
+    if (role === 'user' && meta.eventIndex != null && Number.isFinite(Number(meta.eventIndex))) {
+        var streamRoot = (ctx && ctx.stream) || chatContainer;
+        var existingUser = null;
+        if (streamRoot && streamRoot.querySelector && typeof CSS !== 'undefined' && CSS.escape) {
+            try {
+                existingUser = streamRoot.querySelector('.msg-wrap--user[data-event-index="' + CSS.escape(String(meta.eventIndex)) + '"]');
+            } catch (e) { existingUser = null; }
+        }
+        if (existingUser) {
+            var existingMessage = existingUser.querySelector('.message');
+            var rawStrExisting = content == null ? '' : String(content);
+            if (existingMessage && messageRawMarkdown.get(existingUser) !== rawStrExisting) {
+                messageRawMarkdown.set(existingUser, rawStrExisting);
+                existingMessage.textContent = rawStrExisting;
+                linkifyAssistantTextNodes(existingMessage);
+                renderUserMessageContent(existingUser, existingMessage, rawStrExisting, linkifyAssistantTextNodes);
+            }
+            if (meta.runtimeSeq != null && Number.isFinite(Number(meta.runtimeSeq)) && Number(meta.runtimeSeq) > 0) {
+                existingUser.setAttribute('data-runtime-seq', String(Math.floor(Number(meta.runtimeSeq))));
+            }
+            if (meta.createdAt || meta.created_at || meta.timestamp) {
+                existingUser.setAttribute('data-created-at', String(meta.createdAt || meta.created_at || meta.timestamp));
+            }
+            if (!replayingMessages) rebuildToc({ localOnly: true });
+            return existingUser;
+        }
+    }
     const wrap = document.createElement('div');
     wrap.className = 'msg-wrap msg-wrap--' + (role === 'user' ? 'user' : 'assistant');
     if (role === 'assistant') wrap.classList.add('msg-wrap--answer-frame');

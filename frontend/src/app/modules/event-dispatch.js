@@ -35,7 +35,7 @@ function renderEvent(ctx, event, eventIndex, runSessionId) {
     } else if (event.type === 'process_metrics') {
         applyProcessMetricsFromEvent(ctx, event);
     } else if (event.type === 'cache_stats') {
-        applyCacheStatsFromEvent(ctx, event);
+        applyCacheStatsFromEvent(ctx, event, runSessionId);
     } else if (event.type === 'tool_call') {
         var riTool = uiEventReactIter(event);
         if (event.raw_content) appendLog(ctx, event.raw_content, 'tool-call', runSessionId, riTool);

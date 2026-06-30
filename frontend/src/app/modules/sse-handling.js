@@ -150,7 +150,7 @@ async function consumeAgentSseResponse(response, runCtx, runSessionId, streamEve
                     else if (parsed.type === 'context_summary_delta') appendProgressStreamDelta(runCtx, parsed.delta, 'context-summary', runSessionId);
                     else if (parsed.type === 'key_context_delta') appendKeyContextStreamDelta(runCtx, parsed.delta, runSessionId);
                     else if (parsed.type === 'context_tokens') applyContextTokenLabelForCurrentSession();
-                    else if (parsed.type === 'cache_stats' && runSessionId === currentSessionId) applyCacheStatsFromEvent(runCtx, parsed);
+                    else if (parsed.type === 'cache_stats' && runSessionId === currentSessionId) applyCacheStatsFromEvent(runCtx, parsed, runSessionId);
                     else if (parsed.type === 'todo_plan' && runSessionId === currentSessionId) renderTodoPlanForCurrentSession();
                     else if (parsed.type === 'status') {
                         var statusContent = String(parsed.content || '');
@@ -877,6 +877,7 @@ async function sendFollowupNow(itemId, sessionId) {
                 sessionId: sid,
                 forceStart: true,
                 preserveInput: true,
+                asSteer: true,
             });
         }
         item.status = 'accepted';
@@ -1033,7 +1034,8 @@ async function sendMessage(options) {
     setSessionRunState(runSessionId, { controller: ac, ctx: runCtx, runId: clientRunId });
     setSendButtonState();
     syncSessionListIndicatorClasses();
-    applySessionEvent({ type: 'user', content: rawMessage, created_at: userSentAt }, {
+    const renderAsSteer = !!options.asSteer;
+    applySessionEvent({ type: renderAsSteer ? 'user_steer' : 'user', content: rawMessage, created_at: userSentAt, steer: renderAsSteer }, {
         sessionId: runSessionId,
         eventIndex: preCount,
         source: 'local-send',
@@ -1043,7 +1045,11 @@ async function sendMessage(options) {
         liveAutoFollow = true;
         streamChatNearBottom = true;
         streamProcNearBottom = true;
-        appendMessage(runCtx, 'user', rawMessage, { eventIndex: preCount, turnTruncateIdx: preCount, createdAt: userSentAt }, runSessionId);
+        if (renderAsSteer) {
+            appendLog(runCtx, rawMessage, 'user-steer', runSessionId);
+        } else {
+            appendMessage(runCtx, 'user', rawMessage, { eventIndex: preCount, turnTruncateIdx: preCount, createdAt: userSentAt }, runSessionId);
+        }
         if (!options.fromQueue && !options.preserveInput) {
             messageInput.value = '';
             persistInputDraft(runSessionId, '');
@@ -1059,6 +1065,7 @@ async function sendMessage(options) {
     formData.append('session_id', runSessionId);
     formData.append('client_run_id', clientRunId);
     formData.append('stream_protocol', 'runtime_v2');
+    if (renderAsSteer) formData.append('followup_steer', 'true');
     /* 发送后优先使用本轮 API usage/cache_stats 刷新 token；缺少 usage 时仍保留上一快照。 */
     if (!switchedAway) applyContextTokenLabelForCurrentSession();
     let streamEventIdx = preCount + 1;

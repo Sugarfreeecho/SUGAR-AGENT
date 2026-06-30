@@ -463,3 +463,57 @@ def test_astream_emits_final_before_title_generation(monkeypatch, tmp_path):
 
     assert title_call_seen, "title generation should still run for new sessions"
     assert any(ev.get("type") == "final" and ev.get("content") == "done" for ev in title_call_seen[0])
+
+
+def test_astream_can_record_initial_ui_message_as_user_steer(monkeypatch, tmp_path):
+    import agent_loop
+
+    ui_events = []
+
+    class _SessionManager:
+        sessions_dir = tmp_path
+
+        def clear_interrupt(self, *args, **kwargs):
+            pass
+
+        def append_ui_event(self, session_id, event):
+            ui_events.append((session_id, dict(event)))
+
+        def _load_metadata(self, session_id):
+            return {"name": "existing"}
+
+        def set_session_name(self, *args, **kwargs):
+            pass
+
+        def mark_session_unread_result(self, *args, **kwargs):
+            pass
+
+    async def fake_run_react(state, emit):
+        out = dict(state)
+        out["final_response"] = "done"
+        return out
+
+    monkeypatch.setattr(agent_loop, "session_manager", _SessionManager())
+    monkeypatch.setattr(agent_loop, "_load_key_context_for_run", lambda session_id: "")
+    monkeypatch.setattr(agent_loop, "_load_model_history_dicts_v2_primary", lambda session_id, reconcile_legacy=True: [])
+    monkeypatch.setattr(agent_loop, "_load_work_history_dicts_for_run", lambda session_id: [])
+    monkeypatch.setattr(agent_loop, "_sanitize_loaded_histories_for_new_run", lambda sid, work, llm, key, reason: (work, llm))
+    monkeypatch.setattr(agent_loop.todo_manager, "sync_session_from_key_context", lambda *args, **kwargs: None)
+    monkeypatch.setattr(agent_loop, "setup_logging", lambda *args, **kwargs: None)
+    monkeypatch.setattr(agent_loop, "_runtime_v2_append_model_message", lambda *args, **kwargs: None)
+    monkeypatch.setattr(agent_loop, "_persist_state", lambda *args, **kwargs: None)
+    monkeypatch.setattr(agent_loop, "_persist_session_messages_with_model_replace", lambda *args, **kwargs: None)
+    monkeypatch.setattr(agent_loop, "_run_react_node_off_loop", fake_run_react)
+
+    async def collect():
+        async for _ev in agent_loop.astream_events(
+            "follow up",
+            session_id="s-followup",
+            ui_user_event_type="user_steer",
+        ):
+            pass
+
+    asyncio.run(collect())
+
+    assert ("s-followup", {"type": "user_steer", "content": "follow up", "steer": True}) in ui_events
+    assert ("s-followup", {"type": "user", "content": "follow up"}) not in ui_events

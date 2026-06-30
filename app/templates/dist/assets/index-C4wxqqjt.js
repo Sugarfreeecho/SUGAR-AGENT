@@ -5999,7 +5999,7 @@ function uiEventReactIter(ev) {\r
     return n;\r
 }\r
 \r
-function applyCacheStatsFromEvent(ctx, event) {\r
+function applyCacheStatsFromEvent(ctx, event, runSessionId) {
     if (!event || typeof event !== 'object') return;\r
     var agg = resolveSubagentAggFromCtx(ctx);\r
     if (!agg || !agg.isConnected) {\r
@@ -6017,8 +6017,9 @@ function applyCacheStatsFromEvent(ctx, event) {\r
     if (event.input_tokens != null) agg.dataset.procCacheInput = String(Math.max(0, Math.floor(Number(event.input_tokens))));
     if (event.output_tokens != null) agg.dataset.procCacheOutput = String(Math.max(0, Math.floor(Number(event.output_tokens))));
     if (event.tokens_per_sec != null) agg.dataset.procCacheTps = String(Math.max(0, Number(event.tokens_per_sec)));
-    if (currentSessionId && event.input_tokens != null && Number.isFinite(Number(event.input_tokens))) {
-        recordContextTokens(currentSessionId, Math.max(0, Math.floor(Number(event.input_tokens))), event.threshold);
+    var tokenSessionId = runSessionId || event.session_id || event.sessionId || '';
+    if (tokenSessionId && event.input_tokens != null && Number.isFinite(Number(event.input_tokens))) {
+        recordContextTokens(tokenSessionId, Math.max(0, Math.floor(Number(event.input_tokens))), event.threshold);
     }
     refreshAggregateStatsSmart(agg);
 }
@@ -7927,11 +7928,14 @@ function createProcessFeedRow(ctx, type, initialText, streamOpts, runSessionId, 
         + '<div class="feed-chunk">'\r
         + '<div class="feed-chunk-scroller"></div></div></div>';\r
     const chunk = row.querySelector('.feed-chunk');\r
-    const sc = row.querySelector('.feed-chunk-scroller');\r
-    var txtForUi = initialText;\r
-    if (type === 'llm-reasoning' || type === 'llm-response') txtForUi = trimSurroundingBlankLines(txtForUi);\r
-    sc.textContent = truncateLogTextForUi(txtForUi);\r
-    if (streamOpts.streaming && (type === 'llm-reasoning' || type === 'llm-response')) chunk.classList.add('is-streaming');\r
+    const sc = row.querySelector('.feed-chunk-scroller');
+    var txtForUi = initialText;
+    if (type === 'llm-reasoning' || type === 'llm-response') txtForUi = trimSurroundingBlankLines(txtForUi);
+    sc.textContent = truncateLogTextForUi(txtForUi);
+    if (streamOpts.streaming && (type === 'llm-reasoning' || type === 'llm-response')) {
+        chunk.classList.add('is-streaming');
+        row.setAttribute('data-llm-live-row', '1');
+    }
     bindFeedChunkInteraction(chunk);\r
     bindFeedChunkScrollChain(sc);\r
     body.appendChild(row);\r
@@ -8020,6 +8024,7 @@ function upsertLlmFeedRow(ctx, content, logType, runSessionId, reactIter) {
             ch.classList.remove('is-streaming');
             scheduleFeedChunkOverflowRefresh(ch);
         }
+        existing.removeAttribute('data-llm-live-row');
         if (ctx.llm) resetLlmState(ctx);
         var agg = existing.closest && existing.closest('.process-aggregate');
         if (agg) {
@@ -8034,8 +8039,10 @@ function upsertLlmFeedRow(ctx, content, logType, runSessionId, reactIter) {
 }
 
 function findExistingLlmFeedRow(ctx, logType, reactIter) {
-    if (!ctx || reactIter == null) return null;
-    var selector = '.feed-item[data-log-type="' + logType + '"][data-react-iter="' + reactIter + '"]';
+    if (!ctx) return null;
+    var selector = '.feed-item[data-log-type="' + logType + '"]';
+    if (reactIter != null) selector += '[data-react-iter="' + reactIter + '"]';
+    else selector += '[data-llm-live-row="1"]';
     var roots = [];
     if (ctx.currentProcessGroup && ctx.currentProcessGroup.isConnected) roots.push(ctx.currentProcessGroup);
     if (ctx.stream && ctx.stream.querySelectorAll) roots.push(ctx.stream);
@@ -8093,11 +8100,38 @@ function ensureUserMessageTimeAutoRefresh() {\r
     setInterval(function () { refreshUserMessageTimes(document); }, 60000);\r
 }\r
 \r
-function appendMessage(ctx, role, content, meta, runSessionId) {\r
-    meta = meta || {};\r
-    ensureUserMessageTimeAutoRefresh();\r
-    stripWelcome(ctx);\r
-    const wrap = document.createElement('div');\r
+function appendMessage(ctx, role, content, meta, runSessionId) {
+    meta = meta || {};
+    ensureUserMessageTimeAutoRefresh();
+    stripWelcome(ctx);
+    if (role === 'user' && meta.eventIndex != null && Number.isFinite(Number(meta.eventIndex))) {
+        var streamRoot = (ctx && ctx.stream) || chatContainer;
+        var existingUser = null;
+        if (streamRoot && streamRoot.querySelector && typeof CSS !== 'undefined' && CSS.escape) {
+            try {
+                existingUser = streamRoot.querySelector('.msg-wrap--user[data-event-index="' + CSS.escape(String(meta.eventIndex)) + '"]');
+            } catch (e) { existingUser = null; }
+        }
+        if (existingUser) {
+            var existingMessage = existingUser.querySelector('.message');
+            var rawStrExisting = content == null ? '' : String(content);
+            if (existingMessage && messageRawMarkdown.get(existingUser) !== rawStrExisting) {
+                messageRawMarkdown.set(existingUser, rawStrExisting);
+                existingMessage.textContent = rawStrExisting;
+                linkifyAssistantTextNodes(existingMessage);
+                renderUserMessageContent(existingUser, existingMessage, rawStrExisting, linkifyAssistantTextNodes);
+            }
+            if (meta.runtimeSeq != null && Number.isFinite(Number(meta.runtimeSeq)) && Number(meta.runtimeSeq) > 0) {
+                existingUser.setAttribute('data-runtime-seq', String(Math.floor(Number(meta.runtimeSeq))));
+            }
+            if (meta.createdAt || meta.created_at || meta.timestamp) {
+                existingUser.setAttribute('data-created-at', String(meta.createdAt || meta.created_at || meta.timestamp));
+            }
+            if (!replayingMessages) rebuildToc({ localOnly: true });
+            return existingUser;
+        }
+    }
+    const wrap = document.createElement('div');
     wrap.className = 'msg-wrap msg-wrap--' + (role === 'user' ? 'user' : 'assistant');\r
     if (role === 'assistant') wrap.classList.add('msg-wrap--answer-frame');\r
     if (meta.eventIndex != null) wrap.setAttribute('data-event-index', String(meta.eventIndex));\r
@@ -9207,7 +9241,7 @@ function updateSubagentBlockFinish(ctx, event) {
     } else if (event.type === 'process_metrics') {
         applyProcessMetricsFromEvent(ctx, event);
     } else if (event.type === 'cache_stats') {
-        applyCacheStatsFromEvent(ctx, event);
+        applyCacheStatsFromEvent(ctx, event, runSessionId);
     } else if (event.type === 'tool_call') {
         var riTool = uiEventReactIter(event);
         if (event.raw_content) appendLog(ctx, event.raw_content, 'tool-call', runSessionId, riTool);
@@ -10521,7 +10555,7 @@ async function createNewSessionInner() {\r
                     else if (parsed.type === 'context_summary_delta') appendProgressStreamDelta(runCtx, parsed.delta, 'context-summary', runSessionId);
                     else if (parsed.type === 'key_context_delta') appendKeyContextStreamDelta(runCtx, parsed.delta, runSessionId);
                     else if (parsed.type === 'context_tokens') applyContextTokenLabelForCurrentSession();
-                    else if (parsed.type === 'cache_stats' && runSessionId === currentSessionId) applyCacheStatsFromEvent(runCtx, parsed);
+                    else if (parsed.type === 'cache_stats' && runSessionId === currentSessionId) applyCacheStatsFromEvent(runCtx, parsed, runSessionId);
                     else if (parsed.type === 'todo_plan' && runSessionId === currentSessionId) renderTodoPlanForCurrentSession();
                     else if (parsed.type === 'status') {
                         var statusContent = String(parsed.content || '');
@@ -11248,6 +11282,7 @@ async function sendFollowupNow(itemId, sessionId) {
                 sessionId: sid,
                 forceStart: true,
                 preserveInput: true,
+                asSteer: true,
             });
         }
         item.status = 'accepted';
@@ -11404,7 +11439,8 @@ async function sendMessage(options) {
     setSessionRunState(runSessionId, { controller: ac, ctx: runCtx, runId: clientRunId });
     setSendButtonState();
     syncSessionListIndicatorClasses();
-    applySessionEvent({ type: 'user', content: rawMessage, created_at: userSentAt }, {
+    const renderAsSteer = !!options.asSteer;
+    applySessionEvent({ type: renderAsSteer ? 'user_steer' : 'user', content: rawMessage, created_at: userSentAt, steer: renderAsSteer }, {
         sessionId: runSessionId,
         eventIndex: preCount,
         source: 'local-send',
@@ -11414,7 +11450,11 @@ async function sendMessage(options) {
         liveAutoFollow = true;
         streamChatNearBottom = true;
         streamProcNearBottom = true;
-        appendMessage(runCtx, 'user', rawMessage, { eventIndex: preCount, turnTruncateIdx: preCount, createdAt: userSentAt }, runSessionId);
+        if (renderAsSteer) {
+            appendLog(runCtx, rawMessage, 'user-steer', runSessionId);
+        } else {
+            appendMessage(runCtx, 'user', rawMessage, { eventIndex: preCount, turnTruncateIdx: preCount, createdAt: userSentAt }, runSessionId);
+        }
         if (!options.fromQueue && !options.preserveInput) {
             messageInput.value = '';
             persistInputDraft(runSessionId, '');
@@ -11430,6 +11470,7 @@ async function sendMessage(options) {
     formData.append('session_id', runSessionId);
     formData.append('client_run_id', clientRunId);
     formData.append('stream_protocol', 'runtime_v2');
+    if (renderAsSteer) formData.append('followup_steer', 'true');
     /* 发送后优先使用本轮 API usage/cache_stats 刷新 token；缺少 usage 时仍保留上一快照。 */
     if (!switchedAway) applyContextTokenLabelForCurrentSession();
     let streamEventIdx = preCount + 1;

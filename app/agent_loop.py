@@ -3238,6 +3238,7 @@ async def astream_events(
     session_id: str = None,
     should_stop: Optional[Callable[[str], bool]] = None,
     run_id: Optional[str] = None,
+    ui_user_event_type: str = "user",
 ) -> AsyncGenerator[Dict[str, Any], None]:
     """
     顺序执行 react_node → validate_final（无独立校验 LLM）→ finish，通过队列实时向前端推送事件。
@@ -3350,7 +3351,11 @@ async def astream_events(
             mirror_runtime_v2("run_started", {"mode": "chat"})
             _runtime_v2_append_model_message(state, user_message)
             await emit({"type": "run_started", "run_id": runtime_v2_run_id, "ephemeral": True})
-            session_manager.append_ui_event(session_id, {"type": "user", "content": user_input})
+            user_ui_type = "user_steer" if str(ui_user_event_type or "") == "user_steer" else "user"
+            user_ui_event = {"type": user_ui_type, "content": user_input}
+            if user_ui_type == "user_steer":
+                user_ui_event["steer"] = True
+            session_manager.append_ui_event(session_id, user_ui_event)
             await emit({"type": "status", "content": "New Agent Loop Start"})
             state = await _run_react_node_off_loop(state, emit)
             await emit({"type": "status", "content": "Loop finished"})
