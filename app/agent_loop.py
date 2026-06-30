@@ -430,33 +430,37 @@ def _wrap_read_only_tool_output_lines(text: Any, max_chars: int = READ_ONLY_TOOL
 
 def compute_context_tokens_for_session(session_id: str) -> Dict[str, Any]:
     """
-    与 react_node 中发往模型前的整包输入 token 估算一致；每次现读 llm_history / key_context，不依赖前端缓存。
+    与 react_node 中发往模型前的整包输入 token 估算一致；不依赖前端缓存。
 
     不含仅在循环中途临时插入的系统条目不包含在内（与稳定快照相比误差通常很小）。
     """
-    if not (session_id and str(session_id).strip()):
+    sid = str(session_id or "").strip()
+    if not sid:
         return {"ok": False, "error": "invalid session_id"}
-    try:
-        _sid, _dialogue, _wm, llm_history_dicts, key_context, _md = session_manager.get_or_create_session(
-            str(session_id).strip()
-        )
-    except Exception as e:
-        return {"ok": False, "error": str(e)}
+    if _runtime_v2_is_primary():
+        llm_history_dicts = _load_runtime_v2_model_history_dicts(sid)
+        key_context = _load_runtime_v2_context_summary(sid)
+    else:
+        try:
+            _sid, _dialogue, _wm, llm_history_dicts, key_context, _md = session_manager.get_or_create_session(sid)
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
 
     llm_history = [_dict_to_message(m) for m in llm_history_dicts]
     full_input_est = estimate_full_input_tokens_for_llm_history(
-        str(session_id).strip(),
+        sid,
         llm_history,
         key_context or "",
     )
     _client, active_model, _max_out, active_context_window = resolve_executor_config_for_session(
-        str(session_id).strip()
+        sid
     )
     return {
         "ok": True,
         "estimated": int(full_input_est),
         "threshold": int(active_context_window),
         "model": active_model,
+        "source": "runtime_v2_projection" if _runtime_v2_is_primary() else "legacy_history",
     }
 
 # ==================== 辅助函数：实时持久化 ====================
@@ -572,6 +576,20 @@ def _load_runtime_v2_model_history_dicts(session_id: str) -> List[Dict[str, Any]
     except Exception as exc:
         logger.debug("Runtime V2 model projection read failed: %s", exc)
         return []
+
+
+def _load_runtime_v2_context_summary(session_id: str) -> str:
+    try:
+        from runtime_v2 import SnapshotStore
+
+        snapshot = SnapshotStore(session_manager.sessions_dir).read(session_id)
+        context = snapshot.get("context") if isinstance(snapshot, dict) else {}
+        summary = context.get("summary") if isinstance(context, dict) else {}
+        if isinstance(summary, dict):
+            return str(summary.get("summary") or "")
+    except Exception as exc:
+        logger.debug("Runtime V2 context summary read failed: %s", exc)
+    return ""
 
 
 def _load_model_history_dicts_v2_primary(session_id: str, *, reconcile_legacy: bool) -> List[Dict[str, Any]]:

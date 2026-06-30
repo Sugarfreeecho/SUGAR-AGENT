@@ -49,6 +49,46 @@ def test_runtime_v2_model_history_empty_projection_does_not_fallback_legacy(monk
     assert messages == []
 
 
+def test_runtime_v2_context_token_compute_uses_projection_not_legacy(monkeypatch):
+    import agent_loop
+
+    captured = {}
+
+    class _SessionManager:
+        sessions_dir = Path("unused")
+
+        def get_or_create_session(self, session_id):
+            raise AssertionError("Runtime V2 context token compute must not read legacy session history")
+
+    def fake_estimate(session_id, messages, key_context):
+        captured["session_id"] = session_id
+        captured["messages"] = messages
+        captured["key_context"] = key_context
+        return 123
+
+    monkeypatch.setattr(agent_loop, "session_manager", _SessionManager())
+    monkeypatch.setattr(agent_loop, "_runtime_v2_is_primary", lambda: True)
+    monkeypatch.setattr(agent_loop, "_load_runtime_v2_model_history_dicts", lambda _sid: [
+        {"type": "user", "content": "hello"},
+    ])
+    monkeypatch.setattr(agent_loop, "_load_runtime_v2_context_summary", lambda _sid: "summary")
+    monkeypatch.setattr(agent_loop, "estimate_full_input_tokens_for_llm_history", fake_estimate)
+    monkeypatch.setattr(agent_loop, "resolve_executor_config_for_session", lambda _sid: (None, "m", 1024, 4096))
+
+    result = agent_loop.compute_context_tokens_for_session("s1")
+
+    assert result == {
+        "ok": True,
+        "estimated": 123,
+        "threshold": 4096,
+        "model": "m",
+        "source": "runtime_v2_projection",
+    }
+    assert captured["session_id"] == "s1"
+    assert captured["messages"][0].content == "hello"
+    assert captured["key_context"] == "summary"
+
+
 def test_agent_loop_does_not_auto_backfill_v2_model_history_from_legacy():
     source = (APP_DIR / "agent_loop.py").read_text(encoding="utf-8")
 
