@@ -165,12 +165,13 @@ def test_runtime_v2_run_does_not_load_work_messages(monkeypatch):
     assert agent_loop._load_work_history_dicts_for_run("s1") == []
 
 
-def test_runtime_v2_persist_does_not_save_legacy_histories(monkeypatch):
+def test_runtime_v2_persist_does_not_save_legacy_histories(monkeypatch, tmp_path):
     import agent_loop
-
-    calls = []
+    from runtime_v2 import SnapshotStore
 
     class _SessionManager:
+        sessions_dir = None
+
         def update_session(self, *args, **kwargs):
             raise AssertionError("Runtime V2 persist must not write work_messages")
 
@@ -184,15 +185,17 @@ def test_runtime_v2_persist_does_not_save_legacy_histories(monkeypatch):
             raise AssertionError("Runtime V2 persist must not save legacy work_messages")
 
         def _save_key_context(self, *args, **kwargs):
-            calls.append(("key_context", args, kwargs))
+            raise AssertionError("Runtime V2 persist must not save legacy key_context")
 
         def _save_dialogue_history(self, *args, **kwargs):
-            calls.append(("dialogue", args, kwargs))
+            raise AssertionError("Runtime V2 persist must not save legacy dialogue_history")
 
         def dialogue_dicts_from_ui_events_file(self, session_id):
-            return []
+            raise AssertionError("Runtime V2 persist must not read legacy ui_events for dialogue_history")
 
-    monkeypatch.setattr(agent_loop, "session_manager", _SessionManager())
+    manager = _SessionManager()
+    manager.sessions_dir = tmp_path
+    monkeypatch.setattr(agent_loop, "session_manager", manager)
     monkeypatch.setattr(agent_loop, "_runtime_v2_is_primary", lambda: True)
 
     agent_loop._persist_session_messages(
@@ -200,12 +203,26 @@ def test_runtime_v2_persist_does_not_save_legacy_histories(monkeypatch):
             "session_id": "s1",
             "work_messages": [agent_loop.UserMessage(content="legacy")],
             "llm_history": [agent_loop.UserMessage(content="hello")],
-            "key_context": "",
+            "key_context": "runtime v2 context",
         }
     )
 
-    assert [call[0] for call in calls] == ["key_context", "dialogue"]
-    assert calls[0][1][0] == "s1"
+    snapshot = SnapshotStore(tmp_path).read("s1")
+    summary = snapshot.get("context", {}).get("summary", {})
+    assert summary.get("summary") == "runtime v2 context"
+
+    event_log_path = tmp_path / "s1" / "events.jsonl"
+    before_events = event_log_path.read_text(encoding="utf-8")
+    agent_loop._persist_session_messages(
+        {
+            "session_id": "s1",
+            "work_messages": [agent_loop.UserMessage(content="legacy")],
+            "llm_history": [agent_loop.UserMessage(content="hello")],
+            "key_context": "runtime v2 context",
+        }
+    )
+    after_events = event_log_path.read_text(encoding="utf-8")
+    assert after_events == before_events
 
 
 def test_runtime_v2_continuation_empty_projection_does_not_reconcile(monkeypatch):

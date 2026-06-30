@@ -468,14 +468,7 @@ def _persist_session_messages(state: State) -> None:
     """work / llm / key_context 落盘；dialogue 由 llm 派生，dialogue_history 由 ui_events 派生。"""
     state["dialogue"] = derive_dialogue_from_assistant_history(state["llm_history"])
     if _runtime_v2_is_primary():
-        sid = state["session_id"]
-        if hasattr(session_manager, "_save_key_context"):
-            session_manager._save_key_context(sid, state.get("key_context", ""))
-        if hasattr(session_manager, "_save_dialogue_history"):
-            session_manager._save_dialogue_history(
-                sid,
-                session_manager.dialogue_dicts_from_ui_events_file(sid),
-            )
+        _runtime_v2_commit_context_summary(state)
         return
     _materialize_lazy_work_messages(state)
     session_manager.update_session(
@@ -675,6 +668,23 @@ def _runtime_v2_replace_model_history(state: State, messages: List[Any], reason:
         )
     except Exception as exc:
         logger.debug("Runtime V2 model replace failed: %s", exc)
+
+
+def _runtime_v2_commit_context_summary(state: State) -> None:
+    sid = str(state.get("session_id") or "").strip()
+    summary = str(state.get("key_context") or "")
+    if not sid or not summary.strip():
+        return
+    try:
+        from runtime_v2 import RuntimeHistoryOps, SnapshotStore
+
+        snapshot = SnapshotStore(session_manager.sessions_dir).read(sid)
+        current = snapshot.get("context", {}).get("summary", {}) if isinstance(snapshot, dict) else {}
+        if isinstance(current, dict) and str(current.get("summary") or "") == summary:
+            return
+        RuntimeHistoryOps(session_manager.sessions_dir).commit_context_summary(sid, summary)
+    except Exception as exc:
+        logger.debug("Runtime V2 context summary commit failed: %s", exc)
 
 
 def _runtime_v2_is_primary() -> bool:
