@@ -2303,7 +2303,7 @@ class SessionManager:
 
     def can_continue_react_session(self, session_id: str) -> bool:
         """True when a ReAct turn has user input but no final answer yet."""
-        events = self._load_ui_events(session_id)
+        events = self._load_ui_events_for_active_runtime(session_id)
         if not events:
             return False
         last_user_idx = -1

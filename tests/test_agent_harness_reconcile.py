@@ -170,6 +170,47 @@ def test_runtime_v2_active_ui_events_empty_projection_does_not_fallback_legacy(t
     assert events == []
 
 
+def test_runtime_v2_react_continue_uses_active_ui_projection(tmp_path):
+    import agent_harness
+    from runtime_v2 import RuntimeMirror
+
+    mirror = RuntimeMirror(tmp_path)
+    mirror.mirror_ui_event("s1", {"type": "user", "content": "unfinished"})
+
+    def fail_legacy(_sid):
+        raise AssertionError("Runtime V2 continue check must not read legacy ui_events")
+
+    mgr = _manager_with(
+        repository=_Repository(tmp_path),
+        _runtime_v2_primary=lambda: True,
+        _load_ui_events=fail_legacy,
+        _resolve_session_path=lambda sid: tmp_path / sid,
+    )
+
+    assert agent_harness.SessionManager.can_continue_react_session(mgr, "s1") is True
+
+
+def test_runtime_v2_react_continue_false_after_final_uses_projection(tmp_path):
+    import agent_harness
+    from runtime_v2 import RuntimeMirror
+
+    mirror = RuntimeMirror(tmp_path)
+    mirror.mirror_ui_event("s1", {"type": "user", "content": "u"})
+    mirror.mirror_ui_event("s1", {"type": "final", "content": "done"})
+
+    def fail_legacy(_sid):
+        raise AssertionError("Runtime V2 continue check must not read legacy ui_events")
+
+    mgr = _manager_with(
+        repository=_Repository(tmp_path),
+        _runtime_v2_primary=lambda: True,
+        _load_ui_events=fail_legacy,
+        _resolve_session_path=lambda sid: tmp_path / sid,
+    )
+
+    assert agent_harness.SessionManager.can_continue_react_session(mgr, "s1") is False
+
+
 def test_runtime_v2_truncate_only_changes_visible_range_without_legacy_rebuild():
     import agent_harness
 
