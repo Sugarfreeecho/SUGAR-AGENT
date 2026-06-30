@@ -2891,6 +2891,37 @@ class SessionManager:
         self._sync_ui_event_count_in_metadata(session_id, n)
         return n
 
+    def _apply_appended_ui_event_side_effects(self, session_id: str, event_copy: Dict[str, Any]) -> None:
+        if (
+            event_copy.get("type") == "user"
+            and not event_copy.get("_subagent_forward")
+            and not event_copy.get("_recap")
+            and not event_copy.get("_micro_context_shrink")
+        ):
+            preview = _normalize_sidebar_preview_text(str(event_copy.get("content") or ""), 180)
+            with self._session_metadata_lock(session_id):
+                meta = self._load_metadata_unlocked(session_id)
+                if not isinstance(meta, dict):
+                    meta = {}
+                if meta.get("last_user_preview") != preview:
+                    meta["last_user_preview"] = preview
+                    self._save_metadata_unlocked(session_id, meta)
+            changed = False
+            with self._lock:
+                for sess in self.index:
+                    if sess.get("id") == session_id:
+                        sess["last_user_preview"] = preview
+                        changed = True
+                        break
+            if changed:
+                self._save_index()
+            self.clear_session_unread_result(session_id)
+        elif event_copy.get("type") == "final":
+            final_status = "failed" if self._ui_event_final_is_failure(event_copy) else "success"
+            self.mark_session_unread_result(session_id, status=final_status)
+        elif event_copy.get("type") in ("run_interrupted", "run_failed"):
+            self.mark_session_unread_result(session_id, status="failed")
+
     def append_ui_event(self, session_id: str, event: Dict[str, Any]) -> None:
         """追加一条与 SSE 同结构的 UI 事件（供刷新时原样重放）。"""
         if not event or not isinstance(event, dict):
@@ -2908,16 +2939,23 @@ class SessionManager:
                 "created_at",
                 datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z"),
             )
+            runtime_v2_primary = None
+            runtime_v2_strict = None
             try:
                 from runtime_v2 import runtime_v2_primary, runtime_v2_strict
 
                 if runtime_v2_primary():
                     mirrored = self._mirror_ui_event_to_runtime_v2(session_id, event_copy)
-                    if mirrored is None and runtime_v2_strict():
+                    if mirrored is None:
                         raise RuntimeError("Runtime V2 did not accept ui_event")
+                    self._apply_appended_ui_event_side_effects(session_id, event_copy)
+                    return
             except Exception as mirror_error:
-                if "runtime_v2_strict" in locals() and runtime_v2_strict():
-                    raise
+                if runtime_v2_primary is not None and runtime_v2_primary():
+                    if runtime_v2_strict is None or runtime_v2_strict():
+                        raise
+                    logger.warning("Runtime V2 mirror ui_event failed for %s: %s", session_id, mirror_error)
+                    return
                 logger.warning("Runtime V2 mirror ui_event failed for %s: %s", session_id, mirror_error)
             events = self._load_ui_events(session_id)
             events.append(event_copy)
@@ -2935,35 +2973,7 @@ class SessionManager:
                         )
             except Exception as mirror_error:
                 logger.warning("Runtime V2 mirror ui_event after V1 write failed for %s: %s", session_id, mirror_error)
-            if (
-                event_copy.get("type") == "user"
-                and not event_copy.get("_subagent_forward")
-                and not event_copy.get("_recap")
-                and not event_copy.get("_micro_context_shrink")
-            ):
-                preview = _normalize_sidebar_preview_text(str(event_copy.get("content") or ""), 180)
-                with self._session_metadata_lock(session_id):
-                    meta = self._load_metadata_unlocked(session_id)
-                    if not isinstance(meta, dict):
-                        meta = {}
-                    if meta.get("last_user_preview") != preview:
-                        meta["last_user_preview"] = preview
-                        self._save_metadata_unlocked(session_id, meta)
-                changed = False
-                with self._lock:
-                    for sess in self.index:
-                        if sess.get("id") == session_id:
-                            sess["last_user_preview"] = preview
-                            changed = True
-                            break
-                if changed:
-                    self._save_index()
-                self.clear_session_unread_result(session_id)
-            elif event_copy.get("type") == "final":
-                final_status = "failed" if self._ui_event_final_is_failure(event_copy) else "success"
-                self.mark_session_unread_result(session_id, status=final_status)
-            elif event_copy.get("type") in ("run_interrupted", "run_failed"):
-                self.mark_session_unread_result(session_id, status="failed")
+            self._apply_appended_ui_event_side_effects(session_id, event_copy)
         except Exception as e:
             logger.warning(f"append_ui_event 失败: {e}")
 

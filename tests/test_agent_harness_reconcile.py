@@ -1,4 +1,6 @@
 import sys
+import threading
+from contextlib import nullcontext
 from pathlib import Path
 
 
@@ -496,6 +498,42 @@ def test_runtime_v2_write_subagent_task_output_writes_only_v2_store(tmp_path):
 
     assert output_path.endswith("output.md")
     assert store.read_task_output("parent", "agent1")["content"] == "final text"
+
+
+def test_runtime_v2_append_ui_event_writes_projection_not_legacy(monkeypatch):
+    import agent_harness
+    import runtime_v2
+
+    mirrored = []
+    saved_meta = []
+    cleared = []
+
+    def fail_legacy(*args, **kwargs):
+        raise AssertionError("Runtime V2 append_ui_event must not read/write legacy ui_events")
+
+    monkeypatch.setattr(runtime_v2, "runtime_v2_primary", lambda: True)
+    monkeypatch.setattr(runtime_v2, "runtime_v2_strict", lambda: True)
+
+    mgr = _manager_with(
+        index=[{"id": "s1"}],
+        _lock=threading.RLock(),
+        _session_metadata_lock=lambda sid: nullcontext(),
+        _load_metadata_unlocked=lambda sid: {},
+        _save_metadata_unlocked=lambda sid, meta: saved_meta.append((sid, dict(meta))),
+        _save_index=lambda: None,
+        clear_session_unread_result=lambda sid: cleared.append(sid),
+        _load_ui_events=fail_legacy,
+        _save_ui_events=fail_legacy,
+        _mirror_ui_event_to_runtime_v2=lambda sid, ev: mirrored.append((sid, dict(ev))) or object(),
+    )
+
+    agent_harness.SessionManager.append_ui_event(mgr, "s1", {"type": "user", "content": "hello"})
+
+    assert mirrored and mirrored[0][0] == "s1"
+    assert mirrored[0][1]["type"] == "user"
+    assert saved_meta == [("s1", {"last_user_preview": "hello"})]
+    assert mgr.index[0]["last_user_preview"] == "hello"
+    assert cleared == ["s1"]
 
 
 def test_runtime_v2_pending_subagent_results_do_not_fallback_legacy(tmp_path):
