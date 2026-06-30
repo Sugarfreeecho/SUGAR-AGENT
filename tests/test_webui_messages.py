@@ -517,6 +517,11 @@ def test_manual_runtime_sync_exports_v2_model_projection_to_legacy(monkeypatch, 
 
     result = webui._sync_runtime_session("s1")
 
+    assert result["model_v2_to_v1"]["action"] == "skipped"
+    assert fake.saved_llm_history == []
+
+    result = webui._sync_runtime_session("s1", export_legacy=True)
+
     assert result["model_v2_to_v1"]["action"] == "replace"
     assert result["model_v2_to_v1"]["written"] == 2
     assert fake.saved_llm_history == [[

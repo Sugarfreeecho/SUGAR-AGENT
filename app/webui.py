@@ -2799,7 +2799,7 @@ async def get_session_history_snapshot(
     return await asyncio.to_thread(_build_snapshot_response)
 
 
-def _sync_runtime_session(session_id: str) -> dict:
+def _sync_runtime_session(session_id: str, *, export_legacy: bool = False) -> dict:
     from runtime_v2.migration import RuntimeV2MigrationService
 
     service = RuntimeV2MigrationService(
@@ -2819,6 +2819,7 @@ def _sync_runtime_session(session_id: str) -> dict:
         save_legacy_ui_events=lambda events: session_manager._save_ui_events(session_id, events),
         load_legacy_model_messages=_load_legacy_model_messages,
         save_legacy_model_messages=lambda messages: session_manager._save_llm_history(session_id, messages),
+        export_legacy=bool(export_legacy),
     )
 
 
@@ -2886,12 +2887,15 @@ async def cancel_runtime_sync_queue():
 
 
 @fastapi_app.post("/sessions/{session_id}/runtime/sync")
-async def sync_session_runtime(session_id: str):
+async def sync_session_runtime(
+    session_id: str,
+    export_legacy: bool = Query(False, description="explicitly export Runtime V2 projection back to legacy files"),
+):
     import time as _time
 
     t0 = _time.perf_counter()
     try:
-        result = await run_in_threadpool(_sync_runtime_session, session_id)
+        result = await run_in_threadpool(_sync_runtime_session, session_id, export_legacy=bool(export_legacy))
     except Exception as exc:
         logger.warning("runtime sync failed for %s: %s", session_id, exc)
         return JSONResponse(content={"ok": False, "session_id": session_id, "error": str(exc)}, status_code=500)
@@ -2899,7 +2903,7 @@ async def sync_session_runtime(session_id: str):
     return JSONResponse(content=result)
 
 
-def _sync_all_runtime_sessions(limit: int = 0) -> dict:
+def _sync_all_runtime_sessions(limit: int = 0, *, export_legacy: bool = False) -> dict:
     rows = session_manager.list_sessions(include_archived=True)
     if limit and limit > 0:
         rows = rows[:limit]
@@ -2911,7 +2915,7 @@ def _sync_all_runtime_sessions(limit: int = 0) -> dict:
         if not sid:
             continue
         try:
-            result = _sync_runtime_session(sid)
+            result = _sync_runtime_session(sid, export_legacy=bool(export_legacy))
             ok_count += 1
         except Exception as exc:
             result = {"ok": False, "session_id": sid, "error": str(exc)}
@@ -2927,11 +2931,14 @@ def _sync_all_runtime_sessions(limit: int = 0) -> dict:
 
 
 @fastapi_app.post("/sessions/runtime/sync-all")
-async def sync_all_runtime_sessions(limit: int = Query(0, ge=0, le=10000)):
+async def sync_all_runtime_sessions(
+    limit: int = Query(0, ge=0, le=10000),
+    export_legacy: bool = Query(False, description="explicitly export Runtime V2 projection back to legacy files"),
+):
     import time as _time
 
     t0 = _time.perf_counter()
-    result = await run_in_threadpool(_sync_all_runtime_sessions, int(limit or 0))
+    result = await run_in_threadpool(_sync_all_runtime_sessions, int(limit or 0), export_legacy=bool(export_legacy))
     result["elapsed_ms"] = int((_time.perf_counter() - t0) * 1000)
     return JSONResponse(content=result)
 

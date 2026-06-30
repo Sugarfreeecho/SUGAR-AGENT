@@ -38,6 +38,7 @@ python scripts\audit_runtime_versions.py --repair-model --only-mismatches
 - Session title generation keeps the original executor `title_generator` behavior; final latency fixes must not change title semantics.
 - LLM reasoning/response stream chunks are merged across increasing `stream_seq` values instead of finalizing on every delta, preventing process blocks from fragmenting into many rows.
 - In V2 primary mode, todo state is restored from the Runtime V2 snapshot and updated through persistable `todo_plan`/`todo_updated` events; normal run setup and `update_todo` no longer read or write legacy `todo_plan.md`.
+- Runtime migration sync now defaults to migrating/backfilling V2 only; exporting Runtime V2 UI/model projections back to legacy files requires an explicit `export_legacy=true` request.
 
 ## Compatibility Boundary
 
@@ -57,3 +58,4 @@ python scripts\audit_runtime_versions.py --repair-model --only-mismatches
 - Legacy `key_context.md` and `dialogue_history` writes are reserved for V1 primary or explicit export/migration; V2 context consumers should read Runtime V2 snapshots.
 - Legacy `todo_plan.md` reads/writes are reserved for V1 primary or explicit migration/export; V2 todo consumers should read Runtime V2 snapshots.
 - The frontend final reconcile path must not fetch `/messages` after run completion; final visibility should be driven by the live SSE final or already-cached message records.
+- Runtime sync queue and automatic open-session sync must not write legacy files; legacy compatibility export is a separate explicit action via `export_legacy=true`.
