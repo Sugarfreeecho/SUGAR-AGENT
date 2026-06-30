@@ -4157,12 +4157,25 @@ class SessionManager:
             metadata["best_of_run_id"] = str(best_of_run_id)
             metadata["best_of_attempt"] = int(best_of_attempt or 0)
         self._register_subagent(child_id, parent_id)
-        self._save_work_messages(child_id, [])
-        self._save_llm_history(child_id, [])
-        self._save_key_context(child_id, "")
         self._save_metadata(child_id, metadata)
-        self._save_ui_events(child_id, [])
-        self._save_dialogue_history(child_id, [])
+        if self._runtime_v2_primary():
+            try:
+                self._runtime_subagent_store().upsert_task(parent_id, child_id, {
+                    "agent_id": child_id,
+                    "parent_session_id": parent_id,
+                    "description": desc,
+                    "subagent_type": stype,
+                    "status": "pending",
+                    **metadata,
+                })
+            except Exception as exc:
+                logger.debug("Runtime V2 subagent task seed failed: %s", exc)
+        else:
+            self._save_work_messages(child_id, [])
+            self._save_llm_history(child_id, [])
+            self._save_key_context(child_id, "")
+            self._save_ui_events(child_id, [])
+            self._save_dialogue_history(child_id, [])
         logger.info(
             "创建 subagent 会话 %s ← parent=%s path=%s type=%s depth=%s",
             child_id,
@@ -4198,6 +4211,28 @@ class SessionManager:
             readonly_strict=readonly_strict,
             forked_from_parent=True,
         )
+        if self._runtime_v2_primary():
+            try:
+                from runtime_v2 import RuntimeHistoryOps, RuntimeModelProjection, SnapshotStore
+
+                model_messages = RuntimeModelProjection(self.repository.sessions_dir).read_message_dicts(parent_id)
+                RuntimeHistoryOps(self.repository.sessions_dir).replace_model_history(
+                    child_id,
+                    copy.deepcopy(model_messages),
+                    reason="subagent_fork_from_parent",
+                )
+                parent_snapshot = SnapshotStore(self.repository.sessions_dir).read(parent_id)
+                context = parent_snapshot.get("context") if isinstance(parent_snapshot, dict) else {}
+                summary = context.get("summary") if isinstance(context, dict) else {}
+                text = str(summary.get("summary") or "") if isinstance(summary, dict) else ""
+                if text.strip():
+                    RuntimeHistoryOps(self.repository.sessions_dir).commit_context_summary(
+                        child_id,
+                        text,
+                    )
+            except Exception as exc:
+                logger.warning("Runtime V2 fork subagent history copy failed for %s: %s", child_id, exc)
+            return child_id
         llm_raw = self._load_llm_history(parent_id)
         work_raw = self._load_work_messages(parent_id)
         kc = self._load_key_context(parent_id)

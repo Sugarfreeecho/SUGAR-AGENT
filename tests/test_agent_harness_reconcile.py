@@ -1,5 +1,6 @@
 import sys
 import threading
+import uuid
 from contextlib import nullcontext
 from pathlib import Path
 
@@ -426,6 +427,58 @@ def test_runtime_v2_append_tail_mirrors_events_without_legacy_rebuild():
             {"tail_count": 2, "merged_event_count": 2},
         )
     ]
+
+
+def test_runtime_v2_create_subagent_does_not_initialize_legacy_histories(monkeypatch, tmp_path):
+    import agent_harness
+    from runtime_v2 import RuntimeSubagentStore
+
+    monkeypatch.setenv("RUNTIME_VERSION", "2")
+    parent_id = str(uuid.uuid4())
+    mgr = agent_harness.SessionManager(tmp_path, tmp_path / "sessions.json")
+    mgr._save_metadata(parent_id, {"name": "parent"})
+
+    child_id = mgr.create_subagent_session(parent_id, "desc", "generalPurpose", 1)
+
+    child_path = tmp_path / parent_id / "subagents" / child_id
+    assert (child_path / "metadata.json").is_file()
+    assert not (child_path / "work_messages.json").exists()
+    assert not (child_path / "llm_history.json").exists()
+    assert not (child_path / "ui_events.json").exists()
+    assert not (child_path / "dialogue_history.json").exists()
+    assert not (child_path / "key_context.md").exists()
+
+    tasks = RuntimeSubagentStore(tmp_path).list_tasks(parent_id)
+    assert any(row.get("task_id") == child_id and row.get("status") == "pending" for row in tasks)
+
+
+def test_runtime_v2_fork_subagent_uses_v2_projection_not_legacy(monkeypatch, tmp_path):
+    import agent_harness
+    from runtime_v2 import RuntimeHistoryOps, RuntimeModelProjection, SnapshotStore
+
+    monkeypatch.setenv("RUNTIME_VERSION", "2")
+    parent_id = str(uuid.uuid4())
+    mgr = agent_harness.SessionManager(tmp_path, tmp_path / "sessions.json")
+    mgr._save_metadata(parent_id, {"name": "parent"})
+    RuntimeHistoryOps(tmp_path).append_model_message(parent_id, "user", "from v2")
+    RuntimeHistoryOps(tmp_path).commit_context_summary(parent_id, "v2 summary")
+
+    def fail_legacy(*args, **kwargs):
+        raise AssertionError("Runtime V2 subagent fork must not read/write legacy histories")
+
+    monkeypatch.setattr(mgr, "_load_llm_history", fail_legacy)
+    monkeypatch.setattr(mgr, "_load_work_messages", fail_legacy)
+    monkeypatch.setattr(mgr, "_load_key_context", fail_legacy)
+    monkeypatch.setattr(mgr, "_save_llm_history", fail_legacy)
+    monkeypatch.setattr(mgr, "_save_work_messages", fail_legacy)
+    monkeypatch.setattr(mgr, "_save_key_context", fail_legacy)
+
+    child_id = mgr.fork_subagent_from_parent(parent_id, "desc", "generalPurpose", 1)
+
+    child_messages = RuntimeModelProjection(tmp_path).read_message_dicts(child_id)
+    child_summary = SnapshotStore(tmp_path).read(child_id).get("context", {}).get("summary", {})
+    assert child_messages == [{"type": "user", "content": "from v2"}]
+    assert child_summary.get("summary") == "v2 summary"
 
 
 def test_runtime_v2_subagent_output_does_not_fallback_legacy(tmp_path):
