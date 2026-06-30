@@ -428,6 +428,76 @@ def test_runtime_v2_subagent_output_reads_v2_store(tmp_path):
     assert result["content"] == "final text"
 
 
+def test_runtime_v2_subagent_task_list_does_not_fallback_legacy(tmp_path):
+    import agent_harness
+    from runtime_v2 import RuntimeSubagentStore
+
+    store = RuntimeSubagentStore(tmp_path)
+
+    def fail_legacy(*args, **kwargs):
+        raise AssertionError("Runtime V2 subagent task list must not read legacy task index")
+
+    mgr = _manager_with(
+        repository=_Repository(tmp_path),
+        _runtime_v2_primary=lambda: True,
+        _runtime_subagent_store=lambda: store,
+        _list_subagent_tasks_v1=fail_legacy,
+    )
+
+    assert agent_harness.SessionManager.list_subagent_tasks(mgr, "parent") == []
+
+
+def test_runtime_v2_upsert_subagent_task_writes_only_v2_store(tmp_path):
+    import agent_harness
+    from runtime_v2 import RuntimeSubagentStore
+
+    store = RuntimeSubagentStore(tmp_path)
+
+    def fail_legacy(*args, **kwargs):
+        raise AssertionError("Runtime V2 subagent task upsert must not write legacy task index")
+
+    mgr = _manager_with(
+        repository=_Repository(tmp_path),
+        _runtime_v2_primary=lambda: True,
+        _runtime_subagent_store=lambda: store,
+        _upsert_subagent_task_v1=fail_legacy,
+    )
+
+    agent_harness.SessionManager.upsert_subagent_task(mgr, "parent", "agent1", {"status": "running"})
+
+    tasks = store.list_tasks("parent")
+    assert len(tasks) == 1
+    assert tasks[0]["task_id"] == "agent1"
+    assert tasks[0]["status"] == "running"
+
+
+def test_runtime_v2_write_subagent_task_output_writes_only_v2_store(tmp_path):
+    import agent_harness
+    from runtime_v2 import RuntimeSubagentStore
+
+    store = RuntimeSubagentStore(tmp_path)
+
+    def fail_legacy(*args, **kwargs):
+        raise AssertionError("Runtime V2 subagent task output write must not touch legacy output path")
+
+    mgr = _manager_with(
+        repository=_Repository(tmp_path),
+        _runtime_v2_primary=lambda: True,
+        _runtime_subagent_store=lambda: store,
+        _get_session_path=fail_legacy,
+    )
+
+    output_path = agent_harness.SessionManager.write_subagent_task_output(
+        mgr,
+        "parent",
+        "agent1",
+        "final text",
+    )
+
+    assert output_path.endswith("output.md")
+    assert store.read_task_output("parent", "agent1")["content"] == "final text"
+
+
 def test_runtime_v2_pending_subagent_results_do_not_fallback_legacy(tmp_path):
     import agent_harness
     from runtime_v2 import RuntimeSubagentStore

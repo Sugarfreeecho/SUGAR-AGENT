@@ -634,6 +634,7 @@ SSE 是后端向前端展示 Agent 过程的主通道。事件至少应覆盖以
 - Runtime V2 下 `/context_tokens` 必须优先读 Runtime V2 snapshot；snapshot 无缓存时只能用 Runtime V2 model projection 与 context summary 估算，不得调用 legacy session history 合并路径。
 - Runtime V2 下 `/subagents` 普通展示必须只读 Runtime V2 subagent store / parent snapshot；V2 无 task/subagent 数据时返回空列表，不得回退扫描 legacy subagent 会话目录或 legacy task index。
 - Runtime V2 下 subagent output 与 pending/continue 状态必须只读写 Runtime V2 subagent store 与 V2 UI projection；output 缺失或 pending 为空时返回 V2 结果，不得回退读取或反写 legacy output、pending results、task index 或 `ui_events.json`。
+- Runtime V2 下 subagent task index 与虚拟 task output 写入必须只写 Runtime V2 subagent store；不得为了兼容同时反写 legacy `subagent_tasks.json` 或 `subagent_outputs/`。
 - Runtime V2 下普通 ReAct continue 可用性判断必须读取 Runtime V2 UI projection；不得为了判断最后一轮是否已有 final 而读取 legacy `ui_events.json`。
 - `RUNTIME_SYNC_ON_MESSAGES_OPEN` 不得在 Runtime V2 primary 正常打开会话时触发 legacy sync；旧数据迁移只允许通过显式 runtime sync/migration 接口执行。
 - 显式 runtime sync/migration 可以导出 Runtime V2 UI projection 与 model projection 到 legacy 文件，用于备份、兼容和人工迁移；该导出不得出现在普通打开、发送、刷新、TOC 或滚动恢复路径。

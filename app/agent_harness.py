@@ -2045,8 +2045,7 @@ class SessionManager:
     def list_subagent_tasks(self, parent_session_id: str) -> List[dict]:
         """读取父会话下的 subagent task 状态索引。"""
         if self._runtime_v2_primary():
-            rows = self._list_subagent_tasks_v2(parent_session_id)
-            return rows if rows else self._list_subagent_tasks_v1(parent_session_id)
+            return self._list_subagent_tasks_v2(parent_session_id)
         return self._list_subagent_tasks_v1(parent_session_id)
 
     def _upsert_subagent_task_v1(self, parent_session_id: str, task_id: str, patch: Dict[str, Any]) -> None:
@@ -2083,7 +2082,6 @@ class SessionManager:
             return
         if self._runtime_v2_primary():
             self._upsert_subagent_task_v2(parent_session_id, tid, patch)
-            self._upsert_subagent_task_v1(parent_session_id, tid, patch)
         else:
             self._upsert_subagent_task_v1(parent_session_id, tid, patch)
             self._upsert_subagent_task_v2(parent_session_id, tid, patch)
@@ -2154,13 +2152,7 @@ class SessionManager:
         """将虚拟 subagent task（如 best-of-n runner）输出写入父会话 outputs 目录。"""
         if self._runtime_v2_primary():
             try:
-                v2_path = self._runtime_subagent_store().write_task_output(parent_session_id, task_id, text)
-                tid = str(task_id or "").strip() or "subagent"
-                safe = re.sub(r"[^A-Za-z0-9_.-]+", "_", tid)
-                v1_path = self._get_session_path(parent_session_id) / "subagent_outputs" / f"{safe}.md"
-                v1_path.parent.mkdir(parents=True, exist_ok=True)
-                v1_path.write_text(str(text or ""), encoding="utf-8")
-                return v2_path
+                return self._runtime_subagent_store().write_task_output(parent_session_id, task_id, text)
             except Exception as exc:
                 logger.debug("Runtime V2 write subagent task output failed: %s", exc)
         tid = str(task_id or "").strip() or "subagent"
