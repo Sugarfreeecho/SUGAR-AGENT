@@ -29,6 +29,36 @@ def test_resolve_executor_config_uses_session_cache(monkeypatch):
     assert calls["metadata"] == 1
 
 
+def test_resolve_executor_config_reuses_profile_catalog(monkeypatch):
+    import agent_harness
+
+    agent_harness._invalidate_executor_config_cache()
+    calls = {"sorted": 0, "ids": 0}
+
+    monkeypatch.setattr(agent_harness.session_manager, "_load_metadata", lambda _sid: {})
+
+    def sorted_profiles(_root):
+        calls["sorted"] += 1
+        return []
+
+    def sorted_ids(_root):
+        calls["ids"] += 1
+        return ["__env__"]
+
+    monkeypatch.setattr(agent_harness.model_profiles, "sorted_profiles", sorted_profiles)
+    monkeypatch.setattr(agent_harness.model_profiles, "sorted_profile_ids_with_env", sorted_ids)
+
+    first = agent_harness.resolve_executor_config_for_session("s1")
+    second = agent_harness.resolve_executor_config_for_session("s2")
+
+    assert first == second
+    assert calls == {"sorted": 1, "ids": 1}
+
+    agent_harness._invalidate_executor_config_cache()
+    agent_harness.resolve_executor_config_for_session("s3")
+    assert calls == {"sorted": 2, "ids": 2}
+
+
 def test_metadata_sidecar_updates_do_not_invalidate_executor_config_cache(monkeypatch, tmp_path):
     import agent_harness
 

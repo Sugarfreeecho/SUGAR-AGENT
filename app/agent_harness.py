@@ -4858,17 +4858,36 @@ session_manager = SessionManager(SESSIONS_DIR, INDEX_FILE)
 
 _executor_override_cache: Dict[str, Tuple[Any, str]] = {}
 _executor_config_cache: Dict[str, Tuple[float, Tuple[Any, str, int, int]]] = {}
+_executor_profile_catalog_cache: Optional[Tuple[float, Dict[str, dict], List[str], str]] = None
 _executor_config_cache_lock = threading.Lock()
 _EXECUTOR_CONFIG_CACHE_TTL_SEC = 10.0
 
 
 def _invalidate_executor_config_cache(session_id: str = "") -> None:
+    global _executor_profile_catalog_cache
     sid = str(session_id or "").strip()
     with _executor_config_cache_lock:
         if sid:
             _executor_config_cache.pop(sid, None)
         else:
             _executor_config_cache.clear()
+            _executor_profile_catalog_cache = None
+
+
+def _executor_profile_catalog(now: Optional[float] = None) -> Tuple[Dict[str, dict], List[str], str]:
+    global _executor_profile_catalog_cache
+    ts = time.monotonic() if now is None else float(now)
+    with _executor_config_cache_lock:
+        cached = _executor_profile_catalog_cache
+        if cached and ts - cached[0] <= _EXECUTOR_CONFIG_CACHE_TTL_SEC:
+            return cached[1], list(cached[2]), cached[3]
+    profiles = {str(p.get("id") or ""): p for p in model_profiles.sorted_profiles(PROJECT_ROOT)}
+    ordered_ids = model_profiles.sorted_profile_ids_with_env(PROJECT_ROOT)
+    first_id = ordered_ids[0] if ordered_ids else ""
+    top_profile_id = "" if first_id == "__env__" else first_id
+    with _executor_config_cache_lock:
+        _executor_profile_catalog_cache = (ts, profiles, list(ordered_ids), top_profile_id)
+    return profiles, list(ordered_ids), top_profile_id
 
 
 def _profile_candidate(profile: dict) -> Dict[str, Any]:
@@ -4907,18 +4926,21 @@ def _env_candidate() -> Dict[str, Any]:
     }
 
 
-def resolve_executor_candidates_for_session(session_id: str) -> List[Dict[str, Any]]:
+def resolve_executor_candidates_for_session(
+    session_id: str,
+    *,
+    profile_id_override: Optional[str] = None,
+) -> List[Dict[str, Any]]:
     sid = (session_id or "").strip()
-    profile_id = ""
-    if sid:
+    profile_id = str(profile_id_override or "").strip()
+    if sid and profile_id_override is None:
         try:
             meta = session_manager._load_metadata(sid)
         except Exception:
             meta = {}
         if isinstance(meta, dict):
             profile_id = str(meta.get("model_profile_id") or "").strip()
-    profiles = {str(p.get("id") or ""): p for p in model_profiles.sorted_profiles(PROJECT_ROOT)}
-    ordered_ids = model_profiles.sorted_profile_ids_with_env(PROJECT_ROOT)
+    profiles, ordered_ids, _top_profile_id = _executor_profile_catalog()
     candidates: List[Dict[str, Any]] = []
     seen: set[str] = set()
 
@@ -4972,7 +4994,7 @@ def resolve_executor_config_for_session(session_id: str) -> Tuple[Any, str, int,
         override = str(meta.get("executor_model") or "").strip()
         llm_type = str(meta.get("executor_llm_type") or EXECUTOR_LLM_TYPE).strip().lower()
     if profile_id:
-        candidates = resolve_executor_candidates_for_session(sid)
+        candidates = resolve_executor_candidates_for_session(sid, profile_id_override=profile_id)
         first = candidates[0]
         result = (
             FallbackOpenAIClient(candidates),
@@ -4983,9 +5005,9 @@ def resolve_executor_config_for_session(session_id: str) -> Tuple[Any, str, int,
         with _executor_config_cache_lock:
             _executor_config_cache[sid] = (now, result)
         return result
-    top_profile_id = model_profiles.top_profile_id_with_env(PROJECT_ROOT)
+    _profiles, _ordered_ids, top_profile_id = _executor_profile_catalog(now)
     if top_profile_id and not override:
-        candidates = resolve_executor_candidates_for_session(sid)
+        candidates = resolve_executor_candidates_for_session(sid, profile_id_override="")
         first = candidates[0]
         result = (
             FallbackOpenAIClient(candidates),

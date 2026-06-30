@@ -26,6 +26,7 @@ python scripts\audit_runtime_versions.py --repair-model --only-mismatches
 - In V2 primary mode, subagent tree/status/dialogue/metrics display paths now read child and parent UI history through the active runtime projection, with model-history fallback using `RuntimeModelProjection` instead of child `llm_history.json`.
 - The model-history loader now fails closed to the Runtime V2 projection path whenever V2 is primary; only the V1 primary branch may reconcile and read `llm_history.json`.
 - In V2 primary mode, run and continuation setup load key context from the Runtime V2 context snapshot instead of `key_context.md` and legacy todo migration.
+- Executor model configuration now reuses a short-lived profile catalog cache across sessions and avoids re-reading session metadata when building fallback candidates from already-loaded metadata.
 
 ## Compatibility Boundary
 
@@ -36,3 +37,4 @@ python scripts\audit_runtime_versions.py --repair-model --only-mismatches
 - Legacy child `ui_events.json` and `llm_history.json` reads remain part of the V1 subagent display path only. V2 subagent display should use active-runtime UI/model projections.
 - Legacy model-history reconcile/load remains part of the V1 primary path only. V2 API preparation must not fall back to legacy files after version-check or projection errors.
 - Legacy `key_context.md` loading and embedded todo migration remain part of the V1 run setup path only. V2 run setup should use Runtime V2 context snapshots.
+- Profile/catalog cache invalidation remains tied to explicit model profile/env updates through `_invalidate_executor_config_cache()`.
