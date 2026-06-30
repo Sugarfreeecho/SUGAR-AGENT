@@ -112,6 +112,21 @@ def test_frontend_session_load_logs_open_session_timing_from_snapshot():
     assert "logOpenSessionTiming(sessionId, {" in sessions
 
 
+def test_frontend_send_and_reattach_reuse_event_count_cache():
+    sessions = (ROOT / "frontend/src/app/modules/session-management.js").read_text(encoding="utf-8")
+    scroll = (ROOT / "frontend/src/app/modules/session-scroll-history.js").read_text(encoding="utf-8")
+    sse = (ROOT / "frontend/src/app/modules/sse-handling.js").read_text(encoding="utf-8")
+
+    assert "has(sessionId)" in sessions
+    assert "async function getUiEventCount(sessionId, opts)" in scroll
+    assert "opts.preferCache" in scroll
+    assert "uiEventCountCache.has(sid)" in scroll
+    assert "uiEventCountCache.updateFromServer(sid, count)" in scroll
+    assert "getUiEventCount(runSessionId, { preferCache: true })" in sse
+    assert "uiEventCountCache.updateFromServer(runSessionId, preCount + 1)" in sse
+    assert "getUiEventCount(submitSessionId).then" not in sse
+
+
 def test_frontend_suppressed_toc_rebuild_does_not_clear_started_toc():
     toc = (ROOT / "frontend/src/app/modules/toc-todo.js").read_text(encoding="utf-8")
     suppress_block = re.search(

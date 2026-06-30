@@ -524,6 +524,10 @@ const uiEventCountCache = {
     get(sessionId) {
         return this.cache.get(sessionId) || 0;
     },
+
+    has(sessionId) {
+        return this.cache.has(sessionId);
+    },
     
     set(sessionId, count) {
         this.cache.set(sessionId, count);

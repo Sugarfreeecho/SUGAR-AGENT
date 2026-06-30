@@ -435,7 +435,7 @@ async function startContinueAfterSubagents(sessionId) {
         }
         var ct = (response.headers.get('content-type') || '').toLowerCase();
         if (!response.ok || !response.body || ct.indexOf('text/event-stream') < 0) return;
-        const preCount = await getUiEventCount();
+        const preCount = await getUiEventCount(runSessionId, { preferCache: true });
         if (!getVisibleChatStream()) ensureVisibleChatStreamSlot();
         runCtx = newDomContext(getVisibleChatStream());
         initRunFinalTracking(runCtx);
@@ -536,7 +536,7 @@ async function attachSessionEventStream(sessionId, opts) {
         syncSessionListIndicatorClasses();
         liveAutoFollow = true;
         streamProcNearBottom = true;
-        const preCount = await getUiEventCount(runSessionId);
+        const preCount = await getUiEventCount(runSessionId, { preferCache: true });
         const streamUrl = '/sessions/' + encodeURIComponent(runSessionId)
             + '/stream?after_index=' + encodeURIComponent(String(preCount - 1));
         const response = await fetch(streamUrl, { signal: ac.signal });
@@ -1139,6 +1139,7 @@ async function sendMessage(options) {
         eventIndex: preCount,
         source: 'local-send',
     });
+    uiEventCountCache.updateFromServer(runSessionId, preCount + 1);
         if (!switchedAway) {
         liveAutoFollow = true;
         streamChatNearBottom = true;
@@ -1162,13 +1163,6 @@ async function sendMessage(options) {
     /* 发送后优先使用本轮 API usage/cache_stats 刷新 token；缺少 usage 时仍保留上一快照。 */
     if (!switchedAway) applyContextTokenLabelForCurrentSession();
     let streamEventIdx = preCount + 1;
-    
-    // 异步更新事件计数缓存（从服务器获取真实计数）
-    getUiEventCount(submitSessionId).then(function(serverCount) {
-        uiEventCountCache.updateFromServer(submitSessionId, serverCount);
-    }).catch(function(err) {
-        console.error('更新事件计数缓存失败:', err);
-    });
     let streamDisconnectedUnexpectedly = false;
     try {
         const response = await fetch('/chat', { method: 'POST', body: formData, signal: ac.signal });

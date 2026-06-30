@@ -1242,14 +1242,25 @@ function isNearBottom(el, thresholdPx) {
     return (el.scrollHeight - el.clientHeight - el.scrollTop) <= th;
 }
 
-async function getUiEventCount(sessionId) {
+async function getUiEventCount(sessionId, opts) {
+    opts = opts || {};
     const sid = sessionId != null ? sessionId : currentSessionId;
     if (!sid) return 0;
+    if (
+        opts.preferCache
+        && typeof uiEventCountCache !== 'undefined'
+        && typeof uiEventCountCache.has === 'function'
+        && uiEventCountCache.has(sid)
+    ) {
+        return uiEventCountCache.get(sid);
+    }
     try {
         const r = await fetch('/sessions/' + encodeURIComponent(sid) + '/messages/count');
         if (!r.ok) return 0;
         const j = await r.json();
-        return (j && typeof j.count === 'number') ? j.count : 0;
+        const count = (j && typeof j.count === 'number') ? j.count : 0;
+        if (typeof uiEventCountCache !== 'undefined') uiEventCountCache.updateFromServer(sid, count);
+        return count;
     } catch (e) { return 0; }
 }
 

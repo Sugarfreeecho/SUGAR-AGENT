@@ -30,6 +30,7 @@ python scripts\audit_runtime_versions.py --repair-model --only-mismatches
 - MCP tool definition setup now reuses a short-lived config-signature cache, reducing repeated config stat/hash work across rapid ReAct iterations while preserving explicit reload.
 - Frontend session switching now lets the V2 `history_snapshot` response own the initial TOC build; the legacy early `/user_turns` TOC request is only started when snapshot loading is explicitly disabled.
 - V2 `history_snapshot` now reuses the `total` returned by its page read instead of issuing a second count pass when the page already carries total event count.
+- Frontend send/reattach paths now prefer the event-count cache populated by snapshot/page loads; local send advances the cache immediately instead of issuing an extra `/messages/count` request during stream startup.
 
 ## Compatibility Boundary
 
@@ -44,3 +45,4 @@ python scripts\audit_runtime_versions.py --repair-model --only-mismatches
 - MCP config signature cache is cleared by `force_reload()` so saved MCP settings still rebuild server connections immediately.
 - Snapshot-backed session loads must not mark TOC as already started before messages render; otherwise TOC can be skipped or rebuilt out of order. The old early TOC path remains a compatibility path for `useSnapshot === false`.
 - Snapshot count fallback remains available only for malformed/legacy projection page payloads that do not include `total`.
+- Event-count cache is still refreshed by explicit count reads when no cache exists; stream startup should not add a background count request after the user bubble has already advanced the local event index.
