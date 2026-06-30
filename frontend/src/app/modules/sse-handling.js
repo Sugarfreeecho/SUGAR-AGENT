@@ -341,11 +341,6 @@ async function ensureFinalVisibleAfterRun(sessionId, ctx, opts) {
     if (sid !== currentSessionId) return false;
     stream = getVisibleChatStream();
     if (!stream || hasVisibleFinalAfterUser(stream, lastUserIdx)) return true;
-    var latestFinal = await fetchLatestStoredFinalRecord(sid);
-    if (sid !== currentSessionId) return false;
-    stream = getVisibleChatStream();
-    if (!stream || hasVisibleFinalAfterUser(stream, lastUserIdx)) return true;
-    if (latestFinal) return renderFinalRecordIfMissing(sid, ctx, stream, latestFinal, lastUserIdx);
     return false;
 }
 

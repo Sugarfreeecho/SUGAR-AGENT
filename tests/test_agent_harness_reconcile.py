@@ -280,7 +280,7 @@ def test_runtime_v2_branch_creates_v2_branch_without_legacy_rebuild(tmp_path):
         _load_metadata=lambda sid: {"name": "Source"},
         _save_metadata=lambda sid, meta: saved_meta.append((sid, dict(meta))),
         _save_index=lambda: saved_index.append(True),
-        _copy_branch_sidecar_files=lambda source, new: None,
+        _copy_branch_sidecar_files=fail_legacy,
         _observe_runtime_v2_history=lambda *args, **kwargs: observed.append((args, kwargs)),
         _load_llm_history=fail_legacy,
         _load_work_messages=fail_legacy,
@@ -309,6 +309,53 @@ def test_runtime_v2_branch_creates_v2_branch_without_legacy_rebuild(tmp_path):
             {"source_session_id": source_id, "branch_from_seq": 2, "name": "(1)Source"},
         )
     ]
+
+
+def test_delete_session_removes_subagent_descendants_and_index(tmp_path):
+    import json
+    import agent_harness
+
+    root_id = "11111111-1111-4111-8111-111111111111"
+    child_id = "22222222-2222-4222-8222-222222222222"
+    grandchild_id = "33333333-3333-4333-8333-333333333333"
+    other_id = "44444444-4444-4444-8444-444444444444"
+    sessions_dir = tmp_path / "sessions"
+    sessions_dir.mkdir()
+    index_file = sessions_dir / "sessions_index.json"
+    index_file.write_text(
+        json.dumps({
+            "sessions": [
+                {"id": root_id, "name": "root"},
+                {"id": child_id, "name": "child"},
+                {"id": other_id, "name": "other"},
+            ],
+        }),
+        encoding="utf-8",
+    )
+    for sid in (root_id, other_id):
+        path = sessions_dir / sid
+        path.mkdir(parents=True)
+        (path / "metadata.json").write_text("{}", encoding="utf-8")
+    nested_child = sessions_dir / root_id / "subagents" / child_id
+    nested_grandchild = nested_child / "subagents" / grandchild_id
+    nested_grandchild.mkdir(parents=True)
+    (nested_child / "metadata.json").write_text("{}", encoding="utf-8")
+    (nested_grandchild / "metadata.json").write_text("{}", encoding="utf-8")
+    (sessions_dir / "subagent_index.json").write_text(
+        json.dumps({child_id: root_id, grandchild_id: child_id}),
+        encoding="utf-8",
+    )
+
+    mgr = agent_harness.SessionManager(sessions_dir, index_file)
+    mgr.delete_session(root_id)
+
+    assert not (sessions_dir / root_id).exists()
+    assert not nested_child.exists()
+    assert not nested_grandchild.exists()
+    assert (sessions_dir / other_id).exists()
+    assert json.loads((sessions_dir / "subagent_index.json").read_text(encoding="utf-8")) == {}
+    rows = json.loads(index_file.read_text(encoding="utf-8"))["sessions"]
+    assert [row["id"] for row in rows] == [other_id]
 
 
 def test_runtime_v2_repair_and_reconcile_skip_legacy_rebuilds():

@@ -7930,11 +7930,13 @@ function appendLlmStreamDelta(ctx, ev, runSessionId) {\r
     if (!ctx || !ctx.llm) return;\r
     // 收到 reasoning/content 增量时，移除"正在思考中..."条目\r
     removeTemporaryStatus(ctx);\r
-    const l = ctx.llm;\r
-    const iter = ev.react_iter;\r
-    const seq = Number(ev.stream_seq || 0);\r
-    if (l.llmDeltaLastSeq !== null && seq !== l.llmDeltaLastSeq) finalizeLlmStreamChunks(ctx);\r
-    l.llmDeltaLastSeq = seq;\r
+    const l = ctx.llm;
+    const iter = ev.react_iter;
+    const seq = Number(ev.stream_seq || 0);
+    if (Number.isFinite(seq) && seq > 0) {
+        if (l.llmDeltaLastSeq !== null && seq < l.llmDeltaLastSeq) finalizeLlmStreamChunks(ctx);
+        l.llmDeltaLastSeq = seq;
+    }
     const part = ev.type === 'llm_reasoning_delta' ? 'reasoning' : 'response';\r
     const delta = String(ev.delta || '');\r
     if (!delta) return;\r
@@ -10640,11 +10642,6 @@ async function ensureFinalVisibleAfterRun(sessionId, ctx, opts) {
     if (sid !== currentSessionId) return false;
     stream = getVisibleChatStream();
     if (!stream || hasVisibleFinalAfterUser(stream, lastUserIdx)) return true;
-    var latestFinal = await fetchLatestStoredFinalRecord(sid);
-    if (sid !== currentSessionId) return false;
-    stream = getVisibleChatStream();
-    if (!stream || hasVisibleFinalAfterUser(stream, lastUserIdx)) return true;
-    if (latestFinal) return renderFinalRecordIfMissing(sid, ctx, stream, latestFinal, lastUserIdx);
     return false;
 }
 

@@ -32,6 +32,10 @@ python scripts\audit_runtime_versions.py --repair-model --only-mismatches
 - V2 `history_snapshot` now reuses the `total` returned by its page read instead of issuing a second count pass when the page already carries total event count.
 - Frontend send/reattach paths now prefer the event-count cache populated by snapshot/page loads; local send advances the cache immediately instead of issuing an extra `/messages/count` request during stream startup.
 - In V2 primary mode, normal state persistence now commits key context to the Runtime V2 context snapshot and no longer writes legacy `key_context.md` or `dialogue_history` as an implicit side effect.
+- V2 branch creation no longer copies legacy sidecar context/todo/compress files into the new branch; branch visible history is seeded from Runtime V2 events only.
+- Session deletion now removes subagent descendants recursively from disk, subagent index, and session index so deleted branches/subtrees cannot reappear after refresh.
+- Final finish no longer calls a model to generate the session title before emitting final; new-session titles use a local first-user preview on the hot path.
+- LLM reasoning/response stream chunks are merged across increasing `stream_seq` values instead of finalizing on every delta, preventing process blocks from fragmenting into many rows.
 
 ## Compatibility Boundary
 
@@ -48,3 +52,4 @@ python scripts\audit_runtime_versions.py --repair-model --only-mismatches
 - Snapshot count fallback remains available only for malformed/legacy projection page payloads that do not include `total`.
 - Event-count cache is still refreshed by explicit count reads when no cache exists; stream startup should not add a background count request after the user bubble has already advanced the local event index.
 - Legacy `key_context.md` and `dialogue_history` writes are reserved for V1 primary or explicit export/migration; V2 context consumers should read Runtime V2 snapshots.
+- The frontend final reconcile path must not fetch `/messages` after run completion; final visibility should be driven by the live SSE final or already-cached message records.

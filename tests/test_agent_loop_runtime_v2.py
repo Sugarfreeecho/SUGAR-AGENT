@@ -245,3 +245,43 @@ def test_runtime_v2_continuation_empty_projection_does_not_reconcile(monkeypatch
     import asyncio
 
     assert asyncio.run(collect()) == []
+
+
+def test_finish_does_not_call_model_for_session_title(monkeypatch):
+    import agent_loop
+
+    names = []
+
+    class _SessionManager:
+        def _load_metadata(self, session_id):
+            return {"name": "新会话"}
+
+        def set_session_name(self, session_id, title):
+            names.append((session_id, title))
+
+    monkeypatch.setattr(agent_loop, "session_manager", _SessionManager())
+    monkeypatch.setattr(
+        agent_loop,
+        "executor_text_and_usage",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("finish must not call model before final can be emitted")
+        ),
+    )
+    monkeypatch.setattr(agent_loop, "_persist_session_messages_with_model_replace", lambda *args, **kwargs: None)
+
+    state = {
+        "session_id": "s1",
+        "dialogue": [agent_loop.UserMessage(content="hello world from user")],
+        "work_messages": [],
+        "llm_history": [],
+        "stream_events": [],
+        "final_response": "done",
+        "final_printed": False,
+        "llm_calls": [],
+    }
+
+    out = agent_loop.finish(state)
+
+    assert out["final_printed"] is True
+    assert out["stream_events"][-1] == {"type": "final", "content": "done"}
+    assert names == [("s1", "hello world fro")]

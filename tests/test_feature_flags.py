@@ -62,6 +62,7 @@ def test_frontend_feature_entrypoints_are_flag_guarded():
     assert "if (ctx && ctx.seenFinal === true) return;" in sse
     assert "if (eventSessionId === runSessionId) markRunFinalSeen(runCtx);" in sse
     assert "await ensureFinalVisibleAfterRunIfEnabled" not in sse
+    assert "var latestFinal = await fetchLatestStoredFinalRecord(sid);" not in sse
     assert "function enqueueCurrentInputAsFollowup()" in sse
     assert "if (!isMyAgentFeatureEnabled('followupRestart', false)) return false;" in sse
     assert "function onFollowupInputKeydown(e)" in sse
@@ -125,6 +126,13 @@ def test_frontend_send_and_reattach_reuse_event_count_cache():
     assert "getUiEventCount(runSessionId, { preferCache: true })" in sse
     assert "uiEventCountCache.updateFromServer(runSessionId, preCount + 1)" in sse
     assert "getUiEventCount(submitSessionId).then" not in sse
+
+
+def test_frontend_llm_stream_seq_increments_do_not_split_chunks():
+    rendering = (ROOT / "frontend/src/app/modules/message-rendering.js").read_text(encoding="utf-8")
+
+    assert "seq < l.llmDeltaLastSeq" in rendering
+    assert "seq !== l.llmDeltaLastSeq" not in rendering
 
 
 def test_frontend_suppressed_toc_rebuild_does_not_clear_started_toc():

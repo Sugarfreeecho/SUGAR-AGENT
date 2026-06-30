@@ -2750,8 +2750,10 @@ function appendLlmStreamDelta(ctx, ev, runSessionId) {
     const l = ctx.llm;
     const iter = ev.react_iter;
     const seq = Number(ev.stream_seq || 0);
-    if (l.llmDeltaLastSeq !== null && seq !== l.llmDeltaLastSeq) finalizeLlmStreamChunks(ctx);
-    l.llmDeltaLastSeq = seq;
+    if (Number.isFinite(seq) && seq > 0) {
+        if (l.llmDeltaLastSeq !== null && seq < l.llmDeltaLastSeq) finalizeLlmStreamChunks(ctx);
+        l.llmDeltaLastSeq = seq;
+    }
     const part = ev.type === 'llm_reasoning_delta' ? 'reasoning' : 'response';
     const delta = String(ev.delta || '');
     if (!delta) return;

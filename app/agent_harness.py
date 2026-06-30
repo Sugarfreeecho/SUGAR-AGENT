@@ -3540,7 +3540,6 @@ class SessionManager:
                 }
             if self._runtime_v2_primary():
                 dst_path.mkdir(parents=True, exist_ok=False)
-                self._copy_branch_sidecar_files(sid, new_id)
                 meta = self._load_metadata(sid)
                 if not isinstance(meta, dict):
                     meta = {}
@@ -4464,16 +4463,36 @@ class SessionManager:
         except Exception:
             pass
         idx = self._load_subagent_index()
-        children = [cid for cid, pid in idx.items() if pid == sid]
-        for cid in children:
-            self._unregister_subagent(cid)
-        session_path = self._get_session_path(sid)
-        if session_path.exists():
-            shutil.rmtree(session_path)
-        self._unregister_subagent(sid)
-        self.index = [s for s in self.index if s["id"] != sid]
+        descendants: List[str] = []
+        stack = [sid]
+        while stack:
+            parent = stack.pop()
+            children = [cid for cid, pid in idx.items() if pid == parent]
+            for cid in children:
+                if cid in descendants:
+                    continue
+                descendants.append(cid)
+                stack.append(cid)
+        delete_ids = [sid] + descendants
+        for delete_id in reversed(delete_ids):
+            try:
+                session_path = self._get_session_path(delete_id)
+                if session_path.exists():
+                    shutil.rmtree(session_path)
+            except Exception as exc:
+                logger.warning("delete session path failed: %s %s", delete_id, exc)
+        idx = {cid: pid for cid, pid in idx.items() if cid not in delete_ids and pid not in delete_ids}
+        self._save_subagent_index(idx)
+        for delete_id in delete_ids:
+            try:
+                from session_lifecycle import mark_session_deleted
+
+                mark_session_deleted(delete_id)
+            except Exception:
+                pass
+        self.index = [s for s in self.index if s.get("id") not in set(delete_ids)]
         self._save_index()
-        logger.info(f"已删除会话: {sid}")
+        logger.info("已删除会话: %s descendants=%s", sid, len(descendants))
 
     def last_user_question_preview(self, session_id: str, max_len: int = 180) -> str:
         """最近一条用户提问的单行预览（侧栏）；优先 ui_events，其次 dialogue_history。"""
