@@ -10,6 +10,17 @@ from __future__ import annotations
 from typing import Any, Dict, Optional
 
 
+SUBAGENT_PARENT_FORWARD_BLOCKED_TYPES = frozenset(
+    {
+        # Child-local session state. Forwarding these through the parent SSE stream
+        # makes the frontend reducer apply them to the parent session before the
+        # event is routed to the subagent card.
+        "todo_plan",
+        "context_tokens",
+    }
+)
+
+
 def is_low_value_subagent_ui_event(ev: Dict[str, Any]) -> bool:
     """子会话 UI 不持久化空白/循环标记状态，避免卡片里出现噪声。"""
     if not isinstance(ev, dict):
@@ -46,6 +57,16 @@ def should_persist_ui_event(
         low_value_subagent_events
         or bool(meta.get("is_subagent"))
     ) and is_low_value_subagent_ui_event(ev):
+        return False
+    return True
+
+
+def should_forward_subagent_event_to_parent(ev: Any) -> bool:
+    """Whether a child event belongs in the parent live stream."""
+    if not ev or not isinstance(ev, dict):
+        return False
+    et = str(ev.get("type") or "")
+    if et in SUBAGENT_PARENT_FORWARD_BLOCKED_TYPES:
         return False
     return True
 

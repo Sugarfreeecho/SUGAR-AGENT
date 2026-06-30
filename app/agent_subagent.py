@@ -30,6 +30,7 @@ from agent_harness import (
     todo_manager,
 )
 from agent_subagent_events import (
+    should_forward_subagent_event_to_parent,
     should_persist_ui_event,
     tag_subagent_forward_event,
 )
@@ -779,7 +780,7 @@ async def _execute_subagent_run(
     async def child_emit(ev: Dict[str, Any]) -> None:
         if should_persist_ui_event(ev, session_meta={"is_subagent": True}):
             session_manager.append_ui_event(child_id, ev)
-        if parent_emit and ev and isinstance(ev, dict):
+        if parent_emit and should_forward_subagent_event_to_parent(ev):
             tagged = tag_subagent_forward_event(ev, agent_id=child_id)
             r = parent_emit(tagged)
             if hasattr(r, "__await__"):
