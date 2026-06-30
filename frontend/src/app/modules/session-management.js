@@ -992,7 +992,8 @@ async function switchSession(sessionId, opts) {
         ensureVisibleChatStreamSlot();
     }
     showLoading();
-    if (opts.useSnapshot === false && typeof startTocForSessionLoad === 'function') startTocForSessionLoad(sessionId);
+    const tocAlreadyStarted = opts.useSnapshot === false && typeof startTocForSessionLoad === 'function';
+    if (tocAlreadyStarted) startTocForSessionLoad(sessionId);
     return new Promise(function (resolve) {
         setTimeout(async function () {
         if (switchToken !== switchSessionEpoch || sessionId !== currentSessionId) { resolve(false); return; }
@@ -1000,7 +1001,7 @@ async function switchSession(sessionId, opts) {
             var loadedOk = await loadSessionMessages(sessionId, undefined, {
                 preloadOlderIfShort: isServerStreamActive(sessionId),
                 allowDuringRun: isServerStreamActive(sessionId),
-                tocAlreadyStarted: true,
+                tocAlreadyStarted: tocAlreadyStarted,
             });
             if (!loadedOk) { resolve(false); return; }
         } catch (error) {

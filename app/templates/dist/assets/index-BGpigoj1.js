@@ -10204,16 +10204,17 @@ async function switchSession(sessionId, opts) {
         ensureVisibleChatStreamSlot();\r
     }
     showLoading();
-    if (opts.useSnapshot === false && typeof startTocForSessionLoad === 'function') startTocForSessionLoad(sessionId);
+    const tocAlreadyStarted = opts.useSnapshot === false && typeof startTocForSessionLoad === 'function';
+    if (tocAlreadyStarted) startTocForSessionLoad(sessionId);
     return new Promise(function (resolve) {\r
         setTimeout(async function () {\r
         if (switchToken !== switchSessionEpoch || sessionId !== currentSessionId) { resolve(false); return; }\r
         try {\r
             var loadedOk = await loadSessionMessages(sessionId, undefined, {\r
-                preloadOlderIfShort: isServerStreamActive(sessionId),\r
-                allowDuringRun: isServerStreamActive(sessionId),\r
-                tocAlreadyStarted: true,\r
-            });\r
+                preloadOlderIfShort: isServerStreamActive(sessionId),
+                allowDuringRun: isServerStreamActive(sessionId),
+                tocAlreadyStarted: tocAlreadyStarted,
+            });
             if (!loadedOk) { resolve(false); return; }\r
         } catch (error) {\r
             console.error('切换会话加载失败:', error);\r

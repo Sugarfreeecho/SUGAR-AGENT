@@ -87,17 +87,19 @@ def test_removed_high_risk_dom_stream_shims_do_not_return():
         assert symbol not in combined
 
 
-def test_frontend_session_load_starts_toc_before_messages_finish():
+def test_frontend_session_load_lets_snapshot_own_toc_build():
     sessions = (ROOT / "frontend/src/app/modules/session-management.js").read_text(encoding="utf-8")
     toc = (ROOT / "frontend/src/app/modules/toc-todo.js").read_text(encoding="utf-8")
 
     assert "function startTocForSessionLoad(sessionId)" in toc
     assert "startTocForSessionLoad(sessionId)" in sessions
-    assert "tocAlreadyStarted: true" in sessions
+    assert "const tocAlreadyStarted = opts.useSnapshot === false" in sessions
+    assert "tocAlreadyStarted: tocAlreadyStarted" in sessions
+    assert "tocAlreadyStarted: true" not in sessions
     assert "if (!opts.tocAlreadyStarted) rebuildToc();" in sessions
     assert "/history_snapshot?turns=" in sessions
     assert "setTocTurnsForSession(sessionId, snapshot.user_turns)" in sessions
-    assert "if (opts.useSnapshot === false && typeof startTocForSessionLoad === 'function')" in sessions
+    assert "opts.useSnapshot === false && typeof startTocForSessionLoad === 'function'" in sessions
 
 
 def test_frontend_session_load_logs_open_session_timing_from_snapshot():
