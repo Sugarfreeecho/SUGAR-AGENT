@@ -847,7 +847,7 @@ def get_index_html():
     ctx_thr = _ui_ah.CONTEXT_WINDOW
     feature_flags = {
         "followupRestart": os.getenv("MYAGENT_ENABLE_FOLLOWUP_RESTART", "1").strip().lower() in {"1", "true", "yes", "on"},
-        "streamReconnect": os.getenv("MYAGENT_ENABLE_STREAM_RECONNECT", "0").strip().lower() in {"1", "true", "yes", "on"},
+        "streamReconnect": os.getenv("MYAGENT_ENABLE_STREAM_RECONNECT", "1").strip().lower() in {"1", "true", "yes", "on"},
         "finalReconcile": os.getenv("MYAGENT_ENABLE_FINAL_RECONCILE", "1").strip().lower() in {"1", "true", "yes", "on"},
     }
     inject = (

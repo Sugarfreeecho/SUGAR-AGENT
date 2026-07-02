@@ -54,9 +54,12 @@ def test_frontend_feature_entrypoints_are_flag_guarded():
     sessions = (ROOT / "frontend/src/app/modules/session-management.js").read_text(encoding="utf-8")
 
     assert "isMyAgentFeatureEnabled('followupRestart', false)" in sse
-    assert "isMyAgentFeatureEnabled('streamReconnect', false)" in sse
+    assert "isMyAgentFeatureEnabled('streamReconnect', true)" in sse
     assert "isMyAgentFeatureEnabled('finalReconcile', true)" in sse
     assert "function scheduleFinalVisibleAfterRunIfEnabled" in sse
+    assert "const SSE_IDLE_TIMEOUT_MS = 45000" in sse
+    assert "readSseChunkWithIdleTimeout(reader, SSE_IDLE_TIMEOUT_MS)" in sse
+    assert "parsed.type === 'sse_keepalive' || parsed.keepalive === true" in sse
     assert "function markRunFinalSeen(ctx)" in sse
     assert "function initRunFinalTracking(ctx)" in sse
     assert "if (ctx && ctx.seenFinal === true) return;" in sse
@@ -237,9 +240,10 @@ def test_frontend_run_state_cleanup_is_run_id_scoped():
 
     assert "function clearSessionRunStateIfMatch(sessionId, runId)" in actions
     assert "String(run.runId || '') === expected" in actions
+    assert "function endRunForClient(sessionId, ctx, opts)" in sse
     assert "runCtx.runId = clientRunId;" in sse
     assert "clearSessionRunStateIfMatch(runSessionId, clientRunId)" in sse
-    assert "clearSessionRunStateIfMatch(runSessionId, runCtx && runCtx.runId)" in sse
+    assert "clearSessionRunStateIfMatch(sid, opts.runId || (ctx && ctx.runId))" in sse
     assert "if (run && run.reattached)" in sessions
     assert "abortSessionRun(sid, 'reconcile-finished')" in sessions
 

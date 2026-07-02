@@ -3921,17 +3921,31 @@ class SessionManager:
                 return True
             if self._runtime_v2_primary():
                 try:
-                    mirror = self._runtime_mirror()
-                    for event_copy in clean:
-                        mirror.mirror_ui_event(session_id, event_copy)
-                except Exception as mirror_error:
-                    logger.warning("Runtime V2 append ui_events tail failed for %s: %s", session_id, mirror_error)
+                    from runtime_v2 import RuntimeUiProjection
+
+                    projection = RuntimeUiProjection(
+                        self.repository.sessions_dir,
+                        path_resolver=self._resolve_session_path,
+                    )
+                    current = projection.read_ui_events_fast(session_id)
+                    merged = [
+                        {
+                            key: value
+                            for key, value in deepcopy_json_dict(event).items()
+                            if key not in {"runtime_seq", "runtime_event_type", "rewritten", "rewritten_by_seq"}
+                        }
+                        for event in list(current) + clean
+                        if isinstance(event, dict)
+                    ]
+                    projection.replace_from_legacy(session_id, merged, reason="legacy_tail_restore_replace")
+                except Exception as restore_error:
+                    logger.warning("Runtime V2 append ui_events tail failed for %s: %s", session_id, restore_error)
                     return False
                 self._observe_runtime_v2_history(
                     "observe_legacy_tail_restored",
                     session_id,
                     tail_count=len(clean),
-                    merged_event_count=len(clean),
+                    merged_event_count=len(merged),
                 )
                 return True
             merged = list(self._load_ui_events(session_id)) + clean

@@ -4,7 +4,7 @@ import os
 import json
 import threading
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterable, List, Optional
+from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 from .event_log import SessionEventLog
 from .event_schema import RuntimeEvent
@@ -197,11 +197,9 @@ class RuntimeUiProjection:
     def count_ui_events(self, session_id: str) -> int:
         return len(self.read_ui_events(session_id))
 
-    def ui_index_to_runtime_seq(self, session_id: str, ui_index: int) -> Optional[int]:
-        target = int(ui_index)
-        if target < 0:
-            return None
-        mapped: List[int] = []
+    def _project_visible_ui_entries(self, session_id: str) -> Tuple[List[dict], int]:
+        out: List[dict] = []
+        latest_truncate_seq = 0
         for event in self.event_log.iter_events(session_id):
             if event.type == "legacy_truncate_observed":
                 payload = dict(event.payload or {})
@@ -209,19 +207,32 @@ class RuntimeUiProjection:
                 if new_count is None:
                     new_count = payload.get("before_index")
                 try:
-                    mapped = mapped[:max(0, int(new_count))]
+                    out = out[:max(0, int(new_count))]
+                    latest_truncate_seq = int(event.seq)
                 except (TypeError, ValueError):
                     pass
                 continue
             if event.type == "visible_range_changed":
                 payload = dict(event.payload or {})
-                mapped = self._apply_visible_range_to_runtime_seqs(mapped, payload)
+                out = self._apply_visible_range_to_projected_events(out, payload)
+                latest_truncate_seq = int(event.seq)
                 continue
-            if self.event_to_ui(event) is not None:
-                mapped.append(int(event.seq))
-        if target >= len(mapped):
+            if event.type in {"message_deleted", "message_rewritten"}:
+                out = self._apply_history_op_to_projected_events(out, event)
+                continue
+            ui = self._event_to_ui(session_id, event)
+            if ui is not None:
+                out.append(ui)
+        return out, latest_truncate_seq
+
+    def ui_index_to_runtime_seq(self, session_id: str, ui_index: int) -> Optional[int]:
+        target = int(ui_index)
+        if target < 0:
             return None
-        return mapped[target]
+        events, _latest_truncate_seq = self._project_visible_ui_entries(session_id)
+        if target >= len(events):
+            return None
+        return self._int_or_none(events[target].get("runtime_seq"))
 
     def runtime_seq_to_ui_end_index(self, session_id: str, runtime_seq: int) -> Optional[int]:
         """Return the UI slice end index immediately after a visible runtime event.
@@ -233,28 +244,11 @@ class RuntimeUiProjection:
         target = int(runtime_seq)
         if target <= 0:
             return None
-        mapped: List[int] = []
-        for event in self.event_log.iter_events(session_id):
-            if event.type == "legacy_truncate_observed":
-                payload = dict(event.payload or {})
-                new_count = payload.get("new_event_count")
-                if new_count is None:
-                    new_count = payload.get("before_index")
-                try:
-                    mapped = mapped[:max(0, int(new_count))]
-                except (TypeError, ValueError):
-                    pass
-                continue
-            if event.type == "visible_range_changed":
-                payload = dict(event.payload or {})
-                mapped = self._apply_visible_range_to_runtime_seqs(mapped, payload)
-                continue
-            if self.event_to_ui(event) is not None:
-                mapped.append(int(event.seq))
-        try:
-            return mapped.index(target) + 1
-        except ValueError:
-            return None
+        events, _latest_truncate_seq = self._project_visible_ui_entries(session_id)
+        for idx, event in enumerate(events):
+            if self._int_or_none(event.get("runtime_seq")) == target:
+                return idx + 1
+        return None
 
     def previous_visible_runtime_seq_before(self, session_id: str, runtime_seq: int) -> Optional[int]:
         """Return the visible runtime seq immediately before ``runtime_seq``.
@@ -265,31 +259,17 @@ class RuntimeUiProjection:
         target = int(runtime_seq)
         if target <= 0:
             return None
-        mapped: List[int] = []
-        for event in self.event_log.iter_events(session_id):
-            if event.type == "legacy_truncate_observed":
-                payload = dict(event.payload or {})
-                new_count = payload.get("new_event_count")
-                if new_count is None:
-                    new_count = payload.get("before_index")
-                try:
-                    mapped = mapped[:max(0, int(new_count))]
-                except (TypeError, ValueError):
-                    pass
-                continue
-            if event.type == "visible_range_changed":
-                payload = dict(event.payload or {})
-                mapped = self._apply_visible_range_to_runtime_seqs(mapped, payload)
-                continue
-            if self.event_to_ui(event) is not None:
-                mapped.append(int(event.seq))
-        try:
-            idx = mapped.index(target)
-        except ValueError:
+        events, _latest_truncate_seq = self._project_visible_ui_entries(session_id)
+        idx = -1
+        for pos, event in enumerate(events):
+            if self._int_or_none(event.get("runtime_seq")) == target:
+                idx = pos
+                break
+        if idx < 0:
             return None
         if idx <= 0:
             return 0
-        return mapped[idx - 1]
+        return self._int_or_none(events[idx - 1].get("runtime_seq"))
 
     @staticmethod
     def _user_turn_preview(ui_event: dict) -> str:
@@ -331,28 +311,8 @@ class RuntimeUiProjection:
         return self._count_ui_events_linear(session_id)
 
     def _count_ui_events_linear(self, session_id: str) -> tuple[int, int]:
-        runtime_seqs: List[int] = []
-        latest_truncate_seq = 0
-        for event in self.event_log.iter_events(session_id):
-            if event.type == "legacy_truncate_observed":
-                payload = dict(event.payload or {})
-                new_count = payload.get("new_event_count")
-                if new_count is None:
-                    new_count = payload.get("before_index")
-                try:
-                    runtime_seqs = runtime_seqs[:max(0, int(new_count))]
-                    latest_truncate_seq = int(event.seq)
-                except (TypeError, ValueError):
-                    pass
-                continue
-            if event.type == "visible_range_changed":
-                payload = dict(event.payload or {})
-                runtime_seqs = self._apply_visible_range_to_runtime_seqs(runtime_seqs, payload)
-                latest_truncate_seq = int(event.seq)
-                continue
-            if self.event_to_ui(event) is not None:
-                runtime_seqs.append(int(event.seq))
-        return len(runtime_seqs), latest_truncate_seq
+        events, latest_truncate_seq = self._project_visible_ui_entries(session_id)
+        return len(events), latest_truncate_seq
 
     def _ui_index_path(self, session_id: str) -> Path:
         return self.event_log.session_dir(session_id) / "snapshots" / "ui_projection_index.json"
@@ -375,32 +335,13 @@ class RuntimeUiProjection:
     def _build_ui_index(self, session_id: str, signature: Optional[tuple[bool, int, int]] = None) -> dict:
         if signature is None:
             signature = self._event_log_signature(session_id)
+        projected, latest_truncate_seq = self._project_visible_ui_entries(session_id)
         entries: List[tuple[int, str, str]] = []
-        latest_truncate_seq = 0
-        for event in self.event_log.iter_events(session_id):
-            if event.type == "legacy_truncate_observed":
-                payload = dict(event.payload or {})
-                new_count = payload.get("new_event_count")
-                if new_count is None:
-                    new_count = payload.get("before_index")
-                try:
-                    entries = entries[:max(0, int(new_count))]
-                    latest_truncate_seq = int(event.seq)
-                except (TypeError, ValueError):
-                    pass
-                continue
-            if event.type == "visible_range_changed":
-                payload = dict(event.payload or {})
-                visible_seqs = set(self._apply_visible_range_to_runtime_seqs([seq for seq, _typ, _preview in entries], payload))
-                entries = [(seq, typ, preview) for seq, typ, preview in entries if seq in visible_seqs]
-                latest_truncate_seq = int(event.seq)
-                continue
-            ui = self.event_to_ui(event)
-            if ui is None:
-                continue
+        for ui in projected:
             typ = str(ui.get("type") or "")
             preview = self._user_turn_preview(ui) if typ == "user" else ""
-            entries.append((int(event.seq), typ, preview))
+            seq = self._int_or_none(ui.get("runtime_seq")) or 0
+            entries.append((seq, typ, preview))
         total = len(entries)
         user_turns = [
             {"event_index": idx, "preview": preview}
@@ -408,10 +349,15 @@ class RuntimeUiProjection:
             if typ == "user"
         ]
         user_indices = [int(row["event_index"]) for row in user_turns]
+        has_history_ops = any(
+            event.type in {"message_deleted", "message_rewritten"}
+            for event in self.event_log.iter_events(session_id)
+        )
         data = {
             "signature": list(signature),
             "total": total,
             "latest_truncate_seq": latest_truncate_seq,
+            "has_history_ops": has_history_ops,
             "user_indices": user_indices,
             "user_turns": user_turns,
         }
@@ -509,7 +455,7 @@ class RuntimeUiProjection:
         if total <= 0:
             return None
         user_indices_index = list(index.get("user_indices") or []) if index else []
-        if latest_truncate_seq:
+        if latest_truncate_seq or "has_history_ops" not in index or bool(index.get("has_history_ops")):
             return None
         if user_indices_index:
             if len(user_indices_index) <= turn_count:

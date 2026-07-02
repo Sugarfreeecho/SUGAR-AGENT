@@ -1,7 +1,7 @@
 import tempfile
 import unittest
 
-from app.runtime_v2 import RuntimeMirror, RuntimeUiProjection
+from app.runtime_v2 import RuntimeHistoryOps, RuntimeMirror, RuntimeUiProjection
 from app.runtime_v2.blob_store import BlobStore
 
 
@@ -239,6 +239,49 @@ class RuntimeUiProjectionTests(unittest.TestCase):
             self.assertEqual(projection.runtime_seq_to_ui_end_index("s1", e1.seq), 1)
             self.assertEqual(projection.runtime_seq_to_ui_end_index("s1", e2.seq), 2)
             self.assertIsNone(projection.runtime_seq_to_ui_end_index("s1", 3))
+
+    def test_visible_index_mapping_respects_deleted_and_rewritten_messages(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            mirror = RuntimeMirror(tmp)
+            e1 = mirror.mirror_ui_event("s1", {"type": "user", "content": "u1"})
+            e2 = mirror.mirror_ui_event("s1", {"type": "final", "content": "a1"})
+            e3 = mirror.mirror_ui_event("s1", {"type": "user", "content": "u2"})
+            ops = RuntimeHistoryOps(tmp)
+            deleted = ops.delete_message("s1", e1.seq)
+            rewritten = ops.rewrite_message("s1", e3.seq, "u2-new")
+            projection = RuntimeUiProjection(tmp)
+
+            events = projection.read_ui_events("s1")
+            count, latest_seq = projection.count_ui_events_light("s1")
+            index = projection._read_or_build_ui_index("s1")
+
+            self.assertEqual([ev["content"] for ev in events], ["a1", "u2-new"])
+            self.assertEqual(projection.ui_index_to_runtime_seq("s1", 0), e2.seq)
+            self.assertEqual(projection.ui_index_to_runtime_seq("s1", 1), e3.seq)
+            self.assertIsNone(projection.runtime_seq_to_ui_end_index("s1", e1.seq))
+            self.assertEqual(projection.runtime_seq_to_ui_end_index("s1", e3.seq), 2)
+            self.assertEqual(projection.previous_visible_runtime_seq_before("s1", e3.seq), e2.seq)
+            self.assertEqual(count, 2)
+            self.assertEqual(latest_seq, 0)
+            self.assertEqual(index["user_turns"], [{"event_index": 1, "preview": "u2-new"}])
+            self.assertGreater(rewritten.seq, deleted.seq)
+
+    def test_recent_turn_page_falls_back_to_full_projection_after_history_ops(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            mirror = RuntimeMirror(tmp)
+            mirror.mirror_ui_event("s1", {"type": "user", "content": "u1"})
+            e2 = mirror.mirror_ui_event("s1", {"type": "final", "content": "a1"})
+            e3 = mirror.mirror_ui_event("s1", {"type": "user", "content": "u2"})
+            mirror.mirror_ui_event("s1", {"type": "final", "content": "a2"})
+            ops = RuntimeHistoryOps(tmp)
+            ops.delete_message("s1", e2.seq)
+            ops.rewrite_message("s1", e3.seq, "u2-new")
+            projection = RuntimeUiProjection(tmp)
+
+            page = projection.read_ui_page("s1", turns=1)
+
+            self.assertEqual([event["content"] for event in page["events"]], ["u2-new", "a2"])
+            self.assertNotIn(page.get("source"), {"runtime_v2_tail", "runtime_v2_tail_index"})
 
     def test_projected_ui_events_include_runtime_seq(self):
         with tempfile.TemporaryDirectory() as tmp:

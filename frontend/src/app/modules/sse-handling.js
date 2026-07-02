@@ -1,3 +1,48 @@
+const SSE_IDLE_TIMEOUT_MS = 45000;
+
+function endRunForClient(sessionId, ctx, opts) {
+    opts = opts || {};
+    var sid = String(sessionId || '');
+    if (!sid) return;
+    finalizeLlmStreamChunks(ctx);
+    finalizeProgressStreamChunks(ctx);
+    if (opts.reconcileFinal !== false) {
+        scheduleFinalVisibleAfterRunIfEnabled(sid, ctx, { delayMs: opts.finalDelayMs != null ? opts.finalDelayMs : 80 });
+    }
+    sealProcessGroup(ctx);
+    markSessionRunInactive(sid);
+    if (getSessionRunState(sid)) {
+        clearSessionRunStateIfMatch(sid, opts.runId || (ctx && ctx.runId));
+    }
+    syncSessionListIndicatorClasses();
+    setSendButtonState();
+    if (sid === currentSessionId) renderTodoPlanForCurrentSession();
+    if (opts.drainFollowup !== false) scheduleFollowupQueueDrain(sid, opts.followupDelayMs || 0);
+    if (liveAutoFollow && opts.scroll !== false) {
+        scrollProcessBodyToBottom(ctx, sid);
+        scrollChatToBottomIfFollow(sid, {});
+    }
+}
+
+async function readSseChunkWithIdleTimeout(reader, timeoutMs) {
+    var timer = null;
+    try {
+        return await Promise.race([
+            reader.read(),
+            new Promise(function (_resolve, reject) {
+                timer = setTimeout(function () {
+                    var err = new Error('SSE idle timeout after ' + String(timeoutMs) + 'ms');
+                    err.name = 'SseIdleTimeout';
+                    try { reader.cancel(err).catch(function () { /* ignore */ }); } catch (e) { /* ignore */ }
+                    reject(err);
+                }, timeoutMs);
+            }),
+        ]);
+    } finally {
+        if (timer) clearTimeout(timer);
+    }
+}
+
 async function consumeAgentSseResponse(response, runCtx, runSessionId, streamEventIdx) {
     if (!response || !response.body) throw new Error('stream response missing body');
     var ct0 = (response.headers && response.headers.get ? (response.headers.get('content-type') || '') : '').toLowerCase();
@@ -8,33 +53,22 @@ async function consumeAgentSseResponse(response, runCtx, runSessionId, streamEve
     const decoder = new TextDecoder();
     let buffer = '';
     while (true) {
-        const { done, value } = await reader.read();
+        const { done, value } = await readSseChunkWithIdleTimeout(reader, SSE_IDLE_TIMEOUT_MS);
         if (done) break;
         buffer += decoder.decode(value, { stream: true });
         const lines = buffer.split('\n');
         buffer = lines.pop();
         for (const line of lines) {
+            if (line.startsWith(':')) continue;
             if (!line.startsWith('data: ')) continue;
             const data = line.slice(6);
             if (data === '[DONE]') {
-                finalizeLlmStreamChunks(runCtx);
-                finalizeProgressStreamChunks(runCtx);
-                scheduleFinalVisibleAfterRunIfEnabled(runSessionId, runCtx, { delayMs: 80 });
-                sealProcessGroup(runCtx);
-                markSessionRunInactive(runSessionId);
-                if (getSessionRunState(runSessionId)) clearSessionRunStateIfMatch(runSessionId, runCtx && runCtx.runId);
-                syncSessionListIndicatorClasses();
-                setSendButtonState();
-                if (runSessionId === currentSessionId) renderTodoPlanForCurrentSession();
-                scheduleFollowupQueueDrain(runSessionId, 0);
-                if (liveAutoFollow) {
-                    scrollProcessBodyToBottom(runCtx, runSessionId);
-                    scrollChatToBottomIfFollow(runSessionId, {});
-                }
+                endRunForClient(runSessionId, runCtx, { finalDelayMs: 80, followupDelayMs: 0 });
                 return streamEventIdx;
             }
             try {
                 let parsed = JSON.parse(data);
+                if (parsed && (parsed.type === 'sse_keepalive' || parsed.keepalive === true)) continue;
                 if (parsed && parsed.protocol === 'runtime_v2') {
                     const envelopeSessionId = parsed.session_id || parsed.sessionId || runSessionId;
                     if (!sessionStore.shouldAcceptSseEvent(envelopeSessionId, parsed.seq)) continue;
@@ -73,18 +107,12 @@ async function consumeAgentSseResponse(response, runCtx, runSessionId, streamEve
                 });
                 if (reduced.runStateChanged) {
                     if (parsed.type === 'run_finished' || parsed.type === 'run_interrupted' || parsed.type === 'run_failed') {
-                        finalizeLlmStreamChunks(runCtx);
-                        finalizeProgressStreamChunks(runCtx);
-                        if (parsed.type === 'run_finished') {
-                            scheduleFinalVisibleAfterRunIfEnabled(eventSessionId, runCtx, { delayMs: 80 });
-                        }
-                        sealProcessGroup(runCtx);
-                        if (eventSessionId === runSessionId && getSessionRunState(runSessionId)) {
-                            clearSessionRunStateIfMatch(runSessionId, runCtx && runCtx.runId);
-                        }
-                        syncSessionListIndicatorClasses();
-                        setSendButtonState();
-                        if (eventSessionId === runSessionId) scheduleFollowupQueueDrain(runSessionId, 0);
+                        endRunForClient(eventSessionId, runCtx, {
+                            finalDelayMs: 80,
+                            followupDelayMs: 0,
+                            runId: parsed.run_id || parsed.runId || (runCtx && runCtx.runId),
+                            reconcileFinal: parsed.type === 'run_finished',
+                        });
                         streamEventIdx += 1;
                         continue;
                     }
@@ -193,13 +221,10 @@ async function consumeAgentSseResponse(response, runCtx, runSessionId, streamEve
                     source: 'sse',
                 }, runSessionId);
                 if (parsed.type === 'final' && eventSessionId === runSessionId) {
-                    finalizeLlmStreamChunks(runCtx);
-                    finalizeProgressStreamChunks(runCtx);
-                    markSessionRunInactive(runSessionId);
-                    if (getSessionRunState(runSessionId)) clearSessionRunStateIfMatch(runSessionId, runCtx && runCtx.runId);
-                    syncSessionListIndicatorClasses();
-                    setSendButtonState();
-                    scheduleFollowupQueueDrain(runSessionId, 250);
+                    endRunForClient(runSessionId, runCtx, {
+                        reconcileFinal: false,
+                        followupDelayMs: 250,
+                    });
                 }
                 streamEventIdx += 1;
             } catch (e) { console.error('解析事件失败:', e); }
@@ -551,7 +576,7 @@ async function attachSessionEventStream(sessionId, opts) {
 }
 
 function scheduleActiveSessionReconnect(sessionId, opts) {
-    if (!isMyAgentFeatureEnabled('streamReconnect', false)) return;
+    if (!isMyAgentFeatureEnabled('streamReconnect', true)) return;
     opts = opts || {};
     var sid = String(sessionId || '');
     if (!sid) return;

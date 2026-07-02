@@ -424,23 +424,22 @@ def test_runtime_v2_repair_and_reconcile_skip_legacy_rebuilds():
     assert reconciled is False
 
 
-def test_runtime_v2_append_tail_mirrors_events_without_legacy_rebuild():
+def test_runtime_v2_append_tail_replaces_projected_visible_history(tmp_path):
     import agent_harness
+    from runtime_v2 import RuntimeMirror, RuntimeUiProjection
 
-    mirrored = []
     observed = []
-
-    class _Mirror:
-        def mirror_ui_event(self, session_id, event):
-            mirrored.append((session_id, dict(event)))
 
     def fail_legacy(*args, **kwargs):
         raise AssertionError("Runtime V2 append tail must not touch legacy history")
 
+    RuntimeMirror(tmp_path).mirror_ui_event("s1", {"type": "user", "content": "existing"})
+
     mgr = _manager_with(
         _runtime_v2_primary=lambda: True,
-        _runtime_mirror=lambda: _Mirror(),
         _observe_runtime_v2_history=lambda *args, **kwargs: observed.append((args, kwargs)),
+        repository=_Repository(tmp_path),
+        _resolve_session_path=lambda sid: tmp_path / str(sid),
         _load_ui_events=fail_legacy,
         _save_ui_events=fail_legacy,
         _rebuild_llm_work_from_ui=fail_legacy,
@@ -459,14 +458,15 @@ def test_runtime_v2_append_tail_mirrors_events_without_legacy_rebuild():
     )
 
     assert changed is True
-    assert mirrored == [
-        ("s1", {"type": "user", "content": "u1"}),
-        ("s1", {"type": "final", "content": "a1"}),
+    assert [event["content"] for event in RuntimeUiProjection(tmp_path).read_ui_events("s1")] == [
+        "existing",
+        "u1",
+        "a1",
     ]
     assert observed == [
         (
             ("observe_legacy_tail_restored", "s1"),
-            {"tail_count": 2, "merged_event_count": 2},
+            {"tail_count": 2, "merged_event_count": 3},
         )
     ]
 
