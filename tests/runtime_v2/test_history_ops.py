@@ -29,6 +29,8 @@ class RuntimeHistoryOpsTests(unittest.TestCase):
             self.assertEqual(len(snapshot["visible_messages"]), 1)
             self.assertEqual(snapshot["visible_messages"][0]["payload"]["content"], "new")
             self.assertTrue(snapshot["visible_messages"][0]["rewritten"])
+            ui_events = RuntimeUiProjection(tmp).read_ui_events("s1")
+            self.assertEqual([ev["content"] for ev in ui_events], ["new"])
 
     def test_compaction_changes_model_messages_only(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -171,6 +173,34 @@ class RuntimeHistoryOpsTests(unittest.TestCase):
             branch_events = RuntimeUiProjection(tmp).read_ui_events("branch")
 
             self.assertEqual([ev["content"] for ev in branch_events], ["u1", "a1"])
+
+    def test_branch_seeds_rewritten_visible_history(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            mirror = RuntimeMirror(tmp)
+            mirror.mirror_ui_event("source", {"type": "user", "content": "old"})
+            mirror.mirror_ui_event("source", {"type": "final", "content": "a1"})
+            ops = RuntimeHistoryOps(tmp)
+            ops.rewrite_message("source", target_seq=1, content="new")
+
+            ops.create_branch("branch", source_session_id="source", branch_from_seq=2)
+
+            branch_events = RuntimeUiProjection(tmp).read_ui_events("branch")
+
+            self.assertEqual([ev["content"] for ev in branch_events], ["new", "a1"])
+
+    def test_branch_seed_omits_deleted_visible_history(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            mirror = RuntimeMirror(tmp)
+            mirror.mirror_ui_event("source", {"type": "user", "content": "u1"})
+            mirror.mirror_ui_event("source", {"type": "final", "content": "a1"})
+            ops = RuntimeHistoryOps(tmp)
+            ops.delete_message("source", target_seq=1)
+
+            ops.create_branch("branch", source_session_id="source", branch_from_seq=2)
+
+            branch_events = RuntimeUiProjection(tmp).read_ui_events("branch")
+
+            self.assertEqual([ev["content"] for ev in branch_events], ["a1"])
 
     def test_branch_copies_blob_refs_for_seeded_tool_results(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -342,13 +342,14 @@ def test_finish_uses_title_generator_for_new_session(monkeypatch):
         def set_session_name(self, session_id, title):
             names.append((session_id, title))
 
-    def fake_executor_text_and_usage(prompt):
+    def fake_generate_title(session_id, first_user, final_response):
+        prompt = f"Q:{first_user}\nA:{final_response}"
         calls.append((prompt, list(state["stream_events"])))
         return "model title", {"prompt_tokens": 3, "completion_tokens": 2}
 
     monkeypatch.setattr(agent_loop, "session_manager", _SessionManager())
     monkeypatch.setattr(agent_loop, "load_prompt_template", lambda name: "Q:{first_user}\nA:{final_response}")
-    monkeypatch.setattr(agent_loop, "executor_text_and_usage", fake_executor_text_and_usage)
+    monkeypatch.setattr(agent_loop, "_generate_session_title_with_diagnostics", fake_generate_title)
     monkeypatch.setattr(agent_loop, "_persist_session_messages_with_model_replace", lambda *args, **kwargs: None)
 
     state = {
@@ -370,6 +371,24 @@ def test_finish_uses_title_generator_for_new_session(monkeypatch):
     assert names == [("s1", "model title")]
 
 
+def test_generated_session_title_strips_leading_think_block():
+    import agent_loop
+
+    assert agent_loop._normalize_generated_session_title(
+        "<think>The user wants a diagnostic title</think>\n修复会话标题"
+    ) == "修复会话标题"
+    assert agent_loop._normalize_generated_session_title(
+        "<think>The user wants a diagnostic title"
+    ) == ""
+
+
+def test_reasoning_polluted_session_title_needs_regeneration():
+    import agent_loop
+
+    assert agent_loop._session_title_needs_generation("<think>The user want", "hello")
+    assert agent_loop._session_title_needs_generation("is. The conversation", "hello")
+
+
 def test_finish_does_not_duplicate_prepared_final_event(monkeypatch):
     import agent_loop
 
@@ -384,7 +403,7 @@ def test_finish_does_not_duplicate_prepared_final_event(monkeypatch):
 
     monkeypatch.setattr(agent_loop, "session_manager", _SessionManager())
     monkeypatch.setattr(agent_loop, "load_prompt_template", lambda name: "{first_user} {final_response}")
-    monkeypatch.setattr(agent_loop, "executor_text_and_usage", lambda prompt: ("model title", None))
+    monkeypatch.setattr(agent_loop, "_generate_session_title_with_diagnostics", lambda *args: ("model title", None))
     monkeypatch.setattr(agent_loop, "_persist_session_messages_with_model_replace", lambda *args, **kwargs: None)
 
     state = {
@@ -437,7 +456,7 @@ def test_astream_emits_final_before_title_generation(monkeypatch, tmp_path):
         out["final_response"] = "done"
         return out
 
-    def fake_executor_text_and_usage(prompt):
+    def fake_generate_title(*args):
         title_call_seen.append(list(seen))
         return "model title", None
 
@@ -453,7 +472,7 @@ def test_astream_emits_final_before_title_generation(monkeypatch, tmp_path):
     monkeypatch.setattr(agent_loop, "_persist_session_messages_with_model_replace", lambda *args, **kwargs: None)
     monkeypatch.setattr(agent_loop, "_run_react_node_off_loop", fake_run_react)
     monkeypatch.setattr(agent_loop, "load_prompt_template", lambda name: "{first_user} {final_response}")
-    monkeypatch.setattr(agent_loop, "executor_text_and_usage", fake_executor_text_and_usage)
+    monkeypatch.setattr(agent_loop, "_generate_session_title_with_diagnostics", fake_generate_title)
 
     async def collect():
         async for ev in agent_loop.astream_events("hello", session_id="s-final-first"):
@@ -463,6 +482,12 @@ def test_astream_emits_final_before_title_generation(monkeypatch, tmp_path):
 
     assert title_call_seen, "title generation should still run for new sessions"
     assert any(ev.get("type") == "final" and ev.get("content") == "done" for ev in title_call_seen[0])
+
+    from runtime_v2.event_log import SessionEventLog
+    from runtime_v2.projector import RuntimeProjector
+
+    snapshot = RuntimeProjector().project(SessionEventLog(tmp_path).read_all("s-final-first"))
+    assert snapshot["active_runs"] == []
 
 
 def test_astream_can_record_initial_ui_message_as_user_steer(monkeypatch, tmp_path):

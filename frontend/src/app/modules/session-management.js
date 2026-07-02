@@ -777,6 +777,7 @@ async function loadSessionMessages(sessionId, scrollBehavior, opts) {
     try {
         let raw;
         let snapshotTocTurns = null;
+        let snapshotTodoPlan = null;
         let historySource = 'messages';
         let snapshotTiming = null;
         const canUseSnapshot = !opts.full && opts.useSnapshot !== false && beforeSessionMessageSnapshotAvailable();
@@ -799,6 +800,10 @@ async function loadSessionMessages(sessionId, scrollBehavior, opts) {
                         if (Array.isArray(snapshot.user_turns)) {
                             snapshotTocTurns = snapshot.user_turns;
                             if (typeof setTocTurnsForSession === 'function') setTocTurnsForSession(sessionId, snapshot.user_turns);
+                        }
+                        if (snapshot.todo_plan && typeof snapshot.todo_plan === 'object') {
+                            snapshotTodoPlan = snapshot.todo_plan;
+                            if (typeof setTodoPlanForSession === 'function') setTodoPlanForSession(sessionId, snapshot.todo_plan);
                         }
                     }
                 }
@@ -862,6 +867,11 @@ async function loadSessionMessages(sessionId, scrollBehavior, opts) {
             scheduleContextTokensAfterPaint(sessionId);
             applyChatScrollAfterHistoryLoad(sessionId, scrollBehavior);
             markVisibleSessionStreamLoadState(sessionId, 'ok');
+            if (typeof renderLoadedTodoPlanForSession === 'function') {
+                renderLoadedTodoPlanForSession(sessionId, snapshotTodoPlan, opts.todoAlreadyStarted);
+            } else {
+                renderTodoPlanForCurrentSession();
+            }
             logOpenSessionTiming(sessionId, {
                 source: historySource,
                 events: 0,
@@ -906,7 +916,11 @@ async function loadSessionMessages(sessionId, scrollBehavior, opts) {
         bindExistingLogs();
         scheduleTocActiveUpdate();
         scheduleContextTokensAfterPaint(sessionId);
-        renderTodoPlanForCurrentSession();
+        if (typeof renderLoadedTodoPlanForSession === 'function') {
+            renderLoadedTodoPlanForSession(sessionId, snapshotTodoPlan, opts.todoAlreadyStarted);
+        } else {
+            renderTodoPlanForCurrentSession();
+        }
         markVisibleSessionStreamLoadState(sessionId, 'ok');
         logOpenSessionTiming(sessionId, {
             source: historySource,
@@ -993,7 +1007,8 @@ async function switchSession(sessionId, opts) {
         scheduleContextTokensAfterPaint(sessionId);
         if (restoredFromCache) restoreCachedSessionScrollPosition(sessionId);
         else applyChatScrollAfterHistoryLoad(sessionId, 'saved-or-bottom');
-        renderTodoPlanForCurrentSession();
+        if (typeof refreshTodoPlanPanel === 'function') void refreshTodoPlanPanel();
+        else renderTodoPlanForCurrentSession();
         if (switchToken !== switchSessionEpoch || sessionId !== currentSessionId) return;
         /* 让 rebuildToc 的 /user_turns fetch 先发出，subagent 面板（含 N 个 /messages）顺序后置，
            避免抢占带宽与主线程，让目录最后才稳态。*/
@@ -1013,6 +1028,7 @@ async function switchSession(sessionId, opts) {
     showLoading();
     const tocAlreadyStarted = opts.useSnapshot === false && typeof startTocForSessionLoad === 'function';
     if (tocAlreadyStarted) startTocForSessionLoad(sessionId);
+    if (tocAlreadyStarted && typeof startTodoForSessionLoad === 'function') startTodoForSessionLoad(sessionId);
     return new Promise(function (resolve) {
         setTimeout(async function () {
         if (switchToken !== switchSessionEpoch || sessionId !== currentSessionId) { resolve(false); return; }
@@ -1021,6 +1037,7 @@ async function switchSession(sessionId, opts) {
                 preloadOlderIfShort: isServerStreamActive(sessionId),
                 allowDuringRun: isServerStreamActive(sessionId),
                 tocAlreadyStarted: tocAlreadyStarted,
+                todoAlreadyStarted: tocAlreadyStarted,
             });
             if (!loadedOk) { resolve(false); return; }
         } catch (error) {

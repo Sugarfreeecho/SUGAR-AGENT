@@ -98,13 +98,20 @@ def test_frontend_session_load_lets_snapshot_own_toc_build():
     toc = (ROOT / "frontend/src/app/modules/toc-todo.js").read_text(encoding="utf-8")
 
     assert "function startTocForSessionLoad(sessionId)" in toc
+    assert "function startTodoForSessionLoad(sessionId)" in toc
+    assert "function setTodoPlanForSession(sessionId, snapshot)" in toc
+    assert "function renderLoadedTodoPlanForSession(sessionId, snapshot, alreadyStarted)" in toc
     assert "startTocForSessionLoad(sessionId)" in sessions
+    assert "startTodoForSessionLoad(sessionId)" in sessions
     assert "const tocAlreadyStarted = opts.useSnapshot === false" in sessions
     assert "tocAlreadyStarted: tocAlreadyStarted" in sessions
+    assert "todoAlreadyStarted: tocAlreadyStarted" in sessions
     assert "tocAlreadyStarted: true" not in sessions
     assert "if (!opts.tocAlreadyStarted) rebuildToc();" in sessions
     assert "/history_snapshot?turns=" in sessions
     assert "setTocTurnsForSession(sessionId, snapshot.user_turns)" in sessions
+    assert "setTodoPlanForSession(sessionId, snapshot.todo_plan)" in sessions
+    assert "renderLoadedTodoPlanForSession(sessionId, snapshotTodoPlan, opts.todoAlreadyStarted)" in sessions
     assert "opts.useSnapshot === false && typeof startTocForSessionLoad === 'function'" in sessions
 
 
@@ -200,15 +207,19 @@ def test_frontend_session_scoped_token_and_count_guards():
     assert "isFresh(sessionId, maxAgeMs)" in sessions
     assert "uiEventCountCache.isFresh(sid, opts.maxAgeMs)" in scroll
     assert "await getUiEventCount(submitSessionId, { preferCache: true, maxAgeMs: 10000 })" in sse
+    assert "parsed.type === 'context_tokens' && eventSessionId === currentSessionId" in sse
+    assert "parsed.type === 'cache_stats' && eventSessionId === currentSessionId" in sse
 
 
 def test_frontend_llm_stream_rows_are_upserted_across_process_group_rebuilds():
     rendering = (ROOT / "frontend/src/app/modules/message-rendering.js").read_text(encoding="utf-8")
 
-    assert "function findExistingLlmFeedRow(ctx, logType, reactIter)" in rendering
+    assert "function findExistingLlmFeedRow(ctx, logType, reactIter, opts)" in rendering
     assert "findExistingLlmFeedRow(ctx, logType, ri)" in rendering
     assert "findExistingLlmFeedRow(ctx, 'llm-response'" in rendering
     assert "findExistingLlmFeedRow(ctx, 'llm-reasoning'" in rendering
+    assert "roots.push(ctx.stream)" in rendering
+    assert "function removeDuplicateLlmFeedRows(ctx, keepRow, logType, reactIter)" in rendering
 
 
 def test_frontend_initial_bottom_scroll_remains_smooth_without_saved_position():

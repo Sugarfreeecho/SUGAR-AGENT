@@ -288,6 +288,13 @@ def test_history_snapshot_combines_v2_messages_count_and_toc(monkeypatch, tmp_pa
     for event in [
         {"type": "user", "content": "first question"},
         {"type": "final", "content": "first answer"},
+        {
+            "type": "todo_plan",
+            "has_plan": True,
+            "items": [{"id": "1", "text": "task", "status": "pending"}],
+            "done": 0,
+            "total": 1,
+        },
         {"type": "user", "content": "second question"},
         {"type": "final", "content": "second answer"},
     ]:
@@ -306,13 +313,13 @@ def test_history_snapshot_combines_v2_messages_count_and_toc(monkeypatch, tmp_pa
 
     assert payload["ok"] is True
     assert payload["source"] == "runtime_v2_snapshot"
-    assert payload["count"] == 4
+    assert payload["count"] == 5
     assert payload["count_source"] == "runtime_v2_page"
     assert payload["elapsed_ms"] >= 0
     assert set(payload["timing"]) == {"read_page", "count", "user_turns", "total"}
     assert payload["timing"]["total"] >= 0
     assert payload["messages"]["source"] == "runtime_v2_tail_index"
-    assert [event["content"] for event in payload["messages"]["events"]] == [
+    assert [event["content"] for event in payload["messages"]["events"] if event.get("content")] == [
         "first question",
         "first answer",
         "second question",
@@ -320,8 +327,10 @@ def test_history_snapshot_combines_v2_messages_count_and_toc(monkeypatch, tmp_pa
     ]
     assert payload["user_turns"] == [
         {"event_index": 0, "preview": "first question"},
-        {"event_index": 2, "preview": "second question"},
+        {"event_index": 3, "preview": "second question"},
     ]
+    assert payload["todo_plan"]["source"] == "runtime_v2_snapshot"
+    assert payload["todo_plan"]["items"][0]["text"] == "task"
 
 
 def test_history_snapshot_uses_lightweight_user_turns(monkeypatch, tmp_path):
@@ -661,6 +670,29 @@ def test_truncate_route_passes_runtime_seq_boundary(monkeypatch, tmp_path):
         "before_index": 10,
         "truncate_before_seq": 99,
         "create_backup": True,
+    }]
+
+
+def test_truncate_route_allows_missing_runtime_seq_boundary(monkeypatch, tmp_path):
+    import webui
+
+    fake = _FakeSessionManager(tmp_path, [])
+    monkeypatch.setattr(webui, "session_manager", fake)
+
+    response = asyncio.run(webui.truncate_session_events(
+        "s1",
+        before_index=10,
+        before_seq=None,
+        backup=False,
+    ))
+    payload = _json_response_payload(response)
+
+    assert payload == {"ok": True}
+    assert fake.truncate_calls == [{
+        "session_id": "s1",
+        "before_index": 10,
+        "truncate_before_seq": None,
+        "create_backup": False,
     }]
 
 

@@ -201,6 +201,7 @@ class RuntimeProjector:
                 "replacement_index": index,
                 "replaced_by_seq": event.seq,
             })
+        rows = self._trim_replacement_after_model_truncate(snapshot, rows)
         snapshot["raw_model_messages"] = rows
 
     def _apply_history_op(self, snapshot: dict, event: RuntimeEvent) -> None:
@@ -219,6 +220,14 @@ class RuntimeProjector:
                 "changed_at_seq": event.seq,
                 "reason": payload.get("reason") or "",
             }
+            if payload.get("apply_model") or payload.get("reason") == "runtime_v2_truncate":
+                self._truncate_snapshot_model_rows(snapshot, payload)
+                snapshot["context"]["model_truncate"] = {
+                    "changed_at_seq": event.seq,
+                    "target_seq": payload.get("target_seq"),
+                    "to_seq": payload.get("to_seq"),
+                    "reason": payload.get("reason") or "",
+                }
         elif event.type == "model_window_changed":
             snapshot["model_window"] = {
                 "from_seq": payload.get("from_seq"),
@@ -226,6 +235,7 @@ class RuntimeProjector:
                 "changed_at_seq": event.seq,
                 "reason": payload.get("reason") or "",
             }
+            self._truncate_snapshot_model_rows(snapshot, payload)
         elif event.type == "history_compacted":
             snapshot["context"]["history_compaction"] = {
                 "summary": payload.get("summary") or "",
@@ -251,8 +261,6 @@ class RuntimeProjector:
     def _rebuild_projected_messages(self, snapshot: dict) -> None:
         deleted = set()
         rewrites = {}
-        visible_range = snapshot.get("visible_range") or {}
-        model_window = snapshot.get("model_window") or {}
         compacted_before_seq = None
         compaction = (snapshot.get("context") or {}).get("history_compaction") or {}
         if compaction.get("compacted_before_seq") is not None:
@@ -279,8 +287,6 @@ class RuntimeProjector:
             seq = self._int_or_none(message.get("seq"))
             if seq is None or seq in deleted:
                 continue
-            if not self._seq_in_range(seq, visible_range):
-                continue
             next_message = self._copy_message(message)
             rewrite = rewrites.get(seq)
             if rewrite is not None:
@@ -290,13 +296,17 @@ class RuntimeProjector:
                 next_message["rewritten"] = True
             projected.append(next_message)
 
+        for op in snapshot.get("history_ops") or []:
+            if op.get("type") != "visible_range_changed":
+                continue
+            payload = op.get("payload") or {}
+            projected = self._truncate_rows(projected, payload)
+
         model_source = snapshot.get("raw_model_messages") or projected
         model_messages = []
         for message in model_source:
             seq = self._int_or_none(message.get("seq"))
             if seq is None:
-                continue
-            if not self._seq_in_range(seq, model_window):
                 continue
             if compacted_before_seq is not None and seq < compacted_before_seq:
                 continue
@@ -415,6 +425,51 @@ class RuntimeProjector:
         if to_seq is not None and seq > to_seq:
             return False
         return True
+
+    def _truncate_snapshot_rows(self, snapshot: dict, payload: dict) -> None:
+        snapshot["messages"] = self._truncate_rows(snapshot.get("messages") or [], payload)
+
+    def _truncate_snapshot_model_rows(self, snapshot: dict, payload: dict) -> None:
+        snapshot["raw_model_messages"] = self._truncate_rows(
+            snapshot.get("raw_model_messages") or [],
+            payload,
+        )
+
+    def _truncate_rows(self, rows: list, payload: dict) -> list:
+        if payload.get("to_ui_index") is not None:
+            try:
+                return list(rows or [])[:max(0, int(payload.get("to_ui_index")))]
+            except (TypeError, ValueError):
+                return list(rows or [])
+        out = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            seq = self._int_or_none(row.get("seq"))
+            if seq is None:
+                continue
+            if self._seq_in_range(seq, payload):
+                out.append(row)
+        return out
+
+    def _trim_replacement_after_model_truncate(self, snapshot: dict, rows: list) -> list:
+        context = snapshot.get("context") if isinstance(snapshot, dict) else {}
+        if not isinstance(context, dict) or not context.get("model_truncate"):
+            return rows
+        visible_user_count = sum(
+            1 for row in (snapshot.get("messages") or [])
+            if isinstance(row, dict) and row.get("role") == "user"
+        )
+        if visible_user_count <= 0:
+            return []
+        user_positions = [
+            idx for idx, row in enumerate(rows)
+            if isinstance(row, dict) and row.get("role") == "user"
+        ]
+        if len(user_positions) <= visible_user_count:
+            return rows
+        start = user_positions[-visible_user_count]
+        return rows[start:]
 
     @staticmethod
     def _copy_message(message: dict) -> dict:

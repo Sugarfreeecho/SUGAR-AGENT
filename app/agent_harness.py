@@ -933,27 +933,29 @@ def refresh_executor_client_from_env() -> None:
     _invalidate_executor_config_cache()
 
 
-def executor_text_complete(prompt: str) -> str:
+def executor_text_complete(prompt: str, session_id: str = "") -> str:
     """单轮补全，走执行端（压缩摘要、key_context 条目、会话标题等）。"""
+    client, model, max_tokens, _ctx = resolve_executor_config_for_session(session_id)
     text, _ = single_turn_text_completion(
-        executor_client,
-        executor_model,
+        client,
+        model,
         prompt,
         temperature=EXECUTOR_TEMPERATURE,
-        max_tokens=MAX_OUTPUT_TOKENS,
+        max_tokens=max_tokens,
     )
     return text
 
 
-def executor_chat_complete(messages: List[Any]) -> str:
+def executor_chat_complete(messages: List[Any], session_id: str = "") -> str:
     """多轮 chat，走执行端（compress_history_and_key 等结构化上送）。"""
+    client, model, max_tokens, _ctx = resolve_executor_config_for_session(session_id)
     r = chat_completion(
-        executor_client,
-        executor_model,
+        client,
+        model,
         messages,
         tools=None,
         temperature=EXECUTOR_TEMPERATURE,
-        max_tokens=MAX_OUTPUT_TOKENS,
+        max_tokens=max_tokens,
     )
     return (parse_assistant_message(r.choices[0].message).content or "").strip()
 
@@ -961,6 +963,7 @@ def executor_chat_complete(messages: List[Any]) -> str:
 def executor_chat_complete_stream(
     messages: List[Any],
     on_content_delta: Optional[Callable[[str], None]] = None,
+    session_id: str = "",
 ) -> str:
     """
     执行端多轮 chat 流式补全；每收到 content 片段即回调 on_content_delta（供压缩/要点 SSE 推送）。
@@ -969,16 +972,17 @@ def executor_chat_complete_stream(
     import queue as _queue
 
     sync_q: _queue.Queue = _queue.Queue()
+    client, model, max_tokens, _ctx = resolve_executor_config_for_session(session_id)
 
     def _worker() -> None:
         run_chat_completion_stream_worker(
             sync_q,
-            executor_client,
-            executor_model,
+            client,
+            model,
             messages,
             tools=None,
             temperature=EXECUTOR_TEMPERATURE,
-            max_tokens=MAX_OUTPUT_TOKENS,
+            max_tokens=max_tokens,
         )
 
     t = threading.Thread(target=_worker, daemon=True)
@@ -3021,6 +3025,7 @@ class SessionManager:
         session_id: str,
         limit: int = 200,
         before_index: Optional[int] = None,
+        target_index: Optional[int] = None,
         turns: Optional[int] = None,
     ) -> dict:
         """
@@ -3075,6 +3080,35 @@ class SessionManager:
             }
 
         lim = max(1, min(int(limit), 500))
+        if target_index is not None:
+            target = max(0, min(int(target_index), max(0, total - 1)))
+            nt = max(1, min(int(turns) if turns is not None else 50, 50))
+            target_user_pos = -1
+            for pos, idx in enumerate(user_indices):
+                if idx <= target:
+                    target_user_pos = pos
+                else:
+                    break
+            if target_user_pos < 0:
+                start = max(0, target - (lim // 3))
+                end = min(total, start + lim)
+            else:
+                before_turns = min(5, max(0, nt // 4))
+                start_user_pos = max(0, target_user_pos - before_turns)
+                end_user_pos = min(len(user_indices), target_user_pos + nt + 1)
+                start = user_indices[start_user_pos]
+                end = user_indices[end_user_pos] if end_user_pos < len(user_indices) else total
+            if end <= start:
+                end = min(total, start + 1)
+            return {
+                "events": events[start:end],
+                "total": total,
+                "range_start": start,
+                "range_end": end,
+                "has_older": start > 0,
+                "has_newer": end < total,
+                "target_index": target,
+            }
         if before_index is None:
             start = max(0, total - lim)
             slice_ev = events[start:total]
@@ -3361,8 +3395,9 @@ class SessionManager:
             if before_index < 0:
                 return False
             runtime_truncate_keep_seq: Optional[int] = None
+            runtime_truncate_target_seq: Optional[int] = None
             runtime_seq_truncate = False
-            if self._runtime_v2_primary() and truncate_before_seq is not None:
+            if self._runtime_v2_primary():
                 try:
                     from runtime_v2.ui_projection import RuntimeUiProjection
 
@@ -3370,12 +3405,18 @@ class SessionManager:
                         self.repository.sessions_dir,
                         path_resolver=self._resolve_session_path,
                     )
-                    target_seq = int(truncate_before_seq)
+                    if truncate_before_seq is not None:
+                        target_seq = int(truncate_before_seq)
+                    else:
+                        target_seq = int(projection.ui_index_to_runtime_seq(session_id, before_index) or 0)
+                    if target_seq <= 0:
+                        return False
                     end_index = projection.runtime_seq_to_ui_end_index(session_id, target_seq)
                     keep_seq = projection.previous_visible_runtime_seq_before(session_id, target_seq)
                     if end_index is None or keep_seq is None:
                         return False
                     before_index = max(0, int(end_index) - 1)
+                    runtime_truncate_target_seq = int(target_seq)
                     runtime_truncate_keep_seq = int(keep_seq)
                     runtime_seq_truncate = True
                     events = projection.read_ui_events_fast(session_id)
@@ -3385,21 +3426,22 @@ class SessionManager:
             if before_index > n:
                 before_index = n
             if self._runtime_v2_primary():
-                if truncate_before_seq is not None and runtime_truncate_keep_seq is not None:
+                if runtime_truncate_target_seq is not None and runtime_truncate_keep_seq is not None:
                     self._observe_runtime_v2_history(
                         "truncate_visible_history_before_seq",
                         session_id,
-                        target_seq=int(truncate_before_seq),
+                        target_seq=runtime_truncate_target_seq,
                         keep_to_seq=runtime_truncate_keep_seq,
                         reason="runtime_v2_truncate",
                     )
                 else:
-                    self._observe_runtime_v2_history(
-                        "truncate_ui_history",
+                    logger.warning(
+                        "Runtime V2 truncate refused without runtime seq: session=%s before_index=%s truncate_before_seq=%s",
                         session_id,
-                        before_index=before_index,
-                        reason="runtime_v2_truncate",
+                        before_index,
+                        truncate_before_seq,
                     )
+                    return False
                 return True
             new_events = events[:before_index]
             if create_backup:
@@ -3499,24 +3541,37 @@ class SessionManager:
                         if int(candidate.seq) == seq:
                             source_event = candidate
                             break
-                    if source_event is None:
-                        return {"ok": False, "error": "runtime_seq_not_found"}
-                    source_ui = projection._event_to_ui(sid, source_event)
-                    if not source_ui or source_ui.get("type") != "final":
-                        return {
-                            "ok": False,
-                            "error": "branch_target_not_final",
-                            "event_count": n,
-                            "last_type": str(source_ui.get("type") if isinstance(source_ui, dict) else source_event.type),
-                            "runtime_seq": seq,
-                        }
-                    seq_before_index = projection.runtime_seq_to_ui_end_index(sid, seq)
-                    if seq_before_index is None:
-                        return {"ok": False, "error": "runtime_seq_not_visible", "runtime_seq": seq}
-                    before_index = int(seq_before_index)
-                    branch_from_seq = seq
                     events = projection.read_ui_events_fast(sid)
                     n = len(events)
+                    if source_event is None:
+                        logger.info(
+                            "Runtime V2 branch after_seq not found; falling back to before_index: session=%s seq=%s before_index=%s",
+                            sid,
+                            seq,
+                            before_index,
+                        )
+                    else:
+                        source_ui = projection._event_to_ui(sid, source_event)
+                        if not source_ui or source_ui.get("type") != "final":
+                            logger.info(
+                                "Runtime V2 branch after_seq is not final; falling back to before_index: session=%s seq=%s type=%s before_index=%s",
+                                sid,
+                                seq,
+                                str(source_ui.get("type") if isinstance(source_ui, dict) else source_event.type),
+                                before_index,
+                            )
+                        else:
+                            seq_before_index = projection.runtime_seq_to_ui_end_index(sid, seq)
+                            if seq_before_index is None:
+                                logger.info(
+                                    "Runtime V2 branch after_seq not visible; falling back to before_index: session=%s seq=%s before_index=%s",
+                                    sid,
+                                    seq,
+                                    before_index,
+                                )
+                            else:
+                                before_index = int(seq_before_index)
+                                branch_from_seq = seq
                     if before_index > n:
                         return {"ok": False, "error": "before_index_after_end", "event_count": n}
                 except (TypeError, ValueError):

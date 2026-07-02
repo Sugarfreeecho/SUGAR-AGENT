@@ -17,11 +17,12 @@ class SessionEventLog:
     treated as rebuildable projections.
     """
 
+    _global_locks: Dict[str, threading.Lock] = {}
+    _global_locks_guard = threading.Lock()
+
     def __init__(self, root: os.PathLike[str] | str, path_resolver: Optional[Callable[[str], os.PathLike[str] | str]] = None):
         self.root = Path(root)
         self._path_resolver = path_resolver
-        self._locks: Dict[str, threading.Lock] = {}
-        self._locks_guard = threading.Lock()
 
     def session_dir(self, session_id: str) -> Path:
         safe_id = self._validate_session_id(session_id)
@@ -207,11 +208,15 @@ class SessionEventLog:
 
     def _lock_for(self, session_id: str) -> threading.Lock:
         safe_id = self._validate_session_id(session_id)
-        with self._locks_guard:
-            lock = self._locks.get(safe_id)
+        try:
+            scope = str(self.session_dir(safe_id).resolve())
+        except Exception:
+            scope = str(self.root.resolve()) + "::" + safe_id
+        with self._global_locks_guard:
+            lock = self._global_locks.get(scope)
             if lock is None:
                 lock = threading.Lock()
-                self._locks[safe_id] = lock
+                self._global_locks[scope] = lock
             return lock
 
     @staticmethod

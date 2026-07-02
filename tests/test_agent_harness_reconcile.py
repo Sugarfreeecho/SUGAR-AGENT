@@ -173,6 +173,36 @@ def test_runtime_v2_active_ui_events_empty_projection_does_not_fallback_legacy(t
     assert events == []
 
 
+def test_runtime_v2_truncate_falls_back_to_ui_index_when_runtime_seq_missing(tmp_path):
+    import agent_harness
+    from runtime_v2 import RuntimeMirror, RuntimeUiProjection
+
+    mirror = RuntimeMirror(tmp_path)
+    mirror.mirror_ui_event("s1", {"type": "user", "content": "u1"})
+    mirror.mirror_ui_event("s1", {"type": "final", "content": "a1"})
+    mirror.mirror_ui_event("s1", {"type": "user", "content": "u2"})
+    mirror.mirror_ui_event("s1", {"type": "status", "content": "interrupted"})
+
+    projection = RuntimeUiProjection(tmp_path)
+    mgr = _manager_with(
+        repository=_Repository(tmp_path),
+        _runtime_v2_primary=lambda: True,
+        _resolve_session_path=lambda sid: tmp_path / sid,
+        _load_ui_events_for_active_runtime=lambda sid: projection.read_ui_events_fast(sid),
+    )
+
+    changed = agent_harness.SessionManager.truncate_session_at_event_index(
+        mgr,
+        "s1",
+        2,
+        truncate_before_seq=None,
+        create_backup=False,
+    )
+
+    assert changed is True
+    assert [event["content"] for event in RuntimeUiProjection(tmp_path).read_ui_events("s1")] == ["u1", "a1"]
+
+
 def test_runtime_v2_react_continue_uses_active_ui_projection(tmp_path):
     import agent_harness
     from runtime_v2 import RuntimeMirror
@@ -214,22 +244,26 @@ def test_runtime_v2_react_continue_false_after_final_uses_projection(tmp_path):
     assert agent_harness.SessionManager.can_continue_react_session(mgr, "s1") is False
 
 
-def test_runtime_v2_truncate_only_changes_visible_range_without_legacy_rebuild():
+def test_runtime_v2_truncate_only_changes_visible_range_without_legacy_rebuild(tmp_path):
     import agent_harness
+    from runtime_v2 import RuntimeMirror, RuntimeUiProjection
 
     observed = []
+    mirror = RuntimeMirror(tmp_path)
+    e1 = mirror.mirror_ui_event("s1", {"type": "user", "content": "u1"})
+    e2 = mirror.mirror_ui_event("s1", {"type": "final", "content": "a1"})
+    e3 = mirror.mirror_ui_event("s1", {"type": "user", "content": "u2"})
+    mirror.mirror_ui_event("s1", {"type": "final", "content": "a2"})
+    projection = RuntimeUiProjection(tmp_path)
 
     def fail_legacy(*args, **kwargs):
         raise AssertionError("Runtime V2 truncate must not write or rebuild legacy history")
 
     mgr = _manager_with(
+        repository=_Repository(tmp_path),
         _runtime_v2_primary=lambda: True,
-        _load_ui_events_for_active_runtime=lambda sid: [
-            {"type": "user", "content": "u1"},
-            {"type": "final", "content": "a1"},
-            {"type": "user", "content": "u2"},
-            {"type": "final", "content": "a2"},
-        ],
+        _resolve_session_path=lambda sid: tmp_path / sid,
+        _load_ui_events_for_active_runtime=lambda sid: projection.read_ui_events_fast(sid),
         _backup_session_before_truncate=fail_legacy,
         _save_ui_events=fail_legacy,
         _rebuild_llm_work_from_ui=fail_legacy,
@@ -248,10 +282,13 @@ def test_runtime_v2_truncate_only_changes_visible_range_without_legacy_rebuild()
     )
 
     assert changed is True
+    assert e1.seq == 1
+    assert e2.seq == 2
+    assert e3.seq == 3
     assert observed == [
         (
-            ("truncate_ui_history", "s1"),
-            {"before_index": 2, "reason": "runtime_v2_truncate"},
+            ("truncate_visible_history_before_seq", "s1"),
+            {"target_seq": 3, "keep_to_seq": 2, "reason": "runtime_v2_truncate"},
         )
     ]
 
@@ -312,15 +349,20 @@ def test_runtime_v2_branch_creates_v2_branch_without_legacy_rebuild(tmp_path):
     ]
 
 
-def test_delete_session_removes_subagent_descendants_and_index(tmp_path):
+def test_delete_session_removes_subagent_descendants_and_index(tmp_path, monkeypatch):
     import json
     import agent_harness
 
-    root_id = "11111111-1111-4111-8111-111111111111"
-    child_id = "22222222-2222-4222-8222-222222222222"
-    grandchild_id = "33333333-3333-4333-8333-333333333333"
-    other_id = "44444444-4444-4444-8444-444444444444"
-    sessions_dir = tmp_path / "sessions"
+    monkeypatch.setattr(
+        agent_harness.SessionManager,
+        "_normalize_session_id",
+        staticmethod(lambda session_id: str(session_id or "").strip()),
+    )
+    root_id = "root"
+    child_id = "child"
+    grandchild_id = "grandchild"
+    other_id = "other"
+    sessions_dir = tmp_path / "s"
     sessions_dir.mkdir()
     index_file = sessions_dir / "sessions_index.json"
     index_file.write_text(

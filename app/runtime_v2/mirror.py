@@ -90,6 +90,17 @@ class RuntimeMirror:
             return None
         if event_type == "user":
             return {"type": "message_user", "payload": {"content": event.get("content") or ""}}
+        if event_type == "user_steer":
+            return {
+                "type": "message_user",
+                "payload": {
+                    "content": event.get("content") or "",
+                    "ui_type": "user_steer",
+                    "steer": bool(event.get("steer")),
+                    "steer_id": str(event.get("steer_id") or ""),
+                    "client_id": str(event.get("client_id") or ""),
+                },
+            }
         if event_type == "final":
             return {"type": "message_assistant_final", "payload": {"content": event.get("content") or ""}}
         if event_type == "context_tokens":

@@ -141,86 +141,6 @@ class AssistantTurn:
     reasoning_content: Optional[str]
 
 
-_THINK_OPEN_TAG = "<think>"
-_THINK_CLOSE_TAG = "</think>"
-_THINK_BLOCK_RE = re.compile(r"(?is)<think>(.*?)</think>")
-
-
-def _merge_reasoning_text(existing: Optional[str], extracted: str) -> Optional[str]:
-    parts: List[str] = []
-    if existing and str(existing).strip():
-        parts.append(str(existing).strip())
-    if extracted and str(extracted).strip():
-        parts.append(str(extracted).strip())
-    return "\n\n".join(parts) if parts else None
-
-
-def split_think_tags_from_content(content: str, reasoning: Optional[str] = None) -> Tuple[str, Optional[str]]:
-    """Move inline <think>...</think> blocks out of assistant content and into reasoning."""
-    text = str(content or "")
-    extracted: List[str] = []
-
-    def repl(match: re.Match[str]) -> str:
-        part = match.group(1).strip()
-        if part:
-            extracted.append(part)
-        return ""
-
-    cleaned = _THINK_BLOCK_RE.sub(repl, text)
-    open_idx = cleaned.lower().find(_THINK_OPEN_TAG)
-    if open_idx >= 0:
-        tail = cleaned[open_idx + len(_THINK_OPEN_TAG):].strip()
-        if tail:
-            extracted.append(tail)
-        cleaned = cleaned[:open_idx]
-    return cleaned.strip(), _merge_reasoning_text(reasoning, "\n\n".join(extracted))
-
-
-def _tag_suffix_prefix_len(text: str, tag: str) -> int:
-    max_n = min(len(text), len(tag) - 1)
-    for n in range(max_n, 0, -1):
-        if tag.startswith(text[-n:]):
-            return n
-    return 0
-
-
-class ThinkTagStreamSplitter:
-    """Incrementally split content deltas that contain inline <think> tags."""
-
-    def __init__(self) -> None:
-        self._mode = "content"
-        self._buf = ""
-
-    def feed(self, piece: str) -> List[Tuple[str, str]]:
-        self._buf += str(piece or "")
-        out: List[Tuple[str, str]] = []
-        while self._buf:
-            tag = _THINK_OPEN_TAG if self._mode == "content" else _THINK_CLOSE_TAG
-            lower = self._buf.lower()
-            idx = lower.find(tag)
-            if idx >= 0:
-                before = self._buf[:idx]
-                if before:
-                    out.append((self._mode, before))
-                self._buf = self._buf[idx + len(tag):]
-                self._mode = "reasoning" if self._mode == "content" else "content"
-                continue
-            keep = _tag_suffix_prefix_len(lower, tag)
-            emit_text = self._buf[: len(self._buf) - keep] if keep else self._buf
-            self._buf = self._buf[len(emit_text):]
-            if emit_text:
-                out.append((self._mode, emit_text))
-            break
-        return out
-
-    def finish(self) -> List[Tuple[str, str]]:
-        if not self._buf:
-            return []
-        out = [(self._mode, self._buf)]
-        self._buf = ""
-        return out
-
-
 def normalize_content_text(content: Any) -> str:
     """将 API 返回的 content（str / dict / 多模态 list）统一成纯文本。"""
     if content is None:
@@ -480,7 +400,6 @@ def parse_assistant_message(msg: Any) -> AssistantTurn:
     """解析 chat.completions 返回的 assistant message（content、tool_calls、reasoning_content）。"""
     content = _normalize_content_text(getattr(msg, "content", None))
     reasoning = _extract_reasoning_text(msg)
-    content, reasoning = split_think_tags_from_content(content, reasoning)
 
     raw_calls = getattr(msg, "tool_calls", None)
     tool_calls: Optional[List[Dict[str, Any]]] = None
@@ -693,6 +612,20 @@ def run_chat_completion_stream_worker(
     经 sync_q 投递：("reasoning", str)、("content", str)、("turn", AssistantTurn)；
     失败时 ("err", Exception)；最后一定放入 None。
     """
+    api_t0 = time.perf_counter()
+
+    def put_stream_timing(step: str, **extra: Any) -> None:
+        try:
+            payload: Dict[str, Any] = {
+                "step": step,
+                "ms_since_api_start": int(max(0.0, (time.perf_counter() - api_t0) * 1000.0)),
+                "model": model,
+            }
+            payload.update(extra)
+            sync_q.put(("stream_timing", payload))
+        except Exception:
+            pass
+
     try:
         api_messages = messages_to_openai_params(messages)
         kwargs: Dict[str, Any] = dict(
@@ -731,10 +664,18 @@ def run_chat_completion_stream_worker(
                     pass
 
         _image_fallback_done = False
+        put_stream_timing(
+            "request_start",
+            messages=len(api_messages),
+            tools=len(tools or []),
+            max_tokens=max_tokens,
+        )
         for attempt in range(OPENAI_MAX_RETRIES):
             if abort_requested():
+                put_stream_timing("aborted_before_create", attempt=attempt + 1)
                 return
             try:
+                put_stream_timing("create_attempt_start", attempt=attempt + 1)
                 try:
                     stream = client.chat.completions.create(
                         **kwargs, stream_options={"include_usage": True}
@@ -742,6 +683,7 @@ def run_chat_completion_stream_worker(
                 except Exception as e1:
                     logger.debug("流式 create 无 stream_options 或端点不支持: %s", _redact_runtime_log_text(e1))
                     stream = client.chat.completions.create(**kwargs)
+                put_stream_timing("stream_created", attempt=attempt + 1)
                 break
             except Exception as e:
                 if _is_media_input_error(e) and not _image_fallback_done:
@@ -753,8 +695,10 @@ def run_chat_completion_stream_worker(
                     )
                     kwargs["messages"] = _strip_media_from_api_messages(kwargs["messages"])
                     sync_q.put(("status", "[提示] 当前模型不支持图片识别，已自动切换为纯文本模式"))
+                    put_stream_timing("media_fallback_retry", attempt=attempt + 1)
                     continue
                 if not _is_retriable_openai_error(e) or attempt >= OPENAI_MAX_RETRIES - 1:
+                    put_stream_timing("create_failed", attempt=attempt + 1, error=type(e).__name__)
                     raise
                 delay = OPENAI_RETRY_BASE_SEC * (2**attempt)
                 logger.warning(
@@ -764,26 +708,38 @@ def run_chat_completion_stream_worker(
                     delay,
                     _redact_runtime_log_text(e),
                 )
+                put_stream_timing("retry_sleep", attempt=attempt + 1, delay_ms=int(delay * 1000), error=type(e).__name__)
                 time.sleep(delay)
         if stream is None:
             raise RuntimeError("stream 创建失败")
         reasoning_buf = ""
         content_buf = ""
-        think_splitter = ThinkTagStreamSplitter()
         tool_acc: Dict[int, Dict[str, str]] = {}
         last_usage: Optional[Dict[str, int]] = None
         actual_model = ""
         finish_meta: Dict[str, Any] = {"finish_reason": None, "stop_reason": None}
+        first_chunk_seen = False
+        first_delta_seen = False
+        first_reasoning_seen = False
+        first_content_seen = False
+        first_tool_delta_seen = False
+        chunk_count = 0
         for chunk in stream:
             if abort_requested():
                 close_stream_quietly()
+                put_stream_timing("aborted_during_stream")
                 return
+            chunk_count += 1
+            if not first_chunk_seen:
+                first_chunk_seen = True
+                put_stream_timing("first_chunk", chunk_count=chunk_count)
             chunk_model = str(getattr(chunk, "model", None) or "").strip()
             if chunk_model:
                 actual_model = chunk_model
             uo = getattr(chunk, "usage", None)
             if uo is not None:
                 last_usage = extract_usage_dict(uo)
+                put_stream_timing("usage_chunk", chunk_count=chunk_count)
             if not chunk.choices:
                 continue
             choice0 = chunk.choices[0]
@@ -800,35 +756,43 @@ def run_chat_completion_stream_worker(
             if rc:
                 piece = rc if isinstance(rc, str) else str(rc)
                 reasoning_buf += piece
+                if not first_delta_seen:
+                    first_delta_seen = True
+                    put_stream_timing("first_delta", delta_type="reasoning", chars=len(piece), chunk_count=chunk_count)
+                if not first_reasoning_seen:
+                    first_reasoning_seen = True
+                    put_stream_timing("first_reasoning_delta", chars=len(piece), chunk_count=chunk_count)
                 sync_q.put(("reasoning", piece))
             ct = getattr(delta, "content", None)
             if ct:
                 piece = ct if isinstance(ct, str) else str(ct)
-                for part, text in think_splitter.feed(piece):
-                    if part == "reasoning":
-                        reasoning_buf += text
-                        sync_q.put(("reasoning", text))
-                    else:
-                        content_buf += text
-                        sync_q.put(("content", text))
+                content_buf += piece
+                if not first_delta_seen:
+                    first_delta_seen = True
+                    put_stream_timing("first_delta", delta_type="content", chars=len(piece), chunk_count=chunk_count)
+                if not first_content_seen:
+                    first_content_seen = True
+                    put_stream_timing("first_content_delta", chars=len(piece), chunk_count=chunk_count)
+                sync_q.put(("content", piece))
             delta_tool_calls = getattr(delta, "tool_calls", None)
             for payload in _tool_call_delta_payloads(delta_tool_calls):
+                if not first_delta_seen:
+                    first_delta_seen = True
+                    put_stream_timing("first_delta", delta_type="tool_call", chunk_count=chunk_count)
+                if not first_tool_delta_seen:
+                    first_tool_delta_seen = True
+                    put_stream_timing("first_tool_call_delta", chunk_count=chunk_count)
                 sync_q.put(("tool_call_delta", payload))
             _accumulate_tool_call_delta(tool_acc, delta_tool_calls)
+        put_stream_timing("stream_exhausted", chunk_count=chunk_count)
         if abort_requested():
             close_stream_quietly()
+            put_stream_timing("aborted_after_stream")
             return
-        for part, text in think_splitter.finish():
-            if part == "reasoning":
-                reasoning_buf += text
-                sync_q.put(("reasoning", text))
-            else:
-                content_buf += text
-                sync_q.put(("content", text))
         tool_calls_list = _tool_acc_to_parsed_list(tool_acc)
-        content_final, reasoning_final = split_think_tags_from_content(content_buf or "", reasoning_buf.strip() or None)
+        reasoning_final = reasoning_buf.strip() or None
         turn = AssistantTurn(
-            content=content_final,
+            content=content_buf or "",
             tool_calls=tool_calls_list,
             reasoning_content=reasoning_final,
         )
@@ -850,7 +814,15 @@ def run_chat_completion_stream_worker(
             finish_meta["model"] = actual_model
         sync_q.put(("finish", finish_meta))
         sync_q.put(("turn", turn))
+        put_stream_timing(
+            "turn_ready",
+            chunk_count=chunk_count,
+            reasoning_chars=len(reasoning_final or ""),
+            content_chars=len(content_buf or ""),
+            tool_calls=len(tool_calls_list or []),
+        )
     except Exception as e:
+        put_stream_timing("stream_error", error=type(e).__name__)
         logger.warning("chat.completions 流式调用异常: %s", _redact_runtime_log_text(e))
         sync_q.put(("err", e))
     finally:

@@ -77,7 +77,7 @@ _active_chat_last_seen: dict[str, float] = {}
 _CHAT_ACTIVE_TIMEOUT_SEC = int(os.getenv("CHAT_ACTIVE_TIMEOUT_SEC", "300"))
 _RUNTIME_V2_ORPHAN_GRACE_SEC = int(os.getenv("RUNTIME_V2_ORPHAN_GRACE_SEC", "1800"))
 _chat_start_lock = threading.RLock()
-_chat_starting_by_session: dict[str, float] = {}
+_chat_starting_by_session: dict[str, tuple[float, str]] = {}
 logger = logging.getLogger(__name__)
 _STATIC_TEXT_CACHE_LOCK = threading.Lock()
 _STATIC_TEXT_CACHE: dict[str, tuple[tuple[bool, int, int], str]] = {}
@@ -267,10 +267,11 @@ def _cleanup_stale_active_chat():
         _active_chat_by_session.pop(sid, None)
         _active_chat_last_seen.pop(sid, None)
     with _chat_start_lock:
-        stale_starting = [
-            sid for sid, ts in list(_chat_starting_by_session.items())
-            if now - float(ts or 0.0) > _CHAT_ACTIVE_TIMEOUT_SEC
-        ]
+        stale_starting = []
+        for sid, entry in list(_chat_starting_by_session.items()):
+            ts = entry[0] if isinstance(entry, tuple) else entry
+            if now - float(ts or 0.0) > _CHAT_ACTIVE_TIMEOUT_SEC:
+                stale_starting.append(sid)
         for sid in stale_starting:
             _chat_starting_by_session.pop(sid, None)
 
@@ -285,34 +286,39 @@ def _is_session_stream_active(sid: str) -> bool:
     return bool(_session_run_state_fields(x).get("stream_active"))
 
 
-def _reserve_session_chat_start(sid: str) -> bool:
+def _reserve_session_chat_start(sid: str, run_id: str = "") -> Optional[str]:
     x = str(sid or "").strip()
     if not x:
-        return True
+        return ""
     with _chat_start_lock:
         if x in _chat_starting_by_session:
-            return False
+            return None
     followup_takeover = False
-    if os.getenv("MYAGENT_ENABLE_FOLLOWUP_RESTART", "0").strip().lower() in {"1", "true", "yes", "on"}:
+    if os.getenv("MYAGENT_ENABLE_FOLLOWUP_RESTART", "1").strip().lower() in {"1", "true", "yes", "on"}:
         try:
             followup_takeover = session_manager.get_interrupt_reason(x) == "followup"
         except Exception:
             followup_takeover = False
     if bool(_session_run_state_fields(x).get("stream_active")) and not followup_takeover:
-        return False
+        return None
     with _chat_start_lock:
         if x in _chat_starting_by_session:
-            return False
+            return None
         import time as _t
-        _chat_starting_by_session[x] = _t.time()
-        return True
+        token = str(run_id or "").strip() or str(uuid.uuid4())
+        _chat_starting_by_session[x] = (_t.time(), token)
+        return token
 
 
-def _release_session_chat_start(sid: str) -> None:
+def _release_session_chat_start(sid: str, token: str = "") -> None:
     x = str(sid or "").strip()
     if not x:
         return
     with _chat_start_lock:
+        expected = str(token or "").strip()
+        current = _chat_starting_by_session.get(x)
+        if expected and isinstance(current, tuple) and current[1] != expected:
+            return
         _chat_starting_by_session.pop(x, None)
 
 
@@ -511,6 +517,25 @@ def _runtime_v2_context_snapshot(sid: str) -> dict:
     snapshot = _runtime_v2_snapshot(sid)
     context = snapshot.get("context") if isinstance(snapshot, dict) else None
     return context if isinstance(context, dict) else {}
+
+
+def _empty_todo_plan_snapshot(source: str) -> dict:
+    return {
+        "has_plan": False,
+        "items": [],
+        "done": 0,
+        "total": 0,
+        "source": source,
+    }
+
+
+def _runtime_v2_todo_plan_snapshot(session_id: str) -> dict:
+    todo = _runtime_v2_context_snapshot(session_id).get("todo")
+    if isinstance(todo, dict):
+        out = dict(todo)
+        out.setdefault("source", "runtime_v2_snapshot")
+        return out
+    return _empty_todo_plan_snapshot("runtime_v2_snapshot")
 
 
 def _runtime_v2_event_dicts(session_id: str, *, after_seq: int = 0, before_seq: Optional[int] = None, limit: int = 200) -> list[dict]:
@@ -821,7 +846,7 @@ def get_index_html():
     app_dotenv = str(dotenv_file_path().resolve())
     ctx_thr = _ui_ah.CONTEXT_WINDOW
     feature_flags = {
-        "followupRestart": os.getenv("MYAGENT_ENABLE_FOLLOWUP_RESTART", "0").strip().lower() in {"1", "true", "yes", "on"},
+        "followupRestart": os.getenv("MYAGENT_ENABLE_FOLLOWUP_RESTART", "1").strip().lower() in {"1", "true", "yes", "on"},
         "streamReconnect": os.getenv("MYAGENT_ENABLE_STREAM_RECONNECT", "0").strip().lower() in {"1", "true", "yes", "on"},
         "finalReconcile": os.getenv("MYAGENT_ENABLE_FINAL_RECONCILE", "1").strip().lower() in {"1", "true", "yes", "on"},
     }
@@ -861,10 +886,10 @@ async def get_index(request: Request):
 
 @fastapi_app.get("/api/open-workspace-file")
 async def open_workspace_file(
-    rel: str = Query("", description="工作区相对路径、虚拟 /path 或位于工作区内的 Windows 绝对路径"),
+    rel: str = Query("", description="工作区相对路径、虚拟 /path 或本机绝对路径"),
 ):
     """
-    用系统默认应用打开工作区内的文件。浏览器禁止从 http(s) 页面跳转 file://，故通过后端 os.startfile / open / xdg-open 打开。
+    用系统默认应用打开本机文件。浏览器禁止从 http(s) 页面跳转 file://，故通过后端 os.startfile / open / xdg-open 打开。
     """
     import os
     import platform
@@ -877,8 +902,6 @@ async def open_workspace_file(
         return JSONResponse({"ok": False, "error": "UNC network paths are not supported"}, status_code=403)
 
     def _resolve_and_validate_open_path() -> Path:
-        wd = WORK_DIR.resolve()
-        app_root = Path(__file__).resolve().parent.resolve()
         if len(raw) >= 2 and raw[1] == ":":
             cand = Path(raw)
         else:
@@ -887,23 +910,8 @@ async def open_workspace_file(
             first = rel_raw.replace("\\", "/").split("/", 1)[0]
             if first and first.lower() == WORK_DIR.name.lower():
                 alt = WORK_DIR.parent / rel_raw
-                try:
-                    alt_abs = Path(os.path.abspath(str(alt)))
-                    alt_abs.relative_to(wd)
-                    cand = alt_abs
-                except ValueError:
-                    pass
+                cand = Path(os.path.abspath(str(alt)))
         resolved = Path(os.path.abspath(str(cand)))
-        allowed = False
-        for root in (wd, app_root):
-            try:
-                resolved.relative_to(root)
-                allowed = True
-                break
-            except ValueError:
-                continue
-        if not allowed:
-            raise PermissionError("path is outside allowed directories")
         if not resolved.exists() or not (resolved.is_file() or resolved.is_dir()):
             raise FileNotFoundError("file or directory does not exist")
         return resolved
@@ -1443,7 +1451,7 @@ async def runtime_v2_session_stream(
     session_id: str,
     request: Request,
     after_seq: int = Query(0, ge=0),
-    poll_ms: int = Query(250, ge=50, le=5000),
+    poll_ms: int = Query(50, ge=10, le=5000),
 ):
     """Runtime V2-native SSE stream backed by events.jsonl seq reads."""
     sid = (session_id or "").strip()
@@ -1453,7 +1461,7 @@ async def runtime_v2_session_stream(
     async def event_generator():
         cursor = int(after_seq or 0)
         idle_ticks = 0
-        poll_seconds = max(0.05, min(float(poll_ms or 250) / 1000.0, 5.0))
+        poll_seconds = max(0.01, min(float(poll_ms or 50) / 1000.0, 5.0))
         while True:
             if await request.is_disconnected():
                 break
@@ -1481,7 +1489,7 @@ async def runtime_v2_session_stream(
                 yield "data: [DONE]\n\n"
                 break
             idle_ticks += 1
-            if idle_ticks % max(1, int(15000 / max(50, int(poll_ms or 250)))) == 0:
+            if idle_ticks % max(1, int(15000 / max(10, int(poll_ms or 50)))) == 0:
                 yield f": runtime-v2 keepalive {cursor}\n\n"
             await asyncio.sleep(poll_seconds)
 
@@ -2122,7 +2130,7 @@ async def post_session_steer(session_id: str, request: Request):
         return JSONResponse(content={"ok": False, "error": "invalid json"}, status_code=400)
     message = str((data or {}).get("message") or "").strip()
     client_id = str((data or {}).get("client_id") or "").strip()
-    followup_restart_enabled = os.getenv("MYAGENT_ENABLE_FOLLOWUP_RESTART", "0").strip().lower() in {"1", "true", "yes", "on"}
+    followup_restart_enabled = os.getenv("MYAGENT_ENABLE_FOLLOWUP_RESTART", "1").strip().lower() in {"1", "true", "yes", "on"}
     result = enqueue_session_steer(sid, message, client_id=client_id)
     if not result.get("ok"):
         return JSONResponse(content=result, status_code=400)
@@ -2173,6 +2181,51 @@ async def post_session_steer(session_id: str, request: Request):
     )
 
 
+@fastapi_app.post("/api/client_timing")
+async def client_timing(request: Request):
+    try:
+        data = await request.json()
+    except Exception:
+        return JSONResponse(content={"ok": False, "error": "invalid json"}, status_code=400)
+    if not isinstance(data, dict):
+        return JSONResponse(content={"ok": False, "error": "body must be object"}, status_code=400)
+    label = str(data.get("label") or "client_pipeline_step_timing").strip()[:80]
+    session_id = str(data.get("session_id") or data.get("sessionId") or "").strip()[:120]
+    run_id = str(data.get("run_id") or data.get("runId") or "").strip()[:120]
+    step = str(data.get("step") or "").strip()[:120]
+    mode = str(data.get("mode") or "").strip()[:80]
+    try:
+        ms = int(float(data.get("ms") or 0))
+    except Exception:
+        ms = 0
+    try:
+        since_start_ms = int(float(data.get("since_start_ms") or data.get("sinceStartMs") or 0))
+    except Exception:
+        since_start_ms = 0
+    extra = data.get("extra")
+    extra_text = ""
+    if isinstance(extra, dict):
+        clean_extra = {
+            str(k)[:40]: str(v)[:120]
+            for k, v in extra.items()
+            if k is not None and v is not None
+        }
+        if clean_extra:
+            extra_text = " " + " ".join(f"{k}={v}" for k, v in clean_extra.items())
+    logger.info(
+        "%s session=%s step=%s ms=%sms since_start=%sms run_id=%s mode=%s%s",
+        label,
+        session_id,
+        step,
+        max(0, ms),
+        max(0, since_start_ms),
+        run_id,
+        mode,
+        extra_text,
+    )
+    return JSONResponse(content={"ok": True})
+
+
 @fastapi_app.delete("/sessions/{session_id}/steer")
 async def delete_session_steer(session_id: str, request: Request):
     sid = (session_id or "").strip()
@@ -2202,8 +2255,10 @@ async def chat(
     sid = (session_id or "").strip() or None
     run_id = str(client_run_id or "").strip()
     use_runtime_v2_stream = _runtime_v2_chat_protocol_enabled(stream_protocol, sid)
+    start_token = ""
     if sid:
-        if not _reserve_session_chat_start(sid):
+        start_token = _reserve_session_chat_start(sid, run_id) or ""
+        if not start_token:
             return JSONResponse(content={"ok": False, "reason": "busy"}, status_code=409)
         session_manager.clear_interrupt(sid, run_id)
 
@@ -2218,13 +2273,6 @@ async def chat(
         event_queue: asyncio.Queue = asyncio.Queue()
         stop_event = threading.Event()
         client_disconnected = False
-        runtime_v2_cursor = 0
-        if use_runtime_v2_stream and sid:
-            try:
-                runtime_v2_cursor = int((_runtime_v2_snapshot(sid) or {}).get("last_seq") or 0)
-            except Exception:
-                runtime_v2_cursor = 0
-
         def should_stop_worker(sid_: str) -> bool:
             return stop_event.is_set() or should_stop(sid_)
 
@@ -2232,7 +2280,7 @@ async def chat(
             if client_disconnected:
                 return
             try:
-                asyncio.run_coroutine_threadsafe(event_queue.put(item), main_loop).result(timeout=5)
+                main_loop.call_soon_threadsafe(event_queue.put_nowait, item)
             except Exception:
                 pass
 
@@ -2271,39 +2319,13 @@ async def chat(
                     skip_worker_run_started = True
                     skip_worker_start_status = True
 
-                async def iter_runtime_v2_chunks():
-                    nonlocal runtime_v2_cursor
-                    if not use_runtime_v2_stream or not sid:
-                        return
-                    for raw_event in _runtime_v2_event_dicts(sid, after_seq=runtime_v2_cursor, limit=200):
-                        try:
-                            runtime_v2_cursor = max(runtime_v2_cursor, int(raw_event.get("seq") or runtime_v2_cursor))
-                        except Exception:
-                            pass
-                        payload = _runtime_v2_chat_sse_payload(sid, raw_event)
-                        if payload is None:
-                            continue
-                        yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
-                        await asyncio.sleep(0)
-
                 while True:
                     if sid and await request.is_disconnected():
                         client_disconnected = True
                         logger.info("Chat stream disconnected for session %s; leaving run active", sid)
                         break
-                    if use_runtime_v2_stream:
-                        async for chunk in iter_runtime_v2_chunks():
-                            yield chunk
-                        try:
-                            event = await asyncio.wait_for(event_queue.get(), timeout=0.2)
-                        except asyncio.TimeoutError:
-                            continue
-                    else:
-                        event = await event_queue.get()
+                    event = await event_queue.get()
                     if event is None:
-                        if use_runtime_v2_stream:
-                            async for chunk in iter_runtime_v2_chunks():
-                                yield chunk
                         break
                     if skip_worker_run_started and isinstance(event, dict) and event.get("type") == "run_started":
                         skip_worker_run_started = False
@@ -2315,19 +2337,6 @@ async def chat(
                         and str(event.get("content") or "") == "New Agent Loop Start"
                     ):
                         skip_worker_start_status = False
-                        continue
-                    if use_runtime_v2_stream:
-                        if isinstance(event, dict) and event.get("ephemeral"):
-                            if event.get("type") in {"run_started", "run_finished", "run_interrupted", "run_failed"}:
-                                async for chunk in iter_runtime_v2_chunks():
-                                    yield chunk
-                                continue
-                            payload = _runtime_v2_ephemeral_sse_payload(sid or "", event)
-                            yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
-                            await asyncio.sleep(0)
-                        else:
-                            async for chunk in iter_runtime_v2_chunks():
-                                yield chunk
                         continue
                     yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
                     await asyncio.sleep(0)  # 让 ASGI/uvicorn 尽快把分块刷到客户端，利于工具/LLM 分条显示
@@ -2341,7 +2350,7 @@ async def chat(
             if not client_disconnected:
                 stop_event.set()
             if sid:
-                _release_session_chat_start(sid)
+                _release_session_chat_start(sid, start_token)
             if sid:
                 n = _active_chat_by_session.get(sid, 1) - 1
                 if n <= 0:
@@ -2379,28 +2388,36 @@ async def stream_session_events(
                     session_manager.repository.sessions_dir,
                     path_resolver=session_manager._resolve_session_path,
                 )
-                while True:
+                page = projection.read_ui_page(sid, after_index=cursor, limit=100)
+                events = page.get("events") if isinstance(page, dict) else []
+                if isinstance(events, list) and events:
+                    start = int(page.get("range_start") or (cursor + 1))
+                    for offset, event in enumerate(events):
+                        if await request.is_disconnected():
+                            break
+                        if not isinstance(event, dict):
+                            continue
+                        event_index = start + offset
+                        payload = dict(event)
+                        payload["session_id"] = sid
+                        payload["seq"] = event_index + 1
+                        yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+                        cursor = max(cursor, event_index)
+                        await asyncio.sleep(0)
+                if await request.is_disconnected():
+                    return
+                if not _has_local_worker_activity(sid):
+                    yield "data: [DONE]\n\n"
+                    return
+                async for event in subscribe_session_events(sid, replay_recent=True):
                     if await request.is_disconnected():
                         break
-                    page = projection.read_ui_page(sid, after_index=cursor, limit=100)
-                    events = page.get("events") if isinstance(page, dict) else []
-                    if isinstance(events, list) and events:
-                        start = int(page.get("range_start") or (cursor + 1))
-                        for offset, event in enumerate(events):
-                            if not isinstance(event, dict):
-                                continue
-                            event_index = start + offset
-                            payload = dict(event)
-                            payload["session_id"] = sid
-                            payload["seq"] = event_index + 1
-                            yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
-                            cursor = max(cursor, event_index)
-                            await asyncio.sleep(0)
-                        continue
-                    if not _has_local_worker_activity(sid):
-                        yield "data: [DONE]\n\n"
+                    if event is None:
                         break
-                    await asyncio.sleep(0.25)
+                    yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+                    await asyncio.sleep(0)
+                if not await request.is_disconnected():
+                    yield "data: [DONE]\n\n"
             except asyncio.CancelledError:
                 return
         finally:
@@ -2561,6 +2578,7 @@ async def get_session_messages(
     limit: Optional[int] = Query(None, ge=1, le=500),
     before_index: Optional[int] = Query(None, ge=0),
     after_index: Optional[int] = Query(None, ge=-1),
+    target_index: Optional[int] = Query(None, ge=0),
     turns: Optional[int] = Query(None, ge=1, le=50),
 ):
     """
@@ -2571,6 +2589,9 @@ async def get_session_messages(
     import time as _time
     t0 = _time.perf_counter()
     projection = None
+    target_index_value: Optional[int] = None
+    if isinstance(target_index, int):
+        target_index_value = target_index
     if _runtime_sync_on_messages_open_enabled():
         try:
             _enqueue_runtime_sync(session_id, "messages_open", check_needed=True)
@@ -2598,7 +2619,7 @@ async def get_session_messages(
                         "has_newer": end < total,
                         "source": "runtime_v1_after_index",
                     })
-                if limit is None and turns is None:
+                if limit is None and turns is None and before_index is None and after_index is None and target_index_value is None:
                     payload = session_manager.get_ui_events_for_display(session_id)
                     elapsed_ms = int((_time.perf_counter() - t0) * 1000)
                     if elapsed_ms >= 500:
@@ -2610,6 +2631,7 @@ async def get_session_messages(
                     session_id,
                     limit=lim,
                     before_index=before_index,
+                    target_index=target_index_value,
                     turns=tv,
                 )
                 elapsed_ms = int((_time.perf_counter() - t0) * 1000)
@@ -2633,7 +2655,7 @@ async def get_session_messages(
                     session_manager.repository.sessions_dir,
                     path_resolver=session_manager._resolve_session_path,
                 )
-            if limit is None and turns is None:
+            if limit is None and turns is None and before_index is None and after_index is None and target_index_value is None:
                 payload = projection.read_ui_events(session_id)
                 elapsed_ms = int((_time.perf_counter() - t0) * 1000)
                 if elapsed_ms >= 500:
@@ -2646,6 +2668,7 @@ async def get_session_messages(
                 limit=lim,
                 before_index=before_index,
                 after_index=after_index,
+                target_index=target_index_value,
                 turns=tv,
             )
             elapsed_ms = int((_time.perf_counter() - t0) * 1000)
@@ -2764,6 +2787,7 @@ async def get_session_history_snapshot(
             t_phase = _time.perf_counter()
             user_turns = projection.read_user_turns_light(session_id)
             timings["user_turns"] = int((_time.perf_counter() - t_phase) * 1000)
+            todo_plan = _runtime_v2_todo_plan_snapshot(session_id)
             elapsed_ms = int((_time.perf_counter() - t0) * 1000)
             timings["total"] = elapsed_ms
             if elapsed_ms >= 500:
@@ -2786,6 +2810,7 @@ async def get_session_history_snapshot(
                 "count": count,
                 "count_source": count_source,
                 "user_turns": user_turns,
+                "todo_plan": todo_plan,
                 "elapsed_ms": elapsed_ms,
                 "timing": timings,
             })
@@ -2989,27 +3014,10 @@ async def get_session_todo_plan(session_id: str):
             from runtime_v2 import runtime_v2_primary
 
             if runtime_v2_primary():
-                todo = _runtime_v2_context_snapshot(session_id).get("todo")
-                if isinstance(todo, dict):
-                    out = dict(todo)
-                    out.setdefault("source", "runtime_v2_snapshot")
-                    return JSONResponse(content=out)
-                return JSONResponse(content={
-                    "has_plan": False,
-                    "items": [],
-                    "done": 0,
-                    "total": 0,
-                    "source": "runtime_v2_snapshot",
-                })
+                return JSONResponse(content=_runtime_v2_todo_plan_snapshot(session_id))
         except Exception as exc:
             logger.debug("Runtime V2 todo snapshot read failed for %s: %s", session_id, exc)
-            return JSONResponse(content={
-                "has_plan": False,
-                "items": [],
-                "done": 0,
-                "total": 0,
-                "source": "runtime_v2_snapshot_error",
-            })
+            return JSONResponse(content=_empty_todo_plan_snapshot("runtime_v2_snapshot_error"))
         return JSONResponse(content=session_manager.get_todo_plan_snapshot(session_id))
 
     return await asyncio.to_thread(_build_todo_response)

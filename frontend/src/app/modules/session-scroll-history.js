@@ -277,15 +277,6 @@ function hydrateSubagentTurnProcess(turn, ctx, agentId) {
         if (!ev || typeof ev !== 'object') return;
         if (shouldSkipSubagentProcessEvent(ev)) return;
         if (ev.ephemeral) {
-            if (ev.type === 'llm_reasoning_delta' || ev.type === 'llm_response_delta') {
-                appendLlmStreamDelta(ctx, ev, agentId);
-            } else if (ev.type === 'context_summary_delta') {
-                appendProgressStreamDelta(ctx, ev.delta, 'context-summary', agentId);
-            } else if (ev.type === 'key_context_delta') {
-                appendKeyContextStreamDelta(ctx, ev.delta, agentId);
-            } else if (ev.type === 'context_tokens' || ev.type === 'process_metrics' || ev.type === 'cache_stats') {
-                /* metrics 类事件只更新卡片统计，不在展开过程里落一条“信息”。 */
-            }
             return;
         }
         reduceAndRenderMessageEvent(ctx, ev, {
@@ -744,6 +735,65 @@ async function loadOlderHistoryChunk(opts) {
 
 function insertNewEmptyChatStream() { ensureVisibleChatStreamSlot(); }
 
+async function loadHistoryWindowAroundEventIndex(sessionId, eventIndex, opts) {
+    opts = opts || {};
+    var sid = String(sessionId || '');
+    var ei = Number(eventIndex);
+    if (!sid || !Number.isFinite(ei)) return false;
+    var prevReplaying = replayingMessages;
+    try {
+        var turns = Math.max(1, Math.min(Number(opts.turns) || 50, 50));
+        var url = '/sessions/' + encodeURIComponent(sid)
+            + '/messages?turns=' + encodeURIComponent(String(turns))
+            + '&target_index=' + encodeURIComponent(String(Math.floor(ei)));
+        var response = await fetch(url);
+        var data = await response.json().catch(function () { return null; });
+        if (!response.ok || !data || typeof data !== 'object' || !Array.isArray(data.events)) return false;
+        if (sid !== currentSessionId) return false;
+        if (!getVisibleChatStream()) ensureVisibleChatStreamSlot();
+        var stream = getVisibleChatStream();
+        if (!stream) return false;
+        emptyChatStreamKeepingStrip(stream);
+        var pageMeta = {
+            total: Number(data.total) || 0,
+            range_start: Number(data.range_start) || 0,
+            range_end: Number(data.range_end) || 0,
+            has_older: !!data.has_older,
+        };
+        beginMessageReplay(sid, pageMeta);
+        setSessionHistoryPaging({
+            sessionId: sid,
+            total: pageMeta.total,
+            range_start: pageMeta.range_start,
+            range_end: pageMeta.range_end,
+            has_older: !!pageMeta.has_older,
+        });
+        ensureHistorySentinel(stream);
+        var ctx = newDomContext(stream);
+        ctx.lastUserEventIndex = -1;
+        replayingMessages = true;
+        for (var i = 0; i < data.events.length; i += 1) {
+            var ev = data.events[i];
+            if (ev && typeof ev === 'object' && ev.type) {
+                reduceAndRenderMessageEvent(ctx, ev, {
+                    sessionId: sid,
+                    eventIndex: pageMeta.range_start + i,
+                    source: 'history-target',
+                });
+            }
+        }
+        replayingMessages = prevReplaying;
+        bindExistingLogs(stream);
+        rebuildToc();
+        updateHistorySentinelVisibility();
+        return true;
+    } catch (e) {
+        replayingMessages = prevReplaying;
+        console.error('load target history window failed:', e);
+        return false;
+    }
+}
+
 const SESSION_STREAM_CACHE_LIMIT = 6;
 const cachedSessionStreamOrder = [];
 
@@ -816,6 +866,11 @@ function restoreStreamForRunningSession(enteringId) {
     if (!st.parentNode) return false;
     if (st.parentNode === chatContainer) return st.id === 'chat-stream';
     if (offscreenRoot && st.parentNode !== offscreenRoot) return false;
+    if (st.dataset && (st.dataset.partialBackgroundRun === '1' || st.dataset.sessionLoadOk !== '1')) {
+        abortSessionRun(enteringId, 'reattach-incomplete-background');
+        if (st.parentNode) st.remove();
+        return false;
+    }
     const cur = getVisibleChatStream();
     if (cur && cur.parentNode === chatContainer) cur.remove();
     st.classList.remove('is-offscreen');
@@ -906,6 +961,9 @@ function newLlmState() {
         llmPendingReasoningDelta: '',
         llmPendingResponseDelta: '',
         llmDeltaFlushRaf: 0,
+        llmThinkTagMode: 'response',
+        llmThinkTagCarry: '',
+        llmThinkTagAllowLeading: true,
     };
 }
 
@@ -1025,6 +1083,9 @@ function finalizeLlmStreamChunks(ctx) {
         l.llmStreamReasoningScroller = null;
         l.llmStreamResponseScroller = null;
         l.llmDeltaLastSeq = null;
+        l.llmThinkTagMode = 'response';
+        l.llmThinkTagCarry = '';
+        l.llmThinkTagAllowLeading = true;
     }
     var bodies = [];
     if (ctx.currentProcessGroup && !isSubagentStreamCtx(ctx)) {
@@ -1066,6 +1127,9 @@ function discardLlmStreamChunks(ctx, ev) {
         l.llmStreamReasoningScroller = null;
         l.llmStreamResponseScroller = null;
         l.llmDeltaLastSeq = null;
+        l.llmThinkTagMode = 'response';
+        l.llmThinkTagCarry = '';
+        l.llmThinkTagAllowLeading = true;
     }
     var bodies = [];
     if (ctx.currentProcessGroup && !isSubagentStreamCtx(ctx)) {
@@ -1104,6 +1168,7 @@ function discardLlmStreamChunks(ctx, ev) {
 function flushLlmDeltaText(ctx) {
     if (!ctx || !ctx.llm) return;
     const l = ctx.llm;
+    if (typeof flushThinkTagCarry === 'function') flushThinkTagCarry(ctx);
     if (l.llmDeltaFlushRaf) {
         cancelAnimationFrame(l.llmDeltaFlushRaf);
         l.llmDeltaFlushRaf = 0;
@@ -1139,6 +1204,9 @@ function resetLlmState(ctx) {
     l.llmStreamReasoningScroller = null;
     l.llmStreamResponseScroller = null;
     l.llmDeltaLastSeq = null;
+    l.llmThinkTagMode = 'response';
+    l.llmThinkTagCarry = '';
+    l.llmThinkTagAllowLeading = true;
 }
 
 function showCopyFeedback() {
@@ -1430,6 +1498,16 @@ async function scrollToUserTurnOrLoadOlder(eventIndex, opts) {
             return true;
         }
         var sid = currentSessionId;
+        if (allowFullReload) {
+            var loadedTargetWindow = await loadHistoryWindowAroundEventIndex(sid, ei, { turns: 50 });
+            if (loadedTargetWindow && sid === currentSessionId) {
+                wrap = findWrap();
+                if (wrap) {
+                    wrap.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                    return true;
+                }
+            }
+        }
         var safety = 0;
         var olderLoads = 0;
         var pagingCoveredTarget = false;

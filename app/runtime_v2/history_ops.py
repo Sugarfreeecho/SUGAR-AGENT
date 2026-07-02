@@ -88,11 +88,12 @@ class RuntimeHistoryOps:
         reason: str = "",
     ) -> RuntimeEvent:
         """Hide visible history from ``target_seq`` onward without UI indexes."""
-        return self.change_visible_range(
-            session_id,
-            to_seq=max(0, int(keep_to_seq)),
-            reason=reason or f"truncate_before_seq:{int(target_seq)}",
-        )
+        return self._append_and_snapshot(session_id, "visible_range_changed", {
+            "target_seq": int(target_seq),
+            "to_seq": max(0, int(keep_to_seq)),
+            "apply_model": True,
+            "reason": reason or f"truncate_before_seq:{int(target_seq)}",
+        })
 
     def change_model_window(self, session_id: str, *, from_seq: Optional[int] = None, to_seq: Optional[int] = None, reason: str = "") -> RuntimeEvent:
         payload = {"reason": reason}
@@ -218,6 +219,9 @@ class RuntimeHistoryOps:
     def _seed_branch_visible_history(self, session_id: str, source_session_id: str, branch_from_seq: int) -> int:
         if self._has_projectable_ui_events(session_id):
             return 0
+        projected_count = self._seed_branch_from_projected_ui(session_id, source_session_id, int(branch_from_seq))
+        if projected_count:
+            return projected_count
         count = 0
         for source_event in self.event_log.iter_events(source_session_id):
             if int(source_event.seq) > int(branch_from_seq):
@@ -232,6 +236,37 @@ class RuntimeHistoryOps:
             )
             count += 1 if copied is not None else 0
         return count
+
+    def _seed_branch_from_projected_ui(self, session_id: str, source_session_id: str, branch_from_seq: int) -> int:
+        try:
+            from .mirror import RuntimeMirror
+            from .ui_projection import RuntimeUiProjection
+
+            projection = RuntimeUiProjection(self.event_log.root)
+            end_index = projection.runtime_seq_to_ui_end_index(source_session_id, int(branch_from_seq))
+            if end_index is None:
+                return 0
+            source_events = projection.read_ui_events(source_session_id)[:max(0, int(end_index))]
+            if not source_events:
+                return 0
+            mirror = RuntimeMirror(self.event_log.root)
+            count = 0
+            for event in source_events:
+                if not isinstance(event, dict):
+                    continue
+                seed = dict(event)
+                seed.pop("runtime_seq", None)
+                seed.pop("runtime_event_type", None)
+                seed.pop("rewritten", None)
+                seed.pop("rewritten_by_seq", None)
+                seed.pop("session_id", None)
+                mirrored = mirror.mirror_ui_event(session_id, seed)
+                if mirrored is None:
+                    mirrored = mirror.append(session_id, "legacy_ui_event", self._copy_blob_refs(source_session_id, session_id, seed))
+                count += 1 if mirrored is not None else 0
+            return count
+        except Exception:
+            return 0
 
     def _has_projectable_ui_events(self, session_id: str) -> bool:
         return any(self._is_branch_seed_event(event) for event in self.event_log.iter_events(session_id))

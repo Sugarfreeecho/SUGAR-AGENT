@@ -384,7 +384,11 @@ function onMessageToolbarClick(wrap, role, act) {
             if (!ok) return;
             wrap.dataset.branching = '1';
             (async function () {
-                var res = await branchSessionOnServer(branchBefore, sourceSessionId, runtimeSeq);
+                var runtimeEventType = String(wrap.dataset.runtimeEventType || '');
+                var branchAfterSeq = runtimeEventType && runtimeEventType !== 'message_assistant_final'
+                    ? null
+                    : runtimeSeq;
+                var res = await branchSessionOnServer(branchBefore, sourceSessionId, branchAfterSeq);
                 if (!res || !res.ok || !res.session_id) {
                     showUiAlert({
                         title: '创建失败',
@@ -1366,11 +1370,16 @@ function stripPathWrappingQuotes(s) {
     if (t.length >= 2) {
         var a = t.charAt(0);
         var b = t.charAt(t.length - 1);
-        if ((a === '"' && b === '"') || (a === "'" && b === "'")) {
+        if ((a === '"' && b === '"') || (a === "'" && b === "'") || (a === '`' && b === '`')) {
             return t.slice(1, -1).trim();
         }
     }
     return t;
+}
+
+function stripPathLineSuffix(s) {
+    var t = String(s || '').trim();
+    return t.replace(new RegExp('(\\.(' + LINKIFY_EXT_FRAGMENT + ')):(\\d+)(?::\\d+)?$', 'i'), '.$2');
 }
 
 function decodePathPercentEscapes(s) {
@@ -1391,10 +1400,10 @@ function cleanPathTokenForLink(s) {
     if (!t) return '';
     var a = t.charAt(0);
     var b = t.charAt(t.length - 1);
-    if (t.length >= 2 && ((a === '"' && b === '"') || (a === "'" && b === "'"))) {
-        return trimTrailingPathPunct(t.slice(1, -1).trim());
+    if (t.length >= 2 && ((a === '"' && b === '"') || (a === "'" && b === "'") || (a === '`' && b === '`'))) {
+        return stripPathLineSuffix(trimTrailingPathPunct(t.slice(1, -1).trim()));
     }
-    return stripPathWrappingQuotes(trimTrailingPathPunct(t));
+    return stripPathLineSuffix(stripPathWrappingQuotes(trimTrailingPathPunct(t)));
 }
 
 /** 统一全角标点/数字等，便于识别「．xlsx」「路径：／」等变体 */
@@ -1926,7 +1935,7 @@ function expandInputPathTokens(text) {
 
 /** 整段文本是否仅为可链转的 Windows 绝对路径（用于行内 code 内路径） */
 function isEntireTextNodeWindowsPath(raw) {
-    var t = trimTrailingPathPunct(linkifyNormalizePathToken(String(raw || '').trim()));
+    var t = cleanPathTokenForLink(raw);
     if (!t) return false;
     return /^([A-Za-z]):[\\/](?:(?:[^\\/:*?"<>|\r\n]+)(?:\\|\/))*[^\\/:*?"<>|\r\n]+$/i.test(t);
 }
@@ -1934,18 +1943,18 @@ function isEntireTextNodeWindowsPath(raw) {
 
 /** 行内 code 内整段为 `/工作区相对/路径.ext` 时亦允许链转（否则反引号路径永不可点） */
 function isEntireWorkspaceSlashPathLinkable(raw) {
-    var t = trimTrailingPathPunct(linkifyNormalizePathToken(String(raw || '').trim()));
+    var t = cleanPathTokenForLink(raw);
     return workspaceRelativePathAutoLinkOk(t);
 }
 
 function isEntireWorkspaceRelativePathLinkable(raw) {
-    var t = trimTrailingPathPunct(linkifyNormalizePathToken(String(raw || '').trim()));
+    var t = cleanPathTokenForLink(raw);
     return workspaceRelativePathNoSlashAutoLinkOk(t);
 }
 
 /** 行内 code 内整段为 UNC \\server\share\... 时允许「本机打开」链转 */
 function isEntireTextNodeUncPath(raw) {
-    var t = trimTrailingPathPunct(linkifyNormalizePathToken(String(raw || '').trim()));
+    var t = cleanPathTokenForLink(raw);
     if (!t) return false;
     var u = t.replace(/\//g, '\\');
     return /^\\\\[^\\]+\\[^\\]+(?:\\[^\\]*)*$/i.test(u);
@@ -2324,12 +2333,65 @@ function encodeMarkdownWorkspacePathLinkMatch(match, label, dest) {
     return '[' + label + '](#ga-workspace-path=' + encodeURIComponent(rel) + '&raw=' + encodeURIComponent(decodedDest) + ')';
 }
 
+function normalizeExplicitMarkdownPathLinksInPlainText(text) {
+    return String(text || '')
+        .replace(/`\[([^\]\r\n]+)\]\(([^)\r\n]+)\)`/g, '[$1]($2)')
+        .replace(/`\[([^\]\r\n]+)\]`\(([^)\r\n]+)\)/g, '[$1]($2)')
+        .replace(/\[([^\]\r\n]+)\]`\(([^)\r\n]+)\)`/g, '[$1]($2)')
+        .replace(/\[([^\]\r\n]+)\]\(`([^`\r\n]+)`\)/g, '[$1]($2)')
+        .replace(/\[`([^`\]\r\n]+)`\]\(([^)\r\n]+)\)/g, '[$1]($2)');
+}
+
+function normalizeExplicitMarkdownPathLinksOutsideFences(text) {
+    var src = String(text || '');
+    var out = '';
+    var buf = '';
+    var inFence = false;
+    var fenceMarker = '';
+    var lineStart = true;
+    function flushPlain() {
+        if (buf) {
+            out += normalizeExplicitMarkdownPathLinksInPlainText(buf);
+            buf = '';
+        }
+    }
+    for (var i = 0; i < src.length; i += 1) {
+        var ch = src.charAt(i);
+        var rest = src.slice(i);
+        if (lineStart) {
+            var fence = /^([ \t]{0,3})(`{3,}|~{3,})/.exec(rest);
+            if (fence) {
+                flushPlain();
+                var fenceText = fence[0];
+                var marker = fence[2].charAt(0);
+                if (!inFence) {
+                    inFence = true;
+                    fenceMarker = marker;
+                } else if (marker === fenceMarker) {
+                    inFence = false;
+                    fenceMarker = '';
+                }
+                out += fenceText;
+                i += fenceText.length - 1;
+                lineStart = false;
+                continue;
+            }
+        }
+        if (inFence) out += ch;
+        else buf += ch;
+        lineStart = ch === '\n' || ch === '\r';
+    }
+    flushPlain();
+    return out;
+}
+
 function encodeMarkdownWorkspacePathLinksInPlainText(text) {
-    return String(text || '').replace(/\[([^\]\r\n]+)\]\(([^)\r\n]+)\)/g, encodeMarkdownWorkspacePathLinkMatch);
+    return normalizeExplicitMarkdownPathLinksInPlainText(text)
+        .replace(/\[([^\]\r\n]+)\]\(([^)\r\n]+)\)/g, encodeMarkdownWorkspacePathLinkMatch);
 }
 
 function encodeMarkdownWorkspacePathLinks(text) {
-    var src = String(text || '');
+    var src = normalizeExplicitMarkdownPathLinksOutsideFences(text);
     var out = '';
     var buf = '';
     var inFence = false;
@@ -2435,6 +2497,110 @@ function renderMarkdown(text) {
     return marked.parse(escapeMarkdownSingleTildes(encodeMarkdownWorkspacePathLinks(text)), { mangle: false, headerIds: false });
 }
 
+const THINK_OPEN_TAG = '<think>';
+const THINK_CLOSE_TAG = '</think>';
+
+function appendThinkReasoning(parts, text) {
+    var t = String(text || '').trim();
+    if (t) parts.push(t);
+}
+
+function splitThinkTagsForUi(raw) {
+    var text = String(raw || '');
+    var reasoning = [];
+    var content = '';
+    var pos = 0;
+    var lower = text.toLowerCase();
+    while (pos < text.length) {
+        var openIdx = lower.indexOf(THINK_OPEN_TAG, pos);
+        if (openIdx < 0) {
+            content += text.slice(pos);
+            break;
+        }
+        content += text.slice(pos, openIdx);
+        var bodyStart = openIdx + THINK_OPEN_TAG.length;
+        var closeIdx = lower.indexOf(THINK_CLOSE_TAG, bodyStart);
+        if (closeIdx < 0) {
+            appendThinkReasoning(reasoning, text.slice(bodyStart));
+            pos = text.length;
+            break;
+        }
+        appendThinkReasoning(reasoning, text.slice(bodyStart, closeIdx));
+        pos = closeIdx + THINK_CLOSE_TAG.length;
+    }
+    return {
+        content: content,
+        reasoning: reasoning.join('\n\n'),
+        changed: reasoning.length > 0 || content !== text,
+    };
+}
+
+function stripOrphanThinkCloseForFinalCard(raw) {
+    return String(raw || '').replace(/<\/think\s*>/ig, '');
+}
+
+function tagSuffixPrefixLen(text, tag) {
+    var max = Math.min(String(text || '').length, tag.length - 1);
+    for (var n = max; n > 0; n -= 1) {
+        if (tag.indexOf(text.slice(text.length - n)) === 0) return n;
+    }
+    return 0;
+}
+
+function feedThinkTaggedResponseDelta(llmState, delta) {
+    var l = llmState || {};
+    if (!l.llmThinkTagMode) l.llmThinkTagMode = 'response';
+    if (typeof l.llmThinkTagAllowLeading !== 'boolean') l.llmThinkTagAllowLeading = true;
+    l.llmThinkTagCarry = (l.llmThinkTagCarry || '') + String(delta || '');
+    var out = [];
+    while (l.llmThinkTagCarry) {
+        var lower = l.llmThinkTagCarry.toLowerCase();
+        if (l.llmThinkTagMode === 'reasoning') {
+            var closeIdx = lower.indexOf(THINK_CLOSE_TAG);
+            if (closeIdx >= 0) {
+                var reasoningText = l.llmThinkTagCarry.slice(0, closeIdx);
+                if (reasoningText) out.push({ part: 'reasoning', text: reasoningText });
+                l.llmThinkTagCarry = l.llmThinkTagCarry.slice(closeIdx + THINK_CLOSE_TAG.length);
+                l.llmThinkTagMode = 'response';
+                continue;
+            }
+            var keepReasoning = tagSuffixPrefixLen(lower, THINK_CLOSE_TAG);
+            var emitReasoning = keepReasoning ? l.llmThinkTagCarry.slice(0, l.llmThinkTagCarry.length - keepReasoning) : l.llmThinkTagCarry;
+            l.llmThinkTagCarry = l.llmThinkTagCarry.slice(emitReasoning.length);
+            if (emitReasoning) out.push({ part: 'reasoning', text: emitReasoning });
+            break;
+        }
+        var openIdx = lower.indexOf(THINK_OPEN_TAG);
+        if (openIdx >= 0 && l.llmThinkTagAllowLeading && !l.llmThinkTagCarry.slice(0, openIdx).trim()) {
+            var responseText = l.llmThinkTagCarry.slice(0, openIdx);
+            if (responseText) out.push({ part: 'response', text: responseText });
+            l.llmThinkTagCarry = l.llmThinkTagCarry.slice(openIdx + THINK_OPEN_TAG.length);
+            l.llmThinkTagMode = 'reasoning';
+            continue;
+        }
+        var keepResponse = l.llmThinkTagAllowLeading ? tagSuffixPrefixLen(lower, THINK_OPEN_TAG) : 0;
+        var emitResponse = keepResponse ? l.llmThinkTagCarry.slice(0, l.llmThinkTagCarry.length - keepResponse) : l.llmThinkTagCarry;
+        l.llmThinkTagCarry = l.llmThinkTagCarry.slice(emitResponse.length);
+        if (emitResponse) {
+            out.push({ part: 'response', text: emitResponse });
+            if (emitResponse.trim()) l.llmThinkTagAllowLeading = false;
+        }
+        break;
+    }
+    return out;
+}
+
+function flushThinkTagCarry(ctx) {
+    if (!ctx || !ctx.llm || !ctx.llm.llmThinkTagCarry) return;
+    var l = ctx.llm;
+    if (l.llmThinkTagMode === 'reasoning') l.llmPendingReasoningDelta = (l.llmPendingReasoningDelta || '') + l.llmThinkTagCarry;
+    else {
+        l.llmPendingResponseDelta = (l.llmPendingResponseDelta || '') + l.llmThinkTagCarry;
+        if (String(l.llmThinkTagCarry || '').trim()) l.llmThinkTagAllowLeading = false;
+    }
+    l.llmThinkTagCarry = '';
+}
+
 const TRACE_ROW = {
     'log-entry':   { label: '信息', c: 'feed--log' },
     'tool-call':   { label: '工具', c: 'feed--tool' },
@@ -2531,7 +2697,8 @@ function appendToolCallDelta(ctx, parsed, runSessionId) {
     if (!row) return;
     if (parsed.id) row.dataset.pendingToolCallId = String(parsed.id);
     
-    // 收到 tool_call_delta 时，移除临时状态，展开折叠的 process-aggregate
+    // Tool-call generation should still reveal the process group; only the later
+    // "executing" placeholder should avoid forcing expand/collapse changes.
     removeTemporaryStatus(ctx);
     var agg = row.closest('.process-aggregate');
     if (agg && agg.classList.contains('is-collapsed')) {
@@ -2641,13 +2808,6 @@ function appendToolCommandDelta(ctx, parsed, runSessionId) {
     var row = null;
     if (body && typeof CSS !== 'undefined' && CSS.escape) {
         try { row = body.querySelector('.feed-item.feed--tool[data-tool-call-id="' + CSS.escape(tid) + '"]'); } catch (e) { row = null; }
-    }
-    if (!row) {
-        appendToolPendingRow(ctx, { tool_call_id: tid, command_preview: '', react_iter: parsed.react_iter }, runSessionId);
-        body = getProcessBody(ctx);
-        if (body && typeof CSS !== 'undefined' && CSS.escape) {
-            try { row = body.querySelector('.feed-item.feed--tool[data-tool-call-id="' + CSS.escape(tid) + '"]'); } catch (e2) { row = null; }
-        }
     }
     if (!row) return;
     row.dataset.commandPreview = (row.dataset.commandPreview || '') + String(parsed.delta || '');
@@ -2791,34 +2951,46 @@ function appendLlmStreamDelta(ctx, ev, runSessionId) {
     }
     const streamOpt = { streaming: true };
     if (iter != null && Number.isFinite(Number(iter))) streamOpt.reactIter = Number(iter);
-    if (part === 'reasoning') {
+    var pieces = part === 'response' ? feedThinkTaggedResponseDelta(l, delta) : [{ part: 'reasoning', text: delta }];
+    for (var pi = 0; pi < pieces.length; pi += 1) {
+        var piece = pieces[pi] || {};
+        var piecePart = piece.part === 'reasoning' ? 'reasoning' : 'response';
+        var pieceText = String(piece.text || '');
+        if (!pieceText) continue;
+        if (piecePart === 'reasoning') {
         if (l.llmStreamReasoningIter !== iter) {
             flushLlmDeltaText(ctx);
             l.llmStreamReasoningIter = iter;
-            var existingReasoning = findExistingLlmFeedRow(ctx, 'llm-reasoning', Number.isFinite(Number(iter)) ? Math.max(1, Math.floor(Number(iter))) : null);
+            var existingReasoning = findExistingLlmFeedRow(ctx, 'llm-reasoning', Number.isFinite(Number(iter)) ? Math.max(1, Math.floor(Number(iter))) : null, { liveOnly: true });
             l.llmStreamReasoningScroller = existingReasoning
                 ? existingReasoning.querySelector('.feed-chunk-scroller')
                 : createProcessFeedRow(ctx, 'llm-reasoning', '', streamOpt, runSessionId);
         }
         if (!l.llmStreamReasoningScroller) return;
-        l.llmPendingReasoningDelta = (l.llmPendingReasoningDelta || '') + delta;
-    } else {
+        l.llmPendingReasoningDelta = (l.llmPendingReasoningDelta || '') + pieceText;
+        } else {
         if (l.llmStreamResponseIter !== iter) {
             flushLlmDeltaText(ctx);
             l.llmStreamResponseIter = iter;
-            var existingResponse = findExistingLlmFeedRow(ctx, 'llm-response', Number.isFinite(Number(iter)) ? Math.max(1, Math.floor(Number(iter))) : null);
+            var existingResponse = findExistingLlmFeedRow(ctx, 'llm-response', Number.isFinite(Number(iter)) ? Math.max(1, Math.floor(Number(iter))) : null, { liveOnly: true });
             l.llmStreamResponseScroller = existingResponse
                 ? existingResponse.querySelector('.feed-chunk-scroller')
                 : createProcessFeedRow(ctx, 'llm-response', '', streamOpt, runSessionId);
         }
         if (!l.llmStreamResponseScroller) return;
-        l.llmPendingResponseDelta = (l.llmPendingResponseDelta || '') + delta;
+        l.llmPendingResponseDelta = (l.llmPendingResponseDelta || '') + pieceText;
+        }
     }
     scheduleLlmDeltaFlush(ctx, runSessionId);
 }
 
 function upsertLlmFeedRow(ctx, content, logType, runSessionId, reactIter) {
     if (!ctx) return null;
+    if (logType === 'llm-response') {
+        var split = splitThinkTagsForUi(content);
+        if (split.reasoning && split.reasoning.trim()) upsertLlmFeedRow(ctx, split.reasoning, 'llm-reasoning', runSessionId, reactIter);
+        content = split.content;
+    }
     var ri = reactIter != null && Number.isFinite(Number(reactIter)) ? Math.max(1, Math.floor(Number(reactIter))) : null;
     var txt = truncateLogTextForUi(trimSurroundingBlankLines(String(content || '')));
     if (!txt.trim()) return null;
@@ -2832,6 +3004,7 @@ function upsertLlmFeedRow(ctx, content, logType, runSessionId, reactIter) {
             scheduleFeedChunkOverflowRefresh(ch);
         }
         existing.removeAttribute('data-llm-live-row');
+        removeDuplicateLlmFeedRows(ctx, existing, logType, ri);
         if (ctx.llm) resetLlmState(ctx);
         var agg = existing.closest && existing.closest('.process-aggregate');
         if (agg) {
@@ -2845,19 +3018,32 @@ function upsertLlmFeedRow(ctx, content, logType, runSessionId, reactIter) {
     return appendLog(ctx, content, logType, runSessionId, ri);
 }
 
-function findExistingLlmFeedRow(ctx, logType, reactIter) {
+function findExistingLlmFeedRow(ctx, logType, reactIter, opts) {
     if (!ctx) return null;
+    opts = opts || {};
     var selector = '.feed-item[data-log-type="' + logType + '"]';
     if (reactIter != null) selector += '[data-react-iter="' + reactIter + '"]';
     else selector += '[data-llm-live-row="1"]';
+    if (opts.liveOnly) selector += '[data-llm-live-row="1"]';
     var roots = [];
     if (ctx.currentProcessGroup && ctx.currentProcessGroup.isConnected) roots.push(ctx.currentProcessGroup);
-    if (ctx.stream && ctx.stream.querySelectorAll) roots.push(ctx.stream);
+    if (!replayingMessages && ctx.stream && ctx.stream.querySelectorAll) roots.push(ctx.stream);
     for (var r = 0; r < roots.length; r += 1) {
         var matches = roots[r].querySelectorAll(selector);
         if (matches && matches.length) return matches[matches.length - 1];
     }
     return null;
+}
+
+function removeDuplicateLlmFeedRows(ctx, keepRow, logType, reactIter) {
+    if (!ctx || !ctx.stream || !ctx.stream.querySelectorAll || !keepRow) return;
+    var selector = '.feed-item[data-log-type="' + logType + '"]';
+    if (reactIter != null) selector += '[data-react-iter="' + reactIter + '"]';
+    var rows = ctx.stream.querySelectorAll(selector);
+    if (!rows || rows.length <= 1) return;
+    rows.forEach(function (row) {
+        if (row !== keepRow && row.getAttribute('data-llm-live-row') === '1') row.remove();
+    });
 }
 
 function parseMessageTimestamp(value) {
@@ -2931,6 +3117,9 @@ function appendMessage(ctx, role, content, meta, runSessionId) {
             if (meta.runtimeSeq != null && Number.isFinite(Number(meta.runtimeSeq)) && Number(meta.runtimeSeq) > 0) {
                 existingUser.setAttribute('data-runtime-seq', String(Math.floor(Number(meta.runtimeSeq))));
             }
+            if (meta.runtimeEventType) {
+                existingUser.setAttribute('data-runtime-event-type', String(meta.runtimeEventType));
+            }
             if (meta.createdAt || meta.created_at || meta.timestamp) {
                 existingUser.setAttribute('data-created-at', String(meta.createdAt || meta.created_at || meta.timestamp));
             }
@@ -2944,6 +3133,9 @@ function appendMessage(ctx, role, content, meta, runSessionId) {
     if (meta.eventIndex != null) wrap.setAttribute('data-event-index', String(meta.eventIndex));
     if (meta.runtimeSeq != null && Number.isFinite(Number(meta.runtimeSeq)) && Number(meta.runtimeSeq) > 0) {
         wrap.setAttribute('data-runtime-seq', String(Math.floor(Number(meta.runtimeSeq))));
+    }
+    if (meta.runtimeEventType) {
+        wrap.setAttribute('data-runtime-event-type', String(meta.runtimeEventType));
     }
     if (meta.truncateBeforeSeq != null && Number.isFinite(Number(meta.truncateBeforeSeq)) && Number(meta.truncateBeforeSeq) > 0) {
         wrap.setAttribute('data-truncate-before-seq', String(Math.floor(Number(meta.truncateBeforeSeq))));
@@ -2962,7 +3154,12 @@ function appendMessage(ctx, role, content, meta, runSessionId) {
     const div = document.createElement('div');
     div.className = 'message ' + (role === 'user' ? 'user' : 'assistant');
     var rawStr = content == null ? '' : String(content);
-    messageRawMarkdown.set(wrap, rawStr);
+    var displayStr = rawStr;
+    if (role === 'assistant') {
+        var assistantSplit = splitThinkTagsForUi(rawStr);
+        displayStr = stripOrphanThinkCloseForFinalCard(assistantSplit.content);
+    }
+    messageRawMarkdown.set(wrap, displayStr);
     if (role === 'user') {
         if (userMessageShouldCollapse(rawStr)) {
             wrap.classList.add('has-turn-process');
@@ -2996,7 +3193,7 @@ function appendMessage(ctx, role, content, meta, runSessionId) {
         }
     }
         else {
-        div.innerHTML = renderMarkdown(rawStr);
+        div.innerHTML = renderMarkdown(displayStr);
         enhanceAssistantMessageContent(div);
     }
     wrap.appendChild(div);
@@ -3064,6 +3261,40 @@ function appendLog(ctx, content, type, runSessionId, reactIter) {
     var so = null;
     if (reactIter != null && Number.isFinite(Number(reactIter))) so = { reactIter: Number(reactIter) };
     return createProcessFeedRow(ctx, type, tStr, so, runSessionId);
+}
+
+function appendModelSwitchStatus(ctx, event, runSessionId) {
+    if (!ctx) return null;
+    var content = String((event && event.content) || '').trim();
+    if (!content) return null;
+    var sc = ctx._modelSwitchStatusScroller;
+    if (!sc || !sc.isConnected) {
+        var body = getProcessBody(ctx);
+        var row = null;
+        if (body && body.querySelectorAll) {
+            var rows = body.querySelectorAll('.feed-item[data-model-switch-status="1"]');
+            row = rows && rows.length ? rows[rows.length - 1] : null;
+        }
+        sc = row ? row.querySelector('.feed-chunk-scroller') : null;
+    }
+    if (!sc || !sc.isConnected) {
+        sc = appendLog(ctx, content, 'status', runSessionId);
+        var newRow = sc && sc.closest ? sc.closest('.feed-item') : null;
+        if (newRow) newRow.setAttribute('data-model-switch-status', '1');
+        ctx._modelSwitchStatusScroller = sc;
+        return sc;
+    }
+    var prev = String(sc.textContent || '').trim();
+    if (prev.indexOf(content) < 0) {
+        sc.textContent = truncateLogTextForUi(prev ? (prev + '\n' + content) : content);
+    }
+    var ch = sc.closest && sc.closest('.feed-chunk');
+    if (ch) {
+        refreshFeedChunkOverflow(ch);
+        requestAnimationFrame(function () { refreshFeedChunkOverflow(ch); });
+    }
+    scrollContentAreaIfFollow(ctx, runSessionId);
+    return sc;
 }
 
 function flushProgressDeltaText(ctx, logType) {

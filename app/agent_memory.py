@@ -438,6 +438,19 @@ def _tool_name_for_tool_message(work: List, ti: int) -> str:
     return ""
 
 
+def _tool_name_by_id(work: List) -> dict:
+    out = {}
+    for m in work or []:
+        if not isinstance(m, AssistantMessage):
+            continue
+        for c in m.tool_calls or []:
+            if isinstance(c, dict):
+                cid = str(c.get("id") or "")
+                if cid:
+                    out[cid] = str(c.get("name") or "")
+    return out
+
+
 def _strip_reasoning_inplace(mm: AssistantMessage) -> bool:
     ak = getattr(mm, "additional_kwargs", None) or {}
     if not ak.get("reasoning_content"):
@@ -454,6 +467,7 @@ def _apply_phase_d(work: List, idx_cap: int) -> Tuple[List, bool]:
         return work, False
     changed = False
     n = len(work)
+    tool_names = _tool_name_by_id(work[: min(idx_cap, n)])
     for i in range(min(idx_cap, n)):
         m = work[i]
         if isinstance(m, AssistantMessage):
@@ -464,8 +478,12 @@ def _apply_phase_d(work: List, idx_cap: int) -> Tuple[List, bool]:
                 if _strip_reasoning_inplace(m):
                     changed = True
         elif isinstance(m, ToolMessage):
-            name = _tool_name_for_tool_message(work, i)
-            if name in _NOISE_TOOL_NAMES and _micro_shrink_tool_message_content_inplace(m):
+            tid = str(getattr(m, "tool_call_id", "") or "")
+            name = tool_names.get(tid, "")
+            # Orphan / unmatched ToolMessage is already invalid for the provider
+            # chain. Shrink it like noisy output instead of doing repeated
+            # backward scans or carrying a huge invalid payload forward.
+            if (not name or name in _NOISE_TOOL_NAMES) and _micro_shrink_tool_message_content_inplace(m):
                 changed = True
     return work, changed
 
@@ -475,39 +493,43 @@ def _apply_phase_e(work: List, idx_keep9: int) -> Tuple[List, bool]:
     if idx_keep9 <= 0:
         return work, False
     changed = False
-    n = len(work)
-    for i in range(min(idx_keep9, n)):
-        m = work[i]
-        if isinstance(m, UserMessage):
+    seen_user = False
+    for s, e, kind in _collect_blocks(work):
+        if s >= idx_keep9:
+            break
+        if kind == "user":
+            seen_user = True
             continue
-        s = i
-        while s >= 0 and not isinstance(work[s], UserMessage):
-            s -= 1
-        if s < 0:
-            continue
-        e = s + 1
-        while e < n and not isinstance(work[e], UserMessage):
-            e += 1
-        e -= 1
+        e = min(e, idx_keep9 - 1)
         fin = _final_assistant_index(work, s, e)
-        if fin is None:
+        if fin is None or not seen_user:
+            shrunk = _micro_shrink_work_block(work, s, e)
+            for off, nm in enumerate(shrunk):
+                wi = s + off
+                if wi <= e and nm != work[wi]:
+                    work[wi] = nm
+                    changed = True
             continue
-        if isinstance(m, AssistantMessage):
-            if i == fin:
+        for i in range(s, e + 1):
+            m = work[i]
+            if isinstance(m, UserMessage):
                 continue
-            if m.tool_calls:
-                if _micro_shrink_tool_calling_assistant_inplace(m):
-                    changed = True
-            else:
-                if _strip_reasoning_inplace(m):
-                    changed = True
-                raw = str(m.content or "")
-                new_c = _micro_shrink_truncate_plain(raw, int(MICRO_SHRINK_ASSISTANT_CHARS))
-                if new_c != raw:
-                    m.content = new_c
-                    changed = True
-        elif isinstance(m, ToolMessage) and _micro_shrink_tool_message_content_inplace(m):
-            changed = True
+            if isinstance(m, AssistantMessage):
+                if i == fin:
+                    continue
+                if m.tool_calls:
+                    if _micro_shrink_tool_calling_assistant_inplace(m):
+                        changed = True
+                else:
+                    if _strip_reasoning_inplace(m):
+                        changed = True
+                    raw = str(m.content or "")
+                    new_c = _micro_shrink_truncate_plain(raw, int(MICRO_SHRINK_ASSISTANT_CHARS))
+                    if new_c != raw:
+                        m.content = new_c
+                        changed = True
+            elif isinstance(m, ToolMessage) and _micro_shrink_tool_message_content_inplace(m):
+                changed = True
     return work, changed
 
 
@@ -881,18 +903,24 @@ def _trim_compress_executor_messages(msgs: List, max_tokens: int) -> List:
     else:
         middle_raw = list(rest)
     blocks = _dialogue_messages_to_trim_blocks(middle_raw)
-    bo = 0
-    while bo <= len(blocks):
-        flat_middle = _flatten_trim_blocks(blocks[bo:])
+    def _candidate_from_block_start(block_start: int) -> List:
+        flat_middle = _flatten_trim_blocks(blocks[block_start:])
         cand: List = [sys_m] + flat_middle
         if tail_u is not None:
             cand.append(tail_u)
+        return cand
+
+    lo, hi = 0, len(blocks)
+    best: Optional[List] = None
+    while lo <= hi:
+        mid = (lo + hi) // 2
+        cand = _candidate_from_block_start(mid)
         if estimate_tokens(cand) <= mt:
-            msgs = cand
-            break
-        bo += 1
-    else:
-        msgs = [sys_m] + ([tail_u] if tail_u is not None else [])
+            best = cand
+            hi = mid - 1
+        else:
+            lo = mid + 1
+    msgs = best if best is not None else [sys_m] + ([tail_u] if tail_u is not None else [])
     guard = 0
     while msgs and estimate_tokens(msgs) > mt and guard < 32:
         guard += 1
@@ -948,6 +976,13 @@ def _parse_compress_dialogue_output(raw: str) -> Tuple[str, str]:
         recap = re.sub(r"</?recap>", "", recap, flags=re.IGNORECASE).strip()
     if not recap:
         recap = re.sub(r"</?summary>", "", text, flags=re.IGNORECASE).strip()
+    if recap and not key_body:
+        # Some compatible endpoints ignore one of the XML blocks under pressure.
+        # Keep the compression useful instead of forcing a retry/fallback when
+        # there is still a usable summary body.
+        key_body = recap
+    elif key_body and not recap:
+        recap = key_body
     if not key_body:
         logger.warning("compress_history_and_key 无 <summary> 块")
     if not recap:
@@ -1008,9 +1043,9 @@ def _run_compress_executor_dialogue(
                 )
                 call_msgs = list(msgs) + [UserMessage(content=strict)]
             if stream_sink is not None:
-                raw = executor_chat_complete_stream(call_msgs, on_content_delta=_buffer_delta)
+                raw = executor_chat_complete_stream(call_msgs, on_content_delta=_buffer_delta, session_id=session_id)
             else:
-                raw = executor_chat_complete(call_msgs).strip()
+                raw = executor_chat_complete(call_msgs, session_id=session_id).strip()
             recap, key_body = _parse_compress_dialogue_output(raw)
             if recap and key_body:
                 if stream_sink is not None:
@@ -1058,10 +1093,14 @@ def _llm_history_tail_within_token_budget_with_start(
         return [], 0
     mt = int(max_tokens)
     best_start = len(full)
-    for start in range(len(full)):
-        if estimate_tokens(full[start:]) <= mt:
-            best_start = start
-            break
+    lo, hi = 0, len(full)
+    while lo <= hi:
+        mid = (lo + hi) // 2
+        if estimate_tokens(full[mid:]) <= mt:
+            best_start = mid
+            hi = mid - 1
+        else:
+            lo = mid + 1
     return deepcopy(full[best_start:]), int(best_start)
 
 
@@ -1109,7 +1148,7 @@ def run_edit_key_context_instruction(
         )
     prompt = tpl.format(current=cur or "（当前为空）", instruction=instr)
     try:
-        raw = executor_text_complete(prompt).strip()
+        raw = executor_text_complete(prompt, session_id=session_id).strip()
     except Exception as e:
         logger.warning("edit_key_context 执行器调用失败: %s", e)
         return cur, f"编辑失败：{e}"
@@ -1256,22 +1295,41 @@ def _compress_unified_in_place(
     hints: List[str] = []
     new_recap_text: Optional[str] = None
     snapshot_llm = deepcopy(llm_history)  # 异常/截尾兜底用；work 经 normalize 已与 llm_history 对象隔离，Phase D/E 原地改 work
-    work, should_run, tail_keep, _ut, full_pack, pack_over, _ctx_force = _compress_entry_state(
-        llm_history,
-        session_id,
-        force_user_compact=force_user_compact,
-        key_context=key_context,
-    )
-    if not work:
-        return list(llm_history or []), key_context, False, hints, False, None
-    if not should_run:
-        return list(llm_history or []), key_context, False, hints, False, None
-    idx_full_start = _full_keep_start_index(work, tail_keep)
-    idx_keep9 = _full_keep_start_index(work, tail_keep * 3)
-
-    new_key = key_context
-
     try:
+        _push_progress_hint(
+            hints,
+            hint_sink,
+            "【上下文裁剪】正在分析上下文并准备本地裁剪…",
+            kind="trim",
+            session_id=session_id,
+            preview_llm_history=list(llm_history or []),
+            key_context=key_context,
+            with_pct=False,
+        )
+        work, should_run, tail_keep, _ut, full_pack, pack_over, _ctx_force = _compress_entry_state(
+            llm_history,
+            session_id,
+            force_user_compact=force_user_compact,
+            key_context=key_context,
+        )
+        if not work:
+            return list(llm_history or []), key_context, False, hints, False, None
+        if not should_run:
+            return list(llm_history or []), key_context, False, hints, False, None
+        idx_full_start = _full_keep_start_index(work, tail_keep)
+        idx_keep9 = _full_keep_start_index(work, tail_keep * 3)
+
+        new_key = key_context
+
+        _push_progress_hint(
+            hints,
+            hint_sink,
+            "【上下文裁剪】正在执行本地裁剪与微压…",
+            kind="trim",
+            session_id=session_id,
+            preview_llm_history=_preview_llm_for_ui_estimate(work),
+            key_context=new_key,
+        )
         work, dchg = _apply_phase_d(work, idx_full_start)
         if dchg:
             _push_progress_hint(
@@ -1291,6 +1349,15 @@ def _compress_unified_in_place(
         if _compress_ratio_reached(session_id, work, new_key):
             return _preview_llm_for_ui_estimate(work), new_key, changed_any, hints, False, None
 
+        _push_progress_hint(
+            hints,
+            hint_sink,
+            "【上下文裁剪】正在收敛较早段落中的 ReAct 过程…",
+            kind="trim",
+            session_id=session_id,
+            preview_llm_history=_preview_llm_for_ui_estimate(work),
+            key_context=new_key,
+        )
         work, ech = _apply_phase_e(work, idx_keep9)
         if ech:
             _push_progress_hint(

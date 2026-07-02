@@ -92,6 +92,28 @@ class RuntimeUiProjectionTests(unittest.TestCase):
             self.assertTrue(page["has_older"])
             self.assertEqual([ev["content"] for ev in page["events"]], ["u2", "a2", "u3", "a3"])
 
+    def test_tail_page_does_not_drop_dense_process_events_inside_recent_turns(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            mirror = RuntimeMirror(tmp)
+            mirror.mirror_ui_event("s1", {"type": "user", "content": "older"})
+            mirror.mirror_ui_event("s1", {"type": "status", "content": "older process"})
+            mirror.mirror_ui_event("s1", {"type": "final", "content": "older answer"})
+            mirror.mirror_ui_event("s1", {"type": "user", "content": "dense"})
+            for index in range(650):
+                mirror.mirror_ui_event("s1", {"type": "status", "content": f"process {index}"})
+            mirror.mirror_ui_event("s1", {"type": "final", "content": "dense answer"})
+
+            page = RuntimeUiProjection(tmp).read_ui_page("s1", turns=1)
+
+            self.assertEqual(page["total"], 655)
+            self.assertEqual(page["range_start"], 3)
+            self.assertEqual(page["range_end"], 655)
+            self.assertTrue(page["has_older"])
+            self.assertEqual(len(page["events"]), 652)
+            self.assertEqual(page["events"][0]["content"], "dense")
+            self.assertEqual(page["events"][1]["content"], "process 0")
+            self.assertEqual(page["events"][-1]["content"], "dense answer")
+
     def test_pages_by_turns_backfill_when_runtime_projection_is_empty(self):
         with tempfile.TemporaryDirectory() as tmp:
             projection = RuntimeUiProjection(tmp)
@@ -182,6 +204,21 @@ class RuntimeUiProjectionTests(unittest.TestCase):
             self.assertEqual(index["user_turns"], [
                 {"event_index": 0, "preview": "first question"},
                 {"event_index": 2, "preview": "second question"},
+            ])
+
+    def test_user_steer_stays_process_event_and_is_not_toc_turn(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            mirror = RuntimeMirror(tmp)
+            mirror.mirror_ui_event("s1", {"type": "user", "content": "first question"})
+            mirror.mirror_ui_event("s1", {"type": "user_steer", "content": "follow up", "steer": True})
+            projection = RuntimeUiProjection(tmp)
+
+            events = projection.read_ui_events("s1")
+
+            self.assertEqual(events[1]["type"], "user_steer")
+            self.assertTrue(events[1]["steer"])
+            self.assertEqual(projection.read_user_turns_light("s1"), [
+                {"event_index": 0, "preview": "first question"},
             ])
 
     def test_maps_visible_ui_index_to_runtime_seq(self):

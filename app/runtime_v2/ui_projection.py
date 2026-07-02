@@ -31,6 +31,41 @@ class RuntimeUiProjection:
         self.event_log = SessionEventLog(self.sessions_dir, path_resolver=path_resolver)
 
     @staticmethod
+    def _int_or_none(value: Any) -> Optional[int]:
+        try:
+            if value is None:
+                return None
+            return int(value)
+        except (TypeError, ValueError):
+            return None
+
+    @classmethod
+    def _apply_history_op_to_projected_events(cls, events: List[dict], event: RuntimeEvent) -> List[dict]:
+        payload = dict(event.payload or {})
+        if event.type == "message_deleted":
+            target = cls._int_or_none(payload.get("target_seq"))
+            if target is None:
+                return events
+            return [
+                item for item in events
+                if cls._int_or_none((item or {}).get("runtime_seq")) != target
+            ]
+        if event.type == "message_rewritten":
+            target = cls._int_or_none(payload.get("target_seq"))
+            if target is None:
+                return events
+            out: List[dict] = []
+            for item in events:
+                row = dict(item or {})
+                if cls._int_or_none(row.get("runtime_seq")) == target:
+                    row["content"] = payload.get("content") or ""
+                    row["rewritten"] = True
+                    row["rewritten_by_seq"] = int(event.seq)
+                out.append(row)
+            return out
+        return events
+
+    @staticmethod
     def _apply_visible_range_to_runtime_seqs(runtime_seqs: List[int], payload: dict) -> List[int]:
         if payload.get("to_ui_index") is not None:
             try:
@@ -440,15 +475,23 @@ class RuntimeUiProjection:
         limit: int = 200,
         before_index: Optional[int] = None,
         after_index: Optional[int] = None,
+        target_index: Optional[int] = None,
         turns: Optional[int] = None,
         legacy_loader: Optional[Callable[[], Iterable[dict]]] = None,
     ) -> dict:
-        if legacy_loader is None and before_index is None and after_index is None and turns is not None:
+        if legacy_loader is None and before_index is None and after_index is None and target_index is None and turns is not None:
             page = self._read_recent_turns_from_tail(session_id, turns=int(turns))
             if page is not None:
                 return page
         events = self.read_ui_events(session_id, legacy_loader=legacy_loader)
-        return self._page_events(events, limit=limit, before_index=before_index, after_index=after_index, turns=turns)
+        return self._page_events(
+            events,
+            limit=limit,
+            before_index=before_index,
+            after_index=after_index,
+            target_index=target_index,
+            turns=turns,
+        )
 
     def _read_recent_turns_from_tail(self, session_id: str, *, turns: int) -> Optional[dict]:
         turn_count = max(1, min(int(turns), 50))
@@ -460,7 +503,6 @@ class RuntimeUiProjection:
             64 * 1024,
             int(os.getenv("RUNTIME_V2_TAIL_INITIAL_BYTES", str(512 * 1024))),
         )
-        max_events = max(500, int(os.getenv("RUNTIME_V2_TAIL_MAX_EVENTS", "8000")))
         index = self._read_or_build_ui_index(session_id)
         total = int(index.get("total") or 0) if index else 0
         latest_truncate_seq = int(index.get("latest_truncate_seq") or 0) if index else 0
@@ -478,6 +520,11 @@ class RuntimeUiProjection:
         else:
             wanted_start = 0
             wanted_len = total
+        max_events = max(
+            500,
+            int(os.getenv("RUNTIME_V2_TAIL_MAX_EVENTS", "8000")),
+            wanted_len,
+        )
         while window <= max_bytes_limit:
             runtime_events, reached_start = self.event_log.read_tail_window(
                 session_id,
@@ -535,6 +582,8 @@ class RuntimeUiProjection:
                 i for i, ev in enumerate(ui_events)
                 if isinstance(ev, dict) and ev.get("type") == "user"
             ]
+            if user_indices_index and len(ui_events) < wanted_len and (reached_start or window >= max_bytes_limit):
+                return None
             if len(user_indices) >= turn_count or reached_start or window >= max_bytes_limit:
                 if not user_indices:
                     start = 0
@@ -576,6 +625,9 @@ class RuntimeUiProjection:
                 payload = dict(event.payload or {})
                 out = cls._apply_visible_range_to_projected_events(out, payload)
                 continue
+            if event.type in {"message_deleted", "message_rewritten"}:
+                out = cls._apply_history_op_to_projected_events(out, event)
+                continue
             ui = cls.event_to_ui(event)
             if ui is not None:
                 ui = dict(ui)
@@ -600,6 +652,9 @@ class RuntimeUiProjection:
             if event.type == "visible_range_changed":
                 payload = dict(event.payload or {})
                 out = self._apply_visible_range_to_projected_events(out, payload)
+                continue
+            if event.type in {"message_deleted", "message_rewritten"}:
+                out = self._apply_history_op_to_projected_events(out, event)
                 continue
             ui = self._event_to_ui(session_id, event)
             if ui is not None:
@@ -638,7 +693,28 @@ class RuntimeUiProjection:
     @staticmethod
     def event_to_ui(event: RuntimeEvent) -> Optional[dict]:
         payload = dict(event.payload or {})
+        if payload.get("ephemeral") and payload.get("type") in {
+            "llm_reasoning_delta",
+            "llm_response_delta",
+            "tool_call_delta",
+            "tool_command_delta",
+            "context_summary_delta",
+            "key_context_delta",
+        }:
+            return None
         if event.type == "message_user":
+            if payload.get("ui_type") == "user_steer":
+                data = {
+                    "type": "user_steer",
+                    "content": payload.get("content") or "",
+                    "created_at": event.timestamp,
+                    "steer": True,
+                }
+                if payload.get("steer_id"):
+                    data["steer_id"] = str(payload.get("steer_id") or "")
+                if payload.get("client_id"):
+                    data["client_id"] = str(payload.get("client_id") or "")
+                return data
             return {"type": "user", "content": payload.get("content") or "", "created_at": event.timestamp}
         if event.type == "message_assistant_final":
             return {"type": "final", "content": payload.get("content") or "", "created_at": event.timestamp}
@@ -691,6 +767,7 @@ class RuntimeUiProjection:
         limit: int = 200,
         before_index: Optional[int] = None,
         after_index: Optional[int] = None,
+        target_index: Optional[int] = None,
         turns: Optional[int] = None,
     ) -> dict:
         total = len(events)
@@ -710,6 +787,36 @@ class RuntimeUiProjection:
                 "range_end": end,
                 "has_older": start > 0,
                 "has_newer": end < total,
+            }
+
+        if target_index is not None:
+            target = max(0, min(int(target_index), max(0, total - 1)))
+            turn_count = max(1, min(int(turns) if turns is not None else 50, 50))
+            target_user_pos = -1
+            for pos, idx in enumerate(user_indices):
+                if idx <= target:
+                    target_user_pos = pos
+                else:
+                    break
+            if target_user_pos < 0:
+                start = max(0, target - (lim // 3))
+                end = min(total, start + lim)
+            else:
+                before_turns = min(5, max(0, turn_count // 4))
+                start_user_pos = max(0, target_user_pos - before_turns)
+                end_user_pos = min(len(user_indices), target_user_pos + turn_count + 1)
+                start = user_indices[start_user_pos]
+                end = user_indices[end_user_pos] if end_user_pos < len(user_indices) else total
+            if end <= start:
+                end = min(total, start + 1)
+            return {
+                "events": events[start:end],
+                "total": total,
+                "range_start": start,
+                "range_end": end,
+                "has_older": start > 0,
+                "has_newer": end < total,
+                "target_index": target,
             }
 
         def turn_start(end_exclusive: int, turn_count: int) -> int:

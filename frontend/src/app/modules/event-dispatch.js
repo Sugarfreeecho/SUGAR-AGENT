@@ -26,10 +26,17 @@ function renderEvent(ctx, event, eventIndex, runSessionId) {
         var finalStream = ctx && ctx.stream ? ctx.stream : getVisibleChatStream();
         var userIdx = (ctx && Number.isFinite(Number(ctx.lastUserEventIndex))) ? Number(ctx.lastUserEventIndex) : latestVisibleUserEventIndex(finalStream);
         if (typeof hasDuplicateVisibleFinal === 'function' && hasDuplicateVisibleFinal(finalStream, userIdx, event.content)) return;
+        if (typeof splitThinkTagsForUi === 'function') {
+            var finalThinkSplit = splitThinkTagsForUi(event.content || '');
+            if (finalThinkSplit.reasoning && finalThinkSplit.reasoning.trim()) {
+                upsertLlmFeedRow(ctx, finalThinkSplit.reasoning, 'llm-reasoning', runSessionId, uiEventReactIter(event));
+            }
+        }
         appendMessage(ctx, 'assistant', event.content || '', {
             eventIndex: eventIndex,
             turnTruncateIdx: ctx.lastUserEventIndex,
             runtimeSeq: event.runtime_seq || event.runtimeSeq,
+            runtimeEventType: event.runtime_event_type || event.runtimeEventType,
             truncateBeforeSeq: ctx.lastUserRuntimeSeq,
         }, runSessionId);
     } else if (event.type === 'process_metrics') {
@@ -71,6 +78,10 @@ function renderEvent(ctx, event, eventIndex, runSessionId) {
         appendLog(ctx, String(event.content || ''), 'error-log', runSessionId);
     } else if (event.type === 'status') {
         var statusContent = String(event.content || '');
+        if (event.model_switch) {
+            appendModelSwitchStatus(ctx, event, runSessionId);
+            return;
+        }
         if (statusContent.indexOf('【自动·长度策略】') >= 0) {
             finalizeProgressStreamChunks(ctx);
             resetKeyContextStreamFilter(ctx);

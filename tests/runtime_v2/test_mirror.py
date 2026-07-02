@@ -16,6 +16,24 @@ class RuntimeMirrorTests(unittest.TestCase):
             self.assertEqual([m["role"] for m in snapshot["messages"]], ["user", "assistant"])
             self.assertEqual(snapshot["last_seq"], 2)
 
+    def test_mirrors_user_steer_as_user_message_with_ui_marker(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            mirror = RuntimeMirror(tmp)
+            event = mirror.mirror_ui_event("s1", {
+                "type": "user_steer",
+                "content": "follow up",
+                "steer": True,
+                "steer_id": "st1",
+                "client_id": "c1",
+            })
+
+            snapshot = mirror.snapshots.read("s1")
+
+            self.assertIsNotNone(event)
+            self.assertEqual(event.type, "message_user")
+            self.assertEqual(event.payload["ui_type"], "user_steer")
+            self.assertEqual(snapshot["messages"][0]["role"], "user")
+
     def test_mirrors_run_lifecycle(self):
         with tempfile.TemporaryDirectory() as tmp:
             mirror = RuntimeMirror(tmp)

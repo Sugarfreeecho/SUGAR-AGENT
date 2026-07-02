@@ -532,6 +532,57 @@ def _truncate_unclosed_tool_call_tail(messages: List[Any]) -> tuple[List[Any], O
     return list(messages or [])[:idx], idx
 
 
+def _trim_unclosed_tool_call_tail_preserve_completed(
+    messages: List[Any],
+) -> tuple[List[Any], Optional[int]]:
+    src = list(messages or [])
+    out: List[Any] = []
+    i = 0
+    changed_at: Optional[int] = None
+    while i < len(src):
+        msg = src[i]
+        ids = _assistant_tool_call_ids(msg)
+        if not ids:
+            out.append(msg)
+            i += 1
+            continue
+
+        tool_rows: List[ToolMessage] = []
+        j = i + 1
+        while j < len(src) and isinstance(src[j], ToolMessage):
+            tool_rows.append(src[j])
+            j += 1
+
+        seen_ids = {
+            str(getattr(t, "tool_call_id", "") or "").strip()
+            for t in tool_rows
+        }
+        if len(tool_rows) >= len(ids) and set(ids).issubset(seen_ids):
+            out.extend(src[i:j])
+            i = j
+            continue
+
+        changed_at = len(out)
+        completed_ids = [tid for tid in ids if tid in seen_ids]
+        if completed_ids:
+            raw_calls = list(getattr(msg, "tool_calls", None) or [])
+            completed_set = set(completed_ids)
+            kept_calls: List[Any] = []
+            for idx, tc in enumerate(raw_calls):
+                if isinstance(tc, dict):
+                    raw = tc.get("id") or tc.get("tool_call_id") or ""
+                else:
+                    raw = getattr(tc, "id", "") or getattr(tc, "tool_call_id", "") or ""
+                tid = str(raw or "").strip() or f"__missing_tool_call_id_{idx}"
+                if tid in completed_set:
+                    kept_calls.append(tc)
+            if kept_calls:
+                out.append(msg.model_copy(update={"tool_calls": kept_calls}))
+                out.extend([t for t in tool_rows if str(getattr(t, "tool_call_id", "") or "").strip() in completed_set])
+        return out, changed_at
+    return out, changed_at
+
+
 def _sanitize_loaded_histories_for_new_run(
     session_id: str,
     work_messages: List[Any],
@@ -621,10 +672,36 @@ def _pre_api_timing_log(session_id: str, timings: Dict[str, int], **extra: Any) 
         logger.debug("pre_api_timing log failed", exc_info=True)
 
 
+def _timing_ms(start: float) -> int:
+    return int(max(0.0, (time.perf_counter() - start) * 1000.0))
+
+
+def _pipeline_timing_log(label: str, session_id: str, timings: Dict[str, int], **extra: Any) -> None:
+    try:
+        total = int(sum(int(v or 0) for v in timings.values()))
+        parts = [f"{k}={int(v)}ms" for k, v in timings.items()]
+        for k, v in extra.items():
+            parts.append(f"{k}={v}")
+        logger.info("%s session=%s total=%sms %s", label, session_id, total, " ".join(parts))
+    except Exception:
+        logger.debug("%s log failed", label, exc_info=True)
+
+
+def _pipeline_step_timing_log(label: str, session_id: str, step: str, ms: int, **extra: Any) -> None:
+    try:
+        parts = [f"{k}={v}" for k, v in extra.items()]
+        suffix = (" " + " ".join(parts)) if parts else ""
+        logger.info("%s session=%s step=%s ms=%sms%s", label, session_id, step, int(ms), suffix)
+    except Exception:
+        logger.debug("%s step log failed", label, exc_info=True)
+
+
 def _runtime_v2_append_model_message(state: State, msg: Any) -> None:
     sid = str(state.get("session_id") or "").strip()
     if not sid:
         return
+    t0 = time.perf_counter()
+    role = ""
     try:
         from runtime_v2 import RuntimeHistoryOps
 
@@ -650,6 +727,12 @@ def _runtime_v2_append_model_message(state: State, msg: Any) -> None:
             content,
             **payload,
         )
+        logger.info(
+            "runtime_v2_write_timing session=%s op=append_model_message role=%s ms=%s",
+            sid,
+            role,
+            _timing_ms(t0),
+        )
     except Exception as exc:
         logger.debug("Runtime V2 model append failed: %s", exc)
 
@@ -658,6 +741,7 @@ def _runtime_v2_replace_model_history(state: State, messages: List[Any], reason:
     sid = str(state.get("session_id") or "").strip()
     if not sid:
         return
+    t0 = time.perf_counter()
     try:
         from runtime_v2 import RuntimeHistoryOps
 
@@ -665,6 +749,13 @@ def _runtime_v2_replace_model_history(state: State, messages: List[Any], reason:
             sid,
             [_message_to_dict(m) for m in list(messages or [])],
             reason=reason,
+        )
+        logger.info(
+            "runtime_v2_write_timing session=%s op=replace_model_history reason=%s messages=%s ms=%s",
+            sid,
+            reason,
+            len(list(messages or [])),
+            _timing_ms(t0),
         )
     except Exception as exc:
         logger.debug("Runtime V2 model replace failed: %s", exc)
@@ -791,6 +882,18 @@ def _queue_get_with_timeout(q: queue.Queue, timeout: float):
         return q.get(timeout=timeout)
     except queue.Empty:
         return ("__timeout__", None)
+
+
+class _ThreadToAsyncQueue:
+    def __init__(self, loop: asyncio.AbstractEventLoop, target: asyncio.Queue):
+        self._loop = loop
+        self._target = target
+
+    def put(self, item: Any) -> None:
+        try:
+            self._loop.call_soon_threadsafe(self._target.put_nowait, item)
+        except RuntimeError:
+            pass
 
 
 def _discard_task_result(task: asyncio.Task) -> None:
@@ -932,23 +1035,16 @@ def _rollback_steer_partial_turn(state: State) -> None:
     marker = state.pop("_steer_rollback_marker", None) if isinstance(state, dict) else None
     if not isinstance(marker, dict):
         return
-    try:
-        llm_len = int(marker.get("llm_len"))
-        work_len = int(marker.get("work_len"))
-    except Exception:
-        return
     llm_history = list(state.get("llm_history", []))
     work_messages = list(state.get("work_messages", []))
-    if llm_len < 0 or work_len < 0:
+    llm_history, llm_cut = _trim_unclosed_tool_call_tail_preserve_completed(llm_history)
+    work_messages, work_cut = _trim_unclosed_tool_call_tail_preserve_completed(work_messages)
+    if llm_cut is None and work_cut is None:
         return
-    if len(llm_history) >= llm_len:
-        llm_history = llm_history[:llm_len]
-    if len(work_messages) >= work_len:
-        work_messages = work_messages[:work_len]
     state["llm_history"] = llm_history
     state["work_messages"] = work_messages
     state["dialogue"] = derive_dialogue_from_assistant_history(llm_history)
-    _persist_state_with_model_replace(state, llm_history, "steer_restart_rollback")
+    _persist_state_with_model_replace(state, llm_history, "steer_restart_trim_unclosed_tools")
 
 
 async def _restart_react_after_steer(
@@ -1052,6 +1148,7 @@ async def _await_thread_with_sse_keepalive(
     interval_sec: float = 12.0,
     *,
     thread_hint_queue: Optional[queue.Queue] = None,
+    keepalive_event: Optional[Dict[str, Any]] = None,
 ):
     """
     在线程中运行无参 factory()；等待期间周期性推送 ephemeral keepalive，
@@ -1087,11 +1184,12 @@ async def _await_thread_with_sse_keepalive(
                 return task.result()
             now = loop.time()
             if emit and now - last_keep >= interval_sec:
-                await _push_stream_event(
-                    state,
-                    {"type": "sse_keepalive", "ephemeral": True},
-                    emit=emit,
-                )
+                ev = dict(keepalive_event or {"type": "sse_keepalive", "ephemeral": True})
+                if not ev.get("type"):
+                    ev["type"] = "sse_keepalive"
+                if "ephemeral" not in ev:
+                    ev["ephemeral"] = True
+                await _push_stream_event(state, ev, emit=emit)
                 last_keep = now
     finally:
         if not task.done():
@@ -1726,7 +1824,13 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
                         ),
                         state,
                         emit,
+                        interval_sec=6.0,
                         thread_hint_queue=_hint_q,
+                        keepalive_event={
+                            "type": "context_summary_progress",
+                            "content": "【上下文摘要】摘要模型仍在生成或等待响应中，请稍候…",
+                            "ephemeral": True,
+                        },
                     )
                     _pre_api_timing_mark(pre_api_timings, "context_policy_run", _t_pre_api)
                 else:
@@ -1832,6 +1936,417 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
                 _pre_api_timing_mark(pre_api_timings, "subagent_tool_filter", _t_pre_api)
                 logger.warning("subagent 工具过滤失败（忽略）: %s", _sub_ex)
 
+            async def execute_one(tool_call):
+                tool_name = tool_call["name"]
+                tool_args = tool_call["args"]
+                tool_id = tool_call["id"]
+                tool_call_index = tool_call.get("index")
+                await _raise_if_steer_requested(state, emit, "tool")
+
+                # 工作区放宽 Shell / 网页下载：前端弹窗确认后才进入「执行中」占位
+                if emit and tool_name != "context_manage" and _tool_ui_approval_enabled():
+                    spec = _tool_ui_approval_spec(tool_name, tool_args)
+                    if spec is None and isinstance(tool_name, str) and tool_name.startswith("mcp_"):
+                        await _await_steerable(
+                            state,
+                            agent_mcp.ensure_started(),
+                            emit,
+                            "tool_mcp_start",
+                        )
+                        spec = agent_mcp.ui_approval_spec_for_mcp_tool(tool_name, tool_args)
+                    if spec:
+                        appr_id = new_approval_id()
+
+                        async def _emit_appr():
+                            await _emit_tool_approval_required_sse(
+                                emit,
+                                state["session_id"],
+                                appr_id,
+                                tool_name,
+                                spec["title"],
+                                spec["message"],
+                                spec.get("subtitle") or "",
+                            )
+
+                        allowed = await _await_steerable(
+                            state,
+                            wait_tool_ui_approval_after_emit(
+                                state["session_id"], appr_id, _emit_appr
+                            ),
+                            emit,
+                            "tool_approval",
+                        )
+                        brief = spec.get("brief") or tool_name
+                        if allowed:
+                            await _push_stream_event(
+                                state,
+                                {"type": "status", "content": "【安全确认】用户已允许：" + brief},
+                                emit=emit,
+                            )
+                        else:
+                            await _push_stream_event(
+                                state,
+                                {
+                                    "type": "status",
+                                    "content": "【安全确认】用户已拒绝执行（已跳过）。 " + brief,
+                                },
+                                emit=emit,
+                            )
+                            return _tool_result_user_denied_ui(tool_name, tool_args, tool_id)
+
+                # 执行前不再推送单独的「执行中」工具占位；最终 tool_call 结果行会直接落到过程区。
+                await _raise_if_steer_requested(state, emit, "tool")
+
+                # 特殊处理：context_manage（mode=compact | edit_key_context）
+                if tool_name == "context_manage":
+                    mode = str(tool_args.get("mode") or "compact").strip().lower()
+                    if mode == "compact":
+                        logger.info("手动 context_manage compact：单轨强制压缩")
+                        if emit:
+                            await _push_stream_event(
+                                state,
+                                {
+                                    "type": "status",
+                                    "content": "【context_manage·compact】正在进行上下文裁剪（可能需数秒，请稍候）…",
+                                },
+                                emit=emit,
+                            )
+                        _cq: queue.Queue = queue.Queue()
+
+                        def _compact_hint_emit(item: Any) -> None:
+                            _cq.put(_progress_hint_to_stream_event(item))
+
+                        nl, nk, chg, _, used_llm_c, new_recap_c = await _await_thread_with_sse_keepalive(
+                            lambda: _run_context_policy_serialized(
+                                llm_history,
+                                state.get("key_context", ""),
+                                state["session_id"],
+                                force_user_compact=True,
+                                hint_sink=_compact_hint_emit,
+                            ),
+                            state,
+                            emit,
+                            interval_sec=6.0,
+                            thread_hint_queue=_cq,
+                            keepalive_event={
+                                "type": "context_summary_progress",
+                                "content": "【context_manage·compact】摘要模型仍在生成或等待响应中，请稍候…",
+                                "ephemeral": True,
+                            },
+                        )
+                        if chg:
+                            state["llm_history"] = nl
+                            state["dialogue"] = derive_dialogue_from_assistant_history(nl)
+                            state["key_context"] = nk
+                            todo_manager.sync_session_from_key_context(state["session_id"], "")
+                            return {
+                                "type": "compact",
+                                "new_llm_history": nl,
+                                "new_recap": new_recap_c,
+                                "used_llm_summary": used_llm_c,
+                            }
+                        return {"type": "compact_noop"}
+                    if mode == "edit_key_context":
+                        instr = str(tool_args.get("edit_instruction") or "").strip()
+                        if not instr:
+                            return {
+                                "type": "tool",
+                                "tool_name": tool_name,
+                                "tool_args": tool_args,
+                                "tool_id": tool_id,
+                                "result": "edit_key_context 模式需要提供非空的 edit_instruction。",
+                                "tool_detail_log": "缺少 edit_instruction",
+                                "tool_detail_llm": "缺少 edit_instruction",
+                                "tool_detail_ui": "缺少 edit_instruction",
+                                "result_for_log": "缺少 edit_instruction",
+                                "tool_failed": True,
+                            }
+                        logger.info("context_manage edit_key_context")
+                        _kq: queue.Queue = queue.Queue()
+
+                        def _key_hint_emit(item: Any) -> None:
+                            _kq.put(_progress_hint_to_stream_event(item))
+
+                        nk, msg = await _await_thread_with_sse_keepalive(
+                            lambda: run_edit_key_context_instruction(
+                                state["session_id"],
+                                instr,
+                                hint_sink=_key_hint_emit,
+                            ),
+                            state,
+                            emit,
+                            interval_sec=6.0,
+                            thread_hint_queue=_kq,
+                            keepalive_event={
+                                "type": "key_context_progress",
+                                "content": "【要点】模型仍在更新要点或等待响应中，请稍候…",
+                                "ephemeral": True,
+                            },
+                        )
+                        state["key_context"] = nk
+                        _persist_state(state)
+                        return {
+                            "type": "tool",
+                            "tool_name": tool_name,
+                            "tool_args": tool_args,
+                            "tool_id": tool_id,
+                            "result": msg,
+                            "tool_detail_log": truncate_head_tail(msg, LOG_TRUNCATE_KEEP_CHARS),
+                            "tool_detail_llm": truncate_tool_result_for_llm(msg, LLM_CONTEXT_TRUNCATE_KEEP_CHARS),
+                            "tool_detail_ui": msg,
+                            "result_for_log": truncate_head_tail(msg, LOG_TRUNCATE_KEEP_CHARS),
+                            "tool_failed": _tool_result_indicates_failure(tool_name, msg),
+                        }
+                    return {
+                        "type": "tool",
+                        "tool_name": tool_name,
+                        "tool_args": tool_args,
+                        "tool_id": tool_id,
+                        "result": f"无效的 mode：{mode!r}；仅支持 compact、edit_key_context。",
+                        "tool_detail_log": "无效 mode",
+                        "tool_detail_llm": "无效 mode",
+                        "tool_detail_ui": "无效 mode",
+                        "result_for_log": "无效 mode",
+                        "tool_failed": True,
+                    }
+
+                # 特殊处理：update_todo — 写入 todo_plan.md
+                if tool_name == "update_todo":
+                    todo_tool_failed = False
+                    try:
+                        # 兼容多种参数格式：items / todos，数组 / JSON字符串 / 单个dict
+                        uitems = tool_args.get("items")
+                        if uitems is None:
+                            uitems = tool_args.get("todos")
+                        from agent_tools import _normalize_todo_items
+                        normalized, err_msg = _normalize_todo_items(uitems)
+                        if err_msg:
+                            result = err_msg
+                            todo_tool_failed = True
+                        else:
+                            result = todo_manager.update_for_session(state["session_id"], normalized)
+                        if emit:
+                            titems = list(
+                                todo_manager._by_session.get(state["session_id"], [])
+                            )
+                            done_n = sum(
+                                1 for t in titems if t.get("status") == "completed"
+                            )
+                            await _push_stream_event(
+                                state,
+                                {
+                                    "type": "todo_plan",
+                                    "ephemeral": not _runtime_v2_is_primary(),
+                                    "has_plan": len(titems) > 0,
+                                    "items": [
+                                        {
+                                            "id": t["id"],
+                                            "text": t["text"],
+                                            "status": t["status"],
+                                        }
+                                        for t in titems
+                                    ],
+                                    "done": done_n,
+                                    "total": len(titems),
+                                },
+                                emit=emit,
+                            )
+                    except Exception as e:
+                        result = f"待办更新失败：{e}"
+                        todo_tool_failed = True
+                    result_str = str(result)
+                    result_for_log = truncate_head_tail(result_str, LOG_TRUNCATE_KEEP_CHARS)
+                    _llm_limit = LLM_CONTEXT_TRUNCATE_KEEP_CHARS * 2
+                    if len(result_str) > _llm_limit:
+                        result_for_llm = _save_result_to_tempfile(result_str, tool_name, state)
+                    else:
+                        result_for_llm = truncate_tool_result_for_llm(result_str, LLM_CONTEXT_TRUNCATE_KEEP_CHARS)
+                    return {
+                        "type": "tool",
+                        "tool_name": tool_name,
+                        "tool_args": tool_args,
+                        "tool_id": tool_id,
+                        "result": result,
+                        "tool_detail_log": result_for_log,
+                        "tool_detail_llm": result_for_llm,
+                        "tool_detail_ui": result_str,
+                        "result_for_log": result_for_log,
+                        "tool_failed": bool(
+                            todo_tool_failed or _tool_result_indicates_failure(tool_name, result)
+                        ),
+                    }
+
+                # 特殊处理：task — 启动/续接 subagent
+                if tool_name == "task":
+                    from agent_subagent import run_subagent_task
+
+                    try:
+                        result = await _await_steerable(
+                            state,
+                            run_subagent_task(
+                                tool_args=tool_args if isinstance(tool_args, dict) else {},
+                                parent_session_id=state["session_id"],
+                                parent_key_context=state.get("key_context", ""),
+                                emit=emit,
+                            ),
+                            emit,
+                            "tool_task",
+                        )
+                    except _SteerRestartRequested:
+                        raise
+                    except Exception as e:
+                        result = f"subagent 执行异常：{e}"
+                    result_str = str(result)
+                    result_for_log = truncate_head_tail(result_str, LOG_TRUNCATE_KEEP_CHARS)
+                    _llm_limit = LLM_CONTEXT_TRUNCATE_KEEP_CHARS * 2
+                    if len(result_str) > _llm_limit:
+                        result_for_llm = _save_result_to_tempfile(result_str, tool_name, state)
+                    else:
+                        result_for_llm = truncate_tool_result_for_llm(
+                            result_str, LLM_CONTEXT_TRUNCATE_KEEP_CHARS
+                        )
+                    return {
+                        "type": "tool",
+                        "tool_name": tool_name,
+                        "tool_args": tool_args,
+                        "tool_id": tool_id,
+                        "result": result,
+                        "tool_detail_log": result_for_log,
+                        "tool_detail_llm": result_for_llm,
+                        "tool_detail_ui": result_str,
+                        "result_for_log": result_for_log,
+                        "tool_failed": _tool_result_indicates_failure(tool_name, result),
+                    }
+
+                # MCP 外部工具（配置见 mcp_servers.json / MCP_SERVERS_JSON）
+                if tool_name.startswith("mcp_"):
+                    tool_failed = False
+                    try:
+                        result = await _await_steerable(
+                            state,
+                            agent_mcp.invoke_tool_by_fname(
+                                tool_name,
+                                tool_args if isinstance(tool_args, dict) else {},
+                            ),
+                            emit,
+                            "tool_mcp",
+                        )
+                    except _SteerRestartRequested:
+                        raise
+                    except Exception as e:
+                        result = f"MCP 调用异常：{e}"
+                        tool_failed = True
+                    result_str = str(result)
+                    result_for_log = truncate_head_tail(result_str, LOG_TRUNCATE_KEEP_CHARS)
+                    _llm_limit = LLM_CONTEXT_TRUNCATE_KEEP_CHARS * 2
+                    if len(result_str) > _llm_limit:
+                        result_for_llm = _save_result_to_tempfile(result_str, tool_name, state)
+                    else:
+                        result_for_llm = truncate_tool_result_for_llm(result_str, LLM_CONTEXT_TRUNCATE_KEEP_CHARS)
+                    result_for_ui = result_str
+                    tool_detail_log = result_for_log
+                    tool_detail_llm = result_for_llm
+                    tool_detail_ui = result_for_ui
+                    tool_failed = tool_failed or _tool_result_indicates_failure(tool_name, result)
+                    return {
+                        "type": "tool",
+                        "tool_name": tool_name,
+                        "tool_args": tool_args,
+                        "tool_id": tool_id,
+                        "result": result,
+                        "tool_detail_log": tool_detail_log,
+                        "tool_detail_llm": tool_detail_llm,
+                        "tool_detail_ui": tool_detail_ui,
+                        "result_for_log": result_for_log,
+                        "tool_failed": tool_failed,
+                    }
+
+                # 普通工具
+                tool_func = tools_dict.get(tool_name)
+                tool_failed = False
+                if not tool_func:
+                    result = f"未知工具：{tool_name}"
+                    tool_failed = True
+                else:
+                    try:
+                        # 注入 interrupt 回调，让 run_shell 能感知 interrupt 并杀子进程
+                        _sid = state.get("session_id", "") if isinstance(state, dict) else ""
+                        if _sid and tool_name == "run_shell":
+                            set_run_shell_interrupt_check(
+                                lambda: session_manager.is_interrupt_requested(_sid) or _steer_requested(state)
+                            )
+                        if hasattr(tool_func, "ainvoke"):
+                            result = await _await_steerable(
+                                state,
+                                tool_func.ainvoke(tool_args),
+                                emit,
+                                "tool",
+                            )
+                        elif hasattr(tool_func, "invoke"):
+                            result = await _await_steerable(
+                                state,
+                                asyncio.to_thread(lambda: tool_func.invoke(tool_args)),
+                                emit,
+                                "tool",
+                            )
+                        else:
+                            result = await _await_steerable(
+                                state,
+                                _invoke_plain_tool(tool_func, tool_args),
+                                emit,
+                                "tool",
+                            )
+                    except _SteerRestartRequested:
+                        raise
+                    except Exception as e:
+                        result = f"工具执行异常：{str(e)}"
+                        tool_failed = True
+                    finally:
+                        clear_run_shell_interrupt_check()
+
+                # 截断结果（三路文本生成：日志用、LLM上下文用、UI用）
+                if tool_name in READ_ONLY_TOOLS:
+                    result_str = _wrap_read_only_tool_output_lines(result)
+                else:
+                    result_str = redact_sensitive_tool_text(result)
+                
+                # 1. 日志用（首尾保留LOG_TRUNCATE_KEEP_CHARS）
+                result_for_log = truncate_head_tail(result_str, LOG_TRUNCATE_KEEP_CHARS)
+                
+                # 2. LLM上下文用：activate_skill 完整返回不截断；其他工具超阈值则落盘替换，否则原有截断
+                if tool_name == "activate_skill":
+                    result_for_llm = result_str
+                else:
+                    _llm_limit = LLM_CONTEXT_TRUNCATE_KEEP_CHARS * 2
+                    if len(result_str) > _llm_limit:
+                        result_for_llm = _save_result_to_tempfile(result_str, tool_name, state)
+                    else:
+                        result_for_llm = truncate_tool_result_for_llm(result_str, LLM_CONTEXT_TRUNCATE_KEEP_CHARS)
+                
+                # 3. UI用：完整内容（不做截断，但可保留Shell的10000硬截断，后续可考虑移除）
+                result_for_ui = result_str  # 直接完整
+
+                tool_detail_log = result_for_log
+                tool_detail_llm = result_for_llm
+                tool_detail_ui = result_for_ui
+
+                tool_failed = tool_failed or _tool_result_indicates_failure(tool_name, result)
+
+                return {
+                    "type": "tool",
+                    "tool_name": redact_sensitive_tool_text(tool_name),
+                    "tool_args": redact_sensitive_tool_obj(tool_args),
+                    "tool_id": tool_id,
+                    "tool_call_index": tool_call_index,
+                    "result": result_str,
+                    "tool_detail_log": tool_detail_log,
+                    "tool_detail_llm": tool_detail_llm,
+                    "tool_detail_ui": tool_detail_ui,
+                    "result_for_log": result_for_log,
+                    "tool_failed": tool_failed,
+                }
+
+
             # ---------- 2.6 调用 LLM ----------
             _t_pre_api = time.perf_counter()
             await _await_context_policy_idle_for_session(state, emit)
@@ -1866,6 +2381,9 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
             streamed_this_call = False
             early_tool_detected = False
             seen_tool_call_ids: set = set()
+            early_tool_acc: Dict[int, Dict[str, str]] = {}
+            early_tool_tasks: Dict[int, asyncio.Task] = {}
+            early_tool_results: Dict[int, Any] = {}
             # 定时器：检测 reasoning/content 停止
             thinking_timer_task = None
             api_resp: Any = None
@@ -1873,9 +2391,60 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
             llm_call_finish: Dict[str, Any] = {"finish_reason": None, "stop_reason": None}
             actual_response_model = ""
             steer_interrupted_this_call = False
+            streamed_reasoning_parts: List[str] = []
+            streamed_response_parts: List[str] = []
+
+            def _early_tool_call_from_acc(idx: int) -> Optional[Dict[str, Any]]:
+                row = early_tool_acc.get(int(idx))
+                if not row:
+                    return None
+                name = (row.get("name") or "").strip()
+                tid = row.get("id") or ""
+                raw_args = row.get("arguments") or "{}"
+                if not name or not tid:
+                    return None
+                try:
+                    args = json.loads(raw_args) if isinstance(raw_args, str) else (raw_args or {})
+                except Exception:
+                    return None
+                return {"name": name, "args": args if isinstance(args, dict) else {}, "id": tid, "index": int(idx)}
+
+            async def _run_early_tool_call(idx: int, tc: Dict[str, Any]) -> Any:
+                try:
+                    r = await execute_one(tc)
+                except _SteerRestartRequested:
+                    raise
+                except Exception as e:
+                    r = e
+                early_tool_results[int(idx)] = r
+                if emit and isinstance(r, dict) and r.get("type") == "tool":
+                    r["_sse_emitted"] = True
+                    await _emit_tool_call_sse(emit, r, iter_count, state)
+                return r
+
+            def _maybe_start_closed_tool_call(payload_dict: Dict[str, Any]) -> None:
+                try:
+                    idx = int(payload_dict.get("index", 0) or 0)
+                except Exception:
+                    idx = 0
+                row = early_tool_acc.setdefault(idx, {"id": "", "name": "", "arguments": ""})
+                if payload_dict.get("id"):
+                    row["id"] = str(payload_dict.get("id") or "")
+                if payload_dict.get("name_delta"):
+                    row["name"] = row.get("name", "") + str(payload_dict.get("name_delta") or "")
+                if payload_dict.get("arguments_delta"):
+                    row["arguments"] = row.get("arguments", "") + str(payload_dict.get("arguments_delta") or "")
+                if idx in early_tool_tasks:
+                    return
+                tc = _early_tool_call_from_acc(idx)
+                if not tc or tc.get("name") == "context_manage":
+                    return
+                early_tool_tasks[idx] = asyncio.create_task(_run_early_tool_call(idx, tc))
+
             if EXECUTOR_STREAM and emit:
                 t_llm_start = time.monotonic()
-                sync_q: queue.Queue = queue.Queue()
+                async_stream_q: asyncio.Queue = asyncio.Queue()
+                sync_q = _ThreadToAsyncQueue(asyncio.get_running_loop(), async_stream_q)
                 stream_abort_event = threading.Event()
                 def _stream_model_switch_status(ev: Dict[str, Any]) -> None:
                     if not _should_suppress_model_switch_status(state, ev):
@@ -1909,8 +2478,9 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
                             stream_abort_event.set()
                             await _emit_steer_abort_event(state, emit, "llm_stream")
                             break
-                        item = await asyncio.to_thread(_queue_get_with_timeout, sync_q, 0.03)
-                        if item and item[0] == "__timeout__":
+                        try:
+                            item = await asyncio.wait_for(async_stream_q.get(), timeout=0.03)
+                        except asyncio.TimeoutError:
                             continue
                         if item is None:
                             break
@@ -1925,6 +2495,40 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
                                 status_event = {"type": "status", "content": str(payload or "")}
                             if status_event.get("content"):
                                 await _push_stream_event(state, status_event, emit=emit)
+                            continue
+                        if tag == "stream_timing":
+                            payload_dict = payload if isinstance(payload, dict) else {}
+                            step = str(payload_dict.get("step") or "").strip()
+                            try:
+                                ms_since_api_start = int(float(payload_dict.get("ms_since_api_start") or 0))
+                            except Exception:
+                                ms_since_api_start = 0
+                            extra_parts: List[str] = []
+                            for _k in (
+                                "attempt",
+                                "messages",
+                                "tools",
+                                "max_tokens",
+                                "chunk_count",
+                                "delta_type",
+                                "chars",
+                                "delay_ms",
+                                "error",
+                                "reasoning_chars",
+                                "content_chars",
+                                "tool_calls",
+                            ):
+                                if _k in payload_dict and payload_dict.get(_k) is not None:
+                                    extra_parts.append(f"{_k}={payload_dict.get(_k)}")
+                            logger.info(
+                                "llm_stream_step_timing session=%s react_iter=%s step=%s ms_since_api_start=%sms model=%s %s",
+                                state["session_id"],
+                                int(iter_count),
+                                step,
+                                max(0, ms_since_api_start),
+                                redact_sensitive_tool_text(str(payload_dict.get("model") or iter_model)),
+                                " ".join(extra_parts),
+                            )
                             continue
                         if tag == "usage":
                             llm_call_usage = payload
@@ -1978,6 +2582,7 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
                             if tool_delta_id and tool_delta_id not in seen_tool_call_ids:
                                 seen_tool_call_ids.add(tool_delta_id)
                                 early_tool_detected = True
+                            _maybe_start_closed_tool_call(payload_dict)
                             if emit:
                                 r = emit(
                                     {
@@ -1998,6 +2603,7 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
                             streamed_this_call = True
                             continue
                         if tag == "reasoning" and payload:
+                            streamed_reasoning_parts.append(str(payload))
                             llm_delta_seq += 1
                             # 启动/重置定时器
                             if thinking_timer_task and not thinking_timer_task.done():
@@ -2018,6 +2624,7 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
                             await asyncio.sleep(0)
                             streamed_this_call = True
                         elif tag == "content" and payload:
+                            streamed_response_parts.append(str(payload))
                             llm_delta_seq += 1
                             # 启动/重置定时器
                             if thinking_timer_task and not thinking_timer_task.done():
@@ -2052,6 +2659,75 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
                         pass
                     _set_model_switch_status_callback(iter_client, None)
                 if steer_interrupted_this_call:
+                    for _idx, _task in list(early_tool_tasks.items()):
+                        if not _task.done():
+                            _task.add_done_callback(_discard_task_result)
+                            _task.cancel()
+                    partial_reasoning = "".join(streamed_reasoning_parts).strip()
+                    partial_response = "".join(streamed_response_parts)
+                    completed_early_tool_calls: List[Dict[str, Any]] = []
+                    completed_early_tool_results: List[Dict[str, Any]] = []
+                    for _idx in sorted(early_tool_results.keys()):
+                        _res = early_tool_results.get(_idx)
+                        _tc = _early_tool_call_from_acc(_idx)
+                        if isinstance(_res, dict) and _res.get("type") == "tool" and _tc:
+                            completed_early_tool_calls.append(_tc)
+                            completed_early_tool_results.append(_res)
+                    if partial_reasoning or partial_response.strip() or completed_early_tool_calls:
+                        try:
+                            if partial_reasoning:
+                                await _push_stream_event(
+                                    state,
+                                    {
+                                        "type": "llm_reasoning",
+                                        "content": partial_reasoning,
+                                        "react_iter": int(iter_count),
+                                    },
+                                    emit=emit,
+                                )
+                                await prune_session_ephemeral(
+                                    state["session_id"],
+                                    types={"llm_reasoning_delta"},
+                                    react_iter=int(iter_count),
+                                )
+                            if partial_response.strip():
+                                await _push_stream_event(
+                                    state,
+                                    {
+                                        "type": "llm_response",
+                                        "content": partial_response,
+                                        "react_iter": int(iter_count),
+                                    },
+                                    emit=emit,
+                                )
+                                await prune_session_ephemeral(
+                                    state["session_id"],
+                                    types={"llm_response_delta"},
+                                    react_iter=int(iter_count),
+                                )
+                            partial_msg = AssistantMessage(
+                                content=partial_response if partial_response is not None else "",
+                                tool_calls=completed_early_tool_calls or None,
+                                metadata={"is_assistant_response": True},
+                                additional_kwargs=build_assistant_additional_kwargs(partial_reasoning),
+                            )
+                            llm_history.append(partial_msg)
+                            work_messages.append(partial_msg)
+                            state["llm_history"] = llm_history
+                            state["work_messages"] = work_messages
+                            state["dialogue"] = derive_dialogue_from_assistant_history(llm_history)
+                            _persist_state_with_model_append(state, partial_msg)
+                            for _res in completed_early_tool_results:
+                                _ui_msg = ToolMessage(content=_res["tool_detail_ui"], tool_call_id=_res["tool_id"])
+                                _llm_msg = ToolMessage(content=_res["tool_detail_llm"], tool_call_id=_res["tool_id"])
+                                work_messages.append(_ui_msg)
+                                llm_history.append(_llm_msg)
+                                _runtime_v2_append_model_message(state, _llm_msg)
+                            state["llm_history"] = llm_history
+                            state["work_messages"] = work_messages
+                            state["dialogue"] = derive_dialogue_from_assistant_history(llm_history)
+                        except Exception:
+                            logger.debug("failed to preserve steer partial assistant output", exc_info=True)
                     if await _consume_steer_messages(state, emit=emit):
                         _reset_steer_control(state)
                         llm_history = list(state["llm_history"])
@@ -2278,6 +2954,10 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
             tool_calls_list = turn.tool_calls
             if not isinstance(tool_calls_list, list) or len(tool_calls_list) == 0:
                 tool_calls_list = None
+                for _task in list(early_tool_tasks.values()):
+                    if not _task.done():
+                        _task.add_done_callback(_discard_task_result)
+                        _task.cancel()
             if tool_calls_list is not None:
                 state["_steer_rollback_marker"] = {
                     "llm_len": len(llm_history),
@@ -2327,414 +3007,17 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
 
             # ---------- 2.7 并行工具调用（须先于重复检测插入的系统消息，保证 assistant(tool_calls) 后紧跟 tool） ----------
             if tool_calls_list:
-                # 定义单个工具的执行逻辑（异步）
-                async def execute_one(tool_call):
-                    tool_name = tool_call["name"]
-                    tool_args = tool_call["args"]
-                    tool_id = tool_call["id"]
-                    tool_call_index = tool_call.get("index")
-                    await _raise_if_steer_requested(state, emit, "tool")
-
-                    # 工作区放宽 Shell / 网页下载：前端弹窗确认后才进入「执行中」占位
-                    if emit and tool_name != "context_manage" and _tool_ui_approval_enabled():
-                        spec = _tool_ui_approval_spec(tool_name, tool_args)
-                        if spec is None and isinstance(tool_name, str) and tool_name.startswith("mcp_"):
-                            await _await_steerable(
-                                state,
-                                agent_mcp.ensure_started(),
-                                emit,
-                                "tool_mcp_start",
-                            )
-                            spec = agent_mcp.ui_approval_spec_for_mcp_tool(tool_name, tool_args)
-                        if spec:
-                            appr_id = new_approval_id()
-
-                            async def _emit_appr():
-                                await _emit_tool_approval_required_sse(
-                                    emit,
-                                    state["session_id"],
-                                    appr_id,
-                                    tool_name,
-                                    spec["title"],
-                                    spec["message"],
-                                    spec.get("subtitle") or "",
-                                )
-
-                            allowed = await _await_steerable(
-                                state,
-                                wait_tool_ui_approval_after_emit(
-                                    state["session_id"], appr_id, _emit_appr
-                                ),
-                                emit,
-                                "tool_approval",
-                            )
-                            brief = spec.get("brief") or tool_name
-                            if allowed:
-                                await _push_stream_event(
-                                    state,
-                                    {"type": "status", "content": "【安全确认】用户已允许：" + brief},
-                                    emit=emit,
-                                )
-                            else:
-                                await _push_stream_event(
-                                    state,
-                                    {
-                                        "type": "status",
-                                        "content": "【安全确认】用户已拒绝执行（已跳过）。 " + brief,
-                                    },
-                                    emit=emit,
-                                )
-                                return _tool_result_user_denied_ui(tool_name, tool_args, tool_id)
-
-                    # 执行前占位（context_manage / task 已有独立 status，不重复推送）
-                    await _raise_if_steer_requested(state, emit, "tool")
-                    if emit and tool_name not in ("context_manage", "task"):
-                        await _emit_tool_pending_sse(
-                            emit,
-                            tool_name,
-                            tool_args,
-                            tool_id or "",
-                            iter_count,
-                            int(tool_call_index) if tool_call_index is not None else None,
-                        )
-
-                    # 特殊处理：context_manage（mode=compact | edit_key_context）
-                    if tool_name == "context_manage":
-                        mode = str(tool_args.get("mode") or "compact").strip().lower()
-                        if mode == "compact":
-                            logger.info("手动 context_manage compact：单轨强制压缩")
-                            if emit:
-                                await _push_stream_event(
-                                    state,
-                                    {
-                                        "type": "status",
-                                        "content": "【context_manage·compact】正在进行上下文裁剪（可能需数秒，请稍候）…",
-                                    },
-                                    emit=emit,
-                                )
-                            _cq: queue.Queue = queue.Queue()
-
-                            def _compact_hint_emit(item: Any) -> None:
-                                _cq.put(_progress_hint_to_stream_event(item))
-
-                            nl, nk, chg, _, used_llm_c, new_recap_c = await _await_thread_with_sse_keepalive(
-                                lambda: _run_context_policy_serialized(
-                                    llm_history,
-                                    state.get("key_context", ""),
-                                    state["session_id"],
-                                    force_user_compact=True,
-                                    hint_sink=_compact_hint_emit,
-                                ),
-                                state,
-                                emit,
-                                thread_hint_queue=_cq,
-                            )
-                            if chg:
-                                state["llm_history"] = nl
-                                state["dialogue"] = derive_dialogue_from_assistant_history(nl)
-                                state["key_context"] = nk
-                                todo_manager.sync_session_from_key_context(state["session_id"], "")
-                                return {
-                                    "type": "compact",
-                                    "new_llm_history": nl,
-                                    "new_recap": new_recap_c,
-                                    "used_llm_summary": used_llm_c,
-                                }
-                            return {"type": "compact_noop"}
-                        if mode == "edit_key_context":
-                            instr = str(tool_args.get("edit_instruction") or "").strip()
-                            if not instr:
-                                return {
-                                    "type": "tool",
-                                    "tool_name": tool_name,
-                                    "tool_args": tool_args,
-                                    "tool_id": tool_id,
-                                    "result": "edit_key_context 模式需要提供非空的 edit_instruction。",
-                                    "tool_detail_log": "缺少 edit_instruction",
-                                    "tool_detail_llm": "缺少 edit_instruction",
-                                    "tool_detail_ui": "缺少 edit_instruction",
-                                    "result_for_log": "缺少 edit_instruction",
-                                    "tool_failed": True,
-                                }
-                            logger.info("context_manage edit_key_context")
-                            _kq: queue.Queue = queue.Queue()
-
-                            def _key_hint_emit(item: Any) -> None:
-                                _kq.put(_progress_hint_to_stream_event(item))
-
-                            nk, msg = await _await_thread_with_sse_keepalive(
-                                lambda: run_edit_key_context_instruction(
-                                    state["session_id"],
-                                    instr,
-                                    hint_sink=_key_hint_emit,
-                                ),
-                                state,
-                                emit,
-                                thread_hint_queue=_kq,
-                            )
-                            state["key_context"] = nk
-                            _persist_state(state)
-                            return {
-                                "type": "tool",
-                                "tool_name": tool_name,
-                                "tool_args": tool_args,
-                                "tool_id": tool_id,
-                                "result": msg,
-                                "tool_detail_log": truncate_head_tail(msg, LOG_TRUNCATE_KEEP_CHARS),
-                                "tool_detail_llm": truncate_tool_result_for_llm(msg, LLM_CONTEXT_TRUNCATE_KEEP_CHARS),
-                                "tool_detail_ui": msg,
-                                "result_for_log": truncate_head_tail(msg, LOG_TRUNCATE_KEEP_CHARS),
-                                "tool_failed": _tool_result_indicates_failure(tool_name, msg),
-                            }
-                        return {
-                            "type": "tool",
-                            "tool_name": tool_name,
-                            "tool_args": tool_args,
-                            "tool_id": tool_id,
-                            "result": f"无效的 mode：{mode!r}；仅支持 compact、edit_key_context。",
-                            "tool_detail_log": "无效 mode",
-                            "tool_detail_llm": "无效 mode",
-                            "tool_detail_ui": "无效 mode",
-                            "result_for_log": "无效 mode",
-                            "tool_failed": True,
-                        }
-
-                    # 特殊处理：update_todo — 写入 todo_plan.md
-                    if tool_name == "update_todo":
-                        todo_tool_failed = False
-                        try:
-                            # 兼容多种参数格式：items / todos，数组 / JSON字符串 / 单个dict
-                            uitems = tool_args.get("items")
-                            if uitems is None:
-                                uitems = tool_args.get("todos")
-                            from agent_tools import _normalize_todo_items
-                            normalized, err_msg = _normalize_todo_items(uitems)
-                            if err_msg:
-                                result = err_msg
-                                todo_tool_failed = True
-                            else:
-                                result = todo_manager.update_for_session(state["session_id"], normalized)
-                            if emit:
-                                titems = list(
-                                    todo_manager._by_session.get(state["session_id"], [])
-                                )
-                                done_n = sum(
-                                    1 for t in titems if t.get("status") == "completed"
-                                )
-                                await _push_stream_event(
-                                    state,
-                                    {
-                                        "type": "todo_plan",
-                                        "ephemeral": not _runtime_v2_is_primary(),
-                                        "has_plan": len(titems) > 0,
-                                        "items": [
-                                            {
-                                                "id": t["id"],
-                                                "text": t["text"],
-                                                "status": t["status"],
-                                            }
-                                            for t in titems
-                                        ],
-                                        "done": done_n,
-                                        "total": len(titems),
-                                    },
-                                    emit=emit,
-                                )
-                        except Exception as e:
-                            result = f"待办更新失败：{e}"
-                            todo_tool_failed = True
-                        result_str = str(result)
-                        result_for_log = truncate_head_tail(result_str, LOG_TRUNCATE_KEEP_CHARS)
-                        _llm_limit = LLM_CONTEXT_TRUNCATE_KEEP_CHARS * 2
-                        if len(result_str) > _llm_limit:
-                            result_for_llm = _save_result_to_tempfile(result_str, tool_name, state)
-                        else:
-                            result_for_llm = truncate_tool_result_for_llm(result_str, LLM_CONTEXT_TRUNCATE_KEEP_CHARS)
-                        return {
-                            "type": "tool",
-                            "tool_name": tool_name,
-                            "tool_args": tool_args,
-                            "tool_id": tool_id,
-                            "result": result,
-                            "tool_detail_log": result_for_log,
-                            "tool_detail_llm": result_for_llm,
-                            "tool_detail_ui": result_str,
-                            "result_for_log": result_for_log,
-                            "tool_failed": bool(
-                                todo_tool_failed or _tool_result_indicates_failure(tool_name, result)
-                            ),
-                        }
-
-                    # 特殊处理：task — 启动/续接 subagent
-                    if tool_name == "task":
-                        from agent_subagent import run_subagent_task
-
-                        try:
-                            result = await _await_steerable(
-                                state,
-                                run_subagent_task(
-                                    tool_args=tool_args if isinstance(tool_args, dict) else {},
-                                    parent_session_id=state["session_id"],
-                                    parent_key_context=state.get("key_context", ""),
-                                    emit=emit,
-                                ),
-                                emit,
-                                "tool_task",
-                            )
-                        except _SteerRestartRequested:
-                            raise
-                        except Exception as e:
-                            result = f"subagent 执行异常：{e}"
-                        result_str = str(result)
-                        result_for_log = truncate_head_tail(result_str, LOG_TRUNCATE_KEEP_CHARS)
-                        _llm_limit = LLM_CONTEXT_TRUNCATE_KEEP_CHARS * 2
-                        if len(result_str) > _llm_limit:
-                            result_for_llm = _save_result_to_tempfile(result_str, tool_name, state)
-                        else:
-                            result_for_llm = truncate_tool_result_for_llm(
-                                result_str, LLM_CONTEXT_TRUNCATE_KEEP_CHARS
-                            )
-                        return {
-                            "type": "tool",
-                            "tool_name": tool_name,
-                            "tool_args": tool_args,
-                            "tool_id": tool_id,
-                            "result": result,
-                            "tool_detail_log": result_for_log,
-                            "tool_detail_llm": result_for_llm,
-                            "tool_detail_ui": result_str,
-                            "result_for_log": result_for_log,
-                            "tool_failed": _tool_result_indicates_failure(tool_name, result),
-                        }
-
-                    # MCP 外部工具（配置见 mcp_servers.json / MCP_SERVERS_JSON）
-                    if tool_name.startswith("mcp_"):
-                        tool_failed = False
-                        try:
-                            result = await _await_steerable(
-                                state,
-                                agent_mcp.invoke_tool_by_fname(
-                                    tool_name,
-                                    tool_args if isinstance(tool_args, dict) else {},
-                                ),
-                                emit,
-                                "tool_mcp",
-                            )
-                        except _SteerRestartRequested:
-                            raise
-                        except Exception as e:
-                            result = f"MCP 调用异常：{e}"
-                            tool_failed = True
-                        result_str = str(result)
-                        result_for_log = truncate_head_tail(result_str, LOG_TRUNCATE_KEEP_CHARS)
-                        _llm_limit = LLM_CONTEXT_TRUNCATE_KEEP_CHARS * 2
-                        if len(result_str) > _llm_limit:
-                            result_for_llm = _save_result_to_tempfile(result_str, tool_name, state)
-                        else:
-                            result_for_llm = truncate_tool_result_for_llm(result_str, LLM_CONTEXT_TRUNCATE_KEEP_CHARS)
-                        result_for_ui = result_str
-                        tool_detail_log = result_for_log
-                        tool_detail_llm = result_for_llm
-                        tool_detail_ui = result_for_ui
-                        tool_failed = tool_failed or _tool_result_indicates_failure(tool_name, result)
-                        return {
-                            "type": "tool",
-                            "tool_name": tool_name,
-                            "tool_args": tool_args,
-                            "tool_id": tool_id,
-                            "result": result,
-                            "tool_detail_log": tool_detail_log,
-                            "tool_detail_llm": tool_detail_llm,
-                            "tool_detail_ui": tool_detail_ui,
-                            "result_for_log": result_for_log,
-                            "tool_failed": tool_failed,
-                        }
-
-                    # 普通工具
-                    tool_func = tools_dict.get(tool_name)
-                    tool_failed = False
-                    if not tool_func:
-                        result = f"未知工具：{tool_name}"
-                        tool_failed = True
-                    else:
-                        try:
-                            # 注入 interrupt 回调，让 run_shell 能感知 interrupt 并杀子进程
-                            _sid = state.get("session_id", "") if isinstance(state, dict) else ""
-                            if _sid and tool_name == "run_shell":
-                                set_run_shell_interrupt_check(
-                                    lambda: session_manager.is_interrupt_requested(_sid) or _steer_requested(state)
-                                )
-                            if hasattr(tool_func, "ainvoke"):
-                                result = await _await_steerable(
-                                    state,
-                                    tool_func.ainvoke(tool_args),
-                                    emit,
-                                    "tool",
-                                )
-                            elif hasattr(tool_func, "invoke"):
-                                result = await _await_steerable(
-                                    state,
-                                    asyncio.to_thread(lambda: tool_func.invoke(tool_args)),
-                                    emit,
-                                    "tool",
-                                )
-                            else:
-                                result = await _await_steerable(
-                                    state,
-                                    _invoke_plain_tool(tool_func, tool_args),
-                                    emit,
-                                    "tool",
-                                )
-                        except _SteerRestartRequested:
-                            raise
-                        except Exception as e:
-                            result = f"工具执行异常：{str(e)}"
-                            tool_failed = True
-                        finally:
-                            clear_run_shell_interrupt_check()
-
-                    # 截断结果（三路文本生成：日志用、LLM上下文用、UI用）
-                    if tool_name in READ_ONLY_TOOLS:
-                        result_str = _wrap_read_only_tool_output_lines(result)
-                    else:
-                        result_str = redact_sensitive_tool_text(result)
-                    
-                    # 1. 日志用（首尾保留LOG_TRUNCATE_KEEP_CHARS）
-                    result_for_log = truncate_head_tail(result_str, LOG_TRUNCATE_KEEP_CHARS)
-                    
-                    # 2. LLM上下文用：activate_skill 完整返回不截断；其他工具超阈值则落盘替换，否则原有截断
-                    if tool_name == "activate_skill":
-                        result_for_llm = result_str
-                    else:
-                        _llm_limit = LLM_CONTEXT_TRUNCATE_KEEP_CHARS * 2
-                        if len(result_str) > _llm_limit:
-                            result_for_llm = _save_result_to_tempfile(result_str, tool_name, state)
-                        else:
-                            result_for_llm = truncate_tool_result_for_llm(result_str, LLM_CONTEXT_TRUNCATE_KEEP_CHARS)
-                    
-                    # 3. UI用：完整内容（不做截断，但可保留Shell的10000硬截断，后续可考虑移除）
-                    result_for_ui = result_str  # 直接完整
-
-                    tool_detail_log = result_for_log
-                    tool_detail_llm = result_for_llm
-                    tool_detail_ui = result_for_ui
-
-                    tool_failed = tool_failed or _tool_result_indicates_failure(tool_name, result)
-
-                    return {
-                        "type": "tool",
-                        "tool_name": redact_sensitive_tool_text(tool_name),
-                        "tool_args": redact_sensitive_tool_obj(tool_args),
-                        "tool_id": tool_id,
-                        "tool_call_index": tool_call_index,
-                        "result": result_str,
-                        "tool_detail_log": tool_detail_log,
-                        "tool_detail_llm": tool_detail_llm,
-                        "tool_detail_ui": tool_detail_ui,
-                        "result_for_log": result_for_log,
-                        "tool_failed": tool_failed,
-                    }
-
+                final_tool_indexes = set()
+                for _tc in tool_calls_list:
+                    try:
+                        if _tc.get("index") is not None:
+                            final_tool_indexes.add(int(_tc.get("index")))
+                    except Exception:
+                        pass
+                for _idx, _task in list(early_tool_tasks.items()):
+                    if _idx not in final_tool_indexes and not _task.done():
+                        _task.add_done_callback(_discard_task_result)
+                        _task.cancel()
                 def is_read_only_tool(tool_call: Dict[str, Any]) -> bool:
                     n = tool_call.get("name") or ""
                     if isinstance(n, str) and n.startswith("mcp_"):
@@ -2818,6 +3101,20 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
                         if _is_followup_interrupt(state["session_id"]):
                             raise asyncio.CancelledError()
                         break
+                    try:
+                        early_idx = int(tool_call.get("index")) if tool_call.get("index") is not None else None
+                    except Exception:
+                        early_idx = None
+                    if early_idx is not None and early_idx in early_tool_tasks:
+                        await flush_read_only()
+                        early_result = await _await_steerable(
+                            state,
+                            early_tool_tasks[early_idx],
+                            emit,
+                            "tool",
+                        )
+                        exec_results.append(early_result)
+                        continue
                     if is_read_only_tool(tool_call):
                         pending_read_only.append(tool_call)
                         continue
@@ -2887,18 +3184,29 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
 
                     # 普通工具：添加到历史
                     # UI消息使用完整内容（tool_detail_ui），LLM消息使用截断内容（tool_detail_llm）
+                    tool_post_timings: Dict[str, int] = {}
+                    _t_tool_post = time.perf_counter()
                     if res.get("type") == "tool":
                         res = redact_sensitive_tool_obj(res)
+                    tool_post_timings["redact_result"] = _timing_ms(_t_tool_post)
+                    _pipeline_step_timing_log("tool_result_post_step_timing", state["session_id"], "redact_result", tool_post_timings["redact_result"], react_iter=int(iter_count))
 
+                    _t_tool_post = time.perf_counter()
                     if res.get("tool_failed"):
                         state["_react_ui_tool_fail_count"] = int(state.get("_react_ui_tool_fail_count", 0) or 0) + 1
                         await _emit_live_metrics(state, emit)
+                    tool_post_timings["failure_metrics"] = _timing_ms(_t_tool_post)
+                    _pipeline_step_timing_log("tool_result_post_step_timing", state["session_id"], "failure_metrics", tool_post_timings["failure_metrics"], react_iter=int(iter_count))
+                    _t_tool_post = time.perf_counter()
                     _record_temporary_write_file(
                         state,
                         str(res.get("tool_name") or ""),
                         res.get("tool_args"),
                         bool(res.get("tool_failed")),
                     )
+                    tool_post_timings["record_temp_file"] = _timing_ms(_t_tool_post)
+                    _pipeline_step_timing_log("tool_result_post_step_timing", state["session_id"], "record_temp_file", tool_post_timings["record_temp_file"], react_iter=int(iter_count))
+                    _t_tool_post = time.perf_counter()
                     tool_msg_ui = ToolMessage(content=res["tool_detail_ui"], tool_call_id=res["tool_id"])
                     tool_msg_llm = ToolMessage(content=res["tool_detail_llm"], tool_call_id=res["tool_id"])
                     work_messages.append(tool_msg_ui)
@@ -2906,6 +3214,8 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
                     _runtime_v2_append_model_message(state, tool_msg_llm)
                     state["llm_history"] = llm_history
                     state["work_messages"] = work_messages
+                    tool_post_timings["append_model_history"] = _timing_ms(_t_tool_post)
+                    _pipeline_step_timing_log("tool_result_post_step_timing", state["session_id"], "append_model_history", tool_post_timings["append_model_history"], react_iter=int(iter_count))
 
                     tool_results.append({
                         "tool": res["tool_name"],
@@ -2915,6 +3225,7 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
                     logger.info(f"工具调用: {res['tool_name']}({str(res['tool_args'])}) -> {res['result_for_log']}")
 
                     # 并行只读批已在 run_group 内发 SSE；单工具/写路径在此发
+                    _t_tool_post = time.perf_counter()
                     if emit and not (isinstance(res, dict) and res.get("_sse_emitted")):
                         r = emit({
                             "type": "tool_call",
@@ -2931,11 +3242,36 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
                         state["_react_ui_tool_count"] = int(state.get("_react_ui_tool_count", 0) or 0) + 1
                         await _emit_live_metrics(state, emit)
                         await asyncio.sleep(0)
+                    tool_post_timings["ui_emit"] = _timing_ms(_t_tool_post)
+                    _pipeline_step_timing_log("tool_result_post_step_timing", state["session_id"], "ui_emit", tool_post_timings["ui_emit"], react_iter=int(iter_count))
+                    _pipeline_timing_log(
+                        "tool_result_post_timing",
+                        state["session_id"],
+                        tool_post_timings,
+                        react_iter=int(iter_count),
+                        tool=redact_sensitive_tool_text(res.get("tool_name") or ""),
+                        tool_failed=bool(res.get("tool_failed")),
+                        sse_emitted=bool(isinstance(res, dict) and res.get("_sse_emitted")),
+                    )
 
+                _t_tool_post_all = time.perf_counter()
                 state["llm_history"] = llm_history
                 state["work_messages"] = work_messages
                 _persist_state(state)
+                persist_after_tools_ms = _timing_ms(_t_tool_post_all)
+                _pipeline_step_timing_log("tool_to_next_api_step_timing", state["session_id"], "persist_state", persist_after_tools_ms, react_iter=int(iter_count), tools=len(tool_calls_list or []))
+                _t_tool_post_all = time.perf_counter()
                 if await _consume_steer_messages(state, emit=emit):
+                    steer_check_ms = _timing_ms(_t_tool_post_all)
+                    _pipeline_step_timing_log("tool_to_next_api_step_timing", state["session_id"], "steer_check", steer_check_ms, react_iter=int(iter_count), tools=len(tool_calls_list or []), outcome="steer_restart")
+                    _pipeline_timing_log(
+                        "tool_to_next_api_timing",
+                        state["session_id"],
+                        {"persist_state": persist_after_tools_ms, "steer_check": steer_check_ms},
+                        react_iter=int(iter_count),
+                        tools=len(tool_calls_list or []),
+                        outcome="steer_restart",
+                    )
                     state.pop("_steer_rollback_marker", None)
                     _reset_steer_control(state)
                     llm_history = list(state["llm_history"])
@@ -2944,6 +3280,16 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
                     state["final_result_retries"] = 0
                     state["empty_final_retries"] = 0
                     continue
+                steer_check_ms = _timing_ms(_t_tool_post_all)
+                _pipeline_step_timing_log("tool_to_next_api_step_timing", state["session_id"], "steer_check", steer_check_ms, react_iter=int(iter_count), tools=len(tool_calls_list or []), outcome="next_react_iter")
+                _pipeline_timing_log(
+                    "tool_to_next_api_timing",
+                    state["session_id"],
+                    {"persist_state": persist_after_tools_ms, "steer_check": steer_check_ms},
+                    react_iter=int(iter_count),
+                    tools=len(tool_calls_list or []),
+                    outcome="next_react_iter",
+                )
                 state.pop("_steer_rollback_marker", None)
 
             # ---------- 2.8 重复检测（须在工具结果写入 llm_history 之后，避免 OpenAI 报 tool_calls 顺序错误） ----------
@@ -3129,6 +3475,105 @@ def prepare_final_event(state: State) -> State:
     return state
 
 
+_TITLE_PLACEHOLDER_NAMES = {"", "新会话", "未命名", "New Chat", "New Session"}
+
+
+def _first_user_text_for_title(state: State) -> str:
+    raw = str(state.get("user_input") or "").strip()
+    if raw:
+        return raw
+    for msg in state.get("dialogue", []) or []:
+        if isinstance(msg, UserMessage):
+            return str(msg.content or "").strip()
+    return ""
+
+
+def _normalize_generated_session_title(title: str) -> str:
+    text = str(title or "").strip()
+    text = re.sub(r"^```(?:text|md|markdown)?\s*|\s*```$", "", text, flags=re.IGNORECASE | re.DOTALL).strip()
+    text = re.sub(r"^\s*<think\b[^>]*>[\s\S]*?</think>\s*", "", text, flags=re.IGNORECASE).strip()
+    text = re.sub(r"^\s*<think\b[^>]*>[\s\S]*$", "", text, flags=re.IGNORECASE).strip()
+    text = text.strip(" \t\r\n\"'`“”‘’《》")
+    text = re.sub(r"^[标题：:]+", "", text).strip()
+    text = re.sub(r"[\r\n]+", " ", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text[:20]
+
+
+def _looks_like_local_path_title(text: str) -> bool:
+    s = str(text or "")
+    return bool(re.search(r"[A-Za-z]:[\\/]", s) or re.search(r"[/\\].+[/\\]", s))
+
+
+def _looks_like_reasoning_tag_title(text: str) -> bool:
+    s = str(text or "").strip().lower()
+    return bool(
+        s.startswith("<think")
+        or s.startswith("</think")
+        or "</think>" in s
+        or s.startswith("is. the conversation")
+    )
+
+
+def _session_title_needs_generation(current_name: str, first_user: str) -> bool:
+    name = str(current_name or "").strip()
+    if name in _TITLE_PLACEHOLDER_NAMES:
+        return True
+    if _looks_like_reasoning_tag_title(name):
+        return True
+    user = str(first_user or "").strip()
+    if user and name == user[: len(name)] and len(name) <= 20:
+        return True
+    if _looks_like_local_path_title(name):
+        return True
+    return False
+
+
+def _generate_session_title_with_diagnostics(
+    session_id: str,
+    first_user: str,
+    final_response: str,
+) -> tuple[str, Optional[Dict[str, int]]]:
+    title_template = load_prompt_template("title_generator")
+    title_prompt = title_template.format(
+        first_user=first_user,
+        final_response=final_response or "",
+    )
+    title_client, title_model, title_max_output_tokens, _title_context_window = resolve_executor_config_for_session(session_id)
+    response = title_client.chat.completions.create(
+        model=title_model,
+        messages=[{"role": "user", "content": title_prompt}],
+        temperature=EXECUTOR_TEMPERATURE,
+        max_tokens=min(int(title_max_output_tokens or MAX_OUTPUT_TOKENS), 256),
+    )
+    choice0 = response.choices[0]
+    turn = parse_assistant_message(choice0.message)
+    usage: Optional[Dict[str, int]] = None
+    raw_usage = getattr(response, "usage", None)
+    if raw_usage is not None:
+        usage = extract_usage_dict(raw_usage)
+    raw_title = (turn.content or "").strip()
+    if not raw_title:
+        logger.warning(
+            "生成会话标题返回空: session=%s model=%s finish_reason=%s content_len=0 reasoning_len=%s usage=%s",
+            session_id,
+            redact_sensitive_tool_text(title_model),
+            getattr(choice0, "finish_reason", None),
+            len(turn.reasoning_content or ""),
+            usage,
+        )
+    else:
+        logger.info(
+            "生成会话标题返回: session=%s model=%s finish_reason=%s content_len=%s reasoning_len=%s",
+            session_id,
+            redact_sensitive_tool_text(title_model),
+            getattr(choice0, "finish_reason", None),
+            len(raw_title),
+            len(turn.reasoning_content or ""),
+        )
+    return raw_title, usage
+
+
 def finish(state: State) -> State:
     """最终处理：生成会话标题、保存会话、输出最终结果"""
     state = prepare_final_event(state)
@@ -3139,26 +3584,22 @@ def finish(state: State) -> State:
     # 先尝试生成标题（executor 用量计入下方 Total，避免「仅 HTTP 日志」在流式下恒为 0）
     title_usage: Optional[Dict[str, int]] = None
     metadata = session_manager._load_metadata(state["session_id"])
-    if metadata.get("name") == "新会话":
-        first_user = None
-        for m in state["dialogue"]:
-            if isinstance(m, UserMessage):
-                first_user = m.content
-                break
+    first_user = _first_user_text_for_title(state)
+    if _session_title_needs_generation(str(metadata.get("name") or ""), first_user):
         if first_user:
             try:
-                title_template = load_prompt_template("title_generator")
-                title_prompt = title_template.format(
-                    first_user=first_user,
-                    final_response=state.get("final_response") or "",
+                title, title_usage = _generate_session_title_with_diagnostics(
+                    state["session_id"],
+                    first_user,
+                    state.get("final_response") or "",
                 )
-                title, title_usage = executor_text_and_usage(title_prompt)
-                title = title.strip()[:20] if title else ""
-                if not title:
-                    title = first_user[:15]
+                title = _normalize_generated_session_title(title)
+                if not title or _looks_like_local_path_title(title):
+                    logger.warning("生成会话标题结果不可用，保留当前会话名: %r", title)
+                    title = ""
             except Exception as e:
                 logger.warning(f"生成会话标题失败: {e}")
-                title = first_user[:15]
+                title = ""
                 title_usage = None
             if title:
                 session_manager.set_session_name(state["session_id"], title)
@@ -3313,12 +3754,7 @@ async def astream_events(
     queue: asyncio.Queue = asyncio.Queue()
     runtime_v2_terminal_mirrored = False
 
-    def mirror_runtime_v2(event_type: str, payload: Optional[Dict[str, Any]] = None) -> None:
-        nonlocal runtime_v2_terminal_mirrored
-        if event_type in {"run_finished", "run_interrupted", "run_failed"}:
-            if runtime_v2_terminal_mirrored:
-                return
-            runtime_v2_terminal_mirrored = True
+    def mirror_runtime_v2_sync(event_type: str, payload: Optional[Dict[str, Any]] = None) -> None:
         try:
             from runtime_v2.mirror import RuntimeMirror
 
@@ -3334,6 +3770,14 @@ async def astream_events(
         except Exception as mirror_error:
             logger.debug("Runtime V2 mirror run event failed: %s", mirror_error)
 
+    def mirror_runtime_v2(event_type: str, payload: Optional[Dict[str, Any]] = None) -> None:
+        nonlocal runtime_v2_terminal_mirrored
+        if event_type in {"run_finished", "run_interrupted", "run_failed"}:
+            if runtime_v2_terminal_mirrored:
+                return
+            runtime_v2_terminal_mirrored = True
+        mirror_runtime_v2_sync(event_type, dict(payload or {}))
+
     async def emit(ev: Dict[str, Any]) -> None:
         # 与浏览器 SSE 一致；ephemeral（如 llm_*_delta）仅实时推送，不写入 ui_events
         # 子 agent 转发事件仅推 SSE，不写入父会话 ui_events
@@ -3348,33 +3792,124 @@ async def astream_events(
         terminal_event = {"type": "run_interrupted", "ephemeral": True}
         try:
             # 用户气泡由前端已画；此处只写入与流顺序一致的持久化，供刷新与 SSE 同源
+            run_start_timings: Dict[str, int] = {}
+            _t_run_start = time.perf_counter()
             mirror_runtime_v2("run_started", {"mode": "chat"})
+            run_start_timings["mirror_run_started"] = _timing_ms(_t_run_start)
+            _pipeline_step_timing_log(
+                "run_start_step_timing",
+                session_id,
+                "mirror_run_started",
+                run_start_timings["mirror_run_started"],
+                run_id=runtime_v2_run_id,
+                mode="chat",
+            )
+            _t_run_start = time.perf_counter()
             _runtime_v2_append_model_message(state, user_message)
+            run_start_timings["append_user_model"] = _timing_ms(_t_run_start)
+            _pipeline_step_timing_log(
+                "run_start_step_timing",
+                session_id,
+                "append_user_model",
+                run_start_timings["append_user_model"],
+                run_id=runtime_v2_run_id,
+                mode="chat",
+            )
+            _t_run_start = time.perf_counter()
             await emit({"type": "run_started", "run_id": runtime_v2_run_id, "ephemeral": True})
+            run_start_timings["emit_run_started"] = _timing_ms(_t_run_start)
+            _pipeline_step_timing_log(
+                "run_start_step_timing",
+                session_id,
+                "emit_run_started",
+                run_start_timings["emit_run_started"],
+                run_id=runtime_v2_run_id,
+                mode="chat",
+            )
             user_ui_type = "user_steer" if str(ui_user_event_type or "") == "user_steer" else "user"
             user_ui_event = {"type": user_ui_type, "content": user_input}
             if user_ui_type == "user_steer":
                 user_ui_event["steer"] = True
+            _t_run_start = time.perf_counter()
             session_manager.append_ui_event(session_id, user_ui_event)
+            run_start_timings["append_user_ui"] = _timing_ms(_t_run_start)
+            _pipeline_step_timing_log(
+                "run_start_step_timing",
+                session_id,
+                "append_user_ui",
+                run_start_timings["append_user_ui"],
+                run_id=runtime_v2_run_id,
+                mode="chat",
+                user_event_type=user_ui_type,
+            )
+            _t_run_start = time.perf_counter()
             await emit({"type": "status", "content": "New Agent Loop Start"})
+            run_start_timings["emit_start_status"] = _timing_ms(_t_run_start)
+            _pipeline_step_timing_log(
+                "run_start_step_timing",
+                session_id,
+                "emit_start_status",
+                run_start_timings["emit_start_status"],
+                run_id=runtime_v2_run_id,
+                mode="chat",
+            )
+            _pipeline_timing_log(
+                "run_start_timing",
+                session_id,
+                run_start_timings,
+                run_id=runtime_v2_run_id,
+                user_event_type=user_ui_type,
+            )
             state = await _run_react_node_off_loop(state, emit)
+            final_timings: Dict[str, int] = {}
+            _t_final = time.perf_counter()
             await emit({"type": "status", "content": "Loop finished"})
+            final_timings["emit_loop_finished"] = _timing_ms(_t_final)
+            _pipeline_step_timing_log("final_pipeline_step_timing", session_id, "emit_loop_finished", final_timings["emit_loop_finished"], run_id=runtime_v2_run_id, mode="chat")
             stream_event_count_after_react = len(state["stream_events"])
+            _t_final = time.perf_counter()
             state = validate_final(state)
+            final_timings["validate_final"] = _timing_ms(_t_final)
+            _pipeline_step_timing_log("final_pipeline_step_timing", session_id, "validate_final", final_timings["validate_final"], run_id=runtime_v2_run_id, mode="chat")
+            _t_final = time.perf_counter()
             for evt in state["stream_events"][stream_event_count_after_react:]:
                 if evt.get("type") in ("status", "validate_final", "final"):
                     await emit(evt)
+            final_timings["emit_validate_events"] = _timing_ms(_t_final)
+            _pipeline_step_timing_log("final_pipeline_step_timing", session_id, "emit_validate_events", final_timings["emit_validate_events"], run_id=runtime_v2_run_id, mode="chat")
             stream_event_count_after_validate = len(state["stream_events"])
+            _t_final = time.perf_counter()
             state = prepare_final_event(state)
+            final_timings["prepare_final_event"] = _timing_ms(_t_final)
+            _pipeline_step_timing_log("final_pipeline_step_timing", session_id, "prepare_final_event", final_timings["prepare_final_event"], run_id=runtime_v2_run_id, mode="chat")
+            _t_final = time.perf_counter()
             for evt in state["stream_events"][stream_event_count_after_validate:]:
                 if evt.get("type") in ("status", "validate_final", "final"):
                     await emit(evt)
+            final_timings["emit_final_event"] = _timing_ms(_t_final)
+            _pipeline_step_timing_log("final_pipeline_step_timing", session_id, "emit_final_event", final_timings["emit_final_event"], run_id=runtime_v2_run_id, mode="chat")
+            _t_final = time.perf_counter()
             await asyncio.sleep(0)
+            final_timings["yield_after_final"] = _timing_ms(_t_final)
+            _pipeline_step_timing_log("final_pipeline_step_timing", session_id, "yield_after_final", final_timings["yield_after_final"], run_id=runtime_v2_run_id, mode="chat")
             stream_event_count_after_final = len(state["stream_events"])
+            _t_final = time.perf_counter()
             state = finish(state)
+            final_timings["finish_after_final"] = _timing_ms(_t_final)
+            _pipeline_step_timing_log("final_pipeline_step_timing", session_id, "finish_after_final", final_timings["finish_after_final"], run_id=runtime_v2_run_id, mode="chat")
+            _t_final = time.perf_counter()
             for evt in state["stream_events"][stream_event_count_after_final:]:
                 if evt.get("type") in ("status", "validate_final", "final"):
                     await emit(evt)
+            final_timings["emit_finish_events"] = _timing_ms(_t_final)
+            _pipeline_step_timing_log("final_pipeline_step_timing", session_id, "emit_finish_events", final_timings["emit_finish_events"], run_id=runtime_v2_run_id, mode="chat")
+            _pipeline_timing_log(
+                "final_pipeline_timing",
+                session_id,
+                final_timings,
+                run_id=runtime_v2_run_id,
+                final_chars=len(str(state.get("final_response") or "")),
+            )
             completed = True
         except asyncio.CancelledError:
             terminal_event = {"type": "run_interrupted", "run_id": runtime_v2_run_id, "ephemeral": True}
@@ -3517,12 +4052,7 @@ async def astream_events_continuation(
     queue: asyncio.Queue = asyncio.Queue()
     runtime_v2_terminal_mirrored = False
 
-    def mirror_runtime_v2(event_type: str, payload: Optional[Dict[str, Any]] = None) -> None:
-        nonlocal runtime_v2_terminal_mirrored
-        if event_type in {"run_finished", "run_interrupted", "run_failed"}:
-            if runtime_v2_terminal_mirrored:
-                return
-            runtime_v2_terminal_mirrored = True
+    def mirror_runtime_v2_sync(event_type: str, payload: Optional[Dict[str, Any]] = None) -> None:
         try:
             from runtime_v2.mirror import RuntimeMirror
 
@@ -3538,6 +4068,14 @@ async def astream_events_continuation(
         except Exception as mirror_error:
             logger.debug("Runtime V2 mirror continuation run event failed: %s", mirror_error)
 
+    def mirror_runtime_v2(event_type: str, payload: Optional[Dict[str, Any]] = None) -> None:
+        nonlocal runtime_v2_terminal_mirrored
+        if event_type in {"run_finished", "run_interrupted", "run_failed"}:
+            if runtime_v2_terminal_mirrored:
+                return
+            runtime_v2_terminal_mirrored = True
+        mirror_runtime_v2_sync(event_type, dict(payload or {}))
+
     async def emit(ev: Dict[str, Any]) -> None:
         if should_persist_ui_event(ev):
             session_manager.append_ui_event(session_id, ev)
@@ -3549,27 +4087,77 @@ async def astream_events_continuation(
         completed = False
         terminal_event = {"type": "run_interrupted", "ephemeral": True}
         try:
+            run_start_timings: Dict[str, int] = {}
+            _t_run_start = time.perf_counter()
             mirror_runtime_v2("run_started", {"mode": "continuation"})
+            run_start_timings["mirror_run_started"] = _timing_ms(_t_run_start)
+            _pipeline_step_timing_log("run_start_step_timing", session_id, "mirror_run_started", run_start_timings["mirror_run_started"], run_id=runtime_v2_run_id, mode="continuation")
+            _t_run_start = time.perf_counter()
             await emit({"type": "run_started", "ephemeral": True})
+            run_start_timings["emit_run_started"] = _timing_ms(_t_run_start)
+            _pipeline_step_timing_log("run_start_step_timing", session_id, "emit_run_started", run_start_timings["emit_run_started"], run_id=runtime_v2_run_id, mode="continuation")
+            _t_run_start = time.perf_counter()
             await emit({"type": "status", "content": "Subagent Continuation Start"})
+            run_start_timings["emit_start_status"] = _timing_ms(_t_run_start)
+            _pipeline_step_timing_log("run_start_step_timing", session_id, "emit_start_status", run_start_timings["emit_start_status"], run_id=runtime_v2_run_id, mode="continuation")
+            _pipeline_timing_log(
+                "run_start_timing",
+                session_id,
+                run_start_timings,
+                run_id=runtime_v2_run_id,
+                mode="continuation",
+            )
             state = await _run_react_node_off_loop(state, emit)
+            final_timings: Dict[str, int] = {}
+            _t_final = time.perf_counter()
             await emit({"type": "status", "content": "Loop finished"})
+            final_timings["emit_loop_finished"] = _timing_ms(_t_final)
+            _pipeline_step_timing_log("final_pipeline_step_timing", session_id, "emit_loop_finished", final_timings["emit_loop_finished"], run_id=runtime_v2_run_id, mode="continuation")
             stream_event_count_after_react = len(state["stream_events"])
+            _t_final = time.perf_counter()
             state = validate_final(state)
+            final_timings["validate_final"] = _timing_ms(_t_final)
+            _pipeline_step_timing_log("final_pipeline_step_timing", session_id, "validate_final", final_timings["validate_final"], run_id=runtime_v2_run_id, mode="continuation")
+            _t_final = time.perf_counter()
             for evt in state["stream_events"][stream_event_count_after_react:]:
                 if evt.get("type") in ("status", "validate_final", "final"):
                     await emit(evt)
+            final_timings["emit_validate_events"] = _timing_ms(_t_final)
+            _pipeline_step_timing_log("final_pipeline_step_timing", session_id, "emit_validate_events", final_timings["emit_validate_events"], run_id=runtime_v2_run_id, mode="continuation")
             stream_event_count_after_validate = len(state["stream_events"])
+            _t_final = time.perf_counter()
             state = prepare_final_event(state)
+            final_timings["prepare_final_event"] = _timing_ms(_t_final)
+            _pipeline_step_timing_log("final_pipeline_step_timing", session_id, "prepare_final_event", final_timings["prepare_final_event"], run_id=runtime_v2_run_id, mode="continuation")
+            _t_final = time.perf_counter()
             for evt in state["stream_events"][stream_event_count_after_validate:]:
                 if evt.get("type") in ("status", "validate_final", "final"):
                     await emit(evt)
+            final_timings["emit_final_event"] = _timing_ms(_t_final)
+            _pipeline_step_timing_log("final_pipeline_step_timing", session_id, "emit_final_event", final_timings["emit_final_event"], run_id=runtime_v2_run_id, mode="continuation")
+            _t_final = time.perf_counter()
             await asyncio.sleep(0)
+            final_timings["yield_after_final"] = _timing_ms(_t_final)
+            _pipeline_step_timing_log("final_pipeline_step_timing", session_id, "yield_after_final", final_timings["yield_after_final"], run_id=runtime_v2_run_id, mode="continuation")
             stream_event_count_after_final = len(state["stream_events"])
+            _t_final = time.perf_counter()
             state = finish(state)
+            final_timings["finish_after_final"] = _timing_ms(_t_final)
+            _pipeline_step_timing_log("final_pipeline_step_timing", session_id, "finish_after_final", final_timings["finish_after_final"], run_id=runtime_v2_run_id, mode="continuation")
+            _t_final = time.perf_counter()
             for evt in state["stream_events"][stream_event_count_after_final:]:
                 if evt.get("type") in ("status", "validate_final", "final"):
                     await emit(evt)
+            final_timings["emit_finish_events"] = _timing_ms(_t_final)
+            _pipeline_step_timing_log("final_pipeline_step_timing", session_id, "emit_finish_events", final_timings["emit_finish_events"], run_id=runtime_v2_run_id, mode="continuation")
+            _pipeline_timing_log(
+                "final_pipeline_timing",
+                session_id,
+                final_timings,
+                run_id=runtime_v2_run_id,
+                mode="continuation",
+                final_chars=len(str(state.get("final_response") or "")),
+            )
             completed = True
         except asyncio.CancelledError:
             terminal_event = {"type": "run_interrupted", "ephemeral": True}

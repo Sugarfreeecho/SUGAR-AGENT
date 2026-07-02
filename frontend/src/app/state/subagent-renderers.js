@@ -273,7 +273,10 @@ function createSubagentMiniMessage(role, content, eventIndex, createdAt) {
         renderUserMessageContent(wrap, div, rawStr);
     }
     else {
-        div.innerHTML = renderMarkdown(rawStr);
+        var displayStr = rawStr;
+        if (typeof splitThinkTagsForUi === 'function') displayStr = splitThinkTagsForUi(rawStr).content;
+        if (typeof stripOrphanThinkCloseForFinalCard === 'function') displayStr = stripOrphanThinkCloseForFinalCard(displayStr);
+        div.innerHTML = renderMarkdown(displayStr);
         enhanceAssistantMessageContent(div);
     }
     wrap.appendChild(div);
@@ -327,10 +330,18 @@ function appendSubagentFinalToTurn(ctx, content, eventIndex) {
     if (!slot) return;
     var existing = slot.querySelector('.msg-wrap--assistant');
     var txt = content == null ? '' : String(content);
+    if (typeof splitThinkTagsForUi === 'function') {
+        var thinkSplit = splitThinkTagsForUi(txt);
+        if (thinkSplit.reasoning && thinkSplit.reasoning.trim()) {
+            upsertLlmFeedRow(ctx, thinkSplit.reasoning, 'llm-reasoning', null, null);
+        }
+    }
     if (existing) {
         var msgEl = existing.querySelector('.message.assistant');
         if (msgEl) {
-            msgEl.innerHTML = renderMarkdown(txt);
+            var displayTxt = (typeof splitThinkTagsForUi === 'function') ? splitThinkTagsForUi(txt).content : txt;
+            if (typeof stripOrphanThinkCloseForFinalCard === 'function') displayTxt = stripOrphanThinkCloseForFinalCard(displayTxt);
+            msgEl.innerHTML = renderMarkdown(displayTxt);
             enhanceAssistantMessageContent(msgEl);
         }
         return;

@@ -38,7 +38,10 @@ async function consumeAgentSseResponse(response, runCtx, runSessionId, streamEve
                 if (parsed && parsed.protocol === 'runtime_v2') {
                     const envelopeSessionId = parsed.session_id || parsed.sessionId || runSessionId;
                     if (!sessionStore.shouldAcceptSseEvent(envelopeSessionId, parsed.seq)) continue;
-                    if (parsed.skip_ui) continue;
+                    if (parsed.skip_ui) {
+                        applySkippedRuntimeV2EventMetadata(parsed, runCtx, envelopeSessionId);
+                        continue;
+                    }
                     const uiEvent = parsed.ui_event && typeof parsed.ui_event === 'object' ? parsed.ui_event : null;
                     if (!uiEvent) continue;
                     const runtimeSeq = parsed.runtime_seq || parsed.seq;
@@ -132,12 +135,7 @@ async function consumeAgentSseResponse(response, runCtx, runSessionId, streamEve
                         }
                         continue;
                     }
-                    if (parsed.type === 'tool_pending') {
-                        finalizeLlmStreamChunks(runCtx);
-                        removeTemporaryStatus(runCtx);
-                        appendToolPendingRow(runCtx, parsed, runSessionId);
-                        continue;
-                    }
+                    if (parsed.type === 'tool_pending') continue;
                     if (parsed.type === 'tool_call_delta') {
                         appendToolCallDelta(runCtx, parsed, runSessionId);
                         continue;
@@ -149,11 +147,15 @@ async function consumeAgentSseResponse(response, runCtx, runSessionId, streamEve
                     if (parsed.type === 'llm_reasoning_delta' || parsed.type === 'llm_response_delta') appendLlmStreamDelta(runCtx, parsed, runSessionId);
                     else if (parsed.type === 'context_summary_delta') appendProgressStreamDelta(runCtx, parsed.delta, 'context-summary', runSessionId);
                     else if (parsed.type === 'key_context_delta') appendKeyContextStreamDelta(runCtx, parsed.delta, runSessionId);
-                    else if (parsed.type === 'context_tokens') applyContextTokenLabelForCurrentSession();
-                    else if (parsed.type === 'cache_stats' && runSessionId === currentSessionId) applyCacheStatsFromEvent(runCtx, parsed, runSessionId);
+                    else if (parsed.type === 'context_tokens' && eventSessionId === currentSessionId) applyContextTokenLabelForCurrentSession();
+                    else if (parsed.type === 'cache_stats' && eventSessionId === currentSessionId) applyCacheStatsFromEvent(runCtx, parsed, runSessionId);
                     else if (parsed.type === 'todo_plan' && runSessionId === currentSessionId) renderTodoPlanForCurrentSession();
                     else if (parsed.type === 'status') {
                         var statusContent = String(parsed.content || '');
+                        if (parsed.model_switch) {
+                            appendModelSwitchStatus(runCtx, parsed, runSessionId);
+                            continue;
+                        }
                         var isTemporaryStatus = statusContent.indexOf('正在思考中...') >= 0;
                         isTemporaryStatus = isTemporaryStatus || !!parsed.ephemeral || statusContent.indexOf('正在重连') >= 0;
                         if (isTemporaryStatus) removeTemporaryStatus(runCtx);
@@ -403,6 +405,77 @@ async function startContinueAfterSubagents(sessionId) {
     }
 }
 
+function nowPipelineMs() {
+    return (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+}
+
+function reportClientPipelineStep(ctx, step, startedAt, extra) {
+    if (!ctx || !step) return;
+    const now = nowPipelineMs();
+    const payload = {
+        label: ctx.label || 'client_pipeline_step_timing',
+        session_id: ctx.sessionId || '',
+        run_id: ctx.runId || '',
+        mode: ctx.mode || '',
+        step: step,
+        ms: Math.max(0, Math.round(now - Number(startedAt || now))),
+        since_start_ms: Math.max(0, Math.round(now - Number(ctx.startedAt || now))),
+        extra: extra || {}
+    };
+    try {
+        console.info(
+            payload.label,
+            'session=' + payload.session_id,
+            'step=' + payload.step,
+            'ms=' + payload.ms + 'ms',
+            'since_start=' + payload.since_start_ms + 'ms',
+            'run_id=' + payload.run_id,
+            'mode=' + payload.mode,
+            payload.extra
+        );
+    } catch (e) { /* ignore */ }
+    try {
+        const body = JSON.stringify(payload);
+        if (navigator && typeof navigator.sendBeacon === 'function') {
+            const blob = new Blob([body], { type: 'application/json' });
+            if (navigator.sendBeacon('/api/client_timing', blob)) return;
+        }
+        fetch('/api/client_timing', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: body,
+            keepalive: true
+        }).catch(function () { /* ignore */ });
+    } catch (e) { /* ignore */ }
+}
+
+function applySkippedRuntimeV2EventMetadata(event, runCtx, sessionId) {
+    if (!event || !event.skip_ui) return;
+    const runtimeEvent = event.runtime_event && typeof event.runtime_event === 'object' ? event.runtime_event : null;
+    if (!runtimeEvent || runtimeEvent.type !== 'message_user') return;
+    const runtimeSeq = Number(event.runtime_seq || event.seq);
+    if (!Number.isFinite(runtimeSeq) || runtimeSeq <= 0) return;
+    if (runCtx) runCtx.lastUserRuntimeSeq = Math.floor(runtimeSeq);
+    if (sessionId && sessionId !== currentSessionId) return;
+    const eventIndex = runCtx && Number.isFinite(Number(runCtx.lastUserEventIndex))
+        ? Math.floor(Number(runCtx.lastUserEventIndex))
+        : NaN;
+    let wrap = null;
+    const stream = (runCtx && runCtx.stream) || getVisibleChatStream();
+    if (stream && Number.isFinite(eventIndex)) {
+        try {
+            wrap = stream.querySelector('.msg-wrap--user[data-event-index="' + String(eventIndex) + '"]');
+        } catch (e) { wrap = null; }
+    }
+    if (!wrap && stream) {
+        const users = stream.querySelectorAll('.msg-wrap--user');
+        wrap = users.length ? users[users.length - 1] : null;
+    }
+    if (wrap) {
+        wrap.setAttribute('data-runtime-seq', String(Math.floor(runtimeSeq)));
+    }
+}
+
 async function attachSessionEventStream(sessionId, opts) {
     opts = opts || {};
     if (!sessionId || getSessionRunState(sessionId)) return;
@@ -502,7 +575,11 @@ function scheduleActiveSessionReconnect(sessionId, opts) {
 async function processRewriteTruncateAsync(pr) {
     try {
         const anchor = document.querySelector('.msg-wrap--user[data-truncate-from="' + String(pr.before) + '"]');
-        const res = await truncateSessionOnServer(pr.before, { sessionId: pr.sessionId, backup: false });
+        const res = await truncateSessionOnServer(pr.before, {
+            sessionId: pr.sessionId,
+            beforeSeq: pr.beforeSeq,
+            backup: false
+        });
         if (!res || !res.ok) {
             showUiAlert({
                 title: '截断失败',
@@ -836,8 +913,18 @@ function scheduleFollowupQueueDrain(sessionId, delayMs) {
 }
 
 async function sendFollowupNow(itemId, sessionId) {
+    const followupTimingStartedAt = nowPipelineMs();
+    const followupTimingCtx = {
+        label: 'client_followup_step_timing',
+        sessionId: sessionId || currentSessionId || '',
+        runId: '',
+        mode: 'followup',
+        startedAt: followupTimingStartedAt
+    };
+    let _followupStepStart = followupTimingStartedAt;
     const sid = String(sessionId || currentSessionId || '');
     if (!sid) return;
+    followupTimingCtx.sessionId = sid;
     var q = getFollowupQueue(sid);
     var idx = q.findIndex(function (item) { return String(item.id) === String(itemId); });
     if (idx < 0) return;
@@ -847,18 +934,30 @@ async function sendFollowupNow(itemId, sessionId) {
     item.status = 'submitting';
     persistFollowupQueue(sid);
     renderFollowupQueue(sid);
+    reportClientPipelineStep(followupTimingCtx, 'followup_prepare_item', _followupStepStart, {
+        itemId: itemId,
+        running: isSessionRunning(sid)
+    });
     try {
+        _followupStepStart = nowPipelineMs();
         item.steerInFlight = true;
         var steerResult = await sendSteerMessage(sid, item.text, item.clientId);
         item.steerInFlight = false;
         item.steerId = steerResult && steerResult.item && steerResult.item.id ? String(steerResult.item.id) : '';
+        reportClientPipelineStep(followupTimingCtx, 'followup_send_steer', _followupStepStart, {
+            restart: !!(steerResult && steerResult.restart),
+            steerId: item.steerId || ''
+        });
         if (item.cancelRequested) {
+            _followupStepStart = nowPipelineMs();
             await cancelSteerMessage(sid, item);
+            reportClientPipelineStep(followupTimingCtx, 'followup_cancel_after_steer', _followupStepStart);
             var withdrawn = takeFollowupItem(sid, item.id);
             if (withdrawn) returnFollowupToInput(sid, withdrawn);
             return;
         }
         if (steerResult && steerResult.restart && isMyAgentFeatureEnabled('followupRestart', false)) {
+            _followupStepStart = nowPipelineMs();
             var previousRun = getSessionRunState(sid);
             if (previousRun) abortSessionRun(sid, 'followup-restart');
             markSessionRunInactive(sid);
@@ -871,6 +970,9 @@ async function sendFollowupNow(itemId, sessionId) {
                 takeFollowupItem(sid, itemId);
                 renderFollowupQueue(sid);
             }, 1200);
+            reportClientPipelineStep(followupTimingCtx, 'followup_restart_takeover', _followupStepStart, {
+                hadPreviousRun: !!previousRun
+            });
             return sendMessage({
                 message: item.text,
                 fromQueue: true,
@@ -883,8 +985,44 @@ async function sendFollowupNow(itemId, sessionId) {
         item.status = 'accepted';
         persistFollowupQueue(sid);
         renderFollowupQueue(sid);
+        reportClientPipelineStep(followupTimingCtx, 'followup_accepted_by_running_agent', followupTimingStartedAt, {
+            steerId: item.steerId || ''
+        });
+        setTimeout(function () {
+            var queued = getFollowupQueue(sid).find(function (entry) {
+                return String(entry.id) === String(itemId);
+            });
+            if (!queued || queued.status !== 'accepted') return;
+            cancelSteerMessage(sid, queued).catch(function () {
+                if (isSessionRunning(sid)) return Promise.reject(new Error('still running'));
+                return null;
+            }).then(function () {
+                var latest = getFollowupQueue(sid).find(function (entry) {
+                    return String(entry.id) === String(itemId);
+                });
+                if (!latest || latest.status !== 'accepted') return;
+                latest.status = '';
+                latest.steerId = '';
+                persistFollowupQueue(sid);
+                renderFollowupQueue(sid);
+                scheduleFollowupQueueDrain(sid, 0);
+            }).catch(function () {
+                var latest = getFollowupQueue(sid).find(function (entry) {
+                    return String(entry.id) === String(itemId);
+                });
+                if (!latest || latest.status !== 'accepted') return;
+                latest.status = '';
+                latest.steerId = '';
+                persistFollowupQueue(sid);
+                renderFollowupQueue(sid);
+                scheduleFollowupQueueDrain(sid, 1200);
+            });
+        }, 1200);
         return;
     } catch (e) {
+        reportClientPipelineStep(followupTimingCtx, 'followup_steer_error', _followupStepStart, {
+            error: (e && e.message) ? String(e.message) : String(e)
+        });
         item.steerInFlight = false;
         var msg = (e && e.message) ? String(e.message) : String(e);
         var canFallbackToChat = /session is not running/i.test(msg);
@@ -911,6 +1049,7 @@ async function sendFollowupNow(itemId, sessionId) {
         takeFollowupItem(sid, itemId);
         renderFollowupQueue(sid);
     }, 1200);
+    reportClientPipelineStep(followupTimingCtx, 'followup_fallback_to_chat', followupTimingStartedAt);
     return sendMessage({ message: item.text, fromQueue: true, sessionId: sid });
 }
 
@@ -946,6 +1085,15 @@ function drainFollowupQueue(sessionId) {
 
 async function sendMessage(options) {
     options = options || {};
+    const clientPipelineStartedAt = nowPipelineMs();
+    let clientTimingCtx = {
+        label: 'client_send_pipeline_step_timing',
+        sessionId: options.sessionId || currentSessionId || '',
+        runId: '',
+        mode: options.asSteer ? 'followup_steer' : (options.fromQueue ? 'followup_queue' : (options.fromInlineRewrite ? 'inline_rewrite' : 'chat')),
+        startedAt: clientPipelineStartedAt
+    };
+    let _clientStepStart = clientPipelineStartedAt;
     messageLoadEpoch += 1;
     /* 立即快照「提交会话」：之后所有 await 都不能改变它，避免用户在 await 空隙切走后消息发到新会话。
        关键不变式：runSessionId === submitSessionId 全程恒等。 */
@@ -960,17 +1108,27 @@ async function sendMessage(options) {
         var previousRun = getSessionRunState(submitSessionIdInitial);
         if (previousRun) abortSessionRun(submitSessionIdInitial, 'followup-restart');
     }
+    reportClientPipelineStep(clientTimingCtx, 'preflight_checks', _clientStepStart, {
+        forceStart: !!options.forceStart,
+        fromQueue: !!options.fromQueue,
+        fromInlineRewrite: !!options.fromInlineRewrite,
+        asSteer: !!options.asSteer
+    });
 
     /* 立即上锁：阻止后续连击；锁的 key 是提交时的会话，而非当前会话。 */
+    _clientStepStart = nowPipelineMs();
     sendPipelineLock = true;
     sendPipelineLockSessionId = submitSessionIdInitial;
     let submittedRunCtx = null;
     let submittedRunSessionId = submitSessionIdInitial;
     try {
+    reportClientPipelineStep(clientTimingCtx, 'acquire_send_lock', _clientStepStart);
 
     if (pendingRewriteTruncate && pendingRewriteTruncate.sessionId === submitSessionIdInitial) {
+        _clientStepStart = nowPipelineMs();
         const pendingRewrite = pendingRewriteTruncate;
         const truncated = await processRewriteTruncateAsync(pendingRewrite);
+        reportClientPipelineStep(clientTimingCtx, 'pending_rewrite_truncate', _clientStepStart, { ok: !!truncated });
         if (!truncated) {
             pendingRewriteTruncate = null;
             return;
@@ -985,12 +1143,17 @@ async function sendMessage(options) {
 
     let submitSessionId = submitSessionIdInitial;
     if (!submitSessionId) {
+        _clientStepStart = nowPipelineMs();
         await createNewSession();
         submitSessionId = currentSessionId;
+        clientTimingCtx.sessionId = submitSessionId || clientTimingCtx.sessionId;
+        reportClientPipelineStep(clientTimingCtx, 'create_new_session', _clientStepStart, { ok: !!submitSessionId });
         if (!submitSessionId) return;
         sendPipelineLockSessionId = submitSessionId;
     }
+    clientTimingCtx.sessionId = submitSessionId || clientTimingCtx.sessionId;
     // 缓存过期时用轻量 count 校准，避免乐观 user index 和服务端 ui_events 分叉。
+    _clientStepStart = nowPipelineMs();
     let preCount = await getUiEventCount(submitSessionId, { preferCache: true, maxAgeMs: 10000 });
     const existingStreamForIndex = (submitSessionId === currentSessionId) ? getVisibleChatStream() : null;
     if (existingStreamForIndex) {
@@ -999,14 +1162,18 @@ async function sendMessage(options) {
             if (Number.isFinite(n)) preCount = Math.max(preCount, Math.floor(n) + 1);
         });
     }
+    reportClientPipelineStep(clientTimingCtx, 'resolve_ui_event_count', _clientStepStart, { preCount: preCount });
     const runSessionId = submitSessionId;
     submittedRunSessionId = runSessionId;
+    _clientStepStart = nowPipelineMs();
     if (sessionStore && typeof sessionStore.resetSseSeq === 'function') {
         sessionStore.resetSseSeq(runSessionId);
     }
     const clientRunId = (window.crypto && window.crypto.randomUUID)
         ? window.crypto.randomUUID()
         : ('run-' + Date.now() + '-' + Math.random().toString(16).slice(2));
+    clientTimingCtx.runId = clientRunId;
+    reportClientPipelineStep(clientTimingCtx, 'prepare_client_run_id', _clientStepStart);
 
     /* 用户在 createNewSession / getUiEventCount 期间切走：
        后台仍然发起 /chat（消息已属于 runSessionId），但不要往当前可见 stream 画用户气泡。 */
@@ -1015,12 +1182,14 @@ async function sendMessage(options) {
     if (switchedAway) {
         const offscreen = document.createElement('div');
         offscreen.className = 'chat-stream is-offscreen';
+        offscreen.dataset.partialBackgroundRun = '1';
         if (typeof offscreenRoot !== 'undefined' && offscreenRoot) offscreenRoot.appendChild(offscreen);
         runCtx = newDomContext(offscreen);
     } else {
         if (!getVisibleChatStream()) ensureVisibleChatStreamSlot();
         runCtx = newDomContext(getVisibleChatStream());
     }
+    _clientStepStart = nowPipelineMs();
     submittedRunCtx = runCtx;
     runCtx.runId = clientRunId;
     initRunFinalTracking(runCtx);
@@ -1034,6 +1203,8 @@ async function sendMessage(options) {
     setSessionRunState(runSessionId, { controller: ac, ctx: runCtx, runId: clientRunId });
     setSendButtonState();
     syncSessionListIndicatorClasses();
+    reportClientPipelineStep(clientTimingCtx, 'prepare_run_context', _clientStepStart, { switchedAway: !!switchedAway });
+    _clientStepStart = nowPipelineMs();
     const renderAsSteer = !!options.asSteer;
     applySessionEvent({ type: renderAsSteer ? 'user_steer' : 'user', content: rawMessage, created_at: userSentAt, steer: renderAsSteer }, {
         sessionId: runSessionId,
@@ -1060,6 +1231,8 @@ async function sendMessage(options) {
     }
     updateSidebarLastUserPreviewImmediate(runSessionId, rawMessage);
     lastUserMessageBySession[runSessionId] = rawMessage;
+    reportClientPipelineStep(clientTimingCtx, 'local_user_render', _clientStepStart, { renderAsSteer: !!renderAsSteer, switchedAway: !!switchedAway });
+    _clientStepStart = nowPipelineMs();
     const formData = new FormData();
     formData.append('message', rawMessage);
     formData.append('session_id', runSessionId);
@@ -1071,9 +1244,15 @@ async function sendMessage(options) {
     let streamEventIdx = preCount + 1;
     let streamDisconnectedUnexpectedly = false;
     try {
+        reportClientPipelineStep(clientTimingCtx, 'build_form_data', _clientStepStart, { followupSteer: !!renderAsSteer });
+        _clientStepStart = nowPipelineMs();
         const response = await fetch('/chat', { method: 'POST', body: formData, signal: ac.signal });
+        reportClientPipelineStep(clientTimingCtx, 'fetch_chat_response_headers', _clientStepStart, { status: response && response.status });
+        _clientStepStart = nowPipelineMs();
         streamEventIdx = await consumeAgentSseResponse(response, runCtx, runSessionId, streamEventIdx);
+        reportClientPipelineStep(clientTimingCtx, 'consume_sse_until_done', _clientStepStart, { streamEventIdx: streamEventIdx });
     } catch (error) {
+        reportClientPipelineStep(clientTimingCtx, 'chat_fetch_or_sse_error', _clientStepStart, { error: (error && error.message) ? String(error.message) : String(error) });
         if (error.name === 'AbortError') {
             if (getRunAbortReason(runSessionId, runCtx) === 'user') appendLog(runCtx, '任务已中断', 'status', runSessionId);
         }
@@ -1084,6 +1263,7 @@ async function sendMessage(options) {
             appendLog(runCtx, '请求失败: ' + msg, 'error-log', runSessionId);
         }
     } finally {
+        _clientStepStart = nowPipelineMs();
         finalizeLlmStreamChunks(runCtx);
         finalizeProgressStreamChunks(runCtx);
         if (!switchedAway && runSessionId === currentSessionId && getRunAbortReason(runSessionId, runCtx) !== 'user') {
@@ -1118,14 +1298,23 @@ async function sendMessage(options) {
         if (runSessionId === currentSessionId && countRunningSubagentCards() > 0) {
             scheduleSubagentIncrementalSync();
         }
+        reportClientPipelineStep(clientTimingCtx, 'finalize_visible_state', _clientStepStart, {
+            disconnected: !!streamDisconnectedUnexpectedly,
+            currentSession: runSessionId === currentSessionId
+        });
     }
     } finally {
+        _clientStepStart = nowPipelineMs();
         sendPipelineLock = false;
         sendPipelineLockSessionId = null;
         var stoppedByUser = getRunAbortReason(submittedRunSessionId, submittedRunCtx) === 'user';
         if (!stoppedByUser && (!options.fromQueue || getFollowupQueue(submittedRunSessionId).length)) {
             setTimeout(function () { drainFollowupQueue(submittedRunSessionId); }, 0);
         }
+        reportClientPipelineStep(clientTimingCtx, 'release_send_lock_and_schedule_followup', _clientStepStart, {
+            stoppedByUser: !!stoppedByUser,
+            fromQueue: !!options.fromQueue
+        });
     }
 }
 

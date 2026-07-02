@@ -26,7 +26,16 @@ function applySessionEvent(event, opts) {
     const type = String(event.type || '');
     const runId = String(event.run_id || event.runId || '').trim();
     let messageRecord = null;
-    if (sessionId) {
+    const ephemeral = !!event.ephemeral;
+    const isLiveOnlyDelta = ephemeral && (
+        type === 'llm_reasoning_delta'
+        || type === 'llm_response_delta'
+        || type === 'tool_call_delta'
+        || type === 'tool_command_delta'
+        || type === 'context_summary_delta'
+        || type === 'key_context_delta'
+    );
+    if (sessionId && !isLiveOnlyDelta) {
         messageRecord = applyMessageEvent(sessionId, event, eventIndex, source);
         markUiEventStoreApplied(event);
     }

@@ -409,6 +409,30 @@ function renderTodoPlanForCurrentSession() {
     renderTodoPlanSnapshot(selectTodoPlan(currentSessionId));
 }
 
+function setTodoPlanForSession(sessionId, snapshot) {
+    if (!sessionId || !snapshot || typeof snapshot !== 'object') return;
+    applyTodoPlanToStore(sessionId, snapshot);
+}
+
+function startTodoForSessionLoad(sessionId) {
+    if (!sessionId || sessionId !== currentSessionId) return;
+    void refreshTodoPlanPanel();
+}
+
+function renderLoadedTodoPlanForSession(sessionId, snapshot, alreadyStarted) {
+    if (!sessionId || sessionId !== currentSessionId) return;
+    if (snapshot && typeof snapshot === 'object') {
+        setTodoPlanForSession(sessionId, snapshot);
+        renderTodoPlanForCurrentSession();
+        return;
+    }
+    if (alreadyStarted) {
+        renderTodoPlanForCurrentSession();
+        return;
+    }
+    void refreshTodoPlanPanel();
+}
+
 const TODO_PLAN_CACHE_TTL_MS = 2000;
 
 async function refreshTodoPlanPanel() {
