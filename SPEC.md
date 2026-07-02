@@ -645,6 +645,10 @@ SSE 是后端向前端展示 Agent 过程的主通道。事件至少应覆盖以
 - 前端打开会话必须保留 `open_session_timing` 诊断日志，至少包含前端总耗时、消息数、数据来源和后端 snapshot timing；日志只能用于慢请求诊断，不能改变滚动/TOC/渲染时序。
 - 首次加载且没有保存滚动位置/anchor 时，应保持 V1 体验的平滑滚到底部；存在保存位置/anchor 时必须立即恢复，避免历史分页和 TOC active 更新打断用户位置。
 - Runtime V2 的 TOC 用户轮次必须优先来自 projection index/cache；`/user_turns` 和 session history snapshot 不得为了 TOC 预览重新物化完整 UI events。
+- Runtime V2 UI projection 的 `ui_index`、`runtime_seq` 映射必须基于最终可见 UI 投影，而不是原始 runtime seq 列表；删除、改写、截断、visible range 等历史操作必须先作用到投影后再生成 count/user_turns/index。
+- Runtime V2 recent-turn tail 快路径遇到删除、改写、截断等 history ops 时必须回退到完整 projection，不能用原始尾窗绕过可见历史规则。
+- `user_steer` 只表示 UI 展示类型差异：模型上下文仍按普通 user message 处理，UI projection 必须恢复为执行过程块中的“追问”，且不得进入 TOC 用户轮次。
+- 前端 context token/cache stats 显示必须以事件所属 session 为准；后台运行、切走会话或重连事件不得刷新当前可见会话的右上角 token 标签。
 
 ## 20. 已知工程特征
 
@@ -661,3 +665,6 @@ SSE 是后端向前端展示 Agent 过程的主通道。事件至少应覆盖以
 - 发送 API 前的热路径不得重复读取大历史、重复解析 `work_messages`、重复扫描完整历史或重复解析模型配置。新增逻辑必须观察 `pre_api_timing`，并说明主要耗时项是否变化。
 - 模型配置、token 估算、中断状态等热路径允许使用短 TTL 或显式失效缓存；缓存必须在模型配置变更、会话模型 profile 变更、interrupt request/clear 等写路径同步失效或更新。
 - 新增优化必须配套回归测试，至少覆盖：V2 不 fallback legacy、工具过程不被 user/final 主链覆盖、API 前热路径不会重复读盘或重复计算。
+- SSE 结束、`run_finished`、`final` 三条路径必须共用同一套前端 run-state 收口逻辑，避免一条路径清理运行态而另一条路径仍保持生成中。
+- SSE 读取必须支持 keepalive 和空闲超时；超时只能触发重连/恢复，不得直接追加错误执行块或把后台会话状态写入当前可见会话。
+- 修复 live LLM delta 拆行或重复时，应优先保持同一 `react_iter` 的 live row 可跨 process group 重建继续 upsert；不得通过全量刷新正文或重建会话历史兜底。
