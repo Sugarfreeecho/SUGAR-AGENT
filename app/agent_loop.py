@@ -2005,6 +2005,22 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
                     llm_history=nl,
                     key_context=nk,
                 )
+                post_compress_est = estimate_full_input_tokens_for_llm_history(
+                    state["session_id"],
+                    nl,
+                    nk or "",
+                )
+                await _push_stream_event(
+                    state,
+                    {
+                        "type": "context_tokens",
+                        "estimated": int(post_compress_est),
+                        "threshold": int(iter_context_window),
+                        "model": iter_model,
+                        "ephemeral": True,
+                    },
+                    emit=emit,
+                )
                 await _push_stream_event(
                     state,
                     {"type": "status", "content": _st},
@@ -3088,7 +3104,10 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
                 state.pop("_steer_rollback_marker", None)
 
             # 将本轮助手输出写入历史（OpenAI 多轮：AssistantMessage，含 tool_calls）
-            _ak = build_assistant_additional_kwargs(reasoning_text)
+            _ak = build_assistant_additional_kwargs(
+                reasoning_text,
+                getattr(turn, "reasoning_field", None),
+            )
             _ai_kw: Dict[str, Any] = {
                 "content": response_text if response_text is not None else "",
                 "metadata": {"is_assistant_response": True},

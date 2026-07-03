@@ -56,15 +56,32 @@ def _safe_int(value: Any) -> int:
         return 0
 
 
+_MISSING = object()
+
+
+def _get_attr_or_key(obj: Any, key: str, default: Any = None) -> Any:
+    if obj is None:
+        return default
+    if isinstance(obj, dict):
+        return obj.get(key, default)
+
+    val = getattr(obj, key, _MISSING)
+    if val is not _MISSING:
+        return val
+
+    for extra_name in ("model_extra", "__dict__"):
+        extra = getattr(obj, extra_name, None)
+        if isinstance(extra, dict) and key in extra:
+            return extra.get(key, default)
+    return default
+
+
 def _get_nested_attr_or_key(obj: Any, *path: str) -> Any:
     cur = obj
     for k in path:
-        if cur is None:
+        cur = _get_attr_or_key(cur, k, _MISSING)
+        if cur is _MISSING:
             return None
-        if isinstance(cur, dict):
-            cur = cur.get(k)
-        else:
-            cur = getattr(cur, k, None)
     return cur
 
 
@@ -140,6 +157,7 @@ class AssistantTurn:
     content: str
     tool_calls: Optional[List[Dict[str, Any]]]
     reasoning_content: Optional[str]
+    reasoning_field: Optional[str] = None
 
 
 def normalize_content_text(content: Any) -> str:
@@ -149,7 +167,9 @@ def normalize_content_text(content: Any) -> str:
     if isinstance(content, str):
         return content.strip()
     if isinstance(content, dict):
-        for key in ("text", "content", "message", "value", "output", "reasoning_content"):
+        if str(content.get("type") or "").strip().lower() in {"reasoning", "reasoning_content"}:
+            return ""
+        for key in ("text", "content", "message", "value", "output"):
             v = content.get(key)
             if isinstance(v, str) and v.strip():
                 return v.strip()
@@ -164,14 +184,12 @@ def normalize_content_text(content: Any) -> str:
             if isinstance(item, str) and item.strip():
                 parts.append(item.strip())
             elif isinstance(item, dict):
+                if str(item.get("type") or "").strip().lower() in {"reasoning", "reasoning_content"}:
+                    continue
                 chunk = ""
                 for key in (
                     "text",
                     "content",
-                    "reasoning_content",
-                    "thinking",
-                    "reasoning",
-                    "thought",
                     "value",
                 ):
                     v = item.get(key)
@@ -193,15 +211,7 @@ def _normalize_content_text(content: Any) -> str:
     return normalize_content_text(content)
 
 
-def _extract_reasoning_text(obj: Any) -> Optional[str]:
-    """
-    兼容不同供应商的思考字段命名：
-    - reasoning_content（OpenAI/DeepSeek 常见）
-    - reasoning（部分兼容端）
-    """
-    raw = _get_nested_attr_or_key(obj, "reasoning_content")
-    if raw is None or (isinstance(raw, str) and not raw.strip()):
-        raw = _get_nested_attr_or_key(obj, "reasoning")
+def _coerce_text_or_none(raw: Any) -> Optional[str]:
     if raw is None:
         return None
     if isinstance(raw, str):
@@ -209,6 +219,72 @@ def _extract_reasoning_text(obj: Any) -> Optional[str]:
         return text or None
     text = str(raw).strip()
     return text or None
+
+
+def _extract_reasoning_from_content(value: Any) -> Tuple[Optional[str], Optional[str]]:
+    if value is None or isinstance(value, str):
+        return (None, None)
+    if isinstance(value, dict):
+        direct = _coerce_text_or_none(value.get("reasoning"))
+        if direct:
+            return (direct, "reasoning")
+        nested = value.get("reasoning_content")
+        if isinstance(nested, (dict, list)):
+            return _extract_reasoning_from_content(nested)
+        text = _coerce_text_or_none(nested)
+        return (text, "reasoning_content") if text else (None, None)
+    if isinstance(value, list):
+        parts: List[str] = []
+        field: Optional[str] = None
+        for item in value:
+            if not isinstance(item, dict):
+                continue
+            part_type = str(item.get("type") or "").strip().lower()
+            if part_type in {"reasoning", "reasoning_content"}:
+                text = (
+                    _coerce_text_or_none(item.get("reasoning"))
+                    or _coerce_text_or_none(item.get("reasoning_content"))
+                    or _coerce_text_or_none(item.get("text"))
+                    or _coerce_text_or_none(item.get("content"))
+                )
+                if text:
+                    parts.append(text)
+                    if field is None:
+                        field = "reasoning_content" if part_type == "reasoning_content" else "reasoning"
+                continue
+            text = _coerce_text_or_none(item.get("reasoning"))
+            if text:
+                parts.append(text)
+                if field is None:
+                    field = "reasoning"
+                continue
+            text = _coerce_text_or_none(item.get("reasoning_content"))
+            if text:
+                parts.append(text)
+                if field is None:
+                    field = "reasoning_content"
+        joined = "\n".join(parts).strip()
+        return (joined or None, field if joined else None)
+    return (None, None)
+
+
+def _extract_reasoning_text_and_field(obj: Any) -> Tuple[Optional[str], Optional[str]]:
+    text = _coerce_text_or_none(_get_nested_attr_or_key(obj, "reasoning_content"))
+    if text:
+        return (text, "reasoning_content")
+    text = _coerce_text_or_none(_get_nested_attr_or_key(obj, "reasoning"))
+    if text:
+        return (text, "reasoning")
+    return _extract_reasoning_from_content(_get_nested_attr_or_key(obj, "content"))
+
+
+def _extract_reasoning_text(obj: Any) -> Optional[str]:
+    """
+    兼容不同供应商的思考字段命名：
+    - reasoning_content（OpenAI/DeepSeek 常见）
+    - reasoning（部分兼容端）
+    """
+    return _extract_reasoning_text_and_field(obj)[0]
 
 
 def format_tool_calls_for_openai_api(tool_calls: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -379,9 +455,17 @@ def messages_to_openai_params(messages: List[Any]) -> List[Dict[str, Any]]:
             if m.tool_calls:
                 item["tool_calls"] = format_tool_calls_for_openai_api(m.tool_calls)
             ak = getattr(m, "additional_kwargs", None) or {}
-            rc = ak.get("reasoning_content", None) if isinstance(ak, dict) else None
+            rc = None
+            rc_field = "reasoning_content"
+            if isinstance(ak, dict):
+                raw_field = str(ak.get("reasoning_field") or "").strip()
+                if raw_field in {"reasoning", "reasoning_content"}:
+                    rc_field = raw_field
+                rc = ak.get("reasoning_content", None)
+                if rc is None:
+                    rc = ak.get("reasoning", None)
             if rc is not None:
-                item["reasoning_content"] = str(rc)
+                item[rc_field] = str(rc)
             api_msgs.append(item)
         elif isinstance(m, ToolMessage):
             api_msgs.append(
@@ -399,25 +483,30 @@ def messages_to_openai_params(messages: List[Any]) -> List[Dict[str, Any]]:
 
 def parse_assistant_message(msg: Any) -> AssistantTurn:
     """解析 chat.completions 返回的 assistant message（content、tool_calls、reasoning_content）。"""
-    content = _normalize_content_text(getattr(msg, "content", None))
-    reasoning = _extract_reasoning_text(msg)
+    content = _normalize_content_text(_get_nested_attr_or_key(msg, "content"))
+    reasoning, reasoning_field = _extract_reasoning_text_and_field(msg)
 
-    raw_calls = getattr(msg, "tool_calls", None)
+    raw_calls = _get_nested_attr_or_key(msg, "tool_calls")
     tool_calls: Optional[List[Dict[str, Any]]] = None
     if raw_calls:
         tool_calls = []
         for tc in raw_calls:
-            fn = getattr(tc, "function", None)
-            name = getattr(fn, "name", "") if fn else ""
-            raw_args = getattr(fn, "arguments", "") if fn else "{}"
-            tid = getattr(tc, "id", "") or ""
+            fn = _get_nested_attr_or_key(tc, "function")
+            name = _get_nested_attr_or_key(fn, "name") if fn else ""
+            raw_args = _get_nested_attr_or_key(fn, "arguments") if fn else "{}"
+            tid = _get_nested_attr_or_key(tc, "id") or ""
             try:
                 args = json.loads(raw_args) if isinstance(raw_args, str) else (raw_args or {})
             except json.JSONDecodeError:
                 logger.warning("工具参数 JSON 解析失败，使用空对象: %s", raw_args[:200])
                 args = {}
             tool_calls.append({"name": name, "args": args, "id": tid})
-    return AssistantTurn(content=content, tool_calls=tool_calls, reasoning_content=reasoning)
+    return AssistantTurn(
+        content=content,
+        tool_calls=tool_calls,
+        reasoning_content=reasoning,
+        reasoning_field=reasoning_field,
+    )
 
 
 def chat_completion(
@@ -714,6 +803,7 @@ def run_chat_completion_stream_worker(
         if stream is None:
             raise RuntimeError("stream 创建失败")
         reasoning_buf = ""
+        reasoning_field: Optional[str] = None
         content_buf = ""
         tool_acc: Dict[int, Dict[str, str]] = {}
         last_usage: Optional[Dict[str, int]] = None
@@ -753,10 +843,12 @@ def run_chat_completion_stream_worker(
             delta = choice0.delta
             if not delta:
                 continue
-            rc = _extract_reasoning_text(delta)
+            rc, rc_field = _extract_reasoning_text_and_field(delta)
             if rc:
                 piece = rc if isinstance(rc, str) else str(rc)
                 reasoning_buf += piece
+                if reasoning_field is None and rc_field:
+                    reasoning_field = rc_field
                 if not first_delta_seen:
                     first_delta_seen = True
                     put_stream_timing("first_delta", delta_type="reasoning", chars=len(piece), chunk_count=chunk_count)
@@ -796,6 +888,7 @@ def run_chat_completion_stream_worker(
             content=content_buf or "",
             tool_calls=tool_calls_list,
             reasoning_content=reasoning_final,
+            reasoning_field=reasoning_field,
         )
         if last_usage:
             usage_payload: Dict[str, Any] = dict(last_usage)

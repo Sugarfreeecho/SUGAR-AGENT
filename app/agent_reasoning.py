@@ -7,11 +7,19 @@
 
 from __future__ import annotations
 
-from typing import Dict
+from typing import Dict, Optional
 
 
-def build_assistant_additional_kwargs(reasoning_text: str) -> Dict[str, str]:
+def build_assistant_additional_kwargs(
+    reasoning_text: str,
+    reasoning_field: Optional[str] = None,
+) -> Dict[str, str]:
     """构造 AssistantMessage.additional_kwargs：始终包含 reasoning_content（无正文则为空字符串）。"""
+    out: Dict[str, str] = {}
+    if reasoning_field in {"reasoning", "reasoning_content"}:
+        out["reasoning_field"] = reasoning_field
     if reasoning_text:
-        return {"reasoning_content": reasoning_text}
-    return {"reasoning_content": ""}
+        out["reasoning_content"] = reasoning_text
+    else:
+        out["reasoning_content"] = ""
+    return out

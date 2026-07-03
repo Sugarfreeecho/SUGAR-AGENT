@@ -283,6 +283,22 @@
     border-color: rgba(99, 102, 241, 0.45);
     box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.14);
   }
+  .form-group input.autofill-flash,
+  .form-group select.autofill-flash {
+    border-color: rgba(108, 92, 231, 0.72);
+    box-shadow: 0 0 0 3px rgba(108, 92, 231, 0.2), var(--shadow-brand-glow);
+    animation: autofillPulse 1.45s ease-out;
+  }
+  :root.theme-light .form-group input.autofill-flash,
+  :root.theme-light .form-group select.autofill-flash {
+    border-color: rgba(99, 102, 241, 0.64);
+    box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.18);
+  }
+  @keyframes autofillPulse {
+    0% { box-shadow: 0 0 0 0 rgba(108, 92, 231, 0.42), var(--shadow-brand-glow); }
+    45% { box-shadow: 0 0 0 5px rgba(108, 92, 231, 0.18), var(--shadow-brand-glow); }
+    100% { box-shadow: 0 0 0 3px rgba(108, 92, 231, 0), var(--shadow-brand-glow); }
+  }
   .form-group input::placeholder { color: var(--text-tertiary); opacity: 0.65; }
   .select-wrap {
     position: relative;
@@ -722,6 +738,17 @@
     });
   }
 
+  function flashAutofilledFields(fields) {
+    (fields || []).forEach((el) => {
+      if (!el) return;
+      el.classList.remove('autofill-flash');
+      void el.offsetWidth;
+      el.classList.add('autofill-flash');
+      if (el._autofillTimer) clearTimeout(el._autofillTimer);
+      el._autofillTimer = setTimeout(() => el.classList.remove('autofill-flash'), 1550);
+    });
+  }
+
   function modelLimitSource(model) {
     const source = String((model && (model.limit_source || model.context_window_source)) || '');
     if (source === 'api') return 'API 返回窗口信息';
@@ -764,6 +791,7 @@
     if (contextWindowEl) contextWindowEl.value = String(windows.ctx);
     if (maxOutputTokensEl) maxOutputTokensEl.value = String(windows.out);
     updateModelSelectionHighlight();
+    flashAutofilledFields([modelName, contextWindowEl, maxOutputTokensEl]);
     setModelDiscoveryStatus(windows.capped
       ? '已填入模型和窗口参数；理论最大可配上下文门限为 ' + formatTokens(windows.theoretical) + ' tokens，默认填入 ' + formatTokens(windows.cap) + ' tokens。'
       : '已填入模型和窗口参数。');
@@ -827,7 +855,10 @@
     modelDiscoveryList.querySelectorAll('.model-row').forEach((row) => {
       row.addEventListener('click', () => {
         try {
-          probeAndApplyDiscoveredModel(JSON.parse(row.getAttribute('data-model') || '{}'), row);
+          const model = JSON.parse(row.getAttribute('data-model') || '{}');
+          selectedDiscoveredModelId = String(model.id || model.model || '').trim();
+          updateModelSelectionHighlight();
+          probeAndApplyDiscoveredModel(model, row);
         } catch (err) {}
       });
     });

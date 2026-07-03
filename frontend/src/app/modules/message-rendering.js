@@ -1777,6 +1777,39 @@ function workspaceOpenDisplayLabel(original, wsRel) {
     return name ? ('@' + name) : raw;
 }
 
+function normalizeInputPathTokenIdentity(path) {
+    var s = stripPathWrappingQuotes(String(path || '').trim()).replace(/\\/g, '/').replace(/\/+$/, '');
+    if (/^[A-Za-z]:\//.test(s) || /^\/\//.test(s)) return s.toLowerCase();
+    return s;
+}
+
+function uniqueInputPathDisplayLabel(original, wsRel, preferredLabel) {
+    var stored = stripPathWrappingQuotes(original || '');
+    var storedIdentity = normalizeInputPathTokenIdentity(stored);
+    if (!preferredLabel) preferredLabel = workspaceOpenDisplayLabel(original, wsRel);
+    if (!preferredLabel) return '';
+    if (!inputPathTokenMap[preferredLabel]
+        || normalizeInputPathTokenIdentity(inputPathTokenMap[preferredLabel]) === storedIdentity) {
+        return preferredLabel;
+    }
+
+    var rel = String(wsRel || '').replace(/\\/g, '/').replace(/^\/+/, '').replace(/\/+$/, '');
+    var parts = rel.split('/').filter(Boolean);
+    var candidates = [];
+    if (parts.length >= 2) candidates.push('@' + parts.slice(-2).join('/'));
+    if (parts.length >= 3) candidates.push('@' + parts.join('/'));
+    candidates.push(preferredLabel + '#' + String(Object.keys(inputPathTokenMap).length + 1));
+
+    for (var i = 0; i < candidates.length; i += 1) {
+        var label = candidates[i];
+        if (!inputPathTokenMap[label]
+            || normalizeInputPathTokenIdentity(inputPathTokenMap[label]) === storedIdentity) {
+            return label;
+        }
+    }
+    return candidates[candidates.length - 1];
+}
+
 function workspaceOpenTipPath(original, wsRel) {
     var raw = cleanPathTokenForLink(original || '');
     if (/^[A-Za-z]:[\\/]/.test(raw) || /^\\\\/.test(raw)) return raw;
@@ -1893,7 +1926,7 @@ function rewriteInputWorkspacePaths() {
     function replacePathToken(match, prefix, path) {
         var rel = pathTokenToWorkspaceOpenRel(path);
         if (!rel) return match;
-        var label = workspaceOpenDisplayLabel(path, rel);
+        var label = uniqueInputPathDisplayLabel(path, rel, workspaceOpenDisplayLabel(path, rel));
         if (!label) return match;
         inputPathTokenMap[label] = stripPathWrappingQuotes(path);
         changed = true;

@@ -3,6 +3,16 @@ const SSE_IDLE_TIMEOUT_MS = 45000;
 function shouldApplySseSeqFilter(parsed) {
     if (!parsed || parsed.protocol === 'runtime_v2') return false;
     if (parsed.runtime_seq != null || parsed.runtimeSeq != null) return false;
+    const type = String(parsed.type || '');
+    if (type === 'context_trim_progress'
+        || type === 'context_summary_progress'
+        || type === 'key_context_progress'
+        || type === 'context_trim_delta'
+        || type === 'context_summary_delta'
+        || type === 'key_context_delta'
+        || type === 'context_trim_body'
+        || type === 'context_summary_body'
+        || type === 'key_context_body') return false;
     return true;
 }
 
@@ -939,6 +949,25 @@ async function sendSteerMessage(sessionId, text, clientId) {
     return j;
 }
 
+function sleepMs(ms) {
+    return new Promise(function (resolve) {
+        setTimeout(resolve, Math.max(0, Number(ms) || 0));
+    });
+}
+
+async function refreshFollowupRunState(sessionId) {
+    const sid = String(sessionId || '');
+    if (!sid) return;
+    try {
+        if (typeof reconcileRunStateFromServer === 'function') {
+            await reconcileRunStateFromServer({ silent: true });
+        }
+    } catch (e) { /* ignore */ }
+    try {
+        scheduleActiveSessionReconnect(sid, { delayMs: 0 });
+    } catch (e2) { /* ignore */ }
+}
+
 async function cancelSteerMessage(sessionId, item) {
     var r = await fetch('/sessions/' + encodeURIComponent(sessionId) + '/steer', {
         method: 'DELETE',
@@ -976,6 +1005,50 @@ function scheduleFollowupQueueDrain(sessionId, delayMs) {
     const sid = String(sessionId || '');
     if (!sid) return;
     setTimeout(function () { drainFollowupQueue(sid); }, Math.max(0, Number(delayMs) || 0));
+}
+
+function scheduleAcceptedFollowupWatch(sid, itemId) {
+    setTimeout(function () {
+        var queued = getFollowupQueue(sid).find(function (entry) {
+            return String(entry.id) === String(itemId);
+        });
+        if (!queued || queued.status !== 'accepted') return;
+        cancelSteerMessage(sid, queued).catch(function () {
+            if (isSessionRunning(sid)) return Promise.reject(new Error('still running'));
+            return null;
+        }).then(function () {
+            var latest = getFollowupQueue(sid).find(function (entry) {
+                return String(entry.id) === String(itemId);
+            });
+            if (!latest || latest.status !== 'accepted') return;
+            latest.status = '';
+            latest.steerId = '';
+            persistFollowupQueue(sid);
+            renderFollowupQueue(sid);
+            scheduleFollowupQueueDrain(sid, 0);
+        }).catch(function () {
+            var latest = getFollowupQueue(sid).find(function (entry) {
+                return String(entry.id) === String(itemId);
+            });
+            if (!latest || latest.status !== 'accepted') return;
+            if (isSessionRunning(sid) || isServerStreamActive(sid)) {
+                latest.status = 'sent';
+                persistFollowupQueue(sid);
+                renderFollowupQueue(sid);
+                setTimeout(function () {
+                    takeFollowupItem(sid, itemId);
+                    renderFollowupQueue(sid);
+                }, 1200);
+                scheduleActiveSessionReconnect(sid, { delayMs: 0 });
+                return;
+            }
+            latest.status = '';
+            latest.steerId = '';
+            persistFollowupQueue(sid);
+            renderFollowupQueue(sid);
+            scheduleFollowupQueueDrain(sid, 1200);
+        });
+    }, 1200);
 }
 
 async function sendFollowupNow(itemId, sessionId) {
@@ -1054,47 +1127,7 @@ async function sendFollowupNow(itemId, sessionId) {
         reportClientPipelineStep(followupTimingCtx, 'followup_accepted_by_running_agent', followupTimingStartedAt, {
             steerId: item.steerId || ''
         });
-        setTimeout(function () {
-            var queued = getFollowupQueue(sid).find(function (entry) {
-                return String(entry.id) === String(itemId);
-            });
-            if (!queued || queued.status !== 'accepted') return;
-            cancelSteerMessage(sid, queued).catch(function () {
-                if (isSessionRunning(sid)) return Promise.reject(new Error('still running'));
-                return null;
-            }).then(function () {
-                var latest = getFollowupQueue(sid).find(function (entry) {
-                    return String(entry.id) === String(itemId);
-                });
-                if (!latest || latest.status !== 'accepted') return;
-                latest.status = '';
-                latest.steerId = '';
-                persistFollowupQueue(sid);
-                renderFollowupQueue(sid);
-                scheduleFollowupQueueDrain(sid, 0);
-            }).catch(function () {
-                var latest = getFollowupQueue(sid).find(function (entry) {
-                    return String(entry.id) === String(itemId);
-                });
-                if (!latest || latest.status !== 'accepted') return;
-                if (isSessionRunning(sid) || isServerStreamActive(sid)) {
-                    latest.status = 'sent';
-                    persistFollowupQueue(sid);
-                    renderFollowupQueue(sid);
-                    setTimeout(function () {
-                        takeFollowupItem(sid, itemId);
-                        renderFollowupQueue(sid);
-                    }, 1200);
-                    scheduleActiveSessionReconnect(sid, { delayMs: 0 });
-                    return;
-                }
-                latest.status = '';
-                latest.steerId = '';
-                persistFollowupQueue(sid);
-                renderFollowupQueue(sid);
-                scheduleFollowupQueueDrain(sid, 1200);
-            });
-        }, 1200);
+        scheduleAcceptedFollowupWatch(sid, itemId);
         return;
     } catch (e) {
         reportClientPipelineStep(followupTimingCtx, 'followup_steer_error', _followupStepStart, {
@@ -1103,6 +1136,34 @@ async function sendFollowupNow(itemId, sessionId) {
         item.steerInFlight = false;
         var msg = (e && e.message) ? String(e.message) : String(e);
         var canFallbackToChat = /session is not running/i.test(msg);
+        if (canFallbackToChat && !item.steerRetryAfterSync) {
+            item.steerRetryAfterSync = true;
+            item.status = 'submitting';
+            persistFollowupQueue(sid);
+            renderFollowupQueue(sid);
+            await refreshFollowupRunState(sid);
+            await sleepMs(250);
+            if (isSessionRunning(sid) || isServerStreamActive(sid)) {
+                try {
+                    item.steerInFlight = true;
+                    var retrySteerResult = await sendSteerMessage(sid, item.text, item.clientId);
+                    item.steerInFlight = false;
+                    item.steerId = retrySteerResult && retrySteerResult.item && retrySteerResult.item.id ? String(retrySteerResult.item.id) : '';
+                    item.status = 'accepted';
+                    persistFollowupQueue(sid);
+                    renderFollowupQueue(sid);
+                    reportClientPipelineStep(followupTimingCtx, 'followup_steer_retry_after_sync', _followupStepStart, {
+                        steerId: item.steerId || ''
+                    });
+                    scheduleAcceptedFollowupWatch(sid, itemId);
+                    return;
+                } catch (retryError) {
+                    item.steerInFlight = false;
+                    msg = (retryError && retryError.message) ? String(retryError.message) : String(retryError);
+                    canFallbackToChat = /session is not running/i.test(msg);
+                }
+            }
+        }
         if (!canFallbackToChat) {
             if (item.cancelRequested) {
                 item.status = 'sending';
@@ -1119,6 +1180,8 @@ async function sendFollowupNow(itemId, sessionId) {
             return;
         }
     }
+    markSessionRunInactive(sid);
+    if (typeof sessionStore !== 'undefined') sessionStore.setStreamActive(sid, false);
     item.status = 'sent';
     persistFollowupQueue(sid);
     renderFollowupQueue(sid);
@@ -1127,7 +1190,7 @@ async function sendFollowupNow(itemId, sessionId) {
         renderFollowupQueue(sid);
     }, 1200);
     reportClientPipelineStep(followupTimingCtx, 'followup_fallback_to_chat', followupTimingStartedAt);
-    return sendMessage({ message: item.text, fromQueue: true, sessionId: sid });
+    return sendMessage({ message: item.text, fromQueue: true, sessionId: sid, forceStart: true });
 }
 
 function drainFollowupQueue(sessionId) {

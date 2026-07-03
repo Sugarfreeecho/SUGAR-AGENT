@@ -360,15 +360,23 @@ def strip_reasoning_for_api_request(messages: List[Any]) -> List[Any]:
 
         new_ak = dict(ak)
         has_tool_calls = bool(getattr(m, "tool_calls", None))
+        reasoning_field = str(new_ak.get("reasoning_field") or "").strip()
+        if reasoning_field not in {"reasoning", "reasoning_content"}:
+            reasoning_field = "reasoning_content"
 
         # ?????assistant ? tool_calls ?????? reasoning_content ???
         if has_tool_calls:
-            if "reasoning_content" not in new_ak:
-                new_ak["reasoning_content"] = ""
+            if reasoning_field not in new_ak:
+                new_ak[reasoning_field] = str(new_ak.get("reasoning_content") or new_ak.get("reasoning") or "")
         elif not thinking_on:
             new_ak.pop("reasoning_content", None)
+            new_ak.pop("reasoning", None)
+            new_ak.pop("reasoning_field", None)
         else:
-            new_ak["reasoning_content"] = ""
+            new_ak.pop("reasoning_content", None)
+            new_ak.pop("reasoning", None)
+            new_ak[reasoning_field] = ""
+            new_ak["reasoning_field"] = reasoning_field
 
         out.append(m.model_copy(update={"content": clean_content, "additional_kwargs": new_ak}))
     return out
