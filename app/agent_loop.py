@@ -2476,8 +2476,10 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
                     return None
                 name = (row.get("name") or "").strip()
                 tid = row.get("id") or ""
-                raw_args = row.get("arguments") or "{}"
+                raw_args = row.get("arguments") or ""
                 if not name or not tid:
+                    return None
+                if not raw_args:
                     return None
                 try:
                     args = json.loads(raw_args) if isinstance(raw_args, str) else (raw_args or {})

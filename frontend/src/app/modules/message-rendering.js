@@ -2070,6 +2070,19 @@ function linkifySingleTextNode(textNode) {
 
 function upgradeWorkspacePathMarkdownLinks(root) {
     if (!root) return;
+    root.querySelectorAll('span[data-ga-workspace-link]').forEach(function (span) {
+        var rel = span.getAttribute('data-ga-workspace-link') || '';
+        var raw = span.getAttribute('data-ga-workspace-raw') || rel;
+        if (!rel) return;
+        var a = document.createElement('a');
+        a.href = '#';
+        a.setAttribute('data-workspace-open', rel);
+        a.className = 'msg-link-workspace-open';
+        a.setAttribute('data-ui-tip', workspaceOpenTipPath(raw, rel));
+        a.textContent = span.textContent || raw || rel;
+        bindUiHoverTip(a);
+        if (span.parentNode) span.parentNode.replaceChild(a, span);
+    });
     root.querySelectorAll('a[href]').forEach(function (a) {
         if (!a || a.classList.contains('msg-link-workspace-open')) return;
         var href = a.getAttribute('href') || '';
@@ -2222,6 +2235,22 @@ function linkifyAssistantTextNodes(root) {
     batch.forEach(linkifySingleTextNode);
 }
 
+function ensureExternalMessageLinksOpenInNewTab(root) {
+    if (!root || !root.querySelectorAll) return;
+    root.querySelectorAll('a[href]').forEach(function (a) {
+        if (!a || a.hasAttribute('data-workspace-open')) return;
+        var href = String(a.getAttribute('href') || '').trim();
+        if (!/^(https?:)?\/\//i.test(href)) return;
+        a.target = '_blank';
+        var rel = String(a.getAttribute('rel') || '').trim();
+        var tokens = rel ? rel.split(/\s+/) : [];
+        ['noopener', 'noreferrer'].forEach(function (token) {
+            if (tokens.indexOf(token) < 0) tokens.push(token);
+        });
+        a.setAttribute('rel', tokens.join(' '));
+    });
+}
+
 function scheduleMermaidRun(root) {
     registerMermaidLazy(root);
 }
@@ -2318,6 +2347,7 @@ function enhanceAssistantMessageContent(div) {
     upgradeMermaidBlocks(div);
     linkifyAssistantTextNodes(div);
     upgradeWorkspaceImages(div);
+    ensureExternalMessageLinksOpenInNewTab(div);
     scheduleMermaidRun(div);
 }
 
@@ -2330,7 +2360,7 @@ function encodeMarkdownWorkspacePathLinkMatch(match, label, dest) {
     if (/^[A-Za-z][A-Za-z0-9+.-]*:/i.test(decodedDest) && !/^[A-Za-z]:[\\/]/.test(decodedDest) && !/^file:\/\//i.test(decodedDest)) return match;
     var rel = markdownHrefToWorkspaceOpenRel(decodedDest);
     if (!rel) return match;
-    return '[' + label + '](#ga-workspace-path=' + encodeURIComponent(rel) + '&raw=' + encodeURIComponent(decodedDest) + ')';
+    return '<span data-ga-workspace-link="' + escapeHtmlAttr(rel) + '" data-ga-workspace-raw="' + escapeHtmlAttr(decodedDest) + '">' + escapeHtml(label) + '</span>';
 }
 
 function normalizeExplicitMarkdownPathLinksInPlainText(text) {

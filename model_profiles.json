@@ -45,7 +45,7 @@
       "model": "MiniMax-M3",
       "llm_type": "openai",
       "base_url": "https://api.minimaxi.com/v1",
-      "context_window": 240000,
+      "context_window": 256000,
       "max_output_tokens": 50000,
       "model_context_window": 1000000,
       "thinking_mode": "adaptive",
@@ -53,7 +53,7 @@
       "temperature": "",
       "extra_body_json": "",
       "priority": 2,
-      "updated_at": "2026-07-03T16:08:34+0200",
+      "updated_at": "2026-07-03T17:07:07+0200",
       "api_key": "sk-cp-edJA6p8zDTwCSmIm1Ca2Q5zU_MEDPYGOk3HbTZezobxwnVy6_uG3-oLACsTr3IiQwQnY1qt424tOJ5uDRi5VkkNvFnfb7Rf17kePBXq1qF2uw4WBHS4OeWA",
       "created_at": "2026-06-28T12:07:20+0200"
     }

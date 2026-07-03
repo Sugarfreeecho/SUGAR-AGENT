@@ -1068,10 +1068,9 @@ def _run_compress_executor_dialogue(
             logger.warning("compress_history_and_key 消息链无效，改用摘录兜底")
             return _compress_executor_excerpt_fallback(dialogue_msgs, suffix=suffix), ""
         for attempt in range(2):
-            buffered: List[str] = []
-
             def _buffer_delta(piece: str) -> None:
-                buffered.append(piece)
+                if stream_sink is not None:
+                    stream_sink(piece)
 
             call_msgs = msgs
             if attempt:
@@ -1087,9 +1086,6 @@ def _run_compress_executor_dialogue(
                 raw = executor_chat_complete(call_msgs, session_id=session_id).strip()
             recap, key_body = _parse_compress_dialogue_output(raw)
             if recap and key_body:
-                if stream_sink is not None:
-                    for piece in buffered:
-                        stream_sink(piece)
                 return recap, key_body
             logger.warning("compress_history_and_key 格式无效，已丢弃输出并准备重试 attempt=%s", attempt + 1)
             _push_progress_hint(

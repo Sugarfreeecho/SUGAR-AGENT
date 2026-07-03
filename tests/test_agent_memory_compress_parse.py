@@ -99,3 +99,33 @@ def test_context_window_override_drives_auto_compress_entry(monkeypatch):
         key_context="",
         context_window=50,
     ) is True
+
+
+def test_compress_executor_stream_delta_is_forwarded_live(monkeypatch):
+    import agent_memory
+
+    order = []
+
+    monkeypatch.setattr(agent_memory, "load_prompt_template", lambda _name: "compress")
+
+    def fake_stream(_msgs, on_content_delta=None, session_id=""):
+        if on_content_delta:
+            on_content_delta("<recap>live")
+        order.append("executor_after_delta")
+        return "<recap>live recap</recap><summary>live key</summary>"
+
+    monkeypatch.setattr(agent_memory, "executor_chat_complete_stream", fake_stream)
+
+    recap, key = agent_memory._run_compress_executor_dialogue(
+        "",
+        [
+            agent_memory.UserMessage(content="old"),
+            agent_memory.AssistantMessage(content="answer"),
+        ],
+        stream_sink=lambda piece: order.append("sink:" + piece),
+        session_id="00000000-0000-0000-0000-000000000001",
+    )
+
+    assert recap == "live recap"
+    assert key == "live key"
+    assert order[:2] == ["sink:<recap>live", "executor_after_delta"]
