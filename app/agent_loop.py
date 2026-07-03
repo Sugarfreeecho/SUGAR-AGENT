@@ -19,7 +19,7 @@ import uuid
 import threading
 from datetime import datetime
 import inspect
-from typing import TypedDict, List, Dict, Any, AsyncGenerator, Callable, Optional
+from typing import TypedDict, List, Dict, Any, AsyncGenerator, Callable, Optional, Tuple
 
 from agent_harness import (
     executor_client,
@@ -1401,7 +1401,7 @@ def _save_result_to_tempfile(
     result_str: str,
     tool_name: str,
     state: Dict[str, Any],
-    preview_chars: int = 1500,
+    preview_chars: Optional[int] = None,
 ) -> str:
     """
     工具结果超过 LLM 上下文阈值时：
@@ -1425,26 +1425,47 @@ def _save_result_to_tempfile(
 
         # 用虚拟路径展示给模型（和 read_file 的输出格式一致）
         virtual_path = f"/.tool_results/{filename}"
+        if preview_chars is None:
+            preview_chars = max(0, int(LLM_CONTEXT_TRUNCATE_KEEP_CHARS)) // 2
+        preview_chars = max(0, int(preview_chars))
         preview = result_str[:preview_chars]
         total_chars = len(result_str)
-
+        hint = (
+            f"[系统提示：返回结果已被截断；原始长度 {total_chars} 字符，"
+            f"仅保留开头 {preview_chars} 字符。完整结果已落盘保存在 {virtual_path}，"
+            "请使用 read_file 分块阅读。]"
+        )
         if tool_name == "read_file":
-            return (
-                f"[系统提示：read_file 输出过大（{total_chars} chars），完整内容已保存到临时文件。\n"
-                f"建议缩小行范围分段读取，如 read_file(path, start_line=X, end_line=Y)]\n"
-                f"临时文件路径：{virtual_path}\n\n"
-                f"预览（前 {preview_chars} 字符）：\n{preview}"
+            hint = (
+                f"[系统提示：read_file 返回结果已被截断；原始长度 {total_chars} 字符，"
+                f"仅保留开头 {preview_chars} 字符。完整结果已落盘保存在 {virtual_path}，"
+                "请缩小 start_line/end_line 或使用 read_file 分块阅读该文件。]"
             )
-        else:
-            return (
-                f"[系统提示：工具输出过大（{total_chars} chars），已保存到临时文件。\n"
-                f"如需查看完整内容，请使用 read_file 读取该文件。]\n"
-                f"文件路径：{virtual_path}\n\n"
-                f"预览（前 {preview_chars} 字符）：\n{preview}"
-            )
+        return f"{hint}\n\n{preview}\n\n{hint}"
     except Exception as e:
-        logger.warning("save_result_to_tempfile failed, falling back to head+tail: %s", e)
+        logger.warning("save_result_to_tempfile failed, falling back to head-only truncation: %s", e)
         return truncate_tool_result_for_llm(result_str, LLM_CONTEXT_TRUNCATE_KEEP_CHARS)
+
+
+def _tool_result_details_for_views(
+    result_str: str,
+    tool_name: str,
+    state: Dict[str, Any],
+) -> Tuple[str, str, str]:
+    """Return (log, llm, ui) views for a tool result with one shared UI/LLM cap."""
+    result_for_log = truncate_head_tail(result_str, LOG_TRUNCATE_KEEP_CHARS)
+    limit = max(0, int(LLM_CONTEXT_TRUNCATE_KEEP_CHARS))
+    preview_chars = limit // 2
+    if len(result_str) > limit:
+        result_for_display = _save_result_to_tempfile(
+            result_str,
+            tool_name,
+            state,
+            preview_chars=preview_chars,
+        )
+    else:
+        result_for_display = result_str
+    return result_for_log, result_for_display, result_for_display
 
 
 def _cleanup_temporary_write_files(state: Dict[str, Any]) -> List[str]:
@@ -1470,8 +1491,11 @@ def _cleanup_temporary_write_files(state: Dict[str, Any]) -> List[str]:
 
 def _tool_result_user_denied_ui(tool_name: str, tool_args: Any, tool_id: str) -> Dict[str, Any]:
     result_str = "Error: User denied tool execution in UI (web confirmation)."
-    result_for_log = truncate_head_tail(result_str, LOG_TRUNCATE_KEEP_CHARS)
-    result_for_llm = truncate_tool_result_for_llm(result_str, LLM_CONTEXT_TRUNCATE_KEEP_CHARS)
+    result_for_log, result_for_llm, result_for_ui = _tool_result_details_for_views(
+        result_str,
+        tool_name,
+        {},
+    )
     return {
         "type": "tool",
         "tool_name": redact_sensitive_tool_text(tool_name),
@@ -1480,7 +1504,7 @@ def _tool_result_user_denied_ui(tool_name: str, tool_args: Any, tool_id: str) ->
         "result": result_str,
         "tool_detail_log": result_for_log,
         "tool_detail_llm": result_for_llm,
-        "tool_detail_ui": result_str,
+        "tool_detail_ui": result_for_ui,
         "result_for_log": result_for_log,
         "tool_failed": True,
     }
@@ -2085,16 +2109,19 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
                         )
                         state["key_context"] = nk
                         _persist_state(state)
+                        result_for_log, result_for_llm, result_for_ui = _tool_result_details_for_views(
+                            msg, tool_name, state
+                        )
                         return {
                             "type": "tool",
                             "tool_name": tool_name,
                             "tool_args": tool_args,
                             "tool_id": tool_id,
                             "result": msg,
-                            "tool_detail_log": truncate_head_tail(msg, LOG_TRUNCATE_KEEP_CHARS),
-                            "tool_detail_llm": truncate_tool_result_for_llm(msg, LLM_CONTEXT_TRUNCATE_KEEP_CHARS),
-                            "tool_detail_ui": msg,
-                            "result_for_log": truncate_head_tail(msg, LOG_TRUNCATE_KEEP_CHARS),
+                            "tool_detail_log": result_for_log,
+                            "tool_detail_llm": result_for_llm,
+                            "tool_detail_ui": result_for_ui,
+                            "result_for_log": result_for_log,
                             "tool_failed": _tool_result_indicates_failure(tool_name, msg),
                         }
                     return {
@@ -2155,12 +2182,9 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
                         result = f"待办更新失败：{e}"
                         todo_tool_failed = True
                     result_str = str(result)
-                    result_for_log = truncate_head_tail(result_str, LOG_TRUNCATE_KEEP_CHARS)
-                    _llm_limit = LLM_CONTEXT_TRUNCATE_KEEP_CHARS * 2
-                    if len(result_str) > _llm_limit:
-                        result_for_llm = _save_result_to_tempfile(result_str, tool_name, state)
-                    else:
-                        result_for_llm = truncate_tool_result_for_llm(result_str, LLM_CONTEXT_TRUNCATE_KEEP_CHARS)
+                    result_for_log, result_for_llm, result_for_ui = _tool_result_details_for_views(
+                        result_str, tool_name, state
+                    )
                     return {
                         "type": "tool",
                         "tool_name": tool_name,
@@ -2169,7 +2193,7 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
                         "result": result,
                         "tool_detail_log": result_for_log,
                         "tool_detail_llm": result_for_llm,
-                        "tool_detail_ui": result_str,
+                        "tool_detail_ui": result_for_ui,
                         "result_for_log": result_for_log,
                         "tool_failed": bool(
                             todo_tool_failed or _tool_result_indicates_failure(tool_name, result)
@@ -2197,14 +2221,9 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
                     except Exception as e:
                         result = f"subagent 执行异常：{e}"
                     result_str = str(result)
-                    result_for_log = truncate_head_tail(result_str, LOG_TRUNCATE_KEEP_CHARS)
-                    _llm_limit = LLM_CONTEXT_TRUNCATE_KEEP_CHARS * 2
-                    if len(result_str) > _llm_limit:
-                        result_for_llm = _save_result_to_tempfile(result_str, tool_name, state)
-                    else:
-                        result_for_llm = truncate_tool_result_for_llm(
-                            result_str, LLM_CONTEXT_TRUNCATE_KEEP_CHARS
-                        )
+                    result_for_log, result_for_llm, result_for_ui = _tool_result_details_for_views(
+                        result_str, tool_name, state
+                    )
                     return {
                         "type": "tool",
                         "tool_name": tool_name,
@@ -2213,7 +2232,7 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
                         "result": result,
                         "tool_detail_log": result_for_log,
                         "tool_detail_llm": result_for_llm,
-                        "tool_detail_ui": result_str,
+                        "tool_detail_ui": result_for_ui,
                         "result_for_log": result_for_log,
                         "tool_failed": _tool_result_indicates_failure(tool_name, result),
                     }
@@ -2237,13 +2256,9 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
                         result = f"MCP 调用异常：{e}"
                         tool_failed = True
                     result_str = str(result)
-                    result_for_log = truncate_head_tail(result_str, LOG_TRUNCATE_KEEP_CHARS)
-                    _llm_limit = LLM_CONTEXT_TRUNCATE_KEEP_CHARS * 2
-                    if len(result_str) > _llm_limit:
-                        result_for_llm = _save_result_to_tempfile(result_str, tool_name, state)
-                    else:
-                        result_for_llm = truncate_tool_result_for_llm(result_str, LLM_CONTEXT_TRUNCATE_KEEP_CHARS)
-                    result_for_ui = result_str
+                    result_for_log, result_for_llm, result_for_ui = _tool_result_details_for_views(
+                        result_str, tool_name, state
+                    )
                     tool_detail_log = result_for_log
                     tool_detail_llm = result_for_llm
                     tool_detail_ui = result_for_ui
@@ -2311,20 +2326,9 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
                     result_str = redact_sensitive_tool_text(result)
                 
                 # 1. 日志用（首尾保留LOG_TRUNCATE_KEEP_CHARS）
-                result_for_log = truncate_head_tail(result_str, LOG_TRUNCATE_KEEP_CHARS)
-                
-                # 2. LLM上下文用：activate_skill 完整返回不截断；其他工具超阈值则落盘替换，否则原有截断
-                if tool_name == "activate_skill":
-                    result_for_llm = result_str
-                else:
-                    _llm_limit = LLM_CONTEXT_TRUNCATE_KEEP_CHARS * 2
-                    if len(result_str) > _llm_limit:
-                        result_for_llm = _save_result_to_tempfile(result_str, tool_name, state)
-                    else:
-                        result_for_llm = truncate_tool_result_for_llm(result_str, LLM_CONTEXT_TRUNCATE_KEEP_CHARS)
-                
-                # 3. UI用：完整内容（不做截断，但可保留Shell的10000硬截断，后续可考虑移除）
-                result_for_ui = result_str  # 直接完整
+                result_for_log, result_for_llm, result_for_ui = _tool_result_details_for_views(
+                    result_str, tool_name, state
+                )
 
                 tool_detail_log = result_for_log
                 tool_detail_llm = result_for_llm
@@ -3363,7 +3367,7 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
                     state["final_result_retries"] = 0
                     state["empty_final_retries"] = 0
                     continue
-                final_content = (response_text or "").strip()
+                final_content = _strip_think_tags_for_final(response_text)
                 if not final_content and final_result_retries < final_result_retry_max:
                     final_result_retries += 1
                     state["final_result_retries"] = final_result_retries
@@ -3473,6 +3477,14 @@ def prepare_final_event(state: State) -> State:
         state["stream_events"].append({"type": "final", "content": state["final_response"]})
         state["_final_event_prepared"] = True
     return state
+
+
+def _strip_think_tags_for_final(text: str) -> str:
+    raw = str(text or "")
+    raw = re.sub(r"<think\b[^>]*>[\s\S]*?</think>", "", raw, flags=re.IGNORECASE).strip()
+    raw = re.sub(r"^\s*<think\b[^>]*>[\s\S]*$", "", raw, flags=re.IGNORECASE).strip()
+    raw = re.sub(r"</think\s*>", "", raw, flags=re.IGNORECASE).strip()
+    return raw
 
 
 _TITLE_PLACEHOLDER_NAMES = {"", "新会话", "未命名", "New Chat", "New Session"}

@@ -3038,9 +3038,8 @@ function applySessionEvent(event, opts) {
         markSessionRunInactive(sessionId);
         const sess = sessionStore.get(sessionId);
         if (sess) {
-            const keepFailed = sess.unread_result_status === 'failed';
             sess.unread_result = true;
-            sess.unread_result_status = (keepFailed || type === 'run_interrupted' || type === 'run_failed') ? 'failed' : 'success';
+            sess.unread_result_status = (type === 'run_interrupted' || type === 'run_failed') ? 'failed' : 'success';
             sess.unread_result_at = new Date().toISOString();
         }
         return { handled: true, runStateChanged: true, messageRecord: messageRecord };
@@ -7820,21 +7819,58 @@ function appendThinkReasoning(parts, text) {
     if (t) parts.push(t);
 }
 
+function findTagOutsideBackticks(text, tag, start) {
+    var src = String(text || '');
+    var target = String(tag || '').toLowerCase();
+    var lower = src.toLowerCase();
+    var i = Math.max(0, Number(start) || 0);
+    var codeTickLen = 0;
+    while (i < src.length) {
+        if (src.charAt(i) === '\`') {
+            var j = i + 1;
+            while (j < src.length && src.charAt(j) === '\`') j += 1;
+            var runLen = j - i;
+            if (!codeTickLen) codeTickLen = runLen;
+            else if (runLen >= codeTickLen) codeTickLen = 0;
+            i = j;
+            continue;
+        }
+        if (!codeTickLen && lower.slice(i, i + target.length) === target) return i;
+        i += 1;
+    }
+    return -1;
+}
+
+function removeTagOutsideBackticks(text, tag) {
+    var src = String(text || '');
+    var out = '';
+    var pos = 0;
+    while (pos < src.length) {
+        var idx = findTagOutsideBackticks(src, tag, pos);
+        if (idx < 0) {
+            out += src.slice(pos);
+            break;
+        }
+        out += src.slice(pos, idx);
+        pos = idx + String(tag || '').length;
+    }
+    return out;
+}
+
 function splitThinkTagsForUi(raw) {
     var text = String(raw || '');
     var reasoning = [];
     var content = '';
     var pos = 0;
-    var lower = text.toLowerCase();
     while (pos < text.length) {
-        var openIdx = lower.indexOf(THINK_OPEN_TAG, pos);
+        var openIdx = findTagOutsideBackticks(text, THINK_OPEN_TAG, pos);
         if (openIdx < 0) {
             content += text.slice(pos);
             break;
         }
         content += text.slice(pos, openIdx);
         var bodyStart = openIdx + THINK_OPEN_TAG.length;
-        var closeIdx = lower.indexOf(THINK_CLOSE_TAG, bodyStart);
+        var closeIdx = findTagOutsideBackticks(text, THINK_CLOSE_TAG, bodyStart);
         if (closeIdx < 0) {
             appendThinkReasoning(reasoning, text.slice(bodyStart));
             pos = text.length;
@@ -7851,7 +7887,7 @@ function splitThinkTagsForUi(raw) {
 }
 
 function stripOrphanThinkCloseForFinalCard(raw) {
-    return String(raw || '').replace(/<\\/think\\s*>/ig, '');
+    return removeTagOutsideBackticks(raw, THINK_CLOSE_TAG);
 }
 
 function tagSuffixPrefixLen(text, tag) {
@@ -7869,9 +7905,8 @@ function feedThinkTaggedResponseDelta(llmState, delta) {
     l.llmThinkTagCarry = (l.llmThinkTagCarry || '') + String(delta || '');
     var out = [];
     while (l.llmThinkTagCarry) {
-        var lower = l.llmThinkTagCarry.toLowerCase();
         if (l.llmThinkTagMode === 'reasoning') {
-            var closeIdx = lower.indexOf(THINK_CLOSE_TAG);
+            var closeIdx = findTagOutsideBackticks(l.llmThinkTagCarry, THINK_CLOSE_TAG, 0);
             if (closeIdx >= 0) {
                 var reasoningText = l.llmThinkTagCarry.slice(0, closeIdx);
                 if (reasoningText) out.push({ part: 'reasoning', text: reasoningText });
@@ -7879,13 +7914,14 @@ function feedThinkTaggedResponseDelta(llmState, delta) {
                 l.llmThinkTagMode = 'response';
                 continue;
             }
-            var keepReasoning = tagSuffixPrefixLen(lower, THINK_CLOSE_TAG);
+            var lowerReasoning = l.llmThinkTagCarry.toLowerCase();
+            var keepReasoning = tagSuffixPrefixLen(lowerReasoning, THINK_CLOSE_TAG);
             var emitReasoning = keepReasoning ? l.llmThinkTagCarry.slice(0, l.llmThinkTagCarry.length - keepReasoning) : l.llmThinkTagCarry;
             l.llmThinkTagCarry = l.llmThinkTagCarry.slice(emitReasoning.length);
             if (emitReasoning) out.push({ part: 'reasoning', text: emitReasoning });
             break;
         }
-        var openIdx = lower.indexOf(THINK_OPEN_TAG);
+        var openIdx = findTagOutsideBackticks(l.llmThinkTagCarry, THINK_OPEN_TAG, 0);
         if (openIdx >= 0 && l.llmThinkTagAllowLeading && !l.llmThinkTagCarry.slice(0, openIdx).trim()) {
             var responseText = l.llmThinkTagCarry.slice(0, openIdx);
             if (responseText) out.push({ part: 'response', text: responseText });
@@ -7893,7 +7929,8 @@ function feedThinkTaggedResponseDelta(llmState, delta) {
             l.llmThinkTagMode = 'reasoning';
             continue;
         }
-        var keepResponse = l.llmThinkTagAllowLeading ? tagSuffixPrefixLen(lower, THINK_OPEN_TAG) : 0;
+        var lowerResponse = l.llmThinkTagCarry.toLowerCase();
+        var keepResponse = l.llmThinkTagAllowLeading ? tagSuffixPrefixLen(lowerResponse, THINK_OPEN_TAG) : 0;
         var emitResponse = keepResponse ? l.llmThinkTagCarry.slice(0, l.llmThinkTagCarry.length - keepResponse) : l.llmThinkTagCarry;
         l.llmThinkTagCarry = l.llmThinkTagCarry.slice(emitResponse.length);
         if (emitResponse) {
@@ -11817,16 +11854,27 @@ async function sendFollowupNow(itemId, sessionId) {\r
                 persistFollowupQueue(sid);\r
                 renderFollowupQueue(sid);\r
                 scheduleFollowupQueueDrain(sid, 0);\r
-            }).catch(function () {\r
-                var latest = getFollowupQueue(sid).find(function (entry) {\r
-                    return String(entry.id) === String(itemId);\r
-                });\r
-                if (!latest || latest.status !== 'accepted') return;\r
-                latest.status = '';\r
-                latest.steerId = '';\r
-                persistFollowupQueue(sid);\r
-                renderFollowupQueue(sid);\r
-                scheduleFollowupQueueDrain(sid, 1200);\r
+            }).catch(function () {
+                var latest = getFollowupQueue(sid).find(function (entry) {
+                    return String(entry.id) === String(itemId);
+                });
+                if (!latest || latest.status !== 'accepted') return;
+                if (isSessionRunning(sid) || isServerStreamActive(sid)) {
+                    latest.status = 'sent';
+                    persistFollowupQueue(sid);
+                    renderFollowupQueue(sid);
+                    setTimeout(function () {
+                        takeFollowupItem(sid, itemId);
+                        renderFollowupQueue(sid);
+                    }, 1200);
+                    scheduleActiveSessionReconnect(sid, { delayMs: 0 });
+                    return;
+                }
+                latest.status = '';
+                latest.steerId = '';
+                persistFollowupQueue(sid);
+                renderFollowupQueue(sid);
+                scheduleFollowupQueueDrain(sid, 1200);
             });\r
         }, 1200);\r
         return;\r

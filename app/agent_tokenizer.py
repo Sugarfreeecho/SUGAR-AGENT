@@ -363,26 +363,30 @@ def messages_for_openai_turns(llm_history: List[Any]) -> List[Any]:
 
 def build_env_static(session_id: Optional[str] = None) -> str:
     """Build the Environment block: calendar month, OS, paths, session storage (no live workspace listing)."""
-    from agent_harness import PROJECT_ROOT, WORK_DIR
+    from agent_harness import PROJECT_ROOT as AGENT_PROJECT_ROOT, WORK_DIR
     from agent_tools import describe_run_shell_executor_for_prompt
 
     sid = (session_id or "").strip()
 
     wdir = str(WORK_DIR.resolve())
-    proj = str(PROJECT_ROOT.resolve())
+    proj = str(AGENT_PROJECT_ROOT.resolve())
 
     session_lines = ""
     if sid:
         sdir = (WORK_DIR / "sessions" / sid).resolve()
-        v_key = f"sessions/{sid}/key_context.md"
+        v_session = f"/sessions/{sid}"
+        v_key = f"{v_session}/key_context.md"
+        v_todo = f"{v_session}/todo_plan.md"
         session_lines = f"""
-- **This session's directory (absolute)**: {sdir}
-  - On-disk files include: `llm_history.json`, `dialogue_history.json` (user↔final from `ui_events`), `work_messages.json`, `ui_events.json`, `key_context.md`, `todo_plan.md`, `metadata.json`, and related artifacts.
-  - You may **read** or **grep** under this folder to inspect the **full** persisted history or event stream when you need more detail than the in-context messages.
-  - **Key information** should be written to **`key_context.md`** when it must persist across turns. Virtual path under the work root: `/{v_key}`.
-  - **What the extra `key_context` `system` message contains** (when non-empty): The server injects **full `key_context.md` body** as rendered for the model (legacy sessions may still strip an embedded `## Todo 计划` if present). **Todo** lives in **`todo_plan.md`** in the same folder—use **`update_todo`** or **`read_file`** on `sessions/{sid}/todo_plan.md` for the live plan. Use **`context_manage`** with `mode=edit_key_context` to revise key text per instructions."""
+- **Session storage directory**: {sdir}
+  - Virtual path from `WORK_DIR`: `{v_session}`. Use this virtual path with file tools when possible; OS-absolute paths are shown only for orientation.
+  - Main files: `llm_history.json`, `dialogue_history.json` (user↔final from `ui_events`), `work_messages.json`, `ui_events.json`, `key_context.md`, `todo_plan.md`, `metadata.json`, plus related artifacts.
+  - Read or grep this directory when in-context messages are insufficient and you need persisted history or the event stream.
+  - Persistent key facts belong in `key_context.md`: `{v_key}`. Use `context_manage` with `mode=edit_key_context` to revise it.
+  - Live todo state belongs in `todo_plan.md`: `{v_todo}`. Use `update_todo`, or `read_file` on `{v_todo}` when you need to inspect it.
+  - Extra `key_context` system message: when non-empty, the server injects the rendered full `key_context.md` body; legacy sessions may strip an embedded `## Todo 计划` section."""
     else:
-        session_lines = "\n- **Session directory**: not set for this run."
+        session_lines = "\n- **Session storage directory**: not set for this run."
 
     run_shell_executor_hint = describe_run_shell_executor_for_prompt()
     current_year_month = datetime.now().strftime("%Y-%m")
@@ -393,8 +397,13 @@ def build_env_static(session_id: Optional[str] = None) -> str:
 - **OS**: {platform.system()} | **Python**: {platform.python_version()}
 {run_shell_executor_hint}
 - **MCP extensions** (optional): With `mcp_servers.json` at the project root (or env `MCP_SERVERS_JSON`), or settings saved via **Advanced settings → MCP configuration**, extra tools appear as `mcp_<server_alias>_<tool_name>`. Default `MCP_UI_APPROVAL=1` prompts in the browser for each MCP call; set `0` to disable. Use `MCP_UI_APPROVAL_ALLOW_REGEX` to skip approval for matching tool names.
-- **Project / repository root** (`General_Agent` tree — this agent's source root for self-location): {proj}
-- **Working directory** (`WORK_DIR`; tool sandbox — virtual `/` maps here): {wdir}. **`write_file`**, **`web_download`**, **`delete_file`** `.trash/`, and **`run_shell`** (when restricted) use this tree only unless UI approves broader paths.
+- **Agent project root** (`AGENT_PROJECT_ROOT`): {proj}
+  - This is the agent application's own source tree and project-level config root, including files such as `app/agent_loop.py`, `app/agent_tools.py`, `app/agent_harness.py`, `app/agent_tokenizer.py`, `app/prompt.md`, and `mcp_servers.json`.
+  - When the user asks about "your" features, mechanisms, configuration, tool behavior, prompt behavior, self-checks, or asks you to inspect/check yourself, first use this root to read the relevant code and infer the agent's actual behavior before answering.
+- **Work root** (`WORK_DIR`): {wdir}
+  - Virtual `/` maps to this directory. Relative paths and virtual paths like `/outputs/a.txt` resolve under `WORK_DIR`.
+  - `write_file`, `web_download`, `delete_file` (soft-delete target: `WORK_DIR/.trash/`), and restricted `run_shell` write or run inside this tree unless the UI approves broader access.
+  - `delete_file` refuses protected tool state under `sessions/`, `skills/`, `.trash/`, and their children.
 
 ## This conversation's storage{session_lines}
     """.strip()

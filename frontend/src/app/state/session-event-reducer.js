@@ -62,9 +62,8 @@ function applySessionEvent(event, opts) {
         markSessionRunInactive(sessionId);
         const sess = sessionStore.get(sessionId);
         if (sess) {
-            const keepFailed = sess.unread_result_status === 'failed';
             sess.unread_result = true;
-            sess.unread_result_status = (keepFailed || type === 'run_interrupted' || type === 'run_failed') ? 'failed' : 'success';
+            sess.unread_result_status = (type === 'run_interrupted' || type === 'run_failed') ? 'failed' : 'success';
             sess.unread_result_at = new Date().toISOString();
         }
         return { handled: true, runStateChanged: true, messageRecord: messageRecord };

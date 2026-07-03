@@ -1036,6 +1036,17 @@ async function sendFollowupNow(itemId, sessionId) {
                     return String(entry.id) === String(itemId);
                 });
                 if (!latest || latest.status !== 'accepted') return;
+                if (isSessionRunning(sid) || isServerStreamActive(sid)) {
+                    latest.status = 'sent';
+                    persistFollowupQueue(sid);
+                    renderFollowupQueue(sid);
+                    setTimeout(function () {
+                        takeFollowupItem(sid, itemId);
+                        renderFollowupQueue(sid);
+                    }, 1200);
+                    scheduleActiveSessionReconnect(sid, { delayMs: 0 });
+                    return;
+                }
                 latest.status = '';
                 latest.steerId = '';
                 persistFollowupQueue(sid);

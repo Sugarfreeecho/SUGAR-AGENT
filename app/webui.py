@@ -3517,7 +3517,7 @@ _ENV_GROUP_ORDER: list[tuple[str, str, list[str]]] = [
         "日志与截断",
         [
             "LOG_TRUNCATE_KEEP_CHARS",
-            "LLM_CONTEXT_TRUNCATE_KEEP_CHARS",
+            "TOOL_RESULT_TRUNCATE_KEEP_CHARS",
             "GREP_MAX_MATCH_LINES",
             "GLOB_MAX_MATCHES",
             "LS_MAX_ENTRIES",
@@ -3585,7 +3585,8 @@ _ENV_HINTS: dict[str, str] = {
     "REPEAT_DETECTION_THRESHOLD_SUMMARY": "重复多少次输出后插入系统提示。",
     "REPEAT_DETECTION_THRESHOLD_ERROR": "重复多少次后中止并报错。",
     "LOG_TRUNCATE_KEEP_CHARS": "日志/终端单行展示时每端保留字符数。",
-    "LLM_CONTEXT_TRUNCATE_KEEP_CHARS": "写入 LLM 上下文的单条工具结果首尾各保留字符数（过长时中间省略并在开头提示分块阅读）。",
+    "TOOL_RESULT_TRUNCATE_KEEP_CHARS": "单条工具结果触发落盘的字符阈值；超过该值时完整结果落盘，UI/LLM 保留头部一半字符并在截断结果首尾提示路径。",
+    "LLM_CONTEXT_TRUNCATE_KEEP_CHARS": "旧变量名，仍兼容读取；建议改用 TOOL_RESULT_TRUNCATE_KEEP_CHARS。",
     "GREP_MAX_MATCH_LINES": "grep 最多返回的匹配行数（跨文件累计）。",
     "GLOB_MAX_MATCHES": "glob 最多返回的路径条数。",
     "LS_MAX_ENTRIES": "ls/list_dir 单层目录最多列出的条目数。",

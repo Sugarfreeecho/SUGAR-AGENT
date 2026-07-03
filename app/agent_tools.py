@@ -37,7 +37,6 @@ from agent_harness import (
     WORK_DIR,
     logger,
     todo_manager,
-    truncate_head_tail,
 )
 
 # ---------------------------------------------------------------------------
@@ -888,9 +887,8 @@ def _paths_inside_workspace(cmd: str, workspace: Path) -> bool:
 
 
 def _truncate_output(text: str, max_len: int = 10000) -> str:
-    """按 max_len 估算首尾各保留约一半长度，做 truncate_head_tail 截断。"""
-    keep_chars = max(1, max_len // 2)
-    return truncate_head_tail(text, keep_chars)
+    """Return shell output unchanged; central tool-result handling applies the shared cap."""
+    return text if isinstance(text, str) else str(text)
 
 
 def _posix_shell_eval_wrapper(script: str) -> str:
@@ -2225,23 +2223,9 @@ def grep(
         files_skipped = 0
 
         def _truncate_line(text: str, cap: int) -> str:
-            """围绕首次匹配位置截断，保留关键词前后上下文。"""
             if len(text) <= cap:
                 return text
-            m = regex.search(text)
-            if not m:
-                return text[:cap] + f"... [truncated, {len(text)} chars total]"
-            budget = cap - 80
-            before_need = budget // 3
-            after_need = budget - before_need
-            show_start = max(0, m.start() - before_need)
-            show_end = min(len(text), m.end() + after_need)
-            actual_before = m.start() - show_start
-            if actual_before < before_need:
-                show_end = min(len(text), show_end + (before_need - actual_before))
-            prefix = "... " if show_start > 0 else ""
-            suffix = f"... [truncated, {len(text)} chars total]" if show_end < len(text) else ""
-            return prefix + text[show_start:show_end] + suffix
+            return text[:cap] + f"... [truncated, {len(text)} chars total]"
 
         for file in iter_files():
             # 跳过超大文件
@@ -2583,6 +2567,16 @@ def _html_title(html_text: str) -> str:
     return _web_normalize(_web_strip_tags(m.group(1)))
 
 
+def _tool_result_truncate_keep_chars_from_env() -> int:
+    raw = os.getenv("TOOL_RESULT_TRUNCATE_KEEP_CHARS")
+    if raw is None or str(raw).strip() == "":
+        raw = os.getenv("LLM_CONTEXT_TRUNCATE_KEEP_CHARS", "40000")
+    try:
+        return max(0, int(str(raw).strip()))
+    except (TypeError, ValueError):
+        return 40000
+
+
 async def web_fetch(
     url: str,
     max_chars: Optional[int] = None,
@@ -2591,14 +2585,15 @@ async def web_fetch(
 ) -> str:
     """
     抓取 URL 的文本化内容（简单去 HTML）。仅允许 http(s)，并拒绝解析到内网地址。
-    长度上限：`max_chars`（默认 50000），兼容别名 `max_length`、`limit`（后者优先顺序：max_chars > max_length > limit）。
+    长度上限：`max_chars`（默认 TOOL_RESULT_TRUNCATE_KEEP_CHARS），兼容别名 `max_length`、`limit`（后者优先顺序：max_chars > max_length > limit）。
     """
     ok, err = _url_safe_for_fetch(url)
     if not ok:
         return json.dumps({"error": f"URL blocked: {err}", "url": url}, ensure_ascii=False)
 
-    cap_raw = max_chars if max_chars is not None else max_length if max_length is not None else limit if limit is not None else 50000
-    max_chars = max(500, min(int(cap_raw or 50000), 200_000))
+    default_cap = _tool_result_truncate_keep_chars_from_env()
+    cap_raw = max_chars if max_chars is not None else max_length if max_length is not None else limit if limit is not None else default_cap
+    max_chars = max(500, min(int(cap_raw or default_cap), 200_000))
 
     try:
         async with httpx.AsyncClient(
@@ -3155,8 +3150,8 @@ OPENAI_TOOL_DEFINITIONS: List[Dict[str, Any]] = [
             "url": {"type": "string", "description": "Full http or https URL"},
             "max_chars": {
                 "type": "integer",
-                "description": "Max characters of extracted text (default 50000, cap 200000). Aliases: max_length, limit.",
-                "default": 50000,
+                "description": "Max characters of extracted text (default TOOL_RESULT_TRUNCATE_KEEP_CHARS, cap 200000). Aliases: max_length, limit.",
+                "default": _tool_result_truncate_keep_chars_from_env(),
             },
             "max_length": {"type": "integer", "description": "Alias for max_chars."},
             "limit": {"type": "integer", "description": "Alias for max_chars."},

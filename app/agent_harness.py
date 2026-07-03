@@ -409,8 +409,19 @@ REPEAT_DETECTION_THRESHOLD_ERROR = int(os.getenv("REPEAT_DETECTION_THRESHOLD_ERR
 # 日志消息截断保留字符数（首尾各保留N字符）
 LOG_TRUNCATE_KEEP_CHARS = int(os.getenv("LOG_TRUNCATE_KEEP_CHARS", "200"))
 
-# LLM上下文工具结果截断保留字符数（首尾各保留N字符）
-LLM_CONTEXT_TRUNCATE_KEEP_CHARS = int(os.getenv("LLM_CONTEXT_TRUNCATE_KEEP_CHARS", "20000"))
+def _tool_result_truncate_keep_chars_from_env() -> int:
+    raw = os.getenv("TOOL_RESULT_TRUNCATE_KEEP_CHARS")
+    if raw is None or str(raw).strip() == "":
+        raw = os.getenv("LLM_CONTEXT_TRUNCATE_KEEP_CHARS", "40000")
+    try:
+        return max(0, int(str(raw).strip()))
+    except (TypeError, ValueError):
+        return 40000
+
+
+# 兼容旧名称；实际配置统一使用 TOOL_RESULT_TRUNCATE_KEEP_CHARS，值表示落盘触发阈值。
+TOOL_RESULT_TRUNCATE_KEEP_CHARS = _tool_result_truncate_keep_chars_from_env()
+LLM_CONTEXT_TRUNCATE_KEEP_CHARS = TOOL_RESULT_TRUNCATE_KEEP_CHARS
 
 MAX_PARALLEL_TOOLS = int(os.getenv("MAX_PARALLEL_TOOLS", "10"))
 
@@ -485,16 +496,15 @@ def truncate_head_tail(text: str, keep_chars: int) -> str:
 
 
 def truncate_tool_result_for_llm(text: Any, keep_chars: int) -> str:
-    """工具结果写入 LLM 上下文前的首尾截断；过长时在开头提示模型分块阅读。"""
+    """工具结果写入 UI/LLM 前的头部截断；过长时提示模型分块阅读。"""
     if not isinstance(text, str):
         text = str(text)
     if len(text) <= keep_chars * 2:
         return text
     notice = (
-        "[系统提示：以下工具返回过长已做首尾截断，请勿当作全文；请收窄查询或分块读取（如缩小 grep/glob、"
-        "read_file 指定 start_line/end_line）。]\n"
+        "[系统提示：工具返回结果已被截断；仅保留开头内容。请收窄查询或分块读取完整结果。]\n"
     )
-    return notice + truncate_head_tail(text, keep_chars)
+    return notice + text[: max(0, int(keep_chars))]
 
 # ==================== 日志配置 ====================
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -849,7 +859,8 @@ def refresh_executor_client_from_env() -> None:
     """
     global OPENAI_API_KEY, OPENAI_BASE_URL, executor_client, executor_model
     global EXECUTOR_LLM, EXECUTOR_LLM_TYPE, MAX_OUTPUT_TOKENS
-    global CONTEXT_WINDOW, CONTEXT_KEEP_RECENT_TURNS, MAX_REACT_ITER, SUBAGENT_MAX_REACT_ITER, LLM_CONTEXT_TRUNCATE_KEEP_CHARS
+    global CONTEXT_WINDOW, CONTEXT_KEEP_RECENT_TURNS, MAX_REACT_ITER, SUBAGENT_MAX_REACT_ITER
+    global TOOL_RESULT_TRUNCATE_KEEP_CHARS, LLM_CONTEXT_TRUNCATE_KEEP_CHARS
     global CONTEXT_COMPRESS_FAILURE_MAX_TOKENS, CONTEXT_COMPRESS_MAX_ROUNDS, CONTEXT_COMPRESS_ROUND3_MAX_REACT
     global CONTEXT_COMPRESS_TARGET_RATIO
     global EXECUTOR_EXTRA_BODY, EXECUTOR_REASONING_EFFORT
@@ -861,7 +872,8 @@ def refresh_executor_client_from_env() -> None:
     MAX_OUTPUT_TOKENS = int(os.getenv("MAX_OUTPUT_TOKENS", "8192"))
     CONTEXT_WINDOW = _context_env_int("CONTEXT_WINDOW", "128000")
     CONTEXT_KEEP_RECENT_TURNS = _context_env_int("CONTEXT_KEEP_RECENT_TURNS", "3")
-    LLM_CONTEXT_TRUNCATE_KEEP_CHARS = int(os.getenv("LLM_CONTEXT_TRUNCATE_KEEP_CHARS", "20000"))
+    TOOL_RESULT_TRUNCATE_KEEP_CHARS = _tool_result_truncate_keep_chars_from_env()
+    LLM_CONTEXT_TRUNCATE_KEEP_CHARS = TOOL_RESULT_TRUNCATE_KEEP_CHARS
     MAX_REACT_ITER = int(os.getenv("MAX_REACT_ITER", "100"))
     SUBAGENT_MAX_REACT_ITER = max(1, int(os.getenv("SUBAGENT_MAX_REACT_ITER", "100")))
     _failure_cap_raw = os.getenv("CONTEXT_COMPRESS_FAILURE_MAX_TOKENS")
