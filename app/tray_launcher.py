@@ -42,6 +42,8 @@ HOST = "127.0.0.1"
 PORT = 8192
 BASE_URL = f"http://{HOST}:{PORT}"
 WM_TRAY = win32con.WM_USER + 20
+WM_RESTORE_TRAY = win32con.WM_USER + 21
+TASKBAR_CREATED = win32gui.RegisterWindowMessage("TaskbarCreated")
 
 MENU_OPEN_WEBUI = 1001
 MENU_OPEN_ENV = 1002
@@ -65,6 +67,7 @@ LOG_FILE = LOG_DIR / "agent_terminal.log"
 PYTHONW_EXE = ROOT / "python" / "pythonw.exe"
 COLORED_LOG_VIEWER = ROOT / "app" / "colored_log_viewer.ps1"
 TRAY_ICON_FILE = ROOT / "app" / "assets" / "sugar_tray.ico"
+WINDOW_CLASS_NAME = "MyAgentTrayLauncherWindow"
 
 
 def _append_log(line: str = "") -> None:
@@ -96,6 +99,40 @@ def _open_url_in_browser(path: str = "/", refresh: bool = True) -> None:
         webbrowser.open(url, new=0, autoraise=True)
 
 
+def _find_existing_tray_window() -> int:
+    try:
+        return int(win32gui.FindWindow(WINDOW_CLASS_NAME, None) or 0)
+    except win32gui.error:
+        return 0
+
+
+def _notify_existing_instance(open_browser: bool = True) -> bool:
+    hwnd = _find_existing_tray_window()
+    if not hwnd:
+        return False
+    try:
+        win32gui.PostMessage(hwnd, WM_RESTORE_TRAY, int(bool(open_browser)), 0)
+        return True
+    except win32gui.error as exc:
+        _append_log(f"Unable to notify existing tray launcher: {exc}")
+        return False
+
+
+def _spawn_daemon() -> None:
+    daemon_python = PYTHONW_EXE if PYTHONW_EXE.exists() else PYTHON_EXE
+    env = os.environ.copy()
+    env["PYTHONIOENCODING"] = "utf-8"
+    subprocess.Popen(
+        [str(daemon_python), str(Path(__file__).resolve()), "--daemon"],
+        cwd=str(ROOT),
+        env=env,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        creationflags=subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS,
+    )
+
+
 def run_starter() -> int:
     print("=" * 50)
     print(f"              {APP_NAME}")
@@ -114,6 +151,10 @@ def run_starter() -> int:
 
     if _is_port_listening():
         print(MSG_RUNNING)
+        _append_log(MSG_RUNNING)
+        notified = _notify_existing_instance(open_browser=True)
+        if not notified:
+            _spawn_daemon()
         _open_url_in_browser("/", refresh=True)
         return 0
 
@@ -124,18 +165,7 @@ def run_starter() -> int:
     _append_log(MSG_STARTING)
     _append_log(f"{MSG_LOG}: {LOG_FILE}")
 
-    daemon_python = PYTHONW_EXE if PYTHONW_EXE.exists() else PYTHON_EXE
-    env = os.environ.copy()
-    env["PYTHONIOENCODING"] = "utf-8"
-    subprocess.Popen(
-        [str(daemon_python), str(Path(__file__).resolve()), "--daemon"],
-        cwd=str(ROOT),
-        env=env,
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        creationflags=subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS,
-    )
+    _spawn_daemon()
 
     deadline = time.monotonic() + 120
     dots = 0
@@ -170,7 +200,8 @@ class TrayLauncher:
     def run(self) -> int:
         if self.already_running:
             _append_log(MSG_RUNNING)
-            self._open_url("/", refresh=True)
+            _notify_existing_instance(open_browser=True)
+            _open_url_in_browser("/", refresh=True)
             return 0
         if not self._check_files():
             return 1
@@ -205,12 +236,14 @@ class TrayLauncher:
     def _create_window(self) -> None:
         message_map = {
             WM_TRAY: self._on_tray,
+            WM_RESTORE_TRAY: self._on_restore_tray,
+            TASKBAR_CREATED: self._on_taskbar_created,
             win32con.WM_COMMAND: self._on_command,
             win32con.WM_DESTROY: self._on_destroy,
         }
         wnd_class = win32gui.WNDCLASS()
         wnd_class.hInstance = win32api.GetModuleHandle(None)
-        wnd_class.lpszClassName = "MyAgentTrayLauncherWindow"
+        wnd_class.lpszClassName = WINDOW_CLASS_NAME
         wnd_class.lpfnWndProc = message_map
         try:
             win32gui.RegisterClass(wnd_class)
@@ -231,6 +264,16 @@ class TrayLauncher:
         )
 
     def _add_tray_icon(self) -> None:
+        try:
+            win32gui.Shell_NotifyIcon(win32gui.NIM_DELETE, (self.hwnd, 0))
+        except win32gui.error:
+            pass
+        if self.hicon:
+            try:
+                win32gui.DestroyIcon(self.hicon)
+            except win32gui.error:
+                pass
+            self.hicon = None
         self.hicon = self._create_icon()
         nid = (
             self.hwnd,
@@ -240,7 +283,11 @@ class TrayLauncher:
             self.hicon,
             APP_NAME,
         )
-        win32gui.Shell_NotifyIcon(win32gui.NIM_ADD, nid)
+        try:
+            win32gui.Shell_NotifyIcon(win32gui.NIM_ADD, nid)
+        except win32gui.error as exc:
+            _append_log(f"Unable to add tray icon: {exc}")
+            raise
 
     def _create_icon(self) -> int:
         if not TRAY_ICON_FILE.exists():
@@ -298,6 +345,22 @@ class TrayLauncher:
                 self._show_menu()
         except Exception as exc:
             print(f"Tray handler error: {exc}")
+        return True
+
+    def _on_restore_tray(self, hwnd, msg, wparam, lparam):
+        try:
+            self._add_tray_icon()
+            if int(wparam or 0):
+                self._open_url("/", refresh=True)
+        except Exception as exc:
+            _append_log(f"Tray restore error: {exc}")
+        return True
+
+    def _on_taskbar_created(self, hwnd, msg, wparam, lparam):
+        try:
+            self._add_tray_icon()
+        except Exception as exc:
+            _append_log(f"Taskbar tray restore error: {exc}")
         return True
 
     def _show_menu(self) -> None:
@@ -460,6 +523,12 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument("--daemon", action="store_true")
     args, _ = parser.parse_known_args()
-    if args.daemon:
-        raise SystemExit(TrayLauncher().run())
-    raise SystemExit(run_starter())
+    try:
+        if args.daemon:
+            raise SystemExit(TrayLauncher().run())
+        raise SystemExit(run_starter())
+    except SystemExit:
+        raise
+    except Exception as exc:
+        _append_log(f"Tray launcher fatal error: {type(exc).__name__}: {exc}")
+        raise
