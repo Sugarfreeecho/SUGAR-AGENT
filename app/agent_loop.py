@@ -1,4 +1,4 @@
-﻿"""
+"""
 agent_loop — ReAct 主循环与 SSE 事件源。
 
 流程（单轮用户消息）
@@ -690,12 +690,53 @@ def _pipeline_timing_log(label: str, session_id: str, timings: Dict[str, int], *
 
 
 def _pipeline_step_timing_log(label: str, session_id: str, step: str, ms: int, **extra: Any) -> None:
+    # Step timings are accumulated by the caller and emitted through the
+    # corresponding phase-level *_timing log. Keep this as a compatibility
+    # shim for older call sites without adding one log line per step.
+    return
+
+
+def _llm_stream_timing_log(
+    session_id: str,
+    react_iter: int,
+    model: str,
+    timings: List[Dict[str, Any]],
+) -> None:
+    if not timings:
+        return
     try:
-        parts = [f"{k}={v}" for k, v in extra.items()]
-        suffix = (" " + " ".join(parts)) if parts else ""
-        logger.info("%s session=%s step=%s ms=%sms%s", label, session_id, step, int(ms), suffix)
+        parts: List[str] = []
+        total_since_api = 0
+        for item in timings:
+            step = str(item.get("step") or "").strip()
+            if not step:
+                continue
+            try:
+                ms_since_api_start = int(float(item.get("ms_since_api_start") or 0))
+            except Exception:
+                ms_since_api_start = 0
+            total_since_api = max(total_since_api, ms_since_api_start)
+            extras: List[str] = []
+            for k, v in item.items():
+                if k in {"step", "ms_since_api_start", "model"} or v is None:
+                    continue
+                extras.append(f"{k}={v}")
+            detail = f"{step}@{max(0, ms_since_api_start)}ms"
+            if extras:
+                detail += "(" + ",".join(extras) + ")"
+            parts.append(detail)
+        if not parts:
+            return
+        logger.info(
+            "llm_stream_timing session=%s react_iter=%s total_since_api=%sms model=%s steps=%s",
+            session_id,
+            int(react_iter),
+            max(0, total_since_api),
+            redact_sensitive_tool_text(str(model or "")),
+            " ".join(parts),
+        )
     except Exception:
-        logger.debug("%s step log failed", label, exc_info=True)
+        logger.debug("llm_stream_timing log failed", exc_info=True)
 
 
 def _runtime_v2_append_model_message(state: State, msg: Any) -> None:
@@ -2524,6 +2565,7 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
                 async_stream_q: asyncio.Queue = asyncio.Queue()
                 sync_q = _ThreadToAsyncQueue(asyncio.get_running_loop(), async_stream_q)
                 stream_abort_event = threading.Event()
+                stream_timing_events: List[Dict[str, Any]] = []
                 def _stream_model_switch_status(ev: Dict[str, Any]) -> None:
                     if not _should_suppress_model_switch_status(state, ev):
                         sync_q.put(("status", ev))
@@ -2577,36 +2619,8 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
                         if tag == "stream_timing":
                             payload_dict = payload if isinstance(payload, dict) else {}
                             step = str(payload_dict.get("step") or "").strip()
-                            try:
-                                ms_since_api_start = int(float(payload_dict.get("ms_since_api_start") or 0))
-                            except Exception:
-                                ms_since_api_start = 0
-                            extra_parts: List[str] = []
-                            for _k in (
-                                "attempt",
-                                "messages",
-                                "tools",
-                                "max_tokens",
-                                "chunk_count",
-                                "delta_type",
-                                "chars",
-                                "delay_ms",
-                                "error",
-                                "reasoning_chars",
-                                "content_chars",
-                                "tool_calls",
-                            ):
-                                if _k in payload_dict and payload_dict.get(_k) is not None:
-                                    extra_parts.append(f"{_k}={payload_dict.get(_k)}")
-                            logger.info(
-                                "llm_stream_step_timing session=%s react_iter=%s step=%s ms_since_api_start=%sms model=%s %s",
-                                state["session_id"],
-                                int(iter_count),
-                                step,
-                                max(0, ms_since_api_start),
-                                redact_sensitive_tool_text(str(payload_dict.get("model") or iter_model)),
-                                " ".join(extra_parts),
-                            )
+                            if step:
+                                stream_timing_events.append(dict(payload_dict))
                             continue
                         if tag == "usage":
                             llm_call_usage = payload
@@ -2736,6 +2750,12 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
                     except Exception:
                         pass
                     _set_model_switch_status_callback(iter_client, None)
+                    _llm_stream_timing_log(
+                        state["session_id"],
+                        int(iter_count),
+                        actual_response_model or iter_model,
+                        stream_timing_events,
+                    )
                 if steer_interrupted_this_call:
                     for _idx, _task in list(early_tool_tasks.items()):
                         if not _task.done():

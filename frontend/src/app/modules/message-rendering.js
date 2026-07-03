@@ -3368,21 +3368,27 @@ function appendLog(ctx, content, type, runSessionId, reactIter) {
     return createProcessFeedRow(ctx, type, tStr, so, runSessionId);
 }
 
+function getLastProcessFeedItem(body) {
+    if (!body || !body.querySelectorAll) return null;
+    var rows = body.querySelectorAll('.feed-item');
+    return rows && rows.length ? rows[rows.length - 1] : null;
+}
+
 function appendModelSwitchStatus(ctx, event, runSessionId) {
     if (!ctx) return null;
     var content = String((event && event.content) || '').trim();
     if (!content) return null;
     var sc = ctx._modelSwitchStatusScroller;
-    if (!sc || !sc.isConnected) {
-        var body = getProcessBody(ctx);
-        var row = null;
-        if (body && body.querySelectorAll) {
-            var rows = body.querySelectorAll('.feed-item[data-model-switch-status="1"]');
-            row = rows && rows.length ? rows[rows.length - 1] : null;
-        }
-        sc = row ? row.querySelector('.feed-chunk-scroller') : null;
+    var body = getProcessBody(ctx);
+    var lastRow = getLastProcessFeedItem(body);
+    var row = sc && sc.isConnected && sc.closest ? sc.closest('.feed-item') : null;
+    var canReuse = !!(row && row === lastRow && row.getAttribute('data-model-switch-status') === '1');
+    if (!canReuse && lastRow && lastRow.getAttribute('data-model-switch-status') === '1') {
+        sc = lastRow.querySelector('.feed-chunk-scroller');
+        row = lastRow;
+        canReuse = !!(sc && sc.isConnected);
     }
-    if (!sc || !sc.isConnected) {
+    if (!canReuse) {
         sc = appendLog(ctx, content, 'status', runSessionId);
         var newRow = sc && sc.closest ? sc.closest('.feed-item') : null;
         if (newRow) newRow.setAttribute('data-model-switch-status', '1');

@@ -1,49 +1,4 @@
 const SSE_IDLE_TIMEOUT_MS = 45000;
-const locallyRenderedFollowupSteers = new Set();
-
-function followupSteerRenderKey(ev) {
-    if (!ev || typeof ev !== 'object') return '';
-    const clientId = String(ev.client_id || ev.clientId || '').trim();
-    if (clientId) return 'client:' + clientId;
-    const steerId = String(ev.steer_id || ev.steerId || '').trim();
-    if (steerId) return 'steer:' + steerId;
-    return '';
-}
-
-function markFollowupSteerRendered(ev) {
-    const key = followupSteerRenderKey(ev);
-    if (key) locallyRenderedFollowupSteers.add(key);
-}
-
-function consumeLocallyRenderedFollowupSteer(ev) {
-    const key = followupSteerRenderKey(ev);
-    if (!key || !locallyRenderedFollowupSteers.has(key)) return false;
-    locallyRenderedFollowupSteers.delete(key);
-    return true;
-}
-
-function renderAcceptedFollowupSteer(sessionId, item, steerResult) {
-    const sid = String(sessionId || '');
-    if (!sid || !item) return;
-    const ev = {
-        type: 'user_steer',
-        content: item.text || '',
-        steer: true,
-        steer_id: (steerResult && steerResult.item && steerResult.item.id) || item.steerId || '',
-        client_id: item.clientId || '',
-        created_at: new Date().toISOString(),
-    };
-    markFollowupSteerRendered(ev);
-    if (sid !== currentSessionId) return;
-    const runState = getSessionRunState(sid);
-    let runCtx = runState && runState.ctx;
-    if (!runCtx && getVisibleChatStream()) {
-        runCtx = newDomContext(getVisibleChatStream());
-    }
-    if (!runCtx) return;
-    appendLog(runCtx, ev.content || '', 'user-steer', sid);
-    scrollProcessBodyToBottom(runCtx, sid);
-}
 
 function shouldApplySseSeqFilter(parsed) {
     if (!parsed || parsed.protocol === 'runtime_v2') return false;
@@ -141,14 +96,13 @@ async function consumeAgentSseResponse(response, runCtx, runSessionId, streamEve
                 if (shouldApplySseSeqFilter(parsed) && !sessionStore.shouldAcceptSseEvent(eventSessionId, parsed.seq)) continue;
                 if (parsed.type === 'user_steer' && parsed.steer) {
                     var steerEventIndex = parsed.ephemeral && Number.isFinite(Number(parsed.seq)) ? Number(parsed.seq) : streamEventIdx;
-                    var alreadyRenderedSteer = consumeLocallyRenderedFollowupSteer(parsed);
                     try {
                         applyMessageEvent(eventSessionId, parsed, steerEventIndex, 'sse');
                     } catch (eStoreSteer) {
                         console.error('store user steer event failed:', eStoreSteer);
                     }
                     removeConsumedFollowupSteer(eventSessionId, parsed);
-                    if (!alreadyRenderedSteer) appendLog(runCtx, parsed.content || '', 'user-steer', runSessionId);
+                    appendLog(runCtx, parsed.content || '', 'user-steer', runSessionId);
                     streamEventIdx += 1;
                     continue;
                 }
@@ -487,29 +441,50 @@ function nowPipelineMs() {
     return (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
 }
 
-function reportClientPipelineStep(ctx, step, startedAt, extra) {
-    if (!ctx || !step) return;
-    const now = nowPipelineMs();
-    const payload = {
-        label: ctx.label || 'client_pipeline_step_timing',
+function isClientPipelineTerminalStep(label, step) {
+    var s = String(step || '');
+    var l = String(label || '');
+    if (l.indexOf('client_send_pipeline') >= 0) {
+        return s === 'release_send_lock_and_schedule_followup';
+    }
+    if (l.indexOf('client_followup') >= 0) {
+        return s === 'followup_cancel_after_steer'
+            || s === 'followup_restart_takeover'
+            || s === 'followup_accepted_by_running_agent'
+            || s === 'followup_steer_error'
+            || s === 'followup_fallback_to_chat';
+    }
+    return /(?:final|finish|done|error|failed|cancel|release)$/i.test(s);
+}
+
+function flushClientPipelineTiming(ctx, finalStep) {
+    if (!ctx || ctx._timingFlushed) return;
+    var steps = ctx._timingSteps || {};
+    var names = Object.keys(steps);
+    if (!names.length) return;
+    var now = nowPipelineMs();
+    var label = String(ctx.label || 'client_pipeline_step_timing').replace(/_step_timing$/, '_timing');
+    var payload = {
+        label: label,
         session_id: ctx.sessionId || '',
         run_id: ctx.runId || '',
         mode: ctx.mode || '',
-        step: step,
-        ms: Math.max(0, Math.round(now - Number(startedAt || now))),
-        since_start_ms: Math.max(0, Math.round(now - Number(ctx.startedAt || now))),
-        extra: extra || {}
+        total_ms: Math.max(0, Math.round(now - Number(ctx.startedAt || now))),
+        final_step: finalStep || '',
+        steps: steps
     };
+    ctx._timingFlushed = true;
     try {
+        var stepText = names.map(function (name) {
+            return name + '=' + Math.max(0, Math.round(Number(steps[name] && steps[name].ms || 0))) + 'ms';
+        }).join(' ');
         console.info(
             payload.label,
             'session=' + payload.session_id,
-            'step=' + payload.step,
-            'ms=' + payload.ms + 'ms',
-            'since_start=' + payload.since_start_ms + 'ms',
+            'total=' + payload.total_ms + 'ms',
             'run_id=' + payload.run_id,
             'mode=' + payload.mode,
-            payload.extra
+            stepText
         );
     } catch (e) { /* ignore */ }
     try {
@@ -525,6 +500,19 @@ function reportClientPipelineStep(ctx, step, startedAt, extra) {
             keepalive: true
         }).catch(function () { /* ignore */ });
     } catch (e) { /* ignore */ }
+}
+
+function reportClientPipelineStep(ctx, step, startedAt, extra) {
+    if (!ctx || !step) return;
+    const now = nowPipelineMs();
+    var stepName = String(step || '');
+    if (!ctx._timingSteps) ctx._timingSteps = {};
+    ctx._timingSteps[stepName] = {
+        ms: Math.max(0, Math.round(now - Number(startedAt || now))),
+        since_start_ms: Math.max(0, Math.round(now - Number(ctx.startedAt || now))),
+        extra: extra || {}
+    };
+    if (isClientPipelineTerminalStep(ctx.label, stepName)) flushClientPipelineTiming(ctx, stepName);
 }
 
 function applySkippedRuntimeV2EventMetadata(event, runCtx, sessionId) {
@@ -1060,7 +1048,6 @@ async function sendFollowupNow(itemId, sessionId) {
                 asSteer: true,
             });
         }
-        renderAcceptedFollowupSteer(sid, item, steerResult);
         item.status = 'accepted';
         persistFollowupQueue(sid);
         renderFollowupQueue(sid);

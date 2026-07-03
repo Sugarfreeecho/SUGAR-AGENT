@@ -2213,11 +2213,16 @@ async def client_timing(request: Request):
     session_id = str(data.get("session_id") or data.get("sessionId") or "").strip()[:120]
     run_id = str(data.get("run_id") or data.get("runId") or "").strip()[:120]
     step = str(data.get("step") or "").strip()[:120]
+    final_step = str(data.get("final_step") or data.get("finalStep") or "").strip()[:120]
     mode = str(data.get("mode") or "").strip()[:80]
     try:
         ms = int(float(data.get("ms") or 0))
     except Exception:
         ms = 0
+    try:
+        total_ms = int(float(data.get("total_ms") or data.get("totalMs") or ms or 0))
+    except Exception:
+        total_ms = max(0, ms)
     try:
         since_start_ms = int(float(data.get("since_start_ms") or data.get("sinceStartMs") or 0))
     except Exception:
@@ -2232,6 +2237,40 @@ async def client_timing(request: Request):
         }
         if clean_extra:
             extra_text = " " + " ".join(f"{k}={v}" for k, v in clean_extra.items())
+    steps = data.get("steps")
+    if isinstance(steps, dict):
+        step_parts: list[str] = []
+        for raw_name, raw_info in steps.items():
+            name = str(raw_name or "").strip()[:80]
+            if not name:
+                continue
+            info = raw_info if isinstance(raw_info, dict) else {}
+            try:
+                step_ms = int(float(info.get("ms") if isinstance(info, dict) else raw_info or 0))
+            except Exception:
+                step_ms = 0
+            detail = f"{name}={max(0, step_ms)}ms"
+            step_extra = info.get("extra") if isinstance(info, dict) else None
+            if isinstance(step_extra, dict):
+                clean_step_extra = {
+                    str(k)[:30]: str(v)[:80]
+                    for k, v in step_extra.items()
+                    if k is not None and v is not None
+                }
+                if clean_step_extra:
+                    detail += "(" + ",".join(f"{k}={v}" for k, v in clean_step_extra.items()) + ")"
+            step_parts.append(detail)
+        logger.info(
+            "%s session=%s total=%sms run_id=%s mode=%s final_step=%s steps=%s",
+            label,
+            session_id,
+            max(0, total_ms),
+            run_id,
+            mode,
+            final_step,
+            " ".join(step_parts),
+        )
+        return JSONResponse(content={"ok": True})
     logger.info(
         "%s session=%s step=%s ms=%sms since_start=%sms run_id=%s mode=%s%s",
         label,
