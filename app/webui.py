@@ -30,6 +30,7 @@ from agent_loop import abort_session_steer_run, compute_context_tokens_for_sessi
 from session_lifecycle import get_run_started_at, is_run_active
 from session_event_bus import subscribe_session_events
 import agent_mcp
+from agent_tools import discover_skills
 import model_profiles
 from path_picker_util import pick_native_path
 
@@ -58,6 +59,7 @@ _SSE_HEADERS = {
     "Connection": "keep-alive",
     "X-Accel-Buffering": "no",
 }
+_CHAT_SSE_KEEPALIVE_SEC = max(5.0, float(os.getenv("CHAT_SSE_KEEPALIVE_SEC", "15")))
 
 fastapi_app = FastAPI()
 
@@ -1243,6 +1245,24 @@ async def list_workspace_files(
         return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
 
 
+@fastapi_app.get("/api/skills")
+async def list_registered_skills():
+    try:
+        skills = await run_in_threadpool(discover_skills)
+        public = [
+            {
+                "name": str(skill.get("name") or ""),
+                "description": str(skill.get("description") or ""),
+            }
+            for skill in skills
+            if str(skill.get("name") or "").strip()
+        ]
+        return JSONResponse({"ok": True, "skills": public})
+    except Exception as exc:
+        logger.warning("skills scan failed: %s", exc)
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
+
+
 @fastapi_app.post("/api/upload-chat-files")
 async def upload_chat_files(files: list[UploadFile] = File(...)):
     if not files:
@@ -2251,6 +2271,7 @@ async def chat(
     client_run_id: str = Form(None),
     stream_protocol: str = Form("legacy"),
     followup_steer: bool = Form(False),
+    selected_skills: str = Form(""),
 ):
     sid = (session_id or "").strip() or None
     run_id = str(client_run_id or "").strip()
@@ -2264,6 +2285,46 @@ async def chat(
 
     def should_stop(sid_: str) -> bool:
         return session_manager.is_interrupt_requested(sid_, run_id)
+
+    def selected_skill_names(selected_raw: str) -> list[str]:
+        try:
+            requested = json.loads(selected_raw or "[]")
+        except Exception:
+            requested = []
+        if not isinstance(requested, list):
+            requested = []
+        requested_names = [str(item).strip() for item in requested if str(item).strip()]
+        if not requested_names:
+            return []
+        available = {str(skill.get("name") or "") for skill in discover_skills()}
+        valid_names = []
+        seen = set()
+        for name in requested_names:
+            if name in available and name not in seen:
+                seen.add(name)
+                valid_names.append(name)
+        return valid_names
+
+    def build_agent_message(raw_message: str, valid_names: list[str]) -> str:
+        if not valid_names:
+            return raw_message
+        lines = [
+            raw_message,
+            "",
+            "<selected_skills_for_this_conversation>",
+            "用户已在输入框中选择以下 Skill。请在本次对话中按需使用这些 Skill；需要具体规程时调用 activate_skill 读取对应说明：",
+        ]
+        lines.extend(f"- {name}" for name in valid_names)
+        lines.append("</selected_skills_for_this_conversation>")
+        return "\n".join(lines)
+
+    valid_selected_skills = selected_skill_names(selected_skills)
+    agent_message = build_agent_message(message, valid_selected_skills)
+    ui_message = (
+        message + "\n\n已选择 Skill：" + "、".join(valid_selected_skills)
+        if valid_selected_skills
+        else message
+    )
 
     async def event_generator():
         if sid:
@@ -2287,11 +2348,12 @@ async def chat(
         async def consume_agent_stream() -> None:
             try:
                 async for event in astream_events(
-                    message,
+                    agent_message,
                     session_id=sid,
                     should_stop=should_stop_worker,
                     run_id=run_id,
                     ui_user_event_type="user_steer" if followup_steer else "user",
+                    ui_user_content=ui_message,
                 ):
                     put_from_worker(event)
             except asyncio.CancelledError:
@@ -2324,7 +2386,15 @@ async def chat(
                         client_disconnected = True
                         logger.info("Chat stream disconnected for session %s; leaving run active", sid)
                         break
-                    event = await event_queue.get()
+                    try:
+                        event = await asyncio.wait_for(
+                            event_queue.get(),
+                            timeout=_CHAT_SSE_KEEPALIVE_SEC,
+                        )
+                    except asyncio.TimeoutError:
+                        yield f"data: {json.dumps({'type': 'sse_keepalive', 'keepalive': True, 'session_id': sid}, ensure_ascii=False)}\n\n"
+                        await asyncio.sleep(0)
+                        continue
                     if event is None:
                         break
                     if skip_worker_run_started and isinstance(event, dict) and event.get("type") == "run_started":

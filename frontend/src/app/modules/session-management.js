@@ -987,6 +987,7 @@ async function switchSession(sessionId, opts) {
     const leaving = currentSessionId;
     saveChatScrollForSession(leaving);
     stashInputDraft(leaving);
+    if (typeof stashSkillPickerDraft === 'function') stashSkillPickerDraft(leaving);
     prepareStashLeaving(leaving);
     hideSubagentContinueBanner();
     resetSubagentPanelForSession();
@@ -994,6 +995,7 @@ async function switchSession(sessionId, opts) {
     localStorage.setItem('lastSessionId', sessionId);
     if (typeof applyContextTokenLabelForCurrentSession === 'function') applyContextTokenLabelForCurrentSession();
     restoreInputDraft(sessionId);
+    if (typeof restoreSkillPickerDraft === 'function') restoreSkillPickerDraft(sessionId);
     if (typeof renderFollowupQueue === 'function') renderFollowupQueue(sessionId);
     if (typeof refreshModelProfileSelector === 'function') refreshModelProfileSelector(sessionId);
     syncSessionListIndicatorClasses();
@@ -1076,6 +1078,7 @@ async function createNewSessionInner() {
     try {
         saveChatScrollForSession(currentSessionId);
         stashInputDraft(currentSessionId);
+        if (typeof stashSkillPickerDraft === 'function') stashSkillPickerDraft(currentSessionId);
         prepareStashLeaving(currentSessionId);
         const response = await fetch('/sessions', { method: 'POST' });
         const data = await response.json();
@@ -1086,6 +1089,7 @@ async function createNewSessionInner() {
         setCurrentSessionState(data.session_id);
         localStorage.setItem('lastSessionId', currentSessionId);
         restoreInputDraft(currentSessionId);
+        if (typeof restoreSkillPickerDraft === 'function') restoreSkillPickerDraft(currentSessionId);
         if (typeof renderFollowupQueue === 'function') renderFollowupQueue(currentSessionId);
         if (typeof refreshModelProfileSelector === 'function') refreshModelProfileSelector(currentSessionId);
         if (!getVisibleChatStream()) ensureVisibleChatStreamSlot();

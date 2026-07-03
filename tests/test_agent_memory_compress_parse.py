@@ -53,3 +53,49 @@ def test_phase_e_shrinks_incomplete_non_user_block():
     assert changed is True
     assert len(str(out[0].content)) < 1000
     assert len(str(out[1].content)) < 1000
+
+
+def test_max_rounds_fallback_without_dropping_does_not_mark_truncated():
+    import agent_memory
+
+    hist = [agent_memory.UserMessage(content="short")]
+
+    out, changed, dropped = agent_memory.compress_tail_fallback(
+        hist,
+        reason="max_rounds",
+        max_tokens=100_000,
+    )
+
+    assert changed is True
+    assert dropped is False
+    assert len(out) == 1
+    assert str(out[0].content) == "short"
+    assert not any("Conversation truncated" in str(getattr(m, "content", "")) for m in out)
+
+
+def test_context_window_override_drives_auto_compress_entry(monkeypatch):
+    import agent_memory
+
+    hist = [
+        agent_memory.UserMessage(content="one"),
+        agent_memory.AssistantMessage(content="answer"),
+        agent_memory.UserMessage(content="two"),
+        agent_memory.AssistantMessage(content="answer"),
+    ]
+
+    monkeypatch.setattr(agent_memory, "CONTEXT_WINDOW", 1_000_000)
+    monkeypatch.setattr(agent_memory, "_full_pack_tokens_for_session_preview", lambda *a, **k: 100)
+
+    assert agent_memory.context_will_attempt_compress(
+        hist,
+        "00000000-0000-0000-0000-000000000001",
+        force_user_compact=False,
+        key_context="",
+    ) is False
+    assert agent_memory.context_will_attempt_compress(
+        hist,
+        "00000000-0000-0000-0000-000000000001",
+        force_user_compact=False,
+        key_context="",
+        context_window=50,
+    ) is True

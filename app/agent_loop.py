@@ -190,6 +190,7 @@ def _run_context_policy_serialized(
     *,
     force_user_compact: bool,
     hint_sink: Optional[Callable[[Any], None]] = None,
+    context_window: Optional[int] = None,
 ):
     lock = _context_policy_lock_for_session(session_id)
     with lock:
@@ -199,6 +200,7 @@ def _run_context_policy_serialized(
             session_id,
             force_user_compact=force_user_compact,
             hint_sink=hint_sink,
+            context_window=context_window,
         )
 
 
@@ -1041,10 +1043,78 @@ def _rollback_steer_partial_turn(state: State) -> None:
     work_messages, work_cut = _trim_unclosed_tool_call_tail_preserve_completed(work_messages)
     if llm_cut is None and work_cut is None:
         return
+    kept_tool_ids = _completed_tool_call_ids_from_messages(llm_history)
     state["llm_history"] = llm_history
     state["work_messages"] = work_messages
     state["dialogue"] = derive_dialogue_from_assistant_history(llm_history)
     _persist_state_with_model_replace(state, llm_history, "steer_restart_trim_unclosed_tools")
+    _runtime_v2_delete_unfinished_tool_events_after_marker(state, marker, kept_tool_ids)
+
+
+def _completed_tool_call_ids_from_messages(messages: List[Any]) -> set[str]:
+    out: set[str] = set()
+    for msg in list(messages or []):
+        if not isinstance(msg, ToolMessage):
+            continue
+        tid = str(getattr(msg, "tool_call_id", "") or "").strip()
+        if tid:
+            out.add(tid)
+    return out
+
+
+def _runtime_v2_latest_seq(session_id: str) -> int:
+    sid = str(session_id or "").strip()
+    if not sid:
+        return 0
+    try:
+        from runtime_v2.event_log import SessionEventLog
+
+        log = SessionEventLog(session_manager.sessions_dir)
+        return max(0, int(log.next_seq(sid)) - 1)
+    except Exception:
+        return 0
+
+
+def _runtime_v2_delete_unfinished_tool_events_after_marker(
+    state: State,
+    marker: Dict[str, Any],
+    kept_tool_ids: set[str],
+) -> None:
+    sid = str(state.get("session_id") or "").strip() if isinstance(state, dict) else ""
+    if not sid:
+        return
+    try:
+        marker_seq = int(marker.get("runtime_seq") or 0)
+    except Exception:
+        marker_seq = 0
+    if marker_seq <= 0:
+        return
+    try:
+        from runtime_v2 import RuntimeHistoryOps
+        from runtime_v2.event_log import SessionEventLog
+
+        log = SessionEventLog(session_manager.sessions_dir)
+        ops = RuntimeHistoryOps(session_manager.sessions_dir)
+        for ev in log.read_after_seq(sid, marker_seq):
+            payload = dict(ev.payload or {})
+            ev_type = str(ev.type or "")
+            ui_type = str(payload.get("type") or "")
+            if ev_type not in {"tool_started", "legacy_ui_event"}:
+                continue
+            if ev_type == "legacy_ui_event" and ui_type != "tool_call":
+                continue
+            tid = str(
+                payload.get("tool_call_id")
+                or payload.get("id")
+                or payload.get("tool_id")
+                or ""
+            ).strip()
+            has_result = payload.get("result") is not None or payload.get("raw_content") is not None
+            if tid and tid in kept_tool_ids and has_result:
+                continue
+            ops.delete_message(sid, int(ev.seq), reason="steer_restart_remove_unfinished_tool")
+    except Exception:
+        logger.debug("failed to hide unfinished tool events after steer rollback", exc_info=True)
 
 
 async def _restart_react_after_steer(
@@ -1845,6 +1915,7 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
                             sid,
                             force_user_compact=False,
                             hint_sink=_compress_hint_emit,
+                            context_window=int(iter_context_window),
                         ),
                         state,
                         emit,
@@ -2047,6 +2118,7 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
                                 state["session_id"],
                                 force_user_compact=True,
                                 hint_sink=_compact_hint_emit,
+                                context_window=int(iter_context_window),
                             ),
                             state,
                             emit,
@@ -2917,6 +2989,17 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
                             types={"llm_reasoning_delta"},
                             react_iter=int(iter_count),
                         )
+                        await _push_stream_event(
+                            state,
+                            {
+                                "type": "llm_reasoning",
+                                "content": reasoning_text,
+                                "react_iter": int(iter_count),
+                                "_skip_persist": True,
+                                "metadata": {"live_commit": True},
+                            },
+                            emit=emit,
+                        )
                     if (response_text or "").strip():
                         session_manager.append_ui_event(
                             sid,
@@ -2930,6 +3013,17 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
                             sid,
                             types={"llm_response_delta"},
                             react_iter=int(iter_count),
+                        )
+                        await _push_stream_event(
+                            state,
+                            {
+                                "type": "llm_response",
+                                "content": response_text,
+                                "react_iter": int(iter_count),
+                                "_skip_persist": True,
+                                "metadata": {"live_commit": True},
+                            },
+                            emit=emit,
                         )
                 else:
                     if (reasoning_text or "").strip():
@@ -2966,6 +3060,7 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
                 state["_steer_rollback_marker"] = {
                     "llm_len": len(llm_history),
                     "work_len": len(work_messages),
+                    "runtime_seq": _runtime_v2_latest_seq(state["session_id"]),
                 }
             else:
                 state.pop("_steer_rollback_marker", None)
@@ -3692,6 +3787,7 @@ async def astream_events(
     should_stop: Optional[Callable[[str], bool]] = None,
     run_id: Optional[str] = None,
     ui_user_event_type: str = "user",
+    ui_user_content: Optional[str] = None,
 ) -> AsyncGenerator[Dict[str, Any], None]:
     """
     顺序执行 react_node → validate_final（无独立校验 LLM）→ finish，通过队列实时向前端推送事件。
@@ -3839,7 +3935,7 @@ async def astream_events(
                 mode="chat",
             )
             user_ui_type = "user_steer" if str(ui_user_event_type or "") == "user_steer" else "user"
-            user_ui_event = {"type": user_ui_type, "content": user_input}
+            user_ui_event = {"type": user_ui_type, "content": ui_user_content if ui_user_content is not None else user_input}
             if user_ui_type == "user_steer":
                 user_ui_event["steer"] = True
             _t_run_start = time.perf_counter()

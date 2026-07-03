@@ -216,6 +216,12 @@
     margin-bottom: 1.1rem;
     align-items: start;
   }
+  .form-row-2:has(#llmProvider) {
+    grid-template-columns: 1fr;
+  }
+  .form-group:has(#llmProvider) {
+    display: none;
+  }
   .form-row-2 .form-group { margin-bottom: 0; }
   .form-row-search-pair.search-key-collapsed {
     grid-template-columns: 1fr;
@@ -383,6 +389,22 @@
     border-color: rgba(99,102,241,0.36);
     background: rgba(99,102,241,0.1);
   }
+  .model-row.is-selected,
+  .model-row--empty.is-selected {
+    border-color: rgba(108, 92, 231, 0.68);
+    background: rgba(108, 92, 231, 0.13);
+    box-shadow: 0 0 0 3px rgba(108, 92, 231, 0.14), var(--shadow-brand-glow);
+  }
+  :root.theme-light .model-row.is-selected,
+  :root.theme-light .model-row--empty.is-selected {
+    border-color: rgba(99, 102, 241, 0.58);
+    background: rgba(99, 102, 241, 0.1);
+    box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.14);
+  }
+  .model-row--empty {
+    cursor: default;
+    color: var(--text-tertiary);
+  }
   .model-row__main { min-width: 0; }
   .model-row__id {
     display: block;
@@ -534,7 +556,7 @@
     <form id="configForm">
       <div class="form-group" id="baseUrlGroup">
         <label>API BASE URL <span class="required">*</span></label>
-        <input type="text" id="baseUrl" placeholder="https://api.deepseek.com" autocomplete="off" aria-required="true">
+        <input type="text" id="baseUrl" placeholder="http://models.ascend.huawei.com/v1" autocomplete="off" aria-required="true">
       </div>
 
       <div class="form-group" id="apiKeyGroup">
@@ -558,11 +580,7 @@
         <div class="form-group">
           <label>LLM 供应商（支持OpenAI SDK） <span class="required">*</span></label>
           <div class="select-wrap">
-          <select id="llmProvider">
-            <option value="deepseek">DeepSeek</option>
-            <option value="openai">OpenAI</option>
-            <option value="local">本地模型 (Ollama/LM Studio)</option>
-          </select>
+          <input type="hidden" id="llmProvider" value="openai">
           </div>
         </div>
         <div class="form-group">
@@ -570,7 +588,7 @@
           <input type="text" id="modelName" placeholder="deepseek-v4-flash" autocomplete="off">
         </div>
       </div>
-      <div class="form-hint model-hint-below" id="modelHint">切换供应商时会自动填入推荐模型，也可自行修改。</div>
+      <div class="form-hint model-hint-below" id="modelHint">使用 OpenAI SDK 兼容接口，可自行填写模型名称或从上方列表选择。</div>
 
       <div class="form-row-2">
         <div class="form-group">
@@ -630,11 +648,11 @@
       modelHint: 'DeepSeek 常用：deepseek-v4-flash、deepseek-v4-pro',
     },
     openai: {
-      baseUrl: 'https://api.openai.com/v1',
+      baseUrl: 'http://models.ascend.huawei.com/v1',
       keyPlaceholder: 'sk-...',
       keyHint: 'OpenAI',
-      defaultModel: 'gpt-4o',
-      modelHint: 'OpenAI 常用：gpt-4o、gpt-5.5',
+      defaultModel: 'deepseek-v4-flash',
+      modelHint: 'OpenAI SDK 兼容接口，默认 deepseek-v4-flash',
     },
     local: {
       baseUrl: 'http://localhost:11434/v1',
@@ -676,6 +694,7 @@
   let lastProvider = llmProvider.value;
   let modelFetchTimer = null;
   let lastModelFetchKey = '';
+  let selectedDiscoveredModelId = '';
   let setupReady = false;
 
   function wizardEsc(value) {
@@ -688,6 +707,19 @@
 
   function setModelDiscoveryStatus(message) {
     if (modelDiscoveryStatus) modelDiscoveryStatus.textContent = message || '';
+  }
+
+  function currentModelSelectionKey() {
+    return String(selectedDiscoveredModelId || (modelName && modelName.value) || '').trim();
+  }
+
+  function updateModelSelectionHighlight() {
+    if (!modelDiscoveryList) return;
+    const selected = currentModelSelectionKey();
+    modelDiscoveryList.querySelectorAll('.model-row').forEach((row) => {
+      const rowModel = String(row.getAttribute('data-model-id') || '').trim();
+      row.classList.toggle('is-selected', row.classList.contains('model-row--empty') ? !selected : !!selected && rowModel === selected);
+    });
   }
 
   function modelLimitSource(model) {
@@ -703,14 +735,38 @@
     return Number.isFinite(n) && n > 0 ? n : fallback;
   }
 
+  function formatTokens(value) {
+    return String(Math.max(0, positiveInt(value, 0))).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+  }
+
+  function recommendedModelWindows(modelMaxContext) {
+    const max = positiveInt(modelMaxContext, 0);
+    if (!max) return { out: 8192, ctx: 1000000, theoretical: 1000000, cap: 0, capped: false };
+    let out = max < 130000 ? 8192 : Math.min(Math.floor(max * 0.1), max < 300000 ? 30000 : 50000);
+    out = Math.max(1, Math.min(out, Math.max(1, max - 1)));
+    const theoretical = Math.max(1, max - out);
+    const cap = max < 300000 ? 128000 : 512000;
+    return {
+      out,
+      ctx: Math.min(theoretical, cap),
+      theoretical,
+      cap,
+      capped: theoretical > cap,
+    };
+  }
+
   function applyDiscoveredModel(model) {
     model = model || {};
     const modelMaxContext = positiveInt(model.model_context_window || model.context_window, 1000000);
-    const maxOutputTokens = positiveInt(model.max_output_tokens, 8192);
+    const windows = recommendedModelWindows(modelMaxContext);
+    selectedDiscoveredModelId = String(model.id || model.model || '').trim();
     if (modelName) modelName.value = model.id || model.model || '';
-    if (contextWindowEl) contextWindowEl.value = String(Math.max(1, modelMaxContext - maxOutputTokens));
-    if (maxOutputTokensEl) maxOutputTokensEl.value = String(maxOutputTokens);
-    setModelDiscoveryStatus('已填入模型和窗口参数。');
+    if (contextWindowEl) contextWindowEl.value = String(windows.ctx);
+    if (maxOutputTokensEl) maxOutputTokensEl.value = String(windows.out);
+    updateModelSelectionHighlight();
+    setModelDiscoveryStatus(windows.capped
+      ? '已填入模型和窗口参数；理论最大可配上下文门限为 ' + formatTokens(windows.theoretical) + ' tokens，默认填入 ' + formatTokens(windows.cap) + ' tokens。'
+      : '已填入模型和窗口参数。');
   }
 
   async function probeAndApplyDiscoveredModel(model, row) {
@@ -753,13 +809,15 @@
     if (!modelDiscoveryList) return;
     items = items || [];
     if (!items.length) {
-      modelDiscoveryList.innerHTML = '';
+      modelDiscoveryList.innerHTML = "<div class='model-row model-row--empty is-selected'><span class='model-row__main'><span class='model-row__id'>未获取到模型</span></span></div>";
       return;
     }
     let html = '';
     for (const model of items) {
       const raw = wizardEsc(JSON.stringify(model));
-      html += "<button type='button' class='model-row' data-model='" + raw + "'>"
+      const modelId = String(model.id || model.model || '');
+      const selected = modelId && modelId === currentModelSelectionKey() ? ' is-selected' : '';
+      html += "<button type='button' class='model-row" + selected + "' data-model-id='" + wizardEsc(modelId) + "' data-model='" + raw + "'>"
         + "<span class='model-row__main'><span class='model-row__id'>" + wizardEsc(model.id) + "</span></span>"
         + "<span class='model-row__side'><span class='model-row__meta'>" + wizardEsc(modelLimitSource(model)) + "</span>"
         + "<span class='model-row__limits'>" + wizardEsc(model.context_window) + " ctx / " + wizardEsc(model.max_output_tokens) + " out</span></span>"
@@ -773,6 +831,7 @@
         } catch (err) {}
       });
     });
+    updateModelSelectionHighlight();
   }
 
   async function fetchDiscoveredModels() {
@@ -840,9 +899,7 @@
   var hasPrefill = prefill && typeof prefill === 'object' && Object.keys(prefill).length > 0;
 
   if (hasPrefill) {
-    if (prefill.llm_provider && providerMap[prefill.llm_provider]) {
-      llmProvider.value = prefill.llm_provider;
-    }
+    llmProvider.value = 'openai';
     syncProviderUi(llmProvider.value);
     lastProvider = llmProvider.value;
     if (prefill.model_name) modelName.value = prefill.model_name;
@@ -872,10 +929,11 @@
   if (maxOutputTokensEl && !String(maxOutputTokensEl.value).trim()) maxOutputTokensEl.value = '8192';
   setupReady = true;
 
-  llmProvider.addEventListener('change', () => applyProvider(llmProvider.value, false));
+  llmProvider.value = 'openai';
   baseUrl.addEventListener('input', scheduleModelDiscovery);
   baseUrl.addEventListener('change', scheduleModelDiscovery);
   apiKey.addEventListener('input', scheduleModelDiscovery);
+  if (modelName) modelName.addEventListener('input', () => { selectedDiscoveredModelId = ''; updateModelSelectionHighlight(); });
   if (modelFetchBtn) modelFetchBtn.addEventListener('click', fetchDiscoveredModels);
 
   searchProvider.addEventListener('change', syncSearchPairVisibility);

@@ -48,6 +48,8 @@ def should_persist_ui_event(
     """是否把事件写入当前 session 的 ui_events。"""
     if not ev or not isinstance(ev, dict):
         return False
+    if ev.get("_skip_persist"):
+        return False
     if ev.get("ephemeral"):
         return False
     if ev.get("_subagent_forward"):

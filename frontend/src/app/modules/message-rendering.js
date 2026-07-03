@@ -2765,6 +2765,25 @@ function appendToolCallDelta(ctx, parsed, runSessionId) {
     }
     setToolRowText(row, displayText, ctx, runSessionId);
 }
+
+function removeAbortedToolDraftRows(ctx, ev) {
+    var body = getProcessBody(ctx);
+    if (!body) return;
+    var iter = ev && ev.react_iter != null && Number.isFinite(Number(ev.react_iter))
+        ? Math.max(1, Math.floor(Number(ev.react_iter)))
+        : null;
+    var rows = body.querySelectorAll('.feed-item.feed--tool[data-tool-draft-key], .feed-item.feed--tool[data-tool-pending="1"]');
+    rows.forEach(function (row) {
+        if (iter != null) {
+            var rowIter = Number(row.getAttribute('data-react-iter'));
+            if (!Number.isFinite(rowIter) || Math.floor(rowIter) !== iter) return;
+        }
+        row.remove();
+    });
+    var agg = body.closest('.process-aggregate');
+    if (agg) refreshAggregateStatsSmart(agg);
+}
+
 function formatToolCommandLine(tool, args, commandPreview) {
     if (commandPreview != null && String(commandPreview).trim()) return String(commandPreview).trim();
     var name = String(tool || 'tool');
@@ -2996,6 +3015,9 @@ function appendLlmStreamDelta(ctx, ev, runSessionId) {
         var pieceText = String(piece.text || '');
         if (!pieceText) continue;
         if (piecePart === 'reasoning') {
+        if (l.llmStreamReasoningScroller && !l.llmStreamReasoningScroller.isConnected) {
+            l.llmStreamReasoningScroller = null;
+        }
         if (l.llmStreamReasoningIter !== iter) {
             flushLlmDeltaText(ctx);
             l.llmStreamReasoningIter = iter;
@@ -3004,15 +3026,30 @@ function appendLlmStreamDelta(ctx, ev, runSessionId) {
                 ? existingReasoning.querySelector('.feed-chunk-scroller')
                 : createProcessFeedRow(ctx, 'llm-reasoning', '', streamOpt, runSessionId);
         }
+        if (!l.llmStreamReasoningScroller) {
+            var recoveredReasoning = findExistingLlmFeedRow(ctx, 'llm-reasoning', Number.isFinite(Number(iter)) ? Math.max(1, Math.floor(Number(iter))) : null, { liveOnly: true });
+            l.llmStreamReasoningScroller = recoveredReasoning
+                ? recoveredReasoning.querySelector('.feed-chunk-scroller')
+                : createProcessFeedRow(ctx, 'llm-reasoning', '', streamOpt, runSessionId);
+        }
         if (!l.llmStreamReasoningScroller) return;
         l.llmPendingReasoningDelta = (l.llmPendingReasoningDelta || '') + pieceText;
         } else {
+        if (l.llmStreamResponseScroller && !l.llmStreamResponseScroller.isConnected) {
+            l.llmStreamResponseScroller = null;
+        }
         if (l.llmStreamResponseIter !== iter) {
             flushLlmDeltaText(ctx);
             l.llmStreamResponseIter = iter;
             var existingResponse = findExistingLlmFeedRow(ctx, 'llm-response', Number.isFinite(Number(iter)) ? Math.max(1, Math.floor(Number(iter))) : null, { liveOnly: true });
             l.llmStreamResponseScroller = existingResponse
                 ? existingResponse.querySelector('.feed-chunk-scroller')
+                : createProcessFeedRow(ctx, 'llm-response', '', streamOpt, runSessionId);
+        }
+        if (!l.llmStreamResponseScroller) {
+            var recoveredResponse = findExistingLlmFeedRow(ctx, 'llm-response', Number.isFinite(Number(iter)) ? Math.max(1, Math.floor(Number(iter))) : null, { liveOnly: true });
+            l.llmStreamResponseScroller = recoveredResponse
+                ? recoveredResponse.querySelector('.feed-chunk-scroller')
                 : createProcessFeedRow(ctx, 'llm-response', '', streamOpt, runSessionId);
         }
         if (!l.llmStreamResponseScroller) return;

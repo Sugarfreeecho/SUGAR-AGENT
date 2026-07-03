@@ -47,21 +47,14 @@ def _token_cache_text_hash(text: Any) -> str:
 
 
 def _full_input_token_cache_key(session_id: str, llm_history: List[Any], key_context: str) -> Tuple[str, int, str, str]:
-    last_parts: List[str] = []
-    for msg in list(llm_history or [])[-3:]:
-        last_parts.append(type(msg).__name__)
-        last_parts.append(str(getattr(msg, "content", "") or ""))
-        tool_call_id = getattr(msg, "tool_call_id", "")
-        if tool_call_id:
-            last_parts.append(str(tool_call_id))
-        additional_kwargs = getattr(msg, "additional_kwargs", None) or {}
-        if isinstance(additional_kwargs, dict) and additional_kwargs.get("tool_calls"):
-            last_parts.append(str(additional_kwargs.get("tool_calls")))
+    message_fingerprint = _messages_token_fingerprint_from_hashes(
+        _messages_token_hashes(list(llm_history or []))
+    )
     return (
         str(session_id or "").strip(),
         len(llm_history or []),
         _token_cache_text_hash(key_context or ""),
-        _token_cache_text_hash("\n".join(last_parts)),
+        message_fingerprint,
     )
 
 

@@ -23,7 +23,7 @@
       '.path-browse-btn--ghost:hover{background:rgba(108,92,231,.1);border-color:transparent;color:var(--accent-2,#d4b8fc);}' +
       '.input-wrapper .path-browse-btn--ghost{align-self:center;margin-right:-.15rem;}' +
       '.input-wrapper.is-drag-over{border-color:rgba(203,166,247,.62);box-shadow:0 0 0 3px rgba(203,166,247,.12),0 0 28px rgba(139,92,246,.18);}' +
-      '.workspace-file-popover{position:fixed;display:none;z-index:260;width:min(46rem,calc(100vw - 1.2rem));height:min(32rem,calc(100vh - 1.2rem));border:1px solid rgba(203,166,247,.24);border-radius:14px;background:linear-gradient(145deg,rgba(31,31,49,.88),rgba(19,20,31,.78));box-shadow:0 24px 70px rgba(0,0,0,.38),0 0 0 1px rgba(255,255,255,.045) inset,0 0 34px rgba(139,92,246,.16);overflow:hidden;backdrop-filter:blur(22px);-webkit-backdrop-filter:blur(22px);}' +
+      '.workspace-file-popover{position:fixed;display:none;z-index:260;width:min(46rem,calc(100vw - 1.2rem));height:min(44rem,82vh);max-height:min(44rem,82vh);border:1px solid rgba(203,166,247,.24);border-radius:14px;background:linear-gradient(145deg,rgba(31,31,49,.88),rgba(19,20,31,.78));box-shadow:0 24px 70px rgba(0,0,0,.38),0 0 0 1px rgba(255,255,255,.045) inset,0 0 34px rgba(139,92,246,.16);overflow:hidden;backdrop-filter:blur(22px);-webkit-backdrop-filter:blur(22px);}' +
       '.workspace-file-popover:before{content:"";position:absolute;inset:0;pointer-events:none;background:radial-gradient(circle at 18% 0%,rgba(203,166,247,.18),transparent 30%),radial-gradient(circle at 92% 18%,rgba(99,102,241,.16),transparent 28%);}' +
       '.workspace-file-popover.is-open{display:flex;flex-direction:column;}' +
       '.workspace-file-search{position:relative;width:100%;box-sizing:border-box;border:0;border-bottom:1px solid rgba(255,255,255,.08);background:rgba(255,255,255,.055);color:var(--text-primary,#cdd6f4);padding:.56rem .72rem;font:inherit;font-size:.78rem;outline:none;}' +
@@ -210,12 +210,23 @@
       var gap = 8;
       var width = Math.min(Math.max(rect.width, 520), window.innerWidth - 16);
       var left = Math.max(8, Math.min(rect.left, window.innerWidth - width - 8));
-      var height = panel.offsetHeight || 384;
+      var titlebar = document.querySelector('.titlebar');
+      var titlebarBottom = titlebar ? titlebar.getBoundingClientRect().bottom : 44;
+      var rootSize = parseFloat(getComputedStyle(document.documentElement).fontSize || '16') || 16;
+      var maxHeight = Math.min(44 * rootSize, window.innerHeight * 0.82);
+      var availableAbove = Math.max(1, rect.top - titlebarBottom - gap);
+      var height = Math.min(maxHeight, availableAbove);
       var top = rect.top - height - gap;
-      if (top < 8) top = Math.min(window.innerHeight - height - 8, rect.bottom + gap);
+      if (height < 96) {
+        var availableBelow = Math.max(1, window.innerHeight - rect.bottom - gap - 8);
+        height = Math.min(maxHeight, availableBelow);
+        top = rect.bottom + gap;
+      }
       panel.style.left = left + 'px';
-      panel.style.top = Math.max(8, top) + 'px';
+      panel.style.top = Math.max(titlebarBottom, top) + 'px';
       panel.style.width = width + 'px';
+      panel.style.height = Math.max(1, Math.floor(height)) + 'px';
+      panel.style.maxHeight = Math.max(1, Math.floor(height)) + 'px';
     }
 
     function updateSelectedUi() {

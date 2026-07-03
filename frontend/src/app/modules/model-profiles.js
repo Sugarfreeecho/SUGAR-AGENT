@@ -69,9 +69,22 @@ function closeModelMenu() {
 function openModelMenu() {
     var e = els();
     if (!e.menu || !e.trigger) return;
+    constrainModelMenuToTitlebar();
     e.menu.classList.add('is-open');
     e.trigger.classList.add('is-open');
     e.trigger.setAttribute('aria-expanded', 'true');
+}
+
+function constrainModelMenuToTitlebar() {
+    var e = els();
+    if (!e.menu || !e.trigger) return;
+    var titlebar = document.querySelector('.titlebar');
+    var titlebarBottom = titlebar ? titlebar.getBoundingClientRect().bottom : 44;
+    var triggerTop = e.trigger.getBoundingClientRect().top;
+    var available = Math.max(1, Math.floor(triggerTop - titlebarBottom - 8));
+    var rootSize = parseFloat(getComputedStyle(document.documentElement).fontSize || '16') || 16;
+    var cap = Math.floor(44 * rootSize);
+    e.menu.style.setProperty('--composer-popover-max-height', Math.min(cap, available) + 'px');
 }
 
 function renderModelProfileControl() {
@@ -192,6 +205,10 @@ function initModelProfileSwitcher() {
     });
     document.addEventListener('keydown', (ev) => {
         if (ev.key === 'Escape') closeModelMenu();
+    });
+    window.addEventListener('resize', () => {
+        var fresh = els();
+        if (fresh.menu && fresh.menu.classList.contains('is-open')) constrainModelMenuToTitlebar();
     });
     refreshModelProfileSelectorInBackground(currentSessionId);
 }

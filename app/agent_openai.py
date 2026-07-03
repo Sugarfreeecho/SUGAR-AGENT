@@ -25,6 +25,7 @@ from openai import OpenAI
 from openai.types.chat import ChatCompletion
 
 from agent_messages import AssistantMessage, SystemMessage, ToolMessage, UserMessage
+from agent_think import strip_think_blocks
 
 logger = logging.getLogger(__name__)
 
@@ -374,7 +375,7 @@ def messages_to_openai_params(messages: List[Any]) -> List[Dict[str, Any]]:
             else:
                 api_msgs.append({"role": "user", "content": str(m.content)})
         elif isinstance(m, AssistantMessage):
-            item: Dict[str, Any] = {"role": "assistant", "content": m.content or ""}
+            item: Dict[str, Any] = {"role": "assistant", "content": strip_think_blocks(m.content or "")}
             if m.tool_calls:
                 item["tool_calls"] = format_tool_calls_for_openai_api(m.tool_calls)
             ak = getattr(m, "additional_kwargs", None) or {}

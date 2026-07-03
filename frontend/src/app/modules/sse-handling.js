@@ -1,4 +1,55 @@
 const SSE_IDLE_TIMEOUT_MS = 45000;
+const locallyRenderedFollowupSteers = new Set();
+
+function followupSteerRenderKey(ev) {
+    if (!ev || typeof ev !== 'object') return '';
+    const clientId = String(ev.client_id || ev.clientId || '').trim();
+    if (clientId) return 'client:' + clientId;
+    const steerId = String(ev.steer_id || ev.steerId || '').trim();
+    if (steerId) return 'steer:' + steerId;
+    return '';
+}
+
+function markFollowupSteerRendered(ev) {
+    const key = followupSteerRenderKey(ev);
+    if (key) locallyRenderedFollowupSteers.add(key);
+}
+
+function consumeLocallyRenderedFollowupSteer(ev) {
+    const key = followupSteerRenderKey(ev);
+    if (!key || !locallyRenderedFollowupSteers.has(key)) return false;
+    locallyRenderedFollowupSteers.delete(key);
+    return true;
+}
+
+function renderAcceptedFollowupSteer(sessionId, item, steerResult) {
+    const sid = String(sessionId || '');
+    if (!sid || !item) return;
+    const ev = {
+        type: 'user_steer',
+        content: item.text || '',
+        steer: true,
+        steer_id: (steerResult && steerResult.item && steerResult.item.id) || item.steerId || '',
+        client_id: item.clientId || '',
+        created_at: new Date().toISOString(),
+    };
+    markFollowupSteerRendered(ev);
+    if (sid !== currentSessionId) return;
+    const runState = getSessionRunState(sid);
+    let runCtx = runState && runState.ctx;
+    if (!runCtx && getVisibleChatStream()) {
+        runCtx = newDomContext(getVisibleChatStream());
+    }
+    if (!runCtx) return;
+    appendLog(runCtx, ev.content || '', 'user-steer', sid);
+    scrollProcessBodyToBottom(runCtx, sid);
+}
+
+function shouldApplySseSeqFilter(parsed) {
+    if (!parsed || parsed.protocol === 'runtime_v2') return false;
+    if (parsed.runtime_seq != null || parsed.runtimeSeq != null) return false;
+    return true;
+}
 
 function endRunForClient(sessionId, ctx, opts) {
     opts = opts || {};
@@ -87,16 +138,17 @@ async function consumeAgentSseResponse(response, runCtx, runSessionId, streamEve
                     });
                 }
                 const eventSessionId = parsed.session_id || parsed.sessionId || runSessionId;
-                if (parsed.protocol !== 'runtime_v2' && !sessionStore.shouldAcceptSseEvent(eventSessionId, parsed.seq)) continue;
+                if (shouldApplySseSeqFilter(parsed) && !sessionStore.shouldAcceptSseEvent(eventSessionId, parsed.seq)) continue;
                 if (parsed.type === 'user_steer' && parsed.steer) {
                     var steerEventIndex = parsed.ephemeral && Number.isFinite(Number(parsed.seq)) ? Number(parsed.seq) : streamEventIdx;
+                    var alreadyRenderedSteer = consumeLocallyRenderedFollowupSteer(parsed);
                     try {
                         applyMessageEvent(eventSessionId, parsed, steerEventIndex, 'sse');
                     } catch (eStoreSteer) {
                         console.error('store user steer event failed:', eStoreSteer);
                     }
                     removeConsumedFollowupSteer(eventSessionId, parsed);
-                    appendLog(runCtx, parsed.content || '', 'user-steer', runSessionId);
+                    if (!alreadyRenderedSteer) appendLog(runCtx, parsed.content || '', 'user-steer', runSessionId);
                     streamEventIdx += 1;
                     continue;
                 }
@@ -131,6 +183,7 @@ async function consumeAgentSseResponse(response, runCtx, runSessionId, streamEve
                     if (parsed.type === 'llm_stream_aborted') {
                         removeTemporaryStatus(runCtx);
                         discardLlmStreamChunks(runCtx, parsed);
+                        removeAbortedToolDraftRows(runCtx, parsed);
                         continue;
                     }
                     if (parsed.type === 'tool_approval_required') {
@@ -1007,6 +1060,7 @@ async function sendFollowupNow(itemId, sessionId) {
                 asSteer: true,
             });
         }
+        renderAcceptedFollowupSteer(sid, item, steerResult);
         item.status = 'accepted';
         persistFollowupQueue(sid);
         renderFollowupQueue(sid);
@@ -1144,6 +1198,14 @@ async function sendMessage(options) {
         var previousRun = getSessionRunState(submitSessionIdInitial);
         if (previousRun) abortSessionRun(submitSessionIdInitial, 'followup-restart');
     }
+    var selectedSkillsForRun = [];
+    if (!options.fromQueue && !options.fromInlineRewrite && typeof window.consumeSelectedSkillsForSend === 'function') {
+        selectedSkillsForRun = window.consumeSelectedSkillsForSend();
+    }
+    var displayMessage = rawMessage;
+    if (selectedSkillsForRun && selectedSkillsForRun.length) {
+        displayMessage = rawMessage + '\n\n已选择 Skill：' + selectedSkillsForRun.join('、');
+    }
     reportClientPipelineStep(clientTimingCtx, 'preflight_checks', _clientStepStart, {
         forceStart: !!options.forceStart,
         fromQueue: !!options.fromQueue,
@@ -1242,7 +1304,7 @@ async function sendMessage(options) {
     reportClientPipelineStep(clientTimingCtx, 'prepare_run_context', _clientStepStart, { switchedAway: !!switchedAway });
     _clientStepStart = nowPipelineMs();
     const renderAsSteer = !!options.asSteer;
-    applySessionEvent({ type: renderAsSteer ? 'user_steer' : 'user', content: rawMessage, created_at: userSentAt, steer: renderAsSteer }, {
+    applySessionEvent({ type: renderAsSteer ? 'user_steer' : 'user', content: displayMessage, created_at: userSentAt, steer: renderAsSteer }, {
         sessionId: runSessionId,
         eventIndex: preCount,
         source: 'local-send',
@@ -1253,9 +1315,9 @@ async function sendMessage(options) {
         streamChatNearBottom = true;
         streamProcNearBottom = true;
         if (renderAsSteer) {
-            appendLog(runCtx, rawMessage, 'user-steer', runSessionId);
+            appendLog(runCtx, displayMessage, 'user-steer', runSessionId);
         } else {
-            appendMessage(runCtx, 'user', rawMessage, { eventIndex: preCount, turnTruncateIdx: preCount, createdAt: userSentAt }, runSessionId);
+            appendMessage(runCtx, 'user', displayMessage, { eventIndex: preCount, turnTruncateIdx: preCount, createdAt: userSentAt }, runSessionId);
         }
         if (!options.fromQueue && !options.preserveInput) {
             messageInput.value = '';
@@ -1265,8 +1327,8 @@ async function sendMessage(options) {
             setSendButtonState();
         }
     }
-    updateSidebarLastUserPreviewImmediate(runSessionId, rawMessage);
-    lastUserMessageBySession[runSessionId] = rawMessage;
+    updateSidebarLastUserPreviewImmediate(runSessionId, displayMessage);
+    lastUserMessageBySession[runSessionId] = displayMessage;
     reportClientPipelineStep(clientTimingCtx, 'local_user_render', _clientStepStart, { renderAsSteer: !!renderAsSteer, switchedAway: !!switchedAway });
     _clientStepStart = nowPipelineMs();
     const formData = new FormData();
@@ -1274,6 +1336,9 @@ async function sendMessage(options) {
     formData.append('session_id', runSessionId);
     formData.append('client_run_id', clientRunId);
     formData.append('stream_protocol', 'runtime_v2');
+    if (selectedSkillsForRun && selectedSkillsForRun.length) {
+        formData.append('selected_skills', JSON.stringify(selectedSkillsForRun));
+    }
     if (renderAsSteer) formData.append('followup_steer', 'true');
     /* 发送后优先使用本轮 API usage/cache_stats 刷新 token；缺少 usage 时仍保留上一快照。 */
     if (!switchedAway) applyContextTokenLabelForCurrentSession();

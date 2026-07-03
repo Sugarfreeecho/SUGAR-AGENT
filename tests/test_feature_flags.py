@@ -49,9 +49,20 @@ def test_index_html_injects_independent_feature_overrides(monkeypatch):
     }
 
 
+def test_index_html_defaults_stream_reconnect_enabled(monkeypatch):
+    import webui
+
+    monkeypatch.delenv("MYAGENT_ENABLE_STREAM_RECONNECT", raising=False)
+
+    flags = _extract_feature_flags(str(webui.get_index_html()))
+
+    assert flags["streamReconnect"] is True
+
+
 def test_frontend_feature_entrypoints_are_flag_guarded():
     sse = (ROOT / "frontend/src/app/modules/sse-handling.js").read_text(encoding="utf-8")
     sessions = (ROOT / "frontend/src/app/modules/session-management.js").read_text(encoding="utf-8")
+    webui = (ROOT / "app/webui.py").read_text(encoding="utf-8")
 
     assert "isMyAgentFeatureEnabled('followupRestart', false)" in sse
     assert "isMyAgentFeatureEnabled('streamReconnect', true)" in sse
@@ -60,6 +71,9 @@ def test_frontend_feature_entrypoints_are_flag_guarded():
     assert "const SSE_IDLE_TIMEOUT_MS = 45000" in sse
     assert "readSseChunkWithIdleTimeout(reader, SSE_IDLE_TIMEOUT_MS)" in sse
     assert "parsed.type === 'sse_keepalive' || parsed.keepalive === true" in sse
+    assert 'os.getenv("MYAGENT_ENABLE_STREAM_RECONNECT", "1")' in webui
+    assert "CHAT_SSE_KEEPALIVE_SEC" in webui
+    assert "'type': 'sse_keepalive'" in webui
     assert "function markRunFinalSeen(ctx)" in sse
     assert "function initRunFinalTracking(ctx)" in sse
     assert "if (ctx && ctx.seenFinal === true) return;" in sse
@@ -168,6 +182,38 @@ def test_stream_deltas_have_stable_dedupe_keys():
     assert "hasSeenStreamDelta(ctx, ev, 'llm_' + part)" in rendering
     assert "hasSeenStreamDelta(ctx, parsed, 'tool_call_delta')" in rendering
     assert "_seenStreamDeltaKeys: new Set()" in scroll
+
+
+def test_streamed_llm_commits_are_sse_fallbacks_without_repersisting():
+    agent_loop = (ROOT / "app/agent_loop.py").read_text(encoding="utf-8")
+    subagent_events = (ROOT / "app/agent_subagent_events.py").read_text(encoding="utf-8")
+
+    streamed_block = re.search(
+        r"if streamed_this_call:(?P<body>.*?)else:",
+        agent_loop,
+        re.S,
+    )
+    assert streamed_block, "streamed LLM branch must be explicit"
+    body = streamed_block.group("body")
+
+    assert 'session_manager.append_ui_event(' in body
+    assert '"type": "llm_reasoning"' in body
+    assert '"type": "llm_response"' in body
+    assert '"_skip_persist": True' in body
+    assert '"live_commit": True' in body
+    assert "emit=emit" in body
+    assert 'ev.get("_skip_persist")' in subagent_events
+
+
+def test_frontend_llm_delta_recovers_missing_scrollers():
+    rendering = (ROOT / "frontend/src/app/modules/message-rendering.js").read_text(encoding="utf-8")
+
+    assert "l.llmStreamReasoningScroller && !l.llmStreamReasoningScroller.isConnected" in rendering
+    assert "recoveredReasoning = findExistingLlmFeedRow" in rendering
+    assert "createProcessFeedRow(ctx, 'llm-reasoning'" in rendering
+    assert "l.llmStreamResponseScroller && !l.llmStreamResponseScroller.isConnected" in rendering
+    assert "recoveredResponse = findExistingLlmFeedRow" in rendering
+    assert "createProcessFeedRow(ctx, 'llm-response'" in rendering
 
 
 def test_runtime_v2_todo_plan_events_are_persistable():

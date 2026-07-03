@@ -114,8 +114,10 @@
                         <div class="input-wrapper">
                             <textarea id="message-input" rows="1" placeholder="说说你想做什么…" spellcheck="false" autocomplete="off"></textarea>
                             <button type="button" id="pick-path-btn" class="path-browse-btn path-browse-btn--ghost" aria-label="选择文件" data-ui-tip="选择文件"></button>
+                            <button type="button" id="skill-picker-btn" class="skill-picker-btn" aria-label="选择 Skill" aria-haspopup="dialog" aria-expanded="false" data-ui-tip="选择 Skill">SKILL</button>
                             <button type="button" id="send-btn" data-ui-tip="发送 / 停止">发送</button>
                         </div>
+                        <div id="skill-picker-popover" class="skill-picker-popover" role="dialog" aria-label="选择 Skill"></div>
                     </div>
                 </div>
                 <div class="composer-model-bar" id="model-profile-control">

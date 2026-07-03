@@ -10,8 +10,8 @@
     <script>try { if (localStorage.getItem('myagent-theme') !== 'dark') document.documentElement.classList.add('theme-light'); } catch (e) { document.documentElement.classList.add('theme-light'); }</script>
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/mermaid@10.9.5/dist/mermaid.min.js"></script>
-  <script type="module" crossorigin src="/assets/index-ZZrxg5qJ.js"></script>
-  <link rel="stylesheet" crossorigin href="/assets/index-Peiis_Y7.css">
+  <script type="module" crossorigin src="/assets/index-DKudVJn1.js"></script>
+  <link rel="stylesheet" crossorigin href="/assets/index-CnrZgb_3.css">
 </head>
 <body>
 <div class="app">
@@ -116,8 +116,10 @@
                         <div class="input-wrapper">
                             <textarea id="message-input" rows="1" placeholder="说说你想做什么…" spellcheck="false" autocomplete="off"></textarea>
                             <button type="button" id="pick-path-btn" class="path-browse-btn path-browse-btn--ghost" aria-label="选择文件" data-ui-tip="选择文件"></button>
+                            <button type="button" id="skill-picker-btn" class="skill-picker-btn" aria-label="选择 Skill" aria-haspopup="dialog" aria-expanded="false" data-ui-tip="选择 Skill">SKILL</button>
                             <button type="button" id="send-btn" data-ui-tip="发送 / 停止">发送</button>
                         </div>
+                        <div id="skill-picker-popover" class="skill-picker-popover" role="dialog" aria-label="选择 Skill"></div>
                     </div>
                 </div>
                 <div class="composer-model-bar" id="model-profile-control">

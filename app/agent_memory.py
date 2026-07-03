@@ -82,10 +82,12 @@ LLM 摘要轮（最多 CONTEXT_COMPRESS_MAX_ROUNDS 轮，默认 3）
 from __future__ import annotations
 
 import re
+from contextvars import ContextVar
 from copy import deepcopy
 from typing import Any, Callable, List, Literal, Optional, Tuple
 
 from agent_tokenizer import estimate_full_input_tokens_for_llm_history
+from agent_think import content_with_think_excerpt, strip_think_blocks, think_excerpt
 
 from agent_harness import (
     COMPACT_BOUNDARY_SYSTEM_EXACT,
@@ -124,6 +126,22 @@ from agent_harness import (
 )
 
 
+_ACTIVE_CONTEXT_WINDOW: ContextVar[Optional[int]] = ContextVar(
+    "agent_memory_active_context_window",
+    default=None,
+)
+
+
+def _effective_context_window() -> int:
+    override = _ACTIVE_CONTEXT_WINDOW.get()
+    if override is not None:
+        try:
+            return max(1, int(override))
+        except Exception:
+            pass
+    return max(1, int(CONTEXT_WINDOW))
+
+
 def _preview_llm_for_ui_estimate(work: List) -> List:
     """与压缩成功路径返回的 llm_history 形态一致，供整包 token 与右上角同口径。"""
     out = _filter_work_messages(work)
@@ -132,7 +150,7 @@ def _preview_llm_for_ui_estimate(work: List) -> List:
 
 def _compress_target_full_pack_cap_tokens() -> int:
     """与右上角一致的「达标」整包 token 上限：CONTEXT_WINDOW×CONTEXT_COMPRESS_TARGET_RATIO。"""
-    return max(256, int(int(CONTEXT_WINDOW) * float(CONTEXT_COMPRESS_TARGET_RATIO)))
+    return max(256, int(_effective_context_window() * float(CONTEXT_COMPRESS_TARGET_RATIO)))
 
 
 def _full_pack_tokens_for_session_preview(
@@ -175,7 +193,7 @@ def _full_pack_pct_ui(
     key_context: str,
 ) -> float:
     """上下文窗口占比（%），与右上角同为整包口径。"""
-    cw = max(1, int(CONTEXT_WINDOW))
+    cw = _effective_context_window()
     tok = _full_pack_tokens_for_session_preview(session_id, preview_llm_history, key_context)
     return round(100.0 * float(tok) / float(cw), 1)
 
@@ -343,6 +361,11 @@ def _micro_shrink_tool_calling_assistant_inplace(mm: AssistantMessage) -> bool:
     rc = ak.get("reasoning_content")
     rcs = "" if rc is None else str(rc)
     raw_c = str(mm.content or "")
+    clean_c = strip_think_blocks(raw_c)
+    if clean_c != raw_c:
+        raw_c = clean_c
+        mm.content = clean_c
+        changed = True
     has_c = bool(raw_c.strip())
     has_r = bool(rcs.strip())
 
@@ -452,9 +475,15 @@ def _tool_name_by_id(work: List) -> dict:
 
 
 def _strip_reasoning_inplace(mm: AssistantMessage) -> bool:
+    changed = False
+    raw_content = str(getattr(mm, "content", "") or "")
+    clean_content = strip_think_blocks(raw_content)
+    if clean_content != raw_content:
+        mm.content = clean_content
+        changed = True
     ak = getattr(mm, "additional_kwargs", None) or {}
     if not ak.get("reasoning_content"):
-        return False
+        return changed
     ak = dict(ak)
     ak.pop("reasoning_content", None)
     mm.additional_kwargs = ak
@@ -684,15 +713,19 @@ def compress_tail_fallback(
         tail, dropped = _llm_history_tail_within_token_budget_with_start(hist, mt)
         return tail, dropped > 0, dropped > 0
     if reason == "max_rounds":
-        mt = int(max_tokens if max_tokens is not None else max(4096, int(CONTEXT_WINDOW) // 2))
+        mt = int(max_tokens if max_tokens is not None else max(4096, _effective_context_window() // 2))
         if not hist:
             return [_with_boundary([])[0]], True, False
         tail, dropped = _llm_history_tail_within_token_budget_with_start(hist, mt)
+        if not dropped:
+            return tail, True, False
         return _with_boundary(tail), True, dropped > 0
     mt = int(max_tokens if max_tokens is not None else CONTEXT_COMPRESS_FAILURE_MAX_TOKENS)
     if not hist:
         return [_with_boundary([])[0]], True, False
     tail, dropped = _llm_history_tail_within_token_budget_with_start(hist, mt)
+    if not dropped:
+        return tail, True, False
     return _with_boundary(tail), True, dropped > 0
 
 
@@ -718,6 +751,10 @@ def _format_conversation_excerpt(
             ak = getattr(m, "additional_kwargs", None) or {}
             rc = ak.get("reasoning_content")
             rstr = (str(rc) if rc is not None else "")
+            tag_reasoning = think_excerpt(str(m.content or ""), reasoning_max)
+            if tag_reasoning:
+                rstr = (rstr + "\n\n" + tag_reasoning).strip() if rstr else tag_reasoning
+            content = strip_think_blocks(str(m.content or ""))
             rpart = f"[思考/推理] {truncate_head_tail(rstr, reasoning_max)}\n" if rstr else ""
             tcall = m.tool_calls or []
             tpart = f"[tool_calls] {tcall}\n" if tcall else ""
@@ -725,7 +762,7 @@ def _format_conversation_excerpt(
                 rpart
                 + tpart
                 + "[助手正文] "
-                + str(m.content or "")
+                + content
             )
         elif isinstance(m, ToolMessage):
             raw = str(m.content or "")
@@ -755,6 +792,7 @@ def _dialogue_work_to_chat_messages(
             out.append(UserMessage(content=str(m.content or "")))
         elif isinstance(m, AssistantMessage):
             mm = deepcopy(m)
+            mm.content = content_with_think_excerpt(str(mm.content or ""), keep_each_side=reasoning_max)
             ak = dict(mm.additional_kwargs or {})
             rc = ak.get("reasoning_content")
             if rc is not None:
@@ -938,8 +976,9 @@ def _compress_executor_prompt_caps() -> Tuple[int, int]:
     ratio = float(CONTEXT_COMPRESS_PROMPT_TOKEN_RATIO)
     if ratio < 1.0:
         ratio = 1.0
-    cap_prompt = int(int(CONTEXT_WINDOW) * ratio)
-    return cap_prompt, int(CONTEXT_WINDOW)
+    window = _effective_context_window()
+    cap_prompt = int(window * ratio)
+    return cap_prompt, window
 
 
 def _compress_executor_excerpt_fallback(
@@ -1260,7 +1299,7 @@ def _compress_entry_state(
     if not work:
         return work, False, 0, 0, 0, False, False
     ut = _count_user_turns(work)
-    tlim = int(CONTEXT_WINDOW)
+    tlim = _effective_context_window()
     full_pack = _full_pack_tokens_for_session_preview(
         session_id,
         list(llm_history or []),
@@ -1502,15 +1541,21 @@ def context_will_attempt_compress(
     *,
     force_user_compact: bool,
     key_context: str = "",
+    context_window: Optional[int] = None,
 ) -> bool:
     """在可能进入慢路径（实际会改 llm_history）时为 True。"""
-    _work, should_run, *_rest = _compress_entry_state(
-        llm_history,
-        session_id,
-        force_user_compact=force_user_compact,
-        key_context=key_context,
-    )
-    return should_run
+    token = _ACTIVE_CONTEXT_WINDOW.set(int(context_window)) if context_window else None
+    try:
+        _work, should_run, *_rest = _compress_entry_state(
+            llm_history,
+            session_id,
+            force_user_compact=force_user_compact,
+            key_context=key_context,
+        )
+        return should_run
+    finally:
+        if token is not None:
+            _ACTIVE_CONTEXT_WINDOW.reset(token)
 
 
 def run_context_policy(
@@ -1520,12 +1565,18 @@ def run_context_policy(
     *,
     force_user_compact: bool,
     hint_sink: Optional[Callable[[Any], None]] = None,
+    context_window: Optional[int] = None,
 ) -> Tuple[List, str, bool, List[str], bool, Optional[str]]:
     l = list(llm_history)
-    return _compress_unified_in_place(
-        l,
-        session_id,
-        key_context,
-        force_user_compact=force_user_compact,
-        hint_sink=hint_sink,
-    )
+    token = _ACTIVE_CONTEXT_WINDOW.set(int(context_window)) if context_window else None
+    try:
+        return _compress_unified_in_place(
+            l,
+            session_id,
+            key_context,
+            force_user_compact=force_user_compact,
+            hint_sink=hint_sink,
+        )
+    finally:
+        if token is not None:
+            _ACTIVE_CONTEXT_WINDOW.reset(token)

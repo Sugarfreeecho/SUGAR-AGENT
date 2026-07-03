@@ -344,15 +344,18 @@ def _profile_temperature(profile: dict) -> float:
 
 def strip_reasoning_for_api_request(messages: List[Any]) -> List[Any]:
     """?????? reasoning_content ?? token??????????????"""
+    from agent_think import strip_think_blocks
+
     thinking_on = _extra_body_thinking_enabled()
     out: List[Any] = []
     for m in messages:
         if not isinstance(m, AssistantMessage):
             out.append(m)
             continue
+        clean_content = strip_think_blocks(str(getattr(m, "content", "") or ""))
         ak = getattr(m, "additional_kwargs", None)
         if not isinstance(ak, dict):
-            out.append(m)
+            out.append(m.model_copy(update={"content": clean_content}))
             continue
 
         new_ak = dict(ak)
@@ -367,7 +370,7 @@ def strip_reasoning_for_api_request(messages: List[Any]) -> List[Any]:
         else:
             new_ak["reasoning_content"] = ""
 
-        out.append(m.model_copy(update={"additional_kwargs": new_ak}))
+        out.append(m.model_copy(update={"content": clean_content, "additional_kwargs": new_ak}))
     return out
 def _context_env_int(name: str, default: str) -> int:
     """读取上下文压缩相关 int；仅认 `name`（CONTEXT_*），不设则用 default。"""
