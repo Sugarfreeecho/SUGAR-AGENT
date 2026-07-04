@@ -28,6 +28,10 @@ class SessionAudit:
     runtime_v2_model_count: int
     ui_ok: bool
     model_ok: bool
+    ui_status: str = "unknown"
+    model_status: str = "unknown"
+    ui_first_mismatch: Dict[str, Any] | None = None
+    model_first_mismatch: Dict[str, Any] | None = None
     runtime_v2_active_run_count: int = 0
     runtime_v2_active_runs: List[dict] | None = None
     repaired_ui: int = 0
@@ -44,6 +48,10 @@ class SessionAudit:
             "runtime_v2_model_count": self.runtime_v2_model_count,
             "ui_ok": self.ui_ok,
             "model_ok": self.model_ok,
+            "ui_status": self.ui_status,
+            "model_status": self.model_status,
+            "ui_first_mismatch": self.ui_first_mismatch or {},
+            "model_first_mismatch": self.model_first_mismatch or {},
             "runtime_v2_active_run_count": self.runtime_v2_active_run_count,
             "runtime_v2_active_runs": self.runtime_v2_active_runs or [],
             "repaired_ui": self.repaired_ui,
@@ -86,14 +94,71 @@ def normalize_message_signature(message: dict) -> tuple[str, str, str]:
     return msg_type, content, tool_call_id
 
 
-def signatures_match(left: Iterable[dict], right: Iterable[dict], *, kind: str) -> bool:
+_STATE_ONLY_UI_EVENT_TYPES = {
+    "cache_stats",
+    "context_tokens",
+    "todo_plan",
+    "todo_updated",
+}
+
+
+def normalized_signatures(rows: Iterable[dict], *, kind: str) -> List[tuple]:
     if kind == "ui":
-        a = [normalize_event_signature(item) for item in left if isinstance(item, dict)]
-        b = [normalize_event_signature(item) for item in right if isinstance(item, dict)]
-    else:
-        a = [normalize_message_signature(item) for item in left if isinstance(item, dict)]
-        b = [normalize_message_signature(item) for item in right if isinstance(item, dict)]
-    return a == b
+        signatures = []
+        for item in rows:
+            if not isinstance(item, dict):
+                continue
+            if str(item.get("type") or "") in _STATE_ONLY_UI_EVENT_TYPES:
+                continue
+            signatures.append(normalize_event_signature(item))
+        return signatures
+    return [
+        normalize_message_signature(item)
+        for item in rows
+        if isinstance(item, dict)
+    ]
+
+
+def signatures_match(left: Iterable[dict], right: Iterable[dict], *, kind: str) -> bool:
+    return normalized_signatures(left, kind=kind) == normalized_signatures(right, kind=kind)
+
+
+def signatures_prefix_match(prefix: Iterable[dict], rows: Iterable[dict], *, kind: str) -> bool:
+    a = normalized_signatures(prefix, kind=kind)
+    b = normalized_signatures(rows, kind=kind)
+    return len(a) <= len(b) and b[:len(a)] == a
+
+
+def first_signature_mismatch(left: Iterable[dict], right: Iterable[dict], *, kind: str) -> Dict[str, Any]:
+    a = normalized_signatures(left, kind=kind)
+    b = normalized_signatures(right, kind=kind)
+    limit = max(len(a), len(b))
+    for index in range(limit):
+        left_sig = a[index] if index < len(a) else None
+        right_sig = b[index] if index < len(b) else None
+        if left_sig != right_sig:
+            return {
+                "index": index,
+                "legacy": list(left_sig) if left_sig is not None else None,
+                "runtime_v2": list(right_sig) if right_sig is not None else None,
+            }
+    return {}
+
+
+def classify_projection_status(legacy_rows: List[dict], v2_rows: List[dict], *, kind: str) -> tuple[bool, str]:
+    legacy_signatures = normalized_signatures(legacy_rows, kind=kind)
+    v2_signatures = normalized_signatures(v2_rows, kind=kind)
+    if not legacy_signatures and not v2_signatures:
+        return True, "empty"
+    if not legacy_signatures and v2_signatures:
+        return True, "v2_only"
+    if legacy_signatures and not v2_signatures:
+        return False, "missing_v2"
+    if len(legacy_signatures) == len(v2_signatures) and legacy_signatures == v2_signatures:
+        return True, "match"
+    if len(legacy_signatures) < len(v2_signatures) and v2_signatures[:len(legacy_signatures)] == legacy_signatures:
+        return True, "v2_ahead"
+    return False, "mismatch"
 
 
 def audit_session(
@@ -113,8 +178,10 @@ def audit_session(
     try:
         v2_ui = ui_projection.read_ui_events_fast(session_id)
         v2_model = model_projection.read_message_dicts(session_id)
-        ui_ok = len(legacy_ui) == len(v2_ui) and signatures_match(legacy_ui, v2_ui, kind="ui")
-        model_ok = len(legacy_model) == len(v2_model) and signatures_match(legacy_model, v2_model, kind="model")
+        ui_ok, ui_status = classify_projection_status(legacy_ui, v2_ui, kind="ui")
+        model_ok, model_status = classify_projection_status(legacy_model, v2_model, kind="model")
+        ui_first_mismatch = first_signature_mismatch(legacy_ui, v2_ui, kind="ui") if not ui_ok else {}
+        model_first_mismatch = first_signature_mismatch(legacy_model, v2_model, kind="model") if not model_ok else {}
 
         repaired_ui = 0
         repaired_model = 0
@@ -122,7 +189,8 @@ def audit_session(
         if repair_ui and legacy_ui and not ui_ok:
             repaired_ui = ui_projection.replace_from_legacy(session_id, legacy_ui, reason="runtime_audit_repair")
             v2_ui = ui_projection.read_ui_events_fast(session_id)
-            ui_ok = len(legacy_ui) == len(v2_ui) and signatures_match(legacy_ui, v2_ui, kind="ui")
+            ui_ok, ui_status = classify_projection_status(legacy_ui, v2_ui, kind="ui")
+            ui_first_mismatch = first_signature_mismatch(legacy_ui, v2_ui, kind="ui") if not ui_ok else {}
         if repair_model and legacy_model and not model_ok:
             RuntimeHistoryOps(sessions_dir).replace_model_history(
                 session_id,
@@ -131,7 +199,8 @@ def audit_session(
             )
             repaired_model = len(legacy_model)
             v2_model = model_projection.read_message_dicts(session_id)
-            model_ok = len(legacy_model) == len(v2_model) and signatures_match(legacy_model, v2_model, kind="model")
+            model_ok, model_status = classify_projection_status(legacy_model, v2_model, kind="model")
+            model_first_mismatch = first_signature_mismatch(legacy_model, v2_model, kind="model") if not model_ok else {}
         snapshot = SnapshotStore(sessions_dir).read(session_id)
         active_runs = snapshot.get("active_runs") if isinstance(snapshot, dict) else []
         if not isinstance(active_runs, list):
@@ -159,6 +228,10 @@ def audit_session(
             runtime_v2_model_count=len(v2_model),
             ui_ok=ui_ok,
             model_ok=model_ok,
+            ui_status=ui_status,
+            model_status=model_status,
+            ui_first_mismatch=ui_first_mismatch,
+            model_first_mismatch=model_first_mismatch,
             runtime_v2_active_run_count=len(active_runs),
             runtime_v2_active_runs=[dict(run) for run in active_runs if isinstance(run, dict)],
             repaired_ui=repaired_ui,
@@ -174,6 +247,10 @@ def audit_session(
             runtime_v2_model_count=0,
             ui_ok=False,
             model_ok=False,
+            ui_status="error",
+            model_status="error",
+            ui_first_mismatch={},
+            model_first_mismatch={},
             runtime_v2_active_run_count=0,
             runtime_v2_active_runs=[],
             error=f"{type(exc).__name__}: {exc}",
@@ -193,6 +270,12 @@ def summarize(rows: List[SessionAudit]) -> Dict[str, Any]:
         "checked": len(rows),
         "ui_mismatch": sum(1 for row in rows if not row.ui_ok),
         "model_mismatch": sum(1 for row in rows if not row.model_ok),
+        "ui_v2_only": sum(1 for row in rows if row.ui_status == "v2_only"),
+        "model_v2_only": sum(1 for row in rows if row.model_status == "v2_only"),
+        "ui_v2_ahead": sum(1 for row in rows if row.ui_status == "v2_ahead"),
+        "model_v2_ahead": sum(1 for row in rows if row.model_status == "v2_ahead"),
+        "ui_missing_v2": sum(1 for row in rows if row.ui_status == "missing_v2"),
+        "model_missing_v2": sum(1 for row in rows if row.model_status == "missing_v2"),
         "runtime_v2_active_run_sessions": sum(1 for row in rows if row.runtime_v2_active_run_count > 0),
         "runtime_v2_active_runs": sum(row.runtime_v2_active_run_count for row in rows),
         "errors": sum(1 for row in rows if row.error),

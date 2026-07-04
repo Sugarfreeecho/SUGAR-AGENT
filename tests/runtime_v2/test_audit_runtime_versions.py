@@ -3,7 +3,7 @@ import unittest
 from pathlib import Path
 
 from app.runtime_v2 import RuntimeHistoryOps, RuntimeMirror
-from scripts.audit_runtime_versions import audit_session, load_json_list, signatures_match
+from scripts.audit_runtime_versions import audit_session, load_json_list, signatures_match, summarize
 
 
 class RuntimeAuditToolTests(unittest.TestCase):
@@ -48,6 +48,107 @@ class RuntimeAuditToolTests(unittest.TestCase):
             [{"type": "user", "content": "u"}, {"type": "assistant", "content": "a"}],
             kind="model",
         ))
+
+    def test_audit_treats_pure_runtime_v2_sessions_as_ok(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            sid = "s1"
+            (root / sid).mkdir()
+            RuntimeMirror(root).mirror_ui_event(sid, {"type": "user", "content": "v2 user"})
+            RuntimeHistoryOps(root).replace_model_history(
+                sid,
+                [{"type": "user", "content": "v2 user"}],
+                reason="test",
+            )
+
+            row = audit_session(root, sid)
+            summary = summarize([row])
+
+            self.assertTrue(row.ui_ok)
+            self.assertTrue(row.model_ok)
+            self.assertEqual(row.ui_status, "v2_only")
+            self.assertEqual(row.model_status, "v2_only")
+            self.assertEqual(summary["ui_mismatch"], 0)
+            self.assertEqual(summary["model_mismatch"], 0)
+            self.assertEqual(summary["ui_v2_only"], 1)
+            self.assertEqual(summary["model_v2_only"], 1)
+
+    def test_audit_treats_runtime_v2_ahead_of_legacy_prefix_as_ok(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            sid = "s1"
+            session = root / sid
+            session.mkdir()
+            (session / "ui_events.json").write_text(
+                '[{"type":"user","content":"u"}]',
+                encoding="utf-8",
+            )
+            (session / "llm_history.json").write_text(
+                '[{"type":"user","content":"u"}]',
+                encoding="utf-8",
+            )
+            mirror = RuntimeMirror(root)
+            mirror.mirror_ui_event(sid, {"type": "user", "content": "u"})
+            mirror.mirror_ui_event(sid, {"type": "final", "content": "a"})
+            RuntimeHistoryOps(root).replace_model_history(
+                sid,
+                [
+                    {"type": "user", "content": "u"},
+                    {"type": "assistant", "content": "a"},
+                ],
+                reason="test",
+            )
+
+            row = audit_session(root, sid)
+            summary = summarize([row])
+
+            self.assertTrue(row.ui_ok)
+            self.assertTrue(row.model_ok)
+            self.assertEqual(row.ui_status, "v2_ahead")
+            self.assertEqual(row.model_status, "v2_ahead")
+            self.assertEqual(summary["ui_mismatch"], 0)
+            self.assertEqual(summary["model_mismatch"], 0)
+            self.assertEqual(summary["ui_v2_ahead"], 1)
+            self.assertEqual(summary["model_v2_ahead"], 1)
+
+    def test_audit_reports_first_signature_mismatch(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            sid = "s1"
+            session = root / sid
+            session.mkdir()
+            (session / "ui_events.json").write_text(
+                '[{"type":"user","content":"legacy"}]',
+                encoding="utf-8",
+            )
+            RuntimeMirror(root).mirror_ui_event(sid, {"type": "user", "content": "runtime"})
+
+            row = audit_session(root, sid)
+
+            self.assertFalse(row.ui_ok)
+            self.assertEqual(row.ui_first_mismatch["index"], 0)
+            self.assertEqual(row.ui_first_mismatch["legacy"], ["user", "legacy"])
+            self.assertEqual(row.ui_first_mismatch["runtime_v2"], ["user", "runtime"])
+
+    def test_audit_ignores_state_only_ui_events(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            sid = "s1"
+            session = root / sid
+            session.mkdir()
+            (session / "ui_events.json").write_text(
+                '[{"type":"user","content":"u"}]',
+                encoding="utf-8",
+            )
+            mirror = RuntimeMirror(root)
+            mirror.mirror_ui_event(sid, {"type": "cache_stats", "input": 1})
+            mirror.mirror_ui_event(sid, {"type": "context_tokens", "estimated": 1})
+            mirror.mirror_ui_event(sid, {"type": "user", "content": "u"})
+
+            row = audit_session(root, sid)
+
+            self.assertTrue(row.ui_ok)
+            self.assertEqual(row.ui_status, "match")
 
     def test_audit_reports_and_repairs_runtime_v2_active_runs(self):
         with tempfile.TemporaryDirectory() as tmp:
