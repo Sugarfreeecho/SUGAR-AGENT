@@ -46,7 +46,7 @@ class RuntimeUiProjectionTests(unittest.TestCase):
             self.assertEqual([ev["type"] for ev in events], ["user", "final"])
             self.assertFalse(projection.needs_legacy_backfill("s1"))
 
-    def test_read_ui_events_replaces_partial_runtime_projection(self):
+    def test_read_ui_events_does_not_replace_partial_runtime_projection(self):
         with tempfile.TemporaryDirectory() as tmp:
             mirror = RuntimeMirror(tmp)
             mirror.mirror_ui_event("s1", {"type": "user", "content": "partial"})
@@ -58,14 +58,10 @@ class RuntimeUiProjectionTests(unittest.TestCase):
                 {"type": "final", "content": "legacy final"},
             ])
 
-            self.assertEqual([ev["content"] for ev in events], [
-                "legacy user",
-                "legacy status",
-                "legacy final",
-            ])
-            self.assertEqual(len(projection.read_ui_events_fast("s1")), 3)
+            self.assertEqual([ev["content"] for ev in events], ["partial"])
+            self.assertEqual(len(projection.read_ui_events_fast("s1")), 1)
 
-    def test_read_ui_events_replaces_expanded_runtime_projection(self):
+    def test_read_ui_events_does_not_replace_expanded_runtime_projection(self):
         with tempfile.TemporaryDirectory() as tmp:
             mirror = RuntimeMirror(tmp)
             mirror.mirror_ui_event("s1", {"type": "user", "content": "duplicate user"})
@@ -76,8 +72,40 @@ class RuntimeUiProjectionTests(unittest.TestCase):
                 {"type": "user", "content": "legacy user"},
             ])
 
-            self.assertEqual(len(events), 1)
-            self.assertEqual(events[0]["content"], "legacy user")
+            self.assertEqual(len(events), 2)
+            self.assertEqual([ev["content"] for ev in events], ["duplicate user", "duplicate final"])
+
+    def test_sync_from_legacy_reports_v2_ahead_without_replacing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            mirror = RuntimeMirror(tmp)
+            mirror.mirror_ui_event("s1", {"type": "user", "content": "legacy user"})
+            mirror.mirror_ui_event("s1", {"type": "final", "content": "runtime tail"})
+            projection = RuntimeUiProjection(tmp)
+
+            result = projection.sync_from_legacy_if_needed("s1", lambda: [
+                {"type": "user", "content": "legacy user"},
+            ])
+
+            self.assertEqual(result["action"], "v2_ahead")
+            self.assertEqual(result["written"], 0)
+            self.assertEqual([ev["content"] for ev in projection.read_ui_events_fast("s1")], [
+                "legacy user",
+                "runtime tail",
+            ])
+
+    def test_sync_from_legacy_reports_mismatch_without_replacing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            mirror = RuntimeMirror(tmp)
+            mirror.mirror_ui_event("s1", {"type": "user", "content": "runtime"})
+            projection = RuntimeUiProjection(tmp)
+
+            result = projection.sync_from_legacy_if_needed("s1", lambda: [
+                {"type": "user", "content": "legacy"},
+            ])
+
+            self.assertEqual(result["action"], "mismatch")
+            self.assertEqual(result["written"], 0)
+            self.assertEqual([ev["content"] for ev in projection.read_ui_events_fast("s1")], ["runtime"])
 
     def test_pages_by_turns_from_runtime_projection(self):
         with tempfile.TemporaryDirectory() as tmp:

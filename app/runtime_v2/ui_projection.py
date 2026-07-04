@@ -154,20 +154,28 @@ class RuntimeUiProjection:
         if not projected:
             wrote = self.ensure_backfilled_from_legacy(session_id, legacy)
             return {"checked": True, "action": "backfill", "legacy_count": len(legacy), "projected_count": 0, "written": wrote}
-        if len(projected) != len(legacy):
-            wrote = self.replace_from_legacy(session_id, legacy, reason="legacy_ui_sync_on_open")
+        if self._events_equal(projected, legacy):
             return {
                 "checked": True,
-                "action": "replace",
+                "action": "none",
                 "legacy_count": len(legacy),
                 "projected_count": len(projected),
-                "written": wrote,
+                "written": 0,
+            }
+        if self._events_prefix_match(legacy, projected):
+            return {
+                "checked": True,
+                "action": "v2_ahead",
+                "legacy_count": len(legacy),
+                "projected_count": len(projected),
+                "written": 0,
             }
         return {
             "checked": True,
-            "action": "none",
+            "action": "mismatch",
             "legacy_count": len(legacy),
             "projected_count": len(projected),
+            "written": 0,
         }
 
     def read_ui_events(self, session_id: str, legacy_loader: Optional[Callable[[], Iterable[dict]]] = None) -> List[dict]:
@@ -176,9 +184,6 @@ class RuntimeUiProjection:
             legacy = [event for event in list(legacy_loader() or []) if isinstance(event, dict)]
             if legacy and not projected:
                 self.ensure_backfilled_from_legacy(session_id, legacy)
-                projected = self._projected_ui_events_cached(session_id)
-            elif legacy and len(projected) != len(legacy):
-                self.replace_from_legacy(session_id, legacy, reason="legacy_ui_sync_on_read")
                 projected = self._projected_ui_events_cached(session_id)
         return projected
 
@@ -193,6 +198,34 @@ class RuntimeUiProjection:
             if self.event_to_ui(event) is not None:
                 return True
         return False
+
+    @classmethod
+    def _event_signature(cls, event: dict) -> tuple[str, str]:
+        event_type = str((event or {}).get("type") or "")
+        content = (event or {}).get("content")
+        if content is None:
+            content = (event or {}).get("result")
+        if content is None:
+            content = (event or {}).get("message")
+        return event_type, str(content or "")
+
+    @classmethod
+    def _event_signatures(cls, events: Iterable[dict]) -> List[tuple[str, str]]:
+        return [
+            cls._event_signature(event)
+            for event in events or []
+            if isinstance(event, dict)
+        ]
+
+    @classmethod
+    def _events_equal(cls, left: Iterable[dict], right: Iterable[dict]) -> bool:
+        return cls._event_signatures(left) == cls._event_signatures(right)
+
+    @classmethod
+    def _events_prefix_match(cls, prefix: Iterable[dict], rows: Iterable[dict]) -> bool:
+        prefix_sigs = cls._event_signatures(prefix)
+        row_sigs = cls._event_signatures(rows)
+        return len(prefix_sigs) <= len(row_sigs) and row_sigs[:len(prefix_sigs)] == prefix_sigs
 
     def count_ui_events(self, session_id: str) -> int:
         return len(self.read_ui_events(session_id))

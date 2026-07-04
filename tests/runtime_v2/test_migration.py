@@ -96,3 +96,27 @@ def test_migration_service_backfills_v2_from_legacy_only_when_explicit(monkeypat
     assert model_messages == []
     assert saved_ui == []
     assert saved_model == []
+
+
+def test_migration_service_does_not_replace_runtime_v2_ahead_with_legacy(monkeypatch, tmp_path):
+    monkeypatch.setenv("RUNTIME_VERSION", "2")
+    mirror = RuntimeMirror(tmp_path)
+    mirror.mirror_ui_event("s1", {"type": "user", "content": "legacy prefix"})
+    mirror.mirror_ui_event("s1", {"type": "final", "content": "runtime tail"})
+    saved_ui = []
+    saved_model = []
+
+    result = RuntimeV2MigrationService(tmp_path).sync_session(
+        "s1",
+        load_legacy_ui_events=lambda: [{"type": "user", "content": "legacy prefix"}],
+        save_legacy_ui_events=lambda events: saved_ui.append(events),
+        load_legacy_model_messages=lambda: [],
+        save_legacy_model_messages=lambda messages: saved_model.append(messages),
+    )
+
+    events = RuntimeUiProjection(tmp_path).read_ui_events_fast("s1")
+
+    assert result["v2_from_v1"]["action"] == "v2_ahead"
+    assert [event["content"] for event in events] == ["legacy prefix", "runtime tail"]
+    assert saved_ui == []
+    assert saved_model == []
