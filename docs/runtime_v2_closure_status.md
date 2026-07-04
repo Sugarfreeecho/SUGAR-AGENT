@@ -1,19 +1,27 @@
 # Runtime V2 Closure Status
 
-Date: 2026-06-30
+Date: 2026-07-04
 
 ## Verified State
 
-- Runtime V2 tests: `54 passed`.
-- Workspace audit: `ui_mismatch=0`, `model_mismatch=0`, `runtime_v2_active_runs=0`, `errors=0`.
-- Existing workspace sessions were repaired with:
+- Full test suite: `197 passed`.
+- Frontend build and dist sync: passed.
+- Workspace audit command:
 
 ```powershell
-python scripts\audit_runtime_versions.py --repair-model --only-mismatches
+python scripts\audit_runtime_versions.py --output .tmp-runtime-v2-audit.json
 ```
+
+- Workspace audit result: `checked=126`, `ui_mismatch=3`, `model_mismatch=4`, `ui_v2_only=24`, `model_v2_only=27`, `ui_v2_ahead=2`, `model_v2_ahead=0`, `runtime_v2_active_runs=0`, `errors=0`.
+- `v2_only` means the session has Runtime V2 projection data and no legacy file history. This is expected for pure V2 sessions and is not a failure.
+- `v2_ahead` means legacy is a prefix and Runtime V2 has newer tail events. This is expected after normal V2 operation stopped implicit legacy writes.
+- Remaining `mismatch` rows are old divergent sessions and must not be auto-overwritten by legacy repair. They need explicit migration/repair review using `ui_first_mismatch` / `model_first_mismatch` from the audit output.
 
 ## Closed In This Pass
 
+- Runtime audit now distinguishes `match`, `v2_only`, `v2_ahead`, `missing_v2`, and `mismatch`, so pure V2 sessions are not treated as failed legacy parity checks.
+- Runtime audit ignores state-only UI events such as `cache_stats`, `context_tokens`, and todo snapshot events when comparing visible UI history.
+- Runtime audit reports `ui_first_mismatch` and `model_first_mismatch` for true divergent sessions, making old-session migration review concrete.
 - `/sessions/{id}/stream` reattach in V2 mode reads `RuntimeUiProjection` instead of resurrecting stale legacy stream state.
 - Raw V2 stream is available at `/runtime-v2/sessions/{id}/stream?after_seq=...`.
 - Branch creation records the source Runtime seq and seeds branch visible history from Runtime V2 events in V2 primary mode.
