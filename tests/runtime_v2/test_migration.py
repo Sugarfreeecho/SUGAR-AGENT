@@ -120,3 +120,50 @@ def test_migration_service_does_not_replace_runtime_v2_ahead_with_legacy(monkeyp
     assert [event["content"] for event in events] == ["legacy prefix", "runtime tail"]
     assert saved_ui == []
     assert saved_model == []
+
+
+def test_model_sync_does_not_replace_runtime_v2_ahead_with_legacy(monkeypatch, tmp_path):
+    monkeypatch.setenv("RUNTIME_VERSION", "2")
+    RuntimeHistoryOps(tmp_path).replace_model_history(
+        "s1",
+        [
+            {"type": "user", "content": "legacy prefix"},
+            {"type": "assistant", "content": "runtime tail"},
+        ],
+        reason="test",
+    )
+    projection = RuntimeModelProjection(tmp_path)
+
+    result = projection.sync_from_legacy_if_needed(
+        "s1",
+        [{"type": "user", "content": "legacy prefix"}],
+    )
+
+    assert result["action"] == "v2_ahead"
+    assert result["written"] == 0
+    assert [message["content"] for message in projection.read_message_dicts("s1")] == [
+        "legacy prefix",
+        "runtime tail",
+    ]
+
+
+def test_model_sync_reports_legacy_ahead_as_mismatch_without_replacing(monkeypatch, tmp_path):
+    monkeypatch.setenv("RUNTIME_VERSION", "2")
+    RuntimeHistoryOps(tmp_path).replace_model_history(
+        "s1",
+        [{"type": "user", "content": "runtime prefix"}],
+        reason="test",
+    )
+    projection = RuntimeModelProjection(tmp_path)
+
+    result = projection.sync_from_legacy_if_needed(
+        "s1",
+        [
+            {"type": "user", "content": "runtime prefix"},
+            {"type": "assistant", "content": "legacy tail"},
+        ],
+    )
+
+    assert result["action"] == "mismatch"
+    assert result["written"] == 0
+    assert [message["content"] for message in projection.read_message_dicts("s1")] == ["runtime prefix"]

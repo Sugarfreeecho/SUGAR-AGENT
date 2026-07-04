@@ -159,7 +159,7 @@ class RuntimeProjectorTests(unittest.TestCase):
             self.assertEqual(second, 0)
             self.assertEqual([m["content"] for m in messages], ["legacy", "answer"])
 
-    def test_model_projection_sync_replaces_partial_projection(self):
+    def test_model_projection_sync_reports_partial_projection_mismatch(self):
         with tempfile.TemporaryDirectory() as tmp:
             ops = RuntimeHistoryOps(tmp)
             ops.append_model_message("s1", "user", "partial")
@@ -171,9 +171,9 @@ class RuntimeProjectorTests(unittest.TestCase):
             ])
             messages = projection.read_message_dicts("s1")
 
-            self.assertEqual(result["action"], "replace")
-            self.assertEqual(result["written"], 2)
-            self.assertEqual([m["content"] for m in messages], ["legacy", "answer"])
+            self.assertEqual(result["action"], "mismatch")
+            self.assertEqual(result["written"], 0)
+            self.assertEqual([m["content"] for m in messages], ["partial"])
 
     def test_model_projection_sync_does_not_overwrite_longer_projection(self):
         with tempfile.TemporaryDirectory() as tmp:

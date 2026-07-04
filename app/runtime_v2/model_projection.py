@@ -84,6 +84,19 @@ class RuntimeModelProjection:
                 "projected_count": len(projected),
                 "written": 0,
             }
+        if not projected:
+            RuntimeHistoryOps(self.sessions_dir).replace_model_history(
+                session_id,
+                clean,
+                reason=reason,
+            )
+            return {
+                "checked": True,
+                "action": "backfill",
+                "legacy_count": len(clean),
+                "projected_count": 0,
+                "written": len(clean),
+            }
         if self._messages_equal(projected, clean):
             return {
                 "checked": True,
@@ -92,25 +105,20 @@ class RuntimeModelProjection:
                 "projected_count": len(projected),
                 "written": 0,
             }
-        if len(projected) >= len(clean):
+        if self._messages_prefix_match(clean, projected):
             return {
                 "checked": True,
-                "action": "mismatch",
+                "action": "v2_ahead",
                 "legacy_count": len(clean),
                 "projected_count": len(projected),
                 "written": 0,
             }
-        RuntimeHistoryOps(self.sessions_dir).replace_model_history(
-            session_id,
-            clean,
-            reason=reason,
-        )
         return {
             "checked": True,
-            "action": "replace",
+            "action": "mismatch",
             "legacy_count": len(clean),
             "projected_count": len(projected),
-            "written": len(clean),
+            "written": 0,
         }
 
     @classmethod
@@ -118,6 +126,12 @@ class RuntimeModelProjection:
         return [cls._message_signature(item) for item in left if isinstance(item, dict)] == [
             cls._message_signature(item) for item in right if isinstance(item, dict)
         ]
+
+    @classmethod
+    def _messages_prefix_match(cls, prefix: List[Dict[str, Any]], rows: List[Dict[str, Any]]) -> bool:
+        prefix_sigs = [cls._message_signature(item) for item in prefix if isinstance(item, dict)]
+        row_sigs = [cls._message_signature(item) for item in rows if isinstance(item, dict)]
+        return len(prefix_sigs) <= len(row_sigs) and row_sigs[:len(prefix_sigs)] == prefix_sigs
 
     @staticmethod
     def _message_signature(message: Dict[str, Any]) -> tuple[str, str, str]:
