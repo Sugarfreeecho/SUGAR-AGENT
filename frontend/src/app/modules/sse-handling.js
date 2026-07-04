@@ -1013,40 +1013,15 @@ function scheduleAcceptedFollowupWatch(sid, itemId) {
             return String(entry.id) === String(itemId);
         });
         if (!queued || queued.status !== 'accepted') return;
-        cancelSteerMessage(sid, queued).catch(function () {
-            if (isSessionRunning(sid)) return Promise.reject(new Error('still running'));
-            return null;
-        }).then(function () {
-            var latest = getFollowupQueue(sid).find(function (entry) {
-                return String(entry.id) === String(itemId);
-            });
-            if (!latest || latest.status !== 'accepted') return;
-            latest.status = '';
-            latest.steerId = '';
-            persistFollowupQueue(sid);
-            renderFollowupQueue(sid);
-            scheduleFollowupQueueDrain(sid, 0);
-        }).catch(function () {
+        refreshFollowupRunState(sid).finally(function () {
             var latest = getFollowupQueue(sid).find(function (entry) {
                 return String(entry.id) === String(itemId);
             });
             if (!latest || latest.status !== 'accepted') return;
             if (isSessionRunning(sid) || isServerStreamActive(sid)) {
-                latest.status = 'sent';
-                persistFollowupQueue(sid);
-                renderFollowupQueue(sid);
-                setTimeout(function () {
-                    takeFollowupItem(sid, itemId);
-                    renderFollowupQueue(sid);
-                }, 1200);
                 scheduleActiveSessionReconnect(sid, { delayMs: 0 });
-                return;
+                scheduleActiveSessionReconnect(sid, { delayMs: 1200 });
             }
-            latest.status = '';
-            latest.steerId = '';
-            persistFollowupQueue(sid);
-            renderFollowupQueue(sid);
-            scheduleFollowupQueueDrain(sid, 1200);
         });
     }, 1200);
 }
@@ -1069,6 +1044,9 @@ async function sendFollowupNow(itemId, sessionId) {
     if (idx < 0) return;
     const item = q[idx];
     if (!item) return;
+    if (item.status === 'submitting' || item.status === 'accepted' || item.status === 'sent' || item.status === 'withdrawing') {
+        return;
+    }
     item.clientId = item.clientId || ('followup-' + item.id + '-' + Date.now());
     item.status = 'submitting';
     persistFollowupQueue(sid);
@@ -1300,9 +1278,24 @@ async function sendMessage(options) {
         sendPipelineLockSessionId = submitSessionId;
     }
     clientTimingCtx.sessionId = submitSessionId || clientTimingCtx.sessionId;
+    const runSessionId = submitSessionId;
+    submittedRunSessionId = runSessionId;
+    _clientStepStart = nowPipelineMs();
+    const clientRunId = (window.crypto && window.crypto.randomUUID)
+        ? window.crypto.randomUUID()
+        : ('run-' + Date.now() + '-' + Math.random().toString(16).slice(2));
+    clientTimingCtx.runId = clientRunId;
+    const ac = new AbortController();
+    if (typeof clearSessionStreamStopSuppress === 'function') clearSessionStreamStopSuppress(runSessionId);
+    var optimisticRunState = { controller: ac, ctx: null, runId: clientRunId, optimistic: true };
+    setSessionRunState(runSessionId, optimisticRunState);
+    setSendButtonState();
+    syncSessionListIndicatorClasses();
+    reportClientPipelineStep(clientTimingCtx, 'prepare_client_run_id_and_optimistic_state', _clientStepStart);
     // 缓存过期时用轻量 count 校准，避免乐观 user index 和服务端 ui_events 分叉。
     _clientStepStart = nowPipelineMs();
     let preCount = await getUiEventCount(submitSessionId, { preferCache: true, maxAgeMs: 10000 });
+    if (ac.signal.aborted || optimisticRunState.abortReason) return;
     const existingStreamForIndex = (submitSessionId === currentSessionId) ? getVisibleChatStream() : null;
     if (existingStreamForIndex) {
         existingStreamForIndex.querySelectorAll('.msg-wrap--user[data-event-index]').forEach(function (wrap) {
@@ -1311,17 +1304,11 @@ async function sendMessage(options) {
         });
     }
     reportClientPipelineStep(clientTimingCtx, 'resolve_ui_event_count', _clientStepStart, { preCount: preCount });
-    const runSessionId = submitSessionId;
-    submittedRunSessionId = runSessionId;
     _clientStepStart = nowPipelineMs();
     if (sessionStore && typeof sessionStore.resetSseSeq === 'function') {
         sessionStore.resetSseSeq(runSessionId);
     }
-    const clientRunId = (window.crypto && window.crypto.randomUUID)
-        ? window.crypto.randomUUID()
-        : ('run-' + Date.now() + '-' + Math.random().toString(16).slice(2));
-    clientTimingCtx.runId = clientRunId;
-    reportClientPipelineStep(clientTimingCtx, 'prepare_client_run_id', _clientStepStart);
+    reportClientPipelineStep(clientTimingCtx, 'prepare_sse_sequence_state', _clientStepStart);
 
     /* 用户在 createNewSession / getUiEventCount 期间切走：
        后台仍然发起 /chat（消息已属于 runSessionId），但不要往当前可见 stream 画用户气泡。 */
@@ -1346,9 +1333,9 @@ async function sendMessage(options) {
     resetLlmState(runCtx);
     finalizeLlmStreamChunks(runCtx);
     sealProcessGroup(runCtx);
-    const ac = new AbortController();
-    if (typeof clearSessionStreamStopSuppress === 'function') clearSessionStreamStopSuppress(runSessionId);
-    setSessionRunState(runSessionId, { controller: ac, ctx: runCtx, runId: clientRunId });
+    optimisticRunState.ctx = runCtx;
+    optimisticRunState.optimistic = false;
+    setSessionRunState(runSessionId, optimisticRunState);
     setSendButtonState();
     syncSessionListIndicatorClasses();
     reportClientPipelineStep(clientTimingCtx, 'prepare_run_context', _clientStepStart, { switchedAway: !!switchedAway });
@@ -1458,7 +1445,8 @@ async function sendMessage(options) {
         _clientStepStart = nowPipelineMs();
         sendPipelineLock = false;
         sendPipelineLockSessionId = null;
-        var stoppedByUser = getRunAbortReason(submittedRunSessionId, submittedRunCtx) === 'user';
+        var stoppedByUser = getRunAbortReason(submittedRunSessionId, submittedRunCtx) === 'user'
+            || (optimisticRunState && optimisticRunState.abortReason === 'user');
         if (!stoppedByUser && (!options.fromQueue || getFollowupQueue(submittedRunSessionId).length)) {
             setTimeout(function () { drainFollowupQueue(submittedRunSessionId); }, 0);
         }

@@ -3314,17 +3314,20 @@ async def append_ui_events_tail(session_id: str, request: Request):
 from pathlib import Path as _Path
 from fastapi import Request as _Request
 from fastapi.responses import HTMLResponse as _HTMLResponse
-_CONFIG_PATH = _Path(__file__).resolve().parent / "templates" / "frist_time_config.html"
+_TEMPLATES_DIR = _Path(__file__).resolve().parent / "templates"
+_CONFIG_PATH = _TEMPLATES_DIR / "first_time_config.html"
+_LEGACY_CONFIG_PATH = _TEMPLATES_DIR / "frist_time_config.html"
 
 
 def _load_config_wizard_html() -> str:
-    if _CONFIG_PATH.is_file():
-        return _CONFIG_PATH.read_text(encoding="utf-8")
-    # 极简兜底（完整 UI：templates/frist_time_config.html）
+    for path in (_CONFIG_PATH, _LEGACY_CONFIG_PATH):
+        if path.is_file():
+            return path.read_text(encoding="utf-8")
+    # 极简兜底（完整 UI：templates/first_time_config.html）
     return """<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8"><title>首次配置</title></head>
 <body style="font-family:sans-serif;max-width:480px;margin:2rem auto;padding:1rem;">
 <h1>General Agent · 首次配置</h1>
-<p>缺少 <code>templates/frist_time_config.html</code>，使用简易表单。</p>
+<p>缺少 <code>templates/first_time_config.html</code>，使用简易表单。</p>
 <form id="f"><label>OPENAI_API_KEY<input id="k" type="password" style="width:100%;margin:.5rem 0"></label>
 <label>OPENAI_BASE_URL<input id="u" type="text" placeholder="https://api.deepseek.com" style="width:100%;margin:.5rem 0"></label>
 <button type="submit">保存</button></form>
@@ -3564,7 +3567,7 @@ def _wizard_prefill_from_dotenv() -> dict[str, str]:
 
 @fastapi_app.get("/setup", response_class=_HTMLResponse)
 async def setup_page():
-    # 每次都从磁盘读，替换 templates/frist_time_config.html 后立即生效；避免 stale 缓存
+    # 每次都从磁盘读，替换 templates/first_time_config.html 后立即生效；避免 stale 缓存
     body = _load_config_wizard_html()
     prefill = _wizard_prefill_from_dotenv()
     inject = (

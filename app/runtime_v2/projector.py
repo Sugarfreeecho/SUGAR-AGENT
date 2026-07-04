@@ -302,7 +302,19 @@ class RuntimeProjector:
             payload = op.get("payload") or {}
             projected = self._truncate_rows(projected, payload)
 
-        model_source = snapshot.get("raw_model_messages") or projected
+        raw_model_messages = snapshot.get("raw_model_messages") or []
+        model_source = raw_model_messages if isinstance(raw_model_messages, list) else []
+        context = snapshot.get("context")
+        if not isinstance(context, dict):
+            context = {}
+            snapshot["context"] = context
+        if model_source:
+            context.pop("model_history_missing", None)
+        elif projected:
+            context["model_history_missing"] = {
+                "reason": "raw_model_messages_absent",
+                "visible_message_count": len(projected),
+            }
         model_messages = []
         for message in model_source:
             seq = self._int_or_none(message.get("seq"))

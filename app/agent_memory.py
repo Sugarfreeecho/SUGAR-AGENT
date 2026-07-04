@@ -1004,24 +1004,11 @@ def _extract_xml_block(text: str, tag: str) -> str:
 
 def _parse_compress_dialogue_output(raw: str) -> Tuple[str, str]:
     """单次压缩模型输出 → (recap, key_body)。"""
-    text = (raw or "").strip()
+    text = strip_think_blocks(raw or "")
     if not text:
         return "", ""
     key_body = _extract_xml_block(text, "summary")
     recap = _extract_xml_block(text, "recap")
-    if not recap:
-        recap = re.sub(r"<analysis[^>]*>[\s\S]*?</analysis>", "", text, flags=re.IGNORECASE)
-        recap = re.sub(r"<summary[^>]*>[\s\S]*?</summary>", "", recap, flags=re.IGNORECASE)
-        recap = re.sub(r"</?recap>", "", recap, flags=re.IGNORECASE).strip()
-    if not recap:
-        recap = re.sub(r"</?summary>", "", text, flags=re.IGNORECASE).strip()
-    if recap and not key_body:
-        # Some compatible endpoints ignore one of the XML blocks under pressure.
-        # Keep the compression useful instead of forcing a retry/fallback when
-        # there is still a usable summary body.
-        key_body = recap
-    elif key_body and not recap:
-        recap = key_body
     if not key_body:
         logger.warning("compress_history_and_key 无 <summary> 块")
     if not recap:
@@ -1432,6 +1419,17 @@ def _compress_unified_in_place(
             round_idx += 1
             prefix, tail = _split_prefix_tail_for_summary_round(work, round_idx, tail_keep)
             if not prefix:
+                if round_idx < max_summary_rounds:
+                    _push_progress_hint(
+                        hints,
+                        hint_sink,
+                        f"【上下文摘要】第 {round_idx} 轮没有足够可摘要的历史前缀，继续尝试更窄尾窗…",
+                        kind="summary",
+                        session_id=session_id,
+                        preview_llm_history=_preview_llm_for_ui_estimate(work),
+                        key_context=cur_key,
+                    )
+                    continue
                 fallback_reason = "no_prefix"
                 _push_progress_hint(
                     hints,
@@ -1443,6 +1441,7 @@ def _compress_unified_in_place(
                     key_context=cur_key,
                 )
                 break
+            fallback_reason = "max_rounds"
             try:
                 session_manager.backup_llm_compress_prefix(session_id, list(prefix))
             except Exception as _be:

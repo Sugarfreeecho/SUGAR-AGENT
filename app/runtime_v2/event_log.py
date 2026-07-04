@@ -19,6 +19,8 @@ class SessionEventLog:
 
     _global_locks: Dict[str, threading.Lock] = {}
     _global_locks_guard = threading.Lock()
+    _seq_cache: Dict[str, tuple[int, int, int]] = {}
+    _seq_cache_guard = threading.Lock()
 
     def __init__(self, root: os.PathLike[str] | str, path_resolver: Optional[Callable[[str], os.PathLike[str] | str]] = None):
         self.root = Path(root)
@@ -49,6 +51,7 @@ class SessionEventLog:
                 fh.write(json.dumps(event.to_dict(), ensure_ascii=False, separators=(",", ":")))
                 fh.write("\n")
                 fh.flush()
+            self._update_seq_cache(session_id, event.seq)
             return event
 
     def append_event(self, event: RuntimeEvent) -> RuntimeEvent:
@@ -69,6 +72,7 @@ class SessionEventLog:
                 fh.write(json.dumps(event.to_dict(), ensure_ascii=False, separators=(",", ":")))
                 fh.write("\n")
                 fh.flush()
+            self._update_seq_cache(event.session_id, event.seq)
             return event
 
     def read_all(self, session_id: str) -> List[RuntimeEvent]:
@@ -155,6 +159,9 @@ class SessionEventLog:
                     continue
 
     def next_seq(self, session_id: str) -> int:
+        cached = self._cached_last_seq(session_id)
+        if cached is not None:
+            return cached + 1
         last = 0
         path = self.event_path(session_id)
         if not path.exists():
@@ -170,6 +177,7 @@ class SessionEventLog:
                     continue
                 if event.seq > last:
                     last = event.seq
+        self._update_seq_cache(session_id, last)
         return last + 1
 
     def repair(self, session_id: str) -> Dict[str, int]:
@@ -204,7 +212,42 @@ class SessionEventLog:
                     fh.write(json.dumps(ev.to_dict(), ensure_ascii=False, separators=(",", ":")))
                     fh.write("\n")
             tmp.replace(path)
+            self._update_seq_cache(session_id, len(repaired))
             return {"kept": len(repaired), "dropped": dropped}
+
+    def _cache_scope_for(self, session_id: str) -> str:
+        try:
+            return str(self.event_path(session_id).resolve())
+        except Exception:
+            return str(self.root.resolve()) + "::" + str(session_id or "")
+
+    def _cached_last_seq(self, session_id: str) -> Optional[int]:
+        path = self.event_path(session_id)
+        if not path.exists():
+            return None
+        try:
+            stat = path.stat()
+        except OSError:
+            return None
+        scope = self._cache_scope_for(session_id)
+        with self._seq_cache_guard:
+            cached = self._seq_cache.get(scope)
+        if not cached:
+            return None
+        mtime_ns, size, last = cached
+        if mtime_ns == stat.st_mtime_ns and size == stat.st_size:
+            return int(last)
+        return None
+
+    def _update_seq_cache(self, session_id: str, last_seq: int) -> None:
+        path = self.event_path(session_id)
+        try:
+            stat = path.stat()
+        except OSError:
+            return
+        scope = self._cache_scope_for(session_id)
+        with self._seq_cache_guard:
+            self._seq_cache[scope] = (int(stat.st_mtime_ns), int(stat.st_size), int(last_seq))
 
     def _lock_for(self, session_id: str) -> threading.Lock:
         safe_id = self._validate_session_id(session_id)

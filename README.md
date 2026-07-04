@@ -89,7 +89,7 @@ SugarAgent/
 │   ├── .env                      # 环境变量配置
 │   ├── requirements.txt          # Python 依赖
 │   ├── templates/                # 后端 HTML 模板与 Vite 构建产物
-│   │   ├── frist_time_config.html  # 首次配置向导
+│   │   ├── first_time_config.html  # 首次配置向导
 │   │   ├── advance_config.html     # 高级环境变量配置
 │   │   ├── mcp_config.html         # MCP 配置页面
 │   │   └── dist/                   # Vite 生产构建输出

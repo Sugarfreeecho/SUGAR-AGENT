@@ -1410,11 +1410,13 @@ function cleanPathTokenForLink(s) {
 
 /** 统一全角标点/数字等，便于识别「．xlsx」「路径：／」等变体 */
 function linkifyNormalizePathToken(s) {
-    try {
-        return String(s || '').normalize('NFKC');
-    } catch (e) {
-        return String(s || '');
-    }
+    return String(s || '')
+        .replace(/\uFF0F/g, '/')
+        .replace(/\uFF3C/g, '\\')
+        .replace(/\uFF1A/g, ':')
+        .replace(/\uFF0E/g, '.')
+        .replace(/[\u2018\u2019\u201B\u2032\uFF07]/g, "'")
+        .replace(/[\u201C\u201D\u201E\u2033\uFF02]/g, '"');
 }
 
 /** 可链转「工作区下文件」的已知后缀（与 linkify / 虚拟路径规则共用） */

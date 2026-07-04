@@ -580,10 +580,10 @@ def _trim_unclosed_tool_call_tail_preserve_completed(
 
         changed_at = len(out)
         completed_ids = [tid for tid in ids if tid in seen_ids]
+        raw_calls = list(getattr(msg, "tool_calls", None) or [])
+        kept_calls: List[Any] = []
         if completed_ids:
-            raw_calls = list(getattr(msg, "tool_calls", None) or [])
             completed_set = set(completed_ids)
-            kept_calls: List[Any] = []
             for idx, tc in enumerate(raw_calls):
                 if isinstance(tc, dict):
                     raw = tc.get("id") or tc.get("tool_call_id") or ""
@@ -592,9 +592,22 @@ def _trim_unclosed_tool_call_tail_preserve_completed(
                 tid = str(raw or "").strip() or f"__missing_tool_call_id_{idx}"
                 if tid in completed_set:
                     kept_calls.append(tc)
-            if kept_calls:
-                out.append(msg.model_copy(update={"tool_calls": kept_calls}))
-                out.extend([t for t in tool_rows if str(getattr(t, "tool_call_id", "") or "").strip() in completed_set])
+        if kept_calls:
+            out.append(msg.model_copy(update={"tool_calls": kept_calls}))
+            out.extend([t for t in tool_rows if str(getattr(t, "tool_call_id", "") or "").strip() in completed_set])
+        else:
+            content = str(getattr(msg, "content", "") or "")
+            additional = getattr(msg, "additional_kwargs", None) or {}
+            reasoning = ""
+            if isinstance(additional, dict):
+                reasoning = str(
+                    additional.get("reasoning_content")
+                    or additional.get("reasoning")
+                    or additional.get("reasoning_text")
+                    or ""
+                )
+            if content or reasoning:
+                out.append(msg.model_copy(update={"tool_calls": None}))
         return out, changed_at
     return out, changed_at
 
@@ -1026,6 +1039,14 @@ async def _emit_steer_abort_event(
             event["react_iter"] = int(react_iter)
     except Exception:
         pass
+    try:
+        await prune_session_ephemeral(
+            str(state.get("session_id") or ""),
+            types={"tool_pending", "tool_call_delta", "tool_command_delta"},
+            react_iter=event.get("react_iter"),
+        )
+    except Exception:
+        logger.debug("failed to prune aborted tool stream ephemerals", exc_info=True)
     await _push_stream_event(
         state,
         event,
@@ -2564,7 +2585,7 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
 
             async def _run_early_tool_call(idx: int, tc: Dict[str, Any]) -> Any:
                 try:
-                    r = await execute_one(tc)
+                    r = await _await_steerable(state, execute_one(tc), emit, "tool")
                 except _SteerRestartRequested:
                     raise
                 except Exception as e:
@@ -2591,6 +2612,11 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
                     return
                 tc = _early_tool_call_from_acc(idx)
                 if not tc or tc.get("name") == "context_manage":
+                    return
+                # Only pre-run read-only tools while the model is still streaming.
+                # Write tools must wait until the final finish_reason confirms the
+                # assistant turn was not truncated by max_tokens.
+                if tc.get("name") not in READ_ONLY_TOOLS:
                     return
                 early_tool_tasks[idx] = asyncio.create_task(_run_early_tool_call(idx, tc))
 
@@ -3030,6 +3056,51 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
             )
 
             # 推送给前端：流式时已在 delta 中展示；非流式仍发整段事件（与持久化一致）
+            finish_reason_norm = str(llm_call_finish.get("finish_reason") or "").strip().lower()
+            stop_reason_norm = str(llm_call_finish.get("stop_reason") or "").strip().lower()
+            output_truncated = (
+                finish_reason_norm in {"length", "max_tokens", "max_output_tokens"}
+                or stop_reason_norm in {"length", "max_tokens", "max_output_tokens"}
+            )
+            if output_truncated:
+                for _task in list(early_tool_tasks.values()):
+                    if not _task.done():
+                        _task.add_done_callback(_discard_task_result)
+                        _task.cancel()
+                length_retry = int(state.get("_output_length_retries", 0) or 0) + 1
+                state["_output_length_retries"] = length_retry
+                max_length_retries = max(0, int(os.getenv("OUTPUT_LENGTH_RETRY_MAX", "2")))
+                if length_retry <= max_length_retries:
+                    retry_msg = SystemMessage(
+                        content=(
+                            "[系统通知：上一轮 assistant 输出因为 max_tokens/max_output_tokens 上限被截断，"
+                            "可能包含未闭合或不完整的 tool_call。该半截输出已丢弃，不能当作最终答案。"
+                            "请重新生成一个完整且更短的下一步；如果需要写入长文件，请拆成多个较小的工具调用，"
+                            "或先写入较小脚本/片段再继续。]"
+                        )
+                    )
+                    llm_history.append(retry_msg)
+                    work_messages.append(retry_msg)
+                    _runtime_v2_append_model_message(state, retry_msg)
+                    state["llm_history"] = llm_history
+                    state["work_messages"] = work_messages
+                    _persist_state(state)
+                    await _push_stream_event(
+                        state,
+                        {
+                            "type": "status",
+                            "content": f"模型输出达到输出 token 上限，已丢弃半截工具调用并重试（{length_retry}/{max_length_retries}）",
+                        },
+                        emit=emit,
+                    )
+                    continue
+                final_content = (
+                    "模型输出达到 max_tokens/max_output_tokens 上限，工具调用可能被截断。"
+                    "请调大输出窗口，或把长文件写入拆成更小的步骤后重试。"
+                )
+                break
+            state.pop("_output_length_retries", None)
+
             if emit:
                 if streamed_this_call:
                     sid = state["session_id"]
@@ -3194,7 +3265,7 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
 
                     async def run_one_with_tc(tc: Dict[str, Any]):
                         try:
-                            r = await execute_one(tc)
+                            r = await _await_steerable(state, execute_one(tc), emit, "tool")
                         except _SteerRestartRequested:
                             raise
                         except Exception as e:
@@ -3281,7 +3352,12 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
 
                     # 写操作前先清空当前只读并行队列
                     await flush_read_only()
-                    write_result = await execute_one(tool_call)
+                    write_result = await _await_steerable(
+                        state,
+                        execute_one(tool_call),
+                        emit,
+                        "tool",
+                    )
                     exec_results.append(write_result)
 
                 # 末尾残留的只读工具并行执行
