@@ -40,10 +40,6 @@ python/
 *.7z
 *.rar
 
-# Local-only project notes, scripts, and tests
-docs/
-scripts/
-tests/
 更新日志 202606.md
 
 # Local planning / changelog notes that should stay out of the repo

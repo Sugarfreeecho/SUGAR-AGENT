@@ -1,0 +1,346 @@
+import json
+import re
+import sys
+from pathlib import Path
+import asyncio
+
+
+ROOT = Path(__file__).resolve().parents[1]
+APP_DIR = ROOT / "app"
+if str(APP_DIR) not in sys.path:
+    sys.path.insert(0, str(APP_DIR))
+
+
+def _extract_feature_flags(html: str) -> dict:
+    match = re.search(r"window\.__MYAGENT_FEATURES__=([^<;]+);", html)
+    assert match, "feature flag injection missing"
+    return json.loads(match.group(1))
+
+
+def test_index_html_injects_conservative_feature_values(monkeypatch):
+    import webui
+
+    monkeypatch.setenv("MYAGENT_ENABLE_FOLLOWUP_RESTART", "0")
+    monkeypatch.setenv("MYAGENT_ENABLE_STREAM_RECONNECT", "0")
+    monkeypatch.setenv("MYAGENT_ENABLE_FINAL_RECONCILE", "1")
+
+    flags = _extract_feature_flags(str(webui.get_index_html()))
+
+    assert flags == {
+        "followupRestart": False,
+        "streamReconnect": False,
+        "finalReconcile": True,
+    }
+
+
+def test_index_html_injects_independent_feature_overrides(monkeypatch):
+    import webui
+
+    monkeypatch.setenv("MYAGENT_ENABLE_FOLLOWUP_RESTART", "1")
+    monkeypatch.setenv("MYAGENT_ENABLE_STREAM_RECONNECT", "true")
+    monkeypatch.setenv("MYAGENT_ENABLE_FINAL_RECONCILE", "0")
+
+    flags = _extract_feature_flags(str(webui.get_index_html()))
+
+    assert flags == {
+        "followupRestart": True,
+        "streamReconnect": True,
+        "finalReconcile": False,
+    }
+
+
+def test_index_html_defaults_stream_reconnect_enabled(monkeypatch):
+    import webui
+
+    monkeypatch.delenv("MYAGENT_ENABLE_STREAM_RECONNECT", raising=False)
+
+    flags = _extract_feature_flags(str(webui.get_index_html()))
+
+    assert flags["streamReconnect"] is True
+
+
+def test_frontend_feature_entrypoints_are_flag_guarded():
+    sse = (ROOT / "frontend/src/app/modules/sse-handling.js").read_text(encoding="utf-8")
+    sessions = (ROOT / "frontend/src/app/modules/session-management.js").read_text(encoding="utf-8")
+    webui = (ROOT / "app/webui.py").read_text(encoding="utf-8")
+
+    assert "isMyAgentFeatureEnabled('followupRestart', false)" in sse
+    assert "isMyAgentFeatureEnabled('streamReconnect', true)" in sse
+    assert "isMyAgentFeatureEnabled('finalReconcile', true)" in sse
+    assert "function scheduleFinalVisibleAfterRunIfEnabled" in sse
+    assert "const SSE_IDLE_TIMEOUT_MS = 45000" in sse
+    assert "readSseChunkWithIdleTimeout(reader, SSE_IDLE_TIMEOUT_MS)" in sse
+    assert "parsed.type === 'sse_keepalive' || parsed.keepalive === true" in sse
+    assert 'os.getenv("MYAGENT_ENABLE_STREAM_RECONNECT", "1")' in webui
+    assert "CHAT_SSE_KEEPALIVE_SEC" in webui
+    assert "'type': 'sse_keepalive'" in webui
+    assert "function markRunFinalSeen(ctx)" in sse
+    assert "function initRunFinalTracking(ctx)" in sse
+    assert "if (ctx && ctx.seenFinal === true) return;" in sse
+    assert "if (eventSessionId === runSessionId) markRunFinalSeen(runCtx);" in sse
+    assert "await ensureFinalVisibleAfterRunIfEnabled" not in sse
+    assert "function fetchLatestStoredFinalRecord" not in sse
+    assert "var latestFinal = await fetchLatestStoredFinalRecord(sid);" not in sse
+    assert "messages?limit=120" not in sse
+    assert "function reconcileProjectedMessagesAfter" not in sse
+    assert "projected-reconcile" not in sse
+    assert "messages?after_index=" not in sse
+    assert "function enqueueCurrentInputAsFollowup()" in sse
+    assert "if (!isMyAgentFeatureEnabled('followupRestart', false)) return false;" in sse
+    assert "function onFollowupInputKeydown(e)" in sse
+    assert "if (!isMyAgentFeatureEnabled('followupRestart', false)) return;" in sse
+    assert "followupEnabled" in sessions
+    assert "isMyAgentFeatureEnabled('followupRestart', false)" in sessions
+
+
+def test_removed_high_risk_dom_stream_shims_do_not_return():
+    bundle_sources = [
+        ROOT / "frontend/src/app/modules/sse-handling.js",
+        ROOT / "frontend/src/app/modules/session-scroll-history.js",
+        ROOT / "frontend/src/app/modules/toc-todo.js",
+    ]
+    combined = "\n".join(path.read_text(encoding="utf-8") for path in bundle_sources)
+
+    for symbol in [
+        "ensureDomContextForSession",
+        "resolveRenderStreamForSession",
+        "shouldIgnoreMainProcessAfterFinal",
+        "tocRebuildPendingAfterLoad",
+    ]:
+        assert symbol not in combined
+
+
+def test_frontend_session_load_lets_snapshot_own_toc_build():
+    sessions = (ROOT / "frontend/src/app/modules/session-management.js").read_text(encoding="utf-8")
+    toc = (ROOT / "frontend/src/app/modules/toc-todo.js").read_text(encoding="utf-8")
+
+    assert "function startTocForSessionLoad(sessionId)" in toc
+    assert "function startTodoForSessionLoad(sessionId)" in toc
+    assert "function setTodoPlanForSession(sessionId, snapshot)" in toc
+    assert "function renderLoadedTodoPlanForSession(sessionId, snapshot, alreadyStarted)" in toc
+    assert "startTocForSessionLoad(sessionId)" in sessions
+    assert "startTodoForSessionLoad(sessionId)" in sessions
+    assert "const tocAlreadyStarted = opts.useSnapshot === false" in sessions
+    assert "tocAlreadyStarted: tocAlreadyStarted" in sessions
+    assert "todoAlreadyStarted: tocAlreadyStarted" in sessions
+    assert "tocAlreadyStarted: true" not in sessions
+    assert "if (!opts.tocAlreadyStarted) rebuildToc();" in sessions
+    assert "/history_snapshot?turns=" in sessions
+    assert "setTocTurnsForSession(sessionId, snapshot.user_turns)" in sessions
+    assert "setTodoPlanForSession(sessionId, snapshot.todo_plan)" in sessions
+    assert "renderLoadedTodoPlanForSession(sessionId, snapshotTodoPlan, opts.todoAlreadyStarted)" in sessions
+    assert "opts.useSnapshot === false && typeof startTocForSessionLoad === 'function'" in sessions
+
+
+def test_frontend_session_load_logs_open_session_timing_from_snapshot():
+    sessions = (ROOT / "frontend/src/app/modules/session-management.js").read_text(encoding="utf-8")
+
+    assert "let snapshotTiming = null;" in sessions
+    assert "snapshotTiming = snapshot.timing && typeof snapshot.timing === 'object'" in sessions
+    assert "function logOpenSessionTiming(sessionId, data)" in sessions
+    assert "'open_session_timing session=%s source=%s total=%sms events=%s backend_total=%sms read_page=%sms count=%sms user_turns=%sms'" in sessions
+    assert "logOpenSessionTiming(sessionId, {" in sessions
+
+
+def test_frontend_send_and_reattach_reuse_event_count_cache():
+    sessions = (ROOT / "frontend/src/app/modules/session-management.js").read_text(encoding="utf-8")
+    scroll = (ROOT / "frontend/src/app/modules/session-scroll-history.js").read_text(encoding="utf-8")
+    sse = (ROOT / "frontend/src/app/modules/sse-handling.js").read_text(encoding="utf-8")
+    subagent_sync = (ROOT / "frontend/src/app/state/subagent-sync.js").read_text(encoding="utf-8")
+    subagent_store = (ROOT / "frontend/src/app/state/subagent-store.js").read_text(encoding="utf-8")
+
+    assert "has(sessionId)" in sessions
+    assert "async function getUiEventCount(sessionId, opts)" in scroll
+    assert "opts.preferCache" in scroll
+    assert "uiEventCountCache.has(sid)" in scroll
+    assert "uiEventCountCache.updateFromServer(sid, count)" in scroll
+    assert "getUiEventCount(runSessionId, { preferCache: true })" in sse
+    assert "uiEventCountCache.updateFromServer(runSessionId, preCount + 1)" in sse
+    assert "getUiEventCount(submitSessionId).then" not in sse
+    assert "/messages/count" not in subagent_sync
+    assert "node.event_count" in subagent_store
+    assert "messages?after_index=" in subagent_sync
+
+
+def test_frontend_llm_stream_seq_increments_do_not_split_chunks():
+    rendering = (ROOT / "frontend/src/app/modules/message-rendering.js").read_text(encoding="utf-8")
+
+    assert "seq < l.llmDeltaLastSeq" in rendering
+    assert "seq !== l.llmDeltaLastSeq" not in rendering
+
+
+def test_stream_deltas_have_stable_dedupe_keys():
+    agent_loop = (ROOT / "app/agent_loop.py").read_text(encoding="utf-8")
+    rendering = (ROOT / "frontend/src/app/modules/message-rendering.js").read_text(encoding="utf-8")
+    scroll = (ROOT / "frontend/src/app/modules/session-scroll-history.js").read_text(encoding="utf-8")
+
+    assert "llm_delta_seq = 0" in agent_loop
+    assert "tool_delta_seq = 0" in agent_loop
+    assert '"delta_seq": llm_delta_seq' in agent_loop
+    assert '"delta_seq": tool_delta_seq' in agent_loop
+    assert "function deltaDedupeKey(parsed, scope)" in rendering
+    assert "hasSeenStreamDelta(ctx, ev, 'llm_' + part)" in rendering
+    assert "hasSeenStreamDelta(ctx, parsed, 'tool_call_delta')" in rendering
+    assert "_seenStreamDeltaKeys: new Set()" in scroll
+
+
+def test_streamed_llm_commits_are_sse_fallbacks_without_repersisting():
+    agent_loop = (ROOT / "app/agent_loop.py").read_text(encoding="utf-8")
+    subagent_events = (ROOT / "app/agent_subagent_events.py").read_text(encoding="utf-8")
+
+    streamed_block = re.search(
+        r"if streamed_this_call:(?P<body>.*?)else:",
+        agent_loop,
+        re.S,
+    )
+    assert streamed_block, "streamed LLM branch must be explicit"
+    body = streamed_block.group("body")
+
+    assert 'session_manager.append_ui_event(' in body
+    assert '"type": "llm_reasoning"' in body
+    assert '"type": "llm_response"' in body
+    assert '"_skip_persist": True' in body
+    assert '"live_commit": True' in body
+    assert "emit=emit" in body
+    assert 'ev.get("_skip_persist")' in subagent_events
+
+
+def test_frontend_llm_delta_recovers_missing_scrollers():
+    rendering = (ROOT / "frontend/src/app/modules/message-rendering.js").read_text(encoding="utf-8")
+
+    assert "l.llmStreamReasoningScroller && !l.llmStreamReasoningScroller.isConnected" in rendering
+    assert "recoveredReasoning = findExistingLlmFeedRow" in rendering
+    assert "createProcessFeedRow(ctx, 'llm-reasoning'" in rendering
+    assert "l.llmStreamResponseScroller && !l.llmStreamResponseScroller.isConnected" in rendering
+    assert "recoveredResponse = findExistingLlmFeedRow" in rendering
+    assert "createProcessFeedRow(ctx, 'llm-response'" in rendering
+
+
+def test_runtime_v2_todo_plan_events_are_persistable():
+    agent_loop = (ROOT / "app/agent_loop.py").read_text(encoding="utf-8")
+
+    assert '"type": "todo_plan"' in agent_loop
+    assert '"ephemeral": not _runtime_v2_is_primary()' in agent_loop
+
+
+def test_frontend_suppressed_toc_rebuild_does_not_clear_started_toc():
+    toc = (ROOT / "frontend/src/app/modules/toc-todo.js").read_text(encoding="utf-8")
+    suppress_block = re.search(
+        r"if\s*\(\s*suppressTocDuringSessionLoad\s*\)\s*\{(?P<body>.*?)\}",
+        toc,
+        re.S,
+    )
+    assert suppress_block, "rebuildToc must keep an explicit suppress guard"
+    body = suppress_block.group("body")
+
+    assert "clearTocForSessionLoad" not in body
+    assert re.search(r"\breturn\s*;", body), "suppressed TOC rebuild should be a no-op"
+
+
+def test_frontend_toc_supports_snapshot_turns_and_skips_empty_active_update():
+    toc = (ROOT / "frontend/src/app/modules/toc-todo.js").read_text(encoding="utf-8")
+
+    assert "function setTocTurnsForSession(sessionId, turns)" in toc
+    assert "Array.isArray(options.turns)" in toc
+    assert "tocTurnsCacheBySession.set(sid, turns)" in toc
+    assert "if (!list || !list.querySelector('a[data-event-index]')) return;" in toc
+
+
+def test_frontend_session_scoped_token_and_count_guards():
+    sessions = (ROOT / "frontend/src/app/modules/session-management.js").read_text(encoding="utf-8")
+    scroll = (ROOT / "frontend/src/app/modules/session-scroll-history.js").read_text(encoding="utf-8")
+    sse = (ROOT / "frontend/src/app/modules/sse-handling.js").read_text(encoding="utf-8")
+
+    assert "if (typeof applyContextTokenLabelForCurrentSession === 'function') applyContextTokenLabelForCurrentSession();" in sessions
+    assert "if (sid === currentSessionId) applyContextTokenLabelForCurrentSession();" in scroll
+    assert "isFresh(sessionId, maxAgeMs)" in sessions
+    assert "uiEventCountCache.isFresh(sid, opts.maxAgeMs)" in scroll
+    assert "await getUiEventCount(submitSessionId, { preferCache: true, maxAgeMs: 10000 })" in sse
+    assert "parsed.type === 'context_tokens' && eventSessionId === currentSessionId" in sse
+    assert "parsed.type === 'cache_stats' && eventSessionId === currentSessionId" in sse
+
+
+def test_frontend_llm_stream_rows_are_upserted_across_process_group_rebuilds():
+    rendering = (ROOT / "frontend/src/app/modules/message-rendering.js").read_text(encoding="utf-8")
+
+    assert "function findExistingLlmFeedRow(ctx, logType, reactIter, opts)" in rendering
+    assert "findExistingLlmFeedRow(ctx, logType, ri)" in rendering
+    assert "findExistingLlmFeedRow(ctx, 'llm-response'" in rendering
+    assert "findExistingLlmFeedRow(ctx, 'llm-reasoning'" in rendering
+    assert "roots.push(ctx.stream)" in rendering
+    assert "function removeDuplicateLlmFeedRows(ctx, keepRow, logType, reactIter)" in rendering
+
+
+def test_frontend_initial_bottom_scroll_remains_smooth_without_saved_position():
+    rendering = (ROOT / "frontend/src/app/modules/message-rendering.js").read_text(encoding="utf-8")
+
+    assert "function scrollToBottom(opts)" in rendering
+    assert "chatContainer.scrollTo({ top: chatContainer.scrollHeight, behavior: 'smooth' })" in rendering
+    assert "scrollToBottom({ smooth: mode === 'saved-or-bottom' });" in rendering
+
+
+def test_frontend_run_state_cleanup_is_run_id_scoped():
+    actions = (ROOT / "frontend/src/app/state/session-actions.js").read_text(encoding="utf-8")
+    sse = (ROOT / "frontend/src/app/modules/sse-handling.js").read_text(encoding="utf-8")
+    sessions = (ROOT / "frontend/src/app/modules/session-management.js").read_text(encoding="utf-8")
+
+    assert "function clearSessionRunStateIfMatch(sessionId, runId)" in actions
+    assert "String(run.runId || '') === expected" in actions
+    assert "function endRunForClient(sessionId, ctx, opts)" in sse
+    assert "runCtx.runId = clientRunId;" in sse
+    assert "clearSessionRunStateIfMatch(runSessionId, clientRunId)" in sse
+    assert "clearSessionRunStateIfMatch(sid, opts.runId || (ctx && ctx.runId))" in sse
+    assert "if (run && run.reattached)" in sessions
+    assert "abortSessionRun(sid, 'reconcile-finished')" in sessions
+
+
+class _FakeJsonRequest:
+    def __init__(self, payload: dict):
+        self._payload = payload
+
+    async def json(self):
+        return dict(self._payload)
+
+
+class _FakeSessionManagerForSteer:
+    def __init__(self):
+        self.interrupts: list[tuple[str, str]] = []
+
+    def request_interrupt(self, session_id: str, reason: str = ""):
+        self.interrupts.append((session_id, reason))
+
+
+def test_followup_restart_enabled_prefers_native_steer(monkeypatch):
+    import webui
+
+    fake_manager = _FakeSessionManagerForSteer()
+    monkeypatch.setenv("MYAGENT_ENABLE_FOLLOWUP_RESTART", "1")
+    monkeypatch.setattr(webui, "session_manager", fake_manager)
+    monkeypatch.setattr(webui, "_is_session_stream_active", lambda sid: True)
+    monkeypatch.setattr(
+        webui,
+        "enqueue_session_steer",
+        lambda sid, message, client_id="": {
+            "ok": True,
+            "item": {"content": message, "client_id": client_id},
+        },
+    )
+    monkeypatch.setattr(webui, "abort_session_steer_run", lambda sid, reason="": True)
+    monkeypatch.setattr(
+        webui,
+        "_interrupt_runtime_v2_active_runs",
+        lambda sid, reason="": (_ for _ in ()).throw(AssertionError("native steer must not restart")),
+    )
+
+    response = asyncio.run(webui.post_session_steer(
+        "s1",
+        _FakeJsonRequest({"message": "continue now", "client_id": "cid-1"}),
+    ))
+    payload = json.loads(response.body.decode("utf-8"))
+
+    assert payload["ok"] is True
+    assert payload["restart"] is False
+    assert payload["aborted"] is True
+    assert payload["item"]["content"] == "continue now"
+    assert payload["item"]["client_id"] == "cid-1"
+    assert fake_manager.interrupts == []
