@@ -4,7 +4,7 @@ Date: 2026-07-04
 
 ## Verified State
 
-- Full test suite: `197 passed`.
+- Full test suite: `200 passed`.
 - Frontend build and dist sync: passed.
 - Workspace audit command:
 
@@ -22,6 +22,7 @@ python scripts\audit_runtime_versions.py --output .tmp-runtime-v2-audit.json
 - Runtime audit now distinguishes `match`, `v2_only`, `v2_ahead`, `missing_v2`, and `mismatch`, so pure V2 sessions are not treated as failed legacy parity checks.
 - Runtime audit ignores state-only UI events such as `cache_stats`, `context_tokens`, and todo snapshot events when comparing visible UI history.
 - Runtime audit reports `ui_first_mismatch` and `model_first_mismatch` for true divergent sessions, making old-session migration review concrete.
+- Runtime UI projection no longer replaces existing V2 projected history from legacy during `read_ui_events(..., legacy_loader=...)` or default migration sync; existing V2 data is preserved as `match`, `v2_ahead`, or `mismatch`.
 - `/sessions/{id}/stream` reattach in V2 mode reads `RuntimeUiProjection` instead of resurrecting stale legacy stream state.
 - Raw V2 stream is available at `/runtime-v2/sessions/{id}/stream?after_seq=...`.
 - Branch creation records the source Runtime seq and seeds branch visible history from Runtime V2 events in V2 primary mode.
