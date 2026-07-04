@@ -829,7 +829,9 @@ function applyCacheStatsFromEvent(ctx, event, runSessionId) {
     if (event.output_tokens != null) agg.dataset.procCacheOutput = String(Math.max(0, Math.floor(Number(event.output_tokens))));
     if (event.tokens_per_sec != null) agg.dataset.procCacheTps = String(Math.max(0, Number(event.tokens_per_sec)));
     var tokenSessionId = runSessionId || event.session_id || event.sessionId || '';
-    if (tokenSessionId && event.input_tokens != null && Number.isFinite(Number(event.input_tokens))) {
+    var eventTokenMode = String(event.context_token_mode || event.token_mode || '').toLowerCase();
+    var allowApiTokenStats = eventTokenMode !== 'calculated';
+    if (allowApiTokenStats && tokenSessionId && event.input_tokens != null && Number.isFinite(Number(event.input_tokens))) {
         recordContextTokens(tokenSessionId, Math.max(0, Math.floor(Number(event.input_tokens))), event.threshold);
     }
     refreshAggregateStatsSmart(agg);
@@ -1657,6 +1659,181 @@ function showMermaidRenderError(el, source, err) {
         + '<pre class="mermaid-raw">' + escapeHtml(source) + '</pre>';
 }
 
+var MERMAID_DOWNLOAD_SVG = '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/></svg>';
+var MERMAID_ZOOM_SVG = '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 3h6v6"/><path d="M21 3l-7 7"/><path d="M9 21H3v-6"/><path d="M3 21l7-7"/></svg>';
+var mermaidZoomKeyHandler = null;
+
+function closeMermaidZoom() {
+    var root = document.getElementById('mermaid-zoom-root');
+    if (!root) return;
+    root.classList.remove('is-open');
+    root.setAttribute('aria-hidden', 'true');
+    root.innerHTML = '';
+    if (mermaidZoomKeyHandler) {
+        document.removeEventListener('keydown', mermaidZoomKeyHandler);
+        mermaidZoomKeyHandler = null;
+    }
+}
+
+function ensureMermaidZoomRoot() {
+    var root = document.getElementById('mermaid-zoom-root');
+    if (root) return root;
+    root = document.createElement('div');
+    root.id = 'mermaid-zoom-root';
+    root.className = 'mermaid-zoom-overlay';
+    root.setAttribute('aria-hidden', 'true');
+    document.body.appendChild(root);
+    return root;
+}
+
+function openMermaidZoom(sourceEl) {
+    if (!sourceEl) return;
+    var svg = sourceEl.querySelector('svg');
+    if (!svg) return;
+    var root = ensureMermaidZoomRoot();
+    var clone = svg.cloneNode(true);
+    clone.removeAttribute('style');
+    clone.setAttribute('preserveAspectRatio', 'xMidYMid meet');
+    clone.classList.add('mermaid-zoom-svg');
+    root.innerHTML = '';
+
+    var panel = document.createElement('div');
+    panel.className = 'mermaid-zoom-panel';
+    panel.setAttribute('role', 'dialog');
+    panel.setAttribute('aria-modal', 'true');
+    panel.setAttribute('aria-label', 'Mermaid 流程图放大预览');
+
+    var closeBtn = document.createElement('button');
+    closeBtn.type = 'button';
+    closeBtn.className = 'mermaid-zoom-close';
+    closeBtn.setAttribute('aria-label', '关闭放大预览');
+    closeBtn.setAttribute('data-ui-tip', '关闭');
+    closeBtn.innerHTML = '<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>';
+
+    var stage = document.createElement('div');
+    stage.className = 'mermaid-zoom-stage';
+    stage.appendChild(clone);
+    panel.appendChild(closeBtn);
+    panel.appendChild(stage);
+    root.appendChild(panel);
+
+    closeBtn.onclick = closeMermaidZoom;
+    root.onclick = function (e) {
+        if (e.target === root) closeMermaidZoom();
+    };
+    mermaidZoomKeyHandler = function (e) {
+        if (e.key === 'Escape') {
+            e.preventDefault();
+            closeMermaidZoom();
+        }
+    };
+    document.addEventListener('keydown', mermaidZoomKeyHandler);
+    root.classList.add('is-open');
+    root.setAttribute('aria-hidden', 'false');
+    initUiHoverTips(root);
+    requestAnimationFrame(function () { closeBtn.focus(); });
+}
+
+function getMermaidSvgSize(svg) {
+    var box = svg && svg.viewBox && svg.viewBox.baseVal ? svg.viewBox.baseVal : null;
+    var w = box && box.width ? box.width : 0;
+    var h = box && box.height ? box.height : 0;
+    if (!w || !h) {
+        var rect = svg.getBoundingClientRect ? svg.getBoundingClientRect() : null;
+        w = rect && rect.width ? rect.width : w;
+        h = rect && rect.height ? rect.height : h;
+    }
+    w = Math.max(1, Math.ceil(w || 1200));
+    h = Math.max(1, Math.ceil(h || 800));
+    return { width: w, height: h };
+}
+
+function triggerDownloadBlob(blob, filename) {
+    if (!blob) return;
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+}
+
+function downloadMermaidPng(sourceEl) {
+    if (!sourceEl) return;
+    var svg = sourceEl.querySelector('svg');
+    if (!svg) return;
+    var size = getMermaidSvgSize(svg);
+    var clone = svg.cloneNode(true);
+    clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+    clone.setAttribute('width', String(size.width));
+    clone.setAttribute('height', String(size.height));
+    if (!clone.getAttribute('viewBox')) clone.setAttribute('viewBox', '0 0 ' + size.width + ' ' + size.height);
+    var xml = new XMLSerializer().serializeToString(clone);
+    var svgBlob = new Blob([xml], { type: 'image/svg+xml;charset=utf-8' });
+    var url = URL.createObjectURL(svgBlob);
+    var img = new Image();
+    img.onload = function () {
+        try {
+            var scale = Math.min(3, Math.max(1, window.devicePixelRatio || 1));
+            var canvas = document.createElement('canvas');
+            canvas.width = Math.ceil(size.width * scale);
+            canvas.height = Math.ceil(size.height * scale);
+            var ctx = canvas.getContext('2d');
+            if (!ctx) throw new Error('canvas unavailable');
+            ctx.scale(scale, scale);
+            ctx.fillStyle = document.documentElement.classList.contains('theme-light') ? '#ffffff' : '#1e1e2e';
+            ctx.fillRect(0, 0, size.width, size.height);
+            ctx.drawImage(img, 0, 0, size.width, size.height);
+            canvas.toBlob(function (blob) {
+                triggerDownloadBlob(blob, 'mermaid-' + new Date().toISOString().replace(/[:.]/g, '-') + '.png');
+            }, 'image/png');
+        } catch (e) {
+            triggerDownloadBlob(svgBlob, 'mermaid-' + new Date().toISOString().replace(/[:.]/g, '-') + '.svg');
+        } finally {
+            URL.revokeObjectURL(url);
+        }
+    };
+    img.onerror = function () {
+        URL.revokeObjectURL(url);
+        triggerDownloadBlob(svgBlob, 'mermaid-' + new Date().toISOString().replace(/[:.]/g, '-') + '.svg');
+    };
+    img.src = url;
+}
+
+function enhanceMermaidZoom(el) {
+    if (!el || el.classList.contains('mermaid-error')) return;
+    if (el.querySelector('.mermaid-zoom-btn')) return;
+    if (!el.querySelector('svg')) return;
+    el.classList.add('mermaid-has-zoom');
+    var downloadBtn = document.createElement('button');
+    downloadBtn.type = 'button';
+    downloadBtn.className = 'mermaid-download-btn';
+    downloadBtn.setAttribute('aria-label', '下载保存 Mermaid 流程图为图片');
+    downloadBtn.setAttribute('data-ui-tip', '下载图片');
+    downloadBtn.innerHTML = MERMAID_DOWNLOAD_SVG;
+    downloadBtn.addEventListener('click', function (e) {
+        e.preventDefault();
+        e.stopPropagation();
+        downloadMermaidPng(el);
+    });
+    var btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'mermaid-zoom-btn';
+    btn.setAttribute('aria-label', '放大显示 Mermaid 流程图');
+    btn.setAttribute('data-ui-tip', '放大显示');
+    btn.innerHTML = MERMAID_ZOOM_SVG;
+    btn.addEventListener('click', function (e) {
+        e.preventDefault();
+        e.stopPropagation();
+        openMermaidZoom(el);
+    });
+    el.appendChild(downloadBtn);
+    el.appendChild(btn);
+    initUiHoverTips(el);
+}
+
 function upgradeMermaidBlocks(root) {
     if (!root) return;
     root.querySelectorAll('pre > code').forEach(function (codeEl) {
@@ -2304,6 +2481,7 @@ async function runMermaidElementOnce(el) {
     }
     try {
         await mermaid.run({ nodes: [el], suppressErrors: false });
+        enhanceMermaidZoom(el);
     } catch (errRun) {
         showMermaidRenderError(el, cleaned, errRun);
     }

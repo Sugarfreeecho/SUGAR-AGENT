@@ -465,6 +465,20 @@ def compute_context_tokens_for_session(session_id: str) -> Dict[str, Any]:
         "source": "runtime_v2_projection" if _runtime_v2_is_primary() else "legacy_history",
     }
 
+
+def get_context_token_mode(value: Any = None) -> str:
+    raw = value
+    if raw is None or str(raw).strip() == "":
+        raw = os.getenv("CONTEXT_TOKEN_MODE", os.getenv("CONTEXT_TOKEN_ACCOUNTING_MODE", "hybrid"))
+    mode = str(raw or "").strip().lower()
+    if "#" in mode:
+        mode = mode.split("#", 1)[0].strip()
+    if mode:
+        mode = mode.split()[0]
+    if mode in {"calculated", "compute", "pure", "pure_compute"}:
+        return "calculated"
+    return "hybrid"
+
 # ==================== 辅助函数：实时持久化 ====================
 def _persist_session_messages(state: State) -> None:
     """work / llm / key_context 落盘；dialogue 由 llm 派生，dialogue_history 由 ui_events 派生。"""
@@ -1920,6 +1934,8 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
                         "estimated": int(full_input_est),
                         "threshold": int(iter_context_window),
                         "model": iter_model,
+                        "token_mode": state.get("_context_token_mode", "hybrid"),
+                        "source": "local_estimate",
                         "ephemeral": True,
                     },
                     emit=emit,
@@ -2017,6 +2033,8 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
                         "estimated": int(post_compress_est),
                         "threshold": int(iter_context_window),
                         "model": iter_model,
+                        "token_mode": state.get("_context_token_mode", "hybrid"),
+                        "source": "local_estimate",
                         "ephemeral": True,
                     },
                     emit=emit,
@@ -2665,6 +2683,7 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
                                     "threshold": int(iter_context_window),
                                     "tokens_per_sec": round(int((payload or {}).get("completion_tokens", 0) or 0) / max(0.001, time.monotonic() - t_llm_start), 1),
                                     "model": actual_response_model or iter_model,
+                                    "context_token_mode": state.get("_context_token_mode", "hybrid"),
                                 })
                                 await r
                                 await asyncio.sleep(0)
@@ -2930,6 +2949,7 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
                                     "threshold": int(iter_context_window),
                                     "tokens_per_sec": round(llm_call_usage.get("completion_tokens", 0) / max(0.001, time.monotonic() - t_llm_fallback_start), 1),
                                     "model": actual_response_model or iter_model,
+                                    "context_token_mode": state.get("_context_token_mode", "hybrid"),
                                 },
                                 emit=emit,
                             )
@@ -3829,6 +3849,7 @@ async def astream_events(
     run_id: Optional[str] = None,
     ui_user_event_type: str = "user",
     ui_user_content: Optional[str] = None,
+    context_token_mode: Optional[str] = None,
 ) -> AsyncGenerator[Dict[str, Any], None]:
     """
     顺序执行 react_node → validate_final（无独立校验 LLM）→ finish，通过队列实时向前端推送事件。
@@ -3876,6 +3897,7 @@ async def astream_events(
     _pre_api_timing_mark(pre_run_timings, "sanitize_histories", _t_pre)
 
     user_message = UserMessage(content=user_input)
+    context_token_mode = get_context_token_mode(context_token_mode)
 
     new_work_messages = prev_work_messages + [user_message]
     new_llm_history = prev_llm_history + [user_message]
@@ -3894,6 +3916,7 @@ async def astream_events(
         "key_context": key_context,
         "_runtime_v2_run_id": runtime_v2_run_id,
         "_pre_run_timings": pre_run_timings,
+        "_context_token_mode": context_token_mode,
     }
     todo_manager.sync_session_from_key_context(session_id, key_context or "")
     session_manager.clear_interrupt(session_id, runtime_v2_run_id)

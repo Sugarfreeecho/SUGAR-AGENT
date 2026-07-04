@@ -288,6 +288,10 @@
     border-color: rgba(108, 92, 231, 0.72);
     box-shadow: 0 0 0 3px rgba(108, 92, 231, 0.2), var(--shadow-brand-glow);
   }
+  .form-group input.model-name-invalid {
+    border-color: rgba(243,139,168,0.72) !important;
+    box-shadow: 0 0 0 3px rgba(243,139,168,0.16) !important;
+  }
   :root.theme-light .form-group input.autofill-flash,
   :root.theme-light .form-group select.autofill-flash {
     border-color: rgba(99, 102, 241, 0.64);
@@ -705,6 +709,7 @@
   let modelFetchTimer = null;
   let lastModelFetchKey = '';
   let selectedDiscoveredModelId = '';
+  let discoveredModelIds = [];
   let setupReady = false;
 
   function wizardEsc(value) {
@@ -721,6 +726,16 @@
 
   function currentModelSelectionKey() {
     return String(selectedDiscoveredModelId || (modelName && modelName.value) || '').trim();
+  }
+
+  function validateModelNameAgainstDiscovered(showMessage) {
+    const model = String((modelName && modelName.value) || '').trim();
+    const invalid = !!(discoveredModelIds.length && model && !discoveredModelIds.includes(model));
+    if (modelName) modelName.classList.toggle('model-name-invalid', invalid);
+    if (invalid && showMessage) {
+      setModelDiscoveryStatus('模型名称必须与已获取模型列表中的模型 ID 完全一致。');
+    }
+    return !invalid;
   }
 
   function updateModelSelectionHighlight() {
@@ -786,6 +801,7 @@
     if (maxOutputTokensEl) maxOutputTokensEl.value = String(windows.out);
     updateModelSelectionHighlight();
     flashAutofilledFields([modelName, contextWindowEl, maxOutputTokensEl]);
+    validateModelNameAgainstDiscovered(false);
     setModelDiscoveryStatus(windows.capped
       ? '已填入模型和窗口参数；理论最大可配上下文门限为 ' + formatTokens(windows.theoretical) + ' tokens，默认填入 ' + formatTokens(windows.cap) + ' tokens。'
       : '已填入模型和窗口参数。');
@@ -830,8 +846,10 @@
   function renderDiscoveredModels(items) {
     if (!modelDiscoveryList) return;
     items = items || [];
+    discoveredModelIds = items.map((item) => String((item && (item.id || item.model)) || '').trim()).filter(Boolean);
     if (!items.length) {
       modelDiscoveryList.innerHTML = "<div class='model-row model-row--empty is-selected'><span class='model-row__main'><span class='model-row__id'>未获取到模型</span></span></div>";
+      validateModelNameAgainstDiscovered(false);
       return;
     }
     let html = '';
@@ -857,6 +875,7 @@
       });
     });
     updateModelSelectionHighlight();
+    validateModelNameAgainstDiscovered(false);
   }
 
   async function fetchDiscoveredModels() {
@@ -958,7 +977,7 @@
   baseUrl.addEventListener('input', scheduleModelDiscovery);
   baseUrl.addEventListener('change', scheduleModelDiscovery);
   apiKey.addEventListener('input', scheduleModelDiscovery);
-  if (modelName) modelName.addEventListener('input', () => { selectedDiscoveredModelId = ''; updateModelSelectionHighlight(); clearAutofillHighlight(modelName); });
+  if (modelName) modelName.addEventListener('input', () => { selectedDiscoveredModelId = ''; updateModelSelectionHighlight(); clearAutofillHighlight(modelName); validateModelNameAgainstDiscovered(false); });
   if (contextWindowEl) contextWindowEl.addEventListener('input', () => clearAutofillHighlight(contextWindowEl));
   if (maxOutputTokensEl) maxOutputTokensEl.addEventListener('input', () => clearAutofillHighlight(maxOutputTokensEl));
   if (modelFetchBtn) modelFetchBtn.addEventListener('click', fetchDiscoveredModels);
@@ -985,6 +1004,11 @@
       return;
     }
 
+    if (!validateModelNameAgainstDiscovered(true)) {
+      showStatus('模型名称必须与已获取模型列表中的模型 ID 完全一致', 'error');
+      return;
+    }
+
     if (!url) {
       showStatus('请填写 API BASE URL', 'error');
       return;
@@ -1007,6 +1031,7 @@
           llm_base_url: url,
           api_key: key,
           model_name: model,
+          discovered_model_ids: discoveredModelIds,
           work_dir: workDirInput ? workDirInput.value.trim() : '',
           context_window: contextWindowEl ? contextWindowEl.value.trim() : '1000000',
           max_output_tokens: maxOutputTokensEl ? maxOutputTokensEl.value.trim() : '8192',

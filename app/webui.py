@@ -26,7 +26,7 @@ from starlette.concurrency import run_in_threadpool
 
 from agent import astream_events, astream_events_continuation, session_manager
 from agent_harness import PROJECT_ROOT, WORK_DIR, dotenv_file_path, refresh_executor_client_from_env, _invalidate_executor_config_cache
-from agent_loop import abort_session_steer_run, compute_context_tokens_for_session, enqueue_session_steer, remove_session_steer
+from agent_loop import abort_session_steer_run, compute_context_tokens_for_session, enqueue_session_steer, get_context_token_mode, remove_session_steer
 from session_lifecycle import get_run_started_at, is_run_active
 from session_event_bus import subscribe_session_events
 import agent_mcp
@@ -1880,6 +1880,15 @@ def _model_profiles_response() -> dict:
     }
 
 
+def _validate_model_name_in_discovered_list(data: dict, model_name: str) -> None:
+    discovered = data.get("discovered_model_ids")
+    if not isinstance(discovered, list):
+        return
+    ids = {str(item or "").strip() for item in discovered if str(item or "").strip()}
+    if ids and str(model_name or "").strip() not in ids:
+        raise ValueError("模型名称必须与已获取模型列表中的模型 ID 完全一致")
+
+
 def _save_env_model_profile(data: dict) -> dict:
     env_path = dotenv_file_path()
     prev = env_path.read_text(encoding="utf-8") if env_path.is_file() else ""
@@ -1923,6 +1932,10 @@ async def save_model_profile(req: Request):
         return JSONResponse({"ok": False, "error": "body must be object"}, status_code=400)
     if not str(data.get("model") or "").strip():
         return JSONResponse({"ok": False, "error": "missing model"}, status_code=400)
+    try:
+        _validate_model_name_in_discovered_list(data, str(data.get("model") or "").strip())
+    except ValueError as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
     if not str(data.get("base_url") or "").strip():
         return JSONResponse({"ok": False, "error": "missing base_url"}, status_code=400)
     if str(data.get("id") or "").strip() == "__env__":
@@ -3160,12 +3173,15 @@ async def get_session_context_tokens(session_id: str):
             logger.debug("Runtime V2 context token snapshot read failed for %s: %s", session_id, exc)
         return None
 
-    snap = await asyncio.to_thread(_read_snapshot_tokens)
+    token_mode = get_context_token_mode()
+    snap = None if token_mode == "calculated" else await asyncio.to_thread(_read_snapshot_tokens)
     if snap is not None:
+        snap["token_mode"] = token_mode
         return JSONResponse(content=snap)
     out = await run_in_threadpool(compute_context_tokens_for_session, session_id)
     if not out.get("ok"):
         return JSONResponse(content=out, status_code=400)
+    out["token_mode"] = token_mode
     return JSONResponse(content=out)
 
 
@@ -3344,6 +3360,9 @@ def _parse_dotenv_rhs(raw_val: str) -> str:
                 out.append(inner[i])
                 i += 1
         return "".join(out)
+    for idx, ch in enumerate(v):
+        if ch == "#" and (idx == 0 or v[idx - 1].isspace()):
+            return v[:idx].rstrip()
     return v
 
 
@@ -3390,6 +3409,41 @@ _REQUIRED_ENV_FOR_MAIN_UI = (
     "MAX_OUTPUT_TOKENS",
     "WORK_DIR",
 )
+
+_MODEL_ENV_FOR_MAIN_UI = {
+    "EXECUTOR_LLM",
+    "OPENAI_BASE_URL",
+    "OPENAI_API_KEY",
+    "EXECUTOR_LLM_TYPE",
+    "CONTEXT_WINDOW",
+    "MAX_OUTPUT_TOKENS",
+}
+_PROFILE_BACKED_ENV_FOR_MAIN_UI = _MODEL_ENV_FOR_MAIN_UI | {"WORK_DIR"}
+
+
+def _has_complete_model_profile_for_main_ui() -> bool:
+    try:
+        profiles = model_profiles.sorted_profiles(PROJECT_ROOT)
+    except Exception:
+        return False
+    for profile in profiles:
+        if not isinstance(profile, dict):
+            continue
+        if not str(profile.get("model") or "").strip():
+            continue
+        if not str(profile.get("base_url") or "").strip():
+            continue
+        api_key = str(profile.get("api_key") or "").strip()
+        if not api_key or "YOUR_API_KEY" in api_key:
+            continue
+        if not str(profile.get("llm_type") or "openai").strip():
+            continue
+        if model_profiles._safe_int(profile.get("context_window"), 0) <= 0:
+            continue
+        if model_profiles._safe_int(profile.get("max_output_tokens"), 0) <= 0:
+            continue
+        return True
+    return False
 
 
 def _dotenv_last_assignments(path: Path) -> dict[str, str]:
@@ -3440,6 +3494,7 @@ def _is_configured():
     env_path = dotenv_file_path()
     vals = _dotenv_last_assignments(env_path)
     fallback_vals = _dotenv_last_non_empty_assignments(env_path)
+    profile_configured = _has_complete_model_profile_for_main_ui()
     
     # 尝试加载加密配置作为补充
     encrypted_config = {}
@@ -3450,6 +3505,8 @@ def _is_configured():
         pass
     
     for req in _REQUIRED_ENV_FOR_MAIN_UI:
+        if req in _PROFILE_BACKED_ENV_FOR_MAIN_UI and profile_configured:
+            continue
         v = vals.get(req)
         if (v is None or v.strip() == "") and fallback_vals.get(req):
             v = fallback_vals[req]
@@ -3459,11 +3516,12 @@ def _is_configured():
         if v is None or str(v).strip() == "":
             return False
     
-    api_key_for_check = (vals.get("OPENAI_API_KEY") or "").strip() or fallback_vals.get("OPENAI_API_KEY", "")
-    if not api_key_for_check:
-        api_key_for_check = encrypted_config.get("OPENAI_API_KEY", "")
-    if "YOUR_API_KEY" in api_key_for_check:
-        return False
+    if not profile_configured:
+        api_key_for_check = (vals.get("OPENAI_API_KEY") or "").strip() or fallback_vals.get("OPENAI_API_KEY", "")
+        if not api_key_for_check:
+            api_key_for_check = encrypted_config.get("OPENAI_API_KEY", "")
+        if "YOUR_API_KEY" in api_key_for_check:
+            return False
     return True
 
 
@@ -3604,6 +3662,8 @@ _ENV_GROUP_ORDER: list[tuple[str, str, list[str]]] = [
         "context",
         "上下文压缩与回顾",
         [
+            "CONTEXT_TOKEN_MODE",
+            "CONTEXT_TOKEN_ACCOUNTING_MODE",
             "CONTEXT_KEEP_RECENT_TURNS",
             "CONTEXT_MICRO_WORK_ROUNDS",
             "CONTEXT_COMPRESS_MAX_ROUNDS",
@@ -3650,6 +3710,8 @@ _ENV_HINTS: dict[str, str] = {
     "EXECUTOR_LLM": "执行器使用的模型名（须与所选服务商一致）。",
     "EXECUTOR_LLM_TYPE": "local = 本地 OpenAI 兼容（如 Ollama）；openai = 使用 OPENAI_* 远端 API。",
     "CONTEXT_WINDOW": "预估上下文 token 超过该门限时触发压缩摘要等策略。",
+    "CONTEXT_TOKEN_MODE": "上下文 token 统计模式：hybrid=API usage + 本地计算混合；calculated=只使用本地计算。",
+    "CONTEXT_TOKEN_ACCOUNTING_MODE": "同 CONTEXT_TOKEN_MODE；用于配置上下文 token 统计模式。",
     "MAX_OUTPUT_TOKENS": "模型单次输出的 token 上限（依服务商与实际模型调整）。",
     "OPENAI_BASE_URL": "OpenAI 兼容 API 根地址（DeepSeek/OpenAI 等）。",
     "OPENAI_API_KEY": "远端 API 密钥（仅保存在本机 .env）。",
@@ -3707,7 +3769,12 @@ _ENV_HINTS: dict[str, str] = {
 }
 
 
-_NON_SENSITIVE = frozenset({"MAX_OUTPUT_TOKENS", "CONTEXT_WINDOW"})
+_NON_SENSITIVE = frozenset({
+    "MAX_OUTPUT_TOKENS",
+    "CONTEXT_WINDOW",
+    "CONTEXT_TOKEN_MODE",
+    "CONTEXT_TOKEN_ACCOUNTING_MODE",
+})
 
 _ENV_PATH_KIND_FILE = frozenset(
     {
@@ -3983,6 +4050,7 @@ async def save_config(req: _Request):
             updates["OPENAI_BASE_URL"] = url
 
         mn = str(data.get("model_name", "") or "").strip()
+        _validate_model_name_in_discovered_list(data, mn)
         if mn:
             updates["EXECUTOR_LLM"] = mn
 
@@ -4050,7 +4118,7 @@ async def _config_check(req: _Request, call_next):
         "/api/pick-path",
         "/api/upload-chat-files",
         "/api/workspace-files",
-    ) or p.startswith("/static/") or p.startswith("/api/model_profiles/"):
+    ) or p.startswith("/static/") or p.startswith("/assets/") or p.startswith("/api/model_profiles/"):
         return await call_next(req)
     if not _is_configured():
         return _RedirectResponse(url="/setup")

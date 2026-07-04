@@ -116,7 +116,7 @@ function renderModelProfileControl() {
             + '</button>';
     }
     if (!(modelProfilesCache.profiles || []).length) {
-        html += '<button type="button" class="composer-model-option" disabled><span class="composer-model-option-meta">暂无已保存模型配置，可到高级设置中保存</span></button>';
+        html += '<button type="button" class="composer-model-option" disabled><span class="composer-model-option-meta">暂无已保存模型配置，可到模型配置页中保存</span></button>';
     }
     e.menu.innerHTML = html;
     e.menu.querySelectorAll('[data-profile-id]').forEach((btn) => {
