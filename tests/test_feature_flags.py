@@ -93,6 +93,22 @@ def test_frontend_feature_entrypoints_are_flag_guarded():
     assert "isMyAgentFeatureEnabled('followupRestart', false)" in sessions
 
 
+def test_frontend_final_reconcile_is_local_store_only():
+    sse = (ROOT / "frontend/src/app/modules/sse-handling.js").read_text(encoding="utf-8")
+    final_block = re.search(
+        r"async function ensureFinalVisibleAfterRun\(sessionId, ctx, opts\) \{(?P<body>.*?)\n\}",
+        sse,
+        re.S,
+    )
+    assert final_block, "final visibility reconcile must stay explicit"
+    body = final_block.group("body")
+
+    assert "findStoredFinalAfterUser(sid, lastUserIdx)" in body
+    assert "renderFinalRecordIfMissing(sid, ctx, stream, storedFinal, lastUserIdx)" in body
+    assert "fetch(" not in body
+    assert "/messages" not in body
+
+
 def test_removed_high_risk_dom_stream_shims_do_not_return():
     bundle_sources = [
         ROOT / "frontend/src/app/modules/sse-handling.js",
