@@ -3130,6 +3130,12 @@ function activeProfile() {
     return list[0] || null;
 }
 
+function activeProfileContextWindow() {
+    var profile = activeProfile();
+    var n = profile && profile.context_window != null ? Number(profile.context_window) : 0;
+    return Number.isFinite(n) && n > 0 ? Math.floor(n) : null;
+}
+
 function closeModelMenu() {
     var e = els();
     if (e.menu) e.menu.classList.remove('is-open');
@@ -3250,7 +3256,17 @@ async function setCurrentSessionModelProfile(profileId) {
         if (!data || !data.ok) throw new Error((data && data.error) || '切换失败');
         activeModelProfileId = profileId || '__env__';
         renderModelProfileControl();
-        scheduleContextTokensAfterPaint(currentSessionId);
+        var cachedTokens = selectContextTokens(currentSessionId);
+        var nextThreshold = activeProfileContextWindow();
+        if (cachedTokens && cachedTokens.estimated != null) {
+            recordContextTokens(
+                currentSessionId,
+                cachedTokens.estimated,
+                nextThreshold != null ? nextThreshold : cachedTokens.threshold
+            );
+        } else {
+            scheduleContextTokensAfterPaint(currentSessionId);
+        }
     } catch (err) {
         appendLogVisible('模型配置切换失败: ' + String(err.message || err), 'error-log');
         await refreshModelProfileSelector(currentSessionId);

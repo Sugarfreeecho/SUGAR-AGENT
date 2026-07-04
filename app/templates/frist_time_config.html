@@ -287,17 +287,11 @@
   .form-group select.autofill-flash {
     border-color: rgba(108, 92, 231, 0.72);
     box-shadow: 0 0 0 3px rgba(108, 92, 231, 0.2), var(--shadow-brand-glow);
-    animation: autofillPulse 1.45s ease-out;
   }
   :root.theme-light .form-group input.autofill-flash,
   :root.theme-light .form-group select.autofill-flash {
     border-color: rgba(99, 102, 241, 0.64);
     box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.18);
-  }
-  @keyframes autofillPulse {
-    0% { box-shadow: 0 0 0 0 rgba(108, 92, 231, 0.42), var(--shadow-brand-glow); }
-    45% { box-shadow: 0 0 0 5px rgba(108, 92, 231, 0.18), var(--shadow-brand-glow); }
-    100% { box-shadow: 0 0 0 3px rgba(108, 92, 231, 0), var(--shadow-brand-glow); }
   }
   .form-group input::placeholder { color: var(--text-tertiary); opacity: 0.65; }
   .select-wrap {
@@ -741,12 +735,12 @@
   function flashAutofilledFields(fields) {
     (fields || []).forEach((el) => {
       if (!el) return;
-      el.classList.remove('autofill-flash');
-      void el.offsetWidth;
       el.classList.add('autofill-flash');
-      if (el._autofillTimer) clearTimeout(el._autofillTimer);
-      el._autofillTimer = setTimeout(() => el.classList.remove('autofill-flash'), 1550);
     });
+  }
+
+  function clearAutofillHighlight(el) {
+    if (el) el.classList.remove('autofill-flash');
   }
 
   function modelLimitSource(model) {
@@ -964,7 +958,9 @@
   baseUrl.addEventListener('input', scheduleModelDiscovery);
   baseUrl.addEventListener('change', scheduleModelDiscovery);
   apiKey.addEventListener('input', scheduleModelDiscovery);
-  if (modelName) modelName.addEventListener('input', () => { selectedDiscoveredModelId = ''; updateModelSelectionHighlight(); });
+  if (modelName) modelName.addEventListener('input', () => { selectedDiscoveredModelId = ''; updateModelSelectionHighlight(); clearAutofillHighlight(modelName); });
+  if (contextWindowEl) contextWindowEl.addEventListener('input', () => clearAutofillHighlight(contextWindowEl));
+  if (maxOutputTokensEl) maxOutputTokensEl.addEventListener('input', () => clearAutofillHighlight(maxOutputTokensEl));
   if (modelFetchBtn) modelFetchBtn.addEventListener('click', fetchDiscoveredModels);
 
   searchProvider.addEventListener('change', syncSearchPairVisibility);

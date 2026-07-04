@@ -42,6 +42,7 @@ class RuntimeHistoryOps:
             "name": name,
         })
         self._seed_branch_visible_history(session_id, source_session_id, int(branch_from_seq))
+        self._seed_branch_model_history(session_id, source_session_id, int(branch_from_seq))
         return event
 
     def compact_history(
@@ -228,6 +229,8 @@ class RuntimeHistoryOps:
                 break
             if not self._is_branch_seed_event(source_event):
                 continue
+            if self._is_branch_runtime_metric_event(source_event):
+                continue
             copied = self._append_and_snapshot(
                 session_id,
                 source_event.type,
@@ -260,6 +263,8 @@ class RuntimeHistoryOps:
                 seed.pop("rewritten", None)
                 seed.pop("rewritten_by_seq", None)
                 seed.pop("session_id", None)
+                if self._is_projected_ui_runtime_metric(seed):
+                    continue
                 mirrored = mirror.mirror_ui_event(session_id, seed)
                 if mirrored is None:
                     mirrored = mirror.append(session_id, "legacy_ui_event", self._copy_blob_refs(source_session_id, session_id, seed))
@@ -268,8 +273,44 @@ class RuntimeHistoryOps:
         except Exception:
             return 0
 
+    def _seed_branch_model_history(self, session_id: str, source_session_id: str, branch_from_seq: int) -> int:
+        if self._has_model_history(session_id):
+            return 0
+        messages = self._source_model_message_dicts_at_seq(source_session_id, int(branch_from_seq))
+        if not messages:
+            return 0
+        self.replace_model_history(session_id, messages, reason="branch_model_seed")
+        return len(messages)
+
+    def _source_model_message_dicts_at_seq(self, source_session_id: str, branch_from_seq: int) -> list[dict]:
+        events = []
+        for source_event in self.event_log.iter_events(source_session_id):
+            if int(source_event.seq) > int(branch_from_seq):
+                break
+            events.append(source_event)
+        if not events:
+            return []
+        snapshot = self.projector.project(events)
+        rows = snapshot.get("model_messages") if isinstance(snapshot, dict) else None
+        if not isinstance(rows, list):
+            return []
+        messages: list[dict] = []
+        for row in rows:
+            item = self._model_row_to_message_dict(row)
+            if item:
+                messages.append(item)
+        return messages
+
+    def _has_model_history(self, session_id: str) -> bool:
+        snapshot = self.snapshots.read(session_id)
+        rows = snapshot.get("raw_model_messages") if isinstance(snapshot, dict) else None
+        return bool(rows)
+
     def _has_projectable_ui_events(self, session_id: str) -> bool:
-        return any(self._is_branch_seed_event(event) for event in self.event_log.iter_events(session_id))
+        return any(
+            self._is_branch_seed_event(event) and not self._is_branch_runtime_metric_event(event)
+            for event in self.event_log.iter_events(session_id)
+        )
 
     def _copy_blob_refs(self, source_session_id: str, target_session_id: str, payload: dict) -> dict:
         source_dir = self.event_log.session_dir(source_session_id)
@@ -293,6 +334,56 @@ class RuntimeHistoryOps:
             except Exception:
                 continue
         return copied
+
+    @staticmethod
+    def _model_row_to_message_dict(row: dict) -> dict:
+        if not isinstance(row, dict):
+            return {}
+        role = str(row.get("role") or "").strip()
+        payload = row.get("payload")
+        if not isinstance(payload, dict):
+            payload = {}
+        content = str(payload.get("content") or "")
+        if role == "user":
+            item = {"type": "user", "content": content}
+            if isinstance(payload.get("metadata"), dict):
+                item["metadata"] = dict(payload["metadata"])
+            return item
+        if role == "assistant":
+            item = {"type": "assistant", "content": content}
+            if isinstance(payload.get("tool_calls"), list):
+                item["tool_calls"] = list(payload["tool_calls"])
+            if isinstance(payload.get("metadata"), dict):
+                item["metadata"] = dict(payload["metadata"])
+            if isinstance(payload.get("additional_kwargs"), dict):
+                item["additional_kwargs"] = dict(payload["additional_kwargs"])
+            return item
+        if role == "tool":
+            return {
+                "type": "tool",
+                "content": content,
+                "tool_call_id": str(payload.get("tool_call_id") or ""),
+            }
+        if role == "system":
+            return {"type": "system", "content": content}
+        return {}
+
+    @classmethod
+    def _is_branch_runtime_metric_event(cls, event: RuntimeEvent) -> bool:
+        if event.type == "context_tokens":
+            return True
+        if event.type != "legacy_ui_event":
+            return False
+        return cls._is_projected_ui_runtime_metric(dict(event.payload or {}))
+
+    @staticmethod
+    def _is_projected_ui_runtime_metric(event: dict) -> bool:
+        if not isinstance(event, dict):
+            return False
+        event_type = str(event.get("type") or "").strip()
+        if event_type in {"cache_stats", "context_tokens"}:
+            return True
+        return False
 
     @staticmethod
     def _is_branch_seed_event(event: RuntimeEvent) -> bool:
