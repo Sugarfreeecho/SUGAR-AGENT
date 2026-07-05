@@ -82,7 +82,7 @@ function renderEvent(ctx, event, eventIndex, runSessionId) {
             appendModelSwitchStatus(ctx, event, runSessionId);
             return;
         }
-        if (statusContent.indexOf('【自动·长度策略】') >= 0) {
+        if (statusContent.indexOf('【上下文窗口已满，开始压缩】') >= 0 || statusContent.indexOf('【上下文压缩已完成】') >= 0) {
             finalizeProgressStreamChunks(ctx);
             resetKeyContextStreamFilter(ctx);
         }

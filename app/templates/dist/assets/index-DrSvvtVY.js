@@ -10140,125 +10140,125 @@ function updateSubagentBlockFinish(ctx, event) {
     applySubagentBlockFinish(blk, event);
     handleSubagentLifecycleEvent(event);
 }
-`,je=`function renderEvent(ctx, event, eventIndex, runSessionId) {
-    if (!event || typeof event !== 'object') return;
-    var eventSessionId = runSessionId || currentSessionId || '';
-    if (eventSessionId && !event.__storeApplied) {
-        applyMessageEvent(eventSessionId, event, eventIndex, replayingMessages ? 'history' : 'stream');
-        if (event.type === 'subagent_start' || event.type === 'subagent_finish'
-            || event.type === 'subagent_started' || event.type === 'subagent_finished') {
-            applySubagentLifecycleToStore(eventSessionId, event);
-        }
-    }
-    if (event.type === 'user') {
-        if (typeof eventIndex === 'number') ctx.lastUserEventIndex = eventIndex;
-        if (Number.isFinite(Number(event.runtime_seq || event.runtimeSeq))) {
-            ctx.lastUserRuntimeSeq = Math.floor(Number(event.runtime_seq || event.runtimeSeq));
-        }
-        sealProcessGroup(ctx);
-        appendMessage(ctx, 'user', event.content || '', {
-            eventIndex: eventIndex,
-            turnTruncateIdx: eventIndex,
-            runtimeSeq: event.runtime_seq || event.runtimeSeq,
-            createdAt: event.created_at || event.createdAt || event.timestamp,
-        }, runSessionId);
-    } else if (event.type === 'user_steer') {
-        appendLog(ctx, event.content || '', 'user-steer', runSessionId);
-    } else if (event.type === 'final') {
-        var finalStream = ctx && ctx.stream ? ctx.stream : getVisibleChatStream();
-        var userIdx = (ctx && Number.isFinite(Number(ctx.lastUserEventIndex))) ? Number(ctx.lastUserEventIndex) : latestVisibleUserEventIndex(finalStream);
-        if (typeof hasDuplicateVisibleFinal === 'function' && hasDuplicateVisibleFinal(finalStream, userIdx, event.content)) return;
-        if (typeof splitThinkTagsForUi === 'function') {
-            var finalThinkSplit = splitThinkTagsForUi(event.content || '');
-            if (finalThinkSplit.reasoning && finalThinkSplit.reasoning.trim()) {
-                upsertLlmFeedRow(ctx, finalThinkSplit.reasoning, 'llm-reasoning', runSessionId, uiEventReactIter(event));
-            }
-        }
-        appendMessage(ctx, 'assistant', event.content || '', {
-            eventIndex: eventIndex,
-            turnTruncateIdx: ctx.lastUserEventIndex,
-            runtimeSeq: event.runtime_seq || event.runtimeSeq,
-            runtimeEventType: event.runtime_event_type || event.runtimeEventType,
-            truncateBeforeSeq: ctx.lastUserRuntimeSeq,
-        }, runSessionId);
-    } else if (event.type === 'process_metrics') {
-        applyProcessMetricsFromEvent(ctx, event);
-    } else if (event.type === 'cache_stats') {
-        applyCacheStatsFromEvent(ctx, event, runSessionId);
-    } else if (event.type === 'tool_call') {
-        var riTool = uiEventReactIter(event);
-        if (event.raw_content) appendLog(ctx, event.raw_content, 'tool-call', runSessionId, riTool);
-        else appendLog(ctx, formatToolDoneLine(event.tool, event.args, event.result, event.command_preview), 'tool-call', runSessionId, riTool);
-    } else if (event.type === 'validate_final') {
-        appendLog(ctx, '验证：' + event.result + (event.reason ? '\\n' + event.reason : ''), 'status', runSessionId);
-    } else if (event.type === 'llm_reasoning') {
-        upsertLlmFeedRow(ctx, event.content || '', 'llm-reasoning', runSessionId, uiEventReactIter(event));
-    } else if (event.type === 'llm_response') {
-        upsertLlmFeedRow(ctx, event.content || '', 'llm-response', runSessionId, uiEventReactIter(event));
-    } else if (event.type === 'llm_history_rollup' || event.type === 'compact_summary') {
-        appendLog(ctx, String(event.content || ''), 'compact-summary', runSessionId);
-    } else if (event.type === 'context_trim_progress') {
-        appendProgressLog(ctx, event.content, 'context-trim', runSessionId);
-    } else if (event.type === 'context_summary_progress') {
-        appendProgressLog(ctx, event.content, 'context-summary', runSessionId);
-    } else if (event.type === 'context_summary_delta') {
-        appendProgressStreamDelta(ctx, event.delta, 'context-summary', runSessionId);
-    } else if (event.type === 'context_summary_body') {
-        applyProgressPersistedBody(ctx, event.content, 'context-summary', runSessionId);
-    } else if (event.type === 'key_context_progress') {
-        var keyProg = String(event.content || '');
-        if (keyProg.indexOf('正在根据对话更新要点') >= 0) {
-            finalizeProgressStreamForType(ctx, 'context-summary');
-            resetKeyContextStreamFilter(ctx);
-        }
-        appendProgressLog(ctx, keyProg, 'key-context', runSessionId);
-    } else if (event.type === 'key_context_delta') {
-        appendKeyContextStreamDelta(ctx, event.delta, runSessionId);
-    } else if (event.type === 'key_context_body') {
-        applyProgressPersistedBody(ctx, event.content, 'key-context', runSessionId);
-    } else if (event.type === 'error') {
-        appendLog(ctx, String(event.content || ''), 'error-log', runSessionId);
-    } else if (event.type === 'status') {
-        var statusContent = String(event.content || '');
-        if (event.model_switch) {
-            appendModelSwitchStatus(ctx, event, runSessionId);
-            return;
-        }
-        if (statusContent.indexOf('【自动·长度策略】') >= 0) {
-            finalizeProgressStreamChunks(ctx);
-            resetKeyContextStreamFilter(ctx);
-        }
-        if (event.compress_progress) {
-            var legacyLogType = 'context-trim';
-            if (statusContent.indexOf('【上下文摘要】') >= 0) legacyLogType = 'context-summary';
-            else if (statusContent.indexOf('【要点】') >= 0) legacyLogType = 'key-context';
-            appendProgressLog(ctx, statusContent, legacyLogType, runSessionId);
-            return;
-        }
-        // 临时状态消息处理：标记"正在思考中..."为临时状态
-        var isTemporaryStatus = statusContent.indexOf('正在思考中...') >= 0;
-        if (isTemporaryStatus) removeTemporaryStatus(ctx);
-        var statusRow = appendLog(ctx, statusContent, 'status', runSessionId);
-        if (isTemporaryStatus && statusRow) {
-            statusRow.dataset.temporaryStatus = '1';
-        }
-    } else if (event.type === 'approval_required') {
-        var leg = (event.tool_name ? String(event.tool_name) + ' ' : '') + (event.message || '');
-        appendLog(ctx, '[历史/旧版事件] ' + leg.trim(), 'status', runSessionId);
-    } else if (event.type === 'warning') {
-        appendLog(ctx, String(event.content || ''), 'status', runSessionId);
-    } else if (event.type === 'subagent_start' || event.type === 'subagent_finish') {
-        if (!ctx._subagentBody) {
-            handleSubagentLifecycleEvent(event);
-            return;
-        }
-        if (event.type === 'subagent_start') ensureSubagentBlock(ctx, event);
-        else updateSubagentBlockFinish(ctx, event);
-    } else {
-        var fallbackContent = String(event.content || '');
-        if (fallbackContent.trim()) appendLog(ctx, fallbackContent, 'log-entry', runSessionId);
-    }
-}
+`,je=`function renderEvent(ctx, event, eventIndex, runSessionId) {\r
+    if (!event || typeof event !== 'object') return;\r
+    var eventSessionId = runSessionId || currentSessionId || '';\r
+    if (eventSessionId && !event.__storeApplied) {\r
+        applyMessageEvent(eventSessionId, event, eventIndex, replayingMessages ? 'history' : 'stream');\r
+        if (event.type === 'subagent_start' || event.type === 'subagent_finish'\r
+            || event.type === 'subagent_started' || event.type === 'subagent_finished') {\r
+            applySubagentLifecycleToStore(eventSessionId, event);\r
+        }\r
+    }\r
+    if (event.type === 'user') {\r
+        if (typeof eventIndex === 'number') ctx.lastUserEventIndex = eventIndex;\r
+        if (Number.isFinite(Number(event.runtime_seq || event.runtimeSeq))) {\r
+            ctx.lastUserRuntimeSeq = Math.floor(Number(event.runtime_seq || event.runtimeSeq));\r
+        }\r
+        sealProcessGroup(ctx);\r
+        appendMessage(ctx, 'user', event.content || '', {\r
+            eventIndex: eventIndex,\r
+            turnTruncateIdx: eventIndex,\r
+            runtimeSeq: event.runtime_seq || event.runtimeSeq,\r
+            createdAt: event.created_at || event.createdAt || event.timestamp,\r
+        }, runSessionId);\r
+    } else if (event.type === 'user_steer') {\r
+        appendLog(ctx, event.content || '', 'user-steer', runSessionId);\r
+    } else if (event.type === 'final') {\r
+        var finalStream = ctx && ctx.stream ? ctx.stream : getVisibleChatStream();\r
+        var userIdx = (ctx && Number.isFinite(Number(ctx.lastUserEventIndex))) ? Number(ctx.lastUserEventIndex) : latestVisibleUserEventIndex(finalStream);\r
+        if (typeof hasDuplicateVisibleFinal === 'function' && hasDuplicateVisibleFinal(finalStream, userIdx, event.content)) return;\r
+        if (typeof splitThinkTagsForUi === 'function') {\r
+            var finalThinkSplit = splitThinkTagsForUi(event.content || '');\r
+            if (finalThinkSplit.reasoning && finalThinkSplit.reasoning.trim()) {\r
+                upsertLlmFeedRow(ctx, finalThinkSplit.reasoning, 'llm-reasoning', runSessionId, uiEventReactIter(event));\r
+            }\r
+        }\r
+        appendMessage(ctx, 'assistant', event.content || '', {\r
+            eventIndex: eventIndex,\r
+            turnTruncateIdx: ctx.lastUserEventIndex,\r
+            runtimeSeq: event.runtime_seq || event.runtimeSeq,\r
+            runtimeEventType: event.runtime_event_type || event.runtimeEventType,\r
+            truncateBeforeSeq: ctx.lastUserRuntimeSeq,\r
+        }, runSessionId);\r
+    } else if (event.type === 'process_metrics') {\r
+        applyProcessMetricsFromEvent(ctx, event);\r
+    } else if (event.type === 'cache_stats') {\r
+        applyCacheStatsFromEvent(ctx, event, runSessionId);\r
+    } else if (event.type === 'tool_call') {\r
+        var riTool = uiEventReactIter(event);\r
+        if (event.raw_content) appendLog(ctx, event.raw_content, 'tool-call', runSessionId, riTool);\r
+        else appendLog(ctx, formatToolDoneLine(event.tool, event.args, event.result, event.command_preview), 'tool-call', runSessionId, riTool);\r
+    } else if (event.type === 'validate_final') {\r
+        appendLog(ctx, '验证：' + event.result + (event.reason ? '\\n' + event.reason : ''), 'status', runSessionId);\r
+    } else if (event.type === 'llm_reasoning') {\r
+        upsertLlmFeedRow(ctx, event.content || '', 'llm-reasoning', runSessionId, uiEventReactIter(event));\r
+    } else if (event.type === 'llm_response') {\r
+        upsertLlmFeedRow(ctx, event.content || '', 'llm-response', runSessionId, uiEventReactIter(event));\r
+    } else if (event.type === 'llm_history_rollup' || event.type === 'compact_summary') {\r
+        appendLog(ctx, String(event.content || ''), 'compact-summary', runSessionId);\r
+    } else if (event.type === 'context_trim_progress') {\r
+        appendProgressLog(ctx, event.content, 'context-trim', runSessionId);\r
+    } else if (event.type === 'context_summary_progress') {\r
+        appendProgressLog(ctx, event.content, 'context-summary', runSessionId);\r
+    } else if (event.type === 'context_summary_delta') {\r
+        appendProgressStreamDelta(ctx, event.delta, 'context-summary', runSessionId);\r
+    } else if (event.type === 'context_summary_body') {\r
+        applyProgressPersistedBody(ctx, event.content, 'context-summary', runSessionId);\r
+    } else if (event.type === 'key_context_progress') {\r
+        var keyProg = String(event.content || '');\r
+        if (keyProg.indexOf('正在根据对话更新要点') >= 0) {\r
+            finalizeProgressStreamForType(ctx, 'context-summary');\r
+            resetKeyContextStreamFilter(ctx);\r
+        }\r
+        appendProgressLog(ctx, keyProg, 'key-context', runSessionId);\r
+    } else if (event.type === 'key_context_delta') {\r
+        appendKeyContextStreamDelta(ctx, event.delta, runSessionId);\r
+    } else if (event.type === 'key_context_body') {\r
+        applyProgressPersistedBody(ctx, event.content, 'key-context', runSessionId);\r
+    } else if (event.type === 'error') {\r
+        appendLog(ctx, String(event.content || ''), 'error-log', runSessionId);\r
+    } else if (event.type === 'status') {\r
+        var statusContent = String(event.content || '');\r
+        if (event.model_switch) {\r
+            appendModelSwitchStatus(ctx, event, runSessionId);\r
+            return;\r
+        }\r
+        if (statusContent.indexOf('【上下文窗口已满，开始压缩】') >= 0 || statusContent.indexOf('【上下文压缩已完成】') >= 0) {\r
+            finalizeProgressStreamChunks(ctx);\r
+            resetKeyContextStreamFilter(ctx);\r
+        }\r
+        if (event.compress_progress) {\r
+            var legacyLogType = 'context-trim';\r
+            if (statusContent.indexOf('【上下文摘要】') >= 0) legacyLogType = 'context-summary';\r
+            else if (statusContent.indexOf('【要点】') >= 0) legacyLogType = 'key-context';\r
+            appendProgressLog(ctx, statusContent, legacyLogType, runSessionId);\r
+            return;\r
+        }\r
+        // 临时状态消息处理：标记"正在思考中..."为临时状态\r
+        var isTemporaryStatus = statusContent.indexOf('正在思考中...') >= 0;\r
+        if (isTemporaryStatus) removeTemporaryStatus(ctx);\r
+        var statusRow = appendLog(ctx, statusContent, 'status', runSessionId);\r
+        if (isTemporaryStatus && statusRow) {\r
+            statusRow.dataset.temporaryStatus = '1';\r
+        }\r
+    } else if (event.type === 'approval_required') {\r
+        var leg = (event.tool_name ? String(event.tool_name) + ' ' : '') + (event.message || '');\r
+        appendLog(ctx, '[历史/旧版事件] ' + leg.trim(), 'status', runSessionId);\r
+    } else if (event.type === 'warning') {\r
+        appendLog(ctx, String(event.content || ''), 'status', runSessionId);\r
+    } else if (event.type === 'subagent_start' || event.type === 'subagent_finish') {\r
+        if (!ctx._subagentBody) {\r
+            handleSubagentLifecycleEvent(event);\r
+            return;\r
+        }\r
+        if (event.type === 'subagent_start') ensureSubagentBlock(ctx, event);\r
+        else updateSubagentBlockFinish(ctx, event);\r
+    } else {\r
+        var fallbackContent = String(event.content || '');\r
+        if (fallbackContent.trim()) appendLog(ctx, fallbackContent, 'log-entry', runSessionId);\r
+    }\r
+}\r
 `,We=`\uFEFFfunction setSendButtonState() {\r
     sendBtn.disabled = false;\r
     if (isSessionRunning(currentSessionId)) {\r

@@ -1974,7 +1974,7 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
                             state,
                             {
                                 "type": "status",
-                                "content": "【自动·长度策略】正在进行上下文裁剪以控制 token（可能需数秒，请稍候）…",
+                                "content": "【上下文窗口已满，开始压缩】正在进行上下文裁剪以控制 token（可能需数秒，请稍候）…",
                             },
                             emit=emit,
                         )
@@ -2028,7 +2028,7 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
                     )
                 elif used_llm_summary:
                     _wm_compact_note = "[系统通知：上下文已按策略完成裁剪与摘要]"
-                    _st_base = "【自动·长度策略】已完成上下文裁剪与摘要以控制长度"
+                    _st_base = "【上下文压缩已完成】已完成上下文裁剪与摘要以控制长度"
                 else:
                     _wm_compact_note = "[系统通知：上下文已按策略完成裁剪]"
                     _st_base = "【自动·长度策略】已完成上下文裁剪以控制长度"
