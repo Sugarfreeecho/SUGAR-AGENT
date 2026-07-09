@@ -428,15 +428,55 @@ class RuntimeProjector:
 
     @classmethod
     def _seq_in_range(cls, seq: int, range_payload: dict) -> bool:
+        """Return True if a row with ``seq`` should be kept after applying ``range_payload``.
+
+        The retain region is defined by optional boundaries:
+
+        - ``from_seq``: lower bound (inclusive). Rows with ``seq < from_seq``
+          are dropped.
+        - ``to_seq``: upper bound (inclusive). Rows with ``seq > to_seq`` are
+          dropped.
+        - ``target_seq``: when present alongside ``to_seq`` with
+          ``target_seq > to_seq``, the payload represents a *rewrite/delete
+          truncate*: everything at and after ``target_seq`` is dropped, and
+          rows in the open interval ``(to_seq, target_seq)`` — which belong to
+          the truncated run — are also dropped. Only history up to ``to_seq``
+          survives. Without ``target_seq`` the behaviour degrades to the
+          legacy single-interval filter (drop everything above ``to_seq``).
+        """
         if not range_payload:
             return True
         from_seq = cls._int_or_none(range_payload.get("from_seq"))
         to_seq = cls._int_or_none(range_payload.get("to_seq"))
+        target_seq = cls._int_or_none(range_payload.get("target_seq"))
         if from_seq is not None and seq < from_seq:
             return False
+        # rewrite/delete truncate: only seq <= to_seq survives; everything
+        # above to_seq (including the open interval and target_seq onward) is
+        # dropped. Snapshot rows are handled separately by _snapshot_should_keep.
         if to_seq is not None and seq > to_seq:
             return False
         return True
+
+    @classmethod
+    def _snapshot_should_keep(cls, row: dict, payload: dict) -> bool:
+        """Decide whether a ``model_history_replaced`` snapshot row is kept.
+
+        Snapshot rows share one ``seq`` (the event seq) but represent history
+        *up to* that event, marked by ``replaced_by_seq``. A rewrite/delete
+        truncate with ``target_seq`` drops visible history at and after
+        ``target_seq`` while keeping everything before it. A snapshot whose
+        ``replaced_by_seq < target_seq`` contains only pre-target history and
+        must be kept entirely — even though its event seq may numerically fall
+        between ``to_seq`` and ``target_seq``, because the snapshot captures
+        the full history at the moment *before* the truncated run started.
+        """
+        target_seq = cls._int_or_none(payload.get("target_seq"))
+        replaced_by = cls._int_or_none(row.get("replaced_by_seq"))
+        if target_seq is not None and replaced_by is not None and replaced_by < target_seq:
+            return True
+        judge_seq = replaced_by if replaced_by is not None else cls._int_or_none(row.get("seq"))
+        return cls._seq_in_range(judge_seq, payload)
 
     def _truncate_snapshot_rows(self, snapshot: dict, payload: dict) -> None:
         snapshot["messages"] = self._truncate_rows(snapshot.get("messages") or [], payload)
@@ -447,7 +487,8 @@ class RuntimeProjector:
             payload,
         )
 
-    def _truncate_rows(self, rows: list, payload: dict) -> list:
+    @classmethod
+    def _truncate_rows(cls, rows: list, payload: dict) -> list:
         if payload.get("to_ui_index") is not None:
             try:
                 return list(rows or [])[:max(0, int(payload.get("to_ui_index")))]
@@ -457,10 +498,16 @@ class RuntimeProjector:
         for row in rows:
             if not isinstance(row, dict):
                 continue
-            seq = self._int_or_none(row.get("seq"))
+            seq = cls._int_or_none(row.get("seq"))
             if seq is None:
                 continue
-            if self._seq_in_range(seq, payload):
+            # model_history_replaced snapshot rows are judged as a whole by
+            # their ``replaced_by_seq`` so a rewrite/delete truncate does not
+            # erase pre-existing history (see ``_snapshot_should_keep``).
+            if row.get("replaced_by_seq") is not None:
+                if cls._snapshot_should_keep(row, payload):
+                    out.append(row)
+            elif cls._seq_in_range(seq, payload):
                 out.append(row)
         return out
 

@@ -73,18 +73,17 @@ class RuntimeUiProjection:
             except (TypeError, ValueError):
                 return runtime_seqs
         out = runtime_seqs
-        if payload.get("from_seq") is not None:
-            try:
-                from_seq = int(payload.get("from_seq"))
-                out = [seq for seq in out if int(seq) >= from_seq]
-            except (TypeError, ValueError):
-                pass
-        if payload.get("to_seq") is not None:
-            try:
-                to_seq = int(payload.get("to_seq"))
+        from_seq = RuntimeUiProjection._int_or_none(payload.get("from_seq"))
+        to_seq = RuntimeUiProjection._int_or_none(payload.get("to_seq"))
+        target_seq = RuntimeUiProjection._int_or_none(payload.get("target_seq"))
+        if from_seq is not None:
+            out = [seq for seq in out if int(seq) >= from_seq]
+        if to_seq is not None:
+            # rewrite/delete truncate: keep [.., to_seq] ∪ [target_seq, ..]
+            if target_seq is not None and target_seq > to_seq:
+                out = [seq for seq in out if int(seq) <= to_seq or int(seq) >= target_seq]
+            else:
                 out = [seq for seq in out if int(seq) <= to_seq]
-            except (TypeError, ValueError):
-                pass
         return out
 
     @staticmethod
@@ -95,18 +94,17 @@ class RuntimeUiProjection:
             except (TypeError, ValueError):
                 return events
         out = events
-        if payload.get("from_seq") is not None:
-            try:
-                from_seq = int(payload.get("from_seq"))
-                out = [event for event in out if int(event.get("runtime_seq") or 0) >= from_seq]
-            except (TypeError, ValueError):
-                pass
-        if payload.get("to_seq") is not None:
-            try:
-                to_seq = int(payload.get("to_seq"))
+        from_seq = RuntimeUiProjection._int_or_none(payload.get("from_seq"))
+        to_seq = RuntimeUiProjection._int_or_none(payload.get("to_seq"))
+        target_seq = RuntimeUiProjection._int_or_none(payload.get("target_seq"))
+        if from_seq is not None:
+            out = [event for event in out if int(event.get("runtime_seq") or 0) >= from_seq]
+        if to_seq is not None:
+            # rewrite/delete truncate: keep [.., to_seq] ∪ [target_seq, ..]
+            if target_seq is not None and target_seq > to_seq:
+                out = [event for event in out if int(event.get("runtime_seq") or 0) <= to_seq or int(event.get("runtime_seq") or 0) >= target_seq]
+            else:
                 out = [event for event in out if int(event.get("runtime_seq") or 0) <= to_seq]
-            except (TypeError, ValueError):
-                pass
         return out
 
     def ensure_backfilled_from_legacy(self, session_id: str, legacy_events: Iterable[dict]) -> int:
