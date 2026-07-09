@@ -1,13 +1,15 @@
 ﻿function setSendButtonState() {
     sendBtn.disabled = false;
     if (isSessionRunning(currentSessionId)) {
+        const run = typeof getSessionRunState === 'function' ? getSessionRunState(currentSessionId) : null;
+        const suppressFollowup = !!(run && run.suppressFollowupButton);
         const hasDraft = (typeof inputHasSendableText === 'function')
             ? inputHasSendableText()
             : !!(messageInput && String(messageInput.value || '').trim());
         const followupEnabled = (typeof isMyAgentFeatureEnabled === 'function') && isMyAgentFeatureEnabled('followupRestart', false);
-        sendBtn.innerHTML = (followupEnabled && hasDraft) ? '追问' : '停止 <span class="loader" aria-hidden="true"></span>';
+        sendBtn.innerHTML = (followupEnabled && hasDraft && !suppressFollowup) ? '追问' : '停止 <span class="loader" aria-hidden="true"></span>';
         sendBtn.classList.add('is-stop');
-        sendBtn.classList.toggle('is-followup', followupEnabled && hasDraft);
+        sendBtn.classList.toggle('is-followup', followupEnabled && hasDraft && !suppressFollowup);
     } else {
         sendBtn.textContent = '发送';
         sendBtn.classList.remove('is-stop');

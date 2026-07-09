@@ -582,7 +582,17 @@ def _runtime_v2_chat_sse_payload(session_id: str, event_dict: dict) -> Optional[
                 "ephemeral": True,
             }
         elif event.type == "message_user":
-            skip_ui = True
+            # Regular /chat user messages are rendered optimistically in the
+            # browser. Steer messages are intentionally not, so they must be
+            # projected through this live Runtime V2 stream.
+            if str((event.payload or {}).get("ui_type") or "") == "user_steer":
+                projection = RuntimeUiProjection(
+                    session_manager.repository.sessions_dir,
+                    path_resolver=session_manager._resolve_session_path,
+                )
+                ui_event = projection._event_to_ui(session_id, event)
+            else:
+                skip_ui = True
         else:
             projection = RuntimeUiProjection(
                 session_manager.repository.sessions_dir,
@@ -2150,6 +2160,49 @@ async def post_tool_approval(session_id: str, request: Request):
     return JSONResponse(content={"ok": matched})
 
 
+def _valid_selected_skill_names(raw_selected: Any) -> list[str]:
+    if isinstance(raw_selected, str):
+        try:
+            requested = json.loads(raw_selected or "[]")
+        except Exception:
+            requested = []
+    else:
+        requested = raw_selected
+    if not isinstance(requested, list):
+        requested = []
+    requested_names = [str(item).strip() for item in requested if str(item).strip()]
+    if not requested_names:
+        return []
+    available = {str(skill.get("name") or "") for skill in discover_skills()}
+    valid_names: list[str] = []
+    seen = set()
+    for name in requested_names:
+        if name in available and name not in seen:
+            seen.add(name)
+            valid_names.append(name)
+    return valid_names
+
+
+def _build_agent_message_with_selected_skills(raw_message: str, valid_names: list[str]) -> str:
+    if not valid_names:
+        return raw_message
+    lines = [
+        raw_message,
+        "",
+        "<selected_skills_for_this_conversation>",
+        "用户已在输入框中选择以下 Skill。请在本次对话中按需使用这些 Skill；需要具体规程时调用 activate_skill 读取对应说明：",
+    ]
+    lines.extend(f"- {name}" for name in valid_names)
+    lines.append("</selected_skills_for_this_conversation>")
+    return "\n".join(lines)
+
+
+def _build_ui_message_with_selected_skills(raw_message: str, valid_names: list[str]) -> str:
+    if not valid_names:
+        return raw_message
+    return raw_message + "\n\n已选择 Skill：" + "、".join(valid_names)
+
+
 @fastapi_app.post("/sessions/{session_id}/steer")
 async def post_session_steer(session_id: str, request: Request):
     sid = (session_id or "").strip()
@@ -2163,8 +2216,15 @@ async def post_session_steer(session_id: str, request: Request):
         return JSONResponse(content={"ok": False, "error": "invalid json"}, status_code=400)
     message = str((data or {}).get("message") or "").strip()
     client_id = str((data or {}).get("client_id") or "").strip()
+    selected_skills = (data or {}).get("selected_skills") or []
+    requested_ui_content = str((data or {}).get("ui_content") or "").strip()
+    if not isinstance(selected_skills, list):
+        selected_skills = []
+    valid_selected_skills = _valid_selected_skill_names(selected_skills)
+    agent_message = _build_agent_message_with_selected_skills(message, valid_selected_skills)
+    ui_message = _build_ui_message_with_selected_skills(requested_ui_content or message, valid_selected_skills)
     followup_restart_enabled = os.getenv("MYAGENT_ENABLE_FOLLOWUP_RESTART", "1").strip().lower() in {"1", "true", "yes", "on"}
-    result = enqueue_session_steer(sid, message, client_id=client_id)
+    result = enqueue_session_steer(sid, agent_message, client_id=client_id, ui_content=ui_message)
     if not result.get("ok"):
         return JSONResponse(content=result, status_code=400)
     result["aborted"] = abort_session_steer_run(sid, reason="steer")
@@ -2183,7 +2243,8 @@ async def post_session_steer(session_id: str, request: Request):
         return JSONResponse(content={"ok": False, "error": "empty steer"}, status_code=400)
     steer_item = {
         "id": str(uuid.uuid4()),
-        "content": message,
+        "content": agent_message,
+        "ui_content": ui_message,
         "client_id": client_id,
     }
     aborted = abort_session_steer_run(sid, reason="steer")
@@ -2324,6 +2385,7 @@ async def chat(
     stream_protocol: str = Form("legacy"),
     followup_steer: bool = Form(False),
     selected_skills: str = Form(""),
+    ui_message: str = Form(""),
 ):
     sid = (session_id or "").strip() or None
     run_id = str(client_run_id or "").strip()
@@ -2372,10 +2434,11 @@ async def chat(
 
     valid_selected_skills = selected_skill_names(selected_skills)
     agent_message = build_agent_message(message, valid_selected_skills)
+    ui_base_message = str(ui_message or "").strip() or message
     ui_message = (
-        message + "\n\n已选择 Skill：" + "、".join(valid_selected_skills)
+        ui_base_message + "\n\n已选择 Skill：" + "、".join(valid_selected_skills)
         if valid_selected_skills
-        else message
+        else ui_base_message
     )
 
     async def event_generator():

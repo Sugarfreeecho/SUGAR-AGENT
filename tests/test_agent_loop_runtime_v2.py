@@ -26,6 +26,29 @@ class _NoLegacySessionManager:
         raise AssertionError("Runtime V2 run setup must not migrate legacy key_context")
 
 
+def test_steer_trim_keeps_completed_prefix_and_assistant_text():
+    import agent_loop
+
+    assistant = agent_loop.AssistantMessage(
+        content="already streamed response",
+        tool_calls=[
+            {"name": "read_file", "args": {"path": "a"}, "id": "done"},
+            {"name": "run_shell", "args": {"command": "sleep"}, "id": "running"},
+        ],
+        additional_kwargs={"reasoning_content": "already streamed reasoning"},
+    )
+    completed = agent_loop.ToolMessage(content="file contents", tool_call_id="done")
+
+    trimmed, changed_at = agent_loop._trim_unclosed_tool_call_tail_preserve_completed(
+        [assistant, completed]
+    )
+
+    assert changed_at == 0
+    assert len(trimmed) == 2
+    assert trimmed[0].content == "already streamed response"
+    assert [call["id"] for call in trimmed[0].tool_calls] == ["done"]
+    assert trimmed[1].tool_call_id == "done"
+
 def test_runtime_v2_model_history_prefers_projection(monkeypatch):
     import agent_loop
 

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import logging
 import shutil
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -8,6 +10,14 @@ from .event_log import SessionEventLog
 from .event_schema import RuntimeEvent
 from .projector import RuntimeProjector
 from .snapshot_store import SnapshotStore
+
+logger = logging.getLogger(__name__)
+
+
+def _rt2_step_ms(start: float, end: Optional[float] = None) -> int:
+    if end is None:
+        end = time.perf_counter()
+    return int(max(0.0, (end - start) * 1000.0))
 
 
 class RuntimeHistoryOps:
@@ -212,10 +222,26 @@ class RuntimeHistoryOps:
         return self._append_and_snapshot(session_id, "legacy_compress_observed", payload)
 
     def _append_and_snapshot(self, session_id: str, event_type: str, payload: dict, run_id: Optional[str] = None) -> RuntimeEvent:
+        t0 = time.perf_counter()
         event = self.event_log.append(session_id, event_type, payload=payload, run_id=run_id)
+        t_after_append = time.perf_counter()
         snapshot = self.projector.project_incremental(self.snapshots.read(session_id), event)
+        t_after_project = time.perf_counter()
         self.snapshots.write(session_id, snapshot)
+        t_after_write = time.perf_counter()
+        logger.info(
+            "rt2_append_and_snapshot session=%s event_type=%s run_id=%s "
+            "step_append_ms=%s step_project_ms=%s step_snapshot_write_ms=%s total_ms=%s",
+            session_id,
+            event_type,
+            str(run_id or ""),
+            _rt2_step_ms(t0, t_after_append),
+            _rt2_step_ms(t_after_append, t_after_project),
+            _rt2_step_ms(t_after_project, t_after_write),
+            _rt2_step_ms(t0, t_after_write),
+        )
         return event
+
 
     def _seed_branch_visible_history(self, session_id: str, source_session_id: str, branch_from_seq: int) -> int:
         if self._has_projectable_ui_events(session_id):

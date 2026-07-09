@@ -336,7 +336,7 @@ def test_followup_restart_enabled_prefers_native_steer(monkeypatch):
     monkeypatch.setattr(
         webui,
         "enqueue_session_steer",
-        lambda sid, message, client_id="": {
+        lambda sid, message, client_id="", **_kwargs: {
             "ok": True,
             "item": {"content": message, "client_id": client_id},
         },

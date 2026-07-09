@@ -53,3 +53,7 @@ Thumbs.db
 desktop.ini
 .vscode/
 .idea/
+
+# Local backup files (editor/tool backups, not source)
+*.bak
+*.bak_fix

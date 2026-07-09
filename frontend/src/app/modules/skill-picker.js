@@ -112,8 +112,9 @@ function renderSkillPicker() {
         return;
     }
     var active = selectedSkillSet();
+    var selectedCount = selectedSkillNames.length;
     var html = '<div class="skill-picker-head">'
-        + '<div class="skill-picker-title">选择 Skill</div>'
+        + '<div class="skill-picker-title">选择 Skill <span class="skill-picker-total">已选 ' + skillPickerEscape(selectedCount) + ' / 共 ' + skillPickerEscape(skills.length) + '</span></div>'
         + '<button type="button" class="skill-picker-clear">清空</button>'
         + '</div>'
         + '<div class="skill-picker-list">';
@@ -139,6 +140,7 @@ function renderSkillPicker() {
             selectedSkillNames = Object.keys(set).filter(Boolean);
             persistSkillPickerDraft(currentSessionId);
             syncSkillPickerButton();
+            renderSkillPicker();
         });
     });
     var clear = e.popover.querySelector('.skill-picker-clear');
@@ -177,6 +179,15 @@ function consumeSelectedSkillsForSend() {
     closeSkillPicker();
     if (skillPickerCache) renderSkillPicker();
     return out;
+}
+
+function setSelectedSkillsForCurrentSession(skills) {
+    selectedSkillNames = Array.isArray(skills)
+        ? skills.map(function (item) { return String(item || '').trim(); }).filter(Boolean)
+        : [];
+    persistSkillPickerDraft(currentSessionId);
+    syncSkillPickerButton();
+    if (skillPickerCache) renderSkillPicker();
 }
 
 function stashSkillPickerDraft(sessionId) {
@@ -222,6 +233,7 @@ function initSkillPicker() {
 
 initSkillPicker();
 window.consumeSelectedSkillsForSend = consumeSelectedSkillsForSend;
+window.setSelectedSkillsForCurrentSession = setSelectedSkillsForCurrentSession;
 window.refreshSkillPickerSkills = refreshSkillPickerSkills;
 window.stashSkillPickerDraft = stashSkillPickerDraft;
 window.restoreSkillPickerDraft = restoreSkillPickerDraft;

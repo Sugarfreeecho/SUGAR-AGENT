@@ -1,4 +1,4 @@
-"""
+﻿"""
 agent_harness — Agent 项目的中枢模块。
 
 内容概览
@@ -135,7 +135,7 @@ SUBAGENT_BEST_OF_N = max(2, min(8, int(os.getenv("SUBAGENT_BEST_OF_N", "3"))))
 SUBAGENT_INDEX_FILE = "subagent_index.json"
 SUBAGENT_PENDING_RESULTS_FILE = "pending_subagent_results.json"
 VERBOSE_LOGGING = os.getenv("VERBOSE_LOGGING", "True").lower() == "true"
-TODO_MAX_ITEMS = int(os.getenv("TODO_MAX_ITEMS", "10"))
+TODO_MAX_ITEMS = int(os.getenv("TODO_MAX_ITEMS", "30"))
 
 EXECUTOR_LLM = os.getenv("EXECUTOR_LLM", "deepseek-v4-flash")
 EXECUTOR_LLM_TYPE = (os.getenv("EXECUTOR_LLM_TYPE") or "openai").strip().lower()

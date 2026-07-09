@@ -210,7 +210,7 @@ def _wait_context_policy_idle(session_id: str) -> None:
     lock.release()
 
 
-def enqueue_session_steer(session_id: str, content: str, client_id: str = "") -> Dict[str, Any]:
+def enqueue_session_steer(session_id: str, content: str, client_id: str = "", ui_content: str = "") -> Dict[str, Any]:
     sid = str(session_id or "").strip()
     text = str(content or "").strip()
     if not sid:
@@ -220,6 +220,7 @@ def enqueue_session_steer(session_id: str, content: str, client_id: str = "") ->
     item = {
         "id": str(uuid.uuid4()),
         "content": text,
+        "ui_content": str(ui_content or "").strip() or text,
         "client_id": str(client_id or "").strip(),
         "created_at": time.time(),
     }
@@ -701,8 +702,10 @@ def _pre_api_timing_log(session_id: str, timings: Dict[str, int], **extra: Any) 
         logger.debug("pre_api_timing log failed", exc_info=True)
 
 
-def _timing_ms(start: float) -> int:
-    return int(max(0.0, (time.perf_counter() - start) * 1000.0))
+def _timing_ms(start: float, end: Optional[float] = None) -> int:
+    if end is None:
+        end = time.perf_counter()
+    return int(max(0.0, (end - start) * 1000.0))
 
 
 def _pipeline_timing_log(label: str, session_id: str, timings: Dict[str, int], **extra: Any) -> None:
@@ -775,7 +778,9 @@ def _runtime_v2_append_model_message(state: State, msg: Any) -> None:
     try:
         from runtime_v2 import RuntimeHistoryOps
 
+        t_pre_dict = time.perf_counter()
         data = _message_to_dict(msg)
+        t_post_dict = time.perf_counter()
         msg_type = str(data.get("type") or "").strip()
         role = {
             "human": "user",
@@ -791,17 +796,26 @@ def _runtime_v2_append_model_message(state: State, msg: Any) -> None:
         run_id = str(state.get("_runtime_v2_run_id") or "").strip()
         if run_id:
             payload["run_id"] = run_id
+        t_pre_call = time.perf_counter()
         RuntimeHistoryOps(session_manager.sessions_dir).append_model_message(
             sid,
             role,
             content,
             **payload,
         )
+        t_post_call = time.perf_counter()
+        step_dict_ms = _timing_ms(t_pre_dict, t_post_dict)
+        step_outer_overhead_ms = _timing_ms(t_post_dict, t_pre_call)
+        step_inner_total_ms = _timing_ms(t_pre_call, t_post_call)
         logger.info(
-            "runtime_v2_write_timing session=%s op=append_model_message role=%s ms=%s",
+            "runtime_v2_write_timing session=%s op=append_model_message role=%s ms=%s "
+            "step_dict_ms=%s step_outer_overhead_ms=%s step_inner_total_ms=%s",
             sid,
             role,
             _timing_ms(t0),
+            step_dict_ms,
+            step_outer_overhead_ms,
+            step_inner_total_ms,
         )
     except Exception as exc:
         logger.debug("Runtime V2 model append failed: %s", exc)
@@ -1223,6 +1237,7 @@ async def _consume_steer_messages(
     changed = False
     for item in items:
         text = str((item or {}).get("content") or "").strip()
+        ui_text = str((item or {}).get("ui_content") or text).strip()
         if not text:
             continue
         msg = UserMessage(content=text)
@@ -1237,7 +1252,7 @@ async def _consume_steer_messages(
             state,
             {
                 "type": "user_steer",
-                "content": text,
+                "content": ui_text,
                 "steer": True,
                 "steer_id": str((item or {}).get("id") or ""),
                 "client_id": str((item or {}).get("client_id") or ""),
@@ -3213,6 +3228,32 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
             state["work_messages"] = work_messages
             _persist_state_with_model_append(state, interim_msg)
 
+            # Checkpoint every completed tool before another tool is awaited.
+            # Otherwise a steer between tool calls cannot distinguish a finished
+            # result from an unfinished call during rollback.
+            checkpointed_tool_result_ids: set[str] = set()
+
+            async def checkpoint_completed_tool_result(res: Any) -> Any:
+                if not isinstance(res, dict) or res.get("type") != "tool":
+                    return res
+                tool_id = str(res.get("tool_id") or "").strip()
+                if not tool_id or tool_id in checkpointed_tool_result_ids:
+                    return res
+                tool_msg_ui = ToolMessage(content=res["tool_detail_ui"], tool_call_id=tool_id)
+                tool_msg_llm = ToolMessage(content=res["tool_detail_llm"], tool_call_id=tool_id)
+                work_messages.append(tool_msg_ui)
+                llm_history.append(tool_msg_llm)
+                state["llm_history"] = llm_history
+                state["work_messages"] = work_messages
+                state["dialogue"] = derive_dialogue_from_assistant_history(llm_history)
+                _persist_state_with_model_append(state, tool_msg_llm)
+                checkpointed_tool_result_ids.add(tool_id)
+                res["_history_persisted"] = True
+                if not res.get("_sse_emitted"):
+                    await _emit_tool_call_sse(emit, res, iter_count, state)
+                    res["_sse_emitted"] = True
+                return res
+
             # 记录 LLM 调用详情（可选；与实际上送内容一致，已剥历史 reasoning）
             request_msgs = [_serialize_message(msg) for msg in llm_messages_to_send]
             call_record = {
@@ -3287,6 +3328,7 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
                                 continue
                             for done in done_tasks:
                                 tc, r = await done
+                                r = await checkpoint_completed_tool_result(r)
                                 tid = (tc or {}).get("id", "")
                                 if tid is not None:
                                     by_id[tid] = r
@@ -3294,6 +3336,7 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
                                     emit
                                     and isinstance(r, dict)
                                     and r.get("type") == "tool"
+                                    and not r.get("_sse_emitted")
                                 ):
                                     r["_sse_emitted"] = True
                                     await _emit_tool_call_sse(emit, r, iter_count, state)
@@ -3344,6 +3387,7 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
                             emit,
                             "tool",
                         )
+                        early_result = await checkpoint_completed_tool_result(early_result)
                         exec_results.append(early_result)
                         continue
                     if is_read_only_tool(tool_call):
@@ -3358,6 +3402,7 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
                         emit,
                         "tool",
                     )
+                    write_result = await checkpoint_completed_tool_result(write_result)
                     exec_results.append(write_result)
 
                 # 末尾残留的只读工具并行执行
@@ -3443,13 +3488,14 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
                     tool_post_timings["record_temp_file"] = _timing_ms(_t_tool_post)
                     _pipeline_step_timing_log("tool_result_post_step_timing", state["session_id"], "record_temp_file", tool_post_timings["record_temp_file"], react_iter=int(iter_count))
                     _t_tool_post = time.perf_counter()
-                    tool_msg_ui = ToolMessage(content=res["tool_detail_ui"], tool_call_id=res["tool_id"])
-                    tool_msg_llm = ToolMessage(content=res["tool_detail_llm"], tool_call_id=res["tool_id"])
-                    work_messages.append(tool_msg_ui)
-                    llm_history.append(tool_msg_llm)
-                    _runtime_v2_append_model_message(state, tool_msg_llm)
-                    state["llm_history"] = llm_history
-                    state["work_messages"] = work_messages
+                    if not res.get("_history_persisted"):
+                        tool_msg_ui = ToolMessage(content=res["tool_detail_ui"], tool_call_id=res["tool_id"])
+                        tool_msg_llm = ToolMessage(content=res["tool_detail_llm"], tool_call_id=res["tool_id"])
+                        work_messages.append(tool_msg_ui)
+                        llm_history.append(tool_msg_llm)
+                        _persist_state_with_model_append(state, tool_msg_llm)
+                        state["llm_history"] = llm_history
+                        state["work_messages"] = work_messages
                     tool_post_timings["append_model_history"] = _timing_ms(_t_tool_post)
                     _pipeline_step_timing_log("tool_result_post_step_timing", state["session_id"], "append_model_history", tool_post_timings["append_model_history"], react_iter=int(iter_count))
 

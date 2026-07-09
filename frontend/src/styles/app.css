@@ -2560,6 +2560,12 @@ body {
     font-size: 0.72rem;
     font-weight: 800;
 }
+.skill-picker-total {
+    margin-left: 0.38rem;
+    color: var(--text-tertiary);
+    font-size: 0.66rem;
+    font-weight: 700;
+}
 .skill-picker-clear {
     border: 1px solid transparent;
     border-radius: 8px;
