@@ -92,6 +92,7 @@ from agent_tools import (
     redact_sensitive_tool_text,
 )
 from agent_tokenizer import (
+    estimate_calculated_input_tokens_for_messages,
     estimate_full_input_tokens_for_messages,
     estimate_full_input_tokens_for_llm_history,
     record_prompt_tokens_for_messages,
@@ -1952,10 +1953,18 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
             )
 
             # ---------- 2.1 上下文压缩：单轨 + key_context
-            full_input_est = estimate_full_input_tokens_for_messages(
-                state["session_id"],
-                llm_messages,
-            )
+            # In calculated mode keep the trigger on the same pure local
+            # tokenizer path as agent_memory's compression decision.  Hybrid
+            # mode intentionally retains the provider-usage baseline.
+            if state.get("_context_token_mode") == "calculated":
+                full_input_est = estimate_calculated_input_tokens_for_messages(
+                    llm_messages,
+                )
+            else:
+                full_input_est = estimate_full_input_tokens_for_messages(
+                    state["session_id"],
+                    llm_messages,
+                )
             _pre_api_timing_mark(pre_api_timings, "token_estimate", _t_pre_api)
             _t_pre_api = time.perf_counter()
             iter_client, iter_model, iter_max_output_tokens, iter_context_window = resolve_executor_config_for_session(
@@ -2006,7 +2015,12 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
                             llm_history,
                             kcur,
                             sid,
-                            force_user_compact=False,
+                            # `full_input_est` is calculated from the exact request package
+                            # assembled above.  The policy's history-only preview can be
+                            # smaller (notably when provider-usage cache is available), so do
+                            # not let it turn an already-confirmed overflow into a no-op and
+                            # immediately fall through to the emergency half-window truncate.
+                            force_user_compact=True,
                             hint_sink=_compress_hint_emit,
                             context_window=int(iter_context_window),
                         ),

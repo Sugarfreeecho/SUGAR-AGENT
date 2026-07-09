@@ -279,6 +279,20 @@ def estimate_full_input_tokens_for_messages(
     return estimated
 
 
+def estimate_calculated_input_tokens_for_messages(messages: List[Any]) -> int:
+    """Estimate an assembled API request locally, without provider-usage caches.
+
+    This is deliberately the same pure-tokenizer path used by the history
+    preview in context compression.  It is used by CONTEXT_TOKEN_MODE=calculated
+    so the auto-compression trigger cannot disagree with that preview merely
+    because a provider reported a different token count for an earlier request.
+    """
+    from agent_harness import estimate_tokens, strip_reasoning_for_api_request
+
+    stripped = strip_reasoning_for_api_request(list(messages or []))
+    return int(estimate_tokens(stripped))
+
+
 # ==================== 整包输入 token（与主模型上送一致）====================
 
 
