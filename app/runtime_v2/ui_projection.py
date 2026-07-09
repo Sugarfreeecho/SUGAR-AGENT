@@ -75,15 +75,15 @@ class RuntimeUiProjection:
         out = runtime_seqs
         from_seq = RuntimeUiProjection._int_or_none(payload.get("from_seq"))
         to_seq = RuntimeUiProjection._int_or_none(payload.get("to_seq"))
-        target_seq = RuntimeUiProjection._int_or_none(payload.get("target_seq"))
         if from_seq is not None:
             out = [seq for seq in out if int(seq) >= from_seq]
         if to_seq is not None:
-            # rewrite/delete truncate: keep [.., to_seq] ∪ [target_seq, ..]
-            if target_seq is not None and target_seq > to_seq:
-                out = [seq for seq in out if int(seq) <= to_seq or int(seq) >= target_seq]
-            else:
-                out = [seq for seq in out if int(seq) <= to_seq]
+            # A truncate operation is always a prefix operation: the caller
+            # supplies ``target_seq`` only as an audit/anchor value, while
+            # ``to_seq`` is the final retained boundary.  Keeping events at
+            # and after target_seq here used to resurrect the deleted/rewrite
+            # tail in the UI, even though the model projection had removed it.
+            out = [seq for seq in out if int(seq) <= to_seq]
         return out
 
     @staticmethod
@@ -96,15 +96,11 @@ class RuntimeUiProjection:
         out = events
         from_seq = RuntimeUiProjection._int_or_none(payload.get("from_seq"))
         to_seq = RuntimeUiProjection._int_or_none(payload.get("to_seq"))
-        target_seq = RuntimeUiProjection._int_or_none(payload.get("target_seq"))
         if from_seq is not None:
             out = [event for event in out if int(event.get("runtime_seq") or 0) >= from_seq]
         if to_seq is not None:
-            # rewrite/delete truncate: keep [.., to_seq] ∪ [target_seq, ..]
-            if target_seq is not None and target_seq > to_seq:
-                out = [event for event in out if int(event.get("runtime_seq") or 0) <= to_seq or int(event.get("runtime_seq") or 0) >= target_seq]
-            else:
-                out = [event for event in out if int(event.get("runtime_seq") or 0) <= to_seq]
+            # Keep this exactly aligned with RuntimeProjector._seq_in_range.
+            out = [event for event in out if int(event.get("runtime_seq") or 0) <= to_seq]
         return out
 
     def ensure_backfilled_from_legacy(self, session_id: str, legacy_events: Iterable[dict]) -> int:

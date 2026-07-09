@@ -201,7 +201,10 @@ class RuntimeProjector:
                 "replacement_index": index,
                 "replaced_by_seq": event.seq,
             })
-        rows = self._trim_replacement_after_model_truncate(snapshot, rows)
+        # A replacement is the caller's canonical, already-reconciled model
+        # context (compression, branch seeding, or a post-rewrite run).  Do
+        # not apply an older visible-range operation a second time: its event
+        # sequence cannot describe the individual rows in this new snapshot.
         snapshot["raw_model_messages"] = rows
 
     def _apply_history_op(self, snapshot: dict, event: RuntimeEvent) -> None:
@@ -436,24 +439,17 @@ class RuntimeProjector:
           are dropped.
         - ``to_seq``: upper bound (inclusive). Rows with ``seq > to_seq`` are
           dropped.
-        - ``target_seq``: when present alongside ``to_seq`` with
-          ``target_seq > to_seq``, the payload represents a *rewrite/delete
-          truncate*: everything at and after ``target_seq`` is dropped, and
-          rows in the open interval ``(to_seq, target_seq)`` — which belong to
-          the truncated run — are also dropped. Only history up to ``to_seq``
-          survives. Without ``target_seq`` the behaviour degrades to the
-          legacy single-interval filter (drop everything above ``to_seq``).
+        - ``target_seq``: an audit anchor identifying the clicked UI event.
+          It does not change the retained range.  ``to_seq`` is the sole
+          inclusive upper boundary, so delete/rewrite/truncate all have the
+          same prefix semantics in the UI and model projections.
         """
         if not range_payload:
             return True
         from_seq = cls._int_or_none(range_payload.get("from_seq"))
         to_seq = cls._int_or_none(range_payload.get("to_seq"))
-        target_seq = cls._int_or_none(range_payload.get("target_seq"))
         if from_seq is not None and seq < from_seq:
             return False
-        # rewrite/delete truncate: only seq <= to_seq survives; everything
-        # above to_seq (including the open interval and target_seq onward) is
-        # dropped. Snapshot rows are handled separately by _snapshot_should_keep.
         if to_seq is not None and seq > to_seq:
             return False
         return True
@@ -510,25 +506,6 @@ class RuntimeProjector:
             elif cls._seq_in_range(seq, payload):
                 out.append(row)
         return out
-
-    def _trim_replacement_after_model_truncate(self, snapshot: dict, rows: list) -> list:
-        context = snapshot.get("context") if isinstance(snapshot, dict) else {}
-        if not isinstance(context, dict) or not context.get("model_truncate"):
-            return rows
-        visible_user_count = sum(
-            1 for row in (snapshot.get("messages") or [])
-            if isinstance(row, dict) and row.get("role") == "user"
-        )
-        if visible_user_count <= 0:
-            return []
-        user_positions = [
-            idx for idx, row in enumerate(rows)
-            if isinstance(row, dict) and row.get("role") == "user"
-        ]
-        if len(user_positions) <= visible_user_count:
-            return rows
-        start = user_positions[-visible_user_count]
-        return rows[start:]
 
     @staticmethod
     def _copy_message(message: dict) -> dict:

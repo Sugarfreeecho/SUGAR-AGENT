@@ -82,6 +82,59 @@ class RuntimeHistoryOpsTests(unittest.TestCase):
             self.assertEqual([m["payload"]["content"] for m in snapshot["visible_messages"]], ["u1", "a1"])
             self.assertEqual([ev["runtime_seq"] for ev in events], [e1.seq, e2.seq])
 
+    def test_truncate_keeps_ui_and_model_prefixes_aligned_after_rewrite(self):
+        """A rewritten turn starts from one shared retained boundary.
+
+        The old tail must not reappear in the UI, a branch, or a later model
+        replacement that represents the new run's canonical context.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            ops = RuntimeHistoryOps(tmp)
+            mirror = RuntimeMirror(tmp)
+            ops.append_model_message("source", "user", "u1")
+            e1 = mirror.mirror_ui_event("source", {"type": "user", "content": "u1"})
+            ops.append_model_message("source", "assistant", "a1")
+            e2 = mirror.mirror_ui_event("source", {"type": "final", "content": "a1"})
+            ops.append_model_message("source", "user", "old u2")
+            e3 = mirror.mirror_ui_event("source", {"type": "user", "content": "old u2"})
+            ops.append_model_message("source", "assistant", "old a2")
+            mirror.mirror_ui_event("source", {"type": "final", "content": "old a2"})
+
+            ops.truncate_visible_history_before_seq(
+                "source", target_seq=e3.seq, keep_to_seq=e2.seq
+            )
+            self.assertEqual(
+                [event["content"] for event in RuntimeUiProjection(tmp).read_ui_events("source")],
+                ["u1", "a1"],
+            )
+            self.assertEqual(
+                [row["payload"]["content"] for row in ops.snapshots.read("source")["model_messages"]],
+                ["u1", "a1"],
+            )
+
+            # The post-rewrite runtime owns this exact model context.  An old
+            # truncation must not apply a second heuristic trim to it.
+            ops.replace_model_history("source", [
+                {"type": "user", "content": "u1"},
+                {"type": "assistant", "content": "a1"},
+                {"type": "user", "content": "new u2"},
+                {"type": "assistant", "content": "new a2"},
+            ], reason="rewrite_new_run")
+            self.assertEqual(
+                [row["payload"]["content"] for row in ops.snapshots.read("source")["model_messages"]],
+                ["u1", "a1", "new u2", "new a2"],
+            )
+
+            ops.create_branch("branch", source_session_id="source", branch_from_seq=e2.seq)
+            self.assertEqual(
+                [event["content"] for event in RuntimeUiProjection(tmp).read_ui_events("branch")],
+                ["u1", "a1"],
+            )
+            self.assertEqual(
+                [row["payload"]["content"] for row in ops.snapshots.read("branch")["model_messages"]],
+                ["u1", "a1"],
+            )
+
     def test_model_history_replace_changes_model_projection_only(self):
         with tempfile.TemporaryDirectory() as tmp:
             mirror = RuntimeMirror(tmp)
