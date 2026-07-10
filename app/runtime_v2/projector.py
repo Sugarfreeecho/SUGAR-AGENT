@@ -256,6 +256,48 @@ class RuntimeProjector:
                     "to_seq": payload.get("to_seq"),
                     "reason": payload.get("reason") or "",
                 }
+            if "restore_model_messages" in payload:
+                restored_messages = payload.get("restore_model_messages")
+                if not isinstance(restored_messages, list):
+                    restored_messages = []
+                restored_rows = []
+                for index, item in enumerate(restored_messages):
+                    if not isinstance(item, dict):
+                        continue
+                    msg_type = str(item.get("type") or item.get("role") or "").strip()
+                    role = {
+                        "human": "user",
+                        "llm": "assistant",
+                        "ai": "assistant",
+                        "agent": "assistant",
+                    }.get(msg_type, msg_type)
+                    if role not in {"user", "assistant", "tool", "system"}:
+                        continue
+                    msg_payload = dict(item)
+                    msg_payload["role"] = role
+                    msg_payload["content"] = str(item.get("content") or "")
+                    restored_rows.append({
+                        "seq": event.seq,
+                        "timestamp": event.timestamp,
+                        "role": role,
+                        "run_id": event.run_id,
+                        "payload": msg_payload,
+                        "replacement_index": index,
+                        "replaced_by_seq": event.seq,
+                    })
+                snapshot["raw_model_messages"] = restored_rows
+            if "restore_context_summary" in payload:
+                restored_summary = payload.get("restore_context_summary")
+                if isinstance(restored_summary, dict):
+                    snapshot["context"]["summary"] = dict(restored_summary)
+                else:
+                    snapshot["context"].pop("summary", None)
+            if "restore_history_compaction" in payload:
+                restored_compaction = payload.get("restore_history_compaction")
+                if isinstance(restored_compaction, dict):
+                    snapshot["context"]["history_compaction"] = dict(restored_compaction)
+                else:
+                    snapshot["context"].pop("history_compaction", None)
         elif event.type == "model_window_changed":
             snapshot["model_window"] = {
                 "from_seq": payload.get("from_seq"),

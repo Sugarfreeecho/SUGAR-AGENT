@@ -50,7 +50,11 @@ class RuntimeHistoryOps:
         branch_from_seq = int(branch_from_seq)
         ui_events = self._branch_ui_events(source_session_id, branch_from_seq)
         t_after_ui = time.perf_counter()
-        model_messages = self._source_model_message_dicts_at_seq(source_session_id, branch_from_seq)
+        source_checkpoint = self._source_snapshot_at_seq(source_session_id, branch_from_seq)
+        model_messages = self._model_message_dicts_from_snapshot(source_checkpoint)
+        source_context = source_checkpoint.get("context") if isinstance(source_checkpoint, dict) else {}
+        source_summary = source_context.get("summary") if isinstance(source_context, dict) else {}
+        source_summary_text = str(source_summary.get("summary") or "") if isinstance(source_summary, dict) else ""
         t_after_model = time.perf_counter()
         seed_rows = self._branch_ui_seed_rows(session_id, source_session_id, ui_events)
         t_after_map = time.perf_counter()
@@ -81,6 +85,7 @@ class RuntimeHistoryOps:
                     "payload": {
                         "messages": model_messages,
                         "reason": "branch_model_seed",
+                        "summary": source_summary_text,
                     },
                 })
             appended = self.event_log._append_many_unlocked(session_id, rows)
@@ -134,6 +139,10 @@ class RuntimeHistoryOps:
             if not isinstance(event, dict):
                 continue
             seed = dict(event)
+            origin_session_id = str(
+                seed.get("branch_source_session_id") or source_session_id
+            ).strip()
+            origin_runtime_seq = seed.get("branch_source_runtime_seq", seed.get("runtime_seq"))
             seed.pop("runtime_seq", None)
             seed.pop("runtime_event_type", None)
             seed.pop("rewritten", None)
@@ -147,9 +156,13 @@ class RuntimeHistoryOps:
                     "type": "legacy_ui_event",
                     "payload": self._copy_blob_refs(source_session_id, session_id, seed),
                 }
+            mapped_payload = dict(mapped.get("payload") or {})
+            if origin_session_id and self.projector._int_or_none(origin_runtime_seq) is not None:
+                mapped_payload["branch_source_session_id"] = origin_session_id
+                mapped_payload["branch_source_runtime_seq"] = int(origin_runtime_seq)
             rows.append({
                 "type": mapped["type"],
-                "payload": mapped.get("payload") or {},
+                "payload": mapped_payload,
                 "run_id": mapped.get("run_id"),
             })
         return rows
@@ -242,12 +255,59 @@ class RuntimeHistoryOps:
         reason: str = "",
     ) -> RuntimeEvent:
         """Hide visible history from ``target_seq`` onward without UI indexes."""
-        return self._append_and_snapshot(session_id, "visible_range_changed", {
+        payload = {
             "target_seq": int(target_seq),
             "to_seq": max(0, int(keep_to_seq)),
             "apply_model": True,
             "reason": reason or f"truncate_before_seq:{int(target_seq)}",
-        })
+        }
+        payload.update(
+            self._restore_checkpoint_before_seq(
+                session_id,
+                int(target_seq),
+                keep_to_seq=max(0, int(keep_to_seq)),
+            )
+        )
+        return self._append_and_snapshot(session_id, "visible_range_changed", payload)
+
+    def _restore_checkpoint_before_seq(self, session_id: str, target_seq: int, *, keep_to_seq: int) -> dict:
+        """Capture the exact model context immediately before a rewritten turn.
+
+        A stopped run may already have replaced/compressed model history and
+        updated the context summary. Truncating only UI/model rows would leave
+        that post-send summary behind, so the next rewritten run would start
+        from a different token baseline. The checkpoint is stored on the
+        append-only truncate event so replay restores the same context state.
+        """
+        checkpoint = self.projector.empty_snapshot()
+        for event in self.event_log.iter_events(session_id):
+            if int(event.seq) >= int(target_seq):
+                break
+            self.projector.apply(checkpoint, event)
+        self.projector.finalize(checkpoint)
+        context = checkpoint.get("context") if isinstance(checkpoint, dict) else {}
+        if not isinstance(context, dict):
+            context = {}
+        summary = context.get("summary")
+        if not isinstance(summary, dict):
+            summary = {"summary": "", "source_seq": None, "changed_at_seq": None}
+        history_compaction = context.get("history_compaction")
+        if not isinstance(history_compaction, dict):
+            history_compaction = None
+        checkpoint_model_rows = self.projector._truncate_rows(
+            list(checkpoint.get("raw_model_messages") or []),
+            {"target_seq": int(target_seq), "to_seq": max(0, int(keep_to_seq))},
+        )
+        model_messages = [
+            self._model_row_to_message_dict(row)
+            for row in checkpoint_model_rows
+            if isinstance(row, dict)
+        ]
+        return {
+            "restore_model_messages": [item for item in model_messages if item],
+            "restore_context_summary": dict(summary),
+            "restore_history_compaction": dict(history_compaction) if history_compaction else None,
+        }
 
     def change_model_window(self, session_id: str, *, from_seq: Optional[int] = None, to_seq: Optional[int] = None, reason: str = "") -> RuntimeEvent:
         payload = {"reason": reason}
@@ -540,7 +600,21 @@ class RuntimeHistoryOps:
         self.replace_model_history(session_id, messages, reason="branch_model_seed")
         return len(messages)
 
-    def _source_model_message_dicts_at_seq(self, source_session_id: str, branch_from_seq: int) -> list[dict]:
+    def _source_snapshot_at_seq(
+        self,
+        source_session_id: str,
+        branch_from_seq: int,
+        *,
+        _seen: Optional[set[tuple[str, int]]] = None,
+    ) -> dict:
+        key = (str(source_session_id), int(branch_from_seq))
+        seen = set(_seen or set())
+        if key in seen:
+            return self.projector.empty_snapshot()
+        seen.add(key)
+        origin = self._branch_origin_at_seq(source_session_id, int(branch_from_seq))
+        if origin is not None and origin != key:
+            return self._source_snapshot_at_seq(origin[0], origin[1], _seen=seen)
         events = []
         later_history_ops = []
         for source_event in self.event_log.iter_events(source_session_id):
@@ -551,7 +625,7 @@ class RuntimeHistoryOps:
                 if target is not None and target <= int(branch_from_seq):
                     later_history_ops.append(source_event)
         if not events:
-            return []
+            return self.projector.empty_snapshot()
         snapshot = self.projector.project(events)
         # A later semantic edit may target history before the branch anchor.
         # Apply those edits to the anchored snapshot without importing later
@@ -559,6 +633,13 @@ class RuntimeHistoryOps:
         for source_event in later_history_ops:
             self.projector.apply(snapshot, source_event)
         self.projector.finalize(snapshot)
+        return snapshot
+
+    def _source_model_message_dicts_at_seq(self, source_session_id: str, branch_from_seq: int) -> list[dict]:
+        snapshot = self._source_snapshot_at_seq(source_session_id, branch_from_seq)
+        return self._model_message_dicts_from_snapshot(snapshot)
+
+    def _model_message_dicts_from_snapshot(self, snapshot: dict) -> list[dict]:
         rows = snapshot.get("model_messages") if isinstance(snapshot, dict) else None
         if not isinstance(rows, list):
             return []
@@ -568,6 +649,54 @@ class RuntimeHistoryOps:
             if item:
                 messages.append(item)
         return messages
+
+    def _branch_origin_at_seq(self, source_session_id: str, branch_from_seq: int) -> Optional[tuple[str, int]]:
+        branch_created = None
+        branch_model_seed_seq = None
+        target_event = None
+        for event in self.event_log.iter_events(source_session_id):
+            if int(event.seq) == int(branch_from_seq):
+                target_event = event
+            if event.type == "history_branch_created" and branch_created is None:
+                branch_created = event
+            if (
+                event.type == "model_history_replaced"
+                and str((event.payload or {}).get("reason") or "") == "branch_model_seed"
+                and branch_model_seed_seq is None
+            ):
+                branch_model_seed_seq = int(event.seq)
+        target_payload = dict(target_event.payload or {}) if target_event is not None else {}
+        direct_session = str(target_payload.get("branch_source_session_id") or "").strip()
+        direct_seq = self.projector._int_or_none(target_payload.get("branch_source_runtime_seq"))
+        if direct_session and direct_seq is not None:
+            return direct_session, int(direct_seq)
+        if branch_created is None or branch_model_seed_seq is None or int(branch_from_seq) >= branch_model_seed_seq:
+            return None
+        parent_id = str((branch_created.payload or {}).get("source_session_id") or "").strip()
+        parent_limit = self.projector._int_or_none((branch_created.payload or {}).get("branch_from_seq"))
+        if not parent_id or parent_limit is None:
+            return None
+        try:
+            from .ui_projection import RuntimeUiProjection
+
+            projection = RuntimeUiProjection(self.event_log.root)
+            child_events = [
+                event for event in projection.read_ui_events_through_runtime_seq(source_session_id, int(branch_from_seq))
+                if not self._is_projected_ui_runtime_metric(event)
+            ]
+            parent_events = [
+                event for event in projection.read_ui_events_through_runtime_seq(parent_id, int(parent_limit))
+                if not self._is_projected_ui_runtime_metric(event)
+            ]
+            if not child_events or len(child_events) > len(parent_events):
+                return None
+            mapped = parent_events[len(child_events) - 1]
+            mapped_seq = self.projector._int_or_none(mapped.get("runtime_seq"))
+            if mapped_seq is None:
+                return None
+            return parent_id, int(mapped_seq)
+        except Exception:
+            return None
 
     def _has_model_history(self, session_id: str) -> bool:
         snapshot = self.snapshots.read(session_id)

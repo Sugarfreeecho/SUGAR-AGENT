@@ -255,6 +255,67 @@ class RuntimeHistoryOpsTests(unittest.TestCase):
                 ["u1", "a1"],
             )
 
+    def test_stopped_run_rewrite_restores_pre_send_context_checkpoint(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ops = RuntimeHistoryOps(tmp)
+            mirror = RuntimeMirror(tmp)
+            ops.replace_model_history(
+                "s1",
+                [{"type": "user", "content": "earlier"}],
+                reason="baseline",
+                summary="summary before send",
+            )
+            target = ops.commit_user_turn("s1", "message that will be rewritten")
+            self.assertIsNotNone(target)
+            ops.replace_model_history(
+                "s1",
+                [
+                    {"type": "system", "content": "compressed tail"},
+                    {"type": "user", "content": "message that will be rewritten"},
+                ],
+                reason="auto_context_policy",
+                summary="summary produced after send",
+            )
+            mirror.mirror_run_interrupted("s1", "run-1", {"reason": "user"})
+
+            ops.truncate_visible_history_before_seq(
+                "s1",
+                target_seq=target.seq,
+                keep_to_seq=target.seq - 1,
+                reason="runtime_v2_truncate",
+            )
+            snapshot = ops.snapshots.read("s1")
+
+            self.assertEqual(snapshot["context"]["summary"]["summary"], "summary before send")
+            self.assertEqual(
+                [row["payload"]["content"] for row in snapshot["model_messages"]],
+                ["earlier"],
+            )
+
+    def test_rewrite_before_first_summary_clears_post_send_summary(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ops = RuntimeHistoryOps(tmp)
+            target = ops.commit_user_turn("s1", "rewrite me")
+            self.assertIsNotNone(target)
+            ops.replace_model_history(
+                "s1",
+                [{"type": "user", "content": "rewrite me"}],
+                reason="auto_context_policy",
+                summary="created after send",
+            )
+
+            op = ops.truncate_visible_history_before_seq(
+                "s1",
+                target_seq=target.seq,
+                keep_to_seq=0,
+                reason="runtime_v2_truncate",
+            )
+            snapshot = ops.snapshots.read("s1")
+
+            self.assertEqual(op.payload["restore_context_summary"]["summary"], "")
+            self.assertEqual(snapshot["context"]["summary"]["summary"], "")
+            self.assertEqual(snapshot["model_messages"], [])
+
     def test_model_history_replace_changes_model_projection_only(self):
         with tempfile.TemporaryDirectory() as tmp:
             mirror = RuntimeMirror(tmp)
@@ -329,6 +390,39 @@ class RuntimeHistoryOpsTests(unittest.TestCase):
             self.assertEqual(branch_snapshot["history_ops"][0]["type"], "history_branch_created")
             self.assertEqual([m["payload"]["content"] for m in branch_snapshot["visible_messages"]], ["u1", "a1"])
             self.assertEqual([ev["content"] for ev in branch_events], ["u1", "a1"])
+
+    def test_branch_of_branch_restores_model_context_at_seeded_ui_boundary(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ops = RuntimeHistoryOps(tmp)
+            mirror = RuntimeMirror(tmp)
+            ops.append_model_message("root", "user", "u1")
+            mirror.mirror_ui_event("root", {"type": "user", "content": "u1"})
+            ops.append_model_message("root", "assistant", "a1")
+            first_final = mirror.mirror_ui_event("root", {"type": "final", "content": "a1"})
+            ops.append_model_message("root", "user", "u2")
+            mirror.mirror_ui_event("root", {"type": "user", "content": "u2"})
+            ops.append_model_message("root", "assistant", "a2")
+            last_final = mirror.mirror_ui_event("root", {"type": "final", "content": "a2"})
+
+            ops.create_branch("parent-branch", "root", last_final.seq)
+            seeded_events = RuntimeUiProjection(tmp).read_ui_events("parent-branch")
+            seeded_first_final = next(
+                event for event in seeded_events
+                if event.get("type") == "final" and event.get("content") == "a1"
+            )
+            ops.create_branch(
+                "child-branch",
+                "parent-branch",
+                int(seeded_first_final["runtime_seq"]),
+            )
+
+            child_snapshot = ops.snapshots.read("child-branch")
+            self.assertEqual(
+                [row["payload"]["content"] for row in child_snapshot["model_messages"]],
+                ["u1", "a1"],
+            )
+            child_events = RuntimeUiProjection(tmp).read_ui_events("child-branch")
+            self.assertEqual([event["content"] for event in child_events], ["u1", "a1"])
 
     def test_branch_does_not_duplicate_existing_legacy_seed(self):
         with tempfile.TemporaryDirectory() as tmp:

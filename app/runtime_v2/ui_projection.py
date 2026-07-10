@@ -699,9 +699,19 @@ class RuntimeUiProjection:
                 if payload.get("client_id"):
                     data["client_id"] = str(payload.get("client_id") or "")
                 return data
-            return {"type": "user", "content": payload.get("ui_content") or payload.get("content") or "", "created_at": event.timestamp}
+            data = {"type": "user", "content": payload.get("ui_content") or payload.get("content") or "", "created_at": event.timestamp}
+            if payload.get("branch_source_session_id"):
+                data["branch_source_session_id"] = str(payload.get("branch_source_session_id"))
+            if payload.get("branch_source_runtime_seq") is not None:
+                data["branch_source_runtime_seq"] = payload.get("branch_source_runtime_seq")
+            return data
         if event.type in {"message_assistant_final", "assistant_final_committed"}:
-            return {"type": "final", "content": payload.get("content") or "", "created_at": event.timestamp}
+            data = {"type": "final", "content": payload.get("content") or "", "created_at": event.timestamp}
+            if payload.get("branch_source_session_id"):
+                data["branch_source_session_id"] = str(payload.get("branch_source_session_id"))
+            if payload.get("branch_source_runtime_seq") is not None:
+                data["branch_source_runtime_seq"] = payload.get("branch_source_runtime_seq")
+            return data
         if event.type == "tool_started":
             data = dict(payload)
             data["type"] = data.get("type") or "tool_call"
