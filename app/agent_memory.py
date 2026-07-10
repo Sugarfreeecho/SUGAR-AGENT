@@ -148,11 +148,6 @@ def _preview_llm_for_ui_estimate(work: List) -> List:
     return [m for m in out if not is_ephemeral_system_stripped_by_compress(m)]
 
 
-def _compress_target_full_pack_cap_tokens() -> int:
-    """与右上角一致的「达标」整包 token 上限：CONTEXT_WINDOW×CONTEXT_COMPRESS_TARGET_RATIO。"""
-    return max(256, int(_effective_context_window() * float(CONTEXT_COMPRESS_TARGET_RATIO)))
-
-
 def _full_pack_tokens_for_session_preview(
     session_id: str,
     preview_llm_history: List,
@@ -180,11 +175,17 @@ def _compress_ratio_reached(
     session_id: str,
     work: List,
     key_context: str,
+    baseline_tokens: int,
 ) -> bool:
-    """是否已达到 CONTEXT_COMPRESS_TARGET_RATIO；与 UI 一致：基于 `estimate_full_input_tokens_for_llm_history` 整包。"""
-    fp = _full_pack_tokens_compress_work(session_id, work, key_context)
-    cap = _compress_target_full_pack_cap_tokens()
-    return fp <= cap
+    """本次压缩是否已相对入口本地基线收缩到目标比例。
+
+    自动入口的 T 可以来自 provider usage 或其他计数方式，只负责决定是否
+    启动。压缩阶段必须固定使用本地的 A（入口）和 N（当前）比较，避免
+    两种口径不一致时把正常流程错误送入截尾兜底。
+    """
+    current_tokens = _full_pack_tokens_compress_work(session_id, work, key_context)
+    baseline = max(1, int(baseline_tokens))
+    return float(current_tokens) / float(baseline) <= float(CONTEXT_COMPRESS_TARGET_RATIO)
 
 
 def _full_pack_pct_ui(
@@ -1342,6 +1343,9 @@ def _compress_unified_in_place(
         idx_keep9 = _full_keep_start_index(work, tail_keep * 3)
 
         new_key = key_context
+        # A: 本地口径的压缩前基线。T 仅用于外层决定是否进入此流程；此后
+        # 每一步都以当前本地 N / A 判断是否已经压缩充分。
+        baseline_tokens = max(1, _full_pack_tokens_compress_work(session_id, work, new_key))
 
         _push_progress_hint(
             hints,
@@ -1365,10 +1369,8 @@ def _compress_unified_in_place(
             )
 
         changed_any = bool(dchg)
-        cap_tokens = _compress_target_full_pack_cap_tokens()
-
         # Phase D 后即可判定是否达标，避免「仅微压已够仍强行跑 Phase E + 摘要模型」
-        if _compress_ratio_reached(session_id, work, new_key):
+        if _compress_ratio_reached(session_id, work, new_key, baseline_tokens):
             return _preview_llm_for_ui_estimate(work), new_key, changed_any, hints, False, None
 
         _push_progress_hint(
@@ -1394,8 +1396,8 @@ def _compress_unified_in_place(
 
         changed_any = bool(dchg or ech)
 
-        # 与右上角同口径：整包 ≤ CONTEXT_WINDOW×CONTEXT_COMPRESS_TARGET_RATIO。
-        if _compress_ratio_reached(session_id, work, new_key):
+        # 本地 N / A 达标后即可退出；不再拿外层触发窗口 T 作为退出条件。
+        if _compress_ratio_reached(session_id, work, new_key, baseline_tokens):
             return _preview_llm_for_ui_estimate(work), new_key, changed_any, hints, False, None
 
         cur_key = new_key
@@ -1411,15 +1413,17 @@ def _compress_unified_in_place(
             preview_llm_history=_preview_llm_for_ui_estimate(work),
             key_context=cur_key,
         )
-        max_summary_rounds = max(1, int(CONTEXT_COMPRESS_MAX_ROUNDS))
-        fallback_reason = "max_rounds"
-        while round_idx < max_summary_rounds:
-            if _compress_ratio_reached(session_id, work, cur_key):
+        configured_summary_rounds = max(1, int(CONTEXT_COMPRESS_MAX_ROUNDS))
+        fallback_reason = "no_prefix"
+        while True:
+            if _compress_ratio_reached(session_id, work, cur_key, baseline_tokens):
                 break
             round_idx += 1
             prefix, tail = _split_prefix_tail_for_summary_round(work, round_idx, tail_keep)
             if not prefix:
-                if round_idx < max_summary_rounds:
+                # 第 1 轮可能因完整尾窗较宽而没有可摘要前缀；第 2 轮会缩至
+                # 单个 user 尾窗，仍有机会正常继续。之后无前缀才是结构性兜底。
+                if round_idx == 1 and tail_keep > 1:
                     _push_progress_hint(
                         hints,
                         hint_sink,
@@ -1441,7 +1445,7 @@ def _compress_unified_in_place(
                     key_context=cur_key,
                 )
                 break
-            fallback_reason = "max_rounds"
+            tokens_before_round = _full_pack_tokens_compress_work(session_id, work, cur_key)
             try:
                 session_manager.backup_llm_compress_prefix(session_id, list(prefix))
             except Exception as _be:
@@ -1465,6 +1469,7 @@ def _compress_unified_in_place(
             work, recap = _merge_summary_into_work(summary, micro_prefix, tail)
             if recap:
                 new_recap_text = recap
+            tokens_after_round = _full_pack_tokens_compress_work(session_id, work, cur_key)
             _push_progress_hint(
                 hints,
                 hint_sink,
@@ -1474,18 +1479,41 @@ def _compress_unified_in_place(
                 preview_llm_history=_preview_llm_for_ui_estimate(work),
                 key_context=cur_key,
             )
+            if tokens_after_round >= tokens_before_round:
+                fallback_reason = "no_progress"
+                _push_progress_hint(
+                    hints,
+                    hint_sink,
+                    "【上下文摘要】本轮未能继续缩小本地上下文，已转入安全兜底。",
+                    kind="summary",
+                    session_id=session_id,
+                    preview_llm_history=_preview_llm_for_ui_estimate(work),
+                    key_context=cur_key,
+                )
+                break
+            if round_idx == configured_summary_rounds:
+                _push_progress_hint(
+                    hints,
+                    hint_sink,
+                    f"【上下文摘要】已完成配置的 {configured_summary_rounds} 轮且尚未达到压缩比，继续进行增量摘要…",
+                    kind="summary",
+                    session_id=session_id,
+                    preview_llm_history=_preview_llm_for_ui_estimate(work),
+                    key_context=cur_key,
+                )
 
         new_key = cur_key
 
-        if not _compress_ratio_reached(session_id, work, new_key):
+        if not _compress_ratio_reached(session_id, work, new_key, baseline_tokens):
             fb, _ok, did_trunc = compress_tail_fallback(
                 _with_marker_systems(snapshot_llm, work),
                 reason="max_rounds",
             )
             logger.debug(
-                "compress exit fallback: fp_final=%s cap_tokens=%s full_pack_entry=%s did_trunc=%s",
+                "compress exit fallback: fp_final=%s baseline_tokens=%s target_ratio=%s full_pack_entry=%s did_trunc=%s",
                 _full_pack_tokens_compress_work(session_id, work, new_key),
-                cap_tokens,
+                baseline_tokens,
+                CONTEXT_COMPRESS_TARGET_RATIO,
                 int(full_pack),
                 did_trunc,
             )
@@ -1495,14 +1523,25 @@ def _compress_unified_in_place(
                     if did_trunc
                     else "【上下文摘要】可摘要历史不足；对话已在半窗预算内未再截断。"
                 )
+            elif fallback_reason == "no_progress":
+                if did_trunc:
+                    fb_hint = (
+                        f"【上下文摘要】连续摘要未再缩小本地上下文（已尝试 {round_idx} 轮），"
+                        "已转入安全截尾兜底。"
+                    )
+                else:
+                    fb_hint = (
+                        f"【上下文摘要】连续摘要未再缩小本地上下文（已尝试 {round_idx} 轮）；"
+                        "当前尾部已在安全预算内，无需再截尾。"
+                    )
             else:
                 if did_trunc:
                     fb_hint = (
-                        f"【上下文摘要】摘要轮次已用尽（已尝试 {round_idx}/{max_summary_rounds} 轮），"
+                        f"【上下文摘要】摘要未达到目标压缩比（已尝试 {round_idx} 轮），"
                         "已丢弃更早对话（保留至多约半窗 token 的尾部）。"
                     )
                 else:
-                    fb_hint = f"【上下文摘要】摘要轮次已用尽（已尝试 {round_idx}/{max_summary_rounds} 轮）；对话已在半窗预算内未再截断。"
+                    fb_hint = f"【上下文摘要】摘要未达到目标压缩比（已尝试 {round_idx} 轮）；对话已在半窗预算内未再截断。"
             _push_progress_hint(
                 hints,
                 hint_sink,

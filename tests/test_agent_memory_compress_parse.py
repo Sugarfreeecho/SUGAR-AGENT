@@ -101,6 +101,21 @@ def test_context_window_override_drives_auto_compress_entry(monkeypatch):
     ) is True
 
 
+def test_compress_completion_uses_local_entry_baseline_not_context_window(monkeypatch):
+    import agent_memory
+
+    monkeypatch.setattr(
+        agent_memory,
+        "_full_pack_tokens_compress_work",
+        lambda *_args, **_kwargs: 55,
+    )
+
+    # N / A = 55 / 100 is already below 60%, even if a separately measured
+    # auto-entry T was above a much larger model context window.
+    assert agent_memory._compress_ratio_reached("s1", [], "", 100) is True
+    assert agent_memory._compress_ratio_reached("s1", [], "", 90) is False
+
+
 def test_compress_executor_stream_delta_is_forwarded_live(monkeypatch):
     import agent_memory
 
