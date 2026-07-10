@@ -97,6 +97,7 @@ from agent_tokenizer import (
     estimate_calculated_input_tokens_for_messages,
     estimate_full_input_tokens_for_messages,
     estimate_full_input_tokens_for_llm_history,
+    estimate_hybrid_input_tokens_for_llm_history,
     record_prompt_tokens_for_messages,
     inject_missing_tool_messages,
     messages_for_openai_turns,
@@ -514,11 +515,20 @@ def compute_context_tokens_for_session(session_id: str) -> Dict[str, Any]:
             return {"ok": False, "error": str(e)}
 
     llm_history = [_dict_to_message(m) for m in llm_history_dicts]
-    full_input_est = estimate_full_input_tokens_for_llm_history(
-        sid,
-        llm_history,
-        key_context or "",
-    )
+    token_mode = get_context_token_mode()
+    if token_mode == "calculated":
+        full_input_est = estimate_full_input_tokens_for_llm_history(
+            sid,
+            llm_history,
+            key_context or "",
+        )
+        token_source = "local_calculated"
+    else:
+        full_input_est, token_source = estimate_hybrid_input_tokens_for_llm_history(
+            sid,
+            llm_history,
+            key_context or "",
+        )
     _client, active_model, _max_out, active_context_window = resolve_executor_config_for_session(
         sid
     )
@@ -528,6 +538,8 @@ def compute_context_tokens_for_session(session_id: str) -> Dict[str, Any]:
         "threshold": int(active_context_window),
         "model": active_model,
         "source": "runtime_v2_projection" if _runtime_v2_is_primary() else "legacy_history",
+        "token_source": token_source,
+        "token_mode": token_mode,
     }
 
 
@@ -2113,10 +2125,12 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
                 full_input_est = estimate_calculated_input_tokens_for_messages(
                     llm_messages,
                 )
+                token_estimate_source = "local_calculated"
             else:
-                full_input_est = estimate_full_input_tokens_for_messages(
+                full_input_est, token_estimate_source = estimate_full_input_tokens_for_messages(
                     state["session_id"],
                     llm_messages,
+                    return_source=True,
                 )
             _pre_api_timing_mark(pre_api_timings, "token_estimate", _t_pre_api)
             _t_pre_api = time.perf_counter()
@@ -2133,7 +2147,7 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
                         "threshold": int(iter_context_window),
                         "model": iter_model,
                         "token_mode": state.get("_context_token_mode", "hybrid"),
-                        "source": "local_estimate",
+                        "source": token_estimate_source,
                         "ephemeral": True,
                     },
                     emit=emit,

@@ -201,3 +201,31 @@ def test_prebuilt_token_estimate_uses_provider_prefix_baseline(monkeypatch):
 
     assert estimated == 108
     assert calls == {"estimate": 1, "sizes": [1]}
+
+
+def test_rewritten_tail_uses_provider_calibrated_scale(monkeypatch):
+    import agent_tokenizer
+    from agent_messages import SystemMessage, UserMessage
+    import agent_harness
+
+    agent_tokenizer._PROMPT_USAGE_BASELINE_CACHE.clear()
+    agent_tokenizer._PROMPT_USAGE_EXACT_CACHE.clear()
+    monkeypatch.setattr(agent_harness, "strip_reasoning_for_api_request", lambda messages: messages)
+
+    def estimate_tokens(messages):
+        text = "|".join(str(getattr(message, "content", "")) for message in messages)
+        return 100 if "old question" in text else 110
+
+    monkeypatch.setattr(agent_harness, "estimate_tokens", estimate_tokens)
+    old_request = [SystemMessage(content="stable system"), UserMessage(content="old question")]
+    rewritten_request = [SystemMessage(content="stable system"), UserMessage(content="rewritten question")]
+    agent_tokenizer.record_prompt_tokens_for_messages("s1", old_request, 200)
+
+    estimated, source = agent_tokenizer.estimate_full_input_tokens_for_messages(
+        "s1",
+        rewritten_request,
+        return_source=True,
+    )
+
+    assert estimated == 220
+    assert source == "provider_calibrated"

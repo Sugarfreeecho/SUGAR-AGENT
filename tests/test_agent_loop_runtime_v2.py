@@ -133,7 +133,7 @@ def test_runtime_v2_context_token_compute_uses_projection_not_legacy(monkeypatch
         captured["session_id"] = session_id
         captured["messages"] = messages
         captured["key_context"] = key_context
-        return 123
+        return 123, "provider_calibrated"
 
     monkeypatch.setattr(agent_loop, "session_manager", _SessionManager())
     monkeypatch.setattr(agent_loop, "_runtime_v2_is_primary", lambda: True)
@@ -141,7 +141,8 @@ def test_runtime_v2_context_token_compute_uses_projection_not_legacy(monkeypatch
         {"type": "user", "content": "hello"},
     ])
     monkeypatch.setattr(agent_loop, "_load_runtime_v2_context_summary", lambda _sid: "summary")
-    monkeypatch.setattr(agent_loop, "estimate_full_input_tokens_for_llm_history", fake_estimate)
+    monkeypatch.setattr(agent_loop, "get_context_token_mode", lambda: "hybrid")
+    monkeypatch.setattr(agent_loop, "estimate_hybrid_input_tokens_for_llm_history", fake_estimate)
     monkeypatch.setattr(agent_loop, "resolve_executor_config_for_session", lambda _sid: (None, "m", 1024, 4096))
 
     result = agent_loop.compute_context_tokens_for_session("s1")
@@ -152,6 +153,8 @@ def test_runtime_v2_context_token_compute_uses_projection_not_legacy(monkeypatch
         "threshold": 4096,
         "model": "m",
         "source": "runtime_v2_projection",
+        "token_source": "provider_calibrated",
+        "token_mode": "hybrid",
     }
     assert captured["session_id"] == "s1"
     assert captured["messages"][0].content == "hello"

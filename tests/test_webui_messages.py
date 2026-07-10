@@ -392,6 +392,7 @@ def test_context_tokens_snapshot_miss_uses_runtime_v2_compute_not_legacy(monkeyp
     monkeypatch.setattr(runtime_v2, "runtime_v2_primary", lambda: True)
     monkeypatch.setattr(webui, "session_manager", _NoLegacyContextSessionManager())
     monkeypatch.setattr(webui, "_runtime_v2_context_snapshot", lambda _sid: {})
+    monkeypatch.setattr(webui, "get_context_token_mode", lambda: "hybrid")
     monkeypatch.setattr(webui, "compute_context_tokens_for_session", lambda sid: {
         "ok": True,
         "estimated": 321,
@@ -409,7 +410,7 @@ def test_context_tokens_snapshot_miss_uses_runtime_v2_compute_not_legacy(monkeyp
         "threshold": 4096,
         "model": "m",
         "source": "runtime_v2_projection",
-        "token_mode": "calculated",
+        "token_mode": "hybrid",
     }
 
 

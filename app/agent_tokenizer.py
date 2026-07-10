@@ -36,7 +36,7 @@ _FULL_INPUT_TOKEN_CACHE_LOCK = threading.Lock()
 _FULL_INPUT_TOKEN_CACHE_TTL_SEC = 30.0
 _FULL_INPUT_TOKEN_CACHE_MAX = 256
 _PROMPT_USAGE_BASELINE_CACHE: Dict[str, Dict[str, Any]] = {}
-_PROMPT_USAGE_EXACT_CACHE: Dict[Tuple[str, str], Tuple[float, int]] = {}
+_PROMPT_USAGE_EXACT_CACHE: Dict[Tuple[str, str], Tuple[float, int, str]] = {}
 _PROMPT_USAGE_CACHE_LOCK = threading.Lock()
 _PROMPT_USAGE_CACHE_TTL_SEC = 300.0
 _PROMPT_USAGE_EXACT_CACHE_MAX = 256
@@ -103,8 +103,8 @@ def _messages_token_hashes(messages: List[Any]) -> List[str]:
 def _evict_prompt_usage_exact_cache_locked(now: float) -> None:
     expired = [
         key
-        for key, (ts, _tokens) in _PROMPT_USAGE_EXACT_CACHE.items()
-        if now - ts > _PROMPT_USAGE_CACHE_TTL_SEC
+        for key, cached in _PROMPT_USAGE_EXACT_CACHE.items()
+        if now - float(cached[0]) > _PROMPT_USAGE_CACHE_TTL_SEC
     ]
     for key in expired:
         _PROMPT_USAGE_EXACT_CACHE.pop(key, None)
@@ -224,15 +224,18 @@ def record_prompt_tokens_for_messages(
             "fingerprint": fingerprint,
             "count": len(hashes),
             "tokens": tokens,
+            "messages": list(stripped),
         }
-        _PROMPT_USAGE_EXACT_CACHE[(sid, fingerprint)] = (now, tokens)
+        _PROMPT_USAGE_EXACT_CACHE[(sid, fingerprint)] = (now, tokens, "provider_exact")
         _evict_prompt_usage_exact_cache_locked(now)
 
 
 def estimate_full_input_tokens_for_messages(
     session_id: str,
     messages: List[Any],
-) -> int:
+    *,
+    return_source: bool = False,
+) -> Any:
     """
     Estimate tokens for the already-built API request package.
 
@@ -246,10 +249,12 @@ def estimate_full_input_tokens_for_messages(
     hashes = _messages_token_hashes(stripped)
     fingerprint = _messages_token_fingerprint_from_hashes(hashes)
     now = time.monotonic()
+    calibration = None
     with _PROMPT_USAGE_CACHE_LOCK:
         exact = _PROMPT_USAGE_EXACT_CACHE.get((sid, fingerprint)) if sid else None
         if exact and now - exact[0] <= _PROMPT_USAGE_CACHE_TTL_SEC:
-            return int(exact[1])
+            result = (int(exact[1]), str(exact[2] if len(exact) > 2 else "provider_exact"))
+            return result if return_source else result[0]
         baseline = _PROMPT_USAGE_BASELINE_CACHE.get(sid) if sid else None
         if baseline and now - float(baseline.get("ts") or 0) > _PROMPT_USAGE_CACHE_TTL_SEC:
             _PROMPT_USAGE_BASELINE_CACHE.pop(sid, None)
@@ -268,15 +273,38 @@ def estimate_full_input_tokens_for_messages(
                 suffix_tokens = int(estimate_tokens(suffix)) if suffix else 0
                 margin = max(8, len(suffix) * 4) if suffix else 0
                 estimated = base_tokens + suffix_tokens + margin
-                _PROMPT_USAGE_EXACT_CACHE[(sid, fingerprint)] = (now, estimated)
+                _PROMPT_USAGE_EXACT_CACHE[(sid, fingerprint)] = (now, estimated, "provider_prefix")
                 _evict_prompt_usage_exact_cache_locked(now)
-                return int(estimated)
+                result = (int(estimated), "provider_prefix")
+                return result if return_source else result[0]
+            base_hashes = list(baseline.get("hashes") or [])
+            common = 0
+            for left, right in zip(base_hashes, hashes):
+                if left != right:
+                    break
+                common += 1
+            changed_tail = (len(base_hashes) - common) + (len(hashes) - common)
+            if (
+                common > 0
+                and common >= max(1, min(len(base_hashes), len(hashes)) // 2)
+                and changed_tail <= 4
+            ):
+                calibration = dict(baseline)
     estimated = int(estimate_tokens(stripped))
+    source = "local_estimate"
+    if calibration:
+        base_tokens = int(calibration.get("tokens") or 0)
+        base_messages = list(calibration.get("messages") or [])
+        base_local_tokens = int(estimate_tokens(base_messages)) if base_messages else 0
+        if base_tokens > 0 and base_local_tokens > 0:
+            estimated = max(0, int(round(estimated * (base_tokens / base_local_tokens))))
+            source = "provider_calibrated"
     with _PROMPT_USAGE_CACHE_LOCK:
         if sid:
-            _PROMPT_USAGE_EXACT_CACHE[(sid, fingerprint)] = (now, estimated)
+            _PROMPT_USAGE_EXACT_CACHE[(sid, fingerprint)] = (now, estimated, source)
             _evict_prompt_usage_exact_cache_locked(now)
-    return estimated
+    result = (estimated, source)
+    return result if return_source else result[0]
 
 
 def estimate_calculated_input_tokens_for_messages(messages: List[Any]) -> int:
@@ -477,3 +505,30 @@ def estimate_full_input_tokens_for_llm_history(
             _FULL_INPUT_TOKEN_CACHE.pop(oldest, None)
         _FULL_INPUT_TOKEN_CACHE[cache_key] = (now, estimated)
     return estimated
+
+
+def estimate_hybrid_input_tokens_for_llm_history(
+    session_id: str,
+    llm_history: List[Any],
+    key_context: str,
+) -> Tuple[int, str]:
+    """Estimate a persisted session using the same provider-calibrated path as a live request."""
+    from agent_harness import key_context_body_for_system_prompt
+    from agent_tools import get_skills_catalog
+
+    sid = str(session_id or "").strip()
+    skills_catalog = get_skills_catalog()
+    env_static = build_env_static(sid if sid else None)
+    kc_body = key_context_body_for_system_prompt(key_context or "")
+    static_segments = build_static_system_segments(skills_catalog, env_static)
+    turn_msgs = inject_missing_tool_messages(messages_for_openai_turns(llm_history))
+    llm_messages: List[Any] = [SystemMessage(content=s) for s in static_segments]
+    if kc_body:
+        llm_messages.append(SystemMessage(content=kc_body))
+    llm_messages.extend(turn_msgs)
+    estimated, source = estimate_full_input_tokens_for_messages(
+        sid,
+        llm_messages,
+        return_source=True,
+    )
+    return int(estimated), str(source)

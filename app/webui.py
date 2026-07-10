@@ -3247,9 +3247,10 @@ async def get_session_context_tokens(session_id: str):
     out = await run_in_threadpool(compute_context_tokens_for_session, session_id)
     if not out.get("ok"):
         return JSONResponse(content=out, status_code=400)
-    # A snapshot miss necessarily falls back to a fresh local calculation;
-    # report the source actually used rather than the preferred hybrid mode.
-    out["token_mode"] = "calculated"
+    # Snapshot misses retain the configured accounting mode. In hybrid mode
+    # compute_context_tokens_for_session reuses/calibrates the provider usage
+    # baseline instead of switching the UI to an unrelated local scale.
+    out["token_mode"] = token_mode
     return JSONResponse(content=out)
 
 
