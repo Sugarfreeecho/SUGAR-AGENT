@@ -63,11 +63,50 @@ const sessionStore = {
         if (!session || !session.id) return;
         const sid = String(session.id);
         if (this.isDeletedSessionTombstoned(sid)) return;
+        const existed = this.sessionOrder.indexOf(sid) >= 0;
         this.sessionsById.set(sid, session);
-        if (this.sessionOrder.indexOf(sid) < 0) this.sessionOrder.unshift(sid);
+        if (!existed) {
+            this.sessionOrder.unshift(sid);
+        }
+        // 任何字段更新都可能改变 last_activity_at / pinned_at，需立即重排，
+        // 否则老会话有了新对话后仍停留在原分组、原位置（仅靠 800ms 后的
+        // applySnapshot 兜底，期间 UI 顺序与时间分组不一致）。
+        this._reorderSessionOrder();
         if (Object.prototype.hasOwnProperty.call(session, 'stream_active')) {
             this.streamActiveById[sid] = !!session.stream_active;
         }
+    },
+
+    // 与后端 list_sessions 的 sort_key 保持一致：
+    //   pinned 在前；pinned 之间按 pinned_at 倒序；非 pinned 按 last_activity_at 倒序。
+    // 缺失时间字段时回退到 updated_at / created_at，仍解析失败则视为 0（沉底）。
+    _activityTimeMs(session) {
+        if (!session) return 0;
+        var raw = session.last_activity_at || session.updated_at || session.created_at || '';
+        var t = Date.parse(String(raw || ''));
+        return Number.isFinite(t) ? t : 0;
+    },
+
+    _pinnedTimeMs(session) {
+        if (!session) return 0;
+        var raw = session.pinned_at || session.updated_at || session.created_at || '';
+        var t = Date.parse(String(raw || ''));
+        return Number.isFinite(t) ? t : 0;
+    },
+
+    _reorderSessionOrder() {
+        const self = this;
+        this.sessionOrder.sort(function (aId, bId) {
+            const a = self.sessionsById.get(aId);
+            const b = self.sessionsById.get(bId);
+            if (!a) return 1;
+            if (!b) return -1;
+            const aPinned = !!a.pinned;
+            const bPinned = !!b.pinned;
+            if (aPinned !== bPinned) return aPinned ? -1 : 1;
+            if (aPinned) return self._pinnedTimeMs(b) - self._pinnedTimeMs(a);
+            return self._activityTimeMs(b) - self._activityTimeMs(a);
+        });
     },
 
     remove(sessionId) {
