@@ -34,6 +34,9 @@ class SessionAudit:
     model_first_mismatch: Dict[str, Any] | None = None
     runtime_v2_active_run_count: int = 0
     runtime_v2_active_runs: List[dict] | None = None
+    runtime_v2_bad_line_count: int = 0
+    runtime_v2_duplicate_seq_count: int = 0
+    runtime_v2_non_monotonic_seq_count: int = 0
     repaired_ui: int = 0
     repaired_model: int = 0
     repaired_runs: int = 0
@@ -54,6 +57,9 @@ class SessionAudit:
             "model_first_mismatch": self.model_first_mismatch or {},
             "runtime_v2_active_run_count": self.runtime_v2_active_run_count,
             "runtime_v2_active_runs": self.runtime_v2_active_runs or [],
+            "runtime_v2_bad_line_count": self.runtime_v2_bad_line_count,
+            "runtime_v2_duplicate_seq_count": self.runtime_v2_duplicate_seq_count,
+            "runtime_v2_non_monotonic_seq_count": self.runtime_v2_non_monotonic_seq_count,
             "repaired_ui": self.repaired_ui,
             "repaired_model": self.repaired_model,
             "repaired_runs": self.repaired_runs,
@@ -69,6 +75,28 @@ def load_json_list(path: Path) -> List[dict]:
     except Exception:
         return []
     return data if isinstance(data, list) else []
+
+
+def inspect_event_log(path: Path) -> Dict[str, int]:
+    seqs: List[int] = []
+    bad = 0
+    if not path.exists():
+        return {"bad_lines": 0, "duplicate_seqs": 0, "non_monotonic_seqs": 0}
+    with path.open("r", encoding="utf-8") as fh:
+        for line in fh:
+            try:
+                row = json.loads(line)
+                seq = row.get("seq") if isinstance(row, dict) else None
+                if not isinstance(seq, int):
+                    raise ValueError("missing integer seq")
+                seqs.append(seq)
+            except Exception:
+                bad += 1
+    return {
+        "bad_lines": bad,
+        "duplicate_seqs": len(seqs) - len(set(seqs)),
+        "non_monotonic_seqs": sum(1 for i in range(1, len(seqs)) if seqs[i] <= seqs[i - 1]),
+    }
 
 
 def normalize_event_signature(event: dict) -> tuple[str, str]:
@@ -174,6 +202,7 @@ def audit_session(
     legacy_model = load_json_list(session_dir / "llm_history.json")
     ui_projection = RuntimeUiProjection(sessions_dir)
     model_projection = RuntimeModelProjection(sessions_dir)
+    structure = inspect_event_log(session_dir / "events.jsonl")
 
     try:
         v2_ui = ui_projection.read_ui_events_fast(session_id)
@@ -234,6 +263,9 @@ def audit_session(
             model_first_mismatch=model_first_mismatch,
             runtime_v2_active_run_count=len(active_runs),
             runtime_v2_active_runs=[dict(run) for run in active_runs if isinstance(run, dict)],
+            runtime_v2_bad_line_count=structure["bad_lines"],
+            runtime_v2_duplicate_seq_count=structure["duplicate_seqs"],
+            runtime_v2_non_monotonic_seq_count=structure["non_monotonic_seqs"],
             repaired_ui=repaired_ui,
             repaired_model=repaired_model,
             repaired_runs=repaired_runs,
@@ -253,6 +285,9 @@ def audit_session(
             model_first_mismatch={},
             runtime_v2_active_run_count=0,
             runtime_v2_active_runs=[],
+            runtime_v2_bad_line_count=structure["bad_lines"],
+            runtime_v2_duplicate_seq_count=structure["duplicate_seqs"],
+            runtime_v2_non_monotonic_seq_count=structure["non_monotonic_seqs"],
             error=f"{type(exc).__name__}: {exc}",
         )
 
@@ -278,6 +313,9 @@ def summarize(rows: List[SessionAudit]) -> Dict[str, Any]:
         "model_missing_v2": sum(1 for row in rows if row.model_status == "missing_v2"),
         "runtime_v2_active_run_sessions": sum(1 for row in rows if row.runtime_v2_active_run_count > 0),
         "runtime_v2_active_runs": sum(row.runtime_v2_active_run_count for row in rows),
+        "runtime_v2_bad_lines": sum(row.runtime_v2_bad_line_count for row in rows),
+        "runtime_v2_duplicate_seqs": sum(row.runtime_v2_duplicate_seq_count for row in rows),
+        "runtime_v2_non_monotonic_seqs": sum(row.runtime_v2_non_monotonic_seq_count for row in rows),
         "errors": sum(1 for row in rows if row.error),
         "repaired_ui": sum(row.repaired_ui for row in rows),
         "repaired_model": sum(row.repaired_model for row in rows),
@@ -311,7 +349,15 @@ def main() -> int:
     if args.only_mismatches:
         output_rows = [
             row for row in rows
-            if row.error or not row.ui_ok or not row.model_ok or row.runtime_v2_active_run_count > 0
+            if (
+                row.error
+                or not row.ui_ok
+                or not row.model_ok
+                or row.runtime_v2_active_run_count > 0
+                or row.runtime_v2_bad_line_count > 0
+                or row.runtime_v2_duplicate_seq_count > 0
+                or row.runtime_v2_non_monotonic_seq_count > 0
+            )
         ]
     payload = {
         "sessions_dir": str(sessions_dir),

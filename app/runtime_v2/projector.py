@@ -33,6 +33,7 @@ class RuntimeProjector:
             "legacy_observations": [],
             "visible_range": {},
             "model_window": {},
+            "operation_ids": [],
         }
 
     def project(self, events: Iterable[RuntimeEvent]) -> dict:
@@ -66,6 +67,16 @@ class RuntimeProjector:
                 snapshot[key] = value
 
     def apply(self, snapshot: dict, event: RuntimeEvent) -> dict:
+        self._ensure_shape(snapshot)
+        operation_id = str((event.payload or {}).get("operation_id") or "").strip()
+        if operation_id and operation_id in set(snapshot.get("operation_ids") or []):
+            snapshot["last_seq"] = max(int(snapshot.get("last_seq") or 0), event.seq)
+            snapshot["updated_at"] = event.timestamp
+            return snapshot
+        if operation_id:
+            ids = [str(x) for x in snapshot.get("operation_ids") or [] if str(x)]
+            ids.append(operation_id)
+            snapshot["operation_ids"] = ids[-256:]
         snapshot["session_id"] = snapshot.get("session_id") or event.session_id
         snapshot["last_seq"] = max(int(snapshot.get("last_seq") or 0), event.seq)
         snapshot["updated_at"] = event.timestamp
@@ -75,6 +86,12 @@ class RuntimeProjector:
             snapshot["session"] = dict(event.payload or {})
         elif event_type == "message_user":
             self._append_message(snapshot, event, "user")
+        elif event_type == "user_turn_committed":
+            self._append_message(snapshot, event, "user")
+            self._append_model_message(snapshot, event)
+        elif event_type == "assistant_final_committed":
+            self._append_message(snapshot, event, "assistant")
+            self._append_model_message(snapshot, event)
         elif event_type in {"message_assistant_delta", "message_assistant_final"}:
             self._append_or_update_assistant(snapshot, event)
         elif event_type in {"model_user", "model_assistant", "model_tool", "model_system"}:
@@ -206,6 +223,12 @@ class RuntimeProjector:
         # not apply an older visible-range operation a second time: its event
         # sequence cannot describe the individual rows in this new snapshot.
         snapshot["raw_model_messages"] = rows
+        if "summary" in payload:
+            snapshot["context"]["summary"] = {
+                "summary": str(payload.get("summary") or ""),
+                "source_seq": payload.get("source_seq"),
+                "changed_at_seq": event.seq,
+            }
 
     def _apply_history_op(self, snapshot: dict, event: RuntimeEvent) -> None:
         payload = dict(event.payload or {})
@@ -216,6 +239,8 @@ class RuntimeProjector:
             "payload": payload,
         }
         snapshot["history_ops"].append(row)
+        if event.type in {"message_deleted", "message_rewritten"}:
+            self._apply_message_op_to_model(snapshot, event)
         if event.type == "visible_range_changed":
             snapshot["visible_range"] = {
                 "from_seq": payload.get("from_seq"),
@@ -303,7 +328,11 @@ class RuntimeProjector:
             if op.get("type") != "visible_range_changed":
                 continue
             payload = op.get("payload") or {}
-            projected = self._truncate_rows(projected, payload)
+            projected = self._truncate_rows(
+                projected,
+                payload,
+                effective_before_seq=self._int_or_none(op.get("seq")),
+            )
 
         raw_model_messages = snapshot.get("raw_model_messages") or []
         model_source = raw_model_messages if isinstance(raw_model_messages, list) else []
@@ -484,7 +513,7 @@ class RuntimeProjector:
         )
 
     @classmethod
-    def _truncate_rows(cls, rows: list, payload: dict) -> list:
+    def _truncate_rows(cls, rows: list, payload: dict, effective_before_seq: Optional[int] = None) -> list:
         if payload.get("to_ui_index") is not None:
             try:
                 return list(rows or [])[:max(0, int(payload.get("to_ui_index")))]
@@ -497,6 +526,11 @@ class RuntimeProjector:
             seq = cls._int_or_none(row.get("seq"))
             if seq is None:
                 continue
+            # A history operation is chronological, not a permanent global
+            # filter. Rows appended after the operation must remain visible.
+            if effective_before_seq is not None and seq > effective_before_seq:
+                out.append(row)
+                continue
             # model_history_replaced snapshot rows are judged as a whole by
             # their ``replaced_by_seq`` so a rewrite/delete truncate does not
             # erase pre-existing history (see ``_snapshot_should_keep``).
@@ -506,6 +540,46 @@ class RuntimeProjector:
             elif cls._seq_in_range(seq, payload):
                 out.append(row)
         return out
+
+    def _apply_message_op_to_model(self, snapshot: dict, event: RuntimeEvent) -> None:
+        """Keep standalone delete/rewrite operations aligned with model context.
+
+        UI and model events have independent seq values, so correlate the
+        targeted visible message by role/content and change the latest matching
+        model row. Canonical truncate/replace callers still take precedence.
+        """
+        payload = dict(event.payload or {})
+        target_seq = self._int_or_none(payload.get("target_seq"))
+        if target_seq is None:
+            return
+        target = None
+        for message in snapshot.get("messages") or []:
+            if self._int_or_none((message or {}).get("seq")) == target_seq:
+                target = message
+                break
+        if not isinstance(target, dict):
+            return
+        role = str(target.get("role") or "")
+        content = str((target.get("payload") or {}).get("content") or "")
+        rows = list(snapshot.get("raw_model_messages") or [])
+        match_index = None
+        for index in range(len(rows) - 1, -1, -1):
+            row = rows[index]
+            if not isinstance(row, dict) or str(row.get("role") or "") != role:
+                continue
+            if str((row.get("payload") or {}).get("content") or "") == content:
+                match_index = index
+                break
+        if match_index is None:
+            return
+        if event.type == "message_deleted":
+            rows.pop(match_index)
+        else:
+            changed = self._copy_message(rows[match_index])
+            changed["payload"]["content"] = str(payload.get("content") or "")
+            changed["rewritten_by_seq"] = event.seq
+            rows[match_index] = changed
+        snapshot["raw_model_messages"] = rows
 
     @staticmethod
     def _copy_message(message: dict) -> dict:

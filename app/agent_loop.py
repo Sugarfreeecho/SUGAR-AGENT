@@ -19,6 +19,8 @@ import uuid
 import threading
 from datetime import datetime
 import inspect
+from contextlib import contextmanager
+from pathlib import Path
 from typing import TypedDict, List, Dict, Any, AsyncGenerator, Callable, Optional, Tuple
 
 from agent_harness import (
@@ -114,6 +116,61 @@ _STEER_RUN_LOCK = threading.Lock()
 _ACTIVE_STEER_RUNS: Dict[str, Any] = {}
 _CONTEXT_POLICY_LOCKS_LOCK = threading.Lock()
 _CONTEXT_POLICY_LOCKS: Dict[str, threading.Lock] = {}
+_STEER_QUEUE_SIGNATURES: Dict[str, Tuple[int, int]] = {}
+
+
+def _steer_inbox_path(session_id: str) -> Path:
+    return Path(session_manager.sessions_dir) / str(session_id) / "steer_inbox.json"
+
+
+def _load_steer_queue_locked(session_id: str) -> List[Dict[str, Any]]:
+    path = _steer_inbox_path(session_id)
+    try:
+        stat = path.stat()
+        signature = (int(stat.st_mtime_ns), int(stat.st_size))
+    except OSError:
+        signature = (-1, -1)
+    if session_id in _STEER_QUEUES and _STEER_QUEUE_SIGNATURES.get(session_id) == signature:
+        return _STEER_QUEUES[session_id]
+    rows: List[Dict[str, Any]] = []
+    try:
+        data = json.loads(path.read_text(encoding="utf-8")) if path.exists() else []
+        rows = [dict(x) for x in data if isinstance(x, dict)] if isinstance(data, list) else []
+    except Exception:
+        logger.warning("failed to load steer inbox for %s", session_id, exc_info=True)
+    if rows:
+        _STEER_QUEUES[session_id] = rows
+    else:
+        _STEER_QUEUES.pop(session_id, None)
+    _STEER_QUEUE_SIGNATURES[session_id] = signature
+    return rows
+
+
+def _save_steer_queue_locked(session_id: str, rows: List[Dict[str, Any]]) -> None:
+    path = _steer_inbox_path(session_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if not rows:
+        _STEER_QUEUES.pop(session_id, None)
+        _STEER_QUEUE_SIGNATURES.pop(session_id, None)
+        try:
+            path.unlink(missing_ok=True)
+        except Exception:
+            logger.warning("failed to remove steer inbox for %s", session_id, exc_info=True)
+        return
+    _STEER_QUEUES[session_id] = rows
+    tmp = path.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(rows, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
+    tmp.replace(path)
+    stat = path.stat()
+    _STEER_QUEUE_SIGNATURES[session_id] = (int(stat.st_mtime_ns), int(stat.st_size))
+
+
+@contextmanager
+def _steer_transaction(session_id: str):
+    from runtime_v2.event_log import SessionEventLog
+
+    with SessionEventLog(session_manager.sessions_dir).session_transaction(session_id):
+        yield
 
 
 class _SteerRestartRequested(Exception):
@@ -226,9 +283,16 @@ def enqueue_session_steer(session_id: str, content: str, client_id: str = "", ui
         "created_at": time.time(),
     }
     with _STEER_LOCK:
-        q = _STEER_QUEUES.setdefault(sid, [])
-        q.append(item)
-        depth = len(q)
+        with _steer_transaction(sid):
+            q = _load_steer_queue_locked(sid)
+            client = str(client_id or "").strip()
+            if client:
+                for existing in q:
+                    if str(existing.get("client_id") or "") == client:
+                        return {"ok": True, "item": dict(existing), "queued": len(q), "deduplicated": True}
+            q.append(item)
+            _save_steer_queue_locked(sid, q)
+            depth = len(q)
     return {"ok": True, "item": item, "queued": depth}
 
 
@@ -241,22 +305,20 @@ def remove_session_steer(session_id: str, steer_id: str = "", client_id: str = "
     if not target_id and not target_client:
         return {"ok": False, "error": "missing steer id"}
     with _STEER_LOCK:
-        q = list(_STEER_QUEUES.get(sid) or [])
-        keep: List[Dict[str, Any]] = []
-        removed: Optional[Dict[str, Any]] = None
-        for item in q:
-            same_id = target_id and str(item.get("id") or "") == target_id
-            same_client = target_client and str(item.get("client_id") or "") == target_client
-            if removed is None and (same_id or same_client):
-                removed = item
-                continue
-            keep.append(item)
-        if removed is None:
-            return {"ok": False, "error": "steer not pending"}
-        if keep:
-            _STEER_QUEUES[sid] = keep
-        else:
-            _STEER_QUEUES.pop(sid, None)
+        with _steer_transaction(sid):
+            q = list(_load_steer_queue_locked(sid))
+            keep: List[Dict[str, Any]] = []
+            removed: Optional[Dict[str, Any]] = None
+            for item in q:
+                same_id = target_id and str(item.get("id") or "") == target_id
+                same_client = target_client and str(item.get("client_id") or "") == target_client
+                if removed is None and (same_id or same_client):
+                    removed = item
+                    continue
+                keep.append(item)
+            if removed is None:
+                return {"ok": False, "error": "steer not pending"}
+            _save_steer_queue_locked(sid, keep)
     return {"ok": True, "item": removed, "queued": len(keep)}
 
 
@@ -265,8 +327,9 @@ def _pop_session_steers(session_id: str) -> List[Dict[str, Any]]:
     if not sid:
         return []
     with _STEER_LOCK:
-        items = list(_STEER_QUEUES.get(sid) or [])
-        _STEER_QUEUES.pop(sid, None)
+        # Peek, then acknowledge each item only after its durable Runtime V2
+        # user-turn commit succeeds. This survives process loss mid-consume.
+        items = list(_load_steer_queue_locked(sid))
     return items
 
 
@@ -275,7 +338,7 @@ def _has_session_steers(session_id: str) -> bool:
     if not sid:
         return False
     with _STEER_LOCK:
-        return bool(_STEER_QUEUES.get(sid))
+        return bool(_load_steer_queue_locked(sid))
 
 
 def _is_followup_interrupt(session_id: str) -> bool:
@@ -822,6 +885,81 @@ def _runtime_v2_append_model_message(state: State, msg: Any) -> None:
         logger.debug("Runtime V2 model append failed: %s", exc)
 
 
+def _runtime_v2_commit_user_turn(
+    state: State,
+    msg: Any,
+    *,
+    ui_content: str,
+    ui_type: str = "user",
+    operation_id: str = "",
+) -> bool:
+    sid = str(state.get("session_id") or "").strip()
+    if not sid or not _runtime_v2_is_primary():
+        return False
+    try:
+        from runtime_v2 import RuntimeHistoryOps
+
+        data = _message_to_dict(msg)
+        model_content = str(data.pop("content", "") or "")
+        data.pop("type", None)
+        run_id = str(state.get("_runtime_v2_run_id") or "").strip()
+        RuntimeHistoryOps(session_manager.sessions_dir).commit_user_turn(
+            sid,
+            model_content,
+            ui_content=ui_content,
+            ui_type=ui_type,
+            operation_id=operation_id or (f"user:{run_id}" if run_id else ""),
+            run_id=run_id or None,
+            model_payload=data,
+        )
+        side_effects = getattr(session_manager, "_apply_appended_ui_event_side_effects", None)
+        if callable(side_effects):
+            side_effects(
+                sid,
+                {"type": ui_type, "content": ui_content, "steer": ui_type == "user_steer"},
+            )
+        else:
+            # Lightweight/test SessionManager implementations may expose only
+            # append_ui_event. Production uses the side-effect-only path above
+            # to avoid duplicating the already committed Runtime V2 event.
+            append_ui = getattr(session_manager, "append_ui_event", None)
+            if callable(append_ui):
+                append_ui(sid, {"type": ui_type, "content": ui_content, "steer": ui_type == "user_steer"})
+        return True
+    except Exception as exc:
+        logger.warning("Runtime V2 atomic user turn commit failed for %s: %s", sid, exc)
+        raise
+
+
+def _runtime_v2_commit_assistant_final(state: State, content: str) -> bool:
+    sid = str(state.get("session_id") or "").strip()
+    if not sid or not _runtime_v2_is_primary():
+        return False
+    try:
+        from runtime_v2 import RuntimeHistoryOps
+
+        run_id = str(state.get("_runtime_v2_run_id") or "").strip()
+        RuntimeHistoryOps(session_manager.sessions_dir).commit_assistant_final(
+            sid,
+            str(content or ""),
+            operation_id=f"final:{run_id}" if run_id else "",
+            run_id=run_id or None,
+            model_payload={"metadata": {"is_final": True}},
+        )
+        side_effects = getattr(session_manager, "_apply_appended_ui_event_side_effects", None)
+        event = {"type": "final", "content": str(content or "")}
+        if callable(side_effects):
+            side_effects(sid, event)
+        else:
+            append_ui = getattr(session_manager, "append_ui_event", None)
+            if callable(append_ui):
+                append_ui(sid, event)
+        return True
+    except Exception as exc:
+        logger.warning("Runtime V2 atomic final commit failed for %s: %s", sid, exc)
+        raise
+
+
 def _runtime_v2_replace_model_history(state: State, messages: List[Any], reason: str) -> None:
     sid = str(state.get("session_id") or "").strip()
     if not sid:
@@ -834,6 +972,7 @@ def _runtime_v2_replace_model_history(state: State, messages: List[Any], reason:
             sid,
             [_message_to_dict(m) for m in list(messages or [])],
             reason=reason,
+            summary=str(state.get("key_context") or ""),
         )
         logger.info(
             "runtime_v2_write_timing session=%s op=replace_model_history reason=%s messages=%s ms=%s",
@@ -849,7 +988,7 @@ def _runtime_v2_replace_model_history(state: State, messages: List[Any], reason:
 def _runtime_v2_commit_context_summary(state: State) -> None:
     sid = str(state.get("session_id") or "").strip()
     summary = str(state.get("key_context") or "")
-    if not sid or not summary.strip():
+    if not sid:
         return
     try:
         from runtime_v2 import RuntimeHistoryOps, SnapshotStore
@@ -1248,7 +1387,15 @@ async def _consume_steer_messages(
         state["dialogue"] = derive_dialogue_from_assistant_history(llm_history)
         state["work_messages"] = work_messages
         state["llm_history"] = llm_history
-        _persist_state_with_model_append(state, msg)
+        committed = _runtime_v2_commit_user_turn(
+            state,
+            msg,
+            ui_content=ui_text,
+            ui_type="user_steer",
+            operation_id=str((item or {}).get("id") or (item or {}).get("client_id") or ""),
+        )
+        if not committed:
+            _persist_state_with_model_append(state, msg)
         await _push_stream_event(
             state,
             {
@@ -1257,8 +1404,14 @@ async def _consume_steer_messages(
                 "steer": True,
                 "steer_id": str((item or {}).get("id") or ""),
                 "client_id": str((item or {}).get("client_id") or ""),
+                "_runtime_v2_committed": committed,
             },
             emit=emit,
+        )
+        remove_session_steer(
+            sid,
+            steer_id=str((item or {}).get("id") or ""),
+            client_id=str((item or {}).get("client_id") or ""),
         )
         changed = True
     return changed
@@ -4089,10 +4242,14 @@ async def astream_events(
     async def emit(ev: Dict[str, Any]) -> None:
         # 与浏览器 SSE 一致；ephemeral（如 llm_*_delta）仅实时推送，不写入 ui_events
         # 子 agent 转发事件仅推 SSE，不写入父会话 ui_events
-        if should_persist_ui_event(ev):
+        runtime_committed = bool(ev.get("_runtime_v2_committed"))
+        if ev.get("type") == "final" and not runtime_committed:
+            runtime_committed = _runtime_v2_commit_assistant_final(state, str(ev.get("content") or ""))
+        if should_persist_ui_event(ev) and not runtime_committed:
             session_manager.append_ui_event(session_id, ev)
-        await publish_session_event(session_id, ev)
-        await queue.put(ev)
+        public_event = {k: v for k, v in ev.items() if k != "_runtime_v2_committed"}
+        await publish_session_event(session_id, public_event)
+        await queue.put(public_event)
 
     async def runner():
         nonlocal state
@@ -4113,7 +4270,18 @@ async def astream_events(
                 mode="chat",
             )
             _t_run_start = time.perf_counter()
-            _runtime_v2_append_model_message(state, user_message)
+            user_ui_type = "user_steer" if str(ui_user_event_type or "") == "user_steer" else "user"
+            user_ui_event = {"type": user_ui_type, "content": ui_user_content if ui_user_content is not None else user_input}
+            if user_ui_type == "user_steer":
+                user_ui_event["steer"] = True
+            atomic_user_turn = _runtime_v2_commit_user_turn(
+                state,
+                user_message,
+                ui_content=str(user_ui_event.get("content") or ""),
+                ui_type=user_ui_type,
+            )
+            if not atomic_user_turn:
+                _runtime_v2_append_model_message(state, user_message)
             run_start_timings["append_user_model"] = _timing_ms(_t_run_start)
             _pipeline_step_timing_log(
                 "run_start_step_timing",
@@ -4134,12 +4302,9 @@ async def astream_events(
                 run_id=runtime_v2_run_id,
                 mode="chat",
             )
-            user_ui_type = "user_steer" if str(ui_user_event_type or "") == "user_steer" else "user"
-            user_ui_event = {"type": user_ui_type, "content": ui_user_content if ui_user_content is not None else user_input}
-            if user_ui_type == "user_steer":
-                user_ui_event["steer"] = True
             _t_run_start = time.perf_counter()
-            session_manager.append_ui_event(session_id, user_ui_event)
+            if not atomic_user_turn:
+                session_manager.append_ui_event(session_id, user_ui_event)
             run_start_timings["append_user_ui"] = _timing_ms(_t_run_start)
             _pipeline_step_timing_log(
                 "run_start_step_timing",
@@ -4385,10 +4550,14 @@ async def astream_events_continuation(
         mirror_runtime_v2_sync(event_type, dict(payload or {}))
 
     async def emit(ev: Dict[str, Any]) -> None:
-        if should_persist_ui_event(ev):
+        runtime_committed = bool(ev.get("_runtime_v2_committed"))
+        if ev.get("type") == "final" and not runtime_committed:
+            runtime_committed = _runtime_v2_commit_assistant_final(state, str(ev.get("content") or ""))
+        if should_persist_ui_event(ev) and not runtime_committed:
             session_manager.append_ui_event(session_id, ev)
-        await publish_session_event(session_id, ev)
-        await queue.put(ev)
+        public_event = {k: v for k, v in ev.items() if k != "_runtime_v2_committed"}
+        await publish_session_event(session_id, public_event)
+        await queue.put(public_event)
 
     async def runner():
         nonlocal state

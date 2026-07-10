@@ -401,6 +401,31 @@ def test_delete_session_removes_subagent_descendants_and_index(tmp_path, monkeyp
     assert [row["id"] for row in rows] == [other_id]
 
 
+def test_runtime_v2_clear_todo_writes_empty_snapshot(tmp_path):
+    import agent_harness
+    from runtime_v2 import RuntimeHistoryOps, SnapshotStore
+
+    ops = RuntimeHistoryOps(tmp_path)
+    ops._append_and_snapshot("s1", "todo_updated", {
+        "has_plan": True,
+        "items": [{"id": "1", "text": "todo", "status": "pending"}],
+        "done": 0,
+        "total": 1,
+    })
+    mgr = _manager_with(
+        repository=_Repository(tmp_path),
+        _runtime_v2_primary=lambda: True,
+    )
+
+    changed = agent_harness.SessionManager.clear_todo_plan(mgr, "s1")
+    todo = SnapshotStore(tmp_path).read("s1")["todo"]
+
+    assert changed is True
+    assert todo["has_plan"] is False
+    assert todo["items"] == []
+    assert todo["cleared"] is True
+
+
 def test_runtime_v2_repair_and_reconcile_skip_legacy_rebuilds():
     import agent_harness
 

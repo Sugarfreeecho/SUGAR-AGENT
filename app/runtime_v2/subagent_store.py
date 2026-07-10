@@ -39,10 +39,16 @@ class RuntimeSubagentStore:
     def append_event(self, parent_session_id: str, agent_id: str, event_type: str, payload: Optional[dict] = None, run_id: Optional[str] = None) -> RuntimeEvent:
         root = self.root_for_parent(parent_session_id)
         log = SessionEventLog(root)
-        event = log.append(agent_id, event_type, payload=payload or {}, run_id=run_id)
         snapshots = SnapshotStore(root)
-        snapshot = self.projector.project_incremental(snapshots.read(agent_id), event)
-        snapshots.write(agent_id, snapshot)
+        with log.session_transaction(agent_id):
+            event = log._append_unlocked(agent_id, event_type, payload=payload or {}, run_id=run_id)
+            snapshot = snapshots.read(agent_id)
+            if int(snapshot.get("last_seq") or 0) != int(event.seq) - 1:
+                snapshot = self.projector.project(log.read_all(agent_id))
+            else:
+                snapshot = self.projector.project_incremental(snapshot, event)
+            snapshots.stamp_event_log(agent_id, snapshot, log.event_path(agent_id))
+            snapshots.write(agent_id, snapshot)
         return event
 
     def write_metadata(self, parent_session_id: str, agent_id: str, metadata: dict) -> None:
@@ -61,7 +67,9 @@ class RuntimeSubagentStore:
         return data if isinstance(data, dict) else {}
 
     def read_snapshot(self, parent_session_id: str, agent_id: str) -> dict:
-        return SnapshotStore(self.root_for_parent(parent_session_id)).read(agent_id)
+        root = self.root_for_parent(parent_session_id)
+        log = SessionEventLog(root)
+        return SnapshotStore(root).read_consistent(agent_id, log, self.projector)
 
     def list_tasks(self, parent_session_id: str) -> List[dict]:
         rows = self._read_json_list(self.task_index_path(parent_session_id))

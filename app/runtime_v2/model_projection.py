@@ -4,7 +4,9 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 from .config import runtime_v2_enabled
+from .event_log import SessionEventLog
 from .history_ops import RuntimeHistoryOps
+from .projector import RuntimeProjector
 from .snapshot_store import SnapshotStore
 
 
@@ -14,11 +16,13 @@ class RuntimeModelProjection:
     def __init__(self, sessions_dir: str | Path):
         self.sessions_dir = Path(sessions_dir)
         self.snapshots = SnapshotStore(sessions_dir)
+        self.event_log = SessionEventLog(sessions_dir)
+        self.projector = RuntimeProjector()
 
     def read_message_dicts(self, session_id: str) -> List[Dict[str, Any]]:
         if not runtime_v2_enabled():
             return []
-        snapshot = self.snapshots.read(session_id)
+        snapshot = self.snapshots.read_consistent(session_id, self.event_log, self.projector)
         rows = snapshot.get("model_messages") if isinstance(snapshot, dict) else None
         if not isinstance(rows, list):
             return []

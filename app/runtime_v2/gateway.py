@@ -34,9 +34,15 @@ class RuntimeGateway:
         payload: Optional[dict] = None,
         run_id: Optional[str] = None,
     ) -> RuntimeEvent:
-        event = self.event_log.append(session_id, event_type, payload=payload, run_id=run_id)
-        snapshot = self.projector.project_incremental(self.snapshots.read(session_id), event)
-        self.snapshots.write(session_id, snapshot)
+        with self.event_log.session_transaction(session_id):
+            event = self.event_log._append_unlocked(session_id, event_type, payload=payload, run_id=run_id)
+            snapshot = self.snapshots.read(session_id)
+            if int(snapshot.get("last_seq") or 0) != int(event.seq) - 1:
+                snapshot = self.projector.project(self.event_log.read_all(session_id))
+            else:
+                snapshot = self.projector.project_incremental(snapshot, event)
+            self.snapshots.stamp_event_log(session_id, snapshot, self.event_log.event_path(session_id))
+            self.snapshots.write(session_id, snapshot)
         await self.publisher.publish(event)
         return event
 
@@ -82,11 +88,9 @@ class RuntimeGateway:
 
     def rebuild_session_state(self, session_id: str) -> dict:
         snapshot = self.projector.project(self.event_log.read_all(session_id))
+        self.snapshots.stamp_event_log(session_id, snapshot, self.event_log.event_path(session_id))
         self.snapshots.write(session_id, snapshot)
         return snapshot
 
     def read_snapshot(self, session_id: str) -> dict:
-        snapshot = self.snapshots.read(session_id)
-        if snapshot:
-            return snapshot
-        return self.rebuild_session_state(session_id)
+        return self.snapshots.read_consistent(session_id, self.event_log, self.projector)

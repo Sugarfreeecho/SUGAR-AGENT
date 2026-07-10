@@ -428,9 +428,12 @@ def _runtime_v2_snapshot(sid: str) -> dict:
     if not sid:
         return {}
     try:
+        from runtime_v2.event_log import SessionEventLog
+        from runtime_v2.projector import RuntimeProjector
         from runtime_v2.snapshot_store import SnapshotStore
 
-        return SnapshotStore(session_manager.repository.sessions_dir).read(sid)
+        root = session_manager.repository.sessions_dir
+        return SnapshotStore(root).read_consistent(sid, SessionEventLog(root), RuntimeProjector())
     except Exception as exc:
         logger.debug("Runtime V2 snapshot read failed for %s: %s", sid, exc)
         return {}
@@ -3244,7 +3247,9 @@ async def get_session_context_tokens(session_id: str):
     out = await run_in_threadpool(compute_context_tokens_for_session, session_id)
     if not out.get("ok"):
         return JSONResponse(content=out, status_code=400)
-    out["token_mode"] = token_mode
+    # A snapshot miss necessarily falls back to a fresh local calculation;
+    # report the source actually used rather than the preferred hybrid mode.
+    out["token_mode"] = "calculated"
     return JSONResponse(content=out)
 
 

@@ -1,8 +1,16 @@
 import tempfile
 import threading
 import unittest
+import multiprocessing
 
 from app.runtime_v2 import SessionEventLog
+
+
+def _append_events_in_process(args):
+    root, count = args
+    log = SessionEventLog(root)
+    for _ in range(count):
+        log.append("s1", "message_user", {})
 
 
 class SessionEventLogTests(unittest.TestCase):
@@ -31,6 +39,25 @@ class SessionEventLogTests(unittest.TestCase):
 
             self.assertEqual(result["dropped"], 1)
             self.assertEqual([ev.seq for ev in events], [1, 2])
+
+    def test_repair_preserves_published_seq_and_history_targets(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            log = SessionEventLog(tmp)
+            log.append("s1", "legacy_ui_event", {"type": "status"})
+            user = log.append("s1", "message_user", {"content": "u"})
+            log.append("s1", "message_assistant_final", {"content": "a"})
+            log.append("s1", "message_deleted", {"target_seq": user.seq})
+            path = log.event_path("s1")
+            lines = path.read_text(encoding="utf-8").splitlines()
+            lines[0] = "{bad json}"
+            path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+            result = log.repair("s1")
+            events = log.read_all("s1")
+
+            self.assertEqual(result["dropped"], 1)
+            self.assertEqual([ev.seq for ev in events], [2, 3, 4])
+            self.assertEqual(events[-1].payload["target_seq"], 2)
 
     def test_reads_skip_bad_lines_without_repair(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -61,6 +88,14 @@ class SessionEventLogTests(unittest.TestCase):
             events = log.read_all("s1")
             self.assertEqual(len(events), 12)
             self.assertEqual([ev.seq for ev in events], list(range(1, 13)))
+
+    def test_multiprocess_append_keeps_unique_monotonic_seq(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ctx = multiprocessing.get_context("spawn")
+            with ctx.Pool(3) as pool:
+                pool.map(_append_events_in_process, [(tmp, 6)] * 3)
+            events = SessionEventLog(tmp).read_all("s1")
+            self.assertEqual([ev.seq for ev in events], list(range(1, 19)))
 
     def test_on_demand_reads_support_latest_and_before_seq(self):
         with tempfile.TemporaryDirectory() as tmp:

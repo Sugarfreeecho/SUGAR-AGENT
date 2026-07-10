@@ -26,6 +26,28 @@ class _NoLegacySessionManager:
         raise AssertionError("Runtime V2 run setup must not migrate legacy key_context")
 
 
+def test_steer_inbox_is_persistent_and_client_idempotent(monkeypatch, tmp_path):
+    import agent_loop
+
+    class _SessionManager:
+        sessions_dir = tmp_path
+
+    monkeypatch.setattr(agent_loop, "session_manager", _SessionManager())
+    agent_loop._STEER_QUEUES.clear()
+
+    first = agent_loop.enqueue_session_steer("s1", "follow up", client_id="client-1")
+    second = agent_loop.enqueue_session_steer("s1", "follow up", client_id="client-1")
+    agent_loop._STEER_QUEUES.clear()  # simulate a process-local cache loss
+    recovered = agent_loop._pop_session_steers("s1")
+
+    assert first["item"]["id"] == second["item"]["id"]
+    assert second["deduplicated"] is True
+    assert [row["content"] for row in recovered] == ["follow up"]
+    assert (tmp_path / "s1" / "steer_inbox.json").is_file()
+    agent_loop.remove_session_steer("s1", client_id="client-1")
+    assert not (tmp_path / "s1" / "steer_inbox.json").exists()
+
+
 def test_steer_trim_keeps_completed_prefix_and_assistant_text():
     import agent_loop
 

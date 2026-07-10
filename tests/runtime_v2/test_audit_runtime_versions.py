@@ -3,10 +3,24 @@ import unittest
 from pathlib import Path
 
 from app.runtime_v2 import RuntimeHistoryOps, RuntimeMirror
-from scripts.audit_runtime_versions import audit_session, load_json_list, signatures_match, summarize
+from scripts.audit_runtime_versions import audit_session, inspect_event_log, load_json_list, signatures_match, summarize
 
 
 class RuntimeAuditToolTests(unittest.TestCase):
+    def test_structural_audit_reports_bad_and_duplicate_sequences(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "events.jsonl"
+            path.write_text(
+                '{"seq":1,"type":"message_user","session_id":"s","payload":{}}\n'
+                '{bad}\n'
+                '{"seq":1,"type":"message_user","session_id":"s","payload":{}}\n',
+                encoding="utf-8",
+            )
+            result = inspect_event_log(path)
+            self.assertEqual(result["bad_lines"], 1)
+            self.assertEqual(result["duplicate_seqs"], 1)
+            self.assertEqual(result["non_monotonic_seqs"], 1)
+
     def test_audit_detects_and_repairs_ui_and_model_mismatch(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

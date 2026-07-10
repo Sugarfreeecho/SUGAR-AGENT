@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import threading
+from contextlib import contextmanager
 from collections import deque
 from pathlib import Path
 from typing import Callable, Dict, Iterable, List, Optional
@@ -17,7 +18,7 @@ class SessionEventLog:
     treated as rebuildable projections.
     """
 
-    _global_locks: Dict[str, threading.Lock] = {}
+    _global_locks: Dict[str, threading.RLock] = {}
     _global_locks_guard = threading.Lock()
     _seq_cache: Dict[str, tuple[int, int, int]] = {}
     _seq_cache_guard = threading.Lock()
@@ -36,26 +37,66 @@ class SessionEventLog:
         return self.session_dir(session_id) / "events.jsonl"
 
     def append(self, session_id: str, event_type: str, payload: Optional[dict] = None, run_id: Optional[str] = None) -> RuntimeEvent:
-        with self._lock_for(session_id):
-            seq = self.next_seq(session_id)
-            event = RuntimeEvent(
-                seq=seq,
-                type=event_type,
+        with self.session_transaction(session_id):
+            return self._append_unlocked(session_id, event_type, payload=payload, run_id=run_id)
+
+    def append_batch(self, session_id: str, rows: Iterable[dict]) -> List[RuntimeEvent]:
+        """Append a related group while owning the same session/file lock."""
+        with self.session_transaction(session_id):
+            return self._append_many_unlocked(session_id, rows)
+
+    def _append_many_unlocked(self, session_id: str, rows: Iterable[dict]) -> List[RuntimeEvent]:
+        """Write a batch with one seq lookup and one file open.
+
+        The caller must own ``session_transaction``. This is the hot path for
+        branch materialization, where opening the log once is materially faster
+        than thousands of individual appends.
+        """
+        clean = [row for row in rows if isinstance(row, dict) and str(row.get("type") or "").strip()]
+        if not clean:
+            return []
+        next_seq = self.next_seq(session_id)
+        events: List[RuntimeEvent] = []
+        for offset, row in enumerate(clean):
+            events.append(RuntimeEvent(
+                seq=next_seq + offset,
+                type=str(row.get("type") or "").strip(),
                 session_id=session_id,
-                run_id=run_id,
-                payload=payload or {},
-            )
-            path = self.event_path(session_id)
-            path.parent.mkdir(parents=True, exist_ok=True)
-            with path.open("a", encoding="utf-8", newline="\n") as fh:
-                fh.write(json.dumps(event.to_dict(), ensure_ascii=False, separators=(",", ":")))
-                fh.write("\n")
-                fh.flush()
-            self._update_seq_cache(session_id, event.seq)
-            return event
+                run_id=str(row.get("run_id") or "").strip() or None,
+                payload=dict(row.get("payload") or {}) if isinstance(row.get("payload"), dict) else {},
+            ))
+        path = self.event_path(session_id)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        encoded = [
+            json.dumps(event.to_dict(), ensure_ascii=False, separators=(",", ":")) + "\n"
+            for event in events
+        ]
+        with path.open("a", encoding="utf-8", newline="\n") as fh:
+            fh.writelines(encoded)
+            fh.flush()
+        self._update_seq_cache(session_id, events[-1].seq)
+        return events
+
+    def _append_unlocked(self, session_id: str, event_type: str, payload: Optional[dict] = None, run_id: Optional[str] = None) -> RuntimeEvent:
+        seq = self.next_seq(session_id)
+        event = RuntimeEvent(
+            seq=seq,
+            type=event_type,
+            session_id=session_id,
+            run_id=run_id,
+            payload=payload or {},
+        )
+        path = self.event_path(session_id)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8", newline="\n") as fh:
+            fh.write(json.dumps(event.to_dict(), ensure_ascii=False, separators=(",", ":")))
+            fh.write("\n")
+            fh.flush()
+        self._update_seq_cache(session_id, event.seq)
+        return event
 
     def append_event(self, event: RuntimeEvent) -> RuntimeEvent:
-        with self._lock_for(event.session_id):
+        with self.session_transaction(event.session_id):
             expected = self.next_seq(event.session_id)
             if event.seq != expected:
                 event = RuntimeEvent(
@@ -181,11 +222,16 @@ class SessionEventLog:
         return last + 1
 
     def repair(self, session_id: str) -> Dict[str, int]:
-        """Rewrite the log with valid, monotonic events and skip bad lines."""
-        with self._lock_for(session_id):
+        """Drop malformed lines without changing published sequence IDs.
+
+        Sequence gaps are valid. Renumbering would invalidate history-operation
+        targets, branch anchors and SSE cursors. Duplicate/non-monotonic IDs are
+        reported for explicit migration instead of being guessed here.
+        """
+        with self.session_transaction(session_id):
             path = self.event_path(session_id)
             if not path.exists():
-                return {"kept": 0, "dropped": 0}
+                return {"kept": 0, "dropped": 0, "duplicates": 0, "non_monotonic": 0}
             kept: List[RuntimeEvent] = []
             dropped = 0
             with path.open("r", encoding="utf-8") as fh:
@@ -196,24 +242,22 @@ class SessionEventLog:
                         dropped += 1
                         continue
                     kept.append(ev)
-            repaired: List[RuntimeEvent] = []
-            for index, ev in enumerate(kept, start=1):
-                repaired.append(RuntimeEvent(
-                    seq=index,
-                    type=ev.type,
-                    session_id=ev.session_id,
-                    timestamp=ev.timestamp,
-                    run_id=ev.run_id,
-                    payload=ev.payload,
-                ))
+            seqs = [int(ev.seq) for ev in kept]
+            duplicates = len(seqs) - len(set(seqs))
+            non_monotonic = sum(1 for i in range(1, len(seqs)) if seqs[i] <= seqs[i - 1])
             tmp = path.with_suffix(".jsonl.tmp")
             with tmp.open("w", encoding="utf-8", newline="\n") as fh:
-                for ev in repaired:
+                for ev in kept:
                     fh.write(json.dumps(ev.to_dict(), ensure_ascii=False, separators=(",", ":")))
                     fh.write("\n")
             tmp.replace(path)
-            self._update_seq_cache(session_id, len(repaired))
-            return {"kept": len(repaired), "dropped": dropped}
+            self._update_seq_cache(session_id, max(seqs, default=0))
+            return {
+                "kept": len(kept),
+                "dropped": dropped,
+                "duplicates": duplicates,
+                "non_monotonic": non_monotonic,
+            }
 
     def _cache_scope_for(self, session_id: str) -> str:
         try:
@@ -249,7 +293,7 @@ class SessionEventLog:
         with self._seq_cache_guard:
             self._seq_cache[scope] = (int(stat.st_mtime_ns), int(stat.st_size), int(last_seq))
 
-    def _lock_for(self, session_id: str) -> threading.Lock:
+    def _lock_for(self, session_id: str) -> threading.RLock:
         safe_id = self._validate_session_id(session_id)
         try:
             scope = str(self.session_dir(safe_id).resolve())
@@ -258,9 +302,49 @@ class SessionEventLog:
         with self._global_locks_guard:
             lock = self._global_locks.get(scope)
             if lock is None:
-                lock = threading.Lock()
+                lock = threading.RLock()
                 self._global_locks[scope] = lock
             return lock
+
+    @contextmanager
+    def session_transaction(self, session_id: str):
+        """Serialize a session commit in this process and across workers."""
+        safe_id = self._validate_session_id(session_id)
+        lock = self._lock_for(safe_id)
+        with lock:
+            session_dir = self.session_dir(safe_id)
+            session_dir.mkdir(parents=True, exist_ok=True)
+            lock_path = session_dir / ".events.lock"
+            with lock_path.open("a+b") as fh:
+                self._lock_file(fh)
+                try:
+                    yield
+                finally:
+                    self._unlock_file(fh)
+
+    @staticmethod
+    def _lock_file(fh) -> None:
+        if os.name == "nt":
+            import msvcrt
+            fh.seek(0, os.SEEK_END)
+            if fh.tell() == 0:
+                fh.write(b"0")
+                fh.flush()
+            fh.seek(0)
+            msvcrt.locking(fh.fileno(), msvcrt.LK_LOCK, 1)
+            return
+        import fcntl
+        fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+
+    @staticmethod
+    def _unlock_file(fh) -> None:
+        if os.name == "nt":
+            import msvcrt
+            fh.seek(0)
+            msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 1)
+            return
+        import fcntl
+        fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
 
     @staticmethod
     def _validate_session_id(session_id: str) -> str:

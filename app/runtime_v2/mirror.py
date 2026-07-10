@@ -51,8 +51,9 @@ class RuntimeMirror:
 
     def append(self, session_id: str, event_type: str, payload: Optional[dict] = None, run_id: Optional[str] = None) -> Optional[RuntimeEvent]:
         try:
-            event = self.event_log.append(session_id, event_type, payload=payload or {}, run_id=run_id)
-            self._apply_snapshot_event(session_id, event)
+            with self.event_log.session_transaction(session_id):
+                event = self.event_log._append_unlocked(session_id, event_type, payload=payload or {}, run_id=run_id)
+                self._apply_snapshot_event(session_id, event)
             return event
         except Exception as exc:
             try:
@@ -71,7 +72,11 @@ class RuntimeMirror:
     def _apply_snapshot_event(self, session_id: str, event: RuntimeEvent) -> None:
         try:
             snapshot = self.snapshots.read(session_id)
-            snapshot = self.projector.project_incremental(snapshot, event)
+            if int(snapshot.get("last_seq") or 0) != int(event.seq) - 1:
+                snapshot = self.projector.project(self.event_log.read_all(session_id))
+            else:
+                snapshot = self.projector.project_incremental(snapshot, event)
+            self.snapshots.stamp_event_log(session_id, snapshot, self.event_log.event_path(session_id))
             self.snapshots.write(session_id, snapshot)
         except Exception as exc:
             logger.debug("Runtime V2 mirror incremental snapshot failed for session %s: %s", session_id, exc)
@@ -80,6 +85,7 @@ class RuntimeMirror:
     def _refresh_snapshot(self, session_id: str) -> None:
         try:
             snapshot = self.projector.project(self.event_log.read_all(session_id))
+            self.snapshots.stamp_event_log(session_id, snapshot, self.event_log.event_path(session_id))
             self.snapshots.write(session_id, snapshot)
         except Exception as exc:
             logger.debug("Runtime V2 mirror snapshot failed for session %s: %s", session_id, exc)

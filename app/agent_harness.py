@@ -3009,15 +3009,17 @@ class SessionManager:
         except Exception as e:
             logger.warning(f"append_ui_event 失败: {e}")
 
-    def _observe_runtime_v2_history(self, method_name: str, session_id: str, **kwargs) -> None:
+    def _observe_runtime_v2_history(self, method_name: str, session_id: str, **kwargs) -> bool:
         try:
             from runtime_v2.history_ops import RuntimeHistoryOps
 
             ops = RuntimeHistoryOps(self.repository.sessions_dir)
             method = getattr(ops, method_name)
             method(session_id, **kwargs)
+            return True
         except Exception as exc:
             logger.debug("Runtime V2 observe %s failed for session %s: %s", method_name, session_id, exc)
+            return False
 
     def get_ui_events_for_display(self, session_id: str) -> List[dict]:
         """返回与流式接口相同结构的事件列表，供前端仅调用 renderEvent 重放。"""
@@ -3214,6 +3216,26 @@ class SessionManager:
         if not sid:
             return False
         todo_manager._by_session.pop(sid, None)
+        if self._runtime_v2_primary():
+            try:
+                from runtime_v2 import RuntimeHistoryOps, SnapshotStore
+
+                snapshot = SnapshotStore(self.repository.sessions_dir).read(sid)
+                previous = snapshot.get("todo") if isinstance(snapshot, dict) else None
+                RuntimeHistoryOps(self.repository.sessions_dir).update_todo(
+                    sid,
+                    {
+                        "has_plan": False,
+                        "items": [],
+                        "done": 0,
+                        "total": 0,
+                        "cleared": True,
+                    },
+                )
+                return bool(previous)
+            except Exception as exc:
+                logger.warning("Runtime V2 clear todo failed for %s: %s", sid, exc)
+                return False
         changed = False
         tp = self._get_todo_plan_path(sid)
         if tp.exists():
@@ -3641,17 +3663,6 @@ class SessionManager:
                 meta.pop("truncate_backups", None)
                 meta.pop("last_truncate_backup", None)
                 meta.pop("pending_subagent_notifications", None)
-                self._save_metadata(new_id, meta)
-                self.index.append({
-                    "id": new_id,
-                    "name": branch_name,
-                    "created_at": now_iso,
-                    "updated_at": now_iso,
-                    "archived": False,
-                    "pinned": False,
-                    "pinned_at": None,
-                })
-                self._save_index()
                 if branch_from_seq is None:
                     try:
                         from runtime_v2.ui_projection import RuntimeUiProjection
@@ -3664,13 +3675,35 @@ class SessionManager:
                     except Exception as exc:
                         logger.debug("Runtime V2 branch source seq mapping failed for %s: %s", sid, exc)
                         branch_from_seq = before_index
-                self._observe_runtime_v2_history(
-                    "create_branch",
-                    new_id,
-                    source_session_id=sid,
-                    branch_from_seq=branch_from_seq,
-                    name=branch_name,
-                )
+                try:
+                    branch_written = self._observe_runtime_v2_history(
+                        "create_branch",
+                        new_id,
+                        source_session_id=sid,
+                        branch_from_seq=int(branch_from_seq),
+                        name=branch_name,
+                    )
+                    if branch_written is False:
+                        raise RuntimeError("Runtime V2 branch seed failed")
+                except Exception as exc:
+                    # Do not publish a branch whose UI/model/context seed only
+                    # completed partially. The id is newly allocated here.
+                    try:
+                        shutil.rmtree(dst_path)
+                    except Exception:
+                        logger.warning("failed to roll back partial Runtime V2 branch %s", new_id, exc_info=True)
+                    return {"ok": False, "error": "branch_seed_failed", "detail": str(exc)}
+                self._save_metadata(new_id, meta)
+                self.index.append({
+                    "id": new_id,
+                    "name": branch_name,
+                    "created_at": now_iso,
+                    "updated_at": now_iso,
+                    "archived": False,
+                    "pinned": False,
+                    "pinned_at": None,
+                })
+                self._save_index()
                 return {
                     "ok": True,
                     "session_id": new_id,

@@ -1,4 +1,6 @@
 import tempfile
+import threading
+import time
 import unittest
 
 from app.runtime_v2 import RuntimeHistoryOps, RuntimeMirror, RuntimeUiProjection
@@ -6,6 +8,124 @@ from app.runtime_v2.blob_store import BlobStore
 
 
 class RuntimeHistoryOpsTests(unittest.TestCase):
+    def test_large_branch_materializes_under_ten_seconds(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ops = RuntimeHistoryOps(tmp)
+            model_messages = [
+                {"type": "user" if i % 2 == 0 else "assistant", "content": f"model-{i}"}
+                for i in range(200)
+            ]
+            rows = [{
+                "type": "model_history_replaced",
+                "payload": {"messages": model_messages, "reason": "test_seed"},
+            }]
+            for i in range(1300):
+                rows.append({"type": "message_user", "payload": {"content": f"user-{i}"}})
+                rows.append({"type": "message_assistant_final", "payload": {"content": f"answer-{i}"}})
+            source_events = ops.event_log.append_batch("source", rows)
+
+            started = time.perf_counter()
+            ops.create_branch(
+                "branch",
+                source_session_id="source",
+                branch_from_seq=source_events[-1].seq,
+            )
+            elapsed = time.perf_counter() - started
+
+            self.assertLess(elapsed, 10.0, f"large branch took {elapsed:.3f}s")
+            self.assertEqual(len(RuntimeUiProjection(tmp).read_ui_events("branch")), 2600)
+            self.assertEqual(len(ops.snapshots.read("branch")["model_messages"]), 200)
+
+    def test_concurrent_commits_keep_snapshot_at_log_tail(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            barrier = threading.Barrier(8)
+
+            def append_one(index):
+                barrier.wait()
+                RuntimeHistoryOps(tmp).append_model_message("s1", "user", str(index))
+
+            threads = [threading.Thread(target=append_one, args=(i,)) for i in range(8)]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join()
+
+            ops = RuntimeHistoryOps(tmp)
+            events = ops.event_log.read_all("s1")
+            snapshot = ops.snapshots.read("s1")
+            self.assertEqual(snapshot["last_seq"], events[-1].seq)
+            self.assertEqual(len(snapshot["model_messages"]), 8)
+
+    def test_truncate_does_not_hide_messages_appended_after_operation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            mirror = RuntimeMirror(tmp)
+            u1 = mirror.mirror_ui_event("s1", {"type": "user", "content": "u1"})
+            a1 = mirror.mirror_ui_event("s1", {"type": "final", "content": "a1"})
+            u2 = mirror.mirror_ui_event("s1", {"type": "user", "content": "old"})
+            RuntimeHistoryOps(tmp).truncate_visible_history_before_seq(
+                "s1", target_seq=u2.seq, keep_to_seq=a1.seq
+            )
+            mirror.mirror_ui_event("s1", {"type": "user", "content": "new"})
+
+            snapshot = RuntimeHistoryOps(tmp).snapshots.read("s1")
+            self.assertEqual(
+                [row["payload"]["content"] for row in snapshot["visible_messages"]],
+                ["u1", "a1", "new"],
+            )
+
+    def test_standalone_rewrite_updates_matching_model_message(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ops = RuntimeHistoryOps(tmp)
+            ops.append_model_message("s1", "user", "old")
+            ui = RuntimeMirror(tmp).mirror_ui_event("s1", {"type": "user", "content": "old"})
+            ops.rewrite_message("s1", ui.seq, "new")
+            snapshot = ops.snapshots.read("s1")
+            self.assertEqual(snapshot["model_messages"][0]["payload"]["content"], "new")
+
+    def test_model_replace_commits_summary_in_same_event_and_can_clear_it(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ops = RuntimeHistoryOps(tmp)
+            ops.replace_model_history("s1", [{"type": "user", "content": "u"}], summary="summary")
+            self.assertEqual(ops.snapshots.read("s1")["context"]["summary"]["summary"], "summary")
+            ops.replace_model_history("s1", [], summary="")
+            self.assertEqual(ops.snapshots.read("s1")["context"]["summary"]["summary"], "")
+
+    def test_atomic_user_turn_is_idempotent(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ops = RuntimeHistoryOps(tmp)
+            ops.commit_user_turn("s1", "agent text", ui_content="visible", operation_id="client-1")
+            ops.commit_user_turn("s1", "agent text", ui_content="visible", operation_id="client-1")
+            self.assertEqual(len(ops.event_log.read_all("s1")), 1)
+            self.assertEqual(RuntimeUiProjection(tmp).read_ui_events("s1")[0]["content"], "visible")
+            self.assertEqual(ops.snapshots.read("s1")["model_messages"][0]["payload"]["content"], "agent text")
+
+    def test_atomic_final_is_idempotent_and_updates_both_projections(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ops = RuntimeHistoryOps(tmp)
+            ops.commit_assistant_final("s1", "done", operation_id="final-1")
+            ops.commit_assistant_final("s1", "done", operation_id="final-1")
+            snapshot = ops.snapshots.read("s1")
+            self.assertEqual(len(ops.event_log.read_all("s1")), 1)
+            self.assertEqual(RuntimeUiProjection(tmp).read_ui_events("s1")[0]["content"], "done")
+            self.assertEqual(snapshot["model_messages"][0]["payload"]["content"], "done")
+
+    def test_model_read_repairs_snapshot_left_behind_log(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ops = RuntimeHistoryOps(tmp)
+            ops.append_model_message("s1", "user", "first")
+            # Simulate a crash after the fact append and before snapshot update.
+            ops.event_log.append("s1", "model_user", {"role": "user", "content": "second"})
+
+            projection = RuntimeHistoryOps(tmp)
+            snapshot = projection.snapshots.read_consistent(
+                "s1", projection.event_log, projection.projector
+            )
+
+            self.assertEqual(
+                [row["payload"]["content"] for row in snapshot["model_messages"]],
+                ["first", "second"],
+            )
+            self.assertEqual(ops.snapshots.read("s1")["last_seq"], 2)
     def test_rewrite_and_delete_project_visible_messages_without_rewriting_log(self):
         with tempfile.TemporaryDirectory() as tmp:
             mirror = RuntimeMirror(tmp)
@@ -270,6 +390,25 @@ class RuntimeHistoryOpsTests(unittest.TestCase):
             branch_events = RuntimeUiProjection(tmp).read_ui_events("branch")
 
             self.assertEqual(branch_events[0]["result"], "large result")
+
+    def test_bulk_branch_preserves_subagent_sidecar_events(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            mirror = RuntimeMirror(tmp)
+            source_event = mirror.mirror_ui_event("source", {
+                "type": "subagent_started",
+                "agent_id": "agent-1",
+                "task_id": "agent-1",
+            })
+
+            RuntimeHistoryOps(tmp).create_branch(
+                "branch",
+                source_session_id="source",
+                branch_from_seq=source_event.seq,
+            )
+
+            child_log = RuntimeHistoryOps(tmp).event_log.session_dir("branch") / "subagents" / "agent-1" / "events.jsonl"
+            self.assertTrue(child_log.is_file())
+            self.assertIn("subagent_started", child_log.read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":

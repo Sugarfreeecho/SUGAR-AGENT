@@ -46,14 +46,154 @@ class RuntimeHistoryOps:
         })
 
     def create_branch(self, session_id: str, source_session_id: str, branch_from_seq: int, name: str = "") -> RuntimeEvent:
-        event = self._append_and_snapshot(session_id, "history_branch_created", {
-            "source_session_id": source_session_id,
-            "branch_from_seq": int(branch_from_seq),
-            "name": name,
-        })
-        self._seed_branch_visible_history(session_id, source_session_id, int(branch_from_seq))
-        self._seed_branch_model_history(session_id, source_session_id, int(branch_from_seq))
-        return event
+        t0 = time.perf_counter()
+        branch_from_seq = int(branch_from_seq)
+        ui_events = self._branch_ui_events(source_session_id, branch_from_seq)
+        t_after_ui = time.perf_counter()
+        model_messages = self._source_model_message_dicts_at_seq(source_session_id, branch_from_seq)
+        t_after_model = time.perf_counter()
+        seed_rows = self._branch_ui_seed_rows(session_id, source_session_id, ui_events)
+        t_after_map = time.perf_counter()
+
+        with self.event_log.session_transaction(session_id):
+            existing_events = self.event_log.read_all(session_id)
+            snapshot = self.snapshots.read(session_id)
+            if int(snapshot.get("last_seq") or 0) != max((int(ev.seq) for ev in existing_events), default=0):
+                snapshot = self.projector.project(existing_events)
+            has_ui = any(
+                self._is_branch_seed_event(event) and not self._is_branch_runtime_metric_event(event)
+                for event in existing_events
+            )
+            has_model = bool(snapshot.get("raw_model_messages") if isinstance(snapshot, dict) else None)
+            rows = [{
+                "type": "history_branch_created",
+                "payload": {
+                    "source_session_id": source_session_id,
+                    "branch_from_seq": branch_from_seq,
+                    "name": name,
+                },
+            }]
+            if not has_ui:
+                rows.extend(seed_rows)
+            if not has_model and model_messages:
+                rows.append({
+                    "type": "model_history_replaced",
+                    "payload": {
+                        "messages": model_messages,
+                        "reason": "branch_model_seed",
+                    },
+                })
+            appended = self.event_log._append_many_unlocked(session_id, rows)
+            if not appended:
+                raise RuntimeError("branch batch append produced no events")
+            if int(snapshot.get("last_seq") or 0) == int(appended[0].seq) - 1:
+                if not snapshot:
+                    snapshot = self.projector.empty_snapshot()
+                for appended_event in appended:
+                    self.projector.apply(snapshot, appended_event)
+                self.projector.finalize(snapshot)
+            else:
+                snapshot = self.projector.project(self.event_log.read_all(session_id))
+            self.snapshots.stamp_event_log(session_id, snapshot, self.event_log.event_path(session_id))
+            self.snapshots.write(session_id, snapshot)
+        self._seed_branch_subagent_details_bulk(session_id, ui_events)
+        t_after_commit = time.perf_counter()
+        logger.info(
+            "rt2_branch_timing session=%s source=%s branch_from_seq=%s ui_events=%s model_messages=%s "
+            "source_ui_ms=%s source_model_ms=%s map_ms=%s commit_ms=%s total_ms=%s",
+            session_id,
+            source_session_id,
+            branch_from_seq,
+            len(ui_events),
+            len(model_messages),
+            _rt2_step_ms(t0, t_after_ui),
+            _rt2_step_ms(t_after_ui, t_after_model),
+            _rt2_step_ms(t_after_model, t_after_map),
+            _rt2_step_ms(t_after_map, t_after_commit),
+            _rt2_step_ms(t0, t_after_commit),
+        )
+        return appended[0]
+
+    def _branch_ui_events(self, source_session_id: str, branch_from_seq: int) -> list[dict]:
+        from .ui_projection import RuntimeUiProjection
+
+        projection = RuntimeUiProjection(self.event_log.root)
+        return projection.read_ui_events_through_runtime_seq(source_session_id, branch_from_seq)
+
+    def _branch_ui_seed_rows(
+        self,
+        session_id: str,
+        source_session_id: str,
+        source_events: list[dict],
+    ) -> list[dict]:
+        from .mirror import RuntimeMirror
+
+        mirror = RuntimeMirror(self.event_log.root)
+        rows: list[dict] = []
+        for event in source_events:
+            if not isinstance(event, dict):
+                continue
+            seed = dict(event)
+            seed.pop("runtime_seq", None)
+            seed.pop("runtime_event_type", None)
+            seed.pop("rewritten", None)
+            seed.pop("rewritten_by_seq", None)
+            seed.pop("session_id", None)
+            if self._is_projected_ui_runtime_metric(seed):
+                continue
+            mapped = mirror._map_ui_event(session_id, seed)
+            if not mapped:
+                mapped = {
+                    "type": "legacy_ui_event",
+                    "payload": self._copy_blob_refs(source_session_id, session_id, seed),
+                }
+            rows.append({
+                "type": mapped["type"],
+                "payload": mapped.get("payload") or {},
+                "run_id": mapped.get("run_id"),
+            })
+        return rows
+
+    def _seed_branch_subagent_details_bulk(self, session_id: str, source_events: list[dict]) -> None:
+        from .mirror import RuntimeMirror
+
+        grouped: dict[str, list[dict]] = {}
+        mirror = RuntimeMirror(self.event_log.root)
+        allowed = {
+            "subagent_started",
+            "subagent_progress",
+            "subagent_finished",
+            "subagent_failed",
+            "subagent_result_consumed",
+        }
+        for event in source_events:
+            if not isinstance(event, dict):
+                continue
+            event_type = str(event.get("type") or "")
+            if event_type not in allowed:
+                continue
+            agent_id = str(event.get("agent_id") or event.get("task_id") or event.get("id") or "").strip()
+            if not agent_id:
+                continue
+            payload = mirror._externalize_large_text_payload(
+                str(self.event_log.session_dir(session_id) / "subagents" / agent_id),
+                dict(event),
+            )
+            grouped.setdefault(agent_id, []).append({"type": event_type, "payload": payload})
+        if not grouped:
+            return
+        root = self.event_log.session_dir(session_id) / "subagents"
+        for agent_id, rows in grouped.items():
+            log = SessionEventLog(root)
+            snapshots = SnapshotStore(root)
+            with log.session_transaction(agent_id):
+                appended = log._append_many_unlocked(agent_id, rows)
+                child_snapshot = self.projector.empty_snapshot()
+                for event in appended:
+                    self.projector.apply(child_snapshot, event)
+                self.projector.finalize(child_snapshot)
+                snapshots.stamp_event_log(agent_id, child_snapshot, log.event_path(agent_id))
+                snapshots.write(agent_id, child_snapshot)
 
     def compact_history(
         self,
@@ -74,6 +214,9 @@ class RuntimeHistoryOps:
         if source_seq is not None:
             payload["source_seq"] = int(source_seq)
         return self._append_and_snapshot(session_id, "context_summary_committed", payload)
+
+    def update_todo(self, session_id: str, todo: dict) -> RuntimeEvent:
+        return self._append_and_snapshot(session_id, "todo_updated", dict(todo or {}))
 
     def change_visible_range(self, session_id: str, *, from_seq: Optional[int] = None, to_seq: Optional[int] = None, reason: str = "") -> RuntimeEvent:
         payload = {"reason": reason}
@@ -131,11 +274,94 @@ class RuntimeHistoryOps:
         data["content"] = content
         return self._append_and_snapshot(session_id, event_type, data, run_id=run_id)
 
-    def replace_model_history(self, session_id: str, messages: list[dict], reason: str = "") -> RuntimeEvent:
-        return self._append_and_snapshot(session_id, "model_history_replaced", {
+    def commit_user_turn(
+        self,
+        session_id: str,
+        content: str,
+        *,
+        ui_content: Optional[str] = None,
+        ui_type: str = "user",
+        operation_id: str = "",
+        run_id: Optional[str] = None,
+        model_payload: Optional[dict] = None,
+    ) -> Optional[RuntimeEvent]:
+        """Atomically commit the UI and model representations of one user turn."""
+        op_id = str(operation_id or "").strip()
+        with self.event_log.session_transaction(session_id):
+            snapshot = self.snapshots.read(session_id)
+            if int(snapshot.get("last_seq") or 0) != self.event_log.next_seq(session_id) - 1:
+                snapshot = self.projector.project(self.event_log.read_all(session_id))
+            if op_id and op_id in set(snapshot.get("operation_ids") or []):
+                return None
+            payload = dict(model_payload or {})
+            payload.update({
+                "role": "user",
+                "content": str(content or ""),
+                "ui_content": str(ui_content if ui_content is not None else content or ""),
+                "ui_type": "user_steer" if ui_type == "user_steer" else "user",
+            })
+            if op_id:
+                payload["operation_id"] = op_id
+            event = self.event_log._append_unlocked(
+                session_id,
+                "user_turn_committed",
+                payload=payload,
+                run_id=run_id,
+            )
+            snapshot = self.projector.project_incremental(snapshot, event)
+            self.snapshots.stamp_event_log(session_id, snapshot, self.event_log.event_path(session_id))
+            self.snapshots.write(session_id, snapshot)
+            return event
+
+    def commit_assistant_final(
+        self,
+        session_id: str,
+        content: str,
+        *,
+        operation_id: str = "",
+        run_id: Optional[str] = None,
+        model_payload: Optional[dict] = None,
+    ) -> Optional[RuntimeEvent]:
+        op_id = str(operation_id or "").strip()
+        with self.event_log.session_transaction(session_id):
+            snapshot = self.snapshots.read(session_id)
+            if int(snapshot.get("last_seq") or 0) != self.event_log.next_seq(session_id) - 1:
+                snapshot = self.projector.project(self.event_log.read_all(session_id))
+            if op_id and op_id in set(snapshot.get("operation_ids") or []):
+                return None
+            payload = dict(model_payload or {})
+            payload.update({"role": "assistant", "content": str(content or "")})
+            if op_id:
+                payload["operation_id"] = op_id
+            event = self.event_log._append_unlocked(
+                session_id,
+                "assistant_final_committed",
+                payload=payload,
+                run_id=run_id,
+            )
+            snapshot = self.projector.project_incremental(snapshot, event)
+            self.snapshots.stamp_event_log(session_id, snapshot, self.event_log.event_path(session_id))
+            self.snapshots.write(session_id, snapshot)
+            return event
+
+    def replace_model_history(
+        self,
+        session_id: str,
+        messages: list[dict],
+        reason: str = "",
+        *,
+        summary: Optional[str] = None,
+        source_seq: Optional[int] = None,
+    ) -> RuntimeEvent:
+        payload = {
             "messages": list(messages or []),
             "reason": reason,
-        })
+        }
+        if summary is not None:
+            payload["summary"] = str(summary)
+        if source_seq is not None:
+            payload["source_seq"] = int(source_seq)
+        return self._append_and_snapshot(session_id, "model_history_replaced", payload)
 
     def observe_legacy_truncate(
         self,
@@ -223,11 +449,17 @@ class RuntimeHistoryOps:
 
     def _append_and_snapshot(self, session_id: str, event_type: str, payload: dict, run_id: Optional[str] = None) -> RuntimeEvent:
         t0 = time.perf_counter()
-        event = self.event_log.append(session_id, event_type, payload=payload, run_id=run_id)
-        t_after_append = time.perf_counter()
-        snapshot = self.projector.project_incremental(self.snapshots.read(session_id), event)
-        t_after_project = time.perf_counter()
-        self.snapshots.write(session_id, snapshot)
+        with self.event_log.session_transaction(session_id):
+            event = self.event_log._append_unlocked(session_id, event_type, payload=payload, run_id=run_id)
+            t_after_append = time.perf_counter()
+            snapshot = self.snapshots.read(session_id)
+            if int(snapshot.get("last_seq") or 0) != int(event.seq) - 1:
+                snapshot = self.projector.project(self.event_log.read_all(session_id))
+            else:
+                snapshot = self.projector.project_incremental(snapshot, event)
+            t_after_project = time.perf_counter()
+            self.snapshots.stamp_event_log(session_id, snapshot, self.event_log.event_path(session_id))
+            self.snapshots.write(session_id, snapshot)
         t_after_write = time.perf_counter()
         logger.info(
             "rt2_append_and_snapshot session=%s event_type=%s run_id=%s "
@@ -310,13 +542,23 @@ class RuntimeHistoryOps:
 
     def _source_model_message_dicts_at_seq(self, source_session_id: str, branch_from_seq: int) -> list[dict]:
         events = []
+        later_history_ops = []
         for source_event in self.event_log.iter_events(source_session_id):
-            if int(source_event.seq) > int(branch_from_seq):
-                break
-            events.append(source_event)
+            if int(source_event.seq) <= int(branch_from_seq):
+                events.append(source_event)
+            elif source_event.type in {"message_deleted", "message_rewritten"}:
+                target = self.projector._int_or_none((source_event.payload or {}).get("target_seq"))
+                if target is not None and target <= int(branch_from_seq):
+                    later_history_ops.append(source_event)
         if not events:
             return []
         snapshot = self.projector.project(events)
+        # A later semantic edit may target history before the branch anchor.
+        # Apply those edits to the anchored snapshot without importing later
+        # conversational turns, keeping UI/model branch seeds identical.
+        for source_event in later_history_ops:
+            self.projector.apply(snapshot, source_event)
+        self.projector.finalize(snapshot)
         rows = snapshot.get("model_messages") if isinstance(snapshot, dict) else None
         if not isinstance(rows, list):
             return []
@@ -415,6 +657,8 @@ class RuntimeHistoryOps:
     def _is_branch_seed_event(event: RuntimeEvent) -> bool:
         if event.type in {
             "message_user",
+            "user_turn_committed",
+            "assistant_final_committed",
             "message_assistant_final",
             "tool_started",
             "tool_finished",

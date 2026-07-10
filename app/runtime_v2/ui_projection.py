@@ -277,6 +277,17 @@ class RuntimeUiProjection:
                 return idx + 1
         return None
 
+    def read_ui_events_through_runtime_seq(self, session_id: str, runtime_seq: int) -> List[dict]:
+        """Project once and return the visible prefix ending at ``runtime_seq``."""
+        target = int(runtime_seq)
+        if target <= 0:
+            return []
+        events, _latest_truncate_seq = self._project_visible_ui_entries(session_id)
+        for index, event in enumerate(events):
+            if self._int_or_none((event or {}).get("runtime_seq")) == target:
+                return events[:index + 1]
+        return []
+
     def previous_visible_runtime_seq_before(self, session_id: str, runtime_seq: int) -> Optional[int]:
         """Return the visible runtime seq immediately before ``runtime_seq``.
 
@@ -675,11 +686,11 @@ class RuntimeUiProjection:
             "key_context_delta",
         }:
             return None
-        if event.type == "message_user":
+        if event.type in {"message_user", "user_turn_committed"}:
             if payload.get("ui_type") == "user_steer":
                 data = {
                     "type": "user_steer",
-                    "content": payload.get("content") or "",
+                    "content": payload.get("ui_content") or payload.get("content") or "",
                     "created_at": event.timestamp,
                     "steer": True,
                 }
@@ -688,8 +699,8 @@ class RuntimeUiProjection:
                 if payload.get("client_id"):
                     data["client_id"] = str(payload.get("client_id") or "")
                 return data
-            return {"type": "user", "content": payload.get("content") or "", "created_at": event.timestamp}
-        if event.type == "message_assistant_final":
+            return {"type": "user", "content": payload.get("ui_content") or payload.get("content") or "", "created_at": event.timestamp}
+        if event.type in {"message_assistant_final", "assistant_final_committed"}:
             return {"type": "final", "content": payload.get("content") or "", "created_at": event.timestamp}
         if event.type == "tool_started":
             data = dict(payload)

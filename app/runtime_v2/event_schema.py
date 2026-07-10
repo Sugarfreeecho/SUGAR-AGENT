@@ -8,6 +8,8 @@ from typing import Any, Dict, Optional
 CORE_EVENT_TYPES = {
     "session_meta",
     "message_user",
+    "user_turn_committed",
+    "assistant_final_committed",
     "message_assistant_delta",
     "message_assistant_final",
     "model_user",
