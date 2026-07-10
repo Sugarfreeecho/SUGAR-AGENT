@@ -2576,13 +2576,55 @@ function encodeMarkdownWorkspacePathLinkMatch(match, label, dest) {
     return '<span data-ga-workspace-link="' + escapeHtmlAttr(rel) + '" data-ga-workspace-raw="' + escapeHtmlAttr(decodedDest) + '">' + escapeHtml(label) + '</span>';
 }
 
+function stripMarkdownPathLinkWrapper(s) {
+    var t = String(s || '').trim();
+    var changed = true;
+    var pairs = [
+        ['**', '**'],
+        ['__', '__'],
+        ['~~', '~~'],
+        ['`', '`'],
+        ['*', '*'],
+        ['_', '_'],
+        ['"', '"'],
+        ["'", "'"],
+        ['“', '”'],
+        ['‘', '’']
+    ];
+    while (changed && t.length >= 2) {
+        changed = false;
+        for (var i = 0; i < pairs.length; i += 1) {
+            var open = pairs[i][0];
+            var close = pairs[i][1];
+            if (t.length > open.length + close.length && t.indexOf(open) === 0 && t.slice(-close.length) === close) {
+                t = t.slice(open.length, t.length - close.length).trim();
+                changed = true;
+                break;
+            }
+        }
+    }
+    return t;
+}
+
+function normalizeExplicitMarkdownPathLinkMatch(match, label, dest) {
+    var cleanLabel = stripMarkdownPathLinkWrapper(label);
+    var cleanDest = stripMarkdownPathLinkWrapper(dest);
+    if (!cleanDest || !markdownHrefToWorkspaceOpenRel(cleanDest)) return match;
+    return '[' + cleanLabel + '](' + cleanDest + ')';
+}
+
 function normalizeExplicitMarkdownPathLinksInPlainText(text) {
     return String(text || '')
-        .replace(/`\[([^\]\r\n]+)\]\(([^)\r\n]+)\)`/g, '[$1]($2)')
-        .replace(/`\[([^\]\r\n]+)\]`\(([^)\r\n]+)\)/g, '[$1]($2)')
-        .replace(/\[([^\]\r\n]+)\]`\(([^)\r\n]+)\)`/g, '[$1]($2)')
-        .replace(/\[([^\]\r\n]+)\]\(`([^`\r\n]+)`\)/g, '[$1]($2)')
-        .replace(/\[`([^`\]\r\n]+)`\]\(([^)\r\n]+)\)/g, '[$1]($2)');
+        .replace(/([`*_~]{1,2})\[([^\]\r\n]+)\]\(([^)\r\n]+)\)\1/g, function (match, wrap, label, dest) {
+            return normalizeExplicitMarkdownPathLinkMatch(match, label, dest);
+        })
+        .replace(/([`*_~]{1,2})\[([^\]\r\n]+)\]\1\(([^)\r\n]+)\)/g, function (match, wrap, label, dest) {
+            return normalizeExplicitMarkdownPathLinkMatch(match, label, dest);
+        })
+        .replace(/\[([^\]\r\n]+)\]([`*_~]{1,2})\(([^)\r\n]+)\)\2/g, function (match, label, wrap, dest) {
+            return normalizeExplicitMarkdownPathLinkMatch(match, label, dest);
+        })
+        .replace(/\[([^\]\r\n]+)\]\(([^)\r\n]+)\)/g, normalizeExplicitMarkdownPathLinkMatch);
 }
 
 function normalizeExplicitMarkdownPathLinksOutsideFences(text) {
