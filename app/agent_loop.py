@@ -17,6 +17,9 @@ import time
 import asyncio
 import uuid
 import threading
+import socket
+from urllib.parse import urlparse
+from urllib.request import getproxies, proxy_bypass
 from datetime import datetime
 import inspect
 from contextlib import contextmanager
@@ -105,11 +108,15 @@ from agent_tokenizer import (
     build_static_system_segments,
 )
 import agent_mcp
+import execution_metrics
 from agent_subagent_events import should_persist_ui_event
 from session_event_bus import close_session_stream, prune_session_ephemeral, publish_session_event
 from tool_approval_gate import new_approval_id, wait_tool_ui_approval_after_emit
+from runtime_power import AgentRunPowerGuard, RuntimeResume
 
 EXECUTOR_STREAM = os.getenv("EXECUTOR_STREAM", "true").lower() in ("1", "true", "yes")
+NETWORK_RECONNECT_MAX_ATTEMPTS = max(0, int(os.getenv("NETWORK_RECONNECT_MAX_ATTEMPTS", "5")))
+execution_metrics.configure(session_manager.sessions_dir)
 
 _STEER_LOCK = threading.Lock()
 _STEER_QUEUES: Dict[str, List[Dict[str, Any]]] = {}
@@ -873,6 +880,12 @@ def _runtime_v2_append_model_message(state: State, msg: Any) -> None:
         if run_id:
             payload["run_id"] = run_id
         t_pre_call = time.perf_counter()
+        state["_runtime_stage"] = "persist_model_message"
+        logger.info(
+            "runtime_v2_write_started session=%s op=append_model_message role=%s",
+            sid,
+            role,
+        )
         RuntimeHistoryOps(session_manager.sessions_dir).append_model_message(
             sid,
             role,
@@ -893,7 +906,9 @@ def _runtime_v2_append_model_message(state: State, msg: Any) -> None:
             step_outer_overhead_ms,
             step_inner_total_ms,
         )
+        state["_runtime_stage"] = "react"
     except Exception as exc:
+        state["_runtime_stage"] = "react"
         logger.debug("Runtime V2 model append failed: %s", exc)
 
 
@@ -1273,6 +1288,73 @@ async def _await_retry_delay_or_interrupt(
             return False
         await asyncio.sleep(min(0.25, max(0.0, deadline - time.monotonic())))
     return True
+
+
+def _executor_endpoint_reachable(client: Any, timeout_seconds: float = 4.0) -> bool:
+    try:
+        raw = str(getattr(client, "base_url", "") or "").strip()
+        parsed = urlparse(raw)
+        host = str(parsed.hostname or "").strip()
+        if not host:
+            return False
+        port = int(parsed.port or (443 if parsed.scheme == "https" else 80))
+        if not proxy_bypass(host):
+            proxy_url = str(getproxies().get(parsed.scheme) or "").strip()
+            proxy = urlparse(proxy_url)
+            if proxy.hostname:
+                host = str(proxy.hostname)
+                port = int(proxy.port or (443 if proxy.scheme == "https" else 80))
+        with socket.create_connection((host, port), timeout=max(0.5, timeout_seconds)):
+            return True
+    except OSError:
+        return False
+
+
+async def _wait_for_network_recovery(
+    state: State,
+    emit: Optional[Callable[[Dict[str, Any]], Any]],
+    client: Any,
+    poll_seconds: float = 15.0,
+) -> bool:
+    """Wait without resending the model request until its endpoint is reachable."""
+    sid = str(state.get("session_id") or "").strip()
+    state["_runtime_stage"] = "network_waiting"
+    announced_at = 0.0
+    if not await _await_retry_delay_or_interrupt(state, emit, poll_seconds):
+        return False
+    while True:
+        await _raise_if_steer_requested(state, emit, "network_waiting")
+        if sid and session_manager.is_interrupt_requested(sid):
+            return False
+        if await asyncio.to_thread(_executor_endpoint_reachable, client):
+            state["_runtime_stage"] = "react"
+            if emit:
+                await _push_stream_event(
+                    state,
+                    {
+                        "type": "status",
+                        "content": "网络连接已恢复，正在继续任务…",
+                        "network_recovered": True,
+                        "ephemeral": True,
+                    },
+                    emit=emit,
+                )
+            return True
+        now = time.monotonic()
+        if emit and (not announced_at or now - announced_at >= 60.0):
+            announced_at = now
+            await _push_stream_event(
+                state,
+                {
+                    "type": "status",
+                    "content": "网络仍不可用，任务已暂停并等待连接恢复…",
+                    "network_waiting": True,
+                    "ephemeral": True,
+                },
+                emit=emit,
+            )
+        if not await _await_retry_delay_or_interrupt(state, emit, poll_seconds):
+            return False
 
 
 def _rollback_steer_partial_turn(state: State) -> None:
@@ -1661,7 +1743,7 @@ def _tool_command_preview(tool_name: str, tool_args: Any) -> str:
         return json.dumps(v, ensure_ascii=False)
 
     def _fmt_pair(k: str, v: Any) -> str:
-        if k in ("content", "contents") and isinstance(v, str) and len(v) > 240:
+        if k in ("content", "contents", "patch") and isinstance(v, str) and len(v) > 240:
             v = f"<{len(v)} chars>"
         return f"{_j(k)}: {_j(v)}"
 
@@ -1669,8 +1751,8 @@ def _tool_command_preview(tool_name: str, tool_args: Any) -> str:
         preferred = [
             "path", "target_directory", "file_path", "command", "args", "url",
             "start_line", "end_line", "pattern", "query", "search", "replace",
-            "old_string", "new_string", "working_dir", "timeout", "temporary",
-            "content", "contents",
+            "old_string", "new_string", "workdir", "timeout_ms", "login",
+            "working_dir", "timeout", "temporary", "patch", "content", "contents",
         ]
         keys: List[str] = []
         for k in preferred:
@@ -1857,6 +1939,7 @@ async def _emit_tool_call_sse(
                 "args": redact_sensitive_tool_obj(res["tool_args"]),
                 "command_preview": _tool_command_preview(res["tool_name"], res["tool_args"]),
                 "result": redact_sensitive_tool_text(res.get("result", "")),
+                "status": redact_sensitive_tool_obj(res.get("tool_status") or {}),
                 "tool_call_id": res.get("tool_id") or "",
                 "tool_call_index": res.get("tool_call_index"),
                 "react_iter": int(react_iter),
@@ -1881,6 +1964,7 @@ async def _emit_live_metrics(state, emit):
         state,
         {
             "type": "process_metrics",
+            "ephemeral": True,
             "tool_calls": int(state.get("_react_ui_tool_count", 0) or 0),
             "tool_failures": int(state.get("_react_ui_tool_fail_count", 0) or 0),
         },
@@ -1926,6 +2010,36 @@ def _tool_result_indicates_failure(_tool_name: str, result: Any) -> bool:
         except ValueError:
             pass
     return False
+
+
+def _tool_result_status(
+    tool_name: str,
+    result: Any,
+    *,
+    failed: Optional[bool] = None,
+    duration_ms: Optional[int] = None,
+) -> Dict[str, Any]:
+    """Structured status metadata while preserving the existing text result API."""
+    text = str(result or "")
+    sample = text if len(text) <= 16_384 else text[:8192] + "\n" + text[-8192:]
+    exit_code = None
+    matches = list(re.finditer(r"(?mi)Exit code:\s*(-?\d+)", sample))
+    if matches:
+        try:
+            exit_code = int(matches[-1].group(1))
+        except (TypeError, ValueError):
+            exit_code = None
+    is_failed = _tool_result_indicates_failure(tool_name, result) if failed is None else bool(failed)
+    status: Dict[str, Any] = {
+        "ok": not is_failed,
+        "truncated": "truncated" in sample.lower() or "截断" in sample,
+        "timed_out": "timed out" in sample.lower() or "timeout" in sample.lower(),
+    }
+    if exit_code is not None:
+        status["exit_code"] = exit_code
+    if duration_ms is not None:
+        status["duration_ms"] = max(0, int(duration_ms))
+    return status
 
 
 # ==================== 节点函数 ====================
@@ -2035,6 +2149,13 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
     state["_react_ui_tool_fail_count"] = 0
 
     session_meta = session_manager._load_metadata(state["session_id"]) or {}
+    # A run uses one immutable executor selection. Configuration mutation
+    # endpoints invalidate the shared cache, while an already-running ReAct
+    # loop remains internally consistent and avoids disk/profile work on every
+    # iteration.
+    _t_run_executor = time.perf_counter()
+    run_executor_config = resolve_executor_config_for_session(state["session_id"])
+    run_executor_config_ms = _timing_ms(_t_run_executor)
     max_react_iter = MAX_REACT_ITER
     if isinstance(session_meta, dict) and session_meta.get("is_subagent"):
         max_react_iter = max(
@@ -2134,10 +2255,11 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
                 )
             _pre_api_timing_mark(pre_api_timings, "token_estimate", _t_pre_api)
             _t_pre_api = time.perf_counter()
-            iter_client, iter_model, iter_max_output_tokens, iter_context_window = resolve_executor_config_for_session(
-                state["session_id"]
-            )
-            _pre_api_timing_mark(pre_api_timings, "resolve_model_config", _t_pre_api)
+            iter_client, iter_model, iter_max_output_tokens, iter_context_window = run_executor_config
+            if iter_count == 1:
+                pre_api_timings["resolve_model_config"] = int(run_executor_config_ms)
+            else:
+                pre_api_timings["resolve_model_config_reuse"] = 0
             if emit:
                 await _push_stream_event(
                     state,
@@ -2328,6 +2450,7 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
                 tool_args = tool_call["args"]
                 tool_id = tool_call["id"]
                 tool_call_index = tool_call.get("index")
+                state["_runtime_stage"] = "running_tool:%s" % tool_name
                 await _raise_if_steer_requested(state, emit, "tool")
 
                 # 工作区放宽 Shell / 网页下载：前端弹窗确认后才进入「执行中」占位
@@ -2381,8 +2504,21 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
                             )
                             return _tool_result_user_denied_ui(tool_name, tool_args, tool_id)
 
-                # 执行前不再推送单独的「执行中」工具占位；最终 tool_call 结果行会直接落到过程区。
+                # Run the final steer check before announcing that execution started.
                 await _raise_if_steer_requested(state, emit, "tool")
+
+                # Arguments are closed and any required approval has completed.
+                # Keep this event ephemeral so the UI can switch the streamed
+                # draft from "generating" to "executing" without a disk write.
+                if emit and tool_name != "context_manage":
+                    await _emit_tool_pending_sse(
+                        emit,
+                        tool_name,
+                        tool_args,
+                        tool_id,
+                        iter_count,
+                        tool_call_index,
+                    )
 
                 # 特殊处理：context_manage（mode=compact | edit_key_context）
                 if tool_name == "context_manage":
@@ -2643,6 +2779,7 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
                 # 普通工具
                 tool_func = tools_dict.get(tool_name)
                 tool_failed = False
+                tool_invoke_started = time.perf_counter()
                 if not tool_func:
                     result = f"未知工具：{tool_name}"
                     tool_failed = True
@@ -2683,6 +2820,15 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
                     finally:
                         clear_run_shell_interrupt_check()
 
+                logger.info(
+                    "tool_execution_timing session=%s tool=%s invoke_ms=%s react_iter=%s",
+                    state.get("session_id", ""),
+                    redact_sensitive_tool_text(tool_name),
+                    _timing_ms(tool_invoke_started),
+                    int(iter_count),
+                )
+                tool_invoke_ms = _timing_ms(tool_invoke_started)
+
                 # 截断结果（三路文本生成：日志用、LLM上下文用、UI用）
                 if tool_name in READ_ONLY_TOOLS:
                     result_str = _wrap_read_only_tool_output_lines(result)
@@ -2699,6 +2845,14 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
                 tool_detail_ui = result_for_ui
 
                 tool_failed = tool_failed or _tool_result_indicates_failure(tool_name, result)
+                execution_metrics.record_tool(
+                    state["session_id"],
+                    str(state.get("_runtime_v2_run_id") or ""),
+                    int(iter_count),
+                    redact_sensitive_tool_text(tool_name),
+                    tool_invoke_ms,
+                    tool_failed,
+                )
 
                 return {
                     "type": "tool",
@@ -2712,6 +2866,12 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
                     "tool_detail_ui": tool_detail_ui,
                     "result_for_log": result_for_log,
                     "tool_failed": tool_failed,
+                    "tool_status": _tool_result_status(
+                        tool_name,
+                        result_str,
+                        failed=tool_failed,
+                        duration_ms=tool_invoke_ms,
+                    ),
                 }
 
 
@@ -2737,9 +2897,33 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
                 estimated_tokens=int(full_input_est),
                 model=iter_model,
             )
-            # 通知前端：LLM 推理开始
+            _metrics_run_id = str(state.get("_runtime_v2_run_id") or "")
+            execution_metrics.record_request(
+                state["session_id"], _metrics_run_id, int(iter_count),
+                model=iter_model,
+                status="waiting_first_token",
+                context={
+                    "estimated_tokens": int(full_input_est),
+                    "context_window": int(iter_context_window),
+                    "messages": len(llm_messages),
+                    "tools": len(combined_tools),
+                    "max_output_tokens": int(iter_max_output_tokens),
+                    "source": token_estimate_source,
+                },
+            )
+            execution_metrics.record_phase(
+                state["session_id"], _metrics_run_id, int(iter_count),
+                "pre_api", pre_api_timings,
+                total_ms=sum(int(v or 0) for v in pre_api_timings.values()),
+            )
+            # Preserve the existing lightweight thinking indicator; detailed
+            # phase diagnostics stay in backend timing logs only.
             if emit:
-                await _push_stream_event(state, {"type": "status", "content": "正在思考中...", "ephemeral": True}, emit=emit)
+                await _push_stream_event(
+                    state,
+                    {"type": "status", "content": "正在思考中...", "ephemeral": True},
+                    emit=emit,
+                )
                 await asyncio.sleep(0)
             llm_messages_to_send = strip_reasoning_for_api_request(llm_messages)
             llm_stream_seq += 1
@@ -2818,6 +3002,36 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
 
             if EXECUTOR_STREAM and emit:
                 t_llm_start = time.monotonic()
+                state["_runtime_stage"] = "waiting_model"
+                logger.info(
+                    "llm_worker_started session=%s react_iter=%s model=%s",
+                    state["session_id"],
+                    int(iter_count),
+                    iter_model,
+                )
+                def _run_stream_worker_logged():
+                    try:
+                        return run_chat_completion_stream_worker(
+                            sync_q,
+                            iter_client,
+                            iter_model,
+                            llm_messages_to_send,
+                            tools=combined_tools,
+                            temperature=EXECUTOR_TEMPERATURE,
+                            max_tokens=iter_max_output_tokens,
+                            extra_body=EXECUTOR_EXTRA_BODY,
+                            parallel_tool_calls=True,
+                            reasoning_effort=EXECUTOR_REASONING_EFFORT,
+                            should_abort=stream_abort_event.is_set,
+                            transport_observer=executor_http_client,
+                        )
+                    finally:
+                        logger.info(
+                            "llm_worker_completed session=%s react_iter=%s model=%s",
+                            state["session_id"],
+                            int(iter_count),
+                            iter_model,
+                        )
                 async_stream_q: asyncio.Queue = asyncio.Queue()
                 sync_q = _ThreadToAsyncQueue(asyncio.get_running_loop(), async_stream_q)
                 stream_abort_event = threading.Event()
@@ -2831,20 +3045,7 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
                     _stream_model_switch_status,
                 )
                 stream_task = asyncio.create_task(
-                    asyncio.to_thread(
-                        run_chat_completion_stream_worker,
-                        sync_q,
-                        iter_client,
-                        iter_model,
-                        llm_messages_to_send,
-                        tools=combined_tools,
-                        temperature=EXECUTOR_TEMPERATURE,
-                        max_tokens=iter_max_output_tokens,
-                        extra_body=EXECUTOR_EXTRA_BODY,
-                        parallel_tool_calls=True,
-                        reasoning_effort=EXECUTOR_REASONING_EFFORT,
-                        should_abort=stream_abort_event.is_set,
-                    )
+                    asyncio.to_thread(_run_stream_worker_logged)
                 )
                 stream_error: Optional[BaseException] = None
                 try:
@@ -2877,9 +3078,53 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
                             step = str(payload_dict.get("step") or "").strip()
                             if step:
                                 stream_timing_events.append(dict(payload_dict))
+                                execution_metrics.record_stream_event(
+                                    state["session_id"],
+                                    str(state.get("_runtime_v2_run_id") or ""),
+                                    int(iter_count),
+                                    payload_dict,
+                                )
+                                if step == "transport_breakdown":
+                                    transport_parts = []
+                                    transport_values = {}
+                                    for key, value in payload_dict.items():
+                                        if key in {"step", "model"}:
+                                            continue
+                                        if isinstance(value, (int, float)):
+                                            transport_parts.append(f"{key}={int(value)}ms")
+                                            if key != "ms_since_api_start":
+                                                transport_values[key] = int(value)
+                                    execution_metrics.record_phase(
+                                        state["session_id"],
+                                        str(state.get("_runtime_v2_run_id") or ""),
+                                        int(iter_count),
+                                        "network_transport",
+                                        transport_values,
+                                        total_ms=int(payload_dict.get("trace_elapsed_ms") or payload_dict.get("ms_since_api_start") or 0),
+                                    )
+                                    logger.info(
+                                        "http_transport_timing session=%s react_iter=%s model=%s %s",
+                                        state["session_id"],
+                                        int(iter_count),
+                                        redact_sensitive_tool_text(str(iter_model or "")),
+                                        " ".join(transport_parts),
+                                    )
                             continue
                         if tag == "usage":
                             llm_call_usage = payload
+                            usage_timing = dict((payload or {}).get("_timing") or {})
+                            measured_tps_ms = int(usage_timing.get("measured_total_ms") or 0)
+                            measured_tps = round(
+                                int((payload or {}).get("completion_tokens", 0) or 0)
+                                / max(0.001, measured_tps_ms / 1000.0),
+                                1,
+                            ) if measured_tps_ms > 0 else 0.0
+                            execution_metrics.record_usage(
+                                state["session_id"],
+                                str(state.get("_runtime_v2_run_id") or ""),
+                                int(iter_count),
+                                dict(payload or {}),
+                            )
                             record_prompt_tokens_for_messages(
                                 state["session_id"],
                                 llm_messages_to_send,
@@ -2903,7 +3148,10 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
                                     "input_tokens": int((payload or {}).get("prompt_tokens", 0) or 0),
                                     "output_tokens": int((payload or {}).get("completion_tokens", 0) or 0),
                                     "threshold": int(iter_context_window),
-                                    "tokens_per_sec": round(int((payload or {}).get("completion_tokens", 0) or 0) / max(0.001, time.monotonic() - t_llm_start), 1),
+                                    "tokens_per_sec": measured_tps,
+                                    "first_token_wait_ms": int(usage_timing.get("first_token_wait_ms") or 0),
+                                    "token_generation_ms": int(usage_timing.get("token_generation_ms") or 0),
+                                    "usage_return_ms": int(usage_timing.get("usage_return_ms") or 0),
                                     "model": actual_response_model or iter_model,
                                     "context_token_mode": state.get("_context_token_mode", "hybrid"),
                                 })
@@ -2922,6 +3170,14 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
                             turn = payload
                             continue
                         if tag == "tool_call_delta" and payload:
+                            _tool_batch_completed_at = state.pop("_tool_batch_completed_at", None)
+                            if _tool_batch_completed_at is not None:
+                                logger.info(
+                                    "tool_to_next_llm_first_delta_timing session=%s react_iter=%s total=%sms delta_type=tool_call",
+                                    state["session_id"],
+                                    int(iter_count),
+                                    _timing_ms(float(_tool_batch_completed_at)),
+                                )
                             tool_delta_seq += 1
                             # 取消定时器
                             if thinking_timer_task and not thinking_timer_task.done():
@@ -2952,6 +3208,14 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
                             streamed_this_call = True
                             continue
                         if tag == "reasoning" and payload:
+                            _tool_batch_completed_at = state.pop("_tool_batch_completed_at", None)
+                            if _tool_batch_completed_at is not None:
+                                logger.info(
+                                    "tool_to_next_llm_first_delta_timing session=%s react_iter=%s total=%sms delta_type=reasoning",
+                                    state["session_id"],
+                                    int(iter_count),
+                                    _timing_ms(float(_tool_batch_completed_at)),
+                                )
                             streamed_reasoning_parts.append(str(payload))
                             llm_delta_seq += 1
                             # 启动/重置定时器
@@ -2973,6 +3237,14 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
                             await asyncio.sleep(0)
                             streamed_this_call = True
                         elif tag == "content" and payload:
+                            _tool_batch_completed_at = state.pop("_tool_batch_completed_at", None)
+                            if _tool_batch_completed_at is not None:
+                                logger.info(
+                                    "tool_to_next_llm_first_delta_timing session=%s react_iter=%s total=%sms delta_type=content",
+                                    state["session_id"],
+                                    int(iter_count),
+                                    _timing_ms(float(_tool_batch_completed_at)),
+                                )
                             streamed_response_parts.append(str(payload))
                             llm_delta_seq += 1
                             # 启动/重置定时器
@@ -3013,6 +3285,13 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
                         actual_response_model or iter_model,
                         stream_timing_events,
                     )
+                    logger.info(
+                        "llm_result_consumed session=%s react_iter=%s model=%s",
+                        state["session_id"],
+                        int(iter_count),
+                        actual_response_model or iter_model,
+                    )
+                    state["_runtime_stage"] = "react"
                 if steer_interrupted_this_call:
                     for _idx, _task in list(early_tool_tasks.items()):
                         if not _task.done():
@@ -3111,6 +3390,11 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
                     _collect_model_switch_status,
                 )
                 try:
+                    if stream_error is not None and _classify_api_error(stream_error).get("code") == "NET":
+                        # Do not immediately duplicate a failed streaming request
+                        # through the non-streaming fallback. The bounded outer
+                        # reconnect loop owns transport retries and UI cleanup.
+                        raise stream_error
                     t_llm_fallback_start = time.monotonic()
                     api_resp = await _await_steerable(
                         state,
@@ -3188,6 +3472,24 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
                     if _cls.get("code") == "NET":
                         attempt = int(state.get("_network_reconnect_attempts", 0) or 0) + 1
                         state["_network_reconnect_attempts"] = attempt
+                        if attempt > NETWORK_RECONNECT_MAX_ATTEMPTS:
+                            if emit:
+                                await _push_stream_event(
+                                    state,
+                                    {
+                                        "type": "status",
+                                        "content": "快速重连已达 %s 次，任务暂停并等待网络恢复…" % NETWORK_RECONNECT_MAX_ATTEMPTS,
+                                        "network_waiting": True,
+                                        "ephemeral": True,
+                                    },
+                                    emit=emit,
+                                )
+                            if not await _wait_for_network_recovery(state, emit, iter_client):
+                                final_content = "任务已由用户中断。"
+                                break
+                            iter_count = max(0, iter_count - 1)
+                            state["_current_react_iter"] = int(iter_count)
+                            continue
                         delay = min(30.0, 2.0 * (2 ** min(attempt - 1, 4)))
                         if emit:
                             await _push_stream_event(
@@ -3650,6 +3952,14 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
                     _t_tool_post = time.perf_counter()
                     if res.get("type") == "tool":
                         res = redact_sensitive_tool_obj(res)
+                        res.setdefault(
+                            "tool_status",
+                            _tool_result_status(
+                                str(res.get("tool_name") or ""),
+                                res.get("result"),
+                                failed=bool(res.get("tool_failed")),
+                            ),
+                        )
                     tool_post_timings["redact_result"] = _timing_ms(_t_tool_post)
                     _pipeline_step_timing_log("tool_result_post_step_timing", state["session_id"], "redact_result", tool_post_timings["redact_result"], react_iter=int(iter_count))
 
@@ -3696,6 +4006,7 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
                             "args": redact_sensitive_tool_obj(res["tool_args"]),
                             "command_preview": _tool_command_preview(res["tool_name"], res["tool_args"]),
                             "result": redact_sensitive_tool_text(res["result"]),
+                            "status": redact_sensitive_tool_obj(res.get("tool_status") or {}),
                             "tool_call_id": res.get("tool_id") or "",
                             "tool_call_index": res.get("tool_call_index"),
                             "react_iter": int(iter_count),
@@ -3716,10 +4027,23 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
                         tool_failed=bool(res.get("tool_failed")),
                         sse_emitted=bool(isinstance(res, dict) and res.get("_sse_emitted")),
                     )
+                    execution_metrics.record_phase(
+                        state["session_id"],
+                        str(state.get("_runtime_v2_run_id") or ""),
+                        int(iter_count),
+                        "tool_result_post",
+                        {
+                            f"{str(res.get('tool_name') or 'tool')}:{key}": value
+                            for key, value in tool_post_timings.items()
+                        },
+                        total_ms=sum(int(v or 0) for v in tool_post_timings.values()),
+                    )
 
                 _t_tool_post_all = time.perf_counter()
                 state["llm_history"] = llm_history
                 state["work_messages"] = work_messages
+                state["_runtime_stage"] = "persist_after_tools"
+                state["_tool_batch_completed_at"] = time.perf_counter()
                 _persist_state(state)
                 persist_after_tools_ms = _timing_ms(_t_tool_post_all)
                 _pipeline_step_timing_log("tool_to_next_api_step_timing", state["session_id"], "persist_state", persist_after_tools_ms, react_iter=int(iter_count), tools=len(tool_calls_list or []))
@@ -3734,6 +4058,11 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
                         react_iter=int(iter_count),
                         tools=len(tool_calls_list or []),
                         outcome="steer_restart",
+                    )
+                    execution_metrics.record_phase(
+                        state["session_id"], str(state.get("_runtime_v2_run_id") or ""), int(iter_count),
+                        "tool_to_next_api", {"persist_state": persist_after_tools_ms, "steer_check": steer_check_ms},
+                        total_ms=int(persist_after_tools_ms + steer_check_ms), outcome="steer_restart",
                     )
                     state.pop("_steer_rollback_marker", None)
                     _reset_steer_control(state)
@@ -3753,7 +4082,13 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
                     tools=len(tool_calls_list or []),
                     outcome="next_react_iter",
                 )
+                execution_metrics.record_phase(
+                    state["session_id"], str(state.get("_runtime_v2_run_id") or ""), int(iter_count),
+                    "tool_to_next_api", {"persist_state": persist_after_tools_ms, "steer_check": steer_check_ms},
+                    total_ms=int(persist_after_tools_ms + steer_check_ms), outcome="next_react_iter",
+                )
                 state.pop("_steer_rollback_marker", None)
+                state["_runtime_stage"] = "react"
 
             # ---------- 2.8 重复检测（须在工具结果写入 llm_history 之后，避免 OpenAI 报 tool_calls 顺序错误） ----------
             # 文本重复检测只对比「正文」；思考单独存在于 reasoning 字段，不参与与 last_response 的混比
@@ -4242,6 +4577,8 @@ async def astream_events(
                 mirror.mirror_run_interrupted(session_id, runtime_v2_run_id, payload)
             elif event_type == "run_failed":
                 mirror.mirror_run_failed(session_id, str((payload or {}).get("error") or "unknown error"), runtime_v2_run_id, payload)
+            else:
+                mirror.append(session_id, event_type, payload or {}, run_id=runtime_v2_run_id)
         except Exception as mirror_error:
             logger.debug("Runtime V2 mirror run event failed: %s", mirror_error)
 
@@ -4259,17 +4596,49 @@ async def astream_events(
         runtime_committed = bool(ev.get("_runtime_v2_committed"))
         if ev.get("type") == "final" and not runtime_committed:
             runtime_committed = _runtime_v2_commit_assistant_final(state, str(ev.get("content") or ""))
-        if should_persist_ui_event(ev) and not runtime_committed:
-            session_manager.append_ui_event(session_id, ev)
         public_event = {k: v for k, v in ev.items() if k != "_runtime_v2_committed"}
+        persist = should_persist_ui_event(ev) and not runtime_committed
+        if persist and ev.get("type") != "tool_call":
+            session_manager.append_ui_event(session_id, ev)
         await publish_session_event(session_id, public_event)
         await queue.put(public_event)
+        if persist and ev.get("type") == "tool_call":
+            await asyncio.to_thread(session_manager.append_ui_event, session_id, ev)
+
+    power_guard = AgentRunPowerGuard()
+
+    async def on_runtime_resume(resume: RuntimeResume) -> None:
+        state["_accumulated_suspend_seconds"] = power_guard.monitor.accumulated_suspend_seconds
+        stage = str(state.get("_runtime_stage") or "unknown")
+        payload = {
+            "gap_seconds": round(resume.gap_seconds, 3),
+            "suspended_seconds": round(resume.suspended_seconds, 3),
+            "accumulated_suspend_seconds": round(power_guard.monitor.accumulated_suspend_seconds, 3),
+            "previous_stage": stage,
+        }
+        logger.warning(
+            "runtime_resumed session=%s run_id=%s suspended_seconds=%.3f previous_stage=%s",
+            session_id,
+            runtime_v2_run_id,
+            resume.suspended_seconds,
+            stage,
+        )
+        await asyncio.to_thread(mirror_runtime_v2, "runtime_resumed", payload)
+        await emit({
+            "type": "runtime_resumed",
+            "content": "检测到系统或进程暂停约 %.0f 秒，任务已恢复" % resume.suspended_seconds,
+            "ephemeral": True,
+            **payload,
+        })
+        power_guard.monitor.mark_progress()
 
     async def runner():
         nonlocal state
         completed = False
         terminal_event = {"type": "run_interrupted", "ephemeral": True}
         try:
+            await power_guard.start(on_runtime_resume)
+            execution_metrics.start_run(session_id, runtime_v2_run_id, "chat")
             # 用户气泡由前端已画；此处只写入与流顺序一致的持久化，供刷新与 SSE 同源
             run_start_timings: Dict[str, int] = {}
             _t_run_start = time.perf_counter()
@@ -4397,6 +4766,11 @@ async def astream_events(
                 run_id=runtime_v2_run_id,
                 final_chars=len(str(state.get("final_response") or "")),
             )
+            execution_metrics.record_phase(
+                session_id, runtime_v2_run_id, max(1, int(state.get("_current_react_iter") or 1)),
+                "final_pipeline", final_timings,
+                total_ms=sum(int(v or 0) for v in final_timings.values()),
+            )
             completed = True
         except asyncio.CancelledError:
             terminal_event = {"type": "run_interrupted", "run_id": runtime_v2_run_id, "ephemeral": True}
@@ -4409,6 +4783,12 @@ async def astream_events(
             session_manager.mark_session_unread_result(session_id, status="failed")
             raise
         finally:
+            await power_guard.close()
+            execution_metrics.finish_run(
+                session_id,
+                runtime_v2_run_id,
+                "finished" if completed else ("failed" if terminal_event.get("type") == "run_failed" else "interrupted"),
+            )
             _clear_steer_run_control(session_id, steer_control)
             if completed:
                 mirror_runtime_v2("run_finished", {"mode": "chat"})
@@ -4460,6 +4840,7 @@ async def astream_events_continuation(
     session_id: str,
     should_stop: Optional[Callable[[str], bool]] = None,
     require_pending_subagents: bool = True,
+    recovery_reason: str = "",
 ) -> AsyncGenerator[Dict[str, Any], None]:
     """
     后台 subagent 完成后续接父 Agent：不追加用户气泡与 ui_events user 事件，
@@ -4509,6 +4890,16 @@ async def astream_events_continuation(
     )
     _pre_api_timing_mark(pre_run_timings, "sanitize_histories", _t_pre)
 
+    if str(recovery_reason or "").strip():
+        recovery_note = SystemMessage(content=(
+            "[Runtime recovery] The previous run stopped unexpectedly and is now resuming. "
+            "Continue from the persisted state. Before repeating any write, external side effect, "
+            "message send, purchase, or destructive action whose completion is uncertain, first "
+            "inspect or verify whether it already succeeded. Do not duplicate an uncertain side effect."
+        ))
+        prev_work_messages.append(recovery_note)
+        prev_llm_history.append(recovery_note)
+
     user_input = ""
     for msg in reversed(prev_llm_history):
         if isinstance(msg, UserMessage):
@@ -4552,6 +4943,8 @@ async def astream_events_continuation(
                 mirror.mirror_run_interrupted(session_id, runtime_v2_run_id, payload)
             elif event_type == "run_failed":
                 mirror.mirror_run_failed(session_id, str((payload or {}).get("error") or "unknown error"), runtime_v2_run_id, payload)
+            else:
+                mirror.append(session_id, event_type, payload or {}, run_id=runtime_v2_run_id)
         except Exception as mirror_error:
             logger.debug("Runtime V2 mirror continuation run event failed: %s", mirror_error)
 
@@ -4567,17 +4960,49 @@ async def astream_events_continuation(
         runtime_committed = bool(ev.get("_runtime_v2_committed"))
         if ev.get("type") == "final" and not runtime_committed:
             runtime_committed = _runtime_v2_commit_assistant_final(state, str(ev.get("content") or ""))
-        if should_persist_ui_event(ev) and not runtime_committed:
-            session_manager.append_ui_event(session_id, ev)
         public_event = {k: v for k, v in ev.items() if k != "_runtime_v2_committed"}
+        persist = should_persist_ui_event(ev) and not runtime_committed
+        if persist and ev.get("type") != "tool_call":
+            session_manager.append_ui_event(session_id, ev)
         await publish_session_event(session_id, public_event)
         await queue.put(public_event)
+        if persist and ev.get("type") == "tool_call":
+            await asyncio.to_thread(session_manager.append_ui_event, session_id, ev)
+
+    power_guard = AgentRunPowerGuard()
+
+    async def on_runtime_resume(resume: RuntimeResume) -> None:
+        state["_accumulated_suspend_seconds"] = power_guard.monitor.accumulated_suspend_seconds
+        stage = str(state.get("_runtime_stage") or "unknown")
+        payload = {
+            "gap_seconds": round(resume.gap_seconds, 3),
+            "suspended_seconds": round(resume.suspended_seconds, 3),
+            "accumulated_suspend_seconds": round(power_guard.monitor.accumulated_suspend_seconds, 3),
+            "previous_stage": stage,
+        }
+        logger.warning(
+            "runtime_resumed session=%s run_id=%s suspended_seconds=%.3f previous_stage=%s",
+            session_id,
+            runtime_v2_run_id,
+            resume.suspended_seconds,
+            stage,
+        )
+        await asyncio.to_thread(mirror_runtime_v2, "runtime_resumed", payload)
+        await emit({
+            "type": "runtime_resumed",
+            "content": "Runtime resumed after approximately %.0f seconds" % resume.suspended_seconds,
+            "ephemeral": True,
+            **payload,
+        })
+        power_guard.monitor.mark_progress()
 
     async def runner():
         nonlocal state
         completed = False
         terminal_event = {"type": "run_interrupted", "ephemeral": True}
         try:
+            await power_guard.start(on_runtime_resume)
+            execution_metrics.start_run(session_id, runtime_v2_run_id, "continuation")
             run_start_timings: Dict[str, int] = {}
             _t_run_start = time.perf_counter()
             mirror_runtime_v2("run_started", {"mode": "continuation"})
@@ -4649,6 +5074,11 @@ async def astream_events_continuation(
                 mode="continuation",
                 final_chars=len(str(state.get("final_response") or "")),
             )
+            execution_metrics.record_phase(
+                session_id, runtime_v2_run_id, max(1, int(state.get("_current_react_iter") or 1)),
+                "final_pipeline", final_timings,
+                total_ms=sum(int(v or 0) for v in final_timings.values()),
+            )
             completed = True
         except asyncio.CancelledError:
             terminal_event = {"type": "run_interrupted", "ephemeral": True}
@@ -4661,6 +5091,12 @@ async def astream_events_continuation(
             session_manager.mark_session_unread_result(session_id, status="failed")
             raise
         finally:
+            await power_guard.close()
+            execution_metrics.finish_run(
+                session_id,
+                runtime_v2_run_id,
+                "finished" if completed else ("failed" if terminal_event.get("type") == "run_failed" else "interrupted"),
+            )
             _clear_steer_run_control(session_id, steer_control)
             if completed:
                 mirror_runtime_v2("run_finished", {"mode": "continuation"})

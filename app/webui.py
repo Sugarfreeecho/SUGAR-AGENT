@@ -32,11 +32,13 @@ from session_event_bus import subscribe_session_events
 import agent_mcp
 from agent_tools import discover_skills
 import model_profiles
+import execution_metrics
 from path_picker_util import pick_native_path
 
 _PATH_PICKER_JS_PATH = Path(__file__).resolve().parent / "templates" / "static" / "myagent_path_picker.js"
 _TEMPLATES_DIR = Path(__file__).resolve().parent / "templates"
 _DIST_INDEX = _TEMPLATES_DIR / "dist" / "index.html"
+_DIST_EXECUTION_DASHBOARD = _TEMPLATES_DIR / "dist" / "execution-dashboard.html"
 _DIST_ASSETS = _TEMPLATES_DIR / "dist" / "assets"
 _VIEWABLE_IMAGE_SUFFIXES = {
     ".png",
@@ -75,9 +77,12 @@ UI_LOG_TRUNCATE_KEEP_LINES = max(10, int(os.getenv("UI_LOG_TRUNCATE_KEEP_LINES",
 _active_chat_by_session: dict[str, int] = {}
 # 上次活跃时间戳（按 session），用于清理僵尸计数器（浏览器非正常关闭导致未递减）
 _active_chat_last_seen: dict[str, float] = {}
+# Read-only reconnect/observer streams are deliberately separate from run
+# producers. An observer must never keep an orphaned run "active" or cause 409.
+_observer_streams_by_session: dict[str, int] = {}
 
 _CHAT_ACTIVE_TIMEOUT_SEC = int(os.getenv("CHAT_ACTIVE_TIMEOUT_SEC", "300"))
-_RUNTIME_V2_ORPHAN_GRACE_SEC = int(os.getenv("RUNTIME_V2_ORPHAN_GRACE_SEC", "1800"))
+_RUNTIME_V2_ORPHAN_GRACE_SEC = int(os.getenv("RUNTIME_V2_ORPHAN_GRACE_SEC", "0"))
 _chat_start_lock = threading.RLock()
 _chat_starting_by_session: dict[str, tuple[float, str]] = {}
 logger = logging.getLogger(__name__)
@@ -524,6 +529,21 @@ def _runtime_v2_context_snapshot(sid: str) -> dict:
     return context if isinstance(context, dict) else {}
 
 
+def _runtime_v2_auto_resume_pending(sid: str) -> bool:
+    snapshot = _runtime_v2_snapshot(sid)
+    runs = snapshot.get("runs") if isinstance(snapshot, dict) else None
+    if not isinstance(runs, dict) or not runs:
+        return False
+    rows = [run for run in runs.values() if isinstance(run, dict)]
+    if not rows:
+        return False
+    latest = max(rows, key=lambda run: int(run.get("finished_seq") or run.get("heartbeat_seq") or run.get("started_seq") or 0))
+    return (
+        str(latest.get("status") or "") == "interrupted"
+        and str(latest.get("reason") or "") in {"no_local_activity", "orphaned", "process_restart"}
+    )
+
+
 def _empty_todo_plan_snapshot(source: str) -> dict:
     return {
         "has_plan": False,
@@ -583,6 +603,16 @@ def _runtime_v2_chat_sse_payload(session_id: str, event_dict: dict) -> Optional[
                 "run_id": run_id,
                 "error": payload.get("error") or "",
                 "ephemeral": True,
+            }
+        elif event.type == "runtime_resumed":
+            resume_payload = dict(event.payload or {})
+            seconds = max(0.0, float(resume_payload.get("suspended_seconds") or 0.0))
+            ui_event = {
+                "type": "runtime_resumed",
+                "run_id": run_id,
+                "content": "检测到系统或进程暂停约 %.0f 秒，任务已恢复" % seconds,
+                "ephemeral": True,
+                **resume_payload,
             }
         elif event.type == "message_user":
             # Regular /chat user messages are rendered optimistically in the
@@ -896,6 +926,16 @@ async def get_index(request: Request):
             "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
             "Pragma": "no-cache",
         },
+    )
+
+
+@fastapi_app.get("/execution-dashboard", response_class=HTMLResponse)
+async def get_execution_dashboard():
+    if not _DIST_EXECUTION_DASHBOARD.is_file():
+        return HTMLResponse("<h1>Execution dashboard is not built</h1>", status_code=503)
+    return HTMLResponse(
+        _DIST_EXECUTION_DASHBOARD.read_text(encoding="utf-8"),
+        headers={"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0"},
     )
 
 
@@ -1560,12 +1600,21 @@ async def get_session_detail(
             s["stream_active"] = bool(run_state["stream_active"])
             s["run_active"] = bool(run_state["run_active"])
             s["run_started_at"] = run_state["run_started_at"]
+            try:
+                s["react_can_continue"] = session_manager.can_continue_react_session(str(sid))
+            except Exception:
+                s["react_can_continue"] = False
+            s["react_auto_resume"] = bool(
+                s["react_can_continue"] and _runtime_v2_auto_resume_pending(str(sid))
+            )
             if include_subagents:
                 _attach_subagent_sidebar_fields(s, str(sid))
         else:
             s["stream_active"] = False
             s["run_active"] = False
             s["run_started_at"] = None
+            s["react_can_continue"] = False
+            s["react_auto_resume"] = False
         return JSONResponse(content=s)
 
     return await asyncio.to_thread(_build_detail_response)
@@ -2397,7 +2446,18 @@ async def chat(
     if sid:
         start_token = _reserve_session_chat_start(sid, run_id) or ""
         if not start_token:
-            return JSONResponse(content={"ok": False, "reason": "busy"}, status_code=409)
+            run_state = _session_run_state_fields(sid)
+            return JSONResponse(
+                content={
+                    "ok": False,
+                    "reason": "busy",
+                    "session_id": sid,
+                    "requested_run_id": run_id,
+                    "active_run": run_state.get("active_run"),
+                    "stream_connections": int(run_state.get("stream_connections") or 0),
+                },
+                status_code=409,
+            )
         session_manager.clear_interrupt(sid, run_id)
 
     def should_stop(sid_: str) -> bool:
@@ -2564,9 +2624,7 @@ async def stream_session_events(
         return JSONResponse(content={"error": "missing session_id"}, status_code=400)
 
     async def runtime_v2_event_generator():
-        _active_chat_by_session[sid] = _active_chat_by_session.get(sid, 0) + 1
-        import time as _time_stamp
-        _active_chat_last_seen[sid] = _time_stamp.time()
+        _observer_streams_by_session[sid] = _observer_streams_by_session.get(sid, 0) + 1
         cursor = int(after_index) if after_index is not None else -1
         try:
             try:
@@ -2609,11 +2667,11 @@ async def stream_session_events(
             except asyncio.CancelledError:
                 return
         finally:
-            n = _active_chat_by_session.get(sid, 1) - 1
+            n = _observer_streams_by_session.get(sid, 1) - 1
             if n <= 0:
-                _active_chat_by_session.pop(sid, None)
+                _observer_streams_by_session.pop(sid, None)
             else:
-                _active_chat_by_session[sid] = n
+                _observer_streams_by_session[sid] = n
 
     try:
         from runtime_v2 import runtime_v2_primary
@@ -2628,9 +2686,7 @@ async def stream_session_events(
         logger.debug("Runtime V2 stream path check failed for %s: %s", sid, exc)
 
     async def event_generator():
-        _active_chat_by_session[sid] = _active_chat_by_session.get(sid, 0) + 1
-        import time as _time_stamp
-        _active_chat_last_seen[sid] = _time_stamp.time()
+        _observer_streams_by_session[sid] = _observer_streams_by_session.get(sid, 0) + 1
         try:
             async for event in subscribe_session_events(sid, replay_recent=True):
                 if await request.is_disconnected():
@@ -2644,11 +2700,11 @@ async def stream_session_events(
         except asyncio.CancelledError:
             return
         finally:
-            n = _active_chat_by_session.get(sid, 1) - 1
+            n = _observer_streams_by_session.get(sid, 1) - 1
             if n <= 0:
-                _active_chat_by_session.pop(sid, None)
+                _observer_streams_by_session.pop(sid, None)
             else:
-                _active_chat_by_session[sid] = n
+                _observer_streams_by_session[sid] = n
 
     return StreamingResponse(
         event_generator(),
@@ -2658,7 +2714,11 @@ async def stream_session_events(
 
 
 @fastapi_app.post("/sessions/{session_id}/continue")
-async def continue_react_session(session_id: str, request: Request):
+async def continue_react_session(
+    session_id: str,
+    request: Request,
+    recovery: bool = Query(False),
+):
     """Continue a parent ReAct loop that has no final answer yet."""
     sid = (session_id or "").strip()
     if not sid:
@@ -2681,6 +2741,7 @@ async def continue_react_session(session_id: str, request: Request):
                     sid,
                     should_stop=should_stop,
                     require_pending_subagents=False,
+                    recovery_reason="process_or_network_interruption" if recovery else "",
                 ):
                     if await request.is_disconnected():
                         break
@@ -3218,6 +3279,24 @@ async def clear_session_todo_plan(session_id: str):
     return JSONResponse(content={"ok": ok})
 
 
+@fastapi_app.get("/sessions/{session_id}/execution-metrics")
+async def get_session_execution_metrics(session_id: str):
+    sid = str(session_id or "").strip()
+    if not sid:
+        return JSONResponse({"ok": False, "error": "missing session_id"}, status_code=400)
+    return JSONResponse({"ok": True, "data": execution_metrics.snapshot(sid)})
+
+
+@fastapi_app.get("/api/execution-metrics")
+async def get_all_execution_metrics():
+    names = {
+        str(row.get("id") or ""): str(row.get("name") or row.get("id") or "")
+        for row in list(session_manager.index)
+        if isinstance(row, dict) and row.get("id")
+    }
+    return JSONResponse({"ok": True, "data": execution_metrics.snapshot_all(names)})
+
+
 @fastapi_app.get("/sessions/{session_id}/context_tokens")
 async def get_session_context_tokens(session_id: str):
     """
@@ -3704,6 +3783,7 @@ _ENV_GROUP_ORDER: list[tuple[str, str, list[str]]] = [
             "WEB_DOWNLOAD_MAX_BYTES",
             "OPENAI_HTTP_TIMEOUT",
             "OPENAI_MAX_RETRIES",
+            "NETWORK_RECONNECT_MAX_ATTEMPTS",
             "OPENAI_RETRY_BASE_SEC",
         ],
     ),
@@ -3717,6 +3797,7 @@ _ENV_GROUP_ORDER: list[tuple[str, str, list[str]]] = [
             "NODE_HOME",
             "NVM_SYMLINK",
             "RUN_SHELL_USE_BASH",
+            "RUN_CLI_BASH_LOGIN",
             "RUN_SHELL_BASH",
         ],
     ),
@@ -3760,8 +3841,11 @@ _ENV_GROUP_ORDER: list[tuple[str, str, list[str]]] = [
             "LOG_TRUNCATE_KEEP_CHARS",
             "TOOL_RESULT_TRUNCATE_KEEP_CHARS",
             "GREP_MAX_MATCH_LINES",
+            "GREP_USE_RIPGREP",
+            "GREP_TIMEOUT_SEC",
             "GLOB_MAX_MATCHES",
             "LS_MAX_ENTRIES",
+            "LS_INCLUDE_LINE_COUNTS",
             "READ_FILE_RANGE_MAX_BYTES",
             "MICRO_SHRINK_REASONING_CHARS",
             "MICRO_SHRINK_ASSISTANT_CHARS",
@@ -3806,6 +3890,7 @@ _ENV_HINTS: dict[str, str] = {
     "TOOL_UI_APPROVAL_WAIT_SEC": "等待用户在 UI 内确认的最长时间（秒），超时视为拒绝。",
     "OPENAI_HTTP_TIMEOUT": "兼容 API 请求超时（秒）。",
     "OPENAI_MAX_RETRIES": "可重试错误时的最大重试次数。",
+    "NETWORK_RECONNECT_MAX_ATTEMPTS": "模型网络错误的快速重连次数；达到后转为低频等待网络恢复，不结束任务。",
     "OPENAI_RETRY_BASE_SEC": "重试基础退避时间（秒）。",
     "WORK_DIR": "工作区根目录（文件工具沙箱）。",
     "SKILLS_DIR": "技能包目录（默认可于 WORK_DIR 下）。",
@@ -3813,6 +3898,7 @@ _ENV_HINTS: dict[str, str] = {
     "NODE_HOME": "可选：prepend 到子进程 PATH 的 Node 安装目录。",
     "NVM_SYMLINK": "nvm-windows 当前 node 的 symlink 目录（可选）。",
     "RUN_SHELL_USE_BASH": "Windows 下是否优先用 Git Bash 执行 shell（0=跳过 Git Bash，使用 PowerShell）。",
+    "RUN_CLI_BASH_LOGIN": "是否使用 bash -l 登录 shell；默认 0 以减少每次命令的启动开销。",
     "RUN_SHELL_BASH": "bash.exe 路径（可选）。",
     "MAX_REACT_ITER": "ReAct 主循环最大迭代轮数。",
     "VERBOSE_LOGGING": "是否输出更详细的运行日志。",
@@ -3831,9 +3917,12 @@ _ENV_HINTS: dict[str, str] = {
     "TOOL_RESULT_TRUNCATE_KEEP_CHARS": "单条工具结果触发落盘的字符阈值；超过该值时完整结果落盘，UI/LLM 保留头部一半字符并在截断结果首尾提示路径。",
     "LLM_CONTEXT_TRUNCATE_KEEP_CHARS": "旧变量名，仍兼容读取；建议改用 TOOL_RESULT_TRUNCATE_KEEP_CHARS。",
     "GREP_MAX_MATCH_LINES": "grep 最多返回的匹配行数（跨文件累计）。",
+    "GREP_USE_RIPGREP": "优先使用 ripgrep（rg）加速搜索；不可用或正则不兼容时自动回退 Python。",
+    "GREP_TIMEOUT_SEC": "ripgrep 单次搜索超时秒数。",
     "GLOB_MAX_MATCHES": "glob 最多返回的路径条数。",
     "LS_MAX_ENTRIES": "ls/list_dir 单层目录最多列出的条目数。",
-    "READ_FILE_RANGE_MAX_BYTES": "使用 start_line/end_line 按行读取时，文件超过该字节则拒绝（避免 readlines 一次性载入巨型文件）。",
+    "LS_INCLUDE_LINE_COUNTS": "是否读取每个文件统计行数；默认 1，设为 0 可切换为轻量目录列表。",
+    "READ_FILE_RANGE_MAX_BYTES": "使用 start_line/line_count 按行读取时的文件大小安全上限。",
     "MICRO_SHRINK_REASONING_CHARS": "微压：推理内容字符上限。",
     "MICRO_SHRINK_ASSISTANT_CHARS": "微压：助手正文字符上限。",
     "MICRO_SHRINK_TOOL_CHARS": "微压：工具返回字符上限。",

@@ -741,3 +741,43 @@ def test_sessions_state_uses_lightweight_run_status(monkeypatch, tmp_path):
     assert payload["sessions"][0]["run_active"] is True
     assert payload["active_runs"][0]["session_id"] == "s1"
     assert payload["active_runs"][0]["lightweight"] is True
+
+
+def test_observer_stream_does_not_count_as_local_run_activity(monkeypatch):
+    import webui
+
+    monkeypatch.setattr(webui, "is_run_active", lambda _sid: False)
+    monkeypatch.setattr(webui, "_active_chat_by_session", {})
+    monkeypatch.setattr(webui, "_observer_streams_by_session", {"s1": 2})
+    monkeypatch.setattr(webui, "_chat_starting_by_session", {})
+
+    assert webui._has_local_run_activity("s1") is False
+    assert webui._has_local_worker_activity("s1") is False
+
+
+def test_auto_resume_only_for_orphan_interruption(monkeypatch):
+    import webui
+
+    monkeypatch.setattr(webui, "_runtime_v2_snapshot", lambda _sid: {
+        "runs": {
+            "r1": {
+                "run_id": "r1",
+                "status": "interrupted",
+                "reason": "no_local_activity",
+                "finished_seq": 10,
+            }
+        }
+    })
+    assert webui._runtime_v2_auto_resume_pending("s1") is True
+
+    monkeypatch.setattr(webui, "_runtime_v2_snapshot", lambda _sid: {
+        "runs": {
+            "r2": {
+                "run_id": "r2",
+                "status": "interrupted",
+                "reason": "user",
+                "finished_seq": 11,
+            }
+        }
+    })
+    assert webui._runtime_v2_auto_resume_pending("s1") is False

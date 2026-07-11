@@ -696,6 +696,7 @@ def run_chat_completion_stream_worker(
     reasoning_effort: Optional[str] = None,
     omit_temperature: bool = False,
     should_abort: Optional[Callable[[], bool]] = None,
+    transport_observer: Optional[Any] = None,
 ) -> None:
     """
     在后台线程中跑 chat.completions(stream=True)。
@@ -754,6 +755,12 @@ def run_chat_completion_stream_worker(
                     pass
 
         _image_fallback_done = False
+        if transport_observer is not None:
+            try:
+                transport_observer.start_transport_trace()
+            except Exception:
+                pass
+        put_stream_timing("request_serialized", messages=len(api_messages), tools=len(tools or []))
         put_stream_timing(
             "request_start",
             messages=len(api_messages),
@@ -814,7 +821,42 @@ def run_chat_completion_stream_worker(
         first_reasoning_seen = False
         first_content_seen = False
         first_tool_delta_seen = False
+        transport_breakdown_emitted = False
+        first_delta_at_ms: Optional[int] = None
+        last_delta_at_ms: Optional[int] = None
+        usage_chunk_at_ms: Optional[int] = None
         chunk_count = 0
+
+        def api_elapsed_ms() -> int:
+            return int(max(0.0, (time.perf_counter() - api_t0) * 1000.0))
+
+        def emit_transport_breakdown_once() -> None:
+            nonlocal transport_breakdown_emitted
+            if transport_breakdown_emitted or transport_observer is None:
+                return
+            transport_breakdown_emitted = True
+            try:
+                snapshot = transport_observer.snapshot_transport_trace()
+                events = list(snapshot.get("events") or [])
+                starts: Dict[str, int] = {}
+                phases: Dict[str, int] = {}
+                for row in events:
+                    event_name = str(row.get("event") or "")
+                    at_ms = int(row.get("at_ms") or 0)
+                    if event_name.endswith(".started"):
+                        starts[event_name[:-8]] = at_ms
+                    elif event_name.endswith(".complete"):
+                        base = event_name[:-9]
+                        if base in starts:
+                            key = re.sub(r"[^a-zA-Z0-9]+", "_", base).strip("_") + "_ms"
+                            phases[key] = max(0, at_ms - starts[base])
+                put_stream_timing(
+                    "transport_breakdown",
+                    trace_elapsed_ms=int(snapshot.get("elapsed_ms") or 0),
+                    **phases,
+                )
+            except Exception:
+                pass
         for chunk in stream:
             if abort_requested():
                 close_stream_quietly()
@@ -830,6 +872,7 @@ def run_chat_completion_stream_worker(
             uo = getattr(chunk, "usage", None)
             if uo is not None:
                 last_usage = extract_usage_dict(uo)
+                usage_chunk_at_ms = api_elapsed_ms()
                 put_stream_timing("usage_chunk", chunk_count=chunk_count)
             if not chunk.choices:
                 continue
@@ -846,12 +889,15 @@ def run_chat_completion_stream_worker(
             rc, rc_field = _extract_reasoning_text_and_field(delta)
             if rc:
                 piece = rc if isinstance(rc, str) else str(rc)
+                last_delta_at_ms = api_elapsed_ms()
                 reasoning_buf += piece
                 if reasoning_field is None and rc_field:
                     reasoning_field = rc_field
                 if not first_delta_seen:
                     first_delta_seen = True
+                    first_delta_at_ms = last_delta_at_ms
                     put_stream_timing("first_delta", delta_type="reasoning", chars=len(piece), chunk_count=chunk_count)
+                    emit_transport_breakdown_once()
                 if not first_reasoning_seen:
                     first_reasoning_seen = True
                     put_stream_timing("first_reasoning_delta", chars=len(piece), chunk_count=chunk_count)
@@ -859,19 +905,25 @@ def run_chat_completion_stream_worker(
             ct = getattr(delta, "content", None)
             if ct:
                 piece = ct if isinstance(ct, str) else str(ct)
+                last_delta_at_ms = api_elapsed_ms()
                 content_buf += piece
                 if not first_delta_seen:
                     first_delta_seen = True
+                    first_delta_at_ms = last_delta_at_ms
                     put_stream_timing("first_delta", delta_type="content", chars=len(piece), chunk_count=chunk_count)
+                    emit_transport_breakdown_once()
                 if not first_content_seen:
                     first_content_seen = True
                     put_stream_timing("first_content_delta", chars=len(piece), chunk_count=chunk_count)
                 sync_q.put(("content", piece))
             delta_tool_calls = getattr(delta, "tool_calls", None)
             for payload in _tool_call_delta_payloads(delta_tool_calls):
+                last_delta_at_ms = api_elapsed_ms()
                 if not first_delta_seen:
                     first_delta_seen = True
+                    first_delta_at_ms = last_delta_at_ms
                     put_stream_timing("first_delta", delta_type="tool_call", chunk_count=chunk_count)
+                    emit_transport_breakdown_once()
                 if not first_tool_delta_seen:
                     first_tool_delta_seen = True
                     put_stream_timing("first_tool_call_delta", chunk_count=chunk_count)
@@ -892,6 +944,15 @@ def run_chat_completion_stream_worker(
         )
         if last_usage:
             usage_payload: Dict[str, Any] = dict(last_usage)
+            usage_end_ms = int(usage_chunk_at_ms if usage_chunk_at_ms is not None else api_elapsed_ms())
+            first_ms = int(first_delta_at_ms or 0)
+            last_ms = int(last_delta_at_ms if last_delta_at_ms is not None else first_ms)
+            usage_payload["_timing"] = {
+                "first_token_wait_ms": max(0, first_ms),
+                "token_generation_ms": max(0, last_ms - first_ms),
+                "usage_return_ms": max(0, usage_end_ms - last_ms),
+                "measured_total_ms": max(0, usage_end_ms),
+            }
             if actual_model:
                 usage_payload["model"] = actual_model
             sync_q.put(("usage", usage_payload))
@@ -920,6 +981,11 @@ def run_chat_completion_stream_worker(
         logger.warning("chat.completions 流式调用异常: %s", _redact_runtime_log_text(e))
         sync_q.put(("err", e))
     finally:
+        if transport_observer is not None:
+            try:
+                transport_observer.finish_transport_trace()
+            except Exception:
+                pass
         sync_q.put(None)
 
 
