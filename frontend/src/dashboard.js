@@ -3,8 +3,7 @@ import './styles/dashboard.css';
 const openState = new Map();
 let lastData = { sessions: [] };
 let inflight = null;
-let selectedRequestKey = '';
-let followLatestRequest = true;
+let selectedRequestKey = '__total__';
 const chartScrollState = new Map();
 
 const esc = value => String(value == null ? '' : value).replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
@@ -42,9 +41,15 @@ function lineChart(target, rows, series, valueSuffix='ms') {
 }
 
 function renderCharts(rows){
-  lineChart('api-chart',rows,[
-    {name:'输入 token',value:r=>num((r.req.usage||{}).prompt_tokens||(r.req.context||{}).estimated_tokens)},
-    {name:'输出 token',value:r=>num((r.req.usage||{}).completion_tokens)},
+  let cumulativeInput=0,cumulativeOutput=0;
+  const cumulativeRows=rows.map(row=>{
+    cumulativeInput+=num((row.req.usage||{}).prompt_tokens||(row.req.context||{}).estimated_tokens);
+    cumulativeOutput+=num((row.req.usage||{}).completion_tokens);
+    return Object.assign({},row,{cumulativeInput,cumulativeOutput});
+  });
+  lineChart('api-chart',cumulativeRows,[
+    {name:'累计输入 token',value:r=>r.cumulativeInput},
+    {name:'累计输出 token',value:r=>r.cumulativeOutput},
     {name:'上下文长度',value:r=>num((r.req.context||{}).estimated_tokens)},
   ],'');
   const phaseNames=[];rows.forEach(r=>Object.keys(r.req.phases||{}).forEach(n=>{if(!phaseNames.includes(n))phaseNames.push(n);}));
@@ -77,19 +82,32 @@ function requestDetailHtml(row){
   return `<section class="session-block"><header><div><h2>${esc(session.session_name)}</h2><code>${esc(session.session_id)}</code></div><span>${esc(new Date(req.started_at||run.started_at||'').toLocaleString())}</span></header><article class="run-block"><header><div><strong>${esc(run.mode||'chat')}</strong><code>${esc(run.run_id)}</code></div><em class="${esc(run.status||'')}">${esc(run.status||'')}</em></header><div class="request-card"><header><div><strong>LLM #${req.react_iter}</strong><span>${esc(req.model||'')}</span></div><em>${esc(req.status||'')}</em></header><div class="metrics"><span>首 token<b>${esc(ms(req.first_token_ms))}</b></span><span>API 总耗时<b>${esc(ms(req.duration_ms))}</b></span><span>输入 token<b>${esc(u.prompt_tokens??c.estimated_tokens??'—')}</b></span><span>输出 token<b>${esc(u.completion_tokens??'—')}</b></span><span>上下文<b>${esc(c.estimated_tokens??'—')} / ${esc(c.context_window??'—')}</b></span><span>消息 / 工具<b>${esc(c.messages??'—')} / ${esc(c.tools??'—')}</b></span></div>${Object.keys(req.phases||{}).map(n=>phaseHtml(session,run,req,n,req.phases[n]||{})).join('')}${toolsHtml(session,run,req)}</div></article></section>`;
 }
 
+function cumulativeDetailHtml(rows){
+  if(!rows.length)return '<div class="empty">暂无执行统计</div>';
+  const input=rows.reduce((n,r)=>n+num((r.req.usage||{}).prompt_tokens||(r.req.context||{}).estimated_tokens),0);
+  const output=rows.reduce((n,r)=>n+num((r.req.usage||{}).completion_tokens),0);
+  const apiTotal=rows.reduce((n,r)=>n+num(r.req.duration_ms),0);
+  const ttftRows=rows.filter(r=>Number.isFinite(Number(r.req.first_token_ms)));
+  const avgTtft=ttftRows.length?ttftRows.reduce((n,r)=>n+num(r.req.first_token_ms),0)/ttftRows.length:0;
+  const latest=rows[rows.length-1],phaseTotals={},tools=[];
+  rows.forEach(row=>{Object.keys(row.req.phases||{}).forEach(name=>phaseTotals[name]=(phaseTotals[name]||0)+num((row.req.phases[name]||{}).total_ms));(row.req.tools||[]).forEach(t=>tools.push(t));});
+  return `<section class="session-block"><header><div><h2>累计总值</h2><code>${esc(document.getElementById('session-filter').value?'当前会话筛选':'全部会话')}</code></div><span>${rows.length} 次 LLM 请求</span></header><article class="run-block"><div class="request-card"><div class="metrics"><span>平均首 token<b>${esc(ms(avgTtft))}</b></span><span>API 累计耗时<b>${esc(ms(apiTotal))}</b></span><span>累计输入 token<b>${input.toLocaleString()}</b></span><span>累计输出 token<b>${output.toLocaleString()}</b></span><span>最新上下文<b>${esc((latest.req.context||{}).estimated_tokens??'—')} / ${esc((latest.req.context||{}).context_window??'—')}</b></span><span>工具调用<b>${tools.length}</b></span></div>${Object.keys(phaseTotals).map(name=>`<details class="phase" data-open-key="total|${esc(name)}"><summary><span>${esc(name)}</span><b>${esc(ms(phaseTotals[name]))}</b></summary></details>`).join('')}</div></article></section>`;
+}
+
 function render(data){
-  lastData=data; const filter=document.getElementById('session-filter'), selected=filter.value;
-  filter.innerHTML='<option value="">全部会话</option>'+(data.sessions||[]).map(s=>`<option value="${esc(s.session_id)}">${esc(s.session_name)} · ${esc(s.session_id.slice(0,8))}</option>`).join('');
-  if(selected && (data.sessions||[]).some(s=>s.session_id===selected))filter.value=selected;
+  const visibleSessions=(data.sessions||[]).filter(s=>!['s-followup','s-final-first'].includes(String(s.session_id||'').toLowerCase())&&!['s-followup','s-final-first'].includes(String(s.session_name||'').toLowerCase()));
+  data=Object.assign({},data,{sessions:visibleSessions});lastData=data; const filter=document.getElementById('session-filter'), selected=filter.value;
+  filter.innerHTML='<option value="">全部会话</option>'+visibleSessions.map(s=>`<option value="${esc(s.session_id)}">${esc(s.session_name)} · ${esc(s.session_id.slice(0,8))}</option>`).join('');
+  if(selected && visibleSessions.some(s=>s.session_id===selected))filter.value=selected;
   const rows=flatten(data,filter.value); renderCharts(rows);
   const input=rows.reduce((n,r)=>n+num((r.req.usage||{}).prompt_tokens||(r.req.context||{}).estimated_tokens),0), output=rows.reduce((n,r)=>n+num((r.req.usage||{}).completion_tokens),0);
   document.getElementById('summary').innerHTML=`<div><span>会话</span><b>${new Set(rows.map(r=>r.session.session_id)).size}</b></div><div><span>LLM 请求</span><b>${rows.length}</b></div><div><span>输入 token</span><b>${input.toLocaleString()}</b></div><div><span>输出 token</span><b>${output.toLocaleString()}</b></div>`;
   const requestFilter=document.getElementById('request-filter'),latest=rows.length?rows[rows.length-1]:null;
-  if(followLatestRequest||!rows.some(row=>requestKey(row)===selectedRequestKey))selectedRequestKey=latest?requestKey(latest):'';
-  requestFilter.innerHTML=rows.slice().reverse().map(row=>`<option value="${esc(requestKey(row))}">${esc(row.session.session_name)} · ${esc(new Date(row.req.started_at||row.run.started_at||'').toLocaleString())} · LLM #${row.req.react_iter}</option>`).join('')||'<option value="">暂无历史轮次</option>';
+  if(selectedRequestKey!=='__total__'&&!rows.some(row=>requestKey(row)===selectedRequestKey))selectedRequestKey='__total__';
+  requestFilter.innerHTML='<option value="__total__">累计总值</option>'+rows.slice().reverse().map(row=>`<option value="${esc(requestKey(row))}">${esc(row.session.session_name)} · ${esc(new Date(row.req.started_at||row.run.started_at||'').toLocaleString())} · LLM #${row.req.react_iter}</option>`).join('');
   requestFilter.value=selectedRequestKey;
   const selectedRow=rows.find(row=>requestKey(row)===selectedRequestKey)||latest;
-  document.getElementById('dashboard-body').innerHTML=requestDetailHtml(selectedRow);
+  document.getElementById('dashboard-body').innerHTML=selectedRequestKey==='__total__'?cumulativeDetailHtml(rows):requestDetailHtml(selectedRow);
   document.querySelectorAll('details[data-open-key]').forEach(d=>d.addEventListener('toggle',()=>openState.set(d.dataset.openKey,d.open)));
 }
 
@@ -98,8 +116,8 @@ async function refresh(){
   try{const r=await fetch('/api/execution-metrics',{cache:'no-store',signal:inflight.signal});const p=await r.json();if(!r.ok||!p.ok)throw new Error(p.error||'加载失败');render(p.data||{sessions:[]});}
   catch(e){if(e.name!=='AbortError')document.getElementById('dashboard-body').innerHTML=`<div class="empty">加载失败：${esc(e.message||e)}</div>`;}
 }
-document.getElementById('session-filter').addEventListener('change',()=>{followLatestRequest=true;selectedRequestKey='';render(lastData);});
-document.getElementById('request-filter').addEventListener('change',event=>{selectedRequestKey=event.target.value;const rows=flatten(lastData,document.getElementById('session-filter').value),latest=rows[rows.length-1];followLatestRequest=!!latest&&selectedRequestKey===requestKey(latest);render(lastData);});
+document.getElementById('session-filter').addEventListener('change',()=>{selectedRequestKey='__total__';render(lastData);});
+document.getElementById('request-filter').addEventListener('change',event=>{selectedRequestKey=event.target.value;render(lastData);});
 document.getElementById('refresh-btn').addEventListener('click',refresh);
 document.getElementById('back-to-chat-btn').addEventListener('click',()=>{
   if(window.opener && !window.opener.closed){
