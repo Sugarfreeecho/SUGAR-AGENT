@@ -2450,6 +2450,8 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
                 tool_args = tool_call["args"]
                 tool_id = tool_call["id"]
                 tool_call_index = tool_call.get("index")
+                if state.get("_tool_batch_first_started_at") is None:
+                    state["_tool_batch_first_started_at"] = time.perf_counter()
                 state["_runtime_stage"] = "running_tool:%s" % tool_name
                 await _raise_if_steer_requested(state, emit, "tool")
 
@@ -3285,6 +3287,31 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
                         actual_response_model or iter_model,
                         stream_timing_events,
                     )
+                    _stream_steps = {
+                        str(item.get("step") or ""): int(item.get("ms_since_api_start") or 0)
+                        for item in stream_timing_events
+                        if isinstance(item, dict) and item.get("step")
+                    }
+                    _request_start_ms = int(_stream_steps.get("request_start", 0))
+                    _stream_created_ms = int(_stream_steps.get("stream_created", _request_start_ms))
+                    _first_delta_ms = int(_stream_steps.get("first_delta", _stream_created_ms))
+                    _stream_end_ms = int(_stream_steps.get("stream_exhausted", _stream_steps.get("turn_ready", _first_delta_ms)))
+                    _metrics_run_id = str(state.get("_runtime_v2_run_id") or "")
+                    execution_metrics.record_phase(
+                        state["session_id"], _metrics_run_id, int(iter_count), "api_send",
+                        {"request_start_to_stream_created": max(0, _stream_created_ms - _request_start_ms)},
+                        total_ms=max(0, _stream_created_ms - _request_start_ms),
+                    )
+                    execution_metrics.record_phase(
+                        state["session_id"], _metrics_run_id, int(iter_count), "first_token",
+                        {"stream_created_to_first_delta": max(0, _first_delta_ms - _stream_created_ms)},
+                        total_ms=max(0, _first_delta_ms - _stream_created_ms),
+                    )
+                    execution_metrics.record_phase(
+                        state["session_id"], _metrics_run_id, int(iter_count), "llm_output",
+                        {"first_delta_to_stream_end": max(0, _stream_end_ms - _first_delta_ms)},
+                        total_ms=max(0, _stream_end_ms - _first_delta_ms),
+                    )
                     logger.info(
                         "llm_result_consumed session=%s react_iter=%s model=%s",
                         state["session_id"],
@@ -3892,7 +3919,16 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
                 await _raise_if_steer_requested(state, emit, "tool")
                 await flush_read_only()
 
+                _tool_batch_started_at = state.pop("_tool_batch_first_started_at", None)
+                _tool_batch_duration_ms = _timing_ms(float(_tool_batch_started_at)) if _tool_batch_started_at is not None else 0
+                execution_metrics.record_phase(
+                    state["session_id"], str(state.get("_runtime_v2_run_id") or ""), int(iter_count),
+                    "tool_execution", {"first_tool_start_to_all_results": _tool_batch_duration_ms},
+                    total_ms=_tool_batch_duration_ms,
+                )
+
                 # 处理每个工具的返回结果
+                _round_tool_post_total_ms = 0
                 for res in exec_results:
                     await _raise_if_steer_requested(state, emit, "tool")
                     if isinstance(res, Exception):
@@ -4038,6 +4074,7 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
                         },
                         total_ms=sum(int(v or 0) for v in tool_post_timings.values()),
                     )
+                    _round_tool_post_total_ms += sum(int(v or 0) for v in tool_post_timings.values())
 
                 _t_tool_post_all = time.perf_counter()
                 state["llm_history"] = llm_history
@@ -4064,6 +4101,12 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
                         "tool_to_next_api", {"persist_state": persist_after_tools_ms, "steer_check": steer_check_ms},
                         total_ms=int(persist_after_tools_ms + steer_check_ms), outcome="steer_restart",
                     )
+                    execution_metrics.record_phase(
+                        state["session_id"], str(state.get("_runtime_v2_run_id") or ""), int(iter_count),
+                        "round_postprocess",
+                        {"tool_result_post": _round_tool_post_total_ms, "persist_state": persist_after_tools_ms, "steer_check": steer_check_ms},
+                        total_ms=int(_round_tool_post_total_ms + persist_after_tools_ms + steer_check_ms),
+                    )
                     state.pop("_steer_rollback_marker", None)
                     _reset_steer_control(state)
                     llm_history = list(state["llm_history"])
@@ -4086,6 +4129,12 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
                     state["session_id"], str(state.get("_runtime_v2_run_id") or ""), int(iter_count),
                     "tool_to_next_api", {"persist_state": persist_after_tools_ms, "steer_check": steer_check_ms},
                     total_ms=int(persist_after_tools_ms + steer_check_ms), outcome="next_react_iter",
+                )
+                execution_metrics.record_phase(
+                    state["session_id"], str(state.get("_runtime_v2_run_id") or ""), int(iter_count),
+                    "round_postprocess",
+                    {"tool_result_post": _round_tool_post_total_ms, "persist_state": persist_after_tools_ms, "steer_check": steer_check_ms},
+                    total_ms=int(_round_tool_post_total_ms + persist_after_tools_ms + steer_check_ms),
                 )
                 state.pop("_steer_rollback_marker", None)
                 state["_runtime_stage"] = "react"
