@@ -68,7 +68,14 @@ def test_frontend_feature_entrypoints_are_flag_guarded():
     assert "isMyAgentFeatureEnabled('streamReconnect', true)" in sse
     assert "isMyAgentFeatureEnabled('finalReconcile', true)" in sse
     assert "function scheduleFinalVisibleAfterRunIfEnabled" in sse
-    assert "const SSE_IDLE_TIMEOUT_MS = 45000" in sse
+    assert "const SSE_IDLE_TIMEOUT_MS = 120000" in sse
+    assert "maybeAutoResumeInterruptedReact" in sse
+    refresh_row = sessions.split("async function refreshSingleSessionRow", 1)[1].split("let sessionListLoadEpoch", 1)[0]
+    event_cache_set = sessions.split("const uiEventCountCache", 1)[1].split("increment(sessionId)", 1)[0]
+    assert "maybeAutoResumeInterruptedReact(sessionId, sess)" in refresh_row
+    assert "maybeAutoResumeInterruptedReact" not in event_cache_set
+    assert "window.addEventListener('online'" in sse
+    assert sse.index("let preCount = await getUiEventCount") < sse.index("setSessionRunState(runSessionId, optimisticRunState)")
     assert "readSseChunkWithIdleTimeout(reader, SSE_IDLE_TIMEOUT_MS)" in sse
     assert "parsed.type === 'sse_keepalive' || parsed.keepalive === true" in sse
     assert 'os.getenv("MYAGENT_ENABLE_STREAM_RECONNECT", "1")' in webui
@@ -198,6 +205,27 @@ def test_stream_deltas_have_stable_dedupe_keys():
     assert "hasSeenStreamDelta(ctx, ev, 'llm_' + part)" in rendering
     assert "hasSeenStreamDelta(ctx, parsed, 'tool_call_delta')" in rendering
     assert "_seenStreamDeltaKeys: new Set()" in scroll
+
+
+def test_tool_pending_switches_generated_draft_to_executing():
+    agent_loop = (ROOT / "app/agent_loop.py").read_text(encoding="utf-8")
+    sse = (ROOT / "frontend/src/app/modules/sse-handling.js").read_text(encoding="utf-8")
+    rendering = (ROOT / "frontend/src/app/modules/message-rendering.js").read_text(encoding="utf-8")
+
+    assert "await _emit_tool_pending_sse(" in agent_loop
+    assert 'if emit and tool_name != "context_manage":' in agent_loop
+    assert "if (parsed.type === 'tool_pending')" in sse
+    assert "appendToolPendingRow(runCtx, parsed, runSessionId);" in sse
+    assert "row.getAttribute('data-tool-pending') === '1'" in rendering
+    assert "draftChunk.classList.remove('is-streaming')" in rendering
+
+
+def test_prompt_allows_multi_tool_generation_independent_of_execution_mode():
+    prompt = (ROOT / "app/prompt.md").read_text(encoding="utf-8")
+
+    assert "这与工具最终是并行还是串行执行无关" in prompt
+    assert "依照 `tool_calls` 原始顺序串行" in prompt
+    assert "不得猜测未知参数" in prompt
 
 
 def test_streamed_llm_commits_are_sse_fallbacks_without_repersisting():

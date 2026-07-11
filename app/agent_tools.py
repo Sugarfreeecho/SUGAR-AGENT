@@ -9,6 +9,8 @@ Agent 可调工具：实现函数 + OpenAI `tools` JSON Schema（`OPENAI_TOOL_DE
 
 import asyncio
 import base64
+import fnmatch
+import hashlib
 import html
 import ipaddress
 import json
@@ -58,6 +60,7 @@ def clear_run_shell_interrupt_check() -> None:
 
 # 技能目录签名缓存，避免每次 react 轮次全量遍历
 _skills_cache: Dict[str, Any] = {"sig": None, "skills": None, "catalog": None}
+_read_file_line_count_cache: Dict[str, Tuple[int, int, int]] = {}
 
 
 def _skills_tree_signature() -> tuple:
@@ -89,7 +92,11 @@ def _openai_function_schema(
         "function": {
             "name": name,
             "description": description,
-            "parameters": {"type": "object", "properties": properties, "required": required},
+            "parameters": {
+                "type": "object",
+                "properties": properties,
+                "required": required,
+            },
         },
     }
 
@@ -1433,10 +1440,14 @@ def _fuzzy_find_replacement_segment(content: str, search: str) -> Tuple[Optional
 
 async def run_shell(
     command: str,
+    workdir: Optional[str] = None,
+    timeout_ms: Optional[int] = None,
+    login: Optional[bool] = None,
+    restrict_to_workspace: bool = True,
+    # Legacy arguments remain accepted for saved sessions and older clients.
     args: Optional[List[str]] = None,
     working_dir: Optional[str] = None,
-    timeout: int = 30,
-    restrict_to_workspace: bool = True,
+    timeout: Optional[int] = None,
 ) -> str:
     """
     Run a command through a shell: ``command`` and optional ``args`` are merged into one command line.
@@ -1459,9 +1470,19 @@ async def run_shell(
     Decoded PowerShell scripts still follow PowerShell semantics.
     """
     full_cmd = _compose_shell_command(command, args)
+    effective_workdir = workdir if workdir is not None else working_dir
+    if timeout_ms is not None:
+        effective_timeout = max(0.001, min(float(timeout_ms) / 1000.0, 600.0))
+    else:
+        effective_timeout = max(0.001, min(float(timeout if timeout is not None else 30), 600.0))
+    use_login = (
+        bool(login)
+        if login is not None
+        else os.getenv("RUN_CLI_BASH_LOGIN", "1").strip().lower() not in ("0", "false", "no", "off")
+    )
     if not full_cmd.strip():
         return "Error: empty command (provide command and/or args)."
-    if _text_mentions_sensitive_tool_resource(full_cmd) or _text_mentions_sensitive_tool_resource(working_dir or ""):
+    if _text_mentions_sensitive_tool_resource(full_cmd) or _text_mentions_sensitive_tool_resource(effective_workdir or ""):
         return _sensitive_tool_resource_error("shell access")
 
     # 1. 安全检测
@@ -1474,7 +1495,7 @@ async def run_shell(
         full_cmd, ephemeral_py = _maybe_materialize_python_c_script(full_cmd, wroot)
 
         # 2. 工作目录：默认在 WORK_DIR；本工具是「工作区限制」的唯三入口之一
-        cwd = _resolve_shell_working_dir(working_dir, wroot)
+        cwd = _resolve_shell_working_dir(effective_workdir, wroot)
         if restrict_to_workspace:
             if not _is_path_under(cwd, wroot):
                 return "Error: working_dir is outside allowed directories."
@@ -1482,7 +1503,6 @@ async def run_shell(
                 return "Error: Command contains path outside allowed directories."
 
         # 3. 统一 shell 管线（bash 优先）
-        effective_timeout = min(timeout, 600)
         try:
             child_env = _subprocess_env_for_shell()
             spawn_kw = _run_cli_subprocess_stdio_kwargs(full_cmd)
@@ -1506,11 +1526,6 @@ async def run_shell(
                     _rewrite_windows_nul_redirects_for_bash(full_cmd)
                     if platform.system() == "Windows"
                     else full_cmd
-                )
-                use_login = os.getenv("RUN_CLI_BASH_LOGIN", "1").strip().lower() not in (
-                    "0",
-                    "false",
-                    "no",
                 )
                 bash_wrapped = _posix_shell_eval_wrapper(user_cmd)
                 bash_argv = (
@@ -1816,9 +1831,10 @@ def read_file(
     file_path: Optional[str] = None,
     start_line: Optional[int] = None,
     end_line: Optional[int] = None,
+    line_count: Optional[int] = None,
 ) -> str:
     """
-    按行读取文件。必须同时提供 start_line / end_line（1-based，含首尾）。
+    按行读取文件。推荐提供 start_line / line_count；旧 end_line 参数仍兼容。
     路径不限制在 WORK_DIR（平台绝对路径可指向任意可读位置；相对/虚拟 / 同以往映射到工作区）。
     目标文件：`path`（主）或同义 `target_directory`，或历史别名 `file_path`。
 
@@ -1828,11 +1844,13 @@ def read_file(
     raw = _coalesce_str(path, target_directory, file_path)
     if not raw:
         return "Error: read_file requires `path` (or alias `target_directory`, or legacy `file_path`)."
-    if start_line is None or end_line is None:
-        return (
-            "Error: read_file requires both start_line and end_line (1-based, inclusive). "
-            "Read the file in chunks; do not request the whole file at once."
-        )
+    if start_line is None:
+        start_line = 1
+    if end_line is None:
+        count = 200 if line_count is None else int(line_count)
+        if count <= 0:
+            return "Error: read_file line_count must be a positive integer."
+        end_line = int(start_line) + count - 1
     try:
         path = resolve_unrestricted_path(raw)
         if _path_is_sensitive_tool_resource(path):
@@ -1847,7 +1865,7 @@ def read_file(
         lim = _read_file_range_max_bytes()
         return (
             f"Error: file too large ({_human_file_size(st.st_size)}) for line-range read "
-            f"(loads entire file into memory; limit READ_FILE_RANGE_MAX_BYTES={lim}). "
+            f"(range-reader safety limit READ_FILE_RANGE_MAX_BYTES={lim}). "
             f"Path: {_format_path_for_tool_output(path)}"
         )
 
@@ -1855,22 +1873,38 @@ def read_file(
     if bad:
         return bad
 
+    s = max(1, int(start_line))
+    requested_end = max(0, int(end_line))
+    if requested_end < s:
+        return f"(invalid range: end_line {requested_end} < start_line {s})\n"
+    cache_key = str(path.resolve())
+    cached = _read_file_line_count_cache.get(cache_key)
+    cached_n = cached[2] if cached and cached[:2] == (int(st.st_mtime_ns), int(st.st_size)) else None
+    selected: List[str] = []
+    n = 0
     try:
         with open(path, "r", encoding="utf-8", errors="replace") as f:
-            lines = f.readlines()
+            for physical in f:
+                virtual = _virtualize_text_lines([physical])
+                for line in virtual:
+                    n += 1
+                    if s <= n <= requested_end:
+                        selected.append(line)
+                if cached_n is not None and n >= requested_end:
+                    n = int(cached_n)
+                    break
     except Exception as e:
         return f"Failed to read file: {e}"
-    lines = _virtualize_text_lines(lines)
-    n = len(lines)
-    s = max(1, int(start_line))
-    e = min(n, int(end_line))
+    if cached_n is None:
+        if len(_read_file_line_count_cache) >= 512:
+            _read_file_line_count_cache.pop(next(iter(_read_file_line_count_cache)), None)
+        _read_file_line_count_cache[cache_key] = (int(st.st_mtime_ns), int(st.st_size), n)
     if n == 0:
         return "(empty file)\n"
     if s > n:
         return f"(file has {n} lines; start_line {s} is past end of file)\n"
-    if e < s:
-        return f"(invalid range: end_line {e} < start_line {s})\n"
-    body = "".join(lines[s - 1 : e])
+    e = min(n, requested_end)
+    body = "".join(selected)
     return redact_sensitive_tool_text(f"[lines {s}-{e} of {n}]\n" + body)
 
 
@@ -1967,10 +2001,15 @@ def _ls_max_entries() -> int:
         return 500
 
 
+def _ls_include_line_counts() -> bool:
+    return os.getenv("LS_INCLUDE_LINE_COUNTS", "1").strip().lower() in {"1", "true", "yes", "on"}
+
+
 def format_directory_listing(
     path: Path,
     *,
     max_entries: Optional[int] = None,
+    include_line_counts: Optional[bool] = None,
 ) -> str:
     """
     目录清单文本：每行 名称、大小、行数。目录条目标记为 name/，大小与行数为 —。
@@ -1992,6 +2031,7 @@ def format_directory_listing(
         return "  (empty)"
     rows: List[tuple] = []
     w = 0
+    want_lines = _ls_include_line_counts() if include_line_counts is None else bool(include_line_counts)
     for entry in entries:
         if _path_is_sensitive_tool_resource(entry):
             continue
@@ -2005,7 +2045,7 @@ def format_directory_listing(
                 size_s, line_s = "?", "?"
             else:
                 size_s = _human_file_size(sz)
-                line_s = _line_count_file(entry)
+                line_s = _line_count_file(entry) if want_lines else "—"
         rows.append((display_name, size_s, line_s))
         w = max(w, len(display_name))
     out_lines = [f"{name:<{w}}  {size:>10}  lines: {ln:>8}" for name, size, ln in rows]
@@ -2019,13 +2059,20 @@ def ls(
     path: Optional[str] = None,
     target_directory: Optional[str] = None,
     directory: Optional[str] = None,
+    include_line_counts: Optional[bool] = None,
+    max_entries: Optional[int] = None,
 ) -> str:
     raw = _coalesce_str(path, target_directory, directory) or "/"
     try:
         path = resolve_unrestricted_path(raw)
         if not path.is_dir():
             return f"Error: {raw} is not a directory"
-        t = format_directory_listing(path, max_entries=_ls_max_entries())
+        limit = _ls_max_entries() if max_entries is None else max(1, min(5000, int(max_entries)))
+        t = format_directory_listing(
+            path,
+            max_entries=limit,
+            include_line_counts=include_line_counts,
+        )
         if t.startswith("Error:"):
             return t
         return t if t.strip() and t != "  (empty)" else "Directory is empty"
@@ -2042,6 +2089,9 @@ def edit_file(
     use_regex: bool = False,
     old_string: Optional[str] = None,
     new_string: Optional[str] = None,
+    replace_all: bool = False,
+    expected_replacements: Optional[int] = None,
+    expected_sha256: Optional[str] = None,
 ) -> str:
     """替换片段：`search`/`replace` 与 `old_string`/`new_string` 等价（前者优先）。目标文件：`path` 或 `target_directory` 或 `file_path`。"""
     raw = _coalesce_str(path, target_directory, file_path)
@@ -2062,18 +2112,34 @@ def edit_file(
             return f"Error: file {_format_path_for_tool_output(path)} does not exist"
         with open(path, 'r', encoding='utf-8') as f:
             content = f.read()
+        if expected_sha256:
+            actual_sha256 = hashlib.sha256(content.encode("utf-8")).hexdigest()
+            if actual_sha256.lower() != str(expected_sha256).strip().lower():
+                return (
+                    "Error: edit_file expected_sha256 mismatch; file changed since it was read "
+                    f"(actual {actual_sha256})."
+                )
         if use_regex:
             try:
-                new_content = re.sub(eff_search, eff_replace, content)
+                new_content, n_rep = re.subn(
+                    eff_search,
+                    eff_replace,
+                    content,
+                    count=0 if replace_all else 1,
+                )
             except re.error as e:
                 return f"Regex error: {e}"
             if new_content == content:
                 return "No match found, file unchanged"
-            n_rep = len(re.findall(eff_search, content))
         else:
             if eff_search in content:
-                n_rep = content.count(eff_search)
-                new_content = content.replace(eff_search, eff_replace)
+                if replace_all:
+                    parts = content.split(eff_search)
+                    n_rep = len(parts) - 1
+                    new_content = eff_replace.join(parts)
+                else:
+                    n_rep = 1
+                    new_content = content.replace(eff_search, eff_replace, 1)
             else:
                 segment, err = _fuzzy_find_replacement_segment(content, eff_search)
                 if err:
@@ -2082,10 +2148,155 @@ def edit_file(
                 n_rep = 1
             if new_content == content:
                 return "No match found, file unchanged"
+        if expected_replacements is not None and n_rep != int(expected_replacements):
+            return (
+                "Error: edit_file replacement count mismatch; "
+                f"expected {int(expected_replacements)}, got {n_rep}. File unchanged."
+            )
         _atomic_write_text(path, new_content, encoding='utf-8')
         return f"Successfully modified file {raw}, replaced {n_rep} occurrence(s)."
     except Exception as e:
         return f"Failed to edit file: {e}"
+
+
+def _parse_apply_patch(patch: str) -> List[Dict[str, Any]]:
+    """Parse the Codex-style *** Begin Patch format into file operations."""
+    lines = str(patch or "").replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    if not lines or lines[0] != "*** Begin Patch" or lines[-1] != "*** End Patch":
+        raise ValueError("patch must start with '*** Begin Patch' and end with '*** End Patch'")
+    operations: List[Dict[str, Any]] = []
+    i = 1
+    while i < len(lines) - 1:
+        header = lines[i]
+        if not header:
+            i += 1
+            continue
+        kind = None
+        raw_path = ""
+        for candidate in ("Add", "Update", "Delete"):
+            prefix = f"*** {candidate} File: "
+            if header.startswith(prefix):
+                kind = candidate.lower()
+                raw_path = header[len(prefix):].strip()
+                break
+        if kind is None or not raw_path:
+            raise ValueError(f"invalid patch section header at line {i + 1}: {header!r}")
+        i += 1
+        body: List[str] = []
+        while i < len(lines) - 1 and not lines[i].startswith(("*** Add File: ", "*** Update File: ", "*** Delete File: ")):
+            body.append(lines[i])
+            i += 1
+        operations.append({"kind": kind, "path": raw_path, "body": body})
+    if not operations:
+        raise ValueError("patch contains no file operations")
+    return operations
+
+
+def _apply_update_hunks(content: str, body: List[str], raw_path: str) -> str:
+    """Apply exact, ordered line hunks and reject stale or ambiguous context."""
+    result = content.replace("\r\n", "\n").replace("\r", "\n")
+    i = 0
+    cursor = 0
+    hunk_count = 0
+    while i < len(body):
+        if body[i] == "":
+            i += 1
+            continue
+        if not body[i].startswith("@@"):
+            raise ValueError(f"{raw_path}: expected '@@' hunk header, got {body[i]!r}")
+        i += 1
+        old_lines: List[str] = []
+        new_lines: List[str] = []
+        while i < len(body) and not body[i].startswith("@@"):
+            line = body[i]
+            if line == "\\ No newline at end of file":
+                i += 1
+                continue
+            if not line or line[0] not in (" ", "+", "-"):
+                raise ValueError(f"{raw_path}: malformed hunk line {line!r}")
+            if line[0] in (" ", "-"):
+                old_lines.append(line[1:])
+            if line[0] in (" ", "+"):
+                new_lines.append(line[1:])
+            i += 1
+        old = "\n".join(old_lines)
+        new = "\n".join(new_lines)
+        if not old_lines:
+            raise ValueError(f"{raw_path}: update hunks must include context or removed lines")
+        found = result.find(old, cursor)
+        if found < 0:
+            raise ValueError(f"{raw_path}: hunk context did not match; file may have changed")
+        if result.find(old, found + 1) >= 0:
+            raise ValueError(f"{raw_path}: hunk context is ambiguous; include more surrounding lines")
+        result = result[:found] + new + result[found + len(old):]
+        cursor = found + len(new)
+        hunk_count += 1
+    if not hunk_count:
+        raise ValueError(f"{raw_path}: update section contains no hunks")
+    return result
+
+
+def apply_patch(patch: str) -> str:
+    """Apply one Codex-style multi-file patch under WORK_DIR, with validation and rollback."""
+    try:
+        operations = _parse_apply_patch(patch)
+        planned: Dict[Path, Optional[str]] = {}
+        labels: Dict[Path, str] = {}
+        for operation in operations:
+            raw_path = operation["path"]
+            path = safe_work_path(raw_path)
+            if _path_is_sensitive_tool_resource(path):
+                return _sensitive_tool_resource_error("patch")
+            if path in planned:
+                raise ValueError(f"duplicate file section: {raw_path}")
+            kind = operation["kind"]
+            body = operation["body"]
+            labels[path] = raw_path
+            if kind == "add":
+                if path.exists():
+                    raise ValueError(f"{raw_path}: cannot add because the path already exists")
+                if any(not line.startswith("+") for line in body if line != ""):
+                    raise ValueError(f"{raw_path}: added file lines must start with '+'")
+                added = [line[1:] for line in body if line != ""]
+                planned[path] = "\n".join(added) + ("\n" if body and body[-1].startswith("+") else "")
+            elif kind == "delete":
+                if body and any(body):
+                    raise ValueError(f"{raw_path}: delete section must not contain hunks")
+                if not path.is_file():
+                    raise ValueError(f"{raw_path}: file does not exist")
+                reason = _delete_path_prohibited_reason(path)
+                if reason:
+                    raise ValueError(reason.removeprefix("Error: "))
+                planned[path] = None
+            else:
+                if not path.is_file():
+                    raise ValueError(f"{raw_path}: file does not exist")
+                current = path.read_text(encoding="utf-8")
+                planned[path] = _apply_update_hunks(current, body, raw_path)
+
+        snapshots: Dict[Path, Optional[str]] = {
+            path: (path.read_text(encoding="utf-8") if path.is_file() else None)
+            for path in planned
+        }
+        try:
+            for path, new_content in planned.items():
+                if new_content is None:
+                    path.unlink()
+                else:
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    _atomic_write_text(path, new_content, encoding="utf-8")
+        except Exception:
+            for path, original in snapshots.items():
+                if original is None:
+                    path.unlink(missing_ok=True)
+                else:
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    _atomic_write_text(path, original, encoding="utf-8")
+            raise
+        summary = ", ".join(f"{op['kind']} {op['path']}" for op in operations)
+        return f"Done! Applied {len(operations)} file operation(s): {summary}"
+    except Exception as e:
+        return f"Error: apply_patch failed: {e}"
 
 
 def glob(
@@ -2156,12 +2367,115 @@ def glob(
         return f"Glob search failed: {e}{hint}"
 
 
+def _grep_with_ripgrep(
+    *,
+    regex: re.Pattern,
+    target: Path,
+    recursive: bool,
+    max_results: int,
+    line_cap: int,
+    output_cap: int,
+    file_cap: int,
+    include: Optional[List[str]] = None,
+    exclude: Optional[List[str]] = None,
+) -> Optional[str]:
+    """Fast grep path. Return None when ripgrep cannot handle the request."""
+    rg = shutil.which("rg")
+    if not rg or os.getenv("GREP_USE_RIPGREP", "1").strip().lower() in {"0", "false", "no", "off"}:
+        return None
+    args = [
+        rg,
+        "--line-number",
+        "--no-heading",
+        "--color",
+        "never",
+        "--hidden",
+        "--no-ignore",
+        "--max-filesize",
+        str(file_cap),
+        "--max-columns",
+        str(max(200, line_cap)),
+        "--max-columns-preview",
+    ]
+    if regex.flags & re.IGNORECASE:
+        args.append("--ignore-case")
+    for pattern in include or []:
+        if str(pattern).strip():
+            args.extend(["--glob", str(pattern).strip()])
+    for pattern in exclude or []:
+        if str(pattern).strip():
+            args.extend(["--glob", "!" + str(pattern).strip().lstrip("!")])
+    if target.is_dir():
+        args.extend([
+            "--glob", "!venv/**",
+            "--glob", "!.venv/**",
+            "--glob", "!__pycache__/**",
+            "--glob", "!.git/**",
+            "--glob", "!node_modules/**",
+            "--glob", "!sessions/**",
+            "--glob", "!logs/**",
+            "--glob", "!.trash/**",
+            "--glob", "!.tool_results/**",
+            "--glob", "!truncate_backups/**",
+        ])
+        if not recursive:
+            args.extend(["--max-depth", "1"])
+    args.extend(["--regexp", regex.pattern, "--", str(target)])
+    try:
+        timeout = max(1.0, float(os.getenv("GREP_TIMEOUT_SEC", "30")))
+        completed = subprocess.run(
+            args,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=timeout,
+            check=False,
+            **_run_cli_subprocess_stdio_kwargs("rg"),
+        )
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return None
+    if completed.returncode == 1:
+        return "No matches found"
+    if completed.returncode != 0:
+        return None
+
+    results: List[str] = []
+    total_bytes = 0
+    truncated = False
+    for raw_line in completed.stdout.splitlines():
+        entry = redact_sensitive_tool_text(raw_line.rstrip())
+        if len(entry) > line_cap:
+            entry = entry[:line_cap] + f"... [truncated, {len(entry)} chars total]"
+        entry_size = len(entry.encode("utf-8", errors="replace")) + 1
+        if len(results) >= max_results or total_bytes + entry_size > output_cap:
+            truncated = True
+            break
+        results.append(entry)
+        total_bytes += entry_size
+    if not results:
+        return "No matches found"
+    output = "\n".join(results)
+    if truncated:
+        output += (
+            f"\n... output truncated ({len(results)} lines shown; "
+            f"GREP_MAX_MATCH_LINES={max_results}; GREP_OUTPUT_MAX_BYTES={output_cap})"
+        )
+    return output
+
+
 def grep(
     pattern: str,
     path: Optional[str] = None,
     target_directory: Optional[str] = None,
     recursive: bool = True,
-    use_regex: bool = True,
+    use_regex: Optional[bool] = None,
+    mode: Optional[str] = None,
+    case_sensitive: Optional[bool] = None,
+    include: Optional[List[str]] = None,
+    exclude: Optional[List[str]] = None,
+    max_results: Optional[int] = None,
 ) -> str:
     raw_path = _coalesce_str(path, target_directory) or "/"
     try:
@@ -2171,26 +2485,39 @@ def grep(
         if _path_is_sensitive_tool_resource(target):
             return _sensitive_tool_resource_error("grep")
 
+        selected_mode = str(mode or ("regex" if use_regex is True else "fixed")).strip().lower()
+        if selected_mode not in {"regex", "fixed"}:
+            return "Error: grep mode must be 'fixed' or 'regex'."
+        if case_sensitive is None:
+            case_sensitive = selected_mode == "regex"
+
         # build regex
-        if use_regex:
+        if selected_mode == "regex":
             try:
-                regex = re.compile(pattern)
+                regex = re.compile(pattern, 0 if case_sensitive else re.IGNORECASE)
             except re.error as e:
                 return f"Regex error: {e}"
         else:
-            # smart split: if pattern contains | under use_regex=False, auto split into multi-keyword OR
-            if "|" in pattern:
-                keywords = [re.escape(kw.strip()) for kw in pattern.split("|") if kw.strip()]
-                if keywords:
-                    regex = re.compile("|".join(keywords), re.IGNORECASE)
-                else:
-                    regex = re.compile(re.escape(pattern), re.IGNORECASE)
-            else:
-                regex = re.compile(re.escape(pattern), re.IGNORECASE)
+            regex = re.compile(re.escape(pattern), 0 if case_sensitive else re.IGNORECASE)
+
+        include_patterns = [str(x).strip() for x in (include or []) if str(x).strip()]
+        exclude_patterns = [str(x).strip().lstrip("!") for x in (exclude or []) if str(x).strip()]
+
+        def _path_allowed(file: Path) -> bool:
+            try:
+                rel = file.relative_to(target).as_posix() if target.is_dir() else file.name
+            except ValueError:
+                rel = file.name
+            if include_patterns and not any(fnmatch.fnmatch(rel, p) or fnmatch.fnmatch(file.name, p) for p in include_patterns):
+                return False
+            if any(fnmatch.fnmatch(rel, p) or fnmatch.fnmatch(file.name, p) for p in exclude_patterns):
+                return False
+            return True
 
         def iter_files():
             if target.is_file():
-                yield target
+                if _path_allowed(target):
+                    yield target
                 return
             if not target.is_dir():
                 return
@@ -2207,20 +2534,35 @@ def grep(
                     dirs[:] = [d for d in dirs if d not in exclude_dirs]
                     for file in files:
                         p = Path(root) / file
-                        if not _path_is_sensitive_tool_resource(p):
+                        if not _path_is_sensitive_tool_resource(p) and _path_allowed(p):
                             yield p
             else:
                 for entry in target.iterdir():
-                    if entry.is_file() and not _path_is_sensitive_tool_resource(entry):
+                    if entry.is_file() and not _path_is_sensitive_tool_resource(entry) and _path_allowed(entry):
                         yield entry
 
         results = []
         total_bytes = 0
-        max_results = _grep_max_match_lines()
+        max_results = _grep_max_match_lines() if max_results is None else max(1, min(10_000, int(max_results)))
         line_cap = _grep_line_max_chars()
         output_cap = _grep_output_max_bytes()
         file_cap = _grep_file_max_bytes()
         files_skipped = 0
+
+        if target.is_dir():
+            rg_result = _grep_with_ripgrep(
+                regex=regex,
+                target=target,
+                recursive=recursive,
+                max_results=max_results,
+                line_cap=line_cap,
+                output_cap=output_cap,
+                file_cap=file_cap,
+                include=include_patterns,
+                exclude=exclude_patterns,
+            )
+            if rg_result is not None:
+                return rg_result
 
         def _truncate_line(text: str, cap: int) -> str:
             if len(text) <= cap:
@@ -2970,6 +3312,7 @@ def context_manage(mode: str = "compact", focus: str = "", edit_instruction: str
 
 
 def task(
+    action: str = "start",
     description: str = "",
     prompt: str = "",
     subagent_type: str = "generalPurpose",
@@ -2985,6 +3328,7 @@ def task(
 ) -> str:
     """占位：实际逻辑在 agent_loop.react_node 中拦截 task 后执行。"""
     _ = (
+        action,
         description,
         prompt,
         subagent_type,
@@ -3012,6 +3356,16 @@ OPENAI_TOOL_DEFINITIONS: List[Dict[str, Any]] = [
         "List a directory (virtual `/` = workspace or an accessible OS path). Shows size; files get an approximate line count; directories use — and names end with /.",
         {
             "path": {"type": "string", "description": "Directory to list; default /."},
+            "include_line_counts": {
+                "type": "boolean",
+                "description": "Count lines by reading each file. Omit to use LS_INCLUDE_LINE_COUNTS (default true).",
+            },
+            "max_entries": {
+                "type": "integer",
+                "description": "Maximum entries returned for this call; omit to use LS_MAX_ENTRIES.",
+                "minimum": 1,
+                "maximum": 5000,
+            },
         },
         [],
     ),
@@ -3020,6 +3374,8 @@ OPENAI_TOOL_DEFINITIONS: List[Dict[str, Any]] = [
         "Same behavior as ls.",
         {
             "path": {"type": "string", "description": "Directory to list; default /."},
+            "include_line_counts": {"type": "boolean", "description": "Same as ls.include_line_counts."},
+            "max_entries": {"type": "integer", "minimum": 1, "maximum": 5000},
         },
         [],
     ),
@@ -3034,12 +3390,17 @@ OPENAI_TOOL_DEFINITIONS: List[Dict[str, Any]] = [
     ),
     _openai_function_schema(
         "grep",
-        "Search for text in files (regex optional). Path can be work area (default /) or an OS-absolute file/dir.",
+        "Search text in files. Prefer mode=fixed for literal text; use mode=regex only when needed. "
+        "Path can be work area (default /) or an OS-absolute file/dir.",
         {
             "pattern": {"type": "string"},
             "path": {"type": "string", "description": "File or directory to search; default /."},
             "recursive": {"type": "boolean", "default": True},
-            "use_regex": {"type": "boolean", "default": True},
+            "mode": {"type": "string", "enum": ["fixed", "regex"], "default": "fixed"},
+            "case_sensitive": {"type": "boolean", "default": False},
+            "include": {"type": "array", "items": {"type": "string"}, "description": "Optional file globs, e.g. ['*.py', 'src/**']."},
+            "exclude": {"type": "array", "items": {"type": "string"}, "description": "Optional exclusion globs, e.g. ['dist/**']."},
+            "max_results": {"type": "integer", "minimum": 1, "maximum": 10000},
         },
         ["pattern"],
     ),
@@ -3047,19 +3408,22 @@ OPENAI_TOOL_DEFINITIONS: List[Dict[str, Any]] = [
         "read_file",
         "Read a line range from a text file (virtual `/` under the workspace or an allowed OS-absolute path). "
         "Do not treat PDF/PPTX/spreadsheets/binary as plain text—convert or probe with code first. "
-        "Both start_line and end_line are required (1-based, inclusive). Read large files in multiple windows.",
+        "Use start_line plus line_count (default 200). Legacy end_line remains accepted internally.",
         {
             "path": {"type": "string", "description": "File path (virtual / or OS absolute)."},
             "start_line": {
                 "type": "integer",
                 "description": "First line to read (1-based, inclusive). Required.",
+                "default": 1,
             },
-            "end_line": {
+            "line_count": {
                 "type": "integer",
-                "description": "Last line to read (1-based, inclusive). Required.",
+                "description": "Number of lines to return.",
+                "default": 200,
+                "minimum": 1,
             },
         },
-        ["path", "start_line", "end_line"],
+        ["path"],
     ),
     _openai_function_schema(
         "write_file",
@@ -3078,33 +3442,23 @@ OPENAI_TOOL_DEFINITIONS: List[Dict[str, Any]] = [
             "temporary": {
                 "type": "boolean",
                 "description": "Mark this file as a temporary/intermediate artifact to be soft-deleted to .trash at end of turn.",
+                "default": False,
             },
         },
-        ["temporary"],
+        ["contents"],
     ),
     _openai_function_schema(
-        "edit_file",
-        "Edit file content: find and replace a string. Supports regex. "
-        "Provide (`search`, `replace`) OR aliases (`old_string`, `new_string`) — same meaning; if both are present, `search`/`replace` win. "
-        "Without regex: if exact substring not found, tries a unique multi-line match ignoring leading/trailing spaces per line (indent-tolerant).",
+        "apply_patch",
+        "Apply a Codex-style patch to one or more files under WORK_DIR. Use `*** Begin Patch`, then one or more "
+        "`*** Add File:`, `*** Update File:` (with `@@` hunks), or `*** Delete File:` sections, and `*** End Patch`. "
+        "All sections are validated before writing; stale or ambiguous context fails without partial edits.",
         {
-            "path": {"type": "string", "description": "File to edit."},
-            "search": {
+            "patch": {
                 "type": "string",
-                "description": "Substring to find, or regex pattern when use_regex is true.",
+                "description": "Complete patch text including the Begin Patch and End Patch markers.",
             },
-            "replace": {"type": "string", "description": "Replacement text."},
-            "old_string": {
-                "type": "string",
-                "description": "Alias for search (Cursor-style); ignored if search is provided.",
-            },
-            "new_string": {
-                "type": "string",
-                "description": "Alias for replace; ignored if replace is provided.",
-            },
-            "use_regex": {"type": "boolean", "default": False},
         },
-        [],
+        ["patch"],
     ),
     _openai_function_schema(
         "delete_file",
@@ -3124,7 +3478,7 @@ OPENAI_TOOL_DEFINITIONS: List[Dict[str, Any]] = [
                 "default": False,
             },
         },
-        [],
+        ["path"],
     ),
     _openai_function_schema(
         "web_search",
@@ -3180,18 +3534,18 @@ OPENAI_TOOL_DEFINITIONS: List[Dict[str, Any]] = [
     _openai_function_schema(
         "run_shell",
         "Execute a shell command on this host. **Syntax and backend follow the Environment line `Actual run_shell executor (this host)`** "
-        "(Git Bash vs PowerShell vs sh). Default cwd is WORK_DIR unless `working_dir` is set. "
-        "`args` append as separately quoted argv segments; `timeout` is capped at **600** s. "
+        "(Git Bash vs PowerShell vs sh). Default cwd is WORK_DIR unless `workdir` is set. "
+        "`timeout_ms` is capped at **600000** ms. Bash uses a login shell by default; set `login=false` when startup profiles are unnecessary. "
         "`restrict_to_workspace` (default true): reject commands that reference paths outside the workspace; set false for broader paths (often needs UI approval). "
         "Blocks dangerous patterns and private-network URLs in the command text; quote paths with spaces. "
         "Virtual `/folder` under restriction means under the workspace root, not the OS root; avoid `cd /` expecting the workspace on Windows. "
         "Prefer write_file(temporary=true) + `python script.py` over huge `python -c` for throwaway scripts; long `-c` payloads may auto-materialize under `.run_shell_temp/`. "
         "Do not assume POSIX utilities exist on Windows—use Python when unsure. Binary-heavy output may be truncated or summarized.",
         {
-            "command": {"type": "string", "description": "Shell command line (see args to append quoted tokens)"},
-            "args": {"type": "array", "items": {"type": "string"}, "description": "Optional extra arguments, each passed as one argv word after command (POSIX shlex.quote)"},
-            "working_dir": {"type": "string", "description": "Directory under workspace (relative to workspace root, or absolute). Omit for workspace root. '.' means workspace root."},
-            "timeout": {"type": "integer", "description": "Timeout seconds", "default": 30},
+            "command": {"type": "string", "description": "Complete shell command line."},
+            "workdir": {"type": "string", "description": "Directory under workspace (relative to workspace root, or absolute). Omit for workspace root. '.' means workspace root."},
+            "timeout_ms": {"type": "integer", "description": "Timeout in milliseconds (maximum 600000).", "default": 10000, "minimum": 1, "maximum": 600000},
+            "login": {"type": "boolean", "description": "Use a login shell when the selected executor supports it.", "default": True},
             "restrict_to_workspace": {"type": "boolean", "description": "Reject commands with paths outside workspace", "default": True},
         },
         ["command"],
@@ -3246,13 +3600,19 @@ OPENAI_TOOL_DEFINITIONS: List[Dict[str, Any]] = [
     ),
     _openai_function_schema(
         "task",
-        "Launch an isolated subagent (Cursor Task-compatible). "
-        "Subagent cannot see parent chat — put full context in prompt. "
-        "resume: prior subagent ID, or 'self' to fork parent history into a new subagent. "
-        "check_status: list running/completed subagents without starting a new run. "
-        "collect_result: wait if needed and return latest result(s) without a new prompt. "
-        "best-of-n-runner runs N parallel attempts (git worktree when available).",
+        "Manage isolated subagents with one action: start, resume, status, collect, or interrupt. "
+        "Subagents cannot see parent chat, so start/resume prompts must include the needed context. "
+        "best-of-n-runner is available with action=start.",
         {
+            "action": {
+                "type": "string",
+                "enum": ["start", "resume", "status", "collect", "interrupt"],
+                "description": (
+                    "start creates a subagent; resume continues resume ID with prompt; "
+                    "status reports state; collect waits for/reads results; "
+                    "interrupt cancels the running resume ID."
+                ),
+            },
             "description": {
                 "type": "string",
                 "description": "Short title (3–5 words) for this subagent run.",
@@ -3284,24 +3644,7 @@ OPENAI_TOOL_DEFINITIONS: List[Dict[str, Any]] = [
                 "type": "boolean",
                 "description": (
                     "If true, return immediately; result delivered via pending notification. "
-                    "Use collect_result or check_status instead of resume loops to poll status."
-                ),
-                "default": False,
-            },
-            "check_status": {
-                "type": "boolean",
-                "description": (
-                    "If true, return overall subagent status (running/completed/failed) for this session. "
-                    "Optional resume scopes to one subagent. Does not start or resume work."
-                ),
-                "default": False,
-            },
-            "collect_result": {
-                "type": "boolean",
-                "description": (
-                    "If true, return latest result(s) without sending a new prompt. "
-                    "With resume: wait if still running, then return full final output. "
-                    "Without resume: summary of all subagent results plus pending notifications."
+                    "Use action=collect or action=status instead of resume loops to poll status."
                 ),
                 "default": False,
             },
@@ -3309,11 +3652,6 @@ OPENAI_TOOL_DEFINITIONS: List[Dict[str, Any]] = [
                 "type": "string",
                 "description": "Subagent session ID to continue, or 'self' to fork parent conversation.",
                 "default": "",
-            },
-            "interrupt": {
-                "type": "boolean",
-                "description": "With resume: if target subagent is still running, cancel it (only way to stop and apply a new prompt immediately).",
-                "default": False,
             },
             "readonly": {
                 "type": "boolean",
@@ -3332,7 +3670,7 @@ OPENAI_TOOL_DEFINITIONS: List[Dict[str, Any]] = [
                 "maximum": 8,
             },
         },
-        ["description", "prompt", "subagent_type"],
+        ["action"],
     ),
 ]
 
@@ -3343,6 +3681,7 @@ tools = {
     "run_shell": run_shell,
     "ls": ls,
     "list_dir": ls,
+    "apply_patch": apply_patch,
     "edit_file": edit_file,
     "delete_file": delete_file,
     "glob": glob,

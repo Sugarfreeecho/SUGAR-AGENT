@@ -437,8 +437,8 @@ def _format_subagent_status_report(parent_session_id: str, resume_raw: str = "")
             lines.append(f"  preview: {preview[:240]}")
         lines.append("")
     lines.append(
-        "提示：收集完整结果用 task(collect_result=true, resume=<ID>)；"
-        "汇总全部结果用 task(collect_result=true)。"
+        "提示：收集完整结果用 task(action='collect', resume=<ID>)；"
+        "汇总全部结果用 task(action='collect')。"
     )
     return "\n".join(lines).rstrip()
 
@@ -453,7 +453,7 @@ async def _format_subagent_collect_result(parent_session_id: str, resume_raw: st
             if subagent_registry.is_running(child_id):
                 return (
                     f"Subagent {child_id} 仍在运行。"
-                    f"请稍后 task(collect_result=true, resume={child_id!r}) 再试。"
+                    f"请稍后 task(action='collect', resume={child_id!r}) 再试。"
                 )
             if isinstance(waited, str) and waited.strip():
                 return waited
@@ -537,8 +537,8 @@ def _format_subagent_result(
         return (
             f"Subagent running in background (ID: {child_session_id}, type: {subagent_type}, "
             f"description: {description}). "
-            f"Use task(collect_result=true, resume={child_session_id!r}) to collect the result when finished, "
-            f"or task(check_status=true) for overall status."
+            f"Use task(action='collect', resume={child_session_id!r}) to collect the result when finished, "
+            f"or task(action='status') for overall status."
         )
     tag = "续接完成" if resumed else "完成"
     header = (
@@ -1012,6 +1012,29 @@ async def _run_single_subagent(
     best_of_attempt: int = 0,
     best_of_total: int = 0,
 ) -> str:
+    action = str(tool_args.get("action") or "").strip().lower()
+    if action:
+        if action not in {"start", "resume", "status", "collect", "interrupt"}:
+            return "Error: task action must be start, resume, status, collect, or interrupt."
+        resume_for_action = str(tool_args.get("resume") or "").strip()
+        if action == "start" and resume_for_action:
+            return "Error: task action=start must not include resume; use action=resume."
+        if action in {"resume", "interrupt"} and not resume_for_action:
+            return f"Error: task action={action} requires resume=<subagent id>."
+        if action == "status":
+            return _format_subagent_status_report(parent_session_id, resume_for_action)
+        if action == "collect":
+            return await _format_subagent_collect_result(parent_session_id, resume_for_action)
+        if action == "interrupt":
+            child_id = session_manager.validate_subagent_resume(parent_session_id, resume_for_action)
+            if not child_id:
+                return f"Error: cannot interrupt subagent {resume_for_action!r}; it does not exist or belongs to another session."
+            if subagent_registry.is_running(child_id):
+                await subagent_registry.cancel(child_id)
+                session_manager.request_interrupt(child_id)
+                return f"Subagent {child_id} interrupted."
+            return f"Subagent {child_id} is not running."
+
     check_status = bool(tool_args.get("check_status"))
     collect_result = bool(tool_args.get("collect_result"))
     resume_raw = str(tool_args.get("resume") or "").strip()
@@ -1037,7 +1060,7 @@ async def _run_single_subagent(
     if not prompt and not resume_raw:
         return (
             "Error: task 需要提供非空 prompt，或对已有 subagent 使用 resume，"
-            "或使用 check_status / collect_result 查询状态与结果。"
+            "或使用 action=status / action=collect 查询状态与结果。"
         )
 
     if subagent_type not in SUBAGENT_TYPES:
@@ -1080,14 +1103,14 @@ async def _run_single_subagent(
                 if subagent_registry.is_running(child_id):
                     return (
                         f"Subagent {child_id} still running. "
-                        f"Use task(resume={child_id!r}) again later or interrupt=true."
+                        f"Use task(action='status', resume={child_id!r}) or task(action='interrupt', resume={child_id!r})."
                     )
                 if not prompt:
                     if isinstance(waited, str):
                         return waited
                     return (
                         f"Subagent {child_id} finished but returned no result. "
-                        f"Use task(resume={child_id!r}, prompt=...) to follow up."
+                        f"Use task(action='resume', resume={child_id!r}, prompt=...) to follow up."
                     )
             session_manager.clear_interrupt(child_id)
     else:
