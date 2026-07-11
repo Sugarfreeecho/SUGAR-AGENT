@@ -698,8 +698,12 @@ def test_runtime_v2_append_ui_event_writes_projection_not_legacy(monkeypatch):
 
     assert mirrored and mirrored[0][0] == "s1"
     assert mirrored[0][1]["type"] == "user"
-    assert saved_meta == [("s1", {"last_user_preview": "hello"})]
+    assert len(saved_meta) == 1
+    assert saved_meta[0][0] == "s1"
+    assert saved_meta[0][1]["last_user_preview"] == "hello"
+    assert saved_meta[0][1]["updated_at"]
     assert mgr.index[0]["last_user_preview"] == "hello"
+    assert mgr.index[0]["updated_at"] == saved_meta[0][1]["updated_at"]
     assert cleared == ["s1"]
 
 

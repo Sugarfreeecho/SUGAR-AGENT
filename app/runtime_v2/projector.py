@@ -102,6 +102,16 @@ class RuntimeProjector:
             self._upsert_run(snapshot, event, "running")
         elif event_type == "run_heartbeat":
             self._upsert_run(snapshot, event, "running", heartbeat_only=True)
+        elif event_type == "runtime_resumed":
+            payload = dict(event.payload or {})
+            payload["updated_at"] = event.timestamp
+            payload["seq"] = event.seq
+            snapshot["context"]["runtime_resume"] = payload
+            if event.run_id:
+                run = snapshot["runs"].get(event.run_id)
+                if isinstance(run, dict):
+                    run["heartbeat_at"] = event.timestamp
+                    run["last_resume"] = payload
         elif event_type in TERMINAL_RUN_TYPES:
             self._upsert_run(snapshot, event, TERMINAL_RUN_TYPES[event_type])
         elif event_type.startswith("subagent_"):
@@ -451,6 +461,9 @@ class RuntimeProjector:
         if status in terminal_statuses:
             run["finished_at"] = event.timestamp
             run["finished_seq"] = event.seq
+            reason = str((event.payload or {}).get("reason") or "").strip()
+            if reason:
+                run["reason"] = reason
         if status == "failed":
             run["error"] = str((event.payload or {}).get("error") or "")
 

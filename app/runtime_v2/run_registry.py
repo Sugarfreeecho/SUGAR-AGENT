@@ -20,6 +20,8 @@ class RunState:
     finished_at: Optional[str] = None
     error: Optional[str] = None
     interrupt_requested: bool = False
+    accumulated_suspend_seconds: float = 0.0
+    last_resume_at: Optional[str] = None
 
     def to_dict(self) -> dict:
         return {
@@ -31,6 +33,8 @@ class RunState:
             "finished_at": self.finished_at,
             "error": self.error,
             "interrupt_requested": self.interrupt_requested,
+            "accumulated_suspend_seconds": self.accumulated_suspend_seconds,
+            "last_resume_at": self.last_resume_at,
             "run_active": self.status not in TERMINAL_STATUSES,
         }
 
@@ -69,6 +73,16 @@ class RunRegistry:
             if not state:
                 return None
             state.interrupt_requested = True
+            return state
+
+    def record_resume(self, run_id: str, suspended_seconds: float) -> Optional[RunState]:
+        with self._lock:
+            state = self._runs.get(run_id)
+            if not state:
+                return None
+            state.accumulated_suspend_seconds += max(0.0, float(suspended_seconds or 0.0))
+            state.last_resume_at = now_iso()
+            state.heartbeat_at = state.last_resume_at
             return state
 
     def finish(self, run_id: str) -> Optional[RunState]:

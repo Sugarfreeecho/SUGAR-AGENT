@@ -59,6 +59,16 @@ class RuntimeGateway:
         payload = {"run": state.to_dict() if state else {"run_id": run_id, "missing": True}}
         return await self.append_event(session_id, "run_heartbeat", payload, run_id=run_id)
 
+    async def record_runtime_resume(self, session_id: str, run_id: str, suspended_seconds: float, payload: Optional[dict] = None) -> RuntimeEvent:
+        state = self.run_registry.record_resume(run_id, suspended_seconds)
+        data = {
+            "suspended_seconds": max(0.0, float(suspended_seconds or 0.0)),
+            "run": state.to_dict() if state else {"run_id": run_id, "missing": True},
+        }
+        if payload:
+            data.update(payload)
+        return await self.append_event(session_id, "runtime_resumed", data, run_id=run_id)
+
     async def finish_run(self, session_id: str, run_id: str, payload: Optional[dict] = None) -> RuntimeEvent:
         state = self.run_registry.finish(run_id)
         data = {"run": state.to_dict() if state else {"run_id": run_id, "missing": True}}

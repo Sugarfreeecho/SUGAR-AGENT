@@ -19,6 +19,8 @@ class HealthMonitor:
         stale: List[RunState] = []
         for run in self.registry.active_runs():
             try:
+                # record_resume() refreshes heartbeat_at after excluding the
+                # suspension gap, so pre-resume wall time cannot mark the run stale.
                 age = (now - parse_iso_z(run.heartbeat_at)).total_seconds()
             except Exception:
                 age = max_age_seconds + 1

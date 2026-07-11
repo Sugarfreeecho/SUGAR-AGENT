@@ -19,6 +19,7 @@ CORE_EVENT_TYPES = {
     "model_history_replaced",
     "run_started",
     "run_heartbeat",
+    "runtime_resumed",
     "run_finished",
     "run_failed",
     "run_interrupted",

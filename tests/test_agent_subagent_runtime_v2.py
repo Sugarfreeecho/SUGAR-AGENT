@@ -9,6 +9,25 @@ if str(APP_DIR) not in sys.path:
     sys.path.insert(0, str(APP_DIR))
 
 
+def test_task_action_status_routes_without_starting_subagent(monkeypatch):
+    import agent_subagent
+
+    monkeypatch.setattr(
+        agent_subagent,
+        "_format_subagent_status_report",
+        lambda parent, resume: f"status:{parent}:{resume}",
+    )
+
+    result = asyncio.run(
+        agent_subagent._run_single_subagent(
+            tool_args={"action": "status", "resume": "child-1"},
+            parent_session_id="parent-1",
+        )
+    )
+
+    assert result == "status:parent-1:child-1"
+
+
 def test_runtime_v2_subagent_run_uses_projection_not_legacy(monkeypatch, tmp_path):
     import agent_loop
     import agent_subagent

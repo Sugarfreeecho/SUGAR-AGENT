@@ -509,15 +509,46 @@ class RuntimeHistoryOps:
 
     def _append_and_snapshot(self, session_id: str, event_type: str, payload: dict, run_id: Optional[str] = None) -> RuntimeEvent:
         t0 = time.perf_counter()
+        logger.info(
+            "rt2_append_and_snapshot_started session=%s event_type=%s run_id=%s stage=wait_transaction",
+            session_id,
+            event_type,
+            str(run_id or ""),
+        )
         with self.event_log.session_transaction(session_id):
+            logger.info(
+                "rt2_append_and_snapshot_progress session=%s event_type=%s run_id=%s stage=transaction_acquired",
+                session_id,
+                event_type,
+                str(run_id or ""),
+            )
             event = self.event_log._append_unlocked(session_id, event_type, payload=payload, run_id=run_id)
             t_after_append = time.perf_counter()
+            logger.info(
+                "rt2_append_and_snapshot_progress session=%s event_type=%s run_id=%s stage=event_appended seq=%s",
+                session_id,
+                event_type,
+                str(run_id or ""),
+                event.seq,
+            )
             snapshot = self.snapshots.read(session_id)
             if int(snapshot.get("last_seq") or 0) != int(event.seq) - 1:
+                logger.info(
+                    "rt2_append_and_snapshot_progress session=%s event_type=%s run_id=%s stage=full_projection_started",
+                    session_id,
+                    event_type,
+                    str(run_id or ""),
+                )
                 snapshot = self.projector.project(self.event_log.read_all(session_id))
             else:
                 snapshot = self.projector.project_incremental(snapshot, event)
             t_after_project = time.perf_counter()
+            logger.info(
+                "rt2_append_and_snapshot_progress session=%s event_type=%s run_id=%s stage=snapshot_write_started",
+                session_id,
+                event_type,
+                str(run_id or ""),
+            )
             self.snapshots.stamp_event_log(session_id, snapshot, self.event_log.event_path(session_id))
             self.snapshots.write(session_id, snapshot)
         t_after_write = time.perf_counter()
@@ -531,6 +562,13 @@ class RuntimeHistoryOps:
             _rt2_step_ms(t_after_append, t_after_project),
             _rt2_step_ms(t_after_project, t_after_write),
             _rt2_step_ms(t0, t_after_write),
+        )
+        logger.info(
+            "rt2_append_and_snapshot_completed session=%s event_type=%s run_id=%s seq=%s",
+            session_id,
+            event_type,
+            str(run_id or ""),
+            event.seq,
         )
         return event
 

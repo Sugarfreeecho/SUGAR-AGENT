@@ -203,23 +203,48 @@ class SessionEventLog:
         cached = self._cached_last_seq(session_id)
         if cached is not None:
             return cached + 1
-        last = 0
         path = self.event_path(session_id)
         if not path.exists():
             return 1
-        with path.open("r", encoding="utf-8") as fh:
-            for line in fh:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    event = RuntimeEvent.from_dict(json.loads(line))
-                except Exception:
-                    continue
-                if event.seq > last:
-                    last = event.seq
+        last = self._read_last_seq_from_tail(path)
         self._update_seq_cache(session_id, last)
         return last + 1
+
+    @staticmethod
+    def _read_last_seq_from_tail(path: Path, chunk_size: int = 64 * 1024) -> int:
+        """Return the newest valid sequence without scanning a long JSONL file."""
+        try:
+            with path.open("rb") as fh:
+                fh.seek(0, os.SEEK_END)
+                pos = fh.tell()
+                pending = b""
+                while pos > 0:
+                    take = min(max(1024, int(chunk_size)), pos)
+                    pos -= take
+                    fh.seek(pos)
+                    pending = fh.read(take) + pending
+                    lines = pending.splitlines()
+                    if pos > 0 and lines:
+                        pending = lines.pop(0)
+                    else:
+                        pending = b""
+                    for raw in reversed(lines):
+                        if not raw.strip():
+                            continue
+                        try:
+                            data = json.loads(raw.decode("utf-8"))
+                            return max(0, int(data.get("seq") or 0))
+                        except (UnicodeDecodeError, ValueError, TypeError, json.JSONDecodeError):
+                            continue
+                if pending.strip():
+                    try:
+                        data = json.loads(pending.decode("utf-8"))
+                        return max(0, int(data.get("seq") or 0))
+                    except (UnicodeDecodeError, ValueError, TypeError, json.JSONDecodeError):
+                        pass
+        except OSError:
+            pass
+        return 0
 
     def repair(self, session_id: str) -> Dict[str, int]:
         """Drop malformed lines without changing published sequence IDs.

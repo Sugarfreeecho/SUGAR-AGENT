@@ -580,6 +580,49 @@ class RequestResponseLogger(httpx.Client):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.interactions = []
+        self._trace_local = threading.local()
+
+    def start_transport_trace(self) -> None:
+        """Start a per-thread httpcore trace for the next OpenAI request."""
+        self._trace_local.current = {
+            "started_at": time.perf_counter(),
+            "events": [],
+        }
+
+    def snapshot_transport_trace(self) -> Dict[str, Any]:
+        current = getattr(self._trace_local, "current", None)
+        if not isinstance(current, dict):
+            return {}
+        started_at = float(current.get("started_at") or time.perf_counter())
+        return {
+            "elapsed_ms": int(max(0.0, (time.perf_counter() - started_at) * 1000.0)),
+            "events": [dict(item) for item in current.get("events", [])],
+        }
+
+    def finish_transport_trace(self) -> Dict[str, Any]:
+        snapshot = self.snapshot_transport_trace()
+        try:
+            del self._trace_local.current
+        except AttributeError:
+            pass
+        return snapshot
+
+    def send(self, request, *args, **kwargs):
+        current = getattr(self._trace_local, "current", None)
+        if isinstance(current, dict):
+            started_at = float(current.get("started_at") or time.perf_counter())
+
+            def _trace(event_name: str, info: Dict[str, Any]) -> None:
+                # httpcore trace names are intentionally retained verbatim so
+                # upgrades do not silently collapse new transport phases.
+                current["events"].append({
+                    "event": str(event_name),
+                    "at_ms": int(max(0.0, (time.perf_counter() - started_at) * 1000.0)),
+                })
+
+            request.extensions = dict(getattr(request, "extensions", {}) or {})
+            request.extensions["trace"] = _trace
+        return super().send(request, *args, **kwargs)
 
     def request(self, method, url, **kwargs):
         headers = dict(kwargs.get("headers", {}))
@@ -2931,18 +2974,25 @@ class SessionManager:
             and not event_copy.get("_micro_context_shrink")
         ):
             preview = _normalize_sidebar_preview_text(str(event_copy.get("content") or ""), 180)
+            activity_at = str(event_copy.get("created_at") or "").strip()
+            if not activity_at:
+                activity_at = datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
             with self._session_metadata_lock(session_id):
                 meta = self._load_metadata_unlocked(session_id)
                 if not isinstance(meta, dict):
                     meta = {}
-                if meta.get("last_user_preview") != preview:
-                    meta["last_user_preview"] = preview
-                    self._save_metadata_unlocked(session_id, meta)
+                meta["last_user_preview"] = preview
+                # Runtime V2 does not rewrite ui_events.json. Persist activity on
+                # the same user-turn side effect so /sessions can reorder the row
+                # immediately and retain that order after a process restart.
+                meta["updated_at"] = activity_at
+                self._save_metadata_unlocked(session_id, meta)
             changed = False
             with self._lock:
                 for sess in self.index:
                     if sess.get("id") == session_id:
                         sess["last_user_preview"] = preview
+                        sess["updated_at"] = activity_at
                         changed = True
                         break
             if changed:
@@ -4706,10 +4756,13 @@ class SessionManager:
         if sid:
             # The session index only contains top-level sessions; avoid the generic
             # resolver here because it reloads the subagent index for every row.
-            ui_path = self.sessions_dir / str(sid) / "ui_events.json"
-            if ui_path.exists():
+            # V1 writes ui_events.json while Runtime V2 writes events.jsonl.
+            # Consider both so existing sessions and partially migrated data use
+            # the actual newest persisted activity rather than a stale sidecar.
+            session_dir = self.sessions_dir / str(sid)
+            for activity_path in (session_dir / "ui_events.json", session_dir / "events.jsonl"):
                 try:
-                    mt = ui_path.stat().st_mtime
+                    mt = activity_path.stat().st_mtime
                     best_ts = mt if best_ts is None else max(best_ts, mt)
                 except OSError:
                     pass

@@ -106,6 +106,20 @@ class SessionEventLogTests(unittest.TestCase):
             self.assertEqual([ev.seq for ev in log.read_latest("s1", 2)], [5, 6])
             self.assertEqual([ev.seq for ev in log.read_before_seq("s1", 5, 2)], [3, 4])
 
+    def test_next_seq_recovers_from_tail_and_ignores_partial_last_line(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            log = SessionEventLog(tmp)
+            log.append_batch("s1", [
+                {"type": "message_user", "payload": {}},
+                {"type": "message_assistant_final", "payload": {}},
+            ])
+            path = log.event_path("s1")
+            with path.open("ab") as fh:
+                fh.write(b'{"seq":999')
+            SessionEventLog._seq_cache.clear()
+
+            self.assertEqual(SessionEventLog(tmp).next_seq("s1"), 3)
+
 
 if __name__ == "__main__":
     unittest.main()
