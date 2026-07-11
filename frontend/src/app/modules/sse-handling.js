@@ -1,4 +1,4 @@
-const SSE_IDLE_TIMEOUT_MS = 45000;
+const SSE_IDLE_TIMEOUT_MS = 120000;
 
 function shouldApplySseSeqFilter(parsed) {
     if (!parsed || parsed.protocol === 'runtime_v2') return false;
@@ -46,12 +46,24 @@ async function readSseChunkWithIdleTimeout(reader, timeoutMs) {
         return await Promise.race([
             reader.read(),
             new Promise(function (_resolve, reject) {
-                timer = setTimeout(function () {
-                    var err = new Error('SSE idle timeout after ' + String(timeoutMs) + 'ms');
-                    err.name = 'SseIdleTimeout';
-                    try { reader.cancel(err).catch(function () { /* ignore */ }); } catch (e) { /* ignore */ }
-                    reject(err);
-                }, timeoutMs);
+                var armedAt = performance.now();
+                var arm = function () {
+                    timer = setTimeout(function () {
+                        var elapsed = performance.now() - armedAt;
+                        /* A heavily delayed timer means the browser/system was suspended.
+                           Give the live stream another full idle window after resume. */
+                        if (elapsed > timeoutMs + 15000) {
+                            armedAt = performance.now();
+                            arm();
+                            return;
+                        }
+                        var err = new Error('SSE idle timeout after ' + String(timeoutMs) + 'ms');
+                        err.name = 'SseIdleTimeout';
+                        try { reader.cancel(err).catch(function () { /* ignore */ }); } catch (e) { /* ignore */ }
+                        reject(err);
+                    }, timeoutMs);
+                };
+                arm();
             }),
         ]);
     } finally {
@@ -180,7 +192,10 @@ async function consumeAgentSseResponse(response, runCtx, runSessionId, streamEve
                         }
                         continue;
                     }
-                    if (parsed.type === 'tool_pending') continue;
+                    if (parsed.type === 'tool_pending') {
+                        appendToolPendingRow(runCtx, parsed, runSessionId);
+                        continue;
+                    }
                     if (parsed.type === 'tool_call_delta') {
                         appendToolCallDelta(runCtx, parsed, runSessionId);
                         continue;
@@ -195,6 +210,16 @@ async function consumeAgentSseResponse(response, runCtx, runSessionId, streamEve
                     else if (parsed.type === 'context_tokens' && eventSessionId === currentSessionId) applyContextTokenLabelForCurrentSession();
                     else if (parsed.type === 'cache_stats' && eventSessionId === currentSessionId) applyCacheStatsFromEvent(runCtx, parsed, runSessionId);
                     else if (parsed.type === 'todo_plan' && runSessionId === currentSessionId) renderTodoPlanForCurrentSession();
+                    else if (parsed.type === 'runtime_resumed') {
+                        removeTemporaryStatus(runCtx);
+                        var resumeSeconds = Math.max(0, Number(parsed.suspended_seconds || 0));
+                        appendLog(
+                            runCtx,
+                            parsed.content || ('检测到系统或进程暂停约 ' + Math.round(resumeSeconds) + ' 秒，任务已恢复'),
+                            'status',
+                            runSessionId
+                        );
+                    }
                     else if (parsed.type === 'status') {
                         var statusContent = String(parsed.content || '');
                         if (parsed.model_switch) {
@@ -355,7 +380,7 @@ async function ensureFinalVisibleAfterRun(sessionId, ctx, opts) {
     return false;
 }
 
-async function startContinueAfterSubagents(sessionId) {
+async function startContinueAfterSubagents(sessionId, forcedMode) {
     if (!sessionId || sessionId !== currentSessionId) return;
     delete subagentContinueDismissedForSession[sessionId];
     if (isSessionRunning(sessionId) || subagentContinueInFlight) {
@@ -372,9 +397,11 @@ async function startContinueAfterSubagents(sessionId) {
     var runSessionId = sessionId;
     try {
     var banner = document.getElementById('subagent-continue-banner');
-    var continueMode = banner && banner.dataset && banner.dataset.continueMode === 'react' ? 'react' : 'subagents';
+    var continueMode = forcedMode === 'react'
+        ? 'react'
+        : (banner && banner.dataset && banner.dataset.continueMode === 'react' ? 'react' : 'subagents');
     var continueUrl = continueMode === 'react'
-        ? '/sessions/' + encodeURIComponent(sessionId) + '/continue'
+        ? '/sessions/' + encodeURIComponent(sessionId) + '/continue' + (forcedMode === 'react' ? '?recovery=true' : '')
         : '/sessions/' + encodeURIComponent(sessionId) + '/continue-subagents';
         const response = await fetch(continueUrl, { method: 'POST' });
         if (response.status === 204) {
@@ -446,6 +473,32 @@ async function startContinueAfterSubagents(sessionId) {
         subagentContinueInFlight = false;
     }
 }
+
+var autoResumeReactAttemptAt = Object.create(null);
+
+function maybeAutoResumeInterruptedReact(sessionId, sessionDetail) {
+    var sid = String(sessionId || '');
+    var detail = sessionDetail || {};
+    if (!sid || sid !== currentSessionId) return;
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) return;
+    if (!detail.react_auto_resume || !detail.react_can_continue || detail.run_active || detail.stream_active) return;
+    if (isSessionRunning(sid) || subagentContinueInFlight) return;
+    var now = Date.now();
+    if (now - Number(autoResumeReactAttemptAt[sid] || 0) < 30000) return;
+    autoResumeReactAttemptAt[sid] = now;
+    if (getVisibleChatStream()) {
+        var ctx = newDomContext(getVisibleChatStream());
+        appendLog(ctx, '检测到上次运行未完成，正在自动恢复任务…', 'status', sid);
+    }
+    void startContinueAfterSubagents(sid, 'react');
+}
+
+window.addEventListener('online', function () {
+    var sid = String(currentSessionId || '');
+    if (!sid) return;
+    scheduleActiveSessionReconnect(sid, { delayMs: 100 });
+    setTimeout(function () { void refreshSingleSessionRow(sid); }, 250);
+});
 
 function nowPipelineMs() {
     return (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
@@ -1313,14 +1366,17 @@ async function sendMessage(options) {
     const ac = new AbortController();
     if (typeof clearSessionStreamStopSuppress === 'function') clearSessionStreamStopSuppress(runSessionId);
     var optimisticRunState = { controller: ac, ctx: null, runId: clientRunId, optimistic: true, suppressFollowupButton: true };
+    // Resolve the server message index before publishing the optimistic run.
+    // Background session reconciliation can otherwise observe "no server run"
+    // during this pre-submit window and cancel a request that was never sent.
+    reportClientPipelineStep(clientTimingCtx, 'prepare_client_run_id', _clientStepStart);
+    _clientStepStart = nowPipelineMs();
+    let preCount = await getUiEventCount(submitSessionId, { preferCache: true, maxAgeMs: 10000 });
     setSessionRunState(runSessionId, optimisticRunState);
     setSendButtonState();
     syncSessionListIndicatorClasses();
-    reportClientPipelineStep(clientTimingCtx, 'prepare_client_run_id_and_optimistic_state', _clientStepStart);
-    // 缓存过期时用轻量 count 校准，避免乐观 user index 和服务端 ui_events 分叉。
+    reportClientPipelineStep(clientTimingCtx, 'publish_optimistic_run_state', _clientStepStart);
     _clientStepStart = nowPipelineMs();
-    let preCount = await getUiEventCount(submitSessionId, { preferCache: true, maxAgeMs: 10000 });
-    if (ac.signal.aborted || optimisticRunState.abortReason) return;
     const existingStreamForIndex = (submitSessionId === currentSessionId) ? getVisibleChatStream() : null;
     if (existingStreamForIndex) {
         existingStreamForIndex.querySelectorAll('.msg-wrap--user[data-event-index]').forEach(function (wrap) {
@@ -1415,6 +1471,11 @@ async function sendMessage(options) {
         const response = await fetch('/chat', { method: 'POST', body: formData, signal: ac.signal });
         reportClientPipelineStep(clientTimingCtx, 'fetch_chat_response_headers', _clientStepStart, { status: response && response.status });
         _clientStepStart = nowPipelineMs();
+        if (response.status === 409) {
+            streamDisconnectedUnexpectedly = true;
+            appendLog(runCtx, '服务器报告该会话已有任务运行，正在同步现有任务状态…', 'status', runSessionId);
+            return;
+        }
         streamEventIdx = await consumeAgentSseResponse(response, runCtx, runSessionId, streamEventIdx);
         reportClientPipelineStep(clientTimingCtx, 'consume_sse_until_done', _clientStepStart, { streamEventIdx: streamEventIdx });
     } catch (error) {

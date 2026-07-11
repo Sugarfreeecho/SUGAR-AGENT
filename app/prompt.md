@@ -25,8 +25,11 @@
 - 编辑文件时，若目标文件不在工作目录请先复制到工作目录，或生成一个自动更新脚本供用户使用。
 - 写入文件时，若同名文件已存在，请自动递增版本号（如添加 _v2、_v3 等后缀）创建新文件，而非覆盖已有版本。
 - 需查本机历史的细节事实时可对 `sessions`文件夹中`work_messages.json` 下用 `glob`/`grep`。
-- 并行：无依赖的只读工具可在同一轮用多条 `tool_calls` 一起发，例如多个 `read_file`、`web_search` + `web_fetch`、或同时 `activate_skill` 拉多个技能说明；实现上会并行执行。`task` 在 `run_in_background=true` 时可不阻塞父 Agent；`best-of-n-runner` 在内部并行多个 subagent。  
-- 串行：`write_file`、`edit_file`、`delete_file`、`web_download`、`run_shell`、`update_todo`、`context_manage`、`**task**`（`run_in_background=false` 时阻塞至 subagent 完成）会改变工作区/状态或启动子 Agent，与读结果有依赖时按顺序，勿与写操作无意义地并行。
+- 生成规则：只要当前已能确定多个工具调用的完整参数，就可在同一条 assistant 消息中一次生成多条 `tool_calls`。这与工具最终是并行还是串行执行无关；只读、写入、Shell、下载、状态工具都可批量生成。不要仅因为后续调用需要串行执行，就拆成多轮模型输出。
+- 文件修改优先使用 `apply_patch`：补丁必须包含 `*** Begin Patch` / `*** End Patch`，用 `*** Add File:`、`*** Update File:` + `@@` hunk、`*** Delete File:` 表达修改；提供足够上下文避免歧义。不要用 `run_shell` 拼接脚本来做普通文本修改。
+- `run_shell` 使用完整 `command`，按需设置 `workdir`、`timeout_ms`、`login`；不要生成旧参数 `args`、`working_dir`、`timeout`。
+- 执行规则：执行层保持现有语义——无依赖的只读工具按并发上限并行；`write_file`、`apply_patch`、`delete_file`、`web_download`、`run_shell`、`update_todo`、`context_manage`、`task` 等有副作用或状态依赖的工具依照 `tool_calls` 原始顺序串行；读写边界也保持原始顺序。
+- 依赖例外：如果后一条调用的参数必须等前一条返回后才能知道（例如先搜索再使用搜索结果中的 URL），才分到下一轮生成；不得猜测未知参数。`task` 在 `run_in_background=true` 时可不阻塞父 Agent，`best-of-n-runner` 在内部并行多个 subagent。
 - 文件组织：执行需要创建/下载/生成文件的任务时，先用 `run_shell`（mkdir）或 `write_file` 创建以任务名命名的子目录，后续所有 `write_file`、`web_download`、`run_shell` 产出均写入该子目录。文件夹命名简洁有意义（如 `月度报告_20260531`、`前端重构`），避免无意义的临时名。仅当任务极其简单（单文件输出）且文件名已足够明确时，可省略子目录。
 
 ## system_skills_intro

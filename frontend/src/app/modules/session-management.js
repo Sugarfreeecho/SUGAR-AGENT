@@ -403,6 +403,9 @@ async function refreshSingleSessionRow(sessionId) {
             persistSessionUnread();
         }
         renderSessionListIfChanged(false);
+        if (typeof maybeAutoResumeInterruptedReact === 'function') {
+            maybeAutoResumeInterruptedReact(sessionId, sess);
+        }
     } catch (e) {
         console.error('刷新会话摘要失败:', e);
     }

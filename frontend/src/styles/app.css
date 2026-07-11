@@ -3220,6 +3220,7 @@ body {
     text-transform: uppercase; color: var(--text-tertiary); margin-bottom: 0.55rem;
 }
 .settings-modal__label--sub { margin-top: 0.75rem; margin-bottom: 0.45rem; }
+
 .settings-font-row { display: flex; align-items: stretch; gap: 0.45rem; }
 .settings-font-step {
     flex: 1; min-height: 42px; padding: 0.35rem;

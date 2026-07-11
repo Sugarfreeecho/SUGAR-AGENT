@@ -3018,6 +3018,10 @@ function appendToolCallDelta(ctx, parsed, runSessionId) {
         if (row) row.setAttribute('data-tool-draft-key', key);
     }
     if (!row) return;
+    // A valid call may start executing before the provider finishes emitting
+    // metadata-only deltas. Never let those late deltas revert the row to
+    // "generating" or create a duplicate draft.
+    if (row.getAttribute('data-tool-pending') === '1') return;
     if (parsed.id) row.dataset.pendingToolCallId = String(parsed.id);
     
     // Tool-call generation should still reveal the process group; only the later
@@ -3075,10 +3079,10 @@ function formatToolCommandLine(tool, args, commandPreview) {
     var a = args && typeof args === 'object' && !Array.isArray(args) ? args : {};
     function j(v) { try { return JSON.stringify(v); } catch (e) { return String(v); } }
     function pair(k, v) {
-        if ((k === 'content' || k === 'contents') && typeof v === 'string' && v.length > 240) v = '<' + v.length + ' chars>';
+        if ((k === 'content' || k === 'contents' || k === 'patch') && typeof v === 'string' && v.length > 240) v = '<' + v.length + ' chars>';
         return j(k) + ': ' + j(v);
     }
-    var preferred = ['path','target_directory','file_path','directory','root','command','args','url','start_line','end_line','pattern','query','search','replace','old_string','new_string','working_dir','timeout','temporary','content','contents'];
+    var preferred = ['path','target_directory','file_path','directory','root','command','args','url','start_line','end_line','pattern','query','search','replace','old_string','new_string','workdir','timeout_ms','login','working_dir','timeout','temporary','patch','content','contents'];
     var keys = [];
     // 路径参数去重：只保留第一个存在的路径参数
     var pathKeys = ['path', 'target_directory', 'file_path', 'directory', 'root'];
@@ -3128,17 +3132,29 @@ function appendToolPendingRow(ctx, parsed, runSessionId) {
     var draft = findToolDraftRow(ctx, parsed);
     if (draft) {
         if (parsed.tool_call_id != null && String(parsed.tool_call_id) !== '') draft.setAttribute('data-tool-call-id', String(parsed.tool_call_id));
-        draft.removeAttribute('data-tool-draft-key');
         draft.setAttribute('data-tool-pending', '1');
         draft.dataset.commandPreview = parsed.command_preview != null ? String(parsed.command_preview) : '';
-        setToolRowText(draft, line, ctx, runSessionId);
+        var draftScroller = draft.querySelector('.feed-chunk-scroller');
+        if (draftScroller) draftScroller.textContent = truncateLogTextForUi(line);
+        var draftChunk = draft.querySelector('.feed-chunk');
+        if (draftChunk) {
+            draftChunk.classList.remove('is-streaming');
+            refreshFeedChunkOverflow(draftChunk);
+        }
+        if (!replayingMessages) scrollContentAreaIfFollow(ctx, runSessionId);
         return;
     }
     var sc = createProcessFeedRow(ctx, 'tool-call', line, so, runSessionId, parsed.tool_call_id);
     var row = sc && sc.closest ? sc.closest('.feed-item') : null;
     if (row) {
+        row.setAttribute('data-tool-draft-key', toolCallDraftKey(parsed));
         row.setAttribute('data-tool-pending', '1');
         row.dataset.commandPreview = parsed.command_preview != null ? String(parsed.command_preview) : '';
+        var chunk = row.querySelector('.feed-chunk');
+        if (chunk) {
+            chunk.classList.remove('is-streaming');
+            refreshFeedChunkOverflow(chunk);
+        }
     }
 }
 

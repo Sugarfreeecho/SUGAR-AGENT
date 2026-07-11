@@ -151,5 +151,12 @@ function initUiSettingsControls() {
             }
         });
     }
+    var dashboardBtn = document.getElementById('settings-execution-dashboard');
+    if (dashboardBtn) dashboardBtn.addEventListener('click', function () {
+        closeSettingsModal();
+        var w = window.open('/execution-dashboard', 'myagent-execution-dashboard');
+        if (w) { try { w.focus(); } catch (e) {} }
+        else window.location.href = '/execution-dashboard';
+    });
 }
 initUiSettingsControls();

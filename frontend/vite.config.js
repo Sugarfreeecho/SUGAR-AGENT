@@ -12,7 +12,10 @@ export default defineConfig({
     outDir: appRoot,
     emptyOutDir: true,
     rollupOptions: {
-      input: resolve(__dirname, 'index.html'),
+      input: {
+        main: resolve(__dirname, 'index.html'),
+        executionDashboard: resolve(__dirname, 'execution-dashboard.html'),
+      },
     },
   },
   server: {

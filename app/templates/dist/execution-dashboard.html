@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>执行状态看板</title>
+  <script type="module" crossorigin src="/assets/executionDashboard-BHf_g7cH.js"></script>
+  <link rel="modulepreload" crossorigin href="/assets/modulepreload-polyfill-B5Qt9EMX.js">
+  <link rel="stylesheet" crossorigin href="/assets/executionDashboard-1R_TFd1c.css">
+</head>
+<body>
+  <header class="dash-topbar">
+    <div><h1>执行状态看板</h1><p>跨会话 · 每次 LLM 请求 · 实时刷新</p></div>
+    <div class="dash-controls">
+      <select id="session-filter" aria-label="选择会话"><option value="">全部会话</option></select>
+      <button id="refresh-btn" type="button">立即刷新</button>
+      <button id="back-to-chat-btn" class="back-to-chat" type="button">返回聊天</button>
+    </div>
+  </header>
+  <main>
+    <section class="dash-summary" id="summary"></section>
+    <section class="dash-chart-grid">
+      <article class="dash-panel"><header><h2>LLM API 指标</h2><span>输入、输出及上下文长度</span></header><div id="api-chart" class="chart"></div></article>
+      <article class="dash-panel"><header><h2>阶段耗时</h2><span>每轮各大阶段</span></header><div id="phase-chart" class="chart"></div></article>
+    </section>
+    <section id="dashboard-body"></section>
+  </main>
+  <div id="chart-tooltip" class="chart-tooltip" role="tooltip" aria-hidden="true"></div>
+</body>
+</html>

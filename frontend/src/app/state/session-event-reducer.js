@@ -58,6 +58,14 @@ function applySessionEvent(event, opts) {
     }
     if (type === 'run_finished' || type === 'run_interrupted' || type === 'run_failed') {
         if (runId) sessionStore.markTerminalRun(sessionId, runId);
+        const localRun = getSessionRunState(sessionId);
+        const localRunId = String((localRun && localRun.runId) || '').trim();
+        const activeInfo = sessionStore.activeRunInfoBySession.get(sessionId);
+        const activeRunId = String((activeInfo && (activeInfo.run_id || activeInfo.runId)) || '').trim();
+        const knownCurrentRunId = localRunId || activeRunId;
+        if (runId && knownCurrentRunId && runId !== knownCurrentRunId) {
+            return { handled: true, staleTerminalIgnored: true, messageRecord: messageRecord };
+        }
         if (type === 'run_finished' && typeof clearSessionStreamStopSuppress === 'function') clearSessionStreamStopSuppress(sessionId);
         markSessionRunInactive(sessionId);
         const sess = sessionStore.get(sessionId);

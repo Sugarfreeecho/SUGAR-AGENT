@@ -10,8 +10,9 @@
     <script>try { if (localStorage.getItem('myagent-theme') !== 'dark') document.documentElement.classList.add('theme-light'); } catch (e) { document.documentElement.classList.add('theme-light'); }</script>
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/mermaid@10.9.5/dist/mermaid.min.js"></script>
-  <script type="module" crossorigin src="/assets/index-81rXF3VY.js"></script>
-  <link rel="stylesheet" crossorigin href="/assets/index-omtVztV-.css">
+  <script type="module" crossorigin src="/assets/main-0o664_Z0.js"></script>
+  <link rel="modulepreload" crossorigin href="/assets/modulepreload-polyfill-B5Qt9EMX.js">
+  <link rel="stylesheet" crossorigin href="/assets/main-omtVztV-.css">
 </head>
 <body>
 <div class="app">
@@ -190,6 +191,10 @@
                 <button type="button" id="settings-env-advanced" class="settings-advanced-btn">高级设置</button>
                 <div style="margin-top:.45rem;color:var(--text-tertiary);font-size:0.72rem;line-height:1.45;">编辑完整 .env，保存后立即写回磁盘（部分项需重启服务）。</div>
                 <div style="margin-top:.45rem;color:var(--text-tertiary);font-size:0.72rem;line-height:1.45;">如需帮助或反馈，请联系GitHub @sugarfreeecho</div>
+            </div>
+            <div class="settings-modal__section">
+                <div class="settings-modal__label">运行诊断</div>
+                <button type="button" id="settings-execution-dashboard" class="settings-advanced-btn">打开执行状态看板</button>
             </div>
         </div>
     </div>
