@@ -33,7 +33,6 @@ function endRunForClient(sessionId, ctx, opts) {
     syncSessionListIndicatorClasses();
     setSendButtonState();
     if (sid === currentSessionId) renderTodoPlanForCurrentSession();
-    if (opts.drainFollowup !== false) scheduleFollowupQueueDrain(sid, opts.followupDelayMs || 0);
     if (liveAutoFollow && opts.scroll !== false) {
         scrollProcessBodyToBottom(ctx, sid);
         scrollChatToBottomIfFollow(sid, {});
@@ -215,7 +214,11 @@ async function consumeAgentSseResponse(response, runCtx, runSessionId, streamEve
                         var resumeSeconds = Math.max(0, Number(parsed.suspended_seconds || 0));
                         appendLog(
                             runCtx,
-                            parsed.content || ('检测到系统或进程暂停约 ' + Math.round(resumeSeconds) + ' 秒，任务已恢复'),
+                            parsed.content || (
+                                parsed.cause === 'system_sleep'
+                                    ? ('检测到系统睡眠约 ' + Math.round(resumeSeconds) + ' 秒，任务已恢复')
+                                    : ('检测到 Agent 进程暂停约 ' + Math.round(resumeSeconds) + ' 秒，任务已恢复')
+                            ),
                             'status',
                             runSessionId
                         );
@@ -508,7 +511,7 @@ function isClientPipelineTerminalStep(label, step) {
     var s = String(step || '');
     var l = String(label || '');
     if (l.indexOf('client_send_pipeline') >= 0) {
-        return s === 'release_send_lock_and_schedule_followup';
+        return s === 'release_send_lock';
     }
     if (l.indexOf('client_followup') >= 0) {
         return s === 'followup_cancel_after_steer'
@@ -866,6 +869,9 @@ function renderFollowupQueue(sessionId) {
         return;
     }
     q.forEach(function (item, idx) {
+        if (item && (item.status === 'accepted' || item.status === 'restarting')) {
+            scheduleAcceptedFollowupWatch(sid, item.id);
+        }
         var row = document.createElement('div');
         row.className = 'followup-queue-row';
         row.classList.toggle('is-sending', item.status === 'sending' || item.status === 'submitting');
@@ -922,6 +928,7 @@ function getFollowupStatusText(item) {
     if (status === 'withdrawing') return '撤回中';
     if (status === 'submitting') return '提交中';
     if (status === 'accepted') return '已接收，等待插入';
+    if (status === 'restarting') return '正在接管当前任务';
     if (status === 'sending') return '发送中';
     if (status === 'sent') return '已发送';
     return '待发送';
@@ -953,7 +960,6 @@ function enqueueCurrentInputAsFollowup() {
     autoResizeTextarea();
     renderFollowupQueue(sid);
     setSendButtonState();
-    scheduleFollowupQueueDrain(sid, 0);
     return true;
 }
 
@@ -970,7 +976,7 @@ function withdrawFollowup(itemId) {
     const sid = currentSessionId;
     var q = getFollowupQueue(sid);
     var pendingItem = q.find(function (entry) { return String(entry.id) === String(itemId); });
-    if (pendingItem && (pendingItem.status === 'sending' || pendingItem.status === 'submitting' || pendingItem.status === 'accepted')) {
+    if (pendingItem && (pendingItem.status === 'sending' || pendingItem.status === 'submitting' || pendingItem.status === 'accepted' || pendingItem.status === 'restarting')) {
         pendingItem.cancelRequested = true;
         pendingItem.status = 'withdrawing';
         persistFollowupQueue(sid);
@@ -1009,10 +1015,18 @@ function returnFollowupToInput(sid, item) {
 }
 
 async function sendSteerMessage(sessionId, text, clientId, selectedSkills, uiContent) {
+    var activeRun = getSessionRunState(sessionId);
+    var sourceRunId = activeRun && activeRun.runId ? String(activeRun.runId) : '';
     var r = await fetch('/sessions/' + encodeURIComponent(sessionId) + '/steer', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: text, client_id: clientId || '', selected_skills: selectedSkills || [], ui_content: uiContent || text }),
+        body: JSON.stringify({
+            message: text,
+            client_id: clientId || '',
+            selected_skills: selectedSkills || [],
+            ui_content: uiContent || text,
+            source_run_id: sourceRunId,
+        }),
     });
     var j = await r.json().catch(function () {
         return { ok: false, error: 'steer failed' };
@@ -1056,6 +1070,73 @@ async function cancelSteerMessage(sessionId, item) {
     return j;
 }
 
+async function fetchSteerStatus(sessionId, item) {
+    var steerId = String(item && item.steerId || '');
+    if (!sessionId || !steerId) return null;
+    var r = await fetch('/sessions/' + encodeURIComponent(sessionId) + '/steer/' + encodeURIComponent(steerId));
+    var j = await r.json().catch(function () { return null; });
+    if (!r.ok || !j || !j.ok) return null;
+    return j.item || null;
+}
+
+async function recoverSteerForRestart(sessionId, item) {
+    var steerId = String(item && item.steerId || '');
+    if (!sessionId || !steerId) return null;
+    var r = await fetch('/sessions/' + encodeURIComponent(sessionId) + '/steer/' + encodeURIComponent(steerId) + '/recover', {
+        method: 'POST',
+    });
+    var j = await r.json().catch(function () { return null; });
+    return r.ok && j && j.ok ? (j.item || null) : null;
+}
+
+async function syncFollowupQueueFromServer(sessionId) {
+    var sid = String(sessionId || '');
+    if (!sid || followupServerSyncInFlight[sid]) return followupServerSyncInFlight[sid] || null;
+    followupServerSyncInFlight[sid] = fetch('/sessions/' + encodeURIComponent(sid) + '/steer')
+        .then(function (r) { return r.ok ? r.json() : null; })
+        .then(function (payload) {
+            if (!payload || !payload.ok || !Array.isArray(payload.items)) return;
+            var q = getFollowupQueue(sid);
+            var pendingIds = new Set();
+            payload.items.forEach(function (serverItem) {
+                var steerId = String(serverItem.id || '');
+                var clientId = String(serverItem.client_id || '');
+                if (steerId) pendingIds.add(steerId);
+                var local = q.find(function (entry) {
+                    return (steerId && String(entry.steerId || '') === steerId)
+                        || (clientId && String(entry.clientId || '') === clientId);
+                });
+                if (!local) {
+                    local = {
+                        id: 'server-' + (steerId || clientId || Date.now()),
+                        text: String(serverItem.content || ''),
+                        display: String(serverItem.ui_content || serverItem.content || ''),
+                        clientId: clientId,
+                        steerId: steerId,
+                        createdAt: Math.round(Number(serverItem.created_at || 0) * 1000) || Date.now(),
+                    };
+                    q.push(local);
+                }
+                local.steerId = steerId || local.steerId;
+                local.clientId = clientId || local.clientId;
+                local.replacementRunId = String(serverItem.replacement_run_id || local.replacementRunId || '');
+                var state = String(serverItem.state || 'queued');
+                local.status = state === 'restarting' ? 'restarting' : 'accepted';
+            });
+            for (var i = q.length - 1; i >= 0; i -= 1) {
+                var entry = q[i];
+                if (entry.steerId && (entry.status === 'accepted' || entry.status === 'restarting') && !pendingIds.has(String(entry.steerId))) {
+                    q.splice(i, 1);
+                }
+            }
+            q.sort(function (a, b) { return Number(a.createdAt || 0) - Number(b.createdAt || 0); });
+            persistFollowupQueue(sid);
+            renderFollowupQueue(sid);
+        })
+        .finally(function () { delete followupServerSyncInFlight[sid]; });
+    return followupServerSyncInFlight[sid];
+}
+
 function removeConsumedFollowupSteer(sessionId, ev) {
     const sid = String(sessionId || '');
     if (!sid || !ev || !ev.steer) return false;
@@ -1070,31 +1151,73 @@ function removeConsumedFollowupSteer(sessionId, ev) {
     if (!item) return false;
     takeFollowupItem(sid, item.id);
     renderFollowupQueue(sid);
-    scheduleFollowupQueueDrain(sid, 0);
     return true;
 }
 
-function scheduleFollowupQueueDrain(sessionId, delayMs) {
-    const sid = String(sessionId || '');
-    if (!sid) return;
-    setTimeout(function () { drainFollowupQueue(sid); }, Math.max(0, Number(delayMs) || 0));
-}
-
 function scheduleAcceptedFollowupWatch(sid, itemId) {
-    setTimeout(function () {
+    var watchKey = String(sid || '') + ':' + String(itemId || '');
+    if (followupWatchTimers[watchKey]) return;
+    followupWatchTimers[watchKey] = setTimeout(function () {
+        delete followupWatchTimers[watchKey];
         var queued = getFollowupQueue(sid).find(function (entry) {
             return String(entry.id) === String(itemId);
         });
-        if (!queued || queued.status !== 'accepted') return;
-        refreshFollowupRunState(sid).finally(function () {
+        if (!queued || !['accepted', 'restarting'].includes(String(queued.status || ''))) return;
+        Promise.all([refreshFollowupRunState(sid), fetchSteerStatus(sid, queued)]).then(function (results) {
             var latest = getFollowupQueue(sid).find(function (entry) {
                 return String(entry.id) === String(itemId);
             });
-            if (!latest || latest.status !== 'accepted') return;
+            if (!latest) return;
+            var serverItem = results && results[1];
+            var serverState = String(serverItem && serverItem.state || '');
+            if (serverState === 'consumed') {
+                takeFollowupItem(sid, itemId);
+                renderFollowupQueue(sid);
+                return;
+            }
+            if (serverState === 'cancelled' || serverState === 'failed') {
+                var failed = takeFollowupItem(sid, itemId);
+                if (failed) returnFollowupToInput(sid, failed);
+                return;
+            }
+            if ((serverState === 'queued' || serverState === 'interrupting' || serverState === 'claimed') && !isSessionRunning(sid) && !isServerStreamActive(sid)) {
+                recoverSteerForRestart(sid, latest).then(function (recovered) {
+                    if (recovered) {
+                        latest.status = 'restarting';
+                        latest.replacementRunId = String(recovered.replacement_run_id || '');
+                        persistFollowupQueue(sid);
+                    }
+                    scheduleAcceptedFollowupWatch(sid, itemId);
+                });
+                return;
+            }
+            if (serverState === 'restarting' && !isSessionRunning(sid) && !isServerStreamActive(sid) && !latest.restartRecoveryAttempted) {
+                latest.restartRecoveryAttempted = true;
+                latest.replacementRunId = String(serverItem && serverItem.replacement_run_id || latest.replacementRunId || '');
+                persistFollowupQueue(sid);
+                sendMessage({
+                    message: latest.text,
+                    displayMessage: latest.display || latest.text,
+                    selectedSkills: latest.skills || [],
+                    fromQueue: true,
+                    sessionId: sid,
+                    forceStart: true,
+                    preserveInput: true,
+                    asSteer: true,
+                    steerId: latest.steerId,
+                    clientRunId: latest.replacementRunId,
+                }).finally(function () {
+                    scheduleAcceptedFollowupWatch(sid, itemId);
+                });
+                return;
+            }
             if (isSessionRunning(sid) || isServerStreamActive(sid)) {
                 scheduleActiveSessionReconnect(sid, { delayMs: 0 });
                 scheduleActiveSessionReconnect(sid, { delayMs: 1200 });
             }
+            scheduleAcceptedFollowupWatch(sid, itemId);
+        }).catch(function () {
+            scheduleAcceptedFollowupWatch(sid, itemId);
         });
     }, 1200);
 }
@@ -1152,19 +1275,16 @@ async function sendFollowupNow(itemId, sessionId) {
             var previousRun = getSessionRunState(sid);
             if (previousRun) abortSessionRun(sid, 'followup-restart');
             markSessionRunInactive(sid);
-            item.status = 'sent';
+            item.status = 'restarting';
+            item.replacementRunId = String(steerResult.replacement_run_id || '');
             persistFollowupQueue(sid);
             renderFollowupQueue(sid);
             setSendButtonState();
             syncSessionListIndicatorClasses();
-            setTimeout(function () {
-                takeFollowupItem(sid, itemId);
-                renderFollowupQueue(sid);
-            }, 1200);
             reportClientPipelineStep(followupTimingCtx, 'followup_restart_takeover', _followupStepStart, {
                 hadPreviousRun: !!previousRun
             });
-            return sendMessage({
+            var restartPromise = sendMessage({
                 message: item.text,
                 displayMessage: item.display || item.text,
                 selectedSkills: item.skills || [],
@@ -1173,7 +1293,11 @@ async function sendFollowupNow(itemId, sessionId) {
                 forceStart: true,
                 preserveInput: true,
                 asSteer: true,
+                steerId: item.steerId,
+                clientRunId: String(steerResult.replacement_run_id || ''),
             });
+            scheduleAcceptedFollowupWatch(sid, itemId);
+            return restartPromise;
         }
         item.status = 'accepted';
         persistFollowupQueue(sid);
@@ -1247,36 +1371,6 @@ async function sendFollowupNow(itemId, sessionId) {
     return sendMessage({ message: item.text, displayMessage: item.display || item.text, selectedSkills: item.skills || [], fromQueue: true, sessionId: sid, forceStart: true });
 }
 
-function drainFollowupQueue(sessionId) {
-    const sid = String(sessionId || '');
-    if (!sid || followupQueueDraining[sid]) return;
-    if (sendPipelineLock && sendPipelineLockSessionId === sid) {
-        scheduleFollowupQueueDrain(sid, 120);
-        return;
-    }
-    var q = getFollowupQueue(sid);
-    if (!q.length) {
-        renderFollowupQueue(sid);
-        return;
-    }
-    var item = q[0];
-    if (!item || item.status) {
-        renderFollowupQueue(sid);
-        return;
-    }
-    followupQueueDraining[sid] = true;
-    var attemptedId = String(item.id);
-    Promise.resolve(sendFollowupNow(item.id, sid))
-        .finally(function () {
-            delete followupQueueDraining[sid];
-            var q2 = getFollowupQueue(sid);
-            var same = q2.find(function (entry) { return String(entry.id) === attemptedId; });
-            if (!same && q2.length && !q2[0].status) {
-                scheduleFollowupQueueDrain(sid, 0);
-            }
-        });
-}
-
 async function sendMessage(options) {
     options = options || {};
     const clientPipelineStartedAt = nowPipelineMs();
@@ -1297,7 +1391,7 @@ async function sendMessage(options) {
     const rawMessage = (options.fromQueue || options.fromInlineRewrite) ? visibleMessage : expandInputPathTokens(visibleMessage);
     if (!String(rawMessage).trim()) return;
     if (isSessionRunning(submitSessionIdInitial) && !options.forceStart) return;
-    if (sendPipelineLock && sendPipelineLockSessionId === submitSessionIdInitial && !options.forceStart) return;
+    if (sendPipelineLock && sendPipelineLockSessionId === submitSessionIdInitial) return;
     if (options.forceStart && submitSessionIdInitial) {
         var previousRun = getSessionRunState(submitSessionIdInitial);
         if (previousRun) abortSessionRun(submitSessionIdInitial, 'followup-restart');
@@ -1359,9 +1453,9 @@ async function sendMessage(options) {
     const runSessionId = submitSessionId;
     submittedRunSessionId = runSessionId;
     _clientStepStart = nowPipelineMs();
-    const clientRunId = (window.crypto && window.crypto.randomUUID)
+    const clientRunId = options.clientRunId || ((window.crypto && window.crypto.randomUUID)
         ? window.crypto.randomUUID()
-        : ('run-' + Date.now() + '-' + Math.random().toString(16).slice(2));
+        : ('run-' + Date.now() + '-' + Math.random().toString(16).slice(2)));
     clientTimingCtx.runId = clientRunId;
     const ac = new AbortController();
     if (typeof clearSessionStreamStopSuppress === 'function') clearSessionStreamStopSuppress(runSessionId);
@@ -1461,6 +1555,7 @@ async function sendMessage(options) {
         formData.append('selected_skills', JSON.stringify(selectedSkillsForRun));
     }
     if (renderAsSteer) formData.append('followup_steer', 'true');
+    if (renderAsSteer && options.steerId) formData.append('steer_id', String(options.steerId));
     /* 发送后优先使用本轮 API usage/cache_stats 刷新 token；缺少 usage 时仍保留上一快照。 */
     if (!switchedAway) applyContextTokenLabelForCurrentSession();
     let streamEventIdx = preCount + 1;
@@ -1536,10 +1631,7 @@ async function sendMessage(options) {
         sendPipelineLockSessionId = null;
         var stoppedByUser = getRunAbortReason(submittedRunSessionId, submittedRunCtx) === 'user'
             || (optimisticRunState && optimisticRunState.abortReason === 'user');
-        if (!stoppedByUser && (!options.fromQueue || getFollowupQueue(submittedRunSessionId).length)) {
-            setTimeout(function () { drainFollowupQueue(submittedRunSessionId); }, 0);
-        }
-        reportClientPipelineStep(clientTimingCtx, 'release_send_lock_and_schedule_followup', _clientStepStart, {
+        reportClientPipelineStep(clientTimingCtx, 'release_send_lock', _clientStepStart, {
             stoppedByUser: !!stoppedByUser,
             fromQueue: !!options.fromQueue
         });
