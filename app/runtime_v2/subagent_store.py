@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from .event_log import SessionEventLog
 from .event_schema import RuntimeEvent
@@ -20,12 +20,20 @@ class RuntimeSubagentStore:
       {parent_session}/subagents/{agent_id}/metadata.json
     """
 
-    def __init__(self, sessions_dir: str | Path):
+    def __init__(
+        self,
+        sessions_dir: str | Path,
+        path_resolver: Optional[Callable[[str], str | Path]] = None,
+    ):
         self.sessions_dir = Path(sessions_dir)
+        self._path_resolver = path_resolver
         self.projector = RuntimeProjector()
 
     def root_for_parent(self, parent_session_id: str) -> Path:
-        return self.sessions_dir / self._safe_id(parent_session_id) / "subagents"
+        parent_id = self._safe_id(parent_session_id)
+        if self._path_resolver is not None:
+            return Path(self._path_resolver(parent_id)) / "subagents"
+        return self.sessions_dir / parent_id / "subagents"
 
     def agent_dir(self, parent_session_id: str, agent_id: str) -> Path:
         return self.root_for_parent(parent_session_id) / self._safe_id(agent_id)

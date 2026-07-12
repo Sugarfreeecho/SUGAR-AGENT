@@ -1248,15 +1248,17 @@ def _agent_python_dir_safe_for_bash_path_prepend() -> bool:
 
 def _bundled_subprocess_python_bin_dir() -> Optional[str]:
     """
-    PyInstaller one-folder 分发包内与 ``GeneralAgent.exe`` 同级的 ``python/`` 目录（嵌入式解释器）。
-    存在时优先于 exe 目录加入 PATH，以便 ``run_shell`` 中 ``python`` 指向该内置环境。
+    仓库源码运行或 PyInstaller one-folder 分发包内的 ``python/`` 目录（嵌入式解释器）。
+    存在时优先于当前解释器及系统 PATH，以便 ``run_shell`` 中 ``python`` 指向内置环境；
+    不存在时返回 ``None``，由调用方自然回退到当前/系统 Python。
     """
-    if not getattr(sys, "frozen", False):
-        return None
-    try:
-        root = Path(sys.executable).resolve().parent
-    except OSError:
-        return None
+    if getattr(sys, "frozen", False):
+        try:
+            root = Path(sys.executable).resolve().parent
+        except OSError:
+            return None
+    else:
+        root = PROJECT_ROOT
     bundled = root / "python"
     if platform.system() == "Windows":
         if (bundled / "python.exe").is_file():
@@ -3558,7 +3560,7 @@ OPENAI_TOOL_DEFINITIONS: List[Dict[str, Any]] = [
     ),
     _openai_function_schema(
         "update_todo",
-        "Replace the session todo list; persisted in todo_plan.md (not in key_context.md). Cleared when every item is completed.",
+        "Replace the session todo list in the active runtime store. It is cleared when every item is completed.",
         {
             "items": {
                 "type": "array",
@@ -3577,13 +3579,13 @@ OPENAI_TOOL_DEFINITIONS: List[Dict[str, Any]] = [
     ),
     _openai_function_schema(
         "context_manage",
-        "Session context: mode compact runs history compression into key_context.md. "
-        "mode edit_key_context rewrites key_context.md according to edit_instruction (add/remove/fix key facts, errors, lessons, user rules).",
+        "Session context: mode compact summarizes and trims model history into the active runtime context. "
+        "mode edit_key_context rewrites the active context summary according to edit_instruction (add/remove/fix key facts, errors, lessons, user rules).",
         {
             "mode": {
                 "type": "string",
                 "enum": ["compact", "edit_key_context"],
-                "description": "compact: summarize and trim llm history into key_context. edit_key_context: edit key_context.md per edit_instruction.",
+                "description": "compact: summarize and trim model history into active context. edit_key_context: edit the active context summary.",
             },
             "focus": {
                 "type": "string",
@@ -3592,7 +3594,7 @@ OPENAI_TOOL_DEFINITIONS: List[Dict[str, Any]] = [
             },
             "edit_instruction": {
                 "type": "string",
-                "description": "edit_key_context only: natural-language edits to apply to key_context.md.",
+                "description": "edit_key_context only: natural-language edits to apply to the active context summary.",
                 "default": "",
             },
         },
@@ -3671,6 +3673,30 @@ OPENAI_TOOL_DEFINITIONS: List[Dict[str, Any]] = [
             },
         },
         ["action"],
+    ),
+    _openai_function_schema(
+        "create_goal",
+        "Create one durable goal for this session. Use only when the user explicitly asks to create/start a goal. Only include token_budget when the user explicitly specifies one.",
+        {
+            "objective": {"type": "string", "description": "Concrete objective to pursue across automatic continuation runs."},
+            "token_budget": {"type": "integer", "minimum": 1, "description": "Optional total token budget explicitly requested by the user."},
+        },
+        ["objective"],
+    ),
+    _openai_function_schema(
+        "get_goal",
+        "Read the current session goal, status, elapsed time, token usage, and remaining budget.",
+        {},
+        [],
+    ),
+    _openai_function_schema(
+        "update_goal",
+        "Mark the current goal completed only when all required work is done, or report a genuinely repeated blocker. The same blocker must be reported three times before the goal becomes blocked.",
+        {
+            "status": {"type": "string", "enum": ["completed", "blocked"]},
+            "reason": {"type": "string", "description": "Required when status is blocked."},
+        },
+        ["status"],
     ),
 ]
 

@@ -292,6 +292,128 @@ class RuntimeHistoryOpsTests(unittest.TestCase):
                 ["earlier"],
             )
 
+    def test_stopped_run_rewrite_restores_pre_send_provider_token_checkpoint(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ops = RuntimeHistoryOps(tmp)
+            mirror = RuntimeMirror(tmp)
+            ops.append_model_message("s1", "user", "earlier")
+            mirror.mirror_ui_event("s1", {"type": "user", "content": "earlier"})
+            mirror.mirror_ui_event("s1", {
+                "type": "cache_stats",
+                "input_tokens": 88000,
+                "threshold": 128000,
+                "model": "model-a",
+            })
+            target = ops.commit_user_turn("s1", "rewrite me")
+            mirror.mirror_ui_event("s1", {
+                "type": "cache_stats",
+                "input_tokens": 91000,
+                "threshold": 128000,
+                "model": "model-a",
+            })
+
+            ops.truncate_visible_history_before_seq(
+                "s1",
+                target_seq=target.seq,
+                keep_to_seq=target.seq - 1,
+                reason="runtime_v2_truncate",
+            )
+            tokens = ops.snapshots.read("s1")["context"]["tokens"]
+
+            self.assertEqual(tokens["estimated"], 88000)
+            self.assertEqual(tokens["token_source"], "provider_exact")
+            self.assertFalse(tokens.get("stale", False))
+
+    def test_stopped_run_rewrite_restores_pre_send_todo_checkpoint(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ops = RuntimeHistoryOps(tmp)
+            before = {
+                "has_plan": True,
+                "items": [{"id": "1", "text": "before", "status": "in_progress"}],
+                "done": 0,
+                "total": 1,
+            }
+            after = {
+                "has_plan": True,
+                "items": [{"id": "2", "text": "after", "status": "in_progress"}],
+                "done": 0,
+                "total": 1,
+            }
+            ops.update_todo("s1", before)
+            target = ops.commit_user_turn("s1", "rewrite me")
+            ops.update_todo("s1", after)
+
+            ops.truncate_visible_history_before_seq(
+                "s1",
+                target_seq=target.seq,
+                keep_to_seq=target.seq - 1,
+                reason="runtime_v2_truncate",
+            )
+            todo = ops.snapshots.read("s1")["todo"]
+
+            self.assertEqual(todo["items"][0]["text"], "before")
+            self.assertEqual(todo["total"], 1)
+
+    def test_model_replacement_invalidates_old_tokens_until_new_checkpoint(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ops = RuntimeHistoryOps(tmp)
+            mirror = RuntimeMirror(tmp)
+            ops.append_model_message("s1", "user", "before")
+            mirror.mirror_ui_event("s1", {
+                "type": "cache_stats",
+                "input_tokens": 90000,
+                "threshold": 128000,
+                "model": "model-a",
+            })
+
+            ops.replace_model_history(
+                "s1",
+                [{"type": "user", "content": "compressed"}],
+                reason="auto_context_policy",
+                summary="summary",
+            )
+            stale = ops.snapshots.read("s1")["context"]["tokens"]
+            self.assertTrue(stale["stale"])
+            self.assertEqual(stale["stale_reason"], "model_history_replaced")
+
+            ops.checkpoint_context_tokens("s1", {
+                "estimated": 12000,
+                "threshold": 128000,
+                "token_source": "provider_calibrated",
+                "reason": "post_compress_checkpoint",
+            })
+            fresh = ops.snapshots.read("s1")["context"]["tokens"]
+            self.assertEqual(fresh["estimated"], 12000)
+            self.assertEqual(fresh["token_source"], "provider_calibrated")
+            self.assertFalse(fresh["stale"])
+
+    def test_branch_and_nested_branch_inherit_provider_token_checkpoint(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ops = RuntimeHistoryOps(tmp)
+            mirror = RuntimeMirror(tmp)
+            ops.append_model_message("root", "user", "u1")
+            mirror.mirror_ui_event("root", {"type": "user", "content": "u1"})
+            mirror.mirror_ui_event("root", {
+                "type": "cache_stats",
+                "input_tokens": 64000,
+                "threshold": 128000,
+                "model": "model-a",
+            })
+            ops.append_model_message("root", "assistant", "a1")
+            final = mirror.mirror_ui_event("root", {"type": "final", "content": "a1"})
+
+            ops.create_branch("branch", "root", final.seq)
+            branch_final = next(
+                event for event in RuntimeUiProjection(tmp).read_ui_events("branch")
+                if event.get("type") == "final"
+            )
+            ops.create_branch("nested", "branch", int(branch_final["runtime_seq"]))
+
+            for sid in ("branch", "nested"):
+                tokens = ops.snapshots.read(sid)["context"]["tokens"]
+                self.assertEqual(tokens["estimated"], 64000)
+                self.assertEqual(tokens["token_source"], "provider_exact")
+
     def test_rewrite_before_first_summary_clears_post_send_summary(self):
         with tempfile.TemporaryDirectory() as tmp:
             ops = RuntimeHistoryOps(tmp)
@@ -423,6 +545,48 @@ class RuntimeHistoryOpsTests(unittest.TestCase):
             )
             child_events = RuntimeUiProjection(tmp).read_ui_events("child-branch")
             self.assertEqual([event["content"] for event in child_events], ["u1", "a1"])
+
+    def test_branch_of_branch_keeps_rewrite_of_inherited_seed_in_model_context(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ops = RuntimeHistoryOps(tmp)
+            mirror = RuntimeMirror(tmp)
+            ops.append_model_message("root", "user", "old")
+            mirror.mirror_ui_event("root", {"type": "user", "content": "old"})
+            ops.append_model_message("root", "assistant", "answer")
+            root_final = mirror.mirror_ui_event("root", {"type": "final", "content": "answer"})
+
+            ops.create_branch("parent", "root", root_final.seq)
+            parent_events = RuntimeUiProjection(tmp).read_ui_events("parent")
+            seeded_user = next(event for event in parent_events if event.get("type") == "user")
+            seeded_final = next(event for event in parent_events if event.get("type") == "final")
+            ops.rewrite_message("parent", int(seeded_user["runtime_seq"]), "new")
+
+            ops.create_branch("child", "parent", int(seeded_final["runtime_seq"]))
+            child_snapshot = ops.snapshots.read("child")
+            child_events = RuntimeUiProjection(tmp).read_ui_events("child")
+
+            self.assertEqual([event["content"] for event in child_events], ["new", "answer"])
+            self.assertEqual(
+                [row["payload"]["content"] for row in child_snapshot["model_messages"]],
+                ["new", "answer"],
+            )
+
+    def test_branch_inherits_todo_checkpoint(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ops = RuntimeHistoryOps(tmp)
+            mirror = RuntimeMirror(tmp)
+            ops.update_todo("root", {
+                "has_plan": True,
+                "items": [{"id": "1", "text": "branch task", "status": "pending"}],
+                "done": 0,
+                "total": 1,
+            })
+            final = mirror.mirror_ui_event("root", {"type": "final", "content": "answer"})
+
+            ops.create_branch("branch", "root", final.seq)
+
+            todo = ops.snapshots.read("branch")["todo"]
+            self.assertEqual(todo["items"][0]["text"], "branch task")
 
     def test_branch_does_not_duplicate_existing_legacy_seed(self):
         with tempfile.TemporaryDirectory() as tmp:

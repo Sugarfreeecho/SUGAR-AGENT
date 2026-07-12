@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Callable, Dict, List, Optional
 
 from .config import runtime_v2_enabled
 from .event_log import SessionEventLog
@@ -13,10 +13,15 @@ from .snapshot_store import SnapshotStore
 class RuntimeModelProjection:
     """Read model-facing messages from the Runtime V2 snapshot."""
 
-    def __init__(self, sessions_dir: str | Path):
+    def __init__(
+        self,
+        sessions_dir: str | Path,
+        path_resolver: Optional[Callable[[str], str | Path]] = None,
+    ):
         self.sessions_dir = Path(sessions_dir)
-        self.snapshots = SnapshotStore(sessions_dir)
-        self.event_log = SessionEventLog(sessions_dir)
+        self._path_resolver = path_resolver
+        self.snapshots = SnapshotStore(sessions_dir, path_resolver=path_resolver)
+        self.event_log = SessionEventLog(sessions_dir, path_resolver=path_resolver)
         self.projector = RuntimeProjector()
 
     def read_message_dicts(self, session_id: str) -> List[Dict[str, Any]]:
@@ -68,7 +73,10 @@ class RuntimeModelProjection:
         clean = [dict(item) for item in list(legacy_messages or []) if isinstance(item, dict)]
         if not clean:
             return 0
-        RuntimeHistoryOps(self.sessions_dir).replace_model_history(
+        RuntimeHistoryOps(
+            self.sessions_dir,
+            path_resolver=self._path_resolver,
+        ).replace_model_history(
             session_id,
             clean,
             reason="legacy_model_backfill",
@@ -89,7 +97,10 @@ class RuntimeModelProjection:
                 "written": 0,
             }
         if not projected:
-            RuntimeHistoryOps(self.sessions_dir).replace_model_history(
+            RuntimeHistoryOps(
+                self.sessions_dir,
+                path_resolver=self._path_resolver,
+            ).replace_model_history(
                 session_id,
                 clean,
                 reason=reason,

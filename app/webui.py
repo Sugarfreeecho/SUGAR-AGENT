@@ -45,6 +45,7 @@ import execution_metrics
 from path_picker_util import pick_native_path
 
 _PATH_PICKER_JS_PATH = Path(__file__).resolve().parent / "templates" / "static" / "myagent_path_picker.js"
+_SETUP_I18N_JS_PATH = Path(__file__).resolve().parent / "templates" / "static" / "setup_i18n.js"
 _TEMPLATES_DIR = Path(__file__).resolve().parent / "templates"
 _DIST_INDEX = _TEMPLATES_DIR / "dist" / "index.html"
 _DIST_EXECUTION_DASHBOARD = _TEMPLATES_DIR / "dist" / "execution-dashboard.html"
@@ -246,19 +247,6 @@ def _enqueue_runtime_sync(session_id: str, reason: str = "manual", *, check_need
     return {"ok": True, "session_id": sid, "queued": True, "reason": check_reason, "detail": detail}
 
 
-def _runtime_sync_on_messages_open_enabled() -> bool:
-    if os.getenv("RUNTIME_SYNC_ON_MESSAGES_OPEN", "0").strip().lower() not in {"1", "true", "yes", "on"}:
-        return False
-    try:
-        from runtime_v2 import runtime_v2_primary
-
-        if runtime_v2_primary():
-            return False
-    except Exception:
-        pass
-    return True
-
-
 def _read_text_cached(path: Path, fallback: str = "") -> str:
     try:
         st = path.stat()
@@ -447,7 +435,12 @@ def _runtime_v2_snapshot(sid: str) -> dict:
         from runtime_v2.snapshot_store import SnapshotStore
 
         root = session_manager.repository.sessions_dir
-        return SnapshotStore(root).read_consistent(sid, SessionEventLog(root), RuntimeProjector())
+        resolver = session_manager._resolve_session_path
+        return SnapshotStore(root, path_resolver=resolver).read_consistent(
+            sid,
+            SessionEventLog(root, path_resolver=resolver),
+            RuntimeProjector(),
+        )
     except Exception as exc:
         logger.debug("Runtime V2 snapshot read failed for %s: %s", sid, exc)
         return {}
@@ -497,6 +490,13 @@ def _runtime_v2_filtered_active_runs(sid: str) -> list[dict]:
 
 
 def _cleanup_orphan_runtime_v2_active_runs(sid: str, reason: str = "orphaned") -> int:
+    try:
+        from runtime_v2 import runtime_v2_primary
+
+        if not runtime_v2_primary():
+            return 0
+    except Exception:
+        return 0
     sid = str(sid or "").strip()
     if not sid or _has_local_run_activity(sid) or _has_running_subagent_activity(sid):
         return 0
@@ -515,7 +515,10 @@ def _cleanup_orphan_runtime_v2_active_runs(sid: str, reason: str = "orphaned") -
     try:
         from runtime_v2.mirror import RuntimeMirror
 
-        mirror = RuntimeMirror(session_manager.sessions_dir)
+        mirror = RuntimeMirror(
+            session_manager.sessions_dir,
+            path_resolver=session_manager._resolve_session_path,
+        )
         for run in active_runs:
             if not isinstance(run, dict):
                 continue
@@ -539,6 +542,13 @@ def _runtime_v2_context_snapshot(sid: str) -> dict:
 
 
 def _runtime_v2_auto_resume_pending(sid: str) -> bool:
+    try:
+        from runtime_v2 import runtime_v2_primary
+
+        if not runtime_v2_primary():
+            return False
+    except Exception:
+        return False
     snapshot = _runtime_v2_snapshot(sid)
     runs = snapshot.get("runs") if isinstance(snapshot, dict) else None
     if not isinstance(runs, dict) or not runs:
@@ -754,6 +764,13 @@ def _runtime_v2_active_run_ids(sid: str) -> list[str]:
 
 
 def _interrupt_runtime_v2_active_runs(sid: str, run_id: str = "", reason: str = "user") -> list[str]:
+    try:
+        from runtime_v2 import runtime_v2_primary
+
+        if not runtime_v2_primary():
+            return []
+    except Exception:
+        return []
     targets = [str(run_id or "").strip()] if str(run_id or "").strip() else _runtime_v2_active_run_ids(sid)
     targets = [rid for rid in targets if rid]
     if not targets:
@@ -762,7 +779,10 @@ def _interrupt_runtime_v2_active_runs(sid: str, run_id: str = "", reason: str = 
     try:
         from runtime_v2.mirror import RuntimeMirror
 
-        mirror = RuntimeMirror(session_manager.sessions_dir)
+        mirror = RuntimeMirror(
+            session_manager.sessions_dir,
+            path_resolver=session_manager._resolve_session_path,
+        )
         for rid in targets:
             mirror.mirror_run_interrupted(sid, rid, {"reason": reason})
     except Exception as e:
@@ -905,6 +925,7 @@ def get_index_html():
     app_dotenv = str(dotenv_file_path().resolve())
     ctx_thr = _ui_ah.CONTEXT_WINDOW
     feature_flags = {
+        "goal": os.getenv("GOAL_ENABLED", "1").strip().lower() not in {"0", "false", "no", "off"},
         "followupRestart": os.getenv("MYAGENT_ENABLE_FOLLOWUP_RESTART", "1").strip().lower() in {"1", "true", "yes", "on"},
         "streamReconnect": os.getenv("MYAGENT_ENABLE_STREAM_RECONNECT", "1").strip().lower() in {"1", "true", "yes", "on"},
         "finalReconcile": os.getenv("MYAGENT_ENABLE_FINAL_RECONCILE", "1").strip().lower() in {"1", "true", "yes", "on"},
@@ -1146,6 +1167,14 @@ def _html_with_path_picker_script(body: str) -> str:
 @fastapi_app.get("/static/myagent_path_picker.js")
 async def serve_path_picker_js():
     content = _read_text_cached(_PATH_PICKER_JS_PATH, "")
+    if not content:
+        return JSONResponse({"error": "not found"}, status_code=404)
+    return Response(content=content, media_type="application/javascript")
+
+
+@fastapi_app.get("/static/setup_i18n.js")
+async def serve_setup_i18n_js():
+    content = _read_text_cached(_SETUP_I18N_JS_PATH, "")
     if not content:
         return JSONResponse({"error": "not found"}, status_code=404)
     return Response(content=content, media_type="application/javascript")
@@ -1420,9 +1449,19 @@ def _attach_subagent_sidebar_fields(s: dict, session_id: str) -> None:
             str(session_id)
         )
         s["subagent_can_continue"] = session_manager.can_continue_after_subagents(str(session_id))
+        pending_count = int(s["subagent_pending_continue"] or 0)
+        running_count = int(s.get("subagent_running") or 0)
+        s["subagent_continuation"] = {
+            "state": "ready" if pending_count > 0 and running_count == 0 else (
+                "wait_children" if running_count > 0 else "none"
+            ),
+            "pending_count": pending_count,
+            "reason": "results_not_in_parent_answer" if pending_count > 0 else "",
+        }
     except Exception:
         s["subagent_pending_continue"] = 0
         s["subagent_can_continue"] = False
+        s["subagent_continuation"] = {"state": "none", "pending_count": 0, "reason": ""}
     try:
         s["react_can_continue"] = session_manager.can_continue_react_session(str(session_id))
     except Exception:
@@ -1618,8 +1657,18 @@ async def get_session_detail(
                 s["react_can_continue"] = session_manager.can_continue_react_session(str(sid))
             except Exception:
                 s["react_can_continue"] = False
+            try:
+                from agent_goal import goal_enabled, manager_for
+                s["goal_enabled"] = goal_enabled()
+                s["goal"] = manager_for(session_manager).get(str(sid)) if s["goal_enabled"] else None
+                goal_can_continue = bool(s["goal"] and s["goal"].get("status") == "active")
+            except Exception:
+                s["goal_enabled"] = False
+                s["goal"] = None
+                goal_can_continue = False
+            s["react_can_continue"] = bool(s["react_can_continue"] or goal_can_continue)
             s["react_auto_resume"] = bool(
-                s["react_can_continue"] and _runtime_v2_auto_resume_pending(str(sid))
+                goal_can_continue or (s["react_can_continue"] and _runtime_v2_auto_resume_pending(str(sid)))
             )
             if include_subagents:
                 _attach_subagent_sidebar_fields(s, str(sid))
@@ -1749,7 +1798,10 @@ def _build_session_subagents_response(session_id: str, lite: bool) -> JSONRespon
 def _build_runtime_v2_session_subagents_response(session_id: str, lite: bool) -> JSONResponse:
     from runtime_v2 import RuntimeSubagentStore
 
-    store = RuntimeSubagentStore(session_manager.repository.sessions_dir)
+    store = RuntimeSubagentStore(
+        session_manager.repository.sessions_dir,
+        path_resolver=session_manager._resolve_session_path,
+    )
     task_rows = store.list_tasks(session_id)
     parent_snapshot = _runtime_v2_snapshot(session_id)
     subagent_states = parent_snapshot.get("subagents") if isinstance(parent_snapshot, dict) else {}
@@ -2374,8 +2426,8 @@ async def get_session_steer_status(session_id: str, steer_id: str):
 
 
 @fastapi_app.get("/sessions/{session_id}/steer")
-async def list_session_steer_status(session_id: str):
-    result = list_session_steers(session_id, include_terminal=False)
+async def list_session_steer_status(session_id: str, include_terminal: bool = False):
+    result = list_session_steers(session_id, include_terminal=include_terminal)
     return JSONResponse(content=result, status_code=200 if result.get("ok") else 400)
 
 
@@ -2832,7 +2884,12 @@ async def continue_react_session(
     sid = (session_id or "").strip()
     if not sid:
         return JSONResponse(content={"error": "missing session_id"}, status_code=400)
-    if not session_manager.can_continue_react_session(sid):
+    try:
+        from agent_goal import manager_for
+        goal_can_continue = manager_for(session_manager).should_continue(sid)
+    except Exception:
+        goal_can_continue = False
+    if not session_manager.can_continue_react_session(sid) and not goal_can_continue:
         return Response(status_code=204)
     if _is_session_stream_active(sid):
         return JSONResponse(content={"ok": False, "reason": "busy"}, status_code=409)
@@ -2850,7 +2907,7 @@ async def continue_react_session(
                     sid,
                     should_stop=should_stop,
                     require_pending_subagents=False,
-                    recovery_reason="process_or_network_interruption" if recovery else "",
+                    recovery_reason="process_or_network_interruption" if recovery and not goal_can_continue else "",
                 ):
                     if await request.is_disconnected():
                         break
@@ -2872,6 +2929,29 @@ async def continue_react_session(
         media_type="text/event-stream",
         headers=_SSE_HEADERS,
     )
+
+
+@fastapi_app.get("/sessions/{session_id}/goal")
+async def get_session_goal(session_id: str):
+    try:
+        from agent_goal import goal_enabled, manager_for
+        return JSONResponse(content={"enabled": goal_enabled(), "goal": manager_for(session_manager).get(session_id) if goal_enabled() else None})
+    except Exception as exc:
+        return JSONResponse(content={"enabled": False, "goal": None, "error": str(exc)}, status_code=503)
+
+
+@fastapi_app.post("/sessions/{session_id}/goal/{action}")
+async def control_session_goal(session_id: str, action: str):
+    if action not in {"pause", "resume", "cancel"}:
+        return JSONResponse(content={"ok": False, "error": "action must be pause, resume, or cancel"}, status_code=400)
+    try:
+        from agent_goal import manager_for
+        goal = manager_for(session_manager).user_action(session_id, action)
+        if action in {"pause", "cancel"}:
+            session_manager.request_interrupt(session_id, reason=f"goal_{action}")
+        return JSONResponse(content={"ok": True, "goal": goal})
+    except Exception as exc:
+        return JSONResponse(content={"ok": False, "error": str(exc)}, status_code=409)
 
 
 @fastapi_app.post("/sessions/{session_id}/continue-subagents")
@@ -2950,12 +3030,6 @@ async def get_session_messages(
     target_index_value: Optional[int] = None
     if isinstance(target_index, int):
         target_index_value = target_index
-    if _runtime_sync_on_messages_open_enabled():
-        try:
-            _enqueue_runtime_sync(session_id, "messages_open", check_needed=True)
-        except Exception as exc:
-            logger.debug("runtime sync enqueue check failed for %s: %s", session_id, exc)
-
     def _build_messages_response() -> JSONResponse:
         nonlocal projection
         try:
@@ -3042,19 +3116,12 @@ async def get_session_messages(
             return JSONResponse(content=payload)
         except Exception as exc:
             logger.warning("Runtime V2 messages projection failed for %s: %s", session_id, exc)
-        if limit is None and turns is None:
-            return JSONResponse(content=[])
-        lim = int(limit) if limit is not None else 200
-        return JSONResponse(content={
-            "events": [],
-            "total": 0,
-            "range_start": 0,
-            "range_end": 0,
-            "has_older": False,
-            "has_newer": False,
-            "source": "runtime_v2_projection_error",
-            "limit": lim,
-        })
+            return JSONResponse(content={
+                "source": "runtime_v2_projection_error",
+                "error": "runtime_v2_projection_failed",
+                "repair_required": True,
+                "detail": str(exc),
+            }, status_code=500)
 
     return await asyncio.to_thread(_build_messages_response)
 
@@ -3080,7 +3147,12 @@ async def get_session_message_count(session_id: str):
             return JSONResponse(content={"count": count, "source": "runtime_v2"})
         except Exception as exc:
             logger.warning("Runtime V2 message count failed for %s: %s", session_id, exc)
-        return JSONResponse(content={"count": 0, "source": "runtime_v2_projection_error"})
+            return JSONResponse(content={
+                "source": "runtime_v2_projection_error",
+                "error": "runtime_v2_projection_failed",
+                "repair_required": True,
+                "detail": str(exc),
+            }, status_code=500)
 
     return await asyncio.to_thread(_build_count_response)
     """仅返回 ui_events 条数，供发送前对齐 eventIndex，避免下载整份 JSON。"""
@@ -3147,7 +3219,7 @@ async def get_session_history_snapshot(
             timings["user_turns"] = int((_time.perf_counter() - t_phase) * 1000)
             t_phase = _time.perf_counter()
             context_tokens = _runtime_v2_context_snapshot(session_id).get("tokens")
-            if not isinstance(context_tokens, dict):
+            if not isinstance(context_tokens, dict) or context_tokens.get("stale"):
                 context_tokens = None
             timings["context_tokens"] = int((_time.perf_counter() - t_phase) * 1000)
             todo_plan = _runtime_v2_todo_plan_snapshot(session_id)
@@ -3191,26 +3263,43 @@ async def get_session_history_snapshot(
     return await asyncio.to_thread(_build_snapshot_response)
 
 
-def _sync_runtime_session(session_id: str, *, export_legacy: bool = False) -> dict:
+class RuntimeSyncBusyError(RuntimeError):
+    pass
+
+
+def _sync_runtime_session_unlocked(session_id: str, *, export_legacy: bool = False) -> dict:
     from runtime_v2.migration import RuntimeV2MigrationService
 
-    service = RuntimeV2MigrationService(
-        session_manager.repository.sessions_dir,
-        path_resolver=session_manager._resolve_session_path,
-    )
+    # Keep chat start reservation blocked for the transaction. This closes the
+    # race where a run could start after the active check but before rollback.
+    with _chat_start_lock:
+        if _is_session_stream_active(session_id) or _has_running_subagent_activity(session_id):
+            raise RuntimeSyncBusyError(
+                f"session {session_id} has an active run; stop it before migration/export"
+            )
+        service = RuntimeV2MigrationService(
+            session_manager.repository.sessions_dir,
+            path_resolver=session_manager._resolve_session_path,
+        )
 
-    def _load_legacy_model_messages() -> list[dict]:
-        try:
+        def _load_legacy_model_messages() -> list[dict]:
             return session_manager._load_llm_history(session_id)
-        except Exception:
-            return []
 
-    return service.sync_session(
+        return service.sync_session(
+            session_id,
+            load_legacy_ui_events=lambda: session_manager.get_ui_events_for_display(session_id),
+            save_legacy_ui_events=lambda events: session_manager._save_ui_events(session_id, events),
+            load_legacy_model_messages=_load_legacy_model_messages,
+            save_legacy_model_messages=lambda messages: session_manager._save_llm_history(session_id, messages),
+            export_legacy=bool(export_legacy),
+        )
+
+
+def _sync_runtime_session(session_id: str, *, export_legacy: bool = False) -> dict:
+    return _run_history_op_locked(
         session_id,
-        load_legacy_ui_events=lambda: session_manager.get_ui_events_for_display(session_id),
-        save_legacy_ui_events=lambda events: session_manager._save_ui_events(session_id, events),
-        load_legacy_model_messages=_load_legacy_model_messages,
-        save_legacy_model_messages=lambda messages: session_manager._save_llm_history(session_id, messages),
+        _sync_runtime_session_unlocked,
+        session_id,
         export_legacy=bool(export_legacy),
     )
 
@@ -3288,6 +3377,11 @@ async def sync_session_runtime(
     t0 = _time.perf_counter()
     try:
         result = await run_in_threadpool(_sync_runtime_session, session_id, export_legacy=bool(export_legacy))
+    except RuntimeSyncBusyError as exc:
+        return JSONResponse(
+            content={"ok": False, "session_id": session_id, "busy": True, "error": str(exc)},
+            status_code=409,
+        )
     except Exception as exc:
         logger.warning("runtime sync failed for %s: %s", session_id, exc)
         return JSONResponse(content={"ok": False, "session_id": session_id, "error": str(exc)}, status_code=500)
@@ -3302,6 +3396,7 @@ def _sync_all_runtime_sessions(limit: int = 0, *, export_legacy: bool = False) -
     results = []
     ok_count = 0
     fail_count = 0
+    busy_count = 0
     for row in rows:
         sid = str((row or {}).get("id") or "").strip()
         if not sid:
@@ -3309,6 +3404,10 @@ def _sync_all_runtime_sessions(limit: int = 0, *, export_legacy: bool = False) -
         try:
             result = _sync_runtime_session(sid, export_legacy=bool(export_legacy))
             ok_count += 1
+        except RuntimeSyncBusyError as exc:
+            result = {"ok": False, "session_id": sid, "busy": True, "error": str(exc)}
+            fail_count += 1
+            busy_count += 1
         except Exception as exc:
             result = {"ok": False, "session_id": sid, "error": str(exc)}
             fail_count += 1
@@ -3318,6 +3417,7 @@ def _sync_all_runtime_sessions(limit: int = 0, *, export_legacy: bool = False) -
         "session_count": len(results),
         "ok_count": ok_count,
         "fail_count": fail_count,
+        "busy_count": busy_count,
         "results": results,
     }
 
@@ -3332,7 +3432,116 @@ async def sync_all_runtime_sessions(
     t0 = _time.perf_counter()
     result = await run_in_threadpool(_sync_all_runtime_sessions, int(limit or 0), export_legacy=bool(export_legacy))
     result["elapsed_ms"] = int((_time.perf_counter() - t0) * 1000)
-    return JSONResponse(content=result)
+    status_code = 409 if result.get("busy_count") else (200 if result.get("ok") else 500)
+    return JSONResponse(content=result, status_code=status_code)
+
+
+def _repair_runtime_v2_subagent_storage(
+    *,
+    apply: bool = False,
+    child_session_id: str = "",
+    limit: int = 0,
+) -> dict:
+    from runtime_v2 import RuntimeV2SubagentRepairService
+
+    service = RuntimeV2SubagentRepairService(
+        session_manager.repository.sessions_dir,
+        path_resolver=session_manager._resolve_session_path,
+    )
+    index = session_manager._load_subagent_index()
+    requested_child = str(child_session_id or "").strip()
+    rows = [
+        (child_id, parent_id)
+        for child_id, parent_id in index.items()
+        if not requested_child or child_id == requested_child
+    ]
+    if limit and limit > 0:
+        rows = rows[: int(limit)]
+    results: list[dict] = []
+    repaired = 0
+    split_brain = 0
+    busy = 0
+    failures = 0
+    refused = 0
+    committed_pending_archive = 0
+    applied = 0
+    for child_id, parent_id in rows:
+        if apply and (
+            _has_local_run_activity(child_id)
+            or _has_local_run_activity(parent_id)
+            or _has_running_subagent_activity(parent_id)
+        ):
+            busy += 1
+            results.append({
+                "ok": False,
+                "parent_session_id": parent_id,
+                "child_session_id": child_id,
+                "action": "busy",
+                "error": "session or subagent tree is running",
+            })
+            continue
+        try:
+            result = service.repair(
+                parent_id,
+                child_id,
+                apply=bool(apply),
+                archive_ghost=True,
+            )
+        except Exception as exc:
+            failures += 1
+            result = {
+                "ok": False,
+                "parent_session_id": parent_id,
+                "child_session_id": child_id,
+                "action": "failed",
+                "error": str(exc),
+            }
+        split_brain += 1 if result.get("split_brain") else 0
+        action = str(result.get("action") or "")
+        applied += 1 if result.get("applied") else 0
+        repaired += 1 if action == "repaired" else 0
+        refused += 1 if action in {"refused", "refused_after_lock"} else 0
+        committed_pending_archive += 1 if action == "committed_pending_archive" else 0
+        results.append(result)
+    return {
+        "ok": (
+            failures == 0
+            and busy == 0
+            and refused == 0
+            and committed_pending_archive == 0
+            and all(result.get("ok", False) for result in results)
+        ),
+        "apply": bool(apply),
+        "checked": len(rows),
+        "split_brain": split_brain,
+        "repaired": repaired,
+        "applied": applied,
+        "busy": busy,
+        "failures": failures,
+        "refused": refused,
+        "committed_pending_archive": committed_pending_archive,
+        "results": results,
+    }
+
+
+@fastapi_app.post("/sessions/runtime-v2/subagent-storage/repair")
+async def repair_runtime_v2_subagent_storage(
+    apply: bool = Query(False, description="explicitly merge and archive top-level V2 child ghost logs"),
+    child_session_id: str = Query("", description="optional single child session id"),
+    limit: int = Query(0, ge=0, le=10000),
+):
+    import time as _time
+
+    started = _time.perf_counter()
+    result = await run_in_threadpool(
+        _repair_runtime_v2_subagent_storage,
+        apply=bool(apply),
+        child_session_id=str(child_session_id or ""),
+        limit=int(limit or 0),
+    )
+    result["elapsed_ms"] = int((_time.perf_counter() - started) * 1000)
+    status_code = 200 if result.get("ok") else 409 if (result.get("busy") or result.get("refused")) else 500
+    return JSONResponse(content=result, status_code=status_code)
 
 
 @fastapi_app.post("/sessions/index/repair")
@@ -3425,7 +3634,11 @@ async def get_session_context_tokens(session_id: str):
 
             if runtime_v2_primary():
                 tokens = _runtime_v2_context_snapshot(session_id).get("tokens")
-                if isinstance(tokens, dict) and tokens.get("estimated") is not None:
+                if (
+                    isinstance(tokens, dict)
+                    and tokens.get("estimated") is not None
+                    and not tokens.get("stale")
+                ):
                     out = dict(tokens)
                     out["ok"] = True
                     out["source"] = "runtime_v2_snapshot"
@@ -3925,6 +4138,7 @@ _ENV_GROUP_ORDER: list[tuple[str, str, list[str]]] = [
             "VERBOSE_LOGGING",
             "TODO_MAX_ITEMS",
             "MAX_PARALLEL_TOOLS",
+            "GOAL_ENABLED",
         ],
     ),
     (
@@ -3979,6 +4193,7 @@ for _gid, _title, _keys in _ENV_GROUP_ORDER:
         _ENV_KEY_ORDER_IN_GROUP[_k] = _i
 
 _ENV_HINTS: dict[str, str] = {
+    "GOAL_ENABLED": "1（默认）启用持久 Goal、Goal 工具和自动续跑；0/false/no/off 禁用。修改后需重启 Agent。",
     "EXECUTOR_LLM": "执行器使用的模型名（须与所选服务商一致）。",
     "EXECUTOR_LLM_TYPE": "local = 本地 OpenAI 兼容（如 Ollama）；openai = 使用 OPENAI_* 远端 API。",
     "CONTEXT_WINDOW": "预估上下文 token 超过该门限时触发压缩摘要等策略。",

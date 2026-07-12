@@ -29,6 +29,7 @@ class RuntimeProjector:
             "subagents": {},
             "context": {},
             "todo": None,
+            "goal": None,
             "history_ops": [],
             "legacy_observations": [],
             "visible_range": {},
@@ -131,6 +132,12 @@ class RuntimeProjector:
             todo["seq"] = event.seq
             snapshot["todo"] = todo
             snapshot["context"]["todo"] = todo
+        elif event_type.startswith("goal_"):
+            goal = dict(event.payload or {})
+            goal["updated_at"] = goal.get("updated_at") or event.timestamp
+            goal["seq"] = event.seq
+            snapshot["goal"] = goal
+            snapshot["context"]["goal"] = goal
         elif event_type in {
             "message_deleted",
             "message_rewritten",
@@ -239,6 +246,10 @@ class RuntimeProjector:
                 "source_seq": payload.get("source_seq"),
                 "changed_at_seq": event.seq,
             }
+        # A replacement changes the exact API request package.  An older
+        # provider checkpoint must never remain authoritative if the process
+        # stops before the next model response supplies fresh usage.
+        self._mark_context_tokens_stale(snapshot, "model_history_replaced", event.seq)
 
     def _apply_history_op(self, snapshot: dict, event: RuntimeEvent) -> None:
         payload = dict(event.payload or {})
@@ -251,6 +262,7 @@ class RuntimeProjector:
         snapshot["history_ops"].append(row)
         if event.type in {"message_deleted", "message_rewritten"}:
             self._apply_message_op_to_model(snapshot, event)
+            self._mark_context_tokens_stale(snapshot, event.type, event.seq)
         if event.type == "visible_range_changed":
             snapshot["visible_range"] = {
                 "from_seq": payload.get("from_seq"),
@@ -308,6 +320,23 @@ class RuntimeProjector:
                     snapshot["context"]["history_compaction"] = dict(restored_compaction)
                 else:
                     snapshot["context"].pop("history_compaction", None)
+            if "restore_context_tokens" in payload:
+                restored_tokens = payload.get("restore_context_tokens")
+                if isinstance(restored_tokens, dict):
+                    snapshot["context"]["tokens"] = dict(restored_tokens)
+                else:
+                    snapshot["context"].pop("tokens", None)
+            elif payload.get("apply_model") or payload.get("reason") == "runtime_v2_truncate":
+                self._mark_context_tokens_stale(snapshot, "visible_range_changed", event.seq)
+            if "restore_todo" in payload:
+                restored_todo = payload.get("restore_todo")
+                if isinstance(restored_todo, dict):
+                    todo = dict(restored_todo)
+                    snapshot["todo"] = todo
+                    snapshot["context"]["todo"] = todo
+                else:
+                    snapshot["todo"] = None
+                    snapshot["context"].pop("todo", None)
         elif event.type == "model_window_changed":
             snapshot["model_window"] = {
                 "from_seq": payload.get("from_seq"),
@@ -316,6 +345,7 @@ class RuntimeProjector:
                 "reason": payload.get("reason") or "",
             }
             self._truncate_snapshot_model_rows(snapshot, payload)
+            self._mark_context_tokens_stale(snapshot, "model_window_changed", event.seq)
         elif event.type == "history_compacted":
             snapshot["context"]["history_compaction"] = {
                 "summary": payload.get("summary") or "",
@@ -323,12 +353,28 @@ class RuntimeProjector:
                 "changed_at_seq": event.seq,
                 "reason": payload.get("reason") or "",
             }
+            self._mark_context_tokens_stale(snapshot, "history_compacted", event.seq)
         elif event.type == "context_summary_committed":
             snapshot["context"]["summary"] = {
                 "summary": payload.get("summary") or "",
                 "source_seq": payload.get("source_seq"),
                 "changed_at_seq": event.seq,
             }
+            self._mark_context_tokens_stale(snapshot, "context_summary_committed", event.seq)
+
+    @staticmethod
+    def _mark_context_tokens_stale(snapshot: dict, reason: str, changed_at_seq: int) -> None:
+        context = snapshot.get("context")
+        if not isinstance(context, dict):
+            return
+        tokens = context.get("tokens")
+        if not isinstance(tokens, dict):
+            return
+        stale = dict(tokens)
+        stale["stale"] = True
+        stale["stale_reason"] = str(reason or "history_changed")
+        stale["stale_at_seq"] = int(changed_at_seq)
+        context["tokens"] = stale
 
     def _apply_legacy_observation(self, snapshot: dict, event: RuntimeEvent) -> None:
         snapshot["legacy_observations"].append({
@@ -471,6 +517,9 @@ class RuntimeProjector:
         payload = event.payload or {}
         agent_id = str(payload.get("agent_id") or payload.get("id") or "")
         if not agent_id:
+            return
+        if event.type == "subagent_deleted":
+            snapshot["subagents"].pop(agent_id, None)
             return
         state = snapshot["subagents"].get(agent_id) or {
             "agent_id": agent_id,

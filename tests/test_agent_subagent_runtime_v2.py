@@ -180,3 +180,121 @@ def test_subagent_child_session_state_is_not_forwarded_to_parent(monkeypatch, tm
     assert any(event.get("type") == "status" and event.get("agent_id") == "child" for event in parent_events)
     assert any(event.get("type") == "subagent_finish" and event.get("agent_id") == "child" for event in parent_events)
     assert "done" in result
+
+
+def test_registry_reservation_is_visible_and_release_is_run_identity_safe():
+    import agent_subagent
+
+    async def scenario():
+        registry = agent_subagent.SubagentTaskRegistry()
+        assert await registry.reserve("child", "run-a", parent_session_id="parent") is True
+        assert registry.is_running("child") is True
+        assert await registry.reserve("child", "run-b", parent_session_id="parent") is False
+        assert await registry.unregister("child", "run-b") is False
+        assert registry.is_running("child") is True
+        assert await registry.unregister("child", "run-a") is True
+        assert registry.is_running("child") is False
+
+    asyncio.run(scenario())
+
+
+def test_subagent_tool_filter_reuses_bounded_identity_cache(monkeypatch):
+    import agent_subagent
+
+    definitions = [
+        {"type": "function", "function": {"name": "read_file"}},
+        {"type": "function", "function": {"name": "write_file"}},
+        {"type": "function", "function": {"name": "mcp_remote"}},
+    ]
+    meta = {"is_subagent": True, "subagent_type": "explore", "subagent_depth": 1}
+    calls = 0
+    original = agent_subagent._tool_name
+
+    def counted(definition):
+        nonlocal calls
+        calls += 1
+        return original(definition)
+
+    with agent_subagent._tool_filter_cache_lock:
+        agent_subagent._tool_filter_cache.clear()
+    monkeypatch.setattr(agent_subagent, "_tool_name", counted)
+
+    first = agent_subagent.filter_tools_for_session(definitions, meta)
+    second = agent_subagent.filter_tools_for_session(definitions, dict(meta))
+
+    assert [item["function"]["name"] for item in first] == ["read_file"]
+    assert second == first
+    assert second is not first
+    assert calls == len(definitions)
+
+
+def test_same_subagent_cannot_enter_two_foreground_model_runs(monkeypatch, tmp_path):
+    import agent_loop
+    import agent_subagent
+    from agent_harness import AssistantMessage
+
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    calls = 0
+
+    class _SessionManager:
+        sessions_dir = tmp_path
+
+        def clear_interrupt(self, session_id):
+            pass
+
+        def append_ui_event(self, *args, **kwargs):
+            pass
+
+        def upsert_subagent_task(self, *args, **kwargs):
+            pass
+
+        def append_pending_subagent_result(self, *args, **kwargs):
+            pass
+
+        def patch_subagent_metadata(self, *args, **kwargs):
+            pass
+
+        def write_subagent_output(self, child_session_id, text):
+            return str(tmp_path / child_session_id / "output.md")
+
+    async def fake_react_node(state, emit=None):
+        nonlocal calls
+        calls += 1
+        entered.set()
+        await release.wait()
+        final = AssistantMessage(content="done")
+        final.metadata = {"is_final": True}
+        out = dict(state)
+        out["llm_history"] = list(state.get("llm_history") or []) + [final]
+        out["work_messages"] = list(state.get("work_messages") or []) + [final]
+        out["final_response"] = "done"
+        return out
+
+    monkeypatch.setattr(agent_subagent, "session_manager", _SessionManager())
+    monkeypatch.setattr(agent_subagent, "subagent_registry", agent_subagent.SubagentTaskRegistry())
+    monkeypatch.setattr(agent_subagent, "_load_subagent_run_histories", lambda child_id: ([], [], ""))
+    monkeypatch.setattr(agent_subagent, "_persist_subagent_run_state", lambda *args, **kwargs: None)
+    monkeypatch.setattr(agent_subagent.todo_manager, "sync_session_from_key_context", lambda *args, **kwargs: None)
+    monkeypatch.setattr(agent_subagent, "cleanup_git_worktree_for_session", lambda *args, **kwargs: None)
+    monkeypatch.setattr(agent_loop, "react_node", fake_react_node)
+
+    async def scenario():
+        kwargs = dict(
+            child_id="child",
+            parent_session_id="parent",
+            user_text="task",
+            description="desc",
+            subagent_type="generalPurpose",
+            resumed=True,
+        )
+        first = asyncio.create_task(agent_subagent._execute_subagent_run(**kwargs))
+        await entered.wait()
+        second_result = await agent_subagent._execute_subagent_run(**kwargs)
+        assert "already running" in second_result
+        assert calls == 1
+        release.set()
+        assert "done" in await first
+        assert agent_subagent.subagent_registry.is_running("child") is False
+
+    asyncio.run(scenario())

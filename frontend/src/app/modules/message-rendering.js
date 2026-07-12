@@ -8,6 +8,31 @@ function removeMessagesFromNode(startWrap) {
     syncDisconnectedProcessGroups();
 }
 
+function applyClientHistoryTruncate(sessionId, beforeIndex, anchor) {
+    const sid = String(sessionId || '');
+    const before = Math.max(0, Number(beforeIndex) || 0);
+    if (!sid) return;
+    if (typeof truncateMessageStateForSession === 'function') {
+        truncateMessageStateForSession(sid, before);
+    }
+    if (typeof uiEventCountCache !== 'undefined') {
+        uiEventCountCache.updateFromServer(sid, before);
+    }
+    if (typeof truncateTocTurnsForSession === 'function') {
+        truncateTocTurnsForSession(sid, before);
+    }
+    if (typeof contextStore !== 'undefined') {
+        contextStore.clearTokens(sid);
+        contextStore.clearTodo(sid);
+    }
+    if (sid !== currentSessionId) return;
+    if (anchor) removeMessagesFromNode(anchor);
+    syncDisconnectedProcessGroups();
+    rebuildToc({ localOnly: true });
+    scheduleContextTokensAfterPaint(sid);
+    if (typeof refreshTodoPlanPanel === 'function') void refreshTodoPlanPanel();
+}
+
 async function historyOperationJson(url, options, timeoutMs) {
     options = options || {};
     var ms = Number(timeoutMs) > 0 ? Number(timeoutMs) : 45000;
@@ -330,10 +355,7 @@ function onMessageToolbarClick(wrap, role, act) {
                     });
                     return;
                 }
-                removeMessagesFromNode(wrap);
-                syncDisconnectedProcessGroups();
-                rebuildToc();
-                scheduleContextTokensAfterPaint(currentSessionId);
+                applyClientHistoryTruncate(currentSessionId, before, wrap);
             });
         });
         return;
@@ -363,6 +385,7 @@ function onMessageToolbarClick(wrap, role, act) {
     if (act === 'branch' && role === 'assistant') {
         if (wrap.dataset.branching === '1') return;
         const sourceSessionId = currentSessionId;
+        const sourceSwitchEpoch = (typeof switchSessionEpoch === 'number') ? switchSessionEpoch : null;
         const eiRaw = wrap.dataset.eventIndex;
         const eventIdx = eiRaw !== undefined && eiRaw !== '' ? parseInt(eiRaw, 10) : NaN;
         if (!Number.isFinite(eventIdx) || eventIdx < 0) {
@@ -402,6 +425,12 @@ function onMessageToolbarClick(wrap, role, act) {
                     renderSessionListIfChanged(true);
                 }
                 if (typeof discardCachedSessionStream === 'function') discardCachedSessionStream(res.session_id);
+                const sourceStillActive = currentSessionId === sourceSessionId
+                    && (sourceSwitchEpoch == null || sourceSwitchEpoch === switchSessionEpoch);
+                if (!sourceStillActive) {
+                    setTimeout(function () { void loadSessions({ forceRender: true }); }, 0);
+                    return;
+                }
                 await switchSession(res.session_id, { forceReload: true });
                 setTimeout(function () { void loadSessions({ forceRender: true }); }, 0);
                 delete wrap.dataset.branching;

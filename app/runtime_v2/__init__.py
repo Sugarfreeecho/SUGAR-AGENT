@@ -1,9 +1,4 @@
-"""Runtime V2 sidecar components.
-
-This package is intentionally not wired into the existing General Agent request path
-yet. It provides a tested event-log and run-state core that can be mirrored
-from the old runtime before taking over selected endpoints.
-"""
+"""Runtime V2 event, projection, snapshot, migration, and repair services."""
 
 from .event_schema import RuntimeEvent, now_iso
 from .event_log import SessionEventLog
@@ -18,7 +13,9 @@ from .blob_store import BlobStore
 from .subagent_store import RuntimeSubagentStore
 from .ui_projection import RuntimeUiProjection
 from .model_projection import RuntimeModelProjection
-from .migration import RuntimeV2MigrationService
+from .migration import RuntimeV2MigrationService, RuntimeV2VerificationError
+from .repair import RuntimeV2SubagentRepairService
+from .root_log_repair import RuntimeV2RootEventLogRepairService
 from .config import runtime_v1_primary, runtime_v2_enabled, runtime_v2_primary, runtime_v2_strict, runtime_version
 
 __all__ = [
@@ -37,6 +34,9 @@ __all__ = [
     "RuntimeUiProjection",
     "RuntimeModelProjection",
     "RuntimeV2MigrationService",
+    "RuntimeV2VerificationError",
+    "RuntimeV2SubagentRepairService",
+    "RuntimeV2RootEventLogRepairService",
     "runtime_version",
     "runtime_v1_primary",
     "runtime_v2_primary",

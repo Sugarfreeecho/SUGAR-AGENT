@@ -11,7 +11,9 @@ import copy
 import json
 import shutil
 import subprocess
+import threading
 import uuid
+from collections import OrderedDict
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
@@ -63,6 +65,10 @@ SUBAGENT_TOOL_PROFILES: Dict[str, Dict[str, Any]] = {
     },
 }
 
+_TOOL_FILTER_CACHE_MAX = 64
+_tool_filter_cache: "OrderedDict[tuple, tuple[tuple[Dict[str, Any], ...], tuple[Dict[str, Any], ...]]]" = OrderedDict()
+_tool_filter_cache_lock = threading.Lock()
+
 SUBAGENT_RUN_INSTRUCTION = (
     "你是隔离运行的 subagent：父 Agent 看不到你的中间工具调用。"
     "完成后请输出简洁、可操作的最终结论（路径、依据、未完成项）。"
@@ -83,7 +89,10 @@ def _load_runtime_v2_context_summary(session_id: str) -> str:
     try:
         from runtime_v2 import SnapshotStore
 
-        snapshot = SnapshotStore(session_manager.sessions_dir).read(session_id)
+        snapshot = SnapshotStore(
+            session_manager.sessions_dir,
+            path_resolver=getattr(session_manager, "_resolve_session_path", None),
+        ).read(session_id)
         context = snapshot.get("context") if isinstance(snapshot, dict) else {}
         summary = context.get("summary") if isinstance(context, dict) else {}
         if isinstance(summary, dict):
@@ -98,7 +107,10 @@ def _load_subagent_run_histories(child_id: str) -> tuple[List[Any], List[Any], s
         try:
             from runtime_v2 import RuntimeModelProjection
 
-            llm_dicts = RuntimeModelProjection(session_manager.sessions_dir).read_message_dicts(child_id)
+            llm_dicts = RuntimeModelProjection(
+                session_manager.sessions_dir,
+                path_resolver=getattr(session_manager, "_resolve_session_path", None),
+            ).read_message_dicts(child_id)
         except Exception as exc:
             logger.debug("Runtime V2 subagent model projection read failed for %s: %s", child_id, exc)
             llm_dicts = []
@@ -121,7 +133,10 @@ def _persist_subagent_run_state(child_id: str, state_out: Dict[str, Any]) -> Non
             from runtime_v2 import RuntimeHistoryOps
 
             llm_history = [_message_to_dict(m) for m in state_out.get("llm_history", [])]
-            ops = RuntimeHistoryOps(session_manager.sessions_dir)
+            ops = RuntimeHistoryOps(
+                session_manager.sessions_dir,
+                path_resolver=getattr(session_manager, "_resolve_session_path", None),
+            )
             ops.replace_model_history(child_id, llm_history, reason="subagent_run_finished")
             if key_context.strip():
                 ops.commit_context_summary(child_id, key_context)
@@ -140,7 +155,10 @@ def _save_initial_subagent_key_context(child_id: str, key_context: str) -> None:
         try:
             from runtime_v2 import RuntimeHistoryOps
 
-            RuntimeHistoryOps(session_manager.sessions_dir).commit_context_summary(child_id, key_context)
+            RuntimeHistoryOps(
+                session_manager.sessions_dir,
+                path_resolver=getattr(session_manager, "_resolve_session_path", None),
+            ).commit_context_summary(child_id, key_context)
         except Exception as exc:
             logger.warning("Runtime V2 subagent initial context persist failed for %s: %s", child_id, exc)
         return
@@ -157,8 +175,31 @@ class SubagentTaskRegistry:
 
     def __init__(self) -> None:
         self._tasks: Dict[str, asyncio.Task] = {}
+        self._run_ids: Dict[str, str] = {}
         self._parent_by_child: Dict[str, str] = {}
         self._lock = asyncio.Lock()
+
+    async def reserve(self, child_id: str, run_id: str, *, parent_session_id: str = "") -> bool:
+        """Atomically reserve the single execution slot for a subagent."""
+        async with self._lock:
+            current_run_id = self._run_ids.get(child_id)
+            current_task = self._tasks.get(child_id)
+            if current_run_id and (current_task is None or not current_task.done()):
+                return False
+            self._run_ids[child_id] = run_id
+            self._tasks.pop(child_id, None)
+            pid = (parent_session_id or "").strip()
+            if pid:
+                self._parent_by_child[child_id] = pid
+            return True
+
+    async def attach(self, child_id: str, run_id: str, task: asyncio.Task) -> bool:
+        """Attach a task to a reservation without replacing another run."""
+        async with self._lock:
+            if self._run_ids.get(child_id) != run_id:
+                return False
+            self._tasks[child_id] = task
+            return True
 
     async def register(
         self,
@@ -166,28 +207,41 @@ class SubagentTaskRegistry:
         task: asyncio.Task,
         *,
         parent_session_id: str = "",
-    ) -> None:
-        async with self._lock:
-            old = self._tasks.get(child_id)
-            if old and not old.done():
-                old.cancel()
-            self._tasks[child_id] = task
-            pid = (parent_session_id or "").strip()
-            if pid:
-                self._parent_by_child[child_id] = pid
+    ) -> bool:
+        run_id = uuid.uuid4().hex
+        if not await self.reserve(child_id, run_id, parent_session_id=parent_session_id):
+            return False
+        if not await self.attach(child_id, run_id, task):
+            return False
 
-    async def unregister(self, child_id: str) -> None:
+        def _release_finished(_task: asyncio.Task) -> None:
+            try:
+                asyncio.get_running_loop().create_task(self.unregister(child_id, run_id))
+            except RuntimeError:
+                pass
+
+        task.add_done_callback(_release_finished)
+        return True
+
+    async def unregister(self, child_id: str, run_id: str) -> bool:
         async with self._lock:
+            if run_id and self._run_ids.get(child_id) != run_id:
+                return False
             self._tasks.pop(child_id, None)
+            self._run_ids.pop(child_id, None)
             self._parent_by_child.pop(child_id, None)
+            return True
 
     def is_running(self, child_id: str) -> bool:
+        if child_id in self._run_ids and child_id not in self._tasks:
+            return True
         t = self._tasks.get(child_id)
         return t is not None and not t.done()
 
     async def cancel(self, child_id: str) -> bool:
         async with self._lock:
             t = self._tasks.get(child_id)
+            run_id = self._run_ids.get(child_id, "")
         if t is None or t.done():
             return False
         session_manager.request_interrupt(child_id)
@@ -198,7 +252,7 @@ class SubagentTaskRegistry:
             pass
         except Exception:
             pass
-        await self.unregister(child_id)
+        await self.unregister(child_id, run_id)
         return True
 
     async def cancel_for_parent(
@@ -257,6 +311,23 @@ def filter_tools_for_session(
     stype = str(meta.get("subagent_type") or "generalPurpose").strip()
     readonly_strict = bool(meta.get("readonly_strict"))
 
+    # Built-in and MCP definition dictionaries are immutable snapshots in the
+    # agent loop.  Object identity therefore gives us a cheap, exact revision
+    # key without serialising (potentially large) MCP JSON schemas every turn.
+    source_definitions = tuple(tool_definitions or [])
+    cache_key = (
+        bool(meta.get("is_subagent")),
+        depth,
+        stype,
+        readonly_strict,
+        tuple(id(item) for item in source_definitions),
+    )
+    with _tool_filter_cache_lock:
+        cached = _tool_filter_cache.get(cache_key)
+        if cached is not None:
+            _tool_filter_cache.move_to_end(cache_key)
+            return list(cached[1])
+
     profile: Dict[str, Any] = {}
     if meta.get("is_subagent"):
         profile = SUBAGENT_TOOL_PROFILES.get(
@@ -288,6 +359,13 @@ def filter_tools_for_session(
             if name in excluded:
                 continue
         out.append(defn)
+    with _tool_filter_cache_lock:
+        # Keep the source tuple alive with the entry so Python cannot recycle
+        # an excluded definition's id while the bounded cache entry exists.
+        _tool_filter_cache[cache_key] = (source_definitions, tuple(out))
+        _tool_filter_cache.move_to_end(cache_key)
+        while len(_tool_filter_cache) > _TOOL_FILTER_CACHE_MAX:
+            _tool_filter_cache.popitem(last=False)
     return out
 
 
@@ -738,8 +816,20 @@ async def _execute_subagent_run(
     resumed: bool,
     parent_emit: Optional[Callable[[Dict[str, Any]], Any]] = None,
     run_in_background: bool = False,
+    parent_run_id: str = "",
 ) -> str:
     """单次 subagent react_node 执行（可前台或后台）。"""
+    subagent_run_id = uuid.uuid4().hex
+    if not await subagent_registry.reserve(
+        child_id,
+        subagent_run_id,
+        parent_session_id=parent_session_id,
+    ):
+        return (
+            f"Subagent {child_id} is already running. "
+            f"Use task(action='status', resume={child_id!r}) or "
+            f"task(action='interrupt', resume={child_id!r})."
+        )
     session_manager.clear_interrupt(child_id)
 
     prev_work, prev_llm, key_context = _load_subagent_run_histories(child_id)
@@ -759,6 +849,8 @@ async def _execute_subagent_run(
         "llm_calls": [],
         "key_context": key_context,
         "_subagent_parent_session_id": parent_session_id,
+        "_subagent_run_id": subagent_run_id,
+        **({"_runtime_v2_parent_run_id": parent_run_id} if parent_run_id else {}),
     }
     todo_manager.sync_session_from_key_context(child_id, key_context or "")
     session_manager.append_ui_event(child_id, {"type": "user", "content": user_text})
@@ -767,6 +859,7 @@ async def _execute_subagent_run(
         child_id,
         {
             "agent_id": child_id,
+            "run_id": subagent_run_id,
             "parent_session_id": parent_session_id,
             "description": description,
             "subagent_type": subagent_type,
@@ -806,6 +899,7 @@ async def _execute_subagent_run(
                 parent_session_id,
                 {
                     "agent_id": child_id,
+                    "run_id": subagent_run_id,
                     "description": description,
                     "subagent_type": subagent_type,
                     "status": status,
@@ -813,6 +907,7 @@ async def _execute_subagent_run(
                     "error": err,
                     "output_file": output_file,
                     "finished_at": datetime.now(timezone.utc).isoformat(),
+                    "parent_run_id": str(parent_run_id or "").strip(),
                 },
             )
         session_manager.upsert_subagent_task(
@@ -820,6 +915,7 @@ async def _execute_subagent_run(
             child_id,
             {
                 "status": status,
+                "run_id": subagent_run_id,
                 "result_preview": body[:500],
                 "error": err,
                 "output_file": output_file,
@@ -964,6 +1060,12 @@ async def _execute_subagent_run(
                 await r
         return result_text
 
+    async def _run_owned(*, background: bool, emit_start: bool) -> str:
+        try:
+            return await _run_core(background=background, emit_start=emit_start)
+        finally:
+            await subagent_registry.unregister(child_id, subagent_run_id)
+
     if run_in_background:
         if parent_emit:
             r = parent_emit(
@@ -978,18 +1080,18 @@ async def _execute_subagent_run(
             )
             if hasattr(r, "__await__"):
                 await r
-        task = asyncio.create_task(_run_core(background=True, emit_start=False))
+        task = asyncio.create_task(_run_owned(background=True, emit_start=False))
+        if not await subagent_registry.attach(child_id, subagent_run_id, task):
+            task.cancel()
+            return f"Error: subagent {child_id} execution reservation was lost before start."
 
         async def _bg_done(t: asyncio.Task) -> None:
             try:
                 await t
             except Exception:
                 pass
-            finally:
-                await subagent_registry.unregister(child_id)
 
         task.add_done_callback(lambda t: asyncio.create_task(_bg_done(t)))
-        await subagent_registry.register(child_id, task, parent_session_id=parent_session_id)
         return _format_subagent_result(
             child_session_id=child_id,
             description=description,
@@ -999,7 +1101,12 @@ async def _execute_subagent_run(
             status="running",
         )
 
-    return await _run_core()
+    current_task = asyncio.current_task()
+    if current_task is not None:
+        if not await subagent_registry.attach(child_id, subagent_run_id, current_task):
+            await subagent_registry.unregister(child_id, subagent_run_id)
+            return f"Error: subagent {child_id} execution reservation was lost before start."
+    return await _run_owned(background=False, emit_start=True)
 
 
 async def _run_single_subagent(
@@ -1011,6 +1118,7 @@ async def _run_single_subagent(
     best_of_run_id: str = "",
     best_of_attempt: int = 0,
     best_of_total: int = 0,
+    parent_run_id: str = "",
 ) -> str:
     action = str(tool_args.get("action") or "").strip().lower()
     if action:
@@ -1167,6 +1275,7 @@ async def _run_single_subagent(
         resumed=resumed,
         parent_emit=emit,
         run_in_background=run_in_background,
+        parent_run_id=parent_run_id,
     )
 
 
@@ -1176,6 +1285,7 @@ async def _run_best_of_n(
     parent_session_id: str,
     parent_key_context: str = "",
     emit: Optional[Callable[[Dict[str, Any]], Any]] = None,
+    parent_run_id: str = "",
 ) -> str:
     n = int(tool_args.get("n") or SUBAGENT_BEST_OF_N)
     n = max(2, min(8, n))
@@ -1204,6 +1314,7 @@ async def _run_best_of_n(
             best_of_run_id=run_id,
             best_of_attempt=i + 1,
             best_of_total=n,
+            parent_run_id=parent_run_id,
         )
 
     if run_in_background:
@@ -1241,6 +1352,7 @@ async def _run_best_of_n(
                         "result_preview": combined[:500],
                         "output_file": output_file,
                         "finished_at": datetime.now(timezone.utc).isoformat(),
+                        "parent_run_id": str(parent_run_id or "").strip(),
                     },
                 )
                 session_manager.append_pending_subagent_result(
@@ -1368,6 +1480,7 @@ async def run_subagent_task(
     parent_session_id: str,
     parent_key_context: str = "",
     emit: Optional[Callable[[Dict[str, Any]], Any]] = None,
+    parent_run_id: str = "",
 ) -> str:
     """task 工具入口。"""
     stype = str(tool_args.get("subagent_type") or "generalPurpose").strip()
@@ -1377,10 +1490,12 @@ async def run_subagent_task(
             parent_session_id=parent_session_id,
             parent_key_context=parent_key_context,
             emit=emit,
+            parent_run_id=parent_run_id,
         )
     return await _run_single_subagent(
         tool_args=tool_args,
         parent_session_id=parent_session_id,
         parent_key_context=parent_key_context,
         emit=emit,
+        parent_run_id=parent_run_id,
     )

@@ -190,6 +190,22 @@ function setSelectedSkillsForCurrentSession(skills) {
     if (skillPickerCache) renderSkillPicker();
 }
 
+function setSelectedSkillsForSession(sessionId, skills) {
+    if (!sessionId) return;
+    if (sessionId === currentSessionId) {
+        setSelectedSkillsForCurrentSession(skills);
+        return;
+    }
+    var normalized = Array.isArray(skills)
+        ? skills.map(function (item) { return String(item || '').trim(); }).filter(Boolean)
+        : [];
+    try {
+        var key = skillDraftStorageKey(sessionId);
+        if (normalized.length) localStorage.setItem(key, JSON.stringify(normalized));
+        else localStorage.removeItem(key);
+    } catch (e) { /* ignore */ }
+}
+
 function stashSkillPickerDraft(sessionId) {
     persistSkillPickerDraft(sessionId);
 }
@@ -234,6 +250,7 @@ function initSkillPicker() {
 initSkillPicker();
 window.consumeSelectedSkillsForSend = consumeSelectedSkillsForSend;
 window.setSelectedSkillsForCurrentSession = setSelectedSkillsForCurrentSession;
+window.setSelectedSkillsForSession = setSelectedSkillsForSession;
 window.refreshSkillPickerSkills = refreshSkillPickerSkills;
 window.stashSkillPickerDraft = stashSkillPickerDraft;
 window.restoreSkillPickerDraft = restoreSkillPickerDraft;

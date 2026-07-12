@@ -115,6 +115,7 @@ from agent_subagent_events import should_persist_ui_event
 from session_event_bus import close_session_stream, prune_session_ephemeral, publish_session_event
 from tool_approval_gate import new_approval_id, wait_tool_ui_approval_after_emit
 from runtime_power import AgentRunPowerGuard, RuntimeResume
+from agent_goal import GoalError, goal_enabled, manager_for as goal_manager_for
 
 EXECUTOR_STREAM = os.getenv("EXECUTOR_STREAM", "true").lower() in ("1", "true", "yes")
 NETWORK_RECONNECT_MAX_ATTEMPTS = max(0, int(os.getenv("NETWORK_RECONNECT_MAX_ATTEMPTS", "5")))
@@ -134,8 +135,50 @@ _STEER_CLAIMABLE_STATES = {"queued", "interrupting"}
 _STEER_TERMINAL_STATES = {"consumed", "cancelled", "failed"}
 
 
+def _goal_continuation_message(session_id: str) -> Optional[SystemMessage]:
+    if not goal_enabled():
+        return None
+    try:
+        goal = goal_manager_for(session_manager).get(session_id)
+    except Exception:
+        return None
+    if not goal or goal.get("status") != "active":
+        return None
+    return SystemMessage(content=(
+        "[Goal continuation]\n"
+        f"Goal ID: {goal.get('id')}\nObjective: {goal.get('objective')}\n"
+        f"Used tokens: {goal.get('used_tokens', 0)}; remaining: {goal.get('remaining_tokens')}\n"
+        "This durable goal is still active. Inspect persisted work and the current todo list, then continue making "
+        "meaningful progress. Do not stop merely because one response is complete. Call update_goal(status=completed) "
+        "only after the whole objective is achieved. Report the same genuine blocker with the same reason across "
+        "three continuation runs before blocked can become terminal."
+    ))
+
+
+def _record_goal_run_usage(state: Dict[str, Any], continuation: bool) -> None:
+    if not goal_enabled():
+        return
+    total = 0
+    for call in state.get("llm_calls") or []:
+        usage = call.get("usage") if isinstance(call, dict) else None
+        if isinstance(usage, dict):
+            total += int(usage.get("prompt_tokens", 0) or 0)
+            total += int(usage.get("completion_tokens", 0) or 0)
+    try:
+        goal_manager_for(session_manager).record_run(state["session_id"], total, continuation=continuation)
+    except Exception as exc:
+        logger.debug("Goal usage update failed: %s", exc)
+
+
+def _active_session_path(session_id: str) -> Path:
+    resolver = getattr(session_manager, "_resolve_session_path", None)
+    if callable(resolver):
+        return Path(resolver(str(session_id)))
+    return Path(session_manager.sessions_dir) / str(session_id)
+
+
 def _steer_inbox_path(session_id: str) -> Path:
-    return Path(session_manager.sessions_dir) / str(session_id) / "steer_inbox.json"
+    return _active_session_path(session_id) / "steer_inbox.json"
 
 
 def _load_steer_queue_locked(session_id: str) -> List[Dict[str, Any]]:
@@ -200,10 +243,31 @@ def _trim_steer_rows(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 
 @contextmanager
 def _steer_transaction(session_id: str):
-    from runtime_v2.event_log import SessionEventLog
+    session_dir = _active_session_path(session_id)
+    session_dir.mkdir(parents=True, exist_ok=True)
+    lock_path = session_dir / ".steer.lock"
+    with lock_path.open("a+b") as fh:
+        if os.name == "nt":
+            import msvcrt
 
-    with SessionEventLog(session_manager.sessions_dir).session_transaction(session_id):
-        yield
+            fh.seek(0, os.SEEK_END)
+            if fh.tell() == 0:
+                fh.write(b"0")
+                fh.flush()
+            fh.seek(0)
+            msvcrt.locking(fh.fileno(), msvcrt.LK_LOCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            if os.name == "nt":
+                fh.seek(0)
+                msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
 
 
 class _SteerRestartRequested(Exception):
@@ -238,7 +302,7 @@ def _register_steer_run_control(session_id: str, run_id: str) -> _SteerRunContro
         with _STEER_RUN_LOCK:
             _ACTIVE_STEER_RUNS[sid] = control
         try:
-            fence_path = Path(session_manager.sessions_dir) / sid / "active_run_fence.json"
+            fence_path = _active_session_path(sid) / "active_run_fence.json"
             fence_path.parent.mkdir(parents=True, exist_ok=True)
             with _steer_transaction(sid):
                 tmp = fence_path.with_suffix(".json.tmp")
@@ -260,7 +324,7 @@ def _clear_steer_run_control(session_id: str, control: _SteerRunControl) -> None
         if _ACTIVE_STEER_RUNS.get(sid) is control:
             _ACTIVE_STEER_RUNS.pop(sid, None)
     try:
-        fence_path = Path(session_manager.sessions_dir) / sid / "active_run_fence.json"
+        fence_path = _active_session_path(sid) / "active_run_fence.json"
         with _steer_transaction(sid):
             current = json.loads(fence_path.read_text(encoding="utf-8")) if fence_path.exists() else {}
             if str(current.get("token") or "") == control.fence_token:
@@ -296,7 +360,7 @@ def _state_run_has_write_fence(state: State) -> bool:
     if local_current is not control:
         return False
     try:
-        fence_path = Path(session_manager.sessions_dir) / sid / "active_run_fence.json"
+        fence_path = _active_session_path(sid) / "active_run_fence.json"
         current = json.loads(fence_path.read_text(encoding="utf-8")) if fence_path.exists() else {}
         token = str(current.get("token") or "")
         return not token or token == control.fence_token
@@ -532,6 +596,27 @@ def _claim_session_steers(session_id: str, run_id: str) -> List[Dict[str, Any]]:
     return claimed
 
 
+def _set_session_steers_deferred(session_id: str, deferred: bool) -> None:
+    sid = str(session_id or "").strip()
+    if not sid:
+        return
+    source_states = {"queued", "interrupting"} if deferred else {"deferred"}
+    target_state = "deferred" if deferred else "interrupting"
+    with _STEER_LOCK:
+        with _steer_transaction(sid):
+            rows = [_normalize_steer_item(x) for x in _load_steer_queue_locked(sid)]
+            changed = False
+            for item in rows:
+                if item.get("state") not in source_states:
+                    continue
+                item["state"] = target_state
+                item["version"] = int(item.get("version") or 0) + 1
+                item["updated_at"] = time.time()
+                changed = True
+            if changed:
+                _save_steer_queue_locked(sid, _trim_steer_rows(rows))
+
+
 def _is_followup_interrupt(session_id: str) -> bool:
     try:
         return session_manager.get_interrupt_reason(session_id) == "followup"
@@ -656,6 +741,17 @@ tools_dict = {k: v for k, v in tools.items()}
 # 只读工具允许并发；存在副作用的工具默认串行执行。
 # activate_skill 仅读取 SKILL.md/目录列表，不修改工作区，可并行。
 READ_ONLY_TOOLS = {"read_file", "ls", "list_dir", "glob", "grep", "web_search", "web_fetch", "activate_skill"}
+COOPERATIVE_STEER_TOOLS = {"context_manage", "task"}
+
+
+def _tool_steer_policy(tool_name: str) -> Dict[str, str]:
+    """Describe cancellation semantics without claiming external rollback."""
+    name = str(tool_name or "").strip()
+    if name in READ_ONLY_TOOLS:
+        return {"interruptibility": "safe", "side_effect": "none"}
+    if name in COOPERATIVE_STEER_TOOLS:
+        return {"interruptibility": "cooperative", "side_effect": "reversible"}
+    return {"interruptibility": "non_interruptible", "side_effect": "irreversible"}
 READ_ONLY_TOOL_VIRTUAL_LINE_CHARS = 1000
 
 
@@ -915,7 +1011,10 @@ def _load_runtime_v2_model_history_dicts(session_id: str) -> List[Dict[str, Any]
     try:
         from runtime_v2 import RuntimeModelProjection
 
-        return RuntimeModelProjection(session_manager.sessions_dir).read_message_dicts(session_id)
+        return RuntimeModelProjection(
+            session_manager.sessions_dir,
+            path_resolver=getattr(session_manager, "_resolve_session_path", None),
+        ).read_message_dicts(session_id)
     except Exception as exc:
         logger.debug("Runtime V2 model projection read failed: %s", exc)
         return []
@@ -925,7 +1024,10 @@ def _load_runtime_v2_context_summary(session_id: str) -> str:
     try:
         from runtime_v2 import SnapshotStore
 
-        snapshot = SnapshotStore(session_manager.sessions_dir).read(session_id)
+        snapshot = SnapshotStore(
+            session_manager.sessions_dir,
+            path_resolver=getattr(session_manager, "_resolve_session_path", None),
+        ).read(session_id)
         context = snapshot.get("context") if isinstance(snapshot, dict) else {}
         summary = context.get("summary") if isinstance(context, dict) else {}
         if isinstance(summary, dict):
@@ -1040,7 +1142,7 @@ def _llm_stream_timing_log(
 
 def _runtime_v2_append_model_message(state: State, msg: Any) -> None:
     sid = str(state.get("session_id") or "").strip()
-    if not sid:
+    if not sid or not _runtime_v2_is_primary():
         return
     if not _state_run_has_write_fence(state):
         return
@@ -1074,7 +1176,10 @@ def _runtime_v2_append_model_message(state: State, msg: Any) -> None:
             sid,
             role,
         )
-        RuntimeHistoryOps(session_manager.sessions_dir).append_model_message(
+        RuntimeHistoryOps(
+            session_manager.sessions_dir,
+            path_resolver=getattr(session_manager, "_resolve_session_path", None),
+        ).append_model_message(
             sid,
             role,
             content,
@@ -1118,7 +1223,10 @@ def _runtime_v2_commit_user_turn(
         model_content = str(data.pop("content", "") or "")
         data.pop("type", None)
         run_id = str(state.get("_runtime_v2_run_id") or "").strip()
-        committed_event = RuntimeHistoryOps(session_manager.sessions_dir).commit_user_turn(
+        committed_event = RuntimeHistoryOps(
+            session_manager.sessions_dir,
+            path_resolver=getattr(session_manager, "_resolve_session_path", None),
+        ).commit_user_turn(
             sid,
             model_content,
             ui_content=ui_content,
@@ -1157,7 +1265,10 @@ def _runtime_v2_commit_assistant_final(state: State, content: str) -> bool:
         from runtime_v2 import RuntimeHistoryOps
 
         run_id = str(state.get("_runtime_v2_run_id") or "").strip()
-        RuntimeHistoryOps(session_manager.sessions_dir).commit_assistant_final(
+        RuntimeHistoryOps(
+            session_manager.sessions_dir,
+            path_resolver=getattr(session_manager, "_resolve_session_path", None),
+        ).commit_assistant_final(
             sid,
             str(content or ""),
             operation_id=f"final:{run_id}" if run_id else "",
@@ -1180,7 +1291,7 @@ def _runtime_v2_commit_assistant_final(state: State, content: str) -> bool:
 
 def _runtime_v2_replace_model_history(state: State, messages: List[Any], reason: str) -> None:
     sid = str(state.get("session_id") or "").strip()
-    if not sid:
+    if not sid or not _runtime_v2_is_primary():
         return
     if not _state_run_has_write_fence(state):
         return
@@ -1188,7 +1299,10 @@ def _runtime_v2_replace_model_history(state: State, messages: List[Any], reason:
     try:
         from runtime_v2 import RuntimeHistoryOps
 
-        RuntimeHistoryOps(session_manager.sessions_dir).replace_model_history(
+        RuntimeHistoryOps(
+            session_manager.sessions_dir,
+            path_resolver=getattr(session_manager, "_resolve_session_path", None),
+        ).replace_model_history(
             sid,
             [_message_to_dict(m) for m in list(messages or [])],
             reason=reason,
@@ -1208,18 +1322,40 @@ def _runtime_v2_replace_model_history(state: State, messages: List[Any], reason:
 def _runtime_v2_commit_context_summary(state: State) -> None:
     sid = str(state.get("session_id") or "").strip()
     summary = str(state.get("key_context") or "")
-    if not sid:
+    if not sid or not _runtime_v2_is_primary():
         return
     try:
         from runtime_v2 import RuntimeHistoryOps, SnapshotStore
 
-        snapshot = SnapshotStore(session_manager.sessions_dir).read(sid)
+        resolver = getattr(session_manager, "_resolve_session_path", None)
+        snapshot = SnapshotStore(
+            session_manager.sessions_dir,
+            path_resolver=resolver,
+        ).read(sid)
         current = snapshot.get("context", {}).get("summary", {}) if isinstance(snapshot, dict) else {}
         if isinstance(current, dict) and str(current.get("summary") or "") == summary:
             return
-        RuntimeHistoryOps(session_manager.sessions_dir).commit_context_summary(sid, summary)
+        RuntimeHistoryOps(
+            session_manager.sessions_dir,
+            path_resolver=resolver,
+        ).commit_context_summary(sid, summary)
     except Exception as exc:
         logger.debug("Runtime V2 context summary commit failed: %s", exc)
+
+
+def _runtime_v2_checkpoint_context_tokens(state: State, payload: Dict[str, Any]) -> None:
+    sid = str(state.get("session_id") or "").strip()
+    if not sid or not _runtime_v2_is_primary() or not _state_run_has_write_fence(state):
+        return
+    try:
+        from runtime_v2 import RuntimeHistoryOps
+
+        RuntimeHistoryOps(
+            session_manager.sessions_dir,
+            path_resolver=getattr(session_manager, "_resolve_session_path", None),
+        ).checkpoint_context_tokens(sid, payload)
+    except Exception as exc:
+        logger.warning("Runtime V2 context token checkpoint failed for %s: %s", sid, exc)
 
 
 def _runtime_v2_is_primary() -> bool:
@@ -1462,7 +1598,18 @@ async def _await_steerable(
         # Serialized write tools may have irreversible side effects. Once they
         # have started, preserve their real result and apply the steer at the
         # next checkpoint instead of pretending cancellation rolled them back.
-        return await task
+        deferred_seen = False
+        try:
+            while True:
+                done, _ = await asyncio.wait({task}, timeout=poll_sec)
+                if task in done:
+                    return task.result()
+                if _steer_requested(state) and not deferred_seen:
+                    deferred_seen = True
+                    _set_session_steers_deferred(str(state.get("session_id") or ""), True)
+        finally:
+            if deferred_seen:
+                _set_session_steers_deferred(str(state.get("session_id") or ""), False)
     try:
         while True:
             done, _ = await asyncio.wait({task}, timeout=poll_sec)
@@ -1590,12 +1737,15 @@ def _completed_tool_call_ids_from_messages(messages: List[Any]) -> set[str]:
 
 def _runtime_v2_latest_seq(session_id: str) -> int:
     sid = str(session_id or "").strip()
-    if not sid:
+    if not sid or not _runtime_v2_is_primary():
         return 0
     try:
         from runtime_v2.event_log import SessionEventLog
 
-        log = SessionEventLog(session_manager.sessions_dir)
+        log = SessionEventLog(
+            session_manager.sessions_dir,
+            path_resolver=getattr(session_manager, "_resolve_session_path", None),
+        )
         return max(0, int(log.next_seq(sid)) - 1)
     except Exception:
         return 0
@@ -1607,7 +1757,7 @@ def _runtime_v2_delete_unfinished_tool_events_after_marker(
     kept_tool_ids: set[str],
 ) -> None:
     sid = str(state.get("session_id") or "").strip() if isinstance(state, dict) else ""
-    if not sid:
+    if not sid or not _runtime_v2_is_primary():
         return
     try:
         marker_seq = int(marker.get("runtime_seq") or 0)
@@ -1619,8 +1769,9 @@ def _runtime_v2_delete_unfinished_tool_events_after_marker(
         from runtime_v2 import RuntimeHistoryOps
         from runtime_v2.event_log import SessionEventLog
 
-        log = SessionEventLog(session_manager.sessions_dir)
-        ops = RuntimeHistoryOps(session_manager.sessions_dir)
+        resolver = getattr(session_manager, "_resolve_session_path", None)
+        log = SessionEventLog(session_manager.sessions_dir, path_resolver=resolver)
+        ops = RuntimeHistoryOps(session_manager.sessions_dir, path_resolver=resolver)
         for ev in log.read_after_seq(sid, marker_seq):
             payload = dict(ev.payload or {})
             ev_type = str(ev.type or "")
@@ -1641,23 +1792,6 @@ def _runtime_v2_delete_unfinished_tool_events_after_marker(
             ops.delete_message(sid, int(ev.seq), reason="steer_restart_remove_unfinished_tool")
     except Exception:
         logger.debug("failed to hide unfinished tool events after steer rollback", exc_info=True)
-
-
-async def _restart_react_after_steer(
-    state: State,
-    emit: Optional[Callable[[Dict[str, Any]], Any]],
-) -> State:
-    _rollback_steer_partial_turn(state)
-    consumed = await _consume_steer_messages(state, emit=emit)
-    _reset_steer_control(state)
-    if consumed:
-        state["final_result_retries"] = 0
-        state["empty_final_retries"] = 0
-        state["repeat_count"] = 0
-        state["last_response_content"] = None
-        state["last_tool_calls_signature"] = None
-        state["reminder_inserted"] = False
-    return await react_node(state, emit=emit)
 
 
 async def _consume_steer_messages(
@@ -2378,20 +2512,50 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
         or ""
     ).strip()
 
-    if not (isinstance(session_meta, dict) and session_meta.get("is_subagent")):
-        pending_notes = session_manager.consume_pending_subagent_notifications(state["session_id"])
+    def _inject_pending_subagent_notes(*, current_run_only: bool = False) -> bool:
+        if isinstance(session_meta, dict) and session_meta.get("is_subagent"):
+            return False
+        claim_id = "%s:%s" % (
+            str(state.get("_runtime_v2_run_id") or "continuation"), uuid.uuid4().hex
+        )
+        claimed = session_manager.claim_pending_subagent_notifications(
+            state["session_id"],
+            claim_id,
+            parent_run_id=(str(state.get("_runtime_v2_run_id") or "") if current_run_only else ""),
+        )
+        pending_notes = [
+            session_manager._pending_subagent_notification_line(item)
+            for item in claimed
+        ]
+        pending_notes = [line for line in pending_notes if line]
         if pending_notes:
-            note = SystemMessage(
-                content="[后台 Subagent 已完成]\n" + "\n".join(pending_notes)
+            try:
+                note = SystemMessage(content="[后台 Subagent 已完成]\n" + "\n".join(pending_notes))
+                llm_history.append(note)
+                work_messages.append(note)
+                state["llm_history"] = llm_history
+                state["work_messages"] = work_messages
+                _persist_state_with_model_append(state, note)
+                session_manager.resolve_pending_subagent_claim(
+                    state["session_id"], claim_id, consumed=True
+                )
+                return True
+            except Exception:
+                session_manager.resolve_pending_subagent_claim(
+                    state["session_id"], claim_id, consumed=False
+                )
+                raise
+        if claimed:
+            session_manager.resolve_pending_subagent_claim(
+                state["session_id"], claim_id, consumed=False
             )
-            llm_history.append(note)
-            work_messages.append(note)
-            state["llm_history"] = llm_history
-            state["work_messages"] = work_messages
-            _persist_state_with_model_append(state, note)
+        return False
+
+    _inject_pending_subagent_notes()
 
     try:
         while iter_count < max_react_iter:
+            _inject_pending_subagent_notes(current_run_only=True)
             pre_api_timings: Dict[str, int] = dict(state.pop("_pre_run_timings", {}) or {})
             _t_pre_api = time.perf_counter()
             await _raise_if_steer_requested(state, emit, "react")
@@ -2574,20 +2738,34 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                     llm_history=nl,
                     key_context=nk,
                 )
-                post_compress_est = estimate_full_input_tokens_for_llm_history(
-                    state["session_id"],
-                    nl,
-                    nk or "",
-                )
+                if state.get("_context_token_mode") == "calculated":
+                    post_compress_est = estimate_full_input_tokens_for_llm_history(
+                        state["session_id"],
+                        nl,
+                        nk or "",
+                    )
+                    post_compress_token_source = "local_calculated"
+                else:
+                    post_compress_est, post_compress_token_source = estimate_hybrid_input_tokens_for_llm_history(
+                        state["session_id"],
+                        nl,
+                        nk or "",
+                    )
+                post_compress_tokens = {
+                    "estimated": int(post_compress_est),
+                    "threshold": int(iter_context_window),
+                    "model": iter_model,
+                    "token_mode": state.get("_context_token_mode", "hybrid"),
+                    "token_source": post_compress_token_source,
+                    "source": post_compress_token_source,
+                    "reason": "post_compress_checkpoint",
+                }
+                _runtime_v2_checkpoint_context_tokens(state, post_compress_tokens)
                 await _push_stream_event(
                     state,
                     {
                         "type": "context_tokens",
-                        "estimated": int(post_compress_est),
-                        "threshold": int(iter_context_window),
-                        "model": iter_model,
-                        "token_mode": state.get("_context_token_mode", "hybrid"),
-                        "source": "local_estimate",
+                        **post_compress_tokens,
                         "ephemeral": True,
                     },
                     emit=emit,
@@ -2633,6 +2811,12 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                 compress_attempts = 0
 
             combined_tools: List[Dict[str, Any]] = list(OPENAI_TOOL_DEFINITIONS)
+            if not goal_enabled():
+                combined_tools = [
+                    item for item in combined_tools
+                    if str(((item.get("function") or {}).get("name") or ""))
+                    not in {"create_goal", "get_goal", "update_goal"}
+                ]
             _t_pre_api = time.perf_counter()
             try:
                 combined_tools.extend(
@@ -2812,6 +2996,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                                 state["session_id"],
                                 instr,
                                 hint_sink=_key_hint_emit,
+                                current_key_context=state.get("key_context", ""),
                             ),
                             state,
                             emit,
@@ -2854,6 +3039,45 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                     }
 
                 # 特殊处理：update_todo — 写入 todo_plan.md
+                if tool_name in {"create_goal", "get_goal", "update_goal"}:
+                    goal_failed = False
+                    try:
+                        gm = goal_manager_for(session_manager)
+                        if tool_name == "create_goal":
+                            result_obj = gm.create(
+                                state["session_id"],
+                                str(tool_args.get("objective") or ""),
+                                tool_args.get("token_budget"),
+                            )
+                        elif tool_name == "get_goal":
+                            result_obj = gm.get(state["session_id"])
+                        else:
+                            result_obj = gm.update_status(
+                                state["session_id"],
+                                str(tool_args.get("status") or ""),
+                                str(tool_args.get("reason") or ""),
+                                report_id=str(state.get("_runtime_v2_run_id") or ""),
+                            )
+                        result = json.dumps({"goal": result_obj}, ensure_ascii=False)
+                    except (GoalError, ValueError) as exc:
+                        result = f"Error: {exc}"
+                        goal_failed = True
+                    result_for_log, result_for_llm, result_for_ui = _tool_result_details_for_views(
+                        result, tool_name, state
+                    )
+                    return {
+                        "type": "tool",
+                        "tool_name": tool_name,
+                        "tool_args": tool_args,
+                        "tool_id": tool_id,
+                        "result": result,
+                        "tool_detail_log": result_for_log,
+                        "tool_detail_llm": result_for_llm,
+                        "tool_detail_ui": result_for_ui,
+                        "result_for_log": result_for_log,
+                        "tool_failed": goal_failed,
+                    }
+
                 if tool_name == "update_todo":
                     todo_tool_failed = False
                     try:
@@ -2928,6 +3152,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                                 parent_session_id=state["session_id"],
                                 parent_key_context=state.get("key_context", ""),
                                 emit=emit,
+                                parent_run_id=str(state.get("_runtime_v2_run_id") or ""),
                             ),
                             emit,
                             "tool_task",
@@ -3242,6 +3467,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                             transport_observer=executor_http_client,
                         )
                     finally:
+                        stream_worker_done_event.set()
                         logger.info(
                             "llm_worker_completed session=%s react_iter=%s model=%s",
                             state["session_id"],
@@ -3251,6 +3477,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                 async_stream_q: asyncio.Queue = asyncio.Queue()
                 sync_q = _ThreadToAsyncQueue(asyncio.get_running_loop(), async_stream_q)
                 stream_abort_event = threading.Event()
+                stream_worker_done_event = threading.Event()
                 stream_timing_events: List[Dict[str, Any]] = []
                 def _stream_model_switch_status(ev: Dict[str, Any]) -> None:
                     if not _should_suppress_model_switch_status(state, ev):
@@ -3481,15 +3708,21 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                                 await r
                             await asyncio.sleep(0)
                             streamed_this_call = True
+                except asyncio.CancelledError:
+                    stream_abort_event.set()
+                    raise
                 finally:
                     # 取消定时器
                     if thinking_timer_task and not thinking_timer_task.done():
                         thinking_timer_task.cancel()
                     try:
-                        if steer_interrupted_this_call:
+                        if steer_interrupted_this_call or stream_abort_event.is_set():
                             stream_abort_event.set()
                             stream_task.add_done_callback(_discard_task_result)
                             stream_task.cancel()
+                            await asyncio.shield(
+                                asyncio.to_thread(stream_worker_done_event.wait)
+                            )
                         else:
                             await stream_task
                     except Exception:
@@ -4149,7 +4382,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                         execute_one(tool_call),
                         emit,
                         "tool",
-                        defer_steer=True,
+                        defer_steer=_tool_steer_policy(str(tool_call.get("name") or ""))["interruptibility"] == "non_interruptible",
                     )
                     write_result = await checkpoint_completed_tool_result(write_result)
                     exec_results.append(write_result)
@@ -4454,6 +4687,16 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                     final_result_retries = 0
                     state["final_result_retries"] = 0
                     state["empty_final_retries"] = 0
+                    continue
+                if iter_count < max_react_iter and _inject_pending_subagent_notes(current_run_only=True):
+                    final_result_retries = 0
+                    state["final_result_retries"] = 0
+                    state["empty_final_retries"] = 0
+                    await _push_stream_event(
+                        state,
+                        {"type": "status", "content": "子任务结果已返回，正在纳入当前回答"},
+                        emit=emit,
+                    )
                     continue
                 final_content = _strip_think_tags_for_final(response_text)
                 if not final_content and final_result_retries < final_result_retry_max:
@@ -4858,6 +5101,10 @@ async def astream_events(
 
     new_work_messages = prev_work_messages + [user_message]
     new_llm_history = prev_llm_history + [user_message]
+    goal_note = _goal_continuation_message(session_id)
+    if goal_note is not None:
+        new_work_messages.append(goal_note)
+        new_llm_history.append(goal_note)
     runtime_v2_run_id = str(run_id or "").strip() or str(uuid.uuid4())
 
     state: State = {
@@ -4889,7 +5136,10 @@ async def astream_events(
         try:
             from runtime_v2.mirror import RuntimeMirror
 
-            mirror = RuntimeMirror(session_manager.sessions_dir)
+            mirror = RuntimeMirror(
+                session_manager.sessions_dir,
+                path_resolver=getattr(session_manager, "_resolve_session_path", None),
+            )
             if event_type == "run_started":
                 mirror.mirror_run_started(session_id, runtime_v2_run_id, payload)
             elif event_type == "run_finished":
@@ -5087,6 +5337,7 @@ async def astream_events(
             stream_event_count_after_final = len(state["stream_events"])
             _t_final = time.perf_counter()
             state = finish(state)
+            _record_goal_run_usage(state, continuation=False)
             final_timings["finish_after_final"] = _timing_ms(_t_final)
             _pipeline_step_timing_log("final_pipeline_step_timing", session_id, "finish_after_final", final_timings["finish_after_final"], run_id=runtime_v2_run_id, mode="chat")
             _t_final = time.perf_counter()
@@ -5107,6 +5358,11 @@ async def astream_events(
                 "final_pipeline", final_timings,
                 total_ms=sum(int(v or 0) for v in final_timings.values()),
             )
+            anchor_pending = getattr(
+                session_manager, "anchor_pending_subagent_results_for_run", None
+            )
+            if callable(anchor_pending):
+                anchor_pending(session_id, runtime_v2_run_id)
             completed = True
         except asyncio.CancelledError:
             terminal_event = {"type": "run_interrupted", "run_id": runtime_v2_run_id, "ephemeral": True}
@@ -5195,15 +5451,15 @@ async def astream_events_continuation(
     setup_logging("[subagent-continuation]", session_id)
     pre_run_timings: Dict[str, int] = {}
     _t_pre = time.perf_counter()
-    runtime_v2_llm_history_dicts = _load_runtime_v2_model_history_dicts(session_id)
-    if runtime_v2_llm_history_dicts:
+    if _runtime_v2_is_primary():
+        runtime_v2_llm_history_dicts = _load_runtime_v2_model_history_dicts(session_id)
+        if not runtime_v2_llm_history_dicts:
+            logger.warning(
+                "Runtime V2 continuation skipped because model projection is empty: session=%s",
+                session_id,
+            )
+            return
         llm_history_dicts = runtime_v2_llm_history_dicts
-    elif _runtime_v2_is_primary():
-        logger.warning(
-            "Runtime V2 continuation skipped because model projection is empty: session=%s",
-            session_id,
-        )
-        return
     else:
         session_manager.reconcile_llm_work_to_ui_user_count(session_id)
         llm_history_dicts = _load_model_history_dicts_v2_primary(session_id, reconcile_legacy=False)
@@ -5235,6 +5491,11 @@ async def astream_events_continuation(
         ))
         prev_work_messages.append(recovery_note)
         prev_llm_history.append(recovery_note)
+
+    goal_note = _goal_continuation_message(session_id)
+    if goal_note is not None:
+        prev_work_messages.append(goal_note)
+        prev_llm_history.append(goal_note)
 
     user_input = ""
     for msg in reversed(prev_llm_history):
@@ -5272,7 +5533,10 @@ async def astream_events_continuation(
         try:
             from runtime_v2.mirror import RuntimeMirror
 
-            mirror = RuntimeMirror(session_manager.sessions_dir)
+            mirror = RuntimeMirror(
+                session_manager.sessions_dir,
+                path_resolver=getattr(session_manager, "_resolve_session_path", None),
+            )
             if event_type == "run_started":
                 mirror.mirror_run_started(session_id, runtime_v2_run_id, payload)
             elif event_type == "run_finished":
@@ -5401,6 +5665,7 @@ async def astream_events_continuation(
             stream_event_count_after_final = len(state["stream_events"])
             _t_final = time.perf_counter()
             state = finish(state)
+            _record_goal_run_usage(state, continuation=True)
             final_timings["finish_after_final"] = _timing_ms(_t_final)
             _pipeline_step_timing_log("final_pipeline_step_timing", session_id, "finish_after_final", final_timings["finish_after_final"], run_id=runtime_v2_run_id, mode="continuation")
             _t_final = time.perf_counter()
@@ -5422,6 +5687,11 @@ async def astream_events_continuation(
                 "final_pipeline", final_timings,
                 total_ms=sum(int(v or 0) for v in final_timings.values()),
             )
+            anchor_pending = getattr(
+                session_manager, "anchor_pending_subagent_results_for_run", None
+            )
+            if callable(anchor_pending):
+                anchor_pending(session_id, runtime_v2_run_id)
             completed = True
         except asyncio.CancelledError:
             terminal_event = {"type": "run_interrupted", "ephemeral": True}

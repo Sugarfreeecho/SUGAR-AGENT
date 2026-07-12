@@ -63,6 +63,16 @@
                         <aside id="chat-todo-plan" class="chat-todo-plan" aria-label="当前计划">
                             <div class="chat-todo-plan-inner">
                                 <div class="chat-todo-plan-panel">
+                                    <section id="chat-goal-card" class="chat-goal-card" hidden>
+                                        <div class="chat-goal-heading"><span>GOAL</span><span id="chat-goal-status"></span></div>
+                                        <div id="chat-goal-objective" class="chat-goal-objective"></div>
+                                        <div id="chat-goal-meta" class="chat-goal-meta"></div>
+                                        <div class="chat-goal-actions">
+                                            <button type="button" id="chat-goal-pause" onclick="controlCurrentGoal('pause')">暂停</button>
+                                            <button type="button" id="chat-goal-resume" onclick="controlCurrentGoal('resume')">继续</button>
+                                            <button type="button" onclick="controlCurrentGoal('cancel')">取消</button>
+                                        </div>
+                                    </section>
                                     <div class="chat-todo-plan-title">当前计划<button class="chat-todo-plan-close" type="button" aria-label="清除计划" data-ui-tip="清除当前计划" onclick="clearTodoPlan()">×</button></div>
                                     <div id="chat-todo-plan-stats" class="chat-todo-plan-stats" aria-live="polite"></div>
                                     <ul id="chat-todo-plan-list" class="chat-todo-plan-list"></ul>
@@ -148,6 +158,13 @@
                 <button type="button" id="settings-modal-close" class="settings-modal__close" aria-label="关闭">×</button>
             </div>
             <div class="settings-modal__body">
+                <div class="settings-modal__section">
+                    <div class="settings-modal__label">语言</div>
+                    <div class="settings-theme-row" role="group" aria-label="语言">
+                        <button type="button" id="settings-language-zh" class="settings-theme-btn">中文</button>
+                        <button type="button" id="settings-language-en" class="settings-theme-btn">英文</button>
+                    </div>
+                </div>
                 <div class="settings-modal__section">
                     <div class="settings-modal__label">字体大小</div>
                     <div class="settings-font-row" role="group" aria-label="字体大小">

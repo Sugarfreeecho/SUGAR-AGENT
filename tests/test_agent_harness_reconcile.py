@@ -1,4 +1,5 @@
 import sys
+import tempfile
 import threading
 import uuid
 from contextlib import nullcontext
@@ -23,6 +24,56 @@ def _manager_with(**attrs):
 class _Repository:
     def __init__(self, sessions_dir: Path):
         self.sessions_dir = sessions_dir
+
+
+def test_runtime_v2_create_session_does_not_initialize_legacy_files(monkeypatch, tmp_path):
+    import agent_harness
+
+    monkeypatch.setenv("RUNTIME_VERSION", "2")
+    mgr = agent_harness.SessionManager(tmp_path, tmp_path / "sessions.json")
+
+    session_id, dialogue, work, model, key_context, _metadata = mgr.get_or_create_session()
+    session_dir = tmp_path / session_id
+
+    assert dialogue == []
+    assert work == []
+    assert model == []
+    assert key_context == ""
+    assert (session_dir / "metadata.json").is_file()
+    assert (session_dir / "events.jsonl").is_file()
+    assert (session_dir / "snapshots" / "latest.json").is_file()
+    for legacy_name in (
+        "work_messages.json",
+        "llm_history.json",
+        "key_context.md",
+        "key_context_history.jsonl",
+        "todo_plan.md",
+        "ui_events.json",
+        "dialogue_history.json",
+    ):
+        assert not (session_dir / legacy_name).exists(), legacy_name
+
+
+def test_runtime_v2_list_preview_never_calls_legacy_ui_loader(monkeypatch, tmp_path):
+    import agent_harness
+    from runtime_v2 import RuntimeMirror
+
+    monkeypatch.setenv("RUNTIME_VERSION", "2")
+    mgr = agent_harness.SessionManager(tmp_path, tmp_path / "sessions.json")
+    session_id, *_ = mgr.get_or_create_session()
+    RuntimeMirror(tmp_path, path_resolver=mgr._resolve_session_path).mirror_ui_event(
+        session_id,
+        {"type": "user", "content": "projection-only preview"},
+    )
+
+    def fail_legacy(*_args, **_kwargs):
+        raise AssertionError("Runtime V2 session list preview must not read legacy ui_events")
+
+    monkeypatch.setattr(mgr, "_load_ui_events", fail_legacy)
+    rows = mgr.list_sessions()
+
+    assert len(rows) == 1
+    assert rows[0]["last_user_preview"] == "projection-only preview"
 
 
 def test_reconcile_does_not_rebuild_when_llm_user_count_matches_ui():
@@ -488,12 +539,7 @@ def test_runtime_v2_append_tail_replaces_projected_visible_history(tmp_path):
         "u1",
         "a1",
     ]
-    assert observed == [
-        (
-            ("observe_legacy_tail_restored", "s1"),
-            {"tail_count": 2, "merged_event_count": 3},
-        )
-    ]
+    assert observed == []
 
 
 def test_runtime_v2_create_subagent_does_not_initialize_legacy_histories(monkeypatch, tmp_path):
@@ -542,10 +588,50 @@ def test_runtime_v2_fork_subagent_uses_v2_projection_not_legacy(monkeypatch, tmp
 
     child_id = mgr.fork_subagent_from_parent(parent_id, "desc", "generalPurpose", 1)
 
-    child_messages = RuntimeModelProjection(tmp_path).read_message_dicts(child_id)
-    child_summary = SnapshotStore(tmp_path).read(child_id).get("context", {}).get("summary", {})
+    child_messages = RuntimeModelProjection(
+        tmp_path,
+        path_resolver=mgr._resolve_session_path,
+    ).read_message_dicts(child_id)
+    child_summary = SnapshotStore(
+        tmp_path,
+        path_resolver=mgr._resolve_session_path,
+    ).read(child_id).get("context", {}).get("summary", {})
     assert child_messages == [{"type": "user", "content": "from v2"}]
     assert child_summary.get("summary") == "v2 summary"
+    assert not (tmp_path / child_id).exists()
+
+
+def test_runtime_v2_subagent_and_grandchild_share_one_nested_event_log(monkeypatch):
+    import agent_harness
+    from runtime_v2 import RuntimeHistoryOps, RuntimeModelProjection, RuntimeMirror
+
+    monkeypatch.setenv("RUNTIME_VERSION", "2")
+    # Keep the base short enough for a two-level UUID tree on Windows.
+    with tempfile.TemporaryDirectory(prefix="rt2-nested-") as raw_root:
+        root = Path(raw_root)
+        parent_id = str(uuid.uuid4())
+        mgr = agent_harness.SessionManager(root, root / "sessions.json")
+        mgr._save_metadata(parent_id, {"name": "parent"})
+        child_id = mgr.create_subagent_session(parent_id, "child", "generalPurpose", 1)
+        grandchild_id = mgr.create_subagent_session(child_id, "grandchild", "generalPurpose", 2)
+        resolver = mgr._resolve_session_path
+
+        for sid, text in ((child_id, "child model"), (grandchild_id, "grandchild model")):
+            RuntimeHistoryOps(root, path_resolver=resolver).append_model_message(sid, "user", text)
+            RuntimeMirror(root, path_resolver=resolver).mirror_ui_event(
+                sid, {"type": "user", "content": text}
+            )
+            assert RuntimeModelProjection(root, path_resolver=resolver).read_message_dicts(sid) == [
+                {"type": "user", "content": text}
+            ]
+            assert not (root / sid).exists()
+
+        child_path = root / parent_id / "subagents" / child_id
+        grandchild_path = child_path / "subagents" / grandchild_id
+        assert resolver(child_id).samefile(child_path)
+        assert resolver(grandchild_id).samefile(grandchild_path)
+        assert (child_path / "events.jsonl").is_file()
+        assert (grandchild_path / "events.jsonl").is_file()
 
 
 def test_runtime_v2_subagent_output_does_not_fallback_legacy(tmp_path):
@@ -840,6 +926,144 @@ def test_runtime_v2_pending_subagent_continue_uses_v2_ui_projection(tmp_path):
 
     assert len(lines) == 1
     assert "Subagent agent1" in lines[0]
+    assert store.list_pending_results("parent") == []
+
+
+def test_result_completed_during_parent_run_is_not_bound_to_previous_final(tmp_path):
+    import agent_harness
+    from runtime_v2 import RuntimeMirror, RuntimeSubagentStore
+
+    mirror = RuntimeMirror(tmp_path)
+    mirror.mirror_ui_event("parent", {"type": "user", "content": "old"})
+    mirror.mirror_ui_event("parent", {"type": "final", "content": "old answer"})
+    mirror.mirror_ui_event("parent", {"type": "user", "content": "new"})
+    store = RuntimeSubagentStore(tmp_path)
+    mgr = _manager_with(
+        repository=_Repository(tmp_path),
+        _runtime_v2_primary=lambda: True,
+        _runtime_subagent_store=lambda: store,
+        _resolve_session_path=lambda sid: tmp_path / sid,
+        _load_metadata=lambda sid: {},
+    )
+
+    agent_harness.SessionManager.append_pending_subagent_result(mgr, "parent", {
+        "agent_id": "agent1",
+        "status": "completed",
+        "result": "new result",
+        "parent_run_id": "run-new",
+    })
+
+    row = store.list_pending_results("parent")[0]
+    assert row["delivery_scope"] == "parent_run"
+    assert "after_final_index" not in row
+    assert row["result_id"]
+    assert agent_harness.SessionManager.can_continue_after_subagents(mgr, "parent") is False
+
+
+def test_parent_run_consumes_own_result_once_without_final(tmp_path):
+    import agent_harness
+    from runtime_v2 import RuntimeSubagentStore
+
+    store = RuntimeSubagentStore(tmp_path)
+    store.append_pending_result("parent", {
+        "result_id": "result-1",
+        "agent_id": "agent1",
+        "status": "completed",
+        "result": "done",
+        "parent_run_id": "run-1",
+        "delivery_scope": "parent_run",
+        "delivery_state": "pending",
+    })
+    mgr = _manager_with(
+        repository=_Repository(tmp_path),
+        _runtime_v2_primary=lambda: True,
+        _runtime_subagent_store=lambda: store,
+        _load_metadata=lambda sid: {},
+        _load_ui_events_for_active_runtime=lambda sid: [],
+    )
+
+    first = agent_harness.SessionManager.consume_pending_subagent_notifications(
+        mgr, "parent", parent_run_id="run-1"
+    )
+    second = agent_harness.SessionManager.consume_pending_subagent_notifications(
+        mgr, "parent", parent_run_id="run-1"
+    )
+
+    assert len(first) == 1
+    assert second == []
+    assert store.list_pending_results("parent") == []
+
+
+def test_unconsumed_parent_run_result_becomes_actionable_after_final(tmp_path):
+    import agent_harness
+    from runtime_v2 import RuntimeMirror, RuntimeSubagentStore
+
+    mirror = RuntimeMirror(tmp_path)
+    mirror.mirror_ui_event("parent", {"type": "user", "content": "u"})
+    mirror.mirror_ui_event("parent", {"type": "final", "content": "a"})
+    store = RuntimeSubagentStore(tmp_path)
+    store.append_pending_result("parent", {
+        "result_id": "result-1",
+        "agent_id": "agent1",
+        "status": "completed",
+        "result": "late",
+        "parent_run_id": "run-1",
+        "delivery_scope": "parent_run",
+        "delivery_state": "pending",
+    })
+    mgr = _manager_with(
+        repository=_Repository(tmp_path),
+        _runtime_v2_primary=lambda: True,
+        _runtime_subagent_store=lambda: store,
+        _resolve_session_path=lambda sid: tmp_path / sid,
+        _load_metadata=lambda sid: {},
+    )
+
+    assert agent_harness.SessionManager.anchor_pending_subagent_results_for_run(
+        mgr, "parent", "run-1"
+    ) == 1
+    assert agent_harness.SessionManager.can_continue_after_subagents(mgr, "parent") is True
+
+
+def test_pending_result_claim_can_rollback_and_then_commit(tmp_path):
+    import agent_harness
+    from runtime_v2 import RuntimeSubagentStore
+
+    store = RuntimeSubagentStore(tmp_path)
+    store.append_pending_result("parent", {
+        "result_id": "result-1",
+        "agent_id": "agent1",
+        "status": "completed",
+        "result": "done",
+        "parent_run_id": "run-1",
+        "delivery_state": "pending",
+    })
+    mgr = _manager_with(
+        repository=_Repository(tmp_path),
+        _runtime_v2_primary=lambda: True,
+        _runtime_subagent_store=lambda: store,
+        _load_metadata=lambda sid: {},
+        _load_ui_events_for_active_runtime=lambda sid: [],
+    )
+
+    claimed = agent_harness.SessionManager.claim_pending_subagent_notifications(
+        mgr, "parent", "claim-1", parent_run_id="run-1"
+    )
+    assert [row["result_id"] for row in claimed] == ["result-1"]
+    assert agent_harness.SessionManager.claim_pending_subagent_notifications(
+        mgr, "parent", "claim-2", parent_run_id="run-1"
+    ) == []
+    assert agent_harness.SessionManager.resolve_pending_subagent_claim(
+        mgr, "parent", "claim-1", consumed=False
+    ) == 1
+    assert store.list_pending_results("parent")[0]["delivery_state"] == "pending"
+
+    assert agent_harness.SessionManager.claim_pending_subagent_notifications(
+        mgr, "parent", "claim-3", parent_run_id="run-1"
+    )
+    assert agent_harness.SessionManager.resolve_pending_subagent_claim(
+        mgr, "parent", "claim-3", consumed=True
+    ) == 1
     assert store.list_pending_results("parent") == []
 
 

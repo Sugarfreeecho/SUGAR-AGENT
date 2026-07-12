@@ -17,10 +17,10 @@ import os
 import sys
 import json
 import re
+import uuid
 import logging
 import shutil
 import copy
-import uuid
 import tempfile
 import time
 from datetime import datetime, timezone
@@ -1735,8 +1735,10 @@ class SessionEventLog:
     def save(self, session_id: str, events: List[dict]) -> None:
         path = self.repository.ui_events_path(session_id)
         path.parent.mkdir(parents=True, exist_ok=True)
-        with open(path, "w", encoding="utf-8") as f:
+        tmp = path.with_suffix(path.suffix + ".tmp")
+        with open(tmp, "w", encoding="utf-8") as f:
             json.dump(events, f, indent=2, ensure_ascii=False)
+        os.replace(tmp, path)
 
 
 class SessionManager:
@@ -1767,6 +1769,10 @@ class SessionManager:
         self._ui_events_cache_order: List[str] = []
         self._ui_events_cache_max = 128
         self._ui_user_turns_cache: Dict[str, Tuple[Tuple[bool, int, int], List[dict]]] = {}
+        self._subagent_index_cache_lock = threading.RLock()
+        self._subagent_index_cache: Dict[str, str] = {}
+        self._subagent_index_cache_signature: Optional[Tuple[bool, int, int]] = None
+        self._known_root_session_ids: set[str] = set()
         self._load_index()
         if os.getenv("REPAIR_SESSIONS_INDEX_ON_START", "0").strip().lower() in {"1", "true", "yes", "on"}:
             self.refresh_sessions_index_from_disk()
@@ -1928,39 +1934,71 @@ class SessionManager:
 
     def _load_subagent_index(self) -> Dict[str, str]:
         path = self._subagent_index_file()
-        if not path.is_file():
-            return {}
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            if not isinstance(data, dict):
-                return {}
-            out: Dict[str, str] = {}
-            for k, v in data.items():
-                if not k or not v:
-                    continue
+        lock = getattr(self, "_subagent_index_cache_lock", None)
+        if lock is None:
+            lock = threading.RLock()
+            self._subagent_index_cache_lock = lock
+        with lock:
+            try:
+                stat = path.stat()
+                signature = (True, int(stat.st_mtime_ns), int(stat.st_size))
+            except OSError:
+                signature = (False, 0, 0)
+            cached_signature = getattr(self, "_subagent_index_cache_signature", None)
+            if cached_signature == signature:
+                return dict(getattr(self, "_subagent_index_cache", {}) or {})
+            if not signature[0]:
+                out: Dict[str, str] = {}
+            else:
                 try:
-                    ck = self._normalize_session_id(str(k))
-                    pv = self._normalize_session_id(str(v))
-                except ValueError:
-                    continue
-                out[ck] = pv
-            return out
-        except Exception:
-            return {}
+                    with open(path, "r", encoding="utf-8") as f:
+                        data = json.load(f)
+                    if not isinstance(data, dict):
+                        data = {}
+                    out = {}
+                    for k, v in data.items():
+                        if not k or not v:
+                            continue
+                        try:
+                            ck = self._normalize_session_id(str(k))
+                            pv = self._normalize_session_id(str(v))
+                        except ValueError:
+                            continue
+                        out[ck] = pv
+                except Exception:
+                    out = {}
+            self._subagent_index_cache = dict(out)
+            self._subagent_index_cache_signature = signature
+            return dict(out)
 
     def _save_subagent_index(self, idx: Dict[str, str]) -> None:
         path = self._subagent_index_file()
         path.parent.mkdir(parents=True, exist_ok=True)
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(idx, f, indent=2, ensure_ascii=False)
+        lock = getattr(self, "_subagent_index_cache_lock", None)
+        if lock is None:
+            lock = threading.RLock()
+            self._subagent_index_cache_lock = lock
+        with lock:
+            tmp = path.with_suffix(path.suffix + ".tmp")
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(idx, f, indent=2, ensure_ascii=False)
+            os.replace(tmp, path)
+            stat = path.stat()
+            self._subagent_index_cache = dict(idx)
+            self._subagent_index_cache_signature = (True, int(stat.st_mtime_ns), int(stat.st_size))
 
     def _register_subagent(self, child_session_id: str, parent_session_id: str) -> None:
         child_id = self._normalize_session_id(child_session_id)
         parent_id = self._normalize_session_id(parent_session_id)
-        idx = self._load_subagent_index()
-        idx[child_id] = parent_id
-        self._save_subagent_index(idx)
+        lock = getattr(self, "_subagent_index_cache_lock", None)
+        if lock is None:
+            lock = threading.RLock()
+            self._subagent_index_cache_lock = lock
+        with lock:
+            idx = self._load_subagent_index()
+            idx[child_id] = parent_id
+            self._save_subagent_index(idx)
+        getattr(self, "_known_root_session_ids", set()).discard(child_id)
         try:
             with self._session_metadata_lock(parent_id):
                 meta = self._load_metadata_unlocked(parent_id)
@@ -1982,9 +2020,14 @@ class SessionManager:
             child_id = self._normalize_session_id(child_session_id)
         except ValueError:
             return
-        idx = self._load_subagent_index()
-        parent_id = idx.pop(child_id, None)
-        self._save_subagent_index(idx)
+        lock = getattr(self, "_subagent_index_cache_lock", None)
+        if lock is None:
+            lock = threading.RLock()
+            self._subagent_index_cache_lock = lock
+        with lock:
+            idx = self._load_subagent_index()
+            parent_id = idx.pop(child_id, None)
+            self._save_subagent_index(idx)
         if parent_id:
             try:
                 with self._session_metadata_lock(parent_id):
@@ -2001,52 +2044,80 @@ class SessionManager:
         sid = self._normalize_session_id(session_id)
         root = self.sessions_dir.resolve()
         try:
-            for parent_dir in root.iterdir():
-                if not parent_dir.is_dir():
+            for candidate in root.rglob(sid):
+                if not candidate.is_dir() or candidate.parent.name != "subagents":
                     continue
                 try:
-                    self._normalize_session_id(parent_dir.name)
+                    relative = candidate.resolve().relative_to(root)
+                    # Ignore archive/backup trees whose first component is not
+                    # an actual root session id.
+                    self._normalize_session_id(relative.parts[0])
+                    parent_id = self._normalize_session_id(candidate.parent.parent.name)
                 except ValueError:
                     continue
-                candidate = (parent_dir / "subagents" / sid).resolve()
-                try:
-                    candidate.relative_to(root)
-                except ValueError:
-                    continue
-                if candidate.is_dir():
-                    self._register_subagent(sid, parent_dir.name)
-                    return candidate
+                self._register_subagent(sid, parent_id)
+                return candidate.resolve()
         except FileNotFoundError:
             pass
         return None
 
-    def _resolve_session_path(self, session_id: str, *, parent_hint: Optional[str] = None) -> Path:
+    def _resolve_session_path(
+        self,
+        session_id: str,
+        *,
+        parent_hint: Optional[str] = None,
+        _seen: Optional[set[str]] = None,
+    ) -> Path:
         sid = self._normalize_session_id(session_id)
+        seen = set(_seen or set())
+        if sid in seen:
+            raise ValueError("Cyclic subagent parent index")
+        seen.add(sid)
         root = self.sessions_dir.resolve()
         flat = (root / sid).resolve()
         try:
             flat.relative_to(root)
         except ValueError as e:
             raise ValueError("Invalid session_id") from e
+        idx = self._load_subagent_index()
         # Subagent 目录优先于同名顶层 ghost 目录（误写顶层 sessions/{child_id}/ 时仍走嵌套路径）
         if parent_hint:
             try:
                 pid = self._normalize_session_id(parent_hint)
-                nested = (root / pid / "subagents" / sid).resolve()
+                parent_path = self._resolve_session_path(pid, _seen=seen)
+                nested = (parent_path / "subagents" / sid).resolve()
                 nested.relative_to(root)
-                if nested.is_dir() or self._load_subagent_index().get(sid) == pid:
+                if nested.is_dir() or idx.get(sid) == pid:
                     return nested
             except ValueError:
                 pass
-        idx = self._load_subagent_index()
         parent_id = idx.get(sid)
-        if parent_id:
-            nested = (root / parent_id / "subagents" / sid).resolve()
+        if parent_id and parent_id != sid:
+            parent_path = self._resolve_session_path(parent_id, _seen=seen)
+            nested = (parent_path / "subagents" / sid).resolve()
             try:
                 nested.relative_to(root)
             except ValueError as e:
                 raise ValueError("Invalid session_id") from e
             return nested
+        known_roots = getattr(self, "_known_root_session_ids", None)
+        if known_roots is None:
+            known_roots = set()
+            self._known_root_session_ids = known_roots
+        if sid in known_roots and flat.is_dir():
+            return flat
+        # Root sessions have metadata beside the directory. This fast path
+        # avoids a recursive scan on every V2 event append.
+        if flat.is_dir() and (flat / "metadata.json").is_file():
+            known_roots.add(sid)
+            return flat
+        if flat.is_dir():
+            try:
+                if not any(flat.iterdir()):
+                    known_roots.add(sid)
+                    return flat
+            except OSError:
+                pass
         found = self._scan_nested_subagent_path(sid)
         if found is not None:
             return found
@@ -2076,7 +2147,9 @@ class SessionManager:
         parent_id = self._normalize_session_id(parent_session_id)
         child_id = self._normalize_session_id(child_session_id)
         root = self.sessions_dir.resolve()
-        path = (root / parent_id / "subagents" / child_id).resolve()
+        # The parent may itself be a nested subagent. Resolve it first so
+        # grandchildren stay under the complete parent chain.
+        path = (self._resolve_session_path(parent_id) / "subagents" / child_id).resolve()
         try:
             path.relative_to(root)
         except ValueError as e:
@@ -2100,7 +2173,10 @@ class SessionManager:
     def _runtime_subagent_store(self):
         from runtime_v2.subagent_store import RuntimeSubagentStore
 
-        return RuntimeSubagentStore(self.repository.sessions_dir)
+        return RuntimeSubagentStore(
+            self.repository.sessions_dir,
+            path_resolver=self._resolve_session_path,
+        )
 
     def _runtime_mirror(self):
         from runtime_v2.mirror import RuntimeMirror
@@ -2112,9 +2188,9 @@ class SessionManager:
         mirrored = mirror.mirror_ui_event(session_id, event)
         if mirrored is not None:
             return mirrored
-        # Guarantee the V2 event log exists for legacy-only or newly introduced
-        # UI events instead of silently skipping the mirror.
-        return mirror.append(session_id, "legacy_ui_event", dict(event or {}))
+        # Newly introduced UI shapes remain native V2 facts.  The
+        # ``legacy_ui_event`` type is reserved for explicit migration only.
+        return mirror.append(session_id, "ui_event", dict(event or {}))
 
     def _list_subagent_tasks_v1(self, parent_session_id: str) -> List[dict]:
         return self.repository.load_json_list(self._get_subagent_tasks_path(parent_session_id))
@@ -2168,7 +2244,6 @@ class SessionManager:
             self._upsert_subagent_task_v2(parent_session_id, tid, patch)
         else:
             self._upsert_subagent_task_v1(parent_session_id, tid, patch)
-            self._upsert_subagent_task_v2(parent_session_id, tid, patch)
 
     def write_subagent_output(self, child_session_id: str, text: str) -> str:
         """将 subagent 最终可读输出写入子会话 output.md，返回路径。"""
@@ -2238,25 +2313,30 @@ class SessionManager:
             try:
                 return self._runtime_subagent_store().write_task_output(parent_session_id, task_id, text)
             except Exception as exc:
-                logger.debug("Runtime V2 write subagent task output failed: %s", exc)
+                logger.warning("Runtime V2 write subagent task output failed: %s", exc)
+                raise
         tid = str(task_id or "").strip() or "subagent"
         safe = re.sub(r"[^A-Za-z0-9_.-]+", "_", tid)
         path = self._get_session_path(parent_session_id) / "subagent_outputs" / f"{safe}.md"
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(str(text or ""), encoding="utf-8")
-        try:
-            self._runtime_subagent_store().write_task_output(parent_session_id, task_id, text)
-        except Exception as exc:
-            logger.debug("Runtime V2 mirror subagent task output failed: %s", exc)
         return str(path)
 
     def append_pending_subagent_result(self, parent_session_id: str, entry: Dict[str, Any]) -> None:
         row = dict(entry)
-        if row.get("after_final_index") is None:
+        row.setdefault("result_id", uuid.uuid4().hex)
+        row.setdefault("delivery_state", "pending")
+        parent_run_id = str(row.get("parent_run_id") or "").strip()
+        if row.get("after_final_index") is None and parent_run_id:
+            row.setdefault("delivery_scope", "parent_run")
+        elif row.get("after_final_index") is None:
             events = self._load_ui_events_for_active_runtime(parent_session_id)
             anchor = self._latest_final_index_without_later_user(events)
             if anchor >= 0:
                 row["after_final_index"] = anchor
+                row.setdefault("delivery_scope", "after_final")
+            else:
+                row.setdefault("delivery_scope", "unanchored")
         if self._runtime_v2_primary():
             try:
                 self._runtime_subagent_store().append_pending_result(parent_session_id, row)
@@ -2267,10 +2347,6 @@ class SessionManager:
             rows: List[dict] = self.repository.load_json_list(path)
             rows.append(row)
             self.repository.save_json_list(path, rows)
-            try:
-                self._runtime_subagent_store().append_pending_result(parent_session_id, row)
-            except Exception as exc:
-                logger.debug("Runtime V2 mirror pending subagent result failed: %s", exc)
 
     def _load_pending_subagent_results(self, session_id: str) -> List[dict]:
         if self._runtime_v2_primary():
@@ -2304,10 +2380,6 @@ class SessionManager:
         else:
             path = self._get_pending_subagent_results_path(session_id)
             self.repository.save_json_list(path, rows)
-            try:
-                self._runtime_subagent_store().save_pending_results(session_id, rows)
-            except Exception as exc:
-                logger.debug("Runtime V2 mirror pending subagent results failed: %s", exc)
 
     def has_pending_subagent_notifications(self, session_id: str) -> bool:
         """父会话是否有尚未注入模型的后台 subagent 完成结果。"""
@@ -2351,9 +2423,13 @@ class SessionManager:
         for item in rows:
             if not self._pending_subagent_notification_line(item):
                 continue
+            if str(item.get("delivery_state") or "pending") != "pending":
+                continue
             afi = item.get("after_final_index")
             if afi is None:
-                anchor = last_idx
+                # A result completed while a parent run was active belongs to that
+                # run.  It must not be rebound to a future final event.
+                continue
             else:
                 try:
                     anchor = int(afi)
@@ -2369,6 +2445,29 @@ class SessionManager:
 
     def count_actionable_pending_subagent_results(self, session_id: str) -> int:
         return len(self._actionable_pending_subagent_rows(session_id))
+
+    def anchor_pending_subagent_results_for_run(self, session_id: str, run_id: str) -> int:
+        """Make unconsumed results from a finished parent run manually actionable."""
+        rid = str(run_id or "").strip()
+        if not rid:
+            return 0
+        events = self._load_ui_events_for_active_runtime(session_id)
+        final_idx = self._latest_final_index_without_later_user(events)
+        if final_idx < 0:
+            return 0
+        rows = self._load_pending_subagent_results(session_id)
+        changed = 0
+        for item in rows:
+            if str(item.get("parent_run_id") or "").strip() != rid:
+                continue
+            if item.get("after_final_index") is not None:
+                continue
+            item["after_final_index"] = final_idx
+            item["delivery_scope"] = "after_final"
+            changed += 1
+        if changed:
+            self._save_pending_subagent_results(session_id, rows)
+        return changed
 
     def can_continue_after_subagents(self, session_id: str) -> bool:
         """
@@ -2393,12 +2492,15 @@ class SessionManager:
                 return False
         return True
 
-    def consume_pending_subagent_notifications(self, session_id: str) -> List[str]:
+    def consume_pending_subagent_notifications(
+        self, session_id: str, *, parent_run_id: str = ""
+    ) -> List[str]:
         """读取并消费可注入的后台 subagent 通知，供父 react_node 注入。"""
         rows = self._load_pending_subagent_results(session_id)
         events = self._load_ui_events_for_active_runtime(session_id)
         last_idx = self._latest_final_index_without_later_user(events)
-        if not rows or not events or last_idx < 0:
+        run_id = str(parent_run_id or "").strip()
+        if not rows:
             return []
         lines: List[str] = []
         keep: List[dict] = []
@@ -2407,8 +2509,21 @@ class SessionManager:
             if not line:
                 keep.append(item)
                 continue
+            if str(item.get("delivery_state") or "pending") != "pending":
+                keep.append(item)
+                continue
+            item_run_id = str(item.get("parent_run_id") or "").strip()
+            if run_id and item_run_id == run_id:
+                lines.append(line)
+                continue
+            if run_id or not events or last_idx < 0:
+                keep.append(item)
+                continue
             try:
-                anchor = last_idx if item.get("after_final_index") is None else int(item.get("after_final_index"))
+                if item.get("after_final_index") is None:
+                    keep.append(item)
+                    continue
+                anchor = int(item.get("after_final_index"))
             except (TypeError, ValueError):
                 keep.append(item)
                 continue
@@ -2418,6 +2533,59 @@ class SessionManager:
                 keep.append(item)
         self._save_pending_subagent_results(session_id, keep)
         return lines
+
+    def claim_pending_subagent_notifications(
+        self, session_id: str, claim_id: str, *, parent_run_id: str = ""
+    ) -> List[dict]:
+        """Claim a delivery batch so a failed model-history write can roll it back."""
+        cid = str(claim_id or "").strip()
+        if not cid:
+            return []
+        rows = self._load_pending_subagent_results(session_id)
+        events = self._load_ui_events_for_active_runtime(session_id)
+        last_idx = self._latest_final_index_without_later_user(events)
+        rid = str(parent_run_id or "").strip()
+        claimed: List[dict] = []
+        for item in rows:
+            if str(item.get("delivery_state") or "pending") != "pending":
+                continue
+            if not self._pending_subagent_notification_line(item):
+                continue
+            selected = bool(rid and str(item.get("parent_run_id") or "").strip() == rid)
+            if not rid and last_idx >= 0 and item.get("after_final_index") is not None:
+                try:
+                    selected = int(item.get("after_final_index")) == last_idx
+                except (TypeError, ValueError):
+                    selected = False
+            if selected:
+                item["delivery_state"] = "claimed"
+                item["claimed_by"] = cid
+                item["claimed_at"] = datetime.now(timezone.utc).isoformat()
+                claimed.append(dict(item))
+        if claimed:
+            self._save_pending_subagent_results(session_id, rows)
+        return claimed
+
+    def resolve_pending_subagent_claim(
+        self, session_id: str, claim_id: str, *, consumed: bool
+    ) -> int:
+        cid = str(claim_id or "").strip()
+        rows = self._load_pending_subagent_results(session_id)
+        keep: List[dict] = []
+        changed = 0
+        for item in rows:
+            if not cid or str(item.get("claimed_by") or "") != cid:
+                keep.append(item)
+                continue
+            changed += 1
+            if not consumed:
+                item.pop("claimed_by", None)
+                item.pop("claimed_at", None)
+                item["delivery_state"] = "pending"
+                keep.append(item)
+        if changed:
+            self._save_pending_subagent_results(session_id, keep)
+        return changed
 
     def clear_pending_subagent_results_by_agent_ids(self, session_id: str, agent_ids: List[str]) -> int:
         """清除已被显式读取/注入的 subagent pending 结果，避免续接横幅重复出现。"""
@@ -2507,7 +2675,10 @@ class SessionManager:
             if self._runtime_v2_primary():
                 from runtime_v2.model_projection import RuntimeModelProjection
 
-                raw = RuntimeModelProjection(self.repository.sessions_dir).read_message_dicts(session_id)
+                raw = RuntimeModelProjection(
+                    self.repository.sessions_dir,
+                    path_resolver=getattr(self.repository, "_path_resolver", None),
+                ).read_message_dicts(session_id)
             else:
                 path = self._get_llm_history_path(session_id)
                 if not path.is_file():
@@ -3067,7 +3238,10 @@ class SessionManager:
 
             if not runtime_v2_primary():
                 return False
-            ops = RuntimeHistoryOps(self.repository.sessions_dir)
+            ops = RuntimeHistoryOps(
+                self.repository.sessions_dir,
+                path_resolver=getattr(self.repository, "_path_resolver", None),
+            )
             method = getattr(ops, method_name)
             method(session_id, **kwargs)
             return True
@@ -3274,9 +3448,15 @@ class SessionManager:
             try:
                 from runtime_v2 import RuntimeHistoryOps, SnapshotStore
 
-                snapshot = SnapshotStore(self.repository.sessions_dir).read(sid)
+                snapshot = SnapshotStore(
+                    self.repository.sessions_dir,
+                    path_resolver=getattr(self.repository, "_path_resolver", None),
+                ).read(sid)
                 previous = snapshot.get("todo") if isinstance(snapshot, dict) else None
-                RuntimeHistoryOps(self.repository.sessions_dir).update_todo(
+                RuntimeHistoryOps(
+                    self.repository.sessions_dir,
+                    path_resolver=getattr(self.repository, "_path_resolver", None),
+                ).update_todo(
                     sid,
                     {
                         "has_plan": False,
@@ -3526,13 +3706,21 @@ class SessionManager:
                 before_index = n
             if self._runtime_v2_primary():
                 if runtime_truncate_target_seq is not None and runtime_truncate_keep_seq is not None:
-                    self._observe_runtime_v2_history(
+                    truncated = self._observe_runtime_v2_history(
                         "truncate_visible_history_before_seq",
                         session_id,
                         target_seq=runtime_truncate_target_seq,
                         keep_to_seq=runtime_truncate_keep_seq,
                         reason="runtime_v2_truncate",
                     )
+                    if truncated is False:
+                        logger.warning(
+                            "Runtime V2 truncate failed: session=%s target_seq=%s keep_to_seq=%s",
+                            session_id,
+                            runtime_truncate_target_seq,
+                            runtime_truncate_keep_seq,
+                        )
+                        return False
                 else:
                     logger.warning(
                         "Runtime V2 truncate refused without runtime seq: session=%s before_index=%s truncate_before_seq=%s",
@@ -3792,17 +3980,6 @@ class SessionManager:
                 new_id,
                 [_message_to_dict(m) for m in rebuild_core_messages_from_ui_events(new_events)],
             )
-            if not self._runtime_v2_primary():
-                try:
-                    from runtime_v2.ui_projection import RuntimeUiProjection
-
-                    branch_projection = RuntimeUiProjection(
-                        self.repository.sessions_dir,
-                        path_resolver=self._resolve_session_path,
-                    )
-                    branch_projection.replace_from_legacy(new_id, new_events, reason="legacy_branch_seed")
-                except Exception as exc:
-                    logger.debug("Runtime V2 branch UI seed failed for %s: %s", new_id, exc)
             meta = self._load_metadata(sid)
             if not isinstance(meta, dict):
                 meta = {}
@@ -3843,36 +4020,6 @@ class SessionManager:
                 sid,
                 before_index,
                 branch_name,
-            )
-            self._observe_runtime_v2_history(
-                "observe_legacy_branch",
-                sid,
-                source_session_id=sid,
-                new_session_id=new_id,
-                before_index=before_index,
-                new_event_count=len(new_events),
-                name=branch_name,
-            )
-            if branch_from_seq is None:
-                branch_from_seq = before_index
-            if self._runtime_v2_primary() and branch_after_seq is None:
-                try:
-                    from runtime_v2.ui_projection import RuntimeUiProjection
-
-                    mapped_seq = RuntimeUiProjection(
-                        self.repository.sessions_dir,
-                        path_resolver=self._resolve_session_path,
-                    ).ui_index_to_runtime_seq(sid, before_index - 1)
-                    if mapped_seq is not None:
-                        branch_from_seq = int(mapped_seq)
-                except Exception as exc:
-                    logger.debug("Runtime V2 branch source seq mapping failed for %s: %s", sid, exc)
-            self._observe_runtime_v2_history(
-                "create_branch",
-                new_id,
-                source_session_id=sid,
-                branch_from_seq=branch_from_seq,
-                name=branch_name,
             )
             summary = self.get_session_summary(new_id) or {
                 "id": new_id,
@@ -4051,12 +4198,6 @@ class SessionManager:
                 except Exception as restore_error:
                     logger.warning("Runtime V2 append ui_events tail failed for %s: %s", session_id, restore_error)
                     return False
-                self._observe_runtime_v2_history(
-                    "observe_legacy_tail_restored",
-                    session_id,
-                    tail_count=len(clean),
-                    merged_event_count=len(merged),
-                )
                 return True
             merged = list(self._load_ui_events(session_id)) + clean
             self._save_ui_events(session_id, merged)
@@ -4160,8 +4301,10 @@ class SessionManager:
     def _save_llm_history(self, session_id: str, llm_history: List[dict]):
         path = self._get_llm_history_path(session_id)
         path.parent.mkdir(parents=True, exist_ok=True)
-        with open(path, "w", encoding="utf-8") as f:
+        tmp = path.with_suffix(path.suffix + ".tmp")
+        with open(tmp, "w", encoding="utf-8") as f:
             json.dump(llm_history, f, indent=2, ensure_ascii=False)
+        os.replace(tmp, path)
 
     def _load_llm_history(self, session_id: str) -> List[dict]:
         path = self._get_llm_history_path(session_id)
@@ -4382,18 +4525,30 @@ class SessionManager:
             try:
                 from runtime_v2 import RuntimeHistoryOps, RuntimeModelProjection, SnapshotStore
 
-                model_messages = RuntimeModelProjection(self.repository.sessions_dir).read_message_dicts(parent_id)
-                RuntimeHistoryOps(self.repository.sessions_dir).replace_model_history(
+                model_messages = RuntimeModelProjection(
+                    self.repository.sessions_dir,
+                    path_resolver=self._resolve_session_path,
+                ).read_message_dicts(parent_id)
+                RuntimeHistoryOps(
+                    self.repository.sessions_dir,
+                    path_resolver=self._resolve_session_path,
+                ).replace_model_history(
                     child_id,
                     copy.deepcopy(model_messages),
                     reason="subagent_fork_from_parent",
                 )
-                parent_snapshot = SnapshotStore(self.repository.sessions_dir).read(parent_id)
+                parent_snapshot = SnapshotStore(
+                    self.repository.sessions_dir,
+                    path_resolver=self._resolve_session_path,
+                ).read(parent_id)
                 context = parent_snapshot.get("context") if isinstance(parent_snapshot, dict) else {}
                 summary = context.get("summary") if isinstance(context, dict) else {}
                 text = str(summary.get("summary") or "") if isinstance(summary, dict) else ""
                 if text.strip():
-                    RuntimeHistoryOps(self.repository.sessions_dir).commit_context_summary(
+                    RuntimeHistoryOps(
+                        self.repository.sessions_dir,
+                        path_resolver=self._resolve_session_path,
+                    ).commit_context_summary(
                         child_id,
                         text,
                     )
@@ -4443,10 +4598,12 @@ class SessionManager:
         child_id = str(child_session_id or "").strip()
         if not child_id:
             return
-        try:
-            self._runtime_subagent_store().remove_parent_rows(parent_session_id, child_id)
-        except Exception as exc:
-            logger.debug("Runtime V2 remove subagent parent rows failed: %s", exc)
+        if self._runtime_v2_primary():
+            try:
+                self._runtime_subagent_store().remove_parent_rows(parent_session_id, child_id)
+            except Exception as exc:
+                logger.debug("Runtime V2 remove subagent parent rows failed: %s", exc)
+            return
         for path_getter in (self._get_pending_subagent_results_path, self._get_subagent_tasks_path):
             path = path_getter(parent_session_id)
             if not path.is_file():
@@ -4494,11 +4651,13 @@ class SessionManager:
             except Exception:
                 pass
         logger.info("已删除虚拟 subagent/task %s ← parent=%s", tid, parent_id)
-        self._observe_runtime_v2_history(
-            "observe_legacy_virtual_subagent_deleted",
-            parent_id,
-            task_id=tid,
-        )
+        if self._runtime_v2_primary():
+            from runtime_v2 import RuntimeHistoryOps
+
+            RuntimeHistoryOps(
+                self.repository.sessions_dir,
+                path_resolver=self._resolve_session_path,
+            ).delete_subagent(parent_id, tid, virtual=True)
         return True
 
     def delete_subagent_session(self, parent_session_id: str, child_session_id: str) -> bool:
@@ -4521,12 +4680,17 @@ class SessionManager:
             if p and p.exists():
                 shutil.rmtree(p, ignore_errors=True)
         self._remove_subagent_parent_rows(parent_id, child_id)
-        self._observe_runtime_v2_history(
-            "observe_legacy_subagent_deleted",
-            parent_id,
-            child_session_id=child_id,
-            descendant_count=max(0, len(ids) - 1),
-        )
+        if self._runtime_v2_primary():
+            from runtime_v2 import RuntimeHistoryOps
+
+            RuntimeHistoryOps(
+                self.repository.sessions_dir,
+                path_resolver=self._resolve_session_path,
+            ).delete_subagent(
+                parent_id,
+                child_id,
+                descendant_count=max(0, len(ids) - 1),
+            )
         logger.info(
             "已删除 subagent %s ← parent=%s（含 descendants=%s）",
             child_id,
@@ -4566,12 +4730,20 @@ class SessionManager:
                 "pinned": False,
             }
             dialogue: List[dict] = []  # 与 dialogue_history.json 均由 ui_events 主链写入
-            self._save_work_messages(session_id, work_messages)
-            self._save_llm_history(session_id, llm_history)
-            self._save_key_context(session_id, key_context)
             self._save_metadata(session_id, metadata)
-            self._save_ui_events(session_id, [])
-            self._save_dialogue_history(session_id, [])
+            if self._runtime_v2_primary():
+                from runtime_v2 import RuntimeHistoryOps
+
+                RuntimeHistoryOps(
+                    self.repository.sessions_dir,
+                    path_resolver=self._resolve_session_path,
+                )._append_and_snapshot(session_id, "session_meta", dict(metadata))
+            else:
+                self._save_work_messages(session_id, work_messages)
+                self._save_llm_history(session_id, llm_history)
+                self._save_key_context(session_id, key_context)
+                self._save_ui_events(session_id, [])
+                self._save_dialogue_history(session_id, [])
             self.index.append({
                 "id": session_id,
                 "name": metadata["name"],
@@ -4585,6 +4757,31 @@ class SessionManager:
             logger.info(f"创建新会话: {session_id}")
             return session_id, dialogue, work_messages, llm_history, key_context, metadata
         else:
+            if self._runtime_v2_primary():
+                from runtime_v2 import RuntimeModelProjection, RuntimeUiProjection, SnapshotStore
+
+                resolver = self._resolve_session_path
+                llm_history = RuntimeModelProjection(
+                    self.repository.sessions_dir,
+                    path_resolver=resolver,
+                ).read_message_dicts(session_id)
+                ui_events = RuntimeUiProjection(
+                    self.repository.sessions_dir,
+                    path_resolver=resolver,
+                ).read_ui_events_fast(session_id)
+                dialogue = [
+                    _message_to_dict(message)
+                    for message in rebuild_core_messages_from_ui_events(ui_events)
+                ]
+                snapshot = SnapshotStore(
+                    self.repository.sessions_dir,
+                    path_resolver=resolver,
+                ).read(session_id)
+                context = snapshot.get("context") if isinstance(snapshot, dict) else {}
+                summary = context.get("summary") if isinstance(context, dict) else {}
+                key_context = str(summary.get("summary") or "") if isinstance(summary, dict) else ""
+                metadata = self._load_metadata(session_id)
+                return session_id, dialogue, [], llm_history, key_context, metadata
             work_messages = self._load_work_messages(session_id)
             llm_history = self._load_llm_history(session_id)
             dialogue = self.dialogue_dicts_from_ui_events_file(session_id)
@@ -4701,13 +4898,15 @@ class SessionManager:
         sid = (session_id or "").strip()
         if not sid:
             return ""
-        events = self._load_ui_events(sid)
+        events = self._load_ui_events_for_active_runtime(sid)
         for ev in reversed(events):
             if not isinstance(ev, dict) or ev.get("type") != "user":
                 continue
             raw = ev.get("content")
             text = raw if isinstance(raw, str) else str(raw or "")
             return _normalize_sidebar_preview_text(text, max_len)
+        if self._runtime_v2_primary():
+            return ""
         path = self._get_dialogue_history_path(sid)
         if path.exists():
             try:
@@ -4748,16 +4947,17 @@ class SessionManager:
         if sid:
             # The session index only contains top-level sessions; avoid the generic
             # resolver here because it reloads the subagent index for every row.
-            # V1 writes ui_events.json while Runtime V2 writes events.jsonl.
-            # Consider both so existing sessions and partially migrated data use
-            # the actual newest persisted activity rather than a stale sidecar.
             session_dir = self.sessions_dir / str(sid)
-            for activity_path in (session_dir / "ui_events.json", session_dir / "events.jsonl"):
-                try:
-                    mt = activity_path.stat().st_mtime
-                    best_ts = mt if best_ts is None else max(best_ts, mt)
-                except OSError:
-                    pass
+            activity_path = (
+                session_dir / "events.jsonl"
+                if self._runtime_v2_primary()
+                else session_dir / "ui_events.json"
+            )
+            try:
+                mt = activity_path.stat().st_mtime
+                best_ts = mt if best_ts is None else max(best_ts, mt)
+            except OSError:
+                pass
         if best_ts is not None:
             d["last_activity_at"] = datetime.fromtimestamp(best_ts, tz=timezone.utc).isoformat().replace(
                 "+00:00", "Z"
@@ -5418,7 +5618,10 @@ class TodoManager:
         try:
             from runtime_v2 import SnapshotStore
 
-            snapshot = SnapshotStore(session_manager.sessions_dir).read(session_id)
+            snapshot = SnapshotStore(
+                session_manager.sessions_dir,
+                path_resolver=getattr(session_manager, "_resolve_session_path", None),
+            ).read(session_id)
             todo = snapshot.get("todo") if isinstance(snapshot, dict) else {}
             if not isinstance(todo, dict):
                 todo = {}

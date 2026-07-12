@@ -4,7 +4,7 @@ import logging
 import shutil
 import time
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 from .event_log import SessionEventLog
 from .event_schema import RuntimeEvent
@@ -27,10 +27,15 @@ class RuntimeHistoryOps:
     and let RuntimeProjector calculate the visible/model history.
     """
 
-    def __init__(self, sessions_dir: str | Path):
-        self.event_log = SessionEventLog(sessions_dir)
+    def __init__(
+        self,
+        sessions_dir: str | Path,
+        path_resolver: Optional[Callable[[str], str | Path]] = None,
+    ):
+        self._path_resolver = path_resolver
+        self.event_log = SessionEventLog(sessions_dir, path_resolver=path_resolver)
         self.projector = RuntimeProjector()
-        self.snapshots = SnapshotStore(sessions_dir)
+        self.snapshots = SnapshotStore(sessions_dir, path_resolver=path_resolver)
 
     def delete_message(self, session_id: str, target_seq: int, reason: str = "") -> RuntimeEvent:
         return self._append_and_snapshot(session_id, "message_deleted", {
@@ -55,6 +60,12 @@ class RuntimeHistoryOps:
         source_context = source_checkpoint.get("context") if isinstance(source_checkpoint, dict) else {}
         source_summary = source_context.get("summary") if isinstance(source_context, dict) else {}
         source_summary_text = str(source_summary.get("summary") or "") if isinstance(source_summary, dict) else ""
+        source_tokens = source_context.get("tokens") if isinstance(source_context, dict) else None
+        if not isinstance(source_tokens, dict):
+            source_tokens = None
+        source_todo = source_checkpoint.get("todo") if isinstance(source_checkpoint, dict) else None
+        if not isinstance(source_todo, dict):
+            source_todo = None
         t_after_model = time.perf_counter()
         seed_rows = self._branch_ui_seed_rows(session_id, source_session_id, ui_events)
         t_after_map = time.perf_counter()
@@ -69,6 +80,9 @@ class RuntimeHistoryOps:
                 for event in existing_events
             )
             has_model = bool(snapshot.get("raw_model_messages") if isinstance(snapshot, dict) else None)
+            existing_context = snapshot.get("context") if isinstance(snapshot, dict) else None
+            has_tokens = bool(existing_context.get("tokens")) if isinstance(existing_context, dict) else False
+            has_todo = isinstance(snapshot.get("todo"), dict) if isinstance(snapshot, dict) else False
             rows = [{
                 "type": "history_branch_created",
                 "payload": {
@@ -87,6 +101,24 @@ class RuntimeHistoryOps:
                         "reason": "branch_model_seed",
                         "summary": source_summary_text,
                     },
+                })
+            if not has_tokens and source_tokens:
+                token_payload = dict(source_tokens)
+                token_payload.pop("seq", None)
+                token_payload.pop("updated_at", None)
+                token_payload["inherited_from_session_id"] = source_session_id
+                token_payload["inherited_from_runtime_seq"] = branch_from_seq
+                rows.append({
+                    "type": "context_tokens",
+                    "payload": token_payload,
+                })
+            if not has_todo and source_todo is not None:
+                todo_payload = dict(source_todo)
+                todo_payload.pop("seq", None)
+                todo_payload.pop("updated_at", None)
+                rows.append({
+                    "type": "todo_updated",
+                    "payload": todo_payload,
                 })
             appended = self.event_log._append_many_unlocked(session_id, rows)
             if not appended:
@@ -122,7 +154,10 @@ class RuntimeHistoryOps:
     def _branch_ui_events(self, source_session_id: str, branch_from_seq: int) -> list[dict]:
         from .ui_projection import RuntimeUiProjection
 
-        projection = RuntimeUiProjection(self.event_log.root)
+        projection = RuntimeUiProjection(
+            self.event_log.root,
+            path_resolver=self._path_resolver,
+        )
         return projection.read_ui_events_through_runtime_seq(source_session_id, branch_from_seq)
 
     def _branch_ui_seed_rows(
@@ -133,7 +168,10 @@ class RuntimeHistoryOps:
     ) -> list[dict]:
         from .mirror import RuntimeMirror
 
-        mirror = RuntimeMirror(self.event_log.root)
+        mirror = RuntimeMirror(
+            self.event_log.root,
+            path_resolver=self._path_resolver,
+        )
         rows: list[dict] = []
         for event in source_events:
             if not isinstance(event, dict):
@@ -171,7 +209,10 @@ class RuntimeHistoryOps:
         from .mirror import RuntimeMirror
 
         grouped: dict[str, list[dict]] = {}
-        mirror = RuntimeMirror(self.event_log.root)
+        mirror = RuntimeMirror(
+            self.event_log.root,
+            path_resolver=self._path_resolver,
+        )
         allowed = {
             "subagent_started",
             "subagent_progress",
@@ -230,6 +271,32 @@ class RuntimeHistoryOps:
 
     def update_todo(self, session_id: str, todo: dict) -> RuntimeEvent:
         return self._append_and_snapshot(session_id, "todo_updated", dict(todo or {}))
+
+    def checkpoint_context_tokens(self, session_id: str, tokens: dict) -> RuntimeEvent:
+        """Persist the current request-size checkpoint after a context rewrite."""
+        payload = dict(tokens or {})
+        payload.pop("ephemeral", None)
+        payload["stale"] = False
+        return self._append_and_snapshot(session_id, "context_tokens", payload)
+
+    def update_goal(self, session_id: str, goal: dict, event_type: str = "goal_updated") -> RuntimeEvent:
+        if not str(event_type or "").startswith("goal_"):
+            raise ValueError("goal event_type must start with goal_")
+        return self._append_and_snapshot(session_id, str(event_type), dict(goal or {}))
+
+    def delete_subagent(
+        self,
+        session_id: str,
+        agent_id: str,
+        *,
+        descendant_count: int = 0,
+        virtual: bool = False,
+    ) -> RuntimeEvent:
+        return self._append_and_snapshot(session_id, "subagent_deleted", {
+            "agent_id": str(agent_id or "").strip(),
+            "descendant_count": max(0, int(descendant_count)),
+            "virtual": bool(virtual),
+        })
 
     def change_visible_range(self, session_id: str, *, from_seq: Optional[int] = None, to_seq: Optional[int] = None, reason: str = "") -> RuntimeEvent:
         payload = {"reason": reason}
@@ -294,6 +361,12 @@ class RuntimeHistoryOps:
         history_compaction = context.get("history_compaction")
         if not isinstance(history_compaction, dict):
             history_compaction = None
+        context_tokens = context.get("tokens")
+        if not isinstance(context_tokens, dict):
+            context_tokens = None
+        todo = checkpoint.get("todo") if isinstance(checkpoint, dict) else None
+        if not isinstance(todo, dict):
+            todo = None
         checkpoint_model_rows = self.projector._truncate_rows(
             list(checkpoint.get("raw_model_messages") or []),
             {"target_seq": int(target_seq), "to_seq": max(0, int(keep_to_seq))},
@@ -307,6 +380,8 @@ class RuntimeHistoryOps:
             "restore_model_messages": [item for item in model_messages if item],
             "restore_context_summary": dict(summary),
             "restore_history_compaction": dict(history_compaction) if history_compaction else None,
+            "restore_context_tokens": dict(context_tokens) if context_tokens else None,
+            "restore_todo": dict(todo) if todo is not None else None,
         }
 
     def change_model_window(self, session_id: str, *, from_seq: Optional[int] = None, to_seq: Optional[int] = None, reason: str = "") -> RuntimeEvent:
@@ -601,14 +676,20 @@ class RuntimeHistoryOps:
             from .mirror import RuntimeMirror
             from .ui_projection import RuntimeUiProjection
 
-            projection = RuntimeUiProjection(self.event_log.root)
+            projection = RuntimeUiProjection(
+                self.event_log.root,
+                path_resolver=self._path_resolver,
+            )
             end_index = projection.runtime_seq_to_ui_end_index(source_session_id, int(branch_from_seq))
             if end_index is None:
                 return 0
             source_events = projection.read_ui_events(source_session_id)[:max(0, int(end_index))]
             if not source_events:
                 return 0
-            mirror = RuntimeMirror(self.event_log.root)
+            mirror = RuntimeMirror(
+                self.event_log.root,
+                path_resolver=self._path_resolver,
+            )
             count = 0
             for event in source_events:
                 if not isinstance(event, dict):
@@ -652,7 +733,38 @@ class RuntimeHistoryOps:
         seen.add(key)
         origin = self._branch_origin_at_seq(source_session_id, int(branch_from_seq))
         if origin is not None and origin != key:
-            return self._source_snapshot_at_seq(origin[0], origin[1], _seen=seen)
+            snapshot = self._source_snapshot_at_seq(origin[0], origin[1], _seen=seen)
+            # A branch can rewrite/delete one of its inherited seed events.
+            # The clicked seed retains its origin marker, so translate local
+            # semantic edits back to the origin seq before producing another
+            # branch checkpoint. Otherwise UI shows the edit while model
+            # context silently reverts to the ancestor value.
+            source_events = list(self.event_log.iter_events(source_session_id))
+            by_seq = {int(event.seq): event for event in source_events}
+            for local_op in source_events:
+                if local_op.type not in {"message_deleted", "message_rewritten"}:
+                    continue
+                local_target = self.projector._int_or_none((local_op.payload or {}).get("target_seq"))
+                if local_target is None or local_target > int(branch_from_seq):
+                    continue
+                target_event = by_seq.get(int(local_target))
+                target_payload = dict(target_event.payload or {}) if target_event is not None else {}
+                mapped_session = str(target_payload.get("branch_source_session_id") or "").strip()
+                mapped_seq = self.projector._int_or_none(target_payload.get("branch_source_runtime_seq"))
+                if mapped_session != origin[0] or mapped_seq is None or int(mapped_seq) > int(origin[1]):
+                    continue
+                translated_payload = dict(local_op.payload or {})
+                translated_payload["target_seq"] = int(mapped_seq)
+                self.projector.apply(snapshot, RuntimeEvent(
+                    seq=int(local_op.seq),
+                    type=local_op.type,
+                    session_id=origin[0],
+                    timestamp=local_op.timestamp,
+                    run_id=local_op.run_id,
+                    payload=translated_payload,
+                ))
+            self.projector.finalize(snapshot)
+            return snapshot
         events = []
         later_history_ops = []
         for source_event in self.event_log.iter_events(source_session_id):
@@ -717,7 +829,10 @@ class RuntimeHistoryOps:
         try:
             from .ui_projection import RuntimeUiProjection
 
-            projection = RuntimeUiProjection(self.event_log.root)
+            projection = RuntimeUiProjection(
+                self.event_log.root,
+                path_resolver=self._path_resolver,
+            )
             child_events = [
                 event for event in projection.read_ui_events_through_runtime_seq(source_session_id, int(branch_from_seq))
                 if not self._is_projected_ui_runtime_metric(event)

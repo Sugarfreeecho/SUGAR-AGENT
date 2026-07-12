@@ -167,9 +167,10 @@ def test_full_input_token_estimate_reuses_cache(monkeypatch):
     monkeypatch.setattr(agent_harness, "strip_reasoning_for_api_request", lambda messages: messages)
     monkeypatch.setattr(agent_harness, "load_prompt_template", lambda _name: "{skills_catalog}" if _name == "system_skills_intro" else "")
 
+    session_id = "11111111-1111-4111-8111-111111111111"
     messages = [UserMessage(content="hello")]
-    assert agent_tokenizer.estimate_full_input_tokens_for_llm_history("s1", messages, "") == 123
-    assert agent_tokenizer.estimate_full_input_tokens_for_llm_history("s1", messages, "") == 123
+    assert agent_tokenizer.estimate_full_input_tokens_for_llm_history(session_id, messages, "") == 123
+    assert agent_tokenizer.estimate_full_input_tokens_for_llm_history(session_id, messages, "") == 123
     assert calls["estimate"] == 1
 
 

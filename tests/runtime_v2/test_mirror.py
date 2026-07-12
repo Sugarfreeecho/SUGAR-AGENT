@@ -1,5 +1,6 @@
 import tempfile
 import unittest
+from pathlib import Path
 
 from app.runtime_v2 import RuntimeMirror
 
@@ -76,6 +77,26 @@ class RuntimeMirrorTests(unittest.TestCase):
             self.assertTrue((mirror.sessions_dir / "s1" / ref["blob_ref"]).exists())
             self.assertEqual(ref["bytes"], 17000)
 
+    def test_nested_session_blob_stays_in_resolved_subagent_directory(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            sessions_dir = Path(tmp)
+            nested_dir = sessions_dir / "parent" / "subagents" / "child"
+
+            def resolver(session_id):
+                return nested_dir if session_id == "child" else sessions_dir / session_id
+
+            mirror = RuntimeMirror(sessions_dir, path_resolver=resolver)
+            mirror.mirror_ui_event("child", {
+                "type": "tool_result",
+                "tool": "shell",
+                "result": "x" * 17000,
+            })
+
+            event = mirror.event_log.read_all("child")[0]
+            ref = event.payload["result_ref"]
+            self.assertTrue((nested_dir / ref["blob_ref"]).is_file())
+            self.assertFalse((sessions_dir / "child").exists())
+
     def test_mirrors_context_summary_body_as_committed_summary(self):
         with tempfile.TemporaryDirectory() as tmp:
             mirror = RuntimeMirror(tmp)
@@ -89,6 +110,27 @@ class RuntimeMirrorTests(unittest.TestCase):
 
             self.assertEqual(event.type, "context_summary_committed")
             self.assertEqual(snapshot["context"]["summary"]["summary"], "summary text")
+
+    def test_provider_cache_stats_become_context_token_checkpoint(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            mirror = RuntimeMirror(tmp)
+            event = mirror.mirror_ui_event("s1", {
+                "type": "cache_stats",
+                "input_tokens": 98765,
+                "output_tokens": 12,
+                "threshold": 128000,
+                "model": "model-a",
+                "context_token_mode": "hybrid",
+            })
+
+            snapshot = mirror.snapshots.read("s1")
+            tokens = snapshot["context"]["tokens"]
+
+            self.assertEqual(event.type, "context_tokens")
+            self.assertEqual(tokens["estimated"], 98765)
+            self.assertEqual(tokens["token_source"], "provider_exact")
+            self.assertEqual(tokens["source"], "provider_usage")
+            self.assertEqual(tokens["token_mode"], "hybrid")
 
 
 if __name__ == "__main__":

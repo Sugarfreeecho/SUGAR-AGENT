@@ -142,6 +142,47 @@ def _effective_context_window() -> int:
     return max(1, int(CONTEXT_WINDOW))
 
 
+def _runtime_v2_primary() -> bool:
+    try:
+        from runtime_v2 import runtime_v2_primary
+
+        return bool(runtime_v2_primary())
+    except Exception:
+        return True
+
+
+def _load_active_key_context(session_id: str) -> str:
+    if _runtime_v2_primary():
+        try:
+            from runtime_v2 import SnapshotStore
+
+            snapshot = SnapshotStore(
+                session_manager.sessions_dir,
+                path_resolver=getattr(session_manager, "_resolve_session_path", None),
+            ).read(session_id)
+            summary = (snapshot.get("context") or {}).get("summary") if isinstance(snapshot, dict) else None
+            return str((summary or {}).get("summary") or "") if isinstance(summary, dict) else ""
+        except Exception as exc:
+            logger.debug("Runtime V2 key context snapshot read failed: %s", exc)
+            return ""
+    return session_manager.load_key_context(session_id)
+
+
+def _save_active_key_context(session_id: str, content: str) -> None:
+    if _runtime_v2_primary():
+        from runtime_v2 import RuntimeHistoryOps
+
+        RuntimeHistoryOps(
+            session_manager.sessions_dir,
+            path_resolver=getattr(session_manager, "_resolve_session_path", None),
+        ).commit_context_summary(
+            session_id,
+            str(content or ""),
+        )
+        return
+    session_manager.save_key_context(session_id, content)
+
+
 def _preview_llm_for_ui_estimate(work: List) -> List:
     """与压缩成功路径返回的 llm_history 形态一致，供整包 token 与右上角同口径。"""
     out = _filter_work_messages(work)
@@ -1127,13 +1168,21 @@ def _llm_history_tail_within_token_budget_with_start(
     return deepcopy(full[best_start:]), int(best_start)
 
 
-def _upsert_compress_summary_key_context(session_id: str, summary_body: str) -> str:
+def _upsert_compress_summary_key_context(
+    session_id: str,
+    summary_body: str,
+    current_key_context: Optional[str] = None,
+) -> str:
     """压缩产生的关键信息：去掉旧「上下文摘要/压缩」块后写入一份合并正文。"""
-    cur = session_manager.load_key_context(session_id)
-    if (cur or "").strip():
+    cur = (
+        str(current_key_context or "")
+        if current_key_context is not None
+        else _load_active_key_context(session_id)
+    )
+    if not _runtime_v2_primary() and (cur or "").strip():
         session_manager.append_key_context_history(session_id, cur, "before compact")
     merged = merge_compress_summary_into_key_context(cur, summary_body)
-    session_manager.save_key_context(session_id, merged)
+    _save_active_key_context(session_id, merged)
     return merged
 
 
@@ -1141,6 +1190,7 @@ def run_edit_key_context_instruction(
     session_id: str,
     instruction: str,
     hint_sink: Optional[Callable[[Any], None]] = None,
+    current_key_context: Optional[str] = None,
 ) -> Tuple[str, str]:
     """
     按自然语言说明编辑 key_context.md 全文（增删改规则、错误、经验等）。
@@ -1148,10 +1198,13 @@ def run_edit_key_context_instruction(
     """
     hints: List[str] = []
     instr = (instruction or "").strip()
+    cur = (
+        str(current_key_context or "")
+        if current_key_context is not None
+        else _load_active_key_context(session_id)
+    )
     if not instr:
-        cur = session_manager.load_key_context(session_id)
         return cur, "未提供 edit_instruction，未修改 key_context。"
-    cur = session_manager.load_key_context(session_id)
     _push_progress_hint(
         hints,
         hint_sink,
@@ -1179,9 +1232,9 @@ def run_edit_key_context_instruction(
     new_doc = (m.group(1).strip() if m else raw.strip())
     if not new_doc:
         return cur, "模型未输出有效正文，未修改。"
-    if (cur or "").strip():
+    if not _runtime_v2_primary() and (cur or "").strip():
         session_manager.append_key_context_history(session_id, cur, "before edit")
-    session_manager.save_key_context(session_id, new_doc)
+    _save_active_key_context(session_id, new_doc)
     excerpt = new_doc if len(new_doc) <= 8000 else (new_doc[:8000] + "\n…（要点正文已截断）")
     _push_progress_hint(
         hints,
@@ -1446,10 +1499,11 @@ def _compress_unified_in_place(
                 )
                 break
             tokens_before_round = _full_pack_tokens_compress_work(session_id, work, cur_key)
-            try:
-                session_manager.backup_llm_compress_prefix(session_id, list(prefix))
-            except Exception as _be:
-                logger.warning("待压缩段快照失败（忽略）: %s", _be)
+            if not _runtime_v2_primary():
+                try:
+                    session_manager.backup_llm_compress_prefix(session_id, list(prefix))
+                except Exception as _be:
+                    logger.warning("待压缩段快照失败（忽略）: %s", _be)
             summary, key_body, micro_prefix = _compress_summary_round(
                 cur_key,
                 prefix,
@@ -1464,7 +1518,9 @@ def _compress_unified_in_place(
             if kb:
                 key_round_chunks.append(kb)
             cur_key = _upsert_compress_summary_key_context(
-                session_id, "\n\n".join(key_round_chunks)
+                session_id,
+                "\n\n".join(key_round_chunks),
+                current_key_context=cur_key,
             )
             work, recap = _merge_summary_into_work(summary, micro_prefix, tail)
             if recap:

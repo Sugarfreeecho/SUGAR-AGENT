@@ -27,6 +27,7 @@ function showSubagentContinueBanner(pendingCount) {
     if (msg) {
         msg.textContent = n + ' 个子任务已完成，点击继续让主 Agent 综合子任务结果（不会自动续跑）。';
     }
+    if (msg) msg.textContent = n + ' 个子任务结果尚未纳入上方回答，点击补充综合。';
     banner.classList.add('is-on');
 }
 
@@ -36,10 +37,13 @@ async function fetchSubagentContinueState(sessionId) {
         var r = await fetch('/sessions/' + encodeURIComponent(sessionId) + '?include_subagents=true');
         if (!r.ok) return { pending: 0, running: 0, can_continue: false };
         var j = await r.json();
+        var continuation = j.subagent_continuation || {};
         return {
-            pending: Number(j.subagent_pending_continue || 0),
+            pending: Number(continuation.pending_count != null ? continuation.pending_count : (j.subagent_pending_continue || 0)),
             running: Number(j.subagent_running || 0),
-            can_continue: !!j.subagent_can_continue,
+            can_continue: continuation.state ? continuation.state === 'ready' : !!j.subagent_can_continue,
+            state: String(continuation.state || ''),
+            reason: String(continuation.reason || ''),
         };
     } catch (e) {
         return { pending: 0, running: 0, can_continue: false };

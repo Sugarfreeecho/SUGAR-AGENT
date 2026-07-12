@@ -190,6 +190,15 @@ function setTocTurnsForSession(sessionId, turns) {
     tocTurnsCacheBySession.set(sessionId, turns);
 }
 
+function truncateTocTurnsForSession(sessionId, beforeIndex) {
+    if (!sessionId) return;
+    const before = Math.max(0, Number(beforeIndex) || 0);
+    const turns = tocTurnsCacheBySession.get(sessionId) || [];
+    tocTurnsCacheBySession.set(sessionId, turns.filter(function (row) {
+        return Number(row && row.event_index) < before;
+    }));
+}
+
 function startTocForSessionLoad(sessionId) {
     if (!sessionId || sessionId !== currentSessionId) return;
     var prevSuppress = suppressTocDuringSessionLoad;
@@ -407,6 +416,54 @@ function applyTodoPlanFromPayload(data) {
 
 function renderTodoPlanForCurrentSession() {
     renderTodoPlanSnapshot(selectTodoPlan(currentSessionId));
+    void refreshGoalCard();
+}
+
+function renderGoalCard(goal) {
+    const card = document.getElementById('chat-goal-card');
+    if (!card) return;
+    const has = !!(goal && goal.id);
+    card.hidden = !has;
+    if (!has) return;
+    const status = String(goal.status || 'active');
+    const statusEl = document.getElementById('chat-goal-status');
+    const objectiveEl = document.getElementById('chat-goal-objective');
+    const metaEl = document.getElementById('chat-goal-meta');
+    const pause = document.getElementById('chat-goal-pause');
+    const resume = document.getElementById('chat-goal-resume');
+    if (statusEl) statusEl.textContent = status;
+    if (objectiveEl) objectiveEl.textContent = String(goal.objective || '');
+    if (metaEl) {
+        const budget = goal.token_budget == null ? '无限制' : String(goal.used_tokens || 0) + ' / ' + String(goal.token_budget);
+        metaEl.textContent = 'Token ' + budget + ' · ' + Math.floor(Number(goal.elapsed_seconds || 0) / 60) + '分钟';
+    }
+    if (pause) pause.hidden = status !== 'active';
+    if (resume) resume.hidden = status !== 'paused';
+    const root = document.getElementById('chat-todo-plan');
+    if (root && (status === 'active' || status === 'paused')) root.classList.add('is-open');
+    notifyPanelContentChanged();
+}
+
+async function refreshGoalCard() {
+    const sid = currentSessionId;
+    if (!sid) { renderGoalCard(null); return; }
+    try {
+        const r = await fetch('/sessions/' + encodeURIComponent(sid) + '/goal');
+        if (!r.ok || sid !== currentSessionId) return;
+        const data = await r.json();
+        if (sid === currentSessionId) renderGoalCard(data.goal || null);
+    } catch (e) { /* retain last rendered state */ }
+}
+
+async function controlCurrentGoal(action) {
+    const sid = currentSessionId;
+    if (!sid) return;
+    try {
+        const r = await fetch('/sessions/' + encodeURIComponent(sid) + '/goal/' + encodeURIComponent(action), { method: 'POST' });
+        const data = await r.json();
+        if (r.ok && sid === currentSessionId) renderGoalCard(data.goal || null);
+        if (action === 'resume') void refreshSingleSessionRow(sid);
+    } catch (e) { /* ignore */ }
 }
 
 function setTodoPlanForSession(sessionId, snapshot) {

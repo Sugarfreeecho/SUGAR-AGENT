@@ -16,6 +16,8 @@ import win32event
 import win32gui
 import winerror
 
+from python_runtime import configure_agent_python_environment, preferred_python
+
 
 APP_NAME = "Agent \u667a\u80fd\u4f1a\u8bdd\u52a9\u624b"
 MSG_STARTING = "\u6b63\u5728\u542f\u52a8 Agent\uff0c\u8bf7\u7a0d\u5019..."
@@ -60,11 +62,11 @@ CTRL_LOGOFF_EVENT = 5
 CTRL_SHUTDOWN_EVENT = 6
 
 ROOT = Path(__file__).resolve().parents[1]
-PYTHON_EXE = ROOT / "python" / "python.exe"
+PYTHON_EXE = preferred_python(ROOT)
 MAIN_PY = ROOT / "app" / "main.py"
 LOG_DIR = ROOT / "logs"
 LOG_FILE = LOG_DIR / "agent_terminal.log"
-PYTHONW_EXE = ROOT / "python" / "pythonw.exe"
+PYTHONW_EXE = preferred_python(ROOT, windowed=True)
 COLORED_LOG_VIEWER = ROOT / "app" / "colored_log_viewer.ps1"
 TRAY_ICON_FILE = ROOT / "app" / "assets" / "sugar_tray.ico"
 WINDOW_CLASS_NAME = "MyAgentTrayLauncherWindow"
@@ -119,8 +121,9 @@ def _notify_existing_instance(open_browser: bool = True) -> bool:
 
 
 def _spawn_daemon() -> None:
-    daemon_python = PYTHONW_EXE if PYTHONW_EXE.exists() else PYTHON_EXE
+    daemon_python = PYTHONW_EXE
     env = os.environ.copy()
+    configure_agent_python_environment(env, ROOT)
     env["PYTHONIOENCODING"] = "utf-8"
     subprocess.Popen(
         [str(daemon_python), str(Path(__file__).resolve()), "--daemon"],
@@ -140,10 +143,6 @@ def run_starter() -> int:
     print(MSG_STARTING)
     print(f"{MSG_LOG}: {LOG_FILE}")
 
-    if not PYTHON_EXE.exists():
-        print(f"Missing: {PYTHON_EXE}")
-        input(MSG_PRESS_ENTER)
-        return 1
     if not MAIN_PY.exists():
         print(f"Missing: {MAIN_PY}")
         input(MSG_PRESS_ENTER)
@@ -308,6 +307,7 @@ class TrayLauncher:
         log.write("\n" + "=" * 80 + "\n")
         log.write(time.strftime("Agent started by tray launcher at %Y-%m-%d %H:%M:%S\n"))
         env = os.environ.copy()
+        configure_agent_python_environment(env, ROOT)
         env["PYTHONIOENCODING"] = "utf-8"
         env["OPEN_BROWSER"] = "0"
         self.proc = subprocess.Popen(

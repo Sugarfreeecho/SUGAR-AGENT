@@ -150,9 +150,112 @@
     textarea.focus();
   }
 
+  async function uploadChatFiles(files) {
+    var list = Array.prototype.slice.call(files || []).filter(Boolean);
+    if (!list.length) return [];
+    var form = new FormData();
+    list.forEach(function (file) { form.append('files', file, file.name || 'upload.bin'); });
+    var r = await fetch('/api/upload-chat-files', { method: 'POST', credentials: 'same-origin', body: form });
+    var j = await r.json().catch(function () { return { ok: false, error: '上传失败' }; });
+    if (!r.ok || !j.ok) throw new Error((j && j.error) || '上传失败');
+    return Array.isArray(j.files) ? j.files : [];
+  }
+
+  function currentChatSessionId() {
+    try {
+      return typeof currentSessionId !== 'undefined' ? String(currentSessionId || '') : '';
+    } catch (_error) {
+      return '';
+    }
+  }
+
+  function appendUploadedText(textarea, text, targetSessionId) {
+    if (!text) return;
+    var activeSessionId = currentChatSessionId();
+    if (targetSessionId && activeSessionId && targetSessionId !== activeSessionId) {
+      try {
+        if (typeof persistInputDraft === 'function') {
+          var existing = '';
+          if (typeof draftBySession !== 'undefined'
+              && Object.prototype.hasOwnProperty.call(draftBySession, targetSessionId)) {
+            existing = String(draftBySession[targetSessionId] || '');
+          } else if (typeof readStoredInputDraft === 'function') {
+            existing = String(readStoredInputDraft(targetSessionId) || '');
+          }
+          persistInputDraft(targetSessionId, existing.trim() ? (existing + ' ' + text) : text);
+          return;
+        }
+      } catch (_error) { /* fall through only when session draft storage is unavailable */ }
+      return;
+    }
+    insertTextAtCursor(textarea, text);
+  }
+
+  function insertUploadedFiles(textarea, files) {
+    var targetSessionId = currentChatSessionId();
+    return uploadChatFiles(files).then(function (uploaded) {
+      var text = uploaded.map(function (item) {
+        return quotePickedPath(item.path || item.rel || item.name);
+      }).join(' ');
+      appendUploadedText(textarea, text, targetSessionId);
+    });
+  }
+
+  function clipboardFilesFromEvent(ev) {
+    var data = ev && ev.clipboardData;
+    if (!data) return [];
+    var files = [];
+    var items = Array.prototype.slice.call(data.items || []);
+    items.forEach(function (item) {
+      if (!item || item.kind !== 'file' || typeof item.getAsFile !== 'function') return;
+      var file = item.getAsFile();
+      if (file) files.push(file);
+    });
+    if (!files.length) files = Array.prototype.slice.call(data.files || []).filter(Boolean);
+    return files.map(function (file, index) {
+      if (String(file && file.name || '').trim()) return file;
+      var subtype = String(file && file.type || '').split('/')[1] || 'bin';
+      subtype = subtype.replace(/[^a-z0-9.+-]/gi, '') || 'bin';
+      var name = 'clipboard-' + Date.now() + '-' + (index + 1) + '.' + subtype;
+      try {
+        return new File([file], name, { type: file.type || 'application/octet-stream', lastModified: Date.now() });
+      } catch (_error) {
+        return file;
+      }
+    });
+  }
+
+  function bindPasteUpload(textarea) {
+    if (!textarea || textarea.dataset.filePasteBound === '1') return;
+    textarea.dataset.filePasteBound = '1';
+    textarea.addEventListener('paste', function (ev) {
+      var files = clipboardFilesFromEvent(ev);
+      if (!files.length) return;
+      ev.preventDefault();
+      var wrapper = textarea.closest ? textarea.closest('.input-wrapper') : null;
+      if (wrapper) {
+        wrapper.classList.add('is-paste-uploading');
+        wrapper.setAttribute('aria-busy', 'true');
+      }
+      insertUploadedFiles(textarea, files).catch(function (error) {
+        console.error('clipboard file upload failed:', error);
+        textarea.dispatchEvent(new CustomEvent('myagent:file-paste-error', {
+          bubbles: true,
+          detail: { message: String((error && error.message) || error || '上传失败') }
+        }));
+      }).finally(function () {
+        if (wrapper) {
+          wrapper.classList.remove('is-paste-uploading');
+          wrapper.removeAttribute('aria-busy');
+        }
+      });
+    });
+  }
+
   function attachChatPicker(button, textarea) {
     if (!button || !textarea) return;
     injectStyles();
+    bindPasteUpload(textarea);
     button.classList.add('path-browse-btn', 'path-browse-btn--ghost');
     button.innerHTML = FOLDER_SVG;
     button.setAttribute('aria-label', '选择文件');
@@ -189,6 +292,9 @@
     pickPath: pickPath,
     wrapInputWithBrowse: wrapInputWithBrowse,
     attachChatPicker: attachChatPicker,
+    uploadChatFiles: uploadChatFiles,
+    insertUploadedFiles: insertUploadedFiles,
+    clipboardFilesFromEvent: clipboardFilesFromEvent,
     scan: scan,
   };
 

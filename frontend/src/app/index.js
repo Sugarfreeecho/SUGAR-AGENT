@@ -1,3 +1,4 @@
+import i18nSource from './modules/i18n.js?raw';
 import settingsSource from './modules/settings.js?raw';
 import sharedStateAndDialogsSource from './modules/shared-state-and-dialogs.js?raw';
 import sessionStoreSource from './state/session-store.js?raw';
@@ -29,6 +30,7 @@ import sseHandlingSource from './modules/sse-handling.js?raw';
 import layoutPanelsSource from './modules/layout-panels.js?raw';
 
 const uiSources = [
+    i18nSource,
     settingsSource,
     sharedStateAndDialogsSource,
     sessionStoreSource,

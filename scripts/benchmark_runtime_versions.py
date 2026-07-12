@@ -24,9 +24,16 @@ def percentile(values: List[float], pct: float) -> float:
     return ordered[index]
 
 
-def measure(fn: Callable[[], Any], repeats: int) -> Dict[str, float]:
+def measure(
+    fn: Callable[[], Any],
+    repeats: int,
+    *,
+    before_each: Optional[Callable[[], None]] = None,
+) -> Dict[str, float]:
     values: List[float] = []
     for _ in range(max(1, int(repeats))):
+        if before_each is not None:
+            before_each()
         start = time.perf_counter()
         fn()
         values.append((time.perf_counter() - start) * 1000.0)
@@ -36,6 +43,27 @@ def measure(fn: Callable[[], Any], repeats: int) -> Dict[str, float]:
         "p95_ms": percentile(values, 95),
         "max_ms": max(values),
     }
+
+
+def measure_cache_states(
+    fn: Callable[[], Any],
+    repeats: int,
+    *,
+    reset_application_cache: Optional[Callable[[], None]] = None,
+) -> Dict[str, Dict[str, float]]:
+    """Measure application-cache misses separately from warm reads.
+
+    The cold measurement clears only caches owned by this process. It does not
+    try to evict the operating-system page cache, which would make this script
+    destructive, privileged, and difficult to reproduce.
+    """
+
+    cold = measure(fn, repeats, before_each=reset_application_cache)
+    if reset_application_cache is not None:
+        reset_application_cache()
+    fn()  # Excluded warm-up read.
+    warm = measure(fn, repeats)
+    return {"cold": cold, "warm": warm}
 
 
 def page_events(events: List[dict], *, limit: int = 200, turns: Optional[int] = None) -> dict:
@@ -81,20 +109,74 @@ def benchmark_session(sessions_dir: Path, session_id: str, repeats: int, turns: 
     def read_v2_model() -> List[dict]:
         return model_projection.read_message_dicts(session_id)
 
+    def reset_v2_ui_application_cache() -> None:
+        # RuntimeUiProjection caches are process-wide. Do not call
+        # invalidate_cache() here because that also deletes the on-disk UI
+        # index; a benchmark must not mutate the session being measured.
+        key = ui_projection._cache_key(session_id)
+        with RuntimeUiProjection._cache_lock:
+            RuntimeUiProjection._events_cache.pop(key, None)
+            try:
+                RuntimeUiProjection._events_cache_order.remove(key)
+            except ValueError:
+                pass
+
+    storage = session_storage_bytes(session_dir)
+
     return {
         "session_id": session_id,
+        "selection_bytes": storage["selection_bytes"],
+        "storage_bytes": storage,
         "legacy_ui_count": len(legacy_ui),
         "legacy_model_count": len(legacy_model),
         "runtime_v2_ui_count": len(read_v2_ui_full()),
         "runtime_v2_model_count": len(read_v2_model()),
         "benchmarks": {
-            "v1_ui_full": measure(read_v1_ui_full, repeats),
-            "v1_ui_page": measure(read_v1_ui_page, repeats),
-            "v1_model": measure(read_v1_model, repeats),
-            "v2_ui_full": measure(read_v2_ui_full, repeats),
-            "v2_ui_page": measure(read_v2_ui_page, repeats),
-            "v2_model": measure(read_v2_model, repeats),
+            "v1_ui_full": measure_cache_states(read_v1_ui_full, repeats),
+            "v1_ui_page": measure_cache_states(read_v1_ui_page, repeats),
+            "v1_model": measure_cache_states(read_v1_model, repeats),
+            "v2_ui_full": measure_cache_states(
+                read_v2_ui_full,
+                repeats,
+                reset_application_cache=reset_v2_ui_application_cache,
+            ),
+            "v2_ui_page": measure_cache_states(
+                read_v2_ui_page,
+                repeats,
+                reset_application_cache=reset_v2_ui_application_cache,
+            ),
+            "v2_model": measure_cache_states(read_v2_model, repeats),
         },
+    }
+
+
+def _file_size(path: Path) -> int:
+    try:
+        return int(path.stat().st_size)
+    except OSError:
+        return 0
+
+
+def session_storage_bytes(session_dir: Path) -> Dict[str, int]:
+    """Return comparable V1/V2 main-session storage used for selection.
+
+    A pure V2 session may not have ``ui_events.json`` at all. Ranking only by
+    that legacy file silently excluded the sessions for which the V2 open path
+    matters most. We score each session by its larger active representation.
+    """
+
+    legacy_bytes = (
+        _file_size(session_dir / "ui_events.json")
+        + _file_size(session_dir / "llm_history.json")
+    )
+    runtime_v2_bytes = (
+        _file_size(session_dir / "events.jsonl")
+        + _file_size(session_dir / "snapshots" / "latest.json")
+    )
+    return {
+        "legacy_bytes": legacy_bytes,
+        "runtime_v2_bytes": runtime_v2_bytes,
+        "selection_bytes": max(legacy_bytes, runtime_v2_bytes),
     }
 
 
@@ -105,8 +187,7 @@ def select_sessions(sessions_dir: Path, limit: int, session_id: str = "") -> Lis
     for path in sessions_dir.iterdir() if sessions_dir.exists() else []:
         if not path.is_dir():
             continue
-        ui_path = path / "ui_events.json"
-        size = ui_path.stat().st_size if ui_path.exists() else 0
+        size = session_storage_bytes(path)["selection_bytes"]
         rows.append((size, path.name))
     rows.sort(reverse=True)
     return [session_id for _size, session_id in rows[:max(1, int(limit))]]
@@ -129,6 +210,11 @@ def main() -> int:
         "sessions_dir": str(sessions_dir),
         "repeats": int(args.repeats),
         "turns": int(args.turns),
+        "methodology": {
+            "selection": "max(legacy_ui_plus_model_bytes, runtime_v2_events_plus_snapshot_bytes)",
+            "cold": "application cache cleared where one exists; operating-system page cache retained",
+            "warm": "one excluded warm-up read followed by measured reads",
+        },
         "sessions": results,
     }
     text = json.dumps(payload, ensure_ascii=False, indent=2)

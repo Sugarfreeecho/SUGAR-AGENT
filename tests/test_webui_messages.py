@@ -1,7 +1,10 @@
 import asyncio
 import json
 import sys
+import threading
 from pathlib import Path
+
+import pytest
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -140,6 +143,27 @@ def _json_response_payload(response) -> dict | list:
     return json.loads(response.body.decode("utf-8"))
 
 
+def test_clipboard_upload_returns_insertable_workspace_path(monkeypatch, tmp_path):
+    from io import BytesIO
+    from starlette.datastructures import UploadFile
+    import webui
+
+    monkeypatch.setattr(webui, "WORK_DIR", tmp_path)
+    upload = UploadFile(filename="clipboard-image.png", file=BytesIO(b"\x89PNG\r\nclipboard"))
+
+    response = asyncio.run(webui.upload_chat_files([upload]))
+    payload = _json_response_payload(response)
+
+    assert payload["ok"] is True
+    assert len(payload["files"]) == 1
+    saved = payload["files"][0]
+    assert saved["name"] == "clipboard-image.png"
+    assert saved["rel"].replace("\\", "/").startswith("uploads/chat/")
+    path = Path(saved["path"])
+    assert path.is_file()
+    assert path.read_bytes() == b"\x89PNG\r\nclipboard"
+
+
 def test_messages_turn_page_prefers_runtime_v2_projection(monkeypatch, tmp_path):
     import runtime_v2
     from runtime_v2 import RuntimeMirror
@@ -254,6 +278,64 @@ def test_message_count_prefers_runtime_v2_projection(monkeypatch, tmp_path):
 
     assert payload == {"count": 2, "source": "runtime_v2"}
     assert fake.count_calls == 0
+
+
+def test_runtime_v2_message_projection_failure_is_not_an_empty_session(monkeypatch, tmp_path):
+    import runtime_v2
+    import runtime_v2.ui_projection
+    import webui
+
+    class _BrokenProjection:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def read_ui_page(self, *_args, **_kwargs):
+            raise ValueError("duplicate runtime sequence")
+
+    monkeypatch.setattr(runtime_v2, "runtime_v1_primary", lambda: False)
+    monkeypatch.setattr(runtime_v2.ui_projection, "RuntimeUiProjection", _BrokenProjection)
+    monkeypatch.setattr(webui, "session_manager", _NoLegacyUiSessionManager(tmp_path, []))
+
+    response = asyncio.run(webui.get_session_messages(
+        "s1",
+        limit=20,
+        before_index=None,
+        after_index=None,
+        target_index=None,
+        turns=5,
+    ))
+    payload = _json_response_payload(response)
+
+    assert response.status_code == 500
+    assert payload["error"] == "runtime_v2_projection_failed"
+    assert payload["repair_required"] is True
+    assert "duplicate runtime sequence" in payload["detail"]
+    assert "events" not in payload
+
+
+def test_runtime_v2_message_count_failure_is_not_zero(monkeypatch, tmp_path):
+    import runtime_v2
+    import runtime_v2.ui_projection
+    import webui
+
+    class _BrokenProjection:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def count_ui_events_light(self, *_args, **_kwargs):
+            raise ValueError("non-monotonic runtime sequence")
+
+    monkeypatch.setattr(runtime_v2, "runtime_v1_primary", lambda: False)
+    monkeypatch.setattr(runtime_v2.ui_projection, "RuntimeUiProjection", _BrokenProjection)
+    monkeypatch.setattr(webui, "session_manager", _NoLegacyUiSessionManager(tmp_path, []))
+
+    response = asyncio.run(webui.get_session_message_count("s1"))
+    payload = _json_response_payload(response)
+
+    assert response.status_code == 500
+    assert payload["error"] == "runtime_v2_projection_failed"
+    assert payload["repair_required"] is True
+    assert "count" not in payload
 
 
 def test_user_turns_prefers_runtime_v2_projection(monkeypatch, tmp_path):
@@ -580,6 +662,141 @@ def test_manual_runtime_sync_exports_v2_model_projection_to_legacy(monkeypatch, 
     ]]
 
 
+def test_manual_runtime_sync_refuses_active_run(monkeypatch):
+    import webui
+
+    monkeypatch.setattr(webui, "_is_session_stream_active", lambda sid: sid == "s1")
+
+    with pytest.raises(webui.RuntimeSyncBusyError, match="active run"):
+        webui._sync_runtime_session("s1")
+
+    response = asyncio.run(webui.sync_session_runtime("s1", export_legacy=False))
+    payload = _json_response_payload(response)
+    assert response.status_code == 409
+    assert payload["ok"] is False
+    assert payload["busy"] is True
+
+
+def test_runtime_sync_uses_session_history_operation_lock(monkeypatch):
+    import webui
+
+    entered = threading.Event()
+    finished = threading.Event()
+
+    def unlocked(session_id, *, export_legacy=False):
+        entered.set()
+        return {"ok": True, "session_id": session_id, "export_legacy": export_legacy}
+
+    monkeypatch.setattr(webui, "_sync_runtime_session_unlocked", unlocked)
+    lock = webui._history_op_lock("s-lock")
+    lock.acquire()
+    result: list[dict] = []
+
+    def invoke():
+        try:
+            result.append(webui._sync_runtime_session("s-lock", export_legacy=True))
+        finally:
+            finished.set()
+
+    thread = threading.Thread(target=invoke, daemon=True)
+    thread.start()
+    try:
+        assert entered.wait(0.1) is False
+        assert finished.is_set() is False
+    finally:
+        lock.release()
+    assert entered.wait(1.0) is True
+    assert finished.wait(1.0) is True
+    thread.join(timeout=1.0)
+    assert result == [{"ok": True, "session_id": "s-lock", "export_legacy": True}]
+
+
+def test_runtime_sync_all_reports_active_sessions_as_busy(monkeypatch, tmp_path):
+    import webui
+
+    fake = _FakeSessionManager(tmp_path, [])
+    monkeypatch.setattr(webui, "session_manager", fake)
+    monkeypatch.setattr(webui, "_is_session_stream_active", lambda sid: sid == "s1")
+
+    result = webui._sync_all_runtime_sessions()
+
+    assert result["ok"] is False
+    assert result["ok_count"] == 0
+    assert result["fail_count"] == 1
+    assert result["busy_count"] == 1
+    assert result["results"][0]["busy"] is True
+
+
+def test_subagent_storage_repair_counts_refused_and_pending_archive(monkeypatch, tmp_path):
+    import runtime_v2
+    import webui
+
+    fake = _FakeSessionManager(tmp_path, [])
+    fake._load_subagent_index = lambda: {"child-refused": "parent", "child-pending": "parent"}
+    monkeypatch.setattr(webui, "session_manager", fake)
+    monkeypatch.setattr(webui, "_has_local_run_activity", lambda _sid: False)
+    monkeypatch.setattr(webui, "_has_running_subagent_activity", lambda _sid: False)
+
+    class FakeRepairService:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def repair(self, _parent_id, child_id, **_kwargs):
+            if child_id == "child-refused":
+                return {
+                    "ok": False,
+                    "split_brain": True,
+                    "applied": False,
+                    "action": "refused",
+                }
+            return {
+                "ok": False,
+                "split_brain": True,
+                "applied": True,
+                "action": "committed_pending_archive",
+            }
+
+    monkeypatch.setattr(runtime_v2, "RuntimeV2SubagentRepairService", FakeRepairService)
+
+    result = webui._repair_runtime_v2_subagent_storage(apply=True)
+
+    assert result["ok"] is False
+    assert result["refused"] == 1
+    assert result["committed_pending_archive"] == 1
+    assert result["applied"] == 1
+    assert result["repaired"] == 0
+
+
+def test_subagent_storage_repair_http_status_distinguishes_conflict_and_failure(monkeypatch):
+    import webui
+
+    monkeypatch.setattr(webui, "_repair_runtime_v2_subagent_storage", lambda **_kwargs: {
+        "ok": False,
+        "busy": 0,
+        "refused": 1,
+        "committed_pending_archive": 0,
+    })
+    conflict = asyncio.run(webui.repair_runtime_v2_subagent_storage(
+        apply=True,
+        child_session_id="child",
+        limit=0,
+    ))
+    assert conflict.status_code == 409
+
+    monkeypatch.setattr(webui, "_repair_runtime_v2_subagent_storage", lambda **_kwargs: {
+        "ok": False,
+        "busy": 0,
+        "refused": 0,
+        "committed_pending_archive": 1,
+    })
+    incomplete = asyncio.run(webui.repair_runtime_v2_subagent_storage(
+        apply=True,
+        child_session_id="child",
+        limit=0,
+    ))
+    assert incomplete.status_code == 500
+
+
 def test_messages_empty_runtime_v2_projection_does_not_fallback_legacy(monkeypatch, tmp_path):
     import runtime_v2
     import webui
@@ -597,6 +814,7 @@ def test_messages_empty_runtime_v2_projection_does_not_fallback_legacy(monkeypat
     ))
     payload = _json_response_payload(response)
 
+    assert response.status_code == 200
     assert payload == []
 
 
@@ -637,7 +855,10 @@ def test_messages_projection_error_does_not_fallback_legacy(monkeypatch, tmp_pat
     ))
     payload = _json_response_payload(response)
 
-    assert payload == []
+    assert response.status_code == 500
+    assert payload["error"] == "runtime_v2_projection_failed"
+    assert payload["repair_required"] is True
+    assert "projection unavailable" in payload["detail"]
 
 
 def test_message_count_projection_error_does_not_fallback_legacy(monkeypatch, tmp_path):
@@ -657,7 +878,10 @@ def test_message_count_projection_error_does_not_fallback_legacy(monkeypatch, tm
     response = asyncio.run(webui.get_session_message_count("s1"))
     payload = _json_response_payload(response)
 
-    assert payload == {"count": 0, "source": "runtime_v2_projection_error"}
+    assert response.status_code == 500
+    assert payload["error"] == "runtime_v2_projection_failed"
+    assert payload["repair_required"] is True
+    assert "count" not in payload
 
 
 def test_truncate_route_passes_runtime_seq_boundary(monkeypatch, tmp_path):

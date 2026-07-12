@@ -13,6 +13,12 @@ from contextlib import asynccontextmanager
 
 import uvicorn
 
+from python_runtime import configure_agent_python_environment
+
+
+# Establish one Python runtime policy for the whole agent and all inherited subprocesses.
+configure_agent_python_environment()
+
 
 def _env_wants_browser() -> bool:
     v = os.getenv("OPEN_BROWSER", "True").strip().lower()

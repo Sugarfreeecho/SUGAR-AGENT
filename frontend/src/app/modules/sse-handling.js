@@ -1,5 +1,39 @@
 const SSE_IDLE_TIMEOUT_MS = 120000;
 
+function sendPipelineKey(sessionId) {
+    return String(sessionId || '__new_session__');
+}
+
+function isSendPipelineLocked(sessionId) {
+    return !!sendPipelineLocksBySession[sendPipelineKey(sessionId)];
+}
+
+function acquireSendPipelineLock(sessionId) {
+    const key = sendPipelineKey(sessionId);
+    if (sendPipelineLocksBySession[key]) return null;
+    const token = 'send-lock-' + Date.now() + '-' + Math.random().toString(16).slice(2);
+    sendPipelineLocksBySession[key] = token;
+    return { key: key, token: token };
+}
+
+function transferSendPipelineLock(lock, sessionId) {
+    if (!lock || sendPipelineLocksBySession[lock.key] !== lock.token) return false;
+    const nextKey = sendPipelineKey(sessionId);
+    if (nextKey === lock.key) return true;
+    if (sendPipelineLocksBySession[nextKey]) return false;
+    delete sendPipelineLocksBySession[lock.key];
+    sendPipelineLocksBySession[nextKey] = lock.token;
+    lock.key = nextKey;
+    return true;
+}
+
+function releaseSendPipelineLock(lock) {
+    if (!lock) return;
+    if (sendPipelineLocksBySession[lock.key] === lock.token) {
+        delete sendPipelineLocksBySession[lock.key];
+    }
+}
+
 function shouldApplySseSeqFilter(parsed) {
     if (!parsed || parsed.protocol === 'runtime_v2') return false;
     if (parsed.runtime_seq != null || parsed.runtimeSeq != null) return false;
@@ -390,7 +424,7 @@ async function startContinueAfterSubagents(sessionId, forcedMode) {
         updateSubagentContinueBanner(sessionId);
         return;
     }
-    if (sendPipelineLock && sendPipelineLockSessionId === sessionId) {
+    if (isSendPipelineLocked(sessionId)) {
         updateSubagentContinueBanner(sessionId);
         return;
     }
@@ -721,14 +755,11 @@ async function processRewriteTruncateAsync(pr) {
             return false;
         }
         if (currentSessionId === pr.sessionId) {
-            scheduleContextTokensAfterPaint(pr.sessionId);
             if (anchor) {
-                removeMessagesFromNode(anchor);
                 if (activeInlineRewriteWrap === anchor) activeInlineRewriteWrap = null;
-                syncDisconnectedProcessGroups();
-                rebuildToc();
             }
         }
+        applyClientHistoryTruncate(pr.sessionId, pr.before, anchor);
         return true;
     } catch (error) {
         console.error('异步截断失败:', error);
@@ -934,6 +965,23 @@ function getFollowupStatusText(item) {
     return '待发送';
 }
 
+function appendFollowupQueueItem(sessionId, text, display, selectedSkills) {
+    const sid = String(sessionId || '');
+    if (!sid || !String(text || '').trim()) return null;
+    const item = {
+        id: followupQueueSeq++,
+        text: String(text),
+        display: String(display || text),
+        skills: Array.isArray(selectedSkills) ? selectedSkills.slice() : [],
+        createdAt: Date.now(),
+    };
+    getFollowupQueue(sid).push(item);
+    persistFollowupQueue(sid);
+    renderFollowupQueue(sid);
+    setSendButtonState();
+    return item;
+}
+
 function enqueueCurrentInputAsFollowup() {
     if (!isMyAgentFeatureEnabled('followupRestart', false)) return false;
     const sid = currentSessionId;
@@ -946,21 +994,31 @@ function enqueueCurrentInputAsFollowup() {
     if (typeof window.consumeSelectedSkillsForSend === 'function') {
         selectedSkills = window.consumeSelectedSkillsForSend();
     }
-    getFollowupQueue(sid).push({
-        id: followupQueueSeq++,
-        text: rawMessage,
-        display: visibleMessage,
-        skills: selectedSkills,
-        createdAt: Date.now(),
-    });
-    persistFollowupQueue(sid);
+    appendFollowupQueueItem(sid, rawMessage, visibleMessage, selectedSkills);
     messageInput.value = '';
     persistInputDraft(sid, '');
     clearInputPathTokens();
     autoResizeTextarea();
-    renderFollowupQueue(sid);
-    setSendButtonState();
     return true;
+}
+
+function rollbackOptimisticUserEvent(sessionId, eventIndex) {
+    const sid = String(sessionId || '');
+    const before = Math.max(0, Number(eventIndex) || 0);
+    if (!sid) return;
+    if (typeof truncateMessageStateForSession === 'function') {
+        truncateMessageStateForSession(sid, before);
+    }
+    if (typeof uiEventCountCache !== 'undefined') {
+        uiEventCountCache.updateFromServer(sid, before);
+    }
+    if (typeof truncateTocTurnsForSession === 'function') {
+        truncateTocTurnsForSession(sid, before);
+    }
+    if (sid !== currentSessionId) return;
+    const anchor = document.querySelector('.msg-wrap--user[data-event-index="' + String(before) + '"]');
+    if (anchor) removeMessagesFromNode(anchor);
+    rebuildToc({ localOnly: true });
 }
 
 function takeFollowupItem(sessionId, itemId) {
@@ -1000,8 +1058,20 @@ function withdrawFollowup(itemId) {
 }
 
 function returnFollowupToInput(sid, item) {
-    const existing = String(messageInput.value || '');
     const returned = String(item.display || item.text || '');
+    if (sid !== currentSessionId) {
+        const backgroundDraft = Object.prototype.hasOwnProperty.call(draftBySession, sid)
+            ? String(draftBySession[sid] || '')
+            : String(readStoredInputDraft(sid) || '');
+        const nextDraft = backgroundDraft.trim() ? (returned + '\n' + backgroundDraft) : returned;
+        persistInputDraft(sid, nextDraft);
+        if (typeof window.setSelectedSkillsForSession === 'function') {
+            window.setSelectedSkillsForSession(sid, item.skills || []);
+        }
+        renderFollowupQueue(sid);
+        return;
+    }
+    const existing = String(messageInput.value || '');
     messageInput.value = existing.trim() ? (returned + '\n' + existing) : returned;
     if (typeof window.setSelectedSkillsForCurrentSession === 'function') {
         window.setSelectedSkillsForCurrentSession(item.skills || []);
@@ -1092,7 +1162,7 @@ async function recoverSteerForRestart(sessionId, item) {
 async function syncFollowupQueueFromServer(sessionId) {
     var sid = String(sessionId || '');
     if (!sid || followupServerSyncInFlight[sid]) return followupServerSyncInFlight[sid] || null;
-    followupServerSyncInFlight[sid] = fetch('/sessions/' + encodeURIComponent(sid) + '/steer')
+    followupServerSyncInFlight[sid] = fetch('/sessions/' + encodeURIComponent(sid) + '/steer?include_terminal=true')
         .then(function (r) { return r.ok ? r.json() : null; })
         .then(function (payload) {
             if (!payload || !payload.ok || !Array.isArray(payload.items)) return;
@@ -1101,12 +1171,14 @@ async function syncFollowupQueueFromServer(sessionId) {
             payload.items.forEach(function (serverItem) {
                 var steerId = String(serverItem.id || '');
                 var clientId = String(serverItem.client_id || '');
-                if (steerId) pendingIds.add(steerId);
+                var state = String(serverItem.state || 'queued');
+                var isTerminal = state === 'consumed' || state === 'cancelled' || state === 'failed';
+                if (steerId && !isTerminal) pendingIds.add(steerId);
                 var local = q.find(function (entry) {
                     return (steerId && String(entry.steerId || '') === steerId)
                         || (clientId && String(entry.clientId || '') === clientId);
                 });
-                if (!local) {
+                if (!local && !isTerminal) {
                     local = {
                         id: 'server-' + (steerId || clientId || Date.now()),
                         text: String(serverItem.content || ''),
@@ -1117,10 +1189,21 @@ async function syncFollowupQueueFromServer(sessionId) {
                     };
                     q.push(local);
                 }
+                if (!local) return;
+                if (state === 'failed' || state === 'cancelled') {
+                    var failedIndex = q.indexOf(local);
+                    if (failedIndex >= 0) q.splice(failedIndex, 1);
+                    returnFollowupToInput(sid, local);
+                    return;
+                }
+                if (state === 'consumed') {
+                    var terminalIndex = q.indexOf(local);
+                    if (terminalIndex >= 0) q.splice(terminalIndex, 1);
+                    return;
+                }
                 local.steerId = steerId || local.steerId;
                 local.clientId = clientId || local.clientId;
                 local.replacementRunId = String(serverItem.replacement_run_id || local.replacementRunId || '');
-                var state = String(serverItem.state || 'queued');
                 local.status = state === 'restarting' ? 'restarting' : 'accepted';
             });
             for (var i = q.length - 1; i >= 0; i -= 1) {
@@ -1343,6 +1426,14 @@ async function sendFollowupNow(itemId, sessionId) {
             }
         }
         if (!canFallbackToChat) {
+            await syncFollowupQueueFromServer(sid);
+            var reconciled = getFollowupQueue(sid).find(function (entry) {
+                return String(entry.id) === String(item.id);
+            });
+            if (reconciled && reconciled.steerId && (reconciled.status === 'accepted' || reconciled.status === 'restarting')) {
+                scheduleAcceptedFollowupWatch(sid, itemId);
+                return;
+            }
             if (item.cancelRequested) {
                 item.status = 'sending';
                 item.cancelRequested = false;
@@ -1360,15 +1451,21 @@ async function sendFollowupNow(itemId, sessionId) {
     }
     markSessionRunInactive(sid);
     if (typeof sessionStore !== 'undefined') sessionStore.setStreamActive(sid, false);
-    item.status = 'sent';
+    item.status = 'sending';
     persistFollowupQueue(sid);
     renderFollowupQueue(sid);
-    setTimeout(function () {
-        takeFollowupItem(sid, itemId);
-        renderFollowupQueue(sid);
-    }, 1200);
     reportClientPipelineStep(followupTimingCtx, 'followup_fallback_to_chat', followupTimingStartedAt);
-    return sendMessage({ message: item.text, displayMessage: item.display || item.text, selectedSkills: item.skills || [], fromQueue: true, sessionId: sid, forceStart: true });
+    return sendMessage({ message: item.text, displayMessage: item.display || item.text, selectedSkills: item.skills || [], fromQueue: true, sessionId: sid, forceStart: true }).then(function (sent) {
+        if (sent) {
+            takeFollowupItem(sid, itemId);
+        } else {
+            var retained = getFollowupQueue(sid).find(function (entry) { return String(entry.id) === String(itemId); });
+            if (retained) retained.status = '';
+            persistFollowupQueue(sid);
+        }
+        renderFollowupQueue(sid);
+        return sent;
+    });
 }
 
 async function sendMessage(options) {
@@ -1391,7 +1488,7 @@ async function sendMessage(options) {
     const rawMessage = (options.fromQueue || options.fromInlineRewrite) ? visibleMessage : expandInputPathTokens(visibleMessage);
     if (!String(rawMessage).trim()) return;
     if (isSessionRunning(submitSessionIdInitial) && !options.forceStart) return;
-    if (sendPipelineLock && sendPipelineLockSessionId === submitSessionIdInitial) return;
+    if (isSendPipelineLocked(submitSessionIdInitial)) return;
     if (options.forceStart && submitSessionIdInitial) {
         var previousRun = getSessionRunState(submitSessionIdInitial);
         if (previousRun) abortSessionRun(submitSessionIdInitial, 'followup-restart');
@@ -1415,10 +1512,35 @@ async function sendMessage(options) {
 
     /* 立即上锁：阻止后续连击；锁的 key 是提交时的会话，而非当前会话。 */
     _clientStepStart = nowPipelineMs();
-    sendPipelineLock = true;
-    sendPipelineLockSessionId = submitSessionIdInitial;
+    const sendPipelineLock = acquireSendPipelineLock(submitSessionIdInitial);
+    if (!sendPipelineLock) return;
     let submittedRunCtx = null;
     let submittedRunSessionId = submitSessionIdInitial;
+    _clientStepStart = nowPipelineMs();
+    const clientRunId = options.clientRunId || ((window.crypto && window.crypto.randomUUID)
+        ? window.crypto.randomUUID()
+        : ('run-' + Date.now() + '-' + Math.random().toString(16).slice(2)));
+    clientTimingCtx.runId = clientRunId;
+    const ac = new AbortController();
+    var optimisticRunState = {
+        controller: ac,
+        ctx: null,
+        runId: clientRunId,
+        optimistic: true,
+        submitted: false,
+        suppressFollowupButton: true
+    };
+    // Publish before rewrite truncation, session creation, event-count reads,
+    // or any other network await so every send path flips in the same frame.
+    if (submitSessionIdInitial) {
+        if (typeof clearSessionStreamStopSuppress === 'function') clearSessionStreamStopSuppress(submitSessionIdInitial);
+        setSessionRunState(submitSessionIdInitial, optimisticRunState);
+    } else {
+        optimisticNewSessionRun = optimisticRunState;
+    }
+    setSendButtonState();
+    syncSessionListIndicatorClasses();
+    reportClientPipelineStep(clientTimingCtx, 'publish_optimistic_run_state', _clientStepStart);
     try {
     reportClientPipelineStep(clientTimingCtx, 'acquire_send_lock', _clientStepStart);
 
@@ -1433,6 +1555,7 @@ async function sendMessage(options) {
         }
         pendingRewriteTruncate = null;
         uiEventCountCache.updateFromServer(submitSessionIdInitial, pendingRewrite.before);
+        if (ac.signal.aborted) return;
     }
     hideRewriteUndoToast();
 
@@ -1447,30 +1570,26 @@ async function sendMessage(options) {
         clientTimingCtx.sessionId = submitSessionId || clientTimingCtx.sessionId;
         reportClientPipelineStep(clientTimingCtx, 'create_new_session', _clientStepStart, { ok: !!submitSessionId });
         if (!submitSessionId) return;
-        sendPipelineLockSessionId = submitSessionId;
+        if (!transferSendPipelineLock(sendPipelineLock, submitSessionId)) return;
+        if (ac.signal.aborted) return;
+        if (optimisticNewSessionRun === optimisticRunState) optimisticNewSessionRun = null;
+        setSessionRunState(submitSessionId, optimisticRunState);
+        setSendButtonState();
+        syncSessionListIndicatorClasses();
     }
     clientTimingCtx.sessionId = submitSessionId || clientTimingCtx.sessionId;
     const runSessionId = submitSessionId;
     submittedRunSessionId = runSessionId;
-    _clientStepStart = nowPipelineMs();
-    const clientRunId = options.clientRunId || ((window.crypto && window.crypto.randomUUID)
-        ? window.crypto.randomUUID()
-        : ('run-' + Date.now() + '-' + Math.random().toString(16).slice(2)));
-    clientTimingCtx.runId = clientRunId;
-    const ac = new AbortController();
     if (typeof clearSessionStreamStopSuppress === 'function') clearSessionStreamStopSuppress(runSessionId);
-    var optimisticRunState = { controller: ac, ctx: null, runId: clientRunId, optimistic: true, suppressFollowupButton: true };
-    // Resolve the server message index before publishing the optimistic run.
-    // Background session reconciliation can otherwise observe "no server run"
-    // during this pre-submit window and cancel a request that was never sent.
     reportClientPipelineStep(clientTimingCtx, 'prepare_client_run_id', _clientStepStart);
     _clientStepStart = nowPipelineMs();
-    let preCount = await getUiEventCount(submitSessionId, { preferCache: true, maxAgeMs: 10000 });
-    setSessionRunState(runSessionId, optimisticRunState);
-    setSendButtonState();
-    syncSessionListIndicatorClasses();
-    reportClientPipelineStep(clientTimingCtx, 'publish_optimistic_run_state', _clientStepStart);
-    _clientStepStart = nowPipelineMs();
+    let preCount = await getUiEventCount(submitSessionId, {
+        preferCache: true,
+        maxAgeMs: 10000,
+        signal: ac.signal,
+        timeoutMs: 5000
+    });
+    if (ac.signal.aborted) return;
     const existingStreamForIndex = (submitSessionId === currentSessionId) ? getVisibleChatStream() : null;
     if (existingStreamForIndex) {
         existingStreamForIndex.querySelectorAll('.msg-wrap--user[data-event-index]').forEach(function (wrap) {
@@ -1563,16 +1682,34 @@ async function sendMessage(options) {
     try {
         reportClientPipelineStep(clientTimingCtx, 'build_form_data', _clientStepStart, { followupSteer: !!renderAsSteer });
         _clientStepStart = nowPipelineMs();
+        optimisticRunState.submitted = true;
         const response = await fetch('/chat', { method: 'POST', body: formData, signal: ac.signal });
         reportClientPipelineStep(clientTimingCtx, 'fetch_chat_response_headers', _clientStepStart, { status: response && response.status });
         _clientStepStart = nowPipelineMs();
         if (response.status === 409) {
             streamDisconnectedUnexpectedly = true;
-            appendLog(runCtx, '服务器报告该会话已有任务运行，正在同步现有任务状态…', 'status', runSessionId);
-            return;
+            rollbackOptimisticUserEvent(runSessionId, preCount);
+            if (!options.fromQueue && isMyAgentFeatureEnabled('followupRestart', false)) {
+                appendFollowupQueueItem(
+                    runSessionId,
+                    rawMessage,
+                    displayMessage,
+                    selectedSkillsForRun
+                );
+            } else if (!options.fromQueue && runSessionId === currentSessionId) {
+                messageInput.value = visibleMessage;
+                persistInputDraft(runSessionId, visibleMessage);
+                if (typeof window.setSelectedSkillsForCurrentSession === 'function') {
+                    window.setSelectedSkillsForCurrentSession(selectedSkillsForRun);
+                }
+                autoResizeTextarea();
+            }
+            scheduleActiveSessionReconnect(runSessionId, { delayMs: 0 });
+            return false;
         }
         streamEventIdx = await consumeAgentSseResponse(response, runCtx, runSessionId, streamEventIdx);
         reportClientPipelineStep(clientTimingCtx, 'consume_sse_until_done', _clientStepStart, { streamEventIdx: streamEventIdx });
+        return true;
     } catch (error) {
         reportClientPipelineStep(clientTimingCtx, 'chat_fetch_or_sse_error', _clientStepStart, { error: (error && error.message) ? String(error.message) : String(error) });
         if (error.name === 'AbortError') {
@@ -1584,6 +1721,7 @@ async function sendMessage(options) {
             const msg = (error && error.message) ? String(error.message) : String(error);
             appendLog(runCtx, '请求失败: ' + msg, 'error-log', runSessionId);
         }
+        return false;
     } finally {
         _clientStepStart = nowPipelineMs();
         finalizeLlmStreamChunks(runCtx);
@@ -1627,14 +1765,19 @@ async function sendMessage(options) {
     }
     } finally {
         _clientStepStart = nowPipelineMs();
-        sendPipelineLock = false;
-        sendPipelineLockSessionId = null;
+        if (optimisticNewSessionRun === optimisticRunState) optimisticNewSessionRun = null;
+        if (optimisticRunState && optimisticRunState.submitted === false && submittedRunSessionId) {
+            clearSessionRunStateIfMatch(submittedRunSessionId, optimisticRunState.runId);
+        }
+        releaseSendPipelineLock(sendPipelineLock);
         var stoppedByUser = getRunAbortReason(submittedRunSessionId, submittedRunCtx) === 'user'
             || (optimisticRunState && optimisticRunState.abortReason === 'user');
         reportClientPipelineStep(clientTimingCtx, 'release_send_lock', _clientStepStart, {
             stoppedByUser: !!stoppedByUser,
             fromQueue: !!options.fromQueue
         });
+        setSendButtonState();
+        syncSessionListIndicatorClasses();
     }
 }
 
@@ -1685,15 +1828,23 @@ chatContainer.addEventListener('scroll', function () {
 }, { passive: true });
 sendBtn.addEventListener('click', function (e) {
     e.stopImmediatePropagation();
+    if (!currentSessionId && optimisticNewSessionRun) {
+        pauseCurrentRun();
+        return;
+    }
     if (isSessionRunning(currentSessionId)) {
-        if (isMyAgentFeatureEnabled('followupRestart', false) && inputHasSendableText()) enqueueCurrentInputAsFollowup();
+        const activeRun = getSessionRunState(currentSessionId);
+        const canQueueFollowup = isMyAgentFeatureEnabled('followupRestart', false)
+            && inputHasSendableText()
+            && !(activeRun && activeRun.suppressFollowupButton);
+        if (canQueueFollowup) enqueueCurrentInputAsFollowup();
         else pauseCurrentRun();
         return;
     }
     sendMessage();
 }, true);
 sendBtn.addEventListener('click', function () {
-    if (isSessionRunning(currentSessionId)) pauseCurrentRun();
+    if ((!currentSessionId && optimisticNewSessionRun) || isSessionRunning(currentSessionId)) pauseCurrentRun();
     else sendMessage();
 });
 window.addEventListener('resize', positionFollowupQueuePanel);

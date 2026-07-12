@@ -1,18 +1,22 @@
 # Runtime V2 Closure Status
 
-Date: 2026-07-04
+Date: 2026-07-12
 
 ## Verified State
 
-- Full test suite: `202 passed`.
-- Frontend build and dist sync: passed.
+- Final full Python suite after all isolation, repair, token, branch and frontend-race patches: `348 passed in 97.59s`.
+- Final frontend release gate passed: `npm run build`, `npm run verify:dist`, and `npm run verify:commit`. The committed bundle is reproducible from the source tree.
+- Final repository-native Chromium smoke passed against an isolated Runtime V2 server. It covered snapshot open, TOC scroll, refresh recovery, online reconnect, subagent display, clipboard file/image paste, optimistic stop-before-preflight, explicit follow-up consumption, real branch, truncate and rewrite.
+- The browser branch round trip and session switch was `154.6 ms` for the smoke fixture. Materializing branches from repaired copies of real histories took `1.225 s` for 5,160 events and `3.245 s` for 7,220 events, both below the 10-second acceptance limit.
 - Workspace audit command:
 
 ```powershell
 python scripts\audit_runtime_versions.py --output .tmp-runtime-v2-audit.json
 ```
 
-- Workspace audit result: `checked=126`, `ui_mismatch=3`, `model_mismatch=4`, `ui_v2_only=24`, `model_v2_only=27`, `ui_v2_ahead=2`, `model_v2_ahead=0`, `runtime_v2_active_runs=0`, `errors=0`.
+- Final workspace audit after explicit repair: `checked=129`, `ui_mismatch=3`, `model_mismatch=4`, `ui_v2_only=50`, `model_v2_only=51`, `ui_v2_ahead=2`, `model_v2_ahead=0`, `runtime_v2_active_runs=0`, `errors=0`.
+- Historical root-log repair was applied to the three affected sessions with backup, manifest and semantic projection verification. The final audit reports `bad_lines=0`, `duplicate_seqs=0`, and `non_monotonic_seqs=0`; a separate root repair dry-run reports `checked=120`, `dirty=0`, `refused=0`.
+- Subagent split-storage repair applied `31` repairs from `92` inspected children with `refused=0`, `pending_archive=0`, and `failed=0`. The final dry-run reports `checked=92`, `split_brain=0`, and `repaired=0`.
 - `v2_only` means the session has Runtime V2 projection data and no legacy file history. This is expected for pure V2 sessions and is not a failure.
 - `v2_ahead` means legacy is a prefix and Runtime V2 has newer tail events. This is expected after normal V2 operation stopped implicit legacy writes.
 - Remaining `mismatch` rows are old divergent sessions and must not be auto-overwritten by legacy repair. They need explicit migration/repair review using `ui_first_mismatch` / `model_first_mismatch` from the audit output.
@@ -22,8 +26,8 @@ python scripts\audit_runtime_versions.py --output .tmp-runtime-v2-audit.json
 - Runtime audit now distinguishes `match`, `v2_only`, `v2_ahead`, `missing_v2`, and `mismatch`, so pure V2 sessions are not treated as failed legacy parity checks.
 - Runtime audit ignores state-only UI events such as `cache_stats`, `context_tokens`, and todo snapshot events when comparing visible UI history.
 - Runtime audit reports `ui_first_mismatch` and `model_first_mismatch` for true divergent sessions, making old-session migration review concrete.
-- Runtime UI projection no longer replaces existing V2 projected history from legacy during `read_ui_events(..., legacy_loader=...)` or default migration sync; existing V2 data is preserved as `match`, `v2_ahead`, or `mismatch`.
-- Runtime model projection no longer replaces existing V2 model history from legacy during default migration sync; only empty V2 model projections are backfilled.
+- The explicit migration service does not replace an existing V2 UI projection from legacy; existing V2 data is preserved as `match`, `v2_ahead`, or `mismatch`. Normal V2 reads never pass a legacy loader.
+- The explicit migration service backfills model history only when the V2 projection is empty; normal V2 model reads never reconcile legacy history.
 - `/sessions/{id}/stream` reattach in V2 mode reads `RuntimeUiProjection` instead of resurrecting stale legacy stream state.
 - Raw V2 stream is available at `/runtime-v2/sessions/{id}/stream?after_seq=...`.
 - Branch creation records the source Runtime seq and seeds branch visible history from Runtime V2 events in V2 primary mode.
@@ -52,6 +56,13 @@ python scripts\audit_runtime_versions.py --output .tmp-runtime-v2-audit.json
 - Live UI cache/stat updates now use the event's owning session id instead of `currentSessionId`, so background runs and recently switched-away sessions cannot overwrite the visible session's token label.
 - Follow-up restart messages are recorded and replayed as `user_steer` UI events while remaining normal user input for the model context, so immediate follow-up does not turn into a main user bubble after refresh.
 - `/sessions/{id}/context_tokens` is guarded so a Runtime V2 snapshot miss falls through to Runtime V2 projection-based computation, not legacy session history.
+- Runtime V2 new-session creation writes V2 metadata/event/snapshot state without creating empty `ui_events.json`, `llm_history.json`, `work_messages.json`, `key_context.md`, `dialogue_history.json`, or todo sidecars.
+- Goal, steer-fence, branch/truncate, nested subagent path resolution, blob placement, and subagent indexes now honor the active runtime and resolved nested session path instead of leaking state into the other runtime or a top-level child directory.
+- Branch/truncate checkpoints preserve Runtime V2 model history, context summary, todo state, and cached provider token counts; a rewritten/stopped turn no longer has to fall back to a structurally different local-token estimate.
+- Explicit migration/export preloads both legacy sources before writing, treats V2 as authoritative during export, handles shorter and equal-length rewrites, and restores V2/legacy files and referenced blobs if verification fails.
+- Follow-up queue items are no longer automatically drained when a run ends. Only the user's explicit send/send-now action consumes an item, and failure leaves it queued.
+- The send UI enters optimistic stop state in the same frame while preflight is pending; clipboard image/file paste uploads files through the existing endpoint and inserts quoted local paths into the draft.
+- The runtime benchmark now ranks sessions by the larger of V1 UI+model or V2 event+snapshot storage, so pure V2 large sessions are included, and reports application-cache cold and warm distributions separately without evicting the OS page cache.
 
 ## Compatibility Boundary
 
@@ -71,6 +82,6 @@ python scripts\audit_runtime_versions.py --output .tmp-runtime-v2-audit.json
 - Legacy `key_context.md` and `dialogue_history` writes are reserved for V1 primary or explicit export/migration; V2 context consumers should read Runtime V2 snapshots.
 - Legacy `todo_plan.md` reads/writes are reserved for V1 primary or explicit migration/export; V2 todo consumers should read Runtime V2 snapshots.
 - The frontend final reconcile path must not fetch `/messages` after run completion; final visibility should be driven by the live SSE final or already-cached message records.
-- Runtime sync queue and automatic open-session sync must not write legacy files; legacy compatibility export is a separate explicit action via `export_legacy=true`.
+- Automatic open-session migration is disabled. User/admin-triggered runtime sync writes V2 only unless compatibility export is separately requested with `export_legacy=true`.
 - Frontend live event handlers must pass the run/session id into cache and metric reducers; reducers must not infer ownership from the currently selected session.
 - Follow-up restart is a UI event-type distinction only. It must not fork a separate model-history format or bypass the normal V2 model projection append path.

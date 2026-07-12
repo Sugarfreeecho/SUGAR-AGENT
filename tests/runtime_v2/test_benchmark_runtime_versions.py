@@ -3,7 +3,7 @@ import unittest
 from pathlib import Path
 
 from app.runtime_v2 import RuntimeHistoryOps, RuntimeMirror
-from scripts.benchmark_runtime_versions import benchmark_session, page_events
+from scripts.benchmark_runtime_versions import benchmark_session, page_events, select_sessions
 
 
 class RuntimeBenchmarkToolTests(unittest.TestCase):
@@ -49,6 +49,26 @@ class RuntimeBenchmarkToolTests(unittest.TestCase):
             self.assertEqual(result["runtime_v2_ui_count"], 2)
             self.assertIn("v1_ui_full", result["benchmarks"])
             self.assertIn("v2_ui_full", result["benchmarks"])
+            for metrics in result["benchmarks"].values():
+                self.assertEqual(set(metrics), {"cold", "warm"})
+                self.assertGreaterEqual(metrics["cold"]["median_ms"], 0)
+                self.assertGreaterEqual(metrics["warm"]["median_ms"], 0)
+
+    def test_select_sessions_ranks_pure_v2_session_by_active_storage(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            legacy = root / "legacy-large"
+            pure_v2 = root / "pure-v2-larger"
+            legacy.mkdir()
+            pure_v2.mkdir()
+            (legacy / "ui_events.json").write_bytes(b"x" * 200)
+            (legacy / "llm_history.json").write_bytes(b"x" * 200)
+            (pure_v2 / "events.jsonl").write_bytes(b"x" * 450)
+
+            self.assertEqual(
+                select_sessions(root, 2),
+                ["pure-v2-larger", "legacy-large"],
+            )
 
 
 if __name__ == "__main__":

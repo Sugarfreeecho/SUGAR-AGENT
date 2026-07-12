@@ -9,6 +9,18 @@ const pickPathBtn = document.getElementById('pick-path-btn');
 if (window.MyAgentPathPicker && pickPathBtn && messageInput) {
     MyAgentPathPicker.attachChatPicker(pickPathBtn, messageInput);
 }
+if (messageInput) {
+    messageInput.addEventListener('myagent:file-paste-error', function (event) {
+        const detail = event && event.detail ? event.detail : {};
+        if (typeof showUiAlert === 'function') {
+            showUiAlert({
+                title: '粘贴文件失败',
+                message: String(detail.message || '无法保存剪贴板中的文件或图片。'),
+                variant: 'error',
+            });
+        }
+    });
+}
 const sessionsList = document.getElementById('sessions-list');
 const newSessionBtn = document.getElementById('new-session-btn');
 const offscreenRoot = document.getElementById('session-offscreen-buffers');
@@ -48,6 +60,11 @@ function syncSettingsModalForm() {
     var sd = document.getElementById('settings-session-detailed');
     if (sc) sc.classList.toggle('is-active', compact);
     if (sd) sd.classList.toggle('is-active', !compact);
+    var language = typeof uiLanguage === 'string' ? uiLanguage : 'zh-CN';
+    var lz = document.getElementById('settings-language-zh');
+    var le = document.getElementById('settings-language-en');
+    if (lz) lz.classList.toggle('is-active', language !== 'en');
+    if (le) le.classList.toggle('is-active', language === 'en');
 }
 
 function applyFontLevel(level, persist) {
@@ -139,6 +156,10 @@ function initUiSettingsControls() {
     var sd = document.getElementById('settings-session-detailed');
     if (sc) sc.addEventListener('click', function () { applySessionListMode('compact', true); });
     if (sd) sd.addEventListener('click', function () { applySessionListMode('detailed', true); });
+    var lz = document.getElementById('settings-language-zh');
+    var le = document.getElementById('settings-language-en');
+    if (lz) lz.addEventListener('click', function () { applyUiLanguage('zh-CN', true); syncSettingsModalForm(); });
+    if (le) le.addEventListener('click', function () { applyUiLanguage('en', true); syncSettingsModalForm(); });
     var envAdv = document.getElementById('settings-env-advanced');
     if (envAdv) {
         envAdv.addEventListener('click', function () {

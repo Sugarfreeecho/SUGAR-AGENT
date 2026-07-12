@@ -1,7 +1,8 @@
 ﻿function setSendButtonState() {
     sendBtn.disabled = false;
-    if (isSessionRunning(currentSessionId)) {
-        const run = typeof getSessionRunState === 'function' ? getSessionRunState(currentSessionId) : null;
+    const newSessionPreflight = !currentSessionId && optimisticNewSessionRun;
+    if (isSessionRunning(currentSessionId) || newSessionPreflight) {
+        const run = newSessionPreflight || (typeof getSessionRunState === 'function' ? getSessionRunState(currentSessionId) : null);
         const suppressFollowup = !!(run && run.suppressFollowupButton);
         const hasDraft = (typeof inputHasSendableText === 'function')
             ? inputHasSendableText()
@@ -30,7 +31,15 @@ async function requestInterrupt(sessionId, runId, reason) {
 }
 
 function pauseCurrentRun() {
-    if (!currentSessionId) return;
+    if (!currentSessionId) {
+        if (optimisticNewSessionRun) {
+            markRunAbortReason(optimisticNewSessionRun, 'user');
+            try { optimisticNewSessionRun.controller.abort(); } catch (e) { /* ignore */ }
+            optimisticNewSessionRun = null;
+            setSendButtonState();
+        }
+        return;
+    }
     const run = getSessionRunState(currentSessionId);
     const sid = currentSessionId;
     const activeInfo = sessionStore.getActiveRunInfo(sid) || {};
@@ -45,6 +54,7 @@ function pauseCurrentRun() {
         return;
     }
     const ctx = run.ctx;
+    const reachedServer = run.submitted !== false;
     /* 先同步 abort 本地 fetch 与从 sessionStore 摘除，UI 立即反映「已停止」状态；
        后端 interrupt 走 fire-and-forget，避免被主线程阻塞时按钮响应卡顿。*/
     abortSessionRun(sid, 'user');
@@ -53,7 +63,7 @@ function pauseCurrentRun() {
     renderSessionListIfChanged(false);
     appendLog(ctx, '已请求停止当前任务', 'status', sid);
     sealProcessGroup(ctx);
-    void requestInterrupt(sid, runId);
+    if (reachedServer) void requestInterrupt(sid, runId);
     setTimeout(function () { reconcileRunStateFromServer({ silent: true, respectStopSuppress: true }); }, 3000);
 }
 
@@ -938,6 +948,7 @@ async function loadSessionMessages(sessionId, scrollBehavior, opts) {
         });
         return true;
     } catch (error) {
+        if (loadToken !== messageLoadEpoch || sessionId !== currentSessionId) return false;
         console.error('加载会话消息失败:', error);
         document.getElementById('chat-loading')?.remove();
         appendLogVisible('加载历史消息失败', 'error-log');
@@ -1014,7 +1025,7 @@ async function switchSession(sessionId, opts) {
     if (!opts.forceReload && (restoreStreamForRunningSession(sessionId) || (restoredFromCache = restoreCachedSessionStream(sessionId)))) {
         suppressTocDuringSessionLoad = false;
         hideLoading();
-        rebuildToc();
+        rebuildToc({ localOnly: true });
         updateSessionTitle();
         scheduleContextTokensAfterPaint(sessionId);
         if (restoredFromCache) restoreCachedSessionScrollPosition(sessionId);
@@ -1024,7 +1035,11 @@ async function switchSession(sessionId, opts) {
         if (switchToken !== switchSessionEpoch || sessionId !== currentSessionId) return;
         /* 让 rebuildToc 的 /user_turns fetch 先发出，subagent 面板（含 N 个 /messages）顺序后置，
            避免抢占带宽与主线程，让目录最后才稳态。*/
-        setTimeout(function () { refreshSubagentTreePanel(sessionId); }, 0);
+        setTimeout(function () {
+            if (switchToken === switchSessionEpoch && sessionId === currentSessionId) {
+                refreshSubagentTreePanel(sessionId);
+            }
+        }, 0);
         void refreshSingleSessionRow(sessionId);
         setSendButtonState();
         maybeStartStreamPollForSession(sessionId, { skipInitialLoad: true });
@@ -1067,7 +1082,11 @@ async function switchSession(sessionId, opts) {
         if (switchToken !== switchSessionEpoch || sessionId !== currentSessionId) { resolve(false); return; }
         /* loadSessionMessages 内部已发起 rebuildToc()；这里再延后一步调用 subagent panel
            重建，保证「目录 → 消息 → 副 agent 按钮」的稳定顺序（无 subagent 的会话表现一致）。*/
-        setTimeout(function () { refreshSubagentTreePanel(sessionId); }, 0);
+        setTimeout(function () {
+            if (switchToken === switchSessionEpoch && sessionId === currentSessionId) {
+                refreshSubagentTreePanel(sessionId);
+            }
+        }, 0);
         void refreshSingleSessionRow(sessionId);
         setSendButtonState();
         maybeStartStreamPollForSession(sessionId, { skipInitialLoad: true });

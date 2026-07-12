@@ -49,6 +49,21 @@ def test_steer_inbox_is_persistent_and_client_idempotent(monkeypatch, tmp_path):
     assert cancelled["item"]["state"] == "cancelled"
 
 
+def test_runtime_v1_steer_transaction_uses_neutral_lock_not_v2_event_lock(monkeypatch, tmp_path):
+    import agent_loop
+
+    class _SessionManager:
+        sessions_dir = tmp_path
+
+    monkeypatch.setattr(agent_loop, "session_manager", _SessionManager())
+    monkeypatch.setenv("RUNTIME_VERSION", "1")
+
+    with agent_loop._steer_transaction("legacy-session"):
+        assert (tmp_path / "legacy-session" / ".steer.lock").is_file()
+
+    assert not (tmp_path / "legacy-session" / ".events.lock").exists()
+
+
 def test_steer_state_machine_claim_ack_and_cancel_fencing(monkeypatch, tmp_path):
     import agent_loop
 
@@ -234,6 +249,79 @@ def test_deferred_write_tool_wait_preserves_result_before_steer(monkeypatch):
     ))
     assert result["result"] == "written"
     assert checks == 1
+
+
+def test_tool_steer_policy_does_not_claim_irreversible_rollback():
+    import agent_loop
+
+    assert agent_loop._tool_steer_policy("read_file") == {
+        "interruptibility": "safe", "side_effect": "none"
+    }
+    assert agent_loop._tool_steer_policy("task")["interruptibility"] == "cooperative"
+    assert agent_loop._tool_steer_policy("write_file") == {
+        "interruptibility": "non_interruptible", "side_effect": "irreversible"
+    }
+
+
+def test_non_interruptible_tool_exposes_deferred_state_until_safe_point(monkeypatch, tmp_path):
+    import agent_loop
+
+    class _SessionManager:
+        sessions_dir = tmp_path
+
+    monkeypatch.setattr(agent_loop, "session_manager", _SessionManager())
+    agent_loop._STEER_QUEUES.clear()
+    agent_loop._STEER_QUEUE_SIGNATURES.clear()
+    async def slow_write():
+        await asyncio.sleep(0.16)
+        return "done"
+
+    async def scenario():
+        waiting = asyncio.create_task(agent_loop._await_steerable(
+            {"session_id": "s-deferred", "stream_events": []}, slow_write(), None, "tool", poll_sec=0.02, defer_steer=True
+        ))
+        await asyncio.sleep(0.03)
+        item = agent_loop.enqueue_session_steer("s-deferred", "change direction", client_id="defer-client")["item"]
+        await asyncio.sleep(0.07)
+        during = agent_loop.get_session_steer("s-deferred", steer_id=item["id"])["item"]["state"]
+        result = await waiting
+        after = agent_loop.get_session_steer("s-deferred", steer_id=item["id"])["item"]["state"]
+        return during, result, after
+
+    during, result, after = asyncio.run(scenario())
+    assert (during, result, after) == ("deferred", "done", "interrupting")
+
+
+def test_user_turn_commit_failure_never_acknowledges_steer(monkeypatch, tmp_path):
+    import pytest
+    import agent_loop
+
+    class _SessionManager:
+        sessions_dir = tmp_path
+
+    monkeypatch.setattr(agent_loop, "session_manager", _SessionManager())
+    agent_loop._STEER_QUEUES.clear()
+    agent_loop._STEER_QUEUE_SIGNATURES.clear()
+    item = agent_loop.enqueue_session_steer("s-fail", "must survive", client_id="fail-client")["item"]
+
+    def fail_commit(*args, **kwargs):
+        raise RuntimeError("injected commit failure")
+
+    monkeypatch.setattr(agent_loop, "_runtime_v2_commit_user_turn", fail_commit)
+    state = {
+        "session_id": "s-fail",
+        "_runtime_v2_run_id": "run-fail",
+        "work_messages": [],
+        "llm_history": [],
+        "dialogue": [],
+        "stream_events": [],
+    }
+    with pytest.raises(RuntimeError, match="injected commit failure"):
+        asyncio.run(agent_loop._consume_steer_messages(state))
+
+    failed = agent_loop.get_session_steer("s-fail", steer_id=item["id"])["item"]
+    assert failed["state"] == "failed"
+    assert failed.get("consumed_at") is None
 
 
 def test_steer_trim_keeps_completed_prefix_and_assistant_text():

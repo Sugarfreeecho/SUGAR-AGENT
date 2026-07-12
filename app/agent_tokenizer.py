@@ -398,7 +398,7 @@ def messages_for_openai_turns(llm_history: List[Any]) -> List[Any]:
 
 def build_env_static(session_id: Optional[str] = None) -> str:
     """Build the Environment block: calendar month, OS, paths, session storage (no live workspace listing)."""
-    from agent_harness import PROJECT_ROOT as AGENT_PROJECT_ROOT, WORK_DIR
+    from agent_harness import PROJECT_ROOT as AGENT_PROJECT_ROOT, WORK_DIR, session_manager
     from agent_tools import describe_run_shell_executor_for_prompt
 
     sid = (session_id or "").strip()
@@ -408,8 +408,17 @@ def build_env_static(session_id: Optional[str] = None) -> str:
 
     session_lines = ""
     if sid:
-        sdir = (WORK_DIR / "sessions" / sid).resolve()
-        v_session = f"/sessions/{sid}"
+        try:
+            from runtime_v2 import runtime_v2_primary
+
+            is_v2 = bool(runtime_v2_primary())
+        except Exception:
+            is_v2 = True
+        sdir = session_manager._get_session_path(sid).resolve()
+        try:
+            v_session = "/" + str(sdir.relative_to(WORK_DIR.resolve())).replace("\\", "/")
+        except ValueError:
+            v_session = f"/sessions/{sid}"
         v_key = f"{v_session}/key_context.md"
         v_todo = f"{v_session}/todo_plan.md"
         session_lines = f"""
@@ -420,6 +429,13 @@ def build_env_static(session_id: Optional[str] = None) -> str:
   - Persistent key facts belong in `key_context.md`: `{v_key}`. Use `context_manage` with `mode=edit_key_context` to revise it.
   - Live todo state belongs in `todo_plan.md`: `{v_todo}`. Use `update_todo`, or `read_file` on `{v_todo}` when you need to inspect it.
   - Extra `key_context` system message: when non-empty, the server injects the rendered full `key_context.md` body; legacy sessions may strip an embedded `## Todo 计划` section."""
+        if is_v2:
+            session_lines = f"""
+- **Session storage directory**: {sdir}
+  - Runtime V2 canonical path from `WORK_DIR`: `{v_session}`.
+  - Canonical facts and rebuildable state live in `events.jsonl`, `snapshots/latest.json`, metadata, indexes, and referenced blobs. Legacy `llm_history.json`, `ui_events.json`, `key_context.md`, and `todo_plan.md` may be absent or stale and must not be used as context authority.
+  - The server injects the active model context and summary. Use `context_manage` for explicit compact/summary edits and `update_todo` for the live plan; do not directly edit Runtime V2 storage files.
+  - Use the conversation history APIs/UI when older visible history is needed."""
     else:
         session_lines = "\n- **Session storage directory**: not set for this run."
 

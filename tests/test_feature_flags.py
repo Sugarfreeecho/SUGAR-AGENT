@@ -27,6 +27,7 @@ def test_index_html_injects_conservative_feature_values(monkeypatch):
     flags = _extract_feature_flags(str(webui.get_index_html()))
 
     assert flags == {
+        "goal": True,
         "followupRestart": False,
         "streamReconnect": False,
         "finalReconcile": True,
@@ -43,10 +44,19 @@ def test_index_html_injects_independent_feature_overrides(monkeypatch):
     flags = _extract_feature_flags(str(webui.get_index_html()))
 
     assert flags == {
+        "goal": True,
         "followupRestart": True,
         "streamReconnect": True,
         "finalReconcile": False,
     }
+
+
+def test_index_html_injects_goal_feature_override(monkeypatch):
+    import webui
+
+    monkeypatch.setenv("GOAL_ENABLED", "0")
+    flags = _extract_feature_flags(str(webui.get_index_html()))
+    assert flags["goal"] is False
 
 
 def test_index_html_defaults_stream_reconnect_enabled(monkeypatch):
@@ -75,7 +85,12 @@ def test_frontend_feature_entrypoints_are_flag_guarded():
     assert "maybeAutoResumeInterruptedReact(sessionId, sess)" in refresh_row
     assert "maybeAutoResumeInterruptedReact" not in event_cache_set
     assert "window.addEventListener('online'" in sse
-    assert sse.index("let preCount = await getUiEventCount") < sse.index("setSessionRunState(runSessionId, optimisticRunState)")
+    assert sse.index("setSessionRunState(submitSessionIdInitial, optimisticRunState)") < sse.index("processRewriteTruncateAsync(pendingRewrite)")
+    assert sse.index("setSessionRunState(submitSessionIdInitial, optimisticRunState)") < sse.index("let preCount = await getUiEventCount")
+    assert "optimisticNewSessionRun = optimisticRunState;" in sse
+    assert "if (ac.signal.aborted) return;" in sse
+    assert "optimisticRunState.submitted = true;" in sse
+    assert "!(activeRun && activeRun.suppressFollowupButton)" in sse
     assert "readSseChunkWithIdleTimeout(reader, SSE_IDLE_TIMEOUT_MS)" in sse
     assert "parsed.type === 'sse_keepalive' || parsed.keepalive === true" in sse
     assert 'os.getenv("MYAGENT_ENABLE_STREAM_RECONNECT", "1")' in webui
@@ -99,27 +114,28 @@ def test_frontend_feature_entrypoints_are_flag_guarded():
     assert "async function syncFollowupQueueFromServer(sessionId)" in sse
     assert "async function fetchSteerStatus(sessionId, item)" in sse
     assert "async function recoverSteerForRestart(sessionId, item)" in sse
-    assert "if (sendPipelineLock && sendPipelineLockSessionId === submitSessionIdInitial) return;" in sse
+    assert "const sendPipelineLock = acquireSendPipelineLock(submitSessionIdInitial);" in sse
+    assert "if (!sendPipelineLock) return;" in sse
+    assert "releaseSendPipelineLock(sendPipelineLock);" in sse
     assert "formData.append('steer_id', String(options.steerId))" in sse
+    assert "scheduleFollowupQueueDrain" not in sse
+    assert "drainFollowupQueue" not in sse
     assert "followupEnabled" in sessions
     assert "isMyAgentFeatureEnabled('followupRestart', false)" in sessions
 
 
-def test_followups_wait_for_explicit_send_now_click():
+def test_followups_wait_for_explicit_send_now_after_run_end():
     sse = (ROOT / "frontend/src/app/modules/sse-handling.js").read_text(encoding="utf-8")
     enqueue = sse.split("function enqueueCurrentInputAsFollowup()", 1)[1].split(
         "function takeFollowupItem", 1
     )[0]
 
-    # Enter only appends to the durable browser queue.  Completion, reconnect,
-    # refresh and server reconciliation must never consume a pending item.
+    # Enter only appends to the durable browser queue. Ending the current run
+    # must not consume it; only the explicit send-now button may do that.
     assert "sendFollowupNow" not in enqueue
     assert "scheduleFollowupQueueDrain" not in sse
     assert "drainFollowupQueue" not in sse
 
-    # The sole call site is the queue row's explicit "send now" click handler;
-    # the second occurrence is the function declaration itself.
-    assert sse.count("sendFollowupNow(") == 2
     assert "sendNow.addEventListener('click'" in sse
     assert "sendFollowupNow(String(item.id));" in sse
 
@@ -136,6 +152,41 @@ def test_model_profile_selector_fences_cross_session_responses():
     assert "if (sid !== String(currentSessionId || '')) return;" in source
     assert "selectContextTokens(sid)" in source
     assert "scheduleContextTokensAfterPaint(sid)" in source
+
+
+def test_chat_input_supports_clipboard_files_and_images_as_paths():
+    sources = [
+        ROOT / "frontend/src/vendor/myagent_path_picker.js",
+        ROOT / "app/templates/static/myagent_path_picker.js",
+    ]
+    for path in sources:
+        source = path.read_text(encoding="utf-8")
+        assert "function clipboardFilesFromEvent(ev)" in source
+        assert "textarea.addEventListener('paste'" in source
+        assert "item.kind !== 'file'" in source
+        assert "insertUploadedFiles(textarea, files)" in source
+        assert "fetch('/api/upload-chat-files'" in source
+        assert "quotePickedPath(item.path || item.rel || item.name)" in source
+
+
+def test_branch_completion_does_not_hijack_a_later_session_switch():
+    source = (ROOT / "frontend/src/app/modules/message-rendering.js").read_text(encoding="utf-8")
+
+    assert "const sourceSwitchEpoch" in source
+    assert "const sourceStillActive = currentSessionId === sourceSessionId" in source
+    assert "sourceSwitchEpoch === switchSessionEpoch" in source
+    assert "if (!sourceStillActive)" in source
+
+
+def test_chat_busy_response_rolls_back_optimistic_message_into_queue():
+    sse = (ROOT / "frontend/src/app/modules/sse-handling.js").read_text(encoding="utf-8")
+    busy = sse.split("if (response.status === 409)", 1)[1].split("streamEventIdx = await", 1)[0]
+
+    assert "rollbackOptimisticUserEvent(runSessionId, preCount)" in busy
+    assert "appendFollowupQueueItem(" in busy
+    assert "scheduleActiveSessionReconnect(runSessionId" in busy
+    assert "truncateMessageStateForSession(sid, before)" in sse
+    assert "uiEventCountCache.updateFromServer(sid, before)" in sse
 
 
 def test_frontend_final_reconcile_is_local_store_only():
@@ -201,6 +252,38 @@ def test_frontend_session_load_logs_open_session_timing_from_snapshot():
     assert "function logOpenSessionTiming(sessionId, data)" in sessions
     assert "'open_session_timing session=%s source=%s total=%sms events=%s backend_total=%sms read_page=%sms count=%sms user_turns=%sms context_tokens=%sms'" in sessions
     assert "logOpenSessionTiming(sessionId, {" in sessions
+
+
+def test_frontend_session_switch_async_work_is_session_scoped():
+    sessions = (ROOT / "frontend/src/app/modules/session-management.js").read_text(encoding="utf-8")
+    subagent_sync = (ROOT / "frontend/src/app/state/subagent-sync.js").read_text(encoding="utf-8")
+
+    assert "if (loadToken !== messageLoadEpoch || sessionId !== currentSessionId) return false;" in sessions
+    assert "rebuildToc({ localOnly: true });" in sessions
+    assert sessions.count("if (switchToken === switchSessionEpoch && sessionId === currentSessionId)") >= 3
+    assert "subagentTreeRefreshInflightBySession" in subagent_sync
+    assert "subagentTreeRefreshQueuedBySession" in subagent_sync
+    assert "if (!sessionId || sessionId !== currentSessionId) return;" in subagent_sync
+    assert "if (seq !== subagentPanelRefreshSeq || sessionId !== currentSessionId) return;" in subagent_sync
+
+
+def test_frontend_background_followup_return_does_not_touch_active_composer():
+    sse = (ROOT / "frontend/src/app/modules/sse-handling.js").read_text(encoding="utf-8")
+    skills = (ROOT / "frontend/src/app/modules/skill-picker.js").read_text(encoding="utf-8")
+
+    fn = re.search(
+        r"function returnFollowupToInput\(sid, item\) \{(?P<body>.*?)\n\}",
+        sse,
+        re.S,
+    )
+    assert fn
+    body = fn.group("body")
+    background = body.split("if (sid !== currentSessionId) {", 1)[1].split("\n    }", 1)[0]
+    assert "persistInputDraft(sid, nextDraft);" in background
+    assert "messageInput.value" not in background
+    assert "messageInput.focus()" not in background
+    assert "window.setSelectedSkillsForSession" in background
+    assert "function setSelectedSkillsForSession(sessionId, skills)" in skills
 
 
 def test_frontend_send_and_reattach_reuse_event_count_cache():
@@ -337,7 +420,9 @@ def test_frontend_session_scoped_token_and_count_guards():
     assert "if (sid === currentSessionId) applyContextTokenLabelForCurrentSession();" in scroll
     assert "isFresh(sessionId, maxAgeMs)" in sessions
     assert "uiEventCountCache.isFresh(sid, opts.maxAgeMs)" in scroll
-    assert "await getUiEventCount(submitSessionId, { preferCache: true, maxAgeMs: 10000 })" in sse
+    assert "let preCount = await getUiEventCount(submitSessionId, {" in sse
+    assert "signal: ac.signal" in sse
+    assert "timeoutMs: 5000" in sse
     assert "parsed.type === 'context_tokens' && eventSessionId === currentSessionId" in sse
     assert "parsed.type === 'cache_stats' && eventSessionId === currentSessionId" in sse
 

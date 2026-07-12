@@ -96,6 +96,25 @@ const messageStore = {
         const st = this.getSession(sessionId);
         return st ? st.events.length : 0;
     },
+
+    truncateSession(sessionId, beforeIndex) {
+        const st = this.getSession(sessionId);
+        if (!st) return null;
+        const before = Math.max(0, Number(beforeIndex) || 0);
+        st.events = st.events.filter(function (record) { return Number(record.index) < before; });
+        st.eventsByIndex = new Map();
+        st.messageEvents = [];
+        st.processEvents = [];
+        st.events.forEach(function (record) {
+            st.eventsByIndex.set(Number(record.index), record);
+            if (record.type === 'user' || record.type === 'final') st.messageEvents.push(record);
+            else st.processEvents.push(record);
+        });
+        st.rangeEnd = Math.min(Number(st.rangeEnd) || before, before);
+        st.total = Math.min(Number(st.total) || before, before);
+        st.loadedAt = Date.now();
+        return st;
+    },
 };
 
 function beginMessageReplay(sessionId, meta) {
@@ -120,4 +139,8 @@ function selectMessageEventsInRange(sessionId, startIndex, endIndex) {
 
 function selectMessageEventCount(sessionId) {
     return messageStore.eventCount(sessionId);
+}
+
+function truncateMessageStateForSession(sessionId, beforeIndex) {
+    return messageStore.truncateSession(sessionId, beforeIndex);
 }

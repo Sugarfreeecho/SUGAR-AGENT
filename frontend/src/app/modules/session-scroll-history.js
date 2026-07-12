@@ -1326,7 +1326,23 @@ async function getUiEventCount(sessionId, opts) {
         return uiEventCountCache.get(sid);
     }
     try {
-        const r = await fetch('/sessions/' + encodeURIComponent(sid) + '/messages/count');
+        const controller = new AbortController();
+        const externalSignal = opts.signal;
+        const abortFromExternal = function () { controller.abort(); };
+        if (externalSignal) {
+            if (externalSignal.aborted) controller.abort();
+            else externalSignal.addEventListener('abort', abortFromExternal, { once: true });
+        }
+        const timer = setTimeout(function () { controller.abort(); }, Math.max(250, Number(opts.timeoutMs) || 5000));
+        let r;
+        try {
+            r = await fetch('/sessions/' + encodeURIComponent(sid) + '/messages/count', {
+                signal: controller.signal
+            });
+        } finally {
+            clearTimeout(timer);
+            if (externalSignal) externalSignal.removeEventListener('abort', abortFromExternal);
+        }
         if (!r.ok) return 0;
         const j = await r.json();
         const count = (j && typeof j.count === 'number') ? j.count : 0;

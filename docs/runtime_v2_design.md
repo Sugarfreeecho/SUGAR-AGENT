@@ -102,7 +102,7 @@ workspace/sessions/index.json
 - `events.jsonl` 是唯一核心事实源；暂缓事件日志分段，除非有真实性能数据证明必须引入。
 - `metadata.json` 保存标题、归档、置顶、更新时间等快速字段。
 - `snapshots/latest.json` 是加速恢复的派生数据。
-- `blobs/` 保存大工具输出、长文本、附件等；镜像路径会把超过阈值的工具/legacy 文本外置为 `*_ref`。
+- `blobs/` 保存大工具输出、长文本、附件等；V2 写入以及显式 legacy migration 会把超过阈值的文本外置为 `*_ref`。
 - `subagents/{agent_id}/` 保存子 Agent 独立事件日志、快照、metadata；父会话只保留瘦身后的索引/状态事件。
 - `index.json` 只加速左侧列表，可重建。
 
@@ -194,16 +194,20 @@ app/runtime_v2/
 - 已覆盖坏行 repair、并发 append seq 单调性、publisher 收事件、snapshot rebuild。
 - 尚未接入现有 General Agent 主流程。
 
-### 阶段 B：镜像写入
+### 历史阶段 B：镜像写入
 
 现有 General Agent 继续照旧写 `ui_events.json` 和 SSE，同时 Runtime V2 旁路写 `events.jsonl`。
+
+本节记录最初的接入过程，不描述当前运行边界。镜像阶段完成隔离验证后，
+正常 V1/V2 路径已经纯化为各写各的事实源；当前规则以“当前切换与兼容状态”
+一节为准。
 
 目标：
 
 - 对照旧系统和 V2 的运行终态。
 - 找出异常、停止、刷新不一致来源。
 
-当前接入范围：
+该阶段接入范围（历史）：
 
 - `SessionManager.append_ui_event()` 会把旧 `user`、`final`、context/todo、subagent、tool 等事件镜像为 Runtime V2 事件。
 - `agent_loop.astream_events()` 会把主对话 run started / finished / failed / interrupted 镜像为 Runtime V2 run 事件。
@@ -347,12 +351,16 @@ Runtime V2 完整接入后，应满足：
 ```text
 RUNTIME_VERSION=2
   read  = Runtime V2
-  write = Runtime V2 first, Runtime V1 mirror
+  write = Runtime V2 only
 
 RUNTIME_VERSION=1
   read  = Runtime V1
-  write = Runtime V1 first, Runtime V2 mirror
+  write = Runtime V1 only
 ```
+
+两个正常运行路径互不镜像、互不回填、互不兜底读取。旧会话进入 V2、
+以及为了切回 V1 而生成兼容文件，分别通过显式 migration/export service
+完成；它们不是打开会话、发送、继续、分支、截断或 repair 的隐式副作用。
 
 兼容旧变量：
 
@@ -365,11 +373,12 @@ RUNTIME_V2_ENABLED=0  # 未设置 RUNTIME_VERSION 时等价于 RUNTIME_VERSION=1
 
 ### 当前已经接管的 V2 能力
 
-- UI 历史读取：`/sessions/{id}/messages` 在 V2 模式下读取 Runtime V2 投影，必要时从旧 `ui_events.json` 回填。
-- 模型历史读取：V2 模式下模型输入读取 `model_messages` 投影；V1 模式仍读旧 `llm_history.json`，同时镜像 V2。
+- UI 历史读取：`/sessions/{id}/history_snapshot`、`/messages`、`/messages/count` 和 `/user_turns` 在 V2 模式下只读 Runtime V2 event/projection/snapshot；缺失或损坏会显式报错，不读取旧 `ui_events.json`。
+- 模型历史读取：V2 模式下模型输入只读 `model_messages` 投影；V1 模式只读旧 `llm_history.json`。
 - 运行状态：V2 模式下会话黄点、发送按钮运行态读取 `snapshots/latest.json.active_runs`。
-- Subagent 状态：V2 模式下 task index、pending result、task output 从 `subagents/` 目录读取；V1 文件仍同步镜像。
-- Context/Todo/Token：V2 snapshot 记录 `context.tokens`、`context.todo`、`context.summary`，API 优先读 snapshot，失败再回退旧路径。
+- Subagent 状态：V2 模式下 task index、pending result、task output、子会话历史和继续执行只读写 `subagents/` 下的 V2 存储。
+- Context/Todo/Token：V2 snapshot 记录 `context.tokens`、`context.todo`、`context.summary`；缓存 miss 只允许从 V2 projection/event 重建，不回退 `key_context.md`、`todo_plan.md` 或 legacy history。
+- 历史操作：删除、改写、截断、分支、压缩和 repair 都以 Runtime seq 与 append-only V2 操作事件为边界；分支继承 V2 model/context/todo/token 状态。
 - UI 投影性能：`RuntimeUiProjection` 按 `events.jsonl` 的 `mtime_ns + size` 缓存投影，减少重复切会话时的全量 JSONL 解析。
 - 前端状态：Context token 请求已按 session 去重并短时复用；Todo 面板已短时复用 store，减少 SSE 后重复 fetch。
 
@@ -377,21 +386,22 @@ RUNTIME_V2_ENABLED=0  # 未设置 RUNTIME_VERSION 时等价于 RUNTIME_VERSION=1
 
 | 能力 | V1 模式 | V2 模式 | 当前状态 |
 |---|---|---|---|
-| 会话列表与 state | 读 V1 metadata/index + legacy run state，镜像 V2 | 读 V2 snapshot active runs，并按本进程真实 task/SSE/start 占位过滤孤立 active run | 已接入，仍需继续端到端压测 |
-| 消息历史 `/messages` | 读 `ui_events.json` | 读 RuntimeUiProjection；TOC/user_turns 也读 active runtime。普通打开、刷新、滚动恢复不得回填 legacy，legacy 导出只允许显式 sync/migration | 已接入，需继续压测大历史与分支/改写 |
+| 会话列表与 state | 读 V1 metadata/index + legacy run state | 读 V2 snapshot active runs，并按本进程真实 task/SSE/start 占位过滤孤立 active run | 已接入 |
+| 消息历史 `/history_snapshot`、`/messages` | 读 `ui_events.json` | 只读 RuntimeUiProjection；TOC/user_turns 同源，不自动 migration 或 legacy fallback | 已接入 |
 | 消息计数 `/messages/count` | 读 V1 `ui_event_count`/ui_events | 读 RuntimeUiProjection index | 已接入 |
-| 模型历史 | 读 `llm_history.json`，镜像 V2 | 读 `model_messages` 投影；旧会话 partial projection 会按需用 legacy 同步 | 已接入，需覆盖更多双向测试 |
+| 模型历史 | 读写 `llm_history.json` | 只读写 `model_messages` 投影；projection 缺失不自动回填 legacy | 已接入 |
 | 运行态 | legacy active run + chat connection | V2 `active_runs` snapshot + 本地活动证据过滤 | 已接入 |
 | SSE | 现有 `/stream` / `/chat` 事件 | `/runtime-v2/events?after_seq=...`、`/runtime-v2/sessions/{id}/stream`、V2 模式 `/sessions/{id}/stream` 投影增量流 | reattach 已接管，主 `/chat` 实时流尚未切 raw V2 seq |
-| 历史操作：删除/改写/截断 | 改写 V1 文件，追加 V2 observation/history event | 应追加 V2 原生事件并镜像 V1 | 部分完成，需补 V2-first 写路径 |
-| 分支 | V1 创建新会话文件，镜像 V2 | V2 seed 分支事件流，并用源 Runtime seq 记录 branch point | 部分完成，仍需进一步减少 V1-first 外壳 |
-| Context/Todo/Token | 读旧文件/即时计算，镜像 V2 | 读 snapshot，失败回退旧路径 | 部分完成 |
-| Subagent | 读 V1 subagent 文件 | 读 V2 `subagents/` task/output/pending | 部分完成，需补端到端审计 |
+| 历史操作：删除/改写/截断 | 只改写 V1 文件 | 追加 V2 原生操作事件，不反写 V1 | 已接入 |
+| 分支 | 从 V1 历史创建 V1 会话 | 从 V2 event/model/context 状态创建 V2 会话并记录源 Runtime seq，不创建 legacy history sidecar | 已接入，性能门槛 `<10s` |
+| Context/Todo/Token | 读写旧文件/即时计算 | 读 snapshot；miss 从 V2 projection/event 计算并写回 V2 checkpoint | 已接入 |
+| Subagent | 读写 V1 subagent 文件 | 只读写 V2 `subagents/` task/output/pending/event/snapshot/blob | 已接入 |
+| Migration / export | 不在正常路径跨写 | 显式 migration 读取 V1 并写 V2；显式 export 读取 V2 并写兼容 V1 | 独立 service，带校验与失败回滚 |
 | 调试接口 | 不影响 V1 | `/runtime-v2/state`、`events`、`runs` | 已实现 |
 
-### 当前仍保留的兼容文件
+### 存储边界
 
-这些文件仍会写入，用于 V1/V2 对比和回退：
+这些 legacy 文件由 V1 正常路径或显式 export/migration 使用；纯 V2 新会话不创建空的 legacy history sidecar：
 
 - `ui_events.json`
 - `llm_history.json`
@@ -403,7 +413,7 @@ RUNTIME_V2_ENABLED=0  # 未设置 RUNTIME_VERSION 时等价于 RUNTIME_VERSION=1
 - `pending_subagent_results.json`
 - `subagent_outputs/*.md`
 
-这些文件是 Runtime V2 的事实源和投影：
+这些文件是 Runtime V2 的事实源、投影和缓存：
 
 - `events.jsonl`
 - `snapshots/latest.json`
@@ -442,7 +452,13 @@ python scripts/audit_runtime_versions.py --repair-runs --only-mismatches
 
 ```text
 python scripts/benchmark_runtime_versions.py --session-id <session_id>
+python scripts/benchmark_runtime_versions.py --limit 10 --output .tmp-runtime-v2-benchmark.json
 ```
+
+未指定 `--session-id` 时，脚本按 V1 UI+model 与 V2 event+snapshot 两种表示中
+较大的字节数选择大会话，因此纯 V2 会话不会被漏掉。输出分别报告应用缓存
+cold/warm 指标；cold 不清空操作系统页缓存，避免基准脚本需要特权或影响机器上
+其他进程。
 
 ### 长期双路径保留策略
 
@@ -450,17 +466,18 @@ Runtime V2 的目标是完整接管一条新主路径，但不是删除 Runtime 
 
 必须长期保留：
 
-1. `RUNTIME_VERSION=1` 在线路径：读取 V1 文件，写入 V1 后镜像 V2。
-2. `RUNTIME_VERSION=2` 在线路径：读取 V2 事件/投影，写入 V2 后镜像 V1。
+1. `RUNTIME_VERSION=1` 在线路径：只读写 V1 文件，不自动创建或改写 V2 event/snapshot。
+2. `RUNTIME_VERSION=2` 在线路径：只读写 V2 事件/投影，不自动创建、读取或反写 legacy history。
 3. V1 兼容文件：`ui_events.json`、`llm_history.json`、`work_messages.json`、`metadata.json`、`key_context.md`、`todo_plan.md`、`subagent_tasks.json`、`pending_subagent_results.json`、`subagent_outputs/`。
 4. V2 事实源与投影：`events.jsonl`、`snapshots/latest.json`、`blobs/{sha256}.txt`、`subagents/{agent_id}/events.jsonl`、`subagents/{agent_id}/snapshots/latest.json`、`subagents/tasks.json`、`subagents/pending_results.json`。
-5. 双向 mirror：V1 写入必须持续镜像 V2；V2 写入必须持续镜像 V1。
-6. 审计与修复脚本：作为常驻保护，而不是迁移临时工具。
-7. API fallback：允许在主路径异常时兜底读取另一条路径，但 fallback 不能掩盖审计差异，必须记录日志或可被审计脚本发现。
+5. 显式迁移：`POST /sessions/{id}/runtime/sync` 允许把旧会话可验证地迁入 V2；普通打开不得调用它。
+6. 显式导出：同一 service 仅在 `export_legacy=true` 时把 V2 projection 导出为 V1 兼容文件；导出前后均校验，失败回滚。
+7. 审计与修复脚本：作为常驻保护；repair 只操作被选择的事实源，不充当跨 runtime fallback。
 
 V2 完整完成的标准不是“可以删除 V1”，而是：
 
 - 切到 `RUNTIME_VERSION=2` 后，消息历史、运行状态、SSE 恢复、模型历史、历史操作、subagent、context/todo/token 都可由 V2 独立支撑。
-- 切回 `RUNTIME_VERSION=1` 后，V1 文件仍完整可用，且不丢失在 V2 模式下产生的会话事实。
-- 任一模式写入后，另一模式读取不应丢消息、不应恢复错误运行态、不应改变分支/改写/删除边界。
+- 需要带着 V2 期间的新事实切回 V1 时，先执行显式 export；直接切换不会暗中跨写另一套存储。
+- V1 作为备用运行时仍能独立打开、发送、继续和恢复其自身会话，且不会污染 V2。
+- migration/export 对事件数、顺序、模型消息和引用 blob 做可验证转换；失败不留下半迁移状态。
 - 审计脚本能持续发现并定位 V1/V2 投影差异。

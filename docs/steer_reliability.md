@@ -37,6 +37,15 @@ The browser persists a presentation queue but reconciles it with these APIs on
 session activation and while an operation is accepted. Unknown status is never
 treated as permission to create a new operation.
 
+Text entered while a run is active is first a local pending next turn. Ending
+the old run or releasing the session send lock must not consume that item. The
+queue advances only after an explicit user action: “send now” creates a durable
+steer while a run is active, and an explicit send starts a normal `/chat` once
+the session is idle. Both paths share the same per-session mutex; a failed
+request keeps the queue item instead of deleting it optimistically. This rule
+also prevents a delayed callback from one session from draining another
+session's queue after a switch.
+
 ## Run and content fencing
 
 Each active run owns a process-local control object and a cross-process

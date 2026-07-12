@@ -1,7 +1,8 @@
 let currentSessionId = null;
 /** Blocks repeat sends while the async send pipeline is claiming a sessionStore run slot. */
-let sendPipelineLock = false;
-let sendPipelineLockSessionId = null;
+const sendPipelineLocksBySession = Object.create(null);
+/** Optimistic preflight before the first session id has been allocated. */
+let optimisticNewSessionRun = null;
 const followupQueueBySession = Object.create(null);
 const followupQueueLoadedBySession = Object.create(null);
 let followupQueueSeq = 1;

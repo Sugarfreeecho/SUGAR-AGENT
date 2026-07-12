@@ -2,9 +2,8 @@ var subagentCardSyncTimer = null;
 var subagentContextFetchInFlight = Object.create(null);
 var subagentTreeRefreshTimer = null;
 var subagentTreeRefreshTarget = null;
-var subagentTreeRefreshInflight = null;
-var subagentTreeRefreshInflightSid = null;
-var subagentTreeRefreshQueued = false;
+var subagentTreeRefreshInflightBySession = Object.create(null);
+var subagentTreeRefreshQueuedBySession = Object.create(null);
 var subagentStatsRefreshRaf = 0;
 var subagentStatsPending = new Set();
 
@@ -63,7 +62,7 @@ function cancelScheduledSubagentTreeRefresh() {
         subagentTreeRefreshTimer = null;
     }
     subagentTreeRefreshTarget = null;
-    subagentTreeRefreshQueued = false;
+    subagentTreeRefreshQueuedBySession = Object.create(null);
 }
 
 function stopSubagentIncrementalSync() {
@@ -217,20 +216,25 @@ async function refreshSubagentContextForCard(card, agentId, force) {
 }
 
 async function refreshSubagentTreePanel(sessionId) {
-    if (subagentTreeRefreshInflight && subagentTreeRefreshInflightSid === sessionId) {
-        subagentTreeRefreshQueued = true;
-        return subagentTreeRefreshInflight;
+    if (!sessionId || sessionId !== currentSessionId) return;
+    var inflight = subagentTreeRefreshInflightBySession[sessionId];
+    if (inflight) {
+        subagentTreeRefreshQueuedBySession[sessionId] = true;
+        return inflight;
     }
-    subagentTreeRefreshInflightSid = sessionId;
-    subagentTreeRefreshInflight = refreshSubagentTreePanelInner(sessionId);
+    var refreshPromise = refreshSubagentTreePanelInner(sessionId);
+    subagentTreeRefreshInflightBySession[sessionId] = refreshPromise;
     try {
-        return await subagentTreeRefreshInflight;
+        return await refreshPromise;
     } finally {
-        subagentTreeRefreshInflight = null;
-        subagentTreeRefreshInflightSid = null;
-        if (subagentTreeRefreshQueued && sessionId === currentSessionId) {
-            subagentTreeRefreshQueued = false;
+        if (subagentTreeRefreshInflightBySession[sessionId] === refreshPromise) {
+            delete subagentTreeRefreshInflightBySession[sessionId];
+        }
+        if (subagentTreeRefreshQueuedBySession[sessionId] && sessionId === currentSessionId) {
+            delete subagentTreeRefreshQueuedBySession[sessionId];
             void refreshSubagentTreePanel(currentSessionId);
+        } else {
+            delete subagentTreeRefreshQueuedBySession[sessionId];
         }
     }
 }
@@ -240,6 +244,7 @@ async function refreshSubagentTreePanelInner(sessionId) {
     var seq = ++subagentPanelRefreshSeq;
     var grid = document.getElementById('subagent-grid');
     var toggleBtn = document.getElementById('subagent-toggle-btn');
+    if (sessionId !== currentSessionId) return;
     if (!grid || !sessionId) {
         if (toggleBtn) toggleBtn.classList.add('hidden');
         closeSubagentPanel();
@@ -295,6 +300,7 @@ async function refreshSubagentTreePanelInner(sessionId) {
             if (sessionId === currentSessionId) updateSubagentContinueBanner(sessionId);
         }
     } catch (e) {
+        if (seq !== subagentPanelRefreshSeq || sessionId !== currentSessionId) return;
         if (toggleBtn) toggleBtn.classList.add('hidden');
         closeSubagentPanel();
         stopSubagentIncrementalSync();

@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 
 class RuntimeMirror:
-    """Synchronous compatibility bridge from legacy events to Runtime V2."""
+    """Synchronous mapper from UI-shaped events to native Runtime V2 facts."""
 
     def __init__(self, sessions_dir: str | Path, path_resolver: Optional[Callable[[str], str | Path]] = None):
         self.sessions_dir = Path(sessions_dir)
@@ -23,7 +23,10 @@ class RuntimeMirror:
         self.event_log = SessionEventLog(self.sessions_dir, path_resolver=path_resolver)
         self.projector = RuntimeProjector()
         self.snapshots = SnapshotStore(self.sessions_dir, path_resolver=path_resolver)
-        self.subagents = RuntimeSubagentStore(self.sessions_dir)
+        self.subagents = RuntimeSubagentStore(
+            self.sessions_dir,
+            path_resolver=path_resolver,
+        )
 
     def mirror_ui_event(self, session_id: str, event: Dict[str, Any]) -> Optional[RuntimeEvent]:
         subagent_event = self._mirror_subagent_event(session_id, event)
@@ -122,21 +125,44 @@ class RuntimeMirror:
                 },
             }
         if event_type == "context_summary_finished":
-            return {
-                "type": "legacy_compress_observed",
-                "payload": {
-                    "reason": event.get("reason") or event.get("mode") or "",
-                    "source": "ui_event",
-                },
-            }
+            return {"type": "ui_event", "payload": dict(event)}
         if event_type in {"subagent_started", "subagent_progress", "subagent_finished", "subagent_failed", "subagent_result_consumed"}:
             return {"type": event_type, "payload": self._slim_subagent_payload(event)}
         if event_type in {"tool_call", "tool_result"}:
             mapped_type = "tool_finished" if event_type == "tool_result" else "tool_started"
-            return {"type": mapped_type, "payload": self._externalize_large_text_payload(str(self.sessions_dir / str(session_id)), dict(event))}
-        if event_type in {"status", "process_metrics", "cache_stats", "validate_final"}:
+            return {
+                "type": mapped_type,
+                "payload": self._externalize_large_text_payload(
+                    str(self.event_log.session_dir(session_id)),
+                    dict(event),
+                ),
+            }
+        if event_type == "cache_stats":
+            payload = dict(event)
+            try:
+                provider_tokens = int(payload.get("input_tokens") or 0)
+            except (TypeError, ValueError):
+                provider_tokens = 0
+            if provider_tokens > 0:
+                payload["estimated"] = provider_tokens
+                payload["token_source"] = "provider_exact"
+                payload["source"] = "provider_usage"
+                payload["token_mode"] = str(
+                    payload.get("token_mode")
+                    or payload.get("context_token_mode")
+                    or "hybrid"
+                )
+                return {"type": "context_tokens", "payload": payload}
+            return {"type": "ui_event", "payload": payload}
+        if event_type in {"status", "process_metrics", "validate_final"}:
             return {"type": "ui_event", "payload": dict(event)}
-        return {"type": "ui_event", "payload": self._externalize_large_text_payload(str(self.sessions_dir / str(session_id)), dict(event))}
+        return {
+            "type": "ui_event",
+            "payload": self._externalize_large_text_payload(
+                str(self.event_log.session_dir(session_id)),
+                dict(event),
+            ),
+        }
 
     def _mirror_subagent_event(self, session_id: str, event: Dict[str, Any]) -> Optional[RuntimeEvent]:
         event_type = str((event or {}).get("type") or "")
@@ -147,7 +173,7 @@ class RuntimeMirror:
             return None
         try:
             sub_payload = self._externalize_large_text_payload(
-                str(self.sessions_dir / str(session_id) / "subagents" / agent_id),
+                str(self.subagents.agent_dir(session_id, agent_id)),
                 dict(event),
             )
             self.subagents.append_event(session_id, agent_id, event_type, sub_payload)
@@ -184,7 +210,7 @@ class RuntimeMirror:
         if base is None:
             sid = str(payload.get("session_id") or "").strip()
             if sid:
-                base = self.sessions_dir / sid
+                base = self.event_log.session_dir(sid)
         if base is None:
             return payload
         out = dict(payload)

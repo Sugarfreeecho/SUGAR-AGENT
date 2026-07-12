@@ -9,6 +9,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -100,7 +101,7 @@ def _wait_eval(cdp: Cdp, expression: str, timeout: float = 15.0) -> Any:
 
 
 def run(base_url: str) -> dict:
-    from runtime_v2 import RuntimeHistoryOps
+    from runtime_v2 import RuntimeHistoryOps, RuntimeSubagentStore
     from runtime_v2.config import runtime_version
 
     active_runtime = int(runtime_version())
@@ -117,6 +118,21 @@ def run(base_url: str) -> dict:
     for index in range(1, 9):
         ops.commit_user_turn(session_id, f"browser smoke question {index} " + ("x" * 120))
         ops.commit_assistant_final(session_id, f"browser smoke answer {index} " + ("y" * 240))
+    child_id = str(uuid.uuid4())
+    subagents = RuntimeSubagentStore(ROOT / "workspace" / "sessions")
+    subagents.upsert_task(session_id, child_id, {
+        "description": "browser smoke child",
+        "subagent_type": "explore",
+        "status": "completed",
+        "result_preview": "browser smoke child finished",
+    })
+    subagents.append_event(session_id, child_id, "model_user", {"content": "inspect smoke fixture"})
+    subagents.append_event(
+        session_id,
+        child_id,
+        "model_assistant",
+        {"content": "browser smoke child finished", "metadata": {"is_final": True}},
+    )
 
     debug_port = _free_port()
     profile_dir = Path(tempfile.mkdtemp(prefix="myagent-browser-smoke-"))
@@ -158,11 +174,87 @@ def run(base_url: str) -> dict:
               const smoke = window.__runtimeV2SmokeState = {
                 steerPosts: 0,
                 steerSeq: 0,
-                serverItems: []
+                serverItems: [],
+                uploadCalls: 0,
+                delayMessageCount: false,
+                chatPosts: 0,
+                branchStartedAt: 0,
+                branchElapsedMs: 0,
+                branchSessionId: '',
+                branchRequestUrl: '',
+                branchStatus: 0,
+                branchPayload: '',
+                measureReconnect: false,
+                reconnectGets: 0,
+                fakeChat: false,
+                truncatePosts: 0,
+                truncateStatus: 0,
+                truncatePayload: ''
               };
               const nativeFetch = window.fetch.bind(window);
               window.fetch = function(input, init) {
                 const url = String(typeof input === 'string' ? input : ((input && input.url) || ''));
+                if (url.indexOf('/api/upload-chat-files') >= 0) {
+                  smoke.uploadCalls += 1;
+                  const body = init && init.body;
+                  const files = body && typeof body.getAll === 'function' ? body.getAll('files') : [];
+                  return Promise.resolve(new Response(JSON.stringify({
+                    ok: true,
+                    files: files.map((file, index) => ({
+                      name: String(file && file.name || ('clipboard-' + index + '.bin')),
+                      path: '/workspace/uploads/chat/smoke/' + String(file && file.name || ('clipboard-' + index + '.bin')),
+                      rel: 'uploads/chat/smoke/' + String(file && file.name || ('clipboard-' + index + '.bin')),
+                      size: Number(file && file.size || 0)
+                    }))
+                  }), {status: 200, headers: {'Content-Type': 'application/json'}}));
+                }
+                if (smoke.delayMessageCount && url.indexOf('/sessions/' + encodeURIComponent(sid) + '/messages/count') >= 0) {
+                  return new Promise(resolve => setTimeout(() => resolve(new Response(
+                    JSON.stringify({count: 16}),
+                    {status: 200, headers: {'Content-Type': 'application/json'}}
+                  )), 650));
+                }
+                if (/\/sessions\/[^/]+\/truncate(?:\?|$)/.test(url)
+                    && String((init && init.method) || 'GET').toUpperCase() === 'POST') {
+                  smoke.truncatePosts += 1;
+                  return nativeFetch(input, init).then(response => {
+                    smoke.truncateStatus = Number(response.status || 0);
+                    response.clone().text().then(text => {
+                      smoke.truncatePayload = String(text || '');
+                    }).catch(() => {});
+                    return response;
+                  });
+                }
+                if (url.endsWith('/chat') && String((init && init.method) || 'GET').toUpperCase() === 'POST') {
+                  smoke.chatPosts += 1;
+                  if (smoke.fakeChat) {
+                    return Promise.resolve(new Response('data: [DONE]\n\n', {
+                      status: 200,
+                      headers: {'Content-Type': 'text/event-stream; charset=utf-8'}
+                    }));
+                  }
+                }
+                if (smoke.measureReconnect
+                    && url.endsWith('/sessions/' + encodeURIComponent(sid))
+                    && String((init && init.method) || 'GET').toUpperCase() === 'GET') {
+                  smoke.reconnectGets += 1;
+                }
+                if (/\/sessions\/[^/]+\/branch(?:\?|$)/.test(url)
+                    && String((init && init.method) || 'GET').toUpperCase() === 'POST') {
+                  smoke.branchStartedAt = performance.now();
+                  smoke.branchRequestUrl = url;
+                  return nativeFetch(input, init).then(response => {
+                    smoke.branchElapsedMs = performance.now() - smoke.branchStartedAt;
+                    smoke.branchStatus = Number(response.status || 0);
+                    response.clone().text().then(text => {
+                      smoke.branchPayload = String(text || '');
+                      let payload = null;
+                      try { payload = JSON.parse(smoke.branchPayload); } catch (_e) {}
+                      smoke.branchSessionId = String((payload && payload.session_id) || '');
+                    }).catch(() => {});
+                    return response;
+                  });
+                }
                 const target = '/sessions/' + encodeURIComponent(sid) + '/steer';
                 if (url.indexOf(target) >= 0) {
                   const method = String((init && init.method) || (input && input.method) || 'GET').toUpperCase();
@@ -218,6 +310,8 @@ def run(base_url: str) -> dict:
                         status: String(item.status || ''),
                         steerId: String(item.steerId || '')
                       })),
+                      expireCount: sid => uiEventCountCache.cache.delete(sid),
+                      clearStopSuppression: sid => clearSessionStreamStopSuppress(sid),
                       setFakeRun: sid => setSessionRunState(sid, {runId: 'browser-fake-run', ctx: {}}),
                       enqueueByEnter: text => {
                         messageInput.value = String(text || '');
@@ -233,7 +327,8 @@ def run(base_url: str) -> dict:
                       syncFollowups: sid => syncFollowupQueueFromServer(sid),
                       consumeSteer: (sid, steerId) => removeConsumedFollowupSteer(sid, {
                         steer: true, steer_id: steerId
-                      })
+                      }),
+                      currentSessionId: () => String(currentSessionId || '')
                     };
                     //# sourceURL=myagent-ui.js`
                   );
@@ -248,7 +343,7 @@ def run(base_url: str) -> dict:
         """.replace("__SESSION_ID__", json.dumps(session_id))
         cdp.call("Page.addScriptToEvaluateOnNewDocument", {"source": smoke_bootstrap})
         cdp.call("Page.navigate", {"url": base_url + "/"})
-        _wait_eval(cdp, "document.readyState === 'complete'")
+        _wait_eval(cdp, "document.readyState === 'complete'", timeout=30)
         loaded = _wait_eval(cdp, """
             (() => {
               const users = document.querySelectorAll('.msg-wrap--user').length;
@@ -264,6 +359,20 @@ def run(base_url: str) -> dict:
         """, await_promise=True)
         if not snapshot.get("ok") or snapshot.get("source") != "runtime_v2_snapshot":
             raise AssertionError(f"unexpected snapshot response: {snapshot}")
+        _wait_eval(cdp, "!document.getElementById('subagent-toggle-btn').classList.contains('hidden')")
+        cdp.evaluate("document.getElementById('subagent-toggle-btn').click()")
+        _wait_eval(
+            cdp,
+            f"!!document.querySelector('.subagent-grid-card[data-agent-id={json.dumps(child_id)}]')",
+        )
+        cdp.evaluate("""
+            window.__runtimeV2SmokeState.reconnectGets = 0;
+            window.__runtimeV2SmokeState.measureReconnect = true;
+            window.dispatchEvent(new Event('online'));
+        """)
+        _wait_eval(cdp, "window.__runtimeV2SmokeState.reconnectGets >= 1")
+        reconnect_gets = int(cdp.evaluate("window.__runtimeV2SmokeState.reconnectGets") or 0)
+        cdp.evaluate("window.__runtimeV2SmokeState.measureReconnect = false")
         before_metrics = cdp.evaluate("""
             (() => { const x=document.getElementById('chat-container'); return {
               scrollTop:x.scrollTop, scrollHeight:x.scrollHeight, clientHeight:x.clientHeight
@@ -278,11 +387,60 @@ def run(base_url: str) -> dict:
         if int(after_toc_scroll or 0) >= before_scroll:
             raise AssertionError("TOC click did not scroll toward the selected earlier turn")
         cdp.call("Page.reload", {"ignoreCache": False})
-        _wait_eval(cdp, "document.readyState === 'complete'")
+        _wait_eval(cdp, "document.readyState === 'complete'", timeout=30)
         restored = _wait_eval(cdp, "document.querySelectorAll('.msg-wrap--user').length >= 5")
         if not restored:
             raise AssertionError("history did not recover after refresh")
         _wait_eval(cdp, "!!window.__runtimeV2SmokeHooks")
+
+        paste_result = cdp.evaluate(r"""
+            (() => {
+              const input = document.getElementById('message-input');
+              input.value = '';
+              const transfer = new DataTransfer();
+              transfer.items.add(new File(['clipboard text'], 'clipboard-note.txt', {type:'text/plain'}));
+              transfer.items.add(new File([new Uint8Array([137,80,78,71])], 'clipboard-image.png', {type:'image/png'}));
+              const event = new Event('paste', {bubbles:true, cancelable:true});
+              Object.defineProperty(event, 'clipboardData', {value: transfer});
+              input.dispatchEvent(event);
+              return {defaultPrevented:event.defaultPrevented};
+            })()
+        """)
+        _wait_eval(cdp, "window.__runtimeV2SmokeState.uploadCalls === 1")
+        pasted_value = str(_wait_eval(cdp, """
+            (() => {
+              const value = document.getElementById('message-input').value;
+              return value.includes('clipboard-note.txt') && value.includes('clipboard-image.png') ? value : '';
+            })()
+        """))
+        if not paste_result.get("defaultPrevented") or not pasted_value:
+            raise AssertionError(f"clipboard files were not converted to input paths: {paste_result} {pasted_value!r}")
+
+        optimistic = cdp.evaluate(f"""
+            (() => {{
+              const sid = {json.dumps(session_id)};
+              const input = document.getElementById('message-input');
+              input.value = 'optimistic button smoke';
+              input.dispatchEvent(new Event('input', {{bubbles:true}}));
+              window.__runtimeV2SmokeHooks.expireCount(sid);
+              window.__runtimeV2SmokeState.delayMessageCount = true;
+              document.getElementById('send-btn').click();
+              const button = document.getElementById('send-btn');
+              return {{text:button.textContent, isStop:button.classList.contains('is-stop')}};
+            }})()
+        """)
+        if not optimistic.get("isStop") or "停止" not in str(optimistic.get("text") or ""):
+            raise AssertionError(f"send button did not update optimistically: {optimistic}")
+        cdp.evaluate("document.getElementById('send-btn').click()")
+        time.sleep(0.8)
+        stopped_button = cdp.evaluate("document.getElementById('send-btn').textContent")
+        chat_posts = int(cdp.evaluate("window.__runtimeV2SmokeState.chatPosts") or 0)
+        if "发送" not in str(stopped_button or "") or chat_posts != 0:
+            raise AssertionError(
+                f"stopping optimistic preflight failed: button={stopped_button!r} chat_posts={chat_posts}"
+            )
+        cdp.evaluate(f"window.__runtimeV2SmokeHooks.clearStopSuppression({json.dumps(session_id)})")
+        cdp.evaluate("document.getElementById('message-input').value = ''")
 
         # A follow-up entered during an active run must remain pending across
         # timers, refresh/server sync and run completion.  Only the row's
@@ -332,6 +490,100 @@ def run(base_url: str) -> dict:
             raise AssertionError("consuming the first follow-up auto-sent the next pending item")
         cdp.evaluate("document.querySelector('#followup-queue-panel .followup-queue-send').click()")
         _wait_eval(cdp, "window.__runtimeV2SmokeState.steerPosts === 2")
+
+        # Exercise the real toolbar + confirmation + server branch route and
+        # wait for the UI to switch to the materialized V2 branch.  This is the
+        # user-visible path that previously timed out even though the branch
+        # appeared later.
+        branch_click = cdp.evaluate(r"""
+            (() => {
+              const buttons = Array.from(document.querySelectorAll('#chat-container [data-act="branch"]'));
+              if (!buttons.length) return false;
+              buttons[0].click();
+              return true;
+            })()
+        """)
+        if not branch_click:
+            raise AssertionError("no visible branch toolbar button")
+        _wait_eval(cdp, "document.getElementById('ui-modal-root').classList.contains('is-open')")
+        cdp.evaluate("document.getElementById('ui-modal-ok').click()")
+        try:
+            branch_session_id = str(_wait_eval(
+                cdp,
+                "window.__runtimeV2SmokeState.branchSessionId || ''",
+                timeout=12,
+            ))
+        except RuntimeError as exc:
+            branch_debug = cdp.evaluate("({"
+                "startedAt: window.__runtimeV2SmokeState.branchStartedAt,"
+                "elapsedMs: window.__runtimeV2SmokeState.branchElapsedMs,"
+                "requestUrl: window.__runtimeV2SmokeState.branchRequestUrl,"
+                "status: window.__runtimeV2SmokeState.branchStatus,"
+                "payload: window.__runtimeV2SmokeState.branchPayload,"
+                "modalOpen: document.getElementById('ui-modal-root').classList.contains('is-open')"
+                "})")
+            raise AssertionError(f"browser branch did not return a session id: {branch_debug}") from exc
+        _wait_eval(
+            cdp,
+            "window.__runtimeV2SmokeHooks.currentSessionId() === window.__runtimeV2SmokeState.branchSessionId",
+            timeout=12,
+        )
+        _wait_eval(cdp, "document.querySelectorAll('.msg-wrap--user').length >= 1", timeout=12)
+        branch_elapsed_ms = float(cdp.evaluate("window.__runtimeV2SmokeState.branchElapsedMs") or 0)
+        if not branch_session_id or branch_elapsed_ms <= 0 or branch_elapsed_ms >= 10000:
+            raise AssertionError(
+                f"browser branch exceeded 10s or returned no session: id={branch_session_id!r} elapsed={branch_elapsed_ms:.1f}ms"
+            )
+
+        # Run the inline rewrite interaction through its real truncate and
+        # optimistic-send pipeline.  The model stream itself is replaced by a
+        # deterministic terminal SSE because this smoke must not require API
+        # credentials; Runtime V2 history-op tests verify the persisted model
+        # and token checkpoints independently.
+        _wait_eval(
+            cdp,
+            "document.querySelectorAll('#chat-container [data-act=\"rewrite\"]').length > 0",
+            timeout=12,
+        )
+        rewrite_opened = cdp.evaluate(r"""
+            (() => {
+              const buttons = Array.from(document.querySelectorAll('#chat-container [data-act="rewrite"]'));
+              if (!buttons.length) return false;
+              buttons[buttons.length - 1].click();
+              return true;
+            })()
+        """)
+        if not rewrite_opened:
+            raise AssertionError("no visible rewrite toolbar button in branch")
+        _wait_eval(cdp, "!!document.querySelector('.user-inline-rewrite-input')")
+        rewrite_optimistic = cdp.evaluate(r"""
+            (() => {
+              window.__runtimeV2SmokeState.fakeChat = true;
+              const input = document.querySelector('.user-inline-rewrite-input');
+              input.value = 'rewritten browser smoke question';
+              input.dispatchEvent(new Event('input', {bubbles:true}));
+              document.querySelector('.user-inline-rewrite-btn--primary').click();
+              const send = document.getElementById('send-btn');
+              return {isStop:send.classList.contains('is-stop'), text:String(send.textContent || '')};
+            })()
+        """)
+        if not rewrite_optimistic.get("isStop"):
+            raise AssertionError(f"inline rewrite did not enter optimistic stop state in the click frame: {rewrite_optimistic}")
+        _wait_eval(cdp, "window.__runtimeV2SmokeState.truncatePosts >= 1", timeout=12)
+        _wait_eval(cdp, "window.__runtimeV2SmokeState.truncateStatus >= 1", timeout=12)
+        truncate_result = cdp.evaluate("({status:window.__runtimeV2SmokeState.truncateStatus,payload:window.__runtimeV2SmokeState.truncatePayload})")
+        if int((truncate_result or {}).get("status") or 0) != 200:
+            raise AssertionError(f"browser rewrite truncate failed: {truncate_result}")
+        try:
+            _wait_eval(cdp, "window.__runtimeV2SmokeState.chatPosts >= 1", timeout=12)
+        except RuntimeError as exc:
+            rewrite_state = cdp.evaluate("({truncate:window.__runtimeV2SmokeState.truncatePayload,button:document.getElementById('send-btn').textContent,input:document.getElementById('message-input').value})")
+            raise AssertionError(f"browser rewrite did not reach optimistic chat: {rewrite_state}") from exc
+        _wait_eval(cdp, "!document.getElementById('send-btn').classList.contains('is-stop')", timeout=12)
+        _wait_eval(cdp, """
+            Array.from(document.querySelectorAll('.msg-wrap--user .message.user'))
+              .some(node => String(node.innerText || '').includes('rewritten browser smoke question'))
+        """, timeout=12)
         return {
             "ok": True,
             "runtime_version": active_runtime,
@@ -341,12 +593,38 @@ def run(base_url: str) -> dict:
             "toc_scroll_before": before_scroll,
             "toc_scroll_after": after_toc_scroll,
             "refresh_recovered": True,
+            "reconnect": {
+                "session_refresh_requests": reconnect_gets,
+            },
+            "subagent": {
+                "agent_id": child_id,
+                "card_rendered": True,
+            },
+            "clipboard_paste": {
+                "upload_calls": 1,
+                "paths_inserted": 2,
+            },
+            "optimistic_send_button": {
+                "immediate_stop_state": True,
+                "preflight_stop_prevented_chat": True,
+            },
             "followup_queue": {
                 "queued_before_refresh": len(queued_before_refresh or []),
                 "posts_before_click": posts_after_restore_and_finish,
                 "posts_after_first_click": 1,
                 "next_item_waited": True,
                 "posts_after_second_click": 2,
+            },
+            "branch": {
+                "session_id": branch_session_id,
+                "elapsed_ms": round(branch_elapsed_ms, 1),
+                "switched": True,
+            },
+            "rewrite": {
+                "truncate_posts": 1,
+                "optimistic_chat_posts": 1,
+                "immediate_stop_state": True,
+                "rendered": True,
             },
         }
     finally:
@@ -363,6 +641,11 @@ def run(base_url: str) -> dict:
         shutil.rmtree(profile_dir, ignore_errors=True)
         try:
             requests.delete(base_url + f"/sessions/{session_id}", timeout=15)
+        except Exception:
+            pass
+        try:
+            if 'branch_session_id' in locals() and branch_session_id:
+                requests.delete(base_url + f"/sessions/{branch_session_id}", timeout=15)
         except Exception:
             pass
 

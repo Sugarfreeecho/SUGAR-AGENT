@@ -767,6 +767,13 @@ body {
     margin-bottom: 0.25rem; padding: 0 0.15rem;
     display: flex; justify-content: space-between; align-items: center;
 }
+.chat-goal-card { margin: 0 0.1rem 0.4rem; padding: 0.4rem; border: 1px solid rgba(137,180,250,0.28); border-radius: 7px; background: rgba(137,180,250,0.1); }
+.chat-goal-heading { display:flex; justify-content:space-between; font-size:0.58rem; font-weight:700; color:var(--accent-2); letter-spacing:0.06em; }
+.chat-goal-objective { margin-top:0.28rem; font-size:0.68rem; line-height:1.4; color:var(--text-primary); overflow-wrap:anywhere; }
+.chat-goal-meta { margin-top:0.25rem; font-size:0.58rem; color:var(--text-tertiary); font-variant-numeric:tabular-nums; }
+.chat-goal-actions { display:flex; gap:0.2rem; margin-top:0.32rem; }
+.chat-goal-actions button { flex:1; padding:0.18rem 0.12rem; border:1px solid var(--border-glass); border-radius:4px; background:var(--surface-glass2); color:var(--text-secondary); font-size:0.58rem; cursor:pointer; }
+.chat-goal-actions button:hover { color:var(--text-primary); border-color:var(--accent-2); }
 .chat-todo-plan-close {
     display: inline-flex; align-items: center; justify-content: center;
     width: 16px; height: 16px; padding: 0;

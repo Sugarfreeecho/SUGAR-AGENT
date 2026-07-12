@@ -401,3 +401,13 @@ npm run install:hooks
 ## 反馈与支持
 
 如果你在使用中遇到问题，欢迎直接到 GitHub 提交 Issue 反馈。
+# Durable Goal mode
+
+MyAgent supports one durable active Goal per session. The model can create, inspect, and finish a Goal with
+`create_goal`, `get_goal`, and `update_goal`; active Goals reuse the existing continuation channel after a run
+ends. Goal state, token usage, elapsed active time, and terminal status are persisted in the Runtime V2 event
+log and snapshot. The web UI exposes pause, resume, and cancel controls.
+
+Set `GOAL_ENABLED=0` (also accepts `false`, `no`, or `off`) before starting MyAgent to disable the feature.
+The default is enabled. When disabled, Goal tools are omitted from the model tool list, Goal auto-continuation
+is inactive, and Goal control endpoints reject mutations. Restart MyAgent after changing the variable.

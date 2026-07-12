@@ -1,5 +1,22 @@
 # Runtime V2 问题收敛执行步骤计划
 
+## 执行状态（2026-07-12）
+
+七个阶段的代码收敛、显式数据修复、全量回归和发布门禁均已完成：
+
+| 阶段 | 状态 | 验收证据 |
+|---|---|---|
+| 1. 工具过程保护 | 完成 | V2 history-op 与 reconcile 回归覆盖 model/tool 边界 |
+| 2. no-legacy 硬边界 | 完成 | 新会话、发送/继续、goal、steer、分支/截断、nested subagent 均有 fail-fast guard |
+| 3. model projection 纯化 | 完成 | 每个 LLM 边界重新解析模型；V2 不读取或回填 `llm_history.json` |
+| 4. UI/snapshot 纯化 | 完成 | 首屏正文、count、TOC、token 来自同一 V2 snapshot/projection；保留分页与缓存 |
+| 5. history-op/repair 原生化 | 完成 | 分支继承 model/context/todo/token，典型大会话 `<10s`；repair 仅显式执行且带备份/校验 |
+| 6. 性能与可观测性 | 完成 | projection/user_turns/MCP/subagent-filter/token cache，以及 open/pre-API/branch timing |
+| 7. migration/export | 完成 | 独立显式 service，带 manifest、校验、失败回滚；正常打开不触发 migration/export |
+
+下文保留原始分阶段步骤作为实施记录。其“继续执行”“仍存在”等措辞若与本状态表冲突，
+以本状态表、`runtime_v2_design.md` 和 `runtime_v2_closure_status.md` 的最新边界为准。
+
 ## 目标
 
 同时解决三类问题：
@@ -138,10 +155,10 @@
 - V2 持久化不再写 `work_messages.json`。
 - pre API timing 已记录主要阶段耗时。
 
-仍存在：
+已关闭的旧缺口：
 
-- RuntimeModelProjection 缺失时仍可能 fallback `llm_history.json`。
-- continuation 中 projection 缺失时仍可能调用 legacy reconcile。
+- RuntimeModelProjection 缺失时不再 fallback `llm_history.json`。
+- continuation 不再调用 legacy reconcile；缺失/损坏会显式失败或要求显式 migration。
 
 ### 执行步骤
 
@@ -161,7 +178,7 @@
    只在以下场景调用：
 
    - 用户主动迁移。
-   - 打开旧会话时后台迁移。
+   - 用户或管理员显式触发迁移（普通打开旧会话不会后台迁移）。
    - 管理命令/维护脚本。
 
 3. continuation 路径调整：
@@ -360,9 +377,9 @@
 - 未迁移旧会话不能静默进入 V2 运行。
 - migration 失败不会污染 V2 event log。
 
-## 建议当前马上做的第一批改动
+## 第一批改动的收敛结果
 
-优先做这 5 项：
+以下 5 项均已完成并纳入持续回归：
 
 1. 给 V2 正常路径加 no-legacy guard 测试。
 2. 禁止 V2 下 legacy truncate/branch/repair 反写 V2 model history。
@@ -370,7 +387,7 @@
 4. 修改 V2 model history load，移除自动 fallback legacy。
 5. UI messages/count 读取统一到 RuntimeUiProjection，同一请求返回正文 + TOC 所需索引。
 
-这 5 项完成后，三个问题会一起收敛：
+完成后的结果：
 
 - API 前少读大 legacy 文件。
 - V1/V2 边界开始变硬。
@@ -395,4 +412,3 @@ python scripts\check_frontend_dist_sync.py
 ```
 
 UI raw module 语法检查如有前端 raw JS 改动，也必须执行。
-

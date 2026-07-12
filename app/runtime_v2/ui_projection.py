@@ -144,7 +144,10 @@ class RuntimeUiProjection:
         """Replace visible V2 history from UI-shaped events without reading or writing legacy files."""
         from .history_ops import RuntimeHistoryOps
 
-        RuntimeHistoryOps(self.sessions_dir).truncate_ui_history(session_id, 0, reason=reason)
+        RuntimeHistoryOps(
+            self.sessions_dir,
+            path_resolver=self._path_resolver,
+        ).truncate_ui_history(session_id, 0, reason=reason)
         mirror = RuntimeMirror(self.sessions_dir, path_resolver=self._path_resolver)
         count = 0
         for event in ui_events or []:
@@ -749,6 +752,12 @@ class RuntimeUiProjection:
         if event.type == "todo_updated":
             data = dict(payload)
             data["type"] = data.get("type") or "todo_plan"
+            data.setdefault("created_at", event.timestamp)
+            return data
+        if event.type.startswith("goal_"):
+            data = dict(payload)
+            data["type"] = "goal_state"
+            data["goal_event"] = event.type
             data.setdefault("created_at", event.timestamp)
             return data
         if event.type == "context_tokens":
