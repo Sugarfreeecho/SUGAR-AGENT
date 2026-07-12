@@ -36,6 +36,7 @@ CORE_EVENT_TYPES = {
     "context_summary_started",
     "context_summary_finished",
     "todo_updated",
+    "ui_event",
     "legacy_ui_event",
     "message_deleted",
     "message_rewritten",

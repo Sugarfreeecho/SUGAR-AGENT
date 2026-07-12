@@ -45,7 +45,195 @@ def test_steer_inbox_is_persistent_and_client_idempotent(monkeypatch, tmp_path):
     assert [row["content"] for row in recovered] == ["follow up"]
     assert (tmp_path / "s1" / "steer_inbox.json").is_file()
     agent_loop.remove_session_steer("s1", client_id="client-1")
-    assert not (tmp_path / "s1" / "steer_inbox.json").exists()
+    cancelled = agent_loop.get_session_steer("s1", client_id="client-1")
+    assert cancelled["item"]["state"] == "cancelled"
+
+
+def test_steer_state_machine_claim_ack_and_cancel_fencing(monkeypatch, tmp_path):
+    import agent_loop
+
+    class _SessionManager:
+        sessions_dir = tmp_path
+
+    monkeypatch.setattr(agent_loop, "session_manager", _SessionManager())
+    agent_loop._STEER_QUEUES.clear()
+    agent_loop._STEER_QUEUE_SIGNATURES.clear()
+
+    queued = agent_loop.enqueue_session_steer(
+        "s-state", "follow up", client_id="client-state", source_run_id="run-old"
+    )["item"]
+    steer_id = queued["id"]
+    claimed = agent_loop._claim_session_steers("s-state", "run-old")
+    assert [row["id"] for row in claimed] == [steer_id]
+    assert agent_loop.get_session_steer("s-state", steer_id=steer_id)["item"]["state"] == "claimed"
+
+    cancelled = agent_loop.remove_session_steer("s-state", steer_id=steer_id)
+    assert cancelled == {"ok": False, "error": "steer already claimed or not pending"}
+
+    consumed = agent_loop.transition_session_steer(
+        "s-state", steer_id, {"claimed"}, "consumed", consumed_by="run-old"
+    )
+    assert consumed["ok"] is True
+    assert consumed["item"]["state"] == "consumed"
+    assert agent_loop._pop_session_steers("s-state") == []
+
+    duplicate = agent_loop.enqueue_session_steer(
+        "s-state", "follow up", client_id="client-state", source_run_id="run-old"
+    )
+    assert duplicate["deduplicated"] is True
+    assert duplicate["item"]["id"] == steer_id
+    assert duplicate["item"]["state"] == "consumed"
+
+
+def test_replacement_run_fences_late_old_run_events():
+    import agent_loop
+
+    old = agent_loop._register_steer_run_control("s-fence", "run-old")
+    state = {
+        "session_id": "s-fence",
+        "_runtime_v2_run_id": "run-old",
+        "_steer_control": old,
+        "stream_events": [],
+    }
+    new = agent_loop._register_steer_run_control("s-fence", "run-new")
+    emitted = []
+
+    async def emit(event):
+        emitted.append(event)
+
+    asyncio.run(agent_loop._push_stream_event(state, {"type": "final", "content": "late"}, emit=emit))
+    assert state["stream_events"] == []
+    assert emitted == []
+    agent_loop._clear_steer_run_control("s-fence", new)
+
+
+def test_cross_process_fence_file_blocks_local_late_writer(monkeypatch, tmp_path):
+    import json
+    import agent_loop
+
+    class _SessionManager:
+        sessions_dir = tmp_path
+
+    monkeypatch.setattr(agent_loop, "session_manager", _SessionManager())
+    control = agent_loop._register_steer_run_control("s-cross", "run-local")
+    state = {"session_id": "s-cross", "_runtime_v2_run_id": "run-local", "_steer_control": control}
+    fence_path = tmp_path / "s-cross" / "active_run_fence.json"
+    fence_path.write_text(json.dumps({"run_id": "run-remote", "token": "remote-token"}), encoding="utf-8")
+
+    assert agent_loop._state_run_has_write_fence(state) is False
+    agent_loop._clear_steer_run_control("s-cross", control)
+
+
+def test_twenty_consecutive_steers_replan_without_recursive_react(monkeypatch):
+    import agent_loop
+
+    calls = 0
+
+    async def run_once(state, emit=None):
+        nonlocal calls
+        calls += 1
+        if calls <= 20:
+            raise agent_loop._SteerRestartRequested()
+        state["done"] = True
+        return state
+
+    async def consume(state, emit=None):
+        return True
+
+    monkeypatch.setattr(agent_loop, "_react_node_once", run_once)
+    monkeypatch.setattr(agent_loop, "_consume_steer_messages", consume)
+    monkeypatch.setattr(agent_loop, "_rollback_steer_partial_turn", lambda state: None)
+    monkeypatch.setattr(agent_loop, "_reset_steer_control", lambda state: None)
+    state = {"session_id": "s-many", "stream_events": []}
+
+    result = asyncio.run(agent_loop.react_node(state))
+    assert result["done"] is True
+    assert calls == 21
+
+
+def test_crash_after_user_turn_commit_replay_is_idempotent(monkeypatch, tmp_path):
+    import agent_loop
+    from langchain_core.messages import HumanMessage
+    from runtime_v2 import RuntimeModelProjection
+
+    class _SessionManager:
+        sessions_dir = tmp_path
+
+        def _apply_appended_ui_event_side_effects(self, session_id, event):
+            pass
+
+    monkeypatch.setattr(agent_loop, "session_manager", _SessionManager())
+    monkeypatch.setattr(agent_loop, "_runtime_v2_is_primary", lambda: True)
+    state = {"session_id": "s-crash", "_runtime_v2_run_id": "run-1"}
+    message = HumanMessage(content="durable followup")
+
+    assert agent_loop._runtime_v2_commit_user_turn(
+        state, message, ui_content="durable followup", ui_type="user_steer", operation_id="steer-op"
+    ) is True
+    assert state["_last_user_turn_was_deduplicated"] is False
+
+    # Simulate process loss after the atomic commit but before inbox ack.
+    replay_state = {"session_id": "s-crash", "_runtime_v2_run_id": "run-2"}
+    assert agent_loop._runtime_v2_commit_user_turn(
+        replay_state, message, ui_content="durable followup", ui_type="user_steer", operation_id="steer-op"
+    ) is True
+    assert replay_state["_last_user_turn_was_deduplicated"] is True
+    projected = RuntimeModelProjection(tmp_path).read_message_dicts("s-crash")
+    assert [row["content"] for row in projected if row.get("type") in {"human", "user"}] == ["durable followup"]
+
+
+def test_claim_cancel_race_has_single_winner(monkeypatch, tmp_path):
+    from concurrent.futures import ThreadPoolExecutor
+    import threading
+    import agent_loop
+
+    class _SessionManager:
+        sessions_dir = tmp_path
+
+    monkeypatch.setattr(agent_loop, "session_manager", _SessionManager())
+    agent_loop._STEER_QUEUES.clear()
+    agent_loop._STEER_QUEUE_SIGNATURES.clear()
+    steer_id = agent_loop.enqueue_session_steer("s-race", "race", client_id="race-client")["item"]["id"]
+    barrier = threading.Barrier(2)
+
+    def claim():
+        barrier.wait()
+        return agent_loop._claim_session_steers("s-race", "run-race")
+
+    def cancel():
+        barrier.wait()
+        return agent_loop.remove_session_steer("s-race", steer_id=steer_id)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        claimed_future = pool.submit(claim)
+        cancelled_future = pool.submit(cancel)
+        claimed = claimed_future.result()
+        cancelled = cancelled_future.result()
+
+    final_state = agent_loop.get_session_steer("s-race", steer_id=steer_id)["item"]["state"]
+    assert (bool(claimed), bool(cancelled.get("ok"))) in {(True, False), (False, True)}
+    assert final_state in {"claimed", "cancelled"}
+
+
+def test_deferred_write_tool_wait_preserves_result_before_steer(monkeypatch):
+    import agent_loop
+
+    checks = 0
+
+    async def check(state, emit, stage):
+        nonlocal checks
+        checks += 1
+
+    async def irreversible_write():
+        await asyncio.sleep(0)
+        return {"type": "tool", "result": "written"}
+
+    monkeypatch.setattr(agent_loop, "_raise_if_steer_requested", check)
+    result = asyncio.run(agent_loop._await_steerable(
+        {"session_id": "s-write"}, irreversible_write(), None, "tool", defer_steer=True
+    ))
+    assert result["result"] == "written"
+    assert checks == 1
 
 
 def test_steer_trim_keeps_completed_prefix_and_assistant_text():
@@ -159,6 +347,19 @@ def test_runtime_v2_context_token_compute_uses_projection_not_legacy(monkeypatch
     assert captured["session_id"] == "s1"
     assert captured["messages"][0].content == "hello"
     assert captured["key_context"] == "summary"
+
+
+def test_react_resolves_model_config_at_each_llm_boundary():
+    source = (APP_DIR / "agent_loop.py").read_text(encoding="utf-8")
+    react_source = source.split("async def _react_node_once", 1)[1].split(
+        "async def react_node", 1
+    )[0]
+    loop_source = react_source.split("while iter_count < max_react_iter:", 1)[1]
+
+    assert 'resolve_executor_config_for_session(state["session_id"])' in loop_source
+    assert "run_executor_config" not in react_source
+    assert "resolve_model_config_reuse" not in react_source
+    assert '_pre_api_timing_mark(pre_api_timings, "resolve_model_config"' in loop_source
 
 
 def test_runtime_v2_run_key_context_uses_snapshot_not_legacy(monkeypatch):

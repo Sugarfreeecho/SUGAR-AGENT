@@ -12,29 +12,28 @@ def test_effective_idle_excludes_detected_suspend(monkeypatch):
     assert monitor.effective_idle_seconds() == pytest.approx(5.0)
 
 
-def test_monitor_reports_scheduler_gap(monkeypatch):
-    samples = iter([10.0, 10.0, 10.5])
+def test_monitor_classifies_process_suspension_without_sleep_clock_gap():
     monitor = runtime_power.RuntimeSuspensionMonitor(
-        interval_seconds=0.01,
-        threshold_seconds=0.02,
-        clock=lambda: next(samples),
+        interval_seconds=2,
+        threshold_seconds=15,
     )
-    seen = []
+    event = monitor._classify_gap(20.0, 20.0, 30.0)
+    assert event is not None
+    assert event.cause == "process_suspended"
+    assert event.suspended_seconds == pytest.approx(18.0)
 
-    async def fake_wait_for(_awaitable, timeout):
-        _awaitable.close()
-        raise asyncio.TimeoutError
 
-    monkeypatch.setattr(runtime_power.asyncio, "wait_for", fake_wait_for)
+def test_monitor_classifies_windows_sleep_from_excluded_uptime():
+    monitor = runtime_power.RuntimeSuspensionMonitor(interval_seconds=2, threshold_seconds=15)
+    event = monitor._classify_gap(22.0, 2.0, 30.0)
+    assert event is not None
+    assert event.cause == "system_sleep"
+    assert event.suspended_seconds == pytest.approx(20.0)
 
-    async def on_resume(event):
-        seen.append(event)
-        monitor.stop()
 
-    asyncio.run(monitor.run(on_resume))
-    assert len(seen) == 1
-    assert seen[0].gap_seconds == pytest.approx(0.5)
-    assert seen[0].suspended_seconds == pytest.approx(0.45)
+def test_monitor_ignores_normal_watchdog_ticks():
+    monitor = runtime_power.RuntimeSuspensionMonitor(interval_seconds=2, threshold_seconds=15)
+    assert monitor._classify_gap(2.5, 2.5, 30.0) is None
 
 
 def test_sleep_inhibitor_is_noop_off_windows(monkeypatch):

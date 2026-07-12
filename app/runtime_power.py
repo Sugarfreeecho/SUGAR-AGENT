@@ -4,6 +4,8 @@ import asyncio
 import ctypes
 import logging
 import os
+import queue
+import threading
 import time
 from dataclasses import dataclass
 from typing import Awaitable, Callable, Optional
@@ -131,25 +133,53 @@ class RuntimeResume:
     expected_interval_seconds: float
     suspended_seconds: float
     detected_monotonic: float
+    cause: str = "process_suspended"
+
+
+def _windows_unbiased_seconds() -> Optional[float]:
+    """Return Windows uptime excluding sleep, or None when unavailable."""
+    if os.name != "nt":
+        return None
+    try:
+        value = ctypes.c_ulonglong()
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        query = kernel32.QueryUnbiasedInterruptTime
+        query.argtypes = [ctypes.POINTER(ctypes.c_ulonglong)]
+        query.restype = ctypes.c_bool
+        if not query(ctypes.byref(value)):
+            return None
+        return float(value.value) / 10_000_000.0
+    except Exception:
+        logger.debug("QueryUnbiasedInterruptTime unavailable", exc_info=True)
+        return None
 
 
 class RuntimeSuspensionMonitor:
-    """Detect event-loop scheduling gaps caused by sleep or process suspension."""
+    """Detect system sleep/process suspension without treating loop stalls as sleep.
+
+    Sampling happens on a dedicated native thread.  A synchronous tool may block
+    asyncio for a long time, but the watchdog keeps ticking and therefore does not
+    produce a false resume event.
+    """
 
     def __init__(
         self,
         interval_seconds: float = 2.0,
         threshold_seconds: float = 15.0,
         clock: Callable[[], float] = time.monotonic,
+        unbiased_clock: Optional[Callable[[], Optional[float]]] = _windows_unbiased_seconds,
     ):
         self.interval_seconds = max(0.05, float(interval_seconds))
         self.threshold_seconds = max(self.interval_seconds * 2.0, float(threshold_seconds))
         self._clock = clock
+        self._unbiased_clock = unbiased_clock
         self.accumulated_suspend_seconds = 0.0
         self._suspend_since_progress_seconds = 0.0
         self.last_progress_monotonic = self._clock()
         self._last_tick = self.last_progress_monotonic
         self._stop = asyncio.Event()
+        self._thread_stop = threading.Event()
+        self._thread: Optional[threading.Thread] = None
 
     def mark_progress(self) -> None:
         self.last_progress_monotonic = self._clock()
@@ -161,24 +191,66 @@ class RuntimeSuspensionMonitor:
 
     def stop(self) -> None:
         self._stop.set()
+        self._thread_stop.set()
+
+    def _classify_gap(
+        self,
+        gap: float,
+        unbiased_gap: Optional[float],
+        detected_monotonic: float,
+    ) -> Optional[RuntimeResume]:
+        if gap < self.threshold_seconds:
+            return None
+        suspended = max(0.0, gap - self.interval_seconds)
+        cause = "process_suspended"
+        if unbiased_gap is not None:
+            sleep_seconds = max(0.0, gap - unbiased_gap)
+            # Allow for timer jitter while requiring meaningful excluded uptime.
+            if sleep_seconds >= min(2.0, self.threshold_seconds / 2.0):
+                suspended = sleep_seconds
+                cause = "system_sleep"
+        return RuntimeResume(gap, self.interval_seconds, suspended, detected_monotonic, cause)
+
+    def _watch(self, output: "queue.Queue[RuntimeResume]") -> None:
+        last_tick = self._clock()
+        last_unbiased = self._unbiased_clock() if self._unbiased_clock else None
+        while not self._thread_stop.wait(self.interval_seconds):
+            now = self._clock()
+            current_unbiased = self._unbiased_clock() if self._unbiased_clock else None
+            gap = max(0.0, now - last_tick)
+            unbiased_gap = None
+            if current_unbiased is not None and last_unbiased is not None:
+                unbiased_gap = max(0.0, current_unbiased - last_unbiased)
+            event = self._classify_gap(gap, unbiased_gap, now)
+            if event is not None:
+                output.put(event)
+            last_tick = now
+            last_unbiased = current_unbiased
 
     async def run(self, on_resume: Callable[[RuntimeResume], Awaitable[None]]) -> None:
-        self._last_tick = self._clock()
+        output: "queue.Queue[RuntimeResume]" = queue.Queue()
+        self._thread_stop.clear()
+        self._thread = threading.Thread(
+            target=self._watch,
+            args=(output,),
+            name="myagent-runtime-watchdog",
+            daemon=True,
+        )
+        self._thread.start()
         while not self._stop.is_set():
-            try:
-                await asyncio.wait_for(self._stop.wait(), timeout=self.interval_seconds)
-                break
-            except asyncio.TimeoutError:
-                pass
-            now = self._clock()
-            gap = max(0.0, now - self._last_tick)
-            self._last_tick = now
-            if gap < self.threshold_seconds:
-                continue
-            suspended = max(0.0, gap - self.interval_seconds)
-            self.accumulated_suspend_seconds += suspended
-            self._suspend_since_progress_seconds += suspended
-            await on_resume(RuntimeResume(gap, self.interval_seconds, suspended, now))
+            await asyncio.sleep(min(self.interval_seconds, 0.25))
+            while True:
+                try:
+                    event = output.get_nowait()
+                except queue.Empty:
+                    break
+                self.accumulated_suspend_seconds += event.suspended_seconds
+                self._suspend_since_progress_seconds += event.suspended_seconds
+                await on_resume(event)
+        self._thread_stop.set()
+        if self._thread is not None:
+            await asyncio.to_thread(self._thread.join, max(1.0, self.interval_seconds * 2.0))
+            self._thread = None
 
 
 class AgentRunPowerGuard:

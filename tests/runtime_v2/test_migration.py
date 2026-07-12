@@ -1,3 +1,6 @@
+import json
+from pathlib import Path
+
 from app.runtime_v2 import RuntimeHistoryOps, RuntimeMirror, RuntimeModelProjection
 from app.runtime_v2.migration import RuntimeV2MigrationService
 from app.runtime_v2.ui_projection import RuntimeUiProjection
@@ -96,6 +99,14 @@ def test_migration_service_backfills_v2_from_legacy_only_when_explicit(monkeypat
     assert model_messages == []
     assert saved_ui == []
     assert saved_model == []
+    assert result["verification"]["verified"] is True
+    manifest_path = Path(result["manifest_path"])
+    assert manifest_path.name == "runtime_v2_migration.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert manifest["manifest_version"] == 1
+    assert manifest["operation"] == "migrate"
+    assert manifest["verification"]["ui"]["status"] == "match"
+    assert len(manifest["verification"]["ui"]["source_sha256"]) == 64
 
 
 def test_migration_service_does_not_replace_runtime_v2_ahead_with_legacy(monkeypatch, tmp_path):
@@ -167,3 +178,25 @@ def test_model_sync_reports_legacy_ahead_as_mismatch_without_replacing(monkeypat
     assert result["action"] == "mismatch"
     assert result["written"] == 0
     assert [message["content"] for message in projection.read_message_dicts("s1")] == ["runtime prefix"]
+
+
+def test_migration_manifest_marks_divergent_history_unverified(monkeypatch, tmp_path):
+    monkeypatch.setenv("RUNTIME_VERSION", "2")
+    RuntimeMirror(tmp_path).mirror_ui_event("s1", {"type": "user", "content": "runtime"})
+    RuntimeHistoryOps(tmp_path).replace_model_history(
+        "s1",
+        [{"type": "user", "content": "runtime"}],
+        reason="test",
+    )
+
+    result = RuntimeV2MigrationService(tmp_path).sync_session(
+        "s1",
+        load_legacy_ui_events=lambda: [{"type": "user", "content": "legacy"}],
+        save_legacy_ui_events=None,
+        load_legacy_model_messages=lambda: [{"type": "user", "content": "legacy"}],
+        save_legacy_model_messages=None,
+    )
+
+    assert result["verification"]["verified"] is False
+    assert result["verification"]["ui"]["status"] == "mismatch"
+    assert result["verification"]["model"]["status"] == "mismatch"

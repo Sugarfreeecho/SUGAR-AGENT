@@ -118,7 +118,7 @@ class RuntimeMirror:
                 "type": "context_summary_committed",
                 "payload": {
                     "summary": event.get("content") or event.get("summary") or event.get("text") or "",
-                    "source": "legacy_ui_event",
+                    "source": "ui_event",
                 },
             }
         if event_type == "context_summary_finished":
@@ -126,7 +126,7 @@ class RuntimeMirror:
                 "type": "legacy_compress_observed",
                 "payload": {
                     "reason": event.get("reason") or event.get("mode") or "",
-                    "source": "legacy_ui_event",
+                    "source": "ui_event",
                 },
             }
         if event_type in {"subagent_started", "subagent_progress", "subagent_finished", "subagent_failed", "subagent_result_consumed"}:
@@ -135,8 +135,8 @@ class RuntimeMirror:
             mapped_type = "tool_finished" if event_type == "tool_result" else "tool_started"
             return {"type": mapped_type, "payload": self._externalize_large_text_payload(str(self.sessions_dir / str(session_id)), dict(event))}
         if event_type in {"status", "process_metrics", "cache_stats", "validate_final"}:
-            return {"type": "legacy_ui_event", "payload": dict(event)}
-        return {"type": "legacy_ui_event", "payload": self._externalize_large_text_payload(str(self.sessions_dir / str(session_id)), dict(event))}
+            return {"type": "ui_event", "payload": dict(event)}
+        return {"type": "ui_event", "payload": self._externalize_large_text_payload(str(self.sessions_dir / str(session_id)), dict(event))}
 
     def _mirror_subagent_event(self, session_id: str, event: Dict[str, Any]) -> Optional[RuntimeEvent]:
         event_type = str((event or {}).get("type") or "")

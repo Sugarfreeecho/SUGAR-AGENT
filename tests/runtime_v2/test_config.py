@@ -6,6 +6,14 @@ from app.runtime_v2.config import runtime_v1_primary, runtime_v2_primary, runtim
 
 
 class RuntimeConfigTests(unittest.TestCase):
+    def test_runtime_v2_is_default_when_no_runtime_flag_is_set(self):
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("RUNTIME_VERSION", None)
+            os.environ.pop("RUNTIME_version", None)
+            os.environ.pop("RUNTIME_V2_ENABLED", None)
+            self.assertEqual(runtime_version(), 2)
+            self.assertTrue(runtime_v2_primary())
+
     def test_runtime_version_prefers_explicit_version(self):
         with patch.dict(os.environ, {"RUNTIME_VERSION": "1", "RUNTIME_V2_ENABLED": "1"}, clear=False):
             self.assertEqual(runtime_version(), 1)

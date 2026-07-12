@@ -587,6 +587,7 @@ class RequestResponseLogger(httpx.Client):
         self._trace_local.current = {
             "started_at": time.perf_counter(),
             "events": [],
+            "metrics": {},
         }
 
     def snapshot_transport_trace(self) -> Dict[str, Any]:
@@ -597,6 +598,7 @@ class RequestResponseLogger(httpx.Client):
         return {
             "elapsed_ms": int(max(0.0, (time.perf_counter() - started_at) * 1000.0)),
             "events": [dict(item) for item in current.get("events", [])],
+            "metrics": dict(current.get("metrics") or {}),
         }
 
     def finish_transport_trace(self) -> Dict[str, Any]:
@@ -611,6 +613,11 @@ class RequestResponseLogger(httpx.Client):
         current = getattr(self._trace_local, "current", None)
         if isinstance(current, dict):
             started_at = float(current.get("started_at") or time.perf_counter())
+            try:
+                content_length = int(request.headers.get("content-length") or 0)
+            except (TypeError, ValueError):
+                content_length = 0
+            current.setdefault("metrics", {})["request_bytes"] = max(0, content_length)
 
             def _trace(event_name: str, info: Dict[str, Any]) -> None:
                 # httpcore trace names are intentionally retained verbatim so
@@ -622,7 +629,14 @@ class RequestResponseLogger(httpx.Client):
 
             request.extensions = dict(getattr(request, "extensions", {}) or {})
             request.extensions["trace"] = _trace
-        return super().send(request, *args, **kwargs)
+        response = super().send(request, *args, **kwargs)
+        if isinstance(current, dict):
+            try:
+                response_length = int(response.headers.get("content-length") or 0)
+            except (TypeError, ValueError):
+                response_length = 0
+            current.setdefault("metrics", {})["response_content_length"] = max(0, response_length)
+        return response
 
     def request(self, method, url, **kwargs):
         headers = dict(kwargs.get("headers", {}))
@@ -3042,27 +3056,17 @@ class SessionManager:
             events = self._load_ui_events(session_id)
             events.append(event_copy)
             self._save_ui_events(session_id, events)
-            try:
-                from runtime_v2 import runtime_v1_primary
-
-                if runtime_v1_primary():
-                    mirrored = self._mirror_ui_event_to_runtime_v2(session_id, event_copy)
-                    if mirrored is None and str(event_copy.get("type") or "") in {"user", "final"}:
-                        logger.warning(
-                            "Runtime V2 mirror returned no event for %s type=%s",
-                            session_id,
-                            event_copy.get("type"),
-                        )
-            except Exception as mirror_error:
-                logger.warning("Runtime V2 mirror ui_event after V1 write failed for %s: %s", session_id, mirror_error)
             self._apply_appended_ui_event_side_effects(session_id, event_copy)
         except Exception as e:
             logger.warning(f"append_ui_event 失败: {e}")
 
     def _observe_runtime_v2_history(self, method_name: str, session_id: str, **kwargs) -> bool:
         try:
+            from runtime_v2 import runtime_v2_primary
             from runtime_v2.history_ops import RuntimeHistoryOps
 
+            if not runtime_v2_primary():
+                return False
             ops = RuntimeHistoryOps(self.repository.sessions_dir)
             method = getattr(ops, method_name)
             method(session_id, **kwargs)
@@ -4043,7 +4047,7 @@ class SessionManager:
                         for event in list(current) + clean
                         if isinstance(event, dict)
                     ]
-                    projection.replace_from_legacy(session_id, merged, reason="legacy_tail_restore_replace")
+                    projection.replace_from_ui_events(session_id, merged, reason="runtime_v2_tail_restore_replace")
                 except Exception as restore_error:
                     logger.warning("Runtime V2 append ui_events tail failed for %s: %s", session_id, restore_error)
                     return False
@@ -4061,18 +4065,6 @@ class SessionManager:
             self._save_llm_history(session_id, new_llm)
             self._save_dialogue_history(
                 session_id, self.dialogue_dicts_from_ui_events_file(session_id)
-            )
-            try:
-                mirror = self._runtime_mirror()
-                for event_copy in clean:
-                    mirror.mirror_ui_event(session_id, event_copy)
-            except Exception as mirror_error:
-                logger.warning("Runtime V2 mirror restored ui_events tail failed for %s: %s", session_id, mirror_error)
-            self._observe_runtime_v2_history(
-                "observe_legacy_tail_restored",
-                session_id,
-                tail_count=len(clean),
-                merged_event_count=len(merged),
             )
             return True
         except Exception as e:

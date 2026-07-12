@@ -140,6 +140,24 @@ class RuntimeUiProjection:
         self.invalidate_cache(session_id)
         return count
 
+    def replace_from_ui_events(self, session_id: str, ui_events: Iterable[dict], reason: str = "runtime_v2_ui_restore_replace") -> int:
+        """Replace visible V2 history from UI-shaped events without reading or writing legacy files."""
+        from .history_ops import RuntimeHistoryOps
+
+        RuntimeHistoryOps(self.sessions_dir).truncate_ui_history(session_id, 0, reason=reason)
+        mirror = RuntimeMirror(self.sessions_dir, path_resolver=self._path_resolver)
+        count = 0
+        for event in ui_events or []:
+            if not isinstance(event, dict):
+                continue
+            mirrored = mirror.mirror_ui_event(session_id, dict(event))
+            if mirrored is None:
+                mirrored = mirror.append(session_id, "ui_event", dict(event))
+            if mirrored is not None:
+                count += 1
+        self.invalidate_cache(session_id)
+        return count
+
     def sync_from_legacy_if_needed(self, session_id: str, legacy_loader: Callable[[], Iterable[dict]]) -> dict:
         legacy = [event for event in list(legacy_loader() or []) if isinstance(event, dict)]
         projected = self._projected_ui_events_cached(session_id)
@@ -738,7 +756,7 @@ class RuntimeUiProjection:
             data["type"] = data.get("type") or "context_tokens"
             data.setdefault("created_at", event.timestamp)
             return data
-        if event.type == "legacy_ui_event":
+        if event.type in {"ui_event", "legacy_ui_event"}:
             data = dict(payload)
             if data.get("type"):
                 data.setdefault("created_at", event.timestamp)

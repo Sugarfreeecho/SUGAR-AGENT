@@ -14,7 +14,7 @@ def test_execution_metrics_groups_requests_phases_usage_and_tools(tmp_path):
     old_root = execution_metrics._root
     execution_metrics.configure(tmp_path / "sessions")
     execution_metrics._sessions.clear()
-    execution_metrics.start_run("s1", "r1", "chat")
+    execution_metrics.start_run("s1", "r1", "chat", "这是用户消息")
     execution_metrics.record_request(
         "s1", "r1", 1,
         model="m1",
@@ -30,6 +30,7 @@ def test_execution_metrics_groups_requests_phases_usage_and_tools(tmp_path):
     run = data["runs"][0]
     request = run["requests"][0]
     assert run["status"] == "finished"
+    assert run["user_preview"] == "这是用户消息"
     assert request["model"] == "m1"
     assert request["first_token_ms"] == 50
     assert request["usage"]["completion_tokens"] == 9

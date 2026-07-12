@@ -153,7 +153,7 @@ class RuntimeHistoryOps:
             mapped = mirror._map_ui_event(session_id, seed)
             if not mapped:
                 mapped = {
-                    "type": "legacy_ui_event",
+                    "type": "ui_event",
                     "payload": self._copy_blob_refs(source_session_id, session_id, seed),
                 }
             mapped_payload = dict(mapped.get("payload") or {})
@@ -623,7 +623,7 @@ class RuntimeHistoryOps:
                     continue
                 mirrored = mirror.mirror_ui_event(session_id, seed)
                 if mirrored is None:
-                    mirrored = mirror.append(session_id, "legacy_ui_event", self._copy_blob_refs(source_session_id, session_id, seed))
+                    mirrored = mirror.append(session_id, "ui_event", self._copy_blob_refs(source_session_id, session_id, seed))
                 count += 1 if mirrored is not None else 0
             return count
         except Exception:
@@ -807,7 +807,7 @@ class RuntimeHistoryOps:
     def _is_branch_runtime_metric_event(cls, event: RuntimeEvent) -> bool:
         if event.type == "context_tokens":
             return True
-        if event.type != "legacy_ui_event":
+        if event.type not in {"ui_event", "legacy_ui_event"}:
             return False
         return cls._is_projected_ui_runtime_metric(dict(event.payload or {}))
 
@@ -832,6 +832,7 @@ class RuntimeHistoryOps:
             "context_summary_committed",
             "todo_updated",
             "context_tokens",
+            "ui_event",
             "legacy_ui_event",
         }:
             return True

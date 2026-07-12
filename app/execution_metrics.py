@@ -88,11 +88,16 @@ def _request(run: dict, react_iter: int, create: bool = True) -> Optional[dict]:
     return row
 
 
-def start_run(session_id: str, run_id: str, mode: str = "chat") -> None:
+def start_run(session_id: str, run_id: str, mode: str = "chat", user_preview: str = "") -> None:
     with _lock:
         data = _load(session_id)
         run = _run(data, run_id)
-        run.update({"status": "running", "mode": mode, "started_at": run.get("started_at") or _now()})
+        run.update({
+            "status": "running",
+            "mode": mode,
+            "started_at": run.get("started_at") or _now(),
+            "user_preview": str(user_preview or run.get("user_preview") or "").strip(),
+        })
         _save(session_id, data)
 
 

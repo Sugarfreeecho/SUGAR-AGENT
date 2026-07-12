@@ -59,6 +59,44 @@ def test_resolve_executor_config_reuses_profile_catalog(monkeypatch):
     assert calls == {"sorted": 2, "ids": 2}
 
 
+def test_session_model_cache_invalidation_changes_next_resolution(monkeypatch):
+    import agent_harness
+
+    agent_harness._invalidate_executor_config_cache()
+    metadata = {"model_profile_id": "model-a"}
+    calls = {"metadata": 0}
+
+    def load_metadata(_sid):
+        calls["metadata"] += 1
+        return dict(metadata)
+
+    def candidates(_sid, *, profile_id_override=None):
+        pid = str(profile_id_override or "")
+        return [{
+            "client": "client-" + pid,
+            "model": pid,
+            "max_output_tokens": 100 if pid == "model-a" else 200,
+            "context_window": 1000 if pid == "model-a" else 2000,
+        }]
+
+    monkeypatch.setattr(agent_harness.session_manager, "_load_metadata", load_metadata)
+    monkeypatch.setattr(agent_harness, "resolve_executor_candidates_for_session", candidates)
+
+    first = agent_harness.resolve_executor_config_for_session("switch-session")
+    metadata["model_profile_id"] = "model-b"
+    still_cached = agent_harness.resolve_executor_config_for_session("switch-session")
+    agent_harness._invalidate_executor_config_cache("switch-session")
+    switched = agent_harness.resolve_executor_config_for_session("switch-session")
+
+    assert first[1:] == ("model-a", 100, 1000)
+    assert first[0].candidates[0]["client"] == "client-model-a"
+    assert still_cached == first
+    assert switched[1:] == ("model-b", 200, 2000)
+    assert switched[0].candidates[0]["client"] == "client-model-b"
+    assert calls["metadata"] == 2
+    agent_harness._invalidate_executor_config_cache()
+
+
 def test_metadata_sidecar_updates_do_not_invalidate_executor_config_cache(monkeypatch, tmp_path):
     import agent_harness
 
