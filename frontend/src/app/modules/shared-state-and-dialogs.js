@@ -5,7 +5,8 @@ let sendPipelineLockSessionId = null;
 const followupQueueBySession = Object.create(null);
 const followupQueueLoadedBySession = Object.create(null);
 let followupQueueSeq = 1;
-const followupQueueDraining = Object.create(null);
+const followupWatchTimers = Object.create(null);
+const followupServerSyncInFlight = Object.create(null);
 /** 会话在后台跑完后未点开过：侧栏绿点，点开即清除（localStorage 持久化，刷新不丢） */
 const sessionUnreadComplete = new Set();
 const LS_SESSION_UNREAD = 'myagent-session-unread';

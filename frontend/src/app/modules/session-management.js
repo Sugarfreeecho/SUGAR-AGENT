@@ -810,6 +810,9 @@ async function loadSessionMessages(sessionId, scrollBehavior, opts) {
                             snapshotTodoPlan = snapshot.todo_plan;
                             if (typeof setTodoPlanForSession === 'function') setTodoPlanForSession(sessionId, snapshot.todo_plan);
                         }
+                        if (snapshot.context_tokens && snapshot.context_tokens.estimated != null) {
+                            recordContextTokens(sessionId, snapshot.context_tokens.estimated, snapshot.context_tokens.threshold);
+                        }
                     }
                 }
             } catch (snapshotErr) {
@@ -962,7 +965,7 @@ function logOpenSessionTiming(sessionId, data) {
     var frontendTotal = Number(data.totalMs || 0);
     if (frontendTotal < 500 && backendTotal < 500) return;
     console.info(
-        'open_session_timing session=%s source=%s total=%sms events=%s backend_total=%sms read_page=%sms count=%sms user_turns=%sms',
+        'open_session_timing session=%s source=%s total=%sms events=%s backend_total=%sms read_page=%sms count=%sms user_turns=%sms context_tokens=%sms',
         sessionId,
         data.source || 'unknown',
         frontendTotal,
@@ -970,7 +973,8 @@ function logOpenSessionTiming(sessionId, data) {
         backendTotal,
         Number(timing.read_page || 0),
         Number(timing.count || 0),
-        Number(timing.user_turns || 0)
+        Number(timing.user_turns || 0),
+        Number(timing.context_tokens || 0)
     );
 }
 
@@ -1002,6 +1006,7 @@ async function switchSession(sessionId, opts) {
     restoreInputDraft(sessionId);
     if (typeof restoreSkillPickerDraft === 'function') restoreSkillPickerDraft(sessionId);
     if (typeof renderFollowupQueue === 'function') renderFollowupQueue(sessionId);
+    if (typeof syncFollowupQueueFromServer === 'function') syncFollowupQueueFromServer(sessionId);
     if (typeof refreshModelProfileSelector === 'function') refreshModelProfileSelector(sessionId);
     syncSessionListIndicatorClasses();
     setSendButtonState();
@@ -1096,6 +1101,7 @@ async function createNewSessionInner() {
         restoreInputDraft(currentSessionId);
         if (typeof restoreSkillPickerDraft === 'function') restoreSkillPickerDraft(currentSessionId);
         if (typeof renderFollowupQueue === 'function') renderFollowupQueue(currentSessionId);
+        if (typeof syncFollowupQueueFromServer === 'function') syncFollowupQueueFromServer(currentSessionId);
         if (typeof refreshModelProfileSelector === 'function') refreshModelProfileSelector(currentSessionId);
         if (!getVisibleChatStream()) ensureVisibleChatStreamSlot();
         setWelcome();

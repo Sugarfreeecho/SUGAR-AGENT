@@ -1,6 +1,8 @@
 let modelProfilesCache = null;
-let modelProfilesRefreshPromise = null;
-let modelProfileBusy = false;
+const modelProfilesRefreshPromises = Object.create(null);
+const modelProfileBusyBySession = Object.create(null);
+const modelProfileIdBySession = Object.create(null);
+let modelProfileSelectionEpoch = 0;
 let activeModelProfileId = '__env__';
 
 function h(str) {
@@ -137,68 +139,90 @@ function renderModelProfileLoadingMenu() {
 }
 
 async function refreshModelProfileSelector(sessionId, opts) {
-    var sid = sessionId || currentSessionId;
+    const sid = String(sessionId || currentSessionId || '');
+    const requestEpoch = ++modelProfileSelectionEpoch;
     var e = els();
     opts = opts || {};
     if (!e.control) return;
     if (!opts.silent && e.current) e.current.textContent = '正在加载模型配置';
     try {
         await loadModelProfilesForSwitcher();
-        activeModelProfileId = modelProfilesCache.new_session_default_profile_id || '__env__';
+        var selectedProfileId = modelProfileIdBySession[sid]
+            || modelProfilesCache.new_session_default_profile_id
+            || '__env__';
         if (sid) {
             var r = await fetch('/sessions/' + encodeURIComponent(sid) + '/model_profile', { credentials: 'same-origin' });
             var j = await r.json();
-            if (j && j.ok && j.profile_id) activeModelProfileId = j.profile_id;
+            if (j && j.ok && j.profile_id) {
+                selectedProfileId = String(j.profile_id);
+                modelProfileIdBySession[sid] = selectedProfileId;
+            }
         }
+        if (sid !== String(currentSessionId || '') || requestEpoch !== modelProfileSelectionEpoch) return;
+        activeModelProfileId = selectedProfileId;
         renderModelProfileControl();
     } catch (err) {
+        if (sid !== String(currentSessionId || '') || requestEpoch !== modelProfileSelectionEpoch) return;
         if (e.current) e.current.textContent = '模型配置加载失败';
         if (e.menu) e.menu.innerHTML = '<button type="button" class="composer-model-option" disabled><span class="composer-model-option-name">模型配置加载失败</span><span class="composer-model-option-meta">' + h(err.message || err) + '</span></button>';
     }
 }
 
 function refreshModelProfileSelectorInBackground(sessionId, opts) {
-    if (modelProfilesRefreshPromise) return modelProfilesRefreshPromise;
-    modelProfilesRefreshPromise = refreshModelProfileSelector(sessionId, opts)
+    const sid = String(sessionId || currentSessionId || '');
+    const existing = modelProfilesRefreshPromises[sid];
+    if (existing && existing.epoch === modelProfileSelectionEpoch) return existing.promise;
+    const promise = refreshModelProfileSelector(sid, opts)
         .catch(function (err) {
             console.error('refresh model profiles failed:', err);
         })
         .finally(function () {
-            modelProfilesRefreshPromise = null;
+            if (modelProfilesRefreshPromises[sid] === entry) {
+                delete modelProfilesRefreshPromises[sid];
+            }
         });
-    return modelProfilesRefreshPromise;
+    const entry = { promise: promise, epoch: modelProfileSelectionEpoch };
+    modelProfilesRefreshPromises[sid] = entry;
+    return promise;
 }
 
 async function setCurrentSessionModelProfile(profileId) {
-    if (!currentSessionId || modelProfileBusy) return;
-    modelProfileBusy = true;
+    const sid = String(currentSessionId || '');
+    const selectedProfileId = String(profileId || '__env__');
+    if (!sid || modelProfileBusyBySession[sid]) return;
+    modelProfileBusyBySession[sid] = true;
     try {
-        var response = await fetch('/sessions/' + encodeURIComponent(currentSessionId) + '/model_profile', {
+        var response = await fetch('/sessions/' + encodeURIComponent(sid) + '/model_profile', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             credentials: 'same-origin',
-            body: JSON.stringify({ profile_id: profileId || '__env__' }),
+            body: JSON.stringify({ profile_id: selectedProfileId }),
         });
         var data = await response.json();
         if (!data || !data.ok) throw new Error((data && data.error) || '切换失败');
-        activeModelProfileId = profileId || '__env__';
+        modelProfileIdBySession[sid] = selectedProfileId;
+        if (sid !== String(currentSessionId || '')) return;
+        modelProfileSelectionEpoch += 1;
+        activeModelProfileId = selectedProfileId;
         renderModelProfileControl();
-        var cachedTokens = selectContextTokens(currentSessionId);
+        var cachedTokens = selectContextTokens(sid);
         var nextThreshold = activeProfileContextWindow();
         if (cachedTokens && cachedTokens.estimated != null) {
             recordContextTokens(
-                currentSessionId,
+                sid,
                 cachedTokens.estimated,
                 nextThreshold != null ? nextThreshold : cachedTokens.threshold
             );
         } else {
-            scheduleContextTokensAfterPaint(currentSessionId);
+            scheduleContextTokensAfterPaint(sid);
         }
     } catch (err) {
-        appendLogVisible('模型配置切换失败: ' + String(err.message || err), 'error-log');
-        await refreshModelProfileSelector(currentSessionId);
+        if (sid === String(currentSessionId || '')) {
+            appendLogVisible('模型配置切换失败: ' + String(err.message || err), 'error-log');
+            await refreshModelProfileSelector(sid);
+        }
     } finally {
-        modelProfileBusy = false;
+        delete modelProfileBusyBySession[sid];
     }
 }
 
