@@ -26,7 +26,16 @@ from starlette.concurrency import run_in_threadpool
 
 from agent import astream_events, astream_events_continuation, session_manager
 from agent_harness import PROJECT_ROOT, WORK_DIR, dotenv_file_path, refresh_executor_client_from_env, _invalidate_executor_config_cache
-from agent_loop import abort_session_steer_run, compute_context_tokens_for_session, enqueue_session_steer, get_context_token_mode, remove_session_steer
+from agent_loop import (
+    abort_session_steer_run,
+    compute_context_tokens_for_session,
+    enqueue_session_steer,
+    get_context_token_mode,
+    get_session_steer,
+    list_session_steers,
+    remove_session_steer,
+    transition_session_steer,
+)
 from session_lifecycle import get_run_started_at, is_run_active
 from session_event_bus import subscribe_session_events
 import agent_mcp
@@ -607,10 +616,15 @@ def _runtime_v2_chat_sse_payload(session_id: str, event_dict: dict) -> Optional[
         elif event.type == "runtime_resumed":
             resume_payload = dict(event.payload or {})
             seconds = max(0.0, float(resume_payload.get("suspended_seconds") or 0.0))
+            cause = str(resume_payload.get("cause") or "process_suspended")
             ui_event = {
                 "type": "runtime_resumed",
                 "run_id": run_id,
-                "content": "检测到系统或进程暂停约 %.0f 秒，任务已恢复" % seconds,
+                "content": (
+                    "检测到系统睡眠约 %.0f 秒，任务已恢复"
+                    if cause == "system_sleep"
+                    else "检测到 Agent 进程暂停约 %.0f 秒，任务已恢复"
+                ) % seconds,
                 "ephemeral": True,
                 **resume_payload,
             }
@@ -2260,8 +2274,6 @@ async def post_session_steer(session_id: str, request: Request):
     sid = (session_id or "").strip()
     if not sid:
         return JSONResponse(content={"ok": False, "error": "missing session_id"}, status_code=400)
-    if not _is_session_stream_active(sid):
-        return JSONResponse(content={"ok": False, "error": "session is not running"}, status_code=409)
     try:
         data = await request.json()
     except Exception:
@@ -2270,35 +2282,53 @@ async def post_session_steer(session_id: str, request: Request):
     client_id = str((data or {}).get("client_id") or "").strip()
     selected_skills = (data or {}).get("selected_skills") or []
     requested_ui_content = str((data or {}).get("ui_content") or "").strip()
+    source_run_id = str((data or {}).get("source_run_id") or "").strip()
+    if not message:
+        return JSONResponse(content={"ok": False, "error": "empty steer"}, status_code=400)
+    if not client_id:
+        return JSONResponse(content={"ok": False, "error": "missing client_id"}, status_code=400)
+    if not _is_session_stream_active(sid):
+        existing = get_session_steer(sid, client_id=client_id) if client_id else {"ok": False}
+        if existing.get("ok"):
+            existing_item = existing.get("item") if isinstance(existing.get("item"), dict) else {}
+            is_restarting = str(existing_item.get("state") or "") == "restarting"
+            return JSONResponse(content={
+                "ok": True,
+                "item": existing_item,
+                "deduplicated": True,
+                "restart": is_restarting,
+                "replacement_run_id": str(existing_item.get("replacement_run_id") or ""),
+                "aborted": False,
+            })
+        return JSONResponse(content={"ok": False, "error": "session is not running"}, status_code=409)
     if not isinstance(selected_skills, list):
         selected_skills = []
     valid_selected_skills = _valid_selected_skill_names(selected_skills)
     agent_message = _build_agent_message_with_selected_skills(message, valid_selected_skills)
     ui_message = _build_ui_message_with_selected_skills(requested_ui_content or message, valid_selected_skills)
     followup_restart_enabled = os.getenv("MYAGENT_ENABLE_FOLLOWUP_RESTART", "1").strip().lower() in {"1", "true", "yes", "on"}
-    result = enqueue_session_steer(sid, agent_message, client_id=client_id, ui_content=ui_message)
+    result = enqueue_session_steer(
+        sid,
+        agent_message,
+        client_id=client_id,
+        ui_content=ui_message,
+        source_run_id=source_run_id,
+    )
     if not result.get("ok"):
         return JSONResponse(content=result, status_code=400)
     result["aborted"] = abort_session_steer_run(sid, reason="steer")
     if result["aborted"]:
+        item = result.get("item") if isinstance(result.get("item"), dict) else {}
+        transitioned = transition_session_steer(
+            sid, str(item.get("id") or ""), {"queued"}, "interrupting"
+        )
+        if transitioned.get("ok"):
+            result["item"] = transitioned.get("item")
         result["restart"] = False
         return JSONResponse(content=result)
     item = result.get("item") if isinstance(result.get("item"), dict) else {}
-    remove_session_steer(
-        sid,
-        steer_id=str(item.get("id") or ""),
-        client_id=str(item.get("client_id") or client_id or ""),
-    )
     if not followup_restart_enabled:
         return JSONResponse(content={"ok": False, "error": "session is not running"}, status_code=409)
-    if not message:
-        return JSONResponse(content={"ok": False, "error": "empty steer"}, status_code=400)
-    steer_item = {
-        "id": str(uuid.uuid4()),
-        "content": agent_message,
-        "ui_content": ui_message,
-        "client_id": client_id,
-    }
     aborted = abort_session_steer_run(sid, reason="steer")
     session_manager.request_interrupt(sid, reason="followup")
     _active_chat_by_session.pop(sid, None)
@@ -2317,14 +2347,61 @@ async def post_session_steer(session_id: str, request: Request):
         await close_session_stream(sid)
     except Exception as e:
         logger.debug("publish steer restart interrupt failed for %s: %s", sid, e)
+    replacement_run_id = str(uuid.uuid4())
+    transitioned = transition_session_steer(
+        sid,
+        str(item.get("id") or ""),
+        {"queued", "interrupting"},
+        "restarting",
+        replacement_run_id=replacement_run_id,
+    )
+    steer_item = transitioned.get("item") if transitioned.get("ok") else item
     return JSONResponse(
         content={
             "ok": True,
             "restart": True,
             "aborted": bool(aborted or interrupted_run_ids),
             "item": steer_item,
+            "replacement_run_id": replacement_run_id,
         }
     )
+
+
+@fastapi_app.get("/sessions/{session_id}/steer/{steer_id}")
+async def get_session_steer_status(session_id: str, steer_id: str):
+    result = get_session_steer(session_id, steer_id=steer_id)
+    return JSONResponse(content=result, status_code=200 if result.get("ok") else 404)
+
+
+@fastapi_app.get("/sessions/{session_id}/steer")
+async def list_session_steer_status(session_id: str):
+    result = list_session_steers(session_id, include_terminal=False)
+    return JSONResponse(content=result, status_code=200 if result.get("ok") else 400)
+
+
+@fastapi_app.post("/sessions/{session_id}/steer/{steer_id}/recover")
+async def recover_session_steer(session_id: str, steer_id: str):
+    current = get_session_steer(session_id, steer_id=steer_id)
+    item = current.get("item") if isinstance(current.get("item"), dict) else {}
+    if not current.get("ok"):
+        return JSONResponse(content=current, status_code=404)
+    state_name = str(item.get("state") or "")
+    if state_name == "consumed":
+        return JSONResponse(content=current)
+    if state_name == "restarting" and item.get("replacement_run_id"):
+        return JSONResponse(content=current)
+    stale_claim = state_name == "claimed" and time.time() - float(item.get("claimed_at") or 0.0) >= 30.0
+    if state_name == "claimed" and not stale_claim:
+        return JSONResponse(content={"ok": False, "error": "steer claim is still active"}, status_code=409)
+    replacement_run_id = str(item.get("replacement_run_id") or uuid.uuid4())
+    result = transition_session_steer(
+        session_id,
+        steer_id,
+        {"queued", "interrupting", "restarting", "claimed"},
+        "restarting",
+        replacement_run_id=replacement_run_id,
+    )
+    return JSONResponse(content=result, status_code=200 if result.get("ok") else 409)
 
 
 @fastapi_app.post("/api/client_timing")
@@ -2434,18 +2511,49 @@ async def chat(
     message: str = Form(...),
     session_id: str = Form(None),
     client_run_id: str = Form(None),
-    stream_protocol: str = Form("legacy"),
+    stream_protocol: str = Form("runtime_v2"),
     followup_steer: bool = Form(False),
+    steer_id: str = Form(""),
     selected_skills: str = Form(""),
     ui_message: str = Form(""),
 ):
     sid = (session_id or "").strip() or None
     run_id = str(client_run_id or "").strip()
+    steer_operation_id = str(steer_id or "").strip()
     use_runtime_v2_stream = _runtime_v2_chat_protocol_enabled(stream_protocol, sid)
     start_token = ""
     if sid:
+        if followup_steer and steer_operation_id:
+            steer_status = get_session_steer(sid, steer_id=steer_operation_id)
+            steer_item = steer_status.get("item") if isinstance(steer_status.get("item"), dict) else {}
+            if not steer_status.get("ok"):
+                return JSONResponse(content={"ok": False, "reason": "unknown_steer"}, status_code=409)
+            if str(steer_item.get("state") or "") == "consumed":
+                return JSONResponse(content={"ok": False, "reason": "duplicate_steer"}, status_code=409)
+            if str(steer_item.get("state") or "") != "restarting":
+                return JSONResponse(
+                    content={"ok": False, "reason": "steer_already_claimed", "state": steer_item.get("state")},
+                    status_code=409,
+                )
+            expected_run_id = str(steer_item.get("replacement_run_id") or "").strip()
+            if expected_run_id and run_id and expected_run_id != run_id:
+                return JSONResponse(content={"ok": False, "reason": "replacement_run_mismatch"}, status_code=409)
+            claimed = transition_session_steer(
+                sid,
+                steer_operation_id,
+                {"restarting"},
+                "claimed",
+                claimed_by=run_id,
+                claimed_at=time.time(),
+            )
+            if not claimed.get("ok"):
+                return JSONResponse(content={"ok": False, "reason": "steer_already_claimed"}, status_code=409)
         start_token = _reserve_session_chat_start(sid, run_id) or ""
         if not start_token:
+            if followup_steer and steer_operation_id:
+                transition_session_steer(
+                    sid, steer_operation_id, {"claimed"}, "restarting", claimed_by="", claimed_at=0
+                )
             run_state = _session_run_state_fields(sid)
             return JSONResponse(
                 content={
@@ -2532,6 +2640,7 @@ async def chat(
                     run_id=run_id,
                     ui_user_event_type="user_steer" if followup_steer else "user",
                     ui_user_content=ui_message,
+                    user_operation_id=steer_operation_id,
                 ):
                     put_from_worker(event)
             except asyncio.CancelledError:
@@ -3036,12 +3145,17 @@ async def get_session_history_snapshot(
             t_phase = _time.perf_counter()
             user_turns = projection.read_user_turns_light(session_id)
             timings["user_turns"] = int((_time.perf_counter() - t_phase) * 1000)
+            t_phase = _time.perf_counter()
+            context_tokens = _runtime_v2_context_snapshot(session_id).get("tokens")
+            if not isinstance(context_tokens, dict):
+                context_tokens = None
+            timings["context_tokens"] = int((_time.perf_counter() - t_phase) * 1000)
             todo_plan = _runtime_v2_todo_plan_snapshot(session_id)
             elapsed_ms = int((_time.perf_counter() - t0) * 1000)
             timings["total"] = elapsed_ms
             if elapsed_ms >= 500:
                 logger.warning(
-                    "/history_snapshot slow runtime=2 session=%s turns=%s limit=%s before=%s elapsed_ms=%s read_page=%sms count=%sms user_turns=%sms",
+                    "/history_snapshot slow runtime=2 session=%s turns=%s limit=%s before=%s elapsed_ms=%s read_page=%sms count=%sms user_turns=%sms context_tokens=%sms",
                     session_id,
                     tv,
                     lim,
@@ -3050,6 +3164,7 @@ async def get_session_history_snapshot(
                     timings["read_page"],
                     timings["count"],
                     timings["user_turns"],
+                    timings["context_tokens"],
                 )
             return JSONResponse(content={
                 "ok": True,
@@ -3060,6 +3175,7 @@ async def get_session_history_snapshot(
                 "count_source": count_source,
                 "user_turns": user_turns,
                 "todo_plan": todo_plan,
+                "context_tokens": context_tokens,
                 "elapsed_ms": elapsed_ms,
                 "timing": timings,
             })

@@ -96,8 +96,46 @@ def test_frontend_feature_entrypoints_are_flag_guarded():
     assert "if (!isMyAgentFeatureEnabled('followupRestart', false)) return false;" in sse
     assert "function onFollowupInputKeydown(e)" in sse
     assert "if (!isMyAgentFeatureEnabled('followupRestart', false)) return;" in sse
+    assert "async function syncFollowupQueueFromServer(sessionId)" in sse
+    assert "async function fetchSteerStatus(sessionId, item)" in sse
+    assert "async function recoverSteerForRestart(sessionId, item)" in sse
+    assert "if (sendPipelineLock && sendPipelineLockSessionId === submitSessionIdInitial) return;" in sse
+    assert "formData.append('steer_id', String(options.steerId))" in sse
     assert "followupEnabled" in sessions
     assert "isMyAgentFeatureEnabled('followupRestart', false)" in sessions
+
+
+def test_followups_wait_for_explicit_send_now_click():
+    sse = (ROOT / "frontend/src/app/modules/sse-handling.js").read_text(encoding="utf-8")
+    enqueue = sse.split("function enqueueCurrentInputAsFollowup()", 1)[1].split(
+        "function takeFollowupItem", 1
+    )[0]
+
+    # Enter only appends to the durable browser queue.  Completion, reconnect,
+    # refresh and server reconciliation must never consume a pending item.
+    assert "sendFollowupNow" not in enqueue
+    assert "scheduleFollowupQueueDrain" not in sse
+    assert "drainFollowupQueue" not in sse
+
+    # The sole call site is the queue row's explicit "send now" click handler;
+    # the second occurrence is the function declaration itself.
+    assert sse.count("sendFollowupNow(") == 2
+    assert "sendNow.addEventListener('click'" in sse
+    assert "sendFollowupNow(String(item.id));" in sse
+
+
+def test_model_profile_selector_fences_cross_session_responses():
+    source = (ROOT / "frontend/src/app/modules/model-profiles.js").read_text(encoding="utf-8")
+
+    assert "const modelProfilesRefreshPromises = Object.create(null);" in source
+    assert "const modelProfileBusyBySession = Object.create(null);" in source
+    assert "const requestEpoch = ++modelProfileSelectionEpoch;" in source
+    assert "existing && existing.epoch === modelProfileSelectionEpoch" in source
+    assert "sid !== String(currentSessionId || '') || requestEpoch !== modelProfileSelectionEpoch" in source
+    assert "fetch('/sessions/' + encodeURIComponent(sid) + '/model_profile'" in source
+    assert "if (sid !== String(currentSessionId || '')) return;" in source
+    assert "selectContextTokens(sid)" in source
+    assert "scheduleContextTokensAfterPaint(sid)" in source
 
 
 def test_frontend_final_reconcile_is_local_store_only():
@@ -161,7 +199,7 @@ def test_frontend_session_load_logs_open_session_timing_from_snapshot():
     assert "let snapshotTiming = null;" in sessions
     assert "snapshotTiming = snapshot.timing && typeof snapshot.timing === 'object'" in sessions
     assert "function logOpenSessionTiming(sessionId, data)" in sessions
-    assert "'open_session_timing session=%s source=%s total=%sms events=%s backend_total=%sms read_page=%sms count=%sms user_turns=%sms'" in sessions
+    assert "'open_session_timing session=%s source=%s total=%sms events=%s backend_total=%sms read_page=%sms count=%sms user_turns=%sms context_tokens=%sms'" in sessions
     assert "logOpenSessionTiming(sessionId, {" in sessions
 
 
@@ -388,3 +426,79 @@ def test_followup_restart_enabled_prefers_native_steer(monkeypatch):
     assert payload["item"]["content"] == "continue now"
     assert payload["item"]["client_id"] == "cid-1"
     assert fake_manager.interrupts == []
+
+
+def test_followup_restart_keeps_same_durable_steer_until_replacement_claim(monkeypatch):
+    import webui
+
+    fake_manager = _FakeSessionManagerForSteer()
+    monkeypatch.setenv("MYAGENT_ENABLE_FOLLOWUP_RESTART", "1")
+    monkeypatch.setattr(webui, "session_manager", fake_manager)
+    monkeypatch.setattr(webui, "_is_session_stream_active", lambda sid: True)
+    monkeypatch.setattr(
+        webui,
+        "enqueue_session_steer",
+        lambda sid, message, client_id="", **kwargs: {
+            "ok": True,
+            "item": {"id": "steer-stable", "content": message, "client_id": client_id, "state": "queued"},
+        },
+    )
+    monkeypatch.setattr(webui, "abort_session_steer_run", lambda sid, reason="": False)
+    monkeypatch.setattr(webui, "_interrupt_runtime_v2_active_runs", lambda sid, reason="": ["run-old"])
+    transitions = []
+
+    def transition(sid, steer_id, from_states, to_state, **updates):
+        transitions.append((sid, steer_id, set(from_states), to_state, dict(updates)))
+        return {
+            "ok": True,
+            "item": {
+                "id": steer_id,
+                "content": "continue now",
+                "client_id": "cid-stable",
+                "state": to_state,
+                **updates,
+            },
+        }
+
+    monkeypatch.setattr(webui, "transition_session_steer", transition)
+
+    response = asyncio.run(webui.post_session_steer(
+        "s-fallback",
+        _FakeJsonRequest({"message": "continue now", "client_id": "cid-stable"}),
+    ))
+    payload = json.loads(response.body.decode("utf-8"))
+
+    assert payload["ok"] is True
+    assert payload["restart"] is True
+    assert payload["item"]["id"] == "steer-stable"
+    assert payload["item"]["state"] == "restarting"
+    assert transitions[0][1:4] == ("steer-stable", {"queued", "interrupting"}, "restarting")
+
+
+def test_followup_http_retry_after_run_finished_returns_consumed_operation(monkeypatch):
+    import webui
+
+    monkeypatch.setattr(webui, "_is_session_stream_active", lambda sid: False)
+    monkeypatch.setattr(
+        webui,
+        "get_session_steer",
+        lambda sid, steer_id="", client_id="": {
+            "ok": True,
+            "item": {"id": "steer-once", "client_id": client_id, "state": "consumed"},
+        },
+    )
+    monkeypatch.setattr(
+        webui,
+        "enqueue_session_steer",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("retry must not enqueue again")),
+    )
+
+    response = asyncio.run(webui.post_session_steer(
+        "s-finished",
+        _FakeJsonRequest({"message": "same followup", "client_id": "cid-once"}),
+    ))
+    payload = json.loads(response.body.decode("utf-8"))
+    assert payload["ok"] is True
+    assert payload["deduplicated"] is True
+    assert payload["item"]["state"] == "consumed"
+    assert payload["restart"] is False

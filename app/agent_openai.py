@@ -825,6 +825,7 @@ def run_chat_completion_stream_worker(
         first_delta_at_ms: Optional[int] = None
         last_delta_at_ms: Optional[int] = None
         usage_chunk_at_ms: Optional[int] = None
+        response_payload_bytes_estimated = 0
         chunk_count = 0
 
         def api_elapsed_ms() -> int:
@@ -838,6 +839,7 @@ def run_chat_completion_stream_worker(
             try:
                 snapshot = transport_observer.snapshot_transport_trace()
                 events = list(snapshot.get("events") or [])
+                metrics = dict(snapshot.get("metrics") or {})
                 starts: Dict[str, int] = {}
                 phases: Dict[str, int] = {}
                 for row in events:
@@ -853,6 +855,8 @@ def run_chat_completion_stream_worker(
                 put_stream_timing(
                     "transport_breakdown",
                     trace_elapsed_ms=int(snapshot.get("elapsed_ms") or 0),
+                    request_bytes=int(metrics.get("request_bytes") or 0),
+                    response_content_length=int(metrics.get("response_content_length") or 0),
                     **phases,
                 )
             except Exception:
@@ -863,6 +867,13 @@ def run_chat_completion_stream_worker(
                 put_stream_timing("aborted_during_stream")
                 return
             chunk_count += 1
+            try:
+                raw_chunk = chunk.model_dump(mode="json") if hasattr(chunk, "model_dump") else str(chunk)
+                response_payload_bytes_estimated += len(
+                    json.dumps(raw_chunk, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+                )
+            except Exception:
+                pass
             if not first_chunk_seen:
                 first_chunk_seen = True
                 put_stream_timing("first_chunk", chunk_count=chunk_count)
@@ -930,6 +941,19 @@ def run_chat_completion_stream_worker(
                 sync_q.put(("tool_call_delta", payload))
             _accumulate_tool_call_delta(tool_acc, delta_tool_calls)
         put_stream_timing("stream_exhausted", chunk_count=chunk_count)
+        if transport_observer is not None:
+            try:
+                final_transport = transport_observer.snapshot_transport_trace()
+                transport_metrics = dict(final_transport.get("metrics") or {})
+                put_stream_timing(
+                    "transport_final",
+                    trace_elapsed_ms=int(final_transport.get("elapsed_ms") or 0),
+                    request_bytes=int(transport_metrics.get("request_bytes") or 0),
+                    response_content_length=int(transport_metrics.get("response_content_length") or 0),
+                    response_payload_bytes_estimated=int(response_payload_bytes_estimated),
+                )
+            except Exception:
+                pass
         if abort_requested():
             close_stream_quietly()
             put_stream_timing("aborted_after_stream")

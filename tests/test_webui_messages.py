@@ -299,6 +299,12 @@ def test_history_snapshot_combines_v2_messages_count_and_toc(monkeypatch, tmp_pa
         {"type": "final", "content": "second answer"},
     ]:
         mirror.mirror_ui_event("s1", event)
+    mirror.mirror_ui_event("s1", {
+        "type": "context_tokens",
+        "estimated": 1234,
+        "threshold": 4096,
+        "token_source": "provider_exact",
+    })
     fake = _NoLegacyUiSessionManager(tmp_path, [{"type": "user", "content": "legacy"}])
     monkeypatch.setattr(webui, "session_manager", fake)
 
@@ -313,10 +319,10 @@ def test_history_snapshot_combines_v2_messages_count_and_toc(monkeypatch, tmp_pa
 
     assert payload["ok"] is True
     assert payload["source"] == "runtime_v2_snapshot"
-    assert payload["count"] == 5
+    assert payload["count"] == 6
     assert payload["count_source"] == "runtime_v2_page"
     assert payload["elapsed_ms"] >= 0
-    assert set(payload["timing"]) == {"read_page", "count", "user_turns", "total"}
+    assert set(payload["timing"]) == {"read_page", "count", "user_turns", "context_tokens", "total"}
     assert payload["timing"]["total"] >= 0
     assert payload["messages"]["source"] == "runtime_v2_tail_index"
     assert [event["content"] for event in payload["messages"]["events"] if event.get("content")] == [
@@ -331,6 +337,8 @@ def test_history_snapshot_combines_v2_messages_count_and_toc(monkeypatch, tmp_pa
     ]
     assert payload["todo_plan"]["source"] == "runtime_v2_snapshot"
     assert payload["todo_plan"]["items"][0]["text"] == "task"
+    assert payload["context_tokens"]["estimated"] == 1234
+    assert payload["context_tokens"]["token_source"] == "provider_exact"
 
 
 def test_history_snapshot_uses_lightweight_user_turns(monkeypatch, tmp_path):
@@ -378,7 +386,7 @@ def test_history_snapshot_uses_lightweight_user_turns(monkeypatch, tmp_path):
 
     assert payload["ok"] is True
     assert payload["user_turns"] == [{"event_index": 0, "preview": "u"}]
-    assert set(payload["timing"]) == {"read_page", "count", "user_turns", "total"}
+    assert set(payload["timing"]) == {"read_page", "count", "user_turns", "context_tokens", "total"}
 
 
 def test_context_tokens_snapshot_miss_uses_runtime_v2_compute_not_legacy(monkeypatch, tmp_path):

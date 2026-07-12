@@ -9,6 +9,8 @@ agent_loop — ReAct 主循环与 SSE 事件源。
 3. `validate_final`：验证事件（PASS）；`finish`：落盘、生成 `final` 事件。
 """
 
+from __future__ import annotations
+
 import json
 import os
 import queue
@@ -125,6 +127,11 @@ _ACTIVE_STEER_RUNS: Dict[str, Any] = {}
 _CONTEXT_POLICY_LOCKS_LOCK = threading.Lock()
 _CONTEXT_POLICY_LOCKS: Dict[str, threading.Lock] = {}
 _STEER_QUEUE_SIGNATURES: Dict[str, Tuple[int, int]] = {}
+_STEER_TERMINAL_RETENTION = max(16, int(os.getenv("MYAGENT_STEER_TERMINAL_RETENTION", "128")))
+
+_STEER_PENDING_STATES = {"queued", "claimed", "interrupting", "restarting", "deferred"}
+_STEER_CLAIMABLE_STATES = {"queued", "interrupting"}
+_STEER_TERMINAL_STATES = {"consumed", "cancelled", "failed"}
 
 
 def _steer_inbox_path(session_id: str) -> Path:
@@ -173,6 +180,24 @@ def _save_steer_queue_locked(session_id: str, rows: List[Dict[str, Any]]) -> Non
     _STEER_QUEUE_SIGNATURES[session_id] = (int(stat.st_mtime_ns), int(stat.st_size))
 
 
+def _normalize_steer_item(item: Dict[str, Any]) -> Dict[str, Any]:
+    row = dict(item or {})
+    row["state"] = str(row.get("state") or "queued").strip().lower()
+    if row["state"] not in _STEER_PENDING_STATES | _STEER_TERMINAL_STATES:
+        row["state"] = "queued"
+    row["version"] = max(0, int(row.get("version") or 0))
+    row["source_run_id"] = str(row.get("source_run_id") or "").strip()
+    row["replacement_run_id"] = str(row.get("replacement_run_id") or "").strip()
+    return row
+
+
+def _trim_steer_rows(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    pending = [_normalize_steer_item(x) for x in rows if str((x or {}).get("state") or "queued") not in _STEER_TERMINAL_STATES]
+    terminal = [_normalize_steer_item(x) for x in rows if str((x or {}).get("state") or "queued") in _STEER_TERMINAL_STATES]
+    terminal.sort(key=lambda x: float(x.get("updated_at") or x.get("created_at") or 0.0))
+    return pending + terminal[-_STEER_TERMINAL_RETENTION:]
+
+
 @contextmanager
 def _steer_transaction(session_id: str):
     from runtime_v2.event_log import SessionEventLog
@@ -192,6 +217,7 @@ class _SteerRunControl:
         self.abort_event = threading.Event()
         self.reason = ""
         self.created_at = time.time()
+        self.fence_token = str(uuid.uuid4())
 
     def abort(self, reason: str = "steer") -> None:
         self.reason = str(reason or "steer")
@@ -211,6 +237,18 @@ def _register_steer_run_control(session_id: str, run_id: str) -> _SteerRunContro
     if sid:
         with _STEER_RUN_LOCK:
             _ACTIVE_STEER_RUNS[sid] = control
+        try:
+            fence_path = Path(session_manager.sessions_dir) / sid / "active_run_fence.json"
+            fence_path.parent.mkdir(parents=True, exist_ok=True)
+            with _steer_transaction(sid):
+                tmp = fence_path.with_suffix(".json.tmp")
+                tmp.write_text(
+                    json.dumps({"run_id": control.run_id, "token": control.fence_token, "created_at": control.created_at}),
+                    encoding="utf-8",
+                )
+                tmp.replace(fence_path)
+        except Exception:
+            logger.warning("failed to persist active run fence for %s", sid, exc_info=True)
     return control
 
 
@@ -221,6 +259,14 @@ def _clear_steer_run_control(session_id: str, control: _SteerRunControl) -> None
     with _STEER_RUN_LOCK:
         if _ACTIVE_STEER_RUNS.get(sid) is control:
             _ACTIVE_STEER_RUNS.pop(sid, None)
+    try:
+        fence_path = Path(session_manager.sessions_dir) / sid / "active_run_fence.json"
+        with _steer_transaction(sid):
+            current = json.loads(fence_path.read_text(encoding="utf-8")) if fence_path.exists() else {}
+            if str(current.get("token") or "") == control.fence_token:
+                fence_path.unlink(missing_ok=True)
+    except Exception:
+        logger.debug("failed to clear active run fence for %s", sid, exc_info=True)
 
 
 def abort_session_steer_run(session_id: str, reason: str = "steer") -> bool:
@@ -237,6 +283,25 @@ def abort_session_steer_run(session_id: str, reason: str = "steer") -> bool:
     except Exception:
         logger.debug("abort steer run failed: session_id=%s", sid, exc_info=True)
         return False
+
+
+def _state_run_has_write_fence(state: State) -> bool:
+    """Whether this run still owns process-local writes for its session."""
+    control = _steer_control_from_state(state) if isinstance(state, dict) else None
+    if control is None:
+        return True
+    sid = str(state.get("session_id") or "").strip()
+    with _STEER_RUN_LOCK:
+        local_current = _ACTIVE_STEER_RUNS.get(sid)
+    if local_current is not control:
+        return False
+    try:
+        fence_path = Path(session_manager.sessions_dir) / sid / "active_run_fence.json"
+        current = json.loads(fence_path.read_text(encoding="utf-8")) if fence_path.exists() else {}
+        token = str(current.get("token") or "")
+        return not token or token == control.fence_token
+    except Exception:
+        return local_current is control
 
 
 def _context_policy_lock_for_session(session_id: str) -> threading.Lock:
@@ -276,7 +341,14 @@ def _wait_context_policy_idle(session_id: str) -> None:
     lock.release()
 
 
-def enqueue_session_steer(session_id: str, content: str, client_id: str = "", ui_content: str = "") -> Dict[str, Any]:
+def enqueue_session_steer(
+    session_id: str,
+    content: str,
+    client_id: str = "",
+    ui_content: str = "",
+    *,
+    source_run_id: str = "",
+) -> Dict[str, Any]:
     sid = str(session_id or "").strip()
     text = str(content or "").strip()
     if not sid:
@@ -289,18 +361,23 @@ def enqueue_session_steer(session_id: str, content: str, client_id: str = "", ui
         "ui_content": str(ui_content or "").strip() or text,
         "client_id": str(client_id or "").strip(),
         "created_at": time.time(),
+        "updated_at": time.time(),
+        "state": "queued",
+        "version": 1,
+        "source_run_id": str(source_run_id or "").strip(),
+        "replacement_run_id": "",
     }
     with _STEER_LOCK:
         with _steer_transaction(sid):
-            q = _load_steer_queue_locked(sid)
+            q = [_normalize_steer_item(x) for x in _load_steer_queue_locked(sid)]
             client = str(client_id or "").strip()
             if client:
                 for existing in q:
                     if str(existing.get("client_id") or "") == client:
                         return {"ok": True, "item": dict(existing), "queued": len(q), "deduplicated": True}
             q.append(item)
-            _save_steer_queue_locked(sid, q)
-            depth = len(q)
+            _save_steer_queue_locked(sid, _trim_steer_rows(q))
+            depth = sum(1 for x in q if x.get("state") in _STEER_PENDING_STATES)
     return {"ok": True, "item": item, "queued": depth}
 
 
@@ -314,20 +391,23 @@ def remove_session_steer(session_id: str, steer_id: str = "", client_id: str = "
         return {"ok": False, "error": "missing steer id"}
     with _STEER_LOCK:
         with _steer_transaction(sid):
-            q = list(_load_steer_queue_locked(sid))
+            q = [_normalize_steer_item(x) for x in _load_steer_queue_locked(sid)]
             keep: List[Dict[str, Any]] = []
             removed: Optional[Dict[str, Any]] = None
             for item in q:
                 same_id = target_id and str(item.get("id") or "") == target_id
                 same_client = target_client and str(item.get("client_id") or "") == target_client
-                if removed is None and (same_id or same_client):
-                    removed = item
-                    continue
+                if removed is None and (same_id or same_client) and item.get("state") in {"queued", "interrupting"}:
+                    item["state"] = "cancelled"
+                    item["version"] = int(item.get("version") or 0) + 1
+                    item["updated_at"] = time.time()
+                    item["cancelled_at"] = item["updated_at"]
+                    removed = dict(item)
                 keep.append(item)
             if removed is None:
-                return {"ok": False, "error": "steer not pending"}
-            _save_steer_queue_locked(sid, keep)
-    return {"ok": True, "item": removed, "queued": len(keep)}
+                return {"ok": False, "error": "steer already claimed or not pending"}
+            _save_steer_queue_locked(sid, _trim_steer_rows(keep))
+    return {"ok": True, "item": removed, "queued": sum(1 for x in keep if x.get("state") in _STEER_PENDING_STATES)}
 
 
 def _pop_session_steers(session_id: str) -> List[Dict[str, Any]]:
@@ -337,7 +417,11 @@ def _pop_session_steers(session_id: str) -> List[Dict[str, Any]]:
     with _STEER_LOCK:
         # Peek, then acknowledge each item only after its durable Runtime V2
         # user-turn commit succeeds. This survives process loss mid-consume.
-        items = list(_load_steer_queue_locked(sid))
+        items = [
+            _normalize_steer_item(x)
+            for x in _load_steer_queue_locked(sid)
+            if str((x or {}).get("state") or "queued") in _STEER_CLAIMABLE_STATES
+        ]
     return items
 
 
@@ -346,7 +430,106 @@ def _has_session_steers(session_id: str) -> bool:
     if not sid:
         return False
     with _STEER_LOCK:
-        return bool(_load_steer_queue_locked(sid))
+        return any(
+            str((x or {}).get("state") or "queued") in _STEER_CLAIMABLE_STATES
+            for x in _load_steer_queue_locked(sid)
+        )
+
+
+def get_session_steer(session_id: str, steer_id: str = "", client_id: str = "") -> Dict[str, Any]:
+    sid = str(session_id or "").strip()
+    target_id = str(steer_id or "").strip()
+    target_client = str(client_id or "").strip()
+    if not sid or (not target_id and not target_client):
+        return {"ok": False, "error": "missing steer id"}
+    with _STEER_LOCK:
+        rows = [_normalize_steer_item(x) for x in _load_steer_queue_locked(sid)]
+        for item in rows:
+            if (target_id and item.get("id") == target_id) or (target_client and item.get("client_id") == target_client):
+                return {"ok": True, "item": dict(item)}
+    return {"ok": False, "error": "steer not found"}
+
+
+def list_session_steers(session_id: str, *, include_terminal: bool = False) -> Dict[str, Any]:
+    sid = str(session_id or "").strip()
+    if not sid:
+        return {"ok": False, "error": "missing session_id"}
+    with _STEER_LOCK:
+        rows = [_normalize_steer_item(x) for x in _load_steer_queue_locked(sid)]
+    if not include_terminal:
+        rows = [x for x in rows if x.get("state") in _STEER_PENDING_STATES]
+    rows.sort(key=lambda x: float(x.get("created_at") or 0.0))
+    return {"ok": True, "items": rows}
+
+
+def transition_session_steer(
+    session_id: str,
+    steer_id: str,
+    from_states: set[str],
+    to_state: str,
+    **updates: Any,
+) -> Dict[str, Any]:
+    sid = str(session_id or "").strip()
+    target_id = str(steer_id or "").strip()
+    target_state = str(to_state or "").strip().lower()
+    if not sid or not target_id or target_state not in _STEER_PENDING_STATES | _STEER_TERMINAL_STATES:
+        return {"ok": False, "error": "invalid steer transition"}
+    allowed = {str(x).strip().lower() for x in from_states}
+    with _STEER_LOCK:
+        with _steer_transaction(sid):
+            rows = [_normalize_steer_item(x) for x in _load_steer_queue_locked(sid)]
+            for index, item in enumerate(rows):
+                if item.get("id") != target_id:
+                    continue
+                if item.get("state") == target_state:
+                    changed_updates = {k: v for k, v in updates.items() if v is not None and item.get(k) != v}
+                    if changed_updates:
+                        item.update(changed_updates)
+                        item["version"] = int(item.get("version") or 0) + 1
+                        item["updated_at"] = time.time()
+                        rows[index] = item
+                        _save_steer_queue_locked(sid, _trim_steer_rows(rows))
+                    return {"ok": True, "item": dict(item), "deduplicated": True}
+                if item.get("state") not in allowed:
+                    return {"ok": False, "error": f"steer is {item.get('state')}"}
+                item.update({k: v for k, v in updates.items() if v is not None})
+                item["state"] = target_state
+                item["version"] = int(item.get("version") or 0) + 1
+                item["updated_at"] = time.time()
+                rows[index] = item
+                _save_steer_queue_locked(sid, _trim_steer_rows(rows))
+                return {"ok": True, "item": dict(item)}
+    return {"ok": False, "error": "steer not found"}
+
+
+def _claim_session_steers(session_id: str, run_id: str) -> List[Dict[str, Any]]:
+    sid = str(session_id or "").strip()
+    owner = str(run_id or "").strip()
+    if not sid:
+        return []
+    now = time.time()
+    claimed: List[Dict[str, Any]] = []
+    with _STEER_LOCK:
+        with _steer_transaction(sid):
+            rows = [_normalize_steer_item(x) for x in _load_steer_queue_locked(sid)]
+            changed = False
+            for index, item in enumerate(rows):
+                state_name = str(item.get("state") or "queued")
+                stale_claim = state_name == "claimed" and now - float(item.get("claimed_at") or 0.0) >= 30.0
+                same_owner = state_name == "claimed" and owner and str(item.get("claimed_by") or "") == owner
+                if state_name not in _STEER_CLAIMABLE_STATES and not stale_claim and not same_owner:
+                    continue
+                item["state"] = "claimed"
+                item["claimed_by"] = owner
+                item["claimed_at"] = now
+                item["updated_at"] = now
+                item["version"] = int(item.get("version") or 0) + 1
+                rows[index] = item
+                claimed.append(dict(item))
+                changed = True
+            if changed:
+                _save_steer_queue_locked(sid, _trim_steer_rows(rows))
+    return claimed
 
 
 def _is_followup_interrupt(session_id: str) -> bool:
@@ -565,7 +748,10 @@ def get_context_token_mode(value: Any = None) -> str:
 
 # ==================== 辅助函数：实时持久化 ====================
 def _persist_session_messages(state: State) -> None:
-    """work / llm / key_context 落盘；dialogue 由 llm 派生，dialogue_history 由 ui_events 派生。"""
+    """Persist the current model/work/context state if this run owns the fence."""
+    if not _state_run_has_write_fence(state):
+        logger.info("suppressed stale run persistence: session=%s run=%s", state.get("session_id"), state.get("_runtime_v2_run_id"))
+        return
     state["dialogue"] = derive_dialogue_from_assistant_history(state["llm_history"])
     if _runtime_v2_is_primary():
         _runtime_v2_commit_context_summary(state)
@@ -856,6 +1042,8 @@ def _runtime_v2_append_model_message(state: State, msg: Any) -> None:
     sid = str(state.get("session_id") or "").strip()
     if not sid:
         return
+    if not _state_run_has_write_fence(state):
+        return
     t0 = time.perf_counter()
     role = ""
     try:
@@ -930,7 +1118,7 @@ def _runtime_v2_commit_user_turn(
         model_content = str(data.pop("content", "") or "")
         data.pop("type", None)
         run_id = str(state.get("_runtime_v2_run_id") or "").strip()
-        RuntimeHistoryOps(session_manager.sessions_dir).commit_user_turn(
+        committed_event = RuntimeHistoryOps(session_manager.sessions_dir).commit_user_turn(
             sid,
             model_content,
             ui_content=ui_content,
@@ -939,6 +1127,7 @@ def _runtime_v2_commit_user_turn(
             run_id=run_id or None,
             model_payload=data,
         )
+        state["_last_user_turn_was_deduplicated"] = committed_event is None and bool(operation_id)
         side_effects = getattr(session_manager, "_apply_appended_ui_event_side_effects", None)
         if callable(side_effects):
             side_effects(
@@ -961,6 +1150,8 @@ def _runtime_v2_commit_user_turn(
 def _runtime_v2_commit_assistant_final(state: State, content: str) -> bool:
     sid = str(state.get("session_id") or "").strip()
     if not sid or not _runtime_v2_is_primary():
+        return False
+    if not _state_run_has_write_fence(state):
         return False
     try:
         from runtime_v2 import RuntimeHistoryOps
@@ -990,6 +1181,8 @@ def _runtime_v2_commit_assistant_final(state: State, content: str) -> bool:
 def _runtime_v2_replace_model_history(state: State, messages: List[Any], reason: str) -> None:
     sid = str(state.get("session_id") or "").strip()
     if not sid:
+        return
+    if not _state_run_has_write_fence(state):
         return
     t0 = time.perf_counter()
     try:
@@ -1044,7 +1237,6 @@ def _persist_state_with_model_append(state: State, msg: Any) -> None:
         _persist_state(state)
     else:
         _persist_state(state)
-        _runtime_v2_append_model_message(state, msg)
 
 
 def _persist_state_with_model_replace(state: State, messages: List[Any], reason: str) -> None:
@@ -1053,7 +1245,6 @@ def _persist_state_with_model_replace(state: State, messages: List[Any], reason:
         _persist_state(state)
     else:
         _persist_state(state)
-        _runtime_v2_replace_model_history(state, messages, reason)
 
 
 def _persist_session_messages_with_model_replace(state: State, messages: List[Any], reason: str) -> None:
@@ -1062,7 +1253,6 @@ def _persist_session_messages_with_model_replace(state: State, messages: List[An
         _persist_session_messages(state)
     else:
         _persist_session_messages(state)
-        _runtime_v2_replace_model_history(state, messages, reason)
 
 
 def _materialize_lazy_work_messages(state: State) -> None:
@@ -1097,6 +1287,12 @@ async def _push_stream_event(
     emit: Optional[Callable[[Dict[str, Any]], Any]] = None,
 ):
     """追加 stream_events；若提供 emit（async 可调用），则同步推给前端。"""
+    if not _state_run_has_write_fence(state):
+        logger.info(
+            "suppressed stale run event: session=%s run=%s type=%s",
+            state.get("session_id"), state.get("_runtime_v2_run_id"), event.get("type"),
+        )
+        return
     state["stream_events"].append(event)
     if emit:
         try:
@@ -1252,6 +1448,7 @@ async def _await_steerable(
     emit: Optional[Callable[[Dict[str, Any]], Any]],
     stage: str,
     poll_sec: float = 0.05,
+    defer_steer: bool = False,
 ):
     try:
         await _raise_if_steer_requested(state, emit, stage)
@@ -1261,6 +1458,11 @@ async def _await_steerable(
             close_fn()
         raise
     task = asyncio.ensure_future(awaitable)
+    if defer_steer:
+        # Serialized write tools may have irreversible side effects. Once they
+        # have started, preserve their real result and apply the steer at the
+        # next checkpoint instead of pretending cancellation rolled them back.
+        return await task
     try:
         while True:
             done, _ = await asyncio.wait({task}, timeout=poll_sec)
@@ -1463,7 +1665,8 @@ async def _consume_steer_messages(
     emit: Optional[Callable[[Dict[str, Any]], Any]] = None,
 ) -> bool:
     sid = str(state.get("session_id") or "").strip()
-    items = _pop_session_steers(sid)
+    run_id = str(state.get("_runtime_v2_run_id") or "").strip()
+    items = _claim_session_steers(sid, run_id)
     if not items:
         return False
     work_messages = list(state.get("work_messages", []))
@@ -1475,37 +1678,51 @@ async def _consume_steer_messages(
         if not text:
             continue
         msg = UserMessage(content=text)
-        work_messages.append(msg)
-        llm_history.append(msg)
+        steer_id = str((item or {}).get("id") or "")
+        try:
+            committed = _runtime_v2_commit_user_turn(
+                state,
+                msg,
+                ui_content=ui_text,
+                ui_type="user_steer",
+                operation_id=steer_id or str((item or {}).get("client_id") or ""),
+            )
+            if not committed:
+                _persist_state_with_model_append(state, msg)
+        except Exception:
+            transition_session_steer(sid, steer_id, {"claimed"}, "failed", error="user turn commit failed")
+            raise
+        deduplicated_commit = bool(state.pop("_last_user_turn_was_deduplicated", False))
+        if deduplicated_commit and _runtime_v2_is_primary():
+            llm_history = [_dict_to_message(m) for m in _load_runtime_v2_model_history_dicts(sid)]
+            work_messages = list(llm_history)
+        else:
+            work_messages.append(msg)
+            llm_history.append(msg)
         state["user_input"] = text
         state["dialogue"] = derive_dialogue_from_assistant_history(llm_history)
         state["work_messages"] = work_messages
         state["llm_history"] = llm_history
-        committed = _runtime_v2_commit_user_turn(
-            state,
-            msg,
-            ui_content=ui_text,
-            ui_type="user_steer",
-            operation_id=str((item or {}).get("id") or (item or {}).get("client_id") or ""),
-        )
-        if not committed:
-            _persist_state_with_model_append(state, msg)
-        await _push_stream_event(
-            state,
-            {
-                "type": "user_steer",
-                "content": ui_text,
-                "steer": True,
-                "steer_id": str((item or {}).get("id") or ""),
-                "client_id": str((item or {}).get("client_id") or ""),
-                "_runtime_v2_committed": committed,
-            },
-            emit=emit,
-        )
-        remove_session_steer(
+        if not deduplicated_commit:
+            await _push_stream_event(
+                state,
+                {
+                    "type": "user_steer",
+                    "content": ui_text,
+                    "steer": True,
+                    "steer_id": steer_id,
+                    "client_id": str((item or {}).get("client_id") or ""),
+                    "_runtime_v2_committed": committed,
+                },
+                emit=emit,
+            )
+        transition_session_steer(
             sid,
-            steer_id=str((item or {}).get("id") or ""),
-            client_id=str((item or {}).get("client_id") or ""),
+            steer_id,
+            {"claimed"},
+            "consumed",
+            consumed_by=run_id,
+            consumed_at=time.time(),
         )
         changed = True
     return changed
@@ -2099,7 +2316,7 @@ def _classify_api_error(exc: BaseException) -> dict:
             "retry": 0}
 
 
-async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any]] = None) -> State:
+async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]], Any]] = None) -> State:
     """ReAct 循环执行，集成 todo、技能、压缩、重复检测，支持并行工具调用。"""
     # ========== 1. 初始化状态 ==========
     if "user_input" not in state:
@@ -2149,13 +2366,6 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
     state["_react_ui_tool_fail_count"] = 0
 
     session_meta = session_manager._load_metadata(state["session_id"]) or {}
-    # A run uses one immutable executor selection. Configuration mutation
-    # endpoints invalidate the shared cache, while an already-running ReAct
-    # loop remains internally consistent and avoids disk/profile work on every
-    # iteration.
-    _t_run_executor = time.perf_counter()
-    run_executor_config = resolve_executor_config_for_session(state["session_id"])
-    run_executor_config_ms = _timing_ms(_t_run_executor)
     max_react_iter = MAX_REACT_ITER
     if isinstance(session_meta, dict) and session_meta.get("is_subagent"):
         max_react_iter = max(
@@ -2255,11 +2465,15 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
                 )
             _pre_api_timing_mark(pre_api_timings, "token_estimate", _t_pre_api)
             _t_pre_api = time.perf_counter()
-            iter_client, iter_model, iter_max_output_tokens, iter_context_window = run_executor_config
-            if iter_count == 1:
-                pre_api_timings["resolve_model_config"] = int(run_executor_config_ms)
-            else:
-                pre_api_timings["resolve_model_config_reuse"] = 0
+            # Resolve at every LLM boundary.  The resolver's hot cache keeps
+            # the unchanged path cheap, while a profile update invalidates the
+            # session entry so the very next ReAct request uses the new model,
+            # limits and client.
+            _t_resolve_model = time.perf_counter()
+            iter_client, iter_model, iter_max_output_tokens, iter_context_window = (
+                resolve_executor_config_for_session(state["session_id"])
+            )
+            _pre_api_timing_mark(pre_api_timings, "resolve_model_config", _t_resolve_model)
             if emit:
                 await _push_stream_event(
                     state,
@@ -3093,7 +3307,7 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
                                         if key in {"step", "model"}:
                                             continue
                                         if isinstance(value, (int, float)):
-                                            transport_parts.append(f"{key}={int(value)}ms")
+                                            transport_parts.append(f"{key}={int(value)}{'B' if 'bytes' in key or 'length' in key else 'ms'}")
                                             if key != "ms_since_api_start":
                                                 transport_values[key] = int(value)
                                     execution_metrics.record_phase(
@@ -3296,21 +3510,45 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
                     _stream_created_ms = int(_stream_steps.get("stream_created", _request_start_ms))
                     _first_delta_ms = int(_stream_steps.get("first_delta", _stream_created_ms))
                     _stream_end_ms = int(_stream_steps.get("stream_exhausted", _stream_steps.get("turn_ready", _first_delta_ms)))
+                    _first_chunk_ms = int(_stream_steps.get("first_chunk", _stream_created_ms))
+                    _usage_chunk_ms = int(_stream_steps.get("usage_chunk", _stream_end_ms))
+                    _transport_breakdown = next((item for item in stream_timing_events if item.get("step") == "transport_breakdown"), {})
+                    _transport_final = next((item for item in stream_timing_events if item.get("step") == "transport_final"), {})
                     _metrics_run_id = str(state.get("_runtime_v2_run_id") or "")
+                    _api_send_events = {"request_start_to_stream_created": max(0, _stream_created_ms - _request_start_ms)}
+                    for _key, _value in _transport_breakdown.items():
+                        if _key.endswith("_ms") and _key not in {"ms_since_api_start", "trace_elapsed_ms"}:
+                            _api_send_events[_key] = int(_value or 0)
                     execution_metrics.record_phase(
                         state["session_id"], _metrics_run_id, int(iter_count), "api_send",
-                        {"request_start_to_stream_created": max(0, _stream_created_ms - _request_start_ms)},
+                        _api_send_events,
                         total_ms=max(0, _stream_created_ms - _request_start_ms),
                     )
                     execution_metrics.record_phase(
                         state["session_id"], _metrics_run_id, int(iter_count), "first_token",
-                        {"stream_created_to_first_delta": max(0, _first_delta_ms - _stream_created_ms)},
+                        {
+                            "stream_created_to_first_chunk": max(0, _first_chunk_ms - _stream_created_ms),
+                            "first_chunk_to_first_delta": max(0, _first_delta_ms - _first_chunk_ms),
+                        },
                         total_ms=max(0, _first_delta_ms - _stream_created_ms),
                     )
                     execution_metrics.record_phase(
                         state["session_id"], _metrics_run_id, int(iter_count), "llm_output",
-                        {"first_delta_to_stream_end": max(0, _stream_end_ms - _first_delta_ms)},
+                        {
+                            "first_delta_to_usage": max(0, _usage_chunk_ms - _first_delta_ms),
+                            "usage_to_stream_end": max(0, _stream_end_ms - _usage_chunk_ms),
+                        },
                         total_ms=max(0, _stream_end_ms - _first_delta_ms),
+                    )
+                    execution_metrics.record_request(
+                        state["session_id"], _metrics_run_id, int(iter_count),
+                        network={
+                            "request_bytes": int(_transport_final.get("request_bytes") or _transport_breakdown.get("request_bytes") or 0),
+                            "response_content_length": int(_transport_final.get("response_content_length") or 0),
+                            "response_payload_bytes_estimated": int(_transport_final.get("response_payload_bytes_estimated") or 0),
+                            "request_to_first_token_ms": max(0, _first_delta_ms - _request_start_ms),
+                            "transport_elapsed_ms": int(_transport_final.get("trace_elapsed_ms") or _transport_breakdown.get("trace_elapsed_ms") or 0),
+                        },
                     )
                     logger.info(
                         "llm_result_consumed session=%s react_iter=%s model=%s",
@@ -3911,6 +4149,7 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
                         execute_one(tool_call),
                         emit,
                         "tool",
+                        defer_steer=True,
                     )
                     write_result = await checkpoint_completed_tool_result(write_result)
                     exec_results.append(write_result)
@@ -3921,9 +4160,15 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
 
                 _tool_batch_started_at = state.pop("_tool_batch_first_started_at", None)
                 _tool_batch_duration_ms = _timing_ms(float(_tool_batch_started_at)) if _tool_batch_started_at is not None else 0
+                _tool_phase_events = {"first_tool_start_to_all_results": _tool_batch_duration_ms}
+                for _tool_result_index, _tool_result in enumerate(exec_results, start=1):
+                    if isinstance(_tool_result, dict) and _tool_result.get("type") == "tool":
+                        _tool_status = dict(_tool_result.get("tool_status") or {})
+                        _tool_label = str(_tool_result.get("tool_name") or "tool")
+                        _tool_phase_events[f"tool:{_tool_result_index}:{_tool_label}"] = int(_tool_status.get("duration_ms") or 0)
                 execution_metrics.record_phase(
                     state["session_id"], str(state.get("_runtime_v2_run_id") or ""), int(iter_count),
-                    "tool_execution", {"first_tool_start_to_all_results": _tool_batch_duration_ms},
+                    "tool_execution", _tool_phase_events,
                     total_ms=_tool_batch_duration_ms,
                 )
 
@@ -4235,7 +4480,7 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
             final_content = "执行步骤达到最大迭代次数，可能陷入循环，请检查执行过程。您可以手动继续任务"
 
     except _SteerRestartRequested:
-        return await _restart_react_after_steer(state, emit)
+        raise
     finally:
         pass
 
@@ -4280,6 +4525,30 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
 
     state["final_response"] = final_content
     return state
+
+
+async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any]] = None) -> State:
+    """Run ReAct with non-recursive steer replanning.
+
+    A steer restarts the logical planning pass without stacking coroutine frames.
+    Completed history remains in ``state``; only an unclosed tool tail is rolled
+    back before the durable steer message is claimed and committed.
+    """
+    while True:
+        try:
+            return await _react_node_once(state, emit=emit)
+        except _SteerRestartRequested:
+            _rollback_steer_partial_turn(state)
+            consumed = await _consume_steer_messages(state, emit=emit)
+            _reset_steer_control(state)
+            if not consumed:
+                continue
+            state["final_result_retries"] = 0
+            state["empty_final_retries"] = 0
+            state["repeat_count"] = 0
+            state["last_response_content"] = None
+            state["last_tool_calls_signature"] = None
+            state["reminder_inserted"] = False
 
 def validate_final(state: State) -> State:
     """终稿已由 ReAct 产出；不再调用独立校验模型，仅推送 PASS 占位事件以保持 SSE/UI 兼容。"""
@@ -4537,6 +4806,7 @@ async def astream_events(
     ui_user_event_type: str = "user",
     ui_user_content: Optional[str] = None,
     context_token_mode: Optional[str] = None,
+    user_operation_id: str = "",
 ) -> AsyncGenerator[Dict[str, Any], None]:
     """
     顺序执行 react_node → validate_final（无独立校验 LLM）→ finish，通过队列实时向前端推送事件。
@@ -4614,6 +4884,8 @@ async def astream_events(
     runtime_v2_terminal_mirrored = False
 
     def mirror_runtime_v2_sync(event_type: str, payload: Optional[Dict[str, Any]] = None) -> None:
+        if not _runtime_v2_is_primary():
+            return
         try:
             from runtime_v2.mirror import RuntimeMirror
 
@@ -4664,6 +4936,7 @@ async def astream_events(
             "suspended_seconds": round(resume.suspended_seconds, 3),
             "accumulated_suspend_seconds": round(power_guard.monitor.accumulated_suspend_seconds, 3),
             "previous_stage": stage,
+            "cause": resume.cause,
         }
         logger.warning(
             "runtime_resumed session=%s run_id=%s suspended_seconds=%.3f previous_stage=%s",
@@ -4675,7 +4948,11 @@ async def astream_events(
         await asyncio.to_thread(mirror_runtime_v2, "runtime_resumed", payload)
         await emit({
             "type": "runtime_resumed",
-            "content": "检测到系统或进程暂停约 %.0f 秒，任务已恢复" % resume.suspended_seconds,
+            "content": (
+                "检测到系统睡眠约 %.0f 秒，任务已恢复"
+                if resume.cause == "system_sleep"
+                else "检测到 Agent 进程暂停约 %.0f 秒，任务已恢复"
+            ) % resume.suspended_seconds,
             "ephemeral": True,
             **payload,
         })
@@ -4687,7 +4964,7 @@ async def astream_events(
         terminal_event = {"type": "run_interrupted", "ephemeral": True}
         try:
             await power_guard.start(on_runtime_resume)
-            execution_metrics.start_run(session_id, runtime_v2_run_id, "chat")
+            execution_metrics.start_run(session_id, runtime_v2_run_id, "chat", user_input)
             # 用户气泡由前端已画；此处只写入与流顺序一致的持久化，供刷新与 SSE 同源
             run_start_timings: Dict[str, int] = {}
             _t_run_start = time.perf_counter()
@@ -4711,9 +4988,19 @@ async def astream_events(
                 user_message,
                 ui_content=str(user_ui_event.get("content") or ""),
                 ui_type=user_ui_type,
+                operation_id=str(user_operation_id or "").strip(),
             )
             if not atomic_user_turn:
                 _runtime_v2_append_model_message(state, user_message)
+            if user_ui_type == "user_steer" and str(user_operation_id or "").strip():
+                transition_session_steer(
+                    session_id,
+                    str(user_operation_id).strip(),
+                    {"restarting", "claimed", "interrupting", "queued"},
+                    "consumed",
+                    consumed_by=runtime_v2_run_id,
+                    consumed_at=time.time(),
+                )
             run_start_timings["append_user_model"] = _timing_ms(_t_run_start)
             _pipeline_step_timing_log(
                 "run_start_step_timing",
@@ -4980,6 +5267,8 @@ async def astream_events_continuation(
     runtime_v2_terminal_mirrored = False
 
     def mirror_runtime_v2_sync(event_type: str, payload: Optional[Dict[str, Any]] = None) -> None:
+        if not _runtime_v2_is_primary():
+            return
         try:
             from runtime_v2.mirror import RuntimeMirror
 
@@ -5028,6 +5317,7 @@ async def astream_events_continuation(
             "suspended_seconds": round(resume.suspended_seconds, 3),
             "accumulated_suspend_seconds": round(power_guard.monitor.accumulated_suspend_seconds, 3),
             "previous_stage": stage,
+            "cause": resume.cause,
         }
         logger.warning(
             "runtime_resumed session=%s run_id=%s suspended_seconds=%.3f previous_stage=%s",
@@ -5039,7 +5329,11 @@ async def astream_events_continuation(
         await asyncio.to_thread(mirror_runtime_v2, "runtime_resumed", payload)
         await emit({
             "type": "runtime_resumed",
-            "content": "Runtime resumed after approximately %.0f seconds" % resume.suspended_seconds,
+            "content": (
+                "System resumed after approximately %.0f seconds of sleep"
+                if resume.cause == "system_sleep"
+                else "Agent process resumed after approximately %.0f seconds"
+            ) % resume.suspended_seconds,
             "ephemeral": True,
             **payload,
         })
@@ -5051,7 +5345,7 @@ async def astream_events_continuation(
         terminal_event = {"type": "run_interrupted", "ephemeral": True}
         try:
             await power_guard.start(on_runtime_resume)
-            execution_metrics.start_run(session_id, runtime_v2_run_id, "continuation")
+            execution_metrics.start_run(session_id, runtime_v2_run_id, "continuation", str(state.get("user_input") or ""))
             run_start_timings: Dict[str, int] = {}
             _t_run_start = time.perf_counter()
             mirror_runtime_v2("run_started", {"mode": "continuation"})
