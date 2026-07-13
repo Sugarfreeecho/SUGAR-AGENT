@@ -67,6 +67,16 @@ function endRunForClient(sessionId, ctx, opts) {
     syncSessionListIndicatorClasses();
     setSendButtonState();
     if (sid === currentSessionId) renderTodoPlanForCurrentSession();
+    if (opts.drainFollowup !== false) {
+        var _drainDelay = opts.followupDelayMs || 0;
+        if (typeof syncFollowupQueueFromServer === 'function') {
+            syncFollowupQueueFromServer(sid).finally(function () {
+                scheduleFollowupQueueDrain(sid, _drainDelay);
+            });
+        } else {
+            scheduleFollowupQueueDrain(sid, _drainDelay);
+        }
+    }
     if (liveAutoFollow && opts.scroll !== false) {
         scrollProcessBodyToBottom(ctx, sid);
         scrollChatToBottomIfFollow(sid, {});
@@ -926,7 +936,7 @@ function renderFollowupQueue(sessionId) {
         sendNow.type = 'button';
         sendNow.className = 'followup-queue-action followup-queue-send';
         sendNow.textContent = '立即发送';
-        sendNow.disabled = !!item.status || idx !== 0;
+        sendNow.disabled = !!item.status;
         var undo = document.createElement('button');
         undo.type = 'button';
         undo.className = 'followup-queue-action followup-queue-undo';
@@ -999,6 +1009,7 @@ function enqueueCurrentInputAsFollowup() {
     persistInputDraft(sid, '');
     clearInputPathTokens();
     autoResizeTextarea();
+    scheduleFollowupQueueDrain(sid, 0);
     return true;
 }
 
@@ -1234,7 +1245,44 @@ function removeConsumedFollowupSteer(sessionId, ev) {
     if (!item) return false;
     takeFollowupItem(sid, item.id);
     renderFollowupQueue(sid);
+    scheduleFollowupQueueDrain(sid, 0);
     return true;
+}
+
+function scheduleFollowupQueueDrain(sessionId, delayMs) {
+    var sid = String(sessionId || '');
+    if (!sid) return;
+    setTimeout(function () { drainFollowupQueue(sid); }, Math.max(0, Number(delayMs) || 0));
+}
+
+function drainFollowupQueue(sessionId) {
+    var sid = String(sessionId || '');
+    if (!sid || followupQueueDraining[sid]) return;
+    if (isSendPipelineLocked(sid)) {
+        scheduleFollowupQueueDrain(sid, 120);
+        return;
+    }
+    var q = getFollowupQueue(sid);
+    if (!q.length) {
+        renderFollowupQueue(sid);
+        return;
+    }
+    var item = q[0];
+    if (!item || item.status) {
+        renderFollowupQueue(sid);
+        return;
+    }
+    followupQueueDraining[sid] = true;
+    var attemptedId = String(item.id);
+    Promise.resolve(sendFollowupNow(item.id, sid))
+        .finally(function () {
+            delete followupQueueDraining[sid];
+            var q2 = getFollowupQueue(sid);
+            var same = q2.find(function (entry) { return String(entry.id) === attemptedId; });
+            if (!same && q2.length && !q2[0].status) {
+                scheduleFollowupQueueDrain(sid, 0);
+            }
+        });
 }
 
 function scheduleAcceptedFollowupWatch(sid, itemId) {
@@ -1323,7 +1371,13 @@ async function sendFollowupNow(itemId, sessionId) {
     if (idx < 0) return;
     const item = q[idx];
     if (!item) return;
-    if (idx !== 0) return;
+    if (idx !== 0) {
+        var moved = q.splice(idx, 1)[0];
+        q.unshift(moved);
+        persistFollowupQueue(sid);
+        renderFollowupQueue(sid);
+        idx = 0;
+    }
     if (item.status === 'submitting' || item.status === 'accepted' || item.status === 'sent' || item.status === 'withdrawing') {
         return;
     }
@@ -1358,7 +1412,7 @@ async function sendFollowupNow(itemId, sessionId) {
             var previousRun = getSessionRunState(sid);
             if (previousRun) abortSessionRun(sid, 'followup-restart');
             markSessionRunInactive(sid);
-            item.status = 'restarting';
+            item.status = 'sent';
             item.replacementRunId = String(steerResult.replacement_run_id || '');
             persistFollowupQueue(sid);
             renderFollowupQueue(sid);
@@ -1379,7 +1433,10 @@ async function sendFollowupNow(itemId, sessionId) {
                 steerId: item.steerId,
                 clientRunId: String(steerResult.replacement_run_id || ''),
             });
-            scheduleAcceptedFollowupWatch(sid, itemId);
+            setTimeout(function () {
+                takeFollowupItem(sid, itemId);
+                renderFollowupQueue(sid);
+            }, 1200);
             return restartPromise;
         }
         item.status = 'accepted';
@@ -1451,21 +1508,15 @@ async function sendFollowupNow(itemId, sessionId) {
     }
     markSessionRunInactive(sid);
     if (typeof sessionStore !== 'undefined') sessionStore.setStreamActive(sid, false);
-    item.status = 'sending';
+    item.status = 'sent';
     persistFollowupQueue(sid);
     renderFollowupQueue(sid);
     reportClientPipelineStep(followupTimingCtx, 'followup_fallback_to_chat', followupTimingStartedAt);
-    return sendMessage({ message: item.text, displayMessage: item.display || item.text, selectedSkills: item.skills || [], fromQueue: true, sessionId: sid, forceStart: true }).then(function (sent) {
-        if (sent) {
-            takeFollowupItem(sid, itemId);
-        } else {
-            var retained = getFollowupQueue(sid).find(function (entry) { return String(entry.id) === String(itemId); });
-            if (retained) retained.status = '';
-            persistFollowupQueue(sid);
-        }
+    setTimeout(function () {
+        takeFollowupItem(sid, itemId);
         renderFollowupQueue(sid);
-        return sent;
-    });
+    }, 1200);
+    return sendMessage({ message: item.text, displayMessage: item.display || item.text, selectedSkills: item.skills || [], fromQueue: true, sessionId: sid, forceStart: true });
 }
 
 async function sendMessage(options) {
@@ -1778,6 +1829,9 @@ async function sendMessage(options) {
         });
         setSendButtonState();
         syncSessionListIndicatorClasses();
+        if (!stoppedByUser && getFollowupQueue(submittedRunSessionId).length) {
+            scheduleFollowupQueueDrain(submittedRunSessionId, 0);
+        }
     }
 }
 

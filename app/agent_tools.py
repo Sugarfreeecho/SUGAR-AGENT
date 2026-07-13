@@ -2163,8 +2163,9 @@ def edit_file(
 
 def _parse_apply_patch(patch: str) -> List[Dict[str, Any]]:
     """Parse the Codex-style *** Begin Patch format into file operations."""
-    lines = str(patch or "").replace("\r\n", "\n").replace("\r", "\n").split("\n")
-    if not lines or lines[0] != "*** Begin Patch" or lines[-1] != "*** End Patch":
+    text = str(patch or "").replace("\r\n", "\n").replace("\r", "\n").strip()
+    lines = text.split("\n")
+    if not text or lines[0] != "*** Begin Patch" or lines[-1] != "*** End Patch":
         raise ValueError("patch must start with '*** Begin Patch' and end with '*** End Patch'")
     operations: List[Dict[str, Any]] = []
     i = 1
