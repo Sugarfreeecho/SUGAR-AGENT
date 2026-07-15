@@ -277,13 +277,15 @@ const sessionStore = {
         return this.activeRunInfoBySession.get(String(sessionId || '')) || null;
     },
 
-    shouldAcceptSseEvent(sessionId, seq) {
+    shouldAcceptSseEvent(sessionId, seq, scope) {
         const sid = String(sessionId || '');
         const n = Number(seq);
         if (!sid || !Number.isFinite(n) || n <= 0) return true;
-        const prev = Number(this.sseSeqBySession.get(sid) || 0);
+        const seqScope = String(scope || 'default');
+        const key = sid + '::' + seqScope;
+        const prev = Number(this.sseSeqBySession.get(key) || 0);
         if (n <= prev) return false;
-        this.sseSeqBySession.set(sid, n);
+        this.sseSeqBySession.set(key, n);
         if (Number.isFinite(Number(this.seq)) && n > Number(this.seq)) this.seq = n;
         return true;
     },
@@ -292,6 +294,9 @@ const sessionStore = {
         const sid = String(sessionId || '');
         if (!sid) return;
         this.sseSeqBySession.delete(sid);
+        Array.from(this.sseSeqBySession.keys()).forEach(function (key) {
+            if (String(key).indexOf(sid + '::') === 0) this.sseSeqBySession.delete(key);
+        }, this);
     },
 };
 

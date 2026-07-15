@@ -60,11 +60,6 @@ function syncSettingsModalForm() {
     var sd = document.getElementById('settings-session-detailed');
     if (sc) sc.classList.toggle('is-active', compact);
     if (sd) sd.classList.toggle('is-active', !compact);
-    var language = typeof uiLanguage === 'string' ? uiLanguage : 'zh-CN';
-    var lz = document.getElementById('settings-language-zh');
-    var le = document.getElementById('settings-language-en');
-    if (lz) lz.classList.toggle('is-active', language !== 'en');
-    if (le) le.classList.toggle('is-active', language === 'en');
 }
 
 function applyFontLevel(level, persist) {
@@ -156,10 +151,12 @@ function initUiSettingsControls() {
     var sd = document.getElementById('settings-session-detailed');
     if (sc) sc.addEventListener('click', function () { applySessionListMode('compact', true); });
     if (sd) sd.addEventListener('click', function () { applySessionListMode('detailed', true); });
-    var lz = document.getElementById('settings-language-zh');
-    var le = document.getElementById('settings-language-en');
-    if (lz) lz.addEventListener('click', function () { applyUiLanguage('zh-CN', true); syncSettingsModalForm(); });
-    if (le) le.addEventListener('click', function () { applyUiLanguage('en', true); syncSettingsModalForm(); });
+    var languageBtn = document.getElementById('sidebar-language-btn');
+    if (languageBtn) {
+        languageBtn.addEventListener('click', function () {
+            applyUiLanguage(uiLanguage === 'en' ? 'zh-CN' : 'en', true);
+        });
+    }
     var envAdv = document.getElementById('settings-env-advanced');
     if (envAdv) {
         envAdv.addEventListener('click', function () {

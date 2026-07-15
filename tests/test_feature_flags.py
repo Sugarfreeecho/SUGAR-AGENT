@@ -118,26 +118,40 @@ def test_frontend_feature_entrypoints_are_flag_guarded():
     assert "if (!sendPipelineLock) return;" in sse
     assert "releaseSendPipelineLock(sendPipelineLock);" in sse
     assert "formData.append('steer_id', String(options.steerId))" in sse
-    assert "scheduleFollowupQueueDrain" not in sse
-    assert "drainFollowupQueue" not in sse
+    assert "function scheduleFollowupQueueDrain(sessionId, delayMs)" in sse
+    assert "function drainFollowupQueue(sessionId)" in sse
     assert "followupEnabled" in sessions
     assert "isMyAgentFeatureEnabled('followupRestart', false)" in sessions
 
 
-def test_followups_wait_for_explicit_send_now_after_run_end():
+def test_followups_auto_drain_only_after_run_end():
     sse = (ROOT / "frontend/src/app/modules/sse-handling.js").read_text(encoding="utf-8")
     enqueue = sse.split("function enqueueCurrentInputAsFollowup()", 1)[1].split(
         "function takeFollowupItem", 1
     )[0]
+    end_run = sse.split("function endRunForClient", 1)[1].split(
+        "async function readSseChunkWithIdleTimeout", 1
+    )[0]
+    drain = sse.split("function drainFollowupQueue(sessionId)", 1)[1].split(
+        "function scheduleAcceptedFollowupWatch", 1
+    )[0]
 
-    # Enter only appends to the durable browser queue. Ending the current run
-    # must not consume it; only the explicit send-now button may do that.
+    # Enqueue itself must never transmit. Run finalization arms automatic
+    # draining, which is fenced until both local and server run state are idle.
     assert "sendFollowupNow" not in enqueue
-    assert "scheduleFollowupQueueDrain" not in sse
-    assert "drainFollowupQueue" not in sse
+    assert "scheduleFollowupQueueDrain" not in enqueue
+    assert "setSendButtonState();" in enqueue
+    assert "scheduleFollowupQueueDrain" in end_run
+    assert "isSessionRunning(sid)" in drain
+    assert "isServerStreamActive(sid)" in drain
+    assert "followupDrainTimers[sid]" in sse
+    assert drain.index("if (!q.length)") < drain.index("isSessionRunning(sid)")
 
+    # Explicit Send now remains available independently on every pending row
+    # and deliberately bypasses the automatic drain's idle-only gate.
     assert "sendNow.addEventListener('click'" in sse
     assert "sendFollowupNow(String(item.id));" in sse
+    assert "sendNow.disabled = !!item.status;" in sse
 
 
 def test_model_profile_selector_fences_cross_session_responses():

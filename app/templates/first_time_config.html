@@ -107,12 +107,35 @@
     padding: 1.25rem;
     animation: fadeUp 0.55s var(--ease-out-expo);
   }
+  .wizard-language-toggle {
+    position: absolute;
+    top: 1rem;
+    right: 1rem;
+    z-index: 2;
+    display: inline-flex;
+    align-items: center;
+    gap: .35rem;
+    min-width: 2.4rem;
+    justify-content: center;
+    padding: .38rem .58rem;
+    border: 1px solid var(--border-glass);
+    border-radius: 999px;
+    background: rgba(255,255,255,.055);
+    color: var(--text-secondary);
+    font: 700 .7rem var(--sans);
+    cursor: pointer;
+    transition: color .18s ease, border-color .18s ease, background .18s ease, transform .18s ease;
+  }
+  .wizard-language-toggle:hover { color: var(--text-primary); border-color: var(--border-accent); background: rgba(99,102,241,.12); transform: translateY(-1px); }
+  .wizard-language-toggle__icon { font-size: .82rem; line-height: 1; letter-spacing: -.12em; }
+  :root.theme-light .wizard-language-toggle { background: rgba(0,0,0,.035); }
   @keyframes fadeUp {
     from { opacity: 0; transform: translateY(14px); }
     to { opacity: 1; transform: translateY(0); }
   }
 
   .card {
+    position: relative;
     background: var(--surface-glass3);
     border: 1px solid var(--border-glass);
     border-radius: var(--radius-lg);
@@ -555,6 +578,9 @@
 
 <div class="container">
   <div class="card">
+    <button type="button" id="wizard-language-toggle" class="wizard-language-toggle" aria-label="切换为英文" title="切换语言">
+      <span class="wizard-language-toggle__icon" aria-hidden="true">文A</span>
+    </button>
     <div class="logo">
       <div class="logo-icon" aria-hidden="true"><img src="/assets/sugar-logo.png" alt="" draggable="false"></div>
       <h1>General Agent</h1>

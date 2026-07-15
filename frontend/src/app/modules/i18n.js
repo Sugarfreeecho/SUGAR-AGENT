@@ -4,7 +4,7 @@
 const LS_UI_LANGUAGE = 'myagent-language';
 const UI_TRANSLATIONS_EN = {
     '自优化通用智能平台': 'Self-optimizing general intelligence platform',
-    '界面设置': 'Interface settings', '新建会话': 'New session', '新建对话': 'New chat',
+    '界面设置': 'Interface settings', '新建会话': 'New session', '新建对话': 'New chat', '切换语言': 'Switch language', '切换为英文': 'Switch to English', '切换为中文': 'Switch to Chinese',
     '会话列表': 'Session list', '拖动调整侧栏宽度': 'Drag to resize sidebar', '聊天': 'Chat',
     '选择或新建会话': 'Select or create a session', '展开 Subagent 面板': 'Expand Subagent panel',
     '当前计划': 'Current plan', '清除计划': 'Clear plan', '清除当前计划': 'Clear current plan',
@@ -34,6 +34,35 @@ const UI_TRANSLATIONS_EN = {
     '需要确认': 'Confirmation required', '任务已中断': 'Task interrupted', '已请求停止当前任务': 'Stop requested',
     '展开': 'Expand', '收起': 'Collapse', '复制': 'Copy', '改写': 'Rewrite', '重试': 'Retry'
 };
+Object.assign(UI_TRANSLATIONS_EN, {
+    '新会话': 'New session', '停止 <span class="loader">': 'Stop <span class="loader">', '加载会话': 'Load session',
+    '取消置顶': 'Unpin', '取消归档': 'Unarchive', '删除会话': 'Delete session', '此操作不可恢复': 'This action cannot be undone',
+    '无法同步服务器。': 'Could not sync with the server.', '当前没有选中的会话。': 'No session is currently selected.',
+    '消息定位索引无效，可能需要刷新当前会话。': 'The message index is invalid. Refresh the current session.',
+    '服务端拒绝清空整个会话。': 'The server rejected clearing the entire session.',
+    '服务端裁剪历史失败，可能是历史索引已变化或会话文件暂时不一致。': 'The server could not trim history; the index may have changed or the session file may be inconsistent.',
+    '原因：': 'Reason: ', '无法改写': 'Cannot rewrite', '改写内容不能为空。': 'Rewrite content cannot be empty.',
+    '生成中不可操作': 'Unavailable while generating', '当前会话仍在生成。请等待完成或停止后再修改历史。': 'This session is still generating. Wait for completion or stop it before editing history.',
+    '无法删除该条': 'Cannot delete this message', '消息索引异常，已阻止清空整个会话。请刷新后再试。': 'The message index is invalid; clearing the session was blocked. Refresh and try again.',
+    '删除消息': 'Delete message', '将同步到服务器': 'Will sync to server', '确定删除本条及之后的所有对话内容吗？': 'Delete this message and all following conversation content?',
+    '同步失败': 'Sync failed', '删除未生效。': 'The deletion was not applied.', '无法改写该条': 'Cannot rewrite this message',
+    '该消息尚未与服务器索引对齐，请刷新当前会话后再试。': 'This message is not aligned with the server index. Refresh the session and try again.',
+    '无法分支': 'Cannot branch', '该回答尚未与服务器同步，请刷新页面后重试。': 'This response is not synced with the server. Refresh and try again.',
+    '创建分支会话': 'Create branch session', '原会话不会被修改': 'The original session will not be modified',
+    '问题': 'Question', '已完成': 'Completed', '进行中': 'In progress', '未开始': 'Not started',
+    '折叠文件夹': 'Collapse folder', '展开文件夹': 'Expand folder', '下载保存 Mermaid 流程图为图片': 'Download Mermaid diagram as image',
+    '调用工具': 'Tool calls', '次': 'times', '轮': 'rounds', '分': 'm', '秒': 's',
+    '工具调用生成中...': 'Preparing tool call...', '执行中...': 'Running...', '执行结果': 'Result',
+    '平均': 'Average', '累计': 'Total', '占比': 'Share', '暂无数据': 'No data', '暂无执行统计': 'No execution statistics',
+    '暂无子事件': 'No sub-events', '无用户消息': 'No user message', '成功': 'Success', '会话数': 'Sessions',
+    'LLM 请求': 'LLM requests', 'API 累计耗时': 'Cumulative API duration', '平均首 token': 'Average first token',
+    '累计输入 token': 'Cumulative input tokens', '累计输出 token': 'Cumulative output tokens', '工具调用总数': 'Total tool calls',
+    '累计网络流量': 'Cumulative network traffic', 'API 总耗时': 'Total API duration', '首 token': 'First token',
+    '输入 token': 'Input tokens', '输出 token': 'Output tokens', '上下文长度': 'Context length', '工具调用': 'Tool calls',
+    '网络等待': 'Network wait', '网络流量': 'Network traffic', '时间': 'Time', '执行轮次': 'Execution round',
+    '模型': 'Model', '会话': 'Session', '运行 ID': 'Run ID', 'Session ID': 'Session ID', '当前会话筛选': 'Current session filter',
+    '所有会话': 'All sessions', '累计总值': 'Cumulative totals', '平均首 token': 'Average first token'
+});
 Object.assign(UI_TRANSLATIONS_EN, {
     // Session navigation and lifecycle
     '置顶目录': 'Pinned', '归档目录': 'Archived', '刷新归档目录': 'Refresh archived sessions',
@@ -127,6 +156,11 @@ function translateUiString(value) {
         .replace(/^恢复实时流失败: (.+)$/, 'Failed to restore live stream: $1')
         .replace(/^追问插入失败: (.+)$/, 'Failed to insert follow-up: $1')
         .replace(/^追问已被接收，无法撤回: (.+)$/, 'The follow-up was accepted and cannot be withdrawn: $1')
+        .replace(/^平均 (.+)$/, 'Average $1')
+        .replace(/^累计 (.+)$/, 'Total $1')
+        .replace(/^占本阶段 (.+)$/, 'Share of phase $1')
+        .replace(/^(.+) 次 LLM 请求$/, '$1 LLM requests')
+        .replace(/^(.+) 个模型。$/, '$1 models.')
         .replace(/^\.\.\. \[中间省略 (\d+) 行\] \.\.\.$/, '... [$1 lines omitted] ...')
         .replace(/^\.\.\. \[中间省略约 (\d+) 字符\] \.\.\.$/, '... [about $1 characters omitted] ...');
 }
@@ -137,6 +171,7 @@ function translateUiNode(root) {
     if (root.nodeType === Node.ELEMENT_NODE) elements.push(root);
     if (root.querySelectorAll) elements = elements.concat(Array.from(root.querySelectorAll('*')));
     elements.forEach(function (el) {
+        if (el.closest && el.closest('.sidebar-brand-sub')) return;
         if (el.matches('script,style,code,pre,[contenteditable="true"]')) return;
         var originals = uiI18nAttrOriginal.get(el) || {};
         UI_I18N_ATTRS.forEach(function (attr) {
@@ -164,6 +199,11 @@ function applyUiLanguage(language, persist) {
     if (persist) localStorage.setItem(LS_UI_LANGUAGE, uiLanguage);
     if (uiI18nObserver) uiI18nObserver.disconnect();
     translateUiNode(document.body);
+    var languageButton = document.getElementById('sidebar-language-btn');
+    if (languageButton) {
+        languageButton.setAttribute('aria-label', uiLanguage === 'en' ? 'Switch to Chinese' : '切换为英文');
+        languageButton.setAttribute('title', uiLanguage === 'en' ? 'Switch language' : '切换语言');
+    }
     if (uiI18nObserver) uiI18nObserver.observe(document.body, { childList: true, subtree: true });
     document.dispatchEvent(new CustomEvent('myagent:language-change', { detail: { language: uiLanguage } }));
 }
@@ -175,6 +215,19 @@ function initUiI18n() {
                 if (node.nodeType === Node.ELEMENT_NODE) translateUiNode(node);
                 else if (node.nodeType === Node.TEXT_NODE && node.parentElement) translateUiNode(node.parentElement);
             });
+            if (mutation.type === 'characterData' && mutation.target.parentElement) {
+                var textNode = mutation.target;
+                var current = textNode.nodeValue || '';
+                var original = uiI18nTextOriginal.get(textNode);
+                if (!original || !original.trim()) {
+                    original = current;
+                    uiI18nTextOriginal.set(textNode, original);
+                }
+                var trimmed = original.trim();
+                var translated = uiLanguage === 'en' ? translateUiString(trimmed) : trimmed;
+                var nextValue = original.replace(trimmed, translated);
+                if (nextValue !== current) textNode.nodeValue = nextValue;
+            }
         });
     });
     applyUiLanguage(uiLanguage, false);

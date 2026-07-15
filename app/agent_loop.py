@@ -3434,10 +3434,11 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                 tc = _early_tool_call_from_acc(idx)
                 if not tc or tc.get("name") == "context_manage":
                     return
-                # Only pre-run read-only tools while the model is still streaming.
-                # Write tools must wait until the final finish_reason confirms the
-                # assistant turn was not truncated by max_tokens.
-                if tc.get("name") not in READ_ONLY_TOOLS:
+                # Start read-only and cooperatively cancellable work as soon as a
+                # complete tool JSON object arrives. Irreversible writes still
+                # wait for the provider finish_reason so a truncated call cannot
+                # partially mutate the workspace.
+                if tc.get("name") not in READ_ONLY_TOOLS | COOPERATIVE_STEER_TOOLS:
                     return
                 early_tool_tasks[idx] = asyncio.create_task(_run_early_tool_call(idx, tc))
 
@@ -5128,6 +5129,7 @@ async def astream_events(
     state["_steer_control"] = steer_control
 
     queue: asyncio.Queue = asyncio.Queue()
+    consumer_attached = True
     runtime_v2_terminal_mirrored = False
 
     def mirror_runtime_v2_sync(event_type: str, payload: Optional[Dict[str, Any]] = None) -> None:
@@ -5171,10 +5173,17 @@ async def astream_events(
         persist = should_persist_ui_event(ev) and not runtime_committed
         if persist and ev.get("type") != "tool_call":
             session_manager.append_ui_event(session_id, ev)
-        await publish_session_event(session_id, public_event)
-        await queue.put(public_event)
         if persist and ev.get("type") == "tool_call":
+            # Keep the originating response fast, but do not expose this event
+            # to reconnecting observers until the projection can replay it.
+            if consumer_attached:
+                await queue.put(public_event)
             await asyncio.to_thread(session_manager.append_ui_event, session_id, ev)
+            await publish_session_event(session_id, public_event)
+            return
+        await publish_session_event(session_id, public_event)
+        if consumer_attached:
+            await queue.put(public_event)
 
     power_guard = AgentRunPowerGuard()
 
@@ -5387,12 +5396,14 @@ async def astream_events(
                 terminal_event = {"type": "run_finished", "run_id": runtime_v2_run_id, "ephemeral": True}
             await emit(terminal_event)
             await close_session_stream(session_id)
-            await queue.put(None)
+            if consumer_attached:
+                await queue.put(None)
 
     task = asyncio.create_task(runner())
     from session_lifecycle import register_run_task
 
     register_run_task(session_id, task)
+    cancel_requested_by_consumer = False
     try:
         while True:
             if should_stop and should_stop(session_id):
@@ -5400,6 +5411,7 @@ async def astream_events(
                 if reason == "followup":
                     mirror_runtime_v2("run_interrupted", {"reason": reason})
                     task.cancel()
+                    cancel_requested_by_consumer = True
                     break
                 ev1 = {"type": "status", "content": "任务已由用户中断"}
                 ev2 = {"type": "final", "content": "任务已由用户中断。"}
@@ -5410,22 +5422,25 @@ async def astream_events(
                 yield ev1
                 yield ev2
                 task.cancel()
+                cancel_requested_by_consumer = True
                 break
             item = await queue.get()
             if item is None:
                 break
             yield item
     finally:
-        if not task.done():
+        consumer_attached = False
+        if task.done() or cancel_requested_by_consumer:
             try:
-                session_manager.request_interrupt(session_id, runtime_v2_run_id, reason="disconnect")
-            except Exception:
+                await task
+            except asyncio.CancelledError:
                 pass
-            task.cancel()
-        try:
-            await task
-        except asyncio.CancelledError:
-            pass
+        else:
+            # A browser refresh/network detach only removes this consumer.  The
+            # registered run keeps publishing through the session event bus so a
+            # replacement observer can attach without converting the disconnect
+            # into a user interruption.
+            task.add_done_callback(_discard_task_result)
 
 
 async def astream_events_continuation(
@@ -5525,6 +5540,7 @@ async def astream_events_continuation(
     state["_steer_control"] = steer_control
 
     queue: asyncio.Queue = asyncio.Queue()
+    consumer_attached = True
     runtime_v2_terminal_mirrored = False
 
     def mirror_runtime_v2_sync(event_type: str, payload: Optional[Dict[str, Any]] = None) -> None:
@@ -5566,10 +5582,15 @@ async def astream_events_continuation(
         persist = should_persist_ui_event(ev) and not runtime_committed
         if persist and ev.get("type") != "tool_call":
             session_manager.append_ui_event(session_id, ev)
-        await publish_session_event(session_id, public_event)
-        await queue.put(public_event)
         if persist and ev.get("type") == "tool_call":
+            if consumer_attached:
+                await queue.put(public_event)
             await asyncio.to_thread(session_manager.append_ui_event, session_id, ev)
+            await publish_session_event(session_id, public_event)
+            return
+        await publish_session_event(session_id, public_event)
+        if consumer_attached:
+            await queue.put(public_event)
 
     power_guard = AgentRunPowerGuard()
 
@@ -5716,12 +5737,14 @@ async def astream_events_continuation(
                 terminal_event = {"type": "run_finished", "ephemeral": True}
             await emit(terminal_event)
             await close_session_stream(session_id)
-            await queue.put(None)
+            if consumer_attached:
+                await queue.put(None)
 
     task = asyncio.create_task(runner())
     from session_lifecycle import register_run_task
 
     register_run_task(session_id, task)
+    cancel_requested_by_consumer = False
     try:
         while True:
             if should_stop and should_stop(session_id):
@@ -5729,6 +5752,7 @@ async def astream_events_continuation(
                 if reason == "followup":
                     mirror_runtime_v2("run_interrupted", {"reason": reason})
                     task.cancel()
+                    cancel_requested_by_consumer = True
                     break
                 ev1 = {"type": "status", "content": "任务已由用户中断"}
                 ev2 = {"type": "final", "content": "任务已由用户中断。"}
@@ -5739,19 +5763,18 @@ async def astream_events_continuation(
                 yield ev1
                 yield ev2
                 task.cancel()
+                cancel_requested_by_consumer = True
                 break
             item = await queue.get()
             if item is None:
                 break
             yield item
     finally:
-        if not task.done():
+        consumer_attached = False
+        if task.done() or cancel_requested_by_consumer:
             try:
-                session_manager.request_interrupt(session_id, runtime_v2_run_id, reason="disconnect")
-            except Exception:
+                await task
+            except asyncio.CancelledError:
                 pass
-            task.cancel()
-        try:
-            await task
-        except asyncio.CancelledError:
-            pass
+        else:
+            task.add_done_callback(_discard_task_result)

@@ -142,7 +142,7 @@ async function consumeAgentSseResponse(response, runCtx, runSessionId, streamEve
                 if (parsed && (parsed.type === 'sse_keepalive' || parsed.keepalive === true)) continue;
                 if (parsed && parsed.protocol === 'runtime_v2') {
                     const envelopeSessionId = parsed.session_id || parsed.sessionId || runSessionId;
-                    if (!sessionStore.shouldAcceptSseEvent(envelopeSessionId, parsed.seq)) continue;
+                    if (!sessionStore.shouldAcceptSseEvent(envelopeSessionId, parsed.seq, 'runtime_v2')) continue;
                     if (parsed.skip_ui) {
                         applySkippedRuntimeV2EventMetadata(parsed, runCtx, envelopeSessionId);
                         continue;
@@ -158,7 +158,8 @@ async function consumeAgentSseResponse(response, runCtx, runSessionId, streamEve
                     });
                 }
                 const eventSessionId = parsed.session_id || parsed.sessionId || runSessionId;
-                if (shouldApplySseSeqFilter(parsed) && !sessionStore.shouldAcceptSseEvent(eventSessionId, parsed.seq)) continue;
+                if (shouldApplySseSeqFilter(parsed)
+                    && !sessionStore.shouldAcceptSseEvent(eventSessionId, parsed.seq, parsed.seq_scope || 'legacy')) continue;
                 if (parsed.type === 'user_steer' && parsed.steer) {
                     var steerEventIndex = parsed.ephemeral && Number.isFinite(Number(parsed.seq)) ? Number(parsed.seq) : streamEventIdx;
                     try {
@@ -464,6 +465,9 @@ async function startContinueAfterSubagents(sessionId, forcedMode) {
         const preCount = await getUiEventCount(runSessionId, { preferCache: true });
         if (!getVisibleChatStream()) ensureVisibleChatStreamSlot();
         runCtx = newDomContext(getVisibleChatStream());
+        if (sessionStore && typeof sessionStore.resetSseSeq === 'function') {
+            sessionStore.resetSseSeq(runSessionId);
+        }
         initRunFinalTracking(runCtx);
         runCtx.runStartedAt = new Date().toISOString();
         if (getSessionRunState(runSessionId) && getSessionRunState(runSessionId).ctx) {
@@ -500,7 +504,9 @@ async function startContinueAfterSubagents(sessionId, forcedMode) {
         } finally {
             finalizeLlmStreamChunks(runCtx);
             finalizeProgressStreamChunks(runCtx);
-            if (runSessionId === currentSessionId && getRunAbortReason(runSessionId, runCtx) !== 'user') {
+            if (runSessionId === currentSessionId
+                && getRunAbortReason(runSessionId, runCtx) !== 'user'
+                && !isServerStreamActive(runSessionId)) {
                 scheduleFinalVisibleAfterRunIfEnabled(runSessionId, runCtx, { delayMs: 120 });
             }
             if (runSessionId === currentSessionId) renderTodoPlanForCurrentSession();
@@ -513,6 +519,7 @@ async function startContinueAfterSubagents(sessionId, forcedMode) {
             syncSessionListIndicatorClasses();
             void refreshSingleSessionRow(runSessionId);
             applyContextTokenLabelForCurrentSession();
+            scheduleActiveSessionReconnect(runSessionId, { delayMs: 120 });
         }
         hideSubagentContinueBanner();
         if (!subagentContinueDismissedForSession[sessionId]) updateSubagentContinueBanner(sessionId);
@@ -628,7 +635,7 @@ function reportClientPipelineStep(ctx, step, startedAt, extra) {
 function applySkippedRuntimeV2EventMetadata(event, runCtx, sessionId) {
     if (!event || !event.skip_ui) return;
     const runtimeEvent = event.runtime_event && typeof event.runtime_event === 'object' ? event.runtime_event : null;
-    if (!runtimeEvent || runtimeEvent.type !== 'message_user') return;
+    if (!runtimeEvent || (runtimeEvent.type !== 'message_user' && runtimeEvent.type !== 'user_turn_committed')) return;
     const runtimeSeq = Number(event.runtime_seq || event.seq);
     if (!Number.isFinite(runtimeSeq) || runtimeSeq <= 0) return;
     if (runCtx) runCtx.lastUserRuntimeSeq = Math.floor(runtimeSeq);
@@ -708,7 +715,9 @@ async function attachSessionEventStream(sessionId, opts) {
             finalizeLlmStreamChunks(runCtx);
             finalizeProgressStreamChunks(runCtx);
         }
-        if (runSessionId === currentSessionId && getRunAbortReason(runSessionId, runCtx) !== 'user') {
+        if (runSessionId === currentSessionId
+            && getRunAbortReason(runSessionId, runCtx) !== 'user'
+            && !isServerStreamActive(runSessionId)) {
             scheduleFinalVisibleAfterRunIfEnabled(runSessionId, runCtx, { delayMs: 120 });
         }
         if (getSessionRunState(runSessionId) && getSessionRunState(runSessionId).reattached) {
@@ -718,6 +727,7 @@ async function attachSessionEventStream(sessionId, opts) {
         syncSessionListIndicatorClasses();
         void refreshSingleSessionRow(runSessionId);
         setTimeout(function () { reconcileRunStateFromServer({ silent: true }); }, 800);
+        scheduleActiveSessionReconnect(runSessionId, { delayMs: 120 });
         applyContextTokenLabelForCurrentSession();
         if (runSessionId === currentSessionId) {
             clearSessionUnreadState(runSessionId);
@@ -857,6 +867,9 @@ function persistFollowupQueue(sessionId) {
 function removeStoredFollowupQueue(sessionId) {
     const sid = String(sessionId || '');
     if (!sid) return;
+    var pendingDrain = followupDrainTimers[sid];
+    if (pendingDrain && pendingDrain.timer) clearTimeout(pendingDrain.timer);
+    delete followupDrainTimers[sid];
     delete followupQueueBySession[sid];
     delete followupQueueLoadedBySession[sid];
     try { localStorage.removeItem(followupQueueStorageKey(sid)); } catch (e) { /* ignore */ }
@@ -1009,7 +1022,10 @@ function enqueueCurrentInputAsFollowup() {
     persistInputDraft(sid, '');
     clearInputPathTokens();
     autoResizeTextarea();
-    scheduleFollowupQueueDrain(sid, 0);
+    // appendFollowupQueueItem() refreshed the button while the composer still
+    // contained the follow-up. Refresh again after clearing it so the active
+    // run exposes "Stop", rather than leaving a stale "Follow up" label.
+    setSendButtonState();
     return true;
 }
 
@@ -1252,16 +1268,23 @@ function removeConsumedFollowupSteer(sessionId, ev) {
 function scheduleFollowupQueueDrain(sessionId, delayMs) {
     var sid = String(sessionId || '');
     if (!sid) return;
-    setTimeout(function () { drainFollowupQueue(sid); }, Math.max(0, Number(delayMs) || 0));
+    var delay = Math.max(0, Number(delayMs) || 0);
+    var dueAt = Date.now() + delay;
+    var existing = followupDrainTimers[sid];
+    if (existing && existing.dueAt <= dueAt) return;
+    if (existing && existing.timer) clearTimeout(existing.timer);
+    var timer = setTimeout(function () {
+        var current = followupDrainTimers[sid];
+        if (!current || current.timer !== timer) return;
+        delete followupDrainTimers[sid];
+        drainFollowupQueue(sid);
+    }, delay);
+    followupDrainTimers[sid] = { timer: timer, dueAt: dueAt };
 }
 
 function drainFollowupQueue(sessionId) {
     var sid = String(sessionId || '');
     if (!sid || followupQueueDraining[sid]) return;
-    if (isSendPipelineLocked(sid)) {
-        scheduleFollowupQueueDrain(sid, 120);
-        return;
-    }
     var q = getFollowupQueue(sid);
     if (!q.length) {
         renderFollowupQueue(sid);
@@ -1270,6 +1293,15 @@ function drainFollowupQueue(sessionId) {
     var item = q[0];
     if (!item || item.status) {
         renderFollowupQueue(sid);
+        return;
+    }
+    // Automatic draining is armed by run-finalization paths, never by enqueue.
+    // Still fence it against both local and server-observed activity: the local
+    // fetch lock can be absent while reconnecting to a run owned by the server.
+    // "Send now" calls sendFollowupNow() directly and intentionally bypasses
+    // this idle-only gate.
+    if (isSendPipelineLocked(sid) || isSessionRunning(sid) || isServerStreamActive(sid)) {
+        scheduleFollowupQueueDrain(sid, 120);
         return;
     }
     followupQueueDraining[sid] = true;

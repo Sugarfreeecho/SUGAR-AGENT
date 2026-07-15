@@ -76,11 +76,25 @@ async def _cancel_tasks(tasks: List[asyncio.Task], timeout: float = 8.0) -> None
     pending = [t for t in tasks if t and not t.done()]
     if not pending:
         return
+    current_loop = asyncio.get_running_loop()
     for t in pending:
-        t.cancel()
-    try:
-        await asyncio.wait_for(asyncio.gather(*pending, return_exceptions=True), timeout=timeout)
-    except asyncio.TimeoutError:
+        try:
+            task_loop = t.get_loop()
+            if task_loop is current_loop:
+                t.cancel()
+            elif task_loop.is_running():
+                task_loop.call_soon_threadsafe(t.cancel)
+            else:
+                t.cancel()
+        except Exception:
+            logger.debug("failed to request session task cancellation", exc_info=True)
+    deadline = current_loop.time() + max(0.0, float(timeout))
+    while any(not task.done() for task in pending) and current_loop.time() < deadline:
+        # Registered chat runs may live on the worker thread's event loop.  A
+        # foreign-loop Task cannot be passed to gather() on this loop, so wait
+        # for its thread-safe cancellation to settle without cross-loop awaits.
+        await asyncio.sleep(0.01)
+    if any(not task.done() for task in pending):
         logger.warning("session task cancel timeout (%d tasks)", len(pending))
 
 

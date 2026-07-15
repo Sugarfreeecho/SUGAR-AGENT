@@ -439,7 +439,6 @@ function syncArchivedSessionStateFromStore() {
 function computeSessionListRenderKey() {
     const sessions = sessionStore.list();
     const parts = [
-        'cur=' + String(currentSessionId || ''),
         'archivedLoaded=' + (sessionStore.archivedLoaded ? '1' : '0'),
         'archivedCount=' + String(sessionStore.archivedCount || 0),
     ];
@@ -451,13 +450,8 @@ function computeSessionListRenderKey() {
             s.name || '',
             s.pinned ? 'p' : '',
             s.archived ? 'a' : '',
-            s.stream_active ? 'r' : '',
-            s.unread_result ? ('u:' + (s.unread_result_status || 'success')) : '',
             s.last_activity_at || s.updated_at || '',
             s.last_user_preview || '',
-            s.subagent_running || 0,
-            s.subagent_pending_continue || 0,
-            s.subagent_can_continue ? 'c' : '',
         ].join('\u001f'));
     }
     const archived = sessionStore.archivedList();
@@ -468,7 +462,6 @@ function computeSessionListRenderKey() {
             a.id,
             a.name || '',
             a.pinned ? 'p' : '',
-            a.unread_result ? ('u:' + (a.unread_result_status || 'success')) : '',
             a.last_activity_at || a.updated_at || '',
             a.last_user_preview || '',
         ].join('\u001f'));

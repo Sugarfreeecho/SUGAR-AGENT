@@ -638,7 +638,7 @@ def _runtime_v2_chat_sse_payload(session_id: str, event_dict: dict) -> Optional[
                 "ephemeral": True,
                 **resume_payload,
             }
-        elif event.type == "message_user":
+        elif event.type in {"message_user", "user_turn_committed"}:
             # Regular /chat user messages are rendered optimistically in the
             # browser. Steer messages are intentionally not, so they must be
             # projected through this live Runtime V2 stream.
@@ -2787,6 +2787,39 @@ async def stream_session_events(
     async def runtime_v2_event_generator():
         _observer_streams_by_session[sid] = _observer_streams_by_session.get(sid, 0) + 1
         cursor = int(after_index) if after_index is not None else -1
+        subscription = subscribe_session_events(sid, replay_recent=True)
+        next_live_event = asyncio.create_task(subscription.__anext__())
+
+        async def drain_projection(projection):
+            nonlocal cursor
+            while True:
+                page = await asyncio.to_thread(
+                    projection.read_ui_page,
+                    sid,
+                    after_index=cursor,
+                    limit=100,
+                )
+                events = page.get("events") if isinstance(page, dict) else []
+                if not isinstance(events, list) or not events:
+                    break
+                start = int(page.get("range_start") or (cursor + 1))
+                for offset, event in enumerate(events):
+                    if await request.is_disconnected():
+                        return
+                    if not isinstance(event, dict):
+                        continue
+                    event_index = start + offset
+                    payload = dict(event)
+                    payload["session_id"] = sid
+                    payload["seq"] = event_index + 1
+                    payload["seq_scope"] = "ui_projection"
+                    yield_payload = f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+                    cursor = max(cursor, event_index)
+                    yield yield_payload
+                    await asyncio.sleep(0)
+                if len(events) < 100:
+                    break
+
         try:
             try:
                 from runtime_v2.ui_projection import RuntimeUiProjection
@@ -2795,39 +2828,62 @@ async def stream_session_events(
                     session_manager.repository.sessions_dir,
                     path_resolver=session_manager._resolve_session_path,
                 )
-                page = projection.read_ui_page(sid, after_index=cursor, limit=100)
-                events = page.get("events") if isinstance(page, dict) else []
-                if isinstance(events, list) and events:
-                    start = int(page.get("range_start") or (cursor + 1))
-                    for offset, event in enumerate(events):
-                        if await request.is_disconnected():
-                            break
-                        if not isinstance(event, dict):
-                            continue
-                        event_index = start + offset
-                        payload = dict(event)
-                        payload["session_id"] = sid
-                        payload["seq"] = event_index + 1
-                        yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
-                        cursor = max(cursor, event_index)
-                        await asyncio.sleep(0)
+                # Start the live subscription before reading the projection. Any
+                # event committed during catch-up is queued, closing the old
+                # query-then-subscribe race that could hide tool/final events.
+                await asyncio.sleep(0)
+                async for payload in drain_projection(projection):
+                    yield payload
                 if await request.is_disconnected():
                     return
-                if not _has_local_worker_activity(sid):
-                    yield "data: [DONE]\n\n"
-                    return
-                async for event in subscribe_session_events(sid, replay_recent=True):
+                while True:
                     if await request.is_disconnected():
                         break
+                    if not _has_local_worker_activity(sid) and not next_live_event.done():
+                        try:
+                            await asyncio.wait_for(asyncio.shield(next_live_event), timeout=0.05)
+                        except asyncio.TimeoutError:
+                            async for payload in drain_projection(projection):
+                                yield payload
+                            yield "data: [DONE]\n\n"
+                            return
+                    try:
+                        event = await asyncio.wait_for(asyncio.shield(next_live_event), timeout=15.0)
+                    except asyncio.TimeoutError:
+                        yield f": observer keepalive {cursor}\n\n"
+                        continue
+                    except StopAsyncIteration:
+                        event = None
                     if event is None:
+                        async for payload in drain_projection(projection):
+                            yield payload
                         break
-                    yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
-                    await asyncio.sleep(0)
+                    next_live_event = asyncio.create_task(subscription.__anext__())
+                    if event.get("ephemeral"):
+                        yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+                        await asyncio.sleep(0)
+                    else:
+                        # Durable events are rendered from the V2 projection so
+                        # reconnect and live paths share one ordering/index source.
+                        async for payload in drain_projection(projection):
+                            yield payload
                 if not await request.is_disconnected():
                     yield "data: [DONE]\n\n"
             except asyncio.CancelledError:
                 return
         finally:
+            if not next_live_event.done():
+                next_live_event.cancel()
+            try:
+                await next_live_event
+            except (asyncio.CancelledError, StopAsyncIteration):
+                pass
+            except Exception:
+                logger.debug("observer live-event task cleanup failed for %s", sid, exc_info=True)
+            try:
+                await subscription.aclose()
+            except Exception:
+                pass
             n = _observer_streams_by_session.get(sid, 1) - 1
             if n <= 0:
                 _observer_streams_by_session.pop(sid, None)
