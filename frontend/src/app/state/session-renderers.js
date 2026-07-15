@@ -33,7 +33,6 @@ function renderSessionListFromStore() {
 
         var body = document.createElement('div');
         body.className = 'session-section-body';
-        if (sectionKey === 'archived') appendArchiveLoadButton(body);
         if (sectionKey === 'normal' && Array.isArray(sections.normalGroups) && sections.normalGroups.length) {
             for (let g = 0; g < sections.normalGroups.length; g += 1) {
                 var group = sections.normalGroups[g];
@@ -50,6 +49,7 @@ function renderSessionListFromStore() {
                 body.appendChild(buildAndBindSessionRow(list[j], allSessions, nextStreamMap));
             }
         }
+        if (sectionKey === 'archived') appendArchiveLoadButton(body);
         sec.appendChild(toggle);
         sec.appendChild(body);
         sessionsList.appendChild(sec);
@@ -65,7 +65,9 @@ function appendArchiveLoadButton(body) {
     var loadBtn = document.createElement('button');
     loadBtn.type = 'button';
     loadBtn.className = 'session-archive-load-btn';
-    loadBtn.textContent = sessionStore.archivedLoaded ? '刷新归档目录' : '加载归档目录';
+    loadBtn.textContent = !sessionStore.archivedLoaded
+        ? '加载归档目录'
+        : (sessionStore.hasMoreArchivedSessions() ? '加载更多' : '刷新归档目录');
     loadBtn.addEventListener('click', async function (e) {
         e.preventDefault();
         e.stopPropagation();
@@ -76,7 +78,9 @@ function appendArchiveLoadButton(body) {
         } catch (err) {
             console.error('加载归档目录失败:', err);
             loadBtn.disabled = false;
-            loadBtn.textContent = sessionStore.archivedLoaded ? '刷新归档目录' : '加载归档目录';
+            loadBtn.textContent = !sessionStore.archivedLoaded
+                ? '加载归档目录'
+                : (sessionStore.hasMoreArchivedSessions() ? '加载更多' : '刷新归档目录');
         }
     });
     body.appendChild(loadBtn);

@@ -7,7 +7,15 @@ function applySessionSnapshot(snapshot) {
     }
     sessionStore.applySnapshot(sessions, archivedCount);
     if (sessionStore.archivedLoaded && (snapshot.include_archived || snapshot.includeArchived)) {
-        sessionStore.setArchivedLoaded(sessions);
+        const loadedCount = Array.isArray(sessionStore.archivedSessions)
+            ? sessionStore.archivedSessions.length
+            : 0;
+        const visibleCount = sessionStore.archivedVisibleCount;
+        const archived = sessions.filter(function (s) { return s && s.id && !!s.archived; });
+        sessionStore.setArchivedLoaded(archived.slice(0, loadedCount), {
+            visibleCount: visibleCount,
+            totalCount: archivedCount,
+        });
     }
     if (snapshot.current_session_id || snapshot.currentSessionId) {
         sessionStore.setCurrentSession(snapshot.current_session_id || snapshot.currentSessionId);

@@ -208,6 +208,7 @@ function buildAndBindSessionRow(sess, allSessions, nextStreamMap) {
     div.dataset.sessionId = sess.id || '';
     if (currentSessionId === sess.id) div.classList.add('active');
     if (sess.id) nextStreamMap[sess.id] = !!sess.stream_active;
+    if (sess.id) scheduleTitleGenerationRefresh(sess.id, !!sess.title_generation_pending);
     div.innerHTML = '<div class="session-item-head">'
         + '<span class="session-name" data-id="' + sess.id + '" data-original="' + escapeHtml(sess.name) + '">' + escapeHtml(sess.name) + '</span>'
         + '<div class="session-more-wrap">'
@@ -303,15 +304,27 @@ function buildAndBindSessionRow(sess, allSessions, nextStreamMap) {
                 return s && s.id && String(s.id) !== deletedSessionId && !s.archived;
             }) || null;
             sessionStore.markDeletedSession(deletedSessionId);
-            if (wasArchivedLoaded) {
-                sessionStore.setArchivedLoaded((sessionStore.archivedSessions || []).filter(function (s) {
+            if (wasArchivedLoaded && sess.archived) {
+                const archivedBeforeDelete = sessionStore.archivedSessions || [];
+                const deletedArchiveIndex = archivedBeforeDelete.findIndex(function (s) {
+                    return s && String(s.id) === deletedSessionId;
+                });
+                sessionStore.setArchivedLoaded(archivedBeforeDelete.filter(function (s) {
                     return s && String(s.id) !== deletedSessionId;
-                }));
+                }), {
+                    visibleCount: Math.max(
+                        0,
+                        sessionStore.archivedVisibleCount
+                            - (deletedArchiveIndex >= 0 && deletedArchiveIndex < sessionStore.archivedVisibleCount ? 1 : 0)
+                    ),
+                    totalCount: Math.max(0, sessionStore.archivedCount - 1),
+                });
                 syncArchivedSessionStateFromStore();
             }
             renderSessionListIfChanged(true);
             if (div && div.parentNode) div.remove();
             sessionUnreadComplete.delete(deletedSessionId);
+            scheduleTitleGenerationRefresh(deletedSessionId, false);
             persistSessionUnread();
             delete draftBySession[deletedSessionId];
             removeStoredInputDraft(deletedSessionId);
@@ -387,6 +400,27 @@ function buildAndBindSessionRow(sess, allSessions, nextStreamMap) {
     return div;
 }
 
+const sessionTitleRefreshState = Object.create(null);
+
+function scheduleTitleGenerationRefresh(sessionId, pending) {
+    const sid = String(sessionId || '');
+    if (!sid) return;
+    let state = sessionTitleRefreshState[sid];
+    if (!pending) {
+        if (state && state.timer) clearTimeout(state.timer);
+        delete sessionTitleRefreshState[sid];
+        return;
+    }
+    if (!state) state = sessionTitleRefreshState[sid] = { attempts: 0, timer: null };
+    if (state.timer || state.attempts >= 60) return;
+    const delayMs = Math.min(10000, Math.round(1000 * Math.pow(1.45, state.attempts)));
+    state.timer = setTimeout(function () {
+        state.timer = null;
+        state.attempts += 1;
+        void refreshSingleSessionRow(sid);
+    }, delayMs);
+}
+
 async function refreshSingleSessionRow(sessionId) {
     if (!sessionId || !sessionsList) return;
     try {
@@ -394,6 +428,7 @@ async function refreshSingleSessionRow(sessionId) {
         if (!response.ok) return;
         const sess = await response.json();
         if (!sess || !sess.id) return;
+        scheduleTitleGenerationRefresh(sess.id, !!sess.title_generation_pending);
         applySessionPatch({
             session: sess,
             session_id: sess.id,
@@ -512,13 +547,34 @@ function applyOptimisticSessionUpdate(sessionId, patch) {
     }
     sessionStore.upsert(next);
     if (prev.archived || next.archived) {
-        const archivedList = (sessionStore.archivedSessions || []).filter(function (s) {
-            return s && s.id !== sid;
-        });
-        if (next.archived && sessionStore.archivedLoaded) archivedList.unshift(next);
         if (sessionStore.archivedLoaded) {
-            sessionStore.setArchivedLoaded(archivedList);
+            const archivedList = (sessionStore.archivedSessions || []).slice();
+            const archivedIndex = archivedList.findIndex(function (s) {
+                return s && String(s.id) === sid;
+            });
+            let visibleCount = sessionStore.archivedVisibleCount;
+            let totalCount = sessionStore.archivedCount;
+            if (prev.archived && next.archived) {
+                if (archivedIndex >= 0) archivedList[archivedIndex] = next;
+            } else if (prev.archived) {
+                if (archivedIndex >= 0) archivedList.splice(archivedIndex, 1);
+                if (archivedIndex >= 0 && archivedIndex < visibleCount) visibleCount -= 1;
+                totalCount = Math.max(0, totalCount - 1);
+            } else if (next.archived) {
+                archivedList.unshift(next);
+                visibleCount += 1;
+                totalCount += 1;
+            }
+            sessionStore.setArchivedLoaded(archivedList, {
+                visibleCount: visibleCount,
+                totalCount: totalCount,
+            });
             syncArchivedSessionStateFromStore();
+        } else if (!!prev.archived !== !!next.archived) {
+            sessionStore.setArchivedCount(Math.max(
+                0,
+                sessionStore.archivedCount + (next.archived ? 1 : -1)
+            ));
         }
     }
     renderSessionListIfChanged(true);
@@ -593,15 +649,93 @@ async function fetchWithTimeout(url, options, timeoutMs) {
     }
 }
 
+async function fetchArchivedSessionPage(offset, limit) {
+    const url = '/sessions?include_archived=true&archived_only=true&offset=' + String(offset)
+        + '&limit=' + String(limit);
+    const response = await fetchWithTimeout(url, {}, 15000);
+    if (!response.ok) throw new Error('archived sessions failed: ' + response.status);
+    const sessions = await response.json();
+    const countHeader = response.headers.get('X-Archived-Count');
+    const parsedCount = Number(countHeader);
+    return {
+        sessions: Array.isArray(sessions) ? sessions : [],
+        totalCount: Number.isFinite(parsedCount) && parsedCount >= 0
+            ? parsedCount
+            : Math.max(offset + (Array.isArray(sessions) ? sessions.length : 0), sessionStore.archivedCount),
+    };
+}
+
+function appendArchivedSessionPage(page, visibleCount) {
+    const combined = (sessionStore.archivedSessions || []).concat(page.sessions || []);
+    const seen = new Set();
+    const deduplicated = combined.filter(function (s) {
+        const sid = s && s.id ? String(s.id) : '';
+        if (!sid || seen.has(sid)) return false;
+        seen.add(sid);
+        return true;
+    });
+    sessionStore.setArchivedLoaded(deduplicated, {
+        visibleCount: visibleCount,
+        totalCount: page.totalCount,
+    });
+}
+
+async function prefetchNextArchivedPage(loadEpoch) {
+    const cachedCount = Array.isArray(sessionStore.archivedSessions)
+        ? sessionStore.archivedSessions.length
+        : 0;
+    const wantedCount = Math.min(
+        sessionStore.archivedCount,
+        sessionStore.archivedVisibleCount + ARCHIVED_SESSIONS_PAGE_SIZE
+    );
+    if (cachedCount >= wantedCount) return;
+    const page = await fetchArchivedSessionPage(cachedCount, wantedCount - cachedCount);
+    if (loadEpoch !== archivedSessionsLoadEpoch) return;
+    appendArchivedSessionPage(page, sessionStore.archivedVisibleCount);
+}
+
 async function loadArchivedSessions(opts) {
     opts = opts || {};
     const loadEpoch = ++archivedSessionsLoadEpoch;
     try {
-        const response = await fetchWithTimeout('/sessions?include_archived=true', {}, 15000);
-        const sessions = await response.json();
+        if (!sessionStore.archivedLoaded) {
+            const initialPage = await fetchArchivedSessionPage(0, ARCHIVED_SESSIONS_PAGE_SIZE * 2);
+            if (loadEpoch !== archivedSessionsLoadEpoch) return;
+            sessionStore.setArchivedLoaded(initialPage.sessions, {
+                visibleCount: ARCHIVED_SESSIONS_PAGE_SIZE,
+                totalCount: initialPage.totalCount,
+            });
+        } else if (opts.background || opts.refresh || !sessionStore.hasMoreArchivedSessions()) {
+            const refreshLimit = Math.max(
+                ARCHIVED_SESSIONS_PAGE_SIZE * 2,
+                sessionStore.archivedVisibleCount + ARCHIVED_SESSIONS_PAGE_SIZE
+            );
+            const refreshedPage = await fetchArchivedSessionPage(0, refreshLimit);
+            if (loadEpoch !== archivedSessionsLoadEpoch) return;
+            sessionStore.setArchivedLoaded(refreshedPage.sessions, {
+                visibleCount: sessionStore.archivedVisibleCount,
+                totalCount: refreshedPage.totalCount,
+            });
+        } else {
+            if (sessionStore.revealNextArchivedPage() === 0) {
+                const cachedCount = Array.isArray(sessionStore.archivedSessions)
+                    ? sessionStore.archivedSessions.length
+                    : 0;
+                const nextPage = await fetchArchivedSessionPage(cachedCount, ARCHIVED_SESSIONS_PAGE_SIZE);
+                if (loadEpoch !== archivedSessionsLoadEpoch) return;
+                appendArchivedSessionPage(nextPage, sessionStore.archivedVisibleCount);
+                sessionStore.revealNextArchivedPage();
+            }
+            syncArchivedSessionStateFromStore();
+            renderSessionListIfChanged(true);
+            clearSessionListError();
+            try {
+                await prefetchNextArchivedPage(loadEpoch);
+            } catch (prefetchErr) {
+                console.error('预加载下一批归档目录失败:', prefetchErr);
+            }
+        }
         if (loadEpoch !== archivedSessionsLoadEpoch) return;
-        const all = Array.isArray(sessions) ? sessions : [];
-        sessionStore.setArchivedLoaded(all);
         syncArchivedSessionStateFromStore();
         renderSessionListIfChanged(!!opts.forceRender);
         clearSessionListError();
@@ -793,9 +927,16 @@ async function loadSessionMessages(sessionId, scrollBehavior, opts) {
             try {
                 const snapshotUrl = '/sessions/' + encodeURIComponent(sessionId)
                     + '/history_snapshot?turns=' + encodeURIComponent(String(HISTORY_DIALOGUES_PER_PAGE));
-                const snapshotResp = await fetchWithTimeout(snapshotUrl, {}, 15000);
-                if (snapshotResp.ok) {
-                    const snapshot = await snapshotResp.json();
+                for (let migrationAttempt = 0; migrationAttempt < 120; migrationAttempt += 1) {
+                    const snapshotResp = await fetchWithTimeout(snapshotUrl, {}, 15000);
+                    const snapshot = await snapshotResp.json().catch(function () { return null; });
+                    if (snapshot && snapshot.migration_pending) {
+                        if (loadToken !== messageLoadEpoch || sessionId !== currentSessionId) return;
+                        const retryMs = Math.max(100, Math.min(Number(snapshot.retry_after_ms) || 250, 1000));
+                        await new Promise(function (resolve) { setTimeout(resolve, retryMs); });
+                        continue;
+                    }
+                    if (snapshotResp.ok) {
                     if (snapshot && snapshot.ok && snapshot.messages) {
                         raw = snapshot.messages;
                         historySource = 'history_snapshot';
@@ -817,6 +958,8 @@ async function loadSessionMessages(sessionId, scrollBehavior, opts) {
                             recordContextTokens(sessionId, snapshot.context_tokens.estimated, snapshot.context_tokens.threshold);
                         }
                     }
+                    }
+                    break;
                 }
             } catch (snapshotErr) {
                 console.warn('history snapshot unavailable, falling back to messages:', snapshotErr);

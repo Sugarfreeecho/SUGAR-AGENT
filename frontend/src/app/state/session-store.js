@@ -1,3 +1,5 @@
+const ARCHIVED_SESSIONS_PAGE_SIZE = 20;
+
 const sessionStore = {
     seq: 0,
     sessionsById: new Map(),
@@ -9,6 +11,7 @@ const sessionStore = {
     archivedCount: 0,
     archivedLoaded: false,
     archivedSessions: null,
+    archivedVisibleCount: 0,
     unreadComplete: new Set(),
     sseSeqBySession: new Map(),
     deletedSessionTombstones: new Map(),
@@ -170,22 +173,49 @@ const sessionStore = {
         }
     },
 
-    setArchivedLoaded(sessions) {
-        const list = Array.isArray(sessions)
+    setArchivedLoaded(sessions, options) {
+        options = options || {};
+        const filtered = Array.isArray(sessions)
             ? sessions.filter(function (s) { return s && s.id && !!s.archived; })
             : [];
+        const requestedTotal = options.totalCount != null ? Number(options.totalCount) : filtered.length;
+        const totalCount = Number.isFinite(requestedTotal)
+            ? Math.max(0, requestedTotal)
+            : filtered.length;
+        const list = filtered.slice(0, totalCount);
+        const requestedVisible = options.visibleCount != null ? Number(options.visibleCount) : list.length;
         this.archivedLoaded = true;
         this.archivedSessions = list;
-        this.archivedCount = list.length;
+        this.archivedVisibleCount = Math.max(0, Math.min(
+            list.length,
+            Number.isFinite(requestedVisible) ? requestedVisible : list.length
+        ));
+        this.archivedCount = totalCount;
     },
 
     clearArchivedLoaded() {
         this.archivedLoaded = false;
         this.archivedSessions = null;
+        this.archivedVisibleCount = 0;
     },
 
     archivedList() {
-        return this.archivedLoaded && Array.isArray(this.archivedSessions) ? this.archivedSessions : [];
+        if (!this.archivedLoaded || !Array.isArray(this.archivedSessions)) return [];
+        return this.archivedSessions.slice(0, this.archivedVisibleCount);
+    },
+
+    revealNextArchivedPage() {
+        if (!this.archivedLoaded || !Array.isArray(this.archivedSessions)) return 0;
+        const previous = this.archivedVisibleCount;
+        this.archivedVisibleCount = Math.min(
+            this.archivedSessions.length,
+            previous + ARCHIVED_SESSIONS_PAGE_SIZE
+        );
+        return this.archivedVisibleCount - previous;
+    },
+
+    hasMoreArchivedSessions() {
+        return this.archivedVisibleCount < this.archivedCount;
     },
 
     isStreamActive(sessionId) {

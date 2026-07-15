@@ -59,7 +59,7 @@ function selectSessionSections() {
 }
 
 function selectArchivedDisplayCount() {
-    return sessionStore.archivedLoaded ? selectArchivedSessions().length : sessionStore.archivedCount;
+    return sessionStore.archivedCount;
 }
 
 function selectIsSessionRunning(sessionId) {

@@ -620,17 +620,12 @@ function ensureHistorySentinel(streamEl) {
     return el;
 }
 
-function getHistoryScrollAnchor(container) {
-    if (!container) return null;
-    var cr = container.getBoundingClientRect();
-    var nodes = container.querySelectorAll('.msg-wrap, .process-aggregate, .welcome');
-    for (var i = 0; i < nodes.length; i += 1) {
-        var n = nodes[i];
-        if (!n || !n.isConnected || n.id === 'chat-loading') continue;
-        var r = n.getBoundingClientRect();
-        if (r.bottom >= cr.top + 4) return { el: n, top: r.top };
-    }
-    return null;
+var HISTORY_AUTO_LOAD_TOP_PX = 32;
+
+/** 滚到历史顶部附近时自动向前分页；按钮仍保留为加载状态提示和手动兜底。 */
+function maybeAutoLoadOlderHistory() {
+    if (!chatContainer || chatContainer.scrollTop > HISTORY_AUTO_LOAD_TOP_PX) return;
+    void loadOlderHistoryChunk({ trigger: 'scroll-top' });
 }
 
 function updateHistorySentinelVisibility() {
@@ -670,8 +665,8 @@ async function loadOlderHistoryChunk(opts) {
     replayingMessages = true;
     updateHistorySentinelVisibility();
     var cc = chatContainer;
-    var prevScrollTop = cc ? cc.scrollTop : 0;
-    var anchor = getHistoryScrollAnchor(cc);
+    var prependScrollTop = null;
+    var prependScrollHeight = null;
     var loadedOlder = false;
     try {
         var pageTurns = Math.max(1, Math.min(Number(opts.turns) || HISTORY_DIALOGUES_PER_PAGE, 50));
@@ -679,6 +674,8 @@ async function loadOlderHistoryChunk(opts) {
         var response = await fetch(url);
         var data = await response.json();
         if (!response.ok || !data || typeof data !== 'object') return;
+        // 自动加载请求返回前可能已切换会话，旧页不能插入新的可见消息流。
+        if (sid !== currentSessionId || stream !== getVisibleChatStream()) return;
         var events = data.events;
         if (!Array.isArray(events) || events.length === 0) {
             setSessionHistoryPaging(Object.assign({}, ph, { has_older: !!data.has_older }));
@@ -701,6 +698,12 @@ async function loadOlderHistoryChunk(opts) {
         }
         var sen = stream && stream.querySelector('#history-load-sentinel');
         if (stream && frag.childNodes.length) {
+            // fetch 期间用户仍可能滚动，所以必须在真正插入前才记录视口。
+            // 插入后补上新增的高度，原来可见的内容就会停在相同屏幕位置。
+            if (cc && stream.parentNode === cc) {
+                prependScrollTop = cc.scrollTop;
+                prependScrollHeight = cc.scrollHeight;
+            }
             stream.insertBefore(frag, sen ? sen.nextSibling : stream.firstChild);
         }
         loadedOlder = true;
@@ -716,18 +719,19 @@ async function loadOlderHistoryChunk(opts) {
     } finally {
         historyOlderLoading = false;
         updateHistorySentinelVisibility();
-        if (cc && stream && stream.parentNode === cc) {
-            if (anchor && anchor.el && anchor.el.isConnected) {
-                var nextTop = anchor.el.getBoundingClientRect().top;
-                setScrollTopImmediate(cc, cc.scrollTop + (nextTop - anchor.top));
-            } else {
-                setScrollTopImmediate(cc, prevScrollTop);
-            }
-        }
         if (loadedOlder) {
             bindExistingLogs(stream);
             if (!opts.keepTocStable) rebuildToc();
             scheduleTocActiveUpdate();
+        }
+        if (
+            cc && stream && stream.parentNode === cc
+            && prependScrollTop != null && prependScrollHeight != null
+        ) {
+            setScrollTopImmediate(
+                cc,
+                prependScrollTop + Math.max(0, cc.scrollHeight - prependScrollHeight)
+            );
         }
         replayingMessages = prevReplaying;
     }

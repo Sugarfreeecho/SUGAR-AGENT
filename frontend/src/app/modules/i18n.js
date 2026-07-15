@@ -47,8 +47,8 @@ Object.assign(UI_TRANSLATIONS_EN, {
     '删除消息': 'Delete message', '将同步到服务器': 'Will sync to server', '确定删除本条及之后的所有对话内容吗？': 'Delete this message and all following conversation content?',
     '同步失败': 'Sync failed', '删除未生效。': 'The deletion was not applied.', '无法改写该条': 'Cannot rewrite this message',
     '该消息尚未与服务器索引对齐，请刷新当前会话后再试。': 'This message is not aligned with the server index. Refresh the session and try again.',
-    '无法分支': 'Cannot branch', '该回答尚未与服务器同步，请刷新页面后重试。': 'This response is not synced with the server. Refresh and try again.',
-    '创建分支会话': 'Create branch session', '原会话不会被修改': 'The original session will not be modified',
+    '无法分支': 'Cannot fork', '该回答尚未与服务器同步，请刷新页面后重试。': 'This response is not synced with the server. Refresh and try again.',
+    '创建分支会话': 'Create fork session', '原会话不会被修改': 'The original session will not be modified',
     '问题': 'Question', '已完成': 'Completed', '进行中': 'In progress', '未开始': 'Not started',
     '折叠文件夹': 'Collapse folder', '展开文件夹': 'Expand folder', '下载保存 Mermaid 流程图为图片': 'Download Mermaid diagram as image',
     '调用工具': 'Tool calls', '次': 'times', '轮': 'rounds', '分': 'm', '秒': 's',
@@ -66,7 +66,7 @@ Object.assign(UI_TRANSLATIONS_EN, {
 Object.assign(UI_TRANSLATIONS_EN, {
     // Session navigation and lifecycle
     '置顶目录': 'Pinned', '归档目录': 'Archived', '刷新归档目录': 'Refresh archived sessions',
-    '加载归档目录': 'Load archived sessions', '今天': 'Today', '昨天': 'Yesterday', '近7天': 'Last 7 days',
+    '加载归档目录': 'Load archived sessions', '加载更多': 'Load more', '今天': 'Today', '昨天': 'Yesterday', '近7天': 'Last 7 days',
     '近14天': 'Last 14 days', '加载会话': 'Load session', '加载会话列表失败': 'Failed to load sessions',
     '加载历史消息失败': 'Failed to load message history', '创建新会话失败': 'Failed to create session',
     '未选择会话': 'No session selected', '暂无提问': 'No questions yet', '打开工作目录': 'Open workspace',
@@ -92,9 +92,9 @@ Object.assign(UI_TRANSLATIONS_EN, {
     // Messages, history and composer
     '开始一段新的对话': 'Start a new conversation',
     '在左侧侧栏新建或选择会话。Enter 发送，Ctrl+Enter / Shift+Enter 换行。': 'Create or select a session in the sidebar. Press Enter to send; Ctrl+Enter or Shift+Enter for a new line.',
-    '分支': 'Branch', '创建分支': 'Create branch', '创建失败': 'Creation failed',
-    '将在当前回答之后创建独立分支会话。分支点之前的内容与原会话相同，可在分支中继续提问且不影响原会话。': 'A separate branch session will be created after this response. Earlier messages remain the same, and continuing in the branch will not affect the original session.',
-    '创建分支未生效。': 'The branch was not created.', '工具': 'Tool', '执行过程': 'Execution process',
+    '分支': 'Fork', '创建分支': 'Create fork', '创建失败': 'Creation failed',
+    '将在当前回答之后创建独立分支会话。分支点之前的内容与原会话相同，可在分支中继续提问且不影响原会话。': 'A separate fork session will be created after this response. Earlier messages remain the same, and continuing in the fork will not affect the original session.',
+    '创建分支未生效。': 'The fork was not created.', '工具': 'Tool', '执行过程': 'Execution process',
     '本段过程已折叠': 'This process section is collapsed', '信息': 'Info', '错误': 'Error', '回复': 'Response',
     '思考': 'Reasoning', '压缩': 'Compression', '裁剪': 'Trim', '要点': 'Key points', '状态': 'Status',
     '工具调用生成中...': 'Preparing tool call...', '执行中...': 'Running...', '执行结果': 'Result',
@@ -156,6 +156,8 @@ function translateUiString(value) {
         .replace(/^恢复实时流失败: (.+)$/, 'Failed to restore live stream: $1')
         .replace(/^追问插入失败: (.+)$/, 'Failed to insert follow-up: $1')
         .replace(/^追问已被接收，无法撤回: (.+)$/, 'The follow-up was accepted and cannot be withdrawn: $1')
+        .replace(/^思·/, 'Reasoning · ')
+        .replace(/^答·/, 'Response · ')
         .replace(/^平均 (.+)$/, 'Average $1')
         .replace(/^累计 (.+)$/, 'Total $1')
         .replace(/^占本阶段 (.+)$/, 'Share of phase $1')

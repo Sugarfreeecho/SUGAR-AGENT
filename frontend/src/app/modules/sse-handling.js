@@ -1005,6 +1005,16 @@ function appendFollowupQueueItem(sessionId, text, display, selectedSkills) {
     return item;
 }
 
+function buildSelectedSkillsDisplayMessage(rawMessage, selectedSkills) {
+    var message = String(rawMessage || '');
+    var names = Array.isArray(selectedSkills)
+        ? selectedSkills.map(function (skill) { return String(skill || '').trim(); }).filter(Boolean)
+        : [];
+    if (!names.length) return message;
+    var suffix = '\n\n已选择 Skill：' + names.join('、');
+    return message.endsWith(suffix) ? message : message + suffix;
+}
+
 function enqueueCurrentInputAsFollowup() {
     if (!isMyAgentFeatureEnabled('followupRestart', false)) return false;
     const sid = currentSessionId;
@@ -1582,10 +1592,8 @@ async function sendMessage(options) {
     } else if (!options.fromQueue && !options.fromInlineRewrite && typeof window.consumeSelectedSkillsForSend === 'function') {
         selectedSkillsForRun = window.consumeSelectedSkillsForSend();
     }
-    var displayMessage = options.displayMessage != null ? String(options.displayMessage) : rawMessage;
-    if (selectedSkillsForRun && selectedSkillsForRun.length) {
-        displayMessage = displayMessage + '\n\n已选择 Skill：' + selectedSkillsForRun.join('、');
-    }
+    var uiBaseMessage = options.displayMessage != null ? String(options.displayMessage) : rawMessage;
+    var displayMessage = buildSelectedSkillsDisplayMessage(uiBaseMessage, selectedSkillsForRun);
     reportClientPipelineStep(clientTimingCtx, 'preflight_checks', _clientStepStart, {
         forceStart: !!options.forceStart,
         fromQueue: !!options.fromQueue,
@@ -1749,7 +1757,9 @@ async function sendMessage(options) {
     _clientStepStart = nowPipelineMs();
     const formData = new FormData();
     formData.append('message', rawMessage);
-    formData.append('ui_message', displayMessage);
+    // The backend owns durable UI-message decoration. Sending the undecorated
+    // value keeps the optimistic row and the reloaded history identical.
+    formData.append('ui_message', uiBaseMessage);
     formData.append('session_id', runSessionId);
     formData.append('client_run_id', clientRunId);
     formData.append('stream_protocol', 'runtime_v2');
@@ -1766,7 +1776,19 @@ async function sendMessage(options) {
         reportClientPipelineStep(clientTimingCtx, 'build_form_data', _clientStepStart, { followupSteer: !!renderAsSteer });
         _clientStepStart = nowPipelineMs();
         optimisticRunState.submitted = true;
-        const response = await fetch('/chat', { method: 'POST', body: formData, signal: ac.signal });
+        let response = null;
+        for (let migrationAttempt = 0; migrationAttempt < 120; migrationAttempt += 1) {
+            response = await fetch('/chat', { method: 'POST', body: formData, signal: ac.signal });
+            if (response.status !== 425) break;
+            const pending = await response.json().catch(function () { return null; });
+            if (!pending || pending.reason !== 'runtime_migration_pending') break;
+            if (migrationAttempt >= 119) {
+                rollbackOptimisticUserEvent(runSessionId, preCount);
+                throw new Error('Runtime V2 migration timed out');
+            }
+            const retryMs = Math.max(100, Math.min(Number(pending.retry_after_ms) || 250, 1000));
+            await new Promise(function (resolve) { setTimeout(resolve, retryMs); });
+        }
         reportClientPipelineStep(clientTimingCtx, 'fetch_chat_response_headers', _clientStepStart, { status: response && response.status });
         _clientStepStart = nowPipelineMs();
         if (response.status === 409) {
@@ -1911,6 +1933,7 @@ messageInput.addEventListener('keydown', function onInputKeydown(e) {
 chatContainer.addEventListener('scroll', function () {
     refreshLiveAutoFollowPins();
     scheduleTocActiveUpdate();
+    maybeAutoLoadOlderHistory();
 }, { passive: true });
 sendBtn.addEventListener('click', function (e) {
     e.stopImmediatePropagation();
