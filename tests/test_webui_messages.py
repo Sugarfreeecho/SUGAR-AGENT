@@ -677,6 +677,56 @@ def test_manual_runtime_sync_refuses_active_run(monkeypatch):
     assert payload["busy"] is True
 
 
+def test_runtime_sync_needed_skips_unchanged_verified_or_blocked_manifest(monkeypatch):
+    import webui
+
+    fingerprints = {
+        "legacy_ui": {"exists": True, "mtime_ns": 1, "size": 10},
+        "legacy_model": {"exists": True, "mtime_ns": 2, "size": 20},
+        "legacy_context": {"exists": False, "mtime_ns": 0, "size": 0},
+        "legacy_todo": {"exists": False, "mtime_ns": 0, "size": 0},
+        "runtime_events": {"exists": True, "mtime_ns": 3, "size": 30},
+    }
+    monkeypatch.setattr(webui, "_runtime_sync_fingerprints", lambda _sid: dict(fingerprints))
+    monkeypatch.setattr(webui, "_read_runtime_migration_manifest", lambda _sid: {
+        "manifest_version": 2,
+        "status": "completed",
+        "file_fingerprints": dict(fingerprints),
+    })
+
+    assert webui._runtime_sync_needed("s1")[:2] == (False, "verified_unchanged")
+
+    monkeypatch.setattr(webui, "_read_runtime_migration_manifest", lambda _sid: {
+        "manifest_version": 2,
+        "status": "blocked",
+        "file_fingerprints": dict(fingerprints),
+    })
+    assert webui._runtime_sync_needed("s1")[:2] == (False, "blocked_unchanged")
+
+
+def test_legacy_only_gate_enqueues_background_migration(monkeypatch):
+    import webui
+
+    monkeypatch.setattr(webui, "_runtime_sync_fingerprints", lambda _sid: {
+        "legacy_ui": {"exists": True, "mtime_ns": 1, "size": 10},
+        "legacy_model": {"exists": False, "mtime_ns": 0, "size": 0},
+        "legacy_context": {"exists": False, "mtime_ns": 0, "size": 0},
+        "legacy_todo": {"exists": False, "mtime_ns": 0, "size": 0},
+        "runtime_events": {"exists": False, "mtime_ns": 0, "size": 0},
+    })
+    calls = []
+    monkeypatch.setattr(webui, "_enqueue_runtime_sync", lambda *args, **kwargs: (
+        calls.append((args, kwargs)) or {"ok": True, "queued": True, "reason": "runtime_missing"}
+    ))
+
+    result = webui._runtime_v2_legacy_only_migration_pending("s1")
+
+    assert result["pending"] is True
+    assert result["queued"] is True
+    assert result["retry_after_ms"] == 250
+    assert calls == [(('s1', 'auto_on_open'), {'check_needed': True})]
+
+
 def test_runtime_sync_uses_session_history_operation_lock(monkeypatch):
     import webui
 
@@ -973,6 +1023,47 @@ def test_sessions_state_uses_lightweight_run_status(monkeypatch, tmp_path):
     assert payload["sessions"][0]["run_active"] is True
     assert payload["active_runs"][0]["session_id"] == "s1"
     assert payload["active_runs"][0]["lightweight"] is True
+
+
+def test_archived_sessions_endpoint_returns_requested_prefetch_window(monkeypatch, tmp_path):
+    import webui
+
+    class _ArchivedSessionManager(_FakeSessionManager):
+        def list_sessions(self, include_archived: bool = False) -> list[dict]:
+            self.list_calls.append({"include_archived": include_archived})
+            normal = [{"id": "normal", "name": "Normal", "archived": False}]
+            archived = [
+                {"id": f"archived-{index}", "name": f"Archived {index}", "archived": True}
+                for index in range(55)
+            ]
+            return normal + archived if include_archived else normal
+
+        def archived_session_count(self) -> int:
+            return 55
+
+    fake = _ArchivedSessionManager(tmp_path, [])
+    monkeypatch.setattr(webui, "session_manager", fake)
+    monkeypatch.setattr(webui, "_cleanup_stale_active_chat", lambda: None)
+    monkeypatch.setattr(webui, "_session_run_state_fields_light", lambda _sid: {
+        "stream_active": False,
+        "run_active": False,
+        "run_started_at": None,
+    })
+    monkeypatch.setattr(webui, "is_session_title_generation_pending", lambda _sid: False)
+
+    response = asyncio.run(webui.list_sessions(
+        include_archived=True,
+        archived_only=True,
+        offset=20,
+        limit=20,
+    ))
+    payload = _json_response_payload(response)
+
+    assert fake.list_calls == [{"include_archived": True}]
+    assert len(payload) == 20
+    assert payload[0]["id"] == "archived-20"
+    assert payload[-1]["id"] == "archived-39"
+    assert response.headers["x-archived-count"] == "55"
 
 
 def test_observer_stream_does_not_count_as_local_run_activity(monkeypatch):

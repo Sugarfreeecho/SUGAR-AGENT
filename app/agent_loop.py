@@ -64,6 +64,7 @@ from agent_harness import (
     MAX_PARALLEL_TOOLS,
     strip_reasoning_for_api_request,
     resolve_executor_config_for_session,
+    resolve_executor_candidates_for_session,
     EXECUTOR_REASONING_EFFORT,
     UserMessage,
     AssistantMessage,
@@ -119,6 +120,8 @@ from agent_goal import GoalError, goal_enabled, manager_for as goal_manager_for
 
 EXECUTOR_STREAM = os.getenv("EXECUTOR_STREAM", "true").lower() in ("1", "true", "yes")
 NETWORK_RECONNECT_MAX_ATTEMPTS = max(0, int(os.getenv("NETWORK_RECONNECT_MAX_ATTEMPTS", "5")))
+TITLE_GENERATION_TIMEOUT_SEC = max(1.0, float(os.getenv("TITLE_GENERATION_TIMEOUT_SEC", "30")))
+TITLE_GENERATION_WORKERS = max(1, min(4, int(os.getenv("TITLE_GENERATION_WORKERS", "2"))))
 execution_metrics.configure(session_manager.sessions_dir)
 
 _STEER_LOCK = threading.Lock()
@@ -129,6 +132,11 @@ _CONTEXT_POLICY_LOCKS_LOCK = threading.Lock()
 _CONTEXT_POLICY_LOCKS: Dict[str, threading.Lock] = {}
 _STEER_QUEUE_SIGNATURES: Dict[str, Tuple[int, int]] = {}
 _STEER_TERMINAL_RETENTION = max(16, int(os.getenv("MYAGENT_STEER_TERMINAL_RETENTION", "128")))
+
+_TITLE_GENERATION_QUEUE: queue.Queue = queue.Queue()
+_TITLE_GENERATION_LOCK = threading.Lock()
+_TITLE_GENERATION_PENDING: set[str] = set()
+_TITLE_GENERATION_WORKERS_STARTED = False
 
 _STEER_PENDING_STATES = {"queued", "claimed", "interrupting", "restarting", "deferred"}
 _STEER_CLAIMABLE_STATES = {"queued", "interrupting"}
@@ -5008,70 +5016,222 @@ def _generate_session_title_with_diagnostics(
         first_user=first_user,
         final_response=final_response or "",
     )
-    title_client, title_model, title_max_output_tokens, _title_context_window = resolve_executor_config_for_session(session_id)
-    response = title_client.chat.completions.create(
-        model=title_model,
-        messages=[{"role": "user", "content": title_prompt}],
-        temperature=EXECUTOR_TEMPERATURE,
-        max_tokens=min(int(title_max_output_tokens or MAX_OUTPUT_TOKENS), 256),
-    )
-    choice0 = response.choices[0]
-    turn = parse_assistant_message(choice0.message)
-    usage: Optional[Dict[str, int]] = None
-    raw_usage = getattr(response, "usage", None)
-    if raw_usage is not None:
-        usage = extract_usage_dict(raw_usage)
-    raw_title = (turn.content or "").strip()
-    if not raw_title:
-        logger.warning(
-            "生成会话标题返回空: session=%s model=%s finish_reason=%s content_len=0 reasoning_len=%s usage=%s",
+    candidates = resolve_executor_candidates_for_session(session_id)
+    last_error: Optional[BaseException] = None
+    previous_model = ""
+    for index, candidate in enumerate(candidates):
+        title_model = str(candidate.get("model") or "").strip()
+        if index > 0:
+            logger.warning(
+                "会话标题模型自动切换: session=%s from=%s to=%s",
+                session_id,
+                redact_sensitive_tool_text(previous_model),
+                redact_sensitive_tool_text(title_model),
+            )
+        previous_model = title_model
+        base_request_kwargs: Dict[str, Any] = {
+            "model": title_model,
+            "messages": [{"role": "user", "content": title_prompt}],
+            "temperature": float(candidate.get("temperature", EXECUTOR_TEMPERATURE)),
+            "max_tokens": min(int(candidate.get("max_output_tokens") or MAX_OUTPUT_TOKENS), 256),
+            "timeout": TITLE_GENERATION_TIMEOUT_SEC,
+        }
+        # Title generation is a short classification task. First explicitly
+        # request non-thinking mode and remove all reasoning-effort controls.
+        # If a provider rejects the toggle itself, retry that same candidate
+        # without provider-specific thinking parameters before switching models.
+        for disable_thinking in (True, False):
+            request_kwargs = dict(base_request_kwargs)
+            candidate_extra = candidate.get("extra_body")
+            if disable_thinking:
+                extra_body = dict(candidate_extra) if isinstance(candidate_extra, dict) else {}
+                extra_body["thinking"] = {"type": "disabled"}
+                extra_body.pop("reasoning_effort", None)
+                request_kwargs["extra_body"] = extra_body
+            else:
+                neutral_extra = dict(candidate_extra) if isinstance(candidate_extra, dict) else {}
+                neutral_extra.pop("thinking", None)
+                neutral_extra.pop("reasoning_effort", None)
+                if neutral_extra:
+                    request_kwargs["extra_body"] = neutral_extra
+            try:
+                response = candidate["client"].chat.completions.create(**request_kwargs)
+                choice0 = response.choices[0]
+                turn = parse_assistant_message(choice0.message)
+                usage: Optional[Dict[str, int]] = None
+                raw_usage = getattr(response, "usage", None)
+                if raw_usage is not None:
+                    usage = extract_usage_dict(raw_usage)
+                raw_title = (turn.content or "").strip()
+                finish_reason = str(getattr(choice0, "finish_reason", None) or "")
+                normalized = _normalize_generated_session_title(raw_title)
+                unusable = (
+                    not normalized
+                    or _looks_like_local_path_title(normalized)
+                    or _looks_like_reasoning_tag_title(normalized)
+                    or finish_reason.lower() == "length"
+                )
+                logger.info(
+                    "生成会话标题返回: session=%s model=%s thinking_disabled=%s finish_reason=%s content_len=%s reasoning_len=%s usable=%s",
+                    session_id,
+                    redact_sensitive_tool_text(title_model),
+                    disable_thinking,
+                    finish_reason or None,
+                    len(raw_title),
+                    len(turn.reasoning_content or ""),
+                    not unusable,
+                )
+                if unusable:
+                    last_error = RuntimeError(
+                        f"unusable title response: finish_reason={finish_reason or 'unknown'}"
+                    )
+                    break
+                return raw_title, usage
+            except Exception as exc:
+                last_error = exc
+                logger.warning(
+                    "会话标题模型调用失败: session=%s model=%s thinking_disabled=%s error=%s",
+                    session_id,
+                    redact_sensitive_tool_text(title_model),
+                    disable_thinking,
+                    redact_sensitive_tool_text(str(exc)),
+                )
+                if disable_thinking:
+                    continue
+                break
+    if last_error is not None:
+        raise last_error
+    raise RuntimeError("no title model candidates configured")
+
+
+def _fallback_session_title(first_user: str) -> str:
+    text = re.sub(r"<[^>]+>", " ", str(first_user or ""))
+    text = re.sub(r"https?://\S+", " ", text, flags=re.IGNORECASE)
+    text = re.sub(r"[A-Za-z]:[\\/]\S+", " ", text)
+    text = re.sub(r"\s+", " ", text).strip(" \t\r\n\"'`“”‘’《》")
+    return _normalize_generated_session_title(text) or "新会话"
+
+
+def _session_still_exists_for_title(session_id: str) -> bool:
+    get_summary = getattr(session_manager, "get_session_summary", None)
+    if not callable(get_summary):
+        return True
+    try:
+        return get_summary(session_id) is not None
+    except Exception:
+        return True
+
+
+def _run_session_title_generation(
+    session_id: str,
+    first_user: str,
+    final_response: str,
+) -> None:
+    """Generate and apply a title without participating in the chat run lifecycle."""
+    if not _session_still_exists_for_title(session_id):
+        return
+    metadata = session_manager._load_metadata(session_id)
+    if not _session_title_needs_generation(str(metadata.get("name") or ""), first_user):
+        return
+
+    try:
+        title, title_usage = _generate_session_title_with_diagnostics(
             session_id,
-            redact_sensitive_tool_text(title_model),
-            getattr(choice0, "finish_reason", None),
-            len(turn.reasoning_content or ""),
-            usage,
+            first_user,
+            final_response,
         )
-    else:
+    except Exception as exc:
+        logger.warning("生成会话标题失败: session=%s error=%s", session_id, exc)
+        title = _fallback_session_title(first_user)
+        title_usage = None
+
+    title = _normalize_generated_session_title(title)
+    if not title or _looks_like_local_path_title(title):
+        logger.warning("生成会话标题结果不可用，保留当前会话名: %r", title)
+        return
+    if title_usage:
         logger.info(
-            "生成会话标题返回: session=%s model=%s finish_reason=%s content_len=%s reasoning_len=%s",
-            session_id,
-            redact_sensitive_tool_text(title_model),
-            getattr(choice0, "finish_reason", None),
-            len(raw_title),
-            len(turn.reasoning_content or ""),
+            "Session title (executor) tokens: input=%s, output=%s",
+            int(title_usage.get("prompt_tokens", 0) or 0),
+            int(title_usage.get("completion_tokens", 0) or 0),
         )
-    return raw_title, usage
+
+    # The user may rename or delete the session while the detached request is
+    # running.  Never recreate a deleted session or overwrite a manual rename.
+    if not _session_still_exists_for_title(session_id):
+        return
+    latest_metadata = session_manager._load_metadata(session_id)
+    if not _session_title_needs_generation(
+        str(latest_metadata.get("name") or ""),
+        first_user,
+    ):
+        return
+    session_manager.set_session_name(session_id, title)
+
+
+def _session_title_worker() -> None:
+    while True:
+        session_id, first_user, final_response = _TITLE_GENERATION_QUEUE.get()
+        try:
+            _run_session_title_generation(session_id, first_user, final_response)
+        except Exception:
+            logger.exception("后台生成会话标题异常: session=%s", session_id)
+        finally:
+            with _TITLE_GENERATION_LOCK:
+                _TITLE_GENERATION_PENDING.discard(session_id)
+            _TITLE_GENERATION_QUEUE.task_done()
+
+
+def _ensure_session_title_workers_started() -> None:
+    global _TITLE_GENERATION_WORKERS_STARTED
+    with _TITLE_GENERATION_LOCK:
+        if _TITLE_GENERATION_WORKERS_STARTED:
+            return
+        _TITLE_GENERATION_WORKERS_STARTED = True
+        for index in range(TITLE_GENERATION_WORKERS):
+            threading.Thread(
+                target=_session_title_worker,
+                name=f"session-title-{index + 1}",
+                daemon=True,
+            ).start()
+
+
+def schedule_session_title_generation(state: State) -> bool:
+    """Queue first-turn title generation and return immediately."""
+    session_id = str(state.get("session_id") or "").strip()
+    first_user = _first_user_text_for_title(state)
+    if not session_id or not first_user:
+        return False
+    try:
+        metadata = session_manager._load_metadata(session_id)
+    except Exception as exc:
+        logger.warning("读取会话标题状态失败: session=%s error=%s", session_id, exc)
+        return False
+    if not _session_title_needs_generation(str(metadata.get("name") or ""), first_user):
+        return False
+
+    with _TITLE_GENERATION_LOCK:
+        if session_id in _TITLE_GENERATION_PENDING:
+            return False
+        _TITLE_GENERATION_PENDING.add(session_id)
+    _ensure_session_title_workers_started()
+    _TITLE_GENERATION_QUEUE.put(
+        (session_id, first_user, str(state.get("final_response") or ""))
+    )
+    return True
+
+
+def is_session_title_generation_pending(session_id: str) -> bool:
+    with _TITLE_GENERATION_LOCK:
+        return str(session_id or "").strip() in _TITLE_GENERATION_PENDING
 
 
 def finish(state: State) -> State:
-    """最终处理：生成会话标题、保存会话、输出最终结果"""
+    """最终处理：保存会话并输出最终结果；标题由独立后台任务生成。"""
     state = prepare_final_event(state)
 
     if state.get("final_printed", False):
         return state
-
-    # 先尝试生成标题（executor 用量计入下方 Total，避免「仅 HTTP 日志」在流式下恒为 0）
-    title_usage: Optional[Dict[str, int]] = None
-    metadata = session_manager._load_metadata(state["session_id"])
-    first_user = _first_user_text_for_title(state)
-    if _session_title_needs_generation(str(metadata.get("name") or ""), first_user):
-        if first_user:
-            try:
-                title, title_usage = _generate_session_title_with_diagnostics(
-                    state["session_id"],
-                    first_user,
-                    state.get("final_response") or "",
-                )
-                title = _normalize_generated_session_title(title)
-                if not title or _looks_like_local_path_title(title):
-                    logger.warning("生成会话标题结果不可用，保留当前会话名: %r", title)
-                    title = ""
-            except Exception as e:
-                logger.warning(f"生成会话标题失败: {e}")
-                title = ""
-                title_usage = None
-            if title:
-                session_manager.set_session_name(state["session_id"], title)
 
     # 记录 LLM 调用详情及 token 统计（以各轮 call 上记录的 usage 为准）
     total_input_tokens = 0
@@ -5109,14 +5269,7 @@ def finish(state: State) -> State:
         logger.info("=== LLM Call Details ===")
         logger.info("(No LLM calls recorded)")
 
-    if title_usage:
-        ti = int(title_usage.get("prompt_tokens", 0) or 0)
-        to = int(title_usage.get("completion_tokens", 0) or 0)
-        total_input_tokens += ti
-        total_output_tokens += to
-        logger.info("Session title (executor) tokens: input=%s, output=%s", ti, to)
-
-    if state.get("llm_calls") or title_usage:
+    if state.get("llm_calls"):
         logger.info(
             f"Total tokens: input={total_input_tokens}, output={total_output_tokens}, total={total_input_tokens+total_output_tokens}"
         )
@@ -5445,6 +5598,7 @@ async def astream_events(
             final_timings["yield_after_final"] = _timing_ms(_t_final)
             _pipeline_step_timing_log("final_pipeline_step_timing", session_id, "yield_after_final", final_timings["yield_after_final"], run_id=runtime_v2_run_id, mode="chat")
             stream_event_count_after_final = len(state["stream_events"])
+            schedule_session_title_generation(state)
             _t_final = time.perf_counter()
             state = finish(state)
             _record_goal_run_usage(state, continuation=False)
@@ -5785,6 +5939,7 @@ async def astream_events_continuation(
             final_timings["yield_after_final"] = _timing_ms(_t_final)
             _pipeline_step_timing_log("final_pipeline_step_timing", session_id, "yield_after_final", final_timings["yield_after_final"], run_id=runtime_v2_run_id, mode="continuation")
             stream_event_count_after_final = len(state["stream_events"])
+            schedule_session_title_generation(state)
             _t_final = time.perf_counter()
             state = finish(state)
             _record_goal_run_usage(state, continuation=True)

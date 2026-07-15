@@ -24,8 +24,20 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
 
-from agent import astream_events, astream_events_continuation, session_manager
-from agent_harness import PROJECT_ROOT, WORK_DIR, dotenv_file_path, refresh_executor_client_from_env, _invalidate_executor_config_cache
+from agent import (
+    astream_events,
+    astream_events_continuation,
+    is_session_title_generation_pending,
+    session_manager,
+)
+from agent_harness import (
+    PROJECT_ROOT,
+    WORK_DIR,
+    _invalidate_executor_config_cache,
+    dotenv_file_path,
+    key_context_body_for_system_prompt,
+    refresh_executor_client_from_env,
+)
 from agent_loop import (
     abort_session_steer_run,
     compute_context_tokens_for_session,
@@ -107,6 +119,12 @@ _history_op_locks: dict[str, threading.Lock] = {}
 _history_op_locks_guard = threading.Lock()
 _RUNTIME_SYNC_CANCEL = threading.Event()
 _RUNTIME_SYNC_SLEEP_SEC = float(os.getenv("RUNTIME_SYNC_QUEUE_SLEEP_SEC", "0.2"))
+_RUNTIME_AUTO_MIGRATION_SCAN_STARTED = False
+_RUNTIME_AUTO_MIGRATION_STATUS: dict[str, Any] = {"state": "idle"}
+_RUNTIME_AUTO_MIGRATION_DELAY_SEC = max(
+    0.0,
+    float(os.getenv("RUNTIME_V2_AUTO_MIGRATE_DELAY_SEC", "3")),
+)
 
 
 def _history_op_lock(session_id: str) -> threading.Lock:
@@ -124,44 +142,123 @@ def _run_history_op_locked(session_id: str, fn, *args, **kwargs):
         return fn(*args, **kwargs)
 
 
-def _runtime_sync_file_sig(path: Path) -> tuple[bool, int, int]:
+def _runtime_sync_file_sig(path: Path) -> dict:
     try:
         st = path.stat()
-        return True, int(st.st_mtime_ns), int(st.st_size)
+        return {"exists": True, "mtime_ns": int(st.st_mtime_ns), "size": int(st.st_size)}
     except OSError:
-        return False, 0, 0
+        return {"exists": False, "mtime_ns": 0, "size": 0}
 
 
-def _runtime_sync_paths(session_id: str) -> tuple[Path, Path]:
-    legacy_path = session_manager._get_ui_events_path(session_id)
+def _runtime_sync_paths(session_id: str) -> dict[str, Path]:
     from runtime_v2.ui_projection import RuntimeUiProjection
 
     projection = RuntimeUiProjection(
         session_manager.repository.sessions_dir,
         path_resolver=session_manager._resolve_session_path,
     )
-    return legacy_path, projection.event_log.event_path(session_id)
+    session_path = Path(session_manager._resolve_session_path(session_id))
+    def manager_path(method_name: str, fallback_name: str) -> Path:
+        method = getattr(session_manager, method_name, None)
+        return Path(method(session_id)) if callable(method) else session_path / fallback_name
+
+    return {
+        "legacy_ui": manager_path("_get_ui_events_path", "ui_events.json"),
+        "legacy_model": manager_path("_get_llm_history_path", "llm_history.json"),
+        "legacy_context": manager_path("_get_key_context_path", "key_context.md"),
+        "legacy_todo": manager_path("_get_todo_plan_path", "todo_plan.md"),
+        "runtime_events": projection.event_log.event_path(session_id),
+        "manifest": session_path / "runtime_v2_migration.json",
+    }
+
+
+def _runtime_sync_fingerprints(session_id: str) -> dict:
+    return {
+        key: _runtime_sync_file_sig(path)
+        for key, path in _runtime_sync_paths(session_id).items()
+        if key != "manifest"
+    }
+
+
+def _read_runtime_migration_manifest(session_id: str) -> dict:
+    path = _runtime_sync_paths(session_id)["manifest"]
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return data if isinstance(data, dict) else {}
 
 
 def _runtime_sync_needed(session_id: str) -> tuple[bool, str, dict]:
     try:
-        legacy_path, runtime_path = _runtime_sync_paths(session_id)
-        legacy_sig = _runtime_sync_file_sig(legacy_path)
-        runtime_sig = _runtime_sync_file_sig(runtime_path)
-        detail = {"legacy": legacy_sig, "runtime": runtime_sig}
-        if legacy_sig[0] and not runtime_sig[0]:
+        fingerprints = _runtime_sync_fingerprints(session_id)
+        legacy_keys = ("legacy_ui", "legacy_model", "legacy_context", "legacy_todo")
+        legacy_present = any(
+            bool((fingerprints.get(key) or {}).get("exists"))
+            and int((fingerprints.get(key) or {}).get("size") or 0) > 0
+            for key in legacy_keys
+        )
+        runtime_present = bool((fingerprints.get("runtime_events") or {}).get("exists"))
+        manifest = _read_runtime_migration_manifest(session_id)
+        detail = {
+            "fingerprints": fingerprints,
+            "manifest_version": manifest.get("manifest_version"),
+            "manifest_status": manifest.get("status"),
+        }
+        if not legacy_present:
+            return False, "no_legacy_data", detail
+        if not runtime_present:
             return True, "runtime_missing", detail
-        if runtime_sig[0] and not legacy_sig[0]:
-            return True, "legacy_missing", detail
-        if not legacy_sig[0] and not runtime_sig[0]:
-            return False, "none", detail
-        if legacy_sig[1] > runtime_sig[1] + 1_000_000:
-            return True, "runtime_older", detail
-        if runtime_sig[1] > legacy_sig[1] + 1_000_000:
-            return True, "legacy_older", detail
-        return False, "fresh", detail
+        recorded = manifest.get("file_fingerprints")
+        if isinstance(recorded, dict) and recorded == fingerprints:
+            if manifest.get("status") == "blocked":
+                return False, "blocked_unchanged", detail
+            return False, "verified_unchanged", detail
+        legacy_keys = ("legacy_ui", "legacy_model", "legacy_context", "legacy_todo")
+        if isinstance(recorded, dict):
+            legacy_changed = any(recorded.get(key) != fingerprints.get(key) for key in legacy_keys)
+            if not legacy_changed:
+                return False, "runtime_changed_only", detail
+            return True, "legacy_changed", detail
+
+        # Sessions produced by an older migration release have no fingerprints.
+        # Only enqueue automatically when legacy is newer than the V2 event log;
+        # scanning every already-authoritative V2 session at startup causes large
+        # avoidable disk contention.  Administrators can still request a full
+        # verification through the explicit sync-all endpoint.
+        runtime_mtime = int((fingerprints.get("runtime_events") or {}).get("mtime_ns") or 0)
+        legacy_mtime = max(
+            int((fingerprints.get(key) or {}).get("mtime_ns") or 0)
+            for key in legacy_keys
+        )
+        if legacy_mtime > runtime_mtime + 1_000_000:
+            return True, "legacy_newer", detail
+        return False, "runtime_authoritative_unverified", detail
     except Exception as exc:
         return False, f"check_failed:{exc}", {}
+
+
+def _runtime_v2_legacy_only_migration_pending(session_id: str) -> dict:
+    """Cheap gate preventing an old V1 session from opening as an empty V2 one."""
+    try:
+        fingerprints = _runtime_sync_fingerprints(session_id)
+        runtime_present = bool((fingerprints.get("runtime_events") or {}).get("exists"))
+        legacy_present = any(
+            bool((fingerprints.get(key) or {}).get("exists"))
+            and int((fingerprints.get(key) or {}).get("size") or 0) > 0
+            for key in ("legacy_ui", "legacy_model", "legacy_context", "legacy_todo")
+        )
+    except Exception as exc:
+        return {"pending": False, "error": str(exc)}
+    if runtime_present or not legacy_present:
+        return {"pending": False}
+    queued = _enqueue_runtime_sync(session_id, "auto_on_open", check_needed=True)
+    return {
+        "pending": True,
+        "queued": bool(queued.get("queued")),
+        "reason": queued.get("reason") or "runtime_missing",
+        "retry_after_ms": 250,
+    }
 
 
 def _runtime_sync_worker_loop() -> None:
@@ -181,8 +278,11 @@ def _runtime_sync_worker_loop() -> None:
             _RUNTIME_SYNC_STATUS[sid] = status
         t0 = _time.perf_counter()
         try:
-            result = _sync_runtime_session(sid)
-            state = "done" if result.get("ok") else "failed"
+            result = _sync_runtime_session(
+                sid,
+                automatic=bool(status.get("automatic")),
+            )
+            state = "done" if result.get("ok") else ("blocked" if result.get("blocked") else "failed")
             error = result.get("error")
         except Exception as exc:
             result = {"ok": False, "session_id": sid, "error": str(exc)}
@@ -241,10 +341,95 @@ def _enqueue_runtime_sync(session_id: str, reason: str = "manual", *, check_need
             "state": "queued",
             "queued": True,
             "reason": check_reason,
+            "trigger": reason,
+            "automatic": str(reason or "").startswith("auto_"),
             "detail": detail,
         }
         _ensure_runtime_sync_worker_locked()
     return {"ok": True, "session_id": sid, "queued": True, "reason": check_reason, "detail": detail}
+
+
+def _env_enabled(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return str(raw).strip().lower() not in {"0", "false", "no", "off"}
+
+
+def schedule_runtime_auto_migration() -> dict:
+    """Start one low-priority V1->V2 scan without delaying UI startup."""
+    global _RUNTIME_AUTO_MIGRATION_SCAN_STARTED
+
+    try:
+        from runtime_v2 import runtime_v2_primary
+
+        enabled = (
+            runtime_v2_primary()
+            and _env_enabled("RUNTIME_V2_AUTO_MIGRATE_LEGACY", True)
+            and _env_enabled("RUNTIME_V2_AUTO_MIGRATE_STARTUP", False)
+        )
+    except Exception:
+        enabled = False
+    if not enabled:
+        return {"ok": True, "scheduled": False, "reason": "startup_scan_disabled"}
+    with _RUNTIME_SYNC_LOCK:
+        if _RUNTIME_AUTO_MIGRATION_SCAN_STARTED:
+            return {"ok": True, "scheduled": False, "reason": "already_scheduled"}
+        _RUNTIME_AUTO_MIGRATION_SCAN_STARTED = True
+        _RUNTIME_AUTO_MIGRATION_STATUS.clear()
+        _RUNTIME_AUTO_MIGRATION_STATUS.update({"state": "scheduled", "started_at": None})
+
+    def scan() -> None:
+        import time as _time
+
+        if _RUNTIME_AUTO_MIGRATION_DELAY_SEC:
+            _time.sleep(_RUNTIME_AUTO_MIGRATION_DELAY_SEC)
+        with _RUNTIME_SYNC_LOCK:
+            _RUNTIME_AUTO_MIGRATION_STATUS.update({"state": "scanning", "started_at": _time.time()})
+        queued = skipped = failed = 0
+        try:
+            rows = session_manager.list_sessions(include_archived=True)
+            session_ids = {
+                str((row or {}).get("id") or "").strip()
+                for row in rows
+                if str((row or {}).get("id") or "").strip()
+            }
+            try:
+                session_ids.update(
+                    str(value or "").strip()
+                    for pair in session_manager._load_subagent_index().items()
+                    for value in pair
+                    if str(value or "").strip()
+                )
+            except Exception:
+                pass
+            limit = max(0, int(os.getenv("RUNTIME_V2_AUTO_MIGRATE_LIMIT", "0") or 0))
+            ordered = sorted(session_ids)
+            if limit:
+                ordered = ordered[:limit]
+            for sid in ordered:
+                result = _enqueue_runtime_sync(sid, "auto_startup", check_needed=True)
+                if not result.get("ok"):
+                    failed += 1
+                elif result.get("queued"):
+                    queued += 1
+                else:
+                    skipped += 1
+        except Exception as exc:
+            failed += 1
+            logger.warning("Runtime V2 automatic migration scan failed: %s", exc)
+        finally:
+            with _RUNTIME_SYNC_LOCK:
+                _RUNTIME_AUTO_MIGRATION_STATUS.update({
+                    "state": "done" if failed == 0 else "failed",
+                    "finished_at": _time.time(),
+                    "queued": queued,
+                    "skipped": skipped,
+                    "failed": failed,
+                })
+
+    threading.Thread(target=scan, name="runtime-v2-auto-migration-scan", daemon=True).start()
+    return {"ok": True, "scheduled": True, "reason": "runtime_v2_startup"}
 
 
 def _read_text_cached(path: Path, fallback: str = "") -> str:
@@ -897,6 +1082,7 @@ def _build_sessions_state_snapshot(include_archived: bool = False) -> dict:
         s["stream_active"] = bool(run_state["stream_active"])
         s["run_active"] = bool(run_state["run_active"])
         s["run_started_at"] = run_state["run_started_at"]
+        s["title_generation_pending"] = is_session_title_generation_pending(sid)
         if run_state.get("active_run"):
             active_runs.append(run_state["active_run"])
     out = {
@@ -1469,10 +1655,22 @@ def _attach_subagent_sidebar_fields(s: dict, session_id: str) -> None:
 
 
 @fastapi_app.get("/sessions")
-async def list_sessions(include_archived: bool = Query(False)):
+async def list_sessions(
+    include_archived: bool = Query(False),
+    archived_only: bool = Query(False),
+    offset: int = Query(0, ge=0),
+    limit: Optional[int] = Query(None, ge=1),
+):
+    schedule_runtime_auto_migration()
+
     def _build_response() -> JSONResponse:
-        sessions = session_manager.list_sessions(include_archived=include_archived)
+        sessions = session_manager.list_sessions(include_archived=include_archived or archived_only)
         archived_count = session_manager.archived_session_count()
+        if archived_only:
+            sessions = [s for s in sessions if bool(s.get("archived"))]
+        if offset or limit is not None:
+            end = None if limit is None else offset + limit
+            sessions = sessions[offset:end]
         _cleanup_stale_active_chat()
         for s in sessions:
             sid = s.get("id")
@@ -1482,10 +1680,12 @@ async def list_sessions(include_archived: bool = Query(False)):
                 s["stream_active"] = bool(run_state["stream_active"])
                 s["run_active"] = bool(run_state["run_active"])
                 s["run_started_at"] = run_state["run_started_at"]
+                s["title_generation_pending"] = is_session_title_generation_pending(sid)
             else:
                 s["stream_active"] = False
                 s["run_active"] = False
                 s["run_started_at"] = None
+                s["title_generation_pending"] = False
         return JSONResponse(
             content=sessions,
             headers={"X-Archived-Count": str(archived_count)},
@@ -1653,6 +1853,7 @@ async def get_session_detail(
             s["stream_active"] = bool(run_state["stream_active"])
             s["run_active"] = bool(run_state["run_active"])
             s["run_started_at"] = run_state["run_started_at"]
+            s["title_generation_pending"] = is_session_title_generation_pending(str(sid))
             try:
                 s["react_can_continue"] = session_manager.can_continue_react_session(str(sid))
             except Exception:
@@ -1676,6 +1877,7 @@ async def get_session_detail(
             s["stream_active"] = False
             s["run_active"] = False
             s["run_started_at"] = None
+            s["title_generation_pending"] = False
             s["react_can_continue"] = False
             s["react_auto_resume"] = False
         return JSONResponse(content=s)
@@ -2318,7 +2520,8 @@ def _build_agent_message_with_selected_skills(raw_message: str, valid_names: lis
 def _build_ui_message_with_selected_skills(raw_message: str, valid_names: list[str]) -> str:
     if not valid_names:
         return raw_message
-    return raw_message + "\n\n已选择 Skill：" + "、".join(valid_names)
+    suffix = "\n\n已选择 Skill：" + "、".join(valid_names)
+    return raw_message if raw_message.endswith(suffix) else raw_message + suffix
 
 
 @fastapi_app.post("/sessions/{session_id}/steer")
@@ -2575,6 +2778,26 @@ async def chat(
     use_runtime_v2_stream = _runtime_v2_chat_protocol_enabled(stream_protocol, sid)
     start_token = ""
     if sid:
+        try:
+            from runtime_v2 import runtime_v2_primary
+
+            migration_gate = (
+                _runtime_v2_legacy_only_migration_pending(sid)
+                if runtime_v2_primary()
+                else {"pending": False}
+            )
+        except Exception:
+            migration_gate = {"pending": False}
+        if migration_gate.get("pending"):
+            return JSONResponse(
+                content={
+                    "ok": False,
+                    "reason": "runtime_migration_pending",
+                    "session_id": sid,
+                    **migration_gate,
+                },
+                status_code=425,
+            )
         if followup_steer and steer_operation_id:
             steer_status = get_session_steer(sid, steer_id=steer_operation_id)
             steer_item = steer_status.get("item") if isinstance(steer_status.get("item"), dict) else {}
@@ -2658,11 +2881,7 @@ async def chat(
     valid_selected_skills = selected_skill_names(selected_skills)
     agent_message = build_agent_message(message, valid_selected_skills)
     ui_base_message = str(ui_message or "").strip() or message
-    ui_message = (
-        ui_base_message + "\n\n已选择 Skill：" + "、".join(valid_selected_skills)
-        if valid_selected_skills
-        else ui_base_message
-    )
+    ui_message = _build_ui_message_with_selected_skills(ui_base_message, valid_selected_skills)
 
     async def event_generator():
         if sid:
@@ -3135,6 +3354,15 @@ async def get_session_messages(
                 return JSONResponse(content=payload)
         except Exception as exc:
             logger.warning("Runtime version check failed for messages %s: %s", session_id, exc)
+        migration_gate = _runtime_v2_legacy_only_migration_pending(session_id)
+        if migration_gate.get("pending"):
+            return JSONResponse(content={
+                "ok": False,
+                "source": "runtime_v2_migration",
+                "migration_pending": True,
+                "session_id": session_id,
+                **migration_gate,
+            }, status_code=425)
         try:
             if projection is None:
                 from runtime_v2.ui_projection import RuntimeUiProjection
@@ -3244,6 +3472,15 @@ async def get_session_history_snapshot(
                 "source": "runtime_unknown",
                 "error": "runtime_version_check_failed",
             }, status_code=409)
+        migration_gate = _runtime_v2_legacy_only_migration_pending(session_id)
+        if migration_gate.get("pending"):
+            return JSONResponse(content={
+                "ok": False,
+                "source": "runtime_v2_migration",
+                "migration_pending": True,
+                "session_id": session_id,
+                **migration_gate,
+            }, status_code=425)
         try:
             from runtime_v2.ui_projection import RuntimeUiProjection
 
@@ -3323,7 +3560,12 @@ class RuntimeSyncBusyError(RuntimeError):
     pass
 
 
-def _sync_runtime_session_unlocked(session_id: str, *, export_legacy: bool = False) -> dict:
+def _sync_runtime_session_unlocked(
+    session_id: str,
+    *,
+    export_legacy: bool = False,
+    automatic: bool = False,
+) -> dict:
     from runtime_v2.migration import RuntimeV2MigrationService
 
     # Keep chat start reservation blocked for the transaction. This closes the
@@ -3341,22 +3583,47 @@ def _sync_runtime_session_unlocked(session_id: str, *, export_legacy: bool = Fal
         def _load_legacy_model_messages() -> list[dict]:
             return session_manager._load_llm_history(session_id)
 
+        def _load_legacy_context() -> str:
+            loader = getattr(session_manager, "_load_key_context", None)
+            if not callable(loader):
+                return ""
+            return key_context_body_for_system_prompt(loader(session_id))
+
+        def _load_legacy_todo() -> dict:
+            loader = getattr(session_manager, "get_todo_plan_snapshot", None)
+            if not callable(loader):
+                return {}
+            value = loader(session_id)
+            return dict(value) if isinstance(value, dict) else {}
+
         return service.sync_session(
             session_id,
             load_legacy_ui_events=lambda: session_manager.get_ui_events_for_display(session_id),
             save_legacy_ui_events=lambda events: session_manager._save_ui_events(session_id, events),
             load_legacy_model_messages=_load_legacy_model_messages,
             save_legacy_model_messages=lambda messages: session_manager._save_llm_history(session_id, messages),
+            load_legacy_context=_load_legacy_context,
+            load_legacy_todo=_load_legacy_todo,
+            load_file_fingerprints=lambda: _runtime_sync_fingerprints(session_id),
             export_legacy=bool(export_legacy),
+            conflict_policy="record" if automatic else "raise",
         )
 
 
-def _sync_runtime_session(session_id: str, *, export_legacy: bool = False) -> dict:
+def _sync_runtime_session(
+    session_id: str,
+    *,
+    export_legacy: bool = False,
+    automatic: bool = False,
+) -> dict:
+    kwargs = {"export_legacy": bool(export_legacy)}
+    if automatic:
+        kwargs["automatic"] = True
     return _run_history_op_locked(
         session_id,
         _sync_runtime_session_unlocked,
         session_id,
-        export_legacy=bool(export_legacy),
+        **kwargs,
     )
 
 
@@ -3401,12 +3668,14 @@ async def get_runtime_sync_status():
         queue = list(_RUNTIME_SYNC_QUEUE)
         statuses = {sid: dict(status) for sid, status in _RUNTIME_SYNC_STATUS.items()}
         worker_alive = _RUNTIME_SYNC_WORKER is not None and _RUNTIME_SYNC_WORKER.is_alive()
+        auto_migration = dict(_RUNTIME_AUTO_MIGRATION_STATUS)
     return JSONResponse(content={
         "ok": True,
         "worker_alive": worker_alive,
         "queue_length": len(queue),
         "queue": queue[:200],
         "statuses": statuses,
+        "auto_migration": auto_migration,
     })
 
 
@@ -4228,8 +4497,10 @@ _ENV_GROUP_ORDER: list[tuple[str, str, list[str]]] = [
             "TOOL_RESULT_TRUNCATE_KEEP_CHARS",
             "GREP_MAX_MATCH_LINES",
             "GREP_USE_RIPGREP",
+            "GREP_RIPGREP_PATH",
             "GREP_TIMEOUT_SEC",
             "GLOB_MAX_MATCHES",
+            "GLOB_USE_WINDOWS_INDEX",
             "LS_MAX_ENTRIES",
             "LS_INCLUDE_LINE_COUNTS",
             "READ_FILE_RANGE_MAX_BYTES",
@@ -4305,8 +4576,10 @@ _ENV_HINTS: dict[str, str] = {
     "LLM_CONTEXT_TRUNCATE_KEEP_CHARS": "旧变量名，仍兼容读取；建议改用 TOOL_RESULT_TRUNCATE_KEEP_CHARS。",
     "GREP_MAX_MATCH_LINES": "grep 最多返回的匹配行数（跨文件累计）。",
     "GREP_USE_RIPGREP": "优先使用 ripgrep（rg）加速搜索；不可用或正则不兼容时自动回退 Python。",
+    "GREP_RIPGREP_PATH": "可选：rg/rg.exe 的完整路径；默认优先查找仓库内置 Python 和 bundled tools。",
     "GREP_TIMEOUT_SEC": "ripgrep 单次搜索超时秒数。",
     "GLOB_MAX_MATCHES": "glob 最多返回的路径条数。",
+    "GLOB_USE_WINDOWS_INDEX": "Windows 文件名索引加速，默认 1；设为 0 关闭。无结果或不可用时回退文件系统。",
     "LS_MAX_ENTRIES": "ls/list_dir 单层目录最多列出的条目数。",
     "LS_INCLUDE_LINE_COUNTS": "是否读取每个文件统计行数；默认 1，设为 0 可切换为轻量目录列表。",
     "READ_FILE_RANGE_MAX_BYTES": "使用 start_line/line_count 按行读取时的文件大小安全上限。",
@@ -4328,6 +4601,7 @@ _ENV_PATH_KIND_FILE = frozenset(
     {
         "RUN_SHELL_BASH",
         "MCP_SERVERS_JSON",
+        "GREP_RIPGREP_PATH",
     }
 )
 _ENV_PATH_KIND_DIR = frozenset(

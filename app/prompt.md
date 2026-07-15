@@ -31,7 +31,19 @@
 - `run_shell` 使用完整 `command`，按需设置 `workdir`、`timeout_ms`、`login`；不要生成旧参数 `args`、`working_dir`、`timeout`。
 - 执行规则：执行层保持现有语义——无依赖的只读工具按并发上限并行；`write_file`、`apply_patch`、`delete_file`、`web_download`、`run_shell`、`update_todo`、`context_manage`、`task` 等有副作用或状态依赖的工具依照 `tool_calls` 原始顺序串行；读写边界也保持原始顺序。
 - 依赖例外：如果后一条调用的参数必须等前一条返回后才能知道（例如先搜索再使用搜索结果中的 URL），才分到下一轮生成；不得猜测未知参数。`task` 在 `run_in_background=true` 时可不阻塞父 Agent，`best-of-n-runner` 在内部并行多个 subagent。
+- `task` 只用于目标、范围和交付物明确且可独立推进的子任务；简单一步、强依赖父 Agent 当前中间状态、或必须由父 Agent亲自完成的工作不要委派。`start`/`resume` 的 `prompt` 必须自包含，至少写清目标、范围/路径、已知事实、约束与非目标、交付物和验证方式；subagent 看不到父对话和父工具结果。默认前台执行会等待并直接返回最终结果；只有父 Agent 可在不依赖结果的情况下继续工作时才使用后台模式。查询用 `status`，读取结果用 `collect`，追加新指令才用 `resume`，不要用 `resume` 轮询。`status`/`collect` 不传 `resume` 时面向全部子 Agent（递归包含嵌套层级），传 `resume` 时只接受一个直属子 Agent ID；不支持 ID 数组或任意多个 ID 的子集查询。虚拟 `best-of-n-runner` ID 不是可 resume 的真实子会话，应查看其实际尝试或收集已返回的运行结果。
 - 文件组织：执行需要创建/下载/生成文件的任务时，先用 `run_shell`（mkdir）或 `write_file` 创建以任务名命名的子目录，后续所有 `write_file`、`web_download`、`run_shell` 产出均写入该子目录。文件夹命名简洁有意义（如 `月度报告_20260531`、`前端重构`），避免无意义的临时名。仅当任务极其简单（单文件输出）且文件名已足够明确时，可省略子目录。
+
+### task / subagent 常用模式
+
+- **代码探索或问题定位**：需要一个结论后才能继续时，用 `task(action="start", subagent_type="explore", run_in_background=false, description=..., prompt=...)`。`prompt` 写清要搜索的目录、问题、已知线索和期望证据；`explore` 可读文件和访问 Web，但不会修改文件。
+- **单点实现或修复**：用前台 `generalPurpose`，例如 `task(action="start", subagent_type="generalPurpose", run_in_background=false, description=..., prompt=...)`。必须提供准确路径、目标行为、不可改变项、验收标准和测试命令；父 Agent 收到结果后仍要检查改动与验证结果。
+- **多个独立调研或审查维度**：按目录、组件或审查主题分别启动多个 `explore`，设置 `run_in_background=true`；不要让多个 Agent 重复同一范围。父 Agent 可继续其他不依赖结果的工作，随后用 `task(action="status")` 查看全部状态，用 `task(action="collect")` 汇总全部结果，并负责去重、解决冲突和形成最终结论。
+- **耗时较长但结果暂时不阻塞父任务**：使用后台 `generalPurpose` 或 `explore`，保存启动结果返回的 ID。收到完成通知后用 `task(action="collect", resume="<ID>")` 读取结果；仅想看是否完成时用 `task(action="status", resume="<ID>")`，不要用 `resume` 轮询。
+- **继续同一 Agent、补充材料或纠正方向**：只对一个直属子 Agent 调用 `task(action="resume", resume="<ID>", prompt="<新增指令和变化事实>")`。`prompt` 只写新增要求，不要重复完整旧任务；若只是读取原结果，应改用 `collect`。
+- **需要多个明显不同的候选方案**：用 `task(action="start", subagent_type="best-of-n-runner", n=3, prompt=...)`（`n` 可为 2–8）。要求各尝试采用不同策略；返回的是多份候选，父 Agent 必须比较、验证并综合，不能直接把全部原样交给用户。
+- **严格本地只读检查**：使用 `readonly=true`，适合只读代码审计或基于现有文件回答问题；此模式没有写入、Shell、Web 或 MCP。需要 Web 检索时改用 `subagent_type="explore"`，不要同时假设严格只读模式能联网。
+- **不应使用 subagent 的情况**：一步即可完成的工作、后续每一步都依赖父 Agent 即时结果的串行流程、上下文尚不明确的任务，以及会让多个 Agent 同时修改同一文件或同一状态的工作。写密集任务默认单 Agent；确需并行时必须按互不重叠的文件范围拆分，或使用具备隔离工作树的流程。
 
 ## system_skills_intro
 需要某技能的具体规程时，调用 `activate_skill`。

@@ -7,7 +7,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterable, List, Optional
 
+from .history_ops import RuntimeHistoryOps
 from .model_projection import RuntimeModelProjection
+from .snapshot_store import SnapshotStore
 from .ui_projection import RuntimeUiProjection
 
 
@@ -30,7 +32,7 @@ class RuntimeV2MigrationService:
     maintenance only.
     """
 
-    MANIFEST_VERSION = 1
+    MANIFEST_VERSION = 2
     MANIFEST_FILE = "runtime_v2_migration.json"
 
     def __init__(
@@ -50,7 +52,11 @@ class RuntimeV2MigrationService:
         save_legacy_ui_events: Optional[Callable[[List[dict]], None]],
         load_legacy_model_messages: Callable[[], Iterable[dict]],
         save_legacy_model_messages: Optional[Callable[[List[dict]], None]],
+        load_legacy_context: Optional[Callable[[], str]] = None,
+        load_legacy_todo: Optional[Callable[[], dict]] = None,
+        load_file_fingerprints: Optional[Callable[[], dict]] = None,
         export_legacy: bool = False,
+        conflict_policy: str = "raise",
     ) -> dict:
         # Resolve and validate every legacy input before the first V2 write.
         # A loader failure therefore cannot leave a partially migrated event log.
@@ -64,6 +70,11 @@ class RuntimeV2MigrationService:
             for item in list(load_legacy_model_messages() or [])
             if isinstance(item, dict)
         ]
+        legacy_context = str(load_legacy_context() or "") if load_legacy_context is not None else ""
+        loaded_todo = load_legacy_todo() if load_legacy_todo is not None else {}
+        legacy_todo = dict(loaded_todo) if isinstance(loaded_todo, dict) else {}
+        if conflict_policy not in {"raise", "record"}:
+            raise ValueError("conflict_policy must be 'raise' or 'record'")
         if export_legacy and save_legacy_ui_events is None:
             raise ValueError("save_legacy_ui_events is required when export_legacy=True")
         if export_legacy and save_legacy_model_messages is None:
@@ -110,6 +121,12 @@ class RuntimeV2MigrationService:
 
             projected_events = ui_projection.read_ui_events_fast(session_id)
             v2_model_messages = model_projection.read_message_dicts(session_id)
+            context_v2_from_v1, todo_v2_from_v1 = self._migrate_optional_state(
+                session_id,
+                legacy_context=legacy_context,
+                legacy_todo=legacy_todo,
+                enabled=not export_legacy,
+            )
             v1_from_v2 = {
                 "checked": True,
                 "action": "skipped" if not export_legacy else "none",
@@ -179,11 +196,15 @@ class RuntimeV2MigrationService:
                 "manifest_version": self.MANIFEST_VERSION,
                 "session_id": session_id,
                 "operation": "export" if export_legacy else "migrate",
+                "status": "completed",
                 "created_at": datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z"),
+                "file_fingerprints": self._load_fingerprints(load_file_fingerprints),
                 "verification": verification,
                 "actions": {
                     "v2_from_v1": v2_from_v1,
                     "model_v2_from_v1": model_v2_from_v1,
+                    "context_v2_from_v1": context_v2_from_v1,
+                    "todo_v2_from_v1": todo_v2_from_v1,
                     "v1_from_v2": v1_from_v2,
                     "model_v2_to_v1": model_v2_to_v1,
                 },
@@ -213,6 +234,30 @@ class RuntimeV2MigrationService:
                     "migration/export failed and rollback was incomplete: "
                     + "; ".join(rollback_errors)
                 ) from exc
+            if conflict_policy == "record" and isinstance(exc, RuntimeV2VerificationError):
+                blocked_manifest = {
+                    "manifest_version": self.MANIFEST_VERSION,
+                    "session_id": session_id,
+                    "operation": "migrate",
+                    "status": "blocked",
+                    "created_at": datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z"),
+                    "file_fingerprints": self._load_fingerprints(load_file_fingerprints),
+                    "verification": dict(exc.verification or {}),
+                    "actions": {
+                        "v2_from_v1": locals().get("v2_from_v1", {}),
+                        "model_v2_from_v1": locals().get("model_v2_from_v1", {}),
+                    },
+                }
+                manifest_path = self._write_manifest(ui_projection, session_id, blocked_manifest)
+                return {
+                    "ok": False,
+                    "blocked": True,
+                    "session_id": session_id,
+                    "error": str(exc),
+                    "verification": dict(exc.verification or {}),
+                    "manifest_version": self.MANIFEST_VERSION,
+                    "manifest_path": str(manifest_path),
+                }
             raise
 
         return {
@@ -220,12 +265,83 @@ class RuntimeV2MigrationService:
             "session_id": session_id,
             "v2_from_v1": v2_from_v1,
             "model_v2_from_v1": model_v2_from_v1,
+            "context_v2_from_v1": context_v2_from_v1,
+            "todo_v2_from_v1": todo_v2_from_v1,
             "v1_from_v2": v1_from_v2,
             "model_v2_to_v1": model_v2_to_v1,
             "verification": verification,
             "manifest_version": self.MANIFEST_VERSION,
             "manifest_path": str(manifest_path),
         }
+
+    def _migrate_optional_state(
+        self,
+        session_id: str,
+        *,
+        legacy_context: str,
+        legacy_todo: dict,
+        enabled: bool,
+    ) -> tuple[dict, dict]:
+        snapshot = SnapshotStore(
+            self.sessions_dir,
+            path_resolver=self.path_resolver,
+        ).read_consistent(session_id)
+        context = snapshot.get("context") if isinstance(snapshot, dict) else {}
+        summary = context.get("summary") if isinstance(context, dict) else {}
+        current_context = str(summary.get("summary") or "") if isinstance(summary, dict) else ""
+        current_todo = snapshot.get("todo") if isinstance(snapshot, dict) else {}
+        current_todo = dict(current_todo) if isinstance(current_todo, dict) else {}
+        clean_legacy_todo = self._canonical_todo(legacy_todo)
+        clean_current_todo = self._canonical_todo(current_todo)
+
+        context_action = self._optional_state_action(legacy_context, current_context, enabled=enabled)
+        todo_action = self._optional_state_action(clean_legacy_todo, clean_current_todo, enabled=enabled)
+        ops = RuntimeHistoryOps(self.sessions_dir, path_resolver=self.path_resolver)
+        if context_action["action"] == "backfill":
+            ops.commit_context_summary(session_id, legacy_context)
+        if todo_action["action"] == "backfill":
+            ops.update_todo(session_id, clean_legacy_todo)
+        return context_action, todo_action
+
+    @staticmethod
+    def _optional_state_action(source: Any, target: Any, *, enabled: bool) -> dict:
+        source_present = bool(source)
+        target_present = bool(target)
+        if not enabled:
+            action = "skipped_export_mode"
+        elif not source_present:
+            action = "none"
+        elif not target_present:
+            action = "backfill"
+        elif source == target:
+            action = "none"
+        else:
+            # Context/todo do not have an append-only ordering signal.  Existing
+            # V2 state is therefore authoritative and a differing legacy value
+            # is surfaced for review rather than guessed or overwritten.
+            action = "v2_preserved"
+        return {
+            "checked": True,
+            "action": action,
+            "source_present": source_present,
+            "target_present": target_present,
+        }
+
+    @classmethod
+    def _canonical_todo(cls, todo: dict) -> dict:
+        clean = dict(todo or {})
+        clean.pop("updated_at", None)
+        clean.pop("seq", None)
+        if not clean.get("has_plan") and not list(clean.get("items") or []):
+            return {}
+        return cls._canonical_value(clean)
+
+    @staticmethod
+    def _load_fingerprints(loader: Optional[Callable[[], dict]]) -> dict:
+        if loader is None:
+            return {}
+        value = loader()
+        return dict(value) if isinstance(value, dict) else {}
 
     @classmethod
     def _rows_equal(cls, left: Iterable[dict], right: Iterable[dict], *, kind: str) -> bool:

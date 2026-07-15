@@ -168,7 +168,6 @@ def test_twenty_consecutive_steers_replan_without_recursive_react(monkeypatch):
 
 def test_crash_after_user_turn_commit_replay_is_idempotent(monkeypatch, tmp_path):
     import agent_loop
-    from langchain_core.messages import HumanMessage
     from runtime_v2 import RuntimeModelProjection
 
     class _SessionManager:
@@ -180,7 +179,7 @@ def test_crash_after_user_turn_commit_replay_is_idempotent(monkeypatch, tmp_path
     monkeypatch.setattr(agent_loop, "session_manager", _SessionManager())
     monkeypatch.setattr(agent_loop, "_runtime_v2_is_primary", lambda: True)
     state = {"session_id": "s-crash", "_runtime_v2_run_id": "run-1"}
-    message = HumanMessage(content="durable followup")
+    message = agent_loop.UserMessage(content="durable followup")
 
     assert agent_loop._runtime_v2_commit_user_turn(
         state, message, ui_content="durable followup", ui_type="user_steer", operation_id="steer-op"
@@ -666,7 +665,7 @@ def test_runtime_v2_continuation_empty_projection_does_not_reconcile(monkeypatch
     assert asyncio.run(collect()) == []
 
 
-def test_finish_uses_title_generator_for_new_session(monkeypatch):
+def test_title_worker_uses_title_generator_for_new_session(monkeypatch):
     import agent_loop
 
     names = []
@@ -704,6 +703,11 @@ def test_finish_uses_title_generator_for_new_session(monkeypatch):
 
     assert out["final_printed"] is True
     assert out["stream_events"][-1] == {"type": "final", "content": "done"}
+    assert calls == []
+    assert names == []
+
+    agent_loop._run_session_title_generation("s1", "hello world from user", "done")
+
     assert calls == [("Q:hello world from user\nA:done", [{"type": "final", "content": "done"}])]
     assert names == [("s1", "model title")]
 
@@ -719,6 +723,132 @@ def test_generated_session_title_strips_leading_think_block():
     ) == ""
 
 
+def test_title_generation_switches_model_when_response_is_truncated(monkeypatch):
+    import agent_loop
+
+    calls = []
+
+    class _Completions:
+        def __init__(self, model, content, finish_reason):
+            self.model = model
+            self.content = content
+            self.finish_reason = finish_reason
+
+        def create(self, **kwargs):
+            calls.append((
+                self.model,
+                kwargs["model"],
+                kwargs["max_tokens"],
+                kwargs.get("extra_body"),
+                kwargs.get("reasoning_effort"),
+            ))
+            message = type("Message", (), {"content": self.content, "reasoning_content": "", "tool_calls": None})()
+            choice = type("Choice", (), {"message": message, "finish_reason": self.finish_reason})()
+            return type("Response", (), {"choices": [choice], "usage": None})()
+
+    class _Client:
+        def __init__(self, completions):
+            self.chat = type("Chat", (), {"completions": completions})()
+
+    monkeypatch.setattr(agent_loop, "load_prompt_template", lambda _name: "{first_user}\n{final_response}")
+    monkeypatch.setattr(
+        agent_loop,
+        "resolve_executor_candidates_for_session",
+        lambda _sid: [
+            {
+                "client": _Client(_Completions("primary", "<think>unfinished reasoning", "length")),
+                "model": "primary",
+                "max_output_tokens": 4096,
+            },
+            {
+                "client": _Client(_Completions("backup", "仓库七月功能总结", "stop")),
+                "model": "backup",
+                "max_output_tokens": 1024,
+            },
+        ],
+    )
+
+    title, usage = agent_loop._generate_session_title_with_diagnostics("s1", "分析仓库", "完成")
+
+    assert title == "仓库七月功能总结"
+    assert usage is None
+    assert calls == [
+        ("primary", "primary", 256, {"thinking": {"type": "disabled"}}, None),
+        ("backup", "backup", 256, {"thinking": {"type": "disabled"}}, None),
+    ]
+
+
+def test_title_generation_retries_without_toggle_when_provider_rejects_it(monkeypatch):
+    import agent_loop
+
+    calls = []
+
+    class _Completions:
+        def create(self, **kwargs):
+            calls.append(dict(kwargs))
+            if kwargs.get("extra_body", {}).get("thinking") == {"type": "disabled"}:
+                raise RuntimeError("unknown field: thinking")
+            message = type("Message", (), {"content": "兼容模型标题", "reasoning_content": "", "tool_calls": None})()
+            choice = type("Choice", (), {"message": message, "finish_reason": "stop"})()
+            return type("Response", (), {"choices": [choice], "usage": None})()
+
+    class _Client:
+        def __init__(self):
+            self.chat = type("Chat", (), {"completions": _Completions()})()
+
+    monkeypatch.setattr(agent_loop, "load_prompt_template", lambda _name: "{first_user}\n{final_response}")
+    monkeypatch.setattr(
+        agent_loop,
+        "resolve_executor_candidates_for_session",
+        lambda _sid: [{
+            "client": _Client(),
+            "model": "compatible-model",
+            "max_output_tokens": 1024,
+            "extra_body": {"vendor_option": True},
+            "reasoning_effort": "max",
+        }],
+    )
+
+    title, _usage = agent_loop._generate_session_title_with_diagnostics("s1", "用户问题", "回答")
+
+    assert title == "兼容模型标题"
+    assert calls[0]["extra_body"] == {
+        "vendor_option": True,
+        "thinking": {"type": "disabled"},
+    }
+    assert "reasoning_effort" not in calls[0]
+    assert calls[1]["extra_body"] == {"vendor_option": True}
+    assert "reasoning_effort" not in calls[1]
+
+
+def test_title_worker_uses_user_text_when_all_models_fail(monkeypatch):
+    import agent_loop
+
+    names = []
+
+    class _SessionManager:
+        def _load_metadata(self, _session_id):
+            return {"name": "新会话"}
+
+        def set_session_name(self, session_id, title):
+            names.append((session_id, title))
+
+    monkeypatch.setattr(agent_loop, "session_manager", _SessionManager())
+    monkeypatch.setattr(
+        agent_loop,
+        "_generate_session_title_with_diagnostics",
+        lambda *_args: (_ for _ in ()).throw(RuntimeError("all unavailable")),
+    )
+
+    agent_loop._run_session_title_generation(
+        "s1",
+        "分析下仓库改动，总结7月份新增功能",
+        "done",
+    )
+
+    assert names == [("s1", "分析下仓库改动，总结7月份新增功能"[:20])]
+
+
 def test_reasoning_polluted_session_title_needs_regeneration():
     import agent_loop
 
@@ -726,7 +856,7 @@ def test_reasoning_polluted_session_title_needs_regeneration():
     assert agent_loop._session_title_needs_generation("is. The conversation", "hello")
 
 
-def test_finish_does_not_duplicate_prepared_final_event(monkeypatch):
+def test_finish_does_not_duplicate_prepared_final_event_or_generate_title(monkeypatch):
     import agent_loop
 
     names = []
@@ -761,14 +891,19 @@ def test_finish_does_not_duplicate_prepared_final_event(monkeypatch):
 
     assert out["final_printed"] is True
     assert out["stream_events"] == [{"type": "final", "content": "done"}]
-    assert names == [("s1", "model title")]
+    assert names == []
 
 
-def test_astream_emits_final_before_title_generation(monkeypatch, tmp_path):
+def test_astream_finishes_while_title_generation_is_still_running(monkeypatch, tmp_path):
     import agent_loop
 
     seen = []
     title_call_seen = []
+    import threading
+
+    title_started = threading.Event()
+    release_title = threading.Event()
+    title_done = threading.Event()
 
     class _SessionManager:
         sessions_dir = tmp_path
@@ -795,6 +930,9 @@ def test_astream_emits_final_before_title_generation(monkeypatch, tmp_path):
 
     def fake_generate_title(*args):
         title_call_seen.append(list(seen))
+        title_started.set()
+        release_title.wait(timeout=5)
+        title_done.set()
         return "model title", None
 
     monkeypatch.setattr(agent_loop, "session_manager", _SessionManager())
@@ -817,8 +955,11 @@ def test_astream_emits_final_before_title_generation(monkeypatch, tmp_path):
 
     asyncio.run(collect())
 
-    assert title_call_seen, "title generation should still run for new sessions"
-    assert any(ev.get("type") == "final" and ev.get("content") == "done" for ev in title_call_seen[0])
+    assert title_started.wait(timeout=2), "title generation should run in the background"
+    assert any(ev.get("type") == "run_finished" for ev in seen)
+    assert any(ev.get("type") == "final" and ev.get("content") == "done" for ev in seen)
+    release_title.set()
+    assert title_done.wait(timeout=2)
 
     from runtime_v2.event_log import SessionEventLog
     from runtime_v2.projector import RuntimeProjector

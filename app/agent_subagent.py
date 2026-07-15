@@ -70,9 +70,17 @@ _tool_filter_cache: "OrderedDict[tuple, tuple[tuple[Dict[str, Any], ...], tuple[
 _tool_filter_cache_lock = threading.Lock()
 
 SUBAGENT_RUN_INSTRUCTION = (
-    "你是隔离运行的 subagent：父 Agent 看不到你的中间工具调用。"
-    "完成后请输出简洁、可操作的最终结论（路径、依据、未完成项）。"
-    "不要向用户追问；信息不足时在结论中说明缺口即可。"
+    "你是隔离运行的 subagent。你只能依赖当前 subagent 的 system/key_context、"
+    "父 Agent 本次下发的任务说明和附件；不要假设能看到父会话、用户原话或父 Agent 的工具结果。"
+    "父 Agent 通常只消费你的最终输出，因此最终输出必须自包含。\n"
+    "工作规则：\n"
+    "1. 先识别目标、范围、约束、交付物和验收方式，只处理下发任务授权的范围。\n"
+    "2. 先检查实际文件、数据或运行状态再下结论。分析任务保持只读；"
+    "只有任务明确要求实施时才修改，并做与风险相称的验证。\n"
+    "3. 不要向用户追问，也不要等待父 Agent 回复。非关键事实缺失时采用最小合理假设并明确标注；"
+    "关键输入缺失时说明已检查内容、具体阻塞和所需信息。\n"
+    "4. 最终输出按顺序给出：结果或结论、关键证据、修改文件与验证、假设/风险/未完成项。"
+    "省略空项和过程性寒暄。"
 )
 
 
@@ -433,23 +441,40 @@ def build_subagent_user_message(
     description: str,
     subagent_type: str,
     is_resume: bool = False,
+    readonly: bool = False,
     file_attachments: Optional[List[str]] = None,
     best_of_attempt: int = 0,
     best_of_total: int = 0,
 ) -> str:
+    if readonly:
+        access_mode = "严格只读（无写入、Shell、Web 或 MCP）"
+    elif subagent_type == "explore":
+        access_mode = "探索只读（可读文件和检索 Web，不可写入）"
+    else:
+        access_mode = "通用（仅在父 Agent 明确要求实施时修改）"
     parts = [
         f"## Subagent 任务：{description.strip() or '未命名'}",
-        f"类型：`{subagent_type}`",
+        f"- 类型：`{subagent_type}`",
+        f"- 权限模式：{access_mode}",
+        f"- 会话模式：{'续接已有 subagent' if is_resume else '新任务'}",
     ]
     if best_of_total > 1 and best_of_attempt > 0:
-        parts.append(f"Best-of-N：尝试 **{best_of_attempt}/{best_of_total}**（请采用与其他尝试不同的思路）。")
+        parts.append(
+            f"- Best-of-N：尝试 **{best_of_attempt}/{best_of_total}**；"
+            "采用真正不同的策略，不要只改写常规方案。"
+        )
     if is_resume:
-        parts.append("（续接先前 subagent 会话；以下为追加指令）")
+        parts.append("\n续接要求：沿用已验证的状态，只执行下面的追加指令；除非必要，不要重做已完成工作。")
+    parts.append("\n### 父 Agent 指令\n")
+    parts.append((prompt or "").strip())
     attach_block = load_file_attachments_block(list(file_attachments or []))
     if attach_block:
         parts.append("\n" + attach_block)
-    parts.append("\n### 任务说明\n")
-    parts.append((prompt or "").strip())
+    parts.extend([
+        "\n### 返回父 Agent\n",
+        "最终回答必须独立可读，先给结果，再给关键证据；如有修改，列出文件和验证结果；"
+        "如未完成，明确阻塞、已尝试内容和下一步。不要只汇报过程。",
+    ])
     return "\n".join(parts)
 
 
@@ -573,7 +598,10 @@ async def _format_subagent_collect_result(parent_session_id: str, resume_raw: st
         status = str(n.get("status") or "")
         if n.get("running"):
             lines.append(f"### {cid} ({desc}) — **运行中**")
-            lines.append("（尚未完成，请稍后 collect_result 或 check_status）")
+            lines.append(
+                f"（尚未完成；用 task(action='status', resume={cid!r}) 查看状态，"
+                f"完成后用 task(action='collect', resume={cid!r}) 收集结果。）"
+            )
         else:
             body = _get_subagent_final_result(cid) or str(n.get("result_preview") or "").strip()
             if not body:
@@ -1129,6 +1157,11 @@ async def _run_single_subagent(
             return "Error: task action=start must not include resume; use action=resume."
         if action in {"resume", "interrupt"} and not resume_for_action:
             return f"Error: task action={action} requires resume=<subagent id>."
+        if action == "resume" and not str(tool_args.get("prompt") or "").strip():
+            return (
+                "Error: task action=resume requires a non-empty follow-up prompt. "
+                "Use action=collect to read the existing result or action=status to inspect state."
+            )
         if action == "status":
             return _format_subagent_status_report(parent_session_id, resume_for_action)
         if action == "collect":
@@ -1261,6 +1294,7 @@ async def _run_single_subagent(
         description=description,
         subagent_type=subagent_type,
         is_resume=resumed,
+        readonly=readonly_strict,
         file_attachments=[str(x) for x in file_attachments],
         best_of_attempt=best_of_attempt,
         best_of_total=best_of_total,

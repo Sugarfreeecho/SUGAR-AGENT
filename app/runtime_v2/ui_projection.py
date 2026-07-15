@@ -185,6 +185,27 @@ class RuntimeUiProjection:
                 "projected_count": len(projected),
                 "written": 0,
             }
+        if self._events_prefix_match(projected, legacy):
+            # Both histories agree up to the current V2 boundary.  Appending the
+            # missing legacy tail is deterministic and preserves every existing
+            # Runtime V2 sequence id; a true fork still falls through to
+            # ``mismatch`` and is never overwritten automatically.
+            mirror = RuntimeMirror(self.sessions_dir, path_resolver=self._path_resolver)
+            written = 0
+            for event in legacy[len(projected):]:
+                mirrored = mirror.mirror_ui_event(session_id, dict(event))
+                if mirrored is None:
+                    mirrored = mirror.append(session_id, "legacy_ui_event", dict(event))
+                if mirrored is not None:
+                    written += 1
+            self.invalidate_cache(session_id)
+            return {
+                "checked": True,
+                "action": "legacy_tail_backfill",
+                "legacy_count": len(legacy),
+                "projected_count": len(projected),
+                "written": written,
+            }
         return {
             "checked": True,
             "action": "mismatch",

@@ -59,6 +59,44 @@ def test_resolve_executor_config_reuses_profile_catalog(monkeypatch):
     assert calls == {"sorted": 2, "ids": 2}
 
 
+def test_env_first_executor_config_keeps_saved_profiles_as_fallbacks(monkeypatch):
+    import agent_harness
+
+    agent_harness._invalidate_executor_config_cache()
+    monkeypatch.setattr(agent_harness.session_manager, "_load_metadata", lambda _sid: {})
+    monkeypatch.setattr(
+        agent_harness,
+        "_executor_profile_catalog",
+        lambda _now=None: ({}, ["__env__", "backup"], ""),
+    )
+    candidates = [
+        {
+            "client": object(),
+            "model": "env-model",
+            "max_output_tokens": 1000,
+            "context_window": 8000,
+        },
+        {
+            "client": object(),
+            "model": "backup-model",
+            "max_output_tokens": 2000,
+            "context_window": 16000,
+        },
+    ]
+    monkeypatch.setattr(
+        agent_harness,
+        "resolve_executor_candidates_for_session",
+        lambda _sid, *, profile_id_override=None: candidates,
+    )
+
+    client, model, max_tokens, context_window = agent_harness.resolve_executor_config_for_session("s-env-first")
+
+    assert isinstance(client, agent_harness.FallbackOpenAIClient)
+    assert client.candidates == candidates
+    assert (model, max_tokens, context_window) == ("env-model", 1000, 8000)
+    agent_harness._invalidate_executor_config_cache()
+
+
 def test_session_model_cache_invalidation_changes_next_resolution(monkeypatch):
     import agent_harness
 

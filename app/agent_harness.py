@@ -846,7 +846,13 @@ class _FallbackCompletions:
         for idx, item in enumerate(self._candidates):
             call_kwargs = dict(kwargs)
             call_kwargs["model"] = item["model"]
-            call_kwargs["max_tokens"] = int(item.get("max_output_tokens") or call_kwargs.get("max_tokens") or MAX_OUTPUT_TOKENS)
+            requested_max_tokens = int(call_kwargs.get("max_tokens") or 0)
+            candidate_max_tokens = int(item.get("max_output_tokens") or MAX_OUTPUT_TOKENS)
+            call_kwargs["max_tokens"] = (
+                min(requested_max_tokens, candidate_max_tokens)
+                if requested_max_tokens > 0
+                else candidate_max_tokens
+            )
             call_kwargs["temperature"] = float(item.get("temperature", EXECUTOR_TEMPERATURE))
             if item.get("extra_body") is not None:
                 call_kwargs["extra_body"] = item.get("extra_body")
@@ -5429,21 +5435,20 @@ def resolve_executor_config_for_session(session_id: str) -> Tuple[Any, str, int,
         with _executor_config_cache_lock:
             _executor_config_cache[sid] = (now, result)
         return result
-    _profiles, _ordered_ids, top_profile_id = _executor_profile_catalog(now)
-    if top_profile_id and not override:
+    _profiles, _ordered_ids, _top_profile_id = _executor_profile_catalog(now)
+    if not override:
         candidates = resolve_executor_candidates_for_session(sid, profile_id_override="")
         first = candidates[0]
+        # Keep the configured priority order even when the environment-backed
+        # model is first.  Previously that branch returned ``executor_client``
+        # directly, so an API failure could not fall through to saved profiles.
+        client = FallbackOpenAIClient(candidates) if len(candidates) > 1 else first.get("client")
         result = (
-            FallbackOpenAIClient(candidates),
+            client or executor_client,
             str(first.get("model") or executor_model),
             int(first.get("max_output_tokens") or MAX_OUTPUT_TOKENS),
             int(first.get("context_window") or CONTEXT_WINDOW),
         )
-        with _executor_config_cache_lock:
-            _executor_config_cache[sid] = (now, result)
-        return result
-    if not override:
-        result = (executor_client, executor_model, int(MAX_OUTPUT_TOKENS), int(CONTEXT_WINDOW))
         with _executor_config_cache_lock:
             _executor_config_cache[sid] = (now, result)
         return result

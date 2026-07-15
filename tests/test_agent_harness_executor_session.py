@@ -52,3 +52,50 @@ def test_executor_text_complete_uses_session_model(monkeypatch):
         ("resolve", "s1"),
         ("client-for-session", "model-for-session", "prompt", 321),
     ]
+
+
+def test_fallback_client_switches_after_api_error_and_preserves_request_cap():
+    import agent_harness
+
+    calls = []
+
+    class _Completions:
+        def __init__(self, name, error=None):
+            self.name = name
+            self.error = error
+
+        def create(self, **kwargs):
+            calls.append((self.name, kwargs["model"], kwargs["max_tokens"]))
+            if self.error:
+                raise self.error
+            return "ok"
+
+    class _Client:
+        def __init__(self, completions):
+            self.chat = type("Chat", (), {"completions": completions})()
+
+    candidates = [
+        {
+            "client": _Client(_Completions("primary", RuntimeError("bad api"))),
+            "model": "primary-model",
+            "max_output_tokens": 4096,
+        },
+        {
+            "client": _Client(_Completions("backup")),
+            "model": "backup-model",
+            "max_output_tokens": 1024,
+        },
+    ]
+    switched = []
+    client = agent_harness.FallbackOpenAIClient(candidates)
+    client.set_status_callback(switched.append)
+
+    result = client.chat.completions.create(model="ignored", max_tokens=256)
+
+    assert result == "ok"
+    assert calls == [
+        ("primary", "primary-model", 256),
+        ("backup", "backup-model", 256),
+    ]
+    assert switched[0]["from_model"] == "primary-model"
+    assert switched[0]["to_model"] == "backup-model"

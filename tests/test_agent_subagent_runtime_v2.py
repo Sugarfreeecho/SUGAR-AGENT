@@ -28,6 +28,49 @@ def test_task_action_status_routes_without_starting_subagent(monkeypatch):
     assert result == "status:parent-1:child-1"
 
 
+def test_task_action_resume_requires_a_real_followup_prompt():
+    import agent_subagent
+
+    result = asyncio.run(
+        agent_subagent._run_single_subagent(
+            tool_args={"action": "resume", "resume": "child-1", "prompt": ""},
+            parent_session_id="parent-1",
+        )
+    )
+
+    assert "requires a non-empty follow-up prompt" in result
+    assert "action=collect" in result
+
+
+def test_subagent_prompt_is_self_contained_and_has_a_completion_contract():
+    import agent_subagent
+
+    message = agent_subagent.build_subagent_user_message(
+        prompt="Inspect app/example.py, explain the defect, implement the fix, and run the focused test.",
+        description="Fix parser defect",
+        subagent_type="generalPurpose",
+        is_resume=True,
+        readonly=False,
+        best_of_attempt=2,
+        best_of_total=3,
+    )
+
+    assert "## Subagent 任务：Fix parser defect" in message
+    assert "权限模式：通用" in message
+    assert "会话模式：续接已有 subagent" in message
+    assert "沿用已验证的状态" in message
+    assert "### 父 Agent 指令" in message
+    assert "Inspect app/example.py" in message
+    assert "### 返回父 Agent" in message
+    assert "先给结果，再给关键证据" in message
+    assert "尝试 **2/3**" in message
+
+    instruction = agent_subagent.SUBAGENT_RUN_INSTRUCTION
+    assert "不要假设能看到父会话" in instruction
+    assert "只有任务明确要求实施时才修改" in instruction
+    assert "最终输出必须自包含" in instruction
+
+
 def test_runtime_v2_subagent_run_uses_projection_not_legacy(monkeypatch, tmp_path):
     import agent_loop
     import agent_subagent

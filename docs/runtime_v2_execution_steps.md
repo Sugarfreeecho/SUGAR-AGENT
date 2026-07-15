@@ -12,7 +12,7 @@
 | 4. UI/snapshot 纯化 | 完成 | 首屏正文、count、TOC、token 来自同一 V2 snapshot/projection；保留分页与缓存 |
 | 5. history-op/repair 原生化 | 完成 | 分支继承 model/context/todo/token，典型大会话 `<10s`；repair 仅显式执行且带备份/校验 |
 | 6. 性能与可观测性 | 完成 | projection/user_turns/MCP/subagent-filter/token cache，以及 open/pre-API/branch timing |
-| 7. migration/export | 完成 | 独立显式 service，带 manifest、校验、失败回滚；正常打开不触发 migration/export |
+| 7. migration/export | 完成 | 独立 service，带 manifest、校验、失败回滚；后台自动迁移 legacy-only/安全尾部，真实分叉留档并拒绝覆盖 |
 
 下文保留原始分阶段步骤作为实施记录。其“继续执行”“仍存在”等措辞若与本状态表冲突，
 以本状态表、`runtime_v2_design.md` 和 `runtime_v2_closure_status.md` 的最新边界为准。

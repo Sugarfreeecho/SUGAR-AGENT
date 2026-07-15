@@ -242,7 +242,7 @@ def test_migration_service_backfills_v2_from_legacy_only_when_explicit(monkeypat
     manifest_path = Path(result["manifest_path"])
     assert manifest_path.name == "runtime_v2_migration.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    assert manifest["manifest_version"] == 1
+    assert manifest["manifest_version"] == 2
     assert manifest["operation"] == "migrate"
     assert manifest["verification"]["ui"]["status"] == "match"
     assert len(manifest["verification"]["ui"]["source_sha256"]) == 64
@@ -297,7 +297,7 @@ def test_model_sync_does_not_replace_runtime_v2_ahead_with_legacy(monkeypatch, t
     ]
 
 
-def test_model_sync_reports_legacy_ahead_as_mismatch_without_replacing(monkeypatch, tmp_path):
+def test_model_sync_backfills_an_exact_legacy_tail(monkeypatch, tmp_path):
     monkeypatch.setenv("RUNTIME_VERSION", "2")
     RuntimeHistoryOps(tmp_path).replace_model_history(
         "s1",
@@ -314,9 +314,113 @@ def test_model_sync_reports_legacy_ahead_as_mismatch_without_replacing(monkeypat
         ],
     )
 
-    assert result["action"] == "mismatch"
-    assert result["written"] == 0
-    assert [message["content"] for message in projection.read_message_dicts("s1")] == ["runtime prefix"]
+    assert result["action"] == "legacy_tail_backfill"
+    assert result["written"] == 1
+    assert [message["content"] for message in projection.read_message_dicts("s1")] == [
+        "runtime prefix",
+        "legacy tail",
+    ]
+
+
+def test_ui_sync_backfills_an_exact_legacy_tail(monkeypatch, tmp_path):
+    monkeypatch.setenv("RUNTIME_VERSION", "2")
+    RuntimeMirror(tmp_path).mirror_ui_event("s1", {"type": "user", "content": "prefix"})
+    projection = RuntimeUiProjection(tmp_path)
+
+    result = projection.sync_from_legacy_if_needed(
+        "s1",
+        lambda: [
+            {"type": "user", "content": "prefix"},
+            {"type": "final", "content": "legacy tail"},
+        ],
+    )
+
+    assert result["action"] == "legacy_tail_backfill"
+    assert result["written"] == 1
+    assert [row["content"] for row in projection.read_ui_events_fast("s1")] == [
+        "prefix",
+        "legacy tail",
+    ]
+
+
+def test_migration_service_verifies_ui_and_model_legacy_tails(monkeypatch, tmp_path):
+    monkeypatch.setenv("RUNTIME_VERSION", "2")
+    RuntimeMirror(tmp_path).mirror_ui_event("s1", {"type": "user", "content": "prefix"})
+    RuntimeHistoryOps(tmp_path).replace_model_history(
+        "s1",
+        [{"type": "user", "content": "prefix"}],
+        reason="test",
+    )
+
+    result = RuntimeV2MigrationService(tmp_path).sync_session(
+        "s1",
+        load_legacy_ui_events=lambda: [
+            {"type": "user", "content": "prefix"},
+            {"type": "final", "content": "tail"},
+        ],
+        save_legacy_ui_events=None,
+        load_legacy_model_messages=lambda: [
+            {"type": "user", "content": "prefix"},
+            {"type": "assistant", "content": "tail"},
+        ],
+        save_legacy_model_messages=None,
+    )
+
+    assert result["verification"]["verified"] is True
+    assert result["v2_from_v1"]["action"] == "legacy_tail_backfill"
+    assert result["model_v2_from_v1"]["action"] == "legacy_tail_backfill"
+
+
+def test_migration_backfills_legacy_context_and_todo_without_writing_legacy(monkeypatch, tmp_path):
+    monkeypatch.setenv("RUNTIME_VERSION", "2")
+    todo = {
+        "has_plan": True,
+        "items": [{"id": "one", "text": "migrate", "status": "pending"}],
+        "done": 0,
+        "total": 1,
+    }
+
+    result = RuntimeV2MigrationService(tmp_path).sync_session(
+        "s1",
+        load_legacy_ui_events=lambda: [],
+        save_legacy_ui_events=None,
+        load_legacy_model_messages=lambda: [],
+        save_legacy_model_messages=None,
+        load_legacy_context=lambda: "legacy summary",
+        load_legacy_todo=lambda: dict(todo),
+    )
+
+    snapshot = RuntimeUiProjection(tmp_path).event_log
+    from app.runtime_v2 import SnapshotStore
+
+    projected = SnapshotStore(tmp_path).read_consistent("s1")
+    assert result["context_v2_from_v1"]["action"] == "backfill"
+    assert result["todo_v2_from_v1"]["action"] == "backfill"
+    assert projected["context"]["summary"]["summary"] == "legacy summary"
+    assert projected["todo"]["items"] == todo["items"]
+    assert snapshot.event_path("s1").is_file()
+
+
+def test_automatic_migration_records_unchanged_conflict_in_manifest(monkeypatch, tmp_path):
+    monkeypatch.setenv("RUNTIME_VERSION", "2")
+    RuntimeMirror(tmp_path).mirror_ui_event("s1", {"type": "user", "content": "runtime"})
+
+    result = RuntimeV2MigrationService(tmp_path).sync_session(
+        "s1",
+        load_legacy_ui_events=lambda: [{"type": "user", "content": "legacy"}],
+        save_legacy_ui_events=None,
+        load_legacy_model_messages=lambda: [],
+        save_legacy_model_messages=None,
+        load_file_fingerprints=lambda: {"legacy_ui": {"exists": True, "size": 1, "mtime_ns": 1}},
+        conflict_policy="record",
+    )
+
+    assert result["ok"] is False
+    assert result["blocked"] is True
+    manifest = json.loads(Path(result["manifest_path"]).read_text(encoding="utf-8"))
+    assert manifest["status"] == "blocked"
+    assert manifest["file_fingerprints"]["legacy_ui"]["mtime_ns"] == 1
+    assert [row["content"] for row in RuntimeUiProjection(tmp_path).read_ui_events_fast("s1")] == ["runtime"]
 
 
 def test_migration_verification_mismatch_rolls_back_partial_v2_write(monkeypatch, tmp_path):

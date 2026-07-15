@@ -27,7 +27,7 @@ import sys
 import uuid
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
-from urllib.parse import urljoin, urlparse
+from urllib.parse import unquote, urljoin, urlparse
 
 import httpx
 
@@ -1996,6 +1996,124 @@ def _glob_max_matches() -> int:
         return 500
 
 
+def _windows_index_glob_spec(pattern: str) -> Optional[Tuple[bool, str]]:
+    """Return ``(recursive, basename_glob)`` for filename-only patterns."""
+    normalized = str(pattern or "").replace("\\", "/").strip()
+    recursive = normalized.startswith("**/")
+    basename_glob = normalized[3:] if recursive else normalized
+    if not basename_glob or "/" in basename_glob or any(ch in basename_glob for ch in "[]"):
+        return None
+    return recursive, basename_glob
+
+
+def _glob_to_windows_search_like(pattern: str) -> str:
+    parts: List[str] = []
+    for char in pattern:
+        if char == "*":
+            parts.append("%")
+        elif char == "?":
+            parts.append("_")
+        elif char == "%":
+            parts.append("[%]")
+        elif char == "_":
+            parts.append("[_]")
+        elif char == "'":
+            parts.append("''")
+        else:
+            parts.append(char)
+    return "".join(parts)
+
+
+def _query_windows_search_index(
+    *,
+    root: Path,
+    filename_like: str,
+    recursive: bool,
+    max_results: int,
+) -> Optional[List[Path]]:
+    """Query Windows Search for filename candidates; return None if unavailable."""
+    connection = None
+    recordset = None
+    try:
+        import win32com.client  # type: ignore[import-untyped]
+
+        connection = win32com.client.Dispatch("ADODB.Connection")
+        connection.ConnectionTimeout = 2
+        connection.CommandTimeout = 3
+        connection.Open("Provider=Search.CollatorDSO;Extended Properties='Application=Windows';")
+
+        scope = "file:" + str(root.resolve())
+        scope = scope.replace("'", "''")
+        scope_operator = "SCOPE" if recursive else "DIRECTORY"
+        sql = (
+            f"SELECT TOP {max(1, int(max_results))} System.ItemUrl FROM SYSTEMINDEX "
+            f"WHERE {scope_operator}='{scope}' AND System.FileName LIKE '{filename_like}' "
+            "ORDER BY System.ItemPathDisplay"
+        )
+        recordset = win32com.client.Dispatch("ADODB.Recordset")
+        recordset.Open(sql, connection, 0, 1)
+
+        results: List[Path] = []
+        while not recordset.EOF:
+            value = recordset.Fields.Item(0).Value
+            if isinstance(value, str) and value.lower().startswith("file:"):
+                raw_path = unquote(value[5:])
+                if re.match(r"^/[A-Za-z]:/", raw_path):
+                    raw_path = raw_path[1:]
+                results.append(Path(raw_path))
+            recordset.MoveNext()
+        return results
+    except Exception:
+        return None
+    finally:
+        if recordset is not None:
+            try:
+                recordset.Close()
+            except Exception:
+                pass
+        if connection is not None:
+            try:
+                connection.Close()
+            except Exception:
+                pass
+
+
+def _glob_with_windows_index(root: Path, pattern: str, max_matches: int) -> Optional[List[Path]]:
+    """Optional filename-only fast path. Empty/partial-unavailable results fall back to the filesystem."""
+    enabled = os.getenv("GLOB_USE_WINDOWS_INDEX", "1").strip().lower() not in {"0", "false", "no", "off", ""}
+    if not enabled or platform.system() != "Windows":
+        return None
+    spec = _windows_index_glob_spec(pattern)
+    if spec is None:
+        return None
+    recursive, basename_glob = spec
+    indexed = _query_windows_search_index(
+        root=root,
+        filename_like=_glob_to_windows_search_like(basename_glob),
+        recursive=recursive,
+        max_results=max_matches + 1,
+    )
+    if not indexed:
+        return None
+
+    root_resolved = root.resolve()
+    matches: List[Path] = []
+    for candidate in indexed:
+        try:
+            resolved = candidate.resolve()
+            resolved.relative_to(root_resolved)
+            if not recursive and resolved.parent != root_resolved:
+                continue
+            if not fnmatch.fnmatch(resolved.name, basename_glob):
+                continue
+            if not resolved.exists() or _path_is_sensitive_tool_resource(resolved):
+                continue
+        except (OSError, ValueError):
+            continue
+        matches.append(resolved)
+    return matches or None
+
+
 def _ls_max_entries() -> int:
     try:
         return max(1, int(os.getenv("LS_MAX_ENTRIES", "500")))
@@ -2163,7 +2281,24 @@ def edit_file(
 
 def _parse_apply_patch(patch: str) -> List[Dict[str, Any]]:
     """Parse the Codex-style *** Begin Patch format into file operations."""
-    text = str(patch or "").replace("\r\n", "\n").replace("\r", "\n").strip()
+    text = str(patch or "").replace("\r\n", "\n").replace("\r", "\n").lstrip("\ufeff").strip()
+    raw_lines = text.split("\n") if text else []
+    if len(raw_lines) >= 2 and raw_lines[0].startswith("```") and raw_lines[-1] == "```":
+        raw_lines = raw_lines[1:-1]
+        text = "\n".join(raw_lines).strip()
+    if "*** Begin Patch" in raw_lines or "*** End Patch" in raw_lines:
+        if "*** Begin Patch" not in raw_lines or "*** End Patch" not in raw_lines:
+            raise ValueError("patch must include both '*** Begin Patch' and '*** End Patch'")
+        begin = raw_lines.index("*** Begin Patch")
+        end = len(raw_lines) - 1 - raw_lines[::-1].index("*** End Patch")
+        if end <= begin:
+            raise ValueError("'*** End Patch' must appear after '*** Begin Patch'")
+        # Models occasionally wrap the payload in a Markdown fence or a short lead-in.
+        # The markers remain the authoritative boundary, so ignore text outside them.
+        text = "\n".join(raw_lines[begin : end + 1])
+    elif raw_lines and raw_lines[0].startswith(("*** Add File: ", "*** Update File: ", "*** Delete File: ")):
+        # Accept the otherwise unambiguous section-only form seen in saved sessions.
+        text = "*** Begin Patch\n" + text + "\n*** End Patch"
     lines = text.split("\n")
     if not text or lines[0] != "*** Begin Patch" or lines[-1] != "*** End Patch":
         raise ValueError("patch must start with '*** Begin Patch' and end with '*** End Patch'")
@@ -2189,6 +2324,9 @@ def _parse_apply_patch(patch: str) -> List[Dict[str, Any]]:
         while i < len(lines) - 1 and not lines[i].startswith(("*** Add File: ", "*** Update File: ", "*** Delete File: ")):
             body.append(lines[i])
             i += 1
+        # Empty separator lines between file sections are formatting, not hunk data.
+        while body and body[-1] == "":
+            body.pop()
         operations.append({"kind": kind, "path": raw_path, "body": body})
     if not operations:
         raise ValueError("patch contains no file operations")
@@ -2210,13 +2348,22 @@ def _apply_update_hunks(content: str, body: List[str], raw_path: str) -> str:
         i += 1
         old_lines: List[str] = []
         new_lines: List[str] = []
+        hunk_lines: List[str] = []
         while i < len(body) and not body[i].startswith("@@"):
             line = body[i]
             if line == "\\ No newline at end of file":
                 i += 1
                 continue
+            if line == "*** End of File":
+                i += 1
+                break
+            if line == "":
+                # A common model formatting slip: unified diff blank context should
+                # be " ", but an unprefixed empty line is still unambiguous here.
+                line = " "
             if not line or line[0] not in (" ", "+", "-"):
                 raise ValueError(f"{raw_path}: malformed hunk line {line!r}")
+            hunk_lines.append(line)
             if line[0] in (" ", "-"):
                 old_lines.append(line[1:])
             if line[0] in (" ", "+"):
@@ -2224,14 +2371,61 @@ def _apply_update_hunks(content: str, body: List[str], raw_path: str) -> str:
             i += 1
         old = "\n".join(old_lines)
         new = "\n".join(new_lines)
+        fuzzy_source_lines: Optional[List[str]] = None
         if not old_lines:
             raise ValueError(f"{raw_path}: update hunks must include context or removed lines")
         found = result.find(old, cursor)
         if found < 0:
-            raise ValueError(f"{raw_path}: hunk context did not match; file may have changed")
-        if result.find(old, found + 1) >= 0:
-            raise ValueError(f"{raw_path}: hunk context is ambiguous; include more surrounding lines")
-        result = result[:found] + new + result[found + len(old):]
+            # Fall back to one unique line block while ignoring indentation and
+            # trailing whitespace. This handles harmless formatter drift without
+            # weakening stale-context protection for changed text.
+            source_lines = result.split("\n")
+            offsets: List[int] = []
+            offset = 0
+            for source_line in source_lines:
+                offsets.append(offset)
+                offset += len(source_line) + 1
+            needle = [line.strip() for line in old_lines]
+            candidates: List[Tuple[int, int]] = []
+            for line_index in range(0, len(source_lines) - len(needle) + 1):
+                start = offsets[line_index]
+                if start < cursor:
+                    continue
+                window = source_lines[line_index : line_index + len(needle)]
+                if [line.strip() for line in window] == needle:
+                    end = offsets[line_index + len(needle) - 1] + len(window[-1])
+                    candidates.append((start, end))
+            if not candidates:
+                raise ValueError(
+                    f"{raw_path}: hunk context did not match exactly or by whitespace; file may have changed"
+                )
+            if len(candidates) > 1:
+                raise ValueError(
+                    f"{raw_path}: hunk context is ambiguous ({len(candidates)} whitespace-insensitive matches); "
+                    "include more surrounding lines"
+                )
+            found, found_end = candidates[0]
+            matched_line_index = offsets.index(found)
+            fuzzy_source_lines = source_lines[matched_line_index : matched_line_index + len(needle)]
+        else:
+            if result.find(old, found + 1) >= 0:
+                raise ValueError(f"{raw_path}: hunk context is ambiguous; include more surrounding lines")
+            found_end = found + len(old)
+        if fuzzy_source_lines is not None:
+            # Preserve the file's real whitespace on context lines; fuzzy matching
+            # should only make the requested +/- edits, not reindent nearby code.
+            rebuilt: List[str] = []
+            old_index = 0
+            for hunk_line in hunk_lines:
+                if hunk_line[0] == " ":
+                    rebuilt.append(fuzzy_source_lines[old_index])
+                    old_index += 1
+                elif hunk_line[0] == "-":
+                    old_index += 1
+                else:
+                    rebuilt.append(hunk_line[1:])
+            new = "\n".join(rebuilt)
+        result = result[:found] + new + result[found_end:]
         cursor = found + len(new)
         hunk_count += 1
     if not hunk_count:
@@ -2244,7 +2438,8 @@ def apply_patch(patch: str) -> str:
     try:
         operations = _parse_apply_patch(patch)
         planned: Dict[Path, Optional[str]] = {}
-        labels: Dict[Path, str] = {}
+        ordered_paths: List[Path] = []
+        line_changes: Dict[Path, Tuple[int, int]] = {}
         for operation in operations:
             raw_path = operation["path"]
             path = safe_work_path(raw_path)
@@ -2252,9 +2447,9 @@ def apply_patch(patch: str) -> str:
                 return _sensitive_tool_resource_error("patch")
             if path in planned:
                 raise ValueError(f"duplicate file section: {raw_path}")
+            ordered_paths.append(path)
             kind = operation["kind"]
             body = operation["body"]
-            labels[path] = raw_path
             if kind == "add":
                 if path.exists():
                     raise ValueError(f"{raw_path}: cannot add because the path already exists")
@@ -2262,6 +2457,7 @@ def apply_patch(patch: str) -> str:
                     raise ValueError(f"{raw_path}: added file lines must start with '+'")
                 added = [line[1:] for line in body if line != ""]
                 planned[path] = "\n".join(added) + ("\n" if body and body[-1].startswith("+") else "")
+                line_changes[path] = (len(added), 0)
             elif kind == "delete":
                 if body and any(body):
                     raise ValueError(f"{raw_path}: delete section must not contain hunks")
@@ -2270,12 +2466,20 @@ def apply_patch(patch: str) -> str:
                 reason = _delete_path_prohibited_reason(path)
                 if reason:
                     raise ValueError(reason.removeprefix("Error: "))
+                current = path.read_text(encoding="utf-8")
                 planned[path] = None
+                line_changes[path] = (0, len(current.splitlines()))
             else:
                 if not path.is_file():
-                    raise ValueError(f"{raw_path}: file does not exist")
+                    raise ValueError(
+                        f"{raw_path}: file does not exist (resolved to {path}; relative paths use WORK_DIR)"
+                    )
                 current = path.read_text(encoding="utf-8")
                 planned[path] = _apply_update_hunks(current, body, raw_path)
+                line_changes[path] = (
+                    sum(1 for line in body if line.startswith("+")),
+                    sum(1 for line in body if line.startswith("-")),
+                )
 
         snapshots: Dict[Path, Optional[str]] = {
             path: (path.read_text(encoding="utf-8") if path.is_file() else None)
@@ -2296,8 +2500,18 @@ def apply_patch(patch: str) -> str:
                     path.parent.mkdir(parents=True, exist_ok=True)
                     _atomic_write_text(path, original, encoding="utf-8")
             raise
-        summary = ", ".join(f"{op['kind']} {op['path']}" for op in operations)
-        return f"Done! Applied {len(operations)} file operation(s): {summary}"
+        details: List[str] = []
+        total_added = 0
+        total_deleted = 0
+        for operation, path in zip(operations, ordered_paths):
+            added, deleted = line_changes[path]
+            total_added += added
+            total_deleted += deleted
+            details.append(f"- {operation['kind']} {operation['path']} (+{added} -{deleted})")
+        return (
+            f"Done! Applied {len(operations)} file operation(s) (+{total_added} -{total_deleted}):\n"
+            + "\n".join(details)
+        )
     except Exception as e:
         return f"Error: apply_patch failed: {e}"
 
@@ -2344,8 +2558,11 @@ def glob(
         if not root_path.is_dir():
             return f"Error: root '{raw_root}' is not a directory. Hint: use path='D:/path' and pattern='**/*.py' as separate params."
 
-        raw_matches = [m for m in root_path.glob(use_pattern) if not _path_is_sensitive_tool_resource(m)]
         max_m = _glob_max_matches()
+        indexed_matches = _glob_with_windows_index(root_path, use_pattern, max_m)
+        raw_matches = indexed_matches if indexed_matches is not None else [
+            m for m in root_path.glob(use_pattern) if not _path_is_sensitive_tool_resource(m)
+        ]
         truncated_ct = max(0, len(raw_matches) - max_m)
         matches = raw_matches[:max_m]
         if not matches:
@@ -2370,6 +2587,32 @@ def glob(
         return f"Glob search failed: {e}{hint}"
 
 
+def _resolve_ripgrep_path() -> Optional[str]:
+    """Resolve rg without relying solely on the launcher's inherited PATH."""
+    executable = "rg.exe" if os.name == "nt" else "rg"
+    candidates: List[Path] = []
+
+    configured = (os.getenv("GREP_RIPGREP_PATH") or os.getenv("RIPGREP_PATH") or "").strip()
+    if configured:
+        configured_path = Path(configured).expanduser()
+        candidates.append(configured_path / executable if configured_path.is_dir() else configured_path)
+
+    runtime_dir = Path(sys.executable).resolve().parent
+    candidates.extend([
+        runtime_dir / ("Scripts" if os.name == "nt" else "bin") / executable,
+        PROJECT_ROOT / "python" / ("Scripts" if os.name == "nt" else "bin") / executable,
+        PROJECT_ROOT / "app" / "tools" / "ripgrep" / executable,
+        PROJECT_ROOT / "tools" / "ripgrep" / executable,
+    ])
+    for candidate in candidates:
+        try:
+            if candidate.is_file():
+                return str(candidate.resolve())
+        except OSError:
+            continue
+    return shutil.which("rg")
+
+
 def _grep_with_ripgrep(
     *,
     regex: re.Pattern,
@@ -2383,7 +2626,7 @@ def _grep_with_ripgrep(
     exclude: Optional[List[str]] = None,
 ) -> Optional[str]:
     """Fast grep path. Return None when ripgrep cannot handle the request."""
-    rg = shutil.which("rg")
+    rg = _resolve_ripgrep_path()
     if not rg or os.getenv("GREP_USE_RIPGREP", "1").strip().lower() in {"0", "false", "no", "off"}:
         return None
     args = [
@@ -2436,6 +2679,11 @@ def _grep_with_ripgrep(
             timeout=timeout,
             check=False,
             **_run_cli_subprocess_stdio_kwargs("rg"),
+        )
+    except subprocess.TimeoutExpired:
+        return (
+            f"Error: ripgrep timed out after {timeout:g} seconds "
+            "(GREP_TIMEOUT_SEC); Python fallback was not started."
         )
     except (OSError, subprocess.SubprocessError, ValueError):
         return None
@@ -3603,26 +3851,38 @@ OPENAI_TOOL_DEFINITIONS: List[Dict[str, Any]] = [
     ),
     _openai_function_schema(
         "task",
-        "Manage isolated subagents with one action: start, resume, status, collect, or interrupt. "
-        "Subagents cannot see parent chat, so start/resume prompts must include the needed context. "
-        "best-of-n-runner is available with action=start.",
+        "Delegate a bounded independent task to an isolated subagent, or manage an existing one. "
+        "Use delegation when a subtask has a clear deliverable and can run independently; do not use it for a trivial "
+        "step or when the parent must perform the work itself. A subagent does not receive parent chat or tool history, "
+        "so every start/resume prompt must be a self-contained handoff. Foreground start/resume waits for the final result; "
+        "background mode returns an ID immediately. Never use resume to poll or collect an existing result. "
+        "Common patterns: use foreground explore for one read-only investigation; foreground generalPurpose for one implementation; "
+        "several background explore runs followed by status/collect for independent parallel reviews; best-of-n-runner for genuinely "
+        "different candidate solutions; readonly=true for strict local inspection; and resume with one ID only for a real follow-up.",
         {
             "action": {
                 "type": "string",
                 "enum": ["start", "resume", "status", "collect", "interrupt"],
                 "description": (
-                    "start creates a subagent; resume continues resume ID with prompt; "
-                    "status reports state; collect waits for/reads results; "
-                    "interrupt cancels the running resume ID."
+                    "Choose exactly one action. start: create a new subagent; provide description and prompt, omit resume. "
+                    "resume: send a new follow-up instruction; requires resume ID and non-empty prompt. "
+                    "status: non-blocking state only; omit resume to list all actual subagents recursively, or pass one direct-child ID. "
+                    "There is no multi-ID subset form. "
+                    "collect: wait for/read final output; resume is optional (empty = all), and consumed pending results are cleared. "
+                    "interrupt: cancel a running subagent; requires resume ID."
                 ),
             },
             "description": {
                 "type": "string",
-                "description": "Short title (3–5 words) for this subagent run.",
+                "description": "start only: specific 3–7 word title describing the delegated deliverable; avoid generic labels.",
             },
             "prompt": {
                 "type": "string",
-                "description": "Detailed task instructions and context for the subagent.",
+                "description": (
+                    "start/resume only: self-contained handoff. Include objective; scope and exact paths; relevant facts or prior "
+                    "findings; constraints and non-goals; expected deliverable; and how to verify completion. Include exact errors, "
+                    "data, and decisions the subagent cannot infer. For resume, provide only the new instruction and changed facts."
+                ),
             },
             "subagent_type": {
                 "type": "string",
@@ -3633,42 +3893,51 @@ OPENAI_TOOL_DEFINITIONS: List[Dict[str, Any]] = [
                 ],
                 "description": (
                     "generalPurpose: multi-step tasks (read/write/shell/tools). "
-                    "explore: read-only codebase search (includes web). "
-                    "best-of-n-runner: N parallel attempts (see n). "
-                    "Use readonly=true for strict Ask mode (no web/MCP/write/shell)."
+                    "explore: read-only code/data discovery with web access, no writes. "
+                    "best-of-n-runner: start N independent implementation/solution attempts when diversity is valuable (see n); "
+                    "the parent must synthesize the returned attempts. Use readonly=true for strict local Ask mode "
+                    "(no web/MCP/write/shell)."
                 ),
+                "default": "generalPurpose",
             },
             "model": {
                 "type": "string",
-                "description": "Optional LLM model id for this subagent; default = parent executor model.",
+                "description": "start only: optional LLM model id; default = parent executor model.",
                 "default": "",
             },
             "run_in_background": {
                 "type": "boolean",
                 "description": (
-                    "If true, return immediately; result delivered via pending notification. "
-                    "Use action=collect or action=status instead of resume loops to poll status."
+                    "start/resume only. false: wait and return the subagent final output in this tool call. "
+                    "true: return an ID immediately; use only if the parent can continue without the result. "
+                    "After a completion notification, use collect to read it; use status for a non-blocking check."
                 ),
                 "default": False,
             },
             "resume": {
                 "type": "string",
-                "description": "Subagent session ID to continue, or 'self' to fork parent conversation.",
+                "description": (
+                    "A single subagent ID string; arrays and multiple IDs are unsupported. Required for resume/interrupt. "
+                    "For status/collect, omit it to target all subagents recursively; when supplied from a root session, "
+                    "the ID must be a direct child even though the all-subagents view includes nested descendants. "
+                    "A virtual best-of-n runner ID is not a resumable child; inspect its attempts with status-all or collect its returned output. "
+                    "Use 'self' only with action=resume plus prompt to fork the parent conversation into a new subagent."
+                ),
                 "default": "",
             },
             "readonly": {
                 "type": "boolean",
-                "description": "Strict read-only (Ask mode): no write/shell/web/MCP tools.",
+                "description": "start only: strict local read-only Ask mode with no write, shell, web, or MCP tools.",
                 "default": False,
             },
             "file_attachments": {
                 "type": "array",
                 "items": {"type": "string"},
-                "description": "File paths under WORK_DIR to inject into subagent prompt (text inlined; images as path note).",
+                "description": "start/resume only: WORK_DIR file paths to attach (text inlined up to a cap; images/binaries as path metadata).",
             },
             "n": {
                 "type": "integer",
-                "description": "best-of-n-runner only: number of parallel attempts (2–8, default from env).",
+                "description": "start + best-of-n-runner only: number of parallel, distinct attempts (2–8; default from env).",
                 "minimum": 2,
                 "maximum": 8,
             },

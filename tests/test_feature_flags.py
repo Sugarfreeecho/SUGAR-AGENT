@@ -300,6 +300,19 @@ def test_frontend_background_followup_return_does_not_touch_active_composer():
     assert "function setSelectedSkillsForSession(sessionId, skills)" in skills
 
 
+def test_selected_skill_display_marker_is_not_duplicated_on_reload():
+    import webui
+
+    suffix = "\n\n已选择 Skill：documents、pdf"
+    assert webui._build_ui_message_with_selected_skills("整理文件", ["documents", "pdf"]) == "整理文件" + suffix
+    assert webui._build_ui_message_with_selected_skills("整理文件" + suffix, ["documents", "pdf"]) == "整理文件" + suffix
+
+    sse = (ROOT / "frontend/src/app/modules/sse-handling.js").read_text(encoding="utf-8")
+    assert "function buildSelectedSkillsDisplayMessage(rawMessage, selectedSkills)" in sse
+    assert "message.endsWith(suffix) ? message : message + suffix" in sse
+    assert "formData.append('ui_message', uiBaseMessage);" in sse
+
+
 def test_frontend_send_and_reattach_reuse_event_count_cache():
     sessions = (ROOT / "frontend/src/app/modules/session-management.js").read_text(encoding="utf-8")
     scroll = (ROOT / "frontend/src/app/modules/session-scroll-history.js").read_text(encoding="utf-8")
@@ -458,6 +471,18 @@ def test_frontend_initial_bottom_scroll_remains_smooth_without_saved_position():
     assert "function scrollToBottom(opts)" in rendering
     assert "chatContainer.scrollTo({ top: chatContainer.scrollHeight, behavior: 'smooth' })" in rendering
     assert "scrollToBottom({ smooth: mode === 'saved-or-bottom' });" in rendering
+
+
+def test_frontend_older_history_auto_load_preserves_viewport():
+    scroll = (ROOT / "frontend/src/app/modules/session-scroll-history.js").read_text(encoding="utf-8")
+    sse = (ROOT / "frontend/src/app/modules/sse-handling.js").read_text(encoding="utf-8")
+
+    assert "function maybeAutoLoadOlderHistory()" in scroll
+    assert "chatContainer.scrollTop > HISTORY_AUTO_LOAD_TOP_PX" in scroll
+    assert "maybeAutoLoadOlderHistory();" in sse
+    assert "prependScrollTop = cc.scrollTop" in scroll
+    assert "prependScrollHeight = cc.scrollHeight" in scroll
+    assert "prependScrollTop + Math.max(0, cc.scrollHeight - prependScrollHeight)" in scroll
 
 
 def test_frontend_run_state_cleanup_is_run_id_scoped():

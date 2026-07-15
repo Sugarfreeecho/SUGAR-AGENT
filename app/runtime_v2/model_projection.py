@@ -128,6 +128,25 @@ class RuntimeModelProjection:
                 "projected_count": len(projected),
                 "written": 0,
             }
+        if self._messages_prefix_match(projected, clean):
+            # A legacy-only tail is safe to adopt because the complete existing
+            # V2 projection is an exact prefix.  RuntimeHistoryOps records one
+            # replacement event, keeping the operation atomic and auditable.
+            RuntimeHistoryOps(
+                self.sessions_dir,
+                path_resolver=self._path_resolver,
+            ).replace_model_history(
+                session_id,
+                clean,
+                reason=reason,
+            )
+            return {
+                "checked": True,
+                "action": "legacy_tail_backfill",
+                "legacy_count": len(clean),
+                "projected_count": len(projected),
+                "written": len(clean) - len(projected),
+            }
         return {
             "checked": True,
             "action": "mismatch",
