@@ -32,15 +32,8 @@ design-previews/
 # Local runtime/workspace data
 workspace/
 
-# Bundled/interpreter/runtime folders. Keep only the vendored ripgrep binary
-# and its license in source control; the rest of the local Python runtime stays ignored.
+# Bundled/interpreter/runtime folders
 python/
-!python/
-python/*
-!python/Scripts/
-python/Scripts/*
-!python/Scripts/rg.exe
-!python/Scripts/rg-LICENSE-MIT.txt
 
 # Local archives/backups
 *.zip
