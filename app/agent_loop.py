@@ -744,6 +744,16 @@ READ_ONLY_TOOLS = {"read_file", "ls", "list_dir", "glob", "grep", "web_search", 
 COOPERATIVE_STEER_TOOLS = {"context_manage", "task"}
 
 
+def _can_execute_closed_stream_tool(tool_name: str) -> bool:
+    """A closed, schema-valid streamed call may run before the turn finishes.
+
+    context_manage is a ReAct control operation that replaces the very history
+    currently being used to assemble this assistant turn, so it remains in the
+    post-turn phase. External/read/write/Shell/MCP tools have no such dependency.
+    """
+    return bool(str(tool_name or "").strip()) and str(tool_name).strip() != "context_manage"
+
+
 def _tool_steer_policy(tool_name: str) -> Dict[str, str]:
     """Describe cancellation semantics without claiming external rollback."""
     name = str(tool_name or "").strip()
@@ -3377,6 +3387,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
             early_tool_acc: Dict[int, Dict[str, str]] = {}
             early_tool_tasks: Dict[int, asyncio.Task] = {}
             early_tool_results: Dict[int, Any] = {}
+            early_ordered_tool_lock = asyncio.Lock()
             # 定时器：检测 reasoning/content 停止
             thinking_timer_task = None
             api_resp: Any = None
@@ -3406,7 +3417,23 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
 
             async def _run_early_tool_call(idx: int, tc: Dict[str, Any]) -> Any:
                 try:
-                    r = await _await_steerable(state, execute_one(tc), emit, "tool")
+                    async def execute_closed_call() -> Any:
+                        policy = _tool_steer_policy(str(tc.get("name") or ""))
+                        return await _await_steerable(
+                            state,
+                            execute_one(tc),
+                            emit,
+                            "tool",
+                            defer_steer=policy["interruptibility"] == "non_interruptible",
+                        )
+
+                    if tc.get("name") in READ_ONLY_TOOLS:
+                        r = await execute_closed_call()
+                    else:
+                        # Preserve model order for writes/Shell/other side effects
+                        # while still starting the queue before finish_reason.
+                        async with early_ordered_tool_lock:
+                            r = await execute_closed_call()
                 except _SteerRestartRequested:
                     raise
                 except Exception as e:
@@ -3432,14 +3459,10 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                 if idx in early_tool_tasks:
                     return
                 tc = _early_tool_call_from_acc(idx)
-                if not tc or tc.get("name") == "context_manage":
+                if not tc or not _can_execute_closed_stream_tool(str(tc.get("name") or "")):
                     return
-                # Start read-only and cooperatively cancellable work as soon as a
-                # complete tool JSON object arrives. Irreversible writes still
-                # wait for the provider finish_reason so a truncated call cannot
-                # partially mutate the workspace.
-                if tc.get("name") not in READ_ONLY_TOOLS | COOPERATIVE_STEER_TOOLS:
-                    return
+                # JSON parsing above is the completeness boundary. Tool category
+                # controls concurrency/approval/cancellation, not start timing.
                 early_tool_tasks[idx] = asyncio.create_task(_run_early_tool_call(idx, tc))
 
             if EXECUTOR_STREAM and emit:
@@ -3878,6 +3901,45 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                     logger.warning("流式未完成（无 turn），降级为整段响应")
                     streamed_this_call = False
 
+            if turn is None and early_tool_tasks:
+                _network_recovered_calls = [
+                    _tc
+                    for _idx in sorted(early_tool_tasks)
+                    if (_tc := _early_tool_call_from_acc(_idx)) is not None
+                ]
+                if _network_recovered_calls:
+                    # Never reissue an LLM request after a complete side-effecting
+                    # call may already have started. Continue from the append-only
+                    # streamed calls and their actual results instead.
+                    turn = AssistantTurn(
+                        content="".join(streamed_response_parts),
+                        tool_calls=_network_recovered_calls,
+                        reasoning_content="".join(streamed_reasoning_parts).strip() or None,
+                    )
+                    stream_error = None
+                    streamed_this_call = True
+                    llm_call_finish = {
+                        "finish_reason": "recovered_closed_tool_calls",
+                        "stop_reason": None,
+                        "model": actual_response_model or None,
+                    }
+                    await prune_session_ephemeral(
+                        state["session_id"],
+                        types={"tool_pending", "tool_call_delta", "tool_command_delta"},
+                        react_iter=int(iter_count),
+                    )
+                    await _push_stream_event(
+                        state,
+                        {
+                            "type": "llm_stream_aborted",
+                            "reason": "transport_after_closed_tool_call",
+                            "react_iter": int(iter_count),
+                            "stream_seq": llm_stream_seq,
+                            "ephemeral": True,
+                        },
+                        emit=emit,
+                    )
+
             if turn is None:
                 model_switch_status_events: List[Dict[str, Any]] = []
                 def _collect_model_switch_status(ev: Dict[str, Any]) -> None:
@@ -4059,6 +4121,45 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                 finish_reason_norm in {"length", "max_tokens", "max_output_tokens"}
                 or stop_reason_norm in {"length", "max_tokens", "max_output_tokens"}
             )
+            recovered_truncated_tool_calls: List[Dict[str, Any]] = []
+            if output_truncated and early_tool_tasks:
+                for _idx in sorted(early_tool_tasks):
+                    _closed_call = _early_tool_call_from_acc(_idx)
+                    if _closed_call is not None:
+                        recovered_truncated_tool_calls.append(_closed_call)
+                if recovered_truncated_tool_calls:
+                    # The assistant turn may have been truncated after one or
+                    # more independently complete calls. Keep those calls and
+                    # their real results in history; discard only unfinished
+                    # draft fragments instead of pretending executed writes did
+                    # not happen.
+                    turn.tool_calls = recovered_truncated_tool_calls
+                    output_truncated = False
+                    await prune_session_ephemeral(
+                        state["session_id"],
+                        types={"tool_pending", "tool_call_delta", "tool_command_delta"},
+                        react_iter=int(iter_count),
+                    )
+                    await _push_stream_event(
+                        state,
+                        {
+                            "type": "llm_stream_aborted",
+                            "reason": "truncated_after_closed_tool_call",
+                            "react_iter": int(iter_count),
+                            "stream_seq": llm_stream_seq,
+                            "ephemeral": True,
+                        },
+                        emit=emit,
+                    )
+                    await _push_stream_event(
+                        state,
+                        {
+                            "type": "status",
+                            "content": "模型输出在完整工具调用后达到长度上限；已保留并执行完整调用，未完成片段已丢弃。",
+                            "ephemeral": True,
+                        },
+                        emit=emit,
+                    )
             if output_truncated:
                 for _task in list(early_tool_tasks.values()):
                     if not _task.done():
@@ -4175,7 +4276,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                             await r
                         await asyncio.sleep(0)
 
-            tool_calls_list = turn.tool_calls
+            tool_calls_list = recovered_truncated_tool_calls or turn.tool_calls
             if not isinstance(tool_calls_list, list) or len(tool_calls_list) == 0:
                 tool_calls_list = None
                 for _task in list(early_tool_tasks.values()):

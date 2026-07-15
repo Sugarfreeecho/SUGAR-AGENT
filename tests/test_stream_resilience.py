@@ -164,7 +164,18 @@ def test_stream_detach_does_not_request_user_interrupt():
         assert "task.add_done_callback(_discard_task_result)" in source
 
     react_source = inspect.getsource(agent_loop._react_node_once)
-    assert "READ_ONLY_TOOLS | COOPERATIVE_STEER_TOOLS" in react_source
+    assert "not _can_execute_closed_stream_tool" in react_source
+    assert "recovered_closed_tool_calls" in react_source
+
+
+def test_all_closed_external_tools_can_start_before_finish_reason():
+    import agent_loop
+
+    for tool_name in ("read_file", "task", "write_file", "apply_patch", "run_shell", "mcp_remote"):
+        assert agent_loop._can_execute_closed_stream_tool(tool_name) is True
+    # This is an internal history-replacement control operation, not an external
+    # command; it must run after the current assistant turn has been assembled.
+    assert agent_loop._can_execute_closed_stream_tool("context_manage") is False
 
 
 def test_frontend_uses_independent_sse_sequence_scopes_and_fast_reattach():
