@@ -26,6 +26,8 @@ General Agent 是一个本地运行的 AI Agent 开发与使用平台。系统�
 4. `app/main.py` 调用 `refresh_executor_client_from_env()` 刷新 LLM 配置。
 5. 服务监听后自动打开浏览器，除非 `OPEN_BROWSER=0/false/no/off`。
 
+托盘右键菜单提供“重启 Agent”和“更新 Agent”：重启操作在后台停止并重新拉起后端；更新操作由独立进程执行 `git pull --ff-only`，仅在 `app/requirements.txt` 变化时同步 Python 依赖，完成后自动重启。更新不得强制覆盖本地修改；失败时必须恢复启动并记录到 `logs/agent_update.log`。
+
 ### 2.2 前端开发运行
 
 后端开发服务：
@@ -566,6 +568,7 @@ SSE 是后端向前端展示 Agent 过程的主通道。事件至少应覆盖以
 ### 17.2 前端
 
 - 历史消息应分页/懒加载。
+- 归档目录首次显性展示 20 条并预取但隐藏后续 20 条；每次点击“加载更多”新增展示 20 条，同时继续预取下一批。
 - 子 Agent 详情应懒加载，避免大量卡片一次性渲染完整过程。
 - 流式文本应批量 flush，避免每个 token 都触发布局。
 - TOC/Todo/上下文 token 刷新应异步调度，避免切换会话卡顿。
@@ -636,9 +639,9 @@ SSE 是后端向前端展示 Agent 过程的主通道。事件至少应覆盖以
 - Runtime V2 下 subagent output 与 pending/continue 状态必须只读写 Runtime V2 subagent store 与 V2 UI projection；output 缺失或 pending 为空时返回 V2 结果，不得回退读取或反写 legacy output、pending results、task index 或 `ui_events.json`。
 - Runtime V2 下 subagent task index 与虚拟 task output 写入必须只写 Runtime V2 subagent store；不得为了兼容同时反写 legacy `subagent_tasks.json` 或 `subagent_outputs/`。
 - Runtime V2 下普通 ReAct continue 可用性判断必须读取 Runtime V2 UI projection；不得为了判断最后一轮是否已有 final 而读取 legacy `ui_events.json`。
-- `RUNTIME_SYNC_ON_MESSAGES_OPEN` 不得在 Runtime V2 primary 正常打开会话时触发 legacy sync；旧数据迁移只允许通过显式 runtime sync/migration 接口执行。
+- `RUNTIME_SYNC_ON_MESSAGES_OPEN` 不得在 Runtime V2 primary 正常打开会话时同步读取 legacy；检测到 legacy-only 会话时，可由独立后台 migration coordinator 按需排队执行可验证迁移。迁移未完成前快照返回 `migration_pending`，前端自动重试，不得把旧会话显示为空 V2 会话。为避免批量 JSON 解析阻塞主进程，启动全量扫描默认关闭，仅可通过 `RUNTIME_V2_AUTO_MIGRATE_STARTUP=1` 显式启用。
 - 显式 runtime sync/migration 可以导出 Runtime V2 UI projection 与 model projection 到 legacy 文件，用于备份、兼容和人工迁移；该导出不得出现在普通打开、发送、刷新、TOC 或滚动恢复路径。
-- 显式 legacy migration/export 必须集中在 Runtime V2 migration service；普通 webui/messages/agent_loop/projection read path 不得直接调用 legacy sync/export 逻辑。
+- legacy migration/export 必须集中在 Runtime V2 migration service；允许 startup/on-open coordinator 只做文件指纹检查、排队和状态查询，普通 webui/messages/agent_loop/projection read path 不得直接加载、合并或反写 legacy 历史。
 - 会话加载期间 TOC 可以提前启动，但后续被 suppress 的 `rebuildToc()` 必须是 no-op，不能再次清空 TOC、递增 TOC epoch 或作废已经发出的 `/user_turns` 请求。
 - Runtime V2 打开会话应优先使用 session history snapshot，一次返回首屏正文分页、消息总数和 TOC 用户轮次，减少 `/messages`、`/messages/count`、`/user_turns` 多请求竞争；snapshot 失败时才回退旧分页接口。
 - Runtime V2 session history snapshot 必须返回 `timing` 分段，至少包含 `read_page`、`count`、`user_turns`、`total`，慢日志也必须带同样分段，方便定位打开会话慢在正文分页、计数还是 TOC 索引。
@@ -659,7 +662,7 @@ SSE 是后端向前端展示 Agent 过程的主通道。事件至少应覆盖以
 
 ## Runtime V2 与 API 前热路径修改规范
 
-- Runtime V2 正常运行路径不得为了兼容旧文件而自动读取、重建或反写 legacy `work_messages.json` / legacy `llm_history.json`。旧数据迁移必须走显式 migration/export 流程，不能混在会话打开、发送消息、分支、截断、repair、reconcile 的正常路径里。
+- Runtime V2 正常运行路径不得为了兼容旧文件而直接读取、重建或反写 legacy `work_messages.json` / legacy `llm_history.json`。旧数据迁移必须走隔离的 migration service；自动迁移仅可后台串行执行，要求 active-run 互斥、文件指纹幂等、UI/model/context/todo 全量预读、事务回滚和 manifest 校验。V2 为 legacy 精确前缀时可安全补齐 legacy 尾部，真实分叉必须记录 blocked manifest 并拒绝自动覆盖。
 - 会话历史的工具执行过程以 Runtime V2 event log / projection 为准。任何 `replace_model_history` 都必须保留 assistant tool call 与 tool result 的配对关系，禁止用 `user/final` 可见主链重建模型历史。
 - 修复历史错位、TOC、滚动、final 展示等前端问题时，优先修事件协议和 projection 边界，不得通过“重新拉全量历史并反写模型历史”兜底。
 - 发送 API 前的热路径不得重复读取大历史、重复解析 `work_messages`、重复扫描完整历史或重复解析模型配置。新增逻辑必须观察 `pre_api_timing`，并说明主要耗时项是否变化。

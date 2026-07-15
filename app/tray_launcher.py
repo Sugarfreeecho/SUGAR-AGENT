@@ -6,6 +6,7 @@ import argparse
 import os
 import socket
 import subprocess
+import threading
 import time
 import webbrowser
 from pathlib import Path
@@ -38,7 +39,19 @@ MENU_TEXT_WEBUI = "\u6253\u5f00WebUI"
 MENU_TEXT_ENV = "\u6253\u5f00\u9ad8\u7ea7\u8bbe\u7f6e"
 MENU_TEXT_MCP = "\u6253\u5f00MCP\u914d\u7f6e"
 MENU_TEXT_TERMINAL = "\u67e5\u770b\u7ec8\u7aef\u4fe1\u606f"
+MENU_TEXT_RESTART = "\u91cd\u542fAgent"
+MENU_TEXT_UPDATE = "\u66f4\u65b0Agent"
 MENU_TEXT_EXIT = "\u9000\u51faAgent"
+
+MSG_RESTART_CONFIRM = "\u91cd\u542f\u4f1a\u4e2d\u65ad\u5f53\u524d\u6b63\u5728\u8fd0\u884c\u7684\u4efb\u52a1\uff0c\u662f\u5426\u7ee7\u7eed\uff1f"
+MSG_RESTARTING = "\u6b63\u5728\u91cd\u542f Agent..."
+MSG_RESTARTED = "Agent \u5df2\u91cd\u542f\u3002"
+MSG_RESTART_FAILED = "Agent \u91cd\u542f\u5931\u8d25\uff0c\u8bf7\u67e5\u770b\u7ec8\u7aef\u65e5\u5fd7\u3002"
+MSG_UPDATE_CONFIRM = (
+    "\u66f4\u65b0\u4f1a\u4e2d\u65ad\u5f53\u524d\u4efb\u52a1\uff0c\u5e76\u4ece Git \u8fdc\u7a0b\u62c9\u53d6\u6700\u65b0\u4ee3\u7801\u540e\u81ea\u52a8\u91cd\u542f\u3002\n\n"
+    "\u672c\u5730\u4fee\u6539\u4e0d\u4f1a\u88ab\u5f3a\u5236\u8986\u76d6\u3002\u662f\u5426\u7ee7\u7eed\uff1f"
+)
+MSG_OPERATION_BUSY = "Agent \u6b63\u5728\u6267\u884c\u91cd\u542f\u6216\u66f4\u65b0\uff0c\u8bf7\u7a0d\u5019\u3002"
 
 HOST = "127.0.0.1"
 PORT = 8192
@@ -52,6 +65,8 @@ MENU_OPEN_ENV = 1002
 MENU_OPEN_MCP = 1003
 MENU_VIEW_TERMINAL = 1004
 MENU_EXIT = 1005
+MENU_RESTART = 1006
+MENU_UPDATE = 1007
 
 SW_HIDE = 0
 SW_SHOW = 5
@@ -68,6 +83,7 @@ LOG_DIR = ROOT / "logs"
 LOG_FILE = LOG_DIR / "agent_terminal.log"
 PYTHONW_EXE = preferred_python(ROOT, windowed=True)
 COLORED_LOG_VIEWER = ROOT / "app" / "colored_log_viewer.ps1"
+UPDATER_PY = ROOT / "app" / "agent_updater.py"
 TRAY_ICON_FILE = ROOT / "app" / "assets" / "sugar_tray.ico"
 WINDOW_CLASS_NAME = "MyAgentTrayLauncherWindow"
 
@@ -190,6 +206,8 @@ class TrayLauncher:
         self.hicon = None
         self.proc = None
         self.exiting = False
+        self.lifecycle_busy = False
+        self._lifecycle_lock = threading.Lock()
         self.mutex = win32event.CreateMutex(None, True, "MyAgentTrayLauncher")
         self.already_running = win32api.GetLastError() == winerror.ERROR_ALREADY_EXISTS
         self.console_hwnd = ctypes.windll.kernel32.GetConsoleWindow()
@@ -310,29 +328,33 @@ class TrayLauncher:
         configure_agent_python_environment(env, ROOT)
         env["PYTHONIOENCODING"] = "utf-8"
         env["OPEN_BROWSER"] = "0"
-        self.proc = subprocess.Popen(
-            [str(PYTHON_EXE), str(MAIN_PY)],
-            cwd=str(ROOT),
-            env=env,
-            stdout=log,
-            stderr=subprocess.STDOUT,
-            creationflags=subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW,
-        )
+        try:
+            self.proc = subprocess.Popen(
+                [str(PYTHON_EXE), str(MAIN_PY)],
+                cwd=str(ROOT),
+                env=env,
+                stdout=log,
+                stderr=subprocess.STDOUT,
+                creationflags=subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW,
+            )
+        finally:
+            log.close()
 
-    def _watch_startup(self) -> None:
+    def _watch_startup(self) -> bool:
         deadline = time.monotonic() + 120
         dots = 0
         while time.monotonic() < deadline:
             if self.proc and self.proc.poll() is not None:
                 _append_log(f"{MSG_FAILED}: {self.proc.returncode}")
                 _append_log(f"{MSG_CHECK_LOG}: {LOG_FILE}")
-                return
+                return False
             if self._is_listening():
                 _append_log(MSG_READY)
-                return
+                return True
             dots = (dots + 1) % 24
             time.sleep(0.5)
         _append_log(f"{MSG_TIMEOUT}: {LOG_FILE}")
+        return False
 
     def _is_listening(self) -> bool:
         return _is_port_listening()
@@ -370,6 +392,10 @@ class TrayLauncher:
         win32gui.AppendMenu(menu, win32con.MF_STRING, MENU_OPEN_MCP, MENU_TEXT_MCP)
         win32gui.AppendMenu(menu, win32con.MF_STRING, MENU_VIEW_TERMINAL, MENU_TEXT_TERMINAL)
         win32gui.AppendMenu(menu, win32con.MF_SEPARATOR, 0, "")
+        lifecycle_flags = win32con.MF_GRAYED if self.lifecycle_busy else win32con.MF_STRING
+        win32gui.AppendMenu(menu, lifecycle_flags, MENU_RESTART, MENU_TEXT_RESTART)
+        win32gui.AppendMenu(menu, lifecycle_flags, MENU_UPDATE, MENU_TEXT_UPDATE)
+        win32gui.AppendMenu(menu, win32con.MF_SEPARATOR, 0, "")
         win32gui.AppendMenu(menu, win32con.MF_STRING, MENU_EXIT, MENU_TEXT_EXIT)
         pos = win32gui.GetCursorPos()
         win32gui.SetForegroundWindow(self.hwnd)
@@ -386,6 +412,10 @@ class TrayLauncher:
             self._open_url("/setup/mcp", refresh=True)
         elif command == MENU_VIEW_TERMINAL:
             self._open_terminal_viewer()
+        elif command == MENU_RESTART:
+            self._request_restart()
+        elif command == MENU_UPDATE:
+            self._request_update()
         elif command == MENU_EXIT:
             self._exit_agent()
         return True
@@ -440,8 +470,99 @@ class TrayLauncher:
             ctypes.windll.user32.ShowWindow(self.console_hwnd, SW_SHOW)
             ctypes.windll.user32.SetForegroundWindow(self.console_hwnd)
 
+    def _confirm(self, message: str) -> bool:
+        result = win32gui.MessageBox(
+            self.hwnd,
+            message,
+            APP_NAME,
+            win32con.MB_YESNO | win32con.MB_ICONQUESTION | win32con.MB_DEFBUTTON2,
+        )
+        return result == win32con.IDYES
+
+    def _show_message(self, message: str, *, error: bool = False) -> None:
+        icon = win32con.MB_ICONERROR if error else win32con.MB_ICONINFORMATION
+        win32gui.MessageBox(self.hwnd, message, APP_NAME, win32con.MB_OK | icon)
+
+    def _claim_lifecycle_action(self) -> bool:
+        with self._lifecycle_lock:
+            if self.lifecycle_busy:
+                return False
+            self.lifecycle_busy = True
+            return True
+
+    def _request_restart(self) -> None:
+        if self.lifecycle_busy:
+            self._show_message(MSG_OPERATION_BUSY)
+            return
+        if not self._confirm(MSG_RESTART_CONFIRM):
+            return
+        if not self._claim_lifecycle_action():
+            self._show_message(MSG_OPERATION_BUSY)
+            return
+        threading.Thread(target=self._restart_agent_worker, name="agent-restart", daemon=True).start()
+
+    def _restart_agent_worker(self) -> None:
+        _append_log(MSG_RESTARTING)
+        try:
+            self._stop_agent()
+            self._start_agent()
+            if self._watch_startup():
+                _append_log(MSG_RESTARTED)
+                self._show_message(MSG_RESTARTED)
+            else:
+                self._show_message(MSG_RESTART_FAILED, error=True)
+        except Exception as exc:
+            _append_log(f"{MSG_RESTART_FAILED} {type(exc).__name__}: {exc}")
+            self._show_message(MSG_RESTART_FAILED, error=True)
+        finally:
+            with self._lifecycle_lock:
+                self.lifecycle_busy = False
+
+    def _request_update(self) -> None:
+        if self.lifecycle_busy:
+            self._show_message(MSG_OPERATION_BUSY)
+            return
+        if not UPDATER_PY.exists():
+            self._show_message(f"Missing: {UPDATER_PY}", error=True)
+            return
+        if not self._confirm(MSG_UPDATE_CONFIRM):
+            return
+        if not self._claim_lifecycle_action():
+            self._show_message(MSG_OPERATION_BUSY)
+            return
+
+        env = os.environ.copy()
+        configure_agent_python_environment(env, ROOT)
+        env["PYTHONIOENCODING"] = "utf-8"
+        try:
+            subprocess.Popen(
+                [
+                    str(PYTHON_EXE),
+                    str(UPDATER_PY),
+                    "--root",
+                    str(ROOT),
+                    "--launcher-pid",
+                    str(os.getpid()),
+                ],
+                cwd=str(ROOT),
+                env=env,
+                creationflags=subprocess.CREATE_NEW_CONSOLE | subprocess.CREATE_NEW_PROCESS_GROUP,
+            )
+        except Exception as exc:
+            with self._lifecycle_lock:
+                self.lifecycle_busy = False
+            _append_log(f"Unable to launch updater: {type(exc).__name__}: {exc}")
+            self._show_message("\u65e0\u6cd5\u542f\u52a8\u66f4\u65b0\u7a0b\u5e8f\uff0c\u8bf7\u67e5\u770b\u7ec8\u7aef\u65e5\u5fd7\u3002", error=True)
+            return
+
+        self._exit_agent()
+
     def _exit_agent(self) -> None:
         self.exiting = True
+        self._stop_agent()
+        win32gui.DestroyWindow(self.hwnd)
+
+    def _stop_agent(self) -> None:
         if self.proc and self.proc.poll() is None:
             try:
                 self.proc.send_signal(CTRL_BREAK_EVENT)
@@ -452,9 +573,25 @@ class TrayLauncher:
                     self.proc.wait(timeout=4)
                 except subprocess.TimeoutExpired:
                     self.proc.kill()
+                    try:
+                        self.proc.wait(timeout=2)
+                    except subprocess.TimeoutExpired:
+                        pass
         else:
             self._stop_process_on_port()
-        win32gui.DestroyWindow(self.hwnd)
+        self.proc = None
+        if not self._wait_until_port_stops(timeout_seconds=5):
+            self._stop_process_on_port()
+            if not self._wait_until_port_stops(timeout_seconds=5):
+                _append_log(f"Port {PORT} is still listening after stopping Agent.")
+
+    def _wait_until_port_stops(self, timeout_seconds: float) -> bool:
+        deadline = time.monotonic() + timeout_seconds
+        while time.monotonic() < deadline:
+            if not self._is_listening():
+                return True
+            time.sleep(0.2)
+        return not self._is_listening()
 
     def _stop_process_on_port(self) -> None:
         try:
