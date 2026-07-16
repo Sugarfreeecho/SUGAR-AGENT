@@ -63,23 +63,55 @@ _skills_cache: Dict[str, Any] = {"sig": None, "skills": None, "catalog": None}
 _read_file_line_count_cache: Dict[str, Tuple[int, int, int]] = {}
 
 
-def _skills_tree_signature() -> tuple:
-    if not SKILLS_DIR.is_dir():
-        return tuple()
-    rows: List[tuple] = []
+def invalidate_skills_cache() -> None:
+    """Invalidate project and Plugin-provided Skill discovery snapshots."""
+
+    _skills_cache.update({"sig": None, "skills": None, "catalog": None})
+
+
+def _plugin_skill_directories() -> Dict[str, Path]:
     try:
-        for d in sorted(SKILLS_DIR.iterdir(), key=lambda p: p.name):
-            if not d.is_dir():
-                continue
-            md = d / "SKILL.md"
-            try:
-                dm = int(d.stat().st_mtime_ns)
-                mm = int(md.stat().st_mtime_ns) if md.is_file() else 0
-            except OSError:
-                continue
-            rows.append((d.name, dm, mm))
-    except OSError:
-        return tuple()
+        from agent_extensions import plugin_skill_directories
+
+        return {
+            str(name): Path(path)
+            for name, path in plugin_skill_directories().items()
+        }
+    except Exception as exc:
+        logger.debug("Plugin skill discovery unavailable: %s", exc)
+        return {}
+
+
+def _skills_tree_signature() -> tuple:
+    rows: List[tuple] = []
+    sources: List[Tuple[str, Path]] = []
+    if SKILLS_DIR.is_dir():
+        try:
+            sources.extend(
+                (f"project:{d.name}", d)
+                for d in sorted(SKILLS_DIR.iterdir(), key=lambda p: p.name)
+                if d.is_dir()
+            )
+        except OSError:
+            pass
+    sources.extend(
+        (f"plugin:{name}", path)
+        for name, path in sorted(_plugin_skill_directories().items())
+    )
+    for source_name, directory in sources:
+        md = directory / "SKILL.md"
+        try:
+            dm = int(directory.stat().st_mtime_ns)
+            mm = int(md.stat().st_mtime_ns) if md.is_file() else 0
+        except OSError:
+            continue
+        rows.append((source_name, str(directory.resolve()), dm, mm))
+    try:
+        from agent_extensions import plugin_registry_signature
+
+        rows.append(("__plugin_registry__", plugin_registry_signature()))
+    except Exception:
+        pass
     return tuple(rows)
 
 
@@ -2736,11 +2768,11 @@ def grep(
         if _path_is_sensitive_tool_resource(target):
             return _sensitive_tool_resource_error("grep")
 
-        selected_mode = str(mode or ("regex" if use_regex is True else "fixed")).strip().lower()
+        selected_mode = str(mode or ("regex" if use_regex is True else ("fixed" if use_regex is False else "regex"))).strip().lower()
         if selected_mode not in {"regex", "fixed"}:
             return "Error: grep mode must be 'fixed' or 'regex'."
         if case_sensitive is None:
-            case_sensitive = selected_mode == "regex"
+            case_sensitive = False
 
         # build regex
         if selected_mode == "regex":
@@ -3387,6 +3419,64 @@ async def web_download(
 
 
 # ==================== 技能发现与激活 ====================
+def _plugin_instruction_entries() -> List[Dict[str, Any]]:
+    try:
+        from agent_extensions import plugin_instruction_resources
+
+        resources = plugin_instruction_resources()
+    except Exception as exc:
+        logger.debug("Plugin Agent/Prompt discovery unavailable: %s", exc)
+        return []
+    entries: List[Dict[str, Any]] = []
+    for qualified_name, resource in sorted(resources.items()):
+        kind, raw_path = resource
+        root = Path(raw_path)
+        files = [root] if root.is_file() else sorted(
+            (
+                item
+                for item in root.rglob("*")
+                if item.is_file() and item.suffix.lower() in {".md", ".txt", ".json"}
+            ),
+            key=lambda item: item.as_posix(),
+        )[:64]
+        parts: List[str] = []
+        resource_names: List[str] = []
+        for item in files:
+            try:
+                content = item.read_text(encoding="utf-8")
+            except (OSError, UnicodeError):
+                continue
+            label = item.name if root.is_file() else str(item.relative_to(root))
+            resource_names.append(label)
+            parts.append(f"## {label}\n\n{content[:262144]}")
+        body = "\n\n".join(parts).strip()
+        if not body:
+            continue
+        summary = next(
+            (
+                line.strip().lstrip("#").strip()
+                for line in body.splitlines()
+                if line.strip() and not line.strip().startswith("---")
+            ),
+            qualified_name,
+        )
+        plugin_id = qualified_name.split(":", 1)[0]
+        entries.append(
+            {
+                "name": qualified_name,
+                "description": f"Plugin {kind} definition: {summary[:240]}",
+                "path": str(root),
+                "base_dir": str(root.parent if root.is_file() else root),
+                "body": body,
+                "resources": resource_names,
+                "plugin_id": plugin_id,
+                "source": f"plugin_{kind}",
+                "resource_kind": kind,
+            }
+        )
+    return entries
+
+
 def discover_skills() -> List[Dict]:
     sig = _skills_tree_signature()
     if _skills_cache["sig"] == sig and _skills_cache["skills"] is not None:
@@ -3394,15 +3484,21 @@ def discover_skills() -> List[Dict]:
 
     _skills_cache["catalog"] = None
     skills = []
-    if not SKILLS_DIR.exists():
-        logger.debug(f"Skills directory does not exist: {SKILLS_DIR}")
-        _skills_cache["sig"] = sig
-        _skills_cache["skills"] = skills
-        return skills
+    skill_sources: List[Tuple[Optional[str], Path, Optional[str]]] = []
+    if SKILLS_DIR.is_dir():
+        try:
+            skill_sources.extend(
+                (None, skill_dir, None)
+                for skill_dir in SKILLS_DIR.iterdir()
+                if skill_dir.is_dir()
+            )
+        except OSError as exc:
+            logger.debug("Cannot scan Skills directory %s: %s", SKILLS_DIR, exc)
+    for qualified_name, skill_dir in _plugin_skill_directories().items():
+        plugin_id = qualified_name.split(":", 1)[0] if ":" in qualified_name else qualified_name
+        skill_sources.append((qualified_name, Path(skill_dir), plugin_id))
 
-    for skill_dir in SKILLS_DIR.iterdir():
-        if not skill_dir.is_dir():
-            continue
+    for qualified_name, skill_dir, plugin_id in skill_sources:
         skill_file = skill_dir / "SKILL.md"
         if not skill_file.exists():
             continue
@@ -3422,7 +3518,7 @@ def discover_skills() -> List[Dict]:
                     except Exception as e:
                         logger.debug(f"Failed to parse YAML frontmatter for {skill_dir.name}: {e}")
                         continue
-            name = frontmatter.get('name')
+            name = qualified_name or frontmatter.get('name')
             description = frontmatter.get('description')
             if not name or not description:
                 logger.debug(f"Skill {skill_dir.name} missing name or description, skipping")
@@ -3441,12 +3537,16 @@ def discover_skills() -> List[Dict]:
                 "path": str(skill_file),
                 "base_dir": str(skill_dir),
                 "body": body.strip(),
-                "resources": resources
+                "resources": resources,
+                "plugin_id": plugin_id,
+                "source": "plugin" if plugin_id else "project",
             })
             logger.debug(f"Discovered skill: {name} ({skill_dir})")
         except Exception as e:
             logger.error(f"Error processing skill {skill_dir.name}: {e}")
             continue
+
+    skills.extend(_plugin_instruction_entries())
 
     name_map = {}
     for skill in skills:
@@ -3490,7 +3590,8 @@ def activate_skill(skill_name: str) -> str:
         return f"Error: skill '{skill_name}' not found. Available: {[s['name'] for s in skills]}"
 
     result_parts = []
-    result_parts.append(f"## Skill: {skill['name']}")
+    resource_kind = str(skill.get("resource_kind") or "skill").title()
+    result_parts.append(f"## {resource_kind}: {skill['name']}")
     result_parts.append(f"Description: {skill['description']}")
     result_parts.append("")
     result_parts.append("### Instructions")
@@ -3569,7 +3670,7 @@ def task(
     subagent_type: str = "generalPurpose",
     resume: str = "",
     readonly: bool = False,
-    model: str = "",
+    model_profile_id: str = "",
     run_in_background: bool = False,
     interrupt: bool = False,
     check_status: bool = False,
@@ -3585,7 +3686,7 @@ def task(
         subagent_type,
         resume,
         readonly,
-        model,
+        model_profile_id,
         run_in_background,
         interrupt,
         check_status,
@@ -3641,13 +3742,13 @@ OPENAI_TOOL_DEFINITIONS: List[Dict[str, Any]] = [
     ),
     _openai_function_schema(
         "grep",
-        "Search text in files. Prefer mode=fixed for literal text; use mode=regex only when needed. "
+        "Search text in files. Default mode=regex (supports |, ., *, +, ?, [], (), ^, $); use mode=fixed when you need to match literal text containing regex metacharacters. "
         "Path can be work area (default /) or an OS-absolute file/dir.",
         {
             "pattern": {"type": "string"},
             "path": {"type": "string", "description": "File or directory to search; default /."},
             "recursive": {"type": "boolean", "default": True},
-            "mode": {"type": "string", "enum": ["fixed", "regex"], "default": "fixed"},
+            "mode": {"type": "string", "enum": ["fixed", "regex"], "default": "regex"},
             "case_sensitive": {"type": "boolean", "default": False},
             "include": {"type": "array", "items": {"type": "string"}, "description": "Optional file globs, e.g. ['*.py', 'src/**']."},
             "exclude": {"type": "array", "items": {"type": "string"}, "description": "Optional exclusion globs, e.g. ['dist/**']."},
@@ -3700,13 +3801,36 @@ OPENAI_TOOL_DEFINITIONS: List[Dict[str, Any]] = [
     ),
     _openai_function_schema(
         "apply_patch",
-        "Apply a Codex-style patch to one or more files under WORK_DIR. Use `*** Begin Patch`, then one or more "
-        "`*** Add File:`, `*** Update File:` (with `@@` hunks), or `*** Delete File:` sections, and `*** End Patch`. "
-        "All sections are validated before writing; stale or ambiguous context fails without partial edits.",
+        "Preferred tool for ordinary text-file modifications; use it instead of constructing file rewrites through run_shell. "
+        "It accepts exactly one argument named `patch`; there are no `before`, `after`, `path`, `search`, or `replace` arguments. "
+        "The patch string uses Codex patch syntax for one or more files under the runtime WORK_DIR. Read the target immediately "
+        "before editing and copy exact existing lines into each update hunk. All file sections are validated before writing; "
+        "stale, missing, malformed, or ambiguous context fails atomically without partial edits. If an update fails, re-read the "
+        "reported file and rebuild the hunk from its current contents instead of retrying the same patch.",
         {
             "patch": {
                 "type": "string",
-                "description": "Complete patch text including the Begin Patch and End Patch markers.",
+                "description": (
+                    "Complete raw patch text; do not pass a JSON object or separate before/after strings inside this value. "
+                    "Use exactly `*** Begin Patch` and `*** End Patch` as boundary lines. Each section starts with exactly one of "
+                    "`*** Add File: <path>`, `*** Update File: <path>`, or `*** Delete File: <path>`. Paths are resolved from the "
+                    "runtime WORK_DIR, not automatically from a repository/source root; reuse the exact absolute path returned by "
+                    "read_file only when it is under WORK_DIR. Files outside WORK_DIR cannot be patched. For multiple files, start a "
+                    "new Add/Update/Delete File section for every file. For Update File, use a plain `@@` hunk header (never `*** @@`). Every hunk "
+                    "body line must begin with exactly one prefix character: space for an unchanged existing line, `-` for an exact "
+                    "existing line to remove, or `+` for a line to add. Each update hunk must contain at least one space- or minus-prefixed "
+                    "existing line—the tool may describe this as required old, before, or context content. Include enough unchanged "
+                    "surrounding lines to make the match unique, preserving indentation and blank lines; a blank context line is a line "
+                    "containing one leading space. Add File contains only `+` lines. Delete File has no body or hunks. Minimal update example:\n"
+                    "*** Begin Patch\n"
+                    "*** Update File: relative/path.txt\n"
+                    "@@\n"
+                    " unchanged line before\n"
+                    "-exact old line\n"
+                    "+replacement line\n"
+                    " unchanged line after\n"
+                    "*** End Patch"
+                ),
             },
         },
         ["patch"],
@@ -3791,7 +3915,8 @@ OPENAI_TOOL_DEFINITIONS: List[Dict[str, Any]] = [
         "Blocks dangerous patterns and private-network URLs in the command text; quote paths with spaces. "
         "Virtual `/folder` under restriction means under the workspace root, not the OS root; avoid `cd /` expecting the workspace on Windows. "
         "Prefer write_file(temporary=true) + `python script.py` over huge `python -c` for throwaway scripts; long `-c` payloads may auto-materialize under `.run_shell_temp/`. "
-        "Do not assume POSIX utilities exist on Windows—use Python when unsure. Binary-heavy output may be truncated or summarized.",
+        "Do not assume POSIX utilities exist on Windows—use Python when unsure. Binary-heavy output may be truncated or summarized. "
+        "Use the canonical parameters command, workdir, timeout_ms, and login; do not send legacy args, working_dir, or timeout.",
         {
             "command": {"type": "string", "description": "Complete shell command line."},
             "workdir": {"type": "string", "description": "Directory under workspace (relative to workspace root, or absolute). Omit for workspace root. '.' means workspace root."},
@@ -3856,6 +3981,13 @@ OPENAI_TOOL_DEFINITIONS: List[Dict[str, Any]] = [
         "step or when the parent must perform the work itself. A subagent does not receive parent chat or tool history, "
         "so every start/resume prompt must be a self-contained handoff. Foreground start/resume waits for the final result; "
         "background mode returns an ID immediately. Never use resume to poll or collect an existing result. "
+        "Reuse existing subagents before creating new ones: when a similar task may already have been delegated, call status "
+        "without resume, then collect its result or resume that same direct child with a genuine follow-up. Use start only when "
+        "no suitable subagent exists, the objective or scope is materially different, or deliberate independent parallelism is required. "
+        "Do not create a duplicate merely because an existing subagent finished, needs clarification, or needs a correction. "
+        "Parallel subagents must have independent, non-overlapping scopes; do not let them concurrently modify the same files or state. "
+        "The parent remains responsible for inspecting evidence and changes, verifying results, deduplicating findings, resolving conflicts, "
+        "and synthesizing the final answer instead of forwarding subagent output uncritically. "
         "Common patterns: use foreground explore for one read-only investigation; foreground generalPurpose for one implementation; "
         "several background explore runs followed by status/collect for independent parallel reviews; best-of-n-runner for genuinely "
         "different candidate solutions; readonly=true for strict local inspection; and resume with one ID only for a real follow-up.",
@@ -3864,17 +3996,24 @@ OPENAI_TOOL_DEFINITIONS: List[Dict[str, Any]] = [
                 "type": "string",
                 "enum": ["start", "resume", "status", "collect", "interrupt"],
                 "description": (
-                    "Choose exactly one action. start: create a new subagent; provide description and prompt, omit resume. "
-                    "resume: send a new follow-up instruction; requires resume ID and non-empty prompt. "
-                    "status: non-blocking state only; omit resume to list all actual subagents recursively, or pass one direct-child ID. "
+                    "Choose exactly one action and prefer interacting with an existing suitable subagent over creating a similar one. "
+                    "start: create a new subagent only after checking status when prior related delegation may exist; provide description "
+                    "and prompt, omit resume. resume: continue the same objective with a new instruction, clarification, correction, or "
+                    "additional work; requires resume ID and non-empty prompt, and the ID must be a direct child. "
+                    "status: non-blocking state only; use it before start when unsure whether a reusable subagent exists; omit resume to "
+                    "list all actual subagents recursively, or pass one direct-child ID. "
                     "There is no multi-ID subset form. "
-                    "collect: wait for/read final output; resume is optional (empty = all), and consumed pending results are cleared. "
+                    "collect: wait for/read existing final output before deciding whether follow-up work is needed; resume is optional "
+                    "(empty = all), and consumed pending results are cleared. "
                     "interrupt: cancel a running subagent; requires resume ID."
                 ),
             },
             "description": {
                 "type": "string",
-                "description": "start only: specific 3–7 word title describing the delegated deliverable; avoid generic labels.",
+                "description": (
+                    "start only, after the reuse check: specific 3–7 word title describing a genuinely new or deliberately "
+                    "independent delegated deliverable; avoid generic or duplicate labels."
+                ),
             },
             "prompt": {
                 "type": "string",
@@ -3895,14 +4034,24 @@ OPENAI_TOOL_DEFINITIONS: List[Dict[str, Any]] = [
                     "generalPurpose: multi-step tasks (read/write/shell/tools). "
                     "explore: read-only code/data discovery with web access, no writes. "
                     "best-of-n-runner: start N independent implementation/solution attempts when diversity is valuable (see n); "
-                    "the parent must synthesize the returned attempts. Use readonly=true for strict local Ask mode "
+                    "attempts must use genuinely different strategies and the parent must compare, verify, and synthesize them. "
+                    "Use readonly=true for strict local Ask mode "
                     "(no web/MCP/write/shell)."
                 ),
                 "default": "generalPurpose",
             },
-            "model": {
+            "model_profile_id": {
                 "type": "string",
-                "description": "start only: optional LLM model id; default = parent executor model.",
+                "description": (
+                    "start only. Default: omit this parameter so the subagent inherits the parent's effective model. "
+                    "Choose a registered profile only when the delegated task has a clear specialized need, such as "
+                    "low-cost/high-concurrency batch work, difficult reasoning, investigation/research, or image understanding. "
+                    "The available IDs, models, and automatic capability descriptions are injected at runtime. A selected "
+                    "profile supplies the subagent's endpoint, credentials, model, limits, and reasoning settings. Never guess, abbreviate, "
+                    "or pass a raw model name; an unregistered model must first become a profile. Existing subagents keep their original "
+                    "profile on resume. A multimodal capability tag is only a routing hint: select it for image work only after confirming "
+                    "the exact model, endpoint, and current message/attachment chain actually accept image input."
+                ),
                 "default": "",
             },
             "run_in_background": {
@@ -3910,6 +4059,7 @@ OPENAI_TOOL_DEFINITIONS: List[Dict[str, Any]] = [
                 "description": (
                     "start/resume only. false: wait and return the subagent final output in this tool call. "
                     "true: return an ID immediately; use only if the parent can continue without the result. "
+                    "Background tasks should be independent of the parent's immediate next step and of other subagents' write scopes. "
                     "After a completion notification, use collect to read it; use status for a non-blocking check."
                 ),
                 "default": False,
@@ -3918,6 +4068,8 @@ OPENAI_TOOL_DEFINITIONS: List[Dict[str, Any]] = [
                 "type": "string",
                 "description": (
                     "A single subagent ID string; arrays and multiple IDs are unsupported. Required for resume/interrupt. "
+                    "Prefer reusing this ID with action=resume when the new request continues, clarifies, corrects, or extends that "
+                    "subagent's objective; do not start a replacement subagent for the same scope. "
                     "For status/collect, omit it to target all subagents recursively; when supplied from a root session, "
                     "the ID must be a direct child even though the all-subagents view includes nested descendants. "
                     "A virtual best-of-n runner ID is not a resumable child; inspect its attempts with status-all or collect its returned output. "

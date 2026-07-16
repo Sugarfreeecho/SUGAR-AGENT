@@ -17,6 +17,12 @@ def _extract_feature_flags(html: str) -> dict:
     return json.loads(match.group(1))
 
 
+def _extract_steer_mode(html: str) -> str:
+    match = re.search(r"window\.__MYAGENT_STEER_MODE__=([^<;]+);", html)
+    assert match, "steer mode injection missing"
+    return json.loads(match.group(1))
+
+
 def test_index_html_injects_conservative_feature_values(monkeypatch):
     import webui
 
@@ -69,6 +75,17 @@ def test_index_html_defaults_stream_reconnect_enabled(monkeypatch):
     assert flags["streamReconnect"] is True
 
 
+def test_index_html_injects_append_steer_default_and_environment_override(monkeypatch):
+    import webui
+
+    monkeypatch.delenv("MYAGENT_STEER_MODE", raising=False)
+    assert _extract_steer_mode(str(webui.get_index_html())) == "append"
+    monkeypatch.setenv("MYAGENT_STEER_MODE", "interrupt")
+    assert _extract_steer_mode(str(webui.get_index_html())) == "interrupt"
+    monkeypatch.setenv("MYAGENT_STEER_MODE", "invalid")
+    assert _extract_steer_mode(str(webui.get_index_html())) == "append"
+
+
 def test_frontend_feature_entrypoints_are_flag_guarded():
     sse = (ROOT / "frontend/src/app/modules/sse-handling.js").read_text(encoding="utf-8")
     sessions = (ROOT / "frontend/src/app/modules/session-management.js").read_text(encoding="utf-8")
@@ -118,13 +135,16 @@ def test_frontend_feature_entrypoints_are_flag_guarded():
     assert "if (!sendPipelineLock) return;" in sse
     assert "releaseSendPipelineLock(sendPipelineLock);" in sse
     assert "formData.append('steer_id', String(options.steerId))" in sse
-    assert "function scheduleFollowupQueueDrain(sessionId, delayMs)" in sse
-    assert "function drainFollowupQueue(sessionId)" in sse
+    # 队列状态可刷新，但任何 pending 都不能被自动消费。
+    assert "function refreshPendingFollowupQueue(sessionId)" in sse
+    assert "void sendFollowupNow(String(front.id), sid)" not in sse
+    assert "function withFollowupDispatch(sessionId, fn)" in sse
+    assert "async function waitForSendPipelineIdle(sessionId, timeoutMs)" in sse
     assert "followupEnabled" in sessions
     assert "isMyAgentFeatureEnabled('followupRestart', false)" in sessions
 
 
-def test_followups_auto_drain_only_after_run_end():
+def test_followups_wait_for_explicit_send_now_across_run_end_and_sync():
     sse = (ROOT / "frontend/src/app/modules/sse-handling.js").read_text(encoding="utf-8")
     enqueue = sse.split("function enqueueCurrentInputAsFollowup()", 1)[1].split(
         "function takeFollowupItem", 1
@@ -132,26 +152,62 @@ def test_followups_auto_drain_only_after_run_end():
     end_run = sse.split("function endRunForClient", 1)[1].split(
         "async function readSseChunkWithIdleTimeout", 1
     )[0]
-    drain = sse.split("function drainFollowupQueue(sessionId)", 1)[1].split(
-        "function scheduleAcceptedFollowupWatch", 1
-    )[0]
-
-    # Enqueue itself must never transmit. Run finalization arms automatic
-    # draining, which is fenced until both local and server run state are idle.
+    # 入队绝不发送：入队只创建并持久化 pending，绝不触发发送。
     assert "sendFollowupNow" not in enqueue
     assert "scheduleFollowupQueueDrain" not in enqueue
     assert "setSendButtonState();" in enqueue
-    assert "scheduleFollowupQueueDrain" in end_run
-    assert "isSessionRunning(sid)" in drain
-    assert "isServerStreamActive(sid)" in drain
-    assert "followupDrainTimers[sid]" in sse
-    assert drain.index("if (!q.length)") < drain.index("isSessionRunning(sid)")
+    # 运行结束只同步服务端状态，不发送 pending。
+    assert "syncFollowupQueueFromServer(sid)" in end_run
+    assert "syncFollowupQueueFromServer(sid)" in end_run
+    assert "sendFollowupNow" not in end_run
+    # 三重空闲门禁：本地 run、服务端 stream、发送锁都空闲才允许 drain。
+    assert "isSessionRunning(sid) || isServerStreamActive(sid)" in sse
+    assert "isSendPipelineLocked(sid)" in sse
+    assert "followupDrainTimers" not in sse
+    # 旧名 followupQueueDraining 已被会话级 dispatcher 链取代，不应再出现。
+    assert "followupQueueDraining" not in sse
+    # 会话级互斥：所有显式立即发送共用同一 dispatcher 链。
+    assert "function isFollowupDispatchBusy(sessionId)" in sse
+    # 降级 /chat 前等待发送锁释放，避免静默返回导致追问丢失。
+    assert "waitForSendPipelineIdle(sid, 4000)" in sse
+    assert "function startFollowupChat(options)" in sse
+    assert "options.onRunStarted" in sse
+    assert "chatStarted = isSessionRunning(sid)" not in sse
+    # 持久化所有非终态条目，提交期间刷新不丢消息。
+    assert "status !== 'sent'" in sse
+    # watcher 覆盖全部传输非终态，并与手动/自动发送共用 dispatcher。
+    assert "['submitting', 'sending', 'accepted', 'restarting'].includes" in sse
+    assert "withFollowupDispatch(sid, async function ()" in sse
+    # 乐观行和实时 SSE 统一优先使用 client_id。
+    assert "parsed.client_id || parsed.steer_id" in sse
+    assert "parsed.steer_id || parsed.client_id" not in sse
 
-    # Explicit Send now remains available independently on every pending row
-    # and deliberately bypasses the automatic drain's idle-only gate.
+    # Explicit Send now remains available independently on every pending row.
     assert "sendNow.addEventListener('click'" in sse
     assert "sendFollowupNow(String(item.id));" in sse
     assert "sendNow.disabled = !!item.status;" in sse
+
+
+def test_followup_supports_interrupt_and_append_modes():
+    sse = (ROOT / "frontend/src/app/modules/sse-handling.js").read_text(encoding="utf-8")
+    events = (ROOT / "frontend/src/app/modules/event-dispatch.js").read_text(encoding="utf-8")
+    loop = (ROOT / "app/agent_loop.py").read_text(encoding="utf-8")
+    webui = (ROOT / "app/webui.py").read_text(encoding="utf-8")
+
+    assert "modeSelect.value = item.steerMode === 'append' ? 'append' : 'interrupt'" in sse
+    assert "mode: steerMode === 'append' ? 'append' : 'interrupt'" in sse
+    assert "appendPendingSteerToProcess(sid, item);" in sse
+    assert "appendSteerProcessMessage(" in events
+    assert "prepareSteerProcessBoundary(ctx, event.steer_mode || 'interrupt', steerOperationId);" in events
+    assert "optimisticSteerRow.dataset.steerEventReserved = '1';" in sse
+    assert "if (!reservedSteerIndex) streamEventIdx += 1;" in sse
+    assert "if (!renderAsSteer)" in sse
+    assert "prepareSteerProcessBoundary(runCtx, optimisticSteerMode, optimisticSteerOpId);" in sse
+    assert '_STEER_MODES = {"interrupt", "append"}' in loop
+    assert '_has_session_steers(sid, modes={"interrupt"})' in loop
+    assert 'modes={"append", "interrupt"}' in loop
+    assert loop.count("max_react_iter = max(max_react_iter, iter_count + 1)") == 2
+    assert 'if str(item.get("mode") or steer_mode) == "append":' in webui
 
 
 def test_model_profile_selector_fences_cross_session_responses():
@@ -176,11 +232,30 @@ def test_chat_input_supports_clipboard_files_and_images_as_paths():
     for path in sources:
         source = path.read_text(encoding="utf-8")
         assert "function clipboardFilesFromEvent(ev)" in source
+        assert "function clipboardHasUsableText(ev)" in source
         assert "textarea.addEventListener('paste'" in source
+        assert "if (clipboardHasUsableText(ev)) return;" in source
+        assert source.index("if (clipboardHasUsableText(ev)) return;") < source.index(
+            "var files = clipboardFilesFromEvent(ev);"
+        )
         assert "item.kind !== 'file'" in source
-        assert "insertUploadedFiles(textarea, files)" in source
-        assert "fetch('/api/upload-chat-files'" in source
+        assert "insertUploadedFiles(textarea, files, options)" in source
+        assert "new XMLHttpRequest()" in source
+        assert "xhr.upload.onprogress" in source
+        assert "xhr.abort()" in source
+        assert "MAX_CHAT_UPLOAD_FILE_BYTES = 100 * 1024 * 1024" in source
+        assert "MAX_CHAT_UPLOAD_TOTAL_BYTES = 200 * 1024 * 1024" in source
+        assert "textarea.dataset.fileUploadBusy = '1'" in source
+        assert "class=\"chat-upload-cancel\"" in source
         assert "quotePickedPath(item.path || item.rel || item.name)" in source
+
+    session_management = (ROOT / "frontend/src/app/modules/session-management.js").read_text(encoding="utf-8")
+    sse = (ROOT / "frontend/src/app/modules/sse-handling.js").read_text(encoding="utf-8")
+    assert "function isChatFileUploadBusy()" in session_management
+    assert "sendBtn.disabled = uploadBusy;" in session_management
+    assert "&& !uploadBusy" in session_management
+    assert "isChatFileUploadBusy()) return;" in sse
+    assert "if (isChatFileUploadBusy()) return false;" in sse
 
 
 def test_branch_completion_does_not_hijack_a_later_session_switch():
@@ -540,7 +615,7 @@ def test_followup_restart_enabled_prefers_native_steer(monkeypatch):
 
     response = asyncio.run(webui.post_session_steer(
         "s1",
-        _FakeJsonRequest({"message": "continue now", "client_id": "cid-1"}),
+        _FakeJsonRequest({"message": "continue now", "client_id": "cid-1", "mode": "interrupt"}),
     ))
     payload = json.loads(response.body.decode("utf-8"))
 
@@ -549,6 +624,52 @@ def test_followup_restart_enabled_prefers_native_steer(monkeypatch):
     assert payload["aborted"] is True
     assert payload["item"]["content"] == "continue now"
     assert payload["item"]["client_id"] == "cid-1"
+    assert fake_manager.interrupts == []
+
+
+def test_append_steer_is_accepted_without_aborting_active_run(monkeypatch):
+    import webui
+
+    fake_manager = _FakeSessionManagerForSteer()
+    captured = {}
+    monkeypatch.delenv("MYAGENT_STEER_MODE", raising=False)
+    monkeypatch.setattr(webui, "session_manager", fake_manager)
+    monkeypatch.setattr(webui, "_is_session_stream_active", lambda sid: True)
+
+    def enqueue(sid, message, client_id="", **kwargs):
+        captured.update(kwargs)
+        return {
+            "ok": True,
+            "item": {
+                "id": "append-steer",
+                "content": message,
+                "client_id": client_id,
+                "state": "queued",
+                "mode": kwargs.get("mode"),
+            },
+        }
+
+    monkeypatch.setattr(webui, "enqueue_session_steer", enqueue)
+    monkeypatch.setattr(
+        webui,
+        "abort_session_steer_run",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("append mode must not abort")),
+    )
+
+    response = asyncio.run(webui.post_session_steer(
+        "s-append",
+        _FakeJsonRequest({
+            "message": "use this on the next round",
+            "client_id": "append-client",
+        }),
+    ))
+    payload = json.loads(response.body.decode("utf-8"))
+
+    assert payload["ok"] is True
+    assert payload["restart"] is False
+    assert payload["aborted"] is False
+    assert payload["item"]["mode"] == "append"
+    assert captured["mode"] == "append"
     assert fake_manager.interrupts == []
 
 
@@ -588,7 +709,7 @@ def test_followup_restart_keeps_same_durable_steer_until_replacement_claim(monke
 
     response = asyncio.run(webui.post_session_steer(
         "s-fallback",
-        _FakeJsonRequest({"message": "continue now", "client_id": "cid-stable"}),
+        _FakeJsonRequest({"message": "continue now", "client_id": "cid-stable", "mode": "interrupt"}),
     ))
     payload = json.loads(response.body.decode("utf-8"))
 

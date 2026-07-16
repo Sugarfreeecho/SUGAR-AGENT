@@ -27,6 +27,7 @@ const UI_TRANSLATIONS_EN = {
     '未命名': 'Untitled', '重新加载': 'Reload', '加载中...': 'Loading...', '加载中…': 'Loading…',
     '生成中': 'Generating', '任务失败，点击查看': 'Task failed — click to view', '有新回复，点击查看': 'New response — click to view',
     '追问': 'Follow up', '立即发送': 'Send now', '撤回': 'Withdraw', '待发送': 'Pending', '发送中': 'Sending',
+    '打断': 'Interrupt', '追加': 'Append', '追问发送模式': 'Follow-up mode', '已追加，等待下一轮': 'Appended, waiting for the next round',
     '已发送': 'Sent', '提交中': 'Submitting', '撤回中': 'Withdrawing', '已接收，等待插入': 'Received, waiting to insert',
     '正在接管当前任务': 'Taking over the current task', '选择 Skill ': 'Select Skill ', '清空': 'Clear',
     '当前没有已注册 Skill': 'No registered skills', '正在加载 Skill': 'Loading skills',
@@ -112,13 +113,18 @@ Object.assign(UI_TRANSLATIONS_EN, {
 
     // File picker
     '请求失败': 'Request failed', '无法打开选择对话框': 'Could not open the file picker', '上传失败': 'Upload failed',
+    '正在取消上传…': 'Cancelling upload…', '上传已取消。': 'Upload cancelled.',
+    '上传失败：网络连接异常。': 'Upload failed: network connection error.', '上传超时，请重试。': 'Upload timed out. Please try again.',
+    '已有文件正在上传，请等待完成或先取消。': 'A file upload is already in progress. Wait for it to finish or cancel it first.',
+    '本次上传总大小超过 200 MB 限制。': 'The total upload exceeds the 200 MB limit.',
     '读取工作区文件失败': 'Failed to read workspace files', '搜索工作区文件': 'Search workspace files',
     '未选择文件': 'No files selected', '选择工作目录外文件': 'Choose a file outside the workspace',
     '加载中': 'Loading', '没有匹配文件': 'No matching files', '折叠文件夹': 'Collapse folder',
     '展开文件夹': 'Expand folder', '读取失败': 'Failed to read', '浏览路径': 'Browse path', '工作区文件': 'Workspace files',
 
     // Confirmations, recovery and errors
-    '粘贴文件失败': 'Failed to paste file', '无法保存剪贴板中的文件或图片。': 'Could not save the file or image from the clipboard.',
+    '粘贴文件失败': 'Failed to paste file', '文件上传失败': 'File upload failed', '无法保存剪贴板中的文件或图片。': 'Could not save the file or image from the clipboard.',
+    '无法上传所选文件或剪贴板中的图片。': 'Could not upload the selected file or clipboard image.',
     '截断失败': 'Truncation failed', '无法同步服务器，改写未生效。': 'Could not sync with the server; the rewrite was not applied.',
     '撤销失败，请重试。': 'Undo failed. Please try again.', '检测到上次运行未完成，正在自动恢复任务…': 'The previous run was incomplete. Restoring it automatically…',
     '恢复实时流失败': 'Failed to restore the live stream', '续接失败': 'Failed to continue',
@@ -138,6 +144,7 @@ function translateUiString(value) {
         .replace(/^更早 (\d+) 轮对话$/, 'Earlier $1 conversations')
         .replace(/^已选择 (\d+) 个 Skill$/, '$1 skills selected')
         .replace(/^已选择 (\d+) 项$/, '$1 items selected')
+        .replace(/^正在上传 (\d+) 个文件… (\d+)%$/, 'Uploading $1 files… $2%')
         .replace(/^已选 (\d+) \/ 共 (\d+)$/, '$1 selected / $2 total')
         .replace(/^加载失败: (.+)$/, 'Failed to load: $1')
         .replace(/^请求失败: (.+)$/, 'Request failed: $1')
@@ -146,6 +153,9 @@ function translateUiString(value) {
         .replace(/^确定删除会话「(.+)」吗？其中的消息与记录将被移除。$/, 'Delete session “$1”? Its messages and records will be removed.')
         .replace(/^工具 (\d+) 次$/, '$1 tool calls')
         .replace(/^失败 (\d+) 次$/, '$1 failures')
+        .replace(/工具\s*(\d+)\s*次/g, '$1 tool calls')
+        .replace(/失败\s*(\d+)\s*次/g, '$1 failures')
+        .replace(/(\d+)\s*轮/g, '$1 rounds')
         .replace(/^(\d+) 轮$/, '$1 rounds')
         .replace(/^(\d+)分(\d+)秒$/, '$1m $2s')
         .replace(/^调用工具 (.+) (\d+)次$/, 'Called tool $1 $2 times')

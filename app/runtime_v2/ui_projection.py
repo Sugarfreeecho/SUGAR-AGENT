@@ -736,10 +736,14 @@ class RuntimeUiProjection:
                     "created_at": event.timestamp,
                     "steer": True,
                 }
-                if payload.get("steer_id"):
-                    data["steer_id"] = str(payload.get("steer_id") or "")
+                steer_id = payload.get("steer_id") or payload.get("operation_id")
+                if steer_id:
+                    data["steer_id"] = str(steer_id or "")
                 if payload.get("client_id"):
                     data["client_id"] = str(payload.get("client_id") or "")
+                data["steer_mode"] = (
+                    "append" if str(payload.get("steer_mode") or "").strip().lower() == "append" else "interrupt"
+                )
                 return data
             data = {"type": "user", "content": payload.get("ui_content") or payload.get("content") or "", "created_at": event.timestamp}
             if payload.get("branch_source_session_id"):
@@ -779,6 +783,15 @@ class RuntimeUiProjection:
             data = dict(payload)
             data["type"] = "goal_state"
             data["goal_event"] = event.type
+            data.setdefault("created_at", event.timestamp)
+            return data
+        if event.type.startswith("hook_"):
+            data = dict(payload)
+            # Payloads may describe an executor with their own ``type`` field;
+            # the UI event type must remain the lifecycle event so dispatch is
+            # deterministic.
+            data["type"] = event.type
+            data["hook_runtime_event"] = event.type
             data.setdefault("created_at", event.timestamp)
             return data
         if event.type == "context_tokens":

@@ -42,6 +42,125 @@ def test_task_action_resume_requires_a_real_followup_prompt():
     assert "action=collect" in result
 
 
+def test_task_schema_injects_registered_profiles_without_mutating_static_schema(monkeypatch):
+    import agent_subagent
+    import agent_tools
+
+    monkeypatch.setattr(
+        agent_subagent,
+        "list_executor_model_profile_choices",
+        lambda: [
+            {
+                "id": "profile-fast",
+                "name": "Fast profile",
+                "model": "fast-model",
+                "capability_description": "低成本/多并发：批量总结和并行探索",
+            },
+            {
+                "id": "profile-deep",
+                "name": "Deep profile",
+                "model": "deep-model",
+            },
+        ],
+    )
+
+    injected = agent_subagent.inject_task_model_profiles(agent_tools.OPENAI_TOOL_DEFINITIONS)
+    injected_task = next(
+        row["function"] for row in injected if row["function"]["name"] == "task"
+    )
+    static_task = next(
+        row["function"] for row in agent_tools.OPENAI_TOOL_DEFINITIONS
+        if row["function"]["name"] == "task"
+    )
+    injected_profile = injected_task["parameters"]["properties"]["model_profile_id"]
+    static_profile = static_task["parameters"]["properties"]["model_profile_id"]
+
+    assert injected_profile["enum"] == ["profile-fast", "profile-deep"]
+    assert "profile-fast: Fast profile (model=fast-model)" in injected_profile["description"]
+    assert "低成本/多并发：批量总结和并行探索" in injected_profile["description"]
+    assert "omit by default" in injected_profile["description"]
+    assert "enum" not in static_profile
+
+
+def test_task_selected_profile_is_bound_to_created_subagent(monkeypatch):
+    import agent_subagent
+
+    captured = {}
+
+    class _SessionManager:
+        def get_session_subagent_depth(self, _session_id):
+            return 0
+
+        def create_subagent_session(self, *args, **kwargs):
+            captured.update(kwargs)
+            return "child-profile"
+
+    async def fake_execute(**kwargs):
+        captured["executed_child_id"] = kwargs["child_id"]
+        return "done"
+
+    monkeypatch.setattr(agent_subagent, "session_manager", _SessionManager())
+    monkeypatch.setattr(agent_subagent, "_save_initial_subagent_key_context", lambda *args: None)
+    monkeypatch.setattr(agent_subagent, "_execute_subagent_run", fake_execute)
+    monkeypatch.setattr(
+        agent_subagent,
+        "list_executor_model_profile_choices",
+        lambda: [{"id": "profile-deep", "name": "Deep", "model": "deep-model"}],
+    )
+
+    result = asyncio.run(
+        agent_subagent._run_single_subagent(
+            tool_args={
+                "action": "start",
+                "description": "Use selected model",
+                "prompt": "Complete the delegated task.",
+                "model_profile_id": "profile-deep",
+            },
+            parent_session_id="parent",
+        )
+    )
+
+    assert result == "done"
+    assert captured["model_profile_id"] == "profile-deep"
+    assert captured["executor_model"] == ""
+    assert captured["executed_child_id"] == "child-profile"
+
+
+def test_task_rejects_unknown_profile_or_removed_raw_model(monkeypatch):
+    import agent_subagent
+
+    monkeypatch.setattr(
+        agent_subagent,
+        "list_executor_model_profile_choices",
+        lambda: [{"id": "profile-valid", "name": "Valid", "model": "valid-model"}],
+    )
+
+    unknown = asyncio.run(
+        agent_subagent._run_single_subagent(
+            tool_args={
+                "action": "start",
+                "prompt": "Do work.",
+                "model_profile_id": "profile-missing",
+            },
+            parent_session_id="parent",
+        )
+    )
+    removed_raw_model = asyncio.run(
+        agent_subagent._run_single_subagent(
+            tool_args={
+                "action": "start",
+                "prompt": "Do work.",
+                "model": "raw-model",
+            },
+            parent_session_id="parent",
+        )
+    )
+
+    assert "unknown model_profile_id='profile-missing'" in unknown
+    assert "task.model has been removed" in removed_raw_model
+    assert "model_profile_id instead" in removed_raw_model
+
+
 def test_subagent_prompt_is_self_contained_and_has_a_completion_contract():
     import agent_subagent
 

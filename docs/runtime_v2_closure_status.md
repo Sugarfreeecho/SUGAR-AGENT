@@ -1,20 +1,21 @@
 # Runtime V2 Closure Status
 
-Date: 2026-07-12
+Date: 2026-07-16
 
 ## Verified State
 
-- Final full Python suite after all isolation, repair, token, branch and frontend-race patches: `348 passed in 97.59s`.
+- Final full Python suite after isolation, migration, stream recovery, steer modes, upload, Hooks/Plugins and frontend-race patches: `465 passed, 1 skipped in 56.10s`.
 - Final frontend release gate passed: `npm run build`, `npm run verify:dist`, and `npm run verify:commit`. The committed bundle is reproducible from the source tree.
-- Final repository-native Chromium smoke passed against an isolated Runtime V2 server. It covered snapshot open, TOC scroll, refresh recovery, online reconnect, subagent display, clipboard file/image paste, optimistic stop-before-preflight, explicit follow-up consumption, real branch, truncate and rewrite.
-- The browser branch round trip and session switch was `154.6 ms` for the smoke fixture. Materializing branches from repaired copies of real histories took `1.225 s` for 5,160 events and `3.245 s` for 7,220 events, both below the 10-second acceptance limit.
+- Final repository-native Chromium smoke passed against Runtime V2. It covered snapshot open, TOC scroll, refresh recovery, online reconnect, subagent display, clipboard file/image paste, optimistic stop-before-preflight, explicit follow-up consumption, interrupt process alignment, real branch, truncate and rewrite.
+- The final browser smoke completed snapshot open in `71 ms`; branch round trip and session switch was `460.3 ms`. Interrupt takeover produced separate old/new process groups, exactly one steer row, and the ordered new-group rows `user-steer -> llm-reasoning -> llm-response`. Materializing branches from repaired copies of real histories previously took `1.225 s` for 5,160 events and `3.245 s` for 7,220 events, all below the 10-second acceptance limit.
 - Workspace audit command:
 
 ```powershell
 python scripts\audit_runtime_versions.py --output .tmp-runtime-v2-audit.json
 ```
 
-- Final workspace audit after explicit repair: `checked=129`, `ui_mismatch=3`, `model_mismatch=4`, `ui_v2_only=50`, `model_v2_only=51`, `ui_v2_ahead=2`, `model_v2_ahead=0`, `runtime_v2_active_runs=0`, `errors=0`.
+- Final workspace audit after explicit repair and automatic-migration validation: `checked=146`, `ui_mismatch=3`, `model_mismatch=4`, `ui_v2_only=63`, `model_v2_only=64`, `ui_v2_ahead=2`, `model_v2_ahead=0`, `runtime_v2_active_runs=0`, `bad_lines=0`, `duplicate_seqs=0`, `non_monotonic_seqs=0`, `errors=0`.
+- The latest 102 MB mixed-runtime benchmark measured V2 UI cold-full median `694 ms` versus V1 `1.645 s`, V2 cold-page median `757 ms` versus V1 `1.652 s`, and V2 warm-full median below `1 ms`. Default on-demand migration left `/sessions/state` at `56-64 ms` after a `120 ms` first request in five repeated local checks.
 - Historical root-log repair was applied to the three affected sessions with backup, manifest and semantic projection verification. The final audit reports `bad_lines=0`, `duplicate_seqs=0`, and `non_monotonic_seqs=0`; a separate root repair dry-run reports `checked=120`, `dirty=0`, `refused=0`.
 - Subagent split-storage repair applied `31` repairs from `92` inspected children with `refused=0`, `pending_archive=0`, and `failed=0`. The final dry-run reports `checked=92`, `split_brain=0`, and `repaired=0`.
 - `v2_only` means the session has Runtime V2 projection data and no legacy file history. This is expected for pure V2 sessions and is not a failure.
@@ -61,6 +62,7 @@ python scripts\audit_runtime_versions.py --output .tmp-runtime-v2-audit.json
 - Branch/truncate checkpoints preserve Runtime V2 model history, context summary, todo state, and cached provider token counts; a rewritten/stopped turn no longer has to fall back to a structurally different local-token estimate.
 - Explicit migration/export preloads both legacy sources before writing, treats V2 as authoritative during export, handles shorter and equal-length rewrites, and restores V2/legacy files and referenced blobs if verification fails.
 - Follow-up queue items are no longer automatically drained when a run ends. Only the user's explicit send/send-now action consumes an item, and failure leaves it queued.
+- Interrupt follow-ups now reserve and reuse one UI event index and one operation-keyed row. The interrupt seals the old process group once, and LLM row lookup is scoped to the current group so a replacement run restarting at `react_iter=1` cannot overwrite the old run's reasoning.
 - The send UI enters optimistic stop state in the same frame while preflight is pending; clipboard image/file paste uploads files through the existing endpoint and inserts quoted local paths into the draft.
 - The runtime benchmark now ranks sessions by the larger of V1 UI+model or V2 event+snapshot storage, so pure V2 large sessions are included, and reports application-cache cold and warm distributions separately without evicting the OS page cache.
 

@@ -108,6 +108,7 @@ class RuntimeMirror:
                     "steer": bool(event.get("steer")),
                     "steer_id": str(event.get("steer_id") or ""),
                     "client_id": str(event.get("client_id") or ""),
+                    "steer_mode": "append" if str(event.get("steer_mode") or "").strip().lower() == "append" else "interrupt",
                 },
             }
         if event_type == "final":

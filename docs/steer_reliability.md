@@ -2,7 +2,22 @@
 
 Agent steer is a durable user turn, not a best-effort UI command. The server is
 the source of truth and stores each operation in `steer_inbox.json` with a stable
-`id`, `client_id`, source/replacement run IDs, state, version, and timestamps.
+`id`, `client_id`, `mode`, source/replacement run IDs, state, version, and timestamps.
+
+## Delivery modes
+
+- `interrupt` is the existing takeover mode. It aborts interruptible LLM/tool
+  work, preserves completed output, removes only an unclosed tool tail, commits
+  the steer, and replans.
+- `append` never requests an abort. The UI appends an optimistic follow-up row
+  to the end of the active process block after server acceptance. The ReAct loop
+  claims and durably commits it only after the current round is complete: after
+  all tool results are persisted, or after a no-tool model response, and before
+  constructing the next model request.
+
+Old inbox rows without `mode` normalize to `interrupt` for compatibility.
+New steers default to `MYAGENT_STEER_MODE` (`append` when unset or invalid).
+An explicit per-item browser selection overrides the environment default.
 
 ## State transitions
 
@@ -37,14 +52,12 @@ The browser persists a presentation queue but reconciles it with these APIs on
 session activation and while an operation is accepted. Unknown status is never
 treated as permission to create a new operation.
 
-Text entered while a run is active is first a local pending next turn. Ending
-the old run or releasing the session send lock must not consume that item. The
-queue advances only after an explicit user action: “send now” creates a durable
-steer while a run is active, and an explicit send starts a normal `/chat` once
-the session is idle. Both paths share the same per-session mutex; a failed
-request keeps the queue item instead of deleting it optimistically. This rule
-also prevents a delayed callback from one session from draining another
-session's queue after a switch.
+Text entered while a run is active is first a local pending next turn. Refresh,
+server reconciliation, and run completion only restore or refresh the queue;
+they never transmit a pending item. The user must click “Send now” on that row,
+which creates a durable steer in the selected mode while a run is active. A
+failed request keeps the queue item instead of deleting it optimistically, and
+consuming one item never automatically sends the next pending row.
 
 ## Run and content fencing
 
@@ -68,3 +81,8 @@ safe point, because cancelling an awaitable cannot undo an external side effect.
 4. A replacement run must claim the matching steer ID and replacement run ID.
 5. Missing SSE delivery must be recoverable through projection and status APIs.
 6. Confirmed output is retained; only unfinished execution artifacts are pruned.
+7. Append mode is invisible to interruption polling and is consumed only at a
+   completed ReAct boundary before the next model request.
+8. Interrupt mode seals the prior process block exactly once. Its durable event
+   reuses the optimistic operation-keyed row and reserved UI index; replacement
+   reasoning/response rows may only be upserted inside the new process block.

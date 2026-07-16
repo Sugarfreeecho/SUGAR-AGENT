@@ -4431,6 +4431,7 @@ class SessionManager:
         subagent_type: str,
         depth: int,
         *,
+        model_profile_id: str = "",
         executor_model: str = "",
         executor_llm_type: str = "",
         readonly_strict: bool = False,
@@ -4463,6 +4464,9 @@ class SessionManager:
             "readonly_strict": bool(readonly_strict),
             "forked_from_parent": bool(forked_from_parent),
         }
+        mpi = (model_profile_id or "").strip()
+        if mpi:
+            metadata["model_profile_id"] = mpi
         em = (executor_model or "").strip()
         if em:
             metadata["executor_model"] = em
@@ -4509,6 +4513,7 @@ class SessionManager:
         subagent_type: str,
         depth: int,
         *,
+        model_profile_id: str = "",
         executor_model: str = "",
         executor_llm_type: str = "",
         readonly_strict: bool = False,
@@ -4522,6 +4527,7 @@ class SessionManager:
             description,
             subagent_type,
             depth,
+            model_profile_id=model_profile_id,
             executor_model=executor_model,
             executor_llm_type=executor_llm_type,
             readonly_strict=readonly_strict,
@@ -5318,6 +5324,80 @@ def _executor_profile_catalog(now: Optional[float] = None) -> Tuple[Dict[str, di
     with _executor_config_cache_lock:
         _executor_profile_catalog_cache = (ts, profiles, list(ordered_ids), top_profile_id)
     return profiles, list(ordered_ids), top_profile_id
+
+
+def list_executor_model_profile_choices() -> List[Dict[str, Any]]:
+    """Return safe, ordered model-profile choices for the task tool schema."""
+    profiles, ordered_ids, _top_profile_id = _executor_profile_catalog()
+    choices: List[Dict[str, Any]] = []
+    for profile_id in ordered_ids:
+        pid = str(profile_id or "").strip()
+        if not pid:
+            continue
+        if pid == "__env__":
+            choice = {
+                "id": "__env__",
+                "name": str(EXECUTOR_LLM or executor_model or "environment default"),
+                "model": str(executor_model or EXECUTOR_LLM),
+                "llm_type": str(EXECUTOR_LLM_TYPE or "openai"),
+                "context_window": int(CONTEXT_WINDOW),
+                "max_output_tokens": int(MAX_OUTPUT_TOKENS),
+            }
+            choice.update(model_profiles.infer_model_task_capabilities(
+                choice["model"], choice["name"], choice["context_window"]
+            ))
+            choices.append(choice)
+            continue
+        profile = profiles.get(pid)
+        if not isinstance(profile, dict):
+            continue
+        choice = {
+            "id": pid,
+            "name": str(profile.get("name") or profile.get("model") or pid),
+            "model": str(profile.get("model") or ""),
+            "llm_type": str(profile.get("llm_type") or "openai"),
+            "context_window": int(profile.get("context_window") or CONTEXT_WINDOW),
+            "max_output_tokens": int(profile.get("max_output_tokens") or MAX_OUTPUT_TOKENS),
+        }
+        choice.update(model_profiles.infer_model_task_capabilities(
+            choice["model"], choice["name"], choice["context_window"]
+        ))
+        choices.append(choice)
+    if not choices:
+        choice = {
+            "id": "__env__",
+            "name": str(EXECUTOR_LLM or executor_model or "environment default"),
+            "model": str(executor_model or EXECUTOR_LLM),
+            "llm_type": str(EXECUTOR_LLM_TYPE or "openai"),
+            "context_window": int(CONTEXT_WINDOW),
+            "max_output_tokens": int(MAX_OUTPUT_TOKENS),
+        }
+        choice.update(model_profiles.infer_model_task_capabilities(
+            choice["model"], choice["name"], choice["context_window"]
+        ))
+        choices.append(choice)
+    return choices
+
+
+def inherited_executor_selection(session_id: str) -> Dict[str, str]:
+    """Snapshot the parent's effective model selection for a new subagent."""
+    try:
+        meta = session_manager._load_metadata((session_id or "").strip())
+    except Exception:
+        meta = {}
+    if isinstance(meta, dict):
+        profile_id = str(meta.get("model_profile_id") or "").strip()
+        if profile_id:
+            return {"model_profile_id": profile_id}
+        model = str(meta.get("executor_model") or "").strip()
+        if model:
+            return {
+                "executor_model": model,
+                "executor_llm_type": str(meta.get("executor_llm_type") or EXECUTOR_LLM_TYPE).strip(),
+            }
+    choices = list_executor_model_profile_choices()
+    profile_id = str((choices[0] if choices else {}).get("id") or "").strip()
+    return {"model_profile_id": profile_id or "__env__"}
 
 
 def _profile_candidate(profile: dict) -> Dict[str, Any]:

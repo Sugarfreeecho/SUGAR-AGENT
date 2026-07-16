@@ -21,7 +21,25 @@ function renderEvent(ctx, event, eventIndex, runSessionId) {
             createdAt: event.created_at || event.createdAt || event.timestamp,
         }, runSessionId);
     } else if (event.type === 'user_steer') {
-        appendLog(ctx, event.content || '', 'user-steer', runSessionId);
+        var steerOperationId = event.client_id || event.steer_id || '';
+        if (typeof prepareSteerProcessBoundary === 'function') {
+            prepareSteerProcessBoundary(ctx, event.steer_mode || 'interrupt', steerOperationId);
+        }
+        if (typeof markSteerEventPosition === 'function') {
+            markSteerEventPosition(ctx, eventIndex, event.runtime_seq || event.runtimeSeq);
+        }
+        if (typeof appendSteerProcessMessage === 'function' && (event.client_id || event.steer_id)) {
+            appendSteerProcessMessage(
+                eventSessionId,
+                ctx,
+                event.content || '',
+                steerOperationId,
+                event.steer_mode || 'interrupt',
+                false
+            );
+        } else {
+            appendLog(ctx, event.content || '', 'user-steer', runSessionId);
+        }
     } else if (event.type === 'final') {
         var finalStream = ctx && ctx.stream ? ctx.stream : getVisibleChatStream();
         var userIdx = (ctx && Number.isFinite(Number(ctx.lastUserEventIndex))) ? Number(ctx.lastUserEventIndex) : latestVisibleUserEventIndex(finalStream);

@@ -1,5 +1,6 @@
 ﻿function setSendButtonState() {
     sendBtn.disabled = false;
+    const uploadBusy = isChatFileUploadBusy();
     const newSessionPreflight = !currentSessionId && optimisticNewSessionRun;
     if (isSessionRunning(currentSessionId) || newSessionPreflight) {
         const run = newSessionPreflight || (typeof getSessionRunState === 'function' ? getSessionRunState(currentSessionId) : null);
@@ -8,14 +9,19 @@
             ? inputHasSendableText()
             : !!(messageInput && String(messageInput.value || '').trim());
         const followupEnabled = (typeof isMyAgentFeatureEnabled === 'function') && isMyAgentFeatureEnabled('followupRestart', false);
-        sendBtn.innerHTML = (followupEnabled && hasDraft && !suppressFollowup) ? '追问' : '停止 <span class="loader" aria-hidden="true"></span>';
+        sendBtn.innerHTML = (followupEnabled && hasDraft && !suppressFollowup && !uploadBusy) ? '追问' : '停止 <span class="loader" aria-hidden="true"></span>';
         sendBtn.classList.add('is-stop');
-        sendBtn.classList.toggle('is-followup', followupEnabled && hasDraft && !suppressFollowup);
+        sendBtn.classList.toggle('is-followup', followupEnabled && hasDraft && !suppressFollowup && !uploadBusy);
     } else {
         sendBtn.textContent = '发送';
         sendBtn.classList.remove('is-stop');
         sendBtn.classList.remove('is-followup');
+        sendBtn.disabled = uploadBusy;
     }
+}
+
+function isChatFileUploadBusy() {
+    return !!(messageInput && messageInput.dataset.fileUploadBusy === '1');
 }
 
 async function requestInterrupt(sessionId, runId, reason) {

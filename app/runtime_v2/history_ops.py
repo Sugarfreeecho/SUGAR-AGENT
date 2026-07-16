@@ -14,6 +14,19 @@ from .snapshot_store import SnapshotStore
 logger = logging.getLogger(__name__)
 
 
+HOOK_EVENT_TYPES = {
+    "hook_started",
+    "hook_progress",
+    "hook_finished",
+    "hook_failed",
+    "hook_blocked",
+    "hook_timed_out",
+    "hook_input_modified",
+}
+
+PLUGIN_EVENT_TYPES = {"plugin_state_changed", "plugin_reloaded"}
+
+
 def _rt2_step_ms(start: float, end: Optional[float] = None) -> int:
     if end is None:
         end = time.perf_counter()
@@ -283,6 +296,54 @@ class RuntimeHistoryOps:
         if not str(event_type or "").startswith("goal_"):
             raise ValueError("goal event_type must start with goal_")
         return self._append_and_snapshot(session_id, str(event_type), dict(goal or {}))
+
+    def append_hook_event(
+        self,
+        session_id: str,
+        event_type: str,
+        payload: Optional[dict] = None,
+        run_id: Optional[str] = None,
+        **fields,
+    ) -> RuntimeEvent:
+        """Append a supported hook audit event and refresh the snapshot."""
+        normalized_type = str(event_type or "").strip()
+        if normalized_type not in HOOK_EVENT_TYPES:
+            raise ValueError(f"unsupported hook event_type: {normalized_type}")
+        data = dict(payload or {})
+        data.update(fields)
+        return self._append_and_snapshot(
+            session_id,
+            normalized_type,
+            data,
+            run_id=run_id,
+        )
+
+    def update_plugin_state(
+        self,
+        session_id: str,
+        plugin_id: str,
+        state=None,
+        event_type: str = "plugin_state_changed",
+        run_id: Optional[str] = None,
+        **fields,
+    ) -> RuntimeEvent:
+        """Merge a plugin's latest state into the Runtime V2 projection."""
+        normalized_type = str(event_type or "").strip()
+        if normalized_type not in PLUGIN_EVENT_TYPES:
+            raise ValueError(f"unsupported plugin event_type: {normalized_type}")
+        normalized_id = str(plugin_id or "").strip()
+        if not normalized_id:
+            raise ValueError("plugin_id is required")
+        data = dict(fields or {})
+        data["plugin_id"] = normalized_id
+        if state is not None:
+            data["state"] = dict(state) if isinstance(state, dict) else state
+        return self._append_and_snapshot(
+            session_id,
+            normalized_type,
+            data,
+            run_id=run_id,
+        )
 
     def delete_subagent(
         self,

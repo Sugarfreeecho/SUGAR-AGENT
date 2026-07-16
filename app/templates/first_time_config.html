@@ -400,6 +400,10 @@
     font-size: 0.72rem;
     line-height: 1.4;
   }
+  .model-context-warning {
+    width: 100%; color: #f9c74f; font-size: 0.7rem; line-height: 1.45;
+  }
+  :root.theme-light .model-context-warning { color: #9a6700; }
   .model-list {
     display: grid;
     gap: 0.45rem;
@@ -579,7 +583,7 @@
 <div class="container">
   <div class="card">
     <button type="button" id="wizard-language-toggle" class="wizard-language-toggle" aria-label="切换为英文" title="切换语言">
-      <span class="wizard-language-toggle__icon" aria-hidden="true">文A</span>
+      <span class="wizard-language-toggle__icon" aria-hidden="true">中/EN</span>
     </button>
     <div class="logo">
       <div class="logo-icon" aria-hidden="true"><img src="/assets/sugar-logo.png" alt="" draggable="false"></div>
@@ -611,7 +615,9 @@
       <div class="model-discovery" aria-label="模型发现">
         <div class="model-discovery-row">
           <button type="button" class="model-fetch-btn" id="modelFetchBtn">获取模型列表</button>
+          <button type="button" class="model-fetch-btn" id="modelContextBtn" aria-describedby="modelContextWarning">获取模型上下文</button>
           <span class="model-discovery-status" id="modelDiscoveryStatus"></span>
+          <div class="model-context-warning" id="modelContextWarning" role="note">⚠ 获取模型上下文会向模型 API 发送探测请求，可能消耗 API 额度。</div>
         </div>
         <div id="modelDiscoveryList" class="model-list"></div>
       </div>
@@ -728,6 +734,7 @@
   const contextWindowEl = document.getElementById('contextWindow');
   const maxOutputTokensEl = document.getElementById('maxOutputTokens');
   const modelFetchBtn = document.getElementById('modelFetchBtn');
+  const modelContextBtn = document.getElementById('modelContextBtn');
   const modelDiscoveryStatus = document.getElementById('modelDiscoveryStatus');
   const modelDiscoveryList = document.getElementById('modelDiscoveryList');
 
@@ -833,14 +840,26 @@
       : '已填入模型和窗口参数。');
   }
 
-  async function probeAndApplyDiscoveredModel(model, row) {
-    model = model || {};
-    const modelId = String(model.id || model.model || '').trim();
-    if (!modelId) {
-      applyDiscoveredModel(model);
+  function currentModelMetadata() {
+    const row = modelDiscoveryList && modelDiscoveryList.querySelector('.model-row.is-selected[data-model]');
+    if (row) {
+      try { return JSON.parse(row.getAttribute('data-model') || '{}'); } catch (err) {}
+    }
+    return {
+      model: String((modelName && modelName.value) || '').trim(),
+      context_window: String((contextWindowEl && contextWindowEl.value) || '').trim(),
+      max_output_tokens: String((maxOutputTokensEl && maxOutputTokensEl.value) || '').trim(),
+    };
+  }
+
+  async function probeCurrentModelContext() {
+    const model = currentModelMetadata();
+    const modelId = String(model.model || model.id || (modelName && modelName.value) || '').trim();
+    if (!baseUrl.value.trim() || !apiKey.value.trim() || !modelId) {
+      setModelDiscoveryStatus('请先填写 API BASE URL、API Key 和模型名称。');
       return;
     }
-    if (row) row.disabled = true;
+    if (modelContextBtn) modelContextBtn.disabled = true;
     setModelDiscoveryStatus('正在探测 ' + modelId + ' 的真实上下文窗口...');
     try {
       const resp = await fetch('/api/model_profiles/probe', {
@@ -859,13 +878,12 @@
       const merged = Object.assign({}, model, result.model || {});
       applyDiscoveredModel(merged);
       setModelDiscoveryStatus(result.model && result.model.probe_succeeded
-        ? '已通过 HTTP 400 错误消息探测真实上下文窗口。'
-        : '未从错误消息取得真实上下文窗口，已使用列表/默认窗口。');
+        ? '已获取模型上下文；探测请求可能已消耗 API 额度。'
+        : '未从 API 错误消息取得真实上下文窗口，已保留列表/默认窗口；探测请求可能已消耗 API 额度。');
     } catch (err) {
-      applyDiscoveredModel(model);
-      setModelDiscoveryStatus('上下文探测失败，已使用列表/默认窗口：' + String(err.message || err));
+      setModelDiscoveryStatus('获取模型上下文失败：' + String(err.message || err));
     } finally {
-      if (row) row.disabled = false;
+      if (modelContextBtn) modelContextBtn.disabled = false;
     }
   }
 
@@ -895,8 +913,8 @@
         try {
           const model = JSON.parse(row.getAttribute('data-model') || '{}');
           selectedDiscoveredModelId = String(model.id || model.model || '').trim();
-          updateModelSelectionHighlight();
-          probeAndApplyDiscoveredModel(model, row);
+          applyDiscoveredModel(model);
+          setModelDiscoveryStatus('已选择模型；如需探测真实上下文窗口，请点击“获取模型上下文”。');
         } catch (err) {}
       });
     });
@@ -1007,6 +1025,7 @@
   if (contextWindowEl) contextWindowEl.addEventListener('input', () => clearAutofillHighlight(contextWindowEl));
   if (maxOutputTokensEl) maxOutputTokensEl.addEventListener('input', () => clearAutofillHighlight(maxOutputTokensEl));
   if (modelFetchBtn) modelFetchBtn.addEventListener('click', fetchDiscoveredModels);
+  if (modelContextBtn) modelContextBtn.addEventListener('click', probeCurrentModelContext);
 
   searchProvider.addEventListener('change', syncSearchPairVisibility);
 

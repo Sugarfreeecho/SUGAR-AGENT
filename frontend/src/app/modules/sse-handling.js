@@ -34,6 +34,45 @@ function releaseSendPipelineLock(lock) {
     }
 }
 
+/* ---------------------------------------------------------------------------
+ * 会话级追问 dispatcher：所有显式“立即发送”共用同一 per-session 互斥链，
+ * 保证同一会话同一时刻只处理一条追问，避免并发 steer 竞争。
+ * ------------------------------------------------------------------------- */
+function withFollowupDispatch(sessionId, fn) {
+    var sid = String(sessionId || '');
+    if (!sid) return Promise.resolve();
+    var prev = followupDispatchChain[sid] || Promise.resolve();
+    var run = function () { return Promise.resolve().then(fn); };
+    // 前一条无论成功/失败都继续执行本条，避免一次失败永久堵塞后续追问。
+    var next = prev.then(run, run);
+    var settled = next.then(function () { return null; }, function () { return null; });
+    followupDispatchChain[sid] = settled;
+    settled.finally(function () {
+        if (followupDispatchChain[sid] === settled) delete followupDispatchChain[sid];
+    });
+    return next;
+}
+
+function isFollowupDispatchBusy(sessionId) {
+    return !!followupDispatchChain[String(sessionId || '')];
+}
+
+async function waitForSendPipelineIdle(sessionId, timeoutMs) {
+    var sid = String(sessionId || '');
+    var deadline = Date.now() + Math.max(0, Number(timeoutMs) || 0);
+    while (isSendPipelineLocked(sid)) {
+        if (Date.now() >= deadline) return false;
+        await sleepMs(40);
+    }
+    return true;
+}
+
+function refreshPendingFollowupQueue(sessionId) {
+    var sid = String(sessionId || '');
+    if (!sid) return;
+    renderFollowupQueue(sid);
+}
+
 function shouldApplySseSeqFilter(parsed) {
     if (!parsed || parsed.protocol === 'runtime_v2') return false;
     if (parsed.runtime_seq != null || parsed.runtimeSeq != null) return false;
@@ -67,15 +106,11 @@ function endRunForClient(sessionId, ctx, opts) {
     syncSessionListIndicatorClasses();
     setSendButtonState();
     if (sid === currentSessionId) renderTodoPlanForCurrentSession();
-    if (opts.drainFollowup !== false) {
-        var _drainDelay = opts.followupDelayMs || 0;
-        if (typeof syncFollowupQueueFromServer === 'function') {
-            syncFollowupQueueFromServer(sid).finally(function () {
-                scheduleFollowupQueueDrain(sid, _drainDelay);
-            });
-        } else {
-            scheduleFollowupQueueDrain(sid, _drainDelay);
-        }
+    if (opts.syncFollowup !== false && typeof syncFollowupQueueFromServer === 'function') {
+        // 先同步服务端状态（清理已 consumed/cancelled、补齐服务端已接收条目），
+        // 同步只刷新状态，pending 条目仍需用户显式点击发送。
+        // Reconcile status only. Never transmit a pending row from completion.
+        void syncFollowupQueueFromServer(sid);
     }
     if (liveAutoFollow && opts.scroll !== false) {
         scrollProcessBodyToBottom(ctx, sid);
@@ -161,15 +196,39 @@ async function consumeAgentSseResponse(response, runCtx, runSessionId, streamEve
                 if (shouldApplySseSeqFilter(parsed)
                     && !sessionStore.shouldAcceptSseEvent(eventSessionId, parsed.seq, parsed.seq_scope || 'legacy')) continue;
                 if (parsed.type === 'user_steer' && parsed.steer) {
-                    var steerEventIndex = parsed.ephemeral && Number.isFinite(Number(parsed.seq)) ? Number(parsed.seq) : streamEventIdx;
+                    var steerOpId = String(parsed.client_id || parsed.steer_id || '');
+                    var optimisticSteerRow = steerOpId ? findSteerProcessRow(runCtx, steerOpId) : null;
+                    var reservedSteerIndex = !!(optimisticSteerRow && optimisticSteerRow.dataset.steerEventReserved === '1');
+                    var steerEventIndex = reservedSteerIndex && Number.isFinite(Number(runCtx && runCtx.lastUserEventIndex))
+                        ? Number(runCtx.lastUserEventIndex)
+                        : (parsed.ephemeral && Number.isFinite(Number(parsed.seq)) ? Number(parsed.seq) : streamEventIdx);
                     try {
                         applyMessageEvent(eventSessionId, parsed, steerEventIndex, 'sse');
                     } catch (eStoreSteer) {
                         console.error('store user steer event failed:', eStoreSteer);
                     }
                     removeConsumedFollowupSteer(eventSessionId, parsed);
-                    appendLog(runCtx, parsed.content || '', 'user-steer', runSessionId);
-                    streamEventIdx += 1;
+                    // 通过 operation-id（steer_id/client_id）提交已存在的乐观 pending 行，
+                    // 而非再 appendLog 一条新行，避免 append 追问出现「一条灰色 pending + 一条 committed」。
+                    // Optimistic append rows are keyed by client_id before the
+                    // server steer id exists, so live commit must use the same
+                    // priority to update that row instead of creating a second.
+                    prepareSteerProcessBoundary(runCtx, parsed.steer_mode || 'interrupt', steerOpId);
+                    markSteerEventPosition(runCtx, steerEventIndex, parsed.runtime_seq || parsed.runtimeSeq);
+                    if (steerOpId && typeof appendSteerProcessMessage === 'function') {
+                        var committedSteerRow = appendSteerProcessMessage(
+                            eventSessionId, runCtx, parsed.content || '', steerOpId,
+                            String(parsed.steer_mode || 'interrupt'), false
+                        );
+                        if (committedSteerRow) {
+                            if (parsed.client_id) committedSteerRow.dataset.steerClientId = String(parsed.client_id);
+                            if (parsed.steer_id) committedSteerRow.dataset.steerId = String(parsed.steer_id);
+                            committedSteerRow.removeAttribute('data-steer-event-reserved');
+                        }
+                    } else {
+                        appendLog(runCtx, parsed.content || '', 'user-steer', runSessionId);
+                    }
+                    if (!reservedSteerIndex) streamEventIdx += 1;
                     continue;
                 }
                 const reduced = applySessionEvent(parsed, {
@@ -807,6 +866,12 @@ function followupQueueStorageKey(sessionId) {
     return LS_FOLLOWUP_QUEUE_PREFIX + String(sessionId || '');
 }
 
+function defaultSteerMode() {
+    return String(window.__MYAGENT_STEER_MODE__ || 'append').toLowerCase() === 'interrupt'
+        ? 'interrupt'
+        : 'append';
+}
+
 function normalizeStoredFollowupItem(item) {
     if (!item || typeof item !== 'object') return null;
     var text = String(item.text || '').trim();
@@ -815,12 +880,26 @@ function normalizeStoredFollowupItem(item) {
     var skills = Array.isArray(item.skills)
         ? item.skills.map(function (skill) { return String(skill || '').trim(); }).filter(Boolean)
         : [];
+    var restoredStatus = String(item.status || '');
+    if (restoredStatus === 'submitting' || restoredStatus === 'sending') restoredStatus = '';
+    // A browser reload cannot resume the in-flight DELETE request. If the
+    // durable steer id is known, reconcile it as accepted; otherwise restore a
+    // normal pending row so the user never gets a permanently disabled item.
+    if (restoredStatus === 'withdrawing') {
+        restoredStatus = String(item.steerId || '') ? 'accepted' : '';
+    }
     return {
         id: item.id || ('stored-followup-' + (followupQueueSeq++)),
         text: text,
         display: display || text,
         skills: skills,
         createdAt: Number(item.createdAt) || Date.now(),
+        steerMode: String(item.steerMode || item.mode || defaultSteerMode()) === 'interrupt' ? 'interrupt' : 'append',
+        // 恢复提交期间的 in-flight 状态：刷新/崩溃后可继续恢复，不再静默丢失。
+        clientId: String(item.clientId || ''),
+        steerId: String(item.steerId || ''),
+        status: restoredStatus,
+        replacementRunId: String(item.replacementRunId || ''),
     };
 }
 
@@ -845,9 +924,12 @@ function persistFollowupQueue(sessionId) {
     const sid = String(sessionId || '');
     if (!sid) return;
     var q = followupQueueBySession[sid] || [];
+    // 持久化所有非终态条目：包括 submitting/sending/accepted/restarting，
+    // 这样刷新/崩溃/请求未达服务端时仍可恢复。只有 'sent'（/chat 已成功开跑）
+    // 视为本地终态不再持久化；consumed/cancelled 由 takeFollowupItem 直接移除。
     var pending = q.filter(function (item) {
         var status = item && item.status ? String(item.status) : '';
-        return item && item.text && !status;
+        return item && item.text && status !== 'sent';
     }).map(function (item) {
         return {
             id: item.id,
@@ -855,6 +937,11 @@ function persistFollowupQueue(sessionId) {
             display: item.display || item.text,
             skills: Array.isArray(item.skills) ? item.skills : [],
             createdAt: item.createdAt || Date.now(),
+            steerMode: item.steerMode === 'append' ? 'append' : 'interrupt',
+            clientId: item.clientId || '',
+            steerId: item.steerId || '',
+            status: item.status || '',
+            replacementRunId: item.replacementRunId || '',
         };
     });
     try {
@@ -867,9 +954,6 @@ function persistFollowupQueue(sessionId) {
 function removeStoredFollowupQueue(sessionId) {
     const sid = String(sessionId || '');
     if (!sid) return;
-    var pendingDrain = followupDrainTimers[sid];
-    if (pendingDrain && pendingDrain.timer) clearTimeout(pendingDrain.timer);
-    delete followupDrainTimers[sid];
     delete followupQueueBySession[sid];
     delete followupQueueLoadedBySession[sid];
     try { localStorage.removeItem(followupQueueStorageKey(sid)); } catch (e) { /* ignore */ }
@@ -923,7 +1007,7 @@ function renderFollowupQueue(sessionId) {
         return;
     }
     q.forEach(function (item, idx) {
-        if (item && (item.status === 'accepted' || item.status === 'restarting')) {
+        if (item && ['submitting', 'sending', 'accepted', 'restarting'].includes(String(item.status || ''))) {
             scheduleAcceptedFollowupWatch(sid, item.id);
         }
         var row = document.createElement('div');
@@ -950,6 +1034,19 @@ function renderFollowupQueue(sessionId) {
         sendNow.className = 'followup-queue-action followup-queue-send';
         sendNow.textContent = '立即发送';
         sendNow.disabled = !!item.status;
+        var modeSelect = document.createElement('select');
+        modeSelect.className = 'followup-queue-mode';
+        modeSelect.setAttribute('aria-label', '追问发送模式');
+        var interruptOption = document.createElement('option');
+        interruptOption.value = 'interrupt';
+        interruptOption.textContent = '打断';
+        var appendOption = document.createElement('option');
+        appendOption.value = 'append';
+        appendOption.textContent = '追加';
+        modeSelect.appendChild(interruptOption);
+        modeSelect.appendChild(appendOption);
+        modeSelect.value = item.steerMode === 'append' ? 'append' : 'interrupt';
+        modeSelect.disabled = !!item.status;
         var undo = document.createElement('button');
         undo.type = 'button';
         undo.className = 'followup-queue-action followup-queue-undo';
@@ -959,6 +1056,10 @@ function renderFollowupQueue(sessionId) {
             ev.preventDefault();
             sendFollowupNow(String(item.id));
         });
+        modeSelect.addEventListener('change', function () {
+            item.steerMode = modeSelect.value === 'append' ? 'append' : 'interrupt';
+            persistFollowupQueue(sid);
+        });
         undo.addEventListener('click', function (ev) {
             ev.preventDefault();
             withdrawFollowup(String(item.id));
@@ -966,6 +1067,7 @@ function renderFollowupQueue(sessionId) {
         row.appendChild(order);
         row.appendChild(text);
         row.appendChild(status);
+        row.appendChild(modeSelect);
         row.appendChild(sendNow);
         row.appendChild(undo);
         panel.appendChild(row);
@@ -981,7 +1083,7 @@ function getFollowupStatusText(item) {
     var status = item && item.status ? String(item.status) : '';
     if (status === 'withdrawing') return '撤回中';
     if (status === 'submitting') return '提交中';
-    if (status === 'accepted') return '已接收，等待插入';
+    if (status === 'accepted') return item && item.steerMode === 'append' ? '已追加，等待下一轮' : '已接收，等待插入';
     if (status === 'restarting') return '正在接管当前任务';
     if (status === 'sending') return '发送中';
     if (status === 'sent') return '已发送';
@@ -997,6 +1099,7 @@ function appendFollowupQueueItem(sessionId, text, display, selectedSkills) {
         display: String(display || text),
         skills: Array.isArray(selectedSkills) ? selectedSkills.slice() : [],
         createdAt: Date.now(),
+        steerMode: defaultSteerMode(),
     };
     getFollowupQueue(sid).push(item);
     persistFollowupQueue(sid);
@@ -1017,6 +1120,7 @@ function buildSelectedSkillsDisplayMessage(rawMessage, selectedSkills) {
 
 function enqueueCurrentInputAsFollowup() {
     if (!isMyAgentFeatureEnabled('followupRestart', false)) return false;
+    if (isChatFileUploadBusy()) return false;
     const sid = currentSessionId;
     if (!sid) return false;
     rewriteInputWorkspacePaths();
@@ -1095,6 +1199,7 @@ function withdrawFollowup(itemId) {
 }
 
 function returnFollowupToInput(sid, item) {
+    removePendingSteerFromProcess(sid, item);
     const returned = String(item.display || item.text || '');
     if (sid !== currentSessionId) {
         const backgroundDraft = Object.prototype.hasOwnProperty.call(draftBySession, sid)
@@ -1121,7 +1226,132 @@ function returnFollowupToInput(sid, item) {
     messageInput.focus();
 }
 
-async function sendSteerMessage(sessionId, text, clientId, selectedSkills, uiContent) {
+function findSteerProcessRow(ctx, operationId) {
+    var key = String(operationId || '');
+    if (!ctx || !key || typeof getProcessBody !== 'function') return null;
+    var body = getProcessBody(ctx);
+    if (!body || !body.querySelectorAll) return null;
+    var rows = body.querySelectorAll('.feed-item[data-steer-operation-id]');
+    for (var i = 0; i < rows.length; i += 1) {
+        if (String(rows[i].dataset.steerOperationId || '') === key
+            || String(rows[i].dataset.steerClientId || '') === key
+            || String(rows[i].dataset.steerId || '') === key) return rows[i];
+    }
+    return null;
+}
+
+function commitPendingSteerProcessRow(sessionId, item, serverItem) {
+    var sid = String(sessionId || '');
+    if (!sid || !item) return null;
+    var run = getSessionRunState(sid);
+    var ctx = run && run.ctx;
+    var row = item.pendingProcessRow && item.pendingProcessRow.isConnected
+        ? item.pendingProcessRow
+        : findSteerProcessRow(ctx, item.clientId || item.steerId || '');
+    var content = String((serverItem && (serverItem.ui_content || serverItem.content)) || item.display || item.text || '');
+    if (!row && ctx) {
+        row = appendSteerProcessMessage(
+            sid, ctx, content, item.clientId || item.steerId || '',
+            item.steerMode || (serverItem && serverItem.mode) || 'interrupt', false
+        );
+    }
+    if (!row) return null;
+    var scroller = row.querySelector('.feed-chunk-scroller');
+    if (scroller && content.trim()) scroller.textContent = truncateLogTextForUi(content);
+    row.dataset.steerCommitted = '1';
+    row.removeAttribute('data-steer-pending');
+    if (item.clientId) row.dataset.steerClientId = String(item.clientId);
+    if (item.steerId) row.dataset.steerId = String(item.steerId);
+    item.pendingProcessRow = row;
+    return row;
+}
+
+function appendSteerProcessMessage(sessionId, ctx, content, operationId, steerMode, pending) {
+    var sid = String(sessionId || '');
+    var key = String(operationId || '');
+    if (!sid || !ctx || !key) return null;
+    var existing = findSteerProcessRow(ctx, key);
+    if (existing) {
+        if (!pending) {
+            var existingScroller = existing.querySelector('.feed-chunk-scroller');
+            if (existingScroller && String(content || '').trim()) {
+                existingScroller.textContent = truncateLogTextForUi(String(content || ''));
+            }
+            existing.dataset.steerCommitted = '1';
+            existing.removeAttribute('data-steer-pending');
+        }
+        return existing;
+    }
+    var scroller = appendLog(ctx, String(content || ''), 'user-steer', sid);
+    var row = scroller && scroller.closest ? scroller.closest('.feed-item') : null;
+    if (!row) return null;
+    row.dataset.steerOperationId = key;
+    row.dataset.steerMode = steerMode === 'append' ? 'append' : 'interrupt';
+    if (pending) row.dataset.steerPending = '1';
+    else row.dataset.steerCommitted = '1';
+    return row;
+}
+
+function appendPendingSteerToProcess(sessionId, item) {
+    var sid = String(sessionId || '');
+    if (!sid || !item || item.steerMode !== 'append') return null;
+    var run = getSessionRunState(sid);
+    var ctx = run && run.ctx;
+    if (!ctx) return null;
+    var row = appendSteerProcessMessage(
+        sid,
+        ctx,
+        buildSelectedSkillsDisplayMessage(item.display || item.text || '', item.skills || []),
+        item.clientId || item.steerId || '',
+        'append',
+        true
+    );
+    if (row) {
+        if (item.clientId) row.dataset.steerClientId = String(item.clientId);
+        if (item.steerId) row.dataset.steerId = String(item.steerId);
+        item.pendingProcessRow = row;
+    }
+    return row;
+}
+
+function prepareSteerProcessBoundary(ctx, steerMode, operationId) {
+    if (!ctx || String(steerMode || 'interrupt') !== 'interrupt') return;
+    var key = String(operationId || '');
+    if (key && String(ctx.lastInterruptSteerOperationId || '') === key) return;
+    // An interrupt steer starts a new logical model round. Flush any confirmed
+    // old-run text, seal its process block, and prevent delayed delta flushes
+    // from attaching the replacement reasoning/response to that old block.
+    finalizeLlmStreamChunks(ctx);
+    finalizeProgressStreamChunks(ctx);
+    sealProcessGroup(ctx);
+    resetLlmState(ctx);
+    if (key) ctx.lastInterruptSteerOperationId = key;
+}
+
+function markSteerEventPosition(ctx, eventIndex, runtimeSeq) {
+    if (!ctx) return;
+    if (Number.isFinite(Number(eventIndex))) {
+        ctx.lastUserEventIndex = Math.max(
+            Number.isFinite(Number(ctx.lastUserEventIndex)) ? Number(ctx.lastUserEventIndex) : -1,
+            Math.floor(Number(eventIndex))
+        );
+    }
+    if (Number.isFinite(Number(runtimeSeq)) && Number(runtimeSeq) > 0) {
+        ctx.lastUserRuntimeSeq = Math.floor(Number(runtimeSeq));
+    }
+}
+
+function removePendingSteerFromProcess(sessionId, item) {
+    var sid = String(sessionId || '');
+    if (!sid || !item || item.steerMode !== 'append') return;
+    var run = getSessionRunState(sid);
+    var row = item.pendingProcessRow && item.pendingProcessRow.isConnected
+        ? item.pendingProcessRow
+        : findSteerProcessRow(run && run.ctx, item.clientId || item.steerId || '');
+    if (row && row.dataset.steerPending === '1' && row.dataset.steerCommitted !== '1') row.remove();
+}
+
+async function sendSteerMessage(sessionId, text, clientId, selectedSkills, uiContent, steerMode) {
     var activeRun = getSessionRunState(sessionId);
     var sourceRunId = activeRun && activeRun.runId ? String(activeRun.runId) : '';
     var r = await fetch('/sessions/' + encodeURIComponent(sessionId) + '/steer', {
@@ -1133,6 +1363,7 @@ async function sendSteerMessage(sessionId, text, clientId, selectedSkills, uiCon
             selected_skills: selectedSkills || [],
             ui_content: uiContent || text,
             source_run_id: sourceRunId,
+            mode: steerMode === 'append' ? 'append' : 'interrupt',
         }),
     });
     var j = await r.json().catch(function () {
@@ -1223,6 +1454,7 @@ async function syncFollowupQueueFromServer(sessionId) {
                         clientId: clientId,
                         steerId: steerId,
                         createdAt: Math.round(Number(serverItem.created_at || 0) * 1000) || Date.now(),
+                        steerMode: String(serverItem.mode || '') === 'append' ? 'append' : 'interrupt',
                     };
                     q.push(local);
                 }
@@ -1234,6 +1466,7 @@ async function syncFollowupQueueFromServer(sessionId) {
                     return;
                 }
                 if (state === 'consumed') {
+                    commitPendingSteerProcessRow(sid, local, serverItem);
                     var terminalIndex = q.indexOf(local);
                     if (terminalIndex >= 0) q.splice(terminalIndex, 1);
                     return;
@@ -1241,6 +1474,7 @@ async function syncFollowupQueueFromServer(sessionId) {
                 local.steerId = steerId || local.steerId;
                 local.clientId = clientId || local.clientId;
                 local.replacementRunId = String(serverItem.replacement_run_id || local.replacementRunId || '');
+                local.steerMode = String(serverItem.mode || local.steerMode || '') === 'append' ? 'append' : 'interrupt';
                 local.status = state === 'restarting' ? 'restarting' : 'accepted';
             });
             for (var i = q.length - 1; i >= 0; i -= 1) {
@@ -1271,60 +1505,7 @@ function removeConsumedFollowupSteer(sessionId, ev) {
     if (!item) return false;
     takeFollowupItem(sid, item.id);
     renderFollowupQueue(sid);
-    scheduleFollowupQueueDrain(sid, 0);
     return true;
-}
-
-function scheduleFollowupQueueDrain(sessionId, delayMs) {
-    var sid = String(sessionId || '');
-    if (!sid) return;
-    var delay = Math.max(0, Number(delayMs) || 0);
-    var dueAt = Date.now() + delay;
-    var existing = followupDrainTimers[sid];
-    if (existing && existing.dueAt <= dueAt) return;
-    if (existing && existing.timer) clearTimeout(existing.timer);
-    var timer = setTimeout(function () {
-        var current = followupDrainTimers[sid];
-        if (!current || current.timer !== timer) return;
-        delete followupDrainTimers[sid];
-        drainFollowupQueue(sid);
-    }, delay);
-    followupDrainTimers[sid] = { timer: timer, dueAt: dueAt };
-}
-
-function drainFollowupQueue(sessionId) {
-    var sid = String(sessionId || '');
-    if (!sid || followupQueueDraining[sid]) return;
-    var q = getFollowupQueue(sid);
-    if (!q.length) {
-        renderFollowupQueue(sid);
-        return;
-    }
-    var item = q[0];
-    if (!item || item.status) {
-        renderFollowupQueue(sid);
-        return;
-    }
-    // Automatic draining is armed by run-finalization paths, never by enqueue.
-    // Still fence it against both local and server-observed activity: the local
-    // fetch lock can be absent while reconnecting to a run owned by the server.
-    // "Send now" calls sendFollowupNow() directly and intentionally bypasses
-    // this idle-only gate.
-    if (isSendPipelineLocked(sid) || isSessionRunning(sid) || isServerStreamActive(sid)) {
-        scheduleFollowupQueueDrain(sid, 120);
-        return;
-    }
-    followupQueueDraining[sid] = true;
-    var attemptedId = String(item.id);
-    Promise.resolve(sendFollowupNow(item.id, sid))
-        .finally(function () {
-            delete followupQueueDraining[sid];
-            var q2 = getFollowupQueue(sid);
-            var same = q2.find(function (entry) { return String(entry.id) === attemptedId; });
-            if (!same && q2.length && !q2[0].status) {
-                scheduleFollowupQueueDrain(sid, 0);
-            }
-        });
 }
 
 function scheduleAcceptedFollowupWatch(sid, itemId) {
@@ -1335,17 +1516,33 @@ function scheduleAcceptedFollowupWatch(sid, itemId) {
         var queued = getFollowupQueue(sid).find(function (entry) {
             return String(entry.id) === String(itemId);
         });
-        if (!queued || !['accepted', 'restarting'].includes(String(queued.status || ''))) return;
-        Promise.all([refreshFollowupRunState(sid), fetchSteerStatus(sid, queued)]).then(function (results) {
+        if (!queued || !['submitting', 'sending', 'accepted', 'restarting'].includes(String(queued.status || ''))) return;
+        // Recovery can start a replacement /chat, so it participates in the
+        // same per-session dispatcher as manual and automatic sends.
+        void withFollowupDispatch(sid, async function () {
+            await refreshFollowupRunState(sid);
             var latest = getFollowupQueue(sid).find(function (entry) {
                 return String(entry.id) === String(itemId);
             });
             if (!latest) return;
-            var serverItem = results && results[1];
+            var serverItem = latest.steerId ? await fetchSteerStatus(sid, latest) : null;
+            // A request may have reached the server immediately before refresh,
+            // leaving only client_id locally. Reconcile first, then resolve the
+            // authoritative steer state without creating another operation.
+            if (!serverItem && latest.clientId) {
+                await syncFollowupQueueFromServer(sid);
+                latest = getFollowupQueue(sid).find(function (entry) {
+                    return String(entry.id) === String(itemId);
+                });
+                if (!latest) return;
+                if (latest.steerId) serverItem = await fetchSteerStatus(sid, latest);
+            }
             var serverState = String(serverItem && serverItem.state || '');
             if (serverState === 'consumed') {
+                commitPendingSteerProcessRow(sid, latest, serverItem);
                 takeFollowupItem(sid, itemId);
                 renderFollowupQueue(sid);
+                refreshPendingFollowupQueue(sid);
                 return;
             }
             if (serverState === 'cancelled' || serverState === 'failed') {
@@ -1353,22 +1550,35 @@ function scheduleAcceptedFollowupWatch(sid, itemId) {
                 if (failed) returnFollowupToInput(sid, failed);
                 return;
             }
-            if ((serverState === 'queued' || serverState === 'interrupting' || serverState === 'claimed') && !isSessionRunning(sid) && !isServerStreamActive(sid)) {
-                recoverSteerForRestart(sid, latest).then(function (recovered) {
-                    if (recovered) {
-                        latest.status = 'restarting';
-                        latest.replacementRunId = String(recovered.replacement_run_id || '');
-                        persistFollowupQueue(sid);
-                    }
+            if (!serverItem && (latest.status === 'submitting' || latest.status === 'sending')) {
+                if (latest.steerInFlight || isSessionRunning(sid) || isServerStreamActive(sid) || isSendPipelineLocked(sid)) {
                     scheduleAcceptedFollowupWatch(sid, itemId);
-                });
+                    return;
+                }
+                // No local activity and no authoritative server operation: the
+                // previous attempt was orphaned. Restore a durable pending row.
+                latest.status = '';
+                persistFollowupQueue(sid);
+                renderFollowupQueue(sid);
+                refreshPendingFollowupQueue(sid);
+                return;
+            }
+            if ((serverState === 'queued' || serverState === 'interrupting' || serverState === 'claimed') && !isSessionRunning(sid) && !isServerStreamActive(sid)) {
+                var recovered = await recoverSteerForRestart(sid, latest);
+                if (recovered) {
+                    latest.status = 'restarting';
+                    latest.replacementRunId = String(recovered.replacement_run_id || '');
+                    persistFollowupQueue(sid);
+                    renderFollowupQueue(sid);
+                }
+                scheduleAcceptedFollowupWatch(sid, itemId);
                 return;
             }
             if (serverState === 'restarting' && !isSessionRunning(sid) && !isServerStreamActive(sid) && !latest.restartRecoveryAttempted) {
                 latest.restartRecoveryAttempted = true;
                 latest.replacementRunId = String(serverItem && serverItem.replacement_run_id || latest.replacementRunId || '');
                 persistFollowupQueue(sid);
-                sendMessage({
+                var restarted = await startFollowupChat({
                     message: latest.text,
                     displayMessage: latest.display || latest.text,
                     selectedSkills: latest.skills || [],
@@ -1378,10 +1588,18 @@ function scheduleAcceptedFollowupWatch(sid, itemId) {
                     preserveInput: true,
                     asSteer: true,
                     steerId: latest.steerId,
+                    steerClientId: latest.clientId,
+                    steerMode: latest.steerMode,
                     clientRunId: latest.replacementRunId,
-                }).finally(function () {
-                    scheduleAcceptedFollowupWatch(sid, itemId);
                 });
+                if (restarted) {
+                    takeFollowupItem(sid, itemId);
+                    renderFollowupQueue(sid);
+                } else {
+                    latest.restartRecoveryAttempted = false;
+                    persistFollowupQueue(sid);
+                    scheduleAcceptedFollowupWatch(sid, itemId);
+                }
                 return;
             }
             if (isSessionRunning(sid) || isServerStreamActive(sid)) {
@@ -1395,7 +1613,41 @@ function scheduleAcceptedFollowupWatch(sid, itemId) {
     }, 1200);
 }
 
-async function sendFollowupNow(itemId, sessionId) {
+// Resolve as soon as /chat has been accepted and its SSE stream is ready. The
+// long-running sendMessage promise continues consuming the stream in the
+// background, while the dispatcher is released for genuine in-run steers.
+function startFollowupChat(options) {
+    return new Promise(function (resolve) {
+        var settled = false;
+        var finish = function (started) {
+            if (settled) return;
+            settled = true;
+            resolve(!!started);
+        };
+        var opts = Object.assign({}, options || {});
+        var priorStarted = opts.onRunStarted;
+        opts.onRunStarted = function (info) {
+            if (typeof priorStarted === 'function') {
+                try { priorStarted(info); } catch (e) { /* callback is observational */ }
+            }
+            finish(true);
+        };
+        var completion;
+        try {
+            completion = Promise.resolve(sendMessage(opts));
+        } catch (e) {
+            finish(false);
+            return;
+        }
+        completion.then(function (result) {
+            finish(result === true);
+        }, function () {
+            finish(false);
+        });
+    });
+}
+
+async function sendFollowupNowImpl(itemId, sessionId) {
     const followupTimingStartedAt = nowPipelineMs();
     const followupTimingCtx = {
         label: 'client_followup_step_timing',
@@ -1413,6 +1665,8 @@ async function sendFollowupNow(itemId, sessionId) {
     if (idx < 0) return;
     const item = q[idx];
     if (!item) return;
+    item.steerMode = item.steerMode === 'append' ? 'append' : 'interrupt';
+    followupTimingCtx.mode = 'followup_' + item.steerMode;
     if (idx !== 0) {
         var moved = q.splice(idx, 1)[0];
         q.unshift(moved);
@@ -1420,7 +1674,7 @@ async function sendFollowupNow(itemId, sessionId) {
         renderFollowupQueue(sid);
         idx = 0;
     }
-    if (item.status === 'submitting' || item.status === 'accepted' || item.status === 'sent' || item.status === 'withdrawing') {
+    if (['submitting', 'sending', 'accepted', 'restarting', 'sent', 'withdrawing'].includes(String(item.status || ''))) {
         return;
     }
     item.clientId = item.clientId || ('followup-' + item.id + '-' + Date.now());
@@ -1434,9 +1688,19 @@ async function sendFollowupNow(itemId, sessionId) {
     try {
         _followupStepStart = nowPipelineMs();
         item.steerInFlight = true;
-        var steerResult = await sendSteerMessage(sid, item.text, item.clientId, item.skills || [], item.display || item.text);
+        var steerResult = await sendSteerMessage(
+            sid,
+            item.text,
+            item.clientId,
+            item.skills || [],
+            item.display || item.text,
+            item.steerMode
+        );
         item.steerInFlight = false;
         item.steerId = steerResult && steerResult.item && steerResult.item.id ? String(steerResult.item.id) : '';
+        if (steerResult && steerResult.item && steerResult.item.mode) {
+            item.steerMode = String(steerResult.item.mode) === 'append' ? 'append' : 'interrupt';
+        }
         reportClientPipelineStep(followupTimingCtx, 'followup_send_steer', _followupStepStart, {
             restart: !!(steerResult && steerResult.restart),
             steerId: item.steerId || ''
@@ -1454,7 +1718,10 @@ async function sendFollowupNow(itemId, sessionId) {
             var previousRun = getSessionRunState(sid);
             if (previousRun) abortSessionRun(sid, 'followup-restart');
             markSessionRunInactive(sid);
-            item.status = 'sent';
+            // The server has created a durable replacement operation, but the
+            // replacement /chat has not started yet. Keep it persisted and
+            // watcher-visible until the new stream is actually accepted.
+            item.status = 'restarting';
             item.replacementRunId = String(steerResult.replacement_run_id || '');
             persistFollowupQueue(sid);
             renderFollowupQueue(sid);
@@ -1463,7 +1730,13 @@ async function sendFollowupNow(itemId, sessionId) {
             reportClientPipelineStep(followupTimingCtx, 'followup_restart_takeover', _followupStepStart, {
                 hadPreviousRun: !!previousRun
             });
-            var restartPromise = sendMessage({
+            var restartLockReady = await waitForSendPipelineIdle(sid, 4000);
+            if (!restartLockReady || isSendPipelineLocked(sid)) {
+                appendLogVisible('追问接管已保留，等待发送通道释放。', 'error-log');
+                scheduleAcceptedFollowupWatch(sid, itemId);
+                return;
+            }
+            var restartStarted = await startFollowupChat({
                 message: item.text,
                 displayMessage: item.display || item.text,
                 selectedSkills: item.skills || [],
@@ -1473,17 +1746,27 @@ async function sendFollowupNow(itemId, sessionId) {
                 preserveInput: true,
                 asSteer: true,
                 steerId: item.steerId,
+                steerClientId: item.clientId,
+                steerMode: item.steerMode,
                 clientRunId: String(steerResult.replacement_run_id || ''),
             });
-            setTimeout(function () {
+            if (restartStarted) {
                 takeFollowupItem(sid, itemId);
                 renderFollowupQueue(sid);
-            }, 1200);
-            return restartPromise;
+            } else {
+                item.restartRecoveryAttempted = false;
+                persistFollowupQueue(sid);
+                renderFollowupQueue(sid);
+                scheduleAcceptedFollowupWatch(sid, itemId);
+            }
+            return;
         }
         item.status = 'accepted';
         persistFollowupQueue(sid);
         renderFollowupQueue(sid);
+        if (item.steerMode === 'append') {
+            appendPendingSteerToProcess(sid, item);
+        }
         reportClientPipelineStep(followupTimingCtx, 'followup_accepted_by_running_agent', followupTimingStartedAt, {
             steerId: item.steerId || ''
         });
@@ -1506,12 +1789,25 @@ async function sendFollowupNow(itemId, sessionId) {
             if (isSessionRunning(sid) || isServerStreamActive(sid)) {
                 try {
                     item.steerInFlight = true;
-                    var retrySteerResult = await sendSteerMessage(sid, item.text, item.clientId, item.skills || [], item.display || item.text);
+                    var retrySteerResult = await sendSteerMessage(
+                        sid,
+                        item.text,
+                        item.clientId,
+                        item.skills || [],
+                        item.display || item.text,
+                        item.steerMode
+                    );
                     item.steerInFlight = false;
                     item.steerId = retrySteerResult && retrySteerResult.item && retrySteerResult.item.id ? String(retrySteerResult.item.id) : '';
+                    if (retrySteerResult && retrySteerResult.item && retrySteerResult.item.mode) {
+                        item.steerMode = String(retrySteerResult.item.mode) === 'append' ? 'append' : 'interrupt';
+                    }
                     item.status = 'accepted';
                     persistFollowupQueue(sid);
                     renderFollowupQueue(sid);
+                    if (item.steerMode === 'append') {
+                        appendPendingSteerToProcess(sid, item);
+                    }
                     reportClientPipelineStep(followupTimingCtx, 'followup_steer_retry_after_sync', _followupStepStart, {
                         steerId: item.steerId || ''
                     });
@@ -1550,19 +1846,56 @@ async function sendFollowupNow(itemId, sessionId) {
     }
     markSessionRunInactive(sid);
     if (typeof sessionStore !== 'undefined') sessionStore.setStreamActive(sid, false);
-    item.status = 'sent';
+    // 降级 /chat 前必须等待发送锁释放，否则 sendMessage 会因锁未释放而静默返回，
+    // 随后定时器无条件删除条目 → 表现为「点了立即发送却没反应」「发送后内容被删」。
+    var lockAcquired = await waitForSendPipelineIdle(sid, 4000);
+    if (!lockAcquired || isSendPipelineLocked(sid)) {
+        // 锁迟迟未释放：恢复为 pending，交由后续 drain 或手动重试，绝不删除。
+        item.status = '';
+        item.steerInFlight = false;
+        persistFollowupQueue(sid);
+        renderFollowupQueue(sid);
+        appendLogVisible('追问暂未发出（发送通道繁忙），已保留待重试: ' + msg, 'error-log');
+        refreshPendingFollowupQueue(sid);
+        return;
+    }
+    item.status = 'sending';
     persistFollowupQueue(sid);
     renderFollowupQueue(sid);
     reportClientPipelineStep(followupTimingCtx, 'followup_fallback_to_chat', followupTimingStartedAt);
-    setTimeout(function () {
+    var chatStarted = await startFollowupChat({
+        message: item.text,
+        displayMessage: item.display || item.text,
+        selectedSkills: item.skills || [],
+        fromQueue: true,
+        sessionId: sid,
+        forceStart: true,
+    });
+    if (chatStarted) {
+        // /chat 已成功开跑，追问作为普通用户轮次发出，删除队列项。
         takeFollowupItem(sid, itemId);
         renderFollowupQueue(sid);
-    }, 1200);
-    return sendMessage({ message: item.text, displayMessage: item.display || item.text, selectedSkills: item.skills || [], fromQueue: true, sessionId: sid, forceStart: true });
+    } else {
+        // /chat 未真正开跑：恢复为 pending，保留条目，交由 drain 重试。
+        item.status = '';
+        item.steerInFlight = false;
+        persistFollowupQueue(sid);
+        renderFollowupQueue(sid);
+        appendLogVisible('追问降级发送未成功，已保留待重试: ' + msg, 'error-log');
+        refreshPendingFollowupQueue(sid);
+    }
+    return;
+}
+
+/* 会话级互斥：所有显式立即发送共用同一 dispatcher 链，防止并发 steer 竞争。 */
+async function sendFollowupNow(itemId, sessionId) {
+    const sid = String(sessionId || currentSessionId || '');
+    return withFollowupDispatch(sid, function () { return sendFollowupNowImpl(itemId, sessionId); });
 }
 
 async function sendMessage(options) {
     options = options || {};
+    if (!options.fromQueue && !options.fromInlineRewrite && isChatFileUploadBusy()) return;
     const clientPipelineStartedAt = nowPipelineMs();
     let clientTimingCtx = {
         label: 'client_send_pipeline_step_timing',
@@ -1726,18 +2059,33 @@ async function sendMessage(options) {
     reportClientPipelineStep(clientTimingCtx, 'prepare_run_context', _clientStepStart, { switchedAway: !!switchedAway });
     _clientStepStart = nowPipelineMs();
     const renderAsSteer = !!options.asSteer;
-    applySessionEvent({ type: renderAsSteer ? 'user_steer' : 'user', content: displayMessage, created_at: userSentAt, steer: renderAsSteer }, {
-        sessionId: runSessionId,
-        eventIndex: preCount,
-        source: 'local-send',
-    });
+    if (!renderAsSteer) {
+        applySessionEvent({ type: 'user', content: displayMessage, created_at: userSentAt }, {
+            sessionId: runSessionId,
+            eventIndex: preCount,
+            source: 'local-send',
+        });
+    }
     uiEventCountCache.updateFromServer(runSessionId, preCount + 1);
     if (!switchedAway) {
         liveAutoFollow = true;
         streamChatNearBottom = true;
         streamProcNearBottom = true;
         if (renderAsSteer) {
-            appendLog(runCtx, displayMessage, 'user-steer', runSessionId);
+            var optimisticSteerClientId = String(options.steerClientId || '');
+            var optimisticSteerId = String(options.steerId || '');
+            var optimisticSteerOpId = optimisticSteerClientId || optimisticSteerId || clientRunId;
+            var optimisticSteerMode = String(options.steerMode || 'interrupt') === 'append' ? 'append' : 'interrupt';
+            prepareSteerProcessBoundary(runCtx, optimisticSteerMode, optimisticSteerOpId);
+            var optimisticSteerRow = appendSteerProcessMessage(
+                runSessionId, runCtx, displayMessage, optimisticSteerOpId,
+                optimisticSteerMode, true
+            );
+            if (optimisticSteerRow) {
+                optimisticSteerRow.dataset.steerEventReserved = '1';
+                if (optimisticSteerClientId) optimisticSteerRow.dataset.steerClientId = optimisticSteerClientId;
+                if (optimisticSteerId) optimisticSteerRow.dataset.steerId = optimisticSteerId;
+            }
         } else {
             appendMessage(runCtx, 'user', displayMessage, { eventIndex: preCount, turnTruncateIdx: preCount, createdAt: userSentAt }, runSessionId);
         }
@@ -1812,6 +2160,17 @@ async function sendMessage(options) {
             scheduleActiveSessionReconnect(runSessionId, { delayMs: 0 });
             return false;
         }
+        var responseContentType = String(response.headers && response.headers.get
+            ? (response.headers.get('content-type') || '')
+            : '').toLowerCase();
+        if (response.ok && responseContentType.indexOf('text/event-stream') >= 0
+            && typeof options.onRunStarted === 'function') {
+            try {
+                options.onRunStarted({ sessionId: runSessionId, runId: clientRunId });
+            } catch (onStartedError) {
+                console.error('run start callback failed:', onStartedError);
+            }
+        }
         streamEventIdx = await consumeAgentSseResponse(response, runCtx, runSessionId, streamEventIdx);
         reportClientPipelineStep(clientTimingCtx, 'consume_sse_until_done', _clientStepStart, { streamEventIdx: streamEventIdx });
         return true;
@@ -1884,7 +2243,7 @@ async function sendMessage(options) {
         setSendButtonState();
         syncSessionListIndicatorClasses();
         if (!stoppedByUser && getFollowupQueue(submittedRunSessionId).length) {
-            scheduleFollowupQueueDrain(submittedRunSessionId, 0);
+            renderFollowupQueue(submittedRunSessionId);
         }
     }
 }
@@ -1903,6 +2262,10 @@ messageInput.addEventListener('keydown', function onFollowupInputKeydown(e) {
         return;
     }
     if (e.shiftKey) return;
+    if (isChatFileUploadBusy()) {
+        e.preventDefault();
+        return;
+    }
     e.preventDefault();
     if (isSessionRunning(currentSessionId)) {
         enqueueCurrentInputAsFollowup();
@@ -1925,6 +2288,10 @@ messageInput.addEventListener('keydown', function onInputKeydown(e) {
     }
     // Shift+Enter → 浏览器默认插入换行
     if (e.shiftKey) return;
+    if (isChatFileUploadBusy()) {
+        e.preventDefault();
+        return;
+    }
     // 纯 Enter → 发送
     if (isSessionRunning(currentSessionId)) return;
     e.preventDefault();
@@ -1945,6 +2312,7 @@ sendBtn.addEventListener('click', function (e) {
         const activeRun = getSessionRunState(currentSessionId);
         const canQueueFollowup = isMyAgentFeatureEnabled('followupRestart', false)
             && inputHasSendableText()
+            && !isChatFileUploadBusy()
             && !(activeRun && activeRun.suppressFollowupButton);
         if (canQueueFollowup) enqueueCurrentInputAsFollowup();
         else pauseCurrentRun();

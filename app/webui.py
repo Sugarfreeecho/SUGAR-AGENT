@@ -84,6 +84,9 @@ _SSE_HEADERS = {
     "X-Accel-Buffering": "no",
 }
 _CHAT_SSE_KEEPALIVE_SEC = max(5.0, float(os.getenv("CHAT_SSE_KEEPALIVE_SEC", "15")))
+CHAT_UPLOAD_MAX_FILE_BYTES = 100 * 1024 * 1024
+CHAT_UPLOAD_MAX_TOTAL_BYTES = 200 * 1024 * 1024
+_CHAT_UPLOAD_MULTIPART_OVERHEAD_BYTES = 4 * 1024 * 1024
 
 fastapi_app = FastAPI()
 
@@ -1110,6 +1113,9 @@ def get_index_html():
     sessions_dir = str((WORK_DIR / "sessions").resolve())
     app_dotenv = str(dotenv_file_path().resolve())
     ctx_thr = _ui_ah.CONTEXT_WINDOW
+    default_steer_mode = str(os.getenv("MYAGENT_STEER_MODE", "append") or "append").strip().lower()
+    if default_steer_mode not in {"interrupt", "append"}:
+        default_steer_mode = "append"
     feature_flags = {
         "goal": os.getenv("GOAL_ENABLED", "1").strip().lower() not in {"0", "false", "no", "off"},
         "followupRestart": os.getenv("MYAGENT_ENABLE_FOLLOWUP_RESTART", "1").strip().lower() in {"1", "true", "yes", "on"},
@@ -1123,6 +1129,7 @@ def get_index_html():
         f"window.__WORK_DIR__={json.dumps(work_dir)};"
         f"window.__SESSIONS_DIR__={json.dumps(sessions_dir)};"
         f"window.__APP_DOTENV_PATH__={json.dumps(app_dotenv)};"
+        f"window.__MYAGENT_STEER_MODE__={json.dumps(default_steer_mode)};"
         f"window.__MYAGENT_FEATURES__={json.dumps(feature_flags)};"
         "</script>"
     )
@@ -1387,6 +1394,10 @@ def _dedupe_upload_path(dest: Path) -> Path:
     raise RuntimeError("too many duplicate upload filenames")
 
 
+class _ChatUploadLimitError(Exception):
+    pass
+
+
 _WORKSPACE_FILE_SKIP_DIRS = {
     ".git",
     ".hg",
@@ -1549,10 +1560,28 @@ async def list_registered_skills():
 async def upload_chat_files(files: list[UploadFile] = File(...)):
     if not files:
         return JSONResponse({"ok": False, "error": "no files"}, status_code=400)
+    declared_total = 0
+    for uf in files:
+        declared_size = getattr(uf, "size", None)
+        if not isinstance(declared_size, int) or declared_size < 0:
+            continue
+        if declared_size > CHAT_UPLOAD_MAX_FILE_BYTES:
+            return JSONResponse(
+                {"ok": False, "error": f"文件“{_safe_upload_filename(uf.filename or '')}”超过 100 MB 限制。"},
+                status_code=413,
+            )
+        declared_total += declared_size
+    if declared_total > CHAT_UPLOAD_MAX_TOTAL_BYTES:
+        return JSONResponse(
+            {"ok": False, "error": "本次上传总大小超过 200 MB 限制。"},
+            status_code=413,
+        )
     import datetime
     upload_root = (WORK_DIR / "uploads" / "chat" / datetime.datetime.now().strftime("%Y%m%d")).resolve()
     upload_root.mkdir(parents=True, exist_ok=True)
     saved = []
+    created_paths: list[Path] = []
+    actual_total = 0
     try:
         for uf in files:
             filename = _safe_upload_filename(uf.filename or "")
@@ -1561,11 +1590,19 @@ async def upload_chat_files(files: list[UploadFile] = File(...)):
                 dest.relative_to(upload_root)
             except ValueError:
                 return JSONResponse({"ok": False, "error": "invalid filename"}, status_code=400)
+            created_paths.append(dest)
+            actual_file_size = 0
             with dest.open("wb") as out:
                 while True:
                     chunk = await uf.read(1024 * 1024)
                     if not chunk:
                         break
+                    actual_file_size += len(chunk)
+                    actual_total += len(chunk)
+                    if actual_file_size > CHAT_UPLOAD_MAX_FILE_BYTES:
+                        raise _ChatUploadLimitError(f"文件“{filename}”超过 100 MB 限制。")
+                    if actual_total > CHAT_UPLOAD_MAX_TOTAL_BYTES:
+                        raise _ChatUploadLimitError("本次上传总大小超过 200 MB 限制。")
                     out.write(chunk)
             saved.append({
                 "name": filename,
@@ -1573,6 +1610,14 @@ async def upload_chat_files(files: list[UploadFile] = File(...)):
                 "rel": str(dest.relative_to(WORK_DIR.resolve())).replace("\\", "/"),
                 "size": dest.stat().st_size,
             })
+    except _ChatUploadLimitError as exc:
+        for path in created_paths:
+            path.unlink(missing_ok=True)
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=413)
+    except Exception:
+        for path in created_paths:
+            path.unlink(missing_ok=True)
+        raise
     finally:
         for uf in files:
             try:
@@ -2538,10 +2583,16 @@ async def post_session_steer(session_id: str, request: Request):
     selected_skills = (data or {}).get("selected_skills") or []
     requested_ui_content = str((data or {}).get("ui_content") or "").strip()
     source_run_id = str((data or {}).get("source_run_id") or "").strip()
+    default_steer_mode = str(os.getenv("MYAGENT_STEER_MODE", "append") or "append").strip().lower()
+    if default_steer_mode not in {"interrupt", "append"}:
+        default_steer_mode = "append"
+    steer_mode = str((data or {}).get("mode") or default_steer_mode).strip().lower()
     if not message:
         return JSONResponse(content={"ok": False, "error": "empty steer"}, status_code=400)
     if not client_id:
         return JSONResponse(content={"ok": False, "error": "missing client_id"}, status_code=400)
+    if steer_mode not in {"interrupt", "append"}:
+        return JSONResponse(content={"ok": False, "error": "invalid steer mode"}, status_code=400)
     if not _is_session_stream_active(sid):
         existing = get_session_steer(sid, client_id=client_id) if client_id else {"ok": False}
         if existing.get("ok"):
@@ -2568,12 +2619,20 @@ async def post_session_steer(session_id: str, request: Request):
         client_id=client_id,
         ui_content=ui_message,
         source_run_id=source_run_id,
+        mode=steer_mode,
     )
     if not result.get("ok"):
         return JSONResponse(content=result, status_code=400)
+    item = result.get("item") if isinstance(result.get("item"), dict) else {}
+    if str(item.get("mode") or steer_mode) == "append":
+        # Append mode never aborts the active LLM/tool operation. The running
+        # ReAct loop claims it after the current round is durably complete and
+        # before constructing the next model request.
+        result["aborted"] = False
+        result["restart"] = False
+        return JSONResponse(content=result)
     result["aborted"] = abort_session_steer_run(sid, reason="steer")
     if result["aborted"]:
-        item = result.get("item") if isinstance(result.get("item"), dict) else {}
         transitioned = transition_session_steer(
             sid, str(item.get("id") or ""), {"queued"}, "interrupting"
         )
@@ -2581,7 +2640,6 @@ async def post_session_steer(session_id: str, request: Request):
             result["item"] = transitioned.get("item")
         result["restart"] = False
         return JSONResponse(content=result)
-    item = result.get("item") if isinstance(result.get("item"), dict) else {}
     if not followup_restart_enabled:
         return JSONResponse(content={"ok": False, "error": "session is not running"}, status_code=409)
     aborted = abort_session_steer_run(sid, reason="steer")
@@ -4389,12 +4447,19 @@ async def setup_page():
 
 _ENV_ADVANCED_PATH = _Path(__file__).resolve().parent / "templates" / "advance_config.html"
 _MCP_CONFIG_HTML_PATH = _Path(__file__).resolve().parent / "templates" / "mcp_config.html"
+_EXTENSIONS_CONFIG_HTML_PATH = _Path(__file__).resolve().parent / "templates" / "extensions_config.html"
 
 
 def _load_mcp_config_html() -> str:
     if _MCP_CONFIG_HTML_PATH.is_file():
         return _read_text_cached(_MCP_CONFIG_HTML_PATH, "")
     return "<!DOCTYPE html><html><body><p>缺少 templates/mcp_config.html</p><a href='/'>返回</a></body></html>"
+
+
+def _load_extensions_config_html() -> str:
+    if _EXTENSIONS_CONFIG_HTML_PATH.is_file():
+        return _read_text_cached(_EXTENSIONS_CONFIG_HTML_PATH, "")
+    return "<!DOCTYPE html><html><body><p>缺少 templates/extensions_config.html</p><a href='/'>返回</a></body></html>"
 
 
 _ENV_GROUP_ORDER: list[tuple[str, str, list[str]]] = [
@@ -4447,6 +4512,10 @@ _ENV_GROUP_ORDER: list[tuple[str, str, list[str]]] = [
         [
             "WORK_DIR",
             "SKILLS_DIR",
+            "PLUGINS_DIR",
+            "PLUGINS_DIRS",
+            "PLUGINS_STATE_PATH",
+            "HOOKS_PATH",
             "LOG_DIR",
             "NODE_HOME",
             "NVM_SYMLINK",
@@ -4464,6 +4533,8 @@ _ENV_GROUP_ORDER: list[tuple[str, str, list[str]]] = [
             "TODO_MAX_ITEMS",
             "MAX_PARALLEL_TOOLS",
             "GOAL_ENABLED",
+            "HOOKS_ENABLED",
+            "PLUGINS_ENABLED",
         ],
     ),
     (
@@ -4521,6 +4592,12 @@ for _gid, _title, _keys in _ENV_GROUP_ORDER:
 
 _ENV_HINTS: dict[str, str] = {
     "GOAL_ENABLED": "1（默认）启用持久 Goal、Goal 工具和自动续跑；0/false/no/off 禁用。修改后需重启 Agent。",
+    "HOOKS_ENABLED": "1（默认）启用生命周期 Hook；0/false/no/off 会跳过项目与插件 Hook。按次读取，保存后立即生效。",
+    "PLUGINS_ENABLED": "1（默认）启用插件发现与组件合并；0/false/no/off 会移除插件 Skill、MCP、Hook、Agent 与 Prompt。",
+    "HOOKS_PATH": "可选 hooks.json 路径；留空时使用 WORK_DIR/hooks.json。",
+    "PLUGINS_DIR": "单个插件发现目录；留空时使用项目 plugins 与 ~/.myagent/plugins。",
+    "PLUGINS_DIRS": "多个插件发现目录，使用系统 PATH 分隔符（Windows 为分号）；优先于 PLUGINS_DIR。",
+    "PLUGINS_STATE_PATH": "插件启用/禁用状态 JSON；采用原子替换写入。",
     "EXECUTOR_LLM": "执行器使用的模型名（须与所选服务商一致）。",
     "EXECUTOR_LLM_TYPE": "local = 本地 OpenAI 兼容（如 Ollama）；openai = 使用 OPENAI_* 远端 API。",
     "CONTEXT_WINDOW": "预估上下文 token 超过该门限时触发压缩摘要等策略。",
@@ -4737,6 +4814,58 @@ async def mcp_config_page():
     )
 
 
+@fastapi_app.get("/setup/extensions", response_class=_HTMLResponse)
+async def extensions_config_page():
+    return _HTMLResponse(
+        content=_load_extensions_config_html(),
+        headers={"Cache-Control": "no-store, max-age=0", "Pragma": "no-cache"},
+    )
+
+
+@fastapi_app.get("/api/extensions")
+async def get_extensions_snapshot():
+    try:
+        from agent_extensions import extensions_snapshot
+
+        data = await asyncio.to_thread(extensions_snapshot)
+        return JSONResponse(content=data)
+    except Exception as exc:
+        logger.exception("Extension snapshot failed")
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
+
+
+@fastapi_app.post("/api/plugins/{plugin_id}/enabled")
+async def set_plugin_enabled_api(plugin_id: str, request: Request):
+    try:
+        data = await request.json()
+    except Exception:
+        return JSONResponse({"ok": False, "error": "invalid json"}, status_code=400)
+    enabled = data.get("enabled") if isinstance(data, dict) else None
+    if not isinstance(enabled, bool):
+        return JSONResponse({"ok": False, "error": "enabled must be boolean"}, status_code=400)
+    try:
+        from agent_extensions import set_plugin_enabled
+
+        state = await asyncio.to_thread(set_plugin_enabled, plugin_id, enabled)
+        await agent_mcp.force_reload()
+        return JSONResponse({"ok": True, "plugin_id": plugin_id, "state": dict(state)})
+    except Exception as exc:
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+
+
+@fastapi_app.post("/api/extensions/reload")
+async def reload_extensions_api():
+    try:
+        from agent_extensions import reload_extensions
+
+        result = await asyncio.to_thread(reload_extensions)
+        await agent_mcp.force_reload()
+        return JSONResponse({"ok": True, **result.to_dict()})
+    except Exception as exc:
+        logger.exception("Extension reload failed")
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
+
+
 @fastapi_app.get("/api/mcp_config")
 async def get_mcp_config_snapshot():
     path = agent_mcp.get_config_path()
@@ -4834,6 +4963,25 @@ async def save_env_snapshot(req: _Request):
     env_path.parent.mkdir(parents=True, exist_ok=True)
     env_path.write_text(merged, encoding="utf-8")
     refresh_executor_client_from_env()
+    extension_keys = {
+        "HOOKS_ENABLED",
+        "HOOKS_PATH",
+        "PLUGINS_ENABLED",
+        "PLUGINS_DIR",
+        "PLUGINS_DIRS",
+        "PLUGINS_STATE_PATH",
+        "MCP_ENABLED",
+    }
+    if extension_keys.intersection(normalized):
+        try:
+            from agent_extensions import invalidate_extension_caches
+            from agent_tools import invalidate_skills_cache
+
+            invalidate_extension_caches()
+            invalidate_skills_cache()
+            await agent_mcp.force_reload()
+        except Exception:
+            logger.exception("Failed to refresh extension registries after env update")
     return JSONResponse({"ok": True, "restart_required": work_dir_changed})
 
 
@@ -4928,19 +5076,32 @@ from fastapi.responses import RedirectResponse as _RedirectResponse
 @fastapi_app.middleware("http")
 async def _config_check(req: _Request, call_next):
     p = req.url.path
+    if p == "/api/upload-chat-files":
+        try:
+            content_length = int(req.headers.get("content-length") or 0)
+        except (TypeError, ValueError):
+            content_length = 0
+        request_limit = CHAT_UPLOAD_MAX_TOTAL_BYTES + _CHAT_UPLOAD_MULTIPART_OVERHEAD_BYTES
+        if content_length > request_limit:
+            return JSONResponse(
+                {"ok": False, "error": "本次上传总大小超过 200 MB 限制。"},
+                status_code=413,
+            )
     if p in (
         "/setup",
         "/setup/env",
         "/setup/mcp",
+        "/setup/extensions",
         "/api/save_config",
         "/api/env",
         "/api/mcp_config",
+        "/api/extensions",
         "/api/model_profiles",
         "/api/model_profiles/discover",
         "/api/pick-path",
         "/api/upload-chat-files",
         "/api/workspace-files",
-    ) or p.startswith("/static/") or p.startswith("/assets/") or p.startswith("/api/model_profiles/"):
+    ) or p.startswith("/static/") or p.startswith("/assets/") or p.startswith("/api/model_profiles/") or p.startswith("/api/plugins/"):
         return await call_next(req)
     if not _is_configured():
         return _RedirectResponse(url="/setup")

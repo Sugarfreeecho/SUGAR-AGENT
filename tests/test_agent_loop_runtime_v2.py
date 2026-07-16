@@ -100,6 +100,93 @@ def test_steer_state_machine_claim_ack_and_cancel_fencing(monkeypatch, tmp_path)
     assert duplicate["item"]["state"] == "consumed"
 
 
+def test_append_steer_waits_for_safe_boundary_without_requesting_interrupt(monkeypatch, tmp_path):
+    import agent_loop
+
+    class _SessionManager:
+        sessions_dir = tmp_path
+
+    monkeypatch.setattr(agent_loop, "session_manager", _SessionManager())
+    agent_loop._STEER_QUEUES.clear()
+    agent_loop._STEER_QUEUE_SIGNATURES.clear()
+
+    appended = agent_loop.enqueue_session_steer(
+        "s-modes", "append later", client_id="append-client", mode="append"
+    )["item"]
+    state = {"session_id": "s-modes"}
+    assert appended["mode"] == "append"
+    assert agent_loop._steer_requested(state) is False
+    assert agent_loop._claim_session_steers("s-modes", "run-1", modes={"interrupt"}) == []
+
+    interrupt = agent_loop.enqueue_session_steer(
+        "s-modes", "interrupt now", client_id="interrupt-client", mode="interrupt"
+    )["item"]
+    assert agent_loop._steer_requested(state) is True
+    append_claim = agent_loop._claim_session_steers("s-modes", "run-1", modes={"append"})
+    assert [item["id"] for item in append_claim] == [appended["id"]]
+    assert agent_loop.get_session_steer("s-modes", steer_id=interrupt["id"])["item"]["state"] == "queued"
+
+
+def test_new_steer_defaults_to_append_and_honors_environment_override(monkeypatch, tmp_path):
+    import agent_loop
+
+    class _SessionManager:
+        sessions_dir = tmp_path
+
+    monkeypatch.setattr(agent_loop, "session_manager", _SessionManager())
+    agent_loop._STEER_QUEUES.clear()
+    agent_loop._STEER_QUEUE_SIGNATURES.clear()
+    monkeypatch.delenv("MYAGENT_STEER_MODE", raising=False)
+    default_item = agent_loop.enqueue_session_steer(
+        "s-default-mode", "default", client_id="default-mode"
+    )["item"]
+    monkeypatch.setenv("MYAGENT_STEER_MODE", "interrupt")
+    interrupt_item = agent_loop.enqueue_session_steer(
+        "s-default-mode", "override", client_id="override-mode"
+    )["item"]
+
+    assert default_item["mode"] == "append"
+    assert interrupt_item["mode"] == "interrupt"
+
+
+def test_append_steer_commit_emits_mode_at_safe_boundary(monkeypatch, tmp_path):
+    import agent_loop
+
+    class _SessionManager:
+        sessions_dir = tmp_path
+
+    monkeypatch.setattr(agent_loop, "session_manager", _SessionManager())
+    monkeypatch.setattr(agent_loop, "_runtime_v2_commit_user_turn", lambda *args, **kwargs: False)
+    monkeypatch.setattr(agent_loop, "_persist_state_with_model_append", lambda *args, **kwargs: None)
+    agent_loop._STEER_QUEUES.clear()
+    agent_loop._STEER_QUEUE_SIGNATURES.clear()
+    item = agent_loop.enqueue_session_steer(
+        "s-append", "new constraint", client_id="append-op", mode="append"
+    )["item"]
+    emitted = []
+
+    async def emit(event):
+        emitted.append(event)
+
+    state = {
+        "session_id": "s-append",
+        "_runtime_v2_run_id": "run-append",
+        "work_messages": [],
+        "llm_history": [],
+        "dialogue": [],
+        "stream_events": [],
+    }
+    consumed = asyncio.run(agent_loop._consume_steer_messages(
+        state, emit=emit, modes={"append"}
+    ))
+
+    assert consumed is True
+    assert state["llm_history"][-1].content == "new constraint"
+    assert emitted[-1]["type"] == "user_steer"
+    assert emitted[-1]["steer_mode"] == "append"
+    assert agent_loop.get_session_steer("s-append", steer_id=item["id"])["item"]["state"] == "consumed"
+
+
 def test_replacement_run_fences_late_old_run_events():
     import agent_loop
 
@@ -152,7 +239,7 @@ def test_twenty_consecutive_steers_replan_without_recursive_react(monkeypatch):
         state["done"] = True
         return state
 
-    async def consume(state, emit=None):
+    async def consume(state, emit=None, **_kwargs):
         return True
 
     monkeypatch.setattr(agent_loop, "_react_node_once", run_once)
@@ -168,7 +255,7 @@ def test_twenty_consecutive_steers_replan_without_recursive_react(monkeypatch):
 
 def test_crash_after_user_turn_commit_replay_is_idempotent(monkeypatch, tmp_path):
     import agent_loop
-    from runtime_v2 import RuntimeModelProjection
+    from runtime_v2 import RuntimeModelProjection, RuntimeUiProjection
 
     class _SessionManager:
         sessions_dir = tmp_path
@@ -182,18 +269,33 @@ def test_crash_after_user_turn_commit_replay_is_idempotent(monkeypatch, tmp_path
     message = agent_loop.UserMessage(content="durable followup")
 
     assert agent_loop._runtime_v2_commit_user_turn(
-        state, message, ui_content="durable followup", ui_type="user_steer", operation_id="steer-op"
+        state,
+        message,
+        ui_content="durable followup",
+        ui_type="user_steer",
+        operation_id="steer-op",
+        ui_metadata={"client_id": "client-op", "steer_mode": "append"},
     ) is True
     assert state["_last_user_turn_was_deduplicated"] is False
 
     # Simulate process loss after the atomic commit but before inbox ack.
     replay_state = {"session_id": "s-crash", "_runtime_v2_run_id": "run-2"}
     assert agent_loop._runtime_v2_commit_user_turn(
-        replay_state, message, ui_content="durable followup", ui_type="user_steer", operation_id="steer-op"
+        replay_state,
+        message,
+        ui_content="durable followup",
+        ui_type="user_steer",
+        operation_id="steer-op",
+        ui_metadata={"client_id": "client-op", "steer_mode": "append"},
     ) is True
     assert replay_state["_last_user_turn_was_deduplicated"] is True
     projected = RuntimeModelProjection(tmp_path).read_message_dicts("s-crash")
     assert [row["content"] for row in projected if row.get("type") in {"human", "user"}] == ["durable followup"]
+    ui_event = RuntimeUiProjection(tmp_path).read_ui_events("s-crash")[0]
+    assert ui_event["type"] == "user_steer"
+    assert ui_event["steer_id"] == "steer-op"
+    assert ui_event["client_id"] == "client-op"
+    assert ui_event["steer_mode"] == "append"
 
 
 def test_claim_cancel_race_has_single_winner(monkeypatch, tmp_path):
@@ -280,7 +382,9 @@ def test_non_interruptible_tool_exposes_deferred_state_until_safe_point(monkeypa
             {"session_id": "s-deferred", "stream_events": []}, slow_write(), None, "tool", poll_sec=0.02, defer_steer=True
         ))
         await asyncio.sleep(0.03)
-        item = agent_loop.enqueue_session_steer("s-deferred", "change direction", client_id="defer-client")["item"]
+        item = agent_loop.enqueue_session_steer(
+            "s-deferred", "change direction", client_id="defer-client", mode="interrupt"
+        )["item"]
         await asyncio.sleep(0.07)
         during = agent_loop.get_session_steer("s-deferred", steer_id=item["id"])["item"]["state"]
         result = await waiting

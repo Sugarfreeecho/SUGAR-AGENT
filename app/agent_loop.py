@@ -71,6 +71,7 @@ from agent_harness import (
     SystemMessage,
     ToolMessage,
     COMPACT_TRUNCATED_BOUNDARY_SYSTEM_EXACT,
+    WORK_DIR,
 )
 from agent_memory import (
     auto_length_strategy_status_line,
@@ -141,6 +142,12 @@ _TITLE_GENERATION_WORKERS_STARTED = False
 _STEER_PENDING_STATES = {"queued", "claimed", "interrupting", "restarting", "deferred"}
 _STEER_CLAIMABLE_STATES = {"queued", "interrupting"}
 _STEER_TERMINAL_STATES = {"consumed", "cancelled", "failed"}
+_STEER_MODES = {"interrupt", "append"}
+
+
+def _default_steer_mode() -> str:
+    mode = str(os.getenv("MYAGENT_STEER_MODE", "append") or "append").strip().lower()
+    return mode if mode in _STEER_MODES else "append"
 
 
 def _goal_continuation_message(session_id: str) -> Optional[SystemMessage]:
@@ -176,6 +183,130 @@ def _record_goal_run_usage(state: Dict[str, Any], continuation: bool) -> None:
         goal_manager_for(session_manager).record_run(state["session_id"], total, continuation=continuation)
     except Exception as exc:
         logger.debug("Goal usage update failed: %s", exc)
+
+
+def _hook_decision_reason(result: Any, fallback: str) -> str:
+    for item in getattr(result, "results", ()) or ():
+        reason = str(getattr(item, "reason", "") or getattr(item, "error", "")).strip()
+        if reason:
+            return reason
+    messages = list(getattr(result, "user_messages", ()) or ())
+    return str(messages[0]).strip() if messages else fallback
+
+
+async def _dispatch_state_hook(
+    event: str,
+    state: Dict[str, Any],
+    payload: Optional[Dict[str, Any]] = None,
+    emit: Optional[Callable[[Dict[str, Any]], Any]] = None,
+):
+    """Dispatch one lifecycle Hook with common run identity and audit fields."""
+
+    from agent_extensions import dispatch_hook
+
+    data = dict(payload or {})
+    data.setdefault("session_id", str(state.get("session_id") or ""))
+    data.setdefault("run_id", str(state.get("_runtime_v2_run_id") or ""))
+    data.setdefault("project_root", str(WORK_DIR))
+    result = await dispatch_hook(
+        event,
+        data,
+        session_manager=session_manager,
+        session_id=str(state.get("session_id") or ""),
+        run_id=str(state.get("_runtime_v2_run_id") or ""),
+    )
+    notices = [*list(result.warnings or ()), *list(result.user_messages or ())]
+    if emit and notices:
+        await _push_stream_event(
+            state,
+            {
+                "type": "status",
+                "content": "【Hook · %s】%s" % (event, "\n".join(str(x) for x in notices if x)),
+            },
+            emit=emit,
+        )
+    return result
+
+
+def _append_hook_context(state: Dict[str, Any], text: str, event: str) -> None:
+    content = str(text or "").strip()
+    if not content:
+        return
+    message = SystemMessage(content=f"[Hook additional context · {event}]\n{content}")
+    state.setdefault("work_messages", []).append(message)
+    state.setdefault("llm_history", []).append(message)
+    _persist_state_with_model_append(state, message)
+
+
+def _blocked_tool_result(
+    tool_name: str,
+    tool_args: Dict[str, Any],
+    tool_id: str,
+    reason: str,
+    *,
+    paused: bool = False,
+) -> Dict[str, Any]:
+    status = "paused" if paused else "blocked"
+    message = f"Hook {status} `{tool_name}`: {reason}"
+    return {
+        "type": "tool",
+        "tool_name": tool_name,
+        "tool_args": tool_args,
+        "tool_id": tool_id,
+        "result": message,
+        "tool_detail_log": message,
+        "tool_detail_llm": message,
+        "tool_detail_ui": message,
+        "result_for_log": message,
+        "tool_failed": True,
+        "tool_status": _tool_result_status(tool_name, message, failed=True),
+    }
+
+
+async def _apply_stop_hooks(
+    state: Dict[str, Any],
+    emit: Optional[Callable[[Dict[str, Any]], Any]],
+) -> Dict[str, Any]:
+    """Let a Stop Hook request more work, with a hard retry boundary."""
+
+    max_retries = max(0, min(10, int(os.getenv("STOP_HOOK_MAX_RETRIES", "3"))))
+    for attempt in range(max_retries + 1):
+        result = await _dispatch_state_hook(
+            "Stop",
+            state,
+            {
+                "matcher_value": "stop",
+                "attempt": attempt + 1,
+                "final_response": str(state.get("final_response") or ""),
+            },
+            emit,
+        )
+        if result.additional_context:
+            _append_hook_context(state, result.additional_context, "Stop")
+        if result.should_pause or result.requires_approval:
+            reason = _hook_decision_reason(result, "Stop Hook paused the run.")
+            state["final_response"] = f"执行已由 Stop Hook 暂停：{reason}"
+            return state
+        if not result.blocked:
+            return state
+        reason = _hook_decision_reason(result, "Stop Hook requested more work.")
+        if attempt >= max_retries:
+            state["final_response"] = (
+                f"Stop Hook 在 {max_retries + 1} 次检查后仍阻止结束：{reason}"
+            )
+            return state
+        continuation = SystemMessage(
+            content=(
+                "[Stop Hook blocked completion]\n"
+                f"{reason}\nContinue working and address this requirement before stopping again."
+            )
+        )
+        state.setdefault("work_messages", []).append(continuation)
+        state.setdefault("llm_history", []).append(continuation)
+        _persist_state_with_model_append(state, continuation)
+        state["final_response"] = ""
+        state = await _run_react_node_off_loop(state, emit)
+    return state
 
 
 def _active_session_path(session_id: str) -> Path:
@@ -239,6 +370,9 @@ def _normalize_steer_item(item: Dict[str, Any]) -> Dict[str, Any]:
     row["version"] = max(0, int(row.get("version") or 0))
     row["source_run_id"] = str(row.get("source_run_id") or "").strip()
     row["replacement_run_id"] = str(row.get("replacement_run_id") or "").strip()
+    row["mode"] = str(row.get("mode") or "interrupt").strip().lower()
+    if row["mode"] not in _STEER_MODES:
+        row["mode"] = "interrupt"
     return row
 
 
@@ -420,6 +554,7 @@ def enqueue_session_steer(
     ui_content: str = "",
     *,
     source_run_id: str = "",
+    mode: str = "",
 ) -> Dict[str, Any]:
     sid = str(session_id or "").strip()
     text = str(content or "").strip()
@@ -427,6 +562,9 @@ def enqueue_session_steer(
         return {"ok": False, "error": "missing session_id"}
     if not text:
         return {"ok": False, "error": "empty message"}
+    steer_mode = str(mode or _default_steer_mode()).strip().lower()
+    if steer_mode not in _STEER_MODES:
+        return {"ok": False, "error": "invalid steer mode"}
     item = {
         "id": str(uuid.uuid4()),
         "content": text,
@@ -438,6 +576,7 @@ def enqueue_session_steer(
         "version": 1,
         "source_run_id": str(source_run_id or "").strip(),
         "replacement_run_id": "",
+        "mode": steer_mode,
     }
     with _STEER_LOCK:
         with _steer_transaction(sid):
@@ -482,10 +621,17 @@ def remove_session_steer(session_id: str, steer_id: str = "", client_id: str = "
     return {"ok": True, "item": removed, "queued": sum(1 for x in keep if x.get("state") in _STEER_PENDING_STATES)}
 
 
-def _pop_session_steers(session_id: str) -> List[Dict[str, Any]]:
+def _normalize_steer_modes(modes: Optional[set[str]]) -> set[str]:
+    if modes is None:
+        return set(_STEER_MODES)
+    return {str(mode or "").strip().lower() for mode in modes} & _STEER_MODES
+
+
+def _pop_session_steers(session_id: str, *, modes: Optional[set[str]] = None) -> List[Dict[str, Any]]:
     sid = str(session_id or "").strip()
     if not sid:
         return []
+    allowed_modes = _normalize_steer_modes(modes)
     with _STEER_LOCK:
         # Peek, then acknowledge each item only after its durable Runtime V2
         # user-turn commit succeeds. This survives process loss mid-consume.
@@ -493,17 +639,20 @@ def _pop_session_steers(session_id: str) -> List[Dict[str, Any]]:
             _normalize_steer_item(x)
             for x in _load_steer_queue_locked(sid)
             if str((x or {}).get("state") or "queued") in _STEER_CLAIMABLE_STATES
+            and str((x or {}).get("mode") or "interrupt").strip().lower() in allowed_modes
         ]
     return items
 
 
-def _has_session_steers(session_id: str) -> bool:
+def _has_session_steers(session_id: str, *, modes: Optional[set[str]] = None) -> bool:
     sid = str(session_id or "").strip()
     if not sid:
         return False
+    allowed_modes = _normalize_steer_modes(modes)
     with _STEER_LOCK:
         return any(
             str((x or {}).get("state") or "queued") in _STEER_CLAIMABLE_STATES
+            and str((x or {}).get("mode") or "interrupt").strip().lower() in allowed_modes
             for x in _load_steer_queue_locked(sid)
         )
 
@@ -574,11 +723,17 @@ def transition_session_steer(
     return {"ok": False, "error": "steer not found"}
 
 
-def _claim_session_steers(session_id: str, run_id: str) -> List[Dict[str, Any]]:
+def _claim_session_steers(
+    session_id: str,
+    run_id: str,
+    *,
+    modes: Optional[set[str]] = None,
+) -> List[Dict[str, Any]]:
     sid = str(session_id or "").strip()
     owner = str(run_id or "").strip()
     if not sid:
         return []
+    allowed_modes = _normalize_steer_modes(modes)
     now = time.time()
     claimed: List[Dict[str, Any]] = []
     with _STEER_LOCK:
@@ -586,6 +741,8 @@ def _claim_session_steers(session_id: str, run_id: str) -> List[Dict[str, Any]]:
             rows = [_normalize_steer_item(x) for x in _load_steer_queue_locked(sid)]
             changed = False
             for index, item in enumerate(rows):
+                if str(item.get("mode") or "interrupt") not in allowed_modes:
+                    continue
                 state_name = str(item.get("state") or "queued")
                 stale_claim = state_name == "claimed" and now - float(item.get("claimed_at") or 0.0) >= 30.0
                 same_owner = state_name == "claimed" and owner and str(item.get("claimed_by") or "") == owner
@@ -615,6 +772,8 @@ def _set_session_steers_deferred(session_id: str, deferred: bool) -> None:
             rows = [_normalize_steer_item(x) for x in _load_steer_queue_locked(sid)]
             changed = False
             for item in rows:
+                if str(item.get("mode") or "interrupt") != "interrupt":
+                    continue
                 if item.get("state") not in source_states:
                     continue
                 item["state"] = target_state
@@ -1230,6 +1389,7 @@ def _runtime_v2_commit_user_turn(
     ui_content: str,
     ui_type: str = "user",
     operation_id: str = "",
+    ui_metadata: Optional[Dict[str, Any]] = None,
 ) -> bool:
     sid = str(state.get("session_id") or "").strip()
     if not sid or not _runtime_v2_is_primary():
@@ -1240,6 +1400,23 @@ def _runtime_v2_commit_user_turn(
         data = _message_to_dict(msg)
         model_content = str(data.pop("content", "") or "")
         data.pop("type", None)
+        ui_event_metadata = dict(ui_metadata or {})
+        if ui_type == "user_steer":
+            op_id = str(operation_id or "").strip()
+            if op_id:
+                ui_event_metadata.setdefault("steer_id", op_id)
+                try:
+                    steer_status = get_session_steer(sid, steer_id=op_id)
+                    steer_item = steer_status.get("item") if isinstance(steer_status.get("item"), dict) else {}
+                except Exception:
+                    steer_item = {}
+                if steer_item:
+                    ui_event_metadata.setdefault("client_id", str(steer_item.get("client_id") or ""))
+                    ui_event_metadata.setdefault("steer_mode", str(steer_item.get("mode") or "interrupt"))
+            for key in ("steer_id", "client_id", "steer_mode"):
+                value = str(ui_event_metadata.get(key) or "").strip()
+                if value:
+                    data[key] = value
         run_id = str(state.get("_runtime_v2_run_id") or "").strip()
         committed_event = RuntimeHistoryOps(
             session_manager.sessions_dir,
@@ -1255,18 +1432,21 @@ def _runtime_v2_commit_user_turn(
         )
         state["_last_user_turn_was_deduplicated"] = committed_event is None and bool(operation_id)
         side_effects = getattr(session_manager, "_apply_appended_ui_event_side_effects", None)
+        side_effect_event = {
+            "type": ui_type,
+            "content": ui_content,
+            "steer": ui_type == "user_steer",
+            **{key: value for key, value in ui_event_metadata.items() if value not in (None, "")},
+        }
         if callable(side_effects):
-            side_effects(
-                sid,
-                {"type": ui_type, "content": ui_content, "steer": ui_type == "user_steer"},
-            )
+            side_effects(sid, side_effect_event)
         else:
             # Lightweight/test SessionManager implementations may expose only
             # append_ui_event. Production uses the side-effect-only path above
             # to avoid duplicating the already committed Runtime V2 event.
             append_ui = getattr(session_manager, "append_ui_event", None)
             if callable(append_ui):
-                append_ui(sid, {"type": ui_type, "content": ui_content, "steer": ui_type == "user_steer"})
+                append_ui(sid, side_effect_event)
         return True
     except Exception as exc:
         logger.warning("Runtime V2 atomic user turn commit failed for %s: %s", sid, exc)
@@ -1537,7 +1717,13 @@ def _steer_control_from_state(state: State) -> Optional[_SteerRunControl]:
 def _steer_requested(state: State) -> bool:
     sid = str(state.get("session_id") or "").strip() if isinstance(state, dict) else ""
     control = _steer_control_from_state(state)
-    return bool((control and control.is_aborted()) or _has_session_steers(sid))
+    # Append-mode steers are deliberately invisible to interruption polling.
+    # They are claimed only at a completed ReAct boundary, after any tool
+    # results have been persisted and before the next model request is built.
+    return bool(
+        (control and control.is_aborted())
+        or _has_session_steers(sid, modes={"interrupt"})
+    )
 
 
 def _reset_steer_control(state: State) -> None:
@@ -1815,10 +2001,12 @@ def _runtime_v2_delete_unfinished_tool_events_after_marker(
 async def _consume_steer_messages(
     state: State,
     emit: Optional[Callable[[Dict[str, Any]], Any]] = None,
+    *,
+    modes: Optional[set[str]] = None,
 ) -> bool:
     sid = str(state.get("session_id") or "").strip()
     run_id = str(state.get("_runtime_v2_run_id") or "").strip()
-    items = _claim_session_steers(sid, run_id)
+    items = _claim_session_steers(sid, run_id, modes=modes)
     if not items:
         return False
     work_messages = list(state.get("work_messages", []))
@@ -1831,6 +2019,7 @@ async def _consume_steer_messages(
             continue
         msg = UserMessage(content=text)
         steer_id = str((item or {}).get("id") or "")
+        steer_mode = str((item or {}).get("mode") or "interrupt")
         try:
             committed = _runtime_v2_commit_user_turn(
                 state,
@@ -1838,6 +2027,11 @@ async def _consume_steer_messages(
                 ui_content=ui_text,
                 ui_type="user_steer",
                 operation_id=steer_id or str((item or {}).get("client_id") or ""),
+                ui_metadata={
+                    "steer_id": steer_id,
+                    "client_id": str((item or {}).get("client_id") or ""),
+                    "steer_mode": steer_mode,
+                },
             )
             if not committed:
                 _persist_state_with_model_append(state, msg)
@@ -1864,6 +2058,7 @@ async def _consume_steer_messages(
                     "steer": True,
                     "steer_id": steer_id,
                     "client_id": str((item or {}).get("client_id") or ""),
+                    "steer_mode": steer_mode,
                     "_runtime_v2_committed": committed,
                 },
                 emit=emit,
@@ -2695,6 +2890,28 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                         _hint_q.put(_progress_hint_to_stream_event(item))
 
                     # 压缩内为同步 LLM 调用，放线程执行以免阻塞 SSE；hint_sink 实时灌入队列由上层 drain
+                    pre_compact_hook = await _dispatch_state_hook(
+                        "PreCompact",
+                        state,
+                        {
+                            "matcher_value": "automatic",
+                            "mode": "automatic",
+                            "estimated_tokens": int(full_input_est),
+                            "context_window": int(iter_context_window),
+                        },
+                        emit,
+                    )
+                    if (
+                        pre_compact_hook.blocked
+                        or pre_compact_hook.should_pause
+                        or pre_compact_hook.requires_approval
+                    ):
+                        raise RuntimeError(
+                            _hook_decision_reason(
+                                pre_compact_hook,
+                                "PreCompact Hook stopped automatic compaction.",
+                            )
+                        )
                     nl, nk, chg, _, used_llm_summary, new_recap = await _await_thread_with_sse_keepalive(
                         lambda: _run_context_policy_serialized(
                             llm_history,
@@ -2719,6 +2936,28 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                             "ephemeral": True,
                         },
                     )
+                    post_compact_hook = await _dispatch_state_hook(
+                        "PostCompact",
+                        state,
+                        {
+                            "matcher_value": "automatic",
+                            "mode": "automatic",
+                            "changed": bool(chg),
+                            "used_llm_summary": bool(used_llm_summary),
+                        },
+                        emit,
+                    )
+                    if (
+                        post_compact_hook.blocked
+                        or post_compact_hook.should_pause
+                        or post_compact_hook.requires_approval
+                    ):
+                        raise RuntimeError(
+                            _hook_decision_reason(
+                                post_compact_hook,
+                                "PostCompact Hook stopped the run.",
+                            )
+                        )
                     _pre_api_timing_mark(pre_api_timings, "context_policy_run", _t_pre_api)
                 else:
                     nl, nk, chg, used_llm_summary, new_recap = llm_history, kcur, False, False, None
@@ -2853,15 +3092,16 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                 logger.warning("MCP 工具列表加载失败（忽略）: %s", _mcp_ex)
             _t_pre_api = time.perf_counter()
             try:
-                from agent_subagent import filter_tools_for_session
+                from agent_subagent import filter_tools_for_session, inject_task_model_profiles
 
                 combined_tools = filter_tools_for_session(combined_tools, session_meta)
+                combined_tools = inject_task_model_profiles(combined_tools)
                 _pre_api_timing_mark(pre_api_timings, "subagent_tool_filter", _t_pre_api)
             except Exception as _sub_ex:
                 _pre_api_timing_mark(pre_api_timings, "subagent_tool_filter", _t_pre_api)
                 logger.warning("subagent 工具过滤失败（忽略）: %s", _sub_ex)
 
-            async def execute_one(tool_call):
+            async def _execute_one_core(tool_call):
                 tool_name = tool_call["name"]
                 tool_args = tool_call["args"]
                 tool_id = tool_call["id"]
@@ -2872,8 +3112,11 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                 await _raise_if_steer_requested(state, emit, "tool")
 
                 # 工作区放宽 Shell / 网页下载：前端弹窗确认后才进入「执行中」占位
-                if emit and tool_name != "context_manage" and _tool_ui_approval_enabled():
-                    spec = _tool_ui_approval_spec(tool_name, tool_args)
+                hook_approval_spec = tool_call.get("_hook_approval_spec")
+                if emit and tool_name != "context_manage" and (
+                    _tool_ui_approval_enabled() or hook_approval_spec
+                ):
+                    spec = hook_approval_spec or _tool_ui_approval_spec(tool_name, tool_args)
                     if spec is None and isinstance(tool_name, str) and tool_name.startswith("mcp_"):
                         await _await_steerable(
                             state,
@@ -3333,6 +3576,153 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                     ),
                 }
 
+
+            async def execute_one(tool_call):
+                """Execute a closed tool call through the Hook lifecycle."""
+
+                call = dict(tool_call or {})
+                tool_name = str(call.get("name") or "")
+                tool_args = call.get("args") if isinstance(call.get("args"), dict) else {}
+                tool_id = str(call.get("id") or "")
+                pre = await _dispatch_state_hook(
+                    "PreToolUse",
+                    state,
+                    {
+                        "tool_name": tool_name,
+                        "tool_input": dict(tool_args),
+                        "tool_call_id": tool_id,
+                    },
+                    emit,
+                )
+                if pre.updated_input is not None:
+                    tool_args = dict(pre.updated_input)
+                    call["args"] = tool_args
+                if pre.requires_approval:
+                    if emit is None:
+                        return _blocked_tool_result(
+                            tool_name,
+                            tool_args,
+                            tool_id,
+                            _hook_decision_reason(pre, "Hook requested approval but no UI approval channel is available."),
+                        )
+                    call["_hook_approval_spec"] = {
+                        "title": "Hook 请求确认",
+                        "message": _hook_decision_reason(
+                            pre,
+                            f"Hook requested approval before executing `{tool_name}`.",
+                        ),
+                        "subtitle": tool_name,
+                        "brief": f"Hook / {tool_name}",
+                    }
+                if pre.blocked or pre.should_pause:
+                    reason = _hook_decision_reason(pre, "execution rejected by PreToolUse Hook")
+                    if pre.should_pause:
+                        state["_hook_pause_requested"] = reason
+                    blocked = _blocked_tool_result(
+                        tool_name,
+                        tool_args,
+                        tool_id,
+                        reason,
+                        paused=pre.should_pause,
+                    )
+                    blocked["tool_call_index"] = call.get("index")
+                    return blocked
+
+                before_event = None
+                if tool_name == "task":
+                    before_event = "SubagentStart"
+                elif tool_name == "context_manage" and str(tool_args.get("mode") or "compact").lower() == "compact":
+                    before_event = "PreCompact"
+                if before_event:
+                    before = await _dispatch_state_hook(
+                        before_event,
+                        state,
+                        {
+                            "tool_name": tool_name,
+                            "tool_input": dict(tool_args),
+                            "tool_call_id": tool_id,
+                        },
+                        emit,
+                    )
+                    if before.blocked or before.should_pause:
+                        reason = _hook_decision_reason(before, f"execution rejected by {before_event} Hook")
+                        if before.should_pause:
+                            state["_hook_pause_requested"] = reason
+                        blocked = _blocked_tool_result(
+                            tool_name,
+                            tool_args,
+                            tool_id,
+                            reason,
+                            paused=before.should_pause,
+                        )
+                        blocked["tool_call_index"] = call.get("index")
+                        return blocked
+
+                result = await _execute_one_core(call)
+                failed = bool(isinstance(result, dict) and result.get("tool_failed"))
+                after_event = "PostToolUseFailure" if failed else "PostToolUse"
+                after = await _dispatch_state_hook(
+                    after_event,
+                    state,
+                    {
+                        "tool_name": tool_name,
+                        "tool_input": dict(tool_args),
+                        "tool_call_id": tool_id,
+                        "tool_result": result,
+                        "success": not failed,
+                    },
+                    emit,
+                )
+
+                lifecycle_events: List[str] = []
+                if tool_name == "task":
+                    lifecycle_events.append("SubagentStop")
+                if tool_name == "context_manage" and str(tool_args.get("mode") or "compact").lower() == "compact":
+                    lifecycle_events.append("PostCompact")
+                if not failed and tool_name == "create_goal":
+                    lifecycle_events.append("GoalCreated")
+                if not failed and tool_name == "update_goal":
+                    goal_status = str(tool_args.get("status") or "").strip().lower()
+                    if goal_status == "completed":
+                        lifecycle_events.append("GoalCompleted")
+                    elif goal_status == "blocked":
+                        lifecycle_events.append("GoalBlocked")
+                lifecycle_results = []
+                for lifecycle_event in lifecycle_events:
+                    lifecycle_results.append(
+                        await _dispatch_state_hook(
+                            lifecycle_event,
+                            state,
+                            {
+                                "tool_name": tool_name,
+                                "tool_input": dict(tool_args),
+                                "tool_call_id": tool_id,
+                                "tool_result": result,
+                                "success": not failed,
+                            },
+                            emit,
+                        )
+                    )
+
+                hook_results = [after, *lifecycle_results]
+                contexts = [str(pre.additional_context or "")]
+                contexts.extend(str(item.additional_context or "") for item in hook_results)
+                extra_context = "\n".join(item.strip() for item in contexts if item.strip())
+                stop_result = next(
+                    (item for item in hook_results if item.blocked or item.should_pause),
+                    None,
+                )
+                if stop_result is not None:
+                    state["_hook_pause_requested"] = _hook_decision_reason(
+                        stop_result,
+                        "post-execution Hook stopped continuation",
+                    )
+                if extra_context and isinstance(result, dict) and result.get("type") == "tool":
+                    suffix = f"\n\n[Hook additional context]\n{extra_context}"
+                    result["tool_detail_llm"] = str(
+                        result.get("tool_detail_llm") or result.get("result") or ""
+                    ) + suffix
+                return result
 
             # ---------- 2.6 调用 LLM ----------
             _t_pre_api = time.perf_counter()
@@ -3892,7 +4282,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                             state["dialogue"] = derive_dialogue_from_assistant_history(llm_history)
                         except Exception:
                             logger.debug("failed to preserve steer partial assistant output", exc_info=True)
-                    if await _consume_steer_messages(state, emit=emit):
+                    if await _consume_steer_messages(state, emit=emit, modes={"interrupt"}):
                         _reset_steer_control(state)
                         llm_history = list(state["llm_history"])
                         work_messages = list(state["work_messages"])
@@ -4673,7 +5063,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                 persist_after_tools_ms = _timing_ms(_t_tool_post_all)
                 _pipeline_step_timing_log("tool_to_next_api_step_timing", state["session_id"], "persist_state", persist_after_tools_ms, react_iter=int(iter_count), tools=len(tool_calls_list or []))
                 _t_tool_post_all = time.perf_counter()
-                if await _consume_steer_messages(state, emit=emit):
+                if await _consume_steer_messages(state, emit=emit, modes={"append", "interrupt"}):
                     steer_check_ms = _timing_ms(_t_tool_post_all)
                     _pipeline_step_timing_log("tool_to_next_api_step_timing", state["session_id"], "steer_check", steer_check_ms, react_iter=int(iter_count), tools=len(tool_calls_list or []), outcome="steer_restart")
                     _pipeline_timing_log(
@@ -4702,6 +5092,9 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                     final_result_retries = 0
                     state["final_result_retries"] = 0
                     state["empty_final_retries"] = 0
+                    # A steer consumed on the configured final iteration must
+                    # still receive the promised next model request.
+                    max_react_iter = max(max_react_iter, iter_count + 1)
                     continue
                 steer_check_ms = _timing_ms(_t_tool_post_all)
                 _pipeline_step_timing_log("tool_to_next_api_step_timing", state["session_id"], "steer_check", steer_check_ms, react_iter=int(iter_count), tools=len(tool_calls_list or []), outcome="next_react_iter")
@@ -4726,6 +5119,16 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                 )
                 state.pop("_steer_rollback_marker", None)
                 state["_runtime_stage"] = "react"
+
+            hook_pause_reason = str(state.pop("_hook_pause_requested", "") or "").strip()
+            if hook_pause_reason:
+                final_content = f"执行已由 Hook 暂停：{hook_pause_reason}"
+                await _push_stream_event(
+                    state,
+                    {"type": "status", "content": final_content},
+                    emit=emit,
+                )
+                break
 
             # ---------- 2.8 重复检测（须在工具结果写入 llm_history 之后，避免 OpenAI 报 tool_calls 顺序错误） ----------
             # 文本重复检测只对比「正文」；思考单独存在于 reasoning 字段，不参与与 last_response 的混比
@@ -4790,13 +5193,14 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
 
             if not tool_calls_list:
                 # 没有工具调用 → 终稿只取正文；仅有思考、无正文时由前端 llm_reasoning 展示，不当作最终回答文本
-                if await _consume_steer_messages(state, emit=emit):
+                if await _consume_steer_messages(state, emit=emit, modes={"append", "interrupt"}):
                     _reset_steer_control(state)
                     llm_history = list(state["llm_history"])
                     work_messages = list(state["work_messages"])
                     final_result_retries = 0
                     state["final_result_retries"] = 0
                     state["empty_final_retries"] = 0
+                    max_react_iter = max(max_react_iter, iter_count + 1)
                     continue
                 if iter_count < max_react_iter and _inject_pending_subagent_notes(current_run_only=True):
                     final_result_retries = 0
@@ -4892,7 +5296,7 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
             return await _react_node_once(state, emit=emit)
         except _SteerRestartRequested:
             _rollback_steer_partial_turn(state)
-            consumed = await _consume_steer_messages(state, emit=emit)
+            consumed = await _consume_steer_messages(state, emit=emit, modes={"interrupt"})
             _reset_steer_control(state)
             if not consumed:
                 continue
@@ -5328,6 +5732,40 @@ async def astream_events(
         session_id, _, _, _, key_context, _metadata = (
             session_manager.get_or_create_session(session_id)
         )
+    runtime_v2_run_id = str(run_id or "").strip() or str(uuid.uuid4())
+    prompt_hook_context = ""
+    try:
+        from agent_extensions import dispatch_hook
+
+        prompt_hook = await dispatch_hook(
+            "UserPromptSubmit",
+            {
+                "session_id": session_id,
+                "run_id": runtime_v2_run_id,
+                "matcher_value": user_input,
+                "input": {"prompt": user_input},
+                "project_root": str(WORK_DIR),
+            },
+            session_manager=session_manager,
+            session_id=session_id,
+            run_id=runtime_v2_run_id,
+        )
+        if prompt_hook.updated_input is not None:
+            user_input = str(
+                prompt_hook.updated_input.get("prompt", prompt_hook.updated_input.get("user_input", user_input))
+            )
+        prompt_hook_context = str(prompt_hook.additional_context or "").strip()
+        if prompt_hook.blocked or prompt_hook.should_pause or prompt_hook.requires_approval:
+            reason = _hook_decision_reason(
+                prompt_hook,
+                "UserPromptSubmit Hook rejected this prompt.",
+            )
+            yield {"type": "error", "content": f"Hook stopped the prompt: {reason}"}
+            return
+    except Exception as exc:
+        logger.exception("UserPromptSubmit Hook dispatch failed")
+        yield {"type": "error", "content": f"Hook dispatch failed: {exc}"}
+        return
     setup_logging(user_input, session_id or "")
     pre_run_timings: Dict[str, int] = {}
     _t_pre = time.perf_counter()
@@ -5356,12 +5794,16 @@ async def astream_events(
 
     new_work_messages = prev_work_messages + [user_message]
     new_llm_history = prev_llm_history + [user_message]
+    if prompt_hook_context:
+        prompt_context_message = SystemMessage(
+            content=f"[Hook additional context · UserPromptSubmit]\n{prompt_hook_context}"
+        )
+        new_work_messages.append(prompt_context_message)
+        new_llm_history.append(prompt_context_message)
     goal_note = _goal_continuation_message(session_id)
     if goal_note is not None:
         new_work_messages.append(goal_note)
         new_llm_history.append(goal_note)
-    runtime_v2_run_id = str(run_id or "").strip() or str(uuid.uuid4())
-
     state: State = {
         "dialogue": derive_dialogue_from_assistant_history(new_llm_history),
         "work_messages": new_work_messages,
@@ -5547,6 +5989,30 @@ async def astream_events(
                 mode="chat",
                 user_event_type=user_ui_type,
             )
+            from agent_extensions import audit_plugin_inventory
+
+            await asyncio.to_thread(
+                audit_plugin_inventory,
+                session_manager,
+                session_id,
+                runtime_v2_run_id,
+            )
+            session_start_hook = await _dispatch_state_hook(
+                "SessionStart",
+                state,
+                {"matcher_value": "chat", "mode": "chat"},
+                emit,
+            )
+            if session_start_hook.additional_context:
+                _append_hook_context(state, session_start_hook.additional_context, "SessionStart")
+            if (
+                session_start_hook.blocked
+                or session_start_hook.should_pause
+                or session_start_hook.requires_approval
+            ):
+                raise RuntimeError(
+                    _hook_decision_reason(session_start_hook, "SessionStart Hook stopped the run.")
+                )
             _t_run_start = time.perf_counter()
             await emit({"type": "status", "content": "New Agent Loop Start"})
             run_start_timings["emit_start_status"] = _timing_ms(_t_run_start)
@@ -5566,6 +6032,7 @@ async def astream_events(
                 user_event_type=user_ui_type,
             )
             state = await _run_react_node_off_loop(state, emit)
+            state = await _apply_stop_hooks(state, emit)
             final_timings: Dict[str, int] = {}
             _t_final = time.perf_counter()
             await emit({"type": "status", "content": "Loop finished"})
@@ -5627,6 +6094,12 @@ async def astream_events(
             )
             if callable(anchor_pending):
                 anchor_pending(session_id, runtime_v2_run_id)
+            await _dispatch_state_hook(
+                "SessionEnd",
+                state,
+                {"matcher_value": "chat", "mode": "chat", "status": "finished"},
+                emit,
+            )
             completed = True
         except asyncio.CancelledError:
             terminal_event = {"type": "run_interrupted", "run_id": runtime_v2_run_id, "ephemeral": True}
@@ -5634,6 +6107,15 @@ async def astream_events(
             session_manager.mark_session_unread_result(session_id, status="failed")
             raise
         except Exception as exc:
+            try:
+                await _dispatch_state_hook(
+                    "RunFailed",
+                    state,
+                    {"matcher_value": "chat", "mode": "chat", "error": str(exc)},
+                    emit,
+                )
+            except Exception:
+                logger.debug("RunFailed Hook dispatch failed", exc_info=True)
             terminal_event = {"type": "run_failed", "run_id": runtime_v2_run_id, "error": str(exc), "ephemeral": True}
             mirror_runtime_v2("run_failed", {"error": str(exc)})
             session_manager.mark_session_unread_result(session_id, status="failed")
@@ -5895,6 +6377,59 @@ async def astream_events_continuation(
             await emit({"type": "run_started", "ephemeral": True})
             run_start_timings["emit_run_started"] = _timing_ms(_t_run_start)
             _pipeline_step_timing_log("run_start_step_timing", session_id, "emit_run_started", run_start_timings["emit_run_started"], run_id=runtime_v2_run_id, mode="continuation")
+            from agent_extensions import audit_plugin_inventory
+
+            await asyncio.to_thread(
+                audit_plugin_inventory,
+                session_manager,
+                session_id,
+                runtime_v2_run_id,
+            )
+            session_start_hook = await _dispatch_state_hook(
+                "SessionStart",
+                state,
+                {"matcher_value": "continuation", "mode": "continuation"},
+                emit,
+            )
+            if session_start_hook.additional_context:
+                _append_hook_context(state, session_start_hook.additional_context, "SessionStart")
+            if (
+                session_start_hook.blocked
+                or session_start_hook.should_pause
+                or session_start_hook.requires_approval
+            ):
+                raise RuntimeError(
+                    _hook_decision_reason(session_start_hook, "SessionStart Hook stopped continuation.")
+                )
+
+            active_goal = None
+            if goal_enabled():
+                try:
+                    active_goal = goal_manager_for(session_manager).get(session_id)
+                except Exception:
+                    active_goal = None
+            if active_goal and active_goal.get("status") == "active":
+                goal_hook = await _dispatch_state_hook(
+                    "GoalBeforeContinue",
+                    state,
+                    {
+                        "matcher_value": str(active_goal.get("objective") or ""),
+                        "goal_id": active_goal.get("id"),
+                        "goal_status": active_goal.get("status"),
+                        "goal": active_goal,
+                    },
+                    emit,
+                )
+                if goal_hook.additional_context:
+                    _append_hook_context(state, goal_hook.additional_context, "GoalBeforeContinue")
+                if goal_hook.blocked or goal_hook.should_pause or goal_hook.requires_approval:
+                    try:
+                        goal_manager_for(session_manager).user_action(session_id, "pause")
+                    except Exception:
+                        logger.debug("Could not pause Goal after GoalBeforeContinue Hook", exc_info=True)
+                    raise RuntimeError(
+                        _hook_decision_reason(goal_hook, "GoalBeforeContinue Hook stopped continuation.")
+                    )
             _t_run_start = time.perf_counter()
             await emit({"type": "status", "content": "Subagent Continuation Start"})
             run_start_timings["emit_start_status"] = _timing_ms(_t_run_start)
@@ -5907,6 +6442,7 @@ async def astream_events_continuation(
                 mode="continuation",
             )
             state = await _run_react_node_off_loop(state, emit)
+            state = await _apply_stop_hooks(state, emit)
             final_timings: Dict[str, int] = {}
             _t_final = time.perf_counter()
             await emit({"type": "status", "content": "Loop finished"})
@@ -5969,6 +6505,16 @@ async def astream_events_continuation(
             )
             if callable(anchor_pending):
                 anchor_pending(session_id, runtime_v2_run_id)
+            await _dispatch_state_hook(
+                "SessionEnd",
+                state,
+                {
+                    "matcher_value": "continuation",
+                    "mode": "continuation",
+                    "status": "finished",
+                },
+                emit,
+            )
             completed = True
         except asyncio.CancelledError:
             terminal_event = {"type": "run_interrupted", "ephemeral": True}
@@ -5976,6 +6522,19 @@ async def astream_events_continuation(
             session_manager.mark_session_unread_result(session_id, status="failed")
             raise
         except Exception as exc:
+            try:
+                await _dispatch_state_hook(
+                    "RunFailed",
+                    state,
+                    {
+                        "matcher_value": "continuation",
+                        "mode": "continuation",
+                        "error": str(exc),
+                    },
+                    emit,
+                )
+            except Exception:
+                logger.debug("RunFailed Hook dispatch failed", exc_info=True)
             terminal_event = {"type": "run_failed", "error": str(exc), "ephemeral": True}
             mirror_runtime_v2("run_failed", {"error": str(exc)})
             session_manager.mark_session_unread_result(session_id, status="failed")

@@ -611,7 +611,7 @@ function setBriefRows(brief, texts) {
         if (!t || !String(t).trim()) return;
         const row = document.createElement('div');
         row.className = 'process-brief-item';
-        row.textContent = t;
+        row.textContent = typeof translateUiString === 'function' ? translateUiString(String(t)) : t;
         brief.appendChild(row);
     });
 }
@@ -971,7 +971,9 @@ function refreshSubagentCardStats(card) {
     if (est != null && est !== '' && thr != null && thr !== '' && Number(thr) > 0) {
         pctStr = (Math.round(Number(est) / Number(thr) * 1000) / 10) + '%';
     }
-    el.innerHTML = '<span>' + parts.join(' · ') + '</span><span>' + escapeHtml(modelStr) + ' · ' + escapeHtml(pctStr) + '</span>';
+    var processPartsText = parts.join(' · ');
+    if (typeof translateUiString === 'function') processPartsText = translateUiString(processPartsText);
+    el.innerHTML = '<span>' + processPartsText + '</span><span>' + escapeHtml(modelStr) + ' · ' + escapeHtml(pctStr) + '</span>';
 }
 
 function refreshProcessAggregateStats(agg) {
@@ -1032,7 +1034,9 @@ function refreshProcessAggregateStats(agg) {
     var rateStr = (ch + cm > 0) ? (cr % 1 === 0 ? cr.toFixed(0) : cr.toFixed(1)) + '%' : '0%';
     cacheParts.push('hit_rate=' + rateStr);
     var cacheLine = cacheParts.join(' · ');
-    el.innerHTML = '<span>' + parts.join(' · ') + '</span><span>' + cacheLine + '</span>';
+    var aggregatePartsText = parts.join(' · ');
+    if (typeof translateUiString === 'function') aggregatePartsText = translateUiString(aggregatePartsText);
+    el.innerHTML = '<span>' + aggregatePartsText + '</span><span>' + cacheLine + '</span>';
 }
 
 function ensureProcessGroup(ctx) {
@@ -3431,8 +3435,14 @@ function findExistingLlmFeedRow(ctx, logType, reactIter, opts) {
     else selector += '[data-llm-live-row="1"]';
     if (opts.liveOnly) selector += '[data-llm-live-row="1"]';
     var roots = [];
-    if (ctx.currentProcessGroup && ctx.currentProcessGroup.isConnected) roots.push(ctx.currentProcessGroup);
-    if (!replayingMessages && ctx.stream && ctx.stream.querySelectorAll) roots.push(ctx.stream);
+    if (ctx.currentProcessGroup && ctx.currentProcessGroup.isConnected) {
+        // react_iter restarts at 1 for a replacement run. Once a new process
+        // block exists, never reuse an identically numbered LLM row from an
+        // older block or reasoning and response will be split across runs.
+        roots.push(ctx.currentProcessGroup);
+    } else if (!replayingMessages && ctx.stream && ctx.stream.querySelectorAll) {
+        roots.push(ctx.stream);
+    }
     for (var r = 0; r < roots.length; r += 1) {
         var matches = roots[r].querySelectorAll(selector);
         if (matches && matches.length) return matches[matches.length - 1];

@@ -12,6 +12,56 @@ TERMINAL_RUN_TYPES = {
 }
 
 
+HOOK_EVENT_TYPES = {
+    "hook_started",
+    "hook_progress",
+    "hook_finished",
+    "hook_failed",
+    "hook_blocked",
+    "hook_timed_out",
+    "hook_input_modified",
+}
+
+PLUGIN_EVENT_TYPES = {"plugin_state_changed", "plugin_reloaded"}
+
+_HOOK_RECENT_LIMIT = 50
+_HOOK_SNAPSHOT_FIELDS = {
+    "hook_id",
+    "hook_event",
+    "event",
+    "plugin_id",
+    "hook_type",
+    "source_id",
+    "execution_id",
+    "invocation_id",
+    "hook_run_id",
+    "hook_call_id",
+    "tool_call_id",
+    "tool_name",
+    "subagent_id",
+    "goal_id",
+    "matcher",
+    "status",
+    "success",
+    "outcome",
+    "decision",
+    "reason",
+    "error",
+    "message",
+    "user_message",
+    "duration_ms",
+    "input_modified",
+    "progress",
+    "exit_code",
+    "failure_policy",
+    "attempt",
+    "stdout_ref",
+    "stderr_ref",
+    "output_ref",
+    "result_ref",
+}
+
+
 class RuntimeProjector:
     """Rebuild a session snapshot from Runtime V2 events."""
 
@@ -30,6 +80,21 @@ class RuntimeProjector:
             "context": {},
             "todo": None,
             "goal": None,
+            "hooks": {
+                "recent": [],
+                "stats": {
+                    "total": 0,
+                    "started": 0,
+                    "progress": 0,
+                    "finished": 0,
+                    "failed": 0,
+                    "blocked": 0,
+                    "timed_out": 0,
+                    "input_modified": 0,
+                    "by_type": {},
+                },
+            },
+            "plugins": {},
             "history_ops": [],
             "legacy_observations": [],
             "visible_range": {},
@@ -138,6 +203,10 @@ class RuntimeProjector:
             goal["seq"] = event.seq
             snapshot["goal"] = goal
             snapshot["context"]["goal"] = goal
+        elif event_type in HOOK_EVENT_TYPES:
+            self._apply_hook_event(snapshot, event)
+        elif event_type in PLUGIN_EVENT_TYPES:
+            self._apply_plugin_event(snapshot, event)
         elif event_type in {
             "message_deleted",
             "message_rewritten",
@@ -151,6 +220,90 @@ class RuntimeProjector:
         elif event_type.startswith("legacy_") and event_type.endswith("_observed"):
             self._apply_legacy_observation(snapshot, event)
         return snapshot
+
+    @staticmethod
+    def _compact_hook_value(value):
+        """Keep hook snapshots useful without copying command output into them."""
+        if isinstance(value, str):
+            return value if len(value) <= 2048 else value[:2048] + "..."
+        if isinstance(value, dict):
+            # Blob references are intentionally retained; their contents stay
+            # outside snapshot.json and can be hydrated by the UI projection.
+            return dict(value)
+        if isinstance(value, (bool, int, float)) or value is None:
+            return value
+        return str(value)[:2048]
+
+    def _apply_hook_event(self, snapshot: dict, event: RuntimeEvent) -> None:
+        hooks = snapshot.get("hooks")
+        if not isinstance(hooks, dict):
+            hooks = {}
+            snapshot["hooks"] = hooks
+        recent = hooks.get("recent")
+        if not isinstance(recent, list):
+            recent = []
+        stats = hooks.get("stats")
+        if not isinstance(stats, dict):
+            stats = {}
+
+        payload = dict(event.payload or {})
+        row = {
+            "seq": event.seq,
+            "timestamp": event.timestamp,
+            "type": event.type,
+            "run_id": event.run_id,
+        }
+        for key in _HOOK_SNAPSHOT_FIELDS:
+            if key in payload:
+                row[key] = self._compact_hook_value(payload[key])
+        # stdout/stderr/result bodies are deliberately omitted. Executors may
+        # place large data in BlobStore and include one of the *_ref fields.
+        recent.append(row)
+        hooks["recent"] = recent[-_HOOK_RECENT_LIMIT:]
+
+        by_type = stats.get("by_type")
+        if not isinstance(by_type, dict):
+            by_type = {}
+        by_type[event.type] = int(by_type.get(event.type) or 0) + 1
+        stats["by_type"] = by_type
+        stats["total"] = int(stats.get("total") or 0) + 1
+        counter = event.type.removeprefix("hook_")
+        stats[counter] = int(stats.get(counter) or 0) + 1
+        hooks["stats"] = stats
+
+    def _apply_plugin_event(self, snapshot: dict, event: RuntimeEvent) -> None:
+        plugins = snapshot.get("plugins")
+        if not isinstance(plugins, dict):
+            plugins = {}
+            snapshot["plugins"] = plugins
+        payload = dict(event.payload or {})
+        plugin_id = str(
+            payload.pop("plugin_id", None)
+            or payload.get("id")
+            or payload.get("name")
+            or ""
+        ).strip()
+        if not plugin_id:
+            # Invalid third-party audit rows remain in events.jsonl, but do not
+            # create an unstable/anonymous key in the durable state projection.
+            return
+        current = plugins.get(plugin_id)
+        if not isinstance(current, dict):
+            current = {"plugin_id": plugin_id}
+        state = payload.pop("state", None)
+        if isinstance(state, dict):
+            current.update(state)
+        elif state is not None:
+            current["status"] = state
+        current.update(payload)
+        current["plugin_id"] = plugin_id
+        current["last_event"] = event.type
+        current["updated_at"] = event.timestamp
+        current["seq"] = event.seq
+        if event.type == "plugin_reloaded":
+            current["last_reloaded_at"] = event.timestamp
+            current["reload_count"] = int(current.get("reload_count") or 0) + 1
+        plugins[plugin_id] = current
 
     def _append_message(self, snapshot: dict, event: RuntimeEvent, role: str) -> None:
         snapshot["messages"].append({

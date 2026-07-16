@@ -109,13 +109,24 @@ def _compute_config_signature() -> str:
         return "disabled"
     inline = (os.getenv("MCP_SERVERS_JSON") or "").strip()
     if inline:
-        return "inline:" + hashlib.sha256(inline.encode("utf-8")).hexdigest()
-    path = _config_path()
+        base = "inline:" + hashlib.sha256(inline.encode("utf-8")).hexdigest()
+    else:
+        path = _config_path()
+        try:
+            st = path.stat()
+            base = f"file:{path.resolve()}:{st.st_mtime_ns}:{st.st_size}"
+        except OSError:
+            base = f"missing:{path.resolve()}"
     try:
-        st = path.stat()
-        return f"file:{path.resolve()}:{st.st_mtime_ns}:{st.st_size}"
-    except OSError:
-        return f"missing:{path.resolve()}"
+        from agent_extensions import plugin_registry_signature
+
+        plugin_sig = hashlib.sha256(
+            plugin_registry_signature().encode("utf-8")
+        ).hexdigest()
+    except Exception as exc:
+        logger.debug("MCP plugin signature unavailable: %s", exc)
+        plugin_sig = "unavailable"
+    return f"{base}|plugins:{plugin_sig}"
 
 
 def _compute_config_signature_cached() -> str:
@@ -135,6 +146,14 @@ def _load_servers_dict_from_config() -> Tuple[Optional[dict], Optional[str]]:
     _last_config_error = None
     if not _enabled_flag():
         return None, None
+    try:
+        from agent_extensions import plugin_mcp_servers
+
+        plugin_servers = dict(plugin_mcp_servers())
+    except Exception as exc:
+        logger.debug("MCP plugin resources unavailable: %s", exc)
+        plugin_servers = {}
+
     inline = (os.getenv("MCP_SERVERS_JSON") or "").strip()
     raw_obj: Any = None
     if inline:
@@ -143,34 +162,43 @@ def _load_servers_dict_from_config() -> Tuple[Optional[dict], Optional[str]]:
         except json.JSONDecodeError as e:
             _last_config_error = f"MCP_SERVERS_JSON parse error: {e}"
             logger.warning(_last_config_error)
-            return None, _last_config_error
+            return (plugin_servers or None), _last_config_error
     else:
         path = _config_path()
         if not path.is_file():
-            return None, None
-        try:
-            raw_obj = json.loads(path.read_text(encoding="utf-8"))
-        except OSError as e:
-            _last_config_error = f"read {path}: {e}"
-            logger.warning(_last_config_error)
-            return None, _last_config_error
-        except json.JSONDecodeError as e:
-            _last_config_error = f"{path}: {e}"
-            logger.warning(_last_config_error)
-            return None, _last_config_error
+            raw_obj = None
+        else:
+            try:
+                raw_obj = json.loads(path.read_text(encoding="utf-8"))
+            except OSError as e:
+                _last_config_error = f"read {path}: {e}"
+                logger.warning(_last_config_error)
+                return (plugin_servers or None), _last_config_error
+            except json.JSONDecodeError as e:
+                _last_config_error = f"{path}: {e}"
+                logger.warning(_last_config_error)
+                return (plugin_servers or None), _last_config_error
 
-    if not isinstance(raw_obj, dict):
+    if raw_obj is not None and not isinstance(raw_obj, dict):
         _last_config_error = "MCP config root must be an object"
         logger.warning(_last_config_error)
-        return None, _last_config_error
-    if raw_obj.get("enabled") is False:
-        return None, None
-    servers = raw_obj.get("servers")
-    if servers is None:
-        servers = raw_obj.get("mcpServers")
-    if not isinstance(servers, dict) or not servers:
-        return None, None
-    return servers, None
+        return (plugin_servers or None), _last_config_error
+
+    project_servers: Dict[str, Any] = {}
+    if isinstance(raw_obj, dict) and raw_obj.get("enabled") is not False:
+        servers = raw_obj.get("servers")
+        if servers is None:
+            servers = raw_obj.get("mcpServers")
+        if isinstance(servers, dict):
+            project_servers.update(servers)
+
+    merged = dict(project_servers)
+    for alias, config in plugin_servers.items():
+        if alias in merged:
+            logger.warning("MCP: plugin server `%s` conflicts with project config and was ignored", alias)
+            continue
+        merged[alias] = config
+    return (merged or None), _last_config_error
 
 
 def _resolve_transport(cfg: dict) -> str:

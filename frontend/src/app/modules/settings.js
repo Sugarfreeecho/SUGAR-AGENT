@@ -10,12 +10,15 @@ if (window.MyAgentPathPicker && pickPathBtn && messageInput) {
     MyAgentPathPicker.attachChatPicker(pickPathBtn, messageInput);
 }
 if (messageInput) {
+    messageInput.addEventListener('myagent:file-upload-state', function () {
+        if (typeof setSendButtonState === 'function') setSendButtonState();
+    });
     messageInput.addEventListener('myagent:file-paste-error', function (event) {
         const detail = event && event.detail ? event.detail : {};
         if (typeof showUiAlert === 'function') {
             showUiAlert({
-                title: '粘贴文件失败',
-                message: String(detail.message || '无法保存剪贴板中的文件或图片。'),
+                title: '文件上传失败',
+                message: String(detail.message || '无法上传所选文件或剪贴板中的图片。'),
                 variant: 'error',
             });
         }
@@ -175,6 +178,13 @@ function initUiSettingsControls() {
         var w = window.open('/execution-dashboard', 'myagent-execution-dashboard');
         if (w) { try { w.focus(); } catch (e) {} }
         else window.location.href = '/execution-dashboard';
+    });
+    var extensionsBtn = document.getElementById('settings-extensions');
+    if (extensionsBtn) extensionsBtn.addEventListener('click', function () {
+        closeSettingsModal();
+        var w = window.open('/setup/extensions', 'myagent-extensions');
+        if (w) { try { w.focus(); } catch (e) {} }
+        else window.location.href = '/setup/extensions';
     });
 }
 initUiSettingsControls();

@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "^(run_shell|write_file|edit_file|delete_file)$",
+        "hooks": [
+          {
+            "id": "workspace-policy",
+            "type": "command",
+            "windows_command": "python scripts/hook_policy.py",
+            "unix_command": "python3 scripts/hook_policy.py",
+            "timeout_seconds": 10,
+            "failure_policy": "block",
+            "env_allowlist": []
+          }
+        ]
+      }
+    ]
+  }
+}

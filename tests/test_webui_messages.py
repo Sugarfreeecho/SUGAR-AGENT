@@ -164,6 +164,70 @@ def test_clipboard_upload_returns_insertable_workspace_path(monkeypatch, tmp_pat
     assert path.read_bytes() == b"\x89PNG\r\nclipboard"
 
 
+def test_clipboard_upload_rejects_oversized_file_and_removes_partial_output(monkeypatch, tmp_path):
+    from io import BytesIO
+    from starlette.datastructures import UploadFile
+    import webui
+
+    monkeypatch.setattr(webui, "WORK_DIR", tmp_path)
+    monkeypatch.setattr(webui, "CHAT_UPLOAD_MAX_FILE_BYTES", 8)
+    monkeypatch.setattr(webui, "CHAT_UPLOAD_MAX_TOTAL_BYTES", 32)
+    upload = UploadFile(filename="too-large.bin", file=BytesIO(b"123456789"))
+
+    response = asyncio.run(webui.upload_chat_files([upload]))
+    payload = _json_response_payload(response)
+
+    assert response.status_code == 413
+    assert payload["ok"] is False
+    assert not list((tmp_path / "uploads").rglob("too-large.bin"))
+
+
+def test_clipboard_upload_rejects_oversized_batch_and_cleans_prior_files(monkeypatch, tmp_path):
+    from io import BytesIO
+    from starlette.datastructures import UploadFile
+    import webui
+
+    monkeypatch.setattr(webui, "WORK_DIR", tmp_path)
+    monkeypatch.setattr(webui, "CHAT_UPLOAD_MAX_FILE_BYTES", 16)
+    monkeypatch.setattr(webui, "CHAT_UPLOAD_MAX_TOTAL_BYTES", 10)
+    uploads = [
+        UploadFile(filename="first.bin", file=BytesIO(b"123456")),
+        UploadFile(filename="second.bin", file=BytesIO(b"abcdef")),
+    ]
+
+    response = asyncio.run(webui.upload_chat_files(uploads))
+    payload = _json_response_payload(response)
+
+    assert response.status_code == 413
+    assert payload["ok"] is False
+    assert not list((tmp_path / "uploads").rglob("*.bin"))
+
+
+def test_clipboard_upload_middleware_rejects_oversized_request_before_routing(monkeypatch):
+    from types import SimpleNamespace
+    import webui
+
+    monkeypatch.setattr(webui, "CHAT_UPLOAD_MAX_TOTAL_BYTES", 10)
+    monkeypatch.setattr(webui, "_CHAT_UPLOAD_MULTIPART_OVERHEAD_BYTES", 2)
+    request = SimpleNamespace(
+        url=SimpleNamespace(path="/api/upload-chat-files"),
+        headers={"content-length": "13"},
+    )
+    routed = False
+
+    async def call_next(_request):
+        nonlocal routed
+        routed = True
+        raise AssertionError("oversized request should not reach routing")
+
+    response = asyncio.run(webui._config_check(request, call_next))
+    payload = _json_response_payload(response)
+
+    assert response.status_code == 413
+    assert payload["ok"] is False
+    assert routed is False
+
+
 def test_messages_turn_page_prefers_runtime_v2_projection(monkeypatch, tmp_path):
     import runtime_v2
     from runtime_v2 import RuntimeMirror

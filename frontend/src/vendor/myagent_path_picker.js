@@ -4,6 +4,9 @@
 (function (global) {
   'use strict';
 
+  var MAX_CHAT_UPLOAD_FILE_BYTES = 100 * 1024 * 1024;
+  var MAX_CHAT_UPLOAD_TOTAL_BYTES = 200 * 1024 * 1024;
+
   var FOLDER_SVG =
     '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
     '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"></path>' +
@@ -23,6 +26,14 @@
       '.path-browse-btn--ghost:hover{background:rgba(108,92,231,.1);border-color:transparent;color:var(--accent-2,#d4b8fc);}' +
       '.input-wrapper .path-browse-btn--ghost{align-self:center;margin-right:-.15rem;}' +
       '.input-wrapper.is-drag-over{border-color:rgba(203,166,247,.62);box-shadow:0 0 0 3px rgba(203,166,247,.12),0 0 28px rgba(139,92,246,.18);}' +
+      '.input-wrapper.is-file-uploading{border-color:rgba(99,102,241,.52);}' +
+      '.chat-upload-status{box-sizing:border-box;width:100%;margin:.38rem 0 0;padding:.42rem .58rem;border:1px solid rgba(99,102,241,.22);border-radius:10px;background:rgba(99,102,241,.08);color:var(--text-secondary,#a6adc8);font-size:.72rem;}' +
+      '.chat-upload-status-row{display:flex;align-items:center;gap:.5rem;}' +
+      '.chat-upload-status-label{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}' +
+      '.chat-upload-cancel{flex:none;border:0;background:transparent;color:var(--accent-2,#d4b8fc);font:inherit;font-weight:700;cursor:pointer;padding:.08rem .2rem;}' +
+      '.chat-upload-cancel:hover{color:var(--text-primary,#fff);}' +
+      '.chat-upload-progress{height:4px;margin-top:.36rem;border-radius:999px;overflow:hidden;background:rgba(255,255,255,.1);}' +
+      '.chat-upload-progress-bar{display:block;width:0;height:100%;border-radius:inherit;background:linear-gradient(90deg,#6366f1,#a78bfa);transition:width .12s linear;}' +
       '.workspace-file-popover{position:fixed;display:none;z-index:260;width:min(46rem,calc(100vw - 1.2rem));height:min(44rem,82vh);max-height:min(44rem,82vh);border:1px solid rgba(203,166,247,.24);border-radius:14px;background:linear-gradient(145deg,rgba(31,31,49,.88),rgba(19,20,31,.78));box-shadow:0 24px 70px rgba(0,0,0,.38),0 0 0 1px rgba(255,255,255,.045) inset,0 0 34px rgba(139,92,246,.16);overflow:hidden;backdrop-filter:blur(22px);-webkit-backdrop-filter:blur(22px);}' +
       '.workspace-file-popover:before{content:"";position:absolute;inset:0;pointer-events:none;background:radial-gradient(circle at 18% 0%,rgba(203,166,247,.18),transparent 30%),radial-gradient(circle at 92% 18%,rgba(99,102,241,.16),transparent 28%);}' +
       '.workspace-file-popover.is-open{display:flex;flex-direction:column;}' +
@@ -137,15 +148,65 @@
     textarea.focus();
   }
 
-  async function uploadChatFiles(files) {
+  function validatedChatUploadList(files) {
     var list = Array.prototype.slice.call(files || []).filter(Boolean);
-    if (!list.length) return [];
+    var total = 0;
+    list.forEach(function (file) {
+      var size = Number(file && file.size || 0);
+      if (size > MAX_CHAT_UPLOAD_FILE_BYTES) {
+        throw new Error('文件“' + String(file && file.name || '未命名文件') + '”超过 ' + formatBytes(MAX_CHAT_UPLOAD_FILE_BYTES) + ' 限制。');
+      }
+      total += Math.max(0, size);
+    });
+    if (total > MAX_CHAT_UPLOAD_TOTAL_BYTES) {
+      throw new Error('本次上传总大小超过 ' + formatBytes(MAX_CHAT_UPLOAD_TOTAL_BYTES) + ' 限制。');
+    }
+    return list;
+  }
+
+  function uploadChatFiles(files, options) {
+    var list;
+    try {
+      list = validatedChatUploadList(files);
+    } catch (error) {
+      return Promise.reject(error);
+    }
+    if (!list.length) return Promise.resolve([]);
+    options = options || {};
     var form = new FormData();
     list.forEach(function (file) { form.append('files', file, file.name || 'upload.bin'); });
-    var r = await fetch('/api/upload-chat-files', { method: 'POST', credentials: 'same-origin', body: form });
-    var j = await r.json().catch(function () { return { ok: false, error: '上传失败' }; });
-    if (!r.ok || !j.ok) throw new Error((j && j.error) || '上传失败');
-    return Array.isArray(j.files) ? j.files : [];
+    return new Promise(function (resolve, reject) {
+      var xhr = new XMLHttpRequest();
+      xhr.open('POST', '/api/upload-chat-files', true);
+      xhr.withCredentials = true;
+      xhr.timeout = 10 * 60 * 1000;
+      if (xhr.upload && typeof options.onProgress === 'function') {
+        xhr.upload.onprogress = function (event) {
+          options.onProgress(event.loaded || 0, event.lengthComputable ? event.total : 0);
+        };
+      }
+      if (typeof options.registerAbort === 'function') {
+        options.registerAbort(function () { xhr.abort(); });
+      }
+      xhr.onload = function () {
+        var data;
+        try { data = JSON.parse(xhr.responseText || '{}'); }
+        catch (_error) { data = { ok: false, error: '上传失败' }; }
+        if (xhr.status < 200 || xhr.status >= 300 || !data.ok) {
+          reject(new Error((data && data.error) || '上传失败'));
+          return;
+        }
+        resolve(Array.isArray(data.files) ? data.files : []);
+      };
+      xhr.onerror = function () { reject(new Error('上传失败：网络连接异常。')); };
+      xhr.ontimeout = function () { reject(new Error('上传超时，请重试。')); };
+      xhr.onabort = function () {
+        var error = new Error('上传已取消。');
+        error.name = 'AbortError';
+        reject(error);
+      };
+      xhr.send(form);
+    });
   }
 
   function formatBytes(n) {
@@ -198,13 +259,97 @@
     insertTextAtCursor(textarea, text);
   }
 
-  function insertUploadedFiles(textarea, files) {
+  function insertUploadedFiles(textarea, files, options) {
     var targetSessionId = currentChatSessionId();
-    return uploadChatFiles(files).then(function (uploaded) {
+    return uploadChatFiles(files, options).then(function (uploaded) {
       var text = uploaded.map(function (item) {
         return quotePickedPath(item.path || item.rel || item.name);
       }).join(' ');
       appendUploadedText(textarea, text, targetSessionId);
+    });
+  }
+
+  function dispatchUploadError(textarea, error) {
+    console.error('chat file upload failed:', error);
+    textarea.dispatchEvent(new CustomEvent('myagent:file-paste-error', {
+      bubbles: true,
+      detail: { message: String((error && error.message) || error || '上传失败') }
+    }));
+  }
+
+  function setChatUploadBusy(textarea, busy) {
+    var wrapper = textarea.closest ? textarea.closest('.input-wrapper') : null;
+    if (busy) textarea.dataset.fileUploadBusy = '1';
+    else delete textarea.dataset.fileUploadBusy;
+    if (wrapper) {
+      wrapper.classList.toggle('is-file-uploading', !!busy);
+      if (busy) wrapper.setAttribute('aria-busy', 'true');
+      else wrapper.removeAttribute('aria-busy');
+    }
+    textarea.dispatchEvent(new CustomEvent('myagent:file-upload-state', {
+      bubbles: true,
+      detail: { busy: !!busy }
+    }));
+  }
+
+  function createChatUploadStatus(textarea, files) {
+    var wrapper = textarea.closest ? textarea.closest('.input-wrapper') : null;
+    var panel = document.createElement('div');
+    panel.className = 'chat-upload-status';
+    panel.setAttribute('role', 'status');
+    panel.innerHTML = '<div class="chat-upload-status-row"><span class="chat-upload-status-label"></span><button type="button" class="chat-upload-cancel">取消</button></div>' +
+      '<div class="chat-upload-progress" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><span class="chat-upload-progress-bar"></span></div>';
+    var count = files.length;
+    panel.querySelector('.chat-upload-status-label').textContent = '正在上传 ' + count + ' 个文件… 0%';
+    if (wrapper && wrapper.parentNode) wrapper.parentNode.insertBefore(panel, wrapper.nextSibling);
+    return panel;
+  }
+
+  function startChatFileUpload(textarea, files) {
+    var list;
+    try {
+      list = validatedChatUploadList(files);
+    } catch (error) {
+      dispatchUploadError(textarea, error);
+      return Promise.reject(error);
+    }
+    if (!list.length) return Promise.resolve();
+    if (textarea._myAgentActiveUpload) {
+      var busyError = new Error('已有文件正在上传，请等待完成或先取消。');
+      dispatchUploadError(textarea, busyError);
+      return Promise.reject(busyError);
+    }
+    var panel = createChatUploadStatus(textarea, list);
+    var label = panel.querySelector('.chat-upload-status-label');
+    var progress = panel.querySelector('.chat-upload-progress');
+    var bar = panel.querySelector('.chat-upload-progress-bar');
+    var cancel = panel.querySelector('.chat-upload-cancel');
+    var abortUpload = null;
+    var state = textarea._myAgentActiveUpload = {};
+    setChatUploadBusy(textarea, true);
+    cancel.addEventListener('click', function () {
+      cancel.disabled = true;
+      label.textContent = '正在取消上传…';
+      if (abortUpload) abortUpload();
+    });
+    return insertUploadedFiles(textarea, list, {
+      registerAbort: function (abort) { abortUpload = abort; },
+      onProgress: function (loaded, total) {
+        if (textarea._myAgentActiveUpload !== state) return;
+        var percent = total > 0 ? Math.min(100, Math.round(loaded * 100 / total)) : 0;
+        label.textContent = '正在上传 ' + list.length + ' 个文件… ' + percent + '%';
+        bar.style.width = percent + '%';
+        progress.setAttribute('aria-valuenow', String(percent));
+      }
+    }).catch(function (error) {
+      if (!error || error.name !== 'AbortError') dispatchUploadError(textarea, error);
+      throw error;
+    }).finally(function () {
+      if (textarea._myAgentActiveUpload === state) {
+        delete textarea._myAgentActiveUpload;
+        setChatUploadBusy(textarea, false);
+      }
+      if (panel.parentNode) panel.parentNode.removeChild(panel);
     });
   }
 
@@ -232,30 +377,28 @@
     });
   }
 
+  function clipboardHasUsableText(ev) {
+    var data = ev && ev.clipboardData;
+    if (!data || typeof data.getData !== 'function') return false;
+    try {
+      return String(data.getData('text/plain') || '').trim().length > 0;
+    } catch (_error) {
+      return false;
+    }
+  }
+
   function bindPasteUpload(textarea) {
     if (!textarea || textarea.dataset.filePasteBound === '1') return;
     textarea.dataset.filePasteBound = '1';
     textarea.addEventListener('paste', function (ev) {
+      // Office applications put a bitmap preview on the clipboard alongside
+      // copied text. Prefer the text and leave the textarea's native paste
+      // behavior intact; upload files only when the clipboard has no text.
+      if (clipboardHasUsableText(ev)) return;
       var files = clipboardFilesFromEvent(ev);
       if (!files.length) return;
       ev.preventDefault();
-      var wrapper = textarea.closest ? textarea.closest('.input-wrapper') : null;
-      if (wrapper) {
-        wrapper.classList.add('is-paste-uploading');
-        wrapper.setAttribute('aria-busy', 'true');
-      }
-      insertUploadedFiles(textarea, files).catch(function (error) {
-        console.error('clipboard file upload failed:', error);
-        textarea.dispatchEvent(new CustomEvent('myagent:file-paste-error', {
-          bubbles: true,
-          detail: { message: String((error && error.message) || error || '上传失败') }
-        }));
-      }).finally(function () {
-        if (wrapper) {
-          wrapper.classList.remove('is-paste-uploading');
-          wrapper.removeAttribute('aria-busy');
-        }
-      });
+      startChatFileUpload(textarea, files).catch(function () {});
     });
   }
 
@@ -802,7 +945,7 @@
     wrapper.addEventListener('drop', function (ev) {
       if (!ev.dataTransfer || !ev.dataTransfer.files || !ev.dataTransfer.files.length) return;
       ev.preventDefault();
-      insertUploadedFiles(textarea, ev.dataTransfer.files).catch(function () {});
+      startChatFileUpload(textarea, ev.dataTransfer.files).catch(function () {});
     });
   }
 
@@ -828,7 +971,7 @@
       var files = fileInput.files;
       if (!files || !files.length) return;
       button.disabled = true;
-      insertUploadedFiles(textarea, files).finally(function () {
+      startChatFileUpload(textarea, files).catch(function () {}).finally(function () {
         fileInput.value = '';
         button.disabled = false;
       });
@@ -867,7 +1010,9 @@
     attachChatPicker: attachChatPicker,
     uploadChatFiles: uploadChatFiles,
     insertUploadedFiles: insertUploadedFiles,
+    startChatFileUpload: startChatFileUpload,
     clipboardFilesFromEvent: clipboardFilesFromEvent,
+    clipboardHasUsableText: clipboardHasUsableText,
     scan: scan,
   };
 

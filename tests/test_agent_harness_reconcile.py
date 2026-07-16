@@ -565,6 +565,27 @@ def test_runtime_v2_create_subagent_does_not_initialize_legacy_histories(monkeyp
     assert any(row.get("task_id") == child_id and row.get("status") == "pending" for row in tasks)
 
 
+def test_create_subagent_persists_selected_model_profile(monkeypatch, tmp_path):
+    import agent_harness
+
+    monkeypatch.setenv("RUNTIME_VERSION", "2")
+    parent_id = str(uuid.uuid4())
+    mgr = agent_harness.SessionManager(tmp_path, tmp_path / "sessions.json")
+    mgr._save_metadata(parent_id, {"name": "parent"})
+
+    child_id = mgr.create_subagent_session(
+        parent_id,
+        "profile-bound child",
+        "generalPurpose",
+        1,
+        model_profile_id="profile-deep",
+    )
+
+    metadata = mgr._load_metadata(child_id)
+    assert metadata["model_profile_id"] == "profile-deep"
+    assert "executor_model" not in metadata
+
+
 def test_runtime_v2_fork_subagent_uses_v2_projection_not_legacy(monkeypatch, tmp_path):
     import agent_harness
     from runtime_v2 import RuntimeHistoryOps, RuntimeModelProjection, SnapshotStore

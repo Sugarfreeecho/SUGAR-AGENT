@@ -218,14 +218,36 @@ def test_task_schema_uses_action_discriminator():
     props = schema["parameters"]["properties"]
     assert props["action"]["enum"] == ["start", "resume", "status", "collect", "interrupt"]
     assert "Never use resume to poll" in schema["description"]
+    assert "Reuse existing subagents before creating new ones" in schema["description"]
+    assert "Do not create a duplicate" in schema["description"]
+    assert "independent, non-overlapping scopes" in schema["description"]
+    assert "verifying results, deduplicating findings, resolving conflicts" in schema["description"]
     assert "foreground explore for one read-only investigation" in schema["description"]
     assert "several background explore runs followed by status/collect" in schema["description"]
     assert "best-of-n-runner for genuinely different candidate solutions" in schema["description"]
     assert "requires resume ID and non-empty prompt" in props["action"]["description"]
+    assert "prefer interacting with an existing suitable subagent" in props["action"]["description"]
+    assert "use it before start" in props["action"]["description"]
+    assert "continues, clarifies, corrects, or extends" in props["resume"]["description"]
     assert "list all actual subagents recursively" in props["action"]["description"]
     assert "There is no multi-ID subset form" in props["action"]["description"]
     assert "objective; scope and exact paths" in props["prompt"]["description"]
     assert "false: wait and return" in props["run_in_background"]["description"]
+    assert "model_profile_id" in props
+    assert "Default: omit this parameter" in props["model_profile_id"]["description"]
+    assert "low-cost/high-concurrency batch work" in props["model_profile_id"]["description"]
+    assert "do not send legacy args, working_dir, or timeout" in next(
+        row["function"]["description"] for row in agent_tools.OPENAI_TOOL_DEFINITIONS
+        if row["function"]["name"] == "run_shell"
+    )
+    assert "Preferred tool for ordinary text-file modifications" in next(
+        row["function"]["description"] for row in agent_tools.OPENAI_TOOL_DEFINITIONS
+        if row["function"]["name"] == "apply_patch"
+    )
+    assert "Never guess, abbreviate" in props["model_profile_id"]["description"]
+    assert "current message/attachment chain actually accept image input" in props["model_profile_id"]["description"]
+    assert "keep their original profile on resume" in props["model_profile_id"]["description"]
+    assert "model" not in props
     assert props["subagent_type"]["default"] == "generalPurpose"
     assert "arrays and multiple IDs are unsupported" in props["resume"]["description"]
     assert "all-subagents view includes nested descendants" in props["resume"]["description"]
@@ -234,24 +256,21 @@ def test_task_schema_uses_action_discriminator():
     assert "collect_result" not in props
 
 
-def test_system_prompt_documents_common_subagent_patterns():
+def test_system_prompt_keeps_cross_tool_rules_without_repeating_tool_schemas():
     prompt = (APP / "prompt.md").read_text(encoding="utf-8")
 
-    expected_patterns = [
-        "代码探索或问题定位",
-        "单点实现或修复",
-        "多个独立调研或审查维度",
-        "耗时较长但结果暂时不阻塞父任务",
-        "继续同一 Agent、补充材料或纠正方向",
-        "需要多个明显不同的候选方案",
-        "严格本地只读检查",
-        "不应使用 subagent 的情况",
-    ]
-    assert all(pattern in prompt for pattern in expected_patterns)
-    assert 'task(action="status")' in prompt
-    assert 'task(action="collect")' in prompt
-    assert 'task(action="resume", resume="<ID>"' in prompt
-    assert 'subagent_type="best-of-n-runner", n=3' in prompt
+    assert "先读后写" in prompt
+    assert "写入或编辑后要做必要验证" in prompt
+    assert "未征得用户同意不要擅自 `pip install`" in prompt
+    assert "无依赖的只读工具按并发上限并行" in prompt
+    assert "不得猜测未知参数" in prompt
+    assert "创建以任务名命名的子目录" in prompt
+    assert "grep` 默认 `mode=regex" not in prompt
+    assert "*** Begin Patch" not in prompt
+    assert "不要生成旧参数" not in prompt
+    assert "task / subagent 常用模式" not in prompt
+    assert 'task(action="status")' not in prompt
+    assert "model_profile_id" not in prompt
 
 
 def test_tool_schemas_require_canonical_write_fields_without_forcing_strict_provider_mode():
@@ -265,6 +284,31 @@ def test_tool_schemas_require_canonical_write_fields_without_forcing_strict_prov
     assert "edit_file" not in schemas
     assert schemas["apply_patch"]["required"] == ["patch"]
     assert schemas["delete_file"]["required"] == ["path"]
+
+
+def test_apply_patch_schema_explains_update_context_without_fake_before_parameter():
+    function = next(
+        row["function"] for row in agent_tools.OPENAI_TOOL_DEFINITIONS
+        if row["function"]["name"] == "apply_patch"
+    )
+    properties = function["parameters"]["properties"]
+    description = function["description"]
+    patch_description = properties["patch"]["description"]
+
+    assert set(properties) == {"patch"}
+    assert "there are no `before`, `after`" in description
+    assert "Read the target immediately before editing" in description
+    assert "re-read the reported file and rebuild the hunk" in description
+    assert "plain `@@` hunk header (never `*** @@`)" in patch_description
+    assert "space for an unchanged existing line" in patch_description
+    assert "at least one space- or minus-prefixed existing line" in patch_description
+    assert "required old, before, or context content" in patch_description
+    assert "Paths are resolved from the runtime WORK_DIR" in patch_description
+    assert "Files outside WORK_DIR cannot be patched" in patch_description
+    assert "new Add/Update/Delete File section for every file" in patch_description
+    assert "*** Update File: relative/path.txt" in patch_description
+    assert "-exact old line" in patch_description
+    assert "+replacement line" in patch_description
 
 
 def test_apply_patch_handles_multiple_file_operations(tmp_path, monkeypatch):

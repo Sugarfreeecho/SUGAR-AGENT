@@ -651,6 +651,12 @@ SSE 是后端向前端展示 Agent 过程的主通道。事件至少应覆盖以
 - Runtime V2 UI projection 的 `ui_index`、`runtime_seq` 映射必须基于最终可见 UI 投影，而不是原始 runtime seq 列表；删除、改写、截断、visible range 等历史操作必须先作用到投影后再生成 count/user_turns/index。
 - Runtime V2 recent-turn tail 快路径遇到删除、改写、截断等 history ops 时必须回退到完整 projection，不能用原始尾窗绕过可见历史规则。
 - `user_steer` 只表示 UI 展示类型差异：模型上下文仍按普通 user message 处理，UI projection 必须恢复为执行过程块中的“追问”，且不得进入 TOC 用户轮次。
+- 运行中输入的追问先进入本地待发送队列；入队、刷新、服务端同步、当前 run 结束以及上一条追问消费完成均只能恢复或刷新队列状态，不得自动发送任何 `pending` 条目。只有用户点击该条“立即发送”才能创建/消费 durable steer；发送路径共用同一 per-session dispatcher，保证同一会话同一时刻只处理一条追问，失败时队列项必须保留。
+- `interrupt` 追问必须用 `client_id/steer_id` 原位提交同一乐观行，并在追问处封口旧 process group；新运行即使从 `react_iter=1` 重新计数，也只能在新 process group 内查找/upsert reasoning 与 response 行，不得覆盖旧运行中编号相同的行。
+- “立即发送”steer 返回 409（服务端认为旧 run 已结束）后降级 `/chat`，降级前必须等待发送锁释放；若锁迟迟未释放或 `/chat` 未真正开跑，必须将队列项恢复为 `pending` 保留，不得静默返回或定时无条件删除。
+- 追问队列项必须持久化所有非终态状态（含 `clientId`、`steerId`、`status`、`mode`、`replacementRunId`），包括 `submitting/sending/accepted/restarting`；只有收到 `consumed/cancelled` 或 `/chat` 明确成功开跑后才删除。刷新恢复时 `submitting/sending` 回退为 `pending`（服务端按 `client_id` 幂等去重），`accepted/restarting` 保留由 watcher/server sync 继续追踪。
+- 实时 `user_steer` SSE、轮询与历史回放必须携带并通过 `client_id/steer_id/steer_mode` 提交同一乐观行，不得 `appendLog` 新增重复行；`append` 模式先乐观追加 pending 行，SSE 到达时通过 operation-id 提交该行而非再追加一条；预留的乐观 UI event index 必须被持久化事件原位占用，不能使后续事件整体偏移。
+- watcher 必须覆盖 `submitting/sending/accepted/restarting` 全部非终态状态，不能只监控后两种；SSE 丢失、轮询查到 consumed/cancelled 时必须相应提交或回退乐观行。
 - 前端 context token/cache stats 显示必须以事件所属 session 为准；后台运行、切走会话或重连事件不得刷新当前可见会话的右上角 token 标签。
 
 ## 20. 已知工程特征

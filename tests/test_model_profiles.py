@@ -14,6 +14,44 @@ def test_profile_store_defaults_to_project_root(tmp_path):
     assert model_profiles.profile_store_path(tmp_path) == tmp_path / "model_profiles.json"
 
 
+def test_model_task_capabilities_cover_routing_families():
+    cases = {
+        "deepseek-v4-flash": {"low_cost_parallel", "research", "coding_agent"},
+        "MiniMax-M3": {"low_cost_parallel", "hard_reasoning", "multimodal_candidate"},
+        "gpt-5.4": {"hard_reasoning", "multimodal_candidate", "coding_agent"},
+        "claude-opus-4.8": {"hard_reasoning", "multimodal_candidate", "coding_agent"},
+        "glm-5.2": {"hard_reasoning", "coding_agent"},
+        "gemini-3.1-pro": {"hard_reasoning", "research", "multimodal_candidate"},
+        "grok-4.5": {"hard_reasoning", "research", "multimodal_candidate"},
+        "mimo-v2.5-pro": {"hard_reasoning", "multimodal_candidate", "coding_agent"},
+        "qwen3.7-plus": {"multimodal_candidate", "coding_agent"},
+        "kimi-k2.6": {"hard_reasoning", "multimodal_candidate", "coding_agent"},
+        "sonar-deep-research": {"research"},
+        "pixtral-large": {"multimodal_candidate"},
+    }
+
+    for model, expected in cases.items():
+        inferred = model_profiles.infer_model_task_capabilities(model, context_window=256_000)
+        assert expected <= set(inferred["capability_tags"]), model
+
+    deepseek = model_profiles.infer_model_task_capabilities("deepseek-v4-flash")
+    assert "低成本/多并发" in deepseek["capability_description"]
+    assert "批量总结" in deepseek["capability_description"]
+
+
+def test_public_profile_adds_automatic_capability_description():
+    public = model_profiles.public_profile({
+        "name": "Research model",
+        "model": "gemini-3.1-pro",
+        "context_window": 1_000_000,
+        "api_key": "secret",
+    })
+
+    assert public["capability_source"] == "automatic:model-family-heuristic"
+    assert {"research", "multimodal_candidate", "long_context"} <= set(public["capability_tags"])
+    assert "调查调研" in public["capability_description"]
+
+
 def test_load_store_reads_legacy_app_location_when_default_missing(tmp_path):
     legacy_dir = tmp_path / "app"
     legacy_dir.mkdir()

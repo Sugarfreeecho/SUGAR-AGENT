@@ -132,7 +132,7 @@ body {
 .sidebar-brand { padding: 1rem 1rem 0.7rem; border-bottom: 1px solid var(--border-glass); }
 .sidebar-brand-line { display: flex; align-items: center; gap: 0.7rem; }
 .sidebar-brand-actions { display: flex; flex-direction: column; align-items: center; gap: 0; flex-shrink: 0; transform: translateY(4px); }
-.sidebar-brand-actions .sidebar-settings-btn { width: 22px; height: 22px; border-radius: 7px; }
+.sidebar-brand-actions .sidebar-settings-btn { width: 28px; height: 22px; border-radius: 7px; }
 .sidebar-brand-copy { flex: 1; min-width: 0; overflow: hidden; }
 
 .sidebar-settings-btn {
@@ -148,7 +148,7 @@ body {
     transform: rotate(30deg);
 }
 .sidebar-settings-btn svg { width: 18px; height: 18px; }
-.sidebar-language-btn { margin-top: 0; font-size: 0.68rem; font-weight: 800; letter-spacing: -0.08em; }
+.sidebar-language-btn { margin-top: 0; font-size: 0.6rem; font-weight: 800; letter-spacing: -0.08em; }
 .sidebar-language-btn:hover { transform: none; }
 .sidebar-language-glyph { display: inline-block; line-height: 1; }
 :root.theme-light .sidebar-settings-btn { background: transparent; color: var(--text-secondary); }
@@ -2415,7 +2415,7 @@ body {
 .followup-queue-row {
     position: relative;
     display: grid;
-    grid-template-columns: 1.3rem minmax(0, 1fr) auto auto auto;
+    grid-template-columns: 1.3rem minmax(0, 1fr) auto auto auto auto;
     align-items: center;
     gap: 0.36rem;
     min-height: 2rem;
@@ -2459,6 +2459,26 @@ body {
     line-height: 1;
     padding: 0.34rem 0.48rem;
     cursor: pointer;
+}
+.followup-queue-mode {
+    min-width: 3.7rem;
+    border: 1px solid var(--border-glass);
+    border-radius: 8px;
+    background: rgba(255,255,255,0.04);
+    color: var(--text-secondary);
+    font-family: var(--sans);
+    font-size: 0.72rem;
+    font-weight: 700;
+    line-height: 1;
+    padding: 0.28rem 0.34rem;
+    cursor: pointer;
+}
+.followup-queue-mode:disabled {
+    opacity: 0.48;
+    cursor: default;
+}
+.feed-item[data-steer-pending="1"] {
+    opacity: 0.78;
 }
 .followup-queue-action:disabled {
     opacity: 0.48;

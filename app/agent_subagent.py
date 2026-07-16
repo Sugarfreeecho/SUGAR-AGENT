@@ -27,6 +27,8 @@ from agent_harness import (
     _dict_to_message,
     _message_to_dict,
     derive_dialogue_from_assistant_history,
+    inherited_executor_selection,
+    list_executor_model_profile_choices,
     logger,
     session_manager,
     todo_manager,
@@ -304,6 +306,56 @@ subagent_registry = SubagentTaskRegistry()
 def _tool_name(defn: Dict[str, Any]) -> str:
     fn = (defn or {}).get("function") or {}
     return str(fn.get("name") or "")
+
+
+def inject_task_model_profiles(
+    tool_definitions: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """Inject current registered profile IDs into a copy of the task schema."""
+    choices = list_executor_model_profile_choices()
+    profile_ids = [str(row.get("id") or "").strip() for row in choices]
+    profile_ids = [value for value in profile_ids if value]
+    if not profile_ids:
+        return list(tool_definitions or [])
+
+    details = []
+    for row in choices:
+        pid = str(row.get("id") or "").strip()
+        if not pid:
+            continue
+        name = str(row.get("name") or pid).strip()
+        model = str(row.get("model") or "").strip()
+        capability = str(row.get("capability_description") or "").strip()
+        details.append(
+            f"- {pid}: {name} (model={model or 'unspecified'})"
+            + (f" — {capability}" if capability else "")
+        )
+
+    out: List[Dict[str, Any]] = []
+    for definition in tool_definitions or []:
+        if _tool_name(definition) != "task":
+            out.append(definition)
+            continue
+        task_definition = copy.deepcopy(definition)
+        function = task_definition.get("function") or {}
+        parameters = function.get("parameters") or {}
+        properties = parameters.get("properties") or {}
+        profile_property = properties.get("model_profile_id")
+        if isinstance(profile_property, dict):
+            base_description = str(profile_property.get("description") or "").split(
+                "\n\nAvailable registered model profiles:", 1
+            )[0]
+            profile_property["description"] = (
+                base_description
+                + "\n\nAvailable registered model profiles:\n"
+                + "\n".join(details)
+                + "\nSelection rule: omit by default; for a specialized task choose the first configured profile "
+                "whose capability description materially matches the task. Do not select merely because a profile exists."
+            )
+            profile_property["enum"] = profile_ids
+            profile_property.pop("default", None)
+        out.append(task_definition)
+    return out
 
 
 def filter_tools_for_session(
@@ -1162,6 +1214,15 @@ async def _run_single_subagent(
                 "Error: task action=resume requires a non-empty follow-up prompt. "
                 "Use action=collect to read the existing result or action=status to inspect state."
             )
+        requested_profile_id = str(tool_args.get("model_profile_id") or "").strip()
+        creates_new_session = action == "start" or (
+            action == "resume" and resume_for_action.lower() == "self"
+        )
+        if not creates_new_session and requested_profile_id:
+            return (
+                f"Error: task action={action} cannot change the model of an existing subagent; "
+                "set model_profile_id only when creating a new subagent."
+            )
         if action == "status":
             return _format_subagent_status_report(parent_session_id, resume_for_action)
         if action == "collect":
@@ -1193,10 +1254,45 @@ async def _run_single_subagent(
     readonly_strict = bool(tool_args.get("readonly"))
     run_in_background = bool(tool_args.get("run_in_background"))
     interrupt = bool(tool_args.get("interrupt"))
-    model_override = str(tool_args.get("model") or "").strip()
+    model_profile_id = str(tool_args.get("model_profile_id") or "").strip()
+    removed_model_override = str(tool_args.get("model") or "").strip()
+    model_override = ""
+    executor_llm_type_override = ""
     file_attachments = tool_args.get("file_attachments")
     if not isinstance(file_attachments, list):
         file_attachments = []
+
+    if removed_model_override:
+        return (
+            "Error: task.model has been removed; register/select the model and pass "
+            "model_profile_id instead."
+        )
+    if resume_raw and resume_raw.lower() != "self" and model_profile_id:
+        return (
+            "Error: an existing subagent keeps its original model; "
+            "model_profile_id is only valid when creating a new subagent."
+        )
+
+    profile_choices = list_executor_model_profile_choices()
+    valid_profile_ids = {
+        str(row.get("id") or "").strip() for row in profile_choices
+        if str(row.get("id") or "").strip()
+    }
+    if model_profile_id and model_profile_id not in valid_profile_ids:
+        return (
+            f"Error: unknown model_profile_id={model_profile_id!r}; "
+            f"available IDs: {', '.join(sorted(valid_profile_ids)) or '(none)'}."
+        )
+
+    if not model_profile_id and (
+        not resume_raw or resume_raw.lower() == "self"
+    ):
+        inherited = inherited_executor_selection(parent_session_id)
+        model_profile_id = str(inherited.get("model_profile_id") or "").strip()
+        model_override = str(inherited.get("executor_model") or "").strip()
+        executor_llm_type_override = str(inherited.get("executor_llm_type") or "").strip()
+        if model_profile_id not in valid_profile_ids:
+            model_profile_id = str((profile_choices[0] if profile_choices else {}).get("id") or "").strip()
 
     if not prompt and not resume_raw:
         return (
@@ -1228,7 +1324,9 @@ async def _run_single_subagent(
             description,
             subagent_type,
             parent_depth + 1,
+            model_profile_id=model_profile_id,
             executor_model=model_override,
+            executor_llm_type=executor_llm_type_override,
             readonly_strict=readonly_strict,
         )
     elif resume_raw:
@@ -1260,7 +1358,9 @@ async def _run_single_subagent(
             description,
             subagent_type,
             parent_depth + 1,
+            model_profile_id=model_profile_id,
             executor_model=model_override,
+            executor_llm_type=executor_llm_type_override,
             readonly_strict=readonly_strict,
             best_of_run_id=best_of_run_id,
             best_of_attempt=best_of_attempt,

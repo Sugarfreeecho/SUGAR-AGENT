@@ -238,13 +238,23 @@ class RuntimeUiProjectionTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             mirror = RuntimeMirror(tmp)
             mirror.mirror_ui_event("s1", {"type": "user", "content": "first question"})
-            mirror.mirror_ui_event("s1", {"type": "user_steer", "content": "follow up", "steer": True})
+            mirror.mirror_ui_event("s1", {
+                "type": "user_steer",
+                "content": "follow up",
+                "steer": True,
+                "steer_id": "steer-1",
+                "client_id": "client-1",
+                "steer_mode": "append",
+            })
             projection = RuntimeUiProjection(tmp)
 
             events = projection.read_ui_events("s1")
 
             self.assertEqual(events[1]["type"], "user_steer")
             self.assertTrue(events[1]["steer"])
+            self.assertEqual(events[1]["steer_id"], "steer-1")
+            self.assertEqual(events[1]["client_id"], "client-1")
+            self.assertEqual(events[1]["steer_mode"], "append")
             self.assertEqual(projection.read_user_turns_light("s1"), [
                 {"event_index": 0, "preview": "first question"},
             ])

@@ -153,6 +153,96 @@ def infer_model_limits(model_id: str, raw: Optional[dict] = None) -> dict[str, A
     }
 
 
+def infer_model_task_capabilities(
+    model_id: str,
+    profile_name: str = "",
+    context_window: int = 0,
+) -> dict[str, Any]:
+    """Infer concise task-routing hints from a model family/name.
+
+    These are conservative routing hints for the parent agent, not guarantees
+    that every provider endpoint exposes every modality of a model family.
+    """
+    key = f"{profile_name} {model_id}".strip().lower()
+    tags: list[str] = []
+    descriptions: list[str] = []
+
+    def add(tag: str, description: str) -> None:
+        if tag not in tags:
+            tags.append(tag)
+            descriptions.append(description)
+
+    low_cost_variant = bool(re.search(
+        r"(?:^|[-_/])(mini|nano|flash|lite|haiku|turbo|small)(?:[-_. /]|$)",
+        key,
+    ))
+    if "deepseek" in key or "minimax" in key or low_cost_variant:
+        add(
+            "low_cost_parallel",
+            "低成本/多并发：批量总结、信息抽取、常规代码探索和大量独立 subagent",
+        )
+
+    hard_family = any(name in key for name in ("gpt", "claude", "glm"))
+    hard_variant = any(name in key for name in (
+        "reasoner", "reasoning", "thinking", "-pro", "-max", "opus",
+        "gemini-pro", "gemini-3.1-pro", "grok", "minimax-m3", "mimo-v2.5-pro",
+        "kimi-k2", "qwen-max", "qwen3-max", "mistral-large", "command-r-plus",
+    )) or bool(re.search(r"(?:^|[-_/])o[134](?:[-_. /]|$)", key))
+    if hard_family or hard_variant:
+        add(
+            "hard_reasoning",
+            "高难度：复杂推理、架构设计、疑难调试和长链路决策",
+        )
+
+    if any(name in key for name in (
+        "deepseek", "gemini", "grok", "perplexity", "sonar", "deep-research",
+        "deep_research", "command-r",
+    )):
+        add(
+            "research",
+            "调查调研：多源搜索、资料核验、事实交叉验证和研究综述",
+        )
+
+    broad_multimodal_family = any(name in key for name in (
+        "gpt", "claude", "gemini", "grok", "minimax-m3", "mimo", "qwen", "kimi",
+    ))
+    explicit_multimodal = any(name in key for name in (
+        "vision", "-vl", "_vl", "omni", "multimodal", "pixtral", "llava", "molmo",
+        "internvl", "cogvlm", "nova-pro", "nova-lite", "phi-vision", "gemma-vision",
+    )) or bool(re.search(r"glm[-_.]?[0-9.]*v(?:[-_. /]|$)", key))
+    if broad_multimodal_family or explicit_multimodal:
+        add(
+            "multimodal_candidate",
+            "多模态候选：图片识别、OCR、UI 截图和图文理解；须确认具体型号及接口支持图片输入",
+        )
+
+    if any(name in key for name in (
+        "gpt", "claude", "glm", "deepseek", "gemini", "grok", "minimax-m3", "mimo",
+        "qwen", "kimi", "coder", "codestral", "mistral", "llama",
+    )):
+        add(
+            "coding_agent",
+            "代码/Agent：代码理解、工具调用、实现修改和调试",
+        )
+
+    if _safe_int(context_window, 0) >= 200_000:
+        add(
+            "long_context",
+            "长上下文：大型文档、长日志和大代码库的总结与检索",
+        )
+
+    if not tags:
+        add(
+            "general",
+            "通用：未识别到明确专长，默认继承父模型，除非已有人工验证",
+        )
+    return {
+        "capability_tags": tags,
+        "capability_description": "；".join(descriptions),
+        "capability_source": "automatic:model-family-heuristic",
+    }
+
+
 def _normalize_base_url(base_url: str) -> str:
     url = str(base_url or "").strip().rstrip("/")
     if not url:
@@ -317,6 +407,11 @@ def save_store(project_root: Path, data: dict) -> None:
 def public_profile(profile: dict) -> dict:
     out = dict(profile)
     out["api_key_set"] = bool(str(profile.get("api_key") or "").strip())
+    out.update(infer_model_task_capabilities(
+        str(profile.get("model") or ""),
+        str(profile.get("name") or ""),
+        _safe_int(profile.get("context_window"), 0),
+    ))
     return out
 
 

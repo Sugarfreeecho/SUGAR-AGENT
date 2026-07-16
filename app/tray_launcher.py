@@ -35,13 +35,13 @@ MSG_NOT_READY = "Agent \u5c1a\u672a\u5c31\u7eea\uff0c\u8bf7\u7a0d\u5019\u3002"
 MSG_EMPTY_LOG = "Agent \u7ec8\u7aef\u65e5\u5fd7\u5c1a\u672a\u751f\u6210\u3002\n"
 TITLE_TERMINAL = "Agent \u7ec8\u7aef\u4fe1\u606f"
 
-MENU_TEXT_WEBUI = "\u6253\u5f00WebUI"
-MENU_TEXT_ENV = "\u6253\u5f00\u9ad8\u7ea7\u8bbe\u7f6e"
-MENU_TEXT_MCP = "\u6253\u5f00MCP\u914d\u7f6e"
-MENU_TEXT_TERMINAL = "\u67e5\u770b\u7ec8\u7aef\u4fe1\u606f"
-MENU_TEXT_RESTART = "\u91cd\u542fAgent"
-MENU_TEXT_UPDATE = "\u66f4\u65b0Agent"
-MENU_TEXT_EXIT = "\u9000\u51faAgent"
+MENU_TEXT_WEBUI = "\u6253\u5f00 Agent"
+MENU_TEXT_ENV = "\u9ad8\u7ea7\u8bbe\u7f6e"
+MENU_TEXT_MCP = "MCP \u914d\u7f6e"
+MENU_TEXT_TERMINAL = "\u8fd0\u884c\u65e5\u5fd7"
+MENU_TEXT_RESTART = "\u91cd\u542f"
+MENU_TEXT_UPDATE = "\u66f4\u65b0"
+MENU_TEXT_EXIT = "\u9000\u51fa Agent"
 
 MSG_RESTART_CONFIRM = "\u91cd\u542f\u4f1a\u4e2d\u65ad\u5f53\u524d\u6b63\u5728\u8fd0\u884c\u7684\u4efb\u52a1\uff0c\u662f\u5426\u7ee7\u7eed\uff1f"
 MSG_RESTARTING = "\u6b63\u5728\u91cd\u542f Agent..."
@@ -75,6 +75,7 @@ CTRL_BREAK_EVENT = 1
 CTRL_CLOSE_EVENT = 2
 CTRL_LOGOFF_EVENT = 5
 CTRL_SHUTDOWN_EVENT = 6
+GRACEFUL_STOP_TIMEOUT_SECONDS = 2
 
 ROOT = Path(__file__).resolve().parents[1]
 PYTHON_EXE = preferred_python(ROOT)
@@ -387,23 +388,51 @@ class TrayLauncher:
 
     def _show_menu(self) -> None:
         menu = win32gui.CreatePopupMenu()
-        win32gui.AppendMenu(menu, win32con.MF_STRING, MENU_OPEN_WEBUI, MENU_TEXT_WEBUI)
-        win32gui.AppendMenu(menu, win32con.MF_STRING, MENU_OPEN_ENV, MENU_TEXT_ENV)
-        win32gui.AppendMenu(menu, win32con.MF_STRING, MENU_OPEN_MCP, MENU_TEXT_MCP)
-        win32gui.AppendMenu(menu, win32con.MF_STRING, MENU_VIEW_TERMINAL, MENU_TEXT_TERMINAL)
-        win32gui.AppendMenu(menu, win32con.MF_SEPARATOR, 0, "")
-        lifecycle_flags = win32con.MF_GRAYED if self.lifecycle_busy else win32con.MF_STRING
-        win32gui.AppendMenu(menu, lifecycle_flags, MENU_RESTART, MENU_TEXT_RESTART)
-        win32gui.AppendMenu(menu, lifecycle_flags, MENU_UPDATE, MENU_TEXT_UPDATE)
-        win32gui.AppendMenu(menu, win32con.MF_SEPARATOR, 0, "")
-        win32gui.AppendMenu(menu, win32con.MF_STRING, MENU_EXIT, MENU_TEXT_EXIT)
-        pos = win32gui.GetCursorPos()
-        win32gui.SetForegroundWindow(self.hwnd)
-        win32gui.TrackPopupMenu(menu, win32con.TPM_LEFTALIGN, pos[0], pos[1], 0, self.hwnd, None)
-        win32gui.PostMessage(self.hwnd, win32con.WM_NULL, 0, 0)
+        try:
+            win32gui.AppendMenu(menu, win32con.MF_STRING, MENU_OPEN_WEBUI, MENU_TEXT_WEBUI)
+            win32gui.AppendMenu(menu, win32con.MF_STRING, MENU_OPEN_ENV, MENU_TEXT_ENV)
+            win32gui.AppendMenu(menu, win32con.MF_STRING, MENU_OPEN_MCP, MENU_TEXT_MCP)
+            win32gui.AppendMenu(menu, win32con.MF_STRING, MENU_VIEW_TERMINAL, MENU_TEXT_TERMINAL)
+            win32gui.AppendMenu(menu, win32con.MF_SEPARATOR, 0, "")
+
+            lifecycle_flags = win32con.MF_GRAYED if self.lifecycle_busy else win32con.MF_STRING
+            win32gui.AppendMenu(menu, lifecycle_flags, MENU_RESTART, MENU_TEXT_RESTART)
+            win32gui.AppendMenu(menu, lifecycle_flags, MENU_UPDATE, MENU_TEXT_UPDATE)
+            win32gui.AppendMenu(menu, win32con.MF_SEPARATOR, 0, "")
+            win32gui.AppendMenu(menu, win32con.MF_STRING, MENU_EXIT, MENU_TEXT_EXIT)
+
+            # Windows renders the default item in bold, giving the primary action
+            # a clear visual hierarchy while retaining native theme and DPI support.
+            win32gui.SetMenuDefaultItem(menu, MENU_OPEN_WEBUI, 0)
+            pos = win32gui.GetCursorPos()
+            win32gui.SetForegroundWindow(self.hwnd)
+            popup_flags = (
+                win32con.TPM_LEFTALIGN
+                | win32con.TPM_RIGHTBUTTON
+                | win32con.TPM_RETURNCMD
+                | win32con.TPM_NONOTIFY
+            )
+            command = win32gui.TrackPopupMenu(
+                menu,
+                popup_flags,
+                pos[0],
+                pos[1],
+                0,
+                self.hwnd,
+                None,
+            )
+            win32gui.PostMessage(self.hwnd, win32con.WM_NULL, 0, 0)
+            if command:
+                self._dispatch_command(int(command))
+        finally:
+            win32gui.DestroyMenu(menu)
 
     def _on_command(self, hwnd, msg, wparam, lparam):
-        command = win32api.LOWORD(wparam)
+        self._dispatch_command(win32api.LOWORD(wparam))
+        return True
+
+    def _dispatch_command(self, command: int) -> None:
+        _append_log(f"Tray menu command selected: {command}")
         if command == MENU_OPEN_WEBUI:
             self._open_url("/", refresh=True)
         elif command == MENU_OPEN_ENV:
@@ -418,7 +447,6 @@ class TrayLauncher:
             self._request_update()
         elif command == MENU_EXIT:
             self._exit_agent()
-        return True
 
     def _open_url(self, path: str, refresh: bool = False) -> None:
         if not self._is_listening():
@@ -504,10 +532,12 @@ class TrayLauncher:
     def _restart_agent_worker(self) -> None:
         _append_log(MSG_RESTARTING)
         try:
+            previous_pid = self.proc.pid if self.proc and self.proc.poll() is None else None
             self._stop_agent()
             self._start_agent()
             if self._watch_startup():
-                _append_log(MSG_RESTARTED)
+                current_pid = self.proc.pid if self.proc and self.proc.poll() is None else None
+                _append_log(f"{MSG_RESTARTED} old_pid={previous_pid} new_pid={current_pid}")
                 self._show_message(MSG_RESTARTED)
             else:
                 self._show_message(MSG_RESTART_FAILED, error=True)
@@ -566,7 +596,7 @@ class TrayLauncher:
         if self.proc and self.proc.poll() is None:
             try:
                 self.proc.send_signal(CTRL_BREAK_EVENT)
-                self.proc.wait(timeout=6)
+                self.proc.wait(timeout=GRACEFUL_STOP_TIMEOUT_SECONDS)
             except Exception:
                 self.proc.terminate()
                 try:

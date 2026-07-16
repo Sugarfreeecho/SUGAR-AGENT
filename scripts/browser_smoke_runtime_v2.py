@@ -296,6 +296,71 @@ def run(base_url: str) -> dict:
                 return nativeFetch(input, init);
               };
 
+              const NativeXMLHttpRequest = window.XMLHttpRequest;
+              window.XMLHttpRequest = class SmokeXMLHttpRequest {
+                constructor() {
+                  this.upload = {};
+                  this.status = 0;
+                  this.responseText = '';
+                  this.withCredentials = false;
+                  this.timeout = 0;
+                  this._native = null;
+                  this._aborted = false;
+                }
+                open(method, url, async) {
+                  this._method = method;
+                  this._url = String(url || '');
+                  this._async = async;
+                  if (this._url.indexOf('/api/upload-chat-files') < 0) {
+                    this._native = new NativeXMLHttpRequest();
+                    this._native.open(method, url, async);
+                  }
+                }
+                setRequestHeader(name, value) {
+                  if (this._native) this._native.setRequestHeader(name, value);
+                }
+                send(body) {
+                  if (this._native) {
+                    this._native.withCredentials = this.withCredentials;
+                    this._native.timeout = this.timeout;
+                    ['onload', 'onerror', 'ontimeout', 'onabort'].forEach(name => {
+                      this._native[name] = event => {
+                        this.status = this._native.status;
+                        this.responseText = this._native.responseText;
+                        if (typeof this[name] === 'function') this[name](event);
+                      };
+                    });
+                    this._native.send(body);
+                    return;
+                  }
+                  smoke.uploadCalls += 1;
+                  const files = body && typeof body.getAll === 'function' ? body.getAll('files') : [];
+                  const total = files.reduce((sum, file) => sum + Number(file && file.size || 0), 0);
+                  queueMicrotask(() => {
+                    if (this._aborted) return;
+                    if (typeof this.upload.onprogress === 'function') {
+                      this.upload.onprogress({loaded: total, total, lengthComputable: true});
+                    }
+                    this.status = 200;
+                    this.responseText = JSON.stringify({
+                      ok: true,
+                      files: files.map((file, index) => ({
+                        name: String(file && file.name || ('clipboard-' + index + '.bin')),
+                        path: '/workspace/uploads/chat/smoke/' + String(file && file.name || ('clipboard-' + index + '.bin')),
+                        rel: 'uploads/chat/smoke/' + String(file && file.name || ('clipboard-' + index + '.bin')),
+                        size: Number(file && file.size || 0)
+                      }))
+                    });
+                    if (typeof this.onload === 'function') this.onload();
+                  });
+                }
+                abort() {
+                  this._aborted = true;
+                  if (this._native) this._native.abort();
+                  else if (typeof this.onabort === 'function') this.onabort();
+                }
+              };
+
               const NativeFunction = window.Function;
               function SmokeFunction(...args) {
                 const last = args.length - 1;
@@ -328,6 +393,38 @@ def run(base_url: str) -> dict:
                       consumeSteer: (sid, steerId) => removeConsumedFollowupSteer(sid, {
                         steer: true, steer_id: steerId
                       }),
+                      interruptLayout: sid => {
+                        const stream = getVisibleChatStream();
+                        const ctx = newDomContext(stream);
+                        ctx.runId = 'layout-run';
+                        appendLog(ctx, 'old interrupted reasoning', 'llm-reasoning', sid, 1);
+                        const oldGroup = ctx.currentProcessGroup;
+                        prepareSteerProcessBoundary(ctx, 'interrupt', 'layout-client');
+                        const steerRow = appendSteerProcessMessage(
+                          sid, ctx, 'interrupt follow-up', 'layout-client', 'interrupt', true
+                        );
+                        steerRow.dataset.steerClientId = 'layout-client';
+                        steerRow.dataset.steerId = 'layout-steer';
+                        const committed = appendSteerProcessMessage(
+                          sid, ctx, 'interrupt follow-up', 'layout-client', 'interrupt', false
+                        );
+                        upsertLlmFeedRow(ctx, 'replacement reasoning', 'llm-reasoning', sid, 1);
+                        upsertLlmFeedRow(ctx, 'replacement response', 'llm-response', sid, 1);
+                        const newGroup = ctx.currentProcessGroup;
+                        prepareSteerProcessBoundary(ctx, 'interrupt', 'layout-client');
+                        const groups = Array.from(stream.querySelectorAll('.process-aggregate'));
+                        const rows = Array.from(newGroup.querySelectorAll('.feed-item')).map(row =>
+                          String(row.dataset.logType || '')
+                        );
+                        return {
+                          distinctGroups: oldGroup !== newGroup,
+                          oldHasReplacement: String(oldGroup.textContent || '').includes('replacement reasoning'),
+                          rows,
+                          steerRows: newGroup.querySelectorAll('.feed-item[data-steer-operation-id="layout-client"]').length,
+                          committedInPlace: committed === steerRow,
+                          groupCount: groups.length
+                        };
+                      },
                       currentSessionId: () => String(currentSessionId || '')
                     };
                     //# sourceURL=myagent-ui.js`
@@ -584,6 +681,18 @@ def run(base_url: str) -> dict:
             Array.from(document.querySelectorAll('.msg-wrap--user .message.user'))
               .some(node => String(node.innerText || '').includes('rewritten browser smoke question'))
         """, timeout=12)
+        interrupt_layout = cdp.evaluate(
+            "window.__runtimeV2SmokeHooks.interruptLayout(window.__runtimeV2SmokeHooks.currentSessionId())"
+        )
+        expected_interrupt_rows = ["user-steer", "llm-reasoning", "llm-response"]
+        if (
+            not interrupt_layout.get("distinctGroups")
+            or interrupt_layout.get("oldHasReplacement")
+            or interrupt_layout.get("rows") != expected_interrupt_rows
+            or int(interrupt_layout.get("steerRows") or 0) != 1
+            or not interrupt_layout.get("committedInPlace")
+        ):
+            raise AssertionError(f"interrupt steer process layout is misaligned: {interrupt_layout}")
         return {
             "ok": True,
             "runtime_version": active_runtime,
@@ -615,6 +724,7 @@ def run(base_url: str) -> dict:
                 "next_item_waited": True,
                 "posts_after_second_click": 2,
             },
+            "interrupt_steer_layout": interrupt_layout,
             "branch": {
                 "session_id": branch_session_id,
                 "elapsed_ms": round(branch_elapsed_ms, 1),

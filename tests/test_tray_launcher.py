@@ -1,4 +1,5 @@
 import sys
+import socket
 import threading
 from pathlib import Path
 
@@ -62,3 +63,110 @@ def test_update_launches_external_updater_then_exits(monkeypatch):
     assert "--launcher-pid" in command
     assert kwargs["creationflags"] & tray_launcher.subprocess.CREATE_NEW_CONSOLE
     assert events == ["exit"]
+
+
+def test_menu_is_compact_with_groups_default_action_and_cleanup(monkeypatch):
+    launcher = make_launcher()
+    launcher.lifecycle_busy = False
+    launcher._is_listening = lambda: True
+    calls: list[tuple] = []
+    menu_handle = 321
+
+    monkeypatch.setattr(tray_launcher.win32gui, "CreatePopupMenu", lambda: menu_handle)
+    monkeypatch.setattr(
+        tray_launcher.win32gui,
+        "AppendMenu",
+        lambda *args: calls.append(("append", *args)),
+    )
+    monkeypatch.setattr(
+        tray_launcher.win32gui,
+        "SetMenuDefaultItem",
+        lambda *args: calls.append(("default", *args)),
+    )
+    monkeypatch.setattr(tray_launcher.win32gui, "GetCursorPos", lambda: (10, 20))
+    monkeypatch.setattr(tray_launcher.win32gui, "SetForegroundWindow", lambda hwnd: None)
+    monkeypatch.setattr(
+        tray_launcher.win32gui,
+        "TrackPopupMenu",
+        lambda *args: calls.append(("track", *args)) or 0,
+    )
+    monkeypatch.setattr(tray_launcher.win32gui, "PostMessage", lambda *args: None)
+    monkeypatch.setattr(
+        tray_launcher.win32gui,
+        "DestroyMenu",
+        lambda menu: calls.append(("destroy", menu)),
+    )
+
+    launcher._show_menu()
+
+    appended_labels = [call[-1] for call in calls if call[0] == "append"]
+    assert appended_labels[0] == tray_launcher.MENU_TEXT_WEBUI
+    assert tray_launcher.MENU_TEXT_WEBUI in appended_labels
+    assert tray_launcher.MENU_TEXT_UPDATE in appended_labels
+    assert max(len(label) for label in appended_labels) <= len(tray_launcher.MENU_TEXT_WEBUI)
+    assert ("default", menu_handle, tray_launcher.MENU_OPEN_WEBUI, 0) in calls
+    assert calls[-1] == ("destroy", menu_handle)
+
+
+def test_menu_dispatches_returned_command_directly(monkeypatch):
+    launcher = make_launcher()
+    launcher.lifecycle_busy = False
+    selected: list[int] = []
+
+    monkeypatch.setattr(tray_launcher.win32gui, "CreatePopupMenu", lambda: 321)
+    monkeypatch.setattr(tray_launcher.win32gui, "AppendMenu", lambda *args: None)
+    monkeypatch.setattr(tray_launcher.win32gui, "SetMenuDefaultItem", lambda *args: None)
+    monkeypatch.setattr(tray_launcher.win32gui, "GetCursorPos", lambda: (10, 20))
+    monkeypatch.setattr(tray_launcher.win32gui, "SetForegroundWindow", lambda hwnd: None)
+    monkeypatch.setattr(
+        tray_launcher.win32gui,
+        "TrackPopupMenu",
+        lambda *args: tray_launcher.MENU_RESTART,
+    )
+    monkeypatch.setattr(tray_launcher.win32gui, "PostMessage", lambda *args: None)
+    monkeypatch.setattr(tray_launcher.win32gui, "DestroyMenu", lambda menu: None)
+    launcher._dispatch_command = lambda command: selected.append(command)
+
+    launcher._show_menu()
+
+    assert selected == [tray_launcher.MENU_RESTART]
+
+
+def test_real_restart_replaces_process_and_restores_listener(tmp_path, monkeypatch):
+    with socket.socket() as probe:
+        probe.bind((tray_launcher.HOST, 0))
+        port = probe.getsockname()[1]
+
+    server_script = tmp_path / "temporary_server.py"
+    server_script.write_text(
+        "import socket\n"
+        f"server = socket.socket()\nserver.bind(('127.0.0.1', {port}))\n"
+        "server.listen()\n"
+        "while True:\n"
+        "    connection, _ = server.accept()\n"
+        "    connection.close()\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(tray_launcher, "MAIN_PY", server_script)
+    monkeypatch.setattr(tray_launcher, "PORT", port)
+    monkeypatch.setattr(tray_launcher, "LOG_DIR", tmp_path)
+    monkeypatch.setattr(tray_launcher, "LOG_FILE", tmp_path / "agent.log")
+
+    launcher = make_launcher()
+    launcher.lifecycle_busy = False
+    try:
+        launcher._start_agent()
+        assert launcher._watch_startup() is True
+        first_pid = launcher.proc.pid
+
+        launcher._stop_agent()
+        assert launcher._is_listening() is False
+
+        launcher._start_agent()
+        assert launcher._watch_startup() is True
+        second_pid = launcher.proc.pid
+
+        assert second_pid != first_pid
+        assert launcher._is_listening() is True
+    finally:
+        launcher._stop_agent()
