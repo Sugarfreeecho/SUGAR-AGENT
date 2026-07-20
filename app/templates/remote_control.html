@@ -1,0 +1,202 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#111827">
+  <title>SugarAgent Remote</title>
+  <style>
+    :root { color-scheme: dark; --bg:#0b1020; --panel:#111827; --line:#263248; --text:#edf2f7; --muted:#94a3b8; --accent:#5eead4; --danger:#fb7185; }
+    * { box-sizing:border-box; }
+    body { margin:0; background:var(--bg); color:var(--text); font:15px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif; }
+    button,input,textarea,select { font:inherit; }
+    button { color:var(--text); background:#1e293b; border:1px solid var(--line); border-radius:10px; padding:10px 13px; }
+    button.primary { background:#0f766e; border-color:#14b8a6; }
+    button.danger { color:#fecdd3; border-color:#9f1239; }
+    button:disabled { opacity:.45; }
+    input,textarea { width:100%; color:var(--text); background:#0f172a; border:1px solid var(--line); border-radius:10px; padding:11px; }
+    #app { min-height:100dvh; display:grid; grid-template-rows:auto 1fr auto; max-width:1100px; margin:auto; }
+    header { display:flex; align-items:center; gap:10px; padding:10px 12px; background:var(--panel); border-bottom:1px solid var(--line); }
+    header strong { flex:1; }
+    #status { color:var(--muted); font-size:12px; }
+    main { min-height:0; display:grid; grid-template-columns:260px 1fr; }
+    aside { border-right:1px solid var(--line); overflow:auto; background:#0d1528; }
+    #sessions button { width:100%; text-align:left; border:0; border-bottom:1px solid #1b263c; border-radius:0; background:transparent; }
+    #sessions button.active { color:var(--accent); background:#152238; }
+    #messages { overflow:auto; padding:14px; }
+    .event { margin:0 0 10px; padding:10px 12px; border:1px solid var(--line); border-radius:12px; white-space:pre-wrap; overflow-wrap:anywhere; }
+    .event.user { margin-left:12%; background:#123047; }
+    .event.final { margin-right:5%; background:#172033; }
+    .event.status,.event.tool { color:var(--muted); font-size:13px; }
+    .approval { border-color:#a16207; background:#422006; }
+    .approval .actions { display:flex; gap:8px; margin-top:9px; }
+    footer { display:flex; gap:8px; padding:10px 12px calc(10px + env(safe-area-inset-bottom)); border-top:1px solid var(--line); background:var(--panel); }
+    footer textarea { min-height:46px; max-height:140px; resize:vertical; }
+    #pairing { position:fixed; inset:0; display:none; place-items:center; padding:20px; background:rgba(3,7,18,.88); z-index:5; }
+    #pairing.show { display:grid; }
+    #pairing section { width:min(430px,100%); padding:22px; border:1px solid var(--line); border-radius:16px; background:var(--panel); }
+    #pairing p { color:var(--muted); }
+    #pairing input { margin:9px 0; text-transform:uppercase; letter-spacing:1px; }
+    .empty { color:var(--muted); text-align:center; padding:35px 10px; }
+    @media (max-width:720px) {
+      main { grid-template-columns:1fr; }
+      aside { display:none; position:absolute; inset:52px 20% 70px 0; z-index:3; border:1px solid var(--line); box-shadow:0 10px 40px #000; }
+      aside.show { display:block; }
+      #menu { display:inline-block; }
+      .event.user { margin-left:5%; }
+    }
+    @media (min-width:721px) { #menu { display:none; } }
+  </style>
+</head>
+<body>
+<div id="app">
+  <header>
+    <button id="menu" aria-label="会话列表">☰</button>
+    <strong>SugarAgent Remote</strong>
+    <span id="status">未连接</span>
+    <button id="newSession" title="新建会话">＋</button>
+    <button id="disconnect" class="danger" title="移除此设备">退出设备</button>
+  </header>
+  <main>
+    <aside id="sidebar"><div id="sessions"></div></aside>
+    <section id="messages"><div class="empty">选择一个会话</div></section>
+  </main>
+  <footer>
+    <textarea id="prompt" placeholder="输入消息…" disabled></textarea>
+    <button id="interrupt" class="danger" disabled>停止</button>
+    <button id="send" class="primary" disabled>发送</button>
+  </footer>
+</div>
+<div id="pairing" class="show">
+  <section>
+    <h2>连接到这台电脑</h2>
+    <p>先在电脑本机创建一次性配对码，再在这里输入。浏览器凭证会存入 HttpOnly Cookie，页面脚本无法读取。</p>
+    <input id="pairingCode" autocomplete="one-time-code" placeholder="XXXX-XXXX-XXXX">
+    <input id="deviceName" value="我的手机" maxlength="120" placeholder="设备名称">
+    <button id="pair" class="primary">配对</button>
+    <p id="pairError"></p>
+  </section>
+</div>
+<script>
+(() => {
+  const $ = id => document.getElementById(id);
+  const legacyStorageKey = "sugaragent.remote.device_token.v1";
+  let socket, token = localStorage.getItem(legacyStorageKey) || "", challengeNonce = "", paired = false;
+  let selectedSession = "", reconnectTimer = 0, intentionalClose = false, requestNo = 0, hydrating = false;
+  let hydrationBuffer = [];
+  const pending = new Map(), lastSeq = new Map();
+  const reqId = () => `${Date.now()}-${++requestNo}`;
+  const idem = () => (crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`);
+  const setStatus = text => $("status").textContent = text;
+  function rpc(method, params={}, idempotencyKey="") {
+    return new Promise((resolve,reject) => {
+      if (!socket || socket.readyState !== WebSocket.OPEN) return reject(new Error("连接不可用"));
+      const id=reqId(); pending.set(id,{resolve,reject});
+      const frame={type:"req",id,method,params}; if(idempotencyKey) frame.idempotency_key=idempotencyKey;
+      socket.send(JSON.stringify(frame));
+      setTimeout(() => { if(pending.has(id)){ pending.delete(id); reject(new Error("请求超时")); } }, 20000);
+    });
+  }
+  function connect(pairingCode="") {
+    clearTimeout(reconnectTimer); intentionalClose=false; setStatus("连接中…");
+    const scheme=location.protocol === "https:" ? "wss:" : "ws:";
+    socket = new WebSocket(`${scheme}//${location.host}/api/remote/v1/ws`);
+    socket.onmessage = async e => {
+      const frame=JSON.parse(e.data);
+      if(frame.type === "event" && frame.event === "connect.challenge") {
+        challengeNonce=frame.payload.nonce;
+        const params={nonce:challengeNonce,device_name:$("deviceName").value || "我的手机"};
+        if(pairingCode) params.pairing_code=pairingCode; else params.device_token=token;
+        try {
+          const connected=await rpc("connect",params);
+          if(connected.device_token){ token=connected.device_token; }
+          localStorage.removeItem(legacyStorageKey); paired=true;
+          $("pairing").classList.remove("show"); $("pairError").textContent=""; setStatus("已连接");
+          await loadSessions();
+        } catch(err) { intentionalClose=true; $("pairing").classList.add("show"); $("pairError").textContent=err.message; }
+        return;
+      }
+      if(frame.type === "res") {
+        const waiter=pending.get(frame.id); if(!waiter) return; pending.delete(frame.id);
+        if(frame.ok) waiter.resolve(frame.result); else { const err=new Error(frame.error?.message || "请求失败"); err.code=frame.error?.code||"request_failed"; waiter.reject(err); } return;
+      }
+      if(frame.type === "event" && frame.event === "session.event") handleEvent(frame.session_id,frame.payload);
+    };
+    socket.onclose = () => {
+      setStatus("已断线"); for(const waiter of pending.values()) waiter.reject(new Error("连接已断开")); pending.clear();
+      if(!intentionalClose && (paired || token)) reconnectTimer=setTimeout(() => connect(),2500);
+    };
+    socket.onerror = () => setStatus("连接错误");
+  }
+  async function loadSessions() {
+    const result=await rpc("session.list",{}); const box=$("sessions"); box.replaceChildren();
+    for(const session of result.sessions){
+      const b=document.createElement("button"); b.textContent=session.name || session.id; b.dataset.sid=session.id;
+      b.onclick=()=>selectSession(session.id,b); box.appendChild(b);
+    }
+    if(selectedSession){ const b=box.querySelector(`[data-sid="${CSS.escape(selectedSession)}"]`); if(b) selectSession(selectedSession,b); }
+  }
+  async function selectSession(sid,button) {
+    if(selectedSession && selectedSession !== sid) await rpc("session.unsubscribe",{session_id:selectedSession}).catch(()=>{});
+    selectedSession=sid; document.querySelectorAll("#sessions button").forEach(b=>b.classList.toggle("active",b===button));
+    $("sidebar").classList.remove("show"); $("messages").replaceChildren(); hydrating=true; hydrationBuffer=[];
+    await rpc("session.subscribe",{session_id:sid,after_seq:lastSeq.get(sid)||0});
+    const page=await rpc("session.history",{session_id:sid,turns:20});
+    $("messages").replaceChildren(); for(const event of page.events) renderEvent(event);
+    hydrating=false; for(const event of hydrationBuffer) renderEvent(event); hydrationBuffer=[];
+    $("prompt").disabled=false; $("send").disabled=false; $("interrupt").disabled=false; scrollBottom();
+  }
+  function handleEvent(sid,event) {
+    const seq=Number(event.event_bus_seq || event.seq || 0); if(seq) lastSeq.set(sid,Math.max(lastSeq.get(sid)||0,seq));
+    if(sid===selectedSession){ if(hydrating) hydrationBuffer.push(event); else renderEvent(event); scrollBottom(); }
+  }
+  function renderEvent(event) {
+    if(!event || ["llm_reasoning_delta","llm_response_delta","sse_keepalive"].includes(event.type)) return;
+    if(event.type === "tool_approval_required") { renderApproval(event); return; }
+    const div=document.createElement("div"); div.className=`event ${event.type||"status"}`;
+    const content=event.content ?? event.message ?? event.title ?? (event.type ? `[${event.type}]` : "");
+    div.textContent=typeof content === "string" ? content : JSON.stringify(content,null,2); $("messages").appendChild(div);
+  }
+  function renderApproval(event) {
+    const div=document.createElement("div"); div.className="event approval";
+    const title=document.createElement("strong"); title.textContent=event.title || "需要确认";
+    const msg=document.createElement("div"); msg.textContent=event.message || event.tool || "工具请求";
+    const actions=document.createElement("div"); actions.className="actions";
+    for(const [label,approve] of [["允许",true],["拒绝",false]]){
+      const b=document.createElement("button"); b.textContent=label; if(approve)b.className="primary";
+      b.onclick=async()=>{ b.disabled=true; try{await rpc("approval.resolve",{session_id:selectedSession,approval_id:event.approval_id,approve},idem()); div.remove();}catch(err){msg.textContent=err.message;} };
+      actions.appendChild(b);
+    }
+    div.append(title,msg,actions); $("messages").appendChild(div);
+  }
+  const scrollBottom=()=>requestAnimationFrame(()=>{$("messages").scrollTop=$("messages").scrollHeight;});
+  async function send() {
+    const message=$("prompt").value.trim(); if(!message || !selectedSession)return; $("prompt").value="";
+    const operationId=idem();
+    try{ await rpc("session.send",{session_id:selectedSession,message},operationId); }
+    catch(err){
+      if(err.code==="session_busy") {
+        try{ await rpc("session.steer",{session_id:selectedSession,message,mode:"append",client_id:operationId},operationId); }
+        catch(steerErr){ alert(steerErr.message); }
+      } else alert(err.message);
+    }
+  }
+  $("pair").onclick=async()=>{
+    const code=$("pairingCode").value.trim(); if(!code)return; $("pairError").textContent="正在配对…";
+    try{
+      const response=await fetch("/api/remote/v1/claim",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({pairing_code:code,device_name:$("deviceName").value||"我的手机"})});
+      const body=await response.json(); if(!response.ok)throw new Error(body.error||"配对失败");
+      paired=true; token=""; intentionalClose=true; socket?.close(); connect();
+    }catch(err){$("pairError").textContent=err.message;}
+  };
+  $("send").onclick=send;
+  $("prompt").onkeydown=e=>{ if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();send();} };
+  $("interrupt").onclick=()=>selectedSession&&rpc("session.interrupt",{session_id:selectedSession},idem()).catch(err=>alert(err.message));
+  $("newSession").onclick=async()=>{ try{const result=await rpc("session.create",{},idem()); await loadSessions(); const b=$("sessions").querySelector(`[data-sid="${CSS.escape(result.session_id)}"]`); if(b)await selectSession(result.session_id,b);}catch(err){alert(err.message);} };
+  $("menu").onclick=()=>$("sidebar").classList.toggle("show");
+  $("disconnect").onclick=async()=>{ intentionalClose=true; token=""; paired=false; localStorage.removeItem(legacyStorageKey); await fetch("/api/remote/v1/logout",{method:"POST"}).catch(()=>{}); socket?.close(); $("pairing").classList.add("show"); setStatus("未连接"); };
+  connect();
+})();
+</script>
+</body>
+</html>
