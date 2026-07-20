@@ -438,7 +438,9 @@ class RuntimeV2RootEventLogRepairService:
         expected_snapshot = self.projector.project(actual)
         snapshot = self.snapshots.read(session_id)
         snapshot.pop("_event_log", None)
+        snapshot.pop("_projection", None)
         expected_snapshot.pop("_event_log", None)
+        expected_snapshot.pop("_projection", None)
         if snapshot != expected_snapshot:
             raise RuntimeError("snapshot rebuild verification failed")
 

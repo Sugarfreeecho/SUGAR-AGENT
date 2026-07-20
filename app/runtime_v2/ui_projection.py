@@ -8,6 +8,7 @@ from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 from .event_log import SessionEventLog
 from .event_schema import RuntimeEvent
+from .versions import UI_PROJECTION_INDEX_VERSION
 from .blob_store import BlobStore
 from .mirror import RuntimeMirror
 from .config import runtime_v2_enabled
@@ -24,6 +25,8 @@ class RuntimeUiProjection:
     _events_cache: Dict[str, tuple[tuple[bool, int, int], List[dict]]] = {}
     _events_cache_order: List[str] = []
     _events_cache_max = 64
+    _recent_page_cache: Dict[tuple[str, tuple[bool, int, int], int], dict] = {}
+    _recent_page_cache_order: List[tuple[str, tuple[bool, int, int], int]] = []
 
     def __init__(self, sessions_dir: str | Path, path_resolver: Optional[Callable[[str], str | Path]] = None):
         self.sessions_dir = Path(sessions_dir)
@@ -107,15 +110,7 @@ class RuntimeUiProjection:
         if self.event_log.event_path(session_id).exists() and self._has_ui_projectable_events(session_id):
             return 0
         mirror = RuntimeMirror(self.sessions_dir, path_resolver=self._path_resolver)
-        count = 0
-        for event in legacy_events or []:
-            if not isinstance(event, dict):
-                continue
-            mirrored = mirror.mirror_ui_event(session_id, event)
-            if mirrored is None:
-                mirrored = mirror.append(session_id, "legacy_ui_event", dict(event))
-            if mirrored is not None:
-                count += 1
+        count = len(mirror.mirror_ui_events_batch(session_id, legacy_events or []))
         if count:
             self.invalidate_cache(session_id)
         return count
@@ -128,15 +123,7 @@ class RuntimeUiProjection:
             "new_event_count": 0,
             "reason": reason,
         })
-        count = 0
-        for event in legacy_events or []:
-            if not isinstance(event, dict):
-                continue
-            mirrored = mirror.mirror_ui_event(session_id, event)
-            if mirrored is None:
-                mirrored = mirror.append(session_id, "legacy_ui_event", dict(event))
-            if mirrored is not None:
-                count += 1
+        count = len(mirror.mirror_ui_events_batch(session_id, legacy_events or []))
         self.invalidate_cache(session_id)
         return count
 
@@ -149,15 +136,7 @@ class RuntimeUiProjection:
             path_resolver=self._path_resolver,
         ).truncate_ui_history(session_id, 0, reason=reason)
         mirror = RuntimeMirror(self.sessions_dir, path_resolver=self._path_resolver)
-        count = 0
-        for event in ui_events or []:
-            if not isinstance(event, dict):
-                continue
-            mirrored = mirror.mirror_ui_event(session_id, dict(event))
-            if mirrored is None:
-                mirrored = mirror.append(session_id, "ui_event", dict(event))
-            if mirrored is not None:
-                count += 1
+        count = len(mirror.mirror_ui_events_batch(session_id, ui_events or []))
         self.invalidate_cache(session_id)
         return count
 
@@ -191,13 +170,9 @@ class RuntimeUiProjection:
             # Runtime V2 sequence id; a true fork still falls through to
             # ``mismatch`` and is never overwritten automatically.
             mirror = RuntimeMirror(self.sessions_dir, path_resolver=self._path_resolver)
-            written = 0
-            for event in legacy[len(projected):]:
-                mirrored = mirror.mirror_ui_event(session_id, dict(event))
-                if mirrored is None:
-                    mirrored = mirror.append(session_id, "legacy_ui_event", dict(event))
-                if mirrored is not None:
-                    written += 1
+            written = len(
+                mirror.mirror_ui_events_batch(session_id, legacy[len(projected):])
+            )
             self.invalidate_cache(session_id)
             return {
                 "checked": True,
@@ -266,9 +241,15 @@ class RuntimeUiProjection:
     def count_ui_events(self, session_id: str) -> int:
         return len(self.read_ui_events(session_id))
 
-    def _project_visible_ui_entries(self, session_id: str) -> Tuple[List[dict], int]:
+    def _project_visible_ui_entries(
+        self,
+        session_id: str,
+        *,
+        hydrate: bool = True,
+    ) -> Tuple[List[dict], int, bool]:
         out: List[dict] = []
         latest_truncate_seq = 0
+        has_history_ops = False
         for event in self.event_log.iter_events(session_id):
             if event.type == "legacy_truncate_observed":
                 payload = dict(event.payload or {})
@@ -287,18 +268,26 @@ class RuntimeUiProjection:
                 latest_truncate_seq = int(event.seq)
                 continue
             if event.type in {"message_deleted", "message_rewritten"}:
+                has_history_ops = True
                 out = self._apply_history_op_to_projected_events(out, event)
                 continue
-            ui = self._event_to_ui(session_id, event)
+            if hydrate:
+                ui = self._event_to_ui(session_id, event)
+            else:
+                ui = self.event_to_ui(event)
+                if ui is not None:
+                    ui = dict(ui)
+                    ui["runtime_seq"] = int(event.seq)
+                    ui["runtime_event_type"] = event.type
             if ui is not None:
                 out.append(ui)
-        return out, latest_truncate_seq
+        return out, latest_truncate_seq, has_history_ops
 
     def ui_index_to_runtime_seq(self, session_id: str, ui_index: int) -> Optional[int]:
         target = int(ui_index)
         if target < 0:
             return None
-        events, _latest_truncate_seq = self._project_visible_ui_entries(session_id)
+        events, _latest_truncate_seq, _has_history_ops = self._project_visible_ui_entries(session_id)
         if target >= len(events):
             return None
         return self._int_or_none(events[target].get("runtime_seq"))
@@ -313,7 +302,7 @@ class RuntimeUiProjection:
         target = int(runtime_seq)
         if target <= 0:
             return None
-        events, _latest_truncate_seq = self._project_visible_ui_entries(session_id)
+        events, _latest_truncate_seq, _has_history_ops = self._project_visible_ui_entries(session_id)
         for idx, event in enumerate(events):
             if self._int_or_none(event.get("runtime_seq")) == target:
                 return idx + 1
@@ -324,7 +313,7 @@ class RuntimeUiProjection:
         target = int(runtime_seq)
         if target <= 0:
             return []
-        events, _latest_truncate_seq = self._project_visible_ui_entries(session_id)
+        events, _latest_truncate_seq, _has_history_ops = self._project_visible_ui_entries(session_id)
         for index, event in enumerate(events):
             if self._int_or_none((event or {}).get("runtime_seq")) == target:
                 return events[:index + 1]
@@ -339,7 +328,7 @@ class RuntimeUiProjection:
         target = int(runtime_seq)
         if target <= 0:
             return None
-        events, _latest_truncate_seq = self._project_visible_ui_entries(session_id)
+        events, _latest_truncate_seq, _has_history_ops = self._project_visible_ui_entries(session_id)
         idx = -1
         for pos, event in enumerate(events):
             if self._int_or_none(event.get("runtime_seq")) == target:
@@ -391,7 +380,7 @@ class RuntimeUiProjection:
         return self._count_ui_events_linear(session_id)
 
     def _count_ui_events_linear(self, session_id: str) -> tuple[int, int]:
-        events, latest_truncate_seq = self._project_visible_ui_entries(session_id)
+        events, latest_truncate_seq, _has_history_ops = self._project_visible_ui_entries(session_id)
         return len(events), latest_truncate_seq
 
     def _ui_index_path(self, session_id: str) -> Path:
@@ -403,8 +392,21 @@ class RuntimeUiProjection:
         try:
             with path.open("r", encoding="utf-8") as fh:
                 data = json.load(fh)
-            if isinstance(data, dict) and tuple(data.get("signature") or ()) == signature:
+            if (
+                isinstance(data, dict)
+                and int(data.get("index_version") or 0) == UI_PROJECTION_INDEX_VERSION
+                and tuple(data.get("signature") or ()) == signature
+            ):
                 return data
+            if (
+                isinstance(data, dict)
+                and int(data.get("index_version") or 0) == UI_PROJECTION_INDEX_VERSION
+                and data.get("last_runtime_seq") is not None
+                and self._can_extend_ui_index(data, signature)
+            ):
+                extended = self._extend_ui_index(session_id, data, signature)
+                if extended is not None:
+                    return extended
         except Exception:
             pass
         try:
@@ -415,7 +417,10 @@ class RuntimeUiProjection:
     def _build_ui_index(self, session_id: str, signature: Optional[tuple[bool, int, int]] = None) -> dict:
         if signature is None:
             signature = self._event_log_signature(session_id)
-        projected, latest_truncate_seq = self._project_visible_ui_entries(session_id)
+        projected, latest_truncate_seq, has_history_ops = self._project_visible_ui_entries(
+            session_id,
+            hydrate=False,
+        )
         entries: List[tuple[int, str, str]] = []
         for ui in projected:
             typ = str(ui.get("type") or "")
@@ -429,19 +434,82 @@ class RuntimeUiProjection:
             if typ == "user"
         ]
         user_indices = [int(row["event_index"]) for row in user_turns]
-        has_history_ops = any(
-            event.type in {"message_deleted", "message_rewritten"}
-            for event in self.event_log.iter_events(session_id)
-        )
         data = {
+            "index_version": UI_PROJECTION_INDEX_VERSION,
             "signature": list(signature),
+            "last_runtime_seq": max(0, self.event_log.next_seq(session_id) - 1),
             "total": total,
             "latest_truncate_seq": latest_truncate_seq,
             "has_history_ops": has_history_ops,
+            "runtime_seqs": [int(seq) for seq, _typ, _preview in entries],
             "user_indices": user_indices,
             "user_turns": user_turns,
         }
         path = self._ui_index_path(session_id)
+        self._write_ui_index(path, data)
+        return data
+
+    @staticmethod
+    def _can_extend_ui_index(data: dict, signature: tuple[bool, int, int]) -> bool:
+        old_signature = tuple(data.get("signature") or ())
+        if len(old_signature) != 3 or len(signature) != 3:
+            return False
+        old_exists, _old_mtime, old_size = old_signature
+        new_exists, _new_mtime, new_size = signature
+        return bool(old_exists and new_exists and int(new_size) >= int(old_size))
+
+    def _extend_ui_index(
+        self,
+        session_id: str,
+        data: dict,
+        signature: tuple[bool, int, int],
+    ) -> Optional[dict]:
+        after_seq = int(data.get("last_runtime_seq") or 0)
+        events = self.event_log.read_after_seq(session_id, after_seq)
+        if not events:
+            # A changed file with no higher sequence is a rewrite/repair, not an
+            # append-only extension. Rebuild rather than trusting stale offsets.
+            return None
+        semantic_ops = {
+            "legacy_truncate_observed",
+            "visible_range_changed",
+            "message_deleted",
+            "message_rewritten",
+        }
+        if any(event.type in semantic_ops for event in events):
+            return None
+        extended = dict(data)
+        user_indices = [int(value) for value in extended.get("user_indices") or []]
+        user_turns = [dict(row) for row in extended.get("user_turns") or [] if isinstance(row, dict)]
+        total = int(extended.get("total") or 0)
+        runtime_seqs = [int(value) for value in extended.get("runtime_seqs") or []]
+        if len(runtime_seqs) != total:
+            return None
+        for event in events:
+            ui = self.event_to_ui(event)
+            if ui is None:
+                continue
+            if str(ui.get("type") or "") == "user":
+                user_indices.append(total)
+                user_turns.append({
+                    "event_index": total,
+                    "preview": self._user_turn_preview(ui),
+                })
+            runtime_seqs.append(int(event.seq))
+            total += 1
+        extended.update({
+            "signature": list(signature),
+            "last_runtime_seq": int(events[-1].seq),
+            "total": total,
+            "user_indices": user_indices,
+            "user_turns": user_turns,
+            "runtime_seqs": runtime_seqs,
+        })
+        self._write_ui_index(self._ui_index_path(session_id), extended)
+        return extended
+
+    @staticmethod
+    def _write_ui_index(path: Path, data: dict) -> None:
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
             tmp = path.with_suffix(".json.tmp")
@@ -450,7 +518,6 @@ class RuntimeUiProjection:
             tmp.replace(path)
         except Exception:
             pass
-        return data
 
     def invalidate_cache(self, session_id: str) -> None:
         key = self._cache_key(session_id)
@@ -460,6 +527,13 @@ class RuntimeUiProjection:
                 self._events_cache_order.remove(key)
             except ValueError:
                 pass
+            stale_pages = [cache_key for cache_key in self._recent_page_cache if cache_key[0] == key]
+            for cache_key in stale_pages:
+                self._recent_page_cache.pop(cache_key, None)
+                try:
+                    self._recent_page_cache_order.remove(cache_key)
+                except ValueError:
+                    pass
         try:
             self._ui_index_path(session_id).unlink(missing_ok=True)
         except Exception:
@@ -506,8 +580,21 @@ class RuntimeUiProjection:
         legacy_loader: Optional[Callable[[], Iterable[dict]]] = None,
     ) -> dict:
         if legacy_loader is None and before_index is None and after_index is None and target_index is None and turns is not None:
+            cache_key = (self._cache_key(session_id), self._event_log_signature(session_id), int(turns))
+            with self._cache_lock:
+                cached_page = self._recent_page_cache.get(cache_key)
+            if cached_page is not None:
+                return self._copy_page(cached_page)
             page = self._read_recent_turns_from_tail(session_id, turns=int(turns))
             if page is not None:
+                with self._cache_lock:
+                    self._recent_page_cache[cache_key] = page
+                    if cache_key in self._recent_page_cache_order:
+                        self._recent_page_cache_order.remove(cache_key)
+                    self._recent_page_cache_order.append(cache_key)
+                    while len(self._recent_page_cache_order) > self._events_cache_max:
+                        old_key = self._recent_page_cache_order.pop(0)
+                        self._recent_page_cache.pop(old_key, None)
                 return page
         events = self.read_ui_events(session_id, legacy_loader=legacy_loader)
         return self._page_events(
@@ -518,6 +605,55 @@ class RuntimeUiProjection:
             target_index=target_index,
             turns=turns,
         )
+
+    @staticmethod
+    def _copy_page(page: dict) -> dict:
+        copied = dict(page)
+        copied["events"] = [dict(event) for event in page.get("events") or [] if isinstance(event, dict)]
+        return copied
+
+    def read_ui_after_runtime_seq(
+        self,
+        session_id: str,
+        *,
+        after_runtime_seq: int,
+        limit: int = 100,
+    ) -> dict:
+        """Project only newly appended facts for a live observer.
+
+        The caller already has the historical UI projection, so replaying the
+        entire JSONL file after every durable event is unnecessary. Semantic
+        history operations explicitly request a full reprojection.
+        """
+        lim = max(1, min(int(limit), 500))
+        runtime_events = self.event_log.read_after_seq(session_id, int(after_runtime_seq))
+        projected: List[dict] = []
+        last_runtime_seq = int(after_runtime_seq)
+        history_types = {
+            "legacy_truncate_observed",
+            "visible_range_changed",
+            "message_deleted",
+            "message_rewritten",
+        }
+        for event in runtime_events:
+            last_runtime_seq = int(event.seq)
+            if event.type in history_types:
+                return {
+                    "events": [],
+                    "last_runtime_seq": last_runtime_seq,
+                    "requires_reprojection": True,
+                }
+            ui = self._event_to_ui(session_id, event)
+            if ui is not None:
+                projected.append(ui)
+                if len(projected) >= lim:
+                    break
+        return {
+            "events": projected,
+            "last_runtime_seq": last_runtime_seq,
+            "requires_reprojection": False,
+            "has_more": bool(runtime_events and last_runtime_seq < int(runtime_events[-1].seq)),
+        }
 
     def _read_recent_turns_from_tail(self, session_id: str, *, turns: int) -> Optional[dict]:
         turn_count = max(1, min(int(turns), 50))
@@ -535,8 +671,6 @@ class RuntimeUiProjection:
         if total <= 0:
             return None
         user_indices_index = list(index.get("user_indices") or []) if index else []
-        if latest_truncate_seq or "has_history_ops" not in index or bool(index.get("has_history_ops")):
-            return None
         if user_indices_index:
             if len(user_indices_index) <= turn_count:
                 wanted_start = 0
@@ -546,6 +680,34 @@ class RuntimeUiProjection:
         else:
             wanted_start = 0
             wanted_len = total
+        runtime_seqs = [int(value) for value in index.get("runtime_seqs") or []]
+        semantic_ops = {
+            "legacy_truncate_observed",
+            "visible_range_changed",
+            "message_deleted",
+            "message_rewritten",
+        }
+        if len(runtime_seqs) == total:
+            boundary_seq = runtime_seqs[wanted_start - 1] if wanted_start > 0 else 0
+            indexed_runtime_events = self.event_log.read_after_seq(session_id, boundary_seq)
+            if not any(event.type in semantic_ops for event in indexed_runtime_events):
+                indexed_ui = [
+                    ui
+                    for event in indexed_runtime_events
+                    for ui in [self._event_to_ui(session_id, event)]
+                    if ui is not None
+                ]
+                if len(indexed_ui) >= wanted_len:
+                    selected = indexed_ui[-wanted_len:] if wanted_len > 0 else []
+                    return {
+                        "events": selected,
+                        "total": total,
+                        "range_start": wanted_start,
+                        "range_end": total,
+                        "has_older": wanted_start > 0,
+                        "has_newer": False,
+                        "source": "runtime_v2_seq_index",
+                    }
         max_events = max(
             500,
             int(os.getenv("RUNTIME_V2_TAIL_MAX_EVENTS", "8000")),
@@ -560,7 +722,7 @@ class RuntimeUiProjection:
             if not runtime_events:
                 return None
             if any(
-                event.type == "legacy_truncate_observed"
+                event.type in {"legacy_truncate_observed", "message_deleted", "message_rewritten"}
                 or (
                     event.type == "visible_range_changed"
                     and (

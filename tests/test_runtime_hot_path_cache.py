@@ -20,8 +20,6 @@ def test_resolve_executor_config_uses_session_cache(monkeypatch):
         return {}
 
     monkeypatch.setattr(agent_harness.session_manager, "_load_metadata", load_metadata)
-    monkeypatch.setattr(agent_harness.model_profiles, "top_profile_id_with_env", lambda _root: "")
-
     first = agent_harness.resolve_executor_config_for_session("s1")
     second = agent_harness.resolve_executor_config_for_session("s1")
 
@@ -33,33 +31,45 @@ def test_resolve_executor_config_reuses_profile_catalog(monkeypatch):
     import agent_harness
 
     agent_harness._invalidate_executor_config_cache()
-    calls = {"sorted": 0, "ids": 0}
+    calls = {"sorted": 0}
 
     monkeypatch.setattr(agent_harness.session_manager, "_load_metadata", lambda _sid: {})
 
     def sorted_profiles(_root):
         calls["sorted"] += 1
-        return []
-
-    def sorted_ids(_root):
-        calls["ids"] += 1
-        return ["__env__"]
+        return [{
+            "id": "profile-a",
+            "model": "model-a",
+            "base_url": "https://api.example.com/v1",
+            "api_key": "key",
+            "context_window": 8000,
+            "max_output_tokens": 1000,
+        }]
 
     monkeypatch.setattr(agent_harness.model_profiles, "sorted_profiles", sorted_profiles)
-    monkeypatch.setattr(agent_harness.model_profiles, "sorted_profile_ids_with_env", sorted_ids)
+    monkeypatch.setattr(
+        agent_harness,
+        "_profile_candidate",
+        lambda profile: {
+            "client": "client-a",
+            "model": profile["model"],
+            "max_output_tokens": profile["max_output_tokens"],
+            "context_window": profile["context_window"],
+        },
+    )
 
     first = agent_harness.resolve_executor_config_for_session("s1")
     second = agent_harness.resolve_executor_config_for_session("s2")
 
     assert first == second
-    assert calls == {"sorted": 1, "ids": 1}
+    assert calls == {"sorted": 1}
 
     agent_harness._invalidate_executor_config_cache()
     agent_harness.resolve_executor_config_for_session("s3")
-    assert calls == {"sorted": 2, "ids": 2}
+    assert calls == {"sorted": 2}
 
 
-def test_env_first_executor_config_keeps_saved_profiles_as_fallbacks(monkeypatch):
+def test_first_profile_executor_config_keeps_saved_profiles_as_fallbacks(monkeypatch):
     import agent_harness
 
     agent_harness._invalidate_executor_config_cache()
@@ -67,12 +77,12 @@ def test_env_first_executor_config_keeps_saved_profiles_as_fallbacks(monkeypatch
     monkeypatch.setattr(
         agent_harness,
         "_executor_profile_catalog",
-        lambda _now=None: ({}, ["__env__", "backup"], ""),
+        lambda _now=None: ({}, ["primary", "backup"], "primary"),
     )
     candidates = [
         {
             "client": object(),
-            "model": "env-model",
+            "model": "primary-model",
             "max_output_tokens": 1000,
             "context_window": 8000,
         },
@@ -89,11 +99,11 @@ def test_env_first_executor_config_keeps_saved_profiles_as_fallbacks(monkeypatch
         lambda _sid, *, profile_id_override=None: candidates,
     )
 
-    client, model, max_tokens, context_window = agent_harness.resolve_executor_config_for_session("s-env-first")
+    client, model, max_tokens, context_window = agent_harness.resolve_executor_config_for_session("s-profile-first")
 
     assert isinstance(client, agent_harness.FallbackOpenAIClient)
     assert client.candidates == candidates
-    assert (model, max_tokens, context_window) == ("env-model", 1000, 8000)
+    assert (model, max_tokens, context_window) == ("primary-model", 1000, 8000)
     agent_harness._invalidate_executor_config_cache()
 
 
@@ -147,8 +157,6 @@ def test_metadata_sidecar_updates_do_not_invalidate_executor_config_cache(monkey
         return {}
 
     monkeypatch.setattr(agent_harness.session_manager, "_load_metadata", load_metadata)
-    monkeypatch.setattr(agent_harness.model_profiles, "top_profile_id_with_env", lambda _root: "")
-
     first = agent_harness.resolve_executor_config_for_session(sid)
     manager = agent_harness.SessionManager(tmp_path / "sessions", tmp_path / "sessions.json")
     manager._save_metadata(

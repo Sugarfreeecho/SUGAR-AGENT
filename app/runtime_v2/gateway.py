@@ -36,13 +36,13 @@ class RuntimeGateway:
     ) -> RuntimeEvent:
         with self.event_log.session_transaction(session_id):
             event = self.event_log._append_unlocked(session_id, event_type, payload=payload, run_id=run_id)
-            snapshot = self.snapshots.read(session_id)
+            snapshot = self.snapshots.read_for_update(session_id)
             if int(snapshot.get("last_seq") or 0) != int(event.seq) - 1:
                 snapshot = self.projector.project(self.event_log.read_all(session_id))
             else:
                 snapshot = self.projector.project_incremental(snapshot, event)
             self.snapshots.stamp_event_log(session_id, snapshot, self.event_log.event_path(session_id))
-            self.snapshots.write(session_id, snapshot)
+            self.snapshots.write_checkpointed(session_id, snapshot)
         await self.publisher.publish(event)
         return event
 

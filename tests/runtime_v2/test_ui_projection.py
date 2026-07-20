@@ -321,6 +321,38 @@ class RuntimeUiProjectionTests(unittest.TestCase):
             self.assertEqual([event["content"] for event in page["events"]], ["u2-new", "a2"])
             self.assertNotIn(page.get("source"), {"runtime_v2_tail", "runtime_v2_tail_index"})
 
+    def test_recent_turn_page_uses_seq_index_when_history_ops_are_outside_window(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            mirror = RuntimeMirror(tmp)
+            old_user = mirror.mirror_ui_event("s1", {"type": "user", "content": "old"})
+            mirror.mirror_ui_event("s1", {"type": "final", "content": "old-answer"})
+            RuntimeHistoryOps(tmp).rewrite_message("s1", old_user.seq, "old-new")
+            for index in range(30):
+                mirror.mirror_ui_event("s1", {"type": "user", "content": f"u{index}"})
+                mirror.mirror_ui_event("s1", {"type": "final", "content": f"a{index}"})
+
+            page = RuntimeUiProjection(tmp).read_ui_page("s1", turns=5)
+
+            self.assertEqual(page.get("source"), "runtime_v2_seq_index")
+            self.assertEqual(page["events"][0]["content"], "u25")
+            self.assertEqual(page["events"][-1]["content"], "a29")
+
+    def test_live_runtime_seq_projection_reads_only_new_facts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            mirror = RuntimeMirror(tmp)
+            first = mirror.mirror_ui_event("s1", {"type": "user", "content": "u1"})
+            mirror.append("s1", "run_heartbeat", {}, run_id="r1")
+            mirror.mirror_ui_event("s1", {"type": "final", "content": "a1"})
+
+            page = RuntimeUiProjection(tmp).read_ui_after_runtime_seq(
+                "s1",
+                after_runtime_seq=first.seq,
+            )
+
+            self.assertFalse(page["requires_reprojection"])
+            self.assertEqual([event["content"] for event in page["events"]], ["a1"])
+            self.assertEqual(page["last_runtime_seq"], 3)
+
     def test_projected_ui_events_include_runtime_seq(self):
         with tempfile.TemporaryDirectory() as tmp:
             mirror = RuntimeMirror(tmp)

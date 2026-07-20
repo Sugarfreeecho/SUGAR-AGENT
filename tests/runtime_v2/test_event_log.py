@@ -3,7 +3,7 @@ import threading
 import unittest
 import multiprocessing
 
-from app.runtime_v2 import SessionEventLog
+from app.runtime_v2 import RuntimeEventLogCorruptionError, SessionEventLog
 
 
 def _append_events_in_process(args):
@@ -59,7 +59,7 @@ class SessionEventLogTests(unittest.TestCase):
             self.assertEqual([ev.seq for ev in events], [2, 3, 4])
             self.assertEqual(events[-1].payload["target_seq"], 2)
 
-    def test_reads_skip_bad_lines_without_repair(self):
+    def test_reads_fail_closed_on_bad_lines_without_repair(self):
         with tempfile.TemporaryDirectory() as tmp:
             log = SessionEventLog(tmp)
             log.append("s1", "message_user", {})
@@ -68,9 +68,10 @@ class SessionEventLogTests(unittest.TestCase):
                 fh.write("bad json\n")
             log.append("s1", "run_finished", {})
 
-            events = log.read_all("s1")
-
-            self.assertEqual([ev.seq for ev in events], [1, 2])
+            with self.assertRaises(RuntimeEventLogCorruptionError) as raised:
+                log.read_all("s1")
+            self.assertIn("line 2", str(raised.exception))
+            self.assertIn("repair", str(raised.exception).lower())
 
     def test_concurrent_append_keeps_monotonic_seq(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -105,6 +106,21 @@ class SessionEventLogTests(unittest.TestCase):
 
             self.assertEqual([ev.seq for ev in log.read_latest("s1", 2)], [5, 6])
             self.assertEqual([ev.seq for ev in log.read_before_seq("s1", 5, 2)], [3, 4])
+
+    def test_after_seq_uses_sparse_offset_index_after_first_build(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            log = SessionEventLog(tmp)
+            log.append_batch("s1", [
+                {"type": "message_user", "payload": {"index": i}}
+                for i in range(400)
+            ])
+
+            self.assertEqual([ev.seq for ev in log.read_after_seq("s1", 395)], [396, 397, 398, 399, 400])
+            index_path = log.seq_offset_index_path("s1")
+            self.assertTrue(index_path.exists())
+            entries = __import__("json").loads(index_path.read_text(encoding="utf-8"))["entries"]
+            self.assertGreater(entries[-1][1], 0)
+            self.assertGreaterEqual(entries[-1][0], 385)
 
     def test_next_seq_recovers_from_tail_and_ignores_partial_last_line(self):
         with tempfile.TemporaryDirectory() as tmp:

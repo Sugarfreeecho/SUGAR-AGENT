@@ -753,6 +753,7 @@ def test_runtime_v2_continuation_empty_projection_does_not_reconcile(monkeypatch
     monkeypatch.setattr(agent_loop, "session_manager", _NoLegacySessionManager())
     monkeypatch.setattr(agent_loop, "_runtime_v2_is_primary", lambda: True)
     monkeypatch.setattr(agent_loop, "_load_runtime_v2_model_history_dicts", lambda _sid: [])
+    monkeypatch.setattr(agent_loop, "_load_runtime_v2_context_summary", lambda _sid: "")
     monkeypatch.setattr(agent_loop, "setup_logging", lambda *args, **kwargs: None)
 
     async def collect():

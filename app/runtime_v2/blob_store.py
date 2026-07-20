@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import hashlib
+import os
+import threading
 from pathlib import Path
 
 
@@ -18,7 +20,17 @@ class BlobStore:
         path = self.session_dir / rel
         path.parent.mkdir(parents=True, exist_ok=True)
         if not path.exists():
-            path.write_bytes(data)
+            tmp = path.with_name(
+                f".{path.name}.{os.getpid()}.{threading.get_ident()}.tmp"
+            )
+            try:
+                with tmp.open("wb") as fh:
+                    fh.write(data)
+                    fh.flush()
+                    os.fsync(fh.fileno())
+                tmp.replace(path)
+            finally:
+                tmp.unlink(missing_ok=True)
         return {
             "blob_ref": rel.as_posix(),
             "sha256": digest,
@@ -30,4 +42,13 @@ class BlobStore:
         if rel.is_absolute() or ".." in rel.parts:
             raise ValueError("invalid blob_ref")
         path = self.session_dir / rel
-        return path.read_text(encoding="utf-8")
+        data = path.read_bytes()
+        expected = path.stem.lower()
+        if len(expected) == 64 and all(char in "0123456789abcdef" for char in expected):
+            actual = hashlib.sha256(data).hexdigest()
+            if actual != expected:
+                raise RuntimeError(
+                    f"Runtime V2 blob checksum mismatch for {rel.as_posix()}: "
+                    f"expected {expected}, got {actual}"
+                )
+        return data.decode("utf-8")

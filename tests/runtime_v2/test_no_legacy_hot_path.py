@@ -80,6 +80,63 @@ def test_v2_model_and_context_loaders_do_not_reference_legacy_reconcile():
     assert "_load_key_context" not in context_source
 
 
+def test_v2_model_projection_failure_is_not_converted_to_empty_history(monkeypatch):
+    import agent_loop
+    import runtime_v2
+
+    class _BrokenProjection:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def read_message_dicts(self, _session_id):
+            raise OSError("projection unavailable")
+
+    monkeypatch.setattr(runtime_v2, "RuntimeModelProjection", _BrokenProjection)
+    try:
+        agent_loop._load_runtime_v2_model_history_dicts("s1")
+    except OSError as exc:
+        assert "projection unavailable" in str(exc)
+    else:
+        raise AssertionError("V2 projection failures must abort the request")
+
+
+def test_v2_context_projection_failure_is_not_converted_to_empty_summary(monkeypatch):
+    import agent_loop
+    import runtime_v2
+
+    class _BrokenStore:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def read_consistent(self, _session_id):
+            raise OSError("context snapshot unavailable")
+
+    monkeypatch.setattr(runtime_v2, "SnapshotStore", _BrokenStore)
+    try:
+        agent_loop._load_runtime_v2_context_summary("s1")
+    except OSError as exc:
+        assert "context snapshot unavailable" in str(exc)
+    else:
+        raise AssertionError("V2 context failures must abort the request")
+
+
+def test_v2_state_persistence_failure_propagates(monkeypatch):
+    import agent_loop
+
+    monkeypatch.setattr(agent_loop, "_runtime_v2_is_primary", lambda: True)
+    monkeypatch.setattr(
+        agent_loop,
+        "_persist_session_messages",
+        lambda _state: (_ for _ in ()).throw(OSError("disk unavailable")),
+    )
+    try:
+        agent_loop._persist_state({})
+    except OSError as exc:
+        assert "disk unavailable" in str(exc)
+    else:
+        raise AssertionError("V2 persistence failures must fail the run")
+
+
 def test_chat_form_defaults_to_runtime_v2_protocol():
     import webui
 

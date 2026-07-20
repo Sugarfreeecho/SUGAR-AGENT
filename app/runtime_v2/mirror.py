@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, Iterable, List, Optional
 
 from .blob_store import BlobStore
 from .event_log import SessionEventLog
@@ -72,15 +72,55 @@ class RuntimeMirror:
             )
             return None
 
+    def append_batch(self, session_id: str, rows: Iterable[dict]) -> List[RuntimeEvent]:
+        """Append many native facts and materialize one snapshot.
+
+        This is used by explicit migration/restore paths. Unlike the live UI
+        convenience method, failures propagate so the migration transaction can
+        verify or roll back the whole operation.
+        """
+        clean = [dict(row) for row in rows if isinstance(row, dict) and row.get("type")]
+        if not clean:
+            return []
+        with self.event_log.session_transaction(session_id):
+            events = self.event_log._append_many_unlocked(session_id, clean)
+            snapshot = self.snapshots.read(session_id)
+            if events and int(snapshot.get("last_seq") or 0) == int(events[0].seq) - 1:
+                for event in events:
+                    snapshot = self.projector.project_incremental(snapshot, event)
+            else:
+                snapshot = self.projector.project(self.event_log.read_all(session_id))
+            self.snapshots.stamp_event_log(
+                session_id, snapshot, self.event_log.event_path(session_id)
+            )
+            self.snapshots.write(session_id, snapshot)
+            return events
+
+    def mirror_ui_events_batch(self, session_id: str, ui_events: Iterable[dict]) -> List[RuntimeEvent]:
+        rows: List[dict] = []
+        for event in ui_events or []:
+            if not isinstance(event, dict):
+                continue
+            mapped = self._map_ui_event(session_id, dict(event))
+            if mapped:
+                rows.append({
+                    "type": mapped["type"],
+                    "payload": mapped.get("payload") or {},
+                    "run_id": mapped.get("run_id"),
+                })
+            else:
+                rows.append({"type": "legacy_ui_event", "payload": dict(event)})
+        return self.append_batch(session_id, rows)
+
     def _apply_snapshot_event(self, session_id: str, event: RuntimeEvent) -> None:
         try:
-            snapshot = self.snapshots.read(session_id)
+            snapshot = self.snapshots.read_for_update(session_id)
             if int(snapshot.get("last_seq") or 0) != int(event.seq) - 1:
                 snapshot = self.projector.project(self.event_log.read_all(session_id))
             else:
                 snapshot = self.projector.project_incremental(snapshot, event)
             self.snapshots.stamp_event_log(session_id, snapshot, self.event_log.event_path(session_id))
-            self.snapshots.write(session_id, snapshot)
+            self.snapshots.write_checkpointed(session_id, snapshot)
         except Exception as exc:
             logger.debug("Runtime V2 mirror incremental snapshot failed for session %s: %s", session_id, exc)
             self._refresh_snapshot(session_id)

@@ -297,6 +297,41 @@ class RuntimeHistoryOps:
             raise ValueError("goal event_type must start with goal_")
         return self._append_and_snapshot(session_id, str(event_type), dict(goal or {}))
 
+    def mutate_goal(
+        self,
+        session_id: str,
+        mutator: Callable[[Optional[dict]], tuple[str, dict, dict]],
+        *,
+        run_id: Optional[str] = None,
+    ) -> tuple[Optional[RuntimeEvent], dict]:
+        """Atomically read, mutate, append, and project one Goal state change."""
+
+        with self.event_log.session_transaction(session_id):
+            snapshot = self.snapshots.read(session_id)
+            latest_seq = self.event_log.next_seq(session_id) - 1
+            if int(snapshot.get("last_seq") or 0) != int(latest_seq):
+                snapshot = self.projector.project(self.event_log.read_all(session_id))
+            current = snapshot.get("goal") if isinstance(snapshot, dict) else None
+            current_goal = dict(current) if isinstance(current, dict) else None
+            event_type, persisted_goal, response_goal = mutator(current_goal)
+            normalized_type = str(event_type or "").strip()
+            if not normalized_type:
+                return None, dict(response_goal or persisted_goal or current_goal or {})
+            if not normalized_type.startswith("goal_"):
+                raise ValueError("goal event_type must start with goal_")
+            if not isinstance(persisted_goal, dict) or not persisted_goal.get("id"):
+                raise ValueError("goal mutation must return a persisted goal with an id")
+            event = self.event_log._append_unlocked(
+                session_id,
+                normalized_type,
+                payload=dict(persisted_goal),
+                run_id=run_id,
+            )
+            snapshot = self.projector.project_incremental(snapshot, event)
+            self.snapshots.stamp_event_log(session_id, snapshot, self.event_log.event_path(session_id))
+            self.snapshots.write(session_id, snapshot)
+            return event, dict(response_goal or persisted_goal)
+
     def append_hook_event(
         self,
         session_id: str,
@@ -484,7 +519,7 @@ class RuntimeHistoryOps:
         """Atomically commit the UI and model representations of one user turn."""
         op_id = str(operation_id or "").strip()
         with self.event_log.session_transaction(session_id):
-            snapshot = self.snapshots.read(session_id)
+            snapshot = self.snapshots.read_for_update(session_id)
             if int(snapshot.get("last_seq") or 0) != self.event_log.next_seq(session_id) - 1:
                 snapshot = self.projector.project(self.event_log.read_all(session_id))
             if op_id and op_id in set(snapshot.get("operation_ids") or []):
@@ -506,7 +541,7 @@ class RuntimeHistoryOps:
             )
             snapshot = self.projector.project_incremental(snapshot, event)
             self.snapshots.stamp_event_log(session_id, snapshot, self.event_log.event_path(session_id))
-            self.snapshots.write(session_id, snapshot)
+            self.snapshots.write_checkpointed(session_id, snapshot)
             return event
 
     def commit_assistant_final(
@@ -520,7 +555,7 @@ class RuntimeHistoryOps:
     ) -> Optional[RuntimeEvent]:
         op_id = str(operation_id or "").strip()
         with self.event_log.session_transaction(session_id):
-            snapshot = self.snapshots.read(session_id)
+            snapshot = self.snapshots.read_for_update(session_id)
             if int(snapshot.get("last_seq") or 0) != self.event_log.next_seq(session_id) - 1:
                 snapshot = self.projector.project(self.event_log.read_all(session_id))
             if op_id and op_id in set(snapshot.get("operation_ids") or []):
@@ -537,7 +572,7 @@ class RuntimeHistoryOps:
             )
             snapshot = self.projector.project_incremental(snapshot, event)
             self.snapshots.stamp_event_log(session_id, snapshot, self.event_log.event_path(session_id))
-            self.snapshots.write(session_id, snapshot)
+            self.snapshots.write_checkpointed(session_id, snapshot)
             return event
 
     def replace_model_history(
@@ -667,7 +702,7 @@ class RuntimeHistoryOps:
                 str(run_id or ""),
                 event.seq,
             )
-            snapshot = self.snapshots.read(session_id)
+            snapshot = self.snapshots.read_for_update(session_id)
             if int(snapshot.get("last_seq") or 0) != int(event.seq) - 1:
                 logger.info(
                     "rt2_append_and_snapshot_progress session=%s event_type=%s run_id=%s stage=full_projection_started",
@@ -686,7 +721,7 @@ class RuntimeHistoryOps:
                 str(run_id or ""),
             )
             self.snapshots.stamp_event_log(session_id, snapshot, self.event_log.event_path(session_id))
-            self.snapshots.write(session_id, snapshot)
+            self.snapshots.write_checkpointed(session_id, snapshot)
         t_after_write = time.perf_counter()
         logger.info(
             "rt2_append_and_snapshot session=%s event_type=%s run_id=%s "

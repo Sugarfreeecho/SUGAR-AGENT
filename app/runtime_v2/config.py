@@ -28,4 +28,7 @@ def runtime_v2_enabled() -> bool:
 
 
 def runtime_v2_strict() -> bool:
-    return os.getenv("RUNTIME_V2_STRICT", "0").strip().lower() in {"1", "true", "yes", "on"}
+    # Runtime V2 is the default fact source. Silently dropping a failed write
+    # makes later projections look valid but incomplete, so fail closed unless
+    # an operator explicitly opts into the old diagnostic behavior.
+    return os.getenv("RUNTIME_V2_STRICT", "1").strip().lower() in {"1", "true", "yes", "on"}
