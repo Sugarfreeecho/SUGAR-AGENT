@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import shutil
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterable, List, Optional
@@ -259,6 +260,8 @@ class RuntimeV2MigrationService:
                     "manifest_path": str(manifest_path),
                 }
             raise
+        finally:
+            self._discard_v2_state(rollback_state)
 
         return {
             "ok": True,
@@ -366,25 +369,37 @@ class RuntimeV2MigrationService:
 
     def _capture_v2_state(self, projection: RuntimeUiProjection, session_id: str) -> dict:
         session_dir = projection.event_log.session_dir(session_id)
+        session_dir.parent.mkdir(parents=True, exist_ok=True)
+        backup_dir = Path(tempfile.mkdtemp(
+            prefix=f".runtime-v2-migration-{session_id}-",
+            dir=str(session_dir.parent),
+        ))
         fixed_rel = [
             Path("events.jsonl"),
             Path("snapshots/latest.json"),
             Path("snapshots/ui_projection_index.json"),
+            Path("snapshots/seq_offset_index.json"),
             Path(self.MANIFEST_FILE),
         ]
-        fixed = {
-            str(relative): (session_dir / relative).read_bytes()
-            if (session_dir / relative).is_file()
-            else None
-            for relative in fixed_rel
-        }
-        blobs: dict[str, bytes] = {}
+        present: list[str] = []
+        for relative in fixed_rel:
+            source = session_dir / relative
+            if not source.is_file():
+                continue
+            target = backup_dir / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, target)
+            present.append(str(relative))
         blob_root = session_dir / "blobs"
         if blob_root.is_dir():
-            for path in blob_root.rglob("*"):
-                if path.is_file():
-                    blobs[str(path.relative_to(blob_root))] = path.read_bytes()
-        return {"session_dir": session_dir, "fixed": fixed, "blobs": blobs}
+            shutil.copytree(blob_root, backup_dir / "blobs")
+        return {
+            "session_dir": session_dir,
+            "backup_dir": backup_dir,
+            "fixed_rel": [str(relative) for relative in fixed_rel],
+            "present": present,
+            "had_blobs": blob_root.is_dir(),
+        }
 
     def _restore_v2_state(
         self,
@@ -393,28 +408,38 @@ class RuntimeV2MigrationService:
         state: dict,
     ) -> None:
         session_dir = Path(state["session_dir"])
-        for relative, content in dict(state.get("fixed") or {}).items():
+        backup_dir = Path(state["backup_dir"])
+        present = set(state.get("present") or [])
+        for relative in list(state.get("fixed_rel") or []):
             path = session_dir / relative
-            if content is None:
+            if relative not in present:
                 path.unlink(missing_ok=True)
                 continue
             path.parent.mkdir(parents=True, exist_ok=True)
             tmp = path.with_suffix(path.suffix + ".rollback.tmp")
-            tmp.write_bytes(content)
+            shutil.copy2(backup_dir / relative, tmp)
             tmp.replace(path)
         blob_root = session_dir / "blobs"
         if blob_root.exists():
             shutil.rmtree(blob_root)
-        for relative, content in dict(state.get("blobs") or {}).items():
-            path = blob_root / relative
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_bytes(content)
+        if state.get("had_blobs") and (backup_dir / "blobs").is_dir():
+            shutil.copytree(backup_dir / "blobs", blob_root)
         projection.invalidate_cache(session_id)
         events = projection.event_log.read_all(session_id)
         projection.event_log._update_seq_cache(
             session_id,
             max((event.seq for event in events), default=0),
         )
+
+    @staticmethod
+    def _discard_v2_state(state: dict) -> None:
+        backup_dir = Path(str((state or {}).get("backup_dir") or ""))
+        if not backup_dir.name.startswith(".runtime-v2-migration-"):
+            return
+        try:
+            shutil.rmtree(backup_dir)
+        except FileNotFoundError:
+            pass
 
     @classmethod
     def _verification(cls, source: Iterable[dict], target: Iterable[dict], *, kind: str) -> dict:

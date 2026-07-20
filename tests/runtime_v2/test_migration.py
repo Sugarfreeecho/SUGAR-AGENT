@@ -1,4 +1,5 @@
 import json
+import time
 from pathlib import Path
 
 import pytest
@@ -6,6 +7,22 @@ import pytest
 from app.runtime_v2 import RuntimeHistoryOps, RuntimeMirror, RuntimeModelProjection
 from app.runtime_v2.migration import RuntimeV2MigrationService, RuntimeV2VerificationError
 from app.runtime_v2.ui_projection import RuntimeUiProjection
+
+
+def test_legacy_ui_batch_migration_of_10000_events_completes_under_10_seconds(tmp_path):
+    legacy = [
+        {"type": "user" if i % 2 == 0 else "final", "content": f"row-{i}"}
+        for i in range(10_000)
+    ]
+    projection = RuntimeUiProjection(tmp_path)
+
+    started = time.perf_counter()
+    written = projection.ensure_backfilled_from_legacy("s1", legacy)
+    elapsed = time.perf_counter() - started
+
+    assert written == 10_000
+    assert elapsed < 10.0
+    assert projection.count_ui_events_light("s1")[0] == 10_000
 
 
 def test_migration_service_does_not_export_legacy_by_default(monkeypatch, tmp_path):
