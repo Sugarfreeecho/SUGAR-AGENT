@@ -67,9 +67,10 @@ def load_app_dotenv() -> None:
 load_app_dotenv()
 
 
-# ==================== 配置（环境变量，见 .env）====================
+# ==================== 运行配置（非模型项来自 .env，模型项来自 profile）====================
 # 工程根目录（app/ 的上级）；兼容旧名 PROJECT_ROOT
 PROJECT_ROOT = _PROJECT_ROOT.parent
+_INITIAL_MODEL_PROFILE = model_profiles.top_profile(PROJECT_ROOT) or {}
 
 
 def _env_path(name: str, default: Path | str, *, base: Path = PROJECT_ROOT) -> Path:
@@ -137,43 +138,52 @@ SUBAGENT_PENDING_RESULTS_FILE = "pending_subagent_results.json"
 VERBOSE_LOGGING = os.getenv("VERBOSE_LOGGING", "True").lower() == "true"
 TODO_MAX_ITEMS = int(os.getenv("TODO_MAX_ITEMS", "30"))
 
-EXECUTOR_LLM = os.getenv("EXECUTOR_LLM", "deepseek-v4-flash")
-EXECUTOR_LLM_TYPE = (os.getenv("EXECUTOR_LLM_TYPE") or "openai").strip().lower()
-EXECUTOR_TEMPERATURE = float(os.getenv("EXECUTOR_TEMPERATURE", 0.7))
+EXECUTOR_LLM = str(_INITIAL_MODEL_PROFILE.get("model") or "").strip()
+EXECUTOR_LLM_TYPE = str(_INITIAL_MODEL_PROFILE.get("llm_type") or "openai").strip().lower()
+try:
+    EXECUTOR_TEMPERATURE = float(str(_INITIAL_MODEL_PROFILE.get("temperature") or "0.7"))
+except ValueError:
+    EXECUTOR_TEMPERATURE = 0.7
+EXECUTOR_THINKING_MODE = str(_INITIAL_MODEL_PROFILE.get("thinking_mode") or "").strip()
+EXECUTOR_EXTRA_BODY_JSON = str(_INITIAL_MODEL_PROFILE.get("extra_body_json") or "").strip()
+EXECUTOR_REASONING_EFFORT_RAW = str(_INITIAL_MODEL_PROFILE.get("reasoning_effort") or "").strip()
 
 # 本地 OpenAI 兼容服务（根 URL + /v1）
-LOCAL_LLM_HOST = os.getenv("LOCAL_LLM_HOST", "http://localhost:11434")
-LOCAL_LLM = os.getenv("LOCAL_LLM", "qwen3.5:9b")
+LOCAL_LLM_HOST = str(_INITIAL_MODEL_PROFILE.get("base_url") or "http://localhost:11434").rstrip("/")
+LOCAL_LLM = EXECUTOR_LLM
 _LOCAL_OPENAI_DUMMY_KEY = "local"
 
-# 默认与 .env 中 DeepSeek 兼容一致；API Key 仍只通过环境变量 / .env 提供，勿写入仓库
-OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://api.deepseek.com")
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+# Compatibility globals are derived from the first usable model profile. Model
+# connection settings are never read from .env.
+OPENAI_BASE_URL = str(_INITIAL_MODEL_PROFILE.get("base_url") or "").strip()
+OPENAI_API_KEY = str(_INITIAL_MODEL_PROFILE.get("api_key") or "").strip()
+_MODEL_PROFILE_ENV_KEYS = {
+    "EXECUTOR_LLM", "EXECUTOR_LLM_TYPE", "EXECUTOR_TEMPERATURE",
+    "OPENAI_BASE_URL", "OPENAI_API_KEY", "CONTEXT_WINDOW", "MAX_OUTPUT_TOKENS",
+    "LLM_THINKING_MODE", "LLM_REASONING_EFFORT", "LLM_EXTRA_BODY_JSON",
+    "LOCAL_LLM_HOST", "LOCAL_LLM",
+}
 
-# 尝试从加密文件加载配置（仅在.env中没有对应值时作为默认值）
+# 加密配置仅补充非模型环境变量；模型字段始终以 model profile 为准。
 try:
     from secret_loader import load_encrypted_config
     _encrypted_config = load_encrypted_config()
     if _encrypted_config:
         _loaded_keys = []
         for _k, _v in _encrypted_config.items():
+            if _k in _MODEL_PROFILE_ENV_KEYS:
+                continue
             if not os.environ.get(_k):
                 os.environ[_k] = _v
                 _loaded_keys.append(_k)
-        if "OPENAI_API_KEY" in _loaded_keys:
-            OPENAI_API_KEY = _encrypted_config["OPENAI_API_KEY"]
-        if "EXECUTOR_LLM" in _loaded_keys:
-            EXECUTOR_LLM = _encrypted_config["EXECUTOR_LLM"]
-        if "OPENAI_BASE_URL" in _loaded_keys:
-            OPENAI_BASE_URL = _encrypted_config["OPENAI_BASE_URL"]
         if _loaded_keys:
             logging.getLogger(__name__).info(f"从加密文件加载默认配置: {_loaded_keys}")
 except Exception as e:
     logging.getLogger(__name__).warning("Failed to load encrypted config defaults: %s", e)
 
-if not OPENAI_API_KEY and EXECUTOR_LLM_TYPE == "openai":
+if not _INITIAL_MODEL_PROFILE:
     logging.getLogger(__name__).warning(
-        "OPENAI_API_KEY 未设置且 EXECUTOR_LLM_TYPE=openai；Web 将停留在配置向导（/setup），保存密钥后再使用对话。"
+        "没有可用的 model profile；Web 将停留在配置向导（/setup）。"
     )
 
 # 创建必要目录（可关闭：AGENT_AUTO_CREATE_DIRS=false）
@@ -231,8 +241,8 @@ def _sanitize_extra_body_drop_reasoning_when_thinking_off(
     return out
 
 
-def _env_llm_thinking_wants_extra_body_enabled() -> bool:
-    raw = (os.getenv("LLM_THINKING_MODE") or "").strip().lower()
+def _profile_llm_thinking_wants_extra_body_enabled() -> bool:
+    raw = EXECUTOR_THINKING_MODE.lower()
     if not raw:
         return True
     if raw == "enabled":
@@ -241,13 +251,13 @@ def _env_llm_thinking_wants_extra_body_enabled() -> bool:
         return False
     logging.getLogger(__name__).warning(
         "LLM_THINKING_MODE 应为 enabled 或 disabled（当前 %r），已按 enabled 处理",
-        os.getenv("LLM_THINKING_MODE"),
+        EXECUTOR_THINKING_MODE,
     )
     return True
 
 
-def _openai_base_url_likely_deepseek() -> bool:
-    return "deepseek" in (os.getenv("OPENAI_BASE_URL") or "").lower()
+def _profile_base_url_likely_deepseek() -> bool:
+    return "deepseek" in OPENAI_BASE_URL.lower()
 
 
 def _base_url_likely_deepseek(base_url: str) -> bool:
@@ -255,7 +265,7 @@ def _base_url_likely_deepseek(base_url: str) -> bool:
 
 
 def _load_executor_extra_body() -> Optional[Dict[str, Any]]:
-    raw = os.getenv("LLM_EXTRA_BODY_JSON", "").strip()
+    raw = EXECUTOR_EXTRA_BODY_JSON
     if raw:
         try:
             data = json.loads(raw)
@@ -269,10 +279,10 @@ def _load_executor_extra_body() -> Optional[Dict[str, Any]]:
             return None
         return _sanitize_extra_body_drop_reasoning_when_thinking_off(data)
     eb_out: Optional[Dict[str, Any]] = None
-    if _env_llm_thinking_wants_extra_body_enabled():
+    if _profile_llm_thinking_wants_extra_body_enabled():
         eb_out = {"thinking": {"type": "enabled"}}
     # 关闭思考：非 DeepSeek 基准通常可省略 thinking；DeepSeek 须显式 disabled，否则会默认仍为思考开启
-    elif _openai_base_url_likely_deepseek():
+    elif _profile_base_url_likely_deepseek():
         eb_out = {"thinking": {"type": "disabled"}}
     return _sanitize_extra_body_drop_reasoning_when_thinking_off(eb_out)
 
@@ -288,13 +298,13 @@ def _extra_body_thinking_enabled() -> bool:
 def _executor_reasoning_effort() -> Optional[str]:
     """仅思考开启时才下发顶层 reasoning_effort；否则忽略 LLM_REASONING_EFFORT。"""
     if not _extra_body_thinking_enabled():
-        v_skip = (os.getenv("LLM_REASONING_EFFORT") or "").strip()
+        v_skip = EXECUTOR_REASONING_EFFORT_RAW
         if v_skip:
             logging.getLogger(__name__).debug(
                 "思考未开启，已忽略 LLM_REASONING_EFFORT=%r", v_skip
             )
         return None
-    v = (os.getenv("LLM_REASONING_EFFORT") or "").strip()
+    v = EXECUTOR_REASONING_EFFORT_RAW
     return v if v else "high"
 
 
@@ -390,7 +400,7 @@ def _context_env_int(name: str, default: str) -> int:
 
 # 压缩 / 记忆策略（.env 使用下列 CONTEXT_* 名，与 agent_memory 一致）
 # 与压缩/应急共用同一估算 token 门限 T：若 (整包上送 > T) 或 (仅多轮 work > T) 且块数足则尝试压缩
-CONTEXT_WINDOW = _context_env_int("CONTEXT_WINDOW", "128000")
+CONTEXT_WINDOW = model_profiles._safe_int(_INITIAL_MODEL_PROFILE.get("context_window"), 128000)
 # 从块序列尾部完整保留的「对话轮」数（一轮 = 一条 user 起至下一条 user 之前）；微压扫描仍用 legacy 块（见 agent_memory._collect_blocks）
 CONTEXT_KEEP_RECENT_TURNS = _context_env_int("CONTEXT_KEEP_RECENT_TURNS", "3")
 # 紧挨全量保留区之前的块数，做微压
@@ -672,7 +682,7 @@ class RequestResponseLogger(httpx.Client):
 OPENAI_HTTP_TIMEOUT = float(os.getenv("OPENAI_HTTP_TIMEOUT", "600"))
 executor_http_client = RequestResponseLogger(timeout=OPENAI_HTTP_TIMEOUT)
 
-MAX_OUTPUT_TOKENS = int(os.getenv("MAX_OUTPUT_TOKENS", "8192"))
+MAX_OUTPUT_TOKENS = model_profiles._safe_int(_INITIAL_MODEL_PROFILE.get("max_output_tokens"), 8192)
 
 
 def _openai_sdk_base_url(for_local: bool) -> Optional[str]:
@@ -778,10 +788,10 @@ def create_openai_client_for_profile(
     """Create an OpenAI-compatible client from a saved model profile."""
     model_name = str(profile.get("model") or "").strip()
     model_type = str(profile.get("llm_type") or "openai").strip().lower()
-    if model_type == "local":
-        return create_openai_client(model_name, "local", role, http_client=http_client)
     base_url = str(profile.get("base_url") or "").strip().rstrip("/") or None
-    api_key = str(profile.get("api_key") or "").strip() or OPENAI_API_KEY or ""
+    api_key = str(profile.get("api_key") or "").strip()
+    if model_type == "local" and not api_key:
+        api_key = _LOCAL_OPENAI_DUMMY_KEY
     logger.info(
         "创建 %s 客户端 (模型档案): model=%s, base_url=%s",
         role,
@@ -917,18 +927,20 @@ class FallbackOpenAIClient:
         self.chat.set_status_callback(status_callback)
 
 
-executor_client, executor_model = create_openai_client(
-    EXECUTOR_LLM,
-    EXECUTOR_LLM_TYPE,
-    "executor",
-    http_client=executor_http_client,
-)
+if _INITIAL_MODEL_PROFILE:
+    executor_client, executor_model = create_openai_client_for_profile(
+        _INITIAL_MODEL_PROFILE,
+        "executor",
+        http_client=executor_http_client,
+    )
+else:
+    executor_client, executor_model = None, ""
 
 
 def refresh_executor_client_from_env() -> None:
     """
-    向导 / 前端保存 .env 后调用：将热点变量从磁盘同步到本模块，并重建 executor、
-    回填 agent_loop / agent_memory 中与主循环共用的引用。
+    Reload non-model .env settings and the first usable model profile, then
+    rebuild the compatibility executor globals shared with agent_loop/memory.
     联网搜索（WEB_SEARCH_*）在 agent_tools 内按次读 os.environ，load_app_dotenv 后即生效。
     """
     global OPENAI_API_KEY, OPENAI_BASE_URL, executor_client, executor_model
@@ -938,13 +950,27 @@ def refresh_executor_client_from_env() -> None:
     global CONTEXT_COMPRESS_FAILURE_MAX_TOKENS, CONTEXT_COMPRESS_MAX_ROUNDS, CONTEXT_COMPRESS_ROUND3_MAX_REACT
     global CONTEXT_COMPRESS_TARGET_RATIO
     global EXECUTOR_EXTRA_BODY, EXECUTOR_REASONING_EFFORT
+    global EXECUTOR_TEMPERATURE, EXECUTOR_THINKING_MODE, EXECUTOR_EXTRA_BODY_JSON
+    global EXECUTOR_REASONING_EFFORT_RAW, LOCAL_LLM_HOST, LOCAL_LLM
 
     load_app_dotenv()
 
-    EXECUTOR_LLM = os.getenv("EXECUTOR_LLM", "deepseek-v4-flash")
-    EXECUTOR_LLM_TYPE = (os.getenv("EXECUTOR_LLM_TYPE") or "openai").strip().lower()
-    MAX_OUTPUT_TOKENS = int(os.getenv("MAX_OUTPUT_TOKENS", "8192"))
-    CONTEXT_WINDOW = _context_env_int("CONTEXT_WINDOW", "128000")
+    profile = model_profiles.top_profile(PROJECT_ROOT) or {}
+    EXECUTOR_LLM = str(profile.get("model") or "").strip()
+    EXECUTOR_LLM_TYPE = str(profile.get("llm_type") or "openai").strip().lower()
+    MAX_OUTPUT_TOKENS = model_profiles._safe_int(profile.get("max_output_tokens"), 8192)
+    CONTEXT_WINDOW = model_profiles._safe_int(profile.get("context_window"), 128000)
+    try:
+        EXECUTOR_TEMPERATURE = float(str(profile.get("temperature") or "0.7"))
+    except ValueError:
+        EXECUTOR_TEMPERATURE = 0.7
+    EXECUTOR_THINKING_MODE = str(profile.get("thinking_mode") or "").strip()
+    EXECUTOR_EXTRA_BODY_JSON = str(profile.get("extra_body_json") or "").strip()
+    EXECUTOR_REASONING_EFFORT_RAW = str(profile.get("reasoning_effort") or "").strip()
+    OPENAI_BASE_URL = str(profile.get("base_url") or "").strip()
+    OPENAI_API_KEY = str(profile.get("api_key") or "").strip()
+    LOCAL_LLM_HOST = OPENAI_BASE_URL.rstrip("/") or "http://localhost:11434"
+    LOCAL_LLM = EXECUTOR_LLM
     CONTEXT_KEEP_RECENT_TURNS = _context_env_int("CONTEXT_KEEP_RECENT_TURNS", "3")
     TOOL_RESULT_TRUNCATE_KEEP_CHARS = _tool_result_truncate_keep_chars_from_env()
     LLM_CONTEXT_TRUNCATE_KEEP_CHARS = TOOL_RESULT_TRUNCATE_KEEP_CHARS
@@ -960,42 +986,22 @@ def refresh_executor_client_from_env() -> None:
     CONTEXT_COMPRESS_ROUND3_MAX_REACT = _context_env_int("CONTEXT_COMPRESS_ROUND3_MAX_REACT", "10")
     CONTEXT_COMPRESS_TARGET_RATIO = float(os.getenv("CONTEXT_COMPRESS_TARGET_RATIO", "0.6"))
 
-    OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://api.deepseek.com")
-    OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-
-    # 尝试从加密文件加载配置（仅在.env中没有对应值时作为默认值）
-    try:
-        from secret_loader import load_encrypted_config
-        _encrypted_config = load_encrypted_config()
-        if _encrypted_config:
-            _loaded_keys = []
-            for _k, _v in _encrypted_config.items():
-                if not os.environ.get(_k):
-                    os.environ[_k] = _v
-                    _loaded_keys.append(_k)
-            if "OPENAI_API_KEY" in _loaded_keys:
-                OPENAI_API_KEY = _encrypted_config["OPENAI_API_KEY"]
-            if "EXECUTOR_LLM" in _loaded_keys:
-                EXECUTOR_LLM = _encrypted_config["EXECUTOR_LLM"]
-            if "OPENAI_BASE_URL" in _loaded_keys:
-                OPENAI_BASE_URL = _encrypted_config["OPENAI_BASE_URL"]
-    except Exception as e:
-        logging.getLogger(__name__).warning("Failed to reload encrypted config defaults: %s", e)
-
-    if not OPENAI_API_KEY and EXECUTOR_LLM_TYPE == "openai":
+    if not profile:
         logging.getLogger(__name__).warning(
-            "OPENAI_API_KEY 未设置且 EXECUTOR_LLM_TYPE=openai；对话/API 调用将失败，请通过向导或 .env 配置密钥。"
+            "没有可用的 model profile；对话/API 调用不可用。"
         )
 
     EXECUTOR_EXTRA_BODY = _load_executor_extra_body()
     EXECUTOR_REASONING_EFFORT = _executor_reasoning_effort()
 
-    executor_client, executor_model = create_openai_client(
-        EXECUTOR_LLM,
-        EXECUTOR_LLM_TYPE,
-        "executor",
-        http_client=executor_http_client,
-    )
+    if profile:
+        executor_client, executor_model = create_openai_client_for_profile(
+            profile,
+            "executor",
+            http_client=executor_http_client,
+        )
+    else:
+        executor_client, executor_model = None, ""
     import agent_loop as _agent_loop
     import agent_memory as _agent_memory
 
@@ -2202,11 +2208,7 @@ class SessionManager:
         return self.repository.load_json_list(self._get_subagent_tasks_path(parent_session_id))
 
     def _list_subagent_tasks_v2(self, parent_session_id: str) -> List[dict]:
-        try:
-            return self._runtime_subagent_store().list_tasks(parent_session_id)
-        except Exception as exc:
-            logger.debug("Runtime V2 list subagent tasks failed: %s", exc)
-            return []
+        return self._runtime_subagent_store().list_tasks(parent_session_id)
 
     def list_subagent_tasks(self, parent_session_id: str) -> List[dict]:
         """读取父会话下的 subagent task 状态索引。"""
@@ -2236,10 +2238,7 @@ class SessionManager:
         self.repository.save_json_list(path, rows)
 
     def _upsert_subagent_task_v2(self, parent_session_id: str, task_id: str, patch: Dict[str, Any]) -> None:
-        try:
-            self._runtime_subagent_store().upsert_task(parent_session_id, task_id, patch)
-        except Exception as exc:
-            logger.debug("Runtime V2 upsert subagent task failed: %s", exc)
+        self._runtime_subagent_store().upsert_task(parent_session_id, task_id, patch)
 
     def upsert_subagent_task(self, parent_session_id: str, task_id: str, patch: Dict[str, Any]) -> None:
         """维护父会话下 subagent task 状态索引，供 UI/恢复/调试使用。"""
@@ -2344,10 +2343,7 @@ class SessionManager:
             else:
                 row.setdefault("delivery_scope", "unanchored")
         if self._runtime_v2_primary():
-            try:
-                self._runtime_subagent_store().append_pending_result(parent_session_id, row)
-            except Exception as exc:
-                logger.debug("Runtime V2 append pending subagent result failed: %s", exc)
+            self._runtime_subagent_store().append_pending_result(parent_session_id, row)
         else:
             path = self._get_pending_subagent_results_path(parent_session_id)
             rows: List[dict] = self.repository.load_json_list(path)
@@ -2356,11 +2352,7 @@ class SessionManager:
 
     def _load_pending_subagent_results(self, session_id: str) -> List[dict]:
         if self._runtime_v2_primary():
-            try:
-                rows = self._runtime_subagent_store().list_pending_results(session_id)
-            except Exception as exc:
-                logger.debug("Runtime V2 load pending subagent results failed: %s", exc)
-                rows = []
+            rows = self._runtime_subagent_store().list_pending_results(session_id)
         else:
             rows = self.repository.load_json_list(self._get_pending_subagent_results_path(session_id))
         try:
@@ -2379,10 +2371,7 @@ class SessionManager:
     def _save_pending_subagent_results(self, session_id: str, rows: List[dict]) -> None:
         rows = [x for x in (rows or []) if isinstance(x, dict)]
         if self._runtime_v2_primary():
-            try:
-                self._runtime_subagent_store().save_pending_results(session_id, rows)
-            except Exception as exc:
-                logger.debug("Runtime V2 save pending subagent results failed: %s", exc)
+            self._runtime_subagent_store().save_pending_results(session_id, rows)
         else:
             path = self._get_pending_subagent_results_path(session_id)
             self.repository.save_json_list(path, rows)
@@ -3199,6 +3188,8 @@ class SessionManager:
         """追加一条与 SSE 同结构的 UI 事件（供刷新时原样重放）。"""
         if not event or not isinstance(event, dict):
             return
+        runtime_v2_active = False
+        runtime_v2_strict_mode = False
         try:
             from session_lifecycle import is_session_deleted
 
@@ -3218,6 +3209,8 @@ class SessionManager:
                 from runtime_v2 import runtime_v2_primary, runtime_v2_strict
 
                 if runtime_v2_primary():
+                    runtime_v2_active = True
+                    runtime_v2_strict_mode = runtime_v2_strict()
                     mirrored = self._mirror_ui_event_to_runtime_v2(session_id, event_copy)
                     if mirrored is None:
                         raise RuntimeError("Runtime V2 did not accept ui_event")
@@ -3236,6 +3229,8 @@ class SessionManager:
             self._apply_appended_ui_event_side_effects(session_id, event_copy)
         except Exception as e:
             logger.warning(f"append_ui_event 失败: {e}")
+            if runtime_v2_active and runtime_v2_strict_mode:
+                raise
 
     def _observe_runtime_v2_history(self, method_name: str, session_id: str, **kwargs) -> bool:
         try:
@@ -3262,21 +3257,13 @@ class SessionManager:
     def _load_ui_events_for_active_runtime(self, session_id: str) -> List[dict]:
         """Load UI-visible history from the selected runtime."""
         if self._runtime_v2_primary():
-            try:
-                from runtime_v2.ui_projection import RuntimeUiProjection
+            from runtime_v2.ui_projection import RuntimeUiProjection
 
-                projection = RuntimeUiProjection(
-                    self.repository.sessions_dir,
-                    path_resolver=self._resolve_session_path,
-                )
-                events = projection.read_ui_events(
-                    session_id,
-                )
-                if events:
-                    return events
-            except Exception as exc:
-                logger.debug("Runtime V2 UI history read failed for %s: %s", session_id, exc)
-            return []
+            projection = RuntimeUiProjection(
+                self.repository.sessions_dir,
+                path_resolver=self._resolve_session_path,
+            )
+            return projection.read_ui_events(session_id)
         return self._load_ui_events(session_id)
 
     def get_ui_events_page(
@@ -5317,10 +5304,14 @@ def _executor_profile_catalog(now: Optional[float] = None) -> Tuple[Dict[str, di
         cached = _executor_profile_catalog_cache
         if cached and ts - cached[0] <= _EXECUTOR_CONFIG_CACHE_TTL_SEC:
             return cached[1], list(cached[2]), cached[3]
-    profiles = {str(p.get("id") or ""): p for p in model_profiles.sorted_profiles(PROJECT_ROOT)}
-    ordered_ids = model_profiles.sorted_profile_ids_with_env(PROJECT_ROOT)
+    ordered_profiles = [
+        p for p in model_profiles.sorted_profiles(PROJECT_ROOT)
+        if model_profiles.is_usable_profile(p)
+    ]
+    profiles = {str(p.get("id") or ""): p for p in ordered_profiles}
+    ordered_ids = [str(p.get("id") or "") for p in ordered_profiles]
     first_id = ordered_ids[0] if ordered_ids else ""
-    top_profile_id = "" if first_id == "__env__" else first_id
+    top_profile_id = first_id
     with _executor_config_cache_lock:
         _executor_profile_catalog_cache = (ts, profiles, list(ordered_ids), top_profile_id)
     return profiles, list(ordered_ids), top_profile_id
@@ -5334,20 +5325,6 @@ def list_executor_model_profile_choices() -> List[Dict[str, Any]]:
         pid = str(profile_id or "").strip()
         if not pid:
             continue
-        if pid == "__env__":
-            choice = {
-                "id": "__env__",
-                "name": str(EXECUTOR_LLM or executor_model or "environment default"),
-                "model": str(executor_model or EXECUTOR_LLM),
-                "llm_type": str(EXECUTOR_LLM_TYPE or "openai"),
-                "context_window": int(CONTEXT_WINDOW),
-                "max_output_tokens": int(MAX_OUTPUT_TOKENS),
-            }
-            choice.update(model_profiles.infer_model_task_capabilities(
-                choice["model"], choice["name"], choice["context_window"]
-            ))
-            choices.append(choice)
-            continue
         profile = profiles.get(pid)
         if not isinstance(profile, dict):
             continue
@@ -5358,19 +5335,6 @@ def list_executor_model_profile_choices() -> List[Dict[str, Any]]:
             "llm_type": str(profile.get("llm_type") or "openai"),
             "context_window": int(profile.get("context_window") or CONTEXT_WINDOW),
             "max_output_tokens": int(profile.get("max_output_tokens") or MAX_OUTPUT_TOKENS),
-        }
-        choice.update(model_profiles.infer_model_task_capabilities(
-            choice["model"], choice["name"], choice["context_window"]
-        ))
-        choices.append(choice)
-    if not choices:
-        choice = {
-            "id": "__env__",
-            "name": str(EXECUTOR_LLM or executor_model or "environment default"),
-            "model": str(executor_model or EXECUTOR_LLM),
-            "llm_type": str(EXECUTOR_LLM_TYPE or "openai"),
-            "context_window": int(CONTEXT_WINDOW),
-            "max_output_tokens": int(MAX_OUTPUT_TOKENS),
         }
         choice.update(model_profiles.infer_model_task_capabilities(
             choice["model"], choice["name"], choice["context_window"]
@@ -5389,15 +5353,9 @@ def inherited_executor_selection(session_id: str) -> Dict[str, str]:
         profile_id = str(meta.get("model_profile_id") or "").strip()
         if profile_id:
             return {"model_profile_id": profile_id}
-        model = str(meta.get("executor_model") or "").strip()
-        if model:
-            return {
-                "executor_model": model,
-                "executor_llm_type": str(meta.get("executor_llm_type") or EXECUTOR_LLM_TYPE).strip(),
-            }
     choices = list_executor_model_profile_choices()
     profile_id = str((choices[0] if choices else {}).get("id") or "").strip()
-    return {"model_profile_id": profile_id or "__env__"}
+    return {"model_profile_id": profile_id} if profile_id else {}
 
 
 def _profile_candidate(profile: dict) -> Dict[str, Any]:
@@ -5423,19 +5381,6 @@ def _profile_candidate(profile: dict) -> Dict[str, Any]:
     }
 
 
-def _env_candidate() -> Dict[str, Any]:
-    return {
-        "profile_id": "__env__",
-        "client": executor_client,
-        "model": executor_model,
-        "max_output_tokens": int(MAX_OUTPUT_TOKENS),
-        "context_window": int(CONTEXT_WINDOW),
-        "temperature": float(EXECUTOR_TEMPERATURE),
-        "extra_body": EXECUTOR_EXTRA_BODY,
-        "reasoning_effort": EXECUTOR_REASONING_EFFORT,
-    }
-
-
 def resolve_executor_candidates_for_session(
     session_id: str,
     *,
@@ -5455,12 +5400,8 @@ def resolve_executor_candidates_for_session(
     seen: set[str] = set()
 
     def add_candidate(pid: str) -> None:
-        pid = str(pid or "").strip() or "__env__"
-        if pid in seen:
-            return
-        if pid == "__env__":
-            candidates.append(_env_candidate())
-            seen.add(pid)
+        pid = str(pid or "").strip()
+        if not pid or pid in seen:
             return
         profile = profiles.get(pid)
         if profile:
@@ -5471,8 +5412,6 @@ def resolve_executor_candidates_for_session(
         add_candidate(profile_id)
     for pid in ordered_ids:
         add_candidate(pid)
-    if not candidates:
-        candidates.append(_env_candidate())
     return candidates
 
 
@@ -5485,70 +5424,37 @@ def resolve_executor_for_session(session_id: str) -> Tuple[Any, str]:
 def resolve_executor_config_for_session(session_id: str) -> Tuple[Any, str, int, int]:
     """Resolve executor client/model plus per-session model limits."""
     sid = (session_id or "").strip()
-    if not sid:
-        return executor_client, executor_model, int(MAX_OUTPUT_TOKENS), int(CONTEXT_WINDOW)
     now = time.monotonic()
-    with _executor_config_cache_lock:
-        cached_config = _executor_config_cache.get(sid)
-        if cached_config and now - cached_config[0] <= _EXECUTOR_CONFIG_CACHE_TTL_SEC:
-            return cached_config[1]
+    if sid:
+        with _executor_config_cache_lock:
+            cached_config = _executor_config_cache.get(sid)
+            if cached_config and now - cached_config[0] <= _EXECUTOR_CONFIG_CACHE_TTL_SEC:
+                return cached_config[1]
     try:
         meta = session_manager._load_metadata(sid)
     except Exception:
         meta = {}
     profile_id = ""
-    override = ""
-    llm_type = EXECUTOR_LLM_TYPE
     if isinstance(meta, dict):
         profile_id = str(meta.get("model_profile_id") or "").strip()
-        override = str(meta.get("executor_model") or "").strip()
-        llm_type = str(meta.get("executor_llm_type") or EXECUTOR_LLM_TYPE).strip().lower()
-    if profile_id:
-        candidates = resolve_executor_candidates_for_session(sid, profile_id_override=profile_id)
-        first = candidates[0]
-        result = (
-            FallbackOpenAIClient(candidates),
-            str(first.get("model") or executor_model),
-            int(first.get("max_output_tokens") or MAX_OUTPUT_TOKENS),
-            int(first.get("context_window") or CONTEXT_WINDOW),
-        )
-        with _executor_config_cache_lock:
-            _executor_config_cache[sid] = (now, result)
-        return result
-    _profiles, _ordered_ids, _top_profile_id = _executor_profile_catalog(now)
-    if not override:
-        candidates = resolve_executor_candidates_for_session(sid, profile_id_override="")
-        first = candidates[0]
-        # Keep the configured priority order even when the environment-backed
-        # model is first.  Previously that branch returned ``executor_client``
-        # directly, so an API failure could not fall through to saved profiles.
-        client = FallbackOpenAIClient(candidates) if len(candidates) > 1 else first.get("client")
-        result = (
-            client or executor_client,
-            str(first.get("model") or executor_model),
-            int(first.get("max_output_tokens") or MAX_OUTPUT_TOKENS),
-            int(first.get("context_window") or CONTEXT_WINDOW),
-        )
-        with _executor_config_cache_lock:
-            _executor_config_cache[sid] = (now, result)
-        return result
-    cache_key = f"{llm_type}:{override}"
-    cached = _executor_override_cache.get(cache_key)
-    if cached is not None:
-        result = (cached[0], cached[1], int(MAX_OUTPUT_TOKENS), int(CONTEXT_WINDOW))
-        with _executor_config_cache_lock:
-            _executor_config_cache[sid] = (now, result)
-        return result
-    client, model = create_openai_client(
-        override,
-        llm_type or EXECUTOR_LLM_TYPE,
-        f"subagent:{override[:32]}",
-        http_client=executor_http_client,
+    candidates = resolve_executor_candidates_for_session(sid, profile_id_override=profile_id)
+    if not candidates:
+        raise RuntimeError("no usable model profile configured")
+    first = candidates[0]
+    client = (
+        FallbackOpenAIClient(candidates)
+        if profile_id or len(candidates) > 1
+        else first.get("client")
     )
-    _executor_override_cache[cache_key] = (client, model)
-    result = (client, model, int(MAX_OUTPUT_TOKENS), int(CONTEXT_WINDOW))
-    with _executor_config_cache_lock:
-        _executor_config_cache[sid] = (now, result)
+    result = (
+        client,
+        str(first.get("model") or ""),
+        int(first.get("max_output_tokens") or MAX_OUTPUT_TOKENS),
+        int(first.get("context_window") or CONTEXT_WINDOW),
+    )
+    if sid:
+        with _executor_config_cache_lock:
+            _executor_config_cache[sid] = (now, result)
     return result
 
 # ==================== Todo 计划（todo_plan.md）与 key_context 兼容 ====================
