@@ -3697,6 +3697,13 @@ def task(
     raise RuntimeError("task is handled in agent_loop.react_node, not via tools_dict invocation.")
 
 
+def team(action: str = "status", **kwargs) -> str:
+    """Placeholder; the active session identity is injected by agent_loop."""
+
+    _ = action, kwargs
+    raise RuntimeError("team is handled in agent_loop.react_node, not via tools_dict invocation.")
+
+
 # ==================== OpenAI tools 定义（Chat Completions）====================
 # Keep a stable order for tool schemas sent to the model.
 # web_search `count` maximum follows WEB_SEARCH_MAX_RESULTS at process start (restart to refresh schema).
@@ -4097,6 +4104,52 @@ OPENAI_TOOL_DEFINITIONS: List[Dict[str, Any]] = [
         ["action"],
     ),
     _openai_function_schema(
+        "team",
+        "Manage a durable Agent Team when the experimental feature is enabled. The root agent is the lead; spawned members keep one persistent child session and can be dispatched repeatedly. Team state, tasks, mailbox delivery, permissions, and lifecycle are stored as Runtime V2 events. Use status before mutating an existing team. Only the lead may create/archive a team, spawn/dispatch/remove members, resolve permissions, or shut down. Members may coordinate through messages, claim/update work, read their own inbox, and request permission.",
+        {
+            "action": {
+                "type": "string",
+                "enum": [
+                    "status", "create", "spawn_member", "dispatch", "remove_member",
+                    "set_member_state", "create_task", "claim_task", "release_task",
+                    "update_task", "send_message", "read_inbox", "consume_message",
+                    "request_permission", "resolve_permission", "shutdown",
+                    "complete_shutdown", "archive"
+                ],
+            },
+            "title": {"type": "string", "description": "create: optional team title; create_task: required task title."},
+            "name": {"type": "string", "description": "spawn_member: unique member name."},
+            "role": {"type": "string", "description": "spawn_member: bounded responsibility or specialty."},
+            "prompt": {"type": "string", "description": "spawn_member: standing instruction; dispatch: current assignment."},
+            "model_profile_id": {"type": "string", "description": "spawn_member only; omit to inherit the lead model."},
+            "readonly": {"type": "boolean", "description": "spawn_member: give the member strict read-only tools."},
+            "member_id": {"type": "string", "description": "Target member. For member self-actions, omit to use current identity."},
+            "task_id": {"type": "string", "description": "Task targeted by dispatch/claim/release/update."},
+            "description": {"type": "string", "description": "create_task: self-contained task description."},
+            "priority": {"type": "string", "enum": ["low", "normal", "high", "urgent"]},
+            "depends_on": {"type": "array", "items": {"type": "string"}},
+            "status": {
+                "type": "string",
+                "description": "set_member_state or update_task status.",
+                "enum": ["starting", "idle", "working", "waiting_permission", "stopping", "stopped", "failed", "pending", "in_progress", "blocked", "completed", "cancelled"]
+            },
+            "result": {"type": "string", "description": "update_task: result or handoff."},
+            "detail": {"type": "string", "description": "Optional status/permission detail."},
+            "reason": {"type": "string", "description": "Optional release/removal/permission/shutdown reason."},
+            "recipient_ids": {"type": "array", "items": {"type": "string"}, "description": "send_message recipients; use lead for the root agent."},
+            "content": {"type": "string", "description": "send_message body."},
+            "message_id": {"type": "string", "description": "consume_message target."},
+            "reply_to": {"type": "string", "description": "send_message optional parent message ID."},
+            "include_consumed": {"type": "boolean", "description": "read_inbox: include consumed rows."},
+            "permission_action": {"type": "string", "description": "request_permission: exact protected action."},
+            "resource": {"type": "string", "description": "request_permission: file, command, URL, or other target."},
+            "permission_id": {"type": "string", "description": "resolve_permission target."},
+            "decision": {"type": "string", "enum": ["allowed", "denied"]},
+            "run_in_background": {"type": "boolean", "description": "dispatch: return immediately while member runs."},
+        },
+        ["action"],
+    ),
+    _openai_function_schema(
         "create_goal",
         "Create one durable goal for this session. Use only when the user explicitly asks to create/start a goal. Only include token_budget when the user explicitly specifies one.",
         {
@@ -4117,6 +4170,7 @@ OPENAI_TOOL_DEFINITIONS: List[Dict[str, Any]] = [
         {
             "status": {"type": "string", "enum": ["completed", "blocked"]},
             "reason": {"type": "string", "description": "Required when status is blocked."},
+            "blocker_key": {"type": "string", "description": "Optional stable identifier for the same blocker across runs; use the same value even if the human-readable reason wording changes."},
         },
         ["status"],
     ),
@@ -4141,4 +4195,5 @@ tools = {
     "update_todo": update_todo,
     "context_manage": context_manage,
     "task": task,
+    "team": team,
 }

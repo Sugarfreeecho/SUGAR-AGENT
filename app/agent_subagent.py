@@ -96,34 +96,27 @@ def _runtime_v2_primary() -> bool:
 
 
 def _load_runtime_v2_context_summary(session_id: str) -> str:
-    try:
-        from runtime_v2 import SnapshotStore
+    from runtime_v2 import SnapshotStore
 
-        snapshot = SnapshotStore(
-            session_manager.sessions_dir,
-            path_resolver=getattr(session_manager, "_resolve_session_path", None),
-        ).read(session_id)
-        context = snapshot.get("context") if isinstance(snapshot, dict) else {}
-        summary = context.get("summary") if isinstance(context, dict) else {}
-        if isinstance(summary, dict):
-            return str(summary.get("summary") or "")
-    except Exception as exc:
-        logger.debug("Runtime V2 subagent context read failed for %s: %s", session_id, exc)
+    snapshot = SnapshotStore(
+        session_manager.sessions_dir,
+        path_resolver=getattr(session_manager, "_resolve_session_path", None),
+    ).read_consistent(session_id)
+    context = snapshot.get("context") if isinstance(snapshot, dict) else {}
+    summary = context.get("summary") if isinstance(context, dict) else {}
+    if isinstance(summary, dict):
+        return str(summary.get("summary") or "")
     return ""
 
 
 def _load_subagent_run_histories(child_id: str) -> tuple[List[Any], List[Any], str]:
     if _runtime_v2_primary():
-        try:
-            from runtime_v2 import RuntimeModelProjection
+        from runtime_v2 import RuntimeModelProjection
 
-            llm_dicts = RuntimeModelProjection(
-                session_manager.sessions_dir,
-                path_resolver=getattr(session_manager, "_resolve_session_path", None),
-            ).read_message_dicts(child_id)
-        except Exception as exc:
-            logger.debug("Runtime V2 subagent model projection read failed for %s: %s", child_id, exc)
-            llm_dicts = []
+        llm_dicts = RuntimeModelProjection(
+            session_manager.sessions_dir,
+            path_resolver=getattr(session_manager, "_resolve_session_path", None),
+        ).read_message_dicts(child_id)
         prev_llm = [_dict_to_message(m) for m in llm_dicts if isinstance(m, dict)]
         key_context = _load_runtime_v2_context_summary(child_id)
         return [], prev_llm, key_context
@@ -139,19 +132,16 @@ def _load_subagent_run_histories(child_id: str) -> tuple[List[Any], List[Any], s
 def _persist_subagent_run_state(child_id: str, state_out: Dict[str, Any]) -> None:
     key_context = str(state_out.get("key_context") or "")
     if _runtime_v2_primary():
-        try:
-            from runtime_v2 import RuntimeHistoryOps
+        from runtime_v2 import RuntimeHistoryOps
 
-            llm_history = [_message_to_dict(m) for m in state_out.get("llm_history", [])]
-            ops = RuntimeHistoryOps(
-                session_manager.sessions_dir,
-                path_resolver=getattr(session_manager, "_resolve_session_path", None),
-            )
-            ops.replace_model_history(child_id, llm_history, reason="subagent_run_finished")
-            if key_context.strip():
-                ops.commit_context_summary(child_id, key_context)
-        except Exception as exc:
-            logger.warning("Runtime V2 subagent state persist failed for %s: %s", child_id, exc)
+        llm_history = [_message_to_dict(m) for m in state_out.get("llm_history", [])]
+        ops = RuntimeHistoryOps(
+            session_manager.sessions_dir,
+            path_resolver=getattr(session_manager, "_resolve_session_path", None),
+        )
+        ops.replace_model_history(child_id, llm_history, reason="subagent_run_finished")
+        if key_context.strip():
+            ops.commit_context_summary(child_id, key_context)
         return
     work_messages = [_message_to_dict(m) for m in state_out.get("work_messages", [])]
     llm_history = [_message_to_dict(m) for m in state_out.get("llm_history", [])]
@@ -162,15 +152,12 @@ def _save_initial_subagent_key_context(child_id: str, key_context: str) -> None:
     if not (key_context or "").strip():
         return
     if _runtime_v2_primary():
-        try:
-            from runtime_v2 import RuntimeHistoryOps
+        from runtime_v2 import RuntimeHistoryOps
 
-            RuntimeHistoryOps(
-                session_manager.sessions_dir,
-                path_resolver=getattr(session_manager, "_resolve_session_path", None),
-            ).commit_context_summary(child_id, key_context)
-        except Exception as exc:
-            logger.warning("Runtime V2 subagent initial context persist failed for %s: %s", child_id, exc)
+        RuntimeHistoryOps(
+            session_manager.sessions_dir,
+            path_resolver=getattr(session_manager, "_resolve_session_path", None),
+        ).commit_context_summary(child_id, key_context)
         return
     session_manager.save_key_context(child_id, key_context)
 
@@ -377,6 +364,7 @@ def filter_tools_for_session(
     source_definitions = tuple(tool_definitions or [])
     cache_key = (
         bool(meta.get("is_subagent")),
+        str(meta.get("agent_team_member_id") or ""),
         depth,
         stype,
         readonly_strict,
@@ -412,6 +400,8 @@ def filter_tools_for_session(
             if depth >= SUBAGENT_MAX_DEPTH or stype == "best-of-n-runner":
                 continue
             out.append(defn)
+            continue
+        if name == "team" and meta.get("is_subagent") and not meta.get("agent_team_member_id"):
             continue
         if meta.get("is_subagent"):
             if allowed is not None and name not in allowed:

@@ -4,6 +4,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
+from .versions import EVENT_SCHEMA_VERSION
+
 
 CORE_EVENT_TYPES = {
     "session_meta",
@@ -33,6 +35,27 @@ CORE_EVENT_TYPES = {
     "subagent_failed",
     "subagent_result_consumed",
     "subagent_deleted",
+    "team_created",
+    "team_status_changed",
+    "team_member_added",
+    "team_member_updated",
+    "team_member_state_changed",
+    "team_member_removed",
+    "team_task_created",
+    "team_task_updated",
+    "team_task_claimed",
+    "team_task_released",
+    "team_message_enqueued",
+    "team_message_delivery_started",
+    "team_message_delivered",
+    "team_message_consumed",
+    "team_message_delivery_failed",
+    "team_permission_requested",
+    "team_permission_resolved",
+    "team_permission_consumed",
+    "team_shutdown_requested",
+    "team_shutdown_completed",
+    "team_archived",
     "context_tokens",
     "context_summary_started",
     "context_summary_finished",
@@ -85,9 +108,11 @@ class RuntimeEvent:
     timestamp: str = field(default_factory=now_iso)
     run_id: Optional[str] = None
     payload: Dict[str, Any] = field(default_factory=dict)
+    schema_version: int = EVENT_SCHEMA_VERSION
 
     def to_dict(self) -> Dict[str, Any]:
         data: Dict[str, Any] = {
+            "schema_version": int(self.schema_version),
             "seq": int(self.seq),
             "timestamp": self.timestamp,
             "type": self.type,
@@ -102,6 +127,14 @@ class RuntimeEvent:
     def from_dict(cls, data: Dict[str, Any]) -> "RuntimeEvent":
         if not isinstance(data, dict):
             raise ValueError("runtime event must be an object")
+        schema_version = data.get("schema_version", EVENT_SCHEMA_VERSION)
+        if not isinstance(schema_version, int) or schema_version <= 0:
+            raise ValueError("runtime event schema_version must be a positive integer")
+        if schema_version > EVENT_SCHEMA_VERSION:
+            raise ValueError(
+                f"runtime event schema_version {schema_version} is newer than supported "
+                f"version {EVENT_SCHEMA_VERSION}"
+            )
         seq = data.get("seq")
         if not isinstance(seq, int):
             raise ValueError("runtime event seq must be an integer")
@@ -126,4 +159,5 @@ class RuntimeEvent:
             timestamp=timestamp,
             run_id=run_id,
             payload=payload,
+            schema_version=schema_version,
         )
