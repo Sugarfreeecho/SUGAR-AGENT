@@ -3,7 +3,7 @@ const modelProfilesRefreshPromises = Object.create(null);
 const modelProfileBusyBySession = Object.create(null);
 const modelProfileIdBySession = Object.create(null);
 let modelProfileSelectionEpoch = 0;
-let activeModelProfileId = '__env__';
+let activeModelProfileId = '';
 
 function h(str) {
     return String(str == null ? '' : str)
@@ -46,15 +46,13 @@ async function loadModelProfilesForSwitcher() {
 
 function allProfiles() {
     if (!modelProfilesCache) return [];
-    var defaultProfile = modelProfilesCache.default_profile || { id: '__env__', name: '', model: '' };
-    var profiles = modelProfilesCache.profiles || [];
-    return profiles.length ? profiles : [defaultProfile];
+    return (modelProfilesCache.profiles || []).filter((profile) => profile && profile.usable !== false);
 }
 
 function activeProfile() {
     var list = allProfiles();
     for (var i = 0; i < list.length; i += 1) {
-        if (String(list[i].id || '__env__') === String(activeModelProfileId || '__env__')) return list[i];
+        if (String(list[i].id || '') === String(activeModelProfileId || '')) return list[i];
     }
     return list[0] || null;
 }
@@ -110,11 +108,11 @@ function renderModelProfileControl() {
     var html = '';
     for (var i = 0; i < profiles.length; i += 1) {
         var p = profiles[i] || {};
-        var id = String(p.id || '__env__');
-        var activeCls = id === String(activeModelProfileId || '__env__') ? ' is-active' : '';
+        var id = String(p.id || '');
+        var activeCls = id === String(activeModelProfileId || '') ? ' is-active' : '';
         html += '<button type="button" class="composer-model-option' + activeCls + '" role="option" data-profile-id="' + h(id) + '">'
             + '<span class="composer-model-option-name">' + h(profileLabel(p)) + '</span>'
-            + '<span class="composer-model-option-meta">' + h(profileMeta(p) || (id === '__env__' ? (p.model || '') : '')) + '</span>'
+            + '<span class="composer-model-option-meta">' + h(profileMeta(p)) + '</span>'
             + '</button>';
     }
     if (!(modelProfilesCache.profiles || []).length) {
@@ -123,7 +121,7 @@ function renderModelProfileControl() {
     e.menu.innerHTML = html;
     e.menu.querySelectorAll('[data-profile-id]').forEach((btn) => {
         btn.addEventListener('click', () => {
-            setCurrentSessionModelProfile(btn.getAttribute('data-profile-id') || '__env__');
+            setCurrentSessionModelProfile(btn.getAttribute('data-profile-id') || '');
             closeModelMenu();
         });
     });
@@ -149,7 +147,7 @@ async function refreshModelProfileSelector(sessionId, opts) {
         await loadModelProfilesForSwitcher();
         var selectedProfileId = modelProfileIdBySession[sid]
             || modelProfilesCache.new_session_default_profile_id
-            || '__env__';
+            || '';
         if (sid) {
             var r = await fetch('/sessions/' + encodeURIComponent(sid) + '/model_profile', { credentials: 'same-origin' });
             var j = await r.json();
@@ -188,7 +186,7 @@ function refreshModelProfileSelectorInBackground(sessionId, opts) {
 
 async function setCurrentSessionModelProfile(profileId) {
     const sid = String(currentSessionId || '');
-    const selectedProfileId = String(profileId || '__env__');
+    const selectedProfileId = String(profileId || '');
     if (!sid || modelProfileBusyBySession[sid]) return;
     modelProfileBusyBySession[sid] = true;
     try {

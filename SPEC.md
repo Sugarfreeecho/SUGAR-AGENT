@@ -1,3 +1,18 @@
+# Runtime V2 correctness and performance supplement (2026-07-17)
+
+- `events.jsonl` is the Runtime V2 fact source. Malformed, undecodable, or unsupported-version rows must raise a repair-required error; readers must never skip them and continue with a shorter projection.
+- Every event carries `schema_version`; snapshots and projection indexes carry projector/index versions. Version mismatches invalidate only derived caches and rebuild from facts.
+- V2 model, context, subagent, pending-result, and persistence failures are fail-closed. A projection error is never equivalent to an empty session.
+- Normal append updates projections incrementally. Full message reprojection is reserved for delete, rewrite, truncate, model-window replacement, compaction, and equivalent semantic history operations.
+- Snapshot disk writes may be coalesced because snapshots are rebuildable. Published in-memory projections use copy-on-write, and restart recovery replays a bounded tail (default checkpoint interval: 32 events).
+- Runtime seq reads use a versioned sparse byte-offset index. Reconnect polling must not scan from byte zero when the cursor is near the tail.
+- UI indexes store final-visible runtime seq mappings. Recent-turn reads may use the seq index when older history operations are outside the requested window; operations inside the window require full deterministic projection.
+- Live reattach may do one UI-index catch-up and then advances by durable Runtime V2 seq. Semantic history operations explicitly request reprojection.
+- Legacy UI migration commits a batch and materializes one snapshot, uses bounded-memory disk rollback, prioritizes on-open/manual work over startup scanning, and must migrate 10,000 local rows in under 10 seconds.
+- Content-addressed blobs are atomic and SHA-256 verified.
+- A stale provider token checkpoint keeps the prior provider-scale value with `pending_recalculation=true`; projection errors are explicit and never trigger a silent local-scale switch.
+- `history_snapshot.timing` includes `read_page`, `count`, `user_turns`, `context_tokens`, `todo_plan`, and `total`; retain `open_session_timing` and `pre_api_timing` diagnostics.
+
 # General Agent 工程规格说明
 
 版本日期：2026-06-07
@@ -409,26 +424,18 @@ SSE 是后端向前端展示 Agent 过程的主通道。事件至少应覆盖以
 
 ## 11. 配置规格
 
-主要配置文件：`app/.env`
+主要配置文件：`model_profiles.json`（模型）与 `app/.env`（非模型运行设置）。
 
 ### 11.1 LLM 配置
 
-典型字段：
-
-- `EXECUTOR_LLM`
-- `EXECUTOR_LLM_TYPE`
-- `OPENAI_BASE_URL`
-- `OPENAI_API_KEY`
-- `CONTEXT_WINDOW`
-- `MAX_OUTPUT_TOKENS`
-- `LLM_THINKING_MODE`
-- `LLM_REASONING_EFFORT`
+模型名称、类型、API 连接、密钥、窗口限制、推理模式、temperature 与 extra body 必须保存在 model profile 中，不得从 `.env` 配置或回退。
 
 要求：
 
 - 修改 LLM 配置后必须刷新 executor client。
 - API key 等敏感字段在 UI、日志和工具输出中必须脱敏。
 - OpenAI 兼容接口差异应在 `agent_harness.py` 或 `agent_openai.py` 中适配，避免散落到业务层。
+- 配置向导入口只检查是否存在可用 model profile。
 
 ### 11.2 工作区配置
 

@@ -678,7 +678,7 @@
 
     <div class="footer">
       <a href="#" id="footer-advanced-link" class="footer-advanced-link">高级设置（与聊天共用命名窗口，可回到原标签）</a>
-      <div style="margin-top:8px;font-size:11px;color:var(--text-tertiary);">配置写入本地 .env；修改 WORK_DIR 后需重启服务生效。</div>
+      <div style="margin-top:8px;font-size:11px;color:var(--text-tertiary);">模型配置保存为 model profile；其他运行设置写入本地 .env。修改 WORK_DIR 后需重启服务生效。</div>
       <div style="margin-top:6px;font-size:11px;color:var(--text-tertiary);">如需帮助或反馈，请联系GitHub @sugarfreeecho</div>
     </div>
   </div>
@@ -1099,7 +1099,7 @@
         showStatus('❌ ' + (result.error || '保存失败'), 'error');
       }
     } catch (err) {
-      showStatus('⚠️ 配置服务器未启动，请手动编辑 .env 文件', 'error');
+      showStatus('⚠️ 配置服务器未启动，请检查服务状态后重试', 'error');
     } finally {
       submitBtn.disabled = false;
       submitBtn.textContent = '保存配置并启动';

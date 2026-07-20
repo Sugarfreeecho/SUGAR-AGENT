@@ -23,7 +23,7 @@
 <main>
   <div class="head">
     <div><h1>Hooks 与 Plugins</h1><div class="muted">查看有效开关、已发现插件、兼容性与 Hook 注册情况。</div></div>
-    <div class="actions"><a class="btn" href="/setup/env">环境变量</a><a class="btn" href="/setup/mcp">MCP 配置</a><a class="btn" href="/">返回 Agent</a><button id="reload" class="primary">重新发现 / 热重载</button></div>
+    <div class="actions"><button type="button" class="btn" id="wizard-language-toggle" aria-label="切换为英文" title="切换语言">中/EN</button><a class="btn" href="/setup/env#extensions">环境变量</a><a class="btn" href="/setup/mcp">MCP 配置</a><a class="btn" href="/">返回 Agent</a><button id="reload" class="primary">重新发现 / 热重载</button></div>
   </div>
   <div id="notice" aria-live="polite"></div>
   <div class="grid">
@@ -40,6 +40,7 @@
 <script>
 const $=id=>document.getElementById(id);
 const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const sessionId=new URLSearchParams(location.search).get('session_id')||'';
 function status(el,on){el.textContent=on?'已启用':'已禁用';el.className='status '+(on?'on':'off')}
 function componentPills(p){const c=p.components||{};const rows=[];for(const k of ['skills','hooks','mcp_servers','agents','prompts']){const v=c[k];const n=Array.isArray(v)?v.length:(v&&typeof v==='object'?Object.keys(v).length:Number(v||0));if(n)rows.push(`<span class="pill">${esc(k)} ${n}</span>`)}return rows.join('')||'<span class="muted">无</span>'}
 function diagnostics(p){const x=p.compatibility||{};const lines=[...(x.warnings||[]),...(p.errors||[])];return lines.length?`<span class="warn">${lines.map(esc).join('<br>')}</span>`:'<span class="muted">通过</span>'}
@@ -48,15 +49,16 @@ async function load(){
   status($('hooks-status'),!!d.enabled?.hooks);status($('plugins-status'),!!d.enabled?.plugins);
   $('hooks-path').textContent=d.paths?.hooks||'未配置';$('plugins-path').textContent=(d.paths?.plugins||[]).join('；')||'未配置';
   const ps=d.plugins||[];$('plugin-count').textContent=`${ps.length} 个已发现`;
-  $('plugins-body').innerHTML=ps.length?ps.map(p=>{const cp=p.compatibility||{};const enabled=!!p.enabled;return `<tr><td><strong>${esc(p.name||p.id)}</strong><br><code>${esc(p.id)}</code> <span class="muted">${esc(p.version||'')}</span></td><td><code>${esc(p.source_format||p.format||'native')}</code><br><span class="pill">${esc(cp.status||'unknown')}</span></td><td>${componentPills(p)}</td><td class="diagnostic">${diagnostics(p)}</td><td><button class="toggle" data-id="${esc(p.id)}" data-enabled="${enabled?'1':'0'}">${enabled?'禁用':'启用'}</button></td></tr>`}).join(''):'<tr><td colspan="5" class="empty">未发现插件。把插件放入插件目录后点击“重新发现”。</td></tr>';
+  $('plugins-body').innerHTML=ps.length?ps.map(p=>{const cp=p.compatibility||{};const enabled=p.configured_enabled===undefined?!!p.enabled:!!p.configured_enabled;const globalOn=!!d.enabled?.plugins;return `<tr><td><strong>${esc(p.name||p.id)}</strong><br><code>${esc(p.id)}</code> <span class="muted">${esc(p.version||'')}</span></td><td><code>${esc(p.source_format||p.format||'native')}</code><br><span class="pill">${esc(cp.status||'unknown')}</span></td><td>${componentPills(p)}</td><td class="diagnostic">${diagnostics(p)}</td><td><button class="toggle" data-id="${esc(p.id)}" data-enabled="${enabled?'1':'0'}" ${globalOn?'':'disabled title="PLUGINS_ENABLED 已关闭"'}>${enabled?'禁用':'启用'}</button></td></tr>`}).join(''):'<tr><td colspan="5" class="empty">未发现插件。把插件放入插件目录后点击“重新发现”。</td></tr>';
   const hs=d.hooks||[];$('hook-count').textContent=`${hs.length} 个已注册`;
   $('hooks-body').innerHTML=hs.length?hs.map(h=>`<tr><td><code>${esc(h.id)}</code></td><td>${esc(h.event)}</td><td><code>${esc(h.matcher||'(全部)')}</code></td><td>${esc(h.source_id||h.source||'project')}</td><td>${esc(h.failure_policy||'warn')} / ${esc(h.timeout_seconds||h.timeout||'—')}s</td></tr>`).join(''):'<tr><td colspan="5" class="empty">没有有效 Hook。</td></tr>';
   const errors=[...(d.plugin_errors||[]),...(d.hook_errors||[])];if(errors.length)note(errors.join('；'),true);else note('');
-  document.querySelectorAll('.toggle').forEach(b=>b.onclick=async()=>{b.disabled=true;try{const enabled=b.dataset.enabled!=='1';const r=await fetch('/api/plugins/'+encodeURIComponent(b.dataset.id)+'/enabled',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled})});const x=await r.json();if(!r.ok||!x.ok)throw new Error(x.error||'操作失败');await load();note('插件状态已更新。')}catch(e){note(e.message,true)}finally{b.disabled=false}});
+  document.querySelectorAll('.toggle').forEach(b=>b.onclick=async()=>{b.disabled=true;try{const enabled=b.dataset.enabled!=='1';const r=await fetch('/api/plugins/'+encodeURIComponent(b.dataset.id)+'/enabled',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled,session_id:sessionId})});const x=await r.json();if(!r.ok||!x.ok)throw new Error(x.error||'操作失败');await load();note('插件状态已更新。')}catch(e){note(e.message,true)}finally{b.disabled=false}});
 }
 function note(t,bad=false){$('notice').textContent=t;$('notice').className=bad?'error':'muted'}
-$('reload').onclick=async()=>{const b=$('reload');b.disabled=true;try{const r=await fetch('/api/extensions/reload',{method:'POST'});const d=await r.json();if(!r.ok||!d.ok)throw new Error(d.error||'重载失败');await load();note('发现与热重载完成。')}catch(e){note(e.message,true)}finally{b.disabled=false}};
+$('reload').onclick=async()=>{const b=$('reload');b.disabled=true;try{const r=await fetch('/api/extensions/reload',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({session_id:sessionId})});const d=await r.json();if(!r.ok||!d.ok)throw new Error(d.error||'重载失败');await load();note('发现与热重载完成。')}catch(e){note(e.message,true)}finally{b.disabled=false}};
 load().catch(e=>note(e.message,true));
 </script>
+<script src="/static/setup_i18n.js"></script>
 </body>
 </html>

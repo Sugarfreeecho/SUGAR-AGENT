@@ -136,6 +136,7 @@ SugarAgent/
 ├── docs/                         # 设计文档
 │   ├── runtime_v2_design.md            # Runtime V2 架构设计
 │   ├── runtime_v2_closure_status.md    # Runtime V2 状态闭包
+│   ├── runtime_v2_optimization_20260717.md # Runtime V2 正确性/性能优化记录
 │   └── runtime_v2_sidecar_invariants.md # Runtime V2 Sidecar 不变量
 ├── logs/                         # 运行日志
 ├── RUN.bat                       # Windows 一键启动脚本
@@ -162,19 +163,14 @@ git clone <repository-url>
 cd "MyAgent Developer"
 ```
 
-### 2. 配置环境变量
+### 2. 配置
 
-复制并编辑配置文件，或在首次启动后通过浏览器向导配置。
+首次启动后通过浏览器向导创建 model profile。模型名称、API 地址、密钥、上下文窗口和推理参数全部保存在 `model_profiles.json`，不再从 `.env` 读取。
 
-关键配置项：
+`.env` 仅保留模型之外的运行配置，例如：
 
 | 变量 | 说明 |
 |------|------|
-| `EXECUTOR_LLM` | 模型名称（如 `deepseek-v4-pro`） |
-| `OPENAI_BASE_URL` | LLM API 地址 |
-| `OPENAI_API_KEY` | API 密钥 |
-| `CONTEXT_WINDOW` | 上下文窗口大小 |
-| `MAX_OUTPUT_TOKENS` | 最大输出 Token 数 |
 | `WORK_DIR` | 工作区目录 |
 | `WEB_SEARCH_PROVIDER` | 搜索引擎 provider |
 
@@ -333,12 +329,14 @@ npm run install:hooks
 
 ### LLM 配置
 
-支持通过环境变量或 `model_profiles.json` 配置多个模型，运行时可切换：
+仅通过 `model_profiles.json` 配置模型，运行时可切换并按优先级故障转移。每个 profile 包含：
 
-- `EXECUTOR_LLM` / `EXECUTOR_LLM_TYPE` — 模型名称与类型
-- `OPENAI_BASE_URL` / `OPENAI_API_KEY` — API 连接信息
-- `CONTEXT_WINDOW` / `MAX_OUTPUT_TOKENS` — 上下文与输出限制
-- `LLM_THINKING_MODE` / `LLM_REASONING_EFFORT` — 推理模式
+- 模型名称与类型
+- API Base URL 与 API Key
+- 上下文窗口与输出限制
+- 思考模式、reasoning effort、temperature 和额外请求体
+
+首页是否进入配置向导，只取决于是否存在可用的 model profile；`.env` 中的旧模型字段不会参与判断或运行时回退。
 
 ### MCP 配置
 
@@ -403,13 +401,28 @@ npm run install:hooks
 ## 反馈与支持
 
 如果你在使用中遇到问题，欢迎直接到 GitHub 提交 Issue 反馈。
-# Durable Goal mode
+# 持久 Goal 模式 / Durable Goal mode
 
-MyAgent supports one durable active Goal per session. The model can create, inspect, and finish a Goal with
-`create_goal`, `get_goal`, and `update_goal`; active Goals reuse the existing continuation channel after a run
-ends. Goal state, token usage, elapsed active time, and terminal status are persisted in the Runtime V2 event
-log and snapshot. The web UI exposes pause, resume, and cancel controls.
+MyAgent 每个会话支持一个持久 Goal。模型通过 `create_goal`、`get_goal` 和 `update_goal` 创建、查询及结束
+Goal；服务端调度器会在本轮结束后继续执行 active Goal，不依赖浏览器保持打开。Goal 状态、每次模型调用的
+Token 用量、活动时长、续跑次数和最终状态都会写入 Runtime V2 事件日志及快照。Web UI 提供暂停、恢复、
+追加预算并恢复以及取消操作。Token 预算耗尽后必须追加正数预算才能恢复；连续运行失败默认达到 3 次会自动
+暂停，以避免无限重试。
 
-Set `GOAL_ENABLED=0` (also accepts `false`, `no`, or `off`) before starting MyAgent to disable the feature.
-The default is enabled. When disabled, Goal tools are omitted from the model tool list, Goal auto-continuation
-is inactive, and Goal control endpoints reject mutations. Restart MyAgent after changing the variable.
+MyAgent supports one durable Goal per session. The model creates, inspects, and finishes it with `create_goal`,
+`get_goal`, and `update_goal`. A server-side scheduler continues active Goals after a run ends, without requiring
+an open browser. Goal state, per-call token usage, active time, continuation count, and terminal status are stored
+in the Runtime V2 event log and snapshot. The web UI provides pause, resume, add-budget-and-resume, and cancel
+controls. An exhausted token budget requires a positive budget increase before resuming. By default, three
+consecutive run failures pause the Goal to prevent an infinite retry loop.
+
+`GOAL_ENABLED=0`（也接受 `false`、`no` 或 `off`）会禁用整个功能；默认启用。禁用后模型工具列表不会
+暴露 Goal 工具，服务端不会自动续跑，Goal 控制接口也会拒绝变更。`GOAL_RUNNER_POLL_SECONDS` 控制服务端
+扫描间隔（默认 `2` 秒，最小 `0.5` 秒），`GOAL_MAX_CONSECUTIVE_FAILURES` 控制连续失败暂停阈值（默认 `3`）。
+修改这些环境变量后需要重启 MyAgent。
+
+Set `GOAL_ENABLED=0` (also accepts `false`, `no`, or `off`) to disable the entire feature; it is enabled by
+default. When disabled, Goal tools are omitted, server-side continuation stops, and Goal control mutations are
+rejected. `GOAL_RUNNER_POLL_SECONDS` controls the server scan interval (default `2`, minimum `0.5` seconds), and
+`GOAL_MAX_CONSECUTIVE_FAILURES` controls the automatic pause threshold (default `3`). Restart MyAgent after
+changing these environment variables.

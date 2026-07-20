@@ -14,6 +14,12 @@ const UI_TRANSLATIONS_EN = {
     '选择 Skill': 'Select Skill', '发送 / 停止': 'Send / Stop', '发送': 'Send', '停止': 'Stop',
     '模型': 'Model', '正在加载模型配置': 'Loading model configuration', '模型配置': 'Model configuration',
     '操作提示': 'Notifications', '已复制': 'Copied', '提示': 'Notice', '取消': 'Cancel', '确定': 'Confirm',
+    '暂停': 'Pause', '继续': 'Resume', '增加预算并继续': 'Add budget and resume', '无限制': 'Unlimited', '分钟': 'min',
+    '进行中': 'Active', '已暂停': 'Paused', '已完成': 'Completed', '已阻塞': 'Blocked', '已取消': 'Cancelled',
+    'Token 预算已耗尽': 'Token budget exhausted', '连续运行失败': 'Consecutive run failures', '手动暂停': 'Paused manually',
+    '续跑': 'continuations', '失败': 'failures',
+    '请输入要增加的 Token 预算': 'Enter the additional Token budget', '预算必须是大于 0 的整数。': 'The budget must be a positive integer.',
+    'Goal 操作失败': 'Goal action failed',
     '关闭': 'Close', '语言': 'Language', '中文': 'Chinese', '英文': 'English',
     '字体大小': 'Font size', '小号': 'Small', '标准': 'Default', '大号': 'Large',
     '界面风格': 'Appearance', '深色': 'Dark', '浅色（默认）': 'Light (default)',
@@ -129,6 +135,21 @@ Object.assign(UI_TRANSLATIONS_EN, {
     '撤销失败，请重试。': 'Undo failed. Please try again.', '检测到上次运行未完成，正在自动恢复任务…': 'The previous run was incomplete. Restoring it automatically…',
     '恢复实时流失败': 'Failed to restore the live stream', '续接失败': 'Failed to continue',
     '追问插入失败': 'Failed to insert follow-up', '追问已被接收，无法撤回': 'The follow-up was accepted and can no longer be withdrawn'
+});
+Object.assign(UI_TRANSLATIONS_EN, {
+    'Agent Team（实验功能）': 'Agent Team (experimental)',
+    'Agent Team 功能开关': 'Agent Team feature switch',
+    '关闭（默认）': 'Off (default)', '启用': 'Enable',
+    '正在读取状态…': 'Reading status…', '管理当前会话团队': 'Manage current session team',
+    '当前会话团队控制面板': 'Current session team control panel',
+    '刷新': 'Refresh', '请求关停': 'Request shutdown', '完成关停': 'Complete shutdown',
+    '当前会话还没有团队。': 'This session does not have a team yet.',
+    '团队名称（可选）': 'Team name (optional)', '创建团队': 'Create team',
+    '成员': 'Members', '共享任务': 'Shared tasks', '权限请求': 'Permission requests',
+    '持久成员由 Agent 调用 team(action="spawn_member") 创建和派工。': 'The agent creates and dispatches persistent members with team(action="spawn_member").',
+    '新任务标题': 'New task title', '添加任务': 'Add task',
+    '允许一次': 'Allow once', '暂无成员': 'No members', '暂无任务': 'No tasks',
+    '暂无权限请求': 'No permission requests', '请先选择或新建一个会话。': 'Select or create a session first.'
 });
 const UI_I18N_ATTRS = ['aria-label', 'data-ui-tip', 'title', 'placeholder'];
 const uiI18nTextOriginal = new WeakMap();

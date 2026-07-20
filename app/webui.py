@@ -38,6 +38,9 @@ from agent_harness import (
     key_context_body_for_system_prompt,
     refresh_executor_client_from_env,
 )
+from agent_team import AGENT_TEAM_ENV_VAR, agent_team_enabled
+from agent_team.api import create_agent_team_router
+from agent_team.service import AgentTeamService
 from agent_loop import (
     abort_session_steer_run,
     compute_context_tokens_for_session,
@@ -49,7 +52,7 @@ from agent_loop import (
     transition_session_steer,
 )
 from session_lifecycle import get_run_started_at, is_run_active
-from session_event_bus import subscribe_session_events
+from session_event_bus import publish_session_event, subscribe_session_events
 import agent_mcp
 from agent_tools import discover_skills
 import model_profiles
@@ -89,6 +92,17 @@ CHAT_UPLOAD_MAX_TOTAL_BYTES = 200 * 1024 * 1024
 _CHAT_UPLOAD_MULTIPART_OVERHEAD_BYTES = 4 * 1024 * 1024
 
 fastapi_app = FastAPI()
+fastapi_app.include_router(
+    create_agent_team_router(
+        lambda: AgentTeamService(
+            session_manager.repository.sessions_dir,
+            path_resolver=session_manager._resolve_session_path,
+        ),
+        session_exists=lambda session_id: bool(
+            session_manager.get_session_summary(session_id)
+        ),
+    )
+)
 
 if _DIST_ASSETS.is_dir():
     fastapi_app.mount(
@@ -118,8 +132,12 @@ _RUNTIME_SYNC_LOCK = threading.Lock()
 _RUNTIME_SYNC_QUEUE: deque[str] = deque()
 _RUNTIME_SYNC_STATUS: dict[str, dict] = {}
 _RUNTIME_SYNC_WORKER: Optional[threading.Thread] = None
+_RUNTIME_SYNC_EXTRA_WORKERS: set[threading.Thread] = set()
 _history_op_locks: dict[str, threading.Lock] = {}
 _history_op_locks_guard = threading.Lock()
+_goal_runner_task: Optional[asyncio.Task] = None
+_goal_runner_workers: dict[str, asyncio.Task] = {}
+_GOAL_RUNNER_POLL_SECONDS = max(0.5, float(os.getenv("GOAL_RUNNER_POLL_SECONDS", "2")))
 _RUNTIME_SYNC_CANCEL = threading.Event()
 _RUNTIME_SYNC_SLEEP_SEC = float(os.getenv("RUNTIME_SYNC_QUEUE_SLEEP_SEC", "0.2"))
 _RUNTIME_AUTO_MIGRATION_SCAN_STARTED = False
@@ -311,9 +329,20 @@ def _runtime_sync_worker_loop() -> None:
             _time.sleep(_RUNTIME_SYNC_SLEEP_SEC)
 
 
-def _ensure_runtime_sync_worker_locked() -> None:
-    global _RUNTIME_SYNC_WORKER
+def _ensure_runtime_sync_worker_locked(*, urgent: bool = False) -> None:
+    global _RUNTIME_SYNC_WORKER, _RUNTIME_SYNC_EXTRA_WORKERS
+    _RUNTIME_SYNC_EXTRA_WORKERS = {
+        worker for worker in _RUNTIME_SYNC_EXTRA_WORKERS if worker.is_alive()
+    }
     if _RUNTIME_SYNC_WORKER is not None and _RUNTIME_SYNC_WORKER.is_alive():
+        if urgent and not _RUNTIME_SYNC_EXTRA_WORKERS:
+            worker = threading.Thread(
+                target=_runtime_sync_worker_loop,
+                name="runtime-sync-urgent-worker",
+                daemon=True,
+            )
+            _RUNTIME_SYNC_EXTRA_WORKERS.add(worker)
+            worker.start()
         return
     _RUNTIME_SYNC_CANCEL.clear()
     _RUNTIME_SYNC_WORKER = threading.Thread(
@@ -339,7 +368,11 @@ def _enqueue_runtime_sync(session_id: str, reason: str = "manual", *, check_need
         existing = _RUNTIME_SYNC_STATUS.get(sid) or {}
         if existing.get("state") == "running" or sid in _RUNTIME_SYNC_QUEUE:
             return {"ok": True, "session_id": sid, "queued": True, "deduped": True, "reason": existing.get("reason") or reason}
-        _RUNTIME_SYNC_QUEUE.append(sid)
+        urgent = reason in {"auto_on_open", "manual"}
+        if urgent:
+            _RUNTIME_SYNC_QUEUE.appendleft(sid)
+        else:
+            _RUNTIME_SYNC_QUEUE.append(sid)
         _RUNTIME_SYNC_STATUS[sid] = {
             "state": "queued",
             "queued": True,
@@ -348,7 +381,7 @@ def _enqueue_runtime_sync(session_id: str, reason: str = "manual", *, check_need
             "automatic": str(reason or "").startswith("auto_"),
             "detail": detail,
         }
-        _ensure_runtime_sync_worker_locked()
+        _ensure_runtime_sync_worker_locked(urgent=urgent)
     return {"ok": True, "session_id": sid, "queued": True, "reason": check_reason, "detail": detail}
 
 
@@ -560,6 +593,149 @@ def _has_local_worker_activity(sid: str) -> bool:
         return sid in _chat_starting_by_session
 
 
+def _discover_runnable_goal_sessions() -> list[str]:
+    try:
+        from agent_goal import goal_enabled, manager_for
+
+        if not goal_enabled():
+            return []
+        manager = manager_for(session_manager)
+        runnable: list[str] = []
+        for row in session_manager.list_sessions(include_archived=True):
+            sid = str((row or {}).get("id") or "").strip()
+            if not sid:
+                continue
+            try:
+                if manager.should_continue(sid):
+                    runnable.append(sid)
+            except Exception:
+                logger.debug("Goal runner discovery failed for %s", sid, exc_info=True)
+        return runnable
+    except Exception:
+        logger.debug("Goal runner discovery failed", exc_info=True)
+        return []
+
+
+async def _run_goal_continuation_background(session_id: str) -> None:
+    sid = str(session_id or "").strip()
+    if not sid:
+        return
+    scheduler_run_id = "goal-runner-" + uuid.uuid4().hex
+    start_token = _reserve_session_chat_start(sid, scheduler_run_id) or ""
+    if not start_token:
+        return
+    manager = None
+    saw_event = False
+    try:
+        from agent_goal import manager_for
+
+        manager = manager_for(session_manager)
+        if not manager.should_continue(sid):
+            return
+        get_goal = getattr(manager, "get", None)
+        current_goal = get_goal(sid) if callable(get_goal) else {}
+        current_goal = current_goal if isinstance(current_goal, dict) else {}
+        recovery_reason = "process_or_network_interruption" if current_goal.get("current_run_id") else ""
+        manager.mark_continuation_started(sid, run_id=scheduler_run_id)
+
+        def should_stop(sid_: str) -> bool:
+            return session_manager.is_interrupt_requested(sid_)
+
+        async for _event in astream_events_continuation(
+            sid,
+            should_stop=should_stop,
+            require_pending_subagents=False,
+            recovery_reason=recovery_reason,
+            run_id=scheduler_run_id,
+        ):
+            # The agent loop already publishes every event to observers and
+            # persists durable Runtime V2 events; the server runner only drains
+            # the generator so execution does not depend on an HTTP client.
+            saw_event = True
+        if not saw_event:
+            manager.record_run(
+                sid,
+                0,
+                continuation=True,
+                run_id=scheduler_run_id,
+                outcome="failed",
+                error="goal_continuation_produced_no_events",
+            )
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        logger.warning("Background Goal continuation failed for %s: %s", sid, exc)
+        if manager is not None:
+            try:
+                manager.record_run(
+                    sid,
+                    0,
+                    continuation=True,
+                    run_id=scheduler_run_id,
+                    outcome="failed",
+                    error=str(exc),
+                )
+            except Exception:
+                logger.debug("Goal runner fallback failure accounting failed for %s", sid, exc_info=True)
+    finally:
+        _release_session_chat_start(sid, start_token)
+
+
+async def _goal_runner_loop() -> None:
+    while True:
+        try:
+            runnable = await asyncio.to_thread(_discover_runnable_goal_sessions)
+            for sid in runnable:
+                existing = _goal_runner_workers.get(sid)
+                if existing and not existing.done():
+                    continue
+                if _has_local_worker_activity(sid):
+                    continue
+                task = asyncio.create_task(
+                    _run_goal_continuation_background(sid),
+                    name=f"goal-runner-{sid}",
+                )
+                _goal_runner_workers[sid] = task
+
+                def cleanup(done: asyncio.Task, session_id: str = sid) -> None:
+                    if _goal_runner_workers.get(session_id) is done:
+                        _goal_runner_workers.pop(session_id, None)
+
+                task.add_done_callback(cleanup)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("Goal runner scheduling tick failed")
+        await asyncio.sleep(_GOAL_RUNNER_POLL_SECONDS)
+
+
+async def start_goal_runner() -> bool:
+    global _goal_runner_task
+    from agent_goal import goal_enabled
+
+    if not goal_enabled():
+        return False
+    if _goal_runner_task and not _goal_runner_task.done():
+        return False
+    _goal_runner_task = asyncio.create_task(_goal_runner_loop(), name="goal-runner-scheduler")
+    return True
+
+
+async def stop_goal_runner() -> None:
+    global _goal_runner_task
+    scheduler = _goal_runner_task
+    _goal_runner_task = None
+    if scheduler and not scheduler.done():
+        scheduler.cancel()
+    workers = [task for task in _goal_runner_workers.values() if task and not task.done()]
+    for task in workers:
+        task.cancel()
+    pending = [task for task in [scheduler, *workers] if task is not None]
+    if pending:
+        await asyncio.gather(*pending, return_exceptions=True)
+    _goal_runner_workers.clear()
+
+
 def _runtime_v2_timestamp_age_seconds(value: Any) -> Optional[float]:
     text = str(value or "").strip()
     if not text:
@@ -613,7 +789,7 @@ def _has_running_subagent_activity(sid: str) -> bool:
         return False
 
 
-def _runtime_v2_snapshot(sid: str) -> dict:
+def _runtime_v2_snapshot(sid: str, *, fail_closed: bool = False) -> dict:
     sid = str(sid or "").strip()
     if not sid:
         return {}
@@ -631,6 +807,8 @@ def _runtime_v2_snapshot(sid: str) -> dict:
         )
     except Exception as exc:
         logger.debug("Runtime V2 snapshot read failed for %s: %s", sid, exc)
+        if fail_closed:
+            raise
         return {}
 
 
@@ -724,7 +902,7 @@ def _cleanup_orphan_runtime_v2_active_runs(sid: str, reason: str = "orphaned") -
 
 
 def _runtime_v2_context_snapshot(sid: str) -> dict:
-    snapshot = _runtime_v2_snapshot(sid)
+    snapshot = _runtime_v2_snapshot(sid, fail_closed=True)
     context = snapshot.get("context") if isinstance(snapshot, dict) else None
     return context if isinstance(context, dict) else {}
 
@@ -1118,6 +1296,7 @@ def get_index_html():
         default_steer_mode = "append"
     feature_flags = {
         "goal": os.getenv("GOAL_ENABLED", "1").strip().lower() not in {"0", "false", "no", "off"},
+        "agentTeam": agent_team_enabled(),
         "followupRestart": os.getenv("MYAGENT_ENABLE_FOLLOWUP_RESTART", "1").strip().lower() in {"1", "true", "yes", "on"},
         "streamReconnect": os.getenv("MYAGENT_ENABLE_STREAM_RECONNECT", "1").strip().lower() in {"1", "true", "yes", "on"},
         "finalReconcile": os.getenv("MYAGENT_ENABLE_FINAL_RECONCILE", "1").strip().lower() in {"1", "true", "yes", "on"},
@@ -1914,8 +2093,11 @@ async def get_session_detail(
                 goal_can_continue = False
             s["react_can_continue"] = bool(s["react_can_continue"] or goal_can_continue)
             s["react_auto_resume"] = bool(
-                goal_can_continue or (s["react_can_continue"] and _runtime_v2_auto_resume_pending(str(sid)))
+                not goal_can_continue
+                and s["react_can_continue"]
+                and _runtime_v2_auto_resume_pending(str(sid))
             )
+            s["goal_server_runner"] = bool(goal_can_continue)
             if include_subagents:
                 _attach_subagent_sidebar_fields(s, str(sid))
         else:
@@ -1925,6 +2107,7 @@ async def get_session_detail(
             s["title_generation_pending"] = False
             s["react_can_continue"] = False
             s["react_auto_resume"] = False
+            s["goal_server_runner"] = False
         return JSONResponse(content=s)
 
     return await asyncio.to_thread(_build_detail_response)
@@ -2102,9 +2285,12 @@ def _runtime_v2_subagent_node(parent_id: str, task_id: str, task: dict, state: d
     except (TypeError, ValueError):
         depth = 1
     event_count = 0
+    has_session_events = False
     try:
         from runtime_v2.ui_projection import RuntimeUiProjection
 
+        session_path = Path(session_manager._resolve_session_path(task_id))
+        has_session_events = (session_path / "events.jsonl").is_file()
         projection = RuntimeUiProjection(
             session_manager.repository.sessions_dir,
             path_resolver=session_manager._resolve_session_path,
@@ -2112,6 +2298,10 @@ def _runtime_v2_subagent_node(parent_id: str, task_id: str, task: dict, state: d
         event_count, _latest_truncate_seq = projection.count_ui_events_light(task_id)
     except Exception as exc:
         logger.debug("Runtime V2 subagent event count failed for %s: %s", task_id, exc)
+    subagent_type = str(task.get("subagent_type") or state.get("subagent_type") or "subagent")
+    virtual_task = subagent_type == "best-of-n-runner" or (
+        normalized_status != "running" and has_output and not has_session_events
+    )
     return {
         "id": task_id,
         "task_id": task_id,
@@ -2123,7 +2313,7 @@ def _runtime_v2_subagent_node(parent_id: str, task_id: str, task: dict, state: d
             or state.get("subagent_type")
             or task_id[:8]
         ),
-        "subagent_type": str(task.get("subagent_type") or state.get("subagent_type") or "subagent"),
+        "subagent_type": subagent_type,
         "depth": depth,
         "created_at": task.get("created_at") or state.get("started_at"),
         "updated_at": task.get("updated_at") or state.get("finished_at") or task.get("finished_at") or task.get("started_at"),
@@ -2141,6 +2331,7 @@ def _runtime_v2_subagent_node(parent_id: str, task_id: str, task: dict, state: d
         "dialogue_turns": [] if lite else [],
         "event_count": int(event_count or 0),
         "session_metrics": {},
+        "virtual_task": virtual_task,
         "source": "runtime_v2_subagents",
     }
 
@@ -2235,22 +2426,16 @@ async def create_session():
     return JSONResponse(content={"session_id": session_id, "session": session})
 
 
-def _current_env_profile() -> dict:
-    vals = _dotenv_last_non_empty_assignments(dotenv_file_path())
-    return model_profiles.env_profile_from_env(PROJECT_ROOT, vals)
-
-
 def _model_profiles_response() -> dict:
-    default_profile = _current_env_profile()
     profiles = [
         model_profiles.public_profile(p)
-        for p in model_profiles.sorted_profiles_with_env(PROJECT_ROOT, default_profile)
+        for p in model_profiles.sorted_profiles(PROJECT_ROOT)
     ]
-    top = profiles[0] if profiles else default_profile
+    top = next((p for p in profiles if model_profiles.is_usable_profile(p)), None)
     return {
         "ok": True,
-        "default_profile": default_profile,
-        "new_session_default_profile_id": top.get("id") or "__env__",
+        "default_profile": top or {},
+        "new_session_default_profile_id": str((top or {}).get("id") or ""),
         "profiles": profiles,
     }
 
@@ -2262,34 +2447,6 @@ def _validate_model_name_in_discovered_list(data: dict, model_name: str) -> None
     ids = {str(item or "").strip() for item in discovered if str(item or "").strip()}
     if ids and str(model_name or "").strip() not in ids:
         raise ValueError("模型名称必须与已获取模型列表中的模型 ID 完全一致")
-
-
-def _save_env_model_profile(data: dict) -> dict:
-    env_path = dotenv_file_path()
-    prev = env_path.read_text(encoding="utf-8") if env_path.is_file() else ""
-    updates = {
-        "EXECUTOR_LLM": str(data.get("model") or "").strip(),
-        "EXECUTOR_LLM_TYPE": str(data.get("llm_type") or "openai").strip().lower() or "openai",
-        "OPENAI_BASE_URL": model_profiles._normalize_base_url(str(data.get("base_url") or "")),
-        "OPENAI_API_KEY": str(data.get("api_key") or "").strip(),
-        "CONTEXT_WINDOW": str(data.get("context_window") or "").strip(),
-        "MAX_OUTPUT_TOKENS": str(data.get("max_output_tokens") or "").strip(),
-        "LLM_THINKING_MODE": str(data.get("thinking_mode") or "").strip(),
-        "LLM_REASONING_EFFORT": str(data.get("reasoning_effort") or "").strip(),
-        "EXECUTOR_TEMPERATURE": str(data.get("temperature") or "").strip(),
-        "LLM_EXTRA_BODY_JSON": str(data.get("extra_body_json") or "").strip(),
-    }
-    env_path.parent.mkdir(parents=True, exist_ok=True)
-    env_path.write_text(_apply_env_updates(prev, updates), encoding="utf-8")
-    model_profiles.save_env_profile_meta(
-        PROJECT_ROOT,
-        {
-            "name": str(data.get("name") or "").strip(),
-            "model_context_window": data.get("model_context_window"),
-        },
-    )
-    refresh_executor_client_from_env()
-    return _current_env_profile()
 
 
 @fastapi_app.get("/api/model_profiles")
@@ -2313,24 +2470,17 @@ async def save_model_profile(req: Request):
         return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
     if not str(data.get("base_url") or "").strip():
         return JSONResponse({"ok": False, "error": "missing base_url"}, status_code=400)
-    if str(data.get("id") or "").strip() == "__env__":
-        if not str(data.get("api_key") or "").strip():
-            return JSONResponse({"ok": False, "error": "missing api_key"}, status_code=400)
-        try:
-            profile = _save_env_model_profile(data)
-        except Exception as e:
-            return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
-        _invalidate_executor_config_cache()
-        return JSONResponse({"ok": True, "profile": model_profiles.public_profile(profile)})
     old_profile = model_profiles.get_profile(PROJECT_ROOT, str(data.get("id") or "").strip())
     incoming_key = str(data.get("api_key") or "").strip() if "api_key" in data else ""
-    if not incoming_key and not str((old_profile or {}).get("api_key") or "").strip():
+    llm_type = str(data.get("llm_type") or "openai").strip().lower()
+    if llm_type != "local" and not incoming_key and not str((old_profile or {}).get("api_key") or "").strip():
         return JSONResponse({"ok": False, "error": "missing api_key"}, status_code=400)
     try:
         profile = model_profiles.upsert_profile(PROJECT_ROOT, data)
     except Exception as e:
         return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
     _invalidate_executor_config_cache()
+    refresh_executor_client_from_env()
     return JSONResponse({"ok": True, "profile": model_profiles.public_profile(profile)})
 
 
@@ -2345,6 +2495,7 @@ async def reorder_model_profiles(req: Request):
         return JSONResponse({"ok": False, "error": "ordered_ids must be list"}, status_code=400)
     model_profiles.reorder_profiles(PROJECT_ROOT, [str(x) for x in ids])
     _invalidate_executor_config_cache()
+    refresh_executor_client_from_env()
     return JSONResponse(_model_profiles_response())
 
 
@@ -2353,6 +2504,7 @@ async def delete_model_profile(profile_id: str):
     ok = model_profiles.delete_profile(PROJECT_ROOT, (profile_id or "").strip())
     if ok:
         _invalidate_executor_config_cache()
+        refresh_executor_client_from_env()
     return JSONResponse({"ok": ok})
 
 
@@ -2364,8 +2516,6 @@ async def discover_model_profiles(req: Request):
         return JSONResponse({"ok": False, "error": "invalid json"}, status_code=400)
     base_url = str((data or {}).get("base_url") or "").strip()
     api_key = str((data or {}).get("api_key") or "").strip()
-    if not api_key:
-        api_key = _dotenv_last_non_empty_assignments(dotenv_file_path()).get("OPENAI_API_KEY", "")
     try:
         models = await run_in_threadpool(model_profiles.discover_models, base_url, api_key)
     except Exception as e:
@@ -2383,8 +2533,6 @@ async def probe_model_profile(req: Request):
         return JSONResponse({"ok": False, "error": "body must be object"}, status_code=400)
     base_url = str(data.get("base_url") or "").strip()
     api_key = str(data.get("api_key") or "").strip()
-    if not api_key:
-        api_key = _dotenv_last_non_empty_assignments(dotenv_file_path()).get("OPENAI_API_KEY", "")
     model_id = str(data.get("model") or data.get("id") or "").strip()
     fallback = data.get("metadata") if isinstance(data.get("metadata"), dict) else data
     try:
@@ -2404,8 +2552,9 @@ async def get_session_model_profile(session_id: str):
     except Exception as e:
         return JSONResponse({"ok": False, "error": str(e)}, status_code=404)
     pid = str((meta or {}).get("model_profile_id") or "").strip()
-    if not pid:
-        pid = model_profiles.top_profile_id_with_env(PROJECT_ROOT)
+    if not model_profiles.is_usable_profile(model_profiles.get_profile(PROJECT_ROOT, pid)):
+        top = model_profiles.top_profile(PROJECT_ROOT)
+        pid = str((top or {}).get("id") or "")
     return JSONResponse({"ok": True, "profile_id": pid})
 
 
@@ -2418,8 +2567,8 @@ async def set_session_model_profile(session_id: str, req: Request):
         data = await req.json()
     except Exception:
         return JSONResponse({"ok": False, "error": "invalid json"}, status_code=400)
-    pid = str((data or {}).get("profile_id") or "__env__").strip() or "__env__"
-    if pid != "__env__" and not model_profiles.get_profile(PROJECT_ROOT, pid):
+    pid = str((data or {}).get("profile_id") or "").strip()
+    if not model_profiles.is_usable_profile(model_profiles.get_profile(PROJECT_ROOT, pid)):
         return JSONResponse({"ok": False, "error": "unknown profile_id"}, status_code=404)
     with session_manager._session_metadata_lock(sid):
         meta = session_manager._load_metadata_unlocked(sid)
@@ -3064,22 +3213,53 @@ async def stream_session_events(
     async def runtime_v2_event_generator():
         _observer_streams_by_session[sid] = _observer_streams_by_session.get(sid, 0) + 1
         cursor = int(after_index) if after_index is not None else -1
+        runtime_cursor: Optional[int] = None
         subscription = subscribe_session_events(sid, replay_recent=True)
         next_live_event = asyncio.create_task(subscription.__anext__())
 
         async def drain_projection(projection):
-            nonlocal cursor
+            nonlocal cursor, runtime_cursor
             while True:
-                page = await asyncio.to_thread(
-                    projection.read_ui_page,
-                    sid,
-                    after_index=cursor,
-                    limit=100,
-                )
+                incremental = runtime_cursor is not None
+                if incremental:
+                    page = await asyncio.to_thread(
+                        projection.read_ui_after_runtime_seq,
+                        sid,
+                        after_runtime_seq=runtime_cursor,
+                        limit=100,
+                    )
+                    if page.get("requires_reprojection"):
+                        reprojected_through = int(page.get("last_runtime_seq") or 0)
+                        incremental = False
+                        page = await asyncio.to_thread(
+                            projection.read_ui_page,
+                            sid,
+                            after_index=cursor,
+                            limit=100,
+                        )
+                        page["reprojected_through"] = reprojected_through
+                else:
+                    page = await asyncio.to_thread(
+                        projection.read_ui_page,
+                        sid,
+                        after_index=cursor,
+                        limit=100,
+                    )
                 events = page.get("events") if isinstance(page, dict) else []
                 if not isinstance(events, list) or not events:
+                    if incremental:
+                        runtime_cursor = max(
+                            int(runtime_cursor or 0),
+                            int(page.get("last_runtime_seq") or 0),
+                        )
+                    elif runtime_cursor is None:
+                        runtime_cursor = max(0, projection.event_log.next_seq(sid) - 1)
+                    runtime_cursor = max(
+                        int(runtime_cursor or 0),
+                        int(page.get("reprojected_through") or 0),
+                    )
                     break
-                start = int(page.get("range_start") or (cursor + 1))
+                start = cursor + 1 if incremental else int(page.get("range_start") or (cursor + 1))
                 for offset, event in enumerate(events):
                     if await request.is_disconnected():
                         return
@@ -3092,9 +3272,21 @@ async def stream_session_events(
                     payload["seq_scope"] = "ui_projection"
                     yield_payload = f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
                     cursor = max(cursor, event_index)
+                    runtime_seq = payload.get("runtime_seq")
+                    if runtime_seq is not None:
+                        runtime_cursor = max(int(runtime_cursor or 0), int(runtime_seq))
                     yield yield_payload
                     await asyncio.sleep(0)
-                if len(events) < 100:
+                if incremental:
+                    runtime_cursor = max(
+                        int(runtime_cursor or 0),
+                        int(page.get("last_runtime_seq") or 0),
+                    )
+                runtime_cursor = max(
+                    int(runtime_cursor or 0),
+                    int(page.get("reprojected_through") or 0),
+                )
+                if len(events) < 100 and not page.get("has_more"):
                     break
 
         try:
@@ -3274,14 +3466,31 @@ async def get_session_goal(session_id: str):
 
 
 @fastapi_app.post("/sessions/{session_id}/goal/{action}")
-async def control_session_goal(session_id: str, action: str):
+async def control_session_goal(session_id: str, action: str, request: Request):
     if action not in {"pause", "resume", "cancel"}:
         return JSONResponse(content={"ok": False, "error": "action must be pause, resume, or cancel"}, status_code=400)
     try:
         from agent_goal import manager_for
-        goal = manager_for(session_manager).user_action(session_id, action)
+
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        if not isinstance(body, dict):
+            body = {}
+        goal = manager_for(session_manager).user_action(
+            session_id,
+            action,
+            additional_budget=body.get("additional_budget"),
+            reason=str(body.get("reason") or ""),
+            actor="user",
+        )
         if action in {"pause", "cancel"}:
             session_manager.request_interrupt(session_id, reason=f"goal_{action}")
+        await publish_session_event(
+            session_id,
+            {**goal, "type": "goal_state", "goal_event": f"user_{action}", "ephemeral": True},
+        )
         return JSONResponse(content={"ok": True, "goal": goal})
     except Exception as exc:
         return JSONResponse(content={"ok": False, "error": str(exc)}, status_code=409)
@@ -3570,12 +3779,32 @@ async def get_session_history_snapshot(
             timings["user_turns"] = int((_time.perf_counter() - t_phase) * 1000)
             t_phase = _time.perf_counter()
             context_tokens = _runtime_v2_context_snapshot(session_id).get("tokens")
-            if not isinstance(context_tokens, dict) or context_tokens.get("stale"):
+            if not isinstance(context_tokens, dict):
                 context_tokens = None
+            elif context_tokens.get("stale"):
+                context_tokens = dict(context_tokens)
+                context_tokens["pending_recalculation"] = True
+                context_tokens["source"] = "runtime_v2_snapshot_stale"
             timings["context_tokens"] = int((_time.perf_counter() - t_phase) * 1000)
+            t_phase = _time.perf_counter()
             todo_plan = _runtime_v2_todo_plan_snapshot(session_id)
+            timings["todo_plan"] = int((_time.perf_counter() - t_phase) * 1000)
             elapsed_ms = int((_time.perf_counter() - t0) * 1000)
             timings["total"] = elapsed_ms
+            logger.info(
+                "open_session_timing session=%s source=%s page_source=%s messages=%s "
+                "total=%sms read_page=%sms count=%sms user_turns=%sms context_tokens=%sms todo_plan=%sms",
+                session_id,
+                "runtime_v2_snapshot",
+                str(page.get("source") or "runtime_v2_projection") if isinstance(page, dict) else "unknown",
+                len(page.get("events") or []) if isinstance(page, dict) else 0,
+                elapsed_ms,
+                timings["read_page"],
+                timings["count"],
+                timings["user_turns"],
+                timings["context_tokens"],
+                timings["todo_plan"],
+            )
             if elapsed_ms >= 500:
                 logger.warning(
                     "/history_snapshot slow runtime=2 session=%s turns=%s limit=%s before=%s elapsed_ms=%s read_page=%sms count=%sms user_turns=%sms context_tokens=%sms",
@@ -3725,7 +3954,10 @@ async def get_runtime_sync_status():
     with _RUNTIME_SYNC_LOCK:
         queue = list(_RUNTIME_SYNC_QUEUE)
         statuses = {sid: dict(status) for sid, status in _RUNTIME_SYNC_STATUS.items()}
-        worker_alive = _RUNTIME_SYNC_WORKER is not None and _RUNTIME_SYNC_WORKER.is_alive()
+        worker_alive = bool(
+            (_RUNTIME_SYNC_WORKER is not None and _RUNTIME_SYNC_WORKER.is_alive())
+            or any(worker.is_alive() for worker in _RUNTIME_SYNC_EXTRA_WORKERS)
+        )
         auto_migration = dict(_RUNTIME_AUTO_MIGRATION_STATUS)
     return JSONResponse(content={
         "ok": True,
@@ -4020,20 +4252,31 @@ async def get_session_context_tokens(session_id: str):
                 if (
                     isinstance(tokens, dict)
                     and tokens.get("estimated") is not None
-                    and not tokens.get("stale")
                 ):
                     out = dict(tokens)
                     out["ok"] = True
-                    out["source"] = "runtime_v2_snapshot"
+                    if tokens.get("stale"):
+                        out["pending_recalculation"] = True
+                        out["source"] = "runtime_v2_snapshot_stale"
+                    else:
+                        out["source"] = "runtime_v2_snapshot"
                     return out
         except Exception as exc:
-            logger.debug("Runtime V2 context token snapshot read failed for %s: %s", session_id, exc)
+            logger.warning("Runtime V2 context token snapshot read failed for %s: %s", session_id, exc)
+            return {
+                "ok": False,
+                "error": "runtime_v2_projection_failed",
+                "repair_required": True,
+                "detail": str(exc),
+            }
         return None
 
     token_mode = get_context_token_mode()
     snap = None if token_mode == "calculated" else await asyncio.to_thread(_read_snapshot_tokens)
     if snap is not None:
         snap["token_mode"] = token_mode
+        if not snap.get("ok", True):
+            return JSONResponse(content=snap, status_code=500)
         return JSONResponse(content=snap)
     out = await run_in_threadpool(compute_context_tokens_for_session, session_id)
     if not out.get("ok"):
@@ -4188,14 +4431,15 @@ def _load_config_wizard_html() -> str:
 <body style="font-family:sans-serif;max-width:480px;margin:2rem auto;padding:1rem;">
 <h1>General Agent · 首次配置</h1>
 <p>缺少 <code>templates/first_time_config.html</code>，使用简易表单。</p>
-<form id="f"><label>OPENAI_API_KEY<input id="k" type="password" style="width:100%;margin:.5rem 0"></label>
-<label>OPENAI_BASE_URL<input id="u" type="text" placeholder="https://api.deepseek.com" style="width:100%;margin:.5rem 0"></label>
+<form id="f"><label>API Key<input id="k" type="password" style="width:100%;margin:.5rem 0"></label>
+<label>API Base URL<input id="u" type="text" placeholder="https://api.deepseek.com" style="width:100%;margin:.5rem 0"></label>
+<label>模型 ID<input id="m" type="text" style="width:100%;margin:.5rem 0"></label>
 <button type="submit">保存</button></form>
 <pre id="e" style="color:red"></pre>
 <script>
 document.getElementById('f').onsubmit=async(e)=>{e.preventDefault();document.getElementById('e').textContent='';
 const r=await fetch('/api/save_config',{method:'POST',headers:{'Content-Type':'application/json'},
-body:JSON.stringify({api_key:document.getElementById('k').value,llm_base_url:document.getElementById('u').value})});
+body:JSON.stringify({api_key:document.getElementById('k').value,llm_base_url:document.getElementById('u').value,model_name:document.getElementById('m').value})});
 const j=await r.json();if(j.ok)location.href='/?'+Date.now();else document.getElementById('e').textContent=j.error||'failed';};
 </script></body></html>"""
 
@@ -4262,26 +4506,20 @@ def _resolve_project_env_path(raw: str) -> Path:
     return path.resolve()
 
 
-# 首页放行前：下列变量须在 .env 中均有非空取值（strip 后）；缺文件、缺 key、值为空或占位密钥 → 走向导
-_REQUIRED_ENV_FOR_MAIN_UI = (
+_MODEL_ENV_KEYS = frozenset({
     "EXECUTOR_LLM",
     "OPENAI_BASE_URL",
     "OPENAI_API_KEY",
     "EXECUTOR_LLM_TYPE",
     "CONTEXT_WINDOW",
     "MAX_OUTPUT_TOKENS",
-    "WORK_DIR",
-)
-
-_MODEL_ENV_FOR_MAIN_UI = {
-    "EXECUTOR_LLM",
-    "OPENAI_BASE_URL",
-    "OPENAI_API_KEY",
-    "EXECUTOR_LLM_TYPE",
-    "CONTEXT_WINDOW",
-    "MAX_OUTPUT_TOKENS",
-}
-_PROFILE_BACKED_ENV_FOR_MAIN_UI = _MODEL_ENV_FOR_MAIN_UI | {"WORK_DIR"}
+    "LLM_THINKING_MODE",
+    "LLM_REASONING_EFFORT",
+    "LLM_EXTRA_BODY_JSON",
+    "EXECUTOR_TEMPERATURE",
+    "LOCAL_LLM_HOST",
+    "LOCAL_LLM",
+})
 
 
 def _has_complete_model_profile_for_main_ui() -> bool:
@@ -4289,24 +4527,7 @@ def _has_complete_model_profile_for_main_ui() -> bool:
         profiles = model_profiles.sorted_profiles(PROJECT_ROOT)
     except Exception:
         return False
-    for profile in profiles:
-        if not isinstance(profile, dict):
-            continue
-        if not str(profile.get("model") or "").strip():
-            continue
-        if not str(profile.get("base_url") or "").strip():
-            continue
-        api_key = str(profile.get("api_key") or "").strip()
-        if not api_key or "YOUR_API_KEY" in api_key:
-            continue
-        if not str(profile.get("llm_type") or "openai").strip():
-            continue
-        if model_profiles._safe_int(profile.get("context_window"), 0) <= 0:
-            continue
-        if model_profiles._safe_int(profile.get("max_output_tokens"), 0) <= 0:
-            continue
-        return True
-    return False
+    return any(model_profiles.is_usable_profile(profile) for profile in profiles)
 
 
 def _dotenv_last_assignments(path: Path) -> dict[str, str]:
@@ -4330,98 +4551,27 @@ def _dotenv_last_assignments(path: Path) -> dict[str, str]:
     return out
 
 
-def _dotenv_last_non_empty_assignments(path: Path) -> dict[str, str]:
-    """解析 .env 中每个 key 的最后一个非空值，用于配置向导容错重复空行。"""
-    out: dict[str, str] = {}
-    if not path.is_file():
-        return out
-    try:
-        raw = path.read_text(encoding="utf-8")
-    except OSError:
-        return out
-    for line in raw.splitlines():
-        s = line.strip()
-        if not s or s.startswith("#") or "=" not in s:
-            continue
-        key, _, val = s.partition("=")
-        key = _normalize_dotenv_key(key)
-        if not _DOTENV_KEY_RE.match(key):
-            continue
-        parsed = _parse_dotenv_rhs(val).strip()
-        if parsed:
-            out[key] = parsed
-    return out
-
-
 def _is_configured():
-    env_path = dotenv_file_path()
-    vals = _dotenv_last_assignments(env_path)
-    fallback_vals = _dotenv_last_non_empty_assignments(env_path)
-    profile_configured = _has_complete_model_profile_for_main_ui()
-    
-    # 尝试加载加密配置作为补充
-    encrypted_config = {}
-    try:
-        from secret_loader import load_encrypted_config
-        encrypted_config = load_encrypted_config()
-    except Exception:
-        pass
-    
-    for req in _REQUIRED_ENV_FOR_MAIN_UI:
-        if req in _PROFILE_BACKED_ENV_FOR_MAIN_UI and profile_configured:
-            continue
-        v = vals.get(req)
-        if (v is None or v.strip() == "") and fallback_vals.get(req):
-            v = fallback_vals[req]
-        # 如果.env中没有，检查加密配置
-        if (v is None or str(v).strip() == "") and encrypted_config.get(req):
-            v = encrypted_config[req]
-        if v is None or str(v).strip() == "":
-            return False
-    
-    if not profile_configured:
-        api_key_for_check = (vals.get("OPENAI_API_KEY") or "").strip() or fallback_vals.get("OPENAI_API_KEY", "")
-        if not api_key_for_check:
-            api_key_for_check = encrypted_config.get("OPENAI_API_KEY", "")
-        if "YOUR_API_KEY" in api_key_for_check:
-            return False
-    return True
-
-
-def _infer_llm_provider_for_wizard(vals: dict[str, str]) -> str:
-    """向导三选一：deepseek / openai / local（与 EXECUTOR_LLM_TYPE + BASE_URL 对齐）。"""
-    et = (vals.get("EXECUTOR_LLM_TYPE") or "").strip().lower()
-    if et == "local":
-        return "local"
-    url = (vals.get("OPENAI_BASE_URL") or "").lower()
-    if "deepseek" in url:
-        return "deepseek"
-    return "openai"
+    """The wizard gate depends only on the presence of a usable model profile."""
+    return _has_complete_model_profile_for_main_ui()
 
 
 def _wizard_prefill_from_dotenv() -> dict[str, str]:
-    """从 .env 最后一遍赋值生成向导预填（原始字符串，不经进程环境默认值改写）。"""
+    """Prefill only non-model settings; model values never come from .env."""
     vals = _dotenv_last_assignments(dotenv_file_path())
     if not vals:
         return {}
     out: dict[str, str] = {}
     pairs = (
         ("WORK_DIR", "work_dir"),
-        ("CONTEXT_WINDOW", "context_window"),
-        ("MAX_OUTPUT_TOKENS", "max_output_tokens"),
-        ("EXECUTOR_LLM", "model_name"),
-        ("OPENAI_BASE_URL", "llm_base_url"),
         ("WEB_SEARCH_PROVIDER", "search_provider"),
     )
     for env_k, js_k in pairs:
         v = vals.get(env_k)
         if v is not None and str(v).strip() != "":
             out[js_k] = str(v).strip()
-    if vals.get("OPENAI_API_KEY"):
-        out["api_key"] = str(vals.get("OPENAI_API_KEY") or "").strip()
     if vals.get("TAVILY_API_KEY"):
         out["search_api_key"] = str(vals.get("TAVILY_API_KEY") or "").strip()
-    out["llm_provider"] = _infer_llm_provider_for_wizard(vals)
     return out
 
 
@@ -4463,24 +4613,6 @@ def _load_extensions_config_html() -> str:
 
 
 _ENV_GROUP_ORDER: list[tuple[str, str, list[str]]] = [
-    (
-        "llm",
-        "模型与 OpenAI 兼容 API",
-        [
-            "EXECUTOR_LLM",
-            "EXECUTOR_LLM_TYPE",
-            "CONTEXT_WINDOW",
-            "MAX_OUTPUT_TOKENS",
-            "OPENAI_BASE_URL",
-            "OPENAI_API_KEY",
-            "LLM_THINKING_MODE",
-            "LLM_REASONING_EFFORT",
-            "LLM_EXTRA_BODY_JSON",
-            "EXECUTOR_TEMPERATURE",
-            "LOCAL_LLM_HOST",
-            "LOCAL_LLM",
-        ],
-    ),
     (
         "search",
         "联网搜索",
@@ -4533,6 +4665,16 @@ _ENV_GROUP_ORDER: list[tuple[str, str, list[str]]] = [
             "TODO_MAX_ITEMS",
             "MAX_PARALLEL_TOOLS",
             "GOAL_ENABLED",
+            "GOAL_RUNNER_POLL_SECONDS",
+            "GOAL_MAX_CONSECUTIVE_FAILURES",
+            "AGENT_TEAM_ENABLED",
+            "AGENT_TEAM_MAX_MEMBERS",
+            "AGENT_TEAM_MAX_TASKS",
+            "AGENT_TEAM_MAX_MESSAGES",
+            "AGENT_TEAM_MAX_PERMISSIONS",
+            "AGENT_TEAM_MAX_MESSAGE_CHARS",
+            "AGENT_TEAM_SERIAL_WRITE_TOOLS",
+            "AGENT_TEAM_PERMISSION_TOOLS",
             "HOOKS_ENABLED",
             "PLUGINS_ENABLED",
         ],
@@ -4591,27 +4733,25 @@ for _gid, _title, _keys in _ENV_GROUP_ORDER:
         _ENV_KEY_ORDER_IN_GROUP[_k] = _i
 
 _ENV_HINTS: dict[str, str] = {
-    "GOAL_ENABLED": "1（默认）启用持久 Goal、Goal 工具和自动续跑；0/false/no/off 禁用。修改后需重启 Agent。",
+    "GOAL_ENABLED": "1（默认）启用持久 Goal、Goal 工具和服务端自动续跑；0/false/no/off 禁用。修改后需重启 Agent。",
+    "GOAL_RUNNER_POLL_SECONDS": "服务端 Goal 调度器扫描 active Goal 的间隔秒数，默认 2，最小 0.5。修改后需重启 Agent。",
+    "GOAL_MAX_CONSECUTIVE_FAILURES": "Goal 连续运行失败多少次后自动暂停，默认 3；用于避免无限失败重试。",
+    "AGENT_TEAM_ENABLED": "实验功能。1/true/yes/on 启用 Agent Team；其他值或未配置均禁用。保存后立即生效，默认关闭。",
+    "AGENT_TEAM_MAX_MEMBERS": "单个根会话团队的非终态成员上限，默认 4。",
+    "AGENT_TEAM_MAX_TASKS": "单个团队的共享任务投影上限，默认 1000。",
+    "AGENT_TEAM_MAX_MESSAGES": "单个团队的持久邮箱消息上限，默认 2000。",
+    "AGENT_TEAM_MAX_PERMISSIONS": "单个团队的权限请求记录上限，默认 500。",
+    "AGENT_TEAM_MAX_MESSAGE_CHARS": "单条团队消息的字符上限，默认 32000。",
+    "AGENT_TEAM_SERIAL_WRITE_TOOLS": "逗号分隔；团队成员调用这些写工具时按根团队串行执行。",
+    "AGENT_TEAM_PERMISSION_TOOLS": "逗号分隔；团队成员调用这些高风险工具前必须消费 lead 的一次性授权。",
     "HOOKS_ENABLED": "1（默认）启用生命周期 Hook；0/false/no/off 会跳过项目与插件 Hook。按次读取，保存后立即生效。",
     "PLUGINS_ENABLED": "1（默认）启用插件发现与组件合并；0/false/no/off 会移除插件 Skill、MCP、Hook、Agent 与 Prompt。",
     "HOOKS_PATH": "可选 hooks.json 路径；留空时使用 WORK_DIR/hooks.json。",
     "PLUGINS_DIR": "单个插件发现目录；留空时使用项目 plugins 与 ~/.myagent/plugins。",
     "PLUGINS_DIRS": "多个插件发现目录，使用系统 PATH 分隔符（Windows 为分号）；优先于 PLUGINS_DIR。",
     "PLUGINS_STATE_PATH": "插件启用/禁用状态 JSON；采用原子替换写入。",
-    "EXECUTOR_LLM": "执行器使用的模型名（须与所选服务商一致）。",
-    "EXECUTOR_LLM_TYPE": "local = 本地 OpenAI 兼容（如 Ollama）；openai = 使用 OPENAI_* 远端 API。",
-    "CONTEXT_WINDOW": "预估上下文 token 超过该门限时触发压缩摘要等策略。",
     "CONTEXT_TOKEN_MODE": "上下文 token 统计模式：hybrid=API usage + 本地计算混合；calculated=只使用本地计算。",
     "CONTEXT_TOKEN_ACCOUNTING_MODE": "同 CONTEXT_TOKEN_MODE；用于配置上下文 token 统计模式。",
-    "MAX_OUTPUT_TOKENS": "模型单次输出的 token 上限（依服务商与实际模型调整）。",
-    "OPENAI_BASE_URL": "OpenAI 兼容 API 根地址（DeepSeek/OpenAI 等）。",
-    "OPENAI_API_KEY": "远端 API 密钥（仅保存在本机 .env）。",
-    "LLM_THINKING_MODE": "思考扩展：enabled（默认）或 disabled。disabled 时不使用 LLM_REASONING_EFFORT。DeepSeek 基准 URL 在 disabled 时会显式请求 thinking.disabled；可用 LLM_EXTRA_BODY_JSON 整段覆盖。",
-    "LLM_REASONING_EFFORT": "仅在思考开启时下发 reasoning_effort；未设置时默认 high；可按服务商填写 low/medium/high/max 等（原样传给 API）。",
-    "LLM_EXTRA_BODY_JSON": "可选：JSON 字符串，合并进请求 extra_body（覆盖自动生成）。",
-    "EXECUTOR_TEMPERATURE": "采样温度（若模型支持）。",
-    "LOCAL_LLM_HOST": "本地兼容服务地址，如 http://localhost:11434。",
-    "LOCAL_LLM": "本地使用的模型标识（Ollama 模型名等）。",
     "WEB_SEARCH_PROVIDER": "网页搜索提供者：duckduckgo、tavily、brave、searxng、jina 等。",
     "TAVILY_API_KEY": "Tavily API Key（在 app.tavily.com 获取）。",
     "BRAVE_API_KEY": "Brave Search API Key。",
@@ -4668,8 +4808,6 @@ _ENV_HINTS: dict[str, str] = {
 
 
 _NON_SENSITIVE = frozenset({
-    "MAX_OUTPUT_TOKENS",
-    "CONTEXT_WINDOW",
     "CONTEXT_TOKEN_MODE",
     "CONTEXT_TOKEN_ACCOUNTING_MODE",
 })
@@ -4848,18 +4986,43 @@ async def set_plugin_enabled_api(plugin_id: str, request: Request):
 
         state = await asyncio.to_thread(set_plugin_enabled, plugin_id, enabled)
         await agent_mcp.force_reload()
+        session_id = str(data.get("session_id") or "").strip()
+        if session_id:
+            from agent_extensions import audit_plugin_inventory
+
+            await asyncio.to_thread(
+                audit_plugin_inventory,
+                session_manager,
+                session_id,
+                "",
+            )
         return JSONResponse({"ok": True, "plugin_id": plugin_id, "state": dict(state)})
     except Exception as exc:
         return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
 
 
 @fastapi_app.post("/api/extensions/reload")
-async def reload_extensions_api():
+async def reload_extensions_api(request: Request):
     try:
         from agent_extensions import reload_extensions
 
         result = await asyncio.to_thread(reload_extensions)
         await agent_mcp.force_reload()
+        try:
+            data = await request.json()
+        except Exception:
+            data = {}
+        session_id = str(data.get("session_id") or "").strip() if isinstance(data, dict) else ""
+        if session_id:
+            from agent_extensions import audit_plugin_inventory
+
+            await asyncio.to_thread(
+                audit_plugin_inventory,
+                session_manager,
+                session_id,
+                "",
+                event_type="plugin_reloaded",
+            )
         return JSONResponse({"ok": True, **result.to_dict()})
     except Exception as exc:
         logger.exception("Extension reload failed")
@@ -4904,7 +5067,35 @@ async def save_mcp_config_snapshot(request: Request):
 async def get_env_snapshot():
     path = dotenv_file_path()
     raw = path.read_text(encoding="utf-8") if path.is_file() else ""
-    flat = _parse_env_entries(raw)
+    flat = [row for row in _parse_env_entries(raw) if row.get("key") not in _MODEL_ENV_KEYS]
+    existing_keys = {str(row.get("key") or "") for row in flat}
+    for key, default in {
+        "GOAL_ENABLED": "1",
+        "GOAL_RUNNER_POLL_SECONDS": "2",
+        "GOAL_MAX_CONSECUTIVE_FAILURES": "3",
+        "AGENT_TEAM_ENABLED": "0",
+        "AGENT_TEAM_MAX_MEMBERS": "4",
+        "AGENT_TEAM_MAX_TASKS": "1000",
+        "AGENT_TEAM_MAX_MESSAGES": "2000",
+        "AGENT_TEAM_MAX_PERMISSIONS": "500",
+        "AGENT_TEAM_MAX_MESSAGE_CHARS": "32000",
+        "AGENT_TEAM_SERIAL_WRITE_TOOLS": "write_file,apply_patch,edit_file,delete_file,run_shell,web_download",
+        "AGENT_TEAM_PERMISSION_TOOLS": "delete_file,web_download",
+        "HOOKS_ENABLED": "1",
+        "PLUGINS_ENABLED": "1",
+    }.items():
+        if key in existing_keys:
+            continue
+        flat.append(
+            {
+                "key": key,
+                "value": default,
+                "has_value": True,
+                "hint": _ENV_HINTS.get(key, ""),
+                "sensitive": False,
+                "path_kind": None,
+            }
+        )
     by_group: dict[str, list[dict]] = defaultdict(list)
     for row in flat:
         gid = _ENV_KEY_GROUP.get(row["key"], "other")
@@ -4926,6 +5117,56 @@ async def get_env_snapshot():
     return JSONResponse(content={"ok": True, "path": str(path.resolve()), "groups": groups_out})
 
 
+@fastapi_app.get("/api/features/agent-team")
+async def get_agent_team_feature():
+    """Return the authoritative, fail-closed Agent Team feature state."""
+
+    return JSONResponse(
+        {
+            "ok": True,
+            "enabled": agent_team_enabled(),
+            "env_var": AGENT_TEAM_ENV_VAR,
+            "experimental": True,
+        }
+    )
+
+
+@fastapi_app.post("/api/features/agent-team")
+async def set_agent_team_feature(req: _Request):
+    """Persist and immediately apply the Agent Team feature switch."""
+
+    try:
+        data = await req.json()
+    except Exception:
+        return JSONResponse({"ok": False, "error": "invalid json"}, status_code=400)
+    enabled = data.get("enabled")
+    if not isinstance(enabled, bool):
+        return JSONResponse(
+            {"ok": False, "error": "enabled must be boolean"},
+            status_code=400,
+        )
+    env_path = dotenv_file_path()
+    previous = env_path.read_text(encoding="utf-8") if env_path.is_file() else ""
+    tmp_path = env_path.with_suffix(env_path.suffix + ".agent-team.tmp")
+    try:
+        merged = _apply_env_updates(
+            previous,
+            {AGENT_TEAM_ENV_VAR: "1" if enabled else "0"},
+        )
+        env_path.parent.mkdir(parents=True, exist_ok=True)
+        tmp_path.write_text(merged, encoding="utf-8")
+        tmp_path.replace(env_path)
+        os.environ[AGENT_TEAM_ENV_VAR] = "1" if enabled else "0"
+    except (OSError, ValueError) as exc:
+        try:
+            tmp_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        logger.exception("Failed to persist Agent Team feature state")
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
+    return JSONResponse({"ok": True, "enabled": agent_team_enabled()})
+
+
 @fastapi_app.post("/api/env")
 async def save_env_snapshot(req: _Request):
     try:
@@ -4940,6 +5181,11 @@ async def save_env_snapshot(req: _Request):
     for k, v in vals.items():
         if not isinstance(k, str) or not key_re.match(k):
             continue
+        if k in _MODEL_ENV_KEYS:
+            return JSONResponse(
+                {"ok": False, "error": f"{k} must be configured in a model profile"},
+                status_code=400,
+            )
         if v is None:
             normalized[k] = ""
         elif isinstance(v, bool):
@@ -5012,21 +5258,18 @@ async def save_config(req: _Request):
         updates: dict[str, str] = {}
 
         api_key = str(data.get("api_key", "") or "").strip()
-        if "api_key" in data:  # 前端传了api_key字段就更新（支持清空）
-            updates["OPENAI_API_KEY"] = api_key
-
         url = str(data.get("llm_base_url", "") or "").strip()
-        if url:
-            updates["OPENAI_BASE_URL"] = url
-
         mn = str(data.get("model_name", "") or "").strip()
         _validate_model_name_in_discovered_list(data, mn)
-        if mn:
-            updates["EXECUTOR_LLM"] = mn
-
         prov = str(data.get("llm_provider", "") or "").strip().lower()
         exec_type = "local" if prov == "local" else "openai"
-        updates["EXECUTOR_LLM_TYPE"] = exec_type
+
+        if not mn:
+            raise ValueError("missing model")
+        if not url:
+            raise ValueError("missing base_url")
+        if exec_type != "local" and not api_key:
+            raise ValueError("missing api_key")
 
         work_dir = str(data.get("work_dir", "") or "").strip()
         if not work_dir:
@@ -5041,8 +5284,6 @@ async def save_config(req: _Request):
             ctx_w = 1000000
         if ctx_w <= 0:
             ctx_w = 1000000
-        updates["CONTEXT_WINDOW"] = str(ctx_w)
-
         mot_raw = data.get("max_output_tokens", "")
         try:
             max_out = int(str(mot_raw).strip()) if str(mot_raw).strip() != "" else 8192
@@ -5050,8 +5291,6 @@ async def save_config(req: _Request):
             max_out = 8192
         if max_out <= 0:
             max_out = 8192
-        updates["MAX_OUTPUT_TOKENS"] = str(max_out)
-
         sp_raw = data.get("search_provider") or "duckduckgo"
         sp = sp_raw.strip().lower() if isinstance(sp_raw, str) else "duckduckgo"
         if sp not in ("duckduckgo", "tavily"):
@@ -5066,12 +5305,55 @@ async def save_config(req: _Request):
         env_path.parent.mkdir(parents=True, exist_ok=True)
         prev = env_path.read_text(encoding="utf-8") if env_path.exists() else ""
         env_path.write_text(_apply_env_updates(prev, updates), encoding="utf-8")
+        profile = model_profiles.upsert_profile(
+            PROJECT_ROOT,
+            {
+                "name": str(data.get("profile_name") or mn).strip(),
+                "model": mn,
+                "llm_type": exec_type,
+                "base_url": url,
+                "api_key": api_key,
+                "context_window": ctx_w,
+                "max_output_tokens": max_out,
+                "model_context_window": max(ctx_w + max_out, ctx_w),
+            },
+        )
+        if not model_profiles.is_usable_profile(profile):
+            raise ValueError("saved model profile is not usable")
+        _invalidate_executor_config_cache()
         refresh_executor_client_from_env()
-        return {"ok": True, "restart_required": work_dir_changed}
+        return {
+            "ok": True,
+            "restart_required": work_dir_changed,
+            "profile": model_profiles.public_profile(profile),
+        }
     except ValueError as e:
         return {"ok": False, "error": str(e)}
     except Exception as e:
         return {"ok": False, "error": str(e)}
+
+
+# Remote Control is isolated behind an explicit feature flag and its own
+# authenticated, versioned router. Keeping registration here avoids circular
+# imports while allowing the transport to reuse the existing run coordinator.
+from remote_control.config import RemoteControlConfig as _RemoteControlConfig
+from remote_control.gateway import create_remote_control_gateway as _create_remote_control_gateway
+from remote_control.service import ControlDependencies as _RemoteControlDependencies
+
+_remote_control_config = _RemoteControlConfig.from_env(PROJECT_ROOT)
+_remote_control_gateway = _create_remote_control_gateway(
+    _remote_control_config,
+    _RemoteControlDependencies(
+        session_manager=session_manager,
+        astream_events=astream_events,
+        reserve_start=_reserve_session_chat_start,
+        release_start=_release_session_chat_start,
+        is_stream_active=_is_session_stream_active,
+    ),
+)
+fastapi_app.include_router(_remote_control_gateway.router)
+
+
 from fastapi.responses import RedirectResponse as _RedirectResponse
 @fastapi_app.middleware("http")
 async def _config_check(req: _Request, call_next):
@@ -5101,7 +5383,7 @@ async def _config_check(req: _Request, call_next):
         "/api/pick-path",
         "/api/upload-chat-files",
         "/api/workspace-files",
-    ) or p.startswith("/static/") or p.startswith("/assets/") or p.startswith("/api/model_profiles/") or p.startswith("/api/plugins/"):
+    ) or p.startswith("/static/") or p.startswith("/assets/") or p.startswith("/api/model_profiles/") or p.startswith("/api/plugins/") or p.startswith("/api/remote/v1/"):
         return await call_next(req)
     if not _is_configured():
         return _RedirectResponse(url="/setup")

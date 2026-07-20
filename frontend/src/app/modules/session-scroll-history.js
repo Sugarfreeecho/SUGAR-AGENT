@@ -38,7 +38,7 @@ function setContextTokenLabel(estimated, threshold) {
     el.setAttribute(
         'data-ui-tip',
         formatTokenCompact(n) + ' / ' + formatTokenCompact(t) + ' tokens（' + tipPct
-            + '）。预估进入模型的上下文规模，含历史与系统提示；分母为触发压缩摘要的门限，可在.env文件中 CONTEXT_WINDOW 修改。'
+            + '）。预估进入模型的上下文规模，含历史与系统提示；分母为当前 model profile 中触发压缩摘要的上下文门限。'
     );
     bindUiHoverTip(el);
 }

@@ -195,6 +195,13 @@ async function consumeAgentSseResponse(response, runCtx, runSessionId, streamEve
                 const eventSessionId = parsed.session_id || parsed.sessionId || runSessionId;
                 if (shouldApplySseSeqFilter(parsed)
                     && !sessionStore.shouldAcceptSseEvent(eventSessionId, parsed.seq, parsed.seq_scope || 'legacy')) continue;
+                if (parsed.type === 'goal_state') {
+                    if (eventSessionId === currentSessionId) {
+                        const goal = parsed.goal && typeof parsed.goal === 'object' ? parsed.goal : parsed;
+                        renderGoalCard(goal);
+                    }
+                    continue;
+                }
                 if (parsed.type === 'user_steer' && parsed.steer) {
                     var steerOpId = String(parsed.client_id || parsed.steer_id || '');
                     var optimisticSteerRow = steerOpId ? findSteerProcessRow(runCtx, steerOpId) : null;
@@ -352,6 +359,11 @@ async function consumeAgentSseResponse(response, runCtx, runSessionId, streamEve
                 finalizeLlmStreamChunks(runCtx);
                 if (parsed.type === 'tool_call') {
                     upsertToolCallResult(runCtx, parsed, runSessionId);
+                    const completedTool = String(parsed.tool || parsed.tool_name || '');
+                    if ((completedTool === 'create_goal' || completedTool === 'update_goal')
+                        && eventSessionId === currentSessionId) {
+                        void refreshGoalCard();
+                    }
                     streamEventIdx += 1;
                     continue;
                 }

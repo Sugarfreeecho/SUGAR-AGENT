@@ -17,14 +17,24 @@ import weakref
 from pathlib import Path
 from typing import Any, Dict, Mapping, Optional, Tuple
 
-from hooks import HookDispatchResult, HookManager, HookSource, hooks_enabled
-from plugins import (
-    PluginLoadResult,
-    PluginManager,
-    PluginReloadResult,
-    get_plugin_manager,
-    plugins_enabled,
-)
+try:  # Production launches with app/ on sys.path; package imports use the fallback.
+    from hooks import HookDispatchResult, HookManager, HookSource, hooks_enabled
+    from plugins import (
+        PluginLoadResult,
+        PluginManager,
+        PluginReloadResult,
+        get_plugin_manager,
+        plugins_enabled,
+    )
+except ImportError:  # pragma: no cover - import style depends on the launcher
+    from .hooks import HookDispatchResult, HookManager, HookSource, hooks_enabled
+    from .plugins import (
+        PluginLoadResult,
+        PluginManager,
+        PluginReloadResult,
+        get_plugin_manager,
+        plugins_enabled,
+    )
 
 logger = logging.getLogger(__name__)
 
@@ -502,7 +512,8 @@ def extensions_snapshot() -> Dict[str, Any]:
     plugin_rows = []
     for plugin in report.plugins:
         row = plugin.to_dict()
-        row["enabled"] = manager.is_enabled(plugin.plugin_id) and plugins_enabled()
+        row["configured_enabled"] = manager.is_enabled(plugin.plugin_id)
+        row["enabled"] = row["configured_enabled"] and plugins_enabled()
         row["loaded"] = plugin.plugin_id in loaded_ids
         plugin_rows.append(row)
     hook_data = hook_snapshot()

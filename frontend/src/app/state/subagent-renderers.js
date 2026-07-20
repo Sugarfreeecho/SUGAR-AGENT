@@ -55,6 +55,7 @@ function subagentCardViewModel(n) {
         status: subagentStatusFromNode(n),
         resultPreview: String(n.result_preview || '').trim(),
         outputFile: !!n.output_file,
+        virtualTask: !!n.virtual_task,
         taskStatus: n.task_status || n.status || '',
         hasFinalKnown: Object.prototype.hasOwnProperty.call(n, 'has_final'),
         hasFinal: !!n.has_final,
@@ -70,6 +71,7 @@ function renderSubagentCardHtml(n) {
     var html = '<div class="process-aggregate subagent-grid-card" data-agent-id="' + escapeHtml(vm.id) + '"';
     if (vm.executorModel) html += ' data-executor-model="' + escapeHtml(String(vm.executorModel)) + '"';
     if (vm.outputFile) html += ' data-output-file="1"';
+    if (vm.virtualTask) html += ' data-virtual-task="1"';
     if (vm.taskStatus) html += ' data-task-status="' + escapeHtml(String(vm.taskStatus)) + '"';
     if (vm.hasFinalKnown) html += ' data-has-final="' + (vm.hasFinal ? '1' : '0') + '"';
     html += ' data-subagent-running="' + (vm.running ? '1' : '0') + '"';
@@ -149,6 +151,8 @@ function applySubagentNodeMetaToCard(card, n) {
     card.dataset.subagentRunning = running ? '1' : '0';
     card.dataset.description = String(n.description || id.slice(0, 8) || '');
     if (n.result_preview) card.dataset.resultPreview = String(n.result_preview);
+    if (n.virtual_task) card.dataset.virtualTask = '1';
+    else delete card.dataset.virtualTask;
     if (Object.prototype.hasOwnProperty.call(n, 'has_final')) card.dataset.hasFinal = n.has_final ? '1' : '0';
     if (n.session_metrics) applySubagentSessionMetricsToCard(card, n.session_metrics);
     var st = subagentStatusFromNode(n);

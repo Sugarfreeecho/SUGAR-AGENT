@@ -3281,6 +3281,11 @@ body {
 :root.theme-light .settings-theme-btn { background: rgba(0,0,0,0.025); }
 .settings-theme-btn:hover { border-color: rgba(203,166,247,0.38); color: var(--text-primary); }
 .settings-theme-btn.is-active { border-color: rgba(203,166,247,0.55); background: rgba(203,166,247,0.15); color: var(--text-primary); }
+.settings-feature-status {
+    min-height: 1.1rem; margin-top: 0.42rem;
+    color: var(--text-tertiary); font-size: 0.7rem; line-height: 1.45;
+}
+.settings-feature-status.is-error { color: #f87171; }
 .settings-advanced-btn {
     width: 100%; margin-top: 0.45rem;
     padding: 0.52rem 0.85rem;
@@ -3291,6 +3296,28 @@ body {
 }
 :root.theme-light .settings-advanced-btn { background: rgba(99,102,241,0.06); border-color: rgba(99,102,241,0.24); }
 .settings-advanced-btn:hover { border-color: rgba(203,166,247,0.55); background: rgba(203,166,247,0.18); }
+.settings-advanced-btn:disabled, .settings-theme-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+.agent-team-modal { max-width: 720px; max-height: min(86vh, 820px); overflow-y: auto; }
+.agent-team-toolbar { display: flex; flex-wrap: wrap; gap: 0.45rem; margin-bottom: 0.8rem; }
+.agent-team-toolbar .settings-theme-btn { flex: 0 1 auto; }
+.agent-team-empty { padding: 1rem 0; color: var(--text-secondary); }
+.agent-team-content { display: grid; gap: 1rem; }
+.agent-team-summary { padding: 0.75rem; border: 1px solid var(--border-glass); border-radius: var(--radius-sm); color: var(--text-primary); font-weight: 600; }
+.agent-team-section h3 { margin: 0 0 0.55rem; color: var(--text-secondary); font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.06em; }
+.agent-team-list { display: grid; gap: 0.4rem; }
+.agent-team-row { display: flex; align-items: center; gap: 0.65rem; padding: 0.58rem 0.65rem; border: 1px solid var(--border-glass); border-radius: var(--radius-sm); background: rgba(255,255,255,0.025); }
+.agent-team-row__copy { flex: 1; min-width: 0; display: grid; gap: 0.16rem; }
+.agent-team-row__copy strong, .agent-team-row__copy span { overflow-wrap: anywhere; }
+.agent-team-row__copy strong { color: var(--text-primary); font-size: 0.8rem; }
+.agent-team-row__copy span { color: var(--text-tertiary); font-size: 0.68rem; }
+.agent-team-badge { flex: 0 0 auto; padding: 0.2rem 0.42rem; border-radius: 999px; background: rgba(203,166,247,0.13); color: var(--text-secondary); font-size: 0.65rem; }
+.agent-team-row__actions { display: flex; gap: 0.32rem; }
+.agent-team-mini-btn { border: 1px solid var(--border-glass); border-radius: 6px; padding: 0.28rem 0.42rem; background: transparent; color: var(--text-secondary); cursor: pointer; font-size: 0.66rem; }
+.agent-team-mini-btn:hover { border-color: rgba(203,166,247,0.55); color: var(--text-primary); }
+.agent-team-inline-form { display: flex; gap: 0.45rem; align-items: center; margin-bottom: 0.55rem; }
+.agent-team-inline-form .settings-advanced-btn { width: auto; margin-top: 0; white-space: nowrap; }
+.agent-team-input { width: 100%; min-width: 0; padding: 0.52rem 0.62rem; border: 1px solid var(--border-glass); border-radius: var(--radius-sm); background: rgba(255,255,255,0.035); color: var(--text-primary); font: inherit; }
+.agent-team-help { margin: 0.42rem 0 0; color: var(--text-tertiary); font-size: 0.68rem; }
 
 /* ═══════════════ 响应式 ═══════════════ */
 @media (max-width: 900px) { .main-center { padding: 0; } }

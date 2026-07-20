@@ -419,10 +419,13 @@ function renderTodoPlanForCurrentSession() {
     void refreshGoalCard();
 }
 
+let renderedGoalState = null;
+
 function renderGoalCard(goal) {
     const card = document.getElementById('chat-goal-card');
     if (!card) return;
     const has = !!(goal && goal.id);
+    renderedGoalState = has ? Object.assign({}, goal) : null;
     card.hidden = !has;
     if (!has) return;
     const status = String(goal.status || 'active');
@@ -431,14 +434,42 @@ function renderGoalCard(goal) {
     const metaEl = document.getElementById('chat-goal-meta');
     const pause = document.getElementById('chat-goal-pause');
     const resume = document.getElementById('chat-goal-resume');
-    if (statusEl) statusEl.textContent = status;
+    const cancel = document.getElementById('chat-goal-cancel');
+    const statusLabels = {
+        active: '进行中', paused: '已暂停', completed: '已完成', blocked: '已阻塞', cancelled: '已取消'
+    };
+    if (statusEl) {
+        const label = statusLabels[status] || status;
+        statusEl.textContent = typeof translateUiString === 'function' ? translateUiString(label) : label;
+    }
     if (objectiveEl) objectiveEl.textContent = String(goal.objective || '');
     if (metaEl) {
-        const budget = goal.token_budget == null ? '无限制' : String(goal.used_tokens || 0) + ' / ' + String(goal.token_budget);
-        metaEl.textContent = 'Token ' + budget + ' · ' + Math.floor(Number(goal.elapsed_seconds || 0) / 60) + '分钟';
+        const unlimited = typeof translateUiString === 'function' ? translateUiString('无限制') : '无限制';
+        const minute = typeof translateUiString === 'function' ? translateUiString('分钟') : '分钟';
+        const budget = goal.token_budget == null ? unlimited : String(goal.used_tokens || 0) + ' / ' + String(goal.token_budget);
+        const reasonLabels = {
+            token_budget_exhausted: 'Token 预算已耗尽',
+            consecutive_run_failures: '连续运行失败',
+            manual: '手动暂停'
+        };
+        const rawReason = String(goal.pause_reason || '');
+        const reasonText = reasonLabels[rawReason] || rawReason;
+        const translatedReason = reasonText && typeof translateUiString === 'function' ? translateUiString(reasonText) : reasonText;
+        const continuationLabel = typeof translateUiString === 'function' ? translateUiString('续跑') : '续跑';
+        const failureLabel = typeof translateUiString === 'function' ? translateUiString('失败') : '失败';
+        const counters = ' · ' + continuationLabel + ' ' + String(goal.continuation_count || 0)
+            + ' · ' + failureLabel + ' ' + String(goal.consecutive_failures || 0);
+        const pauseReason = translatedReason ? ' · ' + translatedReason : '';
+        metaEl.textContent = 'Token ' + budget + ' · ' + Math.floor(Number(goal.elapsed_seconds || 0) / 60) + minute + counters + pauseReason;
     }
     if (pause) pause.hidden = status !== 'active';
-    if (resume) resume.hidden = status !== 'paused';
+    if (cancel) cancel.hidden = status !== 'active' && status !== 'paused';
+    if (resume) {
+        resume.hidden = status !== 'paused';
+        const exhausted = goal.token_budget != null && Number(goal.remaining_tokens || 0) <= 0;
+        const resumeLabel = exhausted ? '增加预算并继续' : '继续';
+        resume.textContent = typeof translateUiString === 'function' ? translateUiString(resumeLabel) : resumeLabel;
+    }
     const root = document.getElementById('chat-todo-plan');
     if (root && (status === 'active' || status === 'paused')) root.classList.add('is-open');
     notifyPanelContentChanged();
@@ -459,11 +490,43 @@ async function controlCurrentGoal(action) {
     const sid = currentSessionId;
     if (!sid) return;
     try {
-        const r = await fetch('/sessions/' + encodeURIComponent(sid) + '/goal/' + encodeURIComponent(action), { method: 'POST' });
+        const payload = {};
+        if (action === 'resume' && renderedGoalState
+            && renderedGoalState.token_budget != null
+            && Number(renderedGoalState.remaining_tokens || 0) <= 0) {
+            const promptText = typeof translateUiString === 'function'
+                ? translateUiString('请输入要增加的 Token 预算')
+                : '请输入要增加的 Token 预算';
+            const raw = window.prompt(promptText, '10000');
+            if (raw == null) return;
+            const additional = Number(raw);
+            if (!Number.isInteger(additional) || additional <= 0) {
+                const message = typeof translateUiString === 'function'
+                    ? translateUiString('预算必须是大于 0 的整数。')
+                    : '预算必须是大于 0 的整数。';
+                if (typeof showUiAlert === 'function') showUiAlert({ title: 'Goal', message: message, variant: 'error' });
+                return;
+            }
+            payload.additional_budget = additional;
+        }
+        const r = await fetch('/sessions/' + encodeURIComponent(sid) + '/goal/' + encodeURIComponent(action), {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        });
         const data = await r.json();
         if (r.ok && sid === currentSessionId) renderGoalCard(data.goal || null);
+        if (!r.ok && typeof showUiAlert === 'function') {
+            const title = typeof translateUiString === 'function' ? translateUiString('Goal 操作失败') : 'Goal 操作失败';
+            showUiAlert({ title: title, message: String(data.error || 'Unknown error'), variant: 'error' });
+        }
         if (action === 'resume') void refreshSingleSessionRow(sid);
-    } catch (e) { /* ignore */ }
+    } catch (e) {
+        if (typeof showUiAlert === 'function') {
+            const title = typeof translateUiString === 'function' ? translateUiString('Goal 操作失败') : 'Goal 操作失败';
+            showUiAlert({ title: title, message: String((e && e.message) || e), variant: 'error' });
+        }
+    }
 }
 
 function setTodoPlanForSession(sessionId, snapshot) {

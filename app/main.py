@@ -53,7 +53,12 @@ def _schedule_browser_open(host: str, port: int) -> None:
 
 
 if __name__ == "__main__":
-    from webui import fastapi_app, schedule_runtime_auto_migration
+    from webui import (
+        fastapi_app,
+        schedule_runtime_auto_migration,
+        start_goal_runner,
+        stop_goal_runner,
+    )
     from agent_harness import refresh_executor_client_from_env
     
     # 确保配置正确加载，避免重启后400/401错误
@@ -67,8 +72,9 @@ if __name__ == "__main__":
         # 启动时打开浏览器
         _schedule_browser_open("127.0.0.1", _listen_port)
         schedule_runtime_auto_migration()
+        await start_goal_runner()
         yield
-        # 关闭时不需要特殊清理
+        await stop_goal_runner()
         
     fastapi_app.router.lifespan_context = lifespan
 

@@ -1,5 +1,19 @@
 # Runtime V2 Closure Status
 
+## Optimization update — 2026-07-17
+
+- Event corruption and unsupported schemas fail closed; model/context/subagent failures no longer become empty histories.
+- Snapshots and indexes are versioned rebuildable caches; normal projection updates are incremental and copy-on-write.
+- Disk snapshot checkpoints are coalesced with bounded tail recovery; reconnect and recent-turn reads use sparse Runtime V2 seq offsets.
+- Live reattach performs one UI-index catch-up and then advances by Runtime V2 seq.
+- Legacy migration is batched, rollback storage is disk-backed, and on-open/manual jobs receive queue priority.
+- Token UI keeps the previous provider scale while a post-rewrite checkpoint is stale; blob writes are atomic and reads verify SHA-256.
+- A copied 38 MB real-session benchmark measured steady-state append at 6–12.5 ms (first old-cache upgrade about 94 ms). A 10,000-row legacy UI migration completed in 1.98 seconds.
+- Final regression for this optimization pass: `522 passed, 1 skipped in 68.01s`; frontend dist-sync and commit-policy gates also pass.
+- The isolated Runtime V2 HTTP smoke returned 200. No controllable browser was exposed in the current automation environment, so the prior repository-native Chromium run remains the latest interactive browser evidence.
+
+See `docs/runtime_v2_optimization_20260717.md` for implementation and operational details.
+
 Date: 2026-07-16
 
 ## Verified State

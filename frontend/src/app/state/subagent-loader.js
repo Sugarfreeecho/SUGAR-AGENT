@@ -235,6 +235,19 @@ function bindSubagentFinalOnlyHistoryLoader(bodyEl, hostEl, agentId, hasOlder, r
     }, { passive: true });
 }
 
+async function loadSubagentOutputAsFinalEvent(parentSessionId, agentId) {
+    if (!parentSessionId || !agentId) throw new Error('missing subagent output context');
+    var url = '/sessions/' + encodeURIComponent(parentSessionId)
+        + '/subagents/' + encodeURIComponent(agentId) + '/output';
+    var resp = await fetch(url);
+    var data = null;
+    try { data = await resp.json(); } catch (ignore) { /* handled below */ }
+    if (!resp.ok || !data || !data.ok) {
+        throw new Error((data && data.error) || ('HTTP ' + resp.status));
+    }
+    return [{ type: 'final', content: String(data.content || '') }];
+}
+
 async function loadSubagentDetailInto(el, agentId, hostEl, sessionIdOpt) {
     if (!el || !agentId) return;
     if (el.dataset.loading === '1') return;
@@ -244,10 +257,26 @@ async function loadSubagentDetailInto(el, agentId, hostEl, sessionIdOpt) {
     el.innerHTML = '<div class="subagent-detail-empty">加载详情中…</div>';
     try {
         var isCollapsed = card && card.classList && !card.classList.contains('is-expanded') && card.classList.contains('subagent-grid-card');
-        var turnsParam = isCollapsed ? '&turns=3' : '&turns=10';
-        var resp = await fetch('/sessions/' + encodeURIComponent(agentId) + '/messages?' + turnsParam);
-        if (!resp.ok) throw new Error('HTTP ' + resp.status);
-        var data = await resp.json();
+        var parentSessionId = sessionIdOpt || currentSessionId || '';
+        var virtualTask = !!(card && card.dataset && card.dataset.virtualTask === '1');
+        var data;
+        if (virtualTask) {
+            data = { events: await loadSubagentOutputAsFinalEvent(parentSessionId, agentId) };
+        } else {
+            var turnsParam = isCollapsed ? '&turns=3' : '&turns=10';
+            var resp = await fetch('/sessions/' + encodeURIComponent(agentId) + '/messages?' + turnsParam);
+            if (!resp.ok) {
+                var canUseOutput = !!(card && card.dataset && card.dataset.outputFile === '1' && parentSessionId);
+                if (!canUseOutput) throw new Error('HTTP ' + resp.status);
+                try {
+                    data = { events: await loadSubagentOutputAsFinalEvent(parentSessionId, agentId) };
+                } catch (outputError) {
+                    throw new Error('HTTP ' + resp.status + '; output fallback failed: ' + String(outputError));
+                }
+            } else {
+                data = await resp.json();
+            }
+        }
 
         var events, hasOlder, rangeStart;
         if (data && Array.isArray(data)) {

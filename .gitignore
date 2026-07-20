@@ -31,6 +31,7 @@ design-previews/
 
 # Local runtime/workspace data
 workspace/
+.myagent/
 
 # Bundled/interpreter/runtime folders
 python/

@@ -73,7 +73,7 @@
                                         <div class="chat-goal-actions">
                                             <button type="button" id="chat-goal-pause" onclick="controlCurrentGoal('pause')">暂停</button>
                                             <button type="button" id="chat-goal-resume" onclick="controlCurrentGoal('resume')">继续</button>
-                                            <button type="button" onclick="controlCurrentGoal('cancel')">取消</button>
+                                            <button type="button" id="chat-goal-cancel" onclick="controlCurrentGoal('cancel')">取消</button>
                                         </div>
                                     </section>
                                     <div class="chat-todo-plan-title">当前计划<button class="chat-todo-plan-close" type="button" aria-label="清除计划" data-ui-tip="清除当前计划" onclick="clearTodoPlan()">×</button></div>
@@ -184,6 +184,15 @@
                     </div>
                 </div>
                 <div class="settings-modal__section">
+                    <div class="settings-modal__label">Agent Team（实验功能）</div>
+                    <div class="settings-theme-row" role="group" aria-label="Agent Team 功能开关">
+                        <button type="button" id="settings-agent-team-off" class="settings-theme-btn">关闭（默认）</button>
+                        <button type="button" id="settings-agent-team-on" class="settings-theme-btn">启用</button>
+                    </div>
+                    <div id="settings-agent-team-status" class="settings-feature-status" role="status" aria-live="polite">正在读取状态…</div>
+                    <button type="button" id="settings-agent-team-manage" class="settings-advanced-btn" disabled>管理当前会话团队</button>
+                </div>
+                <div class="settings-modal__section">
                     <div class="settings-modal__label">环境与 API</div>
                     <button type="button" id="settings-env-advanced" class="settings-advanced-btn">高级设置</button>
                     <div style="margin-top:.45rem;color:var(--text-tertiary);font-size:0.72rem;line-height:1.45;">编辑完整 .env，保存后立即写回磁盘（部分项需重启服务）。</div>
@@ -193,6 +202,52 @@
                     <div class="settings-modal__label">Hooks / Plugins</div>
                     <button type="button" id="settings-extensions" class="settings-advanced-btn">扩展管理</button>
                 </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="agent-team-modal-root" class="settings-modal-overlay" aria-hidden="true">
+        <div class="settings-modal agent-team-modal" role="dialog" aria-modal="true" aria-labelledby="agent-team-modal-title" tabindex="-1">
+            <div class="settings-modal__head">
+                <div>
+                    <h2 id="agent-team-modal-title" class="settings-modal__title">Agent Team</h2>
+                    <div id="agent-team-modal-subtitle" class="settings-feature-status">当前会话团队控制面板</div>
+                </div>
+                <button type="button" id="agent-team-modal-close" class="settings-modal__close" aria-label="关闭">×</button>
+            </div>
+            <div class="agent-team-toolbar">
+                <button type="button" id="agent-team-refresh" class="settings-theme-btn">刷新</button>
+                <button type="button" id="agent-team-shutdown" class="settings-theme-btn">请求关停</button>
+                <button type="button" id="agent-team-complete-shutdown" class="settings-theme-btn">完成关停</button>
+                <button type="button" id="agent-team-archive" class="settings-theme-btn">归档</button>
+            </div>
+            <div id="agent-team-error" class="settings-feature-status is-error hidden" role="alert"></div>
+            <div id="agent-team-empty" class="agent-team-empty hidden">
+                <p>当前会话还没有团队。</p>
+                <div class="agent-team-inline-form">
+                    <input id="agent-team-title-input" class="agent-team-input" type="text" maxlength="200" placeholder="团队名称（可选）">
+                    <button type="button" id="agent-team-create" class="settings-advanced-btn">创建团队</button>
+                </div>
+            </div>
+            <div id="agent-team-content" class="agent-team-content hidden">
+                <div id="agent-team-summary" class="agent-team-summary"></div>
+                <section class="agent-team-section">
+                    <h3>成员</h3>
+                    <div id="agent-team-members" class="agent-team-list"></div>
+                    <p class="agent-team-help">持久成员由 Agent 调用 team(action="spawn_member") 创建和派工。</p>
+                </section>
+                <section class="agent-team-section">
+                    <h3>共享任务</h3>
+                    <div class="agent-team-inline-form">
+                        <input id="agent-team-task-title" class="agent-team-input" type="text" maxlength="300" placeholder="新任务标题">
+                        <button type="button" id="agent-team-task-create" class="settings-advanced-btn">添加任务</button>
+                    </div>
+                    <div id="agent-team-tasks" class="agent-team-list"></div>
+                </section>
+                <section class="agent-team-section">
+                    <h3>权限请求</h3>
+                    <div id="agent-team-permissions" class="agent-team-list"></div>
+                </section>
             </div>
         </div>
     </div>
