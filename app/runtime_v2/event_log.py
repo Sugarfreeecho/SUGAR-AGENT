@@ -3,12 +3,41 @@ from __future__ import annotations
 import json
 import os
 import threading
+import uuid
 from contextlib import contextmanager
 from collections import deque
 from pathlib import Path
 from typing import Callable, Dict, Iterable, List, Optional
 
 from .event_schema import RuntimeEvent
+from .versions import SEQ_OFFSET_INDEX_VERSION
+
+
+_SEQ_OFFSET_STRIDE = 32
+
+
+class RuntimeEventLogCorruptionError(RuntimeError):
+    """Raised when the append-only fact source contains an unreadable row."""
+
+    def __init__(
+        self,
+        session_id: str,
+        path: Path,
+        *,
+        line_number: Optional[int] = None,
+        byte_offset: Optional[int] = None,
+        detail: str = "invalid runtime event",
+    ) -> None:
+        location = f"line {line_number}" if line_number is not None else f"byte {byte_offset or 0}"
+        super().__init__(
+            f"Runtime V2 event log is corrupt for session {session_id!r} at {location}: {detail}. "
+            "Run the explicit Runtime V2 repair service before continuing."
+        )
+        self.session_id = session_id
+        self.path = path
+        self.line_number = line_number
+        self.byte_offset = byte_offset
+        self.detail = detail
 
 
 class SessionEventLog:
@@ -35,6 +64,9 @@ class SessionEventLog:
 
     def event_path(self, session_id: str) -> Path:
         return self.session_dir(session_id) / "events.jsonl"
+
+    def seq_offset_index_path(self, session_id: str) -> Path:
+        return self.session_dir(session_id) / "snapshots" / "seq_offset_index.json"
 
     def append(self, session_id: str, event_type: str, payload: Optional[dict] = None, run_id: Optional[str] = None) -> RuntimeEvent:
         with self.session_transaction(session_id):
@@ -71,10 +103,12 @@ class SessionEventLog:
             json.dumps(event.to_dict(), ensure_ascii=False, separators=(",", ":")) + "\n"
             for event in events
         ]
+        start_offset = path.stat().st_size if path.exists() else 0
         with path.open("a", encoding="utf-8", newline="\n") as fh:
             fh.writelines(encoded)
             fh.flush()
         self._update_seq_cache(session_id, events[-1].seq)
+        self._update_seq_offset_index_after_append(session_id, events, encoded, start_offset)
         return events
 
     def _append_unlocked(self, session_id: str, event_type: str, payload: Optional[dict] = None, run_id: Optional[str] = None) -> RuntimeEvent:
@@ -88,11 +122,13 @@ class SessionEventLog:
         )
         path = self.event_path(session_id)
         path.parent.mkdir(parents=True, exist_ok=True)
+        start_offset = path.stat().st_size if path.exists() else 0
+        encoded = json.dumps(event.to_dict(), ensure_ascii=False, separators=(",", ":")) + "\n"
         with path.open("a", encoding="utf-8", newline="\n") as fh:
-            fh.write(json.dumps(event.to_dict(), ensure_ascii=False, separators=(",", ":")))
-            fh.write("\n")
+            fh.write(encoded)
             fh.flush()
         self._update_seq_cache(session_id, event.seq)
+        self._update_seq_offset_index_after_append(session_id, [event], [encoded], start_offset)
         return event
 
     def append_event(self, event: RuntimeEvent) -> RuntimeEvent:
@@ -109,25 +145,38 @@ class SessionEventLog:
                 )
             path = self.event_path(event.session_id)
             path.parent.mkdir(parents=True, exist_ok=True)
+            start_offset = path.stat().st_size if path.exists() else 0
+            encoded = json.dumps(event.to_dict(), ensure_ascii=False, separators=(",", ":")) + "\n"
             with path.open("a", encoding="utf-8", newline="\n") as fh:
-                fh.write(json.dumps(event.to_dict(), ensure_ascii=False, separators=(",", ":")))
-                fh.write("\n")
+                fh.write(encoded)
                 fh.flush()
             self._update_seq_cache(event.session_id, event.seq)
+            self._update_seq_offset_index_after_append(
+                event.session_id, [event], [encoded], start_offset
+            )
             return event
 
     def read_all(self, session_id: str) -> List[RuntimeEvent]:
         return list(self.iter_events(session_id))
 
     def read_after_seq(self, session_id: str, after_seq: int) -> List[RuntimeEvent]:
-        return [ev for ev in self.iter_events(session_id) if ev.seq > after_seq]
+        after = int(after_seq)
+        entries = self._read_or_build_seq_offset_index(session_id)
+        offset = self._offset_at_or_before_seq(entries, after + 1)
+        return [
+            ev for ev in self._iter_events_from_offset(session_id, offset)
+            if ev.seq > after
+        ]
 
     def read_latest(self, session_id: str, limit: int) -> List[RuntimeEvent]:
         limit = max(0, int(limit))
         if limit <= 0:
             return []
+        entries = self._read_or_build_seq_offset_index(session_id)
+        entry_back = max(1, (limit + _SEQ_OFFSET_STRIDE - 1) // _SEQ_OFFSET_STRIDE + 1)
+        offset = int(entries[-entry_back][1]) if len(entries) >= entry_back else 0
         rows = deque(maxlen=limit)
-        for ev in self.iter_events(session_id):
+        for ev in self._iter_events_from_offset(session_id, offset):
             rows.append(ev)
         return list(rows)
 
@@ -141,8 +190,9 @@ class SessionEventLog:
         """Read a suffix of the JSONL log without scanning from the beginning.
 
         Returns ``(events, reached_start)`` with events in chronological order.
-        Bad trailing lines are skipped so a partially written line cannot make a
-        session unloadable.
+        A partial first line is discarded when reading a suffix. Any malformed
+        complete or trailing row is surfaced as corruption instead of silently
+        deleting facts from the projection.
         """
         max_bytes = max(4096, int(max_bytes))
         max_events = max(1, int(max_events))
@@ -164,14 +214,23 @@ class SessionEventLog:
             else:
                 data = b""
         rows: deque[RuntimeEvent] = deque(maxlen=max_events)
-        for raw_line in data.splitlines():
+        base_offset = size - read_size
+        relative_offset = 0
+        for raw_line in data.splitlines(keepends=True):
             line = raw_line.strip()
             if not line:
+                relative_offset += len(raw_line)
                 continue
             try:
                 rows.append(RuntimeEvent.from_dict(json.loads(line.decode("utf-8"))))
-            except Exception:
-                continue
+            except Exception as exc:
+                raise RuntimeEventLogCorruptionError(
+                    session_id,
+                    path,
+                    byte_offset=base_offset + relative_offset,
+                    detail=str(exc),
+                ) from exc
+            relative_offset += len(raw_line)
         return list(rows), reached_start
 
     def read_before_seq(self, session_id: str, before_seq: int, limit: int) -> List[RuntimeEvent]:
@@ -179,25 +238,177 @@ class SessionEventLog:
         limit = max(0, int(limit))
         if limit <= 0:
             return []
+        entries = self._read_or_build_seq_offset_index(session_id)
+        eligible = [entry for entry in entries if int(entry[0]) < before]
+        entry_back = max(1, (limit + _SEQ_OFFSET_STRIDE - 1) // _SEQ_OFFSET_STRIDE + 1)
+        offset = int(eligible[-entry_back][1]) if len(eligible) >= entry_back else 0
         rows = deque(maxlen=limit)
-        for ev in self.iter_events(session_id):
+        for ev in self._iter_events_from_offset(session_id, offset):
             if ev.seq < before:
                 rows.append(ev)
+            else:
+                break
         return list(rows)
 
     def iter_events(self, session_id: str) -> Iterable[RuntimeEvent]:
+        yield from self._iter_events_from_offset(session_id, 0)
+
+    def _iter_events_from_offset(self, session_id: str, offset: int) -> Iterable[RuntimeEvent]:
         path = self.event_path(session_id)
         if not path.exists():
             return
-        with path.open("r", encoding="utf-8") as fh:
-            for line in fh:
-                line = line.strip()
+        with path.open("rb") as fh:
+            fh.seek(max(0, int(offset)))
+            for line_number, raw_line in enumerate(fh, 1):
+                line = raw_line.strip()
                 if not line:
                     continue
                 try:
-                    yield RuntimeEvent.from_dict(json.loads(line))
-                except Exception:
-                    continue
+                    yield RuntimeEvent.from_dict(json.loads(line.decode("utf-8")))
+                except Exception as exc:
+                    raise RuntimeEventLogCorruptionError(
+                        session_id,
+                        path,
+                        line_number=line_number,
+                        detail=str(exc),
+                    ) from exc
+
+    @staticmethod
+    def _offset_at_or_before_seq(entries: List[List[int]], target_seq: int) -> int:
+        offset = 0
+        target = int(target_seq)
+        for seq, candidate in entries:
+            if int(seq) > target:
+                break
+            offset = int(candidate)
+        return offset
+
+    def _read_or_build_seq_offset_index(self, session_id: str) -> List[List[int]]:
+        path = self.seq_offset_index_path(session_id)
+        event_path = self.event_path(session_id)
+        if not event_path.exists():
+            return []
+        try:
+            with path.open("r", encoding="utf-8") as fh:
+                data = json.load(fh)
+            entries = data.get("entries") if isinstance(data, dict) else None
+            if (
+                int(data.get("index_version") or 0) == SEQ_OFFSET_INDEX_VERSION
+                and isinstance(entries, list)
+                and self._seq_offset_entries_valid(event_path, entries)
+            ):
+                return [[int(row[0]), int(row[1])] for row in entries]
+        except Exception:
+            pass
+        return self._build_seq_offset_index(session_id)
+
+    @staticmethod
+    def _seq_offset_entries_valid(event_path: Path, entries: List[object]) -> bool:
+        if not entries:
+            return event_path.stat().st_size == 0
+        last_seq = -1
+        last_offset = -1
+        try:
+            for raw in entries:
+                if not isinstance(raw, list) or len(raw) != 2:
+                    return False
+                seq, offset = int(raw[0]), int(raw[1])
+                if seq <= last_seq or offset <= last_offset:
+                    return False
+                last_seq, last_offset = seq, offset
+            if last_offset >= event_path.stat().st_size:
+                return False
+            with event_path.open("rb") as fh:
+                fh.seek(last_offset)
+                row = RuntimeEvent.from_dict(json.loads(fh.readline().decode("utf-8")))
+            return int(row.seq) == last_seq
+        except Exception:
+            return False
+
+    def _build_seq_offset_index(self, session_id: str) -> List[List[int]]:
+        event_path = self.event_path(session_id)
+        if not event_path.exists():
+            return []
+        entries: List[List[int]] = []
+        offset = 0
+        with event_path.open("rb") as fh:
+            for ordinal, raw_line in enumerate(fh):
+                line = raw_line.strip()
+                if line:
+                    try:
+                        event = RuntimeEvent.from_dict(json.loads(line.decode("utf-8")))
+                    except Exception as exc:
+                        raise RuntimeEventLogCorruptionError(
+                            session_id,
+                            event_path,
+                            line_number=ordinal + 1,
+                            detail=str(exc),
+                        ) from exc
+                    if ordinal % _SEQ_OFFSET_STRIDE == 0:
+                        entries.append([int(event.seq), int(offset)])
+                offset += len(raw_line)
+        self._write_seq_offset_index(session_id, entries)
+        return entries
+
+    def _write_seq_offset_index(self, session_id: str, entries: List[List[int]]) -> None:
+        path = self.seq_offset_index_path(session_id)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}.{uuid.uuid4().hex}.tmp")
+        try:
+            with tmp.open("x", encoding="utf-8") as fh:
+                json.dump(
+                    {
+                        "index_version": SEQ_OFFSET_INDEX_VERSION,
+                        "stride": _SEQ_OFFSET_STRIDE,
+                        "entries": entries,
+                    },
+                    fh,
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                )
+                fh.flush()
+                os.fsync(fh.fileno())
+            os.replace(tmp, path)
+        finally:
+            try:
+                tmp.unlink(missing_ok=True)
+            except OSError:
+                pass
+
+    def _update_seq_offset_index_after_append(
+        self,
+        session_id: str,
+        events: List[RuntimeEvent],
+        encoded: List[str],
+        start_offset: int,
+    ) -> None:
+        """Best-effort maintenance for a rebuildable sparse index.
+
+        Index failure must never turn a successfully appended fact into an
+        apparent failed transaction; readers will rebuild it lazily.
+        """
+        path = self.seq_offset_index_path(session_id)
+        if not path.exists():
+            return
+        try:
+            with path.open("r", encoding="utf-8") as fh:
+                data = json.load(fh)
+            if int(data.get("index_version") or 0) != SEQ_OFFSET_INDEX_VERSION:
+                path.unlink(missing_ok=True)
+                return
+            entries = [list(row) for row in data.get("entries") or []]
+            offset = int(start_offset)
+            for event, row in zip(events, encoded):
+                if (int(event.seq) - 1) % _SEQ_OFFSET_STRIDE == 0:
+                    if not entries or int(entries[-1][0]) < int(event.seq):
+                        entries.append([int(event.seq), offset])
+                offset += len(row.encode("utf-8"))
+            self._write_seq_offset_index(session_id, entries)
+        except Exception:
+            try:
+                path.unlink(missing_ok=True)
+            except Exception:
+                pass
 
     def next_seq(self, session_id: str) -> int:
         cached = self._cached_last_seq(session_id)
@@ -277,6 +488,10 @@ class SessionEventLog:
                     fh.write("\n")
             tmp.replace(path)
             self._update_seq_cache(session_id, max(seqs, default=0))
+            try:
+                self.seq_offset_index_path(session_id).unlink(missing_ok=True)
+            except Exception:
+                pass
             return {
                 "kept": len(kept),
                 "dropped": dropped,
