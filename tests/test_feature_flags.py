@@ -26,6 +26,7 @@ def _extract_steer_mode(html: str) -> str:
 def test_index_html_injects_conservative_feature_values(monkeypatch):
     import webui
 
+    monkeypatch.delenv("AGENT_TEAM_ENABLED", raising=False)
     monkeypatch.setenv("MYAGENT_ENABLE_FOLLOWUP_RESTART", "0")
     monkeypatch.setenv("MYAGENT_ENABLE_STREAM_RECONNECT", "0")
     monkeypatch.setenv("MYAGENT_ENABLE_FINAL_RECONCILE", "1")
@@ -34,6 +35,7 @@ def test_index_html_injects_conservative_feature_values(monkeypatch):
 
     assert flags == {
         "goal": True,
+        "agentTeam": False,
         "followupRestart": False,
         "streamReconnect": False,
         "finalReconcile": True,
@@ -43,6 +45,7 @@ def test_index_html_injects_conservative_feature_values(monkeypatch):
 def test_index_html_injects_independent_feature_overrides(monkeypatch):
     import webui
 
+    monkeypatch.setenv("AGENT_TEAM_ENABLED", "true")
     monkeypatch.setenv("MYAGENT_ENABLE_FOLLOWUP_RESTART", "1")
     monkeypatch.setenv("MYAGENT_ENABLE_STREAM_RECONNECT", "true")
     monkeypatch.setenv("MYAGENT_ENABLE_FINAL_RECONCILE", "0")
@@ -51,6 +54,7 @@ def test_index_html_injects_independent_feature_overrides(monkeypatch):
 
     assert flags == {
         "goal": True,
+        "agentTeam": True,
         "followupRestart": True,
         "streamReconnect": True,
         "finalReconcile": False,
@@ -63,6 +67,14 @@ def test_index_html_injects_goal_feature_override(monkeypatch):
     monkeypatch.setenv("GOAL_ENABLED", "0")
     flags = _extract_feature_flags(str(webui.get_index_html()))
     assert flags["goal"] is False
+
+
+def test_index_html_defaults_agent_team_disabled(monkeypatch):
+    import webui
+
+    monkeypatch.delenv("AGENT_TEAM_ENABLED", raising=False)
+    flags = _extract_feature_flags(str(webui.get_index_html()))
+    assert flags["agentTeam"] is False
 
 
 def test_index_html_defaults_stream_reconnect_enabled(monkeypatch):
@@ -747,3 +759,13 @@ def test_followup_http_retry_after_run_finished_returns_consumed_operation(monke
     assert payload["deduplicated"] is True
     assert payload["item"]["state"] == "consumed"
     assert payload["restart"] is False
+
+
+def test_subagent_card_falls_back_to_saved_output_when_messages_fail():
+    loader = (ROOT / "frontend/src/app/state/subagent-loader.js").read_text(encoding="utf-8")
+    renderers = (ROOT / "frontend/src/app/state/subagent-renderers.js").read_text(encoding="utf-8")
+
+    assert "loadSubagentOutputAsFinalEvent" in loader
+    assert "card.dataset.outputFile === '1'" in loader
+    assert "card.dataset.virtualTask === '1'" in loader
+    assert "data-virtual-task" in renderers

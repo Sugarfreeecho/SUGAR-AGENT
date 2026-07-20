@@ -1,4 +1,5 @@
 import json
+import asyncio
 import sys
 from pathlib import Path
 
@@ -108,6 +109,44 @@ def test_global_plugin_switch_removes_every_component(tmp_path, monkeypatch):
     assert agent_extensions.plugin_instruction_resources() == {}
 
 
+def test_global_hook_switch_prevents_project_and_plugin_execution(tmp_path, monkeypatch):
+    import agent_extensions
+
+    sentinel = tmp_path / "must-not-exist.txt"
+    _write_json(
+        tmp_path / "hooks.json",
+        {
+            "version": 1,
+            "hooks": {
+                "PreToolUse": [
+                    {
+                        "id": "disabled-hook",
+                        "matcher": "run_shell",
+                        "command": f'echo executed > "{sentinel}"',
+                        "failure_policy": "block",
+                    }
+                ]
+            },
+        },
+    )
+    monkeypatch.setattr(agent_extensions, "_project_root", lambda: tmp_path)
+    monkeypatch.setenv("HOOKS_ENABLED", "0")
+    monkeypatch.setenv("HOOKS_PATH", str(tmp_path / "hooks.json"))
+    monkeypatch.setenv("PLUGINS_ENABLED", "0")
+    agent_extensions.invalidate_extension_caches()
+
+    result = asyncio.run(
+        agent_extensions.dispatch_hook(
+            "PreToolUse",
+            {"tool_name": "run_shell", "tool_input": {"command": "echo unsafe"}},
+        )
+    )
+
+    assert result.enabled is False
+    assert result.skipped is True
+    assert not sentinel.exists()
+
+
 def test_extensions_management_page_and_routes_are_wired():
     html = (ROOT / "app/templates/extensions_config.html").read_text(encoding="utf-8")
     webui = (ROOT / "app/webui.py").read_text(encoding="utf-8")
@@ -117,7 +156,101 @@ def test_extensions_management_page_and_routes_are_wired():
     assert '@fastapi_app.get("/api/extensions")' in webui
     assert '@fastapi_app.post("/api/extensions/reload")' in webui
     assert '@fastapi_app.post("/api/plugins/{plugin_id}/enabled")' in webui
-    assert "window.open('/setup/extensions'" in frontend
+    assert "extensionsUrl = '/setup/env'" in frontend
+    assert "window.open(extensionsUrl" in frontend
+    advanced = (ROOT / "app/templates/advance_config.html").read_text(encoding="utf-8")
+    setup_i18n = (ROOT / "app/templates/static/setup_i18n.js").read_text(encoding="utf-8")
+    assert 'data-settings-tab="extensions"' in advanced
+    assert 'data-settings-panel="extensions"' in advanced
+    assert 'location.hash==="#extensions"' in advanced
+    assert "async function loadExtensions()" in advanced
+    assert "'扩展管理':'Extension management'" in setup_i18n
+    assert "'已注册 Hooks':'Registered hooks'" in setup_i18n
+    assert "'插件状态已更新。':'Plugin state updated.'" in setup_i18n
+    assert 'id="wizard-language-toggle"' in advanced
+    assert 'extText("正在加载扩展…","Loading extensions…")' in advanced
+
+
+def test_advanced_env_api_synthesizes_feature_switches_when_missing(tmp_path, monkeypatch):
+    import webui
+
+    env_path = tmp_path / ".env"
+    env_path.write_text(
+        "EXECUTOR_LLM=test-model\nOPENAI_API_KEY=legacy-key\nWORK_DIR=./workspace\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(webui, "dotenv_file_path", lambda: env_path)
+
+    response = asyncio.run(webui.get_env_snapshot())
+    payload = json.loads(response.body)
+    variables = {
+        row["key"]: row
+        for group in payload["groups"]
+        for row in group["vars"]
+    }
+
+    assert variables["GOAL_ENABLED"]["value"] == "1"
+    assert variables["HOOKS_ENABLED"]["value"] == "1"
+    assert variables["PLUGINS_ENABLED"]["value"] == "1"
+    assert "EXECUTOR_LLM" not in variables
+    assert "OPENAI_API_KEY" not in variables
+
+
+def test_setup_gate_depends_only_on_usable_model_profile(monkeypatch):
+    import webui
+
+    monkeypatch.setattr(webui.model_profiles, "sorted_profiles", lambda _root: [])
+    assert webui._is_configured() is False
+
+    monkeypatch.setattr(
+        webui.model_profiles,
+        "sorted_profiles",
+        lambda _root: [{
+            "id": "profile-a",
+            "model": "model-a",
+            "llm_type": "openai",
+            "base_url": "https://api.example.com/v1",
+            "api_key": "key",
+            "context_window": 128000,
+            "max_output_tokens": 8192,
+        }],
+    )
+    assert webui._is_configured() is True
+
+
+def test_setup_saves_model_to_profile_not_dotenv(tmp_path, monkeypatch):
+    import webui
+
+    class Request:
+        async def json(self):
+            return {
+                "llm_provider": "openai",
+                "llm_base_url": "https://api.example.com/v1",
+                "api_key": "profile-key",
+                "model_name": "model-a",
+                "context_window": "128000",
+                "max_output_tokens": "8192",
+                "work_dir": "./workspace",
+                "search_provider": "duckduckgo",
+            }
+
+    env_path = tmp_path / ".env"
+    monkeypatch.setattr(webui, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(webui, "dotenv_file_path", lambda: env_path)
+    monkeypatch.setattr(webui, "refresh_executor_client_from_env", lambda: None)
+    monkeypatch.setattr(webui, "_invalidate_executor_config_cache", lambda *_args: None)
+
+    result = asyncio.run(webui.save_config(Request()))
+
+    assert result["ok"] is True
+    env_text = env_path.read_text(encoding="utf-8")
+    assert "WORK_DIR=./workspace" in env_text
+    assert "EXECUTOR_LLM" not in env_text
+    assert "OPENAI_API_KEY" not in env_text
+    profiles = webui.model_profiles.sorted_profiles(tmp_path)
+    assert len(profiles) == 1
+    assert profiles[0]["model"] == "model-a"
+    assert profiles[0]["api_key"] == "profile-key"
 
 
 def test_agent_loop_wires_hooks_before_safety_approval_and_across_lifecycles():

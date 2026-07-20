@@ -256,7 +256,7 @@ def test_messages_turn_page_prefers_runtime_v2_projection(monkeypatch, tmp_path)
     ))
     payload = _json_response_payload(response)
 
-    assert payload["source"] == "runtime_v2_tail_index"
+    assert payload["source"] == "runtime_v2_seq_index"
     assert payload["total"] == 4
     assert [event["content"] for event in payload["events"]] == ["u0", "a0", "u1", "a1"]
     assert fake.page_calls == []
@@ -468,9 +468,9 @@ def test_history_snapshot_combines_v2_messages_count_and_toc(monkeypatch, tmp_pa
     assert payload["count"] == 6
     assert payload["count_source"] == "runtime_v2_page"
     assert payload["elapsed_ms"] >= 0
-    assert set(payload["timing"]) == {"read_page", "count", "user_turns", "context_tokens", "total"}
+    assert set(payload["timing"]) == {"read_page", "count", "user_turns", "context_tokens", "todo_plan", "total"}
     assert payload["timing"]["total"] >= 0
-    assert payload["messages"]["source"] == "runtime_v2_tail_index"
+    assert payload["messages"]["source"] == "runtime_v2_seq_index"
     assert [event["content"] for event in payload["messages"]["events"] if event.get("content")] == [
         "first question",
         "first answer",
@@ -532,7 +532,7 @@ def test_history_snapshot_uses_lightweight_user_turns(monkeypatch, tmp_path):
 
     assert payload["ok"] is True
     assert payload["user_turns"] == [{"event_index": 0, "preview": "u"}]
-    assert set(payload["timing"]) == {"read_page", "count", "user_turns", "context_tokens", "total"}
+    assert set(payload["timing"]) == {"read_page", "count", "user_turns", "context_tokens", "todo_plan", "total"}
 
 
 def test_context_tokens_snapshot_miss_uses_runtime_v2_compute_not_legacy(monkeypatch, tmp_path):
@@ -566,6 +566,59 @@ def test_context_tokens_snapshot_miss_uses_runtime_v2_compute_not_legacy(monkeyp
         "source": "runtime_v2_projection",
         "token_mode": "hybrid",
     }
+
+
+def test_context_tokens_stale_provider_value_does_not_switch_to_local_scale(monkeypatch):
+    import runtime_v2
+    import webui
+
+    monkeypatch.setattr(runtime_v2, "runtime_v2_primary", lambda: True)
+    monkeypatch.setattr(webui, "get_context_token_mode", lambda: "hybrid")
+    monkeypatch.setattr(webui, "_runtime_v2_context_snapshot", lambda _sid: {
+        "tokens": {
+            "estimated": 4321,
+            "threshold": 8192,
+            "token_source": "provider_exact",
+            "stale": True,
+            "stale_reason": "message_rewritten",
+        }
+    })
+    monkeypatch.setattr(
+        webui,
+        "compute_context_tokens_for_session",
+        lambda _sid: (_ for _ in ()).throw(AssertionError("must preserve provider scale")),
+    )
+
+    payload = _json_response_payload(asyncio.run(webui.get_session_context_tokens("s1")))
+
+    assert payload["estimated"] == 4321
+    assert payload["source"] == "runtime_v2_snapshot_stale"
+    assert payload["pending_recalculation"] is True
+
+
+def test_context_tokens_projection_failure_does_not_fall_back_to_local(monkeypatch):
+    import runtime_v2
+    import webui
+
+    monkeypatch.setattr(runtime_v2, "runtime_v2_primary", lambda: True)
+    monkeypatch.setattr(webui, "get_context_token_mode", lambda: "hybrid")
+    monkeypatch.setattr(
+        webui,
+        "_runtime_v2_context_snapshot",
+        lambda _sid: (_ for _ in ()).throw(OSError("corrupt projection")),
+    )
+    monkeypatch.setattr(
+        webui,
+        "compute_context_tokens_for_session",
+        lambda _sid: (_ for _ in ()).throw(AssertionError("must fail closed")),
+    )
+
+    response = asyncio.run(webui.get_session_context_tokens("s1"))
+    payload = _json_response_payload(response)
+
+    assert response.status_code == 500
+    assert payload["error"] == "runtime_v2_projection_failed"
+    assert payload["repair_required"] is True
 
 
 def test_user_turns_uses_lightweight_projection_index(monkeypatch, tmp_path):
@@ -671,6 +724,32 @@ def test_subagent_list_prefers_runtime_v2_store(monkeypatch, tmp_path):
     assert node["has_final"] is True
     assert node["event_count"] == 2
     assert node["output_file"] == output_path
+    assert node["virtual_task"] is False
+
+
+def test_subagent_list_marks_output_only_runtime_v2_task_virtual(monkeypatch, tmp_path):
+    import runtime_v2
+    from runtime_v2 import RuntimeSubagentStore
+    import webui
+
+    monkeypatch.setattr(runtime_v2, "runtime_v2_primary", lambda: True)
+    store = RuntimeSubagentStore(tmp_path)
+    output_path = store.write_task_output("s1", "runner1", "combined result")
+    store.upsert_task("s1", "runner1", {
+        "status": "completed",
+        "description": "best result",
+        "subagent_type": "best-of-n-runner",
+    })
+    fake = _NoLegacyUiSessionManager(tmp_path, [])
+    monkeypatch.setattr(webui, "session_manager", fake)
+
+    response = webui._build_session_subagents_response("s1", lite=True)
+    node = _json_response_payload(response)["subagents"][0]
+
+    assert node["id"] == "runner1"
+    assert node["output_file"] == output_path
+    assert node["event_count"] == 0
+    assert node["virtual_task"] is True
 
 
 def test_empty_subagent_list_runtime_v2_does_not_fallback_legacy(monkeypatch, tmp_path):

@@ -152,7 +152,7 @@ def test_probe_model_context_uses_context_probe_for_one_selected_model(monkeypat
     assert model["probe_succeeded"] is True
 
 
-def test_env_profile_participates_in_model_order(tmp_path):
+def test_model_order_contains_only_saved_profiles(tmp_path):
     saved = model_profiles.upsert_profile(
         tmp_path,
         {
@@ -164,26 +164,32 @@ def test_env_profile_participates_in_model_order(tmp_path):
             "max_output_tokens": 8192,
         },
     )
-    env = model_profiles.env_profile_from_env(
+    assert [p["id"] for p in model_profiles.sorted_profiles(tmp_path)] == [saved["id"]]
+    assert model_profiles.top_profile(tmp_path)["id"] == saved["id"]
+
+
+def test_legacy_env_profile_metadata_is_discarded_on_save(tmp_path):
+    path = model_profiles.profile_store_path(tmp_path)
+    path.write_text(
+        json.dumps({"env_profile": {"priority": 1}, "profiles": []}),
+        encoding="utf-8",
+    )
+
+    assert model_profiles.load_store(tmp_path) == {"profiles": []}
+    model_profiles.save_store(tmp_path, model_profiles.load_store(tmp_path))
+    assert "env_profile" not in json.loads(path.read_text(encoding="utf-8"))
+
+
+def test_local_profile_is_usable_without_api_key(tmp_path):
+    profile = model_profiles.upsert_profile(
         tmp_path,
         {
-            "EXECUTOR_LLM": "env-model",
-            "OPENAI_BASE_URL": "https://api.example.com/v1",
-            "OPENAI_API_KEY": "env-key",
+            "model": "qwen3",
+            "llm_type": "local",
+            "base_url": "http://localhost:11434/v1",
+            "context_window": 32768,
+            "max_output_tokens": 4096,
         },
     )
 
-    assert [p["id"] for p in model_profiles.sorted_profiles_with_env(tmp_path, env)] == [saved["id"], "__env__"]
-
-    model_profiles.reorder_profiles(tmp_path, ["__env__", saved["id"]])
-    env = model_profiles.env_profile_from_env(
-        tmp_path,
-        {
-            "EXECUTOR_LLM": "env-model",
-            "OPENAI_BASE_URL": "https://api.example.com/v1",
-            "OPENAI_API_KEY": "env-key",
-        },
-    )
-
-    assert [p["id"] for p in model_profiles.sorted_profiles_with_env(tmp_path, env)] == ["__env__", saved["id"]]
-    assert model_profiles.top_profile_id_with_env(tmp_path) == "__env__"
+    assert model_profiles.is_usable_profile(profile) is True
