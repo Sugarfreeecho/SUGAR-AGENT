@@ -70,6 +70,35 @@ load_app_dotenv()
 # ==================== 运行配置（非模型项来自 .env，模型项来自 profile）====================
 # 工程根目录（app/ 的上级）；兼容旧名 PROJECT_ROOT
 PROJECT_ROOT = _PROJECT_ROOT.parent
+
+
+def _register_legacy_dotenv_model_profile() -> dict:
+    """One-way migration from legacy .env model fields into the profile store."""
+    path = dotenv_file_path()
+    if not path.is_file():
+        return {"ok": True, "action": "skipped_missing_env", "profile": None}
+    try:
+        raw = dotenv.dotenv_values(path, interpolate=False)
+        values = {
+            str(k).lstrip("\ufeff").strip(): v
+            for k, v in raw.items()
+            if str(k or "").lstrip("\ufeff").strip() and v is not None
+        }
+        result = model_profiles.register_legacy_env_model_profile(PROJECT_ROOT, values)
+        if result.get("action") in {"created", "matched_existing"}:
+            profile = result.get("profile") if isinstance(result.get("profile"), dict) else {}
+            logging.getLogger(__name__).info(
+                "Legacy .env model configuration registered as model profile: action=%s id=%s",
+                result.get("action"),
+                profile.get("id") or "",
+            )
+        return result
+    except Exception as exc:
+        logging.getLogger(__name__).warning("Failed to import legacy .env model profile: %s", exc)
+        return {"ok": False, "action": "error", "profile": None}
+
+
+_LEGACY_ENV_MODEL_IMPORT = _register_legacy_dotenv_model_profile()
 _INITIAL_MODEL_PROFILE = model_profiles.top_profile(PROJECT_ROOT) or {}
 
 
@@ -954,6 +983,7 @@ def refresh_executor_client_from_env() -> None:
     global EXECUTOR_REASONING_EFFORT_RAW, LOCAL_LLM_HOST, LOCAL_LLM
 
     load_app_dotenv()
+    _register_legacy_dotenv_model_profile()
 
     profile = model_profiles.top_profile(PROJECT_ROOT) or {}
     EXECUTOR_LLM = str(profile.get("model") or "").strip()

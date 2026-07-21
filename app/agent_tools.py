@@ -24,6 +24,7 @@ import shutil
 import socket
 import subprocess
 import sys
+import threading
 import uuid
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
@@ -60,6 +61,8 @@ def clear_run_shell_interrupt_check() -> None:
 
 # 技能目录签名缓存，避免每次 react 轮次全量遍历
 _skills_cache: Dict[str, Any] = {"sig": None, "skills": None, "catalog": None}
+_skill_state_lock = threading.RLock()
+SKILL_STATE_PATH = PROJECT_ROOT / "skill_states.json"
 _read_file_line_count_cache: Dict[str, Tuple[int, int, int]] = {}
 
 
@@ -67,6 +70,47 @@ def invalidate_skills_cache() -> None:
     """Invalidate project and Plugin-provided Skill discovery snapshots."""
 
     _skills_cache.update({"sig": None, "skills": None, "catalog": None})
+
+
+def _load_skill_enabled_states() -> Dict[str, bool]:
+    try:
+        data = json.loads(SKILL_STATE_PATH.read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        return {}
+    raw = data.get("skills") if isinstance(data, dict) else None
+    if not isinstance(raw, dict):
+        return {}
+    return {
+        str(name): bool(value.get("enabled") if isinstance(value, dict) else value)
+        for name, value in raw.items()
+        if str(name).strip() and (
+            isinstance(value, bool)
+            or (isinstance(value, dict) and isinstance(value.get("enabled"), bool))
+        )
+    }
+
+
+def set_skill_enabled(skill_name: str, enabled: bool) -> bool:
+    """Persist whether a discovered Skill participates in prompts and activation."""
+    name = str(skill_name or "").strip()
+    if not name:
+        return False
+    with _skill_state_lock:
+        states = _load_skill_enabled_states()
+        if enabled:
+            states.pop(name, None)  # enabled is the backward-compatible default
+        else:
+            states[name] = False
+        out = {
+            "version": 1,
+            "skills": {key: {"enabled": value} for key, value in sorted(states.items())},
+        }
+        SKILL_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        tmp = SKILL_STATE_PATH.with_suffix(SKILL_STATE_PATH.suffix + ".tmp")
+        tmp.write_text(json.dumps(out, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        tmp.replace(SKILL_STATE_PATH)
+        invalidate_skills_cache()
+    return True
 
 
 def _plugin_skill_directories() -> Dict[str, Path]:
@@ -112,6 +156,11 @@ def _skills_tree_signature() -> tuple:
         rows.append(("__plugin_registry__", plugin_registry_signature()))
     except Exception:
         pass
+    try:
+        state_stat = SKILL_STATE_PATH.stat()
+        rows.append(("__skill_states__", int(state_stat.st_mtime_ns), int(state_stat.st_size)))
+    except OSError:
+        rows.append(("__skill_states__", 0, 0))
     return tuple(rows)
 
 
@@ -3477,10 +3526,11 @@ def _plugin_instruction_entries() -> List[Dict[str, Any]]:
     return entries
 
 
-def discover_skills() -> List[Dict]:
+def discover_skills(*, include_disabled: bool = False) -> List[Dict]:
     sig = _skills_tree_signature()
     if _skills_cache["sig"] == sig and _skills_cache["skills"] is not None:
-        return _skills_cache["skills"]
+        cached = _skills_cache["skills"]
+        return list(cached) if include_disabled else [s for s in cached if s.get("enabled") is not False]
 
     _skills_cache["catalog"] = None
     skills = []
@@ -3555,9 +3605,12 @@ def discover_skills() -> List[Dict]:
             logger.warning(f"Skill name conflict: {name}, already from {name_map[name]['base_dir']}, overwritten by {skill['base_dir']}")
         name_map[name] = skill
     out = list(name_map.values())
+    enabled_states = _load_skill_enabled_states()
+    for skill in out:
+        skill["enabled"] = enabled_states.get(str(skill.get("name") or ""), True)
     _skills_cache["sig"] = sig
     _skills_cache["skills"] = out
-    return out
+    return list(out) if include_disabled else [s for s in out if s.get("enabled") is not False]
 
 
 def get_skills_catalog() -> str:
@@ -3710,6 +3763,61 @@ def team(action: str = "status", **kwargs) -> str:
 _WEB_SEARCH_COUNT_SCHEMA_MAX = _web_search_max_results_cap()
 
 OPENAI_TOOL_DEFINITIONS: List[Dict[str, Any]] = [
+    _openai_function_schema(
+        "ask_user",
+        "Pause the current run and ask the user one to four structured questions when an answer is genuinely required to continue. "
+        "Use repository and environment evidence first. Call ask_user as the only tool in the assistant turn; do not batch it with any other tool. "
+        "Put the recommended option first and mark it in the label. The UI automatically provides an Other free-text choice, so never add an Other option yourself.",
+        {
+            "questions": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 4,
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "header": {
+                            "type": "string",
+                            "description": "Short tab/card label, at most 12 visible characters.",
+                            "maxLength": 12,
+                        },
+                        "question": {
+                            "type": "string",
+                            "description": "Complete user-facing question.",
+                        },
+                        "options": {
+                            "type": "array",
+                            "minItems": 2,
+                            "maxItems": 4,
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "label": {"type": "string", "description": "Concise option label."},
+                                    "description": {"type": "string", "description": "Impact or tradeoff of choosing this option."},
+                                    "preview": {"type": "string", "description": "Optional Markdown preview when visual comparison is useful."},
+                                },
+                                "required": ["label", "description"],
+                                "additionalProperties": False,
+                            },
+                        },
+                        "multi_select": {
+                            "type": "boolean",
+                            "description": "Whether the user may choose multiple options for this question.",
+                            "default": False,
+                        },
+                    },
+                    "required": ["header", "question", "options"],
+                    "additionalProperties": False,
+                },
+            },
+            "metadata": {
+                "type": "object",
+                "description": "Optional small JSON object for source or workflow metadata.",
+                "additionalProperties": True,
+            },
+        },
+        ["questions"],
+    ),
     _openai_function_schema(
         "ls",
         "List a directory (virtual `/` = workspace or an accessible OS path). Shows size; files get an approximate line count; directories use — and names end with /.",
@@ -3988,6 +4096,9 @@ OPENAI_TOOL_DEFINITIONS: List[Dict[str, Any]] = [
         "step or when the parent must perform the work itself. A subagent does not receive parent chat or tool history, "
         "so every start/resume prompt must be a self-contained handoff. Foreground start/resume waits for the final result; "
         "background mode returns an ID immediately. Never use resume to poll or collect an existing result. "
+        "When the user wants details of a subagent's execution process, ask that same existing subagent directly: resume the "
+        "relevant resumable direct child in the foreground with focused questions and obtain its complete first-hand account. "
+        "Do not infer process details from its final summary, and do not treat status or collect as a complete execution record. "
         "Reuse existing subagents before creating new ones: when a similar task may already have been delegated, call status "
         "without resume, then collect its result or resume that same direct child with a genuine follow-up. Use start only when "
         "no suitable subagent exists, the objective or scope is materially different, or deliberate independent parallelism is required. "
@@ -4006,11 +4117,12 @@ OPENAI_TOOL_DEFINITIONS: List[Dict[str, Any]] = [
                     "Choose exactly one action and prefer interacting with an existing suitable subagent over creating a similar one. "
                     "start: create a new subagent only after checking status when prior related delegation may exist; provide description "
                     "and prompt, omit resume. resume: continue the same objective with a new instruction, clarification, correction, or "
-                    "additional work; requires resume ID and non-empty prompt, and the ID must be a direct child. "
-                    "status: non-blocking state only; use it before start when unsure whether a reusable subagent exists; omit resume to "
+                    "additional work; requires resume ID and non-empty prompt, and the ID must be a direct child. Also use foreground "
+                    "resume to ask that subagent for a complete first-hand account when the user requests execution-process details. "
+                    "status: non-blocking state only, not execution details; use it before start when unsure whether a reusable subagent exists; omit resume to "
                     "list all actual subagents recursively, or pass one direct-child ID. "
                     "There is no multi-ID subset form. "
-                    "collect: wait for/read existing final output before deciding whether follow-up work is needed; resume is optional "
+                    "collect: wait for/read existing final output, not a complete process record, before deciding whether follow-up work is needed; resume is optional "
                     "(empty = all), and consumed pending results are cleared. "
                     "interrupt: cancel a running subagent; requires resume ID."
                 ),
@@ -4027,7 +4139,10 @@ OPENAI_TOOL_DEFINITIONS: List[Dict[str, Any]] = [
                 "description": (
                     "start/resume only: self-contained handoff. Include objective; scope and exact paths; relevant facts or prior "
                     "findings; constraints and non-goals; expected deliverable; and how to verify completion. Include exact errors, "
-                    "data, and decisions the subagent cannot infer. For resume, provide only the new instruction and changed facts."
+                    "data, and decisions the subagent cannot infer. For resume, provide only the new instruction and changed facts. "
+                    "For an execution-detail request, explicitly ask for all available steps, files, commands/tools, observations, "
+                    "decisions and reasons, failures/retries, verification performed, and remaining uncertainty; request facts from "
+                    "the subagent's own history rather than asking it to guess or merely repeat its final answer."
                 ),
             },
             "subagent_type": {

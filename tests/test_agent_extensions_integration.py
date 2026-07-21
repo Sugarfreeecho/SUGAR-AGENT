@@ -156,14 +156,21 @@ def test_extensions_management_page_and_routes_are_wired():
     assert '@fastapi_app.get("/api/extensions")' in webui
     assert '@fastapi_app.post("/api/extensions/reload")' in webui
     assert '@fastapi_app.post("/api/plugins/{plugin_id}/enabled")' in webui
-    assert "extensionsUrl = '/setup/env'" in frontend
-    assert "window.open(extensionsUrl" in frontend
+    assert "settings-extensions" not in frontend
     advanced = (ROOT / "app/templates/advance_config.html").read_text(encoding="utf-8")
     setup_i18n = (ROOT / "app/templates/static/setup_i18n.js").read_text(encoding="utf-8")
-    assert 'data-settings-tab="extensions"' in advanced
-    assert 'data-settings-panel="extensions"' in advanced
-    assert 'location.hash==="#extensions"' in advanced
+    assert advanced.count('data-settings-tab=') == 2
+    assert advanced.count('data-settings-panel=') == 2
+    assert 'data-settings-tab="model"' in advanced
+    assert 'data-settings-tab="advanced"' in advanced
+    assert 'data-advanced-tab="env"' in advanced
+    assert 'data-advanced-tab="mcp"' in advanced
+    assert 'data-advanced-tab="extensions"' in advanced
+    assert 'data-advanced-panel="mcp"' in advanced
+    assert 'h==="#extensions"' in advanced
     assert "async function loadExtensions()" in advanced
+    assert "async function loadMcpConfig()" in advanced
+    assert 'fetch("/api/mcp_config"' in advanced
     assert "'扩展管理':'Extension management'" in setup_i18n
     assert "'已注册 Hooks':'Registered hooks'" in setup_i18n
     assert "'插件状态已更新。':'Plugin state updated.'" in setup_i18n

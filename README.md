@@ -165,7 +165,9 @@ cd "MyAgent Developer"
 
 ### 2. 配置
 
-首次启动后通过浏览器向导创建 model profile。模型名称、API 地址、密钥、上下文窗口和推理参数全部保存在 `model_profiles.json`，不再从 `.env` 读取。
+首次启动后通过浏览器向导创建 model profile。模型名称、API 地址、密钥、上下文窗口和推理参数全部保存在 `model_profiles.json`，运行时不再从 `.env` 读取。
+
+升级旧版本时，如果 `app/.env` 中存在一套完整的旧模型配置，启动过程会自动将其一次性注册为 model profile。已有等价 profile 时直接复用，不会重复创建；导入后的 profile 可独立编辑，后续启动不会再被 `.env` 覆盖。
 
 `.env` 仅保留模型之外的运行配置，例如：
 
@@ -336,7 +338,7 @@ npm run install:hooks
 - 上下文窗口与输出限制
 - 思考模式、reasoning effort、temperature 和额外请求体
 
-首页是否进入配置向导，只取决于是否存在可用的 model profile；`.env` 中的旧模型字段不会参与判断或运行时回退。
+首页是否进入配置向导，只取决于自动导入完成后是否存在可用的 model profile；`.env` 中的旧模型字段只用于一次性迁移，不参与运行时回退。
 
 ### MCP 配置
 

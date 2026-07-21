@@ -15,6 +15,7 @@ DEFAULT_UNKNOWN_CONTEXT_WINDOW = 1_000_000
 DEFAULT_UNKNOWN_OUTPUT_TOKENS = 8_192
 CONTEXT_PROBE_TOKEN_COUNT = 3_000_000
 CONTEXT_PROBE_TIMEOUT = 8.0
+LEGACY_ENV_IMPORT_MARKER = "imported_from_legacy_env"
 
 CONTEXT_LIMIT_FIELDS = (
     "context_window",
@@ -398,6 +399,7 @@ def save_store(project_root: Path, data: dict) -> None:
 
 def public_profile(profile: dict) -> dict:
     out = dict(profile)
+    out["enabled"] = profile.get("enabled") is not False
     out["api_key_set"] = bool(str(profile.get("api_key") or "").strip())
     out["usable"] = is_usable_profile(profile)
     out.update(infer_model_task_capabilities(
@@ -411,6 +413,8 @@ def public_profile(profile: dict) -> dict:
 def is_usable_profile(profile: object) -> bool:
     """Return whether a saved profile has everything needed for execution."""
     if not isinstance(profile, dict):
+        return False
+    if profile.get("enabled") is False:
         return False
     if not str(profile.get("id") or "").strip():
         return False
@@ -427,6 +431,112 @@ def is_usable_profile(profile: object) -> bool:
     if _safe_int(profile.get("max_output_tokens"), 0) <= 0:
         return False
     return True
+
+
+def _legacy_env_profile_payload(env: dict[str, Any]) -> Optional[dict]:
+    """Translate a complete legacy .env model configuration into a profile payload."""
+    llm_type = str(env.get("EXECUTOR_LLM_TYPE") or "openai").strip().lower() or "openai"
+    if llm_type == "local":
+        model = str(env.get("LOCAL_LLM") or env.get("EXECUTOR_LLM") or "").strip()
+        local_host = str(env.get("LOCAL_LLM_HOST") or "").strip()
+        base_url = local_host or str(env.get("OPENAI_BASE_URL") or "").strip()
+        if local_host and base_url.rstrip("/").lower().endswith("/v1") is False:
+            base_url = base_url.rstrip("/") + "/v1"
+    else:
+        model = str(env.get("EXECUTOR_LLM") or "").strip()
+        base_url = str(env.get("OPENAI_BASE_URL") or "").strip()
+    api_key = str(env.get("OPENAI_API_KEY") or "").strip()
+    if not model or not base_url:
+        return None
+    if llm_type != "local" and (not api_key or "YOUR_API_KEY" in api_key.upper()):
+        return None
+
+    limits = infer_model_limits(model)
+    context_window = _safe_int(env.get("CONTEXT_WINDOW"), limits["context_window"])
+    max_output_tokens = _safe_int(env.get("MAX_OUTPUT_TOKENS"), limits["max_output_tokens"])
+    if context_window <= 0 or max_output_tokens <= 0:
+        return None
+    inferred_model_window = _safe_int(limits.get("context_window"), 0)
+    model_context_window = max(inferred_model_window, context_window + max_output_tokens)
+    return {
+        "name": model,
+        "model": model,
+        "llm_type": llm_type,
+        "base_url": base_url,
+        "api_key": api_key,
+        "context_window": context_window,
+        "max_output_tokens": max_output_tokens,
+        "model_context_window": model_context_window,
+        "thinking_mode": str(env.get("LLM_THINKING_MODE") or "").strip(),
+        "reasoning_effort": str(env.get("LLM_REASONING_EFFORT") or "").strip(),
+        "temperature": str(env.get("EXECUTOR_TEMPERATURE") or "").strip(),
+        "extra_body_json": str(env.get("LLM_EXTRA_BODY_JSON") or "").strip(),
+        "enabled": True,
+    }
+
+
+def _legacy_env_profile_identity(profile: dict) -> tuple[str, ...]:
+    return (
+        str(profile.get("model") or "").strip(),
+        str(profile.get("llm_type") or "openai").strip().lower(),
+        _normalize_base_url(str(profile.get("base_url") or "")),
+        str(profile.get("api_key") or "").strip(),
+        str(_safe_int(profile.get("context_window"), 0)),
+        str(_safe_int(profile.get("max_output_tokens"), 0)),
+        str(profile.get("thinking_mode") or "").strip().lower(),
+        str(profile.get("reasoning_effort") or "").strip().lower(),
+        str(profile.get("temperature") or "").strip(),
+        str(profile.get("extra_body_json") or "").strip(),
+    )
+
+
+def register_legacy_env_model_profile(project_root: Path, env: dict[str, Any]) -> dict:
+    """Import legacy .env model settings exactly once without making .env a runtime fallback."""
+    data = load_store(project_root)
+    profiles = [p for p in data.get("profiles", []) if isinstance(p, dict)]
+    already_imported = next(
+        (p for p in profiles if p.get(LEGACY_ENV_IMPORT_MARKER) is True),
+        None,
+    )
+    if already_imported is not None:
+        model = str(already_imported.get("model") or "").strip()
+        if str(already_imported.get("name") or "").strip() == f"{model}（从 .env 导入）":
+            already_imported["name"] = model
+            save_store(project_root, {"profiles": profiles})
+        return {"ok": True, "action": "already_imported", "profile": dict(already_imported)}
+
+    payload = _legacy_env_profile_payload(env)
+    if payload is None:
+        return {"ok": True, "action": "skipped_incomplete", "profile": None}
+
+    identity = _legacy_env_profile_identity(payload)
+    existing = next(
+        (p for p in profiles if _legacy_env_profile_identity(p) == identity),
+        None,
+    )
+    if existing is not None:
+        existing[LEGACY_ENV_IMPORT_MARKER] = True
+        existing.setdefault("source", "legacy_env_import")
+        existing.setdefault("legacy_env_imported_at", _now())
+        save_store(project_root, {"profiles": profiles})
+        return {"ok": True, "action": "matched_existing", "profile": dict(existing)}
+
+    digest = hashlib.sha256("\0".join(identity).encode("utf-8")).hexdigest()[:16]
+    payload["id"] = f"legacy-env-{digest}"
+    payload["priority"] = len(profiles) + 1
+    imported = upsert_profile(project_root, payload)
+
+    data = load_store(project_root)
+    for profile in data.get("profiles", []):
+        if not isinstance(profile, dict) or profile.get("id") != imported.get("id"):
+            continue
+        profile[LEGACY_ENV_IMPORT_MARKER] = True
+        profile["source"] = "legacy_env_import"
+        profile["legacy_env_imported_at"] = _now()
+        imported = dict(profile)
+        break
+    save_store(project_root, data)
+    return {"ok": True, "action": "created", "profile": imported}
 
 
 def upsert_profile(project_root: Path, payload: dict) -> dict:
@@ -452,6 +562,7 @@ def upsert_profile(project_root: Path, payload: dict) -> dict:
         raise ValueError("missing api_key")
     profile = dict(old or {})
     priority_default = _safe_int((old or {}).get("priority"), len(profiles) + 1)
+    enabled = payload.get("enabled") if "enabled" in payload else (old or {}).get("enabled", True)
     profile.update(
         {
             "id": pid,
@@ -467,6 +578,7 @@ def upsert_profile(project_root: Path, payload: dict) -> dict:
             "temperature": str(payload.get("temperature") or "").strip(),
             "extra_body_json": str(payload.get("extra_body_json") or "").strip(),
             "priority": _safe_int(payload.get("priority"), priority_default),
+            "enabled": enabled is not False,
             "updated_at": now,
         }
     )
@@ -524,6 +636,19 @@ def delete_profile(project_root: Path, profile_id: str) -> bool:
     return len(data["profiles"]) != before
 
 
+def set_profile_enabled(project_root: Path, profile_id: str, enabled: bool) -> Optional[dict]:
+    """Persist a profile's availability without deleting its configuration."""
+    data = load_store(project_root)
+    for profile in data.get("profiles", []):
+        if not isinstance(profile, dict) or str(profile.get("id") or "") != str(profile_id or ""):
+            continue
+        profile["enabled"] = bool(enabled)
+        profile["updated_at"] = _now()
+        save_store(project_root, data)
+        return dict(profile)
+    return None
+
+
 def get_profile(project_root: Path, profile_id: str) -> Optional[dict]:
     if not profile_id:
         return None
@@ -537,10 +662,12 @@ def fallback_chain(project_root: Path, selected_profile_id: str = "") -> list[di
     selected = get_profile(project_root, selected_profile_id)
     chain: list[dict] = []
     seen: set[str] = set()
-    if selected:
+    if is_usable_profile(selected):
         chain.append(selected)
         seen.add(str(selected.get("id") or ""))
     for profile in sorted_profiles(project_root):
+        if not is_usable_profile(profile):
+            continue
         pid = str(profile.get("id") or "")
         if pid and pid not in seen:
             chain.append(dict(profile))

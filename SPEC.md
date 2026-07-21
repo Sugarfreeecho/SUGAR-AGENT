@@ -428,7 +428,7 @@ SSE 是后端向前端展示 Agent 过程的主通道。事件至少应覆盖以
 
 ### 11.1 LLM 配置
 
-模型名称、类型、API 连接、密钥、窗口限制、推理模式、temperature 与 extra body 必须保存在 model profile 中，不得从 `.env` 配置或回退。
+模型名称、类型、API 连接、密钥、窗口限制、推理模式、temperature 与 extra body 必须保存在 model profile 中。旧 `.env` 模型字段仅允许在启动时执行一次性、幂等导入：等价 profile 不得重复创建，导入完成后不得持续覆盖 profile，也不得作为运行时回退。
 
 要求：
 
@@ -436,6 +436,7 @@ SSE 是后端向前端展示 Agent 过程的主通道。事件至少应覆盖以
 - API key 等敏感字段在 UI、日志和工具输出中必须脱敏。
 - OpenAI 兼容接口差异应在 `agent_harness.py` 或 `agent_openai.py` 中适配，避免散落到业务层。
 - 配置向导入口只检查是否存在可用 model profile。
+- 检查配置向导入口前必须先完成旧 `.env` 模型配置的自动注册。
 
 ### 11.2 工作区配置
 
@@ -658,7 +659,7 @@ SSE 是后端向前端展示 Agent 过程的主通道。事件至少应覆盖以
 - Runtime V2 UI projection 的 `ui_index`、`runtime_seq` 映射必须基于最终可见 UI 投影，而不是原始 runtime seq 列表；删除、改写、截断、visible range 等历史操作必须先作用到投影后再生成 count/user_turns/index。
 - Runtime V2 recent-turn tail 快路径遇到删除、改写、截断等 history ops 时必须回退到完整 projection，不能用原始尾窗绕过可见历史规则。
 - `user_steer` 只表示 UI 展示类型差异：模型上下文仍按普通 user message 处理，UI projection 必须恢复为执行过程块中的“追问”，且不得进入 TOC 用户轮次。
-- 运行中输入的追问先进入本地待发送队列；入队、刷新、服务端同步、当前 run 结束以及上一条追问消费完成均只能恢复或刷新队列状态，不得自动发送任何 `pending` 条目。只有用户点击该条“立即发送”才能创建/消费 durable steer；发送路径共用同一 per-session dispatcher，保证同一会话同一时刻只处理一条追问，失败时队列项必须保留。
+- 运行中输入的追问先进入本地待发送队列；入队、刷新及普通服务端同步本身均不得发送 `pending` 条目。用户可点击任意 pending 条目的“立即发送”；若未点击，则上一轮对话正常结束后必须先完成服务端对账，并仅在本地 run、服务端 stream、发送管线锁和会话 dispatcher 全部空闲时按 FIFO 自动续发队首一条；用户主动停止及其抑制窗口不得自动续发。`consumed` 事件只能唤醒同一套空闲门禁，不得绕过活跃 run 直接续发。新 run 启动后其余条目继续等待该 run 的终止边界。手动与自动发送共用同一 per-session dispatcher，重复终止事件必须合并为一个 drain；每个终止边界最多尝试一条，失败时保留队列项且不得形成自动重试环。
 - `interrupt` 追问必须用 `client_id/steer_id` 原位提交同一乐观行，并在追问处封口旧 process group；新运行即使从 `react_iter=1` 重新计数，也只能在新 process group 内查找/upsert reasoning 与 response 行，不得覆盖旧运行中编号相同的行。
 - “立即发送”steer 返回 409（服务端认为旧 run 已结束）后降级 `/chat`，降级前必须等待发送锁释放；若锁迟迟未释放或 `/chat` 未真正开跑，必须将队列项恢复为 `pending` 保留，不得静默返回或定时无条件删除。
 - 追问队列项必须持久化所有非终态状态（含 `clientId`、`steerId`、`status`、`mode`、`replacementRunId`），包括 `submitting/sending/accepted/restarting`；只有收到 `consumed/cancelled` 或 `/chat` 明确成功开跑后才删除。刷新恢复时 `submitting/sending` 回退为 `pending`（服务端按 `client_id` 幂等去重），`accepted/restarting` 保留由 watcher/server sync 继续追踪。
