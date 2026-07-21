@@ -60,6 +60,83 @@ async function testDispatcherDoesNotConsumePendingRows() {
   assert.strictEqual(queue.length, 1, 'status refresh must not consume a pending row');
 }
 
+async function testAutoDrainRequiresACompleteIdleBoundary() {
+  const queue = [
+    { id: 'first', status: '' },
+    { id: 'second', status: '' },
+  ];
+  const sent = [];
+  const timers = new Map();
+  let timerSeq = 0;
+  let localRunning = true;
+  let serverRunning = false;
+  let sendLocked = false;
+  let dispatchBusy = false;
+  let stopSuppressed = false;
+  const ctx = context({
+    followupDrainTimers: Object.create(null),
+    isSessionRunning: () => localRunning,
+    isSessionStreamStopSuppressed: () => stopSuppressed,
+    isServerStreamActive: () => serverRunning,
+    isSendPipelineLocked: () => sendLocked,
+    isFollowupDispatchBusy: () => dispatchBusy,
+    getFollowupQueue: () => queue,
+    renderFollowupQueue() {},
+    sendFollowupNow: async (id) => { sent.push(id); },
+    setTimeout: (fn, delay) => {
+      const id = ++timerSeq;
+      timers.set(id, { fn, delay });
+      return id;
+    },
+    clearTimeout: (id) => { timers.delete(id); },
+  });
+  vm.runInContext(
+    between('function isFollowupAutoDrainReady', 'function scheduleAcceptedFollowupWatch'),
+    ctx,
+  );
+
+  ctx.drainFollowupQueue('s');
+  assert.deepStrictEqual(sent, [], 'an active local run must block automatic transmission');
+  assert.strictEqual(timers.size, 0, 'an active run owns the next completion boundary; do not poll it');
+
+  localRunning = false;
+  serverRunning = true;
+  ctx.drainFollowupQueue('s');
+  assert.deepStrictEqual(sent, [], 'an active server stream must block automatic transmission');
+  assert.strictEqual(timers.size, 0);
+
+  serverRunning = false;
+  stopSuppressed = true;
+  ctx.drainFollowupQueue('s');
+  assert.deepStrictEqual(sent, [], 'a user stop suppression window must block automatic transmission');
+  assert.strictEqual(timers.size, 0, 'a user stop must not leave a delayed automatic send behind');
+
+  stopSuppressed = false;
+  sendLocked = true;
+  ctx.drainFollowupQueue('s');
+  assert.deepStrictEqual(sent, []);
+  assert.strictEqual(timers.size, 1, 'a transient send lock should schedule one retry');
+  const lockedRetry = [...timers.values()][0];
+  assert.strictEqual(lockedRetry.delay, 120);
+
+  // A nearer completion signal replaces the retry, while a later duplicate is ignored.
+  ctx.scheduleFollowupQueueDrain('s', 0);
+  assert.strictEqual(timers.size, 1, 'per-session drain timers must coalesce');
+  const immediateTimerId = [...timers.keys()][0];
+  ctx.scheduleFollowupQueueDrain('s', 250);
+  assert.strictEqual([...timers.keys()][0], immediateTimerId, 'a later duplicate must not replace an earlier drain');
+
+  sendLocked = false;
+  const immediate = timers.get(immediateTimerId);
+  timers.delete(immediateTimerId);
+  immediate.fn();
+  await Promise.resolve();
+  await Promise.resolve();
+  assert.deepStrictEqual(sent, ['first'], 'automatic continuation must send only the FIFO head');
+  assert.strictEqual(queue.length, 2, 'the dispatcher owns queue state transitions; drain must not delete rows');
+  assert.strictEqual(timers.size, 0, 'a completed attempt must not arm an automatic retry loop');
+}
+
 async function testRunStartSignalAndFallbacks() {
   const startHelper = between('function startFollowupChat', 'async function sendFollowupNowImpl');
 
@@ -213,6 +290,7 @@ function testAppendOptimisticRowCommitsInPlace() {
 
 (async () => {
   await testDispatcherDoesNotConsumePendingRows();
+  await testAutoDrainRequiresACompleteIdleBoundary();
   await testRunStartSignalAndFallbacks();
   testAppendOptimisticRowCommitsInPlace();
   process.stdout.write('followup dispatcher runtime checks passed\n');

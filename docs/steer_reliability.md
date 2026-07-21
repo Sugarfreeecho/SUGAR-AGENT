@@ -52,12 +52,18 @@ The browser persists a presentation queue but reconciles it with these APIs on
 session activation and while an operation is accepted. Unknown status is never
 treated as permission to create a new operation.
 
-Text entered while a run is active is first a local pending next turn. Refresh,
-server reconciliation, and run completion only restore or refresh the queue;
-they never transmit a pending item. The user must click “Send now” on that row,
-which creates a durable steer in the selected mode while a run is active. A
-failed request keeps the queue item instead of deleting it optimistically, and
-consuming one item never automatically sends the next pending row.
+Text entered while a run is active is first a local pending next turn. Enqueue,
+refresh, and ordinary server reconciliation do not transmit a pending item. A
+consumed event may only wake the same idle-gated drain; it cannot bypass an
+active run. The user may click “Send now” on any
+row to create a durable steer in the selected mode while a run is active. If the
+user does not, a real run-completion boundary first reconciles server state and
+then automatically sends only the FIFO head after the local run, server stream,
+send pipeline, and per-session dispatcher are all idle. Once that starts a new
+run, the remaining rows wait for its completion boundary. Duplicate completion
+signals are coalesced. A user-requested stop and its suppression window never
+auto-continue the queue. Each completion boundary attempts at most one row, so a
+failed request remains queued without entering an automatic retry loop.
 
 ## Run and content fencing
 
