@@ -1,4 +1,5 @@
 ﻿function setSendButtonState() {
+    syncMessageInputPlaceholder();
     sendBtn.disabled = false;
     const uploadBusy = isChatFileUploadBusy();
     const newSessionPreflight = !currentSessionId && optimisticNewSessionRun;
@@ -20,9 +21,29 @@
     }
 }
 
+const MESSAGE_INPUT_PLACEHOLDER_DEFAULT = '说说你想做什么…（Shift/Ctrl+Enter换行）';
+const MESSAGE_INPUT_PLACEHOLDER_RUNNING = 'Agent运行中，输入后续任务';
+const MESSAGE_INPUT_PLACEHOLDER_QUEUED = '点击`立即发送`插入提示';
+
+function syncMessageInputPlaceholder() {
+    if (!messageInput) return;
+    var queue = currentSessionId && typeof getFollowupQueue === 'function'
+        ? getFollowupQueue(currentSessionId)
+        : [];
+    var running = !!(optimisticNewSessionRun || isSessionRunning(currentSessionId));
+    var value = queue.length
+        ? MESSAGE_INPUT_PLACEHOLDER_QUEUED
+        : (running ? MESSAGE_INPUT_PLACEHOLDER_RUNNING : MESSAGE_INPUT_PLACEHOLDER_DEFAULT);
+    messageInput.placeholder = typeof translateUiString === 'function'
+        ? translateUiString(value)
+        : value;
+}
+
 function isChatFileUploadBusy() {
     return !!(messageInput && messageInput.dataset.fileUploadBusy === '1');
 }
+
+document.addEventListener('myagent:language-change', syncMessageInputPlaceholder);
 
 async function requestInterrupt(sessionId, runId, reason) {
     if (!sessionId) return;
@@ -1062,6 +1083,26 @@ async function loadSessionMessages(sessionId, scrollBehavior, opts) {
                 if (loadToken !== messageLoadEpoch || sessionId !== currentSessionId) return;
             }
         }
+        if (!chatStreamHasConversationContent()) {
+            suppressTocDuringSessionLoad = false;
+            setWelcome();
+            updateSessionTitle();
+            scheduleContextTokensAfterPaint(sessionId);
+            applyChatScrollAfterHistoryLoad(sessionId, scrollBehavior);
+            markVisibleSessionStreamLoadState(sessionId, 'ok');
+            if (typeof renderLoadedTodoPlanForSession === 'function') {
+                renderLoadedTodoPlanForSession(sessionId, snapshotTodoPlan, opts.todoAlreadyStarted);
+            } else {
+                renderTodoPlanForCurrentSession();
+            }
+            logOpenSessionTiming(sessionId, {
+                source: historySource,
+                events: events.length,
+                snapshotTiming: snapshotTiming,
+                totalMs: elapsedSince(openSessionStartedAt),
+            });
+            return true;
+        }
         if (!opts.full && opts.preloadOlderIfShort && pageMeta && pageMeta.has_older && events.length <= 2) {
             await loadOlderHistoryChunk({ keepTocStable: true });
             if (loadToken !== messageLoadEpoch || sessionId !== currentSessionId) return;
@@ -1106,6 +1147,12 @@ async function loadSessionMessages(sessionId, scrollBehavior, opts) {
         if (loadToken === messageLoadEpoch) suppressTocDuringSessionLoad = false;
         if (loadToken === messageLoadEpoch) replayingMessages = false;
     }
+}
+
+function chatStreamHasConversationContent() {
+    var stream = getVisibleChatStream();
+    if (!stream) return false;
+    return !!stream.querySelector('.msg-wrap, .process-aggregate, .human-interaction-card, .human-interaction-banner');
 }
 
 function elapsedSince(startedAt) {
@@ -1157,7 +1204,10 @@ async function switchSession(sessionId, opts) {
     prepareStashLeaving(leaving);
     hideSubagentContinueBanner();
     resetSubagentPanelForSession();
+    if (typeof closeGoalEditModal === 'function') closeGoalEditModal(false);
     setCurrentSessionState(sessionId);
+    if (typeof renderGoalForCurrentSession === 'function') renderGoalForCurrentSession();
+    if (typeof refreshGoalCard === 'function') void refreshGoalCard();
     if (typeof updateHumanInteractionBanner === 'function') updateHumanInteractionBanner(sessionId);
     localStorage.setItem('lastSessionId', sessionId);
     if (typeof applyContextTokenLabelForCurrentSession === 'function') applyContextTokenLabelForCurrentSession();

@@ -207,10 +207,8 @@ async function consumeAgentSseResponse(response, runCtx, runSessionId, streamEve
                 if (shouldApplySseSeqFilter(parsed)
                     && !sessionStore.shouldAcceptSseEvent(eventSessionId, parsed.seq, parsed.seq_scope || 'legacy')) continue;
                 if (parsed.type === 'goal_state') {
-                    if (eventSessionId === currentSessionId) {
-                        const goal = parsed.goal && typeof parsed.goal === 'object' ? parsed.goal : parsed;
-                        renderGoalCard(goal);
-                    }
+                    const goal = parsed.goal && typeof parsed.goal === 'object' ? parsed.goal : parsed;
+                    setGoalStateForSession(eventSessionId, goal);
                     continue;
                 }
                 if (parsed.type === 'user_steer' && parsed.steer) {
@@ -1022,6 +1020,7 @@ function renderFollowupQueue(sessionId) {
         return;
     }
     var q = getFollowupQueue(sid);
+    syncMessageInputPlaceholder();
     panel.innerHTML = '';
     panel.dataset.sessionId = sid;
     panel.classList.toggle('is-visible', !!q.length);
@@ -2188,6 +2187,12 @@ async function sendMessage(options) {
     formData.append('session_id', runSessionId);
     formData.append('client_run_id', clientRunId);
     formData.append('stream_protocol', 'runtime_v2');
+    formData.append(
+        'ui_language',
+        (document.documentElement && document.documentElement.getAttribute('data-language'))
+            || localStorage.getItem('myagent-language')
+            || 'zh-CN'
+    );
     if (selectedSkillsForRun && selectedSkillsForRun.length) {
         formData.append('selected_skills', JSON.stringify(selectedSkillsForRun));
     }

@@ -394,6 +394,10 @@ def test_advanced_model_profile_list_wires_drag_drop_reordering():
     assert "data-act='down'" not in html
     assert "animateProfileRowShift" in html
     assert "profile-drop-settle" in html
+    drag_over = html.split("function onProfileDragOver", 1)[1].split("function onProfileDrop", 1)[0]
+    assert drag_over.index("ev.preventDefault()") < drag_over.index("target===dragged")
+    assert 'modelEls.configured.addEventListener("dragover",onProfileDragOver)' in html
+    assert 'modelEls.configured.addEventListener("drop",onProfileDrop)' in html
     assert 'fetch("/api/model_profiles/reorder"' in html
     assert "ordered_ids:ids" in html
     assert '"ArrowUp"' in html and '"ArrowDown"' in html

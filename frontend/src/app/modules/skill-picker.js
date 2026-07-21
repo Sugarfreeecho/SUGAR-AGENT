@@ -21,6 +21,13 @@ function skillPickerEscape(str) {
         .replace(/'/g, '&#39;');
 }
 
+function skillPickerHoverDetail(skill) {
+    var name = String(skill && skill.name || '未命名 Skill');
+    var description = String(skill && skill.description || '').trim() || '暂无描述';
+    var status = skill && skill.enabled !== false ? '已启用' : '已禁用';
+    return ['Skill：' + name, '描述：' + description, '状态：' + status].join('\n');
+}
+
 function selectedSkillSet() {
     var out = {};
     selectedSkillNames.forEach(function (name) { out[String(name)] = true; });
@@ -136,7 +143,7 @@ function renderSkillPicker() {
         var enabled = skill && skill.enabled !== false;
         var checked = active[name] ? ' checked' : '';
         var disabled = enabled ? '' : ' disabled';
-        html += '<div class="skill-picker-option' + (enabled ? '' : ' is-disabled') + '">'
+        html += '<div class="skill-picker-option' + (enabled ? '' : ' is-disabled') + '" data-ui-tip="' + skillPickerEscape(skillPickerHoverDetail(skill)) + '">'
             + '<label class="skill-picker-select">'
             + '<input type="checkbox" value="' + skillPickerEscape(name) + '"' + checked + disabled + '>'
             + '<span class="skill-picker-option-body">'
@@ -149,6 +156,7 @@ function renderSkillPicker() {
     });
     html += '</div>';
     e.popover.innerHTML = html;
+    if (typeof initUiHoverTips === 'function') initUiHoverTips(e.popover);
     e.popover.querySelectorAll('input[type="checkbox"]').forEach(function (checkbox) {
         checkbox.addEventListener('change', function () {
             var name = String(checkbox.value || '');

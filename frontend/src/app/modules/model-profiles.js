@@ -28,6 +28,20 @@ function profileMeta(profile) {
     return [model, ctx, out].filter(Boolean).join(' · ');
 }
 
+function modelProfileHoverDetail(profile) {
+    var p = profile || {};
+    var lines = [
+        '模型配置：' + profileLabel(p),
+        '模型 ID：' + String(p.model || '未设置'),
+        '接口类型：' + String(p.llm_type || 'openai'),
+        '上下文窗口：' + String(p.context_window || '未设置'),
+        '最大输出：' + String(p.max_output_tokens || '未设置'),
+    ];
+    if (p.capability_description) lines.push('能力：' + String(p.capability_description));
+    lines.push('状态：' + (p.enabled === false ? '已禁用' : (p.usable === false ? '未就绪' : '可用')));
+    return lines.join('\n');
+}
+
 function els() {
     return {
         control: document.getElementById('model-profile-control'),
@@ -116,7 +130,7 @@ function renderModelProfileControl() {
         var id = String(p.id || '');
         var enabled = p.enabled !== false;
         var activeCls = id === String(activeModelProfileId || '') ? ' is-active' : '';
-        html += '<div class="composer-model-option-row' + (enabled ? '' : ' is-disabled') + '">'
+        html += '<div class="composer-model-option-row' + (enabled ? '' : ' is-disabled') + '" data-ui-tip="' + h(modelProfileHoverDetail(p)) + '">'
             + '<button type="button" class="composer-model-option' + activeCls + '" role="option" data-profile-id="' + h(id) + '"' + (enabled ? '' : ' disabled') + '>'
             + '<span class="composer-model-option-name">' + h(profileLabel(p)) + '</span>'
             + '<span class="composer-model-option-meta">' + h(profileMeta(p)) + '</span>'
@@ -125,6 +139,7 @@ function renderModelProfileControl() {
             + '</div>';
     }
     e.menu.innerHTML = html;
+    if (typeof initUiHoverTips === 'function') initUiHoverTips(e.menu);
     e.menu.querySelectorAll('[data-profile-id]').forEach((btn) => {
         btn.addEventListener('click', () => {
             setCurrentSessionModelProfile(btn.getAttribute('data-profile-id') || '');

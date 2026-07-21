@@ -101,6 +101,13 @@ function bindUiHoverTip(el) {
         clearUiHoverTipTimer();
         hideUiHoverTooltip();
     });
+    el.addEventListener('focus', function () {
+        var t = el.getAttribute('data-ui-tip');
+        if (t == null || !String(t).trim()) return;
+        var rect = el.getBoundingClientRect();
+        showUiHoverTooltip({ clientX: rect.right, clientY: rect.top }, t);
+    });
+    el.addEventListener('blur', hideUiHoverTooltip);
 }
 
 function initUiHoverTips(root) {
@@ -352,10 +359,13 @@ function todoPlanStatusLabel(st) {
     return '待处理';
 }
 
-function hideTodoPlanPanel() {
+function syncGoalTodoPanelVisibility() {
     const root = document.getElementById('chat-todo-plan');
+    const goalCard = document.getElementById('chat-goal-card');
+    const todoCard = document.getElementById('chat-todo-card');
     if (!root) return;
-    root.classList.remove('is-open');
+    const hasVisibleCard = !!((goalCard && !goalCard.hidden) || (todoCard && !todoCard.hidden));
+    root.classList.toggle('is-open', hasVisibleCard);
     notifyPanelContentChanged();
 }
 
@@ -366,27 +376,29 @@ async function clearTodoPlan() {
         await fetch('/sessions/' + encodeURIComponent(sid) + '/todo_plan', { method: 'DELETE' });
     } catch (e) { /* ignore */ }
     clearTodoPlanState(sid);
-    hideTodoPlanPanel();
+    const todoCard = document.getElementById('chat-todo-card');
+    if (todoCard) todoCard.hidden = true;
     const statsEl = document.getElementById('chat-todo-plan-stats');
     const listEl = document.getElementById('chat-todo-plan-list');
     if (statsEl) statsEl.textContent = '';
     if (listEl) listEl.textContent = '';
-    notifyPanelContentChanged();
+    syncGoalTodoPanelVisibility();
 }
 
 function renderTodoPlanSnapshot(snapshot) {
     const root = document.getElementById('chat-todo-plan');
     const listEl = document.getElementById('chat-todo-plan-list');
     const statsEl = document.getElementById('chat-todo-plan-stats');
-    if (!root || !listEl || !statsEl) return;
+    const todoCard = document.getElementById('chat-todo-card');
+    if (!root || !listEl || !statsEl || !todoCard) return;
     const data = snapshot || { items: [], done: 0, total: 0, has_plan: false };
     const items = Array.isArray(data.items) ? data.items : [];
     const has = !!(data.has_plan && items.length > 0);
+    todoCard.hidden = !has;
     if (!has) {
         listEl.textContent = '';
         statsEl.textContent = '';
-        hideTodoPlanPanel();
-        notifyPanelContentChanged();
+        syncGoalTodoPanelVisibility();
         return;
     }
     const done = data.done;
@@ -408,8 +420,7 @@ function renderTodoPlanSnapshot(snapshot) {
         li.appendChild(text);
         listEl.appendChild(li);
     });
-    root.classList.add('is-open');
-    notifyPanelContentChanged();
+    syncGoalTodoPanelVisibility();
 }
 
 function applyTodoPlanFromPayload(data) {
@@ -418,25 +429,160 @@ function applyTodoPlanFromPayload(data) {
 
 function renderTodoPlanForCurrentSession() {
     renderTodoPlanSnapshot(selectTodoPlan(currentSessionId));
+    renderGoalForCurrentSession();
     void refreshGoalCard();
 }
 
 let renderedGoalState = null;
+const goalStateBySession = new Map();
+const goalStateReceivedAtBySession = new Map();
+const goalRefreshInFlightBySession = new Map();
+const goalStreamRecoveryInFlightBySession = new Set();
 
-function renderGoalCard(goal) {
+function summarizeGoalObjective(value, maxLength) {
+    const full = String(value == null ? '' : value).replace(/\s+/g, ' ').trim();
+    const limit = Math.max(24, Number(maxLength) || 96);
+    if (full.length <= limit) return full;
+    return full.slice(0, limit - 1).trimEnd() + '…';
+}
+
+function renderGoalForCurrentSession() {
+    const sid = String(currentSessionId || '');
+    const goal = sid && goalStateBySession.has(sid) ? goalStateBySession.get(sid) : null;
+    renderGoalCard(goal, sid);
+}
+
+function setGoalStateForSession(sessionId, goal) {
+    const sid = String(sessionId || '').trim();
+    if (!sid) return;
+    const normalized = goal && goal.id && String(goal.status || '') !== 'completed'
+        ? Object.assign({}, goal)
+        : null;
+    goalStateBySession.set(sid, normalized);
+    if (normalized) goalStateReceivedAtBySession.set(sid, Date.now());
+    else goalStateReceivedAtBySession.delete(sid);
+    if (sid === String(currentSessionId || '')) {
+        renderGoalCard(normalized, sid);
+        if (normalized && String(normalized.status || '') === 'active') {
+            void recoverActiveGoalStream(sid);
+        }
+    }
+}
+
+async function recoverActiveGoalStream(sessionId) {
+    const sid = String(sessionId || '').trim();
+    if (!sid || sid !== String(currentSessionId || '') || document.visibilityState === 'hidden') return false;
+    const goal = goalStateBySession.get(sid);
+    if (!goal || String(goal.status || '') !== 'active') return false;
+    if (typeof getSessionRunState === 'function' && getSessionRunState(sid)) return false;
+    if (goalStreamRecoveryInFlightBySession.has(sid)) return false;
+    goalStreamRecoveryInFlightBySession.add(sid);
+    try {
+        if (typeof reconcileRunStateFromServer === 'function') {
+            await reconcileRunStateFromServer({ silent: true });
+        }
+        if (sid !== String(currentSessionId || '')) return false;
+        const latestGoal = goalStateBySession.get(sid);
+        if (!latestGoal || String(latestGoal.status || '') !== 'active') return false;
+        if (typeof getSessionRunState === 'function' && getSessionRunState(sid)) return false;
+        const serverActive = (typeof isServerStreamActive === 'function' && isServerStreamActive(sid))
+            || (typeof isSessionRunning === 'function' && isSessionRunning(sid));
+        if (!serverActive || typeof maybeStartStreamPollForSession !== 'function') return false;
+        maybeStartStreamPollForSession(sid, { skipInitialLoad: true });
+        return true;
+    } catch (error) {
+        return false;
+    } finally {
+        goalStreamRecoveryInFlightBySession.delete(sid);
+    }
+}
+
+function formatGoalElapsed(seconds) {
+    const total = Math.max(0, Math.floor(Number(seconds) || 0));
+    const hours = Math.floor(total / 3600);
+    const minutes = Math.floor((total % 3600) / 60);
+    const secs = total % 60;
+    const translate = function (value) {
+        return typeof translateUiString === 'function' ? translateUiString(value) : value;
+    };
+    if (hours > 0) return String(hours) + translate('小时') + ' ' + String(minutes) + translate('分') + ' ' + String(secs).padStart(2, '0') + translate('秒');
+    if (minutes > 0) return String(minutes) + translate('分') + ' ' + String(secs).padStart(2, '0') + translate('秒');
+    return String(secs) + translate('秒');
+}
+
+function renderGoalMeta(goal, sessionId) {
+    const sid = String(sessionId || currentSessionId || '');
+    if (!goal || sid !== String(currentSessionId || '')) return;
+    const metaEl = document.getElementById('chat-goal-meta');
+    if (!metaEl) return;
+    const translate = function (value) {
+        return typeof translateUiString === 'function' ? translateUiString(value) : value;
+    };
+    const status = String(goal.status || 'active');
+    const receivedAt = Number(goalStateReceivedAtBySession.get(sid) || Date.now());
+    const liveSeconds = status === 'active' ? Math.max(0, (Date.now() - receivedAt) / 1000) : 0;
+    const elapsed = Number(goal.elapsed_seconds || 0) + liveSeconds;
+    const statusEl = document.getElementById('chat-goal-status');
+    if (statusEl && status === 'active') {
+        statusEl.textContent = translate('进行中') + ' · ' + formatGoalElapsed(elapsed);
+    }
+    const usedTokens = Math.max(0, Number(goal.used_tokens || 0));
+    const tokenText = goal.token_budget == null
+        ? 'Token ' + translate('已消耗') + ' ' + String(usedTokens)
+        : 'Token ' + String(usedTokens) + ' / ' + String(goal.token_budget);
+    const continuationText = translate('续跑') + ' ' + String(goal.continuation_count || 0);
+    const failureText = translate('连续失败') + ' ' + String(goal.consecutive_failures || 0);
+    const reasonLabels = {
+        token_budget_exhausted: 'Token 预算已耗尽',
+        consecutive_run_failures: '连续运行失败',
+        manual: '手动暂停'
+    };
+    const rawReason = String(goal.pause_reason || '');
+    const reasonText = reasonLabels[rawReason] || rawReason;
+    const pauseReason = reasonText ? ' · ' + translate(reasonText) : '';
+    const metaText = tokenText + ' · ' + translate('用时') + ' ' + formatGoalElapsed(elapsed)
+        + ' · ' + continuationText + ' · ' + failureText + pauseReason;
+    let help = translate('连续失败表示 Goal 执行中连续以失败或错误结束的运行次数（包括初始执行和自动续跑）；任一轮成功完成后会归零。');
+    if (goal.last_error) help += '\n' + translate('最近错误') + ': ' + String(goal.last_error);
+    metaEl.setAttribute('data-ui-tip', metaText + '\n' + help);
+    metaEl.setAttribute('aria-label', translate('统计信息') + ': ' + metaText + '. ' + help);
+    bindUiHoverTip(metaEl);
+}
+
+function renderGoalCard(goal, sessionId) {
+    const sid = String(sessionId || currentSessionId || '');
+    if (sid !== String(currentSessionId || '')) return;
     const card = document.getElementById('chat-goal-card');
     if (!card) return;
-    const has = !!(goal && goal.id);
+    const has = !!(goal && goal.id && String(goal.status || '') !== 'completed');
     renderedGoalState = has ? Object.assign({}, goal) : null;
-    card.hidden = !has;
-    if (!has) return;
-    const status = String(goal.status || 'active');
     const statusEl = document.getElementById('chat-goal-status');
     const objectiveEl = document.getElementById('chat-goal-objective');
     const metaEl = document.getElementById('chat-goal-meta');
-    const pause = document.getElementById('chat-goal-pause');
-    const resume = document.getElementById('chat-goal-resume');
-    const cancel = document.getElementById('chat-goal-cancel');
+    const toggle = document.getElementById('chat-goal-toggle');
+    const edit = document.getElementById('chat-goal-edit');
+    const remove = document.getElementById('chat-goal-delete');
+    card.hidden = !has;
+    if (!has) {
+        if (statusEl) statusEl.textContent = '';
+        if (objectiveEl) {
+            objectiveEl.textContent = '';
+            objectiveEl.removeAttribute('data-ui-tip');
+            objectiveEl.removeAttribute('aria-label');
+        }
+        if (metaEl) {
+            metaEl.removeAttribute('data-ui-tip');
+            metaEl.removeAttribute('aria-label');
+            metaEl.hidden = true;
+        }
+        if (toggle) toggle.hidden = true;
+        if (edit) edit.hidden = true;
+        if (remove) remove.hidden = true;
+        syncGoalTodoPanelVisibility();
+        return;
+    }
+    if (metaEl) metaEl.hidden = false;
+    const status = String(goal.status || 'active');
     const statusLabels = {
         active: '进行中', paused: '已暂停', completed: '已完成', blocked: '已阻塞', cancelled: '已取消'
     };
@@ -444,55 +590,80 @@ function renderGoalCard(goal) {
         const label = statusLabels[status] || status;
         statusEl.textContent = typeof translateUiString === 'function' ? translateUiString(label) : label;
     }
-    if (objectiveEl) objectiveEl.textContent = String(goal.objective || '');
-    if (metaEl) {
-        const unlimited = typeof translateUiString === 'function' ? translateUiString('无限制') : '无限制';
-        const minute = typeof translateUiString === 'function' ? translateUiString('分钟') : '分钟';
-        const budget = goal.token_budget == null ? unlimited : String(goal.used_tokens || 0) + ' / ' + String(goal.token_budget);
-        const reasonLabels = {
-            token_budget_exhausted: 'Token 预算已耗尽',
-            consecutive_run_failures: '连续运行失败',
-            manual: '手动暂停'
-        };
-        const rawReason = String(goal.pause_reason || '');
-        const reasonText = reasonLabels[rawReason] || rawReason;
-        const translatedReason = reasonText && typeof translateUiString === 'function' ? translateUiString(reasonText) : reasonText;
-        const continuationLabel = typeof translateUiString === 'function' ? translateUiString('续跑') : '续跑';
-        const failureLabel = typeof translateUiString === 'function' ? translateUiString('失败') : '失败';
-        const counters = ' · ' + continuationLabel + ' ' + String(goal.continuation_count || 0)
-            + ' · ' + failureLabel + ' ' + String(goal.consecutive_failures || 0);
-        const pauseReason = translatedReason ? ' · ' + translatedReason : '';
-        metaEl.textContent = 'Token ' + budget + ' · ' + Math.floor(Number(goal.elapsed_seconds || 0) / 60) + minute + counters + pauseReason;
+    if (objectiveEl) {
+        const fullObjective = String(goal.objective || '').trim();
+        const summary = summarizeGoalObjective(fullObjective, 200);
+        objectiveEl.textContent = summary;
+        objectiveEl.setAttribute('aria-label', fullObjective);
+        if (summary !== fullObjective) {
+            objectiveEl.setAttribute('data-ui-tip', fullObjective);
+            bindUiHoverTip(objectiveEl);
+        } else {
+            objectiveEl.removeAttribute('data-ui-tip');
+        }
     }
-    if (pause) pause.hidden = status !== 'active';
-    if (cancel) cancel.hidden = status !== 'active' && status !== 'paused';
-    if (resume) {
-        resume.hidden = status !== 'paused';
-        const exhausted = goal.token_budget != null && Number(goal.remaining_tokens || 0) <= 0;
-        const resumeLabel = exhausted ? '增加预算并继续' : '继续';
-        resume.textContent = typeof translateUiString === 'function' ? translateUiString(resumeLabel) : resumeLabel;
+    renderGoalMeta(goal, sid);
+    if (toggle) {
+        const canToggle = status === 'active' || status === 'paused';
+        const isPaused = status === 'paused';
+        const toggleLabel = isPaused ? '开始 Goal' : '暂停 Goal';
+        const translatedToggleLabel = typeof translateUiString === 'function' ? translateUiString(toggleLabel) : toggleLabel;
+        toggle.hidden = !canToggle;
+        toggle.setAttribute('aria-label', translatedToggleLabel);
+        toggle.setAttribute('data-ui-tip', translatedToggleLabel);
+        const playIcon = toggle.querySelector('.chat-goal-icon-play');
+        const pauseIcon = toggle.querySelector('.chat-goal-icon-pause');
+        if (playIcon) playIcon.toggleAttribute('hidden', !isPaused);
+        if (pauseIcon) pauseIcon.toggleAttribute('hidden', isPaused);
     }
-    const root = document.getElementById('chat-todo-plan');
-    if (root && (status === 'active' || status === 'paused')) root.classList.add('is-open');
-    notifyPanelContentChanged();
+    if (edit) edit.hidden = false;
+    if (remove) remove.hidden = false;
+    syncGoalTodoPanelVisibility();
 }
 
 async function refreshGoalCard() {
     const sid = currentSessionId;
-    if (!sid) { renderGoalCard(null); return; }
-    try {
-        const r = await fetch('/sessions/' + encodeURIComponent(sid) + '/goal');
-        if (!r.ok || sid !== currentSessionId) return;
-        const data = await r.json();
-        if (sid === currentSessionId) renderGoalCard(data.goal || null);
-    } catch (e) { /* retain last rendered state */ }
+    if (!sid) { renderGoalCard(null, ''); return; }
+    if (goalRefreshInFlightBySession.has(sid)) return goalRefreshInFlightBySession.get(sid);
+    const task = (async function () {
+        try {
+            const r = await fetch('/sessions/' + encodeURIComponent(sid) + '/goal');
+            if (!r.ok) return;
+            const data = await r.json();
+            setGoalStateForSession(sid, data.goal || null);
+        } catch (e) { /* the session-scoped cache or hidden state remains authoritative */ }
+        finally { goalRefreshInFlightBySession.delete(sid); }
+    })();
+    goalRefreshInFlightBySession.set(sid, task);
+    return task;
 }
 
-async function controlCurrentGoal(action) {
+setInterval(function () {
+    if (document.visibilityState === 'hidden' || isGoalEditModalOpen()) return;
+    const sid = String(currentSessionId || '');
+    const goal = sid ? goalStateBySession.get(sid) : null;
+    if (goal) renderGoalMeta(goal, sid);
+}, 1000);
+
+setInterval(function () {
+    if (document.visibilityState === 'hidden' || !currentSessionId || isGoalEditModalOpen()) return;
+    void refreshGoalCard();
+}, 5000);
+
+setInterval(function () {
+    if (document.visibilityState === 'hidden' || isGoalEditModalOpen()) return;
+    const sid = String(currentSessionId || '');
+    const goal = sid ? goalStateBySession.get(sid) : null;
+    if (!goal || String(goal.status || '') !== 'active') return;
+    if (typeof getSessionRunState === 'function' && getSessionRunState(sid)) return;
+    void recoverActiveGoalStream(sid);
+}, 2000);
+
+async function controlCurrentGoal(action, payloadOverrides) {
     const sid = currentSessionId;
-    if (!sid) return;
+    if (!sid) return false;
     try {
-        const payload = {};
+        const payload = Object.assign({}, payloadOverrides || {});
         if (action === 'resume' && renderedGoalState
             && renderedGoalState.token_budget != null
             && Number(renderedGoalState.remaining_tokens || 0) <= 0) {
@@ -500,14 +671,14 @@ async function controlCurrentGoal(action) {
                 ? translateUiString('请输入要增加的 Token 预算')
                 : '请输入要增加的 Token 预算';
             const raw = window.prompt(promptText, '10000');
-            if (raw == null) return;
+            if (raw == null) return false;
             const additional = Number(raw);
             if (!Number.isInteger(additional) || additional <= 0) {
                 const message = typeof translateUiString === 'function'
                     ? translateUiString('预算必须是大于 0 的整数。')
                     : '预算必须是大于 0 的整数。';
                 if (typeof showUiAlert === 'function') showUiAlert({ title: 'Goal', message: message, variant: 'error' });
-                return;
+                return false;
             }
             payload.additional_budget = additional;
         }
@@ -517,18 +688,169 @@ async function controlCurrentGoal(action) {
             body: JSON.stringify(payload),
         });
         const data = await r.json();
-        if (r.ok && sid === currentSessionId) renderGoalCard(data.goal || null);
+        if (r.ok) setGoalStateForSession(sid, data.goal || null);
         if (!r.ok && typeof showUiAlert === 'function') {
             const title = typeof translateUiString === 'function' ? translateUiString('Goal 操作失败') : 'Goal 操作失败';
             showUiAlert({ title: title, message: String(data.error || 'Unknown error'), variant: 'error' });
         }
         if (action === 'resume') void refreshSingleSessionRow(sid);
+        return r.ok;
     } catch (e) {
         if (typeof showUiAlert === 'function') {
             const title = typeof translateUiString === 'function' ? translateUiString('Goal 操作失败') : 'Goal 操作失败';
             showUiAlert({ title: title, message: String((e && e.message) || e), variant: 'error' });
         }
+        return false;
     }
+}
+
+function toggleCurrentGoalState() {
+    if (!renderedGoalState) return;
+    const status = String(renderedGoalState.status || '');
+    if (status === 'active') void controlCurrentGoal('pause');
+    else if (status === 'paused') void controlCurrentGoal('resume');
+}
+
+function goalEditModalElements() {
+    return {
+        root: document.getElementById('goal-edit-modal-root'),
+        input: document.getElementById('goal-edit-textarea'),
+        count: document.getElementById('goal-edit-char-count'),
+        save: document.getElementById('goal-edit-save'),
+        cancel: document.getElementById('goal-edit-cancel'),
+        close: document.getElementById('goal-edit-modal-close'),
+    };
+}
+
+function isGoalEditModalOpen() {
+    const root = document.getElementById('goal-edit-modal-root');
+    return !!(root && root.classList.contains('is-open'));
+}
+
+function updateGoalEditModalState() {
+    const elements = goalEditModalElements();
+    if (!elements.root || !elements.input) return;
+    const value = String(elements.input.value || '');
+    const normalized = value.trim();
+    const original = String(elements.root._goalOriginalObjective || '').trim();
+    if (elements.count) elements.count.textContent = String(value.length) + ' / 12000';
+    if (elements.save) {
+        elements.save.disabled = !!elements.root._goalSaving
+            || !normalized
+            || normalized === original
+            || value.length > 12000;
+    }
+}
+
+function closeGoalEditModal(restoreFocus) {
+    const elements = goalEditModalElements();
+    if (!elements.root || !elements.root.classList.contains('is-open')) return;
+    elements.root.classList.remove('is-open');
+    elements.root.setAttribute('aria-hidden', 'true');
+    elements.root._goalSaving = false;
+    document.body.classList.remove('goal-editing');
+    document.body.style.overflow = '';
+    const returnFocus = elements.root._goalReturnFocus;
+    elements.root._goalReturnFocus = null;
+    if (restoreFocus !== false && returnFocus && typeof returnFocus.focus === 'function') {
+        requestAnimationFrame(function () { returnFocus.focus(); });
+    }
+}
+
+async function saveGoalEditModal() {
+    const elements = goalEditModalElements();
+    if (!elements.root || !elements.input || elements.root._goalSaving) return false;
+    const objective = String(elements.input.value || '').trim();
+    if (!objective || objective.length > 12000) return false;
+    const sid = String(elements.root.dataset.sessionId || '');
+    const goalId = String(elements.root.dataset.goalId || '');
+    if (sid !== String(currentSessionId || '') || !renderedGoalState || String(renderedGoalState.id || '') !== goalId) {
+        closeGoalEditModal(false);
+        return false;
+    }
+    elements.root._goalSaving = true;
+    updateGoalEditModalState();
+    const saved = await controlCurrentGoal('edit', { objective: objective });
+    elements.root._goalSaving = false;
+    if (saved) closeGoalEditModal();
+    else updateGoalEditModalState();
+    return saved;
+}
+
+function ensureGoalEditModalBindings() {
+    const elements = goalEditModalElements();
+    if (!elements.root || elements.root._goalEditBound) return elements;
+    elements.root._goalEditBound = true;
+    if (elements.input) {
+        elements.input.addEventListener('input', updateGoalEditModalState);
+        elements.input.addEventListener('keydown', function (event) {
+            if (event.key === 'Escape') {
+                event.preventDefault();
+                closeGoalEditModal();
+            } else if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
+                event.preventDefault();
+                void saveGoalEditModal();
+            }
+        });
+    }
+    if (elements.save) elements.save.addEventListener('click', function () { void saveGoalEditModal(); });
+    if (elements.cancel) elements.cancel.addEventListener('click', function () { closeGoalEditModal(); });
+    if (elements.close) elements.close.addEventListener('click', function () { closeGoalEditModal(); });
+    elements.root.addEventListener('mousedown', function (event) {
+        if (event.target === elements.root) closeGoalEditModal();
+    });
+    return elements;
+}
+
+function editCurrentGoal() {
+    if (!renderedGoalState) return;
+    const elements = ensureGoalEditModalBindings();
+    if (!elements.root || !elements.input) return;
+    const currentObjective = String(renderedGoalState.objective || '');
+    elements.root.dataset.sessionId = String(currentSessionId || '');
+    elements.root.dataset.goalId = String(renderedGoalState.id || '');
+    elements.root._goalOriginalObjective = currentObjective;
+    elements.root._goalReturnFocus = document.activeElement;
+    elements.root._goalSaving = false;
+    elements.input.value = currentObjective;
+    elements.root.classList.add('is-open');
+    elements.root.setAttribute('aria-hidden', 'false');
+    document.body.classList.add('goal-editing');
+    document.body.style.overflow = 'hidden';
+    updateGoalEditModalState();
+    requestAnimationFrame(function () {
+        elements.input.focus();
+        elements.input.setSelectionRange(0, 0);
+        elements.input.scrollTop = 0;
+    });
+}
+
+async function deleteCurrentGoal() {
+    if (!renderedGoalState) return;
+    const translate = function (value) {
+        return typeof translateUiString === 'function' ? translateUiString(value) : value;
+    };
+    const confirmed = typeof openUiModal === 'function'
+        ? await openUiModal({
+            title: translate('确认删除 Goal'),
+            message: translate('删除后当前 Goal 将从此会话中移除。此操作不会删除历史审计事件。'),
+            confirmText: translate('确认删除'),
+            cancelText: translate('取消'),
+            danger: true,
+        })
+        : window.confirm(translate('确认删除 Goal'));
+    if (!confirmed) return;
+    await controlCurrentGoal('delete');
+}
+
+document.addEventListener('myagent:language-change', function () {
+    renderGoalForCurrentSession();
+});
+
+if (typeof globalThis !== 'undefined') {
+    globalThis.toggleCurrentGoalState = toggleCurrentGoalState;
+    globalThis.editCurrentGoal = editCurrentGoal;
+    globalThis.deleteCurrentGoal = deleteCurrentGoal;
 }
 
 function setTodoPlanForSession(sessionId, snapshot) {

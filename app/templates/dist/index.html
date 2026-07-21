@@ -10,9 +10,9 @@
     <script>try { if (localStorage.getItem('myagent-theme') !== 'dark') document.documentElement.classList.add('theme-light'); } catch (e) { document.documentElement.classList.add('theme-light'); }</script>
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/mermaid@10.9.5/dist/mermaid.min.js"></script>
-  <script type="module" crossorigin src="/assets/main-D_yP49ow.js"></script>
+  <script type="module" crossorigin src="/assets/main-CyMMFeYL.js"></script>
   <link rel="modulepreload" crossorigin href="/assets/modulepreload-polyfill-B5Qt9EMX.js">
-  <link rel="stylesheet" crossorigin href="/assets/main-DKJn6LUy.css">
+  <link rel="stylesheet" crossorigin href="/assets/main-BoKpH0x0.css">
 </head>
 <body>
 <div class="app">
@@ -80,9 +80,28 @@
                     </div>
                 </div>
                 <div class="chat-stage">
-                    <aside id="chat-todo-plan" class="chat-todo-plan" aria-label="当前计划">
+                    <aside id="chat-todo-plan" class="chat-todo-plan" aria-label="Goal 与当前计划">
                         <div class="chat-todo-plan-inner">
-                            <div class="chat-todo-plan-panel">
+                            <section id="chat-goal-card" class="chat-goal-card" hidden>
+                                <div class="chat-goal-heading"><span>GOAL</span><span id="chat-goal-status"></span></div>
+                                <div id="chat-goal-objective" class="chat-goal-objective" tabindex="0"></div>
+                                <div class="chat-goal-actions" role="toolbar" aria-label="Goal 操作">
+                                    <button type="button" id="chat-goal-meta" class="chat-goal-icon-btn chat-goal-stats-btn" data-ui-tip="统计信息" aria-label="统计信息">
+                                        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 20V10M12 20V4M19 20v-7"/></svg>
+                                    </button>
+                                    <button type="button" id="chat-goal-toggle" class="chat-goal-icon-btn" data-ui-tip="暂停 Goal" aria-label="暂停 Goal" onclick="toggleCurrentGoalState()">
+                                        <svg class="chat-goal-icon-pause" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 5v14M15 5v14"/></svg>
+                                        <svg class="chat-goal-icon-play" viewBox="0 0 24 24" aria-hidden="true" hidden><path d="m8 5 11 7-11 7Z"/></svg>
+                                    </button>
+                                    <button type="button" id="chat-goal-edit" class="chat-goal-icon-btn" data-ui-tip="编辑 Goal" aria-label="编辑 Goal" onclick="editCurrentGoal()">
+                                        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m4 20 4.5-1 10-10a2.1 2.1 0 0 0-3-3l-10 10Z"/><path d="m14 7 3 3"/></svg>
+                                    </button>
+                                    <button type="button" id="chat-goal-delete" class="chat-goal-icon-btn chat-goal-icon-btn--danger" data-ui-tip="删除 Goal" aria-label="删除 Goal" onclick="deleteCurrentGoal()">
+                                        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3M7 7l1 13h8l1-13M10 11v5M14 11v5"/></svg>
+                                    </button>
+                                </div>
+                            </section>
+                            <div id="chat-todo-card" class="chat-todo-plan-panel" hidden>
                                 <div class="chat-todo-plan-title">当前计划<button class="chat-todo-plan-close" type="button" aria-label="清除计划" data-ui-tip="清除当前计划" onclick="clearTodoPlan()">×</button></div>
                                 <div id="chat-todo-plan-stats" class="chat-todo-plan-stats" aria-live="polite"></div>
                                 <ul id="chat-todo-plan-list" class="chat-todo-plan-list"></ul>
@@ -100,7 +119,7 @@
                             </div>
                         </div>
                     </aside>
-                    <button type="button" class="panel-edge-handle todo-handle" id="todo-edge-tab" onclick="toggleTodoPlanPanel()" aria-label="折叠计划面板">▶</button>
+                    <button type="button" class="panel-edge-handle todo-handle" id="todo-edge-tab" onclick="toggleTodoPlanPanel()" aria-label="折叠 Goal 与计划面板">▶</button>
                     <button type="button" class="panel-edge-handle toc-handle" id="toc-edge-tab" onclick="toggleTocPanel()" aria-label="折叠历史面板">◀</button>
                 </div>
             </div>
@@ -118,7 +137,7 @@
                     </div>
                     <div class="composer-row">
                         <div class="input-wrapper">
-                            <textarea id="message-input" rows="1" placeholder="说说你想做什么…" spellcheck="false" autocomplete="off"></textarea>
+                            <textarea id="message-input" rows="1" placeholder="说说你想做什么…（Shift/Ctrl+Enter换行）" spellcheck="false" autocomplete="off"></textarea>
                             <button type="button" id="pick-path-btn" class="path-browse-btn path-browse-btn--ghost" aria-label="选择文件" data-ui-tip="选择文件"></button>
                             <button type="button" id="skill-picker-btn" class="skill-picker-btn" aria-label="选择 Skill" aria-haspopup="dialog" aria-expanded="false" data-ui-tip="选择 Skill">SKILL</button>
                             <button type="button" id="send-btn" data-ui-tip="发送 / 停止">发送</button>
@@ -162,6 +181,28 @@
     </div>
 </div>
 
+<div id="goal-edit-modal-root" class="goal-edit-modal-overlay" aria-hidden="true">
+    <div class="goal-edit-modal" role="dialog" aria-modal="true" aria-labelledby="goal-edit-modal-title" aria-describedby="goal-edit-modal-subtitle">
+        <div class="goal-edit-modal__head">
+            <div>
+                <h2 id="goal-edit-modal-title" class="goal-edit-modal__title">编辑 Goal 内容</h2>
+                <p id="goal-edit-modal-subtitle" class="goal-edit-modal__subtitle">支持多行编辑，保存后会立即同步到当前会话。</p>
+            </div>
+            <button type="button" id="goal-edit-modal-close" class="goal-edit-modal__close" aria-label="关闭">×</button>
+        </div>
+        <label class="goal-edit-modal__label" for="goal-edit-textarea">Goal 内容</label>
+        <textarea id="goal-edit-textarea" class="goal-edit-modal__textarea" maxlength="12000" rows="14" spellcheck="false"></textarea>
+        <div class="goal-edit-modal__meta">
+            <span>Ctrl/Cmd + Enter 保存</span>
+            <span id="goal-edit-char-count" aria-live="polite">0 / 12000</span>
+        </div>
+        <div class="goal-edit-modal__actions">
+            <button type="button" id="goal-edit-cancel" class="ui-modal-btn ui-modal-btn--ghost">取消</button>
+            <button type="button" id="goal-edit-save" class="ui-modal-btn ui-modal-btn--primary">保存修改</button>
+        </div>
+    </div>
+</div>
+
 <div id="settings-modal-root" class="settings-modal-overlay" aria-hidden="true">
     <div class="settings-modal" role="dialog" aria-modal="true" aria-labelledby="settings-modal-title" tabindex="-1">
         <div class="settings-modal__head">
@@ -190,14 +231,14 @@
                 </div>
             </div>
             <div class="settings-modal__section">
+                <div class="settings-modal__label">运行诊断</div>
+                <button type="button" id="settings-execution-dashboard" class="settings-advanced-btn">执行状态看板</button>
+            </div>
+            <div class="settings-modal__section">
                 <div class="settings-modal__label">环境与 API</div>
                 <button type="button" id="settings-env-advanced" class="settings-advanced-btn">高级设置</button>
                 <div style="margin-top:.45rem;color:var(--text-tertiary);font-size:0.72rem;line-height:1.45;">编辑完整 .env，保存后立即写回磁盘（部分项需重启服务）。</div>
                 <div style="margin-top:.45rem;color:var(--text-tertiary);font-size:0.72rem;line-height:1.45;">如需帮助或反馈，请联系GitHub @sugarfreeecho</div>
-            </div>
-            <div class="settings-modal__section">
-                <div class="settings-modal__label">运行诊断</div>
-                <button type="button" id="settings-execution-dashboard" class="settings-advanced-btn">打开执行状态看板</button>
             </div>
         </div>
     </div>
