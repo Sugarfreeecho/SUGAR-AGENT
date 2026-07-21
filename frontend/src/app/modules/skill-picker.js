@@ -1,6 +1,7 @@
 let skillPickerCache = null;
 let skillPickerRefreshPromise = null;
 let selectedSkillNames = [];
+const skillPickerToggleBusy = Object.create(null);
 const LS_SKILL_DRAFT_PREFIX = 'myagent-skill-draft:';
 
 function skillPickerEls() {
@@ -24,6 +25,17 @@ function selectedSkillSet() {
     var out = {};
     selectedSkillNames.forEach(function (name) { out[String(name)] = true; });
     return out;
+}
+
+function reconcileSelectedSkillsWithEnabledCatalog() {
+    if (!skillPickerCache) return;
+    var enabled = {};
+    (skillPickerCache.skills || []).forEach(function (skill) {
+        if (skill && skill.enabled !== false) enabled[String(skill.name || '')] = true;
+    });
+    selectedSkillNames = selectedSkillNames.filter(function (name) { return enabled[String(name)]; });
+    persistSkillPickerDraft(currentSessionId);
+    syncSkillPickerButton();
 }
 
 function skillDraftStorageKey(sessionId) {
@@ -113,21 +125,27 @@ function renderSkillPicker() {
     }
     var active = selectedSkillSet();
     var selectedCount = selectedSkillNames.length;
+    var enabledCount = skills.filter(function (skill) { return skill && skill.enabled !== false; }).length;
     var html = '<div class="skill-picker-head">'
-        + '<div class="skill-picker-title">选择 Skill <span class="skill-picker-total">已选 ' + skillPickerEscape(selectedCount) + ' / 共 ' + skillPickerEscape(skills.length) + '</span></div>'
+        + '<div class="skill-picker-title">选择 Skill <span class="skill-picker-total">已选 ' + skillPickerEscape(selectedCount) + ' / 已启用 ' + skillPickerEscape(enabledCount) + ' / 共 ' + skillPickerEscape(skills.length) + '</span></div>'
         + '<button type="button" class="skill-picker-clear">清空</button>'
         + '</div>'
         + '<div class="skill-picker-list">';
     skills.forEach(function (skill) {
         var name = String(skill && skill.name || '');
+        var enabled = skill && skill.enabled !== false;
         var checked = active[name] ? ' checked' : '';
-        html += '<label class="skill-picker-option">'
-            + '<input type="checkbox" value="' + skillPickerEscape(name) + '"' + checked + '>'
+        var disabled = enabled ? '' : ' disabled';
+        html += '<div class="skill-picker-option' + (enabled ? '' : ' is-disabled') + '">'
+            + '<label class="skill-picker-select">'
+            + '<input type="checkbox" value="' + skillPickerEscape(name) + '"' + checked + disabled + '>'
             + '<span class="skill-picker-option-body">'
             + '<span class="skill-picker-option-name">' + skillPickerEscape(name) + '</span>'
             + '<span class="skill-picker-option-desc">' + skillPickerEscape(skill && skill.description || '') + '</span>'
             + '</span>'
-            + '</label>';
+            + '</label>'
+            + '<button type="button" class="skill-picker-toggle" data-skill-name="' + skillPickerEscape(name) + '" data-enabled="' + (enabled ? 'true' : 'false') + '">' + (enabled ? '禁用' : '启用') + '</button>'
+            + '</div>';
     });
     html += '</div>';
     e.popover.innerHTML = html;
@@ -152,6 +170,38 @@ function renderSkillPicker() {
             renderSkillPicker();
         });
     }
+    e.popover.querySelectorAll('.skill-picker-toggle').forEach(function (button) {
+        button.addEventListener('click', function () {
+            var name = String(button.getAttribute('data-skill-name') || '');
+            var enabled = button.getAttribute('data-enabled') !== 'true';
+            setSkillPickerEnabled(name, enabled);
+        });
+    });
+}
+
+async function setSkillPickerEnabled(name, enabled) {
+    name = String(name || '').trim();
+    if (!name || skillPickerToggleBusy[name]) return;
+    skillPickerToggleBusy[name] = true;
+    try {
+        var response = await fetch('/api/skills/' + encodeURIComponent(name) + '/enabled', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'same-origin',
+            body: JSON.stringify({ enabled: enabled === true }),
+        });
+        var data = await response.json();
+        if (!data || !data.ok) throw new Error((data && data.error) || 'Skill 启停失败');
+        (skillPickerCache.skills || []).forEach(function (skill) {
+            if (String(skill && skill.name || '') === name) skill.enabled = enabled === true;
+        });
+        reconcileSelectedSkillsWithEnabledCatalog();
+        renderSkillPicker();
+    } catch (err) {
+        if (typeof appendLogVisible === 'function') appendLogVisible('Skill 启停失败：' + String(err.message || err), 'error-log');
+    } finally {
+        delete skillPickerToggleBusy[name];
+    }
 }
 
 async function loadSkillPickerSkills() {
@@ -159,6 +209,7 @@ async function loadSkillPickerSkills() {
     const data = await response.json();
     if (!data || !data.ok) throw new Error((data && data.error) || 'Skill 加载失败');
     skillPickerCache = data;
+    reconcileSelectedSkillsWithEnabledCatalog();
     return data;
 }
 

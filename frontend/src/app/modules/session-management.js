@@ -155,6 +155,7 @@ function syncSessionListIndicatorClasses() {
         div.classList.toggle('active', !!sid && sid === currentSessionId);
         applySessionItemIndicators(div, sid);
     });
+    if (typeof updateAllHumanInteractionSessionBadges === 'function') updateAllHumanInteractionSessionBadges();
 }
 
 function sessionSectionExpanded(key) {
@@ -227,6 +228,9 @@ function buildAndBindSessionRow(sess, allSessions, nextStreamMap) {
         + '</div></div>'
         + '</div>'
         + '<div class="session-last-query"></div>';
+    if (typeof updateHumanInteractionSessionBadge === 'function') {
+        setTimeout(function () { updateHumanInteractionSessionBadge(sess.id); }, 0);
+    }
     var pinMi = div.querySelector('.session-menu-pin');
     var archMi = div.querySelector('.session-menu-archive');
     if (pinMi) pinMi.textContent = sess.pinned ? '取消置顶' : '置顶';
@@ -1154,6 +1158,7 @@ async function switchSession(sessionId, opts) {
     hideSubagentContinueBanner();
     resetSubagentPanelForSession();
     setCurrentSessionState(sessionId);
+    if (typeof updateHumanInteractionBanner === 'function') updateHumanInteractionBanner(sessionId);
     localStorage.setItem('lastSessionId', sessionId);
     if (typeof applyContextTokenLabelForCurrentSession === 'function') applyContextTokenLabelForCurrentSession();
     restoreInputDraft(sessionId);
@@ -1174,6 +1179,7 @@ async function switchSession(sessionId, opts) {
         else applyChatScrollAfterHistoryLoad(sessionId, 'saved-or-bottom');
         if (typeof refreshTodoPlanPanel === 'function') void refreshTodoPlanPanel();
         else renderTodoPlanForCurrentSession();
+        if (typeof refreshHumanInteractions === 'function') void refreshHumanInteractions(sessionId);
         if (switchToken !== switchSessionEpoch || sessionId !== currentSessionId) return;
         /* 让 rebuildToc 的 /user_turns fetch 先发出，subagent 面板（含 N 个 /messages）顺序后置，
            避免抢占带宽与主线程，让目录最后才稳态。*/
@@ -1232,6 +1238,7 @@ async function switchSession(sessionId, opts) {
         void refreshSingleSessionRow(sessionId);
         setSendButtonState();
         maybeStartStreamPollForSession(sessionId, { skipInitialLoad: true });
+        if (typeof refreshHumanInteractions === 'function') void refreshHumanInteractions(sessionId);
         resolve(true);
         }, 20);
     });
@@ -1258,6 +1265,7 @@ async function createNewSessionInner() {
         switchSessionEpoch += 1;
         messageLoadEpoch += 1;
         setCurrentSessionState(data.session_id);
+        if (typeof updateHumanInteractionBanner === 'function') updateHumanInteractionBanner(currentSessionId);
         localStorage.setItem('lastSessionId', currentSessionId);
         restoreInputDraft(currentSessionId);
         if (typeof restoreSkillPickerDraft === 'function') restoreSkillPickerDraft(currentSessionId);

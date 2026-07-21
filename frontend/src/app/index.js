@@ -25,6 +25,7 @@ import sessionScrollHistorySource from './modules/session-scroll-history.js?raw'
 import tocTodoSource from './modules/toc-todo.js?raw';
 import messageRenderingSource from './modules/message-rendering.js?raw';
 import subagentSource from './modules/subagent.js?raw';
+import humanInteractionsSource from './modules/human-interactions.js?raw';
 import eventDispatchSource from './modules/event-dispatch.js?raw';
 import sessionManagementSource from './modules/session-management.js?raw';
 import sseHandlingSource from './modules/sse-handling.js?raw';
@@ -58,6 +59,7 @@ const uiSources = [
     tocTodoSource,
     messageRenderingSource,
     subagentSource,
+    humanInteractionsSource,
     eventDispatchSource,
     sessionManagementSource,
     sseHandlingSource,

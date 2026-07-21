@@ -391,7 +391,8 @@ function renderTodoPlanSnapshot(snapshot) {
     }
     const done = data.done;
     const total = data.total;
-    statsEl.textContent = String(done) + ' / ' + String(total) + ' 已完成';
+    const statsText = String(done) + ' / ' + String(total) + ' 已完成';
+    statsEl.textContent = typeof translateUiString === 'function' ? translateUiString(statsText) : statsText;
     listEl.textContent = '';
     items.forEach(function (it) {
         const li = document.createElement('li');
@@ -399,7 +400,8 @@ function renderTodoPlanSnapshot(snapshot) {
         li.className = 'todo-plan-item todo-plan--' + String(st);
         const tag = document.createElement('span');
         tag.className = 'todo-plan-status-tag';
-        tag.textContent = todoPlanStatusLabel(st);
+        const statusLabel = todoPlanStatusLabel(st);
+        tag.textContent = typeof translateUiString === 'function' ? translateUiString(statusLabel) : statusLabel;
         li.appendChild(tag);
         const text = document.createElement('span');
         text.textContent = (it && it.text != null) ? String(it.text) : '';

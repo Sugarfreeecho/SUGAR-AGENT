@@ -1,4 +1,4 @@
-import"./modulepreload-polyfill-B5Qt9EMX.js";(function(x){var q=104857600,H=200*1024*1024,M='<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"></path></svg>';function j(){if(!document.getElementById("myagent-path-picker-styles")){var e=document.createElement("style");e.id="myagent-path-picker-styles",e.textContent='.path-input-row{display:flex;align-items:stretch;gap:.35rem;width:100%;}.path-input-row>.ip,.path-input-row>.tx,.path-input-row>input[type="text"],.path-input-row>input:not([type]){flex:1;min-width:0;}.path-browse-btn{flex-shrink:0;width:2.35rem;padding:0;border:1px solid var(--border-glass,rgba(255,255,255,.08));border-radius:var(--radius-sm,8px);background:var(--surface-glass2,rgba(40,40,60,.94));color:var(--text-secondary,#a6adc8);cursor:pointer;display:inline-flex;align-items:center;justify-content:center;transition:color .18s,border-color .18s,background .18s;}.path-browse-btn:hover{color:var(--text-primary,#cdd6f4);border-color:var(--border-brand-accent,rgba(124,111,247,.35));background:rgba(108,92,231,.12);}.path-browse-btn:disabled{opacity:.45;cursor:not-allowed;}.path-browse-btn--ghost{background:transparent;border-color:transparent;box-shadow:none;width:2.1rem;}.path-browse-btn--ghost:hover{background:rgba(108,92,231,.1);border-color:transparent;color:var(--accent-2,#d4b8fc);}.input-wrapper .path-browse-btn--ghost{align-self:center;margin-right:-.15rem;}.input-wrapper.is-drag-over{border-color:rgba(203,166,247,.62);box-shadow:0 0 0 3px rgba(203,166,247,.12),0 0 28px rgba(139,92,246,.18);}.input-wrapper.is-file-uploading{border-color:rgba(99,102,241,.52);}.chat-upload-status{box-sizing:border-box;width:100%;margin:.38rem 0 0;padding:.42rem .58rem;border:1px solid rgba(99,102,241,.22);border-radius:10px;background:rgba(99,102,241,.08);color:var(--text-secondary,#a6adc8);font-size:.72rem;}.chat-upload-status-row{display:flex;align-items:center;gap:.5rem;}.chat-upload-status-label{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}.chat-upload-cancel{flex:none;border:0;background:transparent;color:var(--accent-2,#d4b8fc);font:inherit;font-weight:700;cursor:pointer;padding:.08rem .2rem;}.chat-upload-cancel:hover{color:var(--text-primary,#fff);}.chat-upload-progress{height:4px;margin-top:.36rem;border-radius:999px;overflow:hidden;background:rgba(255,255,255,.1);}.chat-upload-progress-bar{display:block;width:0;height:100%;border-radius:inherit;background:linear-gradient(90deg,#6366f1,#a78bfa);transition:width .12s linear;}.workspace-file-popover{position:fixed;display:none;z-index:260;width:min(46rem,calc(100vw - 1.2rem));height:min(44rem,82vh);max-height:min(44rem,82vh);border:1px solid rgba(203,166,247,.24);border-radius:14px;background:linear-gradient(145deg,rgba(31,31,49,.88),rgba(19,20,31,.78));box-shadow:0 24px 70px rgba(0,0,0,.38),0 0 0 1px rgba(255,255,255,.045) inset,0 0 34px rgba(139,92,246,.16);overflow:hidden;backdrop-filter:blur(22px);-webkit-backdrop-filter:blur(22px);}.workspace-file-popover:before{content:"";position:absolute;inset:0;pointer-events:none;background:radial-gradient(circle at 18% 0%,rgba(203,166,247,.18),transparent 30%),radial-gradient(circle at 92% 18%,rgba(99,102,241,.16),transparent 28%);}.workspace-file-popover.is-open{display:flex;flex-direction:column;}.workspace-file-search{position:relative;width:100%;box-sizing:border-box;border:0;border-bottom:1px solid rgba(255,255,255,.08);background:rgba(255,255,255,.055);color:var(--text-primary,#cdd6f4);padding:.56rem .72rem;font:inherit;font-size:.78rem;outline:none;}.workspace-file-search::placeholder{color:var(--text-muted,#6c7086);}.workspace-file-list{position:relative;flex:1;min-height:0;overflow:auto;padding:.36rem .38rem .2rem;}.workspace-file-item{width:100%;display:grid;grid-template-columns:1.05rem minmax(0,1fr) auto;gap:.2rem .38rem;align-items:center;text-align:left;border:0;border-radius:8px;background:transparent;color:var(--text-secondary,#a6adc8);padding:.22rem .36rem;cursor:pointer;font:inherit;font-size:.74rem;}.workspace-file-item:hover,.workspace-file-item.is-active{background:rgba(139,92,246,.13);color:var(--text-primary,#cdd6f4);}.workspace-file-item.is-selected{background:rgba(99,102,241,.18);color:var(--text-primary,#cdd6f4);}.workspace-file-check{width:.82rem;height:.82rem;border:1px solid rgba(203,166,247,.38);border-radius:4px;display:inline-flex;align-items:center;justify-content:center;color:#fff;font-size:.62rem;line-height:1;background:transparent;}.workspace-file-item.is-selected .workspace-file-check{background:linear-gradient(135deg,#6366f1,#a78bfa);border-color:transparent;color:#fff;}.workspace-file-dir-row{grid-template-columns:1.05rem minmax(0,1fr) auto;color:var(--text-primary,#cdd6f4);font-weight:650;}.workspace-file-dir-row .workspace-file-tree{grid-column:2/3;}.workspace-file-file-row{grid-template-columns:1.05rem minmax(0,1fr) auto;}.workspace-file-tree{min-width:0;display:flex;align-items:center;gap:.24rem;}.workspace-file-indent{flex:0 0 auto;width:var(--indent,0);}.workspace-file-chevron{width:.8rem;min-width:.8rem;color:var(--text-muted,#6c7086);font-size:.72rem;text-align:center;border:0;background:transparent;padding:0;cursor:pointer;}.workspace-file-icon{position:relative;width:.98rem;min-width:.98rem;height:.74rem;margin-top:.04rem;border-radius:3px;border:1px solid rgba(203,166,247,.28);background:linear-gradient(135deg,rgba(203,166,247,.18),rgba(99,102,241,.1));box-shadow:inset 0 .12rem .26rem rgba(255,255,255,.08);}.workspace-file-icon:before{content:"";position:absolute;left:.06rem;right:.06rem;top:.12rem;height:.16rem;border-radius:999px;background:rgba(203,166,247,.34);}.workspace-file-icon:after{content:"";position:absolute;left:.06rem;right:.06rem;bottom:.11rem;height:.24rem;border-radius:2px;background:rgba(99,102,241,.16);}.workspace-file-icon.is-file{width:.82rem;min-width:.82rem;height:1rem;margin-top:0;border-radius:3px;background:transparent;border:1.5px solid rgba(166,173,200,.58);box-shadow:none;color:var(--text-muted,#6c7086);}.workspace-file-icon.is-file:before{left:auto;right:-1.5px;top:-1.5px;width:.3rem;height:.3rem;border:0;border-left:1.5px solid rgba(166,173,200,.58);border-bottom:1.5px solid rgba(166,173,200,.58);border-radius:0 3px 0 3px;background:var(--surface-glass2,rgba(40,40,60,.94));}.workspace-file-icon.is-file:after{display:none;}.workspace-file-icon.is-folder-svg{width:1rem;min-width:1rem;height:1rem;margin-top:0;border:0;background:transparent;box-shadow:none;color:var(--text-muted,#6c7086);display:inline-flex;align-items:center;justify-content:center;}.workspace-file-icon.is-folder-svg:before,.workspace-file-icon.is-folder-svg:after{display:none;}.workspace-file-icon.is-folder-svg svg{width:1rem;height:1rem;display:block;}.workspace-file-icon.is-image{border-color:rgba(45,212,191,.72);}.workspace-file-icon.is-image:after{display:block;left:.12rem;right:.12rem;bottom:.15rem;height:.24rem;clip-path:polygon(0 100%,38% 38%,56% 66%,76% 24%,100% 100%);background:rgba(45,212,191,.72);}.workspace-file-icon.is-audio{border-color:rgba(251,191,36,.76);}.workspace-file-icon.is-audio:after{display:block;left:.17rem;right:auto;bottom:.18rem;width:.36rem;height:.4rem;border-radius:0;background:rgba(251,191,36,.76);clip-path:polygon(0 32%,45% 32%,100% 0,100% 100%,45% 68%,0 68%);}.workspace-file-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:.74rem;}.workspace-file-dir{grid-column:2/-1;color:var(--text-muted,#6c7086);font-size:.68rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}.workspace-file-meta{color:var(--text-muted,#6c7086);font-size:.68rem;white-space:nowrap;}.workspace-file-footer{position:relative;display:flex;align-items:center;justify-content:space-between;gap:.5rem;padding:.42rem .52rem;border-top:1px solid rgba(255,255,255,.08);background:rgba(255,255,255,.035);font-size:.72rem;color:var(--text-muted,#6c7086);}.workspace-file-outside{flex-shrink:0;border:1px solid rgba(203,166,247,.24);border-radius:8px;padding:.28rem .58rem;background:rgba(203,166,247,.1);color:var(--text-primary,#cdd6f4);font:inherit;font-size:.7rem;font-weight:700;cursor:pointer;transition:background .16s,border-color .16s,color .16s;}.workspace-file-outside:hover{background:rgba(203,166,247,.18);border-color:rgba(203,166,247,.42);color:#fff;}.workspace-file-insert{border:0;border-radius:8px;padding:.34rem .62rem;background:linear-gradient(135deg,#6366f1,#8b5cf6);color:#fff;font-size:.72rem;font-weight:700;cursor:pointer;}.workspace-file-insert:disabled{opacity:.45;cursor:not-allowed;}.workspace-file-empty{padding:1rem;text-align:center;color:var(--text-muted,#6c7086);font-size:.78rem;}.theme-light .workspace-file-popover{background:linear-gradient(145deg,rgba(255,255,255,.93),rgba(244,247,252,.86));box-shadow:0 24px 64px rgba(31,35,52,.16),0 0 28px rgba(99,102,241,.12);}.theme-light .workspace-file-search,.theme-light .workspace-file-footer{background:rgba(34,40,58,.035);}',document.head.appendChild(e)}}async function W(e,a,s){var d=typeof AbortController<"u"?new AbortController:null,i=d?setTimeout(function(){d.abort()},5e4):null,f;try{f=await fetch("/api/pick-path",{method:"POST",headers:{"Content-Type":"application/json"},credentials:"same-origin",body:JSON.stringify({kind:e||"directory",initial:a||"",multiple:!!s}),signal:d?d.signal:void 0})}finally{i&&clearTimeout(i)}var c=await f.json().catch(function(){return{ok:!1,error:"请求失败"}});if(!f.ok||!c.ok){if(c&&c.cancelled)return null;var r=c&&c.error||"无法打开选择对话框";if(/取消|cancelled|800704c7|2147023673/i.test(r))return null;throw new Error(r)}return s?Array.isArray(c.paths)?c.paths:c.path?[c.path]:[]:c.path||null}async function V(e,a,s,d,i){e.disabled=!0;try{var f=await W(a,s||"",!!i);d&&d(f)}catch{return}finally{e.disabled=!1}}function C(e){var a=String(e||"").trim();return a?((a.charAt(0)==='"'&&a.charAt(a.length-1)==='"'||a.charAt(0)==="'"&&a.charAt(a.length-1)==="'")&&(a=a.slice(1,-1)),'"'+a.replace(/"/g,'\\"')+'"'):""}function de(e){var a=String(e||"").toLowerCase().split(".").pop()||"";return/^(png|jpe?g|gif|webp|bmp|svg|tiff?|ico|avif)$/.test(a)?"is-image":/^(mp3|wav|flac|aac|m4a|ogg|oga|opus|wma|aiff?)$/.test(a)?"is-audio":""}function B(e,a){var s=e.selectionStart,d=e.selectionEnd,i=e.value.slice(0,s),f=e.value.slice(d),c=String(a||"");i.length&&!/\s$/.test(i)&&(c=" "+c),f.length&&!/^\s/.test(f)&&(c=c+" "),e.value=i+c+f;var r=i.length+c.length;e.selectionStart=e.selectionEnd=r,e.dispatchEvent(new Event("input",{bubbles:!0})),e.focus()}function G(e){var a=Array.prototype.slice.call(e||[]).filter(Boolean),s=0;if(a.forEach(function(d){var i=Number(d&&d.size||0);if(i>q)throw new Error("文件“"+String(d&&d.name||"未命名文件")+"”超过 "+N(q)+" 限制。");s+=Math.max(0,i)}),s>H)throw new Error("本次上传总大小超过 "+N(H)+" 限制。");return a}function z(e,a){var s;try{s=G(e)}catch(i){return Promise.reject(i)}if(!s.length)return Promise.resolve([]);a=a||{};var d=new FormData;return s.forEach(function(i){d.append("files",i,i.name||"upload.bin")}),new Promise(function(i,f){var c=new XMLHttpRequest;c.open("POST","/api/upload-chat-files",!0),c.withCredentials=!0,c.timeout=600*1e3,c.upload&&typeof a.onProgress=="function"&&(c.upload.onprogress=function(r){a.onProgress(r.loaded||0,r.lengthComputable?r.total:0)}),typeof a.registerAbort=="function"&&a.registerAbort(function(){c.abort()}),c.onload=function(){var r;try{r=JSON.parse(c.responseText||"{}")}catch{r={ok:!1,error:"上传失败"}}if(c.status<200||c.status>=300||!r.ok){f(new Error(r&&r.error||"上传失败"));return}i(Array.isArray(r.files)?r.files:[])},c.onerror=function(){f(new Error("上传失败：网络连接异常。"))},c.ontimeout=function(){f(new Error("上传超时，请重试。"))},c.onabort=function(){var r=new Error("上传已取消。");r.name="AbortError",f(r)},c.send(d)})}function N(e){return e=Number(e||0),!isFinite(e)||e<=0?"":e<1024?e+" B":e<1024*1024?Math.round(e/102.4)/10+" KB":e<1024*1024*1024?Math.round(e/104857.6)/10+" MB":Math.round(e/1073741824e-1)/10+" GB"}async function K(e,a,s){var d=[];e?d.push("q="+encodeURIComponent(e)):a&&d.push("dir="+encodeURIComponent(a));var i="/api/workspace-files"+(d.length?"?"+d.join("&"):""),f=await fetch(i,{credentials:"same-origin",signal:s}),c=await f.json().catch(function(){return{ok:!1,error:"读取工作区文件失败"}});if(!f.ok||!c.ok)throw new Error(c&&c.error||"读取工作区文件失败");return Array.isArray(c.files)?c.files:[]}function Q(){try{return typeof currentSessionId<"u"?String(currentSessionId||""):""}catch{return""}}function ce(e,a,s){if(a){var d=Q();if(s&&d&&s!==d){try{if(typeof persistInputDraft=="function"){var i="";typeof draftBySession<"u"&&Object.prototype.hasOwnProperty.call(draftBySession,s)?i=String(draftBySession[s]||""):typeof readStoredInputDraft=="function"&&(i=String(readStoredInputDraft(s)||"")),persistInputDraft(s,i.trim()?i+" "+a:a);return}}catch{}return}B(e,a)}}function $(e,a,s){var d=Q();return z(a,s).then(function(i){var f=i.map(function(c){return C(c.path||c.rel||c.name)}).join(" ");ce(e,f,d)})}function O(e,a){console.error("chat file upload failed:",a),e.dispatchEvent(new CustomEvent("myagent:file-paste-error",{bubbles:!0,detail:{message:String(a&&a.message||a||"上传失败")}}))}function Y(e,a){var s=e.closest?e.closest(".input-wrapper"):null;a?e.dataset.fileUploadBusy="1":delete e.dataset.fileUploadBusy,s&&(s.classList.toggle("is-file-uploading",!!a),a?s.setAttribute("aria-busy","true"):s.removeAttribute("aria-busy")),e.dispatchEvent(new CustomEvent("myagent:file-upload-state",{bubbles:!0,detail:{busy:!!a}}))}function ue(e,a){var s=e.closest?e.closest(".input-wrapper"):null,d=document.createElement("div");d.className="chat-upload-status",d.setAttribute("role","status"),d.innerHTML='<div class="chat-upload-status-row"><span class="chat-upload-status-label"></span><button type="button" class="chat-upload-cancel">取消</button></div><div class="chat-upload-progress" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><span class="chat-upload-progress-bar"></span></div>';var i=a.length;return d.querySelector(".chat-upload-status-label").textContent="正在上传 "+i+" 个文件… 0%",s&&s.parentNode&&s.parentNode.insertBefore(d,s.nextSibling),d}function R(e,a){var s;try{s=G(a)}catch(v){return O(e,v),Promise.reject(v)}if(!s.length)return Promise.resolve();if(e._myAgentActiveUpload){var d=new Error("已有文件正在上传，请等待完成或先取消。");return O(e,d),Promise.reject(d)}var i=ue(e,s),f=i.querySelector(".chat-upload-status-label"),c=i.querySelector(".chat-upload-progress"),r=i.querySelector(".chat-upload-progress-bar"),h=i.querySelector(".chat-upload-cancel"),y=null,I=e._myAgentActiveUpload={};return Y(e,!0),h.addEventListener("click",function(){h.disabled=!0,f.textContent="正在取消上传…",y&&y()}),$(e,s,{registerAbort:function(v){y=v},onProgress:function(v,T){if(e._myAgentActiveUpload===I){var E=T>0?Math.min(100,Math.round(v*100/T)):0;f.textContent="正在上传 "+s.length+" 个文件… "+E+"%",r.style.width=E+"%",c.setAttribute("aria-valuenow",String(E))}}}).catch(function(v){throw(!v||v.name!=="AbortError")&&O(e,v),v}).finally(function(){e._myAgentActiveUpload===I&&(delete e._myAgentActiveUpload,Y(e,!1)),i.parentNode&&i.parentNode.removeChild(i)})}function X(e){var a=e&&e.clipboardData;if(!a)return[];var s=[],d=Array.prototype.slice.call(a.items||[]);return d.forEach(function(i){if(!(!i||i.kind!=="file"||typeof i.getAsFile!="function")){var f=i.getAsFile();f&&s.push(f)}}),s.length||(s=Array.prototype.slice.call(a.files||[]).filter(Boolean)),s.map(function(i,f){if(String(i&&i.name||"").trim())return i;var c=String(i&&i.type||"").split("/")[1]||"bin";c=c.replace(/[^a-z0-9.+-]/gi,"")||"bin";var r="clipboard-"+Date.now()+"-"+(f+1)+"."+c;try{return new File([i],r,{type:i.type||"application/octet-stream",lastModified:Date.now()})}catch{return i}})}function Z(e){var a=e&&e.clipboardData;if(!a||typeof a.getData!="function")return!1;try{return String(a.getData("text/plain")||"").trim().length>0}catch{return!1}}function pe(e){!e||e.dataset.filePasteBound==="1"||(e.dataset.filePasteBound="1",e.addEventListener("paste",function(a){if(!Z(a)){var s=X(a);s.length&&(a.preventDefault(),R(e,s).catch(function(){}))}}))}function fe(e,a){var s=document.createElement("div");s.className="workspace-file-popover",s.setAttribute("aria-hidden","true"),s.innerHTML='<input class="workspace-file-search" type="text" autocomplete="off" spellcheck="false" placeholder="搜索工作区文件"><div class="workspace-file-list" role="listbox"></div><div class="workspace-file-footer"><span class="workspace-file-count">未选择文件</span><button type="button" class="workspace-file-outside">选择工作目录外文件</button></div>',document.body.appendChild(s);var d=s.querySelector(".workspace-file-search"),i=s.querySelector(".workspace-file-list"),f=s.querySelector(".workspace-file-count"),c=s.querySelector(".workspace-file-outside"),r={items:[],visible:[],active:0,open:!1,debounce:null,controller:null,selected:Object.create(null),expanded:Object.create(null),loadedDirs:Object.create(null),itemMap:Object.create(null)};function h(){var n=e.closest?e.closest(".input-wrapper"):e,t=n.getBoundingClientRect(),o=8,p=Math.min(Math.max(t.width,520),window.innerWidth-16),l=Math.max(8,Math.min(t.left,window.innerWidth-p-8)),m=document.querySelector(".titlebar"),u=m?m.getBoundingClientRect().bottom:44,g=parseFloat(getComputedStyle(document.documentElement).fontSize||"16")||16,S=Math.min(44*g,window.innerHeight*.82),w=Math.max(1,t.top-u-o),b=Math.min(S,w),_=t.top-b-o;if(b<96){var L=Math.max(1,window.innerHeight-t.bottom-o-8);b=Math.min(S,L),_=t.bottom+o}s.style.left=l+"px",s.style.top=Math.max(u,_)+"px",s.style.width=p+"px",s.style.height=Math.max(1,Math.floor(b))+"px",s.style.maxHeight=Math.max(1,Math.floor(b))+"px"}function y(){var n=Object.keys(r.selected).length;f.textContent=n?"已选择 "+n+" 项":"未选择文件",i.querySelectorAll(".workspace-file-item").forEach(function(t){var o=t.getAttribute("data-path-key")||"",p=!!r.selected[o];t.classList.toggle("is-selected",p);var l=t.querySelector(".workspace-file-check");l&&(l.textContent=p?"✓":"")})}function I(n){var t=i.querySelectorAll(".workspace-file-item");if(!t.length){r.active=0;return}r.active=Math.max(0,Math.min(n,t.length-1));for(var o=0;o<t.length;o++)t[o].classList.toggle("is-active",o===r.active),t[o].setAttribute("aria-selected",o===r.active?"true":"false");var p=t[r.active];p&&typeof p.scrollIntoView=="function"&&p.scrollIntoView({block:"nearest"})}function v(){r.open=!1,s.classList.remove("is-open"),s.setAttribute("aria-hidden","true"),r.debounce&&clearTimeout(r.debounce),r.controller&&r.controller.abort()}function T(n){return n&&(n.path||n.rel||n.name)||""}function E(n){return C(T(n))}function Se(n,t){var o=T(n);if(!o)return!1;var p=String(n&&n.rel||"");return t.indexOf(E(n))>=0||t.indexOf(o)>=0||p&&t.indexOf(C(p))>=0||p&&t.indexOf(p)>=0}function he(n,t){n=String(n||""),t=String(t||"");for(var o=0;o<n.length&&o<t.length&&n.charAt(o)===t.charAt(o);)o++;for(var p=n.length-1,l=t.length-1;p>=o&&l>=o&&n.charAt(p)===t.charAt(l);)p--,l--;return t.slice(o,l+1).trim()}function ve(n,t){if(t){var o=String(e.value||"");if(!(o.indexOf(t)>=0)){var p=e.value;B(e,t);var l=he(p,e.value);n&&l&&(n._inputToken=l)}}}function be(n,t){if(!t&&!n)return;var o=String(e.value||""),p=[];function l(u){u=String(u||"").trim(),u&&p.indexOf(u)<0&&p.push(u)}l(n&&n._inputToken),l(t),l(n&&n.path),l(n&&n.rel),l(n&&n.path&&C(n.path)),l(n&&n.rel&&C(n.rel));var m=o;p.sort(function(u,g){return g.length-u.length}).forEach(function(u){var g=u.replace(/[.*+?^${}()|[\]\\]/g,"\\$&"),S=new RegExp("(?:^|\\s)"+g+"(?=\\s|$)","g");m=m.replace(S,function(w){return w.charAt(0)&&/\s/.test(w.charAt(0))?" ":""})}),m=m.replace(/[ \t]{2,}/g," ").trim(),m!==o&&(e.value=m,e.selectionStart=e.selectionEnd=e.value.length,e.dispatchEvent(new Event("input",{bubbles:!0})))}function F(n){if(n){var t=T(n);if(t){var o=E(n);if(r.selected[t]){var p=r.selected[t];delete r.selected[t],be(p,o)}else r.selected[t]=n,ve(n,o);y()}}}function ee(){var n=String(e.value||"");Object.keys(r.selected).forEach(function(t){var o=r.selected[t];Se(o,n)||delete r.selected[t]})}function ye(){ee(),y()}e.addEventListener("input",ye),c&&c.addEventListener("click",function(n){n.preventDefault(),n.stopPropagation(),typeof a=="function"&&a()});function ne(){var n=String(x.__WORK_DIR__||"workspace"),t=n.split(/[\\/]+/).filter(Boolean);return t[t.length-1]||"workspace"}function te(n,t,o){return{type:"dir",name:n,rel:t,root:!!o,path:"",dirs:Object.create(null),files:[],children:[],loaded:!1}}function Ie(n,t){var o=String(n&&n.path||""),p=String(t||"").replace(/\//g,"\\");return o&&p&&o.toLowerCase().slice(-p.length)===p.toLowerCase()?o.slice(0,Math.max(0,o.length-p.length)).replace(/[\\/]+$/,""):String(x.__WORK_DIR__||"").replace(/[\\/]+$/,"")}function re(n,t){var o=String(n||"").replace(/[\\/]+$/,""),p=String(t||"").replace(/[\\/]+/g,"/");if(!p)return o;var l=o.indexOf("\\")>=0?"\\":"/";return o?o+l+p.replace(/\//g,l):p}function A(n){return{kind:"directory",name:n.name||n.rel||ne(),rel:n.rel||"",path:n.path||re(String(x.__WORK_DIR__||""),n.rel||"")}}function we(n){var t=te(ne(),"",!0);t.path=String(x.__WORK_DIR__||"").replace(/[\\/]+$/,""),t.loaded=!!r.loadedDirs.__root__;function o(l,m){for(var u=t,g=[],S=0;S<l.length;S++)g.push(l[S]),u.dirs[l[S]]||(u.dirs[l[S]]=te(l[S],g.join("/"),!1),u.dirs[l[S]].path=re(m||t.path,g.join("/"))),u=u.dirs[l[S]],u.loaded=!!r.loadedDirs[u.rel||"__root__"];return u}(n||[]).forEach(function(l){var m=String(l.rel||l.path||l.name||"").replace(/\\/g,"/"),u=m.split("/").filter(Boolean);if(u.length){var g=Ie(l,m);if(!t.path&&g&&(t.path=g),l.kind==="directory"){var S=o(u,g||t.path);S.name=l.name||S.name,S.path=l.path||S.path;return}var w=o(u.slice(0,-1),g||t.path);w.files.push({type:"file",name:l.name||u[u.length-1]||m,rel:m,item:l})}});function p(l){var m=Object.keys(l.dirs).map(function(u){return l.dirs[u]}).sort(function(u,g){return u.name.localeCompare(g.name,void 0,{sensitivity:"base"})});m.forEach(p),l.files.sort(function(u,g){return u.name.localeCompare(g.name,void 0,{sensitivity:"base"})}),l.children=m.concat(l.files)}return p(t),t}function se(n,t,o){if(!(!n||n.type!=="dir")){o=Number(o||0);var p=n.rel||"__root__";t?r.expanded[p]=!0:typeof r.expanded[p]>"u"&&(r.expanded[p]=o===0),t&&n.children.forEach(function(l){l.type==="dir"&&se(l,t,o+1)})}}function xe(n){var t=[];function o(p,l){t.push({type:"dir",node:p,depth:l}),r.expanded[p.rel||"__root__"]&&p.children.forEach(function(m){m.type==="dir"?o(m,l+1):t.push({type:"file",node:m,depth:l+1})})}return o(n,0),t}function ke(n){return String(n&&(n.kind||"file")||"file")+":"+String(n&&(n.rel||n.path||n.name)||"")}function ae(n){(n||[]).forEach(function(t){var o=ke(t);o!==":"&&(r.itemMap[o]=t)}),r.items=Object.keys(r.itemMap).map(function(t){return r.itemMap[t]}),r.items.sort(function(t,o){return String(t.rel||"").localeCompare(String(o.rel||""),void 0,{sensitivity:"base"})})}function Ce(n){if(n){var t=n.rel||"__root__";r.expanded[t]=!r.expanded[t],k(r.items,!1),r.expanded[t]&&!d.value&&!r.loadedDirs[t]&&Te(n.rel||"")}}function k(n,t,o){if(ee(),r.items=(n||[]).slice().sort(function(l,m){return String(l.rel||"").localeCompare(String(m.rel||""),void 0,{sensitivity:"base"})}),i.innerHTML="",r.visible=[],t){i.innerHTML='<div class="workspace-file-empty">加载中</div>';return}if(o){i.innerHTML='<div class="workspace-file-empty">'+String(o)+"</div>";return}if(!r.items.length){i.innerHTML='<div class="workspace-file-empty">没有匹配文件</div>';return}var p=we(r.items);se(p,!!d.value),r.visible=xe(p),r.visible.forEach(function(l,m){var u=l.node,g=document.createElement("button");g.type="button",g.className="workspace-file-item "+(l.type==="dir"?"workspace-file-dir-row":"workspace-file-file-row"),g.setAttribute("role","option"),g.setAttribute("data-row-index",String(m)),g.setAttribute("data-path-key",l.type==="dir"?A(u).path||A(u).rel||A(u).name||"":u.item.path||u.item.rel||u.item.name||"");var S=document.createElement("div");S.className="workspace-file-tree";var w=document.createElement("span");w.className="workspace-file-indent",w.style.setProperty("--indent",Math.min(l.depth,10)*.86+"rem");var b=document.createElement("span");b.className="workspace-file-chevron",b.textContent=l.type==="dir"?r.expanded[u.rel||"__root__"]?"▾":"▸":"",l.type==="dir"?(b.setAttribute("aria-label",r.expanded[u.rel||"__root__"]?"折叠文件夹":"展开文件夹"),b.setAttribute("role","button"),b.addEventListener("click",function(P){P.preventDefault(),P.stopPropagation(),Ce(u)})):b.setAttribute("tabindex","-1");var _=document.createElement("span");_.className="workspace-file-icon"+(l.type==="file"?" is-file "+de(u.item&&u.item.name):" is-folder-svg"),l.type==="dir"&&(_.innerHTML=M);var L=document.createElement("div");L.className="workspace-file-name",L.textContent=u.name||u.rel||"";var U=document.createElement("div");U.className="workspace-file-meta",U.textContent=l.type==="dir"?"":N(u.item.size),S.appendChild(w),S.appendChild(b),S.appendChild(_),S.appendChild(L);var le=document.createElement("span");le.className="workspace-file-check",g.appendChild(le),g.appendChild(S),g.appendChild(U),g.addEventListener("mouseenter",function(){I(m)}),g.addEventListener("click",function(P){P.preventDefault(),P.stopPropagation(),l.type==="dir"?F(A(u)):F(u.item)}),i.appendChild(g)}),I(0),y()}function ie(){var n=d.value||"";r.controller&&r.controller.abort(),r.controller=typeof AbortController<"u"?new AbortController:null,k(r.items,!0),K(n,"",r.controller?r.controller.signal:void 0).then(function(t){r.open&&(n?k(t,!1):(r.loadedDirs.__root__=!0,ae(t),k(r.items,!1)))}).catch(function(t){t&&t.name==="AbortError"||r.open&&k([],!1,t&&t.message||"读取失败")})}function Te(n){var t=n||"__root__";r.loadedDirs[t]||(r.loadedDirs[t]=!0,K("",n||"",void 0).then(function(o){!r.open||d.value||(ae(o),k(r.items,!1))}).catch(function(){delete r.loadedDirs[t]}))}function Ee(){r.debounce&&clearTimeout(r.debounce),r.debounce=setTimeout(ie,120)}function oe(){if(r.open){h();try{d.focus(),d.select()}catch{}return}r.open=!0,s.classList.add("is-open"),s.setAttribute("aria-hidden","false"),d.value="",r.expanded=Object.create(null),r.loadedDirs=Object.create(null),r.itemMap=Object.create(null),r.items=[],k([],!0),h(),ie(),setTimeout(function(){h();try{d.focus()}catch{}},0)}function _e(){r.open?v():oe()}return d.addEventListener("input",Ee),d.addEventListener("keydown",function(n){if(n.key==="ArrowDown")n.preventDefault(),I(r.active+1);else if(n.key==="ArrowUp")n.preventDefault(),I(r.active-1);else if(n.key==="Enter"){n.preventDefault();var t=r.visible[r.active];t&&t.type==="dir"?F(A(t.node)):t&&t.type==="file"&&F(t.node.item)}else n.key==="Escape"&&(n.preventDefault(),v(),e.focus())}),document.addEventListener("click",function(n){r.open&&(s.contains(n.target)||v())}),window.addEventListener("resize",function(){r.open&&h()}),window.addEventListener("scroll",function(){r.open&&h()},!0),{panel:s,open:oe,close:v,toggle:_e}}function J(e,a,s){if(!e||e.dataset.pathBrowseWrapped==="1")return e;j();var d=document.createElement("div");d.className="path-input-row";var i=e.parentNode;if(!i)return e;i.insertBefore(d,e),d.appendChild(e);var f=document.createElement("button");f.type="button",f.className="path-browse-btn",f.innerHTML=M;var c=s||"浏览路径";return f.setAttribute("aria-label",c),typeof bindUiHoverTip=="function"?(f.setAttribute("data-ui-tip",c),f.removeAttribute("title"),bindUiHoverTip(f)):f.title=c,f.addEventListener("click",function(r){r.stopPropagation();var h=e.getAttribute("data-path-kind")||a;h!=="file"&&h!=="directory"&&(h="directory"),V(f,h,e.value||"",function(y){if(y){var I=Array.isArray(y)?y[0]||"":String(y);I&&(e.value=I,e.dispatchEvent(new Event("input",{bubbles:!0})),e.dispatchEvent(new Event("change",{bubbles:!0})))}})}),d.appendChild(f),e.dataset.pathBrowseWrapped="1",e}function ge(e){var a=e.closest?e.closest(".input-wrapper"):e;!a||a.dataset.fileDropBound==="1"||(a.dataset.fileDropBound="1",["dragenter","dragover"].forEach(function(s){a.addEventListener(s,function(d){!d.dataTransfer||!d.dataTransfer.files||!d.dataTransfer.files.length||(d.preventDefault(),a.classList.add("is-drag-over"))})}),["dragleave","drop"].forEach(function(s){a.addEventListener(s,function(){a.classList.remove("is-drag-over")})}),a.addEventListener("drop",function(s){!s.dataTransfer||!s.dataTransfer.files||!s.dataTransfer.files.length||(s.preventDefault(),R(e,s.dataTransfer.files).catch(function(){}))}))}function me(e,a){if(!(!e||!a)){j(),ge(a),pe(a),e.classList.add("path-browse-btn","path-browse-btn--ghost"),e.innerHTML=M,e.setAttribute("aria-label","工作区文件"),e.setAttribute("data-ui-tip","工作区文件"),e.dataset.silentPickerUnavailable="1",e.removeAttribute("title");var s=document.createElement("input");s.type="file",s.multiple=!0,s.style.display="none",s.setAttribute("aria-hidden","true"),document.body.appendChild(s),s.addEventListener("change",function(){var i=s.files;!i||!i.length||(e.disabled=!0,R(a,i).catch(function(){}).finally(function(){s.value="",e.disabled=!1}))});var d=fe(a,function(){s.click()});e.addEventListener("click",function(i){if(i.stopPropagation(),i.preventDefault(),i.altKey){s.click();return}if(!i.shiftKey){d.toggle();return}var f=x&&typeof x.__WORK_DIR__=="string"?x.__WORK_DIR__:"";V(e,"file",f,function(c){var r=Array.isArray(c)?c:c?[c]:[];r.length&&B(a,r.map(function(h){return C(h)}).join(" "))},!1)})}}function D(e){e=e||document;for(var a=e.querySelectorAll("[data-path-kind]"),s=0;s<a.length;s++){var d=a[s],i=d.getAttribute("data-path-kind");(i==="file"||i==="directory")&&J(d,i)}}x.MyAgentPathPicker={pickPath:W,wrapInputWithBrowse:J,attachChatPicker:me,uploadChatFiles:z,insertUploadedFiles:$,startChatFileUpload:R,clipboardFilesFromEvent:X,clipboardHasUsableText:Z,scan:D},document.readyState==="loading"?document.addEventListener("DOMContentLoaded",function(){D(document)}):D(document)})(typeof window<"u"?window:globalThis);const Ae=`// Lightweight UI internationalisation. The UI is rendered by several legacy
+import"./modulepreload-polyfill-B5Qt9EMX.js";(function(x){var U=104857600,H=200*1024*1024,M='<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"></path></svg>';function j(){if(!document.getElementById("myagent-path-picker-styles")){var e=document.createElement("style");e.id="myagent-path-picker-styles",e.textContent='.path-input-row{display:flex;align-items:stretch;gap:.35rem;width:100%;}.path-input-row>.ip,.path-input-row>.tx,.path-input-row>input[type="text"],.path-input-row>input:not([type]){flex:1;min-width:0;}.path-browse-btn{flex-shrink:0;width:2.35rem;padding:0;border:1px solid var(--border-glass,rgba(255,255,255,.08));border-radius:var(--radius-sm,8px);background:var(--surface-glass2,rgba(40,40,60,.94));color:var(--text-secondary,#a6adc8);cursor:pointer;display:inline-flex;align-items:center;justify-content:center;transition:color .18s,border-color .18s,background .18s;}.path-browse-btn:hover{color:var(--text-primary,#cdd6f4);border-color:var(--border-brand-accent,rgba(124,111,247,.35));background:rgba(108,92,231,.12);}.path-browse-btn:disabled{opacity:.45;cursor:not-allowed;}.path-browse-btn--ghost{background:transparent;border-color:transparent;box-shadow:none;width:2.1rem;}.path-browse-btn--ghost:hover{background:rgba(108,92,231,.1);border-color:transparent;color:var(--accent-2,#d4b8fc);}.input-wrapper .path-browse-btn--ghost{align-self:center;margin-right:-.15rem;}.input-wrapper.is-drag-over{border-color:rgba(203,166,247,.62);box-shadow:0 0 0 3px rgba(203,166,247,.12),0 0 28px rgba(139,92,246,.18);}.input-wrapper.is-file-uploading{border-color:rgba(99,102,241,.52);}.chat-upload-status{box-sizing:border-box;width:100%;margin:.38rem 0 0;padding:.42rem .58rem;border:1px solid rgba(99,102,241,.22);border-radius:10px;background:rgba(99,102,241,.08);color:var(--text-secondary,#a6adc8);font-size:.72rem;}.chat-upload-status-row{display:flex;align-items:center;gap:.5rem;}.chat-upload-status-label{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}.chat-upload-cancel{flex:none;border:0;background:transparent;color:var(--accent-2,#d4b8fc);font:inherit;font-weight:700;cursor:pointer;padding:.08rem .2rem;}.chat-upload-cancel:hover{color:var(--text-primary,#fff);}.chat-upload-progress{height:4px;margin-top:.36rem;border-radius:999px;overflow:hidden;background:rgba(255,255,255,.1);}.chat-upload-progress-bar{display:block;width:0;height:100%;border-radius:inherit;background:linear-gradient(90deg,#6366f1,#a78bfa);transition:width .12s linear;}.workspace-file-popover{position:fixed;display:none;z-index:260;width:min(46rem,calc(100vw - 1.2rem));height:min(44rem,82vh);max-height:min(44rem,82vh);border:1px solid rgba(203,166,247,.24);border-radius:14px;background:linear-gradient(145deg,rgba(31,31,49,.88),rgba(19,20,31,.78));box-shadow:0 24px 70px rgba(0,0,0,.38),0 0 0 1px rgba(255,255,255,.045) inset,0 0 34px rgba(139,92,246,.16);overflow:hidden;backdrop-filter:blur(22px);-webkit-backdrop-filter:blur(22px);}.workspace-file-popover:before{content:"";position:absolute;inset:0;pointer-events:none;background:radial-gradient(circle at 18% 0%,rgba(203,166,247,.18),transparent 30%),radial-gradient(circle at 92% 18%,rgba(99,102,241,.16),transparent 28%);}.workspace-file-popover.is-open{display:flex;flex-direction:column;}.workspace-file-search{position:relative;width:100%;box-sizing:border-box;border:0;border-bottom:1px solid rgba(255,255,255,.08);background:rgba(255,255,255,.055);color:var(--text-primary,#cdd6f4);padding:.56rem .72rem;font:inherit;font-size:.78rem;outline:none;}.workspace-file-search::placeholder{color:var(--text-muted,#6c7086);}.workspace-file-list{position:relative;flex:1;min-height:0;overflow:auto;padding:.36rem .38rem .2rem;}.workspace-file-item{width:100%;display:grid;grid-template-columns:1.05rem minmax(0,1fr) auto;gap:.2rem .38rem;align-items:center;text-align:left;border:0;border-radius:8px;background:transparent;color:var(--text-secondary,#a6adc8);padding:.22rem .36rem;cursor:pointer;font:inherit;font-size:.74rem;}.workspace-file-item:hover,.workspace-file-item.is-active{background:rgba(139,92,246,.13);color:var(--text-primary,#cdd6f4);}.workspace-file-item.is-selected{background:rgba(99,102,241,.18);color:var(--text-primary,#cdd6f4);}.workspace-file-check{width:.82rem;height:.82rem;border:1px solid rgba(203,166,247,.38);border-radius:4px;display:inline-flex;align-items:center;justify-content:center;color:#fff;font-size:.62rem;line-height:1;background:transparent;}.workspace-file-item.is-selected .workspace-file-check{background:linear-gradient(135deg,#6366f1,#a78bfa);border-color:transparent;color:#fff;}.workspace-file-dir-row{grid-template-columns:1.05rem minmax(0,1fr) auto;color:var(--text-primary,#cdd6f4);font-weight:650;}.workspace-file-dir-row .workspace-file-tree{grid-column:2/3;}.workspace-file-file-row{grid-template-columns:1.05rem minmax(0,1fr) auto;}.workspace-file-tree{min-width:0;display:flex;align-items:center;gap:.24rem;}.workspace-file-indent{flex:0 0 auto;width:var(--indent,0);}.workspace-file-chevron{width:.8rem;min-width:.8rem;color:var(--text-muted,#6c7086);font-size:.72rem;text-align:center;border:0;background:transparent;padding:0;cursor:pointer;}.workspace-file-icon{position:relative;width:.98rem;min-width:.98rem;height:.74rem;margin-top:.04rem;border-radius:3px;border:1px solid rgba(203,166,247,.28);background:linear-gradient(135deg,rgba(203,166,247,.18),rgba(99,102,241,.1));box-shadow:inset 0 .12rem .26rem rgba(255,255,255,.08);}.workspace-file-icon:before{content:"";position:absolute;left:.06rem;right:.06rem;top:.12rem;height:.16rem;border-radius:999px;background:rgba(203,166,247,.34);}.workspace-file-icon:after{content:"";position:absolute;left:.06rem;right:.06rem;bottom:.11rem;height:.24rem;border-radius:2px;background:rgba(99,102,241,.16);}.workspace-file-icon.is-file{width:.82rem;min-width:.82rem;height:1rem;margin-top:0;border-radius:3px;background:transparent;border:1.5px solid rgba(166,173,200,.58);box-shadow:none;color:var(--text-muted,#6c7086);}.workspace-file-icon.is-file:before{left:auto;right:-1.5px;top:-1.5px;width:.3rem;height:.3rem;border:0;border-left:1.5px solid rgba(166,173,200,.58);border-bottom:1.5px solid rgba(166,173,200,.58);border-radius:0 3px 0 3px;background:var(--surface-glass2,rgba(40,40,60,.94));}.workspace-file-icon.is-file:after{display:none;}.workspace-file-icon.is-folder-svg{width:1rem;min-width:1rem;height:1rem;margin-top:0;border:0;background:transparent;box-shadow:none;color:var(--text-muted,#6c7086);display:inline-flex;align-items:center;justify-content:center;}.workspace-file-icon.is-folder-svg:before,.workspace-file-icon.is-folder-svg:after{display:none;}.workspace-file-icon.is-folder-svg svg{width:1rem;height:1rem;display:block;}.workspace-file-icon.is-image{border-color:rgba(45,212,191,.72);}.workspace-file-icon.is-image:after{display:block;left:.12rem;right:.12rem;bottom:.15rem;height:.24rem;clip-path:polygon(0 100%,38% 38%,56% 66%,76% 24%,100% 100%);background:rgba(45,212,191,.72);}.workspace-file-icon.is-audio{border-color:rgba(251,191,36,.76);}.workspace-file-icon.is-audio:after{display:block;left:.17rem;right:auto;bottom:.18rem;width:.36rem;height:.4rem;border-radius:0;background:rgba(251,191,36,.76);clip-path:polygon(0 32%,45% 32%,100% 0,100% 100%,45% 68%,0 68%);}.workspace-file-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:.74rem;}.workspace-file-dir{grid-column:2/-1;color:var(--text-muted,#6c7086);font-size:.68rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}.workspace-file-meta{color:var(--text-muted,#6c7086);font-size:.68rem;white-space:nowrap;}.workspace-file-footer{position:relative;display:flex;align-items:center;justify-content:space-between;gap:.5rem;padding:.42rem .52rem;border-top:1px solid rgba(255,255,255,.08);background:rgba(255,255,255,.035);font-size:.72rem;color:var(--text-muted,#6c7086);}.workspace-file-outside{flex-shrink:0;border:1px solid rgba(203,166,247,.24);border-radius:8px;padding:.28rem .58rem;background:rgba(203,166,247,.1);color:var(--text-primary,#cdd6f4);font:inherit;font-size:.7rem;font-weight:700;cursor:pointer;transition:background .16s,border-color .16s,color .16s;}.workspace-file-outside:hover{background:rgba(203,166,247,.18);border-color:rgba(203,166,247,.42);color:#fff;}.workspace-file-insert{border:0;border-radius:8px;padding:.34rem .62rem;background:linear-gradient(135deg,#6366f1,#8b5cf6);color:#fff;font-size:.72rem;font-weight:700;cursor:pointer;}.workspace-file-insert:disabled{opacity:.45;cursor:not-allowed;}.workspace-file-empty{padding:1rem;text-align:center;color:var(--text-muted,#6c7086);font-size:.78rem;}.theme-light .workspace-file-popover{background:linear-gradient(145deg,rgba(255,255,255,.93),rgba(244,247,252,.86));box-shadow:0 24px 64px rgba(31,35,52,.16),0 0 28px rgba(99,102,241,.12);}.theme-light .workspace-file-search,.theme-light .workspace-file-footer{background:rgba(34,40,58,.035);}',document.head.appendChild(e)}}async function W(e,a,s){var d=typeof AbortController<"u"?new AbortController:null,i=d?setTimeout(function(){d.abort()},5e4):null,f;try{f=await fetch("/api/pick-path",{method:"POST",headers:{"Content-Type":"application/json"},credentials:"same-origin",body:JSON.stringify({kind:e||"directory",initial:a||"",multiple:!!s}),signal:d?d.signal:void 0})}finally{i&&clearTimeout(i)}var c=await f.json().catch(function(){return{ok:!1,error:"请求失败"}});if(!f.ok||!c.ok){if(c&&c.cancelled)return null;var r=c&&c.error||"无法打开选择对话框";if(/取消|cancelled|800704c7|2147023673/i.test(r))return null;throw new Error(r)}return s?Array.isArray(c.paths)?c.paths:c.path?[c.path]:[]:c.path||null}async function V(e,a,s,d,i){e.disabled=!0;try{var f=await W(a,s||"",!!i);d&&d(f)}catch{return}finally{e.disabled=!1}}function C(e){var a=String(e||"").trim();return a?((a.charAt(0)==='"'&&a.charAt(a.length-1)==='"'||a.charAt(0)==="'"&&a.charAt(a.length-1)==="'")&&(a=a.slice(1,-1)),'"'+a.replace(/"/g,'\\"')+'"'):""}function de(e){var a=String(e||"").toLowerCase().split(".").pop()||"";return/^(png|jpe?g|gif|webp|bmp|svg|tiff?|ico|avif)$/.test(a)?"is-image":/^(mp3|wav|flac|aac|m4a|ogg|oga|opus|wma|aiff?)$/.test(a)?"is-audio":""}function B(e,a){var s=e.selectionStart,d=e.selectionEnd,i=e.value.slice(0,s),f=e.value.slice(d),c=String(a||"");i.length&&!/\s$/.test(i)&&(c=" "+c),f.length&&!/^\s/.test(f)&&(c=c+" "),e.value=i+c+f;var r=i.length+c.length;e.selectionStart=e.selectionEnd=r,e.dispatchEvent(new Event("input",{bubbles:!0})),e.focus()}function G(e){var a=Array.prototype.slice.call(e||[]).filter(Boolean),s=0;if(a.forEach(function(d){var i=Number(d&&d.size||0);if(i>U)throw new Error("文件“"+String(d&&d.name||"未命名文件")+"”超过 "+N(U)+" 限制。");s+=Math.max(0,i)}),s>H)throw new Error("本次上传总大小超过 "+N(H)+" 限制。");return a}function z(e,a){var s;try{s=G(e)}catch(i){return Promise.reject(i)}if(!s.length)return Promise.resolve([]);a=a||{};var d=new FormData;return s.forEach(function(i){d.append("files",i,i.name||"upload.bin")}),new Promise(function(i,f){var c=new XMLHttpRequest;c.open("POST","/api/upload-chat-files",!0),c.withCredentials=!0,c.timeout=600*1e3,c.upload&&typeof a.onProgress=="function"&&(c.upload.onprogress=function(r){a.onProgress(r.loaded||0,r.lengthComputable?r.total:0)}),typeof a.registerAbort=="function"&&a.registerAbort(function(){c.abort()}),c.onload=function(){var r;try{r=JSON.parse(c.responseText||"{}")}catch{r={ok:!1,error:"上传失败"}}if(c.status<200||c.status>=300||!r.ok){f(new Error(r&&r.error||"上传失败"));return}i(Array.isArray(r.files)?r.files:[])},c.onerror=function(){f(new Error("上传失败：网络连接异常。"))},c.ontimeout=function(){f(new Error("上传超时，请重试。"))},c.onabort=function(){var r=new Error("上传已取消。");r.name="AbortError",f(r)},c.send(d)})}function N(e){return e=Number(e||0),!isFinite(e)||e<=0?"":e<1024?e+" B":e<1024*1024?Math.round(e/102.4)/10+" KB":e<1024*1024*1024?Math.round(e/104857.6)/10+" MB":Math.round(e/1073741824e-1)/10+" GB"}async function K(e,a,s){var d=[];e?d.push("q="+encodeURIComponent(e)):a&&d.push("dir="+encodeURIComponent(a));var i="/api/workspace-files"+(d.length?"?"+d.join("&"):""),f=await fetch(i,{credentials:"same-origin",signal:s}),c=await f.json().catch(function(){return{ok:!1,error:"读取工作区文件失败"}});if(!f.ok||!c.ok)throw new Error(c&&c.error||"读取工作区文件失败");return Array.isArray(c.files)?c.files:[]}function Q(){try{return typeof currentSessionId<"u"?String(currentSessionId||""):""}catch{return""}}function ce(e,a,s){if(a){var d=Q();if(s&&d&&s!==d){try{if(typeof persistInputDraft=="function"){var i="";typeof draftBySession<"u"&&Object.prototype.hasOwnProperty.call(draftBySession,s)?i=String(draftBySession[s]||""):typeof readStoredInputDraft=="function"&&(i=String(readStoredInputDraft(s)||"")),persistInputDraft(s,i.trim()?i+" "+a:a);return}}catch{}return}B(e,a)}}function $(e,a,s){var d=Q();return z(a,s).then(function(i){var f=i.map(function(c){return C(c.path||c.rel||c.name)}).join(" ");ce(e,f,d)})}function O(e,a){console.error("chat file upload failed:",a),e.dispatchEvent(new CustomEvent("myagent:file-paste-error",{bubbles:!0,detail:{message:String(a&&a.message||a||"上传失败")}}))}function X(e,a){var s=e.closest?e.closest(".input-wrapper"):null;a?e.dataset.fileUploadBusy="1":delete e.dataset.fileUploadBusy,s&&(s.classList.toggle("is-file-uploading",!!a),a?s.setAttribute("aria-busy","true"):s.removeAttribute("aria-busy")),e.dispatchEvent(new CustomEvent("myagent:file-upload-state",{bubbles:!0,detail:{busy:!!a}}))}function ue(e,a){var s=e.closest?e.closest(".input-wrapper"):null,d=document.createElement("div");d.className="chat-upload-status",d.setAttribute("role","status"),d.innerHTML='<div class="chat-upload-status-row"><span class="chat-upload-status-label"></span><button type="button" class="chat-upload-cancel">取消</button></div><div class="chat-upload-progress" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><span class="chat-upload-progress-bar"></span></div>';var i=a.length;return d.querySelector(".chat-upload-status-label").textContent="正在上传 "+i+" 个文件… 0%",s&&s.parentNode&&s.parentNode.insertBefore(d,s.nextSibling),d}function R(e,a){var s;try{s=G(a)}catch(v){return O(e,v),Promise.reject(v)}if(!s.length)return Promise.resolve();if(e._myAgentActiveUpload){var d=new Error("已有文件正在上传，请等待完成或先取消。");return O(e,d),Promise.reject(d)}var i=ue(e,s),f=i.querySelector(".chat-upload-status-label"),c=i.querySelector(".chat-upload-progress"),r=i.querySelector(".chat-upload-progress-bar"),S=i.querySelector(".chat-upload-cancel"),y=null,I=e._myAgentActiveUpload={};return X(e,!0),S.addEventListener("click",function(){S.disabled=!0,f.textContent="正在取消上传…",y&&y()}),$(e,s,{registerAbort:function(v){y=v},onProgress:function(v,T){if(e._myAgentActiveUpload===I){var E=T>0?Math.min(100,Math.round(v*100/T)):0;f.textContent="正在上传 "+s.length+" 个文件… "+E+"%",r.style.width=E+"%",c.setAttribute("aria-valuenow",String(E))}}}).catch(function(v){throw(!v||v.name!=="AbortError")&&O(e,v),v}).finally(function(){e._myAgentActiveUpload===I&&(delete e._myAgentActiveUpload,X(e,!1)),i.parentNode&&i.parentNode.removeChild(i)})}function Y(e){var a=e&&e.clipboardData;if(!a)return[];var s=[],d=Array.prototype.slice.call(a.items||[]);return d.forEach(function(i){if(!(!i||i.kind!=="file"||typeof i.getAsFile!="function")){var f=i.getAsFile();f&&s.push(f)}}),s.length||(s=Array.prototype.slice.call(a.files||[]).filter(Boolean)),s.map(function(i,f){if(String(i&&i.name||"").trim())return i;var c=String(i&&i.type||"").split("/")[1]||"bin";c=c.replace(/[^a-z0-9.+-]/gi,"")||"bin";var r="clipboard-"+Date.now()+"-"+(f+1)+"."+c;try{return new File([i],r,{type:i.type||"application/octet-stream",lastModified:Date.now()})}catch{return i}})}function Z(e){var a=e&&e.clipboardData;if(!a||typeof a.getData!="function")return!1;try{return String(a.getData("text/plain")||"").trim().length>0}catch{return!1}}function pe(e){!e||e.dataset.filePasteBound==="1"||(e.dataset.filePasteBound="1",e.addEventListener("paste",function(a){if(!Z(a)){var s=Y(a);s.length&&(a.preventDefault(),R(e,s).catch(function(){}))}}))}function fe(e,a){var s=document.createElement("div");s.className="workspace-file-popover",s.setAttribute("aria-hidden","true"),s.innerHTML='<input class="workspace-file-search" type="text" autocomplete="off" spellcheck="false" placeholder="搜索工作区文件"><div class="workspace-file-list" role="listbox"></div><div class="workspace-file-footer"><span class="workspace-file-count">未选择文件</span><button type="button" class="workspace-file-outside">选择工作目录外文件</button></div>',document.body.appendChild(s);var d=s.querySelector(".workspace-file-search"),i=s.querySelector(".workspace-file-list"),f=s.querySelector(".workspace-file-count"),c=s.querySelector(".workspace-file-outside"),r={items:[],visible:[],active:0,open:!1,debounce:null,controller:null,selected:Object.create(null),expanded:Object.create(null),loadedDirs:Object.create(null),itemMap:Object.create(null)};function S(){var n=e.closest?e.closest(".input-wrapper"):e,t=n.getBoundingClientRect(),o=8,p=Math.min(Math.max(t.width,520),window.innerWidth-16),l=Math.max(8,Math.min(t.left,window.innerWidth-p-8)),m=document.querySelector(".titlebar"),u=m?m.getBoundingClientRect().bottom:44,g=parseFloat(getComputedStyle(document.documentElement).fontSize||"16")||16,h=Math.min(44*g,window.innerHeight*.82),w=Math.max(1,t.top-u-o),b=Math.min(h,w),_=t.top-b-o;if(b<96){var L=Math.max(1,window.innerHeight-t.bottom-o-8);b=Math.min(h,L),_=t.bottom+o}s.style.left=l+"px",s.style.top=Math.max(u,_)+"px",s.style.width=p+"px",s.style.height=Math.max(1,Math.floor(b))+"px",s.style.maxHeight=Math.max(1,Math.floor(b))+"px"}function y(){var n=Object.keys(r.selected).length;f.textContent=n?"已选择 "+n+" 项":"未选择文件",i.querySelectorAll(".workspace-file-item").forEach(function(t){var o=t.getAttribute("data-path-key")||"",p=!!r.selected[o];t.classList.toggle("is-selected",p);var l=t.querySelector(".workspace-file-check");l&&(l.textContent=p?"✓":"")})}function I(n){var t=i.querySelectorAll(".workspace-file-item");if(!t.length){r.active=0;return}r.active=Math.max(0,Math.min(n,t.length-1));for(var o=0;o<t.length;o++)t[o].classList.toggle("is-active",o===r.active),t[o].setAttribute("aria-selected",o===r.active?"true":"false");var p=t[r.active];p&&typeof p.scrollIntoView=="function"&&p.scrollIntoView({block:"nearest"})}function v(){r.open=!1,s.classList.remove("is-open"),s.setAttribute("aria-hidden","true"),r.debounce&&clearTimeout(r.debounce),r.controller&&r.controller.abort()}function T(n){return n&&(n.path||n.rel||n.name)||""}function E(n){return C(T(n))}function he(n,t){var o=T(n);if(!o)return!1;var p=String(n&&n.rel||"");return t.indexOf(E(n))>=0||t.indexOf(o)>=0||p&&t.indexOf(C(p))>=0||p&&t.indexOf(p)>=0}function Se(n,t){n=String(n||""),t=String(t||"");for(var o=0;o<n.length&&o<t.length&&n.charAt(o)===t.charAt(o);)o++;for(var p=n.length-1,l=t.length-1;p>=o&&l>=o&&n.charAt(p)===t.charAt(l);)p--,l--;return t.slice(o,l+1).trim()}function ve(n,t){if(t){var o=String(e.value||"");if(!(o.indexOf(t)>=0)){var p=e.value;B(e,t);var l=Se(p,e.value);n&&l&&(n._inputToken=l)}}}function be(n,t){if(!t&&!n)return;var o=String(e.value||""),p=[];function l(u){u=String(u||"").trim(),u&&p.indexOf(u)<0&&p.push(u)}l(n&&n._inputToken),l(t),l(n&&n.path),l(n&&n.rel),l(n&&n.path&&C(n.path)),l(n&&n.rel&&C(n.rel));var m=o;p.sort(function(u,g){return g.length-u.length}).forEach(function(u){var g=u.replace(/[.*+?^${}()|[\]\\]/g,"\\$&"),h=new RegExp("(?:^|\\s)"+g+"(?=\\s|$)","g");m=m.replace(h,function(w){return w.charAt(0)&&/\s/.test(w.charAt(0))?" ":""})}),m=m.replace(/[ \t]{2,}/g," ").trim(),m!==o&&(e.value=m,e.selectionStart=e.selectionEnd=e.value.length,e.dispatchEvent(new Event("input",{bubbles:!0})))}function F(n){if(n){var t=T(n);if(t){var o=E(n);if(r.selected[t]){var p=r.selected[t];delete r.selected[t],be(p,o)}else r.selected[t]=n,ve(n,o);y()}}}function ee(){var n=String(e.value||"");Object.keys(r.selected).forEach(function(t){var o=r.selected[t];he(o,n)||delete r.selected[t]})}function ye(){ee(),y()}e.addEventListener("input",ye),c&&c.addEventListener("click",function(n){n.preventDefault(),n.stopPropagation(),typeof a=="function"&&a()});function ne(){var n=String(x.__WORK_DIR__||"workspace"),t=n.split(/[\\/]+/).filter(Boolean);return t[t.length-1]||"workspace"}function te(n,t,o){return{type:"dir",name:n,rel:t,root:!!o,path:"",dirs:Object.create(null),files:[],children:[],loaded:!1}}function Ie(n,t){var o=String(n&&n.path||""),p=String(t||"").replace(/\//g,"\\");return o&&p&&o.toLowerCase().slice(-p.length)===p.toLowerCase()?o.slice(0,Math.max(0,o.length-p.length)).replace(/[\\/]+$/,""):String(x.__WORK_DIR__||"").replace(/[\\/]+$/,"")}function re(n,t){var o=String(n||"").replace(/[\\/]+$/,""),p=String(t||"").replace(/[\\/]+/g,"/");if(!p)return o;var l=o.indexOf("\\")>=0?"\\":"/";return o?o+l+p.replace(/\//g,l):p}function A(n){return{kind:"directory",name:n.name||n.rel||ne(),rel:n.rel||"",path:n.path||re(String(x.__WORK_DIR__||""),n.rel||"")}}function we(n){var t=te(ne(),"",!0);t.path=String(x.__WORK_DIR__||"").replace(/[\\/]+$/,""),t.loaded=!!r.loadedDirs.__root__;function o(l,m){for(var u=t,g=[],h=0;h<l.length;h++)g.push(l[h]),u.dirs[l[h]]||(u.dirs[l[h]]=te(l[h],g.join("/"),!1),u.dirs[l[h]].path=re(m||t.path,g.join("/"))),u=u.dirs[l[h]],u.loaded=!!r.loadedDirs[u.rel||"__root__"];return u}(n||[]).forEach(function(l){var m=String(l.rel||l.path||l.name||"").replace(/\\/g,"/"),u=m.split("/").filter(Boolean);if(u.length){var g=Ie(l,m);if(!t.path&&g&&(t.path=g),l.kind==="directory"){var h=o(u,g||t.path);h.name=l.name||h.name,h.path=l.path||h.path;return}var w=o(u.slice(0,-1),g||t.path);w.files.push({type:"file",name:l.name||u[u.length-1]||m,rel:m,item:l})}});function p(l){var m=Object.keys(l.dirs).map(function(u){return l.dirs[u]}).sort(function(u,g){return u.name.localeCompare(g.name,void 0,{sensitivity:"base"})});m.forEach(p),l.files.sort(function(u,g){return u.name.localeCompare(g.name,void 0,{sensitivity:"base"})}),l.children=m.concat(l.files)}return p(t),t}function se(n,t,o){if(!(!n||n.type!=="dir")){o=Number(o||0);var p=n.rel||"__root__";t?r.expanded[p]=!0:typeof r.expanded[p]>"u"&&(r.expanded[p]=o===0),t&&n.children.forEach(function(l){l.type==="dir"&&se(l,t,o+1)})}}function xe(n){var t=[];function o(p,l){t.push({type:"dir",node:p,depth:l}),r.expanded[p.rel||"__root__"]&&p.children.forEach(function(m){m.type==="dir"?o(m,l+1):t.push({type:"file",node:m,depth:l+1})})}return o(n,0),t}function ke(n){return String(n&&(n.kind||"file")||"file")+":"+String(n&&(n.rel||n.path||n.name)||"")}function ae(n){(n||[]).forEach(function(t){var o=ke(t);o!==":"&&(r.itemMap[o]=t)}),r.items=Object.keys(r.itemMap).map(function(t){return r.itemMap[t]}),r.items.sort(function(t,o){return String(t.rel||"").localeCompare(String(o.rel||""),void 0,{sensitivity:"base"})})}function Ce(n){if(n){var t=n.rel||"__root__";r.expanded[t]=!r.expanded[t],k(r.items,!1),r.expanded[t]&&!d.value&&!r.loadedDirs[t]&&Te(n.rel||"")}}function k(n,t,o){if(ee(),r.items=(n||[]).slice().sort(function(l,m){return String(l.rel||"").localeCompare(String(m.rel||""),void 0,{sensitivity:"base"})}),i.innerHTML="",r.visible=[],t){i.innerHTML='<div class="workspace-file-empty">加载中</div>';return}if(o){i.innerHTML='<div class="workspace-file-empty">'+String(o)+"</div>";return}if(!r.items.length){i.innerHTML='<div class="workspace-file-empty">没有匹配文件</div>';return}var p=we(r.items);se(p,!!d.value),r.visible=xe(p),r.visible.forEach(function(l,m){var u=l.node,g=document.createElement("button");g.type="button",g.className="workspace-file-item "+(l.type==="dir"?"workspace-file-dir-row":"workspace-file-file-row"),g.setAttribute("role","option"),g.setAttribute("data-row-index",String(m)),g.setAttribute("data-path-key",l.type==="dir"?A(u).path||A(u).rel||A(u).name||"":u.item.path||u.item.rel||u.item.name||"");var h=document.createElement("div");h.className="workspace-file-tree";var w=document.createElement("span");w.className="workspace-file-indent",w.style.setProperty("--indent",Math.min(l.depth,10)*.86+"rem");var b=document.createElement("span");b.className="workspace-file-chevron",b.textContent=l.type==="dir"?r.expanded[u.rel||"__root__"]?"▾":"▸":"",l.type==="dir"?(b.setAttribute("aria-label",r.expanded[u.rel||"__root__"]?"折叠文件夹":"展开文件夹"),b.setAttribute("role","button"),b.addEventListener("click",function(P){P.preventDefault(),P.stopPropagation(),Ce(u)})):b.setAttribute("tabindex","-1");var _=document.createElement("span");_.className="workspace-file-icon"+(l.type==="file"?" is-file "+de(u.item&&u.item.name):" is-folder-svg"),l.type==="dir"&&(_.innerHTML=M);var L=document.createElement("div");L.className="workspace-file-name",L.textContent=u.name||u.rel||"";var D=document.createElement("div");D.className="workspace-file-meta",D.textContent=l.type==="dir"?"":N(u.item.size),h.appendChild(w),h.appendChild(b),h.appendChild(_),h.appendChild(L);var le=document.createElement("span");le.className="workspace-file-check",g.appendChild(le),g.appendChild(h),g.appendChild(D),g.addEventListener("mouseenter",function(){I(m)}),g.addEventListener("click",function(P){P.preventDefault(),P.stopPropagation(),l.type==="dir"?F(A(u)):F(u.item)}),i.appendChild(g)}),I(0),y()}function ie(){var n=d.value||"";r.controller&&r.controller.abort(),r.controller=typeof AbortController<"u"?new AbortController:null,k(r.items,!0),K(n,"",r.controller?r.controller.signal:void 0).then(function(t){r.open&&(n?k(t,!1):(r.loadedDirs.__root__=!0,ae(t),k(r.items,!1)))}).catch(function(t){t&&t.name==="AbortError"||r.open&&k([],!1,t&&t.message||"读取失败")})}function Te(n){var t=n||"__root__";r.loadedDirs[t]||(r.loadedDirs[t]=!0,K("",n||"",void 0).then(function(o){!r.open||d.value||(ae(o),k(r.items,!1))}).catch(function(){delete r.loadedDirs[t]}))}function Ee(){r.debounce&&clearTimeout(r.debounce),r.debounce=setTimeout(ie,120)}function oe(){if(r.open){S();try{d.focus(),d.select()}catch{}return}r.open=!0,s.classList.add("is-open"),s.setAttribute("aria-hidden","false"),d.value="",r.expanded=Object.create(null),r.loadedDirs=Object.create(null),r.itemMap=Object.create(null),r.items=[],k([],!0),S(),ie(),setTimeout(function(){S();try{d.focus()}catch{}},0)}function _e(){r.open?v():oe()}return d.addEventListener("input",Ee),d.addEventListener("keydown",function(n){if(n.key==="ArrowDown")n.preventDefault(),I(r.active+1);else if(n.key==="ArrowUp")n.preventDefault(),I(r.active-1);else if(n.key==="Enter"){n.preventDefault();var t=r.visible[r.active];t&&t.type==="dir"?F(A(t.node)):t&&t.type==="file"&&F(t.node.item)}else n.key==="Escape"&&(n.preventDefault(),v(),e.focus())}),document.addEventListener("click",function(n){r.open&&(s.contains(n.target)||v())}),window.addEventListener("resize",function(){r.open&&S()}),window.addEventListener("scroll",function(){r.open&&S()},!0),{panel:s,open:oe,close:v,toggle:_e}}function J(e,a,s){if(!e||e.dataset.pathBrowseWrapped==="1")return e;j();var d=document.createElement("div");d.className="path-input-row";var i=e.parentNode;if(!i)return e;i.insertBefore(d,e),d.appendChild(e);var f=document.createElement("button");f.type="button",f.className="path-browse-btn",f.innerHTML=M;var c=s||"浏览路径";return f.setAttribute("aria-label",c),typeof bindUiHoverTip=="function"?(f.setAttribute("data-ui-tip",c),f.removeAttribute("title"),bindUiHoverTip(f)):f.title=c,f.addEventListener("click",function(r){r.stopPropagation();var S=e.getAttribute("data-path-kind")||a;S!=="file"&&S!=="directory"&&(S="directory"),V(f,S,e.value||"",function(y){if(y){var I=Array.isArray(y)?y[0]||"":String(y);I&&(e.value=I,e.dispatchEvent(new Event("input",{bubbles:!0})),e.dispatchEvent(new Event("change",{bubbles:!0})))}})}),d.appendChild(f),e.dataset.pathBrowseWrapped="1",e}function ge(e){var a=e.closest?e.closest(".input-wrapper"):e;!a||a.dataset.fileDropBound==="1"||(a.dataset.fileDropBound="1",["dragenter","dragover"].forEach(function(s){a.addEventListener(s,function(d){!d.dataTransfer||!d.dataTransfer.files||!d.dataTransfer.files.length||(d.preventDefault(),a.classList.add("is-drag-over"))})}),["dragleave","drop"].forEach(function(s){a.addEventListener(s,function(){a.classList.remove("is-drag-over")})}),a.addEventListener("drop",function(s){!s.dataTransfer||!s.dataTransfer.files||!s.dataTransfer.files.length||(s.preventDefault(),R(e,s.dataTransfer.files).catch(function(){}))}))}function me(e,a){if(!(!e||!a)){j(),ge(a),pe(a),e.classList.add("path-browse-btn","path-browse-btn--ghost"),e.innerHTML=M,e.setAttribute("aria-label","工作区文件"),e.setAttribute("data-ui-tip","工作区文件"),e.dataset.silentPickerUnavailable="1",e.removeAttribute("title");var s=document.createElement("input");s.type="file",s.multiple=!0,s.style.display="none",s.setAttribute("aria-hidden","true"),document.body.appendChild(s),s.addEventListener("change",function(){var i=s.files;!i||!i.length||(e.disabled=!0,R(a,i).catch(function(){}).finally(function(){s.value="",e.disabled=!1}))});var d=fe(a,function(){s.click()});e.addEventListener("click",function(i){if(i.stopPropagation(),i.preventDefault(),i.altKey){s.click();return}if(!i.shiftKey){d.toggle();return}var f=x&&typeof x.__WORK_DIR__=="string"?x.__WORK_DIR__:"";V(e,"file",f,function(c){var r=Array.isArray(c)?c:c?[c]:[];r.length&&B(a,r.map(function(S){return C(S)}).join(" "))},!1)})}}function q(e){e=e||document;for(var a=e.querySelectorAll("[data-path-kind]"),s=0;s<a.length;s++){var d=a[s],i=d.getAttribute("data-path-kind");(i==="file"||i==="directory")&&J(d,i)}}x.MyAgentPathPicker={pickPath:W,wrapInputWithBrowse:J,attachChatPicker:me,uploadChatFiles:z,insertUploadedFiles:$,startChatFileUpload:R,clipboardFilesFromEvent:Y,clipboardHasUsableText:Z,scan:q},document.readyState==="loading"?document.addEventListener("DOMContentLoaded",function(){q(document)}):q(document)})(typeof window<"u"?window:globalThis);const Ae=`// Lightweight UI internationalisation. The UI is rendered by several legacy
 // modules, so translations are applied at the DOM boundary (including nodes
 // added later) instead of coupling every renderer to a framework.
 const LS_UI_LANGUAGE = 'myagent-language';
@@ -41,6 +41,26 @@ const UI_TRANSLATIONS_EN = {
     '需要确认': 'Confirmation required', '任务已中断': 'Task interrupted', '已请求停止当前任务': 'Stop requested',
     '展开': 'Expand', '收起': 'Collapse', '复制': 'Copy', '改写': 'Rewrite', '重试': 'Retry'
 };
+Object.assign(UI_TRANSLATIONS_EN, {
+    // Todo / goal panel
+    '已完成': 'Completed', '进行中': 'In progress', '待处理': 'Pending', '已暂停': 'Paused', '已阻塞': 'Blocked', '已取消': 'Cancelled',
+    '无限制': 'Unlimited', '分钟': 'min', '续跑': 'Continue run', '增加预算并继续': 'Increase budget and continue',
+    '继续': 'Continue', 'Token 预算已耗尽': 'Token budget exhausted', '连续运行失败': 'Consecutive run failures', '手动暂停': 'Paused manually',
+    '请输入要增加的 Token 预算': 'Enter additional Token budget', '预算必须是大于 0 的整数。': 'Budget must be an integer greater than 0.',
+    'Goal 操作失败': 'Goal operation failed', '目标操作失败': 'Goal operation failed', '待办事项': 'Todo items',
+    '规划': 'Plan', '计划': 'Plan', '清除当前计划': 'Clear current plan',
+    // Runtime status lines
+    '正在思考中...': 'Thinking...', '正在重连': 'Reconnecting', '任务已中断': 'Task interrupted',
+    '已请求停止当前任务': 'Stop requested for the current task', '解析事件失败': 'Failed to parse event',
+    '验证': 'Verification', '正在根据对话更新要点': 'Updating key points from the conversation',
+    '上下文窗口已满，开始压缩': 'Context window full; starting compression', '上下文压缩已完成': 'Context compression completed',
+    '上下文摘要': 'Context summary', '要点': 'Key points', '历史/旧版事件': 'History/legacy event',
+    '立即发送': 'Send now', '追问发送模式': 'Follow-up send mode', '打断': 'Interrupt', '追加': 'Append', '撤回': 'Withdraw',
+    '撤回中': 'Withdrawing', '提交中': 'Submitting', '已追加，等待下一轮': 'Appended, waiting for the next round',
+    '已接收，等待插入': 'Received, waiting to insert', '正在接管当前任务': 'Taking over the current task', '发送中': 'Sending', '已发送': 'Sent', '待发送': 'Pending send',
+    '已选择 Skill：': 'Selected Skill: ', '追问接管已保留，等待发送通道释放。': 'Follow-up takeover retained; waiting for the send channel to become available.',
+    '请求失败': 'Request failed', '撤销失败，请重试。': 'Undo failed. Please try again.'
+});
 Object.assign(UI_TRANSLATIONS_EN, {
     '新会话': 'New session', '停止 <span class="loader">': 'Stop <span class="loader">', '加载会话': 'Load session',
     '取消置顶': 'Unpin', '取消归档': 'Unarchive', '删除会话': 'Delete session', '此操作不可恢复': 'This action cannot be undone',
@@ -91,10 +111,11 @@ Object.assign(UI_TRANSLATIONS_EN, {
 
     // Model and skill controls
     '默认方案': 'Default profile', '未命名方案': 'Unnamed profile', '未加载模型配置': 'Model configuration not loaded',
-    '没有可用模型配置': 'No model configurations available',
+    '没有可用模型配置': 'No model configurations available', '没有启用的模型配置': 'No enabled model profiles',
     '暂无已保存模型配置，可到模型配置页中保存': 'No saved model configurations. Save one on the model configuration page.',
     '请稍候': 'Please wait', '模型配置加载失败': 'Failed to load model configuration', '切换失败': 'Switch failed',
-    'Skill 加载失败': 'Failed to load skills',
+    'Skill 加载失败': 'Failed to load skills', '启用': 'Enable', '禁用': 'Disable',
+    '模型配置启停失败': 'Failed to change model profile status', 'Skill 启停失败': 'Failed to change Skill status',
 
     // Messages, history and composer
     '开始一段新的对话': 'Start a new conversation',
@@ -163,10 +184,15 @@ function translateUiString(value) {
     if (exact) return exact;
     return String(value)
         .replace(/^更早 (\\d+) 轮对话$/, 'Earlier $1 conversations')
+        .replace(/^(\\d+) \\/ (\\d+) 已完成$/, '$1 / $2 completed')
+        .replace(/^(\\d+) \\/ (\\d+) 完成$/, '$1 / $2 completed')
+        .replace(/^(\\d+)分钟$/, '$1 min')
+        .replace(/^(\\d+) 分钟$/, '$1 min')
         .replace(/^已选择 (\\d+) 个 Skill$/, '$1 skills selected')
         .replace(/^已选择 (\\d+) 项$/, '$1 items selected')
         .replace(/^正在上传 (\\d+) 个文件… (\\d+)%$/, 'Uploading $1 files… $2%')
         .replace(/^已选 (\\d+) \\/ 共 (\\d+)$/, '$1 selected / $2 total')
+        .replace(/^已选 (\\d+) \\/ 已启用 (\\d+) \\/ 共 (\\d+)$/, '$1 selected / $2 enabled / $3 total')
         .replace(/^加载失败: (.+)$/, 'Failed to load: $1')
         .replace(/^请求失败: (.+)$/, 'Request failed: $1')
         .replace(/^无法打开：(.+)$/, 'Could not open: $1')
@@ -176,17 +202,79 @@ function translateUiString(value) {
         .replace(/^失败 (\\d+) 次$/, '$1 failures')
         .replace(/工具\\s*(\\d+)\\s*次/g, '$1 tool calls')
         .replace(/失败\\s*(\\d+)\\s*次/g, '$1 failures')
-        .replace(/(\\d+)\\s*轮/g, '$1 rounds')
+        .replace(/(\\d+)\\s*分\\s*(\\d+)\\s*秒/g, '$1m $2s')
         .replace(/^(\\d+) 轮$/, '$1 rounds')
         .replace(/^(\\d+)分(\\d+)秒$/, '$1m $2s')
         .replace(/^调用工具 (.+) (\\d+)次$/, 'Called tool $1 $2 times')
         .replace(/^检测到系统睡眠约 (\\d+) 秒，任务已恢复$/, 'System sleep detected for about $1 seconds; task resumed')
         .replace(/^检测到 Agent 进程暂停约 (\\d+) 秒，任务已恢复$/, 'Agent process pause detected for about $1 seconds; task resumed')
         .replace(/^模型配置切换失败: (.+)$/, 'Failed to switch model configuration: $1')
+        .replace(/^模型配置启停失败: (.+)$/, 'Failed to change model profile status: $1')
+        .replace(/^Skill 启停失败：(.+)$/, 'Failed to change Skill status: $1')
         .replace(/^续接失败: (.+)$/, 'Failed to continue: $1')
         .replace(/^恢复实时流失败: (.+)$/, 'Failed to restore live stream: $1')
         .replace(/^追问插入失败: (.+)$/, 'Failed to insert follow-up: $1')
         .replace(/^追问已被接收，无法撤回: (.+)$/, 'The follow-up was accepted and cannot be withdrawn: $1')
+        .replace(/^验证：(.+)$/, 'Verification: $1')
+        .replace(/【上下文窗口已满，开始压缩】/g, '[Context window full; starting compression]')
+        .replace(/【上下文压缩已完成】/g, '[Context compression completed]')
+        .replace(/【上下文摘要】/g, '[Context summary]')
+        .replace(/【上下文裁剪】/g, '[Context trimming]')
+        .replace(/【要点】/g, '[Key points]')
+        .replace(/上下文窗口已满，开始压缩/g, 'Context window full; starting compression')
+        .replace(/上下文压缩已完成/g, 'Context compression completed')
+        .replace(/正在进行上下文裁剪以控制 token（可能需数秒，请稍候）…/g, 'Trimming context to control tokens (this may take a few seconds; please wait)…')
+        .replace(/摘要模型仍在生成或等待响应中，请稍候…/g, 'The summary model is still generating or waiting for a response; please wait…')
+        .replace(/模型仍在更新要点或等待响应中，请稍候…/g, 'The model is still updating key points or waiting for a response; please wait…')
+        .replace(/已完成上下文裁剪与摘要以控制长度/g, 'Context trimming and summarization completed to control length')
+        .replace(/已完成上下文裁剪以控制长度/g, 'Context trimming completed to control length')
+        .replace(/正在分析上下文并准备本地裁剪…/g, 'Analyzing context and preparing local trimming…')
+        .replace(/正在执行本地裁剪与微压…/g, 'Performing local trimming and micro-compression…')
+        .replace(/已对非关键信息进行裁剪/g, 'Non-critical information trimmed')
+        .replace(/正在收敛较早段落中的 ReAct 过程…/g, 'Consolidating ReAct steps in earlier sections…')
+        .replace(/已对较早段落中的思考过程进行裁剪/g, 'Reasoning in earlier sections trimmed')
+        .replace(/裁剪后仍超限，开始生成历史摘要…/g, 'Still over the limit after trimming; generating a history summary…')
+        .replace(/没有足够可摘要的历史前缀，已转入截尾兜底。/g, 'Not enough history prefix to summarize; switching to tail truncation fallback.')
+        .replace(/没有足够可摘要的历史前缀，继续尝试更窄尾窗…/g, 'Not enough history prefix to summarize; trying a narrower tail window…')
+        .replace(/可摘要历史不足，已丢弃更早对话（保留至多约半窗 token 的尾部）。/g, 'Not enough history to summarize; discarded earlier messages and kept up to roughly half a window of recent tokens.')
+        .replace(/可摘要历史不足；对话已在半窗预算内未再截断。/g, 'Not enough history to summarize; the conversation was not truncated further within the half-window budget.')
+        .replace(/摘要输出格式重试后仍无效，已改用摘录兜底。/g, 'The summary output remained invalid after retries; using an excerpt fallback.')
+        .replace(/第 (\\d+) 次摘要输出格式无效，已丢弃并准备重试…/g, 'Summary output for attempt $1 was invalid, discarded, and will be retried…')
+        .replace(/摘要模型调用失败，已改用摘录兜底：/g, 'Summary model call failed; using an excerpt fallback: ')
+        .replace(/流程异常，已切换为失败兜底截尾。/g, 'The process encountered an error; switched to the failure fallback truncation.')
+        .replace(/当前上下文无需进一步裁剪或摘要/g, 'The current context needs no further trimming or summarization')
+        .replace(/正在进行上下文裁剪（可能需数秒，请稍候）…/g, 'Trimming context (this may take a few seconds; please wait)…')
+        .replace(/第 (\\d+) 轮：正在生成历史摘要与要点…/g, 'Round $1: generating history summary and key points…')
+        .replace(/第 (\\d+) 轮摘要完成/g, 'Round $1 summary completed')
+        .replace(/第 (\\d+) 轮要点已写入/g, 'Key points for round $1 written')
+        .replace(/正在根据编辑说明更新要点…/g, 'Updating key points from the edit instructions…')
+        .replace(/已按说明更新要点/g, 'Key points updated according to the instructions')
+        .replace(/完成 (\\d+) 轮历史摘要；完成关键 信息、经验与结论 的记录/g, 'Completed $1 rounds of history summarization; recorded key information, experience, and conclusions')
+        .replace(/本轮未能继续缩小本地上下文，已转入安全兜底。/g, 'This round could not reduce local context further; switched to safe fallback.')
+        .replace(/已完成配置的 (\\d+) 轮且尚未达到压缩比，继续进行增量摘要…/g, 'Completed the configured $1 rounds without reaching the compression ratio; continuing incremental summarization…')
+        .replace(/连续摘要未再缩小本地上下文（已尝试 (\\d+) 轮）/g, 'Repeated summarization did not reduce local context further (tried $1 rounds)')
+        .replace(/摘要未达到目标压缩比（已尝试 (\\d+) 轮）/g, 'Summary did not reach the target compression ratio (tried $1 rounds)')
+        .replace(/已转入安全兜底截尾。/g, 'Switched to safe fallback truncation.')
+        .replace(/对话已在半窗预算内未再截断。/g, 'The conversation was not truncated further within the half-window budget.')
+        .replace(/上下文已按策略完成裁剪/g, 'Context trimmed according to policy')
+        .replace(/对话已摘要，关键信息已写入 key_context/g, 'Conversation summarized; key information written to key_context')
+        .replace(/\\[系统通知：/g, '[System notice: ')
+        .replace(/\\[压缩失败，保留截断原文片段\\]/g, '[Compression failed; retaining a truncated excerpt]')
+        .replace(/检测到同会话仍有未结束的上下文压缩，等待其完成后再继续 ReAct。/g, 'An unfinished context compression was detected for this session; waiting for it to finish before continuing ReAct.')
+        .replace(/已按 CONTEXT_COMPRESS_FAILURE_MAX_TOKENS（与压缩失败兜底同款）裁剪对话尾部并继续本步/g, 'The conversation tail was trimmed using CONTEXT_COMPRESS_FAILURE_MAX_TOKENS (same as the compression-failure fallback), then this step continued')
+        .replace(/上下文已截尾（Conversation truncated）；更早内容请查本会话目录。/g, 'Context truncated (Conversation truncated); see the session directory for earlier content.')
+        .replace(/上下文已截尾（Conversation truncated），保留约半窗 token 尾部。/g, 'Context truncated (Conversation truncated), keeping roughly the last half-window of tokens.')
+        .replace(/已完成上下文裁剪与摘要/g, 'Context trimming and summarization completed')
+        .replace(/已完成上下文裁剪/g, 'Context trimming completed')
+        .replace(/【自动·长度策略】/g, '[Automatic length policy]')
+        .replace(/(\\d+)\\s*轮/g, '$1 rounds')
+        .replace(/正在根据对话更新要点/g, 'Updating key points from the conversation')
+        .replace(/正在思考中\\.\\.\\./g, 'Thinking...')
+        .replace(/正在重连/g, 'Reconnecting')
+        .replace(/^\\[历史\\/旧版事件\\] (.+)$/, '[History/legacy event] $1')
+        .replace(/^已选择 Skill：(.+)$/, 'Selected Skill: $1')
+        .replace(/^追问暂未发出（发送通道繁忙），已保留待重试: (.+)$/, 'Follow-up not sent (send channel busy); retained for retry: $1')
+        .replace(/^追问降级发送未成功，已保留待重试: (.+)$/, 'Fallback follow-up send failed; retained for retry: $1')
         .replace(/^思·/, 'Reasoning · ')
         .replace(/^答·/, 'Response · ')
         .replace(/^平均 (.+)$/, 'Average $1')
@@ -534,301 +622,291 @@ function initUiSettingsControls() {
         if (w) { try { w.focus(); } catch (e) {} }
         else window.location.href = '/execution-dashboard';
     });
-    var extensionsBtn = document.getElementById('settings-extensions');
-    if (extensionsBtn) extensionsBtn.addEventListener('click', function () {
-        closeSettingsModal();
-        var extensionsUrl = '/setup/env';
-        if (typeof currentSessionId !== 'undefined' && currentSessionId) {
-            extensionsUrl += '?session_id=' + encodeURIComponent(String(currentSessionId));
-        }
-        extensionsUrl += '#extensions';
-        var w = window.open(extensionsUrl, 'myagent-extensions');
-        if (w) { try { w.focus(); } catch (e) {} }
-        else window.location.href = extensionsUrl;
-    });
 }
 initUiSettingsControls();
-`,Pe=`let currentSessionId = null;\r
-/** Blocks repeat sends while the async send pipeline is claiming a sessionStore run slot. */\r
-const sendPipelineLocksBySession = Object.create(null);\r
-/** Optimistic preflight before the first session id has been allocated. */\r
-let optimisticNewSessionRun = null;\r
-const followupQueueBySession = Object.create(null);\r
-const followupQueueLoadedBySession = Object.create(null);\r
-let followupQueueSeq = 1;\r
-const followupWatchTimers = Object.create(null);\r
-const followupServerSyncInFlight = Object.create(null);\r
+`,Pe=`let currentSessionId = null;
+/** Blocks repeat sends while the async send pipeline is claiming a sessionStore run slot. */
+const sendPipelineLocksBySession = Object.create(null);
+/** Optimistic preflight before the first session id has been allocated. */
+let optimisticNewSessionRun = null;
+const followupQueueBySession = Object.create(null);
+const followupQueueLoadedBySession = Object.create(null);
+let followupQueueSeq = 1;
+const followupWatchTimers = Object.create(null);
+const followupServerSyncInFlight = Object.create(null);
+/** 会话级自动续发定时器；同一会话只保留一个最近到期的任务。 */
+const followupDrainTimers = Object.create(null);
 /** 会话级追问发送互斥链：显式立即发送共用，保证同一会话同一时刻只处理一条追问。 */
 const followupDispatchChain = Object.create(null);
-/** 会话在后台跑完后未点开过：侧栏绿点，点开即清除（localStorage 持久化，刷新不丢） */\r
-const sessionUnreadComplete = new Set();\r
-const LS_SESSION_UNREAD = 'myagent-session-unread';\r
-const sessionUnreadClearInFlight = Object.create(null);\r
-/** 每个会话独立的输入草稿（切换会话恢复） */\r
-const draftBySession = Object.create(null);\r
-const LS_INPUT_DRAFT_PREFIX = 'myagent-input-draft-';\r
-const LS_FOLLOWUP_QUEUE_PREFIX = 'myagent-followup-queue-';\r
-const inputPathTokenMap = Object.create(null);\r
-let inputPathRewriteGuard = false;\r
-/** 本会话最近一次成功点击「发送」的用户消息全文（供工具确认失败后「重新发送」） */\r
-const lastUserMessageBySession = Object.create(null);\r
-/** 离开会话时主列表 scrollTop，切回时恢复（本页内；首次进入该会话无记录则置底） */\r
-const LS_SESSION_SECTION_PREFIX = 'myagent-session-section-';\r
-let streamPollTimer = null;\r
-const messageRawMarkdown = new WeakMap();\r
-let liveAutoFollow = true;\r
-/** 生成中：对话区 / 执行过程区是否在底部附近（二者同时满足才跟流，见 refreshLiveAutoFollowPins） */\r
-let streamChatNearBottom = true;\r
-let streamProcNearBottom = true;\r
-let mermaidInitialized = false;\r
-let mermaidIdSeq = 0;\r
-/** 重放历史消息时创建的过程块不记真实起止时间（仅显示步数与工具次数） */\r
-let replayingMessages = false;\r
-\r
-/** 历史消息分页：按「对话轮」（每条用户提问为一轮起点），每页条数见 HISTORY_DIALOGUES_PER_PAGE */\r
-let sessionHistoryPaging = null;\r
-let historyOlderLoading = false;\r
-/** 每次加载末尾或更早一页时包含的用户提问轮数（含其间全部工具/过程事件） */\r
-const HISTORY_DIALOGUES_PER_PAGE = 5;\r
-\r
-/** 右侧「历史记录」重建序号：防止切换会话后旧 fetch 与当前 DOM 合并导致目录串台 */\r
-let tocRebuildEpoch = 0;\r
-let todoRefreshEpoch = 0;\r
-let tocActiveUpdateRaf = 0;\r
-let tocScrollBottomOnNextBuild = false;\r
-let suppressTocDuringSessionLoad = false;\r
-let switchSessionEpoch = 0;\r
-let messageLoadEpoch = 0;\r
-\r
-/** 右侧「历史记录」链接悬停浮层（替代浏览器原生 title） */\r
-let uiHoverTooltipEl = null;\r
-let hoverTooltipMoveScheduled = false;\r
-const UI_HOVER_TIP_DELAY_MS = 500;\r
-let uiHoverTipTimer = null;\r
-let uiHoverTipActiveEl = null;\r
-let uiHoverTipLastEv = null;\r
-\r
-let mermaidIoObserver = null;\r
-\r
-const defaultCtxThreshold = (typeof window.__CONTEXT_WINDOW__ === 'number' && window.__CONTEXT_WINDOW__ > 0)\r
-    ? window.__CONTEXT_WINDOW__\r
-    : 90000;\r
-let streamScrollFollowRaf = 0;\r
-let subagentScrollFollowRaf = 0;\r
-var subagentCardNearBottom = Object.create(null);\r
-const SUBAGENT_CARD_NEAR_BOTTOM_PX = 48;\r
-const USER_MESSAGE_COLLAPSE_LINES = 10;\r
-const USER_MESSAGE_VIRTUAL_LINE_CHARS = 100;\r
-\r
-var uiModalKeyHandler = null;\r
-\r
-function isMyAgentFeatureEnabled(name, defaultValue) {\r
-    var features = (typeof window !== 'undefined' && window.__MYAGENT_FEATURES__ && typeof window.__MYAGENT_FEATURES__ === 'object')\r
-        ? window.__MYAGENT_FEATURES__\r
-        : {};\r
-    if (Object.prototype.hasOwnProperty.call(features, name)) return !!features[name];\r
-    return !!defaultValue;\r
-}\r
-\r
-function clearSessionUnreadState(sessionId, opts) {\r
-    var sid = String(sessionId || '');\r
-    if (!sid) return;\r
-    opts = opts || {};\r
-    sessionUnreadComplete.delete(sid);\r
-    persistSessionUnread();\r
-    if (typeof sessionStore !== 'undefined') {\r
-        var sess = sessionStore.get(sid);\r
-        if (sess) {\r
-            sess.unread_result = false;\r
-            delete sess.unread_result_at;\r
-            delete sess.unread_result_status;\r
-        }\r
-    }\r
-    if (typeof syncSessionListIndicatorClasses === 'function') syncSessionListIndicatorClasses();\r
-    if (opts.server === false || sessionUnreadClearInFlight[sid]) return;\r
-    sessionUnreadClearInFlight[sid] = true;\r
-    fetch('/sessions/' + encodeURIComponent(sid) + '/unread-result/clear', { method: 'POST' })\r
-        .catch(function () { /* ignore */ })\r
-        .finally(function () { delete sessionUnreadClearInFlight[sid]; });\r
-}\r
-\r
-function splitUserMessageVisualLines(text) {\r
-    var raw = text == null ? '' : String(text);\r
-    var physical = raw.split('\\n');\r
-    var out = [];\r
-    for (var i = 0; i < physical.length; i += 1) {\r
-        var line = physical[i];\r
-        if (line.length === 0) {\r
-            out.push('');\r
-            continue;\r
-        }\r
-        for (var j = 0; j < line.length; j += USER_MESSAGE_VIRTUAL_LINE_CHARS) {\r
-            out.push(line.slice(j, j + USER_MESSAGE_VIRTUAL_LINE_CHARS));\r
-        }\r
-    }\r
-    return out;\r
-}\r
-\r
-function buildUserMessageSummary(text) {\r
-    var lines = splitUserMessageVisualLines(text);\r
-    return lines.slice(0, USER_MESSAGE_COLLAPSE_LINES).join('\\n') + '\\n...';\r
-}\r
-\r
-function userMessageShouldCollapse(text) {\r
-    return false;\r
-}\r
-\r
-function renderUserMessageContent(wrap, div, rawStr, linkifier) {\r
-    var applyLinks = typeof linkifier === 'function' ? linkifier : null;\r
-\r
-    function setPlain() {\r
-        div.textContent = rawStr;\r
-        if (applyLinks) applyLinks(div);\r
-    }\r
-\r
-    function setCollapsed() {\r
-        if (div.classList.contains('is-collapsible')) return;\r
-        wrap.classList.add('has-turn-process');\r
-        div.classList.add('is-collapsible');\r
-        div.textContent = '';\r
-        var sum = document.createElement('div');\r
-        sum.className = 'user-msg-summary';\r
-        sum.textContent = buildUserMessageSummary(rawStr);\r
-        if (applyLinks) applyLinks(sum);\r
-        var ful = document.createElement('div');\r
-        ful.className = 'user-msg-full';\r
-        ful.textContent = rawStr;\r
-        if (applyLinks) applyLinks(ful);\r
-        var ch = document.createElement('div');\r
-        ch.className = 'user-msg-chevron';\r
-        var arrow = document.createElement('span');\r
-        arrow.className = 'chevron-arrow';\r
-        ch.appendChild(arrow);\r
-        ch.addEventListener('click', function(e) {\r
-            e.stopPropagation();\r
-            wrap.classList.toggle('user-msg-expanded');\r
-        });\r
-        div.appendChild(sum);\r
-        div.appendChild(ful);\r
-        div.appendChild(ch);\r
-    }\r
-\r
-    setPlain();\r
-    requestAnimationFrame(function () {\r
-        if (!div.isConnected || div.classList.contains('is-collapsible')) return;\r
-        var cs = window.getComputedStyle ? window.getComputedStyle(div) : null;\r
-        var lineHeight = cs ? parseFloat(cs.lineHeight) : NaN;\r
-        if (!Number.isFinite(lineHeight) || lineHeight <= 0) {\r
-            var fontSize = cs ? parseFloat(cs.fontSize) : NaN;\r
-            lineHeight = Number.isFinite(fontSize) && fontSize > 0 ? fontSize * 1.65 : 18;\r
-        }\r
-        if (div.scrollHeight > lineHeight * USER_MESSAGE_COLLAPSE_LINES + 1) {\r
-            setCollapsed();\r
-        }\r
-    });\r
-}\r
-\r
-function closeUiModal(result) {\r
-    var root = document.getElementById('ui-modal-root');\r
-    if (!root) return;\r
-    root.classList.remove('is-open');\r
-    root.setAttribute('aria-hidden', 'true');\r
-    root.onclick = null;\r
-    var okBtn = document.getElementById('ui-modal-ok');\r
-    var cancelBtn = document.getElementById('ui-modal-cancel');\r
-    if (okBtn) okBtn.onclick = null;\r
-    if (cancelBtn) cancelBtn.onclick = null;\r
-    if (uiModalKeyHandler) {\r
-        document.removeEventListener('keydown', uiModalKeyHandler);\r
-        uiModalKeyHandler = null;\r
-    }\r
-    document.body.style.overflow = '';\r
-    var p = root._resolve;\r
-    root._resolve = null;\r
-    if (typeof p === 'function') p(result);\r
-}\r
-\r
-var UI_MODAL_SVG_TRASH = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>';\r
-var UI_MODAL_SVG_INFO = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>';\r
-\r
-function openUiModal(options) {\r
-    return new Promise(function (resolve) {\r
-        var root = document.getElementById('ui-modal-root');\r
-        var titleEl = document.getElementById('ui-modal-title');\r
-        var subEl = document.getElementById('ui-modal-subtitle');\r
-        var bodyEl = document.getElementById('ui-modal-desc');\r
-        var iconEl = document.getElementById('ui-modal-icon');\r
-        var okBtn = document.getElementById('ui-modal-ok');\r
-        var cancelBtn = document.getElementById('ui-modal-cancel');\r
-        if (!root || !titleEl || !bodyEl || !okBtn || !cancelBtn || !iconEl) {\r
-            resolve(false);\r
-            return;\r
-        }\r
-        root._resolve = resolve;\r
-        var o = options || {};\r
-        titleEl.textContent = o.title || '提示';\r
-        if (subEl) {\r
-            subEl.textContent = o.subtitle || '';\r
-            subEl.style.display = (o.subtitle) ? '' : 'none';\r
-        }\r
-        bodyEl.textContent = o.message || '';\r
-        bodyEl.style.display = (o.message) ? '' : 'none';\r
-        var showCancel = o.showCancel !== false;\r
-        cancelBtn.style.display = showCancel ? '' : 'none';\r
-        okBtn.textContent = o.confirmText || (showCancel ? '确定' : '知道了');\r
-        cancelBtn.textContent = o.cancelText || '取消';\r
-\r
-        var danger = !!o.danger;\r
-        iconEl.className = 'ui-modal__icon ' + (danger ? 'ui-modal__icon--danger' : 'ui-modal__icon--info');\r
-        iconEl.innerHTML = danger ? UI_MODAL_SVG_TRASH : UI_MODAL_SVG_INFO;\r
-\r
-        okBtn.className = 'ui-modal-btn ' + (danger ? 'ui-modal-btn--danger' : 'ui-modal-btn--primary');\r
-\r
-        function onOk() { closeUiModal(true); }\r
-        function onCancel() { closeUiModal(false); }\r
-        okBtn.onclick = onOk;\r
-        cancelBtn.onclick = onCancel;\r
-        root.onclick = function (e) { if (e.target === root) onCancel(); };\r
-\r
-        uiModalKeyHandler = function (e) {\r
-            if (e.key === 'Escape') { e.preventDefault(); onCancel(); }\r
-            else if (e.key === 'Enter' && !e.shiftKey && !e.ctrlKey && !e.metaKey && document.activeElement !== cancelBtn) {\r
-                e.preventDefault();\r
-                onOk();\r
-            }\r
-        };\r
-        document.addEventListener('keydown', uiModalKeyHandler);\r
-\r
-        root.classList.add('is-open');\r
-        root.setAttribute('aria-hidden', 'false');\r
-        document.body.style.overflow = 'hidden';\r
-        requestAnimationFrame(function () { okBtn.focus(); });\r
-    });\r
-}\r
-\r
-function showUiAlert(opts) {\r
-    var o = opts || {};\r
-    var root = document.getElementById('ui-modal-root');\r
-    var token = Date.now() + ':' + Math.random();\r
-    if (root && o.autoCloseMs) root.dataset.alertToken = token;\r
-    var p = openUiModal({\r
-        title: o.title || '提示',\r
-        subtitle: o.subtitle,\r
-        message: o.message || '',\r
-        variant: o.variant || 'info',\r
-        danger: false,\r
-        showCancel: false,\r
-        confirmText: o.confirmText || '知道了',\r
-    });\r
-    if (root && o.autoCloseMs) {\r
-        setTimeout(function () {\r
-            if (!root.classList.contains('is-open')) return;\r
-            if (root.dataset.alertToken !== token) return;\r
-            closeUiModal(true);\r
-        }, Math.max(800, Number(o.autoCloseMs) || 0));\r
-    }\r
-    return p;\r
-}\r
+/** 会话在后台跑完后未点开过：侧栏绿点，点开即清除（localStorage 持久化，刷新不丢） */
+const sessionUnreadComplete = new Set();
+const LS_SESSION_UNREAD = 'myagent-session-unread';
+const sessionUnreadClearInFlight = Object.create(null);
+/** 每个会话独立的输入草稿（切换会话恢复） */
+const draftBySession = Object.create(null);
+const LS_INPUT_DRAFT_PREFIX = 'myagent-input-draft-';
+const LS_FOLLOWUP_QUEUE_PREFIX = 'myagent-followup-queue-';
+const inputPathTokenMap = Object.create(null);
+let inputPathRewriteGuard = false;
+/** 本会话最近一次成功点击「发送」的用户消息全文（供工具确认失败后「重新发送」） */
+const lastUserMessageBySession = Object.create(null);
+/** 离开会话时主列表 scrollTop，切回时恢复（本页内；首次进入该会话无记录则置底） */
+const LS_SESSION_SECTION_PREFIX = 'myagent-session-section-';
+let streamPollTimer = null;
+const messageRawMarkdown = new WeakMap();
+let liveAutoFollow = true;
+/** 生成中：对话区 / 执行过程区是否在底部附近（二者同时满足才跟流，见 refreshLiveAutoFollowPins） */
+let streamChatNearBottom = true;
+let streamProcNearBottom = true;
+let mermaidInitialized = false;
+let mermaidIdSeq = 0;
+/** 重放历史消息时创建的过程块不记真实起止时间（仅显示步数与工具次数） */
+let replayingMessages = false;
+
+/** 历史消息分页：按「对话轮」（每条用户提问为一轮起点），每页条数见 HISTORY_DIALOGUES_PER_PAGE */
+let sessionHistoryPaging = null;
+let historyOlderLoading = false;
+/** 每次加载末尾或更早一页时包含的用户提问轮数（含其间全部工具/过程事件） */
+const HISTORY_DIALOGUES_PER_PAGE = 5;
+
+/** 右侧「历史记录」重建序号：防止切换会话后旧 fetch 与当前 DOM 合并导致目录串台 */
+let tocRebuildEpoch = 0;
+let todoRefreshEpoch = 0;
+let tocActiveUpdateRaf = 0;
+let tocScrollBottomOnNextBuild = false;
+let suppressTocDuringSessionLoad = false;
+let switchSessionEpoch = 0;
+let messageLoadEpoch = 0;
+
+/** 右侧「历史记录」链接悬停浮层（替代浏览器原生 title） */
+let uiHoverTooltipEl = null;
+let hoverTooltipMoveScheduled = false;
+const UI_HOVER_TIP_DELAY_MS = 500;
+let uiHoverTipTimer = null;
+let uiHoverTipActiveEl = null;
+let uiHoverTipLastEv = null;
+
+let mermaidIoObserver = null;
+
+const defaultCtxThreshold = (typeof window.__CONTEXT_WINDOW__ === 'number' && window.__CONTEXT_WINDOW__ > 0)
+    ? window.__CONTEXT_WINDOW__
+    : 90000;
+let streamScrollFollowRaf = 0;
+let subagentScrollFollowRaf = 0;
+var subagentCardNearBottom = Object.create(null);
+const SUBAGENT_CARD_NEAR_BOTTOM_PX = 48;
+const USER_MESSAGE_COLLAPSE_LINES = 10;
+const USER_MESSAGE_VIRTUAL_LINE_CHARS = 100;
+
+var uiModalKeyHandler = null;
+
+function isMyAgentFeatureEnabled(name, defaultValue) {
+    var features = (typeof window !== 'undefined' && window.__MYAGENT_FEATURES__ && typeof window.__MYAGENT_FEATURES__ === 'object')
+        ? window.__MYAGENT_FEATURES__
+        : {};
+    if (Object.prototype.hasOwnProperty.call(features, name)) return !!features[name];
+    return !!defaultValue;
+}
+
+function clearSessionUnreadState(sessionId, opts) {
+    var sid = String(sessionId || '');
+    if (!sid) return;
+    opts = opts || {};
+    sessionUnreadComplete.delete(sid);
+    persistSessionUnread();
+    if (typeof sessionStore !== 'undefined') {
+        var sess = sessionStore.get(sid);
+        if (sess) {
+            sess.unread_result = false;
+            delete sess.unread_result_at;
+            delete sess.unread_result_status;
+        }
+    }
+    if (typeof syncSessionListIndicatorClasses === 'function') syncSessionListIndicatorClasses();
+    if (opts.server === false || sessionUnreadClearInFlight[sid]) return;
+    sessionUnreadClearInFlight[sid] = true;
+    fetch('/sessions/' + encodeURIComponent(sid) + '/unread-result/clear', { method: 'POST' })
+        .catch(function () { /* ignore */ })
+        .finally(function () { delete sessionUnreadClearInFlight[sid]; });
+}
+
+function splitUserMessageVisualLines(text) {
+    var raw = text == null ? '' : String(text);
+    var physical = raw.split('\\n');
+    var out = [];
+    for (var i = 0; i < physical.length; i += 1) {
+        var line = physical[i];
+        if (line.length === 0) {
+            out.push('');
+            continue;
+        }
+        for (var j = 0; j < line.length; j += USER_MESSAGE_VIRTUAL_LINE_CHARS) {
+            out.push(line.slice(j, j + USER_MESSAGE_VIRTUAL_LINE_CHARS));
+        }
+    }
+    return out;
+}
+
+function buildUserMessageSummary(text) {
+    var lines = splitUserMessageVisualLines(text);
+    return lines.slice(0, USER_MESSAGE_COLLAPSE_LINES).join('\\n') + '\\n...';
+}
+
+function userMessageShouldCollapse(text) {
+    return false;
+}
+
+function renderUserMessageContent(wrap, div, rawStr, linkifier) {
+    var applyLinks = typeof linkifier === 'function' ? linkifier : null;
+
+    function setPlain() {
+        div.textContent = rawStr;
+        if (applyLinks) applyLinks(div);
+    }
+
+    function setCollapsed() {
+        if (div.classList.contains('is-collapsible')) return;
+        wrap.classList.add('has-turn-process');
+        div.classList.add('is-collapsible');
+        div.textContent = '';
+        var sum = document.createElement('div');
+        sum.className = 'user-msg-summary';
+        sum.textContent = buildUserMessageSummary(rawStr);
+        if (applyLinks) applyLinks(sum);
+        var ful = document.createElement('div');
+        ful.className = 'user-msg-full';
+        ful.textContent = rawStr;
+        if (applyLinks) applyLinks(ful);
+        var ch = document.createElement('div');
+        ch.className = 'user-msg-chevron';
+        var arrow = document.createElement('span');
+        arrow.className = 'chevron-arrow';
+        ch.appendChild(arrow);
+        ch.addEventListener('click', function(e) {
+            e.stopPropagation();
+            wrap.classList.toggle('user-msg-expanded');
+        });
+        div.appendChild(sum);
+        div.appendChild(ful);
+        div.appendChild(ch);
+    }
+
+    setPlain();
+    requestAnimationFrame(function () {
+        if (!div.isConnected || div.classList.contains('is-collapsible')) return;
+        var cs = window.getComputedStyle ? window.getComputedStyle(div) : null;
+        var lineHeight = cs ? parseFloat(cs.lineHeight) : NaN;
+        if (!Number.isFinite(lineHeight) || lineHeight <= 0) {
+            var fontSize = cs ? parseFloat(cs.fontSize) : NaN;
+            lineHeight = Number.isFinite(fontSize) && fontSize > 0 ? fontSize * 1.65 : 18;
+        }
+        if (div.scrollHeight > lineHeight * USER_MESSAGE_COLLAPSE_LINES + 1) {
+            setCollapsed();
+        }
+    });
+}
+
+function closeUiModal(result) {
+    var root = document.getElementById('ui-modal-root');
+    if (!root) return;
+    root.classList.remove('is-open');
+    root.setAttribute('aria-hidden', 'true');
+    root.onclick = null;
+    var okBtn = document.getElementById('ui-modal-ok');
+    var cancelBtn = document.getElementById('ui-modal-cancel');
+    if (okBtn) okBtn.onclick = null;
+    if (cancelBtn) cancelBtn.onclick = null;
+    if (uiModalKeyHandler) {
+        document.removeEventListener('keydown', uiModalKeyHandler);
+        uiModalKeyHandler = null;
+    }
+    document.body.style.overflow = '';
+    var p = root._resolve;
+    root._resolve = null;
+    if (typeof p === 'function') p(result);
+}
+
+var UI_MODAL_SVG_TRASH = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>';
+var UI_MODAL_SVG_INFO = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>';
+
+function openUiModal(options) {
+    return new Promise(function (resolve) {
+        var root = document.getElementById('ui-modal-root');
+        var titleEl = document.getElementById('ui-modal-title');
+        var subEl = document.getElementById('ui-modal-subtitle');
+        var bodyEl = document.getElementById('ui-modal-desc');
+        var iconEl = document.getElementById('ui-modal-icon');
+        var okBtn = document.getElementById('ui-modal-ok');
+        var cancelBtn = document.getElementById('ui-modal-cancel');
+        if (!root || !titleEl || !bodyEl || !okBtn || !cancelBtn || !iconEl) {
+            resolve(false);
+            return;
+        }
+        root._resolve = resolve;
+        var o = options || {};
+        titleEl.textContent = o.title || '提示';
+        if (subEl) {
+            subEl.textContent = o.subtitle || '';
+            subEl.style.display = (o.subtitle) ? '' : 'none';
+        }
+        bodyEl.textContent = o.message || '';
+        bodyEl.style.display = (o.message) ? '' : 'none';
+        var showCancel = o.showCancel !== false;
+        cancelBtn.style.display = showCancel ? '' : 'none';
+        okBtn.textContent = o.confirmText || (showCancel ? '确定' : '知道了');
+        cancelBtn.textContent = o.cancelText || '取消';
+
+        var danger = !!o.danger;
+        iconEl.className = 'ui-modal__icon ' + (danger ? 'ui-modal__icon--danger' : 'ui-modal__icon--info');
+        iconEl.innerHTML = danger ? UI_MODAL_SVG_TRASH : UI_MODAL_SVG_INFO;
+
+        okBtn.className = 'ui-modal-btn ' + (danger ? 'ui-modal-btn--danger' : 'ui-modal-btn--primary');
+
+        function onOk() { closeUiModal(true); }
+        function onCancel() { closeUiModal(false); }
+        okBtn.onclick = onOk;
+        cancelBtn.onclick = onCancel;
+        root.onclick = function (e) { if (e.target === root) onCancel(); };
+
+        uiModalKeyHandler = function (e) {
+            if (e.key === 'Escape') { e.preventDefault(); onCancel(); }
+            else if (e.key === 'Enter' && !e.shiftKey && !e.ctrlKey && !e.metaKey && document.activeElement !== cancelBtn) {
+                e.preventDefault();
+                onOk();
+            }
+        };
+        document.addEventListener('keydown', uiModalKeyHandler);
+
+        root.classList.add('is-open');
+        root.setAttribute('aria-hidden', 'false');
+        document.body.style.overflow = 'hidden';
+        requestAnimationFrame(function () { okBtn.focus(); });
+    });
+}
+
+function showUiAlert(opts) {
+    var o = opts || {};
+    var root = document.getElementById('ui-modal-root');
+    var token = Date.now() + ':' + Math.random();
+    if (root && o.autoCloseMs) root.dataset.alertToken = token;
+    var p = openUiModal({
+        title: o.title || '提示',
+        subtitle: o.subtitle,
+        message: o.message || '',
+        variant: o.variant || 'info',
+        danger: false,
+        showCancel: false,
+        confirmText: o.confirmText || '知道了',
+    });
+    if (root && o.autoCloseMs) {
+        setTimeout(function () {
+            if (!root.classList.contains('is-open')) return;
+            if (root.dataset.alertToken !== token) return;
+            closeUiModal(true);
+        }, Math.max(800, Number(o.autoCloseMs) || 0));
+    }
+    return p;
+}
 `,Re=`var agentTeamModalKeyHandler = null;
 var agentTeamBusy = false;
 
@@ -1879,7 +1957,7 @@ function selectMessageEventCount(sessionId) {
 function truncateMessageStateForSession(sessionId, beforeIndex) {
     return messageStore.truncateSession(sessionId, beforeIndex);
 }
-`,De=`function renderMessageRecord(ctx, record, sessionId) {
+`,qe=`function renderMessageRecord(ctx, record, sessionId) {
     if (!ctx || !record || !record.event) return null;
     const sid = sessionId || record.sessionId || currentSessionId;
     renderEvent(ctx, record.event, record.index, sid);
@@ -1909,7 +1987,7 @@ function renderMessageRecords(ctx, records, sessionId) {
         renderMessageRecord(ctx, list[i], sessionId);
     }
 }
-`,Ue=`const subagentStore = {
+`,De=`const subagentStore = {
     sessions: new Map(),
 
     ensureSession(sessionId) {
@@ -2080,7 +2158,7 @@ function selectSubagentList(sessionId) {
 function selectSubagentRunningCount(sessionId) {
     return subagentStore.runningCount(sessionId);
 }
-`,qe=`var subagentContinueInFlight = false;
+`,Ue=`var subagentContinueInFlight = false;
 var subagentContinueBannerTimer = null;
 var subagentContinueDismissedForSession = Object.create(null);
 
@@ -3852,10 +3930,11 @@ function applySessionEvent(event, opts) {
     }
     return { handled: false, messageRecord: messageRecord };
 }
-`,Ye=`let modelProfilesCache = null;
+`,Xe=`let modelProfilesCache = null;
 const modelProfilesRefreshPromises = Object.create(null);
 const modelProfileBusyBySession = Object.create(null);
 const modelProfileIdBySession = Object.create(null);
+const modelProfileToggleBusy = Object.create(null);
 let modelProfileSelectionEpoch = 0;
 let activeModelProfileId = '';
 
@@ -3898,9 +3977,13 @@ async function loadModelProfilesForSwitcher() {
     return data;
 }
 
-function allProfiles() {
+function storedProfiles() {
     if (!modelProfilesCache) return [];
-    return (modelProfilesCache.profiles || []).filter((profile) => profile && profile.usable !== false);
+    return (modelProfilesCache.profiles || []).filter((profile) => profile);
+}
+
+function allProfiles() {
+    return storedProfiles().filter((profile) => profile.enabled !== false && profile.usable !== false);
 }
 
 function activeProfile() {
@@ -3951,10 +4034,10 @@ function renderModelProfileControl() {
     var e = els();
     if (!e.trigger || !e.current || !e.menu) return;
     var active = activeProfile();
-    e.current.textContent = active ? profileLabel(active) : '未加载模型配置';
+    e.current.textContent = active ? profileLabel(active) : '没有启用的模型配置';
     e.trigger.removeAttribute('title');
     e.trigger.removeAttribute('data-ui-tip');
-    var profiles = allProfiles();
+    var profiles = storedProfiles();
     if (!profiles.length) {
         e.menu.innerHTML = '<button type="button" class="composer-model-option" disabled><span class="composer-model-option-name">没有可用模型配置</span></button>';
         return;
@@ -3963,14 +4046,15 @@ function renderModelProfileControl() {
     for (var i = 0; i < profiles.length; i += 1) {
         var p = profiles[i] || {};
         var id = String(p.id || '');
+        var enabled = p.enabled !== false;
         var activeCls = id === String(activeModelProfileId || '') ? ' is-active' : '';
-        html += '<button type="button" class="composer-model-option' + activeCls + '" role="option" data-profile-id="' + h(id) + '">'
+        html += '<div class="composer-model-option-row' + (enabled ? '' : ' is-disabled') + '">'
+            + '<button type="button" class="composer-model-option' + activeCls + '" role="option" data-profile-id="' + h(id) + '"' + (enabled ? '' : ' disabled') + '>'
             + '<span class="composer-model-option-name">' + h(profileLabel(p)) + '</span>'
             + '<span class="composer-model-option-meta">' + h(profileMeta(p)) + '</span>'
-            + '</button>';
-    }
-    if (!(modelProfilesCache.profiles || []).length) {
-        html += '<button type="button" class="composer-model-option" disabled><span class="composer-model-option-meta">暂无已保存模型配置，可到模型配置页中保存</span></button>';
+            + '</button>'
+            + '<button type="button" class="composer-model-toggle" data-toggle-profile-id="' + h(id) + '" data-enabled="' + (enabled ? 'true' : 'false') + '">' + (enabled ? '禁用' : '启用') + '</button>'
+            + '</div>';
     }
     e.menu.innerHTML = html;
     e.menu.querySelectorAll('[data-profile-id]').forEach((btn) => {
@@ -3979,6 +4063,35 @@ function renderModelProfileControl() {
             closeModelMenu();
         });
     });
+    e.menu.querySelectorAll('[data-toggle-profile-id]').forEach((btn) => {
+        btn.addEventListener('click', () => {
+            var enabled = btn.getAttribute('data-enabled') !== 'true';
+            setModelProfileEnabled(btn.getAttribute('data-toggle-profile-id') || '', enabled);
+        });
+    });
+}
+
+async function setModelProfileEnabled(profileId, enabled) {
+    const id = String(profileId || '');
+    const sid = String(currentSessionId || '');
+    if (!id || modelProfileToggleBusy[id]) return;
+    modelProfileToggleBusy[id] = true;
+    try {
+        var response = await fetch('/api/model_profiles/' + encodeURIComponent(id) + '/enabled', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'same-origin',
+            body: JSON.stringify({ enabled: enabled === true }),
+        });
+        var data = await response.json();
+        if (!data || !data.ok) throw new Error((data && data.error) || '模型配置启停失败');
+        await refreshModelProfileSelector(sid, { silent: true });
+        openModelMenu();
+    } catch (err) {
+        if (typeof appendLogVisible === 'function') appendLogVisible('模型配置启停失败: ' + String(err.message || err), 'error-log');
+    } finally {
+        delete modelProfileToggleBusy[id];
+    }
 }
 
 function renderModelProfileLoadingMenu() {
@@ -4108,9 +4221,10 @@ function initModelProfileSwitcher() {
 initModelProfileSwitcher();
 window.refreshModelProfileSelector = refreshModelProfileSelector;
 window.loadModelProfilesForSwitcher = loadModelProfilesForSwitcher;
-`,Xe=`let skillPickerCache = null;
+`,Ye=`let skillPickerCache = null;
 let skillPickerRefreshPromise = null;
 let selectedSkillNames = [];
+const skillPickerToggleBusy = Object.create(null);
 const LS_SKILL_DRAFT_PREFIX = 'myagent-skill-draft:';
 
 function skillPickerEls() {
@@ -4134,6 +4248,17 @@ function selectedSkillSet() {
     var out = {};
     selectedSkillNames.forEach(function (name) { out[String(name)] = true; });
     return out;
+}
+
+function reconcileSelectedSkillsWithEnabledCatalog() {
+    if (!skillPickerCache) return;
+    var enabled = {};
+    (skillPickerCache.skills || []).forEach(function (skill) {
+        if (skill && skill.enabled !== false) enabled[String(skill.name || '')] = true;
+    });
+    selectedSkillNames = selectedSkillNames.filter(function (name) { return enabled[String(name)]; });
+    persistSkillPickerDraft(currentSessionId);
+    syncSkillPickerButton();
 }
 
 function skillDraftStorageKey(sessionId) {
@@ -4223,21 +4348,27 @@ function renderSkillPicker() {
     }
     var active = selectedSkillSet();
     var selectedCount = selectedSkillNames.length;
+    var enabledCount = skills.filter(function (skill) { return skill && skill.enabled !== false; }).length;
     var html = '<div class="skill-picker-head">'
-        + '<div class="skill-picker-title">选择 Skill <span class="skill-picker-total">已选 ' + skillPickerEscape(selectedCount) + ' / 共 ' + skillPickerEscape(skills.length) + '</span></div>'
+        + '<div class="skill-picker-title">选择 Skill <span class="skill-picker-total">已选 ' + skillPickerEscape(selectedCount) + ' / 已启用 ' + skillPickerEscape(enabledCount) + ' / 共 ' + skillPickerEscape(skills.length) + '</span></div>'
         + '<button type="button" class="skill-picker-clear">清空</button>'
         + '</div>'
         + '<div class="skill-picker-list">';
     skills.forEach(function (skill) {
         var name = String(skill && skill.name || '');
+        var enabled = skill && skill.enabled !== false;
         var checked = active[name] ? ' checked' : '';
-        html += '<label class="skill-picker-option">'
-            + '<input type="checkbox" value="' + skillPickerEscape(name) + '"' + checked + '>'
+        var disabled = enabled ? '' : ' disabled';
+        html += '<div class="skill-picker-option' + (enabled ? '' : ' is-disabled') + '">'
+            + '<label class="skill-picker-select">'
+            + '<input type="checkbox" value="' + skillPickerEscape(name) + '"' + checked + disabled + '>'
             + '<span class="skill-picker-option-body">'
             + '<span class="skill-picker-option-name">' + skillPickerEscape(name) + '</span>'
             + '<span class="skill-picker-option-desc">' + skillPickerEscape(skill && skill.description || '') + '</span>'
             + '</span>'
-            + '</label>';
+            + '</label>'
+            + '<button type="button" class="skill-picker-toggle" data-skill-name="' + skillPickerEscape(name) + '" data-enabled="' + (enabled ? 'true' : 'false') + '">' + (enabled ? '禁用' : '启用') + '</button>'
+            + '</div>';
     });
     html += '</div>';
     e.popover.innerHTML = html;
@@ -4262,6 +4393,38 @@ function renderSkillPicker() {
             renderSkillPicker();
         });
     }
+    e.popover.querySelectorAll('.skill-picker-toggle').forEach(function (button) {
+        button.addEventListener('click', function () {
+            var name = String(button.getAttribute('data-skill-name') || '');
+            var enabled = button.getAttribute('data-enabled') !== 'true';
+            setSkillPickerEnabled(name, enabled);
+        });
+    });
+}
+
+async function setSkillPickerEnabled(name, enabled) {
+    name = String(name || '').trim();
+    if (!name || skillPickerToggleBusy[name]) return;
+    skillPickerToggleBusy[name] = true;
+    try {
+        var response = await fetch('/api/skills/' + encodeURIComponent(name) + '/enabled', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'same-origin',
+            body: JSON.stringify({ enabled: enabled === true }),
+        });
+        var data = await response.json();
+        if (!data || !data.ok) throw new Error((data && data.error) || 'Skill 启停失败');
+        (skillPickerCache.skills || []).forEach(function (skill) {
+            if (String(skill && skill.name || '') === name) skill.enabled = enabled === true;
+        });
+        reconcileSelectedSkillsWithEnabledCatalog();
+        renderSkillPicker();
+    } catch (err) {
+        if (typeof appendLogVisible === 'function') appendLogVisible('Skill 启停失败：' + String(err.message || err), 'error-log');
+    } finally {
+        delete skillPickerToggleBusy[name];
+    }
 }
 
 async function loadSkillPickerSkills() {
@@ -4269,6 +4432,7 @@ async function loadSkillPickerSkills() {
     const data = await response.json();
     if (!data || !data.ok) throw new Error((data && data.error) || 'Skill 加载失败');
     skillPickerCache = data;
+    reconcileSelectedSkillsWithEnabledCatalog();
     return data;
 }
 
@@ -6347,7 +6511,8 @@ function renderTodoPlanSnapshot(snapshot) {
     }
     const done = data.done;
     const total = data.total;
-    statsEl.textContent = String(done) + ' / ' + String(total) + ' 已完成';
+    const statsText = String(done) + ' / ' + String(total) + ' 已完成';
+    statsEl.textContent = typeof translateUiString === 'function' ? translateUiString(statsText) : statsText;
     listEl.textContent = '';
     items.forEach(function (it) {
         const li = document.createElement('li');
@@ -6355,7 +6520,8 @@ function renderTodoPlanSnapshot(snapshot) {
         li.className = 'todo-plan-item todo-plan--' + String(st);
         const tag = document.createElement('span');
         tag.className = 'todo-plan-status-tag';
-        tag.textContent = todoPlanStatusLabel(st);
+        const statusLabel = todoPlanStatusLabel(st);
+        tag.textContent = typeof translateUiString === 'function' ? translateUiString(statusLabel) : statusLabel;
         li.appendChild(tag);
         const text = document.createElement('span');
         text.textContent = (it && it.text != null) ? String(it.text) : '';
@@ -9843,6 +10009,7 @@ function createProcessFeedRow(ctx, type, initialText, streamOpts, runSessionId, 
     bindFeedChunkInteraction(chunk);
     bindFeedChunkScrollChain(sc);
     body.appendChild(row);
+    if (typeof translateUiNode === 'function') translateUiNode(row);
     if (ctx && ctx.currentTurn && body.classList && body.classList.contains('subagent-turn-process')) {
         markSubagentTurnHasProcess(ctx.currentTurn);
     }
@@ -10384,6 +10551,7 @@ function appendProgressLog(ctx, content, logType, runSessionId) {
     if (prev && prev.isConnected) {
         var prevTxt = prev.textContent || '';
         prev.textContent = truncateLogTextForUi(prevTxt ? (prevTxt + '\\n' + line) : line);
+        if (typeof translateUiNode === 'function') translateUiNode(prev);
         var chMerge = prev.closest('.feed-chunk');
         if (chMerge) {
             refreshFeedChunkOverflow(chMerge);
@@ -10395,6 +10563,7 @@ function appendProgressLog(ctx, content, logType, runSessionId) {
     var sc = ensureProgressScroller(ctx, logType, runSessionId);
     if (!sc) return;
     sc.textContent = truncateLogTextForUi(line);
+    if (typeof translateUiNode === 'function') translateUiNode(sc);
     var chNew = sc.closest('.feed-chunk');
     if (chNew) {
         refreshFeedChunkOverflow(chNew);
@@ -11209,9 +11378,583 @@ function updateSubagentBlockFinish(ctx, event) {
     applySubagentBlockFinish(blk, event);
     handleSubagentLifecycleEvent(event);
 }
-`,tn=`function renderEvent(ctx, event, eventIndex, runSessionId) {\r
-    if (!event || typeof event !== 'object') return;\r
-    var eventSessionId = runSessionId || currentSessionId || '';\r
+`,tn=`const humanInteractionStoreBySession = Object.create(null);
+const HUMAN_INTERACTION_DRAFT_PREFIX = 'myagent-human-interaction-draft:';
+
+function humanInteractionSessionState(sessionId) {
+    var sid = String(sessionId || '');
+    if (!humanInteractionStoreBySession[sid]) {
+        humanInteractionStoreBySession[sid] = {
+            interactions: Object.create(null),
+            approvals: Object.create(null),
+            loaded: false,
+        };
+    }
+    return humanInteractionStoreBySession[sid];
+}
+
+function isHumanInteractionEventType(type) {
+    var t = String(type || '');
+    return t.indexOf('interaction_') === 0 || t.indexOf('approval_') === 0;
+}
+
+function humanInteractionKindForEvent(event) {
+    return String((event && event.type) || '').indexOf('approval_') === 0 ? 'approval' : 'question';
+}
+
+function humanInteractionId(event, kind) {
+    return String(kind === 'approval' ? (event.approval_id || '') : (event.interaction_id || ''));
+}
+
+function humanInteractionStatusFromEvent(event) {
+    var explicit = String((event && event.status) || '');
+    if (explicit) return explicit;
+    var type = String((event && event.type) || '');
+    if (type.endsWith('_resolved')) return 'resolved';
+    if (type.endsWith('_cancelled')) return 'cancelled';
+    if (type.endsWith('_expired')) return 'expired';
+    return 'pending';
+}
+
+function applyHumanInteractionEvent(sessionId, event) {
+    if (!event || !isHumanInteractionEventType(event.type)) return null;
+    var sid = String(sessionId || event.session_id || '');
+    if (!sid) return null;
+    var kind = humanInteractionKindForEvent(event);
+    var id = humanInteractionId(event, kind);
+    if (!id) return null;
+    var state = humanInteractionSessionState(sid);
+    var collection = kind === 'approval' ? state.approvals : state.interactions;
+    var previous = collection[id] || {};
+    var record = Object.assign({}, previous, event, {
+        kind: kind,
+        status: humanInteractionStatusFromEvent(event),
+    });
+    collection[id] = record;
+    state.loaded = true;
+    syncHumanInteractionSessionSummary(sid);
+    if (sid === String(currentSessionId || '')) updateHumanInteractionBanner(sid);
+    return record;
+}
+
+function pendingHumanInteractionRecords(sessionId) {
+    var state = humanInteractionSessionState(sessionId);
+    var rows = [];
+    Object.keys(state.interactions).forEach(function (id) {
+        var row = state.interactions[id];
+        if (row && row.status === 'pending') rows.push(row);
+    });
+    Object.keys(state.approvals).forEach(function (id) {
+        var row = state.approvals[id];
+        if (row && row.status === 'pending') rows.push(row);
+    });
+    rows.sort(function (a, b) {
+        return String(a.created_at || '').localeCompare(String(b.created_at || ''));
+    });
+    return rows;
+}
+
+function humanInteractionPendingCounts(sessionId) {
+    var rows = pendingHumanInteractionRecords(sessionId);
+    var questions = rows.filter(function (row) { return row.kind === 'question'; }).length;
+    return { questions: questions, approvals: rows.length - questions, total: rows.length };
+}
+
+function syncHumanInteractionSessionSummary(sessionId) {
+    var sid = String(sessionId || '');
+    var counts = humanInteractionPendingCounts(sid);
+    var session = typeof sessionStore !== 'undefined' ? sessionStore.get(sid) : null;
+    if (session) session.pending_human_interactions = counts;
+    updateHumanInteractionSessionBadge(sid);
+}
+
+function sessionPendingHumanCount(sessionId) {
+    var sid = String(sessionId || '');
+    var state = humanInteractionStoreBySession[sid];
+    if (state && state.loaded) return humanInteractionPendingCounts(sid).total;
+    var session = typeof sessionStore !== 'undefined' ? sessionStore.get(sid) : null;
+    return Math.max(0, Number(session && session.pending_human_interactions && session.pending_human_interactions.total) || 0);
+}
+
+function updateHumanInteractionSessionBadge(sessionId) {
+    var sid = String(sessionId || '');
+    if (!sid || !sessionsList) return;
+    var row = sessionsList.querySelector('.session-item[data-session-id="' + (window.CSS && CSS.escape ? CSS.escape(sid) : sid.replace(/"/g, '\\\\"')) + '"]');
+    if (!row) return;
+    var head = row.querySelector('.session-item-head');
+    if (!head) return;
+    var badge = head.querySelector('.session-human-badge');
+    var count = sessionPendingHumanCount(sid);
+    if (!badge && count > 0) {
+        badge = document.createElement('span');
+        badge.className = 'session-human-badge';
+        badge.setAttribute('aria-label', '待处理的人机交互');
+        var more = head.querySelector('.session-more-wrap');
+        head.insertBefore(badge, more || null);
+    }
+    if (badge) {
+        badge.textContent = String(count);
+        badge.classList.toggle('hidden', count <= 0);
+        badge.setAttribute('data-ui-tip', count + ' 个待处理请求');
+        if (typeof bindUiHoverTip === 'function') bindUiHoverTip(badge);
+    }
+    row.classList.toggle('has-human-pending', count > 0);
+}
+
+function updateAllHumanInteractionSessionBadges() {
+    if (!sessionsList) return;
+    sessionsList.querySelectorAll('.session-item[data-session-id]').forEach(function (row) {
+        updateHumanInteractionSessionBadge(row.dataset.sessionId || '');
+    });
+}
+
+function updateHumanInteractionBanner(sessionId) {
+    var sid = String(sessionId || currentSessionId || '');
+    var banner = document.getElementById('human-interaction-banner');
+    if (!banner) return;
+    var rows = sid ? pendingHumanInteractionRecords(sid) : [];
+    banner.classList.toggle('is-on', rows.length > 0);
+    banner.classList.toggle('hidden', rows.length === 0);
+    var text = banner.querySelector('.human-interaction-banner-msg');
+    if (text) {
+        var q = rows.filter(function (row) { return row.kind === 'question'; }).length;
+        var a = rows.length - q;
+        var parts = [];
+        if (q) parts.push(q + ' 个问题');
+        if (a) parts.push(a + ' 个审批');
+        text.textContent = rows.length ? ('Agent 正在等待你处理' + parts.join('、')) : '';
+    }
+}
+
+function focusFirstPendingHumanInteraction() {
+    var stream = typeof getVisibleChatStream === 'function' ? getVisibleChatStream() : document.getElementById('chat-stream');
+    var card = stream && stream.querySelector('.human-interaction-card[data-status="pending"]');
+    if (card) {
+        card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        card.classList.add('is-highlighted');
+        setTimeout(function () { card.classList.remove('is-highlighted'); }, 1200);
+    }
+}
+
+function humanInteractionDraftKey(sessionId, interactionId) {
+    return HUMAN_INTERACTION_DRAFT_PREFIX + String(sessionId || '') + ':' + String(interactionId || '');
+}
+
+function persistHumanInteractionDraft(card) {
+    if (!card || card.dataset.kind !== 'question') return;
+    var draft = { selections: {}, others: {} };
+    card.querySelectorAll('.human-question-pane').forEach(function (pane) {
+        var qid = pane.dataset.questionId || '';
+        draft.selections[qid] = Array.from(pane.querySelectorAll('input[data-option-id]:checked')).map(function (input) {
+            return input.dataset.optionId;
+        });
+        var other = pane.querySelector('.human-other-input');
+        draft.others[qid] = other ? other.value : '';
+    });
+    try { sessionStorage.setItem(humanInteractionDraftKey(card.dataset.sessionId, card.dataset.interactionId), JSON.stringify(draft)); } catch (e) { /* ignore */ }
+}
+
+function restoreHumanInteractionDraft(card) {
+    if (!card || card.dataset.kind !== 'question') return;
+    var draft = null;
+    try { draft = JSON.parse(sessionStorage.getItem(humanInteractionDraftKey(card.dataset.sessionId, card.dataset.interactionId)) || 'null'); } catch (e) { draft = null; }
+    if (!draft) return;
+    card.querySelectorAll('.human-question-pane').forEach(function (pane) {
+        var qid = pane.dataset.questionId || '';
+        var selected = (draft.selections && draft.selections[qid]) || [];
+        pane.querySelectorAll('input[data-option-id]').forEach(function (input) {
+            input.checked = selected.indexOf(input.dataset.optionId) >= 0;
+        });
+        var other = pane.querySelector('.human-other-input');
+        if (other && draft.others) {
+            other.value = draft.others[qid] || '';
+            var otherMark = pane.querySelector('.human-other-mark');
+            if (otherMark && other.value) otherMark.checked = true;
+        }
+    });
+}
+
+function clearHumanInteractionDraft(sessionId, interactionId) {
+    try { sessionStorage.removeItem(humanInteractionDraftKey(sessionId, interactionId)); } catch (e) { /* ignore */ }
+}
+
+function humanElement(tag, className, text) {
+    var el = document.createElement(tag);
+    if (className) el.className = className;
+    if (text != null) el.textContent = String(text);
+    return el;
+}
+
+function appendHumanCardHeader(card, record, kind) {
+    var head = humanElement('div', 'human-card-head');
+    var icon = humanElement('span', 'human-card-icon', kind === 'approval' ? '!' : '?');
+    icon.setAttribute('aria-hidden', 'true');
+    var copy = humanElement('div', 'human-card-head-copy');
+    copy.appendChild(humanElement('div', 'human-card-kicker', kind === 'approval' ? '安全审批' : '需要你的回答'));
+    copy.appendChild(humanElement('div', 'human-card-title', kind === 'approval'
+        ? (record.title || 'Agent 请求执行操作')
+        : ((record.questions && record.questions.length > 1) ? (record.questions.length + ' 个问题待确认') : ((record.questions && record.questions[0] && record.questions[0].header) || '确认下一步'))));
+    var status = humanElement('span', 'human-card-status', record.status === 'pending' ? '等待中' : ({ resolved: '已处理', cancelled: '已取消', expired: '已过期' }[record.status] || record.status));
+    head.appendChild(icon);
+    head.appendChild(copy);
+    head.appendChild(status);
+    card.appendChild(head);
+}
+
+function setHumanQuestionStep(card, index) {
+    var panes = Array.from(card.querySelectorAll('.human-question-pane'));
+    if (!panes.length) return;
+    var next = Math.max(0, Math.min(Number(index) || 0, panes.length - 1));
+    card.dataset.step = String(next);
+    panes.forEach(function (pane, idx) { pane.classList.toggle('is-active', idx === next); });
+    card.querySelectorAll('.human-question-tab').forEach(function (tab, idx) {
+        tab.classList.toggle('is-active', idx === next);
+        tab.setAttribute('aria-selected', idx === next ? 'true' : 'false');
+    });
+    var back = card.querySelector('.human-back-btn');
+    var nextBtn = card.querySelector('.human-next-btn');
+    var submit = card.querySelector('.human-submit-btn');
+    if (back) back.disabled = next === 0;
+    if (nextBtn) nextBtn.classList.toggle('hidden', next >= panes.length - 1);
+    if (submit) submit.classList.toggle('hidden', next < panes.length - 1);
+}
+
+function createHumanQuestionCard(record, sessionId) {
+    var card = humanElement('section', 'human-interaction-card human-question-card');
+    card.dataset.kind = 'question';
+    card.dataset.sessionId = sessionId;
+    card.dataset.interactionId = String(record.interaction_id || '');
+    appendHumanCardHeader(card, record, 'question');
+    var questions = Array.isArray(record.questions) ? record.questions : [];
+    if (questions.length > 1) {
+        var tabs = humanElement('div', 'human-question-tabs');
+        tabs.setAttribute('role', 'tablist');
+        questions.forEach(function (question, index) {
+            var tab = humanElement('button', 'human-question-tab', question.header || ('问题 ' + (index + 1)));
+            tab.type = 'button';
+            tab.addEventListener('click', function () { setHumanQuestionStep(card, index); });
+            tabs.appendChild(tab);
+        });
+        card.appendChild(tabs);
+    }
+    var body = humanElement('div', 'human-card-body');
+    questions.forEach(function (question, qIndex) {
+        var pane = humanElement('div', 'human-question-pane');
+        pane.dataset.questionId = String(question.question_id || ('q' + (qIndex + 1)));
+        pane.appendChild(humanElement('div', 'human-question-text', question.question || ''));
+        pane.appendChild(humanElement('div', 'human-question-hint', question.multi_select ? '可多选' : '单选'));
+        var options = humanElement('div', 'human-options');
+        (question.options || []).forEach(function (option) {
+            var label = humanElement('label', 'human-option');
+            var input = document.createElement('input');
+            input.type = question.multi_select ? 'checkbox' : 'radio';
+            input.name = 'human-' + record.interaction_id + '-' + pane.dataset.questionId;
+            input.dataset.optionId = String(option.option_id || '');
+            var copy = humanElement('span', 'human-option-copy');
+            copy.appendChild(humanElement('span', 'human-option-label', option.label || ''));
+            copy.appendChild(humanElement('span', 'human-option-description', option.description || ''));
+            if (option.preview) {
+                var details = humanElement('details', 'human-option-preview');
+                details.appendChild(humanElement('summary', '', '查看预览'));
+                details.appendChild(humanElement('pre', '', option.preview));
+                copy.appendChild(details);
+            }
+            label.appendChild(input);
+            label.appendChild(copy);
+            options.appendChild(label);
+        });
+        var other = humanElement('label', 'human-option human-option-other');
+        var otherMark = document.createElement('input');
+        otherMark.type = question.multi_select ? 'checkbox' : 'radio';
+        otherMark.name = 'human-' + record.interaction_id + '-' + pane.dataset.questionId;
+        otherMark.className = 'human-other-mark';
+        var otherCopy = humanElement('span', 'human-option-copy');
+        otherCopy.appendChild(humanElement('span', 'human-option-label', '其他'));
+        var otherInput = document.createElement('textarea');
+        otherInput.className = 'human-other-input';
+        otherInput.rows = 2;
+        otherInput.maxLength = 2000;
+        otherInput.placeholder = '输入你的答案…';
+        otherInput.addEventListener('focus', function () { otherMark.checked = true; persistHumanInteractionDraft(card); });
+        otherCopy.appendChild(otherInput);
+        other.appendChild(otherMark);
+        other.appendChild(otherCopy);
+        options.appendChild(other);
+        options.addEventListener('change', function () { persistHumanInteractionDraft(card); });
+        options.addEventListener('input', function () { persistHumanInteractionDraft(card); });
+        pane.appendChild(options);
+        body.appendChild(pane);
+    });
+    card.appendChild(body);
+    var error = humanElement('div', 'human-card-error');
+    error.setAttribute('role', 'alert');
+    card.appendChild(error);
+    var actions = humanElement('div', 'human-card-actions');
+    var cancel = humanElement('button', 'human-secondary-btn', '取消提问');
+    cancel.type = 'button';
+    cancel.addEventListener('click', function () { void cancelHumanQuestion(card); });
+    var nav = humanElement('div', 'human-card-nav');
+    var back = humanElement('button', 'human-secondary-btn human-back-btn', '上一步');
+    back.type = 'button';
+    back.addEventListener('click', function () { setHumanQuestionStep(card, Number(card.dataset.step || 0) - 1); });
+    var next = humanElement('button', 'human-primary-btn human-next-btn', '下一步');
+    next.type = 'button';
+    next.addEventListener('click', function () { setHumanQuestionStep(card, Number(card.dataset.step || 0) + 1); });
+    var submit = humanElement('button', 'human-primary-btn human-submit-btn', '提交答案');
+    submit.type = 'button';
+    submit.addEventListener('click', function () { void submitHumanQuestion(card); });
+    nav.appendChild(back);
+    nav.appendChild(next);
+    nav.appendChild(submit);
+    actions.appendChild(cancel);
+    actions.appendChild(nav);
+    card.appendChild(actions);
+    restoreHumanInteractionDraft(card);
+    setHumanQuestionStep(card, 0);
+    return card;
+}
+
+function collectHumanQuestionAnswers(card) {
+    var answers = [];
+    var invalidPane = null;
+    card.querySelectorAll('.human-question-pane').forEach(function (pane) {
+        var selected = Array.from(pane.querySelectorAll('input[data-option-id]:checked')).map(function (input) { return input.dataset.optionId; });
+        var otherMark = pane.querySelector('.human-other-mark');
+        var otherInput = pane.querySelector('.human-other-input');
+        var otherText = otherMark && otherMark.checked && otherInput ? otherInput.value.trim() : '';
+        if (!selected.length && !otherText && !invalidPane) invalidPane = pane;
+        answers.push({
+            question_id: pane.dataset.questionId || '',
+            selected_option_ids: selected,
+            other_text: otherText || null,
+            notes: null,
+        });
+    });
+    return { answers: answers, invalidPane: invalidPane };
+}
+
+async function submitHumanQuestion(card) {
+    if (!card || card.dataset.submitting === '1') return;
+    var collected = collectHumanQuestionAnswers(card);
+    var error = card.querySelector('.human-card-error');
+    if (collected.invalidPane) {
+        var panes = Array.from(card.querySelectorAll('.human-question-pane'));
+        setHumanQuestionStep(card, panes.indexOf(collected.invalidPane));
+        if (error) error.textContent = '请完成当前问题后再提交。';
+        return;
+    }
+    card.dataset.submitting = '1';
+    card.classList.add('is-submitting');
+    if (error) error.textContent = '';
+    try {
+        var response = await fetch('/sessions/' + encodeURIComponent(card.dataset.sessionId) + '/interactions/' + encodeURIComponent(card.dataset.interactionId) + '/resolve', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ answers: collected.answers }),
+        });
+        var data = await response.json();
+        if (!response.ok || !data.ok) throw new Error(data.error || ('HTTP ' + response.status));
+        clearHumanInteractionDraft(card.dataset.sessionId, card.dataset.interactionId);
+        var record = applyHumanInteractionEvent(card.dataset.sessionId, Object.assign({ type: 'interaction_resolved' }, data.interaction || {}));
+        renderHumanInteractionRecord(record, card.dataset.sessionId, card.parentNode);
+    } catch (err) {
+        card.dataset.submitting = '0';
+        card.classList.remove('is-submitting');
+        if (error) error.textContent = '提交失败：' + String(err && err.message ? err.message : err);
+    }
+}
+
+async function cancelHumanQuestion(card) {
+    if (!card || card.dataset.submitting === '1') return;
+    card.dataset.submitting = '1';
+    card.classList.add('is-submitting');
+    try {
+        var response = await fetch('/sessions/' + encodeURIComponent(card.dataset.sessionId) + '/interactions/' + encodeURIComponent(card.dataset.interactionId) + '/cancel', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ reason: 'user_cancelled' }),
+        });
+        var data = await response.json();
+        if (!response.ok || !data.ok) throw new Error(data.error || ('HTTP ' + response.status));
+        clearHumanInteractionDraft(card.dataset.sessionId, card.dataset.interactionId);
+        var record = applyHumanInteractionEvent(card.dataset.sessionId, Object.assign({ type: 'interaction_cancelled' }, data.interaction || {}));
+        renderHumanInteractionRecord(record, card.dataset.sessionId, card.parentNode);
+    } catch (err) {
+        card.dataset.submitting = '0';
+        card.classList.remove('is-submitting');
+        var error = card.querySelector('.human-card-error');
+        if (error) error.textContent = '取消失败：' + String(err && err.message ? err.message : err);
+    }
+}
+
+function createHumanApprovalCard(record, sessionId) {
+    var card = humanElement('section', 'human-interaction-card human-approval-card');
+    card.dataset.kind = 'approval';
+    card.dataset.sessionId = sessionId;
+    card.dataset.interactionId = String(record.approval_id || '');
+    appendHumanCardHeader(card, record, 'approval');
+    var body = humanElement('div', 'human-card-body');
+    if (record.subtitle) body.appendChild(humanElement('div', 'human-approval-subtitle', record.subtitle));
+    body.appendChild(humanElement('div', 'human-approval-message', record.message || '是否允许 Agent 执行此操作？'));
+    if (record.tool) {
+        var detail = humanElement('div', 'human-approval-detail');
+        detail.appendChild(humanElement('span', '', '工具'));
+        detail.appendChild(humanElement('code', '', record.tool));
+        body.appendChild(detail);
+    }
+    card.appendChild(body);
+    var error = humanElement('div', 'human-card-error');
+    card.appendChild(error);
+    var actions = humanElement('div', 'human-card-actions human-approval-actions');
+    var deny = humanElement('button', 'human-secondary-btn human-deny-btn', '拒绝');
+    deny.type = 'button';
+    deny.addEventListener('click', function () { void resolveHumanApproval(card, 'deny'); });
+    actions.appendChild(deny);
+    if (record.allow_always_available) {
+        var always = humanElement('button', 'human-secondary-btn', '始终允许');
+        always.type = 'button';
+        always.addEventListener('click', function () { void resolveHumanApproval(card, 'allow_always'); });
+        actions.appendChild(always);
+    }
+    var allow = humanElement('button', 'human-primary-btn human-allow-btn', '仅本次允许');
+    allow.type = 'button';
+    allow.addEventListener('click', function () { void resolveHumanApproval(card, 'allow_once'); });
+    actions.appendChild(allow);
+    card.appendChild(actions);
+    return card;
+}
+
+async function resolveHumanApproval(card, decision) {
+    if (!card || card.dataset.submitting === '1') return;
+    card.dataset.submitting = '1';
+    card.classList.add('is-submitting');
+    try {
+        var response = await fetch('/sessions/' + encodeURIComponent(card.dataset.sessionId) + '/approvals/' + encodeURIComponent(card.dataset.interactionId) + '/resolve', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ decision: decision }),
+        });
+        var data = await response.json();
+        if (!response.ok || !data.ok) {
+            if (data.approval) {
+                var staleRecord = applyHumanInteractionEvent(card.dataset.sessionId, Object.assign({ type: 'approval_cancelled' }, data.approval));
+                renderHumanInteractionRecord(staleRecord, card.dataset.sessionId, card.parentNode);
+                return;
+            }
+            throw new Error(data.error || ('HTTP ' + response.status));
+        }
+        var record = applyHumanInteractionEvent(card.dataset.sessionId, Object.assign({ type: 'approval_resolved' }, data.approval || {}));
+        renderHumanInteractionRecord(record, card.dataset.sessionId, card.parentNode);
+    } catch (err) {
+        card.dataset.submitting = '0';
+        card.classList.remove('is-submitting');
+        var error = card.querySelector('.human-card-error');
+        if (error) error.textContent = '处理失败：' + String(err && err.message ? err.message : err);
+    }
+}
+
+function createHumanTerminalCard(record, sessionId) {
+    var kind = record.kind === 'approval' ? 'approval' : 'question';
+    var card = humanElement('section', 'human-interaction-card is-terminal');
+    card.dataset.kind = kind;
+    card.dataset.sessionId = sessionId;
+    card.dataset.interactionId = String(kind === 'approval' ? record.approval_id : record.interaction_id);
+    appendHumanCardHeader(card, record, kind);
+    var summary = humanElement('div', 'human-terminal-summary');
+    if (record.status === 'cancelled') {
+        summary.textContent = record.reason || '该请求已取消。';
+    } else if (record.status === 'expired') {
+        summary.textContent = '该请求已过期。';
+    } else if (kind === 'approval') {
+        summary.textContent = record.decision === 'deny' ? '你已拒绝本次操作。' : (record.decision === 'allow_always' ? '你已允许同类操作。' : '你已允许本次操作。');
+    } else {
+        var answers = Array.isArray(record.answers) ? record.answers : [];
+        answers.forEach(function (answer) {
+            var line = humanElement('div', 'human-terminal-answer');
+            var values = (answer.selected_labels || []).slice();
+            if (answer.other_text) values.push(answer.other_text);
+            line.textContent = values.join('、') || '已回答';
+            summary.appendChild(line);
+        });
+    }
+    card.appendChild(summary);
+    return card;
+}
+
+function renderHumanInteractionRecord(record, sessionId, stream) {
+    if (!record) return null;
+    var sid = String(sessionId || record.session_id || '');
+    var kind = record.kind === 'approval' ? 'approval' : 'question';
+    var id = String(kind === 'approval' ? (record.approval_id || '') : (record.interaction_id || ''));
+    if (!id) return null;
+    stream = stream && stream.querySelectorAll ? stream : (typeof getVisibleChatStream === 'function' ? getVisibleChatStream() : document.getElementById('chat-stream'));
+    if (!stream) return null;
+    var existing = Array.from(stream.querySelectorAll('.human-interaction-card')).find(function (card) {
+        return card.dataset.kind === kind && card.dataset.interactionId === id;
+    });
+    var card = record.status === 'pending'
+        ? (kind === 'approval' ? createHumanApprovalCard(record, sid) : createHumanQuestionCard(record, sid))
+        : createHumanTerminalCard(record, sid);
+    card.dataset.status = record.status || 'pending';
+    if (existing && existing.parentNode) existing.parentNode.replaceChild(card, existing);
+    else stream.appendChild(card);
+    if (!replayingMessages && record.status === 'pending') {
+        requestAnimationFrame(function () { card.scrollIntoView({ behavior: 'smooth', block: 'nearest' }); });
+    }
+    return card;
+}
+
+function renderHumanInteractionEvent(ctx, event, runSessionId) {
+    var sid = String(runSessionId || event.session_id || currentSessionId || '');
+    var record = applyHumanInteractionEvent(sid, event);
+    var stream = ctx && ctx.stream ? ctx.stream : null;
+    return renderHumanInteractionRecord(record, sid, stream);
+}
+
+function renderPendingHumanInteractions(sessionId) {
+    var sid = String(sessionId || '');
+    if (!sid || sid !== String(currentSessionId || '')) return;
+    var stream = typeof getVisibleChatStream === 'function' ? getVisibleChatStream() : document.getElementById('chat-stream');
+    pendingHumanInteractionRecords(sid).forEach(function (record) { renderHumanInteractionRecord(record, sid, stream); });
+    updateHumanInteractionBanner(sid);
+}
+
+async function refreshHumanInteractions(sessionId) {
+    var sid = String(sessionId || '');
+    if (!sid) return false;
+    try {
+        var responses = await Promise.all([
+            fetch('/sessions/' + encodeURIComponent(sid) + '/interactions?status=pending'),
+            fetch('/sessions/' + encodeURIComponent(sid) + '/approvals?status=pending'),
+        ]);
+        if (!responses[0].ok || !responses[1].ok) throw new Error('HTTP ' + responses[0].status + '/' + responses[1].status);
+        var payloads = await Promise.all([responses[0].json(), responses[1].json()]);
+        var state = humanInteractionSessionState(sid);
+        state.interactions = Object.create(null);
+        state.approvals = Object.create(null);
+        (payloads[0].interactions || []).forEach(function (row) {
+            row.kind = 'question';
+            state.interactions[String(row.interaction_id || '')] = row;
+        });
+        (payloads[1].approvals || []).forEach(function (row) {
+            row.kind = 'approval';
+            state.approvals[String(row.approval_id || '')] = row;
+        });
+        state.loaded = true;
+        syncHumanInteractionSessionSummary(sid);
+        if (sid === String(currentSessionId || '')) renderPendingHumanInteractions(sid);
+        return true;
+    } catch (err) {
+        console.error('加载待处理交互失败:', err);
+        return false;
+    }
+}
+
+(function bindHumanInteractionBanner() {
+    var button = document.getElementById('human-interaction-banner-btn');
+    if (button) button.addEventListener('click', focusFirstPendingHumanInteraction);
+})();
+`,rn=`function renderEvent(ctx, event, eventIndex, runSessionId) {
+    if (!event || typeof event !== 'object') return;
+    var eventSessionId = runSessionId || currentSessionId || '';
+    if (typeof isHumanInteractionEventType === 'function' && isHumanInteractionEventType(event.type)) {
+        renderHumanInteractionEvent(ctx, event, eventSessionId);
+        return;
+    }
     if (eventSessionId && !event.__storeApplied) {\r
         applyMessageEvent(eventSessionId, event, eventIndex, replayingMessages ? 'history' : 'stream');\r
         if (event.type === 'subagent_start' || event.type === 'subagent_finish'\r
@@ -11346,7 +12089,7 @@ function updateSubagentBlockFinish(ctx, event) {
         if (fallbackContent.trim()) appendLog(ctx, fallbackContent, 'log-entry', runSessionId);\r
     }\r
 }\r
-`,rn=`\uFEFFfunction setSendButtonState() {\r
+`,sn=`\uFEFFfunction setSendButtonState() {\r
     sendBtn.disabled = false;
     const uploadBusy = isChatFileUploadBusy();
     const newSessionPreflight = !currentSessionId && optimisticNewSessionRun;
@@ -11494,15 +12237,16 @@ function applySessionItemIndicators(itemDiv, sessionId, opts) {\r
 }\r
 \r
 /** 立即刷新侧栏全部指示点与当前选中项；不依赖 loadSessions 网络回流，与是否切换会话无关 */\r
-function syncSessionListIndicatorClasses() {\r
+function syncSessionListIndicatorClasses() {
     if (!sessionsList) return;\r
     sessionsList.querySelectorAll('.session-item').forEach(function (div) {\r
         var el = div.querySelector('.session-name[data-id]');\r
         if (!el) return;\r
         var sid = el.getAttribute('data-id');\r
         div.classList.toggle('active', !!sid && sid === currentSessionId);\r
-        applySessionItemIndicators(div, sid);\r
-    });\r
+        applySessionItemIndicators(div, sid);
+    });
+    if (typeof updateAllHumanInteractionSessionBadges === 'function') updateAllHumanInteractionSessionBadges();
 }\r
 \r
 function sessionSectionExpanded(key) {\r
@@ -11563,7 +12307,7 @@ function buildAndBindSessionRow(sess, allSessions, nextStreamMap) {
     if (currentSessionId === sess.id) div.classList.add('active');\r
     if (sess.id) nextStreamMap[sess.id] = !!sess.stream_active;
     if (sess.id) scheduleTitleGenerationRefresh(sess.id, !!sess.title_generation_pending);
-    div.innerHTML = '<div class="session-item-head">'\r
+    div.innerHTML = '<div class="session-item-head">'
         + '<span class="session-name" data-id="' + sess.id + '" data-original="' + escapeHtml(sess.name) + '">' + escapeHtml(sess.name) + '</span>'\r
         + '<div class="session-more-wrap">'\r
         + '<button type="button" class="session-more-btn" aria-label="更多操作" aria-expanded="false" aria-haspopup="true" data-ui-tip="更多">'\r
@@ -11574,7 +12318,10 @@ function buildAndBindSessionRow(sess, allSessions, nextStreamMap) {
         + '<button type="button" class="session-menu-archive" role="menuitem"></button>'\r
         + '</div></div>'\r
         + '</div>'\r
-        + '<div class="session-last-query"></div>';\r
+        + '<div class="session-last-query"></div>';
+    if (typeof updateHumanInteractionSessionBadge === 'function') {
+        setTimeout(function () { updateHumanInteractionSessionBadge(sess.id); }, 0);
+    }
     var pinMi = div.querySelector('.session-menu-pin');\r
     var archMi = div.querySelector('.session-menu-archive');\r
     if (pinMi) pinMi.textContent = sess.pinned ? '取消置顶' : '置顶';\r
@@ -12502,6 +13249,7 @@ async function switchSession(sessionId, opts) {
     hideSubagentContinueBanner();\r
     resetSubagentPanelForSession();
     setCurrentSessionState(sessionId);
+    if (typeof updateHumanInteractionBanner === 'function') updateHumanInteractionBanner(sessionId);
     localStorage.setItem('lastSessionId', sessionId);
     if (typeof applyContextTokenLabelForCurrentSession === 'function') applyContextTokenLabelForCurrentSession();
     restoreInputDraft(sessionId);
@@ -12522,6 +13270,7 @@ async function switchSession(sessionId, opts) {
         else applyChatScrollAfterHistoryLoad(sessionId, 'saved-or-bottom');
         if (typeof refreshTodoPlanPanel === 'function') void refreshTodoPlanPanel();
         else renderTodoPlanForCurrentSession();
+        if (typeof refreshHumanInteractions === 'function') void refreshHumanInteractions(sessionId);
         if (switchToken !== switchSessionEpoch || sessionId !== currentSessionId) return;
         /* 让 rebuildToc 的 /user_turns fetch 先发出，subagent 面板（含 N 个 /messages）顺序后置，\r
            避免抢占带宽与主线程，让目录最后才稳态。*/\r
@@ -12579,8 +13328,9 @@ async function switchSession(sessionId, opts) {
         }, 0);
         void refreshSingleSessionRow(sessionId);\r
         setSendButtonState();\r
-        maybeStartStreamPollForSession(sessionId, { skipInitialLoad: true });\r
-        resolve(true);\r
+        maybeStartStreamPollForSession(sessionId, { skipInitialLoad: true });
+        if (typeof refreshHumanInteractions === 'function') void refreshHumanInteractions(sessionId);
+        resolve(true);
         }, 20);\r
     });\r
 }\r
@@ -12605,7 +13355,8 @@ async function createNewSessionInner() {\r
         resetSubagentPanelForSession();\r
         switchSessionEpoch += 1;\r
         messageLoadEpoch += 1;\r
-        setCurrentSessionState(data.session_id);\r
+        setCurrentSessionState(data.session_id);
+        if (typeof updateHumanInteractionBanner === 'function') updateHumanInteractionBanner(currentSessionId);
         localStorage.setItem('lastSessionId', currentSessionId);
         restoreInputDraft(currentSessionId);
         if (typeof restoreSkillPickerDraft === 'function') restoreSkillPickerDraft(currentSessionId);
@@ -12630,200 +13381,211 @@ async function createNewSessionInner() {\r
         appendLogVisible('创建新会话失败', 'error-log');\r
     }\r
 }\r
-`,sn=`const SSE_IDLE_TIMEOUT_MS = 120000;\r
-\r
-function sendPipelineKey(sessionId) {\r
-    return String(sessionId || '__new_session__');\r
-}\r
-\r
-function isSendPipelineLocked(sessionId) {\r
-    return !!sendPipelineLocksBySession[sendPipelineKey(sessionId)];\r
-}\r
-\r
-function acquireSendPipelineLock(sessionId) {\r
-    const key = sendPipelineKey(sessionId);\r
-    if (sendPipelineLocksBySession[key]) return null;\r
-    const token = 'send-lock-' + Date.now() + '-' + Math.random().toString(16).slice(2);\r
-    sendPipelineLocksBySession[key] = token;\r
-    return { key: key, token: token };\r
-}\r
-\r
-function transferSendPipelineLock(lock, sessionId) {\r
-    if (!lock || sendPipelineLocksBySession[lock.key] !== lock.token) return false;\r
-    const nextKey = sendPipelineKey(sessionId);\r
-    if (nextKey === lock.key) return true;\r
-    if (sendPipelineLocksBySession[nextKey]) return false;\r
-    delete sendPipelineLocksBySession[lock.key];\r
-    sendPipelineLocksBySession[nextKey] = lock.token;\r
-    lock.key = nextKey;\r
-    return true;\r
-}\r
-\r
-function releaseSendPipelineLock(lock) {\r
-    if (!lock) return;\r
-    if (sendPipelineLocksBySession[lock.key] === lock.token) {\r
-        delete sendPipelineLocksBySession[lock.key];\r
-    }\r
-}\r
-\r
-/* ---------------------------------------------------------------------------\r
+`,an=`const SSE_IDLE_TIMEOUT_MS = 120000;
+
+function sendPipelineKey(sessionId) {
+    return String(sessionId || '__new_session__');
+}
+
+function isSendPipelineLocked(sessionId) {
+    return !!sendPipelineLocksBySession[sendPipelineKey(sessionId)];
+}
+
+function acquireSendPipelineLock(sessionId) {
+    const key = sendPipelineKey(sessionId);
+    if (sendPipelineLocksBySession[key]) return null;
+    const token = 'send-lock-' + Date.now() + '-' + Math.random().toString(16).slice(2);
+    sendPipelineLocksBySession[key] = token;
+    return { key: key, token: token };
+}
+
+function transferSendPipelineLock(lock, sessionId) {
+    if (!lock || sendPipelineLocksBySession[lock.key] !== lock.token) return false;
+    const nextKey = sendPipelineKey(sessionId);
+    if (nextKey === lock.key) return true;
+    if (sendPipelineLocksBySession[nextKey]) return false;
+    delete sendPipelineLocksBySession[lock.key];
+    sendPipelineLocksBySession[nextKey] = lock.token;
+    lock.key = nextKey;
+    return true;
+}
+
+function releaseSendPipelineLock(lock) {
+    if (!lock) return;
+    if (sendPipelineLocksBySession[lock.key] === lock.token) {
+        delete sendPipelineLocksBySession[lock.key];
+    }
+}
+
+/* ---------------------------------------------------------------------------
  * 会话级追问 dispatcher：所有显式“立即发送”共用同一 per-session 互斥链，
- * 保证同一会话同一时刻只处理一条追问，避免并发 steer 竞争。\r
- * ------------------------------------------------------------------------- */\r
-function withFollowupDispatch(sessionId, fn) {\r
-    var sid = String(sessionId || '');\r
-    if (!sid) return Promise.resolve();\r
-    var prev = followupDispatchChain[sid] || Promise.resolve();\r
-    var run = function () { return Promise.resolve().then(fn); };\r
-    // 前一条无论成功/失败都继续执行本条，避免一次失败永久堵塞后续追问。\r
-    var next = prev.then(run, run);\r
-    var settled = next.then(function () { return null; }, function () { return null; });\r
-    followupDispatchChain[sid] = settled;\r
-    settled.finally(function () {\r
-        if (followupDispatchChain[sid] === settled) delete followupDispatchChain[sid];\r
-    });\r
-    return next;\r
-}\r
-\r
-function isFollowupDispatchBusy(sessionId) {\r
-    return !!followupDispatchChain[String(sessionId || '')];\r
-}\r
-\r
-async function waitForSendPipelineIdle(sessionId, timeoutMs) {\r
-    var sid = String(sessionId || '');\r
-    var deadline = Date.now() + Math.max(0, Number(timeoutMs) || 0);\r
-    while (isSendPipelineLocked(sid)) {\r
-        if (Date.now() >= deadline) return false;\r
-        await sleepMs(40);\r
-    }\r
-    return true;\r
-}\r
-\r
+ * 保证同一会话同一时刻只处理一条追问，避免并发 steer 竞争。
+ * ------------------------------------------------------------------------- */
+function withFollowupDispatch(sessionId, fn) {
+    var sid = String(sessionId || '');
+    if (!sid) return Promise.resolve();
+    var prev = followupDispatchChain[sid] || Promise.resolve();
+    var run = function () { return Promise.resolve().then(fn); };
+    // 前一条无论成功/失败都继续执行本条，避免一次失败永久堵塞后续追问。
+    var next = prev.then(run, run);
+    var settled = next.then(function () { return null; }, function () { return null; });
+    followupDispatchChain[sid] = settled;
+    settled.finally(function () {
+        if (followupDispatchChain[sid] === settled) delete followupDispatchChain[sid];
+    });
+    return next;
+}
+
+function isFollowupDispatchBusy(sessionId) {
+    return !!followupDispatchChain[String(sessionId || '')];
+}
+
+async function waitForSendPipelineIdle(sessionId, timeoutMs) {
+    var sid = String(sessionId || '');
+    var deadline = Date.now() + Math.max(0, Number(timeoutMs) || 0);
+    while (isSendPipelineLocked(sid)) {
+        if (Date.now() >= deadline) return false;
+        await sleepMs(40);
+    }
+    return true;
+}
+
 function refreshPendingFollowupQueue(sessionId) {
     var sid = String(sessionId || '');
     if (!sid) return;
     renderFollowupQueue(sid);
 }
-\r
+
 function shouldApplySseSeqFilter(parsed) {
-    if (!parsed || parsed.protocol === 'runtime_v2') return false;\r
-    if (parsed.runtime_seq != null || parsed.runtimeSeq != null) return false;\r
-    const type = String(parsed.type || '');\r
-    if (type === 'context_trim_progress'\r
-        || type === 'context_summary_progress'\r
-        || type === 'key_context_progress'\r
-        || type === 'context_trim_delta'\r
-        || type === 'context_summary_delta'\r
-        || type === 'key_context_delta'\r
-        || type === 'context_trim_body'\r
-        || type === 'context_summary_body'\r
-        || type === 'key_context_body') return false;\r
-    return true;\r
-}\r
-\r
-function endRunForClient(sessionId, ctx, opts) {\r
-    opts = opts || {};\r
-    var sid = String(sessionId || '');\r
-    if (!sid) return;\r
-    finalizeLlmStreamChunks(ctx);\r
-    finalizeProgressStreamChunks(ctx);\r
-    if (opts.reconcileFinal !== false) {\r
-        scheduleFinalVisibleAfterRunIfEnabled(sid, ctx, { delayMs: opts.finalDelayMs != null ? opts.finalDelayMs : 80 });\r
-    }\r
-    sealProcessGroup(ctx);\r
-    markSessionRunInactive(sid);\r
-    if (getSessionRunState(sid)) {\r
-        clearSessionRunStateIfMatch(sid, opts.runId || (ctx && ctx.runId));\r
-    }\r
-    syncSessionListIndicatorClasses();\r
-    setSendButtonState();\r
-    if (sid === currentSessionId) renderTodoPlanForCurrentSession();\r
-    if (opts.syncFollowup !== false && typeof syncFollowupQueueFromServer === 'function') {\r
-        // 先同步服务端状态（清理已 consumed/cancelled、补齐服务端已接收条目），\r
-        // 同步只刷新状态，pending 条目仍需用户显式点击发送。
-        // Reconcile status only. Never transmit a pending row from completion.
-        void syncFollowupQueueFromServer(sid);
-    }\r
-    if (liveAutoFollow && opts.scroll !== false) {\r
-        scrollProcessBodyToBottom(ctx, sid);\r
-        scrollChatToBottomIfFollow(sid, {});\r
-    }\r
-}\r
-\r
-async function readSseChunkWithIdleTimeout(reader, timeoutMs) {\r
-    var timer = null;\r
-    try {\r
-        return await Promise.race([\r
-            reader.read(),\r
-            new Promise(function (_resolve, reject) {\r
-                var armedAt = performance.now();\r
-                var arm = function () {\r
-                    timer = setTimeout(function () {\r
-                        var elapsed = performance.now() - armedAt;\r
-                        /* A heavily delayed timer means the browser/system was suspended.\r
-                           Give the live stream another full idle window after resume. */\r
-                        if (elapsed > timeoutMs + 15000) {\r
-                            armedAt = performance.now();\r
-                            arm();\r
-                            return;\r
-                        }\r
-                        var err = new Error('SSE idle timeout after ' + String(timeoutMs) + 'ms');\r
-                        err.name = 'SseIdleTimeout';\r
-                        try { reader.cancel(err).catch(function () { /* ignore */ }); } catch (e) { /* ignore */ }\r
-                        reject(err);\r
-                    }, timeoutMs);\r
-                };\r
-                arm();\r
-            }),\r
-        ]);\r
-    } finally {\r
-        if (timer) clearTimeout(timer);\r
-    }\r
-}\r
-\r
-async function consumeAgentSseResponse(response, runCtx, runSessionId, streamEventIdx) {\r
-    if (!response || !response.body) throw new Error('stream response missing body');\r
-    var ct0 = (response.headers && response.headers.get ? (response.headers.get('content-type') || '') : '').toLowerCase();\r
-    if (!response.ok || ct0.indexOf('text/event-stream') < 0) {\r
-        throw new Error('stream response failed: ' + (response.status || 'no status'));\r
-    }\r
-    const reader = response.body.getReader();\r
-    const decoder = new TextDecoder();\r
-    let buffer = '';\r
-    while (true) {\r
-        const { done, value } = await readSseChunkWithIdleTimeout(reader, SSE_IDLE_TIMEOUT_MS);\r
-        if (done) break;\r
-        buffer += decoder.decode(value, { stream: true });\r
-        const lines = buffer.split('\\n');\r
-        buffer = lines.pop();\r
-        for (const line of lines) {\r
-            if (line.startsWith(':')) continue;\r
-            if (!line.startsWith('data: ')) continue;\r
-            const data = line.slice(6);\r
-            if (data === '[DONE]') {\r
-                endRunForClient(runSessionId, runCtx, { finalDelayMs: 80, followupDelayMs: 0 });\r
-                return streamEventIdx;\r
-            }\r
-            try {\r
-                let parsed = JSON.parse(data);\r
-                if (parsed && (parsed.type === 'sse_keepalive' || parsed.keepalive === true)) continue;\r
-                if (parsed && parsed.protocol === 'runtime_v2') {\r
-                    const envelopeSessionId = parsed.session_id || parsed.sessionId || runSessionId;\r
-                    if (!sessionStore.shouldAcceptSseEvent(envelopeSessionId, parsed.seq, 'runtime_v2')) continue;\r
-                    if (parsed.skip_ui) {\r
-                        applySkippedRuntimeV2EventMetadata(parsed, runCtx, envelopeSessionId);\r
-                        continue;\r
-                    }\r
-                    const uiEvent = parsed.ui_event && typeof parsed.ui_event === 'object' ? parsed.ui_event : null;\r
-                    if (!uiEvent) continue;\r
-                    const runtimeSeq = parsed.runtime_seq || parsed.seq;\r
-                    parsed = Object.assign({}, uiEvent, {\r
-                        protocol: 'runtime_v2',\r
-                        runtime_seq: runtimeSeq,\r
-                        seq: parsed.seq,\r
-                        session_id: uiEvent.session_id || envelopeSessionId,\r
-                    });\r
-                }\r
+    if (!parsed || parsed.protocol === 'runtime_v2') return false;
+    if (parsed.runtime_seq != null || parsed.runtimeSeq != null) return false;
+    const type = String(parsed.type || '');
+    if (type === 'context_trim_progress'
+        || type === 'context_summary_progress'
+        || type === 'key_context_progress'
+        || type === 'context_trim_delta'
+        || type === 'context_summary_delta'
+        || type === 'key_context_delta'
+        || type === 'context_trim_body'
+        || type === 'context_summary_body'
+        || type === 'key_context_body') return false;
+    return true;
+}
+
+function endRunForClient(sessionId, ctx, opts) {
+    opts = opts || {};
+    var sid = String(sessionId || '');
+    if (!sid) return;
+    var allowFollowupDrain = opts.drainFollowup !== false
+        && getRunAbortReason(sid, ctx) !== 'user';
+    finalizeLlmStreamChunks(ctx);
+    finalizeProgressStreamChunks(ctx);
+    if (opts.reconcileFinal !== false) {
+        scheduleFinalVisibleAfterRunIfEnabled(sid, ctx, { delayMs: opts.finalDelayMs != null ? opts.finalDelayMs : 80 });
+    }
+    sealProcessGroup(ctx);
+    markSessionRunInactive(sid);
+    if (getSessionRunState(sid)) {
+        clearSessionRunStateIfMatch(sid, opts.runId || (ctx && ctx.runId));
+    }
+    syncSessionListIndicatorClasses();
+    setSendButtonState();
+    if (sid === currentSessionId) renderTodoPlanForCurrentSession();
+    if (opts.syncFollowup !== false && typeof syncFollowupQueueFromServer === 'function') {
+        // 终止边界必须先与服务端对账，再决定是否自动续发队首 pending。
+        // 入队和普通同步本身都不具备发送权限。
+        var followupSync = syncFollowupQueueFromServer(sid);
+        if (allowFollowupDrain) {
+            void Promise.resolve(followupSync).then(function () {
+                scheduleFollowupQueueDrain(sid, opts.followupDelayMs || 0);
+            }).catch(function (error) {
+                // 未完成服务端对账时不能把“未知状态”当作发送许可。
+                console.warn('follow-up reconciliation failed; auto-drain skipped', error);
+            });
+        }
+    } else if (allowFollowupDrain) {
+        scheduleFollowupQueueDrain(sid, opts.followupDelayMs || 0);
+    }
+    if (liveAutoFollow && opts.scroll !== false) {
+        scrollProcessBodyToBottom(ctx, sid);
+        scrollChatToBottomIfFollow(sid, {});
+    }
+}
+
+async function readSseChunkWithIdleTimeout(reader, timeoutMs) {
+    var timer = null;
+    try {
+        return await Promise.race([
+            reader.read(),
+            new Promise(function (_resolve, reject) {
+                var armedAt = performance.now();
+                var arm = function () {
+                    timer = setTimeout(function () {
+                        var elapsed = performance.now() - armedAt;
+                        /* A heavily delayed timer means the browser/system was suspended.
+                           Give the live stream another full idle window after resume. */
+                        if (elapsed > timeoutMs + 15000) {
+                            armedAt = performance.now();
+                            arm();
+                            return;
+                        }
+                        var err = new Error('SSE idle timeout after ' + String(timeoutMs) + 'ms');
+                        err.name = 'SseIdleTimeout';
+                        try { reader.cancel(err).catch(function () { /* ignore */ }); } catch (e) { /* ignore */ }
+                        reject(err);
+                    }, timeoutMs);
+                };
+                arm();
+            }),
+        ]);
+    } finally {
+        if (timer) clearTimeout(timer);
+    }
+}
+
+async function consumeAgentSseResponse(response, runCtx, runSessionId, streamEventIdx) {
+    if (!response || !response.body) throw new Error('stream response missing body');
+    var ct0 = (response.headers && response.headers.get ? (response.headers.get('content-type') || '') : '').toLowerCase();
+    if (!response.ok || ct0.indexOf('text/event-stream') < 0) {
+        throw new Error('stream response failed: ' + (response.status || 'no status'));
+    }
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    while (true) {
+        const { done, value } = await readSseChunkWithIdleTimeout(reader, SSE_IDLE_TIMEOUT_MS);
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\\n');
+        buffer = lines.pop();
+        for (const line of lines) {
+            if (line.startsWith(':')) continue;
+            if (!line.startsWith('data: ')) continue;
+            const data = line.slice(6);
+            if (data === '[DONE]') {
+                endRunForClient(runSessionId, runCtx, { finalDelayMs: 80, followupDelayMs: 0 });
+                return streamEventIdx;
+            }
+            try {
+                let parsed = JSON.parse(data);
+                if (parsed && (parsed.type === 'sse_keepalive' || parsed.keepalive === true)) continue;
+                if (parsed && parsed.protocol === 'runtime_v2') {
+                    const envelopeSessionId = parsed.session_id || parsed.sessionId || runSessionId;
+                    if (!sessionStore.shouldAcceptSseEvent(envelopeSessionId, parsed.seq, 'runtime_v2')) continue;
+                    if (parsed.skip_ui) {
+                        applySkippedRuntimeV2EventMetadata(parsed, runCtx, envelopeSessionId);
+                        continue;
+                    }
+                    const uiEvent = parsed.ui_event && typeof parsed.ui_event === 'object' ? parsed.ui_event : null;
+                    if (!uiEvent) continue;
+                    const runtimeSeq = parsed.runtime_seq || parsed.seq;
+                    parsed = Object.assign({}, uiEvent, {
+                        protocol: 'runtime_v2',
+                        runtime_seq: runtimeSeq,
+                        seq: parsed.seq,
+                        session_id: uiEvent.session_id || envelopeSessionId,
+                    });
+                }
                 const eventSessionId = parsed.session_id || parsed.sessionId || runSessionId;
                 if (shouldApplySseSeqFilter(parsed)
                     && !sessionStore.shouldAcceptSseEvent(eventSessionId, parsed.seq, parsed.seq_scope || 'legacy')) continue;
@@ -12841,14 +13603,14 @@ async function consumeAgentSseResponse(response, runCtx, runSessionId, streamEve
                     var steerEventIndex = reservedSteerIndex && Number.isFinite(Number(runCtx && runCtx.lastUserEventIndex))
                         ? Number(runCtx.lastUserEventIndex)
                         : (parsed.ephemeral && Number.isFinite(Number(parsed.seq)) ? Number(parsed.seq) : streamEventIdx);
-                    try {\r
-                        applyMessageEvent(eventSessionId, parsed, steerEventIndex, 'sse');\r
-                    } catch (eStoreSteer) {\r
-                        console.error('store user steer event failed:', eStoreSteer);\r
+                    try {
+                        applyMessageEvent(eventSessionId, parsed, steerEventIndex, 'sse');
+                    } catch (eStoreSteer) {
+                        console.error('store user steer event failed:', eStoreSteer);
                     }
                     removeConsumedFollowupSteer(eventSessionId, parsed);
-                    // 通过 operation-id（steer_id/client_id）提交已存在的乐观 pending 行，\r
-                    // 而非再 appendLog 一条新行，避免 append 追问出现「一条灰色 pending + 一条 committed」。\r
+                    // 通过 operation-id（steer_id/client_id）提交已存在的乐观 pending 行，
+                    // 而非再 appendLog 一条新行，避免 append 追问出现「一条灰色 pending + 一条 committed」。
                     // Optimistic append rows are keyed by client_id before the
                     // server steer id exists, so live commit must use the same
                     // priority to update that row instead of creating a second.
@@ -12864,131 +13626,131 @@ async function consumeAgentSseResponse(response, runCtx, runSessionId, streamEve
                             if (parsed.steer_id) committedSteerRow.dataset.steerId = String(parsed.steer_id);
                             committedSteerRow.removeAttribute('data-steer-event-reserved');
                         }
-                    } else {\r
-                        appendLog(runCtx, parsed.content || '', 'user-steer', runSessionId);\r
-                    }\r
+                    } else {
+                        appendLog(runCtx, parsed.content || '', 'user-steer', runSessionId);
+                    }
                     if (!reservedSteerIndex) streamEventIdx += 1;
                     continue;
-                }\r
-                const reduced = applySessionEvent(parsed, {\r
-                    sessionId: eventSessionId,\r
-                    eventIndex: parsed.ephemeral && Number.isFinite(Number(parsed.seq)) ? Number(parsed.seq) : streamEventIdx,\r
-                    source: 'sse',\r
-                });\r
-                if (reduced.runStateChanged) {\r
-                    if (parsed.type === 'run_finished' || parsed.type === 'run_interrupted' || parsed.type === 'run_failed') {\r
-                        endRunForClient(eventSessionId, runCtx, {\r
-                            finalDelayMs: 80,\r
-                            followupDelayMs: 0,\r
-                            runId: parsed.run_id || parsed.runId || (runCtx && runCtx.runId),\r
-                            reconcileFinal: parsed.type === 'run_finished',\r
-                        });\r
-                        streamEventIdx += 1;\r
-                        continue;\r
-                    }\r
-                    syncSessionListIndicatorClasses();\r
-                    continue;\r
-                }\r
-                if (reduced.contextStateChanged && eventSessionId === currentSessionId) {\r
-                    if (parsed.type === 'context_tokens') applyContextTokenLabelForCurrentSession();\r
-                    else if (parsed.type === 'todo_plan') renderTodoPlanForCurrentSession();\r
-                    if (parsed.type === 'context_tokens' || parsed.type === 'todo_plan') continue;\r
-                }\r
-                if (parsed.ephemeral) {\r
-                    /* 任何携带 agent_id 的 ephemeral 都属于子 agent；无论投递成功与否都不能 fall-through\r
-                       到父 ctx 的 appendLlmStreamDelta，否则会污染主对话区。 */\r
-                    if (parsed.agent_id) { handleSubagentStreamEvent(parsed, streamEventIdx, runSessionId); continue; }\r
-                    if (parsed.type === 'llm_stream_aborted') {\r
-                        removeTemporaryStatus(runCtx);\r
-                        discardLlmStreamChunks(runCtx, parsed);\r
-                        removeAbortedToolDraftRows(runCtx, parsed);\r
-                        continue;\r
-                    }\r
-                    if (parsed.type === 'tool_approval_required') {\r
-                        finalizeLlmStreamChunks(runCtx);\r
-                        var aidApr = parsed.approval_id != null ? String(parsed.approval_id) : '';\r
-                        var ttlApr = parsed.title != null ? String(parsed.title) : '需要确认';\r
-                        var msgApr = parsed.message != null ? String(parsed.message) : '';\r
-                        var subApr = parsed.subtitle != null ? String(parsed.subtitle) : '';\r
-                        var allowApr = false;\r
-                        try {\r
-                            allowApr = await openUiModal({\r
-                                title: ttlApr,\r
-                                subtitle: subApr,\r
-                                message: msgApr,\r
-                                danger: true,\r
-                                confirmText: '允许执行',\r
-                                cancelText: '拒绝',\r
-                            });\r
-                        } catch (eApr) {\r
-                            allowApr = false;\r
-                        }\r
-                        try {\r
-                            await fetch('/sessions/' + encodeURIComponent(runSessionId) + '/tool-approval', {\r
-                                method: 'POST',\r
-                                headers: { 'Content-Type': 'application/json' },\r
-                                body: JSON.stringify({ approval_id: aidApr, approve: allowApr }),\r
-                            });\r
-                        } catch (errApr) {\r
-                            console.error('tool-approval POST failed:', errApr);\r
-                        }\r
-                        continue;\r
-                    }\r
-                    if (parsed.type === 'tool_pending') {\r
-                        appendToolPendingRow(runCtx, parsed, runSessionId);\r
-                        continue;\r
-                    }\r
-                    if (parsed.type === 'tool_call_delta') {\r
-                        appendToolCallDelta(runCtx, parsed, runSessionId);\r
-                        continue;\r
-                    }\r
-                    if (parsed.type === 'tool_command_delta') {\r
-                        appendToolCommandDelta(runCtx, parsed, runSessionId);\r
-                        continue;\r
-                    }\r
-                    if (parsed.type === 'llm_reasoning_delta' || parsed.type === 'llm_response_delta') appendLlmStreamDelta(runCtx, parsed, runSessionId);\r
-                    else if (parsed.type === 'context_summary_delta') appendProgressStreamDelta(runCtx, parsed.delta, 'context-summary', runSessionId);\r
-                    else if (parsed.type === 'key_context_delta') appendKeyContextStreamDelta(runCtx, parsed.delta, runSessionId);\r
-                    else if (parsed.type === 'context_tokens' && eventSessionId === currentSessionId) applyContextTokenLabelForCurrentSession();\r
-                    else if (parsed.type === 'cache_stats' && eventSessionId === currentSessionId) applyCacheStatsFromEvent(runCtx, parsed, runSessionId);\r
-                    else if (parsed.type === 'todo_plan' && runSessionId === currentSessionId) renderTodoPlanForCurrentSession();\r
-                    else if (parsed.type === 'runtime_resumed') {\r
-                        removeTemporaryStatus(runCtx);\r
-                        var resumeSeconds = Math.max(0, Number(parsed.suspended_seconds || 0));\r
-                        appendLog(\r
-                            runCtx,\r
-                            parsed.content || (\r
-                                parsed.cause === 'system_sleep'\r
-                                    ? ('检测到系统睡眠约 ' + Math.round(resumeSeconds) + ' 秒，任务已恢复')\r
-                                    : ('检测到 Agent 进程暂停约 ' + Math.round(resumeSeconds) + ' 秒，任务已恢复')\r
-                            ),\r
-                            'status',\r
-                            runSessionId\r
-                        );\r
-                    }\r
-                    else if (parsed.type === 'status') {\r
-                        var statusContent = String(parsed.content || '');\r
-                        if (parsed.model_switch) {\r
-                            appendModelSwitchStatus(runCtx, parsed, runSessionId);\r
-                            continue;\r
-                        }\r
-                        var isTemporaryStatus = statusContent.indexOf('正在思考中...') >= 0;\r
-                        isTemporaryStatus = isTemporaryStatus || !!parsed.ephemeral || statusContent.indexOf('正在重连') >= 0;\r
-                        if (isTemporaryStatus) removeTemporaryStatus(runCtx);\r
-                        var statusRow = appendLog(runCtx, statusContent, 'status', runSessionId);\r
-                        if (isTemporaryStatus && statusRow) {\r
-                            statusRow.dataset.temporaryStatus = '1';\r
-                        }\r
-                    }\r
-                    continue;\r
-                }\r
-                if (parsed.agent_id) {\r
-                    /* 非 ephemeral 子 agent 事件：必须走子 agent 通道，绝不能落到 renderEvent(runCtx,...) */\r
-                    handleSubagentStreamEvent(parsed, streamEventIdx, runSessionId);\r
-                    streamEventIdx += 1;\r
-                    continue;\r
-                }\r
-                finalizeLlmStreamChunks(runCtx);\r
+                }
+                const reduced = applySessionEvent(parsed, {
+                    sessionId: eventSessionId,
+                    eventIndex: parsed.ephemeral && Number.isFinite(Number(parsed.seq)) ? Number(parsed.seq) : streamEventIdx,
+                    source: 'sse',
+                });
+                if (reduced.runStateChanged) {
+                    if (parsed.type === 'run_finished' || parsed.type === 'run_interrupted' || parsed.type === 'run_failed') {
+                        endRunForClient(eventSessionId, runCtx, {
+                            finalDelayMs: 80,
+                            followupDelayMs: 0,
+                            runId: parsed.run_id || parsed.runId || (runCtx && runCtx.runId),
+                            reconcileFinal: parsed.type === 'run_finished',
+                        });
+                        streamEventIdx += 1;
+                        continue;
+                    }
+                    syncSessionListIndicatorClasses();
+                    continue;
+                }
+                if (reduced.contextStateChanged && eventSessionId === currentSessionId) {
+                    if (parsed.type === 'context_tokens') applyContextTokenLabelForCurrentSession();
+                    else if (parsed.type === 'todo_plan') renderTodoPlanForCurrentSession();
+                    if (parsed.type === 'context_tokens' || parsed.type === 'todo_plan') continue;
+                }
+                if (parsed.ephemeral) {
+                    /* 任何携带 agent_id 的 ephemeral 都属于子 agent；无论投递成功与否都不能 fall-through
+                       到父 ctx 的 appendLlmStreamDelta，否则会污染主对话区。 */
+                    if (parsed.agent_id) { handleSubagentStreamEvent(parsed, streamEventIdx, runSessionId); continue; }
+                    if (parsed.type === 'llm_stream_aborted') {
+                        removeTemporaryStatus(runCtx);
+                        discardLlmStreamChunks(runCtx, parsed);
+                        removeAbortedToolDraftRows(runCtx, parsed);
+                        continue;
+                    }
+                    if (parsed.type === 'tool_approval_required') {
+                        finalizeLlmStreamChunks(runCtx);
+                        var aidApr = parsed.approval_id != null ? String(parsed.approval_id) : '';
+                        var ttlApr = parsed.title != null ? String(parsed.title) : '需要确认';
+                        var msgApr = parsed.message != null ? String(parsed.message) : '';
+                        var subApr = parsed.subtitle != null ? String(parsed.subtitle) : '';
+                        var allowApr = false;
+                        try {
+                            allowApr = await openUiModal({
+                                title: ttlApr,
+                                subtitle: subApr,
+                                message: msgApr,
+                                danger: true,
+                                confirmText: '允许执行',
+                                cancelText: '拒绝',
+                            });
+                        } catch (eApr) {
+                            allowApr = false;
+                        }
+                        try {
+                            await fetch('/sessions/' + encodeURIComponent(runSessionId) + '/tool-approval', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ approval_id: aidApr, approve: allowApr }),
+                            });
+                        } catch (errApr) {
+                            console.error('tool-approval POST failed:', errApr);
+                        }
+                        continue;
+                    }
+                    if (parsed.type === 'tool_pending') {
+                        appendToolPendingRow(runCtx, parsed, runSessionId);
+                        continue;
+                    }
+                    if (parsed.type === 'tool_call_delta') {
+                        appendToolCallDelta(runCtx, parsed, runSessionId);
+                        continue;
+                    }
+                    if (parsed.type === 'tool_command_delta') {
+                        appendToolCommandDelta(runCtx, parsed, runSessionId);
+                        continue;
+                    }
+                    if (parsed.type === 'llm_reasoning_delta' || parsed.type === 'llm_response_delta') appendLlmStreamDelta(runCtx, parsed, runSessionId);
+                    else if (parsed.type === 'context_summary_delta') appendProgressStreamDelta(runCtx, parsed.delta, 'context-summary', runSessionId);
+                    else if (parsed.type === 'key_context_delta') appendKeyContextStreamDelta(runCtx, parsed.delta, runSessionId);
+                    else if (parsed.type === 'context_tokens' && eventSessionId === currentSessionId) applyContextTokenLabelForCurrentSession();
+                    else if (parsed.type === 'cache_stats' && eventSessionId === currentSessionId) applyCacheStatsFromEvent(runCtx, parsed, runSessionId);
+                    else if (parsed.type === 'todo_plan' && runSessionId === currentSessionId) renderTodoPlanForCurrentSession();
+                    else if (parsed.type === 'runtime_resumed') {
+                        removeTemporaryStatus(runCtx);
+                        var resumeSeconds = Math.max(0, Number(parsed.suspended_seconds || 0));
+                        appendLog(
+                            runCtx,
+                            parsed.content || (
+                                parsed.cause === 'system_sleep'
+                                    ? ('检测到系统睡眠约 ' + Math.round(resumeSeconds) + ' 秒，任务已恢复')
+                                    : ('检测到 Agent 进程暂停约 ' + Math.round(resumeSeconds) + ' 秒，任务已恢复')
+                            ),
+                            'status',
+                            runSessionId
+                        );
+                    }
+                    else if (parsed.type === 'status') {
+                        var statusContent = String(parsed.content || '');
+                        if (parsed.model_switch) {
+                            appendModelSwitchStatus(runCtx, parsed, runSessionId);
+                            continue;
+                        }
+                        var isTemporaryStatus = statusContent.indexOf('正在思考中...') >= 0;
+                        isTemporaryStatus = isTemporaryStatus || !!parsed.ephemeral || statusContent.indexOf('正在重连') >= 0;
+                        if (isTemporaryStatus) removeTemporaryStatus(runCtx);
+                        var statusRow = appendLog(runCtx, statusContent, 'status', runSessionId);
+                        if (isTemporaryStatus && statusRow) {
+                            statusRow.dataset.temporaryStatus = '1';
+                        }
+                    }
+                    continue;
+                }
+                if (parsed.agent_id) {
+                    /* 非 ephemeral 子 agent 事件：必须走子 agent 通道，绝不能落到 renderEvent(runCtx,...) */
+                    handleSubagentStreamEvent(parsed, streamEventIdx, runSessionId);
+                    streamEventIdx += 1;
+                    continue;
+                }
+                finalizeLlmStreamChunks(runCtx);
                 if (parsed.type === 'tool_call') {
                     upsertToolCallResult(runCtx, parsed, runSessionId);
                     const completedTool = String(parsed.tool || parsed.tool_name || '');
@@ -12999,531 +13761,531 @@ async function consumeAgentSseResponse(response, runCtx, runSessionId, streamEve
                     streamEventIdx += 1;
                     continue;
                 }
-                if (parsed.type === 'final') {\r
-                    if (eventSessionId === runSessionId) markRunFinalSeen(runCtx);\r
-                    var finalStream = runCtx && runCtx.stream && runCtx.stream.isConnected ? runCtx.stream : getVisibleChatStream();\r
-                    var finalLastUserIdx = latestVisibleUserEventIndex(finalStream);\r
-                    if (hasDuplicateVisibleFinal(finalStream, finalLastUserIdx, parsed.content)) {\r
-                        streamEventIdx += 1;\r
-                        continue;\r
-                    }\r
-                }\r
-                renderMessageRecord(runCtx, reduced.messageRecord || {\r
-                    index: streamEventIdx,\r
-                    event: parsed,\r
-                    source: 'sse',\r
-                }, runSessionId);\r
-                if (parsed.type === 'final' && eventSessionId === runSessionId) {\r
-                    endRunForClient(runSessionId, runCtx, {\r
-                        reconcileFinal: false,\r
-                        followupDelayMs: 250,\r
-                    });\r
-                }\r
-                streamEventIdx += 1;\r
-            } catch (e) { console.error('解析事件失败:', e); }\r
-        }\r
-    }\r
-    scheduleFinalVisibleAfterRunIfEnabled(runSessionId, runCtx, { delayMs: 120 });\r
-    return streamEventIdx;\r
-}\r
-\r
-function latestVisibleUserEventIndex(stream) {\r
-    var maxIdx = -1;\r
-    if (!stream || !stream.querySelectorAll) return maxIdx;\r
-    stream.querySelectorAll('.msg-wrap--user[data-event-index]').forEach(function (wrap) {\r
-        var n = Number(wrap.getAttribute('data-event-index'));\r
-        if (Number.isFinite(n)) maxIdx = Math.max(maxIdx, Math.floor(n));\r
-    });\r
-    return maxIdx;\r
-}\r
-\r
-function hasVisibleFinalAfterUser(stream, userEventIndex) {\r
-    if (!stream || !stream.querySelectorAll) return false;\r
-    var found = false;\r
-    stream.querySelectorAll('.msg-wrap--assistant[data-event-index]').forEach(function (wrap) {\r
-        if (found) return;\r
-        var n = Number(wrap.getAttribute('data-event-index'));\r
-        if (Number.isFinite(n) && Math.floor(n) > userEventIndex) found = true;\r
-    });\r
-    return found;\r
-}\r
-\r
-function hasDuplicateVisibleFinal(stream, userEventIndex, content) {\r
-    if (!stream || !stream.querySelectorAll) return false;\r
-    var expected = String(content || '').replace(/\\s+/g, ' ').trim();\r
-    if (!expected) return false;\r
-    var found = false;\r
-    stream.querySelectorAll('.msg-wrap--assistant[data-event-index]').forEach(function (wrap) {\r
-        if (found) return;\r
-        var n = Number(wrap.getAttribute('data-event-index'));\r
-        if (!Number.isFinite(n) || Math.floor(n) <= userEventIndex) return;\r
-        var raw = messageRawMarkdown.get(wrap);\r
-        var actual = String(raw != null ? raw : (wrap.textContent || '')).replace(/\\s+/g, ' ').trim();\r
-        if (actual === expected) found = true;\r
-    });\r
-    return found;\r
-}\r
-\r
-function findStoredFinalAfterUser(sessionId, userEventIndex) {\r
-    var events = [];\r
-    try { events = selectMessageEvents(sessionId) || []; } catch (e) { events = []; }\r
-    for (var i = events.length - 1; i >= 0; i -= 1) {\r
-        var rec = events[i];\r
-        if (!rec || rec.type !== 'final') continue;\r
-        if (Number.isFinite(Number(rec.index)) && Number(rec.index) > userEventIndex) return rec;\r
-    }\r
-    return null;\r
-}\r
-\r
-function renderFinalRecordIfMissing(sessionId, ctx, stream, finalRecord, userEventIndex) {\r
-    if (!finalRecord || !finalRecord.event || finalRecord.type !== 'final') return false;\r
-    var content = finalRecord.event.content || '';\r
-    if (hasVisibleFinalAfterUser(stream, userEventIndex)) return true;\r
-    if (hasDuplicateVisibleFinal(stream, userEventIndex, content)) return true;\r
-    var renderCtx = ctx || newDomContext(stream);\r
-    renderCtx.stream = stream;\r
-    renderCtx.lastUserEventIndex = Math.max(renderCtx.lastUserEventIndex || -1, userEventIndex);\r
-    renderMessageRecord(renderCtx, finalRecord, sessionId);\r
-    return hasVisibleFinalAfterUser(stream, userEventIndex);\r
-}\r
-\r
-async function ensureFinalVisibleAfterRunIfEnabled(sessionId, ctx, opts) {\r
-    if (!isMyAgentFeatureEnabled('finalReconcile', true)) return false;\r
-    return ensureFinalVisibleAfterRun(sessionId, ctx, opts);\r
-}\r
-\r
-function markRunFinalSeen(ctx) {\r
-    if (ctx) ctx.seenFinal = true;\r
-}\r
-\r
-function initRunFinalTracking(ctx) {\r
-    if (ctx) ctx.seenFinal = false;\r
-}\r
-\r
-function scheduleFinalVisibleAfterRunIfEnabled(sessionId, ctx, opts) {\r
-    if (!isMyAgentFeatureEnabled('finalReconcile', true)) return;\r
-    if (ctx && ctx.seenFinal === true) return;\r
-    setTimeout(function () {\r
-        if (ctx && ctx.seenFinal === true) return;\r
-        ensureFinalVisibleAfterRun(sessionId, ctx, opts).catch(function (e) {\r
-            console.error('final reconcile failed:', e);\r
-        });\r
-    }, 0);\r
-}\r
-\r
-async function ensureFinalVisibleAfterRun(sessionId, ctx, opts) {\r
-    opts = opts || {};\r
-    var sid = String(sessionId || '');\r
-    if (!sid || sid !== currentSessionId) return false;\r
-    var stream = (ctx && ctx.stream && ctx.stream.isConnected) ? ctx.stream : getVisibleChatStream();\r
-    if (!stream) return false;\r
-    var lastUserIdx = latestVisibleUserEventIndex(stream);\r
-    if (hasVisibleFinalAfterUser(stream, lastUserIdx)) return true;\r
-    var storedFinal = findStoredFinalAfterUser(sid, lastUserIdx);\r
-    if (storedFinal) {\r
-        if (renderFinalRecordIfMissing(sid, ctx, stream, storedFinal, lastUserIdx)) return true;\r
-    }\r
-    var delayMs = Math.max(0, Number(opts.delayMs) || 0);\r
-    if (delayMs) await new Promise(function (resolve) { setTimeout(resolve, delayMs); });\r
-    if (sid !== currentSessionId) return false;\r
-    stream = getVisibleChatStream();\r
-    if (!stream || hasVisibleFinalAfterUser(stream, lastUserIdx)) return true;\r
-    return false;\r
-}\r
-\r
-async function startContinueAfterSubagents(sessionId, forcedMode) {\r
-    if (!sessionId || sessionId !== currentSessionId) return;\r
-    delete subagentContinueDismissedForSession[sessionId];\r
-    if (isSessionRunning(sessionId) || subagentContinueInFlight) {\r
-        updateSubagentContinueBanner(sessionId);\r
-        return;\r
-    }\r
-    if (isSendPipelineLocked(sessionId)) {\r
-        updateSubagentContinueBanner(sessionId);\r
-        return;\r
-    }\r
-    hideSubagentContinueBanner();\r
-    subagentContinueInFlight = true;\r
-    var runCtx = null;\r
-    var runSessionId = sessionId;\r
-    try {\r
-    var banner = document.getElementById('subagent-continue-banner');\r
-    var continueMode = forcedMode === 'react'\r
-        ? 'react'\r
-        : (banner && banner.dataset && banner.dataset.continueMode === 'react' ? 'react' : 'subagents');\r
-    var continueUrl = continueMode === 'react'\r
-        ? '/sessions/' + encodeURIComponent(sessionId) + '/continue' + (forcedMode === 'react' ? '?recovery=true' : '')\r
-        : '/sessions/' + encodeURIComponent(sessionId) + '/continue-subagents';\r
-        const response = await fetch(continueUrl, { method: 'POST' });\r
-        if (response.status === 204) {\r
-            hideSubagentContinueBanner();\r
-            return;\r
-        }\r
+                if (parsed.type === 'final') {
+                    if (eventSessionId === runSessionId) markRunFinalSeen(runCtx);
+                    var finalStream = runCtx && runCtx.stream && runCtx.stream.isConnected ? runCtx.stream : getVisibleChatStream();
+                    var finalLastUserIdx = latestVisibleUserEventIndex(finalStream);
+                    if (hasDuplicateVisibleFinal(finalStream, finalLastUserIdx, parsed.content)) {
+                        streamEventIdx += 1;
+                        continue;
+                    }
+                }
+                renderMessageRecord(runCtx, reduced.messageRecord || {
+                    index: streamEventIdx,
+                    event: parsed,
+                    source: 'sse',
+                }, runSessionId);
+                if (parsed.type === 'final' && eventSessionId === runSessionId) {
+                    endRunForClient(runSessionId, runCtx, {
+                        reconcileFinal: false,
+                        followupDelayMs: 250,
+                    });
+                }
+                streamEventIdx += 1;
+            } catch (e) { console.error('解析事件失败:', e); }
+        }
+    }
+    scheduleFinalVisibleAfterRunIfEnabled(runSessionId, runCtx, { delayMs: 120 });
+    return streamEventIdx;
+}
+
+function latestVisibleUserEventIndex(stream) {
+    var maxIdx = -1;
+    if (!stream || !stream.querySelectorAll) return maxIdx;
+    stream.querySelectorAll('.msg-wrap--user[data-event-index]').forEach(function (wrap) {
+        var n = Number(wrap.getAttribute('data-event-index'));
+        if (Number.isFinite(n)) maxIdx = Math.max(maxIdx, Math.floor(n));
+    });
+    return maxIdx;
+}
+
+function hasVisibleFinalAfterUser(stream, userEventIndex) {
+    if (!stream || !stream.querySelectorAll) return false;
+    var found = false;
+    stream.querySelectorAll('.msg-wrap--assistant[data-event-index]').forEach(function (wrap) {
+        if (found) return;
+        var n = Number(wrap.getAttribute('data-event-index'));
+        if (Number.isFinite(n) && Math.floor(n) > userEventIndex) found = true;
+    });
+    return found;
+}
+
+function hasDuplicateVisibleFinal(stream, userEventIndex, content) {
+    if (!stream || !stream.querySelectorAll) return false;
+    var expected = String(content || '').replace(/\\s+/g, ' ').trim();
+    if (!expected) return false;
+    var found = false;
+    stream.querySelectorAll('.msg-wrap--assistant[data-event-index]').forEach(function (wrap) {
+        if (found) return;
+        var n = Number(wrap.getAttribute('data-event-index'));
+        if (!Number.isFinite(n) || Math.floor(n) <= userEventIndex) return;
+        var raw = messageRawMarkdown.get(wrap);
+        var actual = String(raw != null ? raw : (wrap.textContent || '')).replace(/\\s+/g, ' ').trim();
+        if (actual === expected) found = true;
+    });
+    return found;
+}
+
+function findStoredFinalAfterUser(sessionId, userEventIndex) {
+    var events = [];
+    try { events = selectMessageEvents(sessionId) || []; } catch (e) { events = []; }
+    for (var i = events.length - 1; i >= 0; i -= 1) {
+        var rec = events[i];
+        if (!rec || rec.type !== 'final') continue;
+        if (Number.isFinite(Number(rec.index)) && Number(rec.index) > userEventIndex) return rec;
+    }
+    return null;
+}
+
+function renderFinalRecordIfMissing(sessionId, ctx, stream, finalRecord, userEventIndex) {
+    if (!finalRecord || !finalRecord.event || finalRecord.type !== 'final') return false;
+    var content = finalRecord.event.content || '';
+    if (hasVisibleFinalAfterUser(stream, userEventIndex)) return true;
+    if (hasDuplicateVisibleFinal(stream, userEventIndex, content)) return true;
+    var renderCtx = ctx || newDomContext(stream);
+    renderCtx.stream = stream;
+    renderCtx.lastUserEventIndex = Math.max(renderCtx.lastUserEventIndex || -1, userEventIndex);
+    renderMessageRecord(renderCtx, finalRecord, sessionId);
+    return hasVisibleFinalAfterUser(stream, userEventIndex);
+}
+
+async function ensureFinalVisibleAfterRunIfEnabled(sessionId, ctx, opts) {
+    if (!isMyAgentFeatureEnabled('finalReconcile', true)) return false;
+    return ensureFinalVisibleAfterRun(sessionId, ctx, opts);
+}
+
+function markRunFinalSeen(ctx) {
+    if (ctx) ctx.seenFinal = true;
+}
+
+function initRunFinalTracking(ctx) {
+    if (ctx) ctx.seenFinal = false;
+}
+
+function scheduleFinalVisibleAfterRunIfEnabled(sessionId, ctx, opts) {
+    if (!isMyAgentFeatureEnabled('finalReconcile', true)) return;
+    if (ctx && ctx.seenFinal === true) return;
+    setTimeout(function () {
+        if (ctx && ctx.seenFinal === true) return;
+        ensureFinalVisibleAfterRun(sessionId, ctx, opts).catch(function (e) {
+            console.error('final reconcile failed:', e);
+        });
+    }, 0);
+}
+
+async function ensureFinalVisibleAfterRun(sessionId, ctx, opts) {
+    opts = opts || {};
+    var sid = String(sessionId || '');
+    if (!sid || sid !== currentSessionId) return false;
+    var stream = (ctx && ctx.stream && ctx.stream.isConnected) ? ctx.stream : getVisibleChatStream();
+    if (!stream) return false;
+    var lastUserIdx = latestVisibleUserEventIndex(stream);
+    if (hasVisibleFinalAfterUser(stream, lastUserIdx)) return true;
+    var storedFinal = findStoredFinalAfterUser(sid, lastUserIdx);
+    if (storedFinal) {
+        if (renderFinalRecordIfMissing(sid, ctx, stream, storedFinal, lastUserIdx)) return true;
+    }
+    var delayMs = Math.max(0, Number(opts.delayMs) || 0);
+    if (delayMs) await new Promise(function (resolve) { setTimeout(resolve, delayMs); });
+    if (sid !== currentSessionId) return false;
+    stream = getVisibleChatStream();
+    if (!stream || hasVisibleFinalAfterUser(stream, lastUserIdx)) return true;
+    return false;
+}
+
+async function startContinueAfterSubagents(sessionId, forcedMode) {
+    if (!sessionId || sessionId !== currentSessionId) return;
+    delete subagentContinueDismissedForSession[sessionId];
+    if (isSessionRunning(sessionId) || subagentContinueInFlight) {
+        updateSubagentContinueBanner(sessionId);
+        return;
+    }
+    if (isSendPipelineLocked(sessionId)) {
+        updateSubagentContinueBanner(sessionId);
+        return;
+    }
+    hideSubagentContinueBanner();
+    subagentContinueInFlight = true;
+    var runCtx = null;
+    var runSessionId = sessionId;
+    try {
+    var banner = document.getElementById('subagent-continue-banner');
+    var continueMode = forcedMode === 'react'
+        ? 'react'
+        : (banner && banner.dataset && banner.dataset.continueMode === 'react' ? 'react' : 'subagents');
+    var continueUrl = continueMode === 'react'
+        ? '/sessions/' + encodeURIComponent(sessionId) + '/continue' + (forcedMode === 'react' ? '?recovery=true' : '')
+        : '/sessions/' + encodeURIComponent(sessionId) + '/continue-subagents';
+        const response = await fetch(continueUrl, { method: 'POST' });
+        if (response.status === 204) {
+            hideSubagentContinueBanner();
+            return;
+        }
         if (response.status === 409) {
-            updateSubagentContinueBanner(sessionId);\r
-            return;\r
-        }\r
-        var ct = (response.headers.get('content-type') || '').toLowerCase();\r
-        if (!response.ok || !response.body || ct.indexOf('text/event-stream') < 0) return;\r
-        const preCount = await getUiEventCount(runSessionId, { preferCache: true });\r
-        if (!getVisibleChatStream()) ensureVisibleChatStreamSlot();\r
-        runCtx = newDomContext(getVisibleChatStream());\r
-        if (sessionStore && typeof sessionStore.resetSseSeq === 'function') {\r
-            sessionStore.resetSseSeq(runSessionId);\r
-        }\r
-        initRunFinalTracking(runCtx);\r
-        runCtx.runStartedAt = new Date().toISOString();\r
-        if (getSessionRunState(runSessionId) && getSessionRunState(runSessionId).ctx) {\r
-            runCtx = getSessionRunState(runSessionId).ctx;\r
-            initRunFinalTracking(runCtx);\r
-            if (!runCtx.runStartedAt) runCtx.runStartedAt = new Date().toISOString();\r
-        } else {\r
-            runCtx.lastUserEventIndex = Math.max(0, preCount - 1);\r
-            resetLlmState(runCtx);\r
-            finalizeLlmStreamChunks(runCtx);\r
-        }\r
-        const ac = new AbortController();\r
-        setSessionRunState(runSessionId, { controller: ac, ctx: runCtx });\r
-        if (sessionStore && typeof sessionStore.resetSseSeq === 'function') {\r
-            sessionStore.resetSseSeq(runSessionId);\r
-        }\r
-        setSendButtonState();\r
-        syncSessionListIndicatorClasses();\r
-        liveAutoFollow = true;\r
-        streamProcNearBottom = true;\r
-        scheduleContextTokensAfterPaint(runSessionId);\r
-        let streamEventIdx = preCount;\r
-        try {\r
-            await consumeAgentSseResponse(response, runCtx, runSessionId, streamEventIdx);\r
-        } catch (error) {\r
-            if (error.name === 'AbortError') {\r
-                if (getRunAbortReason(runSessionId, runCtx) === 'user') appendLog(runCtx, '任务已中断', 'status', runSessionId);\r
-            }\r
-            else {\r
-                console.error('续接 subagent 失败:', error);\r
-                const msg = (error && error.message) ? String(error.message) : String(error);\r
-                appendLog(runCtx, '续接失败: ' + msg, 'error-log', runSessionId);\r
-            }\r
-        } finally {\r
-            finalizeLlmStreamChunks(runCtx);\r
-            finalizeProgressStreamChunks(runCtx);\r
-            if (runSessionId === currentSessionId\r
-                && getRunAbortReason(runSessionId, runCtx) !== 'user'\r
-                && !isServerStreamActive(runSessionId)) {\r
-                scheduleFinalVisibleAfterRunIfEnabled(runSessionId, runCtx, { delayMs: 120 });\r
-            }\r
-            if (runSessionId === currentSessionId) renderTodoPlanForCurrentSession();\r
-            if (liveAutoFollow) {\r
-                scrollProcessBodyToBottom(runCtx, runSessionId);\r
-                scrollChatToBottomIfFollow(runSessionId, {});\r
-            }\r
-            if (getSessionRunState(runSessionId)) clearSessionRunState(runSessionId);\r
-            setSendButtonState();\r
-            syncSessionListIndicatorClasses();\r
-            void refreshSingleSessionRow(runSessionId);\r
-            applyContextTokenLabelForCurrentSession();\r
-            scheduleActiveSessionReconnect(runSessionId, { delayMs: 120 });\r
-        }\r
-        hideSubagentContinueBanner();\r
-        if (!subagentContinueDismissedForSession[sessionId]) updateSubagentContinueBanner(sessionId);\r
-    } finally {\r
-        subagentContinueInFlight = false;\r
-    }\r
-}\r
-\r
-var autoResumeReactAttemptAt = Object.create(null);\r
-\r
-function maybeAutoResumeInterruptedReact(sessionId, sessionDetail) {\r
-    var sid = String(sessionId || '');\r
-    var detail = sessionDetail || {};\r
-    if (!sid || sid !== currentSessionId) return;\r
-    if (typeof navigator !== 'undefined' && navigator.onLine === false) return;\r
-    if (!detail.react_auto_resume || !detail.react_can_continue || detail.run_active || detail.stream_active) return;\r
-    if (isSessionRunning(sid) || subagentContinueInFlight) return;\r
-    var now = Date.now();\r
-    if (now - Number(autoResumeReactAttemptAt[sid] || 0) < 30000) return;\r
-    autoResumeReactAttemptAt[sid] = now;\r
-    if (getVisibleChatStream()) {\r
-        var ctx = newDomContext(getVisibleChatStream());\r
-        appendLog(ctx, '检测到上次运行未完成，正在自动恢复任务…', 'status', sid);\r
-    }\r
-    void startContinueAfterSubagents(sid, 'react');\r
-}\r
-\r
-window.addEventListener('online', function () {\r
-    var sid = String(currentSessionId || '');\r
-    if (!sid) return;\r
-    scheduleActiveSessionReconnect(sid, { delayMs: 100 });\r
-    setTimeout(function () { void refreshSingleSessionRow(sid); }, 250);\r
-});\r
-\r
-function nowPipelineMs() {\r
-    return (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();\r
-}\r
-\r
-function isClientPipelineTerminalStep(label, step) {\r
-    var s = String(step || '');\r
-    var l = String(label || '');\r
-    if (l.indexOf('client_send_pipeline') >= 0) {\r
-        return s === 'release_send_lock';\r
-    }\r
-    if (l.indexOf('client_followup') >= 0) {\r
-        return s === 'followup_cancel_after_steer'\r
-            || s === 'followup_restart_takeover'\r
-            || s === 'followup_accepted_by_running_agent'\r
-            || s === 'followup_steer_error'\r
-            || s === 'followup_fallback_to_chat';\r
-    }\r
-    return /(?:final|finish|done|error|failed|cancel|release)$/i.test(s);\r
-}\r
-\r
-function flushClientPipelineTiming(ctx, finalStep) {\r
-    if (!ctx || ctx._timingFlushed) return;\r
-    var steps = ctx._timingSteps || {};\r
-    var names = Object.keys(steps);\r
-    if (!names.length) return;\r
-    var now = nowPipelineMs();\r
-    var label = String(ctx.label || 'client_pipeline_step_timing').replace(/_step_timing$/, '_timing');\r
-    var payload = {\r
-        label: label,\r
-        session_id: ctx.sessionId || '',\r
-        run_id: ctx.runId || '',\r
-        mode: ctx.mode || '',\r
-        total_ms: Math.max(0, Math.round(now - Number(ctx.startedAt || now))),\r
-        final_step: finalStep || '',\r
-        steps: steps\r
-    };\r
-    ctx._timingFlushed = true;\r
-    try {\r
-        var stepText = names.map(function (name) {\r
-            return name + '=' + Math.max(0, Math.round(Number(steps[name] && steps[name].ms || 0))) + 'ms';\r
-        }).join(' ');\r
-        console.info(\r
-            payload.label,\r
-            'session=' + payload.session_id,\r
-            'total=' + payload.total_ms + 'ms',\r
-            'run_id=' + payload.run_id,\r
-            'mode=' + payload.mode,\r
-            stepText\r
-        );\r
-    } catch (e) { /* ignore */ }\r
-    try {\r
-        const body = JSON.stringify(payload);\r
-        if (navigator && typeof navigator.sendBeacon === 'function') {\r
-            const blob = new Blob([body], { type: 'application/json' });\r
-            if (navigator.sendBeacon('/api/client_timing', blob)) return;\r
-        }\r
-        fetch('/api/client_timing', {\r
-            method: 'POST',\r
-            headers: { 'Content-Type': 'application/json' },\r
-            body: body,\r
-            keepalive: true\r
-        }).catch(function () { /* ignore */ });\r
-    } catch (e) { /* ignore */ }\r
-}\r
-\r
-function reportClientPipelineStep(ctx, step, startedAt, extra) {\r
-    if (!ctx || !step) return;\r
-    const now = nowPipelineMs();\r
-    var stepName = String(step || '');\r
-    if (!ctx._timingSteps) ctx._timingSteps = {};\r
-    ctx._timingSteps[stepName] = {\r
-        ms: Math.max(0, Math.round(now - Number(startedAt || now))),\r
-        since_start_ms: Math.max(0, Math.round(now - Number(ctx.startedAt || now))),\r
-        extra: extra || {}\r
-    };\r
-    if (isClientPipelineTerminalStep(ctx.label, stepName)) flushClientPipelineTiming(ctx, stepName);\r
-}\r
-\r
-function applySkippedRuntimeV2EventMetadata(event, runCtx, sessionId) {\r
-    if (!event || !event.skip_ui) return;\r
-    const runtimeEvent = event.runtime_event && typeof event.runtime_event === 'object' ? event.runtime_event : null;\r
-    if (!runtimeEvent || (runtimeEvent.type !== 'message_user' && runtimeEvent.type !== 'user_turn_committed')) return;\r
-    const runtimeSeq = Number(event.runtime_seq || event.seq);\r
-    if (!Number.isFinite(runtimeSeq) || runtimeSeq <= 0) return;\r
-    if (runCtx) runCtx.lastUserRuntimeSeq = Math.floor(runtimeSeq);\r
-    if (sessionId && sessionId !== currentSessionId) return;\r
-    const eventIndex = runCtx && Number.isFinite(Number(runCtx.lastUserEventIndex))\r
-        ? Math.floor(Number(runCtx.lastUserEventIndex))\r
-        : NaN;\r
-    let wrap = null;\r
-    const stream = (runCtx && runCtx.stream) || getVisibleChatStream();\r
-    if (stream && Number.isFinite(eventIndex)) {\r
-        try {\r
-            wrap = stream.querySelector('.msg-wrap--user[data-event-index="' + String(eventIndex) + '"]');\r
-        } catch (e) { wrap = null; }\r
-    }\r
-    if (!wrap && stream) {\r
-        const users = stream.querySelectorAll('.msg-wrap--user');\r
-        wrap = users.length ? users[users.length - 1] : null;\r
-    }\r
-    if (wrap) {\r
-        wrap.setAttribute('data-runtime-seq', String(Math.floor(runtimeSeq)));\r
-    }\r
-}\r
-\r
-async function attachSessionEventStream(sessionId, opts) {\r
-    opts = opts || {};\r
-    if (!sessionId || getSessionRunState(sessionId)) return;\r
-    if (!isServerStreamActive(sessionId)) return;\r
-    var runSessionId = sessionId;\r
-    var runCtx = null;\r
-    try {\r
-        if (runSessionId !== currentSessionId) return;\r
-        if (!opts.skipInitialLoad) {\r
-            await loadSessionMessages(runSessionId, 'saved-or-bottom', { preloadOlderIfShort: true });\r
-            if (runSessionId !== currentSessionId) return;\r
-        }\r
-        if (!getVisibleChatStream()) ensureVisibleChatStreamSlot();\r
-        runCtx = newDomContext(getVisibleChatStream());\r
-        var activeInfoForAttach = sessionStore.getActiveRunInfo(runSessionId) || {};\r
-        runCtx.runStartedAt = activeInfoForAttach.started_at || new Date().toISOString();\r
-        var existingProcessGroup = runCtx.stream.querySelector('.process-aggregate:last-of-type');\r
-        if (existingProcessGroup) {\r
-            runCtx.currentProcessGroup = existingProcessGroup;\r
-            existingProcessGroup.classList.add('is-running');\r
-            bindProcessAggregate(existingProcessGroup);\r
-            var activeInfo = sessionStore.getActiveRunInfo(runSessionId) || {};\r
-            if (activeInfo.started_at) {\r
-                applyRunStartedAtToProcessGroup(existingProcessGroup, activeInfo.started_at);\r
-            } else if (!existingProcessGroup.dataset.procStartedAt && !existingProcessGroup.dataset.procDurationMs) {\r
-                existingProcessGroup.dataset.procStartedAt = String(procNow());\r
-                refreshProcessAggregateStats(existingProcessGroup);\r
-            }\r
-            existingProcessGroup.classList.remove('is-collapsed');\r
-            var top = existingProcessGroup.querySelector('.process-aggregate-top');\r
-            if (top) top.setAttribute('aria-expanded', 'true');\r
-        }\r
-        resetLlmState(runCtx);\r
-        initRunFinalTracking(runCtx);\r
-        finalizeLlmStreamChunks(runCtx);\r
-        const ac = new AbortController();\r
-        setSessionRunState(runSessionId, { controller: ac, ctx: runCtx, reattached: true });\r
-        setSendButtonState();\r
-        syncSessionListIndicatorClasses();\r
-        liveAutoFollow = true;\r
-        streamProcNearBottom = true;\r
-        const preCount = await getUiEventCount(runSessionId, { preferCache: true });\r
-        const streamUrl = '/sessions/' + encodeURIComponent(runSessionId)\r
-            + '/stream?after_index=' + encodeURIComponent(String(preCount - 1));\r
-        const response = await fetch(streamUrl, { signal: ac.signal });\r
-        await consumeAgentSseResponse(response, runCtx, runSessionId, preCount);\r
-    } catch (error) {\r
-        if (error && error.name === 'AbortError') return;\r
-        console.error('reattach stream failed:', error);\r
-        const msg = (error && error.message) ? String(error.message) : String(error);\r
-        if (runCtx && runSessionId === currentSessionId) appendLog(runCtx, '恢复实时流失败: ' + msg, 'error-log', runSessionId);\r
-    } finally {\r
-        if (runCtx) {\r
-            finalizeLlmStreamChunks(runCtx);\r
-            finalizeProgressStreamChunks(runCtx);\r
-        }\r
-        if (runSessionId === currentSessionId\r
-            && getRunAbortReason(runSessionId, runCtx) !== 'user'\r
-            && !isServerStreamActive(runSessionId)) {\r
-            scheduleFinalVisibleAfterRunIfEnabled(runSessionId, runCtx, { delayMs: 120 });\r
-        }\r
-        if (getSessionRunState(runSessionId) && getSessionRunState(runSessionId).reattached) {\r
-            clearSessionRunState(runSessionId);\r
-        }\r
-        setSendButtonState();\r
-        syncSessionListIndicatorClasses();\r
-        void refreshSingleSessionRow(runSessionId);\r
-        setTimeout(function () { reconcileRunStateFromServer({ silent: true }); }, 800);\r
-        scheduleActiveSessionReconnect(runSessionId, { delayMs: 120 });\r
-        applyContextTokenLabelForCurrentSession();\r
-        if (runSessionId === currentSessionId) {\r
-            clearSessionUnreadState(runSessionId);\r
-            updateSubagentContinueBanner(runSessionId);\r
-        }\r
-    }\r
-}\r
-\r
-function scheduleActiveSessionReconnect(sessionId, opts) {\r
-    if (!isMyAgentFeatureEnabled('streamReconnect', true)) return;\r
-    opts = opts || {};\r
-    var sid = String(sessionId || '');\r
-    if (!sid) return;\r
-    var delayMs = Math.max(0, Number(opts.delayMs) || 0);\r
-    setTimeout(async function () {\r
-        if (sid !== currentSessionId) return;\r
-        try {\r
-            if (typeof reconcileRunStateFromServer === 'function') {\r
-                await reconcileRunStateFromServer({ silent: true });\r
-            }\r
-            if (sid !== currentSessionId) return;\r
-            if ((isServerStreamActive(sid) || isSessionRunning(sid)) && typeof maybeStartStreamPollForSession === 'function') {\r
-                maybeStartStreamPollForSession(sid, { skipInitialLoad: true });\r
-            }\r
-        } catch (e) {\r
-            /* keep current UI state; normal polling or user action can retry later */\r
-        }\r
-    }, delayMs);\r
-}\r
-\r
-async function processRewriteTruncateAsync(pr) {\r
-    try {\r
-        const anchor = document.querySelector('.msg-wrap--user[data-truncate-from="' + String(pr.before) + '"]');\r
-        const res = await truncateSessionOnServer(pr.before, {\r
-            sessionId: pr.sessionId,\r
-            beforeSeq: pr.beforeSeq,\r
-            backup: false\r
-        });\r
-        if (!res || !res.ok) {\r
-            showUiAlert({\r
-                title: '截断失败',\r
-                message: describeServerSyncFailure(res, '无法同步服务器，改写未生效。'),\r
-                variant: 'error'\r
-            });\r
-            return false;\r
-        }\r
-        if (currentSessionId === pr.sessionId) {\r
-            if (anchor) {\r
-                if (activeInlineRewriteWrap === anchor) activeInlineRewriteWrap = null;\r
-            }\r
-        }\r
-        applyClientHistoryTruncate(pr.sessionId, pr.before, anchor);\r
-        return true;\r
-    } catch (error) {\r
-        console.error('异步截断失败:', error);\r
-        showUiAlert({\r
-            title: '截断失败',\r
-            message: describeServerSyncFailure({ error: (error && error.message) || String(error) }, '无法同步服务器，改写未生效。'),\r
-            variant: 'error'\r
-        });\r
-        return false;\r
-    }\r
-}\r
-\r
-function getFollowupQueue(sessionId) {\r
-    const sid = String(sessionId || '');\r
-    if (!sid) return [];\r
-    if (!followupQueueLoadedBySession[sid]) {\r
-        followupQueueBySession[sid] = readStoredFollowupQueue(sid);\r
-        followupQueueLoadedBySession[sid] = true;\r
-    }\r
-    if (!followupQueueBySession[sid]) followupQueueBySession[sid] = [];\r
-    return followupQueueBySession[sid];\r
-}\r
-\r
-function followupQueueStorageKey(sessionId) {\r
-    return LS_FOLLOWUP_QUEUE_PREFIX + String(sessionId || '');\r
-}\r
-\r
-function defaultSteerMode() {\r
-    return String(window.__MYAGENT_STEER_MODE__ || 'append').toLowerCase() === 'interrupt'\r
-        ? 'interrupt'\r
-        : 'append';\r
-}\r
-\r
+            updateSubagentContinueBanner(sessionId);
+            return;
+        }
+        var ct = (response.headers.get('content-type') || '').toLowerCase();
+        if (!response.ok || !response.body || ct.indexOf('text/event-stream') < 0) return;
+        const preCount = await getUiEventCount(runSessionId, { preferCache: true });
+        if (!getVisibleChatStream()) ensureVisibleChatStreamSlot();
+        runCtx = newDomContext(getVisibleChatStream());
+        if (sessionStore && typeof sessionStore.resetSseSeq === 'function') {
+            sessionStore.resetSseSeq(runSessionId);
+        }
+        initRunFinalTracking(runCtx);
+        runCtx.runStartedAt = new Date().toISOString();
+        if (getSessionRunState(runSessionId) && getSessionRunState(runSessionId).ctx) {
+            runCtx = getSessionRunState(runSessionId).ctx;
+            initRunFinalTracking(runCtx);
+            if (!runCtx.runStartedAt) runCtx.runStartedAt = new Date().toISOString();
+        } else {
+            runCtx.lastUserEventIndex = Math.max(0, preCount - 1);
+            resetLlmState(runCtx);
+            finalizeLlmStreamChunks(runCtx);
+        }
+        const ac = new AbortController();
+        setSessionRunState(runSessionId, { controller: ac, ctx: runCtx });
+        if (sessionStore && typeof sessionStore.resetSseSeq === 'function') {
+            sessionStore.resetSseSeq(runSessionId);
+        }
+        setSendButtonState();
+        syncSessionListIndicatorClasses();
+        liveAutoFollow = true;
+        streamProcNearBottom = true;
+        scheduleContextTokensAfterPaint(runSessionId);
+        let streamEventIdx = preCount;
+        try {
+            await consumeAgentSseResponse(response, runCtx, runSessionId, streamEventIdx);
+        } catch (error) {
+            if (error.name === 'AbortError') {
+                if (getRunAbortReason(runSessionId, runCtx) === 'user') appendLog(runCtx, '任务已中断', 'status', runSessionId);
+            }
+            else {
+                console.error('续接 subagent 失败:', error);
+                const msg = (error && error.message) ? String(error.message) : String(error);
+                appendLog(runCtx, '续接失败: ' + msg, 'error-log', runSessionId);
+            }
+        } finally {
+            finalizeLlmStreamChunks(runCtx);
+            finalizeProgressStreamChunks(runCtx);
+            if (runSessionId === currentSessionId
+                && getRunAbortReason(runSessionId, runCtx) !== 'user'
+                && !isServerStreamActive(runSessionId)) {
+                scheduleFinalVisibleAfterRunIfEnabled(runSessionId, runCtx, { delayMs: 120 });
+            }
+            if (runSessionId === currentSessionId) renderTodoPlanForCurrentSession();
+            if (liveAutoFollow) {
+                scrollProcessBodyToBottom(runCtx, runSessionId);
+                scrollChatToBottomIfFollow(runSessionId, {});
+            }
+            if (getSessionRunState(runSessionId)) clearSessionRunState(runSessionId);
+            setSendButtonState();
+            syncSessionListIndicatorClasses();
+            void refreshSingleSessionRow(runSessionId);
+            applyContextTokenLabelForCurrentSession();
+            scheduleActiveSessionReconnect(runSessionId, { delayMs: 120 });
+        }
+        hideSubagentContinueBanner();
+        if (!subagentContinueDismissedForSession[sessionId]) updateSubagentContinueBanner(sessionId);
+    } finally {
+        subagentContinueInFlight = false;
+    }
+}
+
+var autoResumeReactAttemptAt = Object.create(null);
+
+function maybeAutoResumeInterruptedReact(sessionId, sessionDetail) {
+    var sid = String(sessionId || '');
+    var detail = sessionDetail || {};
+    if (!sid || sid !== currentSessionId) return;
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) return;
+    if (!detail.react_auto_resume || !detail.react_can_continue || detail.run_active || detail.stream_active) return;
+    if (isSessionRunning(sid) || subagentContinueInFlight) return;
+    var now = Date.now();
+    if (now - Number(autoResumeReactAttemptAt[sid] || 0) < 30000) return;
+    autoResumeReactAttemptAt[sid] = now;
+    if (getVisibleChatStream()) {
+        var ctx = newDomContext(getVisibleChatStream());
+        appendLog(ctx, '检测到上次运行未完成，正在自动恢复任务…', 'status', sid);
+    }
+    void startContinueAfterSubagents(sid, 'react');
+}
+
+window.addEventListener('online', function () {
+    var sid = String(currentSessionId || '');
+    if (!sid) return;
+    scheduleActiveSessionReconnect(sid, { delayMs: 100 });
+    setTimeout(function () { void refreshSingleSessionRow(sid); }, 250);
+});
+
+function nowPipelineMs() {
+    return (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+}
+
+function isClientPipelineTerminalStep(label, step) {
+    var s = String(step || '');
+    var l = String(label || '');
+    if (l.indexOf('client_send_pipeline') >= 0) {
+        return s === 'release_send_lock';
+    }
+    if (l.indexOf('client_followup') >= 0) {
+        return s === 'followup_cancel_after_steer'
+            || s === 'followup_restart_takeover'
+            || s === 'followup_accepted_by_running_agent'
+            || s === 'followup_steer_error'
+            || s === 'followup_fallback_to_chat';
+    }
+    return /(?:final|finish|done|error|failed|cancel|release)$/i.test(s);
+}
+
+function flushClientPipelineTiming(ctx, finalStep) {
+    if (!ctx || ctx._timingFlushed) return;
+    var steps = ctx._timingSteps || {};
+    var names = Object.keys(steps);
+    if (!names.length) return;
+    var now = nowPipelineMs();
+    var label = String(ctx.label || 'client_pipeline_step_timing').replace(/_step_timing$/, '_timing');
+    var payload = {
+        label: label,
+        session_id: ctx.sessionId || '',
+        run_id: ctx.runId || '',
+        mode: ctx.mode || '',
+        total_ms: Math.max(0, Math.round(now - Number(ctx.startedAt || now))),
+        final_step: finalStep || '',
+        steps: steps
+    };
+    ctx._timingFlushed = true;
+    try {
+        var stepText = names.map(function (name) {
+            return name + '=' + Math.max(0, Math.round(Number(steps[name] && steps[name].ms || 0))) + 'ms';
+        }).join(' ');
+        console.info(
+            payload.label,
+            'session=' + payload.session_id,
+            'total=' + payload.total_ms + 'ms',
+            'run_id=' + payload.run_id,
+            'mode=' + payload.mode,
+            stepText
+        );
+    } catch (e) { /* ignore */ }
+    try {
+        const body = JSON.stringify(payload);
+        if (navigator && typeof navigator.sendBeacon === 'function') {
+            const blob = new Blob([body], { type: 'application/json' });
+            if (navigator.sendBeacon('/api/client_timing', blob)) return;
+        }
+        fetch('/api/client_timing', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: body,
+            keepalive: true
+        }).catch(function () { /* ignore */ });
+    } catch (e) { /* ignore */ }
+}
+
+function reportClientPipelineStep(ctx, step, startedAt, extra) {
+    if (!ctx || !step) return;
+    const now = nowPipelineMs();
+    var stepName = String(step || '');
+    if (!ctx._timingSteps) ctx._timingSteps = {};
+    ctx._timingSteps[stepName] = {
+        ms: Math.max(0, Math.round(now - Number(startedAt || now))),
+        since_start_ms: Math.max(0, Math.round(now - Number(ctx.startedAt || now))),
+        extra: extra || {}
+    };
+    if (isClientPipelineTerminalStep(ctx.label, stepName)) flushClientPipelineTiming(ctx, stepName);
+}
+
+function applySkippedRuntimeV2EventMetadata(event, runCtx, sessionId) {
+    if (!event || !event.skip_ui) return;
+    const runtimeEvent = event.runtime_event && typeof event.runtime_event === 'object' ? event.runtime_event : null;
+    if (!runtimeEvent || (runtimeEvent.type !== 'message_user' && runtimeEvent.type !== 'user_turn_committed')) return;
+    const runtimeSeq = Number(event.runtime_seq || event.seq);
+    if (!Number.isFinite(runtimeSeq) || runtimeSeq <= 0) return;
+    if (runCtx) runCtx.lastUserRuntimeSeq = Math.floor(runtimeSeq);
+    if (sessionId && sessionId !== currentSessionId) return;
+    const eventIndex = runCtx && Number.isFinite(Number(runCtx.lastUserEventIndex))
+        ? Math.floor(Number(runCtx.lastUserEventIndex))
+        : NaN;
+    let wrap = null;
+    const stream = (runCtx && runCtx.stream) || getVisibleChatStream();
+    if (stream && Number.isFinite(eventIndex)) {
+        try {
+            wrap = stream.querySelector('.msg-wrap--user[data-event-index="' + String(eventIndex) + '"]');
+        } catch (e) { wrap = null; }
+    }
+    if (!wrap && stream) {
+        const users = stream.querySelectorAll('.msg-wrap--user');
+        wrap = users.length ? users[users.length - 1] : null;
+    }
+    if (wrap) {
+        wrap.setAttribute('data-runtime-seq', String(Math.floor(runtimeSeq)));
+    }
+}
+
+async function attachSessionEventStream(sessionId, opts) {
+    opts = opts || {};
+    if (!sessionId || getSessionRunState(sessionId)) return;
+    if (!isServerStreamActive(sessionId)) return;
+    var runSessionId = sessionId;
+    var runCtx = null;
+    try {
+        if (runSessionId !== currentSessionId) return;
+        if (!opts.skipInitialLoad) {
+            await loadSessionMessages(runSessionId, 'saved-or-bottom', { preloadOlderIfShort: true });
+            if (runSessionId !== currentSessionId) return;
+        }
+        if (!getVisibleChatStream()) ensureVisibleChatStreamSlot();
+        runCtx = newDomContext(getVisibleChatStream());
+        var activeInfoForAttach = sessionStore.getActiveRunInfo(runSessionId) || {};
+        runCtx.runStartedAt = activeInfoForAttach.started_at || new Date().toISOString();
+        var existingProcessGroup = runCtx.stream.querySelector('.process-aggregate:last-of-type');
+        if (existingProcessGroup) {
+            runCtx.currentProcessGroup = existingProcessGroup;
+            existingProcessGroup.classList.add('is-running');
+            bindProcessAggregate(existingProcessGroup);
+            var activeInfo = sessionStore.getActiveRunInfo(runSessionId) || {};
+            if (activeInfo.started_at) {
+                applyRunStartedAtToProcessGroup(existingProcessGroup, activeInfo.started_at);
+            } else if (!existingProcessGroup.dataset.procStartedAt && !existingProcessGroup.dataset.procDurationMs) {
+                existingProcessGroup.dataset.procStartedAt = String(procNow());
+                refreshProcessAggregateStats(existingProcessGroup);
+            }
+            existingProcessGroup.classList.remove('is-collapsed');
+            var top = existingProcessGroup.querySelector('.process-aggregate-top');
+            if (top) top.setAttribute('aria-expanded', 'true');
+        }
+        resetLlmState(runCtx);
+        initRunFinalTracking(runCtx);
+        finalizeLlmStreamChunks(runCtx);
+        const ac = new AbortController();
+        setSessionRunState(runSessionId, { controller: ac, ctx: runCtx, reattached: true });
+        setSendButtonState();
+        syncSessionListIndicatorClasses();
+        liveAutoFollow = true;
+        streamProcNearBottom = true;
+        const preCount = await getUiEventCount(runSessionId, { preferCache: true });
+        const streamUrl = '/sessions/' + encodeURIComponent(runSessionId)
+            + '/stream?after_index=' + encodeURIComponent(String(preCount - 1));
+        const response = await fetch(streamUrl, { signal: ac.signal });
+        await consumeAgentSseResponse(response, runCtx, runSessionId, preCount);
+    } catch (error) {
+        if (error && error.name === 'AbortError') return;
+        console.error('reattach stream failed:', error);
+        const msg = (error && error.message) ? String(error.message) : String(error);
+        if (runCtx && runSessionId === currentSessionId) appendLog(runCtx, '恢复实时流失败: ' + msg, 'error-log', runSessionId);
+    } finally {
+        if (runCtx) {
+            finalizeLlmStreamChunks(runCtx);
+            finalizeProgressStreamChunks(runCtx);
+        }
+        if (runSessionId === currentSessionId
+            && getRunAbortReason(runSessionId, runCtx) !== 'user'
+            && !isServerStreamActive(runSessionId)) {
+            scheduleFinalVisibleAfterRunIfEnabled(runSessionId, runCtx, { delayMs: 120 });
+        }
+        if (getSessionRunState(runSessionId) && getSessionRunState(runSessionId).reattached) {
+            clearSessionRunState(runSessionId);
+        }
+        setSendButtonState();
+        syncSessionListIndicatorClasses();
+        void refreshSingleSessionRow(runSessionId);
+        setTimeout(function () { reconcileRunStateFromServer({ silent: true }); }, 800);
+        scheduleActiveSessionReconnect(runSessionId, { delayMs: 120 });
+        applyContextTokenLabelForCurrentSession();
+        if (runSessionId === currentSessionId) {
+            clearSessionUnreadState(runSessionId);
+            updateSubagentContinueBanner(runSessionId);
+        }
+    }
+}
+
+function scheduleActiveSessionReconnect(sessionId, opts) {
+    if (!isMyAgentFeatureEnabled('streamReconnect', true)) return;
+    opts = opts || {};
+    var sid = String(sessionId || '');
+    if (!sid) return;
+    var delayMs = Math.max(0, Number(opts.delayMs) || 0);
+    setTimeout(async function () {
+        if (sid !== currentSessionId) return;
+        try {
+            if (typeof reconcileRunStateFromServer === 'function') {
+                await reconcileRunStateFromServer({ silent: true });
+            }
+            if (sid !== currentSessionId) return;
+            if ((isServerStreamActive(sid) || isSessionRunning(sid)) && typeof maybeStartStreamPollForSession === 'function') {
+                maybeStartStreamPollForSession(sid, { skipInitialLoad: true });
+            }
+        } catch (e) {
+            /* keep current UI state; normal polling or user action can retry later */
+        }
+    }, delayMs);
+}
+
+async function processRewriteTruncateAsync(pr) {
+    try {
+        const anchor = document.querySelector('.msg-wrap--user[data-truncate-from="' + String(pr.before) + '"]');
+        const res = await truncateSessionOnServer(pr.before, {
+            sessionId: pr.sessionId,
+            beforeSeq: pr.beforeSeq,
+            backup: false
+        });
+        if (!res || !res.ok) {
+            showUiAlert({
+                title: '截断失败',
+                message: describeServerSyncFailure(res, '无法同步服务器，改写未生效。'),
+                variant: 'error'
+            });
+            return false;
+        }
+        if (currentSessionId === pr.sessionId) {
+            if (anchor) {
+                if (activeInlineRewriteWrap === anchor) activeInlineRewriteWrap = null;
+            }
+        }
+        applyClientHistoryTruncate(pr.sessionId, pr.before, anchor);
+        return true;
+    } catch (error) {
+        console.error('异步截断失败:', error);
+        showUiAlert({
+            title: '截断失败',
+            message: describeServerSyncFailure({ error: (error && error.message) || String(error) }, '无法同步服务器，改写未生效。'),
+            variant: 'error'
+        });
+        return false;
+    }
+}
+
+function getFollowupQueue(sessionId) {
+    const sid = String(sessionId || '');
+    if (!sid) return [];
+    if (!followupQueueLoadedBySession[sid]) {
+        followupQueueBySession[sid] = readStoredFollowupQueue(sid);
+        followupQueueLoadedBySession[sid] = true;
+    }
+    if (!followupQueueBySession[sid]) followupQueueBySession[sid] = [];
+    return followupQueueBySession[sid];
+}
+
+function followupQueueStorageKey(sessionId) {
+    return LS_FOLLOWUP_QUEUE_PREFIX + String(sessionId || '');
+}
+
+function defaultSteerMode() {
+    return String(window.__MYAGENT_STEER_MODE__ || 'append').toLowerCase() === 'interrupt'
+        ? 'interrupt'
+        : 'append';
+}
+
 function normalizeStoredFollowupItem(item) {
-    if (!item || typeof item !== 'object') return null;\r
-    var text = String(item.text || '').trim();\r
-    if (!text) return null;\r
-    var display = String(item.display || item.text || '').trim();\r
-    var skills = Array.isArray(item.skills)\r
-        ? item.skills.map(function (skill) { return String(skill || '').trim(); }).filter(Boolean)\r
-        : [];\r
+    if (!item || typeof item !== 'object') return null;
+    var text = String(item.text || '').trim();
+    if (!text) return null;
+    var display = String(item.display || item.text || '').trim();
+    var skills = Array.isArray(item.skills)
+        ? item.skills.map(function (skill) { return String(skill || '').trim(); }).filter(Boolean)
+        : [];
     var restoredStatus = String(item.status || '');
     if (restoredStatus === 'submitting' || restoredStatus === 'sending') restoredStatus = '';
     // A browser reload cannot resume the in-flight DELETE request. If the
@@ -13533,348 +14295,348 @@ function normalizeStoredFollowupItem(item) {
         restoredStatus = String(item.steerId || '') ? 'accepted' : '';
     }
     return {
-        id: item.id || ('stored-followup-' + (followupQueueSeq++)),\r
-        text: text,\r
-        display: display || text,\r
-        skills: skills,\r
-        createdAt: Number(item.createdAt) || Date.now(),\r
-        steerMode: String(item.steerMode || item.mode || defaultSteerMode()) === 'interrupt' ? 'interrupt' : 'append',\r
-        // 恢复提交期间的 in-flight 状态：刷新/崩溃后可继续恢复，不再静默丢失。\r
-        clientId: String(item.clientId || ''),\r
-        steerId: String(item.steerId || ''),\r
+        id: item.id || ('stored-followup-' + (followupQueueSeq++)),
+        text: text,
+        display: display || text,
+        skills: skills,
+        createdAt: Number(item.createdAt) || Date.now(),
+        steerMode: String(item.steerMode || item.mode || defaultSteerMode()) === 'interrupt' ? 'interrupt' : 'append',
+        // 恢复提交期间的 in-flight 状态：刷新/崩溃后可继续恢复，不再静默丢失。
+        clientId: String(item.clientId || ''),
+        steerId: String(item.steerId || ''),
         status: restoredStatus,
-        replacementRunId: String(item.replacementRunId || ''),\r
-    };\r
-}\r
-\r
-function readStoredFollowupQueue(sessionId) {\r
-    try {\r
-        var raw = localStorage.getItem(followupQueueStorageKey(sessionId));\r
-        if (!raw) return [];\r
-        var arr = JSON.parse(raw);\r
-        if (!Array.isArray(arr)) return [];\r
-        var out = arr.map(normalizeStoredFollowupItem).filter(Boolean);\r
-        out.forEach(function (item) {\r
-            var n = Number(item.id);\r
-            if (Number.isFinite(n)) followupQueueSeq = Math.max(followupQueueSeq, Math.floor(n) + 1);\r
-        });\r
+        replacementRunId: String(item.replacementRunId || ''),
+    };
+}
+
+function readStoredFollowupQueue(sessionId) {
+    try {
+        var raw = localStorage.getItem(followupQueueStorageKey(sessionId));
+        if (!raw) return [];
+        var arr = JSON.parse(raw);
+        if (!Array.isArray(arr)) return [];
+        var out = arr.map(normalizeStoredFollowupItem).filter(Boolean);
+        out.forEach(function (item) {
+            var n = Number(item.id);
+            if (Number.isFinite(n)) followupQueueSeq = Math.max(followupQueueSeq, Math.floor(n) + 1);
+        });
         return out;
-    } catch (e) {\r
-        return [];\r
-    }\r
-}\r
-\r
-function persistFollowupQueue(sessionId) {\r
-    const sid = String(sessionId || '');\r
-    if (!sid) return;\r
-    var q = followupQueueBySession[sid] || [];\r
-    // 持久化所有非终态条目：包括 submitting/sending/accepted/restarting，\r
-    // 这样刷新/崩溃/请求未达服务端时仍可恢复。只有 'sent'（/chat 已成功开跑）\r
-    // 视为本地终态不再持久化；consumed/cancelled 由 takeFollowupItem 直接移除。\r
-    var pending = q.filter(function (item) {\r
-        var status = item && item.status ? String(item.status) : '';\r
-        return item && item.text && status !== 'sent';\r
-    }).map(function (item) {\r
-        return {\r
-            id: item.id,\r
-            text: item.text,\r
-            display: item.display || item.text,\r
-            skills: Array.isArray(item.skills) ? item.skills : [],\r
-            createdAt: item.createdAt || Date.now(),\r
-            steerMode: item.steerMode === 'append' ? 'append' : 'interrupt',\r
-            clientId: item.clientId || '',\r
-            steerId: item.steerId || '',\r
-            status: item.status || '',\r
-            replacementRunId: item.replacementRunId || '',\r
-        };\r
-    });\r
-    try {\r
-        var key = followupQueueStorageKey(sid);\r
-        if (pending.length) localStorage.setItem(key, JSON.stringify(pending));\r
-        else localStorage.removeItem(key);\r
-    } catch (e) { /* ignore */ }\r
-}\r
-\r
-function removeStoredFollowupQueue(sessionId) {\r
-    const sid = String(sessionId || '');\r
-    if (!sid) return;\r
-    delete followupQueueBySession[sid];\r
-    delete followupQueueLoadedBySession[sid];\r
-    try { localStorage.removeItem(followupQueueStorageKey(sid)); } catch (e) { /* ignore */ }\r
-}\r
-\r
-function inputHasSendableText() {\r
-    if (!messageInput) return false;\r
-    return String(messageInput.value || '').replace(/[\\u200B-\\u200D\\uFEFF]/g, '').trim().length > 0;\r
-}\r
-\r
-function ensureFollowupQueueHost() {\r
-    var existing = document.getElementById('followup-queue-panel');\r
-    if (existing) return existing;\r
-    var panel = document.createElement('div');\r
-    panel.id = 'followup-queue-panel';\r
-    panel.className = 'followup-queue-panel';\r
-    panel.setAttribute('aria-live', 'polite');\r
-    var anchor = messageInput && messageInput.closest ? messageInput.closest('.composer-row') : null;\r
-    var host = anchor && anchor.parentNode ? anchor.parentNode : null;\r
-    if (host && anchor) host.insertBefore(panel, anchor);\r
-    else document.body.appendChild(panel);\r
-    return panel;\r
-}\r
-\r
-function positionFollowupQueuePanel() {\r
-    var panel = document.getElementById('followup-queue-panel');\r
-    if (!panel) return;\r
-    panel.style.left = '';\r
-    panel.style.top = '';\r
-    panel.style.width = '';\r
-}\r
-\r
-function renderFollowupQueue(sessionId) {\r
-    var sid = String(sessionId != null ? sessionId : (currentSessionId || ''));\r
-    var panel = ensureFollowupQueueHost();\r
-    if (!panel) return;\r
-    if (!sid || sid !== currentSessionId) {\r
-        if (!currentSessionId) {\r
-            panel.innerHTML = '';\r
-            panel.classList.remove('is-visible');\r
-            panel.removeAttribute('data-session-id');\r
-        }\r
-        return;\r
-    }\r
-    var q = getFollowupQueue(sid);\r
-    panel.innerHTML = '';\r
-    panel.dataset.sessionId = sid;\r
-    panel.classList.toggle('is-visible', !!q.length);\r
-    if (!q.length) {\r
-        positionFollowupQueuePanel();\r
-        return;\r
-    }\r
-    q.forEach(function (item, idx) {\r
+    } catch (e) {
+        return [];
+    }
+}
+
+function persistFollowupQueue(sessionId) {
+    const sid = String(sessionId || '');
+    if (!sid) return;
+    var q = followupQueueBySession[sid] || [];
+    // 持久化所有非终态条目：包括 submitting/sending/accepted/restarting，
+    // 这样刷新/崩溃/请求未达服务端时仍可恢复。只有 'sent'（/chat 已成功开跑）
+    // 视为本地终态不再持久化；consumed/cancelled 由 takeFollowupItem 直接移除。
+    var pending = q.filter(function (item) {
+        var status = item && item.status ? String(item.status) : '';
+        return item && item.text && status !== 'sent';
+    }).map(function (item) {
+        return {
+            id: item.id,
+            text: item.text,
+            display: item.display || item.text,
+            skills: Array.isArray(item.skills) ? item.skills : [],
+            createdAt: item.createdAt || Date.now(),
+            steerMode: item.steerMode === 'append' ? 'append' : 'interrupt',
+            clientId: item.clientId || '',
+            steerId: item.steerId || '',
+            status: item.status || '',
+            replacementRunId: item.replacementRunId || '',
+        };
+    });
+    try {
+        var key = followupQueueStorageKey(sid);
+        if (pending.length) localStorage.setItem(key, JSON.stringify(pending));
+        else localStorage.removeItem(key);
+    } catch (e) { /* ignore */ }
+}
+
+function removeStoredFollowupQueue(sessionId) {
+    const sid = String(sessionId || '');
+    if (!sid) return;
+    delete followupQueueBySession[sid];
+    delete followupQueueLoadedBySession[sid];
+    try { localStorage.removeItem(followupQueueStorageKey(sid)); } catch (e) { /* ignore */ }
+}
+
+function inputHasSendableText() {
+    if (!messageInput) return false;
+    return String(messageInput.value || '').replace(/[\\u200B-\\u200D\\uFEFF]/g, '').trim().length > 0;
+}
+
+function ensureFollowupQueueHost() {
+    var existing = document.getElementById('followup-queue-panel');
+    if (existing) return existing;
+    var panel = document.createElement('div');
+    panel.id = 'followup-queue-panel';
+    panel.className = 'followup-queue-panel';
+    panel.setAttribute('aria-live', 'polite');
+    var anchor = messageInput && messageInput.closest ? messageInput.closest('.composer-row') : null;
+    var host = anchor && anchor.parentNode ? anchor.parentNode : null;
+    if (host && anchor) host.insertBefore(panel, anchor);
+    else document.body.appendChild(panel);
+    return panel;
+}
+
+function positionFollowupQueuePanel() {
+    var panel = document.getElementById('followup-queue-panel');
+    if (!panel) return;
+    panel.style.left = '';
+    panel.style.top = '';
+    panel.style.width = '';
+}
+
+function renderFollowupQueue(sessionId) {
+    var sid = String(sessionId != null ? sessionId : (currentSessionId || ''));
+    var panel = ensureFollowupQueueHost();
+    if (!panel) return;
+    if (!sid || sid !== currentSessionId) {
+        if (!currentSessionId) {
+            panel.innerHTML = '';
+            panel.classList.remove('is-visible');
+            panel.removeAttribute('data-session-id');
+        }
+        return;
+    }
+    var q = getFollowupQueue(sid);
+    panel.innerHTML = '';
+    panel.dataset.sessionId = sid;
+    panel.classList.toggle('is-visible', !!q.length);
+    if (!q.length) {
+        positionFollowupQueuePanel();
+        return;
+    }
+    q.forEach(function (item, idx) {
         if (item && ['submitting', 'sending', 'accepted', 'restarting'].includes(String(item.status || ''))) {
             scheduleAcceptedFollowupWatch(sid, item.id);
         }
-        var row = document.createElement('div');\r
-        row.className = 'followup-queue-row';\r
-        row.classList.toggle('is-sending', item.status === 'sending' || item.status === 'submitting');\r
-        row.classList.toggle('is-accepted', item.status === 'accepted');\r
-        row.classList.toggle('is-sent', item.status === 'sent');\r
-        row.dataset.id = String(item.id);\r
-        var order = document.createElement('div');\r
-        order.className = 'followup-queue-order';\r
-        order.textContent = String(idx + 1);\r
-        var text = document.createElement('div');\r
-        text.className = 'followup-queue-text';\r
-        var itemSkills = Array.isArray(item.skills) ? item.skills : [];\r
-        var itemDisplay = String(item.display || item.text || '');\r
-        var itemDetail = itemDisplay + (itemSkills.length ? ('\\n\\nSkill: ' + itemSkills.join('、')) : '');\r
-        text.textContent = itemDisplay + (itemSkills.length ? ('  · Skill: ' + itemSkills.join('、')) : '');\r
-        text.setAttribute('data-ui-tip', itemDetail);\r
-        var status = document.createElement('div');\r
-        status.className = 'followup-queue-status';\r
-        status.textContent = getFollowupStatusText(item);\r
-        var sendNow = document.createElement('button');\r
-        sendNow.type = 'button';\r
-        sendNow.className = 'followup-queue-action followup-queue-send';\r
-        sendNow.textContent = '立即发送';\r
-        sendNow.disabled = !!item.status;\r
-        var modeSelect = document.createElement('select');\r
-        modeSelect.className = 'followup-queue-mode';\r
-        modeSelect.setAttribute('aria-label', '追问发送模式');\r
-        var interruptOption = document.createElement('option');\r
-        interruptOption.value = 'interrupt';\r
-        interruptOption.textContent = '打断';\r
-        var appendOption = document.createElement('option');\r
-        appendOption.value = 'append';\r
-        appendOption.textContent = '追加';\r
-        modeSelect.appendChild(interruptOption);\r
-        modeSelect.appendChild(appendOption);\r
-        modeSelect.value = item.steerMode === 'append' ? 'append' : 'interrupt';\r
-        modeSelect.disabled = !!item.status;\r
-        var undo = document.createElement('button');\r
-        undo.type = 'button';\r
-        undo.className = 'followup-queue-action followup-queue-undo';\r
-        undo.textContent = '撤回';\r
-        undo.disabled = item.status === 'sent' || item.status === 'withdrawing';\r
-        sendNow.addEventListener('click', function (ev) {\r
-            ev.preventDefault();\r
-            sendFollowupNow(String(item.id));\r
-        });\r
-        modeSelect.addEventListener('change', function () {\r
-            item.steerMode = modeSelect.value === 'append' ? 'append' : 'interrupt';\r
-            persistFollowupQueue(sid);\r
-        });\r
-        undo.addEventListener('click', function (ev) {\r
-            ev.preventDefault();\r
-            withdrawFollowup(String(item.id));\r
-        });\r
-        row.appendChild(order);\r
-        row.appendChild(text);\r
-        row.appendChild(status);\r
-        row.appendChild(modeSelect);\r
-        row.appendChild(sendNow);\r
-        row.appendChild(undo);\r
-        panel.appendChild(row);\r
-        if (typeof initUiHoverTips === 'function') initUiHoverTips(row);\r
-    });\r
-    positionFollowupQueuePanel();\r
-    if (typeof scrollChatToBottomIfFollow === 'function') {\r
-        scrollChatToBottomIfFollow(sid, {});\r
-    }\r
-}\r
-\r
-function getFollowupStatusText(item) {\r
-    var status = item && item.status ? String(item.status) : '';\r
-    if (status === 'withdrawing') return '撤回中';\r
-    if (status === 'submitting') return '提交中';\r
-    if (status === 'accepted') return item && item.steerMode === 'append' ? '已追加，等待下一轮' : '已接收，等待插入';\r
-    if (status === 'restarting') return '正在接管当前任务';\r
-    if (status === 'sending') return '发送中';\r
-    if (status === 'sent') return '已发送';\r
-    return '待发送';\r
-}\r
-\r
-function appendFollowupQueueItem(sessionId, text, display, selectedSkills) {\r
-    const sid = String(sessionId || '');\r
-    if (!sid || !String(text || '').trim()) return null;\r
-    const item = {\r
-        id: followupQueueSeq++,\r
-        text: String(text),\r
-        display: String(display || text),\r
-        skills: Array.isArray(selectedSkills) ? selectedSkills.slice() : [],\r
-        createdAt: Date.now(),\r
-        steerMode: defaultSteerMode(),\r
-    };\r
-    getFollowupQueue(sid).push(item);\r
-    persistFollowupQueue(sid);\r
-    renderFollowupQueue(sid);\r
-    setSendButtonState();\r
-    return item;\r
-}\r
-\r
-function buildSelectedSkillsDisplayMessage(rawMessage, selectedSkills) {\r
-    var message = String(rawMessage || '');\r
-    var names = Array.isArray(selectedSkills)\r
-        ? selectedSkills.map(function (skill) { return String(skill || '').trim(); }).filter(Boolean)\r
-        : [];\r
-    if (!names.length) return message;\r
-    var suffix = '\\n\\n已选择 Skill：' + names.join('、');\r
-    return message.endsWith(suffix) ? message : message + suffix;\r
-}\r
-\r
-function enqueueCurrentInputAsFollowup() {\r
-    if (!isMyAgentFeatureEnabled('followupRestart', false)) return false;\r
-    if (isChatFileUploadBusy()) return false;\r
-    const sid = currentSessionId;\r
-    if (!sid) return false;\r
-    rewriteInputWorkspacePaths();\r
-    const visibleMessage = messageInput.value;\r
-    const rawMessage = expandInputPathTokens(visibleMessage);\r
-    if (!String(rawMessage).trim()) return false;\r
-    var selectedSkills = [];\r
-    if (typeof window.consumeSelectedSkillsForSend === 'function') {\r
-        selectedSkills = window.consumeSelectedSkillsForSend();\r
-    }\r
-    appendFollowupQueueItem(sid, rawMessage, visibleMessage, selectedSkills);\r
-    messageInput.value = '';\r
-    persistInputDraft(sid, '');\r
-    clearInputPathTokens();\r
-    autoResizeTextarea();\r
-    // appendFollowupQueueItem() refreshed the button while the composer still\r
-    // contained the follow-up. Refresh again after clearing it so the active\r
-    // run exposes "Stop", rather than leaving a stale "Follow up" label.\r
-    setSendButtonState();\r
-    return true;\r
-}\r
-\r
-function rollbackOptimisticUserEvent(sessionId, eventIndex) {\r
-    const sid = String(sessionId || '');\r
-    const before = Math.max(0, Number(eventIndex) || 0);\r
-    if (!sid) return;\r
-    if (typeof truncateMessageStateForSession === 'function') {\r
-        truncateMessageStateForSession(sid, before);\r
-    }\r
-    if (typeof uiEventCountCache !== 'undefined') {\r
-        uiEventCountCache.updateFromServer(sid, before);\r
-    }\r
-    if (typeof truncateTocTurnsForSession === 'function') {\r
-        truncateTocTurnsForSession(sid, before);\r
-    }\r
-    if (sid !== currentSessionId) return;\r
-    const anchor = document.querySelector('.msg-wrap--user[data-event-index="' + String(before) + '"]');\r
-    if (anchor) removeMessagesFromNode(anchor);\r
-    rebuildToc({ localOnly: true });\r
-}\r
-\r
-function takeFollowupItem(sessionId, itemId) {\r
-    var q = getFollowupQueue(sessionId);\r
-    var idx = q.findIndex(function (item) { return String(item.id) === String(itemId); });\r
-    if (idx < 0) return null;\r
-    var item = q.splice(idx, 1)[0] || null;\r
-    persistFollowupQueue(sessionId);\r
-    return item;\r
-}\r
-\r
-function withdrawFollowup(itemId) {\r
-    const sid = currentSessionId;\r
-    var q = getFollowupQueue(sid);\r
-    var pendingItem = q.find(function (entry) { return String(entry.id) === String(itemId); });\r
-    if (pendingItem && (pendingItem.status === 'sending' || pendingItem.status === 'submitting' || pendingItem.status === 'accepted' || pendingItem.status === 'restarting')) {\r
-        pendingItem.cancelRequested = true;\r
-        pendingItem.status = 'withdrawing';\r
-        persistFollowupQueue(sid);\r
-        renderFollowupQueue(sid);\r
-        if (pendingItem.steerInFlight && !pendingItem.steerId) return;\r
-        cancelSteerMessage(sid, pendingItem).then(function () {\r
-            var item = takeFollowupItem(sid, itemId);\r
-            if (item) returnFollowupToInput(sid, item);\r
-        }).catch(function (e) {\r
-            var item = q.find(function (entry) { return String(entry.id) === String(itemId); });\r
-            if (item) item.status = 'sending';\r
-            persistFollowupQueue(sid);\r
-            renderFollowupQueue(sid);\r
-            appendLogVisible('追问已被接收，无法撤回: ' + ((e && e.message) || String(e)), 'error-log');\r
-        });\r
-        return;\r
-    }\r
-    const item = takeFollowupItem(sid, itemId);\r
-    if (!item) return;\r
-    returnFollowupToInput(sid, item);\r
-}\r
-\r
-function returnFollowupToInput(sid, item) {\r
-    removePendingSteerFromProcess(sid, item);\r
-    const returned = String(item.display || item.text || '');\r
-    if (sid !== currentSessionId) {\r
-        const backgroundDraft = Object.prototype.hasOwnProperty.call(draftBySession, sid)\r
-            ? String(draftBySession[sid] || '')\r
-            : String(readStoredInputDraft(sid) || '');\r
-        const nextDraft = backgroundDraft.trim() ? (returned + '\\n' + backgroundDraft) : returned;\r
-        persistInputDraft(sid, nextDraft);\r
-        if (typeof window.setSelectedSkillsForSession === 'function') {\r
-            window.setSelectedSkillsForSession(sid, item.skills || []);\r
-        }\r
-        renderFollowupQueue(sid);\r
-        return;\r
-    }\r
-    const existing = String(messageInput.value || '');\r
-    messageInput.value = existing.trim() ? (returned + '\\n' + existing) : returned;\r
-    if (typeof window.setSelectedSkillsForCurrentSession === 'function') {\r
-        window.setSelectedSkillsForCurrentSession(item.skills || []);\r
-    }\r
-    rewriteInputWorkspacePaths();\r
-    persistInputDraft(sid, messageInput.value);\r
-    autoResizeTextarea();\r
-    renderFollowupQueue(sid);\r
-    setSendButtonState();\r
-    messageInput.focus();\r
-}\r
-\r
+        var row = document.createElement('div');
+        row.className = 'followup-queue-row';
+        row.classList.toggle('is-sending', item.status === 'sending' || item.status === 'submitting');
+        row.classList.toggle('is-accepted', item.status === 'accepted');
+        row.classList.toggle('is-sent', item.status === 'sent');
+        row.dataset.id = String(item.id);
+        var order = document.createElement('div');
+        order.className = 'followup-queue-order';
+        order.textContent = String(idx + 1);
+        var text = document.createElement('div');
+        text.className = 'followup-queue-text';
+        var itemSkills = Array.isArray(item.skills) ? item.skills : [];
+        var itemDisplay = String(item.display || item.text || '');
+        var itemDetail = itemDisplay + (itemSkills.length ? ('\\n\\nSkill: ' + itemSkills.join('、')) : '');
+        text.textContent = itemDisplay + (itemSkills.length ? ('  · Skill: ' + itemSkills.join('、')) : '');
+        text.setAttribute('data-ui-tip', itemDetail);
+        var status = document.createElement('div');
+        status.className = 'followup-queue-status';
+        status.textContent = getFollowupStatusText(item);
+        var sendNow = document.createElement('button');
+        sendNow.type = 'button';
+        sendNow.className = 'followup-queue-action followup-queue-send';
+        sendNow.textContent = '立即发送';
+        sendNow.disabled = !!item.status;
+        var modeSelect = document.createElement('select');
+        modeSelect.className = 'followup-queue-mode';
+        modeSelect.setAttribute('aria-label', '追问发送模式');
+        var interruptOption = document.createElement('option');
+        interruptOption.value = 'interrupt';
+        interruptOption.textContent = '打断';
+        var appendOption = document.createElement('option');
+        appendOption.value = 'append';
+        appendOption.textContent = '追加';
+        modeSelect.appendChild(interruptOption);
+        modeSelect.appendChild(appendOption);
+        modeSelect.value = item.steerMode === 'append' ? 'append' : 'interrupt';
+        modeSelect.disabled = !!item.status;
+        var undo = document.createElement('button');
+        undo.type = 'button';
+        undo.className = 'followup-queue-action followup-queue-undo';
+        undo.textContent = '撤回';
+        undo.disabled = item.status === 'sent' || item.status === 'withdrawing';
+        sendNow.addEventListener('click', function (ev) {
+            ev.preventDefault();
+            sendFollowupNow(String(item.id));
+        });
+        modeSelect.addEventListener('change', function () {
+            item.steerMode = modeSelect.value === 'append' ? 'append' : 'interrupt';
+            persistFollowupQueue(sid);
+        });
+        undo.addEventListener('click', function (ev) {
+            ev.preventDefault();
+            withdrawFollowup(String(item.id));
+        });
+        row.appendChild(order);
+        row.appendChild(text);
+        row.appendChild(status);
+        row.appendChild(modeSelect);
+        row.appendChild(sendNow);
+        row.appendChild(undo);
+        panel.appendChild(row);
+        if (typeof initUiHoverTips === 'function') initUiHoverTips(row);
+    });
+    positionFollowupQueuePanel();
+    if (typeof scrollChatToBottomIfFollow === 'function') {
+        scrollChatToBottomIfFollow(sid, {});
+    }
+}
+
+function getFollowupStatusText(item) {
+    var status = item && item.status ? String(item.status) : '';
+    if (status === 'withdrawing') return '撤回中';
+    if (status === 'submitting') return '提交中';
+    if (status === 'accepted') return item && item.steerMode === 'append' ? '已追加，等待下一轮' : '已接收，等待插入';
+    if (status === 'restarting') return '正在接管当前任务';
+    if (status === 'sending') return '发送中';
+    if (status === 'sent') return '已发送';
+    return '待发送';
+}
+
+function appendFollowupQueueItem(sessionId, text, display, selectedSkills) {
+    const sid = String(sessionId || '');
+    if (!sid || !String(text || '').trim()) return null;
+    const item = {
+        id: followupQueueSeq++,
+        text: String(text),
+        display: String(display || text),
+        skills: Array.isArray(selectedSkills) ? selectedSkills.slice() : [],
+        createdAt: Date.now(),
+        steerMode: defaultSteerMode(),
+    };
+    getFollowupQueue(sid).push(item);
+    persistFollowupQueue(sid);
+    renderFollowupQueue(sid);
+    setSendButtonState();
+    return item;
+}
+
+function buildSelectedSkillsDisplayMessage(rawMessage, selectedSkills) {
+    var message = String(rawMessage || '');
+    var names = Array.isArray(selectedSkills)
+        ? selectedSkills.map(function (skill) { return String(skill || '').trim(); }).filter(Boolean)
+        : [];
+    if (!names.length) return message;
+    var suffix = '\\n\\n已选择 Skill：' + names.join('、');
+    return message.endsWith(suffix) ? message : message + suffix;
+}
+
+function enqueueCurrentInputAsFollowup() {
+    if (!isMyAgentFeatureEnabled('followupRestart', false)) return false;
+    if (isChatFileUploadBusy()) return false;
+    const sid = currentSessionId;
+    if (!sid) return false;
+    rewriteInputWorkspacePaths();
+    const visibleMessage = messageInput.value;
+    const rawMessage = expandInputPathTokens(visibleMessage);
+    if (!String(rawMessage).trim()) return false;
+    var selectedSkills = [];
+    if (typeof window.consumeSelectedSkillsForSend === 'function') {
+        selectedSkills = window.consumeSelectedSkillsForSend();
+    }
+    appendFollowupQueueItem(sid, rawMessage, visibleMessage, selectedSkills);
+    messageInput.value = '';
+    persistInputDraft(sid, '');
+    clearInputPathTokens();
+    autoResizeTextarea();
+    // appendFollowupQueueItem() refreshed the button while the composer still
+    // contained the follow-up. Refresh again after clearing it so the active
+    // run exposes "Stop", rather than leaving a stale "Follow up" label.
+    setSendButtonState();
+    return true;
+}
+
+function rollbackOptimisticUserEvent(sessionId, eventIndex) {
+    const sid = String(sessionId || '');
+    const before = Math.max(0, Number(eventIndex) || 0);
+    if (!sid) return;
+    if (typeof truncateMessageStateForSession === 'function') {
+        truncateMessageStateForSession(sid, before);
+    }
+    if (typeof uiEventCountCache !== 'undefined') {
+        uiEventCountCache.updateFromServer(sid, before);
+    }
+    if (typeof truncateTocTurnsForSession === 'function') {
+        truncateTocTurnsForSession(sid, before);
+    }
+    if (sid !== currentSessionId) return;
+    const anchor = document.querySelector('.msg-wrap--user[data-event-index="' + String(before) + '"]');
+    if (anchor) removeMessagesFromNode(anchor);
+    rebuildToc({ localOnly: true });
+}
+
+function takeFollowupItem(sessionId, itemId) {
+    var q = getFollowupQueue(sessionId);
+    var idx = q.findIndex(function (item) { return String(item.id) === String(itemId); });
+    if (idx < 0) return null;
+    var item = q.splice(idx, 1)[0] || null;
+    persistFollowupQueue(sessionId);
+    return item;
+}
+
+function withdrawFollowup(itemId) {
+    const sid = currentSessionId;
+    var q = getFollowupQueue(sid);
+    var pendingItem = q.find(function (entry) { return String(entry.id) === String(itemId); });
+    if (pendingItem && (pendingItem.status === 'sending' || pendingItem.status === 'submitting' || pendingItem.status === 'accepted' || pendingItem.status === 'restarting')) {
+        pendingItem.cancelRequested = true;
+        pendingItem.status = 'withdrawing';
+        persistFollowupQueue(sid);
+        renderFollowupQueue(sid);
+        if (pendingItem.steerInFlight && !pendingItem.steerId) return;
+        cancelSteerMessage(sid, pendingItem).then(function () {
+            var item = takeFollowupItem(sid, itemId);
+            if (item) returnFollowupToInput(sid, item);
+        }).catch(function (e) {
+            var item = q.find(function (entry) { return String(entry.id) === String(itemId); });
+            if (item) item.status = 'sending';
+            persistFollowupQueue(sid);
+            renderFollowupQueue(sid);
+            appendLogVisible('追问已被接收，无法撤回: ' + ((e && e.message) || String(e)), 'error-log');
+        });
+        return;
+    }
+    const item = takeFollowupItem(sid, itemId);
+    if (!item) return;
+    returnFollowupToInput(sid, item);
+}
+
+function returnFollowupToInput(sid, item) {
+    removePendingSteerFromProcess(sid, item);
+    const returned = String(item.display || item.text || '');
+    if (sid !== currentSessionId) {
+        const backgroundDraft = Object.prototype.hasOwnProperty.call(draftBySession, sid)
+            ? String(draftBySession[sid] || '')
+            : String(readStoredInputDraft(sid) || '');
+        const nextDraft = backgroundDraft.trim() ? (returned + '\\n' + backgroundDraft) : returned;
+        persistInputDraft(sid, nextDraft);
+        if (typeof window.setSelectedSkillsForSession === 'function') {
+            window.setSelectedSkillsForSession(sid, item.skills || []);
+        }
+        renderFollowupQueue(sid);
+        return;
+    }
+    const existing = String(messageInput.value || '');
+    messageInput.value = existing.trim() ? (returned + '\\n' + existing) : returned;
+    if (typeof window.setSelectedSkillsForCurrentSession === 'function') {
+        window.setSelectedSkillsForCurrentSession(item.skills || []);
+    }
+    rewriteInputWorkspacePaths();
+    persistInputDraft(sid, messageInput.value);
+    autoResizeTextarea();
+    renderFollowupQueue(sid);
+    setSendButtonState();
+    messageInput.focus();
+}
+
 function findSteerProcessRow(ctx, operationId) {
     var key = String(operationId || '');
     if (!ctx || !key || typeof getProcessBody !== 'function') return null;
-    var body = getProcessBody(ctx);\r
-    if (!body || !body.querySelectorAll) return null;\r
+    var body = getProcessBody(ctx);
+    if (!body || !body.querySelectorAll) return null;
     var rows = body.querySelectorAll('.feed-item[data-steer-operation-id]');
     for (var i = 0; i < rows.length; i += 1) {
         if (String(rows[i].dataset.steerOperationId || '') === key
@@ -13909,45 +14671,45 @@ function commitPendingSteerProcessRow(sessionId, item, serverItem) {
     item.pendingProcessRow = row;
     return row;
 }
-\r
+
 function appendSteerProcessMessage(sessionId, ctx, content, operationId, steerMode, pending) {
-    var sid = String(sessionId || '');\r
-    var key = String(operationId || '');\r
-    if (!sid || !ctx || !key) return null;\r
-    var existing = findSteerProcessRow(ctx, key);\r
-    if (existing) {\r
-        if (!pending) {\r
-            var existingScroller = existing.querySelector('.feed-chunk-scroller');\r
-            if (existingScroller && String(content || '').trim()) {\r
-                existingScroller.textContent = truncateLogTextForUi(String(content || ''));\r
-            }\r
-            existing.dataset.steerCommitted = '1';\r
-            existing.removeAttribute('data-steer-pending');\r
-        }\r
-        return existing;\r
-    }\r
-    var scroller = appendLog(ctx, String(content || ''), 'user-steer', sid);\r
-    var row = scroller && scroller.closest ? scroller.closest('.feed-item') : null;\r
-    if (!row) return null;\r
+    var sid = String(sessionId || '');
+    var key = String(operationId || '');
+    if (!sid || !ctx || !key) return null;
+    var existing = findSteerProcessRow(ctx, key);
+    if (existing) {
+        if (!pending) {
+            var existingScroller = existing.querySelector('.feed-chunk-scroller');
+            if (existingScroller && String(content || '').trim()) {
+                existingScroller.textContent = truncateLogTextForUi(String(content || ''));
+            }
+            existing.dataset.steerCommitted = '1';
+            existing.removeAttribute('data-steer-pending');
+        }
+        return existing;
+    }
+    var scroller = appendLog(ctx, String(content || ''), 'user-steer', sid);
+    var row = scroller && scroller.closest ? scroller.closest('.feed-item') : null;
+    if (!row) return null;
     row.dataset.steerOperationId = key;
     row.dataset.steerMode = steerMode === 'append' ? 'append' : 'interrupt';
-    if (pending) row.dataset.steerPending = '1';\r
-    else row.dataset.steerCommitted = '1';\r
-    return row;\r
-}\r
-\r
-function appendPendingSteerToProcess(sessionId, item) {\r
-    var sid = String(sessionId || '');\r
-    if (!sid || !item || item.steerMode !== 'append') return null;\r
-    var run = getSessionRunState(sid);\r
-    var ctx = run && run.ctx;\r
-    if (!ctx) return null;\r
+    if (pending) row.dataset.steerPending = '1';
+    else row.dataset.steerCommitted = '1';
+    return row;
+}
+
+function appendPendingSteerToProcess(sessionId, item) {
+    var sid = String(sessionId || '');
+    if (!sid || !item || item.steerMode !== 'append') return null;
+    var run = getSessionRunState(sid);
+    var ctx = run && run.ctx;
+    if (!ctx) return null;
     var row = appendSteerProcessMessage(
         sid,
         ctx,
-        buildSelectedSkillsDisplayMessage(item.display || item.text || '', item.skills || []),\r
-        item.clientId || item.steerId || '',\r
-        'append',\r
+        buildSelectedSkillsDisplayMessage(item.display || item.text || '', item.skills || []),
+        item.clientId || item.steerId || '',
+        'append',
         true
     );
     if (row) {
@@ -13984,174 +14746,227 @@ function markSteerEventPosition(ctx, eventIndex, runtimeSeq) {
         ctx.lastUserRuntimeSeq = Math.floor(Number(runtimeSeq));
     }
 }
-\r
-function removePendingSteerFromProcess(sessionId, item) {\r
-    var sid = String(sessionId || '');\r
-    if (!sid || !item || item.steerMode !== 'append') return;\r
-    var run = getSessionRunState(sid);\r
+
+function removePendingSteerFromProcess(sessionId, item) {
+    var sid = String(sessionId || '');
+    if (!sid || !item || item.steerMode !== 'append') return;
+    var run = getSessionRunState(sid);
     var row = item.pendingProcessRow && item.pendingProcessRow.isConnected
         ? item.pendingProcessRow
         : findSteerProcessRow(run && run.ctx, item.clientId || item.steerId || '');
-    if (row && row.dataset.steerPending === '1' && row.dataset.steerCommitted !== '1') row.remove();\r
-}\r
-\r
-async function sendSteerMessage(sessionId, text, clientId, selectedSkills, uiContent, steerMode) {\r
-    var activeRun = getSessionRunState(sessionId);\r
-    var sourceRunId = activeRun && activeRun.runId ? String(activeRun.runId) : '';\r
-    var r = await fetch('/sessions/' + encodeURIComponent(sessionId) + '/steer', {\r
-        method: 'POST',\r
-        headers: { 'Content-Type': 'application/json' },\r
-        body: JSON.stringify({\r
-            message: text,\r
-            client_id: clientId || '',\r
-            selected_skills: selectedSkills || [],\r
-            ui_content: uiContent || text,\r
-            source_run_id: sourceRunId,\r
-            mode: steerMode === 'append' ? 'append' : 'interrupt',\r
-        }),\r
-    });\r
-    var j = await r.json().catch(function () {\r
-        return { ok: false, error: 'steer failed' };\r
-    });\r
-    if (!r.ok || !j.ok) throw new Error((j && j.error) || 'steer failed');\r
-    return j;\r
-}\r
-\r
-function sleepMs(ms) {\r
-    return new Promise(function (resolve) {\r
-        setTimeout(resolve, Math.max(0, Number(ms) || 0));\r
-    });\r
-}\r
-\r
-async function refreshFollowupRunState(sessionId) {\r
-    const sid = String(sessionId || '');\r
-    if (!sid) return;\r
-    try {\r
-        if (typeof reconcileRunStateFromServer === 'function') {\r
-            await reconcileRunStateFromServer({ silent: true });\r
-        }\r
-    } catch (e) { /* ignore */ }\r
-    try {\r
-        scheduleActiveSessionReconnect(sid, { delayMs: 0 });\r
-    } catch (e2) { /* ignore */ }\r
-}\r
-\r
-async function cancelSteerMessage(sessionId, item) {\r
-    var r = await fetch('/sessions/' + encodeURIComponent(sessionId) + '/steer', {\r
-        method: 'DELETE',\r
-        headers: { 'Content-Type': 'application/json' },\r
-        body: JSON.stringify({\r
-            steer_id: (item && item.steerId) || '',\r
-            client_id: (item && item.clientId) || '',\r
-        }),\r
-    });\r
-    var j = await r.json().catch(function () {\r
-        return { ok: false, error: 'cancel steer failed' };\r
-    });\r
-    if (!r.ok || !j.ok) throw new Error((j && j.error) || 'cancel steer failed');\r
-    return j;\r
-}\r
-\r
-async function fetchSteerStatus(sessionId, item) {\r
-    var steerId = String(item && item.steerId || '');\r
-    if (!sessionId || !steerId) return null;\r
-    var r = await fetch('/sessions/' + encodeURIComponent(sessionId) + '/steer/' + encodeURIComponent(steerId));\r
-    var j = await r.json().catch(function () { return null; });\r
-    if (!r.ok || !j || !j.ok) return null;\r
-    return j.item || null;\r
-}\r
-\r
-async function recoverSteerForRestart(sessionId, item) {\r
-    var steerId = String(item && item.steerId || '');\r
-    if (!sessionId || !steerId) return null;\r
-    var r = await fetch('/sessions/' + encodeURIComponent(sessionId) + '/steer/' + encodeURIComponent(steerId) + '/recover', {\r
-        method: 'POST',\r
-    });\r
-    var j = await r.json().catch(function () { return null; });\r
-    return r.ok && j && j.ok ? (j.item || null) : null;\r
-}\r
-\r
-async function syncFollowupQueueFromServer(sessionId) {\r
-    var sid = String(sessionId || '');\r
-    if (!sid || followupServerSyncInFlight[sid]) return followupServerSyncInFlight[sid] || null;\r
-    followupServerSyncInFlight[sid] = fetch('/sessions/' + encodeURIComponent(sid) + '/steer?include_terminal=true')\r
-        .then(function (r) { return r.ok ? r.json() : null; })\r
-        .then(function (payload) {\r
-            if (!payload || !payload.ok || !Array.isArray(payload.items)) return;\r
-            var q = getFollowupQueue(sid);\r
-            var pendingIds = new Set();\r
-            payload.items.forEach(function (serverItem) {\r
-                var steerId = String(serverItem.id || '');\r
-                var clientId = String(serverItem.client_id || '');\r
-                var state = String(serverItem.state || 'queued');\r
-                var isTerminal = state === 'consumed' || state === 'cancelled' || state === 'failed';\r
-                if (steerId && !isTerminal) pendingIds.add(steerId);\r
-                var local = q.find(function (entry) {\r
-                    return (steerId && String(entry.steerId || '') === steerId)\r
-                        || (clientId && String(entry.clientId || '') === clientId);\r
-                });\r
-                if (!local && !isTerminal) {\r
-                    local = {\r
-                        id: 'server-' + (steerId || clientId || Date.now()),\r
-                        text: String(serverItem.content || ''),\r
-                        display: String(serverItem.ui_content || serverItem.content || ''),\r
-                        clientId: clientId,\r
-                        steerId: steerId,\r
-                        createdAt: Math.round(Number(serverItem.created_at || 0) * 1000) || Date.now(),\r
-                        steerMode: String(serverItem.mode || '') === 'append' ? 'append' : 'interrupt',\r
-                    };\r
-                    q.push(local);\r
-                }\r
-                if (!local) return;\r
-                if (state === 'failed' || state === 'cancelled') {\r
-                    var failedIndex = q.indexOf(local);\r
-                    if (failedIndex >= 0) q.splice(failedIndex, 1);\r
-                    returnFollowupToInput(sid, local);\r
-                    return;\r
+    if (row && row.dataset.steerPending === '1' && row.dataset.steerCommitted !== '1') row.remove();
+}
+
+async function sendSteerMessage(sessionId, text, clientId, selectedSkills, uiContent, steerMode) {
+    var activeRun = getSessionRunState(sessionId);
+    var sourceRunId = activeRun && activeRun.runId ? String(activeRun.runId) : '';
+    var r = await fetch('/sessions/' + encodeURIComponent(sessionId) + '/steer', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            message: text,
+            client_id: clientId || '',
+            selected_skills: selectedSkills || [],
+            ui_content: uiContent || text,
+            source_run_id: sourceRunId,
+            mode: steerMode === 'append' ? 'append' : 'interrupt',
+        }),
+    });
+    var j = await r.json().catch(function () {
+        return { ok: false, error: 'steer failed' };
+    });
+    if (!r.ok || !j.ok) throw new Error((j && j.error) || 'steer failed');
+    return j;
+}
+
+function sleepMs(ms) {
+    return new Promise(function (resolve) {
+        setTimeout(resolve, Math.max(0, Number(ms) || 0));
+    });
+}
+
+async function refreshFollowupRunState(sessionId) {
+    const sid = String(sessionId || '');
+    if (!sid) return;
+    try {
+        if (typeof reconcileRunStateFromServer === 'function') {
+            await reconcileRunStateFromServer({ silent: true });
+        }
+    } catch (e) { /* ignore */ }
+    try {
+        scheduleActiveSessionReconnect(sid, { delayMs: 0 });
+    } catch (e2) { /* ignore */ }
+}
+
+async function cancelSteerMessage(sessionId, item) {
+    var r = await fetch('/sessions/' + encodeURIComponent(sessionId) + '/steer', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            steer_id: (item && item.steerId) || '',
+            client_id: (item && item.clientId) || '',
+        }),
+    });
+    var j = await r.json().catch(function () {
+        return { ok: false, error: 'cancel steer failed' };
+    });
+    if (!r.ok || !j.ok) throw new Error((j && j.error) || 'cancel steer failed');
+    return j;
+}
+
+async function fetchSteerStatus(sessionId, item) {
+    var steerId = String(item && item.steerId || '');
+    if (!sessionId || !steerId) return null;
+    var r = await fetch('/sessions/' + encodeURIComponent(sessionId) + '/steer/' + encodeURIComponent(steerId));
+    var j = await r.json().catch(function () { return null; });
+    if (!r.ok || !j || !j.ok) return null;
+    return j.item || null;
+}
+
+async function recoverSteerForRestart(sessionId, item) {
+    var steerId = String(item && item.steerId || '');
+    if (!sessionId || !steerId) return null;
+    var r = await fetch('/sessions/' + encodeURIComponent(sessionId) + '/steer/' + encodeURIComponent(steerId) + '/recover', {
+        method: 'POST',
+    });
+    var j = await r.json().catch(function () { return null; });
+    return r.ok && j && j.ok ? (j.item || null) : null;
+}
+
+async function syncFollowupQueueFromServer(sessionId) {
+    var sid = String(sessionId || '');
+    if (!sid || followupServerSyncInFlight[sid]) return followupServerSyncInFlight[sid] || null;
+    followupServerSyncInFlight[sid] = fetch('/sessions/' + encodeURIComponent(sid) + '/steer?include_terminal=true')
+        .then(function (r) { return r.ok ? r.json() : null; })
+        .then(function (payload) {
+            if (!payload || !payload.ok || !Array.isArray(payload.items)) return;
+            var q = getFollowupQueue(sid);
+            var pendingIds = new Set();
+            payload.items.forEach(function (serverItem) {
+                var steerId = String(serverItem.id || '');
+                var clientId = String(serverItem.client_id || '');
+                var state = String(serverItem.state || 'queued');
+                var isTerminal = state === 'consumed' || state === 'cancelled' || state === 'failed';
+                if (steerId && !isTerminal) pendingIds.add(steerId);
+                var local = q.find(function (entry) {
+                    return (steerId && String(entry.steerId || '') === steerId)
+                        || (clientId && String(entry.clientId || '') === clientId);
+                });
+                if (!local && !isTerminal) {
+                    local = {
+                        id: 'server-' + (steerId || clientId || Date.now()),
+                        text: String(serverItem.content || ''),
+                        display: String(serverItem.ui_content || serverItem.content || ''),
+                        clientId: clientId,
+                        steerId: steerId,
+                        createdAt: Math.round(Number(serverItem.created_at || 0) * 1000) || Date.now(),
+                        steerMode: String(serverItem.mode || '') === 'append' ? 'append' : 'interrupt',
+                    };
+                    q.push(local);
+                }
+                if (!local) return;
+                if (state === 'failed' || state === 'cancelled') {
+                    var failedIndex = q.indexOf(local);
+                    if (failedIndex >= 0) q.splice(failedIndex, 1);
+                    returnFollowupToInput(sid, local);
+                    return;
                 }
                 if (state === 'consumed') {
                     commitPendingSteerProcessRow(sid, local, serverItem);
                     var terminalIndex = q.indexOf(local);
                     if (terminalIndex >= 0) q.splice(terminalIndex, 1);
                     return;
-                }\r
-                local.steerId = steerId || local.steerId;\r
-                local.clientId = clientId || local.clientId;\r
-                local.replacementRunId = String(serverItem.replacement_run_id || local.replacementRunId || '');\r
-                local.steerMode = String(serverItem.mode || local.steerMode || '') === 'append' ? 'append' : 'interrupt';\r
-                local.status = state === 'restarting' ? 'restarting' : 'accepted';\r
-            });\r
-            for (var i = q.length - 1; i >= 0; i -= 1) {\r
-                var entry = q[i];\r
-                if (entry.steerId && (entry.status === 'accepted' || entry.status === 'restarting') && !pendingIds.has(String(entry.steerId))) {\r
-                    q.splice(i, 1);\r
-                }\r
-            }\r
-            q.sort(function (a, b) { return Number(a.createdAt || 0) - Number(b.createdAt || 0); });\r
-            persistFollowupQueue(sid);\r
-            renderFollowupQueue(sid);\r
-        })\r
-        .finally(function () { delete followupServerSyncInFlight[sid]; });\r
-    return followupServerSyncInFlight[sid];\r
-}\r
-\r
-function removeConsumedFollowupSteer(sessionId, ev) {\r
-    const sid = String(sessionId || '');\r
-    if (!sid || !ev || !ev.steer) return false;\r
-    var steerId = String(ev.steer_id || '');\r
-    var clientId = String(ev.client_id || '');\r
-    if (!steerId && !clientId) return false;\r
-    var q = getFollowupQueue(sid);\r
-    var item = q.find(function (entry) {\r
-        return (clientId && String(entry.clientId || '') === clientId)\r
-            || (steerId && String(entry.steerId || '') === steerId);\r
-    });\r
-    if (!item) return false;\r
-    takeFollowupItem(sid, item.id);\r
-    renderFollowupQueue(sid);\r
-    return true;\r
-}\r
-\r
+                }
+                local.steerId = steerId || local.steerId;
+                local.clientId = clientId || local.clientId;
+                local.replacementRunId = String(serverItem.replacement_run_id || local.replacementRunId || '');
+                local.steerMode = String(serverItem.mode || local.steerMode || '') === 'append' ? 'append' : 'interrupt';
+                local.status = state === 'restarting' ? 'restarting' : 'accepted';
+            });
+            for (var i = q.length - 1; i >= 0; i -= 1) {
+                var entry = q[i];
+                if (entry.steerId && (entry.status === 'accepted' || entry.status === 'restarting') && !pendingIds.has(String(entry.steerId))) {
+                    q.splice(i, 1);
+                }
+            }
+            q.sort(function (a, b) { return Number(a.createdAt || 0) - Number(b.createdAt || 0); });
+            persistFollowupQueue(sid);
+            renderFollowupQueue(sid);
+        })
+        .finally(function () { delete followupServerSyncInFlight[sid]; });
+    return followupServerSyncInFlight[sid];
+}
+
+function removeConsumedFollowupSteer(sessionId, ev) {
+    const sid = String(sessionId || '');
+    if (!sid || !ev || !ev.steer) return false;
+    var steerId = String(ev.steer_id || '');
+    var clientId = String(ev.client_id || '');
+    if (!steerId && !clientId) return false;
+    var q = getFollowupQueue(sid);
+    var item = q.find(function (entry) {
+        return (clientId && String(entry.clientId || '') === clientId)
+            || (steerId && String(entry.steerId || '') === steerId);
+    });
+    if (!item) return false;
+    takeFollowupItem(sid, item.id);
+    renderFollowupQueue(sid);
+    // 只发起一次门禁检查：活跃 run 会直接拦截；若终止事件先到、consumed 后到，
+    // 则允许已经结束的这一轮继续 FIFO 队首。
+    scheduleFollowupQueueDrain(sid, 0);
+    return true;
+}
+
+function isFollowupAutoDrainReady(sessionId) {
+    var sid = String(sessionId || '');
+    return !!sid
+        && !(typeof isSessionStreamStopSuppressed === 'function' && isSessionStreamStopSuppressed(sid))
+        && !isSessionRunning(sid)
+        && !isServerStreamActive(sid)
+        && !isSendPipelineLocked(sid)
+        && !isFollowupDispatchBusy(sid);
+}
+
+function scheduleFollowupQueueDrain(sessionId, delayMs) {
+    var sid = String(sessionId || '');
+    if (!sid) return;
+    var delay = Math.max(0, Number(delayMs) || 0);
+    var dueAt = Date.now() + delay;
+    var existing = followupDrainTimers[sid];
+    if (existing && existing.dueAt <= dueAt) return;
+    if (existing) clearTimeout(existing.timer);
+    var timer = setTimeout(function () {
+        var current = followupDrainTimers[sid];
+        if (!current || current.timer !== timer) return;
+        delete followupDrainTimers[sid];
+        drainFollowupQueue(sid);
+    }, delay);
+    followupDrainTimers[sid] = { timer: timer, dueAt: dueAt };
+}
+
+function drainFollowupQueue(sessionId) {
+    var sid = String(sessionId || '');
+    if (!sid) return;
+    if (!isFollowupAutoDrainReady(sid)) {
+        // 活跃 run 会在自己的终止边界重新启动 drain；这里只重试瞬时的锁/dispatcher 竞争。
+        if (isSessionRunning(sid)
+            || isServerStreamActive(sid)
+            || (typeof isSessionStreamStopSuppressed === 'function' && isSessionStreamStopSuppressed(sid))) return;
+        scheduleFollowupQueueDrain(sid, 120);
+        return;
+    }
+    var q = getFollowupQueue(sid);
+    if (!q.length) { renderFollowupQueue(sid); return; }
+    var item = q[0];
+    if (!item || item.status) { renderFollowupQueue(sid); return; }
+    // 一个终止边界最多尝试一条。失败后 sendFollowupNow 会恢复 pending；
+    // 不在这里循环重试，避免网络错误造成请求风暴或重复执行。
+    void Promise.resolve(sendFollowupNow(item.id, sid))
+        .catch(function (error) {
+            console.error('follow-up auto-drain failed:', error);
+        });
+}
+
 function scheduleAcceptedFollowupWatch(sid, itemId) {
     var watchKey = String(sid || '') + ':' + String(itemId || '');
     if (followupWatchTimers[watchKey]) return;
@@ -14187,6 +15002,7 @@ function scheduleAcceptedFollowupWatch(sid, itemId) {
                 takeFollowupItem(sid, itemId);
                 renderFollowupQueue(sid);
                 refreshPendingFollowupQueue(sid);
+                scheduleFollowupQueueDrain(sid, 0);
                 return;
             }
             if (serverState === 'cancelled' || serverState === 'failed') {
@@ -14225,11 +15041,11 @@ function scheduleAcceptedFollowupWatch(sid, itemId) {
                 var restarted = await startFollowupChat({
                     message: latest.text,
                     displayMessage: latest.display || latest.text,
-                    selectedSkills: latest.skills || [],\r
-                    fromQueue: true,\r
-                    sessionId: sid,\r
-                    forceStart: true,\r
-                    preserveInput: true,\r
+                    selectedSkills: latest.skills || [],
+                    fromQueue: true,
+                    sessionId: sid,
+                    forceStart: true,
+                    preserveInput: true,
                     asSteer: true,
                     steerId: latest.steerId,
                     steerClientId: latest.clientId,
@@ -14290,75 +15106,75 @@ function startFollowupChat(options) {
         });
     });
 }
-\r
-async function sendFollowupNowImpl(itemId, sessionId) {\r
-    const followupTimingStartedAt = nowPipelineMs();\r
-    const followupTimingCtx = {\r
-        label: 'client_followup_step_timing',\r
-        sessionId: sessionId || currentSessionId || '',\r
-        runId: '',\r
-        mode: 'followup',\r
-        startedAt: followupTimingStartedAt\r
-    };\r
-    let _followupStepStart = followupTimingStartedAt;\r
-    const sid = String(sessionId || currentSessionId || '');\r
-    if (!sid) return;\r
-    followupTimingCtx.sessionId = sid;\r
-    var q = getFollowupQueue(sid);\r
-    var idx = q.findIndex(function (item) { return String(item.id) === String(itemId); });\r
-    if (idx < 0) return;\r
-    const item = q[idx];\r
-    if (!item) return;\r
-    item.steerMode = item.steerMode === 'append' ? 'append' : 'interrupt';\r
-    followupTimingCtx.mode = 'followup_' + item.steerMode;\r
-    if (idx !== 0) {\r
-        var moved = q.splice(idx, 1)[0];\r
-        q.unshift(moved);\r
-        persistFollowupQueue(sid);\r
-        renderFollowupQueue(sid);\r
-        idx = 0;\r
-    }\r
+
+async function sendFollowupNowImpl(itemId, sessionId) {
+    const followupTimingStartedAt = nowPipelineMs();
+    const followupTimingCtx = {
+        label: 'client_followup_step_timing',
+        sessionId: sessionId || currentSessionId || '',
+        runId: '',
+        mode: 'followup',
+        startedAt: followupTimingStartedAt
+    };
+    let _followupStepStart = followupTimingStartedAt;
+    const sid = String(sessionId || currentSessionId || '');
+    if (!sid) return;
+    followupTimingCtx.sessionId = sid;
+    var q = getFollowupQueue(sid);
+    var idx = q.findIndex(function (item) { return String(item.id) === String(itemId); });
+    if (idx < 0) return;
+    const item = q[idx];
+    if (!item) return;
+    item.steerMode = item.steerMode === 'append' ? 'append' : 'interrupt';
+    followupTimingCtx.mode = 'followup_' + item.steerMode;
+    if (idx !== 0) {
+        var moved = q.splice(idx, 1)[0];
+        q.unshift(moved);
+        persistFollowupQueue(sid);
+        renderFollowupQueue(sid);
+        idx = 0;
+    }
     if (['submitting', 'sending', 'accepted', 'restarting', 'sent', 'withdrawing'].includes(String(item.status || ''))) {
         return;
     }
-    item.clientId = item.clientId || ('followup-' + item.id + '-' + Date.now());\r
-    item.status = 'submitting';\r
-    persistFollowupQueue(sid);\r
-    renderFollowupQueue(sid);\r
-    reportClientPipelineStep(followupTimingCtx, 'followup_prepare_item', _followupStepStart, {\r
-        itemId: itemId,\r
-        running: isSessionRunning(sid)\r
-    });\r
-    try {\r
-        _followupStepStart = nowPipelineMs();\r
-        item.steerInFlight = true;\r
-        var steerResult = await sendSteerMessage(\r
-            sid,\r
-            item.text,\r
-            item.clientId,\r
-            item.skills || [],\r
-            item.display || item.text,\r
-            item.steerMode\r
-        );\r
-        item.steerInFlight = false;\r
-        item.steerId = steerResult && steerResult.item && steerResult.item.id ? String(steerResult.item.id) : '';\r
-        if (steerResult && steerResult.item && steerResult.item.mode) {\r
-            item.steerMode = String(steerResult.item.mode) === 'append' ? 'append' : 'interrupt';\r
-        }\r
-        reportClientPipelineStep(followupTimingCtx, 'followup_send_steer', _followupStepStart, {\r
-            restart: !!(steerResult && steerResult.restart),\r
-            steerId: item.steerId || ''\r
-        });\r
-        if (item.cancelRequested) {\r
-            _followupStepStart = nowPipelineMs();\r
-            await cancelSteerMessage(sid, item);\r
-            reportClientPipelineStep(followupTimingCtx, 'followup_cancel_after_steer', _followupStepStart);\r
-            var withdrawn = takeFollowupItem(sid, item.id);\r
-            if (withdrawn) returnFollowupToInput(sid, withdrawn);\r
-            return;\r
-        }\r
+    item.clientId = item.clientId || ('followup-' + item.id + '-' + Date.now());
+    item.status = 'submitting';
+    persistFollowupQueue(sid);
+    renderFollowupQueue(sid);
+    reportClientPipelineStep(followupTimingCtx, 'followup_prepare_item', _followupStepStart, {
+        itemId: itemId,
+        running: isSessionRunning(sid)
+    });
+    try {
+        _followupStepStart = nowPipelineMs();
+        item.steerInFlight = true;
+        var steerResult = await sendSteerMessage(
+            sid,
+            item.text,
+            item.clientId,
+            item.skills || [],
+            item.display || item.text,
+            item.steerMode
+        );
+        item.steerInFlight = false;
+        item.steerId = steerResult && steerResult.item && steerResult.item.id ? String(steerResult.item.id) : '';
+        if (steerResult && steerResult.item && steerResult.item.mode) {
+            item.steerMode = String(steerResult.item.mode) === 'append' ? 'append' : 'interrupt';
+        }
+        reportClientPipelineStep(followupTimingCtx, 'followup_send_steer', _followupStepStart, {
+            restart: !!(steerResult && steerResult.restart),
+            steerId: item.steerId || ''
+        });
+        if (item.cancelRequested) {
+            _followupStepStart = nowPipelineMs();
+            await cancelSteerMessage(sid, item);
+            reportClientPipelineStep(followupTimingCtx, 'followup_cancel_after_steer', _followupStepStart);
+            var withdrawn = takeFollowupItem(sid, item.id);
+            if (withdrawn) returnFollowupToInput(sid, withdrawn);
+            return;
+        }
         if (steerResult && steerResult.restart && isMyAgentFeatureEnabled('followupRestart', false)) {
-            _followupStepStart = nowPipelineMs();\r
+            _followupStepStart = nowPipelineMs();
             var previousRun = getSessionRunState(sid);
             if (previousRun) abortSessionRun(sid, 'followup-restart');
             markSessionRunInactive(sid);
@@ -14368,12 +15184,12 @@ async function sendFollowupNowImpl(itemId, sessionId) {\r
             item.status = 'restarting';
             item.replacementRunId = String(steerResult.replacement_run_id || '');
             persistFollowupQueue(sid);
-            renderFollowupQueue(sid);\r
-            setSendButtonState();\r
-            syncSessionListIndicatorClasses();\r
-            reportClientPipelineStep(followupTimingCtx, 'followup_restart_takeover', _followupStepStart, {\r
-                hadPreviousRun: !!previousRun\r
-            });\r
+            renderFollowupQueue(sid);
+            setSendButtonState();
+            syncSessionListIndicatorClasses();
+            reportClientPipelineStep(followupTimingCtx, 'followup_restart_takeover', _followupStepStart, {
+                hadPreviousRun: !!previousRun
+            });
             var restartLockReady = await waitForSendPipelineIdle(sid, 4000);
             if (!restartLockReady || isSendPipelineLocked(sid)) {
                 appendLogVisible('追问接管已保留，等待发送通道释放。', 'error-log');
@@ -14382,12 +15198,12 @@ async function sendFollowupNowImpl(itemId, sessionId) {\r
             }
             var restartStarted = await startFollowupChat({
                 message: item.text,
-                displayMessage: item.display || item.text,\r
-                selectedSkills: item.skills || [],\r
-                fromQueue: true,\r
-                sessionId: sid,\r
-                forceStart: true,\r
-                preserveInput: true,\r
+                displayMessage: item.display || item.text,
+                selectedSkills: item.skills || [],
+                fromQueue: true,
+                sessionId: sid,
+                forceStart: true,
+                preserveInput: true,
                 asSteer: true,
                 steerId: item.steerId,
                 steerClientId: item.clientId,
@@ -14404,109 +15220,109 @@ async function sendFollowupNowImpl(itemId, sessionId) {\r
                 scheduleAcceptedFollowupWatch(sid, itemId);
             }
             return;
-        }\r
-        item.status = 'accepted';\r
-        persistFollowupQueue(sid);\r
-        renderFollowupQueue(sid);\r
-        if (item.steerMode === 'append') {\r
-            appendPendingSteerToProcess(sid, item);\r
-        }\r
-        reportClientPipelineStep(followupTimingCtx, 'followup_accepted_by_running_agent', followupTimingStartedAt, {\r
-            steerId: item.steerId || ''\r
-        });\r
-        scheduleAcceptedFollowupWatch(sid, itemId);\r
-        return;\r
-    } catch (e) {\r
-        reportClientPipelineStep(followupTimingCtx, 'followup_steer_error', _followupStepStart, {\r
-            error: (e && e.message) ? String(e.message) : String(e)\r
-        });\r
-        item.steerInFlight = false;\r
-        var msg = (e && e.message) ? String(e.message) : String(e);\r
-        var canFallbackToChat = /session is not running/i.test(msg);\r
-        if (canFallbackToChat && !item.steerRetryAfterSync) {\r
-            item.steerRetryAfterSync = true;\r
-            item.status = 'submitting';\r
-            persistFollowupQueue(sid);\r
-            renderFollowupQueue(sid);\r
-            await refreshFollowupRunState(sid);\r
-            await sleepMs(250);\r
-            if (isSessionRunning(sid) || isServerStreamActive(sid)) {\r
-                try {\r
-                    item.steerInFlight = true;\r
-                    var retrySteerResult = await sendSteerMessage(\r
-                        sid,\r
-                        item.text,\r
-                        item.clientId,\r
-                        item.skills || [],\r
-                        item.display || item.text,\r
-                        item.steerMode\r
-                    );\r
-                    item.steerInFlight = false;\r
-                    item.steerId = retrySteerResult && retrySteerResult.item && retrySteerResult.item.id ? String(retrySteerResult.item.id) : '';\r
-                    if (retrySteerResult && retrySteerResult.item && retrySteerResult.item.mode) {\r
-                        item.steerMode = String(retrySteerResult.item.mode) === 'append' ? 'append' : 'interrupt';\r
-                    }\r
-                    item.status = 'accepted';\r
-                    persistFollowupQueue(sid);\r
-                    renderFollowupQueue(sid);\r
-                    if (item.steerMode === 'append') {\r
-                        appendPendingSteerToProcess(sid, item);\r
-                    }\r
-                    reportClientPipelineStep(followupTimingCtx, 'followup_steer_retry_after_sync', _followupStepStart, {\r
-                        steerId: item.steerId || ''\r
-                    });\r
-                    scheduleAcceptedFollowupWatch(sid, itemId);\r
-                    return;\r
-                } catch (retryError) {\r
-                    item.steerInFlight = false;\r
-                    msg = (retryError && retryError.message) ? String(retryError.message) : String(retryError);\r
-                    canFallbackToChat = /session is not running/i.test(msg);\r
-                }\r
-            }\r
-        }\r
-        if (!canFallbackToChat) {\r
-            await syncFollowupQueueFromServer(sid);\r
-            var reconciled = getFollowupQueue(sid).find(function (entry) {\r
-                return String(entry.id) === String(item.id);\r
-            });\r
-            if (reconciled && reconciled.steerId && (reconciled.status === 'accepted' || reconciled.status === 'restarting')) {\r
-                scheduleAcceptedFollowupWatch(sid, itemId);\r
-                return;\r
-            }\r
-            if (item.cancelRequested) {\r
-                item.status = 'sending';\r
-                item.cancelRequested = false;\r
-                persistFollowupQueue(sid);\r
-                renderFollowupQueue(sid);\r
-                appendLogVisible('追问已被接收，无法撤回: ' + msg, 'error-log');\r
-                return;\r
-            }\r
-            item.status = '';\r
-            persistFollowupQueue(sid);\r
-            renderFollowupQueue(sid);\r
-            appendLogVisible('追问插入失败: ' + msg, 'error-log');\r
-            return;\r
-        }\r
-    }\r
-    markSessionRunInactive(sid);\r
-    if (typeof sessionStore !== 'undefined') sessionStore.setStreamActive(sid, false);\r
-    // 降级 /chat 前必须等待发送锁释放，否则 sendMessage 会因锁未释放而静默返回，\r
-    // 随后定时器无条件删除条目 → 表现为「点了立即发送却没反应」「发送后内容被删」。\r
-    var lockAcquired = await waitForSendPipelineIdle(sid, 4000);\r
-    if (!lockAcquired || isSendPipelineLocked(sid)) {\r
-        // 锁迟迟未释放：恢复为 pending，交由后续 drain 或手动重试，绝不删除。\r
-        item.status = '';\r
-        item.steerInFlight = false;\r
-        persistFollowupQueue(sid);\r
-        renderFollowupQueue(sid);\r
-        appendLogVisible('追问暂未发出（发送通道繁忙），已保留待重试: ' + msg, 'error-log');\r
+        }
+        item.status = 'accepted';
+        persistFollowupQueue(sid);
+        renderFollowupQueue(sid);
+        if (item.steerMode === 'append') {
+            appendPendingSteerToProcess(sid, item);
+        }
+        reportClientPipelineStep(followupTimingCtx, 'followup_accepted_by_running_agent', followupTimingStartedAt, {
+            steerId: item.steerId || ''
+        });
+        scheduleAcceptedFollowupWatch(sid, itemId);
+        return;
+    } catch (e) {
+        reportClientPipelineStep(followupTimingCtx, 'followup_steer_error', _followupStepStart, {
+            error: (e && e.message) ? String(e.message) : String(e)
+        });
+        item.steerInFlight = false;
+        var msg = (e && e.message) ? String(e.message) : String(e);
+        var canFallbackToChat = /session is not running/i.test(msg);
+        if (canFallbackToChat && !item.steerRetryAfterSync) {
+            item.steerRetryAfterSync = true;
+            item.status = 'submitting';
+            persistFollowupQueue(sid);
+            renderFollowupQueue(sid);
+            await refreshFollowupRunState(sid);
+            await sleepMs(250);
+            if (isSessionRunning(sid) || isServerStreamActive(sid)) {
+                try {
+                    item.steerInFlight = true;
+                    var retrySteerResult = await sendSteerMessage(
+                        sid,
+                        item.text,
+                        item.clientId,
+                        item.skills || [],
+                        item.display || item.text,
+                        item.steerMode
+                    );
+                    item.steerInFlight = false;
+                    item.steerId = retrySteerResult && retrySteerResult.item && retrySteerResult.item.id ? String(retrySteerResult.item.id) : '';
+                    if (retrySteerResult && retrySteerResult.item && retrySteerResult.item.mode) {
+                        item.steerMode = String(retrySteerResult.item.mode) === 'append' ? 'append' : 'interrupt';
+                    }
+                    item.status = 'accepted';
+                    persistFollowupQueue(sid);
+                    renderFollowupQueue(sid);
+                    if (item.steerMode === 'append') {
+                        appendPendingSteerToProcess(sid, item);
+                    }
+                    reportClientPipelineStep(followupTimingCtx, 'followup_steer_retry_after_sync', _followupStepStart, {
+                        steerId: item.steerId || ''
+                    });
+                    scheduleAcceptedFollowupWatch(sid, itemId);
+                    return;
+                } catch (retryError) {
+                    item.steerInFlight = false;
+                    msg = (retryError && retryError.message) ? String(retryError.message) : String(retryError);
+                    canFallbackToChat = /session is not running/i.test(msg);
+                }
+            }
+        }
+        if (!canFallbackToChat) {
+            await syncFollowupQueueFromServer(sid);
+            var reconciled = getFollowupQueue(sid).find(function (entry) {
+                return String(entry.id) === String(item.id);
+            });
+            if (reconciled && reconciled.steerId && (reconciled.status === 'accepted' || reconciled.status === 'restarting')) {
+                scheduleAcceptedFollowupWatch(sid, itemId);
+                return;
+            }
+            if (item.cancelRequested) {
+                item.status = 'sending';
+                item.cancelRequested = false;
+                persistFollowupQueue(sid);
+                renderFollowupQueue(sid);
+                appendLogVisible('追问已被接收，无法撤回: ' + msg, 'error-log');
+                return;
+            }
+            item.status = '';
+            persistFollowupQueue(sid);
+            renderFollowupQueue(sid);
+            appendLogVisible('追问插入失败: ' + msg, 'error-log');
+            return;
+        }
+    }
+    markSessionRunInactive(sid);
+    if (typeof sessionStore !== 'undefined') sessionStore.setStreamActive(sid, false);
+    // 降级 /chat 前必须等待发送锁释放，否则 sendMessage 会因锁未释放而静默返回，
+    // 随后定时器无条件删除条目 → 表现为「点了立即发送却没反应」「发送后内容被删」。
+    var lockAcquired = await waitForSendPipelineIdle(sid, 4000);
+    if (!lockAcquired || isSendPipelineLocked(sid)) {
+        // 锁迟迟未释放：恢复为 pending，交由后续 drain 或手动重试，绝不删除。
+        item.status = '';
+        item.steerInFlight = false;
+        persistFollowupQueue(sid);
+        renderFollowupQueue(sid);
+        appendLogVisible('追问暂未发出（发送通道繁忙），已保留待重试: ' + msg, 'error-log');
         refreshPendingFollowupQueue(sid);
-        return;\r
-    }\r
-    item.status = 'sending';\r
-    persistFollowupQueue(sid);\r
-    renderFollowupQueue(sid);\r
-    reportClientPipelineStep(followupTimingCtx, 'followup_fallback_to_chat', followupTimingStartedAt);\r
+        return;
+    }
+    item.status = 'sending';
+    persistFollowupQueue(sid);
+    renderFollowupQueue(sid);
+    reportClientPipelineStep(followupTimingCtx, 'followup_fallback_to_chat', followupTimingStartedAt);
     var chatStarted = await startFollowupChat({
         message: item.text,
         displayMessage: item.display || item.text,
@@ -14515,193 +15331,193 @@ async function sendFollowupNowImpl(itemId, sessionId) {\r
         sessionId: sid,
         forceStart: true,
     });
-    if (chatStarted) {\r
-        // /chat 已成功开跑，追问作为普通用户轮次发出，删除队列项。\r
-        takeFollowupItem(sid, itemId);\r
-        renderFollowupQueue(sid);\r
-    } else {\r
-        // /chat 未真正开跑：恢复为 pending，保留条目，交由 drain 重试。\r
-        item.status = '';\r
-        item.steerInFlight = false;\r
-        persistFollowupQueue(sid);\r
-        renderFollowupQueue(sid);\r
-        appendLogVisible('追问降级发送未成功，已保留待重试: ' + msg, 'error-log');\r
+    if (chatStarted) {
+        // /chat 已成功开跑，追问作为普通用户轮次发出，删除队列项。
+        takeFollowupItem(sid, itemId);
+        renderFollowupQueue(sid);
+    } else {
+        // /chat 未真正开跑：恢复为 pending，保留条目，交由 drain 重试。
+        item.status = '';
+        item.steerInFlight = false;
+        persistFollowupQueue(sid);
+        renderFollowupQueue(sid);
+        appendLogVisible('追问降级发送未成功，已保留待重试: ' + msg, 'error-log');
         refreshPendingFollowupQueue(sid);
-    }\r
-    return;\r
-}\r
-\r
+    }
+    return;
+}
+
 /* 会话级互斥：所有显式立即发送共用同一 dispatcher 链，防止并发 steer 竞争。 */
-async function sendFollowupNow(itemId, sessionId) {\r
-    const sid = String(sessionId || currentSessionId || '');\r
-    return withFollowupDispatch(sid, function () { return sendFollowupNowImpl(itemId, sessionId); });\r
-}\r
-\r
-async function sendMessage(options) {\r
-    options = options || {};\r
-    if (!options.fromQueue && !options.fromInlineRewrite && isChatFileUploadBusy()) return;\r
-    const clientPipelineStartedAt = nowPipelineMs();\r
-    let clientTimingCtx = {\r
-        label: 'client_send_pipeline_step_timing',\r
-        sessionId: options.sessionId || currentSessionId || '',\r
-        runId: '',\r
-        mode: options.asSteer ? 'followup_steer' : (options.fromQueue ? 'followup_queue' : (options.fromInlineRewrite ? 'inline_rewrite' : 'chat')),\r
-        startedAt: clientPipelineStartedAt\r
-    };\r
-    let _clientStepStart = clientPipelineStartedAt;\r
-    messageLoadEpoch += 1;\r
-    /* 立即快照「提交会话」：之后所有 await 都不能改变它，避免用户在 await 空隙切走后消息发到新会话。\r
-       关键不变式：runSessionId === submitSessionId 全程恒等。 */\r
-    const submitSessionIdInitial = options.sessionId || currentSessionId;\r
-    if (!options.fromQueue && !options.fromInlineRewrite) rewriteInputWorkspacePaths();\r
-    const visibleMessage = options.message != null ? String(options.message) : messageInput.value;\r
-    const rawMessage = (options.fromQueue || options.fromInlineRewrite) ? visibleMessage : expandInputPathTokens(visibleMessage);\r
-    if (!String(rawMessage).trim()) return;\r
-    if (isSessionRunning(submitSessionIdInitial) && !options.forceStart) return;\r
-    if (isSendPipelineLocked(submitSessionIdInitial)) return;\r
-    if (options.forceStart && submitSessionIdInitial) {\r
-        var previousRun = getSessionRunState(submitSessionIdInitial);\r
-        if (previousRun) abortSessionRun(submitSessionIdInitial, 'followup-restart');\r
-    }\r
-    var selectedSkillsForRun = [];\r
-    if (Array.isArray(options.selectedSkills)) {\r
-        selectedSkillsForRun = options.selectedSkills.map(function (skill) { return String(skill || '').trim(); }).filter(Boolean);\r
-    } else if (!options.fromQueue && !options.fromInlineRewrite && typeof window.consumeSelectedSkillsForSend === 'function') {\r
-        selectedSkillsForRun = window.consumeSelectedSkillsForSend();\r
-    }\r
-    var uiBaseMessage = options.displayMessage != null ? String(options.displayMessage) : rawMessage;\r
-    var displayMessage = buildSelectedSkillsDisplayMessage(uiBaseMessage, selectedSkillsForRun);\r
-    reportClientPipelineStep(clientTimingCtx, 'preflight_checks', _clientStepStart, {\r
-        forceStart: !!options.forceStart,\r
-        fromQueue: !!options.fromQueue,\r
-        fromInlineRewrite: !!options.fromInlineRewrite,\r
-        asSteer: !!options.asSteer\r
-    });\r
-\r
-    /* 立即上锁：阻止后续连击；锁的 key 是提交时的会话，而非当前会话。 */\r
-    _clientStepStart = nowPipelineMs();\r
-    const sendPipelineLock = acquireSendPipelineLock(submitSessionIdInitial);\r
-    if (!sendPipelineLock) return;\r
-    let submittedRunCtx = null;\r
-    let submittedRunSessionId = submitSessionIdInitial;\r
-    _clientStepStart = nowPipelineMs();\r
-    const clientRunId = options.clientRunId || ((window.crypto && window.crypto.randomUUID)\r
-        ? window.crypto.randomUUID()\r
-        : ('run-' + Date.now() + '-' + Math.random().toString(16).slice(2)));\r
-    clientTimingCtx.runId = clientRunId;\r
-    const ac = new AbortController();\r
-    var optimisticRunState = {\r
-        controller: ac,\r
-        ctx: null,\r
-        runId: clientRunId,\r
-        optimistic: true,\r
-        submitted: false,\r
-        suppressFollowupButton: true\r
-    };\r
-    // Publish before rewrite truncation, session creation, event-count reads,\r
-    // or any other network await so every send path flips in the same frame.\r
-    if (submitSessionIdInitial) {\r
-        if (typeof clearSessionStreamStopSuppress === 'function') clearSessionStreamStopSuppress(submitSessionIdInitial);\r
-        setSessionRunState(submitSessionIdInitial, optimisticRunState);\r
-    } else {\r
-        optimisticNewSessionRun = optimisticRunState;\r
-    }\r
-    setSendButtonState();\r
-    syncSessionListIndicatorClasses();\r
-    reportClientPipelineStep(clientTimingCtx, 'publish_optimistic_run_state', _clientStepStart);\r
-    try {\r
-    reportClientPipelineStep(clientTimingCtx, 'acquire_send_lock', _clientStepStart);\r
-\r
-    if (pendingRewriteTruncate && pendingRewriteTruncate.sessionId === submitSessionIdInitial) {\r
-        _clientStepStart = nowPipelineMs();\r
-        const pendingRewrite = pendingRewriteTruncate;\r
-        const truncated = await processRewriteTruncateAsync(pendingRewrite);\r
-        reportClientPipelineStep(clientTimingCtx, 'pending_rewrite_truncate', _clientStepStart, { ok: !!truncated });\r
-        if (!truncated) {\r
-            pendingRewriteTruncate = null;\r
-            return;\r
-        }\r
-        pendingRewriteTruncate = null;\r
-        uiEventCountCache.updateFromServer(submitSessionIdInitial, pendingRewrite.before);\r
-        if (ac.signal.aborted) return;\r
-    }\r
-    hideRewriteUndoToast();\r
-\r
-    hideSubagentContinueBanner();\r
-    const userSentAt = new Date().toISOString();\r
-\r
-    let submitSessionId = submitSessionIdInitial;\r
-    if (!submitSessionId) {\r
-        _clientStepStart = nowPipelineMs();\r
-        await createNewSession();\r
-        submitSessionId = currentSessionId;\r
-        clientTimingCtx.sessionId = submitSessionId || clientTimingCtx.sessionId;\r
-        reportClientPipelineStep(clientTimingCtx, 'create_new_session', _clientStepStart, { ok: !!submitSessionId });\r
-        if (!submitSessionId) return;\r
-        if (!transferSendPipelineLock(sendPipelineLock, submitSessionId)) return;\r
-        if (ac.signal.aborted) return;\r
-        if (optimisticNewSessionRun === optimisticRunState) optimisticNewSessionRun = null;\r
-        setSessionRunState(submitSessionId, optimisticRunState);\r
-        setSendButtonState();\r
-        syncSessionListIndicatorClasses();\r
-    }\r
-    clientTimingCtx.sessionId = submitSessionId || clientTimingCtx.sessionId;\r
-    const runSessionId = submitSessionId;\r
-    submittedRunSessionId = runSessionId;\r
-    if (typeof clearSessionStreamStopSuppress === 'function') clearSessionStreamStopSuppress(runSessionId);\r
-    reportClientPipelineStep(clientTimingCtx, 'prepare_client_run_id', _clientStepStart);\r
-    _clientStepStart = nowPipelineMs();\r
-    let preCount = await getUiEventCount(submitSessionId, {\r
-        preferCache: true,\r
-        maxAgeMs: 10000,\r
-        signal: ac.signal,\r
-        timeoutMs: 5000\r
-    });\r
-    if (ac.signal.aborted) return;\r
-    const existingStreamForIndex = (submitSessionId === currentSessionId) ? getVisibleChatStream() : null;\r
-    if (existingStreamForIndex) {\r
-        existingStreamForIndex.querySelectorAll('.msg-wrap--user[data-event-index]').forEach(function (wrap) {\r
-            const n = Number(wrap.getAttribute('data-event-index'));\r
-            if (Number.isFinite(n)) preCount = Math.max(preCount, Math.floor(n) + 1);\r
-        });\r
-    }\r
-    reportClientPipelineStep(clientTimingCtx, 'resolve_ui_event_count', _clientStepStart, { preCount: preCount });\r
-    _clientStepStart = nowPipelineMs();\r
-    if (sessionStore && typeof sessionStore.resetSseSeq === 'function') {\r
-        sessionStore.resetSseSeq(runSessionId);\r
-    }\r
-    reportClientPipelineStep(clientTimingCtx, 'prepare_sse_sequence_state', _clientStepStart);\r
-\r
-    /* 用户在 createNewSession / getUiEventCount 期间切走：\r
-       后台仍然发起 /chat（消息已属于 runSessionId），但不要往当前可见 stream 画用户气泡。 */\r
-    const switchedAway = currentSessionId !== runSessionId;\r
-    let runCtx;\r
-    if (switchedAway) {\r
-        const offscreen = document.createElement('div');\r
-        offscreen.className = 'chat-stream is-offscreen';\r
-        offscreen.dataset.partialBackgroundRun = '1';\r
-        if (typeof offscreenRoot !== 'undefined' && offscreenRoot) offscreenRoot.appendChild(offscreen);\r
-        runCtx = newDomContext(offscreen);\r
-    } else {\r
-        if (!getVisibleChatStream()) ensureVisibleChatStreamSlot();\r
-        runCtx = newDomContext(getVisibleChatStream());\r
-    }\r
-    _clientStepStart = nowPipelineMs();\r
-    submittedRunCtx = runCtx;\r
-    runCtx.runId = clientRunId;\r
-    initRunFinalTracking(runCtx);\r
-    runCtx.runStartedAt = userSentAt;\r
-    runCtx.lastUserEventIndex = preCount;\r
-    resetLlmState(runCtx);\r
-    finalizeLlmStreamChunks(runCtx);\r
-    sealProcessGroup(runCtx);\r
-    optimisticRunState.ctx = runCtx;\r
-    optimisticRunState.optimistic = false;\r
-    setSessionRunState(runSessionId, optimisticRunState);\r
-    setSendButtonState();\r
-    syncSessionListIndicatorClasses();\r
-    reportClientPipelineStep(clientTimingCtx, 'prepare_run_context', _clientStepStart, { switchedAway: !!switchedAway });\r
-    _clientStepStart = nowPipelineMs();\r
+async function sendFollowupNow(itemId, sessionId) {
+    const sid = String(sessionId || currentSessionId || '');
+    return withFollowupDispatch(sid, function () { return sendFollowupNowImpl(itemId, sessionId); });
+}
+
+async function sendMessage(options) {
+    options = options || {};
+    if (!options.fromQueue && !options.fromInlineRewrite && isChatFileUploadBusy()) return;
+    const clientPipelineStartedAt = nowPipelineMs();
+    let clientTimingCtx = {
+        label: 'client_send_pipeline_step_timing',
+        sessionId: options.sessionId || currentSessionId || '',
+        runId: '',
+        mode: options.asSteer ? 'followup_steer' : (options.fromQueue ? 'followup_queue' : (options.fromInlineRewrite ? 'inline_rewrite' : 'chat')),
+        startedAt: clientPipelineStartedAt
+    };
+    let _clientStepStart = clientPipelineStartedAt;
+    messageLoadEpoch += 1;
+    /* 立即快照「提交会话」：之后所有 await 都不能改变它，避免用户在 await 空隙切走后消息发到新会话。
+       关键不变式：runSessionId === submitSessionId 全程恒等。 */
+    const submitSessionIdInitial = options.sessionId || currentSessionId;
+    if (!options.fromQueue && !options.fromInlineRewrite) rewriteInputWorkspacePaths();
+    const visibleMessage = options.message != null ? String(options.message) : messageInput.value;
+    const rawMessage = (options.fromQueue || options.fromInlineRewrite) ? visibleMessage : expandInputPathTokens(visibleMessage);
+    if (!String(rawMessage).trim()) return;
+    if (isSessionRunning(submitSessionIdInitial) && !options.forceStart) return;
+    if (isSendPipelineLocked(submitSessionIdInitial)) return;
+    if (options.forceStart && submitSessionIdInitial) {
+        var previousRun = getSessionRunState(submitSessionIdInitial);
+        if (previousRun) abortSessionRun(submitSessionIdInitial, 'followup-restart');
+    }
+    var selectedSkillsForRun = [];
+    if (Array.isArray(options.selectedSkills)) {
+        selectedSkillsForRun = options.selectedSkills.map(function (skill) { return String(skill || '').trim(); }).filter(Boolean);
+    } else if (!options.fromQueue && !options.fromInlineRewrite && typeof window.consumeSelectedSkillsForSend === 'function') {
+        selectedSkillsForRun = window.consumeSelectedSkillsForSend();
+    }
+    var uiBaseMessage = options.displayMessage != null ? String(options.displayMessage) : rawMessage;
+    var displayMessage = buildSelectedSkillsDisplayMessage(uiBaseMessage, selectedSkillsForRun);
+    reportClientPipelineStep(clientTimingCtx, 'preflight_checks', _clientStepStart, {
+        forceStart: !!options.forceStart,
+        fromQueue: !!options.fromQueue,
+        fromInlineRewrite: !!options.fromInlineRewrite,
+        asSteer: !!options.asSteer
+    });
+
+    /* 立即上锁：阻止后续连击；锁的 key 是提交时的会话，而非当前会话。 */
+    _clientStepStart = nowPipelineMs();
+    const sendPipelineLock = acquireSendPipelineLock(submitSessionIdInitial);
+    if (!sendPipelineLock) return;
+    let submittedRunCtx = null;
+    let submittedRunSessionId = submitSessionIdInitial;
+    _clientStepStart = nowPipelineMs();
+    const clientRunId = options.clientRunId || ((window.crypto && window.crypto.randomUUID)
+        ? window.crypto.randomUUID()
+        : ('run-' + Date.now() + '-' + Math.random().toString(16).slice(2)));
+    clientTimingCtx.runId = clientRunId;
+    const ac = new AbortController();
+    var optimisticRunState = {
+        controller: ac,
+        ctx: null,
+        runId: clientRunId,
+        optimistic: true,
+        submitted: false,
+        suppressFollowupButton: true
+    };
+    // Publish before rewrite truncation, session creation, event-count reads,
+    // or any other network await so every send path flips in the same frame.
+    if (submitSessionIdInitial) {
+        if (typeof clearSessionStreamStopSuppress === 'function') clearSessionStreamStopSuppress(submitSessionIdInitial);
+        setSessionRunState(submitSessionIdInitial, optimisticRunState);
+    } else {
+        optimisticNewSessionRun = optimisticRunState;
+    }
+    setSendButtonState();
+    syncSessionListIndicatorClasses();
+    reportClientPipelineStep(clientTimingCtx, 'publish_optimistic_run_state', _clientStepStart);
+    try {
+    reportClientPipelineStep(clientTimingCtx, 'acquire_send_lock', _clientStepStart);
+
+    if (pendingRewriteTruncate && pendingRewriteTruncate.sessionId === submitSessionIdInitial) {
+        _clientStepStart = nowPipelineMs();
+        const pendingRewrite = pendingRewriteTruncate;
+        const truncated = await processRewriteTruncateAsync(pendingRewrite);
+        reportClientPipelineStep(clientTimingCtx, 'pending_rewrite_truncate', _clientStepStart, { ok: !!truncated });
+        if (!truncated) {
+            pendingRewriteTruncate = null;
+            return;
+        }
+        pendingRewriteTruncate = null;
+        uiEventCountCache.updateFromServer(submitSessionIdInitial, pendingRewrite.before);
+        if (ac.signal.aborted) return;
+    }
+    hideRewriteUndoToast();
+
+    hideSubagentContinueBanner();
+    const userSentAt = new Date().toISOString();
+
+    let submitSessionId = submitSessionIdInitial;
+    if (!submitSessionId) {
+        _clientStepStart = nowPipelineMs();
+        await createNewSession();
+        submitSessionId = currentSessionId;
+        clientTimingCtx.sessionId = submitSessionId || clientTimingCtx.sessionId;
+        reportClientPipelineStep(clientTimingCtx, 'create_new_session', _clientStepStart, { ok: !!submitSessionId });
+        if (!submitSessionId) return;
+        if (!transferSendPipelineLock(sendPipelineLock, submitSessionId)) return;
+        if (ac.signal.aborted) return;
+        if (optimisticNewSessionRun === optimisticRunState) optimisticNewSessionRun = null;
+        setSessionRunState(submitSessionId, optimisticRunState);
+        setSendButtonState();
+        syncSessionListIndicatorClasses();
+    }
+    clientTimingCtx.sessionId = submitSessionId || clientTimingCtx.sessionId;
+    const runSessionId = submitSessionId;
+    submittedRunSessionId = runSessionId;
+    if (typeof clearSessionStreamStopSuppress === 'function') clearSessionStreamStopSuppress(runSessionId);
+    reportClientPipelineStep(clientTimingCtx, 'prepare_client_run_id', _clientStepStart);
+    _clientStepStart = nowPipelineMs();
+    let preCount = await getUiEventCount(submitSessionId, {
+        preferCache: true,
+        maxAgeMs: 10000,
+        signal: ac.signal,
+        timeoutMs: 5000
+    });
+    if (ac.signal.aborted) return;
+    const existingStreamForIndex = (submitSessionId === currentSessionId) ? getVisibleChatStream() : null;
+    if (existingStreamForIndex) {
+        existingStreamForIndex.querySelectorAll('.msg-wrap--user[data-event-index]').forEach(function (wrap) {
+            const n = Number(wrap.getAttribute('data-event-index'));
+            if (Number.isFinite(n)) preCount = Math.max(preCount, Math.floor(n) + 1);
+        });
+    }
+    reportClientPipelineStep(clientTimingCtx, 'resolve_ui_event_count', _clientStepStart, { preCount: preCount });
+    _clientStepStart = nowPipelineMs();
+    if (sessionStore && typeof sessionStore.resetSseSeq === 'function') {
+        sessionStore.resetSseSeq(runSessionId);
+    }
+    reportClientPipelineStep(clientTimingCtx, 'prepare_sse_sequence_state', _clientStepStart);
+
+    /* 用户在 createNewSession / getUiEventCount 期间切走：
+       后台仍然发起 /chat（消息已属于 runSessionId），但不要往当前可见 stream 画用户气泡。 */
+    const switchedAway = currentSessionId !== runSessionId;
+    let runCtx;
+    if (switchedAway) {
+        const offscreen = document.createElement('div');
+        offscreen.className = 'chat-stream is-offscreen';
+        offscreen.dataset.partialBackgroundRun = '1';
+        if (typeof offscreenRoot !== 'undefined' && offscreenRoot) offscreenRoot.appendChild(offscreen);
+        runCtx = newDomContext(offscreen);
+    } else {
+        if (!getVisibleChatStream()) ensureVisibleChatStreamSlot();
+        runCtx = newDomContext(getVisibleChatStream());
+    }
+    _clientStepStart = nowPipelineMs();
+    submittedRunCtx = runCtx;
+    runCtx.runId = clientRunId;
+    initRunFinalTracking(runCtx);
+    runCtx.runStartedAt = userSentAt;
+    runCtx.lastUserEventIndex = preCount;
+    resetLlmState(runCtx);
+    finalizeLlmStreamChunks(runCtx);
+    sealProcessGroup(runCtx);
+    optimisticRunState.ctx = runCtx;
+    optimisticRunState.optimistic = false;
+    setSessionRunState(runSessionId, optimisticRunState);
+    setSendButtonState();
+    syncSessionListIndicatorClasses();
+    reportClientPipelineStep(clientTimingCtx, 'prepare_run_context', _clientStepStart, { switchedAway: !!switchedAway });
+    _clientStepStart = nowPipelineMs();
     const renderAsSteer = !!options.asSteer;
     if (!renderAsSteer) {
         applySessionEvent({ type: 'user', content: displayMessage, created_at: userSentAt }, {
@@ -14710,9 +15526,9 @@ async function sendMessage(options) {\r
             source: 'local-send',
         });
     }
-    uiEventCountCache.updateFromServer(runSessionId, preCount + 1);\r
-    if (!switchedAway) {\r
-        liveAutoFollow = true;\r
+    uiEventCountCache.updateFromServer(runSessionId, preCount + 1);
+    if (!switchedAway) {
+        liveAutoFollow = true;
         streamChatNearBottom = true;
         streamProcNearBottom = true;
         if (renderAsSteer) {
@@ -14731,76 +15547,76 @@ async function sendMessage(options) {\r
                 if (optimisticSteerId) optimisticSteerRow.dataset.steerId = optimisticSteerId;
             }
         } else {
-            appendMessage(runCtx, 'user', displayMessage, { eventIndex: preCount, turnTruncateIdx: preCount, createdAt: userSentAt }, runSessionId);\r
-        }\r
-        if (!options.fromQueue && !options.preserveInput) {\r
-            messageInput.value = '';\r
-            persistInputDraft(runSessionId, '');\r
-            clearInputPathTokens();\r
-            autoResizeTextarea();\r
-            setSendButtonState();\r
-        }\r
-    }\r
-    optimisticRunState.suppressFollowupButton = false;\r
-    setSendButtonState();\r
-    updateSidebarLastUserPreviewImmediate(runSessionId, displayMessage);\r
-    lastUserMessageBySession[runSessionId] = displayMessage;\r
-    reportClientPipelineStep(clientTimingCtx, 'local_user_render', _clientStepStart, { renderAsSteer: !!renderAsSteer, switchedAway: !!switchedAway });\r
-    _clientStepStart = nowPipelineMs();\r
-    const formData = new FormData();\r
-    formData.append('message', rawMessage);\r
-    // The backend owns durable UI-message decoration. Sending the undecorated\r
-    // value keeps the optimistic row and the reloaded history identical.\r
-    formData.append('ui_message', uiBaseMessage);\r
-    formData.append('session_id', runSessionId);\r
-    formData.append('client_run_id', clientRunId);\r
-    formData.append('stream_protocol', 'runtime_v2');\r
-    if (selectedSkillsForRun && selectedSkillsForRun.length) {\r
-        formData.append('selected_skills', JSON.stringify(selectedSkillsForRun));\r
-    }\r
-    if (renderAsSteer) formData.append('followup_steer', 'true');\r
-    if (renderAsSteer && options.steerId) formData.append('steer_id', String(options.steerId));\r
-    /* 发送后优先使用本轮 API usage/cache_stats 刷新 token；缺少 usage 时仍保留上一快照。 */\r
-    if (!switchedAway) applyContextTokenLabelForCurrentSession();\r
-    let streamEventIdx = preCount + 1;\r
-    let streamDisconnectedUnexpectedly = false;\r
-    try {\r
-        reportClientPipelineStep(clientTimingCtx, 'build_form_data', _clientStepStart, { followupSteer: !!renderAsSteer });\r
-        _clientStepStart = nowPipelineMs();\r
-        optimisticRunState.submitted = true;\r
-        let response = null;\r
-        for (let migrationAttempt = 0; migrationAttempt < 120; migrationAttempt += 1) {\r
-            response = await fetch('/chat', { method: 'POST', body: formData, signal: ac.signal });\r
-            if (response.status !== 425) break;\r
-            const pending = await response.json().catch(function () { return null; });\r
-            if (!pending || pending.reason !== 'runtime_migration_pending') break;\r
-            if (migrationAttempt >= 119) {\r
-                rollbackOptimisticUserEvent(runSessionId, preCount);\r
-                throw new Error('Runtime V2 migration timed out');\r
-            }\r
-            const retryMs = Math.max(100, Math.min(Number(pending.retry_after_ms) || 250, 1000));\r
-            await new Promise(function (resolve) { setTimeout(resolve, retryMs); });\r
-        }\r
-        reportClientPipelineStep(clientTimingCtx, 'fetch_chat_response_headers', _clientStepStart, { status: response && response.status });\r
-        _clientStepStart = nowPipelineMs();\r
-        if (response.status === 409) {\r
-            streamDisconnectedUnexpectedly = true;\r
-            rollbackOptimisticUserEvent(runSessionId, preCount);\r
-            if (!options.fromQueue && isMyAgentFeatureEnabled('followupRestart', false)) {\r
-                appendFollowupQueueItem(\r
-                    runSessionId,\r
-                    rawMessage,\r
-                    displayMessage,\r
-                    selectedSkillsForRun\r
-                );\r
-            } else if (!options.fromQueue && runSessionId === currentSessionId) {\r
-                messageInput.value = visibleMessage;\r
-                persistInputDraft(runSessionId, visibleMessage);\r
-                if (typeof window.setSelectedSkillsForCurrentSession === 'function') {\r
-                    window.setSelectedSkillsForCurrentSession(selectedSkillsForRun);\r
-                }\r
-                autoResizeTextarea();\r
-            }\r
+            appendMessage(runCtx, 'user', displayMessage, { eventIndex: preCount, turnTruncateIdx: preCount, createdAt: userSentAt }, runSessionId);
+        }
+        if (!options.fromQueue && !options.preserveInput) {
+            messageInput.value = '';
+            persistInputDraft(runSessionId, '');
+            clearInputPathTokens();
+            autoResizeTextarea();
+            setSendButtonState();
+        }
+    }
+    optimisticRunState.suppressFollowupButton = false;
+    setSendButtonState();
+    updateSidebarLastUserPreviewImmediate(runSessionId, displayMessage);
+    lastUserMessageBySession[runSessionId] = displayMessage;
+    reportClientPipelineStep(clientTimingCtx, 'local_user_render', _clientStepStart, { renderAsSteer: !!renderAsSteer, switchedAway: !!switchedAway });
+    _clientStepStart = nowPipelineMs();
+    const formData = new FormData();
+    formData.append('message', rawMessage);
+    // The backend owns durable UI-message decoration. Sending the undecorated
+    // value keeps the optimistic row and the reloaded history identical.
+    formData.append('ui_message', uiBaseMessage);
+    formData.append('session_id', runSessionId);
+    formData.append('client_run_id', clientRunId);
+    formData.append('stream_protocol', 'runtime_v2');
+    if (selectedSkillsForRun && selectedSkillsForRun.length) {
+        formData.append('selected_skills', JSON.stringify(selectedSkillsForRun));
+    }
+    if (renderAsSteer) formData.append('followup_steer', 'true');
+    if (renderAsSteer && options.steerId) formData.append('steer_id', String(options.steerId));
+    /* 发送后优先使用本轮 API usage/cache_stats 刷新 token；缺少 usage 时仍保留上一快照。 */
+    if (!switchedAway) applyContextTokenLabelForCurrentSession();
+    let streamEventIdx = preCount + 1;
+    let streamDisconnectedUnexpectedly = false;
+    try {
+        reportClientPipelineStep(clientTimingCtx, 'build_form_data', _clientStepStart, { followupSteer: !!renderAsSteer });
+        _clientStepStart = nowPipelineMs();
+        optimisticRunState.submitted = true;
+        let response = null;
+        for (let migrationAttempt = 0; migrationAttempt < 120; migrationAttempt += 1) {
+            response = await fetch('/chat', { method: 'POST', body: formData, signal: ac.signal });
+            if (response.status !== 425) break;
+            const pending = await response.json().catch(function () { return null; });
+            if (!pending || pending.reason !== 'runtime_migration_pending') break;
+            if (migrationAttempt >= 119) {
+                rollbackOptimisticUserEvent(runSessionId, preCount);
+                throw new Error('Runtime V2 migration timed out');
+            }
+            const retryMs = Math.max(100, Math.min(Number(pending.retry_after_ms) || 250, 1000));
+            await new Promise(function (resolve) { setTimeout(resolve, retryMs); });
+        }
+        reportClientPipelineStep(clientTimingCtx, 'fetch_chat_response_headers', _clientStepStart, { status: response && response.status });
+        _clientStepStart = nowPipelineMs();
+        if (response.status === 409) {
+            streamDisconnectedUnexpectedly = true;
+            rollbackOptimisticUserEvent(runSessionId, preCount);
+            if (!options.fromQueue && isMyAgentFeatureEnabled('followupRestart', false)) {
+                appendFollowupQueueItem(
+                    runSessionId,
+                    rawMessage,
+                    displayMessage,
+                    selectedSkillsForRun
+                );
+            } else if (!options.fromQueue && runSessionId === currentSessionId) {
+                messageInput.value = visibleMessage;
+                persistInputDraft(runSessionId, visibleMessage);
+                if (typeof window.setSelectedSkillsForCurrentSession === 'function') {
+                    window.setSelectedSkillsForCurrentSession(selectedSkillsForRun);
+                }
+                autoResizeTextarea();
+            }
             scheduleActiveSessionReconnect(runSessionId, { delayMs: 0 });
             return false;
         }
@@ -14816,225 +15632,225 @@ async function sendMessage(options) {\r
             }
         }
         streamEventIdx = await consumeAgentSseResponse(response, runCtx, runSessionId, streamEventIdx);
-        reportClientPipelineStep(clientTimingCtx, 'consume_sse_until_done', _clientStepStart, { streamEventIdx: streamEventIdx });\r
-        return true;\r
-    } catch (error) {\r
-        reportClientPipelineStep(clientTimingCtx, 'chat_fetch_or_sse_error', _clientStepStart, { error: (error && error.message) ? String(error.message) : String(error) });\r
-        if (error.name === 'AbortError') {\r
-            if (getRunAbortReason(runSessionId, runCtx) === 'user') appendLog(runCtx, '任务已中断', 'status', runSessionId);\r
-        }\r
-        else {\r
-            console.error('请求失败:', error);\r
-            streamDisconnectedUnexpectedly = true;\r
-            const msg = (error && error.message) ? String(error.message) : String(error);\r
-            appendLog(runCtx, '请求失败: ' + msg, 'error-log', runSessionId);\r
-        }\r
-        return false;\r
-    } finally {\r
-        _clientStepStart = nowPipelineMs();\r
-        finalizeLlmStreamChunks(runCtx);\r
-        finalizeProgressStreamChunks(runCtx);\r
-        if (!switchedAway && runSessionId === currentSessionId && getRunAbortReason(runSessionId, runCtx) !== 'user') {\r
-            scheduleFinalVisibleAfterRunIfEnabled(runSessionId, runCtx, { delayMs: 120 });\r
-        }\r
-        if (runSessionId === currentSessionId) renderTodoPlanForCurrentSession();\r
-        if (liveAutoFollow && !switchedAway) {\r
-            scrollProcessBodyToBottom(runCtx, runSessionId);\r
-            scrollChatToBottomIfFollow(runSessionId, {});\r
-        }\r
-        if (runSessionId !== currentSessionId) {\r
-            void tryMarkSessionUnreadComplete(runSessionId);\r
-        } else {\r
-            clearSessionUnreadState(runSessionId);\r
-            updateSubagentContinueBanner(runSessionId);\r
-        }\r
-        if (getSessionRunState(runSessionId)) {\r
-            clearSessionRunStateIfMatch(runSessionId, clientRunId);\r
-        }\r
-        if (streamDisconnectedUnexpectedly && runSessionId === currentSessionId && getRunAbortReason(runSessionId, runCtx) !== 'user') {\r
-            scheduleActiveSessionReconnect(runSessionId, { delayMs: 500 });\r
-            scheduleActiveSessionReconnect(runSessionId, { delayMs: 2500 });\r
-        }\r
-        if (runSessionId !== currentSessionId) {\r
-            const el = runCtx.stream;\r
-            if (el && el.parentNode) el.remove();\r
-        }\r
-        setSendButtonState();\r
-        syncSessionListIndicatorClasses();\r
-        void refreshSingleSessionRow(runSessionId);\r
-        applyContextTokenLabelForCurrentSession();\r
-        if (runSessionId === currentSessionId && countRunningSubagentCards() > 0) {\r
-            scheduleSubagentIncrementalSync();\r
-        }\r
-        reportClientPipelineStep(clientTimingCtx, 'finalize_visible_state', _clientStepStart, {\r
-            disconnected: !!streamDisconnectedUnexpectedly,\r
-            currentSession: runSessionId === currentSessionId\r
-        });\r
-    }\r
-    } finally {\r
-        _clientStepStart = nowPipelineMs();\r
-        if (optimisticNewSessionRun === optimisticRunState) optimisticNewSessionRun = null;\r
-        if (optimisticRunState && optimisticRunState.submitted === false && submittedRunSessionId) {\r
-            clearSessionRunStateIfMatch(submittedRunSessionId, optimisticRunState.runId);\r
-        }\r
-        releaseSendPipelineLock(sendPipelineLock);\r
-        var stoppedByUser = getRunAbortReason(submittedRunSessionId, submittedRunCtx) === 'user'\r
-            || (optimisticRunState && optimisticRunState.abortReason === 'user');\r
-        reportClientPipelineStep(clientTimingCtx, 'release_send_lock', _clientStepStart, {\r
-            stoppedByUser: !!stoppedByUser,\r
-            fromQueue: !!options.fromQueue\r
-        });\r
-        setSendButtonState();\r
-        syncSessionListIndicatorClasses();\r
-        if (!stoppedByUser && getFollowupQueue(submittedRunSessionId).length) {\r
-            renderFollowupQueue(submittedRunSessionId);\r
-        }\r
-    }\r
-}\r
-\r
-messageInput.addEventListener('keydown', function onFollowupInputKeydown(e) {\r
-    if (!isMyAgentFeatureEnabled('followupRestart', false)) return;\r
-    if (e.key !== 'Enter') return;\r
-    e.stopImmediatePropagation();\r
-    if (e.ctrlKey && !e.shiftKey && !e.metaKey) {\r
-        const start = this.selectionStart;\r
-        const end = this.selectionEnd;\r
-        this.value = this.value.substring(0, start) + '\\n' + this.value.substring(end);\r
-        this.selectionStart = this.selectionEnd = start + 1;\r
-        e.preventDefault();\r
-        autoResizeTextarea();\r
-        return;\r
-    }\r
-    if (e.shiftKey) return;\r
-    if (isChatFileUploadBusy()) {\r
-        e.preventDefault();\r
-        return;\r
-    }\r
-    e.preventDefault();\r
-    if (isSessionRunning(currentSessionId)) {\r
-        enqueueCurrentInputAsFollowup();\r
-        return;\r
-    }\r
-    sendMessage();\r
-}, true);\r
-\r
-messageInput.addEventListener('keydown', function onInputKeydown(e) {\r
-    if (e.key !== 'Enter') return;\r
-    // Ctrl+Enter → 插入换行（跨浏览器兼容）\r
-    if (e.ctrlKey && !e.shiftKey && !e.metaKey) {\r
-        const start = this.selectionStart;\r
-        const end = this.selectionEnd;\r
-        this.value = this.value.substring(0, start) + '\\n' + this.value.substring(end);\r
-        this.selectionStart = this.selectionEnd = start + 1;\r
-        e.preventDefault();\r
-        autoResizeTextarea();\r
-        return;\r
-    }\r
-    // Shift+Enter → 浏览器默认插入换行\r
-    if (e.shiftKey) return;\r
-    if (isChatFileUploadBusy()) {\r
-        e.preventDefault();\r
-        return;\r
-    }\r
-    // 纯 Enter → 发送\r
-    if (isSessionRunning(currentSessionId)) return;\r
-    e.preventDefault();\r
-    sendMessage();\r
-});\r
-chatContainer.addEventListener('scroll', function () {\r
-    refreshLiveAutoFollowPins();\r
-    scheduleTocActiveUpdate();\r
-    maybeAutoLoadOlderHistory();\r
-}, { passive: true });\r
-sendBtn.addEventListener('click', function (e) {\r
-    e.stopImmediatePropagation();\r
-    if (!currentSessionId && optimisticNewSessionRun) {\r
-        pauseCurrentRun();\r
-        return;\r
-    }\r
-    if (isSessionRunning(currentSessionId)) {\r
-        const activeRun = getSessionRunState(currentSessionId);\r
-        const canQueueFollowup = isMyAgentFeatureEnabled('followupRestart', false)\r
-            && inputHasSendableText()\r
-            && !isChatFileUploadBusy()\r
-            && !(activeRun && activeRun.suppressFollowupButton);\r
-        if (canQueueFollowup) enqueueCurrentInputAsFollowup();\r
-        else pauseCurrentRun();\r
-        return;\r
-    }\r
-    sendMessage();\r
-}, true);\r
-sendBtn.addEventListener('click', function () {\r
-    if ((!currentSessionId && optimisticNewSessionRun) || isSessionRunning(currentSessionId)) pauseCurrentRun();\r
-    else sendMessage();\r
-});\r
-window.addEventListener('resize', positionFollowupQueuePanel);\r
-window.addEventListener('scroll', positionFollowupQueuePanel, true);\r
-(function bindRewriteUndo() {\r
-    const toast = document.getElementById('rewrite-undo-toast');\r
-    const btn = toast && toast.querySelector('.rewrite-undo-btn');\r
-    if (!btn) return;\r
-    btn.addEventListener('click', async function (e) {\r
-        e.preventDefault();\r
-        if (!rewriteUndoState) { hideRewriteUndoToast(); return; }\r
-        const s = rewriteUndoState;\r
-        if (s.type === 'rewrite_pending') {\r
-            const prevIn = (s.data && s.data.prevInput != null) ? s.data.prevInput : '';\r
-            messageInput.value = prevIn;\r
-            rewriteInputWorkspacePaths();\r
-            autoResizeTextarea();\r
-            messageInput.focus();\r
-            pendingRewriteTruncate = null;\r
-            hideRewriteUndoToast();\r
-            return;\r
-        }\r
-        if (s.type === 'input' && s.data) {\r
-            messageInput.value = s.data.prev;\r
-            rewriteInputWorkspacePaths();\r
-            autoResizeTextarea();\r
-            messageInput.focus();\r
-            hideRewriteUndoToast();\r
-            return;\r
-        }\r
-        if (s.type === 'tail' && s.data && s.data.sessionId && s.data.tail && s.data.tail.length) {\r
-            try {\r
-                const r = await historyOperationJson(\r
-                    '/sessions/' + encodeURIComponent(s.data.sessionId) + '/append_ui_events',\r
-                    { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ events: s.data.tail }) },\r
-                    45000\r
-                );\r
-                if (!r || !r.ok) { alert('撤销失败，请重试。'); return; }\r
-                if (s.data.sessionId === currentSessionId) {\r
-                    showLoading();\r
-                    try {\r
-                        await loadSessionMessages(s.data.sessionId, 'bottom', { full: true });\r
-                    } finally {\r
-                        hideLoading();\r
-                    }\r
-                }\r
-            } catch (err) { console.error(err); alert('撤销失败，请重试。'); return; }\r
-        }\r
-        hideRewriteUndoToast();\r
-    });\r
-})();\r
-(function bindSubagentContinueBannerOnce() {\r
-    if (window.__myAgentSubagentContinueBound) return;\r
-    window.__myAgentSubagentContinueBound = true;\r
-    var btn = document.getElementById('subagent-continue-btn');\r
-    var dismissBtn = document.getElementById('subagent-continue-dismiss');\r
-    if (btn) btn.addEventListener('click', function (e) {\r
-        e.preventDefault();\r
-        if (!currentSessionId || subagentContinueInFlight) return;\r
-        void startContinueAfterSubagents(currentSessionId);\r
-    });\r
-    if (dismissBtn) dismissBtn.addEventListener('click', function (e) {\r
-        e.preventDefault();\r
-        e.stopPropagation();\r
-        dismissSubagentContinueBanner(currentSessionId);\r
-    });\r
-})();\r
-initUiHoverTips(document);\r
-`,an=`newSessionBtn.addEventListener('click', async () => { await createNewSession(); });
+        reportClientPipelineStep(clientTimingCtx, 'consume_sse_until_done', _clientStepStart, { streamEventIdx: streamEventIdx });
+        return true;
+    } catch (error) {
+        reportClientPipelineStep(clientTimingCtx, 'chat_fetch_or_sse_error', _clientStepStart, { error: (error && error.message) ? String(error.message) : String(error) });
+        if (error.name === 'AbortError') {
+            if (getRunAbortReason(runSessionId, runCtx) === 'user') appendLog(runCtx, '任务已中断', 'status', runSessionId);
+        }
+        else {
+            console.error('请求失败:', error);
+            streamDisconnectedUnexpectedly = true;
+            const msg = (error && error.message) ? String(error.message) : String(error);
+            appendLog(runCtx, '请求失败: ' + msg, 'error-log', runSessionId);
+        }
+        return false;
+    } finally {
+        _clientStepStart = nowPipelineMs();
+        finalizeLlmStreamChunks(runCtx);
+        finalizeProgressStreamChunks(runCtx);
+        if (!switchedAway && runSessionId === currentSessionId && getRunAbortReason(runSessionId, runCtx) !== 'user') {
+            scheduleFinalVisibleAfterRunIfEnabled(runSessionId, runCtx, { delayMs: 120 });
+        }
+        if (runSessionId === currentSessionId) renderTodoPlanForCurrentSession();
+        if (liveAutoFollow && !switchedAway) {
+            scrollProcessBodyToBottom(runCtx, runSessionId);
+            scrollChatToBottomIfFollow(runSessionId, {});
+        }
+        if (runSessionId !== currentSessionId) {
+            void tryMarkSessionUnreadComplete(runSessionId);
+        } else {
+            clearSessionUnreadState(runSessionId);
+            updateSubagentContinueBanner(runSessionId);
+        }
+        if (getSessionRunState(runSessionId)) {
+            clearSessionRunStateIfMatch(runSessionId, clientRunId);
+        }
+        if (streamDisconnectedUnexpectedly && runSessionId === currentSessionId && getRunAbortReason(runSessionId, runCtx) !== 'user') {
+            scheduleActiveSessionReconnect(runSessionId, { delayMs: 500 });
+            scheduleActiveSessionReconnect(runSessionId, { delayMs: 2500 });
+        }
+        if (runSessionId !== currentSessionId) {
+            const el = runCtx.stream;
+            if (el && el.parentNode) el.remove();
+        }
+        setSendButtonState();
+        syncSessionListIndicatorClasses();
+        void refreshSingleSessionRow(runSessionId);
+        applyContextTokenLabelForCurrentSession();
+        if (runSessionId === currentSessionId && countRunningSubagentCards() > 0) {
+            scheduleSubagentIncrementalSync();
+        }
+        reportClientPipelineStep(clientTimingCtx, 'finalize_visible_state', _clientStepStart, {
+            disconnected: !!streamDisconnectedUnexpectedly,
+            currentSession: runSessionId === currentSessionId
+        });
+    }
+    } finally {
+        _clientStepStart = nowPipelineMs();
+        if (optimisticNewSessionRun === optimisticRunState) optimisticNewSessionRun = null;
+        if (optimisticRunState && optimisticRunState.submitted === false && submittedRunSessionId) {
+            clearSessionRunStateIfMatch(submittedRunSessionId, optimisticRunState.runId);
+        }
+        releaseSendPipelineLock(sendPipelineLock);
+        var stoppedByUser = getRunAbortReason(submittedRunSessionId, submittedRunCtx) === 'user'
+            || (optimisticRunState && optimisticRunState.abortReason === 'user');
+        reportClientPipelineStep(clientTimingCtx, 'release_send_lock', _clientStepStart, {
+            stoppedByUser: !!stoppedByUser,
+            fromQueue: !!options.fromQueue
+        });
+        setSendButtonState();
+        syncSessionListIndicatorClasses();
+        if (!stoppedByUser && getFollowupQueue(submittedRunSessionId).length) {
+            renderFollowupQueue(submittedRunSessionId);
+        }
+    }
+}
+
+messageInput.addEventListener('keydown', function onFollowupInputKeydown(e) {
+    if (!isMyAgentFeatureEnabled('followupRestart', false)) return;
+    if (e.key !== 'Enter') return;
+    e.stopImmediatePropagation();
+    if (e.ctrlKey && !e.shiftKey && !e.metaKey) {
+        const start = this.selectionStart;
+        const end = this.selectionEnd;
+        this.value = this.value.substring(0, start) + '\\n' + this.value.substring(end);
+        this.selectionStart = this.selectionEnd = start + 1;
+        e.preventDefault();
+        autoResizeTextarea();
+        return;
+    }
+    if (e.shiftKey) return;
+    if (isChatFileUploadBusy()) {
+        e.preventDefault();
+        return;
+    }
+    e.preventDefault();
+    if (isSessionRunning(currentSessionId)) {
+        enqueueCurrentInputAsFollowup();
+        return;
+    }
+    sendMessage();
+}, true);
+
+messageInput.addEventListener('keydown', function onInputKeydown(e) {
+    if (e.key !== 'Enter') return;
+    // Ctrl+Enter → 插入换行（跨浏览器兼容）
+    if (e.ctrlKey && !e.shiftKey && !e.metaKey) {
+        const start = this.selectionStart;
+        const end = this.selectionEnd;
+        this.value = this.value.substring(0, start) + '\\n' + this.value.substring(end);
+        this.selectionStart = this.selectionEnd = start + 1;
+        e.preventDefault();
+        autoResizeTextarea();
+        return;
+    }
+    // Shift+Enter → 浏览器默认插入换行
+    if (e.shiftKey) return;
+    if (isChatFileUploadBusy()) {
+        e.preventDefault();
+        return;
+    }
+    // 纯 Enter → 发送
+    if (isSessionRunning(currentSessionId)) return;
+    e.preventDefault();
+    sendMessage();
+});
+chatContainer.addEventListener('scroll', function () {
+    refreshLiveAutoFollowPins();
+    scheduleTocActiveUpdate();
+    maybeAutoLoadOlderHistory();
+}, { passive: true });
+sendBtn.addEventListener('click', function (e) {
+    e.stopImmediatePropagation();
+    if (!currentSessionId && optimisticNewSessionRun) {
+        pauseCurrentRun();
+        return;
+    }
+    if (isSessionRunning(currentSessionId)) {
+        const activeRun = getSessionRunState(currentSessionId);
+        const canQueueFollowup = isMyAgentFeatureEnabled('followupRestart', false)
+            && inputHasSendableText()
+            && !isChatFileUploadBusy()
+            && !(activeRun && activeRun.suppressFollowupButton);
+        if (canQueueFollowup) enqueueCurrentInputAsFollowup();
+        else pauseCurrentRun();
+        return;
+    }
+    sendMessage();
+}, true);
+sendBtn.addEventListener('click', function () {
+    if ((!currentSessionId && optimisticNewSessionRun) || isSessionRunning(currentSessionId)) pauseCurrentRun();
+    else sendMessage();
+});
+window.addEventListener('resize', positionFollowupQueuePanel);
+window.addEventListener('scroll', positionFollowupQueuePanel, true);
+(function bindRewriteUndo() {
+    const toast = document.getElementById('rewrite-undo-toast');
+    const btn = toast && toast.querySelector('.rewrite-undo-btn');
+    if (!btn) return;
+    btn.addEventListener('click', async function (e) {
+        e.preventDefault();
+        if (!rewriteUndoState) { hideRewriteUndoToast(); return; }
+        const s = rewriteUndoState;
+        if (s.type === 'rewrite_pending') {
+            const prevIn = (s.data && s.data.prevInput != null) ? s.data.prevInput : '';
+            messageInput.value = prevIn;
+            rewriteInputWorkspacePaths();
+            autoResizeTextarea();
+            messageInput.focus();
+            pendingRewriteTruncate = null;
+            hideRewriteUndoToast();
+            return;
+        }
+        if (s.type === 'input' && s.data) {
+            messageInput.value = s.data.prev;
+            rewriteInputWorkspacePaths();
+            autoResizeTextarea();
+            messageInput.focus();
+            hideRewriteUndoToast();
+            return;
+        }
+        if (s.type === 'tail' && s.data && s.data.sessionId && s.data.tail && s.data.tail.length) {
+            try {
+                const r = await historyOperationJson(
+                    '/sessions/' + encodeURIComponent(s.data.sessionId) + '/append_ui_events',
+                    { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ events: s.data.tail }) },
+                    45000
+                );
+                if (!r || !r.ok) { alert('撤销失败，请重试。'); return; }
+                if (s.data.sessionId === currentSessionId) {
+                    showLoading();
+                    try {
+                        await loadSessionMessages(s.data.sessionId, 'bottom', { full: true });
+                    } finally {
+                        hideLoading();
+                    }
+                }
+            } catch (err) { console.error(err); alert('撤销失败，请重试。'); return; }
+        }
+        hideRewriteUndoToast();
+    });
+})();
+(function bindSubagentContinueBannerOnce() {
+    if (window.__myAgentSubagentContinueBound) return;
+    window.__myAgentSubagentContinueBound = true;
+    var btn = document.getElementById('subagent-continue-btn');
+    var dismissBtn = document.getElementById('subagent-continue-dismiss');
+    if (btn) btn.addEventListener('click', function (e) {
+        e.preventDefault();
+        if (!currentSessionId || subagentContinueInFlight) return;
+        void startContinueAfterSubagents(currentSessionId);
+    });
+    if (dismissBtn) dismissBtn.addEventListener('click', function (e) {
+        e.preventDefault();
+        e.stopPropagation();
+        dismissSubagentContinueBanner(currentSessionId);
+    });
+})();
+initUiHoverTips(document);
+`,on=`newSessionBtn.addEventListener('click', async () => { await createNewSession(); });
 
 function initSidebarSash() {
     const side = document.getElementById('sidebar');
@@ -15263,8 +16079,8 @@ if (typeof globalThis !== 'undefined') {
     globalThis.toggleTodoPlanPanel = toggleTodoPlanPanel;
     globalThis.toggleTocPanel = toggleTocPanel;
 }
-`,on=[Ae,Le,Pe,Re,Fe,Me,Be,Ne,Oe,De,Ue,qe,He,je,We,Ve,Ge,ze,Ke,Qe,$e,Ye,Xe,Ze,Je,en,nn,tn,rn,sn,an];Function(`"use strict";
-`+on.join(`
+`,ln=[Ae,Le,Pe,Re,Fe,Me,Be,Ne,Oe,qe,De,Ue,He,je,We,Ve,Ge,ze,Ke,Qe,$e,Xe,Ye,Ze,Je,en,nn,tn,rn,sn,an,on];Function(`"use strict";
+`+ln.join(`
 
 `)+`
 //# sourceURL=myagent-ui.js`)();typeof initUiHoverTips=="function"&&initUiHoverTips(document);

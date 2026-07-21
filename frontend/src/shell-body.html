@@ -6,8 +6,8 @@
                     <div class="sidebar-brand-icon" aria-hidden="true"><img src="/assets/sugar-logo.png" alt="" draggable="false"></div>
                     <div class="sidebar-brand-copy">
                         <div class="sidebar-brand-text">General Agent</div>
-                        <div class="sidebar-brand-sub" aria-label="Self-Upgrade General Agent - 自优化通用智能平台" data-ui-tip="Self-Upgrade General Agent - 自优化通用智能平台" title="Self-Upgrade General Agent - 自优化通用智能平台">
-                            <span class="sidebar-brand-sub-line sidebar-brand-sub-line--en">Self-Upgrade General Agent</span>
+                        <div class="sidebar-brand-sub" aria-label="Self-Upgrade General Agent Runtime - 自优化通用智能平台" data-ui-tip="Self-Upgrade General Agent Runtime - 自优化通用智能平台" title="Self-Upgrade General Agent Runtime - 自优化通用智能平台">
+                            <span class="sidebar-brand-sub-line sidebar-brand-sub-line--en">Self-Upgrade General Agent Runtime</span>
                             <span class="sidebar-brand-sub-line sidebar-brand-sub-line--zh">自优化通用智能平台</span>
                         </div>
                     </div>
@@ -100,6 +100,11 @@
 
                 <div class="panel" role="form">
                     <div class="panel-inner">
+                        <div id="human-interaction-banner" class="human-interaction-banner hidden" role="status" aria-live="polite">
+                            <span class="human-interaction-banner-mark" aria-hidden="true">?</span>
+                            <span class="human-interaction-banner-msg"></span>
+                            <button type="button" id="human-interaction-banner-btn" class="human-interaction-banner-btn">立即处理</button>
+                        </div>
                         <div id="subagent-continue-banner" class="subagent-continue-banner hidden" role="status" aria-live="polite">
                             <span class="subagent-continue-banner-msg"></span>
                             <button type="button" id="subagent-continue-btn" class="subagent-continue-banner-btn">继续综合子任务</button>
@@ -197,10 +202,6 @@
                     <button type="button" id="settings-env-advanced" class="settings-advanced-btn">高级设置</button>
                     <div style="margin-top:.45rem;color:var(--text-tertiary);font-size:0.72rem;line-height:1.45;">编辑完整 .env，保存后立即写回磁盘（部分项需重启服务）。</div>
                     <div style="margin-top:.45rem;color:var(--text-tertiary);font-size:0.72rem;line-height:1.45;">如需帮助或反馈，请联系GitHub @sugarfreeecho</div>
-                </div>
-                <div class="settings-modal__section">
-                    <div class="settings-modal__label">Hooks / Plugins</div>
-                    <button type="button" id="settings-extensions" class="settings-advanced-btn">扩展管理</button>
                 </div>
             </div>
         </div>

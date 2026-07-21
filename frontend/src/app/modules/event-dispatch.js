@@ -1,6 +1,10 @@
 function renderEvent(ctx, event, eventIndex, runSessionId) {
     if (!event || typeof event !== 'object') return;
     var eventSessionId = runSessionId || currentSessionId || '';
+    if (typeof isHumanInteractionEventType === 'function' && isHumanInteractionEventType(event.type)) {
+        renderHumanInteractionEvent(ctx, event, eventSessionId);
+        return;
+    }
     if (eventSessionId && !event.__storeApplied) {
         applyMessageEvent(eventSessionId, event, eventIndex, replayingMessages ? 'history' : 'stream');
         if (event.type === 'subagent_start' || event.type === 'subagent_finish'

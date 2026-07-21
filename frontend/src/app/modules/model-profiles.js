@@ -2,6 +2,7 @@ let modelProfilesCache = null;
 const modelProfilesRefreshPromises = Object.create(null);
 const modelProfileBusyBySession = Object.create(null);
 const modelProfileIdBySession = Object.create(null);
+const modelProfileToggleBusy = Object.create(null);
 let modelProfileSelectionEpoch = 0;
 let activeModelProfileId = '';
 
@@ -44,9 +45,13 @@ async function loadModelProfilesForSwitcher() {
     return data;
 }
 
-function allProfiles() {
+function storedProfiles() {
     if (!modelProfilesCache) return [];
-    return (modelProfilesCache.profiles || []).filter((profile) => profile && profile.usable !== false);
+    return (modelProfilesCache.profiles || []).filter((profile) => profile);
+}
+
+function allProfiles() {
+    return storedProfiles().filter((profile) => profile.enabled !== false && profile.usable !== false);
 }
 
 function activeProfile() {
@@ -97,10 +102,10 @@ function renderModelProfileControl() {
     var e = els();
     if (!e.trigger || !e.current || !e.menu) return;
     var active = activeProfile();
-    e.current.textContent = active ? profileLabel(active) : '未加载模型配置';
+    e.current.textContent = active ? profileLabel(active) : '没有启用的模型配置';
     e.trigger.removeAttribute('title');
     e.trigger.removeAttribute('data-ui-tip');
-    var profiles = allProfiles();
+    var profiles = storedProfiles();
     if (!profiles.length) {
         e.menu.innerHTML = '<button type="button" class="composer-model-option" disabled><span class="composer-model-option-name">没有可用模型配置</span></button>';
         return;
@@ -109,14 +114,15 @@ function renderModelProfileControl() {
     for (var i = 0; i < profiles.length; i += 1) {
         var p = profiles[i] || {};
         var id = String(p.id || '');
+        var enabled = p.enabled !== false;
         var activeCls = id === String(activeModelProfileId || '') ? ' is-active' : '';
-        html += '<button type="button" class="composer-model-option' + activeCls + '" role="option" data-profile-id="' + h(id) + '">'
+        html += '<div class="composer-model-option-row' + (enabled ? '' : ' is-disabled') + '">'
+            + '<button type="button" class="composer-model-option' + activeCls + '" role="option" data-profile-id="' + h(id) + '"' + (enabled ? '' : ' disabled') + '>'
             + '<span class="composer-model-option-name">' + h(profileLabel(p)) + '</span>'
             + '<span class="composer-model-option-meta">' + h(profileMeta(p)) + '</span>'
-            + '</button>';
-    }
-    if (!(modelProfilesCache.profiles || []).length) {
-        html += '<button type="button" class="composer-model-option" disabled><span class="composer-model-option-meta">暂无已保存模型配置，可到模型配置页中保存</span></button>';
+            + '</button>'
+            + '<button type="button" class="composer-model-toggle" data-toggle-profile-id="' + h(id) + '" data-enabled="' + (enabled ? 'true' : 'false') + '">' + (enabled ? '禁用' : '启用') + '</button>'
+            + '</div>';
     }
     e.menu.innerHTML = html;
     e.menu.querySelectorAll('[data-profile-id]').forEach((btn) => {
@@ -125,6 +131,35 @@ function renderModelProfileControl() {
             closeModelMenu();
         });
     });
+    e.menu.querySelectorAll('[data-toggle-profile-id]').forEach((btn) => {
+        btn.addEventListener('click', () => {
+            var enabled = btn.getAttribute('data-enabled') !== 'true';
+            setModelProfileEnabled(btn.getAttribute('data-toggle-profile-id') || '', enabled);
+        });
+    });
+}
+
+async function setModelProfileEnabled(profileId, enabled) {
+    const id = String(profileId || '');
+    const sid = String(currentSessionId || '');
+    if (!id || modelProfileToggleBusy[id]) return;
+    modelProfileToggleBusy[id] = true;
+    try {
+        var response = await fetch('/api/model_profiles/' + encodeURIComponent(id) + '/enabled', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'same-origin',
+            body: JSON.stringify({ enabled: enabled === true }),
+        });
+        var data = await response.json();
+        if (!data || !data.ok) throw new Error((data && data.error) || '模型配置启停失败');
+        await refreshModelProfileSelector(sid, { silent: true });
+        openModelMenu();
+    } catch (err) {
+        if (typeof appendLogVisible === 'function') appendLogVisible('模型配置启停失败: ' + String(err.message || err), 'error-log');
+    } finally {
+        delete modelProfileToggleBusy[id];
+    }
 }
 
 function renderModelProfileLoadingMenu() {

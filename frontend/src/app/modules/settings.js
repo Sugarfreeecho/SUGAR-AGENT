@@ -266,17 +266,5 @@ function initUiSettingsControls() {
         if (w) { try { w.focus(); } catch (e) {} }
         else window.location.href = '/execution-dashboard';
     });
-    var extensionsBtn = document.getElementById('settings-extensions');
-    if (extensionsBtn) extensionsBtn.addEventListener('click', function () {
-        closeSettingsModal();
-        var extensionsUrl = '/setup/env';
-        if (typeof currentSessionId !== 'undefined' && currentSessionId) {
-            extensionsUrl += '?session_id=' + encodeURIComponent(String(currentSessionId));
-        }
-        extensionsUrl += '#extensions';
-        var w = window.open(extensionsUrl, 'myagent-extensions');
-        if (w) { try { w.focus(); } catch (e) {} }
-        else window.location.href = extensionsUrl;
-    });
 }
 initUiSettingsControls();

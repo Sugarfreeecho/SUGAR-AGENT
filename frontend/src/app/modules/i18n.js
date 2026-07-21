@@ -42,6 +42,26 @@ const UI_TRANSLATIONS_EN = {
     '展开': 'Expand', '收起': 'Collapse', '复制': 'Copy', '改写': 'Rewrite', '重试': 'Retry'
 };
 Object.assign(UI_TRANSLATIONS_EN, {
+    // Todo / goal panel
+    '已完成': 'Completed', '进行中': 'In progress', '待处理': 'Pending', '已暂停': 'Paused', '已阻塞': 'Blocked', '已取消': 'Cancelled',
+    '无限制': 'Unlimited', '分钟': 'min', '续跑': 'Continue run', '增加预算并继续': 'Increase budget and continue',
+    '继续': 'Continue', 'Token 预算已耗尽': 'Token budget exhausted', '连续运行失败': 'Consecutive run failures', '手动暂停': 'Paused manually',
+    '请输入要增加的 Token 预算': 'Enter additional Token budget', '预算必须是大于 0 的整数。': 'Budget must be an integer greater than 0.',
+    'Goal 操作失败': 'Goal operation failed', '目标操作失败': 'Goal operation failed', '待办事项': 'Todo items',
+    '规划': 'Plan', '计划': 'Plan', '清除当前计划': 'Clear current plan',
+    // Runtime status lines
+    '正在思考中...': 'Thinking...', '正在重连': 'Reconnecting', '任务已中断': 'Task interrupted',
+    '已请求停止当前任务': 'Stop requested for the current task', '解析事件失败': 'Failed to parse event',
+    '验证': 'Verification', '正在根据对话更新要点': 'Updating key points from the conversation',
+    '上下文窗口已满，开始压缩': 'Context window full; starting compression', '上下文压缩已完成': 'Context compression completed',
+    '上下文摘要': 'Context summary', '要点': 'Key points', '历史/旧版事件': 'History/legacy event',
+    '立即发送': 'Send now', '追问发送模式': 'Follow-up send mode', '打断': 'Interrupt', '追加': 'Append', '撤回': 'Withdraw',
+    '撤回中': 'Withdrawing', '提交中': 'Submitting', '已追加，等待下一轮': 'Appended, waiting for the next round',
+    '已接收，等待插入': 'Received, waiting to insert', '正在接管当前任务': 'Taking over the current task', '发送中': 'Sending', '已发送': 'Sent', '待发送': 'Pending send',
+    '已选择 Skill：': 'Selected Skill: ', '追问接管已保留，等待发送通道释放。': 'Follow-up takeover retained; waiting for the send channel to become available.',
+    '请求失败': 'Request failed', '撤销失败，请重试。': 'Undo failed. Please try again.'
+});
+Object.assign(UI_TRANSLATIONS_EN, {
     '新会话': 'New session', '停止 <span class="loader">': 'Stop <span class="loader">', '加载会话': 'Load session',
     '取消置顶': 'Unpin', '取消归档': 'Unarchive', '删除会话': 'Delete session', '此操作不可恢复': 'This action cannot be undone',
     '无法同步服务器。': 'Could not sync with the server.', '当前没有选中的会话。': 'No session is currently selected.',
@@ -91,10 +111,11 @@ Object.assign(UI_TRANSLATIONS_EN, {
 
     // Model and skill controls
     '默认方案': 'Default profile', '未命名方案': 'Unnamed profile', '未加载模型配置': 'Model configuration not loaded',
-    '没有可用模型配置': 'No model configurations available',
+    '没有可用模型配置': 'No model configurations available', '没有启用的模型配置': 'No enabled model profiles',
     '暂无已保存模型配置，可到模型配置页中保存': 'No saved model configurations. Save one on the model configuration page.',
     '请稍候': 'Please wait', '模型配置加载失败': 'Failed to load model configuration', '切换失败': 'Switch failed',
-    'Skill 加载失败': 'Failed to load skills',
+    'Skill 加载失败': 'Failed to load skills', '启用': 'Enable', '禁用': 'Disable',
+    '模型配置启停失败': 'Failed to change model profile status', 'Skill 启停失败': 'Failed to change Skill status',
 
     // Messages, history and composer
     '开始一段新的对话': 'Start a new conversation',
@@ -163,10 +184,15 @@ function translateUiString(value) {
     if (exact) return exact;
     return String(value)
         .replace(/^更早 (\d+) 轮对话$/, 'Earlier $1 conversations')
+        .replace(/^(\d+) \/ (\d+) 已完成$/, '$1 / $2 completed')
+        .replace(/^(\d+) \/ (\d+) 完成$/, '$1 / $2 completed')
+        .replace(/^(\d+)分钟$/, '$1 min')
+        .replace(/^(\d+) 分钟$/, '$1 min')
         .replace(/^已选择 (\d+) 个 Skill$/, '$1 skills selected')
         .replace(/^已选择 (\d+) 项$/, '$1 items selected')
         .replace(/^正在上传 (\d+) 个文件… (\d+)%$/, 'Uploading $1 files… $2%')
         .replace(/^已选 (\d+) \/ 共 (\d+)$/, '$1 selected / $2 total')
+        .replace(/^已选 (\d+) \/ 已启用 (\d+) \/ 共 (\d+)$/, '$1 selected / $2 enabled / $3 total')
         .replace(/^加载失败: (.+)$/, 'Failed to load: $1')
         .replace(/^请求失败: (.+)$/, 'Request failed: $1')
         .replace(/^无法打开：(.+)$/, 'Could not open: $1')
@@ -176,17 +202,79 @@ function translateUiString(value) {
         .replace(/^失败 (\d+) 次$/, '$1 failures')
         .replace(/工具\s*(\d+)\s*次/g, '$1 tool calls')
         .replace(/失败\s*(\d+)\s*次/g, '$1 failures')
-        .replace(/(\d+)\s*轮/g, '$1 rounds')
+        .replace(/(\d+)\s*分\s*(\d+)\s*秒/g, '$1m $2s')
         .replace(/^(\d+) 轮$/, '$1 rounds')
         .replace(/^(\d+)分(\d+)秒$/, '$1m $2s')
         .replace(/^调用工具 (.+) (\d+)次$/, 'Called tool $1 $2 times')
         .replace(/^检测到系统睡眠约 (\d+) 秒，任务已恢复$/, 'System sleep detected for about $1 seconds; task resumed')
         .replace(/^检测到 Agent 进程暂停约 (\d+) 秒，任务已恢复$/, 'Agent process pause detected for about $1 seconds; task resumed')
         .replace(/^模型配置切换失败: (.+)$/, 'Failed to switch model configuration: $1')
+        .replace(/^模型配置启停失败: (.+)$/, 'Failed to change model profile status: $1')
+        .replace(/^Skill 启停失败：(.+)$/, 'Failed to change Skill status: $1')
         .replace(/^续接失败: (.+)$/, 'Failed to continue: $1')
         .replace(/^恢复实时流失败: (.+)$/, 'Failed to restore live stream: $1')
         .replace(/^追问插入失败: (.+)$/, 'Failed to insert follow-up: $1')
         .replace(/^追问已被接收，无法撤回: (.+)$/, 'The follow-up was accepted and cannot be withdrawn: $1')
+        .replace(/^验证：(.+)$/, 'Verification: $1')
+        .replace(/【上下文窗口已满，开始压缩】/g, '[Context window full; starting compression]')
+        .replace(/【上下文压缩已完成】/g, '[Context compression completed]')
+        .replace(/【上下文摘要】/g, '[Context summary]')
+        .replace(/【上下文裁剪】/g, '[Context trimming]')
+        .replace(/【要点】/g, '[Key points]')
+        .replace(/上下文窗口已满，开始压缩/g, 'Context window full; starting compression')
+        .replace(/上下文压缩已完成/g, 'Context compression completed')
+        .replace(/正在进行上下文裁剪以控制 token（可能需数秒，请稍候）…/g, 'Trimming context to control tokens (this may take a few seconds; please wait)…')
+        .replace(/摘要模型仍在生成或等待响应中，请稍候…/g, 'The summary model is still generating or waiting for a response; please wait…')
+        .replace(/模型仍在更新要点或等待响应中，请稍候…/g, 'The model is still updating key points or waiting for a response; please wait…')
+        .replace(/已完成上下文裁剪与摘要以控制长度/g, 'Context trimming and summarization completed to control length')
+        .replace(/已完成上下文裁剪以控制长度/g, 'Context trimming completed to control length')
+        .replace(/正在分析上下文并准备本地裁剪…/g, 'Analyzing context and preparing local trimming…')
+        .replace(/正在执行本地裁剪与微压…/g, 'Performing local trimming and micro-compression…')
+        .replace(/已对非关键信息进行裁剪/g, 'Non-critical information trimmed')
+        .replace(/正在收敛较早段落中的 ReAct 过程…/g, 'Consolidating ReAct steps in earlier sections…')
+        .replace(/已对较早段落中的思考过程进行裁剪/g, 'Reasoning in earlier sections trimmed')
+        .replace(/裁剪后仍超限，开始生成历史摘要…/g, 'Still over the limit after trimming; generating a history summary…')
+        .replace(/没有足够可摘要的历史前缀，已转入截尾兜底。/g, 'Not enough history prefix to summarize; switching to tail truncation fallback.')
+        .replace(/没有足够可摘要的历史前缀，继续尝试更窄尾窗…/g, 'Not enough history prefix to summarize; trying a narrower tail window…')
+        .replace(/可摘要历史不足，已丢弃更早对话（保留至多约半窗 token 的尾部）。/g, 'Not enough history to summarize; discarded earlier messages and kept up to roughly half a window of recent tokens.')
+        .replace(/可摘要历史不足；对话已在半窗预算内未再截断。/g, 'Not enough history to summarize; the conversation was not truncated further within the half-window budget.')
+        .replace(/摘要输出格式重试后仍无效，已改用摘录兜底。/g, 'The summary output remained invalid after retries; using an excerpt fallback.')
+        .replace(/第 (\d+) 次摘要输出格式无效，已丢弃并准备重试…/g, 'Summary output for attempt $1 was invalid, discarded, and will be retried…')
+        .replace(/摘要模型调用失败，已改用摘录兜底：/g, 'Summary model call failed; using an excerpt fallback: ')
+        .replace(/流程异常，已切换为失败兜底截尾。/g, 'The process encountered an error; switched to the failure fallback truncation.')
+        .replace(/当前上下文无需进一步裁剪或摘要/g, 'The current context needs no further trimming or summarization')
+        .replace(/正在进行上下文裁剪（可能需数秒，请稍候）…/g, 'Trimming context (this may take a few seconds; please wait)…')
+        .replace(/第 (\d+) 轮：正在生成历史摘要与要点…/g, 'Round $1: generating history summary and key points…')
+        .replace(/第 (\d+) 轮摘要完成/g, 'Round $1 summary completed')
+        .replace(/第 (\d+) 轮要点已写入/g, 'Key points for round $1 written')
+        .replace(/正在根据编辑说明更新要点…/g, 'Updating key points from the edit instructions…')
+        .replace(/已按说明更新要点/g, 'Key points updated according to the instructions')
+        .replace(/完成 (\d+) 轮历史摘要；完成关键 信息、经验与结论 的记录/g, 'Completed $1 rounds of history summarization; recorded key information, experience, and conclusions')
+        .replace(/本轮未能继续缩小本地上下文，已转入安全兜底。/g, 'This round could not reduce local context further; switched to safe fallback.')
+        .replace(/已完成配置的 (\d+) 轮且尚未达到压缩比，继续进行增量摘要…/g, 'Completed the configured $1 rounds without reaching the compression ratio; continuing incremental summarization…')
+        .replace(/连续摘要未再缩小本地上下文（已尝试 (\d+) 轮）/g, 'Repeated summarization did not reduce local context further (tried $1 rounds)')
+        .replace(/摘要未达到目标压缩比（已尝试 (\d+) 轮）/g, 'Summary did not reach the target compression ratio (tried $1 rounds)')
+        .replace(/已转入安全兜底截尾。/g, 'Switched to safe fallback truncation.')
+        .replace(/对话已在半窗预算内未再截断。/g, 'The conversation was not truncated further within the half-window budget.')
+        .replace(/上下文已按策略完成裁剪/g, 'Context trimmed according to policy')
+        .replace(/对话已摘要，关键信息已写入 key_context/g, 'Conversation summarized; key information written to key_context')
+        .replace(/\[系统通知：/g, '[System notice: ')
+        .replace(/\[压缩失败，保留截断原文片段\]/g, '[Compression failed; retaining a truncated excerpt]')
+        .replace(/检测到同会话仍有未结束的上下文压缩，等待其完成后再继续 ReAct。/g, 'An unfinished context compression was detected for this session; waiting for it to finish before continuing ReAct.')
+        .replace(/已按 CONTEXT_COMPRESS_FAILURE_MAX_TOKENS（与压缩失败兜底同款）裁剪对话尾部并继续本步/g, 'The conversation tail was trimmed using CONTEXT_COMPRESS_FAILURE_MAX_TOKENS (same as the compression-failure fallback), then this step continued')
+        .replace(/上下文已截尾（Conversation truncated）；更早内容请查本会话目录。/g, 'Context truncated (Conversation truncated); see the session directory for earlier content.')
+        .replace(/上下文已截尾（Conversation truncated），保留约半窗 token 尾部。/g, 'Context truncated (Conversation truncated), keeping roughly the last half-window of tokens.')
+        .replace(/已完成上下文裁剪与摘要/g, 'Context trimming and summarization completed')
+        .replace(/已完成上下文裁剪/g, 'Context trimming completed')
+        .replace(/【自动·长度策略】/g, '[Automatic length policy]')
+        .replace(/(\d+)\s*轮/g, '$1 rounds')
+        .replace(/正在根据对话更新要点/g, 'Updating key points from the conversation')
+        .replace(/正在思考中\.\.\./g, 'Thinking...')
+        .replace(/正在重连/g, 'Reconnecting')
+        .replace(/^\[历史\/旧版事件\] (.+)$/, '[History/legacy event] $1')
+        .replace(/^已选择 Skill：(.+)$/, 'Selected Skill: $1')
+        .replace(/^追问暂未发出（发送通道繁忙），已保留待重试: (.+)$/, 'Follow-up not sent (send channel busy); retained for retry: $1')
+        .replace(/^追问降级发送未成功，已保留待重试: (.+)$/, 'Fallback follow-up send failed; retained for retry: $1')
         .replace(/^思·/, 'Reasoning · ')
         .replace(/^答·/, 'Response · ')
         .replace(/^平均 (.+)$/, 'Average $1')

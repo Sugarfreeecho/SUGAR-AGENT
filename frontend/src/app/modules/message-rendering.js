@@ -3297,6 +3297,7 @@ function createProcessFeedRow(ctx, type, initialText, streamOpts, runSessionId, 
     bindFeedChunkInteraction(chunk);
     bindFeedChunkScrollChain(sc);
     body.appendChild(row);
+    if (typeof translateUiNode === 'function') translateUiNode(row);
     if (ctx && ctx.currentTurn && body.classList && body.classList.contains('subagent-turn-process')) {
         markSubagentTurnHasProcess(ctx.currentTurn);
     }
@@ -3838,6 +3839,7 @@ function appendProgressLog(ctx, content, logType, runSessionId) {
     if (prev && prev.isConnected) {
         var prevTxt = prev.textContent || '';
         prev.textContent = truncateLogTextForUi(prevTxt ? (prevTxt + '\n' + line) : line);
+        if (typeof translateUiNode === 'function') translateUiNode(prev);
         var chMerge = prev.closest('.feed-chunk');
         if (chMerge) {
             refreshFeedChunkOverflow(chMerge);
@@ -3849,6 +3851,7 @@ function appendProgressLog(ctx, content, logType, runSessionId) {
     var sc = ensureProgressScroller(ctx, logType, runSessionId);
     if (!sc) return;
     sc.textContent = truncateLogTextForUi(line);
+    if (typeof translateUiNode === 'function') translateUiNode(sc);
     var chNew = sc.closest('.feed-chunk');
     if (chNew) {
         refreshFeedChunkOverflow(chNew);

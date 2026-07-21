@@ -93,6 +93,8 @@ function endRunForClient(sessionId, ctx, opts) {
     opts = opts || {};
     var sid = String(sessionId || '');
     if (!sid) return;
+    var allowFollowupDrain = opts.drainFollowup !== false
+        && getRunAbortReason(sid, ctx) !== 'user';
     finalizeLlmStreamChunks(ctx);
     finalizeProgressStreamChunks(ctx);
     if (opts.reconcileFinal !== false) {
@@ -107,10 +109,19 @@ function endRunForClient(sessionId, ctx, opts) {
     setSendButtonState();
     if (sid === currentSessionId) renderTodoPlanForCurrentSession();
     if (opts.syncFollowup !== false && typeof syncFollowupQueueFromServer === 'function') {
-        // 先同步服务端状态（清理已 consumed/cancelled、补齐服务端已接收条目），
-        // 同步只刷新状态，pending 条目仍需用户显式点击发送。
-        // Reconcile status only. Never transmit a pending row from completion.
-        void syncFollowupQueueFromServer(sid);
+        // 终止边界必须先与服务端对账，再决定是否自动续发队首 pending。
+        // 入队和普通同步本身都不具备发送权限。
+        var followupSync = syncFollowupQueueFromServer(sid);
+        if (allowFollowupDrain) {
+            void Promise.resolve(followupSync).then(function () {
+                scheduleFollowupQueueDrain(sid, opts.followupDelayMs || 0);
+            }).catch(function (error) {
+                // 未完成服务端对账时不能把“未知状态”当作发送许可。
+                console.warn('follow-up reconciliation failed; auto-drain skipped', error);
+            });
+        }
+    } else if (allowFollowupDrain) {
+        scheduleFollowupQueueDrain(sid, opts.followupDelayMs || 0);
     }
     if (liveAutoFollow && opts.scroll !== false) {
         scrollProcessBodyToBottom(ctx, sid);
@@ -1517,7 +1528,60 @@ function removeConsumedFollowupSteer(sessionId, ev) {
     if (!item) return false;
     takeFollowupItem(sid, item.id);
     renderFollowupQueue(sid);
+    // 只发起一次门禁检查：活跃 run 会直接拦截；若终止事件先到、consumed 后到，
+    // 则允许已经结束的这一轮继续 FIFO 队首。
+    scheduleFollowupQueueDrain(sid, 0);
     return true;
+}
+
+function isFollowupAutoDrainReady(sessionId) {
+    var sid = String(sessionId || '');
+    return !!sid
+        && !(typeof isSessionStreamStopSuppressed === 'function' && isSessionStreamStopSuppressed(sid))
+        && !isSessionRunning(sid)
+        && !isServerStreamActive(sid)
+        && !isSendPipelineLocked(sid)
+        && !isFollowupDispatchBusy(sid);
+}
+
+function scheduleFollowupQueueDrain(sessionId, delayMs) {
+    var sid = String(sessionId || '');
+    if (!sid) return;
+    var delay = Math.max(0, Number(delayMs) || 0);
+    var dueAt = Date.now() + delay;
+    var existing = followupDrainTimers[sid];
+    if (existing && existing.dueAt <= dueAt) return;
+    if (existing) clearTimeout(existing.timer);
+    var timer = setTimeout(function () {
+        var current = followupDrainTimers[sid];
+        if (!current || current.timer !== timer) return;
+        delete followupDrainTimers[sid];
+        drainFollowupQueue(sid);
+    }, delay);
+    followupDrainTimers[sid] = { timer: timer, dueAt: dueAt };
+}
+
+function drainFollowupQueue(sessionId) {
+    var sid = String(sessionId || '');
+    if (!sid) return;
+    if (!isFollowupAutoDrainReady(sid)) {
+        // 活跃 run 会在自己的终止边界重新启动 drain；这里只重试瞬时的锁/dispatcher 竞争。
+        if (isSessionRunning(sid)
+            || isServerStreamActive(sid)
+            || (typeof isSessionStreamStopSuppressed === 'function' && isSessionStreamStopSuppressed(sid))) return;
+        scheduleFollowupQueueDrain(sid, 120);
+        return;
+    }
+    var q = getFollowupQueue(sid);
+    if (!q.length) { renderFollowupQueue(sid); return; }
+    var item = q[0];
+    if (!item || item.status) { renderFollowupQueue(sid); return; }
+    // 一个终止边界最多尝试一条。失败后 sendFollowupNow 会恢复 pending；
+    // 不在这里循环重试，避免网络错误造成请求风暴或重复执行。
+    void Promise.resolve(sendFollowupNow(item.id, sid))
+        .catch(function (error) {
+            console.error('follow-up auto-drain failed:', error);
+        });
 }
 
 function scheduleAcceptedFollowupWatch(sid, itemId) {
@@ -1555,6 +1619,7 @@ function scheduleAcceptedFollowupWatch(sid, itemId) {
                 takeFollowupItem(sid, itemId);
                 renderFollowupQueue(sid);
                 refreshPendingFollowupQueue(sid);
+                scheduleFollowupQueueDrain(sid, 0);
                 return;
             }
             if (serverState === 'cancelled' || serverState === 'failed') {

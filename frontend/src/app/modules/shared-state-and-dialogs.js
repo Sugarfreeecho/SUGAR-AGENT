@@ -8,6 +8,8 @@ const followupQueueLoadedBySession = Object.create(null);
 let followupQueueSeq = 1;
 const followupWatchTimers = Object.create(null);
 const followupServerSyncInFlight = Object.create(null);
+/** 会话级自动续发定时器；同一会话只保留一个最近到期的任务。 */
+const followupDrainTimers = Object.create(null);
 /** 会话级追问发送互斥链：显式立即发送共用，保证同一会话同一时刻只处理一条追问。 */
 const followupDispatchChain = Object.create(null);
 /** 会话在后台跑完后未点开过：侧栏绿点，点开即清除（localStorage 持久化，刷新不丢） */
