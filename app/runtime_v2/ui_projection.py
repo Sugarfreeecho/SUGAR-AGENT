@@ -681,6 +681,7 @@ class RuntimeUiProjection:
             wanted_start = 0
             wanted_len = total
         runtime_seqs = [int(value) for value in index.get("runtime_seqs") or []]
+        index_last_runtime_seq = max(0, int(index.get("last_runtime_seq") or 0))
         semantic_ops = {
             "legacy_truncate_observed",
             "visible_range_changed",
@@ -689,16 +690,31 @@ class RuntimeUiProjection:
         }
         if len(runtime_seqs) == total:
             boundary_seq = runtime_seqs[wanted_start - 1] if wanted_start > 0 else 0
-            indexed_runtime_events = self.event_log.read_after_seq(session_id, boundary_seq)
+            # The run may append another UI event after the index was read but
+            # before this tail query. Keep the page on the index's published
+            # boundary; otherwise ``indexed_ui[-wanted_len:]`` drops the first
+            # visible row (often the only user bubble) to make room for the
+            # concurrently appended event. The observer SSE delivers facts
+            # newer than this boundary immediately after the snapshot.
+            indexed_runtime_events = [
+                event
+                for event in self.event_log.read_after_seq(session_id, boundary_seq)
+                if int(event.seq) <= index_last_runtime_seq
+            ]
             if not any(event.type in semantic_ops for event in indexed_runtime_events):
-                indexed_ui = [
-                    ui
+                indexed_ui_by_seq = {
+                    int(event.seq): ui
                     for event in indexed_runtime_events
                     for ui in [self._event_to_ui(session_id, event)]
                     if ui is not None
+                }
+                wanted_runtime_seqs = runtime_seqs[wanted_start:]
+                selected = [
+                    indexed_ui_by_seq[seq]
+                    for seq in wanted_runtime_seqs
+                    if seq in indexed_ui_by_seq
                 ]
-                if len(indexed_ui) >= wanted_len:
-                    selected = indexed_ui[-wanted_len:] if wanted_len > 0 else []
+                if len(selected) == wanted_len:
                     return {
                         "events": selected,
                         "total": total,
@@ -719,6 +735,10 @@ class RuntimeUiProjection:
                 max_bytes=window,
                 max_events=max_events,
             )
+            runtime_events = [
+                event for event in runtime_events
+                if int(event.seq) <= index_last_runtime_seq
+            ]
             if not runtime_events:
                 return None
             if any(

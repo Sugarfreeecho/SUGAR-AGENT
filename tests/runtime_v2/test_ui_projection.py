@@ -337,6 +337,39 @@ class RuntimeUiProjectionTests(unittest.TestCase):
             self.assertEqual(page["events"][0]["content"], "u25")
             self.assertEqual(page["events"][-1]["content"], "a29")
 
+    def test_recent_turn_page_does_not_drop_user_when_event_appends_after_index_read(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            mirror = RuntimeMirror(tmp)
+            mirror.mirror_ui_event("s1", {"type": "user", "content": "keep-user"})
+            mirror.mirror_ui_event("s1", {"type": "status", "content": "working"})
+            projection = RuntimeUiProjection(tmp)
+            index = projection._read_or_build_ui_index("s1")
+            self.assertEqual(index["total"], 2)
+
+            original_read_after = projection.event_log.read_after_seq
+            appended = False
+
+            def append_during_indexed_read(session_id, after_seq):
+                nonlocal appended
+                if not appended:
+                    appended = True
+                    mirror.mirror_ui_event("s1", {"type": "llm_response", "content": "new-tail"})
+                return original_read_after(session_id, after_seq)
+
+            projection.event_log.read_after_seq = append_during_indexed_read
+            page = projection.read_ui_page("s1", turns=50)
+
+            self.assertEqual(page.get("source"), "runtime_v2_seq_index")
+            self.assertEqual(page["total"], 2)
+            self.assertEqual(
+                [(event["type"], event["content"]) for event in page["events"]],
+                [("user", "keep-user"), ("status", "working")],
+            )
+            self.assertEqual(
+                [event["content"] for event in projection.read_ui_events("s1")],
+                ["keep-user", "working", "new-tail"],
+            )
+
     def test_live_runtime_seq_projection_reads_only_new_facts(self):
         with tempfile.TemporaryDirectory() as tmp:
             mirror = RuntimeMirror(tmp)

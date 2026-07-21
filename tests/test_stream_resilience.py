@@ -69,6 +69,17 @@ def test_completed_tool_prunes_live_delta_snapshot():
         await bus.publish_session_event(
             sid,
             {
+                "type": "tool_pending",
+                "ephemeral": True,
+                "react_iter": 1,
+                "tool_call_id": "call-prune",
+                "tool": "task",
+                "args": {},
+            },
+        )
+        await bus.publish_session_event(
+            sid,
+            {
                 "type": "tool_call",
                 "react_iter": 1,
                 "tool_call_id": "call-prune",
@@ -81,9 +92,100 @@ def test_completed_tool_prunes_live_delta_snapshot():
             for event in bus._recent_ephemeral.get(sid, ())
             if event.get("type") == "tool_call_delta"
         ]
+        assert not bus._live_state_snapshots.get(sid)
         await bus.close_session_stream(sid)
 
     asyncio.run(scenario())
+
+
+def test_refresh_replay_keeps_running_tool_after_many_stream_chunks():
+    import session_event_bus as bus
+
+    async def scenario():
+        sid = "stream-replay-running-tool"
+        await bus.close_session_stream(sid)
+        await bus.publish_session_event(
+            sid,
+            {
+                "type": "tool_pending",
+                "ephemeral": True,
+                "react_iter": 3,
+                "tool_call_index": 0,
+                "tool_call_id": "call-running",
+                "tool": "run_shell",
+                "args": {"command": "long-running"},
+            },
+        )
+        for index in range(800):
+            await bus.publish_session_event(
+                sid,
+                {
+                    "type": "tool_command_delta",
+                    "ephemeral": True,
+                    "react_iter": 3,
+                    "tool_call_id": "call-running",
+                    "stream_seq": 1,
+                    "delta_seq": index + 1,
+                    "delta": str(index % 10),
+                },
+            )
+        subscription = bus.subscribe_session_events(sid, replay_recent=True)
+        first = await asyncio.wait_for(subscription.__anext__(), timeout=1)
+        second = await asyncio.wait_for(subscription.__anext__(), timeout=1)
+        await subscription.aclose()
+        await bus.close_session_stream(sid)
+        return [first, second]
+
+    replay = asyncio.run(scenario())
+    assert [event["type"] for event in replay] == ["tool_pending", "tool_command_delta"]
+    assert replay[0]["tool_call_id"] == "call-running"
+    assert replay[1]["delta"] == "".join(str(i % 10) for i in range(800))
+
+
+def test_refresh_replay_compacts_thinking_status_and_clears_it_on_delta():
+    import session_event_bus as bus
+
+    async def replay_all(sid, count):
+        subscription = bus.subscribe_session_events(sid, replay_recent=True)
+        rows = []
+        for _ in range(count):
+            rows.append(await asyncio.wait_for(subscription.__anext__(), timeout=1))
+        await subscription.aclose()
+        return rows
+
+    async def scenario():
+        sid = "stream-replay-thinking-status"
+        await bus.close_session_stream(sid)
+        for index in range(30):
+            await bus.publish_session_event(
+                sid,
+                {
+                    "type": "status",
+                    "content": "正在思考中...",
+                    "ephemeral": True,
+                    "heartbeat": index,
+                },
+            )
+        compacted = await replay_all(sid, 1)
+        await bus.publish_session_event(
+            sid,
+            {
+                "type": "llm_reasoning_delta",
+                "delta": "reasoning",
+                "ephemeral": True,
+                "react_iter": 1,
+                "stream_seq": 1,
+                "delta_seq": 1,
+            },
+        )
+        after_delta = await replay_all(sid, 1)
+        await bus.close_session_stream(sid)
+        return compacted, after_delta
+
+    compacted, after_delta = asyncio.run(scenario())
+    assert [event["type"] for event in compacted] == ["status"]
+    assert compacted[0]["heartbeat"] == 29
+    assert [event["type"] for event in after_delta] == ["llm_reasoning_delta"]
 
 
 def test_session_event_bus_wakes_subscriber_on_a_different_event_loop():

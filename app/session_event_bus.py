@@ -9,6 +9,7 @@ from typing import Any, AsyncGenerator, Deque, Dict, Set, Tuple
 _subscribers: Dict[str, Set[Tuple[asyncio.Queue, asyncio.AbstractEventLoop]]] = defaultdict(set)
 _recent_ephemeral: Dict[str, Deque[dict]] = defaultdict(lambda: deque(maxlen=400))
 _live_delta_snapshots: Dict[str, Dict[Tuple[Any, ...], dict]] = defaultdict(dict)
+_live_state_snapshots: Dict[str, Dict[Tuple[Any, ...], dict]] = defaultdict(dict)
 _seq_by_session: Dict[str, int] = defaultdict(int)
 _lock = threading.Lock()
 
@@ -18,6 +19,8 @@ _SNAPSHOT_DELTA_FIELDS = {
     "tool_call_delta": ("name_delta", "arguments_delta"),
     "tool_command_delta": ("delta", "command_delta"),
 }
+
+_LIVE_STATE_TYPES = {"tool_pending"}
 
 
 def _sid(session_id: str) -> str:
@@ -39,14 +42,40 @@ async def publish_session_event(session_id: str, event: Dict[str, Any]) -> None:
         event["seq_scope"] = "event_bus"
         event["seq"] = event_bus_seq
         if event.get("ephemeral"):
-            _recent_ephemeral[sid].append(dict(event))
-            _accumulate_live_delta_unlocked(sid, event)
+            event_type = str(event.get("type") or "")
+            if event_type in _SNAPSHOT_DELTA_FIELDS:
+                # Delta events already have an accumulated reconnect snapshot.
+                # Keeping every raw chunk in the bounded recent deque used to
+                # evict the earlier tool_pending row during verbose tools.
+                _clear_replayed_status_unlocked(sid)
+                _accumulate_live_delta_unlocked(sid, event)
+            elif event_type in _LIVE_STATE_TYPES:
+                _clear_replayed_status_unlocked(sid)
+                _store_live_state_unlocked(sid, event)
+            else:
+                if event_type == "status":
+                    # A reconnect needs the current transient status, not every
+                    # historical "Thinking..." heartbeat. Replaying all of
+                    # them causes remove/append flicker in the frontend.
+                    _clear_replayed_status_unlocked(sid)
+                _recent_ephemeral[sid].append(dict(event))
         elif event.get("type") == "tool_call" and str(event.get("tool_call_id") or "").strip():
             _prune_recent_ephemeral_unlocked(
                 sid,
                 types={"tool_pending", "tool_call_delta", "tool_command_delta"},
                 react_iter=event.get("react_iter"),
                 tool_call_id=event.get("tool_call_id"),
+            )
+        elif event.get("type") in {"llm_reasoning", "llm_response"}:
+            completed_type = (
+                "llm_reasoning_delta"
+                if event.get("type") == "llm_reasoning"
+                else "llm_response_delta"
+            )
+            _prune_recent_ephemeral_unlocked(
+                sid,
+                types={completed_type},
+                react_iter=event.get("react_iter"),
             )
         subscribers = list(_subscribers.get(sid, ()))
     for q, loop in subscribers:
@@ -118,6 +147,40 @@ def _accumulate_live_delta_unlocked(sid: str, event: Dict[str, Any]) -> None:
             parts[field].append(str(value))
 
 
+def _live_state_key(event: Dict[str, Any]) -> Tuple[Any, ...] | None:
+    event_type = str(event.get("type") or "")
+    if event_type not in _LIVE_STATE_TYPES:
+        return None
+    identity = (
+        event.get("tool_call_id")
+        or event.get("id")
+        or event.get("tool_call_index")
+        or event.get("index")
+        or ""
+    )
+    return (
+        event_type,
+        event.get("run_id") or event.get("runId") or "",
+        event.get("react_iter"),
+        identity,
+    )
+
+
+def _store_live_state_unlocked(sid: str, event: Dict[str, Any]) -> None:
+    key = _live_state_key(event)
+    if key is not None:
+        _live_state_snapshots[sid][key] = dict(event)
+
+
+def _clear_replayed_status_unlocked(sid: str) -> None:
+    bucket = _recent_ephemeral.get(sid)
+    if not bucket:
+        return
+    kept = [ev for ev in bucket if str(ev.get("type") or "") != "status"]
+    bucket.clear()
+    bucket.extend(kept)
+
+
 def _live_delta_replay_unlocked(sid: str) -> list[dict]:
     replay: list[dict] = []
     snapshots = list(_live_delta_snapshots.get(sid, {}).values())
@@ -129,6 +192,10 @@ def _live_delta_replay_unlocked(sid: str) -> list[dict]:
         public["replayed_snapshot"] = True
         replay.append(public)
     return replay
+
+
+def _live_state_replay_unlocked(sid: str) -> list[dict]:
+    return [dict(event) for event in _live_state_snapshots.get(sid, {}).values()]
 
 
 def _prune_recent_ephemeral_unlocked(
@@ -172,6 +239,26 @@ def _prune_recent_ephemeral_unlocked(
     if bucket is not None:
         bucket.clear()
         bucket.extend(kept)
+
+    live_states = _live_state_snapshots.get(sid)
+    if live_states:
+        for key, ev in list(live_states.items()):
+            ev_type = str(ev.get("type") or "")
+            if wanted_types and ev_type not in wanted_types:
+                continue
+            if iter_filter is not None:
+                try:
+                    if int(ev.get("react_iter")) != iter_filter:
+                        continue
+                except (TypeError, ValueError):
+                    continue
+            if tool_filter:
+                ev_tool_id = str(ev.get("tool_call_id") or ev.get("id") or "").strip()
+                if ev_tool_id and ev_tool_id != tool_filter:
+                    continue
+            live_states.pop(key, None)
+        if not live_states:
+            _live_state_snapshots.pop(sid, None)
 
     snapshots = _live_delta_snapshots.get(sid)
     if not snapshots:
@@ -222,6 +309,7 @@ async def close_session_stream(session_id: str) -> None:
         subscribers = list(_subscribers.get(sid, ()))
         _recent_ephemeral.pop(sid, None)
         _live_delta_snapshots.pop(sid, None)
+        _live_state_snapshots.pop(sid, None)
     for q, loop in subscribers:
         _deliver_to_subscriber(loop, q, None)
 
@@ -240,10 +328,11 @@ async def subscribe_session_events(
         if replay_recent:
             snapshot_types = set(_SNAPSHOT_DELTA_FIELDS)
             replay = _live_delta_replay_unlocked(sid)
+            replay.extend(_live_state_replay_unlocked(sid))
             replay.extend(
                 ev
                 for ev in list(_recent_ephemeral.get(sid, ()))
-                if str(ev.get("type") or "") not in snapshot_types
+                if str(ev.get("type") or "") not in snapshot_types | _LIVE_STATE_TYPES
             )
             replay.sort(key=lambda row: int(row.get("event_bus_seq") or row.get("seq") or 0))
             for ev in replay:
