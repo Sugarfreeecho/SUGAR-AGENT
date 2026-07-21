@@ -44,6 +44,7 @@ from agent_harness import (
     _message_to_dict,
     _dict_to_message,
     setup_logging,
+    normalize_prompt_language,
     executor_http_client,
     key_context_body_for_system_prompt,
     todo_manager,
@@ -607,6 +608,7 @@ def _run_context_policy_serialized(
     force_user_compact: bool,
     hint_sink: Optional[Callable[[Any], None]] = None,
     context_window: Optional[int] = None,
+    prompt_language: Optional[str] = None,
 ):
     lock = _context_policy_lock_for_session(session_id)
     with lock:
@@ -617,6 +619,7 @@ def _run_context_policy_serialized(
             force_user_compact=force_user_compact,
             hint_sink=hint_sink,
             context_window=context_window,
+            prompt_language=prompt_language,
         )
 
 
@@ -1059,12 +1062,19 @@ def compute_context_tokens_for_session(session_id: str) -> Dict[str, Any]:
             return {"ok": False, "error": str(e)}
 
     llm_history = [_dict_to_message(m) for m in llm_history_dicts]
+    try:
+        prompt_language = normalize_prompt_language(
+            (session_manager._load_metadata(sid) or {}).get("prompt_language")
+        )
+    except Exception:
+        prompt_language = "zh-CN"
     token_mode = get_context_token_mode()
     if token_mode == "calculated":
         full_input_est = estimate_full_input_tokens_for_llm_history(
             sid,
             llm_history,
             key_context or "",
+            prompt_language,
         )
         token_source = "local_calculated"
     else:
@@ -1072,6 +1082,7 @@ def compute_context_tokens_for_session(session_id: str) -> Dict[str, Any]:
             sid,
             llm_history,
             key_context or "",
+            prompt_language,
         )
     _client, active_model, _max_out, active_context_window = resolve_executor_config_for_session(
         sid
@@ -2892,7 +2903,11 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
             # ---------- 2.2 构建 LLM 输入（静态 system 多段 + key_context，优化前缀缓存与维护） ----------
             skills_catalog = get_skills_catalog()
             env_static = build_env_static(state.get("session_id"))
-            static_segments = build_static_system_segments(skills_catalog, env_static)
+            static_segments = build_static_system_segments(
+                skills_catalog,
+                env_static,
+                state.get("_prompt_language", "zh-CN"),
+            )
             if isinstance(session_meta, dict) and session_meta.get("is_subagent"):
                 from agent_subagent import SUBAGENT_RUN_INSTRUCTION
 
@@ -3019,6 +3034,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                             force_user_compact=True,
                             hint_sink=_compress_hint_emit,
                             context_window=int(iter_context_window),
+                            prompt_language=state.get("_prompt_language", "zh-CN"),
                         ),
                         state,
                         emit,
@@ -3094,6 +3110,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                         state["session_id"],
                         nl,
                         nk or "",
+                        state.get("_prompt_language", "zh-CN"),
                     )
                     post_compress_token_source = "local_calculated"
                 else:
@@ -3101,6 +3118,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                         state["session_id"],
                         nl,
                         nk or "",
+                        state.get("_prompt_language", "zh-CN"),
                     )
                 post_compress_tokens = {
                     "estimated": int(post_compress_est),
@@ -3141,6 +3159,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                         state["session_id"],
                         llm_history,
                         state.get("key_context", "") or "",
+                        state.get("_prompt_language", "zh-CN"),
                     )
                     new_llm_history, did_shrink, _ = compress_tail_fallback(
                         llm_history, reason="emergency"
@@ -3149,6 +3168,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                         state["session_id"],
                         new_llm_history,
                         state.get("key_context", "") or "",
+                        state.get("_prompt_language", "zh-CN"),
                     ) < old_tok:
                         llm_history = new_llm_history
                         state["llm_history"] = llm_history
@@ -3386,6 +3406,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                                 force_user_compact=True,
                                 hint_sink=_compact_hint_emit,
                                 context_window=int(iter_context_window),
+                                prompt_language=state.get("_prompt_language", "zh-CN"),
                             ),
                             state,
                             emit,
@@ -3436,6 +3457,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                                 instr,
                                 hint_sink=_key_hint_emit,
                                 current_key_context=state.get("key_context", ""),
+                                prompt_language=state.get("_prompt_language", "zh-CN"),
                             ),
                             state,
                             emit,
@@ -5749,8 +5771,18 @@ def _generate_session_title_with_diagnostics(
     session_id: str,
     first_user: str,
     final_response: str,
+    prompt_language: Optional[str] = None,
 ) -> tuple[str, Optional[Dict[str, int]]]:
-    title_template = load_prompt_template("title_generator")
+    if prompt_language is None:
+        try:
+            prompt_language = session_manager.get_session_prompt_language(session_id)
+        except Exception:
+            prompt_language = "zh-CN"
+    title_template = (
+        load_prompt_template("title_generator", "en")
+        if normalize_prompt_language(prompt_language) == "en"
+        else load_prompt_template("title_generator")
+    )
     title_prompt = title_template.format(
         first_user=first_user,
         final_response=final_response or "",
@@ -6044,12 +6076,14 @@ async def astream_events(
     ui_user_content: Optional[str] = None,
     context_token_mode: Optional[str] = None,
     user_operation_id: str = "",
+    prompt_language: str = "zh-CN",
 ) -> AsyncGenerator[Dict[str, Any], None]:
     """
     顺序执行 react_node → validate_final（无独立校验 LLM）→ finish，通过队列实时向前端推送事件。
     """
     executor_http_client.interactions.clear()
 
+    requested_prompt_language = str(prompt_language or "").strip()
     sid_in = str(session_id or "").strip()
     if sid_in:
         try:
@@ -6067,6 +6101,17 @@ async def astream_events(
         session_id, _, _, _, key_context, _metadata = (
             session_manager.get_or_create_session(session_id)
         )
+    if requested_prompt_language:
+        prompt_language = normalize_prompt_language(requested_prompt_language)
+    else:
+        try:
+            prompt_language = session_manager.get_session_prompt_language(session_id)
+        except Exception:
+            prompt_language = "zh-CN"
+    try:
+        session_manager.set_session_prompt_language(session_id, prompt_language)
+    except Exception:
+        logger.debug("Unable to persist prompt language for session=%s", session_id, exc_info=True)
     runtime_v2_run_id = str(run_id or "").strip() or str(uuid.uuid4())
     prompt_hook_context = ""
     try:
@@ -6153,6 +6198,7 @@ async def astream_events(
         "_runtime_v2_run_id": runtime_v2_run_id,
         "_pre_run_timings": pre_run_timings,
         "_context_token_mode": context_token_mode,
+        "_prompt_language": prompt_language,
     }
     todo_manager.sync_session_from_key_context(session_id, key_context or "")
     session_manager.clear_interrupt(session_id, runtime_v2_run_id)
@@ -6532,6 +6578,7 @@ async def astream_events_continuation(
     require_pending_subagents: bool = True,
     recovery_reason: str = "",
     run_id: Optional[str] = None,
+    prompt_language: Optional[str] = None,
 ) -> AsyncGenerator[Dict[str, Any], None]:
     """
     后台 subagent 完成后续接父 Agent：不追加用户气泡与 ui_events user 事件，
@@ -6546,6 +6593,15 @@ async def astream_events_continuation(
         return
 
     session_id = sid
+    if prompt_language:
+        prompt_language = normalize_prompt_language(prompt_language)
+    else:
+        try:
+            prompt_language = normalize_prompt_language(
+                session_manager.get_session_prompt_language(session_id)
+            )
+        except Exception:
+            prompt_language = "zh-CN"
     key_context = _load_key_context_for_run(session_id)
     setup_logging("[subagent-continuation]", session_id)
     pre_run_timings: Dict[str, int] = {}
@@ -6617,6 +6673,7 @@ async def astream_events_continuation(
         "key_context": key_context,
         "_runtime_v2_run_id": runtime_v2_run_id,
         "_pre_run_timings": pre_run_timings,
+        "_prompt_language": prompt_language,
     }
     todo_manager.sync_session_from_key_context(session_id, key_context or "")
     session_manager.clear_interrupt(session_id)

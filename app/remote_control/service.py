@@ -209,6 +209,7 @@ class SessionControlService:
                         session_id, run_id
                     ),
                     ui_user_content=str(params.get("ui_message") or message),
+                    prompt_language=str(params.get("ui_language") or ""),
                 ):
                     pass
             except Exception as exc:

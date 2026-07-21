@@ -154,7 +154,7 @@ class GoalManager:
             goal = snapshot.get("goal") if isinstance(snapshot, dict) else None
         else:
             goal = self._read_legacy(self._legacy_goal_path(sid))
-        if not isinstance(goal, dict) or not goal.get("id"):
+        if not isinstance(goal, dict) or not goal.get("id") or goal.get("deleted") is True:
             return None
         return self._with_computed_fields(goal)
 
@@ -288,6 +288,7 @@ class GoalManager:
         action: str,
         *,
         additional_budget: Optional[int] = None,
+        objective: Optional[str] = None,
         reason: str = "",
         actor: str = "user",
         run_id: str = "",
@@ -297,9 +298,15 @@ class GoalManager:
             additional_budget = int(additional_budget)
             if additional_budget <= 0:
                 raise GoalError("additional_budget must be greater than zero")
+        if action == "edit":
+            objective = str(objective or "").strip()
+            if not objective:
+                raise GoalError("objective is required")
+            if len(objective) > 12000:
+                raise GoalError("objective must not exceed 12000 characters")
 
         def mutate(current: Optional[Dict[str, Any]]):
-            if not current:
+            if not current or current.get("deleted") is True:
                 raise GoalError("No goal exists for this session.")
             goal = dict(current)
             if action == "pause" and goal.get("status") == "active":
@@ -324,10 +331,27 @@ class GoalManager:
                 goal["status"] = "cancelled"
                 goal["pause_reason"] = str(reason or "cancelled_by_user")
                 goal["next_retry_at"] = None
+            elif action == "edit":
+                goal["objective"] = str(objective)
+            elif action == "delete":
+                if goal.get("status") == "active":
+                    self._stop_clock(goal)
+                goal["status"] = "cancelled"
+                goal["pause_reason"] = "deleted_by_user"
+                goal["next_retry_at"] = None
+                goal["deleted"] = True
+                goal["deleted_at"] = _now_iso()
             else:
                 raise GoalError(f"Cannot {action} a goal in status {goal.get('status')}.")
             goal = self._touch(goal, actor=actor, run_id=run_id)
-            event_type = f"goal_{action}d" if action != "pause" else "goal_paused"
+            event_types = {
+                "pause": "goal_paused",
+                "resume": "goal_resumed",
+                "cancel": "goal_cancelled",
+                "edit": "goal_edited",
+                "delete": "goal_deleted",
+            }
+            event_type = event_types[action]
             return event_type, self._stored(goal), self._stored(goal)
 
         return self._mutate(session_id, mutate, run_id=run_id)

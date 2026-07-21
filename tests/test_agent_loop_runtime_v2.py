@@ -508,10 +508,11 @@ def test_runtime_v2_context_token_compute_uses_projection_not_legacy(monkeypatch
         def get_or_create_session(self, session_id):
             raise AssertionError("Runtime V2 context token compute must not read legacy session history")
 
-    def fake_estimate(session_id, messages, key_context):
+    def fake_estimate(session_id, messages, key_context, prompt_language):
         captured["session_id"] = session_id
         captured["messages"] = messages
         captured["key_context"] = key_context
+        captured["prompt_language"] = prompt_language
         return 123, "provider_calibrated"
 
     monkeypatch.setattr(agent_loop, "session_manager", _SessionManager())

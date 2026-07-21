@@ -120,6 +120,29 @@ class GoalManagerTests(unittest.TestCase):
         second = self.manager.create("s1", "Second")
         self.assertNotEqual(first["id"], second["id"])
 
+    def test_goals_are_isolated_by_session(self):
+        first = self.manager.create("s1", "First session objective")
+        second = self.manager.create("s2", "Second session objective")
+
+        self.assertEqual(self.manager.get("s1")["id"], first["id"])
+        self.assertEqual(self.manager.get("s2")["id"], second["id"])
+        self.assertNotEqual(self.manager.get("s1")["id"], self.manager.get("s2")["id"])
+        self.assertEqual(self.manager.get("s1")["objective"], "First session objective")
+        self.assertEqual(self.manager.get("s2")["objective"], "Second session objective")
+
+    def test_user_can_edit_and_delete_goal_then_create_a_replacement(self):
+        original = self.manager.create("s1", "Original objective")
+        edited = self.manager.user_action("s1", "edit", objective="Edited objective")
+        self.assertEqual(edited["id"], original["id"])
+        self.assertEqual(self.manager.get("s1")["objective"], "Edited objective")
+
+        deleted = self.manager.user_action("s1", "delete")
+        self.assertTrue(deleted["deleted"])
+        self.assertIsNone(self.manager.get("s1"))
+
+        replacement = self.manager.create("s1", "Replacement objective")
+        self.assertNotEqual(replacement["id"], original["id"])
+
     def test_environment_switch_disables_feature(self):
         with patch.dict(os.environ, {"GOAL_ENABLED": "off"}, clear=False):
             self.assertFalse(goal_enabled())
@@ -152,10 +175,91 @@ def test_goal_tool_pushes_live_state_and_frontend_consumes_it_immediately():
     live_handler = frontend.split("if (parsed.type === 'goal_state')", 1)[1].split(
         "if (parsed.type === 'user_steer'", 1
     )[0]
-    assert "renderGoalCard(goal)" in live_handler
+    assert "setGoalStateForSession(eventSessionId, goal)" in live_handler
     assert "continue;" in live_handler
     assert "completedTool === 'create_goal'" in frontend
     assert "completedTool === 'update_goal'" in frontend
+
+
+def test_goal_card_is_present_in_the_vite_entry_and_shell_source():
+    for relative_path in ("frontend/index.html", "frontend/src/shell-body.html"):
+        markup = (ROOT / relative_path).read_text(encoding="utf-8")
+        assert 'id="chat-goal-card"' in markup
+        assert 'id="chat-goal-status"' in markup
+        assert 'id="chat-goal-objective"' in markup
+        assert 'id="chat-goal-meta"' in markup
+        assert 'class="chat-goal-icon-btn chat-goal-stats-btn"' in markup
+        assert markup.index('id="chat-goal-meta"') < markup.index('id="chat-goal-toggle"')
+        assert 'id="chat-goal-toggle"' in markup
+        assert 'id="chat-goal-edit"' in markup
+        assert 'id="chat-goal-delete"' in markup
+        assert 'class="chat-goal-icon-pause"' in markup
+        assert 'class="chat-goal-icon-play"' in markup
+        assert 'id="goal-edit-modal-root"' in markup
+        assert 'id="goal-edit-textarea"' in markup
+        assert 'maxlength="12000"' in markup
+        assert 'id="goal-edit-char-count"' in markup
+        assert 'id="goal-edit-save"' in markup
+        assert 'id="chat-todo-card"' in markup
+        assert markup.index('id="chat-goal-card"') < markup.index('id="chat-todo-card"')
+
+    renderer = (
+        ROOT / "frontend" / "src" / "app" / "modules" / "toc-todo.js"
+    ).read_text(encoding="utf-8")
+    assert "card.hidden = !has" in renderer
+    assert "todoCard.hidden = !has" in renderer
+    assert "syncGoalTodoPanelVisibility()" in renderer
+    assert "当前会话暂无 Goal" not in renderer
+    assert "const goalStateBySession = new Map()" in renderer
+    assert "goalStateBySession.has(sid)" in renderer
+    assert "String(goal.status || '') !== 'completed'" in renderer
+    assert "summarizeGoalObjective(fullObjective, 200)" in renderer
+    assert "objectiveEl.setAttribute('data-ui-tip', fullObjective)" in renderer
+    assert "globalThis.toggleCurrentGoalState = toggleCurrentGoalState" in renderer
+    assert "playIcon.toggleAttribute('hidden', !isPaused)" in renderer
+    assert "pauseIcon.toggleAttribute('hidden', isPaused)" in renderer
+    assert "controlCurrentGoal('edit', { objective: objective })" in renderer
+    assert "await controlCurrentGoal('delete')" in renderer
+    assert "function saveGoalEditModal()" in renderer
+    assert "event.ctrlKey || event.metaKey" in renderer
+    edit_handler = renderer.split("function editCurrentGoal()", 1)[1].split("async function deleteCurrentGoal()", 1)[0]
+    assert "window.prompt" not in edit_handler
+    assert "elements.input.value = currentObjective" in edit_handler
+    assert "Token ' + translate('已消耗')" in renderer
+    assert "function formatGoalElapsed(seconds)" in renderer
+    assert "renderGoalMeta(goal, sid)" in renderer
+    assert "statusEl.textContent = translate('进行中') + ' · ' + formatGoalElapsed(elapsed)" in renderer
+    assert "metaEl.setAttribute('data-ui-tip', metaText + '\\n' + help)" in renderer
+    assert "}, 1000);" in renderer
+    assert "}, 5000);" in renderer
+    assert "goalRefreshInFlightBySession" in renderer
+    assert "const goalStreamRecoveryInFlightBySession = new Set()" in renderer
+    assert "async function recoverActiveGoalStream(sessionId)" in renderer
+    assert "await reconcileRunStateFromServer({ silent: true })" in renderer
+    assert "maybeStartStreamPollForSession(sid, { skipInitialLoad: true })" in renderer
+    assert "void recoverActiveGoalStream(sid)" in renderer
+    assert "}, 2000);" in renderer
+    assert "连续失败表示 Goal 执行中连续以失败或错误结束" in renderer
+    assert "isGoalEditModalOpen()" in renderer
+    assert "document.body.classList.add('goal-editing')" in renderer
+    assert "document.body.classList.remove('goal-editing')" in renderer
+
+    styles = (ROOT / "frontend" / "src" / "styles" / "app.css").read_text(encoding="utf-8")
+    assert "backdrop-filter:none" in styles
+    assert "contain:layout paint" in styles
+    assert "overscroll-behavior:contain" in styles
+    assert ".chat-goal-actions { display:flex; align-items:center" in styles
+    assert ".chat-goal-stats-btn { color:var(--accent-2); margin-right:auto; }" in styles
+    assert "-webkit-line-clamp:6; line-clamp:6" in styles
+    assert "overflow:hidden; overflow-wrap:anywhere; cursor:default" in styles
+
+    session_management = (
+        ROOT / "frontend" / "src" / "app" / "modules" / "session-management.js"
+    ).read_text(encoding="utf-8")
+    assert "closeGoalEditModal(false)" in session_management
+    switch_boundary = session_management.split("setCurrentSessionState(sessionId);", 1)[1][:300]
+    assert "renderGoalForCurrentSession()" in switch_boundary
+    assert "refreshGoalCard()" in switch_boundary
 
 
 if __name__ == "__main__":

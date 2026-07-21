@@ -594,12 +594,23 @@ def setup_logging(user_input: str, session_id: str = ""):
     logger.info(f"用户输入: {user_input}")
 
 # ==================== 提示词模板加载 ====================
-def load_prompt_template(template_name: str) -> str:
-    """从 prompt.md 加载指定的模板片段"""
+def normalize_prompt_language(language: str = "zh-CN") -> str:
+    """Normalize the UI language value used to select model-facing prompts."""
+    value = str(language or "zh-CN").strip().lower()
+    return "en" if value in {"en", "en-us", "en-gb", "english"} else "zh-CN"
+
+
+def load_prompt_template(template_name: str, language: str = "zh-CN") -> str:
+    """从对应语言的 prompt 模板文件加载指定片段。"""
     if template_name == "tools_description":
         return ""
     try:
         path = resolve_prompt_md_path()
+        normalized_language = normalize_prompt_language(language)
+        if normalized_language == "en":
+            english_path = path.with_name("prompt.en.md")
+            if english_path.is_file():
+                path = english_path
         with path.open("r", encoding="utf-8") as f:
             content = f.read()
         pattern = rf"## {template_name}\n(.*?)(?=\n## |$)"
@@ -4393,6 +4404,31 @@ class SessionManager:
         with self._session_metadata_lock(session_id):
             return self._load_metadata_unlocked(session_id)
 
+    def get_session_prompt_language(self, session_id: str) -> str:
+        """Return the language selected by the session's frontend, defaulting to Chinese."""
+        try:
+            return normalize_prompt_language(
+                (self._load_metadata(session_id) or {}).get("prompt_language")
+            )
+        except Exception:
+            return "zh-CN"
+
+    def set_session_prompt_language(self, session_id: str, language: str) -> None:
+        """Persist the frontend language used for subsequent model-facing prompts."""
+        sid = str(session_id or "").strip()
+        if not sid:
+            return
+        normalized = normalize_prompt_language(language)
+        with self._session_metadata_lock(sid):
+            metadata = self._load_metadata_unlocked(sid)
+            if not isinstance(metadata, dict):
+                metadata = {}
+            if metadata.get("prompt_language") == normalized:
+                return
+            metadata["prompt_language"] = normalized
+            metadata["updated_at"] = datetime.now().isoformat()
+            self._save_metadata_unlocked(sid, metadata)
+
     def _set_interrupt_cache_from_metadata(self, session_id: str, metadata: dict) -> None:
         sid = (session_id or "").strip()
         if not sid:
@@ -4481,6 +4517,12 @@ class SessionManager:
             "readonly_strict": bool(readonly_strict),
             "forked_from_parent": bool(forked_from_parent),
         }
+        try:
+            parent_prompt_language = (self._load_metadata(parent_id) or {}).get("prompt_language")
+            if parent_prompt_language:
+                metadata["prompt_language"] = normalize_prompt_language(parent_prompt_language)
+        except Exception:
+            pass
         mpi = (model_profile_id or "").strip()
         if mpi:
             metadata["model_profile_id"] = mpi

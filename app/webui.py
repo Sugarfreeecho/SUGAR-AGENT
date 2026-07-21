@@ -36,6 +36,7 @@ from agent_harness import (
     _invalidate_executor_config_cache,
     dotenv_file_path,
     key_context_body_for_system_prompt,
+    normalize_prompt_language,
     refresh_executor_client_from_env,
 )
 from agent_team import AGENT_TEAM_ENV_VAR, agent_team_enabled
@@ -3292,8 +3293,10 @@ async def chat(
     steer_id: str = Form(""),
     selected_skills: str = Form(""),
     ui_message: str = Form(""),
+    ui_language: str = Form("zh-CN"),
 ):
     sid = (session_id or "").strip() or None
+    prompt_language = normalize_prompt_language(ui_language)
     run_id = str(client_run_id or "").strip()
     steer_operation_id = str(steer_id or "").strip()
     use_runtime_v2_stream = _runtime_v2_chat_protocol_enabled(stream_protocol, sid)
@@ -3433,6 +3436,7 @@ async def chat(
                     ui_user_event_type="user_steer" if followup_steer else "user",
                     ui_user_content=ui_message,
                     user_operation_id=steer_operation_id,
+                    prompt_language=prompt_language,
                 ):
                     put_from_worker(event)
             except asyncio.CancelledError:
@@ -3781,8 +3785,8 @@ async def get_session_goal(session_id: str):
 
 @fastapi_app.post("/sessions/{session_id}/goal/{action}")
 async def control_session_goal(session_id: str, action: str, request: Request):
-    if action not in {"pause", "resume", "cancel"}:
-        return JSONResponse(content={"ok": False, "error": "action must be pause, resume, or cancel"}, status_code=400)
+    if action not in {"pause", "resume", "cancel", "edit", "delete"}:
+        return JSONResponse(content={"ok": False, "error": "action must be pause, resume, cancel, edit, or delete"}, status_code=400)
     try:
         from agent_goal import manager_for
 
@@ -3792,20 +3796,25 @@ async def control_session_goal(session_id: str, action: str, request: Request):
             body = {}
         if not isinstance(body, dict):
             body = {}
-        goal = manager_for(session_manager).user_action(
-            session_id,
-            action,
-            additional_budget=body.get("additional_budget"),
-            reason=str(body.get("reason") or ""),
-            actor="user",
-        )
-        if action in {"pause", "cancel"}:
+        action_kwargs = {
+            "additional_budget": body.get("additional_budget"),
+            "reason": str(body.get("reason") or ""),
+            "actor": "user",
+        }
+        if action == "edit":
+            action_kwargs["objective"] = body.get("objective")
+        goal = manager_for(session_manager).user_action(session_id, action, **action_kwargs)
+        if action in {"pause", "cancel", "delete"}:
             session_manager.request_interrupt(session_id, reason=f"goal_{action}")
+        public_goal = None if action == "delete" else goal
+        event = {"type": "goal_state", "goal": public_goal, "goal_event": f"user_{action}", "ephemeral": True}
+        if public_goal:
+            event.update(public_goal)
         await publish_session_event(
             session_id,
-            {**goal, "type": "goal_state", "goal_event": f"user_{action}", "ephemeral": True},
+            event,
         )
-        return JSONResponse(content={"ok": True, "goal": goal})
+        return JSONResponse(content={"ok": True, "goal": public_goal})
     except Exception as exc:
         return JSONResponse(content={"ok": False, "error": str(exc)}, status_code=409)
 

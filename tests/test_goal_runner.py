@@ -184,3 +184,52 @@ def test_goal_control_forwards_budget_and_publishes_live_state(monkeypatch):
     ]
     assert published[0][0] == "s1"
     assert published[0][1]["type"] == "goal_state"
+
+
+def test_goal_edit_and_delete_routes_publish_session_scoped_state(monkeypatch):
+    import agent_goal
+    import webui
+
+    calls = []
+    published = []
+
+    class Manager:
+        @staticmethod
+        def user_action(session_id, action, **kwargs):
+            calls.append((session_id, action, kwargs))
+            return {
+                "id": "g1",
+                "status": "active" if action == "edit" else "cancelled",
+                "objective": kwargs.get("objective") or "Edited objective",
+                "deleted": action == "delete",
+            }
+
+    class EditRequest:
+        @staticmethod
+        async def json():
+            return {"objective": "Edited objective"}
+
+    class DeleteRequest:
+        @staticmethod
+        async def json():
+            return {}
+
+    async def publish(session_id, event):
+        published.append((session_id, event))
+
+    monkeypatch.setattr(agent_goal, "manager_for", lambda _session_manager: Manager())
+    monkeypatch.setattr(webui, "publish_session_event", publish)
+    monkeypatch.setattr(webui.session_manager, "request_interrupt", lambda *_args, **_kwargs: None)
+
+    edited = asyncio.run(webui.control_session_goal("s1", "edit", EditRequest()))
+    deleted = asyncio.run(webui.control_session_goal("s1", "delete", DeleteRequest()))
+    edited_body = json.loads(edited.body)
+    deleted_body = json.loads(deleted.body)
+
+    assert edited_body["goal"]["objective"] == "Edited objective"
+    assert calls[0][2]["objective"] == "Edited objective"
+    assert published[0][1]["goal"]["id"] == "g1"
+    assert deleted_body["goal"] is None
+    assert published[1][0] == "s1"
+    assert published[1][1]["goal"] is None
+    assert published[1][1]["goal_event"] == "user_delete"

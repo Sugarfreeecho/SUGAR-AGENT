@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 
 _TOKENIZER: Any = None
 _LOAD_FAILED: bool = False
-_FULL_INPUT_TOKEN_CACHE: Dict[Tuple[str, int, str, str], Tuple[float, int]] = {}
+_FULL_INPUT_TOKEN_CACHE: Dict[Tuple[str, int, str, str, str], Tuple[float, int]] = {}
 _FULL_INPUT_TOKEN_CACHE_LOCK = threading.Lock()
 _FULL_INPUT_TOKEN_CACHE_TTL_SEC = 30.0
 _FULL_INPUT_TOKEN_CACHE_MAX = 256
@@ -461,21 +461,37 @@ def build_env_static(session_id: Optional[str] = None) -> str:
     return text
 
 
-def build_static_system_segments(skills_catalog: str, env_static: str) -> List[str]:
+def build_static_system_segments(
+    skills_catalog: str,
+    env_static: str,
+    language: str = "zh-CN",
+) -> List[str]:
     """
     静态 system 分段上送（不含 key_context、不含对话轮）。
     顺序兼顾可读性与前缀缓存：角色原则 → 工具清单 → 调用策略 → 技能目录 → 环境。
     """
     from agent_harness import load_prompt_template
 
-    identity = load_prompt_template("system_identity").strip()
-    contract = load_prompt_template("system_tool_contract").strip()
-    skills_tpl = load_prompt_template("system_skills_intro").strip()
+    normalized_language = str(language or "zh-CN").strip().lower()
+    is_english = normalized_language in {"en", "en-us", "en-gb", "english"}
+    def load_for_language(name: str) -> str:
+        return (
+            load_prompt_template(name, "en")
+            if is_english
+            else load_prompt_template(name)
+        )
+
+    identity = load_for_language("system_identity").strip()
+    contract = load_for_language("system_tool_contract").strip()
+    skills_tpl = load_for_language("system_skills_intro").strip()
     skills_block = skills_tpl.format(skills_catalog=skills_catalog)
+    identity_heading = "## Role and response principles" if is_english else "## 角色与回答原则"
+    contract_heading = "## Tool-calling policy" if is_english else "## 工具调用策略"
+    skills_heading = "## Skills catalog" if is_english else "## 技能目录"
     parts = [
-        "## 角色与回答原则\n\n" + identity,
-        "## 工具调用策略\n\n" + contract,
-        "## 技能目录\n\n" + skills_block,
+        identity_heading + "\n\n" + identity,
+        contract_heading + "\n\n" + contract,
+        skills_heading + "\n\n" + skills_block,
         env_static.strip(),
     ]
     return [p for p in parts if p.strip()]
@@ -485,6 +501,7 @@ def estimate_full_input_tokens_for_llm_history(
     session_id: str,
     llm_history: List[Any],
     key_context: str,
+    language: str = "zh-CN",
 ) -> int:
     """
     与 react_node 发往主模型前、`compute_context_tokens_for_session`（右上角）一致的整包 token：
@@ -498,7 +515,7 @@ def estimate_full_input_tokens_for_llm_history(
     from agent_tools import get_skills_catalog
 
     sid = str(session_id or "").strip()
-    cache_key = _full_input_token_cache_key(sid, llm_history, key_context or "")
+    cache_key = (*_full_input_token_cache_key(sid, llm_history, key_context or ""), str(language or "zh-CN"))
     now = time.monotonic()
     with _FULL_INPUT_TOKEN_CACHE_LOCK:
         cached = _FULL_INPUT_TOKEN_CACHE.get(cache_key)
@@ -507,7 +524,7 @@ def estimate_full_input_tokens_for_llm_history(
     skills_catalog = get_skills_catalog()
     env_static = build_env_static(sid if sid else None)
     kc_body = key_context_body_for_system_prompt(key_context or "")
-    static_segments = build_static_system_segments(skills_catalog, env_static)
+    static_segments = build_static_system_segments(skills_catalog, env_static, language)
     turn_msgs = inject_missing_tool_messages(messages_for_openai_turns(llm_history))
     llm_messages: List[Any] = [SystemMessage(content=s) for s in static_segments]
     if kc_body:
@@ -527,6 +544,7 @@ def estimate_hybrid_input_tokens_for_llm_history(
     session_id: str,
     llm_history: List[Any],
     key_context: str,
+    language: str = "zh-CN",
 ) -> Tuple[int, str]:
     """Estimate a persisted session using the same provider-calibrated path as a live request."""
     from agent_harness import key_context_body_for_system_prompt
@@ -536,7 +554,7 @@ def estimate_hybrid_input_tokens_for_llm_history(
     skills_catalog = get_skills_catalog()
     env_static = build_env_static(sid if sid else None)
     kc_body = key_context_body_for_system_prompt(key_context or "")
-    static_segments = build_static_system_segments(skills_catalog, env_static)
+    static_segments = build_static_system_segments(skills_catalog, env_static, language)
     turn_msgs = inject_missing_tool_messages(messages_for_openai_turns(llm_history))
     llm_messages: List[Any] = [SystemMessage(content=s) for s in static_segments]
     if kc_body:

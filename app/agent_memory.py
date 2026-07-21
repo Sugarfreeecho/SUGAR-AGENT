@@ -688,6 +688,7 @@ def _compress_summary_round(
     hints: Optional[List[str]] = None,
     round_idx: int = 1,
     session_id: str = "",
+    prompt_language: str = "zh-CN",
 ) -> Tuple[str, str, List]:
     """单次摘要 LLM → recap + key 要点 + legacy 微压段。"""
     hint_list = hints if hints is not None else []
@@ -717,6 +718,7 @@ def _compress_summary_round(
         hint_sink=hint_sink,
         hints=hint_list,
         session_id=session_id,
+        prompt_language=prompt_language,
     )
     _push_progress_persist_body(hint_sink, summary, kind="summary")
     _push_progress_persist_body(hint_sink, key_body, kind="key")
@@ -1066,6 +1068,7 @@ def _run_compress_executor_dialogue(
     hint_sink: Optional[Callable[[Any], None]] = None,
     hints: Optional[List[str]] = None,
     session_id: str = "",
+    prompt_language: str = "zh-CN",
 ) -> Tuple[str, str]:
     """组包 → trim → 执行端 chat（compress_history_and_key）→ 解析 recap + key。"""
     if not (key_context or "").strip() and not dialogue_msgs:
@@ -1073,7 +1076,11 @@ def _run_compress_executor_dialogue(
     suffix = "[压缩失败，保留截断原文片段]"
     try:
         try:
-            instr = load_prompt_template("compress_history_and_key")
+            instr = (
+                load_prompt_template("compress_history_and_key", "en")
+                if str(prompt_language or "").strip().lower() == "en"
+                else load_prompt_template("compress_history_and_key")
+            )
         except Exception:
             instr = (
                 "请根据对话一次性输出 <recap> 历史前情提要 </recap> 与 "
@@ -1191,6 +1198,7 @@ def run_edit_key_context_instruction(
     instruction: str,
     hint_sink: Optional[Callable[[Any], None]] = None,
     current_key_context: Optional[str] = None,
+    prompt_language: str = "zh-CN",
 ) -> Tuple[str, str]:
     """
     按自然语言说明编辑 key_context.md 全文（增删改规则、错误、经验等）。
@@ -1214,7 +1222,11 @@ def run_edit_key_context_instruction(
         with_pct=False,
     )
     try:
-        tpl = load_prompt_template("edit_key_context")
+        tpl = (
+            load_prompt_template("edit_key_context", "en")
+            if str(prompt_language or "").strip().lower() == "en"
+            else load_prompt_template("edit_key_context")
+        )
     except Exception:
         tpl = (
             "你是会话关键信息编辑助手。根据「编辑说明」修改下面的全文，可增删改任意 Markdown 小节。\n"
@@ -1367,6 +1379,7 @@ def _compress_unified_in_place(
     *,
     force_user_compact: bool,
     hint_sink: Optional[Callable[[Any], None]] = None,
+    prompt_language: str = "zh-CN",
 ) -> Tuple[List, str, bool, List[str], bool, Optional[str]]:
     hints: List[str] = []
     new_recap_text: Optional[str] = None
@@ -1512,6 +1525,7 @@ def _compress_unified_in_place(
                 hints=hints,
                 round_idx=round_idx,
                 session_id=session_id,
+                prompt_language=prompt_language,
             )
             used_llm_summary = True
             kb = (key_body or "").strip()
@@ -1656,6 +1670,7 @@ def run_context_policy(
     force_user_compact: bool,
     hint_sink: Optional[Callable[[Any], None]] = None,
     context_window: Optional[int] = None,
+    prompt_language: str = "zh-CN",
 ) -> Tuple[List, str, bool, List[str], bool, Optional[str]]:
     l = list(llm_history)
     token = _ACTIVE_CONTEXT_WINDOW.set(int(context_window)) if context_window else None
@@ -1666,6 +1681,7 @@ def run_context_policy(
             key_context,
             force_user_compact=force_user_compact,
             hint_sink=hint_sink,
+            prompt_language=prompt_language,
         )
     finally:
         if token is not None:
