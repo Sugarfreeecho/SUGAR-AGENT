@@ -13,10 +13,10 @@ APP_DIR = ROOT / "app"
 if str(APP_DIR) not in sys.path:
     sys.path.insert(0, str(APP_DIR))
 
-from feishu_adapter.adapter import FeishuTransportAdapter
-from feishu_adapter.config import FeishuConfig
-from feishu_adapter.models import parse_message_event
-from feishu_adapter.store import FeishuStateStore
+from remote_control.transports.feishu.adapter import FeishuTransportAdapter
+from remote_control.transports.feishu.config import FeishuConfig
+from remote_control.transports.feishu.models import parse_message_event
+from remote_control.transports.feishu.store import FeishuStateStore
 from remote_control.service import RemoteControlError
 
 

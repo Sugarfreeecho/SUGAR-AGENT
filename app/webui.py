@@ -5671,8 +5671,8 @@ _remote_control_gateway = _register_remote_control(
     _control_dependencies,
 )
 
-from feishu_adapter.config import FeishuConfig as _FeishuConfig
-from feishu_adapter.runtime import FeishuRuntimeManager as _FeishuRuntimeManager
+from remote_control.transports.feishu.config import FeishuConfig as _FeishuConfig
+from remote_control.transports.feishu.runtime import FeishuRuntimeManager as _FeishuRuntimeManager
 
 _feishu_runtime = _FeishuRuntimeManager(
     _FeishuConfig.from_env(PROJECT_ROOT),
