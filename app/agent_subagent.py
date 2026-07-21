@@ -47,7 +47,7 @@ EXPLORE_TOOLS = frozenset(
 STRICT_READONLY_TOOLS = frozenset(
     {"read_file", "ls", "list_dir", "glob", "grep", "activate_skill"}
 )
-GENERAL_TOOLS_EXCLUDE = frozenset({"update_todo", "context_manage"})
+GENERAL_TOOLS_EXCLUDE = frozenset({"update_todo", "context_manage", "ask_user"})
 
 SUBAGENT_TYPES = frozenset(
     {"generalPurpose", "explore", "best-of-n-runner"}

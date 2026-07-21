@@ -27,6 +27,13 @@ def new_approval_id() -> str:
     return uuid.uuid4().hex
 
 
+def has_live_approval_waiter(session_id: str, approval_id: str) -> bool:
+    key = (str(session_id or "").strip(), str(approval_id or "").strip())
+    with _PENDING_LOCK:
+        future = _PENDING.get(key)
+    return bool(future is not None and not future.done())
+
+
 def reject_pending_approvals_for_sessions(session_ids) -> None:
     ids = {(s or "").strip() for s in session_ids if (s or "").strip()}
     if not ids:
@@ -37,10 +44,22 @@ def reject_pending_approvals_for_sessions(session_ids) -> None:
                 fut.get_loop().call_soon_threadsafe(fut.set_result, False)
             except RuntimeError:
                 pass
+    try:
+        from human_interaction import get_human_interaction_service
+
+        service = get_human_interaction_service()
+        for sid in ids:
+            for row in service.list(sid, kind="approval", status="pending"):
+                try:
+                    service.cancel(sid, str(row.get("approval_id") or ""), kind="approval", reason="session_interrupted")
+                except Exception:
+                    pass
+    except Exception:
+        pass
 
 
 def list_pending_approvals(session_id: str | None = None) -> list[dict]:
-    """Return reconnect-safe metadata for approvals currently waiting in this process."""
+    """Return live waiters plus durable pending approvals for reconnecting clients."""
     sid_filter = str(session_id or "").strip()
     with _PENDING_LOCK:
         rows = []
@@ -49,7 +68,18 @@ def list_pending_approvals(session_id: str | None = None) -> list[dict]:
                 continue
             meta = dict(_PENDING_META.get((sid, aid)) or {})
             rows.append({"session_id": sid, "approval_id": aid, **meta})
-        return rows
+        live_keys = {(row.get("session_id"), row.get("approval_id")) for row in rows}
+    if sid_filter:
+        try:
+            from human_interaction import get_human_interaction_service
+
+            for row in get_human_interaction_service().list(sid_filter, kind="approval", status="pending"):
+                key = (sid_filter, row.get("approval_id"))
+                if key not in live_keys:
+                    rows.append(row)
+        except Exception:
+            pass
+    return rows
 
 
 def resolve_tool_approval(session_id: str, approval_id: str, approved: bool) -> bool:
@@ -60,13 +90,29 @@ def resolve_tool_approval(session_id: str, approval_id: str, approved: bool) -> 
         return False
     with _PENDING_LOCK:
         fut = _PENDING.get((sid, aid))
-    if not fut or fut.done():
+    live_matched = bool(fut and not fut.done())
+    if not live_matched:
+        # A durable record can outlive the coroutine that owned the protected
+        # operation. Never turn such a stale approval into a claim that the
+        # operation was allowed or executed.
         return False
+    durable_matched = False
+    try:
+        from human_interaction import HumanInteractionNotFound, get_human_interaction_service
+
+        get_human_interaction_service().resolve_approval(
+            sid, aid, "allow_once" if approved else "deny", resolver={"channel": "legacy_api"}
+        )
+        durable_matched = True
+    except HumanInteractionNotFound:
+        pass
+    except Exception:
+        pass
     try:
         fut.get_loop().call_soon_threadsafe(fut.set_result, bool(approved))
     except RuntimeError:
-        return False
-    return True
+        live_matched = False
+    return durable_matched or live_matched
 
 
 async def _interrupt_poll_until_done(session_id: str, fut: asyncio.Future) -> None:
@@ -99,14 +145,49 @@ async def wait_tool_ui_approval_after_emit(
     with _PENDING_LOCK:
         _PENDING[key] = fut
         _PENDING_META[key] = {"created_at": time.time(), **dict(metadata or {})}
+    durable = bool((metadata or {}).get("_durable"))
+    durable_service = None
+    if durable:
+        try:
+            from human_interaction import get_human_interaction_service
+
+            durable_service = get_human_interaction_service()
+            durable_meta = {k: v for k, v in dict(metadata or {}).items() if not str(k).startswith("_")}
+            durable_service.create_approval(
+                key[0],
+                approval_id=key[1],
+                metadata=durable_meta,
+                run_id=str((metadata or {}).get("run_id") or ""),
+                tool_call_id=str((metadata or {}).get("tool_call_id") or ""),
+            )
+        except Exception:
+            durable_service = None
     poll = asyncio.create_task(_interrupt_poll_until_done(session_id, fut))
     try:
         await emit_coro()
-        return await asyncio.wait_for(fut, timeout=max(30.0, _WAIT_SEC))
+        allowed = await asyncio.wait_for(fut, timeout=max(30.0, _WAIT_SEC))
+        if not allowed and durable_service is not None:
+            try:
+                durable_service.cancel(key[0], key[1], kind="approval", reason="approval_wait_ended")
+            except Exception:
+                pass
+        return bool(allowed)
     except asyncio.TimeoutError:
         if not fut.done():
             fut.set_result(False)
+        if durable_service is not None:
+            try:
+                durable_service.expire(key[0], key[1], kind="approval", reason="approval_timeout")
+            except Exception:
+                pass
         return False
+    except asyncio.CancelledError:
+        if durable_service is not None:
+            try:
+                durable_service.cancel(key[0], key[1], kind="approval", reason="run_cancelled")
+            except Exception:
+                pass
+        raise
     finally:
         poll.cancel()
         try:

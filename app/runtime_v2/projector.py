@@ -109,6 +109,10 @@ class RuntimeProjector:
                 },
             },
             "plugins": {},
+            "interactions": {},
+            "approvals": {},
+            "pending_interactions": [],
+            "pending_approvals": [],
             "history_ops": [],
             "legacy_observations": [],
             "visible_range": {},
@@ -180,6 +184,20 @@ class RuntimeProjector:
             key: dict(value) if isinstance(value, dict) else value
             for key, value in dict(snapshot.get("plugins") or {}).items()
         }
+        out["interactions"] = {
+            key: copy.deepcopy(value) if isinstance(value, dict) else value
+            for key, value in dict(snapshot.get("interactions") or {}).items()
+        }
+        out["approvals"] = {
+            key: copy.deepcopy(value) if isinstance(value, dict) else value
+            for key, value in dict(snapshot.get("approvals") or {}).items()
+        }
+        out["pending_interactions"] = [
+            copy.deepcopy(value) for value in list(snapshot.get("pending_interactions") or [])
+        ]
+        out["pending_approvals"] = [
+            copy.deepcopy(value) for value in list(snapshot.get("pending_approvals") or [])
+        ]
         out["hooks"] = copy.deepcopy(snapshot.get("hooks") or {})
         if isinstance(snapshot.get("todo"), dict):
             out["todo"] = dict(snapshot["todo"])
@@ -390,6 +408,10 @@ class RuntimeProjector:
             self._apply_hook_event(snapshot, event)
         elif event_type in PLUGIN_EVENT_TYPES:
             self._apply_plugin_event(snapshot, event)
+        elif event_type.startswith("interaction_"):
+            self._apply_human_interaction(snapshot, event, kind="question")
+        elif event_type.startswith("approval_"):
+            self._apply_human_interaction(snapshot, event, kind="approval")
         elif event_type in {
             "message_deleted",
             "message_rewritten",
@@ -403,6 +425,43 @@ class RuntimeProjector:
         elif event_type.startswith("legacy_") and event_type.endswith("_observed"):
             self._apply_legacy_observation(snapshot, event)
         return snapshot
+
+    @staticmethod
+    def _apply_human_interaction(snapshot: dict, event: RuntimeEvent, *, kind: str) -> None:
+        payload = dict(event.payload or {})
+        is_approval = kind == "approval"
+        collection_key = "approvals" if is_approval else "interactions"
+        pending_key = "pending_approvals" if is_approval else "pending_interactions"
+        id_key = "approval_id" if is_approval else "interaction_id"
+        request_id = str(payload.get(id_key) or "").strip()
+        if not request_id:
+            return
+        collection = snapshot.setdefault(collection_key, {})
+        current = collection.get(request_id)
+        if event.type.endswith("_requested"):
+            row = payload
+            row["status"] = "pending"
+            row.setdefault("created_at", event.timestamp)
+        else:
+            row = dict(current or {id_key: request_id, "kind": kind})
+            row.update(payload)
+            if event.type.endswith("_resolved"):
+                row["status"] = "resolved"
+                row.setdefault("resolved_at", event.timestamp)
+            elif event.type.endswith("_cancelled"):
+                row["status"] = "cancelled"
+                row.setdefault("cancelled_at", event.timestamp)
+            elif event.type.endswith("_expired"):
+                row["status"] = "expired"
+                row.setdefault("expired_at", event.timestamp)
+        row["seq"] = event.seq
+        row["updated_at"] = event.timestamp
+        collection[request_id] = row
+        snapshot[pending_key] = [
+            copy.deepcopy(item)
+            for item in collection.values()
+            if isinstance(item, dict) and item.get("status") == "pending"
+        ]
 
     @staticmethod
     def _new_team_projection(event: RuntimeEvent) -> dict:

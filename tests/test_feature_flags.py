@@ -35,6 +35,7 @@ def test_index_html_injects_conservative_feature_values(monkeypatch):
 
     assert flags == {
         "goal": True,
+        "askUser": False,
         "agentTeam": False,
         "followupRestart": False,
         "streamReconnect": False,
@@ -54,6 +55,7 @@ def test_index_html_injects_independent_feature_overrides(monkeypatch):
 
     assert flags == {
         "goal": True,
+        "askUser": False,
         "agentTeam": True,
         "followupRestart": True,
         "streamReconnect": True,
@@ -67,6 +69,14 @@ def test_index_html_injects_goal_feature_override(monkeypatch):
     monkeypatch.setenv("GOAL_ENABLED", "0")
     flags = _extract_feature_flags(str(webui.get_index_html()))
     assert flags["goal"] is False
+
+
+def test_index_html_injects_ask_user_feature_override(monkeypatch):
+    import webui
+
+    monkeypatch.setenv("ASK_USER_ENABLED", "on")
+    flags = _extract_feature_flags(str(webui.get_index_html()))
+    assert flags["askUser"] is True
 
 
 def test_index_html_defaults_agent_team_disabled(monkeypatch):
@@ -147,16 +157,17 @@ def test_frontend_feature_entrypoints_are_flag_guarded():
     assert "if (!sendPipelineLock) return;" in sse
     assert "releaseSendPipelineLock(sendPipelineLock);" in sse
     assert "formData.append('steer_id', String(options.steerId))" in sse
-    # 队列状态可刷新，但任何 pending 都不能被自动消费。
+    # 普通状态刷新不会发送；自动续发只从 run 终止边界进入 drain。
     assert "function refreshPendingFollowupQueue(sessionId)" in sse
     assert "void sendFollowupNow(String(front.id), sid)" not in sse
+    assert "function drainFollowupQueue(sessionId)" in sse
     assert "function withFollowupDispatch(sessionId, fn)" in sse
     assert "async function waitForSendPipelineIdle(sessionId, timeoutMs)" in sse
     assert "followupEnabled" in sessions
     assert "isMyAgentFeatureEnabled('followupRestart', false)" in sessions
 
 
-def test_followups_wait_for_explicit_send_now_across_run_end_and_sync():
+def test_followups_auto_continue_only_after_run_end_and_sync():
     sse = (ROOT / "frontend/src/app/modules/sse-handling.js").read_text(encoding="utf-8")
     enqueue = sse.split("function enqueueCurrentInputAsFollowup()", 1)[1].split(
         "function takeFollowupItem", 1
@@ -164,21 +175,38 @@ def test_followups_wait_for_explicit_send_now_across_run_end_and_sync():
     end_run = sse.split("function endRunForClient", 1)[1].split(
         "async function readSseChunkWithIdleTimeout", 1
     )[0]
+    consumed = sse.split("function removeConsumedFollowupSteer", 1)[1].split(
+        "function isFollowupAutoDrainReady", 1
+    )[0]
+    drain = sse.split("function isFollowupAutoDrainReady", 1)[1].split(
+        "function scheduleAcceptedFollowupWatch", 1
+    )[0]
     # 入队绝不发送：入队只创建并持久化 pending，绝不触发发送。
     assert "sendFollowupNow" not in enqueue
     assert "scheduleFollowupQueueDrain" not in enqueue
     assert "setSendButtonState();" in enqueue
-    # 运行结束只同步服务端状态，不发送 pending。
+    # 上一轮结束后必须先完成服务端对账，再启动自动续发。
     assert "syncFollowupQueueFromServer(sid)" in end_run
-    assert "syncFollowupQueueFromServer(sid)" in end_run
-    assert "sendFollowupNow" not in end_run
-    # 三重空闲门禁：本地 run、服务端 stream、发送锁都空闲才允许 drain。
-    assert "isSessionRunning(sid) || isServerStreamActive(sid)" in sse
-    assert "isSendPipelineLocked(sid)" in sse
-    assert "followupDrainTimers" not in sse
-    # 旧名 followupQueueDraining 已被会话级 dispatcher 链取代，不应再出现。
+    assert "Promise.resolve(followupSync).then" in end_run
+    assert "auto-drain skipped" in end_run
+    assert "getRunAbortReason(sid, ctx) !== 'user'" in end_run
+    assert "scheduleFollowupQueueDrain(sid" in end_run
+    # consumed 只唤醒同一套门禁；活跃 run 下不能绕过门禁顺手发下一条。
+    assert "scheduleFollowupQueueDrain(sid, 0)" in consumed
+    # 本地 run、服务端 stream、发送锁和 dispatcher 全部空闲才允许 drain。
+    assert "!isSessionRunning(sid)" in drain
+    assert "isSessionStreamStopSuppressed(sid)" in drain
+    assert "!isServerStreamActive(sid)" in drain
+    assert "!isSendPipelineLocked(sid)" in drain
+    assert "!isFollowupDispatchBusy(sid)" in drain
+    assert "var item = q[0];" in drain
+    assert "sendFollowupNow(item.id, sid)" in drain
+    assert ".finally(function ()" not in drain
+    # 定时器按会话合并，避免 final/run_finished/finally 重复触发多个请求。
+    assert "followupDrainTimers[sid]" in drain
+    assert "clearTimeout(existing.timer)" in drain
+    # 旧的第二套 draining 锁不得复活，自动/手动统一由 dispatcher 串行化。
     assert "followupQueueDraining" not in sse
-    # 会话级互斥：所有显式立即发送共用同一 dispatcher 链。
     assert "function isFollowupDispatchBusy(sessionId)" in sse
     # 降级 /chat 前等待发送锁释放，避免静默返回导致追问丢失。
     assert "waitForSendPipelineIdle(sid, 4000)" in sse

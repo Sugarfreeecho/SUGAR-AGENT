@@ -116,6 +116,11 @@ import execution_metrics
 from agent_subagent_events import should_persist_ui_event
 from session_event_bus import close_session_stream, prune_session_ephemeral, publish_session_event
 from tool_approval_gate import new_approval_id, wait_tool_ui_approval_after_emit
+from human_interaction import (
+    HumanInteractionValidationError,
+    ask_user_enabled,
+    wait_for_user_answers,
+)
 from runtime_power import AgentRunPowerGuard, RuntimeResume
 from agent_goal import GoalError, goal_enabled, manager_for as goal_manager_for
 
@@ -983,6 +988,7 @@ tools_dict = {k: v for k, v in tools.items()}
 # activate_skill 仅读取 SKILL.md/目录列表，不修改工作区，可并行。
 READ_ONLY_TOOLS = {"read_file", "ls", "list_dir", "glob", "grep", "web_search", "web_fetch", "activate_skill"}
 COOPERATIVE_STEER_TOOLS = {"context_manage", "task", "team"}
+INTERACTIVE_TOOLS = {"ask_user"}
 
 
 def _can_execute_closed_stream_tool(tool_name: str) -> bool:
@@ -992,7 +998,8 @@ def _can_execute_closed_stream_tool(tool_name: str) -> bool:
     currently being used to assemble this assistant turn, so it remains in the
     post-turn phase. External/read/write/Shell/MCP tools have no such dependency.
     """
-    return bool(str(tool_name or "").strip()) and str(tool_name).strip() != "context_manage"
+    name = str(tool_name or "").strip()
+    return bool(name) and name not in {"context_manage", *INTERACTIVE_TOOLS}
 
 
 def _tool_steer_policy(tool_name: str) -> Dict[str, str]:
@@ -1000,7 +1007,7 @@ def _tool_steer_policy(tool_name: str) -> Dict[str, str]:
     name = str(tool_name or "").strip()
     if name in READ_ONLY_TOOLS:
         return {"interruptibility": "safe", "side_effect": "none"}
-    if name in COOPERATIVE_STEER_TOOLS:
+    if name in COOPERATIVE_STEER_TOOLS or name in INTERACTIVE_TOOLS:
         return {"interruptibility": "cooperative", "side_effect": "reversible"}
     return {"interruptibility": "non_interruptible", "side_effect": "irreversible"}
 READ_ONLY_TOOL_VIRTUAL_LINE_CHARS = 1000
@@ -2312,13 +2319,15 @@ async def _emit_tool_approval_required_sse(
     message: str,
     subtitle: str = "",
 ) -> None:
-    """浏览器须弹窗确认；ephemeral 不落盘。"""
+    """Emit the already-persisted approval request to connected clients."""
     if not emit:
         return
     try:
         payload = {
-            "type": "tool_approval_required",
-            "ephemeral": True,
+            "type": "approval_requested",
+            "status": "pending",
+            "kind": "approval",
+            "_runtime_v2_committed": True,
             "approval_id": approval_id,
             "session_id": session_id,
             "tool": redact_sensitive_tool_text(tool_name),
@@ -3198,6 +3207,13 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
             except Exception as _sub_ex:
                 _pre_api_timing_mark(pre_api_timings, "subagent_tool_filter", _t_pre_api)
                 logger.warning("subagent 工具过滤失败（忽略）: %s", _sub_ex)
+            # Apply this after built-in, MCP, plugin, and session-level tool
+            # composition so no same-named external definition can bypass it.
+            if not ask_user_enabled():
+                combined_tools = [
+                    item for item in combined_tools
+                    if str(((item.get("function") or {}).get("name") or "")) != "ask_user"
+                ]
 
             async def _execute_one_core(tool_call):
                 tool_name = tool_call["name"]
@@ -3244,6 +3260,9 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                                 appr_id,
                                 _emit_appr,
                                 metadata={
+                                    "_durable": True,
+                                    "run_id": str(state.get("_runtime_v2_run_id") or ""),
+                                    "tool_call_id": str(tool_id or ""),
                                     "tool": redact_sensitive_tool_text(tool_name),
                                     "title": redact_sensitive_tool_text(spec["title"]),
                                     "message": redact_sensitive_tool_text(spec["message"]),
@@ -3273,6 +3292,59 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
 
                 # Run the final steer check before announcing that execution started.
                 await _raise_if_steer_requested(state, emit, "tool")
+
+                if tool_name == "ask_user":
+                    state["_runtime_stage"] = "waiting_user:ask_user"
+                    started = time.perf_counter()
+                    try:
+                        interaction = await wait_for_user_answers(
+                            state["session_id"],
+                            tool_args,
+                            run_id=str(state.get("_runtime_v2_run_id") or ""),
+                            tool_call_id=str(tool_id or ""),
+                            emit=emit,
+                            interrupt_check=lambda: (
+                                session_manager.is_interrupt_requested(state["session_id"])
+                                or _steer_requested(state)
+                            ),
+                        )
+                        status = str(interaction.get("status") or "resolved")
+                        result_payload = {
+                            "status": status,
+                            "interaction_id": interaction.get("interaction_id"),
+                            "answers": interaction.get("answers") or [],
+                        }
+                        if interaction.get("reason"):
+                            result_payload["reason"] = interaction.get("reason")
+                        result_str = json.dumps(result_payload, ensure_ascii=False, separators=(",", ":"))
+                        tool_failed = status not in {"resolved", "cancelled"}
+                    except HumanInteractionValidationError as exc:
+                        result_str = json.dumps(
+                            {"status": "invalid_request", "error": str(exc)},
+                            ensure_ascii=False,
+                            separators=(",", ":"),
+                        )
+                        tool_failed = True
+                    tool_invoke_ms = _timing_ms(started)
+                    result_for_log, result_for_llm, result_for_ui = _tool_result_details_for_views(
+                        result_str, tool_name, state
+                    )
+                    return {
+                        "type": "tool",
+                        "tool_name": tool_name,
+                        "tool_args": redact_sensitive_tool_obj(tool_args),
+                        "tool_id": tool_id,
+                        "tool_call_index": tool_call_index,
+                        "result": result_str,
+                        "tool_detail_log": result_for_log,
+                        "tool_detail_llm": result_for_llm,
+                        "tool_detail_ui": result_for_ui,
+                        "result_for_log": result_for_log,
+                        "tool_failed": tool_failed,
+                        "tool_status": _tool_result_status(
+                            tool_name, result_str, failed=tool_failed, duration_ms=tool_invoke_ms
+                        ),
+                    }
 
                 # Arguments are closed and any required approval has completed.
                 # Keep this event ephemeral so the UI can switch the streamed
@@ -4910,6 +4982,16 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                     if not _task.done():
                         _task.add_done_callback(_discard_task_result)
                         _task.cancel()
+            invalid_interactive_batch = bool(
+                tool_calls_list
+                and any(str((tc or {}).get("name") or "") in INTERACTIVE_TOOLS for tc in tool_calls_list)
+                and len(tool_calls_list) != 1
+            )
+            if invalid_interactive_batch:
+                for _task in list(early_tool_tasks.values()):
+                    if not _task.done():
+                        _task.add_done_callback(_discard_task_result)
+                        _task.cancel()
             if tool_calls_list is not None:
                 state["_steer_rollback_marker"] = {
                     "llm_len": len(llm_history),
@@ -5098,6 +5180,17 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                         if _is_followup_interrupt(state["session_id"]):
                             raise asyncio.CancelledError()
                         break
+                    if invalid_interactive_batch:
+                        rejected = _blocked_tool_result(
+                            str(tool_call.get("name") or "tool"),
+                            tool_call.get("args") if isinstance(tool_call.get("args"), dict) else {},
+                            str(tool_call.get("id") or ""),
+                            "ask_user must be the only tool call in its assistant turn; no tool in this mixed batch was executed.",
+                        )
+                        rejected["tool_call_index"] = tool_call.get("index")
+                        rejected = await checkpoint_completed_tool_result(rejected)
+                        exec_results.append(rejected)
+                        continue
                     try:
                         early_idx = int(tool_call.get("index")) if tool_call.get("index") is not None else None
                     except Exception:

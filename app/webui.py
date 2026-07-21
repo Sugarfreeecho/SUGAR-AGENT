@@ -41,6 +41,7 @@ from agent_harness import (
 from agent_team import AGENT_TEAM_ENV_VAR, agent_team_enabled
 from agent_team.api import create_agent_team_router
 from agent_team.service import AgentTeamService
+from human_interaction import ask_user_enabled
 from agent_loop import (
     abort_session_steer_run,
     compute_context_tokens_for_session,
@@ -54,7 +55,7 @@ from agent_loop import (
 from session_lifecycle import get_run_started_at, is_run_active
 from session_event_bus import publish_session_event, subscribe_session_events
 import agent_mcp
-from agent_tools import discover_skills
+from agent_tools import discover_skills, set_skill_enabled
 import model_profiles
 import execution_metrics
 from path_picker_util import pick_native_path
@@ -137,6 +138,7 @@ _history_op_locks: dict[str, threading.Lock] = {}
 _history_op_locks_guard = threading.Lock()
 _goal_runner_task: Optional[asyncio.Task] = None
 _goal_runner_workers: dict[str, asyncio.Task] = {}
+_human_interaction_recovery_workers: dict[str, asyncio.Task] = {}
 _GOAL_RUNNER_POLL_SECONDS = max(0.5, float(os.getenv("GOAL_RUNNER_POLL_SECONDS", "2")))
 _RUNTIME_SYNC_CANCEL = threading.Event()
 _RUNTIME_SYNC_SLEEP_SEC = float(os.getenv("RUNTIME_SYNC_QUEUE_SLEEP_SEC", "0.2"))
@@ -679,6 +681,96 @@ async def _run_goal_continuation_background(session_id: str) -> None:
                 logger.debug("Goal runner fallback failure accounting failed for %s", sid, exc_info=True)
     finally:
         _release_session_chat_start(sid, start_token)
+
+
+def _append_recovered_question_tool_result(record: dict) -> bool:
+    """Close an orphaned ask_user tool call exactly once before continuation."""
+    sid = str((record or {}).get("session_id") or "").strip()
+    interaction_id = str((record or {}).get("interaction_id") or "").strip()
+    tool_call_id = str((record or {}).get("tool_call_id") or "").strip()
+    if not sid or not interaction_id or not tool_call_id:
+        return False
+    operation_id = "interaction-recovery-tool:" + interaction_id
+    from runtime_v2 import RuntimeHistoryOps, SnapshotStore
+
+    resolver = getattr(session_manager, "_resolve_session_path", None)
+    snapshot = SnapshotStore(
+        session_manager.repository.sessions_dir,
+        path_resolver=resolver,
+    ).read_consistent(sid)
+    if operation_id in set(str(value) for value in snapshot.get("operation_ids") or []):
+        return False
+    content = json.dumps(
+        {
+            "status": str(record.get("status") or "resolved"),
+            "interaction_id": interaction_id,
+            "answers": record.get("answers") or [],
+            **({"reason": record.get("reason")} if record.get("reason") else {}),
+        },
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+    RuntimeHistoryOps(
+        session_manager.repository.sessions_dir,
+        path_resolver=resolver,
+    ).append_model_message(
+        sid,
+        "tool",
+        content,
+        tool_call_id=tool_call_id,
+        operation_id=operation_id,
+        run_id=str(record.get("run_id") or "") or None,
+    )
+    return True
+
+
+async def _run_human_interaction_recovery_background(session_id: str) -> None:
+    sid = str(session_id or "").strip()
+    if not sid:
+        return
+    recovery_run_id = "interaction-recovery-" + uuid.uuid4().hex
+    start_token = _reserve_session_chat_start(sid, recovery_run_id) or ""
+    if not start_token:
+        return
+    try:
+        def should_stop(sid_: str) -> bool:
+            return session_manager.is_interrupt_requested(sid_)
+
+        async for _event in astream_events_continuation(
+            sid,
+            should_stop=should_stop,
+            require_pending_subagents=False,
+            recovery_reason="human_interaction_resolved_after_restart",
+            run_id=recovery_run_id,
+        ):
+            pass
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        logger.warning("Human interaction recovery failed for %s: %s", sid, exc)
+    finally:
+        _release_session_chat_start(sid, start_token)
+
+
+def _schedule_human_interaction_recovery(session_id: str) -> bool:
+    sid = str(session_id or "").strip()
+    if not sid:
+        return False
+    existing = _human_interaction_recovery_workers.get(sid)
+    if existing is not None and not existing.done():
+        return False
+    task = asyncio.create_task(
+        _run_human_interaction_recovery_background(sid),
+        name=f"interaction-recovery-{sid}",
+    )
+    _human_interaction_recovery_workers[sid] = task
+
+    def cleanup(done: asyncio.Task, session_id_: str = sid) -> None:
+        if _human_interaction_recovery_workers.get(session_id_) is done:
+            _human_interaction_recovery_workers.pop(session_id_, None)
+
+    task.add_done_callback(cleanup)
+    return True
 
 
 async def _goal_runner_loop() -> None:
@@ -1296,6 +1388,7 @@ def get_index_html():
         default_steer_mode = "append"
     feature_flags = {
         "goal": os.getenv("GOAL_ENABLED", "1").strip().lower() not in {"0", "false", "no", "off"},
+        "askUser": ask_user_enabled(),
         "agentTeam": agent_team_enabled(),
         "followupRestart": os.getenv("MYAGENT_ENABLE_FOLLOWUP_RESTART", "1").strip().lower() in {"1", "true", "yes", "on"},
         "streamReconnect": os.getenv("MYAGENT_ENABLE_STREAM_RECONNECT", "1").strip().lower() in {"1", "true", "yes", "on"},
@@ -1720,11 +1813,12 @@ async def list_workspace_files(
 @fastapi_app.get("/api/skills")
 async def list_registered_skills():
     try:
-        skills = await run_in_threadpool(discover_skills)
+        skills = await run_in_threadpool(lambda: discover_skills(include_disabled=True))
         public = [
             {
                 "name": str(skill.get("name") or ""),
                 "description": str(skill.get("description") or ""),
+                "enabled": skill.get("enabled") is not False,
             }
             for skill in skills
             if str(skill.get("name") or "").strip()
@@ -1733,6 +1827,26 @@ async def list_registered_skills():
     except Exception as exc:
         logger.warning("skills scan failed: %s", exc)
         return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
+
+
+@fastapi_app.post("/api/skills/{skill_name}/enabled")
+async def set_registered_skill_enabled(skill_name: str, request: Request):
+    try:
+        data = await request.json()
+    except Exception:
+        return JSONResponse({"ok": False, "error": "invalid json"}, status_code=400)
+    enabled = data.get("enabled") if isinstance(data, dict) else None
+    if not isinstance(enabled, bool):
+        return JSONResponse({"ok": False, "error": "enabled must be boolean"}, status_code=400)
+    name = str(skill_name or "").strip()
+    available = {
+        str(skill.get("name") or "")
+        for skill in await run_in_threadpool(lambda: discover_skills(include_disabled=True))
+    }
+    if name not in available:
+        return JSONResponse({"ok": False, "error": "unknown skill"}, status_code=404)
+    await run_in_threadpool(set_skill_enabled, name, enabled)
+    return JSONResponse({"ok": True, "name": name, "enabled": enabled})
 
 
 @fastapi_app.post("/api/upload-chat-files")
@@ -1896,6 +2010,12 @@ async def list_sessions(
             end = None if limit is None else offset + limit
             sessions = sessions[offset:end]
         _cleanup_stale_active_chat()
+        try:
+            from human_interaction import get_human_interaction_service
+
+            interaction_service = get_human_interaction_service()
+        except Exception:
+            interaction_service = None
         for s in sessions:
             sid = s.get("id")
             if sid:
@@ -1905,11 +2025,20 @@ async def list_sessions(
                 s["run_active"] = bool(run_state["run_active"])
                 s["run_started_at"] = run_state["run_started_at"]
                 s["title_generation_pending"] = is_session_title_generation_pending(sid)
+                if interaction_service is not None:
+                    try:
+                        pending_human = interaction_service.pending_counts(sid)
+                    except Exception:
+                        pending_human = {"questions": 0, "approvals": 0, "total": 0}
+                else:
+                    pending_human = {"questions": 0, "approvals": 0, "total": 0}
+                s["pending_human_interactions"] = pending_human
             else:
                 s["stream_active"] = False
                 s["run_active"] = False
                 s["run_started_at"] = None
                 s["title_generation_pending"] = False
+                s["pending_human_interactions"] = {"questions": 0, "approvals": 0, "total": 0}
         return JSONResponse(
             content=sessions,
             headers={"X-Archived-Count": str(archived_count)},
@@ -2499,6 +2628,23 @@ async def reorder_model_profiles(req: Request):
     return JSONResponse(_model_profiles_response())
 
 
+@fastapi_app.post("/api/model_profiles/{profile_id}/enabled")
+async def set_model_profile_enabled(profile_id: str, req: Request):
+    try:
+        data = await req.json()
+    except Exception:
+        return JSONResponse({"ok": False, "error": "invalid json"}, status_code=400)
+    enabled = data.get("enabled") if isinstance(data, dict) else None
+    if not isinstance(enabled, bool):
+        return JSONResponse({"ok": False, "error": "enabled must be boolean"}, status_code=400)
+    profile = model_profiles.set_profile_enabled(PROJECT_ROOT, (profile_id or "").strip(), enabled)
+    if profile is None:
+        return JSONResponse({"ok": False, "error": "unknown profile_id"}, status_code=404)
+    _invalidate_executor_config_cache()
+    refresh_executor_client_from_env()
+    return JSONResponse({"ok": True, "profile": model_profiles.public_profile(profile)})
+
+
 @fastapi_app.delete("/api/model_profiles/{profile_id}")
 async def delete_model_profile(profile_id: str):
     ok = model_profiles.delete_profile(PROJECT_ROOT, (profile_id or "").strip())
@@ -2671,7 +2817,175 @@ async def post_tool_approval(session_id: str, request: Request):
     from tool_approval_gate import resolve_tool_approval
 
     matched = resolve_tool_approval(session_id, aid, approve)
+    if matched:
+        try:
+            from human_interaction import get_human_interaction_service
+
+            record = get_human_interaction_service().get(session_id, aid, kind="approval")
+            await publish_session_event(session_id, {"type": "approval_resolved", **record})
+        except Exception:
+            pass
     return JSONResponse(content={"ok": matched})
+
+
+def _interaction_resolver_metadata(request: Request) -> dict:
+    return {
+        "channel": "webui",
+        "client": str(request.headers.get("x-client-id") or "browser")[:120],
+    }
+
+
+def _human_interaction_error_response(exc: Exception) -> JSONResponse:
+    from human_interaction import (
+        HumanInteractionConflict,
+        HumanInteractionNotFound,
+        HumanInteractionValidationError,
+    )
+
+    if isinstance(exc, HumanInteractionNotFound):
+        return JSONResponse(content={"ok": False, "error": str(exc)}, status_code=404)
+    if isinstance(exc, HumanInteractionConflict):
+        return JSONResponse(content={"ok": False, "error": str(exc)}, status_code=409)
+    if isinstance(exc, HumanInteractionValidationError):
+        return JSONResponse(content={"ok": False, "error": str(exc)}, status_code=422)
+    if isinstance(exc, ValueError):
+        return JSONResponse(content={"ok": False, "error": str(exc)}, status_code=422)
+    logger.exception("human interaction request failed")
+    return JSONResponse(content={"ok": False, "error": "human interaction request failed"}, status_code=500)
+
+
+@fastapi_app.get("/sessions/{session_id}/interactions")
+async def get_session_interactions(session_id: str, status: str = Query(default="pending")):
+    try:
+        from human_interaction import get_human_interaction_service
+
+        normalized = str(status or "").strip().lower()
+        if normalized not in {"", "pending", "resolved", "cancelled", "expired"}:
+            return JSONResponse(content={"ok": False, "error": "invalid status"}, status_code=422)
+        rows = await asyncio.to_thread(
+            get_human_interaction_service().list,
+            session_id,
+            kind="question",
+            status=normalized,
+        )
+        return JSONResponse(content={"ok": True, "interactions": rows})
+    except Exception as exc:
+        return _human_interaction_error_response(exc)
+
+
+@fastapi_app.post("/sessions/{session_id}/interactions/{interaction_id}/resolve")
+async def resolve_session_interaction(session_id: str, interaction_id: str, request: Request):
+    try:
+        body = await request.json()
+        from human_interaction import get_human_interaction_service, has_registered_waiter
+
+        had_waiter = has_registered_waiter(session_id, "question", interaction_id)
+        record = await asyncio.to_thread(
+            get_human_interaction_service().resolve_question,
+            session_id,
+            interaction_id,
+            body,
+            resolver=_interaction_resolver_metadata(request),
+        )
+        await publish_session_event(session_id, {"type": "interaction_resolved", **record})
+        recovery_scheduled = False
+        if not had_waiter and not _has_local_worker_activity(session_id):
+            appended = await asyncio.to_thread(_append_recovered_question_tool_result, record)
+            if appended:
+                recovery_scheduled = _schedule_human_interaction_recovery(session_id)
+        return JSONResponse(content={"ok": True, "interaction": record, "recovery_scheduled": recovery_scheduled})
+    except Exception as exc:
+        return _human_interaction_error_response(exc)
+
+
+@fastapi_app.post("/sessions/{session_id}/interactions/{interaction_id}/cancel")
+async def cancel_session_interaction(session_id: str, interaction_id: str, request: Request):
+    try:
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        from human_interaction import get_human_interaction_service, has_registered_waiter
+
+        had_waiter = has_registered_waiter(session_id, "question", interaction_id)
+        record = await asyncio.to_thread(
+            get_human_interaction_service().cancel,
+            session_id,
+            interaction_id,
+            kind="question",
+            reason=str((body or {}).get("reason") or "user_cancelled"),
+        )
+        await publish_session_event(session_id, {"type": "interaction_cancelled", **record})
+        recovery_scheduled = False
+        if not had_waiter and not _has_local_worker_activity(session_id):
+            appended = await asyncio.to_thread(_append_recovered_question_tool_result, record)
+            if appended:
+                recovery_scheduled = _schedule_human_interaction_recovery(session_id)
+        return JSONResponse(content={"ok": True, "interaction": record, "recovery_scheduled": recovery_scheduled})
+    except Exception as exc:
+        return _human_interaction_error_response(exc)
+
+
+@fastapi_app.get("/sessions/{session_id}/approvals")
+async def get_session_approvals(session_id: str, status: str = Query(default="pending")):
+    try:
+        from human_interaction import get_human_interaction_service
+
+        normalized = str(status or "").strip().lower()
+        if normalized not in {"", "pending", "resolved", "cancelled", "expired"}:
+            return JSONResponse(content={"ok": False, "error": "invalid status"}, status_code=422)
+        rows = await asyncio.to_thread(
+            get_human_interaction_service().list,
+            session_id,
+            kind="approval",
+            status=normalized,
+        )
+        return JSONResponse(content={"ok": True, "approvals": rows})
+    except Exception as exc:
+        return _human_interaction_error_response(exc)
+
+
+@fastapi_app.post("/sessions/{session_id}/approvals/{approval_id}/resolve")
+async def resolve_session_approval(session_id: str, approval_id: str, request: Request):
+    try:
+        body = await request.json()
+        decision = str((body or {}).get("decision") or "")
+        from human_interaction import get_human_interaction_service
+        from tool_approval_gate import has_live_approval_waiter
+
+        service = get_human_interaction_service()
+        if not has_live_approval_waiter(session_id, approval_id):
+            record = await asyncio.to_thread(
+                service.cancel,
+                session_id,
+                approval_id,
+                kind="approval",
+                reason="原执行已结束，审批未执行；请让 Agent 重新发起该操作。",
+            )
+            await publish_session_event(session_id, {"type": "approval_cancelled", **record})
+            return JSONResponse(
+                content={
+                    "ok": False,
+                    "error": "原执行已结束，不能继续执行旧审批；请让 Agent 重新发起。",
+                    "approval": record,
+                },
+                status_code=409,
+            )
+        record = await asyncio.to_thread(
+            service.resolve_approval,
+            session_id,
+            approval_id,
+            decision,
+            resolver=_interaction_resolver_metadata(request),
+        )
+        # Wake the compatibility Future used by the current Agent Loop.
+        from tool_approval_gate import resolve_tool_approval
+
+        resolve_tool_approval(session_id, approval_id, record.get("decision") in {"allow_once", "allow_always"})
+        await publish_session_event(session_id, {"type": "approval_resolved", **record})
+        return JSONResponse(content={"ok": True, "approval": record})
+    except Exception as exc:
+        return _human_interaction_error_response(exc)
 
 
 def _valid_selected_skill_names(raw_selected: Any) -> list[str]:
@@ -4664,6 +4978,7 @@ _ENV_GROUP_ORDER: list[tuple[str, str, list[str]]] = [
             "VERBOSE_LOGGING",
             "TODO_MAX_ITEMS",
             "MAX_PARALLEL_TOOLS",
+            "ASK_USER_ENABLED",
             "GOAL_ENABLED",
             "GOAL_RUNNER_POLL_SECONDS",
             "GOAL_MAX_CONSECUTIVE_FAILURES",
@@ -4733,6 +5048,7 @@ for _gid, _title, _keys in _ENV_GROUP_ORDER:
         _ENV_KEY_ORDER_IN_GROUP[_k] = _i
 
 _ENV_HINTS: dict[str, str] = {
+    "ASK_USER_ENABLED": "0（默认）禁止主 Agent 创建 ask_user 问题；1/true/yes/on 启用。已有待回答问题仍可处理，工具审批不受影响。保存后立即生效。",
     "GOAL_ENABLED": "1（默认）启用持久 Goal、Goal 工具和服务端自动续跑；0/false/no/off 禁用。修改后需重启 Agent。",
     "GOAL_RUNNER_POLL_SECONDS": "服务端 Goal 调度器扫描 active Goal 的间隔秒数，默认 2，最小 0.5。修改后需重启 Agent。",
     "GOAL_MAX_CONSECUTIVE_FAILURES": "Goal 连续运行失败多少次后自动暂停，默认 3；用于避免无限失败重试。",
@@ -5070,6 +5386,7 @@ async def get_env_snapshot():
     flat = [row for row in _parse_env_entries(raw) if row.get("key") not in _MODEL_ENV_KEYS]
     existing_keys = {str(row.get("key") or "") for row in flat}
     for key, default in {
+        "ASK_USER_ENABLED": "0",
         "GOAL_ENABLED": "1",
         "GOAL_RUNNER_POLL_SECONDS": "2",
         "GOAL_MAX_CONSECUTIVE_FAILURES": "3",
@@ -5337,21 +5654,41 @@ async def save_config(req: _Request):
 # authenticated, versioned router. Keeping registration here avoids circular
 # imports while allowing the transport to reuse the existing run coordinator.
 from remote_control.config import RemoteControlConfig as _RemoteControlConfig
-from remote_control.gateway import create_remote_control_gateway as _create_remote_control_gateway
+from remote_control.gateway import register_remote_control as _register_remote_control
 from remote_control.service import ControlDependencies as _RemoteControlDependencies
 
 _remote_control_config = _RemoteControlConfig.from_env(PROJECT_ROOT)
-_remote_control_gateway = _create_remote_control_gateway(
+_control_dependencies = _RemoteControlDependencies(
+    session_manager=session_manager,
+    astream_events=astream_events,
+    reserve_start=_reserve_session_chat_start,
+    release_start=_release_session_chat_start,
+    is_stream_active=_is_session_stream_active,
+)
+_remote_control_gateway = _register_remote_control(
+    fastapi_app,
     _remote_control_config,
-    _RemoteControlDependencies(
-        session_manager=session_manager,
-        astream_events=astream_events,
-        reserve_start=_reserve_session_chat_start,
-        release_start=_release_session_chat_start,
-        is_stream_active=_is_session_stream_active,
+    _control_dependencies,
+)
+
+from feishu_adapter.config import FeishuConfig as _FeishuConfig
+from feishu_adapter.runtime import FeishuRuntimeManager as _FeishuRuntimeManager
+
+_feishu_runtime = _FeishuRuntimeManager(
+    _FeishuConfig.from_env(PROJECT_ROOT),
+    _control_dependencies,
+    shared_service=(
+        _remote_control_gateway.service if _remote_control_gateway is not None else None
     ),
 )
-fastapi_app.include_router(_remote_control_gateway.router)
+
+
+async def start_feishu_adapter() -> None:
+    await asyncio.to_thread(_feishu_runtime.start)
+
+
+async def stop_feishu_adapter() -> None:
+    await asyncio.to_thread(_feishu_runtime.stop)
 
 
 from fastapi.responses import RedirectResponse as _RedirectResponse

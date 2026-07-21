@@ -941,6 +941,12 @@ class RuntimeUiProjection:
             data["type"] = data.get("type") or "todo_plan"
             data.setdefault("created_at", event.timestamp)
             return data
+        if event.type.startswith("interaction_") or event.type.startswith("approval_"):
+            data = dict(payload)
+            data["type"] = event.type
+            data["runtime_event_type"] = event.type
+            data.setdefault("created_at", event.timestamp)
+            return data
         if event.type.startswith("goal_"):
             data = dict(payload)
             data["type"] = "goal_state"

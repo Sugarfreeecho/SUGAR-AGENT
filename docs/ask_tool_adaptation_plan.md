@@ -604,3 +604,17 @@ MVP 只支持 Markdown/plain-text preview，复用现有 Markdown 渲染并禁�
 - **问答默认可恢复，审批默认失败关闭**。
 - **交互工具必须独占 tool-call batch**，防止模型在用户答案未知时预先提交后续副作用参数。
 - **所有终态都必须闭合原 tool call**，这是避免历史损坏、恢复重复和下一轮 API 报错的核心不变量。
+
+## 16. 功能开关
+
+在 `app/.env` 中使用统一开关：
+
+```dotenv
+ASK_USER_ENABLED=0
+```
+
+- `0/false/no/off` 或未配置：从模型工具列表移除 `ask_user`，服务层同时拒绝创建新问题。
+- `1/true/yes/on`：允许主 Agent 使用 `ask_user`。
+- 开关按次读取，通过高级配置页保存后立即生效。
+- 已经创建的 pending 问题仍可回答或取消，避免正在等待的运行悬空。
+- 安全审批由 `TOOL_UI_APPROVAL` 独立控制；关闭业务问答不会关闭或绕过高风险操作审批。
