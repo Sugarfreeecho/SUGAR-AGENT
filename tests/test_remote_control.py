@@ -15,7 +15,11 @@ if str(APP_DIR) not in sys.path:
     sys.path.insert(0, str(APP_DIR))
 
 from remote_control.config import RemoteControlConfig
-from remote_control.gateway import _is_direct_loopback_request, create_remote_control_gateway
+from remote_control.gateway import (
+    _is_direct_loopback_request,
+    create_remote_control_gateway,
+    register_remote_control,
+)
 from remote_control.protocol import ProtocolError, parse_request
 from remote_control.service import ControlDependencies, RemoteControlError, SessionControlService
 from remote_control.store import DevicePrincipal, IdempotencyConflict, PairingCodeError, RemoteControlStore
@@ -289,15 +293,39 @@ def test_gateway_pair_connect_and_read_methods(tmp_path):
 
 
 def test_gateway_is_disabled_by_default_contract(tmp_path):
-    config = RemoteControlConfig(enabled=False, state_dir=tmp_path)
-    gateway = create_remote_control_gateway(config, _dependencies(_SessionManager()))
+    state_dir = tmp_path / "remote-state"
+    config = RemoteControlConfig(enabled=False, state_dir=state_dir)
     app = FastAPI()
-    app.include_router(gateway.router)
+    gateway = register_remote_control(app, config, _dependencies(_SessionManager()))
+    assert gateway is None
+    assert not state_dir.exists()
     with TestClient(app) as client:
-        status = client.get("/api/remote/v1/status").json()
-        assert status["enabled"] is False
-        assert client.get("/api/remote/v1/client").status_code == 200
+        assert client.get("/api/remote/v1/status").status_code == 404
+        assert client.get("/api/remote/v1/client").status_code == 404
         assert client.post("/api/remote/v1/pairings", json={}).status_code == 404
+
+
+def test_register_remote_control_mounts_routes_when_enabled(tmp_path):
+    state_dir = tmp_path / "remote-state"
+    config = RemoteControlConfig(enabled=True, state_dir=state_dir)
+    app = FastAPI()
+    gateway = register_remote_control(app, config, _dependencies(_SessionManager()))
+    assert gateway is not None
+    paths = {getattr(route, "path", "") for route in app.routes}
+    assert "/api/remote/v1/status" in paths
+    assert "/api/remote/v1/ws" in paths
+    assert state_dir.exists()
+
+
+def test_remote_control_enabled_environment_flag(monkeypatch, tmp_path):
+    monkeypatch.delenv("MYAGENT_REMOTE_CONTROL_ENABLED", raising=False)
+    assert RemoteControlConfig.from_env(tmp_path).enabled is False
+    for value in ("1", "true", "YES", "on"):
+        monkeypatch.setenv("MYAGENT_REMOTE_CONTROL_ENABLED", value)
+        assert RemoteControlConfig.from_env(tmp_path).enabled is True
+    for value in ("0", "false", "no", "off", "invalid"):
+        monkeypatch.setenv("MYAGENT_REMOTE_CONTROL_ENABLED", value)
+        assert RemoteControlConfig.from_env(tmp_path).enabled is False
 
 
 def test_local_admin_detection_rejects_reverse_proxy_headers():

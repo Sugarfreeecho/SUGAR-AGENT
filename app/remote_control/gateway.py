@@ -483,3 +483,22 @@ def create_remote_control_gateway(
     config: RemoteControlConfig, dependencies: ControlDependencies
 ) -> RemoteControlGateway:
     return RemoteControlGateway(config, dependencies)
+
+
+def register_remote_control(
+    app: Any,
+    config: RemoteControlConfig,
+    dependencies: ControlDependencies,
+) -> RemoteControlGateway | None:
+    """Mount Remote Control only when the startup feature flag is enabled.
+
+    Keeping the disabled path free of routes and state-store creation makes
+    ``MYAGENT_REMOTE_CONTROL_ENABLED`` a hard startup boundary rather than a
+    per-request soft check. Changing the environment variable requires a
+    process restart.
+    """
+    if not config.enabled:
+        return None
+    gateway = create_remote_control_gateway(config, dependencies)
+    app.include_router(gateway.router)
+    return gateway

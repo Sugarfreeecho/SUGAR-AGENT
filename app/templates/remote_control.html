@@ -152,7 +152,7 @@
   }
   function renderEvent(event) {
     if(!event || ["llm_reasoning_delta","llm_response_delta","sse_keepalive"].includes(event.type)) return;
-    if(event.type === "tool_approval_required") { renderApproval(event); return; }
+    if(event.type === "tool_approval_required" || event.type === "approval_requested") { renderApproval(event); return; }
     const div=document.createElement("div"); div.className=`event ${event.type||"status"}`;
     const content=event.content ?? event.message ?? event.title ?? (event.type ? `[${event.type}]` : "");
     div.textContent=typeof content === "string" ? content : JSON.stringify(content,null,2); $("messages").appendChild(div);

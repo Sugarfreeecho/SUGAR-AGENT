@@ -56,7 +56,9 @@ if __name__ == "__main__":
     from webui import (
         fastapi_app,
         schedule_runtime_auto_migration,
+        start_feishu_adapter,
         start_goal_runner,
+        stop_feishu_adapter,
         stop_goal_runner,
     )
     from agent_harness import refresh_executor_client_from_env
@@ -73,8 +75,12 @@ if __name__ == "__main__":
         _schedule_browser_open("127.0.0.1", _listen_port)
         schedule_runtime_auto_migration()
         await start_goal_runner()
-        yield
-        await stop_goal_runner()
+        try:
+            await start_feishu_adapter()
+            yield
+        finally:
+            await stop_feishu_adapter()
+            await stop_goal_runner()
         
     fastapi_app.router.lifespan_context = lifespan
 

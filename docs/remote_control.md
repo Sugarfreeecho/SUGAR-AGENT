@@ -4,7 +4,7 @@ Remote Control v1 是 SugarAgent 的正式远控入口。它复用现有会话�
 
 ## 安全模型
 
-- 默认关闭；未设置 `MYAGENT_REMOTE_CONTROL_ENABLED=1` 时不创建状态文件，也不接受连接。
+- 默认关闭；未设置 `MYAGENT_REMOTE_CONTROL_ENABLED=1` 时不注册 Remote Control 路由、不创建状态文件，也不接受连接。修改开关后必须重启 SugarAgent。
 - SugarAgent 继续只监听 `127.0.0.1:8192`。不要为了手机访问把整个现有 Web UI 绑定到 `0.0.0.0`，因为普通 Web UI 路由尚未全部纳入 Remote Control 鉴权。
 - 推荐用 Tailscale Serve 将本机端口作为 tailnet 内的 HTTPS 服务提供。不要使用公网 Funnel。
 - 配对必须先在电脑本机创建一次性配对码；配对码默认 10 分钟过期，使用一次立即失效。
@@ -125,14 +125,6 @@ Invoke-RestMethod `
 | `MYAGENT_REMOTE_CONTROL_ALLOWED_ORIGINS` | 空 | 额外允许的浏览器 Origin，逗号分隔；同 Host Origin 自动允许 |
 | `MYAGENT_REMOTE_CONTROL_BOOTSTRAP_TOKEN` | 空 | 可选的管理员 bootstrap token；只建议临时用于原生运维客户端 |
 
-## 飞书适配位置
+## 飞书适配
 
-飞书接入不应模拟浏览器或调用未鉴权的 `/chat`。新增 `FeishuTransportAdapter` 后，应完成下面的映射：
-
-1. 飞书用户/群聊绑定到 Remote Control principal 与 SugarAgent `session_id`。
-2. 文本消息调用 `SessionControlService.execute(..., "session.send", ...)`，以飞书 `message_id` 作为 `idempotency_key`。
-3. “停止”“继续”“批准/拒绝”分别映射到 `session.interrupt`、`session.steer`、`approval.resolve`。
-4. 通过 `SessionControlService.subscribe()` 消费事件，合并高频 delta，再编辑或回复飞书消息。
-5. 飞书事件回调先验签、去重、快速 ACK，再异步执行；群聊默认要求 @ 机器人，并设置用户与会话 allowlist。
-
-这样 Direct WebSocket、手机页面和飞书共享会话控制、权限、幂等、审批与审计，避免出现三套行为不一致的 Agent Runtime。
+飞书长连接适配器已经实现，并与 Direct WebSocket 共享 `SessionControlService`；未启用 Direct Remote Control 时，飞书会创建独立的本地控制服务，仍然不会调用未鉴权的 `/chat`。配置、权限和命令参见 [飞书机器人接入](feishu.md)。
