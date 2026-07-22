@@ -818,6 +818,73 @@ def test_title_worker_uses_title_generator_for_new_session(monkeypatch):
     assert names == [("s1", "model title")]
 
 
+def test_title_worker_uses_first_persisted_user_and_latest_persisted_final(monkeypatch):
+    import agent_loop
+
+    calls = []
+    names = []
+
+    class _SessionManager:
+        def _load_metadata(self, _session_id):
+            return {"name": "New Session"}
+
+        def _load_ui_events_for_active_runtime(self, _session_id):
+            return [
+                {"type": "user", "content": "original request"},
+                {"type": "final", "content": "intermediate answer"},
+                {"type": "user_steer", "content": "follow-up request"},
+                {"type": "final", "content": "latest goal answer"},
+            ]
+
+        def set_session_name(self, session_id, title):
+            names.append((session_id, title))
+
+    def fake_generate_title(session_id, first_user, final_response):
+        calls.append((session_id, first_user, final_response))
+        return "stable title", None
+
+    monkeypatch.setattr(agent_loop, "session_manager", _SessionManager())
+    monkeypatch.setattr(agent_loop, "_session_goal_is_active_for_title", lambda _sid: False)
+    monkeypatch.setattr(agent_loop, "_generate_session_title_with_diagnostics", fake_generate_title)
+
+    agent_loop._run_session_title_generation(
+        "s-title-inputs",
+        "follow-up request",
+        "intermediate answer",
+    )
+
+    assert calls == [("s-title-inputs", "original request", "latest goal answer")]
+    assert names == [("s-title-inputs", "stable title")]
+
+
+def test_title_first_user_fallback_uses_dialogue_head_not_current_user_input():
+    import agent_loop
+
+    state = {
+        "dialogue": [
+            agent_loop.UserMessage(content="original request"),
+            agent_loop.UserMessage(content="follow-up request"),
+        ],
+        "user_input": "follow-up request",
+    }
+
+    assert agent_loop._first_user_text_for_title(state) == "original request"
+
+
+def test_title_generation_waits_while_goal_is_active(monkeypatch):
+    import agent_loop
+
+    monkeypatch.setattr(agent_loop, "_session_goal_is_active_for_title", lambda _sid: True)
+    state = {
+        "session_id": "s-active-goal",
+        "dialogue": [agent_loop.UserMessage(content="original request")],
+        "user_input": "follow-up request",
+        "final_response": "intermediate goal answer",
+    }
+
+    assert agent_loop.schedule_session_title_generation(state) is False
+
+
 def test_generated_session_title_strips_leading_think_block():
     import agent_loop
 

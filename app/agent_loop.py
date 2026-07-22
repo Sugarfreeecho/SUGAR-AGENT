@@ -5717,13 +5717,71 @@ _TITLE_PLACEHOLDER_NAMES = {"", "新会话", "未命名", "New Chat", "New Sessi
 
 
 def _first_user_text_for_title(state: State) -> str:
-    raw = str(state.get("user_input") or "").strip()
-    if raw:
-        return raw
     for msg in state.get("dialogue", []) or []:
         if isinstance(msg, UserMessage):
             return str(msg.content or "").strip()
-    return ""
+    return str(state.get("user_input") or "").strip()
+
+
+def _session_title_ui_inputs(session_id: str) -> tuple[str, str]:
+    """Return the first visible user request and latest visible final answer."""
+    loader = getattr(session_manager, "_load_ui_events_for_active_runtime", None)
+    if not callable(loader):
+        loader = getattr(session_manager, "get_ui_events_for_display", None)
+    if not callable(loader):
+        return "", ""
+    try:
+        events = list(loader(session_id) or [])
+    except Exception as exc:
+        logger.debug(
+            "Unable to load persisted title inputs for session=%s: %s",
+            session_id,
+            exc,
+        )
+        return "", ""
+
+    first_user = ""
+    first_steer = ""
+    latest_final = ""
+    for event in events:
+        if not isinstance(event, dict):
+            continue
+        event_type = str(event.get("type") or "").strip()
+        content = str(event.get("content") or "").strip()
+        if event_type in {"user", "human"} and content and not first_user:
+            first_user = content
+        elif event_type == "user_steer" and content and not first_steer:
+            first_steer = content
+        elif event_type == "final" and content:
+            latest_final = content
+    return first_user or first_steer, latest_final
+
+
+def _session_title_inputs(state: State) -> tuple[str, str]:
+    session_id = str(state.get("session_id") or "").strip()
+    persisted_first, persisted_final = _session_title_ui_inputs(session_id)
+    return (
+        persisted_first or _first_user_text_for_title(state),
+        persisted_final or str(state.get("final_response") or "").strip(),
+    )
+
+
+def _session_goal_is_active_for_title(session_id: str) -> bool:
+    """Keep a goal session untitled until its latest continuation is terminal."""
+    try:
+        from agent_goal import goal_enabled, manager_for
+
+        if not goal_enabled():
+            return False
+        goal = manager_for(session_manager).get(session_id)
+        return bool(goal and str(goal.get("status") or "").strip().lower() == "active")
+    except Exception as exc:
+        logger.debug(
+            "Unable to inspect goal state for title generation: session=%s error=%s",
+            session_id,
+            exc,
+        )
+        return False
 
 
 def _normalize_generated_session_title(title: str) -> str:
@@ -5901,6 +5959,13 @@ def _run_session_title_generation(
     """Generate and apply a title without participating in the chat run lifecycle."""
     if not _session_still_exists_for_title(session_id):
         return
+    if _session_goal_is_active_for_title(session_id):
+        return
+    persisted_first, persisted_final = _session_title_ui_inputs(session_id)
+    first_user = persisted_first or str(first_user or "").strip()
+    final_response = persisted_final or str(final_response or "").strip()
+    if not first_user:
+        return
     metadata = session_manager._load_metadata(session_id)
     if not _session_title_needs_generation(str(metadata.get("name") or ""), first_user):
         return
@@ -5930,6 +5995,8 @@ def _run_session_title_generation(
     # The user may rename or delete the session while the detached request is
     # running.  Never recreate a deleted session or overwrite a manual rename.
     if not _session_still_exists_for_title(session_id):
+        return
+    if _session_goal_is_active_for_title(session_id):
         return
     latest_metadata = session_manager._load_metadata(session_id)
     if not _session_title_needs_generation(
@@ -5968,10 +6035,14 @@ def _ensure_session_title_workers_started() -> None:
 
 
 def schedule_session_title_generation(state: State) -> bool:
-    """Queue first-turn title generation and return immediately."""
+    """Queue title generation once the session has stable title inputs."""
     session_id = str(state.get("session_id") or "").strip()
-    first_user = _first_user_text_for_title(state)
-    if not session_id or not first_user:
+    if not session_id:
+        return False
+    if _session_goal_is_active_for_title(session_id):
+        return False
+    first_user, final_response = _session_title_inputs(state)
+    if not first_user:
         return False
     try:
         metadata = session_manager._load_metadata(session_id)
@@ -5987,7 +6058,7 @@ def schedule_session_title_generation(state: State) -> bool:
         _TITLE_GENERATION_PENDING.add(session_id)
     _ensure_session_title_workers_started()
     _TITLE_GENERATION_QUEUE.put(
-        (session_id, first_user, str(state.get("final_response") or ""))
+        (session_id, first_user, final_response)
     )
     return True
 
