@@ -5385,22 +5385,38 @@ function discardCachedSessionStream(sessionId) {\r
     if (idx >= 0) cachedSessionStreamOrder.splice(idx, 1);\r
 }\r
 \r
-function trimCachedSessionStreams() {\r
+function trimCachedSessionStreams() {
     if (!offscreenRoot) return;\r
     while (cachedSessionStreamOrder.length > SESSION_STREAM_CACHE_LIMIT) {\r
         var sid = cachedSessionStreamOrder.shift();\r
         var cached = offscreenRoot.querySelector('.chat-stream[data-cache-session-id="' + cssEscapeIdent(sid) + '"]');\r
         if (cached && cached.parentNode) cached.remove();\r
-    }\r
-}\r
-\r
-function stashVisibleStreamForSession(sessionId, opts) {\r
+    }
+}
+
+function isCompleteLocalRunStream(sessionId, stream) {
+    var run = getSessionRunState(sessionId);
+    return !!(run && run.ctx && run.ctx.stream === stream
+        && stream && stream.dataset
+        && stream.dataset.partialBackgroundRun !== '1'
+        && stream.dataset.sessionLoadFailed !== '1');
+}
+
+function stashVisibleStreamForSession(sessionId, opts) {
     opts = opts || {};\r
     var sid = String(sessionId || '');\r
     if (!sid || !offscreenRoot) return false;\r
-    const el = getVisibleChatStream();\r
-    if (!el || !el.parentNode) return false;\r
-    if (!opts.force && el.dataset.sessionLoadOk !== '1') return false;\r
+    const el = getVisibleChatStream();
+    if (!el || !el.parentNode) return false;
+    /* A stream owned by this tab's active run is already the authoritative,
+       gap-free UI projection even when no history request was needed (notably
+       a newly-created session).  Certify it before moving it offscreen so a
+       same-page switch can restore the live DOM instead of fetching snapshot. */
+    if (opts.certifyLocalRun && isCompleteLocalRunStream(sid, el)) {
+        el.dataset.sessionLoadOk = '1';
+        delete el.dataset.sessionLoading;
+    }
+    if (!opts.force && el.dataset.sessionLoadOk !== '1') return false;
     if (el.dataset.sessionLoadFailed === '1') return false;\r
     discardCachedSessionStream(sid);\r
     el.remove();\r
@@ -5414,11 +5430,11 @@ function stashVisibleStreamForSession(sessionId, opts) {\r
     return true;\r
 }\r
 \r
-function prepareStashLeaving(leavingId) {\r
-    if (!leavingId) return;\r
-    if (isSessionRunning(leavingId)) {\r
-        stashVisibleStreamForSession(leavingId, { force: true });\r
-        insertNewEmptyChatStream();\r
+function prepareStashLeaving(leavingId) {
+    if (!leavingId) return;
+    if (isSessionRunning(leavingId)) {
+        stashVisibleStreamForSession(leavingId, { force: true, certifyLocalRun: true });
+        insertNewEmptyChatStream();
     } else {\r
         if (!stashVisibleStreamForSession(leavingId)) ensureVisibleChatStreamSlot();\r
         insertNewEmptyChatStream();\r
@@ -5432,10 +5448,16 @@ function restoreStreamForRunningSession(enteringId) {
     if (!st.parentNode) return false;
     if (st.parentNode === chatContainer) return st.id === 'chat-stream';
     if (offscreenRoot && st.parentNode !== offscreenRoot) return false;
-    if (st.dataset && (st.dataset.partialBackgroundRun === '1' || st.dataset.sessionLoadOk !== '1')) {
+    const completeLocalRun = isCompleteLocalRunStream(enteringId, st);
+    if (st.dataset && (st.dataset.partialBackgroundRun === '1'
+        || (st.dataset.sessionLoadOk !== '1' && !completeLocalRun))) {
         abortSessionRun(enteringId, 'reattach-incomplete-background');
         if (st.parentNode) st.remove();
         return false;
+    }
+    if (completeLocalRun && st.dataset.sessionLoadOk !== '1') {
+        st.dataset.sessionLoadOk = '1';
+        delete st.dataset.sessionLoading;
     }
     const cur = getVisibleChatStream();
     if (cur && cur.parentNode === chatContainer) cur.remove();\r

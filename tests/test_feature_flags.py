@@ -448,6 +448,21 @@ def test_frontend_send_and_reattach_reuse_event_count_cache():
     assert "messages?after_index=" in subagent_sync
 
 
+def test_frontend_running_session_switch_restores_local_stream_without_snapshot_reload():
+    scroll = (ROOT / "frontend/src/app/modules/session-scroll-history.js").read_text(encoding="utf-8")
+    sessions = (ROOT / "frontend/src/app/modules/session-management.js").read_text(encoding="utf-8")
+
+    assert "function isCompleteLocalRunStream(sessionId, stream)" in scroll
+    assert "run.ctx.stream === stream" in scroll
+    assert "stream.dataset.partialBackgroundRun !== '1'" in scroll
+    assert "certifyLocalRun: true" in scroll
+    assert "(st.dataset.sessionLoadOk !== '1' && !completeLocalRun)" in scroll
+    fast_restore = sessions.split("if (!opts.forceReload && (restoreStreamForRunningSession", 1)[1]
+    fast_restore = fast_restore.split("const vs = getVisibleChatStream();", 1)[0]
+    assert "hideLoading();" in fast_restore
+    assert "loadSessionMessages(" not in fast_restore
+
+
 def test_frontend_llm_stream_seq_increments_do_not_split_chunks():
     rendering = (ROOT / "frontend/src/app/modules/message-rendering.js").read_text(encoding="utf-8")
 
