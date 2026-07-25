@@ -201,7 +201,9 @@ def test_followups_auto_continue_only_after_run_end_and_sync():
     assert "!isFollowupDispatchBusy(sid)" in drain
     assert "var item = q[0];" in drain
     assert "sendFollowupNow(item.id, sid, { autoAfterRun: true })" in drain
-    assert "sendQueuedFollowupAsChat(sid, item, itemId)" in sse
+    assert "sendQueuedFollowupAsChat(sid, item, itemId, options.autoDispatchEpoch)" in sse
+    assert "followupManualDispatchEpochBySession[sid]" in sse
+    assert "isFollowupAutoDispatchSuperseded(sid, dispatchOptions.autoDispatchEpoch)" in sse
     assert "recoverFollowupQueueDrainsFromSessionSnapshot" in sse
     assert ".finally(function ()" not in drain
     # 定时器按会话合并，避免 final/run_finished/finally 重复触发多个请求。
@@ -543,9 +545,23 @@ def test_ui_translation_does_not_mutate_conversation_content():
         ".followup-queue-text",
         ".session-name",
         "#chat-goal-objective",
+        ".todo-plan-item > span:last-child",
+        ".human-question-text",
+        ".human-option-label",
+        ".human-option-description",
+        ".human-approval-message",
+        ".subagent-card-summary",
+        ".subagent-output-content",
+        ".skill-picker-option-desc",
     ):
         assert selector in i18n
     assert "el.closest(UI_I18N_CONTENT_SELECTOR)" in i18n
+
+    remote_i18n = (ROOT / "app/templates/static/remote_i18n.js").read_text(encoding="utf-8")
+    remote_markup = (ROOT / "app/templates/remote_control.html").read_text(encoding="utf-8")
+    assert "contentSelector" in remote_i18n
+    assert "el.closest(contentSelector)" in remote_i18n
+    assert remote_markup.count('setAttribute("data-i18n-skip","true")') >= 4
 
 
 def test_streamed_llm_commits_are_sse_fallbacks_without_repersisting():
@@ -596,17 +612,38 @@ def test_live_history_owner_is_never_replaced_by_target_window():
     assert "if (!getFeedItemText(el).trim()) el.remove();" in scroll
 
 
-def test_chat_scrollbar_is_a_non_layout_overlay():
+def test_chat_scrollbars_are_non_layout_overlays_without_visual_restyling():
     markup = (ROOT / "frontend/index.html").read_text(encoding="utf-8")
     styles = (ROOT / "frontend/src/styles/app.css").read_text(encoding="utf-8")
     layout = (ROOT / "frontend/src/app/modules/layout-panels.js").read_text(encoding="utf-8")
 
-    assert 'id="chat-overlay-scrollbar"' in markup
-    assert "position:absolute" in styles
-    assert ".chat-container::-webkit-scrollbar { width:0 !important; height:0 !important; }" in styles
+    assert 'id="chat-overlay-scrollbar"' not in markup
+    assert ".chat-overlay-scroll-target::-webkit-scrollbar { width:0 !important; height:0 !important; }" in styles
+    assert ".chat-overlay-scrollbars" in styles
+    assert "position:absolute; z-index:390; inset:0" in styles
+    assert "overflow-y:scroll; overflow-x:hidden" in styles
+    assert ".chat-overlay-scrollbar::-webkit-scrollbar-thumb" in styles
     assert "background:rgba(255,255,255,0.12)" in styles
-    assert "function updateChatOverlayScrollbar()" in layout
-    assert "viewport.scrollTop = dragStartScrollTop" in layout
+    assert "background:rgba(15,23,42,0.16)" in styles
+    assert "chat-overlay-scrollbar-space" in styles
+    assert "CHAT_OVERLAY_SCROLL_TARGET_SELECTOR" in layout
+    for selector in (
+        "#chat-container",
+        ".chat-toc-list",
+        ".chat-todo-plan-list",
+        ".process-aggregate-brief",
+        ".process-aggregate-body",
+        ".subagent-grid",
+        ".subagent-card-body",
+        ".feed-chunk-scroller",
+        ".followup-queue-panel",
+        ".skill-picker-popover",
+        ".composer-model-menu",
+    ):
+        assert f"'{selector}'" in layout
+    assert "root.querySelectorAll(CHAT_OVERLAY_SCROLL_TARGET_SELECTOR)" in layout
+    assert "target.scrollTop = track.scrollTop" in layout
+    assert "track.scrollTop = geometry.scrollTop" in layout
     assert "new ResizeObserver" in layout
     assert "new MutationObserver" in layout
 

@@ -639,26 +639,47 @@ body {
 .chat-container {
     flex: 1; min-height: 0; min-width: 0; width: 100%;
     display: block; overflow-y: auto; scroll-behavior: smooth; position: relative; overflow-anchor: none;
-    scrollbar-width: none !important;
 }
-.chat-container::-webkit-scrollbar { width:0 !important; height:0 !important; }
+.chat-overlay-scroll-target {
+    scrollbar-width:none !important;
+    scrollbar-color:transparent transparent !important;
+}
+.chat-overlay-scroll-target::-webkit-scrollbar { width:0 !important; height:0 !important; }
+.chat-overlay-scrollbars {
+    position:absolute; z-index:390; inset:0;
+    overflow:hidden; pointer-events:none;
+}
 .chat-overlay-scrollbar {
-    position:absolute; z-index:30; top:0; right:0; bottom:0; width:3px;
-    pointer-events:none; opacity:0;
+    position:absolute; width:3px;
+    overflow-y:scroll; overflow-x:hidden;
+    pointer-events:auto;
+    opacity:0;
+    scrollbar-width:thin !important;
+    scrollbar-color:rgba(255,255,255,0.12) transparent !important;
 }
-.chat-overlay-scrollbar:not([hidden]) { display:block; }
-.chat-stage:hover .chat-overlay-scrollbar,
-.chat-stage:focus-within .chat-overlay-scrollbar,
-.chat-overlay-scrollbar.is-active,
-.chat-overlay-scrollbar.is-dragging { opacity:1; }
-.chat-overlay-scrollbar-thumb {
-    position:absolute; top:0; right:0; width:3px; min-height:28px;
-    border:0; border-radius:999px;
-    background:rgba(255,255,255,0.12);
-    pointer-events:auto; cursor:grab; touch-action:none; user-select:none;
+.chat-overlay-scrollbar[hidden] { display:none !important; }
+.chat-overlay-scrollbar.is-visible { opacity:1; }
+.chat-overlay-scrollbar::-webkit-scrollbar {
+    width:3px !important; height:3px !important;
 }
-.chat-overlay-scrollbar.is-dragging .chat-overlay-scrollbar-thumb { cursor:grabbing; }
-:root.theme-light .chat-overlay-scrollbar-thumb { background:rgba(15,23,42,0.16); }
+.chat-overlay-scrollbar::-webkit-scrollbar-track {
+    background:transparent !important;
+}
+.chat-overlay-scrollbar::-webkit-scrollbar-thumb {
+    background:rgba(255,255,255,0.12) !important;
+    background-color:rgba(255,255,255,0.12) !important;
+    border:0 !important; border-radius:999px !important;
+}
+.chat-overlay-scrollbar-space {
+    width:1px; min-height:1px; opacity:0; pointer-events:none;
+}
+:root.theme-light .chat-overlay-scrollbar {
+    scrollbar-color:rgba(15,23,42,0.16) transparent !important;
+}
+:root.theme-light .chat-overlay-scrollbar::-webkit-scrollbar-thumb {
+    background:rgba(15,23,42,0.16) !important;
+    background-color:rgba(15,23,42,0.16) !important;
+}
 .chat-stream {
     min-width: 0; display: flex; flex-direction: column;
     align-items: center; gap: 0.25rem;

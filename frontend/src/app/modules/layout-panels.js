@@ -1,102 +1,261 @@
 newSessionBtn.addEventListener('click', async () => { await createNewSession(); });
 
 var chatOverlayScrollbarRaf = null;
-var chatOverlayScrollbarHideTimer = null;
 var chatOverlayScrollbarResizeObserver = null;
 var chatOverlayScrollbarMutationObserver = null;
+var chatOverlayScrollbarPortal = null;
+var chatOverlayScrollbarStates = new Map();
+var CHAT_OVERLAY_SCROLL_TARGET_SELECTOR = [
+    '#chat-container',
+    '.chat-toc-list',
+    '.chat-todo-plan-list',
+    '.process-aggregate-brief',
+    '.process-aggregate-body',
+    '.subagent-grid',
+    '.subagent-card-body',
+    '.subagent-output-panel',
+    '.subagent-block-body',
+    '.feed-chunk-scroller',
+    '.followup-queue-panel',
+    '.skill-picker-popover',
+    '.composer-model-menu',
+    '.subagent-card-summary'
+].join(',');
 
-function updateChatOverlayScrollbar() {
-    var viewport = document.getElementById('chat-container');
-    var track = document.getElementById('chat-overlay-scrollbar');
-    var thumb = track && track.querySelector('.chat-overlay-scrollbar-thumb');
-    if (!viewport || !track || !thumb) return;
-    var viewportHeight = Math.max(0, viewport.clientHeight);
-    var scrollHeight = Math.max(0, viewport.scrollHeight);
-    var maxScroll = Math.max(0, scrollHeight - viewportHeight);
-    if (!viewportHeight || maxScroll <= 1) {
-        track.hidden = true;
-        thumb.style.height = '0px';
-        thumb.style.transform = 'translateY(0)';
-        return;
-    }
-    track.hidden = false;
-    var thumbHeight = Math.max(28, Math.min(viewportHeight, viewportHeight * viewportHeight / scrollHeight));
-    var travel = Math.max(0, viewportHeight - thumbHeight);
-    var top = maxScroll > 0 ? travel * viewport.scrollTop / maxScroll : 0;
-    thumb.style.height = thumbHeight + 'px';
-    thumb.style.transform = 'translateY(' + Math.max(0, Math.min(travel, top)) + 'px)';
+function computeChatOverlayScrollbarGeometry(viewportHeight, scrollHeight, scrollTop) {
+    var height = Math.max(0, Number(viewportHeight) || 0);
+    var total = Math.max(0, Number(scrollHeight) || 0);
+    var maxScroll = Math.max(0, total - height);
+    if (!height || maxScroll <= 1) return null;
+    return {
+        trackHeight: height,
+        spacerHeight: total,
+        scrollTop: Math.max(0, Math.min(maxScroll, Number(scrollTop) || 0))
+    };
 }
 
-function scheduleChatOverlayScrollbarUpdate(active) {
-    var track = document.getElementById('chat-overlay-scrollbar');
-    if (active && track) {
-        track.classList.add('is-active');
-        if (chatOverlayScrollbarHideTimer) clearTimeout(chatOverlayScrollbarHideTimer);
-        chatOverlayScrollbarHideTimer = setTimeout(function () {
-            track.classList.remove('is-active');
-        }, 700);
+function ensureChatOverlayScrollbarPortal() {
+    if (chatOverlayScrollbarPortal && chatOverlayScrollbarPortal.isConnected) {
+        return chatOverlayScrollbarPortal;
     }
+    var main = document.querySelector('.main');
+    if (!main) return null;
+    var portal = document.createElement('div');
+    portal.id = 'chat-overlay-scrollbars';
+    portal.className = 'chat-overlay-scrollbars';
+    portal.setAttribute('aria-hidden', 'true');
+    main.appendChild(portal);
+    chatOverlayScrollbarPortal = portal;
+    return portal;
+}
+
+function syncChatOverlayScrollbarVisibility(state) {
+    if (!state || !state.track) return;
+    state.track.classList.toggle(
+        'is-visible',
+        !!(state.hovered || state.trackHovered || state.focused)
+    );
+}
+
+function getChatOverlayScrollbarClip(target, main, targetTop, targetBottom) {
+    var mainRect = main.getBoundingClientRect();
+    var clipTop = Math.max(0, mainRect.top);
+    var clipBottom = Math.min(
+        Number(window.innerHeight) || mainRect.bottom,
+        mainRect.bottom
+    );
+    var parent = target.parentElement;
+    while (parent && parent !== main) {
+        var style = window.getComputedStyle(parent);
+        if (/(auto|scroll|overlay|hidden|clip)/.test(String(style.overflowY || ''))) {
+            var rect = parent.getBoundingClientRect();
+            var top = rect.top + Math.max(0, Number(parent.clientTop) || 0);
+            clipTop = Math.max(clipTop, top);
+            clipBottom = Math.min(
+                clipBottom,
+                top + Math.max(0, Number(parent.clientHeight) || 0)
+            );
+        }
+        parent = parent.parentElement;
+    }
+    return {
+        top: Math.max(targetTop, clipTop),
+        bottom: Math.min(targetBottom, clipBottom)
+    };
+}
+
+function updateChatOverlayScrollbarState(state) {
+    if (!state || !state.target || !state.target.isConnected) return;
+    var main = document.querySelector('.main');
+    var portal = ensureChatOverlayScrollbarPortal();
+    if (!main || !portal) return;
+    var target = state.target;
+    var geometry = computeChatOverlayScrollbarGeometry(
+        target.clientHeight,
+        target.scrollHeight,
+        target.scrollTop
+    );
+    var targetRect = target.getBoundingClientRect();
+    var mainRect = main.getBoundingClientRect();
+    var targetTop = targetRect.top + Math.max(0, Number(target.clientTop) || 0);
+    var rightInset = Math.max(
+        0,
+        (Number(target.offsetWidth) || targetRect.width)
+            - (Number(target.clientWidth) || targetRect.width)
+            - (Number(target.clientLeft) || 0)
+    );
+    var targetRight = targetRect.right - rightInset;
+    var targetBottom = targetTop + Math.max(0, Number(target.clientHeight) || 0);
+    var clip = getChatOverlayScrollbarClip(target, main, targetTop, targetBottom);
+    var outsideMain = clip.bottom <= clip.top
+        || targetRight <= mainRect.left
+        || targetRect.left >= mainRect.right;
+    if (!geometry || outsideMain || targetRect.width <= 0) {
+        state.track.hidden = true;
+        state.space.style.height = '0px';
+        return;
+    }
+    state.track.hidden = false;
+    state.track.style.left = Math.round(targetRight - mainRect.left - 3) + 'px';
+    state.track.style.top = Math.round(targetTop - mainRect.top) + 'px';
+    state.track.style.height = Math.round(geometry.trackHeight) + 'px';
+    state.track.style.clipPath = 'inset('
+        + Math.max(0, clip.top - targetTop) + 'px 0 '
+        + Math.max(0, targetBottom - clip.bottom) + 'px 0)';
+    state.space.style.height = geometry.spacerHeight + 'px';
+    if (Math.abs(state.track.scrollTop - geometry.scrollTop) > 0.5) {
+        state.track.scrollTop = geometry.scrollTop;
+    }
+    syncChatOverlayScrollbarVisibility(state);
+}
+
+function updateAllChatOverlayScrollbars() {
+    chatOverlayScrollbarStates.forEach(function (state) {
+        updateChatOverlayScrollbarState(state);
+    });
+}
+
+function scheduleChatOverlayScrollbarUpdate() {
     if (chatOverlayScrollbarRaf != null) return;
     chatOverlayScrollbarRaf = requestAnimationFrame(function () {
         chatOverlayScrollbarRaf = null;
-        updateChatOverlayScrollbar();
+        updateAllChatOverlayScrollbars();
     });
 }
 
-function observeCurrentChatStreamForOverlay() {
-    var viewport = document.getElementById('chat-container');
-    if (!viewport || !chatOverlayScrollbarResizeObserver) return;
-    chatOverlayScrollbarResizeObserver.disconnect();
-    chatOverlayScrollbarResizeObserver.observe(viewport);
-    var stream = document.getElementById('chat-stream');
-    if (stream) chatOverlayScrollbarResizeObserver.observe(stream);
-    scheduleChatOverlayScrollbarUpdate(false);
+function unregisterChatOverlayScrollbarTarget(target) {
+    var state = chatOverlayScrollbarStates.get(target);
+    if (!state) return;
+    target.removeEventListener('scroll', state.onScroll);
+    target.removeEventListener('pointerenter', state.onPointerEnter);
+    target.removeEventListener('pointerleave', state.onPointerLeave);
+    target.removeEventListener('focusin', state.onFocusIn);
+    target.removeEventListener('focusout', state.onFocusOut);
+    state.track.removeEventListener('scroll', state.onTrackScroll);
+    target.classList.remove('chat-overlay-scroll-target');
+    if (chatOverlayScrollbarResizeObserver) chatOverlayScrollbarResizeObserver.unobserve(target);
+    if (state.track && state.track.parentNode) state.track.parentNode.removeChild(state.track);
+    chatOverlayScrollbarStates.delete(target);
+}
+
+function registerChatOverlayScrollbarTarget(target) {
+    if (!target || chatOverlayScrollbarStates.has(target)) return;
+    var portal = ensureChatOverlayScrollbarPortal();
+    if (!portal) return;
+    var track = document.createElement('div');
+    track.className = 'chat-overlay-scrollbar';
+    track.hidden = true;
+    var space = document.createElement('div');
+    space.className = 'chat-overlay-scrollbar-space';
+    track.appendChild(space);
+    portal.appendChild(track);
+    var state = {
+        target: target,
+        track: track,
+        space: space,
+        hovered: false,
+        trackHovered: false,
+        focused: false
+    };
+    state.onScroll = function () {
+        scheduleChatOverlayScrollbarUpdate();
+    };
+    state.onPointerEnter = function () {
+        state.hovered = true;
+        syncChatOverlayScrollbarVisibility(state);
+        scheduleChatOverlayScrollbarUpdate();
+    };
+    state.onPointerLeave = function () {
+        state.hovered = false;
+        syncChatOverlayScrollbarVisibility(state);
+    };
+    state.onFocusIn = function () {
+        state.focused = true;
+        syncChatOverlayScrollbarVisibility(state);
+    };
+    state.onFocusOut = function () {
+        state.focused = target.contains(document.activeElement);
+        syncChatOverlayScrollbarVisibility(state);
+    };
+    track.addEventListener('pointerenter', function () {
+        state.trackHovered = true;
+        syncChatOverlayScrollbarVisibility(state);
+    });
+    track.addEventListener('pointerleave', function () {
+        state.trackHovered = false;
+        syncChatOverlayScrollbarVisibility(state);
+    });
+    state.onTrackScroll = function () {
+        if (Math.abs(target.scrollTop - track.scrollTop) > 0.5) {
+            target.scrollTop = track.scrollTop;
+        }
+        scheduleChatOverlayScrollbarUpdate();
+    };
+    track.addEventListener('scroll', state.onTrackScroll, { passive: true });
+    target.classList.add('chat-overlay-scroll-target');
+    target.addEventListener('scroll', state.onScroll, { passive: true });
+    target.addEventListener('pointerenter', state.onPointerEnter);
+    target.addEventListener('pointerleave', state.onPointerLeave);
+    target.addEventListener('focusin', state.onFocusIn);
+    target.addEventListener('focusout', state.onFocusOut);
+    chatOverlayScrollbarStates.set(target, state);
+    if (chatOverlayScrollbarResizeObserver) chatOverlayScrollbarResizeObserver.observe(target);
+    updateChatOverlayScrollbarState(state);
+}
+
+function discoverChatOverlayScrollbarTargets() {
+    var root = document.querySelector('.main-center');
+    if (!root) return;
+    var current = new Set(root.querySelectorAll(CHAT_OVERLAY_SCROLL_TARGET_SELECTOR));
+    chatOverlayScrollbarStates.forEach(function (_state, target) {
+        if (!target.isConnected || !current.has(target)) {
+            unregisterChatOverlayScrollbarTarget(target);
+        }
+    });
+    current.forEach(registerChatOverlayScrollbarTarget);
+    scheduleChatOverlayScrollbarUpdate();
 }
 
 function initChatOverlayScrollbar() {
-    var viewport = document.getElementById('chat-container');
-    var track = document.getElementById('chat-overlay-scrollbar');
-    var thumb = track && track.querySelector('.chat-overlay-scrollbar-thumb');
-    if (!viewport || !track || !thumb || track.dataset.bound === '1') return;
-    track.dataset.bound = '1';
-    viewport.addEventListener('scroll', function () {
-        scheduleChatOverlayScrollbarUpdate(true);
-    }, { passive: true });
-    var dragStartY = 0;
-    var dragStartScrollTop = 0;
-    function stopDrag() {
-        track.classList.remove('is-dragging');
-        document.removeEventListener('pointermove', moveDrag);
-        document.removeEventListener('pointerup', stopDrag);
-        document.removeEventListener('pointercancel', stopDrag);
-    }
-    function moveDrag(event) {
-        var maxScroll = Math.max(0, viewport.scrollHeight - viewport.clientHeight);
-        var travel = Math.max(1, viewport.clientHeight - thumb.offsetHeight);
-        viewport.scrollTop = dragStartScrollTop + (event.clientY - dragStartY) * maxScroll / travel;
-        scheduleChatOverlayScrollbarUpdate(true);
-    }
-    thumb.addEventListener('pointerdown', function (event) {
-        if (event.button !== 0) return;
-        event.preventDefault();
-        dragStartY = event.clientY;
-        dragStartScrollTop = viewport.scrollTop;
-        track.classList.add('is-dragging');
-        document.addEventListener('pointermove', moveDrag);
-        document.addEventListener('pointerup', stopDrag);
-        document.addEventListener('pointercancel', stopDrag);
-    });
+    var root = document.querySelector('.main-center');
+    if (!root || chatOverlayScrollbarMutationObserver) return;
+    ensureChatOverlayScrollbarPortal();
     chatOverlayScrollbarResizeObserver = new ResizeObserver(function () {
-        scheduleChatOverlayScrollbarUpdate(false);
+        scheduleChatOverlayScrollbarUpdate();
     });
     chatOverlayScrollbarMutationObserver = new MutationObserver(function () {
-        observeCurrentChatStreamForOverlay();
+        discoverChatOverlayScrollbarTargets();
     });
-    chatOverlayScrollbarMutationObserver.observe(viewport, { childList: true });
-    window.addEventListener('resize', function () {
-        scheduleChatOverlayScrollbarUpdate(false);
-    }, { passive: true });
-    observeCurrentChatStreamForOverlay();
+    chatOverlayScrollbarMutationObserver.observe(root, {
+        childList: true,
+        subtree: true,
+        attributes: true,
+        attributeFilter: ['class', 'hidden'],
+        characterData: true
+    });
+    window.addEventListener('resize', scheduleChatOverlayScrollbarUpdate, { passive: true });
+    window.addEventListener('load', scheduleChatOverlayScrollbarUpdate, { passive: true });
+    discoverChatOverlayScrollbarTargets();
 }
 
 function initSidebarSash() {
