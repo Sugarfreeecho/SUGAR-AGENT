@@ -524,6 +524,17 @@ async function startContinueAfterSubagents(sessionId, forcedMode) {
     var runCtx = null;
     var runSessionId = sessionId;
     try {
+    if (typeof ensureLatestHistoryTailForLiveAppend === 'function') {
+        var continuationTailReady = await ensureLatestHistoryTailForLiveAppend(sessionId);
+        if (!continuationTailReady) {
+            showUiAlert({
+                title: '无法继续任务',
+                message: '当前页面正在查看较早历史，且未能恢复最新历史尾部。请重试。',
+                variant: 'error'
+            });
+            return;
+        }
+    }
     var banner = document.getElementById('subagent-continue-banner');
     var continueMode = forcedMode === 'react'
         ? 'react'
@@ -750,6 +761,9 @@ async function attachSessionEventStream(sessionId, opts) {
         if (!opts.skipInitialLoad) {
             await loadSessionMessages(runSessionId, 'saved-or-bottom', { preloadOlderIfShort: true });
             if (runSessionId !== currentSessionId) return;
+        } else if (typeof ensureLatestHistoryTailForLiveAppend === 'function') {
+            var attachTailReady = await ensureLatestHistoryTailForLiveAppend(runSessionId);
+            if (!attachTailReady || runSessionId !== currentSessionId) return;
         }
         if (!getVisibleChatStream()) ensureVisibleChatStreamSlot();
         runCtx = newDomContext(getVisibleChatStream());
@@ -2137,6 +2151,17 @@ async function sendMessage(options) {
     if (options.forceStart && submitSessionIdInitial) {
         var previousRun = getSessionRunState(submitSessionIdInitial);
         if (previousRun) abortSessionRun(submitSessionIdInitial, 'followup-restart');
+    }
+    if (submitSessionIdInitial && typeof ensureLatestHistoryTailForLiveAppend === 'function') {
+        var sendTailReady = await ensureLatestHistoryTailForLiveAppend(submitSessionIdInitial);
+        if (!sendTailReady) {
+            showUiAlert({
+                title: '无法发送',
+                message: '当前页面正在查看较早历史，且未能恢复最新历史尾部。请重试。',
+                variant: 'error'
+            });
+            return;
+        }
     }
     var selectedSkillsForRun = [];
     if (Array.isArray(options.selectedSkills)) {

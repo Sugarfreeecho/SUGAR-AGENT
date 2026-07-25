@@ -575,6 +575,7 @@ function persistHistoryPagingToStream(streamEl, paging) {
         range_start: Number(paging.range_start) || 0,
         range_end: Number(paging.range_end) || 0,
         has_older: !!paging.has_older,
+        has_newer: !!paging.has_newer,
     });
 }
 
@@ -589,6 +590,7 @@ function restoreHistoryPagingFromStream(streamEl) {
             range_start: Number(raw.range_start) || 0,
             range_end: Number(raw.range_end) || 0,
             has_older: !!raw.has_older,
+            has_newer: !!raw.has_newer,
         };
     } catch (_e) {
         delete streamEl.dataset.historyPaging;
@@ -618,6 +620,65 @@ function ensureHistorySentinel(streamEl) {
     el.appendChild(btn);
     streamEl.insertBefore(el, streamEl.firstChild);
     return el;
+}
+
+var latestHistoryTailRestoreBySession = Object.create(null);
+
+function getSessionHistoryPaging(sessionId) {
+    var sid = String(sessionId || '');
+    if (!sid) return null;
+    var paging = sessionHistoryPaging;
+    var stream = getVisibleChatStream();
+    if ((!paging || paging.sessionId !== sid) && stream) {
+        paging = restoreHistoryPagingFromStream(stream);
+        if (paging) sessionHistoryPaging = paging;
+    }
+    return paging && paging.sessionId === sid ? paging : null;
+}
+
+function sessionHasLiveHistoryOwner(sessionId) {
+    var sid = String(sessionId || '');
+    return !!sid && (
+        isSessionRunning(sid)
+        || (typeof isServerStreamActive === 'function' && isServerStreamActive(sid))
+    );
+}
+
+async function refreshSessionLiveHistoryOwner(sessionId) {
+    var sid = String(sessionId || '');
+    if (!sid || sessionHasLiveHistoryOwner(sid)) return !!sid;
+    if (typeof fetchSessionStreamActiveMap !== 'function') return sessionHasLiveHistoryOwner(sid);
+    var activeMap = await fetchSessionStreamActiveMap();
+    if (activeMap && Object.prototype.hasOwnProperty.call(activeMap, sid)) {
+        if (typeof applyServerStreamActiveMap === 'function') applyServerStreamActiveMap(activeMap);
+        if (activeMap[sid]) return true;
+    }
+    return sessionHasLiveHistoryOwner(sid);
+}
+
+async function ensureLatestHistoryTailForLiveAppend(sessionId) {
+    var sid = String(sessionId || '');
+    if (!sid || sid !== currentSessionId) return true;
+    var paging = getSessionHistoryPaging(sid);
+    if (!paging || !paging.has_newer) return true;
+    if (latestHistoryTailRestoreBySession[sid]) return latestHistoryTailRestoreBySession[sid];
+    var restore = (async function () {
+        var loaded = await loadSessionMessages(sid, 'bottom', {
+            useSnapshot: false,
+            preloadOlderIfShort: false,
+        });
+        if (sid !== currentSessionId) return true;
+        var current = getSessionHistoryPaging(sid);
+        return loaded === true && !(current && current.has_newer);
+    })();
+    latestHistoryTailRestoreBySession[sid] = restore;
+    try {
+        return await restore;
+    } finally {
+        if (latestHistoryTailRestoreBySession[sid] === restore) {
+            delete latestHistoryTailRestoreBySession[sid];
+        }
+    }
 }
 
 var HISTORY_AUTO_LOAD_TOP_PX = 32;
@@ -716,6 +777,7 @@ async function loadOlderHistoryChunk(opts) {
             range_start: typeof data.range_start === 'number' ? data.range_start : ph.range_start,
             range_end: ph.range_end,
             has_older: !!data.has_older,
+            has_newer: !!ph.has_newer,
         });
     } catch (e) {
         console.error('加载更早消息失败:', e);
@@ -751,8 +813,7 @@ async function loadHistoryWindowAroundEventIndex(sessionId, eventIndex, opts) {
     // replace that DOM with an isolated history window or subsequent output
     // will be inserted in the middle of history. Older pages are prepended by
     // scrollToUserTurnOrLoadOlder instead.
-    if (isSessionRunning(sid)
-        || (typeof isServerStreamActive === 'function' && isServerStreamActive(sid))) return false;
+    if (sessionHasLiveHistoryOwner(sid)) return false;
     var prevReplaying = replayingMessages;
     try {
         var turns = Math.max(1, Math.min(Number(opts.turns) || 50, 50));
@@ -763,15 +824,23 @@ async function loadHistoryWindowAroundEventIndex(sessionId, eventIndex, opts) {
         var data = await response.json().catch(function () { return null; });
         if (!response.ok || !data || typeof data !== 'object' || !Array.isArray(data.events)) return false;
         if (sid !== currentSessionId) return false;
+        // The run may have started while the target window request was in
+        // flight, or the local stream-active snapshot may have been stale.
+        // Revalidate against the server before mutating the live append owner.
+        if (await refreshSessionLiveHistoryOwner(sid)) return false;
+        if (sid !== currentSessionId) return false;
         if (!getVisibleChatStream()) ensureVisibleChatStreamSlot();
         var stream = getVisibleChatStream();
         if (!stream) return false;
         emptyChatStreamKeepingStrip(stream);
+        var total = Number(data.total) || 0;
+        var rangeEnd = Number(data.range_end) || 0;
         var pageMeta = {
-            total: Number(data.total) || 0,
+            total: total,
             range_start: Number(data.range_start) || 0,
-            range_end: Number(data.range_end) || 0,
+            range_end: rangeEnd,
             has_older: !!data.has_older,
+            has_newer: data.has_newer == null ? rangeEnd < total : !!data.has_newer,
         };
         beginMessageReplay(sid, pageMeta);
         setSessionHistoryPaging({
@@ -780,6 +849,7 @@ async function loadHistoryWindowAroundEventIndex(sessionId, eventIndex, opts) {
             range_start: pageMeta.range_start,
             range_end: pageMeta.range_end,
             has_older: !!pageMeta.has_older,
+            has_newer: !!pageMeta.has_newer,
         });
         ensureHistorySentinel(stream);
         var ctx = newDomContext(stream);

@@ -598,14 +598,24 @@ def test_frontend_llm_delta_recovers_missing_scrollers():
 
 def test_live_history_owner_is_never_replaced_by_target_window():
     scroll = (ROOT / "frontend/src/app/modules/session-scroll-history.js").read_text(encoding="utf-8")
+    sessions = (ROOT / "frontend/src/app/modules/session-management.js").read_text(encoding="utf-8")
+    sse = (ROOT / "frontend/src/app/modules/sse-handling.js").read_text(encoding="utf-8")
     target_window = scroll.split("async function loadHistoryWindowAroundEventIndex", 1)[1].split(
         "const SESSION_STREAM_CACHE_LIMIT", 1
     )[0]
     jump = scroll.split("async function scrollToUserTurnOrLoadOlder", 1)[1]
 
-    assert "isSessionRunning(sid)" in target_window
-    assert "isServerStreamActive(sid)" in target_window
-    assert target_window.index("isSessionRunning(sid)") < target_window.index("await fetch(url)")
+    assert "sessionHasLiveHistoryOwner(sid)" in target_window
+    assert target_window.index("sessionHasLiveHistoryOwner(sid)") < target_window.index("await fetch(url)")
+    assert "await refreshSessionLiveHistoryOwner(sid)" in target_window
+    assert target_window.index("await fetch(url)") < target_window.index(
+        "await refreshSessionLiveHistoryOwner(sid)"
+    )
+    assert "has_newer: data.has_newer == null ? rangeEnd < total : !!data.has_newer" in target_window
+    assert "has_newer: !!paging.has_newer" in scroll
+    assert "has_newer: !!raw.has_newer" in scroll
+    assert "has_newer: raw.has_newer == null ? pageRangeEnd < pageTotal : !!raw.has_newer" in sessions
+    assert sse.count("ensureLatestHistoryTailForLiveAppend(") >= 3
     assert "liveHistoryOwner" in jump
     assert "!liveHistoryOwner" in jump
     assert "loadOlderHistoryChunk({ keepTocStable: true, turns: 50 })" in jump

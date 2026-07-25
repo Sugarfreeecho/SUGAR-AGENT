@@ -1026,11 +1026,14 @@ async function loadSessionMessages(sessionId, scrollBehavior, opts) {
             events = raw;
         } else if (raw && typeof raw === 'object' && Array.isArray(raw.events)) {
             events = raw.events;
+            const pageTotal = Number(raw.total) || 0;
+            const pageRangeEnd = Number(raw.range_end) || 0;
             pageMeta = {
-                total: Number(raw.total) || 0,
+                total: pageTotal,
                 range_start: Number(raw.range_start) || 0,
-                range_end: Number(raw.range_end) || 0,
+                range_end: pageRangeEnd,
                 has_older: !!raw.has_older,
+                has_newer: raw.has_newer == null ? pageRangeEnd < pageTotal : !!raw.has_newer,
             };
             uiEventCountCache.updateFromServer(sessionId, pageMeta.total);
         } else {
@@ -1048,6 +1051,7 @@ async function loadSessionMessages(sessionId, scrollBehavior, opts) {
                 range_start: pageMeta.range_start,
                 range_end: pageMeta.range_end,
                 has_older: !!pageMeta.has_older,
+                has_newer: !!pageMeta.has_newer,
             });
             ensureHistorySentinel(getVisibleChatStream());
         }
