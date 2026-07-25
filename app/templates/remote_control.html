@@ -161,7 +161,8 @@
   function renderApproval(event) {
     const div=document.createElement("div"); div.className="event approval";
     const title=document.createElement("strong"); title.textContent=event.title || "需要确认"; if(event.title)title.setAttribute("data-i18n-skip","true");
-    const msg=document.createElement("div"); msg.textContent=event.message || event.tool || "工具请求"; msg.setAttribute("data-i18n-skip","true");
+    const customMessage=event.message || event.tool;
+    const msg=document.createElement("div"); msg.textContent=customMessage || "工具请求"; if(customMessage)msg.setAttribute("data-i18n-skip","true");
     const actions=document.createElement("div"); actions.className="actions";
     for(const [label,approve] of [["允许",true],["拒绝",false]]){
       const b=document.createElement("button"); b.textContent=label; if(approve)b.className="primary";
