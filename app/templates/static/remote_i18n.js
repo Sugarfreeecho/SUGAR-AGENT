@@ -12,6 +12,7 @@
     '请求失败': 'Request failed', '需要确认': 'Confirmation required', '工具请求': 'Tool request', '允许': 'Allow', '拒绝': 'Deny'
   };
   var attrs = ['aria-label', 'title', 'placeholder'];
+  var contentSelector = '#sessions [data-i18n-skip],#messages [data-i18n-skip],[data-i18n-skip]';
   var textOriginal = new WeakMap(), attrOriginal = new WeakMap();
   function tr(value) {
     var s = String(value == null ? '' : value);
@@ -25,6 +26,7 @@
     if (root && root.querySelectorAll) els = els.concat(Array.from(root.querySelectorAll('*')));
     els.forEach(function (el) {
       if (el.matches('script,style,code,pre')) return;
+      if (el.matches(contentSelector) || el.closest(contentSelector)) return;
       var ao = attrOriginal.get(el) || {};
       attrs.forEach(function (attr) {
         if (!el.hasAttribute(attr)) return;
