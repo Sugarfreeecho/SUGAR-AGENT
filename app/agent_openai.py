@@ -11,6 +11,8 @@ messages_to_openai_params 对每条 assistant 均带上 reasoning_content（可�
 from __future__ import annotations
 
 import base64
+import hashlib
+import html
 import json
 import logging
 import os
@@ -158,6 +160,315 @@ class AssistantTurn:
     tool_calls: Optional[List[Dict[str, Any]]]
     reasoning_content: Optional[str]
     reasoning_field: Optional[str] = None
+
+
+_DSML_SEP = r"[|｜]"
+_DSML_MARKER_RE = re.compile(
+    rf"<\s*{_DSML_SEP}\s*DSML\s*{_DSML_SEP}\s*(?:tool_calls|invoke|parameter)\b",
+    re.IGNORECASE,
+)
+_DSML_TOOL_CALLS_RE = re.compile(
+    rf"<\s*{_DSML_SEP}\s*DSML\s*{_DSML_SEP}\s*tool_calls\b[^>]*>"
+    rf"(?P<body>[\s\S]*?)"
+    rf"</\s*{_DSML_SEP}\s*DSML\s*{_DSML_SEP}\s*tool_calls\s*>",
+    re.IGNORECASE,
+)
+_DSML_INVOKE_RE = re.compile(
+    rf"<\s*{_DSML_SEP}\s*DSML\s*{_DSML_SEP}\s*invoke\b(?P<attrs>[^>]*)>"
+    rf"(?P<body>[\s\S]*?)"
+    rf"</\s*{_DSML_SEP}\s*DSML\s*{_DSML_SEP}\s*invoke\s*>",
+    re.IGNORECASE,
+)
+_DSML_PARAMETER_RE = re.compile(
+    rf"<\s*{_DSML_SEP}\s*DSML\s*{_DSML_SEP}\s*parameter\b(?P<attrs>[^>]*)>"
+    rf"(?P<body>[\s\S]*?)"
+    rf"</\s*{_DSML_SEP}\s*DSML\s*{_DSML_SEP}\s*parameter\s*>",
+    re.IGNORECASE,
+)
+_DSML_ATTR_RE = re.compile(
+    r"""(?P<name>[A-Za-z_][\w.-]*)\s*=\s*(?:"(?P<double>[^"]*)"|'(?P<single>[^']*)')""",
+    re.IGNORECASE,
+)
+_DSML_STREAM_PREFIXES = ("<｜DSML｜", "<|DSML|")
+
+
+def _attrs_dict(raw: str) -> Dict[str, str]:
+    attrs: Dict[str, str] = {}
+    for match in _DSML_ATTR_RE.finditer(str(raw or "")):
+        value = match.group("double")
+        if value is None:
+            value = match.group("single") or ""
+        attrs[str(match.group("name") or "").strip().lower()] = html.unescape(value)
+    return attrs
+
+
+def _tool_schema_map(tools: Optional[List[Dict[str, Any]]]) -> Dict[str, Dict[str, Any]]:
+    out: Dict[str, Dict[str, Any]] = {}
+    for item in tools or []:
+        if not isinstance(item, dict):
+            continue
+        fn = item.get("function") if isinstance(item.get("function"), dict) else item
+        name = str((fn or {}).get("name") or "").strip()
+        if name:
+            out[name] = fn or {}
+    return out
+
+
+def _matches_schema_type(value: Any, schema: Dict[str, Any]) -> bool:
+    expected = schema.get("type")
+    if isinstance(expected, list):
+        return any(_matches_schema_type(value, {**schema, "type": item}) for item in expected)
+    if not expected:
+        return True
+    expected = str(expected).lower()
+    if expected == "null":
+        ok = value is None
+    elif expected == "boolean":
+        ok = isinstance(value, bool)
+    elif expected == "integer":
+        ok = isinstance(value, int) and not isinstance(value, bool)
+    elif expected == "number":
+        ok = isinstance(value, (int, float)) and not isinstance(value, bool)
+    elif expected == "string":
+        ok = isinstance(value, str)
+    elif expected == "array":
+        ok = isinstance(value, list)
+    elif expected == "object":
+        ok = isinstance(value, dict)
+    else:
+        ok = True
+    if not ok:
+        return False
+    enum = schema.get("enum")
+    return not isinstance(enum, list) or value in enum
+
+
+def _is_in_fenced_code(text: str, position: int) -> bool:
+    prefix = text[: max(0, int(position))]
+    return (prefix.count("```") % 2 == 1) or (prefix.count("~~~") % 2 == 1)
+
+
+def _parse_dsml_invokes(
+    raw: str,
+    tools: Optional[List[Dict[str, Any]]],
+) -> Tuple[List[Dict[str, Any]], Optional[str]]:
+    schema_map = _tool_schema_map(tools)
+    if not schema_map:
+        return [], "no tools were supplied for DSML validation"
+    invoke_matches = list(_DSML_INVOKE_RE.finditer(raw))
+    if not invoke_matches:
+        return [], "DSML contains no complete invoke block"
+    residue = _DSML_INVOKE_RE.sub("", raw)
+    if residue.strip():
+        return [], "unexpected text or an incomplete invoke exists inside DSML tool_calls"
+
+    calls: List[Dict[str, Any]] = []
+    for invoke in invoke_matches:
+        invoke_attrs = _attrs_dict(invoke.group("attrs"))
+        tool_name = str(invoke_attrs.get("name") or "").strip()
+        fn_schema = schema_map.get(tool_name)
+        if not tool_name or fn_schema is None:
+            return [], f"unknown or missing DSML tool name: {tool_name or '(empty)'}"
+
+        param_matches = list(_DSML_PARAMETER_RE.finditer(invoke.group("body")))
+        param_residue = _DSML_PARAMETER_RE.sub("", invoke.group("body"))
+        if param_residue.strip():
+            return [], f"malformed parameter block for DSML tool {tool_name}"
+
+        args: Dict[str, Any] = {}
+        for param in param_matches:
+            attrs = _attrs_dict(param.group("attrs"))
+            param_name = str(attrs.get("name") or "").strip()
+            if not param_name or param_name in args:
+                return [], f"missing or duplicate DSML parameter for tool {tool_name}"
+            raw_value = html.unescape(param.group("body"))
+            is_string = str(attrs.get("string") or "").strip().lower() == "true"
+            if is_string:
+                value: Any = raw_value
+            else:
+                try:
+                    value = json.loads(raw_value.strip())
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    return [], f"invalid JSON value for DSML parameter {tool_name}.{param_name}"
+            args[param_name] = value
+
+        parameters = fn_schema.get("parameters")
+        parameters = parameters if isinstance(parameters, dict) else {}
+        properties = parameters.get("properties")
+        properties = properties if isinstance(properties, dict) else {}
+        unknown = [name for name in args if properties and name not in properties]
+        if unknown:
+            return [], f"unknown DSML parameter for tool {tool_name}: {unknown[0]}"
+        required = parameters.get("required")
+        required = required if isinstance(required, list) else []
+        missing = [str(name) for name in required if str(name) not in args]
+        if missing:
+            return [], f"missing required DSML parameter for tool {tool_name}: {missing[0]}"
+        for param_name, value in args.items():
+            prop_schema = properties.get(param_name)
+            if isinstance(prop_schema, dict) and not _matches_schema_type(value, prop_schema):
+                return [], f"wrong DSML value type for {tool_name}.{param_name}"
+
+        digest = hashlib.sha256(invoke.group(0).encode("utf-8")).hexdigest()[:20]
+        calls.append(
+            {
+                "name": tool_name,
+                "args": args,
+                "id": f"call_dsml_{digest}",
+            }
+        )
+    return calls, None
+
+
+def _recover_dsml_from_text(
+    text: Optional[str],
+    tools: Optional[List[Dict[str, Any]]],
+) -> Tuple[str, List[Dict[str, Any]], bool]:
+    raw = str(text or "")
+    markers = [
+        match for match in _DSML_MARKER_RE.finditer(raw)
+        if not _is_in_fenced_code(raw, match.start())
+    ]
+    if not markers:
+        return raw, [], False
+
+    outer = [
+        match for match in _DSML_TOOL_CALLS_RE.finditer(raw)
+        if not _is_in_fenced_code(raw, match.start())
+    ]
+    candidates: List[Tuple[re.Match[str], str]] = []
+    if outer:
+        candidates = [(match, match.group("body")) for match in outer]
+    else:
+        invokes = [
+            match for match in _DSML_INVOKE_RE.finditer(raw)
+            if not _is_in_fenced_code(raw, match.start())
+        ]
+        candidates = [(match, match.group(0)) for match in invokes]
+
+    recovered: List[Dict[str, Any]] = []
+    remove_ranges: List[Tuple[int, int]] = []
+    parse_failed = False
+    for match, body in candidates:
+        calls, error = _parse_dsml_invokes(body, tools)
+        if error:
+            logger.warning("丢弃无法安全恢复的 DSML 工具调用: %s", error)
+            parse_failed = True
+            continue
+        recovered.extend(calls)
+        remove_ranges.append((match.start(), match.end()))
+
+    uncovered_marker = any(
+        not any(start <= marker.start() < end for start, end in remove_ranges)
+        for marker in markers
+    )
+    tail_start = markers[0].start()
+    tail_residue_parts: List[str] = []
+    tail_cursor = tail_start
+    for start, end in sorted(remove_ranges):
+        if end <= tail_start:
+            continue
+        tail_residue_parts.append(raw[tail_cursor:start])
+        tail_cursor = end
+    tail_residue_parts.append(raw[tail_cursor:])
+    non_protocol_tail = bool("".join(tail_residue_parts).strip())
+    if not recovered or parse_failed or uncovered_marker or non_protocol_tail:
+        # Never expose an executable-looking, malformed protocol fragment or
+        # accept its conversational prefix as a final answer. Returning an empty
+        # channel lets the normal empty-result path retry the model cleanly.
+        return "", [], True
+
+    cleaned_parts: List[str] = []
+    cursor = 0
+    for start, end in sorted(remove_ranges):
+        cleaned_parts.append(raw[cursor:start])
+        cursor = end
+    cleaned_parts.append(raw[cursor:])
+    cleaned = "".join(cleaned_parts).strip()
+    return cleaned, recovered, True
+
+
+def _repair_dsml_turn(
+    content: str,
+    reasoning: Optional[str],
+    tools: Optional[List[Dict[str, Any]]],
+    existing_calls: Optional[List[Dict[str, Any]]] = None,
+) -> Tuple[str, Optional[str], Optional[List[Dict[str, Any]]], List[Dict[str, Any]]]:
+    clean_content, content_calls, _ = _recover_dsml_from_text(content, tools)
+    clean_reasoning, reasoning_calls, _ = _recover_dsml_from_text(reasoning, tools)
+    merged: List[Dict[str, Any]] = list(existing_calls or [])
+    if merged:
+        # A standard OpenAI tool_calls array is authoritative. Raw protocol text
+        # may be a duplicate provider artifact; strip it, but never combine two
+        # conflicting interpretations into one executable batch.
+        return clean_content, clean_reasoning.strip() or None, merged, []
+    added: List[Dict[str, Any]] = []
+    signatures = {
+        (
+            str(call.get("name") or ""),
+            json.dumps(call.get("args") or {}, ensure_ascii=False, sort_keys=True, default=str),
+        )
+        for call in merged
+    }
+    for call in content_calls + reasoning_calls:
+        signature = (
+            str(call.get("name") or ""),
+            json.dumps(call.get("args") or {}, ensure_ascii=False, sort_keys=True, default=str),
+        )
+        if signature in signatures:
+            continue
+        signatures.add(signature)
+        merged.append(call)
+        added.append(call)
+    return clean_content, clean_reasoning.strip() or None, merged or None, added
+
+
+class _DsmlStreamFilter:
+    """Hold native DSML protocol text until it can be validated at turn end."""
+
+    def __init__(self, enabled: bool):
+        self.enabled = bool(enabled)
+        self.pending = ""
+        self.blocked = False
+
+    def feed(self, piece: str) -> str:
+        if not self.enabled:
+            return piece
+        if self.blocked:
+            return ""
+        combined = self.pending + piece
+        marker_positions = [
+            combined.find(prefix)
+            for prefix in _DSML_STREAM_PREFIXES
+            if combined.find(prefix) >= 0
+        ]
+        marker = _DSML_MARKER_RE.search(combined)
+        if marker:
+            marker_positions.append(marker.start())
+        if marker_positions:
+            marker_start = min(marker_positions)
+            self.blocked = True
+            self.pending = combined[marker_start:]
+            return combined[:marker_start]
+        keep = 0
+        for prefix in _DSML_STREAM_PREFIXES:
+            limit = min(len(prefix) - 1, len(combined))
+            for size in range(limit, 0, -1):
+                if combined.endswith(prefix[:size]):
+                    keep = max(keep, size)
+                    break
+        if keep:
+            self.pending = combined[-keep:]
+            return combined[:-keep]
+        self.pending = ""
+        return combined
+
+    def finish(self) -> str:
+        if not self.enabled or not self.blocked:
+            tail = self.pending
+            self.pending = ""
+            return tail
+        return ""
 
 
 def normalize_content_text(content: Any) -> str:
@@ -481,7 +792,10 @@ def messages_to_openai_params(messages: List[Any]) -> List[Dict[str, Any]]:
     return api_msgs
 
 
-def parse_assistant_message(msg: Any) -> AssistantTurn:
+def parse_assistant_message(
+    msg: Any,
+    tools: Optional[List[Dict[str, Any]]] = None,
+) -> AssistantTurn:
     """解析 chat.completions 返回的 assistant message（content、tool_calls、reasoning_content）。"""
     content = _normalize_content_text(_get_nested_attr_or_key(msg, "content"))
     reasoning, reasoning_field = _extract_reasoning_text_and_field(msg)
@@ -501,6 +815,13 @@ def parse_assistant_message(msg: Any) -> AssistantTurn:
                 logger.warning("工具参数 JSON 解析失败，使用空对象: %s", raw_args[:200])
                 args = {}
             tool_calls.append({"name": name, "args": args, "id": tid})
+    if tools is not None:
+        content, reasoning, tool_calls, _ = _repair_dsml_turn(
+            content,
+            reasoning,
+            tools,
+            tool_calls,
+        )
     return AssistantTurn(
         content=content,
         tool_calls=tool_calls,
@@ -813,6 +1134,8 @@ def run_chat_completion_stream_worker(
         reasoning_field: Optional[str] = None
         content_buf = ""
         tool_acc: Dict[int, Dict[str, str]] = {}
+        content_dsml_filter = _DsmlStreamFilter(enabled=bool(tools))
+        reasoning_dsml_filter = _DsmlStreamFilter(enabled=bool(tools))
         last_usage: Optional[Dict[str, int]] = None
         actual_model = ""
         finish_meta: Dict[str, Any] = {"finish_reason": None, "stop_reason": None}
@@ -902,31 +1225,35 @@ def run_chat_completion_stream_worker(
                 piece = rc if isinstance(rc, str) else str(rc)
                 last_delta_at_ms = api_elapsed_ms()
                 reasoning_buf += piece
+                visible_piece = reasoning_dsml_filter.feed(piece)
                 if reasoning_field is None and rc_field:
                     reasoning_field = rc_field
-                if not first_delta_seen:
+                if visible_piece and not first_delta_seen:
                     first_delta_seen = True
                     first_delta_at_ms = last_delta_at_ms
-                    put_stream_timing("first_delta", delta_type="reasoning", chars=len(piece), chunk_count=chunk_count)
+                    put_stream_timing("first_delta", delta_type="reasoning", chars=len(visible_piece), chunk_count=chunk_count)
                     emit_transport_breakdown_once()
-                if not first_reasoning_seen:
+                if visible_piece and not first_reasoning_seen:
                     first_reasoning_seen = True
-                    put_stream_timing("first_reasoning_delta", chars=len(piece), chunk_count=chunk_count)
-                sync_q.put(("reasoning", piece))
+                    put_stream_timing("first_reasoning_delta", chars=len(visible_piece), chunk_count=chunk_count)
+                if visible_piece:
+                    sync_q.put(("reasoning", visible_piece))
             ct = getattr(delta, "content", None)
             if ct:
                 piece = ct if isinstance(ct, str) else str(ct)
                 last_delta_at_ms = api_elapsed_ms()
                 content_buf += piece
-                if not first_delta_seen:
+                visible_piece = content_dsml_filter.feed(piece)
+                if visible_piece and not first_delta_seen:
                     first_delta_seen = True
                     first_delta_at_ms = last_delta_at_ms
-                    put_stream_timing("first_delta", delta_type="content", chars=len(piece), chunk_count=chunk_count)
+                    put_stream_timing("first_delta", delta_type="content", chars=len(visible_piece), chunk_count=chunk_count)
                     emit_transport_breakdown_once()
-                if not first_content_seen:
+                if visible_piece and not first_content_seen:
                     first_content_seen = True
-                    put_stream_timing("first_content_delta", chars=len(piece), chunk_count=chunk_count)
-                sync_q.put(("content", piece))
+                    put_stream_timing("first_content_delta", chars=len(visible_piece), chunk_count=chunk_count)
+                if visible_piece:
+                    sync_q.put(("content", visible_piece))
             delta_tool_calls = getattr(delta, "tool_calls", None)
             for payload in _tool_call_delta_payloads(delta_tool_calls):
                 last_delta_at_ms = api_elapsed_ms()
@@ -958,10 +1285,45 @@ def run_chat_completion_stream_worker(
             close_stream_quietly()
             put_stream_timing("aborted_after_stream")
             return
+        reasoning_tail = reasoning_dsml_filter.finish()
+        if reasoning_tail:
+            sync_q.put(("reasoning", reasoning_tail))
+        content_tail = content_dsml_filter.finish()
+        if content_tail:
+            sync_q.put(("content", content_tail))
         tool_calls_list = _tool_acc_to_parsed_list(tool_acc)
-        reasoning_final = reasoning_buf.strip() or None
+        content_final, reasoning_final, tool_calls_list, recovered_dsml_calls = _repair_dsml_turn(
+            content_buf,
+            reasoning_buf.strip() or None,
+            tools,
+            tool_calls_list,
+        )
+        if recovered_dsml_calls:
+            start_index = len(tool_acc)
+            for offset, call in enumerate(recovered_dsml_calls):
+                sync_q.put(
+                    (
+                        "tool_call_delta",
+                        {
+                            "index": start_index + offset,
+                            "id": str(call.get("id") or ""),
+                            "name_delta": str(call.get("name") or ""),
+                            "arguments_delta": json.dumps(
+                                call.get("args") or {},
+                                ensure_ascii=False,
+                                separators=(",", ":"),
+                            ),
+                        },
+                    )
+                )
+            finish_meta["finish_reason"] = "tool_calls"
+            logger.warning(
+                "已从模型原始 DSML 文本安全恢复 %s 个工具调用 model=%s",
+                len(recovered_dsml_calls),
+                _masked_model_label(actual_model or model),
+            )
         turn = AssistantTurn(
-            content=content_buf or "",
+            content=content_final or "",
             tool_calls=tool_calls_list,
             reasoning_content=reasoning_final,
             reasoning_field=reasoning_field,
@@ -997,7 +1359,7 @@ def run_chat_completion_stream_worker(
             "turn_ready",
             chunk_count=chunk_count,
             reasoning_chars=len(reasoning_final or ""),
-            content_chars=len(content_buf or ""),
+            content_chars=len(content_final or ""),
             tool_calls=len(tool_calls_list or []),
         )
     except Exception as e:

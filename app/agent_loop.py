@@ -4784,7 +4784,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                     )
                     choice0 = api_resp.choices[0]
                     actual_response_model = str(getattr(api_resp, "model", None) or actual_response_model or "").strip()
-                    turn = parse_assistant_message(choice0.message)
+                    turn = parse_assistant_message(choice0.message, tools=combined_tools)
                     llm_call_finish = {
                         "finish_reason": getattr(choice0, "finish_reason", None),
                         "stop_reason": getattr(choice0, "stop_reason", None),
