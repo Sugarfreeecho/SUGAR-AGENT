@@ -50,5 +50,6 @@ def test_runtime_only_presents_verified_system_sleep_as_resume():
 
     assert 'if resume.cause != "system_sleep":' in source
     assert "runtime_watchdog_delay_suppressed" in source
-    assert "machine_only=True" in source
+    assert "_wait_for_local_network_recovery" in source
+    assert "_executor_endpoint_reachable" not in source
     assert "LocalNetworkUnavailableError" in source

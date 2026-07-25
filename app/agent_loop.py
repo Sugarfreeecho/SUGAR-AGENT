@@ -19,9 +19,6 @@ import time
 import asyncio
 import uuid
 import threading
-import socket
-from urllib.parse import urlparse
-from urllib.request import getproxies, proxy_bypass
 from datetime import datetime
 import inspect
 from contextlib import contextmanager
@@ -1982,48 +1979,20 @@ async def _await_retry_delay_or_interrupt(
     return True
 
 
-def _executor_endpoint_reachable(client: Any, timeout_seconds: float = 4.0) -> bool:
-    try:
-        raw = str(getattr(client, "base_url", "") or "").strip()
-        parsed = urlparse(raw)
-        host = str(parsed.hostname or "").strip()
-        if not host:
-            return False
-        port = int(parsed.port or (443 if parsed.scheme == "https" else 80))
-        if not proxy_bypass(host):
-            proxy_url = str(getproxies().get(parsed.scheme) or "").strip()
-            proxy = urlparse(proxy_url)
-            if proxy.hostname:
-                host = str(proxy.hostname)
-                port = int(proxy.port or (443 if proxy.scheme == "https" else 80))
-        with socket.create_connection((host, port), timeout=max(0.5, timeout_seconds)):
-            return True
-    except OSError:
-        return False
-
-
-async def _wait_for_network_recovery(
+async def _wait_for_local_network_recovery(
     state: State,
     emit: Optional[Callable[[Dict[str, Any]], Any]],
-    client: Any,
     poll_seconds: float = 15.0,
-    *,
-    machine_only: bool = False,
 ) -> bool:
-    """Sleep without resending until the machine or provider path is reachable."""
+    """Sleep without model retries only while the local machine is offline."""
     sid = str(state.get("session_id") or "").strip()
     state["_runtime_stage"] = "network_waiting"
     announced_at = 0.0
-    if not machine_only and not await _await_retry_delay_or_interrupt(state, emit, poll_seconds):
-        return False
     while True:
         await _raise_if_steer_requested(state, emit, "network_waiting")
         if sid and session_manager.is_interrupt_requested(sid):
             return False
-        if machine_only:
-            recovered = await asyncio.to_thread(machine_network_available)
-        else:
-            recovered = await asyncio.to_thread(_executor_endpoint_reachable, client)
+        recovered = await asyncio.to_thread(machine_network_available)
         if recovered:
             state["_runtime_stage"] = "react"
             if emit:
@@ -2031,11 +2000,7 @@ async def _wait_for_network_recovery(
                     state,
                     {
                         "type": "status",
-                        "content": (
-                            "本机网络已恢复，正在继续任务…"
-                            if machine_only
-                            else "网络连接已恢复，正在继续任务…"
-                        ),
+                        "content": "本机网络已恢复，正在继续任务…",
                         "network_recovered": True,
                         "ephemeral": True,
                     },
@@ -2049,13 +2014,9 @@ async def _wait_for_network_recovery(
                 state,
                 {
                     "type": "status",
-                    "content": (
-                        "本机仍处于离线状态，Agent 正在沉睡并等待网络恢复…"
-                        if machine_only
-                        else "网络仍不可用，任务已暂停并等待连接恢复…"
-                    ),
+                    "content": "本机仍处于离线状态，Agent 正在沉睡并等待网络恢复…",
                     "network_waiting": True,
-                    "local_network_offline": machine_only,
+                    "local_network_offline": True,
                     "ephemeral": True,
                 },
                 emit=emit,
@@ -4904,12 +4865,10 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                                     },
                                     emit=emit,
                                 )
-                            if not await _wait_for_network_recovery(
+                            if not await _wait_for_local_network_recovery(
                                 state,
                                 emit,
-                                iter_client,
                                 poll_seconds=LOCAL_NETWORK_POLL_SECONDS,
-                                machine_only=True,
                             ):
                                 final_content = _interrupt_terminal_text(state["session_id"])
                                 break
@@ -4919,57 +4878,40 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                             continue
                         attempt = int(state.get("_network_reconnect_attempts", 0) or 0) + 1
                         state["_network_reconnect_attempts"] = attempt
-                        if attempt > NETWORK_RECONNECT_MAX_ATTEMPTS:
+                        if attempt <= NETWORK_RECONNECT_MAX_ATTEMPTS:
+                            delay = min(30.0, 2.0 * (2 ** min(attempt - 1, 4)))
                             if emit:
                                 await _push_stream_event(
                                     state,
                                     {
-                                        "type": "status",
-                                        "content": "快速重连已达 %s 次，任务暂停并等待网络恢复…" % NETWORK_RECONNECT_MAX_ATTEMPTS,
-                                        "network_waiting": True,
+                                        "type": "llm_stream_aborted",
+                                        "reason": "network_reconnect",
+                                        "react_iter": int(iter_count),
+                                        "stream_seq": llm_stream_seq,
                                         "ephemeral": True,
                                     },
                                     emit=emit,
                                 )
-                            if not await _wait_for_network_recovery(state, emit, iter_client):
+                                await _push_stream_event(
+                                    state,
+                                    {
+                                        "type": "status",
+                                        "content": f"网络连接失败，正在重连（第 {attempt} 次，{delay:g}s 后重试）...",
+                                        "ephemeral": True,
+                                    },
+                                    emit=emit,
+                                )
+                            if not await _await_retry_delay_or_interrupt(state, emit, delay):
                                 final_content = _interrupt_terminal_text(state["session_id"])
+                                await _push_stream_event(
+                                    state,
+                                    {"type": "status", "content": final_content.rstrip("。")},
+                                    emit=emit,
+                                )
                                 break
                             iter_count = max(0, iter_count - 1)
                             state["_current_react_iter"] = int(iter_count)
                             continue
-                        delay = min(30.0, 2.0 * (2 ** min(attempt - 1, 4)))
-                        if emit:
-                            await _push_stream_event(
-                                state,
-                                {
-                                    "type": "llm_stream_aborted",
-                                    "reason": "network_reconnect",
-                                    "react_iter": int(iter_count),
-                                    "stream_seq": llm_stream_seq,
-                                    "ephemeral": True,
-                                },
-                                emit=emit,
-                            )
-                            await _push_stream_event(
-                                state,
-                                {
-                                    "type": "status",
-                                    "content": f"网络连接失败，正在重连（第 {attempt} 次，{delay:g}s 后重试）...",
-                                    "ephemeral": True,
-                                },
-                                emit=emit,
-                            )
-                        if not await _await_retry_delay_or_interrupt(state, emit, delay):
-                            final_content = _interrupt_terminal_text(state["session_id"])
-                            await _push_stream_event(
-                                state,
-                                {"type": "status", "content": final_content.rstrip("。")},
-                                emit=emit,
-                            )
-                            break
-                        iter_count = max(0, iter_count - 1)
-                        state["_current_react_iter"] = int(iter_count)
-                        continue
                     state.pop("_network_reconnect_attempts", None)
                     if emit:
                         import json as _json

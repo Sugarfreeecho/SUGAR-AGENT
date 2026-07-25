@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import inspect
 import sys
 from pathlib import Path
 
@@ -109,3 +111,53 @@ def test_non_windows_network_probe_is_conservative(monkeypatch):
 
     monkeypatch.setattr(agent_harness.os, "name", "posix")
     assert agent_harness.machine_network_available() is True
+
+
+def test_local_network_sleep_resumes_without_probing_a_provider(monkeypatch):
+    import agent_loop
+
+    availability = iter([False, True])
+    events = []
+
+    monkeypatch.setattr(agent_loop, "machine_network_available", lambda: next(availability))
+    monkeypatch.setattr(agent_loop.session_manager, "is_interrupt_requested", lambda _sid: False)
+
+    async def no_steer(*_args, **_kwargs):
+        return None
+
+    async def no_delay(*_args, **_kwargs):
+        return True
+
+    async def emit(event):
+        events.append(event)
+
+    monkeypatch.setattr(agent_loop, "_raise_if_steer_requested", no_steer)
+    monkeypatch.setattr(agent_loop, "_await_retry_delay_or_interrupt", no_delay)
+    state = {"session_id": "offline", "stream_events": []}
+
+    recovered = asyncio.run(
+        agent_loop._wait_for_local_network_recovery(state, emit, poll_seconds=0.01)
+    )
+
+    assert recovered is True
+    assert state["_runtime_stage"] == "react"
+    assert any(event.get("local_network_offline") for event in events)
+    assert events[-1]["network_recovered"] is True
+
+
+def test_online_provider_failure_never_enters_an_unbounded_endpoint_wait():
+    import agent_loop
+
+    source = inspect.getsource(agent_loop)
+    react_source = inspect.getsource(agent_loop._react_node_once)
+    network_branch = react_source.split('if _cls.get("code") == "NET":', 1)[1].split(
+        "import json as _json", 1
+    )[0]
+
+    assert "_executor_endpoint_reachable" not in source
+    assert "_wait_for_network_recovery" not in source
+    assert network_branch.count("_wait_for_local_network_recovery(") == 1
+    assert network_branch.index("if local_network_offline:") < network_branch.index(
+        "_wait_for_local_network_recovery("
+    )
+    assert "if attempt <= NETWORK_RECONNECT_MAX_ATTEMPTS:" in network_branch
