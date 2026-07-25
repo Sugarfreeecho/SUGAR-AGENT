@@ -35,6 +35,8 @@ class RuntimeMirror:
         mapped = self._map_ui_event(session_id, event)
         if not mapped:
             return None
+        if not mapped.get("run_id"):
+            mapped["run_id"] = str((event or {}).get("run_id") or "").strip() or None
         return self.append(session_id, mapped["type"], mapped.get("payload") or {}, run_id=mapped.get("run_id"))
 
     def mirror_run_started(self, session_id: str, run_id: Optional[str] = None, payload: Optional[dict] = None) -> Optional[RuntimeEvent]:

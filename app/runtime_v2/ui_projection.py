@@ -25,8 +25,8 @@ class RuntimeUiProjection:
     _events_cache: Dict[str, tuple[tuple[bool, int, int], List[dict]]] = {}
     _events_cache_order: List[str] = []
     _events_cache_max = 64
-    _recent_page_cache: Dict[tuple[str, tuple[bool, int, int], int], dict] = {}
-    _recent_page_cache_order: List[tuple[str, tuple[bool, int, int], int]] = []
+    _recent_page_cache: Dict[tuple[str, tuple[bool, int, int], int, int], dict] = {}
+    _recent_page_cache_order: List[tuple[str, tuple[bool, int, int], int, int]] = []
 
     def __init__(self, sessions_dir: str | Path, path_resolver: Optional[Callable[[str], str | Path]] = None):
         self.sessions_dir = Path(sessions_dir)
@@ -41,6 +41,74 @@ class RuntimeUiProjection:
             return int(value)
         except (TypeError, ValueError):
             return None
+
+    @classmethod
+    def _react_process_sort_key(cls, event: dict, original_index: int) -> Optional[tuple[int, int, int, int]]:
+        """Return the logical ReAct display order for one process row.
+
+        Early tool execution made some legacy logs durable in completion order
+        (tool, then LLM text).  Display order is a protocol invariant instead:
+        reasoning, response, then tools in model call order for each iteration.
+        """
+        event_type = str((event or {}).get("type") or "")
+        phase = {
+            "llm_reasoning": 0,
+            "llm_response": 1,
+            "tool_call": 2,
+            "tool_result": 2,
+        }.get(event_type)
+        react_iter = cls._int_or_none((event or {}).get("react_iter"))
+        if phase is None or react_iter is None:
+            return None
+        tool_index = cls._int_or_none((event or {}).get("tool_call_index"))
+        # A missing tool index keeps its original stable position.  Indexed
+        # tools sort first by the model-provided order, never completion time.
+        tool_order = tool_index if phase == 2 and tool_index is not None else original_index
+        return int(react_iter), int(phase), int(tool_order), int(original_index)
+
+    @staticmethod
+    def _is_react_order_boundary(event: dict) -> bool:
+        event_type = str((event or {}).get("type") or "")
+        if event_type in {"user", "final"}:
+            return True
+        return bool(
+            event_type == "user_steer"
+            and str((event or {}).get("steer_mode") or "").strip().lower() == "interrupt"
+        )
+
+    @classmethod
+    def _normalize_react_process_order(cls, events: List[dict]) -> List[dict]:
+        """Stably repair legacy completion-order rows without moving UI chrome.
+
+        Only ReAct process slots are exchanged. Status, metrics, goal and user
+        rows retain their exact positions, and user/final/interrupt boundaries
+        prevent equal ``react_iter`` values from different runs being mixed.
+        """
+        if len(events) < 2:
+            return events
+        groups: Dict[int, List[tuple[int, dict, tuple[int, int, int, int]]]] = {}
+        scope = 0
+        for index, event in enumerate(events):
+            if cls._is_react_order_boundary(event):
+                scope += 1
+            key = cls._react_process_sort_key(event, index)
+            if key is not None:
+                groups.setdefault(scope, []).append((index, event, key))
+            if str((event or {}).get("type") or "") == "final":
+                scope += 1
+        for entries in groups.values():
+            if len(entries) < 2:
+                continue
+            ordered = sorted(entries, key=lambda item: item[2])
+            for (target_index, _old, _old_key), (_source_index, source, _source_key) in zip(entries, ordered):
+                events[target_index] = source
+        return events
+
+    @classmethod
+    def _normalize_before_history_op(cls, events: List[dict]) -> List[dict]:
+        # Index-based history operations must observe the same logical order as
+        # the frontend; normalizing only at the final return changes their target.
+        return cls._normalize_react_process_order(events)
 
     @classmethod
     def _apply_history_op_to_projected_events(cls, events: List[dict], event: RuntimeEvent) -> List[dict]:
@@ -252,6 +320,7 @@ class RuntimeUiProjection:
         has_history_ops = False
         for event in self.event_log.iter_events(session_id):
             if event.type == "legacy_truncate_observed":
+                out = self._normalize_before_history_op(out)
                 payload = dict(event.payload or {})
                 new_count = payload.get("new_event_count")
                 if new_count is None:
@@ -263,11 +332,13 @@ class RuntimeUiProjection:
                     pass
                 continue
             if event.type == "visible_range_changed":
+                out = self._normalize_before_history_op(out)
                 payload = dict(event.payload or {})
                 out = self._apply_visible_range_to_projected_events(out, payload)
                 latest_truncate_seq = int(event.seq)
                 continue
             if event.type in {"message_deleted", "message_rewritten"}:
+                out = self._normalize_before_history_op(out)
                 has_history_ops = True
                 out = self._apply_history_op_to_projected_events(out, event)
                 continue
@@ -281,7 +352,7 @@ class RuntimeUiProjection:
                     ui["runtime_event_type"] = event.type
             if ui is not None:
                 out.append(ui)
-        return out, latest_truncate_seq, has_history_ops
+        return self._normalize_react_process_order(out), latest_truncate_seq, has_history_ops
 
     def ui_index_to_runtime_seq(self, session_id: str, ui_index: int) -> Optional[int]:
         target = int(ui_index)
@@ -422,8 +493,14 @@ class RuntimeUiProjection:
             hydrate=False,
         )
         entries: List[tuple[int, str, str]] = []
+        react_order_tail: Optional[List[int]] = None
         for ui in projected:
             typ = str(ui.get("type") or "")
+            if self._is_react_order_boundary(ui):
+                react_order_tail = None
+            process_key = self._react_process_sort_key(ui, len(entries))
+            if process_key is not None:
+                react_order_tail = [int(process_key[0]), int(process_key[1])]
             preview = self._user_turn_preview(ui) if typ == "user" else ""
             seq = self._int_or_none(ui.get("runtime_seq")) or 0
             entries.append((seq, typ, preview))
@@ -442,6 +519,7 @@ class RuntimeUiProjection:
             "latest_truncate_seq": latest_truncate_seq,
             "has_history_ops": has_history_ops,
             "runtime_seqs": [int(seq) for seq, _typ, _preview in entries],
+            "react_order_tail": react_order_tail,
             "user_indices": user_indices,
             "user_turns": user_turns,
         }
@@ -483,12 +561,30 @@ class RuntimeUiProjection:
         user_turns = [dict(row) for row in extended.get("user_turns") or [] if isinstance(row, dict)]
         total = int(extended.get("total") or 0)
         runtime_seqs = [int(value) for value in extended.get("runtime_seqs") or []]
+        raw_react_tail = extended.get("react_order_tail")
+        react_order_tail: Optional[tuple[int, int]] = None
+        if isinstance(raw_react_tail, list) and len(raw_react_tail) == 2:
+            try:
+                react_order_tail = (int(raw_react_tail[0]), int(raw_react_tail[1]))
+            except (TypeError, ValueError):
+                react_order_tail = None
         if len(runtime_seqs) != total:
             return None
         for event in events:
             ui = self.event_to_ui(event)
             if ui is None:
                 continue
+            if self._is_react_order_boundary(ui):
+                react_order_tail = None
+            process_key = self._react_process_sort_key(ui, total)
+            if process_key is not None:
+                current_order = (int(process_key[0]), int(process_key[1]))
+                if react_order_tail is not None and current_order < react_order_tail:
+                    # A late LLM commit must be inserted before an already
+                    # indexed tool row. Rebuild so runtime_seqs reflects the
+                    # repaired visual order instead of extending incorrectly.
+                    return None
+                react_order_tail = current_order
             if str(ui.get("type") or "") == "user":
                 user_indices.append(total)
                 user_turns.append({
@@ -504,6 +600,7 @@ class RuntimeUiProjection:
             "user_indices": user_indices,
             "user_turns": user_turns,
             "runtime_seqs": runtime_seqs,
+            "react_order_tail": list(react_order_tail) if react_order_tail is not None else None,
         })
         self._write_ui_index(self._ui_index_path(session_id), extended)
         return extended
@@ -577,15 +674,21 @@ class RuntimeUiProjection:
         after_index: Optional[int] = None,
         target_index: Optional[int] = None,
         turns: Optional[int] = None,
+        event_budget: Optional[int] = None,
         legacy_loader: Optional[Callable[[], Iterable[dict]]] = None,
     ) -> dict:
         if legacy_loader is None and before_index is None and after_index is None and target_index is None and turns is not None:
-            cache_key = (self._cache_key(session_id), self._event_log_signature(session_id), int(turns))
+            budget = max(1, int(event_budget)) if event_budget is not None else 0
+            cache_key = (self._cache_key(session_id), self._event_log_signature(session_id), int(turns), budget)
             with self._cache_lock:
                 cached_page = self._recent_page_cache.get(cache_key)
             if cached_page is not None:
                 return self._copy_page(cached_page)
-            page = self._read_recent_turns_from_tail(session_id, turns=int(turns))
+            page = self._read_recent_turns_from_tail(
+                session_id,
+                turns=int(turns),
+                event_budget=budget or None,
+            )
             if page is not None:
                 with self._cache_lock:
                     self._recent_page_cache[cache_key] = page
@@ -604,6 +707,7 @@ class RuntimeUiProjection:
             after_index=after_index,
             target_index=target_index,
             turns=turns,
+            event_budget=event_budget,
         )
 
     @staticmethod
@@ -648,6 +752,7 @@ class RuntimeUiProjection:
                 projected.append(ui)
                 if len(projected) >= lim:
                     break
+        projected = self._normalize_react_process_order(projected)
         return {
             "events": projected,
             "last_runtime_seq": last_runtime_seq,
@@ -655,7 +760,41 @@ class RuntimeUiProjection:
             "has_more": bool(runtime_events and last_runtime_seq < int(runtime_events[-1].seq)),
         }
 
-    def _read_recent_turns_from_tail(self, session_id: str, *, turns: int) -> Optional[dict]:
+    @staticmethod
+    def _budgeted_turn_start(
+        user_indices: List[int],
+        *,
+        requested_start: int,
+        end: int,
+        event_budget: Optional[int],
+    ) -> int:
+        """Move a page start forward only at a user-turn boundary.
+
+        A dense turn is never split. If the newest complete turn alone exceeds
+        the budget, that whole turn is retained so callers do not receive a
+        misleading partial conversation.
+        """
+        start = max(0, min(int(requested_start), int(end)))
+        if event_budget is None:
+            return start
+        budget = max(1, int(event_budget))
+        if int(end) - start <= budget:
+            return start
+        candidates = [int(index) for index in user_indices if start <= int(index) < int(end)]
+        for candidate in candidates:
+            if int(end) - candidate <= budget:
+                return candidate
+        if candidates:
+            return candidates[-1]
+        return max(start, int(end) - budget)
+
+    def _read_recent_turns_from_tail(
+        self,
+        session_id: str,
+        *,
+        turns: int,
+        event_budget: Optional[int] = None,
+    ) -> Optional[dict]:
         turn_count = max(1, min(int(turns), 50))
         max_bytes_limit = max(
             64 * 1024,
@@ -676,10 +815,16 @@ class RuntimeUiProjection:
                 wanted_start = 0
             else:
                 wanted_start = int(user_indices_index[len(user_indices_index) - turn_count])
-            wanted_len = max(0, total - wanted_start)
         else:
             wanted_start = 0
-            wanted_len = total
+        requested_start = wanted_start
+        wanted_start = self._budgeted_turn_start(
+            [int(index) for index in user_indices_index],
+            requested_start=wanted_start,
+            end=total,
+            event_budget=event_budget,
+        )
+        wanted_len = max(0, total - wanted_start)
         runtime_seqs = [int(value) for value in index.get("runtime_seqs") or []]
         index_last_runtime_seq = max(0, int(index.get("last_runtime_seq") or 0))
         semantic_ops = {
@@ -723,6 +868,8 @@ class RuntimeUiProjection:
                         "has_older": wanted_start > 0,
                         "has_newer": False,
                         "source": "runtime_v2_seq_index",
+                        "requested_range_start": requested_start,
+                        "event_budget_applied": wanted_start > requested_start,
                     }
         max_events = max(
             500,
@@ -761,6 +908,7 @@ class RuntimeUiProjection:
                 ui = self._event_to_ui(session_id, event)
                 if ui is not None:
                     ui_events.append(ui)
+            ui_events = self._normalize_react_process_order(ui_events)
             if not ui_events:
                 if reached_start:
                     return {
@@ -771,6 +919,8 @@ class RuntimeUiProjection:
                         "has_older": total > 0,
                         "has_newer": False,
                         "source": "runtime_v2_tail",
+                        "requested_range_start": requested_start,
+                        "event_budget_applied": wanted_start > requested_start,
                     }
                 window *= 2
                 continue
@@ -785,6 +935,8 @@ class RuntimeUiProjection:
                     "has_newer": False,
                     "source": "runtime_v2_tail_index",
                     "tail_reached_start": bool(reached_start),
+                    "requested_range_start": requested_start,
+                    "event_budget_applied": wanted_start > requested_start,
                 }
             user_indices = [
                 i for i, ev in enumerate(ui_events)
@@ -799,6 +951,13 @@ class RuntimeUiProjection:
                     start = 0
                 else:
                     start = user_indices[len(user_indices) - turn_count]
+                requested_tail_start = start
+                start = self._budgeted_turn_start(
+                    user_indices,
+                    requested_start=start,
+                    end=len(ui_events),
+                    event_budget=event_budget,
+                )
                 selected = ui_events[start:]
                 range_end = total
                 range_start = max(0, range_end - len(selected))
@@ -811,6 +970,8 @@ class RuntimeUiProjection:
                     "has_newer": False,
                     "source": "runtime_v2_tail",
                     "tail_reached_start": bool(reached_start),
+                    "requested_range_start": max(0, total - (len(ui_events) - requested_tail_start)),
+                    "event_budget_applied": start > requested_tail_start,
                 }
             window *= 2
         return None
@@ -820,6 +981,7 @@ class RuntimeUiProjection:
         out: List[dict] = []
         for event in events:
             if event.type == "legacy_truncate_observed":
+                out = cls._normalize_before_history_op(out)
                 payload = dict(event.payload or {})
                 new_count = payload.get("new_event_count")
                 if new_count is None:
@@ -830,10 +992,12 @@ class RuntimeUiProjection:
                     pass
                 continue
             if event.type == "visible_range_changed":
+                out = cls._normalize_before_history_op(out)
                 payload = dict(event.payload or {})
                 out = cls._apply_visible_range_to_projected_events(out, payload)
                 continue
             if event.type in {"message_deleted", "message_rewritten"}:
+                out = cls._normalize_before_history_op(out)
                 out = cls._apply_history_op_to_projected_events(out, event)
                 continue
             ui = cls.event_to_ui(event)
@@ -842,12 +1006,13 @@ class RuntimeUiProjection:
                 ui["runtime_seq"] = int(event.seq)
                 ui["runtime_event_type"] = event.type
                 out.append(ui)
-        return out
+        return cls._normalize_react_process_order(out)
 
     def _events_to_ui(self, session_id: str, events: Iterable[RuntimeEvent]) -> List[dict]:
         out: List[dict] = []
         for event in events:
             if event.type == "legacy_truncate_observed":
+                out = self._normalize_before_history_op(out)
                 payload = dict(event.payload or {})
                 new_count = payload.get("new_event_count")
                 if new_count is None:
@@ -858,16 +1023,18 @@ class RuntimeUiProjection:
                     pass
                 continue
             if event.type == "visible_range_changed":
+                out = self._normalize_before_history_op(out)
                 payload = dict(event.payload or {})
                 out = self._apply_visible_range_to_projected_events(out, payload)
                 continue
             if event.type in {"message_deleted", "message_rewritten"}:
+                out = self._normalize_before_history_op(out)
                 out = self._apply_history_op_to_projected_events(out, event)
                 continue
             ui = self._event_to_ui(session_id, event)
             if ui is not None:
                 out.append(ui)
-        return out
+        return self._normalize_react_process_order(out)
 
     def _event_to_ui(self, session_id: str, event: RuntimeEvent) -> Optional[dict]:
         ui = self.event_to_ui(event)
@@ -968,10 +1135,21 @@ class RuntimeUiProjection:
             data.setdefault("created_at", event.timestamp)
             return data
         if event.type.startswith("goal_"):
-            data = dict(payload)
-            data["type"] = "goal_state"
-            data["goal_event"] = event.type
-            data.setdefault("created_at", event.timestamp)
+            # Persisted Goal events are audit/recovery facts, not chat rows.
+            # Keep their UI position and runtime sequence without sending the
+            # repeated objective and accounting-id arrays in history pages.
+            source = payload.get("set") if payload.get("_goal_delta") and isinstance(payload.get("set"), dict) else payload
+            data = {
+                "type": "goal_state",
+                "goal_event": event.type,
+                "created_at": event.timestamp,
+            }
+            goal_id = payload.get("id") or source.get("id")
+            if goal_id:
+                data["id"] = goal_id
+            for key in ("version", "status", "used_tokens", "token_budget", "pause_reason", "deleted"):
+                if key in source:
+                    data[key] = source.get(key)
             return data
         if event.type.startswith("hook_"):
             data = dict(payload)
@@ -990,6 +1168,12 @@ class RuntimeUiProjection:
         if event.type in {"ui_event", "legacy_ui_event"}:
             data = dict(payload)
             if data.get("type"):
+                if str(data.get("type") or "") in {"llm_reasoning", "llm_response"}:
+                    content = data.get("content")
+                    if content is None:
+                        content = data.get("text")
+                    if not str(content or "").strip():
+                        return None
                 data.setdefault("created_at", event.timestamp)
                 return data
             content = data.get("content") or data.get("message") or data.get("text")
@@ -1012,6 +1196,7 @@ class RuntimeUiProjection:
         after_index: Optional[int] = None,
         target_index: Optional[int] = None,
         turns: Optional[int] = None,
+        event_budget: Optional[int] = None,
     ) -> dict:
         total = len(events)
         user_indices = [
@@ -1076,6 +1261,13 @@ class RuntimeUiProjection:
             turn_count = max(1, min(int(turns), 50))
             end = total if before_index is None else max(0, min(int(before_index), total))
             start = turn_start(end, turn_count)
+            requested_start = start
+            start = RuntimeUiProjection._budgeted_turn_start(
+                user_indices,
+                requested_start=start,
+                end=end,
+                event_budget=event_budget,
+            )
             return {
                 "events": events[start:end],
                 "total": total,
@@ -1083,6 +1275,8 @@ class RuntimeUiProjection:
                 "range_end": end,
                 "has_older": start > 0,
                 "has_newer": end < total,
+                "requested_range_start": requested_start,
+                "event_budget_applied": start > requested_start,
             }
 
         end = total if before_index is None else max(0, min(int(before_index), total))

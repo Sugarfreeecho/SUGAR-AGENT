@@ -688,6 +688,43 @@ def test_runtime_v2_todo_update_does_not_write_legacy_file(monkeypatch, tmp_path
     ]
 
 
+def test_todo_accepts_multiple_in_progress_items(monkeypatch, tmp_path):
+    import agent_harness
+
+    monkeypatch.setenv("RUNTIME_VERSION", "1")
+
+    class _SessionManager:
+        sessions_dir = tmp_path
+
+        def save_todo_plan(self, *args, **kwargs):
+            pass
+
+    monkeypatch.setattr(agent_harness, "session_manager", _SessionManager())
+    manager = agent_harness.TodoManager()
+
+    result = manager.update_for_session(
+        "s1",
+        [
+            {"id": "1", "text": "parallel task one", "status": "in_progress"},
+            {"id": "2", "text": "parallel task two", "status": "in_progress"},
+        ],
+    )
+
+    assert "parallel task one" in result
+    assert "parallel task two" in result
+    assert len(manager._by_session["s1"]) == 2
+
+
+def test_todo_update_reminder_starts_after_twenty_rounds_and_repeats_every_five():
+    import agent_loop
+
+    assert not agent_loop._todo_update_reminder_due(20)
+    assert agent_loop._todo_update_reminder_due(21)
+    assert not agent_loop._todo_update_reminder_due(25)
+    assert agent_loop._todo_update_reminder_due(26)
+    assert agent_loop._todo_update_reminder_due(31)
+
+
 def test_runtime_v2_persist_does_not_save_legacy_histories(monkeypatch, tmp_path):
     import agent_loop
     from runtime_v2 import SnapshotStore
@@ -1019,7 +1056,7 @@ def test_title_worker_uses_user_text_when_all_models_fail(monkeypatch):
         "done",
     )
 
-    assert names == [("s1", "分析下仓库改动，总结7月份新增功能"[:20])]
+    assert names == [("s1", "分析下仓库改动，总结7月份新增功能"[:100])]
 
 
 def test_reasoning_polluted_session_title_needs_regeneration():

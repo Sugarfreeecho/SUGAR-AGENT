@@ -37,6 +37,10 @@ _FULL_MESSAGE_REPROJECTION_TYPES = {
 }
 
 _HOOK_RECENT_LIMIT = 50
+_GOAL_APPEND_LIMITS = {
+    "accounted_run_ids": 512,
+    "accounted_usage_ids": 2048,
+}
 _HOOK_SNAPSHOT_FIELDS = {
     "hook_id",
     "hook_event",
@@ -150,6 +154,37 @@ class RuntimeProjector:
             if run.get("status") not in {"finished", "failed", "interrupted"}
         ]
         return snapshot
+
+    @staticmethod
+    def _project_goal(snapshot: dict, event: RuntimeEvent) -> dict:
+        payload = dict(event.payload or {})
+        if not payload.get("_goal_delta"):
+            return payload
+
+        current = snapshot.get("goal") if isinstance(snapshot, dict) else None
+        goal = dict(current) if isinstance(current, dict) else {}
+        goal_id = payload.get("id")
+        if goal_id and goal.get("id") not in {None, goal_id}:
+            goal = {}
+        if goal_id:
+            goal["id"] = goal_id
+        changed = payload.get("set")
+        if isinstance(changed, dict):
+            goal.update(copy.deepcopy(changed))
+        removed = payload.get("unset")
+        if isinstance(removed, list):
+            for key in removed:
+                goal.pop(str(key), None)
+        appended = payload.get("append")
+        if isinstance(appended, dict):
+            for key, values in appended.items():
+                limit = _GOAL_APPEND_LIMITS.get(str(key))
+                if not limit or not isinstance(values, list):
+                    continue
+                existing = list(goal.get(key) or [])
+                existing.extend(copy.deepcopy(values))
+                goal[str(key)] = existing[-limit:]
+        return goal
 
     def _copy_for_incremental(self, snapshot: dict, event: RuntimeEvent) -> dict:
         """Copy only mutable containers touched by an incremental apply.
@@ -399,7 +434,7 @@ class RuntimeProjector:
             snapshot["todo"] = todo
             snapshot["context"]["todo"] = todo
         elif event_type.startswith("goal_"):
-            goal = dict(event.payload or {})
+            goal = self._project_goal(snapshot, event)
             goal["updated_at"] = goal.get("updated_at") or event.timestamp
             goal["seq"] = event.seq
             snapshot["goal"] = goal

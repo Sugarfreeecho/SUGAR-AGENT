@@ -49,7 +49,7 @@ def test_background_goal_runner_drains_continuation_without_browser(monkeypatch)
             events.append(("started", session_id, run_id))
 
     async def continuation(session_id, **kwargs):
-        events.append(("event", session_id, kwargs.get("run_id")))
+        events.append(("event", session_id, kwargs.get("run_id"), kwargs.get("continuation_source")))
         yield {"type": "status"}
 
     monkeypatch.setattr(agent_goal, "manager_for", lambda _session_manager: Manager())
@@ -62,6 +62,7 @@ def test_background_goal_runner_drains_continuation_without_browser(monkeypatch)
     assert events[0][0] == "started"
     assert events[1][0:2] == ("event", "s1")
     assert events[1][2] == events[0][2]
+    assert events[1][3] == "goal"
     assert releases == [("s1", "lease")]
 
 

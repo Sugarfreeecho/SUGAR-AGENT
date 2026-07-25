@@ -1380,11 +1380,14 @@ def _compress_unified_in_place(
     force_user_compact: bool,
     hint_sink: Optional[Callable[[Any], None]] = None,
     prompt_language: str = "zh-CN",
+    should_stop: Optional[Callable[[], bool]] = None,
 ) -> Tuple[List, str, bool, List[str], bool, Optional[str]]:
     hints: List[str] = []
     new_recap_text: Optional[str] = None
     snapshot_llm = deepcopy(llm_history)  # 异常/截尾兜底用；work 经 normalize 已与 llm_history 对象隔离，Phase D/E 原地改 work
     try:
+        if should_stop and should_stop():
+            return snapshot_llm, key_context, False, hints, False, None
         _push_progress_hint(
             hints,
             hint_sink,
@@ -1482,6 +1485,8 @@ def _compress_unified_in_place(
         configured_summary_rounds = max(1, int(CONTEXT_COMPRESS_MAX_ROUNDS))
         fallback_reason = "no_prefix"
         while True:
+            if should_stop and should_stop():
+                return snapshot_llm, key_context, False, hints, False, None
             if _compress_ratio_reached(session_id, work, cur_key, baseline_tokens):
                 break
             round_idx += 1
@@ -1527,6 +1532,8 @@ def _compress_unified_in_place(
                 session_id=session_id,
                 prompt_language=prompt_language,
             )
+            if should_stop and should_stop():
+                return snapshot_llm, key_context, False, hints, False, None
             used_llm_summary = True
             kb = (key_body or "").strip()
             if kb:
@@ -1671,6 +1678,7 @@ def run_context_policy(
     hint_sink: Optional[Callable[[Any], None]] = None,
     context_window: Optional[int] = None,
     prompt_language: str = "zh-CN",
+    should_stop: Optional[Callable[[], bool]] = None,
 ) -> Tuple[List, str, bool, List[str], bool, Optional[str]]:
     l = list(llm_history)
     token = _ACTIVE_CONTEXT_WINDOW.set(int(context_window)) if context_window else None
@@ -1682,6 +1690,7 @@ def run_context_policy(
             force_user_compact=force_user_compact,
             hint_sink=hint_sink,
             prompt_language=prompt_language,
+            should_stop=should_stop,
         )
     finally:
         if token is not None:

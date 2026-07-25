@@ -535,6 +535,58 @@ def test_history_snapshot_uses_lightweight_user_turns(monkeypatch, tmp_path):
     assert set(payload["timing"]) == {"read_page", "count", "user_turns", "context_tokens", "todo_plan", "total"}
 
 
+def test_history_snapshot_can_defer_auxiliary_snapshot_until_after_first_paint(monkeypatch, tmp_path):
+    import runtime_v2
+    import runtime_v2.ui_projection
+    import webui
+
+    class _Projection:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def read_ui_page(self, session_id, **kwargs):
+            return {
+                "events": [{"type": "user", "content": "u"}],
+                "total": 1,
+                "range_start": 0,
+                "range_end": 1,
+                "has_older": False,
+                "has_newer": False,
+                "source": "test",
+            }
+
+        def read_user_turns_light(self, session_id):
+            return [{"event_index": 0, "preview": "u"}]
+
+    monkeypatch.setattr(runtime_v2, "runtime_v2_primary", lambda: True)
+    monkeypatch.setattr(runtime_v2.ui_projection, "RuntimeUiProjection", _Projection)
+    monkeypatch.setattr(webui, "session_manager", _NoLegacyUiSessionManager(tmp_path, []))
+    monkeypatch.setattr(
+        webui,
+        "_runtime_v2_snapshot",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("auxiliary snapshot must stay off the initial history path")
+        ),
+    )
+
+    response = asyncio.run(webui.get_session_history_snapshot(
+        "s1",
+        limit=None,
+        before_index=None,
+        after_index=None,
+        turns=5,
+        event_budget=500,
+        include_aux=False,
+    ))
+    payload = _json_response_payload(response)
+
+    assert payload["ok"] is True
+    assert payload["context_tokens"] is None
+    assert payload["todo_plan"] is None
+    assert payload["timing"]["context_tokens"] == 0
+    assert payload["timing"]["todo_plan"] == 0
+
+
 def test_context_tokens_snapshot_miss_uses_runtime_v2_compute_not_legacy(monkeypatch, tmp_path):
     import runtime_v2
     import webui
@@ -1243,6 +1295,30 @@ def test_auto_resume_only_for_orphan_interruption(monkeypatch):
                 "status": "interrupted",
                 "reason": "user",
                 "finished_seq": 11,
+            }
+        }
+    })
+    assert webui._runtime_v2_auto_resume_pending("s1") is False
+
+    monkeypatch.setattr(webui, "_runtime_v2_snapshot", lambda _sid: {
+        "runs": {
+            "r3": {
+                "run_id": "r3",
+                "status": "interrupted",
+                "reason": "cancelled",
+                "finished_seq": 12,
+            }
+        }
+    })
+    assert webui._runtime_v2_auto_resume_pending("s1") is True
+
+    monkeypatch.setattr(webui, "_runtime_v2_snapshot", lambda _sid: {
+        "runs": {
+            "r4": {
+                "run_id": "r4",
+                "status": "interrupted",
+                "reason": "user_button",
+                "finished_seq": 13,
             }
         }
     })

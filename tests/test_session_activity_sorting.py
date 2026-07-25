@@ -75,5 +75,8 @@ def test_user_event_side_effect_persists_activity_for_refresh(tmp_path):
     })
 
     reloaded = agent_harness.SessionManager(sessions_dir, index_file)
-    assert [row["id"] for row in reloaded.list_sessions()] == [old_id, new_id]
-    assert reloaded.list_sessions()[0]["last_user_preview"] == "new question"
+    # This fixture deliberately uses stable timestamps. Include archived rows so
+    # the assertion remains about persisted activity ordering as wall time moves.
+    rows_after_refresh = reloaded.list_sessions(include_archived=True)
+    assert [row["id"] for row in rows_after_refresh] == [old_id, new_id]
+    assert rows_after_refresh[0]["last_user_preview"] == "new question"

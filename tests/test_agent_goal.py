@@ -29,6 +29,67 @@ class GoalManagerTests(unittest.TestCase):
         with self.assertRaises(GoalError):
             self.manager.create("s1", "Another goal")
 
+    def test_runtime_v2_goal_recovers_from_event_log_when_snapshot_is_missing(self):
+        created = self.manager.create("recover-goal", "Survive an Agent restart")
+        snapshot_path = Path(self.tmp.name) / "recover-goal" / "snapshots" / "latest.json"
+        self.assertTrue(snapshot_path.is_file())
+        snapshot_path.unlink()
+
+        restarted_manager = GoalManager(self.tmp.name)
+        recovered = restarted_manager.get("recover-goal")
+
+        self.assertIsNotNone(recovered)
+        self.assertEqual(recovered["id"], created["id"])
+        self.assertEqual(recovered["objective"], "Survive an Agent restart")
+        self.assertEqual(recovered["status"], "active")
+        self.assertTrue(snapshot_path.is_file())
+
+    def test_usage_events_are_compact_and_recoverable(self):
+        self.manager.create("compact-goal", "Do not repeat this objective " * 200)
+        self.manager.record_usage(
+            "compact-goal",
+            17,
+            usage_id="run-1:llm:0",
+            run_id="run-1",
+        )
+        self.manager.record_run(
+            "compact-goal",
+            3,
+            continuation=True,
+            run_id="run-1",
+            outcome="finished",
+        )
+
+        from app.runtime_v2 import RuntimeHistoryOps
+
+        ops = RuntimeHistoryOps(self.tmp.name)
+        events = ops.event_log.read_all("compact-goal")
+        usage_events = [event for event in events if event.type == "goal_usage_updated"]
+        self.assertEqual(len(usage_events), 2)
+        for event in usage_events:
+            self.assertTrue(event.payload["_goal_delta"])
+            self.assertNotIn("objective", event.payload)
+            self.assertNotIn("accounted_usage_ids", event.payload)
+            self.assertNotIn("accounted_run_ids", event.payload)
+        self.assertEqual(
+            usage_events[0].payload["append"]["accounted_usage_ids"],
+            ["run-1:llm:0"],
+        )
+        self.assertEqual(
+            usage_events[1].payload["append"]["accounted_run_ids"],
+            ["run-1"],
+        )
+
+        snapshot_path = Path(self.tmp.name) / "compact-goal" / "snapshots" / "latest.json"
+        snapshot_path.unlink()
+        recovered = GoalManager(self.tmp.name).get("compact-goal")
+
+        self.assertEqual(recovered["used_tokens"], 20)
+        self.assertEqual(recovered["run_count"], 1)
+        self.assertEqual(recovered["continuation_count"], 1)
+        self.assertEqual(recovered["accounted_usage_ids"], ["run-1:llm:0"])
+        self.assertEqual(recovered["accounted_run_ids"], ["run-1"])
+
     def test_same_blocker_requires_three_reports(self):
         self.manager.create("s1", "Ship goal support")
         for expected in (1, 2):
@@ -94,6 +155,24 @@ class GoalManagerTests(unittest.TestCase):
         self.assertEqual(goal["status"], "paused")
         self.assertEqual(goal["pause_reason"], "consecutive_run_failures")
         self.assertEqual(goal["consecutive_failures"], 3)
+
+    def test_react_iteration_limit_pauses_goal_without_auto_continuation(self):
+        self.manager.create("s1", "Do not restart a loop forever")
+
+        goal = self.manager.record_run(
+            "s1",
+            1,
+            continuation=True,
+            run_id="run-limit",
+            outcome="react_limit",
+            error="ReAct reached the maximum iteration limit.",
+        )
+
+        self.assertEqual(goal["status"], "paused")
+        self.assertEqual(goal["pause_reason"], "react_iteration_limit")
+        self.assertEqual(goal["last_run_outcome"], "react_limit")
+        self.assertIn("maximum iteration", goal["last_error"])
+        self.assertFalse(self.manager.should_continue("s1"))
 
     def test_continuation_start_is_persisted_with_run_identity(self):
         self.manager.create("s1", "Continue durably")
@@ -229,6 +308,9 @@ def test_goal_card_is_present_in_the_vite_entry_and_shell_source():
     assert "function formatGoalElapsed(seconds)" in renderer
     assert "renderGoalMeta(goal, sid)" in renderer
     assert "statusEl.textContent = translate('进行中') + ' · ' + formatGoalElapsed(elapsed)" in renderer
+    assert "const goalElapsedAnchorBySession = new Map()" in renderer
+    assert "elapsedSeconds = Math.max(" in renderer
+    assert "react_iteration_limit: 'ReAct 已达到轮次上限'" in renderer
     assert "metaEl.setAttribute('data-ui-tip', metaText + '\\n' + help)" in renderer
     assert "}, 1000);" in renderer
     assert "}, 5000);" in renderer

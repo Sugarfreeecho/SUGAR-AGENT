@@ -193,6 +193,36 @@ def test_interrupt_check_uses_memory_cache(tmp_path):
     assert manager.get_interrupt_reason(sid) == "followup"
 
 
+def test_interrupt_cache_updates_immediately_on_request_and_clear(tmp_path):
+    import agent_harness
+
+    sid = str(uuid.uuid4())
+    manager = agent_harness.SessionManager(tmp_path / "sessions", tmp_path / "sessions.json")
+    manager._save_metadata(sid, {"interrupt_requested": False, "active_run_id": "run-1"})
+
+    # Prime the hot-path cache with False, matching a live ReAct worker.
+    assert manager.is_interrupt_requested(sid, "run-1") is False
+    manager.request_interrupt(sid, "run-1", reason="user")
+    assert manager.is_interrupt_requested(sid, "run-1") is True
+    assert manager.get_interrupt_reason(sid) == "user"
+
+    manager.clear_interrupt(sid, "run-2")
+    assert manager.is_interrupt_requested(sid, "run-2") is False
+    assert manager.get_interrupt_reason(sid) == ""
+
+
+def test_runtime_mirror_preserves_ui_event_run_id(tmp_path):
+    from runtime_v2 import RuntimeMirror
+
+    event = RuntimeMirror(tmp_path).mirror_ui_event(
+        "s1",
+        {"type": "status", "content": "working", "run_id": "run-1"},
+    )
+
+    assert event is not None
+    assert event.run_id == "run-1"
+
+
 def test_full_input_token_estimate_reuses_cache(monkeypatch):
     import agent_tokenizer
     from agent_messages import UserMessage

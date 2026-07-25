@@ -150,7 +150,16 @@ class GoalManager:
         if not sid:
             raise GoalError("session_id is required")
         if self._runtime_v2_primary():
-            snapshot = self._ops().snapshots.read(sid)
+            # latest.json is only a rebuildable cache.  After a hard process
+            # stop it may be missing or behind events.jsonl, so a plain cache
+            # read can incorrectly make a durable Goal look absent after
+            # restart.  Always reconcile against the append-only event log.
+            ops = self._ops()
+            snapshot = ops.snapshots.read_consistent(
+                sid,
+                event_log=ops.event_log,
+                projector=ops.projector,
+            )
             goal = snapshot.get("goal") if isinstance(snapshot, dict) else None
         else:
             goal = self._read_legacy(self._legacy_goal_path(sid))
@@ -447,6 +456,18 @@ class GoalManager:
                     self._stop_clock(goal)
                     goal["status"] = "paused"
                     goal["pause_reason"] = "consecutive_run_failures"
+            elif outcome == "react_limit":
+                # Reaching the hard ReAct ceiling is a terminal condition for
+                # this run, not a successful turn.  Keep the Goal resumable,
+                # but require an explicit user resume so the scheduler cannot
+                # immediately start another 100-iteration loop.
+                goal["consecutive_failures"] = 0
+                goal["last_error"] = str(error or "react_iteration_limit")[:2000]
+                goal["next_retry_at"] = None
+                if goal.get("status") == "active":
+                    self._stop_clock(goal)
+                    goal["status"] = "paused"
+                    goal["pause_reason"] = "react_iteration_limit"
             elif outcome == "finished":
                 goal["consecutive_failures"] = 0
                 goal["last_error"] = None

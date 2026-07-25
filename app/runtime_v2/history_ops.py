@@ -26,6 +26,12 @@ HOOK_EVENT_TYPES = {
 
 PLUGIN_EVENT_TYPES = {"plugin_state_changed", "plugin_reloaded"}
 
+_GOAL_CHECKPOINT_INTERVAL = 64
+_GOAL_APPEND_LIMITS = {
+    "accounted_run_ids": 512,
+    "accounted_usage_ids": 2048,
+}
+
 
 def _rt2_step_ms(start: float, end: Optional[float] = None) -> int:
     if end is None:
@@ -297,6 +303,51 @@ class RuntimeHistoryOps:
             raise ValueError("goal event_type must start with goal_")
         return self._append_and_snapshot(session_id, str(event_type), dict(goal or {}))
 
+    @staticmethod
+    def _compact_goal_payload(current: Optional[dict], goal: dict) -> dict:
+        """Encode frequent Goal accounting writes as replayable field deltas.
+
+        The snapshot store still receives the complete projected Goal.  Full
+        events are retained periodically so event-log recovery never needs to
+        replay an unbounded chain of deltas.
+        """
+
+        previous = dict(current or {})
+        persisted = dict(goal or {})
+        version = max(0, int(persisted.get("version") or 0))
+        if not previous or version % _GOAL_CHECKPOINT_INTERVAL == 0:
+            return persisted
+
+        changed: dict = {}
+        appended: dict = {}
+        removed = []
+        for key in sorted(set(previous) | set(persisted)):
+            if key == "seq" or previous.get(key) == persisted.get(key):
+                continue
+            if key not in persisted:
+                removed.append(key)
+                continue
+            limit = _GOAL_APPEND_LIMITS.get(key)
+            old_value = previous.get(key)
+            new_value = persisted.get(key)
+            if limit and isinstance(old_value, list) and isinstance(new_value, list):
+                additions = new_value[-1:] if new_value else []
+                if additions and (old_value + additions)[-limit:] == new_value:
+                    appended[key] = additions
+                    continue
+            changed[key] = new_value
+
+        payload = {
+            "_goal_delta": True,
+            "id": persisted.get("id"),
+            "set": changed,
+        }
+        if appended:
+            payload["append"] = appended
+        if removed:
+            payload["unset"] = removed
+        return payload
+
     def mutate_goal(
         self,
         session_id: str,
@@ -321,10 +372,13 @@ class RuntimeHistoryOps:
                 raise ValueError("goal event_type must start with goal_")
             if not isinstance(persisted_goal, dict) or not persisted_goal.get("id"):
                 raise ValueError("goal mutation must return a persisted goal with an id")
+            event_payload = dict(persisted_goal)
+            if normalized_type == "goal_usage_updated":
+                event_payload = self._compact_goal_payload(current_goal, persisted_goal)
             event = self.event_log._append_unlocked(
                 session_id,
                 normalized_type,
-                payload=dict(persisted_goal),
+                payload=event_payload,
                 run_id=run_id,
             )
             snapshot = self.projector.project_incremental(snapshot, event)

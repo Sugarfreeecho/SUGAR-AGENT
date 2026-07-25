@@ -55,6 +55,25 @@ def test_phase_e_shrinks_incomplete_non_user_block():
     assert len(str(out[1].content)) < 1000
 
 
+def test_context_policy_stops_before_compaction_when_run_is_interrupted():
+    import agent_memory
+
+    history = [agent_memory.UserMessage(content="keep me")]
+    out, key_context, changed, _hints, used_summary, recap = agent_memory.run_context_policy(
+        history,
+        "facts",
+        "s1",
+        force_user_compact=True,
+        should_stop=lambda: True,
+    )
+
+    assert [message.content for message in out] == ["keep me"]
+    assert key_context == "facts"
+    assert changed is False
+    assert used_summary is False
+    assert recap is None
+
+
 def test_max_rounds_fallback_without_dropping_does_not_mark_truncated():
     import agent_memory
 

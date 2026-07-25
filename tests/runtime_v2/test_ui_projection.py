@@ -6,6 +6,34 @@ from app.runtime_v2.blob_store import BlobStore
 
 
 class RuntimeUiProjectionTests(unittest.TestCase):
+    def test_goal_history_projection_omits_repeated_heavy_state(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            goal = {
+                "id": "goal-1",
+                "objective": "large objective " * 1000,
+                "version": 7,
+                "status": "active",
+                "used_tokens": 123,
+                "token_budget": 1000,
+                "accounted_usage_ids": [f"usage-{index}" for index in range(500)],
+                "accounted_run_ids": [f"run-{index}" for index in range(100)],
+            }
+            RuntimeHistoryOps(tmp).update_goal("s1", goal)
+
+            event = RuntimeUiProjection(tmp).read_ui_events("s1")[0]
+
+            self.assertEqual(event["type"], "goal_state")
+            self.assertEqual(event["goal_event"], "goal_updated")
+            self.assertEqual(event["id"], "goal-1")
+            self.assertEqual(event["version"], 7)
+            self.assertEqual(event["status"], "active")
+            self.assertEqual(event["used_tokens"], 123)
+            self.assertEqual(event["token_budget"], 1000)
+            self.assertEqual(event["runtime_seq"], 1)
+            self.assertNotIn("objective", event)
+            self.assertNotIn("accounted_usage_ids", event)
+            self.assertNotIn("accounted_run_ids", event)
+
     def test_projects_runtime_events_to_legacy_ui_events(self):
         with tempfile.TemporaryDirectory() as tmp:
             mirror = RuntimeMirror(tmp)
@@ -19,6 +47,141 @@ class RuntimeUiProjectionTests(unittest.TestCase):
             self.assertEqual([ev["type"] for ev in events], ["user", "status", "tool_call", "final"])
             self.assertEqual(events[1]["content"], "thinking")
             self.assertEqual(events[2]["result"], "ok")
+
+    def test_blank_llm_rows_are_not_projected_into_history(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            mirror = RuntimeMirror(tmp)
+            mirror.mirror_ui_event("s1", {"type": "user", "content": "hello"})
+            mirror.mirror_ui_event("s1", {"type": "llm_reasoning", "content": " \n "})
+            mirror.mirror_ui_event("s1", {"type": "llm_response", "content": ""})
+            mirror.mirror_ui_event("s1", {"type": "llm_response", "content": "visible"})
+
+            events = RuntimeUiProjection(tmp).read_ui_events("s1")
+
+            self.assertEqual([event["type"] for event in events], ["user", "llm_response"])
+            self.assertEqual(events[-1]["content"], "visible")
+
+    def test_repairs_legacy_tool_before_llm_order_and_preserves_tool_call_index(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            mirror = RuntimeMirror(tmp)
+            mirror.mirror_ui_event("s1", {"type": "user", "content": "question"})
+            second_tool = mirror.append("s1", "tool_started", {
+                "type": "tool_call",
+                "tool": "second",
+                "react_iter": 1,
+                "tool_call_index": 1,
+            })
+            first_tool = mirror.append("s1", "tool_started", {
+                "type": "tool_call",
+                "tool": "first",
+                "react_iter": 1,
+                "tool_call_index": 0,
+            })
+            response = mirror.append("s1", "ui_event", {
+                "type": "llm_response",
+                "content": "response",
+                "react_iter": 1,
+            })
+            reasoning = mirror.append("s1", "ui_event", {
+                "type": "llm_reasoning",
+                "content": "reasoning",
+                "react_iter": 1,
+            })
+            projection = RuntimeUiProjection(tmp)
+
+            events = projection.read_ui_events("s1")
+            page = projection.read_ui_page("s1", turns=1)
+            index = projection._read_or_build_ui_index("s1")
+
+            self.assertEqual(
+                [(event["type"], event.get("tool")) for event in events[1:]],
+                [
+                    ("llm_reasoning", None),
+                    ("llm_response", None),
+                    ("tool_call", "first"),
+                    ("tool_call", "second"),
+                ],
+            )
+            expected_seqs = [reasoning.seq, response.seq, first_tool.seq, second_tool.seq]
+            self.assertEqual([event["runtime_seq"] for event in events[1:]], expected_seqs)
+            self.assertEqual([event["runtime_seq"] for event in page["events"][1:]], expected_seqs)
+            self.assertEqual(index["runtime_seqs"][1:], expected_seqs)
+
+    def test_incremental_projection_repairs_inverted_process_batch(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            mirror = RuntimeMirror(tmp)
+            first = mirror.mirror_ui_event("s1", {"type": "user", "content": "question"})
+            mirror.append("s1", "tool_started", {
+                "type": "tool_call",
+                "tool": "shell",
+                "react_iter": 2,
+            })
+            mirror.append("s1", "ui_event", {
+                "type": "llm_response",
+                "content": "response",
+                "react_iter": 2,
+            })
+            mirror.append("s1", "ui_event", {
+                "type": "llm_reasoning",
+                "content": "reasoning",
+                "react_iter": 2,
+            })
+
+            page = RuntimeUiProjection(tmp).read_ui_after_runtime_seq(
+                "s1", after_runtime_seq=first.seq
+            )
+
+            self.assertFalse(page["requires_reprojection"])
+            self.assertEqual(
+                [event["type"] for event in page["events"]],
+                ["llm_reasoning", "llm_response", "tool_call"],
+            )
+
+    def test_ui_index_rebuilds_when_late_llm_row_must_precede_indexed_tool(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            mirror = RuntimeMirror(tmp)
+            mirror.mirror_ui_event("s1", {"type": "user", "content": "question"})
+            tool = mirror.append("s1", "tool_started", {
+                "type": "tool_call",
+                "tool": "shell",
+                "react_iter": 1,
+            })
+            projection = RuntimeUiProjection(tmp)
+            initial = projection._read_or_build_ui_index("s1")
+            self.assertEqual(initial["runtime_seqs"][-1], tool.seq)
+
+            response = mirror.append("s1", "ui_event", {
+                "type": "llm_response",
+                "content": "late response",
+                "react_iter": 1,
+            })
+            repaired = projection._read_or_build_ui_index("s1")
+
+            self.assertEqual(repaired["runtime_seqs"][-2:], [response.seq, tool.seq])
+
+    def test_index_based_history_op_targets_normalized_react_order(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            mirror = RuntimeMirror(tmp)
+            mirror.mirror_ui_event("s1", {"type": "user", "content": "question"})
+            mirror.append("s1", "tool_started", {
+                "type": "tool_call",
+                "tool": "shell",
+                "react_iter": 1,
+            })
+            response = mirror.append("s1", "ui_event", {
+                "type": "llm_response",
+                "content": "response",
+                "react_iter": 1,
+            })
+            mirror.append("s1", "visible_range_changed", {
+                "to_ui_index": 2,
+                "reason": "test normalized prefix",
+            })
+
+            events = RuntimeUiProjection(tmp).read_ui_events("s1")
+
+            self.assertEqual([event["type"] for event in events], ["user", "llm_response"])
+            self.assertEqual(events[-1]["runtime_seq"], response.seq)
 
     def test_backfills_legacy_events_when_runtime_log_is_empty(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -120,6 +283,34 @@ class RuntimeUiProjectionTests(unittest.TestCase):
             self.assertTrue(page["has_older"])
             self.assertEqual([ev["content"] for ev in page["events"]], ["u2", "a2", "u3", "a3"])
 
+    def test_event_budget_moves_start_only_to_a_complete_turn_boundary(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            mirror = RuntimeMirror(tmp)
+            for turn, process_count in enumerate((10, 6, 1, 0)):
+                mirror.mirror_ui_event("s1", {"type": "user", "content": f"u{turn}"})
+                for index in range(process_count):
+                    mirror.mirror_ui_event(
+                        "s1",
+                        {"type": "status", "content": f"p{turn}-{index}"},
+                    )
+                mirror.mirror_ui_event("s1", {"type": "final", "content": f"a{turn}"})
+
+            page = RuntimeUiProjection(tmp).read_ui_page(
+                "s1",
+                turns=5,
+                event_budget=5,
+            )
+
+            self.assertEqual(page["total"], 25)
+            self.assertEqual(page["requested_range_start"], 0)
+            self.assertEqual(page["range_start"], 20)
+            self.assertTrue(page["event_budget_applied"])
+            self.assertTrue(page["has_older"])
+            self.assertEqual(
+                [event["content"] for event in page["events"]],
+                ["u2", "p2-0", "a2", "u3", "a3"],
+            )
+
     def test_tail_page_does_not_drop_dense_process_events_inside_recent_turns(self):
         with tempfile.TemporaryDirectory() as tmp:
             mirror = RuntimeMirror(tmp)
@@ -131,7 +322,7 @@ class RuntimeUiProjectionTests(unittest.TestCase):
                 mirror.mirror_ui_event("s1", {"type": "status", "content": f"process {index}"})
             mirror.mirror_ui_event("s1", {"type": "final", "content": "dense answer"})
 
-            page = RuntimeUiProjection(tmp).read_ui_page("s1", turns=1)
+            page = RuntimeUiProjection(tmp).read_ui_page("s1", turns=1, event_budget=500)
 
             self.assertEqual(page["total"], 655)
             self.assertEqual(page["range_start"], 3)

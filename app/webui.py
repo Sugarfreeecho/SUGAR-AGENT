@@ -11,6 +11,7 @@ import mimetypes
 import os
 import re
 import threading
+import time
 import uuid
 from collections import defaultdict, deque
 from datetime import datetime, timezone
@@ -67,6 +68,13 @@ _TEMPLATES_DIR = Path(__file__).resolve().parent / "templates"
 _DIST_INDEX = _TEMPLATES_DIR / "dist" / "index.html"
 _DIST_EXECUTION_DASHBOARD = _TEMPLATES_DIR / "dist" / "execution-dashboard.html"
 _DIST_ASSETS = _TEMPLATES_DIR / "dist" / "assets"
+_EXECUTION_METRICS_PAYLOAD_TTL_SEC = max(
+    1.0,
+    float(os.getenv("EXECUTION_DASHBOARD_PAYLOAD_TTL_SEC", "3")),
+)
+_execution_metrics_payload_lock = threading.Lock()
+_execution_metrics_payload_cached_at = 0.0
+_execution_metrics_payload_cache = b""
 _VIEWABLE_IMAGE_SUFFIXES = {
     ".png",
     ".jpg",
@@ -650,6 +658,7 @@ async def _run_goal_continuation_background(session_id: str) -> None:
             require_pending_subagents=False,
             recovery_reason=recovery_reason,
             run_id=scheduler_run_id,
+            continuation_source="goal",
         ):
             # The agent loop already publishes every event to observers and
             # persists durable Runtime V2 events; the server runner only drains
@@ -1018,7 +1027,13 @@ def _runtime_v2_auto_resume_pending(sid: str) -> bool:
     latest = max(rows, key=lambda run: int(run.get("finished_seq") or run.get("heartbeat_seq") or run.get("started_seq") or 0))
     return (
         str(latest.get("status") or "") == "interrupted"
-        and str(latest.get("reason") or "") in {"no_local_activity", "orphaned", "process_restart"}
+        and str(latest.get("reason") or "") in {
+            "no_local_activity",
+            "orphaned",
+            "process_restart",
+            "cancelled",
+            "unspecified",
+        }
     )
 
 
@@ -1420,7 +1435,6 @@ def get_index_html():
 
 @fastapi_app.get("/", response_class=HTMLResponse)
 async def get_index(request: Request):
-    await run_in_threadpool(session_manager.refresh_sessions_index_from_disk)
     return HTMLResponse(
         content=get_index_html(),
         headers={
@@ -2754,7 +2768,7 @@ async def interrupt_session(session_id: str, request: Request):
     if not sid:
         return JSONResponse(content={"error": "missing session_id"}, status_code=400)
     run_id = ""
-    reason = "user"
+    reason = "unspecified"
     try:
         ctype = (request.headers.get("content-type") or "").lower()
         if "application/json" in ctype:
@@ -2767,7 +2781,7 @@ async def interrupt_session(session_id: str, request: Request):
             reason = str(form.get("reason") or reason).strip() or reason
     except Exception:
         run_id = ""
-        reason = "user"
+        reason = "unspecified"
     session_manager.request_interrupt(sid, run_id, reason=reason)
     if reason != "followup":
         session_manager.mark_session_unread_result(sid, status="failed")
@@ -3751,6 +3765,7 @@ async def continue_react_session(
                     should_stop=should_stop,
                     require_pending_subagents=False,
                     recovery_reason="process_or_network_interruption" if recovery and not goal_can_continue else "",
+                    continuation_source="goal" if goal_can_continue else "subagent",
                 ):
                     if await request.is_disconnected():
                         break
@@ -3883,6 +3898,7 @@ async def get_session_messages(
     after_index: Optional[int] = Query(None, ge=-1),
     target_index: Optional[int] = Query(None, ge=0),
     turns: Optional[int] = Query(None, ge=1, le=50),
+    event_budget: Optional[int] = Query(None, ge=50, le=5000),
 ):
     """
     与 SSE 同源：默认返回完整 ui_events 数组（兼容旧前端）。
@@ -3895,6 +3911,7 @@ async def get_session_messages(
     target_index_value: Optional[int] = None
     if isinstance(target_index, int):
         target_index_value = target_index
+    event_budget_value = event_budget if isinstance(event_budget, int) else None
     def _build_messages_response() -> JSONResponse:
         nonlocal projection
         try:
@@ -3976,6 +3993,7 @@ async def get_session_messages(
                 after_index=after_index,
                 target_index=target_index_value,
                 turns=tv,
+                event_budget=event_budget_value,
             )
             elapsed_ms = int((_time.perf_counter() - t0) * 1000)
             if elapsed_ms >= 500:
@@ -4039,6 +4057,8 @@ async def get_session_history_snapshot(
     before_index: Optional[int] = Query(None, ge=0),
     after_index: Optional[int] = Query(None, ge=-1),
     turns: Optional[int] = Query(5, ge=1, le=50),
+    event_budget: Optional[int] = Query(None, ge=50, le=5000),
+    include_aux: bool = Query(True),
 ):
     """Return the initial V2 history page plus TOC/count in one request."""
     import time as _time
@@ -4080,6 +4100,7 @@ async def get_session_history_snapshot(
             )
             lim = int(limit) if limit is not None else 200
             tv = int(turns) if turns is not None else None
+            event_budget_value = event_budget if isinstance(event_budget, int) else None
             timings: dict[str, int] = {}
             t_phase = _time.perf_counter()
             page = projection.read_ui_page(
@@ -4088,6 +4109,7 @@ async def get_session_history_snapshot(
                 before_index=before_index,
                 after_index=after_index,
                 turns=tv,
+                event_budget=event_budget_value,
             )
             timings["read_page"] = int((_time.perf_counter() - t_phase) * 1000)
             t_phase = _time.perf_counter()
@@ -4100,18 +4122,37 @@ async def get_session_history_snapshot(
             t_phase = _time.perf_counter()
             user_turns = projection.read_user_turns_light(session_id)
             timings["user_turns"] = int((_time.perf_counter() - t_phase) * 1000)
-            t_phase = _time.perf_counter()
-            context_tokens = _runtime_v2_context_snapshot(session_id).get("tokens")
-            if not isinstance(context_tokens, dict):
-                context_tokens = None
-            elif context_tokens.get("stale"):
-                context_tokens = dict(context_tokens)
-                context_tokens["pending_recalculation"] = True
-                context_tokens["source"] = "runtime_v2_snapshot_stale"
-            timings["context_tokens"] = int((_time.perf_counter() - t_phase) * 1000)
-            t_phase = _time.perf_counter()
-            todo_plan = _runtime_v2_todo_plan_snapshot(session_id)
-            timings["todo_plan"] = int((_time.perf_counter() - t_phase) * 1000)
+            include_aux_value = include_aux if isinstance(include_aux, bool) else True
+            context_tokens = None
+            todo_plan = None
+            if include_aux_value:
+                t_phase = _time.perf_counter()
+                runtime_snapshot = _runtime_v2_snapshot(session_id, fail_closed=True)
+                runtime_context = runtime_snapshot.get("context") if isinstance(runtime_snapshot, dict) else None
+                if not isinstance(runtime_context, dict):
+                    runtime_context = {}
+                context_tokens = runtime_context.get("tokens")
+                if not isinstance(context_tokens, dict):
+                    context_tokens = None
+                elif context_tokens.get("stale"):
+                    context_tokens = dict(context_tokens)
+                    context_tokens["pending_recalculation"] = True
+                    context_tokens["source"] = "runtime_v2_snapshot_stale"
+                timings["context_tokens"] = int((_time.perf_counter() - t_phase) * 1000)
+                t_phase = _time.perf_counter()
+                raw_todo_plan = runtime_context.get("todo")
+                if isinstance(raw_todo_plan, dict):
+                    todo_plan = dict(raw_todo_plan)
+                    todo_plan.setdefault("source", "runtime_v2_snapshot")
+                else:
+                    todo_plan = _empty_todo_plan_snapshot("runtime_v2_snapshot")
+                timings["todo_plan"] = int((_time.perf_counter() - t_phase) * 1000)
+            else:
+                # The browser fetches these panels after the chat's first paint.
+                # Keeping them off the critical history path avoids parsing a
+                # multi-megabyte Runtime snapshot before any messages appear.
+                timings["context_tokens"] = 0
+                timings["todo_plan"] = 0
             elapsed_ms = int((_time.perf_counter() - t0) * 1000)
             timings["total"] = elapsed_ms
             logger.info(
@@ -4552,12 +4593,35 @@ async def get_session_execution_metrics(session_id: str):
 
 @fastapi_app.get("/api/execution-metrics")
 async def get_all_execution_metrics():
-    names = {
-        str(row.get("id") or ""): str(row.get("name") or row.get("id") or "")
-        for row in list(session_manager.index)
-        if isinstance(row, dict) and row.get("id")
-    }
-    return JSONResponse({"ok": True, "data": execution_metrics.snapshot_all(names)})
+    def _build_payload() -> bytes:
+        global _execution_metrics_payload_cached_at, _execution_metrics_payload_cache
+        now = time.monotonic()
+        with _execution_metrics_payload_lock:
+            if (
+                _execution_metrics_payload_cache
+                and now - _execution_metrics_payload_cached_at < _EXECUTION_METRICS_PAYLOAD_TTL_SEC
+            ):
+                return _execution_metrics_payload_cache
+            names = {
+                str(row.get("id") or ""): str(row.get("name") or row.get("id") or "")
+                for row in list(session_manager.index)
+                if isinstance(row, dict) and row.get("id")
+            }
+            payload = json.dumps(
+                {"ok": True, "data": execution_metrics.snapshot_all(names)},
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ).encode("utf-8")
+            _execution_metrics_payload_cache = payload
+            _execution_metrics_payload_cached_at = time.monotonic()
+            return payload
+
+    payload = await asyncio.to_thread(_build_payload)
+    return Response(
+        content=payload,
+        media_type="application/json",
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 @fastapi_app.get("/sessions/{session_id}/context_tokens")
@@ -4879,38 +4943,10 @@ def _is_configured():
     return _has_complete_model_profile_for_main_ui()
 
 
-def _wizard_prefill_from_dotenv() -> dict[str, str]:
-    """Prefill only non-model settings; model values never come from .env."""
-    vals = _dotenv_last_assignments(dotenv_file_path())
-    if not vals:
-        return {}
-    out: dict[str, str] = {}
-    pairs = (
-        ("WORK_DIR", "work_dir"),
-        ("WEB_SEARCH_PROVIDER", "search_provider"),
-    )
-    for env_k, js_k in pairs:
-        v = vals.get(env_k)
-        if v is not None and str(v).strip() != "":
-            out[js_k] = str(v).strip()
-    if vals.get("TAVILY_API_KEY"):
-        out["search_api_key"] = str(vals.get("TAVILY_API_KEY") or "").strip()
-    return out
-
-
 @fastapi_app.get("/setup", response_class=_HTMLResponse)
 async def setup_page():
     # 每次都从磁盘读，替换 templates/first_time_config.html 后立即生效；避免 stale 缓存
     body = _load_config_wizard_html()
-    prefill = _wizard_prefill_from_dotenv()
-    inject = (
-        "<script>"
-        f"window.__DEFAULT_WORK_DIR__={json.dumps(str(WORK_DIR.resolve()))};"
-        f"window.__WIZARD_PREFILL__={json.dumps(prefill)};"
-        "</script>"
-    )
-    if "</head>" in body:
-        body = body.replace("</head>", inject + "</head>", 1)
     body = _html_with_path_picker_script(body)
     return _HTMLResponse(
         content=body,
@@ -4958,6 +4994,7 @@ _ENV_GROUP_ORDER: list[tuple[str, str, list[str]]] = [
             "OPENAI_HTTP_TIMEOUT",
             "OPENAI_MAX_RETRIES",
             "NETWORK_RECONNECT_MAX_ATTEMPTS",
+            "LOCAL_NETWORK_POLL_SECONDS",
             "OPENAI_RETRY_BASE_SEC",
         ],
     ),
@@ -5091,6 +5128,7 @@ _ENV_HINTS: dict[str, str] = {
     "OPENAI_HTTP_TIMEOUT": "兼容 API 请求超时（秒）。",
     "OPENAI_MAX_RETRIES": "可重试错误时的最大重试次数。",
     "NETWORK_RECONNECT_MAX_ATTEMPTS": "模型网络错误的快速重连次数；达到后转为低频等待网络恢复，不结束任务。",
+    "LOCAL_NETWORK_POLL_SECONDS": "本机断网后 Agent 沉睡期间的网络状态检测间隔秒数，默认 5，最小 1。",
     "OPENAI_RETRY_BASE_SEC": "重试基础退避时间（秒）。",
     "WORK_DIR": "工作区根目录（文件工具沙箱）。",
     "SKILLS_DIR": "技能包目录（默认可于 WORK_DIR 下）。",
@@ -5597,11 +5635,11 @@ async def save_config(req: _Request):
         if exec_type != "local" and not api_key:
             raise ValueError("missing api_key")
 
-        work_dir = str(data.get("work_dir", "") or "").strip()
-        if not work_dir:
-            work_dir = "./workspace"
-        work_dir_changed = _work_dir_restart_required(prev_vals.get("WORK_DIR", ""), work_dir)
-        updates["WORK_DIR"] = work_dir
+        work_dir_changed = False
+        if "work_dir" in data:
+            work_dir = str(data.get("work_dir", "") or "").strip() or "./workspace"
+            work_dir_changed = _work_dir_restart_required(prev_vals.get("WORK_DIR", ""), work_dir)
+            updates["WORK_DIR"] = work_dir
 
         ctx_raw = data.get("context_window", "")
         try:
@@ -5617,16 +5655,17 @@ async def save_config(req: _Request):
             max_out = 8192
         if max_out <= 0:
             max_out = 8192
-        sp_raw = data.get("search_provider") or "duckduckgo"
-        sp = sp_raw.strip().lower() if isinstance(sp_raw, str) else "duckduckgo"
-        if sp not in ("duckduckgo", "tavily"):
-            sp = "duckduckgo"
-        updates["WEB_SEARCH_PROVIDER"] = sp
+        if "search_provider" in data:
+            sp_raw = data.get("search_provider") or "duckduckgo"
+            sp = sp_raw.strip().lower() if isinstance(sp_raw, str) else "duckduckgo"
+            if sp not in ("duckduckgo", "tavily"):
+                sp = "duckduckgo"
+            updates["WEB_SEARCH_PROVIDER"] = sp
 
-        sk_raw = data.get("search_api_key", "")
-        sk = sk_raw.strip() if isinstance(sk_raw, str) else ""
-        if sp == "tavily" and (sk or "TAVILY_API_KEY" not in prev_vals):
-            updates["TAVILY_API_KEY"] = sk
+            sk_raw = data.get("search_api_key", "")
+            sk = sk_raw.strip() if isinstance(sk_raw, str) else ""
+            if sp == "tavily" and (sk or "TAVILY_API_KEY" not in prev_vals):
+                updates["TAVILY_API_KEY"] = sk
 
         env_path.parent.mkdir(parents=True, exist_ok=True)
         prev = env_path.read_text(encoding="utf-8") if env_path.exists() else ""

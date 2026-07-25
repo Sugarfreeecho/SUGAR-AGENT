@@ -73,6 +73,8 @@ from agent_harness import (
     ToolMessage,
     COMPACT_TRUNCATED_BOUNDARY_SYSTEM_EXACT,
     WORK_DIR,
+    LocalNetworkUnavailableError,
+    machine_network_available,
 )
 from agent_memory import (
     auto_length_strategy_status_line,
@@ -127,8 +129,15 @@ from agent_goal import GoalError, goal_enabled, manager_for as goal_manager_for
 
 EXECUTOR_STREAM = os.getenv("EXECUTOR_STREAM", "true").lower() in ("1", "true", "yes")
 NETWORK_RECONNECT_MAX_ATTEMPTS = max(0, int(os.getenv("NETWORK_RECONNECT_MAX_ATTEMPTS", "5")))
+LOCAL_NETWORK_POLL_SECONDS = max(1.0, float(os.getenv("LOCAL_NETWORK_POLL_SECONDS", "5")))
 TITLE_GENERATION_TIMEOUT_SEC = max(1.0, float(os.getenv("TITLE_GENERATION_TIMEOUT_SEC", "30")))
 TITLE_GENERATION_WORKERS = max(1, min(4, int(os.getenv("TITLE_GENERATION_WORKERS", "2"))))
+TODO_UPDATE_REMINDER_START_ROUNDS = max(
+    0, int(os.getenv("TODO_UPDATE_REMINDER_START_ROUNDS", "20"))
+)
+TODO_UPDATE_REMINDER_INTERVAL_ROUNDS = max(
+    1, int(os.getenv("TODO_UPDATE_REMINDER_INTERVAL_ROUNDS", "5"))
+)
 execution_metrics.configure(session_manager.sessions_dir)
 
 _STEER_LOCK = threading.Lock()
@@ -174,6 +183,27 @@ def _goal_continuation_message(session_id: str) -> Optional[SystemMessage]:
         "only after the whole objective is achieved. Report the same genuine blocker with the same reason across "
         "three continuation runs before blocked can become terminal."
     ))
+
+
+def _todo_update_reminder_due(rounds_since_update: int) -> bool:
+    """Return whether the current ReAct round should remind the model to update Todo."""
+    rounds = max(0, int(rounds_since_update or 0))
+    if rounds <= TODO_UPDATE_REMINDER_START_ROUNDS:
+        return False
+    return (
+        rounds - TODO_UPDATE_REMINDER_START_ROUNDS - 1
+    ) % TODO_UPDATE_REMINDER_INTERVAL_ROUNDS == 0
+
+
+def _todo_update_reminder_message(rounds_since_update: int) -> SystemMessage:
+    return SystemMessage(
+        content=(
+            "[Todo 更新提醒] 当前 Todo 计划已经连续 "
+            f"{int(rounds_since_update)} 轮未更新。请立即检查任务进展，"
+            "如有任务已完成、正在并行执行、阻塞或计划发生变化，请调用 `update_todo` "
+            "同步所有条目的最新状态；允许多个条目同时处于 `in_progress`。"
+        )
+    )
 
 
 def _record_goal_call_usage(state: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -609,6 +639,7 @@ def _run_context_policy_serialized(
     hint_sink: Optional[Callable[[Any], None]] = None,
     context_window: Optional[int] = None,
     prompt_language: Optional[str] = None,
+    should_stop: Optional[Callable[[], bool]] = None,
 ):
     lock = _context_policy_lock_for_session(session_id)
     with lock:
@@ -620,6 +651,7 @@ def _run_context_policy_serialized(
             hint_sink=hint_sink,
             context_window=context_window,
             prompt_language=prompt_language,
+            should_stop=should_stop,
         )
 
 
@@ -1473,6 +1505,19 @@ def _runtime_v2_append_model_message(state: State, msg: Any) -> None:
         raise
 
 
+_EXPLICIT_USER_INTERRUPT_REASONS = {"user", "user_button", "user_cancelled"}
+
+
+def _interrupt_terminal_text(session_id: str, *, parent: bool = False) -> str:
+    try:
+        reason = str(session_manager.get_interrupt_reason(session_id) or "unspecified").strip()
+    except Exception:
+        reason = "unspecified"
+    if reason in _EXPLICIT_USER_INTERRUPT_REASONS:
+        return "任务已由用户中断（父会话）。" if parent else "任务已由用户中断。"
+    return "任务因 Agent 停止、重启或运行中断而暂停，可在服务恢复后继续。"
+
+
 def _runtime_v2_commit_user_turn(
     state: State,
     msg: Any,
@@ -1962,25 +2007,35 @@ async def _wait_for_network_recovery(
     emit: Optional[Callable[[Dict[str, Any]], Any]],
     client: Any,
     poll_seconds: float = 15.0,
+    *,
+    machine_only: bool = False,
 ) -> bool:
-    """Wait without resending the model request until its endpoint is reachable."""
+    """Sleep without resending until the machine or provider path is reachable."""
     sid = str(state.get("session_id") or "").strip()
     state["_runtime_stage"] = "network_waiting"
     announced_at = 0.0
-    if not await _await_retry_delay_or_interrupt(state, emit, poll_seconds):
+    if not machine_only and not await _await_retry_delay_or_interrupt(state, emit, poll_seconds):
         return False
     while True:
         await _raise_if_steer_requested(state, emit, "network_waiting")
         if sid and session_manager.is_interrupt_requested(sid):
             return False
-        if await asyncio.to_thread(_executor_endpoint_reachable, client):
+        if machine_only:
+            recovered = await asyncio.to_thread(machine_network_available)
+        else:
+            recovered = await asyncio.to_thread(_executor_endpoint_reachable, client)
+        if recovered:
             state["_runtime_stage"] = "react"
             if emit:
                 await _push_stream_event(
                     state,
                     {
                         "type": "status",
-                        "content": "网络连接已恢复，正在继续任务…",
+                        "content": (
+                            "本机网络已恢复，正在继续任务…"
+                            if machine_only
+                            else "网络连接已恢复，正在继续任务…"
+                        ),
                         "network_recovered": True,
                         "ephemeral": True,
                     },
@@ -1994,8 +2049,13 @@ async def _wait_for_network_recovery(
                 state,
                 {
                     "type": "status",
-                    "content": "网络仍不可用，任务已暂停并等待连接恢复…",
+                    "content": (
+                        "本机仍处于离线状态，Agent 正在沉睡并等待网络恢复…"
+                        if machine_only
+                        else "网络仍不可用，任务已暂停并等待连接恢复…"
+                    ),
                     "network_waiting": True,
+                    "local_network_offline": machine_only,
                     "ephemeral": True,
                 },
                 emit=emit,
@@ -2229,6 +2289,11 @@ async def _await_thread_with_sse_keepalive(
         while True:
             done, _ = await asyncio.wait({task}, timeout=0.05)
             await _raise_if_steer_requested(state, emit, "thread_wait")
+            if (
+                not _state_run_has_write_fence(state)
+                or session_manager.is_interrupt_requested(str(state.get("session_id") or ""))
+            ):
+                raise asyncio.CancelledError()
             if thread_hint_queue is not None and emit:
                 while True:
                     try:
@@ -2864,6 +2929,13 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
 
     try:
         while iter_count < max_react_iter:
+            if not _state_run_has_write_fence(state):
+                logger.info(
+                    "stopping stale ReAct run at iteration boundary: session=%s run=%s",
+                    state.get("session_id"),
+                    state.get("_runtime_v2_run_id"),
+                )
+                raise asyncio.CancelledError()
             goal_pause_reason = str(state.pop("_goal_budget_pause_requested", "") or "").strip()
             if goal_pause_reason:
                 final_content = goal_pause_reason
@@ -2877,17 +2949,19 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
             pre_api_timings: Dict[str, int] = dict(state.pop("_pre_run_timings", {}) or {})
             _t_pre_api = time.perf_counter()
             await _raise_if_steer_requested(state, emit, "react")
+            if not _state_run_has_write_fence(state):
+                raise asyncio.CancelledError()
             if session_manager.is_interrupt_requested(state["session_id"]):
                 if _is_followup_interrupt(state["session_id"]):
                     raise asyncio.CancelledError()
-                final_content = "任务已由用户中断。"
-                await _push_stream_event(state, {"type": "status", "content": "任务已由用户中断"}, emit=emit)
+                final_content = _interrupt_terminal_text(state["session_id"])
+                await _push_stream_event(state, {"type": "status", "content": final_content.rstrip("。")}, emit=emit)
                 break
             if parent_session_id and session_manager.is_interrupt_requested(parent_session_id):
-                final_content = "任务已由用户中断（父会话）。"
+                final_content = _interrupt_terminal_text(parent_session_id, parent=True)
                 await _push_stream_event(
                     state,
-                    {"type": "status", "content": "任务已由用户中断（父会话）"},
+                    {"type": "status", "content": final_content.rstrip("。")},
                     emit=emit,
                 )
                 break
@@ -2899,6 +2973,34 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
             await _raise_if_steer_requested(state, emit, "react")
             iter_count += 1
             state["_current_react_iter"] = int(iter_count)
+
+            # Keep Todo fresh during long ReAct runs.  The counter is scoped to
+            # the current run and is reset by a successful update_todo call.
+            todo_rounds_since_update = int(
+                state.get("_todo_rounds_since_update", 0) or 0
+            )
+            if todo_manager.has_active_plan(state["session_id"]):
+                todo_rounds_since_update += 1
+            else:
+                todo_rounds_since_update = 0
+            state["_todo_rounds_since_update"] = todo_rounds_since_update
+            if _todo_update_reminder_due(todo_rounds_since_update):
+                todo_reminder = _todo_update_reminder_message(todo_rounds_since_update)
+                llm_history.append(todo_reminder)
+                work_messages.append(todo_reminder)
+                _runtime_v2_append_model_message(state, todo_reminder)
+                state["llm_history"] = llm_history
+                state["work_messages"] = work_messages
+                _persist_state(state)
+                await _push_stream_event(
+                    state,
+                    {
+                        "type": "status",
+                        "content": f"Todo 计划已连续 {todo_rounds_since_update} 轮未更新，已插入更新提醒",
+                        "ephemeral": True,
+                    },
+                    emit=emit,
+                )
 
             # ---------- 2.2 构建 LLM 输入（静态 system 多段 + key_context，优化前缀缓存与维护） ----------
             skills_catalog = get_skills_catalog()
@@ -3035,6 +3137,10 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                             hint_sink=_compress_hint_emit,
                             context_window=int(iter_context_window),
                             prompt_language=state.get("_prompt_language", "zh-CN"),
+                            should_stop=lambda: (
+                                not _state_run_has_write_fence(state)
+                                or session_manager.is_interrupt_requested(sid)
+                            ),
                         ),
                         state,
                         emit,
@@ -3324,7 +3430,8 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                             tool_call_id=str(tool_id or ""),
                             emit=emit,
                             interrupt_check=lambda: (
-                                session_manager.is_interrupt_requested(state["session_id"])
+                                not _state_run_has_write_fence(state)
+                                or session_manager.is_interrupt_requested(state["session_id"])
                                 or _steer_requested(state)
                             ),
                         )
@@ -3407,6 +3514,10 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                                 hint_sink=_compact_hint_emit,
                                 context_window=int(iter_context_window),
                                 prompt_language=state.get("_prompt_language", "zh-CN"),
+                                should_stop=lambda: (
+                                    not _state_run_has_write_fence(state)
+                                    or session_manager.is_interrupt_requested(state["session_id"])
+                                ),
                             ),
                             state,
                             emit,
@@ -3571,6 +3682,9 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                             todo_tool_failed = True
                         else:
                             result = todo_manager.update_for_session(state["session_id"], normalized)
+                            # A successful replacement, including clearing the
+                            # plan after completion, starts a fresh reminder window.
+                            state["_todo_rounds_since_update"] = 0
                         if emit:
                             titems = list(
                                 todo_manager._by_session.get(state["session_id"], [])
@@ -3777,7 +3891,11 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                             _sid = state.get("session_id", "") if isinstance(state, dict) else ""
                             if _sid and tool_name == "run_shell":
                                 set_run_shell_interrupt_check(
-                                    lambda: session_manager.is_interrupt_requested(_sid) or _steer_requested(state)
+                                    lambda: (
+                                        not _state_run_has_write_fence(state)
+                                        or session_manager.is_interrupt_requested(_sid)
+                                        or _steer_requested(state)
+                                    )
                                 )
                             if hasattr(tool_func, "ainvoke"):
                                 result = await _await_steerable(
@@ -4053,11 +4171,13 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
             _pre_api_timing_mark(pre_api_timings, "context_policy_wait_pre_api", _t_pre_api)
             _t_pre_api = time.perf_counter()
             await _raise_if_steer_requested(state, emit, "react")
+            if not _state_run_has_write_fence(state):
+                raise asyncio.CancelledError()
             if session_manager.is_interrupt_requested(state["session_id"]):
                 if _is_followup_interrupt(state["session_id"]):
                     raise asyncio.CancelledError()
-                final_content = "任务已由用户中断。"
-                await _push_stream_event(state, {"type": "status", "content": "任务已由用户中断"}, emit=emit)
+                final_content = _interrupt_terminal_text(state["session_id"])
+                await _push_stream_event(state, {"type": "status", "content": final_content.rstrip("。")}, emit=emit)
                 break
             _pre_api_timing_mark(pre_api_timings, "final_interrupt_checks", _t_pre_api)
             _pre_api_timing_log(
@@ -4160,9 +4280,11 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                 except Exception as e:
                     r = e
                 early_tool_results[int(idx)] = r
-                if emit and isinstance(r, dict) and r.get("type") == "tool":
-                    r["_sse_emitted"] = True
-                    await _emit_tool_call_sse(emit, r, iter_count, state)
+                # The tool may execute as soon as its streamed JSON arguments
+                # close, but its durable/live completed row must not overtake
+                # this iteration's reasoning/response commit.  The normal
+                # checkpoint below emits it after that LLM barrier; the steer
+                # interruption path has the same ordered commit explicitly.
                 return r
 
             def _maybe_start_closed_tool_call(payload_dict: Dict[str, Any]) -> None:
@@ -4600,6 +4722,9 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                                 work_messages.append(_ui_msg)
                                 llm_history.append(_llm_msg)
                                 _runtime_v2_append_model_message(state, _llm_msg)
+                                if not _res.get("_sse_emitted"):
+                                    await _emit_tool_call_sse(emit, _res, iter_count, state)
+                                    _res["_sse_emitted"] = True
                             state["llm_history"] = llm_history
                             state["work_messages"] = work_messages
                             state["dialogue"] = derive_dialogue_from_assistant_history(llm_history)
@@ -4752,6 +4877,46 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                     _err_detail = f"{type(_llm_exc).__name__}: {_llm_exc}"
                     logger.error("LLM 调用失败 [iter %s] %s %s: %s", iter_count, _cls["code"], _cls["title"], _err_detail)
                     if _cls.get("code") == "NET":
+                        local_network_offline = isinstance(_llm_exc, LocalNetworkUnavailableError)
+                        if not local_network_offline:
+                            local_network_offline = not await asyncio.to_thread(machine_network_available)
+                        if local_network_offline:
+                            if emit:
+                                await _push_stream_event(
+                                    state,
+                                    {
+                                        "type": "llm_stream_aborted",
+                                        "reason": "local_network_offline",
+                                        "react_iter": int(iter_count),
+                                        "stream_seq": llm_stream_seq,
+                                        "ephemeral": True,
+                                    },
+                                    emit=emit,
+                                )
+                                await _push_stream_event(
+                                    state,
+                                    {
+                                        "type": "status",
+                                        "content": "检测到本机网络已断开，Agent 进入沉睡状态并等待网络恢复…",
+                                        "network_waiting": True,
+                                        "local_network_offline": True,
+                                        "ephemeral": True,
+                                    },
+                                    emit=emit,
+                                )
+                            if not await _wait_for_network_recovery(
+                                state,
+                                emit,
+                                iter_client,
+                                poll_seconds=LOCAL_NETWORK_POLL_SECONDS,
+                                machine_only=True,
+                            ):
+                                final_content = _interrupt_terminal_text(state["session_id"])
+                                break
+                            state.pop("_network_reconnect_attempts", None)
+                            iter_count = max(0, iter_count - 1)
+                            state["_current_react_iter"] = int(iter_count)
+                            continue
                         attempt = int(state.get("_network_reconnect_attempts", 0) or 0) + 1
                         state["_network_reconnect_attempts"] = attempt
                         if attempt > NETWORK_RECONNECT_MAX_ATTEMPTS:
@@ -4767,7 +4932,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                                     emit=emit,
                                 )
                             if not await _wait_for_network_recovery(state, emit, iter_client):
-                                final_content = "任务已由用户中断。"
+                                final_content = _interrupt_terminal_text(state["session_id"])
                                 break
                             iter_count = max(0, iter_count - 1)
                             state["_current_react_iter"] = int(iter_count)
@@ -4795,10 +4960,10 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                                 emit=emit,
                             )
                         if not await _await_retry_delay_or_interrupt(state, emit, delay):
-                            final_content = "任务已由用户中断。"
+                            final_content = _interrupt_terminal_text(state["session_id"])
                             await _push_stream_event(
                                 state,
-                                {"type": "status", "content": "任务已由用户中断"},
+                                {"type": "status", "content": final_content.rstrip("。")},
                                 emit=emit,
                             )
                             break
@@ -5198,6 +5363,8 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
 
                 for tool_call in tool_calls_list:
                     await _raise_if_steer_requested(state, emit, "tool")
+                    if not _state_run_has_write_fence(state):
+                        raise asyncio.CancelledError()
                     if session_manager.is_interrupt_requested(state["session_id"]):
                         if _is_followup_interrupt(state["session_id"]):
                             raise asyncio.CancelledError()
@@ -5714,6 +5881,7 @@ def _strip_think_tags_for_final(text: str) -> str:
 
 
 _TITLE_PLACEHOLDER_NAMES = {"", "新会话", "未命名", "New Chat", "New Session"}
+SESSION_TITLE_MAX_CHARS = 100
 
 
 def _first_user_text_for_title(state: State) -> str:
@@ -5793,7 +5961,7 @@ def _normalize_generated_session_title(title: str) -> str:
     text = re.sub(r"^[标题：:]+", "", text).strip()
     text = re.sub(r"[\r\n]+", " ", text)
     text = re.sub(r"\s+", " ", text).strip()
-    return text[:20]
+    return text[:SESSION_TITLE_MAX_CHARS]
 
 
 def _looks_like_local_path_title(text: str) -> bool:
@@ -5818,7 +5986,7 @@ def _session_title_needs_generation(current_name: str, first_user: str) -> bool:
     if _looks_like_reasoning_tag_title(name):
         return True
     user = str(first_user or "").strip()
-    if user and name == user[: len(name)] and len(name) <= 20:
+    if user and name == user[: len(name)] and len(name) <= SESSION_TITLE_MAX_CHARS:
         return True
     if _looks_like_local_path_title(name):
         return True
@@ -6305,6 +6473,14 @@ async def astream_events(
 
     def mirror_runtime_v2(event_type: str, payload: Optional[Dict[str, Any]] = None) -> None:
         nonlocal runtime_v2_terminal_mirrored
+        if runtime_v2_terminal_mirrored and event_type not in {"run_finished", "run_interrupted", "run_failed"}:
+            logger.info(
+                "suppressed post-terminal runtime event: session=%s run_id=%s type=%s",
+                session_id,
+                runtime_v2_run_id,
+                event_type,
+            )
+            return
         if event_type in {"run_finished", "run_interrupted", "run_failed"}:
             if runtime_v2_terminal_mirrored:
                 return
@@ -6314,6 +6490,17 @@ async def astream_events(
     async def emit(ev: Dict[str, Any]) -> None:
         # 与浏览器 SSE 一致；ephemeral（如 llm_*_delta）仅实时推送，不写入 ui_events
         # 子 agent 转发事件仅推 SSE，不写入父会话 ui_events
+        ev = dict(ev)
+        ev.setdefault("run_id", runtime_v2_run_id)
+        event_type = str(ev.get("type") or "")
+        if runtime_v2_terminal_mirrored and event_type not in {"run_finished", "run_interrupted", "run_failed"}:
+            logger.info(
+                "suppressed post-terminal stream event: session=%s run_id=%s type=%s",
+                session_id,
+                runtime_v2_run_id,
+                event_type,
+            )
+            return
         runtime_committed = bool(ev.get("_runtime_v2_committed"))
         if ev.get("type") == "final" and not runtime_committed:
             runtime_committed = _runtime_v2_commit_assistant_final(state, str(ev.get("content") or ""))
@@ -6352,6 +6539,19 @@ async def astream_events(
             resume.suspended_seconds,
             stage,
         )
+        if resume.cause != "system_sleep":
+            # A Python watchdog thread can itself be delayed by GIL/CPU
+            # starvation.  That is useful diagnostics, but it is not reliable
+            # evidence that the process was externally suspended and must not
+            # be presented to the user as a resume event.
+            logger.info(
+                "runtime_watchdog_delay_suppressed session=%s run_id=%s gap_seconds=%.3f",
+                session_id,
+                runtime_v2_run_id,
+                resume.gap_seconds,
+            )
+            power_guard.monitor.mark_progress()
+            return
         await asyncio.to_thread(mirror_runtime_v2, "runtime_resumed", payload)
         await emit({
             "type": "runtime_resumed",
@@ -6557,7 +6757,8 @@ async def astream_events(
             completed = True
         except asyncio.CancelledError:
             terminal_event = {"type": "run_interrupted", "run_id": runtime_v2_run_id, "ephemeral": True}
-            mirror_runtime_v2("run_interrupted", {"reason": "cancelled"})
+            cancel_reason = session_manager.get_interrupt_reason(session_id) or "cancelled"
+            mirror_runtime_v2("run_interrupted", {"reason": cancel_reason})
             session_manager.mark_session_unread_result(session_id, status="failed")
             raise
         except Exception as exc:
@@ -6576,19 +6777,30 @@ async def astream_events(
             raise
         finally:
             await power_guard.close()
-            goal_outcome = "finished" if completed else ("failed" if terminal_event.get("type") == "run_failed" else "interrupted")
+            react_limit_reached = bool(state.get("react_limit_reached"))
+            goal_outcome = (
+                "react_limit"
+                if react_limit_reached
+                else ("finished" if completed else ("failed" if terminal_event.get("type") == "run_failed" else "interrupted"))
+            )
             goal_after_run = _record_goal_run_usage(
                 state,
                 continuation=False,
                 outcome=goal_outcome,
-                error=str(terminal_event.get("error") or ""),
+                error=(
+                    "ReAct reached the maximum iteration limit."
+                    if react_limit_reached
+                    else str(terminal_event.get("error") or "")
+                ),
             )
             if goal_after_run:
                 await emit({**goal_after_run, "type": "goal_state", "goal_event": "run_accounted", "ephemeral": True})
             execution_metrics.finish_run(
                 session_id,
                 runtime_v2_run_id,
-                "finished" if completed else ("failed" if terminal_event.get("type") == "run_failed" else "interrupted"),
+                "react_limit" if react_limit_reached else (
+                    "finished" if completed else ("failed" if terminal_event.get("type") == "run_failed" else "interrupted")
+                ),
             )
             _clear_steer_run_control(session_id, steer_control)
             if completed:
@@ -6607,14 +6819,15 @@ async def astream_events(
     try:
         while True:
             if should_stop and should_stop(session_id):
-                reason = session_manager.get_interrupt_reason(session_id) or "user"
+                reason = session_manager.get_interrupt_reason(session_id) or "unspecified"
                 if reason == "followup":
                     mirror_runtime_v2("run_interrupted", {"reason": reason})
                     task.cancel()
                     cancel_requested_by_consumer = True
                     break
-                ev1 = {"type": "status", "content": "任务已由用户中断"}
-                ev2 = {"type": "final", "content": "任务已由用户中断。"}
+                terminal_text = _interrupt_terminal_text(session_id)
+                ev1 = {"type": "status", "content": terminal_text.rstrip("。")}
+                ev2 = {"type": "final", "content": terminal_text}
                 mirror_runtime_v2("run_interrupted", {"reason": reason})
                 session_manager.mark_session_unread_result(session_id, status="failed")
                 session_manager.append_ui_event(session_id, ev1)
@@ -6650,10 +6863,13 @@ async def astream_events_continuation(
     recovery_reason: str = "",
     run_id: Optional[str] = None,
     prompt_language: Optional[str] = None,
+    continuation_source: str = "subagent",
 ) -> AsyncGenerator[Dict[str, Any], None]:
     """
-    后台 subagent 完成后续接父 Agent：不追加用户气泡与 ui_events user 事件，
-    pending 结果在 react_node 内通过 consume_pending_subagent_notifications 注入。
+    Continue an existing Agent run without appending a user bubble.
+
+    ``continuation_source`` keeps Goal auto-continuations distinct from the
+    subagent continuation path in the user-visible start status.
     """
     executor_http_client.interactions.clear()
 
@@ -6674,7 +6890,12 @@ async def astream_events_continuation(
         except Exception:
             prompt_language = "zh-CN"
     key_context = _load_key_context_for_run(session_id)
-    setup_logging("[subagent-continuation]", session_id)
+    continuation_source = str(continuation_source or "subagent").strip().lower()
+    is_goal_continuation = continuation_source == "goal"
+    setup_logging(
+        "[goal-continuation]" if is_goal_continuation else "[subagent-continuation]",
+        session_id,
+    )
     pre_run_timings: Dict[str, int] = {}
     _t_pre = time.perf_counter()
     if _runtime_v2_is_primary():
@@ -6780,6 +7001,14 @@ async def astream_events_continuation(
 
     def mirror_runtime_v2(event_type: str, payload: Optional[Dict[str, Any]] = None) -> None:
         nonlocal runtime_v2_terminal_mirrored
+        if runtime_v2_terminal_mirrored and event_type not in {"run_finished", "run_interrupted", "run_failed"}:
+            logger.info(
+                "suppressed post-terminal continuation runtime event: session=%s run_id=%s type=%s",
+                session_id,
+                runtime_v2_run_id,
+                event_type,
+            )
+            return
         if event_type in {"run_finished", "run_interrupted", "run_failed"}:
             if runtime_v2_terminal_mirrored:
                 return
@@ -6787,6 +7016,17 @@ async def astream_events_continuation(
         mirror_runtime_v2_sync(event_type, dict(payload or {}))
 
     async def emit(ev: Dict[str, Any]) -> None:
+        ev = dict(ev)
+        ev.setdefault("run_id", runtime_v2_run_id)
+        event_type = str(ev.get("type") or "")
+        if runtime_v2_terminal_mirrored and event_type not in {"run_finished", "run_interrupted", "run_failed"}:
+            logger.info(
+                "suppressed post-terminal continuation stream event: session=%s run_id=%s type=%s",
+                session_id,
+                runtime_v2_run_id,
+                event_type,
+            )
+            return
         runtime_committed = bool(ev.get("_runtime_v2_committed"))
         if ev.get("type") == "final" and not runtime_committed:
             runtime_committed = _runtime_v2_commit_assistant_final(state, str(ev.get("content") or ""))
@@ -6823,6 +7063,15 @@ async def astream_events_continuation(
             resume.suspended_seconds,
             stage,
         )
+        if resume.cause != "system_sleep":
+            logger.info(
+                "runtime_watchdog_delay_suppressed session=%s run_id=%s gap_seconds=%.3f mode=continuation",
+                session_id,
+                runtime_v2_run_id,
+                resume.gap_seconds,
+            )
+            power_guard.monitor.mark_progress()
+            return
         await asyncio.to_thread(mirror_runtime_v2, "runtime_resumed", payload)
         await emit({
             "type": "runtime_resumed",
@@ -6908,7 +7157,10 @@ async def astream_events_continuation(
                     await _pause_active_goal_for_hook(state, goal_hook_reason, emit)
                     raise RuntimeError(goal_hook_reason)
             _t_run_start = time.perf_counter()
-            await emit({"type": "status", "content": "Subagent Continuation Start"})
+            await emit({
+                "type": "status",
+                "content": "Goal 自动续跑开始" if is_goal_continuation else "Subagent Continuation Start",
+            })
             run_start_timings["emit_start_status"] = _timing_ms(_t_run_start)
             _pipeline_step_timing_log("run_start_step_timing", session_id, "emit_start_status", run_start_timings["emit_start_status"], run_id=runtime_v2_run_id, mode="continuation")
             _pipeline_timing_log(
@@ -6994,7 +7246,8 @@ async def astream_events_continuation(
             completed = True
         except asyncio.CancelledError:
             terminal_event = {"type": "run_interrupted", "ephemeral": True}
-            mirror_runtime_v2("run_interrupted", {"reason": "cancelled"})
+            cancel_reason = session_manager.get_interrupt_reason(session_id) or "cancelled"
+            mirror_runtime_v2("run_interrupted", {"reason": cancel_reason})
             session_manager.mark_session_unread_result(session_id, status="failed")
             raise
         except Exception as exc:
@@ -7017,19 +7270,30 @@ async def astream_events_continuation(
             raise
         finally:
             await power_guard.close()
-            goal_outcome = "finished" if completed else ("failed" if terminal_event.get("type") == "run_failed" else "interrupted")
+            react_limit_reached = bool(state.get("react_limit_reached"))
+            goal_outcome = (
+                "react_limit"
+                if react_limit_reached
+                else ("finished" if completed else ("failed" if terminal_event.get("type") == "run_failed" else "interrupted"))
+            )
             goal_after_run = _record_goal_run_usage(
                 state,
                 continuation=True,
                 outcome=goal_outcome,
-                error=str(terminal_event.get("error") or ""),
+                error=(
+                    "ReAct reached the maximum iteration limit."
+                    if react_limit_reached
+                    else str(terminal_event.get("error") or "")
+                ),
             )
             if goal_after_run:
                 await emit({**goal_after_run, "type": "goal_state", "goal_event": "run_accounted", "ephemeral": True})
             execution_metrics.finish_run(
                 session_id,
                 runtime_v2_run_id,
-                "finished" if completed else ("failed" if terminal_event.get("type") == "run_failed" else "interrupted"),
+                "react_limit" if react_limit_reached else (
+                    "finished" if completed else ("failed" if terminal_event.get("type") == "run_failed" else "interrupted")
+                ),
             )
             _clear_steer_run_control(session_id, steer_control)
             if completed:
@@ -7048,14 +7312,15 @@ async def astream_events_continuation(
     try:
         while True:
             if should_stop and should_stop(session_id):
-                reason = session_manager.get_interrupt_reason(session_id) or "user"
+                reason = session_manager.get_interrupt_reason(session_id) or "unspecified"
                 if reason == "followup":
                     mirror_runtime_v2("run_interrupted", {"reason": reason})
                     task.cancel()
                     cancel_requested_by_consumer = True
                     break
-                ev1 = {"type": "status", "content": "任务已由用户中断"}
-                ev2 = {"type": "final", "content": "任务已由用户中断。"}
+                terminal_text = _interrupt_terminal_text(session_id)
+                ev1 = {"type": "status", "content": terminal_text.rstrip("。")}
+                ev2 = {"type": "final", "content": terminal_text}
                 mirror_runtime_v2("run_interrupted", {"reason": reason})
                 session_manager.mark_session_unread_result(session_id, status="failed")
                 session_manager.append_ui_event(session_id, ev1)

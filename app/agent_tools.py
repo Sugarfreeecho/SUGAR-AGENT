@@ -4049,7 +4049,7 @@ OPENAI_TOOL_DEFINITIONS: List[Dict[str, Any]] = [
     ),
     _openai_function_schema(
         "update_todo",
-        "Replace the session todo list in the active runtime store. It is cleared when every item is completed.",
+        "Replace the session todo list in the active runtime store. Multiple items may be in_progress simultaneously. It is cleared when every item is completed.",
         {
             "items": {
                 "type": "array",

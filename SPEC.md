@@ -685,3 +685,4 @@ SSE 是后端向前端展示 Agent 过程的主通道。事件至少应覆盖以
 - SSE 结束、`run_finished`、`final` 三条路径必须共用同一套前端 run-state 收口逻辑，避免一条路径清理运行态而另一条路径仍保持生成中。
 - SSE 读取必须支持 keepalive 和空闲超时；超时只能触发重连/恢复，不得直接追加错误执行块或把后台会话状态写入当前可见会话。
 - 修复 live LLM delta 拆行或重复时，应优先保持同一 `react_iter` 的 live row 可跨 process group 重建继续 upsert；不得通过全量刷新正文或重建会话历史兜底。
+- 同一 ReAct 运行的过程消息必须按 `(react_iter, phase, tool_call_index)` 展示，其中 `phase` 的唯一顺序为 `llm_reasoning -> llm_response -> tool_call/tool_result`。闭合参数的工具允许在模型流结束前提前执行，但完成事件的持久化与 SSE 发布必须等待本轮 LLM reasoning/response 提交；steer 打断保存 partial assistant 时也必须遵守同一提交屏障。Runtime V2 UI projection 必须稳定修复旧日志中按完成时间形成的倒序，并同步重建 projection index，且不得跨 `user/final/interrupt steer` 边界混排。

@@ -1,4 +1,5 @@
 import asyncio
+from pathlib import Path
 
 import pytest
 
@@ -42,3 +43,12 @@ def test_sleep_inhibitor_is_noop_off_windows(monkeypatch):
     assert request.active is False
     runtime_power.WindowsSleepInhibitor.release(request)
     assert request.closed is True
+
+
+def test_runtime_only_presents_verified_system_sleep_as_resume():
+    source = (Path(__file__).resolve().parents[1] / "app" / "agent_loop.py").read_text(encoding="utf-8")
+
+    assert 'if resume.cause != "system_sleep":' in source
+    assert "runtime_watchdog_delay_suppressed" in source
+    assert "machine_only=True" in source
+    assert "LocalNetworkUnavailableError" in source

@@ -23,6 +23,7 @@ import shutil
 import copy
 import tempfile
 import time
+import ctypes
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
@@ -766,6 +767,28 @@ def _is_network_connectivity_error(exc: BaseException) -> bool:
         return False
 
 
+class LocalNetworkUnavailableError(ConnectionError):
+    """The machine is offline, so provider fallback must not fan out."""
+
+
+def machine_network_available() -> bool:
+    """Return False only when the operating system positively reports offline."""
+    if os.name != "nt":
+        return True
+    try:
+        flags = ctypes.c_ulong(0)
+        connected = ctypes.windll.wininet.InternetGetConnectedState(
+            ctypes.byref(flags),
+            0,
+        )
+        return bool(connected)
+    except Exception:
+        # An unavailable probe is not evidence of an outage. Keep the normal
+        # provider/model fallback behavior in that case.
+        logger.debug("Windows local network state probe unavailable", exc_info=True)
+        return True
+
+
 def create_openai_client(
     model_name: str,
     model_type: str,
@@ -926,6 +949,14 @@ class _FallbackCompletions:
                     )
                 return item["client"].chat.completions.create(**call_kwargs)
             except Exception as exc:
+                if _is_network_connectivity_error(exc) and not machine_network_available():
+                    logger.info(
+                        "本机网络不可用，暂停模型回退: model=%s",
+                        _masked_model_label(str(item.get("model") or "")),
+                    )
+                    raise LocalNetworkUnavailableError(
+                        "The local machine is offline; waiting for network recovery."
+                    ) from exc
                 last_error = exc
                 last_model = str(item.get("model") or "")
                 logger.warning(
@@ -5281,6 +5312,10 @@ class SessionManager:
             elif metadata.get("active_run_id"):
                 metadata["interrupt_run_id"] = str(metadata.get("active_run_id") or "")
             self._save_metadata_unlocked(sid, metadata)
+            # ReAct runs execute on a worker event loop and poll this cache.
+            # Publishing the disk update without updating the cache can leave
+            # the worker observing a stale False value indefinitely.
+            self._set_interrupt_cache_from_metadata(sid, metadata)
 
     def clear_interrupt(self, session_id: str, run_id: str = ""):
         """清除会话中断标记（新任务启动前调用）。始终写回 False，避免残留 true。"""
@@ -5297,11 +5332,13 @@ class SessionManager:
                 interrupt_run_id = str(metadata.get("interrupt_run_id") or "").strip()
                 if bool(metadata.get("interrupt_requested")) and interrupt_run_id == rid:
                     self._save_metadata_unlocked(sid, metadata)
+                    self._set_interrupt_cache_from_metadata(sid, metadata)
                     return
             metadata["interrupt_requested"] = False
             metadata.pop("interrupt_run_id", None)
             metadata.pop("interrupt_reason", None)
             self._save_metadata_unlocked(sid, metadata)
+            self._set_interrupt_cache_from_metadata(sid, metadata)
 
     def is_interrupt_requested(self, session_id: str, run_id: str = "") -> bool:
         """判断会话是否被请求中断。"""
@@ -5750,7 +5787,6 @@ class TodoManager:
         if len(items) > TODO_MAX_ITEMS:
             raise ValueError(f"最多支持 {TODO_MAX_ITEMS} 个待办事项")
         validated: List[Dict] = []
-        in_progress_count = 0
         for i, item in enumerate(items):
             text = str(item.get("text", "")).strip()
             status = str(item.get("status", "pending")).lower()
@@ -5759,11 +5795,7 @@ class TodoManager:
                 raise ValueError(f"条目 {item_id}: 缺少 text")
             if status not in ("pending", "in_progress", "completed"):
                 raise ValueError(f"条目 {item_id}: 无效的状态 '{status}'")
-            if status == "in_progress":
-                in_progress_count += 1
             validated.append({"id": item_id, "text": text, "status": status})
-        if in_progress_count > 1:
-            raise ValueError("一次只能有一个任务处于 in_progress 状态")
         if validated and all(t["status"] == "completed" for t in validated):
             # 计划全部完成：清空该会话待办
             if session_id not in ("__global__",):

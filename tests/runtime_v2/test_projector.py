@@ -75,6 +75,34 @@ class RuntimeProjectorTests(unittest.TestCase):
         self.assertEqual(snapshot["todo"]["seq"], 2)
         self.assertEqual(snapshot["context"]["todo"]["items"][0]["id"], "t1")
 
+    def test_projects_goal_accounting_delta_on_top_of_checkpoint(self):
+        projector = RuntimeProjector()
+        events = [
+            RuntimeEvent(seq=1, type="goal_created", session_id="s1", payload={
+                "id": "goal-1",
+                "objective": "Ship it",
+                "version": 1,
+                "status": "active",
+                "used_tokens": 0,
+                "accounted_usage_ids": [],
+            }),
+            RuntimeEvent(seq=2, type="goal_usage_updated", session_id="s1", payload={
+                "_goal_delta": True,
+                "id": "goal-1",
+                "set": {"version": 2, "used_tokens": 9},
+                "append": {"accounted_usage_ids": ["run-1:llm:0"]},
+            }),
+        ]
+
+        snapshot = projector.project(events)
+
+        self.assertEqual(snapshot["goal"]["objective"], "Ship it")
+        self.assertEqual(snapshot["goal"]["version"], 2)
+        self.assertEqual(snapshot["goal"]["used_tokens"], 9)
+        self.assertEqual(snapshot["goal"]["accounted_usage_ids"], ["run-1:llm:0"])
+        self.assertEqual(snapshot["goal"]["seq"], 2)
+        self.assertEqual(snapshot["context"]["goal"], snapshot["goal"])
+
     def test_gateway_rebuilds_and_reads_snapshot(self):
         async def scenario():
             with tempfile.TemporaryDirectory() as tmp:
