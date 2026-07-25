@@ -24,7 +24,7 @@ Follow these rules when calling tools:
 - If a todo plan has been created, mark every remaining item completed with `update_todo` before the conversation ends.
 - If a target file is outside the working directory, first copy it into the working directory or create an update script.
 - If a file with the same name already exists, create an incremented version such as `_v2` or `_v3` instead of overwriting it.
-- When checking local history, inspect `work_messages.json` under the `sessions` folder with `glob` or `grep` as needed.
+- When the user refers to history that has been compressed or may have been compressed, use a query/search tool to inspect `events.jsonl` in the current session's session folder; do not guess from the current compressed summary alone.
 - If the complete parameters for multiple independent tool calls are known, issue them together; preserve the execution order for stateful or side-effecting calls.
 - When creating or downloading files, create a concise task-named subdirectory first unless the task is a simple single-file output.
 

@@ -260,6 +260,42 @@ def test_setup_saves_model_to_profile_not_dotenv(tmp_path, monkeypatch):
     assert profiles[0]["api_key"] == "profile-key"
 
 
+def test_setup_without_runtime_fields_preserves_existing_env(tmp_path, monkeypatch):
+    import webui
+
+    class Request:
+        async def json(self):
+            return {
+                "llm_provider": "openai",
+                "llm_base_url": "https://api.example.com/v1",
+                "api_key": "profile-key",
+                "model_name": "model-a",
+                "context_window": "128000",
+                "max_output_tokens": "8192",
+            }
+
+    env_path = tmp_path / ".env"
+    env_path.write_text(
+        "WORK_DIR=D:/existing-workspace\n"
+        "WEB_SEARCH_PROVIDER=tavily\n"
+        "TAVILY_API_KEY=existing-key\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(webui, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(webui, "dotenv_file_path", lambda: env_path)
+    monkeypatch.setattr(webui, "refresh_executor_client_from_env", lambda: None)
+    monkeypatch.setattr(webui, "_invalidate_executor_config_cache", lambda *_args: None)
+
+    result = asyncio.run(webui.save_config(Request()))
+
+    assert result["ok"] is True
+    assert result["restart_required"] is False
+    env_text = env_path.read_text(encoding="utf-8")
+    assert "WORK_DIR=D:/existing-workspace" in env_text
+    assert "WEB_SEARCH_PROVIDER=tavily" in env_text
+    assert "TAVILY_API_KEY=existing-key" in env_text
+
+
 def test_agent_loop_wires_hooks_before_safety_approval_and_across_lifecycles():
     source = (ROOT / "app/agent_loop.py").read_text(encoding="utf-8")
     wrapper = source.split("async def execute_one(tool_call):", 1)[1].split(

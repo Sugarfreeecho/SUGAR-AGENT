@@ -183,13 +183,14 @@ def infer_model_task_capabilities(
             "低成本/多并发：批量总结、信息抽取、常规代码探索和大量独立 subagent",
         )
 
+    is_minimax = "minimax" in key
     hard_family = any(name in key for name in ("gpt", "claude", "glm"))
     hard_variant = any(name in key for name in (
         "reasoner", "reasoning", "thinking", "-pro", "-max", "opus",
-        "gemini-pro", "gemini-3.1-pro", "grok", "minimax-m3", "mimo-v2.5-pro",
+        "gemini-pro", "gemini-3.1-pro", "grok", "mimo-v2.5-pro",
         "kimi-k2", "qwen-max", "qwen3-max", "mistral-large", "command-r-plus",
     )) or bool(re.search(r"(?:^|[-_/])o[134](?:[-_. /]|$)", key))
-    if hard_family or hard_variant:
+    if (hard_family or hard_variant) and not is_minimax:
         add(
             "hard_reasoning",
             "高难度：复杂推理、架构设计、疑难调试和长链路决策",
@@ -217,13 +218,18 @@ def infer_model_task_capabilities(
             "多模态候选：图片识别、OCR、UI 截图和图文理解；须确认具体型号及接口支持图片输入",
         )
 
-    if any(name in key for name in (
+    code_or_agent_family = any(name in key for name in (
         "gpt", "claude", "glm", "deepseek", "gemini", "grok", "minimax-m3", "mimo",
         "qwen", "kimi", "coder", "codestral", "mistral", "llama",
-    )):
+    ))
+    if code_or_agent_family:
         add(
-            "coding_agent",
-            "代码/Agent：代码理解、工具调用、实现修改和调试",
+            "coding",
+            "代码：代码理解、实现修改、测试和调试",
+        )
+        add(
+            "agent",
+            "Agent：工具调用、任务规划、状态跟踪和多步骤执行",
         )
 
     if _safe_int(context_window, 0) >= 200_000:
@@ -402,11 +408,16 @@ def public_profile(profile: dict) -> dict:
     out["enabled"] = profile.get("enabled") is not False
     out["api_key_set"] = bool(str(profile.get("api_key") or "").strip())
     out["usable"] = is_usable_profile(profile)
-    out.update(infer_model_task_capabilities(
+    inferred = infer_model_task_capabilities(
         str(profile.get("model") or ""),
         str(profile.get("name") or ""),
         _safe_int(profile.get("context_window"), 0),
-    ))
+    )
+    out.update(inferred)
+    custom_description = str(profile.get("capability_description") or "").strip()
+    if custom_description:
+        out["capability_description"] = custom_description
+        out["capability_source"] = "manual"
     return out
 
 
@@ -582,6 +593,12 @@ def upsert_profile(project_root: Path, payload: dict) -> dict:
             "updated_at": now,
         }
     )
+    if "capability_description" in payload:
+        capability_description = str(payload.get("capability_description") or "").strip()
+        if capability_description:
+            profile["capability_description"] = capability_description
+        else:
+            profile.pop("capability_description", None)
     if incoming_api_key:
         profile["api_key"] = incoming_api_key
     if not profile.get("created_at"):

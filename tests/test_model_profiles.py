@@ -16,16 +16,16 @@ def test_profile_store_defaults_to_project_root(tmp_path):
 
 def test_model_task_capabilities_cover_routing_families():
     cases = {
-        "deepseek-v4-flash": {"low_cost_parallel", "research", "coding_agent"},
-        "MiniMax-M3": {"low_cost_parallel", "hard_reasoning", "multimodal_candidate"},
-        "gpt-5.4": {"hard_reasoning", "multimodal_candidate", "coding_agent"},
-        "claude-opus-4.8": {"hard_reasoning", "multimodal_candidate", "coding_agent"},
-        "glm-5.2": {"hard_reasoning", "coding_agent"},
+        "deepseek-v4-flash": {"low_cost_parallel", "research", "coding", "agent"},
+        "MiniMax-M3": {"low_cost_parallel", "multimodal_candidate", "coding", "agent"},
+        "gpt-5.4": {"hard_reasoning", "multimodal_candidate", "coding", "agent"},
+        "claude-opus-4.8": {"hard_reasoning", "multimodal_candidate", "coding", "agent"},
+        "glm-5.2": {"hard_reasoning", "coding", "agent"},
         "gemini-3.1-pro": {"hard_reasoning", "research", "multimodal_candidate"},
         "grok-4.5": {"hard_reasoning", "research", "multimodal_candidate"},
-        "mimo-v2.5-pro": {"hard_reasoning", "multimodal_candidate", "coding_agent"},
-        "qwen3.7-plus": {"multimodal_candidate", "coding_agent"},
-        "kimi-k2.6": {"hard_reasoning", "multimodal_candidate", "coding_agent"},
+        "mimo-v2.5-pro": {"hard_reasoning", "multimodal_candidate", "coding", "agent"},
+        "qwen3.7-plus": {"multimodal_candidate", "coding", "agent"},
+        "kimi-k2.6": {"hard_reasoning", "multimodal_candidate", "coding", "agent"},
         "sonar-deep-research": {"research"},
         "pixtral-large": {"multimodal_candidate"},
     }
@@ -37,6 +37,9 @@ def test_model_task_capabilities_cover_routing_families():
     deepseek = model_profiles.infer_model_task_capabilities("deepseek-v4-flash")
     assert "低成本/多并发" in deepseek["capability_description"]
     assert "批量总结" in deepseek["capability_description"]
+    assert "代码：" in deepseek["capability_description"]
+    assert "Agent：" in deepseek["capability_description"]
+    assert "hard_reasoning" not in model_profiles.infer_model_task_capabilities("MiniMax-M3")["capability_tags"]
 
 
 def test_public_profile_adds_automatic_capability_description():
@@ -50,6 +53,35 @@ def test_public_profile_adds_automatic_capability_description():
     assert public["capability_source"] == "automatic:model-family-heuristic"
     assert {"research", "multimodal_candidate", "long_context"} <= set(public["capability_tags"])
     assert "调查调研" in public["capability_description"]
+
+
+def test_model_profile_persists_editable_capability_description(tmp_path):
+    saved = model_profiles.upsert_profile(
+        tmp_path,
+        {
+            "model": "minimax-m3",
+            "base_url": "https://api.example.com/v1",
+            "api_key": "test-key",
+            "context_window": 128000,
+            "max_output_tokens": 8192,
+            "capability_description": "代码：常规修改；Agent：低复杂度工具任务",
+        },
+    )
+
+    public = model_profiles.public_profile(saved)
+    assert public["capability_source"] == "manual"
+    assert public["capability_description"] == "代码：常规修改；Agent：低复杂度工具任务"
+
+    cleared = model_profiles.upsert_profile(
+        tmp_path,
+        {
+            **saved,
+            "capability_description": "",
+        },
+    )
+    automatic = model_profiles.public_profile(cleared)
+    assert automatic["capability_source"] == "automatic:model-family-heuristic"
+    assert "hard_reasoning" not in automatic["capability_tags"]
 
 
 def test_load_store_reads_legacy_app_location_when_default_missing(tmp_path):
@@ -402,6 +434,8 @@ def test_advanced_model_profile_list_wires_drag_drop_reordering():
     assert "ordered_ids:ids" in html
     assert '"ArrowUp"' in html and '"ArrowDown"' in html
     assert "'拖动排序':'Drag to reorder'" in i18n
+    assert 'id="model-capability-description"' in html
+    assert "capability_description:fieldValue(modelEls.capability)" in html
 
 
 def test_reorder_profiles_persists_dragged_priority(tmp_path):

@@ -246,12 +246,6 @@
     display: none;
   }
   .form-row-2 .form-group { margin-bottom: 0; }
-  .form-row-search-pair.search-key-collapsed {
-    grid-template-columns: 1fr;
-  }
-  .form-row-search-pair.search-key-collapsed #searchKeyGroup {
-    display: none;
-  }
   .model-hint-below {
     margin-bottom: 1.1rem;
     margin-top: -0.35rem;
@@ -259,9 +253,6 @@
   @media (max-width: 480px) {
     .form-row-2 { grid-template-columns: 1fr; gap: 0; }
     .form-row-2 .form-group:first-child { margin-bottom: 1.1rem; }
-    .form-row-search-pair.search-key-collapsed .form-group:first-child {
-      margin-bottom: 0;
-    }
     .model-row { grid-template-columns: 1fr; }
     .model-row__side, .model-row__meta { text-align: left; }
     .model-row__limits { white-space: normal; }
@@ -647,30 +638,6 @@
         </div>
       </div>
 
-      <div class="form-group">
-        <label>工作目录</label>
-        <input type="text" id="workDir" data-path-kind="directory" placeholder="./workspace" value="" autocomplete="off">
-      </div>
-
-      <div class="form-row-2 form-row-search-pair search-key-collapsed" id="searchPairRow">
-        <div class="form-group">
-          <label>联网搜索</label>
-          <div class="select-wrap">
-          <select id="searchProvider">
-            <option value="duckduckgo">DuckDuckGo（免费无需key，需配合VPN使用）</option>
-            <option value="tavily">Tavily（需 API Key）</option>
-          </select>
-          </div>
-        </div>
-        <div class="form-group" id="searchKeyGroup">
-          <label>API Key（Tavily）</label>
-          <input type="password" id="searchKey" placeholder="tvly-..." autocomplete="off">
-          <div class="form-hint">
-            <a href="https://app.tavily.com/home" target="_blank" rel="noopener">app.tavily.com</a> 获取免费 Key
-          </div>
-        </div>
-      </div>
-
       <button type="submit" class="btn btn-primary" id="submitBtn">
         保存配置并启动
       </button>
@@ -678,7 +645,7 @@
 
     <div class="footer">
       <a href="#" id="footer-advanced-link" class="footer-advanced-link">高级设置（与聊天共用命名窗口，可回到原标签）</a>
-      <div style="margin-top:8px;font-size:11px;color:var(--text-tertiary);">模型配置保存为 model profile；其他运行设置写入本地 .env。修改 WORK_DIR 后需重启服务生效。</div>
+      <div style="margin-top:8px;font-size:11px;color:var(--text-tertiary);">模型配置保存为 model profile；其他运行设置可在高级设置中修改。</div>
       <div style="margin-top:6px;font-size:11px;color:var(--text-tertiary);">如需帮助或反馈，请联系GitHub @sugarfreeecho</div>
     </div>
   </div>
@@ -715,22 +682,8 @@
   const apiKeyGroup = document.getElementById('apiKeyGroup');
   const modelName = document.getElementById('modelName');
   const modelHintEl = document.getElementById('modelHint');
-  const searchProvider = document.getElementById('searchProvider');
-  const searchKey = document.getElementById('searchKey');
-  const searchKeyGroup = document.getElementById('searchKeyGroup');
-  const searchPairRow = document.getElementById('searchPairRow');
-
-  function syncSearchPairVisibility() {
-    if (!searchPairRow || !searchKeyGroup) return;
-    var tav = searchProvider.value === 'tavily';
-    searchPairRow.classList.toggle('search-key-collapsed', !tav);
-  }
   const status = document.getElementById('status');
   const submitBtn = document.getElementById('submitBtn');
-  const workDirInput = document.getElementById('workDir');
-  if (workDirInput && typeof window.__DEFAULT_WORK_DIR__ === 'string' && window.__DEFAULT_WORK_DIR__) {
-    workDirInput.placeholder = window.__DEFAULT_WORK_DIR__ + '（或使用 ./workspace）';
-  }
   const contextWindowEl = document.getElementById('contextWindow');
   const maxOutputTokensEl = document.getElementById('maxOutputTokens');
   const modelFetchBtn = document.getElementById('modelFetchBtn');
@@ -993,13 +946,8 @@
     if (prefill.model_name) modelName.value = prefill.model_name;
     if (prefill.llm_base_url) baseUrl.value = prefill.llm_base_url;
     if (prefill.api_key !== undefined && prefill.api_key !== null) apiKey.value = prefill.api_key;
-    if (prefill.work_dir && workDirInput) workDirInput.value = prefill.work_dir;
     if (prefill.context_window && contextWindowEl) contextWindowEl.value = prefill.context_window;
     if (prefill.max_output_tokens && maxOutputTokensEl) maxOutputTokensEl.value = prefill.max_output_tokens;
-    if (prefill.search_provider === 'tavily' || prefill.search_provider === 'duckduckgo') {
-      searchProvider.value = prefill.search_provider;
-    }
-    if (prefill.search_api_key) searchKey.value = prefill.search_api_key;
     var pSel = llmProvider.value;
     var pm = providerMap[pSel];
     if (pm) {
@@ -1010,9 +958,6 @@
     applyProvider(llmProvider.value, true);
   }
 
-  syncSearchPairVisibility();
-
-  if (workDirInput && !workDirInput.value.trim()) workDirInput.value = './workspace';
   if (contextWindowEl && !String(contextWindowEl.value).trim()) contextWindowEl.value = '1000000';
   if (maxOutputTokensEl && !String(maxOutputTokensEl.value).trim()) maxOutputTokensEl.value = '8192';
   setupReady = true;
@@ -1026,8 +971,6 @@
   if (maxOutputTokensEl) maxOutputTokensEl.addEventListener('input', () => clearAutofillHighlight(maxOutputTokensEl));
   if (modelFetchBtn) modelFetchBtn.addEventListener('click', fetchDiscoveredModels);
   if (modelContextBtn) modelContextBtn.addEventListener('click', probeCurrentModelContext);
-
-  searchProvider.addEventListener('change', syncSearchPairVisibility);
 
   document.getElementById('configForm').addEventListener('submit', async (e) => {
     e.preventDefault();
@@ -1068,21 +1011,24 @@
     submitBtn.textContent = '正在保存...';
 
     try {
+      const configPayload = {
+        llm_provider: provider,
+        llm_base_url: url,
+        api_key: key,
+        model_name: model,
+        discovered_model_ids: discoveredModelIds,
+        context_window: contextWindowEl ? contextWindowEl.value.trim() : '1000000',
+        max_output_tokens: maxOutputTokensEl ? maxOutputTokensEl.value.trim() : '8192',
+      };
+      // Older running backends still default omitted runtime fields. Echo existing
+      // hidden values when available so saving a model never resets those settings.
+      if (prefill && prefill.work_dir) configPayload.work_dir = prefill.work_dir;
+      if (prefill && prefill.search_provider) configPayload.search_provider = prefill.search_provider;
+      if (prefill && prefill.search_api_key) configPayload.search_api_key = prefill.search_api_key;
       const resp = await fetch('/api/save_config', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          llm_provider: provider,
-          llm_base_url: url,
-          api_key: key,
-          model_name: model,
-          discovered_model_ids: discoveredModelIds,
-          work_dir: workDirInput ? workDirInput.value.trim() : '',
-          context_window: contextWindowEl ? contextWindowEl.value.trim() : '1000000',
-          max_output_tokens: maxOutputTokensEl ? maxOutputTokensEl.value.trim() : '8192',
-          search_provider: searchProvider.value,
-          search_api_key: searchKey.value.trim(),
-        }),
+        body: JSON.stringify(configPayload),
       });
 
       const result = await resp.json();
