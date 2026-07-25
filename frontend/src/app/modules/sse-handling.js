@@ -979,6 +979,7 @@ function removeStoredFollowupQueue(sessionId) {
     if (!sid) return;
     delete followupQueueBySession[sid];
     delete followupQueueLoadedBySession[sid];
+    delete followupManualDispatchEpochBySession[sid];
     try { localStorage.removeItem(followupQueueStorageKey(sid)); } catch (e) { /* ignore */ }
 }
 
@@ -1783,20 +1784,35 @@ function startFollowupChat(options) {
     });
 }
 
-async function sendQueuedFollowupAsChat(sessionId, item, itemId) {
+function isFollowupAutoDispatchSuperseded(sessionId, dispatchEpoch) {
+    var sid = String(sessionId || '');
+    if (!sid || dispatchEpoch == null) return false;
+    return Number(followupManualDispatchEpochBySession[sid] || 0) !== Number(dispatchEpoch);
+}
+
+async function sendQueuedFollowupAsChat(sessionId, item, itemId, dispatchEpoch) {
     var sid = String(sessionId || '');
     if (!sid || !item) return false;
+    if (isFollowupAutoDispatchSuperseded(sid, dispatchEpoch)) return false;
     if (isSessionRunning(sid) || isServerStreamActive(sid)) {
         item.awaitingRunEnd = true;
         persistFollowupQueue(sid);
         renderFollowupQueue(sid);
         return false;
     }
+    var previousAwaitingRunEnd = item.awaitingRunEnd;
     item.awaitingRunEnd = false;
     item.status = 'sending';
     persistFollowupQueue(sid);
     renderFollowupQueue(sid);
     var lockReady = await waitForSendPipelineIdle(sid, 4000);
+    if (isFollowupAutoDispatchSuperseded(sid, dispatchEpoch)) {
+        item.status = '';
+        item.awaitingRunEnd = previousAwaitingRunEnd;
+        persistFollowupQueue(sid);
+        renderFollowupQueue(sid);
+        return false;
+    }
     if (!lockReady || isSendPipelineLocked(sid)) {
         item.status = '';
         item.awaitingRunEnd = true;
@@ -1856,7 +1872,7 @@ async function sendFollowupNowImpl(itemId, sessionId, options) {
         return;
     }
     if (options.autoAfterRun) {
-        return sendQueuedFollowupAsChat(sid, item, itemId);
+        return sendQueuedFollowupAsChat(sid, item, itemId, options.autoDispatchEpoch);
     }
     item.awaitingRunEnd = false;
     item.clientId = item.clientId || ('followup-' + item.id + '-' + Date.now());
@@ -2074,7 +2090,11 @@ async function sendFollowupNow(itemId, sessionId, options) {
     options = options || {};
     const sid = String(sessionId || currentSessionId || '');
     if (!sid) return;
+    var dispatchOptions = Object.assign({}, options);
+    var observedManualEpoch = Number(followupManualDispatchEpochBySession[sid] || 0);
     if (options.manual) {
+        observedManualEpoch += 1;
+        followupManualDispatchEpochBySession[sid] = observedManualEpoch;
         cancelFollowupQueueDrain(sid);
         var q = getFollowupQueue(sid);
         var idx = q.findIndex(function (item) { return String(item.id) === String(itemId); });
@@ -2084,8 +2104,11 @@ async function sendFollowupNow(itemId, sessionId, options) {
         persistFollowupQueue(sid);
         renderFollowupQueue(sid);
     }
+    dispatchOptions.autoDispatchEpoch = observedManualEpoch;
     return withFollowupDispatch(sid, function () {
-        return sendFollowupNowImpl(itemId, sid, options);
+        if (dispatchOptions.autoAfterRun
+            && isFollowupAutoDispatchSuperseded(sid, dispatchOptions.autoDispatchEpoch)) return false;
+        return sendFollowupNowImpl(itemId, sid, dispatchOptions);
     });
 }
 

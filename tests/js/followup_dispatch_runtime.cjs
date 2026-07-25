@@ -166,6 +166,7 @@ async function testRunStartSignalAndFallbacks() {
   let steerResponse = null;
   const ctx = context({
     currentSessionId: 's',
+    followupManualDispatchEpochBySession: Object.create(null),
     sessionStore: { setStreamActive() {} },
     nowPipelineMs: () => 0,
     getFollowupQueue: () => queue,
@@ -214,6 +215,30 @@ async function testRunStartSignalAndFallbacks() {
   assert.strictEqual(lastSendOptions.forceStart, true);
   assert.strictEqual(queue.length, 0, 'automatic continuation must become an ordinary accepted /chat turn');
 
+  let releaseAutoLock;
+  waitForLock = new Promise((resolve) => { releaseAutoLock = resolve; });
+  queue = [{
+    id: 'superseded-auto',
+    text: 'old head',
+    display: 'old head',
+    skills: [],
+    steerMode: 'interrupt',
+    status: '',
+    awaitingRunEnd: true,
+  }];
+  const pendingAuto = ctx.sendFollowupNowImpl(
+    'superseded-auto',
+    's',
+    { autoAfterRun: true, autoDispatchEpoch: 0 },
+  );
+  ctx.followupManualDispatchEpochBySession.s = 1;
+  releaseAutoLock(true);
+  await pendingAuto;
+  assert.strictEqual(sendCalls, 1, 'a superseded auto send must not start /chat after its lock wait');
+  assert.strictEqual(queue[0].status, '');
+  assert.strictEqual(queue[0].awaitingRunEnd, true);
+  waitForLock = true;
+
   queue = [{ id: 'fallback', text: 'hello', display: 'hello', skills: [], steerMode: 'append', status: '' }];
   await ctx.sendFollowupNowImpl('fallback', 's');
   assert.strictEqual(sendCalls, 2);
@@ -248,6 +273,7 @@ async function testManualSendPrioritizesTheClickedRow() {
   const drainTimers = { s: { timer: 37 } };
   const ctx = context({
     currentSessionId: 'other',
+    followupManualDispatchEpochBySession: Object.create(null),
     followupDrainTimers: drainTimers,
     clearTimeout: (id) => { cleared.push(id); },
     cancelFollowupQueueDrain(sessionId) {
@@ -282,6 +308,56 @@ async function testManualSendPrioritizesTheClickedRow() {
   assert.deepStrictEqual(
     JSON.parse(JSON.stringify(dispatched[1])),
     ['sent', 'clicked', 's', true, ['clicked', 'first']],
+  );
+}
+
+async function testManualSendSupersedesAnAlreadyQueuedAutoHead() {
+  const queue = [
+    { id: 'first', text: 'first', status: '', awaitingRunEnd: true },
+    { id: 'clicked', text: 'clicked', status: '', awaitingRunEnd: true },
+  ];
+  const sent = [];
+  let releaseGate;
+  const gate = new Promise((resolve) => { releaseGate = resolve; });
+  const ctx = context({
+    currentSessionId: 's',
+    followupDispatchChain: Object.create(null),
+    followupManualDispatchEpochBySession: Object.create(null),
+    sleepMs: async () => {},
+    isSendPipelineLocked: () => false,
+    getFollowupQueue: () => queue,
+    persistFollowupQueue() {},
+    renderFollowupQueue() {},
+    cancelFollowupQueueDrain() {},
+    sendFollowupNowImpl: async (id) => { sent.push(id); },
+  });
+  vm.runInContext(
+    between('function withFollowupDispatch', 'function shouldApplySseSeqFilter'),
+    ctx,
+  );
+  vm.runInContext(
+    between('function isFollowupAutoDispatchSuperseded', 'async function sendQueuedFollowupAsChat'),
+    ctx,
+  );
+  vm.runInContext(
+    between('async function sendFollowupNow(itemId', 'async function sendMessage'),
+    ctx,
+  );
+
+  const blocker = ctx.withFollowupDispatch('s', () => gate);
+  const automatic = ctx.sendFollowupNow('first', 's', { autoAfterRun: true });
+  const manual = ctx.sendFollowupNow('clicked', 's', { manual: true });
+  releaseGate();
+  await Promise.all([blocker, automatic, manual]);
+
+  assert.deepStrictEqual(
+    sent,
+    ['clicked'],
+    'a manual click must invalidate an older queued automatic head send',
+  );
+  assert.deepStrictEqual(
+    Array.from(queue, (item) => item.id),
+    ['clicked', 'first'],
   );
 }
 
@@ -354,6 +430,7 @@ function testAppendOptimisticRowCommitsInPlace() {
   await testAutoDrainRequiresACompleteIdleBoundary();
   await testRunStartSignalAndFallbacks();
   await testManualSendPrioritizesTheClickedRow();
+  await testManualSendSupersedesAnAlreadyQueuedAutoHead();
   testAppendOptimisticRowCommitsInPlace();
   process.stdout.write('followup dispatcher runtime checks passed\n');
 })().catch((error) => {

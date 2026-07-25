@@ -12,6 +12,8 @@ const followupServerSyncInFlight = Object.create(null);
 const followupDrainTimers = Object.create(null);
 /** 会话级追问发送互斥链：显式立即发送共用，保证同一会话同一时刻只处理一条追问。 */
 const followupDispatchChain = Object.create(null);
+/** 手动“立即发送”代次；用于淘汰已排队但尚未开始的旧自动队首发送。 */
+const followupManualDispatchEpochBySession = Object.create(null);
 let followupSnapshotRecoveryInitialized = false;
 /** 会话在后台跑完后未点开过：侧栏绿点，点开即清除（localStorage 持久化，刷新不丢） */
 const sessionUnreadComplete = new Set();
