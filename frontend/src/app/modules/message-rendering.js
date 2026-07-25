@@ -311,16 +311,30 @@ function copyMessageText(wrap) {
     return Promise.reject(new Error('当前浏览器不支持复制文本'));
 }
 
-function getImageExportStyles() {
-    var css = '';
-    Array.prototype.forEach.call(document.styleSheets || [], function (sheet) {
-        try {
-            Array.prototype.forEach.call(sheet.cssRules || [], function (rule) {
-                css += rule.cssText + '\n';
-            });
-        } catch (e) { /* cross-origin stylesheets are skipped */ }
-    });
-    return css.replace(/<\/style/gi, '<\\/style').replace(/:root/g, '.image-export-root');
+function buildFinalExportFilename(extension) {
+    var sess = typeof selectCurrentSession === 'function' ? selectCurrentSession() : null;
+    var nameEl = currentSessionId
+        ? document.querySelector('.session-name[data-id="' + currentSessionId + '"]')
+        : null;
+    var rawName = sess && sess.name != null
+        ? String(sess.name)
+        : (nameEl ? String(nameEl.getAttribute('data-original') || nameEl.textContent || '') : '');
+    var safeName = (rawName.trim() || 'Session')
+        .replace(/[<>:"/\\|?*\u0000-\u001F]/g, '_')
+        .replace(/[.\s]+$/g, '')
+        .slice(0, 100) || 'Session';
+    var timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+    return safeName + '-' + timestamp + '.' + String(extension || '').replace(/^\./, '');
+}
+
+function saveMessageAsMarkdown(wrap) {
+    var msg = wrap && wrap.querySelector('.message');
+    if (!msg) throw new Error('找不到可导出的 Final 内容');
+    var raw = messageRawMarkdown.get(wrap);
+    var markdown = raw !== undefined ? String(raw) : String(msg.innerText || '');
+    var filename = buildFinalExportFilename('md');
+    triggerDownloadBlob(new Blob([markdown], { type: 'text/markdown;charset=utf-8' }), filename);
+    return true;
 }
 
 function waitForImageExportImages(target) {
@@ -336,6 +350,45 @@ function waitForImageExportImages(target) {
     }));
 }
 
+function imageExportCanvasToBlob(canvas) {
+    return new Promise(function (resolve, reject) {
+        try {
+            canvas.toBlob(function (blob) {
+                if (blob) resolve(blob);
+                else reject(new Error('Final 卡片图片保存失败'));
+            }, 'image/png');
+        } catch (error) {
+            reject(error);
+        }
+    });
+}
+
+function sanitizeImageExportDocument(clonedDocument, exportId) {
+    var clone = clonedDocument.querySelector('[data-image-export-id="' + exportId + '"]');
+    if (!clone) return;
+    clone.querySelectorAll('img, svg, video, iframe, object, embed, canvas').forEach(function (node) {
+        node.remove();
+    });
+    [clone].concat(Array.prototype.slice.call(clone.querySelectorAll('*'))).forEach(function (node) {
+        node.style.setProperty('background-image', 'none', 'important');
+        node.style.setProperty('border-image', 'none', 'important');
+        node.style.setProperty('list-style-image', 'none', 'important');
+        node.style.setProperty('mask-image', 'none', 'important');
+        node.style.setProperty('-webkit-mask-image', 'none', 'important');
+    });
+    var safeStyle = clonedDocument.createElement('style');
+    safeStyle.textContent = '[data-image-export-id="' + exportId + '"],'
+        + '[data-image-export-id="' + exportId + '"] *,'
+        + '[data-image-export-id="' + exportId + '"]::before,'
+        + '[data-image-export-id="' + exportId + '"]::after,'
+        + '[data-image-export-id="' + exportId + '"] *::before,'
+        + '[data-image-export-id="' + exportId + '"] *::after'
+        + '{background-image:none!important;border-image:none!important;'
+        + 'list-style-image:none!important;mask-image:none!important;'
+        + '-webkit-mask-image:none!important;}';
+    clonedDocument.head.appendChild(safeStyle);
+}
+
 async function saveMessageAsImage(wrap) {
     var target = wrap && wrap.querySelector('.message');
     if (!target) throw new Error('找不到可保存的 Final 卡片');
@@ -345,66 +398,57 @@ async function saveMessageAsImage(wrap) {
     var rect = target.getBoundingClientRect();
     var width = Math.max(1, Math.ceil(target.scrollWidth || rect.width));
     var height = Math.max(1, Math.ceil(target.scrollHeight || rect.height));
-    var clone = target.cloneNode(true);
-    clone.querySelectorAll('button, .mermaid-download-btn, .mermaid-zoom-btn').forEach(function (el) {
-        el.remove();
-    });
-    clone.style.width = width + 'px';
-    clone.style.maxWidth = 'none';
-    clone.style.height = 'auto';
-    clone.style.minHeight = height + 'px';
-    clone.style.overflow = 'visible';
-    clone.style.boxSizing = 'border-box';
-
-    var rootStyle = getComputedStyle(document.documentElement);
-    var variables = '';
-    for (var i = 0; i < rootStyle.length; i += 1) {
-        var name = rootStyle[i];
-        if (name && name.indexOf('--') === 0) variables += name + ':' + rootStyle.getPropertyValue(name) + ';';
-    }
     var targetStyle = getComputedStyle(target);
     var background = targetStyle.backgroundColor;
     if (!background || background === 'rgba(0, 0, 0, 0)') {
         background = document.documentElement.classList.contains('theme-light') ? '#ffffff' : '#1e1e2e';
     }
-    var rootClass = String(document.documentElement.className || '').replace(/"/g, '');
-    var markup = '<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="' + width + '" height="' + height + '">'
-        + '<foreignObject width="100%" height="100%">'
-        + '<div xmlns="http://www.w3.org/1999/xhtml" class="image-export-root ' + rootClass + '" style="' + variables + 'background:' + background + ';width:' + width + 'px;min-height:' + height + 'px;">'
-        + '<style>' + getImageExportStyles() + '</style>' + clone.outerHTML
-        + '</div></foreignObject></svg>';
-    var svgBlob = new Blob([markup], { type: 'image/svg+xml;charset=utf-8' });
-    var svgUrl = URL.createObjectURL(svgBlob);
-    try {
-        var image = await new Promise(function (resolve, reject) {
-            var img = new Image();
-            img.onload = function () { resolve(img); };
-            img.onerror = function () { reject(new Error('Final 卡片图片生成失败')); };
-            img.src = svgUrl;
-        });
-        var scale = Math.min(2, 16384 / width, 16384 / height, Math.sqrt(100000000 / (width * height)));
-        var canvas = document.createElement('canvas');
-        canvas.width = Math.max(1, Math.floor(width * scale));
-        canvas.height = Math.max(1, Math.floor(height * scale));
-        var ctx = canvas.getContext('2d');
-        ctx.fillStyle = background;
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
-        ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
-        var png = await new Promise(function (resolve, reject) {
-            canvas.toBlob(function (blob) {
-                if (blob) resolve(blob);
-                else reject(new Error('Final 卡片图片保存失败'));
-            }, 'image/png');
-        });
-        var downloadUrl = URL.createObjectURL(png);
-        var link = document.createElement('a');
-        link.href = downloadUrl;
-        link.download = 'final-' + new Date().toISOString().replace(/[:.]/g, '-') + '.png';
-        link.click();
-        setTimeout(function () { URL.revokeObjectURL(downloadUrl); }, 1000);
-    } finally {
-        URL.revokeObjectURL(svgUrl);
+    if (typeof globalThis.loadMyAgentHtml2Canvas !== 'function') {
+        throw new Error('当前版本未加载图片导出组件');
     }
+    var html2canvas = await globalThis.loadMyAgentHtml2Canvas();
+    var scale = Math.min(2, 16384 / width, 16384 / height, Math.sqrt(100000000 / (width * height)));
+    var exportId = 'final-' + Date.now() + '-' + Math.random().toString(36).slice(2);
+    target.setAttribute('data-image-export-id', exportId);
+    var baseOptions = {
+        backgroundColor: background,
+        scale: scale,
+        width: width,
+        height: height,
+        useCORS: true,
+        allowTaint: false,
+        imageTimeout: 12000,
+        logging: false,
+        removeContainer: true,
+        ignoreElements: function (node) {
+            return !!(node.matches && node.matches('button, .mermaid-download-btn, .mermaid-zoom-btn'));
+        }
+    };
+    var png;
+    try {
+        try {
+            var canvas = await html2canvas(target, baseOptions);
+            png = await imageExportCanvasToBlob(canvas);
+        } catch (firstError) {
+            var fallbackOptions = Object.assign({}, baseOptions, {
+                useCORS: false,
+                imageTimeout: 0,
+                onclone: function (clonedDocument) {
+                    sanitizeImageExportDocument(clonedDocument, exportId);
+                }
+            });
+            canvas = await html2canvas(target, fallbackOptions);
+            png = await imageExportCanvasToBlob(canvas);
+        }
+    } finally {
+        target.removeAttribute('data-image-export-id');
+    }
+    var downloadUrl = URL.createObjectURL(png);
+    var link = document.createElement('a');
+    link.href = downloadUrl;
+    link.download = buildFinalExportFilename('png');
+    link.click();
+    setTimeout(function () { URL.revokeObjectURL(downloadUrl); }, 1000);
 }
 
 function closeAllMessageCopyPopovers() {
@@ -437,14 +481,18 @@ function applyMessageCopyOption(wrap, role, option) {
     var button = wrap.querySelector('.msg-tb[data-act="copy"]');
     if (button) button.setAttribute('aria-expanded', 'false');
     var tasks = [];
-    if (option === 'text') tasks.push(copyMessageText(wrap));
+    if (role === 'assistant' && option === 'text') tasks.push(Promise.resolve().then(function () {
+        saveMessageAsMarkdown(wrap);
+        showOpenFileFeedback('Markdown 已导出');
+        return true;
+    }));
     if (role === 'assistant' && option === 'image') tasks.push(saveMessageAsImage(wrap).then(function () {
         showOpenFileFeedback('图片已保存');
         return true;
     }));
     if (!tasks.length) return;
     Promise.all(tasks).catch(function (err) {
-        showUiAlert({ title: '操作失败', message: String((err && err.message) || err || '无法完成复制或保存'), variant: 'error' });
+        showUiAlert({ title: '操作失败', message: String((err && err.message) || err || '无法完成导出'), variant: 'error' });
     });
 }
 
@@ -470,7 +518,11 @@ function onMessageToolbarClick(wrap, role, act) {
         return;
     }
     if (act === 'copy') {
-        toggleMessageCopyPopover(wrap);
+        if (role === 'assistant') {
+            toggleMessageCopyPopover(wrap);
+        } else {
+            copyMessageText(wrap).catch(function () { /* preserve the original silent copy behavior */ });
+        }
         return;
     }
     if (act === 'delete') {
@@ -614,30 +666,34 @@ function attachMessageToolbar(wrap, role) {
             bar.appendChild(timeEl);
         }
     }
-    var html = '<button type="button" class="msg-tb" data-act="copy" data-ui-tip="复制选项" aria-haspopup="true" aria-expanded="false">复制</button>'
+    var copyButtonLabel = role === 'assistant' ? '导出' : '复制';
+    var copyButtonTip = role === 'assistant' ? '导出选项' : '复制';
+    var html = '<button type="button" class="msg-tb" data-act="copy" data-ui-tip="' + copyButtonTip + '" aria-haspopup="true" aria-expanded="false">' + copyButtonLabel + '</button>'
         + '<button type="button" class="msg-tb" data-act="delete" data-ui-tip="删除">删除</button>';
     if (role === 'assistant') {
         html += '<button type="button" class="msg-tb" data-act="branch" data-ui-tip="分支">分支</button>';
     }
     if (role === 'user') html += '<button type="button" class="msg-tb" data-act="rewrite" data-ui-tip="改写">改写</button>';
     bar.insertAdjacentHTML('beforeend', html);
-    var copyPopover = document.createElement('div');
-    copyPopover.className = 'msg-copy-popover';
-    copyPopover.setAttribute('role', 'menu');
-    copyPopover.innerHTML = '<button type="button" class="msg-copy-menu-item" data-copy-option="text" role="menuitem">复制文本</button>'
-        + (role === 'assistant' ? '<button type="button" class="msg-copy-menu-item" data-copy-option="image" role="menuitem">保存图片</button>' : '');
-    bar.appendChild(copyPopover);
-    bar.querySelectorAll('.msg-tb').forEach(bindUiHoverTip);
-    copyPopover.querySelectorAll('[data-copy-option]').forEach(function (item) {
-        item.addEventListener('click', function (e) {
-            e.preventDefault();
-            e.stopPropagation();
-            applyMessageCopyOption(wrap, role, item.getAttribute('data-copy-option'));
+    if (role === 'assistant') {
+        var copyPopover = document.createElement('div');
+        copyPopover.className = 'msg-copy-popover';
+        copyPopover.setAttribute('role', 'menu');
+        copyPopover.innerHTML = '<button type="button" class="msg-copy-menu-item" data-copy-option="image" role="menuitem">导出图片</button>'
+            + '<button type="button" class="msg-copy-menu-item" data-copy-option="text" role="menuitem">导出文本</button>';
+        bar.appendChild(copyPopover);
+        bar.querySelectorAll('[data-copy-option]').forEach(function (item) {
+            item.addEventListener('click', function (e) {
+                e.preventDefault();
+                e.stopPropagation();
+                applyMessageCopyOption(wrap, role, item.getAttribute('data-copy-option'));
+            });
         });
-    });
-    copyPopover.addEventListener('click', function (e) {
-        e.stopPropagation();
-    });
+        copyPopover.addEventListener('click', function (e) {
+            e.stopPropagation();
+        });
+    }
+    bar.querySelectorAll('.msg-tb').forEach(bindUiHoverTip);
     bar.addEventListener('click', function (e) {
         var t = e.target;
         if (!t || t.tagName !== 'BUTTON' || !t.getAttribute) return;
@@ -1560,18 +1616,8 @@ function applyChatScrollAfterHistoryLoad(sessionId, mode) {
 
     // Running sessions always show the newest generated content.
     if (running) {
-        var run = getSessionRunState(sessionId);
-        if (run && run.ctx && run.ctx.stream) {
-            var agg = run.ctx.stream.querySelector('.process-aggregate:last-of-type');
-            if (agg) {
-                var procBody = agg.querySelector('.process-aggregate-body');
-                if (procBody) {
-                    // 延迟一帧确保DOM已渲染
-                    requestAnimationFrame(function() {
-                        procBody.scrollTop = procBody.scrollHeight;
-                    });
-                }
-            }
+        if (typeof scrollCurrentRunningProcessToBottom === 'function') {
+            scrollCurrentRunningProcessToBottom(sessionId);
         }
         streamChatNearBottom = true;
         streamProcNearBottom = true;

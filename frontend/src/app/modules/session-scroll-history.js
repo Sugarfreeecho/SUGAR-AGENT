@@ -1015,6 +1015,40 @@ function restoreCachedSessionStream(enteringId) {
     return true;
 }
 
+function scrollCurrentRunningProcessToBottom(sessionId) {
+    if (!sessionId || sessionId !== currentSessionId) return;
+    var run = getSessionRunState(sessionId);
+    var ctx = run && run.ctx;
+    var stream = ctx && ctx.stream && ctx.stream.isConnected ? ctx.stream : getVisibleChatStream();
+    if (!stream) return;
+    var agg = ctx && ctx.currentProcessGroup && ctx.currentProcessGroup.isConnected
+        ? ctx.currentProcessGroup
+        : null;
+    if (!agg) {
+        var runningAggs = stream.querySelectorAll('.process-aggregate.is-running');
+        agg = runningAggs.length ? runningAggs[runningAggs.length - 1] : null;
+    }
+    if (!agg) return;
+    if (agg.classList.contains('is-collapsed')) {
+        agg.classList.remove('is-collapsed');
+        var top = agg.querySelector('.process-aggregate-top');
+        if (top) top.setAttribute('aria-expanded', 'true');
+    }
+    var viewports = [
+        agg.querySelector('.process-aggregate-body'),
+        agg.querySelector('.process-aggregate-brief'),
+    ].filter(function (el) { return !!el; });
+    function pinBottom() {
+        viewports.forEach(function (el) {
+            setScrollTopImmediate(el, el.scrollHeight);
+        });
+    }
+    requestAnimationFrame(function () {
+        pinBottom();
+        requestAnimationFrame(pinBottom);
+    });
+}
+
 function restoreCachedSessionScrollPosition(sessionId) {
     if (!chatContainer || !sessionId) return;
     if (sessionId !== currentSessionId) return;
@@ -1023,6 +1057,7 @@ function restoreCachedSessionScrollPosition(sessionId) {
     var saved = (typeof getSavedScrollPosition === 'function') ? getSavedScrollPosition(sessionId) : null;
     if (running) {
         setScrollTopImmediate(chatContainer, chatContainer.scrollHeight);
+        scrollCurrentRunningProcessToBottom(sessionId);
         streamChatNearBottom = true;
         streamProcNearBottom = true;
         liveAutoFollow = true;
@@ -1035,7 +1070,10 @@ function restoreCachedSessionScrollPosition(sessionId) {
     scheduleTocActiveUpdate();
     requestAnimationFrame(function () {
         if (sessionId !== currentSessionId) return;
-        if (running) setScrollTopImmediate(chatContainer, chatContainer.scrollHeight);
+        if (running) {
+            setScrollTopImmediate(chatContainer, chatContainer.scrollHeight);
+            scrollCurrentRunningProcessToBottom(sessionId);
+        }
         else if (saved !== null && Number.isFinite(Number(saved))) setScrollTopImmediate(chatContainer, Number(saved));
         refreshLiveAutoFollowPins();
         scheduleTocActiveUpdate();

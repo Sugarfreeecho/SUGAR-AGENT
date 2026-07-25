@@ -47,6 +47,16 @@ globalThis.loadMyAgentMermaid = function loadMyAgentMermaid() {
     return mermaidImportPromise;
 };
 
+let html2canvasImportPromise = null;
+globalThis.loadMyAgentHtml2Canvas = function loadMyAgentHtml2Canvas() {
+    if (!html2canvasImportPromise) {
+        html2canvasImportPromise = import('html2canvas').then(function (module) {
+            return module.default || module;
+        });
+    }
+    return html2canvasImportPromise;
+};
+
 const uiSources = [
     i18nSource,
     settingsSource,

@@ -48,7 +48,7 @@ const UI_TRANSLATIONS_EN = {
     '当前没有已注册 Skill': 'No registered skills', '正在加载 Skill': 'Loading skills',
     '加载详情中…': 'Loading details…', '知道了': 'Got it', '允许执行': 'Allow', '拒绝': 'Deny',
     '需要确认': 'Confirmation required', '任务已中断': 'Task interrupted', '已请求停止当前任务': 'Stop requested',
-    '展开': 'Expand', '收起': 'Collapse', '复制': 'Copy', '改写': 'Rewrite', '重试': 'Retry'
+    '展开': 'Expand', '收起': 'Collapse', '复制': 'Copy', '导出': 'Export', '导出选项': 'Export options', '导出图片': 'Export image', '导出文本': 'Export text', '改写': 'Rewrite', '重试': 'Retry'
 };
 Object.assign(UI_TRANSLATIONS_EN, {
     // Todo / goal panel
@@ -220,8 +220,8 @@ Object.assign(UI_TRANSLATIONS_EN, {
     '当前会话仍在生成。请等待完成或停止后再修改历史。': 'This session is still generating. Wait for completion or stop it before editing history.',
     '本段过程已折叠': 'This process section is collapsed', '未找到可保存的 Final 卡片': 'No Final card is available to save',
     'Final 卡片图片生成失败': 'Failed to generate the Final card image', 'Final 卡片图片保存失败': 'Failed to save the Final card image',
-    '当前浏览器不支持复制文本': 'This browser does not support copying text', '无法完成复制或保存': 'Could not copy or save',
-    '至少选择复制文本或保存图片中的一项。': 'Select at least one of copy text or save image.', '图片已保存': 'Image saved',
+    '当前浏览器不支持复制文本': 'This browser does not support copying text', '无法完成复制或保存': 'Could not copy or save', '无法完成导出': 'Could not export',
+    '至少选择复制文本或保存图片中的一项。': 'Select at least one of copy text or save image.', '图片已保存': 'Image saved', 'Markdown 已导出': 'Markdown exported',
     '复制选项': 'Copy options', '打开会话目录': 'Open session folder', '打开工作目录': 'Open workspace',
     '知道了': 'Got it', '已请求打开': 'Open requested', '无法定位该条': 'Could not locate this message'
 });
