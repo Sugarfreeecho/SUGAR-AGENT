@@ -170,11 +170,15 @@ def _load_active_key_context(session_id: str) -> str:
 
 def _save_active_key_context(session_id: str, content: str) -> None:
     if _runtime_v2_primary():
-        from runtime_v2 import RuntimeHistoryOps
+        from runtime_v2 import (
+            RuntimeHistoryOps,
+            runtime_v2_react_transaction_timeout_seconds,
+        )
 
         RuntimeHistoryOps(
             session_manager.sessions_dir,
             path_resolver=getattr(session_manager, "_resolve_session_path", None),
+            transaction_timeout_seconds=runtime_v2_react_transaction_timeout_seconds(),
         ).commit_context_summary(
             session_id,
             str(content or ""),

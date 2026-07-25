@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ctypes
 import errno
 import json
 import logging
@@ -20,6 +21,32 @@ _SEQ_OFFSET_STRIDE = 32
 
 
 logger = logging.getLogger(__name__)
+_windows_unbiased_query = None
+_windows_unbiased_query_ready = False
+_windows_unbiased_query_guard = threading.Lock()
+
+
+def _active_uptime_seconds() -> float:
+    """Return an acquisition clock that excludes Windows system sleep."""
+    global _windows_unbiased_query, _windows_unbiased_query_ready
+    if os.name == "nt":
+        try:
+            if not _windows_unbiased_query_ready:
+                with _windows_unbiased_query_guard:
+                    if not _windows_unbiased_query_ready:
+                        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+                        query = kernel32.QueryUnbiasedInterruptTime
+                        query.argtypes = [ctypes.POINTER(ctypes.c_ulonglong)]
+                        query.restype = ctypes.c_bool
+                        _windows_unbiased_query = query
+                        _windows_unbiased_query_ready = True
+            value = ctypes.c_ulonglong()
+            query = _windows_unbiased_query
+            if callable(query) and query(ctypes.byref(value)):
+                return float(value.value) / 10_000_000.0
+        except Exception:
+            _windows_unbiased_query_ready = True
+    return time.monotonic()
 
 
 class RuntimeEventLogCorruptionError(RuntimeError):
@@ -519,10 +546,7 @@ class SessionEventLog:
             }
 
     def _cache_scope_for(self, session_id: str) -> str:
-        try:
-            return str(self.event_path(session_id).resolve())
-        except Exception:
-            return str(self.root.resolve()) + "::" + str(session_id or "")
+        return os.path.normcase(os.path.abspath(str(self.event_path(session_id))))
 
     def _cached_last_seq(self, session_id: str) -> Optional[int]:
         path = self.event_path(session_id)
@@ -554,10 +578,7 @@ class SessionEventLog:
 
     def _lock_for(self, session_id: str) -> threading.RLock:
         safe_id = self._validate_session_id(session_id)
-        try:
-            scope = str(self.session_dir(safe_id).resolve())
-        except Exception:
-            scope = str(self.root.resolve()) + "::" + safe_id
+        scope = os.path.normcase(os.path.abspath(str(self.session_dir(safe_id))))
         with self._global_locks_guard:
             lock = self._global_locks.get(scope)
             if lock is None:
@@ -574,17 +595,19 @@ class SessionEventLog:
         """Serialize a session commit in this process and across workers.
 
         Lock acquisition is bounded so a wedged worker cannot suspend the ReAct
-        loop indefinitely. Set ``RUNTIME_V2_TRANSACTION_TIMEOUT_SECONDS=0`` to
-        restore unbounded waiting for an offline maintenance operation.
+        loop indefinitely when an online caller supplies a timeout. Maintenance,
+        migration, and repair callers remain unbounded by default.
         """
         safe_id = self._validate_session_id(session_id)
         lock = self._lock_for(safe_id)
         timeout = self._transaction_timeout_seconds(timeout_seconds)
-        deadline = None if timeout is None else time.monotonic() + timeout
-        acquired = (
-            lock.acquire()
-            if deadline is None
-            else lock.acquire(timeout=max(0.0, deadline - time.monotonic()))
+        started = _active_uptime_seconds()
+        deadline = None if timeout is None else started + timeout
+        acquired = self._acquire_thread_lock(
+            lock,
+            session_id=safe_id,
+            deadline=deadline,
+            started=started,
         )
         if not acquired:
             logger.warning(
@@ -603,6 +626,7 @@ class SessionEventLog:
                     session_id=safe_id,
                     deadline=deadline,
                     timeout_seconds=timeout,
+                    started=started,
                 )
                 try:
                     yield
@@ -618,6 +642,7 @@ class SessionEventLog:
         session_id: str = "",
         deadline: Optional[float] = None,
         timeout_seconds: Optional[float] = None,
+        started: Optional[float] = None,
     ) -> None:
         if deadline is None:
             if os.name == "nt":
@@ -652,7 +677,14 @@ class SessionEventLog:
             except OSError as exc:
                 if exc.errno not in {errno.EACCES, errno.EAGAIN, errno.EDEADLK}:
                     raise
-                remaining = deadline - time.monotonic()
+                now = _active_uptime_seconds()
+                SessionEventLog._log_slow_lock_wait(
+                    session_id,
+                    "cross-worker file lock",
+                    started if started is not None else now,
+                    now,
+                )
+                remaining = deadline - now
                 if remaining <= 0:
                     timeout = max(0.0, float(timeout_seconds or 0.0))
                     logger.warning(
@@ -662,6 +694,53 @@ class SessionEventLog:
                     )
                     raise RuntimeEventLogBusyError(session_id, "cross-worker file lock", timeout) from exc
                 time.sleep(min(0.05, remaining))
+
+    @staticmethod
+    def _acquire_thread_lock(
+        lock: threading.RLock,
+        *,
+        session_id: str,
+        deadline: Optional[float],
+        started: float,
+    ) -> bool:
+        if deadline is None:
+            lock.acquire()
+            return True
+        while True:
+            now = _active_uptime_seconds()
+            remaining = deadline - now
+            if remaining <= 0:
+                return False
+            if lock.acquire(timeout=min(0.25, remaining)):
+                return True
+            SessionEventLog._log_slow_lock_wait(
+                session_id,
+                "in-process session lock",
+                started,
+                _active_uptime_seconds(),
+            )
+
+    @staticmethod
+    def _log_slow_lock_wait(session_id: str, stage: str, started: float, now: float) -> None:
+        waited = max(0.0, now - started)
+        try:
+            warning_seconds = max(
+                0.0,
+                float(os.getenv("RUNTIME_V2_SLOW_LOCK_WARNING_SECONDS", "2")),
+            )
+        except (TypeError, ValueError):
+            warning_seconds = 2.0
+        if warning_seconds and waited >= warning_seconds:
+            # Log on coarse warning intervals rather than every polling tick.
+            previous_bucket = int(max(0.0, waited - 0.25) / warning_seconds)
+            current_bucket = int(waited / warning_seconds)
+            if current_bucket > previous_bucket:
+                logger.warning(
+                    "runtime_v2_slow_lock_wait session=%s stage=%s waited_seconds=%.3f",
+                    session_id,
+                    stage,
+                    waited,
+                )
 
     @staticmethod
     def _unlock_file(fh) -> None:
@@ -684,13 +763,12 @@ class SessionEventLog:
 
     @staticmethod
     def _transaction_timeout_seconds(value: Optional[float]) -> Optional[float]:
-        raw = value
-        if raw is None:
-            raw = os.getenv("RUNTIME_V2_TRANSACTION_TIMEOUT_SECONDS", "30")
+        if value is None:
+            return None
         try:
-            timeout = float(raw)
+            timeout = float(value)
         except (TypeError, ValueError):
-            timeout = 30.0
+            return None
         if timeout <= 0:
             return None
         return timeout

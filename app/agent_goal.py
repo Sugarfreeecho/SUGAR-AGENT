@@ -66,9 +66,16 @@ class GoalManager:
             raise GoalError("Goal feature is disabled by GOAL_ENABLED.")
 
     def _ops(self):
-        from runtime_v2 import RuntimeHistoryOps
+        from runtime_v2 import (
+            RuntimeHistoryOps,
+            runtime_v2_react_transaction_timeout_seconds,
+        )
 
-        return RuntimeHistoryOps(self.sessions_dir, path_resolver=self.path_resolver)
+        return RuntimeHistoryOps(
+            self.sessions_dir,
+            path_resolver=self.path_resolver,
+            transaction_timeout_seconds=runtime_v2_react_transaction_timeout_seconds(),
+        )
 
     @staticmethod
     def _runtime_v2_primary() -> bool:

@@ -26,6 +26,20 @@ class _NoLegacySessionManager:
         raise AssertionError("Runtime V2 run setup must not migrate legacy key_context")
 
 
+def test_react_history_ops_uses_online_lock_budget(monkeypatch, tmp_path):
+    import agent_loop
+
+    class _SessionManager:
+        sessions_dir = tmp_path
+
+    monkeypatch.setattr(agent_loop, "session_manager", _SessionManager())
+    monkeypatch.setenv("RUNTIME_V2_REACT_TRANSACTION_TIMEOUT_SECONDS", "3.5")
+
+    ops = agent_loop._runtime_v2_react_history_ops()
+
+    assert ops._transaction_timeout_seconds == 3.5
+
+
 def test_steer_inbox_is_persistent_and_client_idempotent(monkeypatch, tmp_path):
     import agent_loop
 

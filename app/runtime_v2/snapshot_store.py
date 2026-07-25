@@ -1,15 +1,19 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import logging
 import os
+import tempfile
 import threading
 import time
 import uuid
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional
 
+from .event_log import RuntimeEventLogBusyError, SessionEventLog, _active_uptime_seconds
 from .versions import EVENT_SCHEMA_VERSION, PROJECTOR_VERSION
 
 
@@ -23,7 +27,10 @@ class SnapshotStore:
     _memory_cache_lock = threading.Lock()
     _checkpoint_condition = threading.Condition(threading.Lock())
     _checkpoint_pending: Dict[str, tuple[Any, str, Dict[str, Any]]] = {}
-    _checkpoint_running: set[str] = set()
+    _checkpoint_active: set[str] = set()
+    _checkpoint_cancelled: set[str] = set()
+    _checkpoint_errors: Dict[str, str] = {}
+    _checkpoint_workers_started = 0
     _disk_locks: Dict[str, threading.Lock] = {}
     _disk_locks_guard = threading.Lock()
 
@@ -84,7 +91,8 @@ class SnapshotStore:
         key = self._cache_key(path)
         self._discard_pending_checkpoint(key, at_or_before_seq=self._snapshot_seq(snapshot))
         with self._disk_lock_for(key):
-            self._write_file(path, snapshot)
+            with self._cross_process_checkpoint_lock(path, timeout_seconds=None):
+                self._write_file(path, snapshot)
         with self._memory_cache_lock:
             self._memory_cache[key] = (self._file_signature(path), snapshot)
 
@@ -122,6 +130,9 @@ class SnapshotStore:
         """
         path = self.path(session_id)
         key = self._cache_key(path)
+        with self._checkpoint_condition:
+            if key in self._checkpoint_cancelled:
+                return False
         signature = self._file_signature(path)
         with self._memory_cache_lock:
             self._memory_cache[key] = (signature, snapshot)
@@ -131,7 +142,7 @@ class SnapshotStore:
             os.getenv("RUNTIME_V2_ASYNC_SNAPSHOT_CHECKPOINTS", "true")
         ).strip().lower() not in {"0", "false", "no", "off"}
         with self._checkpoint_condition:
-            checkpoint_in_flight = key in self._checkpoint_running or key in self._checkpoint_pending
+            checkpoint_in_flight = key in self._checkpoint_active or key in self._checkpoint_pending
         checkpoint_due = (
             (not path.exists() and not checkpoint_in_flight)
             or last_seq <= 1
@@ -163,7 +174,7 @@ class SnapshotStore:
         key = self._cache_key(self.path(session_id))
         deadline = time.monotonic() + max(0.0, float(timeout_seconds))
         with self._checkpoint_condition:
-            while key in self._checkpoint_running or key in self._checkpoint_pending:
+            while key in self._checkpoint_active or key in self._checkpoint_pending:
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     return False
@@ -174,63 +185,135 @@ class SnapshotStore:
         path = self.path(session_id)
         key = self._cache_key(path)
         with self._checkpoint_condition:
+            if key in self._checkpoint_cancelled:
+                return
             pending = self._checkpoint_pending.get(key)
             if pending is None or self._snapshot_seq(snapshot) >= self._snapshot_seq(pending[2]):
                 self._checkpoint_pending[key] = (self, str(session_id), snapshot)
-            if key in self._checkpoint_running:
-                self._checkpoint_condition.notify_all()
-                return
-            self._checkpoint_running.add(key)
+            self._ensure_checkpoint_workers_locked()
+            self._checkpoint_condition.notify_all()
+
+    @classmethod
+    def _ensure_checkpoint_workers_locked(cls) -> None:
+        try:
+            worker_limit = max(
+                1,
+                min(8, int(os.getenv("RUNTIME_V2_SNAPSHOT_WORKERS", "2"))),
+            )
+        except (TypeError, ValueError):
+            worker_limit = 2
+        while cls._checkpoint_workers_started < worker_limit:
+            worker_index = cls._checkpoint_workers_started + 1
             worker = threading.Thread(
-                target=self._checkpoint_worker,
-                args=(key,),
-                name=f"runtime-v2-snapshot-{uuid.uuid4().hex[:6]}",
+                target=cls._checkpoint_worker,
+                name=f"runtime-v2-snapshot-{worker_index}",
                 daemon=True,
             )
+            cls._checkpoint_workers_started += 1
             try:
                 worker.start()
             except Exception:
-                self._checkpoint_running.discard(key)
-                self._checkpoint_pending.pop(key, None)
-                self._checkpoint_condition.notify_all()
+                cls._checkpoint_workers_started -= 1
                 logger.warning(
-                    "runtime_v2_snapshot_worker_start_failed session=%s",
-                    session_id,
+                    "runtime_v2_snapshot_worker_start_failed worker=%s",
+                    worker_index,
                     exc_info=True,
                 )
+                return
 
     @classmethod
-    def _checkpoint_worker(cls, key: str) -> None:
+    def _checkpoint_worker(cls) -> None:
         while True:
             with cls._checkpoint_condition:
-                item = cls._checkpoint_pending.pop(key, None)
-                if item is None:
-                    cls._checkpoint_running.discard(key)
-                    cls._checkpoint_condition.notify_all()
-                    return
+                key = ""
+                item = None
+                while item is None:
+                    for candidate in list(cls._checkpoint_pending):
+                        if candidate in cls._checkpoint_active:
+                            continue
+                        key = candidate
+                        item = cls._checkpoint_pending.pop(candidate)
+                        cls._checkpoint_active.add(candidate)
+                        break
+                    if item is None:
+                        cls._checkpoint_condition.wait()
             store, session_id, snapshot = item
             started = time.perf_counter()
             try:
-                store._write_background_checkpoint(session_id, snapshot)
-                logger.info(
-                    "runtime_v2_snapshot_checkpoint session=%s seq=%s ms=%s",
-                    session_id,
-                    cls._snapshot_seq(snapshot),
-                    int((time.perf_counter() - started) * 1000),
-                )
-            except Exception:
+                if not cls._checkpoint_is_cancelled(key):
+                    store._write_background_checkpoint_with_retry(session_id, snapshot)
+                    with cls._checkpoint_condition:
+                        cls._checkpoint_errors.pop(key, None)
+                    logger.info(
+                        "runtime_v2_snapshot_checkpoint session=%s seq=%s ms=%s",
+                        session_id,
+                        cls._snapshot_seq(snapshot),
+                        int((time.perf_counter() - started) * 1000),
+                    )
+            except Exception as exc:
+                with cls._checkpoint_condition:
+                    cls._checkpoint_errors[key] = f"{type(exc).__name__}: {exc}"
                 logger.warning(
                     "runtime_v2_snapshot_checkpoint_failed session=%s seq=%s",
                     session_id,
                     cls._snapshot_seq(snapshot),
                     exc_info=True,
                 )
+            finally:
+                with cls._checkpoint_condition:
+                    cls._checkpoint_active.discard(key)
+                    cls._checkpoint_condition.notify_all()
+
+    def _write_background_checkpoint_with_retry(
+        self,
+        session_id: str,
+        snapshot: Dict[str, Any],
+    ) -> None:
+        for attempt in range(3):
+            try:
+                self._write_background_checkpoint(session_id, snapshot)
+                return
+            except RuntimeEventLogBusyError:
+                raise
+            except OSError:
+                if attempt >= 2:
+                    raise
+                time.sleep(0.025 * (attempt + 1))
 
     def _write_background_checkpoint(self, session_id: str, snapshot: Dict[str, Any]) -> None:
         path = self.path(session_id)
         key = self._cache_key(path)
+        try:
+            lock_timeout = max(
+                0.1,
+                float(os.getenv("RUNTIME_V2_SNAPSHOT_LOCK_TIMEOUT_SECONDS", "30")),
+            )
+        except (TypeError, ValueError):
+            lock_timeout = 30.0
         with self._disk_lock_for(key):
-            self._write_file(path, snapshot)
+            with self._cross_process_checkpoint_lock(
+                path,
+                timeout_seconds=lock_timeout,
+            ):
+                if self._checkpoint_is_cancelled(key):
+                    return
+                disk_seq = self._read_disk_snapshot_seq(path)
+                candidate_seq = self._snapshot_seq(snapshot)
+                if not self._candidate_matches_event_log(path, snapshot):
+                    with self._memory_cache_lock:
+                        self._memory_cache.pop(key, None)
+                    return
+                if disk_seq > candidate_seq:
+                    with self._memory_cache_lock:
+                        current = self._memory_cache.get(key)
+                        if not current or self._snapshot_seq(current[1]) < disk_seq:
+                            self._memory_cache.pop(key, None)
+                    return
+                self._write_file(path, snapshot)
+        if self._checkpoint_is_cancelled(key):
+            with self._memory_cache_lock:
+                self._memory_cache.pop(key, None)
+            return
         signature = self._file_signature(path)
         with self._memory_cache_lock:
             current = self._memory_cache.get(key)
@@ -238,6 +321,104 @@ class SnapshotStore:
                 self._memory_cache[key] = (signature, current[1])
             else:
                 self._memory_cache[key] = (signature, snapshot)
+
+    def cancel_checkpoint(self, session_id: str, timeout_seconds: float = 0.5) -> bool:
+        """Cancel queued work and wait briefly for an active file handle to close."""
+        path = self.path(session_id)
+        key = self._cache_key(path)
+        deadline = time.monotonic() + max(0.0, float(timeout_seconds))
+        quiesced = True
+        with self._checkpoint_condition:
+            self._checkpoint_cancelled.add(key)
+            self._checkpoint_pending.pop(key, None)
+            self._checkpoint_errors.pop(key, None)
+            while key in self._checkpoint_active:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    quiesced = False
+                    break
+                self._checkpoint_condition.wait(timeout=remaining)
+        with self._memory_cache_lock:
+            self._memory_cache.pop(key, None)
+        return quiesced
+
+    def checkpoint_status(self, session_id: str) -> Dict[str, Any]:
+        """Expose bounded-worker health for diagnostics and tests."""
+        key = self._cache_key(self.path(session_id))
+        with self._checkpoint_condition:
+            return {
+                "pending": key in self._checkpoint_pending,
+                "active": key in self._checkpoint_active,
+                "cancelled": key in self._checkpoint_cancelled,
+                "last_error": self._checkpoint_errors.get(key, ""),
+                "workers": int(self._checkpoint_workers_started),
+            }
+
+    @classmethod
+    def _checkpoint_is_cancelled(cls, key: str) -> bool:
+        with cls._checkpoint_condition:
+            return key in cls._checkpoint_cancelled
+
+    @contextmanager
+    def _cross_process_checkpoint_lock(
+        self,
+        path: Path,
+        *,
+        timeout_seconds: Optional[float],
+    ):
+        lock_root = Path(tempfile.gettempdir()) / "sugaragent-runtime-v2-snapshot-locks"
+        lock_root.mkdir(parents=True, exist_ok=True)
+        lock_key = self._cache_key(path)
+        lock_name = hashlib.sha256(lock_key.encode("utf-8", errors="replace")).hexdigest()[:32]
+        lock_path = lock_root / f"{lock_name}.lock"
+        timeout = (
+            None
+            if timeout_seconds is None or float(timeout_seconds) <= 0
+            else float(timeout_seconds)
+        )
+        started = _active_uptime_seconds()
+        deadline = None if timeout is None else started + timeout
+        with lock_path.open("a+b") as fh:
+            SessionEventLog._lock_file(
+                fh,
+                session_id=f"snapshot:{path.parent.parent.name}",
+                deadline=deadline,
+                timeout_seconds=timeout,
+                started=started,
+            )
+            try:
+                yield
+            finally:
+                SessionEventLog._unlock_file(fh)
+
+    @staticmethod
+    def _read_disk_snapshot_seq(path: Path) -> int:
+        if not path.is_file():
+            return 0
+        try:
+            with path.open("r", encoding="utf-8") as fh:
+                data = json.load(fh)
+            return SnapshotStore._snapshot_seq(data if isinstance(data, dict) else {})
+        except Exception:
+            return 0
+
+    @staticmethod
+    def _candidate_matches_event_log(path: Path, snapshot: Dict[str, Any]) -> bool:
+        candidate_signature = snapshot.get("_event_log") if isinstance(snapshot, dict) else None
+        if not isinstance(candidate_signature, dict):
+            return True
+        event_path = path.parent.parent / "events.jsonl"
+        try:
+            current = event_path.stat()
+        except OSError:
+            return SnapshotStore._snapshot_seq(snapshot) == 0
+        candidate_size = int(candidate_signature.get("size") or -1)
+        candidate_mtime = int(candidate_signature.get("mtime_ns") or -1)
+        if int(current.st_size) < candidate_size:
+            return False
+        if int(current.st_size) == candidate_size:
+            return int(current.st_mtime_ns) == candidate_mtime
+        return True
 
     @classmethod
     def _discard_pending_checkpoint(cls, key: str, *, at_or_before_seq: int) -> None:
@@ -363,7 +544,7 @@ class SnapshotStore:
 
     @staticmethod
     def _cache_key(path: Path) -> str:
-        try:
-            return str(path.resolve())
-        except Exception:
-            return str(path)
+        # ``Path.resolve`` can switch between a long and 8.3 path spelling on
+        # Windows when a path changes from nonexistent to existent. A lexical
+        # absolute key remains stable across the background file creation.
+        return os.path.normcase(os.path.abspath(str(path)))

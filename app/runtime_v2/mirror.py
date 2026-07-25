@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional
 
 from .blob_store import BlobStore
-from .event_log import SessionEventLog
+from .event_log import RuntimeEventLogBusyError, SessionEventLog
 from .event_schema import RuntimeEvent
 from .projector import RuntimeProjector
 from .snapshot_store import SnapshotStore
@@ -17,9 +17,15 @@ logger = logging.getLogger(__name__)
 class RuntimeMirror:
     """Synchronous mapper from UI-shaped events to native Runtime V2 facts."""
 
-    def __init__(self, sessions_dir: str | Path, path_resolver: Optional[Callable[[str], str | Path]] = None):
+    def __init__(
+        self,
+        sessions_dir: str | Path,
+        path_resolver: Optional[Callable[[str], str | Path]] = None,
+        transaction_timeout_seconds: Optional[float] = None,
+    ):
         self.sessions_dir = Path(sessions_dir)
         self._path_resolver = path_resolver
+        self._transaction_timeout_seconds = transaction_timeout_seconds
         self.event_log = SessionEventLog(self.sessions_dir, path_resolver=path_resolver)
         self.projector = RuntimeProjector()
         self.snapshots = SnapshotStore(self.sessions_dir, path_resolver=path_resolver)
@@ -56,7 +62,10 @@ class RuntimeMirror:
 
     def append(self, session_id: str, event_type: str, payload: Optional[dict] = None, run_id: Optional[str] = None) -> Optional[RuntimeEvent]:
         try:
-            with self.event_log.session_transaction(session_id):
+            with self.event_log.session_transaction(
+                session_id,
+                timeout_seconds=self._transaction_timeout_seconds,
+            ):
                 event = self.event_log._append_unlocked(session_id, event_type, payload=payload or {}, run_id=run_id)
                 self._apply_snapshot_event(session_id, event)
             return event
@@ -72,6 +81,8 @@ class RuntimeMirror:
                 event_type,
                 exc,
             )
+            if isinstance(exc, RuntimeEventLogBusyError):
+                raise
             return None
 
     def append_batch(self, session_id: str, rows: Iterable[dict]) -> List[RuntimeEvent]:
@@ -84,7 +95,10 @@ class RuntimeMirror:
         clean = [dict(row) for row in rows if isinstance(row, dict) and row.get("type")]
         if not clean:
             return []
-        with self.event_log.session_transaction(session_id):
+        with self.event_log.session_transaction(
+            session_id,
+            timeout_seconds=self._transaction_timeout_seconds,
+        ):
             events = self.event_log._append_many_unlocked(session_id, clean)
             snapshot = self.snapshots.read(session_id)
             if events and int(snapshot.get("last_seq") or 0) == int(events[0].seq) - 1:

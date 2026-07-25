@@ -1436,6 +1436,22 @@ def _llm_stream_timing_log(
         logger.debug("llm_stream_timing log failed", exc_info=True)
 
 
+def _runtime_v2_react_transaction_timeout_seconds() -> Optional[float]:
+    from runtime_v2 import runtime_v2_react_transaction_timeout_seconds
+
+    return runtime_v2_react_transaction_timeout_seconds()
+
+
+def _runtime_v2_react_history_ops():
+    from runtime_v2 import RuntimeHistoryOps
+
+    return RuntimeHistoryOps(
+        session_manager.sessions_dir,
+        path_resolver=getattr(session_manager, "_resolve_session_path", None),
+        transaction_timeout_seconds=_runtime_v2_react_transaction_timeout_seconds(),
+    )
+
+
 def _runtime_v2_append_model_message(state: State, msg: Any) -> None:
     sid = str(state.get("session_id") or "").strip()
     if not sid or not _runtime_v2_is_primary():
@@ -1445,8 +1461,6 @@ def _runtime_v2_append_model_message(state: State, msg: Any) -> None:
     t0 = time.perf_counter()
     role = ""
     try:
-        from runtime_v2 import RuntimeHistoryOps
-
         t_pre_dict = time.perf_counter()
         data = _message_to_dict(msg)
         t_post_dict = time.perf_counter()
@@ -1472,10 +1486,7 @@ def _runtime_v2_append_model_message(state: State, msg: Any) -> None:
             sid,
             role,
         )
-        RuntimeHistoryOps(
-            session_manager.sessions_dir,
-            path_resolver=getattr(session_manager, "_resolve_session_path", None),
-        ).append_model_message(
+        _runtime_v2_react_history_ops().append_model_message(
             sid,
             role,
             content,
@@ -1528,8 +1539,6 @@ def _runtime_v2_commit_user_turn(
     if not sid or not _runtime_v2_is_primary():
         return False
     try:
-        from runtime_v2 import RuntimeHistoryOps
-
         data = _message_to_dict(msg)
         model_content = str(data.pop("content", "") or "")
         data.pop("type", None)
@@ -1551,10 +1560,7 @@ def _runtime_v2_commit_user_turn(
                 if value:
                     data[key] = value
         run_id = str(state.get("_runtime_v2_run_id") or "").strip()
-        committed_event = RuntimeHistoryOps(
-            session_manager.sessions_dir,
-            path_resolver=getattr(session_manager, "_resolve_session_path", None),
-        ).commit_user_turn(
+        committed_event = _runtime_v2_react_history_ops().commit_user_turn(
             sid,
             model_content,
             ui_content=ui_content,
@@ -1593,13 +1599,8 @@ def _runtime_v2_commit_assistant_final(state: State, content: str) -> bool:
     if not _state_run_has_write_fence(state):
         return False
     try:
-        from runtime_v2 import RuntimeHistoryOps
-
         run_id = str(state.get("_runtime_v2_run_id") or "").strip()
-        RuntimeHistoryOps(
-            session_manager.sessions_dir,
-            path_resolver=getattr(session_manager, "_resolve_session_path", None),
-        ).commit_assistant_final(
+        _runtime_v2_react_history_ops().commit_assistant_final(
             sid,
             str(content or ""),
             operation_id=f"final:{run_id}" if run_id else "",
@@ -1628,12 +1629,7 @@ def _runtime_v2_replace_model_history(state: State, messages: List[Any], reason:
         return
     t0 = time.perf_counter()
     try:
-        from runtime_v2 import RuntimeHistoryOps
-
-        RuntimeHistoryOps(
-            session_manager.sessions_dir,
-            path_resolver=getattr(session_manager, "_resolve_session_path", None),
-        ).replace_model_history(
+        _runtime_v2_react_history_ops().replace_model_history(
             sid,
             [_message_to_dict(m) for m in list(messages or [])],
             reason=reason,
@@ -1657,7 +1653,7 @@ def _runtime_v2_commit_context_summary(state: State) -> None:
     if not sid or not _runtime_v2_is_primary():
         return
     try:
-        from runtime_v2 import RuntimeHistoryOps, SnapshotStore
+        from runtime_v2 import SnapshotStore
 
         resolver = getattr(session_manager, "_resolve_session_path", None)
         snapshot = SnapshotStore(
@@ -1667,10 +1663,7 @@ def _runtime_v2_commit_context_summary(state: State) -> None:
         current = snapshot.get("context", {}).get("summary", {}) if isinstance(snapshot, dict) else {}
         if isinstance(current, dict) and str(current.get("summary") or "") == summary:
             return
-        RuntimeHistoryOps(
-            session_manager.sessions_dir,
-            path_resolver=resolver,
-        ).commit_context_summary(sid, summary)
+        _runtime_v2_react_history_ops().commit_context_summary(sid, summary)
     except Exception as exc:
         logger.warning("Runtime V2 context summary commit failed for %s: %s", sid, exc)
         raise
@@ -1681,12 +1674,7 @@ def _runtime_v2_checkpoint_context_tokens(state: State, payload: Dict[str, Any])
     if not sid or not _runtime_v2_is_primary() or not _state_run_has_write_fence(state):
         return
     try:
-        from runtime_v2 import RuntimeHistoryOps
-
-        RuntimeHistoryOps(
-            session_manager.sessions_dir,
-            path_resolver=getattr(session_manager, "_resolve_session_path", None),
-        ).checkpoint_context_tokens(sid, payload)
+        _runtime_v2_react_history_ops().checkpoint_context_tokens(sid, payload)
     except Exception as exc:
         logger.warning("Runtime V2 context token checkpoint failed for %s: %s", sid, exc)
         raise
@@ -2085,12 +2073,11 @@ def _runtime_v2_delete_unfinished_tool_events_after_marker(
     if marker_seq <= 0:
         return
     try:
-        from runtime_v2 import RuntimeHistoryOps
         from runtime_v2.event_log import SessionEventLog
 
         resolver = getattr(session_manager, "_resolve_session_path", None)
         log = SessionEventLog(session_manager.sessions_dir, path_resolver=resolver)
-        ops = RuntimeHistoryOps(session_manager.sessions_dir, path_resolver=resolver)
+        ops = _runtime_v2_react_history_ops()
         for ev in log.read_after_seq(sid, marker_seq):
             payload = dict(ev.payload or {})
             ev_type = str(ev.type or "")
@@ -6402,6 +6389,7 @@ async def astream_events(
             mirror = RuntimeMirror(
                 session_manager.sessions_dir,
                 path_resolver=getattr(session_manager, "_resolve_session_path", None),
+                transaction_timeout_seconds=_runtime_v2_react_transaction_timeout_seconds(),
             )
             if event_type == "run_started":
                 mirror.mirror_run_started(session_id, runtime_v2_run_id, payload)
@@ -6930,6 +6918,7 @@ async def astream_events_continuation(
             mirror = RuntimeMirror(
                 session_manager.sessions_dir,
                 path_resolver=getattr(session_manager, "_resolve_session_path", None),
+                transaction_timeout_seconds=_runtime_v2_react_transaction_timeout_seconds(),
             )
             if event_type == "run_started":
                 mirror.mirror_run_started(session_id, runtime_v2_run_id, payload)

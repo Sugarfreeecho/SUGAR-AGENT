@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from typing import Optional
 
 
 def runtime_version() -> int:
@@ -32,3 +33,16 @@ def runtime_v2_strict() -> bool:
     # makes later projections look valid but incomplete, so fail closed unless
     # an operator explicitly opts into the old diagnostic behavior.
     return os.getenv("RUNTIME_V2_STRICT", "1").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def runtime_v2_react_transaction_timeout_seconds() -> Optional[float]:
+    """Return the online ReAct lock budget; maintenance callers do not use it."""
+    raw = os.getenv("RUNTIME_V2_REACT_TRANSACTION_TIMEOUT_SECONDS")
+    if raw is None:
+        # Compatibility with the first bounded-lock release.
+        raw = os.getenv("RUNTIME_V2_TRANSACTION_TIMEOUT_SECONDS", "10")
+    try:
+        timeout = float(raw)
+    except (TypeError, ValueError):
+        timeout = 10.0
+    return timeout if timeout > 0 else None

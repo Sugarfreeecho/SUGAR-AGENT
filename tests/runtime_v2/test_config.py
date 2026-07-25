@@ -2,7 +2,12 @@ import os
 import unittest
 from unittest.mock import patch
 
-from app.runtime_v2.config import runtime_v1_primary, runtime_v2_primary, runtime_version
+from app.runtime_v2.config import (
+    runtime_v1_primary,
+    runtime_v2_primary,
+    runtime_v2_react_transaction_timeout_seconds,
+    runtime_version,
+)
 
 
 class RuntimeConfigTests(unittest.TestCase):
@@ -35,6 +40,26 @@ class RuntimeConfigTests(unittest.TestCase):
             os.environ.pop("RUNTIME_VERSION", None)
             os.environ.pop("RUNTIME_version", None)
             self.assertEqual(runtime_version(), 2)
+
+    def test_react_transaction_timeout_is_scoped_and_configurable(self):
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("RUNTIME_V2_REACT_TRANSACTION_TIMEOUT_SECONDS", None)
+            os.environ.pop("RUNTIME_V2_TRANSACTION_TIMEOUT_SECONDS", None)
+            self.assertEqual(runtime_v2_react_transaction_timeout_seconds(), 10)
+
+        with patch.dict(
+            os.environ,
+            {"RUNTIME_V2_REACT_TRANSACTION_TIMEOUT_SECONDS": "4.5"},
+            clear=False,
+        ):
+            self.assertEqual(runtime_v2_react_transaction_timeout_seconds(), 4.5)
+
+        with patch.dict(
+            os.environ,
+            {"RUNTIME_V2_REACT_TRANSACTION_TIMEOUT_SECONDS": "0"},
+            clear=False,
+        ):
+            self.assertIsNone(runtime_v2_react_transaction_timeout_seconds())
 
 
 if __name__ == "__main__":

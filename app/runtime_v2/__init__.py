@@ -16,7 +16,14 @@ from .model_projection import RuntimeModelProjection
 from .migration import RuntimeV2MigrationService, RuntimeV2VerificationError
 from .repair import RuntimeV2SubagentRepairService
 from .root_log_repair import RuntimeV2RootEventLogRepairService
-from .config import runtime_v1_primary, runtime_v2_enabled, runtime_v2_primary, runtime_v2_strict, runtime_version
+from .config import (
+    runtime_v1_primary,
+    runtime_v2_enabled,
+    runtime_v2_primary,
+    runtime_v2_react_transaction_timeout_seconds,
+    runtime_v2_strict,
+    runtime_version,
+)
 
 __all__ = [
     "RuntimeEvent",
@@ -43,5 +50,6 @@ __all__ = [
     "runtime_v1_primary",
     "runtime_v2_primary",
     "runtime_v2_enabled",
+    "runtime_v2_react_transaction_timeout_seconds",
     "runtime_v2_strict",
 ]

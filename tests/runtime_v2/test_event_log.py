@@ -3,6 +3,7 @@ import tempfile
 import threading
 import time
 import unittest
+from unittest.mock import patch
 
 from app.runtime_v2 import RuntimeEventLogBusyError, RuntimeEventLogCorruptionError, SessionEventLog
 
@@ -21,6 +22,31 @@ def _hold_transaction_in_process(root, acquired, release):
 
 
 class SessionEventLogTests(unittest.TestCase):
+    def test_transaction_timeout_is_opt_in_for_online_callers(self):
+        self.assertIsNone(SessionEventLog._transaction_timeout_seconds(None))
+        self.assertIsNone(SessionEventLog._transaction_timeout_seconds(0))
+        self.assertEqual(SessionEventLog._transaction_timeout_seconds(10), 10)
+
+    def test_lock_budget_uses_active_uptime_instead_of_wall_sleep(self):
+        class _EventuallyAvailableLock:
+            def __init__(self):
+                self.calls = 0
+
+            def acquire(self, timeout=None):
+                self.calls += 1
+                return self.calls >= 3
+
+        lock = _EventuallyAvailableLock()
+        with patch("app.runtime_v2.event_log._active_uptime_seconds", return_value=100.0):
+            acquired = SessionEventLog._acquire_thread_lock(
+                lock,
+                session_id="s1",
+                deadline=101.0,
+                started=100.0,
+            )
+        self.assertTrue(acquired)
+        self.assertEqual(lock.calls, 3)
+
     def test_session_transaction_times_out_instead_of_waiting_forever(self):
         with tempfile.TemporaryDirectory() as tmp:
             holder_log = SessionEventLog(tmp)

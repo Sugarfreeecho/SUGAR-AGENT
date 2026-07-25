@@ -273,11 +273,13 @@ def _runtime_v2_enabled() -> bool:
 
 
 def _history_ops(session_manager: Any):
+    from runtime_v2 import runtime_v2_react_transaction_timeout_seconds
     from runtime_v2.history_ops import RuntimeHistoryOps
 
     return RuntimeHistoryOps(
         session_manager.sessions_dir,
         path_resolver=getattr(session_manager, "_resolve_session_path", None),
+        transaction_timeout_seconds=runtime_v2_react_transaction_timeout_seconds(),
     )
 
 

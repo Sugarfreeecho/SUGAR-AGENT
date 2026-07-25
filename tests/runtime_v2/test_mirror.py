@@ -1,11 +1,35 @@
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 
-from app.runtime_v2 import RuntimeMirror
+from app.runtime_v2 import RuntimeEventLogBusyError, RuntimeMirror
 
 
 class RuntimeMirrorTests(unittest.TestCase):
+    def test_online_lock_timeout_is_not_silently_dropped(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            holder = RuntimeMirror(tmp)
+            online = RuntimeMirror(tmp, transaction_timeout_seconds=0.05)
+            acquired = threading.Event()
+            release = threading.Event()
+
+            def hold_transaction():
+                with holder.event_log.session_transaction("s1"):
+                    acquired.set()
+                    release.wait(timeout=2)
+
+            thread = threading.Thread(target=hold_transaction)
+            thread.start()
+            self.assertTrue(acquired.wait(timeout=1))
+            try:
+                with self.assertRaises(RuntimeEventLogBusyError):
+                    online.append("s1", "message_user", {"content": "hello"})
+            finally:
+                release.set()
+                thread.join(timeout=1)
+            self.assertEqual(online.event_log.read_all("s1"), [])
+
     def test_mirrors_legacy_user_and_final_events(self):
         with tempfile.TemporaryDirectory() as tmp:
             mirror = RuntimeMirror(tmp)

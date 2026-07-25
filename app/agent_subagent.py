@@ -132,12 +132,16 @@ def _load_subagent_run_histories(child_id: str) -> tuple[List[Any], List[Any], s
 def _persist_subagent_run_state(child_id: str, state_out: Dict[str, Any]) -> None:
     key_context = str(state_out.get("key_context") or "")
     if _runtime_v2_primary():
-        from runtime_v2 import RuntimeHistoryOps
+        from runtime_v2 import (
+            RuntimeHistoryOps,
+            runtime_v2_react_transaction_timeout_seconds,
+        )
 
         llm_history = [_message_to_dict(m) for m in state_out.get("llm_history", [])]
         ops = RuntimeHistoryOps(
             session_manager.sessions_dir,
             path_resolver=getattr(session_manager, "_resolve_session_path", None),
+            transaction_timeout_seconds=runtime_v2_react_transaction_timeout_seconds(),
         )
         ops.replace_model_history(child_id, llm_history, reason="subagent_run_finished")
         if key_context.strip():
@@ -152,11 +156,15 @@ def _save_initial_subagent_key_context(child_id: str, key_context: str) -> None:
     if not (key_context or "").strip():
         return
     if _runtime_v2_primary():
-        from runtime_v2 import RuntimeHistoryOps
+        from runtime_v2 import (
+            RuntimeHistoryOps,
+            runtime_v2_react_transaction_timeout_seconds,
+        )
 
         RuntimeHistoryOps(
             session_manager.sessions_dir,
             path_resolver=getattr(session_manager, "_resolve_session_path", None),
+            transaction_timeout_seconds=runtime_v2_react_transaction_timeout_seconds(),
         ).commit_context_summary(child_id, key_context)
         return
     session_manager.save_key_context(child_id, key_context)

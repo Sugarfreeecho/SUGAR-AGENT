@@ -403,6 +403,7 @@ def test_runtime_v2_branch_creates_v2_branch_without_legacy_rebuild(tmp_path):
 def test_delete_session_removes_subagent_descendants_and_index(tmp_path, monkeypatch):
     import json
     import agent_harness
+    from runtime_v2 import SnapshotStore
 
     monkeypatch.setattr(
         agent_harness.SessionManager,
@@ -441,6 +442,14 @@ def test_delete_session_removes_subagent_descendants_and_index(tmp_path, monkeyp
     )
 
     mgr = agent_harness.SessionManager(sessions_dir, index_file)
+    cancelled = []
+    original_cancel = SnapshotStore.cancel_checkpoint
+
+    def record_cancel(store, session_id, timeout_seconds=0.5):
+        cancelled.append(session_id)
+        return original_cancel(store, session_id, timeout_seconds)
+
+    monkeypatch.setattr(SnapshotStore, "cancel_checkpoint", record_cancel)
     mgr.delete_session(root_id)
 
     assert not (sessions_dir / root_id).exists()
@@ -450,6 +459,45 @@ def test_delete_session_removes_subagent_descendants_and_index(tmp_path, monkeyp
     assert json.loads((sessions_dir / "subagent_index.json").read_text(encoding="utf-8")) == {}
     rows = json.loads(index_file.read_text(encoding="utf-8"))["sessions"]
     assert [row["id"] for row in rows] == [other_id]
+    assert set(cancelled) == {root_id, child_id, grandchild_id}
+
+
+def test_delete_tombstone_prevents_failed_rmtree_from_resurrecting_session(tmp_path, monkeypatch):
+    import agent_harness
+    import json
+
+    session_id = "session"
+    sessions_dir = tmp_path / "s"
+    session_path = sessions_dir / session_id
+    session_path.mkdir(parents=True)
+    (session_path / "metadata.json").write_text(
+        json.dumps({"id": session_id, "name": "deleted"}),
+        encoding="utf-8",
+    )
+    (session_path / "events.jsonl").write_text("{}\n", encoding="utf-8")
+    index_file = sessions_dir / "sessions_index.json"
+    index_file.write_text(
+        json.dumps({"sessions": [{"id": session_id, "name": "deleted"}]}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        agent_harness.SessionManager,
+        "_normalize_session_id",
+        staticmethod(lambda value: str(value or "").strip()),
+    )
+    manager = agent_harness.SessionManager(sessions_dir, index_file)
+
+    def fail_rmtree(_path):
+        raise PermissionError("busy")
+
+    monkeypatch.setattr(agent_harness.shutil, "rmtree", fail_rmtree)
+
+    manager.delete_session(session_id)
+
+    assert session_path.exists()
+    assert json.loads((session_path / "metadata.json").read_text(encoding="utf-8"))["deleted"] is True
+    manager.refresh_sessions_index_from_disk()
+    assert manager.index == []
 
 
 def test_runtime_v2_clear_todo_writes_empty_snapshot(tmp_path):

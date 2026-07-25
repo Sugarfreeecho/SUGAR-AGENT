@@ -50,11 +50,19 @@ class RuntimeHistoryOps:
         self,
         sessions_dir: str | Path,
         path_resolver: Optional[Callable[[str], str | Path]] = None,
+        transaction_timeout_seconds: Optional[float] = None,
     ):
         self._path_resolver = path_resolver
+        self._transaction_timeout_seconds = transaction_timeout_seconds
         self.event_log = SessionEventLog(sessions_dir, path_resolver=path_resolver)
         self.projector = RuntimeProjector()
         self.snapshots = SnapshotStore(sessions_dir, path_resolver=path_resolver)
+
+    def _session_transaction(self, session_id: str):
+        return self.event_log.session_transaction(
+            session_id,
+            timeout_seconds=self._transaction_timeout_seconds,
+        )
 
     def delete_message(self, session_id: str, target_seq: int, reason: str = "") -> RuntimeEvent:
         return self._append_and_snapshot(session_id, "message_deleted", {
@@ -89,7 +97,7 @@ class RuntimeHistoryOps:
         seed_rows = self._branch_ui_seed_rows(session_id, source_session_id, ui_events)
         t_after_map = time.perf_counter()
 
-        with self.event_log.session_transaction(session_id):
+        with self._session_transaction(session_id):
             existing_events = self.event_log.read_all(session_id)
             snapshot = self.snapshots.read(session_id)
             if int(snapshot.get("last_seq") or 0) != max((int(ev.seq) for ev in existing_events), default=0):
@@ -357,7 +365,7 @@ class RuntimeHistoryOps:
     ) -> tuple[Optional[RuntimeEvent], dict]:
         """Atomically read, mutate, append, and project one Goal state change."""
 
-        with self.event_log.session_transaction(session_id):
+        with self._session_transaction(session_id):
             snapshot = self.snapshots.read(session_id)
             latest_seq = self.event_log.next_seq(session_id) - 1
             if int(snapshot.get("last_seq") or 0) != int(latest_seq):
@@ -572,7 +580,7 @@ class RuntimeHistoryOps:
     ) -> Optional[RuntimeEvent]:
         """Atomically commit the UI and model representations of one user turn."""
         op_id = str(operation_id or "").strip()
-        with self.event_log.session_transaction(session_id):
+        with self._session_transaction(session_id):
             snapshot = self.snapshots.read_for_update(session_id)
             if int(snapshot.get("last_seq") or 0) != self.event_log.next_seq(session_id) - 1:
                 snapshot = self.projector.project(self.event_log.read_all(session_id))
@@ -608,7 +616,7 @@ class RuntimeHistoryOps:
         model_payload: Optional[dict] = None,
     ) -> Optional[RuntimeEvent]:
         op_id = str(operation_id or "").strip()
-        with self.event_log.session_transaction(session_id):
+        with self._session_transaction(session_id):
             snapshot = self.snapshots.read_for_update(session_id)
             if int(snapshot.get("last_seq") or 0) != self.event_log.next_seq(session_id) - 1:
                 snapshot = self.projector.project(self.event_log.read_all(session_id))
@@ -740,7 +748,7 @@ class RuntimeHistoryOps:
             event_type,
             str(run_id or ""),
         )
-        with self.event_log.session_transaction(session_id):
+        with self._session_transaction(session_id):
             logger.info(
                 "rt2_append_and_snapshot_progress session=%s event_type=%s run_id=%s stage=transaction_acquired",
                 session_id,

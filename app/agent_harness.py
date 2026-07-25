@@ -1957,7 +1957,11 @@ class SessionManager:
                     meta = {}
                 if meta.get("is_subagent"):
                     continue
-                if self._is_deleted_session(sid) or self._is_metadata_only_delete_remnant(p, meta):
+                if (
+                    self._is_deleted_session(sid)
+                    or bool(meta.get("deleted"))
+                    or self._is_metadata_only_delete_remnant(p, meta)
+                ):
                     continue
                 name = meta.get("name") or "新会话"
                 created_at = meta.get("created_at")
@@ -2263,9 +2267,14 @@ class SessionManager:
         )
 
     def _runtime_mirror(self):
+        from runtime_v2 import runtime_v2_react_transaction_timeout_seconds
         from runtime_v2.mirror import RuntimeMirror
 
-        return RuntimeMirror(self.repository.sessions_dir, path_resolver=self._resolve_session_path)
+        return RuntimeMirror(
+            self.repository.sessions_dir,
+            path_resolver=self._resolve_session_path,
+            transaction_timeout_seconds=runtime_v2_react_transaction_timeout_seconds(),
+        )
 
     def _mirror_ui_event_to_runtime_v2(self, session_id: str, event: Dict[str, Any]):
         mirror = self._runtime_mirror()
@@ -3306,7 +3315,10 @@ class SessionManager:
 
     def _observe_runtime_v2_history(self, method_name: str, session_id: str, **kwargs) -> bool:
         try:
-            from runtime_v2 import runtime_v2_primary
+            from runtime_v2 import (
+                runtime_v2_primary,
+                runtime_v2_react_transaction_timeout_seconds,
+            )
             from runtime_v2.history_ops import RuntimeHistoryOps
 
             if not runtime_v2_primary():
@@ -3314,6 +3326,7 @@ class SessionManager:
             ops = RuntimeHistoryOps(
                 self.repository.sessions_dir,
                 path_resolver=getattr(self.repository, "_path_resolver", None),
+                transaction_timeout_seconds=runtime_v2_react_transaction_timeout_seconds(),
             )
             method = getattr(ops, method_name)
             method(session_id, **kwargs)
@@ -4975,6 +4988,32 @@ class SessionManager:
                 descendants.append(cid)
                 stack.append(cid)
         delete_ids = [sid] + descendants
+        for delete_id in delete_ids:
+            try:
+                with self._session_metadata_lock(delete_id):
+                    metadata = self.repository.load_metadata(delete_id)
+                    if not isinstance(metadata, dict):
+                        metadata = {}
+                    metadata["deleted"] = True
+                    metadata["deleted_at"] = datetime.now().isoformat()
+                    self.repository.save_metadata_atomic(delete_id, metadata)
+            except Exception:
+                logger.debug("persist session deletion tombstone failed: %s", delete_id, exc_info=True)
+        try:
+            from runtime_v2 import SnapshotStore
+
+            checkpoint_store = SnapshotStore(
+                self.sessions_dir,
+                path_resolver=self._resolve_session_path,
+            )
+            for delete_id in delete_ids:
+                if not checkpoint_store.cancel_checkpoint(delete_id, timeout_seconds=0.5):
+                    logger.warning(
+                        "delete session is waiting on a slow Runtime V2 snapshot: %s",
+                        delete_id,
+                    )
+        except Exception:
+            logger.debug("cancel Runtime V2 snapshot before session delete failed", exc_info=True)
         for delete_id in reversed(delete_ids):
             try:
                 session_path = self._get_session_path(delete_id)
