@@ -640,46 +640,6 @@ body {
     flex: 1; min-height: 0; min-width: 0; width: 100%;
     display: block; overflow-y: auto; scroll-behavior: smooth; position: relative; overflow-anchor: none;
 }
-.chat-overlay-scroll-target {
-    scrollbar-width:none !important;
-    scrollbar-color:transparent transparent !important;
-}
-.chat-overlay-scroll-target::-webkit-scrollbar { width:0 !important; height:0 !important; }
-.chat-overlay-scrollbars {
-    position:absolute; z-index:390; inset:0;
-    overflow:hidden; pointer-events:none;
-}
-.chat-overlay-scrollbar {
-    position:absolute; width:3px;
-    overflow-y:scroll; overflow-x:hidden;
-    pointer-events:auto;
-    opacity:0;
-    scrollbar-width:thin !important;
-    scrollbar-color:rgba(255,255,255,0.12) transparent !important;
-}
-.chat-overlay-scrollbar[hidden] { display:none !important; }
-.chat-overlay-scrollbar.is-visible { opacity:1; }
-.chat-overlay-scrollbar::-webkit-scrollbar {
-    width:3px !important; height:3px !important;
-}
-.chat-overlay-scrollbar::-webkit-scrollbar-track {
-    background:transparent !important;
-}
-.chat-overlay-scrollbar::-webkit-scrollbar-thumb {
-    background:rgba(255,255,255,0.12) !important;
-    background-color:rgba(255,255,255,0.12) !important;
-    border:0 !important; border-radius:999px !important;
-}
-.chat-overlay-scrollbar-space {
-    width:1px; min-height:1px; opacity:0; pointer-events:none;
-}
-:root.theme-light .chat-overlay-scrollbar {
-    scrollbar-color:rgba(15,23,42,0.16) transparent !important;
-}
-:root.theme-light .chat-overlay-scrollbar::-webkit-scrollbar-thumb {
-    background:rgba(15,23,42,0.16) !important;
-    background-color:rgba(15,23,42,0.16) !important;
-}
 .chat-stream {
     min-width: 0; display: flex; flex-direction: column;
     align-items: center; gap: 0.25rem;
@@ -3688,7 +3648,7 @@ body {
     padding:0.85rem 0.95rem; border:1px solid var(--border-glass); border-radius:var(--radius-sm);
     outline:none; background:rgba(10,10,20,0.34); color:var(--text-primary);
     font:0.86rem/1.65 var(--sans); tab-size:4; overflow:auto;
-    contain:layout paint; overscroll-behavior:contain; scrollbar-gutter:auto;
+    contain:layout paint; overscroll-behavior:contain; scrollbar-gutter:stable;
     transform:translateZ(0); backface-visibility:hidden;
     box-shadow:inset 0 1px 0 rgba(255,255,255,0.025);
     transition:border-color 0.16s ease, box-shadow 0.16s ease, background 0.16s ease;
