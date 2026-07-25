@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import errno
 import json
+import logging
 import os
 import threading
+import time
 import uuid
 from contextlib import contextmanager
 from collections import deque
@@ -14,6 +17,9 @@ from .versions import SEQ_OFFSET_INDEX_VERSION
 
 
 _SEQ_OFFSET_STRIDE = 32
+
+
+logger = logging.getLogger(__name__)
 
 
 class RuntimeEventLogCorruptionError(RuntimeError):
@@ -38,6 +44,19 @@ class RuntimeEventLogCorruptionError(RuntimeError):
         self.line_number = line_number
         self.byte_offset = byte_offset
         self.detail = detail
+
+
+class RuntimeEventLogBusyError(TimeoutError):
+    """Raised when a session transaction cannot acquire its lock in time."""
+
+    def __init__(self, session_id: str, stage: str, timeout_seconds: float) -> None:
+        super().__init__(
+            f"Runtime V2 session {session_id!r} remained busy while waiting for "
+            f"{stage} for {timeout_seconds:.3f}s"
+        )
+        self.session_id = session_id
+        self.stage = stage
+        self.timeout_seconds = timeout_seconds
 
 
 class SessionEventLog:
@@ -547,34 +566,102 @@ class SessionEventLog:
             return lock
 
     @contextmanager
-    def session_transaction(self, session_id: str):
-        """Serialize a session commit in this process and across workers."""
+    def session_transaction(
+        self,
+        session_id: str,
+        timeout_seconds: Optional[float] = None,
+    ):
+        """Serialize a session commit in this process and across workers.
+
+        Lock acquisition is bounded so a wedged worker cannot suspend the ReAct
+        loop indefinitely. Set ``RUNTIME_V2_TRANSACTION_TIMEOUT_SECONDS=0`` to
+        restore unbounded waiting for an offline maintenance operation.
+        """
         safe_id = self._validate_session_id(session_id)
         lock = self._lock_for(safe_id)
-        with lock:
+        timeout = self._transaction_timeout_seconds(timeout_seconds)
+        deadline = None if timeout is None else time.monotonic() + timeout
+        acquired = (
+            lock.acquire()
+            if deadline is None
+            else lock.acquire(timeout=max(0.0, deadline - time.monotonic()))
+        )
+        if not acquired:
+            logger.warning(
+                "runtime_v2_transaction_timeout session=%s stage=in_process_lock timeout_seconds=%.3f",
+                safe_id,
+                timeout or 0.0,
+            )
+            raise RuntimeEventLogBusyError(safe_id, "in-process session lock", timeout or 0.0)
+        try:
             session_dir = self.session_dir(safe_id)
             session_dir.mkdir(parents=True, exist_ok=True)
             lock_path = session_dir / ".events.lock"
             with lock_path.open("a+b") as fh:
-                self._lock_file(fh)
+                self._lock_file(
+                    fh,
+                    session_id=safe_id,
+                    deadline=deadline,
+                    timeout_seconds=timeout,
+                )
                 try:
                     yield
                 finally:
                     self._unlock_file(fh)
+        finally:
+            lock.release()
 
     @staticmethod
-    def _lock_file(fh) -> None:
+    def _lock_file(
+        fh,
+        *,
+        session_id: str = "",
+        deadline: Optional[float] = None,
+        timeout_seconds: Optional[float] = None,
+    ) -> None:
+        if deadline is None:
+            if os.name == "nt":
+                import msvcrt
+                fh.seek(0, os.SEEK_END)
+                if fh.tell() == 0:
+                    fh.write(b"0")
+                    fh.flush()
+                fh.seek(0)
+                msvcrt.locking(fh.fileno(), msvcrt.LK_LOCK, 1)
+                return
+            import fcntl
+            fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+            return
+
         if os.name == "nt":
             import msvcrt
             fh.seek(0, os.SEEK_END)
             if fh.tell() == 0:
                 fh.write(b"0")
                 fh.flush()
-            fh.seek(0)
-            msvcrt.locking(fh.fileno(), msvcrt.LK_LOCK, 1)
-            return
-        import fcntl
-        fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+        while True:
+            try:
+                fh.seek(0)
+                if os.name == "nt":
+                    import msvcrt
+                    msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
+                else:
+                    import fcntl
+                    fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                return
+            except OSError as exc:
+                if exc.errno not in {errno.EACCES, errno.EAGAIN, errno.EDEADLK}:
+                    raise
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    timeout = max(0.0, float(timeout_seconds or 0.0))
+                    logger.warning(
+                        "runtime_v2_transaction_timeout session=%s stage=file_lock timeout_seconds=%.3f",
+                        session_id,
+                        timeout,
+                    )
+                    raise RuntimeEventLogBusyError(session_id, "cross-worker file lock", timeout) from exc
+                time.sleep(min(0.05, remaining))
 
     @staticmethod
     def _unlock_file(fh) -> None:
@@ -594,3 +681,16 @@ class SessionEventLog:
         if any(part in safe_id for part in ("/", "\\", "..")):
             raise ValueError("session_id contains invalid path characters")
         return safe_id
+
+    @staticmethod
+    def _transaction_timeout_seconds(value: Optional[float]) -> Optional[float]:
+        raw = value
+        if raw is None:
+            raw = os.getenv("RUNTIME_V2_TRANSACTION_TIMEOUT_SECONDS", "30")
+        try:
+            timeout = float(raw)
+        except (TypeError, ValueError):
+            timeout = 30.0
+        if timeout <= 0:
+            return None
+        return timeout

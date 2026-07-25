@@ -1,7 +1,7 @@
 """Runtime V2 event, projection, snapshot, migration, and repair services."""
 
 from .event_schema import RuntimeEvent, now_iso
-from .event_log import RuntimeEventLogCorruptionError, SessionEventLog
+from .event_log import RuntimeEventLogBusyError, RuntimeEventLogCorruptionError, SessionEventLog
 from .run_registry import RunRegistry
 from .stream_publisher import StreamPublisher
 from .gateway import RuntimeGateway
@@ -22,6 +22,7 @@ __all__ = [
     "RuntimeEvent",
     "now_iso",
     "SessionEventLog",
+    "RuntimeEventLogBusyError",
     "RuntimeEventLogCorruptionError",
     "RunRegistry",
     "StreamPublisher",

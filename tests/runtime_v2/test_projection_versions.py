@@ -75,7 +75,9 @@ def test_checkpoint_lag_recovers_incrementally_after_memory_cache_loss(tmp_path,
     mirror = RuntimeMirror(tmp_path)
     mirror.append("s1", "message_user", {"content": "one"})
     mirror.append("s1", "message_assistant_final", {"content": "two"})
-    path = SnapshotStore(tmp_path).path("s1")
+    store = SnapshotStore(tmp_path)
+    assert store.wait_for_checkpoint("s1", timeout_seconds=2)
+    path = store.path("s1")
     assert json.loads(path.read_text(encoding="utf-8"))["last_seq"] == 1
 
     SnapshotStore._memory_cache.clear()

@@ -1,9 +1,10 @@
+import multiprocessing
 import tempfile
 import threading
+import time
 import unittest
-import multiprocessing
 
-from app.runtime_v2 import RuntimeEventLogCorruptionError, SessionEventLog
+from app.runtime_v2 import RuntimeEventLogBusyError, RuntimeEventLogCorruptionError, SessionEventLog
 
 
 def _append_events_in_process(args):
@@ -13,7 +14,64 @@ def _append_events_in_process(args):
         log.append("s1", "message_user", {})
 
 
+def _hold_transaction_in_process(root, acquired, release):
+    with SessionEventLog(root).session_transaction("s1", timeout_seconds=1):
+        acquired.set()
+        release.wait(timeout=3)
+
+
 class SessionEventLogTests(unittest.TestCase):
+    def test_session_transaction_times_out_instead_of_waiting_forever(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            holder_log = SessionEventLog(tmp)
+            waiter_log = SessionEventLog(tmp)
+            acquired = threading.Event()
+            release = threading.Event()
+
+            def hold_transaction():
+                with holder_log.session_transaction("s1", timeout_seconds=1):
+                    acquired.set()
+                    release.wait(timeout=2)
+
+            holder = threading.Thread(target=hold_transaction)
+            holder.start()
+            self.assertTrue(acquired.wait(timeout=1))
+            started = time.monotonic()
+            try:
+                with self.assertRaises(RuntimeEventLogBusyError) as raised:
+                    with waiter_log.session_transaction("s1", timeout_seconds=0.05):
+                        pass
+                self.assertEqual(raised.exception.stage, "in-process session lock")
+                self.assertLess(time.monotonic() - started, 0.5)
+            finally:
+                release.set()
+                holder.join(timeout=1)
+            self.assertFalse(holder.is_alive())
+
+    def test_cross_worker_file_lock_times_out(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ctx = multiprocessing.get_context("spawn")
+            acquired = ctx.Event()
+            release = ctx.Event()
+            holder = ctx.Process(
+                target=_hold_transaction_in_process,
+                args=(tmp, acquired, release),
+            )
+            holder.start()
+            self.assertTrue(acquired.wait(timeout=2))
+            try:
+                with self.assertRaises(RuntimeEventLogBusyError) as raised:
+                    with SessionEventLog(tmp).session_transaction("s1", timeout_seconds=0.1):
+                        pass
+                self.assertEqual(raised.exception.stage, "cross-worker file lock")
+            finally:
+                release.set()
+                holder.join(timeout=2)
+                if holder.is_alive():
+                    holder.terminate()
+                    holder.join(timeout=1)
+            self.assertEqual(holder.exitcode, 0)
+
     def test_append_and_read_after_seq(self):
         with tempfile.TemporaryDirectory() as tmp:
             log = SessionEventLog(tmp)
