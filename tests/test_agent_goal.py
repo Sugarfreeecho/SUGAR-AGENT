@@ -156,8 +156,8 @@ class GoalManagerTests(unittest.TestCase):
         self.assertEqual(goal["pause_reason"], "consecutive_run_failures")
         self.assertEqual(goal["consecutive_failures"], 3)
 
-    def test_react_iteration_limit_pauses_goal_without_auto_continuation(self):
-        self.manager.create("s1", "Do not restart a loop forever")
+    def test_react_iteration_limit_keeps_goal_active_for_auto_continuation(self):
+        self.manager.create("s1", "Continue across bounded ReAct runs")
 
         goal = self.manager.record_run(
             "s1",
@@ -168,11 +168,11 @@ class GoalManagerTests(unittest.TestCase):
             error="ReAct reached the maximum iteration limit.",
         )
 
-        self.assertEqual(goal["status"], "paused")
-        self.assertEqual(goal["pause_reason"], "react_iteration_limit")
+        self.assertEqual(goal["status"], "active")
+        self.assertIsNone(goal.get("pause_reason"))
         self.assertEqual(goal["last_run_outcome"], "react_limit")
-        self.assertIn("maximum iteration", goal["last_error"])
-        self.assertFalse(self.manager.should_continue("s1"))
+        self.assertIsNone(goal["last_error"])
+        self.assertTrue(self.manager.should_continue("s1"))
 
     def test_continuation_start_is_persisted_with_run_identity(self):
         self.manager.create("s1", "Continue durably")

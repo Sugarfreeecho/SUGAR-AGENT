@@ -5758,7 +5758,10 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
         else:
             # 达到最大迭代次数
             state["react_limit_reached"] = True
-            final_content = "执行步骤达到最大迭代次数，可能陷入循环，请检查执行过程。您可以手动继续任务"
+            final_content = (
+                "本轮执行步骤已达到最大迭代次数。Goal 模式会自动开始下一轮；"
+                "普通会话可以手动继续任务。"
+            )
 
     except _SteerRestartRequested:
         raise

@@ -457,17 +457,14 @@ class GoalManager:
                     goal["status"] = "paused"
                     goal["pause_reason"] = "consecutive_run_failures"
             elif outcome == "react_limit":
-                # Reaching the hard ReAct ceiling is a terminal condition for
-                # this run, not a successful turn.  Keep the Goal resumable,
-                # but require an explicit user resume so the scheduler cannot
-                # immediately start another 100-iteration loop.
+                # The ReAct ceiling bounds one execution run, not the whole
+                # Goal. Leave the Goal runnable so the scheduler starts a fresh
+                # continuation with a new run identity and iteration budget.
                 goal["consecutive_failures"] = 0
-                goal["last_error"] = str(error or "react_iteration_limit")[:2000]
+                goal["last_error"] = None
                 goal["next_retry_at"] = None
-                if goal.get("status") == "active":
-                    self._stop_clock(goal)
-                    goal["status"] = "paused"
-                    goal["pause_reason"] = "react_iteration_limit"
+                if goal.get("pause_reason") == "react_iteration_limit":
+                    goal["pause_reason"] = None
             elif outcome == "finished":
                 goal["consecutive_failures"] = 0
                 goal["last_error"] = None

@@ -82,6 +82,28 @@ def test_provider_connect_error_uses_backup_when_machine_is_online(monkeypatch):
     assert statuses[0]["network_error"] is True
 
 
+def test_offline_machine_still_uses_backup_for_non_network_errors(monkeypatch):
+    import agent_harness
+
+    calls = []
+    primary = _Completions(calls, "primary", error=ValueError("invalid provider response"))
+    backup = _Completions(calls, "backup", result={"ok": True})
+    statuses = []
+    completions = agent_harness._FallbackCompletions(
+        [_candidate("primary", primary), _candidate("backup", backup)],
+        statuses.append,
+    )
+    monkeypatch.setattr(agent_harness, "machine_network_available", lambda: False)
+
+    result = completions.create(messages=[], max_tokens=10)
+
+    assert result == {"ok": True}
+    assert calls == ["primary", "backup"]
+    assert len(statuses) == 1
+    assert statuses[0]["model_switch"] is True
+    assert statuses[0]["network_error"] is False
+
+
 def test_non_windows_network_probe_is_conservative(monkeypatch):
     import agent_harness
 
