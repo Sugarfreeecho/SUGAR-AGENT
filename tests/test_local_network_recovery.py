@@ -161,3 +161,5 @@ def test_online_provider_failure_never_enters_an_unbounded_endpoint_wait():
         "_wait_for_local_network_recovery("
     )
     assert "if attempt <= NETWORK_RECONNECT_MAX_ATTEMPTS:" in network_branch
+    webui_source = (APP_DIR / "webui.py").read_text(encoding="utf-8")
+    assert "本机离线时等待网络恢复，其他错误达到上限后进入常规模型回退" in webui_source

@@ -5127,7 +5127,7 @@ _ENV_HINTS: dict[str, str] = {
     "TOOL_UI_APPROVAL_WAIT_SEC": "等待用户在 UI 内确认的最长时间（秒），超时视为拒绝。",
     "OPENAI_HTTP_TIMEOUT": "兼容 API 请求超时（秒）。",
     "OPENAI_MAX_RETRIES": "可重试错误时的最大重试次数。",
-    "NETWORK_RECONNECT_MAX_ATTEMPTS": "模型网络错误的快速重连次数；达到后转为低频等待网络恢复，不结束任务。",
+    "NETWORK_RECONNECT_MAX_ATTEMPTS": "模型网络错误的快速重连次数；本机离线时等待网络恢复，其他错误达到上限后进入常规模型回退。",
     "LOCAL_NETWORK_POLL_SECONDS": "本机断网后 Agent 沉睡期间的网络状态检测间隔秒数，默认 5，最小 1。",
     "OPENAI_RETRY_BASE_SEC": "重试基础退避时间（秒）。",
     "WORK_DIR": "工作区根目录（文件工具沙箱）。",
