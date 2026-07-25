@@ -82,6 +82,7 @@ function bindUiHoverTip(el) {
     el.addEventListener('mouseenter', function (ev) {
         var t = el.getAttribute('data-ui-tip');
         if (t == null || !String(t).trim()) return;
+        if (typeof translateUiString === 'function') t = translateUiString(t);
         clearUiHoverTipTimer();
         hideUiHoverTooltip();
         uiHoverTipActiveEl = el;
@@ -104,6 +105,7 @@ function bindUiHoverTip(el) {
     el.addEventListener('focus', function () {
         var t = el.getAttribute('data-ui-tip');
         if (t == null || !String(t).trim()) return;
+        if (typeof translateUiString === 'function') t = translateUiString(t);
         var rect = el.getBoundingClientRect();
         showUiHoverTooltip({ clientX: rect.right, clientY: rect.top }, t);
     });
@@ -435,7 +437,7 @@ function renderTodoPlanForCurrentSession() {
 
 let renderedGoalState = null;
 const goalStateBySession = new Map();
-const goalStateReceivedAtBySession = new Map();
+const goalElapsedAnchorBySession = new Map();
 const goalRefreshInFlightBySession = new Map();
 const goalStreamRecoveryInFlightBySession = new Set();
 
@@ -455,12 +457,37 @@ function renderGoalForCurrentSession() {
 function setGoalStateForSession(sessionId, goal) {
     const sid = String(sessionId || '').trim();
     if (!sid) return;
+    const now = Date.now();
+    const previous = goalStateBySession.get(sid);
+    const previousAnchor = goalElapsedAnchorBySession.get(sid);
     const normalized = goal && goal.id && String(goal.status || '') !== 'completed'
         ? Object.assign({}, goal)
         : null;
     goalStateBySession.set(sid, normalized);
-    if (normalized) goalStateReceivedAtBySession.set(sid, Date.now());
-    else goalStateReceivedAtBySession.delete(sid);
+    if (normalized) {
+        let elapsedSeconds = Math.max(0, Number(normalized.elapsed_seconds || 0));
+        const sameGoal = previous && previousAnchor
+            && String(previous.id || '') === String(normalized.id || '')
+            && String(previousAnchor.goalId || '') === String(normalized.id || '');
+        if (sameGoal) {
+            const previousLiveSeconds = String(previousAnchor.status || '') === 'active'
+                ? Math.max(0, (now - Number(previousAnchor.receivedAt || now)) / 1000)
+                : 0;
+            elapsedSeconds = Math.max(
+                elapsedSeconds,
+                Number(previousAnchor.elapsedSeconds || 0) + previousLiveSeconds,
+            );
+        }
+        normalized.elapsed_seconds = elapsedSeconds;
+        goalElapsedAnchorBySession.set(sid, {
+            goalId: String(normalized.id || ''),
+            status: String(normalized.status || ''),
+            elapsedSeconds: elapsedSeconds,
+            receivedAt: now,
+        });
+    } else {
+        goalElapsedAnchorBySession.delete(sid);
+    }
     if (sid === String(currentSessionId || '')) {
         renderGoalCard(normalized, sid);
         if (normalized && String(normalized.status || '') === 'active') {
@@ -519,9 +546,11 @@ function renderGoalMeta(goal, sessionId) {
         return typeof translateUiString === 'function' ? translateUiString(value) : value;
     };
     const status = String(goal.status || 'active');
-    const receivedAt = Number(goalStateReceivedAtBySession.get(sid) || Date.now());
+    const anchor = goalElapsedAnchorBySession.get(sid);
+    const anchorMatches = anchor && String(anchor.goalId || '') === String(goal.id || '');
+    const receivedAt = Number(anchorMatches ? anchor.receivedAt : Date.now());
     const liveSeconds = status === 'active' ? Math.max(0, (Date.now() - receivedAt) / 1000) : 0;
-    const elapsed = Number(goal.elapsed_seconds || 0) + liveSeconds;
+    const elapsed = Number(anchorMatches ? anchor.elapsedSeconds : goal.elapsed_seconds || 0) + liveSeconds;
     const statusEl = document.getElementById('chat-goal-status');
     if (statusEl && status === 'active') {
         statusEl.textContent = translate('进行中') + ' · ' + formatGoalElapsed(elapsed);
@@ -535,6 +564,7 @@ function renderGoalMeta(goal, sessionId) {
     const reasonLabels = {
         token_budget_exhausted: 'Token 预算已耗尽',
         consecutive_run_failures: '连续运行失败',
+        react_iteration_limit: 'ReAct 已达到轮次上限',
         manual: '手动暂停'
     };
     const rawReason = String(goal.pause_reason || '');

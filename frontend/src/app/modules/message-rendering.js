@@ -281,6 +281,173 @@ async function waitForBranchFinalPersisted(sessionId, beforeIndex, expectedText)
     return { ready: false, beforeIndex: beforeIndex };
 }
 
+function copyMessageText(wrap) {
+    const msg = wrap && wrap.querySelector('.message');
+    const plain = msg ? (msg.innerText || '') : '';
+    const raw = messageRawMarkdown.get(wrap);
+    const toCopy = raw !== undefined ? String(raw) : plain;
+    const done = function () {
+        showCopyFeedback();
+        return true;
+    };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+        return navigator.clipboard.writeText(toCopy).then(done).catch(function () {
+            try {
+                const ta = document.createElement('textarea');
+                ta.value = toCopy;
+                ta.setAttribute('readonly', 'readonly');
+                ta.style.position = 'fixed';
+                ta.style.opacity = '0';
+                document.body.appendChild(ta);
+                ta.select();
+                document.execCommand('copy');
+                document.body.removeChild(ta);
+                return done();
+            } catch (e) {
+                throw e;
+            }
+        });
+    }
+    return Promise.reject(new Error('当前浏览器不支持复制文本'));
+}
+
+function getImageExportStyles() {
+    var css = '';
+    Array.prototype.forEach.call(document.styleSheets || [], function (sheet) {
+        try {
+            Array.prototype.forEach.call(sheet.cssRules || [], function (rule) {
+                css += rule.cssText + '\n';
+            });
+        } catch (e) { /* cross-origin stylesheets are skipped */ }
+    });
+    return css.replace(/<\/style/gi, '<\\/style').replace(/:root/g, '.image-export-root');
+}
+
+function waitForImageExportImages(target) {
+    var images = target ? Array.prototype.slice.call(target.querySelectorAll('img')) : [];
+    return Promise.all(images.map(function (img) {
+        if (!img.complete) {
+            return new Promise(function (resolve) {
+                img.addEventListener('load', resolve, { once: true });
+                img.addEventListener('error', resolve, { once: true });
+            });
+        }
+        return img.decode ? img.decode().catch(function () {}) : Promise.resolve();
+    }));
+}
+
+async function saveMessageAsImage(wrap) {
+    var target = wrap && wrap.querySelector('.message');
+    if (!target) throw new Error('找不到可保存的 Final 卡片');
+    await waitForImageExportImages(target);
+    await new Promise(function (resolve) { requestAnimationFrame(resolve); });
+
+    var rect = target.getBoundingClientRect();
+    var width = Math.max(1, Math.ceil(target.scrollWidth || rect.width));
+    var height = Math.max(1, Math.ceil(target.scrollHeight || rect.height));
+    var clone = target.cloneNode(true);
+    clone.querySelectorAll('button, .mermaid-download-btn, .mermaid-zoom-btn').forEach(function (el) {
+        el.remove();
+    });
+    clone.style.width = width + 'px';
+    clone.style.maxWidth = 'none';
+    clone.style.height = 'auto';
+    clone.style.minHeight = height + 'px';
+    clone.style.overflow = 'visible';
+    clone.style.boxSizing = 'border-box';
+
+    var rootStyle = getComputedStyle(document.documentElement);
+    var variables = '';
+    for (var i = 0; i < rootStyle.length; i += 1) {
+        var name = rootStyle[i];
+        if (name && name.indexOf('--') === 0) variables += name + ':' + rootStyle.getPropertyValue(name) + ';';
+    }
+    var targetStyle = getComputedStyle(target);
+    var background = targetStyle.backgroundColor;
+    if (!background || background === 'rgba(0, 0, 0, 0)') {
+        background = document.documentElement.classList.contains('theme-light') ? '#ffffff' : '#1e1e2e';
+    }
+    var rootClass = String(document.documentElement.className || '').replace(/"/g, '');
+    var markup = '<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="' + width + '" height="' + height + '">'
+        + '<foreignObject width="100%" height="100%">'
+        + '<div xmlns="http://www.w3.org/1999/xhtml" class="image-export-root ' + rootClass + '" style="' + variables + 'background:' + background + ';width:' + width + 'px;min-height:' + height + 'px;">'
+        + '<style>' + getImageExportStyles() + '</style>' + clone.outerHTML
+        + '</div></foreignObject></svg>';
+    var svgBlob = new Blob([markup], { type: 'image/svg+xml;charset=utf-8' });
+    var svgUrl = URL.createObjectURL(svgBlob);
+    try {
+        var image = await new Promise(function (resolve, reject) {
+            var img = new Image();
+            img.onload = function () { resolve(img); };
+            img.onerror = function () { reject(new Error('Final 卡片图片生成失败')); };
+            img.src = svgUrl;
+        });
+        var scale = Math.min(2, 16384 / width, 16384 / height, Math.sqrt(100000000 / (width * height)));
+        var canvas = document.createElement('canvas');
+        canvas.width = Math.max(1, Math.floor(width * scale));
+        canvas.height = Math.max(1, Math.floor(height * scale));
+        var ctx = canvas.getContext('2d');
+        ctx.fillStyle = background;
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
+        var png = await new Promise(function (resolve, reject) {
+            canvas.toBlob(function (blob) {
+                if (blob) resolve(blob);
+                else reject(new Error('Final 卡片图片保存失败'));
+            }, 'image/png');
+        });
+        var downloadUrl = URL.createObjectURL(png);
+        var link = document.createElement('a');
+        link.href = downloadUrl;
+        link.download = 'final-' + new Date().toISOString().replace(/[:.]/g, '-') + '.png';
+        link.click();
+        setTimeout(function () { URL.revokeObjectURL(downloadUrl); }, 1000);
+    } finally {
+        URL.revokeObjectURL(svgUrl);
+    }
+}
+
+function closeAllMessageCopyPopovers() {
+    document.querySelectorAll('.msg-copy-popover.is-open').forEach(function (popover) {
+        popover.classList.remove('is-open');
+        var wrap = popover.closest('.msg-wrap');
+        var button = wrap && wrap.querySelector('.msg-tb[data-act="copy"]');
+        if (button) button.setAttribute('aria-expanded', 'false');
+    });
+}
+
+(function bindMessageCopyPopoverCloserOnce() {
+    if (window.__myAgentMessageCopyPopoverCloser) return;
+    window.__myAgentMessageCopyPopoverCloser = true;
+    document.addEventListener('click', closeAllMessageCopyPopovers);
+})();
+
+function toggleMessageCopyPopover(wrap) {
+    var popover = wrap && wrap.querySelector('.msg-copy-popover');
+    var button = wrap && wrap.querySelector('.msg-tb[data-act="copy"]');
+    if (!popover) return;
+    var open = !popover.classList.contains('is-open');
+    closeAllMessageCopyPopovers();
+    popover.classList.toggle('is-open', open);
+    if (button) button.setAttribute('aria-expanded', open ? 'true' : 'false');
+}
+
+function applyMessageCopyOption(wrap, role, option) {
+    closeAllMessageCopyPopovers();
+    var button = wrap.querySelector('.msg-tb[data-act="copy"]');
+    if (button) button.setAttribute('aria-expanded', 'false');
+    var tasks = [];
+    if (option === 'text') tasks.push(copyMessageText(wrap));
+    if (role === 'assistant' && option === 'image') tasks.push(saveMessageAsImage(wrap).then(function () {
+        showOpenFileFeedback('图片已保存');
+        return true;
+    }));
+    if (!tasks.length) return;
+    Promise.all(tasks).catch(function (err) {
+        showUiAlert({ title: '操作失败', message: String((err && err.message) || err || '无法完成复制或保存'), variant: 'error' });
+    });
+}
+
 function onMessageToolbarClick(wrap, role, act) {
     const msg = wrap.querySelector('.message');
     const plain = msg ? (msg.innerText || '') : '';
@@ -303,23 +470,7 @@ function onMessageToolbarClick(wrap, role, act) {
         return;
     }
     if (act === 'copy') {
-        const raw = messageRawMarkdown.get(wrap);
-        const toCopy = raw !== undefined ? String(raw) : plain;
-        const done = function () { showCopyFeedback(); };
-        if (navigator.clipboard && navigator.clipboard.writeText) {
-            navigator.clipboard.writeText(toCopy).then(done).catch(function () {
-                try {
-                    const ta = document.createElement('textarea');
-                    ta.value = toCopy;
-                    ta.setAttribute('readonly', 'readonly');
-                    document.body.appendChild(ta);
-                    ta.select();
-                    document.execCommand('copy');
-                    document.body.removeChild(ta);
-                    done();
-                } catch (e) { /* ignore */ }
-            });
-        }
+        toggleMessageCopyPopover(wrap);
         return;
     }
     if (act === 'delete') {
@@ -463,18 +614,35 @@ function attachMessageToolbar(wrap, role) {
             bar.appendChild(timeEl);
         }
     }
-    var html = '<button type="button" class="msg-tb" data-act="copy" data-ui-tip="复制">复制</button>'
+    var html = '<button type="button" class="msg-tb" data-act="copy" data-ui-tip="复制选项" aria-haspopup="true" aria-expanded="false">复制</button>'
         + '<button type="button" class="msg-tb" data-act="delete" data-ui-tip="删除">删除</button>';
     if (role === 'assistant') {
         html += '<button type="button" class="msg-tb" data-act="branch" data-ui-tip="分支">分支</button>';
     }
     if (role === 'user') html += '<button type="button" class="msg-tb" data-act="rewrite" data-ui-tip="改写">改写</button>';
     bar.insertAdjacentHTML('beforeend', html);
+    var copyPopover = document.createElement('div');
+    copyPopover.className = 'msg-copy-popover';
+    copyPopover.setAttribute('role', 'menu');
+    copyPopover.innerHTML = '<button type="button" class="msg-copy-menu-item" data-copy-option="text" role="menuitem">复制文本</button>'
+        + (role === 'assistant' ? '<button type="button" class="msg-copy-menu-item" data-copy-option="image" role="menuitem">保存图片</button>' : '');
+    bar.appendChild(copyPopover);
     bar.querySelectorAll('.msg-tb').forEach(bindUiHoverTip);
+    copyPopover.querySelectorAll('[data-copy-option]').forEach(function (item) {
+        item.addEventListener('click', function (e) {
+            e.preventDefault();
+            e.stopPropagation();
+            applyMessageCopyOption(wrap, role, item.getAttribute('data-copy-option'));
+        });
+    });
+    copyPopover.addEventListener('click', function (e) {
+        e.stopPropagation();
+    });
     bar.addEventListener('click', function (e) {
         var t = e.target;
         if (!t || t.tagName !== 'BUTTON' || !t.getAttribute) return;
         e.preventDefault();
+        e.stopPropagation();
         var a = t.getAttribute('data-act');
         if (a) onMessageToolbarClick(wrap, role, a);
     });
@@ -486,6 +654,13 @@ function getFeedItemText(row) {
     if (sc) return sc.textContent.trim();
     const ch = row.querySelector('.feed-chunk');
     return ch ? ch.textContent.trim() : '';
+}
+
+function getProcessBriefComparableText(row) {
+    if (row && typeof row._processBriefRawText === 'string') {
+        return normalizeProcessBriefComparableText(row._processBriefRawText);
+    }
+    return normalizeProcessBriefComparableText(getFeedItemText(row));
 }
 
 function extractToolNameFromLog(text) {
@@ -500,11 +675,13 @@ function extractToolNameFromLog(text) {
     return '工具';
 }
 
-function pushBriefLine(lines, line) {
+function pushBriefLine(lines, line, type) {
     if (!line || !String(line).trim()) return;
     var t = String(line);
-    if (lines.length && lines[lines.length - 1] === t) return;
-    lines.push(t);
+    var previous = lines.length ? lines[lines.length - 1] : null;
+    var previousText = previous && typeof previous === 'object' ? previous.text : previous;
+    if (previousText === t) return;
+    lines.push(type ? { text: t, type: type } : t);
 }
 
 function refreshFeedChunkOverflow(chunk) {
@@ -608,12 +785,20 @@ function onProcessBriefWheel(e) {
 function setBriefRows(brief, texts) {
     brief.textContent = '';
     texts.forEach(function (t) {
-        if (!t || !String(t).trim()) return;
+        var rowType = t && typeof t === 'object' ? String(t.type || '') : '';
+        var sourceText = t && typeof t === 'object' ? String(t.text || '') : String(t || '');
+        if (!sourceText.trim()) return;
         const row = document.createElement('div');
         row.className = 'process-brief-item';
-        row.textContent = typeof translateUiString === 'function' ? translateUiString(String(t)) : t;
+        if (rowType === 'response') row.classList.add('process-brief-item--response');
+        else if (sourceText.indexOf('Tool calls: ') === 0) row.classList.add('process-brief-item--tool');
+        row.textContent = typeof translateUiString === 'function' ? translateUiString(sourceText) : sourceText;
         brief.appendChild(row);
     });
+}
+
+function normalizeProcessBriefComparableText(value) {
+    return String(value == null ? '' : value).replace(/\s+/g, ' ').trim();
 }
 
 function updateProcessBrief(agg) {
@@ -623,43 +808,151 @@ function updateProcessBrief(agg) {
     if (!body || !brief) return;
     const items = Array.from(body.querySelectorAll('.feed-item'));
     const lines = [];
-    var i = 0;
-    while (i < items.length) {
-        var el = items[i];
-        var raw = getFeedItemText(el);
-        if (el.classList.contains('feed--llm')) {
-            if (raw) pushBriefLine(lines, '思·' + raw);
-            i += 1;
-        } else if (el.classList.contains('feed--llm2')) {
-            if (raw) pushBriefLine(lines, '答·' + raw);
-            i += 1;
-        } else if (el.classList.contains('feed--tool')) {
-            var countMap = {};
-            var order = [];
-            while (i < items.length && items[i].classList.contains('feed--tool')) {
-                var tname = extractToolNameFromLog(getFeedItemText(items[i]));
-                if (countMap[tname] === undefined) { countMap[tname] = 0; order.push(tname); }
-                countMap[tname] += 1;
-                i += 1;
-            }
-            for (var oi = 0; oi < order.length; oi += 1) {
-                var nm = order[oi];
-                var n = countMap[nm] || 0;
-                if (n > 0) pushBriefLine(lines, '调用工具 ' + nm + ' ' + n + '次');
-            }
-        } else { i += 1; }
+    const finalComparable = String(agg._processFinalResponseComparable || '');
+    var toolCountMap = {};
+    var toolOrder = [];
+    function flushBriefTools() {
+        if (!toolOrder.length) return;
+        var toolParts = [];
+        for (var oi = 0; oi < toolOrder.length; oi += 1) {
+            var toolName = toolOrder[oi];
+            var toolCount = toolCountMap[toolName] || 0;
+            if (toolCount > 0) toolParts.push(toolName + ' ×' + toolCount);
+        }
+        if (toolParts.length) pushBriefLine(lines, 'Tool calls: ' + toolParts.join(', '));
+        toolCountMap = {};
+        toolOrder = [];
     }
+    items.forEach(function (el) {
+        var raw = getFeedItemText(el);
+        /* 摘要只保留模型 response；reasoning 仍完整保留在展开内容中。 */
+        if (el.classList.contains('feed--llm2')) {
+            flushBriefTools();
+            var responseComparable = getProcessBriefComparableText(el);
+            if (raw && (!finalComparable || responseComparable !== finalComparable)) {
+                pushBriefLine(lines, raw, 'response');
+            }
+        } else if (el.classList.contains('feed--tool')) {
+            var tname = extractToolNameFromLog(raw);
+            if (toolCountMap[tname] === undefined) toolOrder.push(tname);
+            toolCountMap[tname] = (toolCountMap[tname] || 0) + 1;
+        }
+        /* status/reasoning 不进入摘要；工具会在下一个 response 前统一落成一行。 */
+    });
+    flushBriefTools();
     if (lines.length) setBriefRows(brief, lines);
     else {
         var st = body.querySelector('.feed-item.feed--st .feed-chunk-scroller, .feed-item.feed--st .feed-chunk');
         var tSt = st ? st.textContent.trim() : '';
         if (tSt) setBriefRows(brief, [tSt]);
         else {
-            var any = body.querySelector('.feed-chunk-scroller, .feed-chunk');
+            var any = body.querySelector('.feed-item:not(.feed--llm):not(.feed--llm2) .feed-chunk-scroller, .feed-item:not(.feed--llm):not(.feed--llm2) .feed-chunk');
             var tAny = any ? any.textContent.trim() : '';
             setBriefRows(brief, [tAny || '本段过程已折叠']);
         }
     }
+    scheduleProcessAggregateHeightUi(agg);
+}
+
+function syncProcessAggregateHeightUi(agg) {
+    if (!agg) return;
+    var btn = agg.querySelector('.process-aggregate-resize');
+    if (!btn) return;
+    if (!agg.isConnected) {
+        btn.hidden = true;
+        return;
+    }
+    if (!agg.classList.contains('is-collapsed')) {
+        agg.classList.remove('is-height-expanded');
+        agg.classList.remove('has-height-overflow');
+        btn.hidden = true;
+        btn.setAttribute('aria-expanded', 'false');
+        return;
+    }
+    var expanded = agg.classList.contains('is-height-expanded');
+    agg.classList.remove('is-height-expanded');
+    agg.classList.remove('has-height-overflow');
+    var target = agg.querySelector('.process-aggregate-brief');
+    var hasOverflow = !!(target && target.scrollHeight > target.clientHeight + 1);
+    agg.classList.toggle('has-height-overflow', hasOverflow);
+    if (expanded && hasOverflow) agg.classList.add('is-height-expanded');
+    else expanded = false;
+    btn.hidden = !hasOverflow;
+    var label = expanded ? '收起执行过程高度' : '展开执行过程高度';
+    btn.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+    btn.setAttribute('aria-label', label);
+    btn.setAttribute('data-ui-tip', label);
+    var tip = btn._uiHoverTipBound;
+    if (!tip && typeof bindUiHoverTip === 'function') bindUiHoverTip(btn);
+}
+
+function scheduleProcessAggregateHeightUi(agg) {
+    if (!agg || agg.classList.contains('subagent-grid-card')) return;
+    if (agg._processHeightUiRaf) cancelAnimationFrame(agg._processHeightUiRaf);
+    agg._processHeightUiRaf = requestAnimationFrame(function () {
+        agg._processHeightUiRaf = 0;
+        syncProcessAggregateHeightUi(agg);
+    });
+}
+
+function bindProcessAggregateHeightButton(agg) {
+    if (!agg || agg.classList.contains('subagent-grid-card')) return;
+    var btn = agg.querySelector('.process-aggregate-resize');
+    if (!btn) {
+        btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'process-aggregate-resize';
+        btn.hidden = true;
+        btn.innerHTML = '<span class="process-aggregate-chevron" aria-hidden="true"></span>';
+        agg.appendChild(btn);
+    }
+    if (!btn.dataset.bound) {
+        btn.dataset.bound = '1';
+        btn.addEventListener('click', function (e) {
+            e.preventDefault();
+            e.stopPropagation();
+            agg.classList.toggle('is-height-expanded');
+            if (agg.classList.contains('is-collapsed')) updateProcessBrief(agg);
+            requestAnimationFrame(function () {
+                syncProcessAggregateHeightUi(agg);
+                agg.querySelectorAll('.process-aggregate-body .feed-chunk').forEach(refreshFeedChunkOverflow);
+                registerMermaidLazy(agg);
+            });
+        });
+    }
+    var body = agg.querySelector('.process-aggregate-body');
+    if (body && !agg._processHeightMutationObserver && typeof MutationObserver !== 'undefined') {
+        agg._processHeightMutationObserver = new MutationObserver(function () {
+            scheduleProcessAggregateHeightUi(agg);
+        });
+        agg._processHeightMutationObserver.observe(body, {
+            childList: true,
+            characterData: true,
+            subtree: true,
+        });
+    }
+    if (!agg._processHeightResizeObserver && typeof ResizeObserver !== 'undefined') {
+        agg._processHeightResizeObserver = new ResizeObserver(function () {
+            scheduleProcessAggregateHeightUi(agg);
+        });
+        if (body) agg._processHeightResizeObserver.observe(body);
+        var brief = agg.querySelector('.process-aggregate-brief');
+        if (brief) agg._processHeightResizeObserver.observe(brief);
+    }
+    scheduleProcessAggregateHeightUi(agg);
+}
+
+function alignProcessAggregateToViewportTop(agg) {
+    if (!agg || !agg.isConnected) return;
+    var viewport = document.getElementById('chat-container');
+    if (!viewport) return;
+    var viewportRect = viewport.getBoundingClientRect();
+    var aggregateRect = agg.getBoundingClientRect();
+    var targetTop = viewport.scrollTop + aggregateRect.top - viewportRect.top;
+    var maxTop = Math.max(0, viewport.scrollHeight - viewport.clientHeight);
+    targetTop = Math.max(0, Math.min(maxTop, targetTop));
+    if (typeof setScrollTopImmediate === 'function') setScrollTopImmediate(viewport, targetTop);
+    else viewport.scrollTop = targetTop;
 }
 
 function bindProcessAggregate(agg) {
@@ -674,10 +967,12 @@ function bindProcessAggregate(agg) {
         }, { passive: true });
     }
     if (agg.classList.contains('subagent-grid-card')) return;
+    bindProcessAggregateHeightButton(agg);
     const top = agg.querySelector('.process-aggregate-top');
     if (top && !top.dataset.bound) {
         top.dataset.bound = '1';
         top.addEventListener('click', function () {
+            var openingDetail = agg.classList.contains('is-collapsed');
             agg.classList.toggle('is-collapsed');
             const expanded = !agg.classList.contains('is-collapsed');
             top.setAttribute('aria-expanded', expanded ? 'true' : 'false');
@@ -686,8 +981,10 @@ function bindProcessAggregate(agg) {
             } else {
                 requestAnimationFrame(function () {
                     requestAnimationFrame(function () {
+                        syncProcessAggregateHeightUi(agg);
                         agg.querySelectorAll('.process-aggregate-body .feed-chunk').forEach(refreshFeedChunkOverflow);
                         registerMermaidLazy(agg);
+                        if (openingDetail) alignProcessAggregateToViewportTop(agg);
                     });
                 });
             }
@@ -1058,7 +1355,9 @@ function ensureProcessGroup(ctx) {
         + '</span>'
         + '<span class="process-chev" aria-hidden="true">▼</span></div>'
         + '<div class="process-aggregate-brief"></div></div>'
-        + '<div class="process-aggregate-body"></div>';
+        + '<div class="process-aggregate-body"></div>'
+        + '<button type="button" class="process-aggregate-resize" aria-label="展开执行过程高度" aria-expanded="false" data-ui-tip="展开执行过程高度" hidden>'
+        + '<span class="process-aggregate-chevron" aria-hidden="true"></span></button>';
     if (!replayingMessages) {
         if (ctx.runStartedAt) applyRunStartedAtToProcessGroup(wrap, ctx.runStartedAt);
         else {
@@ -1149,6 +1448,7 @@ function scrollToBottom(opts) {
 // 滚动位置存储
 const LS_SCROLL_POSITION_PREFIX = 'myagent-scroll-';
 const LS_SCROLL_ANCHOR_PREFIX = 'myagent-scroll-anchor-';
+const LS_SCROLL_ANCHOR_OFFSET_PREFIX = 'myagent-scroll-anchor-offset-';
 
 function getScrollPositionKey(sessionId) {
     return LS_SCROLL_POSITION_PREFIX + sessionId;
@@ -1156,6 +1456,10 @@ function getScrollPositionKey(sessionId) {
 
 function getScrollAnchorKey(sessionId) {
     return LS_SCROLL_ANCHOR_PREFIX + sessionId;
+}
+
+function getScrollAnchorOffsetKey(sessionId) {
+    return LS_SCROLL_ANCHOR_OFFSET_PREFIX + sessionId;
 }
 
 function saveScrollPosition(sessionId, scrollTop) {
@@ -1170,23 +1474,38 @@ function saveScrollAnchorPosition(sessionId) {
     try {
         if (isNearBottom(chatContainer, STREAM_CHAT_NEAR_BOTTOM_PX)) {
             localStorage.removeItem(getScrollAnchorKey(sessionId));
+            localStorage.removeItem(getScrollAnchorOffsetKey(sessionId));
             return;
         }
         var rect = chatContainer.getBoundingClientRect();
         var wraps = chatContainer.querySelectorAll('.msg-wrap--user[data-event-index]');
         var best = null;
+        var bestWrap = null;
         for (var i = 0; i < wraps.length; i += 1) {
             var wr = wraps[i];
             var ei = Number(wr.getAttribute('data-event-index'));
             if (!Number.isFinite(ei)) continue;
             var top = wr.getBoundingClientRect().top;
-            if (top <= rect.top + 8) best = ei;
+            if (top <= rect.top + 8) {
+                best = ei;
+                bestWrap = wr;
+            }
             else if (best == null) {
                 best = ei;
+                bestWrap = wr;
                 break;
             }
         }
-        if (best != null) localStorage.setItem(getScrollAnchorKey(sessionId), String(best));
+        if (best != null && bestWrap) {
+            localStorage.setItem(getScrollAnchorKey(sessionId), String(best));
+            localStorage.setItem(
+                getScrollAnchorOffsetKey(sessionId),
+                String(Math.round(bestWrap.getBoundingClientRect().top - rect.top))
+            );
+        } else {
+            localStorage.removeItem(getScrollAnchorKey(sessionId));
+            localStorage.removeItem(getScrollAnchorOffsetKey(sessionId));
+        }
     } catch (e) { /* ignore */ }
 }
 
@@ -1194,6 +1513,16 @@ function getSavedScrollAnchorPosition(sessionId) {
     if (!sessionId) return null;
     try {
         var saved = localStorage.getItem(getScrollAnchorKey(sessionId));
+        if (saved == null || saved === '') return null;
+        var n = Number(saved);
+        return Number.isFinite(n) ? n : null;
+    } catch (e) { return null; }
+}
+
+function getSavedScrollAnchorOffset(sessionId) {
+    if (!sessionId) return null;
+    try {
+        var saved = localStorage.getItem(getScrollAnchorOffsetKey(sessionId));
         if (saved == null || saved === '') return null;
         var n = Number(saved);
         return Number.isFinite(n) ? n : null;
@@ -1222,13 +1551,15 @@ function clampChatScrollTop(y) {
 
 /**
  * @param {string} sessionId
- * @param {'saved-or-bottom'|'bottom'} mode — saved-or-bottom：有离开记录则恢复，否则置底；bottom：始终置底
+ * @param {'saved-or-bottom'|'saved-smooth-or-bottom'|'bottom'} mode
  */
 function applyChatScrollAfterHistoryLoad(sessionId, mode) {
     if (!chatContainer || !sessionId) return;
-    
-    // 如果会话正在运行，执行过程块默认置底
-    if (isSessionRunning(sessionId)) {
+    var running = isSessionRunning(sessionId)
+        || (typeof isServerStreamActive === 'function' && isServerStreamActive(sessionId));
+
+    // Running sessions always show the newest generated content.
+    if (running) {
         var run = getSessionRunState(sessionId);
         if (run && run.ctx && run.ctx.stream) {
             var agg = run.ctx.stream.querySelector('.process-aggregate:last-of-type');
@@ -1242,11 +1573,18 @@ function applyChatScrollAfterHistoryLoad(sessionId, mode) {
                 }
             }
         }
+        streamChatNearBottom = true;
+        streamProcNearBottom = true;
+        liveAutoFollow = true;
+        scrollToBottom();
+        return;
     }
-    
-    if (mode === 'saved-or-bottom') {
+
+    if (mode === 'saved-or-bottom' || mode === 'saved-smooth-or-bottom') {
+        var smoothRestore = mode === 'saved-smooth-or-bottom';
         var savedPosition = getSavedScrollPosition(sessionId);
         var savedAnchor = getSavedScrollAnchorPosition(sessionId);
+        var savedAnchorOffset = getSavedScrollAnchorOffset(sessionId);
         if (savedAnchor != null && typeof scrollToUserTurnOrLoadOlder === 'function') {
             requestAnimationFrame(function () {
                 if (sessionId !== currentSessionId) return;
@@ -1254,10 +1592,17 @@ function applyChatScrollAfterHistoryLoad(sessionId, mode) {
                     silent: true,
                     allowFullReload: false,
                     maxOlderLoads: 2,
+                    instant: !smoothRestore,
+                    viewportOffset: savedAnchorOffset,
                 }).then(function (ok) {
                     if (ok || sessionId !== currentSessionId || !chatContainer) return;
-                    if (savedPosition !== null && savedPosition > 0) {
-                        chatContainer.scrollTop = clampChatScrollTop(savedPosition);
+                    if (savedPosition !== null && Number.isFinite(Number(savedPosition))) {
+                        var fallbackTop = clampChatScrollTop(Number(savedPosition));
+                        if (smoothRestore && typeof chatContainer.scrollTo === 'function') {
+                            chatContainer.scrollTo({ top: fallbackTop, behavior: 'smooth' });
+                        } else {
+                            setScrollTopImmediate(chatContainer, fallbackTop);
+                        }
                         streamChatNearBottom = isNearBottom(chatContainer, STREAM_CHAT_NEAR_BOTTOM_PX);
                         liveAutoFollow = streamChatNearBottom;
                     } else {
@@ -1270,9 +1615,13 @@ function applyChatScrollAfterHistoryLoad(sessionId, mode) {
             liveAutoFollow = false;
             return;
         }
-        if (savedPosition !== null && savedPosition > 0) {
-            // 恢复保存的滚动位置
-            chatContainer.scrollTop = savedPosition;
+        if (savedPosition !== null && Number.isFinite(Number(savedPosition))) {
+            var targetTop = clampChatScrollTop(Number(savedPosition));
+            if (smoothRestore && typeof chatContainer.scrollTo === 'function') {
+                chatContainer.scrollTo({ top: targetTop, behavior: 'smooth' });
+            } else {
+                setScrollTopImmediate(chatContainer, targetTop);
+            }
             streamChatNearBottom = isNearBottom(chatContainer, STREAM_CHAT_NEAR_BOTTOM_PX);
             streamProcNearBottom = true;
             liveAutoFollow = streamChatNearBottom;
@@ -1280,11 +1629,10 @@ function applyChatScrollAfterHistoryLoad(sessionId, mode) {
         }
     }
     
-    // 默认行为：滚动到底部
     streamChatNearBottom = true;
     streamProcNearBottom = true;
     liveAutoFollow = true;
-    scrollToBottom({ smooth: mode === 'saved-or-bottom' });
+    scrollToBottom();
 }
 
 window.addEventListener('beforeunload', function () {
@@ -1311,11 +1659,11 @@ const WELCOME_HTML = `<div class="welcome" role="status"><div class="welcome-ico
 
 function historyLoadScrollsToBottom(sessionId, mode) {
     if (mode === 'bottom') return true;
-    if (mode === 'saved-or-bottom') {
+    if (mode === 'saved-or-bottom' || mode === 'saved-smooth-or-bottom') {
         var savedAnchor = getSavedScrollAnchorPosition(sessionId);
         if (savedAnchor != null) return false;
         var savedPosition = getSavedScrollPosition(sessionId);
-        if (savedPosition !== null && savedPosition > 0) return false;
+        if (savedPosition !== null && Number.isFinite(Number(savedPosition))) return false;
     }
     return true;
 }
@@ -1614,11 +1962,12 @@ function updateSessionTitle() {
     initUiHoverTips(sub);
 }
 
-function ensureMermaidInitialized() {
-    if (mermaidInitialized || !window.mermaid) return;
+function ensureMermaidInitialized(api) {
+    var mermaidApi = api || window.mermaid;
+    if (mermaidInitialized || !mermaidApi) return;
     try {
         var light = document.documentElement.classList.contains('theme-light');
-        mermaid.initialize({
+        mermaidApi.initialize({
             startOnLoad: false,
             theme: light ? 'neutral' : 'dark',
             securityLevel: 'loose',
@@ -2501,24 +2850,41 @@ function scheduleMermaidRun(root) {
 }
 
 async function runMermaidElementOnce(el) {
-    if (!el || !window.mermaid || !el.isConnected) return;
-    if (el.getAttribute('data-processed') === 'true' || el.classList.contains('mermaid-error')) return;
-    ensureMermaidInitialized();
-    var cleaned = normalizeMermaidSource(el.textContent || '');
-    if (!cleaned) return;
-    el.textContent = cleaned;
-    if (!el.id) el.id = 'mermaid-embed-' + (++mermaidIdSeq);
+    if (!el || !el.isConnected) return;
+    if (el.getAttribute('data-processed') === 'true'
+        || el.getAttribute('data-mermaid-loading') === 'true'
+        || el.classList.contains('mermaid-error')) return;
+    el.setAttribute('data-mermaid-loading', 'true');
     try {
-        await mermaid.parse(cleaned);
-    } catch (errParse) {
-        showMermaidRenderError(el, cleaned, errParse);
-        return;
-    }
-    try {
-        await mermaid.run({ nodes: [el], suppressErrors: false });
-        enhanceMermaidZoom(el);
-    } catch (errRun) {
-        showMermaidRenderError(el, cleaned, errRun);
+        var mermaidApi = window.mermaid;
+        if (!mermaidApi) {
+            if (typeof globalThis.loadMyAgentMermaid !== 'function') {
+                throw new Error('Mermaid renderer is unavailable');
+            }
+            mermaidApi = await globalThis.loadMyAgentMermaid();
+        }
+        if (!el.isConnected) return;
+        ensureMermaidInitialized(mermaidApi);
+        var cleaned = normalizeMermaidSource(el.textContent || '');
+        if (!cleaned) return;
+        el.textContent = cleaned;
+        if (!el.id) el.id = 'mermaid-embed-' + (++mermaidIdSeq);
+        try {
+            await mermaidApi.parse(cleaned);
+        } catch (errParse) {
+            showMermaidRenderError(el, cleaned, errParse);
+            return;
+        }
+        try {
+            await mermaidApi.run({ nodes: [el], suppressErrors: false });
+            enhanceMermaidZoom(el);
+        } catch (errRun) {
+            showMermaidRenderError(el, cleaned, errRun);
+        }
+    } catch (errLoad) {
+        showMermaidRenderError(el, normalizeMermaidSource(el.textContent || ''), errLoad);
+    } finally {
+        el.removeAttribute('data-mermaid-loading');
     }
 }
 
@@ -2540,8 +2906,7 @@ function ensureMermaidIoObserver() {
 }
 
 function registerMermaidLazy(root) {
-    if (!root || !window.mermaid) return;
-    ensureMermaidInitialized();
+    if (!root) return;
     var nodes = Array.from(root.querySelectorAll('.mermaid:not([data-processed]):not(.mermaid-error)'));
     if (!nodes.length) return;
     var obs = ensureMermaidIoObserver();
@@ -2806,13 +3171,21 @@ function escapeMarkdownSingleTildes(text) {
 
 function renderMarkdown(text) {
     if (!text) return '';
-    if (typeof marked !== 'undefined' && !markedOptionsApplied) {
+    var markdownParser = globalThis.marked;
+    if (!markdownParser || typeof markdownParser.parse !== 'function') {
+        return '<pre class="markdown-fallback">' + escapeHtml(String(text)) + '</pre>';
+    }
+    if (!markedOptionsApplied) {
         markedOptionsApplied = true;
         try {
-            marked.setOptions({ breaks: true, mangle: false, headerIds: false });
+            markdownParser.setOptions({ breaks: true, mangle: false, headerIds: false });
         } catch (e) { /* ignore */ }
     }
-    return marked.parse(escapeMarkdownSingleTildes(encodeMarkdownWorkspacePathLinks(text)), { mangle: false, headerIds: false });
+    try {
+        return markdownParser.parse(escapeMarkdownSingleTildes(encodeMarkdownWorkspacePathLinks(text)), { mangle: false, headerIds: false });
+    } catch (e) {
+        return '<pre class="markdown-fallback">' + escapeHtml(String(text)) + '</pre>';
+    }
 }
 
 const THINK_OPEN_TAG = '<think>';
@@ -2978,21 +3351,26 @@ const LOG_TRUNCATE_TAIL_LINES = LOG_TRUNCATE_KEEP_LINES;
 const LOG_TRUNCATE_HEAD_CHARS = 12000;
 const LOG_TRUNCATE_TAIL_CHARS = 12000;
 
-function toolCallDraftKey(parsed) {
+function reactGenerationForContext(ctx) {
+    return Math.max(0, Math.floor(Number(ctx && ctx.reactGeneration) || 0));
+}
+
+function toolCallDraftKey(ctx, parsed) {
+    var generation = reactGenerationForContext(ctx);
     var ri = parsed && parsed.react_iter != null ? String(parsed.react_iter) : '';
     var idx = parsed && parsed.tool_call_index != null ? String(parsed.tool_call_index) : (parsed && parsed.index != null ? String(parsed.index) : '0');
-    return ri + ':' + idx;
+    return generation + ':' + ri + ':' + idx;
 }
 
 function findToolDraftRow(ctx, parsed) {
-    var key = toolCallDraftKey(parsed);
+    var key = toolCallDraftKey(ctx, parsed);
     if (!key) return null;
     var body = getProcessBody(ctx);
     if (!body || typeof CSS === 'undefined' || !CSS.escape) return null;
     try { return body.querySelector('.feed-item.feed--tool[data-tool-draft-key="' + CSS.escape(key) + '"]'); } catch (e) { return null; }
 }
 
-function deltaDedupeKey(parsed, scope) {
+function deltaDedupeKey(ctx, parsed, scope) {
     if (!parsed || parsed.delta_seq == null) return '';
     var ds = Number(parsed.delta_seq);
     if (!Number.isFinite(ds) || ds <= 0) return '';
@@ -3000,12 +3378,12 @@ function deltaDedupeKey(parsed, scope) {
     var ri = parsed.react_iter != null ? String(parsed.react_iter) : '';
     var part = String(scope || parsed.type || '');
     var id = String(parsed.tool_call_id || parsed.id || parsed.index || parsed.tool_call_index || '');
-    return part + ':' + (Number.isFinite(ss) ? Math.floor(ss) : 0) + ':' + ri + ':' + id + ':' + Math.floor(ds);
+    return reactGenerationForContext(ctx) + ':' + part + ':' + (Number.isFinite(ss) ? Math.floor(ss) : 0) + ':' + ri + ':' + id + ':' + Math.floor(ds);
 }
 
 function hasSeenStreamDelta(ctx, parsed, scope) {
     if (!ctx) return false;
-    var key = deltaDedupeKey(parsed, scope);
+    var key = deltaDedupeKey(ctx, parsed, scope);
     if (!key) return false;
     if (!ctx._seenStreamDeltaKeys) ctx._seenStreamDeltaKeys = new Set();
     if (ctx._seenStreamDeltaKeys.has(key)) return true;
@@ -3040,7 +3418,7 @@ function removeTemporaryStatus(ctx) {
 
 function appendToolCallDelta(ctx, parsed, runSessionId) {
     if (hasSeenStreamDelta(ctx, parsed, 'tool_call_delta')) return;
-    var key = toolCallDraftKey(parsed);
+    var key = toolCallDraftKey(ctx, parsed);
     if (!key) return;
     var row = findToolDraftRow(ctx, parsed);
     if (!row) {
@@ -3180,7 +3558,7 @@ function appendToolPendingRow(ctx, parsed, runSessionId) {
     var sc = createProcessFeedRow(ctx, 'tool-call', line, so, runSessionId, parsed.tool_call_id);
     var row = sc && sc.closest ? sc.closest('.feed-item') : null;
     if (row) {
-        row.setAttribute('data-tool-draft-key', toolCallDraftKey(parsed));
+        row.setAttribute('data-tool-draft-key', toolCallDraftKey(ctx, parsed));
         row.setAttribute('data-tool-pending', '1');
         row.dataset.commandPreview = parsed.command_preview != null ? String(parsed.command_preview) : '';
         var chunk = row.querySelector('.feed-chunk');
@@ -3270,6 +3648,41 @@ function truncateLogTextForUi(raw) {
     return text;
 }
 
+function reactFeedPhase(type) {
+    if (type === 'llm-reasoning') return 0;
+    if (type === 'llm-response') return 1;
+    if (type === 'tool-call') return 2;
+    return null;
+}
+
+function insertReactOrderedFeedRow(body, row, type, reactIter, reactGeneration) {
+    var phase = reactFeedPhase(type);
+    var iter = Number(reactIter);
+    if (phase == null || !Number.isFinite(iter)) {
+        body.appendChild(row);
+        return;
+    }
+    iter = Math.max(1, Math.floor(iter));
+    var generation = Math.max(0, Math.floor(Number(reactGeneration) || 0));
+    row.setAttribute('data-react-iter', String(iter));
+    row.setAttribute('data-react-generation', String(generation));
+    var rows = body.querySelectorAll('.feed-item[data-react-iter]');
+    for (var i = 0; i < rows.length; i += 1) {
+        var existing = rows[i];
+        var existingPhase = reactFeedPhase(existing.getAttribute('data-log-type'));
+        var existingIter = Number(existing.getAttribute('data-react-iter'));
+        var existingGeneration = Math.max(0, Number(existing.getAttribute('data-react-generation')) || 0);
+        if (existingPhase == null || !Number.isFinite(existingIter)) continue;
+        if (existingGeneration > generation
+            || (existingGeneration === generation
+                && (existingIter > iter || (existingIter === iter && existingPhase > phase)))) {
+            body.insertBefore(row, existing);
+            return;
+        }
+    }
+    body.appendChild(row);
+}
+
 function createProcessFeedRow(ctx, type, initialText, streamOpts, runSessionId, toolCallIdOpt) {
     streamOpts = streamOpts || {};
     if (type == null) type = 'log-entry';
@@ -3280,6 +3693,7 @@ function createProcessFeedRow(ctx, type, initialText, streamOpts, runSessionId, 
     const row = document.createElement('div');
     row.className = 'feed-item ' + meta.c;
     row.setAttribute('data-log-type', type);
+    row.setAttribute('data-react-generation', String(reactGenerationForContext(ctx)));
     if (toolCallIdOpt != null && String(toolCallIdOpt) !== '') row.setAttribute('data-tool-call-id', String(toolCallIdOpt));
     row.innerHTML = '<div class="feed-row">'
         + '<span class="feed-label">' + meta.label + '</span>'
@@ -3289,6 +3703,7 @@ function createProcessFeedRow(ctx, type, initialText, streamOpts, runSessionId, 
     const sc = row.querySelector('.feed-chunk-scroller');
     var txtForUi = initialText;
     if (type === 'llm-reasoning' || type === 'llm-response') txtForUi = trimSurroundingBlankLines(txtForUi);
+    if (type === 'llm-response') row._processBriefRawText = String(txtForUi || '');
     sc.textContent = truncateLogTextForUi(txtForUi);
     if (streamOpts.streaming && (type === 'llm-reasoning' || type === 'llm-response')) {
         chunk.classList.add('is-streaming');
@@ -3296,7 +3711,7 @@ function createProcessFeedRow(ctx, type, initialText, streamOpts, runSessionId, 
     }
     bindFeedChunkInteraction(chunk);
     bindFeedChunkScrollChain(sc);
-    body.appendChild(row);
+    insertReactOrderedFeedRow(body, row, type, streamOpts.reactIter, reactGenerationForContext(ctx));
     if (typeof translateUiNode === 'function') translateUiNode(row);
     if (ctx && ctx.currentTurn && body.classList && body.classList.contains('subagent-turn-process')) {
         markSubagentTurnHasProcess(ctx.currentTurn);
@@ -3310,7 +3725,6 @@ function createProcessFeedRow(ctx, type, initialText, streamOpts, runSessionId, 
     const agg = body.closest('.process-aggregate');
     if (streamOpts.reactIter != null && Number.isFinite(Number(streamOpts.reactIter))) {
         var ri = Math.max(1, Math.floor(Number(streamOpts.reactIter)));
-        row.setAttribute('data-react-iter', String(ri));
         bumpAggregateMaxReactIter(agg, ri);
     }
     if (agg && agg.classList.contains('is-collapsed')) {
@@ -3402,12 +3816,14 @@ function upsertLlmFeedRow(ctx, content, logType, runSessionId, reactIter) {
         content = split.content;
     }
     var ri = reactIter != null && Number.isFinite(Number(reactIter)) ? Math.max(1, Math.floor(Number(reactIter))) : null;
-    var txt = truncateLogTextForUi(trimSurroundingBlankLines(String(content || '')));
+    var rawText = trimSurroundingBlankLines(String(content || ''));
+    var txt = truncateLogTextForUi(rawText);
     if (!txt.trim()) return null;
     var existing = findExistingLlmFeedRow(ctx, logType, ri);
     if (existing) {
         var sc = existing.querySelector('.feed-chunk-scroller');
         var ch = existing.querySelector('.feed-chunk');
+        if (logType === 'llm-response') existing._processBriefRawText = rawText;
         if (sc) sc.textContent = txt;
         if (ch) {
             ch.classList.remove('is-streaming');
@@ -3432,6 +3848,7 @@ function findExistingLlmFeedRow(ctx, logType, reactIter, opts) {
     if (!ctx) return null;
     opts = opts || {};
     var selector = '.feed-item[data-log-type="' + logType + '"]';
+    selector += '[data-react-generation="' + reactGenerationForContext(ctx) + '"]';
     if (reactIter != null) selector += '[data-react-iter="' + reactIter + '"]';
     else selector += '[data-llm-live-row="1"]';
     if (opts.liveOnly) selector += '[data-llm-live-row="1"]';
@@ -3454,6 +3871,7 @@ function findExistingLlmFeedRow(ctx, logType, reactIter, opts) {
 function removeDuplicateLlmFeedRows(ctx, keepRow, logType, reactIter) {
     if (!ctx || !ctx.stream || !ctx.stream.querySelectorAll || !keepRow) return;
     var selector = '.feed-item[data-log-type="' + logType + '"]';
+    selector += '[data-react-generation="' + reactGenerationForContext(ctx) + '"]';
     if (reactIter != null) selector += '[data-react-iter="' + reactIter + '"]';
     var rows = ctx.stream.querySelectorAll(selector);
     if (!rows || rows.length <= 1) return;
@@ -3623,11 +4041,14 @@ function appendMessage(ctx, role, content, meta, runSessionId) {
     attachMessageToolbar(wrap, role);
     (ctx.stream || chatContainer).appendChild(wrap);
     if (role === 'assistant') {
-        if (ctx.currentProcessGroup && ctx.currentProcessGroup.isConnected) {
-            ctx.currentProcessGroup.classList.add('is-collapsed');
-            const ttop = ctx.currentProcessGroup.querySelector('.process-aggregate-top');
-            if (ttop) ttop.setAttribute('aria-expanded', 'false');
-            updateProcessBrief(ctx.currentProcessGroup);
+        if (ctx.currentProcessGroup) {
+            ctx.currentProcessGroup._processFinalResponseComparable = normalizeProcessBriefComparableText(displayStr);
+            if (ctx.currentProcessGroup.isConnected) {
+                ctx.currentProcessGroup.classList.add('is-collapsed');
+                const ttop = ctx.currentProcessGroup.querySelector('.process-aggregate-top');
+                if (ttop) ttop.setAttribute('aria-expanded', 'false');
+                updateProcessBrief(ctx.currentProcessGroup);
+            }
         }
         sealProcessGroup(ctx);
     }

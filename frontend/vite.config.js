@@ -11,6 +11,7 @@ export default defineConfig({
   build: {
     outDir: appRoot,
     emptyOutDir: true,
+    reportCompressedSize: false,
     rollupOptions: {
       input: {
         main: resolve(__dirname, 'index.html'),

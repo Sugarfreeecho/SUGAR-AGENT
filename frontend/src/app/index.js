@@ -1,3 +1,4 @@
+import { marked } from 'marked';
 import i18nSource from './modules/i18n.js?raw';
 import settingsSource from './modules/settings.js?raw';
 import sharedStateAndDialogsSource from './modules/shared-state-and-dialogs.js?raw';
@@ -30,6 +31,21 @@ import eventDispatchSource from './modules/event-dispatch.js?raw';
 import sessionManagementSource from './modules/session-management.js?raw';
 import sseHandlingSource from './modules/sse-handling.js?raw';
 import layoutPanelsSource from './modules/layout-panels.js?raw';
+
+globalThis.marked = marked;
+
+let mermaidImportPromise = null;
+globalThis.loadMyAgentMermaid = function loadMyAgentMermaid() {
+    if (globalThis.mermaid) return Promise.resolve(globalThis.mermaid);
+    if (!mermaidImportPromise) {
+        mermaidImportPromise = import('mermaid').then(function (module) {
+            const api = module.default || module.mermaid || module;
+            globalThis.mermaid = api;
+            return api;
+        });
+    }
+    return mermaidImportPromise;
+};
 
 const uiSources = [
     i18nSource,

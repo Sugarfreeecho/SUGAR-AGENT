@@ -613,7 +613,7 @@ function ensureHistorySentinel(streamEl) {
     var btn = document.createElement('button');
     btn.type = 'button';
     btn.className = 'history-load-older-btn';
-    btn.textContent = '更早 ' + HISTORY_DIALOGUES_PER_PAGE + ' 轮对话';
+    btn.textContent = '加载更早记录';
     btn.addEventListener('click', function () { loadOlderHistoryChunk(); });
     el.appendChild(btn);
     streamEl.insertBefore(el, streamEl.firstChild);
@@ -636,12 +636,12 @@ function updateHistorySentinelVisibility() {
     if (!ph || !ph.has_older || ph.sessionId !== currentSessionId) {
         strip.hidden = true;
         btn.disabled = false;
-        btn.textContent = '更早 ' + HISTORY_DIALOGUES_PER_PAGE + ' 轮对话';
+        btn.textContent = '加载更早记录';
         return;
     }
     strip.hidden = false;
     btn.disabled = historyOlderLoading;
-    btn.textContent = historyOlderLoading ? '加载中…' : ('更早 ' + HISTORY_DIALOGUES_PER_PAGE + ' 轮对话');
+    btn.textContent = historyOlderLoading ? '加载中…' : '加载更早记录';
 }
 
 function resetSessionHistoryPaging() {
@@ -670,7 +670,10 @@ async function loadOlderHistoryChunk(opts) {
     var loadedOlder = false;
     try {
         var pageTurns = Math.max(1, Math.min(Number(opts.turns) || HISTORY_DIALOGUES_PER_PAGE, 50));
-        var url = '/sessions/' + encodeURIComponent(sid) + '/messages?turns=' + encodeURIComponent(String(pageTurns)) + '&before_index=' + ph.range_start;
+        var url = '/sessions/' + encodeURIComponent(sid)
+            + '/messages?turns=' + encodeURIComponent(String(pageTurns))
+            + '&before_index=' + ph.range_start
+            + '&event_budget=' + encodeURIComponent(String(HISTORY_EVENT_BUDGET));
         var response = await fetch(url);
         var data = await response.json();
         if (!response.ok || !data || typeof data !== 'object') return;
@@ -744,6 +747,12 @@ async function loadHistoryWindowAroundEventIndex(sessionId, eventIndex, opts) {
     var sid = String(sessionId || '');
     var ei = Number(eventIndex);
     if (!sid || !Number.isFinite(ei)) return false;
+    // A running session's ctx.stream is the append target for live SSE. Never
+    // replace that DOM with an isolated history window or subsequent output
+    // will be inserted in the middle of history. Older pages are prepended by
+    // scrollToUserTurnOrLoadOlder instead.
+    if (isSessionRunning(sid)
+        || (typeof isServerStreamActive === 'function' && isServerStreamActive(sid))) return false;
     var prevReplaying = replayingMessages;
     try {
         var turns = Math.max(1, Math.min(Number(opts.turns) || 50, 50));
@@ -938,14 +947,26 @@ function restoreCachedSessionStream(enteringId) {
 
 function restoreCachedSessionScrollPosition(sessionId) {
     if (!chatContainer || !sessionId) return;
+    if (sessionId !== currentSessionId) return;
+    var running = isSessionRunning(sessionId)
+        || (typeof isServerStreamActive === 'function' && isServerStreamActive(sessionId));
+    var saved = (typeof getSavedScrollPosition === 'function') ? getSavedScrollPosition(sessionId) : null;
+    if (running) {
+        setScrollTopImmediate(chatContainer, chatContainer.scrollHeight);
+        streamChatNearBottom = true;
+        streamProcNearBottom = true;
+        liveAutoFollow = true;
+    } else if (saved !== null && Number.isFinite(Number(saved))) {
+        setScrollTopImmediate(chatContainer, Number(saved));
+    } else {
+        setScrollTopImmediate(chatContainer, chatContainer.scrollHeight);
+    }
+    refreshLiveAutoFollowPins();
+    scheduleTocActiveUpdate();
     requestAnimationFrame(function () {
         if (sessionId !== currentSessionId) return;
-        var saved = (typeof getSavedScrollPosition === 'function') ? getSavedScrollPosition(sessionId) : null;
-        if (saved !== null && Number.isFinite(Number(saved)) && Number(saved) > 0) {
-            setScrollTopImmediate(chatContainer, Number(saved));
-        } else {
-            chatContainer.scrollTop = chatContainer.scrollHeight;
-        }
+        if (running) setScrollTopImmediate(chatContainer, chatContainer.scrollHeight);
+        else if (saved !== null && Number.isFinite(Number(saved))) setScrollTopImmediate(chatContainer, Number(saved));
         refreshLiveAutoFollowPins();
         scheduleTocActiveUpdate();
     });
@@ -1002,6 +1023,7 @@ function newDomContext(streamEl) {
         progressStream: {},
         keyContextStreamFilter: { phase: 'seek', carry: '' },
         runStartedAt: null,
+        reactGeneration: 0,
         _seenStreamDeltaKeys: new Set(),
         llm: newLlmState(),
     };
@@ -1205,7 +1227,14 @@ function flushLlmDeltaText(ctx) {
     }
     l.llmPendingReasoningDelta = '';
     if (l.llmPendingResponseDelta && l.llmStreamResponseScroller) {
-        var rsp = trimSurroundingBlankLines((l.llmStreamResponseScroller.textContent || '') + l.llmPendingResponseDelta);
+        var responseRow = l.llmStreamResponseScroller.closest
+            ? l.llmStreamResponseScroller.closest('.feed-item')
+            : null;
+        var responseHead = responseRow && typeof responseRow._processBriefRawText === 'string'
+            ? responseRow._processBriefRawText
+            : (l.llmStreamResponseScroller.textContent || '');
+        var rsp = trimSurroundingBlankLines(responseHead + l.llmPendingResponseDelta);
+        if (responseRow) responseRow._processBriefRawText = rsp;
         l.llmStreamResponseScroller.textContent = truncateLogTextForUi(rsp);
     }
     l.llmPendingResponseDelta = '';
@@ -1502,7 +1531,12 @@ async function scrollToUserTurnOrLoadOlder(eventIndex, opts) {
     var ei = Number(eventIndex);
     if (!Number.isFinite(ei)) return false;
     var silent = !!opts.silent;
-    var allowFullReload = opts.allowFullReload !== false && !silent;
+    var scrollBehavior = opts.instant ? 'auto' : 'smooth';
+    var viewportOffset = Number(opts.viewportOffset);
+    var hasViewportOffset = Number.isFinite(viewportOffset);
+    var liveHistoryOwner = isSessionRunning(currentSessionId)
+        || (typeof isServerStreamActive === 'function' && isServerStreamActive(currentSessionId));
+    var allowFullReload = opts.allowFullReload !== false && !silent && !liveHistoryOwner;
     var maxOlderLoads = Number.isFinite(Number(opts.maxOlderLoads))
         ? Math.max(0, Number(opts.maxOlderLoads))
         : 120;
@@ -1520,14 +1554,28 @@ async function scrollToUserTurnOrLoadOlder(eventIndex, opts) {
         return stream.querySelector('.msg-wrap--user[data-event-index="' + ei + '"]')
             || stream.querySelector('#user-msg-' + ei);
     }
+    function scrollToWrap(wrap) {
+        if (!wrap) return;
+        if (!hasViewportOffset || !chatContainer) {
+            wrap.scrollIntoView({ behavior: scrollBehavior, block: 'start' });
+            return;
+        }
+        var viewportRect = chatContainer.getBoundingClientRect();
+        var wrapRect = wrap.getBoundingClientRect();
+        var maxTop = Math.max(0, chatContainer.scrollHeight - chatContainer.clientHeight);
+        var targetTop = chatContainer.scrollTop + wrapRect.top - viewportRect.top - viewportOffset;
+        targetTop = Math.max(0, Math.min(maxTop, targetTop));
+        if (scrollBehavior === 'smooth' && typeof chatContainer.scrollTo === 'function') {
+            chatContainer.scrollTo({ top: targetTop, behavior: 'smooth' });
+        } else {
+            setScrollTopImmediate(chatContainer, targetTop);
+        }
+    }
     async function loadFullHistoryForTarget(sid) {
         if (!allowFullReload) return;
         if (sid !== currentSessionId || typeof loadSessionMessages !== 'function') return;
         try {
-            await loadSessionMessages(sid, 'saved-or-bottom', {
-                full: true,
-                allowDuringRun: typeof isServerStreamActive === 'function' && isServerStreamActive(sid),
-            });
+            await loadSessionMessages(sid, 'saved-or-bottom', { full: true });
         } catch (e) {
             console.error('reload full history for toc target failed:', e);
         }
@@ -1536,7 +1584,7 @@ async function scrollToUserTurnOrLoadOlder(eventIndex, opts) {
     try {
         var wrap = findWrap();
         if (wrap) {
-            wrap.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            scrollToWrap(wrap);
             return true;
         }
         var sid = currentSessionId;
@@ -1545,7 +1593,7 @@ async function scrollToUserTurnOrLoadOlder(eventIndex, opts) {
             if (loadedTargetWindow && sid === currentSessionId) {
                 wrap = findWrap();
                 if (wrap) {
-                    wrap.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                    scrollToWrap(wrap);
                     return true;
                 }
             }
@@ -1557,7 +1605,7 @@ async function scrollToUserTurnOrLoadOlder(eventIndex, opts) {
             safety += 1;
             wrap = findWrap();
             if (wrap) {
-                wrap.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                scrollToWrap(wrap);
                 return true;
             }
             var ph = sessionHistoryPaging;
@@ -1583,7 +1631,7 @@ async function scrollToUserTurnOrLoadOlder(eventIndex, opts) {
         }
         wrap = findWrap();
         if (wrap) {
-            wrap.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            scrollToWrap(wrap);
             return true;
         }
         if (allowFullReload && sid === currentSessionId && pagingCoveredTarget) {
@@ -1591,12 +1639,12 @@ async function scrollToUserTurnOrLoadOlder(eventIndex, opts) {
             if (sid !== currentSessionId) return false;
             wrap = findWrap();
             if (wrap) {
-                wrap.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                wrap.scrollIntoView({ behavior: scrollBehavior, block: 'start' });
                 return true;
             }
             rebuildToc();
         }
-        if (wrap) wrap.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        if (wrap) wrap.scrollIntoView({ behavior: scrollBehavior, block: 'start' });
         else if (!silent) {
             showUiAlert({
                 title: '无法定位该条',

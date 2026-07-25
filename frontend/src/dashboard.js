@@ -6,6 +6,9 @@ let inflight = null;
 let selectedRequestKey = '__total__';
 const chartScrollState = new Map();
 const chartLegendSelection = new Map();
+const CHART_POINT_LIMIT = 300;
+const REFRESH_DELAY_MS = 2000;
+let refreshTimer = null;
 const PHASE_DEFS=[
   ['pre_api','API 发送前准备'],['api_send','API 发送'],['first_token','首 token'],
   ['llm_output','LLM 输出'],['tool_execution','工具执行'],['round_postprocess','本轮后处理'],
@@ -35,6 +38,16 @@ function flatten(data, sessionId='') {
   });
   rows.sort((a,b)=>String(a.req.started_at||a.run.started_at||'').localeCompare(String(b.req.started_at||b.run.started_at||'')));
   return rows;
+}
+
+function sampleChartRows(rows) {
+  if (rows.length <= CHART_POINT_LIMIT) return rows;
+  const sampled=[];
+  for(let i=0;i<CHART_POINT_LIMIT;i++){
+    const index=Math.round(i*(rows.length-1)/(CHART_POINT_LIMIT-1));
+    sampled.push(rows[index]);
+  }
+  return sampled;
 }
 
 function lineChart(target, rows, series, defaultUnit='ms') {
@@ -68,22 +81,23 @@ function formatBytes(value){const n=num(value);if(n>=1048576)return(n/1048576).t
 
 function renderCharts(rows){
   let cumulativeInput=0,cumulativeOutput=0;
-  const cumulativeRows=rows.map(row=>{
+  const cumulativeRows=sampleChartRows(rows.map(row=>{
     cumulativeInput+=num((row.req.usage||{}).prompt_tokens||(row.req.context||{}).estimated_tokens);
     cumulativeOutput+=num((row.req.usage||{}).completion_tokens);
     return Object.assign({},row,{cumulativeInput,cumulativeOutput});
-  });
+  }));
+  const chartRows=sampleChartRows(rows);
   lineChart('api-chart',cumulativeRows,[
     {name:'累计输入 token',value:r=>r.cumulativeInput},
     {name:'累计输出 token',value:r=>r.cumulativeOutput},
     {name:'上下文长度',value:r=>num((r.req.context||{}).estimated_tokens)},
   ],'');
-  lineChart('phase-chart',rows,PHASE_DEFS.map(([key,label])=>({name:label,value:r=>num(phaseData(r.req,key).total_ms)})));
+  lineChart('phase-chart',chartRows,PHASE_DEFS.map(([key,label])=>({name:label,value:r=>num(phaseData(r.req,key).total_ms)})));
   const toolMode=(document.getElementById('tool-chart-mode')||{}).value||'count',toolNames=[];
   rows.forEach(row=>(row.req.tools||[]).forEach(tool=>{const name=String(tool.tool||'tool');if(!toolNames.includes(name))toolNames.push(name);}));
-  const toolTotals={},toolRows=rows.map(row=>{(row.req.tools||[]).forEach(tool=>{const name=String(tool.tool||'tool');toolTotals[name]=(toolTotals[name]||0)+(toolMode==='duration'?num(tool.duration_ms):1);});return Object.assign({},row,{toolTotals:Object.assign({},toolTotals)});});
+  const toolTotals={},toolRows=sampleChartRows(rows.map(row=>{(row.req.tools||[]).forEach(tool=>{const name=String(tool.tool||'tool');toolTotals[name]=(toolTotals[name]||0)+(toolMode==='duration'?num(tool.duration_ms):1);});return Object.assign({},row,{toolTotals:Object.assign({},toolTotals)});}));
   lineChart('tool-chart',toolRows,toolNames.map(name=>({name,value:r=>num(r.toolTotals[name])})),toolMode==='duration'?'ms':'');
-  lineChart('network-chart',rows,[
+  lineChart('network-chart',chartRows,[
     {name:'请求至首 token',axis:'left',unit:'ms',value:r=>num((r.req.network||{}).request_to_first_token_ms||r.req.first_token_ms)},
     {name:'Transport 总耗时',axis:'left',unit:'ms',value:r=>num((r.req.network||{}).transport_elapsed_ms)},
     {name:'请求流量',axis:'right',unit:'B',value:r=>num((r.req.network||{}).request_bytes)},
@@ -174,9 +188,15 @@ function render(data){
 }
 
 async function refresh(){
-  if(inflight)inflight.abort(); inflight=new AbortController();
-  try{const r=await fetch('/api/execution-metrics',{cache:'no-store',signal:inflight.signal});const p=await r.json();if(!r.ok||!p.ok)throw new Error(p.error||'加载失败');render(p.data||{sessions:[]});}
+  if(inflight)return;
+  const controller=new AbortController();inflight=controller;
+  try{const r=await fetch('/api/execution-metrics',{cache:'no-store',signal:controller.signal});const p=await r.json();if(!r.ok||!p.ok)throw new Error(p.error||'加载失败');render(p.data||{sessions:[]});}
   catch(e){if(e.name!=='AbortError')document.getElementById('dashboard-body').innerHTML=`<div class="empty">加载失败：${esc(e.message||e)}</div>`;}
+  finally{
+    if(inflight===controller)inflight=null;
+    clearTimeout(refreshTimer);
+    refreshTimer=setTimeout(refresh,REFRESH_DELAY_MS);
+  }
 }
 document.getElementById('session-filter').addEventListener('change',()=>{selectedRequestKey='__total__';render(lastData);});
 document.getElementById('request-filter').addEventListener('change',event=>{selectedRequestKey=event.target.value;render(lastData);});
@@ -209,4 +229,4 @@ document.addEventListener('pointerout',event=>{
   const point=event.target.closest&&event.target.closest('.chart-point');
   if(point){chartTooltip.classList.remove('is-visible');chartTooltip.setAttribute('aria-hidden','true');}
 });
-refresh(); setInterval(refresh,1000);
+refresh();

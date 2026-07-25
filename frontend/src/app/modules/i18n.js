@@ -60,6 +60,8 @@ Object.assign(UI_TRANSLATIONS_EN, {
     '规划': 'Plan', '计划': 'Plan', '清除当前计划': 'Clear current plan',
     // Runtime status lines
     '正在思考中...': 'Thinking...', '正在重连': 'Reconnecting', '任务已中断': 'Task interrupted',
+    '展开执行过程高度': 'Expand process height', '收起执行过程高度': 'Collapse process height',
+    'Goal 自动续跑开始': 'Goal auto-continuation started',
     '已请求停止当前任务': 'Stop requested for the current task', '解析事件失败': 'Failed to parse event',
     '验证': 'Verification', '正在根据对话更新要点': 'Updating key points from the conversation',
     '上下文窗口已满，开始压缩': 'Context window full; starting compression', '上下文压缩已完成': 'Context compression completed',
@@ -181,7 +183,79 @@ Object.assign(UI_TRANSLATIONS_EN, {
     '允许一次': 'Allow once', '暂无成员': 'No members', '暂无任务': 'No tasks',
     '暂无权限请求': 'No permission requests', '请先选择或新建一个会话。': 'Select or create a session first.'
 });
+Object.assign(UI_TRANSLATIONS_EN, {
+    // Human-in-the-loop cards and banners
+    '待处理的人机交互': 'Pending human interactions', 'Agent 正在等待你处理': 'Agent is waiting for your input',
+    '安全审批': 'Safety approval', '需要你的回答': 'Your response is required', '确认下一步': 'Confirm next step',
+    '等待中': 'Waiting', '已处理': 'Processed', '已过期': 'Expired', '可多选': 'Select multiple', '单选': 'Select one',
+    '查看预览': 'View preview', '其他': 'Other', '输入你的答案…': 'Enter your answer…', '取消提问': 'Cancel question',
+    '上一步': 'Back', '下一步': 'Next', '提交答案': 'Submit answers', '请完成当前问题后再提交。': 'Complete the current question before submitting.',
+    '取消失败：': 'Cancellation failed: ', '提交失败：': 'Submission failed: ', '处理失败：': 'Failed to process: ',
+    '是否允许 Agent 执行此操作？': 'Allow Agent to perform this action?', '工具': 'Tool', '始终允许': 'Always allow',
+    '仅本次允许': 'Allow once', '已取消': 'Cancelled', '该请求已取消。': 'This request was cancelled.', '该请求已过期。': 'This request expired.',
+    '你已拒绝本次操作。': 'You denied this action.', '你已允许同类操作。': 'You allowed similar actions.', '你已允许本次操作。': 'You allowed this action.', '已回答': 'Answered',
+    // Session grouping and subagent continuation
+    '刷新归档目录': 'Refresh archived sessions', '加载归档目录': 'Load archived sessions', '加载更多': 'Load more', '加载中...': 'Loading...',
+    '个子任务已完成，点击继续让主 Agent 综合子任务结果（不会自动续跑）。': ' subtasks completed. Click continue to let the main Agent synthesize their results (no automatic continuation).',
+    '个子任务结果尚未纳入上方回答，点击补充综合。': ' subtask results are not included in the answer above. Click to add a synthesis.',
+    // Agent Team and subagent controls
+    '任务': 'Tasks', '会话': 'Sessions', '成员 · ': ' members · ', '允许一次': 'Allow once', '拒绝': 'Deny',
+    '暂无任务': 'No tasks', '暂无成员': 'No members', '暂无权限请求': 'No permission requests',
+    '请让 Agent 使用 team spawn_member': 'Ask the Agent to use team spawn_member', '收起 Subagent 面板': 'Collapse Subagent panel',
+    '展开查看执行过程': 'Expand to view execution process', '退出全屏': 'Exit full screen', '停止': 'Stop',
+    // Dashboard-specific labels and errors
+    '请求至首 token': 'Request to first token', 'Transport 总耗时': 'Total transport duration', '请求流量': 'Request traffic',
+    '响应流量（估算）': 'Estimated response traffic', '加载失败': 'Load failed',
+    // File picker dynamic errors
+    '无法打开选择对话框': 'Could not open the file picker', '上传失败：网络连接异常。': 'Upload failed: network connection error.',
+    '上传超时，请重试。': 'Upload timed out. Please try again.', '上传已取消。': 'Upload cancelled.',
+    '已有文件正在上传，请等待完成或先取消。': 'A file upload is already in progress. Wait for it to finish or cancel it first.',
+    '读取工作区文件失败': 'Failed to read workspace files', '没有匹配文件': 'No matching files', '浏览路径': 'Browse path',
+    '工作区文件': 'Workspace files', '选择工作目录外文件': 'Choose a file outside the workspace', '未选择文件': 'No files selected',
+    '正在取消上传…': 'Cancelling upload…', '读取失败': 'Failed to read', '取消失败': 'Cancellation failed',
+    '文件上传失败': 'File upload failed', '无法上传所选文件或剪贴板中的图片。': 'Could not upload the selected file or clipboard image.'
+    , '当前没有选中的会话。': 'No session is currently selected.', '未选择会话': 'No session selected', '暂无提问': 'No questions yet',
+    '消息索引异常，已阻止从错误位置清空会话。请刷新后再试。': 'The message index is invalid; clearing from the wrong position was blocked. Refresh and try again.',
+    '消息索引异常，已阻止清空整个会话。请刷新后再试。': 'The message index is invalid; clearing the session was blocked. Refresh and try again.',
+    '当前会话仍在生成。请等待完成或停止后再修改历史。': 'This session is still generating. Wait for completion or stop it before editing history.',
+    '本段过程已折叠': 'This process section is collapsed', '未找到可保存的 Final 卡片': 'No Final card is available to save',
+    'Final 卡片图片生成失败': 'Failed to generate the Final card image', 'Final 卡片图片保存失败': 'Failed to save the Final card image',
+    '当前浏览器不支持复制文本': 'This browser does not support copying text', '无法完成复制或保存': 'Could not copy or save',
+    '至少选择复制文本或保存图片中的一项。': 'Select at least one of copy text or save image.', '图片已保存': 'Image saved',
+    '复制选项': 'Copy options', '打开会话目录': 'Open session folder', '打开工作目录': 'Open workspace',
+    '知道了': 'Got it', '已请求打开': 'Open requested', '无法定位该条': 'Could not locate this message'
+});
+Object.assign(UI_TRANSLATIONS_EN, {
+    '文件上传失败': 'File upload failed', '无法上传所选文件或剪贴板中的图片。': 'Could not upload the selected file or clipboard image.',
+    '正在保存…': 'Saving…', '正在读取状态…': 'Reading status…', '读取失败：': 'Failed to read: ',
+    '已关闭；现有 task/subagent 行为不受影响。': 'Disabled; existing task/subagent behavior is unchanged.',
+    '已启用；Agent Team 入口和团队运行时可用。': 'Enabled; the Agent Team entry point and runtime are available.',
+    '没有可用模型配置': 'No model configurations available', '没有启用的模型配置': 'No enabled model profiles',
+    '模型配置加载失败': 'Failed to load model configuration', '正在加载模型配置': 'Loading model configuration',
+    '模型配置切换失败: ': 'Failed to switch model configuration: ', '模型配置启停失败: ': 'Failed to change model profile status: ',
+    '模型配置加载失败: ': 'Failed to load model configuration: ', '上下文窗口：': 'Context window: ', '接口类型：': 'Interface type: ',
+    '最大输出：': 'Maximum output: ', '能力：': 'Capabilities: ', '状态：': 'Status: ', '可用': 'Available', '未就绪': 'Not ready', '未设置': 'Not set',
+    '加载subagent历史失败:': 'Failed to load subagent history:', '加载详情中…': 'Loading details…', '加载失败: ': 'Load failed: ',
+    '暂无事件': 'No events yet', '暂无 final 结果': 'No final result', '无 Subagent': 'No subagents',
+    '任务失败，点击查看': 'Task failed — click to view', '有新回复，点击查看': 'New response — click to view'
+    , 'Agent 请求执行操作': 'Agent requests permission to perform an action', '请选择操作': 'Choose an action', '复制文本': 'Copy text', '保存图片': 'Save image', '执行': 'Run',
+    '原因：': 'Reason: ', '找不到可保存的 Final 卡片': 'No Final card is available to save', '操作失败': 'Operation failed', '确认': 'Confirm',
+    '加载会话状态快照失败，回退至旧接口': 'Failed to load the session state snapshot; falling back to the legacy endpoint', '归档失败': 'Archive failed', '置顶失败': 'Pin failed', '重命名失败': 'Rename failed',
+    '加载更早记录': 'Load earlier records', '加载更早消息': 'Load earlier messages', '保存失败：': 'Save failed: '
+});
 const UI_I18N_ATTRS = ['aria-label', 'data-ui-tip', 'title', 'placeholder'];
+// These nodes contain user-, model-, or runtime-authored text. Translating them
+// mutates conversation content instead of localizing UI chrome.
+const UI_I18N_CONTENT_SELECTOR = [
+    '.message',
+    '.feed-chunk-scroller',
+    '.process-brief-item',
+    '.followup-queue-text',
+    '.session-name',
+    '.session-last-query',
+    '#chat-goal-objective',
+    '[data-i18n-skip]',
+].join(',');
 const uiI18nTextOriginal = new WeakMap();
 const uiI18nAttrOriginal = new WeakMap();
 var uiLanguage = localStorage.getItem(LS_UI_LANGUAGE) === 'en' ? 'en' : 'zh-CN';
@@ -200,8 +274,66 @@ function translateUiString(value) {
         .replace(/^已选择 (\d+) 个 Skill$/, '$1 skills selected')
         .replace(/^已选择 (\d+) 项$/, '$1 items selected')
         .replace(/^正在上传 (\d+) 个文件… (\d+)%$/, 'Uploading $1 files… $2%')
+        .replace(/预估上下文 token：选择会话并加载或发送消息后显示。分母为压缩摘要阈值。/g, 'Estimated context tokens; shown after selecting a session and loading or sending a message. The denominator is the compression-summary threshold.')
+        .replace(/tokens（约 ([\d.]+)%，超出门限 ([\d.]+)%）。预估进入模型的上下文规模，含历史与系统提示；分母为当前 model profile 中触发压缩摘要的上下文门限。/g, 'tokens (about $1%; $2% over the limit). Estimated context size sent to the model, including history and system prompts; the denominator is the compression threshold for the current model profile.')
+        .replace(/tokens（约 ([\d.]+)%）。预估进入模型的上下文规模，含历史与系统提示；分母为当前 model profile 中触发压缩摘要的上下文门限。/g, 'tokens (about $1%). Estimated context size sent to the model, including history and system prompts; the denominator is the compression threshold for the current model profile.')
+        .replace(/（当前约占上下文窗口 ([^）]+)）/g, ' (currently about $1 of the context window)')
+        .replace(/模型配置：/g, 'Model configuration: ')
+        .replace(/模型 ID：/g, 'Model ID: ')
+        .replace(/接口类型：/g, 'Interface type: ')
+        .replace(/上下文窗口：/g, 'Context window: ')
+        .replace(/最大输出：/g, 'Maximum output: ')
+        .replace(/能力：/g, 'Capabilities: ')
+        .replace(/状态：/g, 'Status: ')
+        .replace(/Skill：/g, 'Skill: ')
+        .replace(/描述：/g, 'Description: ')
+        .replace(/(\d+) 个待处理请求/g, '$1 pending requests')
+        .replace(/约 (\d+(?:\.\d+)?)%/g, 'about $1%')
+        .replace(/超出门限 (\d+(?:\.\d+)?)%/g, '$1% over the limit')
+        .replace(/工具调用生成中\.\.\./g, 'Preparing tool call...')
+        .replace(/执行中\.\.\./g, 'Running...')
+        .replace(/执行结果/g, 'Result')
+        .replace(/生成中\.\.\./g, 'Generating...')
+        .replace(/(\d+) 个待处理请求/g, '$1 pending requests')
+        .replace(/(\d+) 个问题待确认/g, '$1 questions awaiting confirmation')
+        .replace(/(\d+) 个问题/g, '$1 questions')
+        .replace(/(\d+) 个审批/g, '$1 approvals')
+        .replace(/文件“(.+)”超过 (.+) 限制。/g, 'File “$1” exceeds the $2 limit.')
+        .replace(/本次上传总大小超过 (.+) 限制。/g, 'The total upload exceeds the $1 limit.')
+        .replace(/正在上传 (\d+) 个文件… (\d+)%/g, 'Uploading $1 files… $2%')
+        .replace(/^(\d+) 个子任务已完成，点击继续让主 Agent 综合子任务结果（不会自动续跑）。$/g, '$1 subtasks completed. Click continue to let the main Agent synthesize their results (no automatic continuation).')
+        .replace(/^(\d+) 个子任务结果尚未纳入上方回答，点击补充综合。$/g, '$1 subtask results are not included in the answer above. Click to add a synthesis.')
+        .replace(/^提交失败：(.+)$/g, 'Submission failed: $1')
+        .replace(/^取消失败：(.+)$/g, 'Cancellation failed: $1')
+        .replace(/^处理失败：(.+)$/g, 'Failed to process: $1')
+        .replace(/^切换会话加载失败：?(.+)$/g, 'Failed to load the session: $1')
+        .replace(/^切换会话失败：?(.+)$/g, 'Failed to switch session: $1')
+        .replace(/^加载会话消息失败：?(.+)$/g, 'Failed to load session messages: $1')
+        .replace(/^加载会话列表失败：?(.+)$/g, 'Failed to load the session list: $1')
+        .replace(/^创建新会话失败：?(.+)$/g, 'Failed to create a new session: $1')
+        .replace(/^删除会话失败：?(.+)$/g, 'Failed to delete the session: $1')
+        .replace(/^刷新会话摘要失败：?(.+)$/g, 'Failed to refresh the session summary: $1')
+        .replace(/^加载更早(?:消息|记录)失败：?(.+)$/g, 'Failed to load earlier messages: $1')
+        .replace(/^预加载下一批归档目录失败：?(.+)$/g, 'Failed to preload the next archived sessions: $1')
+        .replace(/^重命名失败：?(.+)$/g, 'Rename failed: $1')
+        .replace(/^归档失败：?(.+)$/g, 'Archive failed: $1')
+        .replace(/^置顶失败：?(.+)$/g, 'Pin failed: $1')
+        .replace(/^问题 (\d+)$/g, 'Question $1')
+        .replace(/^保存失败：(.+)$/g, 'Save failed: $1')
+        .replace(/^Skill 加载失败：(.+)$/g, 'Failed to load Skill: $1')
+        .replace(/^异步截断失败：?(.+)$/g, 'Asynchronous truncation failed: $1')
+        .replace(/^续接 subagent 失败：?(.+)$/g, 'Failed to continue subagent: $1')
+        .replace(/^检测到上次运行未完成，正在自动恢复任务…$/g, 'The previous run was incomplete; restoring the task automatically…')
+        .replace(/^检测到 (?:系统睡眠|Agent 进程暂停)约 (\d+) 秒，任务已恢复$/g, 'A system sleep or Agent process pause of about $1 seconds was detected; the task resumed')
+        .replace(/^未能加载到对应的用户提问（可能索引不一致）。可刷新页面或使用「更早 (.+) 轮对话」手动分页。$/g, 'Could not load the corresponding user question (the index may be inconsistent). Refresh the page or use “Earlier $1 conversations” to paginate manually.')
         .replace(/^已选 (\d+) \/ 共 (\d+)$/, '$1 selected / $2 total')
         .replace(/^已选 (\d+) \/ 已启用 (\d+) \/ 共 (\d+)$/, '$1 selected / $2 enabled / $3 total')
+        .replace(/已启用/g, 'Enabled')
+        .replace(/已禁用/g, 'Disabled')
+        .replace(/暂无描述/g, 'No description')
+        .replace(/未就绪/g, 'Not ready')
+        .replace(/可用/g, 'Available')
+        .replace(/未设置/g, 'Not set')
         .replace(/^加载失败: (.+)$/, 'Failed to load: $1')
         .replace(/^请求失败: (.+)$/, 'Request failed: $1')
         .replace(/^无法打开：(.+)$/, 'Could not open: $1')
@@ -302,6 +434,10 @@ function translateUiNode(root) {
     if (root.querySelectorAll) elements = elements.concat(Array.from(root.querySelectorAll('*')));
     elements.forEach(function (el) {
         if (el.closest && el.closest('.sidebar-brand-sub')) return;
+        if (el.matches && (
+            el.matches(UI_I18N_CONTENT_SELECTOR)
+            || (el.closest && el.closest(UI_I18N_CONTENT_SELECTOR))
+        )) return;
         if (el.matches('script,style,code,pre,[contenteditable="true"]')) return;
         var originals = uiI18nAttrOriginal.get(el) || {};
         UI_I18N_ATTRS.forEach(function (attr) {

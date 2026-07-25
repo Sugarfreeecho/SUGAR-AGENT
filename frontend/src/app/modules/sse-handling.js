@@ -921,6 +921,7 @@ function normalizeStoredFollowupItem(item) {
         steerId: String(item.steerId || ''),
         status: restoredStatus,
         replacementRunId: String(item.replacementRunId || ''),
+        awaitingRunEnd: item.awaitingRunEnd !== false,
     };
 }
 
@@ -963,6 +964,7 @@ function persistFollowupQueue(sessionId) {
             steerId: item.steerId || '',
             status: item.status || '',
             replacementRunId: item.replacementRunId || '',
+            awaitingRunEnd: item.awaitingRunEnd !== false,
         };
     });
     try {
@@ -1076,7 +1078,7 @@ function renderFollowupQueue(sessionId) {
         undo.disabled = item.status === 'sent' || item.status === 'withdrawing';
         sendNow.addEventListener('click', function (ev) {
             ev.preventDefault();
-            sendFollowupNow(String(item.id));
+            void sendFollowupNow(String(item.id), sid, { manual: true });
         });
         modeSelect.addEventListener('change', function () {
             item.steerMode = modeSelect.value === 'append' ? 'append' : 'interrupt';
@@ -1122,6 +1124,7 @@ function appendFollowupQueueItem(sessionId, text, display, selectedSkills) {
         skills: Array.isArray(selectedSkills) ? selectedSkills.slice() : [],
         createdAt: Date.now(),
         steerMode: defaultSteerMode(),
+        awaitingRunEnd: isSessionRunning(sid) || isServerStreamActive(sid),
     };
     getFollowupQueue(sid).push(item);
     persistFollowupQueue(sid);
@@ -1340,13 +1343,13 @@ function prepareSteerProcessBoundary(ctx, steerMode, operationId) {
     if (!ctx || String(steerMode || 'interrupt') !== 'interrupt') return;
     var key = String(operationId || '');
     if (key && String(ctx.lastInterruptSteerOperationId || '') === key) return;
-    // An interrupt steer starts a new logical model round. Flush any confirmed
-    // old-run text, seal its process block, and prevent delayed delta flushes
-    // from attaching the replacement reasoning/response to that old block.
+    // An interrupt starts a new logical ReAct generation, but remains in the
+    // same execution-process aggregate.  Generation-aware row keys preserve
+    // ordering when react_iter restarts at 1.
     finalizeLlmStreamChunks(ctx);
     finalizeProgressStreamChunks(ctx);
-    sealProcessGroup(ctx);
     resetLlmState(ctx);
+    ctx.reactGeneration = Math.max(0, Number(ctx.reactGeneration) || 0) + 1;
     if (key) ctx.lastInterruptSteerOperationId = key;
 }
 
@@ -1543,6 +1546,14 @@ function isFollowupAutoDrainReady(sessionId) {
         && !isFollowupDispatchBusy(sid);
 }
 
+function cancelFollowupQueueDrain(sessionId) {
+    var sid = String(sessionId || '');
+    var existing = sid && followupDrainTimers[sid];
+    if (!existing) return;
+    clearTimeout(existing.timer);
+    delete followupDrainTimers[sid];
+}
+
 function scheduleFollowupQueueDrain(sessionId, delayMs) {
     var sid = String(sessionId || '');
     if (!sid) return;
@@ -1577,10 +1588,59 @@ function drainFollowupQueue(sessionId) {
     if (!item || item.status) { renderFollowupQueue(sid); return; }
     // 一个终止边界最多尝试一条。失败后 sendFollowupNow 会恢复 pending；
     // 不在这里循环重试，避免网络错误造成请求风暴或重复执行。
-    void Promise.resolve(sendFollowupNow(item.id, sid))
+    void Promise.resolve(sendFollowupNow(item.id, sid, { autoAfterRun: true }))
         .catch(function (error) {
             console.error('follow-up auto-drain failed:', error);
         });
+}
+
+function markFollowupQueueManualOnly(sessionId) {
+    var sid = String(sessionId || '');
+    if (!sid) return;
+    cancelFollowupQueueDrain(sid);
+    var q = getFollowupQueue(sid);
+    q.forEach(function (item) {
+        if (item) item.awaitingRunEnd = false;
+    });
+    persistFollowupQueue(sid);
+    renderFollowupQueue(sid);
+}
+
+function recoverFollowupQueueDrainsFromSessionSnapshot(previousActiveIds, currentActiveIds) {
+    var previous = previousActiveIds instanceof Set ? previousActiveIds : new Set(previousActiveIds || []);
+    var current = currentActiveIds instanceof Set ? currentActiveIds : new Set(currentActiveIds || []);
+    var candidates = new Set();
+    previous.forEach(function (sid) {
+        sid = String(sid || '');
+        if (sid && !current.has(sid)) candidates.add(sid);
+    });
+    if (!followupSnapshotRecoveryInitialized) {
+        followupSnapshotRecoveryInitialized = true;
+        try {
+            for (var i = 0; i < localStorage.length; i += 1) {
+                var key = String(localStorage.key(i) || '');
+                if (key.indexOf(LS_FOLLOWUP_QUEUE_PREFIX) !== 0) continue;
+                var sid = key.slice(LS_FOLLOWUP_QUEUE_PREFIX.length);
+                if (sid && !current.has(sid)) candidates.add(sid);
+            }
+        } catch (e) { /* localStorage may be unavailable */ }
+    }
+    candidates.forEach(function (sid) {
+        if (current.has(sid)
+            || (typeof isSessionStreamStopSuppressed === 'function' && isSessionStreamStopSuppressed(sid))) return;
+        var q = getFollowupQueue(sid);
+        var waiting = q.some(function (item) {
+            return item && !item.status && item.awaitingRunEnd !== false;
+        });
+        if (!waiting) return;
+        void Promise.resolve(syncFollowupQueueFromServer(sid)).then(function () {
+            if (!isSessionRunning(sid) && !isServerStreamActive(sid)) {
+                scheduleFollowupQueueDrain(sid, 0);
+            }
+        }).catch(function (error) {
+            console.warn('background follow-up reconciliation failed', error);
+        });
+    });
 }
 
 function scheduleAcceptedFollowupWatch(sid, itemId) {
@@ -1723,7 +1783,49 @@ function startFollowupChat(options) {
     });
 }
 
-async function sendFollowupNowImpl(itemId, sessionId) {
+async function sendQueuedFollowupAsChat(sessionId, item, itemId) {
+    var sid = String(sessionId || '');
+    if (!sid || !item) return false;
+    if (isSessionRunning(sid) || isServerStreamActive(sid)) {
+        item.awaitingRunEnd = true;
+        persistFollowupQueue(sid);
+        renderFollowupQueue(sid);
+        return false;
+    }
+    item.awaitingRunEnd = false;
+    item.status = 'sending';
+    persistFollowupQueue(sid);
+    renderFollowupQueue(sid);
+    var lockReady = await waitForSendPipelineIdle(sid, 4000);
+    if (!lockReady || isSendPipelineLocked(sid)) {
+        item.status = '';
+        item.awaitingRunEnd = true;
+        persistFollowupQueue(sid);
+        renderFollowupQueue(sid);
+        scheduleFollowupQueueDrain(sid, 120);
+        return false;
+    }
+    var started = await startFollowupChat({
+        message: item.text,
+        displayMessage: item.display || item.text,
+        selectedSkills: item.skills || [],
+        fromQueue: true,
+        sessionId: sid,
+        forceStart: true,
+    });
+    if (started) {
+        takeFollowupItem(sid, itemId);
+        renderFollowupQueue(sid);
+        return true;
+    }
+    item.status = '';
+    persistFollowupQueue(sid);
+    renderFollowupQueue(sid);
+    return false;
+}
+
+async function sendFollowupNowImpl(itemId, sessionId, options) {
+    options = options || {};
     const followupTimingStartedAt = nowPipelineMs();
     const followupTimingCtx = {
         label: 'client_followup_step_timing',
@@ -1753,6 +1855,10 @@ async function sendFollowupNowImpl(itemId, sessionId) {
     if (['submitting', 'sending', 'accepted', 'restarting', 'sent', 'withdrawing'].includes(String(item.status || ''))) {
         return;
     }
+    if (options.autoAfterRun) {
+        return sendQueuedFollowupAsChat(sid, item, itemId);
+    }
+    item.awaitingRunEnd = false;
     item.clientId = item.clientId || ('followup-' + item.id + '-' + Date.now());
     item.status = 'submitting';
     persistFollowupQueue(sid);
@@ -1964,9 +2070,23 @@ async function sendFollowupNowImpl(itemId, sessionId) {
 }
 
 /* 会话级互斥：所有显式立即发送共用同一 dispatcher 链，防止并发 steer 竞争。 */
-async function sendFollowupNow(itemId, sessionId) {
+async function sendFollowupNow(itemId, sessionId, options) {
+    options = options || {};
     const sid = String(sessionId || currentSessionId || '');
-    return withFollowupDispatch(sid, function () { return sendFollowupNowImpl(itemId, sessionId); });
+    if (!sid) return;
+    if (options.manual) {
+        cancelFollowupQueueDrain(sid);
+        var q = getFollowupQueue(sid);
+        var idx = q.findIndex(function (item) { return String(item.id) === String(itemId); });
+        if (idx < 0) return;
+        if (idx > 0) q.unshift(q.splice(idx, 1)[0]);
+        q[0].awaitingRunEnd = false;
+        persistFollowupQueue(sid);
+        renderFollowupQueue(sid);
+    }
+    return withFollowupDispatch(sid, function () {
+        return sendFollowupNowImpl(itemId, sid, options);
+    });
 }
 
 async function sendMessage(options) {

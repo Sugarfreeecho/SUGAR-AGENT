@@ -12,6 +12,7 @@ const followupServerSyncInFlight = Object.create(null);
 const followupDrainTimers = Object.create(null);
 /** 会话级追问发送互斥链：显式立即发送共用，保证同一会话同一时刻只处理一条追问。 */
 const followupDispatchChain = Object.create(null);
+let followupSnapshotRecoveryInitialized = false;
 /** 会话在后台跑完后未点开过：侧栏绿点，点开即清除（localStorage 持久化，刷新不丢） */
 const sessionUnreadComplete = new Set();
 const LS_SESSION_UNREAD = 'myagent-session-unread';
@@ -42,6 +43,8 @@ let sessionHistoryPaging = null;
 let historyOlderLoading = false;
 /** 每次加载末尾或更早一页时包含的用户提问轮数（含其间全部工具/过程事件） */
 const HISTORY_DIALOGUES_PER_PAGE = 5;
+/** Event-heavy turns can contain hundreds of tool/process rows; cap initial replay at turn boundaries. */
+const HISTORY_EVENT_BUDGET = 500;
 
 /** 右侧「历史记录」重建序号：防止切换会话后旧 fetch 与当前 DOM 合并导致目录串台 */
 let tocRebuildEpoch = 0;

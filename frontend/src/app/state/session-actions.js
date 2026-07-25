@@ -2,6 +2,10 @@ function applySessionSnapshot(snapshot) {
     snapshot = snapshot || {};
     const sessions = Array.isArray(snapshot.sessions) ? snapshot.sessions : [];
     const archivedCount = snapshot.archived_count != null ? snapshot.archived_count : snapshot.archivedCount;
+    const previousActive = new Set();
+    sessionStore.activeRunInfoBySession.forEach(function (_run, sid) {
+        if (sid) previousActive.add(String(sid));
+    });
     if (Number.isFinite(Number(snapshot.seq)) && Number(snapshot.seq) > sessionStore.seq) {
         sessionStore.seq = Number(snapshot.seq);
     }
@@ -27,6 +31,9 @@ function applySessionSnapshot(snapshot) {
             if (sid) active[String(sid)] = true;
         });
         applyServerStreamActiveMap(active);
+        if (typeof recoverFollowupQueueDrainsFromSessionSnapshot === 'function') {
+            recoverFollowupQueueDrainsFromSessionSnapshot(previousActive, new Set(Object.keys(active)));
+        }
     }
 }
 

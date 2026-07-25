@@ -200,7 +200,9 @@ def test_followups_auto_continue_only_after_run_end_and_sync():
     assert "!isSendPipelineLocked(sid)" in drain
     assert "!isFollowupDispatchBusy(sid)" in drain
     assert "var item = q[0];" in drain
-    assert "sendFollowupNow(item.id, sid)" in drain
+    assert "sendFollowupNow(item.id, sid, { autoAfterRun: true })" in drain
+    assert "sendQueuedFollowupAsChat(sid, item, itemId)" in sse
+    assert "recoverFollowupQueueDrainsFromSessionSnapshot" in sse
     assert ".finally(function ()" not in drain
     # 定时器按会话合并，避免 final/run_finished/finally 重复触发多个请求。
     assert "followupDrainTimers[sid]" in drain
@@ -224,7 +226,8 @@ def test_followups_auto_continue_only_after_run_end_and_sync():
 
     # Explicit Send now remains available independently on every pending row.
     assert "sendNow.addEventListener('click'" in sse
-    assert "sendFollowupNow(String(item.id));" in sse
+    assert "sendFollowupNow(String(item.id), sid, { manual: true })" in sse
+    assert "cancelFollowupQueueDrain(sid)" in sse
     assert "sendNow.disabled = !!item.status;" in sse
 
 
@@ -470,6 +473,26 @@ def test_frontend_llm_stream_seq_increments_do_not_split_chunks():
     assert "seq !== l.llmDeltaLastSeq" not in rendering
 
 
+def test_frontend_markdown_dependencies_do_not_block_on_public_cdn():
+    html = (ROOT / "frontend/index.html").read_text(encoding="utf-8")
+    entry = (ROOT / "frontend/src/app/index.js").read_text(encoding="utf-8")
+    rendering = (ROOT / "frontend/src/app/modules/message-rendering.js").read_text(encoding="utf-8")
+    package = json.loads((ROOT / "frontend/package.json").read_text(encoding="utf-8"))
+
+    assert "cdn.jsdelivr.net/npm/marked" not in html
+    assert "cdn.jsdelivr.net/npm/mermaid" not in html
+    assert package["dependencies"]["marked"] == "15.0.12"
+    assert package["dependencies"]["mermaid"] == "10.9.6"
+    assert "import { marked } from 'marked';" in entry
+    assert "globalThis.marked = marked;" in entry
+    assert "import('mermaid')" in entry
+    assert "globalThis.loadMyAgentMermaid" in entry
+    assert "await globalThis.loadMyAgentMermaid()" in rendering
+    assert "data-mermaid-loading" in rendering
+    assert "new IntersectionObserver" in rendering
+    assert "markdown-fallback" in rendering
+
+
 def test_stream_deltas_have_stable_dedupe_keys():
     agent_loop = (ROOT / "app/agent_loop.py").read_text(encoding="utf-8")
     rendering = (ROOT / "frontend/src/app/modules/message-rendering.js").read_text(encoding="utf-8")
@@ -479,10 +502,12 @@ def test_stream_deltas_have_stable_dedupe_keys():
     assert "tool_delta_seq = 0" in agent_loop
     assert '"delta_seq": llm_delta_seq' in agent_loop
     assert '"delta_seq": tool_delta_seq' in agent_loop
-    assert "function deltaDedupeKey(parsed, scope)" in rendering
+    assert "function deltaDedupeKey(ctx, parsed, scope)" in rendering
     assert "hasSeenStreamDelta(ctx, ev, 'llm_' + part)" in rendering
     assert "hasSeenStreamDelta(ctx, parsed, 'tool_call_delta')" in rendering
     assert "_seenStreamDeltaKeys: new Set()" in scroll
+    assert "reactGeneration: 0" in scroll
+    assert "data-react-generation" in rendering
 
 
 def test_tool_pending_switches_generated_draft_to_executing():
@@ -504,6 +529,23 @@ def test_prompt_allows_multi_tool_generation_independent_of_execution_mode():
     assert "这与工具最终是并行还是串行执行无关" in prompt
     assert "依照 `tool_calls` 原始顺序串行" in prompt
     assert "不得猜测未知参数" in prompt
+    assert "已被压缩或可能被压缩的历史信息" in prompt
+    assert "当前会话的 session 文件夹下查询 `events.jsonl`" in prompt
+
+
+def test_ui_translation_does_not_mutate_conversation_content():
+    i18n = (ROOT / "frontend/src/app/modules/i18n.js").read_text(encoding="utf-8")
+
+    assert "UI_I18N_CONTENT_SELECTOR" in i18n
+    for selector in (
+        ".message",
+        ".feed-chunk-scroller",
+        ".followup-queue-text",
+        ".session-name",
+        "#chat-goal-objective",
+    ):
+        assert selector in i18n
+    assert "el.closest(UI_I18N_CONTENT_SELECTOR)" in i18n
 
 
 def test_streamed_llm_commits_are_sse_fallbacks_without_repersisting():
@@ -536,6 +578,37 @@ def test_frontend_llm_delta_recovers_missing_scrollers():
     assert "l.llmStreamResponseScroller && !l.llmStreamResponseScroller.isConnected" in rendering
     assert "recoveredResponse = findExistingLlmFeedRow" in rendering
     assert "createProcessFeedRow(ctx, 'llm-response'" in rendering
+
+
+def test_live_history_owner_is_never_replaced_by_target_window():
+    scroll = (ROOT / "frontend/src/app/modules/session-scroll-history.js").read_text(encoding="utf-8")
+    target_window = scroll.split("async function loadHistoryWindowAroundEventIndex", 1)[1].split(
+        "const SESSION_STREAM_CACHE_LIMIT", 1
+    )[0]
+    jump = scroll.split("async function scrollToUserTurnOrLoadOlder", 1)[1]
+
+    assert "isSessionRunning(sid)" in target_window
+    assert "isServerStreamActive(sid)" in target_window
+    assert target_window.index("isSessionRunning(sid)") < target_window.index("await fetch(url)")
+    assert "liveHistoryOwner" in jump
+    assert "!liveHistoryOwner" in jump
+    assert "loadOlderHistoryChunk({ keepTocStable: true, turns: 50 })" in jump
+    assert "if (!getFeedItemText(el).trim()) el.remove();" in scroll
+
+
+def test_chat_scrollbar_is_a_non_layout_overlay():
+    markup = (ROOT / "frontend/index.html").read_text(encoding="utf-8")
+    styles = (ROOT / "frontend/src/styles/app.css").read_text(encoding="utf-8")
+    layout = (ROOT / "frontend/src/app/modules/layout-panels.js").read_text(encoding="utf-8")
+
+    assert 'id="chat-overlay-scrollbar"' in markup
+    assert "position:absolute" in styles
+    assert ".chat-container::-webkit-scrollbar { width:0 !important; height:0 !important; }" in styles
+    assert "background:rgba(255,255,255,0.12)" in styles
+    assert "function updateChatOverlayScrollbar()" in layout
+    assert "viewport.scrollTop = dragStartScrollTop" in layout
+    assert "new ResizeObserver" in layout
+    assert "new MutationObserver" in layout
 
 
 def test_runtime_v2_todo_plan_events_are_persistable():
@@ -595,12 +668,22 @@ def test_frontend_llm_stream_rows_are_upserted_across_process_group_rebuilds():
     assert "function removeDuplicateLlmFeedRows(ctx, keepRow, logType, reactIter)" in rendering
 
 
-def test_frontend_initial_bottom_scroll_remains_smooth_without_saved_position():
+def test_frontend_session_restore_distinguishes_loaded_cached_and_running_sessions():
     rendering = (ROOT / "frontend/src/app/modules/message-rendering.js").read_text(encoding="utf-8")
+    scroll = (ROOT / "frontend/src/app/modules/session-scroll-history.js").read_text(encoding="utf-8")
+    sessions = (ROOT / "frontend/src/app/modules/session-management.js").read_text(encoding="utf-8")
 
     assert "function scrollToBottom(opts)" in rendering
     assert "chatContainer.scrollTo({ top: chatContainer.scrollHeight, behavior: 'smooth' })" in rendering
-    assert "scrollToBottom({ smooth: mode === 'saved-or-bottom' });" in rendering
+    assert "scrollToBottom({ smooth: mode === 'saved-or-bottom' });" not in rendering
+    assert "mode === 'saved-smooth-or-bottom'" in rendering
+    assert "instant: !smoothRestore" in rendering
+    assert "viewportOffset: savedAnchorOffset" in rendering
+    assert "var scrollBehavior = opts.instant ? 'auto' : 'smooth';" in scroll
+    assert "wrap.scrollIntoView({ behavior: scrollBehavior, block: 'start' });" in scroll
+    assert "function restoreCachedSessionScrollPosition(sessionId)" in scroll
+    assert "setScrollTopImmediate(chatContainer, Number(saved))" in scroll
+    assert "var loadedOk = await loadSessionMessages(sessionId, 'saved-smooth-or-bottom'" in sessions
 
 
 def test_frontend_older_history_auto_load_preserves_viewport():

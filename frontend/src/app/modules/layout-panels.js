@@ -1,5 +1,104 @@
 newSessionBtn.addEventListener('click', async () => { await createNewSession(); });
 
+var chatOverlayScrollbarRaf = null;
+var chatOverlayScrollbarHideTimer = null;
+var chatOverlayScrollbarResizeObserver = null;
+var chatOverlayScrollbarMutationObserver = null;
+
+function updateChatOverlayScrollbar() {
+    var viewport = document.getElementById('chat-container');
+    var track = document.getElementById('chat-overlay-scrollbar');
+    var thumb = track && track.querySelector('.chat-overlay-scrollbar-thumb');
+    if (!viewport || !track || !thumb) return;
+    var viewportHeight = Math.max(0, viewport.clientHeight);
+    var scrollHeight = Math.max(0, viewport.scrollHeight);
+    var maxScroll = Math.max(0, scrollHeight - viewportHeight);
+    if (!viewportHeight || maxScroll <= 1) {
+        track.hidden = true;
+        thumb.style.height = '0px';
+        thumb.style.transform = 'translateY(0)';
+        return;
+    }
+    track.hidden = false;
+    var thumbHeight = Math.max(28, Math.min(viewportHeight, viewportHeight * viewportHeight / scrollHeight));
+    var travel = Math.max(0, viewportHeight - thumbHeight);
+    var top = maxScroll > 0 ? travel * viewport.scrollTop / maxScroll : 0;
+    thumb.style.height = thumbHeight + 'px';
+    thumb.style.transform = 'translateY(' + Math.max(0, Math.min(travel, top)) + 'px)';
+}
+
+function scheduleChatOverlayScrollbarUpdate(active) {
+    var track = document.getElementById('chat-overlay-scrollbar');
+    if (active && track) {
+        track.classList.add('is-active');
+        if (chatOverlayScrollbarHideTimer) clearTimeout(chatOverlayScrollbarHideTimer);
+        chatOverlayScrollbarHideTimer = setTimeout(function () {
+            track.classList.remove('is-active');
+        }, 700);
+    }
+    if (chatOverlayScrollbarRaf != null) return;
+    chatOverlayScrollbarRaf = requestAnimationFrame(function () {
+        chatOverlayScrollbarRaf = null;
+        updateChatOverlayScrollbar();
+    });
+}
+
+function observeCurrentChatStreamForOverlay() {
+    var viewport = document.getElementById('chat-container');
+    if (!viewport || !chatOverlayScrollbarResizeObserver) return;
+    chatOverlayScrollbarResizeObserver.disconnect();
+    chatOverlayScrollbarResizeObserver.observe(viewport);
+    var stream = document.getElementById('chat-stream');
+    if (stream) chatOverlayScrollbarResizeObserver.observe(stream);
+    scheduleChatOverlayScrollbarUpdate(false);
+}
+
+function initChatOverlayScrollbar() {
+    var viewport = document.getElementById('chat-container');
+    var track = document.getElementById('chat-overlay-scrollbar');
+    var thumb = track && track.querySelector('.chat-overlay-scrollbar-thumb');
+    if (!viewport || !track || !thumb || track.dataset.bound === '1') return;
+    track.dataset.bound = '1';
+    viewport.addEventListener('scroll', function () {
+        scheduleChatOverlayScrollbarUpdate(true);
+    }, { passive: true });
+    var dragStartY = 0;
+    var dragStartScrollTop = 0;
+    function stopDrag() {
+        track.classList.remove('is-dragging');
+        document.removeEventListener('pointermove', moveDrag);
+        document.removeEventListener('pointerup', stopDrag);
+        document.removeEventListener('pointercancel', stopDrag);
+    }
+    function moveDrag(event) {
+        var maxScroll = Math.max(0, viewport.scrollHeight - viewport.clientHeight);
+        var travel = Math.max(1, viewport.clientHeight - thumb.offsetHeight);
+        viewport.scrollTop = dragStartScrollTop + (event.clientY - dragStartY) * maxScroll / travel;
+        scheduleChatOverlayScrollbarUpdate(true);
+    }
+    thumb.addEventListener('pointerdown', function (event) {
+        if (event.button !== 0) return;
+        event.preventDefault();
+        dragStartY = event.clientY;
+        dragStartScrollTop = viewport.scrollTop;
+        track.classList.add('is-dragging');
+        document.addEventListener('pointermove', moveDrag);
+        document.addEventListener('pointerup', stopDrag);
+        document.addEventListener('pointercancel', stopDrag);
+    });
+    chatOverlayScrollbarResizeObserver = new ResizeObserver(function () {
+        scheduleChatOverlayScrollbarUpdate(false);
+    });
+    chatOverlayScrollbarMutationObserver = new MutationObserver(function () {
+        observeCurrentChatStreamForOverlay();
+    });
+    chatOverlayScrollbarMutationObserver.observe(viewport, { childList: true });
+    window.addEventListener('resize', function () {
+        scheduleChatOverlayScrollbarUpdate(false);
+    }, { passive: true });
+    observeCurrentChatStreamForOverlay();
+}
+
 function initSidebarSash() {
     const side = document.getElementById('sidebar');
     const sash = document.getElementById('sash');
@@ -220,6 +319,7 @@ function initPanelAutoCollapse() {
 
 initPanelAutoCollapse();
 initPanelEdgeTabsLayout();
+initChatOverlayScrollbar();
 
 // Inline HTML (onclick) still expects these on globalThis.
 if (typeof globalThis !== 'undefined') {

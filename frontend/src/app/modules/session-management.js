@@ -71,12 +71,13 @@ function pauseCurrentRun() {
     const sid = currentSessionId;
     const activeInfo = sessionStore.getActiveRunInfo(sid) || {};
     const runId = run && run.runId ? run.runId : (activeInfo.run_id || activeInfo.runId || '');
+    if (typeof markFollowupQueueManualOnly === 'function') markFollowupQueueManualOnly(sid);
     suppressSessionServerStreamActive(sid);
     if (!run) {
         setSendButtonState();
         syncSessionListIndicatorClasses();
         renderSessionListIfChanged(false);
-        void requestInterrupt(sid, runId);
+        void requestInterrupt(sid, runId, 'user_button');
         setTimeout(function () { reconcileRunStateFromServer({ silent: true, respectStopSuppress: true }); }, 3000);
         return;
     }
@@ -90,7 +91,7 @@ function pauseCurrentRun() {
     renderSessionListIfChanged(false);
     appendLog(ctx, '已请求停止当前任务', 'status', sid);
     sealProcessGroup(ctx);
-    if (reachedServer) void requestInterrupt(sid, runId);
+    if (reachedServer) void requestInterrupt(sid, runId, 'user_button');
     setTimeout(function () { reconcileRunStateFromServer({ silent: true, respectStopSuppress: true }); }, 3000);
 }
 
@@ -373,7 +374,7 @@ function buildAndBindSessionRow(sess, allSessions, nextStreamMap) {
                 if (nextSession) await switchSession(nextSession.id);
                 else await createNewSession();
             }
-            void requestInterrupt(deletedSessionId);
+            void requestInterrupt(deletedSessionId, '', 'session_deleted');
             void fetch('/sessions/' + encodeURIComponent(deletedSessionId), { method: 'DELETE' })
                 .then(function (resp) {
                     if (!resp.ok) throw new Error('delete failed: ' + resp.status);
@@ -957,7 +958,9 @@ async function loadSessionMessages(sessionId, scrollBehavior, opts) {
         if (canUseSnapshot) {
             try {
                 const snapshotUrl = '/sessions/' + encodeURIComponent(sessionId)
-                    + '/history_snapshot?turns=' + encodeURIComponent(String(HISTORY_DIALOGUES_PER_PAGE));
+                    + '/history_snapshot?turns=' + encodeURIComponent(String(HISTORY_DIALOGUES_PER_PAGE))
+                    + '&event_budget=' + encodeURIComponent(String(HISTORY_EVENT_BUDGET))
+                    + '&include_aux=false';
                 for (let migrationAttempt = 0; migrationAttempt < 120; migrationAttempt += 1) {
                     const snapshotResp = await fetchWithTimeout(snapshotUrl, {}, 15000);
                     const snapshot = await snapshotResp.json().catch(function () { return null; });
@@ -998,7 +1001,10 @@ async function loadSessionMessages(sessionId, scrollBehavior, opts) {
         }
         if (!raw) {
             let url = '/sessions/' + encodeURIComponent(sessionId) + '/messages';
-            if (!opts.full) url += '?turns=' + HISTORY_DIALOGUES_PER_PAGE;
+            if (!opts.full) {
+                url += '?turns=' + HISTORY_DIALOGUES_PER_PAGE
+                    + '&event_budget=' + encodeURIComponent(String(HISTORY_EVENT_BUDGET));
+            }
             const response = await fetchWithTimeout(url, {}, 15000);
             if (!response.ok) throw new Error('messages failed: ' + response.status);
             raw = await response.json();
@@ -1225,8 +1231,7 @@ async function switchSession(sessionId, opts) {
         rebuildToc({ localOnly: true });
         updateSessionTitle();
         scheduleContextTokensAfterPaint(sessionId);
-        if (restoredFromCache) restoreCachedSessionScrollPosition(sessionId);
-        else applyChatScrollAfterHistoryLoad(sessionId, 'saved-or-bottom');
+        restoreCachedSessionScrollPosition(sessionId);
         if (typeof refreshTodoPlanPanel === 'function') void refreshTodoPlanPanel();
         else renderTodoPlanForCurrentSession();
         if (typeof refreshHumanInteractions === 'function') void refreshHumanInteractions(sessionId);
@@ -1258,7 +1263,7 @@ async function switchSession(sessionId, opts) {
         setTimeout(async function () {
         if (switchToken !== switchSessionEpoch || sessionId !== currentSessionId) { resolve(false); return; }
         try {
-            var loadedOk = await loadSessionMessages(sessionId, undefined, {
+            var loadedOk = await loadSessionMessages(sessionId, 'saved-smooth-or-bottom', {
                 preloadOlderIfShort: isServerStreamActive(sessionId),
                 allowDuringRun: isServerStreamActive(sessionId),
                 tocAlreadyStarted: tocAlreadyStarted,

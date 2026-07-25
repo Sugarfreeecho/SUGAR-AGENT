@@ -280,6 +280,30 @@ def test_all_closed_external_tools_can_start_before_finish_reason():
     assert agent_loop._can_execute_closed_stream_tool("context_manage") is False
 
 
+def test_early_tool_completion_waits_for_llm_commit_before_ui_emit():
+    import agent_loop
+
+    react_source = inspect.getsource(agent_loop._react_node_once)
+    early_runner = react_source.split("async def _run_early_tool_call", 1)[1].split(
+        "def _maybe_start_closed_tool_call", 1
+    )[0]
+    checkpoint = react_source.split("async def checkpoint_completed_tool_result", 1)[1].split(
+        "call_record =", 1
+    )[0]
+    interrupted_commit = react_source.split("if steer_interrupted_this_call:", 1)[1].split(
+        "if await _consume_steer_messages", 1
+    )[0]
+
+    # Execution still starts early, but a completed tool row can no longer be
+    # persisted/published ahead of this react iteration's LLM rows.
+    assert "asyncio.create_task(_run_early_tool_call" in react_source
+    assert "_emit_tool_call_sse" not in early_runner
+    assert "_emit_tool_call_sse" in checkpoint
+    assert interrupted_commit.index('"type": "llm_response"') < interrupted_commit.index(
+        "_emit_tool_call_sse"
+    )
+
+
 def test_frontend_uses_independent_sse_sequence_scopes_and_fast_reattach():
     store_source = (ROOT / "frontend/src/app/state/session-store.js").read_text(encoding="utf-8")
     sse_source = (ROOT / "frontend/src/app/modules/sse-handling.js").read_text(encoding="utf-8")
@@ -290,3 +314,18 @@ def test_frontend_uses_independent_sse_sequence_scopes_and_fast_reattach():
     assert "scheduleActiveSessionReconnect(runSessionId, { delayMs: 120 })" in sse_source
     assert 'payload["seq_scope"] = "ui_projection"' in webui_source
     assert "subscription.__anext__()" in webui_source
+
+
+def test_frontend_inserts_live_react_rows_in_logical_phase_order():
+    source = (ROOT / "frontend/src/app/modules/message-rendering.js").read_text(encoding="utf-8")
+    helper = source.split("function insertReactOrderedFeedRow", 1)[1].split(
+        "function createProcessFeedRow", 1
+    )[0]
+    creator = source.split("function createProcessFeedRow", 1)[1].split(
+        "function appendLlmStreamDelta", 1
+    )[0]
+
+    assert "existingIter === iter && existingPhase > phase" in helper
+    assert "body.insertBefore(row, existing)" in helper
+    assert "insertReactOrderedFeedRow(body, row, type, streamOpts.reactIter, reactGenerationForContext(ctx))" in creator
+    assert "data-react-generation" in creator

@@ -82,7 +82,7 @@ async function testAutoDrainRequiresACompleteIdleBoundary() {
     isFollowupDispatchBusy: () => dispatchBusy,
     getFollowupQueue: () => queue,
     renderFollowupQueue() {},
-    sendFollowupNow: async (id) => { sent.push(id); },
+    sendFollowupNow: async (id, sid, options) => { sent.push([id, sid, options]); },
     setTimeout: (fn, delay) => {
       const id = ++timerSeq;
       timers.set(id, { fn, delay });
@@ -132,7 +132,10 @@ async function testAutoDrainRequiresACompleteIdleBoundary() {
   immediate.fn();
   await Promise.resolve();
   await Promise.resolve();
-  assert.deepStrictEqual(sent, ['first'], 'automatic continuation must send only the FIFO head');
+  assert.strictEqual(sent.length, 1, 'automatic continuation must send only one row');
+  assert.strictEqual(sent[0][0], 'first');
+  assert.strictEqual(sent[0][1], 's');
+  assert.strictEqual(sent[0][2].autoAfterRun, true, 'automatic continuation must use normal-chat mode');
   assert.strictEqual(queue.length, 2, 'the dispatcher owns queue state transitions; drain must not delete rows');
   assert.strictEqual(timers.size, 0, 'a completed attempt must not arm an automatic retry loop');
 }
@@ -158,6 +161,7 @@ async function testRunStartSignalAndFallbacks() {
 
   let queue = [];
   let sendCalls = 0;
+  let lastSendOptions = null;
   let waitForLock = true;
   let steerResponse = null;
   const ctx = context({
@@ -182,6 +186,7 @@ async function testRunStartSignalAndFallbacks() {
     appendLogVisible() {},
     sendMessage: async (options) => {
       sendCalls += 1;
+      lastSendOptions = options;
       options.onRunStarted({ sessionId: 's', runId: 'new-run' });
       return true;
     },
@@ -202,9 +207,16 @@ async function testRunStartSignalAndFallbacks() {
   });
   vm.runInContext(startHelper + between('async function sendFollowupNowImpl', 'async function sendFollowupNow(itemId'), ctx);
 
+  queue = [{ id: 'auto', text: 'next task', display: 'next task', skills: [], steerMode: 'interrupt', status: '' }];
+  await ctx.sendFollowupNowImpl('auto', 's', { autoAfterRun: true });
+  assert.strictEqual(sendCalls, 1);
+  assert.strictEqual(lastSendOptions.fromQueue, true);
+  assert.strictEqual(lastSendOptions.forceStart, true);
+  assert.strictEqual(queue.length, 0, 'automatic continuation must become an ordinary accepted /chat turn');
+
   queue = [{ id: 'fallback', text: 'hello', display: 'hello', skills: [], steerMode: 'append', status: '' }];
   await ctx.sendFollowupNowImpl('fallback', 's');
-  assert.strictEqual(sendCalls, 1);
+  assert.strictEqual(sendCalls, 2);
   assert.strictEqual(queue.length, 0, 'accepted fallback /chat must remove the queue item exactly once');
 
   steerResponse = {
@@ -217,13 +229,60 @@ async function testRunStartSignalAndFallbacks() {
   await ctx.sendFollowupNowImpl('restart', 's');
   assert.strictEqual(queue.length, 1);
   assert.strictEqual(queue[0].status, 'restarting');
-  assert.strictEqual(sendCalls, 1, 'restart must not call /chat while the previous send lock is held');
+  assert.strictEqual(sendCalls, 2, 'restart must not call /chat while the previous send lock is held');
 
   waitForLock = true;
   queue[0].status = '';
   await ctx.sendFollowupNowImpl('restart', 's');
-  assert.strictEqual(sendCalls, 2);
+  assert.strictEqual(sendCalls, 3);
   assert.strictEqual(queue.length, 0, 'restart item is removed only after the replacement stream is accepted');
+}
+
+async function testManualSendPrioritizesTheClickedRow() {
+  const queue = [
+    { id: 'first', text: 'first', status: '' },
+    { id: 'clicked', text: 'clicked', status: '' },
+  ];
+  const cleared = [];
+  const dispatched = [];
+  const drainTimers = { s: { timer: 37 } };
+  const ctx = context({
+    currentSessionId: 'other',
+    followupDrainTimers: drainTimers,
+    clearTimeout: (id) => { cleared.push(id); },
+    cancelFollowupQueueDrain(sessionId) {
+      const existing = drainTimers[sessionId];
+      if (!existing) return;
+      cleared.push(existing.timer);
+      delete drainTimers[sessionId];
+    },
+    getFollowupQueue: () => queue,
+    persistFollowupQueue() {},
+    renderFollowupQueue() {},
+    withFollowupDispatch: async (sid, callback) => {
+      dispatched.push(['before', sid, queue.map((item) => item.id)]);
+      return callback();
+    },
+    sendFollowupNowImpl: async (id, sid, options) => {
+      dispatched.push(['sent', id, sid, options.manual, queue.map((item) => item.id)]);
+    },
+  });
+  vm.runInContext(
+    between('async function sendFollowupNow(itemId', 'async function sendMessage'),
+    ctx,
+  );
+
+  await ctx.sendFollowupNow('clicked', 's', { manual: true });
+  assert.deepStrictEqual(cleared, [37], 'manual send must cancel an older automatic drain');
+  assert.deepStrictEqual(
+    Array.from(queue, (item) => item.id),
+    ['clicked', 'first'],
+    'the clicked row must be promoted before entering the session dispatcher',
+  );
+  assert.deepStrictEqual(
+    JSON.parse(JSON.stringify(dispatched[1])),
+    ['sent', 'clicked', 's', true, ['clicked', 'first']],
+  );
 }
 
 function testAppendOptimisticRowCommitsInPlace() {
@@ -278,9 +337,11 @@ function testAppendOptimisticRowCommitsInPlace() {
   assert.strictEqual(boundaries, 0, 'append mode must retain the active process block');
   ctx.prepareSteerProcessBoundary(ctxObject, 'interrupt', 'interrupt-1');
   ctx.prepareSteerProcessBoundary(ctxObject, 'interrupt', 'interrupt-1');
-  assert.strictEqual(boundaries, 1, 'one interrupt operation must seal the old block exactly once');
+  assert.strictEqual(boundaries, 0, 'interrupt must retain the active execution-process block');
+  assert.strictEqual(ctxObject.reactGeneration, 1, 'one interrupt operation advances one logical generation');
   ctx.prepareSteerProcessBoundary(ctxObject, 'interrupt', 'interrupt-2');
-  assert.strictEqual(boundaries, 2, 'a later interrupt starts another process block');
+  assert.strictEqual(boundaries, 0, 'later interrupts also stay in the same process block');
+  assert.strictEqual(ctxObject.reactGeneration, 2);
 
   ctxObject.lastUserEventIndex = 3;
   ctx.markSteerEventPosition(ctxObject, 7, 11);
@@ -292,6 +353,7 @@ function testAppendOptimisticRowCommitsInPlace() {
   await testDispatcherDoesNotConsumePendingRows();
   await testAutoDrainRequiresACompleteIdleBoundary();
   await testRunStartSignalAndFallbacks();
+  await testManualSendPrioritizesTheClickedRow();
   testAppendOptimisticRowCommitsInPlace();
   process.stdout.write('followup dispatcher runtime checks passed\n');
 })().catch((error) => {
