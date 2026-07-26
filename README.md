@@ -327,6 +327,19 @@ npm run install:hooks
 
 ---
 
+## 插件生态
+
+MyAgent Plugin API v1 支持在独立持久 Worker 中注册 Python/Node Tool、Hook、
+Slash Command 和生命周期回调，也可在同一插件包中携带 Skill、MCP、Agent、Prompt
+等声明式资源。扩展管理页 `/setup/extensions` 支持从本地目录、压缩包或 Git URL
+安装/更新插件、准备私有 Python/Node 依赖、启停、热重载和可恢复卸载。
+
+当前还提供 Claude Code、Codex、Hermes Agent 与 OpenCode 的兼容发现/适配诊断。
+原生 SDK、Manifest Schema、effect/worktree 契约和兼容边界见
+[Plugin API v1](docs/plugin_api_v1.md) 与 [Hooks / Plugins](docs/hooks_plugins.md)。
+
+---
+
 ## 配置说明
 
 ### LLM 配置

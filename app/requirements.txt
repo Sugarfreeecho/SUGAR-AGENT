@@ -18,6 +18,7 @@ openai==1.0
 openpyxl
 orjson==3.9.0
 pandas==2.2.0
+packaging>=23.2
 pdfplumber
 pillow
 prometheus-client==0.20.0

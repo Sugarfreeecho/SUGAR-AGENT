@@ -5107,7 +5107,7 @@ _ENV_HINTS: dict[str, str] = {
     "AGENT_TEAM_SERIAL_WRITE_TOOLS": "逗号分隔；团队成员调用这些写工具时按根团队串行执行。",
     "AGENT_TEAM_PERMISSION_TOOLS": "逗号分隔；团队成员调用这些高风险工具前必须消费 lead 的一次性授权。",
     "HOOKS_ENABLED": "1（默认）启用生命周期 Hook；0/false/no/off 会跳过项目与插件 Hook。按次读取，保存后立即生效。",
-    "PLUGINS_ENABLED": "1（默认）启用插件发现与组件合并；0/false/no/off 会移除插件 Skill、MCP、Hook、Agent 与 Prompt。",
+    "PLUGINS_ENABLED": "1（默认）启用插件发现、组件合并与 Worker Runtime；0/false/no/off 会移除插件 Tool、Hook、Command、MCP、Skill、Agent 与 Prompt。",
     "HOOKS_PATH": "可选 hooks.json 路径；留空时使用 WORK_DIR/hooks.json。",
     "PLUGINS_DIR": "单个插件发现目录；留空时使用项目 plugins 与 ~/.myagent/plugins。",
     "PLUGINS_DIRS": "多个插件发现目录，使用系统 PATH 分隔符（Windows 为分号）；优先于 PLUGINS_DIR。",
@@ -5390,6 +5390,56 @@ async def reload_extensions_api(request: Request):
     except Exception as exc:
         logger.exception("Extension reload failed")
         return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
+
+
+@fastapi_app.post("/api/plugins/install")
+async def install_plugin_api(request: Request):
+    try:
+        data = await request.json()
+    except Exception:
+        return JSONResponse({"ok": False, "error": "invalid json"}, status_code=400)
+    if not isinstance(data, dict) or not str(data.get("source") or "").strip():
+        return JSONResponse({"ok": False, "error": "source is required"}, status_code=400)
+    try:
+        from agent_extensions import install_plugin
+
+        result = await asyncio.to_thread(
+            install_plugin,
+            str(data["source"]).strip(),
+            replace=bool(data.get("replace", False)),
+            ref=str(data.get("ref") or "").strip(),
+            install_dependencies=bool(data.get("install_dependencies", False)),
+        )
+        await agent_mcp.force_reload()
+        return JSONResponse({"ok": True, **result})
+    except Exception as exc:
+        logger.exception("Plugin installation failed")
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+
+
+@fastapi_app.delete("/api/plugins/{plugin_id}")
+async def uninstall_plugin_api(plugin_id: str):
+    try:
+        from agent_extensions import uninstall_plugin
+
+        result = await asyncio.to_thread(uninstall_plugin, plugin_id)
+        await agent_mcp.force_reload()
+        return JSONResponse({"ok": True, **result})
+    except Exception as exc:
+        logger.exception("Plugin uninstall failed")
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+
+
+@fastapi_app.post("/api/plugins/{plugin_id}/dependencies")
+async def install_plugin_dependencies_api(plugin_id: str):
+    try:
+        from agent_extensions import install_plugin_dependencies
+
+        result = await asyncio.to_thread(install_plugin_dependencies, plugin_id)
+        return JSONResponse({"ok": True, **result})
+    except Exception as exc:
+        logger.exception("Plugin dependency installation failed")
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
 
 
 @fastapi_app.get("/api/mcp_config")
