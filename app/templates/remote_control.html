@@ -156,15 +156,19 @@
   function renderEvent(event) {
     if(!event || ["llm_reasoning_delta","llm_response_delta","sse_keepalive"].includes(event.type)) return;
     if(event.type === "tool_approval_required" || event.type === "approval_requested") { renderApproval(event); return; }
-    const div=document.createElement("div"); div.className=`event ${event.type||"status"}`; div.setAttribute("data-i18n-skip","true");
+    const div=document.createElement("div"); div.className=`event ${event.type||"status"}`;
+    const runtimeEventTypes=new Set(["status","error","warning","validate_final","tool_call","context_trim_progress","context_summary_progress","key_context_progress","subagent_start","subagent_finish"]);
+    if(!runtimeEventTypes.has(event.type)) div.setAttribute("data-i18n-skip","true");
     const content=event.content ?? event.message ?? event.title ?? (event.type ? `[${event.type}]` : "");
     div.textContent=typeof content === "string" ? content : JSON.stringify(content,null,2); $("messages").appendChild(div);
   }
   function renderApproval(event) {
     const div=document.createElement("div"); div.className="event approval";
-    const title=document.createElement("strong"); title.textContent=event.title || "需要确认"; if(event.title)title.setAttribute("data-i18n-skip","true");
+    const title=document.createElement("strong"); title.textContent=event.title || "需要确认";
+    if(event.title) title.setAttribute("data-i18n-skip","true");
     const customMessage=event.message || event.tool;
-    const msg=document.createElement("div"); msg.textContent=customMessage || "工具请求"; if(customMessage)msg.setAttribute("data-i18n-skip","true");
+    const msg=document.createElement("div"); msg.textContent=customMessage || "工具请求";
+    if(customMessage) msg.setAttribute("data-i18n-skip","true");
     const actions=document.createElement("div"); actions.className="actions";
     for(const [label,approve] of [["允许",true],["拒绝",false]]){
       const b=document.createElement("button"); b.textContent=label; if(approve)b.className="primary";
