@@ -781,7 +781,11 @@ body {
     box-shadow: 0 6px 28px rgba(0, 0, 0, 0.22), 0 2px 8px rgba(0, 0, 0, 0.1);
 }
 .chat-goal-card[hidden], .chat-todo-plan-panel[hidden] { display: none; }
-.chat-goal-heading { display:flex; justify-content:space-between; font-size:0.58rem; font-weight:700; color:var(--accent-2); letter-spacing:0.06em; }
+.chat-goal-heading {
+    display:flex; justify-content:space-between;
+    font-size:0.62rem; font-weight:600; color:var(--text-tertiary);
+    letter-spacing:0.05em; text-transform:uppercase;
+}
 .chat-goal-heading #chat-goal-status { margin-left:0.5rem; white-space:nowrap; font-variant-numeric:tabular-nums; }
 .chat-goal-objective {
     margin-top:0.28rem; font-size:0.68rem; line-height:1.4; color:var(--text-primary);
@@ -801,6 +805,17 @@ body {
 .chat-goal-icon-btn svg[hidden] { display:none; }
 .chat-goal-icon-btn:hover { color:var(--text-primary); border-color:var(--accent-2); background:rgba(137,180,250,0.13); transform:translateY(-1px); }
 .chat-goal-icon-btn--danger:hover { color:#f38ba8; border-color:rgba(243,139,168,0.55); background:rgba(243,139,168,0.12); }
+.chat-goal-review-btn {
+    min-height:1.55rem; padding:0.18rem 0.65rem;
+    border:1px solid rgba(166,227,161,0.42); border-radius:5px;
+    background:rgba(166,227,161,0.1); color:var(--text-primary);
+    font:600 0.66rem/1.2 var(--sans); cursor:pointer;
+    transition:border-color 0.15s ease, background 0.15s ease, transform 0.15s ease;
+}
+.chat-goal-review-btn:hover {
+    border-color:rgba(166,227,161,0.72); background:rgba(166,227,161,0.18);
+    transform:translateY(-1px);
+}
 .chat-todo-plan-close {
     display: inline-flex; align-items: center; justify-content: center;
     width: 16px; height: 16px; padding: 0;
@@ -3667,11 +3682,70 @@ body {
 :root.theme-light .goal-edit-modal__close { background:rgba(0,0,0,0.025); }
 body.goal-editing .chat-stream *, body.goal-editing .subagent-dock * { animation-play-state:paused !important; }
 
+.goal-review-modal-overlay {
+    position:fixed; inset:0; z-index:1003; display:none; align-items:center; justify-content:center;
+    padding:1rem; background:rgba(7,9,16,0.78); backdrop-filter:blur(12px); -webkit-backdrop-filter:blur(12px);
+    opacity:0; transition:opacity 0.16s ease;
+}
+.goal-review-modal-overlay.is-open { display:flex; opacity:1; }
+.goal-review-modal {
+    width:min(46rem, 100%); max-height:calc(100vh - 2rem); overflow:auto;
+    padding:1.15rem; border:1px solid var(--border-glass); border-radius:var(--radius-md);
+    background:rgba(18,20,32,0.97); box-shadow:0 24px 80px rgba(0,0,0,0.48);
+    transform:translateY(8px) scale(0.99); transition:transform 0.16s ease;
+}
+.goal-review-modal-overlay.is-open .goal-review-modal { transform:translateY(0) scale(1); }
+.goal-review-modal__head { display:flex; align-items:flex-start; justify-content:space-between; gap:1rem; margin-bottom:0.9rem; }
+.goal-review-modal__title { margin:0; color:var(--text-primary); font-size:1.05rem; line-height:1.35; }
+.goal-review-modal__subtitle { margin:0.25rem 0 0; color:var(--text-tertiary); font-size:0.76rem; line-height:1.45; }
+.goal-review-modal__close {
+    display:inline-flex; align-items:center; justify-content:center; flex:0 0 2rem;
+    width:2rem; height:2rem; padding:0; border:1px solid var(--border-glass); border-radius:var(--radius-sm);
+    background:rgba(255,255,255,0.035); color:var(--text-secondary); font-size:1.1rem; cursor:pointer;
+}
+.goal-review-modal__close:hover { color:var(--text-primary); background:rgba(255,255,255,0.08); }
+.goal-review-modal__label {
+    display:block; margin-bottom:0.38rem; color:var(--text-secondary);
+    font-size:0.72rem; font-weight:650;
+}
+.goal-review-modal__judge-label { margin-top:0.8rem; }
+.goal-review-modal__textarea {
+    width:100%; min-height:8rem; max-height:30vh; resize:vertical;
+    padding:0.75rem 0.85rem; border:1px solid var(--border-glass); border-radius:var(--radius-sm);
+    outline:none; background:rgba(10,10,20,0.34); color:var(--text-primary);
+    font:0.84rem/1.6 var(--sans);
+}
+.goal-review-modal__textarea--judge { min-height:7rem; }
+.goal-review-modal__textarea:focus {
+    border-color:rgba(137,180,250,0.62); background:rgba(10,10,20,0.5);
+    box-shadow:0 0 0 3px rgba(137,180,250,0.11);
+}
+.goal-review-modal__status {
+    min-height:1.15rem; margin-top:0.55rem; color:var(--text-tertiary);
+    font-size:0.7rem; line-height:1.4;
+}
+.goal-review-modal__status.is-error { color:#f38ba8; }
+.goal-review-modal__status.is-success { color:#a6e3a1; }
+.goal-review-modal__actions { display:flex; justify-content:flex-end; flex-wrap:wrap; gap:0.5rem; margin-top:0.5rem; }
+.goal-review-modal__actions .ui-modal-btn:disabled { opacity:0.46; cursor:not-allowed; }
+.goal-review-btn--approve {
+    border-color:rgba(166,227,161,0.42); background:rgba(166,227,161,0.11); color:var(--text-primary);
+}
+.goal-review-btn--approve:hover { border-color:rgba(166,227,161,0.68); background:rgba(166,227,161,0.18); }
+:root.theme-light .goal-review-modal-overlay { background:rgba(246,248,252,0.82); }
+:root.theme-light .goal-review-modal { background:rgba(255,255,255,0.98); border-color:rgba(0,0,0,0.08); box-shadow:0 24px 70px rgba(30,41,59,0.16); }
+:root.theme-light .goal-review-modal__textarea { background:rgba(248,250,252,0.94); border-color:rgba(15,23,42,0.13); }
+:root.theme-light .goal-review-modal__textarea:focus { background:#fff; border-color:rgba(99,102,241,0.52); box-shadow:0 0 0 3px rgba(99,102,241,0.1); }
+body.goal-reviewing .chat-stream *, body.goal-reviewing .subagent-dock * { animation-play-state:paused !important; }
+
 @media (max-width: 620px) {
     .goal-edit-modal-overlay { align-items:flex-end; padding:0.5rem; }
     .goal-edit-modal { width:100%; max-height:calc(100vh - 1rem); padding:1rem; border-radius:var(--radius-md); }
     .goal-edit-modal__textarea { min-height:46vh; max-height:62vh; }
     .goal-edit-modal__meta { align-items:flex-end; flex-direction:column; gap:0.15rem; }
+    .goal-review-modal-overlay { align-items:flex-end; padding:0.5rem; }
+    .goal-review-modal { width:100%; max-height:calc(100vh - 1rem); padding:1rem; border-radius:var(--radius-md); }
+    .goal-review-modal__actions { display:grid; grid-template-columns:1fr; }
 }
 
 /* ═══════════════ 界面设置 ═══════════════ */

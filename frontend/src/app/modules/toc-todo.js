@@ -460,7 +460,7 @@ function setGoalStateForSession(sessionId, goal) {
     const now = Date.now();
     const previous = goalStateBySession.get(sid);
     const previousAnchor = goalElapsedAnchorBySession.get(sid);
-    const normalized = goal && goal.id && String(goal.status || '') !== 'completed'
+    const normalized = goal && goal.id
         ? Object.assign({}, goal)
         : null;
     goalStateBySession.set(sid, normalized);
@@ -561,9 +561,12 @@ function renderGoalMeta(goal, sessionId) {
         : 'Token ' + String(usedTokens) + ' / ' + String(goal.token_budget);
     const continuationText = translate('续跑') + ' ' + String(goal.continuation_count || 0);
     const failureText = translate('连续失败') + ' ' + String(goal.consecutive_failures || 0);
+    const judgeText = 'Judge ' + String(goal.judge_count || 0);
     const reasonLabels = {
         token_budget_exhausted: 'Token 预算已耗尽',
         consecutive_run_failures: '连续运行失败',
+        judge_parse_failures: 'Judge 解析连续失败',
+        judge_transport_failures: 'Judge 调用连续失败',
         react_iteration_limit: 'ReAct 已达到轮次上限',
         manual: '手动暂停'
     };
@@ -571,9 +574,13 @@ function renderGoalMeta(goal, sessionId) {
     const reasonText = reasonLabels[rawReason] || rawReason;
     const pauseReason = reasonText ? ' · ' + translate(reasonText) : '';
     const metaText = tokenText + ' · ' + translate('用时') + ' ' + formatGoalElapsed(elapsed)
-        + ' · ' + continuationText + ' · ' + failureText + pauseReason;
+        + ' · ' + judgeText + ' · ' + continuationText + ' · ' + failureText + pauseReason;
     let help = translate('连续失败表示 Goal 执行中连续以失败或错误结束的运行次数（包括初始执行和自动续跑）；任一轮成功完成后会归零。');
     if (goal.last_error) help += '\n' + translate('最近错误') + ': ' + String(goal.last_error);
+    if (goal.last_judge_verdict) {
+        help += '\n' + translate('最近 Judge') + ': ' + String(goal.last_judge_verdict);
+        if (goal.last_judge_reason) help += ' · ' + String(goal.last_judge_reason);
+    }
     metaEl.setAttribute('data-ui-tip', metaText + '\n' + help);
     metaEl.setAttribute('aria-label', translate('统计信息') + ': ' + metaText + '. ' + help);
     bindUiHoverTip(metaEl);
@@ -584,7 +591,7 @@ function renderGoalCard(goal, sessionId) {
     if (sid !== String(currentSessionId || '')) return;
     const card = document.getElementById('chat-goal-card');
     if (!card) return;
-    const has = !!(goal && goal.id && String(goal.status || '') !== 'completed');
+    const has = !!(goal && goal.id);
     renderedGoalState = has ? Object.assign({}, goal) : null;
     const statusEl = document.getElementById('chat-goal-status');
     const objectiveEl = document.getElementById('chat-goal-objective');
@@ -592,6 +599,7 @@ function renderGoalCard(goal, sessionId) {
     const toggle = document.getElementById('chat-goal-toggle');
     const edit = document.getElementById('chat-goal-edit');
     const remove = document.getElementById('chat-goal-delete');
+    const review = document.getElementById('chat-goal-review');
     card.hidden = !has;
     if (!has) {
         if (statusEl) statusEl.textContent = '';
@@ -608,6 +616,7 @@ function renderGoalCard(goal, sessionId) {
         if (toggle) toggle.hidden = true;
         if (edit) edit.hidden = true;
         if (remove) remove.hidden = true;
+        if (review) review.hidden = true;
         syncGoalTodoPanelVisibility();
         return;
     }
@@ -646,8 +655,10 @@ function renderGoalCard(goal, sessionId) {
         if (playIcon) playIcon.toggleAttribute('hidden', !isPaused);
         if (pauseIcon) pauseIcon.toggleAttribute('hidden', isPaused);
     }
-    if (edit) edit.hidden = false;
-    if (remove) remove.hidden = false;
+    const isCompleted = status === 'completed';
+    if (edit) edit.hidden = isCompleted;
+    if (remove) remove.hidden = isCompleted;
+    if (review) review.hidden = !isCompleted;
     syncGoalTodoPanelVisibility();
 }
 
@@ -669,19 +680,19 @@ async function refreshGoalCard() {
 }
 
 setInterval(function () {
-    if (document.visibilityState === 'hidden' || isGoalEditModalOpen()) return;
+    if (document.visibilityState === 'hidden' || isGoalEditModalOpen() || isGoalReviewModalOpen()) return;
     const sid = String(currentSessionId || '');
     const goal = sid ? goalStateBySession.get(sid) : null;
     if (goal) renderGoalMeta(goal, sid);
 }, 1000);
 
 setInterval(function () {
-    if (document.visibilityState === 'hidden' || !currentSessionId || isGoalEditModalOpen()) return;
+    if (document.visibilityState === 'hidden' || !currentSessionId || isGoalEditModalOpen() || isGoalReviewModalOpen()) return;
     void refreshGoalCard();
 }, 5000);
 
 setInterval(function () {
-    if (document.visibilityState === 'hidden' || isGoalEditModalOpen()) return;
+    if (document.visibilityState === 'hidden' || isGoalEditModalOpen() || isGoalReviewModalOpen()) return;
     const sid = String(currentSessionId || '');
     const goal = sid ? goalStateBySession.get(sid) : null;
     if (!goal || String(goal.status || '') !== 'active') return;
@@ -723,7 +734,9 @@ async function controlCurrentGoal(action, payloadOverrides) {
             const title = typeof translateUiString === 'function' ? translateUiString('Goal 操作失败') : 'Goal 操作失败';
             showUiAlert({ title: title, message: String(data.error || 'Unknown error'), variant: 'error' });
         }
-        if (action === 'resume') void refreshSingleSessionRow(sid);
+        if (action === 'resume' || (action === 'review' && String(payload.decision || '') === 'continue')) {
+            void refreshSingleSessionRow(sid);
+        }
         return r.ok;
     } catch (e) {
         if (typeof showUiAlert === 'function') {
@@ -873,6 +886,200 @@ async function deleteCurrentGoal() {
     await controlCurrentGoal('delete');
 }
 
+function goalReviewModalElements() {
+    return {
+        root: document.getElementById('goal-review-modal-root'),
+        objective: document.getElementById('goal-review-objective'),
+        judge: document.getElementById('goal-review-judge-result'),
+        status: document.getElementById('goal-review-modal-status'),
+        approve: document.getElementById('goal-review-approve'),
+        save: document.getElementById('goal-review-save'),
+        continueGoal: document.getElementById('goal-review-continue'),
+        close: document.getElementById('goal-review-modal-close'),
+    };
+}
+
+function isGoalReviewModalOpen() {
+    const root = document.getElementById('goal-review-modal-root');
+    return !!(root && root.classList.contains('is-open'));
+}
+
+function setGoalReviewModalStatus(message, kind) {
+    const elements = goalReviewModalElements();
+    if (!elements.status) return;
+    elements.status.textContent = String(message || '');
+    elements.status.classList.toggle('is-error', kind === 'error');
+    elements.status.classList.toggle('is-success', kind === 'success');
+}
+
+function setGoalReviewModalBusy(busy) {
+    const elements = goalReviewModalElements();
+    if (!elements.root) return;
+    elements.root._goalReviewSaving = !!busy;
+    [elements.approve, elements.save, elements.continueGoal].forEach(function (button) {
+        if (button) button.disabled = !!busy;
+    });
+    if (elements.objective) elements.objective.disabled = !!busy;
+    if (elements.judge) elements.judge.disabled = !!busy;
+}
+
+function closeGoalReviewModal(restoreFocus) {
+    const elements = goalReviewModalElements();
+    if (!elements.root || !elements.root.classList.contains('is-open')) return;
+    elements.root.classList.remove('is-open');
+    elements.root.setAttribute('aria-hidden', 'true');
+    setGoalReviewModalBusy(false);
+    document.body.classList.remove('goal-reviewing');
+    document.body.style.overflow = '';
+    const returnFocus = elements.root._goalReturnFocus;
+    elements.root._goalReturnFocus = null;
+    if (restoreFocus !== false && returnFocus && typeof returnFocus.focus === 'function') {
+        requestAnimationFrame(function () { returnFocus.focus(); });
+    }
+}
+
+async function submitGoalReview(decision) {
+    const elements = goalReviewModalElements();
+    if (!elements.root || elements.root._goalReviewSaving) return false;
+    const objective = String((elements.objective && elements.objective.value) || '').trim();
+    const judgeResult = String((elements.judge && elements.judge.value) || '').trim();
+    if (!objective) {
+        setGoalReviewModalStatus(
+            typeof translateUiString === 'function' ? translateUiString('Goal 描述不能为空。') : 'Goal 描述不能为空。',
+            'error'
+        );
+        return false;
+    }
+    const sid = String(elements.root.dataset.sessionId || '');
+    const goalId = String(elements.root.dataset.goalId || '');
+    if (
+        sid !== String(currentSessionId || '')
+        || !renderedGoalState
+        || String(renderedGoalState.id || '') !== goalId
+        || String(renderedGoalState.status || '') !== 'completed'
+    ) {
+        closeGoalReviewModal(false);
+        return false;
+    }
+    const payload = {
+        decision: String(decision || ''),
+        objective: objective,
+        judge_result: judgeResult
+    };
+    if (
+        decision === 'continue'
+        && renderedGoalState.token_budget != null
+        && Number(renderedGoalState.remaining_tokens || 0) <= 0
+    ) {
+        const promptText = typeof translateUiString === 'function'
+            ? translateUiString('请输入要增加的 Token 预算')
+            : '请输入要增加的 Token 预算';
+        const raw = window.prompt(promptText, '10000');
+        if (raw == null) return false;
+        const additional = Number(raw);
+        if (!Number.isInteger(additional) || additional <= 0) {
+            setGoalReviewModalStatus(
+                typeof translateUiString === 'function'
+                    ? translateUiString('预算必须是大于 0 的整数。')
+                    : '预算必须是大于 0 的整数。',
+                'error'
+            );
+            return false;
+        }
+        payload.additional_budget = additional;
+    }
+
+    setGoalReviewModalBusy(true);
+    setGoalReviewModalStatus(
+        typeof translateUiString === 'function' ? translateUiString('正在保存审核结果…') : '正在保存审核结果…',
+        ''
+    );
+    const saved = await controlCurrentGoal('review', payload);
+    setGoalReviewModalBusy(false);
+    if (!saved) {
+        setGoalReviewModalStatus(
+            typeof translateUiString === 'function' ? translateUiString('审核结果保存失败。') : '审核结果保存失败。',
+            'error'
+        );
+        return false;
+    }
+    if (decision === 'save') {
+        elements.root._goalOriginalObjective = objective;
+        elements.root._goalOriginalJudgeResult = judgeResult;
+        setGoalReviewModalStatus(
+            typeof translateUiString === 'function'
+                ? translateUiString('修改已保存，可继续编辑或选择审核结果。')
+                : '修改已保存，可继续编辑或选择审核结果。',
+            'success'
+        );
+        return true;
+    }
+    closeGoalReviewModal();
+    if (decision === 'continue') {
+        const activeSid = String(currentSessionId || '');
+        window.setTimeout(function () {
+            if (activeSid === String(currentSessionId || '')) void recoverActiveGoalStream(activeSid);
+        }, 150);
+    }
+    return true;
+}
+
+function ensureGoalReviewModalBindings() {
+    const elements = goalReviewModalElements();
+    if (!elements.root || elements.root._goalReviewBound) return elements;
+    elements.root._goalReviewBound = true;
+    if (elements.close) elements.close.addEventListener('click', function () { closeGoalReviewModal(); });
+    if (elements.approve) elements.approve.addEventListener('click', function () { void submitGoalReview('approve'); });
+    if (elements.save) elements.save.addEventListener('click', function () { void submitGoalReview('save'); });
+    if (elements.continueGoal) elements.continueGoal.addEventListener('click', function () { void submitGoalReview('continue'); });
+    elements.root.addEventListener('mousedown', function (event) {
+        if (event.target === elements.root) closeGoalReviewModal();
+    });
+    elements.root.addEventListener('keydown', function (event) {
+        if (event.key === 'Escape') {
+            event.preventDefault();
+            closeGoalReviewModal();
+        }
+    });
+    return elements;
+}
+
+function openGoalReviewModal() {
+    if (!renderedGoalState || String(renderedGoalState.status || '') !== 'completed') return;
+    const elements = ensureGoalReviewModalBindings();
+    if (!elements.root || !elements.objective || !elements.judge) return;
+    const objective = String(renderedGoalState.objective || '');
+    const judgeResult = String(
+        renderedGoalState.review_judge_result != null
+            ? renderedGoalState.review_judge_result
+            : (renderedGoalState.last_judge_reason || '')
+    );
+    elements.root.dataset.sessionId = String(currentSessionId || '');
+    elements.root.dataset.goalId = String(renderedGoalState.id || '');
+    elements.root._goalOriginalObjective = objective;
+    elements.root._goalOriginalJudgeResult = judgeResult;
+    elements.root._goalReturnFocus = document.activeElement;
+    elements.objective.value = objective;
+    elements.judge.value = judgeResult;
+    elements.root.classList.add('is-open');
+    elements.root.setAttribute('aria-hidden', 'false');
+    document.body.classList.add('goal-reviewing');
+    document.body.style.overflow = 'hidden';
+    setGoalReviewModalBusy(false);
+    const reviewStatus = String(renderedGoalState.review_status || '');
+    setGoalReviewModalStatus(
+        reviewStatus === 'approved'
+            ? (typeof translateUiString === 'function' ? translateUiString('该结果已审核通过。') : '该结果已审核通过。')
+            : '',
+        reviewStatus === 'approved' ? 'success' : ''
+    );
+    requestAnimationFrame(function () {
+        elements.objective.focus();
+        elements.objective.setSelectionRange(0, 0);
+        elements.objective.scrollTop = 0;
+    });
+}
+
 document.addEventListener('myagent:language-change', function () {
     renderGoalForCurrentSession();
 });
@@ -881,6 +1088,7 @@ if (typeof globalThis !== 'undefined') {
     globalThis.toggleCurrentGoalState = toggleCurrentGoalState;
     globalThis.editCurrentGoal = editCurrentGoal;
     globalThis.deleteCurrentGoal = deleteCurrentGoal;
+    globalThis.openGoalReviewModal = openGoalReviewModal;
 }
 
 function setTodoPlanForSession(sessionId, snapshot) {

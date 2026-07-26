@@ -38,6 +38,7 @@ _FULL_MESSAGE_REPROJECTION_TYPES = {
 
 _HOOK_RECENT_LIMIT = 50
 _GOAL_APPEND_LIMITS = {
+    "accounted_judge_run_ids": 512,
     "accounted_run_ids": 512,
     "accounted_usage_ids": 2048,
 }

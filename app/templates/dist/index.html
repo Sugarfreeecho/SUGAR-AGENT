@@ -10,9 +10,9 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:ital,wght@0,400;0,500;0,600;0,700;0,800;1,400;1,500&family=JetBrains+Mono:ital,wght@0,400;0,500;0,600;1,400&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
     <script>try { if (localStorage.getItem('myagent-theme') !== 'dark') document.documentElement.classList.add('theme-light'); } catch (e) { document.documentElement.classList.add('theme-light'); }</script>
-  <script type="module" crossorigin src="/assets/main-xtzfOsUz.js"></script>
+  <script type="module" crossorigin src="/assets/main-OKeiP09l.js"></script>
   <link rel="modulepreload" crossorigin href="/assets/modulepreload-polyfill-B5Qt9EMX.js">
-  <link rel="stylesheet" crossorigin href="/assets/main-DalzhUSC.css">
+  <link rel="stylesheet" crossorigin href="/assets/main-CjF_cV6N.css">
 </head>
 <body>
 <div class="app">
@@ -99,6 +99,7 @@
                                     <button type="button" id="chat-goal-delete" class="chat-goal-icon-btn chat-goal-icon-btn--danger" data-ui-tip="删除 Goal" aria-label="删除 Goal" onclick="deleteCurrentGoal()">
                                         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3M7 7l1 13h8l1-13M10 11v5M14 11v5"/></svg>
                                     </button>
+                                    <button type="button" id="chat-goal-review" class="chat-goal-review-btn" onclick="openGoalReviewModal()" hidden>结果审核</button>
                                 </div>
                             </section>
                             <div id="chat-todo-card" class="chat-todo-plan-panel" hidden>
@@ -181,7 +182,7 @@
     </div>
 </div>
 
-<div id="goal-edit-modal-root" class="goal-edit-modal-overlay" aria-hidden="true">
+    <div id="goal-edit-modal-root" class="goal-edit-modal-overlay" aria-hidden="true">
     <div class="goal-edit-modal" role="dialog" aria-modal="true" aria-labelledby="goal-edit-modal-title" aria-describedby="goal-edit-modal-subtitle">
         <div class="goal-edit-modal__head">
             <div>
@@ -201,9 +202,31 @@
             <button type="button" id="goal-edit-save" class="ui-modal-btn ui-modal-btn--primary">保存修改</button>
         </div>
     </div>
-</div>
+    </div>
 
-<div id="settings-modal-root" class="settings-modal-overlay" aria-hidden="true">
+    <div id="goal-review-modal-root" class="goal-review-modal-overlay" aria-hidden="true">
+        <div class="goal-review-modal" role="dialog" aria-modal="true" aria-labelledby="goal-review-modal-title" aria-describedby="goal-review-modal-subtitle">
+            <div class="goal-review-modal__head">
+                <div>
+                    <h2 id="goal-review-modal-title" class="goal-review-modal__title">Goal 结果审核</h2>
+                    <p id="goal-review-modal-subtitle" class="goal-review-modal__subtitle">核对目标与 Judge 结论，再决定是否通过或继续执行。</p>
+                </div>
+                <button type="button" id="goal-review-modal-close" class="goal-review-modal__close" aria-label="关闭">×</button>
+            </div>
+            <label class="goal-review-modal__label" for="goal-review-objective">当前 Goal 描述</label>
+            <textarea id="goal-review-objective" class="goal-review-modal__textarea" maxlength="12000" rows="8" spellcheck="false"></textarea>
+            <label class="goal-review-modal__label goal-review-modal__judge-label" for="goal-review-judge-result">本次 Judge 结果</label>
+            <textarea id="goal-review-judge-result" class="goal-review-modal__textarea goal-review-modal__textarea--judge" maxlength="12000" rows="8" spellcheck="false"></textarea>
+            <div id="goal-review-modal-status" class="goal-review-modal__status" aria-live="polite"></div>
+            <div class="goal-review-modal__actions">
+                <button type="button" id="goal-review-approve" class="ui-modal-btn goal-review-btn--approve">审核通过</button>
+                <button type="button" id="goal-review-save" class="ui-modal-btn ui-modal-btn--ghost">保存修改</button>
+                <button type="button" id="goal-review-continue" class="ui-modal-btn ui-modal-btn--primary">继续 Goal 任务</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="settings-modal-root" class="settings-modal-overlay" aria-hidden="true">
     <div class="settings-modal" role="dialog" aria-modal="true" aria-labelledby="settings-modal-title" tabindex="-1">
         <div class="settings-modal__head">
             <h2 id="settings-modal-title" class="settings-modal__title">界面设置</h2>

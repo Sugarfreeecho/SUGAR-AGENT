@@ -431,9 +431,32 @@ in the Runtime V2 event log and snapshot. The web UI provides pause, resume, add
 controls. An exhausted token budget requires a positive budget increase before resuming. By default, three
 consecutive run failures pause the Goal to prevent an infinite retry loop.
 
+Goal 使用固定的双阶段完成流程。执行模型自主推进任务，仅在认为整个目标已经达成时调用
+`update_goal(status=completed)`；该调用不会直接完成 Goal，而是发起一次无工具的独立 Judge 裁决。
+Judge 返回 `continue` 时，反馈会注入下一轮供执行模型修正；返回 `done` 时，Goal 才进入人工审核。
+Judge 调用本身的 Token 计入 Goal 预算。单次 Judge 失败会继续执行，连续解析失败 3 次或调用失败 5 次
+则暂停 Goal。
+
+Goal uses one fixed two-stage completion flow. The worker advances the task autonomously and calls
+`update_goal(status=completed)` only when it believes the entire objective is achieved. That call requests an
+independent, tool-free Judge verdict instead of completing the Goal directly. `continue` feeds the Judge's
+feedback into the next worker run; `done` moves the Goal to human review. Judge usage counts toward the Goal
+budget. A single Judge failure fails open, while repeated parse or transport failures pause the Goal.
+
+完成后的 Goal 会保留在侧栏并显示“已完成”，右侧操作替换为“结果审核”。审核弹窗允许修改 Goal 描述和
+Judge 结论：“保存修改”保留弹窗与待审核状态；“继续 Goal 任务”重新激活 Goal，并把人工意见注入下一轮；
+“审核通过”确认目标达成、保留审计事件并从侧栏移除 Goal。
+
+After completion, the Goal remains visible with a Result Review action. The review dialog can edit both the
+objective and Judge result. Save keeps the review pending, Continue reactivates the Goal and injects the human
+feedback into the next run, and Approve finalizes the review while removing the card without deleting audit
+events.
+
 `GOAL_ENABLED=0`（也接受 `false`、`no` 或 `off`）会禁用整个功能；默认启用。禁用后模型工具列表不会
 暴露 Goal 工具，服务端不会自动续跑，Goal 控制接口也会拒绝变更。`GOAL_RUNNER_POLL_SECONDS` 控制服务端
 扫描间隔（默认 `2` 秒，最小 `0.5` 秒），`GOAL_MAX_CONSECUTIVE_FAILURES` 控制连续失败暂停阈值（默认 `3`）。
+Judge 可通过 `GOAL_JUDGE_MAX_OUTPUT_TOKENS`、`GOAL_JUDGE_EVIDENCE_MAX_CHARS`、
+`GOAL_JUDGE_MAX_PARSE_FAILURES` 和 `GOAL_JUDGE_MAX_TRANSPORT_FAILURES` 调整。
 修改这些环境变量后需要重启 MyAgent。
 
 Set `GOAL_ENABLED=0` (also accepts `false`, `no`, or `off`) to disable the entire feature; it is enabled by

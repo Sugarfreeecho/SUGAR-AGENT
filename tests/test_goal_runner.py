@@ -234,3 +234,71 @@ def test_goal_edit_and_delete_routes_publish_session_scoped_state(monkeypatch):
     assert published[1][0] == "s1"
     assert published[1][1]["goal"] is None
     assert published[1][1]["goal_event"] == "user_delete"
+
+
+def test_goal_review_route_reopens_or_removes_completed_goal(monkeypatch):
+    import agent_goal
+    import webui
+
+    calls = []
+    published = []
+    cleared = []
+
+    class Manager:
+        @staticmethod
+        def review_completion(session_id, decision, **kwargs):
+            calls.append((session_id, decision, kwargs))
+            return {
+                "id": "g1",
+                "status": "active" if decision == "continue" else "completed",
+                "objective": kwargs["objective"],
+                "review_judge_result": kwargs["judge_result"],
+                "deleted": decision == "approve",
+            }
+
+    class ContinueRequest:
+        @staticmethod
+        async def json():
+            return {
+                "decision": "continue",
+                "objective": "Revised objective",
+                "judge_result": "Verification is missing.",
+                "additional_budget": 50,
+            }
+
+    class ApproveRequest:
+        @staticmethod
+        async def json():
+            return {
+                "decision": "approve",
+                "objective": "Revised objective",
+                "judge_result": "Verified by the reviewer.",
+            }
+
+    async def publish(session_id, event):
+        published.append((session_id, event))
+
+    monkeypatch.setattr(agent_goal, "manager_for", lambda _session_manager: Manager())
+    monkeypatch.setattr(webui, "publish_session_event", publish)
+    monkeypatch.setattr(
+        webui.session_manager,
+        "clear_interrupt",
+        lambda session_id: cleared.append(session_id),
+    )
+
+    continued = asyncio.run(
+        webui.control_session_goal("s1", "review", ContinueRequest())
+    )
+    approved = asyncio.run(
+        webui.control_session_goal("s1", "review", ApproveRequest())
+    )
+    continued_body = json.loads(continued.body)
+    approved_body = json.loads(approved.body)
+
+    assert continued_body["goal"]["status"] == "active"
+    assert calls[0][1] == "continue"
+    assert calls[0][2]["additional_budget"] == 50
+    assert cleared == ["s1"]
+    assert published[0][1]["goal_event"] == "user_review_continue"
+    assert approved_body["goal"] is None
+    assert published[1][1]["goal_event"] == "user_review_approve"

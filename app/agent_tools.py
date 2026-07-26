@@ -4396,7 +4396,7 @@ OPENAI_TOOL_DEFINITIONS: List[Dict[str, Any]] = [
     ),
     _openai_function_schema(
         "update_goal",
-        "Mark the current goal completed only when all required work is done, or report a genuinely repeated blocker. The same blocker must be reported three times before the goal becomes blocked.",
+        "Request independent Judge verification when all required work is done, or report a genuinely repeated blocker. Judge done moves the Goal to human review; Judge continue keeps it active. The same blocker must be reported three times before the goal becomes blocked.",
         {
             "status": {"type": "string", "enum": ["completed", "blocked"]},
             "reason": {"type": "string", "description": "Required when status is blocked."},

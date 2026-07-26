@@ -193,10 +193,14 @@ class GoalManager:
             token_budget = int(token_budget)
             if token_budget <= 0:
                 raise GoalError("token_budget must be greater than zero")
-
         def mutate(existing: Optional[Dict[str, Any]]):
-            if existing and existing.get("status") in ACTIVE_GOAL_STATUSES:
-                raise GoalError("An unfinished goal already exists for this session.")
+            if existing and existing.get("deleted") is not True and (
+                existing.get("status") in ACTIVE_GOAL_STATUSES
+                or existing.get("status") == "completed"
+            ):
+                raise GoalError(
+                    "A current or pending-review goal already exists for this session."
+                )
             now = _now_iso()
             goal = {
                 "schema_version": 1,
@@ -204,6 +208,22 @@ class GoalManager:
                 "id": "goal_" + uuid.uuid4().hex[:16],
                 "objective": objective,
                 "status": "active",
+                "completion_requested_at": None,
+                "completion_requested_by": None,
+                "completion_request_reason": None,
+                "judge_count": 0,
+                "judge_parse_failures": 0,
+                "judge_transport_failures": 0,
+                "last_judge_verdict": None,
+                "last_judge_reason": None,
+                "last_judge_raw": None,
+                "last_judged_at": None,
+                "accounted_judge_run_ids": [],
+                "review_status": None,
+                "reviewed_at": None,
+                "reviewed_by": None,
+                "review_judge_result": None,
+                "review_feedback_pending": False,
                 "token_budget": token_budget,
                 "used_tokens": 0,
                 "active_seconds": 0.0,
@@ -256,6 +276,16 @@ class GoalManager:
             if current.get("status") in TERMINAL_GOAL_STATUSES:
                 raise GoalError(f"Cannot update a goal in status {current.get('status')}.")
             goal = dict(current)
+            if status == "completed":
+                goal.update({
+                    "completion_requested_at": _now_iso(),
+                    "completion_requested_by": str(actor or "model"),
+                    "completion_request_reason": reason or None,
+                })
+                goal = self._touch(goal, actor=actor, run_id=run_id or report_id)
+                response = dict(goal)
+                response["completion_pending_judge"] = True
+                return "goal_completion_requested", self._stored(goal), response
             if status == "blocked":
                 if not reason:
                     raise GoalError("A blocked goal requires a reason.")
@@ -285,18 +315,208 @@ class GoalManager:
             goal["status"] = status
             goal["pause_reason"] = None
             goal["next_retry_at"] = None
-            if status == "completed":
-                goal.update({
-                    "blocked_streak": 0,
-                    "blocked_fingerprint": None,
-                    "blocker_key": None,
-                    "blocked_reason": None,
-                    "last_blocker_report_id": None,
-                })
             goal = self._touch(goal, actor=actor, run_id=run_id or report_id)
             return f"goal_{status}", self._stored(goal), self._stored(goal)
 
         return self._mutate(session_id, mutate, run_id=run_id or report_id)
+
+    def should_judge(self, session_id: str) -> bool:
+        if not goal_enabled():
+            return False
+        goal = self.get(session_id)
+        if not goal or goal.get("status") != "active":
+            return False
+        return bool(goal.get("completion_requested_at"))
+
+    def record_judge_result(
+        self,
+        session_id: str,
+        verdict: str,
+        reason: str = "",
+        *,
+        run_id: str,
+        raw: str = "",
+        failure_kind: str = "",
+        expected_goal_id: str = "",
+    ) -> Dict[str, Any]:
+        verdict = str(verdict or "").strip().lower()
+        if verdict not in {"done", "continue", "error"}:
+            raise GoalError("Judge verdict must be done, continue, or error.")
+        failure_kind = str(failure_kind or "").strip().lower()
+        if verdict == "error" and failure_kind not in {"parse", "transport"}:
+            raise GoalError("Judge errors require failure_kind parse or transport.")
+        judge_run_id = str(run_id or "").strip()
+        if not judge_run_id:
+            raise GoalError("Judge run_id is required.")
+        reason = str(reason or "").strip()[:2000]
+        raw = str(raw or "").strip()[:4000]
+        expected_goal_id = str(expected_goal_id or "").strip()
+
+        def mutate(current: Optional[Dict[str, Any]]):
+            if not current:
+                raise GoalError("No goal exists for this session.")
+            goal = dict(current)
+            if (
+                goal.get("status") != "active"
+                or (expected_goal_id and str(goal.get("id") or "") != expected_goal_id)
+                or not goal.get("completion_requested_at")
+            ):
+                return "", self._stored(goal), self._stored(goal)
+            accounted = [
+                str(item)
+                for item in goal.get("accounted_judge_run_ids") or []
+                if str(item)
+            ]
+            if judge_run_id in accounted:
+                return "", self._stored(goal), self._stored(goal)
+            if goal.get("status") in TERMINAL_GOAL_STATUSES:
+                return "", self._stored(goal), self._stored(goal)
+
+            accounted.append(judge_run_id)
+            goal["accounted_judge_run_ids"] = accounted[-512:]
+            goal["judge_count"] = int(goal.get("judge_count") or 0) + 1
+            goal["last_judged_at"] = _now_iso()
+            goal["last_judge_verdict"] = verdict
+            goal["last_judge_reason"] = reason or None
+            goal["last_judge_raw"] = raw or None
+
+            event_type = "goal_judge_evaluated"
+            if verdict == "done":
+                self._stop_clock(goal)
+                goal["status"] = "completed"
+                goal["pause_reason"] = None
+                goal["next_retry_at"] = None
+                goal["completion_requested_at"] = None
+                goal["completion_requested_by"] = None
+                goal["completion_request_reason"] = None
+                goal["judge_parse_failures"] = 0
+                goal["judge_transport_failures"] = 0
+                goal["review_status"] = "pending"
+                goal["reviewed_at"] = None
+                goal["reviewed_by"] = None
+                goal["review_judge_result"] = reason or None
+                goal["review_feedback_pending"] = False
+                event_type = "goal_completed"
+            elif verdict == "continue":
+                goal["completion_requested_at"] = None
+                goal["completion_requested_by"] = None
+                goal["completion_request_reason"] = None
+                goal["judge_parse_failures"] = 0
+                goal["judge_transport_failures"] = 0
+            else:
+                counter = f"judge_{failure_kind}_failures"
+                goal[counter] = int(goal.get(counter) or 0) + 1
+                threshold_name = (
+                    "GOAL_JUDGE_MAX_PARSE_FAILURES"
+                    if failure_kind == "parse"
+                    else "GOAL_JUDGE_MAX_TRANSPORT_FAILURES"
+                )
+                default_threshold = 3 if failure_kind == "parse" else 5
+                threshold = max(
+                    1,
+                    int(os.getenv(threshold_name, str(default_threshold)) or default_threshold),
+                )
+                if goal.get("status") == "active" and int(goal[counter]) >= threshold:
+                    self._stop_clock(goal)
+                    goal["status"] = "paused"
+                    goal["pause_reason"] = f"judge_{failure_kind}_failures"
+                    goal["next_retry_at"] = None
+                    event_type = "goal_paused"
+
+            goal = self._touch(goal, actor="judge", run_id=judge_run_id)
+            stored = self._stored(goal)
+            return event_type, stored, stored
+
+        return self._mutate(session_id, mutate, run_id=judge_run_id)
+
+    def review_completion(
+        self,
+        session_id: str,
+        decision: str,
+        *,
+        objective: str,
+        judge_result: str = "",
+        additional_budget: Optional[int] = None,
+        actor: str = "user",
+        run_id: str = "",
+    ) -> Dict[str, Any]:
+        decision = str(decision or "").strip().lower()
+        if decision not in {"approve", "save", "continue"}:
+            raise GoalError("Review decision must be approve, save, or continue.")
+        objective = str(objective or "").strip()
+        if not objective:
+            raise GoalError("objective is required")
+        if len(objective) > 12000:
+            raise GoalError("objective must not exceed 12000 characters")
+        judge_result = str(judge_result or "").strip()
+        if len(judge_result) > 12000:
+            raise GoalError("judge_result must not exceed 12000 characters")
+        if additional_budget is not None:
+            additional_budget = int(additional_budget)
+            if additional_budget <= 0:
+                raise GoalError("additional_budget must be greater than zero")
+
+        def mutate(current: Optional[Dict[str, Any]]):
+            if not current or current.get("deleted") is True:
+                raise GoalError("No goal exists for this session.")
+            if current.get("status") != "completed":
+                raise GoalError("Only a completed goal can be reviewed.")
+            goal = dict(current)
+            goal["objective"] = objective
+            goal["review_judge_result"] = judge_result or None
+            goal["reviewed_at"] = _now_iso()
+            goal["reviewed_by"] = str(actor or "user")
+            goal["review_feedback_pending"] = False
+
+            if decision == "approve":
+                goal["review_status"] = "approved"
+                goal["deleted"] = True
+                goal["deleted_at"] = _now_iso()
+                goal["pause_reason"] = "review_approved"
+                event_type = "goal_review_approved"
+            elif decision == "save":
+                goal["review_status"] = "pending"
+                event_type = "goal_review_saved"
+            else:
+                budget = goal.get("token_budget")
+                exhausted = (
+                    budget is not None
+                    and int(goal.get("used_tokens") or 0) >= int(budget)
+                )
+                if exhausted and additional_budget is None:
+                    raise GoalError(
+                        "Token budget is exhausted; additional_budget is required to continue."
+                    )
+                if additional_budget is not None:
+                    base = (
+                        int(budget)
+                        if budget is not None
+                        else int(goal.get("used_tokens") or 0)
+                    )
+                    goal["token_budget"] = base + int(additional_budget)
+                goal["status"] = "active"
+                goal["active_since_epoch"] = time.time()
+                goal["pause_reason"] = None
+                goal["next_retry_at"] = None
+                goal["current_run_id"] = None
+                goal["consecutive_failures"] = 0
+                goal["completion_requested_at"] = None
+                goal["completion_requested_by"] = None
+                goal["completion_request_reason"] = None
+                goal["review_status"] = "changes_requested"
+                goal["review_feedback_pending"] = True
+                goal["last_judge_verdict"] = "continue"
+                goal["last_judge_reason"] = (
+                    judge_result
+                    or "The human reviewer determined that the Goal is not complete."
+                )
+                event_type = "goal_review_reopened"
+
+            goal = self._touch(goal, actor=actor, run_id=run_id)
+            stored = self._stored(goal)
+            return event_type, stored, stored
+
+        return self._mutate(session_id, mutate, run_id=run_id)
 
     def user_action(
         self,
@@ -476,6 +696,9 @@ class GoalManager:
                 goal["consecutive_failures"] = 0
                 goal["last_error"] = None
                 goal["next_retry_at"] = None
+                if goal.get("review_feedback_pending") and goal.get("status") == "active":
+                    goal["review_feedback_pending"] = False
+                    goal["review_status"] = "addressed"
             budget = goal.get("token_budget")
             if goal.get("status") == "active" and budget is not None and goal["used_tokens"] >= int(budget):
                 self._stop_clock(goal)

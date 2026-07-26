@@ -3800,8 +3800,8 @@ async def get_session_goal(session_id: str):
 
 @fastapi_app.post("/sessions/{session_id}/goal/{action}")
 async def control_session_goal(session_id: str, action: str, request: Request):
-    if action not in {"pause", "resume", "cancel", "edit", "delete"}:
-        return JSONResponse(content={"ok": False, "error": "action must be pause, resume, cancel, edit, or delete"}, status_code=400)
+    if action not in {"pause", "resume", "cancel", "edit", "delete", "review"}:
+        return JSONResponse(content={"ok": False, "error": "action must be pause, resume, cancel, edit, delete, or review"}, status_code=400)
     try:
         from agent_goal import manager_for
 
@@ -3811,18 +3811,34 @@ async def control_session_goal(session_id: str, action: str, request: Request):
             body = {}
         if not isinstance(body, dict):
             body = {}
-        action_kwargs = {
-            "additional_budget": body.get("additional_budget"),
-            "reason": str(body.get("reason") or ""),
-            "actor": "user",
-        }
-        if action == "edit":
-            action_kwargs["objective"] = body.get("objective")
-        goal = manager_for(session_manager).user_action(session_id, action, **action_kwargs)
+        manager = manager_for(session_manager)
+        if action == "review":
+            goal = manager.review_completion(
+                session_id,
+                str(body.get("decision") or ""),
+                objective=str(body.get("objective") or ""),
+                judge_result=str(body.get("judge_result") or ""),
+                additional_budget=body.get("additional_budget"),
+                actor="user",
+            )
+        else:
+            action_kwargs = {
+                "additional_budget": body.get("additional_budget"),
+                "reason": str(body.get("reason") or ""),
+                "actor": "user",
+            }
+            if action == "edit":
+                action_kwargs["objective"] = body.get("objective")
+            goal = manager.user_action(session_id, action, **action_kwargs)
         if action in {"pause", "cancel", "delete"}:
             session_manager.request_interrupt(session_id, reason=f"goal_{action}")
-        public_goal = None if action == "delete" else goal
-        event = {"type": "goal_state", "goal": public_goal, "goal_event": f"user_{action}", "ephemeral": True}
+        if action == "review" and str(body.get("decision") or "").strip().lower() == "continue":
+            session_manager.clear_interrupt(session_id)
+        public_goal = None if action == "delete" or goal.get("deleted") is True else goal
+        goal_event = f"user_{action}"
+        if action == "review":
+            goal_event += "_" + str(body.get("decision") or "").strip().lower()
+        event = {"type": "goal_state", "goal": public_goal, "goal_event": goal_event, "ephemeral": True}
         if public_goal:
             event.update(public_goal)
         await publish_session_event(
@@ -5028,6 +5044,10 @@ _ENV_GROUP_ORDER: list[tuple[str, str, list[str]]] = [
             "GOAL_ENABLED",
             "GOAL_RUNNER_POLL_SECONDS",
             "GOAL_MAX_CONSECUTIVE_FAILURES",
+            "GOAL_JUDGE_MAX_OUTPUT_TOKENS",
+            "GOAL_JUDGE_EVIDENCE_MAX_CHARS",
+            "GOAL_JUDGE_MAX_PARSE_FAILURES",
+            "GOAL_JUDGE_MAX_TRANSPORT_FAILURES",
             "AGENT_TEAM_ENABLED",
             "AGENT_TEAM_MAX_MEMBERS",
             "AGENT_TEAM_MAX_TASKS",
@@ -5098,6 +5118,10 @@ _ENV_HINTS: dict[str, str] = {
     "GOAL_ENABLED": "1（默认）启用持久 Goal、Goal 工具和服务端自动续跑；0/false/no/off 禁用。修改后需重启 Agent。",
     "GOAL_RUNNER_POLL_SECONDS": "服务端 Goal 调度器扫描 active Goal 的间隔秒数，默认 2，最小 0.5。修改后需重启 Agent。",
     "GOAL_MAX_CONSECUTIVE_FAILURES": "Goal 连续运行失败多少次后自动暂停，默认 3；用于避免无限失败重试。",
+    "GOAL_JUDGE_MAX_OUTPUT_TOKENS": "独立 Goal Judge 单次输出 token 上限，默认 512。",
+    "GOAL_JUDGE_EVIDENCE_MAX_CHARS": "送给独立 Goal Judge 的最近执行证据字符上限，默认 24000。",
+    "GOAL_JUDGE_MAX_PARSE_FAILURES": "Judge 输出连续解析失败达到此次数后暂停 Goal，默认 3。",
+    "GOAL_JUDGE_MAX_TRANSPORT_FAILURES": "Judge 模型连续调用失败达到此次数后暂停 Goal，默认 5。",
     "AGENT_TEAM_ENABLED": "实验功能。1/true/yes/on 启用 Agent Team；其他值或未配置均禁用。保存后立即生效，默认关闭。",
     "AGENT_TEAM_MAX_MEMBERS": "单个根会话团队的非终态成员上限，默认 4。",
     "AGENT_TEAM_MAX_TASKS": "单个团队的共享任务投影上限，默认 1000。",
@@ -5487,6 +5511,10 @@ async def get_env_snapshot():
         "GOAL_ENABLED": "1",
         "GOAL_RUNNER_POLL_SECONDS": "2",
         "GOAL_MAX_CONSECUTIVE_FAILURES": "3",
+        "GOAL_JUDGE_MAX_OUTPUT_TOKENS": "512",
+        "GOAL_JUDGE_EVIDENCE_MAX_CHARS": "24000",
+        "GOAL_JUDGE_MAX_PARSE_FAILURES": "3",
+        "GOAL_JUDGE_MAX_TRANSPORT_FAILURES": "5",
         "AGENT_TEAM_ENABLED": "0",
         "AGENT_TEAM_MAX_MEMBERS": "4",
         "AGENT_TEAM_MAX_TASKS": "1000",
