@@ -191,7 +191,8 @@ Object.assign(UI_TRANSLATIONS_EN, {
     '持久成员由 Agent 调用 team(action="spawn_member") 创建和派工。': 'The agent creates and dispatches persistent members with team(action="spawn_member").',
     '新任务标题': 'New task title', '添加任务': 'Add task',
     '允许一次': 'Allow once', '暂无成员': 'No members', '暂无任务': 'No tasks',
-    '暂无权限请求': 'No permission requests', '请先选择或新建一个会话。': 'Select or create a session first.'
+    '暂无权限请求': 'No permission requests', '请先选择或新建一个会话。': 'Select or create a session first.',
+    '当前页面正在查看较早历史，且未能恢复最新历史尾部。请重试。': 'This page is viewing older history and could not restore the latest tail. Please try again.'
 });
 Object.assign(UI_TRANSLATIONS_EN, {
     // Human-in-the-loop cards and banners
@@ -223,8 +224,8 @@ Object.assign(UI_TRANSLATIONS_EN, {
     '读取工作区文件失败': 'Failed to read workspace files', '没有匹配文件': 'No matching files', '浏览路径': 'Browse path',
     '工作区文件': 'Workspace files', '选择工作目录外文件': 'Choose a file outside the workspace', '未选择文件': 'No files selected',
     '正在取消上传…': 'Cancelling upload…', '读取失败': 'Failed to read', '取消失败': 'Cancellation failed',
-    '文件上传失败': 'File upload failed', '无法上传所选文件或剪贴板中的图片。': 'Could not upload the selected file or clipboard image.'
-    , '当前没有选中的会话。': 'No session is currently selected.', '未选择会话': 'No session selected', '暂无提问': 'No questions yet',
+    '文件上传失败': 'File upload failed', '无法上传所选文件或剪贴板中的图片。': 'Could not upload the selected file or clipboard image.',
+    '当前没有选中的会话。': 'No session is currently selected.', '未选择会话': 'No session selected', '暂无提问': 'No questions yet',
     '消息索引异常，已阻止从错误位置清空会话。请刷新后再试。': 'The message index is invalid; clearing from the wrong position was blocked. Refresh and try again.',
     '消息索引异常，已阻止清空整个会话。请刷新后再试。': 'The message index is invalid; clearing the session was blocked. Refresh and try again.',
     '当前会话仍在生成。请等待完成或停止后再修改历史。': 'This session is still generating. Wait for completion or stop it before editing history.',
@@ -247,11 +248,56 @@ Object.assign(UI_TRANSLATIONS_EN, {
     '最大输出：': 'Maximum output: ', '能力：': 'Capabilities: ', '状态：': 'Status: ', '可用': 'Available', '未就绪': 'Not ready', '未设置': 'Not set',
     '加载subagent历史失败:': 'Failed to load subagent history:', '加载详情中…': 'Loading details…', '加载失败: ': 'Load failed: ',
     '暂无事件': 'No events yet', '暂无 final 结果': 'No final result', '无 Subagent': 'No subagents',
-    '任务失败，点击查看': 'Task failed — click to view', '有新回复，点击查看': 'New response — click to view'
-    , 'Agent 请求执行操作': 'Agent requests permission to perform an action', '请选择操作': 'Choose an action', '复制文本': 'Copy text', '保存图片': 'Save image', '执行': 'Run',
+    '任务失败，点击查看': 'Task failed — click to view', '有新回复，点击查看': 'New response — click to view',
+    'Agent 请求执行操作': 'Agent requests permission to perform an action', '请选择操作': 'Choose an action', '复制文本': 'Copy text', '保存图片': 'Save image', '执行': 'Run',
     '原因：': 'Reason: ', '找不到可保存的 Final 卡片': 'No Final card is available to save', '操作失败': 'Operation failed', '确认': 'Confirm',
     '加载会话状态快照失败，回退至旧接口': 'Failed to load the session state snapshot; falling back to the legacy endpoint', '归档失败': 'Archive failed', '置顶失败': 'Pin failed', '重命名失败': 'Rename failed',
     '加载更早记录': 'Load earlier records', '加载更早消息': 'Load earlier messages', '保存失败：': 'Save failed: '
+});
+Object.assign(UI_TRANSLATIONS_EN, {
+    // Agent runtime status events (including compression and recovery)
+    '本机网络已恢复，正在继续任务…': 'The local network is back; continuing the task…',
+    '本机仍处于离线状态，Agent 正在沉睡并等待网络恢复…': 'The local machine is still offline; the Agent is sleeping until the network recovers…',
+    '检测到同会话仍有未结束的上下文压缩，等待其完成后再继续 ReAct。': 'An unfinished context compression was detected for this session; waiting for it to finish before continuing ReAct.',
+    '当前上下文无需进一步裁剪或摘要': 'The current context needs no further trimming or summarization',
+    '对话已摘要，关键信息已写入 key_context': 'Conversation summarized; key information written to key_context',
+    '子任务结果已返回，正在纳入当前回答': 'Subtask results returned; incorporating them into the current response',
+    '安全确认': 'Safety confirmation', '用户已允许': 'User allowed', '用户已拒绝执行（已跳过）。': 'User denied execution (skipped).',
+    '任务已由用户中断。': 'Task interrupted by the user.', '任务已由用户中断（父会话）。': 'Task interrupted by the user (parent session).',
+    '任务因 Agent 停止、重启或运行中断而暂停，可在服务恢复后继续。': 'The task was paused because the Agent stopped, restarted, or was interrupted; it can continue after the service recovers.',
+    '执行已由 Hook 暂停：': 'Execution paused by a Hook: ', '执行已由 Stop Hook 暂停：': 'Execution paused by a Stop Hook: ',
+    '模型未输出最终内容': 'The model did not produce a final response', '检测到连续重复行为': 'Consecutive repeated behavior detected',
+    '已插入强制提醒': 'A mandatory reminder was inserted', '已终止任务': 'Task terminated',
+    '自动应急截断': 'Automatic emergency truncation', '待办更新失败：': 'Todo update failed: ', 'subagent 执行异常：': 'Subagent execution error: ',
+    'MCP 调用异常：': 'MCP call error: ', '未知工具：': 'Unknown tool: ', '工具执行异常：': 'Tool execution error: ',
+    '编辑说明不能为空': 'Edit instructions cannot be empty', '缺少 edit_instruction': 'Missing edit_instruction', '无效 mode': 'Invalid mode',
+    '请稍候': 'Please wait', '本轮执行步骤已达到最大迭代次数。Goal 模式会自动开始下一轮；普通会话可以手动继续任务。': 'This run reached the maximum number of iterations. Goal mode will start the next round automatically; regular sessions can be continued manually.',
+    '确认放宽工作区的 Shell': 'Confirm relaxed-workspace Shell access', 'restrict_to_workspace=false：可能访问或影响工作区之外的路径。': 'restrict_to_workspace=false: this may access or affect paths outside the workspace.',
+    '将执行的大致命令如下，请确认是否允许：': 'The approximate command to run is below. Confirm whether to allow it:', 'run_shell（放宽工作区）': 'run_shell (relaxed workspace)',
+    '确认网络下载': 'Confirm network download', '将把远程文件写入工作区指定路径。': 'The remote file will be written to the specified workspace path.', 'URL：': 'URL:', '保存为（工作区内）：': 'Save as (inside workspace):', '（未指定）': '(not specified)',
+    '无法继续任务': 'Unable to continue the task', '无法发送': 'Unable to send', '截断失败': 'Truncation failed',
+    'Hook 请求确认': 'Hook requests confirmation', '网络连接失败': 'Network connection failed', 'API 认证失败': 'API authentication failed',
+    '访问被拒绝': 'Access denied', '模型或接口不可用': 'Model or interface unavailable', '请求频率超限': 'Request rate limit exceeded',
+    '请求参数错误': 'Invalid request parameters', '内容被拦截': 'Content blocked', '服务器错误': 'Server error', 'LLM 调用异常': 'LLM call failed',
+    '无法连接到 API 服务器。': 'Could not connect to the API server.', 'API Key 无效或已过期。': 'The API key is invalid or expired.',
+    '当前地区不支持或 API Key 被风控。': 'The current region is unsupported or the API key was restricted.',
+    '请求的模型不支持当前能力（如图像输入）。': 'The requested model does not support this capability (such as image input).',
+    '已重试 3 次，均因速率限制失败。': 'All three retries failed due to rate limiting.', '请求体格式不符合 API 要求。': 'The request body format does not meet the API requirements.',
+    '输入内容触发了安全审核。': 'The input triggered a safety review.', '发生未知错误。': 'An unknown error occurred.',
+    '请检查网络连接、当前 model profile 的 API Base URL、VPN/代理设置。': 'Check the network connection, the current model profile API base URL, and VPN/proxy settings.',
+    '请检查当前 model profile 中的 API Key 是否正确。': 'Check that the API key in the current model profile is correct.',
+    '请新建 API Key，或检查服务地区限制。': 'Create a new API key or check regional service restrictions.',
+    '请检查模型名称是否正确，或换一个支持该能力的模型。': 'Check the model name or switch to a model that supports this capability.',
+    '请稍等片刻再试，或降低请求频率；Token Plan 用户可考虑升级套餐。': 'Wait a moment and try again, or reduce the request rate; Token Plan users may consider upgrading.',
+    '请检查消息格式、必填字段、模型名称是否正确。': 'Check the message format, required fields, and model name.',
+    '请避免敏感或违规内容，修改后重试。': 'Avoid sensitive or disallowed content, then try again.',
+    '请稍后重试；若持续出现请联系 API 服务商。': 'Try again later; contact the API provider if the issue persists.',
+    '请先检查模型配置，或到 GitHub 提交 issue 反馈。': 'Check the model configuration first, or report the issue on GitHub.',
+    '（无来源文本，未生成 summary）': '(No source text; no summary generated)', '本机网络已断开': 'The local network is disconnected',
+    '进入沉睡状态并等待网络恢复': 'entering sleep until the network recovers', '模型输出在完整工具调用后达到长度上限；已保留并执行完整调用，未完成片段已丢弃。': 'The model output reached the length limit after a complete tool call; the complete call was retained and executed, and the unfinished fragment was discarded.',
+    '工具执行异常: ': 'Tool execution error: ', '已清理临时文件': 'Cleaned up temporary files', '已移入 .trash': 'moved to .trash',
+    '后台 Subagent 已完成': 'Background subagent completed', 'LLM 调用失败': 'LLM call failed', '模型输出达到输出 token 上限': 'Model output reached the output-token limit',
+    '达到最大迭代次数': 'Reached the maximum iteration count', 'ReAct 已达到轮次上限': 'ReAct reached the iteration limit'
 });
 const UI_I18N_ATTRS = ['aria-label', 'data-ui-tip', 'title', 'placeholder'];
 // These nodes contain user-, model-, or runtime-authored text. Translating them
@@ -282,6 +328,7 @@ const UI_I18N_CONTENT_SELECTOR = [
 ].join(',');
 const uiI18nTextOriginal = new WeakMap();
 const uiI18nAttrOriginal = new WeakMap();
+const uiI18nRuntimeOriginal = new WeakMap();
 var uiLanguage = localStorage.getItem(LS_UI_LANGUAGE) === 'en' ? 'en' : 'zh-CN';
 var uiI18nObserver = null;
 
@@ -343,6 +390,8 @@ function translateUiString(value) {
         .replace(/^归档失败：?(.+)$/g, 'Archive failed: $1')
         .replace(/^置顶失败：?(.+)$/g, 'Pin failed: $1')
         .replace(/^问题 (\d+)$/g, 'Question $1')
+        .replace(/^问题 #(\d+)$/g, 'Question #$1')
+        .replace(/（事件索引 (\d+)）/g, ' (event index $1)')
         .replace(/^保存失败：(.+)$/g, 'Save failed: $1')
         .replace(/^Skill 加载失败：(.+)$/g, 'Failed to load Skill: $1')
         .replace(/^异步截断失败：?(.+)$/g, 'Asynchronous truncation failed: $1')
@@ -350,6 +399,52 @@ function translateUiString(value) {
         .replace(/^检测到上次运行未完成，正在自动恢复任务…$/g, 'The previous run was incomplete; restoring the task automatically…')
         .replace(/^检测到 (?:系统睡眠|Agent 进程暂停)约 (\d+) 秒，任务已恢复$/g, 'A system sleep or Agent process pause of about $1 seconds was detected; the task resumed')
         .replace(/^未能加载到对应的用户提问（可能索引不一致）。可刷新页面或使用「更早 (.+) 轮对话」手动分页。$/g, 'Could not load the corresponding user question (the index may be inconsistent). Refresh the page or use “Earlier $1 conversations” to paginate manually.')
+        .replace(/^【安全确认】用户已允许：(.+)$/g, '[Safety confirmation] User allowed: $1')
+        .replace(/^【安全确认】用户已拒绝执行（已跳过）。\s*(.+)$/g, '[Safety confirmation] User denied execution (skipped): $1')
+        .replace(/^任务已由用户中断（父会话）$/g, 'Task interrupted by the user (parent session)')
+        .replace(/^任务已由用户中断$/g, 'Task interrupted by the user')
+        .replace(/^任务因 Agent 停止、重启或运行中断而暂停，可在服务恢复后继续$/g, 'The task was paused because the Agent stopped, restarted, or was interrupted; it can continue after the service recovers')
+        .replace(/^执行已由 Stop Hook 暂停：(.+)$/g, 'Execution paused by a Stop Hook: $1')
+        .replace(/^执行已由 Hook 暂停：(.+)$/g, 'Execution paused by a Hook: $1')
+        .replace(/^Stop Hook 在 (\d+) 次检查后仍阻止结束：(.+)$/g, 'Stop Hook still blocked completion after $1 checks: $2')
+        .replace(/^模型未输出最终内容，正在重试（(\d+)\/(\d+)）$/g, 'The model did not produce a final response; retrying ($1/$2)')
+        .replace(/^检测到连续重复行为（(\d+)次），已插入强制提醒$/g, 'Consecutive repeated behavior detected ($1 times); a mandatory reminder was inserted')
+        .replace(/^检测到连续重复行为，已终止任务。最近输出：(.+)$/g, 'Consecutive repeated behavior detected; task terminated. Recent output: $1')
+        .replace(/^子任务结果已返回，正在纳入当前回答$/g, 'Subtask results returned; incorporating them into the current response')
+        .replace(/^待办更新失败：(.+)$/g, 'Todo update failed: $1')
+        .replace(/^subagent 执行异常：(.+)$/g, 'Subagent execution error: $1')
+        .replace(/^MCP 调用异常：(.+)$/g, 'MCP call error: $1')
+        .replace(/^未知工具：(.+)$/g, 'Unknown tool: $1')
+        .replace(/^工具执行异常：(.+)$/g, 'Tool execution error: $1')
+        .replace(/^工具执行异常:\s*(.+)$/g, 'Tool execution error: $1')
+        .replace(/^Todo 计划已连续 (\d+) 轮未更新，已插入更新提醒$/g, 'The Todo plan has not been updated for $1 rounds; an update reminder was inserted')
+        .replace(/^检测到本机网络已断开，Agent 进入沉睡状态并等待网络恢复…$/g, 'The local network is disconnected; the Agent is sleeping until it recovers…')
+        .replace(/^网络连接失败，正在重连（第 (\d+) 次，(.+)s 后重试）\.\.\.$/g, 'Network connection failed; reconnecting (attempt $1, retrying in $2s)…')
+        .replace(/^LLM 调用失败 \[([^\]]+)\] (.+)：(.+)\n(.+)$/g, 'LLM call failed [$1] $2: $3\n$4')
+        .replace(/^模型输出在完整工具调用后达到长度上限；已保留并执行完整调用，未完成片段已丢弃。$/g, 'The model output reached the length limit after a complete tool call; the complete call was retained and executed, and the unfinished fragment was discarded.')
+        .replace(/^模型输出达到 max_tokens\/max_output_tokens 上限，工具调用可能被截断。请调大输出窗口，或把长文件写入拆成更小的步骤后重试。$/g, 'Model output reached the max_tokens/max_output_tokens limit; tool calls may be truncated. Increase the output window, or split long-file writes into smaller steps and retry.')
+        .replace(/^模型输出达到输出 token 上限，已丢弃半截工具调用并重试（(\d+)\/(\d+)）$/g, 'Model output reached the output-token limit; the incomplete tool call was discarded and retried ($1/$2)')
+        .replace(/^已清理临时文件 (\d+) 个（已移入 \.trash）$/g, 'Cleaned up $1 temporary files (moved to .trash)')
+        .replace(/^\[后台 Subagent 已完成\]/g, '[Background subagent completed]')
+        .replace(/^无效的 mode：(.+?)；仅支持 compact、edit_key_context。$/g, 'Invalid mode: $1; only compact and edit_key_context are supported.')
+        .replace(/^自动应急截断已重试 (\d+) 次仍可能超过整包阈值；将直接请求主模型。可新建会话或调低环境变量 CONTEXT_WINDOW（当前 (.+)）$/g, 'Automatic emergency truncation may still exceed the full-package threshold after $1 retries; requesting the main model directly. Create a new session or lower CONTEXT_WINDOW (current: $2).')
+        .replace(/网络连接失败/g, 'Network connection failed')
+        .replace(/API 认证失败/g, 'API authentication failed')
+        .replace(/访问被拒绝/g, 'Access denied')
+        .replace(/模型或接口不可用/g, 'Model or interface unavailable')
+        .replace(/请求频率超限/g, 'Request rate limit exceeded')
+        .replace(/请求参数错误/g, 'Invalid request parameters')
+        .replace(/内容被拦截/g, 'Content blocked')
+        .replace(/服务器错误/g, 'Server error')
+        .replace(/LLM 调用异常/g, 'LLM call failed')
+        .replace(/无法连接到 API 服务器。/g, 'Could not connect to the API server.')
+        .replace(/API Key 无效或已过期。/g, 'The API key is invalid or expired.')
+        .replace(/当前地区不支持或 API Key 被风控。/g, 'The current region is unsupported or the API key was restricted.')
+        .replace(/请求的模型不支持当前能力（如图像输入）。/g, 'The requested model does not support this capability (such as image input).')
+        .replace(/已重试 3 次，均因速率限制失败。/g, 'All three retries failed due to rate limiting.')
+        .replace(/请求体格式不符合 API 要求。/g, 'The request body format does not meet the API requirements.')
+        .replace(/输入内容触发了安全审核。/g, 'The input triggered a safety review.')
+        .replace(/发生未知错误。/g, 'An unknown error occurred.')
         .replace(/^已选 (\d+) \/ 共 (\d+)$/, '$1 selected / $2 total')
         .replace(/^已选 (\d+) \/ 已启用 (\d+) \/ 共 (\d+)$/, '$1 selected / $2 enabled / $3 total')
         .replace(/已启用/g, 'Enabled')
@@ -373,6 +468,9 @@ function translateUiString(value) {
         .replace(/^调用工具 (.+) (\d+)次$/, 'Called tool $1 $2 times')
         .replace(/^检测到系统睡眠约 (\d+) 秒，任务已恢复$/, 'System sleep detected for about $1 seconds; task resumed')
         .replace(/^检测到 Agent 进程暂停约 (\d+) 秒，任务已恢复$/, 'Agent process pause detected for about $1 seconds; task resumed')
+        .replace(/^会话 (.+)$/, 'Session $1')
+        .replace(/(\d+)\s*成员/g, '$1 members')
+        .replace(/(\d+)\s*任务/g, '$1 tasks')
         .replace(/^模型配置切换失败: (.+)$/, 'Failed to switch model configuration: $1')
         .replace(/^模型配置启停失败: (.+)$/, 'Failed to change model profile status: $1')
         .replace(/^Skill 启停失败：(.+)$/, 'Failed to change Skill status: $1')
@@ -481,6 +579,54 @@ function translateUiNode(root) {
     });
 }
 
+// Runtime-owned process rows are kept separate from model/user content. Store
+// their source text so toggling back to Chinese always restores the original,
+// even when the row was updated while English was active.
+function setUiRuntimeText(el, original) {
+    if (!el) return;
+    var source = String(original == null ? '' : original);
+    uiI18nRuntimeOriginal.set(el, source);
+    el.setAttribute('data-ui-runtime-text', '1');
+    el.textContent = uiLanguage === 'en' ? translateUiString(source) : source;
+}
+
+function getUiRuntimeText(el) {
+    if (!el) return '';
+    var source = uiI18nRuntimeOriginal.get(el);
+    return source == null ? String(el.textContent || '') : source;
+}
+
+// Final cards normally contain arbitrary model output and must never be
+// translated.  These are the narrow, system-generated terminal messages that
+// are emitted as an assistant final event and therefore need the same runtime
+// localization as process/status rows.
+function isUiRuntimeFinalText(value) {
+    var source = String(value == null ? '' : value).trim();
+    if (!source) return false;
+    return /^任务已由用户中断(?:（父会话）)?。?$/.test(source)
+        || /^任务因 Agent 停止、重启或运行中断而暂停/.test(source)
+        || /^执行已由 (?:Hook|Stop Hook) 暂停：/.test(source)
+        || /^Stop Hook 在 \d+ 次检查后仍阻止结束：/.test(source)
+        || /^检测到连续重复行为，已终止任务。最近输出：/.test(source)
+        || /^本轮执行步骤已达到最大迭代次数。/.test(source)
+        || /^(?:Token 预算已耗尽|连续运行失败|ReAct 已达到轮次上限|手动暂停)$/.test(source)
+        || /^LLM 调用失败 \[[^\]]+\] /.test(source)
+        || /^模型输出达到 max_tokens\/max_output_tokens 上限，/.test(source)
+        || /^模型输出达到输出 token 上限，/.test(source)
+        || /^模型输出在完整工具调用后达到长度上限；/.test(source);
+}
+
+function translateRuntimeUiNodes(root) {
+    if (!root || !root.querySelectorAll) return;
+    var nodes = [];
+    if (root.nodeType === Node.ELEMENT_NODE && root.hasAttribute('data-ui-runtime-text')) nodes.push(root);
+    nodes = nodes.concat(Array.from(root.querySelectorAll('[data-ui-runtime-text]')));
+    nodes.forEach(function (el) {
+        var source = uiI18nRuntimeOriginal.get(el);
+        if (source != null) el.textContent = uiLanguage === 'en' ? translateUiString(source) : source;
+    });
+}
+
 function applyUiLanguage(language, persist) {
     uiLanguage = language === 'en' ? 'en' : 'zh-CN';
     document.documentElement.lang = uiLanguage;
@@ -489,6 +635,7 @@ function applyUiLanguage(language, persist) {
     if (persist) localStorage.setItem(LS_UI_LANGUAGE, uiLanguage);
     if (uiI18nObserver) uiI18nObserver.disconnect();
     translateUiNode(document.body);
+    translateRuntimeUiNodes(document.body);
     var languageButton = document.getElementById('sidebar-language-btn');
     if (languageButton) {
         languageButton.setAttribute('aria-label', uiLanguage === 'en' ? 'Switch to Chinese' : '切换为英文');

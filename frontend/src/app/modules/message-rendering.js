@@ -848,7 +848,10 @@ function setBriefRows(brief, texts) {
         row.className = 'process-brief-item';
         if (rowType === 'response') row.classList.add('process-brief-item--response');
         else if (sourceText.indexOf('Tool calls: ') === 0) row.classList.add('process-brief-item--tool');
-        row.textContent = typeof translateUiString === 'function' ? translateUiString(sourceText) : sourceText;
+        // The collapsed response line is model output and must stay verbatim;
+        // only generated tool/status summary lines are runtime-owned UI copy.
+        if (rowType !== 'response' && typeof setUiRuntimeText === 'function') setUiRuntimeText(row, sourceText);
+        else row.textContent = sourceText;
         brief.appendChild(row);
     });
 }
@@ -899,11 +902,11 @@ function updateProcessBrief(agg) {
     if (lines.length) setBriefRows(brief, lines);
     else {
         var st = body.querySelector('.feed-item.feed--st .feed-chunk-scroller, .feed-item.feed--st .feed-chunk');
-        var tSt = st ? st.textContent.trim() : '';
+        var tSt = st ? (typeof getUiRuntimeText === 'function' ? getUiRuntimeText(st) : st.textContent).trim() : '';
         if (tSt) setBriefRows(brief, [tSt]);
         else {
             var any = body.querySelector('.feed-item:not(.feed--llm):not(.feed--llm2) .feed-chunk-scroller, .feed-item:not(.feed--llm):not(.feed--llm2) .feed-chunk');
-            var tAny = any ? any.textContent.trim() : '';
+            var tAny = any ? (typeof getUiRuntimeText === 'function' ? getUiRuntimeText(any) : any.textContent).trim() : '';
             setBriefRows(brief, [tAny || '本段过程已折叠']);
         }
     }
@@ -1260,6 +1263,20 @@ function refreshAggregateStatsSmart(agg) {
     else refreshProcessAggregateStats(agg);
 }
 
+function renderProcessAggregateStats(el, sourceText, tailText) {
+    if (!el) return;
+    el.textContent = '';
+    var head = document.createElement('span');
+    if (typeof setUiRuntimeText === 'function') setUiRuntimeText(head, sourceText);
+    else head.textContent = typeof translateUiString === 'function' ? translateUiString(sourceText) : sourceText;
+    var tail = document.createElement('span');
+    // Model/profile names and cache values are data, not UI copy.
+    tail.setAttribute('data-i18n-skip', 'true');
+    tail.textContent = String(tailText == null ? '' : tailText);
+    el.appendChild(head);
+    el.appendChild(tail);
+}
+
 function refreshSubagentCardStats(card) {
     if (!card) return;
     var el = card.querySelector('.process-aggregate-stats');
@@ -1324,9 +1341,7 @@ function refreshSubagentCardStats(card) {
     if (est != null && est !== '' && thr != null && thr !== '' && Number(thr) > 0) {
         pctStr = (Math.round(Number(est) / Number(thr) * 1000) / 10) + '%';
     }
-    var processPartsText = parts.join(' · ');
-    if (typeof translateUiString === 'function') processPartsText = translateUiString(processPartsText);
-    el.innerHTML = '<span>' + processPartsText + '</span><span>' + escapeHtml(modelStr) + ' · ' + escapeHtml(pctStr) + '</span>';
+    renderProcessAggregateStats(el, parts.join(' · '), modelStr + ' · ' + pctStr);
 }
 
 function refreshProcessAggregateStats(agg) {
@@ -1387,9 +1402,7 @@ function refreshProcessAggregateStats(agg) {
     var rateStr = (ch + cm > 0) ? (cr % 1 === 0 ? cr.toFixed(0) : cr.toFixed(1)) + '%' : '0%';
     cacheParts.push('hit_rate=' + rateStr);
     var cacheLine = cacheParts.join(' · ');
-    var aggregatePartsText = parts.join(' · ');
-    if (typeof translateUiString === 'function') aggregatePartsText = translateUiString(aggregatePartsText);
-    el.innerHTML = '<span>' + aggregatePartsText + '</span><span>' + cacheLine + '</span>';
+    renderProcessAggregateStats(el, parts.join(' · '), cacheLine);
 }
 
 function ensureProcessGroup(ctx) {
@@ -3440,7 +3453,11 @@ function hasSeenStreamDelta(ctx, parsed, scope) {
 function setToolRowText(row, text, ctx, runSessionId) {
     if (!row) return;
     var sc = row.querySelector('.feed-chunk-scroller');
-    if (sc) sc.textContent = truncateLogTextForUi(text);
+    if (sc) {
+        var nextText = truncateLogTextForUi(text);
+        if (typeof setUiRuntimeText === 'function') setUiRuntimeText(sc, nextText);
+        else sc.textContent = nextText;
+    }
     var ch = row.querySelector('.feed-chunk');
     if (ch) {
         // 工具条目流式生成时也放开高度限制
@@ -3592,7 +3609,11 @@ function appendToolPendingRow(ctx, parsed, runSessionId) {
         draft.setAttribute('data-tool-pending', '1');
         draft.dataset.commandPreview = parsed.command_preview != null ? String(parsed.command_preview) : '';
         var draftScroller = draft.querySelector('.feed-chunk-scroller');
-        if (draftScroller) draftScroller.textContent = truncateLogTextForUi(line);
+        if (draftScroller) {
+            var draftText = truncateLogTextForUi(line);
+            if (typeof setUiRuntimeText === 'function') setUiRuntimeText(draftScroller, draftText);
+            else draftScroller.textContent = draftText;
+        }
         var draftChunk = draft.querySelector('.feed-chunk');
         if (draftChunk) {
             draftChunk.classList.remove('is-streaming');
@@ -3628,7 +3649,11 @@ function appendToolCommandDelta(ctx, parsed, runSessionId) {
     row.dataset.commandPreview = (row.dataset.commandPreview || '') + String(parsed.delta || '');
     var text = formatToolPendingLine(parsed.tool, parsed.args, row.dataset.commandPreview);
     var sc = row.querySelector('.feed-chunk-scroller');
-    if (sc) sc.textContent = truncateLogTextForUi(text);
+    if (sc) {
+        var pendingText = truncateLogTextForUi(text);
+        if (typeof setUiRuntimeText === 'function') setUiRuntimeText(sc, pendingText);
+        else sc.textContent = pendingText;
+    }
     var ch = row.querySelector('.feed-chunk');
     if (ch) refreshFeedChunkOverflow(ch);
     if (!replayingMessages) scrollContentAreaIfFollow(ctx, runSessionId);
@@ -3650,7 +3675,11 @@ function upsertToolCallResult(ctx, parsed, runSessionId) {
         row.removeAttribute('data-tool-pending');
         row.dataset.commandPreview = cmdPreview != null ? String(cmdPreview) : '';
         var sc = row.querySelector('.feed-chunk-scroller');
-        if (sc) sc.textContent = truncateLogTextForUi(text);
+        if (sc) {
+            var doneText = truncateLogTextForUi(text);
+            if (typeof setUiRuntimeText === 'function') setUiRuntimeText(sc, doneText);
+            else sc.textContent = doneText;
+        }
         var ch = row.querySelector('.feed-chunk');
         if (ch) refreshFeedChunkOverflow(ch);
         var agg = body.closest('.process-aggregate');
@@ -3750,7 +3779,15 @@ function createProcessFeedRow(ctx, type, initialText, streamOpts, runSessionId, 
     var txtForUi = initialText;
     if (type === 'llm-reasoning' || type === 'llm-response') txtForUi = trimSurroundingBlankLines(txtForUi);
     if (type === 'llm-response') row._processBriefRawText = String(txtForUi || '');
-    sc.textContent = truncateLogTextForUi(txtForUi);
+    var initialUiText = truncateLogTextForUi(txtForUi);
+    if (type === 'status' || type === 'error-log' || type === 'tool-call'
+        || type === 'compact-summary' || type === 'context-trim'
+        || type === 'context-summary' || type === 'key-context') {
+        if (typeof setUiRuntimeText === 'function') setUiRuntimeText(sc, initialUiText);
+        else sc.textContent = initialUiText;
+    } else {
+        sc.textContent = initialUiText;
+    }
     if (streamOpts.streaming && (type === 'llm-reasoning' || type === 'llm-response')) {
         chunk.classList.add('is-streaming');
         row.setAttribute('data-llm-live-row', '1');
@@ -4071,8 +4108,12 @@ function appendMessage(ctx, role, content, meta, runSessionId) {
             div.textContent = rawStr;
             linkifyAssistantTextNodes(div);
         }
-    }
-        else {
+    } else if (role === 'assistant' && meta.uiRuntimeText && typeof setUiRuntimeText === 'function') {
+        // System terminal statuses are plain text, not model markdown. Keep
+        // their source in the runtime i18n store so language toggles restore
+        // the original Chinese text exactly.
+        setUiRuntimeText(div, displayStr);
+    } else {
         div.innerHTML = renderMarkdown(displayStr);
         enhanceAssistantMessageContent(div);
     }
@@ -4173,9 +4214,11 @@ function appendModelSwitchStatus(ctx, event, runSessionId) {
         ctx._modelSwitchStatusScroller = sc;
         return sc;
     }
-    var prev = String(sc.textContent || '').trim();
+    var prev = (typeof getUiRuntimeText === 'function' ? getUiRuntimeText(sc) : String(sc.textContent || '')).trim();
     if (prev.indexOf(content) < 0) {
-        sc.textContent = truncateLogTextForUi(prev ? (prev + '\n' + content) : content);
+        var merged = truncateLogTextForUi(prev ? (prev + '\n' + content) : content);
+        if (typeof setUiRuntimeText === 'function') setUiRuntimeText(sc, merged);
+        else sc.textContent = merged;
     }
     var ch = sc.closest && sc.closest('.feed-chunk');
     if (ch) {
@@ -4195,8 +4238,10 @@ function flushProgressDeltaText(ctx, logType) {
         st.flushRaf = 0;
     }
     if (st.pending && st.scroller && st.scroller.isConnected) {
-        var merged = (st.scroller.textContent || '') + st.pending;
-        st.scroller.textContent = truncateLogTextForUi(merged);
+        var current = typeof getUiRuntimeText === 'function' ? getUiRuntimeText(st.scroller) : String(st.scroller.textContent || '');
+        var merged = truncateLogTextForUi(current + st.pending);
+        if (typeof setUiRuntimeText === 'function') setUiRuntimeText(st.scroller, merged);
+        else st.scroller.textContent = merged;
         var ch = st.scroller.closest('.feed-chunk');
         if (ch) refreshFeedChunkOverflow(ch);
     }
@@ -4250,7 +4295,7 @@ function applyProgressPersistedBody(ctx, content, logType, runSessionId) {
     finalizeProgressStreamForType(ctx, logType);
     var sc = ensureProgressScroller(ctx, logType, runSessionId);
     if (!sc) return;
-    var prevTxt = sc.textContent || '';
+    var prevTxt = typeof getUiRuntimeText === 'function' ? getUiRuntimeText(sc) : (sc.textContent || '');
     var merged;
     if (hadStream) {
         merged = prevTxt.slice(0, bodyOffset).replace(/\s+$/, '') + '\n\n' + text;
@@ -4259,7 +4304,9 @@ function applyProgressPersistedBody(ctx, content, logType, runSessionId) {
     } else {
         merged = text;
     }
-    sc.textContent = truncateLogTextForUi(merged);
+    var persistedText = truncateLogTextForUi(merged);
+    if (typeof setUiRuntimeText === 'function') setUiRuntimeText(sc, persistedText);
+    else sc.textContent = persistedText;
     var chSet = sc.closest('.feed-chunk');
     if (chSet) {
         chSet.classList.remove('is-streaming');
@@ -4282,11 +4329,14 @@ function appendProgressStreamDelta(ctx, delta, logType, runSessionId) {
     if (chunk) chunk.classList.add('is-streaming');
     var st = ctx.progressStream[logType];
     if (!st) {
-        var head = (sc.textContent || '').trim();
-        var bodyOffset = sc.textContent.length;
+        var sourceText = typeof getUiRuntimeText === 'function' ? getUiRuntimeText(sc) : (sc.textContent || '');
+        var head = sourceText.trim();
+        var bodyOffset = sourceText.length;
         if (head) {
-            sc.textContent = head + '\n\n';
-            bodyOffset = sc.textContent.length;
+            var streamHead = head + '\n\n';
+            if (typeof setUiRuntimeText === 'function') setUiRuntimeText(sc, streamHead);
+            else sc.textContent = streamHead;
+            bodyOffset = streamHead.length;
         }
         st = { scroller: sc, pending: '', flushRaf: 0, bodyOffset: bodyOffset };
         ctx.progressStream[logType] = st;
@@ -4304,9 +4354,10 @@ function appendProgressLog(ctx, content, logType, runSessionId) {
     if (!line.trim()) return;
     var prev = ctx.progressScrollers[logType];
     if (prev && prev.isConnected) {
-        var prevTxt = prev.textContent || '';
-        prev.textContent = truncateLogTextForUi(prevTxt ? (prevTxt + '\n' + line) : line);
-        if (typeof translateUiNode === 'function') translateUiNode(prev);
+        var prevTxt = typeof getUiRuntimeText === 'function' ? getUiRuntimeText(prev) : (prev.textContent || '');
+        var progressText = truncateLogTextForUi(prevTxt ? (prevTxt + '\n' + line) : line);
+        if (typeof setUiRuntimeText === 'function') setUiRuntimeText(prev, progressText);
+        else prev.textContent = progressText;
         var chMerge = prev.closest('.feed-chunk');
         if (chMerge) {
             refreshFeedChunkOverflow(chMerge);
@@ -4317,8 +4368,9 @@ function appendProgressLog(ctx, content, logType, runSessionId) {
     }
     var sc = ensureProgressScroller(ctx, logType, runSessionId);
     if (!sc) return;
-    sc.textContent = truncateLogTextForUi(line);
-    if (typeof translateUiNode === 'function') translateUiNode(sc);
+    var firstProgressText = truncateLogTextForUi(line);
+    if (typeof setUiRuntimeText === 'function') setUiRuntimeText(sc, firstProgressText);
+    else sc.textContent = firstProgressText;
     var chNew = sc.closest('.feed-chunk');
     if (chNew) {
         refreshFeedChunkOverflow(chNew);

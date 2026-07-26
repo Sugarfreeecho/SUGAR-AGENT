@@ -48,18 +48,20 @@ function renderEvent(ctx, event, eventIndex, runSessionId) {
         var finalStream = ctx && ctx.stream ? ctx.stream : getVisibleChatStream();
         var userIdx = (ctx && Number.isFinite(Number(ctx.lastUserEventIndex))) ? Number(ctx.lastUserEventIndex) : latestVisibleUserEventIndex(finalStream);
         if (typeof hasDuplicateVisibleFinal === 'function' && hasDuplicateVisibleFinal(finalStream, userIdx, event.content)) return;
+        var finalContent = event.content || '';
         if (typeof splitThinkTagsForUi === 'function') {
-            var finalThinkSplit = splitThinkTagsForUi(event.content || '');
+            var finalThinkSplit = splitThinkTagsForUi(finalContent);
             if (finalThinkSplit.reasoning && finalThinkSplit.reasoning.trim()) {
                 upsertLlmFeedRow(ctx, finalThinkSplit.reasoning, 'llm-reasoning', runSessionId, uiEventReactIter(event));
             }
         }
-        appendMessage(ctx, 'assistant', event.content || '', {
+        appendMessage(ctx, 'assistant', finalContent, {
             eventIndex: eventIndex,
             turnTruncateIdx: ctx.lastUserEventIndex,
             runtimeSeq: event.runtime_seq || event.runtimeSeq,
             runtimeEventType: event.runtime_event_type || event.runtimeEventType,
             truncateBeforeSeq: ctx.lastUserRuntimeSeq,
+            uiRuntimeText: typeof isUiRuntimeFinalText === 'function' && isUiRuntimeFinalText(finalContent),
         }, runSessionId);
     } else if (event.type === 'process_metrics') {
         applyProcessMetricsFromEvent(ctx, event);
