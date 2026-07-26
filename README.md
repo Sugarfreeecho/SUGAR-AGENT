@@ -137,6 +137,7 @@ SugarAgent/
 │   ├── runtime_v2_design.md            # Runtime V2 架构设计
 │   ├── runtime_v2_closure_status.md    # Runtime V2 状态闭包
 │   ├── runtime_v2_optimization_20260717.md # Runtime V2 正确性/性能优化记录
+│   ├── subagent_runtime_optimizations.md # Subagent 重启/审批/worktree/steer 语义
 │   └── runtime_v2_sidecar_invariants.md # Runtime V2 Sidecar 不变量
 ├── logs/                         # 运行日志
 ├── RUN.bat                       # Windows 一键启动脚本
@@ -323,7 +324,7 @@ npm run install:hooks
 | `activate_skill` | 加载技能说明 |
 | `update_todo` | 更新 Todo 计划 |
 | `context_manage` | 上下文压缩与编辑 |
-| `task` | 启动子 Agent（支持 best-of-n 并行） |
+| `task` | 启动/管理子 Agent（支持引用式 fork、best-of-n、运行中 steer、一次性审批和托管 worktree） |
 
 ---
 
