@@ -93,6 +93,8 @@ class HookDefinition:
     source_root: Path = Path(".")
     plugin_id: Optional[str] = None
     order: int = 0
+    handler_ref: str = ""
+    plugin_signature: str = ""
 
 
 @dataclass(frozen=True)

@@ -5,25 +5,47 @@ import os
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, Optional
 
 
 _lock = threading.RLock()
 _root: Optional[Path] = None
+_path_resolver: Optional[Callable[[str], str | Path]] = None
 _sessions: Dict[str, dict] = {}
 _MAX_RUNS = max(1, int(os.getenv("EXECUTION_DASHBOARD_MAX_RUNS", "100")))
+_heartbeat_controls: Dict[tuple[str, str], threading.Event] = {}
+_HEARTBEAT_INTERVAL_SEC = max(
+    2.0,
+    float(os.getenv("AGENT_RUN_HEARTBEAT_INTERVAL_SECONDS", "15")),
+)
 
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
 
-def configure(root: Path) -> None:
-    global _root
+def configure(
+    root: Path,
+    *,
+    path_resolver: Optional[Callable[[str], str | Path]] = None,
+) -> None:
+    global _root, _path_resolver
     _root = Path(root)
+    _path_resolver = path_resolver
+    try:
+        import runtime_observability
+
+        runtime_observability.configure(_root, path_resolver=path_resolver)
+    except Exception:
+        pass
 
 
 def _path(session_id: str) -> Optional[Path]:
+    if _path_resolver is not None and session_id:
+        try:
+            return Path(_path_resolver(session_id)) / "execution_metrics.json"
+        except Exception:
+            pass
     return (_root / session_id / "execution_metrics.json") if _root is not None and session_id else None
 
 
@@ -88,7 +110,16 @@ def _request(run: dict, react_iter: int, create: bool = True) -> Optional[dict]:
     return row
 
 
-def start_run(session_id: str, run_id: str, mode: str = "chat", user_preview: str = "") -> None:
+def start_run(
+    session_id: str,
+    run_id: str,
+    mode: str = "chat",
+    user_preview: str = "",
+    *,
+    model_profile_id: str = "",
+    pricing: Optional[dict] = None,
+    cost_budget_usd: Any = None,
+) -> None:
     with _lock:
         data = _load(session_id)
         run = _run(data, run_id)
@@ -99,9 +130,43 @@ def start_run(session_id: str, run_id: str, mode: str = "chat", user_preview: st
             "user_preview": str(user_preview or run.get("user_preview") or "").strip(),
         })
         _save(session_id, data)
+    try:
+        import runtime_observability
+
+        runtime_observability.start_run(
+            session_id,
+            run_id,
+            kind=mode,
+            model_profile_id=model_profile_id,
+            pricing=pricing,
+            cost_budget_usd=cost_budget_usd,
+        )
+    except Exception:
+        pass
+    key = (str(session_id), str(run_id))
+    with _lock:
+        previous = _heartbeat_controls.pop(key, None)
+        if previous is not None:
+            previous.set()
+        stop = threading.Event()
+        _heartbeat_controls[key] = stop
+
+    def _pulse() -> None:
+        while not stop.wait(_HEARTBEAT_INTERVAL_SEC):
+            heartbeat_run(session_id, run_id, "running")
+
+    threading.Thread(
+        target=_pulse,
+        name=f"run-heartbeat-{str(run_id)[:12]}",
+        daemon=True,
+    ).start()
 
 
 def finish_run(session_id: str, run_id: str, status: str) -> None:
+    with _lock:
+        stop = _heartbeat_controls.pop((str(session_id), str(run_id)), None)
+    if stop is not None:
+        stop.set()
     with _lock:
         data = _load(session_id)
         run = _run(data, run_id, create=False)
@@ -109,6 +174,21 @@ def finish_run(session_id: str, run_id: str, status: str) -> None:
             run["status"] = status
             run["finished_at"] = _now()
             _save(session_id, data)
+    try:
+        import runtime_observability
+
+        runtime_observability.finish_run(session_id, run_id, status)
+    except Exception:
+        pass
+
+
+def heartbeat_run(session_id: str, run_id: str, stage: str = "") -> None:
+    try:
+        import runtime_observability
+
+        runtime_observability.heartbeat_run(session_id, run_id, stage=stage)
+    except Exception:
+        pass
 
 
 def record_request(session_id: str, run_id: str, react_iter: int, **fields: Any) -> None:
@@ -160,15 +240,42 @@ def record_stream_event(session_id: str, run_id: str, react_iter: int, event: Di
         _save(session_id, data)
 
 
-def record_usage(session_id: str, run_id: str, react_iter: int, usage: Dict[str, Any]) -> None:
+def record_usage(
+    session_id: str,
+    run_id: str,
+    react_iter: int,
+    usage: Dict[str, Any],
+    *,
+    pricing: Optional[dict] = None,
+) -> Optional[dict]:
     with _lock:
         data = _load(session_id)
         req = _request(_run(data, run_id), react_iter)
         req["usage"] = {str(k): v for k, v in (usage or {}).items() if isinstance(v, (str, int, float, bool)) or v is None}
         _save(session_id, data)
+    try:
+        import runtime_observability
+
+        return runtime_observability.record_usage(
+            session_id,
+            run_id,
+            usage,
+            pricing=pricing,
+        )
+    except Exception:
+        return None
 
 
-def record_tool(session_id: str, run_id: str, react_iter: int, tool: str, duration_ms: int, failed: bool) -> None:
+def record_tool(
+    session_id: str,
+    run_id: str,
+    react_iter: int,
+    tool: str,
+    duration_ms: int,
+    failed: bool,
+    *,
+    file_changes: Optional[list[dict]] = None,
+) -> None:
     with _lock:
         data = _load(session_id)
         req = _request(_run(data, run_id), react_iter)
@@ -178,11 +285,40 @@ def record_tool(session_id: str, run_id: str, react_iter: int, tool: str, durati
             "failed": bool(failed),
         })
         _save(session_id, data)
+    try:
+        import runtime_observability
+
+        runtime_observability.heartbeat_run(session_id, run_id, stage=f"tool:{tool}")
+        if file_changes:
+            runtime_observability.record_file_changes(
+                session_id,
+                run_id,
+                file_changes,
+                tool=tool,
+            )
+    except Exception:
+        pass
+
+
+def run_budget_exhausted(session_id: str, run_id: str) -> bool:
+    try:
+        import runtime_observability
+
+        return runtime_observability.budget_exhausted(session_id, run_id)
+    except Exception:
+        return False
 
 
 def snapshot(session_id: str) -> dict:
     with _lock:
-        return json.loads(json.dumps(_load(session_id), ensure_ascii=False))
+        data = json.loads(json.dumps(_load(session_id), ensure_ascii=False))
+    try:
+        import runtime_observability
+
+        data["observability"] = runtime_observability.snapshot(session_id)
+    except Exception:
+        pass
+    return data
 
 
 def snapshot_all(session_names: Optional[Dict[str, str]] = None) -> dict:
@@ -191,8 +327,14 @@ def snapshot_all(session_names: Optional[Dict[str, str]] = None) -> dict:
     with _lock:
         session_ids = set(_sessions.keys())
         if _root is not None and _root.exists():
-            for path in _root.glob("*/execution_metrics.json"):
-                session_ids.add(path.parent.name)
+            for path in _root.rglob("execution_metrics.json"):
+                try:
+                    loaded = json.loads(path.read_text(encoding="utf-8"))
+                    sid = str(loaded.get("session_id") or "")
+                    if sid:
+                        session_ids.add(sid)
+                except (OSError, ValueError, TypeError):
+                    continue
         sessions = []
         for sid in session_ids:
             data = _load(sid)
@@ -200,6 +342,12 @@ def snapshot_all(session_names: Optional[Dict[str, str]] = None) -> dict:
                 continue
             row = json.loads(json.dumps(data, ensure_ascii=False))
             row["session_name"] = str(names.get(sid) or sid)
+            try:
+                import runtime_observability
+
+                row["observability"] = runtime_observability.snapshot(sid)
+            except Exception:
+                pass
             sessions.append(row)
         sessions.sort(
             key=lambda row: str(((row.get("runs") or [{}])[-1]).get("started_at") or ""),

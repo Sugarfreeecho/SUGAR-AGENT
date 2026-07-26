@@ -48,6 +48,7 @@ _STOP = object()
 _fname_to_tool: Dict[str, Tuple[str, str]] = {}
 _servers: Dict[str, Any] = {}
 _defs_snapshot: List[Dict[str, Any]] = []
+_tool_contracts: Dict[str, Dict[str, Any]] = {}
 _start_lock = asyncio.Lock()
 _loaded_signature: Optional[str] = None
 _signature_cache: Optional[Tuple[float, str]] = None
@@ -243,6 +244,56 @@ def _openai_tool_def(alias: str, name: str, description: str, input_schema: Any)
             "parameters": _schema_to_parameters(input_schema),
         },
     }
+
+
+def _tool_contract_from_config(cfg: dict, tool_name: str) -> Dict[str, Any]:
+    contracts = cfg.get("tool_contracts", cfg.get("tools", {}))
+    raw = contracts.get(tool_name) if isinstance(contracts, dict) else None
+    raw = raw if isinstance(raw, dict) else {}
+    effect = str(
+        raw.get("effect")
+        or raw.get("write_semantics")
+        or cfg.get("default_tool_effect")
+        or ""
+    ).strip().lower()
+    aliases = {
+        "readonly": "read",
+        "read_only": "read",
+        "filesystem_write": "workspace_write",
+        "write": "workspace_write",
+        "external": "external_write",
+    }
+    effect = aliases.get(effect, effect)
+    path_arguments = raw.get("path_arguments") or []
+    if isinstance(path_arguments, str):
+        path_arguments = [path_arguments]
+    resource_arguments = raw.get("resource_arguments") or []
+    if isinstance(resource_arguments, str):
+        resource_arguments = [resource_arguments]
+    return {
+        "declared": bool(raw or cfg.get("default_tool_effect")),
+        "effect": effect,
+        "resource_arguments": [
+            str(item) for item in resource_arguments if str(item).strip()
+        ],
+        "path_arguments": [
+            str(item) for item in path_arguments if str(item).strip()
+        ],
+        "workspace_root_argument": str(
+            raw.get("workspace_root_argument")
+            or raw.get("worktree_root_argument")
+            or ""
+        ).strip(),
+        "worktree_compatible": bool(
+            raw.get("worktree_compatible")
+            or raw.get("workspace_root_argument")
+            or raw.get("worktree_root_argument")
+        ),
+    }
+
+
+def get_tool_contract(function_name: str) -> Dict[str, Any]:
+    return dict(_tool_contracts.get(str(function_name or ""), {}))
 
 
 def _serialize_call_tool_result_for_log(result: Any, max_len: int = 12000) -> str:
@@ -538,7 +589,7 @@ def _make_streamable_connector(alias: str, cfg: dict) -> _PersistentMcpServer:
 
 
 async def _shutdown_servers_unlocked() -> None:
-    global _fname_to_tool, _servers, _defs_snapshot
+    global _fname_to_tool, _servers, _defs_snapshot, _tool_contracts
     for srv in list(_servers.values()):
         try:
             await srv.stop()
@@ -547,6 +598,7 @@ async def _shutdown_servers_unlocked() -> None:
     _servers.clear()
     _fname_to_tool.clear()
     _defs_snapshot.clear()
+    _tool_contracts.clear()
 
 
 async def force_reload() -> None:
@@ -613,6 +665,12 @@ async def ensure_started() -> None:
                 continue
 
             _servers[alias] = srv
+            for function_name, pair in list(_fname_to_tool.items()):
+                if pair[0] == alias:
+                    _tool_contracts[function_name] = _tool_contract_from_config(
+                        cfg,
+                        pair[1],
+                    )
 
             logger.info(
                 "MCP: server `%s` OK transport=%s mapped_tools=%s",
@@ -656,12 +714,60 @@ def format_call_tool_result(result: Any) -> str:
     return body if body else repr(result)
 
 
-async def invoke_tool_by_fname(function_name: str, arguments: Dict[str, Any]) -> str:
+async def invoke_tool_by_fname(
+    function_name: str,
+    arguments: Dict[str, Any],
+    *,
+    work_dir: str = "",
+    require_worktree_isolation: bool = False,
+) -> str:
     await ensure_started()
     pair = _fname_to_tool.get(function_name)
     if not pair:
         return f"Error: unknown MCP tool `{function_name}`."
     alias, orig = pair
+    contract = get_tool_contract(function_name)
+    call_arguments = dict(arguments or {})
+    if require_worktree_isolation:
+        if not contract.get("declared") or not contract.get("effect"):
+            return (
+                f"Error: MCP tool `{function_name}` is blocked in a managed worktree "
+                "because it does not declare an effect/resource isolation contract."
+            )
+        effect = str(contract.get("effect") or "")
+        if effect == "workspace_write":
+            if not contract.get("worktree_compatible"):
+                return (
+                    f"Error: MCP tool `{function_name}` declares workspace writes but "
+                    "does not declare worktree compatibility."
+                )
+            root_argument = str(contract.get("workspace_root_argument") or "")
+            if not root_argument:
+                return (
+                    f"Error: MCP tool `{function_name}` requires a "
+                    "workspace_root_argument for worktree isolation."
+                )
+            call_arguments[root_argument] = str(Path(work_dir).resolve())
+        elif effect not in {"read", "external_write"}:
+            return (
+                f"Error: MCP tool `{function_name}` has unsupported effect "
+                f"{effect!r} for worktree isolation."
+            )
+        root = Path(work_dir).resolve()
+        for argument_name in contract.get("path_arguments") or []:
+            raw_path = str(call_arguments.get(argument_name) or "").strip()
+            if not raw_path:
+                continue
+            candidate = Path(raw_path)
+            candidate = candidate.resolve() if candidate.is_absolute() else (root / candidate).resolve()
+            try:
+                candidate.relative_to(root)
+            except ValueError:
+                return (
+                    f"Error: MCP argument `{argument_name}` escapes the managed "
+                    "worktree."
+                )
+            call_arguments[argument_name] = str(candidate)
     srv = _servers.get(alias)
     if srv is None:
         return f"Error: MCP server `{alias}` is not running."
@@ -672,7 +778,7 @@ async def invoke_tool_by_fname(function_name: str, arguments: Dict[str, Any]) ->
             return f"Error: MCP server `{alias}` reconnect failed: {e}"
     t0 = time.perf_counter()
     try:
-        raw = await srv.call_tool(orig, arguments)
+        raw = await srv.call_tool(orig, call_arguments)
         elapsed_ms = (time.perf_counter() - t0) * 1000.0
         raw_dump = _serialize_call_tool_result_for_log(raw)
         logger.info(

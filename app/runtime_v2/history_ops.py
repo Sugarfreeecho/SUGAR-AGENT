@@ -28,6 +28,7 @@ PLUGIN_EVENT_TYPES = {"plugin_state_changed", "plugin_reloaded"}
 
 _GOAL_CHECKPOINT_INTERVAL = 64
 _GOAL_APPEND_LIMITS = {
+    "accounted_judge_run_ids": 512,
     "accounted_run_ids": 512,
     "accounted_usage_ids": 2048,
 }
@@ -177,6 +178,65 @@ class RuntimeHistoryOps:
             _rt2_step_ms(t0, t_after_commit),
         )
         return appended[0]
+
+    def create_reference_branch(
+        self,
+        session_id: str,
+        source_session_id: str,
+        branch_from_seq: int,
+        name: str = "",
+    ) -> RuntimeEvent:
+        """Create an immutable-prefix branch without materializing model history.
+
+        RuntimeModelProjection resolves the source prefix at ``branch_from_seq``
+        and appends this session's local tail.  A later model-history
+        replacement materializes the effective history and detaches the
+        reference, which keeps compaction/rewrite semantics straightforward.
+        """
+        reference = self._append_and_snapshot(
+            session_id,
+            "history_branch_created",
+            {
+                "source_session_id": str(source_session_id),
+                "branch_from_seq": int(branch_from_seq),
+                "name": str(name or ""),
+                "reference_mode": "immutable_model_prefix",
+            },
+        )
+        source = self._source_snapshot_at_seq(source_session_id, int(branch_from_seq))
+        context = source.get("context") if isinstance(source, dict) else {}
+        summary = context.get("summary") if isinstance(context, dict) else {}
+        summary_text = (
+            str(summary.get("summary") or "")
+            if isinstance(summary, dict)
+            else ""
+        )
+        if summary_text:
+            self.commit_context_summary(
+                session_id,
+                summary_text,
+                source_seq=(
+                    summary.get("source_seq")
+                    if isinstance(summary, dict)
+                    and summary.get("source_seq") is not None
+                    else branch_from_seq
+                ),
+            )
+        tokens = context.get("tokens") if isinstance(context, dict) else None
+        if isinstance(tokens, dict) and tokens:
+            inherited_tokens = dict(tokens)
+            inherited_tokens.pop("seq", None)
+            inherited_tokens.pop("updated_at", None)
+            inherited_tokens["inherited_from_session_id"] = source_session_id
+            inherited_tokens["inherited_from_runtime_seq"] = int(branch_from_seq)
+            self.checkpoint_context_tokens(session_id, inherited_tokens)
+        todo = source.get("todo") if isinstance(source, dict) else None
+        if isinstance(todo, dict):
+            inherited_todo = dict(todo)
+            inherited_todo.pop("seq", None)
+            inherited_todo.pop("updated_at", None)
+            self.update_todo(session_id, inherited_todo)
+        return reference
 
     def _branch_ui_events(self, source_session_id: str, branch_from_seq: int) -> list[dict]:
         from .ui_projection import RuntimeUiProjection
@@ -381,7 +441,7 @@ class RuntimeHistoryOps:
             if not isinstance(persisted_goal, dict) or not persisted_goal.get("id"):
                 raise ValueError("goal mutation must return a persisted goal with an id")
             event_payload = dict(persisted_goal)
-            if normalized_type == "goal_usage_updated":
+            if normalized_type in {"goal_usage_updated", "goal_judge_evaluated"}:
                 event_payload = self._compact_goal_payload(current_goal, persisted_goal)
             event = self.event_log._append_unlocked(
                 session_id,

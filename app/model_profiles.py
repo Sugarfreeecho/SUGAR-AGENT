@@ -85,6 +85,31 @@ def _safe_int(value: Any, default: int = 0) -> int:
         return default
 
 
+def _safe_nonnegative_float(value: Any, default: float = 0.0) -> float:
+    try:
+        number = float(value)
+        return number if number >= 0 else default
+    except (TypeError, ValueError):
+        return default
+
+
+MODEL_PRICING_FIELDS = (
+    "input_cost_per_million",
+    "output_cost_per_million",
+    "cache_read_cost_per_million",
+    "cache_write_cost_per_million",
+    "cost_budget_usd",
+)
+
+
+def profile_pricing(profile: Optional[dict]) -> dict[str, float]:
+    row = profile if isinstance(profile, dict) else {}
+    return {
+        key: _safe_nonnegative_float(row.get(key), 0.0)
+        for key in MODEL_PRICING_FIELDS
+    }
+
+
 def _parse_token_count(value: Any) -> int:
     text = str(value or "").strip().lower().replace(",", "").replace("_", "").replace(" ", "")
     if not text:
@@ -593,6 +618,12 @@ def upsert_profile(project_root: Path, payload: dict) -> dict:
             "updated_at": now,
         }
     )
+    for pricing_field in MODEL_PRICING_FIELDS:
+        if pricing_field in payload:
+            profile[pricing_field] = _safe_nonnegative_float(
+                payload.get(pricing_field),
+                0.0,
+            )
     if "capability_description" in payload:
         capability_description = str(payload.get("capability_description") or "").strip()
         if capability_description:

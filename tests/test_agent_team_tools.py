@@ -163,6 +163,57 @@ def test_dispatch_reuses_the_same_member_session(tmp_path, monkeypatch):
     assert service.read_team("root")["members"][member["member_id"]]["state"] == "idle"
 
 
+def test_dispatch_auto_completes_claimed_task_and_unlocks_dependency(tmp_path, monkeypatch):
+    import agent_harness
+    import agent_subagent
+    from agent_team import tools as team_tools
+    from agent_team.service import AgentTeamService
+
+    monkeypatch.setenv("AGENT_TEAM_ENABLED", "1")
+    service = AgentTeamService(tmp_path)
+    service.create_team("root")
+    member = service.add_member("root", name="Coder", role="implementation")
+    service.bind_member_session("root", member["member_id"], "persistent-child")
+    service.set_member_state("root", member["member_id"], "idle")
+    first = service.create_task("root", title="first")
+    second = service.create_task(
+        "root",
+        title="second",
+        depends_on=[first["task_id"]],
+    )
+    service.claim_task("root", first["task_id"], member["member_id"])
+
+    async def fake_run_subagent_task(**_kwargs):
+        return "completed output"
+
+    class _SessionManager:
+        @staticmethod
+        def _load_metadata(_child_id):
+            return {"subagent_run_status": "completed"}
+
+    monkeypatch.setattr(agent_subagent, "run_subagent_task", fake_run_subagent_task)
+    monkeypatch.setattr(agent_harness, "session_manager", _SessionManager())
+    asyncio.run(
+        team_tools._dispatch_member(
+            service,
+            "root",
+            member_id=member["member_id"],
+            prompt="",
+            task_id=first["task_id"],
+            run_in_background=False,
+            parent_key_context="",
+            emit=None,
+            parent_run_id="run",
+            auto_continue=False,
+        )
+    )
+
+    team = service.read_team("root")
+    assert team["tasks"][first["task_id"]]["status"] == "completed"
+    assert team["tasks"][first["task_id"]]["result"] == "completed output"
+    assert service.claim_next_task("root", member["member_id"])["task_id"] == second["task_id"]
+
+
 def test_member_tool_policy_requires_one_shot_permission(tmp_path, monkeypatch):
     from agent_team.policy import authorize_member_tool, workspace_write_lock
     from agent_team.service import AgentTeamService

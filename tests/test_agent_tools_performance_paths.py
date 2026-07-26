@@ -216,7 +216,17 @@ def test_task_schema_uses_action_discriminator():
     )
 
     props = schema["parameters"]["properties"]
-    assert props["action"]["enum"] == ["start", "resume", "status", "collect", "interrupt"]
+    assert props["action"]["enum"] == [
+        "start",
+        "resume",
+        "status",
+        "collect",
+        "interrupt",
+        "steer",
+        "permissions",
+        "resolve_permission",
+        "worktree",
+    ]
     assert "Never use resume to poll" in schema["description"]
     assert "ask that same existing subagent directly" in schema["description"]
     assert "do not treat status or collect as a complete execution record" in schema["description"]

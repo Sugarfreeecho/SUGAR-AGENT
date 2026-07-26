@@ -8,7 +8,10 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import hashlib
 import json
+import os
+import re
 import shutil
 import subprocess
 import threading
@@ -70,6 +73,7 @@ SUBAGENT_TOOL_PROFILES: Dict[str, Dict[str, Any]] = {
 _TOOL_FILTER_CACHE_MAX = 64
 _tool_filter_cache: "OrderedDict[tuple, tuple[tuple[Dict[str, Any], ...], tuple[Dict[str, Any], ...]]]" = OrderedDict()
 _tool_filter_cache_lock = threading.Lock()
+_PROCESS_INSTANCE_ID = f"{os.getpid()}-{uuid.uuid4().hex}"
 
 SUBAGENT_RUN_INSTRUCTION = (
     "你是隔离运行的 subagent。你只能依赖当前 subagent 的 system/key_context、"
@@ -296,6 +300,94 @@ class SubagentTaskRegistry:
 
 
 subagent_registry = SubagentTaskRegistry()
+
+
+def _patch_subagent_run_lifecycle(
+    child_id: str,
+    *,
+    status: str,
+    run_id: str = "",
+    error: str = "",
+) -> None:
+    now = datetime.now(timezone.utc).isoformat()
+    patch: Dict[str, Any] = {
+        "subagent_run_status": str(status or "unknown"),
+        "subagent_run_instance_id": _PROCESS_INSTANCE_ID,
+        "subagent_run_owner_pid": os.getpid(),
+        "subagent_run_heartbeat_at": now,
+    }
+    if run_id:
+        patch["subagent_run_id"] = str(run_id)
+    if status == "running":
+        patch["subagent_run_started_at"] = now
+        patch["subagent_run_finished_at"] = ""
+    else:
+        patch["subagent_run_finished_at"] = now
+    if error:
+        patch["subagent_run_error"] = str(error)[:4000]
+    elif status == "completed":
+        patch["subagent_run_error"] = ""
+    session_manager.patch_subagent_metadata(child_id, patch)
+
+
+def reconcile_orphaned_subagent_runs() -> Dict[str, Any]:
+    """Mark persisted ``running`` task rows from a previous process as orphaned."""
+
+    reconciled: List[str] = []
+    errors: List[str] = []
+    try:
+        task_indexes = list(Path(session_manager.sessions_dir).rglob("subagents/tasks.json"))
+    except Exception as exc:
+        return {"ok": False, "reconciled": [], "errors": [str(exc)]}
+    for task_path in task_indexes:
+        try:
+            data = json.loads(task_path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            errors.append(f"{task_path}: {exc}")
+            continue
+        if not isinstance(data, list):
+            continue
+        for row in data:
+            if not isinstance(row, dict) or str(row.get("status") or "") != "running":
+                continue
+            child_id = str(
+                row.get("agent_id") or row.get("task_id") or row.get("id") or ""
+            ).strip()
+            parent_id = str(row.get("parent_session_id") or "").strip()
+            if not child_id or not parent_id or subagent_registry.is_running(child_id):
+                continue
+            try:
+                meta = session_manager._load_metadata(child_id) or {}
+                owner = str(meta.get("subagent_run_instance_id") or "").strip()
+                if owner == _PROCESS_INSTANCE_ID:
+                    continue
+                reason = (
+                    "orphaned after process restart; the previous in-process "
+                    "subagent execution cannot be resumed transparently"
+                )
+                _patch_subagent_run_lifecycle(
+                    child_id,
+                    status="orphaned",
+                    run_id=str(row.get("run_id") or ""),
+                    error=reason,
+                )
+                session_manager.patch_subagent_metadata(
+                    child_id,
+                    {"subagent_ok": False, "subagent_error": reason},
+                )
+                session_manager.upsert_subagent_task(
+                    parent_id,
+                    child_id,
+                    {
+                        "status": "orphaned",
+                        "error": reason,
+                        "finished_at": datetime.now(timezone.utc).isoformat(),
+                    },
+                )
+                reconciled.append(child_id)
+            except Exception as exc:
+                errors.append(f"{child_id}: {exc}")
+    return {"ok": not errors, "reconciled": reconciled, "errors": errors}
 
 
 def _tool_name(defn: Dict[str, Any]) -> str:
@@ -569,9 +661,11 @@ def _format_subagent_status_report(parent_session_id: str, resume_raw: str = "")
     failed_n = sum(1 for n in flat if n.get("status") == "failed")
     interrupted_n = sum(1 for n in flat if n.get("status") == "interrupted")
     pending_n = sum(1 for n in flat if n.get("status") == "pending")
+    orphaned_n = sum(1 for n in flat if n.get("status") in {"orphaned", "unknown"})
     lines = [
         f"Subagent 状态（共 {len(flat)} 个；运行中 {running_n}；"
-        f"已完成 {completed_n}；失败 {failed_n}；中断 {interrupted_n}；待续 {pending_n}）",
+        f"已完成 {completed_n}；失败 {failed_n}；中断 {interrupted_n}；"
+        f"遗留/未知 {orphaned_n}；待续 {pending_n}）",
         "",
     ]
     for n in flat:
@@ -588,6 +682,51 @@ def _format_subagent_status_report(parent_session_id: str, resume_raw: str = "")
             lines.append(f"  error: {err[:400]}")
         if preview:
             lines.append(f"  preview: {preview[:240]}")
+        heartbeat = str(n.get("run_heartbeat_at") or "").strip()
+        if heartbeat:
+            lines.append(f"  heartbeat: {heartbeat}")
+        worktree_state = str(n.get("git_worktree_state") or "").strip()
+        worktree_path = str(n.get("git_worktree_path") or "").strip()
+        if worktree_state or worktree_path:
+            lines.append(
+                f"  worktree: state={worktree_state or 'active'}, path={worktree_path or '(closed)'}"
+            )
+        files_touched = [str(x) for x in n.get("files_touched") or [] if str(x).strip()]
+        if files_touched:
+            lines.append(f"  files_touched: {', '.join(files_touched[:20])}")
+        metrics = n.get("session_metrics") if isinstance(n.get("session_metrics"), dict) else {}
+        if metrics:
+            lines.append(
+                "  metrics: "
+                f"input_tokens={int(metrics.get('input_tokens') or 0)}, "
+                f"output_tokens={int(metrics.get('output_tokens') or 0)}, "
+                f"tools={int(metrics.get('tool_calls') or 0)}, "
+                f"duration_ms={int(metrics.get('duration_ms') or 0)}"
+            )
+        cost = n.get("cost") if isinstance(n.get("cost"), dict) else {}
+        if cost:
+            lines.append(
+                "  cost: "
+                f"{str(cost.get('currency') or 'USD')} "
+                f"{float(cost.get('total') or 0.0):.6f}"
+                + (
+                    f" / budget {float(n.get('cost_budget_usd')):.6f}"
+                    if n.get("cost_budget_usd") not in (None, "")
+                    else ""
+                )
+                + (" (exhausted)" if n.get("cost_budget_exhausted") else "")
+            )
+        file_changes = [
+            item
+            for item in n.get("file_changes") or []
+            if isinstance(item, dict) and str(item.get("path") or "").strip()
+        ]
+        if file_changes:
+            summary = ", ".join(
+                f"{str(item.get('operation') or 'modified')}:{str(item.get('path') or '')}"
+                for item in file_changes[-20:]
+            )
+            lines.append(f"  file_changes: {summary}")
         lines.append("")
     lines.append(
         "提示：收集完整结果用 task(action='collect', resume=<ID>)；"
@@ -756,6 +895,79 @@ def _git_worktree_add(run_dir: Path, attempt: int) -> Optional[Tuple[Path, str]]
         return None
 
 
+def _git_root_and_relative_work_dir() -> Optional[Tuple[Path, Path]]:
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            cwd=str(WORK_DIR),
+            capture_output=True,
+            text=True,
+            timeout=15,
+            check=False,
+        )
+        if result.returncode != 0:
+            return None
+        root = Path((result.stdout or "").strip()).expanduser().resolve()
+        relative = WORK_DIR.resolve().relative_to(root)
+        return root, relative
+    except Exception:
+        return None
+
+
+def _managed_worktree_base(git_root: Path) -> Path:
+    digest = hashlib.sha256(str(git_root).encode("utf-8")).hexdigest()[:12]
+    return git_root.parent / ".myagent-worktrees" / f"{git_root.name}-{digest}"
+
+
+def _create_managed_worktree(child_id: str) -> Optional[Tuple[Path, Path, str, str]]:
+    """Create a task worktree outside the main checkout.
+
+    Returns ``(worktree_root, subagent_work_dir, branch, base_commit)``.
+    """
+
+    located = _git_root_and_relative_work_dir()
+    if located is None:
+        return None
+    git_root, relative_work_dir = located
+    safe_child = re.sub(r"[^A-Za-z0-9_.-]+", "-", str(child_id or "subagent"))[:48]
+    base = _managed_worktree_base(git_root)
+    base.mkdir(parents=True, exist_ok=True)
+    worktree_root = base / safe_child
+    if worktree_root.exists():
+        return None
+    branch = f"subagent/task-{safe_child[:12]}-{uuid.uuid4().hex[:8]}"
+    try:
+        head = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=str(git_root),
+            capture_output=True,
+            text=True,
+            timeout=15,
+            check=False,
+        )
+        base_commit = (head.stdout or "").strip() if head.returncode == 0 else "HEAD"
+        result = subprocess.run(
+            ["git", "worktree", "add", "-b", branch, str(worktree_root), base_commit or "HEAD"],
+            cwd=str(git_root),
+            capture_output=True,
+            text=True,
+            timeout=120,
+            check=False,
+        )
+        if result.returncode != 0:
+            logger.warning(
+                "managed subagent worktree create failed: %s",
+                (result.stderr or result.stdout)[:1000],
+            )
+            return None
+        subagent_work_dir = (worktree_root / relative_work_dir).resolve()
+        subagent_work_dir.mkdir(parents=True, exist_ok=True)
+        return worktree_root.resolve(), subagent_work_dir, branch, base_commit
+    except Exception as exc:
+        logger.warning("managed subagent worktree create failed: %s", exc)
+        return None
+
+
 def _git_worktree_remove(worktree_path: Path, branch: str = "") -> None:
     """移除 git worktree 及临时分支（忽略非致命错误）。"""
     wt = Path(worktree_path)
@@ -773,7 +985,7 @@ def _git_worktree_remove(worktree_path: Path, branch: str = "") -> None:
             )
         except Exception as e:
             logger.debug("git worktree remove 失败 %s: %s", wt, e)
-        if wt.exists():
+        if wt.exists() and _safe_managed_worktree_path(wt):
             try:
                 shutil.rmtree(wt, ignore_errors=True)
             except Exception:
@@ -792,11 +1004,34 @@ def _git_worktree_remove(worktree_path: Path, branch: str = "") -> None:
             logger.debug("git branch -D 失败 %s: %s", branch_name, e)
 
 
+def _safe_managed_worktree_path(path: Path) -> bool:
+    """Allow fallback deletion only for paths created by subagent worktree code."""
+
+    try:
+        resolved = path.expanduser().resolve()
+        located = _git_root_and_relative_work_dir()
+        if located is not None:
+            managed = _managed_worktree_base(located[0]).resolve()
+            resolved.relative_to(managed)
+            return resolved != managed
+    except Exception:
+        pass
+    try:
+        sessions = Path(session_manager.sessions_dir).resolve()
+        resolved.relative_to(sessions)
+        return "worktree" in resolved.name.lower() or "_best_of" in {
+            part.lower() for part in resolved.parts
+        }
+    except Exception:
+        return False
+
+
 def _persist_worktree_meta(child_id: str, worktree_path: Path, branch: str) -> None:
     session_manager.patch_subagent_metadata(
         child_id,
         {
             "git_worktree_path": str(worktree_path),
+            "subagent_work_dir": str(worktree_path),
             "git_worktree_branch": branch,
         },
     )
@@ -817,8 +1052,200 @@ def cleanup_git_worktree_for_session(child_session_id: str) -> None:
     _git_worktree_remove(Path(wt_raw), branch)
     session_manager.patch_subagent_metadata(
         child_session_id,
-        {"git_worktree_path": "", "git_worktree_branch": ""},
+        {
+            "git_worktree_path": "",
+            "subagent_work_dir": "",
+            "git_worktree_branch": "",
+            "git_worktree_state": "discarded",
+        },
     )
+
+
+def _persist_managed_worktree(
+    child_id: str,
+    worktree_root: Path,
+    subagent_work_dir: Path,
+    branch: str,
+    base_commit: str,
+) -> None:
+    located = _git_root_and_relative_work_dir()
+    git_root = located[0] if located is not None else WORK_DIR.resolve()
+    session_manager.patch_subagent_metadata(
+        child_id,
+        {
+            "git_worktree_path": str(worktree_root),
+            "subagent_work_dir": str(subagent_work_dir),
+            "git_worktree_branch": branch,
+            "git_worktree_base_commit": str(base_commit or ""),
+            "git_worktree_main_root": str(git_root),
+            "git_worktree_state": "active",
+            "git_worktree_managed": True,
+            "git_worktree_retained": True,
+        },
+    )
+
+
+def _worktree_command(
+    cwd: Path,
+    args: List[str],
+    *,
+    timeout: float = 120.0,
+) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        ["git", *args],
+        cwd=str(cwd),
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+        check=False,
+    )
+
+
+def _load_managed_worktree_meta(child_id: str) -> Dict[str, Any]:
+    meta = session_manager._load_metadata(child_id)
+    if not isinstance(meta, dict):
+        return {}
+    return meta
+
+
+def manage_subagent_worktree(
+    parent_session_id: str,
+    child_id: str,
+    operation: str,
+) -> str:
+    """Inspect or finalize one managed task worktree."""
+
+    validated = session_manager.validate_subagent_resume(parent_session_id, child_id)
+    if not validated:
+        return f"Error: subagent {child_id!r} does not exist or belongs to another session."
+    meta = _load_managed_worktree_meta(validated)
+    root_raw = str(meta.get("git_worktree_path") or "").strip()
+    branch = str(meta.get("git_worktree_branch") or "").strip()
+    state = str(meta.get("git_worktree_state") or ("active" if root_raw else "none"))
+    op = str(operation or "status").strip().lower()
+    if op not in {"status", "diff", "retain", "merge", "discard"}:
+        return "Error: worktree_action must be status, diff, retain, merge, or discard."
+    if not root_raw:
+        last_path = str(meta.get("git_worktree_last_path") or "").strip()
+        return (
+            f"Subagent {validated} has no active managed worktree "
+            f"(state={state}, last_path={last_path or '(none)'})."
+        )
+    root = Path(root_raw).expanduser().resolve()
+    if op in {"merge", "discard"} and subagent_registry.is_running(validated):
+        return f"Error: subagent {validated} is still running; interrupt or wait before {op}."
+    if not root.is_dir():
+        session_manager.patch_subagent_metadata(
+            validated,
+            {
+                "git_worktree_state": "missing",
+                "git_worktree_last_path": str(root),
+                "git_worktree_path": "",
+                "subagent_work_dir": "",
+            },
+        )
+        return f"Error: managed worktree is missing: {root}"
+
+    status_result = _worktree_command(root, ["status", "--short"])
+    status_text = (status_result.stdout or status_result.stderr or "").strip()
+    if op == "status":
+        return (
+            f"Managed worktree for {validated}\n"
+            f"state={state}\npath={root}\nbranch={branch or '(unknown)'}\n"
+            f"changes:\n{status_text or '(clean)'}"
+        )
+    if op == "diff":
+        unstaged = _worktree_command(root, ["diff", "--no-ext-diff", "--"]).stdout or ""
+        staged = _worktree_command(root, ["diff", "--cached", "--no-ext-diff", "--"]).stdout or ""
+        untracked = _worktree_command(
+            root, ["ls-files", "--others", "--exclude-standard"]
+        ).stdout or ""
+        body = (
+            f"status:\n{status_text or '(clean)'}\n\n"
+            f"unstaged diff:\n{unstaged or '(none)'}\n\n"
+            f"staged diff:\n{staged or '(none)'}\n\n"
+            f"untracked files:\n{untracked or '(none)'}"
+        )
+        cap = 60_000
+        return body if len(body) <= cap else body[:cap] + "\n\n[diff truncated]"
+    if op == "retain":
+        session_manager.patch_subagent_metadata(
+            validated,
+            {
+                "git_worktree_state": "retained",
+                "git_worktree_retained": True,
+            },
+        )
+        return f"Retained managed worktree for {validated}: {root} ({branch})."
+    if op == "discard":
+        _git_worktree_remove(root, branch)
+        session_manager.patch_subagent_metadata(
+            validated,
+            {
+                "git_worktree_last_path": str(root),
+                "git_worktree_last_branch": branch,
+                "git_worktree_path": "",
+                "subagent_work_dir": "",
+                "git_worktree_branch": "",
+                "git_worktree_state": "discarded",
+                "git_worktree_retained": False,
+            },
+        )
+        return f"Discarded managed worktree for {validated}: {root}."
+
+    # merge
+    main_root_raw = str(meta.get("git_worktree_main_root") or "").strip()
+    main_root = Path(main_root_raw).resolve() if main_root_raw else None
+    if main_root is None or not main_root.is_dir():
+        located = _git_root_and_relative_work_dir()
+        main_root = located[0] if located is not None else None
+    if main_root is None:
+        return "Error: cannot locate the main Git worktree for merge."
+    main_status = _worktree_command(main_root, ["status", "--porcelain"])
+    if main_status.returncode != 0:
+        return f"Error: cannot inspect main worktree: {(main_status.stderr or '').strip()}"
+    if (main_status.stdout or "").strip():
+        return (
+            "Error: main worktree is not clean; merge was not attempted. "
+            "Commit/stash its changes or use worktree_action=diff and merge manually."
+        )
+    if status_text:
+        add = _worktree_command(root, ["add", "-A"])
+        if add.returncode != 0:
+            return f"Error: failed to stage worktree changes: {(add.stderr or '').strip()}"
+        commit = _worktree_command(
+            root,
+            ["commit", "-m", f"MyAgent subagent {validated[:12]}"],
+        )
+        if commit.returncode != 0:
+            return f"Error: failed to commit worktree changes: {(commit.stderr or commit.stdout).strip()}"
+    ahead = _worktree_command(main_root, ["rev-list", "--count", f"HEAD..{branch}"])
+    if ahead.returncode != 0:
+        return f"Error: cannot compare worktree branch: {(ahead.stderr or '').strip()}"
+    if int((ahead.stdout or "0").strip() or 0) > 0:
+        merged = _worktree_command(main_root, ["merge", "--no-ff", "--no-edit", branch])
+        if merged.returncode != 0:
+            _worktree_command(main_root, ["merge", "--abort"], timeout=30)
+            return (
+                "Error: merge conflicted or failed; the merge was aborted and the "
+                f"worktree was retained. {(merged.stderr or merged.stdout).strip()}"
+            )
+    merge_commit = (_worktree_command(main_root, ["rev-parse", "HEAD"]).stdout or "").strip()
+    _git_worktree_remove(root, branch)
+    session_manager.patch_subagent_metadata(
+        validated,
+        {
+            "git_worktree_last_path": str(root),
+            "git_worktree_last_branch": branch,
+            "git_worktree_path": "",
+            "subagent_work_dir": "",
+            "git_worktree_branch": "",
+            "git_worktree_state": "merged",
+            "git_worktree_retained": False,
+            "git_worktree_merge_commit": merge_commit,
+        },
+    )
+    return f"Merged subagent {validated} into {main_root}; HEAD={merge_commit}."
 
 
 def cleanup_best_of_run_worktrees(parent_session_id: str, run_id: str) -> None:
@@ -947,8 +1374,49 @@ async def _execute_subagent_run(
             "started_at": datetime.now(timezone.utc).isoformat(),
         },
     )
+    _patch_subagent_run_lifecycle(
+        child_id,
+        status="running",
+        run_id=subagent_run_id,
+    )
 
+    last_heartbeat_at = 0.0
+    files_touched: Set[str] = set()
     async def child_emit(ev: Dict[str, Any]) -> None:
+        nonlocal last_heartbeat_at
+        now_monotonic = asyncio.get_running_loop().time()
+        if now_monotonic - last_heartbeat_at >= 15.0:
+            last_heartbeat_at = now_monotonic
+            session_manager.patch_subagent_metadata(
+                child_id,
+                {
+                    "subagent_run_heartbeat_at": datetime.now(timezone.utc).isoformat(),
+                    "subagent_run_status": "running",
+                },
+            )
+        if str(ev.get("type") or "") == "tool_call":
+            tool_name = str(ev.get("tool_name") or ev.get("name") or "")
+            if tool_name in {
+                "write_file",
+                "edit_file",
+                "apply_patch",
+                "delete_file",
+                "web_download",
+                "run_shell",
+            }:
+                args = ev.get("tool_args") if isinstance(ev.get("tool_args"), dict) else {}
+                for key in ("path", "target_directory", "output_path", "workdir"):
+                    value = str(args.get(key) or "").strip()
+                    if value:
+                        files_touched.add(value[:2000])
+                patch_text = str(args.get("patch") or "")
+                if tool_name == "apply_patch" and patch_text:
+                    for match in re.finditer(
+                        r"^\*\*\* (?:Add|Update|Delete) File:\s*(.+?)\s*$",
+                        patch_text,
+                        flags=re.MULTILINE,
+                    ):
+                        files_touched.add(match.group(1).strip()[:2000])
         if should_persist_ui_event(ev, session_meta={"is_subagent": True}):
             session_manager.append_ui_event(child_id, ev)
         if parent_emit and should_forward_subagent_event_to_parent(ev):
@@ -1000,6 +1468,17 @@ async def _execute_subagent_run(
                 "finished_at": datetime.now(timezone.utc).isoformat(),
             },
         )
+        _patch_subagent_run_lifecycle(
+            child_id,
+            status=status,
+            run_id=subagent_run_id,
+            error=err,
+        )
+        if files_touched:
+            session_manager.patch_subagent_metadata(
+                child_id,
+                {"subagent_files_touched": sorted(files_touched)[:500]},
+            )
 
     async def _run_core(*, background: bool = False, emit_start: bool = True) -> str:
         from agent_loop import react_node
@@ -1087,7 +1566,12 @@ async def _execute_subagent_run(
                     await r
             return result_text
         finally:
-            cleanup_git_worktree_for_session(child_id)
+            try:
+                worktree_meta = session_manager._load_metadata(child_id) or {}
+            except Exception:
+                worktree_meta = {}
+            if not bool(worktree_meta.get("git_worktree_managed")):
+                cleanup_git_worktree_for_session(child_id)
 
         final_response = str(state_out.get("final_response") or "").strip()
         if final_response:
@@ -1197,21 +1681,35 @@ async def _run_single_subagent(
     best_of_attempt: int = 0,
     best_of_total: int = 0,
     parent_run_id: str = "",
+    parent_runtime_config: Optional[Dict[str, Any]] = None,
 ) -> str:
     action = str(tool_args.get("action") or "").strip().lower()
     if action:
-        if action not in {"start", "resume", "status", "collect", "interrupt"}:
-            return "Error: task action must be start, resume, status, collect, or interrupt."
+        valid_actions = {
+            "start",
+            "resume",
+            "status",
+            "collect",
+            "interrupt",
+            "steer",
+            "permissions",
+            "resolve_permission",
+            "worktree",
+        }
+        if action not in valid_actions:
+            return "Error: invalid task action."
         resume_for_action = str(tool_args.get("resume") or "").strip()
         if action == "start" and resume_for_action:
             return "Error: task action=start must not include resume; use action=resume."
-        if action in {"resume", "interrupt"} and not resume_for_action:
+        if action in {"resume", "interrupt", "steer", "resolve_permission", "worktree"} and not resume_for_action:
             return f"Error: task action={action} requires resume=<subagent id>."
         if action == "resume" and not str(tool_args.get("prompt") or "").strip():
             return (
                 "Error: task action=resume requires a non-empty follow-up prompt. "
                 "Use action=collect to read the existing result or action=status to inspect state."
             )
+        if action == "steer" and not str(tool_args.get("prompt") or "").strip():
+            return "Error: task action=steer requires a non-empty prompt."
         requested_profile_id = str(tool_args.get("model_profile_id") or "").strip()
         creates_new_session = action == "start" or (
             action == "resume" and resume_for_action.lower() == "self"
@@ -1225,6 +1723,104 @@ async def _run_single_subagent(
             return _format_subagent_status_report(parent_session_id, resume_for_action)
         if action == "collect":
             return await _format_subagent_collect_result(parent_session_id, resume_for_action)
+        if action == "permissions":
+            from subagent_control import (
+                format_subagent_permissions,
+                list_subagent_permissions,
+            )
+
+            target_child = ""
+            if resume_for_action:
+                target_child = str(
+                    session_manager.validate_subagent_resume(
+                        parent_session_id, resume_for_action
+                    )
+                    or ""
+                )
+                if not target_child:
+                    return (
+                        f"Error: cannot inspect permissions for subagent "
+                        f"{resume_for_action!r}; it does not exist or belongs to another session."
+                    )
+            rows = list_subagent_permissions(
+                parent_session_id,
+                child_id=target_child,
+                include_terminal=bool(tool_args.get("include_terminal")),
+            )
+            return format_subagent_permissions(rows)
+        if action == "resolve_permission":
+            from subagent_control import resolve_subagent_permission
+
+            child_id = session_manager.validate_subagent_resume(
+                parent_session_id, resume_for_action
+            )
+            if not child_id:
+                return (
+                    f"Error: cannot resolve permission for subagent "
+                    f"{resume_for_action!r}; it does not exist or belongs to another session."
+                )
+            permission_id = str(tool_args.get("permission_id") or "").strip()
+            decision = str(tool_args.get("decision") or "").strip().lower()
+            if not permission_id or decision not in {"allowed", "denied"}:
+                return (
+                    "Error: resolve_permission requires permission_id and "
+                    "decision=allowed|denied."
+                )
+            try:
+                resolved = resolve_subagent_permission(
+                    parent_session_id,
+                    child_id,
+                    permission_id,
+                    decision,
+                    reason=str(tool_args.get("reason") or ""),
+                )
+            except ValueError as exc:
+                return f"Error: {exc}"
+            return (
+                f"Subagent permission {resolved.get('permission_id')} "
+                f"{resolved.get('state')} for {resolved.get('action')}."
+            )
+        if action == "worktree":
+            return await asyncio.to_thread(
+                manage_subagent_worktree,
+                parent_session_id,
+                resume_for_action,
+                str(tool_args.get("worktree_action") or "status"),
+            )
+        if action == "steer":
+            child_id = session_manager.validate_subagent_resume(
+                parent_session_id, resume_for_action
+            )
+            if not child_id:
+                return (
+                    f"Error: cannot steer subagent {resume_for_action!r}; "
+                    "it does not exist or belongs to another session."
+                )
+            if not subagent_registry.is_running(child_id):
+                return (
+                    f"Error: subagent {child_id} is not running; use "
+                    "action=resume for a follow-up after completion."
+                )
+            from agent_loop import abort_session_steer_run, enqueue_session_steer
+
+            steer_mode = str(tool_args.get("steer_mode") or "interrupt").strip().lower()
+            queued = enqueue_session_steer(
+                child_id,
+                str(tool_args.get("prompt") or ""),
+                client_id=str(tool_args.get("client_id") or ""),
+                source_run_id=str(parent_run_id or ""),
+                mode=steer_mode,
+            )
+            if not queued.get("ok"):
+                return f"Error: could not steer subagent: {queued.get('error')}"
+            aborted = False
+            if steer_mode == "interrupt":
+                aborted = abort_session_steer_run(child_id, reason="parent_steer")
+            item = queued.get("item") if isinstance(queued.get("item"), dict) else {}
+            return (
+                f"Queued steer for running subagent {child_id}: "
+                f"id={item.get('id')}, mode={steer_mode}, interrupted_current_step={aborted}."
+            )
         if action == "interrupt":
             child_id = session_manager.validate_subagent_resume(parent_session_id, resume_for_action)
             if not child_id:
@@ -1250,9 +1846,13 @@ async def _run_single_subagent(
     prompt = str(tool_args.get("prompt") or "").strip()
     subagent_type = str(tool_args.get("subagent_type") or "generalPurpose").strip()
     readonly_strict = bool(tool_args.get("readonly"))
+    isolation = str(tool_args.get("isolation") or "auto").strip().lower()
+    if isolation not in {"auto", "worktree", "shared"}:
+        return "Error: isolation must be auto, worktree, or shared."
     run_in_background = bool(tool_args.get("run_in_background"))
     interrupt = bool(tool_args.get("interrupt"))
     model_profile_id = str(tool_args.get("model_profile_id") or "").strip()
+    model_profile_was_explicit = bool(model_profile_id)
     removed_model_override = str(tool_args.get("model") or "").strip()
     model_override = ""
     executor_llm_type_override = ""
@@ -1326,6 +1926,8 @@ async def _run_single_subagent(
             executor_model=model_override,
             executor_llm_type=executor_llm_type_override,
             readonly_strict=readonly_strict,
+            parent_runtime_config=parent_runtime_config,
+            inherit_parent_model_runtime=not model_profile_was_explicit,
         )
     elif resume_raw:
         child_id = session_manager.validate_subagent_resume(parent_session_id, resume_raw)
@@ -1369,8 +1971,67 @@ async def _run_single_subagent(
 
     assert child_id
 
-    # best-of-n worktree hint in prompt
+    # Write-capable ordinary tasks use a managed worktree when possible.
     worktree_note = ""
+    if (
+        not resumed
+        and not best_of_run_id
+        and subagent_type == "generalPurpose"
+        and not readonly_strict
+        and isolation in {"auto", "worktree"}
+        and hasattr(session_manager, "patch_subagent_metadata")
+    ):
+        managed = await asyncio.to_thread(_create_managed_worktree, child_id)
+        if managed is not None:
+            wt_root, wt_work_dir, branch, base_commit = managed
+            _persist_managed_worktree(
+                child_id,
+                wt_root,
+                wt_work_dir,
+                branch,
+                base_commit,
+            )
+            worktree_note = (
+                f"\n\nManaged Git worktree: `{wt_root}`; active tool workspace: "
+                f"`{wt_work_dir}`; branch: `{branch}`. All relative built-in "
+                "filesystem and shell operations are rooted at this isolated workspace. "
+                "Do not modify the main checkout directly."
+            )
+        elif isolation == "worktree":
+            if hasattr(session_manager, "patch_subagent_metadata"):
+                session_manager.patch_subagent_metadata(
+                    child_id,
+                    {
+                        "git_worktree_state": "unavailable",
+                        "git_worktree_error": (
+                            "Git worktree requires a valid Git checkout rooted at or above WORK_DIR."
+                        ),
+                    },
+                )
+                _patch_subagent_run_lifecycle(
+                    child_id,
+                    status="failed",
+                    error="requested worktree isolation is unavailable",
+                )
+                session_manager.upsert_subagent_task(
+                    parent_session_id,
+                    child_id,
+                    {
+                        "status": "failed",
+                        "error": "requested worktree isolation is unavailable",
+                        "finished_at": datetime.now(timezone.utc).isoformat(),
+                    },
+                )
+            return (
+                "Error: requested worktree isolation is unavailable. The Git checkout "
+                "must exist; no subagent execution was started."
+            )
+        else:
+            if hasattr(session_manager, "patch_subagent_metadata"):
+                session_manager.patch_subagent_metadata(
+                    child_id,
+                    {"git_worktree_state": "shared_fallback"},
+                )
     if best_of_run_id and best_of_attempt > 0:
         run_dir = (
             session_manager._get_session_path(parent_session_id)
@@ -1418,6 +2079,7 @@ async def _run_best_of_n(
     parent_key_context: str = "",
     emit: Optional[Callable[[Dict[str, Any]], Any]] = None,
     parent_run_id: str = "",
+    parent_runtime_config: Optional[Dict[str, Any]] = None,
 ) -> str:
     n = int(tool_args.get("n") or SUBAGENT_BEST_OF_N)
     n = max(2, min(8, n))
@@ -1447,6 +2109,7 @@ async def _run_best_of_n(
             best_of_attempt=i + 1,
             best_of_total=n,
             parent_run_id=parent_run_id,
+            parent_runtime_config=parent_runtime_config,
         )
 
     if run_in_background:
@@ -1613,6 +2276,7 @@ async def run_subagent_task(
     parent_key_context: str = "",
     emit: Optional[Callable[[Dict[str, Any]], Any]] = None,
     parent_run_id: str = "",
+    parent_runtime_config: Optional[Dict[str, Any]] = None,
 ) -> str:
     """task 工具入口。"""
     stype = str(tool_args.get("subagent_type") or "generalPurpose").strip()
@@ -1623,6 +2287,7 @@ async def run_subagent_task(
             parent_key_context=parent_key_context,
             emit=emit,
             parent_run_id=parent_run_id,
+            parent_runtime_config=parent_runtime_config,
         )
     return await _run_single_subagent(
         tool_args=tool_args,
@@ -1630,4 +2295,5 @@ async def run_subagent_task(
         parent_key_context=parent_key_context,
         emit=emit,
         parent_run_id=parent_run_id,
+        parent_runtime_config=parent_runtime_config,
     )

@@ -63,6 +63,8 @@ from agent_harness import (
     strip_reasoning_for_api_request,
     resolve_executor_config_for_session,
     resolve_executor_candidates_for_session,
+    executor_pricing_for_session,
+    executor_runtime_snapshot_for_session,
     EXECUTOR_REASONING_EFFORT,
     UserMessage,
     AssistantMessage,
@@ -99,6 +101,7 @@ from agent_tools import (
     clear_run_shell_interrupt_check,
     redact_sensitive_tool_obj,
     redact_sensitive_tool_text,
+    tool_work_dir_override,
 )
 from agent_tokenizer import (
     estimate_calculated_input_tokens_for_messages,
@@ -113,6 +116,7 @@ from agent_tokenizer import (
 )
 import agent_mcp
 import execution_metrics
+from runtime_observability import capture_workspace_state, diff_workspace_states
 from agent_subagent_events import should_persist_ui_event
 from session_event_bus import close_session_stream, prune_session_ephemeral, publish_session_event
 from tool_approval_gate import new_approval_id, wait_tool_ui_approval_after_emit
@@ -135,7 +139,19 @@ TODO_UPDATE_REMINDER_START_ROUNDS = max(
 TODO_UPDATE_REMINDER_INTERVAL_ROUNDS = max(
     1, int(os.getenv("TODO_UPDATE_REMINDER_INTERVAL_ROUNDS", "5"))
 )
-execution_metrics.configure(session_manager.sessions_dir)
+execution_metrics.configure(
+    session_manager.sessions_dir,
+    path_resolver=session_manager._resolve_session_path,
+)
+try:
+    import runtime_observability
+
+    runtime_observability.configure(
+        session_manager.sessions_dir,
+        path_resolver=session_manager._resolve_session_path,
+    )
+except Exception:
+    pass
 
 _STEER_LOCK = threading.Lock()
 _STEER_QUEUES: Dict[str, List[Dict[str, Any]]] = {}
@@ -307,6 +323,23 @@ async def _dispatch_state_hook(
     data.setdefault("session_id", str(state.get("session_id") or ""))
     data.setdefault("run_id", str(state.get("_runtime_v2_run_id") or ""))
     data.setdefault("project_root", str(WORK_DIR))
+    try:
+        hook_meta = session_manager._load_metadata(data["session_id"]) or {}
+    except Exception:
+        hook_meta = {}
+    hook_workspace = str(
+        hook_meta.get("subagent_work_dir")
+        or hook_meta.get("git_worktree_path")
+        or ""
+    ).strip()
+    if hook_workspace:
+        data.setdefault("workspace_root", hook_workspace)
+        data.setdefault("worktree_isolated", bool(hook_meta.get("git_worktree_managed")))
+    hook_workspace_before = (
+        await asyncio.to_thread(capture_workspace_state, hook_workspace)
+        if hook_workspace
+        else None
+    )
     result = await dispatch_hook(
         event,
         data,
@@ -314,6 +347,27 @@ async def _dispatch_state_hook(
         session_id=str(state.get("session_id") or ""),
         run_id=str(state.get("_runtime_v2_run_id") or ""),
     )
+    if hook_workspace:
+        hook_workspace_after = await asyncio.to_thread(
+            capture_workspace_state,
+            hook_workspace,
+        )
+        hook_changes = diff_workspace_states(
+            hook_workspace_before,
+            hook_workspace_after,
+        )
+        if hook_changes:
+            try:
+                import runtime_observability
+
+                runtime_observability.record_file_changes(
+                    str(state.get("session_id") or ""),
+                    str(state.get("_runtime_v2_run_id") or ""),
+                    hook_changes,
+                    tool=f"hook:{event}",
+                )
+            except Exception:
+                logger.debug("Hook file audit failed", exc_info=True)
     notices = [*list(result.warnings or ()), *list(result.user_messages or ())]
     if event == "SessionStart":
         notices.extend(f"Hook configuration: {item}" for item in result.config_errors or ())
@@ -2821,7 +2875,8 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
     state["_react_ui_tool_count"] = 0
     state["_react_ui_tool_fail_count"] = 0
 
-    session_meta = session_manager._load_metadata(state["session_id"]) or {}
+    session_meta = dict(session_manager._load_metadata(state["session_id"]) or {})
+    session_meta["_active_session_id"] = str(state.get("session_id") or "")
     max_react_iter = MAX_REACT_ITER
     if isinstance(session_meta, dict) and session_meta.get("is_subagent"):
         max_react_iter = max(
@@ -2958,7 +3013,23 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                 env_static,
                 state.get("_prompt_language", "zh-CN"),
             )
-            if isinstance(session_meta, dict) and session_meta.get("is_subagent"):
+            fork_runtime_config = (
+                session_meta.get("fork_runtime_config")
+                if isinstance(session_meta, dict)
+                else None
+            )
+            inherited_system_segments = (
+                fork_runtime_config.get("system_segments")
+                if isinstance(fork_runtime_config, dict)
+                else None
+            )
+            if (
+                isinstance(inherited_system_segments, list)
+                and inherited_system_segments
+                and all(isinstance(item, str) for item in inherited_system_segments)
+            ):
+                static_segments = list(inherited_system_segments)
+            elif isinstance(session_meta, dict) and session_meta.get("is_subagent"):
                 from agent_subagent import SUBAGENT_RUN_INSTRUCTION
 
                 static_segments = [
@@ -3273,6 +3344,30 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                 logger.warning("MCP 工具列表加载失败（忽略）: %s", _mcp_ex)
             _t_pre_api = time.perf_counter()
             try:
+                from agent_extensions import plugin_tool_definitions
+
+                combined_tools.extend(
+                    await _await_steerable(
+                        state,
+                        plugin_tool_definitions(),
+                        emit,
+                        "plugin_tool_definitions",
+                    )
+                )
+                _pre_api_timing_mark(
+                    pre_api_timings, "plugin_tool_definitions", _t_pre_api
+                )
+            except _SteerRestartRequested:
+                raise
+            except Exception as _plugin_ex:
+                _pre_api_timing_mark(
+                    pre_api_timings, "plugin_tool_definitions", _t_pre_api
+                )
+                logger.warning(
+                    "Plugin tool definitions failed and were skipped: %s", _plugin_ex
+                )
+            _t_pre_api = time.perf_counter()
+            try:
                 from agent_subagent import filter_tools_for_session, inject_task_model_profiles
 
                 combined_tools = filter_tools_for_session(combined_tools, session_meta)
@@ -3288,6 +3383,29 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                     item for item in combined_tools
                     if str(((item.get("function") or {}).get("name") or "")) != "ask_user"
                 ]
+            inherited_tools = (
+                fork_runtime_config.get("tools")
+                if isinstance(fork_runtime_config, dict)
+                else None
+            )
+            if isinstance(inherited_tools, list) and inherited_tools:
+                try:
+                    combined_tools = json.loads(
+                        json.dumps(inherited_tools, ensure_ascii=False)
+                    )
+                except (TypeError, ValueError):
+                    logger.warning(
+                        "Ignoring invalid inherited fork tool definitions for session=%s",
+                        state.get("session_id"),
+                    )
+            state["_last_prompt_runtime_config"] = {
+                "version": 1,
+                "system_segments": list(static_segments),
+                "tools": json.loads(json.dumps(combined_tools, ensure_ascii=False)),
+                "model_runtime": executor_runtime_snapshot_for_session(
+                    state["session_id"]
+                ),
+            }
 
             async def _execute_one_core(tool_call):
                 tool_name = tool_call["name"]
@@ -3298,6 +3416,40 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                     state["_tool_batch_first_started_at"] = time.perf_counter()
                 state["_runtime_stage"] = "running_tool:%s" % tool_name
                 await _raise_if_steer_requested(state, emit, "tool")
+
+                # Ordinary task subagents use the same durable, one-shot
+                # parent-approval semantics as Agent Team members. This check
+                # runs before UI approval and before any special tool branch.
+                try:
+                    from subagent_control import authorize_subagent_tool
+
+                    subagent_allowed, subagent_denial = await asyncio.to_thread(
+                        authorize_subagent_tool,
+                        session_meta,
+                        tool_name,
+                        tool_args,
+                    )
+                except Exception as exc:
+                    logger.warning("subagent permission broker failed closed: %s", exc)
+                    subagent_allowed = not bool(session_meta.get("is_subagent"))
+                    subagent_denial = f"Subagent permission broker error: {exc}"
+                if not subagent_allowed:
+                    denied_text = str(subagent_denial or "Subagent parent approval required.")
+                    result_for_log, result_for_llm, result_for_ui = _tool_result_details_for_views(
+                        denied_text, tool_name, state
+                    )
+                    return {
+                        "type": "tool",
+                        "tool_name": tool_name,
+                        "tool_args": tool_args,
+                        "tool_id": tool_id,
+                        "result": denied_text,
+                        "tool_detail_log": result_for_log,
+                        "tool_detail_llm": result_for_llm,
+                        "tool_detail_ui": result_for_ui,
+                        "result_for_log": result_for_log,
+                        "tool_failed": True,
+                    }
 
                 # 工作区放宽 Shell / 网页下载：前端弹窗确认后才进入「执行中」占位
                 hook_approval_spec = tool_call.get("_hook_approval_spec")
@@ -3696,6 +3848,9 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                                 parent_key_context=state.get("key_context", ""),
                                 emit=emit,
                                 parent_run_id=str(state.get("_runtime_v2_run_id") or ""),
+                                parent_runtime_config=dict(
+                                    state.get("_last_prompt_runtime_config") or {}
+                                ),
                             ),
                             emit,
                             "tool_team",
@@ -3763,11 +3918,21 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                 if tool_name.startswith("mcp_"):
                     tool_failed = False
                     try:
+                        mcp_work_dir = str(
+                            session_meta.get("subagent_work_dir")
+                            or session_meta.get("git_worktree_path")
+                            or ""
+                        ).strip()
                         result = await _await_steerable(
                             state,
                             agent_mcp.invoke_tool_by_fname(
                                 tool_name,
                                 tool_args if isinstance(tool_args, dict) else {},
+                                work_dir=mcp_work_dir,
+                                require_worktree_isolation=bool(
+                                    mcp_work_dir
+                                    and session_meta.get("git_worktree_managed")
+                                ),
                             ),
                             emit,
                             "tool_mcp",
@@ -3799,6 +3964,63 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                     }
 
                 # 普通工具
+                # Native Plugin API v1 tool. The entrypoint is loaded only in
+                # a worker process; Pre/PostToolUse hooks still wrap this path.
+                if tool_name.startswith("plugin_"):
+                    tool_failed = False
+                    try:
+                        from agent_extensions import invoke_plugin_tool
+
+                        result = await _await_steerable(
+                            state,
+                            invoke_plugin_tool(
+                                tool_name,
+                                tool_args if isinstance(tool_args, dict) else {},
+                                work_dir=str(
+                                    session_meta.get("subagent_work_dir")
+                                    or session_meta.get("git_worktree_path")
+                                    or ""
+                                ).strip(),
+                                require_worktree_isolation=bool(
+                                    session_meta.get("git_worktree_managed")
+                                    and (
+                                        session_meta.get("subagent_work_dir")
+                                        or session_meta.get("git_worktree_path")
+                                    )
+                                ),
+                            ),
+                            emit,
+                            "tool_plugin",
+                        )
+                    except _SteerRestartRequested:
+                        raise
+                    except Exception as e:
+                        result = f"Plugin tool error ({tool_name}): {e}"
+                        tool_failed = True
+                    result_str = (
+                        result
+                        if isinstance(result, str)
+                        else json.dumps(result, ensure_ascii=False, default=str)
+                    )
+                    result_for_log, result_for_llm, result_for_ui = (
+                        _tool_result_details_for_views(result_str, tool_name, state)
+                    )
+                    tool_failed = tool_failed or _tool_result_indicates_failure(
+                        tool_name, result
+                    )
+                    return {
+                        "type": "tool",
+                        "tool_name": tool_name,
+                        "tool_args": tool_args,
+                        "tool_id": tool_id,
+                        "result": result_str,
+                        "tool_detail_log": result_for_log,
+                        "tool_detail_llm": result_for_llm,
+                        "tool_detail_ui": result_for_ui,
+                        "result_for_log": result_for_log,
+                        "tool_failed": tool_failed,
+                    }
+
                 tool_func = tools_dict.get(tool_name)
                 tool_failed = False
                 tool_invoke_started = time.perf_counter()
@@ -3845,27 +4067,35 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                                         or _steer_requested(state)
                                     )
                                 )
-                            if hasattr(tool_func, "ainvoke"):
-                                result = await _await_steerable(
-                                    state,
-                                    tool_func.ainvoke(tool_args),
-                                    emit,
-                                    "tool",
-                                )
-                            elif hasattr(tool_func, "invoke"):
-                                result = await _await_steerable(
-                                    state,
-                                    asyncio.to_thread(lambda: tool_func.invoke(tool_args)),
-                                    emit,
-                                    "tool",
-                                )
-                            else:
-                                result = await _await_steerable(
-                                    state,
-                                    _invoke_plain_tool(tool_func, tool_args),
-                                    emit,
-                                    "tool",
-                                )
+                            worktree_root = ""
+                            if session_meta.get("is_subagent"):
+                                worktree_root = str(
+                                    session_meta.get("subagent_work_dir")
+                                    or session_meta.get("git_worktree_path")
+                                    or ""
+                                ).strip()
+                            with tool_work_dir_override(worktree_root or None):
+                                if hasattr(tool_func, "ainvoke"):
+                                    result = await _await_steerable(
+                                        state,
+                                        tool_func.ainvoke(tool_args),
+                                        emit,
+                                        "tool",
+                                    )
+                                elif hasattr(tool_func, "invoke"):
+                                    result = await _await_steerable(
+                                        state,
+                                        asyncio.to_thread(lambda: tool_func.invoke(tool_args)),
+                                        emit,
+                                        "tool",
+                                    )
+                                else:
+                                    result = await _await_steerable(
+                                        state,
+                                        _invoke_plain_tool(tool_func, tool_args),
+                                        emit,
+                                        "tool",
+                                    )
                     except _SteerRestartRequested:
                         raise
                     except Exception as e:
@@ -3904,15 +4134,6 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                 tool_detail_ui = result_for_ui
 
                 tool_failed = tool_failed or _tool_result_indicates_failure(tool_name, result)
-                execution_metrics.record_tool(
-                    state["session_id"],
-                    str(state.get("_runtime_v2_run_id") or ""),
-                    int(iter_count),
-                    redact_sensitive_tool_text(tool_name),
-                    tool_invoke_ms,
-                    tool_failed,
-                )
-
                 return {
                     "type": "tool",
                     "tool_name": redact_sensitive_tool_text(tool_name),
@@ -4039,8 +4260,49 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                         blocked["tool_call_index"] = call.get("index")
                         return blocked
 
+                audit_root = str(
+                    session_meta.get("subagent_work_dir")
+                    or session_meta.get("git_worktree_path")
+                    or WORK_DIR
+                )
+                audit_candidate = (
+                    tool_name not in READ_ONLY_TOOLS
+                    and tool_name
+                    not in {
+                        "task",
+                        "team",
+                        "context_manage",
+                        "create_goal",
+                        "get_goal",
+                        "update_goal",
+                    }
+                )
+                before_workspace = (
+                    await asyncio.to_thread(capture_workspace_state, audit_root)
+                    if audit_candidate
+                    else None
+                )
+                observed_tool_started = time.perf_counter()
                 result = await _execute_one_core(call)
+                observed_tool_ms = _timing_ms(observed_tool_started)
+                after_workspace = (
+                    await asyncio.to_thread(capture_workspace_state, audit_root)
+                    if audit_candidate
+                    else None
+                )
+                file_changes = diff_workspace_states(before_workspace, after_workspace)
                 failed = bool(isinstance(result, dict) and result.get("tool_failed"))
+                execution_metrics.record_tool(
+                    state["session_id"],
+                    str(state.get("_runtime_v2_run_id") or ""),
+                    int(iter_count),
+                    redact_sensitive_tool_text(tool_name),
+                    observed_tool_ms,
+                    failed,
+                    file_changes=file_changes,
+                )
+                if isinstance(result, dict) and file_changes:
+                    result["file_changes"] = file_changes
                 after_event = "PostToolUseFailure" if failed else "PostToolUse"
                 after = await _dispatch_state_hook(
                     after_event,
@@ -4121,6 +4383,13 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
             await _raise_if_steer_requested(state, emit, "react")
             if not _state_run_has_write_fence(state):
                 raise asyncio.CancelledError()
+            if execution_metrics.run_budget_exhausted(
+                state["session_id"],
+                str(state.get("_runtime_v2_run_id") or ""),
+            ):
+                raise RuntimeError(
+                    "Model-profile monetary cost budget exhausted for this run."
+                )
             if session_manager.is_interrupt_requested(state["session_id"]):
                 if _is_followup_interrupt(state["session_id"]):
                     raise asyncio.CancelledError()
@@ -4382,6 +4651,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                                 str(state.get("_runtime_v2_run_id") or ""),
                                 int(iter_count),
                                 dict(payload or {}),
+                                pricing=dict(state.get("_cost_pricing") or {}),
                             )
                             record_prompt_tokens_for_messages(
                                 state["session_id"],
@@ -4784,6 +5054,13 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                     u = getattr(api_resp, "usage", None)
                     if u is not None and not llm_call_usage:
                         llm_call_usage = extract_usage_dict(u)
+                        execution_metrics.record_usage(
+                            state["session_id"],
+                            str(state.get("_runtime_v2_run_id") or ""),
+                            int(iter_count),
+                            dict(llm_call_usage or {}),
+                            pricing=dict(state.get("_cost_pricing") or {}),
+                        )
                         record_prompt_tokens_for_messages(
                             state["session_id"],
                             llm_messages_to_send,
@@ -6253,6 +6530,7 @@ async def astream_events(
     顺序执行 react_node → validate_final（无独立校验 LLM）→ finish，通过队列实时向前端推送事件。
     """
     executor_http_client.interactions.clear()
+    submitted_user_input = user_input
 
     requested_prompt_language = str(prompt_language or "").strip()
     sid_in = str(session_id or "").strip()
@@ -6284,7 +6562,31 @@ async def astream_events(
     except Exception:
         logger.debug("Unable to persist prompt language for session=%s", session_id, exc_info=True)
     runtime_v2_run_id = str(run_id or "").strip() or str(uuid.uuid4())
-    prompt_hook_context = ""
+    plugin_command_context = ""
+    try:
+        from agent_extensions import dispatch_plugin_command
+
+        command_result = await dispatch_plugin_command(
+            user_input,
+            {
+                "session_id": session_id,
+                "run_id": runtime_v2_run_id,
+                "project_root": str(WORK_DIR),
+                "prompt_language": prompt_language,
+            },
+        )
+        if command_result.get("matched"):
+            user_input = str(command_result.get("prompt") or "")
+            plugin_command_context = str(
+                command_result.get("additional_context") or ""
+            ).strip()
+            if ui_user_content is None:
+                ui_user_content = submitted_user_input
+    except Exception as exc:
+        logger.exception("Plugin command dispatch failed")
+        yield {"type": "error", "content": f"Plugin command failed: {exc}"}
+        return
+    prompt_hook_context = plugin_command_context
     try:
         from agent_extensions import dispatch_hook
 
@@ -6305,7 +6607,10 @@ async def astream_events(
             user_input = str(
                 prompt_hook.updated_input.get("prompt", prompt_hook.updated_input.get("user_input", user_input))
             )
-        prompt_hook_context = str(prompt_hook.additional_context or "").strip()
+        hook_context = str(prompt_hook.additional_context or "").strip()
+        prompt_hook_context = "\n".join(
+            item for item in (plugin_command_context, hook_context) if item
+        )
         if prompt_hook.blocked or prompt_hook.should_pause or prompt_hook.requires_approval:
             reason = _hook_decision_reason(
                 prompt_hook,
@@ -6504,7 +6809,17 @@ async def astream_events(
         terminal_event = {"type": "run_interrupted", "ephemeral": True}
         try:
             await power_guard.start(on_runtime_resume)
-            execution_metrics.start_run(session_id, runtime_v2_run_id, "chat", user_input)
+            cost_profile = executor_pricing_for_session(session_id)
+            state["_cost_pricing"] = dict(cost_profile.get("pricing") or {})
+            execution_metrics.start_run(
+                session_id,
+                runtime_v2_run_id,
+                "chat",
+                user_input,
+                model_profile_id=str(cost_profile.get("model_profile_id") or ""),
+                pricing=state["_cost_pricing"],
+                cost_budget_usd=cost_profile.get("cost_budget_usd"),
+            )
             # 用户气泡由前端已画；此处只写入与流顺序一致的持久化，供刷新与 SSE 同源
             run_start_timings: Dict[str, int] = {}
             _t_run_start = time.perf_counter()
@@ -7025,7 +7340,17 @@ async def astream_events_continuation(
         terminal_event = {"type": "run_interrupted", "ephemeral": True}
         try:
             await power_guard.start(on_runtime_resume)
-            execution_metrics.start_run(session_id, runtime_v2_run_id, "continuation", str(state.get("user_input") or ""))
+            cost_profile = executor_pricing_for_session(session_id)
+            state["_cost_pricing"] = dict(cost_profile.get("pricing") or {})
+            execution_metrics.start_run(
+                session_id,
+                runtime_v2_run_id,
+                "continuation",
+                str(state.get("user_input") or ""),
+                model_profile_id=str(cost_profile.get("model_profile_id") or ""),
+                pricing=state["_cost_pricing"],
+                cost_budget_usd=cost_profile.get("cost_budget_usd"),
+            )
             run_start_timings: Dict[str, int] = {}
             _t_run_start = time.perf_counter()
             mirror_runtime_v2("run_started", {"mode": "continuation"})

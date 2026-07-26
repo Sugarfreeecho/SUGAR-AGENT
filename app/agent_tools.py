@@ -26,6 +26,8 @@ import subprocess
 import sys
 import threading
 import uuid
+from contextlib import contextmanager
+from contextvars import ContextVar
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 from urllib.parse import unquote, urljoin, urlparse
@@ -47,6 +49,36 @@ from agent_harness import (
 # 当 interrupt 被触发时，回调返回 True，run_shell 会主动杀掉子进程树。
 # ---------------------------------------------------------------------------
 _run_shell_interrupt_check: Optional[Callable[[], bool]] = None
+_tool_work_dir_override: ContextVar[Optional[Path]] = ContextVar(
+    "myagent_tool_work_dir_override",
+    default=None,
+)
+
+
+def active_tool_work_dir() -> Path:
+    """Return the workspace root for the current tool execution context."""
+
+    override = _tool_work_dir_override.get()
+    return Path(override).expanduser().resolve() if override is not None else WORK_DIR.resolve()
+
+
+@contextmanager
+def tool_work_dir_override(path: Optional[str | Path]):
+    """Temporarily root built-in filesystem and shell tools at ``path``.
+
+    Context variables keep concurrent subagents isolated without mutating the
+    process-global WORK_DIR.
+    """
+
+    if path is None or not str(path).strip():
+        yield
+        return
+    root = Path(path).expanduser().resolve()
+    token = _tool_work_dir_override.set(root)
+    try:
+        yield
+    finally:
+        _tool_work_dir_override.reset(token)
 
 
 def set_run_shell_interrupt_check(cb: Optional[Callable[[], bool]]) -> None:
@@ -219,7 +251,7 @@ def resolve_default_download_path(url: str) -> Path:
     tail = urlparse(url).path.rstrip("/")
     seg = tail.split("/")[-1] if tail else ""
     base = seg if seg else "download.bin"
-    candidate = (WORK_DIR / base).resolve()
+    candidate = (active_tool_work_dir() / base).resolve()
     if not candidate.exists():
         return candidate
     stem, suf = candidate.stem, candidate.suffix
@@ -237,24 +269,26 @@ def safe_work_path(file_path: str) -> Path:
     虚拟工作区根：`/foo` → WORK_DIR/foo；无前导 slash 的相对路径 → WORK_DIR/foo。"""
     raw = prepare_agent_workspace_path_literal(file_path)
     dotenv_file = (PROJECT_ROOT / ".env").resolve()
+    work_root = active_tool_work_dir()
+    allow_project_dotenv = _tool_work_dir_override.get() is None
 
     p0 = Path(raw).expanduser()
     if p0.is_absolute():
         rp = p0.resolve()
-        if rp == dotenv_file:
+        if rp == dotenv_file and allow_project_dotenv:
             return rp
-        if _is_path_under(rp, WORK_DIR):
+        if _is_path_under(rp, work_root):
             return rp
         raise ValueError(f"Access denied: path {raw} is outside allowed directories")
 
     if raw.startswith("/"):
         inner = raw[1:]
-        full_path = (WORK_DIR / inner).resolve()
+        full_path = (work_root / inner).resolve()
     else:
-        full_path = (WORK_DIR / raw).resolve()
-    if full_path == dotenv_file:
+        full_path = (work_root / raw).resolve()
+    if full_path == dotenv_file and allow_project_dotenv:
         return full_path
-    if _is_path_under(full_path, WORK_DIR):
+    if _is_path_under(full_path, work_root):
         return full_path
     raise ValueError(f"Access denied: path {raw} is outside allowed directories")
 
@@ -267,14 +301,15 @@ def resolve_unrestricted_path(file_path: str) -> Path:
     """
     s0 = file_path if (file_path is not None and str(file_path).strip() != "") else "."
     s = prepare_agent_workspace_path_literal(s0)
+    work_root = active_tool_work_dir()
     if s in ("", "/"):
-        return WORK_DIR.resolve()
+        return work_root
     p0 = Path(s).expanduser()
     if p0.is_absolute():
         return p0.resolve()
     if s.startswith("/"):
-        return (WORK_DIR / s[1:]).resolve()
-    return (WORK_DIR / s).resolve()
+        return (work_root / s[1:]).resolve()
+    return (work_root / s).resolve()
 
 
 def _coalesce_str(*vals: Optional[str]) -> Optional[str]:
@@ -1574,7 +1609,7 @@ async def run_shell(
 
     ephemeral_py: List[Path] = []
     try:
-        wroot = WORK_DIR.resolve()
+        wroot = active_tool_work_dir()
         full_cmd, ephemeral_py = _maybe_materialize_python_c_script(full_cmd, wroot)
 
         # 2. 工作目录：默认在 WORK_DIR；本工具是「工作区限制」的唯三入口之一
@@ -1751,7 +1786,7 @@ def _delete_path_prohibited_reason(p: Path) -> Optional[str]:
         return None
 
     try:
-        trash_root = (WORK_DIR / TRASH_DIR).resolve()
+        trash_root = (active_tool_work_dir() / TRASH_DIR).resolve()
         if pr == trash_root or _is_path_under(pr, trash_root):
             return (
                 "Error: cannot delete the recycle folder (`.trash`) or its contents via delete_file. "
@@ -1761,7 +1796,7 @@ def _delete_path_prohibited_reason(p: Path) -> Optional[str]:
         pass
 
     session_roots: List[Path] = []
-    for root in (SESSIONS_DIR, WORK_DIR / "sessions"):
+    for root in (SESSIONS_DIR, active_tool_work_dir() / "sessions"):
         try:
             session_roots.append(root.resolve())
         except OSError:
@@ -1847,7 +1882,7 @@ def delete_file(
             f"Please delete or shrink manually on this machine (e.g. file manager, or run_shell after explicit user consent), "
             f"or raise TRASH_SIZE_WARN_MB in .env if appropriate."
         )
-    trash_root = (WORK_DIR / TRASH_DIR).resolve()
+    trash_root = (active_tool_work_dir() / TRASH_DIR).resolve()
     try:
         trash_root.mkdir(parents=True, exist_ok=True)
     except Exception as e:
@@ -2619,14 +2654,14 @@ def glob(
                         wildcard_idx = idx
             if wildcard_idx is not None:
                 if wildcard_idx == 0:
-                    root_path = WORK_DIR.resolve()
+                    root_path = active_tool_work_dir()
                     use_pattern = str(abs_path)
                 else:
                     root_parts = parts[:wildcard_idx]
                     if root_parts:
                         root_path = Path(*root_parts).resolve()
                     else:
-                        root_path = WORK_DIR.resolve()
+                        root_path = active_tool_work_dir()
                     use_pattern = str(Path(*parts[wildcard_idx:]))
             else:
                 root_path = abs_path
@@ -3730,6 +3765,14 @@ def task(
     collect_result: bool = False,
     file_attachments: Optional[List[str]] = None,
     n: int = 0,
+    isolation: str = "auto",
+    steer_mode: str = "interrupt",
+    client_id: str = "",
+    permission_id: str = "",
+    decision: str = "",
+    reason: str = "",
+    include_terminal: bool = False,
+    worktree_action: str = "status",
 ) -> str:
     """占位：实际逻辑在 agent_loop.react_node 中拦截 task 后执行。"""
     _ = (
@@ -3746,6 +3789,14 @@ def task(
         collect_result,
         file_attachments,
         n,
+        isolation,
+        steer_mode,
+        client_id,
+        permission_id,
+        decision,
+        reason,
+        include_terminal,
+        worktree_action,
     )
     raise RuntimeError("task is handled in agent_loop.react_node, not via tools_dict invocation.")
 
@@ -4112,7 +4163,17 @@ OPENAI_TOOL_DEFINITIONS: List[Dict[str, Any]] = [
         {
             "action": {
                 "type": "string",
-                "enum": ["start", "resume", "status", "collect", "interrupt"],
+                "enum": [
+                    "start",
+                    "resume",
+                    "status",
+                    "collect",
+                    "interrupt",
+                    "steer",
+                    "permissions",
+                    "resolve_permission",
+                    "worktree",
+                ],
                 "description": (
                     "Choose exactly one action and prefer interacting with an existing suitable subagent over creating a similar one. "
                     "start: create a new subagent only after checking status when prior related delegation may exist; provide description "
@@ -4124,7 +4185,10 @@ OPENAI_TOOL_DEFINITIONS: List[Dict[str, Any]] = [
                     "There is no multi-ID subset form. "
                     "collect: wait for/read existing final output, not a complete process record, before deciding whether follow-up work is needed; resume is optional "
                     "(empty = all), and consumed pending results are cleared. "
-                    "interrupt: cancel a running subagent; requires resume ID."
+                    "interrupt: cancel a running subagent; requires resume ID. "
+                    "steer: queue a durable instruction for a currently running subagent. "
+                    "permissions/resolve_permission: inspect or resolve ordinary subagent one-shot approvals. "
+                    "worktree: inspect, diff, retain, merge, or discard a managed task worktree."
                 ),
             },
             "description": {
@@ -4204,6 +4268,57 @@ OPENAI_TOOL_DEFINITIONS: List[Dict[str, Any]] = [
                 "description": "start only: strict local read-only Ask mode with no write, shell, web, or MCP tools.",
                 "default": False,
             },
+            "isolation": {
+                "type": "string",
+                "enum": ["auto", "worktree", "shared"],
+                "description": (
+                    "start only. auto: write-capable generalPurpose tasks use a managed Git worktree "
+                    "when the checkout is clean and otherwise fall back to the shared workspace. "
+                    "worktree: require isolation and fail before execution when unavailable. "
+                    "shared: explicitly use the main workspace. Read-only tasks do not create worktrees."
+                ),
+                "default": "auto",
+            },
+            "steer_mode": {
+                "type": "string",
+                "enum": ["interrupt", "append"],
+                "description": (
+                    "steer only. interrupt: stop the current model/tool boundary and restart with the queued message. "
+                    "append: preserve the current step and append the message at the next safe turn boundary."
+                ),
+                "default": "interrupt",
+            },
+            "client_id": {
+                "type": "string",
+                "description": "steer only: optional caller-stable idempotency key.",
+            },
+            "permission_id": {
+                "type": "string",
+                "description": "resolve_permission only: exact pending subagent permission ID.",
+            },
+            "decision": {
+                "type": "string",
+                "enum": ["allowed", "denied"],
+                "description": "resolve_permission only: one-shot resolution.",
+            },
+            "reason": {
+                "type": "string",
+                "description": "resolve_permission only: optional audit reason.",
+            },
+            "include_terminal": {
+                "type": "boolean",
+                "description": "permissions only: include consumed and denied historical requests.",
+                "default": False,
+            },
+            "worktree_action": {
+                "type": "string",
+                "enum": ["status", "diff", "retain", "merge", "discard"],
+                "description": (
+                    "worktree only. merge requires a clean main checkout and aborts safely on conflict; "
+                    "discard removes only a verified MyAgent-managed worktree."
+                ),
+                "default": "status",
+            },
             "file_attachments": {
                 "type": "array",
                 "items": {"type": "string"},
@@ -4229,7 +4344,7 @@ OPENAI_TOOL_DEFINITIONS: List[Dict[str, Any]] = [
                     "set_member_state", "create_task", "claim_task", "release_task",
                     "update_task", "send_message", "read_inbox", "consume_message",
                     "request_permission", "resolve_permission", "shutdown",
-                    "complete_shutdown", "archive"
+                    "complete_shutdown", "archive", "auto_schedule"
                 ],
             },
             "title": {"type": "string", "description": "create: optional team title; create_task: required task title."},

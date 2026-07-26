@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
+import threading
 from typing import Any
 
 from .models import AgentTeamError
@@ -19,7 +21,30 @@ _LEAD_ONLY_ACTIONS = {
     "shutdown",
     "complete_shutdown",
     "archive",
+    "auto_schedule",
 }
+
+_SCHEDULER_LOCKS_GUARD = threading.Lock()
+_SCHEDULER_LOCKS: dict[tuple[int, str], asyncio.Lock] = {}
+_SCHEDULER_TASK: asyncio.Task | None = None
+_SCHEDULER_STOP: asyncio.Event | None = None
+
+
+def _scheduler_lock(root_id: str) -> asyncio.Lock:
+    loop_key = id(asyncio.get_running_loop())
+    key = (loop_key, root_id)
+    with _SCHEDULER_LOCKS_GUARD:
+        lock = _SCHEDULER_LOCKS.get(key)
+        if lock is None:
+            lock = asyncio.Lock()
+            _SCHEDULER_LOCKS[key] = lock
+        return lock
+
+
+def _auto_schedule_enabled() -> bool:
+    return str(os.getenv("AGENT_TEAM_AUTO_SCHEDULE", "1")).strip().lower() not in {
+        "0", "false", "no", "off",
+    }
 
 
 def _service() -> AgentTeamService:
@@ -69,7 +94,7 @@ async def execute_team_tool(
     if action == "create":
         return _json_result(action, service.create_team(root_id, str(args.get("title") or "")))
     if action == "spawn_member":
-        return await _spawn_member(
+        result = await _spawn_member(
             service,
             root_id,
             name=str(args.get("name") or ""),
@@ -78,6 +103,14 @@ async def execute_team_tool(
             model_profile_id=str(args.get("model_profile_id") or ""),
             readonly=bool(args.get("readonly", False)),
         )
+        await _auto_schedule_team(
+            service,
+            root_id,
+            parent_key_context=parent_key_context,
+            emit=emit,
+            parent_run_id=parent_run_id,
+        )
+        return result
     if action == "dispatch":
         return await _dispatch_member(
             service,
@@ -116,16 +149,23 @@ async def execute_team_tool(
         depends_on = args.get("depends_on") or []
         if not isinstance(depends_on, list):
             raise AgentTeamError("depends_on must be an array")
-        return _json_result(
-            action,
-            service.create_task(
+        created = service.create_task(
                 root_id,
                 title=str(args.get("title") or ""),
                 description=str(args.get("description") or ""),
                 priority=str(args.get("priority") or "normal"),
                 depends_on=depends_on,
-            ),
+            )
+        scheduled = await _auto_schedule_team(
+            service,
+            root_id,
+            parent_key_context=parent_key_context,
+            emit=emit,
+            parent_run_id=parent_run_id,
         )
+        created = dict(created)
+        created["auto_scheduled"] = scheduled
+        return _json_result(action, created)
     if action == "claim_task":
         member_id = str(args.get("member_id") or actor_id)
         if actor_id != "lead" and member_id != actor_id:
@@ -148,14 +188,33 @@ async def execute_team_tool(
             ),
         )
     if action == "update_task":
-        return _json_result(
-            action,
-            service.update_task(
+        updated = service.update_task(
                 root_id,
                 str(args.get("task_id") or ""),
                 status=str(args.get("status") or ""),
                 result=str(args.get("result") or ""),
                 detail=str(args.get("detail") or ""),
+            )
+        scheduled = await _auto_schedule_team(
+            service,
+            root_id,
+            parent_key_context=parent_key_context,
+            emit=emit,
+            parent_run_id=parent_run_id,
+        )
+        updated = dict(updated)
+        updated["auto_scheduled"] = scheduled
+        return _json_result(action, updated)
+    if action == "auto_schedule":
+        return _json_result(
+            action,
+            await _auto_schedule_team(
+                service,
+                root_id,
+                parent_key_context=parent_key_context,
+                emit=emit,
+                parent_run_id=parent_run_id,
+                force=True,
             ),
         )
     if action == "send_message":
@@ -243,7 +302,12 @@ async def _spawn_member(
     model_profile_id: str,
     readonly: bool,
 ) -> str:
-    from agent_harness import session_manager
+    from agent_harness import inherited_executor_selection, session_manager
+
+    if not model_profile_id:
+        model_profile_id = str(
+            inherited_executor_selection(root_id).get("model_profile_id") or ""
+        )
 
     member = service.add_member(
         root_id,
@@ -272,6 +336,27 @@ async def _spawn_member(
             }
         )
         session_manager._save_metadata(child_id, metadata)
+        if not readonly:
+            try:
+                from agent_subagent import (
+                    _create_managed_worktree,
+                    _persist_managed_worktree,
+                )
+
+                worktree = await asyncio.to_thread(_create_managed_worktree, child_id)
+                if worktree is not None:
+                    wt_root, wt_work_dir, branch, base_commit = worktree
+                    _persist_managed_worktree(
+                        child_id,
+                        wt_root,
+                        wt_work_dir,
+                        branch,
+                        base_commit,
+                    )
+            except Exception:
+                # A dirty/non-Git root remains usable, but the member will still
+                # be protected by write locks and external-tool contracts.
+                pass
         member = service.bind_member_session(root_id, member_id, child_id)
         member = service.set_member_state(root_id, member_id, "idle")
     except Exception as exc:
@@ -291,6 +376,7 @@ async def _dispatch_member(
     parent_key_context: str,
     emit,
     parent_run_id: str,
+    auto_continue: bool = True,
 ) -> str:
     from agent_subagent import run_subagent_task
 
@@ -336,10 +422,11 @@ async def _dispatch_member(
         )
         if run_in_background:
             from agent_subagent import subagent_registry
+            from agent_harness import session_manager
 
             async def monitor_background_member() -> None:
                 try:
-                    await subagent_registry.wait(child_id)
+                    completed_result = await subagent_registry.wait(child_id)
                     current_team = await asyncio.to_thread(service.read_team, root_id)
                     current = (
                         ((current_team or {}).get("members") or {}).get(member_id) or {}
@@ -347,12 +434,46 @@ async def _dispatch_member(
                     # A member that stopped to request permission must remain
                     # visibly blocked until the lead resolves and redispatches.
                     if current.get("state") != "waiting_permission":
+                        metadata = (
+                            await asyncio.to_thread(
+                                session_manager._load_metadata,
+                                child_id,
+                            )
+                            if task_id
+                            else {}
+                        )
+                        current_task = (
+                            ((current_team or {}).get("tasks") or {}).get(task_id) or {}
+                        )
+                        if (
+                            task_id
+                            and str((metadata or {}).get("subagent_run_status") or "")
+                            == "completed"
+                            and current_task.get("status") == "in_progress"
+                            and current_task.get("assignee_id") == member_id
+                        ):
+                            await asyncio.to_thread(
+                                service.update_task,
+                                root_id,
+                                task_id,
+                                status="completed",
+                                result=str(completed_result or "")[:64_000],
+                                detail="completed by automatic Team dispatch",
+                            )
                         await asyncio.to_thread(
                             service.set_member_state,
                             root_id,
                             member_id,
                             "idle",
                         )
+                        if auto_continue:
+                            await _auto_schedule_team(
+                                service,
+                                root_id,
+                                parent_key_context=parent_key_context,
+                                emit=emit,
+                                parent_run_id=parent_run_id,
+                            )
                 except Exception as monitor_exc:
                     try:
                         await asyncio.to_thread(
@@ -367,7 +488,48 @@ async def _dispatch_member(
 
             asyncio.create_task(monitor_background_member())
         else:
+            from agent_harness import session_manager
+
+            metadata = (
+                await asyncio.to_thread(
+                    session_manager._load_metadata,
+                    child_id,
+                )
+                if task_id
+                else {}
+            )
+            current_team = await asyncio.to_thread(service.read_team, root_id)
+            current_member = (
+                ((current_team or {}).get("members") or {}).get(member_id) or {}
+            )
+            current_task = (
+                ((current_team or {}).get("tasks") or {}).get(task_id) or {}
+            )
+            if (
+                task_id
+                and current_member.get("state") != "waiting_permission"
+                and str((metadata or {}).get("subagent_run_status") or "")
+                == "completed"
+                and current_task.get("status") == "in_progress"
+                and current_task.get("assignee_id") == member_id
+            ):
+                await asyncio.to_thread(
+                    service.update_task,
+                    root_id,
+                    task_id,
+                    status="completed",
+                    result=str(result or "")[:64_000],
+                    detail="completed by automatic Team dispatch",
+                )
             service.set_member_state(root_id, member_id, "idle")
+            if auto_continue:
+                await _auto_schedule_team(
+                    service,
+                    root_id,
+                    parent_key_context=parent_key_context,
+                    emit=emit,
+                    parent_run_id=parent_run_id,
+                )
         return _json_result(
             "dispatch",
             {
@@ -381,3 +543,141 @@ async def _dispatch_member(
     except Exception as exc:
         service.set_member_state(root_id, member_id, "failed", detail=str(exc))
         raise
+
+
+async def _auto_schedule_team(
+    service: AgentTeamService,
+    root_id: str,
+    *,
+    parent_key_context: str,
+    emit,
+    parent_run_id: str,
+    force: bool = False,
+) -> list[dict]:
+    """Claim ready tasks for idle members and wake their persistent sessions."""
+    if not force and not _auto_schedule_enabled():
+        return []
+    scheduled: list[dict] = []
+    async with _scheduler_lock(root_id):
+        while True:
+            team = await asyncio.to_thread(service.read_team, root_id)
+            if not isinstance(team, dict) or team.get("status") != "active":
+                break
+            idle_members = [
+                member
+                for member in (team.get("members") or {}).values()
+                if isinstance(member, dict)
+                and member.get("state") == "idle"
+                and member.get("child_session_id")
+                and not member.get("removed")
+            ]
+            idle_members.sort(key=lambda row: int(row.get("seq") or 0))
+            if not idle_members:
+                break
+            progress = False
+            for member in idle_members:
+                member_id = str(member.get("member_id") or "")
+                claimed = await asyncio.to_thread(
+                    service.claim_next_task,
+                    root_id,
+                    member_id,
+                )
+                if not claimed:
+                    continue
+                task_id = str(claimed.get("task_id") or "")
+                try:
+                    dispatch_result = await _dispatch_member(
+                        service,
+                        root_id,
+                        member_id=member_id,
+                        prompt="",
+                        task_id=task_id,
+                        run_in_background=True,
+                        parent_key_context=parent_key_context,
+                        emit=emit,
+                        parent_run_id=parent_run_id,
+                        auto_continue=True,
+                    )
+                    scheduled.append(
+                        {
+                            "member_id": member_id,
+                            "task_id": task_id,
+                            "dispatch": json.loads(dispatch_result),
+                        }
+                    )
+                    progress = True
+                except Exception as exc:
+                    try:
+                        await asyncio.to_thread(
+                            service.release_task,
+                            root_id,
+                            task_id,
+                            member_id,
+                            f"automatic dispatch failed: {exc}",
+                        )
+                    except Exception:
+                        pass
+            if not progress:
+                break
+    return scheduled
+
+
+async def start_auto_scheduler() -> bool:
+    """Start the durable Team task auto-claim/wake loop."""
+    global _SCHEDULER_TASK, _SCHEDULER_STOP
+    if _SCHEDULER_TASK is not None and not _SCHEDULER_TASK.done():
+        return False
+    if not _auto_schedule_enabled():
+        return False
+    _SCHEDULER_STOP = asyncio.Event()
+
+    async def loop() -> None:
+        from agent_harness import session_manager
+
+        interval = max(
+            2.0,
+            float(os.getenv("AGENT_TEAM_SCHEDULER_INTERVAL_SECONDS", "5")),
+        )
+        service = _service()
+        while _SCHEDULER_STOP is not None and not _SCHEDULER_STOP.is_set():
+            roots = []
+            try:
+                roots = [
+                    str(row.get("id") or "")
+                    for row in list(session_manager.index)
+                    if isinstance(row, dict) and str(row.get("id") or "")
+                ]
+            except Exception:
+                roots = []
+            for root_id in roots:
+                try:
+                    team = await asyncio.to_thread(service.read_team, root_id)
+                    if isinstance(team, dict) and team.get("status") == "active":
+                        await _auto_schedule_team(
+                            service,
+                            root_id,
+                            parent_key_context="",
+                            emit=None,
+                            parent_run_id="team_scheduler",
+                        )
+                except Exception:
+                    continue
+            await asyncio.sleep(interval)
+
+    _SCHEDULER_TASK = asyncio.create_task(loop())
+    return True
+
+
+async def stop_auto_scheduler() -> None:
+    global _SCHEDULER_TASK, _SCHEDULER_STOP
+    if _SCHEDULER_STOP is not None:
+        _SCHEDULER_STOP.set()
+    task = _SCHEDULER_TASK
+    _SCHEDULER_TASK = None
+    _SCHEDULER_STOP = None
+    if task is not None:
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass

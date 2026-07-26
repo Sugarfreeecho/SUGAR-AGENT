@@ -205,13 +205,25 @@ class CommandHookExecutor:
             return self._failure(definition, started, "No command is configured for this platform.")
         command = _replace_roots(command, definition, self.project_root)
         try:
-            cwd = self._cwd(definition)
+            workspace_root = str(payload.get("workspace_root") or "").strip()
+            worktree_isolated = bool(payload.get("worktree_isolated"))
+            if workspace_root and worktree_isolated:
+                cwd = Path(workspace_root).expanduser().resolve()
+                if not cwd.is_dir():
+                    raise HookExecutionError(
+                        f"Hook worktree directory does not exist: {cwd}"
+                    )
+            else:
+                cwd = self._cwd(definition)
             stdin_data = json.dumps(payload, ensure_ascii=False, separators=(",", ":"), default=str).encode("utf-8")
             env = build_hook_environment(
                 definition,
                 self.project_root,
                 source_environment=self.source_environment,
             )
+            if workspace_root:
+                env["MYAGENT_WORKSPACE_ROOT"] = workspace_root
+                env["MYAGENT_WORKTREE_ISOLATED"] = "1" if worktree_isolated else "0"
             kwargs: Dict[str, Any] = {}
             if os.name == "nt":
                 kwargs["creationflags"] = (

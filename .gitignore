@@ -10,6 +10,7 @@ model_profiles.json
 __pycache__/
 *.py[cod]
 *$py.class
+app/.requirements.installed
 .venv/
 venv/
 env/

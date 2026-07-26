@@ -27,7 +27,63 @@ class RuntimeModelProjection:
     def read_message_dicts(self, session_id: str) -> List[Dict[str, Any]]:
         if not runtime_v2_enabled():
             return []
-        snapshot = self.snapshots.read_consistent(session_id, self.event_log, self.projector)
+        return self._read_message_dicts(session_id, None, set())
+
+    def _read_message_dicts(
+        self,
+        session_id: str,
+        through_seq: Optional[int],
+        seen: set[tuple[str, Optional[int]]],
+    ) -> List[Dict[str, Any]]:
+        key = (str(session_id), through_seq)
+        if key in seen:
+            return []
+        seen.add(key)
+        all_events = list(self.event_log.iter_events(session_id))
+        events = [
+            event
+            for event in all_events
+            if through_seq is None or int(event.seq) <= int(through_seq)
+        ]
+        if through_seq is None:
+            snapshot = self.snapshots.read_consistent(
+                session_id,
+                self.event_log,
+                self.projector,
+            )
+        else:
+            snapshot = self.projector.project(events)
+        local = self._messages_from_snapshot(snapshot)
+        reference = next(
+            (
+                event
+                for event in events
+                if event.type == "history_branch_created"
+                and str((event.payload or {}).get("reference_mode") or "")
+                == "immutable_model_prefix"
+            ),
+            None,
+        )
+        if reference is None:
+            return local
+        materialized = any(
+            event.type == "model_history_replaced" and int(event.seq) > int(reference.seq)
+            for event in events
+        )
+        if materialized:
+            return local
+        payload = dict(reference.payload or {})
+        source_id = str(payload.get("source_session_id") or "").strip()
+        try:
+            source_seq = int(payload.get("branch_from_seq") or 0)
+        except (TypeError, ValueError):
+            source_seq = 0
+        if not source_id or source_seq <= 0:
+            return local
+        prefix = self._read_message_dicts(source_id, source_seq, seen)
+        return [*prefix, *local]
+
+    def _messages_from_snapshot(self, snapshot: dict) -> List[Dict[str, Any]]:
         rows = snapshot.get("model_messages") if isinstance(snapshot, dict) else None
         if not isinstance(rows, list):
             return []

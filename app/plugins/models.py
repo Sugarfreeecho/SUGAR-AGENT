@@ -1,9 +1,9 @@
-"""Data models shared by MyAgent's declarative plugin subsystem."""
+"""Data models shared by MyAgent's declarative and executable plugin system."""
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Mapping, Tuple
+from typing import Any, Dict, Mapping, Optional, Tuple
 
 
 COMPATIBILITY_STATUSES = {"native", "compatible", "partial", "unsupported"}
@@ -54,6 +54,49 @@ class PluginResource:
 
 
 @dataclass(frozen=True)
+class PluginRuntimeSpec:
+    """Executable runtime declared by a native MyAgent plugin."""
+
+    runtime_type: str
+    entrypoint: Path
+    api_version: str = "1"
+    timeout_seconds: float = 30.0
+    adapter: str = "native"
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "type": self.runtime_type,
+            "entrypoint": str(self.entrypoint),
+            "api_version": self.api_version,
+            "timeout_seconds": self.timeout_seconds,
+            "adapter": self.adapter,
+        }
+
+
+@dataclass(frozen=True)
+class PluginCommand:
+    plugin_id: str
+    name: str
+    qualified_name: str
+    description: str
+    usage: str
+    template: str
+    source_path: Optional[Path] = None
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "plugin_id": self.plugin_id,
+            "name": self.name,
+            "qualified_name": self.qualified_name,
+            "description": self.description,
+            "usage": self.usage,
+            "template": self.template,
+            "source_path": str(self.source_path) if self.source_path else None,
+            "kind": "declarative",
+        }
+
+
+@dataclass(frozen=True)
 class PluginDefinition:
     """The host-neutral representation produced by all plugin adapters."""
 
@@ -71,6 +114,9 @@ class PluginDefinition:
     mcp_sources: Tuple[Path, ...] = ()
     agents: Tuple[Path, ...] = ()
     prompts: Tuple[Path, ...] = ()
+    runtime: Optional[PluginRuntimeSpec] = None
+    dependencies: Mapping[str, Any] = field(default_factory=dict)
+    commands: Mapping[str, PluginCommand] = field(default_factory=dict)
     mcp_servers: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
     permissions: Mapping[str, Any] = field(default_factory=dict)
     content_signature: str = ""
@@ -93,13 +139,18 @@ class PluginDefinition:
 
     @property
     def components(self) -> Mapping[str, Any]:
-        return {
+        components: Dict[str, Any] = {
             "skills": self.skills,
             "hooks": self.hooks,
             "mcp_servers": self.mcp_servers,
             "agents": self.agents,
             "prompts": self.prompts,
         }
+        if self.commands:
+            components["commands"] = self.commands
+        if self.runtime is not None:
+            components["runtime"] = self.runtime
+        return components
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -119,8 +170,11 @@ class PluginDefinition:
                 "mcp_servers": sorted(self.mcp_servers),
                 "agents": [str(path) for path in self.agents],
                 "prompts": [str(path) for path in self.prompts],
+                **({"commands": sorted(self.commands)} if self.commands else {}),
+                **({"runtime": self.runtime.to_dict()} if self.runtime else {}),
             },
             "permissions": dict(self.permissions),
+            "dependencies": dict(self.dependencies),
             "content_signature": self.content_signature,
             "compatibility": self.compatibility.to_dict(),
         }
@@ -150,6 +204,7 @@ class PluginLoadResult:
     mcp_servers: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
     agent_directories: Mapping[str, Path] = field(default_factory=dict)
     prompt_directories: Mapping[str, Path] = field(default_factory=dict)
+    command_definitions: Mapping[str, PluginCommand] = field(default_factory=dict)
     errors: Tuple[str, ...] = ()
     warnings: Tuple[str, ...] = ()
     globally_enabled: bool = True
@@ -193,6 +248,10 @@ class PluginLoadResult:
         return self.prompt_directories
 
     @property
+    def commands(self) -> Mapping[str, PluginCommand]:
+        return self.command_definitions
+
+    @property
     def mcp_config(self) -> Dict[str, Any]:
         return {"servers": dict(self.mcp_servers)}
 
@@ -210,6 +269,10 @@ class PluginLoadResult:
             },
             "prompt_directories": {
                 name: str(path) for name, path in self.prompt_directories.items()
+            },
+            "commands": {
+                name: command.to_dict()
+                for name, command in self.command_definitions.items()
             },
             "errors": list(self.errors),
             "warnings": list(self.warnings),

@@ -1,4 +1,4 @@
-"""Lifecycle manager for discovered declarative plugins."""
+"""Lifecycle manager for discovered plugin packages."""
 from __future__ import annotations
 
 import copy
@@ -62,8 +62,9 @@ def default_state_path() -> Path:
 class PluginManager:
     """Discovers, enables, merges, and hot-reloads plugin resources.
 
-    Plugin contents stay declarative: this class never imports a module from a
-    plugin.  Hook and MCP executors remain separate trust boundaries.
+    This class remains discovery/state-only and never imports plugin code in
+    the host process. Hook, MCP, and executable workers are separate runtime
+    boundaries.
     """
 
     def __init__(
@@ -202,6 +203,7 @@ class PluginManager:
         mcp_servers: Dict[str, Mapping[str, object]] = {}
         agent_dirs: Dict[str, Path] = {}
         prompt_dirs: Dict[str, Path] = {}
+        commands = {}
         errors = list(report.errors) + state_errors
         warnings = list(report.warnings)
 
@@ -240,6 +242,11 @@ class PluginManager:
                     warnings.append(f"Duplicate prompt {resource.qualified_name!r} ignored")
                     continue
                 prompt_dirs[resource.qualified_name] = resource.path
+            for name, command in plugin.commands.items():
+                if name in commands:
+                    warnings.append(f"Duplicate command {name!r} ignored")
+                    continue
+                commands[name] = command
 
         result = PluginLoadResult(
             plugins=tuple(loaded_plugins),
@@ -248,6 +255,7 @@ class PluginManager:
             mcp_servers=mcp_servers,
             agent_directories=agent_dirs,
             prompt_directories=prompt_dirs,
+            command_definitions=commands,
             errors=tuple(dict.fromkeys(errors)),
             warnings=tuple(dict.fromkeys(warnings)),
             globally_enabled=True,

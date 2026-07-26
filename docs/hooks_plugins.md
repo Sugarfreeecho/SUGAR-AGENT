@@ -3,7 +3,9 @@
 MyAgent 现在提供两个彼此独立、可以组合的扩展层：
 
 - Hook 是生命周期执行点。它接收 JSON，运行受超时与最小环境限制的命令，并返回结构化决定。
-- Plugin 是声明式安装包。它可以贡献 Skill、Hook、MCP、Agent 和 Prompt，但 MyAgent 不会导入插件中的 Python/JavaScript 入口文件。
+- Plugin 是可安装扩展包。它可以同时贡献 Skill、声明式/代码型 Hook、Command、MCP、
+  Agent、Prompt 和在独立持久 Worker 中运行的 Python/Node Runtime；插件入口不会
+  导入 MyAgent 主进程。
 
 ## 开关与路径
 
@@ -92,6 +94,8 @@ Hook 从标准输入读取事件 JSON，并在标准输出写一个 JSON 对象�
 ```text
 my-plugin/
 ├─ .myagent-plugin/plugin.json
+├─ plugin.py
+├─ commands/review.md
 ├─ skills/review/SKILL.md
 ├─ hooks/hooks.json
 ├─ mcp/servers.json
@@ -108,6 +112,12 @@ Manifest 示例：
   "name": "Quality Tools",
   "version": "1.0.0",
   "description": "Review and quality gates",
+  "runtime": {
+    "type": "python",
+    "entrypoint": "./plugin.py",
+    "api_version": "1"
+  },
+  "commands": ["./commands"],
   "skills": ["./skills"],
   "hooks": "./hooks/hooks.json",
   "mcp_servers": "./mcp/servers.json",
@@ -117,25 +127,35 @@ Manifest 示例：
 }
 ```
 
-资源会自动命名空间化，例如 `org.example.quality:review` 和 `org.example.quality/lint`。Plugin Agent/Prompt 作为可按名称激活的声明式指令资源进入现有 Skill 目录；MCP server 合并到现有 MCP 桥；Hook 合并到生命周期注册表。
+资源会自动命名空间化，例如 `org.example.quality:review` 和
+`plugin_org_example_quality__lint`。Plugin Agent/Prompt 作为可按名称激活的声明式
+指令资源进入现有 Skill 目录；MCP server 合并到现有 MCP 桥；声明式与代码 Hook
+合并到同一生命周期注册表。完整 SDK、effect/worktree 契约、安装与依赖说明见
+[Plugin API v1](./plugin_api_v1.md)。
 
 插件启用状态写入原子 JSON。管理页支持单插件启停和重新发现/热重载；Skill、Hook 与 MCP 缓存会同步失效，下一次 Agent 边界立即使用新注册表。
 
-## Claude / Codex 兼容范围
+## Claude / Codex / Hermes / OpenCode 兼容范围
 
 MyAgent 会识别：
 
 - `.myagent-plugin/plugin.json`：Native。
 - `.claude-plugin/plugin.json`：Claude 兼容适配。
 - `.codex-plugin/plugin.json`：Codex 兼容适配。
+- `plugin.yaml` / `plugin.yml`：Hermes Python API 常用子集适配。
+- OpenCode npm `package.json`：Tool 与常用 Hook 子集适配。
 
-兼容报告为 `native`、`compatible`、`partial` 或 `unsupported`。Skill、Hook、MCP、Agent、Prompt 等声明式资源可转换；host 专属的 App、Marketplace、认证流程、UI 扩展或任意代码入口不会执行，并会出现在诊断中。因此这不是“所有市场插件都能直接运行”的通用标准。MCP 是其中标准化程度最高、跨 Agent 最可靠的组件；Plugin manifest 和 Hook 语义仍属于各宿主实现。
+兼容报告为 `native`、`compatible`、`partial` 或 `unsupported`。Skill、Hook、Command、
+MCP、Agent、Prompt 等通用能力可转换；Hermes backend/CLI、OpenCode `client`/`$`、
+host 专属 App、认证流程和 UI 扩展会出现在诊断中。因此这不是“所有市场插件都能直接
+运行”的二进制兼容承诺，而是一个带明确诊断的适配层。
 
 ## 安全与审计
 
 - 组件路径必须留在插件根目录；拒绝 `..`、绝对越界、symlink 逃逸，并在加载时再次校验。
-- 不 import 插件代码。能执行命令的入口只有显式 Hook 和 MCP server，它们受各自开关与安全边界控制。
-- 将插件复制到发现目录等同于安装并信任其声明式 Hook/MCP 命令；不信任的插件应立即在管理页禁用并检查 manifest。
+- 插件代码只在按插件隔离的 Worker 进程中导入，不进入 MyAgent 主进程。
+- 将插件复制/安装到发现目录等同于信任其 Runtime、Hook 和 MCP 能力；不信任的插件应
+  立即在管理页禁用并检查 manifest。
 - Runtime V2 记录 Hook 开始、完成、失败、阻塞、超时、输入修改和插件状态/重载。快照只保留紧凑白名单字段，不复制大型 stdout/stderr/result 正文。
 
 ## 管理 API
@@ -143,6 +163,9 @@ MyAgent 会识别：
 ```text
 GET  /api/extensions
 POST /api/extensions/reload
+POST /api/plugins/install
+POST /api/plugins/{plugin_id}/dependencies
+DELETE /api/plugins/{plugin_id}
 POST /api/plugins/{plugin_id}/enabled   {"enabled": true|false}
 GET  /setup/extensions
 ```

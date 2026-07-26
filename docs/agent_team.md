@@ -53,6 +53,17 @@ AGENT_TEAM_PERMISSION_TOOLS=delete_file,web_download
 
 每次 `dispatch` 都对这个 child session 执行 `task(action="resume")`。前台执行完成后成员回到 `idle`；后台执行由监视任务在结束后回收状态。如果成员因权限停止，则保持 `waiting_permission`，直到 lead 审批并再次派工。
 
+## 自动认领与连续调度
+
+默认启用本地自动调度器（可用 `AGENT_TEAM_AUTO_SCHEDULE=0` 关闭）。调度器只为
+`idle`/`starting` 且没有 in-progress 任务的成员认领任务，并要求所有 `depends_on`
+任务已经 completed。候选任务按 `urgent > high > normal > low`、创建顺序和 task id
+稳定排序。
+
+创建任务、更新依赖任务为 completed、成员完成执行，以及后台活动 Team 扫描都会触发
+下一轮原子 claim 与 dispatch。进程重启后，持久化的 pending 任务可被重新唤醒。
+lead 也可显式调用 `team(action="auto_schedule")`。
+
 ## 并发与权限
 
 任务认领、权限消费以及所有 Team 事件提交都在根会话的 `SessionEventLog.session_transaction` 内完成。两个成员同时认领同一任务时只有一个会成功。

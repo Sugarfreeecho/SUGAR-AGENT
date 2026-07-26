@@ -2811,14 +2811,31 @@ class SessionManager:
             "react_loops": 0,
             "tool_calls": 0,
             "tool_failures": 0,
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "cache_hit_tokens": 0,
+            "cache_miss_tokens": 0,
         }
         try:
             for ev in self._load_ui_events_for_active_runtime(session_id):
-                if not isinstance(ev, dict) or str(ev.get("type") or "") != "process_metrics":
+                if not isinstance(ev, dict):
                     continue
-                if ev.get("duration_ms") is None:
+                event_type = str(ev.get("type") or "")
+                if event_type == "cache_stats":
+                    for source, target in (
+                        ("input_tokens", "input_tokens"),
+                        ("output_tokens", "output_tokens"),
+                        ("cache_hit", "cache_hit_tokens"),
+                        ("cache_miss", "cache_miss_tokens"),
+                    ):
+                        try:
+                            totals[target] += max(0, int(ev.get(source) or 0))
+                        except (TypeError, ValueError):
+                            pass
                     continue
-                for key in totals:
+                if event_type != "process_metrics" or ev.get("duration_ms") is None:
+                    continue
+                for key in ("duration_ms", "react_loops", "tool_calls", "tool_failures"):
                     val = ev.get(key)
                     if val is None:
                         continue
@@ -2854,6 +2871,19 @@ class SessionManager:
     ) -> Dict[str, Any]:
         if running:
             return {"status": "running", "ok": None, "error": ""}
+        persisted_run_status = str(meta.get("subagent_run_status") or "").strip().lower()
+        if persisted_run_status in {"orphaned", "unknown"}:
+            return {
+                "status": persisted_run_status,
+                "ok": False,
+                "error": str(meta.get("subagent_run_error") or meta.get("subagent_error") or persisted_run_status),
+            }
+        if persisted_run_status == "running":
+            return {
+                "status": "orphaned",
+                "ok": False,
+                "error": "persisted run has no live process-local execution",
+            }
         finish_ev = self._subagent_finish_from_parent_events(parent_id, cid)
         ok: Optional[bool] = None
         error = ""
@@ -2909,6 +2939,19 @@ class SessionManager:
     ) -> Dict[str, Any]:
         if running:
             return {"status": "running", "ok": None, "error": ""}
+        persisted_run_status = str(meta.get("subagent_run_status") or "").strip().lower()
+        if persisted_run_status in {"orphaned", "unknown"}:
+            return {
+                "status": persisted_run_status,
+                "ok": False,
+                "error": str(meta.get("subagent_run_error") or meta.get("subagent_error") or persisted_run_status),
+            }
+        if persisted_run_status == "running":
+            return {
+                "status": "orphaned",
+                "ok": False,
+                "error": "persisted run has no live process-local execution",
+            }
         ok_raw = meta.get("subagent_ok")
         error = str(meta.get("subagent_error") or "").strip()
         if ok_raw is False:
@@ -3034,6 +3077,16 @@ class SessionManager:
                 executor_model = str(meta.get("executor_model") or "").strip()
                 if not executor_model and cache_model:
                     executor_model = cache_model
+                shared_observability: Dict[str, Any] = {}
+                try:
+                    import runtime_observability
+
+                    observed = runtime_observability.snapshot(cid)
+                    observed_runs = observed.get("runs") if isinstance(observed, dict) else []
+                    if isinstance(observed_runs, list) and observed_runs:
+                        shared_observability = dict(observed_runs[-1] or {})
+                except Exception:
+                    shared_observability = {}
                 node: Dict[str, Any] = {
                     "id": cid,
                     "parent_id": parent_id,
@@ -3045,6 +3098,8 @@ class SessionManager:
                     "best_of_run_id": str(meta.get("best_of_run_id") or ""),
                     "best_of_attempt": int(meta.get("best_of_attempt") or 0),
                     "git_worktree_path": str(meta.get("git_worktree_path") or ""),
+                    "subagent_work_dir": str(meta.get("subagent_work_dir") or ""),
+                    "git_worktree_state": str(meta.get("git_worktree_state") or ""),
                     "forked_from_parent": bool(meta.get("forked_from_parent")),
                     "executor_model": executor_model,
                     "output_file": str(meta.get("output_file") or "").strip(),
@@ -3056,6 +3111,29 @@ class SessionManager:
                     "result_preview": result_preview,
                     "dialogue_turns": dialogue_turns,
                     "session_metrics": session_metrics,
+                    "run_heartbeat_at": str(
+                        shared_observability.get("heartbeat_at")
+                        or meta.get("subagent_run_heartbeat_at")
+                        or ""
+                    ),
+                    "files_touched": list(
+                        dict.fromkeys(
+                            [
+                                *list(meta.get("subagent_files_touched") or []),
+                                *[
+                                    str(item.get("path") or "")
+                                    for item in shared_observability.get("file_changes") or []
+                                    if isinstance(item, dict) and str(item.get("path") or "")
+                                ],
+                            ]
+                        )
+                    ),
+                    "file_changes": list(shared_observability.get("file_changes") or []),
+                    "cost": dict(shared_observability.get("cost") or {}),
+                    "cost_budget_usd": shared_observability.get("cost_budget_usd"),
+                    "cost_budget_exhausted": bool(
+                        shared_observability.get("cost_budget_exhausted")
+                    ),
                 }
                 out.append(node)
                 walk(cid, child_path)
@@ -4620,8 +4698,10 @@ class SessionManager:
         executor_model: str = "",
         executor_llm_type: str = "",
         readonly_strict: bool = False,
+        parent_runtime_config: Optional[Dict[str, Any]] = None,
+        inherit_parent_model_runtime: bool = True,
     ) -> str:
-        """resume=self：复制父会话 llm/work/key_context 到新 subagent。"""
+        """resume=self：引用父模型前缀并精确冻结请求配置。"""
         import copy
 
         parent_id = self._normalize_session_id(parent_session_id)
@@ -4636,39 +4716,64 @@ class SessionManager:
             readonly_strict=readonly_strict,
             forked_from_parent=True,
         )
+        runtime_config = (
+            json.loads(json.dumps(parent_runtime_config, ensure_ascii=False))
+            if isinstance(parent_runtime_config, dict)
+            else {}
+        )
+        model_runtime = (
+            runtime_config.get("model_runtime")
+            if inherit_parent_model_runtime
+            else None
+        )
+        if not isinstance(model_runtime, dict):
+            model_runtime = executor_runtime_snapshot_for_session(
+                parent_id if inherit_parent_model_runtime else child_id
+            )
+        runtime_config["model_runtime"] = model_runtime
+        self.patch_subagent_metadata(
+            child_id,
+            {
+                "fork_runtime_config": runtime_config,
+                "fork_model_runtime": dict(model_runtime or {}),
+                "fork_prefix_mode": "immutable_model_prefix",
+            },
+        )
         if self._runtime_v2_primary():
             try:
-                from runtime_v2 import RuntimeHistoryOps, RuntimeModelProjection, SnapshotStore
+                from runtime_v2 import RuntimeHistoryOps
 
-                model_messages = RuntimeModelProjection(
+                ops = RuntimeHistoryOps(
                     self.repository.sessions_dir,
                     path_resolver=self._resolve_session_path,
-                ).read_message_dicts(parent_id)
-                RuntimeHistoryOps(
-                    self.repository.sessions_dir,
-                    path_resolver=self._resolve_session_path,
-                ).replace_model_history(
-                    child_id,
-                    copy.deepcopy(model_messages),
-                    reason="subagent_fork_from_parent",
                 )
-                parent_snapshot = SnapshotStore(
-                    self.repository.sessions_dir,
-                    path_resolver=self._resolve_session_path,
-                ).read(parent_id)
-                context = parent_snapshot.get("context") if isinstance(parent_snapshot, dict) else {}
-                summary = context.get("summary") if isinstance(context, dict) else {}
-                text = str(summary.get("summary") or "") if isinstance(summary, dict) else ""
-                if text.strip():
+                anchor_seq = max(0, int(ops.event_log.next_seq(parent_id)) - 1)
+                if anchor_seq > 0:
+                    ops.create_reference_branch(
+                        child_id,
+                        parent_id,
+                        anchor_seq,
+                        name=description,
+                    )
+                    self.patch_subagent_metadata(
+                        child_id,
+                        {
+                            "fork_source_session_id": parent_id,
+                            "fork_source_runtime_seq": anchor_seq,
+                        },
+                    )
+                else:
                     RuntimeHistoryOps(
                         self.repository.sessions_dir,
                         path_resolver=self._resolve_session_path,
-                    ).commit_context_summary(
+                    ).replace_model_history(
                         child_id,
-                        text,
+                        [],
+                        reason="subagent_fork_empty_parent",
                     )
+                self._copy_branch_sidecar_files(parent_id, child_id)
             except Exception as exc:
-                logger.warning("Runtime V2 fork subagent history copy failed for %s: %s", child_id, exc)
+                logger.warning("Runtime V2 reference fork failed for %s: %s", child_id, exc)
             return child_id
         llm_raw = self._load_llm_history(parent_id)
         work_raw = self._load_work_messages(parent_id)
@@ -5506,6 +5611,46 @@ def inherited_executor_selection(session_id: str) -> Dict[str, str]:
     return {"model_profile_id": profile_id} if profile_id else {}
 
 
+def executor_runtime_snapshot_for_session(session_id: str) -> Dict[str, Any]:
+    """Return a secret-free immutable request/profile snapshot for a fork."""
+    candidates = resolve_executor_candidates_for_session(session_id)
+    if not candidates:
+        return {}
+    first = candidates[0]
+    return {
+        "profile_id": str(first.get("profile_id") or ""),
+        "model": str(first.get("model") or ""),
+        "max_output_tokens": int(first.get("max_output_tokens") or MAX_OUTPUT_TOKENS),
+        "context_window": int(first.get("context_window") or CONTEXT_WINDOW),
+        "temperature": float(first.get("temperature", EXECUTOR_TEMPERATURE)),
+        "extra_body": dict(first.get("extra_body") or {}),
+        "reasoning_effort": first.get("reasoning_effort"),
+    }
+
+
+def executor_pricing_for_session(session_id: str) -> Dict[str, Any]:
+    """Resolve pricing and optional monetary budget from the effective profile."""
+    try:
+        meta = session_manager._load_metadata((session_id or "").strip()) or {}
+    except Exception:
+        meta = {}
+    profile_id = str(meta.get("model_profile_id") or "").strip()
+    profiles, ordered_ids, _ = _executor_profile_catalog()
+    if not profile_id and ordered_ids:
+        profile_id = ordered_ids[0]
+    profile = profiles.get(profile_id) or {}
+    pricing = model_profiles.profile_pricing(profile)
+    return {
+        "model_profile_id": profile_id,
+        "pricing": pricing,
+        "cost_budget_usd": (
+            pricing.get("cost_budget_usd")
+            if float(pricing.get("cost_budget_usd") or 0.0) > 0
+            else None
+        ),
+    }
+
+
 def _profile_candidate(profile: dict) -> Dict[str, Any]:
     cache_key = "profile:" + model_profiles.profile_cache_key(profile)
     cached = _executor_override_cache.get(cache_key)
@@ -5533,16 +5678,26 @@ def resolve_executor_candidates_for_session(
     session_id: str,
     *,
     profile_id_override: Optional[str] = None,
+    runtime_snapshot_override: Optional[Dict[str, Any]] = None,
 ) -> List[Dict[str, Any]]:
     sid = (session_id or "").strip()
     profile_id = str(profile_id_override or "").strip()
+    runtime_snapshot: Dict[str, Any] = (
+        dict(runtime_snapshot_override)
+        if isinstance(runtime_snapshot_override, dict)
+        else {}
+    )
     if sid and profile_id_override is None:
         try:
             meta = session_manager._load_metadata(sid)
         except Exception:
             meta = {}
         if isinstance(meta, dict):
-            profile_id = str(meta.get("model_profile_id") or "").strip()
+            if profile_id_override is None:
+                profile_id = str(meta.get("model_profile_id") or "").strip()
+            raw_snapshot = meta.get("fork_model_runtime")
+            if not runtime_snapshot and isinstance(raw_snapshot, dict):
+                runtime_snapshot = dict(raw_snapshot)
     profiles, ordered_ids, _top_profile_id = _executor_profile_catalog()
     candidates: List[Dict[str, Any]] = []
     seen: set[str] = set()
@@ -5560,6 +5715,19 @@ def resolve_executor_candidates_for_session(
         add_candidate(profile_id)
     for pid in ordered_ids:
         add_candidate(pid)
+    if candidates and runtime_snapshot:
+        frozen = dict(candidates[0])
+        for key in (
+            "model",
+            "max_output_tokens",
+            "context_window",
+            "temperature",
+            "extra_body",
+            "reasoning_effort",
+        ):
+            if key in runtime_snapshot:
+                frozen[key] = runtime_snapshot[key]
+        candidates[0] = frozen
     return candidates
 
 
@@ -5585,7 +5753,29 @@ def resolve_executor_config_for_session(session_id: str) -> Tuple[Any, str, int,
     profile_id = ""
     if isinstance(meta, dict):
         profile_id = str(meta.get("model_profile_id") or "").strip()
-    candidates = resolve_executor_candidates_for_session(sid, profile_id_override=profile_id)
+    candidates = resolve_executor_candidates_for_session(
+        sid,
+        profile_id_override=profile_id,
+    )
+    runtime_snapshot = (
+        meta.get("fork_model_runtime")
+        if isinstance(meta, dict)
+        and isinstance(meta.get("fork_model_runtime"), dict)
+        else None
+    )
+    if candidates and runtime_snapshot:
+        frozen = dict(candidates[0])
+        for key in (
+            "model",
+            "max_output_tokens",
+            "context_window",
+            "temperature",
+            "extra_body",
+            "reasoning_effort",
+        ):
+            if key in runtime_snapshot:
+                frozen[key] = runtime_snapshot[key]
+        candidates[0] = frozen
     if not candidates:
         raise RuntimeError("no usable model profile configured")
     first = candidates[0]

@@ -275,6 +275,17 @@ class AgentTeamService:
             member = self._member(team, mid)
             if member.get("state") in {"stopping", "stopped", "failed"}:
                 raise AgentTeamConflictError("member cannot claim work in its current state")
+            owned = [
+                existing_id
+                for existing_id, existing in (team.get("tasks") or {}).items()
+                if existing_id != tid
+                and existing.get("assignee_id") == mid
+                and existing.get("status") == "in_progress"
+            ]
+            if owned:
+                raise AgentTeamConflictError(
+                    f"member already owns in-progress task: {owned[0]}"
+                )
             task = self._task(team, tid)
             if task.get("status") not in {"pending", "blocked"}:
                 raise AgentTeamConflictError("task is not claimable")
@@ -292,6 +303,56 @@ class AgentTeamService:
             guard=guard,
         )
         return self._required_team(sid)["tasks"][tid]
+
+    def claim_next_task(self, session_id: str, member_id: str) -> Optional[dict]:
+        """Dependency-aware CAS claim of the highest-priority ready task."""
+        sid = clean_id(session_id, "session_id")
+        mid = clean_id(member_id, "member_id")
+        priority_rank = {"urgent": 0, "high": 1, "normal": 2, "low": 3}
+        # Another scheduler can win between the read and claim. Retry against
+        # the freshly projected task graph instead of assigning twice.
+        for _ in range(16):
+            team = self._required_team(sid)
+            member = self._member(team, mid)
+            if member.get("state") not in {"idle", "starting"}:
+                return None
+            if any(
+                task.get("assignee_id") == mid and task.get("status") == "in_progress"
+                for task in (team.get("tasks") or {}).values()
+                if isinstance(task, dict)
+            ):
+                return None
+            tasks = team.get("tasks") or {}
+            ready = []
+            for task in tasks.values():
+                if not isinstance(task, dict):
+                    continue
+                if task.get("status") != "pending":
+                    continue
+                if task.get("assignee_id"):
+                    continue
+                dependencies = task.get("depends_on") or []
+                if any(
+                    (tasks.get(dep) or {}).get("status") != "completed"
+                    for dep in dependencies
+                ):
+                    continue
+                ready.append(task)
+            if not ready:
+                return None
+            ready.sort(
+                key=lambda task: (
+                    priority_rank.get(str(task.get("priority") or "normal"), 2),
+                    int(task.get("seq") or 0),
+                    str(task.get("task_id") or ""),
+                )
+            )
+            candidate = str(ready[0].get("task_id") or "")
+            try:
+                return self.claim_task(sid, candidate, mid)
+            except AgentTeamConflictError:
+                continue
+        return None
 
     def release_task(self, session_id: str, task_id: str, member_id: str, reason: str = "") -> dict:
         sid = clean_id(session_id, "session_id")

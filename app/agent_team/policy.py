@@ -35,7 +35,22 @@ def team_member_identity(session_meta: dict | None) -> tuple[str, str] | None:
 
 def workspace_write_lock(session_meta: dict | None, tool_name: str) -> threading.Lock | None:
     identity = team_member_identity(session_meta)
-    if identity is None or str(tool_name or "") not in _write_tool_names():
+    name = str(tool_name or "")
+    contract_write = False
+    if name.startswith(("mcp_", "plugin_")):
+        try:
+            if name.startswith("mcp_"):
+                from agent_mcp import get_tool_contract
+            else:
+                from agent_extensions import get_plugin_tool_contract as get_tool_contract
+
+            contract_write = (
+                str(get_tool_contract(name).get("effect") or "")
+                == "workspace_write"
+            )
+        except Exception:
+            contract_write = False
+    if identity is None or (name not in _write_tool_names() and not contract_write):
         return None
     root_id, _ = identity
     with _workspace_locks_guard:
@@ -134,6 +149,20 @@ def _requires_permission(tool_name: str, tool_args: Any) -> bool:
     protected = {part.strip() for part in configured.split(",") if part.strip()}
     if name in protected:
         return True
+    if name.startswith(("mcp_", "plugin_")):
+        try:
+            if name.startswith("mcp_"):
+                from agent_mcp import get_tool_contract
+            else:
+                from agent_extensions import get_plugin_tool_contract as get_tool_contract
+
+            if str(get_tool_contract(name).get("effect") or "") in {
+                "workspace_write",
+                "external_write",
+            }:
+                return True
+        except Exception:
+            pass
     if name == "run_shell" and isinstance(tool_args, dict):
         return tool_args.get("restrict_to_workspace") is False
     return False
@@ -142,6 +171,29 @@ def _requires_permission(tool_name: str, tool_args: Any) -> bool:
 def _tool_resource(tool_name: str, tool_args: Any) -> str:
     args = tool_args if isinstance(tool_args, dict) else {}
     name = str(tool_name or "")
+    if name.startswith(("mcp_", "plugin_")):
+        try:
+            if name.startswith("mcp_"):
+                from agent_mcp import get_tool_contract
+            else:
+                from agent_extensions import get_plugin_tool_contract as get_tool_contract
+
+            keys = get_tool_contract(name).get("resource_arguments") or []
+            if isinstance(keys, str):
+                keys = [keys]
+            declared = {
+                str(key): args.get(str(key))
+                for key in keys
+                if str(key) and args.get(str(key)) not in (None, "")
+            }
+            if declared:
+                return json.dumps(
+                    declared,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                )[:4000]
+        except Exception:
+            pass
     for key in (
         "path",
         "url",

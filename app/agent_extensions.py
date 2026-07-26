@@ -1,9 +1,9 @@
-"""Host integration for declarative Hooks and Plugins.
+"""Host integration for Hooks, declarative resources, and Plugin API runtimes.
 
-This module is deliberately thin: plugin packages are parsed as data and are
-never imported.  It supplies one process-wide plugin registry plus one Hook
-manager per asyncio event loop, so the main loop and its worker loop do not
-share loop-bound locks.
+Executable plugin entrypoints are only loaded in isolated worker processes.
+This module supplies one process-wide plugin registry plus one Hook manager per
+asyncio event loop, so the main loop and its worker loop do not share loop-bound
+locks.
 """
 from __future__ import annotations
 
@@ -11,6 +11,8 @@ import asyncio
 import json
 import logging
 import os
+import re
+import shlex
 import threading
 import time
 import weakref
@@ -24,6 +26,7 @@ try:  # Production launches with app/ on sys.path; package imports use the fallb
         PluginManager,
         PluginReloadResult,
         get_plugin_manager,
+        get_plugin_runtime_registry,
         plugins_enabled,
     )
 except ImportError:  # pragma: no cover - import style depends on the launcher
@@ -33,6 +36,7 @@ except ImportError:  # pragma: no cover - import style depends on the launcher
         PluginManager,
         PluginReloadResult,
         get_plugin_manager,
+        get_plugin_runtime_registry,
         plugins_enabled,
     )
 
@@ -111,6 +115,236 @@ def plugin_instruction_resources() -> Mapping[str, Tuple[str, Path]]:
     return out
 
 
+async def plugin_tool_definitions() -> list[Dict[str, Any]]:
+    """Describe tools registered by enabled Plugin API v1 runtimes."""
+
+    loaded = load_plugins()
+    registry = get_plugin_runtime_registry()
+    definitions = await asyncio.to_thread(registry.tool_definitions, loaded.plugins)
+    for error in registry.errors:
+        logger.warning("Plugin runtime registration failed: %s", error)
+    return definitions
+
+
+async def invoke_plugin_tool(
+    function_name: str,
+    arguments: Optional[Mapping[str, Any]] = None,
+    *,
+    work_dir: str = "",
+    require_worktree_isolation: bool = False,
+) -> Any:
+    """Invoke one code-plugin tool through its worker process."""
+
+    loaded = load_plugins(force=True)
+    registry = get_plugin_runtime_registry()
+    call_arguments = dict(arguments or {})
+    contract = await asyncio.to_thread(
+        registry.tool_contract,
+        function_name,
+        loaded.plugins,
+    )
+    if require_worktree_isolation:
+        if not contract.get("declared") or not contract.get("effect"):
+            raise ValueError(
+                f"Plugin tool {function_name!r} is blocked in a managed worktree "
+                "because it does not declare an effect/resource isolation contract."
+            )
+        effect = str(contract.get("effect") or "")
+        if effect == "workspace_write":
+            if not contract.get("worktree_compatible"):
+                raise ValueError(
+                    f"Plugin tool {function_name!r} declares workspace writes but "
+                    "does not declare worktree compatibility."
+                )
+            root_argument = str(contract.get("workspace_root_argument") or "")
+            if not root_argument:
+                raise ValueError(
+                    f"Plugin tool {function_name!r} requires a "
+                    "workspace_root_argument for worktree isolation."
+                )
+            call_arguments[root_argument] = str(Path(work_dir).resolve())
+        elif effect not in {"read", "external_write"}:
+            raise ValueError(
+                f"Plugin tool {function_name!r} has unsupported effect "
+                f"{effect!r} for worktree isolation."
+            )
+        root = Path(work_dir).resolve()
+        for argument_name in contract.get("path_arguments") or []:
+            raw_path = str(call_arguments.get(argument_name) or "").strip()
+            if not raw_path:
+                continue
+            candidate = Path(raw_path)
+            candidate = (
+                candidate.resolve()
+                if candidate.is_absolute()
+                else (root / candidate).resolve()
+            )
+            try:
+                candidate.relative_to(root)
+            except ValueError as exc:
+                raise ValueError(
+                    f"Plugin argument {argument_name!r} escapes the managed worktree."
+                ) from exc
+            call_arguments[argument_name] = str(candidate)
+    return await asyncio.to_thread(
+        registry.invoke,
+        function_name,
+        call_arguments,
+        loaded.plugins,
+    )
+
+
+def get_plugin_tool_contract(function_name: str) -> Dict[str, Any]:
+    loaded = load_plugins()
+    return get_plugin_runtime_registry().tool_contract(
+        function_name,
+        loaded.plugins,
+    )
+
+
+def plugin_runtime_errors() -> tuple[str, ...]:
+    return get_plugin_runtime_registry().errors
+
+
+async def plugin_command_descriptions() -> list[Dict[str, Any]]:
+    loaded = load_plugins()
+    registry = get_plugin_runtime_registry()
+    runtime_rows = await asyncio.to_thread(
+        registry.command_descriptions,
+        loaded.plugins,
+    )
+    return _plugin_command_catalog(loaded, runtime_rows)
+
+
+def _plugin_command_catalog(
+    loaded: PluginLoadResult,
+    runtime_rows: Optional[list[Dict[str, Any]]] = None,
+) -> list[Dict[str, Any]]:
+    rows = []
+    signatures = {
+        plugin.plugin_id: plugin.content_signature for plugin in loaded.plugins
+    }
+    for command in loaded.command_definitions.values():
+        rows.append(
+            {
+                "plugin_id": command.plugin_id,
+                "plugin_signature": signatures.get(command.plugin_id, ""),
+                "name": command.name,
+                "qualified_name": command.qualified_name,
+                "description": command.description,
+                "usage": command.usage,
+                "kind": "declarative",
+                "source_path": str(command.source_path) if command.source_path else None,
+            }
+        )
+    if runtime_rows is None:
+        runtime_rows = get_plugin_runtime_registry().command_descriptions(loaded.plugins)
+    rows.extend({**row, "kind": "runtime"} for row in runtime_rows)
+    return sorted(
+        rows,
+        key=lambda row: (
+            str(row.get("qualified_name") or ""),
+            str(row.get("kind") or ""),
+        ),
+    )
+
+
+def _expand_declarative_command(template: str, arguments: str) -> str:
+    expanded = str(template)
+    raw_arguments = str(arguments or "")
+    had_placeholder = "$ARGUMENTS" in expanded or "{{arguments}}" in expanded
+    expanded = expanded.replace("$ARGUMENTS", raw_arguments)
+    expanded = expanded.replace("{{arguments}}", raw_arguments)
+    try:
+        positional = shlex.split(raw_arguments, posix=os.name != "nt")
+    except ValueError:
+        positional = raw_arguments.split()
+    for index in range(9, 0, -1):
+        placeholder = f"${index}"
+        if placeholder in expanded:
+            had_placeholder = True
+            value = positional[index - 1] if index <= len(positional) else ""
+            expanded = expanded.replace(placeholder, value)
+    if raw_arguments.strip() and not had_placeholder:
+        expanded = f"{expanded.rstrip()}\n\nArguments: {raw_arguments.strip()}"
+    return expanded
+
+
+async def dispatch_plugin_command(
+    user_input: str,
+    context: Optional[Mapping[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Expand a registered slash command into a prompt and optional context."""
+
+    text = str(user_input or "")
+    if not text.startswith("/") or text.startswith("//"):
+        return {"matched": False}
+    token, separator, arguments = text[1:].partition(" ")
+    requested = token.strip()
+    if not requested:
+        return {"matched": False}
+
+    loaded = load_plugins(force=True)
+    registry = get_plugin_runtime_registry()
+    runtime_rows = await asyncio.to_thread(
+        registry.command_descriptions,
+        loaded.plugins,
+    )
+    rows = _plugin_command_catalog(loaded, runtime_rows)
+    local_counts: Dict[str, int] = {}
+    for row in rows:
+        local_name = str(row.get("name") or "")
+        local_counts[local_name] = local_counts.get(local_name, 0) + 1
+    matches = {
+        str(row.get("qualified_name") or ""): row
+        for row in rows
+    }
+    for row in rows:
+        local_name = str(row.get("name") or "")
+        if local_counts.get(local_name) == 1:
+            matches.setdefault(local_name, row)
+    selected = matches.get(requested)
+    if selected is None:
+        return {"matched": False}
+
+    command_arguments = arguments if separator else ""
+    if selected.get("kind") == "declarative":
+        command = loaded.command_definitions.get(
+            str(selected.get("qualified_name") or "")
+        )
+        if command is None:
+            raise ValueError("Declarative plugin command changed before invocation")
+        result = _expand_declarative_command(command.template, command_arguments)
+    else:
+        result = await asyncio.to_thread(
+            registry.invoke_command,
+            str(selected.get("plugin_id") or ""),
+            str(selected.get("plugin_signature") or ""),
+            str(selected.get("name") or ""),
+            command_arguments,
+            dict(context or {}),
+            loaded.plugins,
+        )
+    if isinstance(result, str):
+        prompt = result
+        additional_context = ""
+    elif isinstance(result, Mapping):
+        prompt = result.get("prompt", result.get("user_input"))
+        additional_context = str(result.get("additional_context") or "")
+    else:
+        raise ValueError("Plugin command must return a string or JSON object")
+    if prompt is None or not str(prompt).strip():
+        raise ValueError("Plugin command returned an empty prompt")
+    return {
+        "matched": True,
+        "plugin_id": str(selected.get("plugin_id") or ""),
+        "name": str(selected.get("name") or ""),
+        "qualified_name": str(selected.get("qualified_name") or ""),
+        "prompt": str(prompt),
+        "additional_context": additional_context,
+    }
+
+
 def plugin_registry_signature() -> str:
     loaded = load_plugins()
     rows = [
@@ -156,7 +390,10 @@ def _path_signature(path: Path) -> str:
         return f"{path}:missing"
 
 
-def _hook_signature(loaded: PluginLoadResult) -> str:
+def _hook_signature(
+    loaded: PluginLoadResult,
+    runtime_definitions: tuple[Any, ...] = (),
+) -> str:
     hook_rows = [
         (resource.plugin_id, str(resource.path), _path_signature(Path(resource.path)))
         for resource in loaded.hook_sources
@@ -167,26 +404,66 @@ def _hook_signature(loaded: PluginLoadResult) -> str:
             "plugins_enabled": plugins_enabled(),
             "project": _path_signature(hooks_config_path()),
             "plugin_hooks": hook_rows,
+            "runtime_hooks": [
+                (
+                    item.plugin_id,
+                    item.plugin_signature,
+                    item.event,
+                    item.id,
+                    item.matcher,
+                    item.priority,
+                )
+                for item in runtime_definitions
+            ],
         },
         sort_keys=True,
     )
 
 
-def hook_manager_for_current_loop(*, force: bool = False) -> HookManager:
+def _runtime_hook_definitions(loaded: PluginLoadResult) -> tuple[Any, ...]:
+    try:
+        from plugins.host_hooks import runtime_hook_definitions
+    except ImportError:  # pragma: no cover - package import style
+        from .plugins.host_hooks import runtime_hook_definitions
+
+    return runtime_hook_definitions(
+        get_plugin_runtime_registry(),
+        tuple(loaded.plugins),
+    )
+
+
+def hook_manager_for_current_loop(
+    *,
+    force: bool = False,
+    runtime_definitions: Optional[tuple[Any, ...]] = None,
+) -> HookManager:
     """Return a manager whose asyncio locks belong to the current loop."""
 
     loop = asyncio.get_running_loop()
     loaded = load_plugins(force=force)
-    signature = _hook_signature(loaded)
+    if runtime_definitions is None:
+        runtime_definitions = _runtime_hook_definitions(loaded)
+    signature = _hook_signature(loaded, runtime_definitions)
     with _lock:
         cached = _hook_managers.get(loop)
         if force or cached is None or cached[0] != signature:
             configured = str(os.getenv("HOOKS_PATH") or os.getenv("HOOKS_CONFIG_PATH") or "").strip()
+            try:
+                from plugins.host_hooks import PluginAwareHookExecutor
+            except ImportError:  # pragma: no cover - package import style
+                from .plugins.host_hooks import PluginAwareHookExecutor
+
             manager = HookManager(
                 _project_root(),
                 config_path=hooks_config_path() if configured else None,
                 plugin_sources=_plugin_hook_sources(loaded) if plugins_enabled() else (),
+                executor=PluginAwareHookExecutor(
+                    _project_root(),
+                    get_plugin_runtime_registry(),
+                    lambda: tuple(load_plugins(force=True).plugins),
+                ),
             )
+            manager.extend_definitions(runtime_definitions)
             _hook_managers[loop] = (signature, manager)
             return manager
         return cached[1]
@@ -197,11 +474,23 @@ def hook_snapshot() -> Dict[str, Any]:
 
     loaded = load_plugins()
     configured = str(os.getenv("HOOKS_PATH") or os.getenv("HOOKS_CONFIG_PATH") or "").strip()
+    runtime_definitions = _runtime_hook_definitions(loaded)
+    try:
+        from plugins.host_hooks import PluginAwareHookExecutor
+    except ImportError:  # pragma: no cover - package import style
+        from .plugins.host_hooks import PluginAwareHookExecutor
+
     manager = HookManager(
         _project_root(),
         config_path=hooks_config_path() if configured else None,
         plugin_sources=_plugin_hook_sources(loaded) if plugins_enabled() else (),
+        executor=PluginAwareHookExecutor(
+            _project_root(),
+            get_plugin_runtime_registry(),
+            lambda: tuple(load_plugins(force=True).plugins),
+        ),
     )
+    manager.extend_definitions(runtime_definitions)
     definitions = []
     for item in manager.definitions:
         definitions.append(
@@ -214,6 +503,7 @@ def hook_snapshot() -> Dict[str, Any]:
                 "failure_policy": item.failure_policy,
                 "priority": item.priority,
                 "timeout_seconds": item.command.timeout_seconds,
+                "handler_type": item.handler_type,
             }
         )
     return {
@@ -230,6 +520,7 @@ def invalidate_extension_caches() -> None:
     with _lock:
         _plugin_cache = None
         _hook_managers.clear()
+    get_plugin_runtime_registry().invalidate()
 
 
 def reload_extensions() -> PluginReloadResult:
@@ -247,6 +538,7 @@ def reload_extensions() -> PluginReloadResult:
         )
         _plugin_cache = (time.monotonic(), cache_key, result.loaded)
         _hook_managers.clear()
+    get_plugin_runtime_registry().invalidate()
     try:
         from agent_tools import invalidate_skills_cache
 
@@ -266,6 +558,58 @@ def set_plugin_enabled(plugin_id: str, enabled: bool) -> Mapping[str, object]:
     except Exception:
         logger.debug("Unable to invalidate the skill cache", exc_info=True)
     return state
+
+
+def install_plugin(
+    source: str,
+    *,
+    replace: bool = False,
+    ref: str = "",
+    install_dependencies: bool = False,
+) -> Dict[str, Any]:
+    try:
+        from plugins import PluginInstaller
+    except ImportError:  # pragma: no cover - package import style
+        from .plugins import PluginInstaller
+
+    get_plugin_runtime_registry().invalidate()
+    installer = PluginInstaller(plugin_manager().discovery_dirs)
+    result = installer.install(
+        source,
+        replace=replace,
+        ref=ref,
+        install_dependencies=install_dependencies,
+    )
+    invalidate_extension_caches()
+    reload_extensions()
+    return result
+
+
+def uninstall_plugin(plugin_id: str) -> Dict[str, Any]:
+    try:
+        from plugins import PluginInstaller
+    except ImportError:  # pragma: no cover - package import style
+        from .plugins import PluginInstaller
+
+    get_plugin_runtime_registry().invalidate()
+    installer = PluginInstaller(plugin_manager().discovery_dirs)
+    result = installer.uninstall(plugin_id)
+    invalidate_extension_caches()
+    reload_extensions()
+    return result
+
+
+def install_plugin_dependencies(plugin_id: str) -> Dict[str, Any]:
+    try:
+        from plugins import PluginInstaller
+    except ImportError:  # pragma: no cover - package import style
+        from .plugins import PluginInstaller
+
+    get_plugin_runtime_registry().invalidate()
+    installer = PluginInstaller(plugin_manager().discovery_dirs)
+    result = installer.install_dependencies(plugin_id)
+    invalidate_extension_caches()
+    return result
 
 
 def _runtime_v2_enabled() -> bool:
@@ -407,7 +751,14 @@ async def dispatch_hook(
     session_id: str = "",
     run_id: str = "",
 ) -> HookDispatchResult:
-    manager = hook_manager_for_current_loop()
+    loaded = load_plugins()
+    runtime_definitions = await asyncio.to_thread(
+        _runtime_hook_definitions,
+        loaded,
+    )
+    manager = hook_manager_for_current_loop(
+        runtime_definitions=runtime_definitions,
+    )
     audit_enabled = bool(manager.enabled and manager.hooks_for(event))
     if session_manager is not None and audit_enabled:
         await asyncio.to_thread(
@@ -511,6 +862,9 @@ def extensions_snapshot() -> Dict[str, Any]:
     report = manager.discover_report()
     loaded = load_plugins(force=True)
     loaded_ids = {plugin.plugin_id for plugin in loaded.plugins}
+    runtime_registry = get_plugin_runtime_registry()
+    runtime_command_rows = runtime_registry.command_descriptions(loaded.plugins)
+    command_rows = _plugin_command_catalog(loaded, runtime_command_rows)
     plugin_rows = []
     for plugin in report.plugins:
         row = plugin.to_dict()
@@ -530,6 +884,9 @@ def extensions_snapshot() -> Dict[str, Any]:
         "plugins": plugin_rows,
         "plugin_errors": list(report.errors) + list(loaded.errors),
         "plugin_warnings": list(report.warnings) + list(loaded.warnings),
+        "plugin_runtime_errors": list(plugin_runtime_errors()),
+        "plugin_runtime": runtime_registry.snapshot(),
+        "plugin_commands": command_rows,
         "hooks": hook_data["definitions"],
         "hook_errors": hook_data["errors"],
         "hook_sources": hook_data["loaded_sources"],

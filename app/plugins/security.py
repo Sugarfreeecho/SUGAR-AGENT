@@ -25,6 +25,9 @@ class PluginStateError(PluginError):
 
 
 _SAFE_NAMESPACE = re.compile(r"[^a-z0-9._-]+")
+_SIGNATURE_IGNORED_DIRS = frozenset(
+    {".git", ".myagent-runtime", "__pycache__", "node_modules"}
+)
 
 
 def normalize_namespace(value: object) -> str:
@@ -99,6 +102,8 @@ def iter_safe_plugin_files(root: Path) -> Iterator[Path]:
         current_path = Path(current)
         kept_dirs = []
         for name in sorted(dir_names):
+            if name in _SIGNATURE_IGNORED_DIRS:
+                continue
             child = current_path / name
             try:
                 resolved = child.resolve(strict=True)
@@ -135,6 +140,9 @@ def plugin_content_signature(root: Path) -> str:
     links = []
     for current, dir_names, file_names in os.walk(resolved_root, followlinks=False):
         current_path = Path(current)
+        dir_names[:] = [
+            name for name in dir_names if name not in _SIGNATURE_IGNORED_DIRS
+        ]
         for name in tuple(dir_names) + tuple(file_names):
             child = current_path / name
             if not child.is_symlink():

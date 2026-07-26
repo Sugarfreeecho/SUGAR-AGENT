@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ssl_bypass  # SSL certificate bypass
 
+import asyncio
 import os
 import socket
 import threading
@@ -62,6 +63,7 @@ if __name__ == "__main__":
         stop_goal_runner,
     )
     from agent_harness import refresh_executor_client_from_env
+    from agent_subagent import reconcile_orphaned_subagent_runs
     
     # 确保配置正确加载，避免重启后400/401错误
     refresh_executor_client_from_env()
@@ -73,12 +75,82 @@ if __name__ == "__main__":
     async def lifespan(app: FastAPI):
         # 启动时打开浏览器
         _schedule_browser_open("127.0.0.1", _listen_port)
+        await asyncio.to_thread(reconcile_orphaned_subagent_runs)
+        import runtime_observability
+        from agent_harness import session_manager
+        from session_lifecycle import cancel_run_tasks, is_run_active
+
+        runtime_observability.configure(
+            session_manager.sessions_dir,
+            path_resolver=session_manager._resolve_session_path,
+        )
+        await asyncio.to_thread(
+            runtime_observability.reconcile_orphaned_runs,
+            live_checker=lambda sid, _rid: is_run_active(sid),
+        )
+
+        watchdog_stop = asyncio.Event()
+
+        async def runtime_watchdog() -> None:
+            stale_seconds = max(
+                30.0,
+                float(os.getenv("AGENT_RUN_STALE_SECONDS", "90")),
+            )
+            timeout_seconds = max(
+                0.0,
+                float(os.getenv("AGENT_RUN_TIMEOUT_SECONDS", "7200")),
+            )
+            interval = max(
+                5.0,
+                min(60.0, float(os.getenv("AGENT_RUN_WATCHDOG_INTERVAL_SECONDS", "15"))),
+            )
+            while not watchdog_stop.is_set():
+                await asyncio.sleep(interval)
+                stale = await asyncio.to_thread(
+                    runtime_observability.scan_stale_runs,
+                    stale_seconds,
+                )
+                expired = (
+                    await asyncio.to_thread(
+                        runtime_observability.scan_timed_out_runs,
+                        timeout_seconds,
+                    )
+                    if timeout_seconds > 0
+                    else []
+                )
+                targets = {
+                    str(item.get("session_id") or "")
+                    for item in [*stale, *expired]
+                    if str(item.get("session_id") or "")
+                }
+                for sid in targets:
+                    try:
+                        session_manager.request_interrupt(
+                            sid,
+                            reason="runtime_watchdog",
+                        )
+                    except Exception:
+                        pass
+                if targets:
+                    await cancel_run_tasks(targets)
+
+        watchdog_task = asyncio.create_task(runtime_watchdog())
         schedule_runtime_auto_migration()
+        from agent_team.tools import start_auto_scheduler, stop_auto_scheduler
+
+        await start_auto_scheduler()
         await start_goal_runner()
         try:
             await start_feishu_adapter()
             yield
         finally:
+            watchdog_stop.set()
+            watchdog_task.cancel()
+            try:
+                await watchdog_task
+            except asyncio.CancelledError:
+                pass
+            await stop_auto_scheduler()
             await stop_feishu_adapter()
             await stop_goal_runner()
         

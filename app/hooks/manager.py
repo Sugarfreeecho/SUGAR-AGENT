@@ -119,6 +119,17 @@ class HookManager:
     def register(self, definition: HookDefinition) -> None:
         self.replace_definitions((*self._definitions, definition))
 
+    def extend_definitions(self, definitions: Iterable[HookDefinition]) -> None:
+        """Append host-generated definitions without discarding load diagnostics."""
+
+        config_errors = self._config_errors
+        loaded_sources = self._loaded_sources
+        self.replace_definitions((*self._definitions, *tuple(definitions)))
+        self._config_errors = config_errors
+        self._loaded_sources = tuple(
+            dict.fromkeys((*loaded_sources, *(item.source_id for item in self._definitions)))
+        )
+
     def hooks_for(self, event: str) -> Tuple[HookDefinition, ...]:
         self._validate_event(event)
         return tuple(item for item in self._definitions if item.event == event)

@@ -5,10 +5,16 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Callable, Optional
 
-from runtime_v2.event_log import SessionEventLog
-from runtime_v2.event_schema import RuntimeEvent
-from runtime_v2.projector import RuntimeProjector
-from runtime_v2.snapshot_store import SnapshotStore
+try:
+    from runtime_v2.event_log import SessionEventLog
+    from runtime_v2.event_schema import RuntimeEvent
+    from runtime_v2.projector import RuntimeProjector
+    from runtime_v2.snapshot_store import SnapshotStore
+except ImportError:  # package import: ``app.agent_team``
+    from app.runtime_v2.event_log import SessionEventLog
+    from app.runtime_v2.event_schema import RuntimeEvent
+    from app.runtime_v2.projector import RuntimeProjector
+    from app.runtime_v2.snapshot_store import SnapshotStore
 
 from .config import require_agent_team_enabled
 

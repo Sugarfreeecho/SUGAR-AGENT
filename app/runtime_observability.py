@@ -1,0 +1,596 @@
+"""Shared run observability for root agents, ordinary subagents, and team members.
+
+The store is deliberately independent from the UI/runtime event projection.  It
+provides one durable source for liveness, file changes, token/cost accounting,
+and restart/stale reconciliation while Runtime V2 remains the conversation
+event source of truth.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import subprocess
+import threading
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Callable, Dict, Iterable, Optional
+
+
+_lock = threading.RLock()
+_sessions_root: Optional[Path] = None
+_path_resolver: Optional[Callable[[str], str | Path]] = None
+_MAX_RUNS = max(1, int(os.getenv("RUNTIME_OBSERVABILITY_MAX_RUNS", "100")))
+_TERMINAL = {"finished", "failed", "interrupted", "orphaned", "stale", "budget_exhausted"}
+
+
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+
+
+def _float(value: Any) -> float:
+    try:
+        return max(0.0, float(value or 0.0))
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _int(value: Any) -> int:
+    try:
+        return max(0, int(value or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def configure(
+    sessions_root: str | Path,
+    *,
+    path_resolver: Optional[Callable[[str], str | Path]] = None,
+) -> None:
+    global _sessions_root, _path_resolver
+    _sessions_root = Path(sessions_root)
+    _path_resolver = path_resolver
+
+
+def _session_dir(session_id: str) -> Path:
+    sid = str(session_id or "").strip()
+    if not sid:
+        raise ValueError("session_id is required")
+    if _path_resolver is not None:
+        return Path(_path_resolver(sid))
+    if _sessions_root is None:
+        raise RuntimeError("runtime_observability is not configured")
+    return _sessions_root / sid
+
+
+def _path(session_id: str) -> Path:
+    return _session_dir(session_id) / "runtime_observability.json"
+
+
+def _read(session_id: str) -> dict:
+    path = _path(session_id)
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if isinstance(data, dict) and isinstance(data.get("runs"), list):
+            return data
+    except (OSError, ValueError, TypeError):
+        pass
+    return {"version": 1, "session_id": str(session_id), "runs": []}
+
+
+def _write(session_id: str, data: dict) -> None:
+    path = _path(session_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".json.tmp")
+    tmp.write_text(
+        json.dumps(data, ensure_ascii=False, separators=(",", ":")),
+        encoding="utf-8",
+    )
+    os.replace(tmp, path)
+
+
+def _run(data: dict, run_id: str, *, create: bool = False) -> Optional[dict]:
+    rid = str(run_id or "").strip()
+    for row in reversed(data.get("runs") or []):
+        if isinstance(row, dict) and str(row.get("run_id") or "") == rid:
+            return row
+    if not create:
+        return None
+    row = {
+        "run_id": rid,
+        "status": "running",
+        "started_at": _now(),
+        "heartbeat_at": _now(),
+        "usage": {},
+        "cost": {"currency": "USD", "total": 0.0},
+        "file_changes": [],
+    }
+    data.setdefault("runs", []).append(row)
+    data["runs"] = data["runs"][-_MAX_RUNS:]
+    return row
+
+
+def start_run(
+    session_id: str,
+    run_id: str,
+    *,
+    kind: str = "agent",
+    model_profile_id: str = "",
+    pricing: Optional[dict] = None,
+    cost_budget_usd: Any = None,
+) -> dict:
+    with _lock:
+        data = _read(session_id)
+        row = _run(data, run_id, create=True)
+        assert row is not None
+        row.update(
+            {
+                "status": "running",
+                "kind": str(kind or "agent"),
+                "model_profile_id": str(model_profile_id or ""),
+                "heartbeat_at": _now(),
+                "finished_at": None,
+                "stale_reason": "",
+                "pricing": normalize_pricing(pricing),
+                "cost_budget_usd": (
+                    _float(cost_budget_usd) if cost_budget_usd not in (None, "") else None
+                ),
+            }
+        )
+        _write(session_id, data)
+        return json.loads(json.dumps(row))
+
+
+def heartbeat_run(session_id: str, run_id: str, *, stage: str = "") -> Optional[dict]:
+    with _lock:
+        data = _read(session_id)
+        row = _run(data, run_id)
+        if row is None or str(row.get("status") or "") in _TERMINAL:
+            return None
+        row["heartbeat_at"] = _now()
+        if stage:
+            row["stage"] = str(stage)[:300]
+        _write(session_id, data)
+        return json.loads(json.dumps(row))
+
+
+def finish_run(session_id: str, run_id: str, status: str, *, reason: str = "") -> Optional[dict]:
+    with _lock:
+        data = _read(session_id)
+        row = _run(data, run_id)
+        if row is None:
+            return None
+        if str(row.get("status") or "") not in {"stale", "orphaned", "budget_exhausted"}:
+            row["status"] = str(status or "finished")
+        row["finished_at"] = _now()
+        row["heartbeat_at"] = row["finished_at"]
+        if reason:
+            row["terminal_reason"] = str(reason)[:4000]
+        _write(session_id, data)
+        return json.loads(json.dumps(row))
+
+
+def normalize_pricing(pricing: Optional[dict]) -> dict:
+    src = pricing if isinstance(pricing, dict) else {}
+    return {
+        "input_per_million": _float(
+            src.get("input_per_million", src.get("input_cost_per_million"))
+        ),
+        "output_per_million": _float(
+            src.get("output_per_million", src.get("output_cost_per_million"))
+        ),
+        "cache_read_per_million": _float(
+            src.get("cache_read_per_million", src.get("cache_read_cost_per_million"))
+        ),
+        "cache_write_per_million": _float(
+            src.get("cache_write_per_million", src.get("cache_write_cost_per_million"))
+        ),
+    }
+
+
+def calculate_cost(usage: Optional[dict], pricing: Optional[dict]) -> dict:
+    u = usage if isinstance(usage, dict) else {}
+    p = normalize_pricing(pricing)
+    prompt = _int(u.get("prompt_tokens"))
+    completion = _int(u.get("completion_tokens"))
+    cache_read = _int(u.get("prompt_cache_hit_tokens"))
+    cache_write = _int(
+        u.get("prompt_cache_write_tokens", u.get("cache_creation_input_tokens"))
+    )
+    cache_miss = _int(u.get("prompt_cache_miss_tokens"))
+    if cache_miss <= 0:
+        cache_miss = max(0, prompt - cache_read)
+    parts = {
+        "input": cache_miss * p["input_per_million"] / 1_000_000.0,
+        "output": completion * p["output_per_million"] / 1_000_000.0,
+        "cache_read": cache_read * p["cache_read_per_million"] / 1_000_000.0,
+        "cache_write": cache_write * p["cache_write_per_million"] / 1_000_000.0,
+    }
+    return {
+        "currency": "USD",
+        **{key: round(value, 12) for key, value in parts.items()},
+        "total": round(sum(parts.values()), 12),
+    }
+
+
+def record_usage(
+    session_id: str,
+    run_id: str,
+    usage: Optional[dict],
+    *,
+    pricing: Optional[dict] = None,
+) -> Optional[dict]:
+    with _lock:
+        data = _read(session_id)
+        row = _run(data, run_id)
+        if row is None:
+            return None
+        current = row.setdefault("usage", {})
+        clean_usage = {
+            str(key): _int(value)
+            for key, value in (usage or {}).items()
+            if isinstance(value, (int, float)) and not str(key).startswith("_")
+        }
+        for key, value in clean_usage.items():
+            current[key] = _int(current.get(key)) + value
+        active_pricing = normalize_pricing(pricing or row.get("pricing"))
+        row["pricing"] = active_pricing
+        row["cost"] = calculate_cost(current, active_pricing)
+        budget = row.get("cost_budget_usd")
+        row["cost_budget_exhausted"] = bool(
+            budget is not None and _float(row["cost"].get("total")) >= _float(budget)
+        )
+        row["heartbeat_at"] = _now()
+        _write(session_id, data)
+        return json.loads(json.dumps(row))
+
+
+def budget_exhausted(session_id: str, run_id: str) -> bool:
+    with _lock:
+        row = _run(_read(session_id), run_id)
+        return bool(row and row.get("cost_budget_exhausted"))
+
+
+def record_file_changes(
+    session_id: str,
+    run_id: str,
+    changes: Iterable[dict],
+    *,
+    tool: str = "",
+) -> Optional[dict]:
+    with _lock:
+        data = _read(session_id)
+        row = _run(data, run_id)
+        if row is None:
+            return None
+        existing = {
+            (str(item.get("path") or ""), str(item.get("operation") or "")): item
+            for item in (row.get("file_changes") or [])
+            if isinstance(item, dict)
+        }
+        for raw in changes or ():
+            if not isinstance(raw, dict):
+                continue
+            path = str(raw.get("path") or "").strip()
+            if not path:
+                continue
+            operation = str(raw.get("operation") or "modified")
+            item = {
+                "path": path[:4000],
+                "operation": operation[:80],
+                "tool": str(tool or raw.get("tool") or "")[:200],
+                "observed_at": _now(),
+            }
+            if raw.get("source"):
+                item["source"] = str(raw.get("source"))[:80]
+            existing[(item["path"], item["operation"])] = item
+        row["file_changes"] = list(existing.values())[-2000:]
+        row["heartbeat_at"] = _now()
+        _write(session_id, data)
+        return json.loads(json.dumps(row))
+
+
+def snapshot(session_id: str) -> dict:
+    with _lock:
+        return json.loads(json.dumps(_read(session_id)))
+
+
+def _parse_time(value: Any) -> Optional[datetime]:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        return datetime.fromisoformat(text.replace("Z", "+00:00")).astimezone(timezone.utc)
+    except ValueError:
+        return None
+
+
+def scan_stale_runs(
+    max_age_seconds: float,
+    *,
+    live_checker: Optional[Callable[[str, str], bool]] = None,
+    mark: bool = True,
+    terminal_status: str = "stale",
+) -> list[dict]:
+    if _sessions_root is None or not _sessions_root.exists():
+        return []
+    cutoff = max(1.0, float(max_age_seconds))
+    now = datetime.now(timezone.utc)
+    stale: list[dict] = []
+    with _lock:
+        for path in _sessions_root.rglob("runtime_observability.json"):
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            sid = str(data.get("session_id") or path.parent.name)
+            changed = False
+            for row in data.get("runs") or []:
+                if not isinstance(row, dict) or str(row.get("status") or "") != "running":
+                    continue
+                rid = str(row.get("run_id") or "")
+                if live_checker is not None:
+                    try:
+                        if live_checker(sid, rid):
+                            continue
+                    except Exception:
+                        pass
+                stamp = _parse_time(row.get("heartbeat_at") or row.get("started_at"))
+                age = cutoff + 1 if stamp is None else max(0.0, (now - stamp).total_seconds())
+                if age <= cutoff:
+                    continue
+                item = {
+                    "session_id": sid,
+                    "run_id": rid,
+                    "age_seconds": round(age, 3),
+                    "kind": str(row.get("kind") or "agent"),
+                }
+                stale.append(item)
+                if mark:
+                    row["status"] = terminal_status
+                    row["finished_at"] = _now()
+                    row["stale_reason"] = f"heartbeat older than {cutoff:g}s"
+                    changed = True
+            if changed:
+                tmp = path.with_suffix(".json.tmp")
+                tmp.write_text(
+                    json.dumps(data, ensure_ascii=False, separators=(",", ":")),
+                    encoding="utf-8",
+                )
+                os.replace(tmp, path)
+    return stale
+
+
+def scan_timed_out_runs(
+    max_runtime_seconds: float,
+    *,
+    mark: bool = True,
+) -> list[dict]:
+    if _sessions_root is None or not _sessions_root.exists():
+        return []
+    timeout = max(1.0, float(max_runtime_seconds))
+    now = datetime.now(timezone.utc)
+    expired: list[dict] = []
+    with _lock:
+        for path in _sessions_root.rglob("runtime_observability.json"):
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            sid = str(data.get("session_id") or path.parent.name)
+            changed = False
+            for row in data.get("runs") or []:
+                if not isinstance(row, dict) or str(row.get("status") or "") != "running":
+                    continue
+                started = _parse_time(row.get("started_at"))
+                age = timeout + 1 if started is None else max(0.0, (now - started).total_seconds())
+                if age <= timeout:
+                    continue
+                rid = str(row.get("run_id") or "")
+                expired.append(
+                    {
+                        "session_id": sid,
+                        "run_id": rid,
+                        "age_seconds": round(age, 3),
+                        "kind": str(row.get("kind") or "agent"),
+                    }
+                )
+                if mark:
+                    row["status"] = "stale"
+                    row["finished_at"] = _now()
+                    row["stale_reason"] = f"runtime exceeded {timeout:g}s"
+                    changed = True
+            if changed:
+                tmp = path.with_suffix(".json.tmp")
+                tmp.write_text(
+                    json.dumps(data, ensure_ascii=False, separators=(",", ":")),
+                    encoding="utf-8",
+                )
+                os.replace(tmp, path)
+    return expired
+
+
+def reconcile_orphaned_runs(
+    *,
+    live_checker: Optional[Callable[[str, str], bool]] = None,
+) -> list[dict]:
+    """Mark every persisted non-live ``running`` row as orphaned at startup."""
+    if _sessions_root is None or not _sessions_root.exists():
+        return []
+    orphaned: list[dict] = []
+    with _lock:
+        for path in _sessions_root.rglob("runtime_observability.json"):
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            sid = str(data.get("session_id") or path.parent.name)
+            changed = False
+            for row in data.get("runs") or []:
+                if not isinstance(row, dict) or str(row.get("status") or "") != "running":
+                    continue
+                rid = str(row.get("run_id") or "")
+                if live_checker is not None:
+                    try:
+                        if live_checker(sid, rid):
+                            continue
+                    except Exception:
+                        pass
+                orphaned.append(
+                    {
+                        "session_id": sid,
+                        "run_id": rid,
+                        "kind": str(row.get("kind") or "agent"),
+                    }
+                )
+                row["status"] = "orphaned"
+                row["finished_at"] = _now()
+                row["stale_reason"] = "process restarted before run completion"
+                changed = True
+            if changed:
+                tmp = path.with_suffix(".json.tmp")
+                tmp.write_text(
+                    json.dumps(data, ensure_ascii=False, separators=(",", ":")),
+                    encoding="utf-8",
+                )
+                os.replace(tmp, path)
+    return orphaned
+
+
+def _git_output(root: Path, args: list[str]) -> Optional[bytes]:
+    try:
+        return subprocess.run(
+            ["git", "-C", str(root), *args],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            timeout=15,
+            check=True,
+        ).stdout
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
+def capture_workspace_state(work_dir: str | Path | None) -> dict:
+    """Capture a cheap Git-aware state used to audit arbitrary tool writes."""
+    if not work_dir:
+        return {"root": "", "files": {}}
+    root_raw = Path(work_dir).resolve()
+    top = _git_output(root_raw, ["rev-parse", "--show-toplevel"])
+    root = (
+        Path(top.decode("utf-8", errors="replace").strip()).resolve()
+        if top is not None
+        else root_raw
+    )
+    status = (
+        _git_output(root, ["status", "--porcelain=v1", "-z", "--untracked-files=all"])
+        if top is not None
+        else b""
+    )
+    files: Dict[str, dict] = {}
+    if status is None:
+        status = b""
+    chunks = status.decode("utf-8", errors="replace").split("\0")
+    index = 0
+    while index < len(chunks):
+        item = chunks[index]
+        index += 1
+        if not item:
+            continue
+        code = item[:2]
+        rel = item[3:] if len(item) > 3 else ""
+        if code and code[0] in {"R", "C"} and index < len(chunks):
+            rel = chunks[index] or rel
+            index += 1
+        if not rel:
+            continue
+        target = root / rel
+        fingerprint = "missing"
+        try:
+            stat = target.stat()
+            if target.is_file():
+                digest = hashlib.sha256()
+                with target.open("rb") as handle:
+                    for block in iter(lambda: handle.read(1024 * 1024), b""):
+                        digest.update(block)
+                fingerprint = f"{stat.st_size}:{stat.st_mtime_ns}:{digest.hexdigest()}"
+            else:
+                fingerprint = f"dir:{stat.st_mtime_ns}"
+        except OSError:
+            pass
+        files[rel.replace("\\", "/")] = {"status": code, "fingerprint": fingerprint}
+    full_snapshot = str(
+        os.getenv("FILE_AUDIT_FULL_SNAPSHOT", "1")
+    ).strip().lower() not in {"0", "false", "no", "off"}
+    if full_snapshot:
+        excluded = {
+            ".git",
+            ".hg",
+            ".svn",
+            ".venv",
+            "venv",
+            "node_modules",
+            "__pycache__",
+            ".pytest_cache",
+            ".trash",
+            "sessions",
+        }
+        limit = max(1000, int(os.getenv("FILE_AUDIT_MAX_FILES", "100000")))
+        seen_count = 0
+        for current_root, dirnames, filenames in os.walk(root):
+            dirnames[:] = [
+                name
+                for name in dirnames
+                if name not in excluded and not name.startswith(".myagent-worktrees")
+            ]
+            current = Path(current_root)
+            for filename in filenames:
+                seen_count += 1
+                if seen_count > limit:
+                    return {
+                        "root": str(root),
+                        "files": files,
+                        "truncated": True,
+                    }
+                target = current / filename
+                try:
+                    rel = target.relative_to(root).as_posix()
+                    stat = target.stat()
+                except OSError:
+                    continue
+                if rel in files:
+                    continue
+                files[rel] = {
+                    "status": "FS",
+                    "fingerprint": f"{stat.st_size}:{stat.st_mtime_ns}",
+                }
+    return {"root": str(root), "files": files}
+
+
+def diff_workspace_states(before: Optional[dict], after: Optional[dict]) -> list[dict]:
+    left = (before or {}).get("files") if isinstance(before, dict) else {}
+    right = (after or {}).get("files") if isinstance(after, dict) else {}
+    left = left if isinstance(left, dict) else {}
+    right = right if isinstance(right, dict) else {}
+    changes: list[dict] = []
+    for path in sorted(set(left) | set(right)):
+        if left.get(path) == right.get(path):
+            continue
+        if path not in right:
+            operation = "deleted"
+        elif path not in left:
+            operation = "created"
+        else:
+            status = str((right.get(path) or {}).get("status") or "")
+            operation = "deleted" if "D" in status else "modified"
+        status = str(
+            ((right if path in right else left).get(path) or {}).get("status") or ""
+        )
+        changes.append(
+            {
+                "path": path,
+                "operation": operation,
+                "source": "filesystem_snapshot" if status == "FS" else "git_worktree",
+            }
+        )
+    return changes
