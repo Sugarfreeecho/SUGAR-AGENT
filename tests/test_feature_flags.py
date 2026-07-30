@@ -694,7 +694,15 @@ def test_frontend_session_restore_distinguishes_loaded_cached_and_running_sessio
     assert "wrap.scrollIntoView({ behavior: scrollBehavior, block: 'start' });" in scroll
     assert "function restoreCachedSessionScrollPosition(sessionId)" in scroll
     assert "setScrollTopImmediate(chatContainer, Number(saved))" in scroll
-    assert "var loadedOk = await loadSessionMessages(sessionId, 'saved-smooth-or-bottom'" in sessions
+    assert "var restoredRunningStream = false;" in sessions
+    assert "var sessionIsRunningNow = !!(" in sessions
+    assert "isServerStreamActive(sessionId)" in sessions
+    assert "restoredFromCache && !sessionHadUnreadResult && !sessionIsRunningNow" in sessions
+    assert "sessionIsRunningNow && typeof scrollCurrentRunningProcessToBottom" in sessions
+    assert "var allAggs = stream.querySelectorAll('.process-aggregate');" in scroll
+    assert "var loadedOk = await loadSessionMessages(sessionId, 'smooth-bottom'" in sessions
+    assert "scrollToBottom({ smooth: mode === 'smooth-bottom' });" in rendering
+    assert "sessionHadUnreadResult = !!(" in sessions
 
 
 def test_frontend_older_history_auto_load_preserves_viewport():
