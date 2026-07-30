@@ -16,6 +16,7 @@ import win32con
 import win32event
 import win32gui
 import winerror
+import dotenv
 
 from python_runtime import configure_agent_python_environment, preferred_python
 
@@ -43,10 +44,16 @@ MENU_TEXT_RESTART = "\u91cd\u542f"
 MENU_TEXT_UPDATE = "\u66f4\u65b0"
 MENU_TEXT_EXIT = "\u9000\u51fa Agent"
 
+# Disabled by default: updating and restarting can interrupt active work.
+TRAY_LIFECYCLE_MENU_ENV_VAR = "MYAGENT_TRAY_SHOW_UPDATE_RESTART"
+_TRUE_ENV_VALUES = {"1", "true", "yes", "on"}
+
 MSG_RESTART_CONFIRM = "\u91cd\u542f\u4f1a\u4e2d\u65ad\u5f53\u524d\u6b63\u5728\u8fd0\u884c\u7684\u4efb\u52a1\uff0c\u662f\u5426\u7ee7\u7eed\uff1f"
 MSG_RESTARTING = "\u6b63\u5728\u91cd\u542f Agent..."
 MSG_RESTARTED = "Agent \u5df2\u91cd\u542f\u3002"
 MSG_RESTART_FAILED = "Agent \u91cd\u542f\u5931\u8d25\uff0c\u8bf7\u67e5\u770b\u7ec8\u7aef\u65e5\u5fd7\u3002"
+MSG_UNEXPECTED_EXIT = "Agent \u540e\u7aef\u5f02\u5e38\u9000\u51fa\uff0c\u6b63\u5728\u81ea\u52a8\u6062\u590d..."
+MSG_CRASH_LOOP_STOPPED = "Agent \u5728\u77ed\u65f6\u95f4\u5185\u591a\u6b21\u5f02\u5e38\u9000\u51fa\uff0c\u5df2\u505c\u6b62\u81ea\u52a8\u91cd\u542f\u3002"
 MSG_UPDATE_CONFIRM = (
     "\u66f4\u65b0\u4f1a\u4e2d\u65ad\u5f53\u524d\u4efb\u52a1\uff0c\u5e76\u4ece Git \u8fdc\u7a0b\u62c9\u53d6\u6700\u65b0\u4ee3\u7801\u540e\u81ea\u52a8\u91cd\u542f\u3002\n\n"
     "\u672c\u5730\u4fee\u6539\u4e0d\u4f1a\u88ab\u5f3a\u5236\u8986\u76d6\u3002\u662f\u5426\u7ee7\u7eed\uff1f"
@@ -58,6 +65,7 @@ PORT = 8192
 BASE_URL = f"http://{HOST}:{PORT}"
 WM_TRAY = win32con.WM_USER + 20
 WM_RESTORE_TRAY = win32con.WM_USER + 21
+WM_RESTART_AGENT = win32con.WM_USER + 22
 TASKBAR_CREATED = win32gui.RegisterWindowMessage("TaskbarCreated")
 
 MENU_OPEN_WEBUI = 1001
@@ -76,6 +84,9 @@ CTRL_CLOSE_EVENT = 2
 CTRL_LOGOFF_EVENT = 5
 CTRL_SHUTDOWN_EVENT = 6
 GRACEFUL_STOP_TIMEOUT_SECONDS = 2
+UNEXPECTED_EXIT_RESTART_LIMIT = 3
+UNEXPECTED_EXIT_WINDOW_SECONDS = 60
+UNEXPECTED_EXIT_POLL_SECONDS = 0.5
 
 ROOT = Path(__file__).resolve().parents[1]
 PYTHON_EXE = preferred_python(ROOT)
@@ -86,7 +97,26 @@ PYTHONW_EXE = preferred_python(ROOT, windowed=True)
 COLORED_LOG_VIEWER = ROOT / "app" / "colored_log_viewer.ps1"
 UPDATER_PY = ROOT / "app" / "agent_updater.py"
 TRAY_ICON_FILE = ROOT / "app" / "assets" / "sugar_tray.ico"
+TRAY_ENV_FILE = ROOT / "app" / ".env"
 WINDOW_CLASS_NAME = "MyAgentTrayLauncherWindow"
+
+
+def _tray_lifecycle_menu_enabled() -> bool:
+    """Return whether the tray's update and restart menu items should be shown.
+
+    Read the app .env for every popup so a change saved through Advanced
+    Settings takes effect without having to restart the tray launcher.
+    """
+    raw = os.getenv(TRAY_LIFECYCLE_MENU_ENV_VAR, "0")
+    env_file = TRAY_ENV_FILE
+    if env_file.is_file():
+        try:
+            configured = dotenv.dotenv_values(env_file).get(TRAY_LIFECYCLE_MENU_ENV_VAR)
+            if configured is not None:
+                raw = configured
+        except OSError as exc:
+            _append_log(f"Unable to read tray menu setting from {env_file}: {exc}")
+    return str(raw or "").strip().lower() in _TRUE_ENV_VALUES
 
 
 def _append_log(line: str = "") -> None:
@@ -137,6 +167,46 @@ def _notify_existing_instance(open_browser: bool = True) -> bool:
         return False
 
 
+def _request_existing_restart() -> bool:
+    hwnd = _find_existing_tray_window()
+    if not hwnd:
+        return False
+    try:
+        win32gui.PostMessage(hwnd, WM_RESTART_AGENT, 0, 0)
+        return True
+    except win32gui.error as exc:
+        _append_log(f"Unable to request Agent restart: {exc}")
+        return False
+
+
+def _stop_listener_on_port() -> None:
+    """Stop only the validated local listener so a fresh launcher can take over."""
+    try:
+        output = subprocess.check_output(
+            ["netstat", "-ano", "-p", "tcp"],
+            text=True,
+            encoding="utf-8",
+            errors="ignore",
+            creationflags=subprocess.CREATE_NO_WINDOW,
+        )
+    except Exception as exc:
+        _append_log(f"Unable to inspect port {PORT}: {exc}")
+        return
+    for line in output.splitlines():
+        parts = line.split()
+        if len(parts) < 5 or parts[0].upper() != "TCP":
+            continue
+        if parts[3].upper() != "LISTENING" or not parts[1].endswith(f":{PORT}") or not parts[4].isdigit():
+            continue
+        subprocess.run(
+            ["taskkill", "/PID", parts[4], "/T", "/F"],
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            creationflags=subprocess.CREATE_NO_WINDOW,
+        )
+
+
 def _spawn_daemon() -> None:
     daemon_python = PYTHONW_EXE
     env = os.environ.copy()
@@ -166,13 +236,19 @@ def run_starter() -> int:
         return 1
 
     if _is_port_listening():
-        print(MSG_RUNNING)
-        _append_log(MSG_RUNNING)
-        notified = _notify_existing_instance(open_browser=True)
-        if not notified:
-            _spawn_daemon()
-        _open_url_in_browser("/", refresh=True)
-        return 0
+        # RUN.bat is an explicit replacement launch: tell the owning tray to
+        # stop its child and start a fresh Agent process.  A stale listener
+        # without a tray owner is terminated before spawning a new owner.
+        print(MSG_RESTARTING)
+        _append_log(MSG_RESTARTING)
+        if _request_existing_restart():
+            _open_url_in_browser("/", refresh=True)
+            return 0
+        _stop_listener_on_port()
+        stop_deadline = time.monotonic() + 5
+        while _is_port_listening() and time.monotonic() < stop_deadline:
+            time.sleep(0.1)
+        _spawn_daemon()
 
     _reset_log()
     _append_log("=" * 50)
@@ -209,6 +285,7 @@ class TrayLauncher:
         self.exiting = False
         self.lifecycle_busy = False
         self._lifecycle_lock = threading.Lock()
+        self._watchdog_thread = None
         self.mutex = win32event.CreateMutex(None, True, "MyAgentTrayLauncher")
         self.already_running = win32api.GetLastError() == winerror.ERROR_ALREADY_EXISTS
         self.console_hwnd = ctypes.windll.kernel32.GetConsoleWindow()
@@ -231,6 +308,7 @@ class TrayLauncher:
         else:
             self._start_agent()
         self._watch_startup()
+        self._start_process_watchdog()
         win32gui.PumpMessages()
         return 0
 
@@ -255,6 +333,7 @@ class TrayLauncher:
         message_map = {
             WM_TRAY: self._on_tray,
             WM_RESTORE_TRAY: self._on_restore_tray,
+            WM_RESTART_AGENT: self._on_external_restart,
             TASKBAR_CREATED: self._on_taskbar_created,
             win32con.WM_COMMAND: self._on_command,
             win32con.WM_DESTROY: self._on_destroy,
@@ -329,6 +408,9 @@ class TrayLauncher:
         configure_agent_python_environment(env, ROOT)
         env["PYTHONIOENCODING"] = "utf-8"
         env["OPEN_BROWSER"] = "0"
+        env["MYAGENT_TRAY_PID"] = str(os.getpid())
+        env["MYAGENT_SUPERVISOR_PID"] = str(os.getpid())
+        env["MYAGENT_SERVER_PORT"] = str(PORT)
         try:
             self.proc = subprocess.Popen(
                 [str(PYTHON_EXE), str(MAIN_PY)],
@@ -340,6 +422,72 @@ class TrayLauncher:
             )
         finally:
             log.close()
+
+    def _start_process_watchdog(self) -> None:
+        if self._watchdog_thread and self._watchdog_thread.is_alive():
+            return
+        self._watchdog_thread = threading.Thread(
+            target=self._watch_agent_process,
+            name="agent-process-watchdog",
+            daemon=True,
+        )
+        self._watchdog_thread.start()
+
+    def _watch_agent_process(self) -> None:
+        """Boundedly restart a backend that exits outside a lifecycle action."""
+
+        restart_times: list[float] = []
+        while not self.exiting:
+            time.sleep(UNEXPECTED_EXIT_POLL_SECONDS)
+            proc = self.proc
+            if proc is None or proc.poll() is None:
+                continue
+            if not self._claim_lifecycle_action():
+                continue
+            try:
+                if self.exiting or self.proc is not proc:
+                    continue
+                now = time.monotonic()
+                restart_times = [
+                    stamp
+                    for stamp in restart_times
+                    if now - stamp <= UNEXPECTED_EXIT_WINDOW_SECONDS
+                ]
+                if len(restart_times) >= UNEXPECTED_EXIT_RESTART_LIMIT:
+                    _append_log(
+                        f"{MSG_CRASH_LOOP_STOPPED} last_exit_code={proc.returncode}"
+                    )
+                    self.proc = None
+                    return
+                restart_times.append(now)
+                attempt = len(restart_times)
+                _append_log(
+                    f"{MSG_UNEXPECTED_EXIT} exit_code={proc.returncode} "
+                    f"attempt={attempt}/{UNEXPECTED_EXIT_RESTART_LIMIT}"
+                )
+                self.proc = None
+                if self._is_listening():
+                    _append_log(
+                        "Unexpected backend exit was already replaced by another listener."
+                    )
+                    continue
+                time.sleep(min(2.0, 0.25 * (2 ** (attempt - 1))))
+                if self.exiting:
+                    return
+                self._start_agent()
+                if self._watch_startup():
+                    _append_log(
+                        f"Agent auto-recovery succeeded pid={self.proc.pid if self.proc else 'unknown'}"
+                    )
+                else:
+                    _append_log("Agent auto-recovery start failed.")
+            except Exception as exc:
+                _append_log(
+                    f"Agent auto-recovery failed: {type(exc).__name__}: {exc}"
+                )
+            finally:
+                with self._lifecycle_lock:
+                    self.lifecycle_busy = False
 
     def _watch_startup(self) -> bool:
         deadline = time.monotonic() + 120
@@ -370,6 +518,11 @@ class TrayLauncher:
             print(f"Tray handler error: {exc}")
         return True
 
+    def _on_external_restart(self, hwnd, msg, wparam, lparam):
+        if self._claim_lifecycle_action():
+            threading.Thread(target=self._restart_agent_worker, name="agent-external-restart", daemon=True).start()
+        return 0
+
     def _on_restore_tray(self, hwnd, msg, wparam, lparam):
         try:
             self._add_tray_icon()
@@ -395,10 +548,11 @@ class TrayLauncher:
             win32gui.AppendMenu(menu, win32con.MF_STRING, MENU_VIEW_TERMINAL, MENU_TEXT_TERMINAL)
             win32gui.AppendMenu(menu, win32con.MF_SEPARATOR, 0, "")
 
-            lifecycle_flags = win32con.MF_GRAYED if self.lifecycle_busy else win32con.MF_STRING
-            win32gui.AppendMenu(menu, lifecycle_flags, MENU_RESTART, MENU_TEXT_RESTART)
-            win32gui.AppendMenu(menu, lifecycle_flags, MENU_UPDATE, MENU_TEXT_UPDATE)
-            win32gui.AppendMenu(menu, win32con.MF_SEPARATOR, 0, "")
+            if _tray_lifecycle_menu_enabled():
+                lifecycle_flags = win32con.MF_GRAYED if self.lifecycle_busy else win32con.MF_STRING
+                win32gui.AppendMenu(menu, lifecycle_flags, MENU_RESTART, MENU_TEXT_RESTART)
+                win32gui.AppendMenu(menu, lifecycle_flags, MENU_UPDATE, MENU_TEXT_UPDATE)
+                win32gui.AppendMenu(menu, win32con.MF_SEPARATOR, 0, "")
             win32gui.AppendMenu(menu, win32con.MF_STRING, MENU_EXIT, MENU_TEXT_EXIT)
 
             # Windows renders the default item in bold, giving the primary action
