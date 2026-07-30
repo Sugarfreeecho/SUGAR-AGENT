@@ -16,6 +16,7 @@ DEFAULT_UNKNOWN_OUTPUT_TOKENS = 8_192
 CONTEXT_PROBE_TOKEN_COUNT = 3_000_000
 CONTEXT_PROBE_TIMEOUT = 8.0
 LEGACY_ENV_IMPORT_MARKER = "imported_from_legacy_env"
+MULTIMODAL_MODES = frozenset({"auto", "enabled", "disabled"})
 
 CONTEXT_LIMIT_FIELDS = (
     "context_window",
@@ -250,6 +251,32 @@ def infer_model_task_capabilities(
     }
 
 
+def normalize_multimodal_mode(value: Any, default: str = "auto") -> str:
+    mode = str(value or "").strip().lower()
+    if mode in MULTIMODAL_MODES:
+        return mode
+    return default if default in MULTIMODAL_MODES else "auto"
+
+
+def infer_multimodal_input(model_id: str, profile_name: str = "") -> bool:
+    inferred = infer_model_task_capabilities(model_id, profile_name)
+    return "multimodal_candidate" in set(inferred.get("capability_tags") or ())
+
+
+def profile_multimodal_input(profile: object) -> bool:
+    if not isinstance(profile, dict):
+        return False
+    mode = normalize_multimodal_mode(profile.get("multimodal_mode"))
+    if mode == "enabled":
+        return True
+    if mode == "disabled":
+        return False
+    return infer_multimodal_input(
+        str(profile.get("model") or ""),
+        str(profile.get("name") or ""),
+    )
+
+
 def _normalize_base_url(base_url: str) -> str:
     url = str(base_url or "").strip().rstrip("/")
     if not url:
@@ -418,6 +445,21 @@ def public_profile(profile: dict) -> dict:
     if custom_description:
         out["capability_description"] = custom_description
         out["capability_source"] = "manual"
+    multimodal_mode = normalize_multimodal_mode(profile.get("multimodal_mode"))
+    multimodal_input = profile_multimodal_input(profile)
+    out["multimodal_mode"] = multimodal_mode
+    out["multimodal_input"] = multimodal_input
+    out["multimodal_source"] = str(
+        profile.get("multimodal_source")
+        or ("automatic:model-family-heuristic" if multimodal_mode == "auto" else "manual")
+    )
+    tags = list(out.get("capability_tags") or [])
+    if multimodal_input:
+        if "multimodal" not in tags:
+            tags.append("multimodal")
+    else:
+        tags = [tag for tag in tags if tag != "multimodal_candidate"]
+    out["capability_tags"] = tags
     return out
 
 
@@ -588,11 +630,25 @@ def upsert_profile(project_root: Path, payload: dict) -> dict:
             "reasoning_effort": _clean_reasoning_effort(payload.get("reasoning_effort")),
             "temperature": str(payload.get("temperature") or "").strip(),
             "extra_body_json": str(payload.get("extra_body_json") or "").strip(),
+            "multimodal_mode": normalize_multimodal_mode(
+                payload.get("multimodal_mode"),
+                normalize_multimodal_mode((old or {}).get("multimodal_mode")),
+            ),
             "priority": _safe_int(payload.get("priority"), priority_default),
             "enabled": enabled is not False,
             "updated_at": now,
         }
     )
+    if "multimodal_mode" in payload:
+        profile["multimodal_source"] = (
+            "automatic:model-family-heuristic"
+            if profile["multimodal_mode"] == "auto"
+            else "manual"
+        )
+        profile.pop("multimodal_failure_at", None)
+        profile.pop("multimodal_failure_reason", None)
+    elif "multimodal_source" not in profile:
+        profile["multimodal_source"] = "automatic:model-family-heuristic"
     if "capability_description" in payload:
         capability_description = str(payload.get("capability_description") or "").strip()
         if capability_description:
@@ -704,11 +760,34 @@ def profile_cache_key(profile: dict) -> str:
             "reasoning_effort": profile.get("reasoning_effort"),
             "temperature": profile.get("temperature"),
             "extra_body_json": profile.get("extra_body_json"),
+            "multimodal_mode": normalize_multimodal_mode(profile.get("multimodal_mode")),
         },
         sort_keys=True,
         ensure_ascii=False,
     )
     return hashlib.sha256(body.encode("utf-8")).hexdigest()
+
+
+def mark_profile_multimodal_failed(
+    project_root: Path,
+    profile_id: str,
+) -> Optional[dict]:
+    """Persist a provider capability rejection so later requests skip media."""
+    pid = str(profile_id or "").strip()
+    if not pid:
+        return None
+    data = load_store(project_root)
+    for profile in data.get("profiles", []):
+        if not isinstance(profile, dict) or str(profile.get("id") or "") != pid:
+            continue
+        profile["multimodal_mode"] = "disabled"
+        profile["multimodal_source"] = "failure"
+        profile["multimodal_failure_reason"] = "provider_rejected_multimodal_input"
+        profile["multimodal_failure_at"] = _now()
+        profile["updated_at"] = _now()
+        save_store(project_root, data)
+        return dict(profile)
+    return None
 
 
 def discover_models(base_url: str, api_key: str, timeout: float = 20.0) -> List[Dict[str, Any]]:

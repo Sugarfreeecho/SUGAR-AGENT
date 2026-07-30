@@ -728,15 +728,18 @@ def _expand_media_paths_in_text(text: str) -> Any:
             b64 = base64.b64encode(p.read_bytes()).decode("ascii")
             if ext in _IMAGE_EXTS:
                 mime = _IMAGE_MIME.get(ext, "image/png")
+                parts.append({"type": "text", "text": m.group(0)})
                 parts.append({"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}})
                 media_found += 1
             elif ext in _AUDIO_EXTS:
                 fmt = _AUDIO_MIME.get(ext, ext.lstrip("."))
+                parts.append({"type": "text", "text": m.group(0)})
                 parts.append({"type": "input_audio", "input_audio": {"data": b64, "format": fmt}})
                 media_found += 1
             elif ext in _VIDEO_EXTS:
                 # 兼容端差异较大：统一以 image_url/video data URL 透传，失败时模型仍可读文本提示。
                 mime = _VIDEO_MIME.get(ext, "video/mp4")
+                parts.append({"type": "text", "text": m.group(0)})
                 parts.append({"type": "video_url", "video_url": {"url": f"data:{mime};base64,{b64}"}})
                 media_found += 1
             else:
@@ -756,12 +759,128 @@ def _expand_media_paths_in_text(text: str) -> Any:
     return merged
 
 
+def _exception_search_text(exc: BaseException) -> str:
+    """Collect provider error text without depending on one SDK exception shape."""
+    values: List[Any] = [
+        getattr(exc, "message", None),
+        getattr(exc, "body", None),
+        getattr(exc, "code", None),
+        exc,
+    ]
+    response = getattr(exc, "response", None)
+    if response is not None:
+        values.extend(
+            [
+                getattr(response, "text", None),
+                getattr(response, "reason_phrase", None),
+            ]
+        )
+    parts: List[str] = []
+    for value in values:
+        if value is None:
+            continue
+        if isinstance(value, (dict, list, tuple)):
+            try:
+                text = json.dumps(value, ensure_ascii=False)
+            except Exception:
+                text = str(value)
+        else:
+            text = str(value)
+        if text and text not in parts:
+            parts.append(text)
+    return " ".join(parts).lower()
+
+
 def _is_media_input_error(exc: BaseException) -> bool:
-    """Check if API error indicates the model does not support image/audio/video input."""
-    msg = str(getattr(exc, "message", None) or getattr(exc, "body", None) or exc).lower()
-    media_kw = ("image input" in msg or "image_url" in msg or "audio input" in msg or "input_audio" in msg)
-    reason_kw = ("not supported" in msg or "not found" in msg or "no endpoint" in msg)
-    return media_kw and reason_kw
+    """Return True when a provider rejects media capability or media content parts."""
+    msg = _exception_search_text(exc)
+    media_kw = (
+        "image input",
+        "image inputs",
+        "images",
+        "image_url",
+        "input_image",
+        "vision",
+        "audio input",
+        "audio inputs",
+        "input_audio",
+        "video input",
+        "video inputs",
+        "video_url",
+        "multimodal",
+        "multi-modal",
+        "图片",
+        "图像",
+        "音频",
+        "视频",
+        "多模态",
+    )
+    reason_kw = (
+        "not supported",
+        "does not support",
+        "doesn't support",
+        "do not support",
+        "don't support",
+        "unsupported",
+        "not_support",
+        "not available",
+        "cannot process",
+        "can't process",
+        "cannot handle",
+        "can't handle",
+        "only supports text",
+        "text-only",
+        "text only",
+        "not found",
+        "no endpoint",
+        "invalid content type",
+        "unsupported content type",
+        "unsupported_value",
+        "不支持",
+        "无法处理",
+        "仅支持文本",
+    )
+    return any(keyword in msg for keyword in media_kw) and any(
+        keyword in msg for keyword in reason_kw
+    )
+
+
+def _is_stream_options_error(exc: BaseException) -> bool:
+    """Return True only when retrying without stream_options can help."""
+    msg = _exception_search_text(exc)
+    stream_kw = ("stream_options", "include_usage")
+    reason_kw = (
+        "not supported",
+        "does not support",
+        "doesn't support",
+        "unsupported",
+        "unknown",
+        "unexpected",
+        "unrecognized",
+        "extra fields",
+        "extra inputs",
+        "extra_forbidden",
+        "not allowed",
+        "not permitted",
+        "invalid",
+    )
+    return any(keyword in msg for keyword in stream_kw) and any(
+        keyword in msg for keyword in reason_kw
+    )
+
+
+def _api_messages_have_media(api_messages: List[Dict[str, Any]]) -> bool:
+    for message in api_messages:
+        content = message.get("content")
+        if not isinstance(content, list):
+            continue
+        if any(
+            isinstance(part, dict)
+            and part.get("type") in ("image_url", "video_url", "input_audio")
+            for part in content
+        ):
+            return True
+    return False
 
 
 def _strip_media_from_api_messages(api_messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -787,12 +906,44 @@ def _strip_media_from_api_messages(api_messages: List[Dict[str, Any]]) -> List[D
     return cleaned
 
 
+def _append_multimodal_fallback_instruction(
+    api_messages: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    out = list(api_messages)
+    out.append(
+        {
+            "role": "system",
+            "content": (
+                "[多模态回退提示] 当前模型不支持直接识别该多媒体内容。"
+                "可使用 task 工具选择支持多模态输入的模型，调用 subagent 识别多媒体内容；"
+                "若该能力不可用，请明确告知用户。"
+            ),
+        }
+    )
+    return out
+
+
+def _serialized_messages_to_text_only(
+    api_messages: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """Strip serialized media while preserving adjacent local-path text."""
+    if not _api_messages_have_media(api_messages):
+        return api_messages
+    return _append_multimodal_fallback_instruction(
+        _strip_media_from_api_messages(api_messages)
+    )
+
+
 def _is_glm_model(model: str) -> bool:
     s = str(model or "").strip().lower()
     return s.startswith("glm-")
 
 
-def messages_to_openai_params(messages: List[Any]) -> List[Dict[str, Any]]:
+def messages_to_openai_params(
+    messages: List[Any],
+    *,
+    expand_media_paths: bool = True,
+) -> List[Dict[str, Any]]:
     """将 UserMessage / AssistantMessage / ToolMessage / SystemMessage 转为 API messages 列表。"""
     api_msgs: List[Dict[str, Any]] = []
     for m in messages:
@@ -802,7 +953,12 @@ def messages_to_openai_params(messages: List[Any]) -> List[Dict[str, Any]]:
             if isinstance(m.content, list):
                 api_msgs.append({"role": "user", "content": m.content})
             elif isinstance(m.content, str):
-                api_msgs.append({"role": "user", "content": _expand_media_paths_in_text(m.content)})
+                content = (
+                    _expand_media_paths_in_text(m.content)
+                    if expand_media_paths
+                    else m.content
+                )
+                api_msgs.append({"role": "user", "content": content})
             else:
                 api_msgs.append({"role": "user", "content": str(m.content)})
         elif isinstance(m, AssistantMessage):
@@ -834,6 +990,80 @@ def messages_to_openai_params(messages: List[Any]) -> List[Dict[str, Any]]:
             c = getattr(m, "content", str(m))
             api_msgs.append({"role": "user", "content": str(c)})
     return api_msgs
+
+
+def _messages_to_text_only_params(messages: List[Any]) -> List[Dict[str, Any]]:
+    """
+    Rebuild a failed multimodal request from the original messages.
+
+    String user messages keep their original local paths. Already-structured
+    multimodal messages have no recoverable local path, so their media parts
+    use the explicit placeholder instead.
+    """
+    fallback_messages = _strip_media_from_api_messages(
+        messages_to_openai_params(messages, expand_media_paths=False)
+    )
+    return _append_multimodal_fallback_instruction(fallback_messages)
+
+
+def _messages_have_media_input(messages: List[Any]) -> bool:
+    for message in messages:
+        if not isinstance(message, UserMessage):
+            continue
+        content = message.content
+        if isinstance(content, list):
+            if any(
+                isinstance(part, dict)
+                and part.get("type") in ("image_url", "video_url", "input_audio")
+                for part in content
+            ):
+                return True
+            continue
+        if not isinstance(content, str):
+            continue
+        for match in _MEDIA_TOKEN_RE.finditer(content):
+            raw = match.group("qp") or match.group("up") or ""
+            path = Path(raw).expanduser()
+            try:
+                if (
+                    path.is_file()
+                    and path.suffix.lower() in (_IMAGE_EXTS | _AUDIO_EXTS | _VIDEO_EXTS)
+                    and path.stat().st_size <= _MAX_INLINE_MEDIA_BYTES
+                ):
+                    return True
+            except OSError:
+                continue
+    return False
+
+
+def _client_multimodal_input_enabled(client: Any) -> bool:
+    return bool(getattr(client, "_myagent_multimodal_input", False))
+
+
+def _mark_client_multimodal_failed(client: Any, exc: BaseException) -> None:
+    try:
+        setattr(client, "_myagent_multimodal_input", False)
+    except Exception:
+        pass
+    callback = getattr(client, "_myagent_mark_multimodal_failed", None)
+    if callable(callback):
+        try:
+            callback(exc)
+        except Exception:
+            logger.warning("记录模型多模态能力失败", exc_info=True)
+
+
+def _messages_to_params_for_client(
+    client: Any,
+    messages: List[Any],
+) -> List[Dict[str, Any]]:
+    has_media = _messages_have_media_input(messages)
+    if has_media and not _client_multimodal_input_enabled(client):
+        return _messages_to_text_only_params(messages)
+    return messages_to_openai_params(
+        messages,
+        expand_media_paths=_client_multimodal_input_enabled(client),
+    )
 
 
 def parse_assistant_message(
@@ -890,7 +1120,7 @@ def chat_completion(
     omit_temperature: bool = False,
 ) -> ChatCompletion:
     """封装 client.chat.completions.create，支持 tools、extra_body、reasoning_effort（如 DeepSeek 思考模式）。"""
-    api_messages = messages_to_openai_params(messages)
+    api_messages = _messages_to_params_for_client(client, messages)
     kwargs: Dict[str, Any] = dict(
         model=model,
         messages=api_messages,
@@ -908,8 +1138,9 @@ def chat_completion(
         kwargs["reasoning_effort"] = reasoning_effort
 
     last_exc: Optional[BaseException] = None
-    _image_fallback_done = False
-    for attempt in range(OPENAI_MAX_RETRIES):
+    media_fallback_done = False
+    attempt = 0
+    while attempt < OPENAI_MAX_RETRIES:
         t0 = time.monotonic()
         try:
             r = client.chat.completions.create(**kwargs)
@@ -946,14 +1177,15 @@ def chat_completion(
         except Exception as e:
             last_exc = e
             dt = time.monotonic() - t0
-            if _is_media_input_error(e) and not _image_fallback_done:
-                _image_fallback_done = True
+            if _is_media_input_error(e) and not media_fallback_done:
+                media_fallback_done = True
+                _mark_client_multimodal_failed(client, e)
                 logger.warning(
                     "模型 %s 不支持多媒体输入，去掉图片/音频/视频后重试: %s",
                     _masked_model_label(model),
                     _redact_runtime_log_text(e),
                 )
-                kwargs["messages"] = _strip_media_from_api_messages(kwargs["messages"])
+                kwargs["messages"] = _messages_to_text_only_params(messages)
                 continue
             if not _is_retriable_openai_error(e) or attempt >= OPENAI_MAX_RETRIES - 1:
                 logger.warning(
@@ -974,6 +1206,7 @@ def chat_completion(
                 OPENAI_MAX_RETRIES,
             )
             time.sleep(delay)
+            attempt += 1
     assert last_exc is not None
     raise last_exc
 
@@ -1085,7 +1318,7 @@ def run_chat_completion_stream_worker(
             pass
 
     try:
-        api_messages = messages_to_openai_params(messages)
+        api_messages = _messages_to_params_for_client(client, messages)
         kwargs: Dict[str, Any] = dict(
             model=model,
             messages=api_messages,
@@ -1104,6 +1337,8 @@ def run_chat_completion_stream_worker(
             kwargs["reasoning_effort"] = reasoning_effort
         # include_usage 使末包返回 usage；部分兼容端会忽略或报错
         stream = None
+        stream_iter = None
+        first_stream_chunk = _MISSING
 
         def abort_requested() -> bool:
             if should_abort is None:
@@ -1121,7 +1356,7 @@ def run_chat_completion_stream_worker(
                 except Exception:
                     pass
 
-        _image_fallback_done = False
+        media_fallback_done = False
         if transport_observer is not None:
             try:
                 transport_observer.start_transport_trace()
@@ -1134,7 +1369,8 @@ def run_chat_completion_stream_worker(
             tools=len(tools or []),
             max_tokens=max_tokens,
         )
-        for attempt in range(OPENAI_MAX_RETRIES):
+        attempt = 0
+        while attempt < OPENAI_MAX_RETRIES:
             if abort_requested():
                 put_stream_timing("aborted_before_create", attempt=attempt + 1)
                 return
@@ -1145,20 +1381,29 @@ def run_chat_completion_stream_worker(
                         **kwargs, stream_options={"include_usage": True}
                     )
                 except Exception as e1:
+                    if _is_media_input_error(e1) or not _is_stream_options_error(e1):
+                        raise
                     logger.debug("流式 create 无 stream_options 或端点不支持: %s", _redact_runtime_log_text(e1))
                     stream = client.chat.completions.create(**kwargs)
                 put_stream_timing("stream_created", attempt=attempt + 1)
+                stream_iter = iter(stream)
+                try:
+                    first_stream_chunk = next(stream_iter)
+                except StopIteration:
+                    first_stream_chunk = _MISSING
                 break
             except Exception as e:
-                if _is_media_input_error(e) and not _image_fallback_done:
-                    _image_fallback_done = True
+                close_stream_quietly()
+                if _is_media_input_error(e) and not media_fallback_done:
+                    media_fallback_done = True
+                    _mark_client_multimodal_failed(client, e)
                     logger.warning(
                         "流式: 模型 %s 不支持多媒体输入，去掉图片/音频/视频后重试: %s",
                         _masked_model_label(model),
                         _redact_runtime_log_text(e),
                     )
-                    kwargs["messages"] = _strip_media_from_api_messages(kwargs["messages"])
-                    sync_q.put(("status", "[提示] 当前模型不支持图片识别，已自动切换为纯文本模式"))
+                    kwargs["messages"] = _messages_to_text_only_params(messages)
+                    sync_q.put(("status", "[提示] 当前模型不支持多媒体输入，已保留文件路径并切换为纯文本模式"))
                     put_stream_timing("media_fallback_retry", attempt=attempt + 1)
                     continue
                 if not _is_retriable_openai_error(e) or attempt >= OPENAI_MAX_RETRIES - 1:
@@ -1174,6 +1419,7 @@ def run_chat_completion_stream_worker(
                 )
                 put_stream_timing("retry_sleep", attempt=attempt + 1, delay_ms=int(delay * 1000), error=type(e).__name__)
                 time.sleep(delay)
+                attempt += 1
         if stream is None:
             raise RuntimeError("stream 创建失败")
         reasoning_buf = ""
@@ -1232,7 +1478,13 @@ def run_chat_completion_stream_worker(
                 )
             except Exception:
                 pass
-        for chunk in stream:
+        def iter_stream_chunks():
+            if first_stream_chunk is not _MISSING:
+                yield first_stream_chunk
+            if stream_iter is not None:
+                yield from stream_iter
+
+        for chunk in iter_stream_chunks():
             if abort_requested():
                 close_stream_quietly()
                 put_stream_timing("aborted_during_stream")

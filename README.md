@@ -351,6 +351,7 @@ Slash Command 和生命周期回调，也可在同一插件包中携带 Skill、
 - API Base URL 与 API Key
 - 上下文窗口与输出限制
 - 思考模式、reasoning effort、temperature 和额外请求体
+- 多模态输入模式：`auto`、`enabled` 或 `disabled`；接口拒绝多模态后自动持久化为仅文本
 
 首页是否进入配置向导，只取决于自动导入完成后是否存在可用的 model profile；`.env` 中的旧模型字段只用于一次性迁移，不参与运行时回退。
 

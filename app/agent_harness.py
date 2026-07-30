@@ -36,6 +36,9 @@ import model_profiles
 
 from agent_messages import UserMessage, AssistantMessage, ToolMessage, SystemMessage
 from agent_openai import (
+    _api_messages_have_media,
+    _is_media_input_error,
+    _serialized_messages_to_text_only,
     chat_completion,
     parse_assistant_message,
     run_chat_completion_stream_worker,
@@ -867,6 +870,14 @@ def create_openai_client_for_profile(
         http_client=http_client,
         timeout=OPENAI_HTTP_TIMEOUT,
     )
+    try:
+        setattr(
+            client,
+            "_myagent_multimodal_input",
+            model_profiles.profile_multimodal_input(profile),
+        )
+    except Exception:
+        logger.debug("无法向模型客户端附加多模态能力元数据", exc_info=True)
     return client, model_name
 
 
@@ -935,6 +946,13 @@ class _FallbackCompletions:
                 call_kwargs["reasoning_effort"] = item.get("reasoning_effort")
             else:
                 call_kwargs.pop("reasoning_effort", None)
+            request_has_media = _api_messages_have_media(
+                list(call_kwargs.get("messages") or [])
+            )
+            if request_has_media and not bool(item.get("multimodal_input")):
+                call_kwargs["messages"] = _serialized_messages_to_text_only(
+                    list(call_kwargs.get("messages") or [])
+                )
             try:
                 if idx > 0:
                     if last_error is not None:
@@ -947,7 +965,27 @@ class _FallbackCompletions:
                         "当前模型故障，按优先级切换到备用模型: %s",
                         _masked_model_label(str(item.get("model") or "")),
                     )
-                return item["client"].chat.completions.create(**call_kwargs)
+                try:
+                    return item["client"].chat.completions.create(**call_kwargs)
+                except Exception as exc:
+                    if (
+                        request_has_media
+                        and bool(item.get("multimodal_input"))
+                        and _is_media_input_error(exc)
+                    ):
+                        item["multimodal_input"] = False
+                        mark_failed = item.get("mark_multimodal_failed")
+                        if callable(mark_failed):
+                            mark_failed(exc)
+                        self._emit_multimodal_fallback_status(
+                            str(item.get("model") or "")
+                        )
+                        retry_kwargs = dict(call_kwargs)
+                        retry_kwargs["messages"] = _serialized_messages_to_text_only(
+                            list(call_kwargs.get("messages") or [])
+                        )
+                        return item["client"].chat.completions.create(**retry_kwargs)
+                    raise
             except Exception as exc:
                 if _is_network_connectivity_error(exc) and not machine_network_available():
                     logger.info(
@@ -967,6 +1005,25 @@ class _FallbackCompletions:
         if last_error is not None:
             raise last_error
         raise RuntimeError("no model candidates configured")
+
+    def _emit_multimodal_fallback_status(self, model: str) -> None:
+        cb = self._status_callback
+        if not cb:
+            return
+        try:
+            cb(
+                {
+                    "type": "status",
+                    "content": (
+                        f"[提示] {_masked_model_label(model)} 不支持多媒体输入，"
+                        "已更新 Model Profile，并保留文件路径切换为纯文本模式"
+                    ),
+                    "multimodal_fallback": True,
+                    "model": model,
+                }
+            )
+        except Exception:
+            logger.debug("多模态回退状态回调失败", exc_info=True)
 
 
 class _FallbackChat:
@@ -990,6 +1047,9 @@ class FallbackOpenAIClient:
     def __init__(self, candidates: List[Dict[str, Any]]):
         self.candidates = candidates
         self.chat = _FallbackChat(candidates)
+        first = candidates[0] if candidates else {}
+        self._myagent_multimodal_input = bool(first.get("multimodal_input"))
+        self._myagent_mark_multimodal_failed = first.get("mark_multimodal_failed")
 
     def set_status_callback(
         self,
@@ -5587,6 +5647,17 @@ def list_executor_model_profile_choices() -> List[Dict[str, Any]]:
         choice.update(model_profiles.infer_model_task_capabilities(
             choice["model"], choice["name"], choice["context_window"]
         ))
+        choice["multimodal_input"] = model_profiles.profile_multimodal_input(profile)
+        choice["multimodal_mode"] = model_profiles.normalize_multimodal_mode(
+            profile.get("multimodal_mode")
+        )
+        tags = list(choice.get("capability_tags") or [])
+        if choice["multimodal_input"]:
+            if "multimodal" not in tags:
+                tags.append("multimodal")
+        else:
+            tags = [tag for tag in tags if tag != "multimodal_candidate"]
+        choice["capability_tags"] = tags
         choices.append(choice)
     return choices
 
@@ -5620,7 +5691,18 @@ def executor_runtime_snapshot_for_session(session_id: str) -> Dict[str, Any]:
         "temperature": float(first.get("temperature", EXECUTOR_TEMPERATURE)),
         "extra_body": dict(first.get("extra_body") or {}),
         "reasoning_effort": first.get("reasoning_effort"),
+        "multimodal_input": bool(first.get("multimodal_input")),
     }
+
+
+def _record_profile_multimodal_failure(
+    profile_id: str,
+    _error: Optional[BaseException] = None,
+) -> None:
+    updated = model_profiles.mark_profile_multimodal_failed(PROJECT_ROOT, profile_id)
+    if updated is None:
+        return
+    _invalidate_executor_config_cache()
 
 
 def _profile_candidate(profile: dict) -> Dict[str, Any]:
@@ -5634,8 +5716,22 @@ def _profile_candidate(profile: dict) -> Dict[str, Any]:
         )
         _executor_override_cache[cache_key] = cached
     extra_body = _profile_extra_body(profile)
+    profile_id = str(profile.get("id") or "")
+    multimodal_input = model_profiles.profile_multimodal_input(profile)
+    mark_multimodal_failed = (
+        lambda error, pid=profile_id: _record_profile_multimodal_failure(pid, error)
+    )
+    try:
+        setattr(cached[0], "_myagent_multimodal_input", multimodal_input)
+        setattr(
+            cached[0],
+            "_myagent_mark_multimodal_failed",
+            mark_multimodal_failed,
+        )
+    except Exception:
+        logger.debug("无法向模型客户端附加多模态能力元数据", exc_info=True)
     return {
-        "profile_id": str(profile.get("id") or ""),
+        "profile_id": profile_id,
         "client": cached[0],
         "model": cached[1],
         "max_output_tokens": int(profile.get("max_output_tokens") or MAX_OUTPUT_TOKENS),
@@ -5643,6 +5739,8 @@ def _profile_candidate(profile: dict) -> Dict[str, Any]:
         "temperature": _profile_temperature(profile),
         "extra_body": extra_body,
         "reasoning_effort": _profile_reasoning_effort(profile, extra_body),
+        "multimodal_input": multimodal_input,
+        "mark_multimodal_failed": mark_multimodal_failed,
     }
 
 
@@ -5696,6 +5794,7 @@ def resolve_executor_candidates_for_session(
             "temperature",
             "extra_body",
             "reasoning_effort",
+            "multimodal_input",
         ):
             if key in runtime_snapshot:
                 frozen[key] = runtime_snapshot[key]
@@ -5744,6 +5843,7 @@ def resolve_executor_config_for_session(session_id: str) -> Tuple[Any, str, int,
             "temperature",
             "extra_body",
             "reasoning_effort",
+            "multimodal_input",
         ):
             if key in runtime_snapshot:
                 frozen[key] = runtime_snapshot[key]

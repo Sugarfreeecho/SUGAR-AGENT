@@ -428,7 +428,7 @@ SSE 是后端向前端展示 Agent 过程的主通道。事件至少应覆盖以
 
 ### 11.1 LLM 配置
 
-模型名称、类型、API 连接、密钥、窗口限制、推理模式、temperature 与 extra body 必须保存在 model profile 中。旧 `.env` 模型字段仅允许在启动时执行一次性、幂等导入：等价 profile 不得重复创建，导入完成后不得持续覆盖 profile，也不得作为运行时回退。
+模型名称、类型、API 连接、密钥、窗口限制、推理模式、temperature、extra body 与多模态输入模式必须保存在 model profile 中。多模态输入模式支持 `auto`、`enabled`、`disabled`；只有有效状态支持多模态的 profile 才能展开并发送媒体内容，接口明确拒绝后必须持久化为 `disabled`。旧 `.env` 模型字段仅允许在启动时执行一次性、幂等导入：等价 profile 不得重复创建，导入完成后不得持续覆盖 profile，也不得作为运行时回退。
 
 要求：
 

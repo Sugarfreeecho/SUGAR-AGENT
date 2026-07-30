@@ -84,6 +84,61 @@ def test_model_profile_persists_editable_capability_description(tmp_path):
     assert "hard_reasoning" not in automatic["capability_tags"]
 
 
+def test_model_profile_multimodal_mode_controls_effective_capability(tmp_path):
+    automatic = model_profiles.upsert_profile(
+        tmp_path,
+        {
+            "model": "gpt-5.4",
+            "base_url": "https://api.example.com/v1",
+            "api_key": "test-key",
+            "context_window": 128000,
+            "max_output_tokens": 8192,
+        },
+    )
+
+    public = model_profiles.public_profile(automatic)
+    assert public["multimodal_mode"] == "auto"
+    assert public["multimodal_input"] is True
+    assert public["multimodal_source"] == "automatic:model-family-heuristic"
+    assert "multimodal" in public["capability_tags"]
+
+    disabled = model_profiles.upsert_profile(
+        tmp_path,
+        {
+            **automatic,
+            "multimodal_mode": "disabled",
+        },
+    )
+    public_disabled = model_profiles.public_profile(disabled)
+    assert public_disabled["multimodal_input"] is False
+    assert public_disabled["multimodal_source"] == "manual"
+    assert "multimodal" not in public_disabled["capability_tags"]
+    assert "multimodal_candidate" not in public_disabled["capability_tags"]
+
+
+def test_multimodal_send_failure_persists_text_only_profile_state(tmp_path):
+    saved = model_profiles.upsert_profile(
+        tmp_path,
+        {
+            "model": "vision-model",
+            "base_url": "https://api.example.com/v1",
+            "api_key": "test-key",
+            "context_window": 128000,
+            "max_output_tokens": 8192,
+            "multimodal_mode": "enabled",
+        },
+    )
+
+    failed = model_profiles.mark_profile_multimodal_failed(tmp_path, saved["id"])
+    public = model_profiles.public_profile(failed)
+
+    assert failed["multimodal_mode"] == "disabled"
+    assert failed["multimodal_source"] == "failure"
+    assert failed["multimodal_failure_reason"] == "provider_rejected_multimodal_input"
+    assert public["multimodal_input"] is False
+    assert model_profiles.load_store(tmp_path)["profiles"][0]["multimodal_mode"] == "disabled"
+
+
 def test_load_store_reads_legacy_app_location_when_default_missing(tmp_path):
     legacy_dir = tmp_path / "app"
     legacy_dir.mkdir()
@@ -436,6 +491,10 @@ def test_advanced_model_profile_list_wires_drag_drop_reordering():
     assert "'拖动排序':'Drag to reorder'" in i18n
     assert 'id="model-capability-description"' in html
     assert "capability_description:fieldValue(modelEls.capability)" in html
+    assert 'id="model-multimodal-mode"' in html
+    assert 'value="auto">自动识别' in html
+    assert "multimodal_mode:fieldValue(modelEls.multimodal)" in html
+    assert "p.multimodal_source===\"failure\"" in html
 
 
 def test_reorder_profiles_persists_dragged_priority(tmp_path):
