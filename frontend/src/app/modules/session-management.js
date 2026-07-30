@@ -1142,10 +1142,20 @@ async function loadSessionMessages(sessionId, scrollBehavior, opts) {
         else if (!opts.tocAlreadyStarted) rebuildToc();
         updateSessionTitle();
         updateHistorySentinelVisibility();
+        bindExistingLogInteractions();
         applyChatScrollAfterHistoryLoad(sessionId, scrollBehavior);
-        await waitForChatScrollAfterHistoryLoad(sessionId, scrollBehavior);
+        var initialSmoothReachedBottom = await waitForChatScrollAfterHistoryLoad(sessionId, scrollBehavior);
         if (loadToken !== messageLoadEpoch || sessionId !== currentSessionId) return;
-        bindExistingLogs();
+        finalizeExistingLogLayout();
+        if (scrollBehavior === 'smooth-bottom' && initialSmoothReachedBottom) {
+            setScrollTopImmediate(chatContainer, chatContainer.scrollHeight);
+            requestAnimationFrame(function () {
+                requestAnimationFrame(function () {
+                    if (loadToken !== messageLoadEpoch || sessionId !== currentSessionId) return;
+                    setScrollTopImmediate(chatContainer, chatContainer.scrollHeight);
+                });
+            });
+        }
         scheduleTocActiveUpdate();
         scheduleContextTokensAfterPaint(sessionId);
         if (typeof renderLoadedTodoPlanForSession === 'function') {
@@ -1216,6 +1226,7 @@ function beforeSessionMessageSnapshotAvailable() {
 
 async function switchSession(sessionId, opts) {
     opts = opts || {};
+    if (typeof endHistorySmoothScroll === 'function') endHistorySmoothScroll();
     if (currentSessionId === sessionId && !opts.forceReload) return;
     if (opts.forceReload && typeof discardCachedSessionStream === 'function') discardCachedSessionStream(sessionId);
     const switchToken = ++switchSessionEpoch;

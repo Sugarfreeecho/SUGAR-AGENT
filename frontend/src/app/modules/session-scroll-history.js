@@ -685,6 +685,7 @@ var HISTORY_AUTO_LOAD_TOP_PX = 32;
 
 /** 滚到历史顶部附近时自动向前分页；按钮仍保留为加载状态提示和手动兜底。 */
 function maybeAutoLoadOlderHistory() {
+    if (typeof isHistorySmoothScrollActive === 'function' && isHistorySmoothScrollActive()) return;
     if (!chatContainer || chatContainer.scrollTop > HISTORY_AUTO_LOAD_TOP_PX) return;
     void loadOlderHistoryChunk({ trigger: 'scroll-top' });
 }
@@ -792,6 +793,7 @@ async function loadOlderHistoryChunk(opts) {
         if (
             cc && stream && stream.parentNode === cc
             && prependScrollTop != null && prependScrollHeight != null
+            && !(typeof isHistorySmoothScrollActive === 'function' && isHistorySmoothScrollActive())
         ) {
             setScrollTopImmediate(
                 cc,

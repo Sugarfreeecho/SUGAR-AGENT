@@ -135,12 +135,44 @@ function userMessageShouldCollapse(text) {
     return false;
 }
 
+// The backend appends this short, system-owned decoration when Skills are
+// selected. Keep the user's message verbatim, but render the decoration as a
+// runtime-owned span so the English UI can translate it without changing the
+// stored/user-authored content.
+function splitSelectedSkillsUiMessage(text) {
+    var source = String(text == null ? '' : text);
+    var match = source.match(/\n\n(?:(?:已选择|激活) Skill：|Activated Skill:[ \t]*)([^\n]*)$/);
+    if (!match || !String(match[1] || '').trim()) return null;
+    return {
+        message: source.slice(0, match.index),
+        decoration: 'Activated Skill: ' + String(match[1] || '').trim().replace(/、/g, ', '),
+    };
+}
+
+function renderSelectedSkillsUiMessage(container, text, linkifier) {
+    if (!container) return;
+    var source = String(text == null ? '' : text);
+    var parts = splitSelectedSkillsUiMessage(source);
+    container.textContent = '';
+    if (!parts) {
+        container.textContent = source;
+    } else {
+        container.appendChild(document.createTextNode(parts.message));
+        container.appendChild(document.createTextNode('\n\n'));
+        var decoration = document.createElement('span');
+        decoration.className = 'user-msg-selected-skills';
+        if (typeof setUiRuntimeText === 'function') setUiRuntimeText(decoration, parts.decoration);
+        else decoration.textContent = parts.decoration;
+        container.appendChild(decoration);
+    }
+    if (typeof linkifier === 'function') linkifier(container);
+}
+
 function renderUserMessageContent(wrap, div, rawStr, linkifier) {
     var applyLinks = typeof linkifier === 'function' ? linkifier : null;
 
     function setPlain() {
-        div.textContent = rawStr;
-        if (applyLinks) applyLinks(div);
+        renderSelectedSkillsUiMessage(div, rawStr, applyLinks);
     }
 
     function setCollapsed() {
@@ -150,12 +182,10 @@ function renderUserMessageContent(wrap, div, rawStr, linkifier) {
         div.textContent = '';
         var sum = document.createElement('div');
         sum.className = 'user-msg-summary';
-        sum.textContent = buildUserMessageSummary(rawStr);
-        if (applyLinks) applyLinks(sum);
+        renderSelectedSkillsUiMessage(sum, buildUserMessageSummary(rawStr), applyLinks);
         var ful = document.createElement('div');
         ful.className = 'user-msg-full';
-        ful.textContent = rawStr;
-        if (applyLinks) applyLinks(ful);
+        renderSelectedSkillsUiMessage(ful, rawStr, applyLinks);
         var ch = document.createElement('div');
         ch.className = 'user-msg-chevron';
         var arrow = document.createElement('span');

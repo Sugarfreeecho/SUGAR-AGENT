@@ -79,7 +79,7 @@ Object.assign(UI_TRANSLATIONS_EN, {
     '立即发送': 'Send now', '追问发送模式': 'Follow-up send mode', '打断': 'Interrupt', '追加': 'Append', '撤回': 'Withdraw',
     '撤回中': 'Withdrawing', '提交中': 'Submitting', '已追加，等待下一轮': 'Appended, waiting for the next round',
     '已接收，等待插入': 'Received, waiting to insert', '正在接管当前任务': 'Taking over the current task', '发送中': 'Sending', '已发送': 'Sent', '待发送': 'Pending send',
-    '已选择 Skill：': 'Selected Skill: ', '追问接管已保留，等待发送通道释放。': 'Follow-up takeover retained; waiting for the send channel to become available.',
+    '已选择 Skill：': 'Activated Skill: ', '激活 Skill：': 'Activated Skill: ', '追问接管已保留，等待发送通道释放。': 'Follow-up takeover retained; waiting for the send channel to become available.',
     '请求失败': 'Request failed', '撤销失败，请重试。': 'Undo failed. Please try again.'
 });
 Object.assign(UI_TRANSLATIONS_EN, {
@@ -535,7 +535,9 @@ function translateUiString(value) {
         .replace(/正在思考中\.\.\./g, 'Thinking...')
         .replace(/正在重连/g, 'Reconnecting')
         .replace(/^\[历史\/旧版事件\] (.+)$/, '[History/legacy event] $1')
-        .replace(/^已选择 Skill：(.+)$/, 'Selected Skill: $1')
+        .replace(/^(?:已选择|激活) Skill：(.+)$/, function (_, skills) {
+            return 'Activated Skill: ' + String(skills || '').replace(/、/g, ', ');
+        })
         .replace(/^追问暂未发出（发送通道繁忙），已保留待重试: (.+)$/, 'Follow-up not sent (send channel busy); retained for retry: $1')
         .replace(/^追问降级发送未成功，已保留待重试: (.+)$/, 'Fallback follow-up send failed; retained for retry: $1')
         .replace(/^思·/, 'Reasoning · ')

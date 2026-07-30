@@ -3044,7 +3044,7 @@ def _build_agent_message_with_selected_skills(raw_message: str, valid_names: lis
 def _build_ui_message_with_selected_skills(raw_message: str, valid_names: list[str]) -> str:
     if not valid_names:
         return raw_message
-    suffix = "\n\n已选择 Skill：" + "、".join(valid_names)
+    suffix = "\n\nActivated Skill: " + ", ".join(valid_names)
     return raw_message if raw_message.endswith(suffix) else raw_message + suffix
 
 

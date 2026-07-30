@@ -3901,6 +3901,17 @@ body.goal-reviewing .chat-stream *, body.goal-reviewing .subagent-dock * { anima
     display: none; white-space: pre-wrap; word-break: break-word; line-height: 1.65;
 }
 
+/* System-owned skill decoration: keep it visually separate from the user's message. */
+.user-msg-selected-skills {
+    display: block;
+    margin-top: 0.45em;
+    color: var(--text-tertiary);
+    font-size: 0.78em;
+    font-style: italic;
+    line-height: 1.35;
+    opacity: 0.78;
+}
+
 /* 旧实现（:after 渐变线条箭头）已移除，由下方 .chevron-arrow 三角形箭头替代 */
 
 /* ═══════════════ 用户消息折叠 ═══════════════ */

@@ -395,6 +395,26 @@ def test_frontend_terminal_cleanup_discards_tool_and_progress_drafts():
     assert "vis.hidden = true" in sessions_source
 
 
+def test_frontend_terminal_cleanup_never_creates_empty_process_groups():
+    render_source = (ROOT / "frontend/src/app/modules/message-rendering.js").read_text(encoding="utf-8")
+
+    existing_body = render_source.split("function getExistingProcessBody", 1)[1].split(
+        "function autoResizeTextarea", 1
+    )[0]
+    temporary_cleanup = render_source.split("function removeTemporaryStatus", 1)[1].split(
+        "function appendToolCallDelta", 1
+    )[0]
+    tool_cleanup = render_source.split("function removeAbortedToolDraftRows", 1)[1].split(
+        "function appendToolPendingRow", 1
+    )[0]
+
+    assert "ensureProcessGroup" not in existing_body
+    assert "getProcessBody(ctx)" not in temporary_cleanup
+    assert "getExistingProcessBody(ctx)" in temporary_cleanup
+    assert "getProcessBody(ctx)" not in tool_cleanup
+    assert "getExistingProcessBody(ctx)" in tool_cleanup
+
+
 def test_all_closed_external_tools_can_start_before_finish_reason():
     import agent_loop
 

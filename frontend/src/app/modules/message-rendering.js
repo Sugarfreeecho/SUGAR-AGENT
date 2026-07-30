@@ -1014,7 +1014,7 @@ function alignProcessAggregateToViewportTop(agg) {
     else viewport.scrollTop = targetTop;
 }
 
-function bindProcessAggregate(agg) {
+function bindProcessAggregateInteractions(agg) {
     const procBody = agg.querySelector('.process-aggregate-body, .subagent-card-body');
     if (procBody && !procBody._streamFollowScrollBound) {
         procBody._streamFollowScrollBound = true;
@@ -1026,7 +1026,6 @@ function bindProcessAggregate(agg) {
         }, { passive: true });
     }
     if (agg.classList.contains('subagent-grid-card')) return;
-    bindProcessAggregateHeightButton(agg);
     const top = agg.querySelector('.process-aggregate-top');
     if (top && !top.dataset.bound) {
         top.dataset.bound = '1';
@@ -1054,6 +1053,12 @@ function bindProcessAggregate(agg) {
     }
     const briefEl = agg.querySelector('.process-aggregate-brief');
     if (briefEl) bindProcessBriefScrollChain(briefEl);
+}
+
+function bindProcessAggregate(agg) {
+    bindProcessAggregateInteractions(agg);
+    if (!agg || agg.classList.contains('subagent-grid-card')) return;
+    bindProcessAggregateHeightButton(agg);
 }
 
 function procNow() {
@@ -1474,6 +1479,22 @@ function getProcessBody(ctx) {
     return w.querySelector('.process-aggregate-body');
 }
 
+function getExistingProcessBody(ctx) {
+    if (!ctx) return null;
+    if (ctx._subagentTurnProcess && ctx._subagentTurnProcess.isConnected) return ctx._subagentTurnProcess;
+    if (ctx.currentTurn && ctx.currentTurn.isConnected) {
+        var subProc = ctx.currentTurn.querySelector('.subagent-turn-process');
+        if (subProc) {
+            ctx._subagentTurnProcess = subProc;
+            return subProc;
+        }
+    }
+    if (ctx._subagentBody && ctx._subagentBody.isConnected) return null;
+    var current = ctx.currentProcessGroup;
+    if (!current || !current.isConnected) return null;
+    return current.querySelector('.process-aggregate-body');
+}
+
 function autoResizeTextarea() {
     messageInput.style.height = 'auto';
     messageInput.style.height = Math.min(messageInput.scrollHeight, 120) + 'px';
@@ -1618,17 +1639,38 @@ function clampChatScrollTop(y) {
     return Math.min(Math.max(0, y), max);
 }
 
+var historySmoothScrollSessionId = '';
+
+function beginHistorySmoothScroll(sessionId) {
+    historySmoothScrollSessionId = String(sessionId || '');
+}
+
+function endHistorySmoothScroll(sessionId) {
+    var sid = String(sessionId || '');
+    if (!sid || historySmoothScrollSessionId === sid) historySmoothScrollSessionId = '';
+}
+
+function isHistorySmoothScrollActive() {
+    return !!(
+        historySmoothScrollSessionId
+        && historySmoothScrollSessionId === String(currentSessionId || '')
+    );
+}
+
 /**
  * @param {string} sessionId
  * @param {'saved-or-bottom'|'saved-smooth-or-bottom'|'bottom'|'smooth-bottom'} mode
  */
 function applyChatScrollAfterHistoryLoad(sessionId, mode) {
     if (!chatContainer || !sessionId) return;
+    if (mode === 'smooth-bottom') beginHistorySmoothScroll(sessionId);
+    else endHistorySmoothScroll();
     var running = isSessionRunning(sessionId)
         || (typeof isServerStreamActive === 'function' && isServerStreamActive(sessionId));
 
     // Running sessions always show the newest generated content.
     if (running) {
+        endHistorySmoothScroll(sessionId);
         if (typeof scrollCurrentRunningProcessToBottom === 'function') {
             scrollCurrentRunningProcessToBottom(sessionId);
         }
@@ -1730,6 +1772,82 @@ function historyLoadScrollsToBottom(sessionId, mode) {
 function waitForChatScrollAfterHistoryLoad(sessionId, mode) {
     if (!chatContainer || !sessionId) return Promise.resolve(false);
     if (sessionId !== currentSessionId) return Promise.resolve(false);
+    if (mode === 'smooth-bottom') {
+        return new Promise(function (resolve) {
+            var settled = false;
+            var raf = 0;
+            var startedAt = performance.now();
+            var lastMovementAt = startedAt;
+            var lastTop = chatContainer.scrollTop;
+            var retargetCount = 0;
+            var userEvents = ['wheel', 'touchstart', 'pointerdown'];
+            function cleanup(reachedBottom) {
+                if (settled) return;
+                settled = true;
+                if (raf) cancelAnimationFrame(raf);
+                chatContainer.removeEventListener('scrollend', onScrollEnd);
+                userEvents.forEach(function (eventName) {
+                    chatContainer.removeEventListener(eventName, onUserInterrupt);
+                });
+                endHistorySmoothScroll(sessionId);
+                resolve(!!reachedBottom);
+            }
+            function isAtBottom() {
+                if (!chatContainer) return false;
+                var maxTop = Math.max(0, chatContainer.scrollHeight - chatContainer.clientHeight);
+                return maxTop - chatContainer.scrollTop <= 2;
+            }
+            function onScrollEnd() {
+                if (sessionId !== currentSessionId) {
+                    cleanup(false);
+                    return;
+                }
+                if (isAtBottom()) {
+                    cleanup(true);
+                    return;
+                }
+                if (retargetCount < 3) {
+                    retargetCount += 1;
+                    lastMovementAt = performance.now();
+                    chatContainer.scrollTo({ top: chatContainer.scrollHeight, behavior: 'smooth' });
+                }
+            }
+            function onUserInterrupt() {
+                cleanup(false);
+            }
+            function check(now) {
+                if (settled) return;
+                if (!chatContainer || sessionId !== currentSessionId) {
+                    cleanup(false);
+                    return;
+                }
+                var top = chatContainer.scrollTop;
+                if (Math.abs(top - lastTop) > 0.5) {
+                    lastTop = top;
+                    lastMovementAt = now;
+                }
+                if (isAtBottom() && now - lastMovementAt >= 96) {
+                    cleanup(true);
+                    return;
+                }
+                if (!isAtBottom() && now - lastMovementAt >= 160 && retargetCount < 3) {
+                    retargetCount += 1;
+                    lastMovementAt = now;
+                    chatContainer.scrollTo({ top: chatContainer.scrollHeight, behavior: 'smooth' });
+                }
+                if (now - startedAt >= 5000) {
+                    cleanup(isAtBottom());
+                    return;
+                }
+                raf = requestAnimationFrame(check);
+            }
+            chatContainer.addEventListener('scrollend', onScrollEnd);
+            userEvents.forEach(function (eventName) {
+                chatContainer.addEventListener(eventName, onUserInterrupt, { passive: true });
+            });
+            raf = requestAnimationFrame(check);
+        });
+    }
     if (historyLoadScrollsToBottom(sessionId, mode)) {
         return new Promise(function (resolve) {
             requestAnimationFrame(function () {
@@ -3470,7 +3588,9 @@ function setToolRowText(row, text, ctx, runSessionId) {
 
 // 移除临时状态消息（移除整个 feed-item 条目）
 function removeTemporaryStatus(ctx) {
-    var body = getProcessBody(ctx);
+    // Cleanup must never create a new process group. Terminal signals can be
+    // delivered more than once (final, run_finished, and [DONE]).
+    var body = getExistingProcessBody(ctx);
     if (!body) return;
     var tempStatuses = body.querySelectorAll('[data-temporary-status="1"]');
     tempStatuses.forEach(function(el) {
@@ -3530,7 +3650,9 @@ function appendToolCallDelta(ctx, parsed, runSessionId) {
 }
 
 function removeAbortedToolDraftRows(ctx, ev) {
-    var body = getProcessBody(ctx);
+    // Like temporary-status cleanup, this may run after the final response has
+    // already sealed the process group, so only inspect an existing body.
+    var body = getExistingProcessBody(ctx);
     if (!body) return;
     var iter = ev && ev.react_iter != null && Number.isFinite(Number(ev.react_iter))
         ? Math.max(1, Math.floor(Number(ev.react_iter)))
@@ -4142,13 +4264,19 @@ function appendMessage(ctx, role, content, meta, runSessionId) {
             // 摘要
             var sum = document.createElement('div');
             sum.className = 'user-msg-summary';
-            sum.textContent = buildUserMessageSummary(rawStr);
-            linkifyAssistantTextNodes(sum);
+            if (typeof renderSelectedSkillsUiMessage === 'function') renderSelectedSkillsUiMessage(sum, buildUserMessageSummary(rawStr), linkifyAssistantTextNodes);
+            else {
+                sum.textContent = buildUserMessageSummary(rawStr);
+                linkifyAssistantTextNodes(sum);
+            }
             // 完整
             var ful = document.createElement('div');
             ful.className = 'user-msg-full';
-            ful.textContent = rawStr;
-            linkifyAssistantTextNodes(ful);
+            if (typeof renderSelectedSkillsUiMessage === 'function') renderSelectedSkillsUiMessage(ful, rawStr, linkifyAssistantTextNodes);
+            else {
+                ful.textContent = rawStr;
+                linkifyAssistantTextNodes(ful);
+            }
             // chevron
             var ch = document.createElement('div');
             ch.className = 'user-msg-chevron';
@@ -4219,21 +4347,36 @@ function bindFeedChunkInteraction(ch) {
     ch.addEventListener('click', handleTraceChunkClick);
 }
 
-function bindExistingLogs(root) {
+function bindExistingLogInteractions(root) {
     const el = root || getVisibleChatStream() || chatContainer;
     if (!el) return;
     el.querySelectorAll('.feed-chunk').forEach(function (ch) {
         bindFeedChunkInteraction(ch);
-        scheduleFeedChunkOverflowRefresh(ch);
         const sc = ch.querySelector('.feed-chunk-scroller');
         if (sc) bindFeedChunkScrollChain(sc);
     });
     el.querySelectorAll('.process-aggregate').forEach(function (agg) {
-        bindProcessAggregate(agg);
+        bindProcessAggregateInteractions(agg);
+    });
+    el.querySelectorAll('.process-aggregate-brief').forEach(bindProcessBriefScrollChain);
+}
+
+function finalizeExistingLogLayout(root) {
+    const el = root || getVisibleChatStream() || chatContainer;
+    if (!el) return;
+    el.querySelectorAll('.feed-chunk').forEach(function (ch) {
+        scheduleFeedChunkOverflowRefresh(ch);
+    });
+    el.querySelectorAll('.process-aggregate').forEach(function (agg) {
+        if (!agg.classList.contains('subagent-grid-card')) bindProcessAggregateHeightButton(agg);
         if (agg.classList.contains('is-collapsed')) updateProcessBrief(agg);
         refreshAggregateStatsSmart(agg);
     });
-    el.querySelectorAll('.process-aggregate-brief').forEach(bindProcessBriefScrollChain);
+}
+
+function bindExistingLogs(root) {
+    bindExistingLogInteractions(root);
+    finalizeExistingLogLayout(root);
 }
 
 function appendLog(ctx, content, type, runSessionId, reactIter) {

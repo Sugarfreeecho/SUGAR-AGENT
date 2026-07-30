@@ -218,6 +218,9 @@ async function consumeAgentSseResponse(response, runCtx, runSessionId, streamEve
             if (!line.startsWith('data: ')) continue;
             const data = line.slice(6);
             if (data === '[DONE]') {
+                if (runCtx && runCtx.streamCompletedSuccessfully !== false) {
+                    runCtx.streamCompletedSuccessfully = true;
+                }
                 endRunForClient(runSessionId, runCtx, { finalDelayMs: 80, followupDelayMs: 0 });
                 return streamEventIdx;
             }
@@ -292,6 +295,7 @@ async function consumeAgentSseResponse(response, runCtx, runSessionId, streamEve
                 });
                 if (reduced.runStateChanged) {
                     if (parsed.type === 'run_finished' || parsed.type === 'run_interrupted' || parsed.type === 'run_failed') {
+                        if (runCtx) runCtx.streamCompletedSuccessfully = parsed.type === 'run_finished';
                         if (
                             runCtx
                             && (parsed.cleanup_scope === 'none' || parsed.checkpoint_ok === false)
@@ -1228,7 +1232,7 @@ function buildSelectedSkillsDisplayMessage(rawMessage, selectedSkills) {
         ? selectedSkills.map(function (skill) { return String(skill || '').trim(); }).filter(Boolean)
         : [];
     if (!names.length) return message;
-    var suffix = '\n\n已选择 Skill：' + names.join('、');
+    var suffix = '\n\nActivated Skill: ' + names.join(', ');
     return message.endsWith(suffix) ? message : message + suffix;
 }
 
@@ -2546,7 +2550,32 @@ async function sendMessage(options) {
         }
         if (runSessionId !== currentSessionId) {
             const el = runCtx.stream;
-            if (el && el.parentNode) el.remove();
+            const reusableCompletedCache = !!(
+                el && el.parentNode
+                && !switchedAway
+                && !streamDisconnectedUnexpectedly
+                && getRunAbortReason(runSessionId, runCtx) !== 'user'
+                && runCtx.streamCompletedSuccessfully === true
+                && runCtx.seenFinal === true
+                && el.dataset.partialBackgroundRun !== '1'
+                && el.dataset.cacheSessionId === String(runSessionId)
+                && el.dataset.sessionLoadFailed !== '1'
+            );
+            if (reusableCompletedCache) {
+                el.dataset.sessionLoadOk = '1';
+                delete el.dataset.sessionLoading;
+                delete el.dataset.sessionLoadFailed;
+                if (typeof cacheOrderTouch === 'function') cacheOrderTouch(runSessionId);
+                if (typeof trimCachedSessionStreams === 'function') trimCachedSessionStreams();
+            } else {
+                // A partial background projection may coexist with an older
+                // cached stream for this session. Both are stale after this
+                // run, so invalidate the registered cache as well as runCtx.
+                if (typeof discardCachedSessionStream === 'function') {
+                    discardCachedSessionStream(runSessionId);
+                }
+                if (el && el.parentNode) el.remove();
+            }
         }
         setSendButtonState();
         syncSessionListIndicatorClasses();

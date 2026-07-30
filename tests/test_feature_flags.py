@@ -423,7 +423,7 @@ def test_frontend_background_followup_return_does_not_touch_active_composer():
 def test_selected_skill_display_marker_is_not_duplicated_on_reload():
     import webui
 
-    suffix = "\n\n已选择 Skill：documents、pdf"
+    suffix = "\n\nActivated Skill: documents, pdf"
     assert webui._build_ui_message_with_selected_skills("整理文件", ["documents", "pdf"]) == "整理文件" + suffix
     assert webui._build_ui_message_with_selected_skills("整理文件" + suffix, ["documents", "pdf"]) == "整理文件" + suffix
 
@@ -703,6 +703,41 @@ def test_frontend_session_restore_distinguishes_loaded_cached_and_running_sessio
     assert "var loadedOk = await loadSessionMessages(sessionId, 'smooth-bottom'" in sessions
     assert "scrollToBottom({ smooth: mode === 'smooth-bottom' });" in rendering
     assert "sessionHadUnreadResult = !!(" in sessions
+
+
+def test_frontend_loaded_session_defers_layout_refresh_until_smooth_bottom_finishes():
+    rendering = (ROOT / "frontend/src/app/modules/message-rendering.js").read_text(encoding="utf-8")
+    scroll = (ROOT / "frontend/src/app/modules/session-scroll-history.js").read_text(encoding="utf-8")
+    sessions = (ROOT / "frontend/src/app/modules/session-management.js").read_text(encoding="utf-8")
+
+    assert "function bindExistingLogInteractions(root)" in rendering
+    assert "function finalizeExistingLogLayout(root)" in rendering
+    assert "function isHistorySmoothScrollActive()" in rendering
+    assert "chatContainer.addEventListener('scrollend', onScrollEnd);" in rendering
+    assert "retargetCount < 3" in rendering
+    assert "if (typeof isHistorySmoothScrollActive === 'function' && isHistorySmoothScrollActive()) return;" in scroll
+    assert "&& !(typeof isHistorySmoothScrollActive === 'function' && isHistorySmoothScrollActive())" in scroll
+    interactions_at = sessions.index("bindExistingLogInteractions();")
+    smooth_at = sessions.index("applyChatScrollAfterHistoryLoad(sessionId, scrollBehavior);", interactions_at)
+    wait_at = sessions.index("await waitForChatScrollAfterHistoryLoad(sessionId, scrollBehavior);", smooth_at)
+    layout_at = sessions.index("finalizeExistingLogLayout();", wait_at)
+    assert interactions_at < smooth_at < wait_at < layout_at
+    assert "scrollBehavior === 'smooth-bottom' && initialSmoothReachedBottom" in sessions
+
+
+def test_frontend_completed_background_stream_remains_reusable_for_green_dot_restore():
+    sse = (ROOT / "frontend/src/app/modules/sse-handling.js").read_text(encoding="utf-8")
+
+    assert "runCtx.streamCompletedSuccessfully !== false" in sse
+    assert "runCtx.streamCompletedSuccessfully = true;" in sse
+    assert "runCtx.streamCompletedSuccessfully = parsed.type === 'run_finished';" in sse
+    assert "const reusableCompletedCache = !!(" in sse
+    assert "runCtx.seenFinal === true" in sse
+    assert "el.dataset.partialBackgroundRun !== '1'" in sse
+    assert "el.dataset.cacheSessionId === String(runSessionId)" in sse
+    assert "el.dataset.sessionLoadOk = '1';" in sse
+    assert "discardCachedSessionStream(runSessionId);" in sse
+    assert "if (el && el.parentNode) el.remove();" in sse
 
 
 def test_frontend_older_history_auto_load_preserves_viewport():
