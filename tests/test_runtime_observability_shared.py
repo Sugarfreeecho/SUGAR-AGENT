@@ -54,6 +54,37 @@ def test_stale_and_restart_reconciliation_are_durable(tmp_path):
     assert obs.snapshot("s2")["runs"][0]["status"] == "orphaned"
 
 
+def test_stale_heartbeat_does_not_mark_a_locally_live_run(tmp_path):
+    import runtime_observability as obs
+
+    obs.configure(tmp_path)
+    obs.start_run("sleeping", "r-sleep")
+    path = tmp_path / "sleeping" / "runtime_observability.json"
+    data = json.loads(path.read_text(encoding="utf-8"))
+    data["runs"][0]["heartbeat_at"] = "2000-01-01T00:00:00Z"
+    path.write_text(json.dumps(data), encoding="utf-8")
+
+    stale = obs.scan_stale_runs(
+        30,
+        live_checker=lambda session_id, run_id: (
+            session_id == "sleeping" and run_id == "r-sleep"
+        ),
+    )
+
+    assert stale == []
+    assert obs.snapshot("sleeping")["runs"][0]["status"] == "running"
+
+
+def test_runtime_watchdog_has_no_wall_clock_hard_timeout():
+    import runtime_observability as obs
+
+    main_source = (APP_DIR / "main.py").read_text(encoding="utf-8")
+    assert not hasattr(obs, "scan_timed_out_runs")
+    assert "AGENT_RUN_TIMEOUT_SECONDS" not in main_source
+    assert "live_checker=runtime_run_is_locally_active" in main_source
+    assert "subagent_registry.is_running(session_id)" in main_source
+
+
 def test_reference_fork_uses_immutable_parent_prefix(tmp_path, monkeypatch):
     monkeypatch.setenv("RUNTIME_V2_ENABLED", "1")
     from runtime_v2.history_ops import RuntimeHistoryOps
