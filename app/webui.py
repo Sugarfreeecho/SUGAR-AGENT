@@ -752,6 +752,7 @@ async def _run_human_interaction_recovery_background(session_id: str) -> None:
             require_pending_subagents=False,
             recovery_reason="human_interaction_resolved_after_restart",
             run_id=recovery_run_id,
+            continuation_source="recovery",
         ):
             pass
     except asyncio.CancelledError:
@@ -3133,7 +3134,14 @@ async def post_session_steer(session_id: str, request: Request):
         for rid in interrupted_run_ids:
             await publish_session_event(
                 sid,
-                {"type": "run_interrupted", "run_id": rid, "reason": "followup", "ephemeral": True},
+                {
+                    "type": "run_interrupted",
+                    "run_id": rid,
+                    "reason": "followup",
+                    "checkpoint_ok": False,
+                    "cleanup_scope": "none",
+                    "ephemeral": True,
+                },
             )
         await close_session_stream(sid)
     except Exception as e:
@@ -3765,7 +3773,9 @@ async def continue_react_session(
                     should_stop=should_stop,
                     require_pending_subagents=False,
                     recovery_reason="process_or_network_interruption" if recovery and not goal_can_continue else "",
-                    continuation_source="goal" if goal_can_continue else "subagent",
+                    continuation_source=(
+                        "goal" if goal_can_continue else ("recovery" if recovery else "subagent")
+                    ),
                 ):
                     if await request.is_disconnected():
                         break
