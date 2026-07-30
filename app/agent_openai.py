@@ -190,6 +190,18 @@ _DSML_ATTR_RE = re.compile(
     re.IGNORECASE,
 )
 _DSML_STREAM_PREFIXES = ("<｜DSML｜", "<|DSML|")
+_NATIVE_BOUNDARY_TOKEN_RE = re.compile(
+    r"<\s*[|｜]\s*(?:begin[▁_]of[▁_]sentence|end[▁_]of[▁_]sentence)\s*[|｜]\s*>",
+    re.IGNORECASE,
+)
+_NATIVE_BOUNDARY_TOKENS = (
+    "<｜begin▁of▁sentence｜>",
+    "<｜end▁of▁sentence｜>",
+    "<｜begin_of_sentence｜>",
+    "<｜end_of_sentence｜>",
+    "<|begin_of_sentence|>",
+    "<|end_of_sentence|>",
+)
 
 
 def _attrs_dict(raw: str) -> Dict[str, str]:
@@ -200,6 +212,10 @@ def _attrs_dict(raw: str) -> Dict[str, str]:
             value = match.group("single") or ""
         attrs[str(match.group("name") or "").strip().lower()] = html.unescape(value)
     return attrs
+
+
+def _strip_native_boundary_tokens(text: Optional[str]) -> str:
+    return _NATIVE_BOUNDARY_TOKEN_RE.sub("", str(text or ""))
 
 
 def _tool_schema_map(tools: Optional[List[Dict[str, Any]]]) -> Dict[str, Dict[str, Any]]:
@@ -469,6 +485,34 @@ class _DsmlStreamFilter:
             self.pending = ""
             return tail
         return ""
+
+
+class _NativeBoundaryStreamFilter:
+    """Remove leaked BOS/EOS tokens, including tokens split across chunks."""
+
+    def __init__(self):
+        self.pending = ""
+
+    def feed(self, piece: str) -> str:
+        combined = self.pending + str(piece or "")
+        cleaned = _NATIVE_BOUNDARY_TOKEN_RE.sub("", combined)
+        keep = 0
+        for token in _NATIVE_BOUNDARY_TOKENS:
+            limit = min(len(token) - 1, len(cleaned))
+            for size in range(limit, 0, -1):
+                if cleaned.endswith(token[:size]):
+                    keep = max(keep, size)
+                    break
+        if keep:
+            self.pending = cleaned[-keep:]
+            return cleaned[:-keep]
+        self.pending = ""
+        return cleaned
+
+    def finish(self) -> str:
+        tail = _strip_native_boundary_tokens(self.pending)
+        self.pending = ""
+        return tail
 
 
 def normalize_content_text(content: Any) -> str:
@@ -799,6 +843,8 @@ def parse_assistant_message(
     """解析 chat.completions 返回的 assistant message（content、tool_calls、reasoning_content）。"""
     content = _normalize_content_text(_get_nested_attr_or_key(msg, "content"))
     reasoning, reasoning_field = _extract_reasoning_text_and_field(msg)
+    content = _strip_native_boundary_tokens(content).strip()
+    reasoning = _strip_native_boundary_tokens(reasoning).strip() or None
 
     raw_calls = _get_nested_attr_or_key(msg, "tool_calls")
     tool_calls: Optional[List[Dict[str, Any]]] = None
@@ -1134,6 +1180,8 @@ def run_chat_completion_stream_worker(
         reasoning_field: Optional[str] = None
         content_buf = ""
         tool_acc: Dict[int, Dict[str, str]] = {}
+        content_boundary_filter = _NativeBoundaryStreamFilter()
+        reasoning_boundary_filter = _NativeBoundaryStreamFilter()
         content_dsml_filter = _DsmlStreamFilter(enabled=bool(tools))
         reasoning_dsml_filter = _DsmlStreamFilter(enabled=bool(tools))
         last_usage: Optional[Dict[str, int]] = None
@@ -1225,7 +1273,9 @@ def run_chat_completion_stream_worker(
                 piece = rc if isinstance(rc, str) else str(rc)
                 last_delta_at_ms = api_elapsed_ms()
                 reasoning_buf += piece
-                visible_piece = reasoning_dsml_filter.feed(piece)
+                visible_piece = reasoning_dsml_filter.feed(
+                    reasoning_boundary_filter.feed(piece)
+                )
                 if reasoning_field is None and rc_field:
                     reasoning_field = rc_field
                 if visible_piece and not first_delta_seen:
@@ -1243,7 +1293,9 @@ def run_chat_completion_stream_worker(
                 piece = ct if isinstance(ct, str) else str(ct)
                 last_delta_at_ms = api_elapsed_ms()
                 content_buf += piece
-                visible_piece = content_dsml_filter.feed(piece)
+                visible_piece = content_dsml_filter.feed(
+                    content_boundary_filter.feed(piece)
+                )
                 if visible_piece and not first_delta_seen:
                     first_delta_seen = True
                     first_delta_at_ms = last_delta_at_ms
@@ -1285,16 +1337,18 @@ def run_chat_completion_stream_worker(
             close_stream_quietly()
             put_stream_timing("aborted_after_stream")
             return
-        reasoning_tail = reasoning_dsml_filter.finish()
+        reasoning_tail = reasoning_dsml_filter.feed(reasoning_boundary_filter.finish())
+        reasoning_tail += reasoning_dsml_filter.finish()
         if reasoning_tail:
             sync_q.put(("reasoning", reasoning_tail))
-        content_tail = content_dsml_filter.finish()
+        content_tail = content_dsml_filter.feed(content_boundary_filter.finish())
+        content_tail += content_dsml_filter.finish()
         if content_tail:
             sync_q.put(("content", content_tail))
         tool_calls_list = _tool_acc_to_parsed_list(tool_acc)
         content_final, reasoning_final, tool_calls_list, recovered_dsml_calls = _repair_dsml_turn(
-            content_buf,
-            reasoning_buf.strip() or None,
+            _strip_native_boundary_tokens(content_buf),
+            _strip_native_boundary_tokens(reasoning_buf).strip() or None,
             tools,
             tool_calls_list,
         )

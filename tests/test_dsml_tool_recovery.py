@@ -62,6 +62,20 @@ def test_non_stream_dsml_in_reasoning_becomes_valid_tool_call():
     assert call["id"].startswith("call_dsml_")
 
 
+def test_non_stream_native_bos_token_is_removed_without_losing_content():
+    from agent_openai import parse_assistant_message
+
+    msg = SimpleNamespace(
+        content="<｜begin▁of▁sentence｜># 更新所有大纲文件",
+        reasoning_content="<|begin_of_sentence|>先检查现有文件。",
+        tool_calls=None,
+    )
+    turn = parse_assistant_message(msg, tools=TOOLS)
+
+    assert turn.content == "# 更新所有大纲文件"
+    assert turn.reasoning_content == "先检查现有文件。"
+
+
 def test_unknown_or_malformed_dsml_is_not_executed_or_exposed():
     from agent_openai import parse_assistant_message
 
@@ -205,3 +219,55 @@ def test_stream_dsml_is_held_back_and_recovered_without_frontend_leak():
     assert turn.tool_calls[0]["args"]["timeout"] == 60
     assert deltas[0]["name_delta"] == "run_shell"
     assert finish["finish_reason"] == "tool_calls"
+
+
+def test_stream_native_bos_token_split_across_chunks_never_leaks():
+    from agent_messages import UserMessage
+    from agent_openai import run_chat_completion_stream_worker
+
+    pieces = ["<｜beg", "in▁of▁", "sentence｜>", "# 更新所有大纲文件"]
+    chunks = [
+        SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    delta=SimpleNamespace(
+                        content=piece,
+                        reasoning_content=None,
+                        tool_calls=None,
+                    ),
+                    finish_reason=None,
+                    stop_reason=None,
+                )
+            ],
+            usage=None,
+            model="deepseek-v4-test",
+        )
+        for piece in pieces
+    ]
+    completions = SimpleNamespace(create=lambda **_kwargs: iter(chunks))
+    client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
+    q = Queue()
+
+    run_chat_completion_stream_worker(
+        q,
+        client,
+        "deepseek-v4-test",
+        [UserMessage(content="update")],
+        tools=TOOLS,
+        temperature=0,
+        max_tokens=128,
+    )
+
+    rows = []
+    while not q.empty():
+        rows.append(q.get())
+    visible = "".join(
+        str(row[1])
+        for row in rows
+        if row and row[0] == "content"
+    )
+    turn = next(row[1] for row in rows if row and row[0] == "turn")
+
+    assert visible == "# 更新所有大纲文件"
+    assert turn.content == "# 更新所有大纲文件"
+    assert "begin" not in visible
