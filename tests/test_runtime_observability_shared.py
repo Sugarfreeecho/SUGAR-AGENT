@@ -11,41 +11,10 @@ if str(APP_DIR) not in sys.path:
     sys.path.insert(0, str(APP_DIR))
 
 
-def test_cost_accounting_and_budget_are_shared(tmp_path):
+def test_file_audit_detects_ignored_or_non_git_files(tmp_path, monkeypatch):
     import runtime_observability as obs
 
-    obs.configure(tmp_path)
-    obs.start_run(
-        "root",
-        "run-1",
-        kind="chat",
-        pricing={
-            "input_cost_per_million": 2,
-            "output_cost_per_million": 10,
-            "cache_read_cost_per_million": 1,
-        },
-        cost_budget_usd=0.00002,
-    )
-    row = obs.record_usage(
-        "root",
-        "run-1",
-        {
-            "prompt_tokens": 10,
-            "completion_tokens": 2,
-            "prompt_cache_hit_tokens": 4,
-            "prompt_cache_miss_tokens": 6,
-        },
-    )
-    assert row["cost"]["input"] == 0.000012
-    assert row["cost"]["cache_read"] == 0.000004
-    assert row["cost"]["output"] == 0.00002
-    assert row["cost"]["total"] == 0.000036
-    assert obs.budget_exhausted("root", "run-1") is True
-
-
-def test_file_audit_detects_ignored_or_non_git_files(tmp_path):
-    import runtime_observability as obs
-
+    monkeypatch.setenv("FILE_AUDIT_FULL_SNAPSHOT", "1")
     target = tmp_path / "generated.bin"
     before = obs.capture_workspace_state(tmp_path)
     target.write_bytes(b"new")
@@ -54,6 +23,17 @@ def test_file_audit_detects_ignored_or_non_git_files(tmp_path):
         (row["path"], row["operation"])
         for row in obs.diff_workspace_states(before, after)
     } == {("generated.bin", "created")}
+
+
+def test_full_workspace_file_audit_is_disabled_by_default(tmp_path, monkeypatch):
+    import runtime_observability as obs
+
+    monkeypatch.delenv("FILE_AUDIT_FULL_SNAPSHOT", raising=False)
+    before = obs.capture_workspace_state(tmp_path)
+    (tmp_path / "generated.bin").write_bytes(b"new")
+    after = obs.capture_workspace_state(tmp_path)
+
+    assert obs.diff_workspace_states(before, after) == []
 
 
 def test_stale_and_restart_reconciliation_are_durable(tmp_path):

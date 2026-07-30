@@ -1,7 +1,7 @@
 """Shared run observability for root agents, ordinary subagents, and team members.
 
 The store is deliberately independent from the UI/runtime event projection.  It
-provides one durable source for liveness, file changes, token/cost accounting,
+provides one durable source for liveness, file changes, and token accounting,
 and restart/stale reconciliation while Runtime V2 remains the conversation
 event source of truth.
 """
@@ -22,7 +22,7 @@ _lock = threading.RLock()
 _sessions_root: Optional[Path] = None
 _path_resolver: Optional[Callable[[str], str | Path]] = None
 _MAX_RUNS = max(1, int(os.getenv("RUNTIME_OBSERVABILITY_MAX_RUNS", "100")))
-_TERMINAL = {"finished", "failed", "interrupted", "orphaned", "stale", "budget_exhausted"}
+_TERMINAL = {"finished", "failed", "interrupted", "orphaned", "stale"}
 
 
 def _now() -> str:
@@ -103,7 +103,6 @@ def _run(data: dict, run_id: str, *, create: bool = False) -> Optional[dict]:
         "started_at": _now(),
         "heartbeat_at": _now(),
         "usage": {},
-        "cost": {"currency": "USD", "total": 0.0},
         "file_changes": [],
     }
     data.setdefault("runs", []).append(row)
@@ -116,9 +115,6 @@ def start_run(
     run_id: str,
     *,
     kind: str = "agent",
-    model_profile_id: str = "",
-    pricing: Optional[dict] = None,
-    cost_budget_usd: Any = None,
 ) -> dict:
     with _lock:
         data = _read(session_id)
@@ -128,14 +124,9 @@ def start_run(
             {
                 "status": "running",
                 "kind": str(kind or "agent"),
-                "model_profile_id": str(model_profile_id or ""),
                 "heartbeat_at": _now(),
                 "finished_at": None,
                 "stale_reason": "",
-                "pricing": normalize_pricing(pricing),
-                "cost_budget_usd": (
-                    _float(cost_budget_usd) if cost_budget_usd not in (None, "") else None
-                ),
             }
         )
         _write(session_id, data)
@@ -161,7 +152,7 @@ def finish_run(session_id: str, run_id: str, status: str, *, reason: str = "") -
         row = _run(data, run_id)
         if row is None:
             return None
-        if str(row.get("status") or "") not in {"stale", "orphaned", "budget_exhausted"}:
+        if str(row.get("status") or "") not in {"stale", "orphaned"}:
             row["status"] = str(status or "finished")
         row["finished_at"] = _now()
         row["heartbeat_at"] = row["finished_at"]
@@ -171,55 +162,10 @@ def finish_run(session_id: str, run_id: str, status: str, *, reason: str = "") -
         return json.loads(json.dumps(row))
 
 
-def normalize_pricing(pricing: Optional[dict]) -> dict:
-    src = pricing if isinstance(pricing, dict) else {}
-    return {
-        "input_per_million": _float(
-            src.get("input_per_million", src.get("input_cost_per_million"))
-        ),
-        "output_per_million": _float(
-            src.get("output_per_million", src.get("output_cost_per_million"))
-        ),
-        "cache_read_per_million": _float(
-            src.get("cache_read_per_million", src.get("cache_read_cost_per_million"))
-        ),
-        "cache_write_per_million": _float(
-            src.get("cache_write_per_million", src.get("cache_write_cost_per_million"))
-        ),
-    }
-
-
-def calculate_cost(usage: Optional[dict], pricing: Optional[dict]) -> dict:
-    u = usage if isinstance(usage, dict) else {}
-    p = normalize_pricing(pricing)
-    prompt = _int(u.get("prompt_tokens"))
-    completion = _int(u.get("completion_tokens"))
-    cache_read = _int(u.get("prompt_cache_hit_tokens"))
-    cache_write = _int(
-        u.get("prompt_cache_write_tokens", u.get("cache_creation_input_tokens"))
-    )
-    cache_miss = _int(u.get("prompt_cache_miss_tokens"))
-    if cache_miss <= 0:
-        cache_miss = max(0, prompt - cache_read)
-    parts = {
-        "input": cache_miss * p["input_per_million"] / 1_000_000.0,
-        "output": completion * p["output_per_million"] / 1_000_000.0,
-        "cache_read": cache_read * p["cache_read_per_million"] / 1_000_000.0,
-        "cache_write": cache_write * p["cache_write_per_million"] / 1_000_000.0,
-    }
-    return {
-        "currency": "USD",
-        **{key: round(value, 12) for key, value in parts.items()},
-        "total": round(sum(parts.values()), 12),
-    }
-
-
 def record_usage(
     session_id: str,
     run_id: str,
     usage: Optional[dict],
-    *,
-    pricing: Optional[dict] = None,
 ) -> Optional[dict]:
     with _lock:
         data = _read(session_id)
@@ -234,22 +180,9 @@ def record_usage(
         }
         for key, value in clean_usage.items():
             current[key] = _int(current.get(key)) + value
-        active_pricing = normalize_pricing(pricing or row.get("pricing"))
-        row["pricing"] = active_pricing
-        row["cost"] = calculate_cost(current, active_pricing)
-        budget = row.get("cost_budget_usd")
-        row["cost_budget_exhausted"] = bool(
-            budget is not None and _float(row["cost"].get("total")) >= _float(budget)
-        )
         row["heartbeat_at"] = _now()
         _write(session_id, data)
         return json.loads(json.dumps(row))
-
-
-def budget_exhausted(session_id: str, run_id: str) -> bool:
-    with _lock:
-        row = _run(_read(session_id), run_id)
-        return bool(row and row.get("cost_budget_exhausted"))
 
 
 def record_file_changes(
@@ -520,7 +453,7 @@ def capture_workspace_state(work_dir: str | Path | None) -> dict:
             pass
         files[rel.replace("\\", "/")] = {"status": code, "fingerprint": fingerprint}
     full_snapshot = str(
-        os.getenv("FILE_AUDIT_FULL_SNAPSHOT", "1")
+        os.getenv("FILE_AUDIT_FULL_SNAPSHOT", "0")
     ).strip().lower() not in {"0", "false", "no", "off"}
     if full_snapshot:
         excluded = {

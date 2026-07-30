@@ -223,8 +223,6 @@ def test_task_schema_uses_action_discriminator():
         "collect",
         "interrupt",
         "steer",
-        "permissions",
-        "resolve_permission",
         "worktree",
     ]
     assert "Never use resume to poll" in schema["description"]

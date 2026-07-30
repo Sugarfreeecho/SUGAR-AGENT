@@ -84,32 +84,6 @@ def test_model_profile_persists_editable_capability_description(tmp_path):
     assert "hard_reasoning" not in automatic["capability_tags"]
 
 
-def test_model_profile_persists_pricing_and_cost_budget(tmp_path):
-    saved = model_profiles.upsert_profile(
-        tmp_path,
-        {
-            "model": "priced-model",
-            "base_url": "https://api.example.com/v1",
-            "api_key": "test-key",
-            "input_cost_per_million": "2.5",
-            "output_cost_per_million": 10,
-            "cache_read_cost_per_million": 0.25,
-            "cache_write_cost_per_million": 3,
-            "cost_budget_usd": 1.5,
-        },
-    )
-
-    assert model_profiles.profile_pricing(saved) == {
-        "input_cost_per_million": 2.5,
-        "output_cost_per_million": 10.0,
-        "cache_read_cost_per_million": 0.25,
-        "cache_write_cost_per_million": 3.0,
-        "cost_budget_usd": 1.5,
-    }
-    public = model_profiles.public_profile(saved)
-    assert public["cost_budget_usd"] == 1.5
-
-
 def test_load_store_reads_legacy_app_location_when_default_missing(tmp_path):
     legacy_dir = tmp_path / "app"
     legacy_dir.mkdir()

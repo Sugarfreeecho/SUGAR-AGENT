@@ -115,10 +115,6 @@ def start_run(
     run_id: str,
     mode: str = "chat",
     user_preview: str = "",
-    *,
-    model_profile_id: str = "",
-    pricing: Optional[dict] = None,
-    cost_budget_usd: Any = None,
 ) -> None:
     with _lock:
         data = _load(session_id)
@@ -137,9 +133,6 @@ def start_run(
             session_id,
             run_id,
             kind=mode,
-            model_profile_id=model_profile_id,
-            pricing=pricing,
-            cost_budget_usd=cost_budget_usd,
         )
     except Exception:
         pass
@@ -245,8 +238,6 @@ def record_usage(
     run_id: str,
     react_iter: int,
     usage: Dict[str, Any],
-    *,
-    pricing: Optional[dict] = None,
 ) -> Optional[dict]:
     with _lock:
         data = _load(session_id)
@@ -260,7 +251,6 @@ def record_usage(
             session_id,
             run_id,
             usage,
-            pricing=pricing,
         )
     except Exception:
         return None
@@ -298,15 +288,6 @@ def record_tool(
             )
     except Exception:
         pass
-
-
-def run_budget_exhausted(session_id: str, run_id: str) -> bool:
-    try:
-        import runtime_observability
-
-        return runtime_observability.budget_exhausted(session_id, run_id)
-    except Exception:
-        return False
 
 
 def snapshot(session_id: str) -> dict:
