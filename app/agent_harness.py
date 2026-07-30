@@ -3129,11 +3129,6 @@ class SessionManager:
                         )
                     ),
                     "file_changes": list(shared_observability.get("file_changes") or []),
-                    "cost": dict(shared_observability.get("cost") or {}),
-                    "cost_budget_usd": shared_observability.get("cost_budget_usd"),
-                    "cost_budget_exhausted": bool(
-                        shared_observability.get("cost_budget_exhausted")
-                    ),
                 }
                 out.append(node)
                 walk(cid, child_path)
@@ -5625,29 +5620,6 @@ def executor_runtime_snapshot_for_session(session_id: str) -> Dict[str, Any]:
         "temperature": float(first.get("temperature", EXECUTOR_TEMPERATURE)),
         "extra_body": dict(first.get("extra_body") or {}),
         "reasoning_effort": first.get("reasoning_effort"),
-    }
-
-
-def executor_pricing_for_session(session_id: str) -> Dict[str, Any]:
-    """Resolve pricing and optional monetary budget from the effective profile."""
-    try:
-        meta = session_manager._load_metadata((session_id or "").strip()) or {}
-    except Exception:
-        meta = {}
-    profile_id = str(meta.get("model_profile_id") or "").strip()
-    profiles, ordered_ids, _ = _executor_profile_catalog()
-    if not profile_id and ordered_ids:
-        profile_id = ordered_ids[0]
-    profile = profiles.get(profile_id) or {}
-    pricing = model_profiles.profile_pricing(profile)
-    return {
-        "model_profile_id": profile_id,
-        "pricing": pricing,
-        "cost_budget_usd": (
-            pricing.get("cost_budget_usd")
-            if float(pricing.get("cost_budget_usd") or 0.0) > 0
-            else None
-        ),
     }
 
 

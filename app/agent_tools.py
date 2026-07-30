@@ -387,11 +387,15 @@ DANGEROUS_PATTERNS = [
     r"\brm\s+-[rf]{1,2}\b",          # rm -r, rm -rf, rm -fr
     r"\bdel\s+/[fq]\b",              # del /f, del /q (Windows)
     r"\brmdir\s+/s\b",               # rmdir /s
+    r"\bremove-item\b[^\r\n;&|]*(?:-recurse[^\r\n;&|]*-force|-force[^\r\n;&|]*-recurse)\b",
     r"(?:^|[;&|]\s*)format\b",       # format
     r"\b(mkfs|diskpart)\b",          # disk operations
     r"\bdd\s+if=",                   # dd
     r">\s*/dev/sd",                  # write to disk
     r"\b(shutdown|reboot|poweroff)\b",  # system power
+    r"\b(stop-computer|restart-computer|logoff|tsdiscon)\b",  # Windows session/system power
+    r"\bdisable-netadapter\b",          # disconnect the host network
+    r"\bnetsh\s+interface\b.*\b(?:disable|disabled)\b",
     r":\(\)\s*\{.*\};\s*:",          # fork bomb
 ]
 
@@ -411,6 +415,204 @@ def _is_dangerous(command: str) -> bool:
         if re.search(pat, command):
             return True
     return False
+
+
+def _safe_process_termination_guidance() -> str:
+    if platform.system() == "Windows":
+        return (
+            "安全做法：先在 PowerShell 中运行 "
+            "`Get-CimInstance Win32_Process -Filter \"Name='python.exe'\" | "
+            "Select-Object ProcessId,CommandLine` 核对目标，再运行 "
+            "`Stop-Process -Id <非 Agent PID> -Force`。"
+        )
+    return (
+        "安全做法：先运行 `ps -eo pid=,args=` 核对目标，再运行 "
+        "`kill <非 Agent PID>`。"
+    )
+
+
+def _dangerous_command_guidance(command: str) -> str:
+    lower = str(command or "").lower()
+    if any(
+        token in lower
+        for token in (
+            "shutdown",
+            "reboot",
+            "poweroff",
+            "stop-computer",
+            "restart-computer",
+            "logoff",
+            "tsdiscon",
+            "disable-netadapter",
+            "netsh interface",
+        )
+    ):
+        return (
+            "该操作会中断 Agent 或整机网络。请先等待任务完成并保存状态，"
+            "然后在 Agent 外部的系统终端中手动执行。"
+        )
+    if any(
+        token in lower
+        for token in (
+            "rm -r",
+            "rm -f",
+            "rmdir /s",
+            "del /f",
+            "del /q",
+            "remove-item",
+        )
+    ):
+        return (
+            "请改用 delete_file 对明确文件执行可恢复删除（移入 `.trash`）；"
+            "如必须递归清理，请缩小到明确临时目录并由用户在 Agent 外部确认执行。"
+        )
+    if any(token in lower for token in ("mkfs", "diskpart", "format", "dd if=", "/dev/sd")):
+        return "该操作涉及磁盘或分区，请备份后在 Agent 外部的管理员终端中手动执行。"
+    if any(re.search(pattern, command, re.IGNORECASE) for pattern in INTERNAL_IP_PATTERNS):
+        return "内部或本机网络地址不允许通过 run_shell 访问；请使用受控的应用接口。"
+    return "请将命令改写为范围明确、可恢复且不会影响 Agent控制进程的操作。"
+
+
+_AGENT_PROCESS_IDENTITY_RE = re.compile(
+    r"(?i)(?:"
+    r"\bpythonw?(?:\.exe)?\b"
+    r"|(?:^|[\\/])app[\\/]main\.py\b"
+    r"|(?:^|[\\/])tray_launcher\.py\b"
+    r")"
+)
+_PROCESS_TERMINATION_RE = re.compile(
+    r"(?i)(?:"
+    r"\bstop-process\b"
+    r"|\bspps\b"
+    r"|\btaskkill(?:\.exe)?\b"
+    r"|\b(?:pkill|killall)(?:\.exe)?\b"
+    r"|(?:^|[;&|]\s*)kill(?:\.exe)?\s+"
+    r"|\bwmic\b[^\r\n;&|]*\b(?:delete|terminate)\b"
+    r"|\binvoke-cimmethod\b[^\r\n;&|]*\bterminate\b"
+    r"|\bterminateprocess\s*\("
+    r"|\bos\.kill\s*\("
+    r"|\bpsutil\.process\s*\("
+    r"|\.terminate\s*\("
+    r"|\.kill\s*\("
+    r")"
+)
+_PROCESS_ANCESTRY_RE = re.compile(
+    r"(?i)\b(?:parentprocessid|getppid|ppid|win32_process)\b"
+)
+_PORT_OWNER_LOOKUP_RE = re.compile(
+    r"(?i)\b(?:get-nettcpconnection|owningprocess|netstat|lsof|fuser)\b"
+)
+_LIFECYCLE_SCRIPT_DIRECT_RE = re.compile(
+    r"(?im)(?:^|[;&|]\s*)"
+    r"(?:call\s+|start(?:-process)?\s+|cmd(?:\.exe)?\s+/c\s+|&\s*)?"
+    r"[\"']?(?:[^\"';&|\r\n]*[\\/])?run\.bat(?:[\"']|\s|$)"
+)
+_LIFECYCLE_PYTHON_RE = re.compile(
+    r"(?i)\b(?:pythonw?|py)(?:\.exe)?\b[^\r\n;&|]*"
+    r"(?:tray_launcher|agent_updater)\.py\b"
+)
+_RUNTIME_DESTRUCTIVE_OPERATION_RE = re.compile(
+    r"(?i)(?:"
+    r"(?:^|[;&|]\s*)(?:remove-item|del|erase|rmdir|rm)\s+"
+    r"|\b(?:os\.(?:remove|unlink)|shutil\.rmtree)\s*\("
+    r"|\.unlink\s*\("
+    r")"
+)
+_AGENT_RUNTIME_RESOURCE_RE = re.compile(
+    r"(?i)(?:"
+    r"(?:^|[\s\"'\\/])app[\\/]main\.py\b"
+    r"|(?:^|[\s\"'\\/])tray_launcher\.py\b"
+    r"|(?:^|[\s\"'\\/])run\.bat\b"
+    r"|(?:^|[\s\"'\\/])python[\\/]pythonw?\.exe\b"
+    r")"
+)
+
+
+def _positive_env_int(name: str) -> Optional[int]:
+    try:
+        value = int(str(os.getenv(name, "") or "").strip())
+    except (TypeError, ValueError):
+        return None
+    return value if value > 0 else None
+
+
+def _agent_protected_process_ids() -> set[int]:
+    """Return concrete controller PIDs that a tool subprocess must not terminate."""
+
+    protected = {int(os.getpid())}
+    for env_name in ("MYAGENT_TRAY_PID", "MYAGENT_SUPERVISOR_PID"):
+        value = _positive_env_int(env_name)
+        if value is not None:
+            protected.add(value)
+    return protected
+
+
+def _agent_server_port() -> int:
+    return _positive_env_int("MYAGENT_SERVER_PORT") or 8192
+
+
+def _mentions_number_token(text: str, value: int) -> bool:
+    return bool(re.search(rf"(?<![\w]){int(value)}(?![\w])", text))
+
+
+def _agent_self_protection_reason(command: str) -> Optional[str]:
+    """Reject commands that can terminate this Agent, while allowing unrelated PIDs.
+
+    This is a guard against accidental broad process cleanup, not the sole
+    security boundary.  A separately privileged Shell worker is still needed
+    to make deliberate encoded/indirect process attacks impossible.
+    """
+
+    text = str(command or "")
+    if not text.strip():
+        return None
+
+    if _LIFECYCLE_SCRIPT_DIRECT_RE.search(text) or _LIFECYCLE_PYTHON_RE.search(text):
+        return (
+            "不能在 run_shell 内启动 Agent 生命周期脚本，因为它会终止正在处理本次工具调用的 "
+            "HTTP/SSE 进程。正确操作：等待当前结果保存后，使用托盘“重启”，或在 Agent 外部双击 RUN.bat"
+        )
+
+    if (
+        _RUNTIME_DESTRUCTIVE_OPERATION_RE.search(text)
+        and _AGENT_RUNTIME_RESOURCE_RE.search(text)
+    ):
+        return (
+            "命令会删除受保护的 Agent运行时或启动文件。正确操作：修改源码请使用 edit_file/apply_patch，"
+            "更新 Agent请使用托盘“更新”，不要删除运行中的 main.py、RUN.bat 或内置 Python"
+        )
+
+    if not _PROCESS_TERMINATION_RE.search(text):
+        return None
+
+    for pid in sorted(_agent_protected_process_ids()):
+        if _mentions_number_token(text, pid):
+            return (
+                f"目标 PID {pid} 属于 Agent后端或托盘监管进程，不能在 run_shell 内终止。"
+                "如需重启 Agent，请使用托盘“重启”或在 Agent外部双击 RUN.bat。"
+                + _safe_process_termination_guidance()
+            )
+
+    if _AGENT_PROCESS_IDENTITY_RE.search(text):
+        return (
+            "按名称批量终止 Python 可能同时杀死 Agent后端或托盘监管进程。"
+            + _safe_process_termination_guidance()
+        )
+
+    port = _agent_server_port()
+    if _mentions_number_token(text, port) and _PORT_OWNER_LOOKUP_RE.search(text):
+        return (
+            f"端口 {port} 是 Agent HTTP/SSE 服务端口，不能通过查端口 PID 的方式终止。"
+            "正确操作：重启 Agent请使用托盘“重启”或在 Agent外部双击 RUN.bat。"
+        )
+
+    if _PROCESS_ANCESTRY_RE.search(text):
+        return (
+            "命令尝试沿 run_shell 父进程链终止进程，该父进程可能就是 Agent。"
+            + _safe_process_termination_guidance()
+        )
+
+    return None
 
 
 def _windows_skip_posix_path_false_positive(path: str) -> bool:
@@ -836,6 +1038,15 @@ def _subprocess_env_for_shell() -> Dict[str, str]:
     - 禁用 RUN_SHELL_PYTHON_UNBUFFERED 时不改该项，沿用 ``os.environ`` 拷贝。
     """
     env = os.environ.copy()
+    # Controller identity is available only to the server-side preflight
+    # guard. Do not disclose supervisor metadata to an untrusted child.
+    for key in (
+        "MYAGENT_TRAY_PID",
+        "MYAGENT_SUPERVISOR_PID",
+        "MYAGENT_SERVER_PID",
+        "MYAGENT_PROTECTED_PIDS",
+    ):
+        env.pop(key, None)
     if os.getenv("RUN_SHELL_INHERIT_SECRET_ENV", "0").strip().lower() not in ("1", "true", "yes", "on"):
         secret_markers = ("API_KEY", "SECRET", "PASSWORD", "TOKEN", "PRIVATE", "CREDENTIAL")
         for key in list(env):
@@ -1251,6 +1462,12 @@ async def _kill_process_tree(process: asyncio.subprocess.Process) -> None:
     pid = getattr(process, "pid", None)
     if not pid:
         return
+    if int(pid) in _agent_protected_process_ids():
+        logger.error(
+            "run_shell refused to terminate protected Agent process pid=%s",
+            pid,
+        )
+        return
     if platform.system() == "Windows":
         try:
             killer = await asyncio.create_subprocess_exec(
@@ -1278,6 +1495,78 @@ async def _kill_process_tree(process: asyncio.subprocess.Process) -> None:
                 process.kill()
             except ProcessLookupError:
                 pass
+
+
+def _assign_windows_run_shell_job(pid: int) -> Any:
+    """Place a Shell tree in a bounded Windows Job Object when available."""
+
+    if platform.system() != "Windows" or not pid:
+        return None
+    if os.getenv("RUN_SHELL_WINDOWS_JOB_LIMITS", "1").strip().lower() in {
+        "0",
+        "false",
+        "no",
+        "off",
+    }:
+        return None
+    try:
+        import win32api
+        import win32con
+        import win32job
+
+        process_limit = max(
+            2,
+            min(int(os.getenv("RUN_SHELL_MAX_PROCESSES", "64")), 512),
+        )
+        memory_mb = max(
+            128,
+            min(int(os.getenv("RUN_SHELL_JOB_MEMORY_MB", "2048")), 32768),
+        )
+        job = win32job.CreateJobObject(None, "")
+        info = win32job.QueryInformationJobObject(
+            job, win32job.JobObjectExtendedLimitInformation
+        )
+        basic = info["BasicLimitInformation"]
+        basic["LimitFlags"] |= (
+            win32job.JOB_OBJECT_LIMIT_ACTIVE_PROCESS
+            | win32job.JOB_OBJECT_LIMIT_JOB_MEMORY
+            | win32job.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+        )
+        basic["ActiveProcessLimit"] = process_limit
+        info["JobMemoryLimit"] = memory_mb * 1024 * 1024
+        win32job.SetInformationJobObject(
+            job, win32job.JobObjectExtendedLimitInformation, info
+        )
+        process_handle = win32api.OpenProcess(
+            win32con.PROCESS_SET_QUOTA | win32con.PROCESS_TERMINATE,
+            False,
+            int(pid),
+        )
+        try:
+            win32job.AssignProcessToJobObject(job, process_handle)
+        finally:
+            win32api.CloseHandle(process_handle)
+        return job
+    except Exception:
+        # Some hosts already place Agent in a non-nestable Job Object. Keep
+        # command execution compatible while retaining preflight protection.
+        logger.debug(
+            "run_shell: unable to assign Windows Job limits for pid=%s",
+            pid,
+            exc_info=True,
+        )
+        return None
+
+
+def _close_windows_run_shell_job(job: Any) -> None:
+    if job is None:
+        return
+    try:
+        import win32api
+
+        win32api.CloseHandle(job)
+    except Exception:
+        logger.debug("run_shell: unable to close Windows Job handle", exc_info=True)
 
 
 def _is_windows_wsl_system_bash(path: str) -> bool:
@@ -1604,10 +1893,17 @@ async def run_shell(
         return _sensitive_tool_resource_error("shell access")
 
     # 1. 安全检测
+    self_protection_reason = _agent_self_protection_reason(full_cmd)
+    if self_protection_reason:
+        return f"Error: Command blocked by Agent self-protection: {self_protection_reason}"
     if _is_dangerous(full_cmd):
-        return "Error: Command blocked by safety guard (dangerous pattern or internal URL)."
+        return (
+            "Error: Command blocked by safety guard. "
+            + _dangerous_command_guidance(full_cmd)
+        )
 
     ephemeral_py: List[Path] = []
+    process_job = None
     try:
         wroot = active_tool_work_dir()
         full_cmd, ephemeral_py = _maybe_materialize_python_c_script(full_cmd, wroot)
@@ -1704,6 +2000,7 @@ async def run_shell(
                     env=sh_env,
                     **spawn_kw,
                 )
+            process_job = _assign_windows_run_shell_job(int(process.pid or 0))
             try:
                 communicate_task = asyncio.create_task(process.communicate())
                 # interrupt 监控：轮询回调标志，触发时杀掉子进程树
@@ -1771,6 +2068,7 @@ async def run_shell(
 
 
     finally:
+        _close_windows_run_shell_job(process_job)
         _unlink_run_shell_temp(ephemeral_py)
 
 
@@ -3829,8 +4127,8 @@ OPENAI_TOOL_DEFINITIONS: List[Dict[str, Any]] = [
                     "properties": {
                         "header": {
                             "type": "string",
-                            "description": "Short tab/card label, at most 12 visible characters.",
-                            "maxLength": 12,
+                            "description": "Short tab/card label, at most 50 visible characters.",
+                            "maxLength": 50,
                         },
                         "question": {
                             "type": "string",
@@ -4079,6 +4377,8 @@ OPENAI_TOOL_DEFINITIONS: List[Dict[str, Any]] = [
         "`timeout_ms` is capped at **600000** ms. Bash uses a login shell by default; set `login=false` when startup profiles are unnecessary. "
         "`restrict_to_workspace` (default true): reject commands that reference paths outside the workspace; set false for broader paths (often needs UI approval). "
         "Blocks dangerous patterns and private-network URLs in the command text; quote paths with spaces. "
+        "Agent backend/tray PIDs and lifecycle scripts are protected: broad Python process termination is rejected, "
+        "while terminating an explicitly selected unrelated PID remains allowed. Restart Agent only through the external tray/RUN.bat flow. "
         "Virtual `/folder` under restriction means under the workspace root, not the OS root; avoid `cd /` expecting the workspace on Windows. "
         "Prefer write_file(temporary=true) + `python script.py` over huge `python -c` for throwaway scripts; long `-c` payloads may auto-materialize under `.run_shell_temp/`. "
         "Do not assume POSIX utilities exist on Windows—use Python when unsure. Binary-heavy output may be truncated or summarized. "
@@ -4170,8 +4470,6 @@ OPENAI_TOOL_DEFINITIONS: List[Dict[str, Any]] = [
                     "collect",
                     "interrupt",
                     "steer",
-                    "permissions",
-                    "resolve_permission",
                     "worktree",
                 ],
                 "description": (
@@ -4187,7 +4485,6 @@ OPENAI_TOOL_DEFINITIONS: List[Dict[str, Any]] = [
                     "(empty = all), and consumed pending results are cleared. "
                     "interrupt: cancel a running subagent; requires resume ID. "
                     "steer: queue a durable instruction for a currently running subagent. "
-                    "permissions/resolve_permission: inspect or resolve ordinary subagent one-shot approvals. "
                     "worktree: inspect, diff, retain, merge, or discard a managed task worktree."
                 ),
             },
@@ -4292,24 +4589,6 @@ OPENAI_TOOL_DEFINITIONS: List[Dict[str, Any]] = [
                 "type": "string",
                 "description": "steer only: optional caller-stable idempotency key.",
             },
-            "permission_id": {
-                "type": "string",
-                "description": "resolve_permission only: exact pending subagent permission ID.",
-            },
-            "decision": {
-                "type": "string",
-                "enum": ["allowed", "denied"],
-                "description": "resolve_permission only: one-shot resolution.",
-            },
-            "reason": {
-                "type": "string",
-                "description": "resolve_permission only: optional audit reason.",
-            },
-            "include_terminal": {
-                "type": "boolean",
-                "description": "permissions only: include consumed and denied historical requests.",
-                "default": False,
-            },
             "worktree_action": {
                 "type": "string",
                 "enum": ["status", "diff", "retain", "merge", "discard"],
@@ -4335,7 +4614,7 @@ OPENAI_TOOL_DEFINITIONS: List[Dict[str, Any]] = [
     ),
     _openai_function_schema(
         "team",
-        "Manage a durable Agent Team when the experimental feature is enabled. The root agent is the lead; spawned members keep one persistent child session and can be dispatched repeatedly. Team state, tasks, mailbox delivery, permissions, and lifecycle are stored as Runtime V2 events. Use status before mutating an existing team. Only the lead may create/archive a team, spawn/dispatch/remove members, resolve permissions, or shut down. Members may coordinate through messages, claim/update work, read their own inbox, and request permission.",
+        "Manage a durable Agent Team when the experimental feature is enabled. The root agent is the lead; spawned members keep one persistent child session and can be dispatched repeatedly. Team state, tasks, mailbox delivery, and lifecycle are stored as Runtime V2 events. Use status before mutating an existing team. Only the lead may create/archive a team, spawn/dispatch/remove members, or shut down. Members may coordinate through messages, claim/update work, and read their own inbox.",
         {
             "action": {
                 "type": "string",
@@ -4343,7 +4622,7 @@ OPENAI_TOOL_DEFINITIONS: List[Dict[str, Any]] = [
                     "status", "create", "spawn_member", "dispatch", "remove_member",
                     "set_member_state", "create_task", "claim_task", "release_task",
                     "update_task", "send_message", "read_inbox", "consume_message",
-                    "request_permission", "resolve_permission", "shutdown",
+                    "shutdown",
                     "complete_shutdown", "archive", "auto_schedule"
                 ],
             },
@@ -4364,17 +4643,13 @@ OPENAI_TOOL_DEFINITIONS: List[Dict[str, Any]] = [
                 "enum": ["starting", "idle", "working", "waiting_permission", "stopping", "stopped", "failed", "pending", "in_progress", "blocked", "completed", "cancelled"]
             },
             "result": {"type": "string", "description": "update_task: result or handoff."},
-            "detail": {"type": "string", "description": "Optional status/permission detail."},
-            "reason": {"type": "string", "description": "Optional release/removal/permission/shutdown reason."},
+            "detail": {"type": "string", "description": "Optional status detail."},
+            "reason": {"type": "string", "description": "Optional release/removal/shutdown reason."},
             "recipient_ids": {"type": "array", "items": {"type": "string"}, "description": "send_message recipients; use lead for the root agent."},
             "content": {"type": "string", "description": "send_message body."},
             "message_id": {"type": "string", "description": "consume_message target."},
             "reply_to": {"type": "string", "description": "send_message optional parent message ID."},
             "include_consumed": {"type": "boolean", "description": "read_inbox: include consumed rows."},
-            "permission_action": {"type": "string", "description": "request_permission: exact protected action."},
-            "resource": {"type": "string", "description": "request_permission: file, command, URL, or other target."},
-            "permission_id": {"type": "string", "description": "resolve_permission target."},
-            "decision": {"type": "string", "enum": ["allowed", "denied"]},
             "run_in_background": {"type": "boolean", "description": "dispatch: return immediately while member runs."},
         },
         ["action"],

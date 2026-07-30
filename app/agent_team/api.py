@@ -193,34 +193,6 @@ def create_agent_team_router(
             error=data.get("error") or "",
         )
 
-    @router.post("/{session_id}/permissions")
-    async def request_permission(session_id: str, request: Request):
-        data = await body(request)
-        if isinstance(data, JSONResponse):
-            return data
-        return await invoke(
-            "request_permission",
-            session_id,
-            member_id=data.get("member_id"),
-            action=data.get("action"),
-            resource=data.get("resource") or "",
-            detail=data.get("detail") or "",
-        )
-
-    @router.post("/{session_id}/permissions/{permission_id}/resolve")
-    async def resolve_permission(session_id: str, permission_id: str, request: Request):
-        data = await body(request)
-        if isinstance(data, JSONResponse):
-            return data
-        return await invoke(
-            "resolve_permission",
-            session_id,
-            permission_id,
-            decision=data.get("decision"),
-            resolved_by=data.get("resolved_by") or "lead",
-            reason=data.get("reason") or "",
-        )
-
     @router.post("/{session_id}/shutdown")
     async def request_shutdown(session_id: str, request: Request):
         data = await body(request)

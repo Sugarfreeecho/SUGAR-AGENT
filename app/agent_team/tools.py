@@ -17,7 +17,6 @@ _LEAD_ONLY_ACTIONS = {
     "spawn_member",
     "dispatch",
     "remove_member",
-    "resolve_permission",
     "shutdown",
     "complete_shutdown",
     "archive",
@@ -256,33 +255,6 @@ async def execute_team_tool(
                 "consumed",
             ),
         )
-    if action == "request_permission":
-        member_id = str(args.get("member_id") or actor_id)
-        if member_id == "lead":
-            raise AgentTeamError("lead does not need to request member permission")
-        if actor_id != "lead" and member_id != actor_id:
-            raise AgentTeamError("members may request permission only for themselves")
-        return _json_result(
-            action,
-            service.request_permission(
-                root_id,
-                member_id=member_id,
-                action=str(args.get("permission_action") or args.get("detail") or ""),
-                resource=str(args.get("resource") or ""),
-                detail=str(args.get("detail") or ""),
-            ),
-        )
-    if action == "resolve_permission":
-        return _json_result(
-            action,
-            service.resolve_permission(
-                root_id,
-                str(args.get("permission_id") or ""),
-                decision=str(args.get("decision") or ""),
-                resolved_by="lead",
-                reason=str(args.get("reason") or ""),
-            ),
-        )
     if action == "shutdown":
         return _json_result(action, service.request_shutdown(root_id, str(args.get("reason") or "")))
     if action == "complete_shutdown":
@@ -402,7 +374,7 @@ async def _dispatch_member(
         f"Root team session: {root_id}.\n"
         + (f"Standing member instruction: {member_prompt}\n" if member_prompt else "")
         + (f"Assigned team task: {task_id}.\n" if task_id else "")
-        + "Use the team tool to read your inbox, coordinate, update task status, and request permissions.\n"
+        + "Use the team tool to read your inbox, coordinate, and update task status.\n"
         + f"Current assignment:\n{assignment}"
     )
     service.set_member_state(root_id, member_id, "working", detail=assignment[:1000])

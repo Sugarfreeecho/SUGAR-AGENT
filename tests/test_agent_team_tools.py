@@ -214,51 +214,16 @@ def test_dispatch_auto_completes_claimed_task_and_unlocks_dependency(tmp_path, m
     assert service.claim_next_task("root", member["member_id"])["task_id"] == second["task_id"]
 
 
-def test_member_tool_policy_requires_one_shot_permission(tmp_path, monkeypatch):
-    from agent_team.policy import authorize_member_tool, workspace_write_lock
-    from agent_team.service import AgentTeamService
+def test_member_workspace_writes_are_serialized():
+    from agent_team.policy import workspace_write_lock
 
-    monkeypatch.setenv("AGENT_TEAM_ENABLED", "1")
-    service = AgentTeamService(tmp_path)
-    service.create_team("root")
-    member = service.add_member("root", name="Writer", role="implementation")
     meta = {
         "agent_team_root_session_id": "root",
-        "agent_team_member_id": member["member_id"],
+        "agent_team_member_id": "member",
     }
-
-    allowed, message = authorize_member_tool(
-        service, meta, "delete_file", {"path": "workspace/old.txt"}
-    )
-    assert allowed is False
-    assert '"action": "request_permission"' in message
-    assert service.read_team("root")["members"][member["member_id"]]["state"] == "waiting_permission"
-
-    permission = service.request_permission(
-        "root",
-        member_id=member["member_id"],
-        action="delete_file",
-        resource="workspace/old.txt",
-    )
-    service.resolve_permission(
-        "root", permission["permission_id"], decision="allowed"
-    )
-    assert authorize_member_tool(
-        service, meta, "delete_file", {"path": "workspace/old.txt"}
-    )[0] is True
-    assert authorize_member_tool(
-        service, meta, "delete_file", {"path": "workspace/old.txt"}
-    )[0] is False
 
     assert workspace_write_lock(meta, "write_file") is workspace_write_lock(meta, "run_shell")
     assert workspace_write_lock(meta, "read_file") is None
-
-    monkeypatch.setenv("AGENT_TEAM_ENABLED", "0")
-    allowed, disabled_message = authorize_member_tool(
-        service, meta, "write_file", {"path": "workspace/new.txt"}
-    )
-    assert allowed is False
-    assert "disabled" in disabled_message
 
 
 def test_workspace_lock_wait_cancellation_does_not_leak():

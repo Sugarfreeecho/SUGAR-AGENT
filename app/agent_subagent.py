@@ -703,19 +703,6 @@ def _format_subagent_status_report(parent_session_id: str, resume_raw: str = "")
                 f"tools={int(metrics.get('tool_calls') or 0)}, "
                 f"duration_ms={int(metrics.get('duration_ms') or 0)}"
             )
-        cost = n.get("cost") if isinstance(n.get("cost"), dict) else {}
-        if cost:
-            lines.append(
-                "  cost: "
-                f"{str(cost.get('currency') or 'USD')} "
-                f"{float(cost.get('total') or 0.0):.6f}"
-                + (
-                    f" / budget {float(n.get('cost_budget_usd')):.6f}"
-                    if n.get("cost_budget_usd") not in (None, "")
-                    else ""
-                )
-                + (" (exhausted)" if n.get("cost_budget_exhausted") else "")
-            )
         file_changes = [
             item
             for item in n.get("file_changes") or []
@@ -1692,8 +1679,6 @@ async def _run_single_subagent(
             "collect",
             "interrupt",
             "steer",
-            "permissions",
-            "resolve_permission",
             "worktree",
         }
         if action not in valid_actions:
@@ -1701,7 +1686,7 @@ async def _run_single_subagent(
         resume_for_action = str(tool_args.get("resume") or "").strip()
         if action == "start" and resume_for_action:
             return "Error: task action=start must not include resume; use action=resume."
-        if action in {"resume", "interrupt", "steer", "resolve_permission", "worktree"} and not resume_for_action:
+        if action in {"resume", "interrupt", "steer", "worktree"} and not resume_for_action:
             return f"Error: task action={action} requires resume=<subagent id>."
         if action == "resume" and not str(tool_args.get("prompt") or "").strip():
             return (
@@ -1723,63 +1708,6 @@ async def _run_single_subagent(
             return _format_subagent_status_report(parent_session_id, resume_for_action)
         if action == "collect":
             return await _format_subagent_collect_result(parent_session_id, resume_for_action)
-        if action == "permissions":
-            from subagent_control import (
-                format_subagent_permissions,
-                list_subagent_permissions,
-            )
-
-            target_child = ""
-            if resume_for_action:
-                target_child = str(
-                    session_manager.validate_subagent_resume(
-                        parent_session_id, resume_for_action
-                    )
-                    or ""
-                )
-                if not target_child:
-                    return (
-                        f"Error: cannot inspect permissions for subagent "
-                        f"{resume_for_action!r}; it does not exist or belongs to another session."
-                    )
-            rows = list_subagent_permissions(
-                parent_session_id,
-                child_id=target_child,
-                include_terminal=bool(tool_args.get("include_terminal")),
-            )
-            return format_subagent_permissions(rows)
-        if action == "resolve_permission":
-            from subagent_control import resolve_subagent_permission
-
-            child_id = session_manager.validate_subagent_resume(
-                parent_session_id, resume_for_action
-            )
-            if not child_id:
-                return (
-                    f"Error: cannot resolve permission for subagent "
-                    f"{resume_for_action!r}; it does not exist or belongs to another session."
-                )
-            permission_id = str(tool_args.get("permission_id") or "").strip()
-            decision = str(tool_args.get("decision") or "").strip().lower()
-            if not permission_id or decision not in {"allowed", "denied"}:
-                return (
-                    "Error: resolve_permission requires permission_id and "
-                    "decision=allowed|denied."
-                )
-            try:
-                resolved = resolve_subagent_permission(
-                    parent_session_id,
-                    child_id,
-                    permission_id,
-                    decision,
-                    reason=str(tool_args.get("reason") or ""),
-                )
-            except ValueError as exc:
-                return f"Error: {exc}"
-            return (
-                f"Subagent permission {resolved.get('permission_id')} "
-                f"{resolved.get('state')} for {resolved.get('action')}."
-            )
         if action == "worktree":
             return await asyncio.to_thread(
                 manage_subagent_worktree,

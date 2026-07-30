@@ -31,7 +31,7 @@ def is_low_value_subagent_ui_event(ev: Dict[str, Any]) -> bool:
         not content
         or content == "New Agent Loop Start"
         or content == "Loop finished"
-        or content == "Subagent Continuation Start"
+        or content in {"Subagent Continuation Start", "任务已恢复，流程重启"}
     ):
         return True
     if et in ("warning", "error") and not content:

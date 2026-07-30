@@ -193,37 +193,6 @@ def test_agent_team_api_rejects_unknown_root_session(tmp_path, monkeypatch):
     assert not (tmp_path / "missing").exists()
 
 
-def test_permission_is_one_shot_and_consumed_atomically(tmp_path, monkeypatch):
-    monkeypatch.setenv("AGENT_TEAM_ENABLED", "1")
-    service = AgentTeamService(tmp_path)
-    service.create_team("root")
-    member = service.add_member("root", name="Writer", role="implementation")
-    permission = service.request_permission(
-        "root",
-        member_id=member["member_id"],
-        action="delete_file",
-        resource="workspace/old.txt",
-    )
-    service.resolve_permission(
-        "root", permission["permission_id"], decision="allowed"
-    )
-
-    def consume(_):
-        return service.consume_permission(
-            "root",
-            member_id=member["member_id"],
-            action="delete_file",
-            resource="workspace/old.txt",
-        )
-
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        outcomes = list(pool.map(consume, range(2)))
-
-    assert sum(value is not None for value in outcomes) == 1
-    stored = service.read_team("root")["permissions"][permission["permission_id"]]
-    assert stored["status"] == "consumed"
-
-
 def test_incremental_team_projection_preserves_published_snapshot():
     projector = RuntimeProjector()
     original = projector.project(

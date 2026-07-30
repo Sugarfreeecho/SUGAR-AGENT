@@ -44,21 +44,9 @@
 这种实现与 Claude Code 的 fork 目标相近：父前缀不可变、子分支追加自己的消息，便于
 提供商复用相同序列化前缀。实际 prompt-cache 是否命中仍取决于提供商、模型和请求序列化。
 
-## 一次性审批
+## 权限与审批
 
-普通 Subagent 复用 Agent Team 的一次性授权语义。默认保护 Shell、删除、下载和外部写
-操作；授权按 `child + tool + resource` 精确匹配，只消费一次。
-
-```text
-task(action="permissions", resume="<child-id>")
-task(
-  action="resolve_permission",
-  resume="<child-id>",
-  permission_id="<permission-id>",
-  decision="allowed" | "denied",
-  reason="..."
-)
-```
+普通 `task` subagent 默认与主 Agent 使用同一套权限路径：内置 UI 安全确认、Hook、MCP 与 Plugin 的审批规则照常生效，但不会仅因它是 subagent 而额外要求父 Agent 放行。也就是说，工作区内 Shell、文件编辑和删除遵循主 Agent 的既有规则；`run_shell(restrict_to_workspace=false)`、`web_download` 以及 Hook/MCP/Plugin 声明为需要确认的操作仍会走同一个用户审批界面。
 
 ## 托管 worktree
 

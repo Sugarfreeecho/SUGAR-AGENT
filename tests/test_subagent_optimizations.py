@@ -11,68 +11,6 @@ if str(APP_DIR) not in sys.path:
     sys.path.insert(0, str(APP_DIR))
 
 
-class _PathSessionManager:
-    def __init__(self, root: Path):
-        self.root = root
-
-    def _get_session_path(self, session_id):
-        return self.root / str(session_id)
-
-
-def test_ordinary_subagent_permission_is_exact_and_consumed_once(tmp_path, monkeypatch):
-    import subagent_control
-
-    monkeypatch.setattr(
-        subagent_control,
-        "session_manager",
-        _PathSessionManager(tmp_path),
-    )
-    meta = {
-        "is_subagent": True,
-        "parent_session_id": "parent",
-        "_active_session_id": "child",
-    }
-
-    allowed, message = subagent_control.authorize_subagent_tool(
-        meta,
-        "run_shell",
-        {"command": "git status"},
-    )
-    assert allowed is False
-    assert "permission_id=" in message
-
-    pending = subagent_control.list_subagent_permissions("parent", child_id="child")
-    assert len(pending) == 1
-    permission_id = pending[0]["permission_id"]
-    subagent_control.resolve_subagent_permission(
-        "parent",
-        "child",
-        permission_id,
-        "allowed",
-    )
-
-    allowed, _ = subagent_control.authorize_subagent_tool(
-        meta,
-        "run_shell",
-        {"command": "git status"},
-    )
-    assert allowed is True
-
-    allowed, message = subagent_control.authorize_subagent_tool(
-        meta,
-        "run_shell",
-        {"command": "git status"},
-    )
-    assert allowed is False
-    assert permission_id not in message
-    assert subagent_control.subagent_tool_requires_permission(
-        "mcp_slack_send_message", {"channel": "dev"}
-    )
-    assert not subagent_control.subagent_tool_requires_permission(
-        "mcp_drive_search_files", {"query": "design"}
-    )
-
-
 def test_tool_workspace_override_is_context_local(tmp_path):
     import agent_tools
 
