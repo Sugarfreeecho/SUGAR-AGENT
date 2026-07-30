@@ -9,10 +9,11 @@
 
 - 每个运行都会记录 `started_at`、`heartbeat_at`、`stage`、`status` 和 `finished_at`。
 - 进程启动时将上一进程遗留的 `running` 标记为 `orphaned`，不会让 UI 长期显示假运行。
-- 后台 watchdog 默认每 15 秒检查一次；心跳超过 90 秒未更新时标记 `stale` 并请求中断，
-  总运行时间超过 7200 秒时标记超时并取消运行任务。
-- 可用 `AGENT_RUN_HEARTBEAT_INTERVAL_SECONDS`、`AGENT_RUN_STALE_SECONDS`、
-  `AGENT_RUN_TIMEOUT_SECONDS` 和 `AGENT_RUN_WATCHDOG_INTERVAL_SECONDS` 调整。
+- 后台 watchdog 默认每 15 秒检查一次；心跳超过 90 秒未更新且本进程已没有对应的
+  主 Agent/Subagent 任务时，才标记 `stale` 并清理。系统睡眠或进程短暂停顿不会
+  仅因心跳时间戳过旧而中断仍存活的任务。
+- 可用 `AGENT_RUN_HEARTBEAT_INTERVAL_SECONDS`、`AGENT_RUN_STALE_SECONDS`
+  和 `AGENT_RUN_WATCHDOG_INTERVAL_SECONDS` 调整。运行时长本身没有硬超时。
 
 ## 文件轨迹
 

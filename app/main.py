@@ -63,7 +63,7 @@ if __name__ == "__main__":
         stop_goal_runner,
     )
     from agent_harness import refresh_executor_client_from_env
-    from agent_subagent import reconcile_orphaned_subagent_runs
+    from agent_subagent import reconcile_orphaned_subagent_runs, subagent_registry
     
     # 确保配置正确加载，避免重启后400/401错误
     refresh_executor_client_from_env()
@@ -84,9 +84,14 @@ if __name__ == "__main__":
             session_manager.sessions_dir,
             path_resolver=session_manager._resolve_session_path,
         )
+
+        def runtime_run_is_locally_active(session_id: str, _run_id: str) -> bool:
+            """Keep stale heartbeat records alive while their local task still exists."""
+            return is_run_active(session_id) or subagent_registry.is_running(session_id)
+
         await asyncio.to_thread(
             runtime_observability.reconcile_orphaned_runs,
-            live_checker=lambda sid, _rid: is_run_active(sid),
+            live_checker=runtime_run_is_locally_active,
         )
 
         watchdog_stop = asyncio.Event()
@@ -95,10 +100,6 @@ if __name__ == "__main__":
             stale_seconds = max(
                 30.0,
                 float(os.getenv("AGENT_RUN_STALE_SECONDS", "90")),
-            )
-            timeout_seconds = max(
-                0.0,
-                float(os.getenv("AGENT_RUN_TIMEOUT_SECONDS", "7200")),
             )
             interval = max(
                 5.0,
@@ -109,18 +110,11 @@ if __name__ == "__main__":
                 stale = await asyncio.to_thread(
                     runtime_observability.scan_stale_runs,
                     stale_seconds,
-                )
-                expired = (
-                    await asyncio.to_thread(
-                        runtime_observability.scan_timed_out_runs,
-                        timeout_seconds,
-                    )
-                    if timeout_seconds > 0
-                    else []
+                    live_checker=runtime_run_is_locally_active,
                 )
                 targets = {
                     str(item.get("session_id") or "")
-                    for item in [*stale, *expired]
+                    for item in stale
                     if str(item.get("session_id") or "")
                 }
                 for sid in targets:

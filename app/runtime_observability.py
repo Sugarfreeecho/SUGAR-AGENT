@@ -295,55 +295,6 @@ def scan_stale_runs(
     return stale
 
 
-def scan_timed_out_runs(
-    max_runtime_seconds: float,
-    *,
-    mark: bool = True,
-) -> list[dict]:
-    if _sessions_root is None or not _sessions_root.exists():
-        return []
-    timeout = max(1.0, float(max_runtime_seconds))
-    now = datetime.now(timezone.utc)
-    expired: list[dict] = []
-    with _lock:
-        for path in _sessions_root.rglob("runtime_observability.json"):
-            try:
-                data = json.loads(path.read_text(encoding="utf-8"))
-            except (OSError, ValueError):
-                continue
-            sid = str(data.get("session_id") or path.parent.name)
-            changed = False
-            for row in data.get("runs") or []:
-                if not isinstance(row, dict) or str(row.get("status") or "") != "running":
-                    continue
-                started = _parse_time(row.get("started_at"))
-                age = timeout + 1 if started is None else max(0.0, (now - started).total_seconds())
-                if age <= timeout:
-                    continue
-                rid = str(row.get("run_id") or "")
-                expired.append(
-                    {
-                        "session_id": sid,
-                        "run_id": rid,
-                        "age_seconds": round(age, 3),
-                        "kind": str(row.get("kind") or "agent"),
-                    }
-                )
-                if mark:
-                    row["status"] = "stale"
-                    row["finished_at"] = _now()
-                    row["stale_reason"] = f"runtime exceeded {timeout:g}s"
-                    changed = True
-            if changed:
-                tmp = path.with_suffix(".json.tmp")
-                tmp.write_text(
-                    json.dumps(data, ensure_ascii=False, separators=(",", ":")),
-                    encoding="utf-8",
-                )
-                os.replace(tmp, path)
-    return expired
-
-
 def reconcile_orphaned_runs(
     *,
     live_checker: Optional[Callable[[str, str], bool]] = None,
