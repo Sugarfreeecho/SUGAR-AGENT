@@ -2,6 +2,7 @@ import asyncio
 import inspect
 import sys
 import threading
+import time
 from pathlib import Path
 
 
@@ -142,6 +143,95 @@ def test_refresh_replay_keeps_running_tool_after_many_stream_chunks():
     assert replay[1]["delta"] == "".join(str(i % 10) for i in range(800))
 
 
+def test_refresh_replay_keeps_complete_context_summary_after_recent_buffer_limit():
+    import session_event_bus as bus
+
+    async def scenario():
+        sid = "stream-replay-context-summary"
+        run_id = "run-summary"
+        await bus.close_session_stream(sid)
+        for index in range(900):
+            await bus.publish_session_event(
+                sid,
+                {
+                    "type": "context_summary_delta",
+                    "ephemeral": True,
+                    "run_id": run_id,
+                    "delta": str(index % 10),
+                },
+            )
+        subscription = bus.subscribe_session_events(sid, replay_recent=True)
+        replay = await asyncio.wait_for(subscription.__anext__(), timeout=1)
+        await subscription.aclose()
+        await bus.close_session_stream(sid)
+        return replay
+
+    replay = asyncio.run(scenario())
+    assert replay["type"] == "context_summary_delta"
+    assert replay["delta"] == "".join(str(i % 10) for i in range(900))
+    assert replay["replayed_snapshot"] is True
+
+
+def test_committed_context_body_prunes_its_live_delta_snapshot():
+    import session_event_bus as bus
+
+    async def scenario():
+        sid = "stream-replay-context-committed"
+        await bus.close_session_stream(sid)
+        await bus.publish_session_event(
+            sid,
+            {
+                "type": "context_summary_delta",
+                "ephemeral": True,
+                "run_id": "run-committed",
+                "delta": "partial",
+            },
+        )
+        await bus.publish_session_event(
+            sid,
+            {
+                "type": "context_summary_body",
+                "run_id": "run-committed",
+                "content": "complete",
+            },
+        )
+        assert not bus._live_delta_snapshots.get(sid)
+        await bus.close_session_stream(sid)
+
+    asyncio.run(scenario())
+
+
+def test_terminal_event_prunes_only_the_terminated_run_ephemerals():
+    import session_event_bus as bus
+
+    async def scenario():
+        sid = "stream-replay-terminal-run-boundary"
+        await bus.close_session_stream(sid)
+        for run_id, delta in (("old-run", "old"), ("replacement-run", "new")):
+            await bus.publish_session_event(
+                sid,
+                {
+                    "type": "context_summary_delta",
+                    "ephemeral": True,
+                    "run_id": run_id,
+                    "delta": delta,
+                },
+            )
+        await bus.publish_session_event(
+            sid,
+            {"type": "run_interrupted", "run_id": "old-run"},
+        )
+        subscription = bus.subscribe_session_events(sid, replay_recent=True)
+        replay = await asyncio.wait_for(subscription.__anext__(), timeout=1)
+        await subscription.aclose()
+        await bus.close_session_stream(sid)
+        return replay
+
+    replay = asyncio.run(scenario())
+    assert replay["run_id"] == "replacement-run"
+    assert replay["delta"] == "new"
+
+
 def test_refresh_replay_compacts_thinking_status_and_clears_it_on_delta():
     import session_event_bus as bus
 
@@ -270,6 +360,41 @@ def test_stream_detach_does_not_request_user_interrupt():
     assert "recovered_closed_tool_calls" in react_source
 
 
+def test_interrupt_waits_are_bounded_and_context_lock_timeout_returns():
+    import agent_loop
+
+    sid = "bounded-context-policy-wait"
+    lock = agent_loop._context_policy_lock_for_session(sid)
+    lock.acquire()
+    try:
+        started = time.monotonic()
+        assert agent_loop._wait_context_policy_idle(sid, 0.02) is False
+        assert time.monotonic() - started < 0.5
+    finally:
+        lock.release()
+
+    react_source = inspect.getsource(agent_loop._react_node_once)
+    assert "stream_worker_done_event.wait," in react_source
+    assert "STREAM_WORKER_ABORT_TIMEOUT_SEC" in react_source
+    assert "asyncio.to_thread(stream_worker_done_event.wait)" not in react_source
+
+
+def test_frontend_terminal_cleanup_discards_tool_and_progress_drafts():
+    sse_source = (ROOT / "frontend/src/app/modules/sse-handling.js").read_text(encoding="utf-8")
+    render_source = (ROOT / "frontend/src/app/modules/message-rendering.js").read_text(encoding="utf-8")
+    sessions_source = (ROOT / "frontend/src/app/modules/session-management.js").read_text(encoding="utf-8")
+
+    end_run = sse_source.split("function endRunForClient", 1)[1].split(
+        "async function readSseChunkWithIdleTimeout", 1
+    )[0]
+    assert "removeAbortedToolDraftRows(ctx, {});" in end_run
+    assert "discardProgressStreamChunks(ctx);" in end_run
+    assert "discardPartialStreams: parsed.type !== 'run_finished'" in sse_source
+    assert "function discardProgressStreamChunks(ctx)" in render_source
+    assert "historyHydrationStream.hidden = false" in sessions_source
+    assert "vis.hidden = true" in sessions_source
+
+
 def test_all_closed_external_tools_can_start_before_finish_reason():
     import agent_loop
 
@@ -304,6 +429,20 @@ def test_early_tool_completion_waits_for_llm_commit_before_ui_emit():
     )
 
 
+def test_consecutive_side_effecting_tools_reuse_the_previous_workspace_snapshot():
+    import agent_loop
+
+    react_source = inspect.getsource(agent_loop._react_node_once)
+    execute_wrapper = react_source.split("async def execute_one(tool_call)", 1)[1].split(
+        "# ---------- 2.6", 1
+    )[0]
+
+    assert "workspace_audit_tail_by_root" in react_source
+    assert "audit_root in workspace_audit_tail_by_root" in execute_wrapper
+    assert "workspace_audit_tail_by_root[audit_root] = after_workspace" in execute_wrapper
+    assert 'audit_before_source = "previous_after"' in execute_wrapper
+
+
 def test_frontend_uses_independent_sse_sequence_scopes_and_fast_reattach():
     store_source = (ROOT / "frontend/src/app/state/session-store.js").read_text(encoding="utf-8")
     sse_source = (ROOT / "frontend/src/app/modules/sse-handling.js").read_text(encoding="utf-8")
@@ -329,3 +468,29 @@ def test_frontend_inserts_live_react_rows_in_logical_phase_order():
     assert "body.insertBefore(row, existing)" in helper
     assert "insertReactOrderedFeedRow(body, row, type, streamOpts.reactIter, reactGenerationForContext(ctx))" in creator
     assert "data-react-generation" in creator
+
+
+def test_pending_append_steer_stays_as_tail_anchor_until_committed():
+    source = (ROOT / "frontend/src/app/modules/message-rendering.js").read_text(encoding="utf-8")
+    sse_source = (ROOT / "frontend/src/app/modules/sse-handling.js").read_text(encoding="utf-8")
+    anchor_helper = source.split(
+        "function appendProcessRowBeforePendingAppendSteer", 1
+    )[1].split("function insertReactOrderedFeedRow", 1)[0]
+    ordered_insert = source.split("function insertReactOrderedFeedRow", 1)[1].split(
+        "function createProcessFeedRow", 1
+    )[0]
+    steer_renderer = sse_source.split("function appendSteerProcessMessage", 1)[1].split(
+        "function appendPendingSteerToProcess", 1
+    )[0]
+
+    assert "type !== 'user-steer'" in anchor_helper
+    assert '[data-steer-mode="append"][data-steer-pending="1"]' in anchor_helper
+    assert "body.insertBefore(row, pendingAppendSteer)" in anchor_helper
+    assert ordered_insert.count(
+        "appendProcessRowBeforePendingAppendSteer(body, row, type)"
+    ) == 2
+    assert "existing.removeAttribute('data-steer-pending')" in steer_renderer
+    assert "existing.dataset.steerCommitted = '1'" in steer_renderer
+    assert "appendPendingSteerToProcess(sid, local);" in sse_source
+    assert "appendPendingSteerToProcess(sid, latest);" in sse_source
+    assert "serverState === 'queued' || serverState === 'claimed'" in sse_source

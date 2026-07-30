@@ -105,6 +105,11 @@ function updateHumanInteractionSessionBadge(sessionId) {
     if (!head) return;
     var badge = head.querySelector('.session-human-badge');
     var count = sessionPendingHumanCount(sid);
+    if (count <= 0) {
+        if (badge) badge.remove();
+        row.classList.remove('has-human-pending');
+        return;
+    }
     if (!badge && count > 0) {
         badge = document.createElement('span');
         badge.className = 'session-human-badge';
@@ -114,11 +119,10 @@ function updateHumanInteractionSessionBadge(sessionId) {
     }
     if (badge) {
         badge.textContent = String(count);
-        badge.classList.toggle('hidden', count <= 0);
         badge.setAttribute('data-ui-tip', count + ' 个待处理请求');
         if (typeof bindUiHoverTip === 'function') bindUiHoverTip(badge);
     }
-    row.classList.toggle('has-human-pending', count > 0);
+    row.classList.add('has-human-pending');
 }
 
 function updateAllHumanInteractionSessionBadges() {
@@ -158,6 +162,34 @@ function focusFirstPendingHumanInteraction() {
 
 function humanInteractionDraftKey(sessionId, interactionId) {
     return HUMAN_INTERACTION_DRAFT_PREFIX + String(sessionId || '') + ':' + String(interactionId || '');
+}
+
+function humanInteractionToolSlot(stream, toolCallId) {
+    var tid = String(toolCallId || '');
+    if (!stream || !tid || typeof CSS === 'undefined' || !CSS.escape) return null;
+    var row = null;
+    try {
+        row = stream.querySelector('.feed-item.feed--tool[data-tool-call-id="' + CSS.escape(tid) + '"]');
+    } catch (e) { row = null; }
+    if (!row) return null;
+    var slot = row.querySelector('.human-interaction-tool-slot');
+    if (!slot) {
+        slot = document.createElement('div');
+        slot.className = 'human-interaction-tool-slot';
+        row.appendChild(slot);
+    }
+    return slot;
+}
+
+function attachHumanInteractionCardsForToolCall(stream, toolCallId) {
+    var tid = String(toolCallId || '');
+    var slot = humanInteractionToolSlot(stream, tid);
+    if (!slot) return false;
+    var escaped = (window.CSS && CSS.escape) ? CSS.escape(tid) : tid.replace(/"/g, '\\"');
+    Array.from(stream.querySelectorAll('.human-interaction-card[data-tool-call-id="' + escaped + '"]')).forEach(function (card) {
+        if (card.parentNode !== slot) slot.appendChild(card);
+    });
+    return true;
 }
 
 function persistHumanInteractionDraft(card) {
@@ -510,8 +542,13 @@ function renderHumanInteractionRecord(record, sessionId, stream) {
         ? (kind === 'approval' ? createHumanApprovalCard(record, sid) : createHumanQuestionCard(record, sid))
         : createHumanTerminalCard(record, sid);
     card.dataset.status = record.status || 'pending';
+    var toolCallId = String(record.tool_call_id || '');
+    if (toolCallId) card.dataset.toolCallId = toolCallId;
     if (existing && existing.parentNode) existing.parentNode.replaceChild(card, existing);
-    else stream.appendChild(card);
+    else {
+        var slot = humanInteractionToolSlot(stream, toolCallId);
+        (slot || stream).appendChild(card);
+    }
     if (!replayingMessages && record.status === 'pending') {
         requestAnimationFrame(function () { card.scrollIntoView({ behavior: 'smooth', block: 'nearest' }); });
     }

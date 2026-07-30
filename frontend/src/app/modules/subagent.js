@@ -224,7 +224,7 @@ function shouldSkipSubagentProcessEvent(event) {
     if (!event || typeof event !== 'object') return true;
     var t = String(event.type || '');
     var c = String(event.content || '').trim();
-    if (t === 'status' && (!c || c === 'New Agent Loop Start' || c === 'Loop finished' || c === 'Subagent Continuation Start')) return true;
+    if (t === 'status' && (!c || c === 'New Agent Loop Start' || c === 'Loop finished' || c === 'Subagent Continuation Start' || c === '任务已恢复，流程重启')) return true;
     if ((t === 'warning' || t === 'error') && !c) return true;
     return false;
 }

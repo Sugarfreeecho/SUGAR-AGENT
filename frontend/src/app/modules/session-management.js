@@ -944,6 +944,14 @@ async function loadSessionMessages(sessionId, scrollBehavior, opts) {
     scrollBehavior = scrollBehavior || 'saved-or-bottom';
     opts = opts || {};
     const loadToken = ++messageLoadEpoch;
+    let historyHydrationStream = null;
+    const finishHistoryHydration = function () {
+        if (historyHydrationStream) {
+            historyHydrationStream.hidden = false;
+            historyHydrationStream = null;
+        }
+        if (loadToken === messageLoadEpoch) hideLoading();
+    };
     sessionStore.ui.loadingMessages = true;
     suppressTocDuringSessionLoad = true;
     replayingMessages = true;
@@ -1011,10 +1019,17 @@ async function loadSessionMessages(sessionId, scrollBehavior, opts) {
         }
         if (loadToken !== messageLoadEpoch || sessionId !== currentSessionId) return;
         if (getSessionRunState(sessionId) && !opts.allowDuringRun) return;
-        document.getElementById('chat-loading')?.remove();
         if (!getVisibleChatStream()) ensureVisibleChatStreamSlot();
         const vis = getVisibleChatStream();
-        if (vis) emptyChatStreamKeepingStrip(vis);
+        if (vis) {
+            const loader = document.getElementById('chat-loading');
+            if (loader && loader.parentNode === vis && chatContainer) {
+                chatContainer.insertBefore(loader, vis);
+            }
+            vis.hidden = true;
+            historyHydrationStream = vis;
+            emptyChatStreamKeepingStrip(vis);
+        }
         else {
             chatContainer.innerHTML = '';
             ensureVisibleChatStreamSlot();
@@ -1058,6 +1073,7 @@ async function loadSessionMessages(sessionId, scrollBehavior, opts) {
         if (events.length === 0) {
             suppressTocDuringSessionLoad = false;
             setWelcome();
+            finishHistoryHydration();
             updateSessionTitle();
             scheduleContextTokensAfterPaint(sessionId);
             applyChatScrollAfterHistoryLoad(sessionId, scrollBehavior);
@@ -1093,6 +1109,7 @@ async function loadSessionMessages(sessionId, scrollBehavior, opts) {
                 if (loadToken !== messageLoadEpoch || sessionId !== currentSessionId) return;
             }
         }
+        finishHistoryHydration();
         if (!chatStreamHasConversationContent()) {
             suppressTocDuringSessionLoad = false;
             setWelcome();
@@ -1153,6 +1170,7 @@ async function loadSessionMessages(sessionId, scrollBehavior, opts) {
         showSessionLoadRetry(sessionId);
         return false;
     } finally {
+        finishHistoryHydration();
         if (loadToken === messageLoadEpoch) sessionStore.ui.loadingMessages = false;
         if (loadToken === messageLoadEpoch) suppressTocDuringSessionLoad = false;
         if (loadToken === messageLoadEpoch) replayingMessages = false;
@@ -1206,6 +1224,12 @@ async function switchSession(sessionId, opts) {
     clearTodoForSessionLoad();
     pendingRewriteTruncate = null;
     hideRewriteUndoToast();
+    // A green-dot session represents an unread completed result. Opening it
+    // must land at the newest result, never at a stale reading anchor.
+    var sessionHadUnreadResult = !!(
+        (sessionStore.get(sessionId) && sessionStore.get(sessionId).unread_result)
+        || sessionUnreadComplete.has(sessionId)
+    );
     clearSessionUnreadState(sessionId);
     const leaving = currentSessionId;
     saveChatScrollForSession(leaving);
@@ -1229,13 +1253,32 @@ async function switchSession(sessionId, opts) {
     syncSessionListIndicatorClasses();
     setSendButtonState();
     var restoredFromCache = false;
-    if (!opts.forceReload && (restoreStreamForRunningSession(sessionId) || (restoredFromCache = restoreCachedSessionStream(sessionId)))) {
+    var restoredRunningStream = false;
+    if (!opts.forceReload && ((restoredRunningStream = restoreStreamForRunningSession(sessionId)) || (restoredFromCache = restoreCachedSessionStream(sessionId)))) {
         suppressTocDuringSessionLoad = false;
         hideLoading();
         rebuildToc({ localOnly: true });
         updateSessionTitle();
         scheduleContextTokensAfterPaint(sessionId);
-        restoreCachedSessionScrollPosition(sessionId);
+        // Only a complete, idle stream restored from the in-memory cache may
+        // return to its prior reading position. A live run and a green-dot
+        // completion always open on their newest content.
+        var sessionIsRunningNow = !!(
+            restoredRunningStream
+            || isSessionRunning(sessionId)
+            || (typeof isServerStreamActive === 'function' && isServerStreamActive(sessionId))
+        );
+        if (restoredFromCache && !sessionHadUnreadResult && !sessionIsRunningNow) {
+            restoreCachedSessionScrollPosition(sessionId);
+        } else {
+            streamChatNearBottom = true;
+            streamProcNearBottom = true;
+            liveAutoFollow = true;
+            scrollToBottom();
+            if (sessionIsRunningNow && typeof scrollCurrentRunningProcessToBottom === 'function') {
+                scrollCurrentRunningProcessToBottom(sessionId);
+            }
+        }
         if (typeof refreshTodoPlanPanel === 'function') void refreshTodoPlanPanel();
         else renderTodoPlanForCurrentSession();
         if (typeof refreshHumanInteractions === 'function') void refreshHumanInteractions(sessionId);
@@ -1267,7 +1310,10 @@ async function switchSession(sessionId, opts) {
         setTimeout(async function () {
         if (switchToken !== switchSessionEpoch || sessionId !== currentSessionId) { resolve(false); return; }
         try {
-            var loadedOk = await loadSessionMessages(sessionId, 'saved-smooth-or-bottom', {
+            // A freshly loaded or force-reloaded stream does not restore a
+            // persisted reading position. Once its history is rendered, ease
+            // the viewport down to the newest message.
+            var loadedOk = await loadSessionMessages(sessionId, 'smooth-bottom', {
                 preloadOlderIfShort: isServerStreamActive(sessionId),
                 allowDuringRun: isServerStreamActive(sessionId),
                 tocAlreadyStarted: tocAlreadyStarted,

@@ -1028,6 +1028,13 @@ function scrollCurrentRunningProcessToBottom(sessionId) {
         var runningAggs = stream.querySelectorAll('.process-aggregate.is-running');
         agg = runningAggs.length ? runningAggs[runningAggs.length - 1] : null;
     }
+    // A restored server-side run may not yet have rebuilt the local run
+    // context or the is-running class. Its last process block still owns the
+    // newest generated entries, so use it as the authoritative fallback.
+    if (!agg) {
+        var allAggs = stream.querySelectorAll('.process-aggregate');
+        agg = allAggs.length ? allAggs[allAggs.length - 1] : null;
+    }
     if (!agg) return;
     if (agg.classList.contains('is-collapsed')) {
         agg.classList.remove('is-collapsed');
@@ -1270,6 +1277,11 @@ function finalizeLlmStreamChunks(ctx) {
 
 function discardLlmStreamChunks(ctx, ev) {
     if (!ctx) return;
+    ev = ev || {};
+    if (ev.cleanup_scope === 'none') {
+        finalizeLlmStreamChunks(ctx);
+        return;
+    }
     if (ctx.llm) {
         const l = ctx.llm;
         if (l.llmDeltaFlushRaf) {
@@ -1298,26 +1310,29 @@ function discardLlmStreamChunks(ctx, ev) {
     var reactIter = ev && ev.react_iter != null && Number.isFinite(Number(ev.react_iter))
         ? String(Math.max(1, Math.floor(Number(ev.react_iter))))
         : '';
+    var runId = String((ev && (ev.run_id || ev.runId)) || '');
+    var hasScopedAbort = !!(reactIter || runId || (ev && ev.react_generation != null));
+    var reactGeneration = ev && ev.react_generation != null && Number.isFinite(Number(ev.react_generation))
+        ? String(Math.max(0, Math.floor(Number(ev.react_generation))))
+        : (hasScopedAbort ? String(reactGenerationForContext(ctx)) : null);
+    function matchesAbortScope(el) {
+        if (!el) return false;
+        if (reactIter && String(el.getAttribute('data-react-iter') || '') !== reactIter) return false;
+        if (reactGeneration !== null && String(el.getAttribute('data-react-generation') || '0') !== reactGeneration) return false;
+        var rowRunId = String(el.getAttribute('data-run-id') || '');
+        if (runId && rowRunId && rowRunId !== runId) return false;
+        return true;
+    }
     bodies.forEach(function (body) {
-        body.querySelectorAll('.feed-item.feed--llm, .feed-item.feed--llm2').forEach(function (el) {
-            var ch = el.querySelector('.feed-chunk');
-            if (ch && ch.classList.contains('is-streaming')) el.remove();
+        body.querySelectorAll('.feed-item[data-llm-live-row="1"]').forEach(function (el) {
+            if (matchesAbortScope(el)) el.remove();
         });
-        body.querySelectorAll('.feed-item.feed--tool[data-tool-pending="1"]').forEach(function (el) {
-            el.remove();
+        body.querySelectorAll(
+            '.feed-item.feed--tool[data-tool-draft-key], '
+            + '.feed-item.feed--tool[data-tool-pending="1"]'
+        ).forEach(function (el) {
+            if (matchesAbortScope(el)) el.remove();
         });
-        if (reactIter) {
-            var sel = '.feed-item[data-react-iter="' + reactIter + '"]';
-            body.querySelectorAll(sel).forEach(function (el) {
-                if (
-                    el.classList.contains('feed--tool')
-                    || el.classList.contains('feed--llm')
-                    || el.classList.contains('feed--llm2')
-                ) {
-                    el.remove();
-                }
-            });
-        }
     });
 }
 

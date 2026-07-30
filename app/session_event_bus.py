@@ -18,6 +18,9 @@ _SNAPSHOT_DELTA_FIELDS = {
     "llm_response_delta": ("delta",),
     "tool_call_delta": ("name_delta", "arguments_delta"),
     "tool_command_delta": ("delta", "command_delta"),
+    "context_trim_delta": ("delta",),
+    "context_summary_delta": ("delta",),
+    "key_context_delta": ("delta",),
 }
 
 _LIVE_STATE_TYPES = {"tool_pending"}
@@ -77,6 +80,27 @@ async def publish_session_event(session_id: str, event: Dict[str, Any]) -> None:
                 types={completed_type},
                 react_iter=event.get("react_iter"),
             )
+        elif event.get("type") in {
+            "context_trim_body",
+            "context_summary_body",
+            "key_context_body",
+        }:
+            completed_type = str(event.get("type") or "").replace("_body", "_delta")
+            _prune_recent_ephemeral_unlocked(
+                sid,
+                types={completed_type},
+                run_id=event.get("run_id") or event.get("runId"),
+            )
+        elif event.get("type") in {"run_finished", "run_interrupted", "run_failed"}:
+            terminal_run_id = event.get("run_id") or event.get("runId")
+            if str(terminal_run_id or "").strip():
+                # A terminal boundary owns all transient UI state for that run.
+                # Remove it before delivery so reconnect cannot resurrect an
+                # abandoned tool call or partial compression row.
+                _prune_recent_ephemeral_unlocked(
+                    sid,
+                    run_id=terminal_run_id,
+                )
         subscribers = list(_subscribers.get(sid, ()))
     for q, loop in subscribers:
         _deliver_to_subscriber(loop, q, event)
@@ -204,6 +228,7 @@ def _prune_recent_ephemeral_unlocked(
     types: set[str] | None = None,
     react_iter: Any = None,
     tool_call_id: Any = None,
+    run_id: Any = None,
 ) -> None:
     bucket = _recent_ephemeral.get(sid)
     wanted_types = set(types or ())
@@ -214,6 +239,7 @@ def _prune_recent_ephemeral_unlocked(
     except (TypeError, ValueError):
         iter_filter = None
     tool_filter = str(tool_call_id or "").strip()
+    run_filter = str(run_id or "").strip()
 
     kept = []
     for ev in bucket or ():
@@ -221,6 +247,11 @@ def _prune_recent_ephemeral_unlocked(
         if wanted_types and ev_type not in wanted_types:
             kept.append(ev)
             continue
+        if run_filter:
+            ev_run_id = str(ev.get("run_id") or ev.get("runId") or "").strip()
+            if ev_run_id != run_filter:
+                kept.append(ev)
+                continue
         if iter_filter is not None:
             try:
                 if int(ev.get("react_iter")) != iter_filter:
@@ -246,6 +277,10 @@ def _prune_recent_ephemeral_unlocked(
             ev_type = str(ev.get("type") or "")
             if wanted_types and ev_type not in wanted_types:
                 continue
+            if run_filter:
+                ev_run_id = str(ev.get("run_id") or ev.get("runId") or "").strip()
+                if ev_run_id != run_filter:
+                    continue
             if iter_filter is not None:
                 try:
                     if int(ev.get("react_iter")) != iter_filter:
@@ -267,6 +302,10 @@ def _prune_recent_ephemeral_unlocked(
         ev_type = str(ev.get("type") or "")
         if wanted_types and ev_type not in wanted_types:
             continue
+        if run_filter:
+            ev_run_id = str(ev.get("run_id") or ev.get("runId") or "").strip()
+            if ev_run_id != run_filter:
+                continue
         if iter_filter is not None:
             try:
                 if int(ev.get("react_iter")) != iter_filter:
@@ -288,6 +327,7 @@ async def prune_session_ephemeral(
     types: set[str] | None = None,
     react_iter: Any = None,
     tool_call_id: Any = None,
+    run_id: Any = None,
 ) -> None:
     sid = _sid(session_id)
     if not sid:
@@ -298,6 +338,7 @@ async def prune_session_ephemeral(
             types=types,
             react_iter=react_iter,
             tool_call_id=tool_call_id,
+            run_id=run_id,
         )
 
 

@@ -781,6 +781,7 @@ body {
     box-shadow: 0 6px 28px rgba(0, 0, 0, 0.22), 0 2px 8px rgba(0, 0, 0, 0.1);
 }
 .chat-goal-card[hidden], .chat-todo-plan-panel[hidden] { display: none; }
+.chat-goal-icon-btn[hidden], .chat-goal-review-btn[hidden] { display: none !important; }
 .chat-goal-heading {
     display:flex; justify-content:space-between;
     font-size:0.62rem; font-weight:600; color:var(--text-tertiary);
@@ -3383,6 +3384,8 @@ body {
     box-shadow: 0 0 0 4px rgba(249, 226, 175, 0.12), 0 14px 42px rgba(0, 0, 0, 0.24);
 }
 .human-interaction-card.is-submitting { opacity: 0.68; pointer-events: none; }
+.human-interaction-tool-slot { width: 100%; padding: 0 0.7rem 0.7rem; }
+.human-interaction-tool-slot .human-interaction-card { width: 100%; margin: 0.65rem 0 0; }
 .human-approval-card { border-color: rgba(249, 226, 175, 0.28); }
 .human-interaction-card.is-terminal {
     box-shadow: none;

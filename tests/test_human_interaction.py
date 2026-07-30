@@ -89,6 +89,18 @@ def test_question_validation_rejects_other_and_bad_answers(tmp_path):
         )
 
 
+def test_question_header_allows_fifty_characters(tmp_path):
+    service = _service(tmp_path)
+    request = _questions()
+    request["questions"][0]["header"] = "x" * 50
+    created = service.create_question("session-1", request)
+    assert created["questions"][0]["header"] == "x" * 50
+
+    request["questions"][0]["header"] = "x" * 51
+    with pytest.raises(HumanInteractionValidationError, match="exceeds 50 characters"):
+        service.create_question("session-2", request)
+
+
 @pytest.mark.parametrize("value", ["0", "false", "NO", "Off"])
 def test_ask_user_switch_blocks_new_questions_but_not_approvals(tmp_path, monkeypatch, value):
     monkeypatch.setenv("ASK_USER_ENABLED", value)
@@ -138,11 +150,21 @@ def test_frontend_human_interaction_contract_is_wired():
     module = (root / "frontend/src/app/modules/human-interactions.js").read_text(encoding="utf-8")
     shell = (root / "frontend/src/shell-body.html").read_text(encoding="utf-8")
     dispatch = (root / "frontend/src/app/modules/event-dispatch.js").read_text(encoding="utf-8")
+    rendering = (root / "frontend/src/app/modules/message-rendering.js").read_text(encoding="utf-8")
     assert "refreshHumanInteractions" in module
     assert "sessionStorage" in module
     assert "selected_option_ids" in module
     assert 'id="human-interaction-banner"' in shell
     assert "renderHumanInteractionEvent" in dispatch
+    assert "function humanInteractionToolSlot" in module
+    assert "attachHumanInteractionCardsForToolCall" in module
+    assert "attachHumanInteractionCardsForToolCall" in rendering
+    badge_update = module.split("function updateHumanInteractionSessionBadge", 1)[1].split(
+        "function updateAllHumanInteractionSessionBadges", 1
+    )[0]
+    assert "if (count <= 0)" in badge_update
+    assert "if (badge) badge.remove();" in badge_update
+    assert "badge.textContent = String(count)" in badge_update
 
 
 def test_stale_approval_is_not_resolved_without_a_live_waiter(tmp_path):

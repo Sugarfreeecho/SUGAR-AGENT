@@ -61,6 +61,30 @@ class RuntimeUiProjectionTests(unittest.TestCase):
             self.assertEqual([event["type"] for event in events], ["user", "llm_response"])
             self.assertEqual(events[-1]["content"], "visible")
 
+    def test_context_summary_is_model_state_not_a_history_process_row(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            mirror = RuntimeMirror(tmp)
+            mirror.mirror_ui_event("s1", {"type": "user", "content": "first question"})
+            mirror.mirror_ui_event("s1", {"type": "final", "content": "first answer"})
+            mirror.mirror_ui_event("s1", {
+                "type": "context_summary_body",
+                "content": "durable compression state",
+            })
+            mirror.mirror_ui_event("s1", {
+                "type": "user_steer",
+                "content": "follow up",
+                "steer": True,
+                "steer_id": "steer-1",
+                "steer_mode": "interrupt",
+            })
+
+            projection = RuntimeUiProjection(tmp)
+            events = projection.read_ui_events("s1")
+            snapshot = mirror.snapshots.read("s1")
+
+            self.assertEqual([event["type"] for event in events], ["user", "final", "user_steer"])
+            self.assertEqual(snapshot["context"]["summary"]["summary"], "durable compression state")
+
     def test_repairs_legacy_tool_before_llm_order_and_preserves_tool_call_index(self):
         with tempfile.TemporaryDirectory() as tmp:
             mirror = RuntimeMirror(tmp)

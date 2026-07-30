@@ -71,7 +71,7 @@ Object.assign(UI_TRANSLATIONS_EN, {
     // Runtime status lines
     '正在思考中...': 'Thinking...', '正在重连': 'Reconnecting', '任务已中断': 'Task interrupted',
     '展开执行过程高度': 'Expand process height', '收起执行过程高度': 'Collapse process height',
-    'Goal 自动续跑开始': 'Goal auto-continuation started',
+    'Goal 自动续跑开始': 'Goal auto-continuation started', '任务已恢复，流程重启': 'Task restored; restarting workflow',
     '已请求停止当前任务': 'Stop requested for the current task', '解析事件失败': 'Failed to parse event',
     '验证': 'Verification', '正在根据对话更新要点': 'Updating key points from the conversation',
     '上下文窗口已满，开始压缩': 'Context window full; starting compression', '上下文压缩已完成': 'Context compression completed',

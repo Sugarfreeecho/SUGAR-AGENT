@@ -17,8 +17,6 @@ const PHASE_DEFS=[
 const esc = value => String(value == null ? '' : value).replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
 const ms = value => { const n=Number(value); if(!Number.isFinite(n)) return '—'; return n>=1000?(n/1000).toFixed(n>=10000?1:2)+' s':Math.max(0,Math.round(n))+' ms'; };
 const num = value => Number.isFinite(Number(value)) ? Number(value) : 0;
-const usd = value => '$'+num(value).toFixed(6);
-
 function observedRun(row) {
   const runs=((row.session.observability||{}).runs)||[];
   return runs.find(run=>String(run.run_id||'')===String(row.run.run_id||''))||null;
@@ -174,17 +172,16 @@ function renderTopCards(rows,selectedRow,isTotal){
     const tools=rows.reduce((n,r)=>n+(r.req.tools||[]).length,0);
     const ttftRows=rows.filter(r=>Number.isFinite(Number(r.req.first_token_ms))),avgTtft=ttftRows.length?ttftRows.reduce((n,r)=>n+num(r.req.first_token_ms),0)/ttftRows.length:0;
     const traffic=rows.reduce((n,r)=>n+num((r.req.network||{}).request_bytes)+num((r.req.network||{}).response_payload_bytes_estimated||(r.req.network||{}).response_content_length),0);
-    const observed=uniqueObservedRuns(rows),cost=observed.reduce((n,run)=>n+num((run.cost||{}).total),0);
+    const observed=uniqueObservedRuns(rows);
     const changedFiles=observed.reduce((n,run)=>n+(run.file_changes||[]).length,0);
     cards=[['会话数',new Set(rows.map(r=>r.session.session_id)).size],['LLM 请求',rows.length],['API 累计耗时',ms(api)],['平均首 token',ms(avgTtft)],['累计输入 token',input.toLocaleString()],['累计输出 token',output.toLocaleString()],['工具调用总数',tools.toLocaleString()],['累计网络流量',formatBytes(traffic)]];
-    cards.push(['成本 (USD)',usd(cost)],['文件变更',changedFiles.toLocaleString()]);
+    cards.push(['文件变更',changedFiles.toLocaleString()]);
   }else{
     const req=selectedRow.req,usage=req.usage||{},ctx=req.context||{};
     const network=req.network||{},traffic=num(network.request_bytes)+num(network.response_payload_bytes_estimated||network.response_content_length);
-    const observed=observedRun(selectedRow)||{},cost=(observed.cost||{}).total;
+    const observed=observedRun(selectedRow)||{};
     cards=[['API 总耗时',ms(req.duration_ms)],['首 token',ms(req.first_token_ms)],['输入 token',num(usage.prompt_tokens||ctx.estimated_tokens).toLocaleString()],['输出 token',num(usage.completion_tokens).toLocaleString()],['上下文长度',`${ctx.estimated_tokens??'—'} / ${ctx.context_window??'—'}`],['工具调用',(req.tools||[]).length],['网络等待',ms(network.request_to_first_token_ms||req.first_token_ms)],['网络流量',formatBytes(traffic)]];
     cards.push(
-      ['成本 (USD)',usd(cost)],
       ['文件变更',(observed.file_changes||[]).length],
       ['心跳',observed.heartbeat_at||'—'],
       ['运行状态',observed.status||selectedRow.run.status||'—'],

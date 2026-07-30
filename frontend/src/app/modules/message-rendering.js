@@ -1620,7 +1620,7 @@ function clampChatScrollTop(y) {
 
 /**
  * @param {string} sessionId
- * @param {'saved-or-bottom'|'saved-smooth-or-bottom'|'bottom'} mode
+ * @param {'saved-or-bottom'|'saved-smooth-or-bottom'|'bottom'|'smooth-bottom'} mode
  */
 function applyChatScrollAfterHistoryLoad(sessionId, mode) {
     if (!chatContainer || !sessionId) return;
@@ -1691,7 +1691,7 @@ function applyChatScrollAfterHistoryLoad(sessionId, mode) {
     streamChatNearBottom = true;
     streamProcNearBottom = true;
     liveAutoFollow = true;
-    scrollToBottom();
+    scrollToBottom({ smooth: mode === 'smooth-bottom' });
 }
 
 window.addEventListener('beforeunload', function () {
@@ -3535,12 +3535,23 @@ function removeAbortedToolDraftRows(ctx, ev) {
     var iter = ev && ev.react_iter != null && Number.isFinite(Number(ev.react_iter))
         ? Math.max(1, Math.floor(Number(ev.react_iter)))
         : null;
+    var runId = String((ev && (ev.run_id || ev.runId)) || '');
+    var hasScopedAbort = !!(iter != null || runId || (ev && ev.react_generation != null));
+    var generation = ev && ev.react_generation != null && Number.isFinite(Number(ev.react_generation))
+        ? Math.max(0, Math.floor(Number(ev.react_generation)))
+        : (hasScopedAbort ? reactGenerationForContext(ctx) : null);
     var rows = body.querySelectorAll('.feed-item.feed--tool[data-tool-draft-key], .feed-item.feed--tool[data-tool-pending="1"]');
     rows.forEach(function (row) {
         if (iter != null) {
             var rowIter = Number(row.getAttribute('data-react-iter'));
             if (!Number.isFinite(rowIter) || Math.floor(rowIter) !== iter) return;
         }
+        if (generation != null) {
+            var rowGeneration = Math.max(0, Math.floor(Number(row.getAttribute('data-react-generation')) || 0));
+            if (rowGeneration !== generation) return;
+        }
+        var rowRunId = String(row.getAttribute('data-run-id') || '');
+        if (runId && rowRunId && rowRunId !== runId) return;
         row.remove();
     });
     var agg = body.closest('.process-aggregate');
@@ -3620,6 +3631,9 @@ function appendToolPendingRow(ctx, parsed, runSessionId) {
             refreshFeedChunkOverflow(draftChunk);
         }
         if (!replayingMessages) scrollContentAreaIfFollow(ctx, runSessionId);
+        if (typeof attachHumanInteractionCardsForToolCall === 'function') {
+            attachHumanInteractionCardsForToolCall(ctx && ctx.stream, parsed.tool_call_id);
+        }
         return;
     }
     var sc = createProcessFeedRow(ctx, 'tool-call', line, so, runSessionId, parsed.tool_call_id);
@@ -3632,6 +3646,9 @@ function appendToolPendingRow(ctx, parsed, runSessionId) {
         if (chunk) {
             chunk.classList.remove('is-streaming');
             refreshFeedChunkOverflow(chunk);
+        }
+        if (typeof attachHumanInteractionCardsForToolCall === 'function') {
+            attachHumanInteractionCardsForToolCall(ctx && ctx.stream, parsed.tool_call_id);
         }
     }
 }
@@ -3673,6 +3690,7 @@ function upsertToolCallResult(ctx, parsed, runSessionId) {
         if (tid) row.setAttribute('data-tool-call-id', tid);
         row.removeAttribute('data-tool-draft-key');
         row.removeAttribute('data-tool-pending');
+        row.setAttribute('data-event-committed', '1');
         row.dataset.commandPreview = cmdPreview != null ? String(cmdPreview) : '';
         var sc = row.querySelector('.feed-chunk-scroller');
         if (sc) {
@@ -3685,6 +3703,9 @@ function upsertToolCallResult(ctx, parsed, runSessionId) {
         var agg = body.closest('.process-aggregate');
         refreshAggregateStatsSmart(agg);
         if (!replayingMessages) scrollContentAreaIfFollow(ctx, runSessionId);
+        if (typeof attachHumanInteractionCardsForToolCall === 'function') {
+            attachHumanInteractionCardsForToolCall(ctx && ctx.stream, tid);
+        }
         return;
     }
     var ri = uiEventReactIter(parsed);
@@ -3730,11 +3751,30 @@ function reactFeedPhase(type) {
     return null;
 }
 
+function appendProcessRowBeforePendingAppendSteer(body, row, type) {
+    if (!body || !row) return;
+    // An accepted append-mode follow-up is the visual boundary between the
+    // current round and the next one.  Keep its pending row at the tail while
+    // the current LLM/tool round finishes; once the server commits user_steer,
+    // data-steer-pending is removed and subsequent rows naturally append below.
+    if (type !== 'user-steer') {
+        var pendingAppendSteer = body.querySelector(
+            '.feed-item[data-log-type="user-steer"]'
+            + '[data-steer-mode="append"][data-steer-pending="1"]'
+        );
+        if (pendingAppendSteer) {
+            body.insertBefore(row, pendingAppendSteer);
+            return;
+        }
+    }
+    body.appendChild(row);
+}
+
 function insertReactOrderedFeedRow(body, row, type, reactIter, reactGeneration) {
     var phase = reactFeedPhase(type);
     var iter = Number(reactIter);
     if (phase == null || !Number.isFinite(iter)) {
-        body.appendChild(row);
+        appendProcessRowBeforePendingAppendSteer(body, row, type);
         return;
     }
     iter = Math.max(1, Math.floor(iter));
@@ -3755,7 +3795,7 @@ function insertReactOrderedFeedRow(body, row, type, reactIter, reactGeneration) 
             return;
         }
     }
-    body.appendChild(row);
+    appendProcessRowBeforePendingAppendSteer(body, row, type);
 }
 
 function createProcessFeedRow(ctx, type, initialText, streamOpts, runSessionId, toolCallIdOpt) {
@@ -3769,6 +3809,7 @@ function createProcessFeedRow(ctx, type, initialText, streamOpts, runSessionId, 
     row.className = 'feed-item ' + meta.c;
     row.setAttribute('data-log-type', type);
     row.setAttribute('data-react-generation', String(reactGenerationForContext(ctx)));
+    if (ctx && ctx.runId) row.setAttribute('data-run-id', String(ctx.runId));
     if (toolCallIdOpt != null && String(toolCallIdOpt) !== '') row.setAttribute('data-tool-call-id', String(toolCallIdOpt));
     row.innerHTML = '<div class="feed-row">'
         + '<span class="feed-label">' + meta.label + '</span>'
@@ -3834,6 +3875,12 @@ function appendLlmStreamDelta(ctx, ev, runSessionId) {
     if (hasSeenStreamDelta(ctx, ev, 'llm_' + part)) return;
     const delta = String(ev.delta || '');
     if (!delta) return;
+    const replayedSnapshot = !!ev.replayed_snapshot;
+    if (replayedSnapshot && part === 'response') {
+        l.llmThinkTagMode = 'response';
+        l.llmThinkTagCarry = '';
+        l.llmThinkTagAllowLeading = true;
+    }
     if (iter != null) {
         var body0 = getProcessBody(ctx);
         if (body0) bumpAggregateMaxReactIter(body0.closest('.process-aggregate'), iter);
@@ -3865,7 +3912,12 @@ function appendLlmStreamDelta(ctx, ev, runSessionId) {
                 : createProcessFeedRow(ctx, 'llm-reasoning', '', streamOpt, runSessionId);
         }
         if (!l.llmStreamReasoningScroller) return;
-        l.llmPendingReasoningDelta = (l.llmPendingReasoningDelta || '') + pieceText;
+        if (replayedSnapshot) {
+            l.llmPendingReasoningDelta = '';
+            l.llmStreamReasoningScroller.textContent = truncateLogTextForUi(pieceText);
+        } else {
+            l.llmPendingReasoningDelta = (l.llmPendingReasoningDelta || '') + pieceText;
+        }
         } else {
         if (l.llmStreamResponseScroller && !l.llmStreamResponseScroller.isConnected) {
             l.llmStreamResponseScroller = null;
@@ -3885,7 +3937,12 @@ function appendLlmStreamDelta(ctx, ev, runSessionId) {
                 : createProcessFeedRow(ctx, 'llm-response', '', streamOpt, runSessionId);
         }
         if (!l.llmStreamResponseScroller) return;
-        l.llmPendingResponseDelta = (l.llmPendingResponseDelta || '') + pieceText;
+        if (replayedSnapshot) {
+            l.llmPendingResponseDelta = '';
+            l.llmStreamResponseScroller.textContent = truncateLogTextForUi(pieceText);
+        } else {
+            l.llmPendingResponseDelta = (l.llmPendingResponseDelta || '') + pieceText;
+        }
         }
     }
     scheduleLlmDeltaFlush(ctx, runSessionId);
@@ -3913,6 +3970,7 @@ function upsertLlmFeedRow(ctx, content, logType, runSessionId, reactIter) {
             scheduleFeedChunkOverflowRefresh(ch);
         }
         existing.removeAttribute('data-llm-live-row');
+        existing.setAttribute('data-event-committed', '1');
         removeDuplicateLlmFeedRows(ctx, existing, logType, ri);
         if (ctx.llm) resetLlmState(ctx);
         var agg = existing.closest && existing.closest('.process-aggregate');
@@ -4260,6 +4318,40 @@ function finalizeProgressStreamChunks(ctx) {
         });
     }
     ctx.progressStream = {};
+}
+
+function discardProgressStreamChunks(ctx) {
+    if (!ctx) return;
+    var streamRoot = (ctx._subagentBody && ctx._subagentBody.isConnected) ? ctx._subagentBody : ctx.stream;
+    var rows = [];
+    var types = ctx.progressStream ? Object.keys(ctx.progressStream) : [];
+    for (var i = 0; i < types.length; i += 1) {
+        var st = ctx.progressStream[types[i]];
+        if (!st) continue;
+        if (st.flushRaf) cancelAnimationFrame(st.flushRaf);
+        var row = st.scroller && st.scroller.closest ? st.scroller.closest('.feed-item') : null;
+        if (row && rows.indexOf(row) < 0) rows.push(row);
+    }
+    if (streamRoot) {
+        streamRoot.querySelectorAll(
+            '.feed-item[data-log-type="context-trim"] .feed-chunk.is-streaming, '
+            + '.feed-item[data-log-type="context-summary"] .feed-chunk.is-streaming, '
+            + '.feed-item[data-log-type="key-context"] .feed-chunk.is-streaming'
+        ).forEach(function (chunk) {
+            var row = chunk.closest('.feed-item');
+            if (row && rows.indexOf(row) < 0) rows.push(row);
+        });
+    }
+    rows.forEach(function (row) {
+        if (row && row.parentNode) row.remove();
+    });
+    ctx.progressStream = {};
+    if (ctx.progressScrollers) {
+        ['context-trim', 'context-summary', 'key-context'].forEach(function (type) {
+            var scroller = ctx.progressScrollers[type];
+            if (!scroller || !scroller.isConnected) delete ctx.progressScrollers[type];
+        });
+    }
 }
 
 function scheduleProgressDeltaFlush(ctx, runSessionId, logType) {

@@ -1,4 +1,31 @@
 const SSE_IDLE_TIMEOUT_MS = 120000;
+const STREAM_RECONNECT_MAX_ATTEMPTS = 5;
+const streamReconnectStateBySession = Object.create(null);
+
+function resetStreamReconnectState(sessionId) {
+    var sid = String(sessionId || '');
+    var state = streamReconnectStateBySession[sid];
+    if (!state) return;
+    if (state.timer) clearTimeout(state.timer);
+    delete streamReconnectStateBySession[sid];
+}
+
+function streamReconnectState(sessionId) {
+    var sid = String(sessionId || '');
+    if (!streamReconnectStateBySession[sid]) {
+        streamReconnectStateBySession[sid] = { attempts: 0, timer: null, exhausted: false };
+    }
+    return streamReconnectStateBySession[sid];
+}
+
+function reportStreamReconnectExhausted(sessionId) {
+    var sid = String(sessionId || '');
+    var run = typeof getSessionRunState === 'function' ? getSessionRunState(sid) : null;
+    var ctx = run && run.ctx;
+    if (ctx && sid === String(currentSessionId || '')) {
+        appendLog(ctx, '实时流恢复已停止重试（5 次）。请检查网络或服务状态后刷新页面。', 'error-log', sid);
+    }
+}
 
 function sendPipelineKey(sessionId) {
     return String(sessionId || '__new_session__');
@@ -95,8 +122,19 @@ function endRunForClient(sessionId, ctx, opts) {
     if (!sid) return;
     var allowFollowupDrain = opts.drainFollowup !== false
         && getRunAbortReason(sid, ctx) !== 'user';
-    finalizeLlmStreamChunks(ctx);
-    finalizeProgressStreamChunks(ctx);
+    var preserveInterruptedPartial = !!(
+        ctx && ctx.preserveInterruptedPartial && opts.discardPartialStreams
+    );
+    removeTemporaryStatus(ctx);
+    if (!preserveInterruptedPartial) removeAbortedToolDraftRows(ctx, {});
+    if (opts.discardPartialStreams && !preserveInterruptedPartial) {
+        discardLlmStreamChunks(ctx, {});
+        discardProgressStreamChunks(ctx);
+    } else {
+        finalizeLlmStreamChunks(ctx);
+        finalizeProgressStreamChunks(ctx);
+    }
+    if (ctx) delete ctx.preserveInterruptedPartial;
     if (opts.reconcileFinal !== false) {
         scheduleFinalVisibleAfterRunIfEnabled(sid, ctx, { delayMs: opts.finalDelayMs != null ? opts.finalDelayMs : 80 });
     }
@@ -254,11 +292,18 @@ async function consumeAgentSseResponse(response, runCtx, runSessionId, streamEve
                 });
                 if (reduced.runStateChanged) {
                     if (parsed.type === 'run_finished' || parsed.type === 'run_interrupted' || parsed.type === 'run_failed') {
+                        if (
+                            runCtx
+                            && (parsed.cleanup_scope === 'none' || parsed.checkpoint_ok === false)
+                        ) {
+                            runCtx.preserveInterruptedPartial = true;
+                        }
                         endRunForClient(eventSessionId, runCtx, {
                             finalDelayMs: 80,
                             followupDelayMs: 0,
                             runId: parsed.run_id || parsed.runId || (runCtx && runCtx.runId),
                             reconcileFinal: parsed.type === 'run_finished',
+                            discardPartialStreams: parsed.type !== 'run_finished',
                         });
                         streamEventIdx += 1;
                         continue;
@@ -277,8 +322,16 @@ async function consumeAgentSseResponse(response, runCtx, runSessionId, streamEve
                     if (parsed.agent_id) { handleSubagentStreamEvent(parsed, streamEventIdx, runSessionId); continue; }
                     if (parsed.type === 'llm_stream_aborted') {
                         removeTemporaryStatus(runCtx);
+                        var preserveInterruptedPartial = parsed.cleanup_scope === 'none'
+                            || parsed.checkpoint_ok === false;
+                        if (runCtx) runCtx.preserveInterruptedPartial = preserveInterruptedPartial;
                         discardLlmStreamChunks(runCtx, parsed);
-                        removeAbortedToolDraftRows(runCtx, parsed);
+                        if (!preserveInterruptedPartial) {
+                            removeAbortedToolDraftRows(runCtx, parsed);
+                            discardProgressStreamChunks(runCtx);
+                        } else {
+                            finalizeProgressStreamChunks(runCtx);
+                        }
                         continue;
                     }
                     if (parsed.type === 'tool_approval_required') {
@@ -641,7 +694,7 @@ function maybeAutoResumeInterruptedReact(sessionId, sessionDetail) {
 window.addEventListener('online', function () {
     var sid = String(currentSessionId || '');
     if (!sid) return;
-    scheduleActiveSessionReconnect(sid, { delayMs: 100 });
+    scheduleActiveSessionReconnect(sid, { delayMs: 100, reset: true });
     setTimeout(function () { void refreshSingleSessionRow(sid); }, 250);
 });
 
@@ -756,6 +809,7 @@ async function attachSessionEventStream(sessionId, opts) {
     if (!isServerStreamActive(sessionId)) return;
     var runSessionId = sessionId;
     var runCtx = null;
+    var reattachFailed = false;
     try {
         if (runSessionId !== currentSessionId) return;
         if (!opts.skipInitialLoad) {
@@ -801,6 +855,7 @@ async function attachSessionEventStream(sessionId, opts) {
         await consumeAgentSseResponse(response, runCtx, runSessionId, preCount);
     } catch (error) {
         if (error && error.name === 'AbortError') return;
+        reattachFailed = true;
         console.error('reattach stream failed:', error);
         const msg = (error && error.message) ? String(error.message) : String(error);
         if (runCtx && runSessionId === currentSessionId) appendLog(runCtx, '恢复实时流失败: ' + msg, 'error-log', runSessionId);
@@ -821,7 +876,11 @@ async function attachSessionEventStream(sessionId, opts) {
         syncSessionListIndicatorClasses();
         void refreshSingleSessionRow(runSessionId);
         setTimeout(function () { reconcileRunStateFromServer({ silent: true }); }, 800);
-        scheduleActiveSessionReconnect(runSessionId, { delayMs: 120 });
+        if (reattachFailed || isServerStreamActive(runSessionId)) {
+            scheduleActiveSessionReconnect(runSessionId, { delayMs: 120 });
+        } else {
+            resetStreamReconnectState(runSessionId);
+        }
         applyContextTokenLabelForCurrentSession();
         if (runSessionId === currentSessionId) {
             clearSessionUnreadState(runSessionId);
@@ -835,9 +894,22 @@ function scheduleActiveSessionReconnect(sessionId, opts) {
     opts = opts || {};
     var sid = String(sessionId || '');
     if (!sid) return;
-    var delayMs = Math.max(0, Number(opts.delayMs) || 0);
-    setTimeout(async function () {
+    if (opts.reset) resetStreamReconnectState(sid);
+    var state = streamReconnectState(sid);
+    if (state.timer) return;
+    if (state.exhausted || state.attempts >= STREAM_RECONNECT_MAX_ATTEMPTS) {
+        if (!state.exhausted) {
+            state.exhausted = true;
+            reportStreamReconnectExhausted(sid);
+        }
+        return;
+    }
+    var baseDelay = Math.max(0, Number(opts.delayMs) || 0);
+    var delayMs = Math.max(baseDelay, Math.min(8000, 300 * Math.pow(2, state.attempts)));
+    state.timer = setTimeout(async function () {
+        state.timer = null;
         if (sid !== currentSessionId) return;
+        state.attempts += 1;
         try {
             if (typeof reconcileRunStateFromServer === 'function') {
                 await reconcileRunStateFromServer({ silent: true });
@@ -845,9 +917,11 @@ function scheduleActiveSessionReconnect(sessionId, opts) {
             if (sid !== currentSessionId) return;
             if ((isServerStreamActive(sid) || isSessionRunning(sid)) && typeof maybeStartStreamPollForSession === 'function') {
                 maybeStartStreamPollForSession(sid, { skipInitialLoad: true });
+            } else {
+                resetStreamReconnectState(sid);
             }
         } catch (e) {
-            /* keep current UI state; normal polling or user action can retry later */
+            scheduleActiveSessionReconnect(sid, {});
         }
     }, delayMs);
 }
@@ -1516,6 +1590,11 @@ async function syncFollowupQueueFromServer(sessionId) {
                 local.replacementRunId = String(serverItem.replacement_run_id || local.replacementRunId || '');
                 local.steerMode = String(serverItem.mode || local.steerMode || '') === 'append' ? 'append' : 'interrupt';
                 local.status = state === 'restarting' ? 'restarting' : 'accepted';
+                if (local.steerMode === 'append' && (state === 'queued' || state === 'claimed')) {
+                    // Rebuild the transient tail anchor after refresh/reattach.
+                    // The durable user_steer event will commit this same row.
+                    appendPendingSteerToProcess(sid, local);
+                }
             });
             for (var i = q.length - 1; i >= 0; i -= 1) {
                 var entry = q[i];
@@ -1688,6 +1767,10 @@ function scheduleAcceptedFollowupWatch(sid, itemId) {
                 if (latest.steerId) serverItem = await fetchSteerStatus(sid, latest);
             }
             var serverState = String(serverItem && serverItem.state || '');
+            if (latest.steerMode === 'append'
+                && (serverState === 'queued' || serverState === 'claimed')) {
+                appendPendingSteerToProcess(sid, latest);
+            }
             if (serverState === 'consumed') {
                 commitPendingSteerProcessRow(sid, latest, serverItem);
                 takeFollowupItem(sid, itemId);

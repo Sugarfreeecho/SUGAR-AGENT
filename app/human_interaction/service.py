@@ -64,7 +64,7 @@ def _normalize_questions(arguments: Any) -> list[dict]:
     for q_index, question in enumerate(questions, start=1):
         if not isinstance(question, dict):
             raise HumanInteractionValidationError(f"questions[{q_index - 1}] must be an object")
-        header = _clean_text(question.get("header"), f"questions[{q_index - 1}].header", maximum=12)
+        header = _clean_text(question.get("header"), f"questions[{q_index - 1}].header", maximum=50)
         prompt = _clean_text(question.get("question"), f"questions[{q_index - 1}].question", maximum=1000)
         prompt_key = prompt.casefold()
         if prompt_key in question_texts:

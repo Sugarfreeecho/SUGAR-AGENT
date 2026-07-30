@@ -1118,11 +1118,12 @@ class RuntimeUiProjection:
             data.setdefault("created_at", event.timestamp)
             return data
         if event.type == "context_summary_committed":
-            return {
-                "type": "context_summary_body",
-                "content": payload.get("summary") or "",
-                "created_at": event.timestamp,
-            }
+            # This is durable model context, not a visible chat event.  It is
+            # already available from the Runtime snapshot to the next run.
+            # Projecting it into the UI makes a late compaction (especially
+            # after an interrupted steer) attach a stale "Compression" row to
+            # the last process group whenever history is reloaded.
+            return None
         if event.type == "todo_updated":
             data = dict(payload)
             data["type"] = data.get("type") or "todo_plan"
