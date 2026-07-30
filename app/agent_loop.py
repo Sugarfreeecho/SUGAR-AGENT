@@ -63,7 +63,6 @@ from agent_harness import (
     strip_reasoning_for_api_request,
     resolve_executor_config_for_session,
     resolve_executor_candidates_for_session,
-    executor_pricing_for_session,
     executor_runtime_snapshot_for_session,
     EXECUTOR_REASONING_EFFORT,
     UserMessage,
@@ -133,6 +132,12 @@ NETWORK_RECONNECT_MAX_ATTEMPTS = max(0, int(os.getenv("NETWORK_RECONNECT_MAX_ATT
 LOCAL_NETWORK_POLL_SECONDS = max(1.0, float(os.getenv("LOCAL_NETWORK_POLL_SECONDS", "5")))
 TITLE_GENERATION_TIMEOUT_SEC = max(1.0, float(os.getenv("TITLE_GENERATION_TIMEOUT_SEC", "30")))
 TITLE_GENERATION_WORKERS = max(1, min(4, int(os.getenv("TITLE_GENERATION_WORKERS", "2"))))
+CONTEXT_POLICY_IDLE_TIMEOUT_SEC = max(
+    1.0, float(os.getenv("CONTEXT_POLICY_IDLE_TIMEOUT_SEC", "30"))
+)
+STREAM_WORKER_ABORT_TIMEOUT_SEC = max(
+    0.1, float(os.getenv("STREAM_WORKER_ABORT_TIMEOUT_SEC", "5"))
+)
 TODO_UPDATE_REMINDER_START_ROUNDS = max(
     0, int(os.getenv("TODO_UPDATE_REMINDER_START_ROUNDS", "20"))
 )
@@ -889,10 +894,19 @@ def _run_context_policy_serialized(
         )
 
 
-def _wait_context_policy_idle(session_id: str) -> None:
+def _wait_context_policy_idle(
+    session_id: str,
+    timeout_sec: Optional[float] = None,
+) -> bool:
     lock = _context_policy_lock_for_session(session_id)
-    lock.acquire()
+    if timeout_sec is None:
+        acquired = lock.acquire()
+    else:
+        acquired = lock.acquire(timeout=max(0.0, float(timeout_sec)))
+    if not acquired:
+        return False
     lock.release()
+    return True
 
 
 def enqueue_session_steer(
@@ -2099,6 +2113,9 @@ async def _emit_steer_abort_event(
     state: State,
     emit: Optional[Callable[[Dict[str, Any]], Any]],
     stage: str,
+    *,
+    checkpoint_ok: bool = True,
+    cleanup_scope: str = "drafts_only",
 ) -> None:
     if not isinstance(state, dict):
         return
@@ -2109,6 +2126,10 @@ async def _emit_steer_abort_event(
         "type": "llm_stream_aborted",
         "reason": "user_steer",
         "stage": str(stage or "react"),
+        "checkpoint_ok": bool(checkpoint_ok),
+        "cleanup_scope": (
+            "drafts_only" if str(cleanup_scope or "") == "drafts_only" else "none"
+        ),
         "ephemeral": True,
     }
     react_iter = state.get("_current_react_iter")
@@ -2120,8 +2141,17 @@ async def _emit_steer_abort_event(
     try:
         await prune_session_ephemeral(
             str(state.get("session_id") or ""),
-            types={"tool_pending", "tool_call_delta", "tool_command_delta"},
-            react_iter=event.get("react_iter"),
+            types={
+                "tool_pending",
+                "tool_call_delta",
+                "tool_command_delta",
+                "llm_reasoning_delta",
+                "llm_response_delta",
+                "context_trim_delta",
+                "context_summary_delta",
+                "key_context_delta",
+            },
+            run_id=state.get("_runtime_v2_run_id"),
         )
     except Exception:
         logger.debug("failed to prune aborted tool stream ephemerals", exc_info=True)
@@ -2529,16 +2559,23 @@ async def _await_context_policy_idle_for_session(
         state,
         {
             "type": "status",
+            "ephemeral": True,
             "content": "检测到同会话仍有未结束的上下文压缩，等待其完成后再继续 ReAct。",
         },
         emit=emit,
     )
-    await _await_thread_with_sse_keepalive(
-        lambda: _wait_context_policy_idle(sid),
+    became_idle = await _await_thread_with_sse_keepalive(
+        lambda: _wait_context_policy_idle(sid, CONTEXT_POLICY_IDLE_TIMEOUT_SEC),
         state,
         emit,
         interval_sec=5.0,
     )
+    if not became_idle:
+        raise RuntimeError(
+            "context compression worker did not stop within "
+            f"{CONTEXT_POLICY_IDLE_TIMEOUT_SEC:g}s; this run was terminated "
+            "instead of waiting indefinitely"
+        )
 
 
 async def _emit_tool_pending_sse(
@@ -2579,6 +2616,7 @@ async def _emit_tool_approval_required_sse(
     title: str,
     message: str,
     subtitle: str = "",
+    tool_call_id: str = "",
 ) -> None:
     """Emit the already-persisted approval request to connected clients."""
     if not emit:
@@ -2595,6 +2633,7 @@ async def _emit_tool_approval_required_sse(
             "title": redact_sensitive_tool_text(title),
             "message": redact_sensitive_tool_text(message),
             "subtitle": redact_sensitive_tool_text(subtitle or ""),
+            "tool_call_id": str(tool_call_id or ""),
         }
         r = emit(payload)
         if inspect.isawaitable(r):
@@ -3589,6 +3628,12 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                     state["session_id"]
                 ),
             }
+            # Side-effecting calls in one assistant turn are serialized.  The
+            # workspace state captured after one call is therefore also the
+            # state immediately before the next call.  Reuse it so a queued
+            # run_shell can switch from "generating" to "executing" without
+            # first rescanning the entire workspace.
+            workspace_audit_tail_by_root: Dict[str, dict] = {}
 
             async def _execute_one_core(tool_call):
                 tool_name = tool_call["name"]
@@ -3599,40 +3644,6 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                     state["_tool_batch_first_started_at"] = time.perf_counter()
                 state["_runtime_stage"] = "running_tool:%s" % tool_name
                 await _raise_if_steer_requested(state, emit, "tool")
-
-                # Ordinary task subagents use the same durable, one-shot
-                # parent-approval semantics as Agent Team members. This check
-                # runs before UI approval and before any special tool branch.
-                try:
-                    from subagent_control import authorize_subagent_tool
-
-                    subagent_allowed, subagent_denial = await asyncio.to_thread(
-                        authorize_subagent_tool,
-                        session_meta,
-                        tool_name,
-                        tool_args,
-                    )
-                except Exception as exc:
-                    logger.warning("subagent permission broker failed closed: %s", exc)
-                    subagent_allowed = not bool(session_meta.get("is_subagent"))
-                    subagent_denial = f"Subagent permission broker error: {exc}"
-                if not subagent_allowed:
-                    denied_text = str(subagent_denial or "Subagent parent approval required.")
-                    result_for_log, result_for_llm, result_for_ui = _tool_result_details_for_views(
-                        denied_text, tool_name, state
-                    )
-                    return {
-                        "type": "tool",
-                        "tool_name": tool_name,
-                        "tool_args": tool_args,
-                        "tool_id": tool_id,
-                        "result": denied_text,
-                        "tool_detail_log": result_for_log,
-                        "tool_detail_llm": result_for_llm,
-                        "tool_detail_ui": result_for_ui,
-                        "result_for_log": result_for_log,
-                        "tool_failed": True,
-                    }
 
                 # 工作区放宽 Shell / 网页下载：前端弹窗确认后才进入「执行中」占位
                 hook_approval_spec = tool_call.get("_hook_approval_spec")
@@ -3660,6 +3671,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                                 spec["title"],
                                 spec["message"],
                                 spec.get("subtitle") or "",
+                                str(tool_id or ""),
                             )
 
                         allowed = await _await_steerable(
@@ -4216,69 +4228,52 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                     try:
                         from agent_team.policy import (
                             acquire_workspace_write_lock,
-                            authorize_member_tool,
                             workspace_write_lock,
                         )
-                        from agent_team.service import AgentTeamService
 
-                        team_service = AgentTeamService(
-                            session_manager.repository.sessions_dir,
-                            path_resolver=session_manager._resolve_session_path,
-                        )
-                        team_allowed, team_denial = await asyncio.to_thread(
-                            authorize_member_tool,
-                            team_service,
-                            session_meta,
-                            tool_name,
-                            tool_args,
-                        )
-                        if not team_allowed:
-                            result = team_denial
-                            tool_failed = True
-                        else:
-                            team_write_lock = workspace_write_lock(session_meta, tool_name)
-                            if team_write_lock is not None:
-                                await acquire_workspace_write_lock(team_write_lock)
-                                team_write_lock_acquired = True
-                            # 注入 interrupt 回调，让 run_shell 能感知 interrupt 并杀子进程
-                            _sid = state.get("session_id", "") if isinstance(state, dict) else ""
-                            if _sid and tool_name == "run_shell":
-                                set_run_shell_interrupt_check(
-                                    lambda: (
-                                        not _state_run_has_write_fence(state)
-                                        or session_manager.is_interrupt_requested(_sid)
-                                        or _steer_requested(state)
-                                    )
+                        team_write_lock = workspace_write_lock(session_meta, tool_name)
+                        if team_write_lock is not None:
+                            await acquire_workspace_write_lock(team_write_lock)
+                            team_write_lock_acquired = True
+                        # 注入 interrupt 回调，让 run_shell 能感知 interrupt 并杀子进程
+                        _sid = state.get("session_id", "") if isinstance(state, dict) else ""
+                        if _sid and tool_name == "run_shell":
+                            set_run_shell_interrupt_check(
+                                lambda: (
+                                    not _state_run_has_write_fence(state)
+                                    or session_manager.is_interrupt_requested(_sid)
+                                    or _steer_requested(state)
                                 )
-                            worktree_root = ""
-                            if session_meta.get("is_subagent"):
-                                worktree_root = str(
-                                    session_meta.get("subagent_work_dir")
-                                    or session_meta.get("git_worktree_path")
-                                    or ""
-                                ).strip()
-                            with tool_work_dir_override(worktree_root or None):
-                                if hasattr(tool_func, "ainvoke"):
-                                    result = await _await_steerable(
-                                        state,
-                                        tool_func.ainvoke(tool_args),
-                                        emit,
-                                        "tool",
-                                    )
-                                elif hasattr(tool_func, "invoke"):
-                                    result = await _await_steerable(
-                                        state,
-                                        asyncio.to_thread(lambda: tool_func.invoke(tool_args)),
-                                        emit,
-                                        "tool",
-                                    )
-                                else:
-                                    result = await _await_steerable(
-                                        state,
-                                        _invoke_plain_tool(tool_func, tool_args),
-                                        emit,
-                                        "tool",
-                                    )
+                            )
+                        worktree_root = ""
+                        if session_meta.get("is_subagent"):
+                            worktree_root = str(
+                                session_meta.get("subagent_work_dir")
+                                or session_meta.get("git_worktree_path")
+                                or ""
+                            ).strip()
+                        with tool_work_dir_override(worktree_root or None):
+                            if hasattr(tool_func, "ainvoke"):
+                                result = await _await_steerable(
+                                    state,
+                                    tool_func.ainvoke(tool_args),
+                                    emit,
+                                    "tool",
+                                )
+                            elif hasattr(tool_func, "invoke"):
+                                result = await _await_steerable(
+                                    state,
+                                    asyncio.to_thread(lambda: tool_func.invoke(tool_args)),
+                                    emit,
+                                    "tool",
+                                )
+                            else:
+                                result = await _await_steerable(
+                                    state,
+                                    _invoke_plain_tool(tool_func, tool_args),
+                                    emit,
+                                    "tool",
+                                )
                     except _SteerRestartRequested:
                         raise
                     except Exception as e:
@@ -4460,20 +4455,43 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                         "update_goal",
                     }
                 )
-                before_workspace = (
-                    await asyncio.to_thread(capture_workspace_state, audit_root)
-                    if audit_candidate
-                    else None
-                )
+                audit_before_started = time.perf_counter()
+                audit_before_source = "none"
+                if audit_candidate and audit_root in workspace_audit_tail_by_root:
+                    before_workspace = workspace_audit_tail_by_root[audit_root]
+                    audit_before_source = "previous_after"
+                elif audit_candidate:
+                    before_workspace = await asyncio.to_thread(
+                        capture_workspace_state, audit_root
+                    )
+                    audit_before_source = "captured"
+                else:
+                    before_workspace = None
+                audit_before_ms = _timing_ms(audit_before_started)
                 observed_tool_started = time.perf_counter()
                 result = await _execute_one_core(call)
                 observed_tool_ms = _timing_ms(observed_tool_started)
-                after_workspace = (
-                    await asyncio.to_thread(capture_workspace_state, audit_root)
-                    if audit_candidate
-                    else None
-                )
+                audit_after_started = time.perf_counter()
+                if audit_candidate:
+                    after_workspace = await asyncio.to_thread(
+                        capture_workspace_state, audit_root
+                    )
+                    workspace_audit_tail_by_root[audit_root] = after_workspace
+                else:
+                    after_workspace = None
+                audit_after_ms = _timing_ms(audit_after_started)
                 file_changes = diff_workspace_states(before_workspace, after_workspace)
+                if audit_candidate:
+                    logger.info(
+                        "tool_workspace_audit_timing session=%s tool=%s "
+                        "before_ms=%s before_source=%s after_ms=%s react_iter=%s",
+                        state.get("session_id", ""),
+                        redact_sensitive_tool_text(tool_name),
+                        audit_before_ms,
+                        audit_before_source,
+                        audit_after_ms,
+                        int(iter_count),
+                    )
                 failed = bool(isinstance(result, dict) and result.get("tool_failed"))
                 execution_metrics.record_tool(
                     state["session_id"],
@@ -4566,13 +4584,6 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
             await _raise_if_steer_requested(state, emit, "react")
             if not _state_run_has_write_fence(state):
                 raise asyncio.CancelledError()
-            if execution_metrics.run_budget_exhausted(
-                state["session_id"],
-                str(state.get("_runtime_v2_run_id") or ""),
-            ):
-                raise RuntimeError(
-                    "Model-profile monetary cost budget exhausted for this run."
-                )
             if session_manager.is_interrupt_requested(state["session_id"]):
                 if _is_followup_interrupt(state["session_id"]):
                     raise asyncio.CancelledError()
@@ -4763,7 +4774,6 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                         if _steer_requested(state):
                             steer_interrupted_this_call = True
                             stream_abort_event.set()
-                            await _emit_steer_abort_event(state, emit, "llm_stream")
                             break
                         try:
                             item = await asyncio.wait_for(async_stream_q.get(), timeout=0.03)
@@ -4834,7 +4844,6 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                                 str(state.get("_runtime_v2_run_id") or ""),
                                 int(iter_count),
                                 dict(payload or {}),
-                                pricing=dict(state.get("_cost_pricing") or {}),
                             )
                             record_prompt_tokens_for_messages(
                                 state["session_id"],
@@ -4988,9 +4997,21 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                             stream_abort_event.set()
                             stream_task.add_done_callback(_discard_task_result)
                             stream_task.cancel()
-                            await asyncio.shield(
-                                asyncio.to_thread(stream_worker_done_event.wait)
+                            worker_stopped = await asyncio.shield(
+                                asyncio.to_thread(
+                                    stream_worker_done_event.wait,
+                                    STREAM_WORKER_ABORT_TIMEOUT_SEC,
+                                )
                             )
+                            if not worker_stopped:
+                                logger.warning(
+                                    "stream worker did not stop within %.1fs after abort; "
+                                    "detaching it so the run can reach a terminal state "
+                                    "session=%s react_iter=%s",
+                                    STREAM_WORKER_ABORT_TIMEOUT_SEC,
+                                    state.get("session_id"),
+                                    int(iter_count),
+                                )
                         else:
                             await stream_task
                     except Exception:
@@ -5073,6 +5094,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                         if isinstance(_res, dict) and _res.get("type") == "tool" and _tc:
                             completed_early_tool_calls.append(_tc)
                             completed_early_tool_results.append(_res)
+                    steer_checkpoint_ok = True
                     if partial_reasoning or partial_response.strip() or completed_early_tool_calls:
                         try:
                             if partial_reasoning:
@@ -5130,7 +5152,19 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                             state["work_messages"] = work_messages
                             state["dialogue"] = derive_dialogue_from_assistant_history(llm_history)
                         except Exception:
+                            steer_checkpoint_ok = False
                             logger.debug("failed to preserve steer partial assistant output", exc_info=True)
+                    # Commit the interrupted assistant/tool checkpoint before
+                    # telling clients to discard live rows.  Durable LLM/tool
+                    # events upgrade their existing DOM rows first; the abort
+                    # event then removes only drafts that remain uncommitted.
+                    await _emit_steer_abort_event(
+                        state,
+                        emit,
+                        "llm_stream",
+                        checkpoint_ok=steer_checkpoint_ok,
+                        cleanup_scope="drafts_only" if steer_checkpoint_ok else "none",
+                    )
                     if await _consume_steer_messages(state, emit=emit, modes={"interrupt"}):
                         _reset_steer_control(state)
                         llm_history = list(state["llm_history"])
@@ -5242,7 +5276,6 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                             str(state.get("_runtime_v2_run_id") or ""),
                             int(iter_count),
                             dict(llm_call_usage or {}),
-                            pricing=dict(state.get("_cost_pricing") or {}),
                         )
                         record_prompt_tokens_for_messages(
                             state["session_id"],
@@ -6930,12 +6963,14 @@ async def astream_events(
         if persist and ev.get("type") != "tool_call":
             session_manager.append_ui_event(session_id, ev)
         if persist and ev.get("type") == "tool_call":
-            # Keep the originating response fast, but do not expose this event
-            # to reconnecting observers until the projection can replay it.
-            if consumer_attached:
-                await queue.put(public_event)
+            # A completed tool row is a durable UI claim.  Persist it before
+            # either the originating response or reconnecting observers can
+            # display it, so interrupt/refresh cannot expose an uncommitted
+            # result.
             await asyncio.to_thread(session_manager.append_ui_event, session_id, ev)
             await publish_session_event(session_id, public_event)
+            if consumer_attached:
+                await queue.put(public_event)
             return
         await publish_session_event(session_id, public_event)
         if consumer_attached:
@@ -6992,16 +7027,11 @@ async def astream_events(
         terminal_event = {"type": "run_interrupted", "ephemeral": True}
         try:
             await power_guard.start(on_runtime_resume)
-            cost_profile = executor_pricing_for_session(session_id)
-            state["_cost_pricing"] = dict(cost_profile.get("pricing") or {})
             execution_metrics.start_run(
                 session_id,
                 runtime_v2_run_id,
                 "chat",
                 user_input,
-                model_profile_id=str(cost_profile.get("model_profile_id") or ""),
-                pricing=state["_cost_pricing"],
-                cost_budget_usd=cost_profile.get("cost_budget_usd"),
             )
             # 用户气泡由前端已画；此处只写入与流顺序一致的持久化，供刷新与 SSE 同源
             run_start_timings: Dict[str, int] = {}
@@ -7303,8 +7333,8 @@ async def astream_events_continuation(
     """
     Continue an existing Agent run without appending a user bubble.
 
-    ``continuation_source`` keeps Goal auto-continuations distinct from the
-    subagent continuation path in the user-visible start status.
+    ``continuation_source`` keeps Goal, interrupted-run recovery, and the
+    subagent continuation path distinct in the user-visible start status.
     """
     executor_http_client.interactions.clear()
 
@@ -7327,8 +7357,11 @@ async def astream_events_continuation(
     key_context = _load_key_context_for_run(session_id)
     continuation_source = str(continuation_source or "subagent").strip().lower()
     is_goal_continuation = continuation_source == "goal"
+    is_recovery_continuation = continuation_source == "recovery"
     setup_logging(
-        "[goal-continuation]" if is_goal_continuation else "[subagent-continuation]",
+        "[goal-continuation]" if is_goal_continuation else (
+            "[recovery-continuation]" if is_recovery_continuation else "[subagent-continuation]"
+        ),
         session_id,
     )
     pre_run_timings: Dict[str, int] = {}
@@ -7527,16 +7560,11 @@ async def astream_events_continuation(
         terminal_event = {"type": "run_interrupted", "ephemeral": True}
         try:
             await power_guard.start(on_runtime_resume)
-            cost_profile = executor_pricing_for_session(session_id)
-            state["_cost_pricing"] = dict(cost_profile.get("pricing") or {})
             execution_metrics.start_run(
                 session_id,
                 runtime_v2_run_id,
                 "continuation",
                 str(state.get("user_input") or ""),
-                model_profile_id=str(cost_profile.get("model_profile_id") or ""),
-                pricing=state["_cost_pricing"],
-                cost_budget_usd=cost_profile.get("cost_budget_usd"),
             )
             run_start_timings: Dict[str, int] = {}
             _t_run_start = time.perf_counter()
@@ -7605,7 +7633,9 @@ async def astream_events_continuation(
             _t_run_start = time.perf_counter()
             await emit({
                 "type": "status",
-                "content": "Goal 自动续跑开始" if is_goal_continuation else "Subagent Continuation Start",
+                "content": "Goal 自动续跑开始" if is_goal_continuation else (
+                    "任务已恢复，流程重启" if is_recovery_continuation else "Subagent Continuation Start"
+                ),
             })
             run_start_timings["emit_start_status"] = _timing_ms(_t_run_start)
             _pipeline_step_timing_log("run_start_step_timing", session_id, "emit_start_status", run_start_timings["emit_start_status"], run_id=runtime_v2_run_id, mode="continuation")
