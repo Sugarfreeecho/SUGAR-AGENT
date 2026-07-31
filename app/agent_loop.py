@@ -87,6 +87,7 @@ from agent_openai import (
     parse_assistant_message,
     run_chat_completion_stream_worker,
 )
+from model_profiles import extract_context_window_from_error
 from agent_reasoning import build_assistant_additional_kwargs
 from agent_tools import (
     tools,
@@ -2992,6 +2993,107 @@ def _tool_result_status(
 
 
 # ==================== 节点函数 ====================
+_CONTEXT_LIMIT_ERROR_MARKERS = (
+    "context_length_exceeded",
+    "context_window_exceeded",
+    "context limit exceeded",
+    "context length exceeded",
+    "context window exceeded",
+    "maximum context length",
+    "maximum context window",
+    "max context length",
+    "max context window",
+    "prompt is too long",
+    "prompt too long",
+    "input is too long",
+    "input too long",
+    "too many input tokens",
+    "request too large for model",
+)
+
+
+def _api_error_search_text(exc: BaseException) -> str:
+    """Collect provider error details across common OpenAI-compatible SDK shapes."""
+    values: List[Any] = []
+    seen: set[int] = set()
+    current: Optional[BaseException] = exc
+    for _ in range(3):
+        if current is None or id(current) in seen:
+            break
+        seen.add(id(current))
+        values.extend(
+            [
+                current,
+                getattr(current, "message", None),
+                getattr(current, "body", None),
+                getattr(current, "code", None),
+            ]
+        )
+        response = getattr(current, "response", None)
+        if response is not None:
+            values.extend(
+                [
+                    getattr(response, "text", None),
+                    getattr(response, "reason_phrase", None),
+                ]
+            )
+            response_json = getattr(response, "json", None)
+            if callable(response_json):
+                try:
+                    values.append(response_json())
+                except Exception:
+                    pass
+        current = getattr(current, "__cause__", None) or getattr(
+            current, "__context__", None
+        )
+
+    parts: List[str] = []
+    for value in values:
+        if value is None:
+            continue
+        if isinstance(value, (dict, list, tuple)):
+            try:
+                text = json.dumps(value, ensure_ascii=False)
+            except Exception:
+                text = str(value)
+        else:
+            text = str(value)
+        if text and text not in parts:
+            parts.append(text)
+    return " ".join(parts)
+
+
+def _context_limit_error_info(exc: BaseException) -> Dict[str, Any]:
+    """Return normalized context-overflow metadata for a provider exception."""
+    text = _api_error_search_text(exc)
+    lowered = text.lower()
+    context_window = extract_context_window_from_error(text)
+    matched = context_window > 0 or any(
+        marker in lowered for marker in _CONTEXT_LIMIT_ERROR_MARKERS
+    )
+    if not matched:
+        matched = bool(
+            re.search(
+                r"(?:requested|resulted in|has)\s+[\d,._ ]+\s+tokens?.{0,120}"
+                r"(?:maximum|max(?:imum)? allowed|context limit)",
+                lowered,
+            )
+        )
+    return {
+        "matched": bool(matched),
+        "context_window": max(0, int(context_window or 0)),
+    }
+
+
+def _context_limit_recovery_window(configured: int, reported: int) -> int:
+    """Use a provider-reported limit for one recovery without mutating its profile."""
+    configured_window = max(1, int(configured))
+    reported_window = max(0, int(reported or 0))
+    if reported_window <= 0:
+        return configured_window
+    return min(configured_window, reported_window)
+
+
 def _classify_api_error(exc: BaseException) -> dict:
     """将 LLM API 异常分类为结构化错误信息（错误码 + 中文描述 + 解决方案）。"""
     try:
@@ -3000,6 +3102,17 @@ def _classify_api_error(exc: BaseException) -> dict:
         AuthenticationError = BadRequestError = InternalServerError = NotFoundError = PermissionDeniedError = RateLimitError = UnprocessableEntityError = type(None)
 
     msg = str(exc).lower()
+    context_limit = _context_limit_error_info(exc)
+
+    if context_limit["matched"]:
+        return {
+            "code": "CTX",
+            "title": "模型上下文窗口已满",
+            "msg": "模型拒绝了超过其最大上下文窗口的请求。",
+            "solution": "系统将尝试压缩当前上下文；若仍失败，请新建会话或检查模型上下文窗口配置。",
+            "retry": 0,
+            "context_window": int(context_limit["context_window"]),
+        }
 
     if isinstance(exc, (APIConnectionError, APITimeoutError)) or 'timeout' in msg or 'timed out' in msg or 'connection' in msg:
         return {"code": "NET", "title": "网络连接失败",
@@ -3079,6 +3192,10 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
     final_content = ""
     llm_stream_seq = 0
     compress_attempts = 0
+    context_limit_recovery_attempts = 0
+    context_limit_recovery_pending = False
+    context_limit_reported_window = 0
+    context_limit_last_error_detail = ""
     final_result_retries = int(
         state.get("final_result_retries", state.get("empty_final_retries", 0)) or 0
     )
@@ -3303,16 +3420,30 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                 resolve_executor_config_for_session(state["session_id"])
             )
             _pre_api_timing_mark(pre_api_timings, "resolve_model_config", _t_resolve_model)
+            forced_context_limit_compress = bool(context_limit_recovery_pending)
+            active_context_window = (
+                _context_limit_recovery_window(
+                    iter_context_window,
+                    context_limit_reported_window,
+                )
+                if forced_context_limit_compress
+                else int(iter_context_window)
+            )
             if emit:
                 await _push_stream_event(
                     state,
                     {
                         "type": "context_tokens",
                         "estimated": int(full_input_est),
-                        "threshold": int(iter_context_window),
+                        "threshold": int(active_context_window),
                         "model": iter_model,
                         "token_mode": state.get("_context_token_mode", "hybrid"),
                         "source": token_estimate_source,
+                        "reason": (
+                            "api_context_limit_recovery"
+                            if forced_context_limit_compress
+                            else "pre_request"
+                        ),
                         "ephemeral": True,
                     },
                     emit=emit,
@@ -3320,17 +3451,23 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
             # 上一轮已成功压缩时本轮不再压：key 追加后 system 变长，若再压会反复套娃并刷爆状态行
             _skip_compress = state.pop("_compress_skip_next", False)
             # 仅按 token 策略自动压缩；是否主动压由模型调用 context_manage(compact) 决定
-            if not _skip_compress:
+            if forced_context_limit_compress or not _skip_compress:
                 kcur = state.get("key_context", "") or ""
                 sid = state["session_id"]
-                if full_input_est > iter_context_window:
+                if forced_context_limit_compress or full_input_est > active_context_window:
                     _t_pre_api = time.perf_counter()
                     if emit:
                         await _push_stream_event(
                             state,
                             {
                                 "type": "status",
-                                "content": "【上下文窗口已满，开始压缩】正在进行上下文裁剪以控制 token（可能需数秒，请稍候）…",
+                                "content": (
+                                    "【模型报告上下文已满，开始压缩】正在进行上下文裁剪后重试原请求"
+                                    "（可能需数秒，请稍候）…"
+                                    if forced_context_limit_compress
+                                    else "【上下文窗口已满，开始压缩】正在进行上下文裁剪以控制 token"
+                                    "（可能需数秒，请稍候）…"
+                                ),
                             },
                             emit=emit,
                         )
@@ -3347,9 +3484,13 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                         state,
                         {
                             "matcher_value": "automatic",
-                            "mode": "automatic",
+                            "mode": (
+                                "api_context_limit"
+                                if forced_context_limit_compress
+                                else "automatic"
+                            ),
                             "estimated_tokens": int(full_input_est),
-                            "context_window": int(iter_context_window),
+                            "context_window": int(active_context_window),
                         },
                         emit,
                     )
@@ -3376,7 +3517,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                             # immediately fall through to the emergency half-window truncate.
                             force_user_compact=True,
                             hint_sink=_compress_hint_emit,
-                            context_window=int(iter_context_window),
+                            context_window=int(active_context_window),
                             prompt_language=state.get("_prompt_language", "zh-CN"),
                             should_stop=lambda: (
                                 not _state_run_has_write_fence(state)
@@ -3398,7 +3539,11 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                         state,
                         {
                             "matcher_value": "automatic",
-                            "mode": "automatic",
+                            "mode": (
+                                "api_context_limit"
+                                if forced_context_limit_compress
+                                else "automatic"
+                            ),
                             "changed": bool(chg),
                             "used_llm_summary": bool(used_llm_summary),
                         },
@@ -3414,8 +3559,73 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                                 post_compact_hook,
                                 "PostCompact Hook stopped the run.",
                             )
-                        )
+                    )
                     _pre_api_timing_mark(pre_api_timings, "context_policy_run", _t_pre_api)
+                    if forced_context_limit_compress:
+                        context_limit_recovery_pending = False
+                        before_recovery_tokens = estimate_full_input_tokens_for_llm_history(
+                            state["session_id"],
+                            llm_history,
+                            kcur,
+                            state.get("_prompt_language", "zh-CN"),
+                        )
+                        after_recovery_tokens = estimate_full_input_tokens_for_llm_history(
+                            state["session_id"],
+                            nl,
+                            nk,
+                            state.get("_prompt_language", "zh-CN"),
+                        )
+                        if after_recovery_tokens >= before_recovery_tokens:
+                            emergency_history, emergency_changed, _ = compress_tail_fallback(
+                                nl,
+                                reason="emergency",
+                                max_tokens=max(1, int(active_context_window) // 2),
+                            )
+                            emergency_tokens = estimate_full_input_tokens_for_llm_history(
+                                state["session_id"],
+                                emergency_history,
+                                nk,
+                                state.get("_prompt_language", "zh-CN"),
+                            )
+                            if emergency_changed and emergency_tokens < before_recovery_tokens:
+                                nl = emergency_history
+                                chg = True
+                                after_recovery_tokens = emergency_tokens
+                            else:
+                                logger.error(
+                                    "API 上下文超限恢复无法继续缩小历史：before=%s after=%s window=%s",
+                                    before_recovery_tokens,
+                                    after_recovery_tokens,
+                                    active_context_window,
+                                )
+                                _cls = {
+                                    "code": "CTX",
+                                    "title": "模型上下文窗口已满",
+                                    "msg": "压缩流程无法继续缩小当前请求。",
+                                    "solution": "请新建会话，或检查当前模型配置的上下文窗口是否正确。",
+                                }
+                                if emit:
+                                    _err_data = {
+                                        "c": _cls["code"],
+                                        "t": _cls["title"],
+                                        "m": _cls["msg"],
+                                        "s": _cls["solution"],
+                                        "d": context_limit_last_error_detail,
+                                    }
+                                    await _push_stream_event(
+                                        state,
+                                        {
+                                            "type": "error",
+                                            "content": "__ERR_CARD__"
+                                            + json.dumps(_err_data, ensure_ascii=False),
+                                        },
+                                        emit=emit,
+                                    )
+                                final_content = (
+                                    f"LLM 调用失败 [{_cls['code']}] {_cls['title']}："
+                                    f"{_cls['msg']}\n{_cls['solution']}"
+                                )
+                                break
                 else:
                     nl, nk, chg, used_llm_summary, new_recap = llm_history, kcur, False, False, None
             else:
@@ -3444,7 +3654,15 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                     _st_base = "【自动·长度策略】已完成上下文裁剪以控制长度"
                 work_messages.append(SystemMessage(content=_wm_compact_note))
                 state["work_messages"] = work_messages
-                _persist_state_with_model_replace(state, nl, "auto_context_policy")
+                _persist_state_with_model_replace(
+                    state,
+                    nl,
+                    (
+                        "api_context_limit_recovery"
+                        if forced_context_limit_compress
+                        else "auto_context_policy"
+                    ),
+                )
                 state["_compress_skip_next"] = True
                 _st = auto_length_strategy_status_line(
                     _st_base,
@@ -3492,14 +3710,17 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                     emit=emit,
                 )
                 compress_attempts = 0
+                if forced_context_limit_compress:
+                    iter_count = max(0, iter_count - 1)
+                    state["_current_react_iter"] = int(iter_count)
                 continue
-            if full_input_est > iter_context_window:
+            if full_input_est > active_context_window:
                 compress_attempts += 1
                 if compress_attempts > CONTEXT_EMERGENCY_SHRINK_MAX_RETRIES:
                     logger.warning(
                         "自动应急截断已重试 %s 次仍可能超过整包阈值；将直接请求主模型。可新建会话或调低环境变量 CONTEXT_WINDOW（当前 %s）",
                         CONTEXT_EMERGENCY_SHRINK_MAX_RETRIES,
-                        iter_context_window,
+                        active_context_window,
                     )
                 else:
                     old_tok = estimate_full_input_tokens_for_llm_history(
@@ -5232,11 +5453,14 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                     _collect_model_switch_status,
                 )
                 try:
-                    if stream_error is not None and _classify_api_error(stream_error).get("code") == "NET":
-                        # Do not immediately duplicate a failed streaming request
-                        # through the non-streaming fallback. The bounded outer
-                        # reconnect loop owns transport retries and UI cleanup.
-                        raise stream_error
+                    if stream_error is not None:
+                        stream_error_code = _classify_api_error(stream_error).get("code")
+                        if stream_error_code in {"NET", "CTX"}:
+                            # Do not immediately duplicate a failed streaming
+                            # request through the non-streaming fallback.
+                            # Bounded reconnect/context-recovery paths own the
+                            # retry and live-row cleanup.
+                            raise stream_error
                     t_llm_fallback_start = time.monotonic()
                     api_resp = await _await_steerable(
                         state,
@@ -5317,6 +5541,55 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                     _cls = _classify_api_error(_llm_exc)
                     _err_detail = f"{type(_llm_exc).__name__}: {_llm_exc}"
                     logger.error("LLM 调用失败 [iter %s] %s %s: %s", iter_count, _cls["code"], _cls["title"], _err_detail)
+                    if _cls.get("code") == "CTX":
+                        if (
+                            context_limit_recovery_attempts
+                            < CONTEXT_EMERGENCY_SHRINK_MAX_RETRIES
+                        ):
+                            context_limit_recovery_attempts += 1
+                            context_limit_recovery_pending = True
+                            context_limit_reported_window = max(
+                                0,
+                                int(_cls.get("context_window") or 0),
+                            )
+                            context_limit_last_error_detail = _err_detail
+                            logger.warning(
+                                "模型报告上下文超限，进入压缩恢复 %s/%s：reported_window=%s",
+                                context_limit_recovery_attempts,
+                                CONTEXT_EMERGENCY_SHRINK_MAX_RETRIES,
+                                context_limit_reported_window or "unknown",
+                            )
+                            if emit:
+                                await _push_stream_event(
+                                    state,
+                                    {
+                                        "type": "llm_stream_aborted",
+                                        "reason": "context_window_exceeded",
+                                        "react_iter": int(iter_count),
+                                        "stream_seq": llm_stream_seq,
+                                        "ephemeral": True,
+                                    },
+                                    emit=emit,
+                                )
+                                await _push_stream_event(
+                                    state,
+                                    {
+                                        "type": "status",
+                                        "content": (
+                                            "模型报告已达到最大上下文窗口，正在进入压缩流程"
+                                            f"（第 {context_limit_recovery_attempts} 次恢复）…"
+                                        ),
+                                        "ephemeral": True,
+                                    },
+                                    emit=emit,
+                                )
+                            iter_count = max(0, iter_count - 1)
+                            state["_current_react_iter"] = int(iter_count)
+                            continue
+                        logger.error(
+                            "模型上下文超限恢复达到次数上限：%s",
+                            CONTEXT_EMERGENCY_SHRINK_MAX_RETRIES,
+                        )
                     if _cls.get("code") == "NET":
                         local_network_offline = isinstance(_llm_exc, LocalNetworkUnavailableError)
                         if not local_network_offline:
@@ -5406,6 +5679,10 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                 finally:
                     _set_model_switch_status_callback(iter_client, None)
             state.pop("_network_reconnect_attempts", None)
+            context_limit_recovery_attempts = 0
+            context_limit_recovery_pending = False
+            context_limit_reported_window = 0
+            context_limit_last_error_detail = ""
             # 正文与思考严格分源
             response_text = turn.content or ""
             reasoning_text = (turn.reasoning_content or "").strip()
