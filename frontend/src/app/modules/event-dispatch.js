@@ -68,9 +68,11 @@ function renderEvent(ctx, event, eventIndex, runSessionId) {
     } else if (event.type === 'cache_stats') {
         applyCacheStatsFromEvent(ctx, event, runSessionId);
     } else if (event.type === 'tool_call') {
-        var riTool = uiEventReactIter(event);
-        if (event.raw_content) appendLog(ctx, event.raw_content, 'tool-call', runSessionId, riTool);
-        else appendLog(ctx, formatToolDoneLine(event.tool, event.args, event.result, event.command_preview), 'tool-call', runSessionId, riTool);
+        // Replay through the same upsert path as live SSE so the tool row
+        // carries data-tool-call-id. Pending approval cards rendered earlier in
+        // the replay can then be anchored into that row by
+        // attachAllHumanInteractionCards().
+        upsertToolCallResult(ctx, event, runSessionId);
     } else if (event.type === 'validate_final') {
         appendLog(ctx, '验证：' + event.result + (event.reason ? '\n' + event.reason : ''), 'status', runSessionId);
     } else if (event.type === 'llm_reasoning') {
@@ -124,6 +126,8 @@ function renderEvent(ctx, event, eventIndex, runSessionId) {
         if (isTemporaryStatus && statusRow) {
             statusRow.dataset.temporaryStatus = '1';
         }
+    } else if (event.type === 'auto_review_status') {
+        renderAutoReviewStatusEvent(ctx, event, runSessionId);
     } else if (event.type === 'approval_required') {
         var leg = (event.tool_name ? String(event.tool_name) + ' ' : '') + (event.message || '');
         appendLog(ctx, '[历史/旧版事件] ' + leg.trim(), 'status', runSessionId);

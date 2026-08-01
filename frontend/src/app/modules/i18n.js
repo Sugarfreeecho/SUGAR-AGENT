@@ -203,7 +203,7 @@ Object.assign(UI_TRANSLATIONS_EN, {
     '上一步': 'Back', '下一步': 'Next', '提交答案': 'Submit answers', '请完成当前问题后再提交。': 'Complete the current question before submitting.',
     '取消失败：': 'Cancellation failed: ', '提交失败：': 'Submission failed: ', '处理失败：': 'Failed to process: ',
     '是否允许 Agent 执行此操作？': 'Allow Agent to perform this action?', '工具': 'Tool', '始终允许': 'Always allow',
-    '仅本次允许': 'Allow once', '已取消': 'Cancelled', '该请求已取消。': 'This request was cancelled.', '该请求已过期。': 'This request expired.',
+    '仅本次允许': 'Allow once', '本次允许': 'Allow once', '拒绝执行': 'Deny execution', '已取消': 'Cancelled', '该请求已取消。': 'This request was cancelled.', '该请求已过期。': 'This request expired.',
     '你已拒绝本次操作。': 'You denied this action.', '你已允许同类操作。': 'You allowed similar actions.', '你已允许本次操作。': 'You allowed this action.', '已回答': 'Answered',
     // Session grouping and subagent continuation
     '刷新归档目录': 'Refresh archived sessions', '加载归档目录': 'Load archived sessions', '加载更多': 'Load more', '加载中...': 'Loading...',
@@ -272,7 +272,6 @@ Object.assign(UI_TRANSLATIONS_EN, {
     'MCP 调用异常：': 'MCP call error: ', '未知工具：': 'Unknown tool: ', '工具执行异常：': 'Tool execution error: ',
     '编辑说明不能为空': 'Edit instructions cannot be empty', '缺少 edit_instruction': 'Missing edit_instruction', '无效 mode': 'Invalid mode',
     '请稍候': 'Please wait', '本轮执行步骤已达到最大迭代次数。Goal 模式会自动开始下一轮；普通会话可以手动继续任务。': 'This run reached the maximum number of iterations. Goal mode will start the next round automatically; regular sessions can be continued manually.',
-    '确认放宽工作区的 Shell': 'Confirm relaxed-workspace Shell access', 'restrict_to_workspace=false：可能访问或影响工作区之外的路径。': 'restrict_to_workspace=false: this may access or affect paths outside the workspace.',
     '将执行的大致命令如下，请确认是否允许：': 'The approximate command to run is below. Confirm whether to allow it:', 'run_shell（放宽工作区）': 'run_shell (relaxed workspace)',
     '确认网络下载': 'Confirm network download', '将把远程文件写入工作区指定路径。': 'The remote file will be written to the specified workspace path.', 'URL：': 'URL:', '保存为（工作区内）：': 'Save as (inside workspace):', '（未指定）': '(not specified)',
     '无法继续任务': 'Unable to continue the task', '无法发送': 'Unable to send', '截断失败': 'Truncation failed',
@@ -298,6 +297,61 @@ Object.assign(UI_TRANSLATIONS_EN, {
     '工具执行异常: ': 'Tool execution error: ', '已清理临时文件': 'Cleaned up temporary files', '已移入 .trash': 'moved to .trash',
     '后台 Subagent 已完成': 'Background subagent completed', 'LLM 调用失败': 'LLM call failed', '模型输出达到输出 token 上限': 'Model output reached the output-token limit',
     '达到最大迭代次数': 'Reached the maximum iteration count', 'ReAct 已达到轮次上限': 'ReAct reached the iteration limit'
+});
+Object.assign(UI_TRANSLATIONS_EN, {
+    // Permission mode selector & security settings
+    '权限': 'Permissions',
+    '请求批准': 'Ask for approval',
+    '替我审批': 'Approve for me',
+    '完全访问权限': 'Full access',
+    '不受限制': 'Unrestricted',
+    '应用层受限': 'App-restricted',
+    '应用层受限，越界和高风险操作由你审批': 'App-restricted; out-of-bounds and high-risk actions are reviewed by you',
+    '相同应用层边界，由独立审查 Agent 审批': 'Same app-level boundary; approved by an independent review agent',
+    '无应用限制、无审批，以当前用户执行': 'No app-level restrictions or approvals; runs as the current user',
+    '更改权限': 'Change permissions',
+    'Agent 的操作应如何获得审批？': 'How should Agent actions be approved?',
+    '工作区内自动执行；网络、删文件、出项目等会先问你': 'Runs automatically inside the workspace; asks before using the internet, deleting files, or going outside the project',
+    '低风险自动放行，高风险仍转给你确认': 'Automatically approves low-risk actions and asks you to confirm high-risk ones',
+    '关闭限制与审批，Agent 拥有你的全部权限': 'Turns off restrictions and approvals; the agent has all of your permissions',
+    '自动审查中：审查 Agent 正在核对你的任务意图与请求风险。': 'Auto-reviewing: a reviewer agent is checking this request against your task intent.',
+    '自动审批已批准': 'Auto-review approved',
+    '自动审批已拒绝': 'Auto-review denied',
+    '自动审批不可用（按拒绝处理）': 'Auto-review unavailable (treated as denied)',
+    '可人工覆盖本次请求（只此一次，不沉淀规则）': 'You can override this once for this exact request (this time only; no rule is saved)',
+    '完全访问权限会关闭应用层路径限制、危险操作检查和审批，且对所有会话生效，直到你切回“请求批准”。Agent 将以你当前的操作系统用户权限直接执行，并可能读取凭据、修改系统或破坏文件。是否继续？': 'Full access disables app-level path restrictions, dangerous-operation checks, and approvals for all sessions until you switch back to "Ask for approval". The agent will run directly with your current OS user permissions and could read credentials, modify the system, or damage files. Continue?',
+    '强烈建议仅在可信任务中使用': 'Strongly recommended only for trusted tasks',
+    '确认切换': 'Switch now',
+    '确认清除': 'Clear now',
+    '切换权限失败': 'Failed to switch permissions',
+    '请求批准 / 替我审批 / 完全访问均可直接切换；完全访问切换时会单独警告': 'Ask for approval / Approve for me / Full access can be switched directly; Full access shows an extra warning',
+    '权限规则（始终允许 / 必问 / 拒绝）': 'Permission rules (Always allow / Always ask / Deny)',
+    '规则类型': 'Rule type',
+    '规则行为': 'Rule behavior',
+    '清除本会话规则': 'Clear session rules',
+    '正在读取…': 'Loading…',
+    'Shell 命令': 'Shell command',
+    '读取': 'Read',
+    '写入': 'Write',
+    '网络': 'Network',
+    '联网搜索': 'Web search',
+    '允许': 'Allow',
+    '必问': 'Always ask',
+    '添加规则': 'Add rule',
+    '网页抓取预批准域名（web_fetch 免审批）': 'Pre-approved domains for web fetch (web_fetch without approval)',
+    '仅作用于只读的 web_fetch；web_download 与 Shell 联网不受影响。每行一个域名，留空表示仅用内置清单。': 'Applies only to read-only web_fetch; web_download and shell networking are unaffected. One domain per line; leave empty to use only the built-in list.',
+    '保存': 'Save',
+    '权限模式': 'Permission mode',
+    '预批准域名操作': 'Pre-approved domain actions',
+    '暂无规则。审批时点“始终允许同类操作”会自动添加。': 'No rules yet. Clicking "Always allow this kind of operation" while approving will add one automatically.',
+    '未选择会话。': 'No session selected.',
+    '清除当前会话的所有权限规则？用户级“始终允许”规则不受影响。': 'Clear all permission rules for the current session? User-level "Always allow" rules are unaffected.',
+    '规则已删除。': 'Rule deleted.',
+    '删除失败：': 'Failed to delete: ',
+    '清除失败：': 'Failed to clear: ',
+    '添加失败：': 'Failed to add: ',
+    '·本会话': '· Session',
+    '·项目': '· Project',
 });
 const UI_I18N_ATTRS = ['aria-label', 'data-ui-tip', 'title', 'placeholder'];
 // These nodes contain user-, model-, or runtime-authored text. Translating them
@@ -342,6 +396,9 @@ function translateUiString(value) {
         .replace(/^(\d+) \/ (\d+) 完成$/, '$1 / $2 completed')
         .replace(/^(\d+)分钟$/, '$1 min')
         .replace(/^(\d+) 分钟$/, '$1 min')
+        .replace(/^已加载 (\d+) 个自定义域名（内置清单始终生效）。$/, '$1 custom domain(s) loaded (the built-in list always applies).')
+        .replace(/^已保存 (\d+) 个自定义域名，新会话立即生效。$/, '$1 custom domain(s) saved; new sessions take effect immediately.')
+        .replace(/^已清除本会话规则（(\d+) 条）。$/, 'Session rules cleared ($1).')
         .replace(/^已选择 (\d+) 个 Skill$/, '$1 skills selected')
         .replace(/^已选择 (\d+) 项$/, '$1 items selected')
         .replace(/^正在上传 (\d+) 个文件… (\d+)%$/, 'Uploading $1 files… $2%')

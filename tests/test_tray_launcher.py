@@ -1,7 +1,14 @@
 import sys
 import socket
 import threading
+import os
 from pathlib import Path
+
+import pytest
+
+
+if os.name != "nt":
+    pytest.skip("Win32 tray tests run on Windows only", allow_module_level=True)
 
 
 ROOT = Path(__file__).resolve().parents[1]

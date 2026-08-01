@@ -25,7 +25,21 @@ SugarAgent 是一个**本地运行**的 AI Agent 开发与使用平台。它通�
 | 🔌 **MCP 扩展** | 支持 stdio / SSE / Streamable HTTP 三种 MCP transport，可热重载配置 |
 | 💾 **会话持久化** | 完整会话状态落盘（元数据、事件流、LLM 历史、对话历史、Todo 计划） |
 | 🛡️ **安全边界** | 工作区路径限制、Shell 危险命令拦截、SSRF 防护、敏感信息脱敏、工具审批机制 |
-| 🖥️ **系统托盘** | Windows 原生托盘集成，支持一键打开 WebUI、查看日志、退出 Agent |
+| 🖥️ **系统托盘** | Windows Win32、Ubuntu Ayatana 和 macOS 原生菜单栏集成 |
+
+### 工具权限与应用层限制
+
+每个新会话默认使用“请求批准”，主界面提供三档固定权限：
+
+| 模式 | 执行边界 | 审批 |
+|------|------|------|
+| 请求批准 | `app_restricted` | 用户批准工作区外、网络、删除或未知副作用 |
+| 替我审批 | 与“请求批准”完全相同 | 独立只读审查 Agent 决定是否批准 |
+| 完全访问权限 | `no_restriction` | 不审批；以当前宿主用户权限执行 |
+
+`app_restricted` 使用当前操作系统用户运行，通过中央能力策略、工作区路径校验、敏感环境过滤、危险操作检查和摘要绑定审批限制工具。它是应用层防护，不是硬沙箱；不会因为缺少原生 OS 沙箱而降级只读。工作区内普通读取、写入和 Shell 自动允许，凭据导出与安全策略篡改默认拒绝。安全策略、权限档位、审批记录和信任规则保存在工作区外，子 Agent 只能继承父 Agent 的权限上限。
+
+原生 OS 沙箱仅作为未来可选的高级安全功能，不是正常运行的前置条件。本项目不安装、检测或调用容器运行时。
 
 ---
 
@@ -33,7 +47,7 @@ SugarAgent 是一个**本地运行**的 AI Agent 开发与使用平台。它通�
 
 ### 后端
 
-- **Python 3.10**（工程内置运行时，无需系统安装）
+- **Python 3.10+**（Windows 可使用工程内置运行时，Linux/macOS 使用项目 `.venv`）
 - **FastAPI** + **uvicorn** — Web 框架与 ASGI 服务器
 - **OpenAI 兼容 API 客户端** — 连接任意 OpenAI 兼容 LLM
 - **SSE (Server-Sent Events)** — 实时事件流推送
@@ -83,6 +97,9 @@ SugarAgent/
 │   ├── model_profiles.py         # 模型配置管理
 │   ├── prompt.md                 # Agent System Prompt 模板
 │   ├── tray_launcher.py          # Windows 系统托盘启动器
+│   ├── platform_tray*.py         # Ubuntu/macOS 原生托盘与菜单栏适配
+│   ├── platform_lifecycle.py     # systemd/launchd/Windows 生命周期后端
+│   ├── agentctl.py               # Linux/macOS 统一运维入口
 │   ├── tool_approval_gate.py     # 工具审批机制
 │   ├── path_picker_util.py       # 本机路径选择器
 │   ├── ssl_bypass.py             # SSL 证书绕过
@@ -129,6 +146,8 @@ SugarAgent/
 │   ├── check_frontend_dist_sync.py     # 前端构建产物同步检查
 │   ├── check_frontend_commit_policy.py # 前端提交策略检查
 │   ├── install_git_hooks.py            # Git Hooks 安装
+│   ├── install_unix.sh                  # Ubuntu/macOS 源码安装
+│   ├── agentctl                         # Unix 生命周期命令包装器
 │   └── compare_runtime_v2_session.py   # Runtime V2 会话对比
 ├── tests/                        # 测试套件
 │   ├── test_model_profiles.py    # 模型配置测试
@@ -141,6 +160,7 @@ SugarAgent/
 │   └── runtime_v2_sidecar_invariants.md # Runtime V2 Sidecar 不变量
 ├── logs/                         # 运行日志
 ├── RUN.bat                       # Windows 一键启动脚本
+├── RUN.sh                        # Ubuntu/macOS 一键启动脚本
 ├── SPEC.md                       # 工程规格说明（~625 行）
 ├── model_profiles.json           # 预置模型配置
 └── .gitignore                    # Git 忽略规则
@@ -152,8 +172,8 @@ SugarAgent/
 
 ### 环境要求
 
-- **操作系统**: Windows 10/11
-- **Python**: 3.10+（工程内置运行时，或系统已安装）
+- **操作系统**: Windows 10/11、Ubuntu 22.04/24.04 x86_64、macOS 13+
+- **Python**: 3.10+（Windows 工程内置运行时，Linux/macOS 使用 `.venv`）
 - **Node.js**: 16+（仅前端开发需要）
 - **Git**: 版本管理
 
@@ -193,6 +213,12 @@ pip install -r app/requirements.txt
 # Windows 一键启动（推荐）
 RUN.bat
 
+# Ubuntu/macOS 首次安装
+bash scripts/install_unix.sh --mode desktop
+
+# Ubuntu/macOS 启动
+bash RUN.sh
+
 # 或手动启动
 python app/main.py
 ```
@@ -200,6 +226,10 @@ python app/main.py
 服务启动后自动打开浏览器，访问地址：**http://127.0.0.1:8192/**
 
 > 首次启动时，若未检测到配置文件，系统会自动跳转到 `/setup` 引导完成初始配置。
+
+Ubuntu Server 使用 `bash scripts/install_unix.sh --mode server` 安装，并通过
+SSH 隧道访问 WebUI；macOS 使用 LaunchAgent 和原生菜单栏。完整安装、运维、
+卸载与故障排查见 [Linux 与 macOS 安装和运维](docs/cross_platform.md)。
 
 ### 5. 托盘启动器（可选）
 
@@ -210,6 +240,10 @@ python app/main.py
 - 🛡️ 更新不会强制覆盖本地修改；更新冲突或失败时会保留现场、恢复启动 Agent，并将详情写入 `logs/agent_update.log`
 - 📋 终端窗口自动隐藏，减少桌面干扰
 - 🔒 单实例运行，重复启动自动打开已有实例
+
+Ubuntu Desktop 使用 Ayatana AppIndicator，macOS 使用原生菜单栏；两者由
+`platform_tray.py` 调用 systemd/launchd 生命周期后端，菜单能力与 Windows
+保持一致。Headless Ubuntu 不启动托盘，改用 `scripts/agentctl` 管理服务。
 
 ---
 

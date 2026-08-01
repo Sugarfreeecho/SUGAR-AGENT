@@ -127,6 +127,18 @@ from human_interaction import (
 )
 from runtime_power import AgentRunPowerGuard, RuntimeResume
 from agent_goal import GoalError, goal_enabled, manager_for as goal_manager_for
+from security import (
+    DecisionOutcome,
+    PermissionMode,
+    SecurityDecision,
+    add_approval_grant,
+    always_ask_for,
+    authorize_tool,
+    execution_scope,
+    forced_approval_for,
+    session_permission_mode,
+)
+from security.reviewer import review_request
 
 EXECUTOR_STREAM = os.getenv("EXECUTOR_STREAM", "true").lower() in ("1", "true", "yes")
 NETWORK_RECONNECT_MAX_ATTEMPTS = max(0, int(os.getenv("NETWORK_RECONNECT_MAX_ATTEMPTS", "5")))
@@ -2618,6 +2630,7 @@ async def _emit_tool_approval_required_sse(
     message: str,
     subtitle: str = "",
     tool_call_id: str = "",
+    extra: Optional[Dict[str, Any]] = None,
 ) -> None:
     """Emit the already-persisted approval request to connected clients."""
     if not emit:
@@ -2636,6 +2649,13 @@ async def _emit_tool_approval_required_sse(
             "subtitle": redact_sensitive_tool_text(subtitle or ""),
             "tool_call_id": str(tool_call_id or ""),
         }
+        if extra:
+            for key, value in dict(extra).items():
+                payload[str(key)] = (
+                    redact_sensitive_tool_text(value)
+                    if isinstance(value, str)
+                    else value
+                )
         r = emit(payload)
         if inspect.isawaitable(r):
             await r
@@ -2645,31 +2665,12 @@ async def _emit_tool_approval_required_sse(
 
 
 def _tool_ui_approval_enabled() -> bool:
-    return os.getenv("TOOL_UI_APPROVAL", "1").strip().lower() not in ("0", "false", "no", "off")
-
-
-def _run_shell_requires_ui_approval(tool_args: Any) -> bool:
-    """仅当模型显式将 restrict_to_workspace 置为 false 时视为工作区外/放宽执行。"""
-    return tool_args.get("restrict_to_workspace") is False
+    # Security prompts are policy-controlled. A model-writable environment file
+    # must never be able to disable them.
+    return True
 
 
 def _tool_ui_approval_spec(tool_name: str, tool_args: Any) -> Optional[Dict[str, str]]:
-    if tool_name == "run_shell":
-        if not _run_shell_requires_ui_approval(tool_args):
-            return None
-        cmd = _compose_shell_command(
-            str(tool_args.get("command") or ""),
-            tool_args.get("args"),
-        )
-        snippet = redact_sensitive_tool_text(truncate_head_tail((cmd or "").strip(), 400))
-        if not snippet.strip():
-            snippet = "（空命令）"
-        return {
-            "title": "确认放宽工作区的 Shell",
-            "subtitle": "restrict_to_workspace=false：可能访问或影响工作区之外的路径。",
-            "message": "将执行的大致命令如下，请确认是否允许：\n\n" + snippet,
-            "brief": "run_shell（放宽工作区）：" + snippet[:160],
-        }
     if tool_name == "web_download":
         url = redact_sensitive_tool_text(str(tool_args.get("url") or "").strip())
         fp = str(
@@ -2686,6 +2687,63 @@ def _tool_ui_approval_spec(tool_name: str, tool_args: Any) -> Optional[Dict[str,
             "brief": "web_download → " + url[:120],
         }
     return None
+
+
+_DANGER_APPROVAL_CONSEQUENCES = {
+    "process.destructive": (
+        "后果：这是破坏性命令（如强制删除、格式化、磁盘写入、关机/重启等），"
+        "执行后可能导致文件永久丢失或系统不可用，且无法撤销。"
+        "请再次核对目标路径与影响范围后决定。"
+    ),
+    "process.dynamic": (
+        "后果：该命令通过动态代码或编码间接执行（如 -c/-e 动态脚本、"
+        "编码命令、eval/invoke-expression、命令替换），实际行为可能超出"
+        "可见内容，可能修改任意文件或造成不可恢复的破坏。"
+    ),
+}
+
+
+def _security_approval_spec(
+    tool_name: str,
+    tool_args: Dict[str, Any],
+    decision: SecurityDecision,
+    request: Any,
+    workspace: Path,
+) -> Dict[str, Any]:
+    preview = _tool_command_preview(tool_name, tool_args)
+    danger = forced_approval_for(decision)
+    force_ask = always_ask_for(decision)
+    # Only forced-approval operations (destructive/dynamic commands) reject a
+    # persistent rule. Everything else may be granted "same kind" (删除、网络、
+    # 外部路径、MCP/插件均按普通审批处理，与 Claude Code 的规则层一致)。
+    unsafe_persistent = danger or force_ask
+    rule_info: Dict[str, str] = {}
+    if not unsafe_persistent:
+        try:
+            from security.policy import suggest_rule_pattern
+
+            suggested = suggest_rule_pattern(request, workspace)
+            if suggested:
+                rule_info = suggested
+        except Exception:
+            rule_info = {}
+    return {
+        "title": "危险命令，需要确认" if danger else "安全权限请求",
+        "subtitle": decision.reason,
+        "message": preview,
+        "consequence": _DANGER_APPROVAL_CONSEQUENCES.get(decision.rule_id) if danger else "",
+        "brief": preview[:180],
+        "request_digest": decision.request_digest,
+        "rule_id": decision.rule_id,
+        # "始终允许同类操作" is only offered when a durable rule pattern can
+        # actually be generated (Claude Code alignment: no suggestion, no
+        # "don't ask again" button).
+        "allow_always_available": bool(rule_info) and not unsafe_persistent,
+        "force_approval": force_ask,
+        "approval_level": "danger" if danger else "warning",
+        "rule_action": rule_info.get("action", ""),
+        "rule_pattern": rule_info.get("pattern", ""),
+    }
 
 
 def _tool_command_preview(tool_name: str, tool_args: Any) -> str:
@@ -3866,21 +3924,173 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                 state["_runtime_stage"] = "running_tool:%s" % tool_name
                 await _raise_if_steer_requested(state, emit, "tool")
 
-                # 工作区放宽 Shell / 网页下载：前端弹窗确认后才进入「执行中」占位
+                security_workspace = Path(
+                    session_meta.get("subagent_work_dir")
+                    or session_meta.get("git_worktree_path")
+                    or WORK_DIR
+                ).resolve()
+                sec_request, sec_decision, sec_context = authorize_tool(
+                    session_id=state["session_id"],
+                    tool_name=tool_name,
+                    arguments=tool_args if isinstance(tool_args, dict) else {},
+                    workspace=security_workspace,
+                )
                 hook_approval_spec = tool_call.get("_hook_approval_spec")
-                if emit and (tool_name != "context_manage" or hook_approval_spec) and (
-                    _tool_ui_approval_enabled() or hook_approval_spec
-                ):
-                    spec = hook_approval_spec or _tool_ui_approval_spec(tool_name, tool_args)
-                    if spec is None and isinstance(tool_name, str) and tool_name.startswith("mcp_"):
-                        await _await_steerable(
-                            state,
-                            agent_mcp.ensure_started(),
-                            emit,
-                            "tool_mcp_start",
+                if sec_context.mode == PermissionMode.FULL_ACCESS:
+                    hook_approval_spec = None
+                if sec_decision.outcome == DecisionOutcome.DENY:
+                    return _blocked_tool_result(
+                        tool_name, tool_args, tool_id, sec_decision.reason
+                    )
+
+                # Announce the tool row before any approval dialog. The approval
+                # card anchors to this row, so it never renders at the bottom of
+                # the stream and jumps back into the tool row later. ask_user
+                # and context_manage keep their dedicated flows.
+                if emit and tool_name not in ("context_manage", "ask_user"):
+                    await _emit_tool_pending_sse(
+                        emit,
+                        tool_name,
+                        tool_args,
+                        tool_id,
+                        iter_count,
+                        tool_call_index,
+                    )
+
+                if sec_decision.outcome == DecisionOutcome.ASK or hook_approval_spec:
+                    spec = (
+                        hook_approval_spec or _tool_ui_approval_spec(tool_name, tool_args)
+                        or _security_approval_spec(
+                            tool_name, tool_args, sec_decision, sec_request,
+                            security_workspace,
                         )
-                        spec = agent_mcp.ui_approval_spec_for_mcp_tool(tool_name, tool_args)
-                    if spec:
+                    )
+                    approved = False
+                    if (
+                        sec_context.mode == PermissionMode.APPROVE_FOR_ME
+                        and not hook_approval_spec
+                        and not always_ask_for(sec_decision)
+                    ):
+                        await _push_stream_event(
+                            state,
+                            {
+                                "type": "auto_review_status",
+                                "status": "in_progress",
+                                "tool_call_id": str(tool_id or ""),
+                                "session_id": state["session_id"],
+                                "content": (
+                                    "自动审查中：审查 Agent 正在核对你的任务意图与请求风险。"
+                                ),
+                            },
+                            emit=emit,
+                        )
+                        review = await review_request(
+                            sec_request,
+                            user_intent=str(submitted_user_input or ""),
+                        )
+                        approved = review.approved
+                        await _push_stream_event(
+                            state,
+                            {
+                                "type": "auto_review_status",
+                                "status": (
+                                    "approved" if approved else "denied"
+                                ),
+                                "tool_call_id": str(tool_id or ""),
+                                "session_id": state["session_id"],
+                                "risk": review.risk,
+                                "reason": review.reason,
+                                "content": (
+                                    f"【自动审批·{review.risk}】"
+                                    + ("已批准：" if approved else "已拒绝：")
+                                    + review.reason
+                                ),
+                            },
+                            emit=emit,
+                        )
+                        if approved:
+                            add_approval_grant(
+                                state["session_id"],
+                                sec_decision.request_digest,
+                                "allow_once",
+                            )
+                        elif emit is not None:
+                            # Auto-review never expands the application boundary. A denial
+                            # may be overridden once by the user, but only for
+                            # this exact digest-bound request.
+                            appr_id = new_approval_id()
+                            override_spec = dict(spec)
+                            override_spec["title"] = "自动审批已拒绝：人工覆盖"
+                            override_spec["subtitle"] = review.reason
+
+                            async def _emit_auto_review_override():
+                                await _emit_tool_approval_required_sse(
+                                    emit,
+                                    state["session_id"],
+                                    appr_id,
+                                    tool_name,
+                                    override_spec["title"],
+                                    override_spec["message"],
+                                    override_spec.get("subtitle") or "",
+                                    str(tool_id or ""),
+                                )
+
+                            approved = await _await_steerable(
+                                state,
+                                wait_tool_ui_approval_after_emit(
+                                    state["session_id"],
+                                    appr_id,
+                                    _emit_auto_review_override,
+                                    metadata={
+                                        "_durable": True,
+                                        "run_id": str(state.get("_runtime_v2_run_id") or ""),
+                                        "tool_call_id": str(tool_id or ""),
+                                        "tool": redact_sensitive_tool_text(tool_name),
+                                        "title": override_spec["title"],
+                                        "message": redact_sensitive_tool_text(
+                                            override_spec["message"]
+                                        ),
+                                        "subtitle": redact_sensitive_tool_text(review.reason),
+                                        "security_request_digest": sec_decision.request_digest,
+                                        "security_rule_id": sec_decision.rule_id,
+                                        # The override window offers the same
+                                        # "始终允许同类操作" choice as a normal
+                                        # approval whenever a durable rule can
+                                        # actually be generated. Forced
+                                        # approvals (dangerous/dynamic) never
+                                        # reach this path.
+                                        "allow_always_available": bool(
+                                            override_spec.get(
+                                                "allow_always_available", False
+                                            )
+                                        ),
+                                        "force_approval": bool(
+                                            override_spec.get("force_approval", False)
+                                        ),
+                                        "approval_level": str(
+                                            override_spec.get("approval_level")
+                                            or "warning"
+                                        ),
+                                        "rule_action": str(
+                                            override_spec.get("rule_action") or ""
+                                        ),
+                                        "rule_pattern": str(
+                                            override_spec.get("rule_pattern") or ""
+                                        ),
+                                        "auto_review_override": True,
+                                    },
+                                ),
+                                emit,
+                                "tool_approval",
+                            )
+                    else:
+                        if emit is None:
+                            return _blocked_tool_result(
+                                tool_name,
+                                tool_args,
+                                tool_id,
+                                "Approval is required but no interactive approval channel is available.",
+                            )
                         appr_id = new_approval_id()
 
                         async def _emit_appr():
@@ -3893,9 +4103,26 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                                 spec["message"],
                                 spec.get("subtitle") or "",
                                 str(tool_id or ""),
+                                extra={
+                                    "force_approval": bool(
+                                        spec.get("force_approval", False)
+                                    ),
+                                    "approval_level": str(
+                                        spec.get("approval_level") or "warning"
+                                    ),
+                                    "consequence": str(
+                                        spec.get("consequence") or ""
+                                    ),
+                                    "rule_action": str(
+                                        spec.get("rule_action") or ""
+                                    ),
+                                    "rule_pattern": str(
+                                        spec.get("rule_pattern") or ""
+                                    ),
+                                },
                             )
 
-                        allowed = await _await_steerable(
+                        approved = await _await_steerable(
                             state,
                             wait_tool_ui_approval_after_emit(
                                 state["session_id"],
@@ -3909,28 +4136,48 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                                     "title": redact_sensitive_tool_text(spec["title"]),
                                     "message": redact_sensitive_tool_text(spec["message"]),
                                     "subtitle": redact_sensitive_tool_text(spec.get("subtitle") or ""),
+                                    "security_request_digest": sec_decision.request_digest,
+                                    "security_rule_id": sec_decision.rule_id,
+                                    "allow_always_available": bool(
+                                        spec.get("allow_always_available", False)
+                                    ),
+                                    "force_approval": bool(
+                                        spec.get("force_approval", False)
+                                    ),
+                                    "approval_level": str(
+                                        spec.get("approval_level") or "warning"
+                                    ),
+                                    "consequence": str(
+                                        spec.get("consequence") or ""
+                                    ),
+                                    "rule_action": str(
+                                        spec.get("rule_action") or ""
+                                    ),
+                                    "rule_pattern": str(
+                                        spec.get("rule_pattern") or ""
+                                    ),
                                 },
                             ),
                             emit,
                             "tool_approval",
                         )
-                        brief = spec.get("brief") or tool_name
-                        if allowed:
-                            await _push_stream_event(
-                                state,
-                                {"type": "status", "content": "【安全确认】用户已允许：" + brief},
-                                emit=emit,
-                            )
-                        else:
-                            await _push_stream_event(
-                                state,
-                                {
-                                    "type": "status",
-                                    "content": "【安全确认】用户已拒绝执行（已跳过）。 " + brief,
-                                },
-                                emit=emit,
-                            )
-                            return _tool_result_user_denied_ui(tool_name, tool_args, tool_id)
+                    if not approved:
+                        return _tool_result_user_denied_ui(
+                            tool_name, tool_args, tool_id
+                        )
+                    sec_request, sec_decision, sec_context = authorize_tool(
+                        session_id=state["session_id"],
+                        tool_name=tool_name,
+                        arguments=tool_args if isinstance(tool_args, dict) else {},
+                        workspace=security_workspace,
+                    )
+                    if sec_decision.outcome != DecisionOutcome.ALLOW:
+                        return _blocked_tool_result(
+                            tool_name,
+                            tool_args,
+                            tool_id,
+                            "Approval could not be bound to the final tool request.",
+                        )
 
                 # Run the final steer check before announcing that execution started.
                 await _raise_if_steer_requested(state, emit, "tool")
@@ -3988,19 +4235,6 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                             tool_name, result_str, failed=tool_failed, duration_ms=tool_invoke_ms
                         ),
                     }
-
-                # Arguments are closed and any required approval has completed.
-                # Keep this event ephemeral so the UI can switch the streamed
-                # draft from "generating" to "executing" without a disk write.
-                if emit and tool_name != "context_manage":
-                    await _emit_tool_pending_sse(
-                        emit,
-                        tool_name,
-                        tool_args,
-                        tool_id,
-                        iter_count,
-                        tool_call_index,
-                    )
 
                 # 特殊处理：context_manage（mode=compact | edit_key_context）
                 if tool_name == "context_manage":
@@ -4474,27 +4708,34 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                                 or ""
                             ).strip()
                         with tool_work_dir_override(worktree_root or None):
-                            if hasattr(tool_func, "ainvoke"):
-                                result = await _await_steerable(
-                                    state,
-                                    tool_func.ainvoke(tool_args),
-                                    emit,
-                                    "tool",
-                                )
-                            elif hasattr(tool_func, "invoke"):
-                                result = await _await_steerable(
-                                    state,
-                                    asyncio.to_thread(lambda: tool_func.invoke(tool_args)),
-                                    emit,
-                                    "tool",
-                                )
-                            else:
-                                result = await _await_steerable(
-                                    state,
-                                    _invoke_plain_tool(tool_func, tool_args),
-                                    emit,
-                                    "tool",
-                                )
+                            with execution_scope(
+                                session_id=state["session_id"],
+                                context=sec_context,
+                                request=sec_request,
+                                decision=sec_decision,
+                                workspace=security_workspace,
+                            ):
+                                if hasattr(tool_func, "ainvoke"):
+                                    result = await _await_steerable(
+                                        state,
+                                        tool_func.ainvoke(tool_args),
+                                        emit,
+                                        "tool",
+                                    )
+                                elif hasattr(tool_func, "invoke"):
+                                    result = await _await_steerable(
+                                        state,
+                                        asyncio.to_thread(lambda: tool_func.invoke(tool_args)),
+                                        emit,
+                                        "tool",
+                                    )
+                                else:
+                                    result = await _await_steerable(
+                                        state,
+                                        _invoke_plain_tool(tool_func, tool_args),
+                                        emit,
+                                        "tool",
+                                    )
                     except _SteerRestartRequested:
                         raise
                     except Exception as e:
@@ -4574,7 +4815,10 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                 if pre.updated_input is not None:
                     tool_args = dict(pre.updated_input)
                     call["args"] = tool_args
-                if pre.requires_approval:
+                if (
+                    pre.requires_approval
+                    and session_permission_mode(state["session_id"]) != PermissionMode.FULL_ACCESS
+                ):
                     if emit is None:
                         return _blocked_tool_result(
                             tool_name,
@@ -4623,7 +4867,10 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                         emit,
                     )
                     before_context = str(before.additional_context or "")
-                    if before.requires_approval:
+                    if (
+                        before.requires_approval
+                        and session_permission_mode(state["session_id"]) != PermissionMode.FULL_ACCESS
+                    ):
                         if emit is None:
                             blocked = _blocked_tool_result(
                                 tool_name,

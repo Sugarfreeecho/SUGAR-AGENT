@@ -1455,6 +1455,65 @@ async def get_execution_dashboard():
     )
 
 
+def _is_within_local_root(path: Path, roots: tuple[Path, ...]) -> bool:
+    for root in roots:
+        try:
+            path.relative_to(root)
+            return True
+        except ValueError:
+            continue
+    return False
+
+
+def _resolve_allowed_local_path(raw_value: str, require_file: bool = False) -> Path:
+    """Resolve native absolute or virtual workspace paths within approved roots.
+
+    On POSIX, an existing absolute path below WORK_DIR/app is treated as native.
+    Other slash-rooted values retain the historic virtual-workspace meaning.
+    """
+
+    raw = unquote(raw_value or "").strip().strip('"').strip("'")
+    if not raw:
+        raise ValueError("empty path")
+    if raw.startswith("\\\\"):
+        raise PermissionError("UNC network paths are not supported")
+
+    work_root = WORK_DIR.resolve()
+    app_root = Path(__file__).resolve().parent.resolve()
+    roots = (work_root, app_root)
+    windows_absolute = bool(re.match(r"^[A-Za-z]:[\\/]", raw))
+    native = Path(raw).expanduser()
+    native_absolute = windows_absolute or native.is_absolute()
+
+    if native_absolute:
+        resolved_native = Path(os.path.abspath(str(native))).resolve()
+        if resolved_native.exists() and _is_within_local_root(resolved_native, roots):
+            candidate = resolved_native
+        else:
+            virtual = (work_root / raw.lstrip("/\\")).resolve()
+            if virtual.exists() and _is_within_local_root(virtual, roots):
+                candidate = virtual
+            elif resolved_native.exists():
+                raise PermissionError("path outside allowed roots")
+            else:
+                raise FileNotFoundError(raw)
+    else:
+        rel_raw = raw.lstrip("/\\")
+        candidate = (work_root / rel_raw).resolve()
+        first = rel_raw.replace("\\", "/").split("/", 1)[0]
+        if first and first.lower() == WORK_DIR.name.lower() and not candidate.exists():
+            candidate = (WORK_DIR.parent / rel_raw).resolve()
+
+    if not _is_within_local_root(candidate, roots):
+        raise PermissionError("path outside allowed roots")
+    if require_file:
+        if not candidate.is_file():
+            raise FileNotFoundError(raw)
+    elif not candidate.exists() or not (candidate.is_file() or candidate.is_dir()):
+        raise FileNotFoundError("file or directory does not exist")
+    return candidate
+
+
 @fastapi_app.get("/api/open-workspace-file")
 async def open_workspace_file(
     rel: str = Query("", description="工作区相对路径、虚拟 /path 或本机绝对路径"),
@@ -1469,27 +1528,9 @@ async def open_workspace_file(
     raw = unquote(rel or "").strip().strip('"').strip("'")
     if not raw:
         return JSONResponse({"ok": False, "error": "路径为空"}, status_code=400)
-    if raw.startswith("\\\\"):
-        return JSONResponse({"ok": False, "error": "UNC network paths are not supported"}, status_code=403)
-
-    def _resolve_and_validate_open_path() -> Path:
-        if len(raw) >= 2 and raw[1] == ":":
-            cand = Path(raw)
-        else:
-            rel_raw = raw.lstrip("/\\")
-            cand = WORK_DIR / rel_raw
-            first = rel_raw.replace("\\", "/").split("/", 1)[0]
-            if first and first.lower() == WORK_DIR.name.lower():
-                alt = WORK_DIR.parent / rel_raw
-                cand = Path(os.path.abspath(str(alt)))
-        resolved = Path(os.path.abspath(str(cand)))
-        if not resolved.exists() or not (resolved.is_file() or resolved.is_dir()):
-            raise FileNotFoundError("file or directory does not exist")
-        return resolved
-
     try:
         safe_path = await asyncio.wait_for(
-            run_in_threadpool(_resolve_and_validate_open_path),
+            run_in_threadpool(_resolve_allowed_local_path, raw, False),
             timeout=5.0,
         )
     except asyncio.TimeoutError:
@@ -1514,97 +1555,12 @@ async def open_workspace_file(
     threading.Thread(target=_open_detached, name="open-workspace-file", daemon=True).start()
     return JSONResponse({"ok": True, "path": str(safe_path)})
 
-    wd = WORK_DIR.resolve()
-    app_root = Path(__file__).resolve().parent.resolve()
-    if len(raw) >= 2 and raw[1] == ":":
-        cand = Path(raw)
-        if not cand.exists():
-            parts = Path(raw).parts
-            lowered = [p.lower() for p in parts]
-            work_name = WORK_DIR.name.lower()
-            if work_name in lowered:
-                idx = len(lowered) - 1 - lowered[::-1].index(work_name)
-                suffix = Path(*parts[idx + 1 :]) if idx + 1 < len(parts) else Path()
-                cand = (WORK_DIR / suffix).resolve()
-    elif raw.startswith("\\\\"):
-        cand = Path(raw)
-    else:
-        rel_raw = raw.lstrip("/\\")
-        cand = (WORK_DIR / rel_raw).resolve()
-        first = rel_raw.replace("\\", "/").split("/", 1)[0]
-        if first and first.lower() == WORK_DIR.name.lower() and not cand.exists():
-            cand = (WORK_DIR.parent / rel_raw).resolve()
-    try:
-        cand = cand.resolve()
-    except OSError:
-        return JSONResponse({"ok": False, "error": "无效路径"}, status_code=400)
-    allowed = False
-    for root in (wd, app_root):
-        try:
-            cand.relative_to(root)
-            allowed = True
-            break
-        except ValueError:
-            continue
-    if (len(raw) >= 2 and raw[1] == ":") or raw.startswith("\\\\"):
-        allowed = True
-    if not allowed:
-        return JSONResponse({"ok": False, "error": "仅限工作区或应用目录内的文件/文件夹"}, status_code=403)
-    if not cand.exists() or not (cand.is_file() or cand.is_dir()):
-        return JSONResponse({"ok": False, "error": "文件或文件夹不存在"}, status_code=404)
-
-    def _open() -> None:
-        p = str(cand)
-        sysname = platform.system()
-        if sysname == "Windows":
-            os.startfile(p)  # type: ignore[attr-defined]
-        elif sysname == "Darwin":
-            subprocess.Popen(["open", p], close_fds=True)
-        else:
-            subprocess.Popen(["xdg-open", p], close_fds=True)
-
-    await run_in_threadpool(_open)
-    return JSONResponse({"ok": True, "path": str(cand)})
-
 
 def _resolve_workspace_view_path(raw_value: str) -> Path:
     raw = unquote(raw_value or "").strip().strip('"').strip("'")
     if not raw:
         raise ValueError("empty path")
-    wd = WORK_DIR.resolve()
-    app_root = Path(__file__).resolve().parent.resolve()
-    if len(raw) >= 2 and raw[1] == ":":
-        cand = Path(raw)
-        if not cand.exists():
-            parts = Path(raw).parts
-            lowered = [p.lower() for p in parts]
-            work_name = WORK_DIR.name.lower()
-            if work_name in lowered:
-                idx = len(lowered) - 1 - lowered[::-1].index(work_name)
-                suffix = Path(*parts[idx + 1 :]) if idx + 1 < len(parts) else Path()
-                cand = (WORK_DIR / suffix).resolve()
-    elif raw.startswith("\\\\"):
-        cand = Path(raw)
-    else:
-        rel_raw = raw.lstrip("/\\")
-        cand = (WORK_DIR / rel_raw).resolve()
-        first = rel_raw.replace("\\", "/").split("/", 1)[0]
-        if first and first.lower() == WORK_DIR.name.lower() and not cand.exists():
-            cand = (WORK_DIR.parent / rel_raw).resolve()
-    cand = cand.resolve()
-    allowed = False
-    for root in (wd, app_root):
-        try:
-            cand.relative_to(root)
-            allowed = True
-            break
-        except ValueError:
-            continue
-    if not allowed:
-        raise PermissionError("path outside allowed roots")
-    if not cand.is_file():
-        raise FileNotFoundError(raw)
-    return cand
+    return _resolve_allowed_local_path(raw, True)
 
 
 @fastapi_app.get("/api/workspace-image")
@@ -2704,6 +2660,167 @@ async def probe_model_profile(req: Request):
     return JSONResponse({"ok": True, "model": model})
 
 
+@fastapi_app.get("/api/security/settings")
+async def get_security_settings():
+    from security import security_settings
+
+    return JSONResponse({"ok": True, **security_settings()})
+
+
+@fastapi_app.post("/api/security/settings")
+async def set_security_settings(req: Request):
+    try:
+        body = await req.json()
+    except Exception:
+        return JSONResponse({"ok": False, "error": "invalid json"}, status_code=400)
+    if not isinstance(body, dict):
+        return JSONResponse({"ok": False, "error": "body must be object"}, status_code=400)
+    from security import update_security_settings
+
+    settings = update_security_settings(
+        **{
+            key: body[key] is True
+            for key in ("auto_review_enabled",)
+            if key in body
+        }
+    )
+    return JSONResponse({"ok": True, **settings})
+
+
+@fastapi_app.get("/api/security/rules")
+async def get_security_rules(
+    session_id: str = Query(default=""),
+    workspace: str = Query(default=""),
+):
+    try:
+        from security import list_permission_rules
+
+        rules = list_permission_rules(
+            session_id=session_id, workspace=workspace
+        )
+        return JSONResponse({"ok": True, "rules": rules})
+    except Exception as exc:
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+
+
+@fastapi_app.post("/api/security/rules")
+async def add_security_rule(req: Request):
+    try:
+        body = await req.json()
+    except Exception:
+        return JSONResponse({"ok": False, "error": "invalid json"}, status_code=400)
+    if not isinstance(body, dict):
+        return JSONResponse({"ok": False, "error": "body must be object"}, status_code=400)
+    try:
+        from security import add_permission_rule
+
+        rule = add_permission_rule(
+            behavior=str(body.get("behavior") or ""),
+            action=str(body.get("action") or ""),
+            pattern=str(body.get("pattern") or ""),
+            source=str(body.get("source") or "user"),
+            session_id=str(body.get("session_id") or ""),
+            workspace=str(body.get("workspace") or ""),
+        )
+        return JSONResponse({"ok": True, "rule": rule})
+    except ValueError as exc:
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=422)
+    except Exception as exc:
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+
+
+@fastapi_app.delete("/api/security/rules")
+async def clear_security_rules(session_id: str = Query(default="")):
+    try:
+        from security import clear_session_permission_rules
+
+        deleted = clear_session_permission_rules(session_id)
+        return JSONResponse({"ok": True, "deleted": deleted})
+    except Exception as exc:
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+
+
+@fastapi_app.delete("/api/security/rules/{rule_id}")
+async def delete_security_rule(rule_id: str):
+    try:
+        from security import delete_permission_rule
+
+        ok = delete_permission_rule(rule_id)
+        return JSONResponse({"ok": ok})
+    except Exception as exc:
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+
+
+@fastapi_app.get("/api/security/web-fetch-domains")
+async def get_web_fetch_preapproved_domains():
+    try:
+        from security import web_fetch_preapproved_domains
+
+        return JSONResponse(
+            {"ok": True, "domains": web_fetch_preapproved_domains()}
+        )
+    except Exception as exc:
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+
+
+@fastapi_app.post("/api/security/web-fetch-domains")
+async def set_web_fetch_preapproved_domains(req: Request):
+    try:
+        body = await req.json()
+    except Exception:
+        return JSONResponse({"ok": False, "error": "invalid json"}, status_code=400)
+    if not isinstance(body, dict):
+        return JSONResponse({"ok": False, "error": "body must be object"}, status_code=400)
+    try:
+        from security import set_web_fetch_preapproved_domains
+
+        raw = body.get("domains")
+        if not isinstance(raw, (list, tuple, str)):
+            return JSONResponse(
+                {"ok": False, "error": "domains must be a list or text"},
+                status_code=422,
+            )
+        if isinstance(raw, str):
+            raw = [item for item in raw.replace(",", "\n").splitlines() if item.strip()]
+        domains = set_web_fetch_preapproved_domains(raw)
+        return JSONResponse({"ok": True, "domains": domains})
+    except Exception as exc:
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+
+
+@fastapi_app.get("/sessions/{session_id}/permissions")
+async def get_session_permissions(session_id: str):
+    sid = str(session_id or "").strip()
+    if not sid:
+        return JSONResponse({"ok": False, "error": "missing session_id"}, status_code=400)
+    try:
+        from security import security_status_for_session
+
+        return JSONResponse({"ok": True, **security_status_for_session(sid)})
+    except Exception as exc:
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=404)
+
+
+@fastapi_app.post("/sessions/{session_id}/permissions")
+async def set_session_permissions(session_id: str, req: Request):
+    sid = str(session_id or "").strip()
+    if not sid:
+        return JSONResponse({"ok": False, "error": "missing session_id"}, status_code=400)
+    try:
+        body = await req.json()
+    except Exception:
+        return JSONResponse({"ok": False, "error": "invalid json"}, status_code=400)
+    try:
+        from security import security_status_for_session, set_session_permission_mode
+
+        set_session_permission_mode(sid, (body or {}).get("mode"))
+        return JSONResponse({"ok": True, **security_status_for_session(sid)})
+    except ValueError as exc:
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=422)
+    except Exception as exc:
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
+
+
 @fastapi_app.get("/sessions/{session_id}/model_profile")
 async def get_session_model_profile(session_id: str):
     sid = (session_id or "").strip()
@@ -2832,12 +2949,24 @@ async def post_tool_approval(session_id: str, request: Request):
 
     from tool_approval_gate import resolve_tool_approval
 
-    matched = resolve_tool_approval(session_id, aid, approve)
-    if matched:
-        try:
-            from human_interaction import get_human_interaction_service
+    # Persist the digest-bound grant before waking the execution waiter. Otherwise
+    # the tool can race ahead, re-authorize, and fail even though the user approved.
+    try:
+        from human_interaction import get_human_interaction_service
+        from security import add_approval_grant
 
-            record = get_human_interaction_service().get(session_id, aid, kind="approval")
+        record = get_human_interaction_service().get(session_id, aid, kind="approval")
+        if approve and record.get("security_request_digest"):
+            add_approval_grant(
+                session_id,
+                str(record.get("security_request_digest")),
+                "allow_once",
+            )
+    except Exception:
+        record = {}
+    matched = resolve_tool_approval(session_id, aid, approve)
+    if matched and record:
+        try:
             await publish_session_event(session_id, {"type": "approval_resolved", **record})
         except Exception:
             pass
@@ -2994,10 +3123,43 @@ async def resolve_session_approval(session_id: str, approval_id: str, request: R
             decision,
             resolver=_interaction_resolver_metadata(request),
         )
+        if record.get("decision") in {"allow_once", "allow_session", "allow_always"}:
+            security_digest = str(record.get("security_request_digest") or "").strip()
+            if not security_digest:
+                raise ValueError("approval is not bound to a security request")
+            from security import add_approval_grant, add_permission_rule
+
+            rule_action = str(record.get("rule_action") or "").strip()
+            rule_pattern = str(record.get("rule_pattern") or "").strip()
+            if (
+                record.get("decision") == "allow_always"
+                and rule_action
+                and rule_pattern
+            ):
+                # "始终允许同类操作" writes a durable pattern rule (like
+                # Claude Code's Bash(git push:*) / Read(src/**)), so changing
+                # arguments no longer triggers a fresh approval.
+                add_permission_rule(
+                    behavior="allow",
+                    action=rule_action,
+                    pattern=rule_pattern,
+                    source="user",
+                    session_id=session_id,
+                )
+            else:
+                add_approval_grant(
+                    session_id,
+                    security_digest,
+                    str(record.get("decision")),
+                )
         # Wake the compatibility Future used by the current Agent Loop.
         from tool_approval_gate import resolve_tool_approval
 
-        resolve_tool_approval(session_id, approval_id, record.get("decision") in {"allow_once", "allow_always"})
+        resolve_tool_approval(
+            session_id,
+            approval_id,
+            record.get("decision") in {"allow_once", "allow_session", "allow_always"},
+        )
         await publish_session_event(session_id, {"type": "approval_resolved", **record})
         return JSONResponse(content={"ok": True, "approval": record})
     except Exception as exc:
@@ -5157,7 +5319,7 @@ _ENV_HINTS: dict[str, str] = {
     "HTTPS_PROXY": "HTTPS 代理，如 http://127.0.0.1:7890（可选）。",
     "HTTP_PROXY": "HTTP 代理（可选）。",
     "WEB_DOWNLOAD_MAX_BYTES": "web_download 单次下载字节上限。",
-    "TOOL_UI_APPROVAL": "1（默认）时对 web_download 及 restrict_to_workspace=false 的 Shell 在浏览器弹窗确认后才执行；0 关闭。",
+    "TOOL_UI_APPROVAL": "中央权限策略需要用户审批时在浏览器显示确认；该安全路径不可由环境变量关闭。",
     "TOOL_UI_APPROVAL_WAIT_SEC": "等待用户在 UI 内确认的最长时间（秒），超时视为拒绝。",
     "OPENAI_HTTP_TIMEOUT": "兼容 API 请求超时（秒）。",
     "OPENAI_MAX_RETRIES": "可重试错误时的最大重试次数。",

@@ -951,6 +951,9 @@ async function loadSessionMessages(sessionId, scrollBehavior, opts) {
             historyHydrationStream = null;
         }
         if (loadToken === messageLoadEpoch) hideLoading();
+        if (typeof attachAllHumanInteractionCards === 'function') {
+            attachAllHumanInteractionCards(getVisibleChatStream());
+        }
     };
     sessionStore.ui.loadingMessages = true;
     suppressTocDuringSessionLoad = true;
@@ -1388,6 +1391,7 @@ async function createNewSessionInner() {
         if (typeof renderFollowupQueue === 'function') renderFollowupQueue(currentSessionId);
         if (typeof syncFollowupQueueFromServer === 'function') syncFollowupQueueFromServer(currentSessionId);
         if (typeof refreshModelProfileSelector === 'function') refreshModelProfileSelector(currentSessionId);
+        if (typeof refreshPermissionModeSelector === 'function') refreshPermissionModeSelector(currentSessionId);
         if (!getVisibleChatStream()) ensureVisibleChatStreamSlot();
         setWelcome();
         replayingMessages = false;

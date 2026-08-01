@@ -101,3 +101,62 @@ def test_main_restores_agent_when_update_fails(tmp_path, monkeypatch):
     assert events == ["wait", "update", "restart"]
     assert messages and messages[-1][1] is True
     assert "Agent 已恢复启动" in messages[-1][0]
+
+
+def test_unix_update_stops_service_then_restores_it(tmp_path, monkeypatch):
+    events: list[str] = []
+
+    class FakeBackend:
+        def stop(self):
+            events.append("stop")
+
+    monkeypatch.setattr(agent_updater, "UpdateLog", MemoryLog)
+    monkeypatch.setattr(
+        agent_updater,
+        "wait_for_launcher_exit",
+        lambda pid: events.append(f"wait:{pid}"),
+    )
+    monkeypatch.setattr(
+        agent_updater,
+        "backend_for",
+        lambda *_args, **_kwargs: FakeBackend(),
+    )
+    monkeypatch.setattr(
+        agent_updater,
+        "update_repository",
+        lambda *_args, **_kwargs: (
+            events.append("update")
+            or agent_updater.UpdateResult("old", "new", False)
+        ),
+    )
+    monkeypatch.setattr(
+        agent_updater,
+        "launch_agent",
+        lambda *_args, **kwargs: events.append(
+            f"launch:{kwargs.get('lifecycle')}"
+        )
+        or True,
+    )
+    monkeypatch.setattr(agent_updater, "show_result", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(agent_updater.webbrowser, "open", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(
+        agent_updater.sys,
+        "argv",
+        [
+            "agent_updater.py",
+            "--root",
+            str(tmp_path),
+            "--launcher-pid",
+            "42",
+            "--lifecycle",
+            "systemd-user",
+        ],
+    )
+
+    assert agent_updater.main() == 0
+    assert events == [
+        "wait:42",
+        "stop",
+        "update",
+        "launch:systemd-user",
+    ]

@@ -16,6 +16,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Sequence
 
+try:
+    from .platform_lifecycle import backend_for, lifecycle_name
+except ImportError:
+    from platform_lifecycle import backend_for, lifecycle_name
+
 
 APP_NAME = "Agent 智能会话助手"
 HOST = "127.0.0.1"
@@ -111,8 +116,19 @@ def update_repository(
 
 
 def wait_for_launcher_exit(pid: int, timeout_seconds: float = 30.0) -> None:
-    if pid <= 0 or os.name != "nt":
+    if pid <= 0:
         return
+    if os.name != "nt":
+        deadline = time.monotonic() + timeout_seconds
+        while time.monotonic() < deadline:
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                return
+            except PermissionError:
+                return
+            time.sleep(0.1)
+        raise TimeoutError(f"Timed out waiting for launcher PID {pid} to exit")
     handle = ctypes.windll.kernel32.OpenProcess(PROCESS_SYNCHRONIZE, False, pid)
     if not handle:
         return
@@ -141,7 +157,18 @@ def wait_for_agent(timeout_seconds: float = 120.0) -> bool:
     return False
 
 
-def launch_agent(root: Path, python_exe: Path, log: UpdateLog) -> bool:
+def launch_agent(
+    root: Path,
+    python_exe: Path,
+    log: UpdateLog,
+    *,
+    lifecycle: str = "windows-tray",
+) -> bool:
+    if lifecycle != "windows-tray":
+        backend = backend_for(root, name=lifecycle)
+        backend.reload()
+        backend.start()
+        return wait_for_agent()
     tray_launcher = root / "app" / "tray_launcher.py"
     if not tray_launcher.is_file():
         raise RuntimeError(f"更新后缺少托盘启动器：{tray_launcher}")
@@ -174,6 +201,12 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", required=True)
     parser.add_argument("--launcher-pid", type=int, default=0)
+    parser.add_argument(
+        "--lifecycle",
+        choices=("windows-tray", "systemd-user", "launchd-user"),
+        default=None,
+    )
+    parser.add_argument("--restart-tray", action="store_true")
     args = parser.parse_args()
 
     root = Path(args.root).resolve()
@@ -183,22 +216,55 @@ def main() -> int:
     update_result: UpdateResult | None = None
     update_error: Exception | None = None
     restarted = False
+    selected_lifecycle = args.lifecycle or lifecycle_name()
+    backend = (
+        backend_for(root, name=selected_lifecycle)
+        if selected_lifecycle != "windows-tray"
+        else None
+    )
 
     log.write("")
     log.write("=" * 72)
     log.write(time.strftime("Agent update started at %Y-%m-%d %H:%M:%S"))
     try:
         wait_for_launcher_exit(args.launcher_pid)
+        if backend is not None:
+            backend.stop()
         update_result = update_repository(root, python_exe, log)
     except Exception as exc:
         update_error = exc
         log.write(f"更新失败：{type(exc).__name__}: {exc}")
     finally:
         try:
-            restarted = launch_agent(root, python_exe, log)
+            if selected_lifecycle == "windows-tray":
+                restarted = launch_agent(root, python_exe, log)
+            else:
+                restarted = launch_agent(
+                    root,
+                    python_exe,
+                    log,
+                    lifecycle=selected_lifecycle,
+                )
         except Exception as exc:
             log.write(f"重新启动失败：{type(exc).__name__}: {exc}")
         log.close()
+
+    if args.restart_tray and selected_lifecycle != "windows-tray":
+        try:
+            subprocess.Popen(
+                [
+                    str(python_exe),
+                    str(root / "app" / "platform_tray.py"),
+                ],
+                cwd=str(root),
+                env=os.environ.copy(),
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+        except Exception:
+            pass
 
     if not restarted:
         show_result(f"Agent 更新后未能重新启动。\n\n请查看日志：\n{log_path}", error=True)

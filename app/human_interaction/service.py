@@ -5,7 +5,9 @@ import hashlib
 import json
 import os
 import threading
+import time
 import uuid
+from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable, Dict, Iterable, Optional
 
 from agent_harness import session_manager
@@ -228,11 +230,15 @@ class HumanInteractionService:
             "request_version": 1,
             **meta,
         }
+        expires_at = datetime.fromtimestamp(
+            time.time() + max(30.0, float(os.getenv("TOOL_UI_APPROVAL_WAIT_SEC", "300"))),
+            tz=timezone.utc,
+        ).isoformat()
         record = {
             **request_core,
             "status": "pending",
             "created_at": now_iso(),
-            "expires_at": None,
+            "expires_at": expires_at,
             "request_digest": _digest(request_core),
         }
         with self.mirror.event_log.session_transaction(sid):
@@ -293,14 +299,23 @@ class HumanInteractionService:
         sid = str(session_id or "").strip()
         aid = str(approval_id or "").strip()
         normalized_decision = str(decision or "").strip().lower().replace("-", "_")
-        if normalized_decision not in {"allow_once", "allow_always", "deny"}:
-            raise HumanInteractionValidationError("decision must be allow_once, allow_always, or deny")
+        if normalized_decision not in {"allow_once", "allow_session", "allow_always", "deny"}:
+            raise HumanInteractionValidationError(
+                "decision must be allow_once, allow_session, allow_always, or deny"
+            )
         with self.mirror.event_log.session_transaction(sid):
             record = dict(self._snapshot(sid).get("approvals") or {}).get(aid)
             if not isinstance(record, dict):
                 raise HumanInteractionNotFound("approval not found")
             if record.get("status") in _TERMINAL:
                 return dict(record)
+            if (
+                bool(record.get("force_approval"))
+                and normalized_decision in {"allow_session", "allow_always"}
+            ):
+                raise HumanInteractionValidationError(
+                    "Dangerous approvals only support allow_once or deny"
+                )
             payload = {
                 "approval_id": aid,
                 "status": "resolved",

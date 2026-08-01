@@ -1992,7 +1992,7 @@ var LINKIFY_EXT_FRAGMENT = (
     '[ch]pp?|cc|hh|mm|hpp|cs|fs|fsx|vb|' +
     'vue|svelte|elm|dart|ex|exs|erl|hrl|' +
     'ipynb|rmd|qmd|tex|bib|cls|sty|rst|adoc|org|' +
-    'sql|graphql|proto|thrift|cmake|gradle|mk|dockerfile|' +
+    'sql|graphql|proto|thrift|cmake|gradle|mk|' +
     'wasm|wat|lock|patch|diff|rej|har|drawio|vsix|' +
     'sqlite3?|db|duckdb|mdb|accdb|parquet|feather|arrow|orc|ndjson|' +
     'ttf|otf|woff2?|eot|apk|ipa|exe|msi|dmg|iso|pkg|deb|rpm|bin|so|dylib|dll|lib|o|a|map|' +
@@ -2420,6 +2420,10 @@ function makeHrefFromAutoLinkToken(s) {
         return fileUrlFromFsPath(m[1].toUpperCase() + ':/' + rest);
     }
     if (t.charAt(0) === '/' && t.charAt(1) !== '/') {
+        var unixWorkDir = (typeof window.__WORK_DIR__ === 'string') ? window.__WORK_DIR__.replace(/\/+$/, '') : '';
+        if (unixWorkDir.charAt(0) === '/' && (t === unixWorkDir || t.indexOf(unixWorkDir + '/') === 0)) {
+            return fileUrlFromFsPath(t);
+        }
         if (!workspaceRelativePathAutoLinkOk(t)) return null;
         var w = (typeof window.__WORK_DIR__ === 'string') ? window.__WORK_DIR__ : '';
         var abs = joinWorkDirAndRelativeSlashPath(w, t);
@@ -2460,6 +2464,11 @@ function pathTokenToWorkspaceOpenRel(token) {
     if (!w) return null;
     var slashRooted = t.replace(/\\/g, '/');
     if (slashRooted.charAt(0) === '/' && slashRooted.charAt(1) !== '/') {
+        var unixRoot = String(w || '').replace(/\\/g, '/').replace(/\/+$/, '');
+        if (unixRoot.charAt(0) === '/'
+            && (slashRooted === unixRoot || slashRooted.indexOf(unixRoot + '/') === 0)) {
+            return slashRooted;
+        }
         var wDrive = /^([A-Za-z]):[\\/]/.exec(String(w || ''));
         if (wDrive) {
             var rootedAbs = (wDrive[1].toUpperCase() + ':' + slashRooted).replace(/\/+/g, '/');
@@ -2551,11 +2560,13 @@ function uniqueInputPathDisplayLabel(original, wsRel, preferredLabel) {
 function workspaceOpenTipPath(original, wsRel) {
     var raw = cleanPathTokenForLink(original || '');
     if (/^[A-Za-z]:[\\/]/.test(raw) || /^\\\\/.test(raw)) return raw;
+    if (raw.charAt(0) === '/' && raw.charAt(1) !== '/') return raw;
     var rel = String(wsRel || raw || '').replace(/\\/g, '/').replace(/^\/+/, '');
     if (/^[A-Za-z]:\//.test(rel) || /^\\\\/.test(rel)) return rel.replace(/\//g, '\\');
     var w = (typeof window.__WORK_DIR__ === 'string') ? window.__WORK_DIR__ : '';
     if (!w || !rel) return rel || raw;
-    return pathJoinBaseName(w, rel).replace(/\//g, '\\');
+    var joined = pathJoinBaseName(w, rel);
+    return String(w).charAt(0) === '/' ? joined : joined.replace(/\//g, '\\');
 }
 
 function escapeRegExpLiteral(s) {
@@ -3807,7 +3818,8 @@ function upsertToolCallResult(ctx, parsed, runSessionId) {
     if (!row) row = findToolDraftRow(ctx, parsed);
     var cmdPreview = parsed.command_preview;
     if ((!cmdPreview || !String(cmdPreview).trim()) && row && row.dataset.commandPreview) cmdPreview = row.dataset.commandPreview;
-    var text = formatToolDoneLine(parsed.tool, parsed.args, parsed.result, cmdPreview);
+    var rawContent = parsed.raw_content != null ? String(parsed.raw_content) : '';
+    var text = rawContent ? rawContent : formatToolDoneLine(parsed.tool, parsed.args, parsed.result, cmdPreview);
     if (row) {
         if (tid) row.setAttribute('data-tool-call-id', tid);
         row.removeAttribute('data-tool-draft-key');
@@ -3831,7 +3843,13 @@ function upsertToolCallResult(ctx, parsed, runSessionId) {
         return;
     }
     var ri = uiEventReactIter(parsed);
-    appendLog(ctx, text, 'tool-call', runSessionId, ri);
+    var so = null;
+    if (ri != null && Number.isFinite(Number(ri))) so = { reactIter: ri };
+    var scNew = createProcessFeedRow(ctx, 'tool-call', text, so, runSessionId, tid);
+    var newRow = scNew && scNew.closest ? scNew.closest('.feed-item') : null;
+    if (newRow && tid && typeof attachHumanInteractionCardsForToolCall === 'function') {
+        attachHumanInteractionCardsForToolCall(ctx && ctx.stream, tid);
+    }
 }
 
 /** 去掉首尾「空白行」（整行仅空格/制表也不保留），保留首行正文缩进与中间空行 */
@@ -3933,12 +3951,54 @@ function createProcessFeedRow(ctx, type, initialText, streamOpts, runSessionId, 
     row.setAttribute('data-react-generation', String(reactGenerationForContext(ctx)));
     if (ctx && ctx.runId) row.setAttribute('data-run-id', String(ctx.runId));
     if (toolCallIdOpt != null && String(toolCallIdOpt) !== '') row.setAttribute('data-tool-call-id', String(toolCallIdOpt));
+    var toolCollapseBtn = type === 'tool-call'
+        ? '<button type="button" class="feed-row-collapse" aria-expanded="true" aria-label="收起工具行">'
+            + '<span class="feed-row-collapse-chevron" aria-hidden="true"></span></button>'
+        : '';
     row.innerHTML = '<div class="feed-row">'
         + '<span class="feed-label">' + meta.label + '</span>'
         + '<div class="feed-chunk">'
-        + '<div class="feed-chunk-scroller"></div></div></div>';
+        + '<div class="feed-chunk-scroller"></div></div>'
+        + toolCollapseBtn
+        + '</div>';
     const chunk = row.querySelector('.feed-chunk');
     const sc = row.querySelector('.feed-chunk-scroller');
+    if (type === 'tool-call') {
+        const collapseBtn = row.querySelector('.feed-row-collapse');
+        if (collapseBtn) {
+            collapseBtn.addEventListener('click', function (e) {
+                e.preventDefault();
+                e.stopPropagation();
+                row.classList.toggle('is-collapsed');
+                var isCollapsed = row.classList.contains('is-collapsed');
+                collapseBtn.setAttribute('aria-expanded', isCollapsed ? 'false' : 'true');
+                collapseBtn.setAttribute('aria-label', isCollapsed ? '展开工具行' : '收起工具行');
+                row.dataset.manualToggle = '1';
+                row.removeAttribute('data-auto-expanded');
+            });
+        }
+        // Tool rows default to a compact one-line preview. A row that already
+        // carries a pending approval renders expanded so the approval card is
+        // visible immediately on history reload; later approval events expand
+        // the row through attachHumanInteractionCardsForToolCall().
+        var rowHasPendingApproval = !!(runSessionId && toolCallIdOpt
+            && typeof toolCallHasPendingApproval === 'function'
+            && toolCallHasPendingApproval(runSessionId, toolCallIdOpt));
+        if (rowHasPendingApproval) {
+            row.classList.remove('is-collapsed');
+            row.dataset.autoExpanded = '1';
+            if (collapseBtn) {
+                collapseBtn.setAttribute('aria-expanded', 'true');
+                collapseBtn.setAttribute('aria-label', '收起工具行');
+            }
+        } else {
+            row.classList.add('is-collapsed');
+            if (collapseBtn) {
+                collapseBtn.setAttribute('aria-expanded', 'false');
+                collapseBtn.setAttribute('aria-label', '展开工具行');
+            }
+        }
+    }
     var txtForUi = initialText;
     if (type === 'llm-reasoning' || type === 'llm-response') txtForUi = trimSurroundingBlankLines(txtForUi);
     if (type === 'llm-response') row._processBriefRawText = String(txtForUi || '');
@@ -4342,8 +4402,32 @@ function handleTraceChunkClick(e) {
     });
 }
 
+function handleToolRowChunkClick(e) {
+    if (e) e.stopPropagation();
+    var row = this.closest ? this.closest('.feed-item') : null;
+    if (!row) return;
+    row.classList.toggle('is-collapsed');
+    row.dataset.manualToggle = '1';
+    row.removeAttribute('data-auto-expanded');
+    var btn = row.querySelector('.feed-row-collapse');
+    if (btn) {
+        var isCollapsed = row.classList.contains('is-collapsed');
+        btn.setAttribute('aria-expanded', isCollapsed ? 'false' : 'true');
+        btn.setAttribute('aria-label', isCollapsed ? '展开工具行' : '收起工具行');
+    }
+}
+
 function bindFeedChunkInteraction(ch) {
     ch.removeEventListener('click', handleTraceChunkClick);
+    ch.removeEventListener('click', handleToolRowChunkClick);
+    // Tool rows use the row-level fold (feed-row-collapse) as their single
+    // collapse affordance; clicking the command text toggles the same fold.
+    // Keep the content-height expand for LLM/log/etc. rows.
+    var row = ch.closest ? ch.closest('.feed-item') : null;
+    if (row && row.classList.contains('feed--tool')) {
+        ch.addEventListener('click', handleToolRowChunkClick);
+        return;
+    }
     ch.addEventListener('click', handleTraceChunkClick);
 }
 

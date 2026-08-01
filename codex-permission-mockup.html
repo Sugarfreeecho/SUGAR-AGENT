@@ -1,0 +1,709 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Codex 权限 UI 对照 · MyAgent</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  :root {
+    --page-bg: #141417;
+    --cx-bg: #17181c;
+    --cx-panel: #202127;
+    --cx-card: #26272e;
+    --cx-card2: #2b2c34;
+    --cx-border: #34353d;
+    --cx-text: #ececef;
+    --cx-dim: #9c9da8;
+    --cx-faint: #6f707b;
+    --cx-primary-bg: #f0f0f2;
+    --cx-primary-fg: #111114;
+    --cx-danger: #e5484d;
+    --cx-danger-dim: #b3373b;
+    --cx-blue: #6fa8ff;
+    --cx-yellow: #e6c25c;
+    --ma-bg: #15151d;
+    --ma-panel: #1c1c27;
+    --ma-card: #26263a;
+    --ma-border: rgba(255,255,255,.10);
+    --ma-text: #e9e9f2;
+    --ma-dim: #9d9db5;
+    --ma-faint: #6f6f8a;
+    --ma-blue: #89b4fa;
+    --ma-danger: #f0647a;
+    --mono: "Cascadia Code", Consolas, "SF Mono", Menlo, monospace;
+  }
+  body {
+    background: var(--page-bg);
+    color: #ddd;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    font-size: 14px;
+    line-height: 1.55;
+    padding: 28px 20px 60px;
+  }
+  header.page-head { max-width: 1460px; margin: 0 auto 18px; }
+  header.page-head h1 { font-size: 22px; color: #fff; font-weight: 650; }
+  header.page-head .sub { color: #9a9aa8; margin-top: 6px; max-width: 980px; }
+  header.page-head .sub code { font-family: var(--mono); font-size: 12px; background: rgba(255,255,255,.06); padding: 1px 6px; border-radius: 4px; }
+  .layout {
+    max-width: 1460px; margin: 0 auto;
+    display: grid; grid-template-columns: 1fr 1fr; gap: 20px; align-items: start;
+  }
+  @media (max-width: 1100px) { .layout { grid-template-columns: 1fr; } }
+  .col { background: #1b1b20; border: 1px solid #2c2c34; border-radius: 14px; overflow: hidden; }
+  .col-head { display: flex; align-items: baseline; gap: 10px; padding: 12px 16px; border-bottom: 1px solid #2c2c34; }
+  .col-head h2 { font-size: 15px; color: #fff; font-weight: 650; }
+  .col-head .tag { font-size: 11px; color: #8b8b99; font-family: var(--mono); }
+  .col.codex-col { border-color: #33333e; }
+  .col.codex-col .col-head { background: #1e1f25; }
+  .col.my-col .col-head { background: #1b1b26; }
+  .section { padding: 16px; border-bottom: 1px solid #26262e; }
+  .section:last-child { border-bottom: 0; }
+  .sec-title { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 650; color: #d6d6e0; margin-bottom: 12px; }
+  .sec-title .no {
+    display: inline-flex; align-items: center; justify-content: center;
+    min-width: 20px; height: 20px; padding: 0 5px; border-radius: 6px;
+    background: #30303b; color: #b8b8c6; font-size: 11px; font-weight: 700;
+  }
+  .sec-desc { font-size: 12px; color: #8f8f9d; margin: -4px 0 12px; }
+  .keys {
+    margin-top: 12px; padding: 8px 10px; border: 1px dashed #33333e; border-radius: 8px;
+    font-family: var(--mono); font-size: 10.5px; color: #7d7d8c; background: rgba(255,255,255,.015);
+    word-break: break-all;
+  }
+  .keys b { color: #a3a3b4; font-weight: 600; }
+  .demo-stage { background: #1c1d22; border: 1px solid #2d2e37; border-radius: 10px; padding: 14px; }
+  .cx-trigger {
+    display: inline-flex; align-items: center; gap: 7px;
+    background: var(--cx-card); color: var(--cx-text);
+    border: 1px solid var(--cx-border); border-radius: 8px;
+    padding: 6px 10px; font-size: 12.5px; cursor: pointer;
+  }
+  .cx-trigger:hover { background: var(--cx-card2); }
+  .cx-trigger .caret { font-size: 10px; color: var(--cx-dim); }
+  .cx-menu {
+    margin-top: 8px; width: 380px; max-width: 100%;
+    background: var(--cx-card); border: 1px solid var(--cx-border);
+    border-radius: 12px; box-shadow: 0 12px 32px rgba(0,0,0,.45);
+    padding: 6px; color: var(--cx-text);
+  }
+  .cx-menu .menu-title { font-size: 12.5px; color: var(--cx-dim); padding: 8px 10px 6px; }
+  .cx-item {
+    display: flex; align-items: flex-start; gap: 10px; width: 100%;
+    background: transparent; border: 0; border-radius: 8px;
+    padding: 8px 10px; color: var(--cx-text); text-align: left; cursor: pointer;
+  }
+  .cx-item:hover { background: rgba(255,255,255,.05); }
+  .cx-item .ico { flex: 0 0 22px; width: 22px; height: 22px; color: var(--cx-dim); margin-top: 1px; }
+  .cx-item .body { flex: 1; min-width: 0; }
+  .cx-item .label { font-size: 13px; font-weight: 600; display: flex; align-items: center; gap: 6px; }
+  .cx-item .check { color: var(--cx-blue); font-size: 12px; }
+  .cx-item .desc { font-size: 11.5px; color: var(--cx-dim); margin-top: 1px; }
+  .cx-item.is-disabled { opacity: .52; cursor: not-allowed; }
+  .cx-item.is-disabled:hover { background: transparent; }
+  .cx-item.is-disabled .label, .cx-item.is-disabled .desc { color: var(--cx-faint); }
+  .cx-item .desc.disabled-reason { color: var(--cx-yellow); }
+  .cx-item.is-active { background: rgba(111,168,255,.10); }
+  .switch-row { display: flex; align-items: center; gap: 8px; margin-top: 10px; font-size: 12px; color: var(--cx-dim); }
+  .switch-row input { accent-color: var(--cx-blue); }
+  .cx-card { background: var(--cx-card); border: 1px solid var(--cx-border); border-radius: 12px; color: var(--cx-text); overflow: hidden; }
+  .cx-card .kicker {
+    display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+    padding: 10px 14px 0; font-size: 11px; color: var(--cx-dim);
+  }
+  .cx-card .kicker .chip {
+    border: 1px solid var(--cx-border); border-radius: 5px; padding: 1px 7px;
+    font-family: var(--mono); font-size: 10.5px; color: var(--cx-dim);
+  }
+  .cx-card .title { padding: 6px 14px 0; font-size: 14px; font-weight: 650; }
+  .cx-card .cmdblock {
+    margin: 10px 14px 0; background: #17181d; border: 1px solid #31323b; border-radius: 8px;
+    padding: 9px 11px; font-family: var(--mono); font-size: 12px; overflow-x: auto; white-space: pre;
+  }
+  .cx-card .cmdblock .cwd { color: var(--cx-faint); }
+  .cx-card .reason { margin: 10px 14px 0; font-size: 12px; color: var(--cx-dim); }
+  .cx-card .reason b { color: #b9b9c6; font-weight: 600; }
+  .cx-card .options { padding: 12px 14px 14px; }
+  .cx-card .options .opt-label { font-size: 10.5px; text-transform: uppercase; letter-spacing: .04em; color: var(--cx-faint); margin-bottom: 7px; }
+  .cx-card .opt-row { display: flex; flex-wrap: wrap; gap: 7px; }
+  .btn {
+    border-radius: 8px; padding: 6px 12px; font-size: 12.5px; font-weight: 600; cursor: pointer;
+    border: 1px solid transparent; background: transparent; color: var(--cx-text);
+  }
+  .btn.primary { background: var(--cx-primary-bg); color: var(--cx-primary-fg); }
+  .btn.secondary { border-color: var(--cx-border); color: var(--cx-text); }
+  .btn.secondary:hover { background: rgba(255,255,255,.06); }
+  .btn.danger { border-color: var(--cx-danger-dim); color: #ff8f93; }
+  .btn.danger:hover { background: rgba(229,72,77,.12); }
+  .btn.solid-danger { background: var(--cx-danger); color: #fff; }
+  .btn.solid-danger:hover { background: #f05a5e; }
+  .btn.sm { padding: 4px 9px; font-size: 11.5px; }
+  .opt-sub { font-size: 10.5px; color: var(--cx-faint); }
+  .variant-tabs { display: flex; gap: 6px; margin-bottom: 10px; flex-wrap: wrap; }
+  .variant-tabs button {
+    border: 1px solid var(--cx-border); background: transparent; color: var(--cx-dim);
+    border-radius: 7px; padding: 4px 10px; font-size: 11.5px; cursor: pointer;
+  }
+  .variant-tabs button.active { background: #2e303a; color: var(--cx-text); border-color: #454652; }
+  .ar-row {
+    display: flex; align-items: center; gap: 8px; margin: 0 0 10px;
+    padding: 8px 10px; border-radius: 8px; font-size: 12px;
+    background: rgba(111,168,255,.08); border: 1px solid rgba(111,168,255,.22); color: #bcd0ff;
+  }
+  .ar-row.approved { background: rgba(95,205,135,.08); border-color: rgba(95,205,135,.25); color: #b9e8c8; }
+  .ar-row.denied { background: rgba(229,72,77,.10); border-color: rgba(229,72,77,.30); color: #ffb3b6; }
+  .ar-row.timedout { background: rgba(230,194,92,.08); border-color: rgba(230,194,92,.28); color: #f0dc9b; }
+  .ar-row .spin {
+    width: 11px; height: 11px; border: 2px solid rgba(255,255,255,.25); border-top-color: #8fb7ff;
+    border-radius: 50%; animation: rot 1s linear infinite; flex: none;
+  }
+  @keyframes rot { to { transform: rotate(360deg); } }
+  .ar-row .ov { margin-left: auto; flex: none; }
+  .ar-state-picker { display: flex; gap: 5px; flex-wrap: wrap; margin-bottom: 10px; align-items: center; }
+  .ar-state-picker button {
+    border: 1px solid #31323b; background: transparent; color: #8f8f9d; border-radius: 6px;
+    padding: 3px 8px; font-size: 11px; cursor: pointer;
+  }
+  .ar-state-picker button.active { background: #2a2b34; color: #ddd; }
+  .cx-modal-backdrop {
+    position: fixed; inset: 0; background: rgba(0,0,0,.55); backdrop-filter: blur(2px);
+    display: none; align-items: center; justify-content: center; z-index: 50; padding: 20px;
+  }
+  .cx-modal-backdrop.open { display: flex; }
+  .cx-modal {
+    width: 520px; max-width: 100%; background: var(--cx-card); border: 1px solid var(--cx-border);
+    border-radius: 14px; color: var(--cx-text); box-shadow: 0 24px 64px rgba(0,0,0,.5);
+  }
+  .cx-modal .m-title { font-size: 16px; font-weight: 700; padding: 18px 20px 6px; }
+  .cx-modal .m-body { padding: 4px 20px 8px; font-size: 13px; color: #c9c9d2; }
+  .cx-modal .m-risk { margin-top: 10px; font-size: 12px; color: var(--cx-dim); }
+  .cx-modal .m-risk a { color: var(--cx-blue); }
+  .cap-row { display: flex; gap: 12px; padding: 11px 20px; border-top: 1px solid var(--cx-border-soft); align-items: flex-start; }
+  .cap-row .cap-ico {
+    flex: 0 0 30px; width: 30px; height: 30px; border-radius: 8px; background: rgba(255,255,255,.05);
+    display: flex; align-items: center; justify-content: center; color: #cfd0d8;
+  }
+  .cap-row .cap-name { font-size: 13px; font-weight: 650; }
+  .cap-row .cap-desc { font-size: 12px; color: var(--cx-dim); }
+  .cx-modal .m-foot { display: flex; justify-content: flex-end; gap: 8px; padding: 14px 20px 18px; border-top: 1px solid var(--cx-border-soft); }
+  .cx-banner {
+    display: none; margin-top: 10px; background: rgba(229,72,77,.10); border: 1px solid rgba(229,72,77,.35);
+    border-radius: 10px; padding: 10px 12px; color: #ffd7d9; font-size: 12px;
+  }
+  .cx-banner.show { display: block; }
+  .cx-banner .b-title { font-weight: 700; font-size: 12.5px; margin-bottom: 3px; display: flex; align-items: center; gap: 7px; }
+  .cx-banner .b-title .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--cx-danger); flex: none; }
+  .cx-banner .b-body a { color: #ff9aa0; }
+  .cx-banner .b-actions { margin-top: 8px; display: flex; gap: 6px; align-items: center; }
+  .cli-list { border: 1px solid var(--cx-border); border-radius: 10px; background: #1d1e24; padding: 10px 12px; }
+  .cli-list .prompt { font-size: 12.5px; color: var(--cx-text); font-family: var(--mono); margin-bottom: 8px; }
+  .cli-opt {
+    display: flex; align-items: center; gap: 8px; padding: 5px 8px; border-radius: 6px;
+    font-family: var(--mono); font-size: 11.5px; color: #b9b9c6;
+  }
+  .cli-opt .k {
+    flex: none; min-width: 26px; text-align: center; border: 1px solid #3a3b46; border-radius: 4px;
+    font-size: 10px; color: #7e7e8c; padding: 1px 0;
+  }
+  .cli-opt.danger .k { border-color: rgba(229,72,77,.5); color: #ff8f93; }
+  .ma-stage { background: #1a1a24; border: 1px solid #2b2b3a; border-radius: 10px; padding: 14px; }
+  .ma-trigger {
+    display: inline-flex; align-items: center; gap: 7px; background: var(--ma-card);
+    color: var(--ma-text); border: 1px solid var(--ma-border); border-radius: 8px;
+    padding: 6px 10px; font-size: 12.5px;
+  }
+  .ma-trigger .k { color: var(--ma-faint); font-size: 11.5px; }
+  .ma-badge {
+    background: rgba(137,180,250,.12); color: var(--ma-blue); border: 1px solid rgba(137,180,250,.28);
+    border-radius: 5px; padding: 1px 7px; font-size: 11px;
+  }
+  .ma-menu {
+    margin-top: 8px; background: var(--ma-card); border: 1px solid var(--ma-border);
+    border-radius: 10px; padding: 5px; width: 380px; max-width: 100%;
+  }
+  .ma-item {
+    display: block; width: 100%; text-align: left; background: transparent; border: 0;
+    border-radius: 7px; padding: 8px 10px; color: var(--ma-text); cursor: pointer;
+  }
+  .ma-item strong { display: block; font-size: 13px; font-weight: 600; }
+  .ma-item span { display: block; font-size: 11.5px; color: var(--ma-dim); margin-top: 1px; }
+  .ma-item.active { background: rgba(137,180,250,.10); }
+  .ma-item.active strong::after { content: " \2713"; color: var(--ma-blue); font-size: 11px; }
+  .ma-card { background: var(--ma-card); border: 1px solid var(--ma-border); border-radius: 12px; color: var(--ma-text); overflow: hidden; }
+  .ma-card.is-danger { border-color: rgba(240,100,122,.45); }
+  .ma-card .m-kicker { display: flex; gap: 6px; padding: 10px 14px 0; font-size: 11px; color: var(--ma-dim); }
+  .ma-card .m-kicker .danger-tag {
+    border: 1px solid rgba(240,100,122,.45); color: #ff9bab; border-radius: 5px; padding: 0 6px; font-size: 10.5px;
+  }
+  .ma-card .m-title { padding: 5px 14px 0; font-size: 14px; font-weight: 650; }
+  .ma-card .m-msg { padding: 8px 14px 0; font-size: 12.5px; color: #c9c9dc; }
+  .ma-card .m-cmd {
+    margin: 9px 14px 0; background: #191924; border: 1px solid #32324a; border-radius: 8px;
+    padding: 8px 10px; font-family: var(--mono); font-size: 12px; white-space: pre; overflow-x: auto;
+  }
+  .ma-card .m-conseq {
+    margin: 9px 14px 0; border: 1px solid rgba(240,100,122,.45); background: rgba(240,100,122,.08);
+    border-radius: 8px; padding: 7px 10px; font-size: 12px; color: #ffb9c3;
+  }
+  .ma-card .m-rule-hint { margin: 8px 14px 0; font-size: 11.5px; color: var(--ma-dim); }
+  .ma-card .m-actions { display: flex; flex-wrap: wrap; gap: 7px; padding: 12px 14px 14px; }
+  .ma-btn { border-radius: 8px; padding: 6px 12px; font-size: 12.5px; font-weight: 600; cursor: pointer; border: 1px solid transparent; }
+  .ma-btn.sec { background: transparent; border-color: var(--ma-border); color: var(--ma-text); }
+  .ma-btn.prim { background: var(--ma-blue); color: #101018; }
+  .ma-btn.danger { background: transparent; border-color: rgba(240,100,122,.55); color: #ff8fa4; }
+  .ma-modal-backdrop {
+    position: fixed; inset: 0; background: rgba(0,0,0,.55); display: none; align-items: center; justify-content: center; z-index: 50; padding: 20px;
+  }
+  .ma-modal-backdrop.open { display: flex; }
+  .ma-modal { width: 520px; max-width: 100%; background: var(--ma-card); border: 1px solid var(--ma-border); border-radius: 12px; color: var(--ma-text); }
+  .ma-modal .m-title { font-size: 15px; font-weight: 700; padding: 16px 18px 6px; }
+  .ma-modal .m-body { padding: 4px 18px 10px; font-size: 12.5px; color: #c5c5da; }
+  .ma-modal .m-foot { display: flex; justify-content: flex-end; gap: 8px; padding: 12px 18px 16px; border-top: 1px solid rgba(255,255,255,.06); }
+  .ma-tag-row { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+  .ma-tag-row .t { font-size: 10.5px; color: var(--ma-dim); border: 1px solid var(--ma-border); border-radius: 5px; padding: 2px 7px; }
+  .note {
+    max-width: 1460px; margin: 18px auto 0; font-size: 12px; color: #888896;
+    background: #1b1b20; border: 1px solid #2a2a32; border-radius: 10px; padding: 12px 16px; line-height: 1.7;
+  }
+  .note b { color: #b9b9c6; }
+  .legend { display: flex; flex-wrap: wrap; gap: 14px; margin: 10px 0 0; font-size: 11px; color: #777788; }
+  .legend span { display: inline-flex; align-items: center; gap: 5px; }
+  .legend i { width: 10px; height: 10px; border-radius: 3px; display: inline-block; }
+  svg.ic { width: 22px; height: 22px; }
+</style>
+</head>
+<body>
+
+<header class="page-head">
+  <h1>Codex 权限 UI 对照 · MyAgent</h1>
+  <div class="sub">
+    左侧为 Codex（ChatGPT/VS Code 扩展 <code>openai.chatgpt 26.727.40816</code>）的真实 UI 结构与文案（含 i18n 文案键），
+    右侧为你项目 <code>frontend/src</code> 当前实现。点击可交互，用于直接对照改造。
+  </div>
+  <div class="legend">
+    <span><i style="background:#6fa8ff"></i> Codex 参考</span>
+    <span><i style="background:#89b4fa"></i> MyAgent 当前</span>
+    <span><i style="background:#e5484d"></i> 危险 / 高风险元素</span>
+    <span><i style="background:#e6c25c"></i> 禁用态原因提示</span>
+  </div>
+</header>
+
+<div class="layout">
+  <section class="col codex-col">
+    <div class="col-head"><h2>Codex（参考）</h2><span class="tag">openai.chatgpt 26.727.40816 webview</span></div>
+    <div class="section">
+      <div class="sec-title"><span class="no">1</span>权限档位下拉（composer permissions dropdown）</div>
+      <div class="sec-desc">触发器 = 当前档位图标 + 简称；菜单标题固定一句 “How should Codex actions be approved?”；每项 = 图标 + 标题 + 一句描述，不可用档位灰字并给出原因。</div>
+      <div class="demo-stage">
+        <button type="button" class="cx-trigger" id="cx-trigger">
+          <svg class="ic" id="cx-trigger-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"></svg>
+          <span id="cx-trigger-label">Ask for approval</span>
+          <span class="caret">&#9660;</span>
+        </button>
+        <div class="cx-menu" role="listbox" aria-label="How should Codex actions be approved?">
+          <div class="menu-title">How should Codex actions be approved?</div>
+          <button type="button" class="cx-item is-active" data-mode="default" role="option" aria-selected="true">
+            <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7 3v5c0 4.5-3 8.3-7 10-4-1.7-7-5.5-7-10V6z"/></svg>
+            <span class="body">
+              <span class="label">Ask for approval <span class="check">&#10003;</span></span>
+              <span class="desc">Always ask to edit external files and use the internet</span>
+            </span>
+          </button>
+          <button type="button" class="cx-item" data-mode="guardian" role="option">
+            <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7 3v5c0 4.5-3 8.3-7 10-4-1.7-7-5.5-7-10V6z"/><path d="M12 8v4"/><circle cx="12" cy="15.5" r="0.8" fill="currentColor"/></svg>
+            <span class="body">
+              <span class="label">Approve for me</span>
+              <span class="desc" data-desc="normal">Only ask for actions detected as potentially unsafe</span>
+            </span>
+          </button>
+          <button type="button" class="cx-item" data-mode="full" role="option">
+            <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="10" width="16" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 7.6-1.6"/><circle cx="12" cy="15" r="1" fill="currentColor"/></svg>
+            <span class="body">
+              <span class="label">Full access</span>
+              <span class="desc">Unrestricted access to the internet and any file on your computer</span>
+            </span>
+          </button>
+          <button type="button" class="cx-item" data-mode="custom" role="option">
+            <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h13M20 18h0"/><circle cx="16" cy="6" r="2"/><circle cx="10" cy="12" r="2"/><circle cx="17" cy="18" r="2"/></svg>
+            <span class="body">
+              <span class="label">Custom (config.toml)</span>
+              <span class="desc">Uses permissions defined in config.toml</span>
+            </span>
+          </button>
+        </div>
+        <div class="switch-row">
+          <input type="checkbox" id="guardian-disabled">
+          <label for="guardian-disabled">模拟 “Approve for me” 不可用（非沙箱工作区）</label>
+        </div>
+      </div>
+      <div class="keys"><b>文案键：</b>composer.permissionsDropdown.title &#47; .trigger.tooltip &#47; .default.shortLabel &#47; .default.description &#47; .guardianApproval.optionLabel &#47; .guardianApproval.description &#47; .guardianApproval.disabledDescription &#47; .fullAccess.shortLabel &#47; .fullAccess.description &#47; .fullAccess.disabledDescription &#47; .custom.optionLabel &#47; .custom.description</div>
+    </div>
+    <div class="section">
+      <div class="sec-title"><span class="no">2</span>审批卡片（approval request card）</div>
+      <div class="sec-desc">标题统一句式 “Allow … to …?”；上方是工具标签（Terminal / Internet access / Edit files）；中间是命令或路径 + Reason；下方固定操作：Allow once / Always allow / Allow this conversation / Deny。“替我审批”模式下卡片上方出现自动审查状态。</div>
+      <div class="variant-tabs" id="cx-variants">
+        <button data-v="cmd" class="active">命令</button>
+        <button data-v="net">网络</button>
+        <button data-v="edit">文件编辑</button>
+      </div>
+      <div class="demo-stage">
+        <div class="ar-state-picker" id="cx-ar-picker">
+          <span style="font-size:11px;color:#8f8f9d">自动审查状态演示：</span>
+          <button data-ar="hide" class="active">不显示</button>
+          <button data-ar="inprogress">审查中</button>
+          <button data-ar="approved">已批准</button>
+          <button data-ar="denied">拒绝·高风险</button>
+          <button data-ar="timedout">超时</button>
+        </div>
+        <div class="ar-row" id="cx-ar" style="display:none">
+          <span class="spin" id="cx-ar-spin"></span>
+          <span id="cx-ar-text"></span>
+          <span class="ov"></span>
+        </div>
+        <div class="cx-card" id="cx-card">
+          <div class="kicker"><span class="chip">Terminal</span><span class="chip">Ask permission</span></div>
+          <div class="title" id="cx-card-title">Allow ChatGPT to run this command?</div>
+          <div class="cmdblock" id="cx-card-cmd"></div>
+          <div class="reason" id="cx-card-reason"></div>
+          <div class="options">
+            <div class="opt-label">Approval options</div>
+            <div class="opt-row" id="cx-card-actions"></div>
+          </div>
+        </div>
+      </div>
+      <div class="keys"><b>文案键：</b>execApprovalRequest.prompt &#47; .shellLabel &#47; .permissionLabel &#47; approvalRequestCard.reasonLabel &#47; .allowOnce &#47; .alwaysAllow &#47; .allowConversation &#47; .deny &#47; .approvalOptions &#47; execApprovalRequest.allowSimilarCommands &#47; .allowConversation.commandPrefixInfo &#47; 网络：execApprovalRequest.network.prompt.chatgpt &#47; .network.reason.compact &#47; .networkLabel &#47; 文件：patchApprovalRequest.prompt.chatgpt.files &#47; .allowAllEdits &#47; .allowAllEdits.info &#47; 自动审查：localConversation.automaticApprovalReview.title.inProgress &#47; .summary.inProgress &#47; .title.deniedHighRisk &#47; .title.timedOut</div>
+    </div>
+
+    <div class="section">
+      <div class="sec-title"><span class="no">3</span>完全访问确认弹窗 + 常驻警示条</div>
+      <div class="sec-desc">切到 Full access 先出确认弹窗：逐条列出 Files / Terminal / Internet 三类能力 + 风险说明；确认后 composer 上方常驻红色警示条（可本会话忽略 / 30 天不再提示）。</div>
+      <div class="demo-stage">
+        <button type="button" class="btn solid-danger" id="cx-open-modal">打开 “Turn on Full Access?” 弹窗</button>
+        <div class="cx-banner" id="cx-banner">
+          <div class="b-title"><span class="dot"></span>Full access is on</div>
+          <div class="b-body">ChatGPT can edit any file and run commands with internet access without your approval. This increases the risk of data loss, exposed information, and unexpected changes. <a href="javascript:void(0)">Learn more</a> about elevated risks.</div>
+          <div class="b-actions">
+            <button class="btn secondary sm" id="cx-banner-session">本会话忽略</button>
+            <button class="btn secondary sm" id="cx-banner-30d">Don’t show again</button>
+          </div>
+        </div>
+      </div>
+      <div class="keys"><b>文案键：</b>composer.mode.agentMode.fullAccessConfirm.warningTitle &#47; .warningDescription.codeMode &#47; .files.title+.description &#47; .terminal.title+.description &#47; .internet.title+.description &#47; .riskDescription &#47; .goBack &#47; .turnOnButton &#47; 常驻条：composer.fullAccessWarning.title &#47; .descriptionWithLearnMore &#47; .dismissForThirtyDays &#47; .dismissForSessionLabel</div>
+    </div>
+
+    <div class="section">
+      <div class="sec-title"><span class="no">4</span>CLI 终端版审批按钮（TUI approval overlay）</div>
+      <div class="sec-desc">终端里同样是三档放行粒度：本次 / 会话 / 命令前缀规则；网络单独 allow/deny 域名；拒绝分“继续干活”和“停下来等指示”。</div>
+      <div class="cli-list">
+        <div class="prompt">$ git push --force origin main</div>
+        <div class="cli-opt"><span class="k">y</span>Yes, proceed</div>
+        <div class="cli-opt"><span class="k">p</span>Yes, and don’t ask again for commands that start with `git push --force`</div>
+        <div class="cli-opt"><span class="k">s</span>Yes, and don’t ask again for this command in this session</div>
+        <div class="cli-opt"><span class="k">n</span>No, continue without running it</div>
+        <div class="cli-opt danger"><span class="k">x</span>No, and tell Codex what to do differently</div>
+        <div class="cli-opt" style="margin-top:6px;border-top:1px solid #2c2d36;border-radius:0;padding-top:7px"><span class="k">n</span>网络：Yes, and allow this host in the future</div>
+        <div class="cli-opt danger"><span class="k">d</span>网络：No, and block this host in the future</div>
+      </div>
+      <div class="keys"><b>来源：</b>openai/codex codex-rs/tui/src/bottom_pane/approval_overlay.rs（ApprovalOption label 原文）</div>
+    </div>
+  </section>
+  <section class="col my-col">
+    <div class="col-head"><h2>MyAgent（当前）</h2><span class="tag">frontend/src/shell-body.html + permissions.js</span></div>
+    <div class="section">
+      <div class="sec-title"><span class="no">1</span>权限档位下拉（当前实现）</div>
+      <div class="sec-desc">触发器 = “权限 + 当前档位 + 应用层受限徽章”；菜单三项为 标题+描述，无图标、无菜单标题、无禁用态原因。</div>
+      <div class="ma-stage">
+        <div class="ma-trigger">
+          <span class="k">权限</span>
+          <span>请求批准</span>
+          <span class="ma-badge">应用层受限</span>
+          <span style="font-size:10px;color:#6f6f8a">&#9660;</span>
+        </div>
+        <div class="ma-menu">
+          <button type="button" class="ma-item active">
+            <strong>请求批准</strong><span>应用层受限，越界和高风险操作由你审批</span>
+          </button>
+          <button type="button" class="ma-item">
+            <strong>替我审批</strong><span>相同应用层边界，由独立审查 Agent 审批</span>
+          </button>
+          <button type="button" class="ma-item">
+            <strong>完全访问权限</strong><span>无应用限制、无审批，以当前用户执行</span>
+          </button>
+        </div>
+        <div class="ma-tag-row">
+          <span class="t">无下拉标题</span><span class="t">无图标</span><span class="t">无禁用态原因</span><span class="t">徽章 = 应用层受限 / 不受限制</span>
+        </div>
+      </div>
+      <div class="keys"><b>现状：</b>权限文案在 frontend/src/app/modules/i18n.js（请求批准=Ask for approval、替我审批=Approve for me、应用层受限=App-restricted）；逻辑在 app/modules/permissions.js（permissionModeLabel / renderPermissionMode / selectPermissionMode）</div>
+    </div>
+
+    <div class="section">
+      <div class="sec-title"><span class="no">2</span>审批卡片（当前实现）</div>
+      <div class="sec-desc">结构：安全审批 + 标题 + 消息 + 后果红框（危险命令）+ 规则提示；按钮为 拒绝执行 / 始终允许同类操作 / 仅本次允许。危险命令（红框标识）仍提供“始终允许同类操作”。</div>
+      <div class="variant-tabs" id="ma-variants">
+        <button data-v="normal" class="active">普通</button>
+        <button data-v="danger">危险命令</button>
+      </div>
+      <div class="demo-stage">
+        <div class="ma-card" id="ma-card">
+          <div class="m-kicker"><span>安全审批</span><span class="danger-tag" id="ma-danger-tag" style="display:none">危险操作</span></div>
+          <div class="m-title" id="ma-title">命令执行</div>
+          <div class="m-msg">是否允许 Agent 执行此操作？</div>
+          <div class="m-cmd" id="ma-cmd">$ npm install</div>
+          <div class="m-conseq" id="ma-conseq" style="display:none">后果：将删除 node_modules 与 dist 目录，不可恢复</div>
+          <div class="m-rule-hint" id="ma-rule-hint">“始终允许同类操作”将保存为规则：npm install:*</div>
+          <div class="m-actions">
+            <button class="ma-btn danger">拒绝执行</button>
+            <button class="ma-btn sec">始终允许同类操作</button>
+            <button class="ma-btn prim">仅本次允许</button>
+          </div>
+        </div>
+      </div>
+      <div class="keys"><b>现状：</b>卡片由 app/modules/human-interactions.js 生成：kicker=安全审批、默认消息=是否允许 Agent 执行此操作？、is-danger 红框、按钮 拒绝执行/始终允许同类操作/仅本次允许（forced 时显示 本次允许）；文案键见 i18n.js（仅本次允许=Allow once、拒绝执行=Deny execution、始终允许=Always allow）</div>
+    </div>
+
+    <div class="section">
+      <div class="sec-title"><span class="no">3</span>完全访问确认弹窗（当前实现）</div>
+      <div class="sec-desc">当前为一整段警告文字 + 取消/继续，无能力清单分项。</div>
+      <div class="demo-stage">
+        <button type="button" class="ma-btn danger" id="ma-open-modal" style="border:1px solid rgba(240,100,122,.55)">打开 “完全访问权限” 确认弹窗</button>
+      </div>
+      <div class="keys"><b>现状：</b>permissions.js 中 confirmPermissionMode：title=完全访问权限，message=完全访问权限会关闭应用层路径限制、危险操作检查和审批，且对所有会话生效，直到你切回“请求批准”。Agent 将以你当前的操作系统用户权限直接执行，并可能读取凭据、修改系统或破坏文件。是否继续？；已改为 openUiModal 统一弹窗</div>
+    </div>
+  </section>
+</div>
+
+<div class="note">
+  <b>怎么对照看：</b>
+  ① 档位：Codex 下拉 = 图标 + 标题 + 一句大白话 + 禁用原因；MyAgent 当前 = 标题 + 描述，无图标、无下拉标题、无禁用态。改造目标即“只保留审批方式一维、去应用层受限徽章、按 Codex 三句文案重写描述”。<br>
+  ② 审批卡：Codex 选项 = Allow once / Always allow / Allow this conversation / Deny，三种放行粒度对应 本次 / 同类前缀 / 会话；MyAgent 的“始终允许同类操作”等价于 Always allow（规则沉淀），目前没有“本会话允许”这一档。<br>
+  ③ 完全访问：Codex = 三类能力清单（文件 / 终端 / 网络）+ 风险说明 + 确认后常驻警示条；MyAgent = 一段警告文字。可参考 Codex 拆成清单式。<br>
+  ④ 替我审批：Codex 在非沙箱工作区直接置灰该档（Requires default sandboxed permissions…）；MyAgent 目前两档共用应用层边界、无禁用逻辑。<br>
+  <b>本页为独立参考文件</b>，不参与构建，可直接删除。文案键为 Codex 扩展真实 message id。
+</div>
+
+<div class="cx-modal-backdrop" id="cx-modal-backdrop">
+  <div class="cx-modal">
+    <div class="m-title">Turn on Full Access?</div>
+    <div class="m-body">
+      Codex will be able to run commands, use the internet, and create and edit files anywhere on this computer without your permission. This includes but is not limited to:
+    </div>
+    <div class="cap-row">
+      <div class="cap-ico"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M3 7h11M17 7h4M3 12h5M11 12h10M3 17h8M14 17h7"/><circle cx="15" cy="7" r="2.2"/><circle cx="9" cy="12" r="2.2"/><circle cx="12" cy="17" r="2.2"/></svg></div>
+      <div><div class="cap-name">Files and folders</div><div class="cap-desc">Read, create, modify, upload, or delete files anywhere on this computer</div></div>
+    </div>
+    <div class="cap-row">
+      <div class="cap-ico"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 17l6-6-6-6M12 19h8"/></svg></div>
+      <div><div class="cap-name">Terminal commands</div><div class="cap-desc">Run commands, install software, and change system settings</div></div>
+    </div>
+    <div class="cap-row">
+      <div class="cap-ico"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a15 15 0 0 1 0 18M12 3a15 15 0 0 0 0 18"/></svg></div>
+      <div><div class="cap-name">Internet and connected apps</div><div class="cap-desc">Access websites, send data, and use enabled plugins</div></div>
+    </div>
+    <div class="m-risk">This comes with risks like loss or exposure of sensitive data and prompt injection. You can turn this off. <a href="javascript:void(0)">Learn more</a></div>
+    <div class="m-foot">
+      <button class="btn secondary" id="cx-modal-cancel">Cancel</button>
+      <button class="btn solid-danger" id="cx-modal-confirm">Confirm</button>
+    </div>
+  </div>
+</div>
+
+<div class="ma-modal-backdrop" id="ma-modal-backdrop">
+  <div class="ma-modal">
+    <div class="m-title">完全访问权限</div>
+    <div class="m-body">完全访问权限会关闭应用层路径限制、危险操作检查和审批，且对所有会话生效，直到你切回“请求批准”。Agent 将以你当前的操作系统用户权限直接执行，并可能读取凭据、修改系统或破坏文件。是否继续？</div>
+    <div class="m-foot">
+      <button class="ma-btn sec" id="ma-modal-cancel">取消</button>
+      <button class="ma-btn prim" id="ma-modal-confirm">继续</button>
+    </div>
+  </div>
+</div>
+<script>
+(function () {
+  'use strict';
+  var ICONS = {
+    default: '<path d="M12 3l7 3v5c0 4.5-3 8.3-7 10-4-1.7-7-5.5-7-10V6z"/>',
+    guardian: '<path d="M12 3l7 3v5c0 4.5-3 8.3-7 10-4-1.7-7-5.5-7-10V6z"/><path d="M12 8v4"/><circle cx="12" cy="15.5" r="0.8" fill="currentColor"/>',
+    full: '<rect x="4" y="10" width="16" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 7.6-1.6"/><circle cx="12" cy="15" r="1" fill="currentColor"/>',
+    custom: '<path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h13M20 18h0"/><circle cx="16" cy="6" r="2"/><circle cx="10" cy="12" r="2"/><circle cx="17" cy="18" r="2"/>'
+  };
+  var LABELS = {
+    default: 'Ask for approval',
+    guardian: 'Approve for me',
+    full: 'Full access',
+    custom: 'Custom (config.toml)'
+  };
+
+  var triggerIco = document.getElementById('cx-trigger-ico');
+  var triggerLabel = document.getElementById('cx-trigger-label');
+  var items = Array.prototype.slice.call(document.querySelectorAll('.cx-item'));
+  var guardianItem = document.querySelector('.cx-item[data-mode="guardian"]');
+  var guardianDesc = guardianItem.querySelector('.desc');
+  var disabledToggle = document.getElementById('guardian-disabled');
+
+  function setActive(mode) {
+    items.forEach(function (it) {
+      var active = it.dataset.mode === mode;
+      it.classList.toggle('is-active', active);
+      var check = it.querySelector('.check');
+      if (active && !check) {
+        var c = document.createElement('span');
+        c.className = 'check';
+        c.textContent = '\u2713';
+        it.querySelector('.label').appendChild(c);
+      } else if (!active && check) {
+        check.remove();
+      }
+    });
+    triggerLabel.textContent = LABELS[mode];
+    triggerIco.innerHTML = ICONS[mode];
+  }
+  items.forEach(function (it) {
+    it.addEventListener('click', function () {
+      if (it.classList.contains('is-disabled')) return;
+      setActive(it.dataset.mode);
+    });
+  });
+  disabledToggle.addEventListener('change', function () {
+    var off = disabledToggle.checked;
+    guardianItem.classList.toggle('is-disabled', off);
+    guardianDesc.textContent = off
+      ? 'Requires default sandboxed permissions in this workspace'
+      : 'Only ask for actions detected as potentially unsafe';
+    guardianDesc.classList.toggle('disabled-reason', off);
+  });
+
+  var variants = {
+    cmd: {
+      kicker: ['Terminal', 'Ask permission'],
+      title: 'Allow ChatGPT to run this command?',
+      cmd: '~/my-app $ git push --force origin main',
+      reason: '将本地 main 分支强制推送并覆盖远端历史',
+      actions: [
+        ['primary', 'Allow once', ''],
+        ['secondary', 'Always allow', ' \u00b7 similar commands'],
+        ['secondary', 'Allow this conversation', ' \u00b7 commands starting with git push --force'],
+        ['danger', 'Deny', '']
+      ]
+    },
+    net: {
+      kicker: ['Internet access', 'Ask permission'],
+      title: 'Allow ChatGPT to connect to api.example.com?',
+      cmd: 'GET https://api.example.com/v1/users',
+      reason: 'api.example.com isn\u2019t on the current network allowlist',
+      actions: [
+        ['primary', 'Allow once', ''],
+        ['secondary', 'Always allow', ' \u00b7 this host'],
+        ['secondary', 'Allow this conversation', ' \u00b7 this host'],
+        ['danger', 'Deny', '']
+      ]
+    },
+    edit: {
+      kicker: ['Edit files', 'Ask permission'],
+      title: 'Allow ChatGPT to edit the following files?',
+      cmd: '~/my-app/src/app.js\n~/my-app/src/utils.js',
+      reason: '重构工具函数并更新调用点',
+      actions: [
+        ['primary', 'Allow once', ''],
+        ['secondary', 'Allow all edits', ' \u00b7 this and future file edits in this conversation'],
+        ['danger', 'Deny', '']
+      ]
+    }
+  };
+  var cardTitle = document.getElementById('cx-card-title');
+  var cardCmd = document.getElementById('cx-card-cmd');
+  var cardReason = document.getElementById('cx-card-reason');
+  var cardActions = document.getElementById('cx-card-actions');
+  var vTabs = document.getElementById('cx-variants');
+
+  function renderVariant(v) {
+    var d = variants[v];
+    cardTitle.textContent = d.title;
+    cardCmd.innerHTML = d.cmd.replace(/^(.*?)\$ /, '<span class="cwd">$1</span> $ ');
+    cardReason.innerHTML = '<b>Reason:</b> ' + d.reason;
+    cardActions.innerHTML = '';
+    d.actions.forEach(function (a) {
+      var b = document.createElement('button');
+      b.className = 'btn ' + a[0];
+      b.innerHTML = a[1] + (a[2] ? '<span class="opt-sub">' + a[2] + '</span>' : '');
+      cardActions.appendChild(b);
+    });
+  }
+  vTabs.addEventListener('click', function (e) {
+    var t = e.target.closest('button');
+    if (!t) return;
+    Array.prototype.forEach.call(vTabs.children, function (x) { x.classList.remove('active'); });
+    t.classList.add('active');
+    renderVariant(t.dataset.v);
+  });
+  renderVariant('cmd');
+
+  var arRow = document.getElementById('cx-ar');
+  var arText = document.getElementById('cx-ar-text');
+  var arSpin = document.getElementById('cx-ar-spin');
+  var arStates = {
+    inprogress: ['A carefully prompted reviewer agent is reviewing this request before ChatGPT runs it', '', ''],
+    approved: ['Auto-review approved \u2014 a carefully prompted reviewer agent reviewed this request.', 'approved', ''],
+    denied: ['Auto-review denied high risk \u2014 审查员判定高风险（凭据 / 破坏性 / 安全策略）。', 'denied', '<button class="btn danger sm">Approve anyway (this time only)</button>'],
+    timedout: ['Auto-review timed out \u2014 审查超时，请求未执行。', 'timedout', '']
+  };
+  document.getElementById('cx-ar-picker').addEventListener('click', function (e) {
+    var t = e.target.closest('button');
+    if (!t) return;
+    Array.prototype.forEach.call(this.children, function (x) { if (x.tagName === 'BUTTON') x.classList.remove('active'); });
+    t.classList.add('active');
+    var s = t.dataset.ar;
+    if (s === 'hide') { arRow.style.display = 'none'; return; }
+    var d = arStates[s];
+    arRow.style.display = 'flex';
+    arRow.className = 'ar-row ' + d[1];
+    arSpin.style.display = s === 'inprogress' ? '' : 'none';
+    arText.textContent = d[0];
+    arRow.querySelector('.ov').innerHTML = d[2];
+  });
+
+  var cxBackdrop = document.getElementById('cx-modal-backdrop');
+  document.getElementById('cx-open-modal').addEventListener('click', function () { cxBackdrop.classList.add('open'); });
+  document.getElementById('cx-modal-cancel').addEventListener('click', function () { cxBackdrop.classList.remove('open'); });
+  document.getElementById('cx-modal-confirm').addEventListener('click', function () {
+    cxBackdrop.classList.remove('open');
+    document.getElementById('cx-banner').classList.add('show');
+  });
+  cxBackdrop.addEventListener('click', function (e) { if (e.target === cxBackdrop) cxBackdrop.classList.remove('open'); });
+  document.getElementById('cx-banner-session').addEventListener('click', function () { document.getElementById('cx-banner').classList.remove('show'); });
+  document.getElementById('cx-banner-30d').addEventListener('click', function () { document.getElementById('cx-banner').classList.remove('show'); });
+
+  var maCard = document.getElementById('ma-card');
+  var maDangerTag = document.getElementById('ma-danger-tag');
+  var maTitle = document.getElementById('ma-title');
+  var maCmd = document.getElementById('ma-cmd');
+  var maConseq = document.getElementById('ma-conseq');
+  var maRuleHint = document.getElementById('ma-rule-hint');
+  var maVariants = {
+    normal: ['命令执行', '$ npm install', '“始终允许同类操作”将保存为规则：npm install:*'],
+    danger: ['命令执行', '$ rm -rf node_modules dist', '“始终允许同类操作”将保存为规则：rm -rf:*']
+  };
+  document.getElementById('ma-variants').addEventListener('click', function (e) {
+    var t = e.target.closest('button');
+    if (!t) return;
+    Array.prototype.forEach.call(this.children, function (x) { x.classList.remove('active'); });
+    t.classList.add('active');
+    var d = maVariants[t.dataset.v];
+    var danger = t.dataset.v === 'danger';
+    maCard.classList.toggle('is-danger', danger);
+    maDangerTag.style.display = danger ? '' : 'none';
+    maTitle.textContent = d[0];
+    maCmd.textContent = d[1];
+    maConseq.style.display = danger ? '' : 'none';
+    maRuleHint.textContent = d[2];
+  });
+
+  var maBackdrop = document.getElementById('ma-modal-backdrop');
+  document.getElementById('ma-open-modal').addEventListener('click', function () { maBackdrop.classList.add('open'); });
+  document.getElementById('ma-modal-cancel').addEventListener('click', function () { maBackdrop.classList.remove('open'); });
+  document.getElementById('ma-modal-confirm').addEventListener('click', function () { maBackdrop.classList.remove('open'); });
+  maBackdrop.addEventListener('click', function (e) { if (e.target === maBackdrop) maBackdrop.classList.remove('open'); });
+})();
+</script>
+</body>
+</html>

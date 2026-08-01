@@ -53,6 +53,7 @@ _tool_work_dir_override: ContextVar[Optional[Path]] = ContextVar(
     "myagent_tool_work_dir_override",
     default=None,
 )
+from security import PermissionMode, active_security_context, enforce_leaf
 
 
 def active_tool_work_dir() -> Path:
@@ -265,20 +266,29 @@ def resolve_default_download_path(url: str) -> Path:
 
 
 def safe_work_path(file_path: str) -> Path:
-    """将路径解析为绝对路径，仅允许 WORK_DIR 及项目根 `.env`。用于 edit / delete / shell（受限）及写入类工具。
+    """将路径解析为绝对路径，仅允许 WORK_DIR。用于 edit / delete / shell（受限）及写入类工具。
     虚拟工作区根：`/foo` → WORK_DIR/foo；无前导 slash 的相对路径 → WORK_DIR/foo。"""
     raw = prepare_agent_workspace_path_literal(file_path)
-    dotenv_file = (PROJECT_ROOT / ".env").resolve()
     work_root = active_tool_work_dir()
-    allow_project_dotenv = _tool_work_dir_override.get() is None
+    active = active_security_context()
+    full_access = bool(
+        active and active["context"].mode == PermissionMode.FULL_ACCESS
+    )
 
     p0 = Path(raw).expanduser()
     if p0.is_absolute():
         rp = p0.resolve()
-        if rp == dotenv_file and allow_project_dotenv:
+        if full_access:
             return rp
         if _is_path_under(rp, work_root):
             return rp
+        if active and active["decision"].allowed:
+            allowed = {
+                Path(item).expanduser().resolve()
+                for item in (active["request"].metadata.get("paths") or [])
+            }
+            if rp in allowed:
+                return rp
         raise ValueError(f"Access denied: path {raw} is outside allowed directories")
 
     if raw.startswith("/"):
@@ -286,8 +296,6 @@ def safe_work_path(file_path: str) -> Path:
         full_path = (work_root / inner).resolve()
     else:
         full_path = (work_root / raw).resolve()
-    if full_path == dotenv_file and allow_project_dotenv:
-        return full_path
     if _is_path_under(full_path, work_root):
         return full_path
     raise ValueError(f"Access denied: path {raw} is outside allowed directories")
@@ -363,6 +371,9 @@ def redact_sensitive_tool_obj(value: Any) -> Any:
 
 
 def _path_is_sensitive_tool_resource(p: Path) -> bool:
+    active = active_security_context()
+    if active and active["context"].mode == PermissionMode.FULL_ACCESS:
+        return False
     try:
         resolved = p.resolve()
     except OSError:
@@ -375,6 +386,9 @@ def _path_is_sensitive_tool_resource(p: Path) -> bool:
 
 
 def _text_mentions_sensitive_tool_resource(value: Any) -> bool:
+    active = active_security_context()
+    if active and active["context"].mode == PermissionMode.FULL_ACCESS:
+        return False
     text = value if isinstance(value, str) else str(value)
     return any(pat.search(text) for pat in SENSITIVE_TOOL_RESOURCE_PATTERNS)
 
@@ -477,7 +491,7 @@ _AGENT_PROCESS_IDENTITY_RE = re.compile(
     r"(?i)(?:"
     r"\bpythonw?(?:\.exe)?\b"
     r"|(?:^|[\\/])app[\\/]main\.py\b"
-    r"|(?:^|[\\/])tray_launcher\.py\b"
+    r"|(?:^|[\\/])(?:tray_launcher|platform_tray)\.py\b"
     r")"
 )
 _PROCESS_TERMINATION_RE = re.compile(
@@ -503,13 +517,17 @@ _PORT_OWNER_LOOKUP_RE = re.compile(
     r"(?i)\b(?:get-nettcpconnection|owningprocess|netstat|lsof|fuser)\b"
 )
 _LIFECYCLE_SCRIPT_DIRECT_RE = re.compile(
-    r"(?im)(?:^|[;&|]\s*)"
-    r"(?:call\s+|start(?:-process)?\s+|cmd(?:\.exe)?\s+/c\s+|&\s*)?"
-    r"[\"']?(?:[^\"';&|\r\n]*[\\/])?run\.bat(?:[\"']|\s|$)"
+    r"(?im)(?:"
+    r"(?:^|[;&|]\s*)(?:call\s+|start(?:-process)?\s+|cmd(?:\.exe)?\s+/c\s+|bash\s+|sh\s+|&\s*)?"
+    r"[\"']?(?:[^\"';&|\r\n]*[\\/])?run\.(?:bat|sh)(?:[\"']|\s|$)"
+    r"|(?:^|[;&|]\s*)(?:[^\r\n;&|]*[\\/])?agentctl\s+(?:start|stop|restart|update)\b"
+    r"|\bsystemctl\s+--user\s+(?:start|stop|restart|disable)[^\r\n;&|]*\bsugaragent(?:\.service)?\b"
+    r"|\blaunchctl\s+(?:bootout|bootstrap|kickstart|kill)[^\r\n;&|]*\bcom\.sugaragent\."
+    r")"
 )
 _LIFECYCLE_PYTHON_RE = re.compile(
     r"(?i)\b(?:pythonw?|py)(?:\.exe)?\b[^\r\n;&|]*"
-    r"(?:tray_launcher|agent_updater)\.py\b"
+    r"(?:tray_launcher|platform_tray|agent_updater|agentctl)\.py\b"
 )
 _RUNTIME_DESTRUCTIVE_OPERATION_RE = re.compile(
     r"(?i)(?:"
@@ -521,8 +539,9 @@ _RUNTIME_DESTRUCTIVE_OPERATION_RE = re.compile(
 _AGENT_RUNTIME_RESOURCE_RE = re.compile(
     r"(?i)(?:"
     r"(?:^|[\s\"'\\/])app[\\/]main\.py\b"
-    r"|(?:^|[\s\"'\\/])tray_launcher\.py\b"
-    r"|(?:^|[\s\"'\\/])run\.bat\b"
+    r"|(?:^|[\s\"'\\/])(?:tray_launcher|platform_tray)\.py\b"
+    r"|(?:^|[\s\"'\\/])run\.(?:bat|sh)\b"
+    r"|(?:^|[\s\"'\\/])scripts[\\/]agentctl\b"
     r"|(?:^|[\s\"'\\/])python[\\/]pythonw?\.exe\b"
     r")"
 )
@@ -551,6 +570,15 @@ def _agent_server_port() -> int:
     return _positive_env_int("MYAGENT_SERVER_PORT") or 8192
 
 
+def _agent_lifecycle_guidance() -> str:
+    system_name = platform.system()
+    if system_name == "Linux":
+        return "请在 Agent 外部运行 `scripts/agentctl restart`，或使用 Linux 托盘“重启”。"
+    if system_name == "Darwin":
+        return "请在 Agent 外部运行 `scripts/agentctl restart`，或使用 macOS 菜单栏“重启”。"
+    return "请在 Agent 外部运行 RUN.bat，或使用 Windows 托盘“重启”。"
+
+
 def _mentions_number_token(text: str, value: int) -> bool:
     return bool(re.search(rf"(?<![\w]){int(value)}(?![\w])", text))
 
@@ -570,7 +598,7 @@ def _agent_self_protection_reason(command: str) -> Optional[str]:
     if _LIFECYCLE_SCRIPT_DIRECT_RE.search(text) or _LIFECYCLE_PYTHON_RE.search(text):
         return (
             "不能在 run_shell 内启动 Agent 生命周期脚本，因为它会终止正在处理本次工具调用的 "
-            "HTTP/SSE 进程。正确操作：等待当前结果保存后，使用托盘“重启”，或在 Agent 外部双击 RUN.bat"
+            f"HTTP/SSE 进程。等待当前结果保存后再操作。{_agent_lifecycle_guidance()}"
         )
 
     if (
@@ -579,7 +607,7 @@ def _agent_self_protection_reason(command: str) -> Optional[str]:
     ):
         return (
             "命令会删除受保护的 Agent运行时或启动文件。正确操作：修改源码请使用 edit_file/apply_patch，"
-            "更新 Agent请使用托盘“更新”，不要删除运行中的 main.py、RUN.bat 或内置 Python"
+            "更新 Agent请使用平台托盘或 scripts/agentctl，不要删除运行中的 main.py、启动脚本或 Python 环境。"
         )
 
     if not _PROCESS_TERMINATION_RE.search(text):
@@ -589,7 +617,7 @@ def _agent_self_protection_reason(command: str) -> Optional[str]:
         if _mentions_number_token(text, pid):
             return (
                 f"目标 PID {pid} 属于 Agent后端或托盘监管进程，不能在 run_shell 内终止。"
-                "如需重启 Agent，请使用托盘“重启”或在 Agent外部双击 RUN.bat。"
+                + _agent_lifecycle_guidance()
                 + _safe_process_termination_guidance()
             )
 
@@ -603,7 +631,7 @@ def _agent_self_protection_reason(command: str) -> Optional[str]:
     if _mentions_number_token(text, port) and _PORT_OWNER_LOOKUP_RE.search(text):
         return (
             f"端口 {port} 是 Agent HTTP/SSE 服务端口，不能通过查端口 PID 的方式终止。"
-            "正确操作：重启 Agent请使用托盘“重启”或在 Agent外部双击 RUN.bat。"
+            + _agent_lifecycle_guidance()
         )
 
     if _PROCESS_ANCESTRY_RE.search(text):
@@ -1037,7 +1065,17 @@ def _subprocess_env_for_shell() -> Dict[str, str]:
       脚本 exit 0 但 ``communicate()`` 读到空（宿主若设置 ``PYTHONUNBUFFERED=0`` 会令 ``setdefault`` 失效）。
     - 禁用 RUN_SHELL_PYTHON_UNBUFFERED 时不改该项，沿用 ``os.environ`` 拷贝。
     """
-    env = os.environ.copy()
+    active = active_security_context()
+    if active and active["context"].mode == PermissionMode.FULL_ACCESS:
+        return os.environ.copy()
+    allowed = {
+        "PATH", "PATHEXT", "SYSTEMROOT", "WINDIR", "COMSPEC", "TEMP", "TMP",
+        "LANG", "LC_ALL", "LC_CTYPE", "USERPROFILE", "HOME", "HOMEDRIVE",
+        "HOMEPATH", "LOCALAPPDATA", "APPDATA", "PROGRAMFILES",
+        "PROGRAMFILES(X86)", "PROGRAMDATA", "NUMBER_OF_PROCESSORS",
+        "PROCESSOR_ARCHITECTURE", "TERM", "COLORTERM",
+    }
+    env = {key: value for key, value in os.environ.items() if key.upper() in allowed}
     # Controller identity is available only to the server-side preflight
     # guard. Do not disclose supervisor metadata to an untrusted child.
     for key in (
@@ -1862,8 +1900,10 @@ async def run_shell(
     ``eval`` + POSIX ``shlex.quote`` to reduce re-parsing of quoted fragments; on Windows without bash, uses
     ``powershell -EncodedCommand`` (UTF-16LE Base64). Errors if PowerShell is missing when bash is unavailable.
     On Unix without bash (or ``RUN_SHELL_USE_BASH=0``), uses ``sh -c`` with the same ``eval`` wrapper.
-    Applies dangerous-pattern checks and workspace path rules; on Windows, ``2>nul`` is rewritten to ``/dev/null``
-    on the bash path only.
+    In restricted modes, the central application policy reviews external paths,
+    network access, destructive commands, and unknown dynamic code before this
+    function runs. On Windows, ``2>nul`` is rewritten to ``/dev/null`` on the
+    bash path only.
 
     External tool name is ``run_shell`` (OpenAI tools schema and dispatch).
 
@@ -1889,18 +1929,26 @@ async def run_shell(
     )
     if not full_cmd.strip():
         return "Error: empty command (provide command and/or args)."
+    enforce_leaf("process.exec", full_cmd)
     if _text_mentions_sensitive_tool_resource(full_cmd) or _text_mentions_sensitive_tool_resource(effective_workdir or ""):
         return _sensitive_tool_resource_error("shell access")
 
-    # 1. 安全检测
-    self_protection_reason = _agent_self_protection_reason(full_cmd)
-    if self_protection_reason:
-        return f"Error: Command blocked by Agent self-protection: {self_protection_reason}"
-    if _is_dangerous(full_cmd):
-        return (
-            "Error: Command blocked by safety guard. "
-            + _dangerous_command_guidance(full_cmd)
-        )
+    active = active_security_context()
+    full_access = bool(
+        active and active["context"].mode == PermissionMode.FULL_ACCESS
+    )
+    if not full_access:
+        self_protection_reason = _agent_self_protection_reason(full_cmd)
+        if self_protection_reason:
+            return f"Error: Command blocked by Agent self-protection: {self_protection_reason}"
+        # Standalone/legacy callers without the central execution scope retain
+        # the old guard. Normal Agent calls have already asked for and consumed
+        # a digest-bound approval for destructive commands.
+        if active is None and _is_dangerous(full_cmd):
+            return (
+                "Error: Command blocked by safety guard. "
+                + _dangerous_command_guidance(full_cmd)
+            )
 
     ephemeral_py: List[Path] = []
     process_job = None
@@ -1908,13 +1956,9 @@ async def run_shell(
         wroot = active_tool_work_dir()
         full_cmd, ephemeral_py = _maybe_materialize_python_c_script(full_cmd, wroot)
 
-        # 2. 工作目录：默认在 WORK_DIR；本工具是「工作区限制」的唯三入口之一
+        # 2. 工作目录：默认在 WORK_DIR。Legacy restrict_to_workspace is
+        # accepted but intentionally ignored; central authorization owns scope.
         cwd = _resolve_shell_working_dir(effective_workdir, wroot)
-        if restrict_to_workspace:
-            if not _is_path_under(cwd, wroot):
-                return "Error: working_dir is outside allowed directories."
-            if not _paths_inside_workspace(full_cmd, wroot):
-                return "Error: Command contains path outside allowed directories."
 
         # 3. 统一 shell 管线（bash 优先）
         try:
@@ -1973,7 +2017,7 @@ async def run_shell(
                     )
                 win_env = _run_shell_env_with_prepended_agent_python_dir(child_env)
                 ps_enc = _powershell_encoded_command_b64(full_cmd)
-                process = await asyncio.create_subprocess_exec(
+                ps_argv = [
                     ps_exe,
                     "-NoProfile",
                     "-NonInteractive",
@@ -1981,6 +2025,9 @@ async def run_shell(
                     "Bypass",
                     "-EncodedCommand",
                     ps_enc,
+                ]
+                process = await asyncio.create_subprocess_exec(
+                    *ps_argv,
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
                     cwd=cwd,
@@ -1990,10 +2037,9 @@ async def run_shell(
             else:
                 sh_path = shutil.which("sh") or "/bin/sh"
                 sh_env = _run_shell_env_with_prepended_agent_python_dir(child_env)
+                sh_argv = [sh_path, "-c", _posix_shell_eval_wrapper(full_cmd)]
                 process = await asyncio.create_subprocess_exec(
-                    sh_path,
-                    "-c",
-                    _posix_shell_eval_wrapper(full_cmd),
+                    *sh_argv,
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
                     cwd=cwd,
@@ -2078,6 +2124,9 @@ TRASH_SIZE_WARN_MB = int(os.getenv("TRASH_SIZE_WARN_MB", "500"))
 
 def _delete_path_prohibited_reason(p: Path) -> Optional[str]:
     """禁止对会话目录、技能目录、回收站及其内容执行 delete_file。"""
+    active = active_security_context()
+    if active and active["context"].mode == PermissionMode.FULL_ACCESS:
+        return None
     try:
         pr = p.resolve()
     except OSError:
@@ -2143,6 +2192,7 @@ def delete_file(
         return "Error: delete_file requires `path` (or alias `target_directory`)."
     try:
         p = safe_work_path(raw)
+        enforce_leaf("fs.delete", p)
     except ValueError as e:
         return f"Error: {e}"
     if _path_is_sensitive_tool_resource(p):
@@ -2269,6 +2319,7 @@ def read_file(
         end_line = int(start_line) + count - 1
     try:
         path = resolve_unrestricted_path(raw)
+        enforce_leaf("fs.read", path)
         if _path_is_sensitive_tool_resource(path):
             return _sensitive_tool_resource_error("read")
         if not path.is_file():
@@ -2341,6 +2392,7 @@ def write_file(
             outp = safe_work_path(AGENT_DEFAULT_WRITE_FILENAME)
         else:
             outp = safe_work_path(raw)
+        enforce_leaf("fs.write", outp)
         if _path_is_sensitive_tool_resource(outp):
             return _sensitive_tool_resource_error("write")
         _atomic_write_text(outp, body, encoding='utf-8')
@@ -2599,6 +2651,7 @@ def ls(
     raw = _coalesce_str(path, target_directory, directory) or "/"
     try:
         path = resolve_unrestricted_path(raw)
+        enforce_leaf("fs.read", path)
         if not path.is_dir():
             return f"Error: {raw} is not a directory"
         limit = _ls_max_entries() if max_entries is None else max(1, min(5000, int(max_entries)))
@@ -2640,6 +2693,7 @@ def edit_file(
         )
     try:
         path = safe_work_path(raw)
+        enforce_leaf("fs.write", path)
         if _path_is_sensitive_tool_resource(path):
             return _sensitive_tool_resource_error("edit")
         if not path.is_file():
@@ -2857,6 +2911,7 @@ def apply_patch(patch: str) -> str:
         for operation in operations:
             raw_path = operation["path"]
             path = safe_work_path(raw_path)
+            enforce_leaf("fs.write", path)
             if _path_is_sensitive_tool_resource(path):
                 return _sensitive_tool_resource_error("patch")
             if path in planned:
@@ -2969,6 +3024,7 @@ def glob(
             root_path = resolve_unrestricted_path(raw_root)
             use_pattern = raw_pattern
 
+        enforce_leaf("fs.read", root_path)
         if not root_path.is_dir():
             return f"Error: root '{raw_root}' is not a directory. Hint: use path='D:/path' and pattern='**/*.py' as separate params."
 
@@ -3145,6 +3201,7 @@ def grep(
     raw_path = _coalesce_str(path, target_directory) or "/"
     try:
         target = resolve_unrestricted_path(raw_path)
+        enforce_leaf("fs.read", target)
         if not target.exists():
             return f"Error: path '{raw_path}' does not exist"
         if _path_is_sensitive_tool_resource(target):
@@ -3703,6 +3760,7 @@ async def web_download(
             dest = resolve_default_download_path(url)
         else:
             dest = safe_work_path(raw_dest)
+        enforce_leaf("fs.write", dest)
         if _path_is_sensitive_tool_resource(dest):
             return json.dumps({"error": _sensitive_tool_resource_error("download"), "url": url}, ensure_ascii=False)
     except ValueError as e:
@@ -4375,10 +4433,11 @@ OPENAI_TOOL_DEFINITIONS: List[Dict[str, Any]] = [
         "Execute a shell command on this host. **Syntax and backend follow the Environment line `Actual run_shell executor (this host)`** "
         "(Git Bash vs PowerShell vs sh). Default cwd is WORK_DIR unless `workdir` is set. "
         "`timeout_ms` is capped at **600000** ms. Bash uses a login shell by default; set `login=false` when startup profiles are unnecessary. "
-        "`restrict_to_workspace` (default true): reject commands that reference paths outside the workspace; set false for broader paths (often needs UI approval). "
-        "Blocks dangerous patterns and private-network URLs in the command text; quote paths with spaces. "
+        "In 请求批准/替我审批 modes, workspace commands run automatically while external paths, network access, "
+        "destructive operations, and dynamically constructed code are routed through the central approval policy. "
+        "Quote paths with spaces. "
         "Agent backend/tray PIDs and lifecycle scripts are protected: broad Python process termination is rejected, "
-        "while terminating an explicitly selected unrelated PID remains allowed. Restart Agent only through the external tray/RUN.bat flow. "
+        "while terminating an explicitly selected unrelated PID remains allowed. Restart Agent only through the external platform tray or agentctl/RUN script. "
         "Virtual `/folder` under restriction means under the workspace root, not the OS root; avoid `cd /` expecting the workspace on Windows. "
         "Prefer write_file(temporary=true) + `python script.py` over huge `python -c` for throwaway scripts; long `-c` payloads may auto-materialize under `.run_shell_temp/`. "
         "Do not assume POSIX utilities exist on Windows—use Python when unsure. Binary-heavy output may be truncated or summarized. "
@@ -4388,7 +4447,6 @@ OPENAI_TOOL_DEFINITIONS: List[Dict[str, Any]] = [
             "workdir": {"type": "string", "description": "Directory under workspace (relative to workspace root, or absolute). Omit for workspace root. '.' means workspace root."},
             "timeout_ms": {"type": "integer", "description": "Timeout in milliseconds (maximum 600000).", "default": 10000, "minimum": 1, "maximum": 600000},
             "login": {"type": "boolean", "description": "Use a login shell when the selected executor supports it.", "default": True},
-            "restrict_to_workspace": {"type": "boolean", "description": "Reject commands with paths outside workspace", "default": True},
         },
         ["command"],
     ),

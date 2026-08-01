@@ -1,0 +1,49 @@
+name: Platform tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            python: "3.10"
+          - os: ubuntu-24.04
+            python: "3.12"
+          - os: windows-2022
+            python: "3.12"
+          - os: macos-15
+            python: "3.12"
+          - os: macos-15-intel
+            python: "3.12"
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+          cache-dependency-path: app/requirements.txt
+
+      - name: Install Ubuntu desktop bindings
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3-gi gir1.2-gtk-3.0 gir1.2-ayatanaappindicator3-0.1 zenity xdg-utils
+
+      - name: Install Python dependencies
+        run: python -m pip install --disable-pip-version-check -r app/requirements.txt
+
+      - name: Validate POSIX scripts
+        if: runner.os != 'Windows'
+        run: bash -n RUN.sh scripts/agentctl scripts/install_unix.sh scripts/uninstall_unix.sh
+
+      - name: Run tests
+        run: python -m pytest -q

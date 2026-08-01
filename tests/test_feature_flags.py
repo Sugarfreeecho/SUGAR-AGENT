@@ -27,6 +27,7 @@ def test_index_html_injects_conservative_feature_values(monkeypatch):
     import webui
 
     monkeypatch.delenv("AGENT_TEAM_ENABLED", raising=False)
+    monkeypatch.delenv("ASK_USER_ENABLED", raising=False)
     monkeypatch.setenv("MYAGENT_ENABLE_FOLLOWUP_RESTART", "0")
     monkeypatch.setenv("MYAGENT_ENABLE_STREAM_RECONNECT", "0")
     monkeypatch.setenv("MYAGENT_ENABLE_FINAL_RECONCILE", "1")
@@ -46,6 +47,7 @@ def test_index_html_injects_conservative_feature_values(monkeypatch):
 def test_index_html_injects_independent_feature_overrides(monkeypatch):
     import webui
 
+    monkeypatch.delenv("ASK_USER_ENABLED", raising=False)
     monkeypatch.setenv("AGENT_TEAM_ENABLED", "true")
     monkeypatch.setenv("MYAGENT_ENABLE_FOLLOWUP_RESTART", "1")
     monkeypatch.setenv("MYAGENT_ENABLE_STREAM_RECONNECT", "true")
@@ -106,6 +108,108 @@ def test_index_html_injects_append_steer_default_and_environment_override(monkey
     assert _extract_steer_mode(str(webui.get_index_html())) == "interrupt"
     monkeypatch.setenv("MYAGENT_STEER_MODE", "invalid")
     assert _extract_steer_mode(str(webui.get_index_html())) == "append"
+
+
+def test_permission_mode_ui_regressions():
+    i18n = (ROOT / "frontend/src/app/modules/i18n.js").read_text(encoding="utf-8")
+    permissions = (ROOT / "frontend/src/app/modules/permissions.js").read_text(
+        encoding="utf-8"
+    )
+    css = (ROOT / "frontend/src/styles/app.css").read_text(encoding="utf-8")
+    html = (ROOT / "frontend/src/shell-body.html").read_text(encoding="utf-8")
+    index_html = (ROOT / "frontend/index.html").read_text(encoding="utf-8")
+    interactions = (ROOT / "frontend/src/app/modules/human-interactions.js").read_text(
+        encoding="utf-8"
+    )
+
+    # Permission mode dropdown and security settings are translated.
+    for key in (
+        "权限",
+        "请求批准",
+        "替我审批",
+        "完全访问权限",
+        "应用层受限",
+        "更改权限",
+        "Agent 的操作应如何获得审批？",
+        "工作区内自动执行；网络、删文件、出项目等会先问你",
+        "低风险自动放行，高风险仍转给你确认",
+        "关闭限制与审批，Agent 拥有你的全部权限",
+        "自动审查中：审查 Agent 正在核对你的任务意图与请求风险。",
+        "自动审批已批准",
+        "自动审批已拒绝",
+        "可人工覆盖本次请求（只此一次，不沉淀规则）",
+        "权限规则（始终允许 / 必问 / 拒绝）",
+        "网页抓取预批准域名（web_fetch 免审批）",
+    ):
+        assert f"'{key}':" in i18n
+
+    # Codex-style permission dropdown: menu title, icon + label + one-line
+    # description per mode, and a trigger icon that follows the active mode.
+    assert "permission-mode-title" in css
+    assert "permission-mode-option" in css
+    assert "permission-mode-ico" in css
+    assert "permission-mode-desc" in css
+    assert "Agent 的操作应如何获得审批？" in html
+    assert "permission-mode-option" in html
+    # The vite entry (frontend/index.html) is the file that actually gets
+    # served; shell-body.html must stay in sync with it. The legacy sandbox
+    # badge must be gone from both.
+    assert "Agent 的操作应如何获得审批？" in index_html
+    assert "permission-mode-option" in index_html
+    assert "permission-sandbox-status" not in html
+    assert "permission-sandbox-status" not in index_html
+    assert "PERMISSION_MODE_ICONS" in permissions
+    assert "permission-mode-ico" in permissions
+
+    # The three permission tiers are color-coded green / blue / amber, both in
+    # the dropdown options and on the trigger for the active mode.
+    assert 'data-permission-mode="ask_for_approval"] .permission-mode-label' in css
+    assert 'data-permission-mode="approve_for_me"] .permission-mode-label' in css
+    assert 'data-permission-mode="full_access"] .permission-mode-label' in css
+    assert "trigger.setAttribute('data-mode'" in permissions
+
+    # Auto-review emits structured status events and the frontend renders an
+    # in-progress -> approved/denied status row anchored to the tool row.
+    assert "renderAutoReviewStatusEvent" in interactions
+    event_dispatch = (ROOT / "frontend/src/app/modules/event-dispatch.js").read_text(
+        encoding="utf-8"
+    )
+    assert "event.type === 'auto_review_status'" in event_dispatch
+    agent_loop = (ROOT / "app/agent_loop.py").read_text(encoding="utf-8")
+    assert '"type": "auto_review_status"' in agent_loop
+    assert '"status": "in_progress"' in agent_loop
+
+    # Full-access warning uses the unified UI modal, not window.confirm.
+    assert "openUiModal({" in permissions
+    assert "window.confirm(" not in permissions
+    assert "showUiAlert({" in permissions
+    assert "window.alert(" not in permissions
+
+    # The permission selector docks on the left edge of the input panel,
+    # mirroring the model selector on the right edge.
+    bar = css.split(".composer-permission-bar {", 1)[1].split("}", 1)[0]
+    assert "left: var(--panel-edge-dock-left);" in bar
+    assert "top: 50%;" in bar
+    assert "transform: translateY(-50%);" in bar
+    panel = css.split(".panel {", 1)[1].split("}", 1)[0]
+    assert "padding: 0.6rem 0.5rem 0.6rem 0;" in panel
+
+    # Permission dropdown options use the same frame as the model selector
+    # (mauve border + tint on hover/active).
+    option_frame = css.split(".permission-mode-option:hover,", 1)[1].split("}", 1)[0]
+    assert "rgba(203, 166, 247, 0.14)" in option_frame
+    assert "border-color: rgba(203, 166, 247, 0.24);" in option_frame
+
+    # Approval dialogs use an opaque dialog surface, not the glass layer.
+    modal = css.split(".ui-modal {", 1)[1].split("}", 1)[0]
+    assert "background: #26263a;" in modal
+
+    # Approval cards in the feed are opaque too (the component the user
+    # actually sees when approving a tool call).
+    approval_card = css.split(".human-interaction-card {", 1)[1].split("}", 1)[0]
+    assert "background: #26263a;" in approval_card
+    light_card = css.split(":root.theme-light .human-interaction-card {", 1)[1].split("}", 1)[0]
+    assert "background: #ffffff;" in light_card
 
 
 def test_frontend_feature_entrypoints_are_flag_guarded():
@@ -462,7 +566,7 @@ def test_frontend_running_session_switch_restores_local_stream_without_snapshot_
     assert "stream.dataset.partialBackgroundRun !== '1'" in scroll
     assert "certifyLocalRun: true" in scroll
     assert "(st.dataset.sessionLoadOk !== '1' && !completeLocalRun)" in scroll
-    fast_restore = sessions.split("if (!opts.forceReload && (restoreStreamForRunningSession", 1)[1]
+    fast_restore = sessions.split("if (!opts.forceReload && (", 1)[1]
     fast_restore = fast_restore.split("const vs = getVisibleChatStream();", 1)[0]
     assert "hideLoading();" in fast_restore
     assert "loadSessionMessages(" not in fast_restore
@@ -518,7 +622,7 @@ def test_tool_pending_switches_generated_draft_to_executing():
     rendering = (ROOT / "frontend/src/app/modules/message-rendering.js").read_text(encoding="utf-8")
 
     assert "await _emit_tool_pending_sse(" in agent_loop
-    assert 'if emit and tool_name != "context_manage":' in agent_loop
+    assert 'if emit and tool_name not in ("context_manage", "ask_user"):' in agent_loop
     assert "if (parsed.type === 'tool_pending')" in sse
     assert "appendToolPendingRow(runCtx, parsed, runSessionId);" in sse
     assert "row.getAttribute('data-tool-pending') === '1'" in rendering

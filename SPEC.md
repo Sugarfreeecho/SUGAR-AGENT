@@ -27,7 +27,9 @@ General Agent 是一个本地运行的 AI Agent 开发与使用平台。系统�
 
 ### 2.1 生产运行
 
-- 入口脚本：`RUN.bat`
+- Windows 入口脚本：`RUN.bat`
+- Ubuntu/macOS 入口脚本：`RUN.sh`
+- Unix 运维接口：`scripts/agentctl start|stop|restart|status|logs|update|tray`
 - Python 入口：`app/main.py`
 - 默认服务地址：`http://127.0.0.1:8192/`
 - 后端应用对象：`app/webui.py` 中的 `fastapi_app`
@@ -35,15 +37,32 @@ General Agent 是一个本地运行的 AI Agent 开发与使用平台。系统�
 
 启动流程：
 
-1. `RUN.bat` 设置 UTF-8 输出和内置 Python 路径。
-2. `RUN.bat` 启动 `app/tray_launcher.py`。
-3. 后端最终通过 `app/main.py` 启动 FastAPI/uvicorn。
-4. `app/main.py` 调用 `refresh_executor_client_from_env()` 刷新 LLM 配置。
-5. 服务监听后自动打开浏览器，除非 `OPEN_BROWSER=0/false/no/off`。
+1. Windows 由 `RUN.bat` 设置 UTF-8 输出和内置 Python 路径，并启动 `app/tray_launcher.py`。
+2. Ubuntu/macOS 由 `RUN.sh` 检查 `.venv`，首次运行调用 `scripts/install_unix.sh`。
+3. Ubuntu 后端由用户级 systemd 服务监管；macOS 后端由用户级 LaunchAgent 监管。
+4. 后端最终通过 `app/main.py` 启动 FastAPI/uvicorn。
+5. `app/main.py` 调用 `refresh_executor_client_from_env()` 刷新 LLM 配置。
+6. 服务监听后自动打开浏览器，除非 `OPEN_BROWSER=0/false/no/off`。
 
-托盘右键菜单提供“重启 Agent”和“更新 Agent”：重启操作在后台停止并重新拉起后端；更新操作由独立进程执行 `git pull --ff-only`，仅在 `app/requirements.txt` 变化时同步 Python 依赖，完成后自动重启。更新不得强制覆盖本地修改；失败时必须恢复启动并记录到 `logs/agent_update.log`。
+Windows、Ubuntu 和 macOS 的托盘/菜单栏均提供 WebUI、设置、MCP、日志、重启、更新和退出入口。重启与更新操作默认隐藏，由 `MYAGENT_TRAY_SHOW_UPDATE_RESTART` 启用。更新操作由独立进程执行 `git pull --ff-only`，仅在 `app/requirements.txt` 变化时同步 Python 依赖，完成后通过对应生命周期后端恢复服务。更新不得强制覆盖本地修改；失败时必须恢复启动并记录到 `logs/agent_update.log`。
 
-### 2.2 前端开发运行
+WebUI 必须继续只监听 `127.0.0.1:8192`。Ubuntu Server 的远程访问通过 SSH 本地端口转发完成，不得因平台适配默认开放局域网或公网监听。
+
+### 2.2 工具安全运行形态
+
+- 新会话默认 `ask_for_approval = (app_restricted, on_request, user)`。
+- `approve_for_me = (app_restricted, on_request, auto_review)`，只替换审批者，不改变文件、网络或进程边界。
+- `full_access = (no_restriction, never, none)`，不执行应用层审批。
+- `app_restricted` 使用当前操作系统用户运行，依靠中央策略、工作区路径限制、敏感环境过滤和危险操作检查；UI 必须明确标为“应用层受限”，不得称为硬沙箱。
+- 工作区内普通读取、写入和 Shell 自动允许；工作区外访问、网络、删除及未知副作用请求审批；凭据导出和安全策略篡改默认拒绝。
+- 原生 OS 沙箱是未来可选高级功能，不是正常运行、写文件或执行工作区 Shell 的前置条件。
+- MCP 与 Plugin 按声明的 `read/workspace_write/external_write`、网络、Shell 和未知副作用能力执行 `allow/ask/deny`，不得因其类型一律拒绝。
+- `run_shell` 的旧范围参数只保留调用兼容，不能由模型用于开启或关闭权限；新 schema 和提示不得暴露该参数。
+- 策略、会话权限档位、审批摘要、授权消费状态和审计记录必须保存在工作区外。
+- 完全访问无需设置页预先启用，用户在当前会话切换时必须看到强警告。
+- 不得提供容器沙箱实现、依赖、探测、配置或备用路径。
+
+### 2.3 前端开发运行
 
 后端开发服务：
 
@@ -65,7 +84,7 @@ Vite 开发服务器默认端口为 `5173`，并代理：
 - `/sessions` -> `http://127.0.0.1:8000`
 - `/api` -> `http://127.0.0.1:8000`
 
-### 2.3 前端构建
+### 2.4 前端构建
 
 ```bash
 cd frontend
@@ -486,7 +505,8 @@ SSE 是后端向前端展示 Agent 过程的主通道。事件至少应覆盖以
 
 - 默认文件操作必须限制在 `WORK_DIR`。
 - 删除文件应采用软删除或受控删除策略。
-- 敏感资源，如 `.env`、密钥文件、配置二进制等，不应被工具结果直接泄露。
+- 凭据文件（`.env`、密钥文件等）读取一律要求审批，且每次都要确认（不支持“始终允许/本会话允许”）；写入/修改仍拒绝，凭据导出（上传、复制到外部、网络发送）无条件拒绝。
+- MyAgent 自身敏感资源（`app/.env`、`config.bin`、`secret_loader`、安全策略与授权库）不允许被工具读取或写入，工具结果不得泄露。
 - 路径解析必须处理 Windows/Posix 差异、引号、重定向和 shell token。
 
 ### 12.2 Shell
@@ -585,7 +605,7 @@ SSE 是后端向前端展示 Agent 过程的主通道。事件至少应覆盖以
 
 ### 18.1 启动验收
 
-- 运行 `RUN.bat` 后服务可访问 `http://127.0.0.1:8192/`。
+- Windows 运行 `RUN.bat`、Ubuntu/macOS 运行 `RUN.sh` 后，服务可访问 `http://127.0.0.1:8192/`。
 - 缺少前端构建产物时显示明确构建提示。
 - 已配置 `.env` 时不应误跳首次配置页。
 - 修改 LLM 配置后重启或刷新配置可生效。

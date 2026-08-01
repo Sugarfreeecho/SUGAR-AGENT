@@ -27,6 +27,7 @@ import tocTodoSource from './modules/toc-todo.js?raw';
 import messageRenderingSource from './modules/message-rendering.js?raw';
 import subagentSource from './modules/subagent.js?raw';
 import humanInteractionsSource from './modules/human-interactions.js?raw';
+import permissionsSource from './modules/permissions.js?raw';
 import eventDispatchSource from './modules/event-dispatch.js?raw';
 import sessionManagementSource from './modules/session-management.js?raw';
 import sseHandlingSource from './modules/sse-handling.js?raw';
@@ -86,6 +87,7 @@ const uiSources = [
     messageRenderingSource,
     subagentSource,
     humanInteractionsSource,
+    permissionsSource,
     eventDispatchSource,
     sessionManagementSource,
     sseHandlingSource,

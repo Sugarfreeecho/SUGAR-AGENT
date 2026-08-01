@@ -59,6 +59,7 @@ function applySessionPatch(patch) {
 function setCurrentSessionState(sessionId) {
     currentSessionId = sessionId || null;
     sessionStore.setCurrentSession(currentSessionId);
+    if (typeof refreshPermissionModeSelector === 'function') refreshPermissionModeSelector(currentSessionId);
 }
 
 function setSessionRunState(sessionId, run) {

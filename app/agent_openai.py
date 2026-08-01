@@ -906,20 +906,27 @@ def _strip_media_from_api_messages(api_messages: List[Dict[str, Any]]) -> List[D
     return cleaned
 
 
-def _append_multimodal_fallback_instruction(
+def _inject_multimodal_fallback_instruction(
     api_messages: List[Dict[str, Any]],
 ) -> List[Dict[str, Any]]:
-    out = list(api_messages)
-    out.append(
-        {
-            "role": "system",
-            "content": (
-                "[多模态回退提示] 当前模型不支持直接识别该多媒体内容。"
-                "可使用 task 工具选择支持多模态输入的模型，调用 subagent 识别多媒体内容；"
-                "若该能力不可用，请明确告知用户。"
-            ),
-        }
+    """Inject fallback guidance without creating a trailing system turn."""
+    instruction = (
+        "[多模态回退提示] 当前模型不支持直接识别该多媒体内容。"
+        "可使用 task 工具选择支持多模态输入的模型，调用 subagent 识别多媒体内容；"
+        "若该能力不可用，请明确告知用户。"
     )
+    out = [dict(message) for message in api_messages]
+    for index, message in enumerate(out):
+        if str(message.get("role") or "").strip().lower() != "system":
+            continue
+        current = str(message.get("content") or "").rstrip()
+        if instruction not in current:
+            out[index] = {
+                **message,
+                "content": f"{current}\n\n{instruction}".strip(),
+            }
+        return out
+    out.insert(0, {"role": "system", "content": instruction})
     return out
 
 
@@ -929,7 +936,7 @@ def _serialized_messages_to_text_only(
     """Strip serialized media while preserving adjacent local-path text."""
     if not _api_messages_have_media(api_messages):
         return api_messages
-    return _append_multimodal_fallback_instruction(
+    return _inject_multimodal_fallback_instruction(
         _strip_media_from_api_messages(api_messages)
     )
 
@@ -1003,7 +1010,7 @@ def _messages_to_text_only_params(messages: List[Any]) -> List[Dict[str, Any]]:
     fallback_messages = _strip_media_from_api_messages(
         messages_to_openai_params(messages, expand_media_paths=False)
     )
-    return _append_multimodal_fallback_instruction(fallback_messages)
+    return _inject_multimodal_fallback_instruction(fallback_messages)
 
 
 def _messages_have_media_input(messages: List[Any]) -> bool:

@@ -8,17 +8,18 @@
 
 from __future__ import annotations
 
-import re
 import subprocess
 import sys
 from pathlib import Path
-from typing import List, Optional
+from typing import List
+
+from packaging.requirements import InvalidRequirement, Requirement
 
 ROOT = Path(__file__).resolve().parent
 REQUIREMENTS_FILE = ROOT / "requirements.txt"
 
 
-def _line_to_distribution_name(line: str) -> Optional[str]:
+def _line_to_requirement(line: str) -> Requirement | None:
     s = line.strip()
     if not s or s.startswith("#"):
         return None
@@ -26,11 +27,13 @@ def _line_to_distribution_name(line: str) -> Optional[str]:
         s = s.split("#", 1)[0].strip()
     if not s:
         return None
-    # 例如 openai>=1.0、markitdown[pptx]、ddgs>=9.0
-    m = re.match(r"^([A-Za-z0-9._-]+)", s)
-    if not m:
+    try:
+        requirement = Requirement(s)
+    except InvalidRequirement:
         return None
-    return m.group(1).strip() or None
+    if requirement.marker is not None and not requirement.marker.evaluate():
+        return None
+    return requirement
 
 
 def load_required_distributions() -> List[str]:
@@ -39,9 +42,9 @@ def load_required_distributions() -> List[str]:
         return []
     out: List[str] = []
     for line in REQUIREMENTS_FILE.read_text(encoding="utf-8").splitlines():
-        name = _line_to_distribution_name(line)
-        if name and name not in out:
-            out.append(name)
+        requirement = _line_to_requirement(line)
+        if requirement is not None and requirement.name not in out:
+            out.append(requirement.name)
     return out
 
 

@@ -328,3 +328,20 @@ def test_agent_loop_wires_hooks_before_safety_approval_and_across_lifecycles():
         "RunFailed",
     ):
         assert f'"{event}"' in source
+
+
+def test_auto_review_override_window_keeps_always_allow_choice():
+    """The manual override card must expose the same "always allow this kind"
+    button as a normal approval whenever a durable rule can be generated.
+    The reviewer rejection gates *this* request; it does not remove the
+    user's choice to persist a rule for that kind of operation."""
+    source = (ROOT / "app/agent_loop.py").read_text(encoding="utf-8")
+    override = source.split('"auto_review_override": True', 1)[0].split(
+        "override_spec = dict(spec)", 1
+    )[1]
+    assert '"allow_always_available": bool(' in override
+    assert '"rule_action": str(' in override
+    assert '"rule_pattern": str(' in override
+    assert '"force_approval": bool(' in override
+    assert '"approval_level": str(' in override
+    assert '"allow_always_available": False' not in override

@@ -462,6 +462,7 @@ def test_run_shell_schema_uses_codex_style_parameters_and_hides_legacy_aliases()
     )["parameters"]
     props = schema["properties"]
 
-    assert {"command", "workdir", "timeout_ms", "login", "restrict_to_workspace"} <= set(props)
+    assert {"command", "workdir", "timeout_ms", "login"} <= set(props)
+    assert "restrict_to_workspace" not in props
     assert {"args", "working_dir", "timeout"}.isdisjoint(props)
     assert props["login"]["default"] is True

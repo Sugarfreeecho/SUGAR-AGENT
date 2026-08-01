@@ -143,6 +143,61 @@ def test_approval_is_durable_and_terminal_transition_is_idempotent(tmp_path):
     assert service.pending_counts("session-1")["total"] == 0
 
 
+def test_dangerous_approval_rejects_session_and_always_grants(tmp_path):
+    service = _service(tmp_path)
+    created = service.create_approval(
+        "session-1",
+        approval_id="danger-1",
+        metadata={
+            "tool": "run_shell",
+            "title": "危险命令，需要确认",
+            "force_approval": True,
+            "approval_level": "danger",
+        },
+    )
+    assert created["force_approval"] is True
+
+    with pytest.raises(HumanInteractionValidationError, match="allow_once or deny"):
+        service.resolve_approval("session-1", "danger-1", "allow_session")
+    with pytest.raises(HumanInteractionValidationError, match="allow_once or deny"):
+        service.resolve_approval("session-1", "danger-1", "allow_always")
+    resolved = service.resolve_approval("session-1", "danger-1", "allow_once")
+    assert resolved["decision"] == "allow_once"
+
+
+def test_non_dangerous_approval_still_supports_session_grant(tmp_path):
+    service = _service(tmp_path)
+    service.create_approval(
+        "session-1",
+        approval_id="normal-1",
+        metadata={"tool": "write_file", "force_approval": False},
+    )
+    resolved = service.resolve_approval("session-1", "normal-1", "allow_session")
+    assert resolved["decision"] == "allow_session"
+
+
+def test_resolved_approval_keeps_rule_metadata_for_rule_creation(tmp_path):
+    """allow_always resolves through the same record that carries
+    rule_action/rule_pattern so webui can persist the durable rule,
+    including for auto-review override cards."""
+    service = _service(tmp_path)
+    service.create_approval(
+        "session-1",
+        approval_id="rule-1",
+        metadata={
+            "tool": "run_shell",
+            "force_approval": False,
+            "allow_always_available": True,
+            "rule_action": "process.exec",
+            "rule_pattern": "git push:*",
+        },
+    )
+    resolved = service.resolve_approval("session-1", "rule-1", "allow_always")
+    assert resolved["decision"] == "allow_always"
+    assert resolved["rule_action"] == "process.exec"
+    assert resolved["rule_pattern"] == "git push:*"
+
+
 def test_frontend_human_interaction_contract_is_wired():
     from pathlib import Path
 
@@ -154,17 +209,75 @@ def test_frontend_human_interaction_contract_is_wired():
     assert "refreshHumanInteractions" in module
     assert "sessionStorage" in module
     assert "selected_option_ids" in module
+    assert "syncHumanInteractionSessionSummary(sid);" in module
     assert 'id="human-interaction-banner"' in shell
     assert "renderHumanInteractionEvent" in dispatch
     assert "function humanInteractionToolSlot" in module
     assert "attachHumanInteractionCardsForToolCall" in module
     assert "attachHumanInteractionCardsForToolCall" in rendering
+    assert "attachAllHumanInteractionCards" in module
+    # Tool rows fold as a whole (command + approval card). They default to a
+    # compact preview; a row with a pending approval renders expanded, clicking
+    # the command text toggles the same row fold, and the banner focus expands
+    # both a collapsed row and the outer process block.
+    assert "feed-row-collapse" in rendering
+    assert "row.classList.toggle('is-collapsed')" in rendering
+    assert "collapsedRow.classList.remove('is-collapsed')" in module
+    assert "row.classList.add('is-collapsed')" in rendering
+    assert "row.dataset.manualToggle = '1'" in rendering
+    assert "function handleToolRowChunkClick" in rendering
+    assert "row.classList.contains('feed--tool')" in rendering
+    assert "collapsedAgg.classList.remove('is-collapsed')" in module
+    assert "function toolCallHasPendingApproval" in module
+    assert "function autoExpandToolRow" in module
+    assert "function collapseAutoExpandedToolRow" in module
+    assert "autoExpandToolRow(slot.closest('.feed-item'))" in module
+    assert "collapseAutoExpandedToolRow(stream, toolCallId)" in module
+    # History replay must route tool_call events through the same upsert path
+    # as live SSE so the tool row carries data-tool-call-id and approval cards
+    # can be re-anchored after a page refresh.
+    assert "upsertToolCallResult(ctx, event, runSessionId)" in dispatch
+    assert "appendLog(ctx, event.raw_content, 'tool-call'" not in dispatch
+    upsert_fn = rendering.split("function upsertToolCallResult", 1)[1].split(
+        "function trimSurroundingBlankLines", 1
+    )[0]
+    assert "createProcessFeedRow(ctx, 'tool-call', text, so, runSessionId, tid)" in upsert_fn
+    assert "attachHumanInteractionCardsForToolCall(ctx && ctx.stream, tid)" in upsert_fn
+    css = (root / "frontend/src/styles/app.css").read_text(encoding="utf-8")
+    slot_card = css.split(".human-interaction-tool-slot .human-interaction-card {", 1)[1].split("}", 1)[0]
+    assert "width: min(720px, calc(100% - 1rem));" in slot_card
+    assert "margin: 0.65rem auto;" in slot_card
+    assert "width: 100%; margin: 0.65rem 0 0;" not in slot_card
+    assert ".feed-row-collapse {" in css
+    assert ".feed-item.is-collapsed .human-interaction-tool-slot { display: none; }" in css
+    assert ".feed-item.is-collapsed .feed-chunk {" in css
+    tool_scroller = css.split(".feed-item.feed--tool .feed-chunk-scroller {", 1)[1].split("}", 1)[0]
+    assert "max-height: none;" in tool_scroller
+    assert "overflow: visible;" in tool_scroller
+    assert ".feed-item.feed--tool .feed-chunk { cursor: default; }" not in css
     badge_update = module.split("function updateHumanInteractionSessionBadge", 1)[1].split(
         "function updateAllHumanInteractionSessionBadges", 1
     )[0]
     assert "if (count <= 0)" in badge_update
     assert "if (badge) badge.remove();" in badge_update
-    assert "badge.textContent = String(count)" in badge_update
+    assert "badge.textContent = hasQuestions ? '?' : '!';" in badge_update
+    assert "badge.textContent = String(count)" not in badge_update
+
+
+def test_tool_pending_is_emitted_before_approval_dialog():
+    """The tool row must exist before the approval card renders so the card
+    anchors inside the row instead of jumping from the bottom of the stream."""
+
+    root = Path(__file__).resolve().parents[1]
+    source = (root / "app/agent_loop.py").read_text(encoding="utf-8")
+    core = source.split("async def _execute_one_core", 1)[1]
+    pending_call = core.index("await _emit_tool_pending_sse(")
+    approval_wait = core.index("wait_tool_ui_approval_after_emit(")
+    assert pending_call < approval_wait
+    pre_approval = core[: core.index("if sec_decision.outcome == DecisionOutcome.ASK or hook_approval_spec:")]
+    assert 'tool_name not in ("context_manage", "ask_user")' in pre_approval
+    # The old post-approval emit was removed in favor of the pre-approval row.
+    assert "Arguments are closed and any required approval has completed" not in source
 
 
 def test_stale_approval_is_not_resolved_without_a_live_waiter(tmp_path):

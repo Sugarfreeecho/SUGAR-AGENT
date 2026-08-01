@@ -184,7 +184,7 @@ SugarAgent 的 `ask_user` 不需要 OpenClaw 的 allowlist；但它和审批都�
 - Runtime V2 append-only event、snapshot、projector、UI projection 和 stream publisher。
 - `app/runtime_v2/permission_manager.py` 中最小的 allow/deny/ask 规则表。
 
-现有工具审批覆盖显式 `restrict_to_workspace=false` 的 `run_shell`、`web_download`、Hook `ask` 以及部分 MCP approval spec。
+工具审批由中央能力策略触发，覆盖工作区外 Shell、网络、删除、未知副作用、Hook `ask` 以及需要确认的 MCP/Plugin 能力。
 
 ### 5.2 关键缺口
 
@@ -569,7 +569,7 @@ MVP 只支持 Markdown/plain-text preview，复用现有 Markdown 渲染并禁�
 
 ### 13.4 Approval
 
-- `run_shell restrict_to_workspace=false` 和 `web_download` 原行为不回退。
+- 旧版 `run_shell` 范围参数只做 API 兼容，不再构成模型可控制的权限开关；`web_download` 继续由网络策略审批。
 - allow、deny、timeout、无 UI fallback。
 - Hook/MCP ask 走统一 service。
 - 第二期覆盖 allow-always、规则命中、规则撤销和跨 Agent 隔离。

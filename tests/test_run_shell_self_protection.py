@@ -25,7 +25,12 @@ def test_agent_process_targets_and_broad_python_kills_are_blocked(monkeypatch):
         "ForEach-Object { Stop-Process -Id $_.OwningProcess -Force }",
         "python -c \"import os; os.kill(os.getppid(), 9)\"",
         "cmd /c RUN.bat",
+        "bash RUN.sh",
+        "scripts/agentctl restart",
+        "systemctl --user restart sugaragent.service",
+        "launchctl kickstart -k gui/501/com.sugaragent.server",
         "python app/tray_launcher.py --daemon",
+        "python app/platform_tray.py",
         "Remove-Item app/main.py -Force",
         "del RUN.bat",
     ]

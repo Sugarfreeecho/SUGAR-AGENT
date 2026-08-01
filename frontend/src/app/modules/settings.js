@@ -178,6 +178,7 @@ function openSettingsModal() {
     if (!root || !panel) return;
     syncSettingsModalForm();
     void refreshAgentTeamFeature();
+    if (typeof refreshSecurityRules === 'function') void refreshSecurityRules();
     root.classList.add('is-open');
     root.setAttribute('aria-hidden', 'false');
     document.body.style.overflow = 'hidden';

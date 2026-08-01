@@ -469,6 +469,8 @@ class PluginRuntimeRegistry:
                         contract = {
                             "declared": bool(effect),
                             "effect": effect,
+                            "permissions": dict(plugin.permissions),
+                            "network": bool(plugin.permissions.get("network")),
                             "resource_arguments": [
                                 str(item)
                                 for item in resource_arguments

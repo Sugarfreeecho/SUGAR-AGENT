@@ -232,15 +232,37 @@ class CommandHookExecutor:
                 )
             else:
                 kwargs["start_new_session"] = True
-            process = await asyncio.create_subprocess_shell(
-                command,
-                cwd=str(cwd),
-                env=env,
-                stdin=asyncio.subprocess.PIPE,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                **kwargs,
-            )
+            if os.name == "nt":
+                shell_argv = [
+                    os.environ.get("COMSPEC", "cmd.exe"),
+                    "/d",
+                    "/s",
+                    "/c",
+                    command,
+                ]
+            else:
+                shell_argv = ["/bin/sh", "-c", command]
+            if os.name == "nt":
+                process = await asyncio.create_subprocess_shell(
+                    command,
+                    executable=os.environ.get("COMSPEC", "cmd.exe"),
+                    cwd=str(cwd),
+                    env=env,
+                    stdin=asyncio.subprocess.PIPE,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                    **kwargs,
+                )
+            else:
+                process = await asyncio.create_subprocess_exec(
+                    *shell_argv,
+                    cwd=str(cwd),
+                    env=env,
+                    stdin=asyncio.subprocess.PIPE,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                    **kwargs,
+                )
             try:
                 stdout, stderr = await asyncio.wait_for(
                     process.communicate(stdin_data),

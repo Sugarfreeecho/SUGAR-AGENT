@@ -160,6 +160,13 @@ def test_fallback_client_marks_media_failure_and_retries_same_profile_as_text():
     assert candidates[0]["multimodal_input"] is False
     assert len(marked) == 1
     assert isinstance(calls[0]["messages"][0]["content"], list)
-    assert 'D:\\screen.png' in calls[1]["messages"][0]["content"]
-    assert "task 工具" in calls[1]["messages"][-1]["content"]
+    retry_user = next(
+        message for message in calls[1]["messages"] if message["role"] == "user"
+    )
+    retry_system = next(
+        message for message in calls[1]["messages"] if message["role"] == "system"
+    )
+    assert 'D:\\screen.png' in retry_user["content"]
+    assert "task 工具" in retry_system["content"]
+    assert calls[1]["messages"][-1]["role"] == "user"
     assert statuses[0]["multimodal_fallback"] is True

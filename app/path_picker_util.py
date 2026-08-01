@@ -494,12 +494,14 @@ def _backends() -> list[tuple[str, Callable[[PathPickKind, str], Optional[str]]]
         order.append(("windows-ifiledialog", _pick_windows_ifiledialog))
         order.append(("tkinter", _pick_tkinter))
         order.append(("windows-powershell", lambda kind, initial: _pick_windows_powershell(kind, initial, False)))  # type: ignore[arg-type]
-    else:
+    elif sysname == "Darwin":
+        order.append(("macos-osascript", _pick_macos))
         order.append(("tkinter", _pick_tkinter))
-        if sysname == "Darwin":
-            order.append(("macos-osascript", _pick_macos))
-        else:
-            order.append(("zenity", _pick_zenity))
+    else:
+        if not (os.getenv("DISPLAY") or os.getenv("WAYLAND_DISPLAY")):
+            return []
+        order.append(("zenity", _pick_zenity))
+        order.append(("tkinter", _pick_tkinter))
     return order
 
 
@@ -511,6 +513,13 @@ def pick_native_path(
         raise ValueError("kind 须为 file 或 directory")
     if multiple and kind != "file":
         raise ValueError("multiple=true 仅支持 kind=file")
+    if platform.system() == "Linux" and not (
+        os.getenv("DISPLAY") or os.getenv("WAYLAND_DISPLAY")
+    ):
+        raise RuntimeError(
+            "Native file picker is unavailable in headless Linux mode. "
+            "Enter a path manually or connect through a desktop session."
+        )
     if multiple:
         failures: list[str] = []
         try:
@@ -543,11 +552,13 @@ def pick_native_path(
                 return None
             failures.append(f"{name}: {e}")
 
-    hint = (
-        "无法打开本机文件选择对话框。"
-        " Windows：请从桌面正常启动 General Agent；或重装 Python 时勾选 tcl/tk。"
-        f" 详情：{' | '.join(failures)}"
-    )
+    if platform.system() == "Linux":
+        platform_hint = " Linux：请安装 zenity 并从图形桌面会话启动 SugarAgent。"
+    elif platform.system() == "Darwin":
+        platform_hint = " macOS：请允许 Terminal/Python 使用系统自动化与文件选择功能。"
+    else:
+        platform_hint = " Windows：请从桌面正常启动 SugarAgent；或重装 Python 时勾选 tcl/tk。"
+    hint = "无法打开本机文件选择对话框。" + platform_hint + f" 详情：{' | '.join(failures)}"
     raise RuntimeError(hint)
 
 
@@ -557,4 +568,3 @@ def tkinter_available() -> bool:
         return True
     except ImportError:
         return False
-

@@ -273,6 +273,7 @@ def _tool_contract_from_config(cfg: dict, tool_name: str) -> Dict[str, Any]:
     return {
         "declared": bool(raw or cfg.get("default_tool_effect")),
         "effect": effect,
+        "network": _resolve_transport(cfg) in {"sse", "streamable-http"},
         "resource_arguments": [
             str(item) for item in resource_arguments if str(item).strip()
         ],

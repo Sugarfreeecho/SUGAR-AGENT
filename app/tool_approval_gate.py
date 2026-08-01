@@ -1,5 +1,5 @@
 """
-Web UI 对工作区放宽类工具的前端确认闸门（run_shell restrict_to_workspace=False、web_download）。
+Web UI 对中央策略判定为需要审批的工具请求提供兼容等待闸门。
 
 /chat SSE 在服务侧 await 此处，直到浏览器 POST /sessions/{id}/tool-approval，
 或会话 interrupt、超时。
@@ -20,7 +20,7 @@ _PENDING: Dict[Tuple[str, str], asyncio.Future] = {}
 _PENDING_META: Dict[Tuple[str, str], Dict[str, Any]] = {}
 _PENDING_LOCK = threading.RLock()
 
-_WAIT_SEC = float(os.getenv("TOOL_UI_APPROVAL_WAIT_SEC", "3600"))
+_WAIT_SEC = float(os.getenv("TOOL_UI_APPROVAL_WAIT_SEC", "300"))
 
 
 def new_approval_id() -> str:

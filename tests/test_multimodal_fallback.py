@@ -20,6 +20,10 @@ def _client_with_create(create, *, multimodal=True, mark_failed=None):
     )
 
 
+def _message_with_role(messages, role):
+    return next(message for message in messages if message.get("role") == role)
+
+
 def test_media_error_detection_accepts_common_provider_wording():
     import agent_openai
 
@@ -62,10 +66,26 @@ def test_text_only_fallback_preserves_original_local_media_path(tmp_path):
     assert any(part.get("type") == "image_url" for part in expanded[0]["content"])
 
     fallback = agent_openai._messages_to_text_only_params(messages)
-    assert fallback[0] == {"role": "user", "content": prompt}
-    assert fallback[-1]["role"] == "system"
-    assert "task 工具" in fallback[-1]["content"]
-    assert "subagent" in fallback[-1]["content"]
+    assert fallback[-1] == {"role": "user", "content": prompt}
+    assert fallback[0]["role"] == "system"
+    assert "task 工具" in fallback[0]["content"]
+    assert "subagent" in fallback[0]["content"]
+
+
+def test_fallback_instruction_does_not_create_trailing_system_turn():
+    import agent_openai
+
+    original = [
+        {"role": "system", "content": "基础系统提示"},
+        {"role": "user", "content": "分析图片路径"},
+    ]
+
+    fallback = agent_openai._inject_multimodal_fallback_instruction(original)
+
+    assert [message["role"] for message in fallback] == ["system", "user"]
+    assert "基础系统提示" in fallback[0]["content"]
+    assert "task 工具" in fallback[0]["content"]
+    assert fallback[-1] == original[-1]
 
 
 def test_structured_media_without_local_path_uses_placeholder():
@@ -86,10 +106,12 @@ def test_structured_media_without_local_path_uses_placeholder():
 
     fallback = agent_openai._messages_to_text_only_params(messages)
 
-    assert "请分析" in fallback[0]["content"]
-    assert "当前模型不支持" in fallback[0]["content"]
-    assert "data:image/png" not in fallback[0]["content"]
-    assert "task 工具" in fallback[-1]["content"]
+    user_message = _message_with_role(fallback, "user")
+    system_message = _message_with_role(fallback, "system")
+    assert "请分析" in user_message["content"]
+    assert "当前模型不支持" in user_message["content"]
+    assert "data:image/png" not in user_message["content"]
+    assert "task 工具" in system_message["content"]
 
 
 def test_nonstream_media_fallback_has_its_own_retry_and_preserves_path(
@@ -121,8 +143,10 @@ def test_nonstream_media_fallback_has_its_own_retry_and_preserves_path(
     )
 
     assert len(calls) == 2
-    assert calls[1]["messages"][0]["content"] == prompt
-    assert "task 工具" in calls[1]["messages"][-1]["content"]
+    assert _message_with_role(calls[1]["messages"], "user")["content"] == prompt
+    assert "task 工具" in _message_with_role(
+        calls[1]["messages"], "system"
+    )["content"]
 
 
 def test_text_only_profile_skips_media_request_and_keeps_path(tmp_path):
@@ -147,8 +171,10 @@ def test_text_only_profile_skips_media_request_and_keeps_path(tmp_path):
     )
 
     assert len(calls) == 1
-    assert calls[0]["messages"][0]["content"] == prompt
-    assert "task 工具" in calls[0]["messages"][-1]["content"]
+    assert _message_with_role(calls[0]["messages"], "user")["content"] == prompt
+    assert "task 工具" in _message_with_role(
+        calls[0]["messages"], "system"
+    )["content"]
     assert not agent_openai._api_messages_have_media(calls[0]["messages"])
 
 
@@ -243,8 +269,10 @@ def test_stream_media_fallback_handles_lazy_error_without_duplicate_request(
         events.append(queue.get())
 
     assert len(calls) == 2
-    assert calls[1]["messages"][0]["content"] == prompt
-    assert "task 工具" in calls[1]["messages"][-1]["content"]
+    assert _message_with_role(calls[1]["messages"], "user")["content"] == prompt
+    assert "task 工具" in _message_with_role(
+        calls[1]["messages"], "system"
+    )["content"]
     assert any(
         event is not None
         and event[0] == "status"

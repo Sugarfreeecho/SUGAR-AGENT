@@ -74,6 +74,15 @@ function pendingHumanInteractionRecords(sessionId) {
     return rows;
 }
 
+function toolCallHasPendingApproval(sessionId, toolCallId) {
+    var sid = String(sessionId || '');
+    var tid = String(toolCallId || '');
+    if (!sid || !tid) return false;
+    return pendingHumanInteractionRecords(sid).some(function (row) {
+        return row.kind === 'approval' && String(row.tool_call_id || '') === tid;
+    });
+}
+
 function humanInteractionPendingCounts(sessionId) {
     var rows = pendingHumanInteractionRecords(sessionId);
     var questions = rows.filter(function (row) { return row.kind === 'question'; }).length;
@@ -88,12 +97,16 @@ function syncHumanInteractionSessionSummary(sessionId) {
     updateHumanInteractionSessionBadge(sid);
 }
 
-function sessionPendingHumanCount(sessionId) {
+function sessionPendingHumanCounts(sessionId) {
     var sid = String(sessionId || '');
     var state = humanInteractionStoreBySession[sid];
-    if (state && state.loaded) return humanInteractionPendingCounts(sid).total;
+    if (state && state.loaded) return humanInteractionPendingCounts(sid);
     var session = typeof sessionStore !== 'undefined' ? sessionStore.get(sid) : null;
-    return Math.max(0, Number(session && session.pending_human_interactions && session.pending_human_interactions.total) || 0);
+    var pending = session && session.pending_human_interactions;
+    var questions = Math.max(0, Number(pending && pending.questions) || 0);
+    var approvals = Math.max(0, Number(pending && pending.approvals) || 0);
+    var total = Math.max(questions + approvals, Number(pending && pending.total) || 0);
+    return { questions: questions, approvals: approvals, total: total };
 }
 
 function updateHumanInteractionSessionBadge(sessionId) {
@@ -104,7 +117,8 @@ function updateHumanInteractionSessionBadge(sessionId) {
     var head = row.querySelector('.session-item-head');
     if (!head) return;
     var badge = head.querySelector('.session-human-badge');
-    var count = sessionPendingHumanCount(sid);
+    var counts = sessionPendingHumanCounts(sid);
+    var count = counts.total;
     if (count <= 0) {
         if (badge) badge.remove();
         row.classList.remove('has-human-pending');
@@ -118,8 +132,10 @@ function updateHumanInteractionSessionBadge(sessionId) {
         head.insertBefore(badge, more || null);
     }
     if (badge) {
-        badge.textContent = String(count);
-        badge.setAttribute('data-ui-tip', count + ' 个待处理请求');
+        var hasQuestions = counts.questions > 0;
+        badge.textContent = hasQuestions ? '?' : '!';
+        badge.setAttribute('aria-label', hasQuestions ? '有问题待回答' : '有审批待处理');
+        badge.setAttribute('data-ui-tip', hasQuestions ? 'Agent 有问题待回答' : 'Agent 有审批待处理');
         if (typeof bindUiHoverTip === 'function') bindUiHoverTip(badge);
     }
     row.classList.add('has-human-pending');
@@ -153,11 +169,43 @@ function updateHumanInteractionBanner(sessionId) {
 function focusFirstPendingHumanInteraction() {
     var stream = typeof getVisibleChatStream === 'function' ? getVisibleChatStream() : document.getElementById('chat-stream');
     var card = stream && stream.querySelector('.human-interaction-card[data-status="pending"]');
-    if (card) {
-        card.scrollIntoView({ behavior: 'smooth', block: 'center' });
-        card.classList.add('is-highlighted');
-        setTimeout(function () { card.classList.remove('is-highlighted'); }, 1200);
+    if (!card) return;
+    var needsLayout = false;
+    var collapsedRow = card.closest ? card.closest('.feed-item.is-collapsed') : null;
+    if (collapsedRow) {
+        collapsedRow.classList.remove('is-collapsed');
+        collapsedRow.dataset.manualToggle = '1';
+        collapsedRow.removeAttribute('data-auto-expanded');
+        var rowBtn = collapsedRow.querySelector('.feed-row-collapse');
+        if (rowBtn) {
+            rowBtn.setAttribute('aria-expanded', 'true');
+            rowBtn.setAttribute('aria-label', '收起工具行');
+        }
+        needsLayout = true;
     }
+    var collapsedAgg = card.closest ? card.closest('.process-aggregate.is-collapsed') : null;
+    if (collapsedAgg) {
+        collapsedAgg.classList.remove('is-collapsed');
+        var aggTop = collapsedAgg.querySelector('.process-aggregate-top');
+        if (aggTop) aggTop.setAttribute('aria-expanded', 'true');
+        needsLayout = true;
+    }
+    if (needsLayout && collapsedAgg) {
+        requestAnimationFrame(function () {
+            requestAnimationFrame(function () {
+                if (typeof syncProcessAggregateHeightUi === 'function') syncProcessAggregateHeightUi(collapsedAgg);
+                collapsedAgg.querySelectorAll('.process-aggregate-body .feed-chunk').forEach(function (ch) {
+                    if (typeof refreshFeedChunkOverflow === 'function') refreshFeedChunkOverflow(ch);
+                });
+                if (typeof registerMermaidLazy === 'function') registerMermaidLazy(collapsedAgg);
+            });
+        });
+    }
+    requestAnimationFrame(function () {
+        card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    });
+    card.classList.add('is-highlighted');
+    setTimeout(function () { card.classList.remove('is-highlighted'); }, 1200);
 }
 
 function humanInteractionDraftKey(sessionId, interactionId) {
@@ -186,10 +234,127 @@ function attachHumanInteractionCardsForToolCall(stream, toolCallId) {
     var slot = humanInteractionToolSlot(stream, tid);
     if (!slot) return false;
     var escaped = (window.CSS && CSS.escape) ? CSS.escape(tid) : tid.replace(/"/g, '\\"');
-    Array.from(stream.querySelectorAll('.human-interaction-card[data-tool-call-id="' + escaped + '"]')).forEach(function (card) {
+    var cards = Array.from(stream.querySelectorAll('.human-interaction-card[data-tool-call-id="' + escaped + '"]'));
+    cards.forEach(function (card) {
         if (card.parentNode !== slot) slot.appendChild(card);
     });
+    var hasPendingApproval = cards.some(function (card) {
+        return card.dataset.status === 'pending' && card.dataset.kind === 'approval';
+    });
+    if (hasPendingApproval) autoExpandToolRow(slot.closest('.feed-item'));
     return true;
+}
+
+function autoExpandToolRow(row) {
+    if (!row || row.dataset.manualToggle === '1') return;
+    if (row.classList.contains('is-collapsed')) row.classList.remove('is-collapsed');
+    row.dataset.autoExpanded = '1';
+    var btn = row.querySelector('.feed-row-collapse');
+    if (btn) {
+        btn.setAttribute('aria-expanded', 'true');
+        btn.setAttribute('aria-label', '收起工具行');
+    }
+}
+
+function collapseAutoExpandedToolRow(stream, toolCallId) {
+    var tid = String(toolCallId || '');
+    if (!stream || !tid || typeof CSS === 'undefined' || !CSS.escape) return;
+    var row = null;
+    try {
+        row = stream.querySelector('.feed-item.feed--tool[data-tool-call-id="' + CSS.escape(tid) + '"]');
+    } catch (e) { row = null; }
+    if (!row || row.dataset.manualToggle === '1') return;
+    if (row.dataset.autoExpanded !== '1') return;
+    var stillPending = stream.querySelector(
+        '.human-interaction-card[data-tool-call-id="' + CSS.escape(tid) + '"][data-kind="approval"][data-status="pending"]'
+    );
+    if (stillPending) return;
+    row.classList.add('is-collapsed');
+    row.removeAttribute('data-auto-expanded');
+    var btn = row.querySelector('.feed-row-collapse');
+    if (btn) {
+        btn.setAttribute('aria-expanded', 'false');
+        btn.setAttribute('aria-label', '展开工具行');
+    }
+}
+
+function attachAllHumanInteractionCards(stream) {
+    if (!stream || !stream.querySelectorAll) return;
+    Array.from(stream.querySelectorAll('.human-interaction-card[data-tool-call-id]')).forEach(function (card) {
+        var tid = card.getAttribute('data-tool-call-id') || '';
+        if (!tid) return;
+        var slot = humanInteractionToolSlot(stream, tid);
+        if (slot && card.parentNode !== slot) slot.appendChild(card);
+    });
+}
+
+function autoReviewStatusElement(stream, toolCallId) {
+    var slot = humanInteractionToolSlot(stream, toolCallId);
+    if (!slot) return null;
+    var el = slot.querySelector('.auto-review-status');
+    if (!el) {
+        el = humanElement('div', 'auto-review-status');
+        slot.insertBefore(el, slot.firstChild);
+    }
+    return el;
+}
+
+function renderAutoReviewStatusEvent(ctx, event, runSessionId) {
+    var stream = ctx && ctx.stream
+        ? ctx.stream
+        : (typeof getVisibleChatStream === 'function'
+            ? getVisibleChatStream()
+            : document.getElementById('chat-stream'));
+    var tid = String((event && event.tool_call_id) || '');
+    var status = String((event && event.status) || '');
+    if (!stream || !tid) {
+        var fallback = String((event && event.content) || '');
+        if (fallback && typeof appendLog === 'function') appendLog(ctx, fallback, 'status', runSessionId);
+        return;
+    }
+    var el = autoReviewStatusElement(stream, tid);
+    if (!el) return;
+    el.className = 'auto-review-status';
+    el.setAttribute('data-status', status);
+    if (status === 'in_progress') {
+        el.classList.add('is-in-progress');
+        el.appendChild(humanElement('span', 'auto-review-spin'));
+        el.appendChild(humanElement(
+            'span',
+            'auto-review-text',
+            '自动审查中：审查 Agent 正在核对你的任务意图与请求风险。'
+        ));
+        return;
+    }
+    var approved = status === 'approved';
+    var risk = String((event && event.risk) || 'unknown');
+    var reason = String((event && event.reason) || '');
+    var unknown = risk === 'unknown' || risk === 'timed_out';
+    el.classList.add(approved ? 'is-approved' : (unknown ? 'is-timedout' : 'is-denied'));
+    var text = humanElement('span', 'auto-review-text');
+    var title = humanElement(
+        'span',
+        'auto-review-title',
+        approved
+            ? '自动审批已批准'
+            : (unknown ? '自动审批不可用（按拒绝处理）' : '自动审批已拒绝')
+    );
+    if (!approved && !unknown) {
+        title.appendChild(humanElement('span', 'auto-review-risk', risk));
+    }
+    text.appendChild(title);
+    if (reason) {
+        text.appendChild(document.createTextNode('：'));
+        text.appendChild(humanElement('span', 'auto-review-reason', reason));
+    }
+    if (!approved && !unknown) {
+        text.appendChild(humanElement(
+            'div',
+            'auto-review-hint',
+            '可人工覆盖本次请求（只此一次，不沉淀规则）'
+        ));
+    }
+    el.appendChild(text);
 }
 
 function persistHumanInteractionDraft(card) {
@@ -436,7 +601,9 @@ async function cancelHumanQuestion(card) {
 }
 
 function createHumanApprovalCard(record, sessionId) {
-    var card = humanElement('section', 'human-interaction-card human-approval-card');
+    var danger = record.approval_level === 'danger';
+    var forced = !!record.force_approval;
+    var card = humanElement('section', 'human-interaction-card human-approval-card' + (danger ? ' is-danger' : ''));
     card.dataset.kind = 'approval';
     card.dataset.sessionId = sessionId;
     card.dataset.interactionId = String(record.approval_id || '');
@@ -444,27 +611,40 @@ function createHumanApprovalCard(record, sessionId) {
     var body = humanElement('div', 'human-card-body');
     if (record.subtitle) body.appendChild(humanElement('div', 'human-approval-subtitle', record.subtitle));
     body.appendChild(humanElement('div', 'human-approval-message', record.message || '是否允许 Agent 执行此操作？'));
+    if (danger && record.consequence) {
+        body.appendChild(humanElement('div', 'human-approval-consequence', record.consequence));
+    }
     if (record.tool) {
         var detail = humanElement('div', 'human-approval-detail');
         detail.appendChild(humanElement('span', '', '工具'));
         detail.appendChild(humanElement('code', '', record.tool));
         body.appendChild(detail);
     }
+    if (!forced && record.rule_pattern) {
+        body.appendChild(
+            humanElement(
+                'div',
+                'human-approval-rule-hint',
+                '“始终允许同类操作”将保存为规则：' + record.rule_pattern
+            )
+        );
+    }
     card.appendChild(body);
     var error = humanElement('div', 'human-card-error');
     card.appendChild(error);
     var actions = humanElement('div', 'human-card-actions human-approval-actions');
-    var deny = humanElement('button', 'human-secondary-btn human-deny-btn', '拒绝');
+    var deny = humanElement('button', 'human-secondary-btn human-deny-btn', danger ? '拒绝执行' : '拒绝');
     deny.type = 'button';
     deny.addEventListener('click', function () { void resolveHumanApproval(card, 'deny'); });
     actions.appendChild(deny);
-    if (record.allow_always_available) {
-        var always = humanElement('button', 'human-secondary-btn', '始终允许');
+    if (!forced && record.allow_always_available && record.rule_pattern) {
+        var always = humanElement('button', 'human-secondary-btn', '始终允许同类操作');
         always.type = 'button';
+        if (record.rule_pattern) always.title = '允许同类操作：' + record.rule_pattern;
         always.addEventListener('click', function () { void resolveHumanApproval(card, 'allow_always'); });
         actions.appendChild(always);
     }
-    var allow = humanElement('button', 'human-primary-btn human-allow-btn', '仅本次允许');
+    var allow = humanElement('button', 'human-primary-btn human-allow-btn', forced ? '本次允许' : '仅本次允许');
     allow.type = 'button';
     allow.addEventListener('click', function () { void resolveHumanApproval(card, 'allow_once'); });
     actions.appendChild(allow);
@@ -512,7 +692,13 @@ function createHumanTerminalCard(record, sessionId) {
     } else if (record.status === 'expired') {
         summary.textContent = '该请求已过期。';
     } else if (kind === 'approval') {
-        summary.textContent = record.decision === 'deny' ? '你已拒绝本次操作。' : (record.decision === 'allow_always' ? '你已允许同类操作。' : '你已允许本次操作。');
+        summary.textContent = record.decision === 'deny'
+            ? '你已拒绝本次操作。'
+            : (record.decision === 'allow_always'
+                ? ('你已始终允许同类操作。' + (record.rule_pattern ? '（规则：' + record.rule_pattern + '）' : ''))
+                : (record.decision === 'allow_session'
+                    ? '你已在本会话允许相同操作。'
+                    : '你已允许本次操作。'));
     } else {
         var answers = Array.isArray(record.answers) ? record.answers : [];
         answers.forEach(function (answer) {
@@ -549,6 +735,12 @@ function renderHumanInteractionRecord(record, sessionId, stream) {
         var slot = humanInteractionToolSlot(stream, toolCallId);
         (slot || stream).appendChild(card);
     }
+    if (toolCallId) {
+        attachHumanInteractionCardsForToolCall(stream, toolCallId);
+        if (kind === 'approval' && record.status !== 'pending') {
+            collapseAutoExpandedToolRow(stream, toolCallId);
+        }
+    }
     if (!replayingMessages && record.status === 'pending') {
         requestAnimationFrame(function () { card.scrollIntoView({ behavior: 'smooth', block: 'nearest' }); });
     }
@@ -567,6 +759,7 @@ function renderPendingHumanInteractions(sessionId) {
     if (!sid || sid !== String(currentSessionId || '')) return;
     var stream = typeof getVisibleChatStream === 'function' ? getVisibleChatStream() : document.getElementById('chat-stream');
     pendingHumanInteractionRecords(sid).forEach(function (record) { renderHumanInteractionRecord(record, sid, stream); });
+    if (typeof attachAllHumanInteractionCards === 'function') attachAllHumanInteractionCards(stream);
     updateHumanInteractionBanner(sid);
 }
 

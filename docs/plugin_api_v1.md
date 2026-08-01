@@ -162,7 +162,9 @@ def write_report(path, workspace_root):
   必须取得一次性审批。
 
 `resource_arguments` 用于生成精确审批签名。工作区隔离依赖插件实际使用注入后的参数；
-显式忽略参数并写绝对路径的 Worker 仍需操作系统级沙箱约束。
+`app_restricted` 会把声明外的路径、网络、Shell 和未知副作用送入中央审批，但它不是
+硬沙箱，无法阻止恶意 Worker 谎报能力或忽略参数。因此只应启用可信插件；未来可选的
+原生 OS 沙箱可作为额外纵深防御，而不是插件正常运行的前置条件。
 
 ## Node.js 插件
 

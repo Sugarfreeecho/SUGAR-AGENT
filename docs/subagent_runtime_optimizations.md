@@ -47,7 +47,7 @@
 
 ## 权限与审批
 
-普通 `task` subagent 默认与主 Agent 使用同一套权限路径：内置 UI 安全确认、Hook、MCP 与 Plugin 的审批规则照常生效，但不会仅因它是 subagent 而额外要求父 Agent 放行。也就是说，工作区内 Shell、文件编辑和删除遵循主 Agent 的既有规则；`run_shell(restrict_to_workspace=false)`、`web_download` 以及 Hook/MCP/Plugin 声明为需要确认的操作仍会走同一个用户审批界面。
+普通 `task` subagent 默认与主 Agent 使用同一套权限路径：内置 UI 安全确认、Hook、MCP 与 Plugin 的审批规则照常生效，但不会仅因它是 subagent 而额外要求父 Agent 放行。工作区内普通 Shell、读取与写入自动允许；工作区外访问、网络、删除和未知副作用仍会走同一个中央审批界面。
 
 ## 托管 worktree
 
@@ -107,8 +107,9 @@ worktree 兼容性和根目录参数；运行时注入 worktree 根并拒绝逃�
 `path_arguments`、`workspace_root_argument` 和 `worktree_compatible`。未声明的原生
 Plugin 工具在托管 worktree 中同样 fail closed。
 
-Plugin/外部进程若显式使用绝对路径，cwd 本身无法构成操作系统级沙箱；需要通过 MCP
-契约、一次性审批或进程级沙箱继续约束。
+Plugin/外部进程若显式使用绝对路径，cwd 本身不能构成硬边界。当前
+`app_restricted` 依靠能力契约、路径校验和摘要绑定审批；它只适用于可信扩展。
+原生 OS 沙箱以后可作为可选纵深防御，不得成为正常执行的前置条件。
 
 ## 运行中 steer
 

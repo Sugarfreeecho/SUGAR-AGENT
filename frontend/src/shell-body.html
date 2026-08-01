@@ -141,6 +141,37 @@
                         </button>
                         <div class="composer-model-menu" id="model-profile-menu" role="listbox" aria-label="模型配置"></div>
                     </div>
+                    <div class="composer-permission-bar" id="permission-mode-control">
+                        <button type="button" class="composer-permission-trigger" id="permission-mode-trigger" aria-haspopup="listbox" aria-expanded="false" title="更改权限" data-ui-tip="更改权限">
+                            <svg class="composer-permission-ico" id="permission-mode-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l7 3v5c0 4.5-3 8.3-7 10-4-1.7-7-5.5-7-10V6z"/></svg>
+                            <span class="composer-permission-label" id="permission-mode-current">请求批准</span>
+                            <span class="composer-permission-caret" aria-hidden="true"></span>
+                        </button>
+                        <div class="composer-permission-menu" id="permission-mode-menu" role="listbox" aria-label="权限模式">
+                            <div class="permission-mode-title">Agent 的操作应如何获得审批？</div>
+                            <button type="button" class="permission-mode-option" data-permission-mode="ask_for_approval" role="option">
+                                <svg class="permission-mode-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l7 3v5c0 4.5-3 8.3-7 10-4-1.7-7-5.5-7-10V6z"/></svg>
+                                <span class="permission-mode-body">
+                                    <span class="permission-mode-label">请求批准</span>
+                                    <span class="permission-mode-desc">工作区内自动执行；网络、删文件、出项目等会先问你</span>
+                                </span>
+                            </button>
+                            <button type="button" class="permission-mode-option" data-permission-mode="approve_for_me" role="option">
+                                <svg class="permission-mode-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l7 3v5c0 4.5-3 8.3-7 10-4-1.7-7-5.5-7-10V6z"/><path d="M9.2 11.8l2 2 3.8-4"/></svg>
+                                <span class="permission-mode-body">
+                                    <span class="permission-mode-label">替我审批</span>
+                                    <span class="permission-mode-desc">低风险自动放行，高风险仍转给你确认</span>
+                                </span>
+                            </button>
+                            <button type="button" class="permission-mode-option" data-permission-mode="full_access" role="option">
+                                <svg class="permission-mode-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="10" width="16" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 7.6-1.6"/><circle cx="12" cy="15" r="1" fill="currentColor"/></svg>
+                                <span class="permission-mode-body">
+                                    <span class="permission-mode-label">完全访问权限</span>
+                                    <span class="permission-mode-desc">关闭限制与审批，Agent 拥有你的全部权限</span>
+                                </span>
+                            </button>
+                        </div>
+                    </div>
                 </div>
 
                 <div class="toast-host" aria-label="操作提示">
@@ -250,6 +281,48 @@
                     </div>
                     <div id="settings-agent-team-status" class="settings-feature-status" role="status" aria-live="polite">正在读取状态…</div>
                     <button type="button" id="settings-agent-team-manage" class="settings-advanced-btn" disabled>管理当前会话团队</button>
+                </div>
+                <div class="settings-modal__section">
+                    <div class="settings-modal__label">权限模式</div>
+                    <div id="settings-security-status" class="settings-feature-status" role="status" aria-live="polite">请求批准 / 替我审批 / 完全访问均可直接切换；完全访问切换时会单独警告</div>
+                </div>
+                <div class="settings-modal__section">
+                    <div class="settings-modal__label">权限规则（始终允许 / 必问 / 拒绝）</div>
+                    <div class="settings-theme-row" role="group" aria-label="权限规则操作">
+                        <button type="button" id="settings-security-rules-refresh" class="settings-theme-btn">刷新</button>
+                        <button type="button" id="settings-security-rules-clear-session" class="settings-theme-btn">清除本会话规则</button>
+                    </div>
+                    <div id="settings-security-rules-list" class="settings-security-rules-list">正在读取…</div>
+                    <div class="settings-security-rule-form">
+                        <select id="settings-security-rule-action" aria-label="规则类型">
+                            <option value="process.exec">Shell 命令</option>
+                            <option value="fs.read">读取</option>
+                            <option value="fs.write">写入</option>
+                            <option value="fs.delete">删除</option>
+                            <option value="network.connect">网络</option>
+                            <option value="web.search">联网搜索</option>
+                            <option value="mcp.call">MCP</option>
+                            <option value="plugin.call">插件</option>
+                        </select>
+                        <select id="settings-security-rule-behavior" aria-label="规则行为">
+                            <option value="allow">允许</option>
+                            <option value="ask">必问</option>
+                            <option value="deny">拒绝</option>
+                        </select>
+                        <input id="settings-security-rule-pattern" type="text" maxlength="400" placeholder="如 git push:*  /  D:\proj\**  /  https://api.example.com/*">
+                        <button type="button" id="settings-security-rule-add" class="settings-advanced-btn">添加规则</button>
+                    </div>
+                    <div id="settings-security-rules-status" class="settings-feature-status" role="status" aria-live="polite"></div>
+                </div>
+                <div class="settings-modal__section">
+                    <div class="settings-modal__label">网页抓取预批准域名（web_fetch 免审批）</div>
+                    <div class="settings-feature-status" role="status" aria-live="polite">仅作用于只读的 web_fetch；web_download 与 Shell 联网不受影响。每行一个域名，留空表示仅用内置清单。</div>
+                    <textarea id="settings-security-web-fetch-domains" class="settings-security-domains-editor" spellcheck="false" placeholder="例如：docs.example.com&#10;api.example.org"></textarea>
+                    <div class="settings-theme-row" role="group" aria-label="预批准域名操作">
+                        <button type="button" id="settings-security-web-fetch-save" class="settings-theme-btn">保存</button>
+                        <button type="button" id="settings-security-web-fetch-reload" class="settings-theme-btn">刷新</button>
+                    </div>
+                    <div id="settings-security-web-fetch-status" class="settings-feature-status" role="status" aria-live="polite"></div>
                 </div>
                 <div class="settings-modal__section">
                     <div class="settings-modal__label">运行诊断</div>

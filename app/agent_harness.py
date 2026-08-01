@@ -4694,10 +4694,15 @@ class SessionManager:
             "readonly_strict": bool(readonly_strict),
             "forked_from_parent": bool(forked_from_parent),
         }
+        parent_permission_mode = "ask_for_approval"
         try:
-            parent_prompt_language = (self._load_metadata(parent_id) or {}).get("prompt_language")
+            parent_metadata = self._load_metadata(parent_id) or {}
+            parent_prompt_language = parent_metadata.get("prompt_language")
             if parent_prompt_language:
                 metadata["prompt_language"] = normalize_prompt_language(parent_prompt_language)
+            from security import session_permission_mode
+
+            parent_permission_mode = session_permission_mode(parent_id).value
         except Exception:
             pass
         mpi = (model_profile_id or "").strip()
@@ -4714,6 +4719,12 @@ class SessionManager:
             metadata["best_of_attempt"] = int(best_of_attempt or 0)
         self._register_subagent(child_id, parent_id)
         self._save_metadata(child_id, metadata)
+        try:
+            from security.runtime import security_store
+
+            security_store().set_session_mode(child_id, parent_permission_mode)
+        except Exception:
+            logger.exception("Failed to inherit subagent permission mode")
         if self._runtime_v2_primary():
             try:
                 self._runtime_subagent_store().upsert_task(parent_id, child_id, {
