@@ -13,6 +13,15 @@ if str(APP_DIR) not in sys.path:
     sys.path.insert(0, str(APP_DIR))
 
 
+@pytest.fixture(autouse=True)
+def _trust_extensions_for_runtime_tests(monkeypatch):
+    """These tests exercise runtime contracts, not the application trust UI."""
+    monkeypatch.setattr(
+        "security.extensions.descriptor_is_trusted",
+        lambda _descriptor: True,
+    )
+
+
 def _write_json(path: Path, data: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -78,6 +87,22 @@ def test_native_manifest_v1_accepts_python_runtime(tmp_path):
     assert plugin.compatibility.status == "native"
     assert "runtime" in plugin.compatibility.supported_components
     assert plugin.to_dict()["components"]["runtime"]["type"] == "python"
+
+
+def test_application_registry_does_not_start_untrusted_plugin(tmp_path, monkeypatch):
+    from plugins import PluginRuntimeRegistry, load_plugin
+
+    plugin = load_plugin(_make_python_plugin(tmp_path))
+    monkeypatch.setattr(
+        "security.extensions.descriptor_is_trusted",
+        lambda _descriptor: False,
+    )
+    registry = PluginRuntimeRegistry(enforce_trust=True)
+
+    assert registry.tool_definitions([plugin]) == []
+    assert registry.snapshot()["workers"][0]["running"] is False
+    assert "not trusted" in registry.errors[0]
+    registry.close()
 
 
 def test_python_worker_describes_and_invokes_registered_tool(tmp_path):

@@ -319,18 +319,47 @@
 <script>
 (function(){
 var pathEl=document.getElementById('cfg-path'),ta=document.getElementById('json'),st=document.getElementById('status');
+var promptedRegistrations={};
 function showSt(m,ok){st.textContent=m||'';st.className=m?('st '+(ok?'ok':'e')):'';st.style.display=m?'block':'none';}
+function registrationMessage(item){
+var caps=item&&item.capabilities?item.capabilities:{};
+var lines=['注册 MCP 服务器：'+String(item.name||item.extension_id||'unknown'),'','类型：'+String(item.runtime||caps.transport||'unknown'),'命令或地址：'+String(item.source||'未提供')];
+if(caps.working_directory)lines.push('工作目录：'+String(caps.working_directory));
+var envs=Array.isArray(caps.configured_environment)?caps.configured_environment:[];
+if(envs.length)lines.push('配置环境变量：'+envs.join(', '));
+lines.push('','确认仅允许连接服务器并发现工具；具体工具调用仍按当前权限模式审批。','该服务器将以当前操作系统用户权限运行。','', '确认并连接？');
+return lines.join('\n');
+}
+async function promptMcpRegistrations(rows){
+rows=Array.isArray(rows)?rows:[];
+var connected=0;
+for(var i=0;i<rows.length;i++){
+var item=rows[i];
+if(!item||item.registration_status!=='pending')continue;
+var key=String(item.extension_id||'')+':'+String(item.config_digest||'');
+if(promptedRegistrations[key])continue;
+promptedRegistrations[key]=true;
+if(!window.confirm(registrationMessage(item)))continue;
+var r=await fetch('/api/security/mcp/'+encodeURIComponent(item.extension_id)+'/registration',{method:'POST',headers:{'Content-Type':'application/json'},credentials:'same-origin',body:JSON.stringify({approved:true,config_digest:String(item.config_digest||'')})});
+var j=await r.json();
+if(!r.ok||!j.ok)throw new Error(j.error||'MCP 注册失败');
+connected+=1;
+}
+return connected;
+}
 async function load(){showSt('',false);try{
 var r=await fetch('/api/mcp_config',{credentials:'same-origin'});var j=await r.json();
 if(!j.ok)throw new Error(j.error||'加载失败');
 pathEl.textContent='路径：'+(j.path||'')+(j.exists?'':'（文件不存在，保存时将创建）');
 ta.value=j.text!=null?j.text:'';
+var connected=await promptMcpRegistrations(j.mcp_registrations);
+if(connected)showSt('已确认并连接 '+connected+' 个 MCP。',true);
 }catch(e){showSt(String(e.message||e),false);}}
 document.getElementById('btn-reload').addEventListener('click',load);
 document.getElementById('btn-save').addEventListener('click',async function(){
 showSt('',false);var b=this;b.disabled=true;
 try{var r=await fetch('/api/mcp_config',{method:'POST',headers:{'Content-Type':'application/json'},credentials:'same-origin',body:JSON.stringify({text:ta.value})});var j=await r.json();
-if(!j.ok)throw new Error(j.error||'保存失败');showSt('已保存并重载 MCP。',true);}
+if(!j.ok)throw new Error(j.error||'保存失败');var connected=await promptMcpRegistrations(j.mcp_registrations);showSt(connected?'已保存，并确认连接 '+connected+' 个 MCP。':'已保存 MCP 配置；未确认的服务器不会启动。',true);}
 catch(e){showSt(String(e.message||e),false);}
 finally{b.disabled=false;}
 });

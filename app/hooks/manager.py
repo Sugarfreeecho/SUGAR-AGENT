@@ -192,6 +192,7 @@ class HookManager:
         started: float,
     ) -> HookDispatchResult:
         current_payload: Dict[str, Any] = dict(payload)
+        hook_authorizer = current_payload.pop("_hook_authorizer", None)
         current_payload["event"] = event
         current_payload.setdefault("project_root", str(self.project_root))
         raw_input = current_payload.get("tool_input")
@@ -249,6 +250,34 @@ class HookManager:
                 "source_id": definition.source_id,
                 "plugin_id": definition.plugin_id,
             }
+            if callable(hook_authorizer):
+                try:
+                    verdict = hook_authorizer(definition, call_payload)
+                    if hasattr(verdict, "__await__"):
+                        verdict = await verdict
+                    if isinstance(verdict, tuple):
+                        approved, denial_reason = bool(verdict[0]), str(verdict[1] or "")
+                    else:
+                        approved, denial_reason = bool(verdict), ""
+                except Exception as exc:
+                    approved, denial_reason = False, f"Hook authorization failed: {exc}"
+                if not approved:
+                    result = HookExecutionResult(
+                        hook_id=definition.id,
+                        event=event,
+                        source_id=definition.source_id,
+                        plugin_id=definition.plugin_id,
+                        success=False,
+                        outcome="blocked",
+                        decision="deny",
+                        reason=denial_reason or "Hook execution was not authorized.",
+                        error=denial_reason or "Hook execution was not authorized.",
+                        failure_policy="block",
+                    )
+                    results.append(result)
+                    executed += 1
+                    decision = "deny"
+                    break
             result = await self.executor.execute(definition, call_payload)
             executed += 1
             warning = ""

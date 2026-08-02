@@ -13,6 +13,15 @@ if str(APP_DIR) not in sys.path:
     sys.path.insert(0, str(APP_DIR))
 
 
+@pytest.fixture(autouse=True)
+def _trust_extensions_for_adapter_tests(monkeypatch):
+    """Compatibility tests isolate adapters from the application trust gate."""
+    monkeypatch.setattr(
+        "security.extensions.descriptor_is_trusted",
+        lambda _descriptor: True,
+    )
+
+
 def _write_json(path: Path, data: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, indent=2), encoding="utf-8")

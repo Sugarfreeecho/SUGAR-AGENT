@@ -74,7 +74,21 @@ class _PersistentPluginWorker:
             raise PluginRuntimeError(
                 f"Plugin {self.plugin.plugin_id!r} has no executable runtime"
             )
-        env = os.environ.copy()
+        from security.extensions import minimal_extension_environment
+
+        permissions = dict(self.plugin.permissions or {})
+        raw_allow = permissions.get("env_allowlist") or permissions.get("environment_allowlist") or []
+        allow_names = (
+            [str(item) for item in raw_allow]
+            if isinstance(raw_allow, (list, tuple))
+            else []
+        )
+        raw_explicit = permissions.get("env") or permissions.get("environment") or {}
+        explicit = raw_explicit if isinstance(raw_explicit, Mapping) else {}
+        env = minimal_extension_environment(
+            allow_names=allow_names,
+            explicit=explicit,
+        )
         app_dir = str(Path(__file__).resolve().parent.parent)
         existing_pythonpath = str(env.get("PYTHONPATH") or "")
         env["PYTHONPATH"] = (
@@ -332,8 +346,12 @@ class _PersistentPluginWorker:
 class PluginRuntimeRegistry:
     """Discover and invoke tools, hooks, and commands in persistent workers."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, enforce_trust: bool = False) -> None:
         self._lock = threading.RLock()
+        # Keep the registry reusable as a low-level runtime component for
+        # compatibility tooling and tests. The application-owned singleton is
+        # trust-gated below, before any plugin worker can execute describe().
+        self._enforce_trust = bool(enforce_trust)
         self._describe_cache: Dict[Tuple[str, str], Mapping[str, Any]] = {}
         self._workers: Dict[Tuple[str, str], _PersistentPluginWorker] = {}
         self._tool_bindings: Dict[str, RuntimeToolBinding] = {}
@@ -403,6 +421,15 @@ class PluginRuntimeRegistry:
                 continue
             key = (plugin.plugin_id, plugin.content_signature)
             try:
+                if self._enforce_trust:
+                    from security.extensions import descriptor_is_trusted, plugin_descriptor
+
+                    if not descriptor_is_trusted(plugin_descriptor(plugin)):
+                        self._errors_by_plugin[plugin.plugin_id] = (
+                            "Plugin is not trusted, or its content changed; approve "
+                            "the current digest in Security settings before it can start."
+                        )
+                        continue
                 description = self._describe_cache.get(key)
                 if description is None:
                     description = self._validate_description(
@@ -718,7 +745,7 @@ class PluginRuntimeRegistry:
             }
 
 
-_default_registry = PluginRuntimeRegistry()
+_default_registry = PluginRuntimeRegistry(enforce_trust=True)
 atexit.register(_default_registry.close)
 
 

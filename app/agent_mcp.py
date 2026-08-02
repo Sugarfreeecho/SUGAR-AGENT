@@ -1,6 +1,6 @@
 """
 MCP（Model Context Protocol）桥：支持 stdio / SSE / Streamable HTTP，配置变更热重载，
-高危调用可走 Web UI 审批（见 MCP_UI_APPROVAL），结构化日志。
+注册前摘要绑定人工确认，工具调用走中央权限策略，结构化日志。
 
 配置：`PROJECT_ROOT/mcp_servers.json` 或 `MCP_SERVERS_JSON`；路径可用 `MCP_SERVERS_PATH`。
 禁用：`MCP_ENABLED=0`；未安装 `mcp` 包时跳过。
@@ -314,36 +314,6 @@ def _serialize_call_tool_result_for_log(result: Any, max_len: int = 12000) -> st
     return r if len(r) <= max_len else r[:max_len] + "…[truncated]"
 
 
-def ui_approval_spec_for_mcp_tool(tool_name: str, tool_args: Any) -> Optional[Dict[str, str]]:
-    """返回与 `_tool_ui_approval_spec` 相同形状的 dict；不需要审批时返回 None。"""
-    if not tool_name.startswith("mcp_"):
-        return None
-    if (os.getenv("MCP_UI_APPROVAL") or "1").strip().lower() in ("0", "false", "no", "off"):
-        return None
-    allow_rx = (os.getenv("MCP_UI_APPROVAL_ALLOW_REGEX") or "").strip()
-    if allow_rx:
-        try:
-            if re.search(allow_rx, tool_name):
-                return None
-        except re.error:
-            logger.warning("MCP_UI_APPROVAL_ALLOW_REGEX invalid, ignored")
-    pair = _fname_to_tool.get(tool_name)
-    alias, orig = pair if pair else ("?", "?")
-    try:
-        args_preview = json.dumps(tool_args, ensure_ascii=False)[:1200] if isinstance(tool_args, dict) else str(tool_args)[:1200]
-    except Exception:
-        args_preview = str(tool_args)[:1200]
-    return {
-        "title": "MCP 工具确认",
-        "message": "即将通过 MCP 调用外部工具。\n\n"
-        f"服务器别名：`{alias}`\n"
-        f"工具：`{orig}`\n\n"
-        f"参数预览：\n{args_preview}",
-        "subtitle": tool_name,
-        "brief": f"MCP {alias}/{orig}",
-    }
-
-
 class _PersistentMcpServer:
     """通用持久会话：由 connect_cm 提供 (read, write) 流。"""
 
@@ -507,10 +477,24 @@ def _make_stdio_connector(alias: str, cfg: dict) -> _PersistentMcpServer:
     if not isinstance(args, list):
         args = []
     args = [str(a) for a in args]
+    from security.extensions import minimal_extension_environment
+
     env = cfg.get("env")
-    env_d: Optional[Dict[str, str]] = None
-    if isinstance(env, dict):
-        env_d = {str(k): str(v) for k, v in env.items()}
+    explicit_env = (
+        {str(k): str(v) for k, v in env.items()}
+        if isinstance(env, dict)
+        else {}
+    )
+    raw_allow = cfg.get("env_allowlist") or cfg.get("environmentAllowlist") or []
+    allow_names = (
+        [str(item) for item in raw_allow]
+        if isinstance(raw_allow, (list, tuple))
+        else []
+    )
+    env_d: Dict[str, str] = minimal_extension_environment(
+        allow_names=allow_names,
+        explicit=explicit_env,
+    )
     cwd = cfg.get("cwd") or cfg.get("workingDirectory")
     cwd_s = str(cwd).strip() if cwd else None
     params = StdioServerParameters(command=cmd, args=args, env=env_d, cwd=cwd_s or None)
@@ -640,6 +624,15 @@ async def ensure_started() -> None:
             transport = _resolve_transport(cfg)
             srv: Optional[_PersistentMcpServer] = None
             try:
+                from security.extensions import mcp_descriptor, mcp_registration_is_approved
+
+                if not mcp_registration_is_approved(mcp_descriptor(str(alias), cfg)):
+                    logger.warning(
+                        "MCP: `%s` is awaiting registration confirmation, was rejected, "
+                        "or its config changed; skipping startup",
+                        alias,
+                    )
+                    continue
                 if transport == "stdio":
                     if not str(cfg.get("command") or "").strip():
                         logger.warning("MCP: skip `%s` (stdio needs command)", alias)

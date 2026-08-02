@@ -339,6 +339,33 @@ class HookManagerTests(unittest.TestCase):
         self.assertEqual(result.skip_reason, "disabled")
         self.assertFalse(executor.calls)
 
+    def test_authorization_denial_happens_before_executor_starts(self):
+        executor = _FakeExecutor()
+        manager = HookManager(
+            self.root,
+            include_project=False,
+            executor=executor,
+            definitions=[_definition(self.root, command="write outside.txt")],
+        )
+
+        async def deny(_definition, _payload):
+            return False, "approval channel unavailable"
+
+        result = asyncio.run(
+            manager.dispatch(
+                "PreToolUse",
+                {
+                    "tool_name": "run_shell",
+                    "_hook_authorizer": deny,
+                },
+            )
+        )
+
+        self.assertTrue(result.blocked)
+        self.assertEqual(result.matched_hooks, 1)
+        self.assertFalse(executor.calls)
+        self.assertIn("approval channel unavailable", result.results[0].reason)
+
     def test_failed_hook_supports_all_failure_policies(self):
         for policy, expected_decision, expected_outcome, warning_count in (
             ("ignore", "allow", "ignored", 0),
