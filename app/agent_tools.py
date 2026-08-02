@@ -1223,9 +1223,9 @@ def _is_posix_special_path_skip_workspace_check(raw: str) -> bool:
 def _resolve_shell_token_for_workspace_restrict(raw: str, workspace: Path) -> Path:
     """
     将命令中的路径 token 解析为绝对路径，用于 restrict_to_workspace 判断。
-    与 safe_path / write 工具对齐：以 ``/xxx`` 开头的路径表示**工作区根**下的相对路径
-    （``/foo/bar`` → WORK_DIR/foo/bar），而不是 POSIX 根目录 ``/``。
-    Git Bash 盘符路径（``/c/Users/...``）、Windows 盘符路径、UNC 仍按真实绝对路径解析。
+    POSIX 上的 ``/xxx`` 是真实绝对路径；Windows 上保留历史虚拟根语义
+    （``/foo/bar`` → WORK_DIR/foo/bar）。Git Bash 盘符路径、Windows 盘符路径、
+    UNC 始终按真实绝对路径解析。
     """
     s = os.path.expandvars((raw or "").strip())
     if not s:
@@ -1235,6 +1235,8 @@ def _resolve_shell_token_for_workspace_restrict(raw: str, workspace: Path) -> Pa
         return Path(s).expanduser().resolve()
     if s.startswith("\\\\"):
         return Path(s).resolve()
+    if s.startswith("/") and platform.system() != "Windows":
+        return Path(s).expanduser().resolve()
     # Git Bash：/d/path /c/Users/...
     if len(s) >= 3 and s[0] == "/" and s[1].isalpha() and s[2] == "/":
         return Path(s).resolve()

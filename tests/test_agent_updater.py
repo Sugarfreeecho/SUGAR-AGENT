@@ -94,7 +94,15 @@ def test_main_restores_agent_when_update_fails(tmp_path, monkeypatch):
     monkeypatch.setattr(
         agent_updater.sys,
         "argv",
-        ["agent_updater.py", "--root", str(tmp_path), "--launcher-pid", "123"],
+        [
+            "agent_updater.py",
+            "--root",
+            str(tmp_path),
+            "--launcher-pid",
+            "123",
+            "--lifecycle",
+            "windows-tray",
+        ],
     )
 
     assert agent_updater.main() == 1

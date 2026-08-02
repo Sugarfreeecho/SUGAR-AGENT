@@ -5,7 +5,7 @@ chardet==5.2.0
 coverage==7.4.0
 ddgs==9.0
 defusedxml
-fastapi
+fastapi==0.136.1
 httptools==0.6.1
 httpx
 jinja2

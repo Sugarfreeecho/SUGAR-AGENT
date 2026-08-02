@@ -51,7 +51,7 @@ def test_agent_environment_prefers_bundled_python(monkeypatch, tmp_path):
     scripts.mkdir(parents=True)
     executable = bundled / "python.exe"
     executable.touch()
-    monkeypatch.setattr(python_runtime.os, "name", "nt")
+    monkeypatch.setattr(python_runtime, "_is_windows", lambda: True)
     env = {"PATH": str(tmp_path / "system")}
 
     python_runtime.configure_agent_python_environment(env, tmp_path)
@@ -64,7 +64,7 @@ def test_agent_environment_falls_back_to_running_python(monkeypatch, tmp_path):
     current = tmp_path / "system" / "python.exe"
     current.parent.mkdir()
     current.touch()
-    monkeypatch.setattr(python_runtime.os, "name", "nt")
+    monkeypatch.setattr(python_runtime, "_is_windows", lambda: True)
     monkeypatch.setattr(python_runtime.sys, "executable", str(current))
     env = {"PATH": ""}
 

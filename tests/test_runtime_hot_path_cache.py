@@ -9,6 +9,20 @@ if str(APP_DIR) not in sys.path:
     sys.path.insert(0, str(APP_DIR))
 
 
+def _install_executor_candidate(monkeypatch, agent_harness):
+    candidate = {
+        "client": object(),
+        "model": "test-model",
+        "max_output_tokens": 1000,
+        "context_window": 8000,
+    }
+    monkeypatch.setattr(
+        agent_harness,
+        "resolve_executor_candidates_for_session",
+        lambda _sid, *, profile_id_override=None: [candidate],
+    )
+
+
 def test_resolve_executor_config_uses_session_cache(monkeypatch):
     import agent_harness
 
@@ -20,6 +34,7 @@ def test_resolve_executor_config_uses_session_cache(monkeypatch):
         return {}
 
     monkeypatch.setattr(agent_harness.session_manager, "_load_metadata", load_metadata)
+    _install_executor_candidate(monkeypatch, agent_harness)
     first = agent_harness.resolve_executor_config_for_session("s1")
     second = agent_harness.resolve_executor_config_for_session("s1")
 
@@ -157,6 +172,7 @@ def test_metadata_sidecar_updates_do_not_invalidate_executor_config_cache(monkey
         return {}
 
     monkeypatch.setattr(agent_harness.session_manager, "_load_metadata", load_metadata)
+    _install_executor_candidate(monkeypatch, agent_harness)
     first = agent_harness.resolve_executor_config_for_session(sid)
     manager = agent_harness.SessionManager(tmp_path / "sessions", tmp_path / "sessions.json")
     manager._save_metadata(

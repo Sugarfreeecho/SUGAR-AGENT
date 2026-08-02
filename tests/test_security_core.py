@@ -464,9 +464,10 @@ def test_shell_scope_is_derived_from_command_paths(tmp_path):
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     outside = tmp_path / "outside.txt"
+    reader = "type" if sys.platform == "win32" else "cat"
     request = classify_tool(
         "run_shell",
-        {"command": f'type "{outside}"'},
+        {"command": f'{reader} "{outside}"'},
         workspace,
     )
     assert request.metadata["external_workspace"] is True
@@ -475,13 +476,36 @@ def test_shell_scope_is_derived_from_command_paths(tmp_path):
 def test_shell_scope_detects_relative_parent_traversal(tmp_path):
     workspace = tmp_path / "workspace"
     workspace.mkdir()
+    command = r"type ..\outside.txt" if sys.platform == "win32" else "cat ../outside.txt"
     request = classify_tool(
         "run_shell",
-        {"command": r"type ..\outside.txt", "workdir": str(workspace)},
+        {"command": command, "workdir": str(workspace)},
         workspace,
     )
 
     assert request.metadata["external_workspace"] is True
+
+
+def test_shell_path_resolution_distinguishes_posix_root_from_windows_virtual_root(
+    monkeypatch, tmp_path
+):
+    import agent_tools
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    monkeypatch.setattr(agent_tools.platform, "system", lambda: "Linux")
+    posix_path = agent_tools._resolve_shell_token_for_workspace_restrict(
+        "/outside/file.txt", workspace
+    )
+    assert posix_path == Path("/outside/file.txt").resolve()
+    assert not agent_tools._is_path_under(posix_path, workspace)
+
+    monkeypatch.setattr(agent_tools.platform, "system", lambda: "Windows")
+    virtual_path = agent_tools._resolve_shell_token_for_workspace_restrict(
+        "/nested/file.txt", workspace
+    )
+    assert virtual_path == (workspace / "nested" / "file.txt").resolve()
 
 
 def test_multi_path_allow_rule_requires_every_path_to_match(tmp_path):
@@ -797,6 +821,40 @@ def test_forced_approval_rules_cover_dynamic_and_destructive_shell():
     assert always_ask_for(network) is False
 
 
+def test_dynamic_shell_risk_wins_over_network_and_reusable_rules(tmp_path, monkeypatch):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    _isolated_security_store(tmp_path, monkeypatch)
+
+    command = (
+        'curl -s "https://api.github.com/repos/example/project/actions/runs" '
+        '| python -c "import json,sys; print(json.load(sys.stdin))"'
+    )
+    request, decision, _ = authorize_tool(
+        session_id="session",
+        tool_name="run_shell",
+        arguments={"command": command},
+        workspace=workspace,
+    )
+
+    assert request.metadata["network"] is True
+    assert decision.outcome == DecisionOutcome.ASK
+    assert decision.rule_id == "process.dynamic"
+    assert forced_approval_for(decision) is True
+
+    # Even an exact digest grant cannot turn dynamic inline code into a
+    # reusable or silently-consumed approval.
+    add_approval_grant("session", decision.request_digest, "allow_once")
+    _, repeated, _ = authorize_tool(
+        session_id="session",
+        tool_name="run_shell",
+        arguments={"command": command},
+        workspace=workspace,
+    )
+    assert repeated.outcome == DecisionOutcome.ASK
+    assert repeated.rule_id == "process.dynamic"
+
+
 def test_dangerous_command_ignores_grants_and_always_asks(tmp_path, monkeypatch):
     workspace = tmp_path / "workspace"
     workspace.mkdir()
@@ -889,10 +947,11 @@ def test_shell_external_credential_read_requires_approval(tmp_path, monkeypatch)
     _isolated_security_store(tmp_path, monkeypatch)
     monkeypatch.delenv("TOOL_UI_APPROVAL", raising=False)
 
+    reader = "type" if sys.platform == "win32" else "cat"
     _, first, _ = authorize_tool(
         session_id="session",
         tool_name="run_shell",
-        arguments={"command": f'type "{outside}"'},
+        arguments={"command": f'{reader} "{outside}"'},
         workspace=workspace,
     )
     assert first.outcome == DecisionOutcome.ASK

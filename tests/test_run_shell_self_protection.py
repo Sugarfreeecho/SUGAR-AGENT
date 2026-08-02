@@ -60,6 +60,7 @@ def test_run_shell_blocks_self_termination_before_spawning(monkeypatch):
         raise AssertionError("blocked command must not spawn a subprocess")
 
     monkeypatch.setattr(agent_tools.asyncio, "create_subprocess_exec", fail_spawn)
+    monkeypatch.setattr(agent_tools.platform, "system", lambda: "Windows")
     result = asyncio.run(
         agent_tools.run_shell(
             "Get-Process -Name python | Stop-Process -Force",

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import platform
 import sys
 from pathlib import Path
 from typing import MutableMapping
@@ -11,13 +12,20 @@ from typing import MutableMapping
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def _is_windows() -> bool:
+    """Keep platform detection patchable without mutating the global os module."""
+
+    return platform.system() == "Windows"
+
+
 def bundled_python(root: Path = ROOT, *, windowed: bool = False) -> Path | None:
     """Return the repository-bundled interpreter when it exists."""
-    name = "pythonw.exe" if windowed and os.name == "nt" else ("python.exe" if os.name == "nt" else "python3")
+    windows = _is_windows()
+    name = "pythonw.exe" if windowed and windows else ("python.exe" if windows else "python3")
     candidate = root / "python" / name
     if candidate.is_file():
         return candidate.resolve()
-    if os.name != "nt":
+    if not windows:
         fallback = root / "python" / "python"
         if fallback.is_file():
             return fallback.resolve()
@@ -30,7 +38,7 @@ def preferred_python(root: Path = ROOT, *, windowed: bool = False) -> Path:
     if selected is not None:
         return selected
     current = Path(sys.executable).resolve()
-    if windowed and os.name == "nt":
+    if windowed and _is_windows():
         sibling = current.with_name("pythonw.exe")
         if sibling.is_file():
             return sibling
@@ -45,7 +53,7 @@ def configure_agent_python_environment(
     target = os.environ if env is None else env
     selected = preferred_python(root)
     dirs = [selected.parent]
-    scripts = selected.parent / ("Scripts" if os.name == "nt" else "bin")
+    scripts = selected.parent / ("Scripts" if _is_windows() else "bin")
     if scripts.is_dir():
         dirs.append(scripts)
     existing = target.get("PATH", "")
