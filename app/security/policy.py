@@ -513,6 +513,14 @@ class PolicyEngine:
                     "process.policy_change",
                     "Security policy or Agent controller tampering is denied.",
                 )
+            # Forced-review risks must win over ordinary approval categories.
+            # Otherwise a networked ``python -c``/encoded command would be
+            # classified only as network access and could receive a reusable
+            # ``curl:*``/``powershell:*`` allow rule.
+            if request.metadata.get("destructive"):
+                return result(DecisionOutcome.ASK, "process.destructive", "Destructive command requires approval.")
+            if _DYNAMIC_SHELL.search(request.resource):
+                return result(DecisionOutcome.ASK, "process.dynamic", "Dynamically constructed shell code requires review.")
             if request.metadata.get("credential_read"):
                 return result(
                     DecisionOutcome.ASK,
@@ -523,10 +531,6 @@ class PolicyEngine:
                 return result(DecisionOutcome.ASK, "process.external", "Command requests access outside the workspace.")
             if request.metadata.get("network"):
                 return result(DecisionOutcome.ASK, "process.network", "Command may access the network.")
-            if request.metadata.get("destructive"):
-                return result(DecisionOutcome.ASK, "process.destructive", "Destructive command requires approval.")
-            if _DYNAMIC_SHELL.search(request.resource):
-                return result(DecisionOutcome.ASK, "process.dynamic", "Dynamically constructed shell code requires review.")
             return result(
                 DecisionOutcome.ALLOW,
                 "process.app_restricted",
