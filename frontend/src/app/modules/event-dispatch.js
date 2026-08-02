@@ -1,6 +1,10 @@
 function renderEvent(ctx, event, eventIndex, runSessionId) {
     if (!event || typeof event !== 'object') return;
     var eventSessionId = runSessionId || currentSessionId || '';
+    if (event.type === 'permission_mode_changed') {
+        if (typeof renderPermissionMode === 'function') renderPermissionMode(event);
+        return;
+    }
     if (typeof isHumanInteractionEventType === 'function' && isHumanInteractionEventType(event.type)) {
         renderHumanInteractionEvent(ctx, event, eventSessionId);
         return;
