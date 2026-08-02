@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import concurrent.futures
 import asyncio
+import json
+import sqlite3
 import sys
 from pathlib import Path
 
@@ -274,11 +276,148 @@ def test_grants_are_bound_to_request_digest_and_session(tmp_path):
 def test_permission_mode_is_kept_in_external_security_store(tmp_path):
     store = SecurityStore(tmp_path / "security.sqlite3")
 
-    assert store.policy_version() >= 2
+    assert store.policy_version() >= 3
     assert store.get_global_permission_mode() == "ask_for_approval"
     assert store.get_session_mode("any-session") == "ask_for_approval"
     store.set_global_permission_mode("full_access")
     assert store.get_session_mode("any-session") == "full_access"
+
+
+def test_v3_migration_preserves_global_mode_and_disables_project_allow(tmp_path):
+    database = tmp_path / "security.sqlite3"
+    store = SecurityStore(database)
+    store.set_global_permission_mode("full_access")
+    store.add_grant("session", "old-digest", "session", ttl_seconds=300)
+    with sqlite3.connect(str(database)) as db:
+        db.execute(
+            "INSERT INTO permission_rules(session_id,workspace,source,behavior,action,pattern,created_at,enabled) "
+            "VALUES('','workspace','project','ask','fs.read','*',1,1)"
+        )
+        db.execute(
+            "UPDATE permission_rules SET behavior='allow' WHERE source='project'"
+        )
+        db.execute("CREATE TABLE session_modes(session_id TEXT PRIMARY KEY, mode TEXT)")
+        db.execute("INSERT INTO session_modes VALUES('legacy', 'ask_for_approval')")
+        db.execute("UPDATE security_meta SET value='2' WHERE key='policy_version'")
+    migrated = SecurityStore(database)
+
+    assert migrated.policy_version() == 3
+    assert migrated.get_global_permission_mode() == "full_access"
+    assert migrated.consume_matching_grant("session", "old-digest") is None
+    rules = migrated.list_permission_rules(workspace="workspace")
+    assert rules[0]["enabled"] == 0
+    with sqlite3.connect(str(database)) as db:
+        session_modes = db.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='session_modes'"
+        ).fetchone()
+    assert session_modes is None
+
+
+def test_extension_trust_is_bound_to_exact_digests(tmp_path):
+    store = SecurityStore(tmp_path / "security.sqlite3")
+    store.set_extension_trust(
+        kind="plugin",
+        extension_id="demo",
+        source="manifest.json",
+        content_digest="content-a",
+        config_digest="config-a",
+        capabilities={"network": False},
+    )
+
+    assert store.extension_is_trusted(
+        kind="plugin", extension_id="demo",
+        content_digest="content-a", config_digest="config-a",
+    )
+    assert not store.extension_is_trusted(
+        kind="plugin", extension_id="demo",
+        content_digest="content-b", config_digest="config-a",
+    )
+    assert store.revoke_extension_trust("plugin", "demo")
+    assert not store.extension_is_trusted(
+        kind="plugin", extension_id="demo",
+        content_digest="content-a", config_digest="config-a",
+    )
+    row = store.get_extension_trust(kind="plugin", extension_id="demo")
+    assert row is not None
+    assert row["decision"] == "revoked"
+
+
+def test_mcp_registration_decision_is_bound_to_exact_config(tmp_path, monkeypatch):
+    import security.extensions as extensions
+
+    store = SecurityStore(tmp_path / "security.sqlite3")
+    descriptor = extensions.mcp_descriptor(
+        "demo",
+        {
+            "transport": "stdio",
+            "command": "demo-server",
+            "args": ["--safe"],
+            "env": {"DEMO_TOKEN": "secret"},
+        },
+    )
+    monkeypatch.setattr(extensions, "security_store", lambda: store)
+    monkeypatch.setattr(
+        extensions,
+        "current_extension_descriptor",
+        lambda kind, extension_id: dict(descriptor)
+        if (kind, extension_id) == ("mcp", "demo")
+        else None,
+    )
+
+    assert extensions.descriptor_decision(descriptor) == "pending"
+    approved = extensions.decide_current_mcp_registration(
+        "demo",
+        config_digest=descriptor["config_digest"],
+        approved=True,
+    )
+    assert approved["registration_status"] == "registered"
+    assert extensions.mcp_registration_is_approved(descriptor)
+
+    changed = extensions.mcp_descriptor(
+        "demo",
+        {"transport": "stdio", "command": "different-server"},
+    )
+    assert extensions.descriptor_decision(changed) == "pending"
+
+
+def test_mcp_registration_rejects_stale_digest(tmp_path, monkeypatch):
+    import security.extensions as extensions
+
+    store = SecurityStore(tmp_path / "security.sqlite3")
+    descriptor = extensions.mcp_descriptor(
+        "demo", {"transport": "streamable-http", "url": "https://example.test/mcp"}
+    )
+    monkeypatch.setattr(extensions, "security_store", lambda: store)
+    monkeypatch.setattr(
+        extensions,
+        "current_extension_descriptor",
+        lambda _kind, _extension_id: dict(descriptor),
+    )
+
+    with pytest.raises(ValueError, match="configuration changed"):
+        extensions.decide_current_mcp_registration(
+            "demo", config_digest="stale", approved=True
+        )
+
+
+def test_audit_redacts_secrets_and_url_queries(tmp_path):
+    store = SecurityStore(tmp_path / "security.sqlite3")
+    store.audit(
+        session_id="session",
+        event_type="tool",
+        payload={
+            "command": "curl https://example.test/path?token=plain-secret",
+            "authorization": "Bearer secret-token",
+            "api_key": "secret-key",
+        },
+    )
+    with sqlite3.connect(str(store.path)) as db:
+        payload = json.loads(db.execute("SELECT payload_json FROM audit_events").fetchone()[0])
+
+    encoded = json.dumps(payload)
+    assert "plain-secret" not in encoded
+    assert "secret-token" not in encoded
+    assert "secret-key" not in encoded
 
 
 def test_permission_mode_is_shared_across_all_sessions(tmp_path, monkeypatch):
@@ -331,6 +470,86 @@ def test_shell_scope_is_derived_from_command_paths(tmp_path):
         workspace,
     )
     assert request.metadata["external_workspace"] is True
+
+
+def test_shell_scope_detects_relative_parent_traversal(tmp_path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    request = classify_tool(
+        "run_shell",
+        {"command": r"type ..\outside.txt", "workdir": str(workspace)},
+        workspace,
+    )
+
+    assert request.metadata["external_workspace"] is True
+
+
+def test_multi_path_allow_rule_requires_every_path_to_match(tmp_path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    inside = workspace / "inside.txt"
+    outside = tmp_path / "outside.txt"
+    request = CapabilityRequest.create(
+        action="fs.write",
+        resource=str(inside),
+        effect="workspace_write",
+        metadata={"paths": [str(inside), str(outside)]},
+    )
+    engine = PolicyEngine(workspace)
+    rule = {
+        "behavior": "allow",
+        "action": "fs.write",
+        "pattern": str(inside),
+    }
+
+    assert engine.rule_decision(request, [rule], workspace) is None
+
+
+def test_project_rules_cannot_widen_permissions(tmp_path):
+    store = SecurityStore(tmp_path / "security.sqlite3")
+    with pytest.raises(ValueError, match="cannot widen"):
+        store.add_permission_rule(
+            source="project",
+            behavior="allow",
+            action="fs.read",
+            pattern="*",
+            workspace=str(tmp_path),
+        )
+
+
+def test_hooks_configuration_is_protected_and_hook_execution_asks(tmp_path):
+    from app.hooks import CommandSpec, HookDefinition
+    from security.runtime import classify_hook
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    config_write = classify_tool(
+        "write_file",
+        {"path": str(workspace / "hooks.json"), "content": "{}"},
+        workspace,
+    )
+    config_decision = PolicyEngine(workspace).decide(
+        config_write,
+        PERMISSION_PRESETS[PermissionMode.ASK_FOR_APPROVAL],
+    )
+    hook = classify_hook(
+        HookDefinition(
+            id="lint",
+            event="PreToolUse",
+            source_root=workspace,
+            command=CommandSpec(command="python lint.py"),
+        ),
+        {"tool_name": "run_shell"},
+        workspace,
+    )
+    hook_decision = PolicyEngine(workspace).decide(
+        hook,
+        PERMISSION_PRESETS[PermissionMode.ASK_FOR_APPROVAL],
+    )
+
+    assert config_decision.outcome == DecisionOutcome.DENY
+    assert hook.action == "hook.exec"
+    assert hook_decision.outcome == DecisionOutcome.ASK
 
 
 def test_shell_file_deletion_is_classified_as_destructive(tmp_path):
@@ -407,6 +626,33 @@ def test_approved_external_file_path_passes_application_path_gate(tmp_path):
         workspace=workspace,
     ):
         assert safe_work_path(str(outside)) == outside.resolve()
+        enforce_leaf("fs.write", outside)
+
+
+def test_approved_relative_external_file_path_passes_application_path_gate(tmp_path):
+    from agent_tools import safe_work_path, tool_work_dir_override
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    outside = tmp_path / "approved-relative.txt"
+    raw = "../approved-relative.txt"
+    request = classify_tool("write_file", {"path": raw, "contents": "ok"}, workspace)
+    context = PERMISSION_PRESETS[PermissionMode.ASK_FOR_APPROVAL]
+    asked = PolicyEngine(workspace).decide(request, context)
+    approved = type(asked)(
+        DecisionOutcome.ALLOW,
+        "Approved once.",
+        "grant.once",
+        asked.request_digest,
+    )
+    with tool_work_dir_override(workspace), execution_scope(
+        session_id="session",
+        context=context,
+        request=request,
+        decision=approved,
+        workspace=workspace,
+    ):
+        assert safe_work_path(raw) == outside.resolve()
         enforce_leaf("fs.write", outside)
 
 

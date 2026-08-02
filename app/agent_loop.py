@@ -133,7 +133,9 @@ from security import (
     SecurityDecision,
     add_approval_grant,
     always_ask_for,
+    authorize_request,
     authorize_tool,
+    classify_hook,
     execution_scope,
     forced_approval_for,
     session_permission_mode,
@@ -510,6 +512,89 @@ def _hook_decision_reason(result: Any, fallback: str) -> str:
     return str(messages[0]).strip() if messages else fallback
 
 
+async def _authorize_hook_before_execute(
+    definition: Any,
+    payload: Dict[str, Any],
+    state: Dict[str, Any],
+    emit: Optional[Callable[[Dict[str, Any]], Any]],
+    workspace: Path,
+) -> tuple[bool, str]:
+    """Authorize a Hook before any Hook-controlled code is started."""
+    session_id = str(state.get("session_id") or "")
+    request = classify_hook(definition, payload, workspace)
+    decision, context = authorize_request(
+        session_id=session_id, request=request, workspace=workspace
+    )
+    if decision.outcome == DecisionOutcome.DENY:
+        return False, decision.reason
+    if decision.outcome == DecisionOutcome.ALLOW:
+        return True, decision.reason
+
+    if context.mode == PermissionMode.APPROVE_FOR_ME:
+        review = await review_request(
+            request,
+            user_intent=str(state.get("_submitted_user_input") or ""),
+        )
+        if not review.approved:
+            return False, review.reason
+        # Hook approval is intentionally session-scoped: unchanged Hook
+        # configuration does not repeatedly interrupt the same task.
+        add_approval_grant(session_id, decision.request_digest, "allow_session")
+    else:
+        if emit is None:
+            return False, "Hook approval is required but no interactive channel is available."
+        approval_id = new_approval_id()
+        hook_id = str(getattr(definition, "id", "hook") or "hook")
+        event = str(getattr(definition, "event", "") or "Hook")
+
+        async def _emit_hook_approval() -> None:
+            await _emit_tool_approval_required_sse(
+                emit,
+                session_id,
+                approval_id,
+                "hook.exec",
+                "Hook 请求执行",
+                f"项目或扩展 Hook `{hook_id}` 将在 `{event}` 阶段运行命令。",
+                str(request.resource),
+                f"hook:{hook_id}",
+                extra={
+                    "force_approval": False,
+                    "approval_level": "warning",
+                    "allow_always_available": False,
+                },
+            )
+
+        approved = await wait_tool_ui_approval_after_emit(
+            session_id,
+            approval_id,
+            _emit_hook_approval,
+            metadata={
+                "_durable": True,
+                "run_id": str(state.get("_runtime_v2_run_id") or ""),
+                "tool_call_id": f"hook:{hook_id}",
+                "tool": "hook.exec",
+                "title": "Hook 请求执行",
+                "message": f"{event} / {hook_id}",
+                "subtitle": str(request.resource),
+                "security_request_digest": decision.request_digest,
+                "security_rule_id": decision.rule_id,
+                "allow_always_available": False,
+                "force_approval": False,
+                "approval_level": "warning",
+            },
+        )
+        if not approved:
+            return False, "Hook execution was denied by the user."
+        add_approval_grant(session_id, decision.request_digest, "allow_session")
+
+    final_decision, _ = authorize_request(
+        session_id=session_id, request=request, workspace=workspace
+    )
+    if final_decision.outcome != DecisionOutcome.ALLOW:
+        return False, "Hook approval could not be bound to the final Hook request."
+    return True, final_decision.reason
+
+
 async def _dispatch_state_hook(
     event: str,
     state: Dict[str, Any],
@@ -536,6 +621,14 @@ async def _dispatch_state_hook(
     if hook_workspace:
         data.setdefault("workspace_root", hook_workspace)
         data.setdefault("worktree_isolated", bool(hook_meta.get("git_worktree_managed")))
+    security_workspace = Path(hook_workspace or WORK_DIR).resolve()
+    data["_hook_authorizer"] = lambda definition, call_payload: _authorize_hook_before_execute(
+        definition,
+        dict(call_payload or {}),
+        state,
+        emit,
+        security_workspace,
+    )
     hook_workspace_before = (
         await asyncio.to_thread(capture_workspace_state, hook_workspace)
         if hook_workspace
@@ -7328,21 +7421,39 @@ async def astream_events(
         return
     prompt_hook_context = plugin_command_context
     try:
-        from agent_extensions import dispatch_hook
-
-        prompt_hook = await dispatch_hook(
-            "UserPromptSubmit",
-            {
-                "session_id": session_id,
-                "run_id": runtime_v2_run_id,
-                "matcher_value": user_input,
-                "input": {"prompt": user_input},
-                "project_root": str(WORK_DIR),
-            },
-            session_manager=session_manager,
-            session_id=session_id,
-            run_id=runtime_v2_run_id,
+        # UserPromptSubmit runs before the main state/runner exists. Pump its
+        # approval events through this generator so the UI can resolve them
+        # before any Hook-controlled process starts.
+        pre_hook_state: Dict[str, Any] = {
+            "session_id": session_id,
+            "user_input": user_input,
+            "stream_events": [],
+            "_runtime_v2_run_id": runtime_v2_run_id,
+            "_submitted_user_input": submitted_user_input,
+        }
+        pre_hook_events: asyncio.Queue = asyncio.Queue()
+        prompt_hook_task = asyncio.create_task(
+            _dispatch_state_hook(
+                "UserPromptSubmit",
+                pre_hook_state,
+                {
+                    "matcher_value": user_input,
+                    "input": {"prompt": user_input},
+                },
+                emit=pre_hook_events.put,
+            )
         )
+        while not prompt_hook_task.done():
+            try:
+                pre_hook_event = await asyncio.wait_for(
+                    pre_hook_events.get(), timeout=0.25
+                )
+            except asyncio.TimeoutError:
+                continue
+            yield pre_hook_event
+        prompt_hook = await prompt_hook_task
+        while not pre_hook_events.empty():
+            yield pre_hook_events.get_nowait()
         if prompt_hook.updated_input is not None:
             user_input = str(
                 prompt_hook.updated_input.get("prompt", prompt_hook.updated_input.get("user_input", user_input))
@@ -7412,6 +7523,7 @@ async def astream_events(
         "llm_calls": [],
         "key_context": key_context,
         "_runtime_v2_run_id": runtime_v2_run_id,
+        "_submitted_user_input": submitted_user_input,
         "_pre_run_timings": pre_run_timings,
         "_context_token_mode": context_token_mode,
         "_prompt_language": prompt_language,

@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import contextlib
 import contextvars
+import hashlib
+import json
 import re
 from pathlib import Path
 from typing import Any, Iterator
+from urllib.parse import urlsplit
 
 from .models import (
     CapabilityRequest,
@@ -41,6 +44,7 @@ _NETWORK_COMMAND = re.compile(
 )
 _POLICY_TAMPER = re.compile(
     r"(?i)(?:app[\\/]+security|security\.sqlite3|windows-sandbox\.json|"
+    r"hooks\.json|HOOKS_(?:PATH|CONFIG_PATH|ENABLED)|"
     r"permission_mode|full_access_enabled|auto_review_enabled|"
     r"disable[^\r\n]*(?:security|approval|firewall|defender)|"
     r"set-mppreference|add-mppreference)"
@@ -139,10 +143,9 @@ def always_ask_for(decision: SecurityDecision) -> bool:
 
 def session_permission_mode(session_id: str) -> PermissionMode:
     """The single global permission mode (shared by all sessions)."""
-    try:
-        return normalize_permission_mode(security_store().get_global_permission_mode())
-    except Exception:
-        return PermissionMode.ASK_FOR_APPROVAL
+    # Do not disguise a store or migration failure as a mode change. Callers
+    # must fail the operation; the persisted global mode remains untouched.
+    return normalize_permission_mode(security_store().get_global_permission_mode())
 
 
 def set_session_permission_mode(session_id: str, mode: object) -> PermissionMode:
@@ -348,6 +351,59 @@ def classify_tool(tool_name: str, arguments: dict[str, Any], workspace: Path) ->
     )
 
 
+def classify_hook(
+    definition: Any,
+    payload: dict[str, Any],
+    workspace: Path,
+) -> CapabilityRequest:
+    command_spec = getattr(definition, "command", None)
+    command = str(
+        command_spec.platform_command() if command_spec is not None else ""
+    ).strip()
+    raw_cwd = str(getattr(command_spec, "cwd", "") or "").strip()
+    source_root = Path(getattr(definition, "source_root", workspace)).resolve()
+    cwd = canonical_path(raw_cwd, source_root) if raw_cwd else source_root
+    config_payload = {
+        "hook_id": str(getattr(definition, "id", "")),
+        "event": str(getattr(definition, "event", "")),
+        "source_id": str(getattr(definition, "source_id", "")),
+        "plugin_id": str(getattr(definition, "plugin_id", "") or ""),
+        "matcher": str(getattr(definition, "matcher", "") or ""),
+        "handler_type": str(getattr(definition, "handler_type", "command") or "command"),
+        "failure_policy": str(getattr(definition, "failure_policy", "") or ""),
+        "priority": int(getattr(definition, "priority", 100) or 100),
+        "command": command,
+        "cwd": str(cwd),
+        "env_allowlist": list(getattr(command_spec, "env_allowlist", ()) or ()),
+        "env": dict(getattr(command_spec, "env", {}) or {}),
+        "plugin_signature": str(getattr(definition, "plugin_signature", "") or ""),
+    }
+    config_digest = hashlib.sha256(
+        json.dumps(
+            config_payload, sort_keys=True, ensure_ascii=False,
+            separators=(",", ":"), default=str,
+        ).encode("utf-8")
+    ).hexdigest()
+    return CapabilityRequest.create(
+        action="hook.exec",
+        resource=command or str(getattr(definition, "id", "hook")),
+        effect="unknown",
+        principal=(
+            f"plugin:{getattr(definition, 'plugin_id', '')}"
+            if getattr(definition, "plugin_id", None)
+            else "project_hook"
+        ),
+        arguments=config_payload,
+        metadata={
+            "hook_id": str(getattr(definition, "id", "")),
+            "event": str(getattr(definition, "event", "")),
+            "cwd": str(cwd),
+            "config_digest": config_digest,
+            "session_id": str(payload.get("session_id") or ""),
+        },
+    )
+
+
 def _declared_paths(
     arguments: dict[str, Any],
     contract: dict[str, Any],
@@ -376,35 +432,57 @@ def _declared_resource(
     return " | ".join(resources) if resources else name
 
 
-def authorize_tool(
+def _audit_resource(request: CapabilityRequest) -> dict[str, Any]:
+    base: dict[str, Any] = {
+        "action": request.action,
+        "resource_digest": hashlib.sha256(
+            str(request.resource or "").encode("utf-8")
+        ).hexdigest(),
+    }
+    if request.action.startswith("fs."):
+        base["paths"] = list(request.metadata.get("paths") or [request.resource])
+    elif request.action == "process.exec":
+        try:
+            from .policy import safe_command_prefix
+
+            base["command_prefix"] = safe_command_prefix(request.resource) or "dynamic"
+        except Exception:
+            base["command_prefix"] = "unknown"
+    elif request.action in {"network.connect", "web.search"}:
+        try:
+            parsed = urlsplit(str(request.resource or ""))
+            base["network_target"] = (
+                f"{parsed.scheme}://{parsed.hostname or ''}{parsed.path}"
+                if parsed.scheme and parsed.hostname
+                else str(request.metadata.get("tool") or request.action)
+            )
+        except ValueError:
+            base["network_target"] = str(request.metadata.get("tool") or request.action)
+    else:
+        base["resource"] = str(request.metadata.get("tool") or request.metadata.get("hook_id") or request.action)
+    return base
+
+
+def authorize_request(
     *,
     session_id: str,
-    tool_name: str,
-    arguments: dict[str, Any],
+    request: CapabilityRequest,
     workspace: Path,
-) -> tuple[CapabilityRequest, SecurityDecision, PermissionContext]:
+) -> tuple[SecurityDecision, PermissionContext]:
     context = permission_context_for_mode(session_permission_mode(session_id))
     store = security_store()
-    request = classify_tool(tool_name, arguments, workspace)
     engine = PolicyEngine(workspace, store.policy_version())
     decision = engine.decide(request, context)
-    # User rules never override the base policy's unconditional denials
-    # (credential export, policy tampering, protected paths). Otherwise
-    # deny > ask > allow, and an allow rule cannot override forced approval
-    # for destructive/dynamic commands.
     if decision.outcome != DecisionOutcome.DENY:
         rules = store.active_permission_rules(
-            session_id=session_id, workspace=workspace
+            session_id=session_id, workspace=str(workspace)
         )
         rule_decision = engine.rule_decision(request, rules, workspace)
         if rule_decision is not None:
-            if rule_decision.outcome == DecisionOutcome.DENY:
-                decision = rule_decision
-            elif rule_decision.outcome == DecisionOutcome.ASK:
+            if rule_decision.outcome in {DecisionOutcome.DENY, DecisionOutcome.ASK}:
                 decision = rule_decision
             elif not always_ask_for(decision):
                 decision = rule_decision
-            # else: forced approval (destructive/dynamic) wins over the rule.
     if (
         decision.outcome == DecisionOutcome.ASK
         and not always_ask_for(decision)
@@ -423,7 +501,21 @@ def authorize_tool(
         event_type="authorization",
         request_digest=decision.request_digest,
         outcome=decision.outcome.value,
-        payload={"tool": tool_name, "action": request.action, "resource": request.resource, "rule": decision.rule_id},
+        payload={**_audit_resource(request), "rule": decision.rule_id},
+    )
+    return decision, context
+
+
+def authorize_tool(
+    *,
+    session_id: str,
+    tool_name: str,
+    arguments: dict[str, Any],
+    workspace: Path,
+) -> tuple[CapabilityRequest, SecurityDecision, PermissionContext]:
+    request = classify_tool(tool_name, arguments, workspace)
+    decision, context = authorize_request(
+        session_id=session_id, request=request, workspace=workspace
     )
     return request, decision, context
 
@@ -593,6 +685,7 @@ def security_status_for_session(session_id: str) -> dict[str, Any]:
     return {
         "mode": mode.value,
         "mode_scope": "global",
+        "updated_at": security_store().get_global_permission_mode_updated_at(),
         "sandbox_profile": context.sandbox_profile.value,
         "effective_profile": context.sandbox_profile.value,
         "approval_policy": context.approval_policy.value,

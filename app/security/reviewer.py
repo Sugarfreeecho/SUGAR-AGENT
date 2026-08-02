@@ -6,6 +6,7 @@ import re
 from dataclasses import dataclass
 
 from .models import CapabilityRequest
+from .store import redact_security_value
 
 
 _CRITICAL = re.compile(
@@ -42,10 +43,10 @@ def _review_with_model(request: CapabilityRequest, user_intent: str) -> ReviewRe
     from agent_harness import executor_client, executor_model
 
     prompt = {
-        "user_intent": str(user_intent or "")[:4000],
+        "user_intent": str(redact_security_value(user_intent or ""))[:4000],
         "request": {
             "action": request.action,
-            "resource": request.resource[:4000],
+            "resource": str(redact_security_value(request.resource))[:4000],
             "effect": request.effect,
             "principal": request.principal,
             "args_digest": request.args_digest,

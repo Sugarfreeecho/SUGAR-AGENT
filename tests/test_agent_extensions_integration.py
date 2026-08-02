@@ -151,11 +151,14 @@ def test_extensions_management_page_and_routes_are_wired():
     html = (ROOT / "app/templates/extensions_config.html").read_text(encoding="utf-8")
     webui = (ROOT / "app/webui.py").read_text(encoding="utf-8")
     frontend = (ROOT / "frontend/src/app/modules/settings.js").read_text(encoding="utf-8")
+    permissions = (ROOT / "frontend/src/app/modules/permissions.js").read_text(encoding="utf-8")
+    mcp_page = (ROOT / "app/templates/mcp_config.html").read_text(encoding="utf-8")
 
     assert "HOOKS_ENABLED" in html and "PLUGINS_ENABLED" in html
     assert '@fastapi_app.get("/api/extensions")' in webui
     assert '@fastapi_app.post("/api/extensions/reload")' in webui
     assert '@fastapi_app.post("/api/plugins/{plugin_id}/enabled")' in webui
+    assert '@fastapi_app.post("/api/security/mcp/{extension_id}/registration")' in webui
     assert "settings-extensions" not in frontend
     advanced = (ROOT / "app/templates/advance_config.html").read_text(encoding="utf-8")
     setup_i18n = (ROOT / "app/templates/static/setup_i18n.js").read_text(encoding="utf-8")
@@ -170,7 +173,12 @@ def test_extensions_management_page_and_routes_are_wired():
     assert 'h==="#extensions"' in advanced
     assert "async function loadExtensions()" in advanced
     assert "async function loadMcpConfig()" in advanced
+    assert "promptAdvancedMcpRegistrations" in advanced
     assert 'fetch("/api/mcp_config"' in advanced
+    assert '"/api/security/mcp/"+encodeURIComponent(item.extension_id)+"/registration"' in advanced
+    assert "promptPendingMcpRegistrations" in permissions
+    assert "每次工具调用仍按当前权限模式审批" in permissions
+    assert "promptMcpRegistrations" in mcp_page
     assert "'扩展管理':'Extension management'" in setup_i18n
     assert "'已注册 Hooks':'Registered hooks'" in setup_i18n
     assert "'插件状态已更新。':'Plugin state updated.'" in setup_i18n

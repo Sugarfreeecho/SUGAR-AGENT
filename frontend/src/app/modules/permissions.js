@@ -1,5 +1,7 @@
 var permissionModeBusy = false;
 var currentPermissionStatus = null;
+var mcpRegistrationPromptBusy = false;
+var mcpRegistrationPrompted = new Set();
 
 var PERMISSION_MODE_ICONS = {
     ask_for_approval: '<path d="M12 3l7 3v5c0 4.5-3 8.3-7 10-4-1.7-7-5.5-7-10V6z"/>',
@@ -13,14 +15,42 @@ function permissionModeLabel(mode) {
     return '请求批准';
 }
 
+function maybeShowGlobalFullAccessNotice(status) {
+    if (!status || status.mode !== 'full_access') return;
+    var key = 'myagent-full-access-notice:' + String(status.updated_at || 'legacy');
+    try {
+        if (window.sessionStorage.getItem(key) === '1') return;
+        window.sessionStorage.setItem(key, '1');
+    } catch (_) {}
+    var notice = document.createElement('div');
+    notice.className = 'permission-global-warning-toast';
+    notice.textContent = '全局完全访问已开启：所有任务均不受应用层限制，重启不会自动降级。';
+    document.body.appendChild(notice);
+    window.setTimeout(function () { notice.remove(); }, 9000);
+}
+
 function renderPermissionMode(status) {
     currentPermissionStatus = status || null;
+    maybeShowGlobalFullAccessNotice(status);
     var trigger = document.getElementById('permission-mode-trigger');
     var label = document.getElementById('permission-mode-current');
     var triggerIco = document.getElementById('permission-mode-ico');
     var menu = document.getElementById('permission-mode-menu');
     if (label) label.textContent = permissionModeLabel(status && status.mode);
     if (trigger) trigger.setAttribute('data-mode', String((status && status.mode) || 'ask_for_approval'));
+    if (trigger) {
+        var fullAccess = !!status && status.mode === 'full_access';
+        trigger.classList.toggle('is-global-full-access', fullAccess);
+        trigger.title = fullAccess
+            ? '全局完全访问已开启；新任务和重启不会自动降级'
+            : '更改权限';
+    }
+    var settingsStatus = document.getElementById('settings-security-status');
+    if (settingsStatus && status) {
+        settingsStatus.textContent = status.mode === 'full_access'
+            ? '警告：全局完全访问已开启，并会跨任务和应用重启保持，直到你主动切换。'
+            : permissionModeLabel(status.mode) + '（全局统一，对所有任务生效）';
+    }
     if (triggerIco) {
         var mode = status && status.mode;
         triggerIco.innerHTML = PERMISSION_MODE_ICONS[mode] || PERMISSION_MODE_ICONS.ask_for_approval;
@@ -40,6 +70,7 @@ function renderPermissionMode(status) {
 
 async function refreshPermissionModeSelector(sessionId) {
     var sid = String(sessionId || currentSessionId || '');
+    var previousPermissionStatus = currentPermissionStatus;
     if (!sid) {
         renderPermissionMode(null);
         return;
@@ -50,11 +81,9 @@ async function refreshPermissionModeSelector(sessionId) {
         if (!response.ok || !data.ok) throw new Error(data.error || ('HTTP ' + response.status));
         if (sid === String(currentSessionId || '')) renderPermissionMode(data);
     } catch (error) {
-        renderPermissionMode({
-            mode: 'ask_for_approval',
-            restriction: { implementation: 'application-policy', label: '应用层受限', hard_sandbox: false },
-            available_modes: { ask_for_approval: true },
-        });
+        // A read failure is not a global mode transition. Restore the last
+        // known badge instead of presenting the fallback as a real downgrade.
+        renderPermissionMode(previousPermissionStatus);
     }
 }
 
@@ -127,6 +156,180 @@ async function refreshWebFetchDomains() {
         if (statusEl) statusEl.textContent = '已加载 ' + editor.value.split('\n').filter(Boolean).length + ' 个自定义域名（内置清单始终生效）。';
     } catch (error) {
         if (statusEl) statusEl.textContent = '读取预批准域名失败：' + String(error && error.message ? error.message : error);
+    }
+}
+
+function extensionTrustLabel(item) {
+    var kind = item.kind === 'mcp' ? 'MCP' : '插件';
+    return kind + ' / ' + String(item.name || item.extension_id || 'unknown');
+}
+
+function mcpRegistrationMessage(item) {
+    var capabilities = item && item.capabilities ? item.capabilities : {};
+    var lines = [
+        '连接前需要确认一次当前 MCP 配置。确认仅允许启动或连接服务器并发现工具；每次工具调用仍按当前权限模式审批。',
+        '',
+        '类型：' + String(item.runtime || capabilities.transport || 'unknown'),
+        '命令或地址：' + String(item.source || '未提供'),
+    ];
+    if (capabilities.working_directory) lines.push('工作目录：' + String(capabilities.working_directory));
+    var envNames = Array.isArray(capabilities.configured_environment)
+        ? capabilities.configured_environment
+        : [];
+    if (envNames.length) lines.push('配置环境变量：' + envNames.join(', '));
+    lines.push('', '该服务器以当前操作系统用户权限运行，不是硬隔离。');
+    return lines.join('\n');
+}
+
+async function submitMcpRegistration(item, approved) {
+    var response = await fetch(
+        '/api/security/mcp/' + encodeURIComponent(item.extension_id) + '/registration',
+        {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                approved: !!approved,
+                config_digest: String(item.config_digest || ''),
+            }),
+        }
+    );
+    var data = await response.json();
+    if (!response.ok || !data.ok) throw new Error(data.error || ('HTTP ' + response.status));
+    return data.registration;
+}
+
+async function confirmMcpRegistration(item) {
+    var accepted = await openUiModal({
+        title: '注册 MCP 服务器',
+        subtitle: extensionTrustLabel(item),
+        message: mcpRegistrationMessage(item),
+        danger: true,
+        confirmText: '确认并连接',
+        cancelText: '暂不连接',
+    });
+    if (!accepted) return false;
+    await submitMcpRegistration(item, true);
+    return true;
+}
+
+async function promptPendingMcpRegistrations(rows) {
+    if (mcpRegistrationPromptBusy) return;
+    var pending = (Array.isArray(rows) ? rows : []).filter(function (item) {
+        var digestKey = String(item.extension_id || '') + ':' + String(item.config_digest || '');
+        return item.kind === 'mcp'
+            && item.registration_status === 'pending'
+            && !mcpRegistrationPrompted.has(digestKey);
+    });
+    if (!pending.length) return;
+    mcpRegistrationPromptBusy = true;
+    var changed = false;
+    try {
+        for (var i = 0; i < pending.length; i += 1) {
+            var item = pending[i];
+            var digestKey = String(item.extension_id || '') + ':' + String(item.config_digest || '');
+            mcpRegistrationPrompted.add(digestKey);
+            try {
+                changed = (await confirmMcpRegistration(item)) || changed;
+            } catch (error) {
+                showUiAlert({
+                    title: 'MCP 注册失败',
+                    message: String(error && error.message ? error.message : error),
+                    confirmText: '知道了',
+                });
+            }
+        }
+    } finally {
+        mcpRegistrationPromptBusy = false;
+    }
+    if (changed) await refreshSecurityExtensions();
+}
+
+async function setExtensionTrust(item, trust) {
+    var statusEl = document.getElementById('settings-security-extensions-status');
+    if (item.kind === 'mcp' && trust) {
+        try {
+            var confirmed = await confirmMcpRegistration(item);
+            if (statusEl && confirmed) statusEl.textContent = 'MCP 已注册并连接；工具调用继续正常审批。';
+            if (confirmed) await refreshSecurityExtensions();
+        } catch (error) {
+            if (statusEl) statusEl.textContent = 'MCP 注册失败：' + String(error && error.message ? error.message : error);
+        }
+        return;
+    }
+    if (trust) {
+        var accepted = await openUiModal({
+            title: '信任可执行扩展',
+            subtitle: extensionTrustLabel(item),
+            message: '该扩展将以当前操作系统用户权限运行。能力声明只用于审批分类，不能阻止扩展代码读取文件或联网。确认信任当前内容摘要？',
+            danger: true,
+            confirmText: '信任当前版本',
+            cancelText: '取消',
+        });
+        if (!accepted) return;
+    }
+    try {
+        var base = '/api/security/extensions/' + encodeURIComponent(item.kind) + '/' + encodeURIComponent(item.extension_id) + '/trust';
+        var response = await fetch(base, { method: trust ? 'POST' : 'DELETE' });
+        var data = await response.json();
+        if (!response.ok || !data.ok) throw new Error(data.error || ('HTTP ' + response.status));
+        if (statusEl) {
+            statusEl.textContent = trust
+                ? '扩展已信任；当前摘要可以启动。'
+                : (item.kind === 'mcp'
+                    ? 'MCP 注册已撤销，运行中的服务器已停止。'
+                    : '扩展信任已撤销，运行中的 worker 已停止。');
+        }
+        await refreshSecurityExtensions();
+    } catch (error) {
+        if (statusEl) statusEl.textContent = '更新扩展信任失败：' + String(error && error.message ? error.message : error);
+    }
+}
+
+async function refreshSecurityExtensions() {
+    var listEl = document.getElementById('settings-security-extensions-list');
+    var statusEl = document.getElementById('settings-security-extensions-status');
+    if (!listEl) return;
+    listEl.textContent = '正在读取…';
+    try {
+        var response = await fetch('/api/security/extensions', { cache: 'no-store' });
+        var data = await response.json();
+        if (!response.ok || !data.ok) throw new Error(data.error || ('HTTP ' + response.status));
+        listEl.textContent = '';
+        var rows = Array.isArray(data.extensions) ? data.extensions : [];
+        if (!rows.length) {
+            listEl.textContent = '没有已安装或已配置的可执行扩展。';
+            return;
+        }
+        rows.forEach(function (item) {
+            var row = document.createElement('div');
+            row.className = 'settings-security-rule-row';
+            var badge = document.createElement('span');
+            var mcpStatus = String(item.registration_status || '');
+            badge.className = item.trusted ? 'settings-security-rule-allow' : 'settings-security-rule-ask';
+            badge.textContent = item.kind === 'mcp'
+                ? (mcpStatus === 'registered' ? '已注册' : (mcpStatus === 'rejected' ? '已拒绝' : '待确认'))
+                : (item.trusted ? '已信任' : '待信任');
+            var label = document.createElement('span');
+            label.className = 'settings-security-rule-label';
+            label.textContent = extensionTrustLabel(item) + ' · ' + String(item.runtime || 'runtime');
+            label.title = String(item.source || '') + '\n摘要：' + String(item.content_digest || '');
+            var action = document.createElement('button');
+            action.type = 'button';
+            action.className = 'settings-security-rule-delete';
+            action.textContent = item.trusted
+                ? '撤销'
+                : (item.kind === 'mcp' ? '确认注册' : '信任');
+            action.addEventListener('click', function () { void setExtensionTrust(item, !item.trusted); });
+            row.appendChild(badge);
+            row.appendChild(label);
+            row.appendChild(action);
+            listEl.appendChild(row);
+        });
+        if (statusEl) statusEl.textContent = '';
+        void promptPendingMcpRegistrations(rows);
+    } catch (error) {
+        listEl.textContent = '';
+        if (statusEl) statusEl.textContent = '读取扩展信任失败：' + String(error && error.message ? error.message : error);
     }
 }
 
@@ -311,7 +514,10 @@ function initPermissionControls() {
     if (webFetchSave) webFetchSave.addEventListener('click', function () { void saveWebFetchDomains(); });
     var webFetchReload = document.getElementById('settings-security-web-fetch-reload');
     if (webFetchReload) webFetchReload.addEventListener('click', function () { void refreshWebFetchDomains(); });
+    var extensionsRefresh = document.getElementById('settings-security-extensions-refresh');
+    if (extensionsRefresh) extensionsRefresh.addEventListener('click', function () { void refreshSecurityExtensions(); });
     void refreshSecurityRules();
+    void refreshSecurityExtensions();
     void refreshWebFetchDomains();
     void refreshPermissionModeSelector(currentSessionId);
 }

@@ -3410,6 +3410,28 @@ body {
     background: rgba(255, 255, 255, 0.075);
     color: var(--text-primary);
 }
+.composer-permission-trigger.is-global-full-access {
+    border-color: rgba(243, 139, 168, 0.72);
+    background: rgba(243, 139, 168, 0.13);
+    box-shadow: 0 0 0 2px rgba(243, 139, 168, 0.08);
+}
+.permission-global-warning-toast {
+    position: fixed;
+    top: 0.85rem;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 2400;
+    max-width: min(44rem, calc(100vw - 2rem));
+    padding: 0.7rem 1rem;
+    border: 1px solid rgba(243, 139, 168, 0.72);
+    border-radius: 0.75rem;
+    background: rgba(67, 22, 34, 0.96);
+    color: #fff;
+    box-shadow: var(--shadow-soft);
+    font-size: 0.78rem;
+    font-weight: 700;
+    pointer-events: none;
+}
 .composer-permission-trigger:disabled { opacity: 0.5; cursor: default; }
 .composer-permission-ico {
     flex: none;

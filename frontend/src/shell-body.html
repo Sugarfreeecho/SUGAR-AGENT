@@ -287,6 +287,15 @@
                     <div id="settings-security-status" class="settings-feature-status" role="status" aria-live="polite">请求批准 / 替我审批 / 完全访问均可直接切换；完全访问切换时会单独警告</div>
                 </div>
                 <div class="settings-modal__section">
+                    <div class="settings-modal__label">插件信任与 MCP 注册</div>
+                    <div class="settings-feature-status">插件代码需要信任后加载；每个 MCP 配置在首次注册或摘要变化后人工确认一次。确认 MCP 只允许连接和发现工具，具体工具调用仍按当前权限模式审批。两者均以当前操作系统用户权限运行，不是硬隔离。</div>
+                    <div class="settings-theme-row" role="group" aria-label="可信扩展操作">
+                        <button type="button" id="settings-security-extensions-refresh" class="settings-theme-btn">刷新</button>
+                    </div>
+                    <div id="settings-security-extensions-list" class="settings-security-rules-list">正在读取…</div>
+                    <div id="settings-security-extensions-status" class="settings-feature-status" role="status" aria-live="polite"></div>
+                </div>
+                <div class="settings-modal__section">
                     <div class="settings-modal__label">权限规则（始终允许 / 必问 / 拒绝）</div>
                     <div class="settings-theme-row" role="group" aria-label="权限规则操作">
                         <button type="button" id="settings-security-rules-refresh" class="settings-theme-btn">刷新</button>
@@ -316,7 +325,7 @@
                 </div>
                 <div class="settings-modal__section">
                     <div class="settings-modal__label">网页抓取预批准域名（web_fetch 免审批）</div>
-                    <div class="settings-feature-status" role="status" aria-live="polite">仅作用于只读的 web_fetch；web_download 与 Shell 联网不受影响。每行一个域名，留空表示仅用内置清单。</div>
+                    <div class="settings-feature-status" role="status" aria-live="polite">仅作用于只读的 web_fetch；web_download 与 Shell 联网不受影响。每行一个域名，留空表示仅用内置清单。当前名单允许匹配子域，GET 的路径和查询参数可能形成无审批数据外传通道。</div>
                     <textarea id="settings-security-web-fetch-domains" class="settings-security-domains-editor" spellcheck="false" placeholder="例如：docs.example.com&#10;api.example.org"></textarea>
                     <div class="settings-theme-row" role="group" aria-label="预批准域名操作">
                         <button type="button" id="settings-security-web-fetch-save" class="settings-theme-btn">保存</button>

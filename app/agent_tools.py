@@ -298,6 +298,13 @@ def safe_work_path(file_path: str) -> Path:
         full_path = (work_root / raw).resolve()
     if _is_path_under(full_path, work_root):
         return full_path
+    if active and active["decision"].allowed:
+        allowed = {
+            Path(item).expanduser().resolve()
+            for item in (active["request"].metadata.get("paths") or [])
+        }
+        if full_path in allowed:
+            return full_path
     raise ValueError(f"Access denied: path {raw} is outside allowed directories")
 
 
@@ -1254,6 +1261,43 @@ def _paths_inside_workspace(cmd: str, workspace: Path) -> bool:
         except Exception:
             continue
         if not _is_path_under(p, wroot):
+            return False
+    try:
+        tokens = _shell_lex_split_for_workspace_path_scan(cmd)
+    except ValueError:
+        # Unbalanced or otherwise unparseable shell syntax is not safe to
+        # classify as a normal workspace command.
+        return False
+    for token in tokens:
+        raw = _unwrap_outer_shell_quotes(str(token or "").strip())
+        if not raw or raw in {"|", "||", "&&", ";", ">", ">>", "<"}:
+            continue
+        redirect = re.match(r"^\d*(?:>{1,2}|<)(.+)$", raw)
+        if redirect:
+            raw = redirect.group(1).strip()
+        if not raw or raw in {"&1", "&2", "&-"}:
+            continue
+        lowered = raw.lower()
+        if lowered.startswith(("http://", "https://")):
+            continue
+        if raw.startswith("-") and not raw.startswith(("-./", "-..\\")):
+            continue
+        path_like = (
+            raw.startswith((".", "~"))
+            or "/" in raw
+            or "\\" in raw
+        )
+        if not path_like:
+            continue
+        # Drive/UNC/POSIX absolute paths were already checked above. Checking
+        # them again is harmless and ensures relative symlinks are resolved.
+        try:
+            candidate = _resolve_shell_token_for_workspace_restrict(raw, wroot)
+        except Exception:
+            return False
+        if _is_posix_special_path_skip_workspace_check(raw):
+            continue
+        if not _is_path_under(candidate, wroot):
             return False
     return True
 

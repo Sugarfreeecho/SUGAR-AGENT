@@ -16,7 +16,13 @@ from .models import (
 )
 
 
-_PROTECTED_NAMES = {".env", ".git", ".agents", ".myagent"}
+_PROTECTED_NAMES = {
+    ".env",
+    ".git",
+    ".agents",
+    ".myagent",
+    "hooks.json",
+}
 _SENSITIVE_PARTS = {
     ".ssh",
     ".aws",
@@ -79,6 +85,11 @@ def is_within(path: Path, root: Path) -> bool:
 
 
 def protected_path(path: Path, workspace: Path) -> bool:
+    configured_hooks = os.getenv("HOOKS_PATH") or os.getenv("HOOKS_CONFIG_PATH")
+    if configured_hooks:
+        configured_path = canonical_path(configured_hooks, workspace)
+        if path == configured_path or configured_path in path.parents:
+            return True
     try:
         rel_parts = [part.lower() for part in path.relative_to(workspace).parts]
     except ValueError:
@@ -271,10 +282,12 @@ def match_rule_for_request(
         if not isinstance(raw, (list, tuple)) or not raw:
             raw = [request.resource]
         try:
-            canonical = canonical_path(raw[0], workspace)
+            canonical = [canonical_path(item, workspace) for item in raw]
         except Exception:
             return False
-        return _path_matches(canonical, pattern)
+        return bool(canonical) and all(
+            _path_matches(path, pattern) for path in canonical
+        )
     if action == "network.connect":
         return _url_matches(request.resource, pattern)
     if action == "web.search":
@@ -302,6 +315,10 @@ def suggest_rule_pattern(
         raw = request.metadata.get("paths")
         if not isinstance(raw, (list, tuple)) or not raw:
             raw = [request.resource]
+        if len(raw) != 1:
+            # A reusable rule for one path must never authorize sibling paths
+            # that happened to share the same multi-file request.
+            return None
         try:
             path = canonical_path(raw[0], workspace)
         except Exception:

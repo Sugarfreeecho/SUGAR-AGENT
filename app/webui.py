@@ -2814,11 +2814,122 @@ async def set_session_permissions(session_id: str, req: Request):
         from security import security_status_for_session, set_session_permission_mode
 
         set_session_permission_mode(sid, (body or {}).get("mode"))
-        return JSONResponse({"ok": True, **security_status_for_session(sid)})
+        status = security_status_for_session(sid)
+        event = {"type": "permission_mode_changed", **status, "ephemeral": True}
+        for row in session_manager.list_sessions(include_archived=True):
+            target = str(row.get("id") or row.get("session_id") or "").strip()
+            if not target:
+                continue
+            try:
+                await publish_session_event(target, event)
+            except Exception:
+                logger.debug("Permission mode broadcast failed for %s", target, exc_info=True)
+        return JSONResponse({"ok": True, **status})
     except ValueError as exc:
         return JSONResponse({"ok": False, "error": str(exc)}, status_code=422)
     except Exception as exc:
         return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
+
+
+@fastapi_app.get("/api/security/extensions")
+async def get_security_extensions():
+    try:
+        from security.extensions import extension_candidates
+
+        return JSONResponse({"ok": True, "extensions": extension_candidates()})
+    except Exception as exc:
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+
+
+@fastapi_app.post("/api/security/extensions/{kind}/{extension_id}/trust")
+async def trust_security_extension(kind: str, extension_id: str):
+    try:
+        from agent_extensions import get_plugin_runtime_registry
+        from security.extensions import trust_current_extension
+        from security.runtime import security_store
+
+        descriptor = trust_current_extension(kind, extension_id)
+        security_store().audit(
+            session_id="",
+            event_type="extension_trust",
+            outcome="allow",
+            payload={
+                "kind": descriptor["kind"],
+                "extension_id": descriptor["extension_id"],
+                "content_digest": descriptor["content_digest"],
+            },
+        )
+        get_plugin_runtime_registry().invalidate()
+        await agent_mcp.force_reload()
+        return JSONResponse({"ok": True, "extension": descriptor})
+    except ValueError as exc:
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=404)
+    except Exception as exc:
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+
+
+@fastapi_app.delete("/api/security/extensions/{kind}/{extension_id}/trust")
+async def revoke_security_extension(kind: str, extension_id: str):
+    try:
+        from agent_extensions import get_plugin_runtime_registry
+        from security.extensions import revoke_extension
+        from security.runtime import security_store
+
+        revoked = revoke_extension(kind, extension_id)
+        security_store().audit(
+            session_id="",
+            event_type="extension_trust",
+            outcome="deny",
+            payload={"kind": kind, "extension_id": extension_id},
+        )
+        get_plugin_runtime_registry().invalidate()
+        await agent_mcp.force_reload()
+        return JSONResponse({"ok": True, "revoked": revoked})
+    except Exception as exc:
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+
+
+@fastapi_app.post("/api/security/mcp/{extension_id}/registration")
+async def decide_mcp_registration(extension_id: str, request: Request):
+    """Confirm or reject starting one exact MCP server configuration."""
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"ok": False, "error": "invalid json"}, status_code=400)
+    try:
+        from security.extensions import decide_current_mcp_registration
+        from security.runtime import security_store
+
+        approved_value = (body or {}).get("approved")
+        if not isinstance(approved_value, bool):
+            raise ValueError("approved must be a boolean")
+        approved = approved_value
+        descriptor = decide_current_mcp_registration(
+            extension_id,
+            config_digest=str((body or {}).get("config_digest") or ""),
+            approved=approved,
+        )
+        security_store().audit(
+            session_id="",
+            event_type="mcp_registration",
+            outcome="allow" if approved else "deny",
+            payload={
+                "extension_id": descriptor["extension_id"],
+                "config_digest": descriptor["config_digest"],
+                "transport": descriptor.get("runtime") or "",
+            },
+        )
+        await agent_mcp.force_reload()
+        if approved:
+            await agent_mcp.ensure_started()
+        return JSONResponse({"ok": True, "registration": descriptor})
+    except ValueError as exc:
+        message = str(exc)
+        lowered = message.lower()
+        status = 409 if "changed" in lowered else (422 if "must be" in lowered else 404)
+        return JSONResponse({"ok": False, "error": message}, status_code=status)
+    except Exception as exc:
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
 
 
 @fastapi_app.get("/sessions/{session_id}/model_profile")
@@ -5640,10 +5751,18 @@ async def install_plugin_dependencies_api(plugin_id: str):
 
 @fastapi_app.get("/api/mcp_config")
 async def get_mcp_config_snapshot():
+    from security.extensions import mcp_registration_candidates
+
     path = agent_mcp.get_config_path()
     exists = path.is_file()
     text = path.read_text(encoding="utf-8") if exists else ""
-    return JSONResponse({"ok": True, "path": str(path.resolve()), "exists": exists, "text": text})
+    return JSONResponse({
+        "ok": True,
+        "path": str(path.resolve()),
+        "exists": exists,
+        "text": text,
+        "mcp_registrations": mcp_registration_candidates(),
+    })
 
 
 @fastapi_app.post("/api/mcp_config")
@@ -5669,7 +5788,13 @@ async def save_mcp_config_snapshot(request: Request):
     path.write_text(out, encoding="utf-8")
     await agent_mcp.force_reload()
     await agent_mcp.ensure_started()
-    return JSONResponse({"ok": True, "path": str(path.resolve())})
+    from security.extensions import mcp_registration_candidates
+
+    return JSONResponse({
+        "ok": True,
+        "path": str(path.resolve()),
+        "mcp_registrations": mcp_registration_candidates(),
+    })
 
 
 @fastapi_app.get("/api/env")

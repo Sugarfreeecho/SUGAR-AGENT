@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sqlite3
 import threading
 import time
@@ -9,7 +10,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 
-CURRENT_POLICY_VERSION = 2
+CURRENT_POLICY_VERSION = 3
 
 
 def security_state_dir() -> Path:
@@ -70,6 +71,7 @@ class SecurityStore:
                     pattern TEXT NOT NULL,
                     created_at REAL NOT NULL,
                     expires_at REAL,
+                    enabled INTEGER NOT NULL DEFAULT 1,
                     UNIQUE(session_id, workspace, source, behavior, action, pattern)
                 );
                 CREATE TABLE IF NOT EXISTS audit_events(
@@ -85,17 +87,34 @@ class SecurityStore:
                     key TEXT PRIMARY KEY,
                     value TEXT NOT NULL
                 );
-                CREATE TABLE IF NOT EXISTS session_modes(
-                    session_id TEXT PRIMARY KEY,
-                    mode TEXT NOT NULL,
-                    updated_at REAL NOT NULL
+                CREATE TABLE IF NOT EXISTS extension_trust(
+                    kind TEXT NOT NULL,
+                    extension_id TEXT NOT NULL,
+                    source TEXT NOT NULL DEFAULT '',
+                    content_digest TEXT NOT NULL,
+                    config_digest TEXT NOT NULL DEFAULT '',
+                    capabilities_json TEXT NOT NULL DEFAULT '{}',
+                    decision TEXT NOT NULL,
+                    created_at REAL NOT NULL,
+                    updated_at REAL NOT NULL,
+                    PRIMARY KEY(kind, extension_id)
                 );
                 INSERT OR IGNORE INTO security_settings(key, value)
                     VALUES('auto_review_enabled', 'false');
                 INSERT OR IGNORE INTO security_settings(key, value)
                     VALUES('permission_mode', 'ask_for_approval');
+                INSERT OR IGNORE INTO security_settings(key, value)
+                    VALUES('permission_mode_updated_at', '0');
                 """
             )
+            columns = {
+                str(item["name"])
+                for item in db.execute("PRAGMA table_info(permission_rules)").fetchall()
+            }
+            if "enabled" not in columns:
+                db.execute(
+                    "ALTER TABLE permission_rules ADD COLUMN enabled INTEGER NOT NULL DEFAULT 1"
+                )
             row = db.execute(
                 "SELECT value FROM security_meta WHERE key='policy_version'"
             ).fetchone()
@@ -104,9 +123,38 @@ class SecurityStore:
             except (TypeError, ValueError):
                 stored_version = 0
             if stored_version < CURRENT_POLICY_VERSION:
+                disabled = db.execute(
+                    """
+                    UPDATE permission_rules SET enabled=0
+                    WHERE source='project' AND behavior='allow' AND enabled=1
+                    """
+                ).rowcount
+                db.execute("DELETE FROM grants")
+                db.execute("DROP TABLE IF EXISTS session_modes")
                 db.execute(
                     "UPDATE security_meta SET value=? WHERE key='policy_version'",
                     (str(CURRENT_POLICY_VERSION),),
+                )
+                db.execute(
+                    """
+                    INSERT INTO audit_events(
+                        created_at, session_id, event_type, request_digest,
+                        outcome, payload_json
+                    ) VALUES(?, '', 'policy_migration', '', 'allow', ?)
+                    """,
+                    (
+                        time.time(),
+                        json.dumps(
+                            {
+                                "from_version": stored_version,
+                                "to_version": CURRENT_POLICY_VERSION,
+                                "grants_cleared": True,
+                                "project_allow_rules_disabled": int(disabled),
+                                "global_permission_mode_preserved": True,
+                            },
+                            separators=(",", ":"),
+                        ),
+                    ),
                 )
 
     def policy_version(self) -> int:
@@ -186,6 +234,8 @@ class SecurityStore:
         behavior = str(behavior or "").strip().lower()
         if behavior not in {"allow", "deny", "ask"}:
             raise ValueError(f"invalid rule behavior: {behavior!r}")
+        if source == "project" and behavior == "allow":
+            raise ValueError("project rules may only ask or deny; they cannot widen permissions")
         action = str(action or "").strip().lower()
         pattern = str(pattern or "").strip()
         if not action or not pattern:
@@ -197,10 +247,11 @@ class SecurityStore:
                 """
                 INSERT INTO permission_rules(
                     session_id, workspace, source, behavior, action, pattern,
-                    created_at, expires_at
-                ) VALUES(?, ?, ?, ?, ?, ?, ?, ?)
+                    created_at, expires_at, enabled
+                ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, 1)
                 ON CONFLICT(session_id, workspace, source, behavior, action, pattern)
-                DO UPDATE SET created_at=excluded.created_at, expires_at=excluded.expires_at
+                DO UPDATE SET created_at=excluded.created_at,
+                    expires_at=excluded.expires_at, enabled=1
                 """,
                 (session_id, workspace, source, behavior, action, pattern, now, expires),
             )
@@ -228,6 +279,7 @@ class SecurityStore:
                 """
                 SELECT * FROM permission_rules
                 WHERE (expires_at IS NULL OR expires_at > ?)
+                  AND enabled=1
                   AND (
                         source='user'
                      OR (source='session' AND session_id=?)
@@ -359,17 +411,33 @@ class SecurityStore:
             return "ask_for_approval"
         return value
 
+    def get_global_permission_mode_updated_at(self) -> float:
+        raw = self.get_text_setting("permission_mode_updated_at", "0")
+        try:
+            return max(0.0, float(raw))
+        except (TypeError, ValueError):
+            return 0.0
+
     def set_global_permission_mode(self, mode: str) -> None:
         normalized = str(mode or "").strip().lower().replace("-", "_")
         if normalized not in {"ask_for_approval", "approve_for_me", "full_access"}:
             raise ValueError(f"invalid permission mode: {mode!r}")
         with self._lock, self._connect() as db:
+            updated_at = time.time()
             db.execute(
                 """
                 INSERT INTO security_settings(key, value) VALUES('permission_mode', ?)
                 ON CONFLICT(key) DO UPDATE SET value=excluded.value
                 """,
                 (normalized,),
+            )
+            db.execute(
+                """
+                INSERT INTO security_settings(key, value)
+                VALUES('permission_mode_updated_at', ?)
+                ON CONFLICT(key) DO UPDATE SET value=excluded.value
+                """,
+                (str(updated_at),),
             )
 
     def get_session_mode(self, session_id: str) -> str:
@@ -380,6 +448,136 @@ class SecurityStore:
 
     def set_session_mode(self, session_id: str, mode: str) -> None:
         self.set_global_permission_mode(mode)
+
+    def set_extension_trust(
+        self,
+        *,
+        kind: str,
+        extension_id: str,
+        source: str,
+        content_digest: str,
+        config_digest: str = "",
+        capabilities: dict[str, Any] | None = None,
+        decision: str = "trusted",
+    ) -> None:
+        kind = str(kind or "").strip().lower()
+        extension_id = str(extension_id or "").strip()
+        decision = str(decision or "").strip().lower()
+        if kind not in {"plugin", "mcp"} or not extension_id:
+            raise ValueError("invalid extension trust identity")
+        if decision not in {"trusted", "revoked"}:
+            raise ValueError("invalid extension trust decision")
+        now = time.time()
+        with self._lock, self._connect() as db:
+            db.execute(
+                """
+                INSERT INTO extension_trust(
+                    kind, extension_id, source, content_digest, config_digest,
+                    capabilities_json, decision, created_at, updated_at
+                ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(kind, extension_id) DO UPDATE SET
+                    source=excluded.source,
+                    content_digest=excluded.content_digest,
+                    config_digest=excluded.config_digest,
+                    capabilities_json=excluded.capabilities_json,
+                    decision=excluded.decision,
+                    updated_at=excluded.updated_at
+                """,
+                (
+                    kind,
+                    extension_id,
+                    str(source or ""),
+                    str(content_digest or ""),
+                    str(config_digest or ""),
+                    json.dumps(
+                        capabilities or {}, ensure_ascii=False,
+                        separators=(",", ":"), default=str,
+                    ),
+                    decision,
+                    now,
+                    now,
+                ),
+            )
+
+    def extension_is_trusted(
+        self,
+        *,
+        kind: str,
+        extension_id: str,
+        content_digest: str,
+        config_digest: str = "",
+    ) -> bool:
+        with self._connect() as db:
+            row = db.execute(
+                "SELECT * FROM extension_trust WHERE kind=? AND extension_id=?",
+                (str(kind or "").strip().lower(), str(extension_id or "").strip()),
+            ).fetchone()
+        return bool(
+            row
+            and row["decision"] == "trusted"
+            and str(row["content_digest"]) == str(content_digest or "")
+            and str(row["config_digest"]) == str(config_digest or "")
+        )
+
+    def get_extension_trust(
+        self,
+        *,
+        kind: str,
+        extension_id: str,
+    ) -> dict[str, Any] | None:
+        """Return the stored decision for an extension identity.
+
+        Callers must still compare the stored digests with the current
+        descriptor. A decision for an older MCP configuration must never be
+        treated as approval for a changed command, URL, environment, or cwd.
+        """
+        with self._connect() as db:
+            row = db.execute(
+                "SELECT * FROM extension_trust WHERE kind=? AND extension_id=?",
+                (str(kind or "").strip().lower(), str(extension_id or "").strip()),
+            ).fetchone()
+        if row is None:
+            return None
+        item = dict(row)
+        try:
+            item["capabilities"] = json.loads(
+                item.pop("capabilities_json") or "{}"
+            )
+        except (TypeError, ValueError):
+            item["capabilities"] = {}
+        return item
+
+    def list_extension_trust(self) -> list[dict[str, Any]]:
+        with self._connect() as db:
+            rows = db.execute(
+                "SELECT * FROM extension_trust ORDER BY kind, extension_id"
+            ).fetchall()
+        result: list[dict[str, Any]] = []
+        for row in rows:
+            item = dict(row)
+            try:
+                item["capabilities"] = json.loads(
+                    item.pop("capabilities_json") or "{}"
+                )
+            except (TypeError, ValueError):
+                item["capabilities"] = {}
+            result.append(item)
+        return result
+
+    def revoke_extension_trust(self, kind: str, extension_id: str) -> bool:
+        with self._lock, self._connect() as db:
+            cur = db.execute(
+                """
+                UPDATE extension_trust SET decision='revoked', updated_at=?
+                WHERE kind=? AND extension_id=?
+                """,
+                (
+                    time.time(),
+                    str(kind or "").strip().lower(),
+                    str(extension_id or "").strip(),
+                ),
+            )
+            return cur.rowcount > 0
 
 
 def _redact(value: Any) -> Any:
@@ -393,4 +591,27 @@ def _redact(value: Any) -> Any:
         return [_redact(item) for item in value]
     if isinstance(value, tuple):
         return tuple(_redact(item) for item in value)
+    if isinstance(value, str):
+        text = re.sub(
+            r"(?i)(authorization\s*:\s*(?:bearer|basic)\s+)[^\s\"']+",
+            r"\1[REDACTED]",
+            value,
+        )
+        text = re.sub(
+            r"(?i)\b(api[_-]?key|access[_-]?token|refresh[_-]?token|password|secret|cookie)"
+            r"(\s*[:=]\s*)[^\s;&|\"']+",
+            r"\1\2[REDACTED]",
+            text,
+        )
+        text = re.sub(
+            r"(?i)(https?://[^\s?#]+\?)[^\s#]+",
+            r"\1[REDACTED]",
+            text,
+        )
+        return text
     return value
+
+
+def redact_security_value(value: Any) -> Any:
+    """Return the same shape with credentials and URL query values removed."""
+    return _redact(value)
