@@ -632,7 +632,7 @@
       <div class="form-row-2">
         <div class="form-group">
           <label>上下文门限（tokens）</label>
-          <input type="text" id="contextWindow" inputmode="numeric" autocomplete="off" spellcheck="false" placeholder="1000000">
+          <input type="text" id="contextWindow" inputmode="numeric" autocomplete="off" spellcheck="false" placeholder="119808">
         </div>
         <div class="form-group">
           <label>单次回复上限（tokens）</label>
@@ -750,8 +750,10 @@
     const source = String((model && (model.limit_source || model.context_window_source)) || '');
     if (source === 'api') return 'API 返回窗口信息';
     if (source === 'probe') return 'HTTP 400 错误消息探测';
-    if (source === 'default') return '默认 1m 上下文';
-    return '使用内置常见模型窗口推断';
+    if (source === 'huawei') return 'Huawei API 默认 128K';
+    if (source === 'table') return 'models_table.md 映射';
+    if (source === 'default') return '默认 128K 模型窗口';
+    return '模型窗口推断';
   }
 
   function positiveInt(value, fallback) {
@@ -765,7 +767,7 @@
 
   function recommendedModelWindows(modelMaxContext) {
     const max = positiveInt(modelMaxContext, 0);
-    if (!max) return { out: 8192, ctx: 1000000, theoretical: 1000000, cap: 0, capped: false };
+    if (!max) return { out: 8192, ctx: 119808, theoretical: 119808, cap: 128000, capped: false };
     let out = max < 130000 ? 8192 : Math.min(Math.floor(max * 0.1), max < 300000 ? 30000 : 50000);
     out = Math.max(1, Math.min(out, Math.max(1, max - 1)));
     const theoretical = Math.max(1, max - out);
@@ -781,7 +783,7 @@
 
   function applyDiscoveredModel(model) {
     model = model || {};
-    const modelMaxContext = positiveInt(model.model_context_window || model.context_window, 1000000);
+    const modelMaxContext = positiveInt(model.model_context_window || model.context_window, 128000);
     const windows = recommendedModelWindows(modelMaxContext);
     selectedDiscoveredModelId = String(model.id || model.model || '').trim();
     if (modelName) modelName.value = model.id || model.model || '';
@@ -960,7 +962,7 @@
     applyProvider(llmProvider.value, true);
   }
 
-  if (contextWindowEl && !String(contextWindowEl.value).trim()) contextWindowEl.value = '1000000';
+  if (contextWindowEl && !String(contextWindowEl.value).trim()) contextWindowEl.value = '119808';
   if (maxOutputTokensEl && !String(maxOutputTokensEl.value).trim()) maxOutputTokensEl.value = '8192';
   setupReady = true;
 
@@ -1019,7 +1021,7 @@
         api_key: key,
         model_name: model,
         discovered_model_ids: discoveredModelIds,
-        context_window: contextWindowEl ? contextWindowEl.value.trim() : '1000000',
+        context_window: contextWindowEl ? contextWindowEl.value.trim() : '119808',
         max_output_tokens: maxOutputTokensEl ? maxOutputTokensEl.value.trim() : '8192',
       };
       // Older running backends still default omitted runtime fields. Echo existing

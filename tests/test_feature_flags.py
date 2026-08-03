@@ -41,6 +41,7 @@ def test_index_html_injects_conservative_feature_values(monkeypatch):
         "followupRestart": False,
         "streamReconnect": False,
         "finalReconcile": True,
+        "security": False,
     }
 
 
@@ -62,6 +63,7 @@ def test_index_html_injects_independent_feature_overrides(monkeypatch):
         "followupRestart": True,
         "streamReconnect": True,
         "finalReconcile": False,
+        "security": False,
     }
 
 
@@ -110,9 +112,21 @@ def test_index_html_injects_append_steer_default_and_environment_override(monkey
     assert _extract_steer_mode(str(webui.get_index_html())) == "append"
 
 
+def test_index_html_injects_security_env_override(monkeypatch):
+    import webui
+
+    monkeypatch.setenv("SECURITY_ENABLED", "0")
+    assert _extract_feature_flags(str(webui.get_index_html()))["security"] is False
+    monkeypatch.setenv("SECURITY_ENABLED", "1")
+    assert _extract_feature_flags(str(webui.get_index_html()))["security"] is True
+
+
 def test_permission_mode_ui_regressions():
     i18n = (ROOT / "frontend/src/app/modules/i18n.js").read_text(encoding="utf-8")
     permissions = (ROOT / "frontend/src/app/modules/permissions.js").read_text(
+        encoding="utf-8"
+    )
+    advanced_settings = (ROOT / "app/templates/advance_config.html").read_text(
         encoding="utf-8"
     )
     css = (ROOT / "frontend/src/styles/app.css").read_text(encoding="utf-8")
@@ -156,10 +170,18 @@ def test_permission_mode_ui_regressions():
     # badge must be gone from both.
     assert "Agent 的操作应如何获得审批？" in index_html
     assert "permission-mode-option" in index_html
+    assert 'id="settings-security-rules-list"' not in html
+    assert 'id="settings-security-rules-list"' not in index_html
+    assert 'data-advanced-tab="security"' in advanced_settings
+    assert 'id="advanced-security-rules-list"' in advanced_settings
+    assert 'id="advanced-security-extensions-list"' in advanced_settings
+    assert 'id="advanced-security-web-fetch-domains"' in advanced_settings
     assert "permission-sandbox-status" not in html
     assert "permission-sandbox-status" not in index_html
     assert "PERMISSION_MODE_ICONS" in permissions
     assert "permission-mode-ico" in permissions
+    assert "permissionControlsEnabled" in permissions
+    assert "control.hidden = !enabled" in permissions
 
     # The three permission tiers are color-coded green / blue / amber, both in
     # the dropdown options and on the trigger for the active mode.

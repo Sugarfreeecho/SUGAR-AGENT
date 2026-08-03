@@ -119,7 +119,11 @@ import execution_metrics
 from runtime_observability import capture_workspace_state, diff_workspace_states
 from agent_subagent_events import should_persist_ui_event
 from session_event_bus import close_session_stream, prune_session_ephemeral, publish_session_event
-from tool_approval_gate import new_approval_id, wait_tool_ui_approval_after_emit
+from tool_approval_gate import (
+    ApprovalPersistenceError,
+    new_approval_id,
+    wait_tool_ui_approval_after_emit,
+)
 from human_interaction import (
     HumanInteractionValidationError,
     ask_user_enabled,
@@ -703,6 +707,28 @@ def _blocked_tool_result(
 ) -> Dict[str, Any]:
     status = "paused" if paused else "blocked"
     message = f"Hook {status} `{tool_name}`: {reason}"
+    return {
+        "type": "tool",
+        "tool_name": tool_name,
+        "tool_args": tool_args,
+        "tool_id": tool_id,
+        "result": message,
+        "tool_detail_log": message,
+        "tool_detail_llm": message,
+        "tool_detail_ui": message,
+        "result_for_log": message,
+        "tool_failed": True,
+        "tool_status": _tool_result_status(tool_name, message, failed=True),
+    }
+
+
+def _unknown_tool_result(
+    tool_name: str,
+    tool_args: Dict[str, Any],
+    tool_id: str,
+) -> Dict[str, Any]:
+    """Return a tool-protocol error without running Hooks or security review."""
+    message = f"Unknown or unavailable tool: {tool_name}"
     return {
         "type": "tool",
         "tool_name": tool_name,
@@ -4000,6 +4026,23 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                     state["session_id"]
                 ),
             }
+            advertised_tool_names = {
+                str(((item.get("function") or {}).get("name") or "")).strip()
+                for item in combined_tools
+                if isinstance(item, dict)
+            }
+            special_tool_names = {
+                "ask_user", "create_goal", "get_goal", "update_goal"
+            }
+            executable_tool_names = {
+                name
+                for name in advertised_tool_names
+                if (
+                    name in tools_dict
+                    or name in special_tool_names
+                    or name.startswith(("mcp_", "plugin_"))
+                )
+            }
             # Side-effecting calls in one assistant turn are serialized.  The
             # workspace state captured after one call is therefore also the
             # state immediately before the next call.  Reuse it so a queued
@@ -4079,7 +4122,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                         )
                         review = await review_request(
                             sec_request,
-                            user_intent=str(submitted_user_input or ""),
+                            user_intent=str(state.get("_submitted_user_input") or ""),
                         )
                         approved = review.approved
                         await _push_stream_event(
@@ -4126,15 +4169,37 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                                     override_spec["message"],
                                     override_spec.get("subtitle") or "",
                                     str(tool_id or ""),
+                                    extra={
+                                        "allow_always_available": bool(
+                                            override_spec.get(
+                                                "allow_always_available", False
+                                            )
+                                        ),
+                                        "force_approval": bool(
+                                            override_spec.get("force_approval", False)
+                                        ),
+                                        "approval_level": str(
+                                            override_spec.get("approval_level")
+                                            or "warning"
+                                        ),
+                                        "rule_action": str(
+                                            override_spec.get("rule_action") or ""
+                                        ),
+                                        "rule_pattern": str(
+                                            override_spec.get("rule_pattern") or ""
+                                        ),
+                                        "auto_review_override": True,
+                                    },
                                 )
 
-                            approved = await _await_steerable(
-                                state,
-                                wait_tool_ui_approval_after_emit(
-                                    state["session_id"],
-                                    appr_id,
-                                    _emit_auto_review_override,
-                                    metadata={
+                            try:
+                                approved = await _await_steerable(
+                                    state,
+                                    wait_tool_ui_approval_after_emit(
+                                        state["session_id"],
+                                        appr_id,
+                                        _emit_auto_review_override,
+                                        metadata={
                                         "_durable": True,
                                         "run_id": str(state.get("_runtime_v2_run_id") or ""),
                                         "tool_call_id": str(tool_id or ""),
@@ -4171,11 +4236,15 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                                             override_spec.get("rule_pattern") or ""
                                         ),
                                         "auto_review_override": True,
-                                    },
-                                ),
-                                emit,
-                                "tool_approval",
-                            )
+                                        },
+                                    ),
+                                    emit,
+                                    "tool_approval",
+                                )
+                            except ApprovalPersistenceError as exc:
+                                return _blocked_tool_result(
+                                    tool_name, tool_args, tool_id, str(exc)
+                                )
                     else:
                         if emit is None:
                             return _blocked_tool_result(
@@ -4197,6 +4266,9 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                                 spec.get("subtitle") or "",
                                 str(tool_id or ""),
                                 extra={
+                                    "allow_always_available": bool(
+                                        spec.get("allow_always_available", False)
+                                    ),
                                     "force_approval": bool(
                                         spec.get("force_approval", False)
                                     ),
@@ -4215,13 +4287,14 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                                 },
                             )
 
-                        approved = await _await_steerable(
-                            state,
-                            wait_tool_ui_approval_after_emit(
-                                state["session_id"],
-                                appr_id,
-                                _emit_appr,
-                                metadata={
+                        try:
+                            approved = await _await_steerable(
+                                state,
+                                wait_tool_ui_approval_after_emit(
+                                    state["session_id"],
+                                    appr_id,
+                                    _emit_appr,
+                                    metadata={
                                     "_durable": True,
                                     "run_id": str(state.get("_runtime_v2_run_id") or ""),
                                     "tool_call_id": str(tool_id or ""),
@@ -4249,11 +4322,15 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                                     "rule_pattern": str(
                                         spec.get("rule_pattern") or ""
                                     ),
-                                },
-                            ),
-                            emit,
-                            "tool_approval",
-                        )
+                                    },
+                                ),
+                                emit,
+                                "tool_approval",
+                            )
+                        except ApprovalPersistenceError as exc:
+                            return _blocked_tool_result(
+                                tool_name, tool_args, tool_id, str(exc)
+                            )
                     if not approved:
                         return _tool_result_user_denied_ui(
                             tool_name, tool_args, tool_id
@@ -4895,6 +4972,8 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                 tool_name = str(call.get("name") or "")
                 tool_args = call.get("args") if isinstance(call.get("args"), dict) else {}
                 tool_id = str(call.get("id") or "")
+                if tool_name not in executable_tool_names:
+                    return _unknown_tool_result(tool_name, tool_args, tool_id)
                 pre = await _dispatch_state_hook(
                     "PreToolUse",
                     state,

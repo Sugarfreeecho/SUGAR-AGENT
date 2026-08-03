@@ -205,6 +205,7 @@ def test_advanced_env_api_synthesizes_feature_switches_when_missing(tmp_path, mo
     }
 
     assert variables["GOAL_ENABLED"]["value"] == "1"
+    assert variables["SECURITY_ENABLED"]["value"] == "0"
     assert variables["HOOKS_ENABLED"]["value"] == "1"
     assert variables["PLUGINS_ENABLED"]["value"] == "1"
     assert "EXECUTOR_LLM" not in variables
@@ -318,6 +319,10 @@ def test_agent_loop_wires_hooks_before_safety_approval_and_across_lifecycles():
     assert 'call["_hook_approval_spec"]' in wrapper
     assert 'hook_approval_spec = tool_call.get("_hook_approval_spec")' in core
     assert "hook_approval_spec or _tool_ui_approval_spec" in core
+    assert wrapper.index("tool_name not in executable_tool_names") < wrapper.index(
+        '"PreToolUse"'
+    )
+    assert 'user_intent=str(state.get("_submitted_user_input") or "")' in core
     for event in (
         "PostToolUse",
         "PostToolUseFailure",
@@ -353,3 +358,18 @@ def test_auto_review_override_window_keeps_always_allow_choice():
     assert '"force_approval": bool(' in override
     assert '"approval_level": str(' in override
     assert '"allow_always_available": False' not in override
+
+
+def test_live_approval_events_include_reusable_rule_availability():
+    source = (ROOT / "app/agent_loop.py").read_text(encoding="utf-8")
+    normal_emit = source.split("async def _emit_appr():", 1)[1].split(
+        "approved = await _await_steerable", 1
+    )[0]
+    override_emit = source.split("async def _emit_auto_review_override():", 1)[1].split(
+        "approved = await _await_steerable", 1
+    )[0]
+
+    assert '"allow_always_available": bool(' in normal_emit
+    assert '"allow_always_available": bool(' in override_emit
+    assert '"rule_pattern": str(' in normal_emit
+    assert '"rule_pattern": str(' in override_emit

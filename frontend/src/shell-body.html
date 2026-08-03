@@ -283,55 +283,12 @@
                     <button type="button" id="settings-agent-team-manage" class="settings-advanced-btn" disabled>管理当前会话团队</button>
                 </div>
                 <div class="settings-modal__section">
-                    <div class="settings-modal__label">权限模式</div>
-                    <div id="settings-security-status" class="settings-feature-status" role="status" aria-live="polite">请求批准 / 替我审批 / 完全访问均可直接切换；完全访问切换时会单独警告</div>
-                </div>
-                <div class="settings-modal__section">
-                    <div class="settings-modal__label">插件信任与 MCP 注册</div>
-                    <div class="settings-feature-status">插件代码需要信任后加载；每个 MCP 配置在首次注册或摘要变化后人工确认一次。确认 MCP 只允许连接和发现工具，具体工具调用仍按当前权限模式审批。两者均以当前操作系统用户权限运行，不是硬隔离。</div>
-                    <div class="settings-theme-row" role="group" aria-label="可信扩展操作">
-                        <button type="button" id="settings-security-extensions-refresh" class="settings-theme-btn">刷新</button>
+                    <div class="settings-modal__label">Agent 主动提问</div>
+                    <div class="settings-theme-row" role="group" aria-label="Agent 主动提问功能开关">
+                        <button type="button" id="settings-ask-user-off" class="settings-theme-btn">关闭</button>
+                        <button type="button" id="settings-ask-user-on" class="settings-theme-btn">启用</button>
                     </div>
-                    <div id="settings-security-extensions-list" class="settings-security-rules-list">正在读取…</div>
-                    <div id="settings-security-extensions-status" class="settings-feature-status" role="status" aria-live="polite"></div>
-                </div>
-                <div class="settings-modal__section">
-                    <div class="settings-modal__label">权限规则（始终允许 / 必问 / 拒绝）</div>
-                    <div class="settings-theme-row" role="group" aria-label="权限规则操作">
-                        <button type="button" id="settings-security-rules-refresh" class="settings-theme-btn">刷新</button>
-                        <button type="button" id="settings-security-rules-clear-session" class="settings-theme-btn">清除本会话规则</button>
-                    </div>
-                    <div id="settings-security-rules-list" class="settings-security-rules-list">正在读取…</div>
-                    <div class="settings-security-rule-form">
-                        <select id="settings-security-rule-action" aria-label="规则类型">
-                            <option value="process.exec">Shell 命令</option>
-                            <option value="fs.read">读取</option>
-                            <option value="fs.write">写入</option>
-                            <option value="fs.delete">删除</option>
-                            <option value="network.connect">网络</option>
-                            <option value="web.search">联网搜索</option>
-                            <option value="mcp.call">MCP</option>
-                            <option value="plugin.call">插件</option>
-                        </select>
-                        <select id="settings-security-rule-behavior" aria-label="规则行为">
-                            <option value="allow">允许</option>
-                            <option value="ask">必问</option>
-                            <option value="deny">拒绝</option>
-                        </select>
-                        <input id="settings-security-rule-pattern" type="text" maxlength="400" placeholder="如 git push:*  /  D:\proj\**  /  https://api.example.com/*">
-                        <button type="button" id="settings-security-rule-add" class="settings-advanced-btn">添加规则</button>
-                    </div>
-                    <div id="settings-security-rules-status" class="settings-feature-status" role="status" aria-live="polite"></div>
-                </div>
-                <div class="settings-modal__section">
-                    <div class="settings-modal__label">网页抓取预批准域名（web_fetch 免审批）</div>
-                    <div class="settings-feature-status" role="status" aria-live="polite">仅作用于只读的 web_fetch；web_download 与 Shell 联网不受影响。每行一个域名，留空表示仅用内置清单。当前名单允许匹配子域，GET 的路径和查询参数可能形成无审批数据外传通道。</div>
-                    <textarea id="settings-security-web-fetch-domains" class="settings-security-domains-editor" spellcheck="false" placeholder="例如：docs.example.com&#10;api.example.org"></textarea>
-                    <div class="settings-theme-row" role="group" aria-label="预批准域名操作">
-                        <button type="button" id="settings-security-web-fetch-save" class="settings-theme-btn">保存</button>
-                        <button type="button" id="settings-security-web-fetch-reload" class="settings-theme-btn">刷新</button>
-                    </div>
-                    <div id="settings-security-web-fetch-status" class="settings-feature-status" role="status" aria-live="polite"></div>
+                    <div id="settings-ask-user-status" class="settings-feature-status" role="status" aria-live="polite">正在读取状态…</div>
                 </div>
                 <div class="settings-modal__section">
                     <div class="settings-modal__label">运行诊断</div>

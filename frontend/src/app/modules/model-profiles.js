@@ -28,17 +28,38 @@ function profileMeta(profile) {
     return [model, ctx, out].filter(Boolean).join(' · ');
 }
 
+function modelProfileCapabilityDescription(profile) {
+    var p = profile || {};
+    var language = (document.documentElement && document.documentElement.getAttribute('data-language'))
+        || localStorage.getItem('myagent-language')
+        || 'zh-CN';
+    if (language === 'en' && p.capability_description_en) return String(p.capability_description_en);
+    return String(p.capability_description || '');
+}
+
+function modelProfileUiLanguage() {
+    return (document.documentElement && document.documentElement.getAttribute('data-language'))
+        || localStorage.getItem('myagent-language')
+        || 'zh-CN';
+}
+
 function modelProfileHoverDetail(profile) {
     var p = profile || {};
+    var english = modelProfileUiLanguage() === 'en';
     var lines = [
-        '模型配置：' + profileLabel(p),
-        '模型 ID：' + String(p.model || '未设置'),
-        '接口类型：' + String(p.llm_type || 'openai'),
-        '上下文窗口：' + String(p.context_window || '未设置'),
-        '最大输出：' + String(p.max_output_tokens || '未设置'),
+        (english ? 'Model profile: ' : '模型配置：') + profileLabel(p),
+        (english ? 'Model ID: ' : '模型 ID：') + String(p.model || (english ? 'Not set' : '未设置')),
+        (english ? 'API type: ' : '接口类型：') + String(p.llm_type || 'openai'),
+        (english ? 'Context window: ' : '上下文窗口：') + String(p.context_window || (english ? 'Not set' : '未设置')),
+        (english ? 'Max output: ' : '最大输出：') + String(p.max_output_tokens || (english ? 'Not set' : '未设置')),
     ];
-    if (p.capability_description) lines.push('能力：' + String(p.capability_description));
-    lines.push('状态：' + (p.enabled === false ? '已禁用' : (p.usable === false ? '未就绪' : '可用')));
+    var capability = modelProfileCapabilityDescription(p);
+    if (capability) lines.push((english ? 'Capability: ' : '能力：') + capability);
+    lines.push((english ? 'Status: ' : '状态：') + (
+        p.enabled === false
+            ? (english ? 'Disabled' : '已禁用')
+            : (p.usable === false ? (english ? 'Not ready' : '未就绪') : (english ? 'Available' : '可用'))
+    ));
     return lines.join('\n');
 }
 
@@ -302,5 +323,8 @@ function initModelProfileSwitcher() {
 }
 
 initModelProfileSwitcher();
+document.addEventListener('myagent:language-change', function () {
+    if (modelProfilesCache) renderModelProfileControl();
+});
 window.refreshModelProfileSelector = refreshModelProfileSelector;
 window.loadModelProfilesForSwitcher = loadModelProfilesForSwitcher;

@@ -445,6 +445,38 @@ def test_permission_mode_is_shared_across_all_sessions(tmp_path, monkeypatch):
     assert session_permission_mode("session-a") == PermissionMode.ASK_FOR_APPROVAL
 
 
+def test_security_env_switch_forces_full_access_without_overwriting_saved_mode(tmp_path, monkeypatch):
+    store = _isolated_security_store(tmp_path, monkeypatch)
+    store.set_global_permission_mode("approve_for_me")
+    monkeypatch.setenv("SECURITY_ENABLED", "0")
+
+    from security.runtime import security_enabled, security_status_for_session, session_permission_mode
+
+    assert security_enabled() is False
+    assert session_permission_mode("any-session") == PermissionMode.FULL_ACCESS
+    status = security_status_for_session("any-session")
+    assert status["mode"] == "full_access"
+    assert status["security_enabled"] is False
+    assert status["permission_controls_visible"] is False
+    assert not any(status["available_modes"].values())
+    assert store.get_global_permission_mode() == "approve_for_me"
+
+    monkeypatch.setenv("SECURITY_ENABLED", "1")
+    assert security_enabled() is True
+    assert session_permission_mode("any-session") == PermissionMode.APPROVE_FOR_ME
+
+
+def test_security_env_switch_only_zero_disables(monkeypatch):
+    from security.runtime import security_enabled
+
+    monkeypatch.delenv("SECURITY_ENABLED", raising=False)
+    assert security_enabled() is False
+    monkeypatch.setenv("SECURITY_ENABLED", "invalid")
+    assert security_enabled() is True
+    monkeypatch.setenv("SECURITY_ENABLED", "0")
+    assert security_enabled() is False
+
+
 def test_full_access_does_not_require_a_settings_enablement():
     assert security_settings()["full_access_enabled"] is True
 
@@ -801,6 +833,12 @@ def test_permission_enums_stringify_as_value_on_all_python_versions():
 
 
 def _isolated_security_store(tmp_path, monkeypatch):
+    # Security policy tests exercise the restricted modes explicitly. The
+    # product default is full access when SECURITY_ENABLED is not configured.
+    # Import first because agent_harness loads app/.env with override=True.
+    import agent_harness  # noqa: F401
+
+    monkeypatch.setenv("SECURITY_ENABLED", "1")
     store = SecurityStore(tmp_path / "security.sqlite3")
     monkeypatch.setattr(security_runtime, "security_store", lambda: store)
     return store
@@ -842,8 +880,9 @@ def test_dynamic_shell_risk_wins_over_network_and_reusable_rules(tmp_path, monke
     assert decision.rule_id == "process.dynamic"
     assert forced_approval_for(decision) is True
 
-    # Even an exact digest grant cannot turn dynamic inline code into a
-    # reusable or silently-consumed approval.
+    # A human-created exact grant authorizes one attempt, then is atomically
+    # consumed. Reusable session/always grants remain unavailable for this risk.
+    add_approval_grant("session", decision.request_digest, "allow_session")
     add_approval_grant("session", decision.request_digest, "allow_once")
     _, repeated, _ = authorize_tool(
         session_id="session",
@@ -851,11 +890,19 @@ def test_dynamic_shell_risk_wins_over_network_and_reusable_rules(tmp_path, monke
         arguments={"command": command},
         workspace=workspace,
     )
-    assert repeated.outcome == DecisionOutcome.ASK
-    assert repeated.rule_id == "process.dynamic"
+    assert repeated.outcome == DecisionOutcome.ALLOW
+    assert repeated.rule_id == "grant.once"
+    _, replayed, _ = authorize_tool(
+        session_id="session",
+        tool_name="run_shell",
+        arguments={"command": command},
+        workspace=workspace,
+    )
+    assert replayed.outcome == DecisionOutcome.ASK
+    assert replayed.rule_id == "process.dynamic"
 
 
-def test_dangerous_command_ignores_grants_and_always_asks(tmp_path, monkeypatch):
+def test_dangerous_command_accepts_one_atomic_human_grant(tmp_path, monkeypatch):
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     _isolated_security_store(tmp_path, monkeypatch)
@@ -878,8 +925,17 @@ def test_dangerous_command_ignores_grants_and_always_asks(tmp_path, monkeypatch)
         arguments={"command": "rm -rf old.txt"},
         workspace=workspace,
     )
-    assert second.outcome == DecisionOutcome.ASK
-    assert second.rule_id == "process.destructive"
+    assert second.outcome == DecisionOutcome.ALLOW
+    assert second.rule_id == "grant.once"
+
+    _, third, _ = authorize_tool(
+        session_id="session",
+        tool_name="run_shell",
+        arguments={"command": "rm -rf old.txt"},
+        workspace=workspace,
+    )
+    assert third.outcome == DecisionOutcome.ASK
+    assert third.rule_id == "process.destructive"
 
 
 def test_workspace_dotenv_read_is_auto_allowed(tmp_path, monkeypatch):

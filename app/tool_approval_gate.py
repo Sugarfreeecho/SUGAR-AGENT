@@ -8,6 +8,7 @@ Web UI 对中央策略判定为需要审批的工具请求提供兼容等待闸�
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import threading
 import time
@@ -16,11 +17,17 @@ from typing import Any, Dict, Tuple
 
 from agent_harness import session_manager
 
+logger = logging.getLogger(__name__)
+
 _PENDING: Dict[Tuple[str, str], asyncio.Future] = {}
 _PENDING_META: Dict[Tuple[str, str], Dict[str, Any]] = {}
 _PENDING_LOCK = threading.RLock()
 
 _WAIT_SEC = float(os.getenv("TOOL_UI_APPROVAL_WAIT_SEC", "300"))
+
+
+class ApprovalPersistenceError(RuntimeError):
+    """Raised when an approval cannot be durably recorded before presentation."""
 
 
 def new_approval_id() -> str:
@@ -160,8 +167,21 @@ async def wait_tool_ui_approval_after_emit(
                 run_id=str((metadata or {}).get("run_id") or ""),
                 tool_call_id=str((metadata or {}).get("tool_call_id") or ""),
             )
-        except Exception:
-            durable_service = None
+        except Exception as exc:
+            # A card that only exists in the live SSE stream disappears on a
+            # refresh and must never be able to authorize a side effect. Remove
+            # the waiter and fail closed before emitting anything to the UI.
+            with _PENDING_LOCK:
+                _PENDING.pop(key, None)
+                _PENDING_META.pop(key, None)
+            logger.exception(
+                "Failed to persist approval before presentation session_id=%s approval_id=%s",
+                key[0],
+                key[1],
+            )
+            raise ApprovalPersistenceError(
+                "Security approval could not be saved; the operation was denied."
+            ) from exc
     poll = asyncio.create_task(_interrupt_poll_until_done(session_id, fut))
     try:
         await emit_coro()

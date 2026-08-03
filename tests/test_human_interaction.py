@@ -1,3 +1,4 @@
+import asyncio
 from pathlib import Path
 
 import pytest
@@ -204,6 +205,7 @@ def test_frontend_human_interaction_contract_is_wired():
     root = Path(__file__).resolve().parents[1]
     module = (root / "frontend/src/app/modules/human-interactions.js").read_text(encoding="utf-8")
     shell = (root / "frontend/src/shell-body.html").read_text(encoding="utf-8")
+    index_html = (root / "frontend/index.html").read_text(encoding="utf-8")
     dispatch = (root / "frontend/src/app/modules/event-dispatch.js").read_text(encoding="utf-8")
     rendering = (root / "frontend/src/app/modules/message-rendering.js").read_text(encoding="utf-8")
     assert "refreshHumanInteractions" in module
@@ -211,11 +213,19 @@ def test_frontend_human_interaction_contract_is_wired():
     assert "selected_option_ids" in module
     assert "syncHumanInteractionSessionSummary(sid);" in module
     assert 'id="human-interaction-banner"' in shell
+    # frontend/index.html is Vite's real entrypoint. Checking only the shell
+    # fragment can pass while the banner is absent from the served page.
+    assert 'id="human-interaction-banner"' in index_html
     assert "renderHumanInteractionEvent" in dispatch
     assert "function humanInteractionToolSlot" in module
     assert "attachHumanInteractionCardsForToolCall" in module
     assert "attachHumanInteractionCardsForToolCall" in rendering
     assert "attachAllHumanInteractionCards" in module
+    assert "允许一次" in module
+    assert "本任务内允许相同请求" in module
+    assert "始终允许此类操作" in module
+    assert "resolveHumanApproval(card, 'allow_session')" in module
+    assert "if (!forced)" in module
     # Tool rows fold as a whole (command + approval card). They default to a
     # compact preview; a row with a pending approval renders expanded, clicking
     # the command text toggles the same row fold, and the banner focus expands
@@ -260,8 +270,21 @@ def test_frontend_human_interaction_contract_is_wired():
     )[0]
     assert "if (count <= 0)" in badge_update
     assert "if (badge) badge.remove();" in badge_update
-    assert "badge.textContent = hasQuestions ? '?' : '!';" in badge_update
-    assert "badge.textContent = String(count)" not in badge_update
+    assert "hasQuestions && hasApprovals" in badge_update
+    assert "String(count)" in badge_update
+    assert "function showHumanQuestionReview" in module
+    assert "function validateHumanQuestionPane" in module
+    assert "aria-busy" in module
+    assert "confirmAndCancelPendingHumanQuestionsForMessage" in module
+    sse = (root / "frontend/src/app/modules/sse-handling.js").read_text(encoding="utf-8")
+    assert "submitComposerWithPendingQuestionGuard" in sse
+    assert "取消问题并发送" in module
+    settings = (root / "frontend/src/app/modules/settings.js").read_text(encoding="utf-8")
+    webui = (root / "app/webui.py").read_text(encoding="utf-8")
+    assert 'id="settings-ask-user-on"' in shell
+    assert 'id="settings-ask-user-on"' in index_html
+    assert "saveAskUserFeature" in settings
+    assert '"/api/features/ask-user"' in webui
 
 
 def test_tool_pending_is_emitted_before_approval_dialog():
@@ -285,3 +308,70 @@ def test_stale_approval_is_not_resolved_without_a_live_waiter(tmp_path):
 
     assert tool_approval_gate.has_live_approval_waiter("missing-session", "missing-approval") is False
     assert tool_approval_gate.resolve_tool_approval("missing-session", "missing-approval", True) is False
+
+
+def test_approval_card_is_not_emitted_when_durable_persistence_fails(monkeypatch):
+    import human_interaction
+    from app import tool_approval_gate
+
+    class _BrokenService:
+        def create_approval(self, *_args, **_kwargs):
+            raise OSError("approval store is unavailable")
+
+    emitted = []
+
+    async def emit_card():
+        emitted.append(True)
+
+    monkeypatch.setattr(human_interaction, "get_human_interaction_service", lambda: _BrokenService())
+
+    with pytest.raises(tool_approval_gate.ApprovalPersistenceError, match="could not be saved"):
+        asyncio.run(
+            tool_approval_gate.wait_tool_ui_approval_after_emit(
+                "session-persist-failure",
+                "approval-persist-failure",
+                emit_card,
+                metadata={"_durable": True, "tool": "run_shell"},
+            )
+        )
+
+    assert emitted == []
+    assert not tool_approval_gate.has_live_approval_waiter(
+        "session-persist-failure", "approval-persist-failure"
+    )
+
+
+def test_pending_approval_refresh_restores_card_badge_and_banner_contract(tmp_path):
+    service = _service(tmp_path)
+    service.create_approval(
+        "session-refresh",
+        approval_id="approval-refresh",
+        metadata={"tool": "run_shell", "title": "Approval required"},
+    )
+
+    # Reconstructing the service simulates a browser/server refresh: the
+    # approval must come from the durable event log, not an in-memory waiter.
+    restored = _service(tmp_path)
+    assert restored.pending_counts("session-refresh") == {
+        "questions": 0,
+        "approvals": 1,
+        "total": 1,
+    }
+    pending = restored.list("session-refresh", kind="approval", status="pending")
+    assert [row["approval_id"] for row in pending] == ["approval-refresh"]
+
+    root = Path(__file__).resolve().parents[1]
+    layout = (root / "frontend/src/app/modules/layout-panels.js").read_text(encoding="utf-8")
+    restore_call = "await refreshHumanInteractions(targetSession, { render: false });"
+    switch_call = "if (targetSession) await switchSession(targetSession);"
+    assert layout.index(restore_call) < layout.index(switch_call)
+
+    interactions = (root / "frontend/src/app/modules/human-interactions.js").read_text(encoding="utf-8")
+    refresh_body = interactions.split("async function refreshHumanInteractions", 1)[1]
+    assert "syncHumanInteractionSessionSummary(sid);" in refresh_body
+    assert "renderPendingHumanInteractions(sid);" in refresh_body
+    render_body = interactions.split("function renderPendingHumanInteractions", 1)[1].split(
+        "async function refreshHumanInteractions", 1
+    )[0]
+    assert "renderHumanInteractionRecord(record, sid, stream)" in render_body
+    assert "updateHumanInteractionBanner(sid);" in render_body

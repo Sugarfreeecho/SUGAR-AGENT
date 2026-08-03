@@ -1295,7 +1295,7 @@ async function switchSession(sessionId, opts) {
         }
         if (typeof refreshTodoPlanPanel === 'function') void refreshTodoPlanPanel();
         else renderTodoPlanForCurrentSession();
-        if (typeof refreshHumanInteractions === 'function') void refreshHumanInteractions(sessionId);
+        if (typeof refreshHumanInteractions === 'function') await refreshHumanInteractions(sessionId);
         if (switchToken !== switchSessionEpoch || sessionId !== currentSessionId) return;
         /* 让 rebuildToc 的 /user_turns fetch 先发出，subagent 面板（含 N 个 /messages）顺序后置，
            避免抢占带宽与主线程，让目录最后才稳态。*/
@@ -1357,7 +1357,7 @@ async function switchSession(sessionId, opts) {
         void refreshSingleSessionRow(sessionId);
         setSendButtonState();
         maybeStartStreamPollForSession(sessionId, { skipInitialLoad: true });
-        if (typeof refreshHumanInteractions === 'function') void refreshHumanInteractions(sessionId);
+        if (typeof refreshHumanInteractions === 'function') await refreshHumanInteractions(sessionId);
         resolve(true);
         }, 20);
     });

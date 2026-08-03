@@ -1216,8 +1216,43 @@ def test_sessions_state_uses_lightweight_run_status(monkeypatch, tmp_path):
     assert payload["sessions"][0]["id"] == "s1"
     assert payload["sessions"][0]["stream_active"] is True
     assert payload["sessions"][0]["run_active"] is True
+    assert payload["sessions"][0]["pending_human_interactions"] == {
+        "questions": 0,
+        "approvals": 0,
+        "total": 0,
+    }
     assert payload["active_runs"][0]["session_id"] == "s1"
     assert payload["active_runs"][0]["lightweight"] is True
+
+
+def test_sessions_state_includes_pending_human_interaction_counts(monkeypatch, tmp_path):
+    import human_interaction
+    import webui
+
+    fake = _FakeSessionManager(tmp_path, [])
+    monkeypatch.setattr(webui, "session_manager", fake)
+    monkeypatch.setattr(webui, "_cleanup_stale_active_chat", lambda: None)
+    monkeypatch.setattr(webui, "_session_run_state_fields_light", lambda _sid: {
+        "stream_active": False,
+        "run_active": False,
+        "run_started_at": None,
+    })
+    monkeypatch.setattr(webui, "is_session_title_generation_pending", lambda _sid: False)
+
+    class _PendingService:
+        def pending_counts(self, session_id):
+            assert session_id == "s1"
+            return {"questions": 2, "approvals": 1, "total": 3}
+
+    monkeypatch.setattr(human_interaction, "get_human_interaction_service", lambda: _PendingService())
+
+    payload = webui._build_sessions_state_snapshot(include_archived=False)
+
+    assert payload["sessions"][0]["pending_human_interactions"] == {
+        "questions": 2,
+        "approvals": 1,
+        "total": 3,
+    }
 
 
 def test_archived_sessions_endpoint_returns_requested_prefetch_window(monkeypatch, tmp_path):

@@ -2610,7 +2610,19 @@ async function sendMessage(options) {
     }
 }
 
-messageInput.addEventListener('keydown', function onFollowupInputKeydown(e) {
+async function submitComposerWithPendingQuestionGuard() {
+    if (typeof pendingHumanQuestions !== 'function' || !pendingHumanQuestions(currentSessionId).length) return false;
+    if (!inputHasSendableText() || isChatFileUploadBusy()) return false;
+    var shouldSend = await confirmAndCancelPendingHumanQuestionsForMessage(currentSessionId);
+    if (shouldSend) {
+        await sendMessage({ forceStart: isSessionRunning(currentSessionId) });
+    }
+    // A visible confirmation was shown, so the originating key/click event is
+    // handled even when the user chooses to return to the question.
+    return true;
+}
+
+messageInput.addEventListener('keydown', async function onFollowupInputKeydown(e) {
     if (!isMyAgentFeatureEnabled('followupRestart', false)) return;
     if (e.key !== 'Enter') return;
     e.stopImmediatePropagation();
@@ -2629,6 +2641,7 @@ messageInput.addEventListener('keydown', function onFollowupInputKeydown(e) {
         return;
     }
     e.preventDefault();
+    if (await submitComposerWithPendingQuestionGuard()) return;
     if (isSessionRunning(currentSessionId)) {
         enqueueCurrentInputAsFollowup();
         return;
@@ -2636,7 +2649,7 @@ messageInput.addEventListener('keydown', function onFollowupInputKeydown(e) {
     sendMessage();
 }, true);
 
-messageInput.addEventListener('keydown', function onInputKeydown(e) {
+messageInput.addEventListener('keydown', async function onInputKeydown(e) {
     if (e.key !== 'Enter') return;
     // Ctrl+Enter → 插入换行（跨浏览器兼容）
     if (e.ctrlKey && !e.shiftKey && !e.metaKey) {
@@ -2654,9 +2667,11 @@ messageInput.addEventListener('keydown', function onInputKeydown(e) {
         e.preventDefault();
         return;
     }
-    // 纯 Enter → 发送
-    if (isSessionRunning(currentSessionId)) return;
+    // 纯 Enter → 发送；pending Ask 即使仍处于运行状态，也先进入
+    // “取消问题并发送”确认流程。
     e.preventDefault();
+    if (await submitComposerWithPendingQuestionGuard()) return;
+    if (isSessionRunning(currentSessionId)) return;
     sendMessage();
 });
 chatContainer.addEventListener('scroll', function () {
@@ -2664,12 +2679,13 @@ chatContainer.addEventListener('scroll', function () {
     scheduleTocActiveUpdate();
     maybeAutoLoadOlderHistory();
 }, { passive: true });
-sendBtn.addEventListener('click', function (e) {
+sendBtn.addEventListener('click', async function (e) {
     e.stopImmediatePropagation();
     if (!currentSessionId && optimisticNewSessionRun) {
         pauseCurrentRun();
         return;
     }
+    if (await submitComposerWithPendingQuestionGuard()) return;
     if (isSessionRunning(currentSessionId)) {
         const activeRun = getSessionRunState(currentSessionId);
         const canQueueFollowup = isMyAgentFeatureEnabled('followupRestart', false)

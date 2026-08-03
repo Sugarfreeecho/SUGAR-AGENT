@@ -43,7 +43,7 @@ from agent_harness import (
 from agent_team import AGENT_TEAM_ENV_VAR, agent_team_enabled
 from agent_team.api import create_agent_team_router
 from agent_team.service import AgentTeamService
-from human_interaction import ask_user_enabled
+from human_interaction import ASK_USER_ENV_VAR, ask_user_enabled
 from agent_loop import (
     abort_session_steer_run,
     compute_context_tokens_for_session,
@@ -1362,10 +1362,18 @@ def _build_sessions_state_snapshot(include_archived: bool = False) -> dict:
     _cleanup_stale_active_chat()
     active_runs = []
     pending_subagents = {}
+    try:
+        from human_interaction import get_human_interaction_service
+
+        human_interaction_service = get_human_interaction_service()
+    except Exception:
+        logger.exception("Failed to initialize pending human-interaction state for /sessions/state")
+        human_interaction_service = None
     for s in sessions:
         sid = s.get("id")
         if not sid:
             s["stream_active"] = False
+            s["pending_human_interactions"] = {"questions": 0, "approvals": 0, "total": 0}
             continue
         sid = str(sid)
         run_state = _session_run_state_fields_light(sid)
@@ -1373,6 +1381,20 @@ def _build_sessions_state_snapshot(include_archived: bool = False) -> dict:
         s["run_active"] = bool(run_state["run_active"])
         s["run_started_at"] = run_state["run_started_at"]
         s["title_generation_pending"] = is_session_title_generation_pending(sid)
+        try:
+            pending_counts = (
+                human_interaction_service.pending_counts(sid)
+                if human_interaction_service is not None
+                else {"questions": 0, "approvals": 0, "total": 0}
+            )
+        except Exception:
+            logger.exception("Failed to read pending human-interaction state session_id=%s", sid)
+            pending_counts = {"questions": 0, "approvals": 0, "total": 0}
+        s["pending_human_interactions"] = {
+            "questions": int(pending_counts.get("questions") or 0),
+            "approvals": int(pending_counts.get("approvals") or 0),
+            "total": int(pending_counts.get("total") or 0),
+        }
         if run_state.get("active_run"):
             active_runs.append(run_state["active_run"])
     out = {
@@ -1403,6 +1425,8 @@ def get_index_html():
     default_steer_mode = str(os.getenv("MYAGENT_STEER_MODE", "append") or "append").strip().lower()
     if default_steer_mode not in {"interrupt", "append"}:
         default_steer_mode = "append"
+    from security import security_enabled
+
     feature_flags = {
         "goal": os.getenv("GOAL_ENABLED", "1").strip().lower() not in {"0", "false", "no", "off"},
         "askUser": ask_user_enabled(),
@@ -1410,6 +1434,7 @@ def get_index_html():
         "followupRestart": os.getenv("MYAGENT_ENABLE_FOLLOWUP_RESTART", "1").strip().lower() in {"1", "true", "yes", "on"},
         "streamReconnect": os.getenv("MYAGENT_ENABLE_STREAM_RECONNECT", "1").strip().lower() in {"1", "true", "yes", "on"},
         "finalReconcile": os.getenv("MYAGENT_ENABLE_FINAL_RECONCILE", "1").strip().lower() in {"1", "true", "yes", "on"},
+        "security": security_enabled(),
     }
     inject = (
         "<script>"
@@ -5323,6 +5348,7 @@ _ENV_GROUP_ORDER: list[tuple[str, str, list[str]]] = [
             "VERBOSE_LOGGING",
             "TODO_MAX_ITEMS",
             "MAX_PARALLEL_TOOLS",
+            "SECURITY_ENABLED",
             "ASK_USER_ENABLED",
             "GOAL_ENABLED",
             "GOAL_RUNNER_POLL_SECONDS",
@@ -5397,6 +5423,7 @@ for _gid, _title, _keys in _ENV_GROUP_ORDER:
         _ENV_KEY_ORDER_IN_GROUP[_k] = _i
 
 _ENV_HINTS: dict[str, str] = {
+    "SECURITY_ENABLED": "0（默认）强制使用完全访问并隐藏前端权限选择；设为 1 时启用请求批准 / 替我审批 / 完全访问三档权限，并恢复此前保存的全局权限模式。保存后立即生效，页面刷新后更新界面。",
     "ASK_USER_ENABLED": "0（默认）禁止主 Agent 创建 ask_user 问题；1/true/yes/on 启用。已有待回答问题仍可处理，工具审批不受影响。保存后立即生效。",
     "GOAL_ENABLED": "1（默认）启用持久 Goal、Goal 工具和服务端自动续跑；0/false/no/off 禁用。修改后需重启 Agent。",
     "GOAL_RUNNER_POLL_SECONDS": "服务端 Goal 调度器扫描 active Goal 的间隔秒数，默认 2，最小 0.5。修改后需重启 Agent。",
@@ -5804,6 +5831,7 @@ async def get_env_snapshot():
     flat = [row for row in _parse_env_entries(raw) if row.get("key") not in _MODEL_ENV_KEYS]
     existing_keys = {str(row.get("key") or "") for row in flat}
     for key, default in {
+        "SECURITY_ENABLED": "0",
         "ASK_USER_ENABLED": "0",
         "GOAL_ENABLED": "1",
         "GOAL_RUNNER_POLL_SECONDS": "2",
@@ -5904,6 +5932,55 @@ async def set_agent_team_feature(req: _Request):
         logger.exception("Failed to persist Agent Team feature state")
         return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
     return JSONResponse({"ok": True, "enabled": agent_team_enabled()})
+
+
+@fastapi_app.get("/api/features/ask-user")
+async def get_ask_user_feature():
+    """Return whether the main Agent may create structured questions."""
+
+    return JSONResponse(
+        {
+            "ok": True,
+            "enabled": ask_user_enabled(),
+            "env_var": ASK_USER_ENV_VAR,
+        }
+    )
+
+
+@fastapi_app.post("/api/features/ask-user")
+async def set_ask_user_feature(req: _Request):
+    """Persist and immediately apply the Ask User feature switch."""
+
+    try:
+        data = await req.json()
+    except Exception:
+        return JSONResponse({"ok": False, "error": "invalid json"}, status_code=400)
+    enabled = data.get("enabled")
+    if not isinstance(enabled, bool):
+        return JSONResponse(
+            {"ok": False, "error": "enabled must be boolean"},
+            status_code=400,
+        )
+    env_path = dotenv_file_path()
+    previous = env_path.read_text(encoding="utf-8") if env_path.is_file() else ""
+    tmp_path = env_path.with_suffix(env_path.suffix + ".ask-user.tmp")
+    try:
+        merged = _apply_env_updates(
+            previous,
+            {ASK_USER_ENV_VAR: "1" if enabled else "0"},
+        )
+        env_path.parent.mkdir(parents=True, exist_ok=True)
+        tmp_path.write_text(merged, encoding="utf-8")
+        tmp_path.replace(env_path)
+        os.environ[ASK_USER_ENV_VAR] = "1" if enabled else "0"
+    except (OSError, ValueError) as exc:
+        try:
+            tmp_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        logger.exception("Failed to persist Ask User feature state")
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
+    return JSONResponse({"ok": True, "enabled": ask_user_enabled()})
 
 
 @fastapi_app.post("/api/env")
@@ -6018,11 +6095,11 @@ async def save_config(req: _Request):
 
         ctx_raw = data.get("context_window", "")
         try:
-            ctx_w = int(str(ctx_raw).strip()) if str(ctx_raw).strip() != "" else 1000000
+            ctx_w = int(str(ctx_raw).strip()) if str(ctx_raw).strip() != "" else 119808
         except ValueError:
-            ctx_w = 1000000
+            ctx_w = 119808
         if ctx_w <= 0:
-            ctx_w = 1000000
+            ctx_w = 119808
         mot_raw = data.get("max_output_tokens", "")
         try:
             max_out = int(str(mot_raw).strip()) if str(mot_raw).strip() != "" else 8192

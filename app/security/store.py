@@ -186,7 +186,13 @@ class SecurityStore:
                 (session_id, request_digest, scope, now, expires),
             )
 
-    def consume_matching_grant(self, session_id: str, request_digest: str) -> str | None:
+    def consume_matching_grant(
+        self,
+        session_id: str,
+        request_digest: str,
+        *,
+        once_only: bool = False,
+    ) -> str | None:
         now = time.time()
         with self._lock, self._connect() as db:
             db.execute("BEGIN IMMEDIATE")
@@ -197,9 +203,10 @@ class SecurityStore:
                   AND (session_id=? OR scope='always')
                   AND (expires_at IS NULL OR expires_at>?)
                   AND (scope!='once' OR consumed_at IS NULL)
+                  AND (?=0 OR scope='once')
                 ORDER BY CASE scope WHEN 'once' THEN 0 WHEN 'session' THEN 1 ELSE 2 END
                 """,
-                (request_digest, session_id, now),
+                (request_digest, session_id, now, int(bool(once_only))),
             ).fetchall()
             if not rows:
                 db.execute("COMMIT")

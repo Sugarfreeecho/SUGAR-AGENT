@@ -5,18 +5,28 @@ import json
 import re
 import time
 import uuid
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+from urllib.parse import urlsplit
 
 import httpx
 
 
-DEFAULT_UNKNOWN_CONTEXT_WINDOW = 1_000_000
+DEFAULT_UNKNOWN_MODEL_CONTEXT_WINDOW = 128_000
+DEFAULT_UNKNOWN_CONTEXT_WINDOW = 119_808
 DEFAULT_UNKNOWN_OUTPUT_TOKENS = 8_192
+MODEL_LIMITS_TABLE_PATH = Path(__file__).resolve().parent / "data" / "models_table.md"
 CONTEXT_PROBE_TOKEN_COUNT = 3_000_000
 CONTEXT_PROBE_TIMEOUT = 8.0
 LEGACY_ENV_IMPORT_MARKER = "imported_from_legacy_env"
 MULTIMODAL_MODES = frozenset({"auto", "enabled", "disabled"})
+LOW_COST_MAX_INPUT_USD_PER_M = 1.0
+LOW_COST_MAX_OUTPUT_USD_PER_M = 5.0
+HIGH_INTELLIGENCE_MIN_SCORE = 35.0
+CODING_MIN_SCORE = 20.0
+AGENTIC_MIN_SCORE = 15.0
+LONG_CONTEXT_MIN_TOKENS = 200_000
 
 CONTEXT_LIMIT_FIELDS = (
     "context_window",
@@ -37,41 +47,6 @@ CONTEXT_LIMIT_ERROR_PATTERNS = (
     re.compile(r"max(?:imum)?(?: model)? context(?: length| window)?(?: is|:)?\s*" + _TOKEN_COUNT_PATTERN + r"\s*tokens?", re.I),
     re.compile(r"context(?: length| window)? limit(?: is|:)?\s*" + _TOKEN_COUNT_PATTERN + r"\s*tokens?", re.I),
 )
-
-
-KNOWN_MODEL_LIMITS: list[tuple[str, int, int]] = [
-    ("gpt-5.5-pro", 1050000, 128000),
-    ("gpt-5.5", 1050000, 128000),
-    ("gpt-5.4-mini", 400000, 128000),
-    ("gpt-5.4-nano", 400000, 128000),
-    ("gpt-5.4", 1050000, 128000),
-    ("gpt-5.2", 400000, 128000),
-    ("gpt-5-mini", 400000, 128000),
-    ("gpt-5-nano", 400000, 128000),
-    ("gpt-5", 400000, 128000),
-    ("gpt-4.1", 1047576, 32768),
-    ("gpt-4o", 128000, 16384),
-    ("gpt-4-turbo", 128000, 4096),
-    ("gpt-4", 128000, 8192),
-    ("gpt-3.5", 16385, 4096),
-    ("o4-mini", 200000, 100000),
-    ("o3", 200000, 100000),
-    ("o1", 200000, 100000),
-    ("deepseek-v4", 1000000, 384000),
-    ("deepseek-reasoner", 1000000, 384000),
-    ("deepseek-chat", 1000000, 384000),
-    ("deepseek", 1000000, 384000),
-    ("claude-fable-5", 1000000, 128000),
-    ("claude-mythos-5", 1000000, 128000),
-    ("claude-opus-4.8", 1000000, 128000),
-    ("claude-opus-4.7", 1000000, 128000),
-    ("claude-opus-4.6", 1000000, 128000),
-    ("claude-sonnet-4.5", 1000000, 64000),
-    ("claude-haiku-4.5", 200000, 64000),
-    ("claude", 200000, 64000),
-    ("qwen", 128000, 8192),
-    ("glm-4", 128000, 8192),
-]
 
 
 def _now() -> str:
@@ -113,15 +88,223 @@ def _clean_thinking_mode(value: Any) -> str:
     return str(value or "").strip().lower()
 
 
-def _known_limits_for_model(model_id: str) -> tuple[int, int] | None:
-    mid = str(model_id or "").lower()
-    for prefix, known_ctx, known_out in KNOWN_MODEL_LIMITS:
-        if mid.startswith(prefix):
-            return known_ctx, known_out
-    return None
+def recommended_model_windows(model_context_window: Any) -> dict[str, int]:
+    max_context = _safe_int(model_context_window, 0)
+    if max_context <= 0:
+        return {
+            "model_context_window": DEFAULT_UNKNOWN_MODEL_CONTEXT_WINDOW,
+            "max_output_tokens": DEFAULT_UNKNOWN_OUTPUT_TOKENS,
+            "context_window": DEFAULT_UNKNOWN_CONTEXT_WINDOW,
+        }
+    if max_context < 130_000:
+        output = DEFAULT_UNKNOWN_OUTPUT_TOKENS
+    else:
+        output = min(
+            max_context // 10,
+            30_000 if max_context < 300_000 else 50_000,
+        )
+    output = max(1, min(output, max(1, max_context - 1)))
+    theoretical = max(1, max_context - output)
+    cap = 128_000 if max_context < 300_000 else 512_000
+    return {
+        "model_context_window": max_context,
+        "max_output_tokens": output,
+        "context_window": min(theoretical, cap),
+    }
 
 
-def infer_model_limits(model_id: str, raw: Optional[dict] = None) -> dict[str, Any]:
+def _safe_score(value: Any) -> Optional[float]:
+    try:
+        score = float(str(value or "").strip())
+    except (TypeError, ValueError):
+        return None
+    return score if score >= 0 else None
+
+
+def _safe_price(value: Any) -> Optional[float]:
+    text = str(value or "").strip().replace("$", "").replace(",", "")
+    try:
+        price = float(text)
+    except (TypeError, ValueError):
+        return None
+    return price if price >= 0 else None
+
+
+def _normalized_model_match_key(value: Any) -> str:
+    return re.sub(r"[/\-_\s]+", "", str(value or "").strip().lower())
+
+
+def _model_candidate_sort_key(record: dict[str, Any]) -> tuple[Any, ...]:
+    scores = [
+        score
+        for score in (
+            record.get("intel_score"),
+            record.get("coding_score"),
+            record.get("agentic_score"),
+        )
+        if isinstance(score, (int, float))
+    ]
+    created = str(record.get("created") or "").strip()
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", created):
+        created = ""
+    return (
+        created,
+        sum(scores),
+        len(scores),
+        float(record.get("intel_score") or -1),
+        float(record.get("coding_score") or -1),
+        float(record.get("agentic_score") or -1),
+        _safe_int(record.get("context_window"), 0),
+        str(record.get("model_id") or ""),
+    )
+
+
+def _select_latest_model_record(records: list[dict[str, Any]]) -> Optional[dict[str, Any]]:
+    return max(records, key=_model_candidate_sort_key) if records else None
+
+
+@lru_cache(maxsize=8)
+def _read_model_table(
+    path_text: str,
+    modified_ns: int,
+    file_size: int,
+) -> tuple[dict[str, dict[str, Any]], dict[str, tuple[dict[str, Any], ...]], tuple[dict[str, Any], ...]]:
+    del modified_ns, file_size  # cache-key inputs; content is read only on file changes
+    exact: dict[str, dict[str, Any]] = {}
+    suffix_candidates: dict[str, list[dict[str, Any]]] = {}
+    records: list[dict[str, Any]] = []
+    try:
+        lines = Path(path_text).read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeError):
+        return exact, {}, ()
+    for line in lines:
+        if not line.lstrip().startswith("|"):
+            continue
+        cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
+        if len(cells) < 4 or cells[1].lower() == "model id":
+            continue
+        model_id = cells[1].strip()
+        context_window = _parse_token_count(cells[3])
+        if not model_id or context_window <= 0:
+            continue
+        normalized_id = model_id.lower()
+        suffix = normalized_id.rsplit("/", 1)[-1]
+        record: dict[str, Any] = {
+            "provider": cells[0],
+            "model_id": model_id,
+            "name": cells[2],
+            "context_window": context_window,
+            "modality": cells[4] if len(cells) > 4 else "",
+            "input_modalities": tuple(
+                part.strip().lower()
+                for part in (cells[5] if len(cells) > 5 else "").split(",")
+                if part.strip()
+            ),
+            "output_modalities": tuple(
+                part.strip().lower()
+                for part in (cells[6] if len(cells) > 6 else "").split(",")
+                if part.strip()
+            ),
+            "input_price_per_m": _safe_price(cells[7] if len(cells) > 7 else None),
+            "output_price_per_m": _safe_price(cells[8] if len(cells) > 8 else None),
+            "intel_score": _safe_score(cells[9] if len(cells) > 9 else None),
+            "coding_score": _safe_score(cells[10] if len(cells) > 10 else None),
+            "agentic_score": _safe_score(cells[11] if len(cells) > 11 else None),
+            "reasoning": cells[12].strip() if len(cells) > 12 else "",
+            "created": cells[13].strip() if len(cells) > 13 else "",
+            "normalized_id": normalized_id,
+            "suffix": suffix,
+            "match_key": _normalized_model_match_key(normalized_id),
+            "suffix_match_key": _normalized_model_match_key(suffix),
+        }
+        exact[normalized_id] = record
+        suffix_candidates.setdefault(suffix, []).append(record)
+        records.append(record)
+    suffixes = {
+        suffix: tuple(candidates)
+        for suffix, candidates in suffix_candidates.items()
+    }
+    return exact, suffixes, tuple(records)
+
+
+def _model_table_record_for_model(model_id: str) -> Optional[dict[str, Any]]:
+    path = Path(MODEL_LIMITS_TABLE_PATH)
+    try:
+        stat = path.stat()
+    except OSError:
+        return None
+    exact, suffixes, records = _read_model_table(
+        str(path.resolve()),
+        int(stat.st_mtime_ns),
+        int(stat.st_size),
+    )
+    normalized_id = str(model_id or "").strip().lower()
+    if not normalized_id:
+        return None
+    matched = exact.get(normalized_id)
+    if matched is not None:
+        return matched
+    suffix = normalized_id.rsplit("/", 1)[-1]
+    suffix_matches = list(suffixes.get(suffix, ()))
+    if suffix_matches:
+        return _select_latest_model_record(suffix_matches)
+
+    match_keys = {
+        _normalized_model_match_key(normalized_id),
+        _normalized_model_match_key(suffix),
+    }
+    match_keys.discard("")
+    exact_normalized = [
+        record
+        for record in records
+        if record.get("match_key") in match_keys or record.get("suffix_match_key") in match_keys
+    ]
+    if exact_normalized:
+        return _select_latest_model_record(exact_normalized)
+
+    fuzzy_matches: list[dict[str, Any]] = []
+    for match_key in match_keys:
+        if len(match_key) < 6:
+            continue
+        for record in records:
+            candidate = str(record.get("suffix_match_key") or "")
+            if len(candidate) < 6:
+                continue
+            if candidate.startswith(match_key) or match_key.startswith(candidate):
+                fuzzy_matches.append(record)
+    return _select_latest_model_record(fuzzy_matches)
+
+
+def model_table_metadata_for_model(model_id: str) -> Optional[dict[str, Any]]:
+    record = _model_table_record_for_model(model_id)
+    if record is None:
+        return None
+    return {
+        key: value
+        for key, value in record.items()
+        if key not in {"normalized_id", "suffix", "match_key", "suffix_match_key"}
+    }
+
+
+def _model_table_context_for_model(model_id: str) -> int:
+    record = _model_table_record_for_model(model_id)
+    return _safe_int((record or {}).get("context_window"), 0)
+
+
+def is_huawei_api_domain(base_url: str) -> bool:
+    normalized = _normalize_base_url(base_url)
+    if not normalized:
+        return False
+    parsed = urlsplit(normalized if "://" in normalized else "//" + normalized)
+    hostname = str(parsed.hostname or "").strip().lower()
+    return any("huawei" in label for label in hostname.split(".") if label)
+
+
+def infer_model_limits(
+    model_id: str,
+    raw: Optional[dict] = None,
+    base_url: str = "",
+) -> dict[str, Any]:
     raw = raw or {}
     candidates = [raw.get(key) for key in CONTEXT_LIMIT_FIELDS]
     raw_ctx = next((_safe_int(v) for v in candidates if _safe_int(v) > 0), 0)
@@ -131,22 +314,20 @@ def infer_model_limits(model_id: str, raw: Optional[dict] = None) -> dict[str, A
     raw_out = next((_safe_int(v) for v in output_candidates if _safe_int(v) > 0), 0)
     out = raw_out
     out_source = "api" if raw_out > 0 else ""
-    if ctx <= 0 or out <= 0:
-        known_limits = _known_limits_for_model(model_id)
-        if known_limits:
-            known_ctx, known_out = known_limits
-            if ctx <= 0:
-                ctx = known_ctx
-                ctx_source = "known"
-            if out <= 0:
-                out = known_out
-                out_source = "known"
+    if ctx <= 0 and is_huawei_api_domain(base_url):
+        ctx = DEFAULT_UNKNOWN_MODEL_CONTEXT_WINDOW
+        ctx_source = "huawei"
+    if ctx <= 0:
+        table_context = _model_table_context_for_model(model_id)
+        if table_context > 0:
+            ctx = table_context
+            ctx_source = "table"
     if raw_ctx <= 0 and ctx <= 0:
-        ctx = DEFAULT_UNKNOWN_CONTEXT_WINDOW
+        ctx = DEFAULT_UNKNOWN_MODEL_CONTEXT_WINDOW
         ctx_source = "default"
     if raw_out <= 0:
-        out = max(out or DEFAULT_UNKNOWN_OUTPUT_TOKENS, DEFAULT_UNKNOWN_OUTPUT_TOKENS)
-        out_source = out_source or "default"
+        out = recommended_model_windows(ctx)["max_output_tokens"]
+        out_source = "recommended"
     return {
         "context_window": ctx,
         "max_output_tokens": out,
@@ -155,99 +336,151 @@ def infer_model_limits(model_id: str, raw: Optional[dict] = None) -> dict[str, A
     }
 
 
+_MODALITY_LABELS = {
+    "text": "文本",
+    "image": "图片",
+    "audio": "音频",
+    "video": "视频",
+    "file": "文件",
+}
+_MODALITY_LABELS_EN = {
+    "text": "text",
+    "image": "image",
+    "audio": "audio",
+    "video": "video",
+    "file": "file",
+}
+def _table_supports_multimodal_input(record: Optional[dict[str, Any]]) -> bool:
+    if not record:
+        return False
+    return any(
+        modality != "text"
+        for modality in (record.get("input_modalities") or ())
+    )
+
+
+def _table_capability_description(
+    record: dict[str, Any],
+    tags: list[str],
+    context_window: int = 0,
+    language: str = "zh-CN",
+) -> str:
+    english = language == "en"
+    task_labels: list[str] = []
+    for tag, zh_label, en_label in (
+        ("low_cost_concurrency", "低成本/多并发", "low-cost/high-concurrency"),
+        ("hard_reasoning", "高难度", "complex tasks"),
+        ("research", "调查调研", "research"),
+        ("coding", "代码", "coding"),
+        ("agent", "Agent", "agent workflows"),
+    ):
+        if tag in tags:
+            task_labels.append(en_label if english else zh_label)
+    if "long_context" in tags:
+        configured = f"{_safe_int(context_window, 0):,} tokens"
+        task_labels.append(
+            f"long-context ({configured} configured)"
+            if english
+            else f"长上下文（实际配置 {configured}）"
+        )
+
+    parts: list[str] = []
+    if task_labels:
+        parts.append(
+            ("Best for: " if english else "适合：")
+            + ((", ".join(task_labels)) if english else "、".join(task_labels))
+        )
+
+    modality_order = {name: index for index, name in enumerate(_MODALITY_LABELS)}
+    multimodal_inputs = sorted(
+        (
+            modality
+            for modality in (record.get("input_modalities") or ())
+            if modality != "text"
+        ),
+        key=lambda modality: (modality_order.get(str(modality), 999), str(modality)),
+    )
+    if multimodal_inputs:
+        labels = [
+            (_MODALITY_LABELS_EN if english else _MODALITY_LABELS).get(
+                str(modality), str(modality)
+            )
+            for modality in multimodal_inputs
+        ]
+        parts.append(
+            ("Multimodal input: " if english else "多模态输入：")
+            + ((", ".join(labels)) if english else "、".join(labels))
+        )
+    else:
+        parts.append(
+            "Multimodal input: not supported (text only)"
+            if english
+            else "多模态输入：不支持（仅文本）"
+        )
+    return ("; " if english else "；").join(parts)
+
+
 def infer_model_task_capabilities(
     model_id: str,
     profile_name: str = "",
     context_window: int = 0,
 ) -> dict[str, Any]:
-    """Infer concise task-routing hints from a model family/name.
-
-    These are conservative routing hints for the parent agent, not guarantees
-    that every provider endpoint exposes every modality of a model family.
-    """
-    key = f"{profile_name} {model_id}".strip().lower()
+    """Build capabilities from the bundled models table without name guessing."""
+    table_record = (
+        _model_table_record_for_model(model_id)
+        or _model_table_record_for_model(profile_name)
+    )
+    if table_record is None:
+        return {
+            "capability_tags": [],
+            "capability_description": "",
+            "capability_description_en": "",
+            "capability_source": "unavailable",
+        }
+    effective_context_window = _safe_int(context_window, 0)
     tags: list[str] = []
-    descriptions: list[str] = []
+    input_price = table_record.get("input_price_per_m")
+    output_price = table_record.get("output_price_per_m")
+    if (
+        isinstance(input_price, (int, float))
+        and isinstance(output_price, (int, float))
+        and input_price <= LOW_COST_MAX_INPUT_USD_PER_M
+        and output_price <= LOW_COST_MAX_OUTPUT_USD_PER_M
+    ):
+        tags.append("low_cost_concurrency")
+    if _table_supports_multimodal_input(table_record):
+        tags.append("multimodal_candidate")
+    if float(table_record.get("intel_score") or 0) >= HIGH_INTELLIGENCE_MIN_SCORE:
+        tags.append("hard_reasoning")
+        tags.append("research")
+    if float(table_record.get("coding_score") or 0) >= CODING_MIN_SCORE:
+        tags.append("coding")
+    if float(table_record.get("agentic_score") or 0) >= AGENTIC_MIN_SCORE:
+        tags.append("agent")
 
-    def add(tag: str, description: str) -> None:
-        if tag not in tags:
-            tags.append(tag)
-            descriptions.append(description)
-
-    low_cost_variant = bool(re.search(
-        r"(?:^|[-_/])(mini|nano|flash|lite|haiku|turbo|small)(?:[-_. /]|$)",
-        key,
-    ))
-    if "deepseek" in key or "minimax" in key or low_cost_variant:
-        add(
-            "low_cost_parallel",
-            "低成本/多并发：批量总结、信息抽取、常规代码探索和大量独立 subagent",
-        )
-
-    is_minimax = "minimax" in key
-    hard_family = any(name in key for name in ("gpt", "claude", "glm"))
-    hard_variant = any(name in key for name in (
-        "reasoner", "reasoning", "thinking", "-pro", "-max", "opus",
-        "gemini-pro", "gemini-3.1-pro", "grok", "mimo-v2.5-pro",
-        "kimi-k2", "qwen-max", "qwen3-max", "mistral-large", "command-r-plus",
-    )) or bool(re.search(r"(?:^|[-_/])o[134](?:[-_. /]|$)", key))
-    if (hard_family or hard_variant) and not is_minimax:
-        add(
-            "hard_reasoning",
-            "高难度：复杂推理、架构设计、疑难调试和长链路决策",
-        )
-
-    if any(name in key for name in (
-        "deepseek", "gemini", "grok", "perplexity", "sonar", "deep-research",
-        "deep_research", "command-r",
-    )):
-        add(
-            "research",
-            "调查调研：多源搜索、资料核验、事实交叉验证和研究综述",
-        )
-
-    broad_multimodal_family = any(name in key for name in (
-        "gpt", "claude", "gemini", "grok", "minimax-m3", "mimo", "qwen", "kimi",
-    ))
-    explicit_multimodal = any(name in key for name in (
-        "vision", "-vl", "_vl", "omni", "multimodal", "pixtral", "llava", "molmo",
-        "internvl", "cogvlm", "nova-pro", "nova-lite", "phi-vision", "gemma-vision",
-    )) or bool(re.search(r"glm[-_.]?[0-9.]*v(?:[-_. /]|$)", key))
-    if broad_multimodal_family or explicit_multimodal:
-        add(
-            "multimodal_candidate",
-            "多模态候选：图片识别、OCR、UI 截图和图文理解；须确认具体型号及接口支持图片输入",
-        )
-
-    code_or_agent_family = any(name in key for name in (
-        "gpt", "claude", "glm", "deepseek", "gemini", "grok", "minimax-m3", "mimo",
-        "qwen", "kimi", "coder", "codestral", "mistral", "llama",
-    ))
-    if code_or_agent_family:
-        add(
-            "coding",
-            "代码：代码理解、实现修改、测试和调试",
-        )
-        add(
-            "agent",
-            "Agent：工具调用、任务规划、状态跟踪和多步骤执行",
-        )
-
-    if _safe_int(context_window, 0) >= 200_000:
-        add(
-            "long_context",
-            "长上下文：大型文档、长日志和大代码库的总结与检索",
-        )
-
-    if not tags:
-        add(
-            "general",
-            "通用：未识别到明确专长，默认继承父模型，除非已有人工验证",
-        )
+    if effective_context_window >= LONG_CONTEXT_MIN_TOKENS:
+        tags.append("long_context")
     return {
         "capability_tags": tags,
-        "capability_description": "；".join(descriptions),
-        "capability_source": "automatic:model-family-heuristic",
+        "capability_description": _table_capability_description(
+            table_record, tags, effective_context_window
+        ),
+        "capability_description_en": _table_capability_description(
+            table_record, tags, effective_context_window, "en"
+        ),
+        "capability_source": "automatic:models-table",
+        "matched_model_id": str(table_record.get("model_id") or ""),
+        "model_scores": {
+            "intel": table_record.get("intel_score"),
+            "coding": table_record.get("coding_score"),
+            "agentic": table_record.get("agentic_score"),
+        },
+        "model_prices": {
+            "input_per_m": input_price,
+            "output_per_m": output_price,
+        },
+        "input_modalities": list(table_record.get("input_modalities") or ()),
+        "output_modalities": list(table_record.get("output_modalities") or ()),
     }
 
 
@@ -364,7 +597,7 @@ def probe_model_context(
     if not mid:
         raise ValueError("missing model")
     fallback = fallback if isinstance(fallback, dict) else {}
-    limits = infer_model_limits(mid, fallback)
+    limits = infer_model_limits(mid, fallback, base_url=base)
     headers = {}
     if str(api_key or "").strip():
         headers["Authorization"] = "Bearer " + str(api_key).strip()
@@ -444,15 +677,20 @@ def public_profile(profile: dict) -> dict:
     custom_description = str(profile.get("capability_description") or "").strip()
     if custom_description:
         out["capability_description"] = custom_description
+        out["capability_description_en"] = custom_description
         out["capability_source"] = "manual"
     multimodal_mode = normalize_multimodal_mode(profile.get("multimodal_mode"))
     multimodal_input = profile_multimodal_input(profile)
     out["multimodal_mode"] = multimodal_mode
     out["multimodal_input"] = multimodal_input
-    out["multimodal_source"] = str(
-        profile.get("multimodal_source")
-        or ("automatic:model-family-heuristic" if multimodal_mode == "auto" else "manual")
-    )
+    if multimodal_mode == "auto":
+        out["multimodal_source"] = (
+            "automatic:models-table"
+            if inferred.get("capability_source") == "automatic:models-table"
+            else "unavailable"
+        )
+    else:
+        out["multimodal_source"] = str(profile.get("multimodal_source") or "manual")
     tags = list(out.get("capability_tags") or [])
     if multimodal_input:
         if "multimodal" not in tags:
@@ -504,9 +742,10 @@ def _legacy_env_profile_payload(env: dict[str, Any]) -> Optional[dict]:
     if llm_type != "local" and (not api_key or "YOUR_API_KEY" in api_key.upper()):
         return None
 
-    limits = infer_model_limits(model)
-    context_window = _safe_int(env.get("CONTEXT_WINDOW"), limits["context_window"])
-    max_output_tokens = _safe_int(env.get("MAX_OUTPUT_TOKENS"), limits["max_output_tokens"])
+    limits = infer_model_limits(model, base_url=base_url)
+    recommended = recommended_model_windows(limits["context_window"])
+    context_window = _safe_int(env.get("CONTEXT_WINDOW"), recommended["context_window"])
+    max_output_tokens = _safe_int(env.get("MAX_OUTPUT_TOKENS"), recommended["max_output_tokens"])
     if context_window <= 0 or max_output_tokens <= 0:
         return None
     inferred_model_window = _safe_int(limits.get("context_window"), 0)
@@ -616,6 +855,26 @@ def upsert_profile(project_root: Path, payload: dict) -> dict:
     profile = dict(old or {})
     priority_default = _safe_int((old or {}).get("priority"), len(profiles) + 1)
     enabled = payload.get("enabled") if "enabled" in payload else (old or {}).get("enabled", True)
+    inferred_limits = infer_model_limits(model, base_url=base_url)
+    recommended = recommended_model_windows(inferred_limits["context_window"])
+    context_window = _safe_int(
+        payload.get("context_window"),
+        _safe_int((old or {}).get("context_window"), recommended["context_window"]),
+    )
+    max_output_tokens = _safe_int(
+        payload.get("max_output_tokens"),
+        _safe_int((old or {}).get("max_output_tokens"), recommended["max_output_tokens"]),
+    )
+    model_context_window = _safe_int(
+        payload.get("model_context_window"),
+        _safe_int(
+            (old or {}).get("model_context_window"),
+            max(
+                _safe_int(inferred_limits.get("context_window"), 0),
+                context_window + max_output_tokens,
+            ),
+        ),
+    )
     profile.update(
         {
             "id": pid,
@@ -623,9 +882,9 @@ def upsert_profile(project_root: Path, payload: dict) -> dict:
             "model": model,
             "llm_type": llm_type,
             "base_url": base_url,
-            "context_window": _safe_int(payload.get("context_window"), DEFAULT_UNKNOWN_CONTEXT_WINDOW),
-            "max_output_tokens": _safe_int(payload.get("max_output_tokens"), 8192),
-            "model_context_window": _safe_int(payload.get("model_context_window"), 0),
+            "context_window": context_window,
+            "max_output_tokens": max_output_tokens,
+            "model_context_window": model_context_window,
             "thinking_mode": _clean_thinking_mode(payload.get("thinking_mode")),
             "reasoning_effort": _clean_reasoning_effort(payload.get("reasoning_effort")),
             "temperature": str(payload.get("temperature") or "").strip(),
@@ -639,16 +898,21 @@ def upsert_profile(project_root: Path, payload: dict) -> dict:
             "updated_at": now,
         }
     )
+    automatic_multimodal_source = (
+        "automatic:models-table"
+        if _model_table_record_for_model(model) is not None
+        else "unavailable"
+    )
     if "multimodal_mode" in payload:
         profile["multimodal_source"] = (
-            "automatic:model-family-heuristic"
+            automatic_multimodal_source
             if profile["multimodal_mode"] == "auto"
             else "manual"
         )
         profile.pop("multimodal_failure_at", None)
         profile.pop("multimodal_failure_reason", None)
     elif "multimodal_source" not in profile:
-        profile["multimodal_source"] = "automatic:model-family-heuristic"
+        profile["multimodal_source"] = automatic_multimodal_source
     if "capability_description" in payload:
         capability_description = str(payload.get("capability_description") or "").strip()
         if capability_description:
@@ -813,7 +1077,13 @@ def discover_models(base_url: str, api_key: str, timeout: float = 20.0) -> List[
                 continue
             raw_has_context = any(k in item for k in CONTEXT_LIMIT_FIELDS)
             raw_has_limits = raw_has_context or any(k in item for k in OUTPUT_LIMIT_FIELDS)
-            limits = infer_model_limits(mid, item)
+            limits = infer_model_limits(mid, item, base_url=base_url)
+            capabilities = infer_model_task_capabilities(
+                mid,
+                context_window=recommended_model_windows(
+                    limits["context_window"]
+                )["context_window"],
+            )
             out.append(
                 {
                     "id": mid,
@@ -826,6 +1096,10 @@ def discover_models(base_url: str, api_key: str, timeout: float = 20.0) -> List[
                     "limit_source": limits["context_source"],
                     "context_window_source": limits["context_source"],
                     "output_limit_source": limits["output_source"],
+                    **capabilities,
+                    "multimodal_input": "multimodal_candidate" in set(
+                        capabilities.get("capability_tags") or ()
+                    ),
                 }
             )
     out.sort(key=lambda row: row["id"].lower())

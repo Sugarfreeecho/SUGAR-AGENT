@@ -124,6 +124,11 @@
 
             <div class="panel" role="form">
                 <div class="panel-inner">
+                    <div id="human-interaction-banner" class="human-interaction-banner hidden" role="status" aria-live="polite">
+                        <span class="human-interaction-banner-mark" aria-hidden="true">?</span>
+                        <span class="human-interaction-banner-msg"></span>
+                        <button type="button" id="human-interaction-banner-btn" class="human-interaction-banner-btn">立即处理</button>
+                    </div>
                     <div id="subagent-continue-banner" class="subagent-continue-banner hidden" role="status" aria-live="polite">
                         <span class="subagent-continue-banner-msg"></span>
                         <button type="button" id="subagent-continue-btn" class="subagent-continue-banner-btn">继续综合子任务</button>
@@ -275,11 +280,21 @@
                     <button type="button" id="settings-theme-dark" class="settings-theme-btn">深色</button>
                     <button type="button" id="settings-theme-light" class="settings-theme-btn">浅色（默认）</button>
                 </div>
-                <div class="settings-modal__label settings-modal__label--sub">会话目录风格</div>
-                <div class="settings-theme-row settings-session-mode-row" role="group" aria-label="会话目录显示模式">
+            </div>
+            <div class="settings-modal__section">
+                <div class="settings-modal__label">会话目录</div>
+                <div class="settings-theme-row" role="group" aria-label="会话目录显示模式">
                     <button type="button" id="settings-session-compact" class="settings-theme-btn">紧凑</button>
                     <button type="button" id="settings-session-detailed" class="settings-theme-btn">详细</button>
                 </div>
+            </div>
+            <div class="settings-modal__section">
+                <div class="settings-modal__label">Agent 主动提问</div>
+                <div class="settings-theme-row" role="group" aria-label="Agent 主动提问功能开关">
+                    <button type="button" id="settings-ask-user-off" class="settings-theme-btn">关闭</button>
+                    <button type="button" id="settings-ask-user-on" class="settings-theme-btn">启用</button>
+                </div>
+                <div id="settings-ask-user-status" class="settings-feature-status" role="status" aria-live="polite">正在读取状态…</div>
             </div>
             <div class="settings-modal__section">
                 <div class="settings-modal__label">运行诊断</div>

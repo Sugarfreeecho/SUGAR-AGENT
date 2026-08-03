@@ -87,6 +87,7 @@ def test_advanced_env_exposes_agent_team_defaults(tmp_path, monkeypatch):
         for row in group["vars"]
     }
     assert values["AGENT_TEAM_ENABLED"] == "0"
+    assert values["SECURITY_ENABLED"] == "0"
     assert values["AGENT_TEAM_MAX_MEMBERS"] == "4"
     assert values["AGENT_TEAM_MAX_MESSAGES"] == "2000"
     assert values["AGENT_TEAM_PERMISSION_TOOLS"] == "delete_file,web_download"

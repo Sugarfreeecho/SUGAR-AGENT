@@ -4631,9 +4631,10 @@ OPENAI_TOOL_DEFINITIONS: List[Dict[str, Any]] = [
                 "type": "string",
                 "description": (
                     "start only. Default: omit this parameter so the subagent inherits the parent's effective model. "
-                    "Choose a registered profile only when the delegated task has a clear specialized need, such as "
-                    "low-cost/high-concurrency batch work, difficult reasoning, investigation/research, or image understanding. "
-                    "The available IDs, models, and automatic capability descriptions are injected at runtime. A selected "
+                    "Choose a registered profile only when its injected models-table capability metadata directly supports "
+                    "the delegated task, such as low-cost/high-concurrency batch work, difficult reasoning, research, or "
+                    "image understanding. The available IDs, models, and automatic capability descriptions are injected at "
+                    "runtime. A selected "
                     "profile supplies the subagent's endpoint, credentials, model, limits, and reasoning settings. Never guess, abbreviate, "
                     "or pass a raw model name; an unregistered model must first become a profile. Existing subagents keep their original "
                     "profile on resume. A multimodal capability tag is only a routing hint: select it for image work only after confirming "

@@ -15,8 +15,28 @@ function permissionModeLabel(mode) {
     return '请求批准';
 }
 
+function permissionControlsEnabled(status) {
+    if (status && status.security_enabled === false) return false;
+    var flags = typeof window !== 'undefined' ? window.__MYAGENT_FEATURES__ : null;
+    return !(flags && flags.security === false);
+}
+
+function syncPermissionControlVisibility(status) {
+    var control = document.getElementById('permission-mode-control');
+    var enabled = permissionControlsEnabled(status);
+    if (control) control.hidden = !enabled;
+    var menu = document.getElementById('permission-mode-menu');
+    var trigger = document.getElementById('permission-mode-trigger');
+    if (!enabled && menu) menu.classList.remove('is-open');
+    if (!enabled && trigger) {
+        trigger.classList.remove('is-open');
+        trigger.setAttribute('aria-expanded', 'false');
+    }
+    return enabled;
+}
+
 function maybeShowGlobalFullAccessNotice(status) {
-    if (!status || status.mode !== 'full_access') return;
+    if (!status || status.mode !== 'full_access' || status.security_enabled === false) return;
     var key = 'myagent-full-access-notice:' + String(status.updated_at || 'legacy');
     try {
         if (window.sessionStorage.getItem(key) === '1') return;
@@ -31,6 +51,7 @@ function maybeShowGlobalFullAccessNotice(status) {
 
 function renderPermissionMode(status) {
     currentPermissionStatus = status || null;
+    var controlsEnabled = syncPermissionControlVisibility(status);
     maybeShowGlobalFullAccessNotice(status);
     var trigger = document.getElementById('permission-mode-trigger');
     var label = document.getElementById('permission-mode-current');
@@ -55,7 +76,7 @@ function renderPermissionMode(status) {
         var mode = status && status.mode;
         triggerIco.innerHTML = PERMISSION_MODE_ICONS[mode] || PERMISSION_MODE_ICONS.ask_for_approval;
     }
-    if (trigger) trigger.disabled = permissionModeBusy || !currentSessionId;
+    if (trigger) trigger.disabled = !controlsEnabled || permissionModeBusy || !currentSessionId;
     if (!menu) return;
     var available = (status && status.available_modes) || { ask_for_approval: true };
     Array.from(menu.querySelectorAll('[data-permission-mode]')).forEach(function (button) {
@@ -375,7 +396,7 @@ async function refreshSecurityRules() {
         if (rules.length === 0) {
             var empty = document.createElement('div');
             empty.className = 'settings-feature-status';
-            empty.textContent = '暂无规则。审批时点“始终允许同类操作”会自动添加。';
+            empty.textContent = '暂无长期规则。审批时选择“始终允许此类操作”会自动添加。';
             listEl.appendChild(empty);
             return;
         }
@@ -479,6 +500,7 @@ async function clearSessionSecurityRules() {
 }
 
 function initPermissionControls() {
+    syncPermissionControlVisibility(currentPermissionStatus);
     var trigger = document.getElementById('permission-mode-trigger');
     var menu = document.getElementById('permission-mode-menu');
     if (trigger && menu) {

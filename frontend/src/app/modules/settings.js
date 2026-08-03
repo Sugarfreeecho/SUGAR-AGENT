@@ -36,6 +36,7 @@ const LS_SESSION_LIST_MODE = 'myagent-session-list-mode';
 const UI_FONT_PX = [14, 16, 17];
 var settingsModalKeyHandler = null;
 var agentTeamFeatureSaving = false;
+var askUserFeatureSaving = false;
 
 function setAgentTeamFeatureUi(enabled, options) {
     options = options || {};
@@ -113,6 +114,66 @@ async function saveAgentTeamFeature(enabled) {
     }
 }
 
+function setAskUserFeatureUi(enabled, options) {
+    options = options || {};
+    var off = document.getElementById('settings-ask-user-off');
+    var on = document.getElementById('settings-ask-user-on');
+    var status = document.getElementById('settings-ask-user-status');
+    var known = typeof enabled === 'boolean';
+    if (off) {
+        off.classList.toggle('is-active', known && !enabled);
+        off.disabled = !!options.busy;
+    }
+    if (on) {
+        on.classList.toggle('is-active', known && enabled);
+        on.disabled = !!options.busy;
+    }
+    if (status) {
+        status.classList.toggle('is-error', !!options.error);
+        if (options.message) status.textContent = options.message;
+        else if (options.busy) status.textContent = '正在保存…';
+        else if (enabled) status.textContent = '已启用；Agent 可在确实需要选择时暂停并向你提问。';
+        else if (known) status.textContent = '已关闭；Agent 不会创建结构化提问卡片。';
+        else status.textContent = '正在读取状态…';
+    }
+}
+
+async function refreshAskUserFeature() {
+    setAskUserFeatureUi(null, { busy: askUserFeatureSaving });
+    try {
+        var response = await fetch('/api/features/ask-user', { cache: 'no-store' });
+        var data = await response.json();
+        if (!response.ok || !data || data.ok !== true) throw new Error((data && data.error) || ('HTTP ' + response.status));
+        window.__MYAGENT_FEATURES__ = window.__MYAGENT_FEATURES__ || {};
+        window.__MYAGENT_FEATURES__.askUser = data.enabled === true;
+        setAskUserFeatureUi(data.enabled === true);
+    } catch (error) {
+        setAskUserFeatureUi(null, { error: true, message: '读取失败：' + String(error && error.message ? error.message : error) });
+    }
+}
+
+async function saveAskUserFeature(enabled) {
+    if (askUserFeatureSaving) return;
+    askUserFeatureSaving = true;
+    setAskUserFeatureUi(enabled, { busy: true });
+    try {
+        var response = await fetch('/api/features/ask-user', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ enabled: enabled === true }),
+        });
+        var data = await response.json();
+        if (!response.ok || !data || data.ok !== true) throw new Error((data && data.error) || ('HTTP ' + response.status));
+        window.__MYAGENT_FEATURES__ = window.__MYAGENT_FEATURES__ || {};
+        window.__MYAGENT_FEATURES__.askUser = data.enabled === true;
+        setAskUserFeatureUi(data.enabled === true);
+    } catch (error) {
+        setAskUserFeatureUi(null, { error: true, message: '保存失败：' + String(error && error.message ? error.message : error) });
+    } finally {
+        askUserFeatureSaving = false;
+    }
+}
+
 function getStoredFontLevel() {
     var n = parseInt(localStorage.getItem(LS_UI_FONT), 10);
     if (isNaN(n) || n < 0 || n > 2) return 1;
@@ -178,7 +239,7 @@ function openSettingsModal() {
     if (!root || !panel) return;
     syncSettingsModalForm();
     void refreshAgentTeamFeature();
-    if (typeof refreshSecurityRules === 'function') void refreshSecurityRules();
+    void refreshAskUserFeature();
     root.classList.add('is-open');
     root.setAttribute('aria-hidden', 'false');
     document.body.style.overflow = 'hidden';
@@ -237,6 +298,10 @@ function initUiSettingsControls() {
     var agentTeamOn = document.getElementById('settings-agent-team-on');
     if (agentTeamOff) agentTeamOff.addEventListener('click', function () { void saveAgentTeamFeature(false); });
     if (agentTeamOn) agentTeamOn.addEventListener('click', function () { void saveAgentTeamFeature(true); });
+    var askUserOff = document.getElementById('settings-ask-user-off');
+    var askUserOn = document.getElementById('settings-ask-user-on');
+    if (askUserOff) askUserOff.addEventListener('click', function () { void saveAskUserFeature(false); });
+    if (askUserOn) askUserOn.addEventListener('click', function () { void saveAskUserFeature(true); });
     var agentTeamManage = document.getElementById('settings-agent-team-manage');
     if (agentTeamManage) agentTeamManage.addEventListener('click', function () {
         closeSettingsModal();
@@ -252,11 +317,15 @@ function initUiSettingsControls() {
     if (envAdv) {
         envAdv.addEventListener('click', function () {
             closeSettingsModal();
-            var w = window.open('/setup/env', 'myagent-env');
+            var query = new URLSearchParams();
+            if (currentSessionId) query.set('session_id', String(currentSessionId));
+            if (window.__WORK_DIR__) query.set('workspace', String(window.__WORK_DIR__));
+            var settingsUrl = '/setup/env' + (query.toString() ? ('?' + query.toString()) : '');
+            var w = window.open(settingsUrl, 'myagent-env');
             if (w) {
                 try { w.focus(); } catch (e) {}
             } else {
-                window.location.href = '/setup/env';
+                window.location.href = settingsUrl;
             }
         });
     }

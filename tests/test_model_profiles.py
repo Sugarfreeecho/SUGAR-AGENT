@@ -14,20 +14,79 @@ def test_profile_store_defaults_to_project_root(tmp_path):
     assert model_profiles.profile_store_path(tmp_path) == tmp_path / "model_profiles.json"
 
 
-def test_model_task_capabilities_cover_routing_families():
+def test_models_table_is_bundled_inside_app():
+    root = Path(__file__).resolve().parents[1]
+    expected = root / "app" / "data" / "models_table.md"
+
+    assert model_profiles.MODEL_LIMITS_TABLE_PATH == expected
+    assert expected.is_file()
+
+
+def test_normalized_custom_model_name_selects_latest_table_match():
+    metadata = model_profiles.model_table_metadata_for_model("deepseekv4")
+    limits = model_profiles.infer_model_limits("deepseekv4")
+    capabilities = model_profiles.infer_model_task_capabilities("deepseekv4")
+
+    assert metadata is not None
+    assert metadata["model_id"] == "deepseek/deepseek-v4-pro"
+    assert metadata["intel_score"] == 44.3
+    assert metadata["coding_score"] == 59.4
+    assert metadata["agentic_score"] == 36.4
+    assert metadata["input_price_per_m"] == 0.435
+    assert metadata["output_price_per_m"] == 0.87
+    assert limits["context_window"] == 1048576
+    assert limits["context_source"] == "table"
+    assert capabilities["matched_model_id"] == "deepseek/deepseek-v4-pro"
+    assert capabilities["capability_source"] == "automatic:models-table"
+    assert capabilities["model_prices"] == {
+        "input_per_m": 0.435,
+        "output_per_m": 0.87,
+    }
+    assert capabilities["capability_description"] == (
+        "适合：低成本/多并发、高难度、调查调研、代码、Agent；"
+        "多模态输入：不支持（仅文本）"
+    )
+
+
+def test_normalized_multiple_matches_prefer_latest_release_over_scores(tmp_path, monkeypatch):
+    table_path = tmp_path / "models_table.md"
+    table_path.write_text(
+        "| Provider | Model ID | Name | Context | Modality | Input | Output | Input $/M | Output $/M | Intel | Coding | Agentic | Reasoning | Created |\n"
+        "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|\n"
+        "| vendor | vendor/family-v4-pro | Old Strong | 1,000,000 | text->text | text | text | - | - | 99 | 99 | 99 | Optional | 2025-01-01 |\n"
+        "| vendor | vendor/family-v4-flash | New Weak | 128,000 | text->text | text | text | - | - | 1 | 1 | 1 | Optional | 2026-01-01 |\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(model_profiles, "MODEL_LIMITS_TABLE_PATH", table_path)
+
+    metadata = model_profiles.model_table_metadata_for_model("familyv4")
+
+    assert metadata is not None
+    assert metadata["model_id"] == "vendor/family-v4-flash"
+    assert metadata["created"] == "2026-01-01"
+
+
+def test_table_multimodal_metadata_drives_capability_description():
+    capabilities = model_profiles.infer_model_task_capabilities("google/gemini-2.5-flash")
+
+    assert "multimodal_candidate" in capabilities["capability_tags"]
+    assert {"image", "audio", "video", "file"} <= set(capabilities["input_modalities"])
+    assert "多模态输入：图片、音频、视频、文件" in capabilities["capability_description"]
+
+
+def test_model_task_capabilities_come_only_from_table_metadata():
     cases = {
-        "deepseek-v4-flash": {"low_cost_parallel", "research", "coding", "agent"},
-        "MiniMax-M3": {"low_cost_parallel", "multimodal_candidate", "coding", "agent"},
-        "gpt-5.4": {"hard_reasoning", "multimodal_candidate", "coding", "agent"},
-        "claude-opus-4.8": {"hard_reasoning", "multimodal_candidate", "coding", "agent"},
-        "glm-5.2": {"hard_reasoning", "coding", "agent"},
-        "gemini-3.1-pro": {"hard_reasoning", "research", "multimodal_candidate"},
-        "grok-4.5": {"hard_reasoning", "research", "multimodal_candidate"},
-        "mimo-v2.5-pro": {"hard_reasoning", "multimodal_candidate", "coding", "agent"},
+        "deepseek-v4-flash": {"low_cost_concurrency", "hard_reasoning", "research", "coding", "agent", "long_context"},
+        "MiniMax-M3": {"hard_reasoning", "research", "multimodal_candidate", "coding", "agent"},
+        "gpt-5.4": {"hard_reasoning", "research", "multimodal_candidate", "coding", "agent"},
+        "claude-opus-4.8": {"hard_reasoning", "research", "multimodal_candidate", "coding", "agent"},
+        "glm-5.2": {"hard_reasoning", "research", "coding", "agent"},
+        "gemini-3.1-pro": {"multimodal_candidate", "long_context"},
+        "grok-4.5": {"hard_reasoning", "research", "multimodal_candidate", "coding", "agent"},
+        "mimo-v2.5-pro": {"hard_reasoning", "research", "coding", "agent"},
         "qwen3.7-plus": {"multimodal_candidate", "coding", "agent"},
-        "kimi-k2.6": {"hard_reasoning", "multimodal_candidate", "coding", "agent"},
-        "sonar-deep-research": {"research"},
-        "pixtral-large": {"multimodal_candidate"},
+        "kimi-k2.6": {"hard_reasoning", "research", "multimodal_candidate", "coding", "agent"},
+        "sonar-deep-research": {"long_context"},
     }
 
     for model, expected in cases.items():
@@ -35,11 +94,42 @@ def test_model_task_capabilities_cover_routing_families():
         assert expected <= set(inferred["capability_tags"]), model
 
     deepseek = model_profiles.infer_model_task_capabilities("deepseek-v4-flash")
-    assert "低成本/多并发" in deepseek["capability_description"]
-    assert "批量总结" in deepseek["capability_description"]
-    assert "代码：" in deepseek["capability_description"]
-    assert "Agent：" in deepseek["capability_description"]
-    assert "hard_reasoning" not in model_profiles.infer_model_task_capabilities("MiniMax-M3")["capability_tags"]
+    assert "适合：低成本/多并发、高难度、调查调研、代码、Agent" in deepseek["capability_description"]
+    assert "Best for: low-cost/high-concurrency, complex tasks, research, coding, agent workflows" in deepseek["capability_description_en"]
+    assert "hard_reasoning" in model_profiles.infer_model_task_capabilities("MiniMax-M3")["capability_tags"]
+
+    unmatched = model_profiles.infer_model_task_capabilities("pixtral-large")
+    assert unmatched == {
+        "capability_tags": [],
+        "capability_description": "",
+        "capability_description_en": "",
+        "capability_source": "unavailable",
+    }
+    assert model_profiles.infer_multimodal_input("pixtral-large") is False
+
+
+def test_long_context_uses_actual_configured_context_not_table_maximum():
+    normal = model_profiles.infer_model_task_capabilities(
+        "deepseek-v4-pro", context_window=119_808
+    )
+    long = model_profiles.infer_model_task_capabilities(
+        "deepseek-v4-pro", context_window=256_000
+    )
+
+    assert "long_context" not in normal["capability_tags"]
+    assert "长上下文" not in normal["capability_description"]
+    assert "long_context" in long["capability_tags"]
+    assert "长上下文（实际配置 256,000 tokens）" in long["capability_description"]
+    assert "long-context (256,000 tokens configured)" in long["capability_description_en"]
+
+
+def test_negative_router_prices_are_not_treated_as_low_cost():
+    inferred = model_profiles.infer_model_task_capabilities(
+        "openrouter/auto", context_window=512_000
+    )
+
+    assert inferred["model_prices"] == {"input_per_m": None, "output_per_m": None}
+    assert "low_cost_concurrency" not in inferred["capability_tags"]
 
 
 def test_public_profile_adds_automatic_capability_description():
@@ -50,9 +140,12 @@ def test_public_profile_adds_automatic_capability_description():
         "api_key": "secret",
     })
 
-    assert public["capability_source"] == "automatic:model-family-heuristic"
-    assert {"research", "multimodal_candidate", "long_context"} <= set(public["capability_tags"])
-    assert "调查调研" in public["capability_description"]
+    assert public["capability_source"] == "automatic:models-table"
+    assert {"multimodal_candidate", "long_context"} <= set(public["capability_tags"])
+    assert "长上下文（实际配置 1,000,000 tokens）" in public["capability_description"]
+    assert "多模态输入：图片、音频、视频、文件" in public["capability_description"]
+    assert "long-context (1,000,000 tokens configured)" in public["capability_description_en"]
+    assert "Multimodal input: image, audio, video, file" in public["capability_description_en"]
 
 
 def test_model_profile_persists_editable_capability_description(tmp_path):
@@ -80,8 +173,8 @@ def test_model_profile_persists_editable_capability_description(tmp_path):
         },
     )
     automatic = model_profiles.public_profile(cleared)
-    assert automatic["capability_source"] == "automatic:model-family-heuristic"
-    assert "hard_reasoning" not in automatic["capability_tags"]
+    assert automatic["capability_source"] == "automatic:models-table"
+    assert "hard_reasoning" in automatic["capability_tags"]
 
 
 def test_model_profile_multimodal_mode_controls_effective_capability(tmp_path):
@@ -99,7 +192,7 @@ def test_model_profile_multimodal_mode_controls_effective_capability(tmp_path):
     public = model_profiles.public_profile(automatic)
     assert public["multimodal_mode"] == "auto"
     assert public["multimodal_input"] is True
-    assert public["multimodal_source"] == "automatic:model-family-heuristic"
+    assert public["multimodal_source"] == "automatic:models-table"
     assert "multimodal" in public["capability_tags"]
 
     disabled = model_profiles.upsert_profile(
@@ -160,6 +253,136 @@ def test_extract_context_window_from_error_message():
     )
 
 
+def test_recommended_unknown_model_windows_use_128k_default():
+    assert model_profiles.recommended_model_windows(0) == {
+        "model_context_window": 128000,
+        "max_output_tokens": 8192,
+        "context_window": 119808,
+    }
+    assert model_profiles.recommended_model_windows(128000) == {
+        "model_context_window": 128000,
+        "max_output_tokens": 8192,
+        "context_window": 119808,
+    }
+
+
+def test_model_limits_map_exact_and_providerless_ids_from_markdown_table(tmp_path, monkeypatch):
+    table_path = tmp_path / "models_table.md"
+    table_path.write_text(
+        "# Models\n\n"
+        "| Provider | Model ID | Name | Context |\n"
+        "|---|---|---|---|\n"
+        "| xiaomi | xiaomi/mimo-v2.5 | MiMo | 1,050,000 |\n"
+        "| deepseek | deepseek/deepseek-chat | DeepSeek | 163,840 |\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(model_profiles, "MODEL_LIMITS_TABLE_PATH", table_path)
+
+    exact = model_profiles.infer_model_limits("xiaomi/mimo-v2.5")
+    providerless = model_profiles.infer_model_limits("mimo-v2.5")
+
+    assert exact["context_window"] == 1050000
+    assert exact["max_output_tokens"] == 50000
+    assert exact["context_source"] == "table"
+    assert providerless["context_window"] == 1050000
+    assert providerless["context_source"] == "table"
+
+
+def test_huawei_domain_precedes_table_but_not_api_limits(tmp_path, monkeypatch):
+    table_path = tmp_path / "models_table.md"
+    table_path.write_text(
+        "| Provider | Model ID | Name | Context |\n"
+        "|---|---|---|---|\n"
+        "| xiaomi | xiaomi/mimo-v2.5 | MiMo | 1,050,000 |\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(model_profiles, "MODEL_LIMITS_TABLE_PATH", table_path)
+    huawei_url = "https://maas-api.cn-north-4.myhuaweicloud.com/v1"
+
+    huawei = model_profiles.infer_model_limits("mimo-v2.5", base_url=huawei_url)
+    api = model_profiles.infer_model_limits(
+        "mimo-v2.5",
+        {"context_window": 256000, "max_output_tokens": 12000},
+        base_url=huawei_url,
+    )
+
+    assert model_profiles.is_huawei_api_domain("https://api.huawei.com/v1") is True
+    assert model_profiles.is_huawei_api_domain(huawei_url) is True
+    assert model_profiles.is_huawei_api_domain("https://example.com/v1/huawei") is False
+    assert huawei == {
+        "context_window": 128000,
+        "max_output_tokens": 8192,
+        "context_source": "huawei",
+        "output_source": "recommended",
+    }
+    assert api == {
+        "context_window": 256000,
+        "max_output_tokens": 12000,
+        "context_source": "api",
+        "output_source": "api",
+    }
+
+
+def test_unknown_model_falls_back_to_128k_model_window(tmp_path, monkeypatch):
+    monkeypatch.setattr(model_profiles, "MODEL_LIMITS_TABLE_PATH", tmp_path / "missing.md")
+
+    limits = model_profiles.infer_model_limits("not-in-model-table")
+
+    assert limits == {
+        "context_window": 128000,
+        "max_output_tokens": 8192,
+        "context_source": "default",
+        "output_source": "recommended",
+    }
+
+
+def test_upsert_without_limits_saves_unknown_model_recommendation(tmp_path, monkeypatch):
+    monkeypatch.setattr(model_profiles, "MODEL_LIMITS_TABLE_PATH", tmp_path / "missing.md")
+
+    saved = model_profiles.upsert_profile(
+        tmp_path,
+        {
+            "model": "not-in-model-table",
+            "base_url": "https://api.example.com/v1",
+            "api_key": "test-key",
+        },
+    )
+
+    assert saved["model_context_window"] == 128000
+    assert saved["max_output_tokens"] == 8192
+    assert saved["context_window"] == 119808
+
+
+def test_huawei_upsert_fills_only_missing_limits_and_preserves_manual_values(tmp_path):
+    base = "https://maas-api.cn-north-4.myhuaweicloud.com/v1"
+    automatic = model_profiles.upsert_profile(
+        tmp_path,
+        {
+            "model": "mimo-v2.5",
+            "base_url": base,
+            "api_key": "test-key",
+        },
+    )
+    manual = model_profiles.upsert_profile(
+        tmp_path,
+        {
+            "model": "mimo-v2.5",
+            "base_url": base,
+            "api_key": "test-key",
+            "model_context_window": 300000,
+            "max_output_tokens": 24000,
+            "context_window": 200000,
+        },
+    )
+
+    assert automatic["model_context_window"] == 128000
+    assert automatic["max_output_tokens"] == 8192
+    assert automatic["context_window"] == 119808
+    assert manual["model_context_window"] == 300000
+    assert manual["max_output_tokens"] == 24000
+    assert manual["context_window"] == 200000
+
+
 def test_probe_context_window_from_http_400_error():
     seen_urls = []
 
@@ -203,8 +426,9 @@ def test_discover_models_only_fetches_model_list(monkeypatch):
     models = model_profiles.discover_models("https://api.example.com/v1", "test-key")
 
     assert seen_paths == ["/v1/models"]
-    assert models[0]["context_window"] == model_profiles.DEFAULT_UNKNOWN_CONTEXT_WINDOW
-    assert models[0]["model_context_window"] == model_profiles.DEFAULT_UNKNOWN_CONTEXT_WINDOW
+    assert models[0]["context_window"] == model_profiles.DEFAULT_UNKNOWN_MODEL_CONTEXT_WINDOW
+    assert models[0]["model_context_window"] == model_profiles.DEFAULT_UNKNOWN_MODEL_CONTEXT_WINDOW
+    assert models[0]["max_output_tokens"] == model_profiles.DEFAULT_UNKNOWN_OUTPUT_TOKENS
     assert models[0]["limit_source"] == "default"
 
 
@@ -490,7 +714,8 @@ def test_advanced_model_profile_list_wires_drag_drop_reordering():
     assert '"ArrowUp"' in html and '"ArrowDown"' in html
     assert "'拖动排序':'Drag to reorder'" in i18n
     assert 'id="model-capability-description"' in html
-    assert "capability_description:fieldValue(modelEls.capability)" in html
+    assert "capability_description:capabilityFieldValue()" in html
+    assert "data-auto-value" in html
     assert 'id="model-multimodal-mode"' in html
     assert 'value="auto">自动识别' in html
     assert "multimodal_mode:fieldValue(modelEls.multimodal)" in html

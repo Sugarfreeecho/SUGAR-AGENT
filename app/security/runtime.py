@@ -4,6 +4,7 @@ import contextlib
 import contextvars
 import hashlib
 import json
+import os
 import re
 from pathlib import Path
 from typing import Any, Iterator
@@ -37,6 +38,7 @@ _ACTIVE_CONTEXT: contextvars.ContextVar[dict[str, Any] | None] = contextvars.Con
     "myagent_security_context", default=None
 )
 _STORE: SecurityStore | None = None
+SECURITY_ENABLED_ENV_VAR = "SECURITY_ENABLED"
 _NETWORK_COMMAND = re.compile(
     r"(?i)(?:https?://|\b(?:curl|wget|invoke-webrequest|invoke-restmethod|iwr|irm)\b|"
     r"\bgit\s+(?:clone|fetch|pull|push)\b|\b(?:pip|pip3|npm|pnpm|yarn)\s+install\b|"
@@ -45,7 +47,7 @@ _NETWORK_COMMAND = re.compile(
 _POLICY_TAMPER = re.compile(
     r"(?i)(?:app[\\/]+security|security\.sqlite3|windows-sandbox\.json|"
     r"hooks\.json|HOOKS_(?:PATH|CONFIG_PATH|ENABLED)|"
-    r"permission_mode|full_access_enabled|auto_review_enabled|"
+    r"permission_mode|full_access_enabled|auto_review_enabled|security_enabled|"
     r"disable[^\r\n]*(?:security|approval|firewall|defender)|"
     r"set-mppreference|add-mppreference)"
 )
@@ -116,6 +118,18 @@ def security_store() -> SecurityStore:
     return _STORE
 
 
+def security_enabled(source: Any = None) -> bool:
+    """Return whether application-level security controls are enabled.
+
+    Missing or empty values default to ``0`` (full access with permission
+    controls hidden). Any configured non-zero value enables the normal
+    three-mode permission system.
+    """
+
+    env = os.environ if source is None else source
+    return str(env.get(SECURITY_ENABLED_ENV_VAR, "0") or "0").strip() != "0"
+
+
 def permission_context_for_mode(mode: object) -> PermissionContext:
     return PERMISSION_PRESETS[normalize_permission_mode(mode)]
 
@@ -123,10 +137,9 @@ def permission_context_for_mode(mode: object) -> PermissionContext:
 def forced_approval_for(decision: SecurityDecision) -> bool:
     """Dangerous commands always require a fresh human approval.
 
-    Rules in ``FORCED_APPROVAL_RULES`` can never be satisfied by a stored
-    grant (allow_once / allow_session / allow_always) or by the automatic
-    reviewer; the approval UI must show every time with only
-    "allow once" / "deny" options.
+    Rules in ``FORCED_APPROVAL_RULES`` cannot be satisfied by reusable rules,
+    session/always grants, or the automatic reviewer. A human-created atomic
+    ``allow_once`` grant may authorize exactly one final execution attempt.
     """
     return decision.rule_id in FORCED_APPROVAL_RULES
 
@@ -143,6 +156,8 @@ def always_ask_for(decision: SecurityDecision) -> bool:
 
 def session_permission_mode(session_id: str) -> PermissionMode:
     """The single global permission mode (shared by all sessions)."""
+    if not security_enabled():
+        return PermissionMode.FULL_ACCESS
     # Do not disguise a store or migration failure as a mode change. Callers
     # must fail the operation; the persisted global mode remains untouched.
     return normalize_permission_mode(security_store().get_global_permission_mode())
@@ -165,6 +180,11 @@ def set_session_permission_mode(session_id: str, mode: object) -> PermissionMode
         meta = session_manager._load_metadata_unlocked(sid)
         if not meta:
             raise ValueError("session not found")
+    if not security_enabled():
+        # SECURITY_ENABLED=0 is an environment-level override. Do not overwrite
+        # the persisted global choice, so setting it back to 1 restores the
+        # user's previous three-mode selection.
+        return PermissionMode.FULL_ACCESS
     security_store().set_session_mode(sid, normalized.value)
     return normalized
 
@@ -485,10 +505,14 @@ def authorize_request(
                 decision = rule_decision
     if (
         decision.outcome == DecisionOutcome.ASK
-        and not always_ask_for(decision)
         and not decision.constraints.get("user_rule")
     ):
-        grant = store.consume_matching_grant(session_id, decision.request_digest)
+        forced = always_ask_for(decision)
+        grant = store.consume_matching_grant(
+            session_id,
+            decision.request_digest,
+            once_only=forced,
+        )
         if grant:
             decision = SecurityDecision(
                 DecisionOutcome.ALLOW,
@@ -680,6 +704,7 @@ def add_approval_grant(
 
 
 def security_status_for_session(session_id: str) -> dict[str, Any]:
+    enabled = security_enabled()
     mode = session_permission_mode(session_id)
     context = permission_context_for_mode(mode)
     return {
@@ -690,6 +715,8 @@ def security_status_for_session(session_id: str) -> dict[str, Any]:
         "effective_profile": context.sandbox_profile.value,
         "approval_policy": context.approval_policy.value,
         "reviewer": context.reviewer.value,
+        "security_enabled": enabled,
+        "permission_controls_visible": enabled,
         "restriction": {
             "implementation": (
                 "none"
@@ -705,9 +732,9 @@ def security_status_for_session(session_id: str) -> dict[str, Any]:
             "os_user": "current",
         },
         "available_modes": {
-            "ask_for_approval": True,
-            "approve_for_me": True,
-            "full_access": True,
+            "ask_for_approval": enabled,
+            "approve_for_me": enabled,
+            "full_access": enabled,
         },
     }
 
@@ -715,6 +742,7 @@ def security_status_for_session(session_id: str) -> dict[str, Any]:
 def security_settings() -> dict[str, bool]:
     store = security_store()
     return {
+        "security_enabled": security_enabled(),
         "auto_review_enabled": store.get_setting("auto_review_enabled"),
         "full_access_enabled": True,
     }

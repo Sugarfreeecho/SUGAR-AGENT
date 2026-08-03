@@ -44,6 +44,11 @@ async function init() {
     if (lastSessionId && sessions.some(s => s.id === lastSessionId)) targetSession = lastSessionId;
     else if (!sessionsLoaded && lastSessionId) targetSession = lastSessionId;
     else if (sessions.length > 0) targetSession = sessions[0].id;
+    // Restore durable approvals/questions before switchSession decides whether
+    // the global pending banner should be hidden for the selected session.
+    if (targetSession && typeof refreshHumanInteractions === 'function') {
+        await refreshHumanInteractions(targetSession, { render: false });
+    }
     if (targetSession) await switchSession(targetSession);
     else await createNewSession();
     bindExistingLogs();

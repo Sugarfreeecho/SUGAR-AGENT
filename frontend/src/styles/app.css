@@ -3703,10 +3703,10 @@ body {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 18px;
+    width: auto;
     min-width: 18px;
     height: 18px;
-    padding: 0;
+    padding: 0 0.28rem;
     margin-left: auto;
     border-radius: 50%;
     background: var(--amber-accent);
@@ -3734,6 +3734,18 @@ body {
     box-shadow: 0 0 0 4px rgba(249, 226, 175, 0.12), 0 14px 42px rgba(0, 0, 0, 0.24);
 }
 .human-interaction-card.is-submitting { opacity: 0.68; pointer-events: none; }
+.human-interaction-card[aria-busy="true"] .human-card-status::before {
+    content: '';
+    display: inline-block;
+    width: 0.58rem;
+    height: 0.58rem;
+    margin-right: 0.32rem;
+    border: 1.5px solid currentColor;
+    border-right-color: transparent;
+    border-radius: 50%;
+    vertical-align: -0.06rem;
+    animation: autoReviewSpin 0.8s linear infinite;
+}
 .human-interaction-tool-slot { width: 100%; padding: 0 0.7rem 0.7rem; }
 .human-interaction-tool-slot .human-interaction-card {
     width: min(720px, calc(100% - 1rem));
@@ -3871,7 +3883,7 @@ body {
     letter-spacing: 0.08em;
     text-transform: uppercase;
 }
-.human-card-title { margin-top: 0.12rem; color: var(--text-primary); font-size: 0.96rem; font-weight: 650; }
+.human-card-title { margin: 0.12rem 0 0; color: var(--text-primary); font-size: 0.96rem; font-weight: 650; }
 .human-card-status {
     flex: 0 0 auto;
     padding: 0.22rem 0.5rem;
@@ -3889,6 +3901,7 @@ body {
     padding: 0.55rem 1rem 0;
     overflow-x: auto;
 }
+.human-question-progress { display: none; padding: 0.6rem 1rem 0; color: var(--text-secondary); font-size: 0.78rem; font-weight: 650; }
 .human-question-tab {
     border: 0;
     border-bottom: 2px solid transparent;
@@ -3900,9 +3913,10 @@ body {
     font-size: 0.78rem;
 }
 .human-question-tab.is-active { border-bottom-color: var(--accent-1); color: var(--accent-2); }
-.human-question-pane { display: none; }
+.human-question-tab.is-answered:not(.is-active)::before { content: '✓ '; color: var(--green-accent); }
+.human-question-pane { display: none; min-width: 0; margin: 0; padding: 0; border: 0; }
 .human-question-pane.is-active { display: block; }
-.human-question-text { color: var(--text-primary); font-size: 0.98rem; line-height: 1.55; }
+.human-question-text { width: 100%; padding: 0; color: var(--text-primary); font-size: 0.98rem; line-height: 1.55; }
 .human-question-hint { margin-top: 0.24rem; color: var(--text-tertiary); font-size: 0.72rem; }
 .human-options { display: grid; gap: 0.55rem; margin-top: 0.85rem; }
 .human-option {
@@ -3948,7 +3962,21 @@ body {
     font: inherit;
     font-size: 0.8rem;
 }
+.human-option-other .human-other-input { display: none; }
+.human-option-other:has(.human-other-mark:checked) .human-other-input { display: block; }
 .human-other-input:focus { border-color: var(--border-accent); }
+.human-question-review { padding: 1rem; outline: none; }
+.human-review-title { margin: 0 0 0.75rem; color: var(--text-primary); font-size: 0.92rem; }
+.human-review-row {
+    display: grid;
+    grid-template-columns: minmax(7rem, 0.34fr) minmax(0, 1fr);
+    gap: 0.75rem;
+    padding: 0.62rem 0;
+    border-bottom: 1px solid var(--border-glass);
+}
+.human-review-row:last-child { border-bottom: 0; }
+.human-review-label { color: var(--text-tertiary); font-size: 0.78rem; }
+.human-review-value { color: var(--text-primary); font-size: 0.82rem; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
 .human-card-error { min-height: 1.1rem; padding: 0 1rem; color: var(--red-accent); font-size: 0.75rem; }
 .human-card-actions {
     display: flex;
@@ -3959,12 +3987,20 @@ body {
 }
 .human-card-nav, .human-approval-actions { display: flex; align-items: center; justify-content: flex-end; gap: 0.5rem; }
 .human-secondary-btn, .human-primary-btn {
-    min-height: 32px;
+    min-height: 40px;
     border-radius: 9px;
     padding: 0.42rem 0.72rem;
     cursor: pointer;
     font: inherit;
     font-size: 0.78rem;
+}
+.human-secondary-btn:focus-visible,
+.human-primary-btn:focus-visible,
+.human-question-tab:focus-visible,
+.human-option:focus-within,
+.human-interaction-banner-btn:focus-visible {
+    outline: 2px solid var(--accent-2);
+    outline-offset: 2px;
 }
 .human-secondary-btn { border: 1px solid var(--border-glass); background: transparent; color: var(--text-secondary); }
 .human-secondary-btn:hover { border-color: var(--border-hover); background: rgba(205, 214, 244, 0.04); color: var(--text-primary); }
@@ -3987,7 +4023,10 @@ body {
     overflow-wrap: anywhere;
 }
 .human-terminal-summary { padding: 0.8rem 1rem 0.95rem 3.75rem; color: var(--text-secondary); font-size: 0.8rem; }
-.human-terminal-answer + .human-terminal-answer { margin-top: 0.25rem; }
+.human-terminal-answer { display: grid; grid-template-columns: minmax(6rem, 0.34fr) minmax(0, 1fr); gap: 0.7rem; }
+.human-terminal-answer + .human-terminal-answer { margin-top: 0.4rem; }
+.human-terminal-answer-label { color: var(--text-tertiary); }
+.human-terminal-answer-value { color: var(--text-secondary); overflow-wrap: anywhere; }
 
 :root.theme-light .human-interaction-card {
     background: #ffffff;
@@ -4007,6 +4046,17 @@ body {
     .human-interaction-banner { align-items: flex-start; flex-wrap: wrap; }
     .human-interaction-banner-msg { flex-basis: calc(100% - 32px); }
     .human-interaction-banner-btn { margin-left: 32px; }
+    .human-secondary-btn, .human-primary-btn { min-height: 44px; }
+}
+@media (max-width: 560px) {
+    .human-question-tabs { display: none; }
+    .human-question-progress { display: block; }
+    .human-review-row, .human-terminal-answer { grid-template-columns: 1fr; gap: 0.18rem; }
+    .human-card-head { align-items: flex-start; padding: 0.78rem; }
+    .human-card-body, .human-question-review { padding: 0.78rem; }
+}
+@media (prefers-reduced-motion: reduce) {
+    .human-interaction-card[aria-busy="true"] .human-card-status::before { animation: none; }
 }
 :root.theme-light .subagent-continue-dismiss:hover { background: rgba(0,0,0,0.055); color: var(--text-primary); }
 .subagent-card-summary {
