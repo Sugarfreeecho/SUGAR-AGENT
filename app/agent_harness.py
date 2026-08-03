@@ -37,7 +37,9 @@ import model_profiles
 from agent_messages import UserMessage, AssistantMessage, ToolMessage, SystemMessage
 from agent_openai import (
     _api_messages_have_media,
+    _api_messages_required_modalities,
     _is_media_input_error,
+    _media_error_modalities,
     _serialized_messages_to_text_only,
     chat_completion,
     parse_assistant_message,
@@ -873,12 +875,26 @@ def create_openai_client_for_profile(
     try:
         setattr(
             client,
+            "_myagent_input_modalities",
+            model_profiles.profile_input_modalities(profile),
+        )
+        setattr(
+            client,
             "_myagent_multimodal_input",
             model_profiles.profile_multimodal_input(profile),
         )
     except Exception:
         logger.debug("无法向模型客户端附加多模态能力元数据", exc_info=True)
     return client, model_name
+
+
+def _candidate_input_modalities(item: Dict[str, Any]) -> set[str]:
+    raw = item.get("input_modalities")
+    if isinstance(raw, (list, tuple, set, frozenset)) and raw:
+        return {str(value or "").strip().lower() for value in raw}
+    if bool(item.get("multimodal_input")):
+        return {"text", "image", "audio", "video", "file"}
+    return {"text"}
 
 
 class _FallbackCompletions:
@@ -927,7 +943,16 @@ class _FallbackCompletions:
     def create(self, **kwargs: Any) -> Any:
         last_error: Optional[BaseException] = None
         last_model = ""
-        for idx, item in enumerate(self._candidates):
+        required_modalities = _api_messages_required_modalities(
+            list(kwargs.get("messages") or [])
+        )
+        # Keep the user's selected profile as the main reasoning model.  When
+        # it cannot read the attached media, the per-candidate text fallback
+        # below preserves the media reference and asks it to delegate the
+        # inspection through the task tool instead of silently replacing the
+        # main model with a multimodal profile.
+        candidates = list(self._candidates)
+        for idx, item in enumerate(candidates):
             call_kwargs = dict(kwargs)
             call_kwargs["model"] = item["model"]
             requested_max_tokens = int(call_kwargs.get("max_tokens") or 0)
@@ -949,7 +974,9 @@ class _FallbackCompletions:
             request_has_media = _api_messages_have_media(
                 list(call_kwargs.get("messages") or [])
             )
-            if request_has_media and not bool(item.get("multimodal_input")):
+            if request_has_media and not required_modalities.issubset(
+                _candidate_input_modalities(item)
+            ):
                 call_kwargs["messages"] = _serialized_messages_to_text_only(
                     list(call_kwargs.get("messages") or [])
                 )
@@ -970,21 +997,33 @@ class _FallbackCompletions:
                 except Exception as exc:
                     if (
                         request_has_media
-                        and bool(item.get("multimodal_input"))
+                        and required_modalities.issubset(
+                            _candidate_input_modalities(item)
+                        )
                         and _is_media_input_error(exc)
                     ):
-                        item["multimodal_input"] = False
-                        mark_failed = item.get("mark_multimodal_failed")
+                        rejected_modalities = _media_error_modalities(
+                            exc, required_modalities
+                        )
+                        item["input_modalities"] = [
+                            modality
+                            for modality in (item.get("input_modalities") or [])
+                            if modality not in rejected_modalities
+                        ]
+                        item["multimodal_input"] = any(
+                            modality in {"image", "audio", "video", "file"}
+                            for modality in item["input_modalities"]
+                        )
+                        mark_failed = item.get("mark_modalities_failed")
                         if callable(mark_failed):
-                            mark_failed(exc)
+                            mark_failed(sorted(rejected_modalities), exc)
+                        else:
+                            legacy_mark_failed = item.get("mark_multimodal_failed")
+                            if callable(legacy_mark_failed):
+                                legacy_mark_failed(exc)
                         self._emit_multimodal_fallback_status(
                             str(item.get("model") or "")
                         )
-                        retry_kwargs = dict(call_kwargs)
-                        retry_kwargs["messages"] = _serialized_messages_to_text_only(
-                            list(call_kwargs.get("messages") or [])
-                        )
-                        return item["client"].chat.completions.create(**retry_kwargs)
                     raise
             except Exception as exc:
                 if _is_network_connectivity_error(exc) and not machine_network_available():
@@ -1015,8 +1054,8 @@ class _FallbackCompletions:
                 {
                     "type": "status",
                     "content": (
-                        f"[提示] {_masked_model_label(model)} 不支持多媒体输入，"
-                        "已更新 Model Profile，并保留文件路径切换为纯文本模式"
+                        f"[提示] {_masked_model_label(model)} 拒绝了本次媒体输入，"
+                        "已记录对应输入类型并尝试其他兼容模型"
                     ),
                     "multimodal_fallback": True,
                     "model": model,
@@ -1048,8 +1087,13 @@ class FallbackOpenAIClient:
         self.candidates = candidates
         self.chat = _FallbackChat(candidates)
         first = candidates[0] if candidates else {}
-        self._myagent_multimodal_input = bool(first.get("multimodal_input"))
-        self._myagent_mark_multimodal_failed = first.get("mark_multimodal_failed")
+        preferred_modalities = _candidate_input_modalities(first) if first else {"text"}
+        self._myagent_input_modalities = sorted(preferred_modalities or {"text"})
+        self._myagent_multimodal_input = bool(
+            preferred_modalities & {"image", "audio", "video", "file"}
+        )
+        self._myagent_mark_multimodal_failed = None
+        self._myagent_mark_modalities_failed = lambda _modalities, _error: None
 
     def set_status_callback(
         self,
@@ -5650,6 +5694,8 @@ def list_executor_model_profile_choices() -> List[Dict[str, Any]]:
         choice.update(model_profiles.infer_model_task_capabilities(
             choice["model"], choice["name"], choice["context_window"]
         ))
+        choice["table_input_modalities"] = list(choice.get("input_modalities") or [])
+        choice["input_modalities"] = model_profiles.profile_input_modalities(profile)
         choice["multimodal_input"] = model_profiles.profile_multimodal_input(profile)
         choice["multimodal_mode"] = model_profiles.normalize_multimodal_mode(
             profile.get("multimodal_mode")
@@ -5695,6 +5741,7 @@ def executor_runtime_snapshot_for_session(session_id: str) -> Dict[str, Any]:
         "extra_body": dict(first.get("extra_body") or {}),
         "reasoning_effort": first.get("reasoning_effort"),
         "multimodal_input": bool(first.get("multimodal_input")),
+        "input_modalities": list(first.get("input_modalities") or ["text"]),
     }
 
 
@@ -5706,6 +5753,21 @@ def _record_profile_multimodal_failure(
     if updated is None:
         return
     _invalidate_executor_config_cache()
+
+
+def _record_profile_modalities_failure(
+    profile_id: str,
+    modalities: List[str],
+    _error: Optional[BaseException] = None,
+) -> None:
+    updated = model_profiles.mark_profile_modalities_failed(
+        PROJECT_ROOT,
+        profile_id,
+        modalities,
+        reason="provider_rejected_media_input",
+    )
+    if updated is not None:
+        _invalidate_executor_config_cache()
 
 
 def _profile_candidate(profile: dict) -> Dict[str, Any]:
@@ -5720,16 +5782,28 @@ def _profile_candidate(profile: dict) -> Dict[str, Any]:
         _executor_override_cache[cache_key] = cached
     extra_body = _profile_extra_body(profile)
     profile_id = str(profile.get("id") or "")
+    input_modalities = model_profiles.profile_input_modalities(profile)
     multimodal_input = model_profiles.profile_multimodal_input(profile)
     mark_multimodal_failed = (
         lambda error, pid=profile_id: _record_profile_multimodal_failure(pid, error)
     )
+    mark_modalities_failed = (
+        lambda modalities, error, pid=profile_id: _record_profile_modalities_failure(
+            pid, modalities, error
+        )
+    )
     try:
+        setattr(cached[0], "_myagent_input_modalities", input_modalities)
         setattr(cached[0], "_myagent_multimodal_input", multimodal_input)
         setattr(
             cached[0],
             "_myagent_mark_multimodal_failed",
             mark_multimodal_failed,
+        )
+        setattr(
+            cached[0],
+            "_myagent_mark_modalities_failed",
+            mark_modalities_failed,
         )
     except Exception:
         logger.debug("无法向模型客户端附加多模态能力元数据", exc_info=True)
@@ -5743,7 +5817,9 @@ def _profile_candidate(profile: dict) -> Dict[str, Any]:
         "extra_body": extra_body,
         "reasoning_effort": _profile_reasoning_effort(profile, extra_body),
         "multimodal_input": multimodal_input,
+        "input_modalities": input_modalities,
         "mark_multimodal_failed": mark_multimodal_failed,
+        "mark_modalities_failed": mark_modalities_failed,
     }
 
 
@@ -5798,6 +5874,7 @@ def resolve_executor_candidates_for_session(
             "extra_body",
             "reasoning_effort",
             "multimodal_input",
+            "input_modalities",
         ):
             if key in runtime_snapshot:
                 frozen[key] = runtime_snapshot[key]
@@ -5847,6 +5924,7 @@ def resolve_executor_config_for_session(session_id: str) -> Tuple[Any, str, int,
             "extra_body",
             "reasoning_effort",
             "multimodal_input",
+            "input_modalities",
         ):
             if key in runtime_snapshot:
                 frozen[key] = runtime_snapshot[key]
@@ -6370,7 +6448,8 @@ def _dict_to_message(d):
     if msg_type == "user":
         u_meta = d.get("metadata")
         u_meta_d = dict(u_meta) if isinstance(u_meta, dict) else {}
-        return UserMessage(content=str(content), metadata=u_meta_d)
+        restored_content = content if isinstance(content, list) else str(content)
+        return UserMessage(content=restored_content, metadata=u_meta_d)
     elif msg_type == "assistant":
         if tool_calls is None:
             msg = AssistantMessage(content=content)

@@ -3614,6 +3614,7 @@ async def chat(
     selected_skills: str = Form(""),
     ui_message: str = Form(""),
     ui_language: str = Form("zh-CN"),
+    attachments: str = Form(""),
 ):
     sid = (session_id or "").strip() or None
     prompt_language = normalize_prompt_language(ui_language)
@@ -3724,6 +3725,41 @@ async def chat(
 
     valid_selected_skills = selected_skill_names(selected_skills)
     agent_message = build_agent_message(message, valid_selected_skills)
+    structured_attachments: list[dict[str, Any]] = []
+    try:
+        requested_attachments = json.loads(attachments or "[]")
+    except Exception:
+        requested_attachments = []
+    if isinstance(requested_attachments, list):
+        seen_attachment_paths: set[str] = set()
+        for item in requested_attachments[:16]:
+            if not isinstance(item, dict):
+                continue
+            raw_path = str(item.get("path") or "").strip()
+            if not raw_path:
+                continue
+            try:
+                attachment_path = Path(raw_path).expanduser().resolve()
+            except OSError:
+                continue
+            path_key = os.path.normcase(str(attachment_path))
+            if path_key in seen_attachment_paths or not attachment_path.is_file():
+                continue
+            seen_attachment_paths.add(path_key)
+            structured_attachments.append(
+                {
+                    "type": "local_file",
+                    "local_file": {
+                        "path": str(attachment_path),
+                        "name": str(item.get("name") or attachment_path.name),
+                    },
+                }
+            )
+    structured_user_content = (
+        [{"type": "text", "text": agent_message}, *structured_attachments]
+        if structured_attachments
+        else None
+    )
     ui_base_message = str(ui_message or "").strip() or message
     ui_message = _build_ui_message_with_selected_skills(ui_base_message, valid_selected_skills)
 
@@ -3757,6 +3793,7 @@ async def chat(
                     ui_user_content=ui_message,
                     user_operation_id=steer_operation_id,
                     prompt_language=prompt_language,
+                    user_content=structured_user_content,
                 ):
                     put_from_worker(event)
             except asyncio.CancelledError:

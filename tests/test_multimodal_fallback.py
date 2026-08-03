@@ -50,6 +50,9 @@ def test_media_error_detection_accepts_common_provider_wording():
     assert not agent_openai._is_media_input_error(
         ValueError("unsupported image file format")
     )
+    assert agent_openai._media_error_modalities(
+        ValueError("image_url is not supported"), {"image", "audio"}
+    ) == {"image"}
 
 
 def test_text_only_fallback_preserves_original_local_media_path(tmp_path):
@@ -70,6 +73,8 @@ def test_text_only_fallback_preserves_original_local_media_path(tmp_path):
     assert fallback[0]["role"] == "system"
     assert "task 工具" in fallback[0]["content"]
     assert "subagent" in fallback[0]["content"]
+    assert "图片" in fallback[0]["content"]
+    assert "model_profile_id" in fallback[0]["content"]
 
 
 def test_fallback_instruction_does_not_create_trailing_system_turn():
@@ -220,8 +225,65 @@ def test_media_failure_disables_client_for_later_requests(tmp_path):
     assert agent_openai._api_messages_have_media(calls[0]["messages"])
     assert not agent_openai._api_messages_have_media(calls[1]["messages"])
     assert not agent_openai._api_messages_have_media(calls[2]["messages"])
-    assert client._myagent_multimodal_input is False
+    assert client._myagent_multimodal_input is True
+    assert "image" not in client._myagent_input_modalities
+    assert {"audio", "video", "file"} <= set(client._myagent_input_modalities)
     assert len(failures) == 1
+
+
+def test_remote_image_url_is_expanded_only_for_image_capable_client():
+    import agent_openai
+    from agent_messages import UserMessage
+
+    prompt = "分析 ![dashboard](https://cdn.example.com/dashboard.png?size=large)"
+    messages = [UserMessage(content=prompt)]
+    image_calls = []
+    text_calls = []
+
+    image_client = _client_with_create(lambda **kwargs: image_calls.append(kwargs) or SimpleNamespace(usage=None, choices=[]))
+    image_client._myagent_input_modalities = ["text", "image"]
+    text_client = _client_with_create(
+        lambda **kwargs: text_calls.append(kwargs) or SimpleNamespace(usage=None, choices=[]),
+        multimodal=False,
+    )
+    text_client._myagent_input_modalities = ["text"]
+
+    agent_openai.chat_completion(image_client, "vision", messages, temperature=0, max_tokens=8)
+    agent_openai.chat_completion(text_client, "text", messages, temperature=0, max_tokens=8)
+
+    image_content = _message_with_role(image_calls[0]["messages"], "user")["content"]
+    assert any(
+        part.get("type") == "image_url"
+        and part["image_url"]["url"] == "https://cdn.example.com/dashboard.png?size=large"
+        for part in image_content
+    )
+    assert not agent_openai._api_messages_have_media(text_calls[0]["messages"])
+    assert prompt in _message_with_role(text_calls[0]["messages"], "user")["content"]
+
+
+def test_structured_local_attachment_expands_and_survives_history_roundtrip(tmp_path):
+    import agent_harness
+    import agent_openai
+    from agent_messages import UserMessage
+
+    image_path = tmp_path / "attached.png"
+    image_path.write_bytes(b"\x89PNG\r\n")
+    original = UserMessage(content=[
+        {"type": "text", "text": "分析附件"},
+        {"type": "local_file", "local_file": {"path": str(image_path)}},
+    ])
+
+    serialized = agent_harness._message_to_dict(original)
+    restored = agent_harness._dict_to_message(serialized)
+    api_messages = agent_openai.messages_to_openai_params([restored])
+
+    assert isinstance(restored.content, list)
+    assert agent_openai._api_messages_required_modalities(api_messages) == {"image"}
+    assert any(
+        part.get("type") == "image_url"
+        and part["image_url"]["url"].startswith("data:image/png;base64,")
+        for part in api_messages[0]["content"]
+    )
 
 
 def test_stream_media_fallback_handles_lazy_error_without_duplicate_request(

@@ -101,7 +101,7 @@ def test_fallback_client_switches_after_api_error_and_preserves_request_cap():
     assert switched[0]["to_model"] == "backup-model"
 
 
-def test_fallback_client_marks_media_failure_and_retries_same_profile_as_text():
+def test_fallback_client_marks_media_failure_and_routes_to_next_profile():
     import agent_harness
 
     calls = []
@@ -170,3 +170,117 @@ def test_fallback_client_marks_media_failure_and_retries_same_profile_as_text():
     assert "task 工具" in retry_system["content"]
     assert calls[1]["messages"][-1]["role"] == "user"
     assert statuses[0]["multimodal_fallback"] is True
+
+
+def test_fallback_client_keeps_text_profile_and_injects_task_delegation():
+    import agent_harness
+
+    calls = []
+    statuses = []
+
+    class _Completions:
+        def __init__(self, name):
+            self.name = name
+
+        def create(self, **kwargs):
+            calls.append((self.name, kwargs))
+            return "ok"
+
+    class _Client:
+        def __init__(self, name):
+            self.chat = type("Chat", (), {"completions": _Completions(name)})()
+
+    candidates = [
+        {
+            "client": _Client("text"),
+            "model": "text-model",
+            "max_output_tokens": 4096,
+            "input_modalities": ["text", "audio"],
+        },
+        {
+            "client": _Client("vision"),
+            "model": "vision-model",
+            "max_output_tokens": 4096,
+            "input_modalities": ["text", "image"],
+        },
+    ]
+    client = agent_harness.FallbackOpenAIClient(candidates)
+    client.set_status_callback(statuses.append)
+
+    result = client.chat.completions.create(
+        model="ignored",
+        max_tokens=256,
+        messages=[{
+            "role": "user",
+            "content": [{
+                "type": "image_url",
+                "image_url": {"url": "https://example.com/image.png"},
+            }],
+        }],
+    )
+
+    assert result == "ok"
+    assert [name for name, _kwargs in calls] == ["text"]
+    text_messages = calls[0][1]["messages"]
+    assert not any(
+        isinstance(part, dict) and part.get("type") == "image_url"
+        for message in text_messages
+        for part in (message.get("content") if isinstance(message.get("content"), list) else [])
+    )
+    system_message = next(message for message in text_messages if message["role"] == "system")
+    user_message = next(message for message in text_messages if message["role"] == "user")
+    assert "task 工具" in system_message["content"]
+    assert "model_profile_id" in system_message["content"]
+    assert "https://example.com/image.png" in user_message["content"]
+    assert statuses == []
+
+
+def test_chat_completion_does_not_replace_preferred_text_profile_for_image():
+    import agent_harness
+    import agent_openai
+    from agent_messages import UserMessage
+
+    calls = []
+
+    class _Completions:
+        def __init__(self, name):
+            self.name = name
+
+        def create(self, **kwargs):
+            calls.append((self.name, kwargs))
+            return type("Response", (), {"usage": None})()
+
+    class _Client:
+        def __init__(self, name):
+            self.chat = type("Chat", (), {"completions": _Completions(name)})()
+
+    client = agent_harness.FallbackOpenAIClient([
+        {
+            "client": _Client("text"),
+            "model": "text-model",
+            "max_output_tokens": 4096,
+            "input_modalities": ["text"],
+        },
+        {
+            "client": _Client("vision"),
+            "model": "vision-model",
+            "max_output_tokens": 4096,
+            "input_modalities": ["text", "image"],
+        },
+    ])
+
+    prompt = "分析 https://example.com/image.png"
+    agent_openai.chat_completion(
+        client,
+        "text-model",
+        [UserMessage(content=prompt)],
+        temperature=0,
+        max_tokens=256,
+    )
+
+    assert [name for name, _kwargs in calls] == ["text"]
+    sent = calls[0][1]["messages"]
+    assert prompt in next(message for message in sent if message["role"] == "user")["content"]
+    system = next(message for message in sent if message["role"] == "system")["content"]
+    assert "task 工具" in system
+    assert "model_profile_id" in system

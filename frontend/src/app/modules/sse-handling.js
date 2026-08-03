@@ -2436,6 +2436,20 @@ async function sendMessage(options) {
     _clientStepStart = nowPipelineMs();
     const formData = new FormData();
     formData.append('message', rawMessage);
+    const rememberedAttachments = window.MyAgentPathPicker
+        && typeof window.MyAgentPathPicker.chatAttachments === 'function'
+        ? window.MyAgentPathPicker.chatAttachments(messageInput)
+        : [];
+    const attachmentsForRun = rememberedAttachments.filter(function (item) {
+        return item && item.path && rawMessage.indexOf(String(item.path)) >= 0;
+    });
+    if (attachmentsForRun.length) {
+        formData.append('attachments', JSON.stringify(attachmentsForRun));
+    }
+    if (window.MyAgentPathPicker
+            && typeof window.MyAgentPathPicker.clearChatAttachments === 'function') {
+        window.MyAgentPathPicker.clearChatAttachments(messageInput);
+    }
     // The backend owns durable UI-message decoration. Sending the undecorated
     // value keeps the optimistic row and the reloaded history identical.
     formData.append('ui_message', uiBaseMessage);

@@ -557,6 +557,7 @@ def test_selected_skill_display_marker_is_not_duplicated_on_reload():
     assert "function buildSelectedSkillsDisplayMessage(rawMessage, selectedSkills)" in sse
     assert "message.endsWith(suffix) ? message : message + suffix" in sse
     assert "formData.append('ui_message', uiBaseMessage);" in sse
+    assert "formData.append('attachments', JSON.stringify(attachmentsForRun));" in sse
 
 
 def test_frontend_send_and_reattach_reuse_event_count_cache():

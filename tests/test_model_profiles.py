@@ -232,6 +232,32 @@ def test_multimodal_send_failure_persists_text_only_profile_state(tmp_path):
     assert model_profiles.load_store(tmp_path)["profiles"][0]["multimodal_mode"] == "disabled"
 
 
+def test_specific_modality_failure_preserves_other_media_capabilities(tmp_path):
+    saved = model_profiles.upsert_profile(
+        tmp_path,
+        {
+            "model": "vision-model",
+            "base_url": "https://api.example.com/v1",
+            "api_key": "test-key",
+            "context_window": 128000,
+            "max_output_tokens": 8192,
+            "multimodal_mode": "enabled",
+            "input_modalities": ["text", "image", "audio"],
+        },
+    )
+
+    failed = model_profiles.mark_profile_modalities_failed(
+        tmp_path, saved["id"], ["image"], "provider rejected image_url"
+    )
+    public = model_profiles.public_profile(failed)
+
+    assert failed["multimodal_mode"] == "enabled"
+    assert public["effective_input_modalities"] == ["text", "audio"]
+    assert public["multimodal_input"] is True
+    assert public["multimodal_source"] == "partial_failure"
+    assert public["failed_modalities"]["image"]["reason"] == "provider rejected image_url"
+
+
 def test_load_store_reads_legacy_app_location_when_default_missing(tmp_path):
     legacy_dir = tmp_path / "app"
     legacy_dir.mkdir()
@@ -717,7 +743,9 @@ def test_advanced_model_profile_list_wires_drag_drop_reordering():
     assert "capability_description:capabilityFieldValue()" in html
     assert "data-auto-value" in html
     assert 'id="model-multimodal-mode"' in html
-    assert 'value="auto">自动识别' in html
+    assert 'value="auto">按 models_table.md 自动识别' in html
+    assert 'id="model-input-modalities"' in html
+    assert "input_modalities:selectedInputModalities()" in html
     assert "multimodal_mode:fieldValue(modelEls.multimodal)" in html
     assert "p.multimodal_source===\"failure\"" in html
 

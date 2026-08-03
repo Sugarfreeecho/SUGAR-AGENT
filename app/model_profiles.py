@@ -21,6 +21,8 @@ CONTEXT_PROBE_TOKEN_COUNT = 3_000_000
 CONTEXT_PROBE_TIMEOUT = 8.0
 LEGACY_ENV_IMPORT_MARKER = "imported_from_legacy_env"
 MULTIMODAL_MODES = frozenset({"auto", "enabled", "disabled"})
+KNOWN_INPUT_MODALITIES = ("text", "image", "audio", "video", "file")
+MEDIA_INPUT_MODALITIES = frozenset({"image", "audio", "video", "file"})
 LOW_COST_MAX_INPUT_USD_PER_M = 1.0
 LOW_COST_MAX_OUTPUT_USD_PER_M = 5.0
 HIGH_INTELLIGENCE_MIN_SCORE = 35.0
@@ -491,22 +493,81 @@ def normalize_multimodal_mode(value: Any, default: str = "auto") -> str:
     return default if default in MULTIMODAL_MODES else "auto"
 
 
+def normalize_input_modalities(value: Any) -> list[str]:
+    if isinstance(value, str):
+        raw_values = re.split(r"[,\s]+", value)
+    elif isinstance(value, (list, tuple, set, frozenset)):
+        raw_values = list(value)
+    else:
+        raw_values = []
+    selected = {
+        str(item or "").strip().lower()
+        for item in raw_values
+        if str(item or "").strip().lower() in KNOWN_INPUT_MODALITIES
+    }
+    return [modality for modality in KNOWN_INPUT_MODALITIES if modality in selected]
+
+
+def normalize_failed_modalities(value: Any) -> dict[str, dict[str, str]]:
+    if not isinstance(value, dict):
+        return {}
+    normalized: dict[str, dict[str, str]] = {}
+    for raw_modality, raw_detail in value.items():
+        modality = str(raw_modality or "").strip().lower()
+        if modality not in MEDIA_INPUT_MODALITIES:
+            continue
+        detail = raw_detail if isinstance(raw_detail, dict) else {}
+        normalized[modality] = {
+            "reason": str(detail.get("reason") or "provider_rejected_media_input"),
+            "failed_at": str(detail.get("failed_at") or ""),
+        }
+    return normalized
+
+
 def infer_multimodal_input(model_id: str, profile_name: str = "") -> bool:
     inferred = infer_model_task_capabilities(model_id, profile_name)
     return "multimodal_candidate" in set(inferred.get("capability_tags") or ())
 
 
-def profile_multimodal_input(profile: object) -> bool:
+def profile_input_modalities(profile: object) -> list[str]:
     if not isinstance(profile, dict):
-        return False
+        return ["text"]
     mode = normalize_multimodal_mode(profile.get("multimodal_mode"))
-    if mode == "enabled":
-        return True
     if mode == "disabled":
-        return False
-    return infer_multimodal_input(
-        str(profile.get("model") or ""),
-        str(profile.get("name") or ""),
+        return ["text"]
+    configured = normalize_input_modalities(profile.get("input_modalities"))
+    if mode == "enabled":
+        modalities = configured or normalize_input_modalities(
+            (_model_table_record_for_model(str(profile.get("model") or "")) or {}).get(
+                "input_modalities"
+            )
+        )
+        if not any(item in MEDIA_INPUT_MODALITIES for item in modalities):
+            modalities = list(KNOWN_INPUT_MODALITIES)
+    else:
+        record = (
+            _model_table_record_for_model(str(profile.get("model") or ""))
+            or _model_table_record_for_model(str(profile.get("name") or ""))
+        )
+        modalities = normalize_input_modalities((record or {}).get("input_modalities"))
+        if not modalities:
+            modalities = ["text"]
+    failed = set(normalize_failed_modalities(profile.get("failed_modalities")))
+    effective = [item for item in modalities if item not in failed]
+    if "text" not in effective:
+        effective.insert(0, "text")
+    return [item for item in KNOWN_INPUT_MODALITIES if item in set(effective)]
+
+
+def profile_supports_modalities(profile: object, required: Any) -> bool:
+    required_set = set(normalize_input_modalities(required)) - {"text"}
+    return required_set.issubset(set(profile_input_modalities(profile)))
+
+
+def profile_multimodal_input(profile: object) -> bool:
+    return any(
+        modality in MEDIA_INPUT_MODALITIES
+        for modality in profile_input_modalities(profile)
     )
 
 
@@ -680,10 +741,23 @@ def public_profile(profile: dict) -> dict:
         out["capability_description_en"] = custom_description
         out["capability_source"] = "manual"
     multimodal_mode = normalize_multimodal_mode(profile.get("multimodal_mode"))
+    effective_modalities = profile_input_modalities(profile)
     multimodal_input = profile_multimodal_input(profile)
     out["multimodal_mode"] = multimodal_mode
     out["multimodal_input"] = multimodal_input
-    if multimodal_mode == "auto":
+    out["table_input_modalities"] = list(inferred.get("input_modalities") or [])
+    out["configured_input_modalities"] = normalize_input_modalities(
+        profile.get("input_modalities")
+    )
+    out["effective_input_modalities"] = effective_modalities
+    out["failed_modalities"] = normalize_failed_modalities(
+        profile.get("failed_modalities")
+    )
+    if out["failed_modalities"]:
+        out["multimodal_source"] = (
+            "partial_failure" if multimodal_input else "failure"
+        )
+    elif multimodal_mode == "auto":
         out["multimodal_source"] = (
             "automatic:models-table"
             if inferred.get("capability_source") == "automatic:models-table"
@@ -691,6 +765,23 @@ def public_profile(profile: dict) -> dict:
         )
     else:
         out["multimodal_source"] = str(profile.get("multimodal_source") or "manual")
+    if out["failed_modalities"] and out.get("capability_source") != "manual":
+        failed_order = [
+            modality
+            for modality in KNOWN_INPUT_MODALITIES
+            if modality in out["failed_modalities"]
+        ]
+        if failed_order:
+            out["capability_description"] = (
+                str(out.get("capability_description") or "")
+                + "；已停用："
+                + "、".join(_MODALITY_LABELS.get(item, item) for item in failed_order)
+            ).strip("；")
+            out["capability_description_en"] = (
+                str(out.get("capability_description_en") or "")
+                + "; Disabled: "
+                + ", ".join(_MODALITY_LABELS_EN.get(item, item) for item in failed_order)
+            ).strip("; ")
     tags = list(out.get("capability_tags") or [])
     if multimodal_input:
         if "multimodal" not in tags:
@@ -898,6 +989,12 @@ def upsert_profile(project_root: Path, payload: dict) -> dict:
             "updated_at": now,
         }
     )
+    if "input_modalities" in payload:
+        configured_modalities = normalize_input_modalities(payload.get("input_modalities"))
+        if configured_modalities:
+            profile["input_modalities"] = configured_modalities
+        else:
+            profile.pop("input_modalities", None)
     automatic_multimodal_source = (
         "automatic:models-table"
         if _model_table_record_for_model(model) is not None
@@ -911,6 +1008,7 @@ def upsert_profile(project_root: Path, payload: dict) -> dict:
         )
         profile.pop("multimodal_failure_at", None)
         profile.pop("multimodal_failure_reason", None)
+        profile.pop("failed_modalities", None)
     elif "multimodal_source" not in profile:
         profile["multimodal_source"] = automatic_multimodal_source
     if "capability_description" in payload:
@@ -1025,6 +1123,8 @@ def profile_cache_key(profile: dict) -> str:
             "temperature": profile.get("temperature"),
             "extra_body_json": profile.get("extra_body_json"),
             "multimodal_mode": normalize_multimodal_mode(profile.get("multimodal_mode")),
+            "input_modalities": normalize_input_modalities(profile.get("input_modalities")),
+            "failed_modalities": normalize_failed_modalities(profile.get("failed_modalities")),
         },
         sort_keys=True,
         ensure_ascii=False,
@@ -1049,6 +1149,40 @@ def mark_profile_multimodal_failed(
         profile["multimodal_failure_reason"] = "provider_rejected_multimodal_input"
         profile["multimodal_failure_at"] = _now()
         profile["updated_at"] = _now()
+        save_store(project_root, data)
+        return dict(profile)
+    return None
+
+
+def mark_profile_modalities_failed(
+    project_root: Path,
+    profile_id: str,
+    modalities: Any,
+    reason: str = "provider_rejected_media_input",
+) -> Optional[dict]:
+    """Persist provider rejection for only the concrete media modalities used."""
+    pid = str(profile_id or "").strip()
+    rejected = [
+        modality
+        for modality in normalize_input_modalities(modalities)
+        if modality in MEDIA_INPUT_MODALITIES
+    ]
+    if not pid or not rejected:
+        return None
+    data = load_store(project_root)
+    now = _now()
+    for profile in data.get("profiles", []):
+        if not isinstance(profile, dict) or str(profile.get("id") or "") != pid:
+            continue
+        failed = normalize_failed_modalities(profile.get("failed_modalities"))
+        for modality in rejected:
+            failed[modality] = {
+                "reason": str(reason or "provider_rejected_media_input"),
+                "failed_at": now,
+            }
+        profile["failed_modalities"] = failed
+        profile["multimodal_source"] = "failure"
+        profile["updated_at"] = now
         save_store(project_root, data)
         return dict(profile)
     return None

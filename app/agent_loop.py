@@ -7437,6 +7437,7 @@ async def astream_events(
     context_token_mode: Optional[str] = None,
     user_operation_id: str = "",
     prompt_language: str = "zh-CN",
+    user_content: Optional[Any] = None,
 ) -> AsyncGenerator[Dict[str, Any], None]:
     """
     顺序执行 react_node → validate_final（无独立校验 LLM）→ finish，通过队列实时向前端推送事件。
@@ -7575,7 +7576,9 @@ async def astream_events(
     )
     _pre_api_timing_mark(pre_run_timings, "sanitize_histories", _t_pre)
 
-    user_message = UserMessage(content=user_input)
+    user_message = UserMessage(
+        content=user_content if isinstance(user_content, list) else user_input
+    )
     context_token_mode = get_context_token_mode(context_token_mode)
 
     new_work_messages = prev_work_messages + [user_message]

@@ -15,6 +15,7 @@ import hashlib
 import html
 import json
 import logging
+import mimetypes
 import os
 import re
 import time
@@ -671,6 +672,11 @@ _MEDIA_TOKEN_RE = re.compile(
     r'(?P<up>(?:[A-Za-z]:[\\/]|/|\.{1,2}[\\/])[^\s<>"\']+?\.(?:png|jpe?g|gif|webp|bmp|mp3|wav|ogg|flac|m4a|aac|mp4|webm|mov|avi))',
     re.IGNORECASE,
 )
+_REMOTE_IMAGE_REF_RE = re.compile(
+    r'!\[[^\]]*\]\((?P<markdown>https?://[^\s)]+)\)'
+    r'|(?P<bare>https?://[^\s<>"\']+?\.(?:png|jpe?g|gif|webp|bmp)(?:\?[^\s<>"\']*)?(?:#[^\s<>"\']*)?)',
+    re.IGNORECASE,
+)
 _IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"}
 _AUDIO_EXTS = {".mp3", ".wav", ".ogg", ".flac", ".m4a", ".aac"}
 _VIDEO_EXTS = {".mp4", ".webm", ".mov", ".avi"}
@@ -699,7 +705,7 @@ _VIDEO_MIME = {
 _MAX_INLINE_MEDIA_BYTES = max(1, int(os.getenv("MULTIMODAL_INLINE_MAX_BYTES", str(10 * 1024 * 1024))))
 
 
-def _expand_media_paths_in_text(text: str) -> Any:
+def _expand_local_media_paths_in_text(text: str) -> Any:
     """将文本中的图片/音频/视频路径展开为多模态 content parts；无命中则返回原文本。"""
     src = str(text or "")
     matches = list(_MEDIA_TOKEN_RE.finditer(src))
@@ -757,6 +763,53 @@ def _expand_media_paths_in_text(text: str) -> Any:
         else:
             merged.append(part)
     return merged
+
+
+def _expand_remote_image_urls_in_text(text: str) -> Any:
+    """Expand explicit Markdown or extension-bearing HTTP image URLs."""
+    src = str(text or "")
+    matches = list(_REMOTE_IMAGE_REF_RE.finditer(src))
+    if not matches:
+        return src
+    parts: List[Dict[str, Any]] = []
+    last = 0
+    for match in matches:
+        if match.start() > last:
+            parts.append({"type": "text", "text": src[last:match.start()]})
+        original = match.group(0)
+        url = match.group("markdown") or match.group("bare") or ""
+        parts.append({"type": "text", "text": original})
+        parts.append({"type": "image_url", "image_url": {"url": url}})
+        last = match.end()
+    if last < len(src):
+        parts.append({"type": "text", "text": src[last:]})
+    return parts
+
+
+def _expand_media_paths_in_text(text: str) -> Any:
+    """Expand local media paths and explicit remote image references."""
+    remote_expanded = _expand_remote_image_urls_in_text(text)
+    source_parts = (
+        remote_expanded
+        if isinstance(remote_expanded, list)
+        else [{"type": "text", "text": str(remote_expanded)}]
+    )
+    expanded: List[Dict[str, Any]] = []
+    for part in source_parts:
+        if not isinstance(part, dict) or part.get("type") != "text":
+            expanded.append(part)
+            continue
+        local = _expand_local_media_paths_in_text(str(part.get("text") or ""))
+        if isinstance(local, list):
+            expanded.extend(local)
+        elif local:
+            expanded.append({"type": "text", "text": str(local)})
+    has_media = any(
+        isinstance(part, dict)
+        and part.get("type") in ("image_url", "video_url", "input_audio", "file", "input_file")
+        for part in expanded
+    )
+    return expanded if has_media else str(text or "")
 
 
 def _exception_search_text(exc: BaseException) -> str:
@@ -845,6 +898,24 @@ def _is_media_input_error(exc: BaseException) -> bool:
     )
 
 
+def _media_error_modalities(
+    exc: BaseException,
+    requested: set[str],
+) -> set[str]:
+    text = _exception_search_text(exc)
+    detected: set[str] = set()
+    if any(value in text for value in ("image", "vision", "图片", "图像")):
+        detected.add("image")
+    if any(value in text for value in ("audio", "input_audio", "音频")):
+        detected.add("audio")
+    if any(value in text for value in ("video", "video_url", "视频")):
+        detected.add("video")
+    if any(value in text for value in ("input_file", "file input", "文件")):
+        detected.add("file")
+    matched = detected & set(requested)
+    return matched or set(requested)
+
+
 def _is_stream_options_error(exc: BaseException) -> bool:
     """Return True only when retrying without stream_options can help."""
     msg = _exception_search_text(exc)
@@ -876,11 +947,34 @@ def _api_messages_have_media(api_messages: List[Dict[str, Any]]) -> bool:
             continue
         if any(
             isinstance(part, dict)
-            and part.get("type") in ("image_url", "video_url", "input_audio")
+            and part.get("type") in ("image_url", "video_url", "input_audio", "file", "input_file")
             for part in content
         ):
             return True
     return False
+
+
+def _api_messages_required_modalities(
+    api_messages: List[Dict[str, Any]],
+) -> set[str]:
+    required: set[str] = set()
+    for message in api_messages:
+        content = message.get("content")
+        if not isinstance(content, list):
+            continue
+        for part in content:
+            if not isinstance(part, dict):
+                continue
+            part_type = str(part.get("type") or "").strip().lower()
+            if part_type in {"image_url", "input_image"}:
+                required.add("image")
+            elif part_type == "input_audio":
+                required.add("audio")
+            elif part_type == "video_url":
+                required.add("video")
+            elif part_type in {"input_file", "file"}:
+                required.add("file")
+    return required
 
 
 def _strip_media_from_api_messages(api_messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -890,15 +984,35 @@ def _strip_media_from_api_messages(api_messages: List[Dict[str, Any]]) -> List[D
     for msg in api_messages:
         c = msg.get("content")
         if isinstance(c, list):
-            has_media = any(isinstance(p, dict) and p.get("type") in ("image_url", "video_url", "input_audio") for p in c)
+            has_media = any(isinstance(p, dict) and p.get("type") in ("image_url", "video_url", "input_audio", "file", "input_file") for p in c)
             text_parts = [p for p in c if isinstance(p, dict) and p.get("type") == "text"]
+            media_refs: List[str] = []
+            for part in c:
+                if not isinstance(part, dict):
+                    continue
+                part_type = str(part.get("type") or "").strip().lower()
+                raw_ref: Any = None
+                if part_type == "image_url":
+                    raw_ref = part.get("image_url")
+                elif part_type == "video_url":
+                    raw_ref = part.get("video_url")
+                if isinstance(raw_ref, dict):
+                    raw_ref = raw_ref.get("url")
+                ref = str(raw_ref or "").strip()
+                if ref.lower().startswith(("http://", "https://")) and ref not in media_refs:
+                    media_refs.append(ref)
+            reference_text = (
+                " [媒体原始地址: " + " ; ".join(media_refs) + "]"
+                if media_refs
+                else ""
+            )
             if text_parts:
                 combined = " ".join(str(p.get("text", "")) for p in text_parts).strip()
                 if has_media:
-                    combined = _MEDIA_PLACEHOLDER + " " + combined
+                    combined = _MEDIA_PLACEHOLDER + reference_text + " " + combined
                 cleaned.append({**msg, "content": combined})
             elif has_media:
-                cleaned.append({**msg, "content": _MEDIA_PLACEHOLDER})
+                cleaned.append({**msg, "content": _MEDIA_PLACEHOLDER + reference_text})
             else:
                 cleaned.append(msg)
         else:
@@ -908,12 +1022,27 @@ def _strip_media_from_api_messages(api_messages: List[Dict[str, Any]]) -> List[D
 
 def _inject_multimodal_fallback_instruction(
     api_messages: List[Dict[str, Any]],
+    required_modalities: Optional[set[str]] = None,
 ) -> List[Dict[str, Any]]:
     """Inject fallback guidance without creating a trailing system turn."""
+    modality_labels = {
+        "image": "图片",
+        "audio": "音频",
+        "video": "视频",
+        "file": "文件",
+    }
+    labels = "、".join(
+        modality_labels[item]
+        for item in ("image", "audio", "video", "file")
+        if item in set(required_modalities or ())
+    ) or "多媒体"
     instruction = (
-        "[多模态回退提示] 当前模型不支持直接识别该多媒体内容。"
-        "可使用 task 工具选择支持多模态输入的模型，调用 subagent 识别多媒体内容；"
-        "若该能力不可用，请明确告知用户。"
+        f"[多模态委派提示] 当前主模型不支持直接读取本次请求中的{labels}。"
+        "如果回答需要理解这些内容，请调用 task 工具（action=start，run_in_background=false），"
+        "从 model_profile_id 候选中选择明确支持所需输入模态的模型；"
+        "将相邻用户消息中的原始图片 URL 或本地附件路径、用户问题完整写入 prompt，"
+        "取得 subagent 的识别结果后再继续回答。不要猜测媒体内容；"
+        "若没有可用的兼容模型，请明确告知用户。"
     )
     out = [dict(message) for message in api_messages]
     for index, message in enumerate(out):
@@ -936,8 +1065,10 @@ def _serialized_messages_to_text_only(
     """Strip serialized media while preserving adjacent local-path text."""
     if not _api_messages_have_media(api_messages):
         return api_messages
+    required_modalities = _api_messages_required_modalities(api_messages)
     return _inject_multimodal_fallback_instruction(
-        _strip_media_from_api_messages(api_messages)
+        _strip_media_from_api_messages(api_messages),
+        required_modalities,
     )
 
 
@@ -958,7 +1089,62 @@ def messages_to_openai_params(
             api_msgs.append({"role": "system", "content": m.content or ""})
         elif isinstance(m, UserMessage):
             if isinstance(m.content, list):
-                api_msgs.append({"role": "user", "content": m.content})
+                content_parts: List[Dict[str, Any]] = []
+                for raw_part in m.content:
+                    if not isinstance(raw_part, dict):
+                        content_parts.append({"type": "text", "text": str(raw_part)})
+                        continue
+                    part_type = str(raw_part.get("type") or "").strip().lower()
+                    if part_type == "text" and expand_media_paths:
+                        remote_parts = _expand_remote_image_urls_in_text(
+                            str(raw_part.get("text") or "")
+                        )
+                        if isinstance(remote_parts, list):
+                            content_parts.extend(remote_parts)
+                        else:
+                            content_parts.append(raw_part)
+                        continue
+                    if part_type != "local_file":
+                        content_parts.append(raw_part)
+                        continue
+                    local_file = raw_part.get("local_file")
+                    local_path = str(
+                        (local_file.get("path") if isinstance(local_file, dict) else local_file)
+                        or raw_part.get("path")
+                        or ""
+                    ).strip()
+                    if not local_path:
+                        continue
+                    if not expand_media_paths:
+                        content_parts.append({"type": "text", "text": local_path})
+                        continue
+                    expanded_local = _expand_local_media_paths_in_text(
+                        json.dumps(local_path, ensure_ascii=False)
+                    )
+                    if isinstance(expanded_local, list):
+                        content_parts.extend(
+                            part
+                            for part in expanded_local
+                            if isinstance(part, dict) and part.get("type") != "text"
+                        )
+                    else:
+                        path = Path(local_path).expanduser()
+                        try:
+                            if path.is_file() and path.stat().st_size <= _MAX_INLINE_MEDIA_BYTES:
+                                mime = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+                                encoded = base64.b64encode(path.read_bytes()).decode("ascii")
+                                content_parts.append({
+                                    "type": "file",
+                                    "file": {
+                                        "filename": path.name,
+                                        "file_data": f"data:{mime};base64,{encoded}",
+                                    },
+                                })
+                            else:
+                                content_parts.append({"type": "text", "text": local_path})
+                        except OSError:
+                            content_parts.append({"type": "text", "text": local_path})
+                api_msgs.append({"role": "user", "content": content_parts})
             elif isinstance(m.content, str):
                 content = (
                     _expand_media_paths_in_text(m.content)
@@ -999,7 +1185,11 @@ def messages_to_openai_params(
     return api_msgs
 
 
-def _messages_to_text_only_params(messages: List[Any]) -> List[Dict[str, Any]]:
+def _messages_to_text_only_params(
+    messages: List[Any],
+    *,
+    required_modalities: Optional[set[str]] = None,
+) -> List[Dict[str, Any]]:
     """
     Rebuild a failed multimodal request from the original messages.
 
@@ -1010,7 +1200,10 @@ def _messages_to_text_only_params(messages: List[Any]) -> List[Dict[str, Any]]:
     fallback_messages = _strip_media_from_api_messages(
         messages_to_openai_params(messages, expand_media_paths=False)
     )
-    return _inject_multimodal_fallback_instruction(fallback_messages)
+    return _inject_multimodal_fallback_instruction(
+        fallback_messages,
+        required_modalities or _messages_required_modalities(messages),
+    )
 
 
 def _messages_have_media_input(messages: List[Any]) -> bool:
@@ -1021,13 +1214,17 @@ def _messages_have_media_input(messages: List[Any]) -> bool:
         if isinstance(content, list):
             if any(
                 isinstance(part, dict)
-                and part.get("type") in ("image_url", "video_url", "input_audio")
+                and part.get("type") in (
+                    "image_url", "video_url", "input_audio", "file", "input_file", "local_file"
+                )
                 for part in content
             ):
                 return True
             continue
         if not isinstance(content, str):
             continue
+        if _REMOTE_IMAGE_REF_RE.search(content):
+            return True
         for match in _MEDIA_TOKEN_RE.finditer(content):
             raw = match.group("qp") or match.group("up") or ""
             path = Path(raw).expanduser()
@@ -1041,6 +1238,25 @@ def _messages_have_media_input(messages: List[Any]) -> bool:
             except OSError:
                 continue
     return False
+
+
+def _messages_required_modalities(messages: List[Any]) -> set[str]:
+    serialized = messages_to_openai_params(messages, expand_media_paths=True)
+    return _api_messages_required_modalities(serialized)
+
+
+def _client_input_modalities(client: Any) -> set[str]:
+    raw = getattr(client, "_myagent_input_modalities", None)
+    if isinstance(raw, (list, tuple, set, frozenset)):
+        values = {str(item or "").strip().lower() for item in raw}
+        return {item for item in values if item in {"text", "image", "audio", "video", "file"}}
+    if bool(getattr(client, "_myagent_multimodal_input", False)):
+        return {"text", "image", "audio", "video", "file"}
+    return {"text"}
+
+
+def _client_supports_modalities(client: Any, required: set[str]) -> bool:
+    return set(required).issubset(_client_input_modalities(client))
 
 
 def _client_multimodal_input_enabled(client: Any) -> bool:
@@ -1060,16 +1276,59 @@ def _mark_client_multimodal_failed(client: Any, exc: BaseException) -> None:
             logger.warning("记录模型多模态能力失败", exc_info=True)
 
 
+def _mark_client_modalities_failed(
+    client: Any,
+    modalities: set[str],
+    exc: BaseException,
+) -> None:
+    rejected = {
+        modality
+        for modality in modalities
+        if modality in {"image", "audio", "video", "file"}
+    }
+    if not rejected:
+        _mark_client_multimodal_failed(client, exc)
+        return
+    remaining = _client_input_modalities(client) - rejected
+    try:
+        setattr(client, "_myagent_input_modalities", sorted(remaining | {"text"}))
+        setattr(
+            client,
+            "_myagent_multimodal_input",
+            bool(remaining & {"image", "audio", "video", "file"}),
+        )
+    except Exception:
+        pass
+    callback = getattr(client, "_myagent_mark_modalities_failed", None)
+    if callable(callback):
+        try:
+            callback(sorted(rejected), exc)
+            return
+        except Exception:
+            logger.warning("记录模型具体模态能力失败", exc_info=True)
+    legacy_callback = getattr(client, "_myagent_mark_multimodal_failed", None)
+    if callable(legacy_callback):
+        try:
+            legacy_callback(exc)
+        except Exception:
+            logger.warning("记录模型多模态能力失败", exc_info=True)
+
+
 def _messages_to_params_for_client(
     client: Any,
     messages: List[Any],
 ) -> List[Dict[str, Any]]:
-    has_media = _messages_have_media_input(messages)
-    if has_media and not _client_multimodal_input_enabled(client):
-        return _messages_to_text_only_params(messages)
+    required_modalities = _messages_required_modalities(messages)
+    if required_modalities and not _client_supports_modalities(
+        client, required_modalities
+    ):
+        return _messages_to_text_only_params(
+            messages,
+            required_modalities=required_modalities,
+        )
     return messages_to_openai_params(
         messages,
-        expand_media_paths=_client_multimodal_input_enabled(client),
+        expand_media_paths=bool(required_modalities),
     )
 
 
@@ -1186,7 +1445,14 @@ def chat_completion(
             dt = time.monotonic() - t0
             if _is_media_input_error(e) and not media_fallback_done:
                 media_fallback_done = True
-                _mark_client_multimodal_failed(client, e)
+                requested_modalities = _api_messages_required_modalities(
+                    list(kwargs.get("messages") or [])
+                )
+                _mark_client_modalities_failed(
+                    client,
+                    _media_error_modalities(e, requested_modalities),
+                    e,
+                )
                 logger.warning(
                     "模型 %s 不支持多媒体输入，去掉图片/音频/视频后重试: %s",
                     _masked_model_label(model),
@@ -1403,7 +1669,14 @@ def run_chat_completion_stream_worker(
                 close_stream_quietly()
                 if _is_media_input_error(e) and not media_fallback_done:
                     media_fallback_done = True
-                    _mark_client_multimodal_failed(client, e)
+                    requested_modalities = _api_messages_required_modalities(
+                        list(kwargs.get("messages") or [])
+                    )
+                    _mark_client_modalities_failed(
+                        client,
+                        _media_error_modalities(e, requested_modalities),
+                        e,
+                    )
                     logger.warning(
                         "流式: 模型 %s 不支持多媒体输入，去掉图片/音频/视频后重试: %s",
                         _masked_model_label(model),

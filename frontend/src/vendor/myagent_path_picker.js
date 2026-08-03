@@ -262,11 +262,31 @@
   function insertUploadedFiles(textarea, files, options) {
     var targetSessionId = currentChatSessionId();
     return uploadChatFiles(files, options).then(function (uploaded) {
+      var remembered = Array.isArray(textarea._myAgentStructuredAttachments)
+        ? textarea._myAgentStructuredAttachments.slice()
+        : [];
+      uploaded.forEach(function (item) {
+        if (!item || !item.path) return;
+        if (!remembered.some(function (existing) { return existing.path === item.path; })) {
+          remembered.push({ path: item.path, name: item.name || '', size: Number(item.size || 0) });
+        }
+      });
+      textarea._myAgentStructuredAttachments = remembered;
       var text = uploaded.map(function (item) {
         return quotePickedPath(item.path || item.rel || item.name);
       }).join(' ');
       appendUploadedText(textarea, text, targetSessionId);
     });
+  }
+
+  function chatAttachments(textarea) {
+    return Array.isArray(textarea && textarea._myAgentStructuredAttachments)
+      ? textarea._myAgentStructuredAttachments.slice()
+      : [];
+  }
+
+  function clearChatAttachments(textarea) {
+    if (textarea) textarea._myAgentStructuredAttachments = [];
   }
 
   function dispatchUploadError(textarea, error) {
@@ -1013,6 +1033,8 @@
     startChatFileUpload: startChatFileUpload,
     clipboardFilesFromEvent: clipboardFilesFromEvent,
     clipboardHasUsableText: clipboardHasUsableText,
+    chatAttachments: chatAttachments,
+    clearChatAttachments: clearChatAttachments,
     scan: scan,
   };
 
