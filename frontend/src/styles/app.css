@@ -3389,6 +3389,9 @@ body {
     max-width: var(--panel-edge-slide-width);
     z-index: 340;
 }
+.composer-permission-bar[hidden] {
+    display: none !important;
+}
 .composer-permission-trigger {
     display: inline-grid;
     grid-template-columns: auto minmax(0, 1fr) auto;

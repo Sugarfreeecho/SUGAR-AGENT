@@ -182,6 +182,9 @@ def test_permission_mode_ui_regressions():
     assert "permission-mode-ico" in permissions
     assert "permissionControlsEnabled" in permissions
     assert "control.hidden = !enabled" in permissions
+    assert ".composer-permission-bar[hidden]" in css
+    hidden_rule = css.split(".composer-permission-bar[hidden]", 1)[1].split("}", 1)[0]
+    assert "display: none !important;" in hidden_rule
 
     # The three permission tiers are color-coded green / blue / amber, both in
     # the dropdown options and on the trigger for the active mode.
