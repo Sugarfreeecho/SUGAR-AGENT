@@ -1,6 +1,15 @@
 let skillPickerCache = null;
 let skillPickerRefreshPromise = null;
 let selectedSkillNames = [];
+let skillPickerActiveTab = 'skills';
+let mcpToolsCache = null;
+let mcpToolsRefreshPromise = null;
+let mcpToolsLoading = false;
+let mcpToolsError = null;
+let extensionsCache = null;
+let extensionsRefreshPromise = null;
+let extensionsLoading = false;
+let extensionsError = null;
 const skillPickerToggleBusy = Object.create(null);
 const LS_SKILL_DRAFT_PREFIX = 'myagent-skill-draft:';
 
@@ -75,12 +84,17 @@ function removeStoredSkillPickerDraft(sessionId) {
     try { localStorage.removeItem(skillDraftStorageKey(sessionId)); } catch (e) { /* ignore */ }
 }
 
+function skillPickerPlusIcon() {
+    return '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>';
+}
+
 function syncSkillPickerButton() {
     var e = skillPickerEls();
     if (!e.button) return;
     var count = selectedSkillNames.length;
     e.button.classList.toggle('is-active', count > 0);
-    e.button.textContent = count > 0 ? ('SKILL ' + count) : 'SKILL';
+    e.button.innerHTML = skillPickerPlusIcon()
+        + (count > 0 ? '<span class="skill-picker-count">' + count + '</span>' : '');
     e.button.setAttribute('data-ui-tip', count > 0 ? ('已选择 ' + count + ' 个 Skill') : '选择 Skill');
 }
 
@@ -122,22 +136,31 @@ function renderSkillPickerError(err) {
     e.popover.innerHTML = '<div class="skill-picker-empty">Skill 加载失败：' + skillPickerEscape(err && err.message ? err.message : err) + '</div>';
 }
 
-function renderSkillPicker() {
-    var e = skillPickerEls();
-    if (!e.popover) return;
+function skillPickerToggleIcon(action) {
+    if (action === 'enable') {
+        return '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2v10"/><path d="M18.4 6.6a9 9 0 1 1-12.8 0"/></svg>';
+    }
+    return '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="m5.5 5.5 13 13"/></svg>';
+}
+
+function skillPickerToggleHtml(enabled) {
+    return '<span class="skill-picker-toggle-ico" aria-hidden="true">' + skillPickerToggleIcon(enabled ? 'disable' : 'enable') + '</span>';
+}
+
+function skillPickerMcpToolHoverDetail(tool) {
+    var toolName = String(tool && tool.tool_name || '');
+    var server = String(tool && tool.server || '');
+    var description = String(tool && tool.description || '').trim() || '暂无描述';
+    return ['MCP 工具：' + toolName, '服务器：' + server, '描述：' + description].join('\n');
+}
+
+function renderSkillPickerSkillsHtml() {
     var skills = (skillPickerCache && skillPickerCache.skills) || [];
     if (!skills.length) {
-        e.popover.innerHTML = '<div class="skill-picker-empty">当前没有已注册 Skill</div>';
-        return;
+        return '<div class="skill-picker-empty">当前没有已注册 Skill</div>';
     }
     var active = selectedSkillSet();
-    var selectedCount = selectedSkillNames.length;
-    var enabledCount = skills.filter(function (skill) { return skill && skill.enabled !== false; }).length;
-    var html = '<div class="skill-picker-head">'
-        + '<div class="skill-picker-title">选择 Skill <span class="skill-picker-total">已选 ' + skillPickerEscape(selectedCount) + ' / 已启用 ' + skillPickerEscape(enabledCount) + ' / 共 ' + skillPickerEscape(skills.length) + '</span></div>'
-        + '<button type="button" class="skill-picker-clear">清空</button>'
-        + '</div>'
-        + '<div class="skill-picker-list">';
+    var html = '';
     skills.forEach(function (skill) {
         var name = String(skill && skill.name || '');
         var enabled = skill && skill.enabled !== false;
@@ -151,12 +174,177 @@ function renderSkillPicker() {
             + '<span class="skill-picker-option-desc">' + skillPickerEscape(skill && skill.description || '') + '</span>'
             + '</span>'
             + '</label>'
-            + '<button type="button" class="skill-picker-toggle" data-skill-name="' + skillPickerEscape(name) + '" data-enabled="' + (enabled ? 'true' : 'false') + '">' + (enabled ? '禁用' : '启用') + '</button>'
+            + '<button type="button" class="skill-picker-toggle" data-skill-name="' + skillPickerEscape(name) + '" data-enabled="' + (enabled ? 'true' : 'false') + '" data-ui-tip="' + (enabled ? '禁用' : '启用') + '" aria-label="' + (enabled ? '禁用' : '启用') + '">' + skillPickerToggleHtml(enabled) + '</button>'
             + '</div>';
     });
-    html += '</div>';
+    return html;
+}
+
+function renderSkillPickerMcpToolsHtml() {
+    if (mcpToolsLoading && !mcpToolsCache) {
+        return '<div class="skill-picker-empty">正在加载 MCP 工具</div>';
+    }
+    if (mcpToolsError && !mcpToolsCache) {
+        return '<div class="skill-picker-empty">MCP 工具加载失败：' + skillPickerEscape(mcpToolsError && mcpToolsError.message ? mcpToolsError.message : String(mcpToolsError)) + '</div>';
+    }
+    var tools = mcpToolsCache || [];
+    if (!tools.length) {
+        return '<div class="skill-picker-empty">当前没有已注册的 MCP 工具</div>';
+    }
+    return tools.map(function (tool) {
+        var fn = String(tool && tool.function_name || '');
+        var server = String(tool && tool.server || '');
+        var name = String(tool && tool.tool_name || fn);
+        var desc = String(tool && tool.description || '').trim();
+        var prefix = '[MCP server `' + server + '`] ';
+        if (desc.indexOf(prefix) === 0) desc = desc.slice(prefix.length).trim();
+        return '<div class="skill-picker-option mcp-tool-option" data-ui-tip="' + skillPickerEscape(skillPickerMcpToolHoverDetail(tool)) + '">'
+            + '<span class="mcp-tool-badge">' + skillPickerEscape(server) + '</span>'
+            + '<span class="skill-picker-option-body">'
+            + '<span class="skill-picker-option-name">' + skillPickerEscape(name) + '</span>'
+            + (desc ? '<span class="skill-picker-option-desc">' + skillPickerEscape(desc) + '</span>' : '')
+            + (fn ? '<span class="mcp-tool-fname">' + skillPickerEscape(fn) + '</span>' : '')
+            + '</span>'
+            + '</div>';
+    }).join('');
+}
+
+function skillPickerComponentPills(plugin) {
+    var components = (plugin && plugin.components) || {};
+    var keys = ['skills', 'hooks', 'commands', 'mcp_servers', 'agents', 'prompts', 'runtime'];
+    var rows = [];
+    keys.forEach(function (key) {
+        var value = components[key];
+        var count = Array.isArray(value)
+            ? value.length
+            : (value && typeof value === 'object'
+                ? (key === 'runtime' ? 1 : Object.keys(value).length)
+                : Number(value || 0));
+        if (count) rows.push('<span class="ext-pill">' + skillPickerEscape(key) + ' ' + count + '</span>');
+    });
+    return rows.join('') || '<span class="ext-pill">' + skillPickerEscape('无') + '</span>';
+}
+
+function renderSkillPickerHooksHtml() {
+    if (extensionsLoading && !extensionsCache) {
+        return '<div class="skill-picker-empty">正在加载扩展</div>';
+    }
+    if (extensionsError && !extensionsCache) {
+        return '<div class="skill-picker-empty">扩展加载失败：' + skillPickerEscape(extensionsError && extensionsError.message ? extensionsError.message : String(extensionsError)) + '</div>';
+    }
+    var hooks = (extensionsCache && extensionsCache.hooks) || [];
+    if (!hooks.length) {
+        return '<div class="skill-picker-empty">当前没有已注册 Hook</div>';
+    }
+    return hooks.map(function (hook) {
+        var id = String(hook && hook.id || '');
+        var event = String(hook && hook.event || '');
+        var matcher = String(hook && hook.matcher || '(全部)');
+        var source = String(hook && (hook.source_id || hook.source) || 'project');
+        var policy = String(hook && hook.failure_policy || 'warn');
+        var timeout = hook && (hook.timeout_seconds != null ? hook.timeout_seconds : hook.timeout);
+        var detail = ['事件：' + event, '匹配器：' + matcher, '来源：' + source, '策略 / 超时：' + policy + ' / ' + (timeout != null ? timeout + 's' : '—')].join('\n');
+        return '<div class="skill-picker-option ext-option" data-ui-tip="' + skillPickerEscape(detail) + '">'
+            + '<span class="hook-event-badge">' + skillPickerEscape(event || 'hook') + '</span>'
+            + '<span class="skill-picker-option-body">'
+            + '<span class="skill-picker-option-name">' + skillPickerEscape(id) + '</span>'
+            + '<span class="skill-picker-option-desc">' + skillPickerEscape([matcher, source, policy + ' / ' + (timeout != null ? timeout + 's' : '—')].join(' · ')) + '</span>'
+            + '</span>'
+            + '</div>';
+    }).join('');
+}
+
+function renderSkillPickerPluginsHtml() {
+    if (extensionsLoading && !extensionsCache) {
+        return '<div class="skill-picker-empty">正在加载扩展</div>';
+    }
+    if (extensionsError && !extensionsCache) {
+        return '<div class="skill-picker-empty">扩展加载失败：' + skillPickerEscape(extensionsError && extensionsError.message ? extensionsError.message : String(extensionsError)) + '</div>';
+    }
+    var plugins = (extensionsCache && extensionsCache.plugins) || [];
+    if (!plugins.length) {
+        return '<div class="skill-picker-empty">当前没有已发现插件</div>';
+    }
+    return plugins.map(function (plugin) {
+        var name = String(plugin && (plugin.name || plugin.id) || '');
+        var id = String(plugin && plugin.id || '');
+        var version = String(plugin && plugin.version || '');
+        var enabled = plugin && (plugin.configured_enabled === undefined ? !!plugin.enabled : !!plugin.configured_enabled);
+        var type = String(plugin && (plugin.source_format || plugin.format) || 'native');
+        var compatibility = plugin && plugin.compatibility && plugin.compatibility.status || 'unknown';
+        var detail = ['插件：' + name, 'ID：' + id, '版本：' + version, '格式：' + type, '兼容性：' + compatibility, '状态：' + (enabled ? '已启用' : '已禁用')].join('\n');
+        return '<div class="skill-picker-option ext-option" data-ui-tip="' + skillPickerEscape(detail) + '">'
+            + '<span class="plugin-type-badge">' + skillPickerEscape(type) + '</span>'
+            + '<span class="skill-picker-option-body">'
+            + '<span class="skill-picker-option-name">' + skillPickerEscape(name) + ' <span class="plugin-state' + (enabled ? '' : ' is-off') + '">' + (enabled ? '已启用' : '已禁用') + '</span></span>'
+            + '<span class="skill-picker-option-desc">' + skillPickerEscape(id + (version ? ' · v' + version : '')) + '</span>'
+            + '<span class="ext-pills">' + skillPickerComponentPills(plugin) + '</span>'
+            + '</span>'
+            + '</div>';
+    }).join('');
+}
+
+function renderSkillPicker(opts) {
+    opts = opts || {};
+    var e = skillPickerEls();
+    if (!e.popover) return;
+    var prevList = e.popover.querySelector('.skill-picker-list');
+    var prevScrollTop = opts.preserveScroll === false ? 0 : (prevList ? prevList.scrollTop : 0);
+    var focusedToggleName = '';
+    if (document.activeElement && e.popover.contains(document.activeElement)) {
+        var active = document.activeElement;
+        if (active.classList && active.classList.contains('skill-picker-toggle')) {
+            focusedToggleName = String(active.getAttribute('data-skill-name') || '');
+        }
+    }
+    var skills = (skillPickerCache && skillPickerCache.skills) || [];
+    var activeTab = ['skills', 'mcp', 'hooks', 'plugins'].indexOf(skillPickerActiveTab) >= 0
+        ? skillPickerActiveTab
+        : 'skills';
+    var selectedCount = selectedSkillNames.length;
+    var enabledCount = skills.filter(function (skill) { return skill && skill.enabled !== false; }).length;
+    var hooks = (extensionsCache && extensionsCache.hooks) || [];
+    var plugins = (extensionsCache && extensionsCache.plugins) || [];
+    var title = activeTab === 'mcp' ? 'MCP 工具'
+        : activeTab === 'hooks' ? 'Hooks'
+            : activeTab === 'plugins' ? 'Plugins'
+                : '选择 Skill';
+    var total = activeTab === 'mcp'
+        ? (mcpToolsCache ? '共 ' + mcpToolsCache.length : '')
+        : activeTab === 'hooks'
+            ? (extensionsCache ? '共 ' + hooks.length : '')
+            : activeTab === 'plugins'
+                ? (extensionsCache ? '共 ' + plugins.length : '')
+                : '已选 ' + selectedCount + ' / 已启用 ' + enabledCount + ' / 共 ' + skills.length;
+    var html = '<div class="skill-picker-head">'
+        + '<div class="skill-picker-title">' + skillPickerEscape(title)
+        + (total ? ' <span class="skill-picker-total">' + skillPickerEscape(total) + '</span>' : '')
+        + '</div>'
+        + '<button type="button" class="skill-picker-clear' + (activeTab === 'skills' ? '' : ' is-hidden') + '"' + (activeTab === 'skills' ? '' : ' tabindex="-1" aria-hidden="true"') + '>清空</button>'
+        + '</div>'
+        + '<div class="skill-picker-tabs" role="tablist" aria-label="Skill">'
+        + '<button type="button" class="skill-picker-tab' + (activeTab === 'skills' ? ' is-active' : '') + '" role="tab" aria-selected="' + (activeTab === 'skills' ? 'true' : 'false') + '" data-skill-picker-tab="skills">Skill</button>'
+        + '<button type="button" class="skill-picker-tab' + (activeTab === 'mcp' ? ' is-active' : '') + '" role="tab" aria-selected="' + (activeTab === 'mcp' ? 'true' : 'false') + '" data-skill-picker-tab="mcp">MCP 工具</button>'
+        + '<button type="button" class="skill-picker-tab' + (activeTab === 'hooks' ? ' is-active' : '') + '" role="tab" aria-selected="' + (activeTab === 'hooks' ? 'true' : 'false') + '" data-skill-picker-tab="hooks">Hooks</button>'
+        + '<button type="button" class="skill-picker-tab' + (activeTab === 'plugins' ? ' is-active' : '') + '" role="tab" aria-selected="' + (activeTab === 'plugins' ? 'true' : 'false') + '" data-skill-picker-tab="plugins">Plugins</button>'
+        + '</div>'
+        + '<div class="skill-picker-list">'
+        + (activeTab === 'mcp' ? renderSkillPickerMcpToolsHtml()
+            : activeTab === 'hooks' ? renderSkillPickerHooksHtml()
+                : activeTab === 'plugins' ? renderSkillPickerPluginsHtml()
+                    : renderSkillPickerSkillsHtml())
+        + '</div>';
     e.popover.innerHTML = html;
     if (typeof initUiHoverTips === 'function') initUiHoverTips(e.popover);
+    var nextList = e.popover.querySelector('.skill-picker-list');
+    if (nextList && prevScrollTop > 0) nextList.scrollTop = prevScrollTop;
+    if (focusedToggleName) {
+        var focusTarget = null;
+        e.popover.querySelectorAll('.skill-picker-toggle').forEach(function (btn) {
+            if (String(btn.getAttribute('data-skill-name') || '') === focusedToggleName) focusTarget = btn;
+        });
+        if (focusTarget) focusTarget.focus();
+    }
     e.popover.querySelectorAll('input[type="checkbox"]').forEach(function (checkbox) {
         checkbox.addEventListener('change', function () {
             var name = String(checkbox.value || '');
@@ -169,9 +357,19 @@ function renderSkillPicker() {
             renderSkillPicker();
         });
     });
+    e.popover.querySelectorAll('[data-skill-picker-tab]').forEach(function (tab) {
+        tab.addEventListener('click', function (ev) {
+            ev.preventDefault();
+            ev.stopPropagation();
+            skillPickerActiveTab = tab.getAttribute('data-skill-picker-tab') || 'skills';
+            renderSkillPicker({ preserveScroll: false });
+        });
+    });
     var clear = e.popover.querySelector('.skill-picker-clear');
     if (clear) {
-        clear.addEventListener('click', function () {
+        clear.addEventListener('click', function (ev) {
+            ev.preventDefault();
+            ev.stopPropagation();
             selectedSkillNames = [];
             persistSkillPickerDraft(currentSessionId);
             syncSkillPickerButton();
@@ -179,7 +377,9 @@ function renderSkillPicker() {
         });
     }
     e.popover.querySelectorAll('.skill-picker-toggle').forEach(function (button) {
-        button.addEventListener('click', function () {
+        button.addEventListener('click', function (ev) {
+            ev.preventDefault();
+            ev.stopPropagation();
             var name = String(button.getAttribute('data-skill-name') || '');
             var enabled = button.getAttribute('data-enabled') !== 'true';
             setSkillPickerEnabled(name, enabled);
@@ -221,6 +421,15 @@ async function loadSkillPickerSkills() {
     return data;
 }
 
+async function loadSkillPickerMcpTools() {
+    const response = await fetch('/api/mcp/tools', { credentials: 'same-origin' });
+    const data = await response.json();
+    if (!data || !data.ok) throw new Error((data && data.error) || 'MCP 工具加载失败');
+    mcpToolsCache = Array.isArray(data.tools) ? data.tools : [];
+    mcpToolsError = null;
+    return mcpToolsCache;
+}
+
 function refreshSkillPickerSkills() {
     if (skillPickerRefreshPromise) return skillPickerRefreshPromise;
     skillPickerRefreshPromise = loadSkillPickerSkills()
@@ -228,6 +437,43 @@ function refreshSkillPickerSkills() {
         .catch(function (err) { renderSkillPickerError(err); })
         .finally(function () { skillPickerRefreshPromise = null; });
     return skillPickerRefreshPromise;
+}
+
+function refreshSkillPickerMcpTools() {
+    if (mcpToolsRefreshPromise) return mcpToolsRefreshPromise;
+    mcpToolsLoading = true;
+    renderSkillPicker();
+    mcpToolsRefreshPromise = loadSkillPickerMcpTools()
+        .catch(function (err) { mcpToolsError = err; })
+        .finally(function () {
+            mcpToolsLoading = false;
+            mcpToolsRefreshPromise = null;
+            renderSkillPicker();
+        });
+    return mcpToolsRefreshPromise;
+}
+
+async function loadSkillPickerExtensions() {
+    const response = await fetch('/api/extensions', { credentials: 'same-origin' });
+    const data = await response.json();
+    if (!data || !data.ok) throw new Error((data && data.error) || '扩展加载失败');
+    extensionsCache = data;
+    extensionsError = null;
+    return data;
+}
+
+function refreshSkillPickerExtensions() {
+    if (extensionsRefreshPromise) return extensionsRefreshPromise;
+    extensionsLoading = true;
+    renderSkillPicker();
+    extensionsRefreshPromise = loadSkillPickerExtensions()
+        .catch(function (err) { extensionsError = err; })
+        .finally(function () {
+            extensionsLoading = false;
+            extensionsRefreshPromise = null;
+            renderSkillPicker();
+        });
+    return extensionsRefreshPromise;
 }
 
 function consumeSelectedSkillsForSend() {
@@ -292,6 +538,8 @@ function initSkillPicker() {
         else renderSkillPickerLoading();
         openSkillPicker();
         refreshSkillPickerSkills();
+        refreshSkillPickerMcpTools();
+        refreshSkillPickerExtensions();
     });
     document.addEventListener('click', function (ev) {
         var fresh = skillPickerEls();

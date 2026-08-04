@@ -15,17 +15,46 @@ function h(str) {
         .replace(/'/g, '&#39;');
 }
 
+function modelToggleIcon(action) {
+    if (action === 'enable') {
+        return '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2v10"/><path d="M18.4 6.6a9 9 0 1 1-12.8 0"/></svg>';
+    }
+    return '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="m5.5 5.5 13 13"/></svg>';
+}
+
+function modelToggleHtml(enabled) {
+    return '<span class="composer-model-toggle-ico" aria-hidden="true">' + modelToggleIcon(enabled ? 'disable' : 'enable') + '</span>';
+}
+
 function profileLabel(profile) {
     if (!profile) return '默认方案';
     return String(profile.name || profile.model || '未命名方案');
 }
 
+function formatContextWindow(value) {
+    var n = Number(value);
+    if (!Number.isFinite(n) || n <= 0) return String(value == null ? '' : value);
+    if (n >= 1000000) {
+        var m = n / 1000000;
+        return String(Math.round(m * 10) / 10).replace(/\.0$/, '') + 'M';
+    }
+    if (n >= 1000) return String(Math.round(n / 1000)) + 'k';
+    return String(Math.round(n));
+}
+
+function profileEffortValue(profile) {
+    var p = profile || {};
+    var thinkingDisabled = String(p.thinking_mode || '').toLowerCase() === 'disabled';
+    return String(p.reasoning_effort || (thinkingDisabled ? 'none' : 'high')).toLowerCase();
+}
+
 function profileMeta(profile) {
     if (!profile) return '';
     var model = profile.model || '';
-    var ctx = profile.context_window ? profile.context_window + ' ctx' : '';
-    var out = profile.max_output_tokens ? profile.max_output_tokens + ' out' : '';
-    return [model, ctx, out].filter(Boolean).join(' · ');
+    var effort = profileEffortValue(profile);
+    var ctx = profile.context_window ? formatContextWindow(profile.context_window) + ' ctx' : '';
+    var out = profile.max_output_tokens ? formatContextWindow(profile.max_output_tokens) + ' out' : '';
+    return [model, effort, ctx, out].filter(Boolean).join(' · ');
 }
 
 function modelProfileCapabilityDescription(profile) {
@@ -50,8 +79,9 @@ function modelProfileHoverDetail(profile) {
         (english ? 'Model profile: ' : '模型配置：') + profileLabel(p),
         (english ? 'Model ID: ' : '模型 ID：') + String(p.model || (english ? 'Not set' : '未设置')),
         (english ? 'API type: ' : '接口类型：') + String(p.llm_type || 'openai'),
-        (english ? 'Context window: ' : '上下文窗口：') + String(p.context_window || (english ? 'Not set' : '未设置')),
+        (english ? 'Context window: ' : '上下文窗口：') + (p.context_window ? formatContextWindow(p.context_window) : (english ? 'Not set' : '未设置')),
         (english ? 'Max output: ' : '最大输出：') + String(p.max_output_tokens || (english ? 'Not set' : '未设置')),
+        (english ? 'Thinking effort: ' : '思考强度：') + profileEffortValue(p),
     ];
     var capability = modelProfileCapabilityDescription(p);
     if (capability) lines.push((english ? 'Capability: ' : '能力：') + capability);
@@ -156,7 +186,7 @@ function renderModelProfileControl() {
             + '<span class="composer-model-option-name">' + h(profileLabel(p)) + '</span>'
             + '<span class="composer-model-option-meta">' + h(profileMeta(p)) + '</span>'
             + '</button>'
-            + '<button type="button" class="composer-model-toggle" data-toggle-profile-id="' + h(id) + '" data-enabled="' + (enabled ? 'true' : 'false') + '">' + (enabled ? '禁用' : '启用') + '</button>'
+            + '<button type="button" class="composer-model-toggle" data-toggle-profile-id="' + h(id) + '" data-enabled="' + (enabled ? 'true' : 'false') + '" data-ui-tip="' + (enabled ? '禁用' : '启用') + '" aria-label="' + (enabled ? '禁用' : '启用') + '">' + modelToggleHtml(enabled) + '</button>'
             + '</div>';
     }
     e.menu.innerHTML = html;

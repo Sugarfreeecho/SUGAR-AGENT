@@ -56,6 +56,8 @@ const UI_TRANSLATIONS_EN = {
     '已发送': 'Sent', '提交中': 'Submitting', '撤回中': 'Withdrawing', '已接收，等待插入': 'Received, waiting to insert',
     '正在接管当前任务': 'Taking over the current task', '选择 Skill ': 'Select Skill ', '清空': 'Clear',
     '当前没有已注册 Skill': 'No registered skills', '正在加载 Skill': 'Loading skills',
+    'MCP 工具': 'MCP Tools', '正在加载 MCP 工具': 'Loading MCP tools', '当前没有已注册的 MCP 工具': 'No registered MCP tools', 'MCP 工具加载失败': 'Failed to load MCP tools',
+    'Hooks': 'Hooks', 'Plugins': 'Plugins', '正在加载扩展': 'Loading extensions', '当前没有已注册 Hook': 'No registered hooks', '当前没有已发现插件': 'No plugins found', '扩展加载失败': 'Failed to load extensions', '无': 'None',
     '加载详情中…': 'Loading details…', '知道了': 'Got it', '允许执行': 'Allow', '拒绝': 'Deny',
     '需要确认': 'Confirmation required', '任务已中断': 'Task interrupted', '已请求停止当前任务': 'Stop requested',
     '展开': 'Expand', '收起': 'Collapse', '复制': 'Copy', '导出': 'Export', '导出选项': 'Export options', '导出图片': 'Export image', '导出文本': 'Export text', '改写': 'Rewrite', '重试': 'Retry'
@@ -103,9 +105,9 @@ Object.assign(UI_TRANSLATIONS_EN, {
     '工具调用生成中...': 'Preparing tool call...', '执行中...': 'Running...', '执行结果': 'Result',
     '平均': 'Average', '累计': 'Total', '占比': 'Share', '暂无数据': 'No data', '暂无执行统计': 'No execution statistics',
     '暂无子事件': 'No sub-events', '无用户消息': 'No user message', '成功': 'Success', '会话数': 'Sessions',
-    'LLM 请求': 'LLM requests', 'API 累计耗时': 'Cumulative API duration', '平均首 token': 'Average first token',
+    'LLM 请求': 'LLM requests', 'LLM API 流累计': 'Cumulative LLM API stream', 'Run 总耗时（墙钟）': 'Run wall-clock total', '平均首 token': 'Average first token',
     '累计输入 token': 'Cumulative input tokens', '累计输出 token': 'Cumulative output tokens', '工具调用总数': 'Total tool calls',
-    '累计网络流量': 'Cumulative network traffic', 'API 总耗时': 'Total API duration', '首 token': 'First token',
+    '累计网络流量': 'Cumulative network traffic', 'LLM API 流耗时': 'LLM API stream duration', '首 token': 'First token',
     '输入 token': 'Input tokens', '输出 token': 'Output tokens', '上下文长度': 'Context length', '工具调用': 'Tool calls',
     '网络等待': 'Network wait', '网络流量': 'Network traffic', '时间': 'Time', '执行轮次': 'Execution round',
     '模型': 'Model', '会话': 'Session', '运行 ID': 'Run ID', 'Session ID': 'Session ID', '当前会话筛选': 'Current session filter',
@@ -197,6 +199,7 @@ Object.assign(UI_TRANSLATIONS_EN, {
 Object.assign(UI_TRANSLATIONS_EN, {
     // Human-in-the-loop cards and banners
     '待处理的人机交互': 'Pending human interactions', 'Agent 正在等待你处理': 'Agent is waiting for your input',
+    '待处理事项': 'Pending items', '全局待办': 'Global pending', '当前会话': 'Current session', '立即处理': 'Handle now',
     '安全审批': 'Safety approval', '需要你的回答': 'Your response is required', '确认下一步': 'Confirm next step',
     '等待中': 'Waiting', '待回答': 'Waiting for answer', '待审批': 'Waiting for approval', '已处理': 'Processed', '已过期': 'Expired', '可多选': 'Select multiple', '单选': 'Select one',
     '查看预览': 'View preview', '其他': 'Other', '其他答案': 'Other answer', '输入你的答案…': 'Enter your answer…', '取消提问': 'Cancel question', '不回答': 'Skip answering',
@@ -316,16 +319,27 @@ Object.assign(UI_TRANSLATIONS_EN, {
     '无应用限制、无审批，以当前用户执行': 'No app-level restrictions or approvals; runs as the current user',
     '更改权限': 'Change permissions',
     'Agent 的操作应如何获得审批？': 'How should Agent actions be approved?',
-    '工作区内自动执行；网络、删文件、出项目等会先问你': 'Runs automatically inside the workspace; asks before using the internet, deleting files, or going outside the project',
+    '工作区内自动执行；联网、出项目、永久删除等会先问你': 'Runs automatically inside the workspace; asks before using the internet, going outside the project, or permanently deleting',
     '低风险自动放行，高风险仍转给你确认': 'Automatically approves low-risk actions and asks you to confirm high-risk ones',
     '关闭限制与审批，Agent 拥有你的全部权限': 'Turns off restrictions and approvals; the agent has all of your permissions',
     '自动审查中：审查 Agent 正在核对你的任务意图与请求风险。': 'Auto-reviewing: a reviewer agent is checking this request against your task intent.',
     '自动审批已批准': 'Auto-review approved',
     '自动审批已拒绝': 'Auto-review denied',
-    '自动审批不可用（按拒绝处理）': 'Auto-review unavailable (treated as denied)',
+    '自动审查不可用（已转人工确认）': 'Auto-review unavailable (switched to manual review)',
     '可人工覆盖本次请求（只此一次，不沉淀规则）': 'You can override this once for this exact request (this time only; no rule is saved)',
-    '完全访问权限会关闭应用层路径限制、危险操作检查和审批，且对所有会话生效，直到你切回“请求批准”。Agent 将以你当前的操作系统用户权限直接执行，并可能读取凭据、修改系统或破坏文件。是否继续？': 'Full access disables app-level path restrictions, dangerous-operation checks, and approvals for all sessions until you switch back to "Ask for approval". The agent will run directly with your current OS user permissions and could read credentials, modify the system, or damage files. Continue?',
-    '强烈建议仅在可信任务中使用': 'Strongly recommended only for trusted tasks',
+    '允许工作区外处理（写/删/Shell）': 'Allow outside-workspace handling (write/delete/shell)',
+    '工作区外处理权限': 'Outside-workspace handling',
+    '开启后，写、删除和 Shell 在工作区外的操作不再逐次询问；破坏性/动态命令、网络和凭据导出仍按原规则。': 'When on, write/delete/shell operations outside the workspace no longer ask each time; destructive/dynamic commands, network, and credential export still follow the existing rules.',
+    '已开启：写/删/Shell 工作区外操作自动放行。': 'Enabled: outside-workspace write/delete/shell run automatically.',
+    '已关闭：工作区外操作恢复逐次审批。': 'Disabled: outside-workspace operations ask again.',
+    '开启工作区外处理权限？': 'Enable outside-workspace handling?',
+    '开启后，Agent 可在工作区外执行写入、删除和 Shell 操作而不再逐次询问。破坏性/动态命令、网络、凭据导出与安全策略篡改仍会被拦截或审批。': 'When enabled, the agent may write, delete, and run shell commands outside the workspace without asking each time. Destructive/dynamic commands, network, credential export, and policy tampering are still blocked or approved.',
+    '确认开启': 'Enable',
+    '完全访问已开启：Agent 可以直接读写文件、执行命令和联网，不再逐项询问。重启后依然有效，直到你手动切回“请求批准”。': 'Full access is on: the agent can read and write files, run commands, and use the network without asking each time. It stays on after restart until you switch back to "Ask for approval".',
+    '完全访问已开启；Agent 可读写文件、执行命令和联网，不会自动关闭。': 'Full access is on; the agent can access files, run commands, and use the network. It will not turn off by itself.',
+    '警告：完全访问已开启，Agent 可直接操作文件、终端和网络，重启后不会自动关闭，直到你手动切换。': 'Warning: Full access is on. The agent can directly use files, terminal, and network, and it stays on after restart until you switch back.',
+    '仅在信任 Agent 时才建议开启': 'Only enable this when you trust the agent.',
+    '完全访问开启后，Agent 可以直接读写文件、执行命令和联网，不再逐项征求你的同意。它拥有你当前账号能做的权限，可能会读取凭据、修改系统或删除文件。此设置对所有会话生效，重启后也不会自动关闭，直到你手动切回“请求批准”。是否继续？': 'With full access, the agent can read and write files, run commands, and use the network without asking each time. It has the permissions your current account has, so it could read credentials, modify the system, or delete files. This applies to all sessions and stays on after restart until you switch back to "Ask for approval". Continue?',
     '确认切换': 'Switch now',
     '确认清除': 'Clear now',
     '切换权限失败': 'Failed to switch permissions',
@@ -418,6 +432,7 @@ function translateUiString(value) {
         .replace(/接口类型：/g, 'Interface type: ')
         .replace(/上下文窗口：/g, 'Context window: ')
         .replace(/最大输出：/g, 'Maximum output: ')
+        .replace(/思考强度：/g, 'Thinking effort: ')
         .replace(/能力：/g, 'Capabilities: ')
         .replace(/状态：/g, 'Status: ')
         .replace(/Skill：/g, 'Skill: ')
@@ -458,6 +473,8 @@ function translateUiString(value) {
         .replace(/（事件索引 (\d+)）/g, ' (event index $1)')
         .replace(/^保存失败：(.+)$/g, 'Save failed: $1')
         .replace(/^Skill 加载失败：(.+)$/g, 'Failed to load Skill: $1')
+        .replace(/^MCP 工具加载失败：(.+)$/g, 'Failed to load MCP tools: $1')
+        .replace(/^扩展加载失败：(.+)$/g, 'Failed to load extensions: $1')
         .replace(/^异步截断失败：?(.+)$/g, 'Asynchronous truncation failed: $1')
         .replace(/^续接 subagent 失败：?(.+)$/g, 'Failed to continue subagent: $1')
         .replace(/^检测到上次运行未完成，正在自动恢复任务…$/g, 'The previous run was incomplete; restoring the task automatically…')
@@ -511,6 +528,7 @@ function translateUiString(value) {
         .replace(/发生未知错误。/g, 'An unknown error occurred.')
         .replace(/^已选 (\d+) \/ 共 (\d+)$/, '$1 selected / $2 total')
         .replace(/^已选 (\d+) \/ 已启用 (\d+) \/ 共 (\d+)$/, '$1 selected / $2 enabled / $3 total')
+        .replace(/^共 (\d+)$/, '$1 total')
         .replace(/已启用/g, 'Enabled')
         .replace(/已禁用/g, 'Disabled')
         .replace(/暂无描述/g, 'No description')

@@ -470,9 +470,25 @@ def test_frontend_uses_independent_sse_sequence_scopes_and_fast_reattach():
 
     assert "sid + '::' + seqScope" in store_source
     assert "parsed.seq_scope || 'legacy'" in sse_source
-    assert "scheduleActiveSessionReconnect(runSessionId, { delayMs: 120 })" in sse_source
+    assert "scheduleActiveSessionReconnect(runSessionId, { delayMs: 120, failure: true })" in sse_source
     assert 'payload["seq_scope"] = "ui_projection"' in webui_source
     assert "subscription.__anext__()" in webui_source
+
+
+def test_frontend_reconnect_counts_only_real_failures():
+    sse_source = (ROOT / "frontend/src/app/modules/sse-handling.js").read_text(encoding="utf-8")
+    scheduler = sse_source.split("function scheduleActiveSessionReconnect", 1)[1].split(
+        "async function processRewriteTruncateAsync", 1
+    )[0]
+
+    assert "STREAM_RECONNECT_MAX_ATTEMPTS = 10" in sse_source
+    assert "function isStreamConsuming" in sse_source
+    assert "run.ctx.streamConsuming" in sse_source
+    assert "var countFailure = !!opts.failure" in scheduler
+    assert "if (countFailure) state.attempts += 1" in scheduler
+    assert scheduler.count("if (isStreamConsuming(sid))") >= 2
+    assert "scheduleActiveSessionReconnect(sid, { failure: countFailure })" in scheduler
+    assert "resetStreamReconnectState(sid);" in scheduler
 
 
 def test_frontend_inserts_live_react_rows_in_logical_phase_order():

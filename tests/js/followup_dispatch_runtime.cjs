@@ -140,6 +140,63 @@ async function testAutoDrainRequiresACompleteIdleBoundary() {
   assert.strictEqual(timers.size, 0, 'a completed attempt must not arm an automatic retry loop');
 }
 
+async function testPendingQueueCanBeReordered() {
+  const queue = [
+    { id: 'a', status: '' },
+    { id: 'b', status: '' },
+    { id: 'c', status: '' },
+  ];
+  const ctx = context({
+    getFollowupQueue: () => queue,
+    persistFollowupQueue() {},
+    renderFollowupQueue() {},
+  });
+  vm.runInContext(between('function moveFollowupQueueItem', 'function withdrawFollowup'), ctx);
+
+  assert.strictEqual(ctx.moveFollowupQueueItem('s', 'c', 'a', 'before'), true);
+  assert.deepStrictEqual(queue.map((item) => item.id), ['c', 'a', 'b']);
+  assert.deepStrictEqual(queue.map((item) => item.order), [0, 1, 2], 'reorder must renumber explicit order');
+
+  assert.strictEqual(ctx.moveFollowupQueueItem('s', 'a', 'c', 'after'), true);
+  assert.deepStrictEqual(queue.map((item) => item.id), ['c', 'a', 'b']);
+
+  assert.strictEqual(ctx.moveFollowupQueueItem('s', 'b', 'a', 'before'), true);
+  assert.deepStrictEqual(queue.map((item) => item.id), ['c', 'b', 'a']);
+
+  assert.strictEqual(ctx.moveFollowupQueueItem('s', 'a', 'c', 'before'), true);
+  assert.deepStrictEqual(queue.map((item) => item.id), ['a', 'c', 'b']);
+
+  assert.strictEqual(ctx.moveFollowupQueueItem('s', 'a', 'a', 'before'), false);
+  assert.strictEqual(ctx.moveFollowupQueueItem('s', 'missing', 'a', 'before'), false);
+  assert.deepStrictEqual(queue.map((item) => item.id), ['a', 'c', 'b']);
+
+  queue.splice(0, queue.length,
+    { id: 'p1', status: '' },
+    { id: 'accepted', status: 'accepted' },
+    { id: 'p2', status: '' },
+    { id: 'p3', status: '' },
+    { id: 'sending', status: 'sending' },
+  );
+  assert.strictEqual(ctx.moveFollowupQueueItem('s', 'p3', 'p1', 'before'), true);
+  assert.deepStrictEqual(
+    queue.map((item) => item.id),
+    ['p3', 'accepted', 'p1', 'p2', 'sending'],
+    'pending rows must reorder only within pending slots',
+  );
+  assert.strictEqual(queue[1].id, 'accepted', 'accepted row must keep its exact index');
+  assert.strictEqual(queue[4].id, 'sending', 'sending row must keep its exact index');
+  assert.strictEqual(
+    ctx.moveFollowupQueueItem('s', 'p1', 'accepted', 'before'),
+    false,
+    'in-flight rows must not be valid drop targets',
+  );
+  assert.strictEqual(
+    ctx.moveFollowupQueueItem('s', 'accepted', 'p1', 'before'),
+    false,
+    'in-flight rows must not be draggable',
+  );
+}
+
 async function testRunStartSignalAndFallbacks() {
   const startHelper = between('function startFollowupChat', 'async function sendFollowupNowImpl');
 
@@ -361,6 +418,75 @@ async function testManualSendSupersedesAnAlreadyQueuedAutoHead() {
   );
 }
 
+async function testAutoDrainDefersBehindSessionAutoResume() {
+  const queue = [{
+    id: 'queued',
+    text: 'follow up',
+    display: 'follow up',
+    skills: [],
+    steerMode: 'interrupt',
+    status: '',
+    awaitingRunEnd: false,
+  }];
+  const scheduled = [];
+  let sendCalls = 0;
+  let autoResumeCalls = 0;
+  let resumePending = true;
+  const ctx = context({
+    currentSessionId: 's',
+    followupManualDispatchEpochBySession: Object.create(null),
+    getFollowupQueue: () => queue,
+    persistFollowupQueue() {},
+    renderFollowupQueue() {},
+    isSessionRunning: () => false,
+    isServerStreamActive: () => false,
+    isSendPipelineLocked: () => false,
+    waitForSendPipelineIdle: async () => true,
+    scheduleFollowupQueueDrain: (sid, delay) => {
+      scheduled.push([sid, delay]);
+    },
+    fetch: async () => ({
+      ok: true,
+      json: async () => ({
+        react_auto_resume: resumePending,
+        run_active: false,
+        stream_active: false,
+      }),
+    }),
+    maybeAutoResumeInterruptedReact: () => {
+      autoResumeCalls += 1;
+    },
+    encodeURIComponent: encodeURIComponent,
+    startFollowupChat: async () => {
+      sendCalls += 1;
+      return true;
+    },
+    takeFollowupItem: (sid, id) => {
+      const index = queue.findIndex((item) => String(item.id) === String(id));
+      return index >= 0 ? queue.splice(index, 1)[0] : null;
+    },
+  });
+  vm.runInContext(
+    between('function isFollowupAutoDispatchSuperseded', 'async function sendFollowupNowImpl'),
+    ctx,
+  );
+
+  const deferred = await ctx.sendQueuedFollowupAsChat('s', queue[0], 'queued', 0);
+  assert.strictEqual(deferred, false, 'pending auto-drain must defer while the session auto-resumes');
+  assert.strictEqual(sendCalls, 0, 'an auto-resuming session must not start an ordinary /chat turn');
+  assert.strictEqual(autoResumeCalls, 1, 'the drain must wake the existing auto-resume path');
+  assert.deepStrictEqual(scheduled, [['s', 1000]], 'deferred drain should retry after the resume window');
+  assert.strictEqual(queue[0].status, '');
+  assert.strictEqual(queue[0].awaitingRunEnd, true);
+
+  resumePending = false;
+  scheduled.length = 0;
+  const sent = await ctx.sendQueuedFollowupAsChat('s', queue[0], 'queued', 0);
+  assert.strictEqual(sent, true, 'once auto-resume is no longer pending the queued follow-up may send');
+  assert.strictEqual(sendCalls, 1);
+  assert.strictEqual(queue.length, 0);
+}
+
 function testAppendOptimisticRowCommitsInPlace() {
   const rows = [];
   let boundaries = 0;
@@ -428,9 +554,11 @@ function testAppendOptimisticRowCommitsInPlace() {
 (async () => {
   await testDispatcherDoesNotConsumePendingRows();
   await testAutoDrainRequiresACompleteIdleBoundary();
+  await testPendingQueueCanBeReordered();
   await testRunStartSignalAndFallbacks();
   await testManualSendPrioritizesTheClickedRow();
   await testManualSendSupersedesAnAlreadyQueuedAutoHead();
+  await testAutoDrainDefersBehindSessionAutoResume();
   testAppendOptimisticRowCommitsInPlace();
   process.stdout.write('followup dispatcher runtime checks passed\n');
 })().catch((error) => {

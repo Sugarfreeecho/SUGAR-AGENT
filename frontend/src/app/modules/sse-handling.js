@@ -1,5 +1,7 @@
 const SSE_IDLE_TIMEOUT_MS = 120000;
-const STREAM_RECONNECT_MAX_ATTEMPTS = 5;
+const STREAM_RECONNECT_MAX_ATTEMPTS = 10;
+const STREAM_RECONNECT_BASE_DELAY_MS = 500;
+const STREAM_RECONNECT_MAX_DELAY_MS = 15000;
 const streamReconnectStateBySession = Object.create(null);
 
 function resetStreamReconnectState(sessionId) {
@@ -18,12 +20,18 @@ function streamReconnectState(sessionId) {
     return streamReconnectStateBySession[sid];
 }
 
+function isStreamConsuming(sessionId) {
+    var sid = String(sessionId || '');
+    var run = typeof getSessionRunState === 'function' ? getSessionRunState(sid) : null;
+    return !!(run && run.ctx && run.ctx.streamConsuming);
+}
+
 function reportStreamReconnectExhausted(sessionId) {
     var sid = String(sessionId || '');
     var run = typeof getSessionRunState === 'function' ? getSessionRunState(sid) : null;
     var ctx = run && run.ctx;
     if (ctx && sid === String(currentSessionId || '')) {
-        appendLog(ctx, '实时流恢复已停止重试（5 次）。请检查网络或服务状态后刷新页面。', 'error-log', sid);
+        appendLog(ctx, '实时流恢复已停止重试（' + STREAM_RECONNECT_MAX_ATTEMPTS + ' 次）。请检查网络或服务状态后刷新页面。', 'error-log', sid);
     }
 }
 
@@ -140,6 +148,7 @@ function endRunForClient(sessionId, ctx, opts) {
     }
     sealProcessGroup(ctx);
     markSessionRunInactive(sid);
+    resetStreamReconnectState(sid);
     if (getSessionRunState(sid)) {
         clearSessionRunStateIfMatch(sid, opts.runId || (ctx && ctx.runId));
     }
@@ -199,6 +208,20 @@ async function readSseChunkWithIdleTimeout(reader, timeoutMs) {
 }
 
 async function consumeAgentSseResponse(response, runCtx, runSessionId, streamEventIdx) {
+    if (!response || !response.body) throw new Error('stream response missing body');
+    var ct0 = (response.headers && response.headers.get ? (response.headers.get('content-type') || '') : '').toLowerCase();
+    if (!response.ok || ct0.indexOf('text/event-stream') < 0) {
+        throw new Error('stream response failed: ' + (response.status || 'no status'));
+    }
+    if (runCtx) runCtx.streamConsuming = true;
+    try {
+        return await consumeAgentSseResponseInner(response, runCtx, runSessionId, streamEventIdx);
+    } finally {
+        if (runCtx) runCtx.streamConsuming = false;
+    }
+}
+
+async function consumeAgentSseResponseInner(response, runCtx, runSessionId, streamEventIdx) {
     if (!response || !response.body) throw new Error('stream response missing body');
     var ct0 = (response.headers && response.headers.get ? (response.headers.get('content-type') || '') : '').toLowerCase();
     if (!response.ok || ct0.indexOf('text/event-stream') < 0) {
@@ -577,9 +600,11 @@ async function startContinueAfterSubagents(sessionId, forcedMode) {
         return;
     }
     hideSubagentContinueBanner();
+    subagentContinueSessionId = sessionId;
     subagentContinueInFlight = true;
     var runCtx = null;
     var runSessionId = sessionId;
+    var continuationFailed = false;
     try {
     if (typeof ensureLatestHistoryTailForLiveAppend === 'function') {
         var continuationTailReady = await ensureLatestHistoryTailForLiveAppend(sessionId);
@@ -645,6 +670,7 @@ async function startContinueAfterSubagents(sessionId, forcedMode) {
                 if (getRunAbortReason(runSessionId, runCtx) === 'user') appendLog(runCtx, '任务已中断', 'status', runSessionId);
             }
             else {
+                continuationFailed = true;
                 console.error('续接 subagent 失败:', error);
                 const msg = (error && error.message) ? String(error.message) : String(error);
                 appendLog(runCtx, '续接失败: ' + msg, 'error-log', runSessionId);
@@ -667,12 +693,27 @@ async function startContinueAfterSubagents(sessionId, forcedMode) {
             syncSessionListIndicatorClasses();
             void refreshSingleSessionRow(runSessionId);
             applyContextTokenLabelForCurrentSession();
-            scheduleActiveSessionReconnect(runSessionId, { delayMs: 120 });
+            if (continuationFailed || isServerStreamActive(runSessionId)) {
+                scheduleActiveSessionReconnect(runSessionId, { delayMs: 120, failure: continuationFailed });
+            } else {
+                resetStreamReconnectState(runSessionId);
+            }
         }
         hideSubagentContinueBanner();
         if (!subagentContinueDismissedForSession[sessionId]) updateSubagentContinueBanner(sessionId);
     } finally {
+        if (subagentContinueSessionId === runSessionId) subagentContinueSessionId = null;
         subagentContinueInFlight = false;
+        var continuationStoppedByUser = !!runCtx && getRunAbortReason(runSessionId, runCtx) === 'user';
+        if (!continuationStoppedByUser
+            && getFollowupQueue(runSessionId).some(function (entry) { return entry && !entry.status; })) {
+            var followupSync = syncFollowupQueueFromServer(runSessionId);
+            void Promise.resolve(followupSync).then(function () {
+                scheduleFollowupQueueDrain(runSessionId, 0);
+            }).catch(function (error) {
+                console.warn('follow-up reconciliation failed; auto-drain skipped', error);
+            });
+        }
     }
 }
 
@@ -880,8 +921,10 @@ async function attachSessionEventStream(sessionId, opts) {
         syncSessionListIndicatorClasses();
         void refreshSingleSessionRow(runSessionId);
         setTimeout(function () { reconcileRunStateFromServer({ silent: true }); }, 800);
-        if (reattachFailed || isServerStreamActive(runSessionId)) {
-            scheduleActiveSessionReconnect(runSessionId, { delayMs: 120 });
+        if (reattachFailed) {
+            scheduleActiveSessionReconnect(runSessionId, { delayMs: 120, failure: true });
+        } else if (isServerStreamActive(runSessionId)) {
+            scheduleActiveSessionReconnect(runSessionId, { delayMs: 1200 });
         } else {
             resetStreamReconnectState(runSessionId);
         }
@@ -899,6 +942,10 @@ function scheduleActiveSessionReconnect(sessionId, opts) {
     var sid = String(sessionId || '');
     if (!sid) return;
     if (opts.reset) resetStreamReconnectState(sid);
+    if (isStreamConsuming(sid)) {
+        resetStreamReconnectState(sid);
+        return;
+    }
     var state = streamReconnectState(sid);
     if (state.timer) return;
     if (state.exhausted || state.attempts >= STREAM_RECONNECT_MAX_ATTEMPTS) {
@@ -908,24 +955,32 @@ function scheduleActiveSessionReconnect(sessionId, opts) {
         }
         return;
     }
+    var countFailure = !!opts.failure;
     var baseDelay = Math.max(0, Number(opts.delayMs) || 0);
-    var delayMs = Math.max(baseDelay, Math.min(8000, 300 * Math.pow(2, state.attempts)));
+    var delayMs = Math.max(
+        baseDelay,
+        Math.min(STREAM_RECONNECT_MAX_DELAY_MS, STREAM_RECONNECT_BASE_DELAY_MS * Math.pow(2, state.attempts))
+    );
     state.timer = setTimeout(async function () {
         state.timer = null;
         if (sid !== currentSessionId) return;
-        state.attempts += 1;
+        if (countFailure) state.attempts += 1;
         try {
             if (typeof reconcileRunStateFromServer === 'function') {
                 await reconcileRunStateFromServer({ silent: true });
             }
             if (sid !== currentSessionId) return;
+            if (isStreamConsuming(sid)) {
+                resetStreamReconnectState(sid);
+                return;
+            }
             if ((isServerStreamActive(sid) || isSessionRunning(sid)) && typeof maybeStartStreamPollForSession === 'function') {
                 maybeStartStreamPollForSession(sid, { skipInitialLoad: true });
             } else {
                 resetStreamReconnectState(sid);
             }
         } catch (e) {
-            scheduleActiveSessionReconnect(sid, {});
+            scheduleActiveSessionReconnect(sid, { failure: countFailure });
         }
     }, delayMs);
 }
@@ -1007,6 +1062,7 @@ function normalizeStoredFollowupItem(item) {
         display: display || text,
         skills: skills,
         createdAt: Number(item.createdAt) || Date.now(),
+        order: Number.isFinite(Number(item.order)) ? Number(item.order) : undefined,
         steerMode: String(item.steerMode || item.mode || defaultSteerMode()) === 'interrupt' ? 'interrupt' : 'append',
         // 恢复提交期间的 in-flight 状态：刷新/崩溃后可继续恢复，不再静默丢失。
         clientId: String(item.clientId || ''),
@@ -1051,6 +1107,7 @@ function persistFollowupQueue(sessionId) {
             display: item.display || item.text,
             skills: Array.isArray(item.skills) ? item.skills : [],
             createdAt: item.createdAt || Date.now(),
+            order: item.order,
             steerMode: item.steerMode === 'append' ? 'append' : 'interrupt',
             clientId: item.clientId || '',
             steerId: item.steerId || '',
@@ -1080,6 +1137,121 @@ function inputHasSendableText() {
     return String(messageInput.value || '').replace(/[\u200B-\u200D\uFEFF]/g, '').trim().length > 0;
 }
 
+var followupDragState = null;
+var FOLLOWUP_DRAG_TOUCH_THRESHOLD = 8;
+
+function startFollowupDrag(sessionId, item, row, ev) {
+    if (!item || item.status) return;
+    if (followupDragState && followupDragState.mode === 'touch') {
+        if (ev && ev.preventDefault) ev.preventDefault();
+        return;
+    }
+    followupDragState = {
+        sid: String(sessionId || ''),
+        itemId: String(item.id),
+        row: row,
+        mode: 'html5',
+    };
+    if (row && row.classList) row.classList.add('is-dragging');
+    if (ev && ev.dataTransfer) {
+        ev.dataTransfer.effectAllowed = 'move';
+        try { ev.dataTransfer.setData('text/plain', String(item.id)); } catch (e) { /* ignore */ }
+    }
+}
+
+function clearFollowupDragIndicators(panel) {
+    if (!panel) return;
+    var rows = panel.querySelectorAll('.followup-queue-row');
+    for (var i = 0; i < rows.length; i += 1) {
+        rows[i].classList.remove('is-drag-over-before');
+        rows[i].classList.remove('is-drag-over-after');
+    }
+}
+
+function endFollowupDrag() {
+    if (!followupDragState) return;
+    if (followupDragState.row && followupDragState.row.classList) {
+        followupDragState.row.classList.remove('is-dragging');
+    }
+    followupDragState = null;
+    clearFollowupDragIndicators(document.getElementById('followup-queue-panel'));
+}
+
+function startFollowupTouchDrag(sessionId, item, row, ev) {
+    if (!item || item.status) return;
+    if (followupDragState) endFollowupDrag();
+    followupDragState = {
+        sid: String(sessionId || ''),
+        itemId: String(item.id),
+        row: row,
+        mode: 'touch',
+        pointerId: ev.pointerId,
+        active: false,
+        startX: ev.clientX,
+        startY: ev.clientY,
+        targetRow: null,
+        after: false,
+    };
+    try {
+        if (ev.currentTarget && ev.currentTarget.setPointerCapture) {
+            ev.currentTarget.setPointerCapture(ev.pointerId);
+        }
+    } catch (e) { /* ignore */ }
+    if (ev.preventDefault) ev.preventDefault();
+}
+
+function autoScrollFollowupQueuePanel(panel, clientY) {
+    if (!panel || panel.scrollHeight <= panel.clientHeight) return;
+    var rect = panel.getBoundingClientRect();
+    var zone = 28;
+    if (clientY < rect.top + zone) panel.scrollTop -= 10;
+    else if (clientY > rect.bottom - zone) panel.scrollTop += 10;
+}
+
+function onFollowupTouchDragMove(ev) {
+    var state = followupDragState;
+    if (!state || state.mode !== 'touch' || state.pointerId !== ev.pointerId) return;
+    if (!state.active) {
+        var dx = ev.clientX - state.startX;
+        var dy = ev.clientY - state.startY;
+        if (Math.abs(dx) < FOLLOWUP_DRAG_TOUCH_THRESHOLD && Math.abs(dy) < FOLLOWUP_DRAG_TOUCH_THRESHOLD) return;
+        state.active = true;
+        if (state.row && state.row.classList) state.row.classList.add('is-dragging');
+    }
+    if (ev.preventDefault) ev.preventDefault();
+    var panel = document.getElementById('followup-queue-panel');
+    if (!panel) return;
+    autoScrollFollowupQueuePanel(panel, ev.clientY);
+    var el = document.elementFromPoint ? document.elementFromPoint(ev.clientX, ev.clientY) : null;
+    var target = el && el.closest ? el.closest('.followup-queue-row') : null;
+    if (!target || !target.dataset || !target.dataset.id
+        || target.dataset.reorderable !== 'true' || target === state.row) {
+        clearFollowupDragIndicators(panel);
+        state.targetRow = null;
+        return;
+    }
+    var rect = target.getBoundingClientRect();
+    var after = ev.clientY > rect.top + rect.height / 2;
+    clearFollowupDragIndicators(panel);
+    target.classList.add(after ? 'is-drag-over-after' : 'is-drag-over-before');
+    state.targetRow = target;
+    state.after = after;
+}
+
+function onFollowupTouchDragEnd(ev) {
+    var state = followupDragState;
+    if (!state || state.mode !== 'touch' || state.pointerId !== ev.pointerId) return;
+    var target = state.targetRow;
+    var after = state.after;
+    var sid = state.sid;
+    var itemId = state.itemId;
+    var active = state.active;
+    endFollowupDrag();
+    if (active && target && target.dataset && target.dataset.id) {
+        moveFollowupQueueItem(sid, itemId, target.dataset.id, after ? 'after' : 'before');
+    }
+}
+
 function ensureFollowupQueueHost() {
     var existing = document.getElementById('followup-queue-panel');
     if (existing) return existing;
@@ -1087,6 +1259,37 @@ function ensureFollowupQueueHost() {
     panel.id = 'followup-queue-panel';
     panel.className = 'followup-queue-panel';
     panel.setAttribute('aria-live', 'polite');
+    if (!panel.dataset.dragReady) {
+        panel.dataset.dragReady = '1';
+        panel.addEventListener('dragover', function (e) {
+            if (!followupDragState) return;
+            var target = e.target && e.target.closest ? e.target.closest('.followup-queue-row') : null;
+            if (!target || !target.dataset || !target.dataset.id
+                || target.dataset.reorderable !== 'true' || target === followupDragState.row) {
+                clearFollowupDragIndicators(panel);
+                if (e.dataTransfer) e.dataTransfer.dropEffect = 'none';
+                return;
+            }
+            e.preventDefault();
+            if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
+            var rect = target.getBoundingClientRect();
+            var after = e.clientY > rect.top + rect.height / 2;
+            clearFollowupDragIndicators(panel);
+            target.classList.add(after ? 'is-drag-over-after' : 'is-drag-over-before');
+        });
+        panel.addEventListener('drop', function (e) {
+            if (!followupDragState) return;
+            e.preventDefault();
+            var target = e.target && e.target.closest ? e.target.closest('.followup-queue-row') : null;
+            if (!target || !target.dataset || !target.dataset.id
+                || target.dataset.reorderable !== 'true' || target === followupDragState.row) return;
+            var after = target.classList.contains('is-drag-over-after');
+            var sid = followupDragState.sid;
+            var itemId = followupDragState.itemId;
+            endFollowupDrag();
+            moveFollowupQueueItem(sid, itemId, target.dataset.id, after ? 'after' : 'before');
+        });
+    }
     var anchor = messageInput && messageInput.closest ? messageInput.closest('.composer-row') : null;
     var host = anchor && anchor.parentNode ? anchor.parentNode : null;
     if (host && anchor) host.insertBefore(panel, anchor);
@@ -1133,6 +1336,25 @@ function renderFollowupQueue(sessionId) {
         row.classList.toggle('is-accepted', item.status === 'accepted');
         row.classList.toggle('is-sent', item.status === 'sent');
         row.dataset.id = String(item.id);
+        row.dataset.reorderable = item.status ? 'false' : 'true';
+        var dragHandle = document.createElement('div');
+        dragHandle.className = 'followup-queue-drag';
+        dragHandle.textContent = '⠿';
+        dragHandle.setAttribute('title', '拖拽调整顺序');
+        dragHandle.draggable = !item.status;
+        dragHandle.classList.toggle('is-disabled', !!item.status);
+        dragHandle.addEventListener('dragstart', function (ev) {
+            startFollowupDrag(sid, item, row, ev);
+        });
+        dragHandle.addEventListener('dragend', endFollowupDrag);
+        dragHandle.addEventListener('pointerdown', function (ev) {
+            if (ev.pointerType === 'touch' || ev.pointerType === 'pen') {
+                startFollowupTouchDrag(sid, item, row, ev);
+            }
+        });
+        dragHandle.addEventListener('pointermove', onFollowupTouchDragMove);
+        dragHandle.addEventListener('pointerup', onFollowupTouchDragEnd);
+        dragHandle.addEventListener('pointercancel', endFollowupDrag);
         var order = document.createElement('div');
         order.className = 'followup-queue-order';
         order.textContent = String(idx + 1);
@@ -1181,6 +1403,7 @@ function renderFollowupQueue(sessionId) {
             ev.preventDefault();
             withdrawFollowup(String(item.id));
         });
+        row.appendChild(dragHandle);
         row.appendChild(order);
         row.appendChild(text);
         row.appendChild(status);
@@ -1287,6 +1510,47 @@ function takeFollowupItem(sessionId, itemId) {
     var item = q.splice(idx, 1)[0] || null;
     persistFollowupQueue(sessionId);
     return item;
+}
+
+function moveFollowupQueueItem(sessionId, itemId, targetId, placement) {
+    var sid = String(sessionId || '');
+    var q = getFollowupQueue(sid);
+    var from = q.findIndex(function (item) { return item && String(item.id) === String(itemId); });
+    var to = q.findIndex(function (item) { return item && String(item.id) === String(targetId); });
+    if (from < 0 || to < 0 || from === to) return false;
+    if (q[from].status || q[to].status) return false;
+
+    // Reorder only the pending slots.  In-flight rows remain at their exact
+    // array indexes while pending rows move around them.
+    var pendingIndexes = [];
+    var pendingItems = [];
+    q.forEach(function (entry, idx) {
+        if (entry && !entry.status) {
+            pendingIndexes.push(idx);
+            pendingItems.push(entry);
+        }
+    });
+    var pendingFrom = pendingItems.findIndex(function (entry) { return String(entry.id) === String(itemId); });
+    var pendingTo = pendingItems.findIndex(function (entry) { return String(entry.id) === String(targetId); });
+    if (pendingFrom < 0 || pendingTo < 0 || pendingFrom === pendingTo) return false;
+    var item = pendingItems.splice(pendingFrom, 1)[0];
+    var insertAt = pendingTo;
+    if (pendingFrom < pendingTo) {
+        insertAt = pendingTo - 1;
+        if (placement === 'after') insertAt = pendingTo;
+    } else if (placement === 'after') {
+        insertAt = pendingTo + 1;
+    }
+    pendingItems.splice(insertAt, 0, item);
+    pendingIndexes.forEach(function (queueIndex, idx) {
+        q[queueIndex] = pendingItems[idx];
+    });
+    q.forEach(function (entry, idx) {
+        if (entry) entry.order = idx;
+    });
+    persistFollowupQueue(sid);
+    renderFollowupQueue(sid);
+    return true;
 }
 
 function withdrawFollowup(itemId) {
@@ -1606,7 +1870,16 @@ async function syncFollowupQueueFromServer(sessionId) {
                     q.splice(i, 1);
                 }
             }
-            q.sort(function (a, b) { return Number(a.createdAt || 0) - Number(b.createdAt || 0); });
+            q.sort(function (a, b) {
+                var aOrder = Number(a.order);
+                var bOrder = Number(b.order);
+                var aHas = Number.isFinite(aOrder);
+                var bHas = Number.isFinite(bOrder);
+                if (aHas && bHas) return aOrder - bOrder;
+                if (aHas) return -1;
+                if (bHas) return 1;
+                return Number(a.createdAt || 0) - Number(b.createdAt || 0);
+            });
             persistFollowupQueue(sid);
             renderFollowupQueue(sid);
         })
@@ -1891,6 +2164,32 @@ function isFollowupAutoDispatchSuperseded(sessionId, dispatchEpoch) {
     return Number(followupManualDispatchEpochBySession[sid] || 0) !== Number(dispatchEpoch);
 }
 
+async function isSessionAutoResumePending(sessionId) {
+    var sid = String(sessionId || '');
+    // Auto-resume only applies to the currently open session. Background
+    // sessions keep their previous pending auto-drain behavior.
+    if (!sid || sid !== String(currentSessionId || '')) return false;
+    if (typeof subagentContinueSessionId !== 'undefined' && subagentContinueSessionId === sid) return true;
+    // During an initial session load the normal switch/refresh path will wake
+    // auto-resume; do not start /continue while history is still hydrating.
+    if (typeof suppressTocDuringSessionLoad !== 'undefined' && suppressTocDuringSessionLoad) return true;
+    try {
+        var response = await fetch('/sessions/' + encodeURIComponent(sid), { cache: 'no-store' });
+        if (!response.ok) return false;
+        var detail = await response.json();
+        if (!detail
+            || !detail.react_auto_resume
+            || detail.run_active
+            || detail.stream_active) return false;
+        if (typeof maybeAutoResumeInterruptedReact === 'function') {
+            maybeAutoResumeInterruptedReact(sid, detail);
+        }
+        return true;
+    } catch (e) {
+        return false;
+    }
+}
+
 async function sendQueuedFollowupAsChat(sessionId, item, itemId, dispatchEpoch) {
     var sid = String(sessionId || '');
     if (!sid || !item) return false;
@@ -1899,6 +2198,15 @@ async function sendQueuedFollowupAsChat(sessionId, item, itemId, dispatchEpoch) 
         item.awaitingRunEnd = true;
         persistFollowupQueue(sid);
         renderFollowupQueue(sid);
+        return false;
+    }
+    if (await isSessionAutoResumePending(sid)) {
+        // A process-restarted session must resume its previous run before any
+        // queued follow-up may start a new ordinary /chat turn.
+        item.awaitingRunEnd = true;
+        persistFollowupQueue(sid);
+        renderFollowupQueue(sid);
+        scheduleFollowupQueueDrain(sid, 1000);
         return false;
     }
     var previousAwaitingRunEnd = item.awaitingRunEnd;
@@ -2156,6 +2464,15 @@ async function sendFollowupNowImpl(itemId, sessionId, options) {
         renderFollowupQueue(sid);
         appendLogVisible('追问暂未发出（发送通道繁忙），已保留待重试: ' + msg, 'error-log');
         refreshPendingFollowupQueue(sid);
+        return;
+    }
+    if (await isSessionAutoResumePending(sid)) {
+        item.status = '';
+        item.steerInFlight = false;
+        item.awaitingRunEnd = true;
+        persistFollowupQueue(sid);
+        renderFollowupQueue(sid);
+        scheduleFollowupQueueDrain(sid, 1000);
         return;
     }
     item.status = 'sending';
@@ -2508,7 +2825,7 @@ async function sendMessage(options) {
                 }
                 autoResizeTextarea();
             }
-            scheduleActiveSessionReconnect(runSessionId, { delayMs: 0 });
+            scheduleActiveSessionReconnect(runSessionId, { delayMs: 0, failure: true });
             return false;
         }
         var responseContentType = String(response.headers && response.headers.get
@@ -2559,8 +2876,10 @@ async function sendMessage(options) {
             clearSessionRunStateIfMatch(runSessionId, clientRunId);
         }
         if (streamDisconnectedUnexpectedly && runSessionId === currentSessionId && getRunAbortReason(runSessionId, runCtx) !== 'user') {
-            scheduleActiveSessionReconnect(runSessionId, { delayMs: 500 });
-            scheduleActiveSessionReconnect(runSessionId, { delayMs: 2500 });
+            scheduleActiveSessionReconnect(runSessionId, { delayMs: 500, failure: true });
+            scheduleActiveSessionReconnect(runSessionId, { delayMs: 2500, failure: true });
+        } else {
+            resetStreamReconnectState(runSessionId);
         }
         if (runSessionId !== currentSessionId) {
             const el = runCtx.stream;

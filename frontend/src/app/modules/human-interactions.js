@@ -59,7 +59,7 @@ function applyHumanInteractionEvent(sessionId, event) {
     collection[id] = record;
     state.loaded = true;
     syncHumanInteractionSessionSummary(sid);
-    if (sid === String(currentSessionId || '')) updateHumanInteractionBanner(sid);
+    updateHumanInteractionBanner(currentSessionId);
     return record;
 }
 
@@ -80,15 +80,6 @@ function pendingHumanInteractionRecords(sessionId) {
         return String(a.created_at || '').localeCompare(String(b.created_at || ''));
     });
     return rows;
-}
-
-function toolCallHasPendingApproval(sessionId, toolCallId) {
-    var sid = String(sessionId || '');
-    var tid = String(toolCallId || '');
-    if (!sid || !tid) return false;
-    return pendingHumanInteractionRecords(sid).some(function (row) {
-        return row.kind === 'approval' && String(row.tool_call_id || '') === tid;
-    });
 }
 
 function humanInteractionPendingCounts(sessionId) {
@@ -149,6 +140,7 @@ function syncHumanInteractionSessionSummary(sessionId) {
     var session = typeof sessionStore !== 'undefined' ? sessionStore.get(sid) : null;
     if (session) session.pending_human_interactions = counts;
     updateHumanInteractionSessionBadge(sid);
+    updateHumanInteractionBanner(currentSessionId);
 }
 
 function sessionPendingHumanCounts(sessionId) {
@@ -161,6 +153,41 @@ function sessionPendingHumanCounts(sessionId) {
     var approvals = Math.max(0, Number(pending && pending.approvals) || 0);
     var total = Math.max(questions + approvals, Number(pending && pending.total) || 0);
     return { questions: questions, approvals: approvals, total: total };
+}
+
+function sessionListForPendingCounts() {
+    if (typeof sessionStore !== 'undefined' && sessionStore && typeof sessionStore.list === 'function') {
+        return sessionStore.list();
+    }
+    return [];
+}
+
+function globalHumanInteractionPendingCounts() {
+    var questions = 0;
+    var approvals = 0;
+    sessionListForPendingCounts().forEach(function (session) {
+        if (!session || !session.id) return;
+        var counts = sessionPendingHumanCounts(session.id);
+        questions += counts.questions;
+        approvals += counts.approvals;
+    });
+    return { questions: questions, approvals: approvals, total: questions + approvals };
+}
+
+function firstSessionWithPendingHumanInteractions() {
+    var sessions = sessionListForPendingCounts();
+    for (var i = 0; i < sessions.length; i += 1) {
+        var session = sessions[i];
+        if (session && session.id && sessionPendingHumanCounts(session.id).total > 0) return session;
+    }
+    return null;
+}
+
+function pendingCountDetailText(counts) {
+    var parts = [];
+    if (counts.approvals > 0) parts.push(counts.approvals + ' 个审批');
+    if (counts.questions > 0) parts.push(counts.questions + ' 个回答');
+    return parts.join('、') || '无待办';
 }
 
 function updateHumanInteractionSessionBadge(sessionId) {
@@ -206,31 +233,26 @@ function updateAllHumanInteractionSessionBadges() {
     sessionsList.querySelectorAll('.session-item[data-session-id]').forEach(function (row) {
         updateHumanInteractionSessionBadge(row.dataset.sessionId || '');
     });
+    updateHumanInteractionBanner(currentSessionId);
 }
 
 function updateHumanInteractionBanner(sessionId) {
     var sid = String(sessionId || currentSessionId || '');
     var banner = document.getElementById('human-interaction-banner');
     if (!banner) return;
-    var rows = sid ? pendingHumanInteractionRecords(sid) : [];
-    banner.classList.toggle('is-on', rows.length > 0);
-    banner.classList.toggle('hidden', rows.length === 0);
-    var text = banner.querySelector('.human-interaction-banner-msg');
-    if (text) {
-        var q = rows.filter(function (row) { return row.kind === 'question'; }).length;
-        var a = rows.length - q;
-        if (rows.length === 1 && rows[0].kind === 'question') {
-            var firstQuestion = rows[0].questions && rows[0].questions[0];
-            text.textContent = 'Agent 正在等待你的回答：' + String((firstQuestion && firstQuestion.header) || '确认下一步');
-        } else if (rows.length === 1) {
-            text.textContent = '有一项操作等待安全确认';
-        } else if (rows.length) {
-            var parts = [];
-            if (a) parts.push(a + ' 个审批');
-            if (q) parts.push(q + ' 个问题');
-            text.textContent = '当前会话有 ' + rows.length + ' 项待处理（' + parts.join('、') + '）';
-        } else text.textContent = '';
-    }
+    var globalCounts = globalHumanInteractionPendingCounts();
+    var sessionCounts = sid ? sessionPendingHumanCounts(sid) : { questions: 0, approvals: 0, total: 0 };
+    var visible = globalCounts.total > 0;
+    banner.classList.toggle('is-on', visible);
+    banner.classList.toggle('hidden', !visible);
+    var globalCountEl = banner.querySelector('.human-todo-count[data-scope="global"]');
+    var globalDetailEl = banner.querySelector('.human-todo-detail[data-scope="global"]');
+    var sessionCountEl = banner.querySelector('.human-todo-count[data-scope="session"]');
+    var sessionDetailEl = banner.querySelector('.human-todo-detail[data-scope="session"]');
+    if (globalCountEl) globalCountEl.textContent = globalCounts.total + ' 项';
+    if (globalDetailEl) globalDetailEl.textContent = pendingCountDetailText(globalCounts);
+    if (sessionCountEl) sessionCountEl.textContent = sessionCounts.total + ' 项';
+    if (sessionDetailEl) sessionDetailEl.textContent = pendingCountDetailText(sessionCounts);
 }
 
 function focusFirstPendingHumanInteraction() {
@@ -242,7 +264,6 @@ function focusFirstPendingHumanInteraction() {
     if (collapsedRow) {
         collapsedRow.classList.remove('is-collapsed');
         collapsedRow.dataset.manualToggle = '1';
-        collapsedRow.removeAttribute('data-auto-expanded');
         var rowBtn = collapsedRow.querySelector('.feed-row-collapse');
         if (rowBtn) {
             rowBtn.setAttribute('aria-expanded', 'true');
@@ -281,6 +302,21 @@ function focusFirstPendingHumanInteraction() {
     setTimeout(function () { card.classList.remove('is-highlighted'); }, 1200);
 }
 
+async function handleHumanTodoFloaterAction() {
+    var current = String(currentSessionId || '');
+    var currentCounts = current ? sessionPendingHumanCounts(current) : { total: 0 };
+    if (currentCounts.total > 0) {
+        focusFirstPendingHumanInteraction();
+        return;
+    }
+    var target = firstSessionWithPendingHumanInteractions();
+    if (!target) return;
+    if (typeof switchSession === 'function') {
+        await switchSession(target.id, { forceReload: false });
+    }
+    requestAnimationFrame(function () { focusFirstPendingHumanInteraction(); });
+}
+
 function humanInteractionDraftKey(sessionId, interactionId, requestVersion) {
     return HUMAN_INTERACTION_DRAFT_PREFIX + String(sessionId || '') + ':' + String(interactionId || '') + ':' + String(requestVersion || 1);
 }
@@ -311,44 +347,7 @@ function attachHumanInteractionCardsForToolCall(stream, toolCallId) {
     cards.forEach(function (card) {
         if (card.parentNode !== slot) slot.appendChild(card);
     });
-    var hasPendingApproval = cards.some(function (card) {
-        return card.dataset.status === 'pending' && card.dataset.kind === 'approval';
-    });
-    if (hasPendingApproval) autoExpandToolRow(slot.closest('.feed-item'));
     return true;
-}
-
-function autoExpandToolRow(row) {
-    if (!row || row.dataset.manualToggle === '1') return;
-    if (row.classList.contains('is-collapsed')) row.classList.remove('is-collapsed');
-    row.dataset.autoExpanded = '1';
-    var btn = row.querySelector('.feed-row-collapse');
-    if (btn) {
-        btn.setAttribute('aria-expanded', 'true');
-        btn.setAttribute('aria-label', '收起工具行');
-    }
-}
-
-function collapseAutoExpandedToolRow(stream, toolCallId) {
-    var tid = String(toolCallId || '');
-    if (!stream || !tid || typeof CSS === 'undefined' || !CSS.escape) return;
-    var row = null;
-    try {
-        row = stream.querySelector('.feed-item.feed--tool[data-tool-call-id="' + CSS.escape(tid) + '"]');
-    } catch (e) { row = null; }
-    if (!row || row.dataset.manualToggle === '1') return;
-    if (row.dataset.autoExpanded !== '1') return;
-    var stillPending = stream.querySelector(
-        '.human-interaction-card[data-tool-call-id="' + CSS.escape(tid) + '"][data-kind="approval"][data-status="pending"]'
-    );
-    if (stillPending) return;
-    row.classList.add('is-collapsed');
-    row.removeAttribute('data-auto-expanded');
-    var btn = row.querySelector('.feed-row-collapse');
-    if (btn) {
-        btn.setAttribute('aria-expanded', 'false');
-        btn.setAttribute('aria-label', '展开工具行');
-    }
 }
 
 function attachAllHumanInteractionCards(stream) {
@@ -410,7 +409,7 @@ function renderAutoReviewStatusEvent(ctx, event, runSessionId) {
         'auto-review-title',
         approved
             ? '自动审批已批准'
-            : (unknown ? '自动审批不可用（按拒绝处理）' : '自动审批已拒绝')
+            : (unknown ? '自动审查不可用（已转人工确认）' : '自动审批已拒绝')
     );
     if (!approved && !unknown) {
         title.appendChild(humanElement('span', 'auto-review-risk', risk));
@@ -895,6 +894,13 @@ function createHumanApprovalCard(record, sessionId) {
         always.addEventListener('click', function () { void resolveHumanApproval(card, 'allow_always'); });
         actions.appendChild(always);
     }
+    if (!forced && record.external_workspace_grantable) {
+        var externalGrant = humanElement('button', 'human-secondary-btn human-external-grant-btn', '允许工作区外处理（写/删/Shell）');
+        externalGrant.type = 'button';
+        externalGrant.title = '一次性授权：写、删除和 Shell 在工作区外的操作以后自动放行，直到你在设置中关闭';
+        externalGrant.addEventListener('click', function () { void resolveHumanApproval(card, 'allow_external_workspace'); });
+        actions.appendChild(externalGrant);
+    }
     var allow = humanElement('button', 'human-primary-btn human-allow-btn', '允许一次');
     allow.type = 'button';
     allow.title = '仅放行这一次；执行后授权立即失效';
@@ -994,9 +1000,6 @@ function renderHumanInteractionRecord(record, sessionId, stream) {
     }
     if (toolCallId) {
         attachHumanInteractionCardsForToolCall(stream, toolCallId);
-        if (kind === 'approval' && record.status !== 'pending') {
-            collapseAutoExpandedToolRow(stream, toolCallId);
-        }
     }
     if (restoreFocus && record.status !== 'pending') {
         card.setAttribute('tabindex', '-1');
@@ -1055,5 +1058,5 @@ async function refreshHumanInteractions(sessionId, options) {
 
 (function bindHumanInteractionBanner() {
     var button = document.getElementById('human-interaction-banner-btn');
-    if (button) button.addEventListener('click', focusFirstPendingHumanInteraction);
+    if (button) button.addEventListener('click', function () { void handleHumanTodoFloaterAction(); });
 })();

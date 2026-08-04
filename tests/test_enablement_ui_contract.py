@@ -23,4 +23,12 @@ def test_skill_picker_exposes_enablement_controls():
     assert "skill-picker-toggle" in picker
     assert "setSkillPickerEnabled" in picker
     assert "reconcileSelectedSkillsWithEnabledCatalog" in picker
+    assert "data-skill-picker-tab" in picker
+    assert 'data-skill-picker-tab="hooks"' in picker
+    assert 'data-skill-picker-tab="plugins"' in picker
+    assert "loadSkillPickerMcpTools" in picker
+    assert "loadSkillPickerExtensions" in picker
+    assert '/api/mcp/tools' in picker
+    assert '/api/extensions' in picker
     assert '@fastapi_app.post("/api/skills/{skill_name}/enabled")' in backend
+    assert '@fastapi_app.get("/api/mcp/tools")' in backend

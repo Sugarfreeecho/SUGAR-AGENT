@@ -239,7 +239,13 @@ function buildAndBindSessionRow(sess, allSessions, nextStreamMap) {
     if (sess.id) nextStreamMap[sess.id] = !!sess.stream_active;
     if (sess.id) scheduleTitleGenerationRefresh(sess.id, !!sess.title_generation_pending);
     div.innerHTML = '<div class="session-item-head">'
+        + '<div class="session-item-main">'
+        + '<div class="session-item-title-row">'
         + '<span class="session-name" data-id="' + sess.id + '" data-original="' + escapeHtml(sess.name) + '">' + escapeHtml(sess.name) + '</span>'
+        + '<span class="session-item-date"></span>'
+        + '</div>'
+        + '<div class="session-last-query"></div>'
+        + '</div>'
         + '<div class="session-more-wrap">'
         + '<button type="button" class="session-more-btn" aria-label="更多操作" aria-expanded="false" aria-haspopup="true" data-ui-tip="更多">'
         + '<span class="session-more-dots" aria-hidden="true"><span></span><span></span><span></span></span></button>'
@@ -248,8 +254,7 @@ function buildAndBindSessionRow(sess, allSessions, nextStreamMap) {
         + '<button type="button" class="session-menu-delete" role="menuitem">删除</button>'
         + '<button type="button" class="session-menu-archive" role="menuitem"></button>'
         + '</div></div>'
-        + '</div>'
-        + '<div class="session-last-query"></div>';
+        + '</div>';
     if (typeof updateHumanInteractionSessionBadge === 'function') {
         setTimeout(function () { updateHumanInteractionSessionBadge(sess.id); }, 0);
     }
@@ -263,6 +268,17 @@ function buildAndBindSessionRow(sess, allSessions, nextStreamMap) {
         wsEl.textContent = wsLine;
         wsEl.setAttribute('data-ui-tip', wsLine);
         bindUiHoverTip(wsEl);
+    }
+    var dateEl = div.querySelector('.session-item-date');
+    if (dateEl) {
+        var dateLine = typeof formatSessionListDate === 'function' ? formatSessionListDate(sess) : '';
+        if (dateLine) {
+            dateEl.innerHTML = (typeof sessionDateIcon === 'function' ? sessionDateIcon() : '') + dateLine;
+            dateEl.setAttribute('data-ui-tip', dateLine);
+            bindUiHoverTip(dateEl);
+        } else {
+            dateEl.textContent = '';
+        }
     }
     var moreWrap = div.querySelector('.session-more-wrap');
     var moreBtn = div.querySelector('.session-more-btn');
@@ -1295,7 +1311,7 @@ async function switchSession(sessionId, opts) {
         }
         if (typeof refreshTodoPlanPanel === 'function') void refreshTodoPlanPanel();
         else renderTodoPlanForCurrentSession();
-        if (typeof refreshHumanInteractions === 'function') await refreshHumanInteractions(sessionId);
+        if (typeof refreshHumanInteractions === 'function') void refreshHumanInteractions(sessionId);
         if (switchToken !== switchSessionEpoch || sessionId !== currentSessionId) return;
         /* 让 rebuildToc 的 /user_turns fetch 先发出，subagent 面板（含 N 个 /messages）顺序后置，
            避免抢占带宽与主线程，让目录最后才稳态。*/
@@ -1357,7 +1373,7 @@ async function switchSession(sessionId, opts) {
         void refreshSingleSessionRow(sessionId);
         setSendButtonState();
         maybeStartStreamPollForSession(sessionId, { skipInitialLoad: true });
-        if (typeof refreshHumanInteractions === 'function') await refreshHumanInteractions(sessionId);
+        if (typeof refreshHumanInteractions === 'function') void refreshHumanInteractions(sessionId);
         resolve(true);
         }, 20);
     });

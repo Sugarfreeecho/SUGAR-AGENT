@@ -1,4 +1,5 @@
 var subagentContinueInFlight = false;
+var subagentContinueSessionId = null;
 var subagentContinueBannerTimer = null;
 var subagentContinueDismissedForSession = Object.create(null);
 

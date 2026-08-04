@@ -28,6 +28,7 @@ def test_index_html_injects_conservative_feature_values(monkeypatch):
 
     monkeypatch.delenv("AGENT_TEAM_ENABLED", raising=False)
     monkeypatch.delenv("ASK_USER_ENABLED", raising=False)
+    monkeypatch.delenv("SECURITY_ENABLED", raising=False)
     monkeypatch.setenv("MYAGENT_ENABLE_FOLLOWUP_RESTART", "0")
     monkeypatch.setenv("MYAGENT_ENABLE_STREAM_RECONNECT", "0")
     monkeypatch.setenv("MYAGENT_ENABLE_FINAL_RECONCILE", "1")
@@ -49,6 +50,7 @@ def test_index_html_injects_independent_feature_overrides(monkeypatch):
     import webui
 
     monkeypatch.delenv("ASK_USER_ENABLED", raising=False)
+    monkeypatch.delenv("SECURITY_ENABLED", raising=False)
     monkeypatch.setenv("AGENT_TEAM_ENABLED", "true")
     monkeypatch.setenv("MYAGENT_ENABLE_FOLLOWUP_RESTART", "1")
     monkeypatch.setenv("MYAGENT_ENABLE_STREAM_RECONNECT", "true")
@@ -145,13 +147,17 @@ def test_permission_mode_ui_regressions():
         "应用层受限",
         "更改权限",
         "Agent 的操作应如何获得审批？",
-        "工作区内自动执行；网络、删文件、出项目等会先问你",
+        "工作区内自动执行；联网、出项目、永久删除等会先问你",
         "低风险自动放行，高风险仍转给你确认",
         "关闭限制与审批，Agent 拥有你的全部权限",
         "自动审查中：审查 Agent 正在核对你的任务意图与请求风险。",
         "自动审批已批准",
         "自动审批已拒绝",
+        "自动审查不可用（已转人工确认）",
         "可人工覆盖本次请求（只此一次，不沉淀规则）",
+        "允许工作区外处理（写/删/Shell）",
+        "工作区外处理权限",
+        "已开启：写/删/Shell 工作区外操作自动放行。",
         "权限规则（始终允许 / 必问 / 拒绝）",
         "网页抓取预批准域名（web_fetch 免审批）",
     ):
@@ -203,6 +209,15 @@ def test_permission_mode_ui_regressions():
     agent_loop = (ROOT / "app/agent_loop.py").read_text(encoding="utf-8")
     assert '"type": "auto_review_status"' in agent_loop
     assert '"status": "in_progress"' in agent_loop
+
+    # One-time outside-workspace handling permission: approval-card button,
+    # settings toggle, and backend wiring.
+    assert "allow_external_workspace" in interactions
+    assert "external_workspace_grantable" in interactions
+    assert "settings-external-ops" in permissions
+    assert "allow_external_workspace_ops" in permissions
+    assert "settings-external-ops" in index_html
+    assert "settings-external-ops" in html
 
     # Full-access warning uses the unified UI modal, not window.confirm.
     assert "openUiModal({" in permissions
@@ -334,6 +349,9 @@ def test_followups_auto_continue_only_after_run_end_and_sync():
     assert "followupManualDispatchEpochBySession[sid]" in sse
     assert "isFollowupAutoDispatchSuperseded(sid, dispatchOptions.autoDispatchEpoch)" in sse
     assert "recoverFollowupQueueDrainsFromSessionSnapshot" in sse
+    assert "async function isSessionAutoResumePending(sessionId)" in sse
+    assert "react_auto_resume" in sse
+    assert "scheduleFollowupQueueDrain(sid, 1000)" in sse
     assert ".finally(function ()" not in drain
     # 定时器按会话合并，避免 final/run_finished/finally 重复触发多个请求。
     assert "followupDrainTimers[sid]" in drain
@@ -692,6 +710,40 @@ def test_ui_translation_does_not_mutate_conversation_content():
     assert "contentSelector" in remote_i18n
     assert "el.closest(contentSelector)" in remote_i18n
     assert remote_markup.count('setAttribute("data-i18n-skip","true")') >= 4
+
+
+def test_followup_pending_queue_supports_manual_drag_reorder():
+    sse = (ROOT / "frontend/src/app/modules/sse-handling.js").read_text(encoding="utf-8")
+    css = (ROOT / "frontend/src/styles/app.css").read_text(encoding="utf-8")
+
+    assert "function moveFollowupQueueItem" in sse
+    assert "followupDragState" in sse
+    assert "dataTransfer.effectAllowed = 'move'" in sse
+    assert "classList.add(after ? 'is-drag-over-after' : 'is-drag-over-before')" in sse
+    assert "entry.order = idx" in sse
+    assert "row.dataset.reorderable = item.status ? 'false' : 'true'" in sse
+    assert "target.dataset.reorderable !== 'true'" in sse
+    assert "pendingIndexes.forEach" in sse
+    assert "startFollowupTouchDrag" in sse
+    assert "ev.pointerType === 'touch' || ev.pointerType === 'pen'" in sse
+    assert "setPointerCapture" in sse
+    assert "document.elementFromPoint" in sse
+    assert ".followup-queue-drag" in css
+    assert ".followup-queue-row.is-dragging" in css
+    assert ".followup-queue-row.is-drag-over-before" in css
+    assert "touch-action: none" in css
+
+
+def test_ui_cache_warmup_delay_runs_inside_background_worker():
+    source = (ROOT / "app/webui.py").read_text(encoding="utf-8")
+    warmup = source.split("def _warm_ui_caches()", 1)[1].split(
+        '@fastapi_app.on_event("startup")', 1
+    )[0]
+
+    worker_start = warmup.index("def _run()")
+    delay = warmup.index("_warm_time.sleep(2.0)")
+    thread_start = warmup.index("threading.Thread")
+    assert worker_start < delay < thread_start
 
 
 def test_streamed_llm_commits_are_sse_fallbacks_without_repersisting():

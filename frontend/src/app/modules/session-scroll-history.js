@@ -102,7 +102,7 @@ function scrollChatToBottomIfFollow(runSessionId, opts) {
     opts = opts || {};
     if (shouldGateScrollByRunSession(null, runSessionId)) return;
     if (!opts.force && !liveAutoFollow) return;
-    if (chatContainer) chatContainer.scrollTop = chatContainer.scrollHeight;
+    if (chatContainer) setScrollTopImmediate(chatContainer, chatContainer.scrollHeight);
 }
 
 function setScrollTopImmediate(el, y) {

@@ -10,9 +10,9 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:ital,wght@0,400;0,500;0,600;0,700;0,800;1,400;1,500&family=JetBrains+Mono:ital,wght@0,400;0,500;0,600;1,400&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
     <script>try { if (localStorage.getItem('myagent-theme') !== 'dark') document.documentElement.classList.add('theme-light'); } catch (e) { document.documentElement.classList.add('theme-light'); }</script>
-  <script type="module" crossorigin src="/assets/main-ChM8W3S_.js"></script>
+  <script type="module" crossorigin src="/assets/main-DToUN_Cd.js"></script>
   <link rel="modulepreload" crossorigin href="/assets/modulepreload-polyfill-B5Qt9EMX.js">
-  <link rel="stylesheet" crossorigin href="/assets/main-Dnemo5tN.css">
+  <link rel="stylesheet" crossorigin href="/assets/main-Bb_sdKnv.css">
 </head>
 <body>
 <div class="app">
@@ -50,6 +50,25 @@
     <!-- 主区域 -->
     <section class="main" aria-label="聊天">
         <div class="main-center">
+            <div id="human-interaction-banner" class="human-interaction-banner hidden" role="status" aria-live="polite">
+                <span class="human-todo-floater-mark" aria-hidden="true">!</span>
+                <div class="human-todo-floater-body">
+                    <div class="human-todo-floater-title">待处理事项</div>
+                    <div class="human-todo-floater-rows">
+                        <div class="human-todo-floater-row">
+                            <span class="human-todo-row-label">全局待办</span>
+                            <span class="human-todo-count" data-scope="global">0 项</span>
+                            <span class="human-todo-detail" data-scope="global"></span>
+                        </div>
+                        <div class="human-todo-floater-row">
+                            <span class="human-todo-row-label">当前会话</span>
+                            <span class="human-todo-count" data-scope="session">0 项</span>
+                            <span class="human-todo-detail" data-scope="session"></span>
+                        </div>
+                    </div>
+                    <button type="button" id="human-interaction-banner-btn" class="human-todo-floater-btn">立即处理</button>
+                </div>
+            </div>
             <header class="titlebar">
                 <div class="breadcrumb">
                     <span id="breadcrumb-text">选择或新建会话</span>
@@ -127,11 +146,6 @@
 
             <div class="panel" role="form">
                 <div class="panel-inner">
-                    <div id="human-interaction-banner" class="human-interaction-banner hidden" role="status" aria-live="polite">
-                        <span class="human-interaction-banner-mark" aria-hidden="true">?</span>
-                        <span class="human-interaction-banner-msg"></span>
-                        <button type="button" id="human-interaction-banner-btn" class="human-interaction-banner-btn">立即处理</button>
-                    </div>
                     <div id="subagent-continue-banner" class="subagent-continue-banner hidden" role="status" aria-live="polite">
                         <span class="subagent-continue-banner-msg"></span>
                         <button type="button" id="subagent-continue-btn" class="subagent-continue-banner-btn">继续综合子任务</button>
@@ -143,9 +157,9 @@
                     </div>
                     <div class="composer-row">
                         <div class="input-wrapper">
+                            <button type="button" id="skill-picker-btn" class="skill-picker-btn" aria-label="选择 Skill" aria-haspopup="dialog" aria-expanded="false" data-ui-tip="选择 Skill"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button>
                             <textarea id="message-input" rows="1" placeholder="说说你想做什么…（Shift/Ctrl+Enter换行）" spellcheck="false" autocomplete="off"></textarea>
                             <button type="button" id="pick-path-btn" class="path-browse-btn path-browse-btn--ghost" aria-label="选择文件" data-ui-tip="选择文件"></button>
-                            <button type="button" id="skill-picker-btn" class="skill-picker-btn" aria-label="选择 Skill" aria-haspopup="dialog" aria-expanded="false" data-ui-tip="选择 Skill">SKILL</button>
                             <button type="button" id="send-btn" data-ui-tip="发送 / 停止">发送</button>
                         </div>
                         <div id="skill-picker-popover" class="skill-picker-popover" role="dialog" aria-label="选择 Skill"></div>
@@ -171,7 +185,7 @@
                             <svg class="permission-mode-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l7 3v5c0 4.5-3 8.3-7 10-4-1.7-7-5.5-7-10V6z"/></svg>
                             <span class="permission-mode-body">
                                 <span class="permission-mode-label">请求批准</span>
-                                <span class="permission-mode-desc">工作区内自动执行；网络、删文件、出项目等会先问你</span>
+                                <span class="permission-mode-desc">工作区内自动执行；联网、出项目、永久删除等会先问你</span>
                             </span>
                         </button>
                         <button type="button" class="permission-mode-option" data-permission-mode="approve_for_me" role="option">
@@ -302,6 +316,15 @@
             <div class="settings-modal__section">
                 <div class="settings-modal__label">运行诊断</div>
                 <button type="button" id="settings-execution-dashboard" class="settings-advanced-btn">执行状态看板</button>
+            </div>
+            <div class="settings-modal__section">
+                <div class="settings-modal__label">工作区外处理权限</div>
+                <div class="settings-theme-row" role="group" aria-label="工作区外处理权限（写/删/Shell）">
+                    <button type="button" id="settings-external-ops-off" class="settings-theme-btn">关闭</button>
+                    <button type="button" id="settings-external-ops-on" class="settings-theme-btn">开启</button>
+                </div>
+                <div class="settings-feature-status">开启后，写、删除和 Shell 在工作区外的操作不再逐次询问；破坏性/动态命令、网络和凭据导出仍按原规则。</div>
+                <div id="settings-external-ops-status" class="settings-feature-status" role="status" aria-live="polite">正在读取状态…</div>
             </div>
             <div class="settings-modal__section">
                 <div class="settings-modal__label">环境与 API</div>

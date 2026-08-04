@@ -11,12 +11,34 @@ const REFRESH_DELAY_MS = 2000;
 let refreshTimer = null;
 const PHASE_DEFS=[
   ['pre_api','API 发送前准备'],['api_send','API 发送'],['first_token','首 token'],
-  ['llm_output','LLM 输出'],['tool_execution','工具执行'],['round_postprocess','本轮后处理'],
+  ['llm_output','LLM 输出'],['tool_execution','工具执行（批次墙钟）'],['round_postprocess','轮内后处理'],
+  ['final_pipeline','Run 收尾'],
 ];
 
 const esc = value => String(value == null ? '' : value).replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
 const ms = value => { const n=Number(value); if(!Number.isFinite(n)) return '—'; return n>=1000?(n/1000).toFixed(n>=10000?1:2)+' s':Math.max(0,Math.round(n))+' ms'; };
 const num = value => Number.isFinite(Number(value)) ? Number(value) : 0;
+function runWallMs(run){
+  const wall=num(run.wall_ms);
+  if(wall>0)return wall;
+  const a=Date.parse(run.started_at||''),b=Date.parse(run.finished_at||'');
+  if(Number.isFinite(a))return Math.max(0,(Number.isFinite(b)?b:Date.now())-a);
+  return 0;
+}
+function runWallTotalMs(rows){
+  const seen=new Set();let total=0;
+  rows.forEach(row=>{
+    const key=String(row.session.session_id||'')+'|'+String(row.run.run_id||'');
+    if(seen.has(key))return;
+    seen.add(key);total+=runWallMs(row.run);
+  });
+  return total;
+}
+function toolWallMs(req){
+  const rec=(req.phases||{}).tool_execution;
+  if(rec&&num(rec.total_ms)>0)return num(rec.total_ms);
+  return (req.tools||[]).reduce((n,t)=>Math.max(n,num(t.duration_ms)),0);
+}
 function observedRun(row) {
   const runs=((row.session.observability||{}).runs)||[];
   return runs.find(run=>String(run.run_id||'')===String(row.run.run_id||''))||null;
@@ -36,12 +58,24 @@ function uniqueObservedRuns(rows) {
 
 function phaseData(req,key){
   const phases=req.phases||{};
+  if(key==='pre_api'){
+    const base=phases.pre_api||{};
+    const tail=Math.max(0,num(req.pre_api_tail_ms));
+    const events=Object.assign({},base.events||{});
+    if(tail>0)events.pre_api_tail=tail;
+    return{total_ms:num(base.total_ms)+tail,events};
+  }
   if(phases[key])return phases[key];
   const stream=((phases.llm_stream||{}).events)||[],at=name=>num((stream.find(e=>e.step===name)||{}).ms_since_api_start);
   if(key==='api_send'){const v=Math.max(0,at('stream_created')-at('request_start'));return{total_ms:v,events:{request_start_to_stream_created:v}};}
   if(key==='first_token'){const v=Math.max(0,at('first_delta')-at('stream_created'));return{total_ms:v,events:{stream_created_to_first_delta:v}};}
   if(key==='llm_output'){const v=Math.max(0,(at('stream_exhausted')||at('turn_ready'))-at('first_delta'));return{total_ms:v,events:{first_delta_to_stream_end:v}};}
-  if(key==='tool_execution'){const values=(req.tools||[]).map(t=>num(t.duration_ms)),v=values.length?Math.max(...values):0;return{total_ms:v,events:{estimated_parallel_wall_time:v}};}
+  if(key==='tool_execution'){
+    const rec=phases.tool_execution;
+    if(rec&&num(rec.total_ms)>0)return rec;
+    const values=(req.tools||[]).map(t=>num(t.duration_ms)),v=values.length?Math.max(...values):0;
+    return{total_ms:v,events:{estimated_parallel_wall_time:v}};
+  }
   if(key==='round_postprocess'){const a=num((phases.tool_result_post||{}).total_ms),b=num((phases.tool_to_next_api||{}).total_ms);return{total_ms:a+b,events:{tool_result_post:a,tool_to_next_api:b}};}
   return{total_ms:0,events:{}};
 }
@@ -148,6 +182,33 @@ function requestDetailHtml(row){
   return `<section class="session-block"><header><div><h2>${esc(session.session_name)}</h2><code>${esc(session.session_id)}</code></div><span>${esc(new Date(req.started_at||run.started_at||'').toLocaleString())}</span></header><article class="run-block"><header><div><strong>${esc(run.mode||'chat')}</strong><code>${esc(run.run_id)}</code></div><em class="${esc(run.status||'')}">${esc(run.status||'')}</em></header><div class="request-card"><header><div><strong>LLM #${req.react_iter}</strong><span>${esc(req.model||'')}</span></div><em>${esc(req.status||'')}</em></header>${PHASE_DEFS.map(([n])=>phaseHtml(session,run,req,n,phaseData(req,n))).join('')}${toolsHtml(session,run,req)}</div></article></section>`;
 }
 
+function runReconcileHtml(rows){
+  const runs=new Map();
+  rows.forEach(row=>{
+    const key=String(row.session.session_id||'')+'|'+String(row.run.run_id||'');
+    if(!runs.has(key))runs.set(key,{run:row.run,reqs:[]});
+    runs.get(key).reqs.push(row.req);
+  });
+  if(!runs.size)return '';
+  return Array.from(runs.values()).map(({run,reqs})=>{
+    const wall=runWallMs(run);
+    let startup=reqs.reduce((n,r)=>n+num(r.startup_ms),0);
+    if(!startup&&reqs.length){
+      const a=Date.parse(reqs[0].started_at||''),b=Date.parse(run.started_at||'');
+      if(Number.isFinite(a)&&Number.isFinite(b))startup=Math.max(0,a-b);
+    }
+    const reqWall=reqs.reduce((n,r)=>n+(num(r.wall_ms)>0?num(r.wall_ms):num(r.duration_ms)+num(((r.phases||{}).pre_api||{}).total_ms)+toolWallMs(r)+num(((r.phases||{}).round_postprocess||{}).total_ms)),0);
+    const roundGap=reqs.reduce((n,r)=>n+num(r.round_gap_ms),0);
+    const finalPipe=reqs.reduce((n,r)=>n+num(((r.phases||{}).final_pipeline||{}).total_ms),0);
+    const api=reqs.reduce((n,r)=>n+num(r.duration_ms),0);
+    const toolWall=reqs.reduce((n,r)=>n+toolWallMs(r),0);
+    const known=startup+reqWall+roundGap+finalPipe;
+    const residual=Math.max(0,wall-known);
+    const rows=[['Run 墙钟',wall],['Run 启动',startup],['Σ 轮次墙钟',reqWall],['Σ 轮间缝隙',roundGap],['Run 收尾（final_pipeline）',finalPipe],['未计时残差',residual],['LLM API 流累计',api],['工具批次墙钟',toolWall]];
+    return `<article class="run-block"><header><div><strong>Run 对账</strong><code>${esc(run.run_id)}</code></div><em class="${esc(run.status||'')}">${esc(run.status||'')}</em></header><div class="request-card">${rows.map(([label,value])=>`<div class="event-row event-row--aggregate"><span>${esc(label)}</span><b>${esc(ms(value))}</b><small>${wall?((value/wall)*100).toFixed(1):'0.0'}%</small></div>`).join('')}</div></article>`;
+  }).join('');
+}
+
 function cumulativeDetailHtml(rows){
   if(!rows.length)return '<div class="empty">暂无执行统计</div>';
   const phaseTotals={},phaseEvents={};
@@ -158,7 +219,7 @@ function cumulativeDetailHtml(rows){
   }));
   const allPhaseTotal=Object.values(phaseTotals).reduce((n,v)=>n+num(v),0);
   const cumulativeEvents=(name)=>{const phaseTotal=num(phaseTotals[name]);return Object.entries(phaseEvents[name]||{}).map(([event,total])=>`<div class="event-row event-row--aggregate"><span>${esc(event)}</span><b>平均 ${esc(ms(num(total)/rows.length))}</b><small>累计 ${esc(ms(total))} · 占本阶段 ${phaseTotal?((num(total)/phaseTotal)*100).toFixed(1):'0.0'}%</small></div>`).join('')||'<div class="empty-inline">暂无子事件</div>';};
-  return `<section class="session-block"><header><div><h2>累计总值</h2><code>${esc(document.getElementById('session-filter').value?'当前会话筛选':'全部会话')}</code></div><span>${rows.length} 次 LLM 请求</span></header><article class="run-block"><div class="request-card">${PHASE_DEFS.map(([name,label])=>{const total=num(phaseTotals[name]),avg=total/rows.length,ratio=allPhaseTotal?total/allPhaseTotal*100:0,key=`total|${name}`,opened=openState.get(key)===true;return`<details class="phase" data-open-key="${esc(key)}" ${opened?'open':''}><summary><span>${esc(label)}</span><b>平均 ${esc(ms(avg))} · 累计 ${esc(ms(total))} · 占比 ${ratio.toFixed(1)}%</b></summary><div>${cumulativeEvents(name)}</div></details>`;}).join('')}</div></article></section>`;
+  return `<section class="session-block"><header><div><h2>累计总值</h2><code>${esc(document.getElementById('session-filter').value?'当前会话筛选':'全部会话')}</code></div><span>${rows.length} 次 LLM 请求</span></header>${runReconcileHtml(rows)}<article class="run-block"><div class="request-card">${PHASE_DEFS.map(([name,label])=>{const total=num(phaseTotals[name]),avg=total/rows.length,ratio=allPhaseTotal?total/allPhaseTotal*100:0,key=`total|${name}`,opened=openState.get(key)===true;return`<details class="phase" data-open-key="${esc(key)}" ${opened?'open':''}><summary><span>${esc(label)}</span><b>平均 ${esc(ms(avg))} · 累计 ${esc(ms(total))} · 占比 ${ratio.toFixed(1)}%</b></summary><div>${cumulativeEvents(name)}</div></details>`;}).join('')}</div></article></section>`;
 }
 
 function renderTopCards(rows,selectedRow,isTotal){
@@ -174,18 +235,20 @@ function renderTopCards(rows,selectedRow,isTotal){
     const traffic=rows.reduce((n,r)=>n+num((r.req.network||{}).request_bytes)+num((r.req.network||{}).response_payload_bytes_estimated||(r.req.network||{}).response_content_length),0);
     const observed=uniqueObservedRuns(rows);
     const changedFiles=observed.reduce((n,run)=>n+(run.file_changes||[]).length,0);
-    cards=[['会话数',new Set(rows.map(r=>r.session.session_id)).size],['LLM 请求',rows.length],['API 累计耗时',ms(api)],['平均首 token',ms(avgTtft)],['累计输入 token',input.toLocaleString()],['累计输出 token',output.toLocaleString()],['工具调用总数',tools.toLocaleString()],['累计网络流量',formatBytes(traffic)]];
+    cards=[['会话数',new Set(rows.map(r=>r.session.session_id)).size],['LLM 请求',rows.length],['Run 总耗时（墙钟）',ms(runWallTotalMs(rows))],['LLM API 流累计',ms(api)],['平均首 token',ms(avgTtft)],['累计输入 token',input.toLocaleString()],['累计输出 token',output.toLocaleString()],['工具调用总数',tools.toLocaleString()],['累计网络流量',formatBytes(traffic)]];
     cards.push(['文件变更',changedFiles.toLocaleString()]);
   }else{
     const req=selectedRow.req,usage=req.usage||{},ctx=req.context||{};
     const network=req.network||{},traffic=num(network.request_bytes)+num(network.response_payload_bytes_estimated||network.response_content_length);
     const observed=observedRun(selectedRow)||{};
-    cards=[['API 总耗时',ms(req.duration_ms)],['首 token',ms(req.first_token_ms)],['输入 token',num(usage.prompt_tokens||ctx.estimated_tokens).toLocaleString()],['输出 token',num(usage.completion_tokens).toLocaleString()],['上下文长度',`${ctx.estimated_tokens??'—'} / ${ctx.context_window??'—'}`],['工具调用',(req.tools||[]).length],['网络等待',ms(network.request_to_first_token_ms||req.first_token_ms)],['网络流量',formatBytes(traffic)]];
+    cards=[['LLM API 流耗时',ms(req.duration_ms)],['首 token',ms(req.first_token_ms)],['输入 token',num(usage.prompt_tokens||ctx.estimated_tokens).toLocaleString()],['输出 token',num(usage.completion_tokens).toLocaleString()],['上下文长度',`${ctx.estimated_tokens??'—'} / ${ctx.context_window??'—'}`],['工具调用',(req.tools||[]).length],['网络等待',ms(network.request_to_first_token_ms||req.first_token_ms)],['网络流量',formatBytes(traffic)]];
     cards.push(
       ['文件变更',(observed.file_changes||[]).length],
       ['心跳',observed.heartbeat_at||'—'],
       ['运行状态',observed.status||selectedRow.run.status||'—'],
     );
+    if(num(req.wall_ms)>0)cards.push(['请求墙钟',ms(req.wall_ms)]);
+    if(num(req.round_gap_ms)>0)cards.push(['前序轮间',ms(req.round_gap_ms)]);
   }
   summary.innerHTML=cards.map(([label,value])=>`<div><span>${esc(label)}</span><b>${esc(value)}</b></div>`).join('');
 }

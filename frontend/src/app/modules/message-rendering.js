@@ -1497,7 +1497,18 @@ function getExistingProcessBody(ctx) {
 
 function autoResizeTextarea() {
     messageInput.style.height = 'auto';
-    messageInput.style.height = Math.min(messageInput.scrollHeight, 120) + 'px';
+    messageInput.style.height = Math.min(messageInput.scrollHeight, Math.floor(window.innerHeight * 0.5)) + 'px';
+    repinStreamScrollAfterComposerResize();
+}
+
+/** 输入框增高会压缩工作区高度；若正在跟随底部，立即把聊天区/执行过程区重新钉到底部，避免与流式滚动互相拉扯。 */
+function repinStreamScrollAfterComposerResize() {
+    if (!liveAutoFollow || !chatContainer) return;
+    if (typeof setScrollTopImmediate === 'function') {
+        setScrollTopImmediate(chatContainer, chatContainer.scrollHeight);
+    }
+    var pb = typeof getProcessBodyElForCurrentRun === 'function' ? getProcessBodyElForCurrentRun() : null;
+    if (pb) pb.scrollTop = pb.scrollHeight;
 }
 messageInput.addEventListener('input', autoResizeTextarea);
 messageInput.addEventListener('input', rewriteInputWorkspacePaths);
@@ -2095,6 +2106,31 @@ function formatSessionListSubtitle(sess) {
     return t || '暂无提问';
 }
 
+/** 侧栏每条会话标题下方第二行：最后修改日期时间 */
+function formatSessionListDate(sess) {
+    if (!sess) return '';
+    var raw = sess.last_activity_at || sess.updated_at || sess.created_at || '';
+    var ts = Date.parse(String(raw));
+    if (!Number.isFinite(ts)) {
+        var numeric = Number(raw);
+        if (Number.isFinite(numeric) && numeric > 0) ts = numeric;
+    }
+    if (!Number.isFinite(ts) || ts <= 0) return '';
+    var d = new Date(ts);
+    var now = new Date();
+    var pad = function (v) { return String(v).padStart(2, '0'); };
+    var time = pad(d.getHours()) + ':' + pad(d.getMinutes());
+    if (d.toDateString() === now.toDateString()) return '今天 ' + time;
+    var yesterday = new Date(now.getTime() - 86400000);
+    if (d.toDateString() === yesterday.toDateString()) return '昨天 ' + time;
+    var prefix = d.getFullYear() === now.getFullYear() ? '' : (d.getFullYear() + '年');
+    return prefix + (d.getMonth() + 1) + '月' + d.getDate() + '日 ' + time;
+}
+
+function sessionDateIcon() {
+    return '<svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>';
+}
+
 /** 与服务端 _normalize_sidebar_preview_text 对齐：折叠空白、180 字符、省略号 */
 function normalizeSidebarPreviewText(text, maxLen) {
     maxLen = maxLen || 180;
@@ -2118,6 +2154,17 @@ function updateSidebarLastUserPreviewImmediate(sessionId, questionText) {
     wsEl.textContent = line;
     wsEl.setAttribute('data-ui-tip', line);
     bindUiHoverTip(wsEl);
+    var dateEl = div.querySelector('.session-item-date');
+    if (dateEl) {
+        var dateLine = formatSessionListDate({ last_activity_at: new Date().toISOString() });
+        if (dateLine) {
+            dateEl.innerHTML = sessionDateIcon() + dateLine;
+            dateEl.setAttribute('data-ui-tip', dateLine);
+            bindUiHoverTip(dateEl);
+        } else {
+            dateEl.textContent = '';
+        }
+    }
 }
 
 function updateSessionTitle() {
@@ -3840,6 +3887,7 @@ function upsertToolCallResult(ctx, parsed, runSessionId) {
         if (typeof attachHumanInteractionCardsForToolCall === 'function') {
             attachHumanInteractionCardsForToolCall(ctx && ctx.stream, tid);
         }
+        autoCollapseToolRowAfterResult(row);
         return;
     }
     var ri = uiEventReactIter(parsed);
@@ -3849,6 +3897,18 @@ function upsertToolCallResult(ctx, parsed, runSessionId) {
     var newRow = scNew && scNew.closest ? scNew.closest('.feed-item') : null;
     if (newRow && tid && typeof attachHumanInteractionCardsForToolCall === 'function') {
         attachHumanInteractionCardsForToolCall(ctx && ctx.stream, tid);
+    }
+    if (newRow) autoCollapseToolRowAfterResult(newRow);
+}
+
+function autoCollapseToolRowAfterResult(row) {
+    if (!row || row.dataset.manualToggle === '1') return;
+    if (row.querySelector('.human-interaction-card[data-kind="approval"][data-status="pending"]')) return;
+    row.classList.add('is-collapsed');
+    var btn = row.querySelector('.feed-row-collapse');
+    if (btn) {
+        btn.setAttribute('aria-expanded', 'false');
+        btn.setAttribute('aria-label', '展开工具行');
     }
 }
 
@@ -3974,29 +4034,7 @@ function createProcessFeedRow(ctx, type, initialText, streamOpts, runSessionId, 
                 collapseBtn.setAttribute('aria-expanded', isCollapsed ? 'false' : 'true');
                 collapseBtn.setAttribute('aria-label', isCollapsed ? '展开工具行' : '收起工具行');
                 row.dataset.manualToggle = '1';
-                row.removeAttribute('data-auto-expanded');
             });
-        }
-        // Tool rows default to a compact one-line preview. A row that already
-        // carries a pending approval renders expanded so the approval card is
-        // visible immediately on history reload; later approval events expand
-        // the row through attachHumanInteractionCardsForToolCall().
-        var rowHasPendingApproval = !!(runSessionId && toolCallIdOpt
-            && typeof toolCallHasPendingApproval === 'function'
-            && toolCallHasPendingApproval(runSessionId, toolCallIdOpt));
-        if (rowHasPendingApproval) {
-            row.classList.remove('is-collapsed');
-            row.dataset.autoExpanded = '1';
-            if (collapseBtn) {
-                collapseBtn.setAttribute('aria-expanded', 'true');
-                collapseBtn.setAttribute('aria-label', '收起工具行');
-            }
-        } else {
-            row.classList.add('is-collapsed');
-            if (collapseBtn) {
-                collapseBtn.setAttribute('aria-expanded', 'false');
-                collapseBtn.setAttribute('aria-label', '展开工具行');
-            }
         }
     }
     var txtForUi = initialText;
@@ -4408,7 +4446,6 @@ function handleToolRowChunkClick(e) {
     if (!row) return;
     row.classList.toggle('is-collapsed');
     row.dataset.manualToggle = '1';
-    row.removeAttribute('data-auto-expanded');
     var btn = row.querySelector('.feed-row-collapse');
     if (btn) {
         var isCollapsed = row.classList.contains('is-collapsed');

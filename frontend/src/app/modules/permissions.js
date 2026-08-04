@@ -44,8 +44,9 @@ function maybeShowGlobalFullAccessNotice(status) {
     } catch (_) {}
     var notice = document.createElement('div');
     notice.className = 'permission-global-warning-toast';
-    notice.textContent = '全局完全访问已开启：所有任务均不受应用层限制，重启不会自动降级。';
-    document.body.appendChild(notice);
+    notice.textContent = '完全访问已开启：Agent 可以直接读写文件、执行命令和联网，不再逐项询问。重启后依然有效，直到你手动切回“请求批准”。';
+    var host = document.querySelector('.chat-stage') || document.querySelector('.main-center') || document.body;
+    host.appendChild(notice);
     window.setTimeout(function () { notice.remove(); }, 9000);
 }
 
@@ -63,13 +64,13 @@ function renderPermissionMode(status) {
         var fullAccess = !!status && status.mode === 'full_access';
         trigger.classList.toggle('is-global-full-access', fullAccess);
         trigger.title = fullAccess
-            ? '全局完全访问已开启；新任务和重启不会自动降级'
+            ? '完全访问已开启；Agent 可读写文件、执行命令和联网，不会自动关闭。'
             : '更改权限';
     }
     var settingsStatus = document.getElementById('settings-security-status');
     if (settingsStatus && status) {
         settingsStatus.textContent = status.mode === 'full_access'
-            ? '警告：全局完全访问已开启，并会跨任务和应用重启保持，直到你主动切换。'
+            ? '警告：完全访问已开启，Agent 可直接操作文件、终端和网络，重启后不会自动关闭，直到你手动切换。'
             : permissionModeLabel(status.mode) + '（全局统一，对所有任务生效）';
     }
     if (triggerIco) {
@@ -113,8 +114,8 @@ async function selectPermissionMode(mode) {
     if (mode === 'full_access') {
         var accepted = await openUiModal({
             title: '完全访问权限',
-            subtitle: '强烈建议仅在可信任务中使用',
-            message: '完全访问权限会关闭应用层路径限制、危险操作检查和审批，且对所有会话生效，直到你切回“请求批准”。Agent 将以你当前的操作系统用户权限直接执行，并可能读取凭据、修改系统或破坏文件。是否继续？',
+            subtitle: '仅在信任 Agent 时才建议开启',
+            message: '完全访问开启后，Agent 可以直接读写文件、执行命令和联网，不再逐项征求你的同意。它拥有你当前账号能做的权限，可能会读取凭据、修改系统或删除文件。此设置对所有会话生效，重启后也不会自动关闭，直到你手动切回“请求批准”。是否继续？',
             danger: true,
             confirmText: '确认切换',
             cancelText: '取消',
@@ -499,6 +500,56 @@ async function clearSessionSecurityRules() {
     }
 }
 
+async function refreshExternalWorkspaceOpsSetting() {
+    var off = document.getElementById('settings-external-ops-off');
+    var on = document.getElementById('settings-external-ops-on');
+    var statusEl = document.getElementById('settings-external-ops-status');
+    if (!off || !on) return;
+    try {
+        var response = await fetch('/api/security/settings', { cache: 'no-store' });
+        var data = await response.json();
+        if (!response.ok || !data.ok) throw new Error(data.error || ('HTTP ' + response.status));
+        var enabled = data.allow_external_workspace_ops === true;
+        off.classList.toggle('is-active', !enabled);
+        on.classList.toggle('is-active', enabled);
+        off.setAttribute('aria-pressed', enabled ? 'false' : 'true');
+        on.setAttribute('aria-pressed', enabled ? 'true' : 'false');
+        if (statusEl) {
+            statusEl.textContent = enabled
+                ? '已开启：写/删/Shell 工作区外操作自动放行。'
+                : '已关闭：工作区外操作恢复逐次审批。';
+        }
+    } catch (error) {
+        if (statusEl) statusEl.textContent = '读取设置失败：' + String(error && error.message ? error.message : error);
+    }
+}
+
+async function setExternalWorkspaceOpsSetting(enabled) {
+    var statusEl = document.getElementById('settings-external-ops-status');
+    if (enabled) {
+        var accepted = await openUiModal({
+            title: '开启工作区外处理权限？',
+            message: '开启后，Agent 可在工作区外执行写入、删除和 Shell 操作而不再逐次询问。破坏性/动态命令、网络、凭据导出与安全策略篡改仍会被拦截或审批。',
+            danger: true,
+            confirmText: '确认开启',
+            cancelText: '取消',
+        });
+        if (!accepted) return;
+    }
+    try {
+        var response = await fetch('/api/security/settings', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ allow_external_workspace_ops: enabled }),
+        });
+        var data = await response.json();
+        if (!response.ok || !data.ok) throw new Error(data.error || ('HTTP ' + response.status));
+        await refreshExternalWorkspaceOpsSetting();
+    } catch (error) {
+        if (statusEl) statusEl.textContent = '保存失败：' + String(error && error.message ? error.message : error);
+    }
+}
+
 function initPermissionControls() {
     syncPermissionControlVisibility(currentPermissionStatus);
     var trigger = document.getElementById('permission-mode-trigger');
@@ -538,6 +589,11 @@ function initPermissionControls() {
     if (webFetchReload) webFetchReload.addEventListener('click', function () { void refreshWebFetchDomains(); });
     var extensionsRefresh = document.getElementById('settings-security-extensions-refresh');
     if (extensionsRefresh) extensionsRefresh.addEventListener('click', function () { void refreshSecurityExtensions(); });
+    var externalOpsOff = document.getElementById('settings-external-ops-off');
+    if (externalOpsOff) externalOpsOff.addEventListener('click', function () { void setExternalWorkspaceOpsSetting(false); });
+    var externalOpsOn = document.getElementById('settings-external-ops-on');
+    if (externalOpsOn) externalOpsOn.addEventListener('click', function () { void setExternalWorkspaceOpsSetting(true); });
+    void refreshExternalWorkspaceOpsSetting();
     void refreshSecurityRules();
     void refreshSecurityExtensions();
     void refreshWebFetchDomains();
