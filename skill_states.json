@@ -1,7 +1,22 @@
 {
   "version": 1,
   "skills": {
+    "code-refactoring": {
+      "enabled": false
+    },
+    "finance-report-analysis": {
+      "enabled": false
+    },
+    "frontend-design": {
+      "enabled": false
+    },
+    "frontend-slides": {
+      "enabled": false
+    },
     "marketing": {
+      "enabled": false
+    },
+    "webapp-testing": {
       "enabled": false
     }
   }

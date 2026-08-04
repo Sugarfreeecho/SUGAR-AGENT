@@ -33,6 +33,7 @@ design-previews/
 # Local runtime/workspace data
 workspace/
 .myagent/
+.sugaragent/
 
 # Bundled/interpreter/runtime folders
 python/
