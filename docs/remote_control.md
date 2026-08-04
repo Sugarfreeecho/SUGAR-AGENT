@@ -13,7 +13,7 @@ Remote Control v1 是 SugarAgent 的正式远控入口。它复用现有会话�
 - 所有改变状态的方法要求 `idempotency_key`；成功结果持久化 24 小时，重试不会重复创建会话或重复发送消息。
 - 配对、连接、写操作、拒绝和设备撤销均写入 SQLite 审计日志。
 
-状态数据库默认位于 `.myagent/remote-control/remote-control.sqlite3`，已被 `.gitignore` 排除。可用 `MYAGENT_REMOTE_CONTROL_STATE_DIR` 改到其他目录。
+状态数据库默认位于 `.sugaragent/remote-control/remote-control.sqlite3`，已被 `.gitignore` 排除。可用 `MYAGENT_REMOTE_CONTROL_STATE_DIR` 改到其他目录。
 
 ## 正式启用
 
@@ -117,7 +117,7 @@ Invoke-RestMethod `
 | 环境变量 | 默认值 | 说明 |
 |---|---:|---|
 | `MYAGENT_REMOTE_CONTROL_ENABLED` | `0` | 启用 Remote Control；修改后需重启 |
-| `MYAGENT_REMOTE_CONTROL_STATE_DIR` | `.myagent/remote-control` | 设备、幂等和审计数据库目录 |
+| `MYAGENT_REMOTE_CONTROL_STATE_DIR` | `.sugaragent/remote-control` | 设备、幂等和审计数据库目录 |
 | `MYAGENT_REMOTE_CONTROL_PAIRING_TTL_SEC` | `600` | 配对码有效期，限制为 60–3600 秒 |
 | `MYAGENT_REMOTE_CONTROL_IDEMPOTENCY_TTL_SEC` | `86400` | 幂等结果保留时间 |
 | `MYAGENT_REMOTE_CONTROL_MAX_FRAME_BYTES` | `262144` | WebSocket 单帧上限 |

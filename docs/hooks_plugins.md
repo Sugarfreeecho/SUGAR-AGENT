@@ -16,7 +16,7 @@ STOP_HOOK_MAX_RETRIES=3
 
 PLUGINS_ENABLED=1
 PLUGINS_DIR=../workspace/plugins
-PLUGINS_STATE_PATH=../workspace/.myagent/plugins-state.json
+PLUGINS_STATE_PATH=../workspace/.sugaragent/plugins-state.json
 ```
 `HOOKS_ENABLED` 与 `PLUGINS_ENABLED` 都默认开启，`0`、`false`、`no`、`off` 表示关闭。
 
@@ -24,6 +24,7 @@ PLUGINS_STATE_PATH=../workspace/.myagent/plugins-state.json
 - 关闭 Plugins：所有插件组件都从运行时注册表移除；项目自己的 `hooks.json` 仍可使用。
 - 插件 Hook 需要两个开关同时开启。
 - `MCP_ENABLED` 仍是 MCP 层的独立总开关。
+- `MCP_REGISTRATION_APPROVAL_ENABLED` 默认 `0`：MCP 注册免人工确认，配置直接连接；设为 `1` 后恢复“首次注册或配置摘要变化需人工确认一次”。
 
 `HOOKS_PATH` 留空时使用 `WORK_DIR/hooks.json`。`PLUGINS_DIRS` 可替代 `PLUGINS_DIR` 指定多个目录，Windows 用分号分隔。环境配置可在“设置 → 高级设置”编辑，扩展状态可在“设置 → 扩展管理”查看。
 

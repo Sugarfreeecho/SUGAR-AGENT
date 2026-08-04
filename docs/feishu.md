@@ -92,11 +92,11 @@ FEISHU_SESSION_SCOPE=chat
 | `FEISHU_SESSION_SCOPE` | `chat` | `chat` 或 `thread` |
 | `FEISHU_RESPONSE_TIMEOUT_SEC` | `7200` | 等待 Agent 最终事件的最长时间 |
 | `FEISHU_MAX_REPLY_CHARS` | `3500` | 单条回复分段长度 |
-| `FEISHU_STATE_DIR` | `.myagent/feishu` | 会话绑定与消息去重数据库目录 |
+| `FEISHU_STATE_DIR` | `.sugaragent/feishu` | 会话绑定与消息去重数据库目录 |
 
 ## 5. 状态与安全
 
-状态默认保存在 `.myagent/feishu/feishu.sqlite3`。当 Direct Remote Control 未启用时，飞书会在同一目录下创建独立 control-plane 数据库，用于命令幂等和审计；两项功能同时启用时会复用现有 `SessionControlService`。
+状态默认保存在 `.sugaragent/feishu/feishu.sqlite3`。当 Direct Remote Control 未启用时，飞书会在同一目录下创建独立 control-plane 数据库，用于命令幂等和审计；两项功能同时启用时会复用现有 `SessionControlService`。
 
 建议：
 

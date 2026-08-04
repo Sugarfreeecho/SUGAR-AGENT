@@ -54,7 +54,7 @@ WebUI 必须继续只监听 `127.0.0.1:8192`。Ubuntu Server 的远程访问通�
 - `approve_for_me = (app_restricted, on_request, auto_review)`，只替换审批者，不改变文件、网络或进程边界。
 - `full_access = (no_restriction, never, none)`，不执行应用层审批。
 - `app_restricted` 使用当前操作系统用户运行，依靠中央策略、工作区路径限制、敏感环境过滤和危险操作检查；UI 必须明确标为“应用层受限”，不得称为硬沙箱。
-- 工作区内普通读取、写入和 Shell 自动允许；工作区外访问、网络、删除及未知副作用请求审批；凭据导出和安全策略篡改默认拒绝。
+- 工作区内普通读取、写入和 Shell 自动允许；工作区外访问、网络、不可恢复删除及未知副作用请求审批；`delete_file` 为可恢复软删除（移入 `WORK_DIR/.trash/`），工作区内外均自动放行；凭据导出和安全策略篡改默认拒绝。
 - 原生 OS 沙箱是未来可选高级功能，不是正常运行、写文件或执行工作区 Shell 的前置条件。
 - MCP 与 Plugin 按声明的 `read/workspace_write/external_write`、网络、Shell 和未知副作用能力执行 `allow/ask/deny`，不得因其类型一律拒绝。
 - `run_shell` 的旧范围参数只保留调用兼容，不能由模型用于开启或关闭权限；新 schema 和提示不得暴露该参数。
