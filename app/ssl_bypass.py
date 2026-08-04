@@ -36,7 +36,7 @@ else:
 
 if _bypass_enabled is True:
     # 强制不使用任何代理访问 huawei.com 域名（及本地）
-    os.environ["NO_PROXY"] = "huawei.com,127.0.0.1,localhost"
+    os.environ["NO_PROXY"] = "huawei.com,myhuaweicloud.com,huaweicloud.com,127.0.0.1,localhost"
     os.environ.pop("http_proxy", None)
     os.environ.pop("https_proxy", None)
     os.environ.pop("HTTP_PROXY", None)

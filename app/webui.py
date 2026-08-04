@@ -3259,42 +3259,62 @@ async def resolve_session_approval(session_id: str, approval_id: str, request: R
             decision,
             resolver=_interaction_resolver_metadata(request),
         )
-        if record.get("decision") in {"allow_once", "allow_session", "allow_always"}:
+        decision_value = str(record.get("decision") or "")
+        if decision_value in {
+            "allow_once",
+            "allow_session",
+            "allow_always",
+            "allow_external_workspace",
+        }:
             security_digest = str(record.get("security_request_digest") or "").strip()
             if not security_digest:
                 raise ValueError("approval is not bound to a security request")
             from security import add_approval_grant, add_permission_rule
 
-            rule_action = str(record.get("rule_action") or "").strip()
-            rule_pattern = str(record.get("rule_pattern") or "").strip()
-            if (
-                record.get("decision") == "allow_always"
-                and rule_action
-                and rule_pattern
-            ):
-                # "始终允许同类操作" writes a durable pattern rule (like
-                # Claude Code's Bash(git push:*) / Read(src/**)), so changing
-                # arguments no longer triggers a fresh approval.
-                add_permission_rule(
-                    behavior="allow",
-                    action=rule_action,
-                    pattern=rule_pattern,
-                    source="user",
-                    session_id=session_id,
-                )
-            else:
+            if decision_value == "allow_external_workspace":
+                # One-time grant of the workspace-outside handling permission:
+                # write / delete / shell operations outside the workspace no
+                # longer ask, until the user turns it off in settings.
+                from security import update_security_settings
+
+                update_security_settings(allow_external_workspace_ops=True)
                 add_approval_grant(
                     session_id,
                     security_digest,
-                    str(record.get("decision")),
+                    "allow_once",
                 )
+            else:
+                rule_action = str(record.get("rule_action") or "").strip()
+                rule_pattern = str(record.get("rule_pattern") or "").strip()
+                if (
+                    decision_value == "allow_always"
+                    and rule_action
+                    and rule_pattern
+                ):
+                    # "始终允许同类操作" writes a durable pattern rule (like
+                    # Claude Code's Bash(git push:*) / Read(src/**)), so changing
+                    # arguments no longer triggers a fresh approval.
+                    add_permission_rule(
+                        behavior="allow",
+                        action=rule_action,
+                        pattern=rule_pattern,
+                        source="user",
+                        session_id=session_id,
+                    )
+                else:
+                    add_approval_grant(
+                        session_id,
+                        security_digest,
+                        decision_value,
+                    )
         # Wake the compatibility Future used by the current Agent Loop.
         from tool_approval_gate import resolve_tool_approval
 
         resolve_tool_approval(
             session_id,
             approval_id,
-            record.get("decision") in {"allow_once", "allow_session", "allow_always"},
+            decision_value
+            in {"allow_once", "allow_session", "allow_always", "allow_external_workspace"},
         )
         await publish_session_event(session_id, {"type": "approval_resolved", **record})
         return JSONResponse(content={"ok": True, "approval": record})
@@ -5386,6 +5406,7 @@ _ENV_GROUP_ORDER: list[tuple[str, str, list[str]]] = [
             "TODO_MAX_ITEMS",
             "MAX_PARALLEL_TOOLS",
             "SECURITY_ENABLED",
+            "MCP_REGISTRATION_APPROVAL_ENABLED",
             "ASK_USER_ENABLED",
             "GOAL_ENABLED",
             "GOAL_RUNNER_POLL_SECONDS",
@@ -5461,6 +5482,7 @@ for _gid, _title, _keys in _ENV_GROUP_ORDER:
 
 _ENV_HINTS: dict[str, str] = {
     "SECURITY_ENABLED": "0（默认）强制使用完全访问并隐藏前端权限选择；设为 1 时启用请求批准 / 替我审批 / 完全访问三档权限，并恢复此前保存的全局权限模式。保存后立即生效，页面刷新后更新界面。",
+    "MCP_REGISTRATION_APPROVAL_ENABLED": "0（默认）关闭 MCP 注册审批：新配置直接连接、无需人工确认；1/true/yes/on 启用首次注册或配置摘要变化后的人工确认。保存后立即刷新 MCP。",
     "ASK_USER_ENABLED": "0（默认）禁止主 Agent 创建 ask_user 问题；1/true/yes/on 启用。已有待回答问题仍可处理，工具审批不受影响。保存后立即生效。",
     "GOAL_ENABLED": "1（默认）启用持久 Goal、Goal 工具和服务端自动续跑；0/false/no/off 禁用。修改后需重启 Agent。",
     "GOAL_RUNNER_POLL_SECONDS": "服务端 Goal 调度器扫描 active Goal 的间隔秒数，默认 2，最小 0.5。修改后需重启 Agent。",
@@ -5480,7 +5502,7 @@ _ENV_HINTS: dict[str, str] = {
     "HOOKS_ENABLED": "1（默认）启用生命周期 Hook；0/false/no/off 会跳过项目与插件 Hook。按次读取，保存后立即生效。",
     "PLUGINS_ENABLED": "1（默认）启用插件发现、组件合并与 Worker Runtime；0/false/no/off 会移除插件 Tool、Hook、Command、MCP、Skill、Agent 与 Prompt。",
     "HOOKS_PATH": "可选 hooks.json 路径；留空时使用 WORK_DIR/hooks.json。",
-    "PLUGINS_DIR": "单个插件发现目录；留空时使用项目 plugins 与 ~/.myagent/plugins。",
+    "PLUGINS_DIR": "单个插件发现目录；留空时使用项目 plugins 与用户数据根目录下的 plugins（Windows: %LOCALAPPDATA%\\SugarAgent\\plugins；POSIX: ~/.local/state/sugaragent/plugins）。",
     "PLUGINS_DIRS": "多个插件发现目录，使用系统 PATH 分隔符（Windows 为分号）；优先于 PLUGINS_DIR。",
     "PLUGINS_STATE_PATH": "插件启用/禁用状态 JSON；采用原子替换写入。",
     "CONTEXT_TOKEN_MODE": "上下文 token 统计模式：hybrid=API usage + 本地计算混合；calculated=只使用本地计算。",
@@ -5495,7 +5517,7 @@ _ENV_HINTS: dict[str, str] = {
     "HTTP_PROXY": "HTTP 代理（可选）。",
     "WEB_DOWNLOAD_MAX_BYTES": "web_download 单次下载字节上限。",
     "TOOL_UI_APPROVAL": "中央权限策略需要用户审批时在浏览器显示确认；该安全路径不可由环境变量关闭。",
-    "TOOL_UI_APPROVAL_WAIT_SEC": "等待用户在 UI 内确认的最长时间（秒），超时视为拒绝。",
+    "TOOL_UI_APPROVAL_WAIT_SEC": "可选：留空或 0 表示工具审批不限时等待用户确认；设置正整数（秒）则超时视为拒绝。",
     "OPENAI_HTTP_TIMEOUT": "兼容 API 请求超时（秒）。",
     "OPENAI_MAX_RETRIES": "可重试错误时的最大重试次数。",
     "NETWORK_RECONNECT_MAX_ATTEMPTS": "模型网络错误的快速重连次数；本机离线时等待网络恢复，其他错误达到上限后进入常规模型回退。",
@@ -5813,6 +5835,17 @@ async def install_plugin_dependencies_api(plugin_id: str):
         return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
 
 
+@fastapi_app.get("/api/mcp/tools")
+async def list_mcp_tools():
+    try:
+        await agent_mcp.ensure_started()
+        tools = await asyncio.to_thread(agent_mcp.list_registered_tools)
+        return JSONResponse({"ok": True, "tools": tools})
+    except Exception as exc:
+        logger.warning("MCP tools snapshot failed: %s", exc)
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
+
+
 @fastapi_app.get("/api/mcp_config")
 async def get_mcp_config_snapshot():
     from security.extensions import mcp_registration_candidates
@@ -5869,6 +5902,7 @@ async def get_env_snapshot():
     existing_keys = {str(row.get("key") or "") for row in flat}
     for key, default in {
         "SECURITY_ENABLED": "0",
+        "MCP_REGISTRATION_APPROVAL_ENABLED": "0",
         "ASK_USER_ENABLED": "0",
         "GOAL_ENABLED": "1",
         "GOAL_RUNNER_POLL_SECONDS": "2",
@@ -6062,6 +6096,10 @@ async def save_env_snapshot(req: _Request):
     env_path.parent.mkdir(parents=True, exist_ok=True)
     env_path.write_text(merged, encoding="utf-8")
     refresh_executor_client_from_env()
+    if "MCP_REGISTRATION_APPROVAL_ENABLED" in normalized:
+        os.environ["MCP_REGISTRATION_APPROVAL_ENABLED"] = normalized[
+            "MCP_REGISTRATION_APPROVAL_ENABLED"
+        ]
     extension_keys = {
         "HOOKS_ENABLED",
         "HOOKS_PATH",
@@ -6070,6 +6108,7 @@ async def save_env_snapshot(req: _Request):
         "PLUGINS_DIRS",
         "PLUGINS_STATE_PATH",
         "MCP_ENABLED",
+        "MCP_REGISTRATION_APPROVAL_ENABLED",
     }
     if extension_keys.intersection(normalized):
         try:
@@ -6262,3 +6301,63 @@ async def _config_check(req: _Request, call_next):
     if not _is_configured():
         return _RedirectResponse(url="/setup")
     return await call_next(req)
+
+
+def _warm_ui_caches() -> None:
+    """Prime slow first-hit caches in the background.
+
+    Skills discovery walks a large project skill tree, the extensions snapshot
+    loads the plugin/hook registry, and the Runtime V2 history projection
+    builds per-session UI pages. Warming them a few seconds after startup moves
+    that cost out of the first page/skill-popover open.
+    """
+    import time as _warm_time
+
+    def _run() -> None:
+        # Delay inside the worker.  Sleeping before Thread.start() blocks the
+        # FastAPI startup event and adds a fixed two seconds to service
+        # readiness, which defeats the purpose of background warm-up.
+        try:
+            _warm_time.sleep(2.0)
+        except Exception:
+            return
+        try:
+            from agent_tools import discover_skills
+
+            discover_skills(include_disabled=True)
+        except Exception:
+            logger.debug("Skills cache warm-up failed", exc_info=True)
+        try:
+            from agent_extensions import extensions_snapshot
+
+            extensions_snapshot()
+        except Exception:
+            logger.debug("Extensions snapshot warm-up failed", exc_info=True)
+        try:
+            from runtime_v2 import runtime_v2_primary
+
+            if not runtime_v2_primary():
+                return
+            from runtime_v2.ui_projection import RuntimeUiProjection
+
+            projection = RuntimeUiProjection(
+                session_manager.repository.sessions_dir,
+                path_resolver=session_manager._resolve_session_path,
+            )
+            for row in session_manager.list_sessions(include_archived=False)[:12]:
+                sid = str((row or {}).get("id") or "").strip()
+                if not sid:
+                    continue
+                try:
+                    projection.read_ui_page(sid, turns=5)
+                except Exception:
+                    logger.debug("History warm-up skipped session=%s", sid, exc_info=True)
+        except Exception:
+            logger.debug("History cache warm-up failed", exc_info=True)
+
+    threading.Thread(target=_run, name="ui-cache-warmup", daemon=True).start()
+
+
+@fastapi_app.on_event("startup")
+async def _schedule_ui_cache_warmup() -> None:
+    _warm_ui_caches()

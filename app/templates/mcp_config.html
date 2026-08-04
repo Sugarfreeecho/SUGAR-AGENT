@@ -292,6 +292,89 @@
     cursor: default;
     opacity: 0.92;
   }
+
+  .modal-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 50;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 1rem;
+    background: rgba(5, 6, 18, 0.62);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.18s ease;
+  }
+  :root.theme-light .modal-overlay { background: rgba(30, 32, 48, 0.38); }
+  .modal-overlay.is-open { opacity: 1; pointer-events: auto; }
+  .modal-card {
+    width: min(480px, 100%);
+    background: var(--surface-glass);
+    border: 1px solid var(--border-brand-accent);
+    border-radius: 18px;
+    box-shadow: var(--shadow-soft), var(--shadow-brand-glow);
+    padding: 1.4rem 1.4rem 1.2rem;
+    transform: translateY(10px) scale(0.98);
+    transition: transform 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  }
+  :root.theme-light .modal-card { background: var(--surface-glass2); }
+  .modal-overlay.is-open .modal-card { transform: none; }
+  .modal-head {
+    display: flex;
+    align-items: center;
+    gap: 0.7rem;
+    margin-bottom: 1rem;
+  }
+  .modal-shield {
+    width: 40px;
+    height: 40px;
+    flex: 0 0 40px;
+    border-radius: 12px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: linear-gradient(135deg, rgba(99,102,241,0.18), rgba(139,92,246,0.18));
+    border: 1px solid var(--border-brand-accent);
+    color: #c4bafc;
+  }
+  .modal-title { font-size: 1.05rem; font-weight: 800; letter-spacing: -0.01em; }
+  .modal-sub { font-size: 0.75rem; color: var(--text-tertiary); margin-top: 0.12rem; word-break: break-all; }
+  .modal-body { max-height: 44vh; overflow: auto; }
+  .reg-row {
+    display: flex;
+    gap: 0.75rem;
+    padding: 0.55rem 0.15rem;
+    border-bottom: 1px solid var(--border-glass);
+    font-size: 0.82rem;
+  }
+  .reg-row:last-child { border-bottom: none; }
+  .reg-label { flex: 0 0 84px; color: var(--text-tertiary); }
+  .reg-value {
+    color: var(--text-primary);
+    word-break: break-all;
+    font-family: var(--mono);
+    font-size: 0.78rem;
+    line-height: 1.5;
+  }
+  .modal-note {
+    margin-top: 0.9rem;
+    padding: 0.7rem 0.8rem;
+    border-radius: var(--radius-sm);
+    background: rgba(243,139,168,0.08);
+    border: 1px solid rgba(243,139,168,0.22);
+    color: var(--text-secondary);
+    font-size: 0.76rem;
+    line-height: 1.6;
+  }
+  .modal-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 0.6rem;
+    margin-top: 1.1rem;
+  }
 </style>
 </head>
 <body>
@@ -316,19 +399,59 @@
 </div>
 <p class="mcp-page-help-footer"><button type="button" class="mcp-help-inline-btn" tabindex="-1">如需帮助或反馈，请联系GitHub @sugarfreeecho</button></p>
 </div>
+<div class="modal-overlay" id="reg-overlay" role="dialog" aria-modal="true" aria-labelledby="reg-title" aria-hidden="true">
+  <div class="modal-card">
+    <div class="modal-head">
+      <div class="modal-shield">
+        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M12 3l7 3v5c0 4.5-3 8.3-7 10-4-1.7-7-5.5-7-10V6z"/><path d="M9.2 11.8l2 2 3.8-4"/>
+        </svg>
+      </div>
+      <div>
+        <div class="modal-title" id="reg-title">注册 MCP 服务器</div>
+        <div class="modal-sub" id="reg-sub"></div>
+      </div>
+    </div>
+    <div class="modal-body" id="reg-body"></div>
+    <div class="modal-note" id="reg-note"></div>
+    <div class="modal-actions">
+      <button type="button" class="btn b2" id="reg-cancel">暂不连接</button>
+      <button type="button" class="btn b1" id="reg-ok">确认并连接</button>
+    </div>
+  </div>
+</div>
 <script>
 (function(){
 var pathEl=document.getElementById('cfg-path'),ta=document.getElementById('json'),st=document.getElementById('status');
 var promptedRegistrations={};
 function showSt(m,ok){st.textContent=m||'';st.className=m?('st '+(ok?'ok':'e')):'';st.style.display=m?'block':'none';}
-function registrationMessage(item){
+var regOverlay=document.getElementById('reg-overlay'),regSub=document.getElementById('reg-sub'),regBody=document.getElementById('reg-body'),regNote=document.getElementById('reg-note');
+function escHtml(s){return String(s==null?'':s).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];});}
+function closeRegistrationModal(){regOverlay.classList.remove('is-open');regOverlay.setAttribute('aria-hidden','true');}
+function openRegistrationModal(item){
 var caps=item&&item.capabilities?item.capabilities:{};
-var lines=['注册 MCP 服务器：'+String(item.name||item.extension_id||'unknown'),'','类型：'+String(item.runtime||caps.transport||'unknown'),'命令或地址：'+String(item.source||'未提供')];
-if(caps.working_directory)lines.push('工作目录：'+String(caps.working_directory));
+regSub.textContent=String(item.name||item.extension_id||'unknown');
+var rows=[['类型',String(item.runtime||caps.transport||'unknown')],['命令或地址',String(item.source||'未提供')]];
+if(caps.working_directory)rows.push(['工作目录',String(caps.working_directory)]);
 var envs=Array.isArray(caps.configured_environment)?caps.configured_environment:[];
-if(envs.length)lines.push('配置环境变量：'+envs.join(', '));
-lines.push('','确认仅允许连接服务器并发现工具；具体工具调用仍按当前权限模式审批。','该服务器将以当前操作系统用户权限运行。','', '确认并连接？');
-return lines.join('\n');
+if(envs.length)rows.push(['配置环境变量',envs.join(', ')]);
+var digest=String(item.config_digest||'');
+rows.push(['配置摘要',digest.slice(0,16)+(digest.length>16?'…':'')]);
+regBody.innerHTML=rows.map(function(r){return '<div class="reg-row"><div class="reg-label">'+escHtml(r[0])+'</div><div class="reg-value">'+escHtml(r[1])+'</div></div>';}).join('');
+regNote.textContent='确认仅允许连接服务器并发现工具；具体工具调用仍按当前权限模式审批。该服务器将以当前操作系统用户权限运行。';
+regOverlay.classList.add('is-open');regOverlay.setAttribute('aria-hidden','false');
+return new Promise(function(resolve){
+var okBtn=document.getElementById('reg-ok'),cancelBtn=document.getElementById('reg-cancel');
+function done(v){cleanup();resolve(v);}
+function onKey(e){if(e.key==='Escape'){e.preventDefault();done(false);}else if(e.key==='Enter'){e.preventDefault();done(true);}}
+function cleanup(){document.removeEventListener('keydown',onKey);okBtn.removeEventListener('click',onOk);cancelBtn.removeEventListener('click',onCancel);closeRegistrationModal();}
+function onOk(){done(true);}
+function onCancel(){done(false);}
+document.addEventListener('keydown',onKey);
+okBtn.addEventListener('click',onOk);
+cancelBtn.addEventListener('click',onCancel);
+setTimeout(function(){okBtn.focus();},30);
+});
 }
 async function promptMcpRegistrations(rows){
 rows=Array.isArray(rows)?rows:[];
@@ -339,7 +462,8 @@ if(!item||item.registration_status!=='pending')continue;
 var key=String(item.extension_id||'')+':'+String(item.config_digest||'');
 if(promptedRegistrations[key])continue;
 promptedRegistrations[key]=true;
-if(!window.confirm(registrationMessage(item)))continue;
+var approved=await openRegistrationModal(item);
+if(!approved)continue;
 var r=await fetch('/api/security/mcp/'+encodeURIComponent(item.extension_id)+'/registration',{method:'POST',headers:{'Content-Type':'application/json'},credentials:'same-origin',body:JSON.stringify({approved:true,config_digest:String(item.config_digest||'')})});
 var j=await r.json();
 if(!r.ok||!j.ok)throw new Error(j.error||'MCP 注册失败');

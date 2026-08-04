@@ -210,7 +210,7 @@ class PluginInstaller:
         staging_root.mkdir(exist_ok=True)
         trash_root = install_root / ".myagent-trash"
         trash_root.mkdir(exist_ok=True)
-        with tempfile.TemporaryDirectory(prefix="myagent-plugin-source-") as temporary:
+        with tempfile.TemporaryDirectory(prefix="sugaragent-plugin-source-") as temporary:
             prepared = self._prepare_source(source, Path(temporary), ref=ref)
             source_plugin = self._plugin_from_source(prepared)
             self._check_plugin_dependencies(source_plugin)

@@ -181,3 +181,67 @@ def test_mcp_registration_endpoint_rejects_non_boolean_decision():
     )
 
     assert response.status_code == 422
+
+
+def test_list_registered_tools_returns_sorted_snapshot(monkeypatch):
+    import agent_mcp
+
+    monkeypatch.setattr(
+        agent_mcp,
+        "_fname_to_tool",
+        {
+            "mcp_b_alpha": ("server-b", "alpha"),
+            "mcp_a_beta": ("server-a", "beta"),
+        },
+    )
+    monkeypatch.setattr(
+        agent_mcp,
+        "_defs_snapshot",
+        [
+            {
+                "type": "function",
+                "function": {
+                    "name": "mcp_b_alpha",
+                    "description": "[MCP server `server-b`] Alpha tool",
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "mcp_a_beta",
+                    "description": "[MCP server `server-a`] Beta tool",
+                },
+            },
+        ],
+    )
+
+    tools = agent_mcp.list_registered_tools()
+
+    assert [t["server"] for t in tools] == ["server-a", "server-b"]
+    assert tools[0] == {
+        "function_name": "mcp_a_beta",
+        "server": "server-a",
+        "tool_name": "beta",
+        "description": "[MCP server `server-a`] Beta tool",
+    }
+    assert tools[1]["tool_name"] == "alpha"
+
+
+def test_mcp_tools_endpoint_returns_registered_tools(monkeypatch):
+    import webui
+
+    async def ensure_started():
+        return None
+
+    def list_registered_tools():
+        return [{"function_name": "mcp_demo_x", "server": "demo", "tool_name": "x"}]
+
+    monkeypatch.setattr(webui.agent_mcp, "ensure_started", ensure_started)
+    monkeypatch.setattr(webui.agent_mcp, "list_registered_tools", list_registered_tools)
+
+    response = asyncio.run(webui.list_mcp_tools())
+
+    assert response.status_code == 200
+    body = json.loads(response.body)
+    assert body["ok"] is True
+    assert body["tools"] == [{"function_name": "mcp_demo_x", "server": "demo", "tool_name": "x"}]

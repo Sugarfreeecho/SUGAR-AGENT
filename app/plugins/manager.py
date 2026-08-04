@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import copy
+import logging
 import os
+import shutil
 import threading
 from pathlib import Path
 from typing import Dict, Iterable, List, Mapping, Optional
@@ -26,7 +28,62 @@ from .security import (
 from .state import PluginStateStore
 
 
+logger = logging.getLogger(__name__)
 _FALSE_VALUES = {"0", "false", "no", "off"}
+
+
+def _migrate_legacy_path(new: Path, legacy: Path) -> Path:
+    """Move a legacy ``.myagent`` state path to ``.sugaragent`` once."""
+    if legacy.exists() and not new.exists():
+        try:
+            new.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(legacy), str(new))
+            logger.info("Migrated %s -> %s", legacy, new)
+        except OSError:
+            logger.warning(
+                "Could not migrate %s to %s; keeping the legacy path",
+                legacy,
+                new,
+                exc_info=True,
+            )
+            return legacy
+    return new
+
+
+def _user_data_root() -> Path:
+    """Single per-user data root shared by all SugarAgent state."""
+    if os.name == "nt":
+        return (
+            Path(os.getenv("LOCALAPPDATA") or (Path.home() / "AppData" / "Local"))
+            / "SugarAgent"
+        )
+    return (
+        Path(os.getenv("XDG_STATE_HOME") or (Path.home() / ".local" / "state"))
+        / "sugaragent"
+    )
+
+
+def _user_plugins_dir() -> Path:
+    target = _user_data_root() / "plugins"
+    for legacy in (
+        Path.home() / ".myagent" / "plugins",
+        Path.home() / ".sugaragent" / "plugins",
+    ):
+        if not legacy.exists() or target.exists():
+            continue
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(legacy), str(target))
+            logger.info("Migrated %s -> %s", legacy, target)
+        except OSError:
+            logger.warning(
+                "Could not migrate %s to %s; keeping the legacy path",
+                legacy,
+                target,
+                exc_info=True,
+            )
+            return legacy
+    return target
 
 
 def plugins_enabled() -> bool:
@@ -49,14 +106,17 @@ def default_discovery_dirs() -> tuple[Path, ...]:
     if single:
         return (Path(single).expanduser(),)
     project_root = Path(__file__).resolve().parents[2]
-    return (project_root / "plugins", Path.home() / ".myagent" / "plugins")
+    return (project_root / "plugins", _user_plugins_dir())
 
 
 def default_state_path() -> Path:
     configured = os.getenv("PLUGINS_STATE_PATH", "").strip()
     if configured:
         return Path(configured).expanduser()
-    return Path(__file__).resolve().parents[2] / ".myagent" / "plugins-state.json"
+    return _migrate_legacy_path(
+        Path(__file__).resolve().parents[2] / ".sugaragent" / "plugins-state.json",
+        Path(__file__).resolve().parents[2] / ".myagent" / "plugins-state.json",
+    )
 
 
 class PluginManager:

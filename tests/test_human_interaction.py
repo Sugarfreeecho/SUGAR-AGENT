@@ -199,6 +199,33 @@ def test_resolved_approval_keeps_rule_metadata_for_rule_creation(tmp_path):
     assert resolved["rule_pattern"] == "git push:*"
 
 
+def test_tool_approval_wait_defaults_to_no_timeout(monkeypatch):
+    from app import tool_approval_gate
+
+    monkeypatch.delenv("TOOL_UI_APPROVAL_WAIT_SEC", raising=False)
+    assert tool_approval_gate.approval_wait_seconds() is None
+    for value in ("0", "0.0", "", "abc"):
+        monkeypatch.setenv("TOOL_UI_APPROVAL_WAIT_SEC", value)
+        assert tool_approval_gate.approval_wait_seconds() is None, value
+    monkeypatch.setenv("TOOL_UI_APPROVAL_WAIT_SEC", "120")
+    assert tool_approval_gate.approval_wait_seconds() == 120.0
+
+
+def test_approval_record_has_no_expiry_by_default(tmp_path, monkeypatch):
+    monkeypatch.delenv("TOOL_UI_APPROVAL_WAIT_SEC", raising=False)
+    service = _service(tmp_path)
+    created = service.create_approval("session-1", approval_id="approval-no-expiry")
+    assert created["status"] == "pending"
+    assert created["expires_at"] is None
+
+
+def test_approval_record_expires_when_timeout_configured(tmp_path, monkeypatch):
+    monkeypatch.setenv("TOOL_UI_APPROVAL_WAIT_SEC", "60")
+    service = _service(tmp_path)
+    created = service.create_approval("session-1", approval_id="approval-expiry")
+    assert created["expires_at"] is not None
+
+
 def test_frontend_human_interaction_contract_is_wired():
     from pathlib import Path
 
@@ -226,23 +253,23 @@ def test_frontend_human_interaction_contract_is_wired():
     assert "始终允许此类操作" in module
     assert "resolveHumanApproval(card, 'allow_session')" in module
     assert "if (!forced)" in module
-    # Tool rows fold as a whole (command + approval card). They default to a
-    # compact preview; a row with a pending approval renders expanded, clicking
-    # the command text toggles the same row fold, and the banner focus expands
-    # both a collapsed row and the outer process block.
+    # Tool rows fold as a whole (command + approval card). They stay expanded
+    # until the tool result arrives, then auto-fold to a compact preview;
+    # manual fold takes priority, clicking the command text toggles the same
+    # row fold, and the banner focus expands both a collapsed row and the
+    # outer process block.
     assert "feed-row-collapse" in rendering
     assert "row.classList.toggle('is-collapsed')" in rendering
     assert "collapsedRow.classList.remove('is-collapsed')" in module
-    assert "row.classList.add('is-collapsed')" in rendering
     assert "row.dataset.manualToggle = '1'" in rendering
     assert "function handleToolRowChunkClick" in rendering
     assert "row.classList.contains('feed--tool')" in rendering
     assert "collapsedAgg.classList.remove('is-collapsed')" in module
-    assert "function toolCallHasPendingApproval" in module
-    assert "function autoExpandToolRow" in module
-    assert "function collapseAutoExpandedToolRow" in module
-    assert "autoExpandToolRow(slot.closest('.feed-item'))" in module
-    assert "collapseAutoExpandedToolRow(stream, toolCallId)" in module
+    assert "function autoCollapseToolRowAfterResult" in rendering
+    assert "autoCollapseToolRowAfterResult(row)" in rendering
+    assert "function toolCallHasPendingApproval" not in module
+    assert "function autoExpandToolRow" not in module
+    assert "function collapseAutoExpandedToolRow" not in module
     # History replay must route tool_call events through the same upsert path
     # as live SSE so the tool row carries data-tool-call-id and approval cards
     # can be re-anchored after a page refresh.
@@ -362,7 +389,7 @@ def test_pending_approval_refresh_restores_card_badge_and_banner_contract(tmp_pa
 
     root = Path(__file__).resolve().parents[1]
     layout = (root / "frontend/src/app/modules/layout-panels.js").read_text(encoding="utf-8")
-    restore_call = "await refreshHumanInteractions(targetSession, { render: false });"
+    restore_call = "void refreshHumanInteractions(targetSession, { render: false });"
     switch_call = "if (targetSession) await switchSession(targetSession);"
     assert layout.index(restore_call) < layout.index(switch_call)
 

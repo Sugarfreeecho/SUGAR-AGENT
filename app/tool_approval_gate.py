@@ -23,11 +23,28 @@ _PENDING: Dict[Tuple[str, str], asyncio.Future] = {}
 _PENDING_META: Dict[Tuple[str, str], Dict[str, Any]] = {}
 _PENDING_LOCK = threading.RLock()
 
-_WAIT_SEC = float(os.getenv("TOOL_UI_APPROVAL_WAIT_SEC", "300"))
-
-
 class ApprovalPersistenceError(RuntimeError):
     """Raised when an approval cannot be durably recorded before presentation."""
+
+
+def approval_wait_seconds() -> Optional[float]:
+    """Return the optional tool-approval wait timeout in seconds.
+
+    ``TOOL_UI_APPROVAL_WAIT_SEC`` unset, empty, or <= 0 means approvals wait
+    indefinitely for the user (no timeout). A positive value keeps the legacy
+    behavior where an unanswered approval times out and is denied.
+    """
+    raw = (os.getenv("TOOL_UI_APPROVAL_WAIT_SEC") or "").strip()
+    if not raw:
+        return None
+    try:
+        value = float(raw)
+    except ValueError:
+        return None
+    return value if value > 0 else None
+
+
+_WAIT_SEC = approval_wait_seconds()
 
 
 def new_approval_id() -> str:
@@ -185,22 +202,28 @@ async def wait_tool_ui_approval_after_emit(
     poll = asyncio.create_task(_interrupt_poll_until_done(session_id, fut))
     try:
         await emit_coro()
-        allowed = await asyncio.wait_for(fut, timeout=max(30.0, _WAIT_SEC))
+        if _WAIT_SEC is None:
+            allowed = await fut
+        else:
+            try:
+                allowed = await asyncio.wait_for(fut, timeout=max(30.0, _WAIT_SEC))
+            except asyncio.TimeoutError:
+                if not fut.done():
+                    fut.set_result(False)
+                if durable_service is not None:
+                    try:
+                        durable_service.expire(
+                            key[0], key[1], kind="approval", reason="approval_timeout"
+                        )
+                    except Exception:
+                        pass
+                return False
         if not allowed and durable_service is not None:
             try:
                 durable_service.cancel(key[0], key[1], kind="approval", reason="approval_wait_ended")
             except Exception:
                 pass
         return bool(allowed)
-    except asyncio.TimeoutError:
-        if not fut.done():
-            fut.set_result(False)
-        if durable_service is not None:
-            try:
-                durable_service.expire(key[0], key[1], kind="approval", reason="approval_timeout")
-            except Exception:
-                pass
-        return False
     except asyncio.CancelledError:
         if durable_service is not None:
             try:

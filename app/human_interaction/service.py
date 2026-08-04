@@ -40,6 +40,7 @@ def ask_user_enabled() -> bool:
 _TERMINAL = {"resolved", "cancelled", "expired"}
 _WAITERS: Dict[tuple[str, str, str], asyncio.Future] = {}
 _WAITERS_LOCK = threading.RLock()
+_PENDING_COUNTS_TTL_SECONDS = 1.0
 
 
 def _clean_text(value: Any, field: str, *, maximum: int, required: bool = True) -> str:
@@ -146,6 +147,8 @@ class HumanInteractionService:
         root = root or session_manager.repository.sessions_dir
         path_resolver = path_resolver or getattr(session_manager, "_resolve_session_path", None)
         self.mirror = RuntimeMirror(root, path_resolver=path_resolver)
+        self._pending_counts_cache: Dict[str, tuple[float, dict]] = {}
+        self._pending_counts_lock = threading.RLock()
 
     def _snapshot(self, session_id: str) -> dict:
         return self.mirror.snapshots.read_consistent(
@@ -165,6 +168,8 @@ class HumanInteractionService:
             session_id, snapshot, self.mirror.event_log.event_path(session_id)
         )
         self.mirror.snapshots.write_checkpointed(session_id, snapshot)
+        with self._pending_counts_lock:
+            self._pending_counts_cache.pop(str(session_id or "").strip(), None)
         return event, snapshot
 
     def create_question(
@@ -230,10 +235,17 @@ class HumanInteractionService:
             "request_version": 1,
             **meta,
         }
-        expires_at = datetime.fromtimestamp(
-            time.time() + max(30.0, float(os.getenv("TOOL_UI_APPROVAL_WAIT_SEC", "300"))),
-            tz=timezone.utc,
-        ).isoformat()
+        from tool_approval_gate import approval_wait_seconds
+
+        wait_seconds = approval_wait_seconds()
+        expires_at = (
+            datetime.fromtimestamp(
+                time.time() + wait_seconds,
+                tz=timezone.utc,
+            ).isoformat()
+            if wait_seconds is not None
+            else None
+        )
         record = {
             **request_core,
             "status": "pending",
@@ -267,10 +279,19 @@ class HumanInteractionService:
         return dict(row)
 
     def pending_counts(self, session_id: str) -> dict:
+        sid = str(session_id or "").strip()
+        now = time.monotonic()
+        with self._pending_counts_lock:
+            cached = self._pending_counts_cache.get(sid)
+            if cached is not None and now - cached[0] <= _PENDING_COUNTS_TTL_SECONDS:
+                return dict(cached[1])
         snapshot = self._snapshot(session_id)
         questions = len(list(snapshot.get("pending_interactions") or []))
         approvals = len(list(snapshot.get("pending_approvals") or []))
-        return {"questions": questions, "approvals": approvals, "total": questions + approvals}
+        counts = {"questions": questions, "approvals": approvals, "total": questions + approvals}
+        with self._pending_counts_lock:
+            self._pending_counts_cache[sid] = (now, counts)
+        return dict(counts)
 
     def resolve_question(self, session_id: str, interaction_id: str, answers: Any, *, resolver: Optional[dict] = None) -> dict:
         sid = str(session_id or "").strip()
@@ -299,9 +320,16 @@ class HumanInteractionService:
         sid = str(session_id or "").strip()
         aid = str(approval_id or "").strip()
         normalized_decision = str(decision or "").strip().lower().replace("-", "_")
-        if normalized_decision not in {"allow_once", "allow_session", "allow_always", "deny"}:
+        if normalized_decision not in {
+            "allow_once",
+            "allow_session",
+            "allow_always",
+            "allow_external_workspace",
+            "deny",
+        }:
             raise HumanInteractionValidationError(
-                "decision must be allow_once, allow_session, allow_always, or deny"
+                "decision must be allow_once, allow_session, allow_always, "
+                "allow_external_workspace, or deny"
             )
         with self.mirror.event_log.session_transaction(sid):
             record = dict(self._snapshot(sid).get("approvals") or {}).get(aid)
@@ -311,7 +339,8 @@ class HumanInteractionService:
                 return dict(record)
             if (
                 bool(record.get("force_approval"))
-                and normalized_decision in {"allow_session", "allow_always"}
+                and normalized_decision
+                in {"allow_session", "allow_always", "allow_external_workspace"}
             ):
                 raise HumanInteractionValidationError(
                     "Dangerous approvals only support allow_once or deny"

@@ -4,6 +4,8 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
+from remote_control.config import migrate_legacy_state_dir
+
 
 def _bool_env(name: str, default: bool) -> bool:
     value = os.getenv(name)
@@ -47,7 +49,10 @@ class FeishuConfig:
         state_dir = (
             Path(configured_dir).expanduser()
             if configured_dir
-            else Path(project_root) / ".myagent" / "feishu"
+            else migrate_legacy_state_dir(
+                Path(project_root) / ".sugaragent" / "feishu",
+                Path(project_root) / ".myagent" / "feishu",
+            )
         )
         scope = os.getenv("FEISHU_SESSION_SCOPE", "chat").strip().lower()
         if scope not in {"chat", "thread"}:

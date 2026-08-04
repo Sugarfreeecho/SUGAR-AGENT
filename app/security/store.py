@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import sqlite3
@@ -11,6 +12,7 @@ from typing import Any, Iterable
 
 
 CURRENT_POLICY_VERSION = 3
+logger = logging.getLogger(__name__)
 
 
 def security_state_dir() -> Path:
@@ -18,11 +20,60 @@ def security_state_dir() -> Path:
     if override:
         root = Path(override).expanduser()
     elif os.name == "nt":
+        root = Path(os.getenv("LOCALAPPDATA") or Path.home() / "AppData" / "Local") / "SugarAgent" / "security"
+    else:
+        root = Path(os.getenv("XDG_STATE_HOME") or Path.home() / ".local" / "state") / "sugaragent" / "security"
+    root.mkdir(parents=True, exist_ok=True)
+    return root.resolve()
+
+
+def _legacy_security_dir() -> Path | None:
+    """Return the pre-rename state directory when it still exists."""
+    if os.getenv("MYAGENT_SECURITY_HOME"):
+        return None
+    if os.name == "nt":
         root = Path(os.getenv("LOCALAPPDATA") or Path.home() / "AppData" / "Local") / "MyAgent" / "security"
     else:
         root = Path(os.getenv("XDG_STATE_HOME") or Path.home() / ".local" / "state") / "myagent" / "security"
-    root.mkdir(parents=True, exist_ok=True)
-    return root.resolve()
+    root = root.resolve()
+    return root if root.is_dir() else None
+
+
+def _migrate_legacy_security_dir(target: Path) -> None:
+    """Copy a pre-rename security database into the current state directory.
+
+    The legacy directory is kept intact as a backup. Migration runs only when
+    the new location has no database yet, so existing approvals (MCP
+    registration, plugin trust, permission rules, grants, audit events)
+    survive the rename. A locked or corrupt legacy database must never block
+    startup, so failures fall back to an empty store at the new path.
+    """
+    legacy = _legacy_security_dir()
+    if legacy is None or legacy == target.resolve():
+        return
+    source_db = legacy / "security.sqlite3"
+    if not source_db.is_file():
+        return
+    if (target / "security.sqlite3").is_file():
+        return
+    try:
+        target.mkdir(parents=True, exist_ok=True)
+        source = sqlite3.connect(str(source_db), timeout=5)
+        try:
+            destination = sqlite3.connect(str(target / "security.sqlite3"), timeout=5)
+            try:
+                source.backup(destination)
+            finally:
+                destination.close()
+        finally:
+            source.close()
+        logger.info("Migrated security store from %s to %s", source_db, target / "security.sqlite3")
+    except Exception:
+        logger.warning(
+            "Could not migrate legacy security store from %s; starting with an empty store",
+            source_db,
+            exc_info=True,
+        )
 
 
 class SecurityStore:
@@ -30,6 +81,8 @@ class SecurityStore:
 
     def __init__(self, path: Path | None = None):
         self.path = (path or security_state_dir() / "security.sqlite3").resolve()
+        if path is None:
+            _migrate_legacy_security_dir(self.path.parent)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.RLock()
         self._init()
@@ -101,6 +154,8 @@ class SecurityStore:
                 );
                 INSERT OR IGNORE INTO security_settings(key, value)
                     VALUES('auto_review_enabled', 'false');
+                INSERT OR IGNORE INTO security_settings(key, value)
+                    VALUES('allow_external_workspace_ops', 'false');
                 INSERT OR IGNORE INTO security_settings(key, value)
                     VALUES('permission_mode', 'ask_for_approval');
                 INSERT OR IGNORE INTO security_settings(key, value)

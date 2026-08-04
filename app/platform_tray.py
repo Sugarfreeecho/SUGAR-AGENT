@@ -38,7 +38,10 @@ def single_instance_lock() -> Iterator[bool]:
 
     import fcntl
 
-    runtime = Path(os.getenv("XDG_RUNTIME_DIR") or (Path.home() / ".cache"))
+    runtime = Path(
+        os.getenv("XDG_RUNTIME_DIR")
+        or (Path.home() / ".local" / "state" / "sugaragent")
+    )
     runtime.mkdir(parents=True, exist_ok=True)
     lock_path = runtime / "sugaragent-tray.lock"
     handle = lock_path.open("a+b")

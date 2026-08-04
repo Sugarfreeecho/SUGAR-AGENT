@@ -7,6 +7,8 @@ from pathlib import Path
 from typing import Any, Mapping
 from urllib.parse import urlsplit
 
+from trusted_domains import is_trusted_host, is_trusted_url
+
 from .runtime import security_store
 
 
@@ -35,6 +37,7 @@ _SECRET_MARKERS = (
     "CREDENTIAL",
     "COOKIE",
 )
+MCP_REGISTRATION_APPROVAL_ENV = "MCP_REGISTRATION_APPROVAL_ENABLED"
 
 
 def minimal_extension_environment(
@@ -154,11 +157,30 @@ def descriptor_is_trusted(descriptor: Mapping[str, Any]) -> bool:
     )
 
 
+def _descriptor_source_is_trusted(descriptor: Mapping[str, Any]) -> bool:
+    source = str(descriptor.get("source") or "")
+    return is_trusted_url(source) or is_trusted_host(source)
+
+
+def mcp_registration_approval_enabled() -> bool:
+    """Whether MCP registration requires one human confirmation per config.
+
+    ``MCP_REGISTRATION_APPROVAL_ENABLED`` defaults to off: MCP servers start
+    without a registration prompt. Set it to ``1``/``true``/``yes``/``on`` to
+    restore the one-time per-config human confirmation gate.
+    """
+    value = (os.getenv(MCP_REGISTRATION_APPROVAL_ENV) or "0").strip().lower()
+    return value not in ("0", "false", "no", "off")
+
+
 def mcp_registration_is_approved(descriptor: Mapping[str, Any]) -> bool:
-    return (
-        str(descriptor.get("kind") or "").strip().lower() == "mcp"
-        and descriptor_is_trusted(descriptor)
-    )
+    if str(descriptor.get("kind") or "").strip().lower() != "mcp":
+        return False
+    if not mcp_registration_approval_enabled():
+        return True
+    if _descriptor_source_is_trusted(descriptor):
+        return True
+    return descriptor_is_trusted(descriptor)
 
 
 def descriptor_decision(descriptor: Mapping[str, Any]) -> str:
@@ -167,6 +189,10 @@ def descriptor_decision(descriptor: Mapping[str, Any]) -> str:
     ``pending`` includes both first-seen extensions and extensions whose
     executable content/configuration changed after an earlier decision.
     """
+    if descriptor.get("kind") == "mcp" and not mcp_registration_approval_enabled():
+        return "trusted"
+    if descriptor.get("kind") == "mcp" and _descriptor_source_is_trusted(descriptor):
+        return "trusted"
     row = security_store().get_extension_trust(
         kind=str(descriptor.get("kind") or ""),
         extension_id=str(descriptor.get("extension_id") or ""),

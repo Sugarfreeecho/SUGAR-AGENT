@@ -10,6 +10,8 @@ from pathlib import Path
 from typing import Any, Iterator
 from urllib.parse import urlsplit
 
+from trusted_domains import normalize_host
+
 from .models import (
     CapabilityRequest,
     DecisionOutcome,
@@ -39,6 +41,15 @@ _ACTIVE_CONTEXT: contextvars.ContextVar[dict[str, Any] | None] = contextvars.Con
 )
 _STORE: SecurityStore | None = None
 SECURITY_ENABLED_ENV_VAR = "SECURITY_ENABLED"
+
+# Policy ASK categories that the one-time "workspace-outside handling
+# permission" (write / delete / shell) may auto-allow once the user grants it.
+# Read (fs.read), network, dynamic/destructive shell, credential export and
+# policy tampering stay on their own paths and are never covered by it.
+EXTERNAL_OPS_GRANTABLE_RULES = frozenset(
+    {"external.write", "delete.review", "process.external"}
+)
+
 _NETWORK_COMMAND = re.compile(
     r"(?i)(?:https?://|\b(?:curl|wget|invoke-webrequest|invoke-restmethod|iwr|irm)\b|"
     r"\bgit\s+(?:clone|fetch|pull|push)\b|\b(?:pip|pip3|npm|pnpm|yarn)\s+install\b|"
@@ -210,6 +221,7 @@ def classify_tool(tool_name: str, arguments: dict[str, Any], workspace: Path) ->
                 "tool": name,
                 "declared": bool(contract.get("declared") and effect),
                 "network": bool(contract.get("network")),
+                "server_source": str(contract.get("server_source") or ""),
                 "paths": _declared_paths(args, contract, workspace),
                 "contract": contract,
             },
@@ -244,10 +256,16 @@ def classify_tool(tool_name: str, arguments: dict[str, Any], workspace: Path) ->
                 _agent_self_protection_reason,
                 _is_dangerous,
                 _paths_inside_workspace,
+                _readonly_git_scope_ok,
                 _text_mentions_sensitive_tool_resource,
             )
 
             external = not _paths_inside_workspace(command, workspace)
+            # Read-only git invocations (log/status/rev-parse/...) may point at
+            # a repository outside the workspace via -C/--git-dir/--work-tree.
+            # That is a pure read and should not count as external access.
+            if external and _readonly_git_scope_ok(command, workspace):
+                external = False
             workdir = str(args.get("workdir") or args.get("working_dir") or "").strip()
             if workdir:
                 external = external or not is_within(canonical_path(workdir, workspace), workspace)
@@ -343,9 +361,16 @@ def classify_tool(tool_name: str, arguments: dict[str, Any], workspace: Path) ->
             ):
                 action, effect = "fs.delete", "destructive"
         resource = paths[0]
+        metadata: dict[str, Any] = {"tool": name, "paths": paths}
+        if name == "delete_file":
+            # delete_file is a recoverable soft delete (moves the target into
+            # WORK_DIR/.trash/). Mark it so the policy can auto-allow it even
+            # outside the workspace; apply_patch deletions stay permanent and
+            # keep asking outside.
+            metadata["soft_delete"] = True
         return CapabilityRequest.create(
             action=action, resource=resource, effect=effect, arguments=args,
-            metadata={"tool": name, "paths": paths},
+            metadata=metadata,
         )
     if name in {
         "ask_user",
@@ -507,19 +532,33 @@ def authorize_request(
         decision.outcome == DecisionOutcome.ASK
         and not decision.constraints.get("user_rule")
     ):
-        forced = always_ask_for(decision)
-        grant = store.consume_matching_grant(
-            session_id,
-            decision.request_digest,
-            once_only=forced,
-        )
-        if grant:
+        if (
+            decision.rule_id in EXTERNAL_OPS_GRANTABLE_RULES
+            and store.get_setting("allow_external_workspace_ops")
+        ):
+            # One-time user grant: write / delete / shell operations outside
+            # the workspace run automatically from now on. Explicit user rules
+            # (deny/ask) and forced approvals already returned above.
             decision = SecurityDecision(
                 DecisionOutcome.ALLOW,
-                f"Approved by {grant} grant.",
-                f"grant.{grant}",
+                "Allowed by the workspace-outside handling permission (write/delete/shell).",
+                "grant.external_workspace_ops",
                 decision.request_digest,
             )
+        else:
+            forced = always_ask_for(decision)
+            grant = store.consume_matching_grant(
+                session_id,
+                decision.request_digest,
+                once_only=forced,
+            )
+            if grant:
+                decision = SecurityDecision(
+                    DecisionOutcome.ALLOW,
+                    f"Approved by {grant} grant.",
+                    f"grant.{grant}",
+                    decision.request_digest,
+                )
     store.audit(
         session_id=session_id,
         event_type="authorization",
@@ -605,7 +644,7 @@ _WEB_FETCH_DOMAINS_KEY = "web_fetch_preapproved_domains"
 def _normalize_domain_list(text: str) -> str:
     seen: list[str] = []
     for item in str(text or "").replace(",", "\n").splitlines():
-        host = str(item).strip().lower().rstrip(".")
+        host = normalize_host(item)
         if not host or host in seen:
             continue
         seen.append(host)
@@ -744,13 +783,16 @@ def security_settings() -> dict[str, bool]:
     return {
         "security_enabled": security_enabled(),
         "auto_review_enabled": store.get_setting("auto_review_enabled"),
+        "allow_external_workspace_ops": store.get_setting(
+            "allow_external_workspace_ops"
+        ),
         "full_access_enabled": True,
     }
 
 
 def update_security_settings(**values: bool) -> dict[str, bool]:
     store = security_store()
-    for key in ("auto_review_enabled",):
+    for key in ("auto_review_enabled", "allow_external_workspace_ops"):
         if key in values:
             store.set_setting(key, bool(values[key]))
     return security_settings()

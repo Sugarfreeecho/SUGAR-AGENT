@@ -1,6 +1,7 @@
 """
 MCP（Model Context Protocol）桥：支持 stdio / SSE / Streamable HTTP，配置变更热重载，
-注册前摘要绑定人工确认，工具调用走中央权限策略，结构化日志。
+默认免注册确认（MCP_REGISTRATION_APPROVAL_ENABLED=1 时恢复摘要绑定人工确认），
+工具调用走中央权限策略，结构化日志。
 
 配置：`PROJECT_ROOT/mcp_servers.json` 或 `MCP_SERVERS_JSON`；路径可用 `MCP_SERVERS_PATH`。
 禁用：`MCP_ENABLED=0`；未安装 `mcp` 包时跳过。
@@ -274,6 +275,7 @@ def _tool_contract_from_config(cfg: dict, tool_name: str) -> Dict[str, Any]:
         "declared": bool(raw or cfg.get("default_tool_effect")),
         "effect": effect,
         "network": _resolve_transport(cfg) in {"sse", "streamable-http"},
+        "server_source": str(cfg.get("url") or "").strip(),
         "resource_arguments": [
             str(item) for item in resource_arguments if str(item).strip()
         ],
@@ -679,6 +681,27 @@ async def ensure_started() -> None:
 async def get_tool_definitions() -> List[Dict[str, Any]]:
     await ensure_started()
     return list(_defs_snapshot)
+
+
+def list_registered_tools() -> List[Dict[str, Any]]:
+    """Return the currently registered MCP tools for UI display."""
+    descriptions = {
+        str(d.get("function", {}).get("name") or ""): str(
+            d.get("function", {}).get("description") or ""
+        )
+        for d in _defs_snapshot
+    }
+    tools = [
+        {
+            "function_name": fname,
+            "server": alias,
+            "tool_name": orig_name,
+            "description": descriptions.get(fname, ""),
+        }
+        for fname, (alias, orig_name) in _fname_to_tool.items()
+    ]
+    tools.sort(key=lambda item: (str(item["server"]).lower(), str(item["tool_name"]).lower()))
+    return tools
 
 
 def format_call_tool_result(result: Any) -> str:

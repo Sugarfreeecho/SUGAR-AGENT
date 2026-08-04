@@ -7,6 +7,8 @@ from pathlib import Path
 from typing import Iterable
 from urllib.parse import urlsplit
 
+from trusted_domains import is_trusted_host, is_trusted_url, trusted_network_command
+
 from .models import (
     CapabilityRequest,
     DecisionOutcome,
@@ -21,6 +23,7 @@ _PROTECTED_NAMES = {
     ".git",
     ".agents",
     ".myagent",
+    ".sugaragent",
     "hooks.json",
 }
 _SENSITIVE_PARTS = {
@@ -494,11 +497,28 @@ class PolicyEngine:
                 return result(DecisionOutcome.ALLOW, "app_restricted.write", "Workspace write is allowed.")
             return result(DecisionOutcome.ASK, "external.write", "Writing outside the workspace requires approval.")
         if request.action == "fs.delete":
+            soft_delete = bool(request.metadata.get("soft_delete"))
+            if inside or soft_delete:
+                # delete_file is a recoverable soft delete (moves to
+                # WORK_DIR/.trash/) and the tool itself refuses sensitive
+                # resources, sessions/skills/.trash, and oversized targets;
+                # it is an ordinary recoverable write even outside the
+                # workspace. Permanent deletion (apply_patch delete sections,
+                # shell rm/os.remove/shutil.rmtree/...) keeps asking outside.
+                return result(
+                    DecisionOutcome.ALLOW,
+                    "app_restricted.delete",
+                    (
+                        "Recoverable soft delete is allowed by the application policy."
+                        if soft_delete and not inside
+                        else "Workspace soft delete is allowed by the application policy."
+                    ),
+                )
             return result(
                 DecisionOutcome.ASK,
                 "delete.review",
-                "Deletion requires approval.",
-                outside_workspace=not inside,
+                "Permanent deletion outside the workspace requires approval.",
+                outside_workspace=True,
             )
         if request.action == "process.exec":
             if request.metadata.get("credential_export"):
@@ -530,6 +550,12 @@ class PolicyEngine:
             if request.metadata.get("external_workspace"):
                 return result(DecisionOutcome.ASK, "process.external", "Command requests access outside the workspace.")
             if request.metadata.get("network"):
+                if trusted_network_command(request.resource):
+                    return result(
+                        DecisionOutcome.ALLOW,
+                        "process.trusted_network",
+                        "Command only contacts trusted built-in Huawei domains.",
+                    )
                 return result(DecisionOutcome.ASK, "process.network", "Command may access the network.")
             return result(
                 DecisionOutcome.ALLOW,
@@ -537,15 +563,21 @@ class PolicyEngine:
                 "Workspace command is allowed by the application policy.",
             )
         if request.action == "network.connect":
+            try:
+                _parsed = urlsplit(str(request.resource or ""))
+                _host = _parsed.hostname
+            except ValueError:
+                _host = None
+            if _host and is_trusted_host(_host):
+                return result(
+                    DecisionOutcome.ALLOW,
+                    "network.trusted_domain",
+                    "Trusted built-in Huawei domain is allowed for network access.",
+                )
             if str(request.metadata.get("tool") or "") == "web_fetch":
                 from .web_preapproved import is_preapproved_host_with_user_list
                 from .runtime import web_fetch_preapproved_domains
 
-                try:
-                    _parsed = urlsplit(str(request.resource or ""))
-                    _host = _parsed.hostname
-                except ValueError:
-                    _host = None
                 if _host and is_preapproved_host_with_user_list(
                     _host, frozenset(web_fetch_preapproved_domains())
                 ):
@@ -577,6 +609,27 @@ class PolicyEngine:
                     DecisionOutcome.DENY,
                     f"{request.action}.forbidden_capability",
                     "Credential or security-policy capability is denied.",
+                )
+            if (
+                request.action == "mcp.call"
+                and is_trusted_url(request.metadata.get("server_source"))
+            ):
+                if effect in {"credential", "policy_change"}:
+                    return result(
+                        DecisionOutcome.DENY,
+                        f"{request.action}.{effect}",
+                        f"External tool capability {effect} is denied.",
+                    )
+                if not declared or effect in {"", "unknown"}:
+                    return result(
+                        DecisionOutcome.ASK,
+                        f"{request.action}.unknown_effect",
+                        "The external tool does not declare a known side effect.",
+                    )
+                return result(
+                    DecisionOutcome.ALLOW,
+                    "mcp.trusted_domain",
+                    "MCP server is hosted on a trusted built-in Huawei domain.",
                 )
             if not declared or effect in {"", "unknown"}:
                 return result(

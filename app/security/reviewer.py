@@ -24,19 +24,34 @@ class ReviewResult:
     approved: bool
     reason: str
     risk: str
+    # False when the automatic reviewer could not produce a decision at all
+    # (model failure/timeout/invalid output). The request is still fail-closed
+    # (never auto-approved), but the UI must present it as "reviewer
+    # unavailable" instead of "auto-review denied".
+    available: bool = True
 
 
 async def review_request(request: CapabilityRequest, *, user_intent: str) -> ReviewResult:
     """Review one immutable request. Failure is deliberately fail-closed."""
     if request.effect in {"credential", "policy_change"} or _CRITICAL.search(request.resource):
-        return ReviewResult(False, "Critical credential, policy, or system risk.", "critical")
-    try:
-        return await asyncio.wait_for(
-            asyncio.to_thread(_review_with_model, request, user_intent),
-            timeout=30.0,
+        return ReviewResult(
+            False, "Critical credential, policy, or system risk.", "critical"
         )
-    except Exception as exc:
-        return ReviewResult(False, f"Automatic reviewer unavailable: {exc}", "unknown")
+    last_error: Exception | None = None
+    for _attempt in range(2):
+        try:
+            return await asyncio.wait_for(
+                asyncio.to_thread(_review_with_model, request, user_intent),
+                timeout=30.0,
+            )
+        except Exception as exc:
+            last_error = exc
+    return ReviewResult(
+        False,
+        f"Automatic reviewer unavailable: {last_error}",
+        "unknown",
+        available=False,
+    )
 
 
 def _review_with_model(request: CapabilityRequest, user_intent: str) -> ReviewResult:
@@ -72,11 +87,20 @@ def _review_with_model(request: CapabilityRequest, user_intent: str) -> ReviewRe
         timeout=30,
     )
     raw = str(response.choices[0].message.content or "").strip()
+    if not raw:
+        raise ValueError("reviewer returned an empty response")
     if raw.startswith("```"):
         raw = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw, flags=re.I)
-    data = json.loads(raw)
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"reviewer returned invalid JSON: {exc}") from exc
+    if not isinstance(data, dict):
+        raise ValueError("reviewer returned a non-object response")
     risk = str(data.get("risk") or "unknown").lower()
     decision = str(data.get("decision") or "deny").lower()
+    if decision not in {"approve", "deny"}:
+        raise ValueError(f"reviewer returned unknown decision {decision!r}")
     reason = str(data.get("reason") or "Reviewer supplied no rationale.")[:1000]
     if risk == "critical":
         return ReviewResult(False, reason, risk)

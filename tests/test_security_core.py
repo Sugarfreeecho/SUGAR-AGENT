@@ -135,12 +135,27 @@ def test_external_reads_ask_when_sandbox_is_available(tmp_path):
     assert decision.rule_id == "external.read"
 
 
-def test_workspace_delete_requires_approval(tmp_path):
+def test_workspace_soft_delete_is_allowed_but_external_delete_asks(tmp_path):
     workspace = tmp_path / "workspace"
     workspace.mkdir()
-    decision = PolicyEngine(workspace).decide(
+    outside = tmp_path / "outside.txt"
+    engine = PolicyEngine(workspace)
+    context = PERMISSION_PRESETS[PermissionMode.ASK_FOR_APPROVAL]
+
+    # delete_file inside the workspace is a recoverable soft delete and is
+    # allowed like any other workspace write.
+    decision = engine.decide(
         _request("fs.delete", workspace / "old.txt", "destructive"),
-        PERMISSION_PRESETS[PermissionMode.ASK_FOR_APPROVAL],
+        context,
+        sandbox_available=False,
+    )
+    assert decision.outcome == DecisionOutcome.ALLOW
+    assert decision.rule_id == "app_restricted.delete"
+
+    # Permanent deletion outside the workspace still requires approval.
+    decision = engine.decide(
+        _request("fs.delete", outside, "destructive"),
+        context,
         sandbox_available=False,
     )
     assert decision.outcome == DecisionOutcome.ASK
@@ -345,6 +360,7 @@ def test_extension_trust_is_bound_to_exact_digests(tmp_path):
 def test_mcp_registration_decision_is_bound_to_exact_config(tmp_path, monkeypatch):
     import security.extensions as extensions
 
+    monkeypatch.setenv("MCP_REGISTRATION_APPROVAL_ENABLED", "1")
     store = SecurityStore(tmp_path / "security.sqlite3")
     descriptor = extensions.mcp_descriptor(
         "demo",
@@ -475,6 +491,93 @@ def test_security_env_switch_only_zero_disables(monkeypatch):
     assert security_enabled() is True
     monkeypatch.setenv("SECURITY_ENABLED", "0")
     assert security_enabled() is False
+
+
+def test_readonly_git_c_scope_is_not_external(tmp_path):
+    """Read-only git invocations pointing outside the workspace via -C are
+    pure reads and must not be classified as external workspace access.
+    Write git subcommands and non-git external paths still ask."""
+    from security.policy import PolicyEngine
+    from security.runtime import permission_context_for_mode
+
+    ws = tmp_path / "workspace"
+    ws.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    ctx = permission_context_for_mode("ask_for_approval")
+    engine = PolicyEngine(ws, 0)
+
+    def decide(cmd: str):
+        req = classify_tool("run_shell", {"command": cmd, "args": []}, ws)
+        return req, engine.decide(req, ctx)
+
+    req, dec = decide(f'git -C "{outside}" log -1 --format="%h"')
+    assert req.metadata.get("external_workspace") is False
+    assert dec.outcome == DecisionOutcome.ALLOW
+
+    req, dec = decide(f'git -C "{outside}" rev-parse --is-inside-work-tree 2>&1')
+    assert req.metadata.get("external_workspace") is False
+    assert dec.outcome == DecisionOutcome.ALLOW
+
+    cmd = (
+        'date "+%Y-%m-%d %H:%M %A" && echo "---" '
+        f'&& git -C "{outside}" log -1 --format="%h %ad %s" --date=iso 2>&1'
+    )
+    req, dec = decide(cmd)
+    assert req.metadata.get("external_workspace") is False
+    assert dec.outcome == DecisionOutcome.ALLOW
+
+    # Write/network git subcommands must keep the external flag.
+    req, dec = decide(f'git -C "{outside}" push origin main')
+    assert req.metadata.get("external_workspace") is True
+    assert dec.outcome == DecisionOutcome.ASK
+
+    # Non-git external access keeps asking.
+    req, dec = decide(f'cat "{outside}/secret.txt"')
+    assert req.metadata.get("external_workspace") is True
+    assert dec.outcome == DecisionOutcome.ASK
+
+
+def test_reviewer_retries_then_reports_unavailable(monkeypatch):
+    """A reviewer that keeps failing must report available=False (fail-closed)
+    instead of masquerading as an auto-review denial, and must be retried once."""
+    from security import reviewer as reviewer_module
+
+    calls = {"n": 0}
+
+    def boom(request, user_intent):
+        calls["n"] += 1
+        raise ValueError("reviewer returned an empty response")
+
+    monkeypatch.setattr(reviewer_module, "_review_with_model", boom)
+    result = asyncio.run(
+        review_request(_request("process.exec", "date", "workspace_write"), user_intent="check time")
+    )
+    assert calls["n"] == 2
+    assert result.available is False
+    assert result.approved is False
+    assert result.risk == "unknown"
+
+
+def test_reviewer_recovers_on_second_attempt(monkeypatch):
+    """A transient reviewer failure is retried once and can still approve."""
+    from security import reviewer as reviewer_module
+
+    calls = {"n": 0}
+
+    def flaky(request, user_intent):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise ValueError("empty response")
+        return reviewer_module.ReviewResult(True, "safe read-only command", "low")
+
+    monkeypatch.setattr(reviewer_module, "_review_with_model", flaky)
+    result = asyncio.run(
+        review_request(_request("process.exec", "date", "workspace_write"), user_intent="check time")
+    )
+    assert calls["n"] == 2
+    assert result.available is True
+    assert result.approved is True
 
 
 def test_full_access_does_not_require_a_settings_enablement():
@@ -620,7 +723,7 @@ def test_shell_file_deletion_is_classified_as_destructive(tmp_path):
     assert decision.outcome == DecisionOutcome.ASK
 
 
-def test_apply_patch_delete_section_requires_approval(tmp_path):
+def test_apply_patch_delete_section_inside_workspace_is_allowed(tmp_path):
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     request = classify_tool(
@@ -633,7 +736,124 @@ def test_apply_patch_delete_section_requires_approval(tmp_path):
         PERMISSION_PRESETS[PermissionMode.ASK_FOR_APPROVAL],
     )
     assert request.action == "fs.delete"
+    assert decision.outcome == DecisionOutcome.ALLOW
+    assert decision.rule_id == "app_restricted.delete"
+
+    # Deleting a file outside the workspace via apply_patch still asks.
+    outside = tmp_path / "outside.txt"
+    request = classify_tool(
+        "apply_patch",
+        {"patch": f"*** Begin Patch\n*** Delete File: {outside}\n*** End Patch\n"},
+        workspace,
+    )
+    decision = PolicyEngine(workspace).decide(
+        request,
+        PERMISSION_PRESETS[PermissionMode.ASK_FOR_APPROVAL],
+    )
+    assert request.action == "fs.delete"
     assert decision.outcome == DecisionOutcome.ASK
+    assert decision.rule_id == "delete.review"
+
+
+def test_delete_file_outside_workspace_is_recoverable_soft_delete(tmp_path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    outside = tmp_path / "outside.txt"
+
+    request = classify_tool("delete_file", {"path": str(outside)}, workspace)
+    decision = PolicyEngine(workspace).decide(
+        request,
+        PERMISSION_PRESETS[PermissionMode.ASK_FOR_APPROVAL],
+    )
+    assert request.action == "fs.delete"
+    assert request.metadata.get("soft_delete") is True
+    assert decision.outcome == DecisionOutcome.ALLOW
+    assert decision.rule_id == "app_restricted.delete"
+
+    # apply_patch deletions are permanent and must keep asking outside.
+    request = classify_tool(
+        "apply_patch",
+        {"patch": f"*** Begin Patch\n*** Delete File: {outside}\n*** End Patch\n"},
+        workspace,
+    )
+    decision = PolicyEngine(workspace).decide(
+        request,
+        PERMISSION_PRESETS[PermissionMode.ASK_FOR_APPROVAL],
+    )
+    assert request.action == "fs.delete"
+    assert request.metadata.get("soft_delete") is not True
+    assert decision.outcome == DecisionOutcome.ASK
+    assert decision.rule_id == "delete.review"
+
+
+def test_external_workspace_ops_permission_grants_write_delete_shell(
+    tmp_path, monkeypatch
+):
+    """The one-time workspace-outside handling permission auto-allows write,
+    delete and shell operations outside the workspace, while read, network and
+    dynamic/destructive shell keep their own paths."""
+    from security.runtime import authorize_request
+
+    _isolated_security_store(tmp_path, monkeypatch)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    outside = tmp_path / "outside.txt"
+
+    def decide(tool: str, args: dict):
+        request = classify_tool(tool, args, workspace)
+        decision, _ = authorize_request(
+            session_id="session-a", request=request, workspace=workspace
+        )
+        return decision
+
+    # Disabled by default: external write / delete / shell all ask.
+    assert (
+        decide("write_file", {"path": str(outside), "content": "x"}).rule_id
+        == "external.write"
+    )
+    assert (
+        decide(
+            "apply_patch",
+            {"patch": f"*** Begin Patch\n*** Delete File: {outside}\n*** End Patch\n"},
+        ).rule_id
+        == "delete.review"
+    )
+    assert (
+        decide("run_shell", {"command": f'cat "{outside}"', "args": []}).rule_id
+        == "process.external"
+    )
+
+    security_runtime.security_store().set_setting("allow_external_workspace_ops", True)
+
+    write = decide("write_file", {"path": str(outside), "content": "x"})
+    assert write.outcome == DecisionOutcome.ALLOW
+    assert write.rule_id == "grant.external_workspace_ops"
+
+    delete = decide(
+        "apply_patch",
+        {"patch": f"*** Begin Patch\n*** Delete File: {outside}\n*** End Patch\n"},
+    )
+    assert delete.outcome == DecisionOutcome.ALLOW
+    assert delete.rule_id == "grant.external_workspace_ops"
+
+    shell = decide("run_shell", {"command": f'cat "{outside}"', "args": []})
+    assert shell.outcome == DecisionOutcome.ALLOW
+    assert shell.rule_id == "grant.external_workspace_ops"
+
+    # Read outside stays per-request.
+    assert (
+        decide("read_file", {"path": str(outside)}).rule_id
+        == "external.read"
+    )
+    # Network and dynamic shell are not covered by the grant.
+    assert (
+        decide("run_shell", {"command": "curl https://example.com", "args": []}).rule_id
+        == "process.network"
+    )
+    assert (
+        decide("run_shell", {"command": 'python -c "print(1)"', "args": []}).rule_id
+        == "process.dynamic"
+    )
 
 
 def test_leaf_check_rejects_resource_substitution_after_authorization(tmp_path):
@@ -1329,6 +1549,143 @@ def test_web_fetch_preapproved_documentation_hosts_skip_approval(
     )
     assert user_decision.outcome == DecisionOutcome.ALLOW
     assert user_decision.rule_id == "network.preapproved_web_fetch"
+
+
+def test_huawei_domains_are_trusted_for_network_tools(tmp_path, monkeypatch):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    _isolated_security_store(tmp_path, monkeypatch)
+    monkeypatch.delenv("TOOL_UI_APPROVAL", raising=False)
+
+    huawei_url = "http://ai.threecloud.huawei.com/models/tools/deepseekv4f/v1"
+
+    _, fetch_decision, _ = authorize_tool(
+        session_id="session",
+        tool_name="web_fetch",
+        arguments={"url": huawei_url},
+        workspace=workspace,
+    )
+    assert fetch_decision.outcome == DecisionOutcome.ALLOW
+    assert fetch_decision.rule_id == "network.trusted_domain"
+
+    _, download_decision, _ = authorize_tool(
+        session_id="session",
+        tool_name="web_download",
+        arguments={"url": huawei_url, "path": str(workspace / "out.bin")},
+        workspace=workspace,
+    )
+    assert download_decision.outcome == DecisionOutcome.ALLOW
+    assert download_decision.rule_id == "network.trusted_domain"
+
+    _, random_decision, _ = authorize_tool(
+        session_id="session",
+        tool_name="web_fetch",
+        arguments={"url": "https://random-host.example/page"},
+        workspace=workspace,
+    )
+    assert random_decision.outcome == DecisionOutcome.ASK
+
+
+def test_web_fetch_preapproved_domains_accept_full_urls_with_paths(
+    tmp_path, monkeypatch
+):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    _isolated_security_store(tmp_path, monkeypatch)
+    monkeypatch.delenv("TOOL_UI_APPROVAL", raising=False)
+    monkeypatch.delenv("MYAGENT_WEB_FETCH_PREAPPROVED_DOMAINS", raising=False)
+
+    from security import set_web_fetch_preapproved_domains, web_fetch_preapproved_domains
+
+    set_web_fetch_preapproved_domains(
+        ["http://docs.mycompany.example/guide/start"]
+    )
+    assert web_fetch_preapproved_domains() == ["docs.mycompany.example"]
+
+    _, decision, _ = authorize_tool(
+        session_id="session",
+        tool_name="web_fetch",
+        arguments={"url": "https://docs.mycompany.example/api/reference"},
+        workspace=workspace,
+    )
+    assert decision.outcome == DecisionOutcome.ALLOW
+    assert decision.rule_id == "network.preapproved_web_fetch"
+
+
+def test_huawei_domains_are_trusted_for_simple_shell_network_commands(
+    tmp_path, monkeypatch
+):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    _isolated_security_store(tmp_path, monkeypatch)
+    monkeypatch.delenv("TOOL_UI_APPROVAL", raising=False)
+
+    command = (
+        'curl -s "http://ai.threecloud.huawei.com/models/tools/deepseekv4f/v1" '
+        "-H 'Accept: application/json'"
+    )
+    _, decision, _ = authorize_tool(
+        session_id="session",
+        tool_name="run_shell",
+        arguments={"command": command},
+        workspace=workspace,
+    )
+    assert decision.outcome == DecisionOutcome.ALLOW
+    assert decision.rule_id == "process.trusted_network"
+
+    mixed = "curl http://ai.threecloud.huawei.com/x | python -c 'print(1)'"
+    _, mixed_decision, _ = authorize_tool(
+        session_id="session",
+        tool_name="run_shell",
+        arguments={"command": mixed},
+        workspace=workspace,
+    )
+    assert mixed_decision.outcome == DecisionOutcome.ASK
+
+
+def test_huawei_mcp_server_calls_are_trusted_when_declared(tmp_path, monkeypatch):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    _isolated_security_store(tmp_path, monkeypatch)
+    monkeypatch.delenv("TOOL_UI_APPROVAL", raising=False)
+
+    from security.models import CapabilityRequest
+
+    request = CapabilityRequest.create(
+        action="mcp.call",
+        resource="mcp__huawei__read_doc",
+        effect="read",
+        metadata={
+            "tool": "mcp__huawei__read_doc",
+            "declared": True,
+            "server_source": "https://ai.threecloud.huawei.com/mcp",
+            "permissions": {},
+        },
+    )
+    decision = PolicyEngine(workspace).decide(
+        request,
+        PERMISSION_PRESETS[PermissionMode.ASK_FOR_APPROVAL],
+    )
+    assert decision.outcome == DecisionOutcome.ALLOW
+    assert decision.rule_id == "mcp.trusted_domain"
+
+    untrusted = CapabilityRequest.create(
+        action="mcp.call",
+        resource="mcp__other__read_doc",
+        effect="read",
+        metadata={
+            "tool": "mcp__other__read_doc",
+            "declared": True,
+            "server_source": "https://example.com/mcp",
+            "permissions": {},
+        },
+    )
+    other = PolicyEngine(workspace).decide(
+        untrusted,
+        PERMISSION_PRESETS[PermissionMode.ASK_FOR_APPROVAL],
+    )
+    assert other.outcome == DecisionOutcome.ALLOW
+    assert other.rule_id == "mcp.call.read"
 
 
 def test_mcp_server_rule_allows_all_tools_from_server(tmp_path, monkeypatch):

@@ -1,8 +1,31 @@
 from __future__ import annotations
 
+import logging
 import os
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
+
+
+logger = logging.getLogger(__name__)
+
+
+def migrate_legacy_state_dir(new: Path, legacy: Path) -> Path:
+    """Move a legacy ``.myagent`` state directory to ``.sugaragent`` once."""
+    if legacy.exists() and not new.exists():
+        try:
+            new.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(legacy), str(new))
+            logger.info("Migrated %s -> %s", legacy, new)
+        except OSError:
+            logger.warning(
+                "Could not migrate %s to %s; keeping the legacy path",
+                legacy,
+                new,
+                exc_info=True,
+            )
+            return legacy
+    return new
 
 
 def _bool_env(name: str, default: bool) -> bool:
@@ -38,7 +61,10 @@ class RemoteControlConfig:
         state_dir = (
             Path(configured_dir).expanduser()
             if configured_dir
-            else Path(project_root) / ".myagent" / "remote-control"
+            else migrate_legacy_state_dir(
+                Path(project_root) / ".sugaragent" / "remote-control",
+                Path(project_root) / ".myagent" / "remote-control",
+            )
         )
         origins = tuple(
             item.strip().rstrip("/")
@@ -66,4 +92,3 @@ class RemoteControlConfig:
             ),
             allowed_origins=origins,
         )
-

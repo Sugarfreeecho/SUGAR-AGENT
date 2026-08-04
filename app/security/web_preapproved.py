@@ -13,12 +13,18 @@ only:
 Users can extend the list with the ``MYAGENT_WEB_FETCH_PREAPPROVED_DOMAINS``
 environment variable (comma-separated) or through the settings UI, which
 persists the edited list in the security store.
+
+Huawei domains (``huawei.com``, ``myhuaweicloud.com``, ``huaweicloud.com``)
+are trusted by default for every network operation and are therefore also
+included in this built-in web_fetch list.
 """
 
 from __future__ import annotations
 
 import os
 from urllib.parse import urlsplit
+
+from trusted_domains import TRUSTED_DOMAINS
 
 
 PREAPPROVED_HOSTS: frozenset[str] = frozenset(
@@ -127,11 +133,26 @@ PREAPPROVED_HOSTS: frozenset[str] = frozenset(
         "www.w3schools.com",
         "devdocs.io",
     }
-)
+) | TRUSTED_DOMAINS
 
 
 def _normalize_host(host: str) -> str:
-    return str(host or "").strip().lower().rstrip(".").removeprefix("www.")
+    text = str(host or "").strip().lower().rstrip(".")
+    if "://" in text:
+        try:
+            parsed = urlsplit(text)
+        except ValueError:
+            return ""
+        if not parsed.hostname:
+            return ""
+        text = parsed.hostname
+    if text.startswith("["):
+        end = text.find("]")
+        if end > 0:
+            text = text[1:end]
+    elif text.count(":") == 1:
+        text = text.rsplit(":", 1)[0]
+    return text.removeprefix("www.")
 
 
 def _env_extra_hosts() -> frozenset[str]:
