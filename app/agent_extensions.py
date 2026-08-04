@@ -860,7 +860,9 @@ def audit_plugin_inventory(
 def extensions_snapshot() -> Dict[str, Any]:
     manager = plugin_manager()
     report = manager.discover_report()
-    loaded = load_plugins(force=True)
+    # Use the short hot-path cache instead of forcing a full plugin reload on
+    # every settings/skill-popover snapshot; explicit reloads call force=True.
+    loaded = load_plugins()
     loaded_ids = {plugin.plugin_id for plugin in loaded.plugins}
     runtime_registry = get_plugin_runtime_registry()
     runtime_command_rows = runtime_registry.command_descriptions(loaded.plugins)

@@ -2859,6 +2859,14 @@ def _security_approval_spec(
         # "don't ask again" button).
         "allow_always_available": bool(rule_info) and not unsafe_persistent,
         "force_approval": force_ask,
+        # External write/delete/shell approvals may offer the one-time
+        # "workspace-outside handling permission" instead of asking every time.
+        "external_workspace_grantable": bool(
+            decision.rule_id
+            in {"external.write", "delete.review", "process.external"}
+        )
+        and not danger
+        and not force_ask,
         "approval_level": "danger" if danger else "warning",
         "rule_action": rule_info.get("action", ""),
         "rule_pattern": rule_info.get("pattern", ""),
@@ -3390,6 +3398,12 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
     react_wall_start = time.monotonic()
     state["_react_ui_tool_count"] = 0
     state["_react_ui_tool_fail_count"] = 0
+    # 轮次墙钟/轮间缝隙是本次 run 内的一次性计时锚点，避免跨 run 复用残留值。
+    state.pop("_req_wall_start", None)
+    state.pop("_last_round_end_perf", None)
+    state.pop("_round_gap_ms_total", None)
+    state.pop("_last_round_gap_ms", None)
+    state.pop("_run_startup_ms", None)
 
     session_meta = dict(session_manager._load_metadata(state["session_id"]) or {})
     session_meta["_active_session_id"] = str(state.get("session_id") or "")
@@ -3467,6 +3481,15 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
             _inject_pending_subagent_notes(current_run_only=True)
             pre_api_timings: Dict[str, int] = dict(state.pop("_pre_run_timings", {}) or {})
             _t_pre_api = time.perf_counter()
+            _req_wall_start = time.perf_counter()
+            _last_round_end_perf = state.pop("_last_round_end_perf", None)
+            if _last_round_end_perf is not None:
+                _round_gap_ms = int(max(0.0, (_req_wall_start - _last_round_end_perf) * 1000.0))
+                state["_round_gap_ms_total"] = int(state.get("_round_gap_ms_total") or 0) + _round_gap_ms
+                state["_last_round_gap_ms"] = _round_gap_ms
+            else:
+                state["_last_round_gap_ms"] = 0
+            state["_req_wall_start"] = _req_wall_start
             await _raise_if_steer_requested(state, emit, "react")
             if not _state_run_has_write_fence(state):
                 raise asyncio.CancelledError()
@@ -4102,11 +4125,13 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                         )
                     )
                     approved = False
-                    if (
+                    use_auto_review = (
                         sec_context.mode == PermissionMode.APPROVE_FOR_ME
                         and not hook_approval_spec
                         and not always_ask_for(sec_decision)
-                    ):
+                    )
+                    normal_pending = not use_auto_review
+                    if use_auto_review:
                         await _push_stream_event(
                             state,
                             {
@@ -4130,7 +4155,13 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                             {
                                 "type": "auto_review_status",
                                 "status": (
-                                    "approved" if approved else "denied"
+                                    "approved"
+                                    if approved
+                                    else (
+                                        "unavailable"
+                                        if not review.available
+                                        else "denied"
+                                    )
                                 ),
                                 "tool_call_id": str(tool_id or ""),
                                 "session_id": state["session_id"],
@@ -4138,7 +4169,15 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                                 "reason": review.reason,
                                 "content": (
                                     f"【自动审批·{review.risk}】"
-                                    + ("已批准：" if approved else "已拒绝：")
+                                    + (
+                                        "已批准："
+                                        if approved
+                                        else (
+                                            "审查不可用："
+                                            if not review.available
+                                            else "已拒绝："
+                                        )
+                                    )
                                     + review.reason
                                 ),
                             },
@@ -4150,7 +4189,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                                 sec_decision.request_digest,
                                 "allow_once",
                             )
-                        elif emit is not None:
+                        elif review.available and emit is not None:
                             # Auto-review never expands the application boundary. A denial
                             # may be overridden once by the user, but only for
                             # this exact digest-bound request.
@@ -4177,6 +4216,11 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                                         ),
                                         "force_approval": bool(
                                             override_spec.get("force_approval", False)
+                                        ),
+                                        "external_workspace_grantable": bool(
+                                            override_spec.get(
+                                                "external_workspace_grantable", False
+                                            )
                                         ),
                                         "approval_level": str(
                                             override_spec.get("approval_level")
@@ -4245,7 +4289,16 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                                 return _blocked_tool_result(
                                     tool_name, tool_args, tool_id, str(exc)
                                 )
-                    else:
+                        elif not review.available and emit is not None:
+                            # The automatic reviewer itself failed (invalid
+                            # output/timeout). Fail-closed still requires a
+                            # human decision, but the card must be honest:
+                            # "reviewer unavailable", not "auto-review denied".
+                            spec = dict(spec)
+                            spec["title"] = "审查不可用，请人工确认"
+                            spec["subtitle"] = review.reason
+                            normal_pending = True
+                    if normal_pending and not approved:
                         if emit is None:
                             return _blocked_tool_result(
                                 tool_name,
@@ -4271,6 +4324,9 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                                     ),
                                     "force_approval": bool(
                                         spec.get("force_approval", False)
+                                    ),
+                                    "external_workspace_grantable": bool(
+                                        spec.get("external_workspace_grantable", False)
                                     ),
                                     "approval_level": str(
                                         spec.get("approval_level") or "warning"
@@ -5231,6 +5287,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                 await _push_stream_event(state, {"type": "status", "content": final_content.rstrip("。")}, emit=emit)
                 break
             _pre_api_timing_mark(pre_api_timings, "final_interrupt_checks", _t_pre_api)
+            _t_pre_api = time.perf_counter()
             _pre_api_timing_log(
                 state["session_id"],
                 pre_api_timings,
@@ -5241,8 +5298,27 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                 model=iter_model,
             )
             _metrics_run_id = str(state.get("_runtime_v2_run_id") or "")
+            _metrics_extra: Dict[str, int] = {}
+            if int(iter_count) == 1 and state.get("_run_start_perf") is not None:
+                _startup_anchor = state.get("_req_wall_start")
+                if _startup_anchor is not None:
+                    _metrics_extra["startup_ms"] = int(
+                        max(0.0, (_startup_anchor - state["_run_start_perf"]) * 1000.0)
+                    )
+                else:
+                    _metrics_extra["startup_ms"] = int(
+                        max(0.0, (time.perf_counter() - state["_run_start_perf"]) * 1000.0)
+                    )
+                state["_run_startup_ms"] = _metrics_extra["startup_ms"]
+                execution_metrics.record_run_fields(
+                    state["session_id"], _metrics_run_id,
+                    startup_ms=_metrics_extra["startup_ms"],
+                )
+            if state.get("_last_round_gap_ms"):
+                _metrics_extra["round_gap_ms"] = int(state["_last_round_gap_ms"])
             execution_metrics.record_request(
                 state["session_id"], _metrics_run_id, int(iter_count),
+                **_metrics_extra,
                 model=iter_model,
                 status="waiting_first_token",
                 context={
@@ -5360,6 +5436,13 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                 early_tool_tasks[idx] = asyncio.create_task(_run_early_tool_call(idx, tc))
 
             if EXECUTOR_STREAM and emit:
+                _pre_api_tail_ms = int(max(0.0, (time.perf_counter() - _t_pre_api) * 1000.0))
+                execution_metrics.record_request(
+                    state["session_id"],
+                    str(state.get("_runtime_v2_run_id") or ""),
+                    int(iter_count),
+                    pre_api_tail_ms=_pre_api_tail_ms,
+                )
                 t_llm_start = time.monotonic()
                 state["_runtime_stage"] = "waiting_model"
                 logger.info(
@@ -6727,6 +6810,13 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                         {"tool_result_post": _round_tool_post_total_ms, "persist_state": persist_after_tools_ms, "steer_check": steer_check_ms},
                         total_ms=int(_round_tool_post_total_ms + persist_after_tools_ms + steer_check_ms),
                     )
+                    _req_wall_end = state.pop("_req_wall_start", None)
+                    if _req_wall_end is not None:
+                        execution_metrics.record_request(
+                            state["session_id"], str(state.get("_runtime_v2_run_id") or ""), int(iter_count),
+                            wall_ms=int(max(0.0, (time.perf_counter() - _req_wall_end) * 1000.0)),
+                        )
+                        state["_last_round_end_perf"] = time.perf_counter()
                     state.pop("_steer_rollback_marker", None)
                     _reset_steer_control(state)
                     llm_history = list(state["llm_history"])
@@ -6759,6 +6849,13 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                     {"tool_result_post": _round_tool_post_total_ms, "persist_state": persist_after_tools_ms, "steer_check": steer_check_ms},
                     total_ms=int(_round_tool_post_total_ms + persist_after_tools_ms + steer_check_ms),
                 )
+                _req_wall_end = state.pop("_req_wall_start", None)
+                if _req_wall_end is not None:
+                    execution_metrics.record_request(
+                        state["session_id"], str(state.get("_runtime_v2_run_id") or ""), int(iter_count),
+                        wall_ms=int(max(0.0, (time.perf_counter() - _req_wall_end) * 1000.0)),
+                    )
+                    state["_last_round_end_perf"] = time.perf_counter()
                 state.pop("_steer_rollback_marker", None)
                 state["_runtime_stage"] = "react"
 
@@ -6887,6 +6984,20 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
         pass
 
     # 本回合 ReAct 统计：写入 ui_events，刷新页面后仍可显示耗时/轮数/工具次数
+    # 最后一轮（通常是无工具收尾轮）的轮次墙钟与 run 级对账字段。
+    _final_react_iter = int(state.get("_current_react_iter") or iter_count or 1)
+    _final_req_wall_start = state.pop("_req_wall_start", None)
+    if _final_req_wall_start is not None:
+        execution_metrics.record_request(
+            state["session_id"], str(state.get("_runtime_v2_run_id") or ""), _final_react_iter,
+            wall_ms=int(max(0.0, (time.perf_counter() - _final_req_wall_start) * 1000.0)),
+        )
+    execution_metrics.record_run_fields(
+        state["session_id"], str(state.get("_runtime_v2_run_id") or ""),
+        startup_ms=int(state.get("_run_startup_ms") or 0),
+        round_gap_ms=int(state.get("_round_gap_ms_total") or 0),
+    )
+
     dur_ms = int(max(0.0, (time.monotonic() - react_wall_start) * 1000.0))
     tool_n = int(state.pop("_react_ui_tool_count", 0) or 0)
     fail_n = int(state.pop("_react_ui_tool_fail_count", 0) or 0)
@@ -7751,6 +7862,7 @@ async def astream_events(
                 "chat",
                 user_input,
             )
+            state["_run_start_perf"] = time.perf_counter()
             # 用户气泡由前端已画；此处只写入与流顺序一致的持久化，供刷新与 SSE 同源
             run_start_timings: Dict[str, int] = {}
             _t_run_start = time.perf_counter()
@@ -8284,6 +8396,7 @@ async def astream_events_continuation(
                 "continuation",
                 str(state.get("user_input") or ""),
             )
+            state["_run_start_perf"] = time.perf_counter()
             run_start_timings: Dict[str, int] = {}
             _t_run_start = time.perf_counter()
             mirror_runtime_v2("run_started", {"mode": "continuation"})

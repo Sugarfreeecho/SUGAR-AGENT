@@ -5,7 +5,9 @@ OpenAI Chat Completions 适配层。
 content / tool_calls / reasoning_content。
 
 主模型在思考开时由 harness 传 extra_body.thinking、reasoning_effort，并继续传 temperature；
-messages_to_openai_params 对每条 assistant 均带上 reasoning_content（可空串），兼容 DeepSeek thinking 多轮。
+messages_to_openai_params 按目标模型的 thinking_format 输出思考字段：
+deepseek=reasoning_content、reasoning=reasoning、think_blocks=内容保留 <think>、none=剥离全部思考。
+canonical 为 fallback 前端的规范序列化（保留 <think> + reasoning_content），具体格式由候选在重试时转换。
 """
 
 from __future__ import annotations
@@ -1081,9 +1083,19 @@ def messages_to_openai_params(
     messages: List[Any],
     *,
     expand_media_paths: bool = True,
+    thinking_format: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """将 UserMessage / AssistantMessage / ToolMessage / SystemMessage 转为 API messages 列表。"""
     api_msgs: List[Dict[str, Any]] = []
+    tf = str(thinking_format or "deepseek").strip().lower()
+    if tf not in {"deepseek", "reasoning", "think_blocks", "none", "canonical"}:
+        tf = "deepseek"
+    strip_think = tf not in {"think_blocks", "canonical"}
+    reasoning_field: Optional[str] = (
+        "reasoning_content"
+        if tf in {"deepseek", "canonical"}
+        else ("reasoning" if tf == "reasoning" else None)
+    )
     for m in messages:
         if isinstance(m, SystemMessage):
             api_msgs.append({"role": "system", "content": m.content or ""})
@@ -1155,21 +1167,19 @@ def messages_to_openai_params(
             else:
                 api_msgs.append({"role": "user", "content": str(m.content)})
         elif isinstance(m, AssistantMessage):
-            item: Dict[str, Any] = {"role": "assistant", "content": strip_think_blocks(m.content or "")}
+            raw_content = m.content or ""
+            content = strip_think_blocks(raw_content) if strip_think else raw_content
+            item: Dict[str, Any] = {"role": "assistant", "content": content}
             if m.tool_calls:
                 item["tool_calls"] = format_tool_calls_for_openai_api(m.tool_calls)
             ak = getattr(m, "additional_kwargs", None) or {}
             rc = None
-            rc_field = "reasoning_content"
             if isinstance(ak, dict):
-                raw_field = str(ak.get("reasoning_field") or "").strip()
-                if raw_field in {"reasoning", "reasoning_content"}:
-                    rc_field = raw_field
                 rc = ak.get("reasoning_content", None)
                 if rc is None:
                     rc = ak.get("reasoning", None)
-            if rc is not None:
-                item[rc_field] = str(rc)
+            if rc is not None and reasoning_field is not None:
+                item[reasoning_field] = str(rc)
             api_msgs.append(item)
         elif isinstance(m, ToolMessage):
             api_msgs.append(
@@ -1189,6 +1199,7 @@ def _messages_to_text_only_params(
     messages: List[Any],
     *,
     required_modalities: Optional[set[str]] = None,
+    thinking_format: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """
     Rebuild a failed multimodal request from the original messages.
@@ -1198,7 +1209,11 @@ def _messages_to_text_only_params(
     use the explicit placeholder instead.
     """
     fallback_messages = _strip_media_from_api_messages(
-        messages_to_openai_params(messages, expand_media_paths=False)
+        messages_to_openai_params(
+            messages,
+            expand_media_paths=False,
+            thinking_format=thinking_format,
+        )
     )
     return _inject_multimodal_fallback_instruction(
         fallback_messages,
@@ -1317,7 +1332,14 @@ def _mark_client_modalities_failed(
 def _messages_to_params_for_client(
     client: Any,
     messages: List[Any],
+    *,
+    thinking_format: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
+    fmt = str(thinking_format or "").strip().lower()
+    if not fmt:
+        fmt = str(getattr(client, "_myagent_thinking_format", "") or "").strip().lower()
+    if not fmt:
+        fmt = "deepseek"
     required_modalities = _messages_required_modalities(messages)
     if required_modalities and not _client_supports_modalities(
         client, required_modalities
@@ -1325,10 +1347,12 @@ def _messages_to_params_for_client(
         return _messages_to_text_only_params(
             messages,
             required_modalities=required_modalities,
+            thinking_format=fmt,
         )
     return messages_to_openai_params(
         messages,
         expand_media_paths=bool(required_modalities),
+        thinking_format=fmt,
     )
 
 

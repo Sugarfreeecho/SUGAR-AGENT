@@ -360,6 +360,29 @@ def test_auto_review_override_window_keeps_always_allow_choice():
     assert '"allow_always_available": False' not in override
 
 
+def test_auto_review_unavailable_falls_back_to_honest_human_approval():
+    """When the automatic reviewer itself fails, the request must fall back to
+    a normal human approval card with honest copy instead of being presented
+    as an auto-review denial with an override window."""
+    source = (ROOT / "app/agent_loop.py").read_text(encoding="utf-8")
+    assert "审查不可用，请人工确认" in source
+    assert "review.available" in source
+    assert '"unavailable"' in source
+
+
+def test_external_workspace_ops_grant_is_wired_into_approval_flow():
+    """The one-time outside-workspace handling permission flows from the
+    approval card through the resolve endpoint to the store setting."""
+    webui = (ROOT / "app/webui.py").read_text(encoding="utf-8")
+    service = (ROOT / "app/human_interaction/service.py").read_text(encoding="utf-8")
+    core = (ROOT / "app/agent_loop.py").read_text(encoding="utf-8")
+    runtime = (ROOT / "app/security/runtime.py").read_text(encoding="utf-8")
+    assert "allow_external_workspace" in webui
+    assert "allow_external_workspace" in service
+    assert "external_workspace_grantable" in core
+    assert "EXTERNAL_OPS_GRANTABLE_RULES" in runtime
+
+
 def test_live_approval_events_include_reusable_rule_availability():
     source = (ROOT / "app/agent_loop.py").read_text(encoding="utf-8")
     normal_emit = source.split("async def _emit_appr():", 1)[1].split(

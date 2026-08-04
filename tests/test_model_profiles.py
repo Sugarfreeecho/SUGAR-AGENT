@@ -334,6 +334,12 @@ def test_huawei_domain_precedes_table_but_not_api_limits(tmp_path, monkeypatch):
 
     assert model_profiles.is_huawei_api_domain("https://api.huawei.com/v1") is True
     assert model_profiles.is_huawei_api_domain(huawei_url) is True
+    assert (
+        model_profiles.is_huawei_api_domain(
+            "http://ai.threecloud.huawei.com/models/tools/deepseekv4f/v1"
+        )
+        is True
+    )
     assert model_profiles.is_huawei_api_domain("https://example.com/v1/huawei") is False
     assert huawei == {
         "context_window": 128000,

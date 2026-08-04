@@ -94,7 +94,9 @@ def clear_run_shell_interrupt_check() -> None:
 
 # 技能目录签名缓存，避免每次 react 轮次全量遍历
 _skills_cache: Dict[str, Any] = {"sig": None, "skills": None, "catalog": None}
+_skills_full_cache: Dict[str, Any] = {"sig": None, "skills": None}
 _skill_state_lock = threading.RLock()
+_skills_scan_lock = threading.RLock()
 SKILL_STATE_PATH = PROJECT_ROOT / "skill_states.json"
 _read_file_line_count_cache: Dict[str, Tuple[int, int, int]] = {}
 
@@ -103,6 +105,7 @@ def invalidate_skills_cache() -> None:
     """Invalidate project and Plugin-provided Skill discovery snapshots."""
 
     _skills_cache.update({"sig": None, "skills": None, "catalog": None})
+    _skills_full_cache.update({"sig": None, "skills": None})
 
 
 def _load_skill_enabled_states() -> Dict[str, bool]:
@@ -1254,7 +1257,26 @@ def _resolve_shell_token_for_workspace_restrict(raw: str, workspace: Path) -> Pa
 
 def _paths_inside_workspace(cmd: str, workspace: Path) -> bool:
     """检查命令中的路径 token 是否落在 workspace 根下。"""
+    return not _outside_workspace_tokens(cmd, workspace)
+
+
+def _outside_workspace_tokens(cmd: str, workspace: Path) -> list:
+    """Return the raw path tokens in ``cmd`` that resolve outside ``workspace``.
+
+    Mirrors the historical classification inside ``_paths_inside_workspace``
+    while exposing *which* tokens caused the escape, so callers can decide
+    whether the out-of-workspace access is benign (e.g. a read-only git ``-C``
+    pointing at a repository outside the workspace).
+    """
     wroot = workspace.resolve()
+    outside = []
+    seen = set()
+
+    def _remember(raw: str) -> None:
+        if raw not in seen:
+            seen.add(raw)
+            outside.append(raw)
+
     for raw_path in _extract_absolute_paths(cmd):
         if _is_posix_special_path_skip_workspace_check(raw_path):
             continue
@@ -1263,13 +1285,13 @@ def _paths_inside_workspace(cmd: str, workspace: Path) -> bool:
         except Exception:
             continue
         if not _is_path_under(p, wroot):
-            return False
+            _remember(raw_path)
     try:
         tokens = _shell_lex_split_for_workspace_path_scan(cmd)
     except ValueError:
         # Unbalanced or otherwise unparseable shell syntax is not safe to
         # classify as a normal workspace command.
-        return False
+        return [cmd]
     for token in tokens:
         raw = _unwrap_outer_shell_quotes(str(token or "").strip())
         if not raw or raw in {"|", "||", "&&", ";", ">", ">>", "<"}:
@@ -1296,12 +1318,93 @@ def _paths_inside_workspace(cmd: str, workspace: Path) -> bool:
         try:
             candidate = _resolve_shell_token_for_workspace_restrict(raw, wroot)
         except Exception:
-            return False
+            return [cmd]
         if _is_posix_special_path_skip_workspace_check(raw):
             continue
         if not _is_path_under(candidate, wroot):
+            _remember(raw)
+    return outside
+
+
+# Git subcommands that only read repository state. A read-only git invocation
+# may legitimately use ``-C``/``--git-dir``/``--work-tree`` to point at a
+# repository outside the workspace; that is a pure read and should not be
+# classified as external workspace access (Claude Code/Codex both allow
+# read-only git by default). Write/network subcommands (push/fetch/clone/
+# checkout/commit/reset/...) deliberately stay outside this set.
+_READONLY_GIT_SUBCOMMANDS = frozenset(
+    {
+        "status", "log", "show", "shortlog", "reflog", "blame", "diff",
+        "ls-files", "merge-base", "rev-parse", "rev-list", "describe",
+        "name-rev", "count-objects", "symbolic-ref", "whatchanged", "fsck",
+        "verify-commit", "verify-tag", "verify-pack", "grep", "help", "version",
+    }
+)
+
+
+def _readonly_git_scope_ok(cmd: str, workspace: Path) -> bool:
+    """True when every out-of-workspace token comes from a read-only git
+    ``-C``/``--git-dir``/``--work-tree`` argument.
+
+    Returns False as soon as a non-read-only git subcommand appears, or when
+    an out-of-workspace path token has any other origin (``cat /x/f``,
+    ``cd /x``, ...), so write/network/unknown external access keeps asking.
+    """
+    outside = _outside_workspace_tokens(cmd, workspace)
+    if not outside:
+        return True
+    try:
+        tokens = [
+            _unwrap_outer_shell_quotes(str(t or "").strip())
+            for t in _shell_lex_split_for_workspace_path_scan(cmd)
+        ]
+    except ValueError:
+        return False
+    targets = set()
+    n = len(tokens)
+    i = 0
+    while i < n:
+        token = tokens[i]
+        if token.lower() not in ("git", "git.exe"):
+            i += 1
+            continue
+        subcommand = None
+        j = i + 1
+        while j < n and tokens[j] not in {"&&", "||", ";", "|"}:
+            tok = tokens[j]
+            low = tok.lower()
+            if tok == "-C":
+                if j + 1 < n:
+                    targets.add(tokens[j + 1])
+                    j += 2
+                    continue
+            elif low in ("--git-dir", "--work-tree"):
+                if j + 1 < n:
+                    targets.add(tokens[j + 1])
+                    j += 2
+                    continue
+            elif low.startswith("--git-dir=") or low.startswith("--work-tree="):
+                targets.add(tok.split("=", 1)[1])
+                j += 1
+                continue
+            elif low in ("-c", "--config-env"):
+                if j + 1 < n:
+                    j += 2
+                    continue
+                j += 1
+                continue
+            elif tok.startswith("-"):
+                j += 1
+                continue
+            else:
+                if subcommand is None:
+                    subcommand = tok
+                j += 1
+                continue
+        if subcommand not in _READONLY_GIT_SUBCOMMANDS:
             return False
-    return True
+        i = j
+    return bool(outside) and all(out in targets for out in outside)
 
 
 def _truncate_output(text: str, max_len: int = 10000) -> str:
@@ -3963,91 +4066,106 @@ def _plugin_instruction_entries() -> List[Dict[str, Any]]:
     return entries
 
 
-def discover_skills(*, include_disabled: bool = False) -> List[Dict]:
-    sig = _skills_tree_signature()
-    if _skills_cache["sig"] == sig and _skills_cache["skills"] is not None:
-        cached = _skills_cache["skills"]
-        return list(cached) if include_disabled else [s for s in cached if s.get("enabled") is not False]
+def discover_skills(
+    *,
+    include_disabled: bool = False,
+    include_resources: bool = False,
+) -> List[Dict]:
+    """Discover project and plugin skills with a process-wide cache.
 
-    _skills_cache["catalog"] = None
-    skills = []
-    skill_sources: List[Tuple[Optional[str], Path, Optional[str]]] = []
-    if SKILLS_DIR.is_dir():
-        try:
-            skill_sources.extend(
-                (None, skill_dir, None)
-                for skill_dir in SKILLS_DIR.iterdir()
-                if skill_dir.is_dir()
-            )
-        except OSError as exc:
-            logger.debug("Cannot scan Skills directory %s: %s", SKILLS_DIR, exc)
-    for qualified_name, skill_dir in _plugin_skill_directories().items():
-        plugin_id = qualified_name.split(":", 1)[0] if ":" in qualified_name else qualified_name
-        skill_sources.append((qualified_name, Path(skill_dir), plugin_id))
+    ``include_resources`` defaults to False because enumerating every file in a
+    skill tree is the dominant cold-scan cost (a single skill can contain tens
+    of thousands of reference files) and no current caller consumes the
+    ``resources`` field.
+    """
+    with _skills_scan_lock:
+        cache = _skills_full_cache if include_resources else _skills_cache
+        sig = _skills_tree_signature()
+        if cache["sig"] == sig and cache["skills"] is not None:
+            cached = cache["skills"]
+            return list(cached) if include_disabled else [s for s in cached if s.get("enabled") is not False]
 
-    for qualified_name, skill_dir, plugin_id in skill_sources:
-        skill_file = skill_dir / "SKILL.md"
-        if not skill_file.exists():
-            continue
+        if not include_resources:
+            _skills_cache["catalog"] = None
+        skills = []
+        skill_sources: List[Tuple[Optional[str], Path, Optional[str]]] = []
+        if SKILLS_DIR.is_dir():
+            try:
+                skill_sources.extend(
+                    (None, skill_dir, None)
+                    for skill_dir in SKILLS_DIR.iterdir()
+                    if skill_dir.is_dir()
+                )
+            except OSError as exc:
+                logger.debug("Cannot scan Skills directory %s: %s", SKILLS_DIR, exc)
+        for qualified_name, skill_dir in _plugin_skill_directories().items():
+            plugin_id = qualified_name.split(":", 1)[0] if ":" in qualified_name else qualified_name
+            skill_sources.append((qualified_name, Path(skill_dir), plugin_id))
 
-        try:
-            content = skill_file.read_text(encoding='utf-8')
-            frontmatter = {}
-            body = content
-            if content.startswith('---\n'):
-                parts = content.split('---\n', 2)
-                if len(parts) >= 3:
-                    yaml_part = parts[1]
-                    body = parts[2]
-                    try:
-                        import yaml
-                        frontmatter = yaml.safe_load(yaml_part) or {}
-                    except Exception as e:
-                        logger.debug(f"Failed to parse YAML frontmatter for {skill_dir.name}: {e}")
-                        continue
-            name = qualified_name or frontmatter.get('name')
-            description = frontmatter.get('description')
-            if not name or not description:
-                logger.debug(f"Skill {skill_dir.name} missing name or description, skipping")
+        for qualified_name, skill_dir, plugin_id in skill_sources:
+            skill_file = skill_dir / "SKILL.md"
+            if not skill_file.exists():
                 continue
 
-            resources = []
-            for item in skill_dir.rglob('*'):
-                if item.is_file() and item.name != "SKILL.md":
-                    rel_path = item.relative_to(skill_dir)
-                    resources.append(str(rel_path))
-            resources.sort()
+            try:
+                content = skill_file.read_text(encoding='utf-8')
+                frontmatter = {}
+                body = content
+                if content.startswith('---\n'):
+                    parts = content.split('---\n', 2)
+                    if len(parts) >= 3:
+                        yaml_part = parts[1]
+                        body = parts[2]
+                        try:
+                            import yaml
+                            frontmatter = yaml.safe_load(yaml_part) or {}
+                        except Exception as e:
+                            logger.debug(f"Failed to parse YAML frontmatter for {skill_dir.name}: {e}")
+                            continue
+                name = qualified_name or frontmatter.get('name')
+                description = frontmatter.get('description')
+                if not name or not description:
+                    logger.debug(f"Skill {skill_dir.name} missing name or description, skipping")
+                    continue
 
-            skills.append({
-                "name": name,
-                "description": description,
-                "path": str(skill_file),
-                "base_dir": str(skill_dir),
-                "body": body.strip(),
-                "resources": resources,
-                "plugin_id": plugin_id,
-                "source": "plugin" if plugin_id else "project",
-            })
-            logger.debug(f"Discovered skill: {name} ({skill_dir})")
-        except Exception as e:
-            logger.error(f"Error processing skill {skill_dir.name}: {e}")
-            continue
+                resources = []
+                if include_resources:
+                    for item in skill_dir.rglob('*'):
+                        if item.is_file() and item.name != "SKILL.md":
+                            rel_path = item.relative_to(skill_dir)
+                            resources.append(str(rel_path))
+                    resources.sort()
 
-    skills.extend(_plugin_instruction_entries())
+                skills.append({
+                    "name": name,
+                    "description": description,
+                    "path": str(skill_file),
+                    "base_dir": str(skill_dir),
+                    "body": body.strip(),
+                    "resources": resources,
+                    "plugin_id": plugin_id,
+                    "source": "plugin" if plugin_id else "project",
+                })
+                logger.debug(f"Discovered skill: {name} ({skill_dir})")
+            except Exception as e:
+                logger.error(f"Error processing skill {skill_dir.name}: {e}")
+                continue
 
-    name_map = {}
-    for skill in skills:
-        name = skill["name"]
-        if name in name_map:
-            logger.warning(f"Skill name conflict: {name}, already from {name_map[name]['base_dir']}, overwritten by {skill['base_dir']}")
-        name_map[name] = skill
-    out = list(name_map.values())
-    enabled_states = _load_skill_enabled_states()
-    for skill in out:
-        skill["enabled"] = enabled_states.get(str(skill.get("name") or ""), True)
-    _skills_cache["sig"] = sig
-    _skills_cache["skills"] = out
-    return list(out) if include_disabled else [s for s in out if s.get("enabled") is not False]
+        skills.extend(_plugin_instruction_entries())
+
+        name_map = {}
+        for skill in skills:
+            name = skill["name"]
+            if name in name_map:
+                logger.warning(f"Skill name conflict: {name}, already from {name_map[name]['base_dir']}, overwritten by {skill['base_dir']}")
+            name_map[name] = skill
+        out = list(name_map.values())
+        enabled_states = _load_skill_enabled_states()
+        for skill in out:
+            skill["enabled"] = enabled_states.get(str(skill.get("name") or ""), True)
+        cache["sig"] = sig
+        cache["skills"] = out
+        return list(out) if include_disabled else [s for s in out if s.get("enabled") is not False]
 
 
 def get_skills_catalog() -> str:

@@ -90,6 +90,11 @@ def _clean_thinking_mode(value: Any) -> str:
     return str(value or "").strip().lower()
 
 
+def _clean_thinking_format(value: Any) -> str:
+    # deepseek / reasoning / think_blocks / none；未配置留空交给运行时按模型名推断。
+    return str(value or "").strip().lower()
+
+
 def recommended_model_windows(model_context_window: Any) -> dict[str, int]:
     max_context = _safe_int(model_context_window, 0)
     if max_context <= 0:
@@ -299,7 +304,12 @@ def is_huawei_api_domain(base_url: str) -> bool:
         return False
     parsed = urlsplit(normalized if "://" in normalized else "//" + normalized)
     hostname = str(parsed.hostname or "").strip().lower()
-    return any("huawei" in label for label in hostname.split(".") if label)
+    try:
+        from trusted_domains import is_huawei_host
+
+        return is_huawei_host(hostname)
+    except Exception:
+        return any("huawei" in label for label in hostname.split(".") if label)
 
 
 def infer_model_limits(
@@ -977,6 +987,7 @@ def upsert_profile(project_root: Path, payload: dict) -> dict:
             "max_output_tokens": max_output_tokens,
             "model_context_window": model_context_window,
             "thinking_mode": _clean_thinking_mode(payload.get("thinking_mode")),
+            "thinking_format": _clean_thinking_format(payload.get("thinking_format")),
             "reasoning_effort": _clean_reasoning_effort(payload.get("reasoning_effort")),
             "temperature": str(payload.get("temperature") or "").strip(),
             "extra_body_json": str(payload.get("extra_body_json") or "").strip(),
@@ -1119,6 +1130,7 @@ def profile_cache_key(profile: dict) -> str:
             "base_url": profile.get("base_url"),
             "api_key": profile.get("api_key"),
             "thinking_mode": profile.get("thinking_mode"),
+            "thinking_format": profile.get("thinking_format"),
             "reasoning_effort": profile.get("reasoning_effort"),
             "temperature": profile.get("temperature"),
             "extra_body_json": profile.get("extra_body_json"),

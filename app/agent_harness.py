@@ -376,6 +376,31 @@ def _profile_reasoning_effort(profile: dict, extra_body: Optional[Dict[str, Any]
     return v if v else "high"
 
 
+THINKING_FORMATS = {"deepseek", "reasoning", "think_blocks", "none"}
+
+
+def _profile_thinking_format(profile: dict) -> str:
+    """目标模型期望的思考格式（发送侧按当前模型自适应）：
+    - deepseek     ：assistant 输出 reasoning_content 字段，内容剥离 <think>；
+    - reasoning    ：assistant 输出 reasoning 字段（mimo 等），内容剥离 <think>；
+    - think_blocks ：不发思考字段，内容原样保留 <think>（思考内联在内容里的模型）；
+    - none         ：不发思考字段，内容剥离 <think>（纯文本模型）。
+    显式配置 thinking_format 优先；未配置时按模型名推断（mimo 只看模型名，不看 oczen）。
+    """
+    raw = str(profile.get("thinking_format") or "").strip().lower()
+    if raw in THINKING_FORMATS:
+        return raw
+    model = str(profile.get("model") or "").strip().lower()
+    base_url = str(profile.get("base_url") or "").strip().lower()
+    if "deepseek" in model:
+        return "deepseek"
+    if "mimo" in model:
+        return "reasoning"
+    if "deepseek" in base_url:
+        return "deepseek"
+    return "deepseek"
+
+
 def _profile_temperature(profile: dict) -> float:
     raw = str(profile.get("temperature") or "").strip()
     if not raw:
@@ -425,6 +450,46 @@ def strip_reasoning_for_api_request(messages: List[Any]) -> List[Any]:
 
         out.append(m.model_copy(update={"content": clean_content, "additional_kwargs": new_ak}))
     return out
+
+
+def _remap_serialized_reasoning_format(
+    messages: List[Dict[str, Any]],
+    thinking_format: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    """将规范序列化消息（保留 <think> 内容 + reasoning_content 字段）按目标模型格式转换。
+
+    供 fallback 客户端在逐个候选重试时调用：每个候选拿到自己期望的思考字段名，
+    并决定内容中的 <think> 保留还是剥离。
+    """
+    from agent_think import strip_think_blocks
+
+    fmt = str(thinking_format or "deepseek").strip().lower()
+    if fmt not in THINKING_FORMATS:
+        fmt = "deepseek"
+    strip_think = fmt != "think_blocks"
+    out: List[Dict[str, Any]] = []
+    for msg in messages:
+        if not isinstance(msg, dict) or str(msg.get("role") or "") != "assistant":
+            out.append(msg)
+            continue
+        new_msg = dict(msg)
+        content = new_msg.get("content")
+        if isinstance(content, str) and strip_think:
+            new_msg["content"] = strip_think_blocks(content)
+        if fmt == "reasoning":
+            rc = new_msg.pop("reasoning_content", None)
+            new_msg.pop("reasoning", None)
+            if rc is not None:
+                new_msg["reasoning"] = rc
+        elif fmt == "deepseek":
+            new_msg.pop("reasoning", None)
+        else:  # think_blocks / none：不发思考字段
+            new_msg.pop("reasoning_content", None)
+            new_msg.pop("reasoning", None)
+        out.append(new_msg)
+    return out
+
+
 def _context_env_int(name: str, default: str) -> int:
     """读取上下文压缩相关 int；仅认 `name`（CONTEXT_*），不设则用 default。"""
     v = os.getenv(name)
@@ -883,6 +948,11 @@ def create_openai_client_for_profile(
             "_myagent_multimodal_input",
             model_profiles.profile_multimodal_input(profile),
         )
+        setattr(
+            client,
+            "_myagent_thinking_format",
+            _profile_thinking_format(profile),
+        )
     except Exception:
         logger.debug("无法向模型客户端附加多模态能力元数据", exc_info=True)
     return client, model_name
@@ -954,6 +1024,10 @@ class _FallbackCompletions:
         candidates = list(self._candidates)
         for idx, item in enumerate(candidates):
             call_kwargs = dict(kwargs)
+            call_kwargs["messages"] = _remap_serialized_reasoning_format(
+                list(call_kwargs.get("messages") or []),
+                item.get("thinking_format") or "deepseek",
+            )
             call_kwargs["model"] = item["model"]
             requested_max_tokens = int(call_kwargs.get("max_tokens") or 0)
             candidate_max_tokens = int(item.get("max_output_tokens") or MAX_OUTPUT_TOKENS)
@@ -1087,6 +1161,9 @@ class FallbackOpenAIClient:
         self.candidates = candidates
         self.chat = _FallbackChat(candidates)
         first = candidates[0] if candidates else {}
+        # 规范序列化标记：先保留 <think> 内容 + reasoning_content 字段，
+        # 具体目标格式在 _FallbackCompletions.create 内按候选 remap。
+        self._myagent_thinking_format = "canonical"
         preferred_modalities = _candidate_input_modalities(first) if first else {"text"}
         self._myagent_input_modalities = sorted(preferred_modalities or {"text"})
         self._myagent_multimodal_input = bool(
@@ -5816,6 +5893,7 @@ def _profile_candidate(profile: dict) -> Dict[str, Any]:
         "temperature": _profile_temperature(profile),
         "extra_body": extra_body,
         "reasoning_effort": _profile_reasoning_effort(profile, extra_body),
+        "thinking_format": _profile_thinking_format(profile),
         "multimodal_input": multimodal_input,
         "input_modalities": input_modalities,
         "mark_multimodal_failed": mark_multimodal_failed,

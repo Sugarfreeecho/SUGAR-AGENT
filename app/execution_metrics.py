@@ -166,6 +166,16 @@ def finish_run(session_id: str, run_id: str, status: str) -> None:
         if run is not None:
             run["status"] = status
             run["finished_at"] = _now()
+            try:
+                _started = datetime.fromisoformat(
+                    str(run.get("started_at") or "").replace("Z", "+00:00")
+                )
+                _finished = datetime.fromisoformat(
+                    str(run.get("finished_at") or "").replace("Z", "+00:00")
+                )
+                run["wall_ms"] = max(0, int(round((_finished - _started).total_seconds() * 1000)))
+            except Exception:
+                pass
             _save(session_id, data)
     try:
         import runtime_observability
@@ -194,6 +204,19 @@ def record_request(session_id: str, run_id: str, react_iter: int, **fields: Any)
         _save(session_id, data)
 
 
+def record_run_fields(session_id: str, run_id: str, **fields: Any) -> None:
+    """Attach run-level timing/accounting fields (startup, round gaps, etc.)."""
+    with _lock:
+        data = _load(session_id)
+        run = _run(data, run_id, create=False)
+        if run is None:
+            return
+        for key, value in fields.items():
+            if value is not None:
+                run[key] = value
+        _save(session_id, data)
+
+
 def record_phase(session_id: str, run_id: str, react_iter: int, phase: str, values: Dict[str, Any], **meta: Any) -> None:
     with _lock:
         data = _load(session_id)
@@ -205,6 +228,9 @@ def record_phase(session_id: str, run_id: str, react_iter: int, phase: str, valu
         row["events"] = merged_events
         if "total_ms" not in row:
             row["total_ms"] = sum(int(v or 0) for v in values.values() if isinstance(v, (int, float)))
+        explicit_total = meta.get("total_ms")
+        if explicit_total is not None:
+            row["total_ms"] = int(explicit_total)
         req["phases"][phase] = row
         _save(session_id, data)
 
