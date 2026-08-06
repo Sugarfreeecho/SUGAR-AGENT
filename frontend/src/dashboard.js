@@ -4,6 +4,14 @@ const openState = new Map();
 let lastData = { sessions: [] };
 let inflight = null;
 let selectedRequestKey = '__total__';
+let phaseChartMode = 'round';
+let reconcileMode = 'session';
+let reconcileAllOpen = false;
+const SESSION_FILTER_KEY = 'execution-dashboard-session-filter';
+let sessionIndex = [];
+let activeSessionId = '';
+let sessionDefaultResolved = false;
+let fullFallback = false;
 const chartScrollState = new Map();
 const chartLegendSelection = new Map();
 const CHART_POINT_LIMIT = 300;
@@ -38,6 +46,22 @@ function toolWallMs(req){
   const rec=(req.phases||{}).tool_execution;
   if(rec&&num(rec.total_ms)>0)return num(rec.total_ms);
   return (req.tools||[]).reduce((n,t)=>Math.max(n,num(t.duration_ms)),0);
+}
+function runMergedRows(rows){
+  const runs=new Map();
+  rows.forEach(row=>{
+    const key=String(row.session.session_id||'')+'|'+String(row.run.run_id||'');
+    if(!runs.has(key))runs.set(key,{session:row.session,run:row.run,reqs:[]});
+    runs.get(key).reqs.push(row.req);
+  });
+  return Array.from(runs.values()).map(({session,run,reqs})=>{
+    const last=reqs[reqs.length-1]||{};
+    return{session,run,reqs,req:{react_iter:reqs.length?1:0,started_at:(reqs[0]||{}).started_at||run.started_at,model:last.model||'',status:run.status||''}};
+  });
+}
+function phaseTotalMs(row,key){
+  if(row.reqs)return row.reqs.reduce((n,req)=>n+num(phaseData(req,key).total_ms),0);
+  return num(phaseData(row.req,key).total_ms);
 }
 function observedRun(row) {
   const runs=((row.session.observability||{}).runs)||[];
@@ -116,8 +140,8 @@ function lineChart(target, rows, series, defaultUnit='ms') {
   const format=(v,unit)=>unit==='ms'?ms(v):unit==='B'?formatBytes(v):Math.round(v).toLocaleString();
   let plot=`<svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" role="img" style="width:${W}px;height:${H}px">`;
   for(let i=0;i<=4;i++){const yy=y(i/4,1);plot+=`<line x1="0" y1="${yy}" x2="${W}" y2="${yy}" class="grid"/>`;}
-  series.forEach(s=>{const max=s.axis==='right'?maxRight:maxLeft,dim=selected&&s.name!==selected;const points=rows.map((r,i)=>`${x(i)},${y(s.value(r),max)}`).join(' ');plot+=`<polyline points="${points}" fill="none" stroke="${s.color}" stroke-width="${dim?1:2}" opacity="${dim?.15:1}"/>`;rows.forEach((r,i)=>{const raw=s.value(r),user=String(r.run.user_preview||r.session.session_name||'').replace(/\s+/g,' ').trim().slice(0,7)||'无用户消息',tip={session:r.session.session_name,session_id:r.session.session_id,run_id:r.run.run_id,time:r.req.started_at||r.run.started_at||'',react_iter:r.req.react_iter,user,model:r.req.model||'',metric:s.name,value:num(raw),display:format(raw,s.unit),unit:s.unit};plot+=`<circle class="chart-point" data-tip="${esc(JSON.stringify(tip))}" cx="${x(i)}" cy="${y(raw,max)}" r="4" fill="${s.color}" opacity="${dim?.12:1}"/>`;});});
-  rows.forEach((r,i)=>{if(rows.length<=20||i%Math.ceil(rows.length/16)===0){const user=String(r.run.user_preview||r.session.session_name||'').replace(/\s+/g,' ').trim().slice(0,7)||'无用户消息';plot+=`<text x="${x(i)}" y="${H-25}" text-anchor="middle">${esc(new Date(r.req.started_at||r.run.started_at).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}))}</text><text x="${x(i)}" y="${H-10}" text-anchor="middle">${esc(user)} · LLM #${r.req.react_iter}</text>`;}});plot+='</svg>';
+  series.forEach(s=>{const max=s.axis==='right'?maxRight:maxLeft,dim=selected&&s.name!==selected;const points=rows.map((r,i)=>`${x(i)},${y(s.value(r),max)}`).join(' ');plot+=`<polyline points="${points}" fill="none" stroke="${s.color}" stroke-width="${dim?1:2}" opacity="${dim?.15:1}"/>`;rows.forEach((r,i)=>{const raw=s.value(r),user=String(r.run.user_preview||r.session.session_name||'').replace(/\s+/g,' ').trim().slice(0,7)||'无用户消息',iterLabel=r.reqs?('Run '+r.reqs.length+'轮'):('LLM #'+r.req.react_iter),tip={session:r.session.session_name,session_id:r.session.session_id,run_id:r.run.run_id,time:r.req.started_at||r.run.started_at||'',react_iter:iterLabel,user,model:r.req.model||'',metric:s.name,value:num(raw),display:format(raw,s.unit),unit:s.unit};plot+=`<circle class="chart-point" data-tip="${esc(JSON.stringify(tip))}" cx="${x(i)}" cy="${y(raw,max)}" r="4" fill="${s.color}" opacity="${dim?.12:1}"/>`;});});
+  rows.forEach((r,i)=>{if(rows.length<=20||i%Math.ceil(rows.length/16)===0){const user=String(r.run.user_preview||r.session.session_name||'').replace(/\s+/g,' ').trim().slice(0,7)||'无用户消息',iterLabel=r.reqs?('Run '+r.reqs.length+'轮'):('LLM #'+r.req.react_iter);plot+=`<text x="${x(i)}" y="${H-25}" text-anchor="middle">${esc(new Date(r.req.started_at||r.run.started_at).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}))}</text><text x="${x(i)}" y="${H-10}" text-anchor="middle">${esc(user)} · ${esc(iterLabel)}</text>`;}});plot+='</svg>';
   const axisHtml=(side,max,unit,enabled)=>`<div class="y-axis y-axis--${side}" aria-hidden="true">${enabled?[0,1,2,3,4].map(i=>{const v=max*i/4;return`<span style="top:${y(v,max)}px">${esc(format(v,unit))}</span>`;}).join(''):''}</div>`;
   const leftUnit=(leftSeries[0]||visible[0]||series[0]).unit,rightUnit=(rightSeries[0]||series.find(s=>s.axis==='right')||{}).unit;
   const legend='<div class="legend">'+series.map(s=>`<button type="button" data-chart="${esc(target)}" data-series="${esc(s.name)}" class="${selected===s.name?'is-selected':selected?'is-dimmed':''}"><i style="background:${s.color}"></i>${esc(s.name)}</button>`).join('')+'</div>';
@@ -137,12 +161,13 @@ function renderCharts(rows){
     return Object.assign({},row,{cumulativeInput,cumulativeOutput});
   }));
   const chartRows=sampleChartRows(rows);
+  const phaseRows=sampleChartRows(phaseChartMode==='run'?runMergedRows(rows):rows);
   lineChart('api-chart',cumulativeRows,[
     {name:'累计输入 token',value:r=>r.cumulativeInput},
     {name:'累计输出 token',value:r=>r.cumulativeOutput},
     {name:'上下文长度',value:r=>num((r.req.context||{}).estimated_tokens)},
   ],'');
-  lineChart('phase-chart',chartRows,PHASE_DEFS.map(([key,label])=>({name:label,value:r=>num(phaseData(r.req,key).total_ms)})));
+  lineChart('phase-chart',phaseRows,PHASE_DEFS.map(([key,label])=>({name:label,value:r=>phaseTotalMs(r,key)})));
   const toolMode=(document.getElementById('tool-chart-mode')||{}).value||'count',toolNames=[];
   rows.forEach(row=>(row.req.tools||[]).forEach(tool=>{const name=String(tool.tool||'tool');if(!toolNames.includes(name))toolNames.push(name);}));
   const toolTotals={},toolRows=sampleChartRows(rows.map(row=>{(row.req.tools||[]).forEach(tool=>{const name=String(tool.tool||'tool');toolTotals[name]=(toolTotals[name]||0)+(toolMode==='duration'?num(tool.duration_ms):1);});return Object.assign({},row,{toolTotals:Object.assign({},toolTotals)});}));
@@ -182,30 +207,69 @@ function requestDetailHtml(row){
   return `<section class="session-block"><header><div><h2>${esc(session.session_name)}</h2><code>${esc(session.session_id)}</code></div><span>${esc(new Date(req.started_at||run.started_at||'').toLocaleString())}</span></header><article class="run-block"><header><div><strong>${esc(run.mode||'chat')}</strong><code>${esc(run.run_id)}</code></div><em class="${esc(run.status||'')}">${esc(run.status||'')}</em></header><div class="request-card"><header><div><strong>LLM #${req.react_iter}</strong><span>${esc(req.model||'')}</span></div><em>${esc(req.status||'')}</em></header>${PHASE_DEFS.map(([n])=>phaseHtml(session,run,req,n,phaseData(req,n))).join('')}${toolsHtml(session,run,req)}</div></article></section>`;
 }
 
-function runReconcileHtml(rows){
+function reconcileRunStats(run,reqs){
+  const wall=runWallMs(run);
+  let startup=reqs.reduce((n,r)=>n+num(r.startup_ms),0);
+  if(!startup&&reqs.length){
+    const a=Date.parse(reqs[0].started_at||''),b=Date.parse(run.started_at||'');
+    if(Number.isFinite(a)&&Number.isFinite(b))startup=Math.max(0,a-b);
+  }
+  const reqWall=reqs.reduce((n,r)=>n+(num(r.wall_ms)>0?num(r.wall_ms):num(r.duration_ms)+num(((r.phases||{}).pre_api||{}).total_ms)+toolWallMs(r)+num(((r.phases||{}).round_postprocess||{}).total_ms)),0);
+  const roundGap=reqs.reduce((n,r)=>n+num(r.round_gap_ms),0);
+  const finalPipe=reqs.reduce((n,r)=>n+num(((r.phases||{}).final_pipeline||{}).total_ms),0);
+  const api=reqs.reduce((n,r)=>n+num(r.duration_ms),0);
+  const toolWall=reqs.reduce((n,r)=>n+toolWallMs(r),0);
+  const known=startup+reqWall+roundGap+finalPipe;
+  return {wall,startup,reqWall,roundGap,finalPipe,api,toolWall,residual:Math.max(0,wall-known)};
+}
+function reconcileRowsHtml(stats,wall){
+  return [['Run 墙钟',stats.wall],['Run 启动',stats.startup],['Σ 轮次墙钟',stats.reqWall],['Σ 轮间缝隙',stats.roundGap],['Run 收尾（final_pipeline）',stats.finalPipe],['未计时残差',stats.residual],['LLM API 流累计',stats.api],['工具批次墙钟',stats.toolWall]].map(([label,value])=>`<div class="event-row event-row--aggregate"><span>${esc(label)}</span><b>${esc(ms(value))}</b><small>${wall?((value/wall)*100).toFixed(1):'0.0'}%</small></div>`).join('');
+}
+function runReconcileCard(run,reqs,openRuns){
+  const stats=reconcileRunStats(run,reqs);
+  const key='reconcile|'+String(run.run_id||'');
+  const opened=openRuns||openState.get(key)===true;
+  const roundRows=reqs.slice().sort((a,b)=>num(a.react_iter)-num(b.react_iter)).map(r=>{
+    const rWall=num(r.wall_ms)>0?num(r.wall_ms):(num(r.duration_ms)+num(((r.phases||{}).pre_api||{}).total_ms)+toolWallMs(r)+num(((r.phases||{}).round_postprocess||{}).total_ms));
+    return `<div class="event-row"><span>LLM #${esc(r.react_iter||'')}</span><b>${esc(ms(rWall))}</b><small>API ${esc(ms(r.duration_ms))} · 工具 ${esc(ms(toolWallMs(r)))} · 轮间 ${esc(ms(r.round_gap_ms))} · 收尾 ${esc(ms(((r.phases||{}).final_pipeline||{}).total_ms))}</small></div>`;
+  }).join('')||'<div class="empty-inline">暂无轮次</div>';
+  return `<details class="phase" data-open-key="${esc(key)}" ${opened?'open':''}><summary><span>Run 对账 · ${esc(String(run.run_id||'').slice(0,8))}</span><b>${esc(ms(stats.wall))}</b><small>${reqs.length} 轮 · ${esc(run.status||'')}</small></summary><div class="request-card">${reconcileRowsHtml(stats,stats.wall)}<details class="phase"><summary><span>轮次明细</span><b>${reqs.length} 轮</b></summary><div>${roundRows}</div></details></div></details>`;
+}
+function runReconcileHtml(rows, mode, openRuns){
   const runs=new Map();
   rows.forEach(row=>{
     const key=String(row.session.session_id||'')+'|'+String(row.run.run_id||'');
-    if(!runs.has(key))runs.set(key,{run:row.run,reqs:[]});
+    if(!runs.has(key))runs.set(key,{session:row.session,run:row.run,reqs:[]});
     runs.get(key).reqs.push(row.req);
   });
   if(!runs.size)return '';
-  return Array.from(runs.values()).map(({run,reqs})=>{
-    const wall=runWallMs(run);
-    let startup=reqs.reduce((n,r)=>n+num(r.startup_ms),0);
-    if(!startup&&reqs.length){
-      const a=Date.parse(reqs[0].started_at||''),b=Date.parse(run.started_at||'');
-      if(Number.isFinite(a)&&Number.isFinite(b))startup=Math.max(0,a-b);
-    }
-    const reqWall=reqs.reduce((n,r)=>n+(num(r.wall_ms)>0?num(r.wall_ms):num(r.duration_ms)+num(((r.phases||{}).pre_api||{}).total_ms)+toolWallMs(r)+num(((r.phases||{}).round_postprocess||{}).total_ms)),0);
-    const roundGap=reqs.reduce((n,r)=>n+num(r.round_gap_ms),0);
-    const finalPipe=reqs.reduce((n,r)=>n+num(((r.phases||{}).final_pipeline||{}).total_ms),0);
-    const api=reqs.reduce((n,r)=>n+num(r.duration_ms),0);
-    const toolWall=reqs.reduce((n,r)=>n+toolWallMs(r),0);
-    const known=startup+reqWall+roundGap+finalPipe;
-    const residual=Math.max(0,wall-known);
-    const rows=[['Run 墙钟',wall],['Run 启动',startup],['Σ 轮次墙钟',reqWall],['Σ 轮间缝隙',roundGap],['Run 收尾（final_pipeline）',finalPipe],['未计时残差',residual],['LLM API 流累计',api],['工具批次墙钟',toolWall]];
-    return `<article class="run-block"><header><div><strong>Run 对账</strong><code>${esc(run.run_id)}</code></div><em class="${esc(run.status||'')}">${esc(run.status||'')}</em></header><div class="request-card">${rows.map(([label,value])=>`<div class="event-row event-row--aggregate"><span>${esc(label)}</span><b>${esc(ms(value))}</b><small>${wall?((value/wall)*100).toFixed(1):'0.0'}%</small></div>`).join('')}</div></article>`;
+  const groups=Array.from(runs.values());
+  if(mode!=='session'){
+    return groups.map(g=>runReconcileCard(g.run,g.reqs,openRuns)).join('');
+  }
+  const sessions=new Map();
+  groups.forEach(g=>{
+    const sid=String(g.session.session_id||'');
+    if(!sessions.has(sid))sessions.set(sid,{session:g.session,runs:[]});
+    sessions.get(sid).runs.push(g);
+  });
+  return Array.from(sessions.values()).map(({session,runs})=>{
+    const key='reconcile-session|'+String(session.session_id||'');
+    const opened=openState.get(key)!==false;
+    const statsList=runs.map(g=>reconcileRunStats(g.run,g.reqs));
+    const wall=statsList.reduce((n,s)=>n+s.wall,0);
+    const stats={
+      wall,
+      startup:statsList.reduce((n,s)=>n+s.startup,0),
+      reqWall:statsList.reduce((n,s)=>n+s.reqWall,0),
+      roundGap:statsList.reduce((n,s)=>n+s.roundGap,0),
+      finalPipe:statsList.reduce((n,s)=>n+s.finalPipe,0),
+      api:statsList.reduce((n,s)=>n+s.api,0),
+      toolWall:statsList.reduce((n,s)=>n+s.toolWall,0),
+      residual:Math.max(0,wall-statsList.reduce((n,s)=>n+(s.startup+s.reqWall+s.roundGap+s.finalPipe),0)),
+    };
+    const totalRounds=runs.reduce((n,g)=>n+g.reqs.length,0);
+    return `<details class="phase" data-open-key="${esc(key)}" ${opened?'open':''}><summary><span>会话 ${esc(session.session_name||session.session_id||'')}</span><b>${esc(ms(wall))}</b><small>${runs.length} 个 Run · ${totalRounds} 轮</small></summary><div class="request-card">${reconcileRowsHtml(stats,wall)}${runs.map(g=>runReconcileCard(g.run,g.reqs,openRuns)).join('')}</div></details>`;
   }).join('');
 }
 
@@ -219,7 +283,7 @@ function cumulativeDetailHtml(rows){
   }));
   const allPhaseTotal=Object.values(phaseTotals).reduce((n,v)=>n+num(v),0);
   const cumulativeEvents=(name)=>{const phaseTotal=num(phaseTotals[name]);return Object.entries(phaseEvents[name]||{}).map(([event,total])=>`<div class="event-row event-row--aggregate"><span>${esc(event)}</span><b>平均 ${esc(ms(num(total)/rows.length))}</b><small>累计 ${esc(ms(total))} · 占本阶段 ${phaseTotal?((num(total)/phaseTotal)*100).toFixed(1):'0.0'}%</small></div>`).join('')||'<div class="empty-inline">暂无子事件</div>';};
-  return `<section class="session-block"><header><div><h2>累计总值</h2><code>${esc(document.getElementById('session-filter').value?'当前会话筛选':'全部会话')}</code></div><span>${rows.length} 次 LLM 请求</span></header>${runReconcileHtml(rows)}<article class="run-block"><div class="request-card">${PHASE_DEFS.map(([name,label])=>{const total=num(phaseTotals[name]),avg=total/rows.length,ratio=allPhaseTotal?total/allPhaseTotal*100:0,key=`total|${name}`,opened=openState.get(key)===true;return`<details class="phase" data-open-key="${esc(key)}" ${opened?'open':''}><summary><span>${esc(label)}</span><b>平均 ${esc(ms(avg))} · 累计 ${esc(ms(total))} · 占比 ${ratio.toFixed(1)}%</b></summary><div>${cumulativeEvents(name)}</div></details>`;}).join('')}</div></article></section>`;
+  return `<section class="session-block"><header><div><h2>累计总值</h2><code>${esc(document.getElementById('session-filter').value?'当前会话筛选':'全部会话')}</code></div><span>${rows.length} 次 LLM 请求</span></header><div class="detail-toolbar"><div><h2>Run 对账</h2><span>合并显示，减少卡片数量</span></div><label>显示方式<select id="reconcile-mode" aria-label="Run 对账显示方式"><option value="session">按会话合并</option><option value="run">按 Run 展开</option></select></label><button type="button" id="reconcile-toggle">全部展开</button></div>${runReconcileHtml(rows,reconcileMode,reconcileAllOpen)}<article class="run-block"><div class="request-card">${PHASE_DEFS.map(([name,label])=>{const total=num(phaseTotals[name]),avg=total/rows.length,ratio=allPhaseTotal?total/allPhaseTotal*100:0,key=`total|${name}`,opened=openState.get(key)===true;return`<details class="phase" data-open-key="${esc(key)}" ${opened?'open':''}><summary><span>${esc(label)}</span><b>平均 ${esc(ms(avg))} · 累计 ${esc(ms(total))} · 占比 ${ratio.toFixed(1)}%</b></summary><div>${cumulativeEvents(name)}</div></details>`;}).join('')}</div></article></section>`;
 }
 
 function renderTopCards(rows,selectedRow,isTotal){
@@ -255,10 +319,11 @@ function renderTopCards(rows,selectedRow,isTotal){
 
 function render(data){
   const visibleSessions=(data.sessions||[]).filter(s=>!['s-followup','s-final-first'].includes(String(s.session_id||'').toLowerCase())&&!['s-followup','s-final-first'].includes(String(s.session_name||'').toLowerCase()));
-  data=Object.assign({},data,{sessions:visibleSessions});lastData=data; const filter=document.getElementById('session-filter'), selected=filter.value;
-  filter.innerHTML='<option value="">全部会话</option>'+visibleSessions.map(s=>`<option value="${esc(s.session_id)}">${esc(s.session_name)} · ${esc(s.session_id.slice(0,8))}</option>`).join('');
-  if(selected && visibleSessions.some(s=>s.session_id===selected))filter.value=selected;
-  const rows=flatten(data,filter.value); renderCharts(rows);
+  data=Object.assign({},data,{sessions:visibleSessions});lastData=data; const filter=document.getElementById('session-filter');
+  filter.innerHTML='<option value="">全部会话</option>'+sessionIndex.map(s=>`<option value="${esc(s.id)}">${esc(s.name)} · ${esc(String(s.id).slice(0,8))}</option>`).join('');
+  const selected=activeSessionId&&sessionIndex.some(s=>s.id===activeSessionId)?activeSessionId:'';
+  filter.value=selected;
+  const rows=flatten(data,selected); renderCharts(rows);
   const requestFilter=document.getElementById('request-filter'),latest=rows.length?rows[rows.length-1]:null;
   if(selectedRequestKey!=='__total__'&&!rows.some(row=>requestKey(row)===selectedRequestKey))selectedRequestKey='__total__';
   requestFilter.innerHTML='<option value="__total__">累计总值</option>'+rows.slice().reverse().map(row=>{const user=String(row.run.user_preview||row.session.session_name||'').replace(/\s+/g,' ').trim().slice(0,7)||'无用户消息';return`<option value="${esc(requestKey(row))}">${esc(user)} · LLM #${row.req.react_iter} · ${esc(new Date(row.req.started_at||row.run.started_at||'').toLocaleString())}</option>`;}).join('');
@@ -273,21 +338,82 @@ function render(data){
       const next=!d.open;openState.set(d.dataset.openKey,next);d.open=next;
     });
   });
+  const reconcileModeEl=document.getElementById('reconcile-mode');
+  if(reconcileModeEl){
+    reconcileModeEl.value=reconcileMode;
+    reconcileModeEl.addEventListener('change',()=>{reconcileMode=reconcileModeEl.value;render(lastData);});
+  }
+  const reconcileToggle=document.getElementById('reconcile-toggle');
+  if(reconcileToggle){
+    reconcileToggle.textContent=reconcileAllOpen?'全部折叠':'全部展开';
+    reconcileToggle.addEventListener('click',()=>{reconcileAllOpen=!reconcileAllOpen;render(lastData);});
+  }
 }
 
+async function loadSessionIndex(){
+  try{
+    const r=await fetch('/api/execution-metrics/sessions',{cache:'no-store'});
+    if(!r.ok)throw new Error('sessions endpoint unavailable');
+    const p=await r.json();
+    if(!p.ok)throw new Error(p.error||'加载失败');
+    fullFallback=false;
+    sessionIndex=((p.data&&p.data.sessions)||[]).filter(s=>{
+      const id=String(s.session_id||'').toLowerCase(),name=String(s.session_name||'').toLowerCase();
+      return !['s-followup','s-final-first'].includes(id)&&!['s-followup','s-final-first'].includes(name);
+    }).map(s=>({id:s.session_id,name:s.session_name||s.session_id}));
+    return;
+  }catch(_e){}
+  // 旧后端没有 sessions 轻量接口时回退全量加载，保证功能可用。
+  const r=await fetch('/api/execution-metrics',{cache:'no-store'});
+  const p=await r.json();
+  if(!r.ok||!p.ok)throw new Error(p.error||'加载失败');
+  fullFallback=true;
+  sessionIndex=((p.data&&p.data.sessions)||[]).filter(s=>{
+    const id=String(s.session_id||'').toLowerCase(),name=String(s.session_name||'').toLowerCase();
+    return !['s-followup','s-final-first'].includes(id)&&!['s-followup','s-final-first'].includes(name);
+  }).map(s=>({id:s.session_id,name:s.session_name||s.session_id}));
+}
+async function loadMetrics(){
+  const url=(activeSessionId&&!fullFallback)?('/api/execution-metrics?session_id='+encodeURIComponent(activeSessionId)):'/api/execution-metrics';
+  const r=await fetch(url,{cache:'no-store'});
+  const p=await r.json();
+  if(!r.ok||!p.ok)throw new Error(p.error||'加载失败');
+  return p.data||{sessions:[]};
+}
 async function refresh(){
   if(inflight)return;
   const controller=new AbortController();inflight=controller;
-  try{const r=await fetch('/api/execution-metrics',{cache:'no-store',signal:controller.signal});const p=await r.json();if(!r.ok||!p.ok)throw new Error(p.error||'加载失败');render(p.data||{sessions:[]});}
-  catch(e){if(e.name!=='AbortError')document.getElementById('dashboard-body').innerHTML=`<div class="empty">加载失败：${esc(e.message||e)}</div>`;}
+  try{
+    await loadSessionIndex();
+    if(!sessionDefaultResolved){
+      sessionDefaultResolved=true;
+      let saved='';
+      try{saved=localStorage.getItem(SESSION_FILTER_KEY)||'';}catch(_e){}
+      if(saved&&sessionIndex.some(s=>s.id===saved))activeSessionId=saved;
+      else if(sessionIndex.length)activeSessionId=sessionIndex[0].id;
+    }else if(activeSessionId&&!sessionIndex.some(s=>s.id===activeSessionId)){
+      activeSessionId=sessionIndex.length?sessionIndex[0].id:'';
+    }
+    const data=await loadMetrics();
+    render(data);
+  }
+  catch(e){
+    if(e.name!=='AbortError')document.getElementById('dashboard-body').innerHTML=`<div class="empty">加载失败：${esc(e.message||e)}</div>`;
+  }
   finally{
     if(inflight===controller)inflight=null;
     clearTimeout(refreshTimer);
     refreshTimer=setTimeout(refresh,REFRESH_DELAY_MS);
   }
 }
-document.getElementById('session-filter').addEventListener('change',()=>{selectedRequestKey='__total__';render(lastData);});
+document.getElementById('session-filter').addEventListener('change',event=>{
+  activeSessionId=event.target.value;
+  selectedRequestKey='__total__';
+  try{localStorage.setItem(SESSION_FILTER_KEY,activeSessionId);}catch(_e){}
+  refresh();
+});
 document.getElementById('request-filter').addEventListener('change',event=>{selectedRequestKey=event.target.value;render(lastData);});
+document.getElementById('phase-chart-mode').addEventListener('change',event=>{phaseChartMode=event.target.value;renderCharts(flatten(lastData,document.getElementById('session-filter').value));});
 document.getElementById('tool-chart-mode').addEventListener('change',()=>renderCharts(flatten(lastData,document.getElementById('session-filter').value)));
 document.getElementById('refresh-btn').addEventListener('click',refresh);
 document.getElementById('back-to-chat-btn').addEventListener('click',()=>{
@@ -302,7 +428,7 @@ document.addEventListener('pointerover',event=>{
   if(!point||!chartTooltip)return;
   try{
     const t=JSON.parse(point.dataset.tip||'{}');
-    chartTooltip.innerHTML=`<strong>${esc(t.metric)}</strong><b>${esc(t.display)}</b><dl><dt>会话</dt><dd>${esc(t.session)}</dd><dt>时间</dt><dd>${esc(t.time?new Date(t.time).toLocaleString():'—')}</dd><dt>执行轮次</dt><dd>${esc(t.user||'无用户消息')} · LLM #${esc(t.react_iter)}</dd><dt>模型</dt><dd>${esc(t.model||'—')}</dd><dt>Run ID</dt><dd>${esc(t.run_id||'—')}</dd><dt>Session ID</dt><dd>${esc(t.session_id||'—')}</dd></dl>`;
+    chartTooltip.innerHTML=`<strong>${esc(t.metric)}</strong><b>${esc(t.display)}</b><dl><dt>会话</dt><dd>${esc(t.session)}</dd><dt>时间</dt><dd>${esc(t.time?new Date(t.time).toLocaleString():'—')}</dd><dt>执行轮次</dt><dd>${esc(t.user||'无用户消息')} · ${esc(typeof t.react_iter==='number'?('LLM #'+t.react_iter):t.react_iter)}</dd><dt>模型</dt><dd>${esc(t.model||'—')}</dd><dt>Run ID</dt><dd>${esc(t.run_id||'—')}</dd><dt>Session ID</dt><dd>${esc(t.session_id||'—')}</dd></dl>`;
     chartTooltip.classList.add('is-visible');chartTooltip.setAttribute('aria-hidden','false');
   }catch(_error){}
 });

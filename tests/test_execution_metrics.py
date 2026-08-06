@@ -100,3 +100,28 @@ def test_execution_metrics_record_phase_explicit_total_overwrites(tmp_path):
     assert phase["events"] == {"build_messages": 3, "pre_api_tail": 42}
     execution_metrics._root = old_root
     execution_metrics._sessions.clear()
+
+
+def test_execution_metrics_list_sessions_is_lightweight(tmp_path):
+    import execution_metrics
+
+    old_root = execution_metrics._root
+    execution_metrics.configure(tmp_path / "sessions")
+    execution_metrics._sessions.clear()
+    execution_metrics.start_run("s4", "r1", "chat", "会话甲")
+    execution_metrics.record_request("s4", "r1", 1, duration_ms=1000)
+    execution_metrics.finish_run("s4", "r1", "finished")
+    execution_metrics.start_run("s5", "r2", "chat", "会话乙")
+    execution_metrics.record_request("s5", "r2", 1, duration_ms=500)
+    execution_metrics.finish_run("s5", "r2", "finished")
+
+    index = execution_metrics.list_sessions({"s4": "会话甲", "s5": "会话乙"})
+    sessions = index["sessions"]
+    assert {row["session_id"] for row in sessions} == {"s4", "s5"}
+    assert {row["session_name"] for row in sessions} == {"会话甲", "会话乙"}
+    assert all(row["run_count"] == 1 for row in sessions)
+    assert all("requests" not in row for row in sessions)
+    # 最新 run 排最前（s5 后写，last_started_at 更晚）。
+    assert sessions[0]["session_id"] == "s5"
+    execution_metrics._root = old_root
+    execution_metrics._sessions.clear()

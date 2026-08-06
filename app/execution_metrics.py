@@ -361,3 +361,36 @@ def snapshot_all(session_names: Optional[Dict[str, str]] = None) -> dict:
             reverse=True,
         )
         return {"version": 1, "sessions": sessions}
+
+
+def list_sessions(session_names: Optional[Dict[str, str]] = None) -> dict:
+    """Lightweight session index for the dashboard (no request/phase payload)."""
+    names = session_names or {}
+    with _lock:
+        session_ids = set(_sessions.keys())
+        if _root is not None and _root.exists():
+            for path in _root.rglob("execution_metrics.json"):
+                try:
+                    loaded = json.loads(path.read_text(encoding="utf-8"))
+                    sid = str(loaded.get("session_id") or "")
+                    if sid:
+                        session_ids.add(sid)
+                except (OSError, ValueError, TypeError):
+                    continue
+        sessions = []
+        for sid in session_ids:
+            data = _load(sid)
+            runs = data.get("runs") or []
+            if not runs:
+                continue
+            last = runs[-1]
+            sessions.append({
+                "session_id": sid,
+                "session_name": str(names.get(sid) or sid),
+                "run_count": len(runs),
+                "last_started_at": str(last.get("started_at") or ""),
+                "last_finished_at": str(last.get("finished_at") or ""),
+                "status": str(last.get("status") or ""),
+            })
+        sessions.sort(key=lambda row: row["last_started_at"], reverse=True)
+        return {"sessions": sessions}

@@ -84,6 +84,8 @@ _EXECUTION_METRICS_PAYLOAD_TTL_SEC = max(
 _execution_metrics_payload_lock = threading.Lock()
 _execution_metrics_payload_cached_at = 0.0
 _execution_metrics_payload_cache = b""
+_execution_metrics_sessions_cached_at = 0.0
+_execution_metrics_sessions_cache = b""
 _VIEWABLE_IMAGE_SUFFIXES = {
     ".png",
     ".jpg",
@@ -5228,10 +5230,55 @@ async def get_session_execution_metrics(session_id: str):
     return JSONResponse({"ok": True, "data": execution_metrics.snapshot(sid)})
 
 
+def _execution_metrics_session_names() -> Dict[str, str]:
+    return {
+        str(row.get("id") or ""): str(row.get("name") or row.get("id") or "")
+        for row in list(session_manager.index)
+        if isinstance(row, dict) and row.get("id")
+    }
+
+
+@fastapi_app.get("/api/execution-metrics/sessions")
+async def get_execution_metrics_sessions():
+    def _build_payload() -> bytes:
+        global _execution_metrics_sessions_cached_at, _execution_metrics_sessions_cache
+        now = time.monotonic()
+        with _execution_metrics_payload_lock:
+            if (
+                _execution_metrics_sessions_cache
+                and now - _execution_metrics_sessions_cached_at < _EXECUTION_METRICS_PAYLOAD_TTL_SEC
+            ):
+                return _execution_metrics_sessions_cache
+            payload = json.dumps(
+                {"ok": True, "data": execution_metrics.list_sessions(_execution_metrics_session_names())},
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ).encode("utf-8")
+            _execution_metrics_sessions_cache = payload
+            _execution_metrics_sessions_cached_at = time.monotonic()
+            return payload
+
+    payload = await asyncio.to_thread(_build_payload)
+    return Response(
+        content=payload,
+        media_type="application/json",
+        headers={"Cache-Control": "no-store"},
+    )
+
+
 @fastapi_app.get("/api/execution-metrics")
-async def get_all_execution_metrics():
+async def get_all_execution_metrics(session_id: Optional[str] = None):
     def _build_payload() -> bytes:
         global _execution_metrics_payload_cached_at, _execution_metrics_payload_cache
+        sid = str(session_id or "").strip()
+        if sid:
+            data = execution_metrics.snapshot(sid)
+            if data.get("runs"):
+                data["session_name"] = _execution_metrics_session_names().get(sid, sid)
+                payload = {"ok": True, "data": {"sessions": [data]}}
+            else:
+                payload = {"ok": True, "data": {"sessions": []}}
+            return json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
         now = time.monotonic()
         with _execution_metrics_payload_lock:
             if (
@@ -5239,13 +5286,8 @@ async def get_all_execution_metrics():
                 and now - _execution_metrics_payload_cached_at < _EXECUTION_METRICS_PAYLOAD_TTL_SEC
             ):
                 return _execution_metrics_payload_cache
-            names = {
-                str(row.get("id") or ""): str(row.get("name") or row.get("id") or "")
-                for row in list(session_manager.index)
-                if isinstance(row, dict) and row.get("id")
-            }
             payload = json.dumps(
-                {"ok": True, "data": execution_metrics.snapshot_all(names)},
+                {"ok": True, "data": execution_metrics.snapshot_all(_execution_metrics_session_names())},
                 ensure_ascii=False,
                 separators=(",", ":"),
             ).encode("utf-8")
