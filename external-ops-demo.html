@@ -1,0 +1,423 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>工作区外处理权限 · 交互演示</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  :root {
+    --bg: #14141a;
+    --panel: #1b1b24;
+    --card: #26263a;
+    --card2: #2c2c44;
+    --border: rgba(255,255,255,.09);
+    --text: #e9e9f2;
+    --dim: #9d9db5;
+    --faint: #6f6f8a;
+    --blue: #89b4fa;
+    --green: #a6e3a1;
+    --amber: #f9e2af;
+    --red: #f38ba8;
+    --mauve: rgba(203,166,247,.14);
+    --mono: "Cascadia Code", Consolas, "SF Mono", Menlo, monospace;
+  }
+  body {
+    background: var(--bg); color: #ddd;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    font-size: 14px; line-height: 1.55;
+    padding: 28px 20px 60px;
+  }
+  header { max-width: 1180px; margin: 0 auto 16px; }
+  header h1 { font-size: 21px; color: #fff; font-weight: 700; }
+  header .sub { color: #9a9aa8; margin-top: 6px; max-width: 920px; }
+  .legend { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 10px; font-size: 11px; color: #7b7b8c; }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .legend i { width: 10px; height: 10px; border-radius: 3px; display: inline-block; }
+  .layout { max-width: 1180px; margin: 0 auto; display: grid; grid-template-columns: 1fr 360px; gap: 18px; align-items: start; }
+  @media (max-width: 960px) { .layout { grid-template-columns: 1fr; } }
+  .col { background: var(--panel); border: 1px solid #2a2a35; border-radius: 14px; padding: 16px; }
+  .col h2 { font-size: 14px; color: #fff; font-weight: 700; margin-bottom: 4px; }
+  .col .hint { font-size: 12px; color: var(--dim); margin-bottom: 12px; }
+
+  .state-bar {
+    display: flex; align-items: center; gap: 8px;
+    padding: 9px 12px; border-radius: 10px; margin-bottom: 12px;
+    font-size: 12.5px; border: 1px solid var(--border);
+    background: rgba(255,255,255,.03); color: var(--dim);
+  }
+  .state-bar .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--amber); flex: none; }
+  .state-bar.granted { border-color: rgba(166,227,161,.35); background: rgba(166,227,161,.08); color: var(--green); }
+  .state-bar.granted .dot { background: var(--green); }
+
+  .trigger-row { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; }
+  .trigger-row button {
+    border: 1px solid var(--border); background: rgba(255,255,255,.04); color: var(--text);
+    border-radius: 8px; padding: 6px 12px; font-size: 12.5px; cursor: pointer;
+  }
+  .trigger-row button:hover { border-color: rgba(137,180,250,.4); background: rgba(137,180,250,.08); }
+
+  .stream { display: flex; flex-direction: column; gap: 10px; }
+  .stream .empty { color: var(--faint); font-size: 12.5px; padding: 8px 2px; }
+
+  .tool-row {
+    border: 1px solid var(--border); border-radius: 12px; background: var(--card);
+    overflow: hidden;
+  }
+  .tool-row .head {
+    display: flex; align-items: center; gap: 8px; padding: 9px 12px;
+    font-size: 12px; color: var(--dim);
+  }
+  .tool-row .head .kicker { color: var(--blue); font-weight: 700; }
+  .tool-row .cmd {
+    padding: 10px 12px; font-family: var(--mono); font-size: 11.5px; color: #c9c9dc;
+    background: #191924; border-top: 1px solid rgba(255,255,255,.05); white-space: pre-wrap; word-break: break-all;
+  }
+
+  .approval-card {
+    border: 1px solid rgba(249,226,175,.28); border-radius: 14px; background: var(--card);
+    overflow: hidden; box-shadow: 0 14px 42px rgba(0,0,0,.22);
+  }
+  .approval-card .kicker {
+    display: flex; align-items: center; gap: 8px; padding: 10px 14px 0;
+    font-size: 11px; color: var(--dim);
+  }
+  .approval-card .kicker .chip {
+    border: 1px solid var(--border); border-radius: 5px; padding: 1px 7px;
+    font-family: var(--mono); font-size: 10.5px;
+  }
+  .approval-card .kicker .chip.warn { color: var(--amber); border-color: rgba(249,226,175,.35); }
+  .approval-card .title { padding: 7px 14px 0; font-size: 14px; font-weight: 700; color: var(--text); }
+  .approval-card .subtitle { padding: 5px 14px 0; font-size: 12px; color: var(--amber); line-height: 1.5; }
+  .approval-card .msg {
+    margin: 9px 14px 0; padding: 9px 11px; border-radius: 9px;
+    background: #191924; border: 1px solid rgba(255,255,255,.07);
+    font-family: var(--mono); font-size: 11.5px; color: #c9c9dc; white-space: pre-wrap; word-break: break-all;
+  }
+  .approval-card .actions { display: flex; flex-wrap: wrap; gap: 8px; padding: 12px 14px 14px; align-items: center; }
+  .btn {
+    border-radius: 8px; padding: 6px 12px; font-size: 12.5px; font-weight: 600; cursor: pointer;
+    border: 1px solid transparent; background: transparent; color: var(--text);
+  }
+  .btn.sec { border-color: var(--border); }
+  .btn.sec:hover { background: rgba(255,255,255,.06); }
+  .btn.danger { border-color: rgba(243,139,168,.5); color: var(--red); }
+  .btn.danger:hover { background: rgba(243,139,168,.1); }
+  .btn.primary { background: var(--blue); color: #101018; }
+  .btn.primary:hover { filter: brightness(1.08); }
+  .btn.sm { padding: 4px 9px; font-size: 11.5px; }
+
+  .result-row {
+    display: flex; align-items: flex-start; gap: 8px; padding: 9px 12px;
+    border-radius: 10px; font-size: 12px; border: 1px solid;
+  }
+  .result-row.ok { border-color: rgba(166,227,161,.3); background: rgba(166,227,161,.07); color: var(--green); }
+  .result-row.blocked { border-color: rgba(243,139,168,.4); background: rgba(243,139,168,.08); color: var(--red); }
+  .result-row.info { border-color: rgba(137,180,250,.25); background: rgba(137,180,250,.07); color: var(--blue); }
+  .result-row .mono { font-family: var(--mono); font-size: 11px; opacity: .9; }
+
+  .settings-frame {
+    border: 1px solid var(--border); border-radius: 12px; background: var(--card); overflow: hidden;
+  }
+  .settings-frame .sf-head {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 10px 12px; border-bottom: 1px solid var(--border); font-size: 13px; color: var(--text); font-weight: 700;
+  }
+  .settings-frame .sf-body { padding: 12px; }
+  .settings-frame .sf-label { font-size: 12.5px; font-weight: 700; color: var(--text); margin-bottom: 7px; }
+  .settings-frame .sf-status { font-size: 11.5px; color: var(--dim); margin-top: 7px; line-height: 1.5; }
+  .settings-frame .sf-status.on { color: var(--green); }
+  .settings-frame .sf-revoke {
+    margin-top: 10px; border: 1px solid rgba(243,139,168,.4); color: var(--red);
+    background: transparent; border-radius: 8px; padding: 6px 12px; font-size: 12px; cursor: pointer;
+  }
+  .settings-frame .sf-revoke:hover { background: rgba(243,139,168,.1); }
+  .boundary-note {
+    margin-top: 12px; padding: 10px 12px; border: 1px dashed #3a3a4c; border-radius: 10px;
+    font-size: 11.5px; color: var(--faint); line-height: 1.7;
+  }
+  .boundary-note b { color: var(--dim); }
+
+  .modal-backdrop {
+    position: fixed; inset: 0; background: rgba(0,0,0,.55); display: none;
+    align-items: center; justify-content: center; z-index: 50; padding: 20px;
+  }
+  .modal-backdrop.open { display: flex; }
+  .modal {
+    width: 460px; max-width: 100%; background: var(--card); border: 1px solid var(--border);
+    border-radius: 14px; color: var(--text); box-shadow: 0 24px 64px rgba(0,0,0,.5);
+  }
+  .modal .m-title { font-size: 15px; font-weight: 700; padding: 16px 18px 6px; }
+  .modal .m-body { padding: 4px 18px 10px; font-size: 12.5px; color: #c5c5da; line-height: 1.6; }
+  .modal .m-foot { display: flex; justify-content: flex-end; gap: 8px; padding: 12px 18px 16px; border-top: 1px solid rgba(255,255,255,.06); }
+
+  .toast {
+    position: fixed; left: 50%; bottom: 26px; transform: translateX(-50%);
+    background: #2a2a40; color: var(--text); border: 1px solid var(--border);
+    border-radius: 10px; padding: 9px 16px; font-size: 12.5px; z-index: 80;
+    opacity: 0; pointer-events: none; transition: opacity .25s ease;
+  }
+  .toast.show { opacity: 1; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>工作区外处理权限 · 交互演示</h1>
+  <div class="sub">
+    模拟 MyAgent 实际效果：写 / 删除 / Shell 第一次触达工作区外时弹出授权卡，点“授权工作区沙箱外处理权限”后
+    这三类外部操作不再逐次询问；设置 → 权限与安全里只保留“撤销授权”。读取、网络、动态代码、破坏性命令不在此权限内。
+  </div>
+  <div class="legend">
+    <span><i style="background:#89b4fa"></i> 审批卡 / 授权</span>
+    <span><i style="background:#a6e3a1"></i> 已授权自动放行</span>
+    <span><i style="background:#f9e2af"></i> 未授权时询问</span>
+    <span><i style="background:#f38ba8"></i> 拒绝 / 阻断</span>
+  </div>
+</header>
+
+<div class="layout">
+  <!--LEFT-->
+  <section class="col">
+    <h2>审批流（实际效果）</h2>
+    <div class="hint">点击下方按钮触发一个“工作区外”操作，观察未授权 / 已授权两种表现。</div>
+    <div class="state-bar" id="state-bar"><span class="dot"></span><span id="state-text">未授权：写 / 删 / Shell 工作区外操作会弹审批卡</span></div>
+    <div class="trigger-row">
+      <button data-act="write">写入外部文件</button>
+      <button data-act="delete">删除外部文件</button>
+      <button data-act="shell">Shell 外部路径</button>
+    </div>
+    <div class="stream" id="stream"><div class="empty">还没有操作。点上面的按钮试试。</div></div>
+  </section>
+
+  <!--RIGHT-->
+  <section class="col">
+    <h2>设置入口（仅撤销）</h2>
+    <div class="hint">设置 → 权限与安全：只有状态和撤销，没有开启开关。</div>
+    <div class="settings-frame">
+      <div class="sf-head">权限与安全 <span style="font-size:10px;color:var(--faint)">Security &amp; Permissions</span></div>
+      <div class="sf-body">
+        <div class="sf-label">工作区外处理权限</div>
+        <div class="sf-status" style="color:var(--dim)">授权入口在审批卡片：当写、删除或 Shell 触发工作区外操作时，选择“授权工作区沙箱外处理权限”即可一次性放开；此处仅提供撤销。</div>
+        <div class="sf-status" id="settings-status">正在读取状态…</div>
+        <button type="button" class="sf-revoke" id="settings-revoke" style="display:none">撤销授权</button>
+      </div>
+    </div>
+    <div class="boundary-note">
+      <b>该权限不覆盖：</b>工作区外读取（read_file / ls / glob / grep）、网络（web_fetch / curl / git push）、
+      动态代码（python -c）、破坏性命令（rm -rf）、凭据导出与安全策略篡改——这些仍按原规则逐次审批或直接拒绝。
+    </div>
+  </section>
+</div>
+
+<div class="modal-backdrop" id="revoke-backdrop">
+  <div class="modal">
+    <div class="m-title">撤销工作区外处理权限？</div>
+    <div class="m-body">撤销后，写、删除和 Shell 在工作区外的操作将恢复逐次审批。</div>
+    <div class="m-foot">
+      <button type="button" class="btn sec" id="revoke-cancel">取消</button>
+      <button type="button" class="btn danger" id="revoke-confirm">确认撤销</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+(function () {
+  'use strict';
+
+  var granted = false;
+  var seq = 0;
+  var stream = document.getElementById('stream');
+  var toastEl = document.getElementById('toast');
+  var toastTimer = null;
+
+  var REQUESTS = {
+    write: {
+      kicker: '文件写入',
+      cmd: 'write_file("path": "D:/AI/AI Agent/MyAgent Developer/README.md", "content": "<84 chars>")',
+      reason: '目标路径在工作区（workspace）之外',
+      rule: 'external.write'
+    },
+    delete: {
+      kicker: '文件删除',
+      cmd: 'apply_patch("patch": "*** Begin Patch\\n*** Delete File: D:/AI/AI Agent/MyAgent Developer/old.txt\\n*** End Patch\\n")',
+      reason: '删除段指向工作区之外的文件',
+      rule: 'delete.review'
+    },
+    shell: {
+      kicker: 'Shell',
+      cmd: 'run_shell("command": "cat D:/AI/AI Agent/MyAgent Developer/README.md | head -5")',
+      reason: '命令包含工作区之外的路径',
+      rule: 'process.external'
+    }
+  };
+
+  function el(tag, cls, text) {
+    var e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (text != null) e.textContent = String(text);
+    return e;
+  }
+
+  function toast(msg) {
+    toastEl.textContent = msg;
+    toastEl.classList.add('show');
+    if (toastTimer) clearTimeout(toastTimer);
+    toastTimer = setTimeout(function () { toastEl.classList.remove('show'); }, 2200);
+  }
+
+  function updateState() {
+    var bar = document.getElementById('state-bar');
+    var text = document.getElementById('state-text');
+    var settingsStatus = document.getElementById('settings-status');
+    var revokeBtn = document.getElementById('settings-revoke');
+    bar.classList.toggle('granted', granted);
+    text.textContent = granted
+      ? '已授权：写 / 删 / Shell 工作区外操作自动放行，不再询问'
+      : '未授权：写 / 删 / Shell 工作区外操作会弹审批卡';
+    settingsStatus.textContent = granted
+      ? '已开启：写/删/Shell 工作区外操作自动放行。'
+      : '已关闭：工作区外操作恢复逐次审批。';
+    settingsStatus.className = 'sf-status' + (granted ? ' on' : '');
+    revokeBtn.style.display = granted ? '' : 'none';
+  }
+
+  function appendToolRow(act) {
+    var req = REQUESTS[act];
+    seq += 1;
+    var row = el('div', 'tool-row');
+    var head = el('div', 'head');
+    head.appendChild(el('span', 'kicker', '工具调用 #' + seq));
+    head.appendChild(el('span', '', req.kicker + ' · 工作区外'));
+    row.appendChild(head);
+    row.appendChild(el('div', 'cmd', req.cmd));
+    stream.appendChild(row);
+    return row;
+  }
+
+  function appendResult(kind, text, detail) {
+    var r = el('div', 'result-row ' + kind);
+    r.appendChild(el('span', '', text));
+    if (detail) r.appendChild(el('span', 'mono', detail));
+    stream.appendChild(r);
+  }
+
+  function appendAutoRow(act) {
+    var req = REQUESTS[act];
+    appendToolRow(act);
+    appendResult('ok', '已自动放行（工作区外处理权限）', req.rule + ' → grant.external_workspace_ops');
+  }
+
+  function execute(act) {
+    var req = REQUESTS[act];
+    appendResult('ok', '执行完成', req.rule);
+  }
+
+  function renderCard(act, toolRow) {
+    var req = REQUESTS[act];
+    var card = el('div', 'approval-card');
+    var kicker = el('div', 'kicker');
+    kicker.appendChild(el('span', 'chip', '安全审批'));
+    kicker.appendChild(el('span', 'chip warn', 'Ask permission'));
+    card.appendChild(kicker);
+    card.appendChild(el('div', 'title', '是否授权工作区沙箱外处理权限？'));
+    card.appendChild(el('div', 'subtitle', '该操作将处理工作区沙箱外的文件/路径。授权后，写、删除和 Shell 在工作区外的操作将自动放行，不再逐次询问。'));
+    card.appendChild(el('div', 'msg', req.cmd));
+
+    var actions = el('div', 'actions');
+
+    var deny = el('button', 'btn danger', '拒绝执行');
+    deny.addEventListener('click', function () { resolve(card, toolRow, act, 'deny'); });
+    actions.appendChild(deny);
+
+    var session = el('button', 'btn sec', '本任务内允许相同请求');
+    session.addEventListener('click', function () {
+      resolve(card, toolRow, act, 'session');
+      toast('演示：仅本任务内相同请求放行，下一任务仍会询问');
+    });
+    actions.appendChild(session);
+
+    var always = el('button', 'btn sec', '始终允许此类操作');
+    always.title = '保存为长期规则：' + req.rule + '（演示）';
+    always.addEventListener('click', function () {
+      resolve(card, toolRow, act, 'always');
+      toast('演示：已保存长期规则 ' + req.rule + '，匹配操作自动放行');
+    });
+    actions.appendChild(always);
+
+    var grantBtn = el('button', 'btn primary', '授权工作区沙箱外处理权限');
+    grantBtn.addEventListener('click', function () { resolve(card, toolRow, act, 'grant'); });
+    actions.appendChild(grantBtn);
+
+    var once = el('button', 'btn sec', '允许一次');
+    once.title = '仅放行这一次；下一次工作区外操作仍会询问';
+    once.addEventListener('click', function () { resolve(card, toolRow, act, 'once'); });
+    actions.appendChild(once);
+
+    card.appendChild(actions);
+    stream.appendChild(card);
+    card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }
+
+  function resolve(card, toolRow, act, decision) {
+    card.remove();
+    if (decision === 'deny') {
+      appendResult('blocked', '已拒绝执行', 'Decision: deny');
+      return;
+    }
+    if (decision === 'grant') {
+      granted = true;
+      updateState();
+      appendResult('ok', '已授权工作区沙箱外处理权限，本请求已放行', 'grant.external_workspace_ops');
+      toast('授权成功：后续写 / 删 / Shell 工作区外操作自动放行');
+      return;
+    }
+    if (decision === 'always') {
+      appendResult('info', '已保存长期规则，本请求已放行', reqRuleLabel(act));
+      return;
+    }
+    // once / session: execute only
+    appendResult('ok', '执行完成（' + (decision === 'session' ? '本任务内' : '本次') + '）', reqRuleLabel(act));
+  }
+
+  function reqRuleLabel(act) {
+    return REQUESTS[act].rule;
+  }
+
+  document.querySelectorAll('.trigger-row button').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      var act = btn.dataset.act;
+      if (granted) {
+        appendAutoRow(act);
+        stream.lastElementChild.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        return;
+      }
+      var toolRow = appendToolRow(act);
+      renderCard(act, toolRow);
+    });
+  });
+
+  var backdrop = document.getElementById('revoke-backdrop');
+  document.getElementById('settings-revoke').addEventListener('click', function () {
+    backdrop.classList.add('open');
+  });
+  document.getElementById('revoke-cancel').addEventListener('click', function () {
+    backdrop.classList.remove('open');
+  });
+  document.getElementById('revoke-confirm').addEventListener('click', function () {
+    backdrop.classList.remove('open');
+    granted = false;
+    updateState();
+    toast('已撤销：工作区外操作恢复逐次审批');
+  });
+  backdrop.addEventListener('click', function (e) {
+    if (e.target === backdrop) backdrop.classList.remove('open');
+  });
+
+  updateState();
+})();
+</script>
+</body>
+</html>
