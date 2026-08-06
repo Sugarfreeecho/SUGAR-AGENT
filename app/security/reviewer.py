@@ -18,6 +18,9 @@ _EXPLICIT_HIGH_RISK = re.compile(
     r".{0,80}(?:删除|覆盖|清空|系统|外部|上传|发送|delete|overwrite|destroy|system|external|upload|send)"
 )
 
+_REVIEWER_MAX_TOKENS = 8192
+_REVIEWER_TIMEOUT_SECONDS = 180.0
+
 
 @dataclass(frozen=True)
 class ReviewResult:
@@ -42,7 +45,7 @@ async def review_request(request: CapabilityRequest, *, user_intent: str) -> Rev
         try:
             return await asyncio.wait_for(
                 asyncio.to_thread(_review_with_model, request, user_intent),
-                timeout=30.0,
+                timeout=_REVIEWER_TIMEOUT_SECONDS,
             )
         except Exception as exc:
             last_error = exc
@@ -67,26 +70,47 @@ def _review_with_model(request: CapabilityRequest, user_intent: str) -> ReviewRe
             "args_digest": request.args_digest,
         },
     }
-    response = executor_client.chat.completions.create(
-        model=executor_model,
-        messages=[
-            {
-                "role": "system",
-                "content": (
-                    "You are a read-only security reviewer. You cannot change the request. "
-                    "Approve only when the exact action is clearly required by the user's "
-                    "stated intent and does not exfiltrate data, access credentials, persistently "
-                    "weaken security, or cause disproportionate destruction. Return JSON only: "
-                    '{"decision":"approve|deny","risk":"low|medium|high|critical","reason":"..."}.'
-                ),
-            },
-            {"role": "user", "content": json.dumps(prompt, ensure_ascii=False)},
-        ],
-        temperature=0,
-        max_tokens=240,
-        timeout=30,
-    )
-    raw = str(response.choices[0].message.content or "").strip()
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "You are a read-only security reviewer. You cannot change the request. "
+                "Approve only when the exact action is clearly required by the user's "
+                "stated intent and does not exfiltrate data, access credentials, persistently "
+                "weaken security, or cause disproportionate destruction. Return JSON only: "
+                '{"decision":"approve|deny","risk":"low|medium|high|critical","reason":"..."}.'
+            ),
+        },
+        {"role": "user", "content": json.dumps(prompt, ensure_ascii=False)},
+    ]
+
+    def _call(extra_body: dict | None = None):
+        return executor_client.chat.completions.create(
+            model=executor_model,
+            messages=messages,
+            temperature=0,
+            max_tokens=_REVIEWER_MAX_TOKENS,
+            timeout=_REVIEWER_TIMEOUT_SECONDS,
+            **({"extra_body": extra_body} if extra_body else {}),
+        )
+
+    def _extract_text(response) -> str:
+        text = str(response.choices[0].message.content or "").strip()
+        if text and response.choices[0].finish_reason == "length":
+            # Reasoning models can spend the whole budget before emitting the
+            # JSON body; a truncated blob is as unusable as an empty one.
+            return ""
+        return text
+
+    raw = _extract_text(_call())
+    if not raw:
+        # Retry once with thinking disabled: reasoning-only output (content
+        # empty) is common on DeepSeek-style free endpoints with a small
+        # max_tokens, and disabling thinking makes the JSON body come back
+        # directly instead of after a long chain of thought.
+        raw = _extract_text(
+            _call(extra_body={"thinking": {"type": "disabled"}})
+        )
     if not raw:
         raise ValueError("reviewer returned an empty response")
     if raw.startswith("```"):
