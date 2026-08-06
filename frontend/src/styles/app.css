@@ -388,7 +388,6 @@ body {
     align-items: center;
     min-width: 0;
     position: relative;
-    padding-right: 1.7rem;
 }
 .session-last-query {
     font-size: 0.62rem; line-height: 1.4; color: var(--text-tertiary);
@@ -409,9 +408,10 @@ body {
     font-variant-numeric: tabular-nums;
     white-space: nowrap;
     margin-left: 0;
+    margin-right: 0;
     opacity: 0;
     pointer-events: none;
-    transition: max-width 0.22s var(--ease-out-expo), opacity 0.18s, margin-left 0.22s var(--ease-out-expo);
+    transition: max-width 0.22s var(--ease-out-expo), opacity 0.18s, margin-left 0.22s var(--ease-out-expo), margin-right 0.22s var(--ease-out-expo);
 }
 .session-item-date svg {
     flex: 0 0 auto;
@@ -422,6 +422,7 @@ body {
 .session-item:has(.session-more-wrap.is-open) .session-item-date {
     max-width: 12rem;
     margin-left: 0.4rem;
+    margin-right: 1.4rem;
     opacity: 0.9;
 }
 .session-item:hover .session-last-query { color: var(--text-secondary); }
@@ -560,12 +561,12 @@ body {
 
 /* ── 分隔条 ── */
 .sash {
-    flex: 0 0 4px; width: 4px; min-width: 4px;
-    cursor: col-resize; background: rgba(255,255,255,0.015);
+    flex: 0 0 0; width: 0; min-width: 0;
+    cursor: col-resize; background: transparent;
     align-self: stretch; z-index: 5;
     transition: background 0.25s; position: relative;
 }
-.sash:hover, .sash.is-dragging { background: rgba(203,166,247,0.22); }
+.sash:hover, .sash.is-dragging { background: rgba(203,166,247,0.3); }
 .sash::after {
     content: ''; position: absolute; left: -3px; right: -3px; top: 0; bottom: 0;
 }

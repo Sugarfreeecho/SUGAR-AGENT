@@ -2180,6 +2180,23 @@ function formatSessionListSubtitle(sess) {
 }
 
 /** 侧栏每条会话标题下方第二行：最后修改日期时间 */
+function sessionListUiEnglish() {
+    return (document.documentElement && document.documentElement.getAttribute('data-language') === 'en')
+        || String(localStorage.getItem('myagent-language') || '') === 'en';
+}
+
+function localizeSessionPlaceholderName(name) {
+    var s = String(name == null ? '' : name);
+    if (sessionListUiEnglish()) {
+        if (s === '新会话' || s === '新对话' || s === '新建对话') return 'New session';
+        if (s === '未命名') return 'Untitled';
+        return s;
+    }
+    if (s === 'New session' || s === 'New chat') return '新会话';
+    if (s === 'Untitled') return '未命名';
+    return s;
+}
+
 function formatSessionListDate(sess) {
     if (!sess) return '';
     var raw = sess.last_activity_at || sess.updated_at || sess.created_at || '';
@@ -2191,17 +2208,45 @@ function formatSessionListDate(sess) {
     if (!Number.isFinite(ts) || ts <= 0) return '';
     var d = new Date(ts);
     var now = new Date();
+    var english = sessionListUiEnglish();
     var pad = function (v) { return String(v).padStart(2, '0'); };
     var time = pad(d.getHours()) + ':' + pad(d.getMinutes());
-    if (d.toDateString() === now.toDateString()) return '今天 ' + time;
+    if (d.toDateString() === now.toDateString()) return (english ? 'Today ' : '今天 ') + time;
     var yesterday = new Date(now.getTime() - 86400000);
-    if (d.toDateString() === yesterday.toDateString()) return '昨天 ' + time;
+    if (d.toDateString() === yesterday.toDateString()) return (english ? 'Yesterday ' : '昨天 ') + time;
+    if (english) {
+        var months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+        var yearSuffix = d.getFullYear() === now.getFullYear() ? '' : (' ' + d.getFullYear());
+        return months[d.getMonth()] + ' ' + d.getDate() + yearSuffix + ' ' + time;
+    }
     var prefix = d.getFullYear() === now.getFullYear() ? '' : (d.getFullYear() + '年');
     return prefix + (d.getMonth() + 1) + '月' + d.getDate() + '日 ' + time;
 }
 
 function sessionDateIcon() {
     return '<svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>';
+}
+
+function buildSessionItemTooltipFromParts(name, dateLine, question) {
+    var english = sessionListUiEnglish();
+    var lines = [];
+    lines.push((english ? 'Session: ' : '会话名称：') + String(name == null ? '' : name));
+    if (dateLine) lines.push((english ? 'Time: ' : '时间：') + dateLine);
+    lines.push((english ? 'Last question: ' : '最近提问：') + String(question == null ? '' : question));
+    return lines.join('\n');
+}
+
+function buildSessionItemTooltip(sess) {
+    if (!sess) return '';
+    var english = sessionListUiEnglish();
+    var name = localizeSessionPlaceholderName(sess.name);
+    var dateLine = formatSessionListDate(sess);
+    var question = sess.last_user_preview != null ? String(sess.last_user_preview).trim() : '';
+    return buildSessionItemTooltipFromParts(
+        name || (english ? 'Untitled' : '未命名'),
+        dateLine,
+        question || (english ? 'No questions yet' : '暂无提问')
+    );
 }
 
 /** 与服务端 _normalize_sidebar_preview_text 对齐：折叠空白、180 字符、省略号 */
@@ -2225,19 +2270,21 @@ function updateSidebarLastUserPreviewImmediate(sessionId, questionText) {
     var line = normalizeSidebarPreviewText(questionText, 180);
     if (!line) line = '暂无提问';
     wsEl.textContent = line;
-    wsEl.setAttribute('data-ui-tip', line);
-    bindUiHoverTip(wsEl);
     var dateEl = div.querySelector('.session-item-date');
+    var dateLine = '';
     if (dateEl) {
-        var dateLine = formatSessionListDate({ last_activity_at: new Date().toISOString() });
+        dateLine = formatSessionListDate({ last_activity_at: new Date().toISOString() });
         if (dateLine) {
             dateEl.innerHTML = sessionDateIcon() + dateLine;
-            dateEl.setAttribute('data-ui-tip', dateLine);
-            bindUiHoverTip(dateEl);
         } else {
             dateEl.textContent = '';
         }
     }
+    var nameText = nameEl ? (nameEl.getAttribute('data-original') || nameEl.textContent || '') : '';
+    nameText = localizeSessionPlaceholderName(nameText);
+    var itemTip = buildSessionItemTooltipFromParts(nameText, dateLine, line);
+    div.setAttribute('data-ui-tip', itemTip);
+    bindUiHoverTip(div);
 }
 
 function updateSessionTitle() {
@@ -2253,7 +2300,7 @@ function updateSessionTitle() {
     const sess = selectCurrentSession();
     const el = document.querySelector('.session-name[data-id="' + currentSessionId + '"]');
     const raw = sess && sess.name != null ? String(sess.name) : (el ? (el.getAttribute('data-original') || el.textContent || '') : '');
-    const name = (raw && raw.trim()) ? raw.trim() : 'Session';
+    const name = localizeSessionPlaceholderName((raw && raw.trim()) ? raw.trim() : 'Session');
     br.textContent = name;
     sub.innerHTML = buildSessionWorkspaceSubtitle(currentSessionId);
     initUiHoverTips(sub);

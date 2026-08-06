@@ -44,6 +44,9 @@ function isChatFileUploadBusy() {
 }
 
 document.addEventListener('myagent:language-change', syncMessageInputPlaceholder);
+document.addEventListener('myagent:language-change', function () {
+    if (typeof renderSessionListIfChanged === 'function') renderSessionListIfChanged(true);
+});
 
 async function requestInterrupt(sessionId, runId, reason) {
     if (!sessionId) return;
@@ -238,10 +241,13 @@ function buildAndBindSessionRow(sess, allSessions, nextStreamMap) {
     if (currentSessionId === sess.id) div.classList.add('active');
     if (sess.id) nextStreamMap[sess.id] = !!sess.stream_active;
     if (sess.id) scheduleTitleGenerationRefresh(sess.id, !!sess.title_generation_pending);
+    var displayName = typeof localizeSessionPlaceholderName === 'function'
+        ? localizeSessionPlaceholderName(sess.name)
+        : (sess.name || '');
     div.innerHTML = '<div class="session-item-head">'
         + '<div class="session-item-main">'
         + '<div class="session-item-title-row">'
-        + '<span class="session-name" data-id="' + sess.id + '" data-original="' + escapeHtml(sess.name) + '">' + escapeHtml(sess.name) + '</span>'
+        + '<span class="session-name" data-id="' + sess.id + '" data-original="' + escapeHtml(sess.name) + '">' + escapeHtml(displayName) + '</span>'
         + '<span class="session-item-date"></span>'
         + '</div>'
         + '<div class="session-last-query"></div>'
@@ -266,19 +272,21 @@ function buildAndBindSessionRow(sess, allSessions, nextStreamMap) {
     var wsEl = div.querySelector('.session-last-query');
     if (wsEl) {
         wsEl.textContent = wsLine;
-        wsEl.setAttribute('data-ui-tip', wsLine);
-        bindUiHoverTip(wsEl);
     }
     var dateEl = div.querySelector('.session-item-date');
+    var dateLine = '';
     if (dateEl) {
-        var dateLine = typeof formatSessionListDate === 'function' ? formatSessionListDate(sess) : '';
+        dateLine = typeof formatSessionListDate === 'function' ? formatSessionListDate(sess) : '';
         if (dateLine) {
             dateEl.innerHTML = (typeof sessionDateIcon === 'function' ? sessionDateIcon() : '') + dateLine;
-            dateEl.setAttribute('data-ui-tip', dateLine);
-            bindUiHoverTip(dateEl);
         } else {
             dateEl.textContent = '';
         }
+    }
+    var itemTip = typeof buildSessionItemTooltip === 'function' ? buildSessionItemTooltip(sess) : '';
+    if (itemTip) {
+        div.setAttribute('data-ui-tip', itemTip);
+        bindUiHoverTip(div);
     }
     var moreWrap = div.querySelector('.session-more-wrap');
     var moreBtn = div.querySelector('.session-more-btn');
