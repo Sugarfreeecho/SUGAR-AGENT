@@ -34,7 +34,7 @@ def test_slash_rooted_virtual_path_still_resolves_under_workspace(tmp_path, monk
     assert webui._resolve_allowed_local_path("/nested/file.txt", True) == target.resolve()
 
 
-def test_existing_absolute_path_outside_allowed_roots_is_rejected(tmp_path, monkeypatch):
+def test_existing_absolute_path_outside_workspace_is_allowed(tmp_path, monkeypatch):
     import webui
 
     workspace = tmp_path / "workspace"
@@ -43,5 +43,30 @@ def test_existing_absolute_path_outside_allowed_roots_is_rejected(tmp_path, monk
     outside.write_text("secret", encoding="utf-8")
     monkeypatch.setattr(webui, "WORK_DIR", workspace)
 
-    with pytest.raises(PermissionError):
-        webui._resolve_allowed_local_path(str(outside), True)
+    assert webui._resolve_allowed_local_path(str(outside), True) == outside.resolve()
+
+
+def test_missing_absolute_path_is_rejected(tmp_path, monkeypatch):
+    import webui
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    missing = tmp_path / "missing.txt"
+    monkeypatch.setattr(webui, "WORK_DIR", workspace)
+
+    with pytest.raises(FileNotFoundError):
+        webui._resolve_allowed_local_path(str(missing), True)
+
+
+def test_virtual_paths_stay_under_workspace(tmp_path, monkeypatch):
+    import webui
+
+    workspace = tmp_path / "workspace"
+    target = workspace / "nested" / "file.txt"
+    target.parent.mkdir(parents=True)
+    target.write_text("ok", encoding="utf-8")
+    monkeypatch.setattr(webui, "WORK_DIR", workspace)
+
+    assert webui._resolve_allowed_local_path(
+        "/nested/file.txt", True
+    ) == target.resolve()

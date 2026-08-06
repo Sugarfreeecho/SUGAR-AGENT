@@ -61,7 +61,11 @@ _DANGEROUS_ALLOW_PREFIXES = frozenset(
 
 # Dangerous command categories that can never be auto-allowed by a grant or by
 # the automatic reviewer: they must surface a fresh human approval every time.
-FORCED_APPROVAL_RULES = frozenset({"process.destructive", "process.dynamic"})
+# Dynamic code (`python -c`, `-EncodedCommand`, eval, ...) is an ordinary
+# (yellow) approval: it may be granted once or for the session, but never
+# becomes an "always allow" rule because its command prefixes are in
+# _DANGEROUS_ALLOW_PREFIXES.
+FORCED_APPROVAL_RULES = frozenset({"process.destructive"})
 
 
 def canonical_path(raw: object, workspace: Path) -> Path:
@@ -471,12 +475,6 @@ class PolicyEngine:
                         "protected.write",
                         f"Security-sensitive path is protected: {path}",
                     )
-                if request.action == "fs.read" and sensitive_path(path) and not inside:
-                    return result(
-                        DecisionOutcome.ASK,
-                        "credential.read",
-                        "Reading credential-bearing files outside the workspace requires approval.",
-                    )
         else:
             inside = False
 
@@ -489,9 +487,20 @@ class PolicyEngine:
             return result(DecisionOutcome.DENY, "read_only.deny", "This explicit legacy profile is read-only.")
 
         if request.action == "fs.read":
-            if inside:
-                return result(DecisionOutcome.ALLOW, "app_restricted.read", "Workspace read is allowed.")
-            return result(DecisionOutcome.ASK, "external.read", "Reading outside the workspace requires approval.")
+            # Read-only tools default to reading anywhere, including outside
+            # the workspace (mirrors Codex's read-only sandbox surface). Only
+            # credential/security-sensitive files require approval.
+            if sensitive_path(resource_path):
+                return result(
+                    DecisionOutcome.ASK,
+                    "credential.read",
+                    "Reading credential-bearing files requires approval.",
+                )
+            return result(
+                DecisionOutcome.ALLOW,
+                "app_restricted.read",
+                "Read access is allowed by the application policy.",
+            )
         if request.action == "fs.write":
             if inside:
                 return result(DecisionOutcome.ALLOW, "app_restricted.write", "Workspace write is allowed.")

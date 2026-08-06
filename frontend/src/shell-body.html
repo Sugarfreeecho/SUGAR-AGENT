@@ -309,13 +309,10 @@
                 <button type="button" id="settings-execution-dashboard" class="settings-advanced-btn">执行状态看板</button>
             </div>
             <div class="settings-modal__section">
-                <div class="settings-modal__label">工作区外处理权限</div>
-                <div class="settings-theme-row" role="group" aria-label="工作区外处理权限（写/删/Shell）">
-                    <button type="button" id="settings-external-ops-off" class="settings-theme-btn">关闭</button>
-                    <button type="button" id="settings-external-ops-on" class="settings-theme-btn">开启</button>
-                </div>
-                <div class="settings-feature-status">开启后，写、删除和 Shell 在工作区外的操作不再逐次询问；破坏性/动态命令、网络和凭据导出仍按原规则。</div>
+                <div class="settings-modal__label">权限与安全</div>
+                <div class="settings-feature-status">工作区外处理权限的授权入口在审批卡片：当写、删除或 Shell 触发工作区外操作时，选择“授权工作区沙箱外处理权限”即可一次性放开；此处仅提供撤销。</div>
                 <div id="settings-external-ops-status" class="settings-feature-status" role="status" aria-live="polite">正在读取状态…</div>
+                <button type="button" id="settings-external-ops-revoke" class="settings-advanced-btn" style="display:none;margin-top:.45rem;color:var(--red-accent,#f38ba8);border-color:rgba(243,139,168,.35)">撤销授权</button>
             </div>
             <div class="settings-modal__section">
                 <div class="settings-modal__label">环境与 API</div>

@@ -275,13 +275,10 @@ def classify_tool(tool_name: str, arguments: dict[str, Any], workspace: Path) ->
                 or _text_mentions_sensitive_tool_resource(workdir)
                 or _CREDENTIAL_EXPORT_COMMAND.search(command)
             )
-            # Reading a credential-bearing file inside the workspace is an
-            # ordinary read (matches Claude Code's default). Only reads that
-            # also touch paths outside the workspace need approval.
-            credential_read = bool(
-                _CREDENTIAL_READ_COMMAND.search(command)
-                and external
-            )
+            # Reading credential-bearing files (cat/Get-Content/... a .env,
+            # key, credentials file) requires approval regardless of location,
+            # so shell cannot bypass the read-tool policy.
+            credential_read = bool(_CREDENTIAL_READ_COMMAND.search(command))
             policy_change = bool(_agent_self_protection_reason(command))
         except Exception:
             external = True

@@ -880,32 +880,57 @@ function createHumanApprovalCard(record, sessionId) {
     deny.type = 'button';
     deny.addEventListener('click', function () { void resolveHumanApproval(card, 'deny'); });
     actions.appendChild(deny);
+    var cmdRow = null;
+    var wsRow = null;
+    if (!forced && record.external_workspace_grantable) {
+        var cmdGroup = humanElement('div', 'human-approval-group');
+        cmdGroup.appendChild(humanElement('span', 'human-approval-group-label', '命令授权'));
+        cmdRow = humanElement('div', 'human-approval-group-row');
+        cmdGroup.appendChild(cmdRow);
+        actions.appendChild(cmdGroup);
+        var wsGroup = humanElement('div', 'human-approval-group');
+        wsGroup.appendChild(humanElement('span', 'human-approval-group-label', '工作区沙箱外处理权限'));
+        wsRow = humanElement('div', 'human-approval-group-row');
+        wsGroup.appendChild(wsRow);
+        actions.appendChild(wsGroup);
+    }
     if (!forced) {
         var sessionAllow = humanElement('button', 'human-secondary-btn', '本任务内允许相同请求');
         sessionAllow.type = 'button';
         sessionAllow.title = '仅在当前任务中，对命令、参数、路径和工作目录完全相同的请求自动放行';
         sessionAllow.addEventListener('click', function () { void resolveHumanApproval(card, 'allow_session'); });
-        actions.appendChild(sessionAllow);
+        (cmdRow || actions).appendChild(sessionAllow);
     }
     if (!forced && record.allow_always_available && record.rule_pattern) {
         var always = humanElement('button', 'human-secondary-btn', '始终允许此类操作');
         always.type = 'button';
         if (record.rule_pattern) always.title = '保存为长期规则，后续匹配时自动放行：' + record.rule_pattern;
         always.addEventListener('click', function () { void resolveHumanApproval(card, 'allow_always'); });
-        actions.appendChild(always);
+        (cmdRow || actions).appendChild(always);
     }
+    var allowPrimary = !record.external_workspace_grantable;
     if (!forced && record.external_workspace_grantable) {
-        var externalGrant = humanElement('button', 'human-secondary-btn human-external-grant-btn', '允许工作区外处理（写/删/Shell）');
+        var externalGrant = humanElement('button', 'human-primary-btn human-external-grant-btn', '授权工作区沙箱外处理权限');
         externalGrant.type = 'button';
-        externalGrant.title = '一次性授权：写、删除和 Shell 在工作区外的操作以后自动放行，直到你在设置中关闭';
+        externalGrant.title = '一次性授权：写、删除和 Shell 在工作区外的操作以后自动放行';
         externalGrant.addEventListener('click', function () { void resolveHumanApproval(card, 'allow_external_workspace'); });
-        actions.appendChild(externalGrant);
+        wsRow.appendChild(externalGrant);
+        var allowOnce = humanElement('button', 'human-secondary-btn human-allow-btn', '允许一次');
+        allowOnce.type = 'button';
+        allowOnce.title = '仅放行这一次；下一次工作区外操作仍会询问';
+        allowOnce.addEventListener('click', function () { void resolveHumanApproval(card, 'allow_once'); });
+        cmdRow.appendChild(allowOnce);
+    } else {
+        var allow = humanElement(
+            'button',
+            (allowPrimary ? 'human-primary-btn human-allow-btn' : 'human-secondary-btn human-allow-btn'),
+            '允许一次'
+        );
+        allow.type = 'button';
+        allow.title = '仅放行这一次；执行后授权立即失效';
+        allow.addEventListener('click', function () { void resolveHumanApproval(card, 'allow_once'); });
+        actions.appendChild(allow);
     }
-    var allow = humanElement('button', 'human-primary-btn human-allow-btn', '允许一次');
-    allow.type = 'button';
-    allow.title = '仅放行这一次；执行后授权立即失效';
-    allow.addEventListener('click', function () { void resolveHumanApproval(card, 'allow_once'); });
-    actions.appendChild(allow);
     card.appendChild(actions);
     return card;
 }

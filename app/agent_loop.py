@@ -2814,11 +2814,6 @@ _DANGER_APPROVAL_CONSEQUENCES = {
         "执行后可能导致文件永久丢失或系统不可用，且无法撤销。"
         "请再次核对目标路径与影响范围后决定。"
     ),
-    "process.dynamic": (
-        "后果：该命令通过动态代码或编码间接执行（如 -c/-e 动态脚本、"
-        "编码命令、eval/invoke-expression、命令替换），实际行为可能超出"
-        "可见内容，可能修改任意文件或造成不可恢复的破坏。"
-    ),
 }
 
 
@@ -2846,9 +2841,22 @@ def _security_approval_spec(
                 rule_info = suggested
         except Exception:
             rule_info = {}
+    external_grantable = (
+        decision.rule_id in {"external.write", "delete.review", "process.external"}
+        and not danger
+        and not force_ask
+    )
     return {
-        "title": "危险命令，需要确认" if danger else "安全权限请求",
-        "subtitle": decision.reason,
+        "title": (
+            "是否授权工作区沙箱外处理权限？"
+            if external_grantable
+            else ("危险命令，需要确认" if danger else "安全权限请求")
+        ),
+        "subtitle": (
+            "该操作将处理工作区沙箱外的文件/路径。授权后，写、删除和 Shell 在工作区外的操作将自动放行，不再逐次询问。"
+            if external_grantable
+            else decision.reason
+        ),
         "message": preview,
         "consequence": _DANGER_APPROVAL_CONSEQUENCES.get(decision.rule_id) if danger else "",
         "brief": preview[:180],
@@ -2861,12 +2869,7 @@ def _security_approval_spec(
         "force_approval": force_ask,
         # External write/delete/shell approvals may offer the one-time
         # "workspace-outside handling permission" instead of asking every time.
-        "external_workspace_grantable": bool(
-            decision.rule_id
-            in {"external.write", "delete.review", "process.external"}
-        )
-        and not danger
-        and not force_ask,
+        "external_workspace_grantable": external_grantable,
         "approval_level": "danger" if danger else "warning",
         "rule_action": rule_info.get("action", ""),
         "rule_pattern": rule_info.get("pattern", ""),
@@ -4217,11 +4220,10 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                                         "force_approval": bool(
                                             override_spec.get("force_approval", False)
                                         ),
-                                        "external_workspace_grantable": bool(
-                                            override_spec.get(
-                                                "external_workspace_grantable", False
-                                            )
-                                        ),
+                                        # Override cards (auto-review denial)
+                                        # never offer the workspace grant; the
+                                        # two-step flow lives on normal cards.
+                                        "external_workspace_grantable": False,
                                         "approval_level": str(
                                             override_spec.get("approval_level")
                                             or "warning"
@@ -4306,87 +4308,103 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                                 tool_id,
                                 "Approval is required but no interactive approval channel is available.",
                             )
-                        appr_id = new_approval_id()
+                        while True:
+                            appr_id = new_approval_id()
 
-                        async def _emit_appr():
-                            await _emit_tool_approval_required_sse(
-                                emit,
-                                state["session_id"],
-                                appr_id,
-                                tool_name,
-                                spec["title"],
-                                spec["message"],
-                                spec.get("subtitle") or "",
-                                str(tool_id or ""),
-                                extra={
-                                    "allow_always_available": bool(
-                                        spec.get("allow_always_available", False)
-                                    ),
-                                    "force_approval": bool(
-                                        spec.get("force_approval", False)
-                                    ),
-                                    "external_workspace_grantable": bool(
-                                        spec.get("external_workspace_grantable", False)
-                                    ),
-                                    "approval_level": str(
-                                        spec.get("approval_level") or "warning"
-                                    ),
-                                    "consequence": str(
-                                        spec.get("consequence") or ""
-                                    ),
-                                    "rule_action": str(
-                                        spec.get("rule_action") or ""
-                                    ),
-                                    "rule_pattern": str(
-                                        spec.get("rule_pattern") or ""
-                                    ),
-                                },
-                            )
-
-                        try:
-                            approved = await _await_steerable(
-                                state,
-                                wait_tool_ui_approval_after_emit(
+                            async def _emit_appr():
+                                await _emit_tool_approval_required_sse(
+                                    emit,
                                     state["session_id"],
                                     appr_id,
-                                    _emit_appr,
-                                    metadata={
-                                    "_durable": True,
-                                    "run_id": str(state.get("_runtime_v2_run_id") or ""),
-                                    "tool_call_id": str(tool_id or ""),
-                                    "tool": redact_sensitive_tool_text(tool_name),
-                                    "title": redact_sensitive_tool_text(spec["title"]),
-                                    "message": redact_sensitive_tool_text(spec["message"]),
-                                    "subtitle": redact_sensitive_tool_text(spec.get("subtitle") or ""),
-                                    "security_request_digest": sec_decision.request_digest,
-                                    "security_rule_id": sec_decision.rule_id,
-                                    "allow_always_available": bool(
-                                        spec.get("allow_always_available", False)
-                                    ),
-                                    "force_approval": bool(
-                                        spec.get("force_approval", False)
-                                    ),
-                                    "approval_level": str(
-                                        spec.get("approval_level") or "warning"
-                                    ),
-                                    "consequence": str(
-                                        spec.get("consequence") or ""
-                                    ),
-                                    "rule_action": str(
-                                        spec.get("rule_action") or ""
-                                    ),
-                                    "rule_pattern": str(
-                                        spec.get("rule_pattern") or ""
-                                    ),
+                                    tool_name,
+                                    spec["title"],
+                                    spec["message"],
+                                    spec.get("subtitle") or "",
+                                    str(tool_id or ""),
+                                    extra={
+                                        "allow_always_available": bool(
+                                            spec.get("allow_always_available", False)
+                                        ),
+                                        "force_approval": bool(
+                                            spec.get("force_approval", False)
+                                        ),
+                                        "external_workspace_grantable": bool(
+                                            spec.get("external_workspace_grantable", False)
+                                        ),
+                                        "approval_level": str(
+                                            spec.get("approval_level") or "warning"
+                                        ),
+                                        "consequence": str(
+                                            spec.get("consequence") or ""
+                                        ),
+                                        "rule_action": str(
+                                            spec.get("rule_action") or ""
+                                        ),
+                                        "rule_pattern": str(
+                                            spec.get("rule_pattern") or ""
+                                        ),
                                     },
-                                ),
-                                emit,
-                                "tool_approval",
-                            )
-                        except ApprovalPersistenceError as exc:
-                            return _blocked_tool_result(
-                                tool_name, tool_args, tool_id, str(exc)
-                            )
+                                )
+
+                            try:
+                                approved = await _await_steerable(
+                                    state,
+                                    wait_tool_ui_approval_after_emit(
+                                        state["session_id"],
+                                        appr_id,
+                                        _emit_appr,
+                                        metadata={
+                                        "_durable": True,
+                                        "run_id": str(state.get("_runtime_v2_run_id") or ""),
+                                        "tool_call_id": str(tool_id or ""),
+                                        "tool": redact_sensitive_tool_text(tool_name),
+                                        "title": redact_sensitive_tool_text(spec["title"]),
+                                        "message": redact_sensitive_tool_text(spec["message"]),
+                                        "subtitle": redact_sensitive_tool_text(spec.get("subtitle") or ""),
+                                        "security_request_digest": sec_decision.request_digest,
+                                        "security_rule_id": sec_decision.rule_id,
+                                        "allow_always_available": bool(
+                                            spec.get("allow_always_available", False)
+                                        ),
+                                        "force_approval": bool(
+                                            spec.get("force_approval", False)
+                                        ),
+                                        "approval_level": str(
+                                            spec.get("approval_level") or "warning"
+                                        ),
+                                        "consequence": str(
+                                            spec.get("consequence") or ""
+                                        ),
+                                        "rule_action": str(
+                                            spec.get("rule_action") or ""
+                                        ),
+                                        "rule_pattern": str(
+                                            spec.get("rule_pattern") or ""
+                                        ),
+                                        },
+                                        return_decision=True,
+                                    ),
+                                    emit,
+                                    "tool_approval",
+                                )
+                            except ApprovalPersistenceError as exc:
+                                return _blocked_tool_result(
+                                    tool_name, tool_args, tool_id, str(exc)
+                                )
+                            if approved == "allow_external_workspace":
+                                # Workspace axis granted; the command axis still
+                                # needs its own approval (two independent axes,
+                                # per the user's separation requirement).
+                                spec = dict(spec)
+                                spec["external_workspace_grantable"] = False
+                                spec["title"] = "确认执行命令（工作区外处理权限已授权）"
+                                spec["subtitle"] = (
+                                    "该命令位于工作区沙箱外；工作区外处理权限已授权，"
+                                    "请确认本条命令本身。"
+                                )
+                                continue
+                            approved = bool(approved)
+                            break
                     if not approved:
                         return _tool_result_user_denied_ui(
                             tool_name, tool_args, tool_id

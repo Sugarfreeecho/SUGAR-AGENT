@@ -501,46 +501,38 @@ async function clearSessionSecurityRules() {
 }
 
 async function refreshExternalWorkspaceOpsSetting() {
-    var off = document.getElementById('settings-external-ops-off');
-    var on = document.getElementById('settings-external-ops-on');
     var statusEl = document.getElementById('settings-external-ops-status');
-    if (!off || !on) return;
+    var revoke = document.getElementById('settings-external-ops-revoke');
+    if (!statusEl) return;
     try {
         var response = await fetch('/api/security/settings', { cache: 'no-store' });
         var data = await response.json();
         if (!response.ok || !data.ok) throw new Error(data.error || ('HTTP ' + response.status));
         var enabled = data.allow_external_workspace_ops === true;
-        off.classList.toggle('is-active', !enabled);
-        on.classList.toggle('is-active', enabled);
-        off.setAttribute('aria-pressed', enabled ? 'false' : 'true');
-        on.setAttribute('aria-pressed', enabled ? 'true' : 'false');
-        if (statusEl) {
-            statusEl.textContent = enabled
-                ? '已开启：写/删/Shell 工作区外操作自动放行。'
-                : '已关闭：工作区外操作恢复逐次审批。';
-        }
+        statusEl.textContent = enabled
+            ? '已开启：写/删/Shell 工作区外操作自动放行。'
+            : '已关闭：工作区外操作恢复逐次审批。';
+        if (revoke) revoke.style.display = enabled ? '' : 'none';
     } catch (error) {
-        if (statusEl) statusEl.textContent = '读取设置失败：' + String(error && error.message ? error.message : error);
+        statusEl.textContent = '读取设置失败：' + String(error && error.message ? error.message : error);
     }
 }
 
-async function setExternalWorkspaceOpsSetting(enabled) {
+async function revokeExternalWorkspaceOps() {
     var statusEl = document.getElementById('settings-external-ops-status');
-    if (enabled) {
-        var accepted = await openUiModal({
-            title: '开启工作区外处理权限？',
-            message: '开启后，Agent 可在工作区外执行写入、删除和 Shell 操作而不再逐次询问。破坏性/动态命令、网络、凭据导出与安全策略篡改仍会被拦截或审批。',
-            danger: true,
-            confirmText: '确认开启',
-            cancelText: '取消',
-        });
-        if (!accepted) return;
-    }
+    var accepted = await openUiModal({
+        title: '撤销工作区外处理权限？',
+        message: '撤销后，写、删除和 Shell 在工作区外的操作将恢复逐次审批。',
+        danger: true,
+        confirmText: '确认撤销',
+        cancelText: '取消',
+    });
+    if (!accepted) return;
     try {
         var response = await fetch('/api/security/settings', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ allow_external_workspace_ops: enabled }),
+            body: JSON.stringify({ allow_external_workspace_ops: false }),
         });
         var data = await response.json();
         if (!response.ok || !data.ok) throw new Error(data.error || ('HTTP ' + response.status));
@@ -589,10 +581,8 @@ function initPermissionControls() {
     if (webFetchReload) webFetchReload.addEventListener('click', function () { void refreshWebFetchDomains(); });
     var extensionsRefresh = document.getElementById('settings-security-extensions-refresh');
     if (extensionsRefresh) extensionsRefresh.addEventListener('click', function () { void refreshSecurityExtensions(); });
-    var externalOpsOff = document.getElementById('settings-external-ops-off');
-    if (externalOpsOff) externalOpsOff.addEventListener('click', function () { void setExternalWorkspaceOpsSetting(false); });
-    var externalOpsOn = document.getElementById('settings-external-ops-on');
-    if (externalOpsOn) externalOpsOn.addEventListener('click', function () { void setExternalWorkspaceOpsSetting(true); });
+    var externalOpsRevoke = document.getElementById('settings-external-ops-revoke');
+    if (externalOpsRevoke) externalOpsRevoke.addEventListener('click', function () { void revokeExternalWorkspaceOps(); });
     void refreshExternalWorkspaceOpsSetting();
     void refreshSecurityRules();
     void refreshSecurityExtensions();

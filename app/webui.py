@@ -1480,46 +1480,34 @@ async def get_execution_dashboard():
     )
 
 
-def _is_within_local_root(path: Path, roots: tuple[Path, ...]) -> bool:
-    for root in roots:
-        try:
-            path.relative_to(root)
-            return True
-        except ValueError:
-            continue
-    return False
+def _resolve_allowed_local_path(
+    raw_value: str, require_file: bool = False
+) -> Path:
+    """Resolve a native absolute or virtual workspace path.
 
-
-def _resolve_allowed_local_path(raw_value: str, require_file: bool = False) -> Path:
-    """Resolve native absolute or virtual workspace paths within approved roots.
-
-    On POSIX, an existing absolute path below WORK_DIR/app is treated as native.
-    Other slash-rooted values retain the historic virtual-workspace meaning.
+    Native absolute paths (drive-letter, POSIX, or UNC) are returned when
+    they exist on disk; no workspace-root restriction is applied. Slash-rooted
+    and relative values retain the historic virtual-workspace meaning and are
+    resolved under WORK_DIR.
     """
 
     raw = unquote(raw_value or "").strip().strip('"').strip("'")
     if not raw:
         raise ValueError("empty path")
-    if raw.startswith("\\\\"):
-        raise PermissionError("UNC network paths are not supported")
 
     work_root = WORK_DIR.resolve()
-    app_root = Path(__file__).resolve().parent.resolve()
-    roots = (work_root, app_root)
     windows_absolute = bool(re.match(r"^[A-Za-z]:[\\/]", raw))
     native = Path(raw).expanduser()
     native_absolute = windows_absolute or native.is_absolute()
 
     if native_absolute:
         resolved_native = Path(os.path.abspath(str(native))).resolve()
-        if resolved_native.exists() and _is_within_local_root(resolved_native, roots):
+        if resolved_native.exists():
             candidate = resolved_native
         else:
             virtual = (work_root / raw.lstrip("/\\")).resolve()
-            if virtual.exists() and _is_within_local_root(virtual, roots):
+            if virtual.exists():
                 candidate = virtual
-            elif resolved_native.exists():
-                raise PermissionError("path outside allowed roots")
             else:
                 raise FileNotFoundError(raw)
     else:
@@ -1529,8 +1517,6 @@ def _resolve_allowed_local_path(raw_value: str, require_file: bool = False) -> P
         if first and first.lower() == WORK_DIR.name.lower() and not candidate.exists():
             candidate = (WORK_DIR.parent / rel_raw).resolve()
 
-    if not _is_within_local_root(candidate, roots):
-        raise PermissionError("path outside allowed roots")
     if require_file:
         if not candidate.is_file():
             raise FileNotFoundError(raw)
@@ -1590,7 +1576,7 @@ def _resolve_workspace_view_path(raw_value: str) -> Path:
 
 @fastapi_app.get("/api/workspace-image")
 async def workspace_image(
-    rel: str = Query("", description="Image path relative to workspace, or an allowed absolute path"),
+    rel: str = Query("", description="Image path relative to workspace, or a native absolute path"),
 ):
     try:
         cand = await run_in_threadpool(_resolve_workspace_view_path, rel)
@@ -2705,7 +2691,10 @@ async def set_security_settings(req: Request):
     settings = update_security_settings(
         **{
             key: body[key] is True
-            for key in ("auto_review_enabled",)
+            for key in (
+                "auto_review_enabled",
+                "allow_external_workspace_ops",
+            )
             if key in body
         }
     )
@@ -3260,30 +3249,25 @@ async def resolve_session_approval(session_id: str, approval_id: str, request: R
             resolver=_interaction_resolver_metadata(request),
         )
         decision_value = str(record.get("decision") or "")
-        if decision_value in {
-            "allow_once",
-            "allow_session",
-            "allow_always",
-            "allow_external_workspace",
-        }:
-            security_digest = str(record.get("security_request_digest") or "").strip()
-            if not security_digest:
-                raise ValueError("approval is not bound to a security request")
+        security_digest = str(record.get("security_request_digest") or "").strip()
+        if not security_digest:
+            raise ValueError("approval is not bound to a security request")
+        if decision_value == "allow_external_workspace":
+            # Grant ONLY the workspace-outside handling permission. The command
+            # itself is not approved here: the Agent Loop re-prompts a
+            # command-only approval card (two independent authorization axes).
+            from security import update_security_settings
+            from tool_approval_gate import resolve_tool_approval_decision
+
+            update_security_settings(allow_external_workspace_ops=True)
+            resolve_tool_approval_decision(
+                session_id, approval_id, "allow_external_workspace"
+            )
+        else:
             from security import add_approval_grant, add_permission_rule
+            from tool_approval_gate import resolve_tool_approval
 
-            if decision_value == "allow_external_workspace":
-                # One-time grant of the workspace-outside handling permission:
-                # write / delete / shell operations outside the workspace no
-                # longer ask, until the user turns it off in settings.
-                from security import update_security_settings
-
-                update_security_settings(allow_external_workspace_ops=True)
-                add_approval_grant(
-                    session_id,
-                    security_digest,
-                    "allow_once",
-                )
-            else:
+            if decision_value in {"allow_once", "allow_session", "allow_always"}:
                 rule_action = str(record.get("rule_action") or "").strip()
                 rule_pattern = str(record.get("rule_pattern") or "").strip()
                 if (
@@ -3307,15 +3291,9 @@ async def resolve_session_approval(session_id: str, approval_id: str, request: R
                         security_digest,
                         decision_value,
                     )
-        # Wake the compatibility Future used by the current Agent Loop.
-        from tool_approval_gate import resolve_tool_approval
-
-        resolve_tool_approval(
-            session_id,
-            approval_id,
-            decision_value
-            in {"allow_once", "allow_session", "allow_always", "allow_external_workspace"},
-        )
+                resolve_tool_approval(session_id, approval_id, True)
+            else:
+                resolve_tool_approval(session_id, approval_id, False)
         await publish_session_event(session_id, {"type": "approval_resolved", **record})
         return JSONResponse(content={"ok": True, "approval": record})
     except Exception as exc:

@@ -155,9 +155,13 @@ def test_permission_mode_ui_regressions():
         "自动审批已拒绝",
         "自动审查不可用（已转人工确认）",
         "可人工覆盖本次请求（只此一次，不沉淀规则）",
-        "允许工作区外处理（写/删/Shell）",
+        "授权工作区沙箱外处理权限",
+        "命令授权",
+        "工作区沙箱外处理权限",
         "工作区外处理权限",
+        "权限与安全",
         "已开启：写/删/Shell 工作区外操作自动放行。",
+        "撤销授权",
         "权限规则（始终允许 / 必问 / 拒绝）",
         "网页抓取预批准域名（web_fetch 免审批）",
     ):
@@ -218,6 +222,13 @@ def test_permission_mode_ui_regressions():
     assert "allow_external_workspace_ops" in permissions
     assert "settings-external-ops" in index_html
     assert "settings-external-ops" in html
+    assert "是否授权工作区沙箱外处理权限？" in agent_loop
+    assert "确认执行命令（工作区外处理权限已授权）" in agent_loop
+    assert "return_decision=True" in agent_loop
+    assert "human-approval-group" in css
+    gate = (ROOT / "app/tool_approval_gate.py").read_text(encoding="utf-8")
+    assert "resolve_tool_approval_decision" in gate
+    assert "return_decision" in gate
 
     # Full-access warning uses the unified UI modal, not window.confirm.
     assert "openUiModal({" in permissions

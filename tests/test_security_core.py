@@ -122,7 +122,7 @@ def test_app_restricted_remains_usable_without_native_sandbox(tmp_path):
     assert shell.outcome == DecisionOutcome.ALLOW
 
 
-def test_external_reads_ask_when_sandbox_is_available(tmp_path):
+def test_external_reads_are_allowed_by_default(tmp_path):
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     outside = tmp_path / "outside.txt"
@@ -131,8 +131,8 @@ def test_external_reads_ask_when_sandbox_is_available(tmp_path):
         PERMISSION_PRESETS[PermissionMode.ASK_FOR_APPROVAL],
         sandbox_available=True,
     )
-    assert decision.outcome == DecisionOutcome.ASK
-    assert decision.rule_id == "external.read"
+    assert decision.outcome == DecisionOutcome.ALLOW
+    assert decision.rule_id == "app_restricted.read"
 
 
 def test_workspace_soft_delete_is_allowed_but_external_delete_asks(tmp_path):
@@ -200,7 +200,7 @@ def test_security_paths_cannot_be_written_in_workspace_mode(tmp_path, name):
     assert decision.rule_id == "protected.write"
 
 
-def test_dotenv_read_inside_workspace_is_allowed(tmp_path):
+def test_dotenv_read_inside_workspace_requires_approval(tmp_path):
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     decision = PolicyEngine(workspace).decide(
@@ -208,21 +208,38 @@ def test_dotenv_read_inside_workspace_is_allowed(tmp_path):
         PERMISSION_PRESETS[PermissionMode.ASK_FOR_APPROVAL],
         sandbox_available=True,
     )
-    assert decision.outcome == DecisionOutcome.ALLOW
-    assert decision.rule_id == "app_restricted.read"
+    assert decision.outcome == DecisionOutcome.ASK
+    assert decision.rule_id == "credential.read"
 
 
-def test_sensitive_read_outside_workspace_requires_approval(tmp_path):
+def test_sensitive_reads_require_approval_anywhere(tmp_path):
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     outside = tmp_path / "home" / ".ssh" / "id_rsa"
-    decision = PolicyEngine(workspace).decide(
-        _request("fs.read", outside),
-        PERMISSION_PRESETS[PermissionMode.ASK_FOR_APPROVAL],
-        sandbox_available=True,
+    inside = workspace / ".env"
+    for target in (outside, inside):
+        decision = PolicyEngine(workspace).decide(
+            _request("fs.read", target),
+            PERMISSION_PRESETS[PermissionMode.ASK_FOR_APPROVAL],
+            sandbox_available=True,
+        )
+        assert decision.outcome == DecisionOutcome.ASK
+        assert decision.rule_id == "credential.read"
+
+
+def test_shell_sensitive_read_requires_approval(tmp_path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    request = classify_tool(
+        "run_shell", {"command": "cat .env", "args": []}, workspace
     )
+    decision = PolicyEngine(workspace).decide(
+        request,
+        PERMISSION_PRESETS[PermissionMode.ASK_FOR_APPROVAL],
+    )
+    assert request.metadata.get("credential_read") is True
     assert decision.outcome == DecisionOutcome.ASK
-    assert decision.rule_id == "credential.read"
+    assert decision.rule_id == "process.credential_read"
 
 
 def test_controller_own_dotenv_is_protected(tmp_path):
@@ -840,11 +857,10 @@ def test_external_workspace_ops_permission_grants_write_delete_shell(
     assert shell.outcome == DecisionOutcome.ALLOW
     assert shell.rule_id == "grant.external_workspace_ops"
 
-    # Read outside stays per-request.
-    assert (
-        decide("read_file", {"path": str(outside)}).rule_id
-        == "external.read"
-    )
+    # Plain external reads are allowed by default (not part of the grant).
+    read = decide("read_file", {"path": str(outside)})
+    assert read.outcome == DecisionOutcome.ALLOW
+    assert read.rule_id == "app_restricted.read"
     # Network and dynamic shell are not covered by the grant.
     assert (
         decide("run_shell", {"command": "curl https://example.com", "args": []}).rule_id
@@ -1064,22 +1080,25 @@ def _isolated_security_store(tmp_path, monkeypatch):
     return store
 
 
-def test_forced_approval_rules_cover_dynamic_and_destructive_shell():
+def test_forced_approval_rules_cover_destructive_only():
     destructive = SecurityDecision(DecisionOutcome.ASK, "x", "process.destructive", "d")
     dynamic = SecurityDecision(DecisionOutcome.ASK, "x", "process.dynamic", "d")
     network = SecurityDecision(DecisionOutcome.ASK, "x", "process.network", "d")
     credential = SecurityDecision(DecisionOutcome.ASK, "x", "credential.read", "d")
     assert forced_approval_for(destructive) is True
-    assert forced_approval_for(dynamic) is True
+    # Dynamic code is an ordinary (yellow) approval now; only destructive
+    # commands remain red-box forced.
+    assert forced_approval_for(dynamic) is False
     assert forced_approval_for(network) is False
     assert always_ask_for(destructive) is True
+    assert always_ask_for(dynamic) is False
     # Credential reads are ordinary approvals now (workspace-internal reads
     # auto-allow; external reads may be covered by rules or grants).
     assert always_ask_for(credential) is False
     assert always_ask_for(network) is False
 
 
-def test_dynamic_shell_risk_wins_over_network_and_reusable_rules(tmp_path, monkeypatch):
+def test_dynamic_shell_is_ordinary_approval_and_session_grantable(tmp_path, monkeypatch):
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     _isolated_security_store(tmp_path, monkeypatch)
@@ -1098,12 +1117,11 @@ def test_dynamic_shell_risk_wins_over_network_and_reusable_rules(tmp_path, monke
     assert request.metadata["network"] is True
     assert decision.outcome == DecisionOutcome.ASK
     assert decision.rule_id == "process.dynamic"
-    assert forced_approval_for(decision) is True
+    assert forced_approval_for(decision) is False
 
-    # A human-created exact grant authorizes one attempt, then is atomically
-    # consumed. Reusable session/always grants remain unavailable for this risk.
+    # Dynamic code is an ordinary approval: a "本任务内" session grant
+    # satisfies the same exact request without re-prompting.
     add_approval_grant("session", decision.request_digest, "allow_session")
-    add_approval_grant("session", decision.request_digest, "allow_once")
     _, repeated, _ = authorize_tool(
         session_id="session",
         tool_name="run_shell",
@@ -1111,15 +1129,7 @@ def test_dynamic_shell_risk_wins_over_network_and_reusable_rules(tmp_path, monke
         workspace=workspace,
     )
     assert repeated.outcome == DecisionOutcome.ALLOW
-    assert repeated.rule_id == "grant.once"
-    _, replayed, _ = authorize_tool(
-        session_id="session",
-        tool_name="run_shell",
-        arguments={"command": command},
-        workspace=workspace,
-    )
-    assert replayed.outcome == DecisionOutcome.ASK
-    assert replayed.rule_id == "process.dynamic"
+    assert repeated.rule_id == "grant.session"
 
 
 def test_dangerous_command_accepts_one_atomic_human_grant(tmp_path, monkeypatch):
@@ -1158,7 +1168,7 @@ def test_dangerous_command_accepts_one_atomic_human_grant(tmp_path, monkeypatch)
     assert third.rule_id == "process.destructive"
 
 
-def test_workspace_dotenv_read_is_auto_allowed(tmp_path, monkeypatch):
+def test_workspace_dotenv_read_requires_approval(tmp_path, monkeypatch):
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     _isolated_security_store(tmp_path, monkeypatch)
@@ -1170,7 +1180,8 @@ def test_workspace_dotenv_read_is_auto_allowed(tmp_path, monkeypatch):
         arguments={"path": str(workspace / ".env")},
         workspace=workspace,
     )
-    assert first.outcome == DecisionOutcome.ALLOW
+    assert first.outcome == DecisionOutcome.ASK
+    assert first.rule_id == "credential.read"
 
 
 def test_external_credential_read_asks_but_grant_can_satisfy(tmp_path, monkeypatch):
@@ -1201,7 +1212,7 @@ def test_external_credential_read_asks_but_grant_can_satisfy(tmp_path, monkeypat
     assert second.outcome == DecisionOutcome.ALLOW
 
 
-def test_shell_dotenv_read_inside_workspace_is_allowed(tmp_path, monkeypatch):
+def test_shell_dotenv_read_inside_workspace_requires_approval(tmp_path, monkeypatch):
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     _isolated_security_store(tmp_path, monkeypatch)
@@ -1213,7 +1224,8 @@ def test_shell_dotenv_read_inside_workspace_is_allowed(tmp_path, monkeypatch):
         arguments={"command": "type .env"},
         workspace=workspace,
     )
-    assert first.outcome == DecisionOutcome.ALLOW
+    assert first.outcome == DecisionOutcome.ASK
+    assert first.rule_id == "process.credential_read"
 
 
 def test_shell_external_credential_read_requires_approval(tmp_path, monkeypatch):
@@ -1260,19 +1272,19 @@ def test_ordinary_ask_request_still_consumes_grant(tmp_path, monkeypatch):
     assert granted.rule_id == "grant.once"
 
 
-def test_shell_credential_read_inside_workspace_is_allowed(tmp_path):
+def test_shell_credential_read_inside_workspace_requires_approval(tmp_path):
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     request = classify_tool("run_shell", {"command": "cat .env"}, workspace)
-    # Reading a credential file inside the workspace is an ordinary read.
-    assert request.metadata["credential_read"] is False
+    assert request.metadata["credential_read"] is True
     assert request.metadata["credential_export"] is False
     decision = PolicyEngine(workspace).decide(
         request,
         PERMISSION_PRESETS[PermissionMode.ASK_FOR_APPROVAL],
         sandbox_available=True,
     )
-    assert decision.outcome == DecisionOutcome.ALLOW
+    assert decision.outcome == DecisionOutcome.ASK
+    assert decision.rule_id == "process.credential_read"
 
 
 def test_shell_credential_export_is_denied(tmp_path):

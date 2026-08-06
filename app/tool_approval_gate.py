@@ -139,6 +139,40 @@ def resolve_tool_approval(session_id: str, approval_id: str, approved: bool) -> 
     return durable_matched or live_matched
 
 
+def resolve_tool_approval_decision(
+    session_id: str, approval_id: str, decision: str
+) -> bool:
+    """Resolve a pending approval with a raw decision token.
+
+    The waiter (``wait_tool_ui_approval_after_emit(..., return_decision=True)``)
+    receives the token instead of a boolean, so callers can implement
+    multi-step flows (e.g. "grant workspace permission, then re-prompt the
+    command itself") without conflating the two authorization axes.
+    """
+    sid = str(session_id or "").strip()
+    aid = str(approval_id or "").strip()
+    if not sid or not aid:
+        return False
+    with _PENDING_LOCK:
+        fut = _PENDING.get((sid, aid))
+    live_matched = bool(fut and not fut.done())
+    if not live_matched:
+        try:
+            from human_interaction import get_human_interaction_service
+
+            get_human_interaction_service().resolve_approval(
+                sid, aid, str(decision or "deny"), resolver={"channel": "decision_api"}
+            )
+        except Exception:
+            pass
+        return False
+    try:
+        fut.get_loop().call_soon_threadsafe(fut.set_result, str(decision))
+    except RuntimeError:
+        live_matched = False
+    return live_matched
+
+
 async def _interrupt_poll_until_done(session_id: str, fut: asyncio.Future) -> None:
     try:
         while not fut.done():
@@ -159,7 +193,8 @@ async def wait_tool_ui_approval_after_emit(
     approval_id: str,
     emit_coro,
     metadata: Dict[str, Any] | None = None,
-) -> bool:
+    return_decision: bool = False,
+) -> bool | str:
     """先登记 Future，再执行 emit_coro（发送 SSE），避免客户端极快 POST 时未命中 pending。"""
     loop = asyncio.get_running_loop()
     fut: asyncio.Future = loop.create_future()
@@ -223,7 +258,7 @@ async def wait_tool_ui_approval_after_emit(
                 durable_service.cancel(key[0], key[1], kind="approval", reason="approval_wait_ended")
             except Exception:
                 pass
-        return bool(allowed)
+        return allowed if return_decision else bool(allowed)
     except asyncio.CancelledError:
         if durable_service is not None:
             try:

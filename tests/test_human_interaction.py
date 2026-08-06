@@ -11,6 +11,36 @@ from app.human_interaction.service import (
 from app.runtime_v2.ui_projection import RuntimeUiProjection
 
 
+def test_approval_gate_returns_raw_decision_for_two_step_flow():
+    """wait_tool_ui_approval_after_emit(return_decision=True) returns the raw
+    decision token so the Agent Loop can re-prompt the command after the
+    workspace permission is granted (two independent authorization axes)."""
+    from app.tool_approval_gate import (
+        new_approval_id,
+        resolve_tool_approval_decision,
+        wait_tool_ui_approval_after_emit,
+    )
+
+    async def flow():
+        sid = "gate-decision-test"
+        aid = new_approval_id()
+
+        async def emit():
+            return None
+
+        waiter = asyncio.ensure_future(
+            wait_tool_ui_approval_after_emit(
+                sid, aid, emit, return_decision=True
+            )
+        )
+        await asyncio.sleep(0.05)
+        resolve_tool_approval_decision(sid, aid, "allow_external_workspace")
+        return await waiter
+
+    result = asyncio.run(flow())
+    assert result == "allow_external_workspace"
+
+
 @pytest.fixture(autouse=True)
 def _enable_ask_user_for_interaction_tests(monkeypatch):
     monkeypatch.setenv("ASK_USER_ENABLED", "1")
