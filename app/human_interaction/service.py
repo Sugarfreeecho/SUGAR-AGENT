@@ -34,7 +34,7 @@ _TRUE_ENV_VALUES = {"1", "true", "yes", "on"}
 def ask_user_enabled() -> bool:
     """Return whether the model may create new ask_user interactions."""
 
-    return os.getenv(ASK_USER_ENV_VAR, "0").strip().lower() in _TRUE_ENV_VALUES
+    return os.getenv(ASK_USER_ENV_VAR, "1").strip().lower() in _TRUE_ENV_VALUES
 
 
 _TERMINAL = {"resolved", "cancelled", "expired"}

@@ -5781,7 +5781,7 @@ for _gid, _title, _keys in _ENV_GROUP_ORDER:
 _ENV_HINTS: dict[str, str] = {
     "SECURITY_ENABLED": "0（默认）强制使用完全访问并隐藏前端权限选择；设为 1 时启用请求批准 / 替我审批 / 完全访问三档权限，并恢复此前保存的全局权限模式。保存后立即生效，页面刷新后更新界面。",
     "MCP_REGISTRATION_APPROVAL_ENABLED": "0（默认）关闭 MCP 注册审批：新配置直接连接、无需人工确认；1/true/yes/on 启用首次注册或配置摘要变化后的人工确认。保存后立即刷新 MCP。",
-    "ASK_USER_ENABLED": "0（默认）禁止主 Agent 创建 ask_user 问题；1/true/yes/on 启用。已有待回答问题仍可处理，工具审批不受影响。保存后立即生效。",
+    "ASK_USER_ENABLED": "1（默认）允许主 Agent 创建 ask_user 问题；0/false/no/off 禁止。已有待回答问题仍可处理，工具审批不受影响。保存后立即生效。",
     "GOAL_ENABLED": "1（默认）启用持久 Goal、Goal 工具和服务端自动续跑；0/false/no/off 禁用。修改后需重启 Agent。",
     "GOAL_RUNNER_POLL_SECONDS": "服务端 Goal 调度器扫描 active Goal 的间隔秒数，默认 2，最小 0.5。修改后需重启 Agent。",
     "GOAL_MAX_CONSECUTIVE_FAILURES": "Goal 连续运行失败多少次后自动暂停，默认 3；用于避免无限失败重试。",
@@ -6224,7 +6224,7 @@ async def get_env_snapshot():
     for key, default in {
         "SECURITY_ENABLED": "0",
         "MCP_REGISTRATION_APPROVAL_ENABLED": "0",
-        "ASK_USER_ENABLED": "0",
+        "ASK_USER_ENABLED": "1",
         "GOAL_ENABLED": "1",
         "GOAL_RUNNER_POLL_SECONDS": "2",
         "GOAL_MAX_CONSECUTIVE_FAILURES": "3",

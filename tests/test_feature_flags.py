@@ -23,7 +23,7 @@ def _extract_steer_mode(html: str) -> str:
     return json.loads(match.group(1))
 
 
-def test_index_html_injects_conservative_feature_values(monkeypatch):
+def test_index_html_injects_default_feature_values(monkeypatch):
     import webui
 
     monkeypatch.delenv("AGENT_TEAM_ENABLED", raising=False)
@@ -37,7 +37,7 @@ def test_index_html_injects_conservative_feature_values(monkeypatch):
 
     assert flags == {
         "goal": True,
-        "askUser": False,
+        "askUser": True,
         "agentTeam": False,
         "followupRestart": False,
         "streamReconnect": False,
@@ -60,7 +60,7 @@ def test_index_html_injects_independent_feature_overrides(monkeypatch):
 
     assert flags == {
         "goal": True,
-        "askUser": False,
+        "askUser": True,
         "agentTeam": True,
         "followupRestart": True,
         "streamReconnect": True,

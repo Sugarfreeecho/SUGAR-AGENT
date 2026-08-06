@@ -610,11 +610,11 @@ MVP 只支持 Markdown/plain-text preview，复用现有 Markdown 渲染并禁�
 在 `app/.env` 中使用统一开关：
 
 ```dotenv
-ASK_USER_ENABLED=0
+ASK_USER_ENABLED=1
 ```
 
-- `0/false/no/off` 或未配置：从模型工具列表移除 `ask_user`，服务层同时拒绝创建新问题。
-- `1/true/yes/on`：允许主 Agent 使用 `ask_user`。
+- `0/false/no/off`：从模型工具列表移除 `ask_user`，服务层同时拒绝创建新问题。
+- `1/true/yes/on` 或未配置：允许主 Agent 使用 `ask_user`。
 - 开关按次读取，通过高级配置页保存后立即生效。
 - 已经创建的 pending 问题仍可回答或取消，避免正在等待的运行悬空。
 - 安全审批由 `TOOL_UI_APPROVAL` 独立控制；关闭业务问答不会关闭或绕过高风险操作审批。

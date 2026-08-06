@@ -145,9 +145,9 @@ def test_ask_user_switch_blocks_new_questions_but_not_approvals(tmp_path, monkey
     assert approval["status"] == "pending"
 
 
-def test_ask_user_switch_defaults_disabled(monkeypatch):
+def test_ask_user_switch_defaults_enabled(monkeypatch):
     monkeypatch.delenv("ASK_USER_ENABLED", raising=False)
-    assert ask_user_enabled() is False
+    assert ask_user_enabled() is True
 
 
 def test_agent_loop_filters_ask_user_tool_when_switch_is_disabled():
