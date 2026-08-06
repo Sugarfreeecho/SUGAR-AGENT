@@ -15,6 +15,7 @@ import json
 import logging
 import os
 import re
+import threading
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -55,6 +56,65 @@ _loaded_signature: Optional[str] = None
 _signature_cache: Optional[Tuple[float, str]] = None
 _SIGNATURE_CACHE_TTL_SEC = 1.0
 _last_config_error: Optional[str] = None
+
+_MCP_TOOLS_STATE_PATH = PROJECT_ROOT / "mcp_tools_state.json"
+_mcp_tool_state_lock = threading.RLock()
+_disabled_mcp_tools: set[str] = set()
+_disabled_mcp_tools_loaded = False
+
+
+def _load_disabled_mcp_tools() -> set[str]:
+    """Load persisted per-tool disabled state (enabled is the default)."""
+    global _disabled_mcp_tools, _disabled_mcp_tools_loaded
+    if _disabled_mcp_tools_loaded:
+        return _disabled_mcp_tools
+    with _mcp_tool_state_lock:
+        if _disabled_mcp_tools_loaded:
+            return _disabled_mcp_tools
+        _disabled_mcp_tools = set()
+        try:
+            data = json.loads(_MCP_TOOLS_STATE_PATH.read_text(encoding="utf-8"))
+        except (OSError, ValueError, TypeError):
+            data = None
+        raw = data.get("tools") if isinstance(data, dict) else None
+        if isinstance(raw, dict):
+            for fname, value in raw.items():
+                name = str(fname or "").strip()
+                if name and isinstance(value, dict) and value.get("enabled") is False:
+                    _disabled_mcp_tools.add(name)
+        _disabled_mcp_tools_loaded = True
+    return _disabled_mcp_tools
+
+
+def is_mcp_tool_enabled(function_name: str) -> bool:
+    return str(function_name or "") not in _load_disabled_mcp_tools()
+
+
+def set_mcp_tool_enabled(function_name: str, enabled: bool) -> bool:
+    """Persist whether a registered MCP tool is visible and callable."""
+    global _disabled_mcp_tools
+    name = str(function_name or "").strip()
+    if not name or name not in _fname_to_tool:
+        return False
+    with _mcp_tool_state_lock:
+        disabled = set(_load_disabled_mcp_tools())
+        if enabled:
+            disabled.discard(name)
+        else:
+            disabled.add(name)
+        out = {
+            "version": 1,
+            "tools": {key: {"enabled": False} for key in sorted(disabled)},
+        }
+        _MCP_TOOLS_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        tmp = _MCP_TOOLS_STATE_PATH.with_suffix(_MCP_TOOLS_STATE_PATH.suffix + ".tmp")
+        tmp.write_text(
+            json.dumps(out, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        tmp.replace(_MCP_TOOLS_STATE_PATH)
+        _disabled_mcp_tools = disabled
+    return True
 
 
 def _register_tools_globally(alias: str, tools: List[Any]) -> int:
@@ -680,11 +740,17 @@ async def ensure_started() -> None:
 
 async def get_tool_definitions() -> List[Dict[str, Any]]:
     await ensure_started()
-    return list(_defs_snapshot)
+    disabled = _load_disabled_mcp_tools()
+    return [
+        d
+        for d in _defs_snapshot
+        if str((d.get("function") or {}).get("name") or "") not in disabled
+    ]
 
 
 def list_registered_tools() -> List[Dict[str, Any]]:
     """Return the currently registered MCP tools for UI display."""
+    disabled = _load_disabled_mcp_tools()
     descriptions = {
         str(d.get("function", {}).get("name") or ""): str(
             d.get("function", {}).get("description") or ""
@@ -697,6 +763,7 @@ def list_registered_tools() -> List[Dict[str, Any]]:
             "server": alias,
             "tool_name": orig_name,
             "description": descriptions.get(fname, ""),
+            "enabled": fname not in disabled,
         }
         for fname, (alias, orig_name) in _fname_to_tool.items()
     ]
@@ -742,6 +809,8 @@ async def invoke_tool_by_fname(
     pair = _fname_to_tool.get(function_name)
     if not pair:
         return f"Error: unknown MCP tool `{function_name}`."
+    if function_name in _load_disabled_mcp_tools():
+        return f"Error: MCP tool `{function_name}` is disabled."
     alias, orig = pair
     contract = get_tool_contract(function_name)
     call_arguments = dict(arguments or {})

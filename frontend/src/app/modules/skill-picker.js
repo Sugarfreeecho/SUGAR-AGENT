@@ -11,6 +11,7 @@ let extensionsRefreshPromise = null;
 let extensionsLoading = false;
 let extensionsError = null;
 const skillPickerToggleBusy = Object.create(null);
+const mcpToolToggleBusy = Object.create(null);
 const LS_SKILL_DRAFT_PREFIX = 'myagent-skill-draft:';
 
 function skillPickerEls() {
@@ -151,7 +152,8 @@ function skillPickerMcpToolHoverDetail(tool) {
     var toolName = String(tool && tool.tool_name || '');
     var server = String(tool && tool.server || '');
     var description = String(tool && tool.description || '').trim() || '暂无描述';
-    return ['MCP 工具：' + toolName, '服务器：' + server, '描述：' + description].join('\n');
+    var status = tool && tool.enabled !== false ? '已启用' : '已禁用';
+    return ['MCP 工具：' + toolName, '服务器：' + server, '描述：' + description, '状态：' + status].join('\n');
 }
 
 function renderSkillPickerSkillsHtml() {
@@ -195,16 +197,18 @@ function renderSkillPickerMcpToolsHtml() {
         var fn = String(tool && tool.function_name || '');
         var server = String(tool && tool.server || '');
         var name = String(tool && tool.tool_name || fn);
+        var enabled = tool && tool.enabled !== false;
         var desc = String(tool && tool.description || '').trim();
         var prefix = '[MCP server `' + server + '`] ';
         if (desc.indexOf(prefix) === 0) desc = desc.slice(prefix.length).trim();
-        return '<div class="skill-picker-option mcp-tool-option" data-ui-tip="' + skillPickerEscape(skillPickerMcpToolHoverDetail(tool)) + '">'
+        return '<div class="skill-picker-option mcp-tool-option' + (enabled ? '' : ' is-disabled') + '" data-ui-tip="' + skillPickerEscape(skillPickerMcpToolHoverDetail(tool)) + '">'
             + '<span class="mcp-tool-badge">' + skillPickerEscape(server) + '</span>'
             + '<span class="skill-picker-option-body">'
             + '<span class="skill-picker-option-name">' + skillPickerEscape(name) + '</span>'
             + (desc ? '<span class="skill-picker-option-desc">' + skillPickerEscape(desc) + '</span>' : '')
             + (fn ? '<span class="mcp-tool-fname">' + skillPickerEscape(fn) + '</span>' : '')
             + '</span>'
+            + '<button type="button" class="skill-picker-toggle mcp-tool-toggle" data-mcp-tool="' + skillPickerEscape(fn) + '" data-enabled="' + (enabled ? 'true' : 'false') + '" data-ui-tip="' + (enabled ? '禁用' : '启用') + '" aria-label="' + (enabled ? '禁用' : '启用') + '">' + skillPickerToggleHtml(enabled) + '</button>'
             + '</div>';
     }).join('');
 }
@@ -385,6 +389,15 @@ function renderSkillPicker(opts) {
             setSkillPickerEnabled(name, enabled);
         });
     });
+    e.popover.querySelectorAll('.mcp-tool-toggle').forEach(function (button) {
+        button.addEventListener('click', function (ev) {
+            ev.preventDefault();
+            ev.stopPropagation();
+            var fname = String(button.getAttribute('data-mcp-tool') || '');
+            var enabled = button.getAttribute('data-enabled') !== 'true';
+            setMcpToolEnabled(fname, enabled);
+        });
+    });
 }
 
 async function setSkillPickerEnabled(name, enabled) {
@@ -428,6 +441,34 @@ async function loadSkillPickerMcpTools() {
     mcpToolsCache = Array.isArray(data.tools) ? data.tools : [];
     mcpToolsError = null;
     return mcpToolsCache;
+}
+
+async function setMcpToolEnabled(functionName, enabled) {
+    functionName = String(functionName || '').trim();
+    if (!functionName || mcpToolToggleBusy[functionName]) return;
+    mcpToolToggleBusy[functionName] = true;
+    try {
+        var response = await fetch('/api/mcp/tools/' + encodeURIComponent(functionName) + '/enabled', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'same-origin',
+            body: JSON.stringify({ enabled: enabled === true }),
+        });
+        var data = await response.json();
+        if (!data || !data.ok) throw new Error((data && data.error) || 'MCP 工具启停失败');
+        (mcpToolsCache || []).forEach(function (tool) {
+            if (String(tool && tool.function_name || '') === functionName) {
+                tool.enabled = enabled === true;
+            }
+        });
+        renderSkillPicker();
+    } catch (err) {
+        if (typeof appendLogVisible === 'function') {
+            appendLogVisible('MCP 工具启停失败：' + String(err.message || err), 'error-log');
+        }
+    } finally {
+        delete mcpToolToggleBusy[functionName];
+    }
 }
 
 function refreshSkillPickerSkills() {

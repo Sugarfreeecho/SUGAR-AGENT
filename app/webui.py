@@ -6144,6 +6144,29 @@ async def list_mcp_tools():
         return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
 
 
+@fastapi_app.post("/api/mcp/tools/{function_name}/enabled")
+async def set_mcp_tool_enabled_api(function_name: str, request: Request):
+    try:
+        data = await request.json()
+    except Exception:
+        return JSONResponse({"ok": False, "error": "invalid json"}, status_code=400)
+    enabled = data.get("enabled") if isinstance(data, dict) else None
+    if not isinstance(enabled, bool):
+        return JSONResponse({"ok": False, "error": "enabled must be boolean"}, status_code=400)
+    try:
+        ok = await asyncio.to_thread(
+            agent_mcp.set_mcp_tool_enabled,
+            str(function_name or "").strip(),
+            enabled,
+        )
+        if not ok:
+            return JSONResponse({"ok": False, "error": "unknown mcp tool"}, status_code=404)
+        return JSONResponse({"ok": True, "function_name": function_name, "enabled": enabled})
+    except Exception as exc:
+        logger.warning("MCP tool enablement failed: %s", exc)
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
+
+
 @fastapi_app.get("/api/mcp_config")
 async def get_mcp_config_snapshot():
     from security.extensions import mcp_registration_candidates

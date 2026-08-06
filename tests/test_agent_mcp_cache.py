@@ -223,6 +223,7 @@ def test_list_registered_tools_returns_sorted_snapshot(monkeypatch):
         "server": "server-a",
         "tool_name": "beta",
         "description": "[MCP server `server-a`] Beta tool",
+        "enabled": True,
     }
     assert tools[1]["tool_name"] == "alpha"
 
@@ -245,3 +246,70 @@ def test_mcp_tools_endpoint_returns_registered_tools(monkeypatch):
     body = json.loads(response.body)
     assert body["ok"] is True
     assert body["tools"] == [{"function_name": "mcp_demo_x", "server": "demo", "tool_name": "x"}]
+
+
+def test_mcp_tool_enablement_persists_and_filters_definitions(monkeypatch, tmp_path):
+    import agent_mcp
+
+    async def ensure_started():
+        return None
+
+    monkeypatch.setattr(agent_mcp, "_MCP_TOOLS_STATE_PATH", tmp_path / "mcp_tools_state.json")
+    monkeypatch.setattr(agent_mcp, "_disabled_mcp_tools_loaded", False)
+    monkeypatch.setattr(agent_mcp, "_disabled_mcp_tools", set())
+    monkeypatch.setattr(
+        agent_mcp,
+        "_fname_to_tool",
+        {"mcp_demo_x": ("demo", "x")},
+    )
+    monkeypatch.setattr(
+        agent_mcp,
+        "_defs_snapshot",
+        [
+            {
+                "type": "function",
+                "function": {
+                    "name": "mcp_demo_x",
+                    "description": "[MCP server `demo`] X tool",
+                },
+            }
+        ],
+    )
+    monkeypatch.setattr(agent_mcp, "ensure_started", ensure_started)
+
+    assert agent_mcp.set_mcp_tool_enabled("mcp_demo_x", False) is True
+    assert agent_mcp.is_mcp_tool_enabled("mcp_demo_x") is False
+    assert asyncio.run(agent_mcp.get_tool_definitions()) == []
+    tools = agent_mcp.list_registered_tools()
+    assert tools[0]["function_name"] == "mcp_demo_x"
+    assert tools[0]["enabled"] is False
+    assert "disabled" in asyncio.run(
+        agent_mcp.invoke_tool_by_fname("mcp_demo_x", {})
+    )
+
+    assert agent_mcp.set_mcp_tool_enabled("mcp_demo_x", True) is True
+    assert agent_mcp.is_mcp_tool_enabled("mcp_demo_x") is True
+    assert [d["function"]["name"] for d in asyncio.run(agent_mcp.get_tool_definitions())] == [
+        "mcp_demo_x"
+    ]
+    assert agent_mcp.list_registered_tools()[0]["enabled"] is True
+
+
+def test_mcp_tool_enablement_endpoint_rejects_unknown_and_non_boolean(monkeypatch):
+    import webui
+
+    response = asyncio.run(
+        webui.set_mcp_tool_enabled_api(
+            "mcp_unknown",
+            _json_request({"enabled": True}),
+        )
+    )
+    assert response.status_code == 404
+
+    response = asyncio.run(
+        webui.set_mcp_tool_enabled_api(
+            "mcp_demo_x",
+            _json_request({"enabled": "yes"}),
+        )
+    )
+    assert response.status_code == 400

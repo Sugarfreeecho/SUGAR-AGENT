@@ -57,6 +57,7 @@ const UI_TRANSLATIONS_EN = {
     '正在接管当前任务': 'Taking over the current task', '选择 Skill ': 'Select Skill ', '清空': 'Clear',
     '当前没有已注册 Skill': 'No registered skills', '正在加载 Skill': 'Loading skills',
     'MCP 工具': 'MCP Tools', '正在加载 MCP 工具': 'Loading MCP tools', '当前没有已注册的 MCP 工具': 'No registered MCP tools', 'MCP 工具加载失败': 'Failed to load MCP tools',
+    'MCP 工具启停失败': 'Failed to change MCP tool status',
     'Hooks': 'Hooks', 'Plugins': 'Plugins', '正在加载扩展': 'Loading extensions', '当前没有已注册 Hook': 'No registered hooks', '当前没有已发现插件': 'No plugins found', '扩展加载失败': 'Failed to load extensions', '无': 'None',
     '加载详情中…': 'Loading details…', '知道了': 'Got it', '允许执行': 'Allow', '拒绝': 'Deny',
     '需要确认': 'Confirmation required', '任务已中断': 'Task interrupted', '已请求停止当前任务': 'Stop requested',
@@ -478,6 +479,7 @@ function translateUiString(value) {
         .replace(/^保存失败：(.+)$/g, 'Save failed: $1')
         .replace(/^Skill 加载失败：(.+)$/g, 'Failed to load Skill: $1')
         .replace(/^MCP 工具加载失败：(.+)$/g, 'Failed to load MCP tools: $1')
+        .replace(/^MCP 工具启停失败：(.+)$/g, 'Failed to change MCP tool status: $1')
         .replace(/^扩展加载失败：(.+)$/g, 'Failed to load extensions: $1')
         .replace(/^异步截断失败：?(.+)$/g, 'Asynchronous truncation failed: $1')
         .replace(/^续接 subagent 失败：?(.+)$/g, 'Failed to continue subagent: $1')

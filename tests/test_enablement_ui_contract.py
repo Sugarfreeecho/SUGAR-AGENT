@@ -27,11 +27,14 @@ def test_skill_picker_exposes_enablement_controls():
     assert 'data-skill-picker-tab="hooks"' in picker
     assert 'data-skill-picker-tab="plugins"' in picker
     assert "loadSkillPickerMcpTools" in picker
+    assert "mcp-tool-toggle" in picker
+    assert "setMcpToolEnabled" in picker
     assert "loadSkillPickerExtensions" in picker
     assert '/api/mcp/tools' in picker
     assert '/api/extensions' in picker
     assert '@fastapi_app.post("/api/skills/{skill_name}/enabled")' in backend
     assert '@fastapi_app.get("/api/mcp/tools")' in backend
+    assert '@fastapi_app.post("/api/mcp/tools/{function_name}/enabled")' in backend
 
 
 def test_ui_presence_tracks_foreground_state_and_attention_notifications():
