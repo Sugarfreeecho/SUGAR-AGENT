@@ -32,3 +32,32 @@ def test_skill_picker_exposes_enablement_controls():
     assert '/api/extensions' in picker
     assert '@fastapi_app.post("/api/skills/{skill_name}/enabled")' in backend
     assert '@fastapi_app.get("/api/mcp/tools")' in backend
+
+
+def test_ui_presence_tracks_foreground_state_and_attention_notifications():
+    frontend = (ROOT / "frontend/src/app/modules/message-rendering.js").read_text(encoding="utf-8")
+    backend = (ROOT / "app/webui.py").read_text(encoding="utf-8")
+    bus = (ROOT / "app/session_event_bus.py").read_text(encoding="utf-8")
+    notify = (ROOT / "app/desktop_notify.py").read_text(encoding="utf-8")
+
+    # The page reports whether it is visible and focused, and pushes updates on
+    # visibility/focus changes instead of waiting for the next heartbeat.
+    assert "getUiPresenceActive" in frontend
+    assert "active: getUiPresenceActive()" in frontend
+    assert "sendUiPresence('update')" in frontend
+    assert "window.addEventListener('blur'" in frontend
+
+    # The backend accepts register/update/unregister and tracks the active flag.
+    assert '@fastapi_app.post("/api/ui-presence")' in backend
+    assert '"register", "update", "unregister"' in backend
+    assert "_ui_presence_has_active" in backend
+
+    # Conversation completion and pending human interactions feed the same
+    # desktop notification path when no UI tab is actively used.
+    assert "add_event_listener(_on_session_event_for_attention_notify)" in backend
+    assert '"run_finished"' in backend
+    assert '"run_failed"' in backend
+    assert '"approval_requested"' in backend
+    assert '"interaction_requested"' in backend
+    assert "show_desktop_notification" in notify
+    assert "add_event_listener" in bus

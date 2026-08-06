@@ -66,7 +66,17 @@ BASE_URL = f"http://{HOST}:{PORT}"
 WM_TRAY = win32con.WM_USER + 20
 WM_RESTORE_TRAY = win32con.WM_USER + 21
 WM_RESTART_AGENT = win32con.WM_USER + 22
+WM_UI_CLOSED_NOTIFY = win32con.WM_USER + 23
 TASKBAR_CREATED = win32gui.RegisterWindowMessage("TaskbarCreated")
+
+NIF_INFO = 0x00000010
+NIIF_INFO = 0x00000001
+
+NOTIFY_UI_CLOSED_TITLE = "SugarAgent"
+NOTIFY_UI_CLOSED_MESSAGE = (
+    "SugarAgent 正在后台运行，任务不会中断。"
+    "可从系统托盘重新打开 WebUI。"
+)
 
 MENU_OPEN_WEBUI = 1001
 MENU_OPEN_ENV = 1002
@@ -334,6 +344,7 @@ class TrayLauncher:
             WM_TRAY: self._on_tray,
             WM_RESTORE_TRAY: self._on_restore_tray,
             WM_RESTART_AGENT: self._on_external_restart,
+            WM_UI_CLOSED_NOTIFY: self._on_ui_closed_notify,
             TASKBAR_CREATED: self._on_taskbar_created,
             win32con.WM_COMMAND: self._on_command,
             win32con.WM_DESTROY: self._on_destroy,
@@ -531,6 +542,34 @@ class TrayLauncher:
         except Exception as exc:
             _append_log(f"Tray restore error: {exc}")
         return True
+
+    def _on_ui_closed_notify(self, hwnd, msg, wparam, lparam):
+        try:
+            self._show_balloon(NOTIFY_UI_CLOSED_TITLE, NOTIFY_UI_CLOSED_MESSAGE)
+        except Exception as exc:
+            _append_log(f"UI closed notification error: {exc}")
+            try:
+                self._show_message(NOTIFY_UI_CLOSED_MESSAGE)
+            except Exception as message_exc:
+                _append_log(f"UI closed fallback message error: {message_exc}")
+        return True
+
+    def _show_balloon(self, title: str, message: str) -> None:
+        nid = (
+            self.hwnd,
+            0,
+            NIF_INFO,
+            0,
+            self.hicon or 0,
+            APP_NAME,
+            0,
+            0,
+            message,
+            5000,
+            title,
+            NIIF_INFO,
+        )
+        win32gui.Shell_NotifyIcon(win32gui.NIM_MODIFY, nid)
 
     def _on_taskbar_created(self, hwnd, msg, wparam, lparam):
         try:

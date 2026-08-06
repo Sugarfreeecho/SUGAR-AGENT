@@ -12,6 +12,7 @@ _live_delta_snapshots: Dict[str, Dict[Tuple[Any, ...], dict]] = defaultdict(dict
 _live_state_snapshots: Dict[str, Dict[Tuple[Any, ...], dict]] = defaultdict(dict)
 _seq_by_session: Dict[str, int] = defaultdict(int)
 _lock = threading.Lock()
+_event_listeners: list = []
 
 _SNAPSHOT_DELTA_FIELDS = {
     "llm_reasoning_delta": ("delta",),
@@ -24,6 +25,27 @@ _SNAPSHOT_DELTA_FIELDS = {
 }
 
 _LIVE_STATE_TYPES = {"tool_pending"}
+
+
+def add_event_listener(listener) -> None:
+    """Register a synchronous listener called for every published session event.
+
+    Listeners receive ``(session_id, event_dict)`` and must be cheap; they run
+    inside the publishing coroutine. Exceptions are swallowed so one faulty
+    listener can never break the event bus.
+    """
+
+    with _lock:
+        if listener not in _event_listeners:
+            _event_listeners.append(listener)
+
+
+def remove_event_listener(listener) -> None:
+    with _lock:
+        try:
+            _event_listeners.remove(listener)
+        except ValueError:
+            pass
 
 
 def _sid(session_id: str) -> str:
@@ -102,6 +124,12 @@ async def publish_session_event(session_id: str, event: Dict[str, Any]) -> None:
                     run_id=terminal_run_id,
                 )
         subscribers = list(_subscribers.get(sid, ()))
+    listeners = list(_event_listeners)
+    for listener in listeners:
+        try:
+            listener(sid, event)
+        except Exception:
+            pass
     for q, loop in subscribers:
         _deliver_to_subscriber(loop, q, event)
 

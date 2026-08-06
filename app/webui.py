@@ -55,12 +55,21 @@ from agent_loop import (
     transition_session_steer,
 )
 from session_lifecycle import get_run_started_at, is_run_active
-from session_event_bus import publish_session_event, subscribe_session_events
+from session_event_bus import (
+    add_event_listener,
+    publish_session_event,
+    subscribe_session_events,
+)
 import agent_mcp
 from agent_tools import discover_skills, set_skill_enabled
 import model_profiles
 import execution_metrics
 from path_picker_util import pick_native_path
+
+try:
+    from .desktop_notify import show_desktop_notification, show_ui_closed_notification
+except ImportError:
+    from desktop_notify import show_desktop_notification, show_ui_closed_notification
 
 _PATH_PICKER_JS_PATH = Path(__file__).resolve().parent / "templates" / "static" / "myagent_path_picker.js"
 _SETUP_I18N_JS_PATH = Path(__file__).resolve().parent / "templates" / "static" / "setup_i18n.js"
@@ -157,6 +166,23 @@ _RUNTIME_AUTO_MIGRATION_DELAY_SEC = max(
     0.0,
     float(os.getenv("RUNTIME_V2_AUTO_MIGRATE_DELAY_SEC", "3")),
 )
+_UI_CLOSED_NOTIFY_ENABLED = (
+    os.getenv("MYAGENT_UI_CLOSED_NOTIFY", "1").strip().lower()
+    not in {"0", "false", "no", "off"}
+)
+_UI_CLOSED_NOTIFY_GRACE_SEC = max(
+    1.0,
+    float(os.getenv("MYAGENT_UI_CLOSED_NOTIFY_DELAY_SEC", "3")),
+)
+_UI_PRESENCE_TOKEN_TTL_SEC = max(90.0, float(os.getenv("MYAGENT_UI_PRESENCE_TTL_SEC", "300")))
+_ui_presence_lock = threading.Lock()
+_ui_presence_tokens: dict[str, dict[str, Any]] = {}
+_ui_closed_notify_task: Optional[asyncio.Task] = None
+_ui_attention_notify_lock = threading.Lock()
+_ui_attention_notify_reasons: dict[str, set[str]] = {}
+_ui_attention_notify_task: Optional[asyncio.Task] = None
+_UI_ATTENTION_MAIN_LOOP: Optional[asyncio.AbstractEventLoop] = None
+_last_ui_attention_notify_at = 0.0
 
 
 def _history_op_lock(session_id: str) -> threading.Lock:
@@ -3583,6 +3609,244 @@ async def client_timing(request: Request):
     return JSONResponse(content={"ok": True})
 
 
+def _ui_presence_prune(now: float) -> None:
+    expired = [
+        token
+        for token, entry in _ui_presence_tokens.items()
+        if now - float(entry.get("seen_at") or 0) > _UI_PRESENCE_TOKEN_TTL_SEC
+    ]
+    for token in expired:
+        _ui_presence_tokens.pop(token, None)
+
+
+def _ui_presence_has_active() -> bool:
+    """Return True when at least one WebUI tab is visible and focused."""
+
+    return any(bool(entry.get("active")) for entry in _ui_presence_tokens.values())
+
+
+def _cancel_pending_ui_closed_notify() -> None:
+    global _ui_closed_notify_task
+    task = _ui_closed_notify_task
+    _ui_closed_notify_task = None
+    if task and not task.done():
+        task.cancel()
+
+
+def _cancel_pending_ui_attention_notify() -> None:
+    global _ui_attention_notify_task
+    task = _ui_attention_notify_task
+    _ui_attention_notify_task = None
+    if task and not task.done():
+        task.cancel()
+    with _ui_attention_notify_lock:
+        _ui_attention_notify_reasons.clear()
+
+
+def _session_pending_human_count(session_id: str) -> int:
+    """Total pending ask_user questions + tool approvals for one session."""
+
+    try:
+        from human_interaction import get_human_interaction_service
+
+        counts = get_human_interaction_service().pending_counts(str(session_id))
+        return int(counts.get("total") or 0)
+    except Exception:
+        return 0
+
+
+def _schedule_ui_attention_notify(session_id: str, reason: str) -> None:
+    """Schedule a desktop notification when the UI is not being actively used.
+
+    Called from the session event bus for terminal run events and new pending
+    human interactions. Reasons for every session are coalesced into one toast
+    after the grace window; opening or focusing a WebUI tab cancels it.
+    """
+
+    global _ui_attention_notify_task
+    if not _UI_CLOSED_NOTIFY_ENABLED or not str(session_id or "").strip():
+        return
+    with _ui_presence_lock:
+        if _ui_presence_has_active():
+            return
+    with _ui_attention_notify_lock:
+        _ui_attention_notify_reasons.setdefault(str(session_id), set()).add(reason)
+        if _ui_attention_notify_task and not _ui_attention_notify_task.done():
+            return
+        _ui_attention_notify_task = asyncio.create_task(
+            _delayed_ui_attention_notify()
+        )
+
+
+async def _delayed_ui_attention_notify() -> None:
+    try:
+        await asyncio.sleep(_UI_CLOSED_NOTIFY_GRACE_SEC)
+        with _ui_attention_notify_lock:
+            pending = {
+                sid: set(reasons)
+                for sid, reasons in _ui_attention_notify_reasons.items()
+                if reasons
+            }
+            _ui_attention_notify_reasons.clear()
+        if not pending:
+            return
+        with _ui_presence_lock:
+            if _ui_presence_has_active():
+                return
+
+        terminal_messages = {
+            "completed": "对话已完成",
+            "failed": "对话已结束（失败）",
+            "interrupted": "对话已中断",
+        }
+        terminal_seen: set[str] = set()
+        pending_total = 0
+        for sid, reasons in pending.items():
+            if "pending" in reasons:
+                pending_total += await run_in_threadpool(
+                    _session_pending_human_count, sid
+                )
+            for reason in terminal_messages:
+                if reason in reasons:
+                    terminal_seen.add(reason)
+
+        parts: list[str] = []
+        for reason in terminal_messages:
+            if reason in terminal_seen:
+                parts.append(terminal_messages[reason])
+        if pending_total > 0:
+            parts.append(f"有 {pending_total} 项待处理事项")
+        if not parts:
+            return
+        global _last_ui_attention_notify_at
+        _last_ui_attention_notify_at = time.time()
+        await run_in_threadpool(
+            show_desktop_notification, "SugarAgent", "；".join(parts)
+        )
+    except asyncio.CancelledError:
+        return
+    finally:
+        global _ui_attention_notify_task
+        if _ui_attention_notify_task is asyncio.current_task():
+            _ui_attention_notify_task = None
+
+
+_UI_ATTENTION_NOTIFY_EVENT_TYPES = {
+    "run_finished": "completed",
+    "run_failed": "failed",
+    "run_interrupted": "interrupted",
+    "approval_requested": "pending",
+    "interaction_requested": "pending",
+}
+
+
+def _on_session_event_for_attention_notify(session_id: str, event: dict) -> None:
+    if not isinstance(event, dict) or event.get("_subagent_forward"):
+        return
+    reason = _UI_ATTENTION_NOTIFY_EVENT_TYPES.get(str(event.get("type") or ""))
+    if not reason:
+        return
+    # Agent streams publish from worker-thread event loops; forward to the
+    # main server loop so the delayed task outlives the worker stream.
+    loop = _UI_ATTENTION_MAIN_LOOP
+    if loop is None or loop.is_closed():
+        return
+    try:
+        loop.call_soon_threadsafe(
+            _schedule_ui_attention_notify,
+            str(session_id or ""),
+            reason,
+        )
+    except Exception:
+        logger.debug("UI attention notify schedule failed", exc_info=True)
+
+
+add_event_listener(_on_session_event_for_attention_notify)
+
+
+async def _schedule_ui_closed_notify() -> None:
+    global _ui_closed_notify_task
+    if not _UI_CLOSED_NOTIFY_ENABLED:
+        return
+    if _ui_closed_notify_task and not _ui_closed_notify_task.done():
+        return
+    # A completion/pending-item toast is more specific; don't stack a generic
+    # "still running in the background" toast on top of it.
+    if _ui_attention_notify_task and not _ui_attention_notify_task.done():
+        return
+    with _ui_attention_notify_lock:
+        if _ui_attention_notify_reasons:
+            return
+    if time.time() - _last_ui_attention_notify_at < 60:
+        return
+
+    async def delayed_notify() -> None:
+        try:
+            await asyncio.sleep(_UI_CLOSED_NOTIFY_GRACE_SEC)
+            with _ui_presence_lock:
+                if _ui_presence_tokens:
+                    return
+            await run_in_threadpool(show_ui_closed_notification)
+        except asyncio.CancelledError:
+            return
+        finally:
+            global _ui_closed_notify_task
+            if _ui_closed_notify_task is asyncio.current_task():
+                _ui_closed_notify_task = None
+
+    _ui_closed_notify_task = asyncio.create_task(delayed_notify())
+
+
+@fastapi_app.post("/api/ui-presence")
+async def ui_presence(request: Request):
+    """Track open WebUI tabs so the backend can notify after the last one closes."""
+
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    if not isinstance(data, dict):
+        return JSONResponse(content={"ok": False, "error": "body must be object"}, status_code=400)
+
+    action = str(data.get("action") or "").strip().lower()
+    token = str(data.get("token") or "").strip()
+    if action not in {"register", "update", "unregister"}:
+        return JSONResponse(content={"ok": False, "error": "invalid action"}, status_code=400)
+    if not token or len(token) > 200:
+        return JSONResponse(content={"ok": False, "error": "missing token"}, status_code=400)
+
+    active = bool(data.get("active", True))
+    now = time.time()
+    with _ui_presence_lock:
+        if action == "register":
+            _ui_presence_tokens[token] = {"seen_at": now, "active": active}
+        elif action == "update":
+            entry = _ui_presence_tokens.get(token)
+            if entry is not None:
+                entry["seen_at"] = now
+                entry["active"] = active
+        else:
+            _ui_presence_tokens.pop(token, None)
+        _ui_presence_prune(now)
+
+    with _ui_presence_lock:
+        has_active_ui = _ui_presence_has_active()
+        has_open_pages = bool(_ui_presence_tokens)
+
+    if action == "register":
+        _cancel_pending_ui_closed_notify()
+    if action in {"register", "update"} and has_active_ui:
+        _cancel_pending_ui_attention_notify()
+
+    if action == "register":
+        return JSONResponse(content={"ok": True, "action": "register"})
+    if action == "update":
+        return JSONResponse(content={"ok": True, "action": "update"})
+    if not has_open_pages:
+        await _schedule_ui_closed_notify()
+    return JSONResponse(content={"ok": True, "action": "unregister"})
+
+
 @fastapi_app.delete("/sessions/{session_id}/steer")
 async def delete_session_steer(session_id: str, request: Request):
     sid = (session_id or "").strip()
@@ -3823,6 +4087,10 @@ async def chat(
                     if sid and await request.is_disconnected():
                         client_disconnected = True
                         logger.info("Chat stream disconnected for session %s; leaving run active", sid)
+                        try:
+                            await _schedule_ui_closed_notify()
+                        except Exception:
+                            logger.debug("ui-closed notify schedule failed", exc_info=True)
                         break
                     try:
                         event = await asyncio.wait_for(
@@ -3853,6 +4121,11 @@ async def chat(
             except asyncio.CancelledError:
                 # 浏览器主动断开 SSE 连接属于正常情况，避免打印冗长异常栈
                 client_disconnected = True
+                if sid:
+                    try:
+                        await _schedule_ui_closed_notify()
+                    except Exception:
+                        logger.debug("ui-closed notify schedule failed", exc_info=True)
                 return
         finally:
             if not client_disconnected:
@@ -4031,6 +4304,11 @@ async def stream_session_events(
                 _observer_streams_by_session.pop(sid, None)
             else:
                 _observer_streams_by_session[sid] = n
+            if await request.is_disconnected():
+                try:
+                    await _schedule_ui_closed_notify()
+                except Exception:
+                    logger.debug("ui-closed notify schedule failed", exc_info=True)
 
     try:
         from runtime_v2 import runtime_v2_primary
@@ -6339,3 +6617,9 @@ def _warm_ui_caches() -> None:
 @fastapi_app.on_event("startup")
 async def _schedule_ui_cache_warmup() -> None:
     _warm_ui_caches()
+
+
+@fastapi_app.on_event("startup")
+async def _capture_ui_attention_main_loop() -> None:
+    global _UI_ATTENTION_MAIN_LOOP
+    _UI_ATTENTION_MAIN_LOOP = asyncio.get_running_loop()

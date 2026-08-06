@@ -1755,8 +1755,77 @@ document.addEventListener('visibilitychange', function () {
     else if (typeof reconcileRunStateFromServer === 'function') {
         void reconcileRunStateFromServer({ silent: true });
     }
+    updateUiPresenceActive();
+});
+
+var uiPresenceToken = null;
+var uiPresenceHeartbeatTimer = null;
+function getUiPresenceToken() {
+    if (uiPresenceToken) return uiPresenceToken;
+    var KEY = 'myagent-ui-presence-token';
+    try {
+        var stored = sessionStorage.getItem(KEY);
+        if (stored) {
+            uiPresenceToken = stored;
+            return stored;
+        }
+    } catch (e) { /* private mode / storage disabled */ }
+    uiPresenceToken = 'ui-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 12);
+    try {
+        sessionStorage.setItem(KEY, uiPresenceToken);
+    } catch (e) { /* best effort */ }
+    return uiPresenceToken;
+}
+function getUiPresenceActive() {
+    return document.visibilityState === 'visible' && document.hasFocus();
+}
+function updateUiPresenceActive() {
+    sendUiPresence('update');
+}
+function sendUiPresence(action) {
+    var token = getUiPresenceToken();
+    var payload = JSON.stringify({
+        action: action,
+        token: token,
+        active: getUiPresenceActive(),
+        session_id: typeof currentSessionId === 'string' ? currentSessionId : ''
+    });
+    try {
+        var blob = new Blob([payload], { type: 'application/json' });
+        if (navigator.sendBeacon('/api/ui-presence', blob)) return;
+    } catch (e) { /* fall through to keepalive fetch */ }
+    try {
+        fetch('/api/ui-presence', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: payload,
+            keepalive: true,
+            credentials: 'same-origin'
+        }).catch(function () { /* page is closing; best effort */ });
+    } catch (e) { /* ignore */ }
+}
+function registerUiPresence() {
+    sendUiPresence('register');
+    stopUiPresenceHeartbeat();
+    uiPresenceHeartbeatTimer = setTimeout(registerUiPresence, 60000);
+}
+function stopUiPresenceHeartbeat() {
+    if (uiPresenceHeartbeatTimer) {
+        clearTimeout(uiPresenceHeartbeatTimer);
+        uiPresenceHeartbeatTimer = null;
+    }
+}
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', registerUiPresence);
+} else {
+    registerUiPresence();
+}
+window.addEventListener('pagehide', function () {
+    stopUiPresenceHeartbeat();
+    sendUiPresence('unregister');
 });
 window.addEventListener('pageshow', function () {
+    registerUiPresence();
     if (typeof reconcileRunStateFromServer === 'function') {
         void reconcileRunStateFromServer({ silent: true });
     }
@@ -1765,6 +1834,10 @@ window.addEventListener('focus', function () {
     if (typeof reconcileRunStateFromServer === 'function') {
         void reconcileRunStateFromServer({ silent: true });
     }
+    updateUiPresenceActive();
+});
+window.addEventListener('blur', function () {
+    updateUiPresenceActive();
 });
 
 const WELCOME_HTML = `<div class="welcome" role="status"><div class="welcome-icon" aria-hidden="true"><img src="/assets/sugar-logo.png" alt="" draggable="false"></div><strong>开始一段新的对话</strong><p>在左侧侧栏新建或选择会话。Enter 发送，Ctrl+Enter / Shift+Enter 换行。</p></div>`;
