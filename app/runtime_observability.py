@@ -355,9 +355,40 @@ def _git_output(root: Path, args: list[str]) -> Optional[bytes]:
         return None
 
 
+def _file_audit_mode() -> str:
+    """Resolve the file audit mode: off (default), git, or full."""
+    raw = os.getenv("FILE_AUDIT_MODE", "").strip().lower()
+    if raw:
+        key = raw.replace("-", "_").replace(" ", "_")
+        if key in {"0", "false", "no", "off", "disabled", "none"}:
+            return "off"
+        if key in {"git", "git_status"}:
+            return "git"
+        if key in {
+            "1",
+            "true",
+            "yes",
+            "on",
+            "full",
+            "full_snapshot",
+            "snapshot",
+            "walk",
+            "workspace",
+        }:
+            return "full"
+    return "off"
+
+
 def capture_workspace_state(work_dir: str | Path | None) -> dict:
-    """Capture a cheap Git-aware state used to audit arbitrary tool writes."""
-    if not work_dir:
+    """Capture a workspace state used to audit arbitrary tool writes.
+
+    FILE_AUDIT_MODE selects the audit depth:
+      - off: file audit is disabled and no state is captured (default);
+      - git: only the Git worktree status is used;
+      - full: additionally walks the whole workspace, bounded by
+        FILE_AUDIT_MAX_FILES.
+    """
+    if not work_dir or _file_audit_mode() == "off":
         return {"root": "", "files": {}}
     root_raw = Path(work_dir).resolve()
     top = _git_output(root_raw, ["rev-parse", "--show-toplevel"])
@@ -403,10 +434,7 @@ def capture_workspace_state(work_dir: str | Path | None) -> dict:
         except OSError:
             pass
         files[rel.replace("\\", "/")] = {"status": code, "fingerprint": fingerprint}
-    full_snapshot = str(
-        os.getenv("FILE_AUDIT_FULL_SNAPSHOT", "0")
-    ).strip().lower() not in {"0", "false", "no", "off"}
-    if full_snapshot:
+    if _file_audit_mode() == "full":
         excluded = {
             ".git",
             ".hg",

@@ -11,29 +11,94 @@ if str(APP_DIR) not in sys.path:
     sys.path.insert(0, str(APP_DIR))
 
 
-def test_file_audit_detects_ignored_or_non_git_files(tmp_path, monkeypatch):
+def test_file_audit_ignores_legacy_full_snapshot_switch(tmp_path, monkeypatch):
     import runtime_observability as obs
 
+    monkeypatch.delenv("FILE_AUDIT_MODE", raising=False)
     monkeypatch.setenv("FILE_AUDIT_FULL_SNAPSHOT", "1")
-    target = tmp_path / "generated.bin"
+
+    def fail_git(*args, **kwargs):
+        raise AssertionError("git must not run when file audit is off")
+
+    monkeypatch.setattr(obs, "_git_output", fail_git)
     before = obs.capture_workspace_state(tmp_path)
-    target.write_bytes(b"new")
+    (tmp_path / "generated.bin").write_bytes(b"new")
     after = obs.capture_workspace_state(tmp_path)
+
+    assert before == {"root": "", "files": {}}
+    assert after == {"root": "", "files": {}}
+    assert obs.diff_workspace_states(before, after) == []
+
+
+def test_file_audit_defaults_to_off(tmp_path, monkeypatch):
+    import runtime_observability as obs
+
+    monkeypatch.delenv("FILE_AUDIT_MODE", raising=False)
+
+    def fail_git(*args, **kwargs):
+        raise AssertionError("git must not run when file audit is off")
+
+    monkeypatch.setattr(obs, "_git_output", fail_git)
+    before = obs.capture_workspace_state(tmp_path)
+    (tmp_path / "generated.bin").write_bytes(b"new")
+    after = obs.capture_workspace_state(tmp_path)
+
+    assert before == {"root": "", "files": {}}
+    assert after == {"root": "", "files": {}}
+    assert obs.diff_workspace_states(before, after) == []
+
+
+def test_file_audit_mode_off_disables_audit(tmp_path, monkeypatch):
+    import runtime_observability as obs
+
+    monkeypatch.setenv("FILE_AUDIT_MODE", "off")
+
+    def fail_git(*args, **kwargs):
+        raise AssertionError("git must not run when file audit is off")
+
+    monkeypatch.setattr(obs, "_git_output", fail_git)
+    before = obs.capture_workspace_state(tmp_path)
+    (tmp_path / "generated.bin").write_bytes(b"new")
+    after = obs.capture_workspace_state(tmp_path)
+
+    assert before == {"root": "", "files": {}}
+    assert after == {"root": "", "files": {}}
+    assert obs.diff_workspace_states(before, after) == []
+
+
+def test_file_audit_mode_git_detects_untracked_changes(tmp_path, monkeypatch):
+    import runtime_observability as obs
+    import subprocess
+
+    monkeypatch.setenv("FILE_AUDIT_MODE", "git")
+    subprocess.run(
+        ["git", "init", "-q", str(tmp_path)],
+        check=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    before = obs.capture_workspace_state(tmp_path)
+    (tmp_path / "generated.bin").write_bytes(b"new")
+    after = obs.capture_workspace_state(tmp_path)
+
     assert {
         (row["path"], row["operation"])
         for row in obs.diff_workspace_states(before, after)
     } == {("generated.bin", "created")}
 
 
-def test_full_workspace_file_audit_is_disabled_by_default(tmp_path, monkeypatch):
+def test_file_audit_mode_full_walks_non_git_workspace(tmp_path, monkeypatch):
     import runtime_observability as obs
 
-    monkeypatch.delenv("FILE_AUDIT_FULL_SNAPSHOT", raising=False)
+    monkeypatch.setenv("FILE_AUDIT_MODE", "full")
     before = obs.capture_workspace_state(tmp_path)
     (tmp_path / "generated.bin").write_bytes(b"new")
     after = obs.capture_workspace_state(tmp_path)
 
-    assert obs.diff_workspace_states(before, after) == []
+    assert {
+        (row["path"], row["operation"])
+        for row in obs.diff_workspace_states(before, after)
+    } == {("generated.bin", "created")}
 
 
 def test_stale_and_restart_reconciliation_are_durable(tmp_path):
