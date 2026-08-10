@@ -1,11 +1,13 @@
 """Durable, session-scoped Goal lifecycle for MyAgent."""
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import threading
 import time
 import uuid
+import weakref
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional
@@ -22,6 +24,59 @@ _TRANSIENT_GOAL_FIELDS = {
 }
 _LEGACY_LOCKS: Dict[str, threading.RLock] = {}
 _LEGACY_LOCKS_GUARD = threading.Lock()
+_ACTIVE_GOAL_SESSIONS: set[str] = set()
+_GOAL_ACTIVITY_LOCK = threading.Lock()
+_GOAL_ACTIVITY_LISTENERS: set[tuple[asyncio.AbstractEventLoop, asyncio.Event]] = set()
+_MANAGER_CACHE: "weakref.WeakKeyDictionary[Any, GoalManager]" = weakref.WeakKeyDictionary()
+_MANAGER_CACHE_LOCK = threading.Lock()
+
+
+def _track_goal_state(
+    session_id: str,
+    goal: Optional[Dict[str, Any]],
+    *,
+    notify: bool = True,
+) -> None:
+    sid = str(session_id or "").strip()
+    if not sid:
+        return
+    is_active = bool(
+        isinstance(goal, dict)
+        and goal.get("deleted") is not True
+        and str(goal.get("status") or "") == "active"
+    )
+    with _GOAL_ACTIVITY_LOCK:
+        was_active = sid in _ACTIVE_GOAL_SESSIONS
+        if is_active:
+            _ACTIVE_GOAL_SESSIONS.add(sid)
+        else:
+            _ACTIVE_GOAL_SESSIONS.discard(sid)
+        listeners = list(_GOAL_ACTIVITY_LISTENERS) if notify or was_active != is_active else []
+    for loop, event in listeners:
+        try:
+            loop.call_soon_threadsafe(event.set)
+        except RuntimeError:
+            pass
+
+
+def active_goal_session_ids() -> list[str]:
+    with _GOAL_ACTIVITY_LOCK:
+        return sorted(_ACTIVE_GOAL_SESSIONS)
+
+
+def subscribe_goal_activity(
+    loop: asyncio.AbstractEventLoop,
+) -> tuple[asyncio.Event, Callable[[], None]]:
+    event = asyncio.Event()
+    listener = (loop, event)
+    with _GOAL_ACTIVITY_LOCK:
+        _GOAL_ACTIVITY_LISTENERS.add(listener)
+
+    def unsubscribe() -> None:
+        with _GOAL_ACTIVITY_LOCK:
+            _GOAL_ACTIVITY_LISTENERS.discard(listener)
+
+    return event, unsubscribe
 
 
 def goal_enabled() -> bool:
@@ -60,6 +115,7 @@ class GoalManager:
     def __init__(self, sessions_dir: Any, path_resolver: Optional[Callable[[str], Any]] = None):
         self.sessions_dir = sessions_dir
         self.path_resolver = path_resolver
+        self._ops_instance = None
 
     def _require_enabled(self) -> None:
         if not goal_enabled():
@@ -71,11 +127,13 @@ class GoalManager:
             runtime_v2_react_transaction_timeout_seconds,
         )
 
-        return RuntimeHistoryOps(
-            self.sessions_dir,
-            path_resolver=self.path_resolver,
-            transaction_timeout_seconds=runtime_v2_react_transaction_timeout_seconds(),
-        )
+        if self._ops_instance is None:
+            self._ops_instance = RuntimeHistoryOps(
+                self.sessions_dir,
+                path_resolver=self.path_resolver,
+                transaction_timeout_seconds=runtime_v2_react_transaction_timeout_seconds(),
+            )
+        return self._ops_instance
 
     @staticmethod
     def _runtime_v2_primary() -> bool:
@@ -131,14 +189,18 @@ class GoalManager:
             raise GoalError("session_id is required")
         if self._runtime_v2_primary():
             _event, response = self._ops().mutate_goal(sid, mutator, run_id=str(run_id or "").strip() or None)
-            return self._with_computed_fields(response)
+            result = self._with_computed_fields(response)
+            _track_goal_state(sid, result)
+            return result
         path = self._legacy_goal_path(sid)
         with self._legacy_lock(path):
             current = self._read_legacy(path)
             event_type, persisted, response = mutator(dict(current) if current else None)
             if str(event_type or "").strip():
                 self._write_legacy(path, dict(persisted))
-            return self._with_computed_fields(response or persisted or current or {})
+            result = self._with_computed_fields(response or persisted or current or {})
+            _track_goal_state(sid, result)
+            return result
 
     @staticmethod
     def _touch(goal: Dict[str, Any], *, actor: str, run_id: str = "") -> Dict[str, Any]:
@@ -171,8 +233,11 @@ class GoalManager:
         else:
             goal = self._read_legacy(self._legacy_goal_path(sid))
         if not isinstance(goal, dict) or not goal.get("id") or goal.get("deleted") is True:
+            _track_goal_state(sid, None, notify=False)
             return None
-        return self._with_computed_fields(goal)
+        result = self._with_computed_fields(goal)
+        _track_goal_state(sid, result, notify=False)
+        return result
 
     def create(
         self,
@@ -769,7 +834,12 @@ class GoalManager:
 
 
 def manager_for(session_manager: Any) -> GoalManager:
-    return GoalManager(
-        session_manager.sessions_dir,
-        path_resolver=getattr(session_manager, "_resolve_session_path", None),
-    )
+    with _MANAGER_CACHE_LOCK:
+        manager = _MANAGER_CACHE.get(session_manager)
+        if manager is None:
+            manager = GoalManager(
+                session_manager.sessions_dir,
+                path_resolver=getattr(session_manager, "_resolve_session_path", None),
+            )
+            _MANAGER_CACHE[session_manager] = manager
+        return manager

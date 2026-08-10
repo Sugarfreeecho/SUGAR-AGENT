@@ -463,6 +463,25 @@ def test_goal_tool_pushes_live_state_and_frontend_consumes_it_immediately():
     assert "completedTool === 'update_goal'" in frontend
 
 
+def test_active_goal_round_final_stays_dynamic_in_frontend():
+    reducer = (ROOT / "frontend/src/app/state/session-event-reducer.js").read_text(encoding="utf-8")
+    sse = (ROOT / "frontend/src/app/modules/sse-handling.js").read_text(encoding="utf-8")
+    sessions = (ROOT / "frontend/src/app/modules/session-management.js").read_text(encoding="utf-8")
+    goal_ui = (ROOT / "frontend/src/app/modules/toc-todo.js").read_text(encoding="utf-8")
+
+    assert "function isGoalActiveForSession(sessionId)" in goal_ui
+    assert "const goalContinues = typeof isGoalActiveForSession" in reducer
+    assert "clearSessionUnreadState(sessionId, { server: false })" in reducer
+    final_branch = reducer.split("if (type === 'final' && source === 'sse')", 1)[1].split(
+        "if (type === 'context_tokens')", 1
+    )[0]
+    assert "markSessionRunInactive" not in final_branch
+    assert "drainFollowup: !reduced.goalContinues" in sse
+    assert "&& !(typeof isGoalActiveForSession" in sse
+    assert "!sessionHadUnreadResult" in sessions
+    assert "isGoalActiveForSession(sessionId)" in sessions
+
+
 def test_goal_judge_response_contract_and_prompt():
     verdict, reason = parse_judge_response(
         '```json\n{"verdict":"continue","reason":"The build was not run."}\n```'
@@ -560,7 +579,7 @@ def test_goal_card_is_present_in_the_vite_entry_and_shell_source():
     assert "action === 'review'" in renderer
     assert "await controlCurrentGoal('delete')" in renderer
     assert "function saveGoalEditModal()" in renderer
-    assert "event.ctrlKey || event.metaKey" in renderer
+    assert "isInputSubmitShortcut(event, 'editor')" in renderer
     edit_handler = renderer.split("function editCurrentGoal()", 1)[1].split("async function deleteCurrentGoal()", 1)[0]
     assert "window.prompt" not in edit_handler
     assert "elements.input.value = currentObjective" in edit_handler
@@ -582,7 +601,7 @@ def test_goal_card_is_present_in_the_vite_entry_and_shell_source():
     assert "await reconcileRunStateFromServer({ silent: true })" in renderer
     assert "maybeStartStreamPollForSession(sid, { skipInitialLoad: true })" in renderer
     assert "void recoverActiveGoalStream(sid)" in renderer
-    assert "}, 2000);" in renderer
+    assert "}, 30000);" in renderer
     assert "连续失败表示 Goal 执行中连续以失败或错误结束" in renderer
     assert "isGoalEditModalOpen()" in renderer
     assert "document.body.classList.add('goal-editing')" in renderer

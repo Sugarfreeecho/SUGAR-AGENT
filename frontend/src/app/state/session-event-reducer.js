@@ -69,15 +69,23 @@ function applySessionEvent(event, opts) {
         if (type === 'run_finished' && typeof clearSessionStreamStopSuppress === 'function') clearSessionStreamStopSuppress(sessionId);
         markSessionRunInactive(sessionId);
         const sess = sessionStore.get(sessionId);
-        if (sess) {
+        const goalContinues = typeof isGoalActiveForSession === 'function'
+            && isGoalActiveForSession(sessionId);
+        if (goalContinues && typeof clearSessionUnreadState === 'function') {
+            clearSessionUnreadState(sessionId, { server: false });
+        } else if (sess) {
             sess.unread_result = true;
             sess.unread_result_status = (type === 'run_interrupted' || type === 'run_failed') ? 'failed' : 'success';
             sess.unread_result_at = new Date().toISOString();
         }
-        return { handled: true, runStateChanged: true, messageRecord: messageRecord };
+        return {
+            handled: true,
+            runStateChanged: true,
+            goalContinues: goalContinues,
+            messageRecord: messageRecord,
+        };
     }
     if (type === 'final' && source === 'sse') {
-        markSessionRunInactive(sessionId);
         return { handled: false, finalStateChanged: true, messageRecord: messageRecord };
     }
     if (type === 'context_tokens') {
