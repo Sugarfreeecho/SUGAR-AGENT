@@ -215,13 +215,15 @@ def test_permission_mode_ui_regressions():
     assert '"status": "in_progress"' in agent_loop
 
     # One-time outside-workspace handling permission: approval-card button,
-    # settings toggle, and backend wiring.
+    # advanced security-tab management, and backend wiring.
     assert "allow_external_workspace" in interactions
     assert "external_workspace_grantable" in interactions
-    assert "settings-external-ops" in permissions
-    assert "allow_external_workspace_ops" in permissions
-    assert "settings-external-ops" in index_html
-    assert "settings-external-ops" in html
+    assert "advanced-security-workspace-scope-status" in advanced_settings
+    assert "advanced-security-workspace-scope-revoke" in advanced_settings
+    assert "allow_external_workspace_ops" in advanced_settings
+    assert "settings-external-ops" not in permissions
+    assert "settings-external-ops" not in index_html
+    assert "settings-external-ops" not in html
     assert "是否授权工作区沙箱外处理权限？" in agent_loop
     assert "确认执行命令（工作区外处理权限已授权）" in agent_loop
     assert "return_decision=True" in agent_loop
@@ -284,7 +286,7 @@ def test_frontend_feature_entrypoints_are_flag_guarded():
     assert "optimisticNewSessionRun = optimisticRunState;" in sse
     assert "if (ac.signal.aborted) return;" in sse
     assert "optimisticRunState.submitted = true;" in sse
-    assert "!(activeRun && activeRun.suppressFollowupButton)" in sse
+    assert "!(state.activeRun && state.activeRun.suppressFollowupButton)" in sse
     assert "readSseChunkWithIdleTimeout(reader, SSE_IDLE_TIMEOUT_MS)" in sse
     assert "parsed.type === 'sse_keepalive' || parsed.keepalive === true" in sse
     assert 'os.getenv("MYAGENT_ENABLE_STREAM_RECONNECT", "1")' in webui
@@ -301,10 +303,11 @@ def test_frontend_feature_entrypoints_are_flag_guarded():
     assert "function reconcileProjectedMessagesAfter" not in sse
     assert "projected-reconcile" not in sse
     assert "messages?after_index=" not in sse
-    assert "function enqueueCurrentInputAsFollowup()" in sse
-    assert "if (!isMyAgentFeatureEnabled('followupRestart', false)) return false;" in sse
-    assert "function onFollowupInputKeydown(e)" in sse
-    assert "if (!isMyAgentFeatureEnabled('followupRestart', false)) return;" in sse
+    assert "function enqueueCurrentInputAsFollowup(options)" in sse
+    assert "if (!options.pendingQuestion && !isMyAgentFeatureEnabled('followupRestart', false)) return false;" in sse
+    assert "function dispatchComposerAction(allowStop)" in sse
+    assert "function onComposerInputKeydown(e)" in sse
+    assert "isInputMethodComposing(e)" in sse
     assert "async function syncFollowupQueueFromServer(sessionId)" in sse
     assert "async function fetchSteerStatus(sessionId, item)" in sse
     assert "async function recoverSteerForRestart(sessionId, item)" in sse
@@ -324,7 +327,7 @@ def test_frontend_feature_entrypoints_are_flag_guarded():
 
 def test_followups_auto_continue_only_after_run_end_and_sync():
     sse = (ROOT / "frontend/src/app/modules/sse-handling.js").read_text(encoding="utf-8")
-    enqueue = sse.split("function enqueueCurrentInputAsFollowup()", 1)[1].split(
+    enqueue = sse.split("function enqueueCurrentInputAsFollowup(options)", 1)[1].split(
         "function takeFollowupItem", 1
     )[0]
     end_run = sse.split("function endRunForClient", 1)[1].split(
@@ -340,6 +343,9 @@ def test_followups_auto_continue_only_after_run_end_and_sync():
     assert "sendFollowupNow" not in enqueue
     assert "scheduleFollowupQueueDrain" not in enqueue
     assert "setSendButtonState();" in enqueue
+    assert "item.awaitingRunEnd = true;" in enqueue
+    assert "queueComposerBehindPendingQuestion" in sse
+    assert "enqueueCurrentInputAsFollowup({ pendingQuestion: true })" in sse
     # 上一轮结束后必须先完成服务端对账，再启动自动续发。
     assert "syncFollowupQueueFromServer(sid)" in end_run
     assert "Promise.resolve(followupSync).then" in end_run
@@ -354,6 +360,7 @@ def test_followups_auto_continue_only_after_run_end_and_sync():
     assert "!isServerStreamActive(sid)" in drain
     assert "!isSendPipelineLocked(sid)" in drain
     assert "!isFollowupDispatchBusy(sid)" in drain
+    assert "pendingHumanQuestions(sid).length" in drain
     assert "var item = q[0];" in drain
     assert "sendFollowupNow(item.id, sid, { autoAfterRun: true })" in drain
     assert "sendQueuedFollowupAsChat(sid, item, itemId, options.autoDispatchEpoch)" in sse
@@ -388,7 +395,8 @@ def test_followups_auto_continue_only_after_run_end_and_sync():
     assert "sendNow.addEventListener('click'" in sse
     assert "sendFollowupNow(String(item.id), sid, { manual: true })" in sse
     assert "cancelFollowupQueueDrain(sid)" in sse
-    assert "sendNow.disabled = !!item.status;" in sse
+    assert "sendNow.disabled = !!item.status ||" in sse
+    assert "item.deferUntilRunEnd" in sse
 
 
 def test_followup_supports_interrupt_and_append_modes():
@@ -638,6 +646,7 @@ def test_frontend_markdown_dependencies_do_not_block_on_public_cdn():
     html = (ROOT / "frontend/index.html").read_text(encoding="utf-8")
     entry = (ROOT / "frontend/src/app/index.js").read_text(encoding="utf-8")
     rendering = (ROOT / "frontend/src/app/modules/message-rendering.js").read_text(encoding="utf-8")
+    vite_config = (ROOT / "frontend/vite.config.js").read_text(encoding="utf-8")
     package = json.loads((ROOT / "frontend/package.json").read_text(encoding="utf-8"))
 
     assert "cdn.jsdelivr.net/npm/marked" not in html
@@ -646,8 +655,13 @@ def test_frontend_markdown_dependencies_do_not_block_on_public_cdn():
     assert package["dependencies"]["mermaid"] == "10.9.6"
     assert "import { marked } from 'marked';" in entry
     assert "globalThis.marked = marked;" in entry
-    assert "import('mermaid')" in entry
+    assert "import('mermaid')" not in entry
+    assert "'/assets/vendor/mermaid.min.js'" in entry
+    assert "document.createElement('script')" in entry
     assert "globalThis.loadMyAgentMermaid" in entry
+    assert "myagent-mermaid-vendor" in vite_config
+    assert "node_modules', 'mermaid', 'dist', 'mermaid.min.js'" in vite_config
+    assert "type: 'asset'" in vite_config
     assert "await globalThis.loadMyAgentMermaid()" in rendering
     assert "data-mermaid-loading" in rendering
     assert "new IntersectionObserver" in rendering
@@ -677,7 +691,7 @@ def test_tool_pending_switches_generated_draft_to_executing():
     rendering = (ROOT / "frontend/src/app/modules/message-rendering.js").read_text(encoding="utf-8")
 
     assert "await _emit_tool_pending_sse(" in agent_loop
-    assert 'if emit and tool_name not in ("context_manage", "ask_user"):' in agent_loop
+    assert 'if emit and tool_name != "context_manage":' in agent_loop
     assert "if (parsed.type === 'tool_pending')" in sse
     assert "appendToolPendingRow(runCtx, parsed, runSessionId);" in sse
     assert "row.getAttribute('data-tool-pending') === '1'" in rendering

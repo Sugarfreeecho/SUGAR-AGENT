@@ -1175,6 +1175,38 @@ def test_truncate_route_allows_missing_runtime_seq_boundary(monkeypatch, tmp_pat
     }]
 
 
+def test_truncate_route_rejects_pending_ask_user(monkeypatch, tmp_path):
+    import human_interaction
+    import webui
+
+    fake = _FakeSessionManager(tmp_path, [])
+    monkeypatch.setattr(webui, "session_manager", fake)
+
+    class _PendingQuestionService:
+        def pending_counts(self, _session_id):
+            return {"questions": 1, "approvals": 0, "total": 1}
+
+    monkeypatch.setattr(
+        human_interaction,
+        "get_human_interaction_service",
+        lambda: _PendingQuestionService(),
+    )
+    response = asyncio.run(webui.truncate_session_events(
+        "s1",
+        before_index=10,
+        before_seq=99,
+        backup=False,
+    ))
+    payload = _json_response_payload(response)
+
+    assert response.status_code == 409
+    assert payload == {
+        "ok": False,
+        "error": "pending human interaction must be cancelled before history mutation",
+    }
+    assert fake.truncate_calls == []
+
+
 def test_branch_route_passes_runtime_seq_boundary(monkeypatch, tmp_path):
     import webui
 
