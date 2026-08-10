@@ -73,6 +73,9 @@ if __name__ == "__main__":
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
+        import cpu_pressure
+
+        cpu_pressure.start()
         # 启动时打开浏览器
         _schedule_browser_open("127.0.0.1", _listen_port)
         await asyncio.to_thread(reconcile_orphaned_subagent_runs)
@@ -138,6 +141,7 @@ if __name__ == "__main__":
             await start_feishu_adapter()
             yield
         finally:
+            cpu_pressure.stop()
             watchdog_stop.set()
             watchdog_task.cancel()
             try:

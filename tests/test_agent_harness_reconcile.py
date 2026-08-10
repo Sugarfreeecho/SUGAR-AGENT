@@ -634,6 +634,56 @@ def test_create_subagent_persists_selected_model_profile(monkeypatch, tmp_path):
     assert "executor_model" not in metadata
 
 
+def test_switch_subagent_model_profile_releases_frozen_runtime(monkeypatch, tmp_path):
+    import agent_harness
+
+    monkeypatch.setenv("RUNTIME_VERSION", "2")
+    parent_id = str(uuid.uuid4())
+    mgr = agent_harness.SessionManager(tmp_path, tmp_path / "sessions.json")
+    mgr._save_metadata(parent_id, {"name": "parent"})
+    child_id = mgr.create_subagent_session(
+        parent_id,
+        "profile-bound child",
+        "generalPurpose",
+        1,
+        model_profile_id="profile-fast",
+        executor_model="model-fast",
+    )
+    mgr.patch_subagent_metadata(
+        child_id,
+        {
+            "fork_model_runtime": {"model": "model-fast"},
+            "fork_runtime_config": {
+                "system_segments": ["inherited system"],
+                "tools": [{"name": "task"}],
+                "model_runtime": {"model": "model-fast"},
+            },
+        },
+    )
+    invalidated = []
+    monkeypatch.setattr(agent_harness, "_invalidate_executor_config_cache", invalidated.append)
+
+    record = mgr.switch_subagent_model_profile(
+        child_id,
+        "profile-deep",
+        executor_model="model-deep",
+        switch_id="switch-1",
+        requested_by="user",
+    )
+
+    metadata = mgr._load_metadata(child_id)
+    assert record["from_profile_id"] == "profile-fast"
+    assert record["to_profile_id"] == "profile-deep"
+    assert metadata["model_profile_id"] == "profile-deep"
+    assert metadata["executor_model"] == "model-deep"
+    assert metadata["fork_model_runtime"] == {}
+    assert "model_runtime" not in metadata["fork_runtime_config"]
+    assert metadata["fork_runtime_config"]["system_segments"] == ["inherited system"]
+    assert metadata["last_model_switch"] == record
+    assert metadata["model_switch_history"][-1] == record
+    assert invalidated == [child_id]
+
+
 def test_runtime_v2_fork_subagent_uses_v2_projection_not_legacy(monkeypatch, tmp_path):
     import agent_harness
     from runtime_v2 import RuntimeHistoryOps, RuntimeModelProjection, SnapshotStore

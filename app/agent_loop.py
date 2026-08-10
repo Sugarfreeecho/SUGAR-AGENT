@@ -115,9 +115,15 @@ from agent_tokenizer import (
     build_static_system_segments,
 )
 import agent_mcp
+import cpu_pressure
 import execution_metrics
 from runtime_observability import capture_workspace_state, diff_workspace_states
 from agent_subagent_events import should_persist_ui_event
+
+
+LLM_FULL_CALL_TRACE = str(os.getenv("LLM_FULL_CALL_TRACE", "0")).strip().lower() in {
+    "1", "true", "yes", "on",
+}
 from session_event_bus import close_session_stream, prune_session_ephemeral, publish_session_event
 from tool_approval_gate import (
     ApprovalPersistenceError,
@@ -167,6 +173,27 @@ execution_metrics.configure(
     session_manager.sessions_dir,
     path_resolver=session_manager._resolve_session_path,
 )
+
+
+def _llm_runtime_policy(emit: Optional[Callable[[Dict[str, Any]], Any]]) -> Dict[str, Any]:
+    """Choose one LLM request's output mode from the process-wide CPU state."""
+    pressure = cpu_pressure.snapshot()
+    use_stream = bool(EXECUTOR_STREAM and emit and not pressure.degraded)
+    if pressure.degraded:
+        reason = pressure.reason or "cpu_pressure"
+    elif not EXECUTOR_STREAM:
+        reason = "stream_disabled"
+    elif not emit:
+        reason = "no_event_sink"
+    else:
+        reason = ""
+    return {
+        "use_stream": use_stream,
+        "output_mode": "stream" if use_stream else "non_stream",
+        "reason": reason,
+        "cpu_pressure_mode": pressure.mode,
+        "cpu_percent": pressure.cpu_percent,
+    }
 try:
     import runtime_observability
 
@@ -275,12 +302,17 @@ def _record_goal_call_usage(state: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     latest = None
     try:
         manager = goal_manager_for(session_manager)
-        for index, call in enumerate(state.get("llm_calls") or []):
+        calls = list(state.get("llm_calls") or [])
+        start_index = max(0, int(state.get("_goal_usage_recorded_calls", 0) or 0))
+        for index in range(start_index, len(calls)):
+            call = calls[index]
             usage = call.get("usage") if isinstance(call, dict) else None
             if not isinstance(usage, dict):
+                state["_goal_usage_recorded_calls"] = index + 1
                 continue
             total = int(usage.get("prompt_tokens", 0) or 0) + int(usage.get("completion_tokens", 0) or 0)
             if total <= 0:
+                state["_goal_usage_recorded_calls"] = index + 1
                 continue
             latest = manager.record_usage(
                 state["session_id"],
@@ -288,6 +320,7 @@ def _record_goal_call_usage(state: Dict[str, Any]) -> Optional[Dict[str, Any]]:
                 usage_id=f"{run_id or 'legacy-run'}:llm:{index}",
                 run_id=run_id,
             )
+            state["_goal_usage_recorded_calls"] = index + 1
         return latest
     except Exception as exc:
         logger.debug("Goal incremental usage update failed: %s", exc)
@@ -316,6 +349,20 @@ def _record_goal_run_usage(
     except Exception as exc:
         logger.debug("Goal usage update failed: %s", exc)
         return None
+
+
+def _sync_goal_unread_result(session_id: str, goal: Optional[Dict[str, Any]], outcome: str) -> None:
+    """Keep round-level Goal finals from masquerading as task completion."""
+    if not isinstance(goal, dict):
+        return
+    try:
+        if str(goal.get("status") or "") == "active":
+            session_manager.clear_session_unread_result(session_id)
+            return
+        result_status = "failed" if str(outcome or "") in {"failed", "interrupted"} else "success"
+        session_manager.mark_session_unread_result(session_id, status=result_status)
+    except Exception as exc:
+        logger.debug("Goal unread-result sync failed: %s", exc)
 
 
 def _goal_judge_evidence(state: Dict[str, Any]) -> str:
@@ -585,6 +632,10 @@ async def _authorize_hook_before_execute(
                 "allow_always_available": False,
                 "force_approval": False,
                 "approval_level": "warning",
+            },
+            review_context={
+                "request": request,
+                "user_intent": str(state.get("_submitted_user_input") or ""),
             },
         )
         if not approved:
@@ -905,17 +956,45 @@ class _SteerRunControl:
         self.reason = ""
         self.created_at = time.time()
         self.fence_token = str(uuid.uuid4())
+        self._listener_lock = threading.Lock()
+        self._abort_listeners: set[tuple[asyncio.AbstractEventLoop, asyncio.Event]] = set()
 
     def abort(self, reason: str = "steer") -> None:
         self.reason = str(reason or "steer")
         self.abort_event.set()
+        with self._listener_lock:
+            listeners = list(self._abort_listeners)
+        for loop, event in listeners:
+            try:
+                loop.call_soon_threadsafe(event.set)
+            except RuntimeError:
+                pass
 
     def reset(self) -> None:
         self.reason = ""
         self.abort_event.clear()
+        with self._listener_lock:
+            listeners = list(self._abort_listeners)
+        for loop, event in listeners:
+            try:
+                loop.call_soon_threadsafe(event.clear)
+            except RuntimeError:
+                pass
 
     def is_aborted(self) -> bool:
         return self.abort_event.is_set()
+
+    def subscribe_abort(self, loop: asyncio.AbstractEventLoop) -> asyncio.Event:
+        event = asyncio.Event()
+        with self._listener_lock:
+            self._abort_listeners.add((loop, event))
+        if self.abort_event.is_set():
+            event.set()
+        return event
+
+    def unsubscribe_abort(self, loop: asyncio.AbstractEventLoop, event: asyncio.Event) -> None:
+        with self._listener_lock:
+            self._abort_listeners.discard((loop, event))
 
 
 def _register_steer_run_control(session_id: str, run_id: str) -> _SteerRunControl:
@@ -2173,13 +2252,80 @@ def _queue_get_with_timeout(q: queue.Queue, timeout: float):
 
 
 class _ThreadToAsyncQueue:
+    """Bridge worker-thread events while coalescing text within one UI frame."""
+
+    _TEXT_FLUSH_SECONDS = max(
+        0.001,
+        min(0.016, float(os.getenv("LLM_STREAM_COALESCE_MS", "12")) / 1000.0),
+    )
+
     def __init__(self, loop: asyncio.AbstractEventLoop, target: asyncio.Queue):
         self._loop = loop
         self._target = target
+        self._lock = threading.Lock()
+        self._pending_text: List[Tuple[str, str]] = []
+        self._flush_scheduled = False
+        self._flush_handle: Optional[asyncio.Handle] = None
+        self._sent_first_text = False
+
+    def _drain_pending(self) -> List[Tuple[str, str]]:
+        with self._lock:
+            rows = self._pending_text
+            self._pending_text = []
+            self._flush_scheduled = False
+            self._flush_handle = None
+        return rows
+
+    def _flush_text(self) -> None:
+        for row in self._drain_pending():
+            self._target.put_nowait(row)
+
+    def _arm_delayed_flush(self) -> None:
+        with self._lock:
+            if not self._pending_text:
+                self._flush_scheduled = False
+                return
+            self._flush_handle = self._loop.call_later(
+                self._TEXT_FLUSH_SECONDS,
+                self._flush_text,
+            )
+
+    def _flush_then_put(self, item: Any) -> None:
+        handle = self._flush_handle
+        if handle is not None:
+            handle.cancel()
+        self._flush_text()
+        self._target.put_nowait(item)
 
     def put(self, item: Any) -> None:
         try:
-            self._loop.call_soon_threadsafe(self._target.put_nowait, item)
+            is_text = (
+                isinstance(item, tuple)
+                and len(item) >= 2
+                and item[0] in {"reasoning", "content"}
+                and isinstance(item[1], str)
+            )
+            if not is_text:
+                self._loop.call_soon_threadsafe(self._flush_then_put, item)
+                return
+            tag, payload = item[0], item[1]
+            with self._lock:
+                if self._pending_text and self._pending_text[-1][0] == tag:
+                    previous_tag, previous_payload = self._pending_text[-1]
+                    self._pending_text[-1] = (previous_tag, previous_payload + payload)
+                else:
+                    self._pending_text.append((tag, payload))
+                if self._flush_scheduled:
+                    return
+                self._flush_scheduled = True
+                first_text = not self._sent_first_text
+                self._sent_first_text = True
+            if first_text:
+                # Preserve time-to-first-token; only subsequent deltas are
+                # coalesced inside the frontend's existing frame budget.
+                self._loop.call_soon_threadsafe(self._flush_text)
+            else:
+                self._loop.call_soon_threadsafe(self._arm_delayed_flush)
         except RuntimeError:
             pass
 
@@ -4108,8 +4254,11 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                 # Announce the tool row before any approval dialog. The approval
                 # card anchors to this row, so it never renders at the bottom of
                 # the stream and jumps back into the tool row later. ask_user
-                # and context_manage keep their dedicated flows.
-                if emit and tool_name not in ("context_manage", "ask_user"):
+                # context_manage keeps its dedicated flow. ask_user also needs
+                # a normal pending row: its durable interaction card is
+                # attached to that row, and the row remains the visual anchor
+                # while the model waits for an answer.
+                if emit and tool_name != "context_manage":
                     await _emit_tool_pending_sse(
                         emit,
                         tool_name,
@@ -4283,6 +4432,12 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                                         ),
                                         "auto_review_override": True,
                                         },
+                                        review_context={
+                                            "request": sec_request,
+                                            "user_intent": str(
+                                                state.get("_submitted_user_input") or ""
+                                            ),
+                                        },
                                     ),
                                     emit,
                                     "tool_approval",
@@ -4383,6 +4538,12 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                                         ),
                                         },
                                         return_decision=True,
+                                        review_context={
+                                            "request": sec_request,
+                                            "user_intent": str(
+                                                state.get("_submitted_user_input") or ""
+                                            ),
+                                        },
                                     ),
                                     emit,
                                     "tool_approval",
@@ -5363,6 +5524,41 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                 )
                 await asyncio.sleep(0)
             llm_messages_to_send = strip_reasoning_for_api_request(llm_messages)
+            llm_runtime_policy = _llm_runtime_policy(emit)
+            cpu_degraded = llm_runtime_policy["cpu_pressure_mode"] == "degraded"
+            previous_cpu_degraded = state.get("_cpu_pressure_degraded")
+            state["_cpu_pressure_degraded"] = cpu_degraded
+            if emit and cpu_degraded and previous_cpu_degraded is not True:
+                await _push_stream_event(
+                    state,
+                    {
+                        "type": "status",
+                        "content": "系统 CPU 负载较高，已切换为整段输出并降低本地并发。",
+                        "ephemeral": True,
+                    },
+                    emit=emit,
+                )
+            elif emit and not cpu_degraded and previous_cpu_degraded is True:
+                await _push_stream_event(
+                    state,
+                    {
+                        "type": "status",
+                        "content": "系统 CPU 负载已恢复，已还原逐 token 流式输出。",
+                        "ephemeral": True,
+                    },
+                    emit=emit,
+                )
+            execution_metrics.record_request(
+                state["session_id"],
+                str(state.get("_runtime_v2_run_id") or ""),
+                int(iter_count),
+                output_mode=llm_runtime_policy["output_mode"],
+                output_mode_reason=llm_runtime_policy["reason"],
+                cpu_pressure={
+                    "mode": llm_runtime_policy["cpu_pressure_mode"],
+                    "cpu_percent": llm_runtime_policy["cpu_percent"],
+                },
+            )
             llm_stream_seq += 1
             llm_delta_seq = 0
             tool_delta_seq = 0
@@ -5453,7 +5649,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                 # controls concurrency/approval/cancellation, not start timing.
                 early_tool_tasks[idx] = asyncio.create_task(_run_early_tool_call(idx, tc))
 
-            if EXECUTOR_STREAM and emit:
+            if llm_runtime_policy["use_stream"]:
                 _pre_api_tail_ms = int(max(0.0, (time.perf_counter() - _t_pre_api) * 1000.0))
                 execution_metrics.record_request(
                     state["session_id"],
@@ -5510,16 +5706,47 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                     asyncio.to_thread(_run_stream_worker_logged)
                 )
                 stream_error: Optional[BaseException] = None
+                stream_loop = asyncio.get_running_loop()
+                steer_control = _steer_control_from_state(state)
+                steer_signal = (
+                    steer_control.subscribe_abort(stream_loop)
+                    if steer_control is not None
+                    else None
+                )
+                queue_get_task: Optional[asyncio.Task] = asyncio.create_task(async_stream_q.get())
+                steer_wait_task: Optional[asyncio.Task] = (
+                    asyncio.create_task(steer_signal.wait())
+                    if steer_signal is not None
+                    else None
+                )
+                steer_fallback_task: Optional[asyncio.Task] = asyncio.create_task(asyncio.sleep(0.25))
                 try:
                     while True:
                         if _steer_requested(state):
                             steer_interrupted_this_call = True
                             stream_abort_event.set()
                             break
-                        try:
-                            item = await asyncio.wait_for(async_stream_q.get(), timeout=0.03)
-                        except asyncio.TimeoutError:
+                        waiters = {queue_get_task, steer_fallback_task}
+                        if steer_wait_task is not None:
+                            waiters.add(steer_wait_task)
+                        done, _ = await asyncio.wait(
+                            waiters,
+                            return_when=asyncio.FIRST_COMPLETED,
+                        )
+                        if steer_wait_task is not None and steer_wait_task in done:
+                            steer_interrupted_this_call = True
+                            stream_abort_event.set()
+                            break
+                        if steer_fallback_task in done:
+                            steer_fallback_task = asyncio.create_task(asyncio.sleep(0.25))
+                            if _steer_requested(state):
+                                steer_interrupted_this_call = True
+                                stream_abort_event.set()
+                                break
+                        if queue_get_task not in done:
                             continue
+                        item = queue_get_task.result()
+                        queue_get_task = asyncio.create_task(async_stream_q.get())
                         if item is None:
                             break
                         tag, payload = item[0], item[1]
@@ -5730,6 +5957,15 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                     stream_abort_event.set()
                     raise
                 finally:
+                    for pending_waiter in (
+                        queue_get_task,
+                        steer_wait_task,
+                        steer_fallback_task,
+                    ):
+                        if pending_waiter is not None and not pending_waiter.done():
+                            pending_waiter.cancel()
+                    if steer_control is not None and steer_signal is not None:
+                        steer_control.unsubscribe_abort(stream_loop, steer_signal)
                     # 取消定时器
                     if thinking_timer_task and not thinking_timer_task.done():
                         thinking_timer_task.cancel()
@@ -6453,23 +6689,62 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                 return res
 
             # 记录 LLM 调用详情（可选；与实际上送内容一致，已剥历史 reasoning）
-            request_msgs = [_serialize_message(msg) for msg in llm_messages_to_send]
+            # Keep the actual request path untouched. The diagnostic trace is
+            # compact by default so growing prompts are not retained N times.
+            trace_messages = (
+                list(llm_messages_to_send)
+                if LLM_FULL_CALL_TRACE
+                else list(llm_messages_to_send)[-6:]
+            )
+            request_msgs = [_serialize_message(msg) for msg in trace_messages]
+            if not LLM_FULL_CALL_TRACE:
+                for trace_message in request_msgs:
+                    if "content" in trace_message:
+                        trace_message["content"] = truncate_head_tail(
+                            str(trace_message.get("content") or ""),
+                            max(400, LOG_TRUNCATE_KEEP_CHARS),
+                        )
+            if LLM_FULL_CALL_TRACE:
+                response_content_for_trace = response_text if response_text else None
+                reasoning_content_for_trace = reasoning_text if reasoning_text else None
+                tool_calls_for_trace = [
+                    {"name": tc["name"], "args": tc["args"], "id": tc.get("id", "")}
+                    for tc in tool_calls_list
+                ] if tool_calls_list else None
+            else:
+                response_content_for_trace = (
+                    truncate_head_tail(response_text, max(800, LOG_TRUNCATE_KEEP_CHARS))
+                    if response_text
+                    else None
+                )
+                reasoning_content_for_trace = (
+                    truncate_head_tail(reasoning_text, max(800, LOG_TRUNCATE_KEEP_CHARS))
+                    if reasoning_text
+                    else None
+                )
+                tool_calls_for_trace = [
+                    {
+                        "name": tc["name"],
+                        "id": tc.get("id", ""),
+                        "args_preview": truncate_head_tail(
+                            json.dumps(tc.get("args") or {}, ensure_ascii=False, default=str),
+                            max(400, LOG_TRUNCATE_KEEP_CHARS),
+                        ),
+                    }
+                    for tc in tool_calls_list
+                ] if tool_calls_list else None
             call_record = {
                 "model": actual_response_model or iter_model,
                 "requested_model": iter_model,
                 "request": request_msgs,
+                "request_message_count": len(llm_messages_to_send),
+                "request_compacted": not LLM_FULL_CALL_TRACE,
                 "response": {
-                    "content": response_text if response_text else None,
-                    "reasoning_content": reasoning_text if reasoning_text else None,
+                    "content": response_content_for_trace,
+                    "reasoning_content": reasoning_content_for_trace,
                     "finish_reason": llm_call_finish.get("finish_reason"),
                     "stop_reason": llm_call_finish.get("stop_reason"),
-                    "tool_calls": [
-                        {
-                            "name": tc["name"],
-                            "args": tc["args"],
-                            "id": tc.get("id", "")
-                        } for tc in tool_calls_list
-                    ] if tool_calls_list else None,
+                    "tool_calls": tool_calls_for_trace,
                 },
                 "usage": llm_call_usage,
             }
@@ -6575,8 +6850,9 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                 async def flush_read_only():
                     nonlocal pending_read_only, exec_results
                     while pending_read_only:
-                        chunk = pending_read_only[:MAX_PARALLEL_TOOLS]
-                        pending_read_only = pending_read_only[MAX_PARALLEL_TOOLS:]
+                        tool_parallel_limit = cpu_pressure.tool_parallelism(MAX_PARALLEL_TOOLS)
+                        chunk = pending_read_only[:tool_parallel_limit]
+                        pending_read_only = pending_read_only[tool_parallel_limit:]
                         chunk_results = await run_group(chunk)
                         exec_results.extend(chunk_results)
 
@@ -8108,6 +8384,7 @@ async def astream_events(
             )
             if goal_after_run:
                 await emit({**goal_after_run, "type": "goal_state", "goal_event": "run_accounted", "ephemeral": True})
+                _sync_goal_unread_result(session_id, goal_after_run, goal_outcome)
             execution_metrics.finish_run(
                 session_id,
                 runtime_v2_run_id,
@@ -8617,6 +8894,7 @@ async def astream_events_continuation(
             )
             if goal_after_run:
                 await emit({**goal_after_run, "type": "goal_state", "goal_event": "run_accounted", "ephemeral": True})
+                _sync_goal_unread_result(session_id, goal_after_run, goal_outcome)
             execution_metrics.finish_run(
                 session_id,
                 runtime_v2_run_id,

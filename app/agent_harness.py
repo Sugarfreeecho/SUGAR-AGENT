@@ -33,6 +33,7 @@ import httpx
 from openai import OpenAI
 import threading
 import model_profiles
+import cpu_pressure
 
 from agent_messages import UserMessage, AssistantMessage, ToolMessage, SystemMessage
 from agent_openai import (
@@ -790,7 +791,7 @@ class RequestResponseLogger(httpx.Client):
         })
         return response
 
-OPENAI_HTTP_TIMEOUT = float(os.getenv("OPENAI_HTTP_TIMEOUT", "600"))
+OPENAI_HTTP_TIMEOUT = float(os.getenv("OPENAI_HTTP_TIMEOUT", "300"))
 executor_http_client = RequestResponseLogger(timeout=OPENAI_HTTP_TIMEOUT)
 
 MAX_OUTPUT_TOKENS = model_profiles._safe_int(_INITIAL_MODEL_PROFILE.get("max_output_tokens"), 8192)
@@ -1314,6 +1315,18 @@ def executor_chat_complete_stream(
     执行端多轮 chat 流式补全；每收到 content 片段即回调 on_content_delta（供压缩/要点 SSE 推送）。
     返回完整正文（与 executor_chat_complete 一致）。
     """
+    if cpu_pressure.snapshot().degraded:
+        # Internal compression/key-context calls follow the same process-wide
+        # policy as user-visible ReAct calls. One callback preserves callers'
+        # progress behavior without creating per-token UI/persistence work.
+        text = executor_chat_complete(messages, session_id=session_id)
+        if text and on_content_delta:
+            try:
+                on_content_delta(text)
+            except Exception:
+                pass
+        return text
+
     import queue as _queue
 
     sync_q: _queue.Queue = _queue.Queue()
@@ -3282,7 +3295,9 @@ class SessionManager:
                     "subagent_work_dir": str(meta.get("subagent_work_dir") or ""),
                     "git_worktree_state": str(meta.get("git_worktree_state") or ""),
                     "forked_from_parent": bool(meta.get("forked_from_parent")),
+                    "model_profile_id": str(meta.get("model_profile_id") or ""),
                     "executor_model": executor_model,
+                    "last_model_switch": dict(meta.get("last_model_switch") or {}),
                     "output_file": str(meta.get("output_file") or "").strip(),
                     "running": is_running,
                     "ok": status_info.get("ok"),
@@ -3330,6 +3345,57 @@ class SessionManager:
             meta.update({k: v for k, v in (patch or {}).items() if v is not None})
             meta["updated_at"] = datetime.now().isoformat()
             self._save_metadata_unlocked(cid, meta)
+
+    def switch_subagent_model_profile(
+        self,
+        child_session_id: str,
+        profile_id: str,
+        *,
+        executor_model: str = "",
+        switch_id: str = "",
+        requested_by: str = "user",
+    ) -> Dict[str, Any]:
+        """Atomically retarget an existing subagent at its next model boundary."""
+        cid = self._normalize_session_id(child_session_id)
+        target_profile_id = str(profile_id or "").strip()
+        if not target_profile_id:
+            raise ValueError("profile_id is required")
+        now = datetime.now(timezone.utc).isoformat()
+        with self._session_metadata_lock(cid):
+            meta = self._load_metadata_unlocked(cid)
+            if not isinstance(meta, dict) or not meta.get("is_subagent"):
+                raise ValueError("session is not a subagent")
+            previous_profile_id = str(meta.get("model_profile_id") or "").strip()
+            previous_model = str(meta.get("executor_model") or "").strip()
+            history = meta.get("model_switch_history")
+            if not isinstance(history, list):
+                history = []
+            record = {
+                "switch_id": str(switch_id or uuid.uuid4().hex),
+                "from_profile_id": previous_profile_id,
+                "to_profile_id": target_profile_id,
+                "from_model": previous_model,
+                "to_model": str(executor_model or "").strip(),
+                "requested_by": str(requested_by or "user"),
+                "switched_at": now,
+            }
+            meta["model_profile_id"] = target_profile_id
+            meta["executor_model"] = str(executor_model or "").strip()
+            # A fork snapshot intentionally freezes its original model runtime.
+            # Once the user switches profiles, keep the inherited tools/system
+            # prompt but release that frozen model so the profile can take over.
+            meta["fork_model_runtime"] = {}
+            fork_runtime = meta.get("fork_runtime_config")
+            if isinstance(fork_runtime, dict) and "model_runtime" in fork_runtime:
+                fork_runtime = dict(fork_runtime)
+                fork_runtime.pop("model_runtime", None)
+                meta["fork_runtime_config"] = fork_runtime
+            meta["model_switch_history"] = [*history[-49:], record]
+            meta["last_model_switch"] = record
+            meta["updated_at"] = now
+            self._save_metadata_unlocked(cid, meta)
+        _invalidate_executor_config_cache(cid)
+        return record
 
     def _get_dialogue_history_path(self, session_id: str) -> Path:
         return self._get_session_path(session_id) / "dialogue_history.json"
@@ -3514,8 +3580,21 @@ class SessionManager:
                 self._save_index()
             self.clear_session_unread_result(session_id)
         elif event_copy.get("type") == "final":
-            final_status = "failed" if self._ui_event_final_is_failure(event_copy) else "success"
-            self.mark_session_unread_result(session_id, status=final_status)
+            try:
+                from agent_goal import goal_enabled, manager_for
+
+                goal = manager_for(self).get(session_id) if goal_enabled() else None
+                goal_active = bool(goal and goal.get("status") == "active")
+            except Exception:
+                goal_active = False
+            if goal_active:
+                # A Goal final closes only the current automatic round.  Keep
+                # the session dynamic and remove any stale completion marker
+                # until the Goal itself reaches a non-active state.
+                self.clear_session_unread_result(session_id)
+            else:
+                final_status = "failed" if self._ui_event_final_is_failure(event_copy) else "success"
+                self.mark_session_unread_result(session_id, status=final_status)
         elif event_copy.get("type") in ("run_interrupted", "run_failed"):
             self.mark_session_unread_result(session_id, status="failed")
 
