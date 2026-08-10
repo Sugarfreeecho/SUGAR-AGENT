@@ -4,9 +4,6 @@
     "code-refactoring": {
       "enabled": false
     },
-    "finance-report-analysis": {
-      "enabled": false
-    },
     "frontend-design": {
       "enabled": false
     },
