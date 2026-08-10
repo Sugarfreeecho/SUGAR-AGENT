@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import atexit
 import json
 import os
 import threading
@@ -14,6 +15,11 @@ _path_resolver: Optional[Callable[[str], str | Path]] = None
 _sessions: Dict[str, dict] = {}
 _MAX_RUNS = max(1, int(os.getenv("EXECUTION_DASHBOARD_MAX_RUNS", "100")))
 _heartbeat_controls: Dict[tuple[str, str], threading.Event] = {}
+_flush_timers: Dict[str, threading.Timer] = {}
+_FLUSH_DELAY_SEC = max(
+    0.05,
+    min(1.0, float(os.getenv("EXECUTION_METRICS_FLUSH_DELAY_MS", "200")) / 1000.0),
+)
 _HEARTBEAT_INTERVAL_SEC = max(
     2.0,
     float(os.getenv("AGENT_RUN_HEARTBEAT_INTERVAL_SECONDS", "15")),
@@ -21,7 +27,7 @@ _HEARTBEAT_INTERVAL_SEC = max(
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+    return datetime.now(timezone.utc).isoformat(timespec="microseconds").replace("+00:00", "Z")
 
 
 def configure(
@@ -66,7 +72,7 @@ def _load(session_id: str) -> dict:
     return data
 
 
-def _save(session_id: str, data: dict) -> None:
+def _write_now(session_id: str, data: dict) -> None:
     path = _path(session_id)
     if path is None:
         return
@@ -77,6 +83,47 @@ def _save(session_id: str, data: dict) -> None:
         os.replace(tmp, path)
     except Exception:
         pass
+
+
+def _flush_locked(session_id: str) -> None:
+    timer = _flush_timers.pop(session_id, None)
+    if timer is not None and timer is not threading.current_thread():
+        timer.cancel()
+    data = _sessions.get(session_id)
+    if data is not None:
+        _write_now(session_id, data)
+
+
+def _flush_timer_fired(session_id: str) -> None:
+    with _lock:
+        _flush_locked(session_id)
+
+
+def _save(session_id: str, data: dict, *, force: bool = False) -> None:
+    """Mark metrics dirty and coalesce whole-file rewrites."""
+    _sessions[session_id] = data
+    if force:
+        _flush_locked(session_id)
+        return
+    if session_id in _flush_timers:
+        return
+    timer = threading.Timer(_FLUSH_DELAY_SEC, _flush_timer_fired, args=(session_id,))
+    timer.daemon = True
+    _flush_timers[session_id] = timer
+    timer.start()
+
+
+def flush(session_id: Optional[str] = None) -> None:
+    """Durably flush pending metrics, normally used at terminal boundaries."""
+    with _lock:
+        if session_id is not None:
+            _flush_locked(str(session_id))
+            return
+        for sid in list(_flush_timers):
+            _flush_locked(sid)
+
+
+atexit.register(flush)
 
 
 def _run(data: dict, run_id: str, create: bool = True) -> Optional[dict]:
@@ -176,7 +223,7 @@ def finish_run(session_id: str, run_id: str, status: str) -> None:
                 run["wall_ms"] = max(0, int(round((_finished - _started).total_seconds() * 1000)))
             except Exception:
                 pass
-            _save(session_id, data)
+            _save(session_id, data, force=True)
     try:
         import runtime_observability
 
@@ -318,6 +365,9 @@ def record_tool(
 
 def snapshot(session_id: str) -> dict:
     with _lock:
+        # A caller explicitly requesting a snapshot is also a natural durable
+        # boundary; keep tests, exports, and external readers consistent.
+        _flush_locked(str(session_id))
         data = json.loads(json.dumps(_load(session_id), ensure_ascii=False))
     try:
         import runtime_observability

@@ -253,24 +253,97 @@ class RuntimeSuspensionMonitor:
             self._thread = None
 
 
+class _RuntimeSuspensionBroker:
+    """One native suspension watchdog shared by all runs on an event loop."""
+
+    def __init__(self) -> None:
+        self.detector: Optional[RuntimeSuspensionMonitor] = None
+        self.task: Optional[asyncio.Task] = None
+        self.subscribers: dict[
+            object,
+            tuple[RuntimeSuspensionMonitor, Callable[[RuntimeResume], Awaitable[None]]],
+        ] = {}
+
+    async def _dispatch(self, event: RuntimeResume) -> None:
+        rows = list(self.subscribers.values())
+        callbacks = []
+        for monitor, callback in rows:
+            monitor.accumulated_suspend_seconds += event.suspended_seconds
+            monitor._suspend_since_progress_seconds += event.suspended_seconds
+            callbacks.append(callback(event))
+        if callbacks:
+            await asyncio.gather(*callbacks, return_exceptions=True)
+
+    async def subscribe(
+        self,
+        monitor: RuntimeSuspensionMonitor,
+        callback: Callable[[RuntimeResume], Awaitable[None]],
+    ) -> object:
+        token = object()
+        self.subscribers[token] = (monitor, callback)
+        if self.task is None or self.task.done():
+            self.detector = RuntimeSuspensionMonitor()
+            self.task = asyncio.create_task(self.detector.run(self._dispatch))
+        return token
+
+    async def unsubscribe(self, token: object) -> None:
+        self.subscribers.pop(token, None)
+        if self.subscribers or self.detector is None or self.task is None:
+            return
+        self.detector.stop()
+        try:
+            await self.task
+        except asyncio.CancelledError:
+            pass
+        self.detector = None
+        self.task = None
+
+
+_SUSPENSION_BROKERS: dict[int, _RuntimeSuspensionBroker] = {}
+_SUSPENSION_BROKERS_LOCK = threading.Lock()
+
+
+def _suspension_broker_for_current_loop() -> _RuntimeSuspensionBroker:
+    loop = asyncio.get_running_loop()
+    key = id(loop)
+    with _SUSPENSION_BROKERS_LOCK:
+        broker = _SUSPENSION_BROKERS.get(key)
+        if broker is None:
+            broker = _RuntimeSuspensionBroker()
+            _SUSPENSION_BROKERS[key] = broker
+        return broker
+
+
 class AgentRunPowerGuard:
     def __init__(self, monitor: Optional[RuntimeSuspensionMonitor] = None):
         self.monitor = monitor or RuntimeSuspensionMonitor()
+        self._uses_shared_monitor = monitor is None
         self.sleep_inhibited = False
         self._power_request: Optional[WindowsPowerRequest] = None
         self._monitor_task: Optional[asyncio.Task] = None
+        self._monitor_broker: Optional[_RuntimeSuspensionBroker] = None
+        self._monitor_token: Optional[object] = None
 
     async def start(self, on_resume: Callable[[RuntimeResume], Awaitable[None]]) -> None:
         self._power_request = WindowsSleepInhibitor.acquire()
         self.sleep_inhibited = self._power_request.active
-        self._monitor_task = asyncio.create_task(self.monitor.run(on_resume))
+        if self._uses_shared_monitor:
+            self._monitor_broker = _suspension_broker_for_current_loop()
+            self._monitor_token = await self._monitor_broker.subscribe(self.monitor, on_resume)
+        else:
+            self._monitor_task = asyncio.create_task(self.monitor.run(on_resume))
 
     async def close(self) -> None:
-        self.monitor.stop()
-        if self._monitor_task is not None:
+        if self._monitor_broker is not None and self._monitor_token is not None:
+            await self._monitor_broker.unsubscribe(self._monitor_token)
+            self._monitor_token = None
+            self._monitor_broker = None
+        elif self._monitor_task is not None:
+            self.monitor.stop()
             try:
                 await self._monitor_task
             except asyncio.CancelledError:
                 pass
+            self._monitor_task = None
         WindowsSleepInhibitor.release(self._power_request)
         self._power_request = None
