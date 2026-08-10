@@ -2419,6 +2419,7 @@ def _human_file_size(num: int) -> str:
 
 
 _READ_FILE_VIRTUAL_LINE_CHARS = 1000
+_LS_DEFAULT_LINE_COUNT_MAX_BYTES = 5 * 1024 * 1024
 
 
 def _virtualize_text_lines(lines: List[str], max_chars: int = _READ_FILE_VIRTUAL_LINE_CHARS) -> List[str]:
@@ -2562,6 +2563,9 @@ def _line_count_file(p: Path) -> str:
         return "?"
     if st.st_size == 0:
         return "0"
+    limit = _ls_line_count_max_bytes()
+    if st.st_size > limit:
+        return f"— (>{_human_file_size(limit)})"
     try:
         n = 0
         with open(p, "r", encoding="utf-8", errors="replace") as f:
@@ -2740,6 +2744,74 @@ def _ls_include_line_counts() -> bool:
     return os.getenv("LS_INCLUDE_LINE_COUNTS", "1").strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _ls_line_count_max_bytes() -> int:
+    try:
+        return max(1, int(os.getenv("LS_LINE_COUNT_MAX_BYTES", str(_LS_DEFAULT_LINE_COUNT_MAX_BYTES))))
+    except ValueError:
+        return _LS_DEFAULT_LINE_COUNT_MAX_BYTES
+
+
+_LS_TEXT_SUFFIXES = frozenset(
+    {
+        ".txt", ".text", ".md", ".markdown", ".rst", ".adoc", ".asciidoc",
+        ".py", ".pyi", ".pyw", ".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx",
+        ".vue", ".svelte", ".html", ".htm", ".css", ".scss", ".sass", ".less",
+        ".json", ".jsonl", ".ndjson", ".json5", ".yaml", ".yml", ".toml", ".xml",
+        ".xsl", ".xsd", ".svg", ".csv", ".tsv", ".log", ".ini", ".cfg", ".conf",
+        ".properties", ".env", ".sh", ".bash", ".zsh", ".fish", ".ps1", ".psm1",
+        ".psd1", ".bat", ".cmd", ".c", ".h", ".cc", ".cpp", ".cxx", ".hpp",
+        ".hxx", ".cs", ".java", ".kt", ".kts", ".go", ".rs", ".rb", ".php",
+        ".swift", ".scala", ".sql", ".r", ".lua", ".pl", ".pm", ".ex", ".exs",
+        ".erl", ".hrl", ".fs", ".fsx", ".vb", ".gradle", ".groovy", ".dart",
+        ".sol", ".proto", ".graphql", ".gql", ".tex", ".bib", ".lock", ".diff",
+        ".patch", ".map", ".ipynb",
+    }
+)
+_LS_TEXT_FILENAMES = frozenset(
+    {
+        "dockerfile", "makefile", "gnumakefile", "justfile", "procfile", "vagrantfile",
+        "pipfile", "gemfile", "rakefile", "license", "licence", "copying", "notice",
+        "readme", "changelog", "authors", "contributors", ".gitignore", ".gitattributes",
+        ".gitmodules", ".dockerignore", ".editorconfig", ".npmrc", ".yarnrc",
+        ".prettierrc", ".eslintrc", ".env",
+    }
+)
+
+
+def _ls_is_text_file(path: Path) -> bool:
+    """Recognize text/source files without opening arbitrary binary files."""
+    name = path.name.lower()
+    return (
+        path.suffix.lower() in _LS_TEXT_SUFFIXES
+        or name in _LS_TEXT_FILENAMES
+        or name.startswith(".env.")
+        or name.startswith("dockerfile.")
+    )
+
+
+_LS_ARCHIVE_SUFFIXES = (
+    ".zip",
+    ".zipx",
+    ".7z",
+    ".rar",
+    ".tar",
+    ".tgz",
+    ".tbz",
+    ".tbz2",
+    ".txz",
+    ".gz",
+    ".bz2",
+    ".xz",
+    ".zst",
+    ".cab",
+)
+
+
+def _ls_is_archive(path: Path) -> bool:
+    """Return whether an ls entry is an archive whose contents are not inspected."""
+    return path.name.lower().endswith(_LS_ARCHIVE_SUFFIXES)
+
+
 def format_directory_listing(
     path: Path,
     *,
@@ -2773,6 +2845,10 @@ def format_directory_listing(
         display_name = entry.name + ("/" if entry.is_dir() else "")
         if entry.is_dir():
             size_s, line_s = "—", "—"
+        elif _ls_is_archive(entry):
+            # An archive is an opaque container for ls: neither its compressed
+            # byte size nor a meaningless text line count belongs in the listing.
+            size_s, line_s = "—", "—"
         else:
             try:
                 sz = entry.stat().st_size
@@ -2780,7 +2856,7 @@ def format_directory_listing(
                 size_s, line_s = "?", "?"
             else:
                 size_s = _human_file_size(sz)
-                line_s = _line_count_file(entry) if want_lines else "—"
+                line_s = _line_count_file(entry) if want_lines and _ls_is_text_file(entry) else "—"
         rows.append((display_name, size_s, line_s))
         w = max(w, len(display_name))
     out_lines = [f"{name:<{w}}  {size:>10}  lines: {ln:>8}" for name, size, ln in rows]
@@ -4391,12 +4467,12 @@ OPENAI_TOOL_DEFINITIONS: List[Dict[str, Any]] = [
     ),
     _openai_function_schema(
         "ls",
-        "List a directory (virtual `/` = workspace or an accessible OS path). Shows size; files get an approximate line count; directories use — and names end with /.",
+        "List a directory (virtual `/` = workspace or an accessible OS path). Shows size; recognized text/source files up to LS_LINE_COUNT_MAX_BYTES (default 5 MiB) get an approximate line count. Other files and directories use —, and directory names end with /.",
         {
             "path": {"type": "string", "description": "Directory to list; default /."},
             "include_line_counts": {
                 "type": "boolean",
-                "description": "Count lines by reading each file. Omit to use LS_INCLUDE_LINE_COUNTS (default true).",
+                "description": "Count lines in recognized text/source files within the size limit. Omit to use LS_INCLUDE_LINE_COUNTS (default true).",
             },
             "max_entries": {
                 "type": "integer",
@@ -4404,16 +4480,6 @@ OPENAI_TOOL_DEFINITIONS: List[Dict[str, Any]] = [
                 "minimum": 1,
                 "maximum": 5000,
             },
-        },
-        [],
-    ),
-    _openai_function_schema(
-        "list_dir",
-        "Same behavior as ls.",
-        {
-            "path": {"type": "string", "description": "Directory to list; default /."},
-            "include_line_counts": {"type": "boolean", "description": "Same as ls.include_line_counts."},
-            "max_entries": {"type": "integer", "minimum": 1, "maximum": 5000},
         },
         [],
     ),
@@ -4692,6 +4758,7 @@ OPENAI_TOOL_DEFINITIONS: List[Dict[str, Any]] = [
                     "collect",
                     "interrupt",
                     "steer",
+                    "switch_model",
                     "worktree",
                 ],
                 "description": (
@@ -4707,6 +4774,8 @@ OPENAI_TOOL_DEFINITIONS: List[Dict[str, Any]] = [
                     "(empty = all), and consumed pending results are cleared. "
                     "interrupt: cancel a running subagent; requires resume ID. "
                     "steer: queue a durable instruction for a currently running subagent. "
+                    "switch_model: change an existing subagent to a registered model profile at a safe generation boundary; "
+                    "requires resume ID and model_profile_id, preserves the same child history/worktree, and may include an optional prompt. "
                     "worktree: inspect, diff, retain, merge, or discard a managed task worktree."
                 ),
             },
@@ -4720,7 +4789,7 @@ OPENAI_TOOL_DEFINITIONS: List[Dict[str, Any]] = [
             "prompt": {
                 "type": "string",
                 "description": (
-                    "start/resume only: self-contained handoff. Include objective; scope and exact paths; relevant facts or prior "
+                    "start/resume, or optional for switch_model: self-contained handoff. Include objective; scope and exact paths; relevant facts or prior "
                     "findings; constraints and non-goals; expected deliverable; and how to verify completion. Include exact errors, "
                     "data, and decisions the subagent cannot infer. For resume, provide only the new instruction and changed facts. "
                     "For an execution-detail request, explicitly ask for all available steps, files, commands/tools, observations, "
@@ -4748,14 +4817,14 @@ OPENAI_TOOL_DEFINITIONS: List[Dict[str, Any]] = [
             "model_profile_id": {
                 "type": "string",
                 "description": (
-                    "start only. Default: omit this parameter so the subagent inherits the parent's effective model. "
+                    "start or switch_model only. On start, omit by default so the subagent inherits the parent's effective model. "
                     "Choose a registered profile only when its injected models-table capability metadata directly supports "
                     "the delegated task, such as low-cost/high-concurrency batch work, difficult reasoning, research, or "
                     "image understanding. The available IDs, models, and automatic capability descriptions are injected at "
                     "runtime. A selected "
                     "profile supplies the subagent's endpoint, credentials, model, limits, and reasoning settings. Never guess, abbreviate, "
-                    "or pass a raw model name; an unregistered model must first become a profile. Existing subagents keep their original "
-                    "profile on resume. A multimodal capability tag is only a routing hint: select it for image work only after confirming "
+                    "or pass a raw model name; an unregistered model must first become a profile. Existing subagents keep their current "
+                    "profile on ordinary resume; use action=switch_model to change it. A multimodal capability tag is only a routing hint: select it for image work only after confirming "
                     "the exact model, endpoint, and current message/attachment chain actually accept image input."
                 ),
                 "default": "",
@@ -4773,7 +4842,7 @@ OPENAI_TOOL_DEFINITIONS: List[Dict[str, Any]] = [
             "resume": {
                 "type": "string",
                 "description": (
-                    "A single subagent ID string; arrays and multiple IDs are unsupported. Required for resume/interrupt. "
+                    "A single subagent ID string; arrays and multiple IDs are unsupported. Required for resume/interrupt/switch_model. "
                     "Prefer reusing this ID with action=resume when the new request continues, clarifies, corrects, or extends that "
                     "subagent's objective; do not start a replacement subagent for the same scope. "
                     "For status/collect, omit it to target all subagents recursively; when supplied from a root session, "

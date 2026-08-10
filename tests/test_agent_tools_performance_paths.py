@@ -50,6 +50,80 @@ def test_ls_includes_line_counts_by_default(tmp_path, monkeypatch):
     assert "2" in result
 
 
+def test_ls_counts_only_recognized_text_files(tmp_path, monkeypatch):
+    (tmp_path / "notes.txt").write_text("one\ntwo\n", encoding="utf-8")
+    (tmp_path / "image.png").write_bytes(b"binary\nwith\nnewlines\n")
+    counted = []
+
+    def count_lines(path):
+        counted.append(path.name)
+        return "2"
+
+    monkeypatch.setattr(agent_tools, "_line_count_file", count_lines)
+
+    result = agent_tools.ls(str(tmp_path))
+
+    assert counted == ["notes.txt"]
+    image_row = next(line for line in result.splitlines() if "image.png" in line)
+    assert image_row.endswith("lines:        —")
+
+
+def test_ls_recognizes_text_extensions_and_special_filenames():
+    text_names = ("app.py", "config.yaml", "data.csv", "Dockerfile", ".env", ".env.local", ".gitignore")
+
+    assert all(agent_tools._ls_is_text_file(Path(name)) for name in text_names)
+    assert not agent_tools._ls_is_text_file(Path("photo.jpg"))
+    assert not agent_tools._ls_is_text_file(Path("program.exe"))
+
+
+def test_ls_skips_line_scan_for_large_text_file(tmp_path, monkeypatch):
+    (tmp_path / "large.txt").write_text("123456789", encoding="utf-8")
+    monkeypatch.setenv("LS_LINE_COUNT_MAX_BYTES", "8")
+
+    result = agent_tools.ls(str(tmp_path))
+
+    large_row = next(line for line in result.splitlines() if "large.txt" in line)
+    assert "lines:" in large_row
+    assert "— (>8 B)" in large_row
+
+
+def test_ls_does_not_calculate_archive_size_or_line_count(tmp_path, monkeypatch):
+    (tmp_path / "bundle.ZIP").write_bytes(b"not-a-text-file")
+    monkeypatch.setattr(
+        agent_tools,
+        "_human_file_size",
+        lambda _size: (_ for _ in ()).throw(AssertionError("archive size should be skipped")),
+    )
+    monkeypatch.setattr(
+        agent_tools,
+        "_line_count_file",
+        lambda _path: (_ for _ in ()).throw(AssertionError("archive line count should be skipped")),
+    )
+
+    result = agent_tools.ls(str(tmp_path))
+
+    assert "bundle.ZIP" in result
+    assert "lines:        —" in result
+
+
+def test_ls_recognizes_common_archive_suffixes():
+    archive_names = ("backup.tar.gz", "source.tgz", "data.7z", "package.rar", "logs.zst")
+
+    assert all(agent_tools._ls_is_archive(Path(name)) for name in archive_names)
+    assert not agent_tools._ls_is_archive(Path("archive-notes.txt"))
+
+
+def test_only_ls_is_exposed_to_model_while_list_dir_remains_compatible():
+    exposed_names = [
+        row["function"]["name"] for row in agent_tools.OPENAI_TOOL_DEFINITIONS
+    ]
+
+    assert exposed_names.count("ls") == 1
+    assert "list_dir" not in exposed_names
+    assert agent_tools.tools["ls"] is agent_tools.ls
+    assert agent_tools.tools["list_dir"] is agent_tools.tools["ls"]
+
+
 def test_ripgrep_fast_path_caps_results(monkeypatch, tmp_path):
     monkeypatch.setattr(agent_tools, "_resolve_ripgrep_path", lambda: "rg")
     monkeypatch.setattr(
@@ -223,6 +297,7 @@ def test_task_schema_uses_action_discriminator():
         "collect",
         "interrupt",
         "steer",
+        "switch_model",
         "worktree",
     ]
     assert "Never use resume to poll" in schema["description"]
@@ -249,7 +324,7 @@ def test_task_schema_uses_action_discriminator():
     assert "subagent's own history" in props["prompt"]["description"]
     assert "false: wait and return" in props["run_in_background"]["description"]
     assert "model_profile_id" in props
-    assert "Default: omit this parameter" in props["model_profile_id"]["description"]
+    assert "omit by default" in props["model_profile_id"]["description"]
     assert "low-cost/high-concurrency batch work" in props["model_profile_id"]["description"]
     assert "do not send legacy args, working_dir, or timeout" in next(
         row["function"]["description"] for row in agent_tools.OPENAI_TOOL_DEFINITIONS
@@ -261,7 +336,8 @@ def test_task_schema_uses_action_discriminator():
     )
     assert "Never guess, abbreviate" in props["model_profile_id"]["description"]
     assert "current message/attachment chain actually accept image input" in props["model_profile_id"]["description"]
-    assert "keep their original profile on resume" in props["model_profile_id"]["description"]
+    assert "use action=switch_model to change it" in props["model_profile_id"]["description"]
+    assert "switch_model" in props["action"]["enum"]
     assert "model" not in props
     assert props["subagent_type"]["default"] == "generalPurpose"
     assert "arrays and multiple IDs are unsupported" in props["resume"]["description"]
