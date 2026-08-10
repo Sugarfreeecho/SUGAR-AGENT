@@ -23,6 +23,7 @@ NOTIFY_MESSAGE = (
     "SugarAgent 正在后台运行，任务不会中断。"
     "可从系统托盘重新打开 WebUI。"
 )
+NOTIFY_ACTION = "打开 SugarAgent"
 
 # WM_USER + 23; must stay in sync with app/tray_launcher.py.
 WM_UI_CLOSED_NOTIFY = 0x0400 + 23
@@ -71,6 +72,11 @@ def _notify_windows_toast(title: str, message: str) -> bool:
     env = os.environ.copy()
     env["SUGARAGENT_NOTIFY_TITLE"] = title
     env["SUGARAGENT_NOTIFY_MESSAGE"] = message
+    # Windows PowerShell 5.1 decodes UTF-8 scripts without a BOM using the
+    # legacy system code page. Pass localized text through the Unicode Windows
+    # environment block so the PowerShell file itself can remain ASCII-safe.
+    env["SUGARAGENT_NOTIFY_ACTION"] = NOTIFY_ACTION
+    proc: subprocess.Popen | None = None
     try:
         proc = subprocess.Popen(
             [
@@ -89,9 +95,36 @@ def _notify_windows_toast(title: str, message: str) -> bool:
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
         return proc.wait(timeout=20) == 0
+    except subprocess.TimeoutExpired:
+        logger.warning("Windows toast helper timed out after 20 seconds")
+        if proc is not None:
+            _terminate_process(proc)
+        return False
     except Exception as exc:
         logger.warning("Unable to show Windows toast: %s", exc)
         return False
+
+
+def _terminate_process(proc: subprocess.Popen, timeout: float = 2.0) -> None:
+    """Stop a timed-out notification helper before another fallback runs."""
+
+    try:
+        proc.terminate()
+    except Exception:
+        logger.debug("Unable to terminate notification helper", exc_info=True)
+    try:
+        proc.wait(timeout=timeout)
+        return
+    except subprocess.TimeoutExpired:
+        pass
+    except Exception:
+        logger.debug("Unable to wait for notification helper exit", exc_info=True)
+        return
+    try:
+        proc.kill()
+        proc.wait(timeout=timeout)
+    except Exception:
+        logger.debug("Unable to kill notification helper", exc_info=True)
 
 
 def _notify_windows_tray() -> bool:

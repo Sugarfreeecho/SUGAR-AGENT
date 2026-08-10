@@ -13,7 +13,8 @@
     (PowerShell, Windows Terminal, ...) so the toast still shows.
 
     Clicking the toast (or its action button) opens the WebUI through the
-    sugaragent:// URL protocol, whose handler is app/open_ui_from_notify.ps1.
+    sugaragent:// URL protocol.  The protocol delegates directly to the
+    windowless Windows URL handler so no console window is created.
 #>
 
 $ErrorActionPreference = "Stop"
@@ -27,6 +28,13 @@ $Message = if ($env:SUGARAGENT_NOTIFY_MESSAGE) {
 } else {
     "SugarAgent is running in the background; tasks will not be interrupted."
 }
+$ActionLabel = if ($env:SUGARAGENT_NOTIFY_ACTION) {
+    $env:SUGARAGENT_NOTIFY_ACTION
+} else {
+    # Keep the script source ASCII-safe for Windows PowerShell 5.1, which reads
+    # UTF-8 files without a BOM using the legacy system code page.
+    ([char]0x6253).ToString() + ([char]0x5F00).ToString() + " SugarAgent"
+}
 
 $SugarAgentAumid = "SugarAgent.MyAgent.UI"
 $AumidRegistryPath = "HKCU:\Software\Classes\AppUserModelId\$SugarAgentAumid"
@@ -34,9 +42,10 @@ $TrayIconPath = Join-Path $Root "app\assets\sugar_tray.ico"
 
 $OpenUiProtocol = "sugaragent"
 $OpenUiProtocolRoot = "HKCU:\Software\Classes\$OpenUiProtocol"
-$OpenUiScriptPath = Join-Path $Root "app\open_ui_from_notify.ps1"
 $OpenUiLaunchUri = "sugaragent://open-ui"
-$OpenUiCommand = "powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$OpenUiScriptPath`""
+$WebUiUrl = "http://127.0.0.1:8192/"
+$Rundll32Path = Join-Path $env:SystemRoot "System32\rundll32.exe"
+$OpenUiCommand = "`"$Rundll32Path`" url.dll,FileProtocolHandler `"$WebUiUrl`""
 
 # Fallback: the well-known AppID of Windows PowerShell.  Get-StartApps normally
 # returns the real registered AppIDs, but keep a hardcoded one as a last resort.
@@ -59,8 +68,8 @@ function Register-SugarAgentAumid {
 }
 
 function Register-OpenUiProtocol {
-    if (-not (Test-Path -LiteralPath $OpenUiScriptPath)) {
-        Write-Warning "Missing UI opener script: $OpenUiScriptPath"
+    if (-not (Test-Path -LiteralPath $Rundll32Path)) {
+        Write-Warning "Missing Windows URL handler: $Rundll32Path"
         return $false
     }
     try {
@@ -109,6 +118,7 @@ function Get-AvailableAppIds {
 function New-SugarAgentToastXml {
     $safeTitle = [System.Security.SecurityElement]::Escape($Title)
     $safeMessage = [System.Security.SecurityElement]::Escape($Message)
+    $safeActionLabel = [System.Security.SecurityElement]::Escape($ActionLabel)
     $xml = New-Object Windows.Data.Xml.Dom.XmlDocument
     $xml.LoadXml(@"
 <toast activationType="protocol" launch="$OpenUiLaunchUri">
@@ -119,7 +129,7 @@ function New-SugarAgentToastXml {
     </binding>
   </visual>
   <actions>
-    <action activationType="protocol" arguments="$OpenUiLaunchUri" content="打开 SugarAgent"/>
+    <action activationType="protocol" arguments="$OpenUiLaunchUri" content="$safeActionLabel"/>
   </actions>
 </toast>
 "@)
