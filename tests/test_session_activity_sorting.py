@@ -80,3 +80,36 @@ def test_user_event_side_effect_persists_activity_for_refresh(tmp_path):
     rows_after_refresh = reloaded.list_sessions(include_archived=True)
     assert [row["id"] for row in rows_after_refresh] == [old_id, new_id]
     assert rows_after_refresh[0]["last_user_preview"] == "new question"
+
+
+def test_active_goal_round_final_does_not_mark_session_complete(tmp_path, monkeypatch):
+    import agent_goal
+    import agent_harness
+
+    monkeypatch.setenv("GOAL_ENABLED", "1")
+    monkeypatch.setenv("RUNTIME_VERSION", "2")
+    session_id = "33333333-3333-4333-8333-333333333333"
+    sessions_dir = tmp_path / "sessions"
+    session_dir = sessions_dir / session_id
+    session_dir.mkdir(parents=True)
+    metadata = {
+        "id": session_id,
+        "name": "goal",
+        "created_at": "2026-07-10T00:00:00Z",
+        "updated_at": "2026-07-10T00:00:00Z",
+        "unread_result": True,
+        "unread_result_status": "success",
+    }
+    (session_dir / "metadata.json").write_text(json.dumps(metadata), encoding="utf-8")
+    index_file = tmp_path / "sessions.json"
+    index_file.write_text(json.dumps({"sessions": [metadata]}), encoding="utf-8")
+    manager = agent_harness.SessionManager(sessions_dir, index_file)
+    agent_goal.manager_for(manager).create(session_id, "Keep running until complete")
+
+    manager._apply_appended_ui_event_side_effects(
+        session_id,
+        {"type": "final", "content": "Intermediate round result"},
+    )
+
+    summary = manager.get_session_summary(session_id)
+    assert summary["unread_result"] is False

@@ -155,7 +155,8 @@ function applySessionItemIndicators(itemDiv, sessionId, opts) {
     itemDiv.classList.remove('is-generating', 'is-unread-result', 'is-unread-failed');
     var nameEl = itemDiv.querySelector('.session-name');
     if (nameEl) nameEl.removeAttribute('data-ui-tip');
-    if (isSessionRunning(sessionId)) {
+    if (isSessionRunning(sessionId)
+        || (typeof isGoalActiveForSession === 'function' && isGoalActiveForSession(sessionId))) {
         itemDiv.classList.add('is-generating');
         if (nameEl) nameEl.setAttribute('data-ui-tip', '生成中');
     } else {
@@ -231,9 +232,260 @@ function closeAllSessionMenus() {
     });
 })();
 
-/**
- * 创建并绑定单条会话（更多菜单：置顶 → 删除 → 归档 在末尾）
- */
+function buildSessionMoreMenuMarkup() {
+    return '<div class="session-more-wrap">'
+        + '<button type="button" class="session-more-btn" aria-label="更多操作" aria-expanded="false" aria-haspopup="true" data-ui-tip="更多">'
+        + '<span class="session-more-dots" aria-hidden="true"><span></span><span></span><span></span></span></button>'
+        + '<div class="session-more-menu" role="menu">'
+        + '<button type="button" class="session-menu-pin" role="menuitem"></button>'
+        + '<button type="button" class="session-menu-rename" role="menuitem">重命名</button>'
+        + '<button type="button" class="session-menu-archive" role="menuitem"></button>'
+        + '<div class="session-menu-separator" role="separator"></div>'
+        + '<button type="button" class="session-menu-export" role="menuitem">导出会话</button>'
+        + '<button type="button" class="session-menu-delete" role="menuitem">删除会话</button>'
+        + '</div></div>';
+}
+
+function findSessionForActions(sessionId, fallback) {
+    var sid = String(sessionId || '');
+    var current = sessionStore.get(sid);
+    if (current) return current;
+    if (sessionStore.archivedLoaded) {
+        current = (sessionStore.archivedSessions || []).find(function (item) {
+            return item && String(item.id) === sid;
+        });
+    }
+    return current || fallback || null;
+}
+
+function syncSessionMenuLabels(wrap, sess) {
+    if (!wrap || !sess) return;
+    wrap._sessionMenuSession = sess;
+    var pin = wrap.querySelector('.session-menu-pin');
+    var archive = wrap.querySelector('.session-menu-archive');
+    if (pin) pin.textContent = sess.pinned ? '取消置顶' : '置顶会话';
+    if (archive) archive.textContent = sess.archived ? '取消归档' : '归档会话';
+}
+
+async function toggleSessionPinnedFromMenu(sess) {
+    try {
+        const formData = new FormData();
+        const nextPinned = !sess.pinned;
+        const previous = applyOptimisticSessionUpdate(sess.id, { pinned: nextPinned });
+        formData.append('pinned', nextPinned ? 'true' : 'false');
+        const response = await fetch('/sessions/' + encodeURIComponent(sess.id) + '/pin', { method: 'PUT', body: formData });
+        if (!response.ok) {
+            if (previous) applyOptimisticSessionUpdate(sess.id, previous);
+            throw new Error('pin failed: ' + response.status);
+        }
+        await refreshSingleSessionRow(sess.id);
+    } catch (err) { console.error('置顶失败', err); }
+}
+
+async function toggleSessionArchivedFromMenu(sess) {
+    try {
+        const formData = new FormData();
+        const nextArchived = !sess.archived;
+        const previous = applyOptimisticSessionUpdate(sess.id, { archived: nextArchived });
+        formData.append('archived', nextArchived ? 'true' : 'false');
+        const response = await fetch('/sessions/' + encodeURIComponent(sess.id) + '/archive', { method: 'PUT', body: formData });
+        if (!response.ok) {
+            if (previous) applyOptimisticSessionUpdate(sess.id, previous);
+            throw new Error('archive failed: ' + response.status);
+        }
+        await refreshSingleSessionRow(sess.id);
+        if (!nextArchived && sessionStore.archivedLoaded) {
+            await loadArchivedSessions({ background: true, refresh: true, forceRender: true });
+        }
+    } catch (err) { console.error('归档失败', err); }
+}
+
+async function renameSessionFromMenu(sess) {
+    var requestedName = await openUiModal({
+        title: '重命名会话',
+        subtitle: '编辑会话名称',
+        message: '',
+        inputLabel: '会话名称',
+        inputValue: String(sess.name || ''),
+        inputMaxLength: 160,
+        inputRequired: true,
+        confirmText: '保存名称',
+        cancelText: '取消',
+    });
+    if (typeof requestedName !== 'string') return;
+    var newName = requestedName.trim().slice(0, 160);
+    if (!newName || newName === String(sess.name || '')) return;
+    const previous = applyOptimisticSessionUpdate(sess.id, { name: newName });
+    if (currentSessionId === sess.id) updateSessionTitle();
+    try {
+        const formData = new FormData();
+        formData.append('name', newName);
+        const response = await fetch('/sessions/' + encodeURIComponent(sess.id) + '/name', { method: 'PUT', body: formData });
+        if (!response.ok) throw new Error('rename failed: ' + response.status);
+        await refreshSingleSessionRow(sess.id);
+        if (currentSessionId === sess.id) updateSessionTitle();
+    } catch (err) {
+        console.error('重命名失败', err);
+        if (previous) applyOptimisticSessionUpdate(sess.id, previous);
+        if (currentSessionId === sess.id) updateSessionTitle();
+    }
+}
+
+async function exportSessionFromMenu(sess) {
+    var confirmed = await openUiModal({
+        title: '导出会话',
+        subtitle: '下载会话文件',
+        message: '将会话「' + String(sess.name || '未命名') + '」对应的 session 文件夹压缩为 ZIP 并下载。',
+        confirmText: '确认导出',
+        cancelText: '取消',
+    });
+    if (!confirmed) return;
+    var link = document.createElement('a');
+    link.href = '/sessions/' + encodeURIComponent(sess.id) + '/export';
+    link.download = 'session-' + String(sess.id || 'export') + '.zip';
+    link.hidden = true;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+}
+
+async function deleteSessionFromMenu(sess, rowDiv) {
+    const okDel = await openUiModal({
+        title: '删除会话',
+        subtitle: '此操作不可恢复',
+        message: '确定删除会话「' + String(sess.name || '未命名') + '」吗？其中的消息与记录将被移除。',
+        danger: true,
+        confirmText: '删除会话',
+        cancelText: '取消',
+    });
+    if (!okDel) return;
+    const wasArchivedLoaded = sessionStore.archivedLoaded;
+    const deletedSessionId = String(sess.id || '');
+    const nextSession = sessionStore.list().find(function (s) {
+        return s && s.id && String(s.id) !== deletedSessionId && !s.archived;
+    }) || null;
+    sessionStore.markDeletedSession(deletedSessionId);
+    if (wasArchivedLoaded && sess.archived) {
+        const archivedBeforeDelete = sessionStore.archivedSessions || [];
+        const deletedArchiveIndex = archivedBeforeDelete.findIndex(function (s) {
+            return s && String(s.id) === deletedSessionId;
+        });
+        sessionStore.setArchivedLoaded(archivedBeforeDelete.filter(function (s) {
+            return s && String(s.id) !== deletedSessionId;
+        }), {
+            visibleCount: Math.max(
+                0,
+                sessionStore.archivedVisibleCount
+                    - (deletedArchiveIndex >= 0 && deletedArchiveIndex < sessionStore.archivedVisibleCount ? 1 : 0)
+            ),
+            totalCount: Math.max(0, sessionStore.archivedCount - 1),
+        });
+        syncArchivedSessionStateFromStore();
+    }
+    renderSessionListIfChanged(true);
+    if (rowDiv && rowDiv.parentNode) rowDiv.remove();
+    sessionUnreadComplete.delete(deletedSessionId);
+    scheduleTitleGenerationRefresh(deletedSessionId, false);
+    persistSessionUnread();
+    delete draftBySession[deletedSessionId];
+    removeStoredInputDraft(deletedSessionId);
+    if (typeof removeStoredFollowupQueue === 'function') removeStoredFollowupQueue(deletedSessionId);
+    delete lastUserMessageBySession[deletedSessionId];
+    clearContextStateForSession(deletedSessionId);
+    if (typeof discardCachedSessionStream === 'function') discardCachedSessionStream(deletedSessionId);
+    if (isSessionRunning(sess.id)) {
+        const r = abortSessionRun(sess.id, 'delete');
+        if (r && r.ctx && r.ctx.stream && r.ctx.stream.parentNode) r.ctx.stream.remove();
+        setSendButtonState();
+        syncSessionListIndicatorClasses();
+    }
+    if (currentSessionId === deletedSessionId) {
+        if (nextSession) await switchSession(nextSession.id);
+        else await createNewSession();
+    }
+    void requestInterrupt(deletedSessionId, '', 'session_deleted');
+    void fetch('/sessions/' + encodeURIComponent(deletedSessionId), { method: 'DELETE' })
+        .then(function (resp) {
+            if (!resp.ok) throw new Error('delete failed: ' + resp.status);
+        })
+        .catch(function (err) {
+            console.error('删除会话失败:', err);
+            sessionStore.clearDeletedSessionTombstone(deletedSessionId);
+            void loadSessions({ skipArchivedRefresh: true });
+            if (wasArchivedLoaded) void loadArchivedSessions({ background: true });
+        });
+}
+
+function bindSessionActionMenu(wrap, getSession, rowDiv) {
+    if (!wrap || wrap.dataset.sessionMenuBound === '1') return;
+    wrap.dataset.sessionMenuBound = '1';
+    var moreBtn = wrap.querySelector('.session-more-btn');
+    if (moreBtn) {
+        bindUiHoverTip(moreBtn);
+        moreBtn.addEventListener('click', function (e) {
+            e.stopPropagation();
+            var wasOpen = wrap.classList.contains('is-open');
+            closeAllSessionMenus();
+            var sess = getSession();
+            if (!sess) return;
+            syncSessionMenuLabels(wrap, sess);
+            if (!wasOpen) {
+                wrap.classList.add('is-open');
+                moreBtn.setAttribute('aria-expanded', 'true');
+            }
+        });
+    }
+    wrap.addEventListener('click', function (e) {
+        var target = e.target && e.target.closest ? e.target.closest('[role="menuitem"]') : null;
+        if (!target || !wrap.contains(target)) return;
+        var handler = target.classList.contains('session-menu-pin') ? toggleSessionPinnedFromMenu
+            : target.classList.contains('session-menu-rename') ? renameSessionFromMenu
+                : target.classList.contains('session-menu-archive') ? toggleSessionArchivedFromMenu
+                    : target.classList.contains('session-menu-export') ? exportSessionFromMenu
+                        : target.classList.contains('session-menu-delete') ? deleteSessionFromMenu
+                            : null;
+        if (!handler) return;
+        e.stopPropagation();
+        closeAllSessionMenus();
+        var sess = getSession();
+        if (!sess) return;
+        Promise.resolve(handler(sess, rowDiv)).catch(function (err) {
+            console.error('会话菜单操作失败:', err);
+        });
+    });
+}
+
+var titlebarSessionMenuSnapshot = null;
+
+function getTitlebarSessionForActions(host, wrap) {
+    var sessionId = (host && host.dataset.sessionId) || currentSessionId;
+    return findSessionForActions(sessionId, wrap && wrap._sessionMenuSession)
+        || titlebarSessionMenuSnapshot;
+}
+
+function syncTitlebarSessionMenu(sess) {
+    var host = document.getElementById('breadcrumb-session-actions');
+    if (!host) return;
+    titlebarSessionMenuSnapshot = sess ? Object.assign({}, titlebarSessionMenuSnapshot || {}, sess) : null;
+    host.dataset.sessionId = titlebarSessionMenuSnapshot ? String(titlebarSessionMenuSnapshot.id || '') : '';
+    host.classList.toggle('hidden', !sess);
+    var wrap = host.querySelector('.session-more-wrap');
+    if (wrap && titlebarSessionMenuSnapshot) syncSessionMenuLabels(wrap, titlebarSessionMenuSnapshot);
+}
+
+(function mountTitlebarSessionMenu() {
+    var host = document.getElementById('breadcrumb-session-actions');
+    if (!host || host.dataset.sessionMenuMounted === '1') return;
+    host.dataset.sessionMenuMounted = '1';
+    host.innerHTML = buildSessionMoreMenuMarkup();
+    var wrap = host.querySelector('.session-more-wrap');
+    bindSessionActionMenu(wrap, function () {
+        return getTitlebarSessionForActions(host, wrap);
+    }, null);
+    syncTitlebarSessionMenu(currentSessionId ? findSessionForActions(currentSessionId, null) : null);
+})();
+
+/** 创建并绑定单条会话及其分区操作菜单。 */
 function buildAndBindSessionRow(sess, allSessions, nextStreamMap) {
     const div = document.createElement('div');
     div.className = 'session-item';
@@ -252,27 +504,14 @@ function buildAndBindSessionRow(sess, allSessions, nextStreamMap) {
         + '</div>'
         + '<div class="session-last-query"></div>'
         + '</div>'
-        + '<div class="session-more-wrap">'
-        + '<button type="button" class="session-more-btn" aria-label="更多操作" aria-expanded="false" aria-haspopup="true" data-ui-tip="更多">'
-        + '<span class="session-more-dots" aria-hidden="true"><span></span><span></span><span></span></span></button>'
-        + '<div class="session-more-menu" role="menu">'
-        + '<button type="button" class="session-menu-pin" role="menuitem"></button>'
-        + '<button type="button" class="session-menu-delete" role="menuitem">删除</button>'
-        + '<button type="button" class="session-menu-archive" role="menuitem"></button>'
-        + '</div></div>'
+        + buildSessionMoreMenuMarkup()
         + '</div>';
     if (typeof updateHumanInteractionSessionBadge === 'function') {
         setTimeout(function () { updateHumanInteractionSessionBadge(sess.id); }, 0);
     }
-    var pinMi = div.querySelector('.session-menu-pin');
-    var archMi = div.querySelector('.session-menu-archive');
-    if (pinMi) pinMi.textContent = sess.pinned ? '取消置顶' : '置顶';
-    if (archMi) archMi.textContent = sess.archived ? '取消归档' : '归档';
     var wsLine = formatSessionListSubtitle(sess);
     var wsEl = div.querySelector('.session-last-query');
-    if (wsEl) {
-        wsEl.textContent = wsLine;
-    }
+    if (wsEl) wsEl.textContent = wsLine;
     var dateEl = div.querySelector('.session-item-date');
     var dateLine = '';
     if (dateEl) {
@@ -289,169 +528,10 @@ function buildAndBindSessionRow(sess, allSessions, nextStreamMap) {
         bindUiHoverTip(div);
     }
     var moreWrap = div.querySelector('.session-more-wrap');
-    var moreBtn = div.querySelector('.session-more-btn');
-    if (moreBtn) bindUiHoverTip(moreBtn);
-    if (moreWrap && moreBtn) {
-        moreBtn.addEventListener('click', function (e) {
-            e.stopPropagation();
-            var wasOpen = moreWrap.classList.contains('is-open');
-            closeAllSessionMenus();
-            if (pinMi) pinMi.textContent = sess.pinned ? '取消置顶' : '置顶';
-            if (archMi) archMi.textContent = sess.archived ? '取消归档' : '归档';
-            if (!wasOpen) {
-                moreWrap.classList.add('is-open');
-                moreBtn.setAttribute('aria-expanded', 'true');
-            }
-        });
-    }
-    if (pinMi) {
-        pinMi.addEventListener('click', async function (e) {
-            e.stopPropagation();
-            closeAllSessionMenus();
-            try {
-                const formData = new FormData();
-                const nextPinned = !sess.pinned;
-                const previous = applyOptimisticSessionUpdate(sess.id, { pinned: nextPinned });
-                formData.append('pinned', nextPinned ? 'true' : 'false');
-                const response = await fetch('/sessions/' + encodeURIComponent(sess.id) + '/pin', { method: 'PUT', body: formData });
-                if (!response.ok) {
-                    if (previous) applyOptimisticSessionUpdate(sess.id, previous);
-                    throw new Error('pin failed: ' + response.status);
-                }
-                void refreshSingleSessionRow(sess.id);
-            } catch (err) { console.error('置顶失败', err); }
-        });
-    }
-    if (archMi) {
-        archMi.addEventListener('click', async function (e) {
-            e.stopPropagation();
-            closeAllSessionMenus();
-            try {
-                const formData = new FormData();
-                const nextArchived = !sess.archived;
-                const previous = applyOptimisticSessionUpdate(sess.id, { archived: nextArchived });
-                formData.append('archived', nextArchived ? 'true' : 'false');
-                const response = await fetch('/sessions/' + encodeURIComponent(sess.id) + '/archive', { method: 'PUT', body: formData });
-                if (!response.ok) {
-                    if (previous) applyOptimisticSessionUpdate(sess.id, previous);
-                    throw new Error('archive failed: ' + response.status);
-                }
-                void refreshSingleSessionRow(sess.id);
-            } catch (err) { console.error('归档失败', err); }
-        });
-    }
-    var delMi = div.querySelector('.session-menu-delete');
-    if (delMi) {
-        delMi.addEventListener('click', async function (e) {
-            e.stopPropagation();
-            closeAllSessionMenus();
-            const okDel = await openUiModal({
-                title: '删除会话',
-                subtitle: '此操作不可恢复',
-                message: '确定删除会话「' + String(sess.name || '未命名') + '」吗？其中的消息与记录将被移除。',
-                danger: true,
-                confirmText: '删除会话',
-                cancelText: '取消',
-            });
-            if (!okDel) return;
-            const wasArchivedLoaded = sessionStore.archivedLoaded;
-            const deletedSessionId = String(sess.id || '');
-            const nextSession = sessionStore.list().find(function (s) {
-                return s && s.id && String(s.id) !== deletedSessionId && !s.archived;
-            }) || null;
-            sessionStore.markDeletedSession(deletedSessionId);
-            if (wasArchivedLoaded && sess.archived) {
-                const archivedBeforeDelete = sessionStore.archivedSessions || [];
-                const deletedArchiveIndex = archivedBeforeDelete.findIndex(function (s) {
-                    return s && String(s.id) === deletedSessionId;
-                });
-                sessionStore.setArchivedLoaded(archivedBeforeDelete.filter(function (s) {
-                    return s && String(s.id) !== deletedSessionId;
-                }), {
-                    visibleCount: Math.max(
-                        0,
-                        sessionStore.archivedVisibleCount
-                            - (deletedArchiveIndex >= 0 && deletedArchiveIndex < sessionStore.archivedVisibleCount ? 1 : 0)
-                    ),
-                    totalCount: Math.max(0, sessionStore.archivedCount - 1),
-                });
-                syncArchivedSessionStateFromStore();
-            }
-            renderSessionListIfChanged(true);
-            if (div && div.parentNode) div.remove();
-            sessionUnreadComplete.delete(deletedSessionId);
-            scheduleTitleGenerationRefresh(deletedSessionId, false);
-            persistSessionUnread();
-            delete draftBySession[deletedSessionId];
-            removeStoredInputDraft(deletedSessionId);
-            if (typeof removeStoredFollowupQueue === 'function') removeStoredFollowupQueue(deletedSessionId);
-            delete lastUserMessageBySession[deletedSessionId];
-            clearContextStateForSession(deletedSessionId);
-            if (typeof discardCachedSessionStream === 'function') discardCachedSessionStream(deletedSessionId);
-            if (isSessionRunning(sess.id)) {
-                const r = abortSessionRun(sess.id, 'delete');
-                if (r && r.ctx && r.ctx.stream && r.ctx.stream.parentNode) r.ctx.stream.remove();
-                setSendButtonState();
-                syncSessionListIndicatorClasses();
-            }
-            if (currentSessionId === deletedSessionId) {
-                if (nextSession) await switchSession(nextSession.id);
-                else await createNewSession();
-            }
-            void requestInterrupt(deletedSessionId, '', 'session_deleted');
-            void fetch('/sessions/' + encodeURIComponent(deletedSessionId), { method: 'DELETE' })
-                .then(function (resp) {
-                    if (!resp.ok) throw new Error('delete failed: ' + resp.status);
-                })
-                .catch(function (err) {
-                    console.error('删除会话失败:', err);
-                    sessionStore.clearDeletedSessionTombstone(deletedSessionId);
-                    void loadSessions({ skipArchivedRefresh: true });
-                    if (wasArchivedLoaded) void loadArchivedSessions({ background: true });
-                });
-        });
-    }
-    const nameSpan = div.querySelector('.session-name');
-    if (nameSpan) {
-        nameSpan.addEventListener('dblclick', function (e) {
-            e.stopPropagation();
-            if (nameSpan.classList.contains('editing')) return;
-            nameSpan.classList.add('editing');
-            nameSpan.contentEditable = 'true';
-            nameSpan.focus();
-            const range = document.createRange();
-            range.selectNodeContents(nameSpan);
-            const sel = window.getSelection();
-            sel.removeAllRanges();
-            sel.addRange(range);
-        });
-        nameSpan.addEventListener('blur', async function () {
-            if (!nameSpan.classList.contains('editing')) return;
-            nameSpan.classList.remove('editing');
-            nameSpan.contentEditable = 'false';
-            const newName = nameSpan.innerText.trim();
-            if (newName && newName !== nameSpan.dataset.original) {
-                const oldName = nameSpan.dataset.original;
-                const previous = applyOptimisticSessionUpdate(sess.id, { name: newName });
-                nameSpan.dataset.original = newName;
-                if (currentSessionId === sess.id) updateSessionTitle();
-                try {
-                    const formData = new FormData();
-                    formData.append('name', newName);
-                    const response = await fetch('/sessions/' + encodeURIComponent(sess.id) + '/name', { method: 'PUT', body: formData });
-                    if (!response.ok) throw new Error('rename failed: ' + response.status);
-                    if (currentSessionId === sess.id) updateSessionTitle();
-                } catch (err) {
-                    console.error('重命名失败', err);
-                    if (previous) applyOptimisticSessionUpdate(sess.id, previous);
-                    nameSpan.innerText = oldName;
-                    nameSpan.dataset.original = oldName;
-                    if (currentSessionId === sess.id) updateSessionTitle();
-                }
-            } else nameSpan.innerText = nameSpan.dataset.original;
-        });
-        nameSpan.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); nameSpan.blur(); } });
-    }
+    syncSessionMenuLabels(moreWrap, sess);
+    bindSessionActionMenu(moreWrap, function () {
+        return findSessionForActions(sess.id, sess);
+    }, div);
     applySessionItemIndicators(div, sess.id, { serverStreamActive: !!sess.stream_active });
     return div;
 }
@@ -490,6 +570,10 @@ async function refreshSingleSessionRow(sessionId) {
             session_id: sess.id,
             stream_active: !!sess.stream_active,
         });
+        if (Object.prototype.hasOwnProperty.call(sess, 'goal')
+            && typeof setGoalStateForSession === 'function') {
+            setGoalStateForSession(sess.id, sess.goal || null);
+        }
         setSessionServerStreamActive(sess.id, !!sess.stream_active);
         if (sess.unread_result) {
             if (!sessionUnreadComplete.has(sess.id)) {
@@ -594,7 +678,11 @@ function renderSessionListError(message) {
 
 function applyOptimisticSessionUpdate(sessionId, patch) {
     const sid = String(sessionId || '');
-    const current = sessionStore.get(sid);
+    const current = sessionStore.get(sid) || (sessionStore.archivedLoaded
+        ? (sessionStore.archivedSessions || []).find(function (session) {
+            return session && String(session.id) === sid;
+        })
+        : null);
     if (!current) return null;
     const prev = Object.assign({}, current);
     const next = Object.assign({}, current, patch || {});
@@ -1292,7 +1380,17 @@ async function switchSession(sessionId, opts) {
     setSendButtonState();
     var restoredFromCache = false;
     var restoredRunningStream = false;
-    if (!opts.forceReload && ((restoredRunningStream = restoreStreamForRunningSession(sessionId)) || (restoredFromCache = restoreCachedSessionStream(sessionId)))) {
+    var sessionHasActiveServerRun = !!(
+        isSessionRunning(sessionId)
+        || (typeof isServerStreamActive === 'function' && isServerStreamActive(sessionId))
+        || (typeof isGoalActiveForSession === 'function' && isGoalActiveForSession(sessionId))
+    );
+    if (!opts.forceReload && (
+        (restoredRunningStream = restoreStreamForRunningSession(sessionId))
+        || (!sessionHadUnreadResult
+            && !sessionHasActiveServerRun
+            && (restoredFromCache = restoreCachedSessionStream(sessionId)))
+    )) {
         suppressTocDuringSessionLoad = false;
         hideLoading();
         rebuildToc({ localOnly: true });
