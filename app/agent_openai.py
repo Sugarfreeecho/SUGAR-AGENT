@@ -20,10 +20,11 @@ import logging
 import mimetypes
 import os
 import re
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from queue import Queue
+from queue import Empty, Queue
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from openai import OpenAI
@@ -34,8 +35,14 @@ from agent_think import strip_think_blocks
 
 logger = logging.getLogger(__name__)
 
-OPENAI_MAX_RETRIES = max(1, int(os.getenv("OPENAI_MAX_RETRIES", "3")))
+OPENAI_MAX_RETRIES = max(1, int(os.getenv("OPENAI_MAX_RETRIES", "4")))
 OPENAI_RETRY_BASE_SEC = float(os.getenv("OPENAI_RETRY_BASE_SEC", "1.0"))
+OPENAI_FIRST_TOKEN_HEDGE_TIMEOUT_SEC = max(
+    0.0, float(os.getenv("OPENAI_FIRST_TOKEN_HEDGE_TIMEOUT_SEC", "30"))
+)
+OPENAI_FIRST_TOKEN_HEDGE_MAX_RETRIES = max(
+    0, int(os.getenv("OPENAI_FIRST_TOKEN_HEDGE_MAX_RETRIES", "2"))
+)
 
 
 def _redact_runtime_log_text(value: Any) -> str:
@@ -1579,6 +1586,23 @@ def _tool_acc_to_parsed_list(tool_acc: Dict[int, Dict[str, str]]) -> Optional[Li
     return tool_calls or None
 
 
+def _stream_chunk_has_first_token(chunk: Any) -> bool:
+    """Whether a chunk contains the first useful model delta."""
+    choices = getattr(chunk, "choices", None) or []
+    for choice in choices:
+        delta = getattr(choice, "delta", None)
+        if not delta:
+            continue
+        reasoning, _ = _extract_reasoning_text_and_field(delta)
+        if reasoning:
+            return True
+        if getattr(delta, "content", None):
+            return True
+        if _tool_call_delta_payloads(getattr(delta, "tool_calls", None)):
+            return True
+    return False
+
+
 def run_chat_completion_stream_worker(
     sync_q: "Queue[Optional[Tuple[str, Any]]]",
     client: OpenAI,
@@ -1635,7 +1659,7 @@ def run_chat_completion_stream_worker(
         # include_usage 使末包返回 usage；部分兼容端会忽略或报错
         stream = None
         stream_iter = None
-        first_stream_chunk = _MISSING
+        prefetched_stream_chunks: List[Any] = []
 
         def abort_requested() -> bool:
             if should_abort is None:
@@ -1645,8 +1669,9 @@ def run_chat_completion_stream_worker(
             except Exception:
                 return False
 
-        def close_stream_quietly() -> None:
-            close_fn = getattr(stream, "close", None)
+        def close_stream_quietly(target: Any = _MISSING) -> None:
+            target_stream = stream if target is _MISSING else target
+            close_fn = getattr(target_stream, "close", None)
             if callable(close_fn):
                 try:
                     close_fn()
@@ -1667,29 +1692,214 @@ def run_chat_completion_stream_worker(
             max_tokens=max_tokens,
         )
         attempt = 0
+        hedges_used = 0
         while attempt < OPENAI_MAX_RETRIES:
             if abort_requested():
                 put_stream_timing("aborted_before_create", attempt=attempt + 1)
                 return
+            active_streams: Dict[str, Any] = {}
+            active_streams_lock = threading.Lock()
+            race_cancelled = threading.Event()
+            race_results: "Queue[Tuple[str, str, Any]]" = Queue()
+
+            def open_until_first_token(
+                request_role: str,
+                results: "Queue[Tuple[str, str, Any]]" = race_results,
+                cancelled: threading.Event = race_cancelled,
+                active: Dict[str, Any] = active_streams,
+                active_lock: threading.Lock = active_streams_lock,
+                request_kwargs: Dict[str, Any] = kwargs.copy(),
+                attempt_number: int = attempt + 1,
+            ) -> None:
+                local_stream = None
+                local_iter = None
+                chunks: List[Any] = []
+                try:
+                    try:
+                        local_stream = client.chat.completions.create(
+                            **request_kwargs, stream_options={"include_usage": True}
+                        )
+                    except Exception as stream_options_exc:
+                        if _is_media_input_error(stream_options_exc) or not _is_stream_options_error(
+                            stream_options_exc
+                        ):
+                            raise
+                        logger.debug(
+                            "流式 create 无 stream_options 或端点不支持: %s",
+                            _redact_runtime_log_text(stream_options_exc),
+                        )
+                        local_stream = client.chat.completions.create(**request_kwargs)
+                    with active_lock:
+                        active[request_role] = local_stream
+                    put_stream_timing(
+                        "stream_created",
+                        attempt=attempt_number,
+                        request_role=request_role,
+                    )
+                    if cancelled.is_set() or abort_requested():
+                        close_stream_quietly(local_stream)
+                        results.put((request_role, "aborted", None))
+                        return
+                    local_iter = iter(local_stream)
+                    for chunk in local_iter:
+                        chunks.append(chunk)
+                        if _stream_chunk_has_first_token(chunk):
+                            results.put(
+                                (
+                                    request_role,
+                                    "token",
+                                    (local_stream, local_iter, chunks),
+                                )
+                            )
+                            return
+                        if cancelled.is_set() or abort_requested():
+                            close_stream_quietly(local_stream)
+                            results.put((request_role, "aborted", None))
+                            return
+                    results.put(
+                        (
+                            request_role,
+                            "exhausted",
+                            (local_stream, local_iter, chunks),
+                        )
+                    )
+                except Exception as exc:
+                    close_stream_quietly(local_stream)
+                    results.put((request_role, "error", exc))
+
+            def start_first_token_request(request_role: str) -> None:
+                threading.Thread(
+                    target=open_until_first_token,
+                    args=(request_role,),
+                    name=f"llm-first-token-{request_role}",
+                    daemon=True,
+                ).start()
+
             try:
                 put_stream_timing("create_attempt_start", attempt=attempt + 1)
-                try:
-                    stream = client.chat.completions.create(
-                        **kwargs, stream_options={"include_usage": True}
+                start_first_token_request("primary")
+                race_started_at = time.monotonic()
+                attempt_hedges_started = 0
+                outcomes: Dict[str, Tuple[str, Any]] = {}
+                winner: Optional[Tuple[str, str, Any]] = None
+                while winner is None:
+                    if abort_requested():
+                        race_cancelled.set()
+                        with active_streams_lock:
+                            streams_to_close = list(active_streams.values())
+                        for pending_stream in streams_to_close:
+                            close_stream_quietly(pending_stream)
+                        put_stream_timing("aborted_waiting_first_token", attempt=attempt + 1)
+                        return
+                    elapsed = time.monotonic() - race_started_at
+                    try:
+                        result = race_results.get_nowait()
+                    except Empty:
+                        if (
+                            hedges_used < OPENAI_FIRST_TOKEN_HEDGE_MAX_RETRIES
+                            and OPENAI_FIRST_TOKEN_HEDGE_TIMEOUT_SEC > 0
+                            and elapsed
+                            >= OPENAI_FIRST_TOKEN_HEDGE_TIMEOUT_SEC
+                            * (attempt_hedges_started + 1)
+                        ):
+                            attempt_hedges_started += 1
+                            hedges_used += 1
+                            hedge_role = f"hedge_{hedges_used}"
+                            put_stream_timing(
+                                "first_token_hedge_started",
+                                attempt=attempt + 1,
+                                timeout_ms=int(OPENAI_FIRST_TOKEN_HEDGE_TIMEOUT_SEC * 1000),
+                                hedge_index=hedges_used,
+                                hedge_max=OPENAI_FIRST_TOKEN_HEDGE_MAX_RETRIES,
+                                request_role=hedge_role,
+                            )
+                            logger.warning(
+                                "模型 %s 首 token 持续等待，已发起并行 API 重试 %s/%s",
+                                _masked_model_label(model),
+                                hedges_used,
+                                OPENAI_FIRST_TOKEN_HEDGE_MAX_RETRIES,
+                            )
+                            start_first_token_request(hedge_role)
+                        wait_timeout = 0.05
+                        if (
+                            hedges_used < OPENAI_FIRST_TOKEN_HEDGE_MAX_RETRIES
+                            and OPENAI_FIRST_TOKEN_HEDGE_TIMEOUT_SEC > 0
+                        ):
+                            next_hedge_at = (
+                                OPENAI_FIRST_TOKEN_HEDGE_TIMEOUT_SEC
+                                * (attempt_hedges_started + 1)
+                            )
+                            wait_timeout = min(
+                                wait_timeout,
+                                max(0.001, next_hedge_at - elapsed),
+                            )
+                        try:
+                            result = race_results.get(timeout=wait_timeout)
+                        except Empty:
+                            continue
+                    role, outcome, payload = result
+                    outcomes[role] = (outcome, payload)
+                    if outcome == "token":
+                        winner = result
+                        break
+                    if attempt_hedges_started == 0:
+                        if outcome == "error":
+                            raise payload
+                        if outcome == "exhausted":
+                            winner = result
+                            break
+                        continue
+                    if len(outcomes) < 1 + attempt_hedges_started:
+                        continue
+                    exhausted = next(
+                        (
+                            (known_role, known_outcome, known_payload)
+                            for known_role, (known_outcome, known_payload) in outcomes.items()
+                            if known_outcome == "exhausted"
+                        ),
+                        None,
                     )
-                except Exception as e1:
-                    if _is_media_input_error(e1) or not _is_stream_options_error(e1):
-                        raise
-                    logger.debug("流式 create 无 stream_options 或端点不支持: %s", _redact_runtime_log_text(e1))
-                    stream = client.chat.completions.create(**kwargs)
-                put_stream_timing("stream_created", attempt=attempt + 1)
-                stream_iter = iter(stream)
-                try:
-                    first_stream_chunk = next(stream_iter)
-                except StopIteration:
-                    first_stream_chunk = _MISSING
+                    if exhausted is not None:
+                        winner = exhausted
+                        break
+                    error = next(
+                        (
+                            known_payload
+                            for known_outcome, known_payload in outcomes.values()
+                            if known_outcome == "error"
+                        ),
+                        RuntimeError("并行流式请求均未返回首 token"),
+                    )
+                    raise error
+
+                assert winner is not None
+                winner_role, winner_outcome, winner_payload = winner
+                if winner_outcome not in {"token", "exhausted"}:
+                    raise RuntimeError("流式请求未产生可用结果")
+                stream, stream_iter, prefetched_stream_chunks = winner_payload
+                race_cancelled.set()
+                with active_streams_lock:
+                    losing_streams = [
+                        candidate_stream
+                        for role, candidate_stream in active_streams.items()
+                        if role != winner_role
+                    ]
+                for losing_stream in losing_streams:
+                    close_stream_quietly(losing_stream)
+                if attempt_hedges_started:
+                    put_stream_timing(
+                        "first_token_hedge_winner",
+                        attempt=attempt + 1,
+                        winner=winner_role,
+                        hedges_started=attempt_hedges_started,
+                    )
                 break
             except Exception as e:
+                race_cancelled.set()
+                with active_streams_lock:
+                    streams_to_close = list(active_streams.values())
+                for pending_stream in streams_to_close:
+                    close_stream_quietly(pending_stream)
                 close_stream_quietly()
                 if _is_media_input_error(e) and not media_fallback_done:
                     media_fallback_done = True
@@ -1726,9 +1936,9 @@ def run_chat_completion_stream_worker(
                 attempt += 1
         if stream is None:
             raise RuntimeError("stream 创建失败")
-        reasoning_buf = ""
+        reasoning_parts: List[str] = []
         reasoning_field: Optional[str] = None
-        content_buf = ""
+        content_parts: List[str] = []
         tool_acc: Dict[int, Dict[str, str]] = {}
         content_boundary_filter = _NativeBoundaryStreamFilter()
         reasoning_boundary_filter = _NativeBoundaryStreamFilter()
@@ -1783,8 +1993,7 @@ def run_chat_completion_stream_worker(
             except Exception:
                 pass
         def iter_stream_chunks():
-            if first_stream_chunk is not _MISSING:
-                yield first_stream_chunk
+            yield from prefetched_stream_chunks
             if stream_iter is not None:
                 yield from stream_iter
 
@@ -1794,22 +2003,25 @@ def run_chat_completion_stream_worker(
                 put_stream_timing("aborted_during_stream")
                 return
             chunk_count += 1
-            try:
-                raw_chunk = chunk.model_dump(mode="json") if hasattr(chunk, "model_dump") else str(chunk)
-                response_payload_bytes_estimated += len(
-                    json.dumps(raw_chunk, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
-                )
-            except Exception:
-                pass
+            # This is intentionally an estimate: serializing the complete SDK
+            # object for every token chunk is far more expensive than the
+            # dashboard metric is worth.  Account for lightweight SSE/JSON
+            # framing here and add the actual delta payload bytes below.
+            response_payload_bytes_estimated += 48
             if not first_chunk_seen:
                 first_chunk_seen = True
                 put_stream_timing("first_chunk", chunk_count=chunk_count)
             chunk_model = str(getattr(chunk, "model", None) or "").strip()
             if chunk_model:
                 actual_model = chunk_model
+                response_payload_bytes_estimated += len(chunk_model.encode("utf-8"))
             uo = getattr(chunk, "usage", None)
             if uo is not None:
                 last_usage = extract_usage_dict(uo)
+                response_payload_bytes_estimated += 16 + sum(
+                    len(str(key)) + len(str(value))
+                    for key, value in (last_usage or {}).items()
+                )
                 usage_chunk_at_ms = api_elapsed_ms()
                 put_stream_timing("usage_chunk", chunk_count=chunk_count)
             if not chunk.choices:
@@ -1828,7 +2040,8 @@ def run_chat_completion_stream_worker(
             if rc:
                 piece = rc if isinstance(rc, str) else str(rc)
                 last_delta_at_ms = api_elapsed_ms()
-                reasoning_buf += piece
+                reasoning_parts.append(piece)
+                response_payload_bytes_estimated += len(piece.encode("utf-8"))
                 visible_piece = reasoning_dsml_filter.feed(
                     reasoning_boundary_filter.feed(piece)
                 )
@@ -1848,7 +2061,8 @@ def run_chat_completion_stream_worker(
             if ct:
                 piece = ct if isinstance(ct, str) else str(ct)
                 last_delta_at_ms = api_elapsed_ms()
-                content_buf += piece
+                content_parts.append(piece)
+                response_payload_bytes_estimated += len(piece.encode("utf-8"))
                 visible_piece = content_dsml_filter.feed(
                     content_boundary_filter.feed(piece)
                 )
@@ -1863,8 +2077,14 @@ def run_chat_completion_stream_worker(
                 if visible_piece:
                     sync_q.put(("content", visible_piece))
             delta_tool_calls = getattr(delta, "tool_calls", None)
-            for payload in _tool_call_delta_payloads(delta_tool_calls):
+            tool_delta_payloads = _tool_call_delta_payloads(delta_tool_calls)
+            for payload in tool_delta_payloads:
                 last_delta_at_ms = api_elapsed_ms()
+                response_payload_bytes_estimated += 24 + sum(
+                    len(str(value).encode("utf-8"))
+                    for value in payload.values()
+                    if value is not None
+                )
                 if not first_delta_seen:
                     first_delta_seen = True
                     first_delta_at_ms = last_delta_at_ms
@@ -1903,8 +2123,8 @@ def run_chat_completion_stream_worker(
             sync_q.put(("content", content_tail))
         tool_calls_list = _tool_acc_to_parsed_list(tool_acc)
         content_final, reasoning_final, tool_calls_list, recovered_dsml_calls = _repair_dsml_turn(
-            _strip_native_boundary_tokens(content_buf),
-            _strip_native_boundary_tokens(reasoning_buf).strip() or None,
+            _strip_native_boundary_tokens("".join(content_parts)),
+            _strip_native_boundary_tokens("".join(reasoning_parts)).strip() or None,
             tools,
             tool_calls_list,
         )
