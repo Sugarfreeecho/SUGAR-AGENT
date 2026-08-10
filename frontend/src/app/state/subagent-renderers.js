@@ -59,6 +59,7 @@ function subagentCardViewModel(n) {
         taskStatus: n.task_status || n.status || '',
         hasFinalKnown: Object.prototype.hasOwnProperty.call(n, 'has_final'),
         hasFinal: !!n.has_final,
+        modelProfileId: n.model_profile_id || '',
         executorModel: n.executor_model || '',
     };
 }
@@ -68,7 +69,9 @@ function renderSubagentCardHtml(n) {
     if (!vm.id) return '';
     var stopBtn = vm.running ? '<button type="button" class="subagent-card-menu-item subagent-card-stop" role="menuitem" data-agent-id="' + escapeHtml(vm.id) + '">停止</button>' : '';
     var outputBtn = vm.outputFile ? '<button type="button" class="subagent-card-menu-item subagent-card-output" role="menuitem" data-agent-id="' + escapeHtml(vm.id) + '">查看输出</button>' : '';
+    var switchModelBtn = vm.virtualTask ? '' : '<button type="button" class="subagent-card-menu-item subagent-card-switch-model" role="menuitem" data-agent-id="' + escapeHtml(vm.id) + '">切换模型</button>';
     var html = '<div class="process-aggregate subagent-grid-card" data-agent-id="' + escapeHtml(vm.id) + '"';
+    if (vm.modelProfileId) html += ' data-model-profile-id="' + escapeHtml(String(vm.modelProfileId)) + '"';
     if (vm.executorModel) html += ' data-executor-model="' + escapeHtml(String(vm.executorModel)) + '"';
     if (vm.outputFile) html += ' data-output-file="1"';
     if (vm.virtualTask) html += ' data-virtual-task="1"';
@@ -94,6 +97,7 @@ function renderSubagentCardHtml(n) {
         + '<button type="button" class="subagent-card-menu-btn" aria-label="更多操作" aria-expanded="false" data-ui-tip="更多操作">' + subagentMoreDotsHtml() + '</button>'
         + '<span class="subagent-card-menu-pop" role="menu">'
         + outputBtn
+        + switchModelBtn
         + stopBtn
         + '<button type="button" class="subagent-card-menu-item subagent-card-delete" role="menuitem" data-agent-id="' + escapeHtml(vm.id) + '">删除</button>'
         + '</span></span>';
@@ -183,6 +187,12 @@ function applySubagentNodeMetaToCard(card, n) {
             var panel = card.querySelector('.subagent-output-panel');
             if (panel) panel.remove();
         }
+        var switchExisting = actions.querySelector('.subagent-card-switch-model');
+        if (!n.virtual_task && !switchExisting) {
+            ensureSubagentMenuButton(menu, 'subagent-card-switch-model', '切换模型', id);
+        } else if (n.virtual_task && switchExisting) {
+            switchExisting.remove();
+        }
         ensureSubagentMenuButton(menu, 'subagent-card-delete', '删除', id);
     }
     if (n.task_status || n.status) card.dataset.taskStatus = String(n.task_status || n.status);
@@ -190,6 +200,7 @@ function applySubagentNodeMetaToCard(card, n) {
         card.dataset.executorModel = String(n.executor_model);
         if (!card.dataset.procCacheModel) card.dataset.procCacheModel = String(n.executor_model);
     }
+    if (n.model_profile_id) card.dataset.modelProfileId = String(n.model_profile_id);
     if (running && !card.dataset.procStartedAt) card.dataset.procStartedAt = String(procNow());
     if (!running) {
         card.dataset.procEndedAt = String(procNow());

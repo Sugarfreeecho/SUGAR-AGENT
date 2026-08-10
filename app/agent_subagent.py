@@ -302,6 +302,165 @@ class SubagentTaskRegistry:
 subagent_registry = SubagentTaskRegistry()
 
 
+async def switch_subagent_model_profile(
+    parent_session_id: str,
+    child_session_id: str,
+    profile_id: str,
+    *,
+    instruction: str = "",
+    source_run_id: str = "",
+    requested_by: str = "user",
+) -> Dict[str, Any]:
+    """Switch an existing subagent at a safe ReAct boundary.
+
+    The active provider request is interrupted, its durable partial checkpoint is
+    preserved by ``agent_loop``, and the same subagent continues with the target
+    profile. This keeps the child ID, history, worktree, and task ownership.
+    """
+    child_id = session_manager.validate_subagent_resume(
+        parent_session_id, child_session_id
+    )
+    if not child_id:
+        return {
+            "ok": False,
+            "error": "invalid subagent",
+            "status_code": 404,
+        }
+    target_profile_id = str(profile_id or "").strip()
+    choices = list_executor_model_profile_choices()
+    target = next(
+        (
+            row for row in choices
+            if str(row.get("id") or "").strip() == target_profile_id
+        ),
+        None,
+    )
+    if not isinstance(target, dict):
+        return {
+            "ok": False,
+            "error": f"unknown model_profile_id={target_profile_id!r}",
+            "available_profile_ids": [
+                str(row.get("id") or "").strip()
+                for row in choices
+                if str(row.get("id") or "").strip()
+            ],
+            "status_code": 404,
+        }
+
+    try:
+        current_meta = session_manager._load_metadata(child_id) or {}
+    except Exception:
+        current_meta = {}
+    previous_profile_id = str(current_meta.get("model_profile_id") or "").strip()
+    target_model = str(target.get("model") or "").strip()
+    running = subagent_registry.is_running(child_id)
+    if previous_profile_id == target_profile_id and not str(instruction or "").strip():
+        return {
+            "ok": True,
+            "agent_id": child_id,
+            "profile_id": target_profile_id,
+            "model": target_model,
+            "running": running,
+            "deduplicated": True,
+            "interrupted_current_step": False,
+            "continuation_queued": False,
+        }
+
+    switch_id = uuid.uuid4().hex
+    try:
+        record = session_manager.switch_subagent_model_profile(
+            child_id,
+            target_profile_id,
+            executor_model=target_model,
+            switch_id=switch_id,
+            requested_by=requested_by,
+        )
+        session_manager.upsert_subagent_task(
+            parent_session_id,
+            child_id,
+            {
+                "model_profile_id": target_profile_id,
+                "executor_model": target_model,
+                "last_model_switch": record,
+                "model_switch_status": "interrupting" if running else "ready",
+            },
+        )
+        session_manager.append_ui_event(
+            child_id,
+            {
+                "type": "status",
+                "content": (
+                    f"Model switched to profile {target_profile_id}"
+                    + (f" ({target_model})" if target_model else "")
+                    + ("; continuing current task." if running else "; applies on next resume.")
+                ),
+                "model_switch": True,
+                "profile_id": target_profile_id,
+                "model": target_model,
+                "switch_id": switch_id,
+            },
+        )
+    except Exception as exc:
+        logger.exception("switch subagent model profile failed: %s", exc)
+        return {
+            "ok": False,
+            "error": str(exc),
+            "status_code": 500,
+        }
+
+    queued = False
+    aborted = False
+    queue_error = ""
+    if running:
+        from agent_loop import abort_session_steer_run, enqueue_session_steer
+
+        continuation = (
+            "## Runtime model switch\n"
+            f"The user switched this subagent to model profile `{target_profile_id}`"
+            + (f" (`{target_model}`)" if target_model else "")
+            + ". Continue the same assigned task from the current durable state. "
+            "Preserve completed work, the existing worktree, and prior verified findings; "
+            "do not restart completed steps solely because the model changed."
+        )
+        extra_instruction = str(instruction or "").strip()
+        if extra_instruction:
+            continuation += "\n\nAdditional instruction from the user or parent agent:\n" + extra_instruction
+        queued_result = enqueue_session_steer(
+            child_id,
+            continuation,
+            client_id=f"model-switch-{switch_id}",
+            source_run_id=str(source_run_id or ""),
+            mode="interrupt",
+        )
+        queued = bool(queued_result.get("ok"))
+        queue_error = str(queued_result.get("error") or "") if not queued else ""
+        if queued:
+            aborted = abort_session_steer_run(child_id, reason="model_switch")
+        session_manager.upsert_subagent_task(
+            parent_session_id,
+            child_id,
+            {
+                "model_switch_status": (
+                    "continuation_queued" if queued else "profile_updated"
+                ),
+                "model_switch_queue_error": queue_error,
+            },
+        )
+
+    return {
+        "ok": True,
+        "agent_id": child_id,
+        "profile_id": target_profile_id,
+        "model": target_model,
+        "previous_profile_id": previous_profile_id,
+        "running": running,
+        "switch_id": switch_id,
+        "interrupted_current_step": aborted,
+        "continuation_queued": queued,
+        **({"warning": queue_error} if queue_error else {}),
+    }
+
+
 def _patch_subagent_run_lifecycle(
     child_id: str,
     *,
@@ -1679,6 +1838,7 @@ async def _run_single_subagent(
             "collect",
             "interrupt",
             "steer",
+            "switch_model",
             "worktree",
         }
         if action not in valid_actions:
@@ -1686,7 +1846,7 @@ async def _run_single_subagent(
         resume_for_action = str(tool_args.get("resume") or "").strip()
         if action == "start" and resume_for_action:
             return "Error: task action=start must not include resume; use action=resume."
-        if action in {"resume", "interrupt", "steer", "worktree"} and not resume_for_action:
+        if action in {"resume", "interrupt", "steer", "switch_model", "worktree"} and not resume_for_action:
             return f"Error: task action={action} requires resume=<subagent id>."
         if action == "resume" and not str(tool_args.get("prompt") or "").strip():
             return (
@@ -1699,10 +1859,38 @@ async def _run_single_subagent(
         creates_new_session = action == "start" or (
             action == "resume" and resume_for_action.lower() == "self"
         )
-        if not creates_new_session and requested_profile_id:
+        if not creates_new_session and requested_profile_id and action != "switch_model":
             return (
                 f"Error: task action={action} cannot change the model of an existing subagent; "
-                "set model_profile_id only when creating a new subagent."
+                "use action=switch_model for an existing subagent."
+            )
+        if action == "switch_model":
+            if not requested_profile_id:
+                return "Error: task action=switch_model requires model_profile_id."
+            result = await switch_subagent_model_profile(
+                parent_session_id,
+                resume_for_action,
+                requested_profile_id,
+                instruction=str(tool_args.get("prompt") or ""),
+                source_run_id=str(parent_run_id or ""),
+                requested_by="parent_agent",
+            )
+            if not result.get("ok"):
+                return f"Error: could not switch subagent model: {result.get('error')}"
+            if result.get("deduplicated"):
+                return (
+                    f"Subagent {result.get('agent_id')} already uses model profile "
+                    f"{requested_profile_id!r}."
+                )
+            phase = (
+                "the active generation was interrupted at a safe checkpoint and the same task was queued to continue"
+                if result.get("continuation_queued")
+                else "the profile was updated and will apply at the next model call"
+            )
+            return (
+                f"Switched subagent {result.get('agent_id')} from model profile "
+                f"{result.get('previous_profile_id') or '(inherited)'} to {requested_profile_id}; "
+                f"{phase}. The subagent ID, history, and worktree were preserved."
             )
         if action == "status":
             return _format_subagent_status_report(parent_session_id, resume_for_action)

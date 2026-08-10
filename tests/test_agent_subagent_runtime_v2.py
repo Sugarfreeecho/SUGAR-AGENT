@@ -42,6 +42,131 @@ def test_task_action_resume_requires_a_real_followup_prompt():
     assert "action=collect" in result
 
 
+def test_task_action_switch_model_routes_to_existing_subagent(monkeypatch):
+    import agent_subagent
+
+    captured = {}
+
+    async def fake_switch(parent, child, profile_id, **kwargs):
+        captured.update({
+            "parent": parent,
+            "child": child,
+            "profile_id": profile_id,
+            **kwargs,
+        })
+        return {
+            "ok": True,
+            "agent_id": child,
+            "previous_profile_id": "profile-fast",
+            "continuation_queued": True,
+        }
+
+    monkeypatch.setattr(agent_subagent, "switch_subagent_model_profile", fake_switch)
+    result = asyncio.run(
+        agent_subagent._run_single_subagent(
+            tool_args={
+                "action": "switch_model",
+                "resume": "child-1",
+                "model_profile_id": "profile-deep",
+                "prompt": "Keep the completed audit evidence.",
+            },
+            parent_session_id="parent-1",
+            parent_run_id="run-parent",
+        )
+    )
+
+    assert "Switched subagent child-1" in result
+    assert "same task was queued to continue" in result
+    assert captured == {
+        "parent": "parent-1",
+        "child": "child-1",
+        "profile_id": "profile-deep",
+        "instruction": "Keep the completed audit evidence.",
+        "source_run_id": "run-parent",
+        "requested_by": "parent_agent",
+    }
+
+
+def test_running_subagent_model_switch_interrupts_at_safe_boundary(monkeypatch):
+    import agent_loop
+    import agent_subagent
+
+    captured = {"task_patches": [], "events": []}
+
+    class _SessionManager:
+        def validate_subagent_resume(self, parent, child):
+            return child if parent == "parent" and child == "child" else None
+
+        def _load_metadata(self, child):
+            assert child == "child"
+            return {"model_profile_id": "profile-fast", "is_subagent": True}
+
+        def switch_subagent_model_profile(self, child, profile_id, **kwargs):
+            captured["metadata_switch"] = (child, profile_id, kwargs)
+            return {
+                "switch_id": kwargs["switch_id"],
+                "from_profile_id": "profile-fast",
+                "to_profile_id": profile_id,
+            }
+
+        def upsert_subagent_task(self, parent, child, patch):
+            captured["task_patches"].append((parent, child, dict(patch)))
+
+        def append_ui_event(self, child, event):
+            captured["events"].append((child, dict(event)))
+
+    class _Registry:
+        @staticmethod
+        def is_running(child):
+            return child == "child"
+
+    def fake_enqueue(session_id, message, **kwargs):
+        captured["steer"] = (session_id, message, kwargs)
+        return {"ok": True, "item": {"id": "steer-1"}}
+
+    monkeypatch.setattr(agent_subagent, "session_manager", _SessionManager())
+    monkeypatch.setattr(agent_subagent, "subagent_registry", _Registry())
+    monkeypatch.setattr(
+        agent_subagent,
+        "list_executor_model_profile_choices",
+        lambda: [
+            {"id": "profile-fast", "model": "fast-model"},
+            {"id": "profile-deep", "model": "deep-model"},
+        ],
+    )
+    monkeypatch.setattr(agent_loop, "enqueue_session_steer", fake_enqueue)
+    monkeypatch.setattr(
+        agent_loop,
+        "abort_session_steer_run",
+        lambda session_id, reason="": captured.setdefault("abort", (session_id, reason)) is not None,
+    )
+
+    result = asyncio.run(
+        agent_subagent.switch_subagent_model_profile(
+            "parent",
+            "child",
+            "profile-deep",
+            instruction="Continue with the existing findings.",
+            requested_by="user",
+        )
+    )
+
+    assert result["ok"] is True
+    assert result["agent_id"] == "child"
+    assert result["previous_profile_id"] == "profile-fast"
+    assert result["continuation_queued"] is True
+    assert result["interrupted_current_step"] is True
+    assert captured["metadata_switch"][0:2] == ("child", "profile-deep")
+    assert captured["metadata_switch"][2]["executor_model"] == "deep-model"
+    assert captured["steer"][0] == "child"
+    assert captured["steer"][2]["mode"] == "interrupt"
+    assert "same assigned task" in captured["steer"][1]
+    assert "Continue with the existing findings." in captured["steer"][1]
+    assert captured["abort"] == ("child", "model_switch")
+    assert captured["task_patches"][-1][2]["model_switch_status"] == "continuation_queued"
+    assert captured["events"][0][1]["model_switch"] is True
+
+
 def test_task_schema_injects_registered_profiles_without_mutating_static_schema(monkeypatch):
     import agent_subagent
     import agent_tools
@@ -80,6 +205,7 @@ def test_task_schema_injects_registered_profiles_without_mutating_static_schema(
     assert "低成本/多并发：批量总结和并行探索" in injected_profile["description"]
     assert "omit by default" in injected_profile["description"]
     assert "enum" not in static_profile
+    assert "switch_model" in injected_task["parameters"]["properties"]["action"]["enum"]
 
 
 def test_task_selected_profile_is_bound_to_created_subagent(monkeypatch):

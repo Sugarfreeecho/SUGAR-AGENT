@@ -1,3 +1,75 @@
+var subagentModelSwitchBusy = Object.create(null);
+
+async function chooseSubagentModelProfile(card, sessionId) {
+    if (!card || !sessionId) return;
+    var agentId = card.getAttribute('data-agent-id') || '';
+    if (!agentId || subagentModelSwitchBusy[agentId]) return;
+    try {
+        if (!modelProfilesCache) await loadModelProfilesForSwitcher();
+        var profiles = allProfiles();
+        if (!profiles.length) {
+            await showUiAlert({ title: '无法切换模型', message: '没有已启用且可用的模型配置。', variant: 'error' });
+            return;
+        }
+        var currentProfileId = String(card.dataset.modelProfileId || '');
+        var selected = await openUiModal({
+            title: '切换 Subagent 模型',
+            subtitle: String(card.dataset.description || agentId.slice(0, 8)),
+            message: card.dataset.subagentRunning === '1'
+                ? '当前生成会在安全检查点停止，并由新模型继续同一任务。Subagent ID、历史记录和工作区不会改变。'
+                : '该模型将在此 Subagent 下次继续运行时生效。',
+            selectLabel: '目标模型配置',
+            selectValue: currentProfileId || String(profiles[0].id || ''),
+            selectOptions: profiles.map(function (profile) {
+                return {
+                    value: String(profile.id || ''),
+                    label: profileLabel(profile) + ' · ' + profileMeta(profile),
+                };
+            }),
+            confirmText: '切换并继续',
+            cancelText: '取消',
+        });
+        if (!selected || String(selected) === currentProfileId) return;
+        subagentModelSwitchBusy[agentId] = true;
+        var response = await fetch(
+            '/sessions/' + encodeURIComponent(sessionId)
+                + '/subagents/' + encodeURIComponent(agentId) + '/model_profile',
+            {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                credentials: 'same-origin',
+                body: JSON.stringify({ profile_id: String(selected) }),
+            }
+        );
+        var data = await response.json();
+        if (!response.ok || !data || !data.ok) {
+            throw new Error((data && data.error) || ('HTTP ' + response.status));
+        }
+        card.dataset.modelProfileId = String(data.profile_id || selected);
+        if (data.model) {
+            card.dataset.executorModel = String(data.model);
+            card.dataset.procCacheModel = String(data.model);
+        }
+        refreshSubagentCardStats(card);
+        scheduleRefreshSubagentTreePanel(sessionId, 0);
+        await showUiAlert({
+            title: data.continuation_queued ? '模型已切换，任务继续运行' : '模型配置已更新',
+            message: data.continuation_queued
+                ? '当前生成已在安全边界交接给新模型。'
+                : '新模型将在下一次模型调用时生效。',
+            autoCloseMs: 2200,
+        });
+    } catch (err) {
+        await showUiAlert({
+            title: 'Subagent 模型切换失败',
+            message: String((err && err.message) || err || 'unknown error'),
+            variant: 'error',
+        });
+    } finally {
+        delete subagentModelSwitchBusy[agentId];
+    }
+}
+
 async function toggleSubagentOutputPanel(card, sessionId) {
     if (!card || !sessionId) return;
     var agentId = card.getAttribute('data-agent-id') || '';
@@ -90,6 +162,17 @@ function bindSubagentGridActions(grid, sessionId) {
                 btn.disabled = false;
                 showUiAlert({ title: '删除失败', message: String((err && err.message) || err || 'unknown error'), variant: 'error' });
             }
+        });
+    });
+    grid.querySelectorAll('.subagent-card-switch-model').forEach(function (btn) {
+        if (btn.dataset.subagentSwitchModelBound) return;
+        btn.dataset.subagentSwitchModelBound = '1';
+        btn.addEventListener('click', async function (e) {
+            e.stopPropagation();
+            var card = btn.closest('.subagent-grid-card');
+            var menu = btn.closest('.subagent-card-menu');
+            if (menu) menu.classList.remove('is-open');
+            if (card) await chooseSubagentModelProfile(card, sessionId);
         });
     });
     grid.querySelectorAll('.subagent-card-menu-btn').forEach(function (btn) {
