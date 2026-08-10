@@ -8,6 +8,7 @@ function humanInteractionSessionState(sessionId) {
             interactions: Object.create(null),
             approvals: Object.create(null),
             loaded: false,
+            refreshEpoch: 0,
         };
     }
     return humanInteractionStoreBySession[sid];
@@ -44,6 +45,7 @@ function applyHumanInteractionEvent(sessionId, event) {
     var id = humanInteractionId(event, kind);
     if (!id) return null;
     var state = humanInteractionSessionState(sid);
+    state.refreshEpoch += 1;
     var collection = kind === 'approval' ? state.approvals : state.interactions;
     var previous = collection[id] || {};
     var terminalStatuses = { resolved: true, cancelled: true, expired: true };
@@ -92,15 +94,15 @@ function pendingHumanQuestions(sessionId) {
     return pendingHumanInteractionRecords(sessionId).filter(function (row) { return row.kind === 'question'; });
 }
 
-async function confirmAndCancelPendingHumanQuestionsForMessage(sessionId) {
+async function confirmAndCancelPendingHumanQuestionsForHistoryMutation(sessionId) {
     var sid = String(sessionId || '');
     var rows = pendingHumanQuestions(sid);
     if (!rows.length) return true;
     var confirmed = typeof openUiModal === 'function'
         ? await openUiModal({
-            title: '发送新消息并取消当前问题？',
-            message: 'Agent 正在等待你的回答。发送新消息会取消当前问题，并用新消息接管当前任务。',
-            confirmText: '取消问题并发送',
+            title: '修改历史并取消待回答问题？',
+            message: '这次修改会移除当前问题所属的对话历史。继续前必须先取消待回答问题，避免它变成无法处理的待办。',
+            confirmText: '取消问题并继续',
             cancelText: '返回回答问题',
         })
         : false;
@@ -110,7 +112,7 @@ async function confirmAndCancelPendingHumanQuestionsForMessage(sessionId) {
             var response = await fetch('/sessions/' + encodeURIComponent(sid) + '/interactions/' + encodeURIComponent(row.interaction_id) + '/cancel', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ reason: 'superseded_by_user_message' }),
+                body: JSON.stringify({ reason: 'superseded_by_history_mutation' }),
             });
             var data = await response.json();
             if (!response.ok || !data.ok) throw new Error(data.error || ('HTTP ' + response.status));
@@ -125,8 +127,8 @@ async function confirmAndCancelPendingHumanQuestionsForMessage(sessionId) {
     } catch (err) {
         if (typeof showUiAlert === 'function') {
             showUiAlert({
-                title: '无法发送新消息',
-                message: '取消当前问题失败：' + String(err && err.message ? err.message : err),
+                title: '无法修改历史',
+                message: '取消待回答问题失败：' + String(err && err.message ? err.message : err),
                 variant: 'error',
             });
         }
@@ -141,6 +143,7 @@ function syncHumanInteractionSessionSummary(sessionId) {
     if (session) session.pending_human_interactions = counts;
     updateHumanInteractionSessionBadge(sid);
     updateHumanInteractionBanner(currentSessionId);
+    if (typeof renderFollowupQueue === 'function') renderFollowupQueue(sid);
 }
 
 function sessionPendingHumanCounts(sessionId) {
@@ -360,6 +363,30 @@ function attachAllHumanInteractionCards(stream) {
     });
 }
 
+function ensurePendingQuestionToolRow(ctx, record, sessionId) {
+    if (!record || record.kind === 'approval' || record.status !== 'pending') return false;
+    var toolCallId = String(record.tool_call_id || '');
+    var stream = ctx && ctx.stream ? ctx.stream : null;
+    if (!toolCallId || !stream || typeof appendToolPendingRow !== 'function') return false;
+    var existing = null;
+    if (typeof CSS !== 'undefined' && CSS.escape) {
+        try {
+            existing = stream.querySelector('.feed-item.feed--tool[data-tool-call-id="' + CSS.escape(toolCallId) + '"]');
+        } catch (e) { existing = null; }
+    }
+    if (!existing) {
+        appendToolPendingRow(ctx, {
+            type: 'tool_pending',
+            ephemeral: true,
+            tool: 'ask_user',
+            args: { questions: record.questions || [] },
+            command_preview: 'ask_user',
+            tool_call_id: toolCallId,
+        }, sessionId);
+    }
+    return true;
+}
+
 function autoReviewStatusElement(stream, toolCallId) {
     var slot = humanInteractionToolSlot(stream, toolCallId);
     if (!slot) return null;
@@ -503,7 +530,7 @@ function humanQuestionPaneState(pane) {
     var otherMark = pane.querySelector('.human-other-mark');
     var otherInput = pane.querySelector('.human-other-input');
     var otherSelected = !!(otherMark && otherMark.checked);
-    var otherText = otherSelected && otherInput ? otherInput.value.trim() : '';
+    var otherText = otherSelected && otherInput ? normalizeSendableText(otherInput.value) : '';
     return {
         selected: selected,
         otherSelected: otherSelected,
@@ -753,7 +780,7 @@ function createHumanQuestionCard(record, sessionId) {
     setHumanQuestionStep(card, draft && Number.isFinite(Number(draft.step)) ? Number(draft.step) : 0);
     card.dataset.draftReady = '1';
     card.addEventListener('keydown', function (event) {
-        if (event.key !== 'Enter' || (!event.ctrlKey && !event.metaKey)) return;
+        if (!isInputSubmitShortcut(event, 'editor')) return;
         event.preventDefault();
         if (questions.length > 1 && card.dataset.review !== '1') showHumanQuestionReview(card);
         else void submitHumanQuestion(card);
@@ -768,7 +795,7 @@ function collectHumanQuestionAnswers(card) {
         var selected = Array.from(pane.querySelectorAll('input[data-option-id]:checked')).map(function (input) { return input.dataset.optionId; });
         var otherMark = pane.querySelector('.human-other-mark');
         var otherInput = pane.querySelector('.human-other-input');
-        var otherText = otherMark && otherMark.checked && otherInput ? otherInput.value.trim() : '';
+        var otherText = otherMark && otherMark.checked && otherInput ? normalizeSendableText(otherInput.value) : '';
         if ((!selected.length && !otherText || (otherMark && otherMark.checked && !otherText)) && !invalidPane) invalidPane = pane;
         answers.push({
             question_id: pane.dataset.questionId || '',
@@ -809,6 +836,9 @@ async function submitHumanQuestion(card) {
     setHumanInteractionSubmitting(card, true, '正在提交…');
     if (error) error.textContent = '';
     try {
+        var recoveryAfterIndex = typeof getUiEventCount === 'function'
+            ? await getUiEventCount(card.dataset.sessionId, { timeoutMs: 5000 })
+            : 0;
         var response = await fetch('/sessions/' + encodeURIComponent(card.dataset.sessionId) + '/interactions/' + encodeURIComponent(card.dataset.interactionId) + '/resolve', {
             method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ answers: collected.answers }),
         });
@@ -817,6 +847,9 @@ async function submitHumanQuestion(card) {
         clearHumanInteractionDraft(card.dataset.sessionId, card.dataset.interactionId, card.dataset.requestVersion);
         var record = applyHumanInteractionEvent(card.dataset.sessionId, Object.assign({ type: 'interaction_resolved' }, data.interaction || {}));
         renderHumanInteractionRecord(record, card.dataset.sessionId, card.parentNode);
+        if (data.recovery_scheduled) {
+            resumeRecoveredHumanInteractionStream(card.dataset.sessionId, recoveryAfterIndex);
+        }
     } catch (err) {
         setHumanInteractionSubmitting(card, false);
         if (error) error.textContent = '提交失败：' + String(err && err.message ? err.message : err);
@@ -827,6 +860,9 @@ async function cancelHumanQuestion(card) {
     if (!card || card.dataset.submitting === '1') return;
     setHumanInteractionSubmitting(card, true, '正在取消…');
     try {
+        var recoveryAfterIndex = typeof getUiEventCount === 'function'
+            ? await getUiEventCount(card.dataset.sessionId, { timeoutMs: 5000 })
+            : 0;
         var response = await fetch('/sessions/' + encodeURIComponent(card.dataset.sessionId) + '/interactions/' + encodeURIComponent(card.dataset.interactionId) + '/cancel', {
             method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ reason: 'user_cancelled' }),
         });
@@ -835,10 +871,35 @@ async function cancelHumanQuestion(card) {
         clearHumanInteractionDraft(card.dataset.sessionId, card.dataset.interactionId, card.dataset.requestVersion);
         var record = applyHumanInteractionEvent(card.dataset.sessionId, Object.assign({ type: 'interaction_cancelled' }, data.interaction || {}));
         renderHumanInteractionRecord(record, card.dataset.sessionId, card.parentNode);
+        if (data.recovery_scheduled) {
+            resumeRecoveredHumanInteractionStream(card.dataset.sessionId, recoveryAfterIndex);
+        }
     } catch (err) {
         setHumanInteractionSubmitting(card, false);
         var error = card.querySelector('.human-card-error');
         if (error) error.textContent = '取消失败：' + String(err && err.message ? err.message : err);
+    }
+}
+
+function resumeRecoveredHumanInteractionStream(sessionId, afterIndex) {
+    var sid = String(sessionId || '');
+    if (!sid) return;
+    if (typeof discardCachedSessionStream === 'function') discardCachedSessionStream(sid);
+    if (sid !== String(currentSessionId || '')) return;
+    var start = function () {
+        if (sid !== String(currentSessionId || '')) return;
+        if (typeof attachSessionEventStream === 'function') {
+            void attachSessionEventStream(sid, {
+                skipInitialLoad: true,
+                force: true,
+                afterIndex: Math.max(0, Number(afterIndex) || 0),
+            });
+        }
+    };
+    if (typeof refreshSingleSessionRow === 'function') {
+        void Promise.resolve(refreshSingleSessionRow(sid)).then(start, start);
+    } else {
+        start();
     }
 }
 
@@ -872,10 +933,19 @@ function createHumanApprovalCard(record, sessionId) {
         );
     }
     card.appendChild(body);
+    var analysis = humanElement('div', 'human-approval-analysis');
+    analysis.hidden = true;
+    analysis.setAttribute('role', 'status');
+    card.appendChild(analysis);
     var error = humanElement('div', 'human-card-error');
     error.setAttribute('role', 'alert');
     card.appendChild(error);
     var actions = humanElement('div', 'human-card-actions human-approval-actions');
+    var analyze = humanElement('button', 'human-secondary-btn human-analyze-btn', '替我分析');
+    analyze.type = 'button';
+    analyze.title = '调用独立审查模型给出风险解读和审批建议，不会替你执行审批';
+    analyze.addEventListener('click', function () { void analyzeHumanApproval(card); });
+    actions.appendChild(analyze);
     var deny = humanElement('button', 'human-secondary-btn human-deny-btn', danger ? '拒绝执行' : '拒绝');
     deny.type = 'button';
     deny.addEventListener('click', function () { void resolveHumanApproval(card, 'deny'); });
@@ -933,6 +1003,47 @@ function createHumanApprovalCard(record, sessionId) {
     }
     card.appendChild(actions);
     return card;
+}
+
+async function analyzeHumanApproval(card) {
+    if (!card || card.dataset.submitting === '1') return;
+    var error = card.querySelector('.human-card-error');
+    var panel = card.querySelector('.human-approval-analysis');
+    setHumanInteractionSubmitting(card, true, '正在分析…');
+    if (error) error.textContent = '';
+    if (panel) {
+        panel.hidden = false;
+        panel.className = 'human-approval-analysis is-loading';
+        panel.textContent = '审查 Agent 正在核对任务意图与本次操作风险…';
+    }
+    try {
+        var response = await fetch('/sessions/' + encodeURIComponent(card.dataset.sessionId) + '/approvals/' + encodeURIComponent(card.dataset.interactionId) + '/analyze', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
+        });
+        var data = await response.json();
+        if (!response.ok || !data.ok) throw new Error(data.error || ('HTTP ' + response.status));
+        var result = data.analysis || {};
+        var recommendAllow = result.recommendation === 'allow';
+        panel.className = 'human-approval-analysis ' + (recommendAllow ? 'is-allow' : 'is-deny');
+        panel.textContent = '';
+        var heading = humanElement(
+            'div',
+            'human-approval-analysis-title',
+            result.available === false
+                ? '暂时无法给出可靠建议'
+                : (recommendAllow ? '建议允许' : '建议拒绝')
+        );
+        var risk = humanElement('span', 'human-approval-analysis-risk', '风险：' + String(result.risk || 'unknown'));
+        heading.appendChild(risk);
+        panel.appendChild(heading);
+        panel.appendChild(humanElement('div', 'human-approval-analysis-reason', String(result.reason || '审查模型未提供理由。')));
+        panel.appendChild(humanElement('div', 'human-approval-analysis-hint', '以上仅为分析建议，审批仍由你决定。'));
+    } catch (err) {
+        if (panel) panel.hidden = true;
+        if (error) error.textContent = '分析失败：' + String(err && err.message ? err.message : err);
+    } finally {
+        setHumanInteractionSubmitting(card, false);
+    }
 }
 
 async function resolveHumanApproval(card, decision) {
@@ -1037,6 +1148,7 @@ function renderHumanInteractionEvent(ctx, event, runSessionId) {
     var sid = String(runSessionId || event.session_id || currentSessionId || '');
     var record = applyHumanInteractionEvent(sid, event);
     var stream = ctx && ctx.stream ? ctx.stream : null;
+    ensurePendingQuestionToolRow(ctx, record, sid);
     return renderHumanInteractionRecord(record, sid, stream);
 }
 
@@ -1044,7 +1156,11 @@ function renderPendingHumanInteractions(sessionId) {
     var sid = String(sessionId || '');
     if (!sid || sid !== String(currentSessionId || '')) return;
     var stream = typeof getVisibleChatStream === 'function' ? getVisibleChatStream() : document.getElementById('chat-stream');
-    pendingHumanInteractionRecords(sid).forEach(function (record) { renderHumanInteractionRecord(record, sid, stream); });
+    var ctx = stream && typeof newDomContext === 'function' ? newDomContext(stream) : null;
+    pendingHumanInteractionRecords(sid).forEach(function (record) {
+        ensurePendingQuestionToolRow(ctx, record, sid);
+        renderHumanInteractionRecord(record, sid, stream);
+    });
     if (typeof attachAllHumanInteractionCards === 'function') attachAllHumanInteractionCards(stream);
     updateHumanInteractionBanner(sid);
 }
@@ -1053,6 +1169,8 @@ async function refreshHumanInteractions(sessionId, options) {
     var sid = String(sessionId || '');
     if (!sid) return false;
     options = options || {};
+    var state = humanInteractionSessionState(sid);
+    var refreshEpoch = ++state.refreshEpoch;
     try {
         var responses = await Promise.all([
             fetch('/sessions/' + encodeURIComponent(sid) + '/interactions?status=pending'),
@@ -1060,7 +1178,7 @@ async function refreshHumanInteractions(sessionId, options) {
         ]);
         if (!responses[0].ok || !responses[1].ok) throw new Error('HTTP ' + responses[0].status + '/' + responses[1].status);
         var payloads = await Promise.all([responses[0].json(), responses[1].json()]);
-        var state = humanInteractionSessionState(sid);
+        if (refreshEpoch !== state.refreshEpoch) return false;
         state.interactions = Object.create(null);
         state.approvals = Object.create(null);
         (payloads[0].interactions || []).forEach(function (row) {

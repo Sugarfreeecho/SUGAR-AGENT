@@ -10,9 +10,11 @@ import logging
 import mimetypes
 import os
 import re
+import tempfile
 import threading
 import time
 import uuid
+import zipfile
 from collections import defaultdict, deque
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
@@ -22,6 +24,7 @@ from urllib.parse import unquote
 
 from fastapi import FastAPI, File, Form, Query, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response, StreamingResponse
+from starlette.background import BackgroundTask
 from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
 
@@ -632,7 +635,9 @@ def _has_local_worker_activity(sid: str) -> bool:
         return sid in _chat_starting_by_session
 
 
-def _discover_runnable_goal_sessions() -> list[str]:
+def _discover_runnable_goal_sessions(
+    candidate_session_ids: Optional[list[str]] = None,
+) -> list[str]:
     try:
         from agent_goal import goal_enabled, manager_for
 
@@ -640,8 +645,14 @@ def _discover_runnable_goal_sessions() -> list[str]:
             return []
         manager = manager_for(session_manager)
         runnable: list[str] = []
-        for row in session_manager.list_sessions(include_archived=True):
-            sid = str((row or {}).get("id") or "").strip()
+        if candidate_session_ids is None:
+            session_ids = [
+                str((row or {}).get("id") or "").strip()
+                for row in session_manager.list_sessions(include_archived=True)
+            ]
+        else:
+            session_ids = [str(value or "").strip() for value in candidate_session_ids]
+        for sid in session_ids:
             if not sid:
                 continue
             try:
@@ -813,31 +824,49 @@ def _schedule_human_interaction_recovery(session_id: str) -> bool:
 
 
 async def _goal_runner_loop() -> None:
-    while True:
-        try:
-            runnable = await asyncio.to_thread(_discover_runnable_goal_sessions)
-            for sid in runnable:
-                existing = _goal_runner_workers.get(sid)
-                if existing and not existing.done():
-                    continue
-                if _has_local_worker_activity(sid):
-                    continue
-                task = asyncio.create_task(
-                    _run_goal_continuation_background(sid),
-                    name=f"goal-runner-{sid}",
+    from agent_goal import active_goal_session_ids, subscribe_goal_activity
+
+    activity, unsubscribe = subscribe_goal_activity(asyncio.get_running_loop())
+    next_full_scan = 0.0
+    try:
+        while True:
+            try:
+                now = time.monotonic()
+                candidates = None if now >= next_full_scan else active_goal_session_ids()
+                if candidates is None:
+                    next_full_scan = now + 60.0
+                runnable = await asyncio.to_thread(
+                    _discover_runnable_goal_sessions,
+                    candidates,
                 )
-                _goal_runner_workers[sid] = task
+                for sid in runnable:
+                    existing = _goal_runner_workers.get(sid)
+                    if existing and not existing.done():
+                        continue
+                    if _has_local_worker_activity(sid):
+                        continue
+                    task = asyncio.create_task(
+                        _run_goal_continuation_background(sid),
+                        name=f"goal-runner-{sid}",
+                    )
+                    _goal_runner_workers[sid] = task
 
-                def cleanup(done: asyncio.Task, session_id: str = sid) -> None:
-                    if _goal_runner_workers.get(session_id) is done:
-                        _goal_runner_workers.pop(session_id, None)
+                    def cleanup(done: asyncio.Task, session_id: str = sid) -> None:
+                        if _goal_runner_workers.get(session_id) is done:
+                            _goal_runner_workers.pop(session_id, None)
 
-                task.add_done_callback(cleanup)
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            logger.exception("Goal runner scheduling tick failed")
-        await asyncio.sleep(_GOAL_RUNNER_POLL_SECONDS)
+                    task.add_done_callback(cleanup)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("Goal runner scheduling tick failed")
+            try:
+                await asyncio.wait_for(activity.wait(), timeout=_GOAL_RUNNER_POLL_SECONDS)
+                activity.clear()
+            except asyncio.TimeoutError:
+                pass
+    finally:
+        unsubscribe()
 
 
 async def start_goal_runner() -> bool:
@@ -2439,6 +2468,26 @@ def _runtime_v2_subagent_node(parent_id: str, task_id: str, task: dict, state: d
     except Exception as exc:
         logger.debug("Runtime V2 subagent event count failed for %s: %s", task_id, exc)
     subagent_type = str(task.get("subagent_type") or state.get("subagent_type") or "subagent")
+    try:
+        metadata = session_manager._load_metadata(task_id) or {}
+    except Exception:
+        metadata = {}
+    model_profile_id = str(
+        task.get("model_profile_id")
+        or state.get("model_profile_id")
+        or metadata.get("model_profile_id")
+        or ""
+    ).strip()
+    executor_model = str(
+        task.get("executor_model")
+        or state.get("executor_model")
+        or metadata.get("executor_model")
+        or ""
+    ).strip()
+    if not executor_model and model_profile_id:
+        profile = model_profiles.get_profile(PROJECT_ROOT, model_profile_id)
+        if isinstance(profile, dict):
+            executor_model = str(profile.get("model") or "").strip()
     virtual_task = subagent_type == "best-of-n-runner" or (
         normalized_status != "running" and has_output and not has_session_events
     )
@@ -2454,6 +2503,14 @@ def _runtime_v2_subagent_node(parent_id: str, task_id: str, task: dict, state: d
             or task_id[:8]
         ),
         "subagent_type": subagent_type,
+        "model_profile_id": model_profile_id,
+        "executor_model": executor_model,
+        "last_model_switch": dict(
+            task.get("last_model_switch")
+            or state.get("last_model_switch")
+            or metadata.get("last_model_switch")
+            or {}
+        ),
         "depth": depth,
         "created_at": task.get("created_at") or state.get("started_at"),
         "updated_at": task.get("updated_at") or state.get("finished_at") or task.get("finished_at") or task.get("started_at"),
@@ -2501,6 +2558,41 @@ async def interrupt_subagent(parent_id: str, child_id: str):
         return JSONResponse(content={"status": "ok", "agent_id": child_id})
     except Exception as e:
         return JSONResponse(content={"error": str(e)}, status_code=500)
+
+
+@fastapi_app.post("/sessions/{parent_id}/subagents/{child_id}/model_profile")
+async def switch_subagent_model_profile_api(
+    parent_id: str,
+    child_id: str,
+    request: Request,
+):
+    """Retarget a subagent without replacing its identity or durable history."""
+    try:
+        data = await request.json()
+    except Exception:
+        return JSONResponse(content={"ok": False, "error": "invalid json"}, status_code=400)
+    profile_id = str((data or {}).get("profile_id") or "").strip()
+    if not profile_id:
+        return JSONResponse(
+            content={"ok": False, "error": "profile_id is required"},
+            status_code=400,
+        )
+    try:
+        from agent_subagent import switch_subagent_model_profile
+
+        result = await switch_subagent_model_profile(
+            parent_id,
+            child_id,
+            profile_id,
+            instruction=str((data or {}).get("instruction") or ""),
+            source_run_id=str((data or {}).get("source_run_id") or ""),
+            requested_by="user",
+        )
+    except Exception as exc:
+        logger.exception("switch subagent model failed: %s", exc)
+        return JSONResponse(content={"ok": False, "error": str(exc)}, status_code=500)
+    status_code = int(result.pop("status_code", 200) or 200)
+    return JSONResponse(content=result, status_code=status_code)
 
 
 @fastapi_app.delete("/sessions/{parent_id}/subagents/{child_id}")
@@ -3206,18 +3298,30 @@ async def cancel_session_interaction(session_id: str, interaction_id: str, reque
         from human_interaction import get_human_interaction_service, has_registered_waiter
 
         had_waiter = has_registered_waiter(session_id, "question", interaction_id)
+        cancel_reason = str((body or {}).get("reason") or "user_cancelled")
+        if cancel_reason == "superseded_by_history_mutation":
+            # Stop the old run before its waiter wakes. Otherwise it may append
+            # a tool result or another assistant turn after the history tail
+            # has already been truncated for a rewrite/delete operation.
+            session_manager.request_interrupt(
+                session_id,
+                reason="history_mutation",
+            )
         record = await asyncio.to_thread(
             get_human_interaction_service().cancel,
             session_id,
             interaction_id,
             kind="question",
-            reason=str((body or {}).get("reason") or "user_cancelled"),
+            reason=cancel_reason,
         )
         await publish_session_event(session_id, {"type": "interaction_cancelled", **record})
         recovery_scheduled = False
         if not had_waiter and not _has_local_worker_activity(session_id):
             appended = await asyncio.to_thread(_append_recovered_question_tool_result, record)
-            if appended:
+            if appended and cancel_reason not in {
+                "superseded_by_user_message",
+                "superseded_by_history_mutation",
+            }:
                 recovery_scheduled = _schedule_human_interaction_recovery(session_id)
         return JSONResponse(content={"ok": True, "interaction": record, "recovery_scheduled": recovery_scheduled})
     except Exception as exc:
@@ -3239,6 +3343,53 @@ async def get_session_approvals(session_id: str, status: str = Query(default="pe
             status=normalized,
         )
         return JSONResponse(content={"ok": True, "approvals": rows})
+    except Exception as exc:
+        return _human_interaction_error_response(exc)
+
+
+@fastapi_app.post("/sessions/{session_id}/approvals/{approval_id}/analyze")
+async def analyze_session_approval(session_id: str, approval_id: str):
+    """Ask the auto-review model for advice without resolving the approval."""
+    try:
+        from human_interaction import get_human_interaction_service
+        from security.reviewer import review_request
+        from tool_approval_gate import get_live_approval_review_context
+
+        record = await asyncio.to_thread(
+            get_human_interaction_service().get,
+            session_id,
+            approval_id,
+            kind="approval",
+        )
+        if str(record.get("status") or "") != "pending":
+            return JSONResponse(
+                content={"ok": False, "error": "该审批已处理，无法继续分析。"},
+                status_code=409,
+            )
+        context = get_live_approval_review_context(session_id, approval_id)
+        if not context or context.get("request") is None:
+            return JSONResponse(
+                content={
+                    "ok": False,
+                    "error": "原执行已结束或缺少审查上下文，请让 Agent 重新发起该操作。",
+                },
+                status_code=409,
+            )
+        review = await review_request(
+            context["request"],
+            user_intent=str(context.get("user_intent") or ""),
+        )
+        return JSONResponse(
+            content={
+                "ok": True,
+                "analysis": {
+                    "recommendation": "allow" if review.approved else "deny",
+                    "risk": review.risk,
+                    "reason": review.reason,
+                    "available": review.available,
+                },
+            }
+        )
     except Exception as exc:
         return _human_interaction_error_response(exc)
 
@@ -3653,6 +3804,18 @@ def _session_pending_human_count(session_id: str) -> int:
 
         counts = get_human_interaction_service().pending_counts(str(session_id))
         return int(counts.get("total") or 0)
+    except Exception:
+        return 0
+
+
+def _session_pending_human_question_count(session_id: str) -> int:
+    """Pending ask_user questions only; storage failures preserve old behavior."""
+
+    try:
+        from human_interaction import get_human_interaction_service
+
+        counts = get_human_interaction_service().pending_counts(str(session_id))
+        return int(counts.get("questions") or 0)
     except Exception:
         return 0
 
@@ -5356,8 +5519,77 @@ async def get_session_context_tokens(session_id: str):
 
 @fastapi_app.put("/sessions/{session_id}/name")
 async def rename_session(session_id: str, name: str = Form(...)):
-    session_manager.set_session_name(session_id, name)
+    normalized_name = str(name or "").strip()[:160]
+    if not normalized_name:
+        return JSONResponse(content={"status": "error", "error": "session name is required"}, status_code=400)
+    session_manager.set_session_name(session_id, normalized_name)
     return JSONResponse(content={"status": "ok"})
+
+
+def _remove_session_export_archive(path: str) -> None:
+    try:
+        Path(path).unlink(missing_ok=True)
+    except OSError:
+        logger.warning("failed to remove temporary session export: %s", path)
+
+
+def _build_session_export_archive(session_id: str) -> tuple[Path, str]:
+    sid = str(session_id or "").strip()
+    if not sid:
+        raise ValueError("session id is required")
+    session_path = Path(session_manager._resolve_session_path(sid)).resolve()
+    sessions_root = Path(session_manager.repository.sessions_dir).resolve()
+    try:
+        session_path.relative_to(sessions_root)
+    except ValueError as exc:
+        raise PermissionError("session path is outside the sessions directory") from exc
+    if not session_path.is_dir():
+        raise FileNotFoundError(f"session directory not found: {sid}")
+
+    archive_root = re.sub(r"[^A-Za-z0-9._-]+", "_", session_path.name).strip("._") or "session"
+    download_name = f"session-{archive_root}.zip"
+    fd, temp_name = tempfile.mkstemp(prefix="myagent-session-export-", suffix=".zip")
+    os.close(fd)
+    archive_path = Path(temp_name)
+    try:
+        with zipfile.ZipFile(archive_path, mode="w", compression=zipfile.ZIP_DEFLATED, allowZip64=True) as output:
+            output.writestr(f"{archive_root}/", b"")
+            for source in sorted(session_path.rglob("*"), key=lambda item: item.as_posix().lower()):
+                if source.is_symlink():
+                    continue
+                resolved = source.resolve()
+                try:
+                    relative = resolved.relative_to(session_path)
+                except ValueError as exc:
+                    raise PermissionError("session export entry is outside the session directory") from exc
+                archive_name = (Path(archive_root) / relative).as_posix()
+                output.write(resolved, archive_name)
+        return archive_path, download_name
+    except Exception:
+        archive_path.unlink(missing_ok=True)
+        raise
+
+
+@fastapi_app.get("/sessions/{session_id}/export")
+async def export_session(session_id: str):
+    try:
+        archive_path, download_name = await run_in_threadpool(_build_session_export_archive, session_id)
+    except ValueError as exc:
+        return JSONResponse(content={"status": "error", "error": str(exc)}, status_code=400)
+    except PermissionError:
+        return JSONResponse(content={"status": "error", "error": "session export is not allowed"}, status_code=403)
+    except FileNotFoundError:
+        return JSONResponse(content={"status": "error", "error": "session not found"}, status_code=404)
+    except Exception as exc:
+        logger.exception("session export failed for %s: %s", session_id, exc)
+        return JSONResponse(content={"status": "error", "error": "session export failed"}, status_code=500)
+    return FileResponse(
+        str(archive_path),
+        media_type="application/zip",
+        filename=download_name,
+        headers={"Cache-Control": "no-store"},
+        background=BackgroundTask(_remove_session_export_archive, str(archive_path)),
+    )
 
 
 @fastapi_app.put("/sessions/{session_id}/archive")
@@ -5394,6 +5626,22 @@ async def truncate_session_events(
             return JSONResponse(
                 content={"ok": False, "error": "invalid before_index"},
                 status_code=400,
+            )
+        # A history mutation must never hide the assistant turn that owns an
+        # actionable ask_user request while leaving the durable request
+        # pending forever. UI callers cancel the question first; this server
+        # guard also protects alternate clients and stale browser builds.
+        pending_human_count = await asyncio.to_thread(
+            _session_pending_human_question_count,
+            session_id,
+        )
+        if pending_human_count > 0:
+            return JSONResponse(
+                content={
+                    "ok": False,
+                    "error": "pending human interaction must be cancelled before history mutation",
+                },
+                status_code=409,
             )
         ok = await run_in_threadpool(
             _run_history_op_locked,
@@ -5672,6 +5920,8 @@ _ENV_GROUP_ORDER: list[tuple[str, str, list[str]]] = [
             "WEB_DOWNLOAD_MAX_BYTES",
             "OPENAI_HTTP_TIMEOUT",
             "OPENAI_MAX_RETRIES",
+            "OPENAI_FIRST_TOKEN_HEDGE_TIMEOUT_SEC",
+            "OPENAI_FIRST_TOKEN_HEDGE_MAX_RETRIES",
             "NETWORK_RECONNECT_MAX_ATTEMPTS",
             "LOCAL_NETWORK_POLL_SECONDS",
             "OPENAI_RETRY_BASE_SEC",
@@ -5762,6 +6012,7 @@ _ENV_GROUP_ORDER: list[tuple[str, str, list[str]]] = [
             "GLOB_USE_WINDOWS_INDEX",
             "LS_MAX_ENTRIES",
             "LS_INCLUDE_LINE_COUNTS",
+            "LS_LINE_COUNT_MAX_BYTES",
             "READ_FILE_RANGE_MAX_BYTES",
             "MICRO_SHRINK_REASONING_CHARS",
             "MICRO_SHRINK_ASSISTANT_CHARS",
@@ -5818,6 +6069,8 @@ _ENV_HINTS: dict[str, str] = {
     "TOOL_UI_APPROVAL_WAIT_SEC": "可选：留空或 0 表示工具审批不限时等待用户确认；设置正整数（秒）则超时视为拒绝。",
     "OPENAI_HTTP_TIMEOUT": "兼容 API 请求超时（秒）。",
     "OPENAI_MAX_RETRIES": "可重试错误时的最大重试次数。",
+    "OPENAI_FIRST_TOKEN_HEDGE_TIMEOUT_SEC": "每等待首 token 达到该秒数便追加一路并行 API 重试；首个返回有效增量的连接胜出，设为 0 关闭。",
+    "OPENAI_FIRST_TOKEN_HEDGE_MAX_RETRIES": "单次模型调用最多追加的并行 API 重试数，默认 2；设为 0 关闭并行重试。",
     "NETWORK_RECONNECT_MAX_ATTEMPTS": "模型网络错误的快速重连次数；本机离线时等待网络恢复，其他错误达到上限后进入常规模型回退。",
     "LOCAL_NETWORK_POLL_SECONDS": "本机断网后 Agent 沉睡期间的网络状态检测间隔秒数，默认 5，最小 1。",
     "OPENAI_RETRY_BASE_SEC": "重试基础退避时间（秒）。",
@@ -5852,7 +6105,8 @@ _ENV_HINTS: dict[str, str] = {
     "GLOB_MAX_MATCHES": "glob 最多返回的路径条数。",
     "GLOB_USE_WINDOWS_INDEX": "Windows 文件名索引加速，默认 1；设为 0 关闭。无结果或不可用时回退文件系统。",
     "LS_MAX_ENTRIES": "ls/list_dir 单层目录最多列出的条目数。",
-    "LS_INCLUDE_LINE_COUNTS": "是否读取每个文件统计行数；默认 1，设为 0 可切换为轻量目录列表。",
+    "LS_INCLUDE_LINE_COUNTS": "是否读取可识别的文本/源码文件统计行数；默认 1，设为 0 可切换为轻量目录列表。",
+    "LS_LINE_COUNT_MAX_BYTES": "ls 统计单个文本文件行数的大小上限，默认 5242880（5 MiB）；超过后跳过。",
     "READ_FILE_RANGE_MAX_BYTES": "使用 start_line/line_count 按行读取时的文件大小安全上限。",
     "MICRO_SHRINK_REASONING_CHARS": "微压：推理内容字符上限。",
     "MICRO_SHRINK_ASSISTANT_CHARS": "微压：助手正文字符上限。",

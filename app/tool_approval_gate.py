@@ -21,6 +21,7 @@ logger = logging.getLogger(__name__)
 
 _PENDING: Dict[Tuple[str, str], asyncio.Future] = {}
 _PENDING_META: Dict[Tuple[str, str], Dict[str, Any]] = {}
+_PENDING_REVIEW_CONTEXT: Dict[Tuple[str, str], Dict[str, Any]] = {}
 _PENDING_LOCK = threading.RLock()
 
 class ApprovalPersistenceError(RuntimeError):
@@ -56,6 +57,19 @@ def has_live_approval_waiter(session_id: str, approval_id: str) -> bool:
     with _PENDING_LOCK:
         future = _PENDING.get(key)
     return bool(future is not None and not future.done())
+
+
+def get_live_approval_review_context(
+    session_id: str, approval_id: str
+) -> Dict[str, Any] | None:
+    """Return model-review input for a live approval without resolving it."""
+    key = (str(session_id or "").strip(), str(approval_id or "").strip())
+    with _PENDING_LOCK:
+        future = _PENDING.get(key)
+        context = _PENDING_REVIEW_CONTEXT.get(key)
+        if future is None or future.done() or not isinstance(context, dict):
+            return None
+        return dict(context)
 
 
 def reject_pending_approvals_for_sessions(session_ids) -> None:
@@ -194,6 +208,7 @@ async def wait_tool_ui_approval_after_emit(
     emit_coro,
     metadata: Dict[str, Any] | None = None,
     return_decision: bool = False,
+    review_context: Dict[str, Any] | None = None,
 ) -> bool | str:
     """先登记 Future，再执行 emit_coro（发送 SSE），避免客户端极快 POST 时未命中 pending。"""
     loop = asyncio.get_running_loop()
@@ -204,6 +219,9 @@ async def wait_tool_ui_approval_after_emit(
     with _PENDING_LOCK:
         _PENDING[key] = fut
         _PENDING_META[key] = {"created_at": time.time(), **dict(metadata or {})}
+        _PENDING_REVIEW_CONTEXT.pop(key, None)
+        if isinstance(review_context, dict):
+            _PENDING_REVIEW_CONTEXT[key] = dict(review_context)
     durable = bool((metadata or {}).get("_durable"))
     durable_service = None
     if durable:
@@ -226,6 +244,7 @@ async def wait_tool_ui_approval_after_emit(
             with _PENDING_LOCK:
                 _PENDING.pop(key, None)
                 _PENDING_META.pop(key, None)
+                _PENDING_REVIEW_CONTEXT.pop(key, None)
             logger.exception(
                 "Failed to persist approval before presentation session_id=%s approval_id=%s",
                 key[0],
@@ -275,3 +294,4 @@ async def wait_tool_ui_approval_after_emit(
         with _PENDING_LOCK:
             _PENDING.pop(key, None)
             _PENDING_META.pop(key, None)
+            _PENDING_REVIEW_CONTEXT.pop(key, None)

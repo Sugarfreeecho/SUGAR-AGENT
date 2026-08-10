@@ -41,6 +41,45 @@ def test_approval_gate_returns_raw_decision_for_two_step_flow():
     assert result == "allow_external_workspace"
 
 
+def test_approval_review_context_lives_only_while_approval_is_pending():
+    from app.security.models import CapabilityRequest
+    from app.tool_approval_gate import (
+        get_live_approval_review_context,
+        resolve_tool_approval,
+        wait_tool_ui_approval_after_emit,
+    )
+
+    request = CapabilityRequest.create(
+        action="process.exec",
+        resource="git status",
+        effect="workspace_write",
+    )
+
+    async def flow():
+        waiter = asyncio.create_task(
+            wait_tool_ui_approval_after_emit(
+                "review-session",
+                "review-approval",
+                lambda: asyncio.sleep(0),
+                review_context={"request": request, "user_intent": "inspect repository"},
+            )
+        )
+        await asyncio.sleep(0.05)
+        context = get_live_approval_review_context(
+            "review-session", "review-approval"
+        )
+        assert context == {"request": request, "user_intent": "inspect repository"}
+        assert resolve_tool_approval(
+            "review-session", "review-approval", False
+        ) is True
+        await waiter
+        assert get_live_approval_review_context(
+            "review-session", "review-approval"
+        ) is None
+
+    asyncio.run(flow())
+
+
 @pytest.fixture(autouse=True)
 def _enable_ask_user_for_interaction_tests(monkeypatch):
     monkeypatch.setenv("ASK_USER_ENABLED", "1")
@@ -279,6 +318,10 @@ def test_frontend_human_interaction_contract_is_wired():
     assert "attachHumanInteractionCardsForToolCall" in rendering
     assert "attachAllHumanInteractionCards" in module
     assert "允许一次" in module
+    assert "替我分析" in module
+    assert "analyzeHumanApproval(card)" in module
+    assert "/analyze'" in module
+    assert "以上仅为分析建议，审批仍由你决定。" in module
     assert "本任务内允许相同请求" in module
     assert "始终允许此类操作" in module
     assert "resolveHumanApproval(card, 'allow_session')" in module
@@ -332,16 +375,93 @@ def test_frontend_human_interaction_contract_is_wired():
     assert "function showHumanQuestionReview" in module
     assert "function validateHumanQuestionPane" in module
     assert "aria-busy" in module
-    assert "confirmAndCancelPendingHumanQuestionsForMessage" in module
+    assert "confirmAndCancelPendingHumanQuestionsForMessage" not in module
+    assert "confirmAndCancelPendingHumanQuestionsForHistoryMutation" in module
     sse = (root / "frontend/src/app/modules/sse-handling.js").read_text(encoding="utf-8")
-    assert "submitComposerWithPendingQuestionGuard" in sse
-    assert "取消问题并发送" in module
+    assert "queueComposerBehindPendingQuestion" in sse
+    assert "enqueueCurrentInputAsFollowup({ pendingQuestion: true })" in sse
+    assert "submitComposerWithPendingQuestionGuard" not in sse
     settings = (root / "frontend/src/app/modules/settings.js").read_text(encoding="utf-8")
     webui = (root / "app/webui.py").read_text(encoding="utf-8")
     assert 'id="settings-ask-user-on"' in shell
     assert 'id="settings-ask-user-on"' in index_html
     assert "saveAskUserFeature" in settings
     assert '"/api/features/ask-user"' in webui
+    assert 'approvals/{approval_id}/analyze' in webui
+    assert '"recommendation": "allow" if review.approved else "deny"' in webui
+
+
+def test_analyze_approval_returns_advice_without_resolving(monkeypatch):
+    import json
+    from types import SimpleNamespace
+
+    import human_interaction
+    import security.reviewer
+    import tool_approval_gate
+    import webui
+    from security import CapabilityRequest
+
+    request = CapabilityRequest.create(
+        action="process.exec",
+        resource="git status",
+        effect="workspace_write",
+    )
+    record = {
+        "approval_id": "approval-analysis",
+        "status": "pending",
+        "decision": None,
+    }
+
+    class Service:
+        def get(self, session_id, approval_id, *, kind):
+            assert (session_id, approval_id, kind) == (
+                "session-analysis",
+                "approval-analysis",
+                "approval",
+            )
+            return dict(record)
+
+    calls = []
+
+    async def fake_review(review_request, *, user_intent):
+        calls.append((review_request, user_intent))
+        return SimpleNamespace(
+            approved=True,
+            risk="low",
+            reason="Matches the requested repository inspection.",
+            available=True,
+        )
+
+    monkeypatch.setattr(
+        human_interaction, "get_human_interaction_service", lambda: Service()
+    )
+    monkeypatch.setattr(
+        tool_approval_gate,
+        "get_live_approval_review_context",
+        lambda *_args: {"request": request, "user_intent": "inspect repository"},
+    )
+    monkeypatch.setattr(security.reviewer, "review_request", fake_review)
+
+    response = asyncio.run(
+        webui.analyze_session_approval("session-analysis", "approval-analysis")
+    )
+    payload = json.loads(response.body)
+
+    assert payload == {
+        "ok": True,
+        "analysis": {
+            "recommendation": "allow",
+            "risk": "low",
+            "reason": "Matches the requested repository inspection.",
+            "available": True,
+        },
+    }
+    assert calls == [(request, "inspect repository")]
+    assert record == {
+        "approval_id": "approval-analysis",
+        "status": "pending",
+        "decision": None,
+    }
 
 
 def test_tool_pending_is_emitted_before_approval_dialog():
@@ -355,7 +475,8 @@ def test_tool_pending_is_emitted_before_approval_dialog():
     approval_wait = core.index("wait_tool_ui_approval_after_emit(")
     assert pending_call < approval_wait
     pre_approval = core[: core.index("if sec_decision.outcome == DecisionOutcome.ASK or hook_approval_spec:")]
-    assert 'tool_name not in ("context_manage", "ask_user")' in pre_approval
+    assert 'tool_name != "context_manage"' in pre_approval
+    assert 'tool_name not in ("context_manage", "ask_user")' not in pre_approval
     # The old post-approval emit was removed in favor of the pre-approval row.
     assert "Arguments are closed and any required approval has completed" not in source
 
@@ -432,3 +553,26 @@ def test_pending_approval_refresh_restores_card_badge_and_banner_contract(tmp_pa
     )[0]
     assert "renderHumanInteractionRecord(record, sid, stream)" in render_body
     assert "updateHumanInteractionBanner(sid);" in render_body
+
+
+def test_pending_question_switch_and_history_mutation_frontend_contract():
+    root = Path(__file__).resolve().parents[1]
+    interactions = (root / "frontend/src/app/modules/human-interactions.js").read_text(encoding="utf-8")
+    sessions = (root / "frontend/src/app/modules/session-management.js").read_text(encoding="utf-8")
+    rendering = (root / "frontend/src/app/modules/message-rendering.js").read_text(encoding="utf-8")
+    sse = (root / "frontend/src/app/modules/sse-handling.js").read_text(encoding="utf-8")
+
+    assert "function ensurePendingQuestionToolRow" in interactions
+    assert "appendToolPendingRow(ctx" in interactions
+    assert "ensurePendingQuestionToolRow(ctx, record, sid);" in interactions
+    assert "refreshEpoch !== state.refreshEpoch" in interactions
+    assert "resumeRecoveredHumanInteractionStream" in interactions
+    assert "recovery_scheduled" in interactions
+    assert "afterIndex: Math.max(0, Number(afterIndex) || 0)" in interactions
+    assert "!sessionHadUnreadResult" in sessions
+    assert "&& !sessionHasActiveServerRun" in sessions
+    assert "&& (restoredFromCache = restoreCachedSessionStream(sessionId))" in sessions
+    assert "confirmAndCancelPendingHumanQuestionsForHistoryMutation" in rendering
+    assert "superseded_by_history_mutation" in interactions
+    assert "if (!opts.force && !isServerStreamActive(sessionId)) return;" in sse
+    assert "Number.isFinite(Number(opts.afterIndex))" in sse
