@@ -6,6 +6,7 @@ import asyncio
 import json
 import os
 import threading
+import time
 from typing import Any
 
 from .models import AgentTeamError
@@ -605,36 +606,61 @@ async def start_auto_scheduler() -> bool:
 
     async def loop() -> None:
         from agent_harness import session_manager
+        from .service import active_team_session_ids, subscribe_team_activity
 
         interval = max(
             2.0,
             float(os.getenv("AGENT_TEAM_SCHEDULER_INTERVAL_SECONDS", "5")),
         )
         service = _service()
-        while _SCHEDULER_STOP is not None and not _SCHEDULER_STOP.is_set():
-            roots = []
-            try:
-                roots = [
-                    str(row.get("id") or "")
-                    for row in list(session_manager.index)
-                    if isinstance(row, dict) and str(row.get("id") or "")
-                ]
-            except Exception:
-                roots = []
-            for root_id in roots:
+        activity, unsubscribe = subscribe_team_activity(asyncio.get_running_loop())
+        next_full_scan = 0.0
+        try:
+            while _SCHEDULER_STOP is not None and not _SCHEDULER_STOP.is_set():
+                now = time.monotonic()
+                roots: list[str] = []
+                if now >= next_full_scan:
+                    next_full_scan = now + 60.0
+                    try:
+                        roots = [
+                            str(row.get("id") or "")
+                            for row in list(session_manager.index)
+                            if isinstance(row, dict) and str(row.get("id") or "")
+                        ]
+                    except Exception:
+                        roots = []
+                else:
+                    roots = active_team_session_ids()
+                for root_id in roots:
+                    try:
+                        team = await asyncio.to_thread(service.read_team, root_id)
+                        if isinstance(team, dict) and team.get("status") == "active":
+                            await _auto_schedule_team(
+                                service,
+                                root_id,
+                                parent_key_context="",
+                                emit=None,
+                                parent_run_id="team_scheduler",
+                            )
+                    except Exception:
+                        continue
+                if _SCHEDULER_STOP is None or _SCHEDULER_STOP.is_set():
+                    break
+                activity_wait = asyncio.create_task(activity.wait())
+                stop_wait = asyncio.create_task(_SCHEDULER_STOP.wait())
                 try:
-                    team = await asyncio.to_thread(service.read_team, root_id)
-                    if isinstance(team, dict) and team.get("status") == "active":
-                        await _auto_schedule_team(
-                            service,
-                            root_id,
-                            parent_key_context="",
-                            emit=None,
-                            parent_run_id="team_scheduler",
-                        )
-                except Exception:
-                    continue
-            await asyncio.sleep(interval)
+                    await asyncio.wait(
+                        {activity_wait, stop_wait},
+                        timeout=interval,
+                        return_when=asyncio.FIRST_COMPLETED,
+                    )
+                    activity.clear()
+                finally:
+                    for waiter in (activity_wait, stop_wait):
+                        if not waiter.done():
+                            waiter.cancel()
+        finally:
+            unsubscribe()
 
     _SCHEDULER_TASK = asyncio.create_task(loop())
     return True

@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
+import threading
 from pathlib import Path
 from typing import Any, Iterable, Optional
 
@@ -20,6 +22,53 @@ from .models import (
     new_id,
 )
 from .store import RuntimeTeamStore
+
+
+_ACTIVE_TEAM_SESSIONS: set[str] = set()
+_TEAM_ACTIVITY_LOCK = threading.Lock()
+_TEAM_ACTIVITY_LISTENERS: set[tuple[asyncio.AbstractEventLoop, asyncio.Event]] = set()
+
+
+def _track_team_state(
+    session_id: str,
+    team: Optional[dict],
+    *,
+    notify: bool = True,
+) -> None:
+    sid = str(session_id or "").strip()
+    if not sid:
+        return
+    active = bool(isinstance(team, dict) and team.get("status") == "active")
+    with _TEAM_ACTIVITY_LOCK:
+        was_active = sid in _ACTIVE_TEAM_SESSIONS
+        if active:
+            _ACTIVE_TEAM_SESSIONS.add(sid)
+        else:
+            _ACTIVE_TEAM_SESSIONS.discard(sid)
+        listeners = list(_TEAM_ACTIVITY_LISTENERS) if notify or was_active != active else []
+    for loop, event in listeners:
+        try:
+            loop.call_soon_threadsafe(event.set)
+        except RuntimeError:
+            pass
+
+
+def active_team_session_ids() -> list[str]:
+    with _TEAM_ACTIVITY_LOCK:
+        return sorted(_ACTIVE_TEAM_SESSIONS)
+
+
+def subscribe_team_activity(loop: asyncio.AbstractEventLoop):
+    event = asyncio.Event()
+    listener = (loop, event)
+    with _TEAM_ACTIVITY_LOCK:
+        _TEAM_ACTIVITY_LISTENERS.add(listener)
+
+    def unsubscribe() -> None:
+        with _TEAM_ACTIVITY_LOCK:
+            _TEAM_ACTIVITY_LISTENERS.discard(listener)
+
+    return event, unsubscribe
 
 
 def _positive_env_int(name: str, default: int) -> int:
@@ -48,10 +97,13 @@ class AgentTeamService:
             max_message_chars=_positive_env_int("AGENT_TEAM_MAX_MESSAGE_CHARS", 32_000),
         )
 
-    def read_team(self, session_id: str) -> Optional[dict]:
-        snapshot = self.store.read_snapshot(clean_id(session_id, "session_id"))
+    def read_team(self, session_id: str, *, notify_activity: bool = False) -> Optional[dict]:
+        sid = clean_id(session_id, "session_id")
+        snapshot = self.store.read_snapshot(sid)
         team = snapshot.get("team")
-        return team if isinstance(team, dict) else None
+        result = team if isinstance(team, dict) else None
+        _track_team_state(sid, result, notify=notify_activity)
+        return result
 
     def create_team(self, session_id: str, title: str = "") -> dict:
         sid = clean_id(session_id, "session_id")
@@ -530,7 +582,7 @@ class AgentTeamService:
         return sorted(rows, key=lambda row: int(row.get("seq") or 0))
 
     def _required_team(self, session_id: str) -> dict:
-        team = self.read_team(session_id)
+        team = self.read_team(session_id, notify_activity=True)
         if not isinstance(team, dict):
             raise AgentTeamNotFoundError("team not found")
         return team
