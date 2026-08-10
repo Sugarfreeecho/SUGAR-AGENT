@@ -84,7 +84,28 @@ function appendArchiveLoadButton(body) {
         }
     });
     body.appendChild(loadBtn);
+    requestAnimationFrame(maybeAutoLoadMoreArchivedSessions);
 }
+
+var ARCHIVED_AUTO_LOAD_BOTTOM_PX = 32;
+
+/** 滚动到归档目录底部附近时自动加载下一页；按钮仍保留为状态提示和手动兜底。 */
+function maybeAutoLoadMoreArchivedSessions() {
+    if (!sessionsList || !sessionStore.archivedLoaded || !sessionStore.hasMoreArchivedSessions()) return;
+    var loadBtn = sessionsList.querySelector('.session-archive-load-btn');
+    if (!loadBtn || loadBtn.disabled) return;
+    var archiveSection = loadBtn.closest('.session-section');
+    if (!archiveSection || archiveSection.classList.contains('is-collapsed')) return;
+    var distanceToBottom = sessionsList.scrollHeight - sessionsList.scrollTop - sessionsList.clientHeight;
+    if (distanceToBottom > ARCHIVED_AUTO_LOAD_BOTTOM_PX) return;
+    loadBtn.click();
+}
+
+(function bindArchivedSessionsAutoLoaderOnce() {
+    if (!sessionsList || window.__myAgentArchivedSessionsAutoLoader) return;
+    window.__myAgentArchivedSessionsAutoLoader = true;
+    sessionsList.addEventListener('scroll', maybeAutoLoadMoreArchivedSessions, { passive: true });
+})();
 
 function renderSessionTitleFromStore() {
     updateSessionTitle();

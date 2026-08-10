@@ -45,6 +45,39 @@ function hideUiHoverTooltip() {
     if (uiHoverTooltipEl) uiHoverTooltipEl.classList.remove('is-visible');
 }
 
+function isUiHoverTipTriggerHovered(el) {
+    return !!(el && el.isConnected && el.matches(':hover'));
+}
+
+function bindUiHoverTipGlobalCleanup() {
+    if (document._uiHoverTipGlobalCleanupBound) return;
+    document._uiHoverTipGlobalCleanupBound = true;
+
+    // Element-level mouseleave is not guaranteed when a live-rendered trigger is
+    // replaced or removed. Validate the active trigger against the real pointer
+    // target so a detached tooltip cannot remain visible indefinitely.
+    document.addEventListener('mousemove', function (ev) {
+        var active = uiHoverTipActiveEl;
+        if (!active) return;
+        if (!active.isConnected || !active.contains(ev.target)) hideUiHoverTooltip();
+    }, true);
+
+    // Scrolling and viewport changes can move a trigger without producing a
+    // mouseleave event. Only dismiss an already-visible tooltip here; the delayed
+    // show path performs its own :hover validation.
+    function hideVisibleUiHoverTooltip() {
+        if (uiHoverTooltipEl && uiHoverTooltipEl.classList.contains('is-visible')) {
+            hideUiHoverTooltip();
+        }
+    }
+    document.addEventListener('scroll', hideVisibleUiHoverTooltip, true);
+    window.addEventListener('resize', hideVisibleUiHoverTooltip, { passive: true });
+    window.addEventListener('blur', hideUiHoverTooltip);
+    document.addEventListener('visibilitychange', function () {
+        if (document.visibilityState !== 'visible') hideUiHoverTooltip();
+    });
+}
+
 function positionUiHoverTooltip(ev) {
     var el = uiHoverTooltipEl;
     if (!el) return;
@@ -89,7 +122,10 @@ function bindUiHoverTip(el) {
         uiHoverTipLastEv = ev;
         uiHoverTipTimer = setTimeout(function () {
             uiHoverTipTimer = null;
-            if (uiHoverTipActiveEl !== el) return;
+            if (uiHoverTipActiveEl !== el || !isUiHoverTipTriggerHovered(el)) {
+                hideUiHoverTooltip();
+                return;
+            }
             showUiHoverTooltip(uiHoverTipLastEv || ev, t);
         }, UI_HOVER_TIP_DELAY_MS);
     });
@@ -113,6 +149,7 @@ function bindUiHoverTip(el) {
 }
 
 function initUiHoverTips(root) {
+    bindUiHoverTipGlobalCleanup();
     root = root || document;
     root.querySelectorAll('[data-ui-tip]').forEach(function (el) {
         bindUiHoverTip(el);
@@ -454,6 +491,21 @@ function renderGoalForCurrentSession() {
     renderGoalCard(goal, sid);
 }
 
+function isGoalActiveForSession(sessionId) {
+    const sid = String(sessionId || '').trim();
+    if (!sid) return false;
+    const goal = goalStateBySession.get(sid);
+    if (goal && String(goal.status || '') === 'active') return true;
+    const sess = sessionStore.get(sid);
+    return !!(
+        sess
+        && (
+            sess.goal_server_runner === true
+            || (sess.goal && String(sess.goal.status || '') === 'active')
+        )
+    );
+}
+
 function setGoalStateForSession(sessionId, goal) {
     const sid = String(sessionId || '').trim();
     if (!sid) return;
@@ -464,6 +516,11 @@ function setGoalStateForSession(sessionId, goal) {
         ? Object.assign({}, goal)
         : null;
     goalStateBySession.set(sid, normalized);
+    const sess = sessionStore.get(sid);
+    if (sess) {
+        sess.goal = normalized;
+        sess.goal_server_runner = !!(normalized && String(normalized.status || '') === 'active');
+    }
     if (normalized) {
         let elapsedSeconds = Math.max(0, Number(normalized.elapsed_seconds || 0));
         const sameGoal = previous && previousAnchor
@@ -487,6 +544,10 @@ function setGoalStateForSession(sessionId, goal) {
         });
     } else {
         goalElapsedAnchorBySession.delete(sid);
+    }
+    if (normalized && String(normalized.status || '') === 'active') {
+        clearSessionUnreadState(sid, { server: false });
+        syncSessionListIndicatorClasses();
     }
     if (sid === String(currentSessionId || '')) {
         renderGoalCard(normalized, sid);
@@ -689,7 +750,7 @@ setInterval(function () {
 setInterval(function () {
     if (document.visibilityState === 'hidden' || !currentSessionId || isGoalEditModalOpen() || isGoalReviewModalOpen()) return;
     void refreshGoalCard();
-}, 5000);
+}, 30000);
 
 setInterval(function () {
     if (document.visibilityState === 'hidden' || isGoalEditModalOpen() || isGoalReviewModalOpen()) return;
@@ -698,7 +759,7 @@ setInterval(function () {
     if (!goal || String(goal.status || '') !== 'active') return;
     if (typeof getSessionRunState === 'function' && getSessionRunState(sid)) return;
     void recoverActiveGoalStream(sid);
-}, 2000);
+}, 5000);
 
 async function controlCurrentGoal(action, payloadOverrides) {
     const sid = currentSessionId;
@@ -711,8 +772,18 @@ async function controlCurrentGoal(action, payloadOverrides) {
             const promptText = typeof translateUiString === 'function'
                 ? translateUiString('请输入要增加的 Token 预算')
                 : '请输入要增加的 Token 预算';
-            const raw = window.prompt(promptText, '10000');
-            if (raw == null) return false;
+            const raw = typeof openUiModal === 'function'
+                ? await openUiModal({
+                    title: promptText,
+                    inputLabel: promptText,
+                    inputValue: '10000',
+                    inputMaxLength: 12,
+                    inputRequired: true,
+                    confirmText: typeof translateUiString === 'function' ? translateUiString('确定') : '确定',
+                    cancelText: typeof translateUiString === 'function' ? translateUiString('取消') : '取消',
+                })
+                : window.prompt(promptText, '10000');
+            if (typeof raw !== 'string') return false;
             const additional = Number(raw);
             if (!Number.isInteger(additional) || additional <= 0) {
                 const message = typeof translateUiString === 'function'
@@ -774,8 +845,8 @@ function updateGoalEditModalState() {
     const elements = goalEditModalElements();
     if (!elements.root || !elements.input) return;
     const value = String(elements.input.value || '');
-    const normalized = value.trim();
-    const original = String(elements.root._goalOriginalObjective || '').trim();
+    const normalized = normalizeSendableText(value);
+    const original = normalizeSendableText(elements.root._goalOriginalObjective);
     if (elements.count) elements.count.textContent = String(value.length) + ' / 12000';
     if (elements.save) {
         elements.save.disabled = !!elements.root._goalSaving
@@ -804,7 +875,7 @@ async function saveGoalEditModal() {
     const elements = goalEditModalElements();
     if (!elements.root || !elements.input || elements.root._goalSaving) return false;
     const objective = String(elements.input.value || '').trim();
-    if (!objective || objective.length > 12000) return false;
+    if (!hasSendableText(objective) || objective.length > 12000) return false;
     const sid = String(elements.root.dataset.sessionId || '');
     const goalId = String(elements.root.dataset.goalId || '');
     if (sid !== String(currentSessionId || '') || !renderedGoalState || String(renderedGoalState.id || '') !== goalId) {
@@ -830,7 +901,7 @@ function ensureGoalEditModalBindings() {
             if (event.key === 'Escape') {
                 event.preventDefault();
                 closeGoalEditModal();
-            } else if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
+            } else if (isInputSubmitShortcut(event, 'editor')) {
                 event.preventDefault();
                 void saveGoalEditModal();
             }
@@ -943,7 +1014,7 @@ async function submitGoalReview(decision) {
     if (!elements.root || elements.root._goalReviewSaving) return false;
     const objective = String((elements.objective && elements.objective.value) || '').trim();
     const judgeResult = String((elements.judge && elements.judge.value) || '').trim();
-    if (!objective) {
+    if (!hasSendableText(objective)) {
         setGoalReviewModalStatus(
             typeof translateUiString === 'function' ? translateUiString('Goal 描述不能为空。') : 'Goal 描述不能为空。',
             'error'
@@ -974,8 +1045,18 @@ async function submitGoalReview(decision) {
         const promptText = typeof translateUiString === 'function'
             ? translateUiString('请输入要增加的 Token 预算')
             : '请输入要增加的 Token 预算';
-        const raw = window.prompt(promptText, '10000');
-        if (raw == null) return false;
+        const raw = typeof openUiModal === 'function'
+            ? await openUiModal({
+                title: promptText,
+                inputLabel: promptText,
+                inputValue: '10000',
+                inputMaxLength: 12,
+                inputRequired: true,
+                confirmText: typeof translateUiString === 'function' ? translateUiString('确定') : '确定',
+                cancelText: typeof translateUiString === 'function' ? translateUiString('取消') : '取消',
+            })
+            : window.prompt(promptText, '10000');
+        if (typeof raw !== 'string') return false;
         const additional = Number(raw);
         if (!Number.isInteger(additional) || additional <= 0) {
             setGoalReviewModalStatus(
@@ -1039,6 +1120,12 @@ function ensureGoalReviewModalBindings() {
         if (event.key === 'Escape') {
             event.preventDefault();
             closeGoalReviewModal();
+        } else if (
+            isInputSubmitShortcut(event, 'editor')
+            && (event.target === elements.objective || event.target === elements.judge)
+        ) {
+            event.preventDefault();
+            void submitGoalReview('save');
         }
     });
     return elements;

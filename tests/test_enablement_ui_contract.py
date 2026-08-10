@@ -16,6 +16,28 @@ def test_model_profile_switcher_and_configuration_page_expose_enablement_control
     assert '@fastapi_app.post("/api/model_profiles/{profile_id}/enabled")' in backend
 
 
+def test_running_subagent_model_switch_is_exposed_in_tool_api_and_ui():
+    tools = (ROOT / "app/agent_tools.py").read_text(encoding="utf-8")
+    backend = (ROOT / "app/webui.py").read_text(encoding="utf-8")
+    renderers = (ROOT / "frontend/src/app/state/subagent-renderers.js").read_text(encoding="utf-8")
+    actions = (ROOT / "frontend/src/app/state/subagent-actions.js").read_text(encoding="utf-8")
+    dialogs = (ROOT / "frontend/src/app/modules/shared-state-and-dialogs.js").read_text(encoding="utf-8")
+
+    assert '"switch_model"' in tools
+    assert "use action=switch_model to change it" in tools
+    assert '@fastapi_app.post("/sessions/{parent_id}/subagents/{child_id}/model_profile")' in backend
+    assert "subagent-card-switch-model" in renderers
+    assert "chooseSubagentModelProfile" in actions
+    assert "/model_profile'" in actions
+    assert "selectOptions" in dialogs
+
+
+def test_model_profile_hover_detail_exposes_profile_id():
+    switcher = (ROOT / "frontend/src/app/modules/model-profiles.js").read_text(encoding="utf-8")
+
+    assert "'model_porfile_id: ' + String(p.id" in switcher
+
+
 def test_skill_picker_exposes_enablement_controls():
     picker = (ROOT / "frontend/src/app/modules/skill-picker.js").read_text(encoding="utf-8")
     backend = (ROOT / "app/webui.py").read_text(encoding="utf-8")

@@ -206,7 +206,7 @@ Object.assign(UI_TRANSLATIONS_EN, {
     '查看预览': 'View preview', '其他': 'Other', '其他答案': 'Other answer', '输入你的答案…': 'Enter your answer…', '取消提问': 'Cancel question', '不回答': 'Skip answering',
     '上一步': 'Back', '下一步': 'Next', '返回修改': 'Edit answers', '确认回答': 'Review answers', '提交答案': 'Submit answers', '正在提交…': 'Submitting…', '正在取消…': 'Cancelling…', '正在处理…': 'Processing…',
     '请选择一个选项。': 'Select an option.', '请至少选择一个选项。': 'Select at least one option.', '请输入其他答案。': 'Enter the other answer.', '请完成当前问题后再提交。': 'Complete the current question before submitting.',
-    '发送新消息并取消当前问题？': 'Send a new message and cancel the current question?', '取消问题并发送': 'Cancel question and send', '返回回答问题': 'Return to question',
+    '返回回答问题': 'Return to question',
     'Agent 主动提问': 'Agent questions', 'Agent 主动提问功能开关': 'Agent question feature toggle',
     '已启用；Agent 可在确实需要选择时暂停并向你提问。': 'Enabled; the Agent may pause and ask when your choice is required.',
     '已关闭；Agent 不会创建结构化提问卡片。': 'Disabled; the Agent will not create structured question cards.',
@@ -261,7 +261,10 @@ Object.assign(UI_TRANSLATIONS_EN, {
     'Agent 请求执行操作': 'Agent requests permission to perform an action', '请选择操作': 'Choose an action', '复制文本': 'Copy text', '保存图片': 'Save image', '执行': 'Run',
     '原因：': 'Reason: ', '找不到可保存的 Final 卡片': 'No Final card is available to save', '操作失败': 'Operation failed', '确认': 'Confirm',
     '加载会话状态快照失败，回退至旧接口': 'Failed to load the session state snapshot; falling back to the legacy endpoint', '归档失败': 'Archive failed', '置顶失败': 'Pin failed', '重命名失败': 'Rename failed',
-    '加载更早记录': 'Load earlier records', '加载更早消息': 'Load earlier messages', '保存失败：': 'Save failed: '
+    '加载更早记录': 'Load earlier records', '加载更早消息': 'Load earlier messages', '保存失败：': 'Save failed: ',
+    '置顶会话': 'Pin session', '归档会话': 'Archive session', '重命名': 'Rename', '重命名会话': 'Rename session',
+    '编辑会话名称': 'Edit the session name', '会话名称': 'Session name', '保存名称': 'Save name',
+    '导出会话': 'Export session', '下载会话文件': 'Download session files', '确认导出': 'Export', '输入内容': 'Input'
 });
 Object.assign(UI_TRANSLATIONS_EN, {
     // Agent runtime status events (including compression and recovery)
@@ -327,6 +330,15 @@ Object.assign(UI_TRANSLATIONS_EN, {
     '自动审批已批准': 'Auto-review approved',
     '自动审批已拒绝': 'Auto-review denied',
     '自动审查不可用（已转人工确认）': 'Auto-review unavailable (switched to manual review)',
+    '替我分析': 'Analyze for me',
+    '调用独立审查模型给出风险解读和审批建议，不会替你执行审批': 'Ask an independent reviewer model for risk analysis and advice without approving anything',
+    '正在分析…': 'Analyzing…',
+    '审查 Agent 正在核对任务意图与本次操作风险…': 'A reviewer agent is checking the task intent and the risk of this operation…',
+    '暂时无法给出可靠建议': 'Unable to provide reliable advice right now',
+    '建议允许': 'Recommend allowing',
+    '建议拒绝': 'Recommend denying',
+    '审查模型未提供理由。': 'The reviewer model did not provide a reason.',
+    '以上仅为分析建议，审批仍由你决定。': 'This is analysis only; the approval decision remains yours.',
     '可人工覆盖本次请求（只此一次，不沉淀规则）': 'You can override this once for this exact request (this time only; no rule is saved)',
     '授权工作区沙箱外处理权限': 'Authorize outside-workspace handling',
     '命令授权': 'Command authorization',
@@ -461,6 +473,8 @@ function translateUiString(value) {
         .replace(/^提交失败：(.+)$/g, 'Submission failed: $1')
         .replace(/^取消失败：(.+)$/g, 'Cancellation failed: $1')
         .replace(/^处理失败：(.+)$/g, 'Failed to process: $1')
+        .replace(/^分析失败：(.+)$/g, 'Analysis failed: $1')
+        .replace(/^风险：(.+)$/g, 'Risk: $1')
         .replace(/^切换会话加载失败：?(.+)$/g, 'Failed to load the session: $1')
         .replace(/^切换会话失败：?(.+)$/g, 'Failed to switch session: $1')
         .replace(/^加载会话消息失败：?(.+)$/g, 'Failed to load session messages: $1')
@@ -546,6 +560,7 @@ function translateUiString(value) {
         .replace(/^无法打开：(.+)$/, 'Could not open: $1')
         .replace(/^移除 (.+)$/, 'Remove $1')
         .replace(/^确定删除会话「(.+)」吗？其中的消息与记录将被移除。$/, 'Delete session “$1”? Its messages and records will be removed.')
+        .replace(/^将会话「(.+)」对应的 session 文件夹压缩为 ZIP 并下载。$/, 'Compress the session folder for “$1” as a ZIP file and download it.')
         .replace(/^工具 (\d+) 次$/, '$1 tool calls')
         .replace(/^失败 (\d+) 次$/, '$1 failures')
         .replace(/工具\s*(\d+)\s*次/g, '$1 tool calls')

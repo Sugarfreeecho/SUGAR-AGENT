@@ -244,7 +244,13 @@ async function consumeAgentSseResponseInner(response, runCtx, runSessionId, stre
                 if (runCtx && runCtx.streamCompletedSuccessfully !== false) {
                     runCtx.streamCompletedSuccessfully = true;
                 }
-                endRunForClient(runSessionId, runCtx, { finalDelayMs: 80, followupDelayMs: 0 });
+                var goalContinuesAfterDone = typeof isGoalActiveForSession === 'function'
+                    && isGoalActiveForSession(runSessionId);
+                endRunForClient(runSessionId, runCtx, {
+                    finalDelayMs: 80,
+                    followupDelayMs: 0,
+                    drainFollowup: !goalContinuesAfterDone,
+                });
                 return streamEventIdx;
             }
             try {
@@ -331,6 +337,7 @@ async function consumeAgentSseResponseInner(response, runCtx, runSessionId, stre
                             runId: parsed.run_id || parsed.runId || (runCtx && runCtx.runId),
                             reconcileFinal: parsed.type === 'run_finished',
                             discardPartialStreams: parsed.type !== 'run_finished',
+                            drainFollowup: !reduced.goalContinues,
                         });
                         streamEventIdx += 1;
                         continue;
@@ -470,7 +477,10 @@ async function consumeAgentSseResponseInner(response, runCtx, runSessionId, stre
                     event: parsed,
                     source: 'sse',
                 }, runSessionId);
-                if (parsed.type === 'final' && eventSessionId === runSessionId) {
+                if (parsed.type === 'final'
+                    && eventSessionId === runSessionId
+                    && !(typeof isGoalActiveForSession === 'function'
+                        && isGoalActiveForSession(runSessionId))) {
                     endRunForClient(runSessionId, runCtx, {
                         reconcileFinal: false,
                         followupDelayMs: 250,
@@ -851,7 +861,7 @@ function applySkippedRuntimeV2EventMetadata(event, runCtx, sessionId) {
 async function attachSessionEventStream(sessionId, opts) {
     opts = opts || {};
     if (!sessionId || getSessionRunState(sessionId)) return;
-    if (!isServerStreamActive(sessionId)) return;
+    if (!opts.force && !isServerStreamActive(sessionId)) return;
     var runSessionId = sessionId;
     var runCtx = null;
     var reattachFailed = false;
@@ -860,7 +870,7 @@ async function attachSessionEventStream(sessionId, opts) {
         if (!opts.skipInitialLoad) {
             await loadSessionMessages(runSessionId, 'saved-or-bottom', { preloadOlderIfShort: true });
             if (runSessionId !== currentSessionId) return;
-        } else if (typeof ensureLatestHistoryTailForLiveAppend === 'function') {
+        } else if (!Number.isFinite(Number(opts.afterIndex)) && typeof ensureLatestHistoryTailForLiveAppend === 'function') {
             var attachTailReady = await ensureLatestHistoryTailForLiveAppend(runSessionId);
             if (!attachTailReady || runSessionId !== currentSessionId) return;
         }
@@ -893,7 +903,9 @@ async function attachSessionEventStream(sessionId, opts) {
         syncSessionListIndicatorClasses();
         liveAutoFollow = true;
         streamProcNearBottom = true;
-        const preCount = await getUiEventCount(runSessionId, { preferCache: true });
+        const preCount = Number.isFinite(Number(opts.afterIndex))
+            ? Math.max(0, Math.floor(Number(opts.afterIndex)))
+            : await getUiEventCount(runSessionId, { preferCache: true });
         const streamUrl = '/sessions/' + encodeURIComponent(runSessionId)
             + '/stream?after_index=' + encodeURIComponent(String(preCount - 1));
         const response = await fetch(streamUrl, { signal: ac.signal });
@@ -1070,6 +1082,7 @@ function normalizeStoredFollowupItem(item) {
         status: restoredStatus,
         replacementRunId: String(item.replacementRunId || ''),
         awaitingRunEnd: item.awaitingRunEnd !== false,
+        deferUntilRunEnd: !!item.deferUntilRunEnd,
     };
 }
 
@@ -1114,6 +1127,7 @@ function persistFollowupQueue(sessionId) {
             status: item.status || '',
             replacementRunId: item.replacementRunId || '',
             awaitingRunEnd: item.awaitingRunEnd !== false,
+            deferUntilRunEnd: !!item.deferUntilRunEnd,
         };
     });
     try {
@@ -1134,7 +1148,7 @@ function removeStoredFollowupQueue(sessionId) {
 
 function inputHasSendableText() {
     if (!messageInput) return false;
-    return String(messageInput.value || '').replace(/[\u200B-\u200D\uFEFF]/g, '').trim().length > 0;
+    return hasSendableText(messageInput.value);
 }
 
 var followupDragState = null;
@@ -1372,7 +1386,10 @@ function renderFollowupQueue(sessionId) {
         sendNow.type = 'button';
         sendNow.className = 'followup-queue-action followup-queue-send';
         sendNow.textContent = '立即发送';
-        sendNow.disabled = !!item.status;
+        sendNow.disabled = !!item.status || !!(
+            (typeof pendingHumanQuestions === 'function' && pendingHumanQuestions(sid).length)
+            || (item.deferUntilRunEnd && (isSessionRunning(sid) || isServerStreamActive(sid)))
+        );
         var modeSelect = document.createElement('select');
         modeSelect.className = 'followup-queue-mode';
         modeSelect.setAttribute('aria-label', '追问发送模式');
@@ -1432,7 +1449,7 @@ function getFollowupStatusText(item) {
 
 function appendFollowupQueueItem(sessionId, text, display, selectedSkills) {
     const sid = String(sessionId || '');
-    if (!sid || !String(text || '').trim()) return null;
+    if (!sid || !hasSendableText(text)) return null;
     const item = {
         id: followupQueueSeq++,
         text: String(text),
@@ -1459,20 +1476,28 @@ function buildSelectedSkillsDisplayMessage(rawMessage, selectedSkills) {
     return message.endsWith(suffix) ? message : message + suffix;
 }
 
-function enqueueCurrentInputAsFollowup() {
-    if (!isMyAgentFeatureEnabled('followupRestart', false)) return false;
+function enqueueCurrentInputAsFollowup(options) {
+    options = options || {};
+    if (!options.pendingQuestion && !isMyAgentFeatureEnabled('followupRestart', false)) return false;
     if (isChatFileUploadBusy()) return false;
     const sid = currentSessionId;
     if (!sid) return false;
     rewriteInputWorkspacePaths();
     const visibleMessage = messageInput.value;
     const rawMessage = expandInputPathTokens(visibleMessage);
-    if (!String(rawMessage).trim()) return false;
+    if (!hasSendableText(rawMessage)) return false;
     var selectedSkills = [];
     if (typeof window.consumeSelectedSkillsForSend === 'function') {
         selectedSkills = window.consumeSelectedSkillsForSend();
     }
-    appendFollowupQueueItem(sid, rawMessage, visibleMessage, selectedSkills);
+    var item = appendFollowupQueueItem(sid, rawMessage, visibleMessage, selectedSkills);
+    if (!item) return false;
+    if (options.pendingQuestion) {
+        item.awaitingRunEnd = true;
+        item.deferUntilRunEnd = true;
+        persistFollowupQueue(sid);
+        renderFollowupQueue(sid);
+    }
     messageInput.value = '';
     persistInputDraft(sid, '');
     clearInputPathTokens();
@@ -1910,6 +1935,7 @@ function removeConsumedFollowupSteer(sessionId, ev) {
 function isFollowupAutoDrainReady(sessionId) {
     var sid = String(sessionId || '');
     return !!sid
+        && !(typeof pendingHumanQuestions === 'function' && pendingHumanQuestions(sid).length)
         && !(typeof isSessionStreamStopSuppressed === 'function' && isSessionStreamStopSuppressed(sid))
         && !isSessionRunning(sid)
         && !isServerStreamActive(sid)
@@ -1947,7 +1973,8 @@ function drainFollowupQueue(sessionId) {
     if (!sid) return;
     if (!isFollowupAutoDrainReady(sid)) {
         // 活跃 run 会在自己的终止边界重新启动 drain；这里只重试瞬时的锁/dispatcher 竞争。
-        if (isSessionRunning(sid)
+        if ((typeof pendingHumanQuestions === 'function' && pendingHumanQuestions(sid).length)
+            || isSessionRunning(sid)
             || isServerStreamActive(sid)
             || (typeof isSessionStreamStopSuppressed === 'function' && isSessionStreamStopSuppressed(sid))) return;
         scheduleFollowupQueueDrain(sid, 120);
@@ -2268,6 +2295,13 @@ async function sendFollowupNowImpl(itemId, sessionId, options) {
     if (idx < 0) return;
     const item = q[idx];
     if (!item) return;
+    if ((typeof pendingHumanQuestions === 'function' && pendingHumanQuestions(sid).length)
+        || (item.deferUntilRunEnd && (isSessionRunning(sid) || isServerStreamActive(sid)))) {
+        item.awaitingRunEnd = true;
+        persistFollowupQueue(sid);
+        renderFollowupQueue(sid);
+        return false;
+    }
     item.steerMode = item.steerMode === 'append' ? 'append' : 'interrupt';
     followupTimingCtx.mode = 'followup_' + item.steerMode;
     if (idx !== 0) {
@@ -2542,16 +2576,24 @@ async function sendMessage(options) {
         startedAt: clientPipelineStartedAt
     };
     let _clientStepStart = clientPipelineStartedAt;
-    messageLoadEpoch += 1;
     /* 立即快照「提交会话」：之后所有 await 都不能改变它，避免用户在 await 空隙切走后消息发到新会话。
        关键不变式：runSessionId === submitSessionId 全程恒等。 */
     const submitSessionIdInitial = options.sessionId || currentSessionId;
     if (!options.fromQueue && !options.fromInlineRewrite) rewriteInputWorkspacePaths();
     const visibleMessage = options.message != null ? String(options.message) : messageInput.value;
     const rawMessage = (options.fromQueue || options.fromInlineRewrite) ? visibleMessage : expandInputPathTokens(visibleMessage);
-    if (!String(rawMessage).trim()) return;
+    if (!hasSendableText(rawMessage)) return;
     if (isSessionRunning(submitSessionIdInitial) && !options.forceStart) return;
-    if (isSendPipelineLocked(submitSessionIdInitial)) return;
+    /* 在任何异步检查和可消费 UI 状态之前上锁，所有发送入口共享同一会话互斥。 */
+    _clientStepStart = nowPipelineMs();
+    const sendPipelineLock = acquireSendPipelineLock(submitSessionIdInitial);
+    if (!sendPipelineLock) return;
+    let submittedRunCtx = null;
+    let submittedRunSessionId = submitSessionIdInitial;
+    let optimisticRunState = null;
+    try {
+    messageLoadEpoch += 1;
+    reportClientPipelineStep(clientTimingCtx, 'acquire_send_lock', _clientStepStart);
     if (options.forceStart && submitSessionIdInitial) {
         var previousRun = getSessionRunState(submitSessionIdInitial);
         if (previousRun) abortSessionRun(submitSessionIdInitial, 'followup-restart');
@@ -2568,10 +2610,19 @@ async function sendMessage(options) {
         }
     }
     var selectedSkillsForRun = [];
+    var consumeSelectedSkillsAfterLock = false;
     if (Array.isArray(options.selectedSkills)) {
         selectedSkillsForRun = options.selectedSkills.map(function (skill) { return String(skill || '').trim(); }).filter(Boolean);
     } else if (!options.fromQueue && !options.fromInlineRewrite && typeof window.consumeSelectedSkillsForSend === 'function') {
-        selectedSkillsForRun = window.consumeSelectedSkillsForSend();
+        consumeSelectedSkillsAfterLock = true;
+    }
+
+    if (consumeSelectedSkillsAfterLock) {
+        try {
+            selectedSkillsForRun = window.consumeSelectedSkillsForSend();
+        } catch (e) {
+            selectedSkillsForRun = [];
+        }
     }
     var uiBaseMessage = options.displayMessage != null ? String(options.displayMessage) : rawMessage;
     var displayMessage = buildSelectedSkillsDisplayMessage(uiBaseMessage, selectedSkillsForRun);
@@ -2581,20 +2632,13 @@ async function sendMessage(options) {
         fromInlineRewrite: !!options.fromInlineRewrite,
         asSteer: !!options.asSteer
     });
-
-    /* 立即上锁：阻止后续连击；锁的 key 是提交时的会话，而非当前会话。 */
-    _clientStepStart = nowPipelineMs();
-    const sendPipelineLock = acquireSendPipelineLock(submitSessionIdInitial);
-    if (!sendPipelineLock) return;
-    let submittedRunCtx = null;
-    let submittedRunSessionId = submitSessionIdInitial;
     _clientStepStart = nowPipelineMs();
     const clientRunId = options.clientRunId || ((window.crypto && window.crypto.randomUUID)
         ? window.crypto.randomUUID()
         : ('run-' + Date.now() + '-' + Math.random().toString(16).slice(2)));
     clientTimingCtx.runId = clientRunId;
     const ac = new AbortController();
-    var optimisticRunState = {
+    optimisticRunState = {
         controller: ac,
         ctx: null,
         runId: clientRunId,
@@ -2613,9 +2657,6 @@ async function sendMessage(options) {
     setSendButtonState();
     syncSessionListIndicatorClasses();
     reportClientPipelineStep(clientTimingCtx, 'publish_optimistic_run_state', _clientStepStart);
-    try {
-    reportClientPipelineStep(clientTimingCtx, 'acquire_send_lock', _clientStepStart);
-
     if (pendingRewriteTruncate && pendingRewriteTruncate.sessionId === submitSessionIdInitial) {
         _clientStepStart = nowPipelineMs();
         const pendingRewrite = pendingRewriteTruncate;
@@ -2943,97 +2984,69 @@ async function sendMessage(options) {
     }
 }
 
-async function submitComposerWithPendingQuestionGuard() {
-    if (typeof pendingHumanQuestions !== 'function' || !pendingHumanQuestions(currentSessionId).length) return false;
-    if (!inputHasSendableText() || isChatFileUploadBusy()) return false;
-    var shouldSend = await confirmAndCancelPendingHumanQuestionsForMessage(currentSessionId);
-    if (shouldSend) {
-        await sendMessage({ forceStart: isSessionRunning(currentSessionId) });
+function readComposerActionState() {
+    const sessionId = currentSessionId;
+    const running = isSessionRunning(sessionId);
+    const uploadBusy = isChatFileUploadBusy();
+    const sendable = hasSendableText(messageInput.value);
+    return {
+        sessionId: sessionId,
+        running: running,
+        uploadBusy: uploadBusy,
+        sendable: sendable,
+        pendingQuestion: sendable && !uploadBusy
+            && typeof pendingHumanQuestions === 'function'
+            && pendingHumanQuestions(sessionId).length > 0,
+        activeRun: running ? getSessionRunState(sessionId) : null,
+    };
+}
+
+function queueComposerBehindPendingQuestion(state) {
+    if (!state.pendingQuestion || !state.sendable || state.uploadBusy) return false;
+    return enqueueCurrentInputAsFollowup({ pendingQuestion: true });
+}
+
+function dispatchComposerAction(allowStop) {
+    const state = readComposerActionState();
+    if (!state.sessionId && optimisticNewSessionRun) {
+        if (allowStop) pauseCurrentRun();
+        return false;
     }
-    // A visible confirmation was shown, so the originating key/click event is
-    // handled even when the user chooses to return to the question.
+    if (queueComposerBehindPendingQuestion(state)) return true;
+    if (state.uploadBusy && !state.running) return false;
+    if (state.running) {
+        const canQueueFollowup = isMyAgentFeatureEnabled('followupRestart', false)
+            && state.sendable
+            && !state.uploadBusy
+            && !(state.activeRun && state.activeRun.suppressFollowupButton);
+        if (canQueueFollowup) return enqueueCurrentInputAsFollowup();
+        if (allowStop) pauseCurrentRun();
+        return false;
+    }
+    void sendMessage();
     return true;
 }
 
-messageInput.addEventListener('keydown', async function onFollowupInputKeydown(e) {
-    if (!isMyAgentFeatureEnabled('followupRestart', false)) return;
-    if (e.key !== 'Enter') return;
-    e.stopImmediatePropagation();
-    if (e.ctrlKey && !e.shiftKey && !e.metaKey) {
-        const start = this.selectionStart;
-        const end = this.selectionEnd;
-        this.value = this.value.substring(0, start) + '\n' + this.value.substring(end);
-        this.selectionStart = this.selectionEnd = start + 1;
-        e.preventDefault();
-        autoResizeTextarea();
-        return;
-    }
-    if (e.shiftKey) return;
-    if (isChatFileUploadBusy()) {
-        e.preventDefault();
-        return;
-    }
-    e.preventDefault();
-    if (await submitComposerWithPendingQuestionGuard()) return;
-    if (isSessionRunning(currentSessionId)) {
-        enqueueCurrentInputAsFollowup();
-        return;
-    }
-    sendMessage();
-}, true);
-
-messageInput.addEventListener('keydown', async function onInputKeydown(e) {
-    if (e.key !== 'Enter') return;
+messageInput.addEventListener('keydown', function onComposerInputKeydown(e) {
+    if (isInputMethodComposing(e) || e.key !== 'Enter') return;
     // Ctrl+Enter → 插入换行（跨浏览器兼容）
-    if (e.ctrlKey && !e.shiftKey && !e.metaKey) {
-        const start = this.selectionStart;
-        const end = this.selectionEnd;
-        this.value = this.value.substring(0, start) + '\n' + this.value.substring(end);
-        this.selectionStart = this.selectionEnd = start + 1;
-        e.preventDefault();
-        autoResizeTextarea();
+    if (e.ctrlKey && !e.shiftKey && !e.metaKey && !e.altKey) {
+        insertTextareaNewline(this, e);
+        syncComposerInputState();
         return;
     }
-    // Shift+Enter → 浏览器默认插入换行
-    if (e.shiftKey) return;
-    if (isChatFileUploadBusy()) {
-        e.preventDefault();
-        return;
-    }
-    // 纯 Enter → 发送；pending Ask 即使仍处于运行状态，也先进入
-    // “取消问题并发送”确认流程。
+    // 带修饰键的 Enter 保留为编辑操作；纯 Enter 才提交。
+    if (!isInputSubmitShortcut(e, 'chat')) return;
     e.preventDefault();
-    if (await submitComposerWithPendingQuestionGuard()) return;
-    if (isSessionRunning(currentSessionId)) return;
-    sendMessage();
+    dispatchComposerAction(false);
 });
 chatContainer.addEventListener('scroll', function () {
     refreshLiveAutoFollowPins();
     scheduleTocActiveUpdate();
     maybeAutoLoadOlderHistory();
 }, { passive: true });
-sendBtn.addEventListener('click', async function (e) {
-    e.stopImmediatePropagation();
-    if (!currentSessionId && optimisticNewSessionRun) {
-        pauseCurrentRun();
-        return;
-    }
-    if (await submitComposerWithPendingQuestionGuard()) return;
-    if (isSessionRunning(currentSessionId)) {
-        const activeRun = getSessionRunState(currentSessionId);
-        const canQueueFollowup = isMyAgentFeatureEnabled('followupRestart', false)
-            && inputHasSendableText()
-            && !isChatFileUploadBusy()
-            && !(activeRun && activeRun.suppressFollowupButton);
-        if (canQueueFollowup) enqueueCurrentInputAsFollowup();
-        else pauseCurrentRun();
-        return;
-    }
-    sendMessage();
-}, true);
 sendBtn.addEventListener('click', function () {
-    if ((!currentSessionId && optimisticNewSessionRun) || isSessionRunning(currentSessionId)) pauseCurrentRun();
-    else sendMessage();
+    dispatchComposerAction(true);
 });
 window.addEventListener('resize', positionFollowupQueuePanel);
 window.addEventListener('scroll', positionFollowupQueuePanel, true);

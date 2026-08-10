@@ -135,7 +135,7 @@ async function refreshAgentTeamPanel() {
 }
 
 async function mutateAgentTeam(path, payload, method) {
-    if (agentTeamBusy) return;
+    if (agentTeamBusy) return false;
     agentTeamBusy = true;
     setAgentTeamError('');
     try {
@@ -145,8 +145,10 @@ async function mutateAgentTeam(path, payload, method) {
             body: payload === undefined ? undefined : JSON.stringify(payload),
         });
         await refreshAgentTeamPanel();
+        return true;
     } catch (error) {
         setAgentTeamError(error && error.message ? error.message : error);
+        return false;
     } finally {
         agentTeamBusy = false;
     }
@@ -198,18 +200,28 @@ function initAgentTeamControls() {
     var refresh = document.getElementById('agent-team-refresh');
     if (refresh) refresh.addEventListener('click', function () { void refreshAgentTeamPanel(); });
     var create = document.getElementById('agent-team-create');
-    if (create) create.addEventListener('click', function () {
+    var titleInput = document.getElementById('agent-team-title-input');
+    async function createTeam() {
         var sid = agentTeamSessionId();
-        var input = document.getElementById('agent-team-title-input');
-        if (sid) void mutateAgentTeam('/api/agent-team/' + encodeURIComponent(sid), { title: input ? input.value : '' });
-    });
+        if (!sid) return false;
+        var saved = await mutateAgentTeam('/api/agent-team/' + encodeURIComponent(sid), { title: titleInput ? normalizeSendableText(titleInput.value) : '' });
+        if (saved && titleInput) titleInput.value = '';
+        return saved;
+    }
+    if (create) create.addEventListener('click', function () { void createTeam(); });
+    bindInputSubmit(titleInput, { mode: 'single-line', submit: createTeam });
     var createTask = document.getElementById('agent-team-task-create');
-    if (createTask) createTask.addEventListener('click', function () {
+    var taskInput = document.getElementById('agent-team-task-title');
+    async function createTaskEntry() {
         var sid = agentTeamSessionId();
-        var input = document.getElementById('agent-team-task-title');
-        var title = input ? input.value.trim() : '';
-        if (sid && title) void mutateAgentTeam('/api/agent-team/' + encodeURIComponent(sid) + '/tasks', { title: title });
-    });
+        var title = taskInput ? normalizeSendableText(taskInput.value) : '';
+        if (!sid || !hasSendableText(title)) return false;
+        var saved = await mutateAgentTeam('/api/agent-team/' + encodeURIComponent(sid) + '/tasks', { title: title });
+        if (saved && taskInput) taskInput.value = '';
+        return saved;
+    }
+    if (createTask) createTask.addEventListener('click', function () { void createTaskEntry(); });
+    bindInputSubmit(taskInput, { mode: 'single-line', submit: createTaskEntry });
     [['agent-team-shutdown', 'shutdown'], ['agent-team-complete-shutdown', 'shutdown/complete'], ['agent-team-archive', 'archive']].forEach(function (entry) {
         var button = document.getElementById(entry[0]);
         if (button) button.addEventListener('click', function () {

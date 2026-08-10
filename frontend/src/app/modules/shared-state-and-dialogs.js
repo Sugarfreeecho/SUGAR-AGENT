@@ -223,8 +223,12 @@ function closeUiModal(result) {
     root.onclick = null;
     var okBtn = document.getElementById('ui-modal-ok');
     var cancelBtn = document.getElementById('ui-modal-cancel');
+    var inputEl = document.getElementById('ui-modal-input');
+    var selectEl = document.getElementById('ui-modal-select');
     if (okBtn) okBtn.onclick = null;
     if (cancelBtn) cancelBtn.onclick = null;
+    if (inputEl) inputEl.oninput = null;
+    if (selectEl) selectEl.onchange = null;
     if (uiModalKeyHandler) {
         document.removeEventListener('keydown', uiModalKeyHandler);
         uiModalKeyHandler = null;
@@ -247,6 +251,10 @@ function openUiModal(options) {
         var iconEl = document.getElementById('ui-modal-icon');
         var okBtn = document.getElementById('ui-modal-ok');
         var cancelBtn = document.getElementById('ui-modal-cancel');
+        var inputLabelEl = document.getElementById('ui-modal-input-label');
+        var inputEl = document.getElementById('ui-modal-input');
+        var selectLabelEl = document.getElementById('ui-modal-select-label');
+        var selectEl = document.getElementById('ui-modal-select');
         if (!root || !titleEl || !bodyEl || !okBtn || !cancelBtn || !iconEl) {
             resolve(false);
             return;
@@ -265,21 +273,86 @@ function openUiModal(options) {
         okBtn.textContent = o.confirmText || (showCancel ? '确定' : '知道了');
         cancelBtn.textContent = o.cancelText || '取消';
 
+        var hasSelect = !!(selectEl && selectLabelEl && Array.isArray(o.selectOptions));
+        var hasInput = !hasSelect && !!(inputEl && inputLabelEl && Object.prototype.hasOwnProperty.call(o, 'inputValue'));
+        var inputRequired = hasInput && o.inputRequired !== false;
+        if (inputEl && inputLabelEl) {
+            inputLabelEl.hidden = !hasInput;
+            inputEl.hidden = !hasInput;
+            inputLabelEl.textContent = hasInput ? (o.inputLabel || '输入内容') : '';
+            inputEl.value = hasInput ? String(o.inputValue == null ? '' : o.inputValue) : '';
+            inputEl.placeholder = hasInput ? String(o.inputPlaceholder || '') : '';
+            inputEl.maxLength = hasInput && Number(o.inputMaxLength) > 0 ? Number(o.inputMaxLength) : 524288;
+            inputEl.removeAttribute('aria-invalid');
+        }
+        if (selectEl && selectLabelEl) {
+            selectLabelEl.hidden = !hasSelect;
+            selectEl.hidden = !hasSelect;
+            selectLabelEl.textContent = hasSelect ? (o.selectLabel || '选择一项') : '';
+            selectEl.innerHTML = '';
+            selectEl.removeAttribute('aria-invalid');
+            if (hasSelect) {
+                o.selectOptions.forEach(function (item) {
+                    var option = document.createElement('option');
+                    var normalized = item && typeof item === 'object' ? item : { value: item, label: item };
+                    option.value = String(normalized.value == null ? '' : normalized.value);
+                    option.textContent = String(normalized.label == null ? option.value : normalized.label);
+                    option.disabled = normalized.disabled === true;
+                    selectEl.appendChild(option);
+                });
+                selectEl.value = String(o.selectValue == null ? '' : o.selectValue);
+                if (!selectEl.value && selectEl.options.length) selectEl.selectedIndex = 0;
+            }
+        }
+
         var danger = !!o.danger;
         iconEl.className = 'ui-modal__icon ' + (danger ? 'ui-modal__icon--danger' : 'ui-modal__icon--info');
         iconEl.innerHTML = danger ? UI_MODAL_SVG_TRASH : UI_MODAL_SVG_INFO;
 
         okBtn.className = 'ui-modal-btn ' + (danger ? 'ui-modal-btn--danger' : 'ui-modal-btn--primary');
 
-        function onOk() { closeUiModal(true); }
+        function syncInputValidity() {
+            if (!hasInput && !hasSelect) return;
+            var invalid = hasSelect ? !String(selectEl.value || '').trim() : (inputRequired && !hasSendableText(inputEl.value));
+            okBtn.disabled = invalid;
+            if (hasInput) inputEl.setAttribute('aria-invalid', invalid ? 'true' : 'false');
+            if (hasSelect) selectEl.setAttribute('aria-invalid', invalid ? 'true' : 'false');
+        }
+        function onOk() {
+            if (hasSelect) {
+                var selectedValue = String(selectEl.value || '').trim();
+                if (!selectedValue) {
+                    syncInputValidity();
+                    selectEl.focus();
+                    return;
+                }
+                closeUiModal(selectedValue);
+                return;
+            }
+            if (hasInput) {
+                var value = normalizeSendableText(inputEl.value);
+                if (inputRequired && !value) {
+                    syncInputValidity();
+                    inputEl.focus();
+                    return;
+                }
+                closeUiModal(value);
+                return;
+            }
+            closeUiModal(true);
+        }
         function onCancel() { closeUiModal(false); }
         okBtn.onclick = onOk;
         cancelBtn.onclick = onCancel;
+        okBtn.disabled = false;
+        if (inputEl) inputEl.oninput = syncInputValidity;
+        if (selectEl) selectEl.onchange = syncInputValidity;
+        syncInputValidity();
         root.onclick = function (e) { if (e.target === root) onCancel(); };
 
         uiModalKeyHandler = function (e) {
             if (e.key === 'Escape') { e.preventDefault(); onCancel(); }
-            else if (e.key === 'Enter' && !e.shiftKey && !e.ctrlKey && !e.metaKey && document.activeElement !== cancelBtn) {
+            else if (isInputSubmitShortcut(e, 'single-line') && document.activeElement !== cancelBtn) {
                 e.preventDefault();
                 onOk();
             }
@@ -289,7 +362,16 @@ function openUiModal(options) {
         root.classList.add('is-open');
         root.setAttribute('aria-hidden', 'false');
         document.body.style.overflow = 'hidden';
-        requestAnimationFrame(function () { okBtn.focus(); });
+        requestAnimationFrame(function () {
+            if (hasSelect) {
+                selectEl.focus();
+            } else if (hasInput) {
+                inputEl.focus();
+                inputEl.select();
+            } else {
+                okBtn.focus();
+            }
+        });
     });
 }
 

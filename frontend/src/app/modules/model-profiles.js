@@ -77,6 +77,7 @@ function modelProfileHoverDetail(profile) {
     var english = modelProfileUiLanguage() === 'en';
     var lines = [
         (english ? 'Model profile: ' : '模型配置：') + profileLabel(p),
+        'model_porfile_id: ' + String(p.id || (english ? 'Not set' : '未设置')),
         (english ? 'Model ID: ' : '模型 ID：') + String(p.model || (english ? 'Not set' : '未设置')),
         (english ? 'API type: ' : '接口类型：') + String(p.llm_type || 'openai'),
         (english ? 'Context window: ' : '上下文窗口：') + (p.context_window ? formatContextWindow(p.context_window) : (english ? 'Not set' : '未设置')),

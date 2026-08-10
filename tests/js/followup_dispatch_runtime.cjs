@@ -73,6 +73,7 @@ async function testAutoDrainRequiresACompleteIdleBoundary() {
   let sendLocked = false;
   let dispatchBusy = false;
   let stopSuppressed = false;
+  let pendingAsk = false;
   const ctx = context({
     followupDrainTimers: Object.create(null),
     isSessionRunning: () => localRunning,
@@ -80,6 +81,7 @@ async function testAutoDrainRequiresACompleteIdleBoundary() {
     isServerStreamActive: () => serverRunning,
     isSendPipelineLocked: () => sendLocked,
     isFollowupDispatchBusy: () => dispatchBusy,
+    pendingHumanQuestions: () => pendingAsk ? [{ interaction_id: 'ask' }] : [],
     getFollowupQueue: () => queue,
     renderFollowupQueue() {},
     sendFollowupNow: async (id, sid, options) => { sent.push([id, sid, options]); },
@@ -106,6 +108,12 @@ async function testAutoDrainRequiresACompleteIdleBoundary() {
   assert.strictEqual(timers.size, 0);
 
   serverRunning = false;
+  pendingAsk = true;
+  ctx.drainFollowupQueue('s');
+  assert.deepStrictEqual(sent, [], 'an unanswered Ask must block automatic transmission');
+  assert.strictEqual(timers.size, 0, 'the Ask completion boundary owns the next drain attempt');
+
+  pendingAsk = false;
   stopSuppressed = true;
   ctx.drainFollowupQueue('s');
   assert.deepStrictEqual(sent, [], 'a user stop suppression window must block automatic transmission');
@@ -221,6 +229,8 @@ async function testRunStartSignalAndFallbacks() {
   let lastSendOptions = null;
   let waitForLock = true;
   let steerResponse = null;
+  let localRunning = false;
+  let pendingAsk = false;
   const ctx = context({
     currentSessionId: 's',
     followupManualDispatchEpochBySession: Object.create(null),
@@ -230,8 +240,9 @@ async function testRunStartSignalAndFallbacks() {
     persistFollowupQueue() {},
     renderFollowupQueue() {},
     reportClientPipelineStep() {},
-    isSessionRunning: () => false,
+    isSessionRunning: () => localRunning,
     isServerStreamActive: () => false,
+    pendingHumanQuestions: () => pendingAsk ? [{ interaction_id: 'ask' }] : [],
     isSendPipelineLocked: () => false,
     sendSteerMessage: async () => {
       if (steerResponse) return steerResponse;
@@ -264,6 +275,22 @@ async function testRunStartSignalAndFallbacks() {
     appendPendingSteerToProcess() {},
   });
   vm.runInContext(startHelper + between('async function sendFollowupNowImpl', 'async function sendFollowupNow(itemId'), ctx);
+
+  queue = [{
+    id: 'ask-deferred',
+    text: 'after ask',
+    display: 'after ask',
+    skills: [],
+    steerMode: 'interrupt',
+    status: '',
+    awaitingRunEnd: true,
+    deferUntilRunEnd: true,
+  }];
+  localRunning = true;
+  await ctx.sendFollowupNowImpl('ask-deferred', 's');
+  assert.strictEqual(sendCalls, 0, 'an Ask-queued follow-up must not interrupt the owning run');
+  assert.strictEqual(queue[0].status, '');
+  localRunning = false;
 
   queue = [{ id: 'auto', text: 'next task', display: 'next task', skills: [], steerMode: 'interrupt', status: '' }];
   await ctx.sendFollowupNowImpl('auto', 's', { autoAfterRun: true });

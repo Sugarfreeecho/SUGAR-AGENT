@@ -161,7 +161,7 @@ function openInlineRewriteEditor(wrap, rawText, beforeIndex) {
 
     async function confirm() {
         const nextText = String(textarea.value || '');
-        if (!nextText.trim()) {
+        if (!hasSendableText(nextText)) {
             showUiAlert({
                 title: '无法改写',
                 message: '改写内容不能为空。',
@@ -170,6 +170,10 @@ function openInlineRewriteEditor(wrap, rawText, beforeIndex) {
             return;
         }
         if (!currentSessionId || !Number.isFinite(Number(beforeIndex))) return;
+        if (typeof confirmAndCancelPendingHumanQuestionsForHistoryMutation === 'function') {
+            var canRewrite = await confirmAndCancelPendingHumanQuestionsForHistoryMutation(currentSessionId);
+            if (!canRewrite) return;
+        }
         confirmBtn.disabled = true;
         cancelBtn.disabled = true;
         pendingRewriteTruncate = {
@@ -202,7 +206,7 @@ function openInlineRewriteEditor(wrap, rawText, beforeIndex) {
             cancel();
             return;
         }
-        if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+        if (isInputSubmitShortcut(e, 'editor')) {
             e.preventDefault();
             void confirm();
         }
@@ -549,16 +553,22 @@ function onMessageToolbarClick(wrap, role, act) {
             cancelText: '取消',
         }).then(function (ok) {
             if (!ok) return;
-            truncateSessionOnServer(before, { beforeSeq: beforeSeq }).then(function (res) {
-                if (!res || !res.ok) {
-                    showUiAlert({
-                        title: '同步失败',
-                        message: describeServerSyncFailure(res, '删除未生效。'),
-                        variant: 'error'
-                    });
-                    return;
-                }
-                applyClientHistoryTruncate(currentSessionId, before, wrap);
+            var guard = typeof confirmAndCancelPendingHumanQuestionsForHistoryMutation === 'function'
+                ? confirmAndCancelPendingHumanQuestionsForHistoryMutation(currentSessionId)
+                : Promise.resolve(true);
+            guard.then(function (canMutate) {
+                if (!canMutate) return;
+                truncateSessionOnServer(before, { beforeSeq: beforeSeq }).then(function (res) {
+                    if (!res || !res.ok) {
+                        showUiAlert({
+                            title: '同步失败',
+                            message: describeServerSyncFailure(res, '删除未生效。'),
+                            variant: 'error'
+                        });
+                        return;
+                    }
+                    applyClientHistoryTruncate(currentSessionId, before, wrap);
+                });
             });
         });
         return;
@@ -1092,7 +1102,7 @@ function scheduleLiveProcessAggregateStats() {
     if (!refreshLiveProcessAggregateStats()) return;
     processAggregateStatsTimer = setInterval(function () {
         if (!refreshLiveProcessAggregateStats()) stopLiveProcessAggregateStats();
-    }, 250);
+    }, 1000);
 }
 
 function formatProcDurationMs(ms) {
@@ -1510,12 +1520,13 @@ function repinStreamScrollAfterComposerResize() {
     var pb = typeof getProcessBodyElForCurrentRun === 'function' ? getProcessBodyElForCurrentRun() : null;
     if (pb) pb.scrollTop = pb.scrollHeight;
 }
-messageInput.addEventListener('input', autoResizeTextarea);
-messageInput.addEventListener('input', rewriteInputWorkspacePaths);
-messageInput.addEventListener('input', function () {
+function syncComposerInputState() {
+    autoResizeTextarea();
+    rewriteInputWorkspacePaths();
     if (currentSessionId) persistInputDraft(currentSessionId, messageInput.value);
     if (typeof setSendButtonState === 'function') setSendButtonState();
-});
+}
+messageInput.addEventListener('input', syncComposerInputState);
 autoResizeTextarea();
 refreshInputPathChips();
 
@@ -2294,6 +2305,7 @@ function updateSessionTitle() {
     if (!currentSessionId) {
         br.textContent = '未选择会话';
         sub.textContent = '';
+        if (typeof syncTitlebarSessionMenu === 'function') syncTitlebarSessionMenu(null);
         setContextTokenLabel(null, null);
         return;
     }
@@ -2303,6 +2315,7 @@ function updateSessionTitle() {
     const name = localizeSessionPlaceholderName((raw && raw.trim()) ? raw.trim() : 'Session');
     br.textContent = name;
     sub.innerHTML = buildSessionWorkspaceSubtitle(currentSessionId);
+    if (typeof syncTitlebarSessionMenu === 'function') syncTitlebarSessionMenu(sess || { id: currentSessionId, name: raw });
     initUiHoverTips(sub);
 }
 

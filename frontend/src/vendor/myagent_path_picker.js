@@ -887,6 +887,7 @@
       if (ev.key === 'ArrowDown') { ev.preventDefault(); setActive(state.active + 1); }
       else if (ev.key === 'ArrowUp') { ev.preventDefault(); setActive(state.active - 1); }
       else if (ev.key === 'Enter') {
+        if (ev.isComposing || ev.keyCode === 229 || ev.which === 229) return;
         ev.preventDefault();
         var row = state.visible[state.active];
         if (row && row.type === 'dir') toggleItem(dirSelectionItem(row.node));
