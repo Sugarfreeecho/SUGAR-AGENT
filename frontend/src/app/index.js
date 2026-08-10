@@ -1,6 +1,7 @@
 import { marked } from 'marked';
 import i18nSource from './modules/i18n.js?raw';
 import settingsSource from './modules/settings.js?raw';
+import inputActionsSource from './modules/input-actions.js?raw';
 import sharedStateAndDialogsSource from './modules/shared-state-and-dialogs.js?raw';
 import agentTeamSource from './modules/agent-team.js?raw';
 import sessionStoreSource from './state/session-store.js?raw';
@@ -35,14 +36,32 @@ import layoutPanelsSource from './modules/layout-panels.js?raw';
 
 globalThis.marked = marked;
 
+const mermaidVendorUrl = '/assets/vendor/mermaid.min.js';
 let mermaidImportPromise = null;
 globalThis.loadMyAgentMermaid = function loadMyAgentMermaid() {
     if (globalThis.mermaid) return Promise.resolve(globalThis.mermaid);
     if (!mermaidImportPromise) {
-        mermaidImportPromise = import('mermaid').then(function (module) {
-            const api = module.default || module.mermaid || module;
-            globalThis.mermaid = api;
-            return api;
+        mermaidImportPromise = new Promise(function (resolve, reject) {
+            const script = document.createElement('script');
+            script.src = mermaidVendorUrl;
+            script.async = true;
+            script.dataset.myagentMermaidVendor = 'true';
+            script.onload = function () {
+                if (!globalThis.mermaid) {
+                    script.remove();
+                    reject(new Error('Mermaid vendor loaded without exposing its API'));
+                    return;
+                }
+                resolve(globalThis.mermaid);
+            };
+            script.onerror = function () {
+                script.remove();
+                reject(new Error('Failed to load Mermaid vendor asset'));
+            };
+            document.head.appendChild(script);
+        }).catch(function (error) {
+            mermaidImportPromise = null;
+            throw error;
         });
     }
     return mermaidImportPromise;
@@ -61,6 +80,7 @@ globalThis.loadMyAgentHtml2Canvas = function loadMyAgentHtml2Canvas() {
 const uiSources = [
     i18nSource,
     settingsSource,
+    inputActionsSource,
     sharedStateAndDialogsSource,
     agentTeamSource,
     sessionStoreSource,

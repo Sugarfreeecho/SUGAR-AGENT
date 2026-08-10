@@ -10,9 +10,9 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:ital,wght@0,400;0,500;0,600;0,700;0,800;1,400;1,500&family=JetBrains+Mono:ital,wght@0,400;0,500;0,600;1,400&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
     <script>try { if (localStorage.getItem('myagent-theme') !== 'dark') document.documentElement.classList.add('theme-light'); } catch (e) { document.documentElement.classList.add('theme-light'); }</script>
-  <script type="module" crossorigin src="/assets/main-BQgksPVu.js"></script>
+  <script type="module" crossorigin src="/assets/main-Ha_3srZy.js"></script>
   <link rel="modulepreload" crossorigin href="/assets/modulepreload-polyfill-B5Qt9EMX.js">
-  <link rel="stylesheet" crossorigin href="/assets/main-BgPg6X22.css">
+  <link rel="stylesheet" crossorigin href="/assets/main-DyDmi-bR.css">
 </head>
 <body>
 <div class="app">
@@ -71,7 +71,10 @@
             </div>
             <header class="titlebar">
                 <div class="breadcrumb">
-                    <span id="breadcrumb-text">选择或新建会话</span>
+                    <div class="breadcrumb-title-row">
+                        <span id="breadcrumb-text">选择或新建会话</span>
+                        <div id="breadcrumb-session-actions" class="breadcrumb-session-actions hidden"></div>
+                    </div>
                     <span id="breadcrumb-sub"></span>
                 </div>
                 <div class="titlebar-right">
@@ -225,6 +228,8 @@
             </div>
         </div>
         <p id="ui-modal-desc" class="ui-modal__body"></p>
+        <label id="ui-modal-input-label" class="ui-modal__input-label" for="ui-modal-input" hidden></label>
+        <input id="ui-modal-input" class="ui-modal__input" type="text" autocomplete="off" hidden>
         <div class="ui-modal__actions">
             <button type="button" class="ui-modal-btn ui-modal-btn--ghost" id="ui-modal-cancel">取消</button>
             <button type="button" class="ui-modal-btn ui-modal-btn--primary" id="ui-modal-ok">确定</button>
@@ -318,12 +323,6 @@
                 <button type="button" id="settings-execution-dashboard" class="settings-advanced-btn">执行状态看板</button>
             </div>
             <div class="settings-modal__section">
-                <div class="settings-modal__label">权限与安全</div>
-                <div class="settings-feature-status">工作区外处理权限的授权入口在审批卡片：当写、删除或 Shell 触发工作区外操作时，选择“授权工作区沙箱外处理权限”即可一次性放开；此处仅提供撤销。</div>
-                <div id="settings-external-ops-status" class="settings-feature-status" role="status" aria-live="polite">正在读取状态…</div>
-                <button type="button" id="settings-external-ops-revoke" class="settings-advanced-btn" style="display:none;margin-top:.45rem;color:var(--red-accent,#f38ba8);border-color:rgba(243,139,168,.35)">撤销授权</button>
-            </div>
-            <div class="settings-modal__section">
                 <div class="settings-modal__label">环境与 API</div>
                 <button type="button" id="settings-env-advanced" class="settings-advanced-btn">高级设置</button>
                 <div style="margin-top:.45rem;color:var(--text-tertiary);font-size:0.72rem;line-height:1.45;">编辑完整 .env，保存后立即写回磁盘（部分项需重启服务）。</div>
@@ -332,6 +331,52 @@
         </div>
     </div>
 </div>
-
+
+    <div id="agent-team-modal-root" class="settings-modal-overlay" aria-hidden="true">
+        <div class="settings-modal agent-team-modal" role="dialog" aria-modal="true" aria-labelledby="agent-team-modal-title" tabindex="-1">
+            <div class="settings-modal__head">
+                <div>
+                    <h2 id="agent-team-modal-title" class="settings-modal__title">Agent Team</h2>
+                    <div id="agent-team-modal-subtitle" class="settings-feature-status">当前会话团队控制面板</div>
+                </div>
+                <button type="button" id="agent-team-modal-close" class="settings-modal__close" aria-label="关闭">×</button>
+            </div>
+            <div class="agent-team-toolbar">
+                <button type="button" id="agent-team-refresh" class="settings-theme-btn">刷新</button>
+                <button type="button" id="agent-team-shutdown" class="settings-theme-btn">请求关停</button>
+                <button type="button" id="agent-team-complete-shutdown" class="settings-theme-btn">完成关停</button>
+                <button type="button" id="agent-team-archive" class="settings-theme-btn">归档</button>
+            </div>
+            <div id="agent-team-error" class="settings-feature-status is-error hidden" role="alert"></div>
+            <div id="agent-team-empty" class="agent-team-empty hidden">
+                <p>当前会话还没有团队。</p>
+                <div class="agent-team-inline-form">
+                    <input id="agent-team-title-input" class="agent-team-input" type="text" maxlength="200" placeholder="团队名称（可选）">
+                    <button type="button" id="agent-team-create" class="settings-advanced-btn">创建团队</button>
+                </div>
+            </div>
+            <div id="agent-team-content" class="agent-team-content hidden">
+                <div id="agent-team-summary" class="agent-team-summary"></div>
+                <section class="agent-team-section">
+                    <h3>成员</h3>
+                    <div id="agent-team-members" class="agent-team-list"></div>
+                    <p class="agent-team-help">持久成员由 Agent 调用 team(action="spawn_member") 创建和派工。</p>
+                </section>
+                <section class="agent-team-section">
+                    <h3>共享任务</h3>
+                    <div class="agent-team-inline-form">
+                        <input id="agent-team-task-title" class="agent-team-input" type="text" maxlength="300" placeholder="新任务标题">
+                        <button type="button" id="agent-team-task-create" class="settings-advanced-btn">添加任务</button>
+                    </div>
+                    <div id="agent-team-tasks" class="agent-team-list"></div>
+                </section>
+                <section class="agent-team-section">
+                    <h3>权限请求</h3>
+                    <div id="agent-team-permissions" class="agent-team-list"></div>
+                </section>
+            </div>
+        </div>
+    </div>
+
 </body>
 </html>
