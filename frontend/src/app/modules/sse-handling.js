@@ -1319,6 +1319,222 @@ function positionFollowupQueuePanel() {
     panel.style.width = '';
 }
 
+var activeFollowupModePickerClose = null;
+
+function closeActiveFollowupModePicker() {
+    if (typeof activeFollowupModePickerClose !== 'function') return;
+    var close = activeFollowupModePickerClose;
+    activeFollowupModePickerClose = null;
+    close();
+}
+
+function followupQueueRenderSignature(sessionId, queue) {
+    var sid = String(sessionId || '');
+    var running = !!(isSessionRunning(sid) || isServerStreamActive(sid));
+    var humanQuestionCount = typeof pendingHumanQuestions === 'function'
+        ? pendingHumanQuestions(sid).length
+        : 0;
+    var items = (Array.isArray(queue) ? queue : []).map(function (item) {
+        return {
+            id: String((item && item.id) || ''),
+            status: String((item && item.status) || ''),
+            steerMode: item && item.steerMode === 'append' ? 'append' : 'interrupt',
+            display: String((item && (item.display || item.text)) || ''),
+            skills: Array.isArray(item && item.skills) ? item.skills.map(String) : [],
+            deferUntilRunEnd: !!(item && item.deferUntilRunEnd),
+            awaitingRunEnd: !!(item && item.awaitingRunEnd),
+        };
+    });
+    return JSON.stringify({ sid: sid, running: running, humanQuestionCount: humanQuestionCount, items: items });
+}
+
+function refreshFollowupQueueRenderSignature(sessionId) {
+    var sid = String(sessionId || '');
+    var panel = document.getElementById('followup-queue-panel');
+    if (!panel || panel.dataset.sessionId !== sid) return;
+    panel.dataset.renderSignature = followupQueueRenderSignature(sid, getFollowupQueue(sid));
+}
+
+function createFollowupModePicker(item, sessionId) {
+    var picker = document.createElement('div');
+    picker.className = 'followup-mode-picker';
+    var choices = [
+        { value: 'interrupt', label: '打断', description: '立即插入当前运行' },
+        { value: 'append', label: '追加', description: '下一轮继续处理' },
+    ];
+    var visualSelect = document.createElement('select');
+    visualSelect.className = 'followup-queue-mode';
+    visualSelect.setAttribute('aria-hidden', 'true');
+    visualSelect.tabIndex = -1;
+    choices.forEach(function (choice) {
+        var visualOption = document.createElement('option');
+        visualOption.value = choice.value;
+        visualOption.textContent = choice.label;
+        visualSelect.appendChild(visualOption);
+    });
+    var direction = document.createElement('span');
+    direction.className = 'followup-mode-direction';
+    direction.setAttribute('aria-hidden', 'true');
+    var trigger = document.createElement('button');
+    trigger.type = 'button';
+    trigger.className = 'followup-mode-hit-target';
+    trigger.setAttribute('aria-label', '追问发送模式');
+    trigger.setAttribute('aria-haspopup', 'listbox');
+    trigger.setAttribute('aria-expanded', 'false');
+    trigger.disabled = !!item.status;
+    visualSelect.disabled = !!item.status;
+
+    var menu = document.createElement('div');
+    menu.className = 'followup-mode-menu';
+    menu.setAttribute('role', 'listbox');
+    menu.setAttribute('aria-label', '选择追问发送模式');
+    menu.hidden = true;
+    var optionRows = [];
+    var outsideHandler = null;
+
+    function currentMode() {
+        return item.steerMode === 'append' ? 'append' : 'interrupt';
+    }
+
+    function sync() {
+        var mode = currentMode();
+        picker.dataset.mode = mode;
+        visualSelect.value = mode;
+        optionRows.forEach(function (row) {
+            var selected = row.dataset.mode === mode;
+            row.classList.toggle('is-selected', selected);
+            row.setAttribute('aria-selected', selected ? 'true' : 'false');
+        });
+    }
+
+    function closeMenu() {
+        menu.hidden = true;
+        picker.classList.remove('is-open');
+        trigger.setAttribute('aria-expanded', 'false');
+        menu.style.left = '';
+        menu.style.top = '';
+        menu.style.width = '';
+        menu.style.maxHeight = '';
+        if (menu.parentNode !== picker) picker.appendChild(menu);
+        if (outsideHandler) {
+            document.removeEventListener('pointerdown', outsideHandler, true);
+            window.removeEventListener('resize', closeMenu);
+            outsideHandler = null;
+        }
+        if (activeFollowupModePickerClose === closeMenu) activeFollowupModePickerClose = null;
+    }
+
+    function openMenu(focusSelected) {
+        if (trigger.disabled) return;
+        closeActiveFollowupModePicker();
+        document.body.appendChild(menu);
+        menu.hidden = false;
+        picker.classList.add('is-open');
+        trigger.setAttribute('aria-expanded', 'true');
+        var triggerRect = trigger.getBoundingClientRect();
+        var viewportWidth = Math.max(document.documentElement.clientWidth || 0, window.innerWidth || 0);
+        var viewportHeight = Math.max(document.documentElement.clientHeight || 0, window.innerHeight || 0);
+        var menuWidth = Math.min(202, Math.max(150, viewportWidth - 16));
+        menu.style.width = menuWidth + 'px';
+        var menuHeight = menu.getBoundingClientRect().height;
+        var roomBelow = viewportHeight - triggerRect.bottom - 8;
+        var roomAbove = triggerRect.top - 8;
+        var openBelow = roomBelow >= menuHeight || roomBelow >= roomAbove;
+        var availableHeight = Math.max(76, (openBelow ? roomBelow : roomAbove) - 6);
+        var left = Math.min(
+            Math.max(8, triggerRect.right - menuWidth),
+            Math.max(8, viewportWidth - menuWidth - 8)
+        );
+        var top = openBelow
+            ? Math.min(viewportHeight - 8, triggerRect.bottom + 5)
+            : Math.max(8, triggerRect.top - Math.min(menuHeight, availableHeight) - 5);
+        menu.style.left = left + 'px';
+        menu.style.top = top + 'px';
+        menu.style.maxHeight = availableHeight + 'px';
+        activeFollowupModePickerClose = closeMenu;
+        outsideHandler = function (event) {
+            if (!picker.contains(event.target) && !menu.contains(event.target)) closeMenu();
+        };
+        document.addEventListener('pointerdown', outsideHandler, true);
+        window.addEventListener('resize', closeMenu);
+        if (focusSelected) {
+            var selectedRow = optionRows.find(function (row) { return row.getAttribute('aria-selected') === 'true'; });
+            if (selectedRow) requestAnimationFrame(function () { selectedRow.focus(); });
+        }
+    }
+
+    function chooseMode(mode) {
+        item.steerMode = mode === 'append' ? 'append' : 'interrupt';
+        persistFollowupQueue(sessionId);
+        sync();
+        refreshFollowupQueueRenderSignature(sessionId);
+        closeMenu();
+        trigger.focus();
+    }
+
+    choices.forEach(function (choice) {
+        var option = document.createElement('button');
+        option.type = 'button';
+        option.className = 'followup-mode-option';
+        option.dataset.mode = choice.value;
+        option.setAttribute('role', 'option');
+        var optionCopy = document.createElement('span');
+        optionCopy.className = 'followup-mode-option-copy';
+        var optionName = document.createElement('span');
+        optionName.className = 'followup-mode-option-name';
+        optionName.textContent = choice.label;
+        var optionDescription = document.createElement('span');
+        optionDescription.className = 'followup-mode-option-description';
+        optionDescription.textContent = choice.description;
+        optionCopy.appendChild(optionName);
+        optionCopy.appendChild(optionDescription);
+        var selectedBadge = document.createElement('span');
+        selectedBadge.className = 'followup-mode-option-selected';
+        selectedBadge.textContent = '当前';
+        option.appendChild(optionCopy);
+        option.appendChild(selectedBadge);
+        option.addEventListener('click', function (event) {
+            event.preventDefault(); event.stopPropagation();
+            chooseMode(choice.value);
+        });
+        option.addEventListener('keydown', function (event) {
+            var index = optionRows.indexOf(option);
+            if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+                event.preventDefault(); event.stopPropagation();
+                var delta = event.key === 'ArrowDown' ? 1 : -1;
+                optionRows[(index + delta + optionRows.length) % optionRows.length].focus();
+            } else if (event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault(); event.stopPropagation();
+                chooseMode(choice.value);
+            } else if (event.key === 'Escape') {
+                event.preventDefault(); event.stopPropagation();
+                closeMenu(); trigger.focus();
+            }
+        });
+        optionRows.push(option);
+        menu.appendChild(option);
+    });
+
+    trigger.addEventListener('click', function (event) {
+        event.preventDefault(); event.stopPropagation();
+        if (menu.hidden) openMenu(false); else closeMenu();
+    });
+    trigger.addEventListener('keydown', function (event) {
+        if (event.key === 'ArrowDown' || event.key === 'ArrowUp' || event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault(); event.stopPropagation();
+            openMenu(true);
+        } else if (event.key === 'Escape' && !menu.hidden) {
+            event.preventDefault(); event.stopPropagation(); closeMenu();
+        }
+    });
+    picker.appendChild(visualSelect);
+    picker.appendChild(direction);
+    picker.appendChild(trigger);
+    picker.appendChild(menu);
+    sync();
+    return picker;
+}
+
 function renderFollowupQueue(sessionId) {
     var sid = String(sessionId != null ? sessionId : (currentSessionId || ''));
     var panel = ensureFollowupQueueHost();
@@ -1328,13 +1544,25 @@ function renderFollowupQueue(sessionId) {
             panel.innerHTML = '';
             panel.classList.remove('is-visible');
             panel.removeAttribute('data-session-id');
+            panel.removeAttribute('data-render-signature');
         }
         return;
     }
     var q = getFollowupQueue(sid);
     syncMessageInputPlaceholder();
+    var renderSignature = followupQueueRenderSignature(sid, q);
+    if (
+        panel.dataset.sessionId === sid
+        && panel.dataset.renderSignature === renderSignature
+        && panel.querySelectorAll('.followup-queue-row').length === q.length
+    ) {
+        positionFollowupQueuePanel();
+        return;
+    }
+    closeActiveFollowupModePicker();
     panel.innerHTML = '';
     panel.dataset.sessionId = sid;
+    panel.dataset.renderSignature = renderSignature;
     panel.classList.toggle('is-visible', !!q.length);
     if (!q.length) {
         positionFollowupQueuePanel();
@@ -1390,19 +1618,7 @@ function renderFollowupQueue(sessionId) {
             (typeof pendingHumanQuestions === 'function' && pendingHumanQuestions(sid).length)
             || (item.deferUntilRunEnd && (isSessionRunning(sid) || isServerStreamActive(sid)))
         );
-        var modeSelect = document.createElement('select');
-        modeSelect.className = 'followup-queue-mode';
-        modeSelect.setAttribute('aria-label', '追问发送模式');
-        var interruptOption = document.createElement('option');
-        interruptOption.value = 'interrupt';
-        interruptOption.textContent = '打断';
-        var appendOption = document.createElement('option');
-        appendOption.value = 'append';
-        appendOption.textContent = '追加';
-        modeSelect.appendChild(interruptOption);
-        modeSelect.appendChild(appendOption);
-        modeSelect.value = item.steerMode === 'append' ? 'append' : 'interrupt';
-        modeSelect.disabled = !!item.status;
+        var modePicker = createFollowupModePicker(item, sid);
         var undo = document.createElement('button');
         undo.type = 'button';
         undo.className = 'followup-queue-action followup-queue-undo';
@@ -1412,10 +1628,6 @@ function renderFollowupQueue(sessionId) {
             ev.preventDefault();
             void sendFollowupNow(String(item.id), sid, { manual: true });
         });
-        modeSelect.addEventListener('change', function () {
-            item.steerMode = modeSelect.value === 'append' ? 'append' : 'interrupt';
-            persistFollowupQueue(sid);
-        });
         undo.addEventListener('click', function (ev) {
             ev.preventDefault();
             withdrawFollowup(String(item.id));
@@ -1424,7 +1636,7 @@ function renderFollowupQueue(sessionId) {
         row.appendChild(order);
         row.appendChild(text);
         row.appendChild(status);
-        row.appendChild(modeSelect);
+        row.appendChild(modePicker);
         row.appendChild(sendNow);
         row.appendChild(undo);
         panel.appendChild(row);
@@ -2814,6 +3026,7 @@ async function sendMessage(options) {
     formData.append('session_id', runSessionId);
     formData.append('client_run_id', clientRunId);
     formData.append('stream_protocol', 'runtime_v2');
+    if (options.fromQueue) formData.append('preserve_unread_result', 'true');
     formData.append(
         'ui_language',
         (document.documentElement && document.documentElement.getAttribute('data-language'))
@@ -3011,6 +3224,15 @@ function dispatchComposerAction(allowStop) {
     if (!state.sessionId && optimisticNewSessionRun) {
         if (allowStop) pauseCurrentRun();
         return false;
+    }
+    if (!allowStop && !state.sendable && state.sessionId) {
+        const firstPending = getFollowupQueue(state.sessionId).find(function (item) {
+            return item && !item.status;
+        });
+        if (firstPending) {
+            void sendFollowupNow(String(firstPending.id), state.sessionId, { manual: true });
+            return true;
+        }
     }
     if (queueComposerBehindPendingQuestion(state)) return true;
     if (state.uploadBusy && !state.running) return false;

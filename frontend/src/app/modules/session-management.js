@@ -21,9 +21,9 @@
     }
 }
 
-const MESSAGE_INPUT_PLACEHOLDER_DEFAULT = '说说你想做什么…（Shift/Ctrl+Enter换行）';
+const MESSAGE_INPUT_PLACEHOLDER_DEFAULT = '说说你想做什么…（Enter 发送 · Shift/Ctrl/Cmd + Enter 换行）';
 const MESSAGE_INPUT_PLACEHOLDER_RUNNING = 'Agent运行中，输入后续任务';
-const MESSAGE_INPUT_PLACEHOLDER_QUEUED = '点击`立即发送`插入提示';
+const MESSAGE_INPUT_PLACEHOLDER_QUEUED = '按 Enter 发送第一条待发送任务';
 
 function syncMessageInputPlaceholder() {
     if (!messageInput) return;
@@ -31,7 +31,7 @@ function syncMessageInputPlaceholder() {
         ? getFollowupQueue(currentSessionId)
         : [];
     var running = !!(optimisticNewSessionRun || isSessionRunning(currentSessionId));
-    var value = queue.length
+    var value = queue.some(function (item) { return item && !item.status; })
         ? MESSAGE_INPUT_PLACEHOLDER_QUEUED
         : (running ? MESSAGE_INPUT_PLACEHOLDER_RUNNING : MESSAGE_INPUT_PLACEHOLDER_DEFAULT);
     messageInput.placeholder = typeof translateUiString === 'function'
@@ -148,23 +148,66 @@ function showLoading() {
 
 function hideLoading() { const loader = document.getElementById('chat-loading'); if (loader) loader.remove(); }
 
+function sessionHasUnsentDraft(sessionId) {
+    if (!sessionId) return false;
+    var draft = Object.prototype.hasOwnProperty.call(draftBySession, sessionId)
+        ? draftBySession[sessionId]
+        : readStoredInputDraft(sessionId);
+    return !!String(draft || '').trim();
+}
+
+function syncSessionDraftBadge(itemDiv, sessionId) {
+    if (!itemDiv || !sessionId) return;
+    var badge = itemDiv.querySelector('.session-draft-badge');
+    if (!badge) return;
+    var visible = String(sessionId) !== String(currentSessionId || '') && sessionHasUnsentDraft(sessionId);
+    badge.hidden = !visible;
+    itemDiv.classList.toggle('has-unsent-draft', visible);
+}
+
+/** 只同步草稿标签，不重绘会话列表；传入 sessionId 时仅更新对应行。 */
+function syncSessionDraftBadges(sessionId) {
+    if (!sessionsList) return;
+    var targetId = sessionId ? String(sessionId) : '';
+    sessionsList.querySelectorAll('.session-item').forEach(function (div) {
+        var sid = String(div.dataset.sessionId || '');
+        if (!sid || (targetId && sid !== targetId)) return;
+        syncSessionDraftBadge(div, sid);
+    });
+}
+
 /** 根据 sessionStore / 服务端 stream_active / sessionUnreadComplete 更新红点、绿点 */
 function applySessionItemIndicators(itemDiv, sessionId, opts) {
     opts = opts || {};
     if (!itemDiv || !sessionId) return;
+    syncSessionDraftBadge(itemDiv, sessionId);
     itemDiv.classList.remove('is-generating', 'is-unread-result', 'is-unread-failed');
     var nameEl = itemDiv.querySelector('.session-name');
     if (nameEl) nameEl.removeAttribute('data-ui-tip');
-    if (isSessionRunning(sessionId)
-        || (typeof isGoalActiveForSession === 'function' && isGoalActiveForSession(sessionId))) {
+    var sess = sessionStore.get(sessionId);
+    var localUnreadResult = sessionUnreadComplete.has(sessionId);
+    var hasUnreadResult = sess ? !!sess.unread_result : localUnreadResult;
+    var failed = !!(sess && sess.unread_result_status === 'failed');
+    var running = isSessionRunning(sessionId)
+        || (typeof isGoalActiveForSession === 'function' && isGoalActiveForSession(sessionId));
+    if (running) {
         itemDiv.classList.add('is-generating');
-        if (nameEl) nameEl.setAttribute('data-ui-tip', '生成中');
+        if (hasUnreadResult) {
+            // A completed queued turn is still unread while the next pending
+            // turn is running. Combining the classes keeps the pulse animation
+            // but changes the dot to the result color.
+            itemDiv.classList.add(failed ? 'is-unread-failed' : 'is-unread-result');
+        }
+        if (nameEl) {
+            nameEl.setAttribute(
+                'data-ui-tip',
+                hasUnreadResult
+                    ? (failed ? '已有任务失败，仍在生成' : '已有任务完成，仍在生成')
+                    : '生成中'
+            );
+        }
     } else {
-        var sess = sessionStore.get(sessionId);
-        var localUnreadResult = sessionUnreadComplete.has(sessionId);
-        var hasUnreadResult = sess ? !!sess.unread_result : localUnreadResult;
         if (!hasUnreadResult) return;
-        var failed = !!(sess && sess.unread_result_status === 'failed');
         itemDiv.classList.add(failed ? 'is-unread-failed' : 'is-unread-result');
         if (nameEl) nameEl.setAttribute('data-ui-tip', failed ? '任务失败，点击查看' : '有新回复，点击查看');
     }
@@ -500,6 +543,7 @@ function buildAndBindSessionRow(sess, allSessions, nextStreamMap) {
         + '<div class="session-item-main">'
         + '<div class="session-item-title-row">'
         + '<span class="session-name" data-id="' + sess.id + '" data-original="' + escapeHtml(sess.name) + '">' + escapeHtml(displayName) + '</span>'
+        + '<span class="session-draft-badge" aria-label="草稿" hidden>草稿</span>'
         + '<span class="session-item-date"></span>'
         + '</div>'
         + '<div class="session-last-query"></div>'
@@ -532,6 +576,18 @@ function buildAndBindSessionRow(sess, allSessions, nextStreamMap) {
     bindSessionActionMenu(moreWrap, function () {
         return findSessionForActions(sess.id, sess);
     }, div);
+    var nameEl = div.querySelector('.session-name');
+    if (nameEl) {
+        nameEl.addEventListener('dblclick', function (e) {
+            e.preventDefault();
+            e.stopPropagation();
+            var current = findSessionForActions(sess.id, sess);
+            if (!current) return;
+            Promise.resolve(renameSessionFromMenu(current)).catch(function (err) {
+                console.error('双击重命名会话失败:', err);
+            });
+        });
+    }
     applySessionItemIndicators(div, sess.id, { serverStreamActive: !!sess.stream_active });
     return div;
 }

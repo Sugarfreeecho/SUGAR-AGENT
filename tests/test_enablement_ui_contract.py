@@ -19,9 +19,12 @@ def test_model_profile_switcher_and_configuration_page_expose_enablement_control
 def test_running_subagent_model_switch_is_exposed_in_tool_api_and_ui():
     tools = (ROOT / "app/agent_tools.py").read_text(encoding="utf-8")
     backend = (ROOT / "app/webui.py").read_text(encoding="utf-8")
+    frontend_entry = (ROOT / "frontend/index.html").read_text(encoding="utf-8")
+    shell_body = (ROOT / "frontend/src/shell-body.html").read_text(encoding="utf-8")
     renderers = (ROOT / "frontend/src/app/state/subagent-renderers.js").read_text(encoding="utf-8")
     actions = (ROOT / "frontend/src/app/state/subagent-actions.js").read_text(encoding="utf-8")
     dialogs = (ROOT / "frontend/src/app/modules/shared-state-and-dialogs.js").read_text(encoding="utf-8")
+    styles = (ROOT / "frontend/src/styles/app.css").read_text(encoding="utf-8")
 
     assert '"switch_model"' in tools
     assert "use action=switch_model to change it" in tools
@@ -30,12 +33,52 @@ def test_running_subagent_model_switch_is_exposed_in_tool_api_and_ui():
     assert "chooseSubagentModelProfile" in actions
     assert "/model_profile'" in actions
     assert "selectOptions" in dialogs
+    assert 'id="ui-modal-select"' in frontend_entry
+    assert 'id="ui-modal-select"' in shell_body
+    assert 'id="ui-modal-select-control"' in frontend_entry
+    assert 'id="ui-modal-select-control"' in shell_body
+    assert ".ui-modal-select-trigger" in styles
+    assert ".ui-modal-select-menu" in styles
+    assert ".ui-modal-select-option.is-selected" in styles
+    assert ":root.theme-light .ui-modal-select-menu" in styles
+    assert "subagentModelProfileOptionMeta" in actions
+    assert "ui-modal-select-control" in dialogs
+    assert "setSelectMenuOpen" in dialogs
 
 
 def test_model_profile_hover_detail_exposes_profile_id():
     switcher = (ROOT / "frontend/src/app/modules/model-profiles.js").read_text(encoding="utf-8")
 
     assert "'model_porfile_id: ' + String(p.id" in switcher
+
+
+def test_pending_followup_mode_uses_custom_picker_instead_of_native_select():
+    frontend = (ROOT / "frontend/src/app/modules/sse-handling.js").read_text(encoding="utf-8")
+    styles = (ROOT / "frontend/src/styles/app.css").read_text(encoding="utf-8")
+
+    assert "createFollowupModePicker" in frontend
+    assert "closeActiveFollowupModePicker" in frontend
+    assert "document.createElement('select')" not in frontend[frontend.index("function renderFollowupQueue"):frontend.index("function getFollowupStatusText")]
+    assert "立即插入当前运行" in frontend
+    assert "下一轮继续处理" in frontend
+    assert ".followup-mode-picker" in styles
+    assert ".followup-mode-menu" in styles
+    assert ".followup-mode-option.is-selected" in styles
+    assert ":root.theme-light .followup-mode-menu" in styles
+    assert "position: fixed; z-index: 390" in styles
+    assert "document.body.appendChild(menu)" in frontend
+    assert "getBoundingClientRect()" in frontend
+    assert "var visualSelect = document.createElement('select');" in frontend
+    assert "visualSelect.className = 'followup-queue-mode';" in frontend
+    assert ".followup-mode-hit-target" in styles
+    assert ".followup-mode-direction" in styles
+    assert "rotate(225deg)" in styles
+    assert "function followupQueueRenderSignature" in frontend
+    render_source = frontend[frontend.index("function renderFollowupQueue"):frontend.index("function getFollowupStatusText")]
+    assert render_source.index("panel.dataset.renderSignature === renderSignature") < render_source.index("closeActiveFollowupModePicker();")
+    assert "followup-mode-trigger-mark" not in frontend
+    assert "followup-mode-option-mark" not in frontend
+    assert "window.addEventListener('scroll', closeMenu, true)" not in frontend
 
 
 def test_skill_picker_exposes_enablement_controls():

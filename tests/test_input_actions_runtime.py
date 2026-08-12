@@ -40,6 +40,9 @@ def test_frontend_inputs_share_submission_helpers():
     assert "const state = readComposerActionState();" in sse
     assert "dispatchComposerAction(false)" in sse
     assert "dispatchComposerAction(true)" in sse
+    assert "getFollowupQueue(state.sessionId).find" in sse
+    assert "return item && !item.status;" in sse
+    assert "sendFollowupNow(String(firstPending.id), state.sessionId, { manual: true })" in sse
     assert "isInputSubmitShortcut(e, 'editor')" in message
     assert "isInputSubmitShortcut(event, 'editor')" in human
     assert "isInputSubmitShortcut(event, 'editor')" in goal

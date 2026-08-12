@@ -578,6 +578,42 @@ function testAppendOptimisticRowCommitsInPlace() {
   assert.strictEqual(ctxObject.lastUserRuntimeSeq, 11);
 }
 
+function testStreamingFramesKeepFollowupRenderSignatureStable() {
+  let running = true;
+  let streaming = true;
+  const queue = [{
+    id: 'pending-1',
+    status: '',
+    steerMode: 'interrupt',
+    display: 'keep this menu open',
+    skills: [],
+    awaitingRunEnd: true,
+  }];
+  const ctx = context({
+    isSessionRunning: () => running,
+    isServerStreamActive: () => streaming,
+    pendingHumanQuestions: () => [],
+  });
+  vm.runInContext(
+    between('function followupQueueRenderSignature', 'function refreshFollowupQueueRenderSignature'),
+    ctx,
+  );
+
+  const first = ctx.followupQueueRenderSignature('s', queue);
+  const nextAnimationFrame = ctx.followupQueueRenderSignature('s', queue);
+  assert.strictEqual(nextAnimationFrame, first, 'stream animation frames must not rebuild the pending list');
+
+  queue[0].steerMode = 'append';
+  const modeChanged = ctx.followupQueueRenderSignature('s', queue);
+  assert.notStrictEqual(modeChanged, first, 'a real queue mode change must invalidate the render');
+
+  queue[0].steerMode = 'interrupt';
+  running = false;
+  streaming = false;
+  const runEnded = ctx.followupQueueRenderSignature('s', queue);
+  assert.notStrictEqual(runEnded, first, 'a run boundary must still refresh pending controls');
+}
+
 (async () => {
   await testDispatcherDoesNotConsumePendingRows();
   await testAutoDrainRequiresACompleteIdleBoundary();
@@ -587,6 +623,7 @@ function testAppendOptimisticRowCommitsInPlace() {
   await testManualSendSupersedesAnAlreadyQueuedAutoHead();
   await testAutoDrainDefersBehindSessionAutoResume();
   testAppendOptimisticRowCommitsInPlace();
+  testStreamingFramesKeepFollowupRenderSignatureStable();
   process.stdout.write('followup dispatcher runtime checks passed\n');
 })().catch((error) => {
   console.error(error);

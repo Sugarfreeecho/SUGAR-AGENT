@@ -39,7 +39,7 @@ def test_switch_session_updates_active_state_without_direct_list_render():
     assert "renderSessionListIfChanged" not in switch_body
 
 
-def test_session_rename_uses_modal_input_instead_of_sidebar_contenteditable():
+def test_session_rename_uses_modal_input_for_menu_and_double_click():
     sessions = SESSION_MANAGEMENT.read_text(encoding="utf-8")
     dialogs = SHARED_DIALOGS.read_text(encoding="utf-8")
     shells = [
@@ -54,6 +54,7 @@ def test_session_rename_uses_modal_input_instead_of_sidebar_contenteditable():
     assert "inputValue: String(sess.name || '')" in rename_body
     assert "inputMaxLength: 160" in rename_body
     assert "contentEditable" not in sessions
-    assert "addEventListener('dblclick'" not in sessions
+    assert "nameEl.addEventListener('dblclick'" in sessions
+    assert "renameSessionFromMenu(current)" in sessions
     assert all('id="ui-modal-input"' in shell for shell in shells)
     assert "closeUiModal(value);" in dialogs

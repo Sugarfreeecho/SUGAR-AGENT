@@ -154,9 +154,11 @@ def test_permission_mode_ui_regressions():
         "自动审批已批准",
         "自动审批已拒绝",
         "自动审查不可用（已转人工确认）",
+        "【命令风险】",
+        "【命令目的】",
         "可人工覆盖本次请求（只此一次，不沉淀规则）",
-        "授权工作区沙箱外处理权限",
-        "命令授权",
+        "始终允许",
+        "本次允许",
         "工作区沙箱外处理权限",
         "工作区外处理权限",
         "权限与安全",
@@ -206,6 +208,15 @@ def test_permission_mode_ui_regressions():
     # Auto-review emits structured status events and the frontend renders an
     # in-progress -> approved/denied status row anchored to the tool row.
     assert "renderAutoReviewStatusEvent" in interactions
+    assert "appendApprovalReviewExplanation" in interactions
+    assert "event && event.risk_analysis" in interactions
+    assert "event && event.command_purpose" in interactions
+    auto_review_renderer = interactions.split(
+        "function renderAutoReviewStatusEvent", 1
+    )[1].split("function persistHumanInteractionDraft", 1)[0]
+    assert auto_review_renderer.index("el.textContent = '';") < auto_review_renderer.index(
+        "if (status === 'in_progress')"
+    )
     event_dispatch = (ROOT / "frontend/src/app/modules/event-dispatch.js").read_text(
         encoding="utf-8"
     )
@@ -217,6 +228,7 @@ def test_permission_mode_ui_regressions():
     # One-time outside-workspace handling permission: approval-card button,
     # advanced security-tab management, and backend wiring.
     assert "allow_external_workspace" in interactions
+    assert "allow_external_workspace_once" in interactions
     assert "external_workspace_grantable" in interactions
     assert "advanced-security-workspace-scope-status" in advanced_settings
     assert "advanced-security-workspace-scope-revoke" in advanced_settings
@@ -225,9 +237,10 @@ def test_permission_mode_ui_regressions():
     assert "settings-external-ops" not in index_html
     assert "settings-external-ops" not in html
     assert "是否授权工作区沙箱外处理权限？" in agent_loop
-    assert "确认执行命令（工作区外处理权限已授权）" in agent_loop
+    assert "确认执行工具（已始终允许工作区外处理）" in agent_loop
+    assert "确认执行工具（已允许本次工作区外处理）" in agent_loop
     assert "return_decision=True" in agent_loop
-    assert "human-approval-group" in css
+    assert "human-approval-group" not in interactions
     gate = (ROOT / "app/tool_approval_gate.py").read_text(encoding="utf-8")
     assert "resolve_tool_approval_decision" in gate
     assert "return_decision" in gate
@@ -276,6 +289,8 @@ def test_frontend_feature_entrypoints_are_flag_guarded():
     assert "function scheduleFinalVisibleAfterRunIfEnabled" in sse
     assert "const SSE_IDLE_TIMEOUT_MS = 120000" in sse
     assert "maybeAutoResumeInterruptedReact" in sse
+    layout = (ROOT / "frontend/src/app/modules/layout-panels.js").read_text(encoding="utf-8")
+    assert "fetch('/sessions/recover', { method: 'POST' })" in layout
     refresh_row = sessions.split("async function refreshSingleSessionRow", 1)[1].split("let sessionListLoadEpoch", 1)[0]
     event_cache_set = sessions.split("const uiEventCountCache", 1)[1].split("increment(sessionId)", 1)[0]
     assert "maybeAutoResumeInterruptedReact(sessionId, sess)" in refresh_row
@@ -405,7 +420,12 @@ def test_followup_supports_interrupt_and_append_modes():
     loop = (ROOT / "app/agent_loop.py").read_text(encoding="utf-8")
     webui = (ROOT / "app/webui.py").read_text(encoding="utf-8")
 
-    assert "modeSelect.value = item.steerMode === 'append' ? 'append' : 'interrupt'" in sse
+    assert "function createFollowupModePicker(item, sessionId)" in sse
+    assert "return item.steerMode === 'append' ? 'append' : 'interrupt';" in sse
+    assert "item.steerMode = mode === 'append' ? 'append' : 'interrupt';" in sse
+    assert "document.body.appendChild(menu);" in sse
+    assert "followupQueueRenderSignature" in sse
+    assert "panel.dataset.renderSignature === renderSignature" in sse
     assert "mode: steerMode === 'append' ? 'append' : 'interrupt'" in sse
     assert "appendPendingSteerToProcess(sid, item);" in sse
     assert "appendSteerProcessMessage(" in events
@@ -565,6 +585,26 @@ def test_frontend_session_switch_async_work_is_session_scoped():
     assert "subagentTreeRefreshQueuedBySession" in subagent_sync
     assert "if (!sessionId || sessionId !== currentSessionId) return;" in subagent_sync
     assert "if (seq !== subagentPanelRefreshSeq || sessionId !== currentSessionId) return;" in subagent_sync
+
+
+def test_running_pending_turn_keeps_a_pulsing_completed_result_indicator():
+    sessions = (ROOT / "frontend/src/app/modules/session-management.js").read_text(encoding="utf-8")
+    sse = (ROOT / "frontend/src/app/modules/sse-handling.js").read_text(encoding="utf-8")
+    styles = (ROOT / "frontend/src/styles/app.css").read_text(encoding="utf-8")
+    webui = (ROOT / "app/webui.py").read_text(encoding="utf-8")
+    loop = (ROOT / "app/agent_loop.py").read_text(encoding="utf-8")
+
+    indicator = sessions.split("function applySessionItemIndicators", 1)[1].split(
+        "function syncSessionListIndicatorClasses", 1
+    )[0]
+    assert "if (running)" in indicator
+    assert "itemDiv.classList.add(failed ? 'is-unread-failed' : 'is-unread-result')" in indicator
+    assert "已有任务完成，仍在生成" in indicator
+    assert ".session-item.is-generating.is-unread-result" in styles
+    assert "formData.append('preserve_unread_result', 'true')" in sse
+    assert "preserve_unread_result: bool = Form(False)" in webui
+    assert "preserve_unread_result=preserve_unread_result" in webui
+    assert 'ui_metadata={"preserve_unread_result": True} if preserve_unread_result else None' in loop
 
 
 def test_frontend_background_followup_return_does_not_touch_active_composer():

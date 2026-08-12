@@ -113,3 +113,37 @@ def test_active_goal_round_final_does_not_mark_session_complete(tmp_path, monkey
 
     summary = manager.get_session_summary(session_id)
     assert summary["unread_result"] is False
+
+
+def test_pending_queue_user_turn_preserves_previous_unread_result(tmp_path):
+    import agent_harness
+
+    session_id = "44444444-4444-4444-8444-444444444444"
+    sessions_dir = tmp_path / "sessions"
+    session_dir = sessions_dir / session_id
+    session_dir.mkdir(parents=True)
+    metadata = {
+        "id": session_id,
+        "name": "pending queue",
+        "created_at": "2026-07-10T00:00:00Z",
+        "updated_at": "2026-07-10T00:00:00Z",
+        "unread_result": True,
+        "unread_result_status": "success",
+    }
+    (session_dir / "metadata.json").write_text(json.dumps(metadata), encoding="utf-8")
+    index_file = tmp_path / "sessions.json"
+    index_file.write_text(json.dumps({"sessions": [metadata]}), encoding="utf-8")
+    manager = agent_harness.SessionManager(sessions_dir, index_file)
+
+    manager._apply_appended_ui_event_side_effects(
+        session_id,
+        {
+            "type": "user",
+            "content": "Automatically dispatched pending task",
+            "preserve_unread_result": True,
+        },
+    )
+
+    summary = manager.get_session_summary(session_id)
+    assert summary["unread_result"] is True
+    assert summary["unread_result_status"] == "success"
