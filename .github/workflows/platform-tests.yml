@@ -43,7 +43,17 @@ jobs:
 
       - name: Validate POSIX scripts
         if: runner.os != 'Windows'
-        run: bash -n RUN.sh scripts/agentctl scripts/install_unix.sh scripts/uninstall_unix.sh
+        run: bash -n RUN.sh scripts/agentctl scripts/install_unix.sh scripts/uninstall_unix.sh app/native/sugaragent-egress-helper
+
+      - name: Build Windows egress helper
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: ./scripts/build_egress_helper_windows.ps1
+
+      - name: Check egress helper health
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: ./app/native/sugaragent-egress-helper.exe health --json
 
       - name: Run tests
         run: python -m pytest -q

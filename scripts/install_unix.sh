@@ -85,6 +85,7 @@ if [[ ! -x "$ROOT/.venv/bin/python" ]]; then
 fi
 "$ROOT/.venv/bin/python" -m pip install --disable-pip-version-check --upgrade pip
 "$ROOT/.venv/bin/python" -m pip install --disable-pip-version-check -r "$ROOT/app/requirements.txt"
+chmod 0755 "$ROOT/app/native/sugaragent-egress-helper" "$ROOT/app/native/sugaragent-egress-helper.py"
 "$ROOT/.venv/bin/python" "$ROOT/app/platform_install.py" install --root "$ROOT" --mode "$MODE"
 
 if [[ "$OS" == "Linux" && "$MODE" == "server" ]]; then
