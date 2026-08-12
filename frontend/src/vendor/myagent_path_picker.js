@@ -427,7 +427,7 @@
     panel.className = 'workspace-file-popover';
     panel.setAttribute('aria-hidden', 'true');
     panel.innerHTML =
-      '<input class="workspace-file-search" type="text" autocomplete="off" spellcheck="false" placeholder="搜索工作区文件">' +
+      '<input class="workspace-file-search" type="text" autocomplete="off" spellcheck="false" placeholder="搜索工作区文件（↑↓ 移动 · Enter 选择 · Esc 关闭）">' +
       '<div class="workspace-file-list" role="listbox"></div>' +
       '<div class="workspace-file-footer"><span class="workspace-file-count">未选择文件</span><button type="button" class="workspace-file-outside">选择工作目录外文件</button></div>';
     document.body.appendChild(panel);

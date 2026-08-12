@@ -698,11 +698,19 @@ def _resolve_attachment_path(raw: str) -> Optional[Path]:
 
 
 def load_file_attachments_block(paths: List[str]) -> str:
-    """将附件路径读入 prompt 块（文本摘录；二进制仅元数据）。"""
+    """将附件路径读入 prompt 块。
+
+    文本附件就地摘录；图片使用带引号的绝对路径，由统一的消息
+    序列化层根据目标 profile 的输入模态决定转为 image_url 或保留文本。
+    """
     if not paths:
         return ""
     lines = ["### Attached files"]
     for raw in paths:
+        raw_value = str(raw or "").strip()
+        if re.fullmatch(r"https?://\S+", raw_value, flags=re.IGNORECASE):
+            lines.append(f"- ![remote image attachment]({raw_value})")
+            continue
         p = _resolve_attachment_path(str(raw))
         if p is None:
             lines.append(f"- {raw!r}: (not found or outside WORK_DIR)")
@@ -714,7 +722,7 @@ def load_file_attachments_block(paths: List[str]) -> str:
             except OSError:
                 size = -1
             lines.append(
-                f"- {p} [image, {size} bytes] — vision not enabled; path only."
+                f'- "{p}" [image, {size} bytes]'
             )
             continue
         if suffix in _TEXT_SUFFIXES or suffix == "":
