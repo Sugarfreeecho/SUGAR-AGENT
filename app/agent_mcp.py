@@ -19,7 +19,7 @@ import threading
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any, AsyncIterator, Callable, Dict, List, Optional, Tuple
+from typing import Any, AsyncIterator, Awaitable, Callable, Dict, List, Optional, Tuple, TypeVar
 
 import httpx
 
@@ -61,6 +61,96 @@ _MCP_TOOLS_STATE_PATH = PROJECT_ROOT / "mcp_tools_state.json"
 _mcp_tool_state_lock = threading.RLock()
 _disabled_mcp_tools: set[str] = set()
 _disabled_mcp_tools_loaded = False
+
+_T = TypeVar("_T")
+_mcp_loop: Optional[asyncio.AbstractEventLoop] = None
+_mcp_loop_thread: Optional[threading.Thread] = None
+_mcp_loop_init_lock = threading.Lock()
+
+
+def _get_mcp_loop() -> asyncio.AbstractEventLoop:
+    """Return the one long-lived event loop that owns all MCP async state."""
+    global _mcp_loop, _mcp_loop_thread
+
+    loop = _mcp_loop
+    thread = _mcp_loop_thread
+    if loop is not None and loop.is_running() and thread is not None and thread.is_alive():
+        return loop
+
+    with _mcp_loop_init_lock:
+        loop = _mcp_loop
+        thread = _mcp_loop_thread
+        if loop is not None and loop.is_running() and thread is not None and thread.is_alive():
+            return loop
+
+        ready = threading.Event()
+        startup_error: List[BaseException] = []
+
+        def _loop_worker() -> None:
+            global _mcp_loop
+            worker_loop: Optional[asyncio.AbstractEventLoop] = None
+            try:
+                worker_loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(worker_loop)
+                _mcp_loop = worker_loop
+                # Signal only after run_forever has started processing callbacks.
+                worker_loop.call_soon(ready.set)
+                worker_loop.run_forever()
+            except BaseException as exc:
+                startup_error.append(exc)
+                ready.set()
+                logger.exception("MCP background event loop exited unexpectedly")
+            finally:
+                if worker_loop is not None:
+                    pending = asyncio.all_tasks(worker_loop)
+                    for task in pending:
+                        task.cancel()
+                    if pending:
+                        worker_loop.run_until_complete(
+                            asyncio.gather(*pending, return_exceptions=True)
+                        )
+                    worker_loop.close()
+                if _mcp_loop is worker_loop:
+                    _mcp_loop = None
+
+        thread = threading.Thread(
+            target=_loop_worker,
+            name="mcp-event-loop",
+            daemon=True,
+        )
+        _mcp_loop_thread = thread
+        thread.start()
+        if not ready.wait(timeout=10.0):
+            raise RuntimeError("MCP background event loop startup timed out")
+        loop = _mcp_loop
+        if startup_error or loop is None or not loop.is_running():
+            detail = f": {startup_error[0]}" if startup_error else ""
+            raise RuntimeError(f"MCP background event loop failed to start{detail}")
+        return loop
+
+
+async def _run_on_mcp_loop(awaitable: Awaitable[_T]) -> _T:
+    """Await an MCP coroutine on the dedicated loop from any caller loop."""
+    target_loop = _get_mcp_loop()
+    try:
+        caller_loop = asyncio.get_running_loop()
+    except RuntimeError:
+        caller_loop = None
+    if caller_loop is target_loop:
+        return await awaitable
+
+    try:
+        submitted = asyncio.run_coroutine_threadsafe(awaitable, target_loop)
+    except BaseException:
+        close = getattr(awaitable, "close", None)
+        if callable(close):
+            close()
+        raise
+    try:
+        return await asyncio.wrap_future(submitted)
+    except asyncio.CancelledError:
+        submitted.cancel()
+        raise
 
 
 def _load_disabled_mcp_tools() -> set[str]:
@@ -648,7 +738,7 @@ async def _shutdown_servers_unlocked() -> None:
     _tool_contracts.clear()
 
 
-async def force_reload() -> None:
+async def _force_reload_impl() -> None:
     """写入新配置后调用：关闭连接并于下次 ensure_started 重建。"""
     global _loaded_signature, _signature_cache
     async with _start_lock:
@@ -657,7 +747,11 @@ async def force_reload() -> None:
         _signature_cache = None
 
 
-async def ensure_started() -> None:
+async def force_reload() -> None:
+    await _run_on_mcp_loop(_force_reload_impl())
+
+
+async def _ensure_started_impl() -> None:
     global _loaded_signature
     if not _MCP_IMPORT_OK:
         return
@@ -738,6 +832,10 @@ async def ensure_started() -> None:
         _loaded_signature = sig
 
 
+async def ensure_started() -> None:
+    await _run_on_mcp_loop(_ensure_started_impl())
+
+
 async def get_tool_definitions() -> List[Dict[str, Any]]:
     await ensure_started()
     disabled = _load_disabled_mcp_tools()
@@ -806,6 +904,23 @@ async def invoke_tool_by_fname(
     require_worktree_isolation: bool = False,
 ) -> str:
     await ensure_started()
+    return await _run_on_mcp_loop(
+        _invoke_tool_by_fname_impl(
+            function_name,
+            arguments,
+            work_dir=work_dir,
+            require_worktree_isolation=require_worktree_isolation,
+        )
+    )
+
+
+async def _invoke_tool_by_fname_impl(
+    function_name: str,
+    arguments: Dict[str, Any],
+    *,
+    work_dir: str = "",
+    require_worktree_isolation: bool = False,
+) -> str:
     pair = _fname_to_tool.get(function_name)
     if not pair:
         return f"Error: unknown MCP tool `{function_name}`."

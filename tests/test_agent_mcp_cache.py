@@ -1,6 +1,7 @@
 import asyncio
 import json
 import sys
+import threading
 from pathlib import Path
 
 from starlette.requests import Request
@@ -111,6 +112,70 @@ def test_confirmed_mcp_is_connected(monkeypatch):
 
     assert calls == ["started"]
     assert "demo" in agent_mcp._servers
+
+    asyncio.run(agent_mcp.force_reload())
+
+
+def test_mcp_async_work_stays_on_one_loop_across_temporary_caller_loops(monkeypatch):
+    import agent_mcp
+
+    calls = []
+    signature = {"value": "first"}
+
+    class RunningTask:
+        @staticmethod
+        def done():
+            return False
+
+    class FakeServer:
+        transport_label = "stdio"
+        _task = RunningTask()
+
+        async def start(self):
+            calls.append(("start", id(asyncio.get_running_loop())))
+            agent_mcp._fname_to_tool["mcp_demo_ping"] = ("demo", "ping")
+
+        async def stop(self):
+            calls.append(("stop", id(asyncio.get_running_loop())))
+
+        async def call_tool(self, _name, _arguments):
+            calls.append(("call", id(asyncio.get_running_loop())))
+            return None
+
+    monkeypatch.setattr(agent_mcp, "_MCP_IMPORT_OK", True)
+    monkeypatch.setattr(agent_mcp, "_loaded_signature", None)
+    monkeypatch.setattr(
+        agent_mcp,
+        "_compute_config_signature_cached",
+        lambda: signature["value"],
+    )
+    monkeypatch.setattr(
+        agent_mcp,
+        "_load_servers_dict_from_config",
+        lambda: ({"demo": {"transport": "stdio", "command": "demo-server"}}, None),
+    )
+    monkeypatch.setattr(
+        "security.extensions.mcp_registration_is_approved",
+        lambda _descriptor: True,
+    )
+    monkeypatch.setattr(agent_mcp, "_make_stdio_connector", lambda *_args: FakeServer())
+
+    def invoke_from_temporary_loop():
+        return asyncio.run(agent_mcp.invoke_tool_by_fname("mcp_demo_ping", {}))
+
+    for _ in range(3):
+        thread = threading.Thread(target=invoke_from_temporary_loop)
+        thread.start()
+        thread.join(timeout=5)
+        assert not thread.is_alive()
+
+    asyncio.run(agent_mcp.force_reload())
+    signature["value"] = "second"
+    invoke_from_temporary_loop()
+
+    loop_ids = {loop_id for _operation, loop_id in calls}
+    assert loop_ids == {id(agent_mcp._get_mcp_loop())}
+    assert [operation for operation, _loop_id in calls].count("call") == 4
 
     asyncio.run(agent_mcp.force_reload())
 
