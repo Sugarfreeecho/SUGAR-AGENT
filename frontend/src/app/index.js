@@ -25,6 +25,7 @@ import modelProfilesSource from './modules/model-profiles.js?raw';
 import skillPickerSource from './modules/skill-picker.js?raw';
 import sessionScrollHistorySource from './modules/session-scroll-history.js?raw';
 import tocTodoSource from './modules/toc-todo.js?raw';
+import workspaceMediaSource from './modules/workspace-media.js?raw';
 import messageRenderingSource from './modules/message-rendering.js?raw';
 import subagentSource from './modules/subagent.js?raw';
 import humanInteractionsSource from './modules/human-interactions.js?raw';
@@ -104,6 +105,7 @@ const uiSources = [
     skillPickerSource,
     sessionScrollHistorySource,
     tocTodoSource,
+    workspaceMediaSource,
     messageRenderingSource,
     subagentSource,
     humanInteractionsSource,

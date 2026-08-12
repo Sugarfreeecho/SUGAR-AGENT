@@ -456,6 +456,7 @@ SSE 是后端向前端展示 Agent 过程的主通道。事件至少应覆盖以
 - 修改 LLM 配置后必须刷新 executor client。
 - API key 等敏感字段在 UI、日志和工具输出中必须脱敏。
 - OpenAI 兼容接口差异应在 `agent_harness.py` 或 `agent_openai.py` 中适配，避免散落到业务层。
+- 媒体序列化只由目标 model profile 的有效输入模态决定：支持图片时将 prompt 或附件中的图片引用转为 `image_url` content；仅文本时保留路径/URL 文本并注入多模态 `task` 委派指引。主 Agent 和 subagent 必须共用此规则。
 - 配置向导入口只检查是否存在可用 model profile。
 - 检查配置向导入口前必须先完成旧 `.env` 模型配置的自动注册。
 
@@ -635,6 +636,7 @@ SSE 是后端向前端展示 Agent 过程的主通道。事件至少应覆盖以
 - 子 Agent 输出可展开查看。
 - 可中断和删除子 Agent。
 - 子 Agent 完成后父会话可继续处理结果。
+- `task.prompt` 和 `task.file_attachments` 中的图片引用必须进入同一模态门控：图片模型收到 `image_url` content，纯文本模型只收到可恢复的文本引用与委派提示。
 
 ### 18.5 上下文验收
 

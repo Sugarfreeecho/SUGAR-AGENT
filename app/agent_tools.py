@@ -4735,6 +4735,11 @@ OPENAI_TOOL_DEFINITIONS: List[Dict[str, Any]] = [
         "step or when the parent must perform the work itself. A subagent does not receive parent chat or tool history, "
         "so every start/resume prompt must be a self-contained handoff. Foreground start/resume waits for the final result; "
         "background mode returns an ID immediately. Never use resume to poll or collect an existing result. "
+        "For image understanding, select a model_profile_id whose effective input modalities include image. In prompt, always "
+        "wrap each exact local image path in double quotes; alternatively pass local paths or remote image URLs through "
+        "file_attachments, which quotes local image paths automatically. Both inputs use the same routing: an image-capable "
+        "profile receives image_url content, while a text-only profile receives only the recoverable path/URL text plus a "
+        "delegation hint and cannot inspect the image itself. "
         "When the user wants details of a subagent's execution process, ask that same existing subagent directly: resume the "
         "relevant resumable direct child in the foreground with focused questions and obtain its complete first-hand account. "
         "Do not infer process details from its final summary, and do not treat status or collect as a complete execution record. "
@@ -4792,6 +4797,9 @@ OPENAI_TOOL_DEFINITIONS: List[Dict[str, Any]] = [
                     "start/resume, or optional for switch_model: self-contained handoff. Include objective; scope and exact paths; relevant facts or prior "
                     "findings; constraints and non-goals; expected deliverable; and how to verify completion. Include exact errors, "
                     "data, and decisions the subagent cannot infer. For resume, provide only the new instruction and changed facts. "
+                    "Always wrap every exact local image path in double quotes so it can be detected reliably; explicit remote image "
+                    "references are also supported. These references are serialized as image_url only when the selected model profile "
+                    "supports image input; otherwise they remain text. "
                     "For an execution-detail request, explicitly ask for all available steps, files, commands/tools, observations, "
                     "decisions and reasons, failures/retries, verification performed, and remaining uncertainty; request facts from "
                     "the subagent's own history rather than asking it to guess or merely repeat its final answer."
@@ -4820,12 +4828,14 @@ OPENAI_TOOL_DEFINITIONS: List[Dict[str, Any]] = [
                     "start or switch_model only. On start, omit by default so the subagent inherits the parent's effective model. "
                     "Choose a registered profile only when its injected models-table capability metadata directly supports "
                     "the delegated task, such as low-cost/high-concurrency batch work, difficult reasoning, research, or "
-                    "image understanding. The available IDs, models, and automatic capability descriptions are injected at "
+                    "image understanding. For media work, the profile's effective input_modalities are authoritative: choose one that "
+                    "explicitly includes every required modality (for example image), rather than relying on the model family name. "
+                    "The available IDs, models, and automatic capability descriptions are injected at "
                     "runtime. A selected "
                     "profile supplies the subagent's endpoint, credentials, model, limits, and reasoning settings. Never guess, abbreviate, "
                     "or pass a raw model name; an unregistered model must first become a profile. Existing subagents keep their current "
-                    "profile on ordinary resume; use action=switch_model to change it. A multimodal capability tag is only a routing hint: select it for image work only after confirming "
-                    "the exact model, endpoint, and current message/attachment chain actually accept image input."
+                    "profile on ordinary resume; use action=switch_model to change it. A multimodal capability tag is only a routing hint; "
+                    "the effective input modalities and endpoint behavior determine whether media is actually sent."
                 ),
                 "default": "",
             },
@@ -4893,7 +4903,13 @@ OPENAI_TOOL_DEFINITIONS: List[Dict[str, Any]] = [
             "file_attachments": {
                 "type": "array",
                 "items": {"type": "string"},
-                "description": "start/resume only: WORK_DIR file paths to attach (text inlined up to a cap; images/binaries as path metadata).",
+                "description": (
+                    "start/resume only: WORK_DIR file paths or remote image URLs to attach. Text is inlined up to a cap; "
+                    "local image paths supplied here are automatically wrapped in double quotes, then follow exactly the same modality "
+                    "routing as quoted image paths in prompt: they are serialized as "
+                    "image_url for image-capable profiles, but remain recoverable text references with a delegation hint for "
+                    "text-only profiles. Other binaries remain path metadata."
+                ),
             },
             "n": {
                 "type": "integer",

@@ -141,6 +141,9 @@ function openInlineRewriteEditor(wrap, rawText, beforeIndex) {
     textarea.rows = 3;
     const actions = document.createElement('div');
     actions.className = 'user-inline-rewrite-actions';
+    const shortcutHint = document.createElement('span');
+    shortcutHint.className = 'input-shortcut-hint user-inline-rewrite-shortcut';
+    shortcutHint.textContent = 'Ctrl/Cmd + Enter 提交';
     const cancelBtn = document.createElement('button');
     cancelBtn.type = 'button';
     cancelBtn.className = 'user-inline-rewrite-btn user-inline-rewrite-btn--ghost';
@@ -149,6 +152,7 @@ function openInlineRewriteEditor(wrap, rawText, beforeIndex) {
     confirmBtn.type = 'button';
     confirmBtn.className = 'user-inline-rewrite-btn user-inline-rewrite-btn--primary';
     confirmBtn.textContent = '确认';
+    actions.appendChild(shortcutHint);
     actions.appendChild(cancelBtn);
     actions.appendChild(confirmBtn);
     editor.appendChild(textarea);
@@ -911,14 +915,12 @@ function updateProcessBrief(agg) {
     flushBriefTools();
     if (lines.length) setBriefRows(brief, lines);
     else {
-        var st = body.querySelector('.feed-item.feed--st .feed-chunk-scroller, .feed-item.feed--st .feed-chunk');
-        var tSt = st ? (typeof getUiRuntimeText === 'function' ? getUiRuntimeText(st) : st.textContent).trim() : '';
-        if (tSt) setBriefRows(brief, [tSt]);
-        else {
-            var any = body.querySelector('.feed-item:not(.feed--llm):not(.feed--llm2) .feed-chunk-scroller, .feed-item:not(.feed--llm):not(.feed--llm2) .feed-chunk');
-            var tAny = any ? (typeof getUiRuntimeText === 'function' ? getUiRuntimeText(any) : any.textContent).trim() : '';
-            setBriefRows(brief, [tAny || '本段过程已折叠']);
-        }
+        // A collapsed process block must not surface runtime status rows. Keep
+        // the fallback useful for other process output, otherwise show only the
+        // neutral collapsed placeholder.
+        var any = body.querySelector('.feed-item:not(.feed--llm):not(.feed--llm2):not(.feed--st) .feed-chunk-scroller, .feed-item:not(.feed--llm):not(.feed--llm2):not(.feed--st) .feed-chunk');
+        var tAny = any ? (typeof getUiRuntimeText === 'function' ? getUiRuntimeText(any) : any.textContent).trim() : '';
+        setBriefRows(brief, [tAny || '本段过程已折叠']);
     }
     scheduleProcessAggregateHeightUi(agg);
 }
@@ -3080,105 +3082,6 @@ function upgradeWorkspacePathMarkdownLinks(root) {
     });
 }
 
-var _workspaceImageExtRe = null;
-function workspaceImageExtRegex() {
-    if (!_workspaceImageExtRe) {
-        _workspaceImageExtRe = /\.(png|jpe?g|gif|webp|bmp|svg|ico|tiff?|avif|jfif)(?:[?#].*)?$/i;
-    }
-    return _workspaceImageExtRe;
-}
-
-function workspaceImageRelFromMarker(value) {
-    var raw = String(value || '').trim();
-    var marker = /^#ga-workspace-path=(.+)$/i.exec(raw);
-    if (marker) {
-        var markerValue = marker[1];
-        var rawIdx = markerValue.indexOf('&raw=');
-        if (rawIdx >= 0) markerValue = markerValue.slice(0, rawIdx);
-        try { raw = decodeURIComponent(markerValue); } catch (e) { raw = markerValue; }
-    }
-    var rel = markdownHrefToWorkspaceOpenRel(raw);
-    if (!rel || !workspaceImageExtRegex().test(String(rel).replace(/\\/g, '/'))) return '';
-    return rel;
-}
-
-function workspaceImageUrl(rel) {
-    return '/api/workspace-image?rel=' + encodeURIComponent(String(rel || ''));
-}
-
-function wrapWorkspaceImageElement(img, rel) {
-    if (!img || !rel || img.dataset.workspaceImageReady === '1') return;
-    img.dataset.workspaceImageReady = '1';
-    img.classList.add('msg-workspace-image');
-    img.loading = 'lazy';
-    img.decoding = 'async';
-    img.src = workspaceImageUrl(rel);
-    img.setAttribute('data-workspace-open', rel);
-    img.setAttribute('data-ui-tip', '点击查看图片');
-    bindUiHoverTip(img);
-    var parent = img.parentElement;
-    if (!parent || (parent.tagName === 'A' && parent.classList.contains('msg-workspace-image-link'))) return;
-    var link = document.createElement('a');
-    link.href = workspaceImageUrl(rel);
-    link.target = '_blank';
-    link.rel = 'noopener noreferrer';
-    link.className = 'msg-workspace-image-link';
-    link.setAttribute('data-workspace-open', rel);
-    if (img.parentNode) img.parentNode.insertBefore(link, img);
-    link.appendChild(img);
-}
-
-function standaloneImageLinkHost(a) {
-    if (!a) return null;
-    var host = a.parentElement;
-    if (!host || !/^(P|DIV|LI)$/i.test(host.tagName || '')) return null;
-    var linkText = String(a.textContent || '').trim();
-    var hostText = String(host.textContent || '').trim();
-    if (!linkText || hostText !== linkText) return null;
-    return host;
-}
-
-function createWorkspaceImagePreview(rel, label) {
-    var figure = document.createElement('figure');
-    figure.className = 'msg-workspace-image-figure';
-    var link = document.createElement('a');
-    link.href = workspaceImageUrl(rel);
-    link.target = '_blank';
-    link.rel = 'noopener noreferrer';
-    link.className = 'msg-workspace-image-link';
-    link.setAttribute('data-workspace-open', rel);
-    var img = document.createElement('img');
-    img.className = 'msg-workspace-image';
-    img.src = workspaceImageUrl(rel);
-    img.loading = 'lazy';
-    img.decoding = 'async';
-    img.alt = String(label || rel || 'image');
-    link.appendChild(img);
-    figure.appendChild(link);
-    var caption = document.createElement('figcaption');
-    caption.textContent = String(label || rel || '');
-    figure.appendChild(caption);
-    return figure;
-}
-
-function upgradeWorkspaceImages(root) {
-    if (!root) return;
-    root.querySelectorAll('img[src]').forEach(function (img) {
-        var rel = workspaceImageRelFromMarker(img.getAttribute('src') || '');
-        if (rel) wrapWorkspaceImageElement(img, rel);
-    });
-    root.querySelectorAll('a.msg-link-workspace-open[data-workspace-open]').forEach(function (a) {
-        if (a.dataset.workspaceImagePreview === '1') return;
-        var rel = a.getAttribute('data-workspace-open') || '';
-        if (!workspaceImageExtRegex().test(String(rel).replace(/\\/g, '/'))) return;
-        var host = standaloneImageLinkHost(a);
-        if (!host || host.querySelector('.msg-workspace-image-figure')) return;
-        a.dataset.workspaceImagePreview = '1';
-        var figure = createWorkspaceImagePreview(rel, a.textContent || rel);
-        host.parentNode.insertBefore(figure, host.nextSibling);
-    });
-}
-
 function linkifyAssistantTextNodes(root) {
     if (!root) return;
     upgradeWorkspacePathMarkdownLinks(root);
@@ -3325,23 +3228,12 @@ function enhanceAssistantMessageContent(div) {
     wrapMessageTables(div);
     upgradeMermaidBlocks(div);
     linkifyAssistantTextNodes(div);
-    upgradeWorkspaceImages(div);
+    upgradeWorkspaceMedia(div);
     ensureExternalMessageLinksOpenInNewTab(div);
     scheduleMermaidRun(div);
 }
 
 let markedOptionsApplied = false;
-function encodeMarkdownWorkspacePathLinkMatch(match, label, dest) {
-    var rawDest = String(dest || '').trim();
-    if (!rawDest || rawDest.charAt(0) === '#') return match;
-    var decodedDest = decodeMarkdownHrefPathTarget(rawDest);
-    if (!decodedDest || /^(https?|mailto|tel|javascript|data|blob):/i.test(decodedDest)) return match;
-    if (/^[A-Za-z][A-Za-z0-9+.-]*:/i.test(decodedDest) && !/^[A-Za-z]:[\\/]/.test(decodedDest) && !/^file:\/\//i.test(decodedDest)) return match;
-    var rel = markdownHrefToWorkspaceOpenRel(decodedDest);
-    if (!rel) return match;
-    return '<span data-ga-workspace-link="' + escapeHtmlAttr(rel) + '" data-ga-workspace-raw="' + escapeHtmlAttr(decodedDest) + '">' + escapeHtml(label) + '</span>';
-}
-
 function stripMarkdownPathLinkWrapper(s) {
     var t = String(s || '').trim();
     var changed = true;
@@ -3436,65 +3328,6 @@ function normalizeExplicitMarkdownPathLinksOutsideFences(text) {
     return out;
 }
 
-function encodeMarkdownWorkspacePathLinksInPlainText(text) {
-    return normalizeExplicitMarkdownPathLinksInPlainText(text)
-        .replace(/\[([^\]\r\n]+)\]\(([^)\r\n]+)\)/g, encodeMarkdownWorkspacePathLinkMatch);
-}
-
-function encodeMarkdownWorkspacePathLinks(text) {
-    var src = normalizeExplicitMarkdownPathLinksOutsideFences(text);
-    var out = '';
-    var buf = '';
-    var inFence = false;
-    var fenceMarker = '';
-    var inCode = false;
-    var lineStart = true;
-    function flushPlain() {
-        if (buf) {
-            out += encodeMarkdownWorkspacePathLinksInPlainText(buf);
-            buf = '';
-        }
-    }
-    for (var i = 0; i < src.length; i += 1) {
-        var ch = src.charAt(i);
-        var rest = src.slice(i);
-        if (lineStart) {
-            var fence = /^([ \t]{0,3})(`{3,}|~{3,})/.exec(rest);
-            if (fence) {
-                flushPlain();
-                var fenceText = fence[0];
-                var marker = fence[2].charAt(0);
-                if (!inFence) {
-                    inFence = true;
-                    fenceMarker = marker;
-                } else if (marker === fenceMarker) {
-                    inFence = false;
-                    fenceMarker = '';
-                }
-                out += fenceText;
-                i += fenceText.length - 1;
-                lineStart = false;
-                continue;
-            }
-        }
-        if (!inFence && ch === '`') {
-            flushPlain();
-            var tickEnd = i + 1;
-            while (tickEnd < src.length && src.charAt(tickEnd) === '`') tickEnd += 1;
-            out += src.slice(i, tickEnd);
-            i = tickEnd - 1;
-            inCode = !inCode;
-            lineStart = false;
-            continue;
-        }
-        if (inFence || inCode) out += ch;
-        else buf += ch;
-        lineStart = ch === '\n' || ch === '\r';
-    }
-    flushPlain();
-    return out;
-}
-
 function escapeMarkdownSingleTildes(text) {
     var src = String(text || '');
     var out = '';
@@ -3547,10 +3380,11 @@ function renderMarkdown(text) {
         markedOptionsApplied = true;
         try {
             markdownParser.setOptions({ breaks: true, mangle: false, headerIds: false });
+            configureWorkspaceMarkdownRenderer(markdownParser);
         } catch (e) { /* ignore */ }
     }
     try {
-        return markdownParser.parse(escapeMarkdownSingleTildes(encodeMarkdownWorkspacePathLinks(text)), { mangle: false, headerIds: false });
+        return markdownParser.parse(escapeMarkdownSingleTildes(normalizeExplicitMarkdownPathLinksOutsideFences(text)), { mangle: false, headerIds: false });
     } catch (e) {
         return '<pre class="markdown-fallback">' + escapeHtml(String(text)) + '</pre>';
     }
