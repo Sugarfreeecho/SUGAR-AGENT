@@ -1,4 +1,4 @@
-var Rn=Object.defineProperty;var Pn=(t,e,n)=>e in t?Rn(t,e,{enumerable:!0,configurable:!0,writable:!0,value:n}):t[e]=n;var L=(t,e,n)=>Pn(t,typeof e!="symbol"?e+"":e,n);import"./modulepreload-polyfill-B5Qt9EMX.js";(function(t){var e=104857600,n=200*1024*1024,r='<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"></path></svg>';function s(){if(!document.getElementById("myagent-path-picker-styles")){var o=document.createElement("style");o.id="myagent-path-picker-styles",o.textContent='.path-input-row{display:flex;align-items:stretch;gap:.35rem;width:100%;}.path-input-row>.ip,.path-input-row>.tx,.path-input-row>input[type="text"],.path-input-row>input:not([type]){flex:1;min-width:0;}.path-browse-btn{flex-shrink:0;width:2.35rem;padding:0;border:1px solid var(--border-glass,rgba(255,255,255,.08));border-radius:var(--radius-sm,8px);background:var(--surface-glass2,rgba(40,40,60,.94));color:var(--text-secondary,#a6adc8);cursor:pointer;display:inline-flex;align-items:center;justify-content:center;transition:color .18s,border-color .18s,background .18s;}.path-browse-btn:hover{color:var(--text-primary,#cdd6f4);border-color:var(--border-brand-accent,rgba(124,111,247,.35));background:rgba(108,92,231,.12);}.path-browse-btn:disabled{opacity:.45;cursor:not-allowed;}.path-browse-btn--ghost{background:transparent;border-color:transparent;box-shadow:none;width:2.1rem;}.path-browse-btn--ghost:hover{background:rgba(108,92,231,.1);border-color:transparent;color:var(--accent-2,#d4b8fc);}.input-wrapper .path-browse-btn--ghost{align-self:center;margin-right:-.15rem;}.input-wrapper.is-drag-over{border-color:rgba(203,166,247,.62);box-shadow:0 0 0 3px rgba(203,166,247,.12),0 0 28px rgba(139,92,246,.18);}.input-wrapper.is-file-uploading{border-color:rgba(99,102,241,.52);}.chat-upload-status{box-sizing:border-box;width:100%;margin:.38rem 0 0;padding:.42rem .58rem;border:1px solid rgba(99,102,241,.22);border-radius:10px;background:rgba(99,102,241,.08);color:var(--text-secondary,#a6adc8);font-size:.72rem;}.chat-upload-status-row{display:flex;align-items:center;gap:.5rem;}.chat-upload-status-label{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}.chat-upload-cancel{flex:none;border:0;background:transparent;color:var(--accent-2,#d4b8fc);font:inherit;font-weight:700;cursor:pointer;padding:.08rem .2rem;}.chat-upload-cancel:hover{color:var(--text-primary,#fff);}.chat-upload-progress{height:4px;margin-top:.36rem;border-radius:999px;overflow:hidden;background:rgba(255,255,255,.1);}.chat-upload-progress-bar{display:block;width:0;height:100%;border-radius:inherit;background:linear-gradient(90deg,#6366f1,#a78bfa);transition:width .12s linear;}.workspace-file-popover{position:fixed;display:none;z-index:260;width:min(46rem,calc(100vw - 1.2rem));height:min(44rem,82vh);max-height:min(44rem,82vh);border:1px solid rgba(203,166,247,.24);border-radius:14px;background:linear-gradient(145deg,rgba(31,31,49,.88),rgba(19,20,31,.78));box-shadow:0 24px 70px rgba(0,0,0,.38),0 0 0 1px rgba(255,255,255,.045) inset,0 0 34px rgba(139,92,246,.16);overflow:hidden;backdrop-filter:blur(22px);-webkit-backdrop-filter:blur(22px);}.workspace-file-popover:before{content:"";position:absolute;inset:0;pointer-events:none;background:radial-gradient(circle at 18% 0%,rgba(203,166,247,.18),transparent 30%),radial-gradient(circle at 92% 18%,rgba(99,102,241,.16),transparent 28%);}.workspace-file-popover.is-open{display:flex;flex-direction:column;}.workspace-file-search{position:relative;width:100%;box-sizing:border-box;border:0;border-bottom:1px solid rgba(255,255,255,.08);background:rgba(255,255,255,.055);color:var(--text-primary,#cdd6f4);padding:.56rem .72rem;font:inherit;font-size:.78rem;outline:none;}.workspace-file-search::placeholder{color:var(--text-muted,#6c7086);}.workspace-file-list{position:relative;flex:1;min-height:0;overflow:auto;padding:.36rem .38rem .2rem;}.workspace-file-item{width:100%;display:grid;grid-template-columns:1.05rem minmax(0,1fr) auto;gap:.2rem .38rem;align-items:center;text-align:left;border:0;border-radius:8px;background:transparent;color:var(--text-secondary,#a6adc8);padding:.22rem .36rem;cursor:pointer;font:inherit;font-size:.74rem;}.workspace-file-item:hover,.workspace-file-item.is-active{background:rgba(139,92,246,.13);color:var(--text-primary,#cdd6f4);}.workspace-file-item.is-selected{background:rgba(99,102,241,.18);color:var(--text-primary,#cdd6f4);}.workspace-file-check{width:.82rem;height:.82rem;border:1px solid rgba(203,166,247,.38);border-radius:4px;display:inline-flex;align-items:center;justify-content:center;color:#fff;font-size:.62rem;line-height:1;background:transparent;}.workspace-file-item.is-selected .workspace-file-check{background:linear-gradient(135deg,#6366f1,#a78bfa);border-color:transparent;color:#fff;}.workspace-file-dir-row{grid-template-columns:1.05rem minmax(0,1fr) auto;color:var(--text-primary,#cdd6f4);font-weight:650;}.workspace-file-dir-row .workspace-file-tree{grid-column:2/3;}.workspace-file-file-row{grid-template-columns:1.05rem minmax(0,1fr) auto;}.workspace-file-tree{min-width:0;display:flex;align-items:center;gap:.24rem;}.workspace-file-indent{flex:0 0 auto;width:var(--indent,0);}.workspace-file-chevron{width:.8rem;min-width:.8rem;color:var(--text-muted,#6c7086);font-size:.72rem;text-align:center;border:0;background:transparent;padding:0;cursor:pointer;}.workspace-file-icon{position:relative;width:.98rem;min-width:.98rem;height:.74rem;margin-top:.04rem;border-radius:3px;border:1px solid rgba(203,166,247,.28);background:linear-gradient(135deg,rgba(203,166,247,.18),rgba(99,102,241,.1));box-shadow:inset 0 .12rem .26rem rgba(255,255,255,.08);}.workspace-file-icon:before{content:"";position:absolute;left:.06rem;right:.06rem;top:.12rem;height:.16rem;border-radius:999px;background:rgba(203,166,247,.34);}.workspace-file-icon:after{content:"";position:absolute;left:.06rem;right:.06rem;bottom:.11rem;height:.24rem;border-radius:2px;background:rgba(99,102,241,.16);}.workspace-file-icon.is-file{width:.82rem;min-width:.82rem;height:1rem;margin-top:0;border-radius:3px;background:transparent;border:1.5px solid rgba(166,173,200,.58);box-shadow:none;color:var(--text-muted,#6c7086);}.workspace-file-icon.is-file:before{left:auto;right:-1.5px;top:-1.5px;width:.3rem;height:.3rem;border:0;border-left:1.5px solid rgba(166,173,200,.58);border-bottom:1.5px solid rgba(166,173,200,.58);border-radius:0 3px 0 3px;background:var(--surface-glass2,rgba(40,40,60,.94));}.workspace-file-icon.is-file:after{display:none;}.workspace-file-icon.is-folder-svg{width:1rem;min-width:1rem;height:1rem;margin-top:0;border:0;background:transparent;box-shadow:none;color:var(--text-muted,#6c7086);display:inline-flex;align-items:center;justify-content:center;}.workspace-file-icon.is-folder-svg:before,.workspace-file-icon.is-folder-svg:after{display:none;}.workspace-file-icon.is-folder-svg svg{width:1rem;height:1rem;display:block;}.workspace-file-icon.is-image{border-color:rgba(45,212,191,.72);}.workspace-file-icon.is-image:after{display:block;left:.12rem;right:.12rem;bottom:.15rem;height:.24rem;clip-path:polygon(0 100%,38% 38%,56% 66%,76% 24%,100% 100%);background:rgba(45,212,191,.72);}.workspace-file-icon.is-audio{border-color:rgba(251,191,36,.76);}.workspace-file-icon.is-audio:after{display:block;left:.17rem;right:auto;bottom:.18rem;width:.36rem;height:.4rem;border-radius:0;background:rgba(251,191,36,.76);clip-path:polygon(0 32%,45% 32%,100% 0,100% 100%,45% 68%,0 68%);}.workspace-file-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:.74rem;}.workspace-file-dir{grid-column:2/-1;color:var(--text-muted,#6c7086);font-size:.68rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}.workspace-file-meta{color:var(--text-muted,#6c7086);font-size:.68rem;white-space:nowrap;}.workspace-file-footer{position:relative;display:flex;align-items:center;justify-content:space-between;gap:.5rem;padding:.42rem .52rem;border-top:1px solid rgba(255,255,255,.08);background:rgba(255,255,255,.035);font-size:.72rem;color:var(--text-muted,#6c7086);}.workspace-file-outside{flex-shrink:0;border:1px solid rgba(203,166,247,.24);border-radius:8px;padding:.28rem .58rem;background:rgba(203,166,247,.1);color:var(--text-primary,#cdd6f4);font:inherit;font-size:.7rem;font-weight:700;cursor:pointer;transition:background .16s,border-color .16s,color .16s;}.workspace-file-outside:hover{background:rgba(203,166,247,.18);border-color:rgba(203,166,247,.42);color:#fff;}.workspace-file-insert{border:0;border-radius:8px;padding:.34rem .62rem;background:linear-gradient(135deg,#6366f1,#8b5cf6);color:#fff;font-size:.72rem;font-weight:700;cursor:pointer;}.workspace-file-insert:disabled{opacity:.45;cursor:not-allowed;}.workspace-file-empty{padding:1rem;text-align:center;color:var(--text-muted,#6c7086);font-size:.78rem;}.theme-light .workspace-file-popover{background:linear-gradient(145deg,rgba(255,255,255,.93),rgba(244,247,252,.86));box-shadow:0 24px 64px rgba(31,35,52,.16),0 0 28px rgba(99,102,241,.12);}.theme-light .workspace-file-search,.theme-light .workspace-file-footer{background:rgba(34,40,58,.035);}',document.head.appendChild(o)}}async function i(o,m,g){var w=typeof AbortController<"u"?new AbortController:null,v=w?setTimeout(function(){w.abort()},5e4):null,C;try{C=await fetch("/api/pick-path",{method:"POST",headers:{"Content-Type":"application/json"},credentials:"same-origin",body:JSON.stringify({kind:o||"directory",initial:m||"",multiple:!!g}),signal:w?w.signal:void 0})}finally{v&&clearTimeout(v)}var I=await C.json().catch(function(){return{ok:!1,error:"请求失败"}});if(!C.ok||!I.ok){if(I&&I.cancelled)return null;var d=I&&I.error||"无法打开选择对话框";if(/取消|cancelled|800704c7|2147023673/i.test(d))return null;throw new Error(d)}return g?Array.isArray(I.paths)?I.paths:I.path?[I.path]:[]:I.path||null}async function f(o,m,g,w,v){o.disabled=!0;try{var C=await i(m,g||"",!!v);w&&w(C)}catch{return}finally{o.disabled=!1}}function a(o){var m=String(o||"").trim();return m?((m.charAt(0)==='"'&&m.charAt(m.length-1)==='"'||m.charAt(0)==="'"&&m.charAt(m.length-1)==="'")&&(m=m.slice(1,-1)),'"'+m.replace(/"/g,'\\"')+'"'):""}function h(o){var m=String(o||"").toLowerCase().split(".").pop()||"";return/^(png|jpe?g|gif|webp|bmp|svg|tiff?|ico|avif)$/.test(m)?"is-image":/^(mp3|wav|flac|aac|m4a|ogg|oga|opus|wma|aiff?)$/.test(m)?"is-audio":""}function l(o,m){var g=o.selectionStart,w=o.selectionEnd,v=o.value.slice(0,g),C=o.value.slice(w),I=String(m||"");v.length&&!/\s$/.test(v)&&(I=" "+I),C.length&&!/^\s/.test(C)&&(I=I+" "),o.value=v+I+C;var d=v.length+I.length;o.selectionStart=o.selectionEnd=d,o.dispatchEvent(new Event("input",{bubbles:!0})),o.focus()}function u(o){var m=Array.prototype.slice.call(o||[]).filter(Boolean),g=0;if(m.forEach(function(w){var v=Number(w&&w.size||0);if(v>e)throw new Error("文件“"+String(w&&w.name||"未命名文件")+"”超过 "+S(e)+" 限制。");g+=Math.max(0,v)}),g>n)throw new Error("本次上传总大小超过 "+S(n)+" 限制。");return m}function T(o,m){var g;try{g=u(o)}catch(v){return Promise.reject(v)}if(!g.length)return Promise.resolve([]);m=m||{};var w=new FormData;return g.forEach(function(v){w.append("files",v,v.name||"upload.bin")}),new Promise(function(v,C){var I=new XMLHttpRequest;I.open("POST","/api/upload-chat-files",!0),I.withCredentials=!0,I.timeout=600*1e3,I.upload&&typeof m.onProgress=="function"&&(I.upload.onprogress=function(d){m.onProgress(d.loaded||0,d.lengthComputable?d.total:0)}),typeof m.registerAbort=="function"&&m.registerAbort(function(){I.abort()}),I.onload=function(){var d;try{d=JSON.parse(I.responseText||"{}")}catch{d={ok:!1,error:"上传失败"}}if(I.status<200||I.status>=300||!d.ok){C(new Error(d&&d.error||"上传失败"));return}v(Array.isArray(d.files)?d.files:[])},I.onerror=function(){C(new Error("上传失败：网络连接异常。"))},I.ontimeout=function(){C(new Error("上传超时，请重试。"))},I.onabort=function(){var d=new Error("上传已取消。");d.name="AbortError",C(d)},I.send(w)})}function S(o){return o=Number(o||0),!isFinite(o)||o<=0?"":o<1024?o+" B":o<1024*1024?Math.round(o/102.4)/10+" KB":o<1024*1024*1024?Math.round(o/104857.6)/10+" MB":Math.round(o/1073741824e-1)/10+" GB"}async function F(o,m,g){var w=[];o?w.push("q="+encodeURIComponent(o)):m&&w.push("dir="+encodeURIComponent(m));var v="/api/workspace-files"+(w.length?"?"+w.join("&"):""),C=await fetch(v,{credentials:"same-origin",signal:g}),I=await C.json().catch(function(){return{ok:!1,error:"读取工作区文件失败"}});if(!C.ok||!I.ok)throw new Error(I&&I.error||"读取工作区文件失败");return Array.isArray(I.files)?I.files:[]}function E(){try{return typeof currentSessionId<"u"?String(currentSessionId||""):""}catch{return""}}function N(o,m,g){if(m){var w=E();if(g&&w&&g!==w){try{if(typeof persistInputDraft=="function"){var v="";typeof draftBySession<"u"&&Object.prototype.hasOwnProperty.call(draftBySession,g)?v=String(draftBySession[g]||""):typeof readStoredInputDraft=="function"&&(v=String(readStoredInputDraft(g)||"")),persistInputDraft(g,v.trim()?v+" "+m:m);return}}catch{}return}l(o,m)}}function ne(o,m,g){var w=E();return T(m,g).then(function(v){var C=Array.isArray(o._myAgentStructuredAttachments)?o._myAgentStructuredAttachments.slice():[];v.forEach(function(d){!d||!d.path||C.some(function(B){return B.path===d.path})||C.push({path:d.path,name:d.name||"",size:Number(d.size||0)})}),o._myAgentStructuredAttachments=C;var I=v.map(function(d){return a(d.path||d.rel||d.name)}).join(" ");N(o,I,w)})}function te(o){return Array.isArray(o&&o._myAgentStructuredAttachments)?o._myAgentStructuredAttachments.slice():[]}function ue(o){o&&(o._myAgentStructuredAttachments=[])}function X(o,m){console.error("chat file upload failed:",m),o.dispatchEvent(new CustomEvent("myagent:file-paste-error",{bubbles:!0,detail:{message:String(m&&m.message||m||"上传失败")}}))}function re(o,m){var g=o.closest?o.closest(".input-wrapper"):null;m?o.dataset.fileUploadBusy="1":delete o.dataset.fileUploadBusy,g&&(g.classList.toggle("is-file-uploading",!!m),m?g.setAttribute("aria-busy","true"):g.removeAttribute("aria-busy")),o.dispatchEvent(new CustomEvent("myagent:file-upload-state",{bubbles:!0,detail:{busy:!!m}}))}function we(o,m){var g=o.closest?o.closest(".input-wrapper"):null,w=document.createElement("div");w.className="chat-upload-status",w.setAttribute("role","status"),w.innerHTML='<div class="chat-upload-status-row"><span class="chat-upload-status-label"></span><button type="button" class="chat-upload-cancel">取消</button></div><div class="chat-upload-progress" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><span class="chat-upload-progress-bar"></span></div>';var v=m.length;return w.querySelector(".chat-upload-status-label").textContent="正在上传 "+v+" 个文件… 0%",g&&g.parentNode&&g.parentNode.insertBefore(w,g.nextSibling),w}function V(o,m){var g;try{g=u(m)}catch(O){return X(o,O),Promise.reject(O)}if(!g.length)return Promise.resolve();if(o._myAgentActiveUpload){var w=new Error("已有文件正在上传，请等待完成或先取消。");return X(o,w),Promise.reject(w)}var v=we(o,g),C=v.querySelector(".chat-upload-status-label"),I=v.querySelector(".chat-upload-progress"),d=v.querySelector(".chat-upload-progress-bar"),B=v.querySelector(".chat-upload-cancel"),H=null,D=o._myAgentActiveUpload={};return re(o,!0),B.addEventListener("click",function(){B.disabled=!0,C.textContent="正在取消上传…",H&&H()}),ne(o,g,{registerAbort:function(O){H=O},onProgress:function(O,Z){if(o._myAgentActiveUpload===D){var J=Z>0?Math.min(100,Math.round(O*100/Z)):0;C.textContent="正在上传 "+g.length+" 个文件… "+J+"%",d.style.width=J+"%",I.setAttribute("aria-valuenow",String(J))}}}).catch(function(O){throw(!O||O.name!=="AbortError")&&X(o,O),O}).finally(function(){o._myAgentActiveUpload===D&&(delete o._myAgentActiveUpload,re(o,!1)),v.parentNode&&v.parentNode.removeChild(v)})}function W(o){var m=o&&o.clipboardData;if(!m)return[];var g=[],w=Array.prototype.slice.call(m.items||[]);return w.forEach(function(v){if(!(!v||v.kind!=="file"||typeof v.getAsFile!="function")){var C=v.getAsFile();C&&g.push(C)}}),g.length||(g=Array.prototype.slice.call(m.files||[]).filter(Boolean)),g.map(function(v,C){if(String(v&&v.name||"").trim())return v;var I=String(v&&v.type||"").split("/")[1]||"bin";I=I.replace(/[^a-z0-9.+-]/gi,"")||"bin";var d="clipboard-"+Date.now()+"-"+(C+1)+"."+I;try{return new File([v],d,{type:v.type||"application/octet-stream",lastModified:Date.now()})}catch{return v}})}function qe(o){var m=o&&o.clipboardData;if(!m||typeof m.getData!="function")return!1;try{return String(m.getData("text/plain")||"").trim().length>0}catch{return!1}}function gn(o){!o||o.dataset.filePasteBound==="1"||(o.dataset.filePasteBound="1",o.addEventListener("paste",function(m){if(!qe(m)){var g=W(m);g.length&&(m.preventDefault(),V(o,g).catch(function(){}))}}))}function fn(o,m){var g=document.createElement("div");g.className="workspace-file-popover",g.setAttribute("aria-hidden","true"),g.innerHTML='<input class="workspace-file-search" type="text" autocomplete="off" spellcheck="false" placeholder="搜索工作区文件"><div class="workspace-file-list" role="listbox"></div><div class="workspace-file-footer"><span class="workspace-file-count">未选择文件</span><button type="button" class="workspace-file-outside">选择工作目录外文件</button></div>',document.body.appendChild(g);var w=g.querySelector(".workspace-file-search"),v=g.querySelector(".workspace-file-list"),C=g.querySelector(".workspace-file-count"),I=g.querySelector(".workspace-file-outside"),d={items:[],visible:[],active:0,open:!1,debounce:null,controller:null,selected:Object.create(null),expanded:Object.create(null),loadedDirs:Object.create(null),itemMap:Object.create(null)};function B(){var c=o.closest?o.closest(".input-wrapper"):o,p=c.getBoundingClientRect(),b=8,k=Math.min(Math.max(p.width,520),window.innerWidth-16),y=Math.max(8,Math.min(p.left,window.innerWidth-k-8)),P=document.querySelector(".titlebar"),x=P?P.getBoundingClientRect().bottom:44,A=parseFloat(getComputedStyle(document.documentElement).fontSize||"16")||16,M=Math.min(44*A,window.innerHeight*.82),j=Math.max(1,p.top-x-b),U=Math.min(M,j),ee=p.top-U-b;if(U<96){var ae=Math.max(1,window.innerHeight-p.bottom-b-8);U=Math.min(M,ae),ee=p.bottom+b}g.style.left=y+"px",g.style.top=Math.max(x,ee)+"px",g.style.width=k+"px",g.style.height=Math.max(1,Math.floor(U))+"px",g.style.maxHeight=Math.max(1,Math.floor(U))+"px"}function H(){var c=Object.keys(d.selected).length;C.textContent=c?"已选择 "+c+" 项":"未选择文件",v.querySelectorAll(".workspace-file-item").forEach(function(p){var b=p.getAttribute("data-path-key")||"",k=!!d.selected[b];p.classList.toggle("is-selected",k);var y=p.querySelector(".workspace-file-check");y&&(y.textContent=k?"✓":"")})}function D(c){var p=v.querySelectorAll(".workspace-file-item");if(!p.length){d.active=0;return}d.active=Math.max(0,Math.min(c,p.length-1));for(var b=0;b<p.length;b++)p[b].classList.toggle("is-active",b===d.active),p[b].setAttribute("aria-selected",b===d.active?"true":"false");var k=p[d.active];k&&typeof k.scrollIntoView=="function"&&k.scrollIntoView({block:"nearest"})}function O(){d.open=!1,g.classList.remove("is-open"),g.setAttribute("aria-hidden","true"),d.debounce&&clearTimeout(d.debounce),d.controller&&d.controller.abort()}function Z(c){return c&&(c.path||c.rel||c.name)||""}function J(c){return a(Z(c))}function vn(c,p){var b=Z(c);if(!b)return!1;var k=String(c&&c.rel||"");return p.indexOf(J(c))>=0||p.indexOf(b)>=0||k&&p.indexOf(a(k))>=0||k&&p.indexOf(k)>=0}function Sn(c,p){c=String(c||""),p=String(p||"");for(var b=0;b<c.length&&b<p.length&&c.charAt(b)===p.charAt(b);)b++;for(var k=c.length-1,y=p.length-1;k>=b&&y>=b&&c.charAt(k)===p.charAt(y);)k--,y--;return p.slice(b,y+1).trim()}function bn(c,p){if(p){var b=String(o.value||"");if(!(b.indexOf(p)>=0)){var k=o.value;l(o,p);var y=Sn(k,o.value);c&&y&&(c._inputToken=y)}}}function yn(c,p){if(!p&&!c)return;var b=String(o.value||""),k=[];function y(x){x=String(x||"").trim(),x&&k.indexOf(x)<0&&k.push(x)}y(c&&c._inputToken),y(p),y(c&&c.path),y(c&&c.rel),y(c&&c.path&&a(c.path)),y(c&&c.rel&&a(c.rel));var P=b;k.sort(function(x,A){return A.length-x.length}).forEach(function(x){var A=x.replace(/[.*+?^${}()|[\]\\]/g,"\\$&"),M=new RegExp("(?:^|\\s)"+A+"(?=\\s|$)","g");P=P.replace(M,function(j){return j.charAt(0)&&/\s/.test(j.charAt(0))?" ":""})}),P=P.replace(/[ \t]{2,}/g," ").trim(),P!==b&&(o.value=P,o.selectionStart=o.selectionEnd=o.value.length,o.dispatchEvent(new Event("input",{bubbles:!0})))}function pe(c){if(c){var p=Z(c);if(p){var b=J(c);if(d.selected[p]){var k=d.selected[p];delete d.selected[p],yn(k,b)}else d.selected[p]=c,bn(c,b);H()}}}function He(){var c=String(o.value||"");Object.keys(d.selected).forEach(function(p){var b=d.selected[p];vn(b,c)||delete d.selected[p]})}function wn(){He(),H()}o.addEventListener("input",wn),I&&I.addEventListener("click",function(c){c.preventDefault(),c.stopPropagation(),typeof m=="function"&&m()});function De(){var c=String(t.__WORK_DIR__||"workspace"),p=c.split(/[\\/]+/).filter(Boolean);return p[p.length-1]||"workspace"}function je(c,p,b){return{type:"dir",name:c,rel:p,root:!!b,path:"",dirs:Object.create(null),files:[],children:[],loaded:!1}}function In(c,p){var b=String(c&&c.path||""),k=String(p||"").replace(/\//g,"\\");return b&&k&&b.toLowerCase().slice(-k.length)===k.toLowerCase()?b.slice(0,Math.max(0,b.length-k.length)).replace(/[\\/]+$/,""):String(t.__WORK_DIR__||"").replace(/[\\/]+$/,"")}function Ge(c,p){var b=String(c||"").replace(/[\\/]+$/,""),k=String(p||"").replace(/[\\/]+/g,"/");if(!k)return b;var y=b.indexOf("\\")>=0?"\\":"/";return b?b+y+k.replace(/\//g,y):k}function se(c){return{kind:"directory",name:c.name||c.rel||De(),rel:c.rel||"",path:c.path||Ge(String(t.__WORK_DIR__||""),c.rel||"")}}function xn(c){var p=je(De(),"",!0);p.path=String(t.__WORK_DIR__||"").replace(/[\\/]+$/,""),p.loaded=!!d.loadedDirs.__root__;function b(y,P){for(var x=p,A=[],M=0;M<y.length;M++)A.push(y[M]),x.dirs[y[M]]||(x.dirs[y[M]]=je(y[M],A.join("/"),!1),x.dirs[y[M]].path=Ge(P||p.path,A.join("/"))),x=x.dirs[y[M]],x.loaded=!!d.loadedDirs[x.rel||"__root__"];return x}(c||[]).forEach(function(y){var P=String(y.rel||y.path||y.name||"").replace(/\\/g,"/"),x=P.split("/").filter(Boolean);if(x.length){var A=In(y,P);if(!p.path&&A&&(p.path=A),y.kind==="directory"){var M=b(x,A||p.path);M.name=y.name||M.name,M.path=y.path||M.path;return}var j=b(x.slice(0,-1),A||p.path);j.files.push({type:"file",name:y.name||x[x.length-1]||P,rel:P,item:y})}});function k(y){var P=Object.keys(y.dirs).map(function(x){return y.dirs[x]}).sort(function(x,A){return x.name.localeCompare(A.name,void 0,{sensitivity:"base"})});P.forEach(k),y.files.sort(function(x,A){return x.name.localeCompare(A.name,void 0,{sensitivity:"base"})}),y.children=P.concat(y.files)}return k(p),p}function ze(c,p,b){if(!(!c||c.type!=="dir")){b=Number(b||0);var k=c.rel||"__root__";p?d.expanded[k]=!0:typeof d.expanded[k]>"u"&&(d.expanded[k]=b===0),p&&c.children.forEach(function(y){y.type==="dir"&&ze(y,p,b+1)})}}function kn(c){var p=[];function b(k,y){p.push({type:"dir",node:k,depth:y}),d.expanded[k.rel||"__root__"]&&k.children.forEach(function(P){P.type==="dir"?b(P,y+1):p.push({type:"file",node:P,depth:y+1})})}return b(c,0),p}function Cn(c){return String(c&&(c.kind||"file")||"file")+":"+String(c&&(c.rel||c.path||c.name)||"")}function $e(c){(c||[]).forEach(function(p){var b=Cn(p);b!==":"&&(d.itemMap[b]=p)}),d.items=Object.keys(d.itemMap).map(function(p){return d.itemMap[p]}),d.items.sort(function(p,b){return String(p.rel||"").localeCompare(String(b.rel||""),void 0,{sensitivity:"base"})})}function Tn(c){if(c){var p=c.rel||"__root__";d.expanded[p]=!d.expanded[p],Q(d.items,!1),d.expanded[p]&&!w.value&&!d.loadedDirs[p]&&En(c.rel||"")}}function Q(c,p,b){if(He(),d.items=(c||[]).slice().sort(function(y,P){return String(y.rel||"").localeCompare(String(P.rel||""),void 0,{sensitivity:"base"})}),v.innerHTML="",d.visible=[],p){v.innerHTML='<div class="workspace-file-empty">加载中</div>';return}if(b){v.innerHTML='<div class="workspace-file-empty">'+String(b)+"</div>";return}if(!d.items.length){v.innerHTML='<div class="workspace-file-empty">没有匹配文件</div>';return}var k=xn(d.items);ze(k,!!w.value),d.visible=kn(k),d.visible.forEach(function(y,P){var x=y.node,A=document.createElement("button");A.type="button",A.className="workspace-file-item "+(y.type==="dir"?"workspace-file-dir-row":"workspace-file-file-row"),A.setAttribute("role","option"),A.setAttribute("data-row-index",String(P)),A.setAttribute("data-path-key",y.type==="dir"?se(x).path||se(x).rel||se(x).name||"":x.item.path||x.item.rel||x.item.name||"");var M=document.createElement("div");M.className="workspace-file-tree";var j=document.createElement("span");j.className="workspace-file-indent",j.style.setProperty("--indent",Math.min(y.depth,10)*.86+"rem");var U=document.createElement("span");U.className="workspace-file-chevron",U.textContent=y.type==="dir"?d.expanded[x.rel||"__root__"]?"▾":"▸":"",y.type==="dir"?(U.setAttribute("aria-label",d.expanded[x.rel||"__root__"]?"折叠文件夹":"展开文件夹"),U.setAttribute("role","button"),U.addEventListener("click",function(ie){ie.preventDefault(),ie.stopPropagation(),Tn(x)})):U.setAttribute("tabindex","-1");var ee=document.createElement("span");ee.className="workspace-file-icon"+(y.type==="file"?" is-file "+h(x.item&&x.item.name):" is-folder-svg"),y.type==="dir"&&(ee.innerHTML=r);var ae=document.createElement("div");ae.className="workspace-file-name",ae.textContent=x.name||x.rel||"";var xe=document.createElement("div");xe.className="workspace-file-meta",xe.textContent=y.type==="dir"?"":S(x.item.size),M.appendChild(j),M.appendChild(U),M.appendChild(ee),M.appendChild(ae);var Qe=document.createElement("span");Qe.className="workspace-file-check",A.appendChild(Qe),A.appendChild(M),A.appendChild(xe),A.addEventListener("mouseenter",function(){D(P)}),A.addEventListener("click",function(ie){ie.preventDefault(),ie.stopPropagation(),y.type==="dir"?pe(se(x)):pe(x.item)}),v.appendChild(A)}),D(0),H()}function Ve(){var c=w.value||"";d.controller&&d.controller.abort(),d.controller=typeof AbortController<"u"?new AbortController:null,Q(d.items,!0),F(c,"",d.controller?d.controller.signal:void 0).then(function(p){d.open&&(c?Q(p,!1):(d.loadedDirs.__root__=!0,$e(p),Q(d.items,!1)))}).catch(function(p){p&&p.name==="AbortError"||d.open&&Q([],!1,p&&p.message||"读取失败")})}function En(c){var p=c||"__root__";d.loadedDirs[p]||(d.loadedDirs[p]=!0,F("",c||"",void 0).then(function(b){!d.open||w.value||($e(b),Q(d.items,!1))}).catch(function(){delete d.loadedDirs[p]}))}function An(){d.debounce&&clearTimeout(d.debounce),d.debounce=setTimeout(Ve,120)}function We(){if(d.open){B();try{w.focus(),w.select()}catch{}return}d.open=!0,g.classList.add("is-open"),g.setAttribute("aria-hidden","false"),w.value="",d.expanded=Object.create(null),d.loadedDirs=Object.create(null),d.itemMap=Object.create(null),d.items=[],Q([],!0),B(),Ve(),setTimeout(function(){B();try{w.focus()}catch{}},0)}function _n(){d.open?O():We()}return w.addEventListener("input",An),w.addEventListener("keydown",function(c){if(c.key==="ArrowDown")c.preventDefault(),D(d.active+1);else if(c.key==="ArrowUp")c.preventDefault(),D(d.active-1);else if(c.key==="Enter"){if(c.isComposing||c.keyCode===229||c.which===229)return;c.preventDefault();var p=d.visible[d.active];p&&p.type==="dir"?pe(se(p.node)):p&&p.type==="file"&&pe(p.node.item)}else c.key==="Escape"&&(c.preventDefault(),O(),o.focus())}),document.addEventListener("click",function(c){d.open&&(g.contains(c.target)||O())}),window.addEventListener("resize",function(){d.open&&B()}),window.addEventListener("scroll",function(){d.open&&B()},!0),{panel:g,open:We,close:O,toggle:_n}}function Ue(o,m,g){if(!o||o.dataset.pathBrowseWrapped==="1")return o;s();var w=document.createElement("div");w.className="path-input-row";var v=o.parentNode;if(!v)return o;v.insertBefore(w,o),w.appendChild(o);var C=document.createElement("button");C.type="button",C.className="path-browse-btn",C.innerHTML=r;var I=g||"浏览路径";return C.setAttribute("aria-label",I),typeof bindUiHoverTip=="function"?(C.setAttribute("data-ui-tip",I),C.removeAttribute("title"),bindUiHoverTip(C)):C.title=I,C.addEventListener("click",function(d){d.stopPropagation();var B=o.getAttribute("data-path-kind")||m;B!=="file"&&B!=="directory"&&(B="directory"),f(C,B,o.value||"",function(H){if(H){var D=Array.isArray(H)?H[0]||"":String(H);D&&(o.value=D,o.dispatchEvent(new Event("input",{bubbles:!0})),o.dispatchEvent(new Event("change",{bubbles:!0})))}})}),w.appendChild(C),o.dataset.pathBrowseWrapped="1",o}function mn(o){var m=o.closest?o.closest(".input-wrapper"):o;!m||m.dataset.fileDropBound==="1"||(m.dataset.fileDropBound="1",["dragenter","dragover"].forEach(function(g){m.addEventListener(g,function(w){!w.dataTransfer||!w.dataTransfer.files||!w.dataTransfer.files.length||(w.preventDefault(),m.classList.add("is-drag-over"))})}),["dragleave","drop"].forEach(function(g){m.addEventListener(g,function(){m.classList.remove("is-drag-over")})}),m.addEventListener("drop",function(g){!g.dataTransfer||!g.dataTransfer.files||!g.dataTransfer.files.length||(g.preventDefault(),V(o,g.dataTransfer.files).catch(function(){}))}))}function hn(o,m){if(!(!o||!m)){s(),mn(m),gn(m),o.classList.add("path-browse-btn","path-browse-btn--ghost"),o.innerHTML=r,o.setAttribute("aria-label","工作区文件"),o.setAttribute("data-ui-tip","工作区文件"),o.dataset.silentPickerUnavailable="1",o.removeAttribute("title");var g=document.createElement("input");g.type="file",g.multiple=!0,g.style.display="none",g.setAttribute("aria-hidden","true"),document.body.appendChild(g),g.addEventListener("change",function(){var v=g.files;!v||!v.length||(o.disabled=!0,V(m,v).catch(function(){}).finally(function(){g.value="",o.disabled=!1}))});var w=fn(m,function(){g.click()});o.addEventListener("click",function(v){if(v.stopPropagation(),v.preventDefault(),v.altKey){g.click();return}if(!v.shiftKey){w.toggle();return}var C=t&&typeof t.__WORK_DIR__=="string"?t.__WORK_DIR__:"";f(o,"file",C,function(I){var d=Array.isArray(I)?I:I?[I]:[];d.length&&l(m,d.map(function(B){return a(B)}).join(" "))},!1)})}}function Ie(o){o=o||document;for(var m=o.querySelectorAll("[data-path-kind]"),g=0;g<m.length;g++){var w=m[g],v=w.getAttribute("data-path-kind");(v==="file"||v==="directory")&&Ue(w,v)}}t.MyAgentPathPicker={pickPath:i,wrapInputWithBrowse:Ue,attachChatPicker:hn,uploadChatFiles:T,insertUploadedFiles:ne,startChatFileUpload:V,clipboardFilesFromEvent:W,clipboardHasUsableText:qe,chatAttachments:te,clearChatAttachments:ue,scan:Ie},document.readyState==="loading"?document.addEventListener("DOMContentLoaded",function(){Ie(document)}):Ie(document)})(typeof window<"u"?window:globalThis);const Ln="modulepreload",Mn=function(t){return"/"+t},Ke={},Fn=function(e,n,r){let s=Promise.resolve();if(n&&n.length>0){let f=function(l){return Promise.all(l.map(u=>Promise.resolve(u).then(T=>({status:"fulfilled",value:T}),T=>({status:"rejected",reason:T}))))};document.getElementsByTagName("link");const a=document.querySelector("meta[property=csp-nonce]"),h=(a==null?void 0:a.nonce)||(a==null?void 0:a.getAttribute("nonce"));s=f(n.map(l=>{if(l=Mn(l),l in Ke)return;Ke[l]=!0;const u=l.endsWith(".css"),T=u?'[rel="stylesheet"]':"";if(document.querySelector(`link[href="${l}"]${T}`))return;const S=document.createElement("link");if(S.rel=u?"stylesheet":Ln,u||(S.as="script"),S.crossOrigin="",S.href=l,h&&S.setAttribute("nonce",h),document.head.appendChild(S),u)return new Promise((F,E)=>{S.addEventListener("load",F),S.addEventListener("error",()=>E(new Error(`Unable to preload CSS for ${l}`)))})}))}function i(f){const a=new Event("vite:preloadError",{cancelable:!0});if(a.payload=f,window.dispatchEvent(a),!a.defaultPrevented)throw f}return s.then(f=>{for(const a of f||[])a.status==="rejected"&&i(a.reason);return e().catch(i)})};function _e(){return{async:!1,breaks:!1,extensions:null,gfm:!0,hooks:null,pedantic:!1,renderer:null,silent:!1,tokenizer:null,walkTokens:null}}var Y=_e();function nn(t){Y=t}var de={exec:()=>null};function _(t,e=""){let n=typeof t=="string"?t:t.source;const r={replace:(s,i)=>{let f=typeof i=="string"?i:i.source;return f=f.replace(q.caret,"$1"),n=n.replace(s,f),r},getRegex:()=>new RegExp(n,e)};return r}var q={codeRemoveIndent:/^(?: {1,4}| {0,3}\t)/gm,outputLinkReplace:/\\([\[\]])/g,indentCodeCompensation:/^(\s+)(?:```)/,beginningSpace:/^\s+/,endingHash:/#$/,startingSpaceChar:/^ /,endingSpaceChar:/ $/,nonSpaceChar:/[^ ]/,newLineCharGlobal:/\n/g,tabCharGlobal:/\t/g,multipleSpaceGlobal:/\s+/g,blankLine:/^[ \t]*$/,doubleBlankLine:/\n[ \t]*\n[ \t]*$/,blockquoteStart:/^ {0,3}>/,blockquoteSetextReplace:/\n {0,3}((?:=+|-+) *)(?=\n|$)/g,blockquoteSetextReplace2:/^ {0,3}>[ \t]?/gm,listReplaceTabs:/^\t+/,listReplaceNesting:/^ {1,4}(?=( {4})*[^ ])/g,listIsTask:/^\[[ xX]\] /,listReplaceTask:/^\[[ xX]\] +/,anyLine:/\n.*\n/,hrefBrackets:/^<(.*)>$/,tableDelimiter:/[:|]/,tableAlignChars:/^\||\| *$/g,tableRowBlankLine:/\n[ \t]*$/,tableAlignRight:/^ *-+: *$/,tableAlignCenter:/^ *:-+: *$/,tableAlignLeft:/^ *:-+ *$/,startATag:/^<a /i,endATag:/^<\/a>/i,startPreScriptTag:/^<(pre|code|kbd|script)(\s|>)/i,endPreScriptTag:/^<\/(pre|code|kbd|script)(\s|>)/i,startAngleBracket:/^</,endAngleBracket:/>$/,pedanticHrefTitle:/^([^'"]*[^\s])\s+(['"])(.*)\2/,unicodeAlphaNumeric:/[\p{L}\p{N}]/u,escapeTest:/[&<>"']/,escapeReplace:/[&<>"']/g,escapeTestNoEncode:/[<>"']|&(?!(#\d{1,7}|#[Xx][a-fA-F0-9]{1,6}|\w+);)/,escapeReplaceNoEncode:/[<>"']|&(?!(#\d{1,7}|#[Xx][a-fA-F0-9]{1,6}|\w+);)/g,unescapeTest:/&(#(?:\d+)|(?:#x[0-9A-Fa-f]+)|(?:\w+));?/ig,caret:/(^|[^\[])\^/g,percentDecode:/%25/g,findPipe:/\|/g,splitPipe:/ \|/,slashPipe:/\\\|/g,carriageReturn:/\r\n|\r/g,spaceLine:/^ +$/gm,notSpaceStart:/^\S*/,endingNewline:/\n$/,listItemRegex:t=>new RegExp(`^( {0,3}${t})((?:[	 ][^\\n]*)?(?:\\n|$))`),nextBulletRegex:t=>new RegExp(`^ {0,${Math.min(3,t-1)}}(?:[*+-]|\\d{1,9}[.)])((?:[ 	][^\\n]*)?(?:\\n|$))`),hrRegex:t=>new RegExp(`^ {0,${Math.min(3,t-1)}}((?:- *){3,}|(?:_ *){3,}|(?:\\* *){3,})(?:\\n+|$)`),fencesBeginRegex:t=>new RegExp(`^ {0,${Math.min(3,t-1)}}(?:\`\`\`|~~~)`),headingBeginRegex:t=>new RegExp(`^ {0,${Math.min(3,t-1)}}#`),htmlBeginRegex:t=>new RegExp(`^ {0,${Math.min(3,t-1)}}<(?:[a-z].*>|!--)`,"i")},Bn=/^(?:[ \t]*(?:\n|$))+/,Nn=/^((?: {4}| {0,3}\t)[^\n]+(?:\n(?:[ \t]*(?:\n|$))*)?)+/,On=/^ {0,3}(`{3,}(?=[^`\n]*(?:\n|$))|~{3,})([^\n]*)(?:\n|$)(?:|([\s\S]*?)(?:\n|$))(?: {0,3}\1[~`]* *(?=\n|$)|$)/,ce=/^ {0,3}((?:-[\t ]*){3,}|(?:_[ \t]*){3,}|(?:\*[ \t]*){3,})(?:\n+|$)/,qn=/^ {0,3}(#{1,6})(?=\s|$)(.*)(?:\n+|$)/,Re=/(?:[*+-]|\d{1,9}[.)])/,tn=/^(?!bull |blockCode|fences|blockquote|heading|html|table)((?:.|\n(?!\s*?\n|bull |blockCode|fences|blockquote|heading|html|table))+?)\n {0,3}(=+|-+) *(?:\n+|$)/,rn=_(tn).replace(/bull/g,Re).replace(/blockCode/g,/(?: {4}| {0,3}\t)/).replace(/fences/g,/ {0,3}(?:`{3,}|~{3,})/).replace(/blockquote/g,/ {0,3}>/).replace(/heading/g,/ {0,3}#{1,6}/).replace(/html/g,/ {0,3}<[^\n>]+>\n/).replace(/\|table/g,"").getRegex(),Un=_(tn).replace(/bull/g,Re).replace(/blockCode/g,/(?: {4}| {0,3}\t)/).replace(/fences/g,/ {0,3}(?:`{3,}|~{3,})/).replace(/blockquote/g,/ {0,3}>/).replace(/heading/g,/ {0,3}#{1,6}/).replace(/html/g,/ {0,3}<[^\n>]+>\n/).replace(/table/g,/ {0,3}\|?(?:[:\- ]*\|)+[\:\- ]*\n/).getRegex(),Pe=/^([^\n]+(?:\n(?!hr|heading|lheading|blockquote|fences|list|html|table| +\n)[^\n]+)*)/,Hn=/^[^\n]+/,Le=/(?!\s*\])(?:\\.|[^\[\]\\])+/,Dn=_(/^ {0,3}\[(label)\]: *(?:\n[ \t]*)?([^<\s][^\s]*|<.*?>)(?:(?: +(?:\n[ \t]*)?| *\n[ \t]*)(title))? *(?:\n+|$)/).replace("label",Le).replace("title",/(?:"(?:\\"?|[^"\\])*"|'[^'\n]*(?:\n[^'\n]+)*\n?'|\([^()]*\))/).getRegex(),jn=_(/^( {0,3}bull)([ \t][^\n]+?)?(?:\n|$)/).replace(/bull/g,Re).getRegex(),be="address|article|aside|base|basefont|blockquote|body|caption|center|col|colgroup|dd|details|dialog|dir|div|dl|dt|fieldset|figcaption|figure|footer|form|frame|frameset|h[1-6]|head|header|hr|html|iframe|legend|li|link|main|menu|menuitem|meta|nav|noframes|ol|optgroup|option|p|param|search|section|summary|table|tbody|td|tfoot|th|thead|title|tr|track|ul",Me=/<!--(?:-?>|[\s\S]*?(?:-->|$))/,Gn=_("^ {0,3}(?:<(script|pre|style|textarea)[\\s>][\\s\\S]*?(?:</\\1>[^\\n]*\\n+|$)|comment[^\\n]*(\\n+|$)|<\\?[\\s\\S]*?(?:\\?>\\n*|$)|<![A-Z][\\s\\S]*?(?:>\\n*|$)|<!\\[CDATA\\[[\\s\\S]*?(?:\\]\\]>\\n*|$)|</?(tag)(?: +|\\n|/?>)[\\s\\S]*?(?:(?:\\n[ 	]*)+\\n|$)|<(?!script|pre|style|textarea)([a-z][\\w-]*)(?:attribute)*? */?>(?=[ \\t]*(?:\\n|$))[\\s\\S]*?(?:(?:\\n[ 	]*)+\\n|$)|</(?!script|pre|style|textarea)[a-z][\\w-]*\\s*>(?=[ \\t]*(?:\\n|$))[\\s\\S]*?(?:(?:\\n[ 	]*)+\\n|$))","i").replace("comment",Me).replace("tag",be).replace("attribute",/ +[a-zA-Z:_][\w.:-]*(?: *= *"[^"\n]*"| *= *'[^'\n]*'| *= *[^\s"'=<>`]+)?/).getRegex(),sn=_(Pe).replace("hr",ce).replace("heading"," {0,3}#{1,6}(?:\\s|$)").replace("|lheading","").replace("|table","").replace("blockquote"," {0,3}>").replace("fences"," {0,3}(?:`{3,}(?=[^`\\n]*\\n)|~{3,})[^\\n]*\\n").replace("list"," {0,3}(?:[*+-]|1[.)]) ").replace("html","</?(?:tag)(?: +|\\n|/?>)|<(?:script|pre|style|textarea|!--)").replace("tag",be).getRegex(),zn=_(/^( {0,3}> ?(paragraph|[^\n]*)(?:\n|$))+/).replace("paragraph",sn).getRegex(),Fe={blockquote:zn,code:Nn,def:Dn,fences:On,heading:qn,hr:ce,html:Gn,lheading:rn,list:jn,newline:Bn,paragraph:sn,table:de,text:Hn},Ye=_("^ *([^\\n ].*)\\n {0,3}((?:\\| *)?:?-+:? *(?:\\| *:?-+:? *)*(?:\\| *)?)(?:\\n((?:(?! *\\n|hr|heading|blockquote|code|fences|list|html).*(?:\\n|$))*)\\n*|$)").replace("hr",ce).replace("heading"," {0,3}#{1,6}(?:\\s|$)").replace("blockquote"," {0,3}>").replace("code","(?: {4}| {0,3}	)[^\\n]").replace("fences"," {0,3}(?:`{3,}(?=[^`\\n]*\\n)|~{3,})[^\\n]*\\n").replace("list"," {0,3}(?:[*+-]|1[.)]) ").replace("html","</?(?:tag)(?: +|\\n|/?>)|<(?:script|pre|style|textarea|!--)").replace("tag",be).getRegex(),$n={...Fe,lheading:Un,table:Ye,paragraph:_(Pe).replace("hr",ce).replace("heading"," {0,3}#{1,6}(?:\\s|$)").replace("|lheading","").replace("table",Ye).replace("blockquote"," {0,3}>").replace("fences"," {0,3}(?:`{3,}(?=[^`\\n]*\\n)|~{3,})[^\\n]*\\n").replace("list"," {0,3}(?:[*+-]|1[.)]) ").replace("html","</?(?:tag)(?: +|\\n|/?>)|<(?:script|pre|style|textarea|!--)").replace("tag",be).getRegex()},Vn={...Fe,html:_(`^ *(?:comment *(?:\\n|\\s*$)|<(tag)[\\s\\S]+?</\\1> *(?:\\n{2,}|\\s*$)|<tag(?:"[^"]*"|'[^']*'|\\s[^'"/>\\s]*)*?/?> *(?:\\n{2,}|\\s*$))`).replace("comment",Me).replace(/tag/g,"(?!(?:a|em|strong|small|s|cite|q|dfn|abbr|data|time|code|var|samp|kbd|sub|sup|i|b|u|mark|ruby|rt|rp|bdi|bdo|span|br|wbr|ins|del|img)\\b)\\w+(?!:|[^\\w\\s@]*@)\\b").getRegex(),def:/^ *\[([^\]]+)\]: *<?([^\s>]+)>?(?: +(["(][^\n]+[")]))? *(?:\n+|$)/,heading:/^(#{1,6})(.*)(?:\n+|$)/,fences:de,lheading:/^(.+?)\n {0,3}(=+|-+) *(?:\n+|$)/,paragraph:_(Pe).replace("hr",ce).replace("heading",` *#{1,6} *[^
+var Rn=Object.defineProperty;var Pn=(t,e,n)=>e in t?Rn(t,e,{enumerable:!0,configurable:!0,writable:!0,value:n}):t[e]=n;var L=(t,e,n)=>Pn(t,typeof e!="symbol"?e+"":e,n);import"./modulepreload-polyfill-B5Qt9EMX.js";(function(t){var e=104857600,n=200*1024*1024,r='<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"></path></svg>';function s(){if(!document.getElementById("myagent-path-picker-styles")){var o=document.createElement("style");o.id="myagent-path-picker-styles",o.textContent='.path-input-row{display:flex;align-items:stretch;gap:.35rem;width:100%;}.path-input-row>.ip,.path-input-row>.tx,.path-input-row>input[type="text"],.path-input-row>input:not([type]){flex:1;min-width:0;}.path-browse-btn{flex-shrink:0;width:2.35rem;padding:0;border:1px solid var(--border-glass,rgba(255,255,255,.08));border-radius:var(--radius-sm,8px);background:var(--surface-glass2,rgba(40,40,60,.94));color:var(--text-secondary,#a6adc8);cursor:pointer;display:inline-flex;align-items:center;justify-content:center;transition:color .18s,border-color .18s,background .18s;}.path-browse-btn:hover{color:var(--text-primary,#cdd6f4);border-color:var(--border-brand-accent,rgba(124,111,247,.35));background:rgba(108,92,231,.12);}.path-browse-btn:disabled{opacity:.45;cursor:not-allowed;}.path-browse-btn--ghost{background:transparent;border-color:transparent;box-shadow:none;width:2.1rem;}.path-browse-btn--ghost:hover{background:rgba(108,92,231,.1);border-color:transparent;color:var(--accent-2,#d4b8fc);}.input-wrapper .path-browse-btn--ghost{align-self:center;margin-right:-.15rem;}.input-wrapper.is-drag-over{border-color:rgba(203,166,247,.62);box-shadow:0 0 0 3px rgba(203,166,247,.12),0 0 28px rgba(139,92,246,.18);}.input-wrapper.is-file-uploading{border-color:rgba(99,102,241,.52);}.chat-upload-status{box-sizing:border-box;width:100%;margin:.38rem 0 0;padding:.42rem .58rem;border:1px solid rgba(99,102,241,.22);border-radius:10px;background:rgba(99,102,241,.08);color:var(--text-secondary,#a6adc8);font-size:.72rem;}.chat-upload-status-row{display:flex;align-items:center;gap:.5rem;}.chat-upload-status-label{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}.chat-upload-cancel{flex:none;border:0;background:transparent;color:var(--accent-2,#d4b8fc);font:inherit;font-weight:700;cursor:pointer;padding:.08rem .2rem;}.chat-upload-cancel:hover{color:var(--text-primary,#fff);}.chat-upload-progress{height:4px;margin-top:.36rem;border-radius:999px;overflow:hidden;background:rgba(255,255,255,.1);}.chat-upload-progress-bar{display:block;width:0;height:100%;border-radius:inherit;background:linear-gradient(90deg,#6366f1,#a78bfa);transition:width .12s linear;}.workspace-file-popover{position:fixed;display:none;z-index:260;width:min(46rem,calc(100vw - 1.2rem));height:min(44rem,82vh);max-height:min(44rem,82vh);border:1px solid rgba(203,166,247,.24);border-radius:14px;background:linear-gradient(145deg,rgba(31,31,49,.88),rgba(19,20,31,.78));box-shadow:0 24px 70px rgba(0,0,0,.38),0 0 0 1px rgba(255,255,255,.045) inset,0 0 34px rgba(139,92,246,.16);overflow:hidden;backdrop-filter:blur(22px);-webkit-backdrop-filter:blur(22px);}.workspace-file-popover:before{content:"";position:absolute;inset:0;pointer-events:none;background:radial-gradient(circle at 18% 0%,rgba(203,166,247,.18),transparent 30%),radial-gradient(circle at 92% 18%,rgba(99,102,241,.16),transparent 28%);}.workspace-file-popover.is-open{display:flex;flex-direction:column;}.workspace-file-search{position:relative;width:100%;box-sizing:border-box;border:0;border-bottom:1px solid rgba(255,255,255,.08);background:rgba(255,255,255,.055);color:var(--text-primary,#cdd6f4);padding:.56rem .72rem;font:inherit;font-size:.78rem;outline:none;}.workspace-file-search::placeholder{color:var(--text-muted,#6c7086);}.workspace-file-list{position:relative;flex:1;min-height:0;overflow:auto;padding:.36rem .38rem .2rem;}.workspace-file-item{width:100%;display:grid;grid-template-columns:1.05rem minmax(0,1fr) auto;gap:.2rem .38rem;align-items:center;text-align:left;border:0;border-radius:8px;background:transparent;color:var(--text-secondary,#a6adc8);padding:.22rem .36rem;cursor:pointer;font:inherit;font-size:.74rem;}.workspace-file-item:hover,.workspace-file-item.is-active{background:rgba(139,92,246,.13);color:var(--text-primary,#cdd6f4);}.workspace-file-item.is-selected{background:rgba(99,102,241,.18);color:var(--text-primary,#cdd6f4);}.workspace-file-check{width:.82rem;height:.82rem;border:1px solid rgba(203,166,247,.38);border-radius:4px;display:inline-flex;align-items:center;justify-content:center;color:#fff;font-size:.62rem;line-height:1;background:transparent;}.workspace-file-item.is-selected .workspace-file-check{background:linear-gradient(135deg,#6366f1,#a78bfa);border-color:transparent;color:#fff;}.workspace-file-dir-row{grid-template-columns:1.05rem minmax(0,1fr) auto;color:var(--text-primary,#cdd6f4);font-weight:650;}.workspace-file-dir-row .workspace-file-tree{grid-column:2/3;}.workspace-file-file-row{grid-template-columns:1.05rem minmax(0,1fr) auto;}.workspace-file-tree{min-width:0;display:flex;align-items:center;gap:.24rem;}.workspace-file-indent{flex:0 0 auto;width:var(--indent,0);}.workspace-file-chevron{width:.8rem;min-width:.8rem;color:var(--text-muted,#6c7086);font-size:.72rem;text-align:center;border:0;background:transparent;padding:0;cursor:pointer;}.workspace-file-icon{position:relative;width:.98rem;min-width:.98rem;height:.74rem;margin-top:.04rem;border-radius:3px;border:1px solid rgba(203,166,247,.28);background:linear-gradient(135deg,rgba(203,166,247,.18),rgba(99,102,241,.1));box-shadow:inset 0 .12rem .26rem rgba(255,255,255,.08);}.workspace-file-icon:before{content:"";position:absolute;left:.06rem;right:.06rem;top:.12rem;height:.16rem;border-radius:999px;background:rgba(203,166,247,.34);}.workspace-file-icon:after{content:"";position:absolute;left:.06rem;right:.06rem;bottom:.11rem;height:.24rem;border-radius:2px;background:rgba(99,102,241,.16);}.workspace-file-icon.is-file{width:.82rem;min-width:.82rem;height:1rem;margin-top:0;border-radius:3px;background:transparent;border:1.5px solid rgba(166,173,200,.58);box-shadow:none;color:var(--text-muted,#6c7086);}.workspace-file-icon.is-file:before{left:auto;right:-1.5px;top:-1.5px;width:.3rem;height:.3rem;border:0;border-left:1.5px solid rgba(166,173,200,.58);border-bottom:1.5px solid rgba(166,173,200,.58);border-radius:0 3px 0 3px;background:var(--surface-glass2,rgba(40,40,60,.94));}.workspace-file-icon.is-file:after{display:none;}.workspace-file-icon.is-folder-svg{width:1rem;min-width:1rem;height:1rem;margin-top:0;border:0;background:transparent;box-shadow:none;color:var(--text-muted,#6c7086);display:inline-flex;align-items:center;justify-content:center;}.workspace-file-icon.is-folder-svg:before,.workspace-file-icon.is-folder-svg:after{display:none;}.workspace-file-icon.is-folder-svg svg{width:1rem;height:1rem;display:block;}.workspace-file-icon.is-image{border-color:rgba(45,212,191,.72);}.workspace-file-icon.is-image:after{display:block;left:.12rem;right:.12rem;bottom:.15rem;height:.24rem;clip-path:polygon(0 100%,38% 38%,56% 66%,76% 24%,100% 100%);background:rgba(45,212,191,.72);}.workspace-file-icon.is-audio{border-color:rgba(251,191,36,.76);}.workspace-file-icon.is-audio:after{display:block;left:.17rem;right:auto;bottom:.18rem;width:.36rem;height:.4rem;border-radius:0;background:rgba(251,191,36,.76);clip-path:polygon(0 32%,45% 32%,100% 0,100% 100%,45% 68%,0 68%);}.workspace-file-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:.74rem;}.workspace-file-dir{grid-column:2/-1;color:var(--text-muted,#6c7086);font-size:.68rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}.workspace-file-meta{color:var(--text-muted,#6c7086);font-size:.68rem;white-space:nowrap;}.workspace-file-footer{position:relative;display:flex;align-items:center;justify-content:space-between;gap:.5rem;padding:.42rem .52rem;border-top:1px solid rgba(255,255,255,.08);background:rgba(255,255,255,.035);font-size:.72rem;color:var(--text-muted,#6c7086);}.workspace-file-outside{flex-shrink:0;border:1px solid rgba(203,166,247,.24);border-radius:8px;padding:.28rem .58rem;background:rgba(203,166,247,.1);color:var(--text-primary,#cdd6f4);font:inherit;font-size:.7rem;font-weight:700;cursor:pointer;transition:background .16s,border-color .16s,color .16s;}.workspace-file-outside:hover{background:rgba(203,166,247,.18);border-color:rgba(203,166,247,.42);color:#fff;}.workspace-file-insert{border:0;border-radius:8px;padding:.34rem .62rem;background:linear-gradient(135deg,#6366f1,#8b5cf6);color:#fff;font-size:.72rem;font-weight:700;cursor:pointer;}.workspace-file-insert:disabled{opacity:.45;cursor:not-allowed;}.workspace-file-empty{padding:1rem;text-align:center;color:var(--text-muted,#6c7086);font-size:.78rem;}.theme-light .workspace-file-popover{background:linear-gradient(145deg,rgba(255,255,255,.93),rgba(244,247,252,.86));box-shadow:0 24px 64px rgba(31,35,52,.16),0 0 28px rgba(99,102,241,.12);}.theme-light .workspace-file-search,.theme-light .workspace-file-footer{background:rgba(34,40,58,.035);}',document.head.appendChild(o)}}async function i(o,m,g){var w=typeof AbortController<"u"?new AbortController:null,v=w?setTimeout(function(){w.abort()},5e4):null,C;try{C=await fetch("/api/pick-path",{method:"POST",headers:{"Content-Type":"application/json"},credentials:"same-origin",body:JSON.stringify({kind:o||"directory",initial:m||"",multiple:!!g}),signal:w?w.signal:void 0})}finally{v&&clearTimeout(v)}var I=await C.json().catch(function(){return{ok:!1,error:"请求失败"}});if(!C.ok||!I.ok){if(I&&I.cancelled)return null;var d=I&&I.error||"无法打开选择对话框";if(/取消|cancelled|800704c7|2147023673/i.test(d))return null;throw new Error(d)}return g?Array.isArray(I.paths)?I.paths:I.path?[I.path]:[]:I.path||null}async function f(o,m,g,w,v){o.disabled=!0;try{var C=await i(m,g||"",!!v);w&&w(C)}catch{return}finally{o.disabled=!1}}function a(o){var m=String(o||"").trim();return m?((m.charAt(0)==='"'&&m.charAt(m.length-1)==='"'||m.charAt(0)==="'"&&m.charAt(m.length-1)==="'")&&(m=m.slice(1,-1)),'"'+m.replace(/"/g,'\\"')+'"'):""}function h(o){var m=String(o||"").toLowerCase().split(".").pop()||"";return/^(png|jpe?g|gif|webp|bmp|svg|tiff?|ico|avif)$/.test(m)?"is-image":/^(mp3|wav|flac|aac|m4a|ogg|oga|opus|wma|aiff?)$/.test(m)?"is-audio":""}function l(o,m){var g=o.selectionStart,w=o.selectionEnd,v=o.value.slice(0,g),C=o.value.slice(w),I=String(m||"");v.length&&!/\s$/.test(v)&&(I=" "+I),C.length&&!/^\s/.test(C)&&(I=I+" "),o.value=v+I+C;var d=v.length+I.length;o.selectionStart=o.selectionEnd=d,o.dispatchEvent(new Event("input",{bubbles:!0})),o.focus()}function u(o){var m=Array.prototype.slice.call(o||[]).filter(Boolean),g=0;if(m.forEach(function(w){var v=Number(w&&w.size||0);if(v>e)throw new Error("文件“"+String(w&&w.name||"未命名文件")+"”超过 "+S(e)+" 限制。");g+=Math.max(0,v)}),g>n)throw new Error("本次上传总大小超过 "+S(n)+" 限制。");return m}function T(o,m){var g;try{g=u(o)}catch(v){return Promise.reject(v)}if(!g.length)return Promise.resolve([]);m=m||{};var w=new FormData;return g.forEach(function(v){w.append("files",v,v.name||"upload.bin")}),new Promise(function(v,C){var I=new XMLHttpRequest;I.open("POST","/api/upload-chat-files",!0),I.withCredentials=!0,I.timeout=600*1e3,I.upload&&typeof m.onProgress=="function"&&(I.upload.onprogress=function(d){m.onProgress(d.loaded||0,d.lengthComputable?d.total:0)}),typeof m.registerAbort=="function"&&m.registerAbort(function(){I.abort()}),I.onload=function(){var d;try{d=JSON.parse(I.responseText||"{}")}catch{d={ok:!1,error:"上传失败"}}if(I.status<200||I.status>=300||!d.ok){C(new Error(d&&d.error||"上传失败"));return}v(Array.isArray(d.files)?d.files:[])},I.onerror=function(){C(new Error("上传失败：网络连接异常。"))},I.ontimeout=function(){C(new Error("上传超时，请重试。"))},I.onabort=function(){var d=new Error("上传已取消。");d.name="AbortError",C(d)},I.send(w)})}function S(o){return o=Number(o||0),!isFinite(o)||o<=0?"":o<1024?o+" B":o<1024*1024?Math.round(o/102.4)/10+" KB":o<1024*1024*1024?Math.round(o/104857.6)/10+" MB":Math.round(o/1073741824e-1)/10+" GB"}async function F(o,m,g){var w=[];o?w.push("q="+encodeURIComponent(o)):m&&w.push("dir="+encodeURIComponent(m));var v="/api/workspace-files"+(w.length?"?"+w.join("&"):""),C=await fetch(v,{credentials:"same-origin",signal:g}),I=await C.json().catch(function(){return{ok:!1,error:"读取工作区文件失败"}});if(!C.ok||!I.ok)throw new Error(I&&I.error||"读取工作区文件失败");return Array.isArray(I.files)?I.files:[]}function E(){try{return typeof currentSessionId<"u"?String(currentSessionId||""):""}catch{return""}}function N(o,m,g){if(m){var w=E();if(g&&w&&g!==w){try{if(typeof persistInputDraft=="function"){var v="";typeof draftBySession<"u"&&Object.prototype.hasOwnProperty.call(draftBySession,g)?v=String(draftBySession[g]||""):typeof readStoredInputDraft=="function"&&(v=String(readStoredInputDraft(g)||"")),persistInputDraft(g,v.trim()?v+" "+m:m);return}}catch{}return}l(o,m)}}function ne(o,m,g){var w=E();return T(m,g).then(function(v){var C=Array.isArray(o._myAgentStructuredAttachments)?o._myAgentStructuredAttachments.slice():[];v.forEach(function(d){!d||!d.path||C.some(function(B){return B.path===d.path})||C.push({path:d.path,name:d.name||"",size:Number(d.size||0)})}),o._myAgentStructuredAttachments=C;var I=v.map(function(d){return a(d.path||d.rel||d.name)}).join(" ");N(o,I,w)})}function te(o){return Array.isArray(o&&o._myAgentStructuredAttachments)?o._myAgentStructuredAttachments.slice():[]}function ue(o){o&&(o._myAgentStructuredAttachments=[])}function X(o,m){console.error("chat file upload failed:",m),o.dispatchEvent(new CustomEvent("myagent:file-paste-error",{bubbles:!0,detail:{message:String(m&&m.message||m||"上传失败")}}))}function re(o,m){var g=o.closest?o.closest(".input-wrapper"):null;m?o.dataset.fileUploadBusy="1":delete o.dataset.fileUploadBusy,g&&(g.classList.toggle("is-file-uploading",!!m),m?g.setAttribute("aria-busy","true"):g.removeAttribute("aria-busy")),o.dispatchEvent(new CustomEvent("myagent:file-upload-state",{bubbles:!0,detail:{busy:!!m}}))}function we(o,m){var g=o.closest?o.closest(".input-wrapper"):null,w=document.createElement("div");w.className="chat-upload-status",w.setAttribute("role","status"),w.innerHTML='<div class="chat-upload-status-row"><span class="chat-upload-status-label"></span><button type="button" class="chat-upload-cancel">取消</button></div><div class="chat-upload-progress" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><span class="chat-upload-progress-bar"></span></div>';var v=m.length;return w.querySelector(".chat-upload-status-label").textContent="正在上传 "+v+" 个文件… 0%",g&&g.parentNode&&g.parentNode.insertBefore(w,g.nextSibling),w}function V(o,m){var g;try{g=u(m)}catch(O){return X(o,O),Promise.reject(O)}if(!g.length)return Promise.resolve();if(o._myAgentActiveUpload){var w=new Error("已有文件正在上传，请等待完成或先取消。");return X(o,w),Promise.reject(w)}var v=we(o,g),C=v.querySelector(".chat-upload-status-label"),I=v.querySelector(".chat-upload-progress"),d=v.querySelector(".chat-upload-progress-bar"),B=v.querySelector(".chat-upload-cancel"),H=null,D=o._myAgentActiveUpload={};return re(o,!0),B.addEventListener("click",function(){B.disabled=!0,C.textContent="正在取消上传…",H&&H()}),ne(o,g,{registerAbort:function(O){H=O},onProgress:function(O,Z){if(o._myAgentActiveUpload===D){var J=Z>0?Math.min(100,Math.round(O*100/Z)):0;C.textContent="正在上传 "+g.length+" 个文件… "+J+"%",d.style.width=J+"%",I.setAttribute("aria-valuenow",String(J))}}}).catch(function(O){throw(!O||O.name!=="AbortError")&&X(o,O),O}).finally(function(){o._myAgentActiveUpload===D&&(delete o._myAgentActiveUpload,re(o,!1)),v.parentNode&&v.parentNode.removeChild(v)})}function W(o){var m=o&&o.clipboardData;if(!m)return[];var g=[],w=Array.prototype.slice.call(m.items||[]);return w.forEach(function(v){if(!(!v||v.kind!=="file"||typeof v.getAsFile!="function")){var C=v.getAsFile();C&&g.push(C)}}),g.length||(g=Array.prototype.slice.call(m.files||[]).filter(Boolean)),g.map(function(v,C){if(String(v&&v.name||"").trim())return v;var I=String(v&&v.type||"").split("/")[1]||"bin";I=I.replace(/[^a-z0-9.+-]/gi,"")||"bin";var d="clipboard-"+Date.now()+"-"+(C+1)+"."+I;try{return new File([v],d,{type:v.type||"application/octet-stream",lastModified:Date.now()})}catch{return v}})}function qe(o){var m=o&&o.clipboardData;if(!m||typeof m.getData!="function")return!1;try{return String(m.getData("text/plain")||"").trim().length>0}catch{return!1}}function gn(o){!o||o.dataset.filePasteBound==="1"||(o.dataset.filePasteBound="1",o.addEventListener("paste",function(m){if(!qe(m)){var g=W(m);g.length&&(m.preventDefault(),V(o,g).catch(function(){}))}}))}function fn(o,m){var g=document.createElement("div");g.className="workspace-file-popover",g.setAttribute("aria-hidden","true"),g.innerHTML='<input class="workspace-file-search" type="text" autocomplete="off" spellcheck="false" placeholder="搜索工作区文件（↑↓ 移动 · Enter 选择 · Esc 关闭）"><div class="workspace-file-list" role="listbox"></div><div class="workspace-file-footer"><span class="workspace-file-count">未选择文件</span><button type="button" class="workspace-file-outside">选择工作目录外文件</button></div>',document.body.appendChild(g);var w=g.querySelector(".workspace-file-search"),v=g.querySelector(".workspace-file-list"),C=g.querySelector(".workspace-file-count"),I=g.querySelector(".workspace-file-outside"),d={items:[],visible:[],active:0,open:!1,debounce:null,controller:null,selected:Object.create(null),expanded:Object.create(null),loadedDirs:Object.create(null),itemMap:Object.create(null)};function B(){var c=o.closest?o.closest(".input-wrapper"):o,p=c.getBoundingClientRect(),b=8,k=Math.min(Math.max(p.width,520),window.innerWidth-16),y=Math.max(8,Math.min(p.left,window.innerWidth-k-8)),P=document.querySelector(".titlebar"),x=P?P.getBoundingClientRect().bottom:44,A=parseFloat(getComputedStyle(document.documentElement).fontSize||"16")||16,M=Math.min(44*A,window.innerHeight*.82),j=Math.max(1,p.top-x-b),U=Math.min(M,j),ee=p.top-U-b;if(U<96){var ae=Math.max(1,window.innerHeight-p.bottom-b-8);U=Math.min(M,ae),ee=p.bottom+b}g.style.left=y+"px",g.style.top=Math.max(x,ee)+"px",g.style.width=k+"px",g.style.height=Math.max(1,Math.floor(U))+"px",g.style.maxHeight=Math.max(1,Math.floor(U))+"px"}function H(){var c=Object.keys(d.selected).length;C.textContent=c?"已选择 "+c+" 项":"未选择文件",v.querySelectorAll(".workspace-file-item").forEach(function(p){var b=p.getAttribute("data-path-key")||"",k=!!d.selected[b];p.classList.toggle("is-selected",k);var y=p.querySelector(".workspace-file-check");y&&(y.textContent=k?"✓":"")})}function D(c){var p=v.querySelectorAll(".workspace-file-item");if(!p.length){d.active=0;return}d.active=Math.max(0,Math.min(c,p.length-1));for(var b=0;b<p.length;b++)p[b].classList.toggle("is-active",b===d.active),p[b].setAttribute("aria-selected",b===d.active?"true":"false");var k=p[d.active];k&&typeof k.scrollIntoView=="function"&&k.scrollIntoView({block:"nearest"})}function O(){d.open=!1,g.classList.remove("is-open"),g.setAttribute("aria-hidden","true"),d.debounce&&clearTimeout(d.debounce),d.controller&&d.controller.abort()}function Z(c){return c&&(c.path||c.rel||c.name)||""}function J(c){return a(Z(c))}function vn(c,p){var b=Z(c);if(!b)return!1;var k=String(c&&c.rel||"");return p.indexOf(J(c))>=0||p.indexOf(b)>=0||k&&p.indexOf(a(k))>=0||k&&p.indexOf(k)>=0}function Sn(c,p){c=String(c||""),p=String(p||"");for(var b=0;b<c.length&&b<p.length&&c.charAt(b)===p.charAt(b);)b++;for(var k=c.length-1,y=p.length-1;k>=b&&y>=b&&c.charAt(k)===p.charAt(y);)k--,y--;return p.slice(b,y+1).trim()}function bn(c,p){if(p){var b=String(o.value||"");if(!(b.indexOf(p)>=0)){var k=o.value;l(o,p);var y=Sn(k,o.value);c&&y&&(c._inputToken=y)}}}function yn(c,p){if(!p&&!c)return;var b=String(o.value||""),k=[];function y(x){x=String(x||"").trim(),x&&k.indexOf(x)<0&&k.push(x)}y(c&&c._inputToken),y(p),y(c&&c.path),y(c&&c.rel),y(c&&c.path&&a(c.path)),y(c&&c.rel&&a(c.rel));var P=b;k.sort(function(x,A){return A.length-x.length}).forEach(function(x){var A=x.replace(/[.*+?^${}()|[\]\\]/g,"\\$&"),M=new RegExp("(?:^|\\s)"+A+"(?=\\s|$)","g");P=P.replace(M,function(j){return j.charAt(0)&&/\s/.test(j.charAt(0))?" ":""})}),P=P.replace(/[ \t]{2,}/g," ").trim(),P!==b&&(o.value=P,o.selectionStart=o.selectionEnd=o.value.length,o.dispatchEvent(new Event("input",{bubbles:!0})))}function pe(c){if(c){var p=Z(c);if(p){var b=J(c);if(d.selected[p]){var k=d.selected[p];delete d.selected[p],yn(k,b)}else d.selected[p]=c,bn(c,b);H()}}}function He(){var c=String(o.value||"");Object.keys(d.selected).forEach(function(p){var b=d.selected[p];vn(b,c)||delete d.selected[p]})}function wn(){He(),H()}o.addEventListener("input",wn),I&&I.addEventListener("click",function(c){c.preventDefault(),c.stopPropagation(),typeof m=="function"&&m()});function De(){var c=String(t.__WORK_DIR__||"workspace"),p=c.split(/[\\/]+/).filter(Boolean);return p[p.length-1]||"workspace"}function je(c,p,b){return{type:"dir",name:c,rel:p,root:!!b,path:"",dirs:Object.create(null),files:[],children:[],loaded:!1}}function In(c,p){var b=String(c&&c.path||""),k=String(p||"").replace(/\//g,"\\");return b&&k&&b.toLowerCase().slice(-k.length)===k.toLowerCase()?b.slice(0,Math.max(0,b.length-k.length)).replace(/[\\/]+$/,""):String(t.__WORK_DIR__||"").replace(/[\\/]+$/,"")}function Ge(c,p){var b=String(c||"").replace(/[\\/]+$/,""),k=String(p||"").replace(/[\\/]+/g,"/");if(!k)return b;var y=b.indexOf("\\")>=0?"\\":"/";return b?b+y+k.replace(/\//g,y):k}function se(c){return{kind:"directory",name:c.name||c.rel||De(),rel:c.rel||"",path:c.path||Ge(String(t.__WORK_DIR__||""),c.rel||"")}}function xn(c){var p=je(De(),"",!0);p.path=String(t.__WORK_DIR__||"").replace(/[\\/]+$/,""),p.loaded=!!d.loadedDirs.__root__;function b(y,P){for(var x=p,A=[],M=0;M<y.length;M++)A.push(y[M]),x.dirs[y[M]]||(x.dirs[y[M]]=je(y[M],A.join("/"),!1),x.dirs[y[M]].path=Ge(P||p.path,A.join("/"))),x=x.dirs[y[M]],x.loaded=!!d.loadedDirs[x.rel||"__root__"];return x}(c||[]).forEach(function(y){var P=String(y.rel||y.path||y.name||"").replace(/\\/g,"/"),x=P.split("/").filter(Boolean);if(x.length){var A=In(y,P);if(!p.path&&A&&(p.path=A),y.kind==="directory"){var M=b(x,A||p.path);M.name=y.name||M.name,M.path=y.path||M.path;return}var j=b(x.slice(0,-1),A||p.path);j.files.push({type:"file",name:y.name||x[x.length-1]||P,rel:P,item:y})}});function k(y){var P=Object.keys(y.dirs).map(function(x){return y.dirs[x]}).sort(function(x,A){return x.name.localeCompare(A.name,void 0,{sensitivity:"base"})});P.forEach(k),y.files.sort(function(x,A){return x.name.localeCompare(A.name,void 0,{sensitivity:"base"})}),y.children=P.concat(y.files)}return k(p),p}function ze(c,p,b){if(!(!c||c.type!=="dir")){b=Number(b||0);var k=c.rel||"__root__";p?d.expanded[k]=!0:typeof d.expanded[k]>"u"&&(d.expanded[k]=b===0),p&&c.children.forEach(function(y){y.type==="dir"&&ze(y,p,b+1)})}}function kn(c){var p=[];function b(k,y){p.push({type:"dir",node:k,depth:y}),d.expanded[k.rel||"__root__"]&&k.children.forEach(function(P){P.type==="dir"?b(P,y+1):p.push({type:"file",node:P,depth:y+1})})}return b(c,0),p}function Cn(c){return String(c&&(c.kind||"file")||"file")+":"+String(c&&(c.rel||c.path||c.name)||"")}function $e(c){(c||[]).forEach(function(p){var b=Cn(p);b!==":"&&(d.itemMap[b]=p)}),d.items=Object.keys(d.itemMap).map(function(p){return d.itemMap[p]}),d.items.sort(function(p,b){return String(p.rel||"").localeCompare(String(b.rel||""),void 0,{sensitivity:"base"})})}function Tn(c){if(c){var p=c.rel||"__root__";d.expanded[p]=!d.expanded[p],Q(d.items,!1),d.expanded[p]&&!w.value&&!d.loadedDirs[p]&&En(c.rel||"")}}function Q(c,p,b){if(He(),d.items=(c||[]).slice().sort(function(y,P){return String(y.rel||"").localeCompare(String(P.rel||""),void 0,{sensitivity:"base"})}),v.innerHTML="",d.visible=[],p){v.innerHTML='<div class="workspace-file-empty">加载中</div>';return}if(b){v.innerHTML='<div class="workspace-file-empty">'+String(b)+"</div>";return}if(!d.items.length){v.innerHTML='<div class="workspace-file-empty">没有匹配文件</div>';return}var k=xn(d.items);ze(k,!!w.value),d.visible=kn(k),d.visible.forEach(function(y,P){var x=y.node,A=document.createElement("button");A.type="button",A.className="workspace-file-item "+(y.type==="dir"?"workspace-file-dir-row":"workspace-file-file-row"),A.setAttribute("role","option"),A.setAttribute("data-row-index",String(P)),A.setAttribute("data-path-key",y.type==="dir"?se(x).path||se(x).rel||se(x).name||"":x.item.path||x.item.rel||x.item.name||"");var M=document.createElement("div");M.className="workspace-file-tree";var j=document.createElement("span");j.className="workspace-file-indent",j.style.setProperty("--indent",Math.min(y.depth,10)*.86+"rem");var U=document.createElement("span");U.className="workspace-file-chevron",U.textContent=y.type==="dir"?d.expanded[x.rel||"__root__"]?"▾":"▸":"",y.type==="dir"?(U.setAttribute("aria-label",d.expanded[x.rel||"__root__"]?"折叠文件夹":"展开文件夹"),U.setAttribute("role","button"),U.addEventListener("click",function(ie){ie.preventDefault(),ie.stopPropagation(),Tn(x)})):U.setAttribute("tabindex","-1");var ee=document.createElement("span");ee.className="workspace-file-icon"+(y.type==="file"?" is-file "+h(x.item&&x.item.name):" is-folder-svg"),y.type==="dir"&&(ee.innerHTML=r);var ae=document.createElement("div");ae.className="workspace-file-name",ae.textContent=x.name||x.rel||"";var xe=document.createElement("div");xe.className="workspace-file-meta",xe.textContent=y.type==="dir"?"":S(x.item.size),M.appendChild(j),M.appendChild(U),M.appendChild(ee),M.appendChild(ae);var Qe=document.createElement("span");Qe.className="workspace-file-check",A.appendChild(Qe),A.appendChild(M),A.appendChild(xe),A.addEventListener("mouseenter",function(){D(P)}),A.addEventListener("click",function(ie){ie.preventDefault(),ie.stopPropagation(),y.type==="dir"?pe(se(x)):pe(x.item)}),v.appendChild(A)}),D(0),H()}function Ve(){var c=w.value||"";d.controller&&d.controller.abort(),d.controller=typeof AbortController<"u"?new AbortController:null,Q(d.items,!0),F(c,"",d.controller?d.controller.signal:void 0).then(function(p){d.open&&(c?Q(p,!1):(d.loadedDirs.__root__=!0,$e(p),Q(d.items,!1)))}).catch(function(p){p&&p.name==="AbortError"||d.open&&Q([],!1,p&&p.message||"读取失败")})}function En(c){var p=c||"__root__";d.loadedDirs[p]||(d.loadedDirs[p]=!0,F("",c||"",void 0).then(function(b){!d.open||w.value||($e(b),Q(d.items,!1))}).catch(function(){delete d.loadedDirs[p]}))}function An(){d.debounce&&clearTimeout(d.debounce),d.debounce=setTimeout(Ve,120)}function We(){if(d.open){B();try{w.focus(),w.select()}catch{}return}d.open=!0,g.classList.add("is-open"),g.setAttribute("aria-hidden","false"),w.value="",d.expanded=Object.create(null),d.loadedDirs=Object.create(null),d.itemMap=Object.create(null),d.items=[],Q([],!0),B(),Ve(),setTimeout(function(){B();try{w.focus()}catch{}},0)}function _n(){d.open?O():We()}return w.addEventListener("input",An),w.addEventListener("keydown",function(c){if(c.key==="ArrowDown")c.preventDefault(),D(d.active+1);else if(c.key==="ArrowUp")c.preventDefault(),D(d.active-1);else if(c.key==="Enter"){if(c.isComposing||c.keyCode===229||c.which===229)return;c.preventDefault();var p=d.visible[d.active];p&&p.type==="dir"?pe(se(p.node)):p&&p.type==="file"&&pe(p.node.item)}else c.key==="Escape"&&(c.preventDefault(),O(),o.focus())}),document.addEventListener("click",function(c){d.open&&(g.contains(c.target)||O())}),window.addEventListener("resize",function(){d.open&&B()}),window.addEventListener("scroll",function(){d.open&&B()},!0),{panel:g,open:We,close:O,toggle:_n}}function Ue(o,m,g){if(!o||o.dataset.pathBrowseWrapped==="1")return o;s();var w=document.createElement("div");w.className="path-input-row";var v=o.parentNode;if(!v)return o;v.insertBefore(w,o),w.appendChild(o);var C=document.createElement("button");C.type="button",C.className="path-browse-btn",C.innerHTML=r;var I=g||"浏览路径";return C.setAttribute("aria-label",I),typeof bindUiHoverTip=="function"?(C.setAttribute("data-ui-tip",I),C.removeAttribute("title"),bindUiHoverTip(C)):C.title=I,C.addEventListener("click",function(d){d.stopPropagation();var B=o.getAttribute("data-path-kind")||m;B!=="file"&&B!=="directory"&&(B="directory"),f(C,B,o.value||"",function(H){if(H){var D=Array.isArray(H)?H[0]||"":String(H);D&&(o.value=D,o.dispatchEvent(new Event("input",{bubbles:!0})),o.dispatchEvent(new Event("change",{bubbles:!0})))}})}),w.appendChild(C),o.dataset.pathBrowseWrapped="1",o}function mn(o){var m=o.closest?o.closest(".input-wrapper"):o;!m||m.dataset.fileDropBound==="1"||(m.dataset.fileDropBound="1",["dragenter","dragover"].forEach(function(g){m.addEventListener(g,function(w){!w.dataTransfer||!w.dataTransfer.files||!w.dataTransfer.files.length||(w.preventDefault(),m.classList.add("is-drag-over"))})}),["dragleave","drop"].forEach(function(g){m.addEventListener(g,function(){m.classList.remove("is-drag-over")})}),m.addEventListener("drop",function(g){!g.dataTransfer||!g.dataTransfer.files||!g.dataTransfer.files.length||(g.preventDefault(),V(o,g.dataTransfer.files).catch(function(){}))}))}function hn(o,m){if(!(!o||!m)){s(),mn(m),gn(m),o.classList.add("path-browse-btn","path-browse-btn--ghost"),o.innerHTML=r,o.setAttribute("aria-label","工作区文件"),o.setAttribute("data-ui-tip","工作区文件"),o.dataset.silentPickerUnavailable="1",o.removeAttribute("title");var g=document.createElement("input");g.type="file",g.multiple=!0,g.style.display="none",g.setAttribute("aria-hidden","true"),document.body.appendChild(g),g.addEventListener("change",function(){var v=g.files;!v||!v.length||(o.disabled=!0,V(m,v).catch(function(){}).finally(function(){g.value="",o.disabled=!1}))});var w=fn(m,function(){g.click()});o.addEventListener("click",function(v){if(v.stopPropagation(),v.preventDefault(),v.altKey){g.click();return}if(!v.shiftKey){w.toggle();return}var C=t&&typeof t.__WORK_DIR__=="string"?t.__WORK_DIR__:"";f(o,"file",C,function(I){var d=Array.isArray(I)?I:I?[I]:[];d.length&&l(m,d.map(function(B){return a(B)}).join(" "))},!1)})}}function Ie(o){o=o||document;for(var m=o.querySelectorAll("[data-path-kind]"),g=0;g<m.length;g++){var w=m[g],v=w.getAttribute("data-path-kind");(v==="file"||v==="directory")&&Ue(w,v)}}t.MyAgentPathPicker={pickPath:i,wrapInputWithBrowse:Ue,attachChatPicker:hn,uploadChatFiles:T,insertUploadedFiles:ne,startChatFileUpload:V,clipboardFilesFromEvent:W,clipboardHasUsableText:qe,chatAttachments:te,clearChatAttachments:ue,scan:Ie},document.readyState==="loading"?document.addEventListener("DOMContentLoaded",function(){Ie(document)}):Ie(document)})(typeof window<"u"?window:globalThis);const Ln="modulepreload",Mn=function(t){return"/"+t},Ke={},Fn=function(e,n,r){let s=Promise.resolve();if(n&&n.length>0){let f=function(l){return Promise.all(l.map(u=>Promise.resolve(u).then(T=>({status:"fulfilled",value:T}),T=>({status:"rejected",reason:T}))))};document.getElementsByTagName("link");const a=document.querySelector("meta[property=csp-nonce]"),h=(a==null?void 0:a.nonce)||(a==null?void 0:a.getAttribute("nonce"));s=f(n.map(l=>{if(l=Mn(l),l in Ke)return;Ke[l]=!0;const u=l.endsWith(".css"),T=u?'[rel="stylesheet"]':"";if(document.querySelector(`link[href="${l}"]${T}`))return;const S=document.createElement("link");if(S.rel=u?"stylesheet":Ln,u||(S.as="script"),S.crossOrigin="",S.href=l,h&&S.setAttribute("nonce",h),document.head.appendChild(S),u)return new Promise((F,E)=>{S.addEventListener("load",F),S.addEventListener("error",()=>E(new Error(`Unable to preload CSS for ${l}`)))})}))}function i(f){const a=new Event("vite:preloadError",{cancelable:!0});if(a.payload=f,window.dispatchEvent(a),!a.defaultPrevented)throw f}return s.then(f=>{for(const a of f||[])a.status==="rejected"&&i(a.reason);return e().catch(i)})};function _e(){return{async:!1,breaks:!1,extensions:null,gfm:!0,hooks:null,pedantic:!1,renderer:null,silent:!1,tokenizer:null,walkTokens:null}}var Y=_e();function nn(t){Y=t}var de={exec:()=>null};function _(t,e=""){let n=typeof t=="string"?t:t.source;const r={replace:(s,i)=>{let f=typeof i=="string"?i:i.source;return f=f.replace(q.caret,"$1"),n=n.replace(s,f),r},getRegex:()=>new RegExp(n,e)};return r}var q={codeRemoveIndent:/^(?: {1,4}| {0,3}\t)/gm,outputLinkReplace:/\\([\[\]])/g,indentCodeCompensation:/^(\s+)(?:```)/,beginningSpace:/^\s+/,endingHash:/#$/,startingSpaceChar:/^ /,endingSpaceChar:/ $/,nonSpaceChar:/[^ ]/,newLineCharGlobal:/\n/g,tabCharGlobal:/\t/g,multipleSpaceGlobal:/\s+/g,blankLine:/^[ \t]*$/,doubleBlankLine:/\n[ \t]*\n[ \t]*$/,blockquoteStart:/^ {0,3}>/,blockquoteSetextReplace:/\n {0,3}((?:=+|-+) *)(?=\n|$)/g,blockquoteSetextReplace2:/^ {0,3}>[ \t]?/gm,listReplaceTabs:/^\t+/,listReplaceNesting:/^ {1,4}(?=( {4})*[^ ])/g,listIsTask:/^\[[ xX]\] /,listReplaceTask:/^\[[ xX]\] +/,anyLine:/\n.*\n/,hrefBrackets:/^<(.*)>$/,tableDelimiter:/[:|]/,tableAlignChars:/^\||\| *$/g,tableRowBlankLine:/\n[ \t]*$/,tableAlignRight:/^ *-+: *$/,tableAlignCenter:/^ *:-+: *$/,tableAlignLeft:/^ *:-+ *$/,startATag:/^<a /i,endATag:/^<\/a>/i,startPreScriptTag:/^<(pre|code|kbd|script)(\s|>)/i,endPreScriptTag:/^<\/(pre|code|kbd|script)(\s|>)/i,startAngleBracket:/^</,endAngleBracket:/>$/,pedanticHrefTitle:/^([^'"]*[^\s])\s+(['"])(.*)\2/,unicodeAlphaNumeric:/[\p{L}\p{N}]/u,escapeTest:/[&<>"']/,escapeReplace:/[&<>"']/g,escapeTestNoEncode:/[<>"']|&(?!(#\d{1,7}|#[Xx][a-fA-F0-9]{1,6}|\w+);)/,escapeReplaceNoEncode:/[<>"']|&(?!(#\d{1,7}|#[Xx][a-fA-F0-9]{1,6}|\w+);)/g,unescapeTest:/&(#(?:\d+)|(?:#x[0-9A-Fa-f]+)|(?:\w+));?/ig,caret:/(^|[^\[])\^/g,percentDecode:/%25/g,findPipe:/\|/g,splitPipe:/ \|/,slashPipe:/\\\|/g,carriageReturn:/\r\n|\r/g,spaceLine:/^ +$/gm,notSpaceStart:/^\S*/,endingNewline:/\n$/,listItemRegex:t=>new RegExp(`^( {0,3}${t})((?:[	 ][^\\n]*)?(?:\\n|$))`),nextBulletRegex:t=>new RegExp(`^ {0,${Math.min(3,t-1)}}(?:[*+-]|\\d{1,9}[.)])((?:[ 	][^\\n]*)?(?:\\n|$))`),hrRegex:t=>new RegExp(`^ {0,${Math.min(3,t-1)}}((?:- *){3,}|(?:_ *){3,}|(?:\\* *){3,})(?:\\n+|$)`),fencesBeginRegex:t=>new RegExp(`^ {0,${Math.min(3,t-1)}}(?:\`\`\`|~~~)`),headingBeginRegex:t=>new RegExp(`^ {0,${Math.min(3,t-1)}}#`),htmlBeginRegex:t=>new RegExp(`^ {0,${Math.min(3,t-1)}}<(?:[a-z].*>|!--)`,"i")},Bn=/^(?:[ \t]*(?:\n|$))+/,Nn=/^((?: {4}| {0,3}\t)[^\n]+(?:\n(?:[ \t]*(?:\n|$))*)?)+/,On=/^ {0,3}(`{3,}(?=[^`\n]*(?:\n|$))|~{3,})([^\n]*)(?:\n|$)(?:|([\s\S]*?)(?:\n|$))(?: {0,3}\1[~`]* *(?=\n|$)|$)/,ce=/^ {0,3}((?:-[\t ]*){3,}|(?:_[ \t]*){3,}|(?:\*[ \t]*){3,})(?:\n+|$)/,qn=/^ {0,3}(#{1,6})(?=\s|$)(.*)(?:\n+|$)/,Re=/(?:[*+-]|\d{1,9}[.)])/,tn=/^(?!bull |blockCode|fences|blockquote|heading|html|table)((?:.|\n(?!\s*?\n|bull |blockCode|fences|blockquote|heading|html|table))+?)\n {0,3}(=+|-+) *(?:\n+|$)/,rn=_(tn).replace(/bull/g,Re).replace(/blockCode/g,/(?: {4}| {0,3}\t)/).replace(/fences/g,/ {0,3}(?:`{3,}|~{3,})/).replace(/blockquote/g,/ {0,3}>/).replace(/heading/g,/ {0,3}#{1,6}/).replace(/html/g,/ {0,3}<[^\n>]+>\n/).replace(/\|table/g,"").getRegex(),Un=_(tn).replace(/bull/g,Re).replace(/blockCode/g,/(?: {4}| {0,3}\t)/).replace(/fences/g,/ {0,3}(?:`{3,}|~{3,})/).replace(/blockquote/g,/ {0,3}>/).replace(/heading/g,/ {0,3}#{1,6}/).replace(/html/g,/ {0,3}<[^\n>]+>\n/).replace(/table/g,/ {0,3}\|?(?:[:\- ]*\|)+[\:\- ]*\n/).getRegex(),Pe=/^([^\n]+(?:\n(?!hr|heading|lheading|blockquote|fences|list|html|table| +\n)[^\n]+)*)/,Hn=/^[^\n]+/,Le=/(?!\s*\])(?:\\.|[^\[\]\\])+/,Dn=_(/^ {0,3}\[(label)\]: *(?:\n[ \t]*)?([^<\s][^\s]*|<.*?>)(?:(?: +(?:\n[ \t]*)?| *\n[ \t]*)(title))? *(?:\n+|$)/).replace("label",Le).replace("title",/(?:"(?:\\"?|[^"\\])*"|'[^'\n]*(?:\n[^'\n]+)*\n?'|\([^()]*\))/).getRegex(),jn=_(/^( {0,3}bull)([ \t][^\n]+?)?(?:\n|$)/).replace(/bull/g,Re).getRegex(),be="address|article|aside|base|basefont|blockquote|body|caption|center|col|colgroup|dd|details|dialog|dir|div|dl|dt|fieldset|figcaption|figure|footer|form|frame|frameset|h[1-6]|head|header|hr|html|iframe|legend|li|link|main|menu|menuitem|meta|nav|noframes|ol|optgroup|option|p|param|search|section|summary|table|tbody|td|tfoot|th|thead|title|tr|track|ul",Me=/<!--(?:-?>|[\s\S]*?(?:-->|$))/,Gn=_("^ {0,3}(?:<(script|pre|style|textarea)[\\s>][\\s\\S]*?(?:</\\1>[^\\n]*\\n+|$)|comment[^\\n]*(\\n+|$)|<\\?[\\s\\S]*?(?:\\?>\\n*|$)|<![A-Z][\\s\\S]*?(?:>\\n*|$)|<!\\[CDATA\\[[\\s\\S]*?(?:\\]\\]>\\n*|$)|</?(tag)(?: +|\\n|/?>)[\\s\\S]*?(?:(?:\\n[ 	]*)+\\n|$)|<(?!script|pre|style|textarea)([a-z][\\w-]*)(?:attribute)*? */?>(?=[ \\t]*(?:\\n|$))[\\s\\S]*?(?:(?:\\n[ 	]*)+\\n|$)|</(?!script|pre|style|textarea)[a-z][\\w-]*\\s*>(?=[ \\t]*(?:\\n|$))[\\s\\S]*?(?:(?:\\n[ 	]*)+\\n|$))","i").replace("comment",Me).replace("tag",be).replace("attribute",/ +[a-zA-Z:_][\w.:-]*(?: *= *"[^"\n]*"| *= *'[^'\n]*'| *= *[^\s"'=<>`]+)?/).getRegex(),sn=_(Pe).replace("hr",ce).replace("heading"," {0,3}#{1,6}(?:\\s|$)").replace("|lheading","").replace("|table","").replace("blockquote"," {0,3}>").replace("fences"," {0,3}(?:`{3,}(?=[^`\\n]*\\n)|~{3,})[^\\n]*\\n").replace("list"," {0,3}(?:[*+-]|1[.)]) ").replace("html","</?(?:tag)(?: +|\\n|/?>)|<(?:script|pre|style|textarea|!--)").replace("tag",be).getRegex(),zn=_(/^( {0,3}> ?(paragraph|[^\n]*)(?:\n|$))+/).replace("paragraph",sn).getRegex(),Fe={blockquote:zn,code:Nn,def:Dn,fences:On,heading:qn,hr:ce,html:Gn,lheading:rn,list:jn,newline:Bn,paragraph:sn,table:de,text:Hn},Ye=_("^ *([^\\n ].*)\\n {0,3}((?:\\| *)?:?-+:? *(?:\\| *:?-+:? *)*(?:\\| *)?)(?:\\n((?:(?! *\\n|hr|heading|blockquote|code|fences|list|html).*(?:\\n|$))*)\\n*|$)").replace("hr",ce).replace("heading"," {0,3}#{1,6}(?:\\s|$)").replace("blockquote"," {0,3}>").replace("code","(?: {4}| {0,3}	)[^\\n]").replace("fences"," {0,3}(?:`{3,}(?=[^`\\n]*\\n)|~{3,})[^\\n]*\\n").replace("list"," {0,3}(?:[*+-]|1[.)]) ").replace("html","</?(?:tag)(?: +|\\n|/?>)|<(?:script|pre|style|textarea|!--)").replace("tag",be).getRegex(),$n={...Fe,lheading:Un,table:Ye,paragraph:_(Pe).replace("hr",ce).replace("heading"," {0,3}#{1,6}(?:\\s|$)").replace("|lheading","").replace("table",Ye).replace("blockquote"," {0,3}>").replace("fences"," {0,3}(?:`{3,}(?=[^`\\n]*\\n)|~{3,})[^\\n]*\\n").replace("list"," {0,3}(?:[*+-]|1[.)]) ").replace("html","</?(?:tag)(?: +|\\n|/?>)|<(?:script|pre|style|textarea|!--)").replace("tag",be).getRegex()},Vn={...Fe,html:_(`^ *(?:comment *(?:\\n|\\s*$)|<(tag)[\\s\\S]+?</\\1> *(?:\\n{2,}|\\s*$)|<tag(?:"[^"]*"|'[^']*'|\\s[^'"/>\\s]*)*?/?> *(?:\\n{2,}|\\s*$))`).replace("comment",Me).replace(/tag/g,"(?!(?:a|em|strong|small|s|cite|q|dfn|abbr|data|time|code|var|samp|kbd|sub|sup|i|b|u|mark|ruby|rt|rp|bdi|bdo|span|br|wbr|ins|del|img)\\b)\\w+(?!:|[^\\w\\s@]*@)\\b").getRegex(),def:/^ *\[([^\]]+)\]: *<?([^\s>]+)>?(?: +(["(][^\n]+[")]))? *(?:\n+|$)/,heading:/^(#{1,6})(.*)(?:\n+|$)/,fences:de,lheading:/^(.+?)\n {0,3}(=+|-+) *(?:\n+|$)/,paragraph:_(Pe).replace("hr",ce).replace("heading",` *#{1,6} *[^
 ]`).replace("lheading",rn).replace("|table","").replace("blockquote"," {0,3}>").replace("|fences","").replace("|list","").replace("|html","").replace("|tag","").getRegex()},Wn=/^\\([!"#$%&'()*+,\-./:;<=>?@\[\]\\^_`{|}~])/,Qn=/^(`+)([^`]|[^`][\s\S]*?[^`])\1(?!`)/,an=/^( {2,}|\\)\n(?!\s*$)/,Kn=/^(`+|[^`])(?:(?= {2,}\n)|[\s\S]*?(?:(?=[\\<!\[`*_]|\b_|$)|[^ ](?= {2,}\n)))/,ye=/[\p{P}\p{S}]/u,Be=/[\s\p{P}\p{S}]/u,on=/[^\s\p{P}\p{S}]/u,Yn=_(/^((?![*_])punctSpace)/,"u").replace(/punctSpace/g,Be).getRegex(),ln=/(?!~)[\p{P}\p{S}]/u,Xn=/(?!~)[\s\p{P}\p{S}]/u,Zn=/(?:[^\s\p{P}\p{S}]|~)/u,Jn=/\[[^[\]]*?\]\((?:\\.|[^\\\(\)]|\((?:\\.|[^\\\(\)])*\))*\)|`[^`]*?`|<[^<>]*?>/g,dn=/^(?:\*+(?:((?!\*)punct)|[^\s*]))|^_+(?:((?!_)punct)|([^\s_]))/,et=_(dn,"u").replace(/punct/g,ye).getRegex(),nt=_(dn,"u").replace(/punct/g,ln).getRegex(),cn="^[^_*]*?__[^_*]*?\\*[^_*]*?(?=__)|[^*]+(?=[^*])|(?!\\*)punct(\\*+)(?=[\\s]|$)|notPunctSpace(\\*+)(?!\\*)(?=punctSpace|$)|(?!\\*)punctSpace(\\*+)(?=notPunctSpace)|[\\s](\\*+)(?!\\*)(?=punct)|(?!\\*)punct(\\*+)(?!\\*)(?=punct)|notPunctSpace(\\*+)(?=notPunctSpace)",tt=_(cn,"gu").replace(/notPunctSpace/g,on).replace(/punctSpace/g,Be).replace(/punct/g,ye).getRegex(),rt=_(cn,"gu").replace(/notPunctSpace/g,Zn).replace(/punctSpace/g,Xn).replace(/punct/g,ln).getRegex(),st=_("^[^_*]*?\\*\\*[^_*]*?_[^_*]*?(?=\\*\\*)|[^_]+(?=[^_])|(?!_)punct(_+)(?=[\\s]|$)|notPunctSpace(_+)(?!_)(?=punctSpace|$)|(?!_)punctSpace(_+)(?=notPunctSpace)|[\\s](_+)(?!_)(?=punct)|(?!_)punct(_+)(?!_)(?=punct)","gu").replace(/notPunctSpace/g,on).replace(/punctSpace/g,Be).replace(/punct/g,ye).getRegex(),at=_(/\\(punct)/,"gu").replace(/punct/g,ye).getRegex(),it=_(/^<(scheme:[^\s\x00-\x1f<>]*|email)>/).replace("scheme",/[a-zA-Z][a-zA-Z0-9+.-]{1,31}/).replace("email",/[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+(@)[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)+(?![-_])/).getRegex(),ot=_(Me).replace("(?:-->|$)","-->").getRegex(),lt=_("^comment|^</[a-zA-Z][\\w:-]*\\s*>|^<[a-zA-Z][\\w-]*(?:attribute)*?\\s*/?>|^<\\?[\\s\\S]*?\\?>|^<![a-zA-Z]+\\s[\\s\\S]*?>|^<!\\[CDATA\\[[\\s\\S]*?\\]\\]>").replace("comment",ot).replace("attribute",/\s+[a-zA-Z:_][\w.:-]*(?:\s*=\s*"[^"]*"|\s*=\s*'[^']*'|\s*=\s*[^\s"'=<>`]+)?/).getRegex(),he=/(?:\[(?:\\.|[^\[\]\\])*\]|\\.|`[^`]*`|[^\[\]\\`])*?/,dt=_(/^!?\[(label)\]\(\s*(href)(?:(?:[ \t]*(?:\n[ \t]*)?)(title))?\s*\)/).replace("label",he).replace("href",/<(?:\\.|[^\n<>\\])+>|[^ \t\n\x00-\x1f]*/).replace("title",/"(?:\\"?|[^"\\])*"|'(?:\\'?|[^'\\])*'|\((?:\\\)?|[^)\\])*\)/).getRegex(),un=_(/^!?\[(label)\]\[(ref)\]/).replace("label",he).replace("ref",Le).getRegex(),pn=_(/^!?\[(ref)\](?:\[\])?/).replace("ref",Le).getRegex(),ct=_("reflink|nolink(?!\\()","g").replace("reflink",un).replace("nolink",pn).getRegex(),Ne={_backpedal:de,anyPunctuation:at,autolink:it,blockSkip:Jn,br:an,code:Qn,del:de,emStrongLDelim:et,emStrongRDelimAst:tt,emStrongRDelimUnd:st,escape:Wn,link:dt,nolink:pn,punctuation:Yn,reflink:un,reflinkSearch:ct,tag:lt,text:Kn,url:de},ut={...Ne,link:_(/^!?\[(label)\]\((.*?)\)/).replace("label",he).getRegex(),reflink:_(/^!?\[(label)\]\s*\[([^\]]*)\]/).replace("label",he).getRegex()},Te={...Ne,emStrongRDelimAst:rt,emStrongLDelim:nt,url:_(/^((?:ftp|https?):\/\/|www\.)(?:[a-zA-Z0-9\-]+\.?)+[^\s<]*|^email/,"i").replace("email",/[A-Za-z0-9._+-]+(@)[a-zA-Z0-9-_]+(?:\.[a-zA-Z0-9-_]*[a-zA-Z0-9])+(?![-_])/).getRegex(),_backpedal:/(?:[^?!.,:;*_'"~()&]+|\([^)]*\)|&(?![a-zA-Z0-9]+;$)|[?!.,:;*_'"~)]+(?!$))+/,del:/^(~~?)(?=[^\s~])((?:\\.|[^\\])*?(?:\\.|[^\s~\\]))\1(?=[^~]|$)/,text:/^([`~]+|[^`~])(?:(?= {2,}\n)|(?=[a-zA-Z0-9.!#$%&'*+\/=?_`{\|}~-]+@)|[\s\S]*?(?:(?=[\\<!\[`*~_]|\b_|https?:\/\/|ftp:\/\/|www\.|$)|[^ ](?= {2,}\n)|[^a-zA-Z0-9.!#$%&'*+\/=?_`{\|}~-](?=[a-zA-Z0-9.!#$%&'*+\/=?_`{\|}~-]+@)))/},pt={...Te,br:_(an).replace("{2,}","*").getRegex(),text:_(Te.text).replace("\\b_","\\b_| {2,}\\n").replace(/\{2,\}/g,"*").getRegex()},ge={normal:Fe,gfm:$n,pedantic:Vn},oe={normal:Ne,gfm:Te,breaks:pt,pedantic:ut},gt={"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"},Xe=t=>gt[t];function G(t,e){if(e){if(q.escapeTest.test(t))return t.replace(q.escapeReplace,Xe)}else if(q.escapeTestNoEncode.test(t))return t.replace(q.escapeReplaceNoEncode,Xe);return t}function Ze(t){try{t=encodeURI(t).replace(q.percentDecode,"%")}catch{return null}return t}function Je(t,e){var i;const n=t.replace(q.findPipe,(f,a,h)=>{let l=!1,u=a;for(;--u>=0&&h[u]==="\\";)l=!l;return l?"|":" |"}),r=n.split(q.splitPipe);let s=0;if(r[0].trim()||r.shift(),r.length>0&&!((i=r.at(-1))!=null&&i.trim())&&r.pop(),e)if(r.length>e)r.splice(e);else for(;r.length<e;)r.push("");for(;s<r.length;s++)r[s]=r[s].trim().replace(q.slashPipe,"|");return r}function le(t,e,n){const r=t.length;if(r===0)return"";let s=0;for(;s<r&&t.charAt(r-s-1)===e;)s++;return t.slice(0,r-s)}function ft(t,e){if(t.indexOf(e[1])===-1)return-1;let n=0;for(let r=0;r<t.length;r++)if(t[r]==="\\")r++;else if(t[r]===e[0])n++;else if(t[r]===e[1]&&(n--,n<0))return r;return n>0?-2:-1}function en(t,e,n,r,s){const i=e.href,f=e.title||null,a=t[1].replace(s.other.outputLinkReplace,"$1");r.state.inLink=!0;const h={type:t[0].charAt(0)==="!"?"image":"link",raw:n,href:i,title:f,text:a,tokens:r.inlineTokens(a)};return r.state.inLink=!1,h}function mt(t,e,n){const r=t.match(n.other.indentCodeCompensation);if(r===null)return e;const s=r[1];return e.split(`
 `).map(i=>{const f=i.match(n.other.beginningSpace);if(f===null)return i;const[a]=f;return a.length>=s.length?i.slice(s.length):i}).join(`
 `)}var ve=class{constructor(t){L(this,"options");L(this,"rules");L(this,"lexer");this.options=t||Y}space(t){const e=this.rules.block.newline.exec(t);if(e&&e[0].length>0)return{type:"space",raw:e[0]}}code(t){const e=this.rules.block.code.exec(t);if(e){const n=e[0].replace(this.rules.other.codeRemoveIndent,"");return{type:"code",raw:e[0],codeBlockStyle:"indented",text:this.options.pedantic?n:le(n,`
@@ -65,8 +65,12 @@ const UI_TRANSLATIONS_EN = {
     '当前计划': 'Current plan', 'Goal 与当前计划': 'Goal and current plan', '清除计划': 'Clear plan', '清除当前计划': 'Clear current plan',
     '消息': 'Messages', '历史记录': 'History', '折叠计划面板': 'Collapse plan panel',
     '折叠历史面板': 'Collapse history panel', '折叠 Goal 与计划面板': 'Collapse Goal and plan panel', '继续综合子任务': 'Continue synthesizing subtasks',
-    '撤销': 'Undo', '说说你想做什么…（Shift/Ctrl+Enter换行）': 'What would you like to do? (Shift/Ctrl+Enter for a new line)', 'Agent运行中，输入后续任务': 'Agent is running; enter a follow-up task', '点击\`立即发送\`插入提示': 'Click \`Send now\` to insert the prompt', '选择文件': 'Choose file',
+    '撤销': 'Undo', '说说你想做什么…（Enter 发送 · Shift/Ctrl/Cmd + Enter 换行）': 'What would you like to do? (Enter to send · Shift/Ctrl/Cmd + Enter for a new line)', 'Agent运行中，输入后续任务': 'Agent is running; enter a follow-up task', '按 Enter 发送第一条待发送任务': 'Press Enter to send the first pending task', '选择文件': 'Choose file',
     '选择 Skill': 'Select Skill', '发送 / 停止': 'Send / Stop', '发送': 'Send', '停止': 'Stop',
+    'Enter 提交': 'Enter to submit', 'Ctrl/Cmd + Enter 提交': 'Ctrl/Cmd + Enter to submit',
+    'Ctrl/Cmd + Enter 保存修改': 'Ctrl/Cmd + Enter to save changes',
+    'Ctrl/Cmd + Enter 确认回答': 'Ctrl/Cmd + Enter to confirm', 'Ctrl/Cmd + Enter 确认并进入下一题': 'Ctrl/Cmd + Enter to confirm and continue', 'Ctrl/Cmd + Enter 提交答案': 'Ctrl/Cmd + Enter to submit answers',
+    '搜索工作区文件（↑↓ 移动 · Enter 选择 · Esc 关闭）': 'Search workspace files (↑↓ Move · Enter to select · Esc to close)',
     '模型': 'Model', '正在加载模型配置': 'Loading model configuration', '模型配置': 'Model configuration',
     '操作提示': 'Notifications', '已复制': 'Copied', '提示': 'Notice', '取消': 'Cancel', '确定': 'Confirm',
     '暂停': 'Pause', '继续': 'Resume', '增加预算并继续': 'Add budget and resume', '无限制': 'Unlimited', '分钟': 'min',
@@ -116,7 +120,9 @@ const UI_TRANSLATIONS_EN = {
     'Hooks': 'Hooks', 'Plugins': 'Plugins', '正在加载扩展': 'Loading extensions', '当前没有已注册 Hook': 'No registered hooks', '当前没有已发现插件': 'No plugins found', '扩展加载失败': 'Failed to load extensions', '无': 'None',
     '加载详情中…': 'Loading details…', '知道了': 'Got it', '允许执行': 'Allow', '拒绝': 'Deny',
     '需要确认': 'Confirmation required', '任务已中断': 'Task interrupted', '已请求停止当前任务': 'Stop requested',
-    '展开': 'Expand', '收起': 'Collapse', '复制': 'Copy', '导出': 'Export', '导出选项': 'Export options', '导出图片': 'Export image', '导出文本': 'Export text', '改写': 'Rewrite', '重试': 'Retry'
+    '展开': 'Expand', '收起': 'Collapse', '复制': 'Copy', '导出': 'Export', '导出选项': 'Export options', '导出图片': 'Export image', '导出文本': 'Export text', '改写': 'Rewrite', '重试': 'Retry',
+    '点击查看图片': 'Click to view image', '使用系统应用打开': 'Open with system app',
+    '无法在浏览器中播放此媒体，可使用系统应用打开。': 'This media cannot be played in the browser. Open it with a system app instead.'
 };
 Object.assign(UI_TRANSLATIONS_EN, {
     // Todo / goal panel
@@ -259,14 +265,14 @@ Object.assign(UI_TRANSLATIONS_EN, {
     '安全审批': 'Safety approval', '需要你的回答': 'Your response is required', '确认下一步': 'Confirm next step',
     '等待中': 'Waiting', '待回答': 'Waiting for answer', '待审批': 'Waiting for approval', '已处理': 'Processed', '已过期': 'Expired', '可多选': 'Select multiple', '单选': 'Select one',
     '查看预览': 'View preview', '其他': 'Other', '其他答案': 'Other answer', '输入你的答案…': 'Enter your answer…', '取消提问': 'Cancel question', '不回答': 'Skip answering',
-    '上一步': 'Back', '下一步': 'Next', '返回修改': 'Edit answers', '确认回答': 'Review answers', '提交答案': 'Submit answers', '正在提交…': 'Submitting…', '正在取消…': 'Cancelling…', '正在处理…': 'Processing…',
+    '上一步': 'Back', '下一步': 'Next', '上一题': 'Previous question', '下一题': 'Next question', '确认': 'Confirm', '返回修改': 'Edit answers', '确认回答': 'Review answers', '提交答案': 'Submit answers', '正在提交…': 'Submitting…', '正在取消…': 'Cancelling…', '正在处理…': 'Processing…',
     '请选择一个选项。': 'Select an option.', '请至少选择一个选项。': 'Select at least one option.', '请输入其他答案。': 'Enter the other answer.', '请完成当前问题后再提交。': 'Complete the current question before submitting.',
     '返回回答问题': 'Return to question',
     'Agent 主动提问': 'Agent questions', 'Agent 主动提问功能开关': 'Agent question feature toggle',
     '已启用；Agent 可在确实需要选择时暂停并向你提问。': 'Enabled; the Agent may pause and ask when your choice is required.',
     '已关闭；Agent 不会创建结构化提问卡片。': 'Disabled; the Agent will not create structured question cards.',
     '取消失败：': 'Cancellation failed: ', '提交失败：': 'Submission failed: ', '处理失败：': 'Failed to process: ',
-    '是否允许 Agent 执行此操作？': 'Allow Agent to perform this action?', '工具': 'Tool', '始终允许': 'Always allow',
+    '是否允许 Agent 执行此操作？': 'Allow Agent to perform this action?', '工具': 'Tool', '始终允许': 'Always allow', '本次允许': 'Allow this time',
     '允许一次': 'Allow once', '本任务内允许相同请求': 'Allow identical requests in this task', '始终允许此类操作': 'Always allow this kind of operation', '拒绝执行': 'Deny execution', '已取消': 'Cancelled', '该请求已取消。': 'This request was cancelled.', '该请求已过期。': 'This request expired.',
     '你已拒绝本次操作。': 'You denied this action.', '你已允许同类操作。': 'You allowed similar actions.', '你已允许本次操作。': 'You allowed this action.', '已回答': 'Answered',
     // Session grouping and subagent continuation
@@ -319,7 +325,7 @@ Object.assign(UI_TRANSLATIONS_EN, {
     '加载更早记录': 'Load earlier records', '加载更早消息': 'Load earlier messages', '保存失败：': 'Save failed: ',
     '置顶会话': 'Pin session', '归档会话': 'Archive session', '重命名': 'Rename', '重命名会话': 'Rename session',
     '编辑会话名称': 'Edit the session name', '会话名称': 'Session name', '保存名称': 'Save name',
-    '导出会话': 'Export session', '下载会话文件': 'Download session files', '确认导出': 'Export', '输入内容': 'Input'
+    '导出会话': 'Export session', '下载会话文件': 'Download session files', '确认导出': 'Export', '输入内容': 'Input', '草稿': 'Draft'
 });
 Object.assign(UI_TRANSLATIONS_EN, {
     // Agent runtime status events (including compression and recovery)
@@ -392,6 +398,10 @@ Object.assign(UI_TRANSLATIONS_EN, {
     '暂时无法给出可靠建议': 'Unable to provide reliable advice right now',
     '建议允许': 'Recommend allowing',
     '建议拒绝': 'Recommend denying',
+    '【命令风险】': '[Command risk]',
+    '【命令目的】': '[Command purpose]',
+    '未提供具体风险说明。': 'No specific risk explanation was provided.',
+    '未提供命令用途说明。': 'No command-purpose explanation was provided.',
     '审查模型未提供理由。': 'The reviewer model did not provide a reason.',
     '以上仅为分析建议，审批仍由你决定。': 'This is analysis only; the approval decision remains yours.',
     '可人工覆盖本次请求（只此一次，不沉淀规则）': 'You can override this once for this exact request (this time only; no rule is saved)',
@@ -434,7 +444,7 @@ Object.assign(UI_TRANSLATIONS_EN, {
     '保存': 'Save',
     '权限模式': 'Permission mode',
     '预批准域名操作': 'Pre-approved domain actions',
-    '暂无长期规则。审批时选择“始终允许此类操作”会自动添加。': 'No persistent rules yet. Choosing "Always allow this kind of operation" while approving will add one automatically.',
+    '暂无长期规则。审批时选择“始终允许”可自动添加可生成的长期规则。': 'No persistent rules yet. Choosing "Always allow" adds a persistent rule when one can be generated.',
     '未选择会话。': 'No session selected.',
     '清除当前会话的所有权限规则？用户级“始终允许”规则不受影响。': 'Clear all permission rules for the current session? User-level "Always allow" rules are unaffected.',
     '规则已删除。': 'Rule deleted.',
@@ -1435,10 +1445,23 @@ function closeUiModal(result) {
     var cancelBtn = document.getElementById('ui-modal-cancel');
     var inputEl = document.getElementById('ui-modal-input');
     var selectEl = document.getElementById('ui-modal-select');
+    var selectControlEl = document.getElementById('ui-modal-select-control');
+    var selectTriggerEl = document.getElementById('ui-modal-select-trigger');
+    var selectMenuEl = document.getElementById('ui-modal-select-menu');
     if (okBtn) okBtn.onclick = null;
     if (cancelBtn) cancelBtn.onclick = null;
     if (inputEl) inputEl.oninput = null;
     if (selectEl) selectEl.onchange = null;
+    if (selectTriggerEl) {
+        selectTriggerEl.onclick = null;
+        selectTriggerEl.onkeydown = null;
+        selectTriggerEl.setAttribute('aria-expanded', 'false');
+    }
+    if (selectMenuEl) {
+        selectMenuEl.hidden = true;
+        selectMenuEl.innerHTML = '';
+    }
+    if (selectControlEl) selectControlEl.classList.remove('is-open');
     if (uiModalKeyHandler) {
         document.removeEventListener('keydown', uiModalKeyHandler);
         uiModalKeyHandler = null;
@@ -1463,8 +1486,14 @@ function openUiModal(options) {
         var cancelBtn = document.getElementById('ui-modal-cancel');
         var inputLabelEl = document.getElementById('ui-modal-input-label');
         var inputEl = document.getElementById('ui-modal-input');
+        var inputHintEl = document.getElementById('ui-modal-input-hint');
         var selectLabelEl = document.getElementById('ui-modal-select-label');
         var selectEl = document.getElementById('ui-modal-select');
+        var selectControlEl = document.getElementById('ui-modal-select-control');
+        var selectTriggerEl = document.getElementById('ui-modal-select-trigger');
+        var selectCurrentEl = document.getElementById('ui-modal-select-current');
+        var selectCurrentMetaEl = document.getElementById('ui-modal-select-current-meta');
+        var selectMenuEl = document.getElementById('ui-modal-select-menu');
         if (!root || !titleEl || !bodyEl || !okBtn || !cancelBtn || !iconEl) {
             resolve(false);
             return;
@@ -1484,6 +1513,12 @@ function openUiModal(options) {
         cancelBtn.textContent = o.cancelText || '取消';
 
         var hasSelect = !!(selectEl && selectLabelEl && Array.isArray(o.selectOptions));
+        var hasCustomSelect = !!(
+            hasSelect && selectControlEl && selectTriggerEl
+            && selectCurrentEl && selectCurrentMetaEl && selectMenuEl
+        );
+        var selectItems = [];
+        var selectOptionRows = [];
         var hasInput = !hasSelect && !!(inputEl && inputLabelEl && Object.prototype.hasOwnProperty.call(o, 'inputValue'));
         var inputRequired = hasInput && o.inputRequired !== false;
         if (inputEl && inputLabelEl) {
@@ -1495,9 +1530,10 @@ function openUiModal(options) {
             inputEl.maxLength = hasInput && Number(o.inputMaxLength) > 0 ? Number(o.inputMaxLength) : 524288;
             inputEl.removeAttribute('aria-invalid');
         }
+        if (inputHintEl) inputHintEl.hidden = !hasInput;
         if (selectEl && selectLabelEl) {
             selectLabelEl.hidden = !hasSelect;
-            selectEl.hidden = !hasSelect;
+            selectEl.hidden = hasCustomSelect || !hasSelect;
             selectLabelEl.textContent = hasSelect ? (o.selectLabel || '选择一项') : '';
             selectEl.innerHTML = '';
             selectEl.removeAttribute('aria-invalid');
@@ -1505,14 +1541,141 @@ function openUiModal(options) {
                 o.selectOptions.forEach(function (item) {
                     var option = document.createElement('option');
                     var normalized = item && typeof item === 'object' ? item : { value: item, label: item };
-                    option.value = String(normalized.value == null ? '' : normalized.value);
-                    option.textContent = String(normalized.label == null ? option.value : normalized.label);
-                    option.disabled = normalized.disabled === true;
+                    var normalizedItem = {
+                        value: String(normalized.value == null ? '' : normalized.value),
+                        label: String(normalized.label == null ? normalized.value : normalized.label),
+                        meta: String(normalized.meta || ''),
+                        title: String(normalized.title || ''),
+                        disabled: normalized.disabled === true,
+                    };
+                    selectItems.push(normalizedItem);
+                    option.value = normalizedItem.value;
+                    option.textContent = normalizedItem.label;
+                    option.disabled = normalizedItem.disabled;
+                    if (normalizedItem.title) option.title = normalizedItem.title;
                     selectEl.appendChild(option);
                 });
                 selectEl.value = String(o.selectValue == null ? '' : o.selectValue);
                 if (!selectEl.value && selectEl.options.length) selectEl.selectedIndex = 0;
             }
+        }
+        if (selectControlEl) {
+            selectControlEl.hidden = !hasCustomSelect;
+            selectControlEl.classList.remove('is-open');
+        }
+        if (selectMenuEl) {
+            selectMenuEl.hidden = true;
+            selectMenuEl.innerHTML = '';
+        }
+
+        function setSelectMenuOpen(open) {
+            if (!hasCustomSelect) return;
+            var nextOpen = !!open;
+            selectControlEl.classList.toggle('is-open', nextOpen);
+            selectMenuEl.hidden = !nextOpen;
+            selectTriggerEl.setAttribute('aria-expanded', nextOpen ? 'true' : 'false');
+            if (nextOpen) {
+                var selectedRow = selectOptionRows.find(function (row) { return row.getAttribute('aria-selected') === 'true'; });
+                var focusRow = selectedRow || selectOptionRows.find(function (row) { return !row.disabled; });
+                if (focusRow) requestAnimationFrame(function () { focusRow.focus(); });
+            }
+        }
+
+        function syncCustomSelect() {
+            if (!hasCustomSelect) return;
+            var selectedValue = String(selectEl.value || '');
+            var selectedItem = selectItems.find(function (item) { return item.value === selectedValue; }) || selectItems[0];
+            selectCurrentEl.textContent = selectedItem ? selectedItem.label : '';
+            selectCurrentMetaEl.textContent = selectedItem ? selectedItem.meta : '';
+            selectOptionRows.forEach(function (row) {
+                var selected = row.dataset.value === selectedValue;
+                row.classList.toggle('is-selected', selected);
+                row.setAttribute('aria-selected', selected ? 'true' : 'false');
+            });
+        }
+
+        function commitSelectValue(value, closeMenu) {
+            if (!hasSelect) return;
+            selectEl.value = String(value || '');
+            syncCustomSelect();
+            syncInputValidity();
+            if (closeMenu) {
+                setSelectMenuOpen(false);
+                selectTriggerEl.focus();
+            }
+        }
+
+        function moveSelectFocus(row, delta) {
+            var enabledRows = selectOptionRows.filter(function (item) { return !item.disabled; });
+            var index = enabledRows.indexOf(row);
+            if (!enabledRows.length) return;
+            var nextIndex = index < 0 ? 0 : (index + delta + enabledRows.length) % enabledRows.length;
+            enabledRows[nextIndex].focus();
+        }
+
+        if (hasCustomSelect) {
+            selectItems.forEach(function (item, index) {
+                var row = document.createElement('button');
+                row.type = 'button';
+                row.id = 'ui-modal-select-option-' + index;
+                row.className = 'ui-modal-select-option';
+                row.setAttribute('role', 'option');
+                row.dataset.value = item.value;
+                row.disabled = item.disabled;
+                if (item.title) row.title = item.title;
+
+                var copy = document.createElement('span');
+                copy.className = 'ui-modal-select-option-copy';
+                var name = document.createElement('span');
+                name.className = 'ui-modal-select-option-name';
+                name.textContent = item.label;
+                var meta = document.createElement('span');
+                meta.className = 'ui-modal-select-option-meta';
+                meta.textContent = item.meta;
+                copy.appendChild(name);
+                if (item.meta) copy.appendChild(meta);
+                var check = document.createElement('span');
+                check.className = 'ui-modal-select-option-check';
+                check.textContent = '✓';
+                check.setAttribute('aria-hidden', 'true');
+                row.appendChild(copy);
+                row.appendChild(check);
+                row.onclick = function (event) {
+                    event.stopPropagation();
+                    commitSelectValue(item.value, true);
+                };
+                row.onkeydown = function (event) {
+                    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+                        event.preventDefault(); event.stopPropagation();
+                        moveSelectFocus(row, event.key === 'ArrowDown' ? 1 : -1);
+                    } else if (event.key === 'Home' || event.key === 'End') {
+                        event.preventDefault(); event.stopPropagation();
+                        var enabledRows = selectOptionRows.filter(function (optionRow) { return !optionRow.disabled; });
+                        var targetRow = event.key === 'Home' ? enabledRows[0] : enabledRows[enabledRows.length - 1];
+                        if (targetRow) targetRow.focus();
+                    } else if (event.key === 'Enter' || event.key === ' ') {
+                        event.preventDefault(); event.stopPropagation();
+                        commitSelectValue(item.value, true);
+                    } else if (event.key === 'Escape') {
+                        event.preventDefault(); event.stopPropagation();
+                        setSelectMenuOpen(false);
+                        selectTriggerEl.focus();
+                    }
+                };
+                selectOptionRows.push(row);
+                selectMenuEl.appendChild(row);
+            });
+            selectTriggerEl.onclick = function (event) {
+                event.stopPropagation();
+                setSelectMenuOpen(selectMenuEl.hidden);
+            };
+            selectTriggerEl.onkeydown = function (event) {
+                if (event.key === 'ArrowDown' || event.key === 'ArrowUp' || event.key === 'Enter' || event.key === ' ') {
+                    event.preventDefault(); event.stopPropagation();
+                    setSelectMenuOpen(true);
+                }
+            };
+            syncCustomSelect();
         }
 
         var danger = !!o.danger;
@@ -1527,13 +1690,14 @@ function openUiModal(options) {
             okBtn.disabled = invalid;
             if (hasInput) inputEl.setAttribute('aria-invalid', invalid ? 'true' : 'false');
             if (hasSelect) selectEl.setAttribute('aria-invalid', invalid ? 'true' : 'false');
+            if (hasCustomSelect) selectTriggerEl.setAttribute('aria-invalid', invalid ? 'true' : 'false');
         }
         function onOk() {
             if (hasSelect) {
                 var selectedValue = String(selectEl.value || '').trim();
                 if (!selectedValue) {
                     syncInputValidity();
-                    selectEl.focus();
+                    (hasCustomSelect ? selectTriggerEl : selectEl).focus();
                     return;
                 }
                 closeUiModal(selectedValue);
@@ -1556,12 +1720,23 @@ function openUiModal(options) {
         cancelBtn.onclick = onCancel;
         okBtn.disabled = false;
         if (inputEl) inputEl.oninput = syncInputValidity;
-        if (selectEl) selectEl.onchange = syncInputValidity;
+        if (selectEl) selectEl.onchange = function () { syncCustomSelect(); syncInputValidity(); };
         syncInputValidity();
-        root.onclick = function (e) { if (e.target === root) onCancel(); };
+        root.onclick = function (e) {
+            if (e.target === root) onCancel();
+            else if (hasCustomSelect && !selectControlEl.contains(e.target)) setSelectMenuOpen(false);
+        };
 
         uiModalKeyHandler = function (e) {
-            if (e.key === 'Escape') { e.preventDefault(); onCancel(); }
+            if (e.key === 'Escape') {
+                e.preventDefault();
+                if (hasCustomSelect && !selectMenuEl.hidden) {
+                    setSelectMenuOpen(false);
+                    selectTriggerEl.focus();
+                } else {
+                    onCancel();
+                }
+            }
             else if (isInputSubmitShortcut(e, 'single-line') && document.activeElement !== cancelBtn) {
                 e.preventDefault();
                 onOk();
@@ -1574,7 +1749,7 @@ function openUiModal(options) {
         document.body.style.overflow = 'hidden';
         requestAnimationFrame(function () {
             if (hasSelect) {
-                selectEl.focus();
+                (hasCustomSelect ? selectTriggerEl : selectEl).focus();
             } else if (hasInput) {
                 inputEl.focus();
                 inputEl.select();
@@ -4206,6 +4381,16 @@ async function refreshSubagentTreePanelInner(sessionId) {
 }
 `,Bt=`var subagentModelSwitchBusy = Object.create(null);
 
+function subagentModelProfileOptionMeta(profile) {
+    var name = profileLabel(profile);
+    var model = String((profile && profile.model) || '').trim();
+    var details = [];
+    if (model && String(name).toLowerCase().indexOf(model.toLowerCase()) < 0) details.push(model);
+    details.push(profileEffortValue(profile));
+    if (profile && profile.context_window) details.push(formatContextWindow(profile.context_window) + ' ctx');
+    return details.filter(Boolean).join(' · ');
+}
+
 async function chooseSubagentModelProfile(card, sessionId) {
     if (!card || !sessionId) return;
     var agentId = card.getAttribute('data-agent-id') || '';
@@ -4229,7 +4414,9 @@ async function chooseSubagentModelProfile(card, sessionId) {
             selectOptions: profiles.map(function (profile) {
                 return {
                     value: String(profile.id || ''),
-                    label: profileLabel(profile) + ' · ' + profileMeta(profile),
+                    label: profileLabel(profile),
+                    meta: subagentModelProfileOptionMeta(profile),
+                    title: profileMeta(profile),
                 };
             }),
             confirmText: '切换并继续',
@@ -7309,16 +7496,17 @@ function inputDraftStorageKey(sessionId) {\r
     return LS_INPUT_DRAFT_PREFIX + String(sessionId || '');\r
 }\r
 \r
-function persistInputDraft(sessionId, value) {\r
-    if (!sessionId) return;\r
-    const text = String(value || '');\r
-    draftBySession[sessionId] = text;\r
+function persistInputDraft(sessionId, value) {
+    if (!sessionId) return;
+    const text = String(value || '');
+    draftBySession[sessionId] = text;
     try {\r
         const key = inputDraftStorageKey(sessionId);\r
-        if (text) localStorage.setItem(key, text);\r
-        else localStorage.removeItem(key);\r
-    } catch (e) { /* ignore */ }\r
-}\r
+        if (text) localStorage.setItem(key, text);
+        else localStorage.removeItem(key);
+    } catch (e) { /* ignore */ }
+    if (typeof syncSessionDraftBadges === 'function') syncSessionDraftBadges(sessionId);
+}
 \r
 function readStoredInputDraft(sessionId) {\r
     if (!sessionId) return '';\r
@@ -7329,11 +7517,12 @@ function readStoredInputDraft(sessionId) {\r
     }\r
 }\r
 \r
-function removeStoredInputDraft(sessionId) {\r
-    if (!sessionId) return;\r
-    delete draftBySession[sessionId];\r
-    try { localStorage.removeItem(inputDraftStorageKey(sessionId)); } catch (e) { /* ignore */ }\r
-}\r
+function removeStoredInputDraft(sessionId) {
+    if (!sessionId) return;
+    delete draftBySession[sessionId];
+    try { localStorage.removeItem(inputDraftStorageKey(sessionId)); } catch (e) { /* ignore */ }
+    if (typeof syncSessionDraftBadges === 'function') syncSessionDraftBadges(sessionId);
+}
 \r
 function clearStreamPoll() {\r
     if (streamPollTimer) {\r
@@ -8764,7 +8953,195 @@ async function refreshTodoPlanPanel() {
         hideTodoPlanPanel();
     }
 }
-`,Gt=`function removeMessagesFromNode(startWrap) {
+`,Gt=`var WORKSPACE_MEDIA_EXTENSIONS = Object.freeze({
+    image: Object.freeze(['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg', 'ico', 'tif', 'tiff', 'avif', 'jfif']),
+    audio: Object.freeze(['mp3', 'wav', 'ogg', 'oga', 'opus', 'm4a', 'aac', 'flac']),
+    video: Object.freeze(['mp4', 'webm', 'ogv', 'mov']),
+});
+
+function workspaceMediaKind(path) {
+    var clean = String(path || '').replace(/[?#].*$/, '').replace(/\\\\/g, '/');
+    var match = /\\.([A-Za-z0-9]+)$/.exec(clean);
+    var ext = match ? match[1].toLowerCase() : '';
+    if (!ext) return '';
+    var kinds = Object.keys(WORKSPACE_MEDIA_EXTENSIONS);
+    for (var i = 0; i < kinds.length; i += 1) {
+        var kind = kinds[i];
+        if (WORKSPACE_MEDIA_EXTENSIONS[kind].indexOf(ext) >= 0) return kind;
+    }
+    return '';
+}
+
+function workspaceMediaUrl(rel) {
+    return '/api/workspace-media?rel=' + encodeURIComponent(String(rel || ''));
+}
+
+function workspaceMediaRelFromMarker(value, expectedKind) {
+    var raw = String(value || '').trim();
+    var marker = /^#ga-workspace-path=(.+)$/i.exec(raw);
+    if (marker) {
+        var markerValue = marker[1];
+        var rawIdx = markerValue.indexOf('&raw=');
+        if (rawIdx >= 0) markerValue = markerValue.slice(0, rawIdx);
+        try { raw = decodeURIComponent(markerValue); } catch (e) { raw = markerValue; }
+    }
+    var rel = markdownHrefToWorkspaceOpenRel(raw);
+    var kind = workspaceMediaKind(rel);
+    if (!rel || !kind || (expectedKind && kind !== expectedKind)) return '';
+    return rel;
+}
+
+function workspaceMarkdownLinkHtml(token, parser) {
+    var href = String(token && token.href || '');
+    var rel = markdownHrefToWorkspaceOpenRel(href);
+    if (!rel) return false;
+    var label = parser.parseInline((token && token.tokens) || []);
+    var title = token && token.title
+        ? ' title="' + escapeHtmlAttr(String(token.title)) + '"'
+        : '';
+    return '<a href="#" class="msg-link-workspace-open" data-workspace-open="'
+        + escapeHtmlAttr(rel)
+        + '" data-workspace-markdown-link="1" data-ui-tip="'
+        + escapeHtmlAttr(workspaceOpenTipPath(href, rel))
+        + '"'
+        + title
+        + '>'
+        + label
+        + '</a>';
+}
+
+function workspaceMarkdownImageHtml(token) {
+    var href = String(token && token.href || '');
+    var rel = markdownHrefToWorkspaceOpenRel(href);
+    if (!rel || workspaceMediaKind(rel) !== 'image') return false;
+    var alt = String(token && token.text || '');
+    var title = token && token.title
+        ? ' title="' + escapeHtmlAttr(String(token.title)) + '"'
+        : '';
+    return '<img src="'
+        + escapeHtmlAttr(workspaceMediaUrl(rel))
+        + '" alt="'
+        + escapeHtmlAttr(alt)
+        + '" class="msg-workspace-image" data-workspace-open="'
+        + escapeHtmlAttr(rel)
+        + '" data-workspace-media-kind="image"'
+        + title
+        + '>';
+}
+
+function configureWorkspaceMarkdownRenderer(markdownParser) {
+    if (!markdownParser || typeof markdownParser.use !== 'function') return;
+    markdownParser.use({
+        renderer: {
+            link: function (token) {
+                return workspaceMarkdownLinkHtml(token, this.parser);
+            },
+            image: function (token) {
+                return workspaceMarkdownImageHtml(token);
+            },
+        },
+    });
+}
+
+function wrapWorkspaceImageElement(img, rel) {
+    if (!img || !rel || img.dataset.workspaceImageReady === '1') return;
+    img.dataset.workspaceImageReady = '1';
+    img.classList.add('msg-workspace-image');
+    img.loading = 'lazy';
+    img.decoding = 'async';
+    img.src = workspaceMediaUrl(rel);
+    img.setAttribute('data-workspace-open', rel);
+    img.setAttribute('data-ui-tip', '点击查看图片');
+    bindUiHoverTip(img);
+    var parent = img.parentElement;
+    if (!parent || (parent.tagName === 'A' && parent.classList.contains('msg-workspace-image-link'))) return;
+    var link = document.createElement('a');
+    link.href = workspaceMediaUrl(rel);
+    link.target = '_blank';
+    link.rel = 'noopener noreferrer';
+    link.className = 'msg-workspace-image-link';
+    link.setAttribute('data-workspace-open', rel);
+    if (img.parentNode) img.parentNode.insertBefore(link, img);
+    link.appendChild(img);
+}
+
+function standaloneExplicitMediaLinkHost(link) {
+    if (!link || link.getAttribute('data-workspace-markdown-link') !== '1') return null;
+    var host = link.parentElement;
+    if (!host || !/^(P|DIV|LI)$/i.test(host.tagName || '')) return null;
+    var linkText = String(link.textContent || '').trim();
+    var hostText = String(host.textContent || '').trim();
+    if (!linkText || hostText !== linkText) return null;
+    return host;
+}
+
+function createWorkspaceMediaPreview(rel, label, kind) {
+    var figure = document.createElement('figure');
+    figure.className = 'msg-workspace-media-figure msg-workspace-media-' + kind;
+    figure.setAttribute('data-workspace-media-kind', kind);
+
+    var player = document.createElement(kind);
+    player.className = 'msg-workspace-media-player';
+    player.controls = true;
+    player.preload = 'metadata';
+    player.autoplay = false;
+    if (kind === 'video') player.playsInline = true;
+    player.src = workspaceMediaUrl(rel);
+    player.setAttribute('aria-label', String(label || rel || kind));
+    figure.appendChild(player);
+
+    var error = document.createElement('div');
+    error.className = 'msg-workspace-media-error';
+    error.hidden = true;
+    error.textContent = '无法在浏览器中播放此媒体，可使用系统应用打开。';
+    figure.appendChild(error);
+
+    var caption = document.createElement('figcaption');
+    var openLink = document.createElement('a');
+    openLink.href = '#';
+    openLink.className = 'msg-link-workspace-open msg-workspace-media-open';
+    openLink.setAttribute('data-workspace-open', rel);
+    openLink.setAttribute('data-ui-tip', '使用系统应用打开');
+    openLink.textContent = String(label || rel || '使用系统应用打开');
+    bindUiHoverTip(openLink);
+    caption.appendChild(openLink);
+    figure.appendChild(caption);
+
+    player.addEventListener('error', function () {
+        player.hidden = true;
+        error.hidden = false;
+        figure.classList.add('is-error');
+    });
+    return figure;
+}
+
+function upgradeWorkspaceMedia(root) {
+    if (!root) return;
+    root.querySelectorAll('img[data-workspace-media-kind="image"][data-workspace-open]').forEach(function (img) {
+        var rel = img.getAttribute('data-workspace-open') || '';
+        if (workspaceMediaKind(rel) === 'image') wrapWorkspaceImageElement(img, rel);
+    });
+    root.querySelectorAll('img[src^="#ga-workspace-path="]').forEach(function (img) {
+        var rel = workspaceMediaRelFromMarker(img.getAttribute('src') || '', 'image');
+        if (rel) wrapWorkspaceImageElement(img, rel);
+    });
+    root.querySelectorAll('a[data-workspace-markdown-link="1"][data-workspace-open]').forEach(function (link) {
+        if (link.dataset.workspaceMediaPreview === '1') return;
+        var rel = link.getAttribute('data-workspace-open') || '';
+        var kind = workspaceMediaKind(rel);
+        if (kind !== 'audio' && kind !== 'video') return;
+        var host = standaloneExplicitMediaLinkHost(link);
+        if (!host || !host.parentNode) return;
+        link.dataset.workspaceMediaPreview = '1';
+        var figure = createWorkspaceMediaPreview(rel, link.textContent || rel, kind);
+        if (String(host.tagName || '').toUpperCase() === 'LI' && typeof host.replaceChildren === 'function') {
+            host.replaceChildren(figure);
+        } else {
+            host.parentNode.replaceChild(figure, host);
+        }
+    });
+}
+`,zt=`function removeMessagesFromNode(startWrap) {
     const stream = getVisibleChatStream() || chatContainer;
     if (!stream) return;
     const kids = Array.from(stream.children);
@@ -8907,6 +9284,9 @@ function openInlineRewriteEditor(wrap, rawText, beforeIndex) {
     textarea.rows = 3;
     const actions = document.createElement('div');
     actions.className = 'user-inline-rewrite-actions';
+    const shortcutHint = document.createElement('span');
+    shortcutHint.className = 'input-shortcut-hint user-inline-rewrite-shortcut';
+    shortcutHint.textContent = 'Ctrl/Cmd + Enter 提交';
     const cancelBtn = document.createElement('button');
     cancelBtn.type = 'button';
     cancelBtn.className = 'user-inline-rewrite-btn user-inline-rewrite-btn--ghost';
@@ -8915,6 +9295,7 @@ function openInlineRewriteEditor(wrap, rawText, beforeIndex) {
     confirmBtn.type = 'button';
     confirmBtn.className = 'user-inline-rewrite-btn user-inline-rewrite-btn--primary';
     confirmBtn.textContent = '确认';
+    actions.appendChild(shortcutHint);
     actions.appendChild(cancelBtn);
     actions.appendChild(confirmBtn);
     editor.appendChild(textarea);
@@ -9677,14 +10058,12 @@ function updateProcessBrief(agg) {
     flushBriefTools();
     if (lines.length) setBriefRows(brief, lines);
     else {
-        var st = body.querySelector('.feed-item.feed--st .feed-chunk-scroller, .feed-item.feed--st .feed-chunk');
-        var tSt = st ? (typeof getUiRuntimeText === 'function' ? getUiRuntimeText(st) : st.textContent).trim() : '';
-        if (tSt) setBriefRows(brief, [tSt]);
-        else {
-            var any = body.querySelector('.feed-item:not(.feed--llm):not(.feed--llm2) .feed-chunk-scroller, .feed-item:not(.feed--llm):not(.feed--llm2) .feed-chunk');
-            var tAny = any ? (typeof getUiRuntimeText === 'function' ? getUiRuntimeText(any) : any.textContent).trim() : '';
-            setBriefRows(brief, [tAny || '本段过程已折叠']);
-        }
+        // A collapsed process block must not surface runtime status rows. Keep
+        // the fallback useful for other process output, otherwise show only the
+        // neutral collapsed placeholder.
+        var any = body.querySelector('.feed-item:not(.feed--llm):not(.feed--llm2):not(.feed--st) .feed-chunk-scroller, .feed-item:not(.feed--llm):not(.feed--llm2):not(.feed--st) .feed-chunk');
+        var tAny = any ? (typeof getUiRuntimeText === 'function' ? getUiRuntimeText(any) : any.textContent).trim() : '';
+        setBriefRows(brief, [tAny || '本段过程已折叠']);
     }
     scheduleProcessAggregateHeightUi(agg);
 }
@@ -11846,105 +12225,6 @@ function upgradeWorkspacePathMarkdownLinks(root) {
     });
 }
 
-var _workspaceImageExtRe = null;
-function workspaceImageExtRegex() {
-    if (!_workspaceImageExtRe) {
-        _workspaceImageExtRe = /\\.(png|jpe?g|gif|webp|bmp|svg|ico|tiff?|avif|jfif)(?:[?#].*)?$/i;
-    }
-    return _workspaceImageExtRe;
-}
-
-function workspaceImageRelFromMarker(value) {
-    var raw = String(value || '').trim();
-    var marker = /^#ga-workspace-path=(.+)$/i.exec(raw);
-    if (marker) {
-        var markerValue = marker[1];
-        var rawIdx = markerValue.indexOf('&raw=');
-        if (rawIdx >= 0) markerValue = markerValue.slice(0, rawIdx);
-        try { raw = decodeURIComponent(markerValue); } catch (e) { raw = markerValue; }
-    }
-    var rel = markdownHrefToWorkspaceOpenRel(raw);
-    if (!rel || !workspaceImageExtRegex().test(String(rel).replace(/\\\\/g, '/'))) return '';
-    return rel;
-}
-
-function workspaceImageUrl(rel) {
-    return '/api/workspace-image?rel=' + encodeURIComponent(String(rel || ''));
-}
-
-function wrapWorkspaceImageElement(img, rel) {
-    if (!img || !rel || img.dataset.workspaceImageReady === '1') return;
-    img.dataset.workspaceImageReady = '1';
-    img.classList.add('msg-workspace-image');
-    img.loading = 'lazy';
-    img.decoding = 'async';
-    img.src = workspaceImageUrl(rel);
-    img.setAttribute('data-workspace-open', rel);
-    img.setAttribute('data-ui-tip', '点击查看图片');
-    bindUiHoverTip(img);
-    var parent = img.parentElement;
-    if (!parent || (parent.tagName === 'A' && parent.classList.contains('msg-workspace-image-link'))) return;
-    var link = document.createElement('a');
-    link.href = workspaceImageUrl(rel);
-    link.target = '_blank';
-    link.rel = 'noopener noreferrer';
-    link.className = 'msg-workspace-image-link';
-    link.setAttribute('data-workspace-open', rel);
-    if (img.parentNode) img.parentNode.insertBefore(link, img);
-    link.appendChild(img);
-}
-
-function standaloneImageLinkHost(a) {
-    if (!a) return null;
-    var host = a.parentElement;
-    if (!host || !/^(P|DIV|LI)$/i.test(host.tagName || '')) return null;
-    var linkText = String(a.textContent || '').trim();
-    var hostText = String(host.textContent || '').trim();
-    if (!linkText || hostText !== linkText) return null;
-    return host;
-}
-
-function createWorkspaceImagePreview(rel, label) {
-    var figure = document.createElement('figure');
-    figure.className = 'msg-workspace-image-figure';
-    var link = document.createElement('a');
-    link.href = workspaceImageUrl(rel);
-    link.target = '_blank';
-    link.rel = 'noopener noreferrer';
-    link.className = 'msg-workspace-image-link';
-    link.setAttribute('data-workspace-open', rel);
-    var img = document.createElement('img');
-    img.className = 'msg-workspace-image';
-    img.src = workspaceImageUrl(rel);
-    img.loading = 'lazy';
-    img.decoding = 'async';
-    img.alt = String(label || rel || 'image');
-    link.appendChild(img);
-    figure.appendChild(link);
-    var caption = document.createElement('figcaption');
-    caption.textContent = String(label || rel || '');
-    figure.appendChild(caption);
-    return figure;
-}
-
-function upgradeWorkspaceImages(root) {
-    if (!root) return;
-    root.querySelectorAll('img[src]').forEach(function (img) {
-        var rel = workspaceImageRelFromMarker(img.getAttribute('src') || '');
-        if (rel) wrapWorkspaceImageElement(img, rel);
-    });
-    root.querySelectorAll('a.msg-link-workspace-open[data-workspace-open]').forEach(function (a) {
-        if (a.dataset.workspaceImagePreview === '1') return;
-        var rel = a.getAttribute('data-workspace-open') || '';
-        if (!workspaceImageExtRegex().test(String(rel).replace(/\\\\/g, '/'))) return;
-        var host = standaloneImageLinkHost(a);
-        if (!host || host.querySelector('.msg-workspace-image-figure')) return;
-        a.dataset.workspaceImagePreview = '1';
-        var figure = createWorkspaceImagePreview(rel, a.textContent || rel);
-        host.parentNode.insertBefore(figure, host.nextSibling);
-    });
-}
-
 function linkifyAssistantTextNodes(root) {
     if (!root) return;
     upgradeWorkspacePathMarkdownLinks(root);
@@ -12091,23 +12371,12 @@ function enhanceAssistantMessageContent(div) {
     wrapMessageTables(div);
     upgradeMermaidBlocks(div);
     linkifyAssistantTextNodes(div);
-    upgradeWorkspaceImages(div);
+    upgradeWorkspaceMedia(div);
     ensureExternalMessageLinksOpenInNewTab(div);
     scheduleMermaidRun(div);
 }
 
 let markedOptionsApplied = false;
-function encodeMarkdownWorkspacePathLinkMatch(match, label, dest) {
-    var rawDest = String(dest || '').trim();
-    if (!rawDest || rawDest.charAt(0) === '#') return match;
-    var decodedDest = decodeMarkdownHrefPathTarget(rawDest);
-    if (!decodedDest || /^(https?|mailto|tel|javascript|data|blob):/i.test(decodedDest)) return match;
-    if (/^[A-Za-z][A-Za-z0-9+.-]*:/i.test(decodedDest) && !/^[A-Za-z]:[\\\\/]/.test(decodedDest) && !/^file:\\/\\//i.test(decodedDest)) return match;
-    var rel = markdownHrefToWorkspaceOpenRel(decodedDest);
-    if (!rel) return match;
-    return '<span data-ga-workspace-link="' + escapeHtmlAttr(rel) + '" data-ga-workspace-raw="' + escapeHtmlAttr(decodedDest) + '">' + escapeHtml(label) + '</span>';
-}
-
 function stripMarkdownPathLinkWrapper(s) {
     var t = String(s || '').trim();
     var changed = true;
@@ -12202,65 +12471,6 @@ function normalizeExplicitMarkdownPathLinksOutsideFences(text) {
     return out;
 }
 
-function encodeMarkdownWorkspacePathLinksInPlainText(text) {
-    return normalizeExplicitMarkdownPathLinksInPlainText(text)
-        .replace(/\\[([^\\]\\r\\n]+)\\]\\(([^)\\r\\n]+)\\)/g, encodeMarkdownWorkspacePathLinkMatch);
-}
-
-function encodeMarkdownWorkspacePathLinks(text) {
-    var src = normalizeExplicitMarkdownPathLinksOutsideFences(text);
-    var out = '';
-    var buf = '';
-    var inFence = false;
-    var fenceMarker = '';
-    var inCode = false;
-    var lineStart = true;
-    function flushPlain() {
-        if (buf) {
-            out += encodeMarkdownWorkspacePathLinksInPlainText(buf);
-            buf = '';
-        }
-    }
-    for (var i = 0; i < src.length; i += 1) {
-        var ch = src.charAt(i);
-        var rest = src.slice(i);
-        if (lineStart) {
-            var fence = /^([ \\t]{0,3})(\`{3,}|~{3,})/.exec(rest);
-            if (fence) {
-                flushPlain();
-                var fenceText = fence[0];
-                var marker = fence[2].charAt(0);
-                if (!inFence) {
-                    inFence = true;
-                    fenceMarker = marker;
-                } else if (marker === fenceMarker) {
-                    inFence = false;
-                    fenceMarker = '';
-                }
-                out += fenceText;
-                i += fenceText.length - 1;
-                lineStart = false;
-                continue;
-            }
-        }
-        if (!inFence && ch === '\`') {
-            flushPlain();
-            var tickEnd = i + 1;
-            while (tickEnd < src.length && src.charAt(tickEnd) === '\`') tickEnd += 1;
-            out += src.slice(i, tickEnd);
-            i = tickEnd - 1;
-            inCode = !inCode;
-            lineStart = false;
-            continue;
-        }
-        if (inFence || inCode) out += ch;
-        else buf += ch;
-        lineStart = ch === '\\n' || ch === '\\r';
-    }
-    flushPlain();
-    return out;
-}
-
 function escapeMarkdownSingleTildes(text) {
     var src = String(text || '');
     var out = '';
@@ -12313,10 +12523,11 @@ function renderMarkdown(text) {
         markedOptionsApplied = true;
         try {
             markdownParser.setOptions({ breaks: true, mangle: false, headerIds: false });
+            configureWorkspaceMarkdownRenderer(markdownParser);
         } catch (e) { /* ignore */ }
     }
     try {
-        return markdownParser.parse(escapeMarkdownSingleTildes(encodeMarkdownWorkspacePathLinks(text)), { mangle: false, headerIds: false });
+        return markdownParser.parse(escapeMarkdownSingleTildes(normalizeExplicitMarkdownPathLinksOutsideFences(text)), { mangle: false, headerIds: false });
     } catch (e) {
         return '<pre class="markdown-fallback">' + escapeHtml(String(text)) + '</pre>';
     }
@@ -13651,7 +13862,7 @@ function finalizeProgressStreamForType(ctx, logType) {
 }
 
 /* ── Subagent 浮层 / 过程块 ── */
-`,zt=`var subagentPanelOpen = false;
+`,$t=`var subagentPanelOpen = false;
 var subagentPanelBound = false;
 var subagentDockExpanded = false;
 
@@ -14440,7 +14651,7 @@ function updateSubagentBlockFinish(ctx, event) {
     applySubagentBlockFinish(blk, event);
     handleSubagentLifecycleEvent(event);
 }
-`,$t=`const humanInteractionStoreBySession = Object.create(null);
+`,Vt=`const humanInteractionStoreBySession = Object.create(null);
 const HUMAN_INTERACTION_DRAFT_PREFIX = 'myagent-human-interaction-draft:';
 
 function humanInteractionSessionState(sessionId) {
@@ -14840,6 +15051,22 @@ function autoReviewStatusElement(stream, toolCallId) {
     return el;
 }
 
+function appendApprovalReviewExplanation(container, riskAnalysis, commandPurpose, fallbackReason) {
+    if (!container) return;
+    var riskText = String(riskAnalysis || fallbackReason || '未提供具体风险说明。').trim();
+    var purposeText = String(commandPurpose || '未提供命令用途说明。').trim();
+    var explanation = humanElement('div', 'approval-review-explanation');
+    var riskRow = humanElement('div', 'approval-review-section');
+    riskRow.appendChild(humanElement('strong', 'approval-review-section-label', '【命令风险】'));
+    riskRow.appendChild(humanElement('span', 'approval-review-section-text', riskText));
+    explanation.appendChild(riskRow);
+    var purposeRow = humanElement('div', 'approval-review-section');
+    purposeRow.appendChild(humanElement('strong', 'approval-review-section-label', '【命令目的】'));
+    purposeRow.appendChild(humanElement('span', 'approval-review-section-text', purposeText));
+    explanation.appendChild(purposeRow);
+    container.appendChild(explanation);
+}
+
 function renderAutoReviewStatusEvent(ctx, event, runSessionId) {
     var stream = ctx && ctx.stream
         ? ctx.stream
@@ -14857,6 +15084,10 @@ function renderAutoReviewStatusEvent(ctx, event, runSessionId) {
     if (!el) return;
     el.className = 'auto-review-status';
     el.setAttribute('data-status', status);
+    // Status events update one persistent row. Clear the previous loading or
+    // result content before rendering the new state so in-progress copy and
+    // its spinner do not remain beside the final decision.
+    el.textContent = '';
     if (status === 'in_progress') {
         el.classList.add('is-in-progress');
         el.appendChild(humanElement('span', 'auto-review-spin'));
@@ -14870,9 +15101,11 @@ function renderAutoReviewStatusEvent(ctx, event, runSessionId) {
     var approved = status === 'approved';
     var risk = String((event && event.risk) || 'unknown');
     var reason = String((event && event.reason) || '');
+    var riskAnalysis = String((event && event.risk_analysis) || '');
+    var commandPurpose = String((event && event.command_purpose) || '');
     var unknown = risk === 'unknown' || risk === 'timed_out';
     el.classList.add(approved ? 'is-approved' : (unknown ? 'is-timedout' : 'is-denied'));
-    var text = humanElement('span', 'auto-review-text');
+    var text = humanElement('div', 'auto-review-text');
     var title = humanElement(
         'span',
         'auto-review-title',
@@ -14884,10 +15117,7 @@ function renderAutoReviewStatusEvent(ctx, event, runSessionId) {
         title.appendChild(humanElement('span', 'auto-review-risk', risk));
     }
     text.appendChild(title);
-    if (reason) {
-        text.appendChild(document.createTextNode('：'));
-        text.appendChild(humanElement('span', 'auto-review-reason', reason));
-    }
+    appendApprovalReviewExplanation(text, riskAnalysis, commandPurpose, reason);
     if (!approved && !unknown) {
         text.appendChild(humanElement(
             'div',
@@ -15005,7 +15235,6 @@ function setHumanQuestionStep(card, index) {
     var panes = Array.from(card.querySelectorAll('.human-question-pane'));
     if (!panes.length) return;
     var next = Math.max(0, Math.min(Number(index) || 0, panes.length - 1));
-    card.dataset.review = '0';
     card.dataset.step = String(next);
     panes.forEach(function (pane, idx) { pane.classList.toggle('is-active', idx === next); });
     card.querySelectorAll('.human-question-tab').forEach(function (tab, idx) {
@@ -15018,71 +15247,29 @@ function setHumanQuestionStep(card, index) {
     if (tabs) tabs.classList.remove('hidden');
     var body = card.querySelector('.human-card-body');
     if (body) body.classList.remove('hidden');
-    var review = card.querySelector('.human-question-review');
-    if (review) review.classList.add('hidden');
     var progress = card.querySelector('.human-question-progress');
     if (progress) progress.textContent = '问题 ' + (next + 1) + '/' + panes.length + ' · ' + String(panes[next].dataset.questionHeader || '');
     var back = card.querySelector('.human-back-btn');
     var nextBtn = card.querySelector('.human-next-btn');
-    var reviewBtn = card.querySelector('.human-review-btn');
+    var confirmBtn = card.querySelector('.human-confirm-btn');
     var submit = card.querySelector('.human-submit-btn');
+    var cancel = card.querySelector('.human-cancel-btn');
+    var multipleQuestions = panes.length > 1;
+    var lastQuestion = next >= panes.length - 1;
     if (back) {
-        back.textContent = '上一步';
-        back.classList.toggle('hidden', panes.length === 1);
+        back.textContent = '上一题';
+        back.classList.toggle('hidden', !multipleQuestions);
         back.disabled = next === 0;
     }
-    if (nextBtn) nextBtn.classList.toggle('hidden', next >= panes.length - 1);
-    if (reviewBtn) reviewBtn.classList.toggle('hidden', panes.length === 1 || next < panes.length - 1);
-    if (submit) submit.classList.toggle('hidden', panes.length > 1);
+    if (nextBtn) {
+        nextBtn.textContent = '下一题';
+        nextBtn.classList.toggle('hidden', !multipleQuestions);
+        nextBtn.disabled = lastQuestion;
+    }
+    if (confirmBtn) confirmBtn.classList.toggle('hidden', !multipleQuestions || lastQuestion);
+    if (submit) submit.classList.toggle('hidden', multipleQuestions && !lastQuestion);
+    if (cancel) cancel.classList.toggle('hidden', multipleQuestions);
     if (card.dataset.draftReady === '1') persistHumanInteractionDraft(card);
-}
-
-function showHumanQuestionReview(card) {
-    var panes = Array.from(card.querySelectorAll('.human-question-pane'));
-    var invalidIndex = panes.findIndex(function (pane) { return !validateHumanQuestionPane(card, pane); });
-    if (invalidIndex >= 0) {
-        setHumanQuestionStep(card, invalidIndex);
-        return false;
-    }
-    var review = card.querySelector('.human-question-review');
-    if (!review) return false;
-    review.innerHTML = '';
-    review.appendChild(humanElement('h4', 'human-review-title', '确认回答'));
-    panes.forEach(function (pane) {
-        var state = humanQuestionPaneState(pane);
-        var row = humanElement('div', 'human-review-row');
-        row.appendChild(humanElement('div', 'human-review-label', pane.dataset.questionHeader || '问题'));
-        var labels = state.selected.map(function (input) {
-            var option = input.closest('.human-option');
-            var label = option && option.querySelector('.human-option-label');
-            return label ? label.textContent : input.dataset.optionId;
-        });
-        if (state.otherText) labels.push(state.otherText);
-        row.appendChild(humanElement('div', 'human-review-value', labels.join('、')));
-        review.appendChild(row);
-    });
-    card.dataset.review = '1';
-    var tabs = card.querySelector('.human-question-tabs');
-    if (tabs) tabs.classList.add('hidden');
-    var body = card.querySelector('.human-card-body');
-    if (body) body.classList.add('hidden');
-    review.classList.remove('hidden');
-    var back = card.querySelector('.human-back-btn');
-    if (back) {
-        back.classList.remove('hidden');
-        back.disabled = false;
-        back.textContent = '返回修改';
-    }
-    var nextBtn = card.querySelector('.human-next-btn');
-    if (nextBtn) nextBtn.classList.add('hidden');
-    var reviewBtn = card.querySelector('.human-review-btn');
-    if (reviewBtn) reviewBtn.classList.add('hidden');
-    var submit = card.querySelector('.human-submit-btn');
-    if (submit) submit.classList.remove('hidden');
-    review.setAttribute('tabindex', '-1');
-    review.focus();
-    persistHumanInteractionDraft(card);
-    return true;
 }
 
 function createHumanQuestionCard(record, sessionId) {
@@ -15140,6 +15327,13 @@ function createHumanQuestionCard(record, sessionId) {
             input.type = question.multi_select ? 'checkbox' : 'radio';
             input.name = 'human-' + record.interaction_id + '-' + pane.dataset.questionId;
             input.dataset.optionId = String(option.option_id || '');
+            input.addEventListener('change', function () {
+                persistHumanInteractionDraft(card);
+                if (question.multi_select || !input.checked || qIndex >= questions.length - 1) return;
+                // A normal single-choice answer is complete immediately. The
+                // free-form "Other" option deliberately has no auto-advance.
+                setHumanQuestionStep(card, qIndex + 1);
+            });
             var copy = humanElement('span', 'human-option-copy');
             copy.appendChild(humanElement('span', 'human-option-label', option.label || ''));
             var description = humanElement('span', 'human-option-description', option.description || '');
@@ -15162,7 +15356,14 @@ function createHumanQuestionCard(record, sessionId) {
         otherMark.name = 'human-' + record.interaction_id + '-' + pane.dataset.questionId;
         otherMark.className = 'human-other-mark';
         var otherCopy = humanElement('span', 'human-option-copy');
-        otherCopy.appendChild(humanElement('span', 'human-option-label', '其他'));
+        var otherHeader = humanElement('span', 'human-other-header');
+        otherHeader.appendChild(humanElement('span', 'human-option-label', '其他'));
+        otherHeader.appendChild(humanElement(
+            'span',
+            'input-shortcut-hint human-other-shortcut',
+            qIndex < questions.length - 1 ? 'Ctrl/Cmd + Enter 确认并进入下一题' : 'Ctrl/Cmd + Enter 提交答案'
+        ));
+        otherCopy.appendChild(otherHeader);
         var otherInput = document.createElement('textarea');
         otherInput.className = 'human-other-input';
         otherInput.rows = 2;
@@ -15180,40 +15381,40 @@ function createHumanQuestionCard(record, sessionId) {
         body.appendChild(pane);
     });
     card.appendChild(body);
-    var review = humanElement('section', 'human-question-review hidden');
-    review.setAttribute('aria-label', '回答摘要');
-    card.appendChild(review);
     var error = humanElement('div', 'human-card-error');
     error.setAttribute('role', 'alert');
     card.appendChild(error);
-    var actions = humanElement('div', 'human-card-actions');
-    var cancel = humanElement('button', 'human-secondary-btn', '不回答');
+    var actions = humanElement('div', 'human-card-actions human-question-actions');
+    var cancel = humanElement('button', 'human-secondary-btn human-cancel-btn', '不回答');
     cancel.type = 'button';
     cancel.title = '取消当前问题并让 Agent 继续';
     cancel.addEventListener('click', function () { void cancelHumanQuestion(card); });
     var nav = humanElement('div', 'human-card-nav');
-    var back = humanElement('button', 'human-secondary-btn human-back-btn', '上一步');
+    var back = humanElement('button', 'human-secondary-btn human-back-btn', '上一题');
     back.type = 'button';
     back.addEventListener('click', function () {
-        if (card.dataset.review === '1') setHumanQuestionStep(card, questions.length - 1);
-        else setHumanQuestionStep(card, Number(card.dataset.step || 0) - 1);
+        setHumanQuestionStep(card, Number(card.dataset.step || 0) - 1);
     });
-    var next = humanElement('button', 'human-primary-btn human-next-btn', '下一步');
+    var next = humanElement('button', 'human-secondary-btn human-next-btn', '下一题');
     next.type = 'button';
     next.addEventListener('click', function () {
         var current = Number(card.dataset.step || 0);
         var pane = card.querySelectorAll('.human-question-pane')[current];
         if (validateHumanQuestionPane(card, pane)) setHumanQuestionStep(card, current + 1);
     });
-    var reviewButton = humanElement('button', 'human-primary-btn human-review-btn', '确认回答');
-    reviewButton.type = 'button';
-    reviewButton.addEventListener('click', function () { showHumanQuestionReview(card); });
+    var confirmButton = humanElement('button', 'human-primary-btn human-confirm-btn', '确认');
+    confirmButton.type = 'button';
+    confirmButton.addEventListener('click', function () {
+        var current = Number(card.dataset.step || 0);
+        var pane = card.querySelectorAll('.human-question-pane')[current];
+        if (validateHumanQuestionPane(card, pane)) setHumanQuestionStep(card, current + 1);
+    });
     var submit = humanElement('button', 'human-primary-btn human-submit-btn', '提交答案');
     submit.type = 'button';
     submit.addEventListener('click', function () { void submitHumanQuestion(card); });
     nav.appendChild(back);
     nav.appendChild(next);
-    nav.appendChild(reviewButton);
+    nav.appendChild(confirmButton);
     nav.appendChild(submit);
     actions.appendChild(cancel);
     actions.appendChild(nav);
@@ -15223,9 +15424,16 @@ function createHumanQuestionCard(record, sessionId) {
     card.dataset.draftReady = '1';
     card.addEventListener('keydown', function (event) {
         if (!isInputSubmitShortcut(event, 'editor')) return;
+        var current = Number(card.dataset.step || 0);
         event.preventDefault();
-        if (questions.length > 1 && card.dataset.review !== '1') showHumanQuestionReview(card);
-        else void submitHumanQuestion(card);
+        if (questions.length > 1 && current < questions.length - 1) {
+            var pane = card.querySelectorAll('.human-question-pane')[current];
+            if (validateHumanQuestionPane(card, pane)) setHumanQuestionStep(card, current + 1);
+        } else {
+            // Ctrl/Cmd+Enter is an explicit user submit action, equivalent to
+            // clicking Submit on the final (or only) question.
+            void submitHumanQuestion(card);
+        }
     });
     return card;
 }
@@ -15348,6 +15556,7 @@ function resumeRecoveredHumanInteractionStream(sessionId, afterIndex) {
 function createHumanApprovalCard(record, sessionId) {
     var danger = record.approval_level === 'danger';
     var forced = !!record.force_approval;
+    var workspaceApproval = !forced && !!record.external_workspace_grantable;
     var card = humanElement('article', 'human-interaction-card human-approval-card' + (danger ? ' is-danger' : ''));
     card.dataset.kind = 'approval';
     card.dataset.sessionId = sessionId;
@@ -15365,12 +15574,12 @@ function createHumanApprovalCard(record, sessionId) {
         detail.appendChild(humanElement('code', '', record.tool));
         body.appendChild(detail);
     }
-    if (!forced && record.rule_pattern) {
+    if (!forced && !workspaceApproval && record.rule_pattern) {
         body.appendChild(
             humanElement(
                 'div',
                 'human-approval-rule-hint',
-                '“始终允许此类操作”将保存为长期规则：' + record.rule_pattern
+                '“始终允许”将保存为长期规则：' + record.rule_pattern
             )
         );
     }
@@ -15388,61 +15597,33 @@ function createHumanApprovalCard(record, sessionId) {
     analyze.title = '调用独立审查模型给出风险解读和审批建议，不会替你执行审批';
     analyze.addEventListener('click', function () { void analyzeHumanApproval(card); });
     actions.appendChild(analyze);
-    var deny = humanElement('button', 'human-secondary-btn human-deny-btn', danger ? '拒绝执行' : '拒绝');
+    var deny = humanElement('button', 'human-secondary-btn human-deny-btn', '拒绝执行');
     deny.type = 'button';
     deny.addEventListener('click', function () { void resolveHumanApproval(card, 'deny'); });
     actions.appendChild(deny);
-    var cmdRow = null;
-    var wsRow = null;
-    if (!forced && record.external_workspace_grantable) {
-        var cmdGroup = humanElement('div', 'human-approval-group');
-        cmdGroup.appendChild(humanElement('span', 'human-approval-group-label', '命令授权'));
-        cmdRow = humanElement('div', 'human-approval-group-row');
-        cmdGroup.appendChild(cmdRow);
-        actions.appendChild(cmdGroup);
-        var wsGroup = humanElement('div', 'human-approval-group');
-        wsGroup.appendChild(humanElement('span', 'human-approval-group-label', '工作区沙箱外处理权限'));
-        wsRow = humanElement('div', 'human-approval-group-row');
-        wsGroup.appendChild(wsRow);
-        actions.appendChild(wsGroup);
-    }
     if (!forced) {
-        var sessionAllow = humanElement('button', 'human-secondary-btn', '本任务内允许相同请求');
-        sessionAllow.type = 'button';
-        sessionAllow.title = '仅在当前任务中，对命令、参数、路径和工作目录完全相同的请求自动放行';
-        sessionAllow.addEventListener('click', function () { void resolveHumanApproval(card, 'allow_session'); });
-        (cmdRow || actions).appendChild(sessionAllow);
-    }
-    if (!forced && record.allow_always_available && record.rule_pattern) {
-        var always = humanElement('button', 'human-secondary-btn', '始终允许此类操作');
+        var durableRuleAvailable = !!record.allow_always_available && !!record.rule_pattern;
+        var alwaysDecision = workspaceApproval
+            ? 'allow_external_workspace'
+            : (durableRuleAvailable ? 'allow_always' : 'allow_session');
+        var always = humanElement('button', 'human-secondary-btn human-always-btn', '始终允许');
         always.type = 'button';
-        if (record.rule_pattern) always.title = '保存为长期规则，后续匹配时自动放行：' + record.rule_pattern;
-        always.addEventListener('click', function () { void resolveHumanApproval(card, 'allow_always'); });
-        (cmdRow || actions).appendChild(always);
+        always.title = workspaceApproval
+            ? '持续允许写入、删除和 Shell 处理工作区沙箱外内容；随后仍会单独审批本次工具操作'
+            : (durableRuleAvailable
+                ? '保存为长期规则，后续匹配时自动放行：' + record.rule_pattern
+                : '无法生成长期规则；改为在当前任务内自动允许完全相同的请求');
+        always.addEventListener('click', function () { void resolveHumanApproval(card, alwaysDecision); });
+        actions.appendChild(always);
     }
-    var allowPrimary = !record.external_workspace_grantable;
-    if (!forced && record.external_workspace_grantable) {
-        var externalGrant = humanElement('button', 'human-primary-btn human-external-grant-btn', '授权工作区沙箱外处理权限');
-        externalGrant.type = 'button';
-        externalGrant.title = '一次性授权：写、删除和 Shell 在工作区外的操作以后自动放行';
-        externalGrant.addEventListener('click', function () { void resolveHumanApproval(card, 'allow_external_workspace'); });
-        wsRow.appendChild(externalGrant);
-        var allowOnce = humanElement('button', 'human-secondary-btn human-allow-btn', '允许一次');
-        allowOnce.type = 'button';
-        allowOnce.title = '仅放行这一次；下一次工作区外操作仍会询问';
-        allowOnce.addEventListener('click', function () { void resolveHumanApproval(card, 'allow_once'); });
-        cmdRow.appendChild(allowOnce);
-    } else {
-        var allow = humanElement(
-            'button',
-            (allowPrimary ? 'human-primary-btn human-allow-btn' : 'human-secondary-btn human-allow-btn'),
-            '允许一次'
-        );
-        allow.type = 'button';
-        allow.title = '仅放行这一次；执行后授权立即失效';
-        allow.addEventListener('click', function () { void resolveHumanApproval(card, 'allow_once'); });
-        actions.appendChild(allow);
-    }
+    var onceDecision = workspaceApproval ? 'allow_external_workspace_once' : 'allow_once';
+    var allow = humanElement('button', 'human-primary-btn human-allow-btn', '本次允许');
+    allow.type = 'button';
+    allow.title = workspaceApproval
+        ? '仅允许本次处理工作区沙箱外内容；随后仍会单独审批本次工具操作'
+        : '仅放行这一次；执行后授权立即失效';
+    allow.addEventListener('click', function () { void resolveHumanApproval(card, onceDecision); });
+    actions.appendChild(allow);
     card.appendChild(actions);
     return card;
 }
@@ -15478,7 +15659,12 @@ async function analyzeHumanApproval(card) {
         var risk = humanElement('span', 'human-approval-analysis-risk', '风险：' + String(result.risk || 'unknown'));
         heading.appendChild(risk);
         panel.appendChild(heading);
-        panel.appendChild(humanElement('div', 'human-approval-analysis-reason', String(result.reason || '审查模型未提供理由。')));
+        appendApprovalReviewExplanation(
+            panel,
+            result.risk_analysis,
+            result.command_purpose,
+            result.reason || '审查模型未提供理由。'
+        );
         panel.appendChild(humanElement('div', 'human-approval-analysis-hint', '以上仅为分析建议，审批仍由你决定。'));
     } catch (err) {
         if (panel) panel.hidden = true;
@@ -15528,11 +15714,15 @@ function createHumanTerminalCard(record, sessionId) {
     } else if (kind === 'approval') {
         summary.textContent = record.decision === 'deny'
             ? '你已拒绝本次操作。'
-            : (record.decision === 'allow_always'
-                ? ('已保存长期规则，后续匹配的操作将自动放行。' + (record.rule_pattern ? '（规则：' + record.rule_pattern + '）' : ''))
-                : (record.decision === 'allow_session'
-                    ? '当前任务内将自动允许完全相同的请求。'
-                    : '已允许这一次；执行后授权失效。'));
+            : (record.decision === 'allow_external_workspace'
+                ? '已始终允许工作区沙箱外处理；本次工具操作仍需单独审批。'
+                : (record.decision === 'allow_external_workspace_once'
+                    ? '已允许本次工作区沙箱外处理；本次工具操作仍需单独审批。'
+                    : (record.decision === 'allow_always'
+                        ? ('已保存长期规则，后续匹配的操作将自动放行。' + (record.rule_pattern ? '（规则：' + record.rule_pattern + '）' : ''))
+                        : (record.decision === 'allow_session'
+                            ? '当前任务内将自动允许完全相同的请求。'
+                            : '已允许这一次；执行后授权失效。'))));
     } else {
         var answers = Array.isArray(record.answers) ? record.answers : [];
         var questionsById = Object.create(null);
@@ -15645,7 +15835,7 @@ async function refreshHumanInteractions(sessionId, options) {
     var button = document.getElementById('human-interaction-banner-btn');
     if (button) button.addEventListener('click', function () { void handleHumanTodoFloaterAction(); });
 })();
-`,Vt=`var permissionModeBusy = false;
+`,Wt=`var permissionModeBusy = false;
 var currentPermissionStatus = null;
 var mcpRegistrationPromptBusy = false;
 var mcpRegistrationPrompted = new Set();
@@ -16044,7 +16234,7 @@ async function refreshSecurityRules() {
         if (rules.length === 0) {
             var empty = document.createElement('div');
             empty.className = 'settings-feature-status';
-            empty.textContent = '暂无长期规则。审批时选择“始终允许此类操作”会自动添加。';
+            empty.textContent = '暂无长期规则。审批时选择“始终允许”可自动添加可生成的长期规则。';
             listEl.appendChild(empty);
             return;
         }
@@ -16197,7 +16387,7 @@ if (document.readyState === 'loading') {
 } else {
     initPermissionControls();
 }
-`,Wt=`function renderEvent(ctx, event, eventIndex, runSessionId) {
+`,Qt=`function renderEvent(ctx, event, eventIndex, runSessionId) {
     if (!event || typeof event !== 'object') return;
     var eventSessionId = runSessionId || currentSessionId || '';
     if (event.type === 'permission_mode_changed') {
@@ -16348,7 +16538,7 @@ if (document.readyState === 'loading') {
         if (fallbackContent.trim()) appendLog(ctx, fallbackContent, 'log-entry', runSessionId);\r
     }\r
 }\r
-`,Qt=`\uFEFFfunction setSendButtonState() {
+`,Kt=`\uFEFFfunction setSendButtonState() {
     syncMessageInputPlaceholder();
     sendBtn.disabled = false;
     const uploadBusy = isChatFileUploadBusy();
@@ -16371,9 +16561,9 @@ if (document.readyState === 'loading') {
     }
 }
 
-const MESSAGE_INPUT_PLACEHOLDER_DEFAULT = '说说你想做什么…（Shift/Ctrl+Enter换行）';
+const MESSAGE_INPUT_PLACEHOLDER_DEFAULT = '说说你想做什么…（Enter 发送 · Shift/Ctrl/Cmd + Enter 换行）';
 const MESSAGE_INPUT_PLACEHOLDER_RUNNING = 'Agent运行中，输入后续任务';
-const MESSAGE_INPUT_PLACEHOLDER_QUEUED = '点击\`立即发送\`插入提示';
+const MESSAGE_INPUT_PLACEHOLDER_QUEUED = '按 Enter 发送第一条待发送任务';
 
 function syncMessageInputPlaceholder() {
     if (!messageInput) return;
@@ -16381,7 +16571,7 @@ function syncMessageInputPlaceholder() {
         ? getFollowupQueue(currentSessionId)
         : [];
     var running = !!(optimisticNewSessionRun || isSessionRunning(currentSessionId));
-    var value = queue.length
+    var value = queue.some(function (item) { return item && !item.status; })
         ? MESSAGE_INPUT_PLACEHOLDER_QUEUED
         : (running ? MESSAGE_INPUT_PLACEHOLDER_RUNNING : MESSAGE_INPUT_PLACEHOLDER_DEFAULT);
     messageInput.placeholder = typeof translateUiString === 'function'
@@ -16498,23 +16688,66 @@ function showLoading() {
 
 function hideLoading() { const loader = document.getElementById('chat-loading'); if (loader) loader.remove(); }
 
+function sessionHasUnsentDraft(sessionId) {
+    if (!sessionId) return false;
+    var draft = Object.prototype.hasOwnProperty.call(draftBySession, sessionId)
+        ? draftBySession[sessionId]
+        : readStoredInputDraft(sessionId);
+    return !!String(draft || '').trim();
+}
+
+function syncSessionDraftBadge(itemDiv, sessionId) {
+    if (!itemDiv || !sessionId) return;
+    var badge = itemDiv.querySelector('.session-draft-badge');
+    if (!badge) return;
+    var visible = String(sessionId) !== String(currentSessionId || '') && sessionHasUnsentDraft(sessionId);
+    badge.hidden = !visible;
+    itemDiv.classList.toggle('has-unsent-draft', visible);
+}
+
+/** 只同步草稿标签，不重绘会话列表；传入 sessionId 时仅更新对应行。 */
+function syncSessionDraftBadges(sessionId) {
+    if (!sessionsList) return;
+    var targetId = sessionId ? String(sessionId) : '';
+    sessionsList.querySelectorAll('.session-item').forEach(function (div) {
+        var sid = String(div.dataset.sessionId || '');
+        if (!sid || (targetId && sid !== targetId)) return;
+        syncSessionDraftBadge(div, sid);
+    });
+}
+
 /** 根据 sessionStore / 服务端 stream_active / sessionUnreadComplete 更新红点、绿点 */
 function applySessionItemIndicators(itemDiv, sessionId, opts) {
     opts = opts || {};
     if (!itemDiv || !sessionId) return;
+    syncSessionDraftBadge(itemDiv, sessionId);
     itemDiv.classList.remove('is-generating', 'is-unread-result', 'is-unread-failed');
     var nameEl = itemDiv.querySelector('.session-name');
     if (nameEl) nameEl.removeAttribute('data-ui-tip');
-    if (isSessionRunning(sessionId)
-        || (typeof isGoalActiveForSession === 'function' && isGoalActiveForSession(sessionId))) {
+    var sess = sessionStore.get(sessionId);
+    var localUnreadResult = sessionUnreadComplete.has(sessionId);
+    var hasUnreadResult = sess ? !!sess.unread_result : localUnreadResult;
+    var failed = !!(sess && sess.unread_result_status === 'failed');
+    var running = isSessionRunning(sessionId)
+        || (typeof isGoalActiveForSession === 'function' && isGoalActiveForSession(sessionId));
+    if (running) {
         itemDiv.classList.add('is-generating');
-        if (nameEl) nameEl.setAttribute('data-ui-tip', '生成中');
+        if (hasUnreadResult) {
+            // A completed queued turn is still unread while the next pending
+            // turn is running. Combining the classes keeps the pulse animation
+            // but changes the dot to the result color.
+            itemDiv.classList.add(failed ? 'is-unread-failed' : 'is-unread-result');
+        }
+        if (nameEl) {
+            nameEl.setAttribute(
+                'data-ui-tip',
+                hasUnreadResult
+                    ? (failed ? '已有任务失败，仍在生成' : '已有任务完成，仍在生成')
+                    : '生成中'
+            );
+        }
     } else {
-        var sess = sessionStore.get(sessionId);
-        var localUnreadResult = sessionUnreadComplete.has(sessionId);
-        var hasUnreadResult = sess ? !!sess.unread_result : localUnreadResult;
         if (!hasUnreadResult) return;
-        var failed = !!(sess && sess.unread_result_status === 'failed');
         itemDiv.classList.add(failed ? 'is-unread-failed' : 'is-unread-result');
         if (nameEl) nameEl.setAttribute('data-ui-tip', failed ? '任务失败，点击查看' : '有新回复，点击查看');
     }
@@ -16850,6 +17083,7 @@ function buildAndBindSessionRow(sess, allSessions, nextStreamMap) {
         + '<div class="session-item-main">'
         + '<div class="session-item-title-row">'
         + '<span class="session-name" data-id="' + sess.id + '" data-original="' + escapeHtml(sess.name) + '">' + escapeHtml(displayName) + '</span>'
+        + '<span class="session-draft-badge" aria-label="草稿" hidden>草稿</span>'
         + '<span class="session-item-date"></span>'
         + '</div>'
         + '<div class="session-last-query"></div>'
@@ -16882,6 +17116,18 @@ function buildAndBindSessionRow(sess, allSessions, nextStreamMap) {
     bindSessionActionMenu(moreWrap, function () {
         return findSessionForActions(sess.id, sess);
     }, div);
+    var nameEl = div.querySelector('.session-name');
+    if (nameEl) {
+        nameEl.addEventListener('dblclick', function (e) {
+            e.preventDefault();
+            e.stopPropagation();
+            var current = findSessionForActions(sess.id, sess);
+            if (!current) return;
+            Promise.resolve(renameSessionFromMenu(current)).catch(function (err) {
+                console.error('双击重命名会话失败:', err);
+            });
+        });
+    }
     applySessionItemIndicators(div, sess.id, { serverStreamActive: !!sess.stream_active });
     return div;
 }
@@ -17882,7 +18128,7 @@ async function createNewSessionInner() {
         appendLogVisible('创建新会话失败', 'error-log');
     }
 }
-`,Kt=`const SSE_IDLE_TIMEOUT_MS = 120000;
+`,Yt=`const SSE_IDLE_TIMEOUT_MS = 120000;
 const STREAM_RECONNECT_MAX_ATTEMPTS = 10;
 const STREAM_RECONNECT_BASE_DELAY_MS = 500;
 const STREAM_RECONNECT_MAX_DELAY_MS = 15000;
@@ -19203,6 +19449,222 @@ function positionFollowupQueuePanel() {
     panel.style.width = '';
 }
 
+var activeFollowupModePickerClose = null;
+
+function closeActiveFollowupModePicker() {
+    if (typeof activeFollowupModePickerClose !== 'function') return;
+    var close = activeFollowupModePickerClose;
+    activeFollowupModePickerClose = null;
+    close();
+}
+
+function followupQueueRenderSignature(sessionId, queue) {
+    var sid = String(sessionId || '');
+    var running = !!(isSessionRunning(sid) || isServerStreamActive(sid));
+    var humanQuestionCount = typeof pendingHumanQuestions === 'function'
+        ? pendingHumanQuestions(sid).length
+        : 0;
+    var items = (Array.isArray(queue) ? queue : []).map(function (item) {
+        return {
+            id: String((item && item.id) || ''),
+            status: String((item && item.status) || ''),
+            steerMode: item && item.steerMode === 'append' ? 'append' : 'interrupt',
+            display: String((item && (item.display || item.text)) || ''),
+            skills: Array.isArray(item && item.skills) ? item.skills.map(String) : [],
+            deferUntilRunEnd: !!(item && item.deferUntilRunEnd),
+            awaitingRunEnd: !!(item && item.awaitingRunEnd),
+        };
+    });
+    return JSON.stringify({ sid: sid, running: running, humanQuestionCount: humanQuestionCount, items: items });
+}
+
+function refreshFollowupQueueRenderSignature(sessionId) {
+    var sid = String(sessionId || '');
+    var panel = document.getElementById('followup-queue-panel');
+    if (!panel || panel.dataset.sessionId !== sid) return;
+    panel.dataset.renderSignature = followupQueueRenderSignature(sid, getFollowupQueue(sid));
+}
+
+function createFollowupModePicker(item, sessionId) {
+    var picker = document.createElement('div');
+    picker.className = 'followup-mode-picker';
+    var choices = [
+        { value: 'interrupt', label: '打断', description: '立即插入当前运行' },
+        { value: 'append', label: '追加', description: '下一轮继续处理' },
+    ];
+    var visualSelect = document.createElement('select');
+    visualSelect.className = 'followup-queue-mode';
+    visualSelect.setAttribute('aria-hidden', 'true');
+    visualSelect.tabIndex = -1;
+    choices.forEach(function (choice) {
+        var visualOption = document.createElement('option');
+        visualOption.value = choice.value;
+        visualOption.textContent = choice.label;
+        visualSelect.appendChild(visualOption);
+    });
+    var direction = document.createElement('span');
+    direction.className = 'followup-mode-direction';
+    direction.setAttribute('aria-hidden', 'true');
+    var trigger = document.createElement('button');
+    trigger.type = 'button';
+    trigger.className = 'followup-mode-hit-target';
+    trigger.setAttribute('aria-label', '追问发送模式');
+    trigger.setAttribute('aria-haspopup', 'listbox');
+    trigger.setAttribute('aria-expanded', 'false');
+    trigger.disabled = !!item.status;
+    visualSelect.disabled = !!item.status;
+
+    var menu = document.createElement('div');
+    menu.className = 'followup-mode-menu';
+    menu.setAttribute('role', 'listbox');
+    menu.setAttribute('aria-label', '选择追问发送模式');
+    menu.hidden = true;
+    var optionRows = [];
+    var outsideHandler = null;
+
+    function currentMode() {
+        return item.steerMode === 'append' ? 'append' : 'interrupt';
+    }
+
+    function sync() {
+        var mode = currentMode();
+        picker.dataset.mode = mode;
+        visualSelect.value = mode;
+        optionRows.forEach(function (row) {
+            var selected = row.dataset.mode === mode;
+            row.classList.toggle('is-selected', selected);
+            row.setAttribute('aria-selected', selected ? 'true' : 'false');
+        });
+    }
+
+    function closeMenu() {
+        menu.hidden = true;
+        picker.classList.remove('is-open');
+        trigger.setAttribute('aria-expanded', 'false');
+        menu.style.left = '';
+        menu.style.top = '';
+        menu.style.width = '';
+        menu.style.maxHeight = '';
+        if (menu.parentNode !== picker) picker.appendChild(menu);
+        if (outsideHandler) {
+            document.removeEventListener('pointerdown', outsideHandler, true);
+            window.removeEventListener('resize', closeMenu);
+            outsideHandler = null;
+        }
+        if (activeFollowupModePickerClose === closeMenu) activeFollowupModePickerClose = null;
+    }
+
+    function openMenu(focusSelected) {
+        if (trigger.disabled) return;
+        closeActiveFollowupModePicker();
+        document.body.appendChild(menu);
+        menu.hidden = false;
+        picker.classList.add('is-open');
+        trigger.setAttribute('aria-expanded', 'true');
+        var triggerRect = trigger.getBoundingClientRect();
+        var viewportWidth = Math.max(document.documentElement.clientWidth || 0, window.innerWidth || 0);
+        var viewportHeight = Math.max(document.documentElement.clientHeight || 0, window.innerHeight || 0);
+        var menuWidth = Math.min(202, Math.max(150, viewportWidth - 16));
+        menu.style.width = menuWidth + 'px';
+        var menuHeight = menu.getBoundingClientRect().height;
+        var roomBelow = viewportHeight - triggerRect.bottom - 8;
+        var roomAbove = triggerRect.top - 8;
+        var openBelow = roomBelow >= menuHeight || roomBelow >= roomAbove;
+        var availableHeight = Math.max(76, (openBelow ? roomBelow : roomAbove) - 6);
+        var left = Math.min(
+            Math.max(8, triggerRect.right - menuWidth),
+            Math.max(8, viewportWidth - menuWidth - 8)
+        );
+        var top = openBelow
+            ? Math.min(viewportHeight - 8, triggerRect.bottom + 5)
+            : Math.max(8, triggerRect.top - Math.min(menuHeight, availableHeight) - 5);
+        menu.style.left = left + 'px';
+        menu.style.top = top + 'px';
+        menu.style.maxHeight = availableHeight + 'px';
+        activeFollowupModePickerClose = closeMenu;
+        outsideHandler = function (event) {
+            if (!picker.contains(event.target) && !menu.contains(event.target)) closeMenu();
+        };
+        document.addEventListener('pointerdown', outsideHandler, true);
+        window.addEventListener('resize', closeMenu);
+        if (focusSelected) {
+            var selectedRow = optionRows.find(function (row) { return row.getAttribute('aria-selected') === 'true'; });
+            if (selectedRow) requestAnimationFrame(function () { selectedRow.focus(); });
+        }
+    }
+
+    function chooseMode(mode) {
+        item.steerMode = mode === 'append' ? 'append' : 'interrupt';
+        persistFollowupQueue(sessionId);
+        sync();
+        refreshFollowupQueueRenderSignature(sessionId);
+        closeMenu();
+        trigger.focus();
+    }
+
+    choices.forEach(function (choice) {
+        var option = document.createElement('button');
+        option.type = 'button';
+        option.className = 'followup-mode-option';
+        option.dataset.mode = choice.value;
+        option.setAttribute('role', 'option');
+        var optionCopy = document.createElement('span');
+        optionCopy.className = 'followup-mode-option-copy';
+        var optionName = document.createElement('span');
+        optionName.className = 'followup-mode-option-name';
+        optionName.textContent = choice.label;
+        var optionDescription = document.createElement('span');
+        optionDescription.className = 'followup-mode-option-description';
+        optionDescription.textContent = choice.description;
+        optionCopy.appendChild(optionName);
+        optionCopy.appendChild(optionDescription);
+        var selectedBadge = document.createElement('span');
+        selectedBadge.className = 'followup-mode-option-selected';
+        selectedBadge.textContent = '当前';
+        option.appendChild(optionCopy);
+        option.appendChild(selectedBadge);
+        option.addEventListener('click', function (event) {
+            event.preventDefault(); event.stopPropagation();
+            chooseMode(choice.value);
+        });
+        option.addEventListener('keydown', function (event) {
+            var index = optionRows.indexOf(option);
+            if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+                event.preventDefault(); event.stopPropagation();
+                var delta = event.key === 'ArrowDown' ? 1 : -1;
+                optionRows[(index + delta + optionRows.length) % optionRows.length].focus();
+            } else if (event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault(); event.stopPropagation();
+                chooseMode(choice.value);
+            } else if (event.key === 'Escape') {
+                event.preventDefault(); event.stopPropagation();
+                closeMenu(); trigger.focus();
+            }
+        });
+        optionRows.push(option);
+        menu.appendChild(option);
+    });
+
+    trigger.addEventListener('click', function (event) {
+        event.preventDefault(); event.stopPropagation();
+        if (menu.hidden) openMenu(false); else closeMenu();
+    });
+    trigger.addEventListener('keydown', function (event) {
+        if (event.key === 'ArrowDown' || event.key === 'ArrowUp' || event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault(); event.stopPropagation();
+            openMenu(true);
+        } else if (event.key === 'Escape' && !menu.hidden) {
+            event.preventDefault(); event.stopPropagation(); closeMenu();
+        }
+    });
+    picker.appendChild(visualSelect);
+    picker.appendChild(direction);
+    picker.appendChild(trigger);
+    picker.appendChild(menu);
+    sync();
+    return picker;
+}
+
 function renderFollowupQueue(sessionId) {
     var sid = String(sessionId != null ? sessionId : (currentSessionId || ''));
     var panel = ensureFollowupQueueHost();
@@ -19212,13 +19674,25 @@ function renderFollowupQueue(sessionId) {
             panel.innerHTML = '';
             panel.classList.remove('is-visible');
             panel.removeAttribute('data-session-id');
+            panel.removeAttribute('data-render-signature');
         }
         return;
     }
     var q = getFollowupQueue(sid);
     syncMessageInputPlaceholder();
+    var renderSignature = followupQueueRenderSignature(sid, q);
+    if (
+        panel.dataset.sessionId === sid
+        && panel.dataset.renderSignature === renderSignature
+        && panel.querySelectorAll('.followup-queue-row').length === q.length
+    ) {
+        positionFollowupQueuePanel();
+        return;
+    }
+    closeActiveFollowupModePicker();
     panel.innerHTML = '';
     panel.dataset.sessionId = sid;
+    panel.dataset.renderSignature = renderSignature;
     panel.classList.toggle('is-visible', !!q.length);
     if (!q.length) {
         positionFollowupQueuePanel();
@@ -19274,19 +19748,7 @@ function renderFollowupQueue(sessionId) {
             (typeof pendingHumanQuestions === 'function' && pendingHumanQuestions(sid).length)
             || (item.deferUntilRunEnd && (isSessionRunning(sid) || isServerStreamActive(sid)))
         );
-        var modeSelect = document.createElement('select');
-        modeSelect.className = 'followup-queue-mode';
-        modeSelect.setAttribute('aria-label', '追问发送模式');
-        var interruptOption = document.createElement('option');
-        interruptOption.value = 'interrupt';
-        interruptOption.textContent = '打断';
-        var appendOption = document.createElement('option');
-        appendOption.value = 'append';
-        appendOption.textContent = '追加';
-        modeSelect.appendChild(interruptOption);
-        modeSelect.appendChild(appendOption);
-        modeSelect.value = item.steerMode === 'append' ? 'append' : 'interrupt';
-        modeSelect.disabled = !!item.status;
+        var modePicker = createFollowupModePicker(item, sid);
         var undo = document.createElement('button');
         undo.type = 'button';
         undo.className = 'followup-queue-action followup-queue-undo';
@@ -19296,10 +19758,6 @@ function renderFollowupQueue(sessionId) {
             ev.preventDefault();
             void sendFollowupNow(String(item.id), sid, { manual: true });
         });
-        modeSelect.addEventListener('change', function () {
-            item.steerMode = modeSelect.value === 'append' ? 'append' : 'interrupt';
-            persistFollowupQueue(sid);
-        });
         undo.addEventListener('click', function (ev) {
             ev.preventDefault();
             withdrawFollowup(String(item.id));
@@ -19308,7 +19766,7 @@ function renderFollowupQueue(sessionId) {
         row.appendChild(order);
         row.appendChild(text);
         row.appendChild(status);
-        row.appendChild(modeSelect);
+        row.appendChild(modePicker);
         row.appendChild(sendNow);
         row.appendChild(undo);
         panel.appendChild(row);
@@ -20698,6 +21156,7 @@ async function sendMessage(options) {
     formData.append('session_id', runSessionId);
     formData.append('client_run_id', clientRunId);
     formData.append('stream_protocol', 'runtime_v2');
+    if (options.fromQueue) formData.append('preserve_unread_result', 'true');
     formData.append(
         'ui_language',
         (document.documentElement && document.documentElement.getAttribute('data-language'))
@@ -20896,6 +21355,15 @@ function dispatchComposerAction(allowStop) {
         if (allowStop) pauseCurrentRun();
         return false;
     }
+    if (!allowStop && !state.sendable && state.sessionId) {
+        const firstPending = getFollowupQueue(state.sessionId).find(function (item) {
+            return item && !item.status;
+        });
+        if (firstPending) {
+            void sendFollowupNow(String(firstPending.id), state.sessionId, { manual: true });
+            return true;
+        }
+    }
     if (queueComposerBehindPendingQuestion(state)) return true;
     if (state.uploadBusy && !state.running) return false;
     if (state.running) {
@@ -20998,7 +21466,7 @@ window.addEventListener('scroll', positionFollowupQueuePanel, true);
     });
 })();
 initUiHoverTips(document);
-`,Yt=`newSessionBtn.addEventListener('click', async () => { await createNewSession(); });
+`,Xt=`newSessionBtn.addEventListener('click', async () => { await createNewSession(); });
 
 function initSidebarSash() {
     const side = document.getElementById('sidebar');
@@ -21051,6 +21519,12 @@ async function init() {
     }
     if (targetSession) await switchSession(targetSession);
     else await createNewSession();
+    // Recovery is server-owned and session-wide. Trigger a scan after the
+    // initial view is ready so interrupted background sessions resume without
+    // temporarily switching them into the visible chat.
+    void fetch('/sessions/recover', { method: 'POST' }).catch(function (error) {
+        console.warn('恢复后台会话失败:', error);
+    });
     bindExistingLogs();
 }
 init();
@@ -21232,8 +21706,8 @@ if (typeof globalThis !== 'undefined') {
     globalThis.toggleTodoPlanPanel = toggleTodoPlanPanel;
     globalThis.toggleTocPanel = toggleTocPanel;
 }
-`;globalThis.marked=R;const Xt="/assets/vendor/mermaid.min.js";let fe=null;globalThis.loadMyAgentMermaid=function(){return globalThis.mermaid?Promise.resolve(globalThis.mermaid):(fe||(fe=new Promise(function(e,n){const r=document.createElement("script");r.src=Xt,r.async=!0,r.dataset.myagentMermaidVendor="true",r.onload=function(){if(!globalThis.mermaid){r.remove(),n(new Error("Mermaid vendor loaded without exposing its API"));return}e(globalThis.mermaid)},r.onerror=function(){r.remove(),n(new Error("Failed to load Mermaid vendor asset"))},document.head.appendChild(r)}).catch(function(e){throw fe=null,e})),fe)};let ke=null;globalThis.loadMyAgentHtml2Canvas=function(){return ke||(ke=Fn(()=>import("./html2canvas.esm-QH1iLAAe.js"),[]).then(function(e){return e.default||e})),ke};const Zt=[vt,St,bt,yt,wt,It,xt,kt,Ct,Tt,Et,At,_t,Rt,Pt,Lt,Mt,Ft,Bt,Nt,Ot,qt,Ut,Ht,Dt,jt,Gt,zt,$t,Vt,Wt,Qt,Kt,Yt];Function(`"use strict";
-`+Zt.join(`
+`;globalThis.marked=R;const Zt="/assets/vendor/mermaid.min.js";let fe=null;globalThis.loadMyAgentMermaid=function(){return globalThis.mermaid?Promise.resolve(globalThis.mermaid):(fe||(fe=new Promise(function(e,n){const r=document.createElement("script");r.src=Zt,r.async=!0,r.dataset.myagentMermaidVendor="true",r.onload=function(){if(!globalThis.mermaid){r.remove(),n(new Error("Mermaid vendor loaded without exposing its API"));return}e(globalThis.mermaid)},r.onerror=function(){r.remove(),n(new Error("Failed to load Mermaid vendor asset"))},document.head.appendChild(r)}).catch(function(e){throw fe=null,e})),fe)};let ke=null;globalThis.loadMyAgentHtml2Canvas=function(){return ke||(ke=Fn(()=>import("./html2canvas.esm-QH1iLAAe.js"),[]).then(function(e){return e.default||e})),ke};const Jt=[vt,St,bt,yt,wt,It,xt,kt,Ct,Tt,Et,At,_t,Rt,Pt,Lt,Mt,Ft,Bt,Nt,Ot,qt,Ut,Ht,Dt,jt,Gt,zt,$t,Vt,Wt,Qt,Kt,Yt,Xt];Function(`"use strict";
+`+Jt.join(`
 
 `)+`
 //# sourceURL=myagent-ui.js`)();typeof initUiHoverTips=="function"&&initUiHoverTips(document);
