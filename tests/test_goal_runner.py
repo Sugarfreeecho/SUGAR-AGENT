@@ -147,6 +147,102 @@ def test_hook_stop_persists_goal_pause_and_pushes_live_state(monkeypatch):
     assert emitted[-1]["type"] == "goal_state"
 
 
+def test_pending_goal_judge_is_keyed_to_the_completion_request(monkeypatch):
+    import agent_goal_judge
+    import agent_loop
+
+    recorded = []
+    pending = {
+        "id": "g1",
+        "status": "active",
+        "completion_request_id": "request-2",
+        "completion_requested_at": "2026-08-11T00:00:00Z",
+        "accounted_judge_run_ids": [],
+    }
+
+    class Manager:
+        @staticmethod
+        def should_judge(_session_id):
+            return True
+
+        @staticmethod
+        def get(_session_id):
+            return dict(pending)
+
+        @staticmethod
+        def record_judge_result(session_id, verdict, reason, **kwargs):
+            recorded.append((session_id, verdict, reason, kwargs))
+            judge_run_id = kwargs["run_id"]
+            return {
+                **pending,
+                "last_judge_verdict": verdict,
+                "last_judge_reason": reason,
+                "accounted_judge_run_ids": [judge_run_id],
+            }
+
+    monkeypatch.setattr(agent_loop, "goal_enabled", lambda: True)
+    monkeypatch.setattr(agent_loop, "goal_manager_for", lambda _session_manager: Manager())
+    monkeypatch.setattr(
+        agent_goal_judge,
+        "evaluate_goal",
+        lambda *_args: {
+            "verdict": "continue",
+            "reason": "Add the missing verification.",
+            "raw": '{"verdict":"continue"}',
+            "usage": {},
+        },
+    )
+
+    goal, applied = asyncio.run(
+        agent_loop._run_pending_goal_judge(
+            {
+                "session_id": "s1",
+                "_runtime_v2_run_id": "run-7",
+                "work_messages": [],
+                "stream_events": [],
+            }
+        )
+    )
+
+    assert applied is True
+    assert goal["last_judge_verdict"] == "continue"
+    assert recorded[0][3]["run_id"] == "run-7:judge:request-2"
+
+
+def test_applied_goal_judge_is_appended_to_current_model_history(monkeypatch):
+    import agent_loop
+
+    persisted = []
+
+    async def judge(_state, _emit=None):
+        return ({
+            "id": "g1",
+            "status": "active",
+            "last_judge_verdict": "continue",
+            "last_judge_reason": "Run the end-to-end test.",
+        }, True)
+
+    monkeypatch.setattr(agent_loop, "_run_pending_goal_judge", judge)
+    monkeypatch.setattr(
+        agent_loop,
+        "_persist_state_with_model_append",
+        lambda _state, message: persisted.append(message),
+    )
+    state = {
+        "session_id": "s1",
+        "work_messages": [],
+        "llm_history": [],
+    }
+
+    asyncio.run(agent_loop._judge_pending_goal_and_append_context(state))
+
+    assert len(state["work_messages"]) == 1
+    assert state["work_messages"][0] is state["llm_history"][0]
+    assert state["llm_history"][0] is persisted[0]
+    assert "Verdict: continue" in state["llm_history"][0].content
+    assert "Run the end-to-end test." in state["llm_history"][0].content
+
+
 def test_goal_control_forwards_budget_and_publishes_live_state(monkeypatch):
     import agent_goal
     import webui

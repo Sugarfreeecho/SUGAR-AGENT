@@ -112,7 +112,14 @@ class GoalManagerTests(unittest.TestCase):
         requested = self.manager.update_status("judge-goal", "completed")
         self.assertEqual(requested["status"], "active")
         self.assertTrue(requested["completion_pending_judge"])
+        self.assertTrue(requested["completion_judge_requested"])
+        self.assertTrue(requested["completion_request_id"].startswith("goal_completion_"))
         self.assertIsNotNone(requested["completion_requested_at"])
+
+        duplicate = self.manager.update_status("judge-goal", "completed")
+        self.assertTrue(duplicate["completion_request_duplicate"])
+        self.assertNotIn("completion_judge_requested", duplicate)
+        self.assertEqual(duplicate["completion_request_id"], requested["completion_request_id"])
 
         completed = self.manager.record_judge_result(
             "judge-goal",
@@ -251,8 +258,43 @@ class GoalManagerTests(unittest.TestCase):
         )
         self.assertEqual(continued["status"], "active")
         self.assertEqual(continued["last_judge_verdict"], "continue")
+        self.assertIsNone(continued["completion_request_id"])
         self.assertIsNone(continued["completion_requested_at"])
         self.assertFalse(self.manager.should_judge("fixed-flow-goal"))
+
+    def test_each_completion_request_gets_a_distinct_identity(self):
+        self.manager.create("repeat-completion", "Finish, fix feedback, and finish again")
+        first = self.manager.update_status("repeat-completion", "completed")
+        self.manager.record_judge_result(
+            "repeat-completion",
+            "continue",
+            "One verification gap remains.",
+            run_id="same-run:judge:first",
+        )
+        second = self.manager.update_status("repeat-completion", "completed")
+
+        self.assertNotEqual(first["completion_request_id"], second["completion_request_id"])
+        self.assertTrue(self.manager.should_judge("repeat-completion"))
+
+    def test_stale_judge_cannot_apply_to_a_newer_completion_request(self):
+        self.manager.create("stale-judge", "Protect completion request identity")
+        requested = self.manager.update_status("stale-judge", "completed")
+
+        stale = self.manager.record_judge_result(
+            "stale-judge",
+            "done",
+            "Stale result.",
+            run_id="run-1:judge:old-request",
+            expected_completion_request_id="old-request",
+        )
+
+        self.assertEqual(stale["status"], "active")
+        self.assertEqual(stale["judge_count"], 0)
+        self.assertEqual(
+            stale["completion_request_id"],
+            requested["completion_request_id"],
+        )
+        self.assertTrue(self.manager.should_judge("stale-judge"))
 
     def test_judge_results_are_idempotent_and_failures_pause_at_threshold(self):
         self.manager.create("judge-goal", "Judge safely")
@@ -504,9 +546,17 @@ def test_goal_judge_response_contract_and_prompt():
     assert "pytest: 10 passed" in prompt
 
 
-def test_goal_judge_is_wired_to_both_chat_and_continuation_pipelines():
+def test_goal_judge_runs_at_completion_boundary_with_startup_recovery_only():
     source = (ROOT / "app" / "agent_loop.py").read_text(encoding="utf-8")
-    assert source.count("await _run_goal_judge_after_turn(state, emit)") == 2
+    assert "_run_goal_judge_after_turn" not in source
+    assert source.count("await _judge_pending_goal_and_append_context(state, emit)") == 3
+    tool_boundary = source.split("completion_judge_requested = any(", 1)[1].split(
+        "if await _consume_steer_messages", 1
+    )[0]
+    assert "if completion_judge_requested:" in tool_boundary
+    assert "await _judge_pending_goal_and_append_context(state, emit)" in tool_boundary
+    assert source.count("completion_judge_requested = any(") == 1
+    assert '"[Goal Judge result]\\n"' in source
     assert "manager.record_judge_result(" in source
     assert 'Previous independent Judge verdict: continue' in source
     assert "Prioritize correcting the identified gap" in source

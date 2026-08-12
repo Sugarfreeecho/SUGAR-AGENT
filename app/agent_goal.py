@@ -273,6 +273,7 @@ class GoalManager:
                 "id": "goal_" + uuid.uuid4().hex[:16],
                 "objective": objective,
                 "status": "active",
+                "completion_request_id": None,
                 "completion_requested_at": None,
                 "completion_requested_by": None,
                 "completion_request_reason": None,
@@ -334,6 +335,7 @@ class GoalManager:
         reason = str(reason or "").strip()
         report_id = str(report_id or "").strip()
         stable_key = " ".join(str(blocker_key or "").lower().split())[:500]
+        completion_request_id = "goal_completion_" + uuid.uuid4().hex
 
         def mutate(current: Optional[Dict[str, Any]]):
             if not current:
@@ -342,7 +344,13 @@ class GoalManager:
                 raise GoalError(f"Cannot update a goal in status {current.get('status')}.")
             goal = dict(current)
             if status == "completed":
+                if goal.get("completion_requested_at"):
+                    response = dict(goal)
+                    response["completion_pending_judge"] = True
+                    response["completion_request_duplicate"] = True
+                    return "", self._stored(goal), response
                 goal.update({
+                    "completion_request_id": completion_request_id,
                     "completion_requested_at": _now_iso(),
                     "completion_requested_by": str(actor or "model"),
                     "completion_request_reason": reason or None,
@@ -350,6 +358,7 @@ class GoalManager:
                 goal = self._touch(goal, actor=actor, run_id=run_id or report_id)
                 response = dict(goal)
                 response["completion_pending_judge"] = True
+                response["completion_judge_requested"] = True
                 return "goal_completion_requested", self._stored(goal), response
             if status == "blocked":
                 if not reason:
@@ -403,6 +412,7 @@ class GoalManager:
         raw: str = "",
         failure_kind: str = "",
         expected_goal_id: str = "",
+        expected_completion_request_id: str = "",
     ) -> Dict[str, Any]:
         verdict = str(verdict or "").strip().lower()
         if verdict not in {"done", "continue", "error"}:
@@ -416,6 +426,7 @@ class GoalManager:
         reason = str(reason or "").strip()[:2000]
         raw = str(raw or "").strip()[:4000]
         expected_goal_id = str(expected_goal_id or "").strip()
+        expected_completion_request_id = str(expected_completion_request_id or "").strip()
 
         def mutate(current: Optional[Dict[str, Any]]):
             if not current:
@@ -424,6 +435,11 @@ class GoalManager:
             if (
                 goal.get("status") != "active"
                 or (expected_goal_id and str(goal.get("id") or "") != expected_goal_id)
+                or (
+                    expected_completion_request_id
+                    and str(goal.get("completion_request_id") or "")
+                    != expected_completion_request_id
+                )
                 or not goal.get("completion_requested_at")
             ):
                 return "", self._stored(goal), self._stored(goal)
@@ -452,6 +468,7 @@ class GoalManager:
                 goal["pause_reason"] = None
                 goal["next_retry_at"] = None
                 goal["completion_requested_at"] = None
+                goal["completion_request_id"] = None
                 goal["completion_requested_by"] = None
                 goal["completion_request_reason"] = None
                 goal["judge_parse_failures"] = 0
@@ -464,6 +481,7 @@ class GoalManager:
                 event_type = "goal_completed"
             elif verdict == "continue":
                 goal["completion_requested_at"] = None
+                goal["completion_request_id"] = None
                 goal["completion_requested_by"] = None
                 goal["completion_request_reason"] = None
                 goal["judge_parse_failures"] = 0
@@ -565,6 +583,7 @@ class GoalManager:
                 goal["next_retry_at"] = None
                 goal["current_run_id"] = None
                 goal["consecutive_failures"] = 0
+                goal["completion_request_id"] = None
                 goal["completion_requested_at"] = None
                 goal["completion_requested_by"] = None
                 goal["completion_request_reason"] = None
@@ -632,6 +651,10 @@ class GoalManager:
                 goal["status"] = "cancelled"
                 goal["pause_reason"] = str(reason or "cancelled_by_user")
                 goal["next_retry_at"] = None
+                goal["completion_request_id"] = None
+                goal["completion_requested_at"] = None
+                goal["completion_requested_by"] = None
+                goal["completion_request_reason"] = None
             elif action == "edit":
                 goal["objective"] = str(objective)
             elif action == "delete":
@@ -640,6 +663,10 @@ class GoalManager:
                 goal["status"] = "cancelled"
                 goal["pause_reason"] = "deleted_by_user"
                 goal["next_retry_at"] = None
+                goal["completion_request_id"] = None
+                goal["completion_requested_at"] = None
+                goal["completion_requested_by"] = None
+                goal["completion_request_reason"] = None
                 goal["deleted"] = True
                 goal["deleted_at"] = _now_iso()
             else:
