@@ -41,9 +41,11 @@ from agent_openai import (
     _api_messages_required_modalities,
     _is_media_input_error,
     _media_error_modalities,
+    _claim_additional_recovery_request,
     _serialized_messages_to_text_only,
     chat_completion,
     parse_assistant_message,
+    refresh_request_recovery_config_from_env,
     run_chat_completion_stream_worker,
     single_turn_text_completion,
 )
@@ -72,6 +74,7 @@ def load_app_dotenv() -> None:
 
 
 load_app_dotenv()
+refresh_request_recovery_config_from_env()
 
 
 # ==================== 运行配置（非模型项来自 .env，模型项来自 profile）====================
@@ -1024,6 +1027,11 @@ class _FallbackCompletions:
         # main model with a multimodal profile.
         candidates = list(self._candidates)
         for idx, item in enumerate(candidates):
+            # The first candidate is covered by the caller's primary/retry/
+            # hedge claim. Every additional fallback model consumes the same
+            # logical request budget instead of multiplying retries invisibly.
+            if idx > 0 and not _claim_additional_recovery_request():
+                raise RuntimeError("LLM request budget exhausted before model fallback")
             call_kwargs = dict(kwargs)
             call_kwargs["messages"] = _remap_serialized_reasoning_format(
                 list(call_kwargs.get("messages") or []),
@@ -1207,6 +1215,7 @@ def refresh_executor_client_from_env() -> None:
     global EXECUTOR_REASONING_EFFORT_RAW, LOCAL_LLM_HOST, LOCAL_LLM
 
     load_app_dotenv()
+    refresh_request_recovery_config_from_env()
     _register_legacy_dotenv_model_profile()
 
     profile = model_profiles.top_profile(PROJECT_ROOT) or {}
@@ -1315,17 +1324,7 @@ def executor_chat_complete_stream(
     执行端多轮 chat 流式补全；每收到 content 片段即回调 on_content_delta（供压缩/要点 SSE 推送）。
     返回完整正文（与 executor_chat_complete 一致）。
     """
-    if cpu_pressure.snapshot().degraded:
-        # Internal compression/key-context calls follow the same process-wide
-        # policy as user-visible ReAct calls. One callback preserves callers'
-        # progress behavior without creating per-token UI/persistence work.
-        text = executor_chat_complete(messages, session_id=session_id)
-        if text and on_content_delta:
-            try:
-                on_content_delta(text)
-            except Exception:
-                pass
-        return text
+    buffer_only = bool(cpu_pressure.snapshot().degraded)
 
     import queue as _queue
 
@@ -1341,11 +1340,13 @@ def executor_chat_complete_stream(
             tools=None,
             temperature=EXECUTOR_TEMPERATURE,
             max_tokens=max_tokens,
+            emit_deltas=not buffer_only,
         )
 
     t = threading.Thread(target=_worker, daemon=True)
     t.start()
     parts: List[str] = []
+    buffered_final = ""
     err: Optional[BaseException] = None
     while True:
         item = sync_q.get()
@@ -1360,22 +1361,34 @@ def executor_chat_complete_stream(
                     on_content_delta(piece)
                 except Exception:
                     pass
+        elif tag == "turn" and payload is not None:
+            buffered_final = str(getattr(payload, "content", "") or "")
         elif tag == "err" and isinstance(payload, BaseException):
             err = payload
     t.join()
     if err is not None:
         raise err
-    return "".join(parts)
+    text = "".join(parts) or buffered_final
+    if buffer_only and text and on_content_delta:
+        try:
+            on_content_delta(text)
+        except Exception:
+            pass
+    return text
 
 
-def executor_text_and_usage(prompt: str) -> Tuple[str, Optional[Dict[str, int]]]:
+def executor_text_and_usage(
+    prompt: str,
+    session_id: str = "",
+) -> Tuple[str, Optional[Dict[str, int]]]:
     """与 executor_text_complete 相同，返回 usage。"""
+    client, model, max_tokens, _ctx = resolve_executor_config_for_session(session_id)
     return single_turn_text_completion(
-        executor_client,
-        executor_model,
+        client,
+        model,
         prompt,
         temperature=EXECUTOR_TEMPERATURE,
-        max_tokens=MAX_OUTPUT_TOKENS,
+        max_tokens=max_tokens,
     )
 
 # ==================== 从 ui_events 还原主对话链（与 SSE 同源）====================
@@ -3578,7 +3591,8 @@ class SessionManager:
                         break
             if changed:
                 self._save_index()
-            self.clear_session_unread_result(session_id)
+            if not event_copy.get("preserve_unread_result"):
+                self.clear_session_unread_result(session_id)
         elif event_copy.get("type") == "final":
             try:
                 from agent_goal import goal_enabled, manager_for

@@ -5,10 +5,10 @@
 ## 一、Agent 运行时（性能与可靠性）
 
 ### 1. CPU 压力自适应降级（新）
-- 新增 `app/cpu_pressure.py`：守护线程按 1s 采样主机 CPU，采用 **85% 进入 / 65% 恢复** 的滞回机制防止模式抖动。
-- LLM 请求在 CPU 高压时统一切换为**非流式输出**，恢复后还原逐 token 流式输出（`_llm_runtime_policy`）。
+- `app/cpu_pressure.py` 升级为主机 CPU、内存、Agent 进程 CPU 与事件循环延迟的三级复合监控；CPU 使用 5 次滑动均值，采用 **60% 繁忙 / 90% 严重 / 65% 恢复**、每 10 秒采样、连续 12 次升档确认和 120 秒恢复稳定期防止抖动。
+- 繁忙状态继续逐 token 流式输出并沿用无感优化；仅严重压力时统一切换为**非流式输出**，恢复后自动还原（`_llm_runtime_policy`）。
 - 内部压缩/关键上下文调用遵循同一进程级策略（`agent_harness.py`）。
-- 工具并发在高压时降为 2（`CPU_PRESSURE_TOOL_CONCURRENCY`）。
+- 严重压力下仅本地资源型只读工具并发降为 2（`CPU_PRESSURE_TOOL_CONCURRENCY`），网络型读取保持正常并发。
 - 新增依赖 `psutil>=5.9,<8`；`app/main.py` 启动/停止监视器。
 
 ### 2. 流式输出合并（新）

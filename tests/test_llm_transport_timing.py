@@ -5,6 +5,8 @@ from pathlib import Path
 from queue import Queue
 from types import SimpleNamespace
 
+import pytest
+
 
 ROOT = Path(__file__).resolve().parents[1]
 APP_DIR = ROOT / "app"
@@ -183,6 +185,38 @@ def test_stream_worker_hedges_slow_first_token_and_uses_retry_winner(monkeypatch
     )
 
 
+def test_buffered_chat_completion_also_selects_winner_by_first_token(monkeypatch):
+    import agent_openai
+    from agent_messages import UserMessage
+
+    monkeypatch.setattr(agent_openai, "OPENAI_FIRST_TOKEN_HEDGE_TIMEOUT_SEC", 0.01)
+    monkeypatch.setattr(agent_openai, "OPENAI_FIRST_TOKEN_HEDGE_MAX_RETRIES", 1)
+    blocked_gate = threading.Event()
+    primary = _GateStream(blocked_gate, "slow")
+    hedge = iter([_content_chunk("fast")])
+    streams = [primary, hedge]
+    create_lock = threading.Lock()
+
+    def create(**kwargs):
+        assert kwargs["stream"] is True
+        with create_lock:
+            return streams.pop(0)
+
+    client = SimpleNamespace(
+        chat=SimpleNamespace(completions=SimpleNamespace(create=create))
+    )
+    response = agent_openai.chat_completion(
+        client,
+        "test-model",
+        [UserMessage(content="hello")],
+        temperature=0,
+        max_tokens=32,
+    )
+
+    assert response.choices[0].message.content == "fast"
+    assert primary.closed is True
+
+
 def test_stream_worker_keeps_primary_and_closes_slower_retry(monkeypatch):
     import agent_openai
     from agent_messages import UserMessage
@@ -315,3 +349,144 @@ def test_stream_worker_does_not_duplicate_fast_request(monkeypatch):
 
     assert calls == [1]
     assert time.monotonic() - started < 0.2
+
+
+def test_nonstream_request_hedges_slow_complete_response(monkeypatch):
+    import agent_openai
+
+    monkeypatch.setattr(agent_openai, "OPENAI_FIRST_TOKEN_HEDGE_TIMEOUT_SEC", 0.01)
+    monkeypatch.setattr(agent_openai, "OPENAI_FIRST_TOKEN_HEDGE_MAX_RETRIES", 1)
+    monkeypatch.setattr(agent_openai, "OPENAI_MAX_RETRIES", 1)
+    monkeypatch.setattr(agent_openai, "OPENAI_TOTAL_REQUEST_BUDGET", 3)
+    monkeypatch.setattr(agent_openai, "OPENAI_MAX_INFLIGHT_REQUESTS", 2)
+    gate = threading.Event()
+    calls = []
+    lock = threading.Lock()
+
+    def call():
+        with lock:
+            index = len(calls)
+            calls.append(index)
+        if index == 0:
+            gate.wait(timeout=2)
+            return "slow"
+        return "fast"
+
+    try:
+        result = agent_openai.run_nonstream_request_with_recovery(
+            call,
+            validator=lambda value: value in {"slow", "fast"},
+            request_name="test.nonstream",
+        )
+    finally:
+        gate.set()
+
+    assert result == "fast"
+    assert calls == [0, 1]
+
+
+def test_nonstream_request_uses_one_total_budget_for_error_retries(monkeypatch):
+    import agent_openai
+
+    monkeypatch.setattr(agent_openai, "OPENAI_FIRST_TOKEN_HEDGE_TIMEOUT_SEC", 0)
+    monkeypatch.setattr(agent_openai, "OPENAI_MAX_RETRIES", 10)
+    monkeypatch.setattr(agent_openai, "OPENAI_RETRY_BASE_SEC", 0.001)
+    monkeypatch.setattr(agent_openai, "OPENAI_TOTAL_REQUEST_BUDGET", 3)
+    calls = []
+
+    def call():
+        calls.append(1)
+        raise TimeoutError("upstream timeout")
+
+    with pytest.raises(TimeoutError):
+        agent_openai.run_nonstream_request_with_recovery(
+            call,
+            request_name="test.budget",
+        )
+
+    assert len(calls) == 3
+
+
+def test_nonstream_request_has_a_total_deadline(monkeypatch):
+    import agent_openai
+
+    monkeypatch.setattr(agent_openai, "OPENAI_FIRST_TOKEN_HEDGE_TIMEOUT_SEC", 0)
+    monkeypatch.setattr(agent_openai, "OPENAI_TOTAL_DEADLINE_SEC", 0.03)
+    gate = threading.Event()
+
+    try:
+        started = time.monotonic()
+        with pytest.raises(TimeoutError, match="total deadline"):
+            agent_openai.run_nonstream_request_with_recovery(
+                lambda: gate.wait(timeout=2),
+                request_name="test.deadline",
+            )
+        assert time.monotonic() - started < 0.2
+    finally:
+        gate.set()
+
+
+def test_stream_worker_buffer_only_keeps_final_turn_without_deltas():
+    import agent_openai
+    from agent_messages import UserMessage
+
+    client = SimpleNamespace(
+        chat=SimpleNamespace(
+            completions=SimpleNamespace(
+                create=lambda **_kwargs: iter([_content_chunk("buffered")])
+            )
+        )
+    )
+    q = Queue()
+
+    agent_openai.run_chat_completion_stream_worker(
+        q,
+        client,
+        "test-model",
+        [UserMessage(content="hello")],
+        temperature=0,
+        max_tokens=32,
+        emit_deltas=False,
+    )
+
+    rows = []
+    while not q.empty():
+        rows.append(q.get())
+    assert not [row for row in rows if row and row[0] == "content"]
+    turn = next(row[1] for row in rows if row and row[0] == "turn")
+    assert turn.content == "buffered"
+
+
+def test_stream_worker_error_retries_share_total_request_budget(monkeypatch):
+    import agent_openai
+    from agent_messages import UserMessage
+
+    monkeypatch.setattr(agent_openai, "OPENAI_FIRST_TOKEN_HEDGE_TIMEOUT_SEC", 0)
+    monkeypatch.setattr(agent_openai, "OPENAI_MAX_RETRIES", 10)
+    monkeypatch.setattr(agent_openai, "OPENAI_RETRY_BASE_SEC", 0.001)
+    monkeypatch.setattr(agent_openai, "OPENAI_TOTAL_REQUEST_BUDGET", 2)
+    calls = []
+
+    def create(**_kwargs):
+        calls.append(1)
+        raise TimeoutError("upstream timeout")
+
+    client = SimpleNamespace(
+        chat=SimpleNamespace(completions=SimpleNamespace(create=create))
+    )
+    q = Queue()
+    agent_openai.run_chat_completion_stream_worker(
+        q,
+        client,
+        "test-model",
+        [UserMessage(content="hello")],
+        temperature=0,
+        max_tokens=32,
+    )
+
+    rows = []
+    while not q.empty():
+        rows.append(q.get())
+    error = next(row[1] for row in rows if row and row[0] == "err")
+    assert len(calls) == 2
+    assert "budget" in str(error).lower()

@@ -75,6 +75,7 @@ def test_text_only_fallback_preserves_original_local_media_path(tmp_path):
     assert "subagent" in fallback[0]["content"]
     assert "图片" in fallback[0]["content"]
     assert "model_profile_id" in fallback[0]["content"]
+    assert "双引号" in fallback[0]["content"]
 
 
 def test_fallback_instruction_does_not_create_trailing_system_turn():

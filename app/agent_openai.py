@@ -35,14 +35,71 @@ from agent_think import strip_think_blocks
 
 logger = logging.getLogger(__name__)
 
-OPENAI_MAX_RETRIES = max(1, int(os.getenv("OPENAI_MAX_RETRIES", "4")))
-OPENAI_RETRY_BASE_SEC = float(os.getenv("OPENAI_RETRY_BASE_SEC", "1.0"))
-OPENAI_FIRST_TOKEN_HEDGE_TIMEOUT_SEC = max(
-    0.0, float(os.getenv("OPENAI_FIRST_TOKEN_HEDGE_TIMEOUT_SEC", "30"))
-)
-OPENAI_FIRST_TOKEN_HEDGE_MAX_RETRIES = max(
-    0, int(os.getenv("OPENAI_FIRST_TOKEN_HEDGE_MAX_RETRIES", "2"))
-)
+def _env_value(primary: str, legacy: str, default: str) -> str:
+    primary_value = os.getenv(primary)
+    if primary_value is not None and str(primary_value).strip() != "":
+        return str(primary_value)
+    legacy_value = os.getenv(legacy)
+    if legacy_value is not None and str(legacy_value).strip() != "":
+        return str(legacy_value)
+    return default
+
+
+OPENAI_MAX_RETRIES = 4
+OPENAI_RETRY_BASE_SEC = 1.0
+OPENAI_FIRST_TOKEN_HEDGE_TIMEOUT_SEC = 30.0
+OPENAI_FIRST_TOKEN_HEDGE_MAX_RETRIES = 2
+OPENAI_TOTAL_REQUEST_BUDGET = 6
+OPENAI_TOTAL_DEADLINE_SEC = 600.0
+OPENAI_MAX_INFLIGHT_REQUESTS = 3
+
+
+def refresh_request_recovery_config_from_env() -> None:
+    """Reload the shared hedge/retry/fallback limits after dotenv changes."""
+    global OPENAI_MAX_RETRIES, OPENAI_RETRY_BASE_SEC
+    global OPENAI_FIRST_TOKEN_HEDGE_TIMEOUT_SEC
+    global OPENAI_FIRST_TOKEN_HEDGE_MAX_RETRIES
+    global OPENAI_TOTAL_REQUEST_BUDGET, OPENAI_TOTAL_DEADLINE_SEC
+    global OPENAI_MAX_INFLIGHT_REQUESTS
+
+    OPENAI_MAX_RETRIES = max(
+        1, int(_env_value("OPENAI_ERROR_MAX_RETRIES", "OPENAI_MAX_RETRIES", "4"))
+    )
+    OPENAI_RETRY_BASE_SEC = max(
+        0.0, float(os.getenv("OPENAI_RETRY_BASE_SEC", "1.0"))
+    )
+    OPENAI_FIRST_TOKEN_HEDGE_TIMEOUT_SEC = max(
+        0.0,
+        float(
+            _env_value(
+                "OPENAI_HEDGE_TIMEOUT_SEC",
+                "OPENAI_FIRST_TOKEN_HEDGE_TIMEOUT_SEC",
+                "30",
+            )
+        ),
+    )
+    OPENAI_FIRST_TOKEN_HEDGE_MAX_RETRIES = max(
+        0,
+        int(
+            _env_value(
+                "OPENAI_HEDGE_MAX_ATTEMPTS",
+                "OPENAI_FIRST_TOKEN_HEDGE_MAX_RETRIES",
+                "2",
+            )
+        ),
+    )
+    OPENAI_TOTAL_REQUEST_BUDGET = max(
+        1, int(os.getenv("OPENAI_TOTAL_REQUEST_BUDGET", "6"))
+    )
+    OPENAI_TOTAL_DEADLINE_SEC = max(
+        1.0, float(os.getenv("OPENAI_TOTAL_DEADLINE_SEC", "600"))
+    )
+    OPENAI_MAX_INFLIGHT_REQUESTS = max(
+        1, int(os.getenv("OPENAI_MAX_INFLIGHT_REQUESTS", "3"))
+    )
+
+
+refresh_request_recovery_config_from_env()
 
 
 def _redact_runtime_log_text(value: Any) -> str:
@@ -1049,7 +1106,8 @@ def _inject_multimodal_fallback_instruction(
         f"[多模态委派提示] 当前主模型不支持直接读取本次请求中的{labels}。"
         "如果回答需要理解这些内容，请调用 task 工具（action=start，run_in_background=false），"
         "从 model_profile_id 候选中选择明确支持所需输入模态的模型；"
-        "将相邻用户消息中的原始图片 URL 或本地附件路径、用户问题完整写入 prompt，"
+        "将相邻用户消息中的原始图片 URL 或本地附件路径、用户问题完整写入 prompt；"
+        "prompt 中的本地附件路径必须用英文双引号完整包裹，"
         "取得 subagent 的识别结果后再继续回答。不要猜测媒体内容；"
         "若没有可用的兼容模型，请明确告知用户。"
     )
@@ -1403,6 +1461,225 @@ def parse_assistant_message(
     )
 
 
+class _InvalidLLMResponseError(RuntimeError):
+    pass
+
+
+class _LogicalRequestBudget:
+    """Thread-safe budget shared by hedge, error retry, and model fallback."""
+
+    def __init__(self) -> None:
+        self.started_at = time.monotonic()
+        self.deadline_at = self.started_at + OPENAI_TOTAL_DEADLINE_SEC
+        self._physical_started = 0
+        self._lock = threading.Lock()
+
+    def claim(self) -> bool:
+        with self._lock:
+            if time.monotonic() >= self.deadline_at:
+                return False
+            if self._physical_started >= OPENAI_TOTAL_REQUEST_BUDGET:
+                return False
+            self._physical_started += 1
+            return True
+
+    @property
+    def physical_started(self) -> int:
+        with self._lock:
+            return self._physical_started
+
+    @property
+    def exhausted(self) -> bool:
+        with self._lock:
+            return self._physical_started >= OPENAI_TOTAL_REQUEST_BUDGET
+
+
+_RECOVERY_BUDGET_LOCAL = threading.local()
+
+
+def _bind_recovery_budget(budget: Optional[_LogicalRequestBudget]) -> None:
+    if budget is None:
+        try:
+            del _RECOVERY_BUDGET_LOCAL.current
+        except AttributeError:
+            pass
+        return
+    _RECOVERY_BUDGET_LOCAL.current = budget
+
+
+def _claim_additional_recovery_request() -> bool:
+    """Claim a nested physical request, such as a fallback model candidate."""
+    budget = getattr(_RECOVERY_BUDGET_LOCAL, "current", None)
+    return True if budget is None else bool(budget.claim())
+
+
+def run_nonstream_request_with_recovery(
+    call: Callable[[], Any],
+    *,
+    validator: Optional[Callable[[Any], bool]] = None,
+    retriable_error: Optional[Callable[[BaseException], bool]] = None,
+    request_name: str = "chat.completions",
+    recovery_budget: Optional[_LogicalRequestBudget] = None,
+) -> Any:
+    """Run one non-stream request through the shared hedge/retry budget.
+
+    A hedge is another concurrent physical request started while earlier calls
+    are still unresolved. Explicit retriable failures schedule a bounded
+    backoff retry. Both consume the same total request budget and deadline.
+    Synchronous SDK calls cannot be force-cancelled portably, so losing worker
+    threads are daemonized and their late results are discarded.
+    """
+
+    budget = recovery_budget or _LogicalRequestBudget()
+    started_at = budget.started_at
+    deadline_at = budget.deadline_at
+    results: "Queue[Tuple[str, str, Any]]" = Queue()
+    stopped = threading.Event()
+    state_lock = threading.Lock()
+    in_flight: set[str] = set()
+    hedge_started = 0
+    error_retries_started = 0
+    role_counter = 0
+    last_error: Optional[BaseException] = None
+    retry_due_at: Optional[float] = None
+
+    def launch(kind: str) -> bool:
+        nonlocal hedge_started, error_retries_started, role_counter
+        with state_lock:
+            if len(in_flight) >= OPENAI_MAX_INFLIGHT_REQUESTS:
+                return False
+            if not budget.claim():
+                return False
+            role_counter += 1
+            role = "primary" if role_counter == 1 else f"{kind}_{role_counter - 1}"
+            if kind == "hedge":
+                hedge_started += 1
+            elif kind == "retry":
+                error_retries_started += 1
+            in_flight.add(role)
+
+        def worker() -> None:
+            _bind_recovery_budget(budget)
+            try:
+                response = call()
+                if validator is not None and not validator(response):
+                    raise _InvalidLLMResponseError(
+                        f"{request_name} returned an invalid response"
+                    )
+                if not stopped.is_set():
+                    results.put((role, "success", response))
+            except BaseException as exc:
+                if not stopped.is_set():
+                    results.put((role, "error", exc))
+            finally:
+                _bind_recovery_budget(None)
+
+        threading.Thread(
+            target=worker,
+            name=f"llm-nonstream-{role}",
+            daemon=True,
+        ).start()
+        return True
+
+    if not launch("primary"):
+        raise RuntimeError("LLM request budget prevented the primary request")
+
+    next_hedge_at = (
+        started_at + OPENAI_FIRST_TOKEN_HEDGE_TIMEOUT_SEC
+        if OPENAI_FIRST_TOKEN_HEDGE_TIMEOUT_SEC > 0
+        and OPENAI_FIRST_TOKEN_HEDGE_MAX_RETRIES > 0
+        else None
+    )
+
+    try:
+        while True:
+            now = time.monotonic()
+            if now >= deadline_at:
+                raise TimeoutError(
+                    f"{request_name} exceeded total deadline "
+                    f"{OPENAI_TOTAL_DEADLINE_SEC:.1f}s"
+                )
+
+            if (
+                next_hedge_at is not None
+                and now >= next_hedge_at
+                and hedge_started < OPENAI_FIRST_TOKEN_HEDGE_MAX_RETRIES
+            ):
+                if launch("hedge"):
+                    logger.warning(
+                        "%s 完整响应持续等待，已发起并行 API 重试 %s/%s",
+                        request_name,
+                        hedge_started,
+                        OPENAI_FIRST_TOKEN_HEDGE_MAX_RETRIES,
+                    )
+                next_hedge_at = started_at + OPENAI_FIRST_TOKEN_HEDGE_TIMEOUT_SEC * (
+                    hedge_started + 1
+                )
+                if hedge_started >= OPENAI_FIRST_TOKEN_HEDGE_MAX_RETRIES:
+                    next_hedge_at = None
+
+            if retry_due_at is not None and now >= retry_due_at:
+                if error_retries_started < max(0, OPENAI_MAX_RETRIES - 1):
+                    if launch("retry"):
+                        retry_due_at = None
+                    else:
+                        with state_lock:
+                            if budget.exhausted:
+                                retry_due_at = None
+                else:
+                    retry_due_at = None
+
+            with state_lock:
+                active_count = len(in_flight)
+                budget_exhausted = budget.exhausted
+            if active_count == 0 and retry_due_at is None:
+                if last_error is not None:
+                    raise last_error
+                if budget_exhausted:
+                    raise RuntimeError(f"{request_name} exhausted its request budget")
+
+            wake_at = deadline_at
+            if next_hedge_at is not None:
+                wake_at = min(wake_at, next_hedge_at)
+            if retry_due_at is not None:
+                wake_at = min(wake_at, retry_due_at)
+            wait_for = max(0.001, min(0.05, wake_at - time.monotonic()))
+            try:
+                role, outcome, payload = results.get(timeout=wait_for)
+            except Empty:
+                continue
+            with state_lock:
+                in_flight.discard(role)
+            if outcome == "success":
+                stopped.set()
+                return payload
+
+            error = payload
+            last_error = error
+            retriable = (
+                bool(retriable_error(error))
+                if retriable_error is not None
+                else (
+                    isinstance(error, _InvalidLLMResponseError)
+                    or _is_retriable_openai_error(error)
+                )
+            )
+            if retriable and error_retries_started < max(0, OPENAI_MAX_RETRIES - 1):
+                delay = OPENAI_RETRY_BASE_SEC * (2**error_retries_started)
+                due = time.monotonic() + delay
+                retry_due_at = due if retry_due_at is None else min(retry_due_at, due)
+                logger.warning(
+                    "%s 可重试错误，计划在 %.1fs 后重试: %s",
+                    request_name,
+                    delay,
+                    _redact_runtime_log_text(error),
+                )
+            elif not in_flight:
+                raise error
+    finally:
+        stopped.set()
+
+
 def chat_completion(
     client: OpenAI,
     model: str,
@@ -1415,104 +1692,72 @@ def chat_completion(
     parallel_tool_calls: bool = True,
     reasoning_effort: Optional[str] = None,
     omit_temperature: bool = False,
+    response_validator: Optional[Callable[[Any], bool]] = None,
+    recovery_budget: Optional[_LogicalRequestBudget] = None,
+    request_timeout: Optional[float] = None,
 ) -> ChatCompletion:
-    """封装 client.chat.completions.create，支持 tools、extra_body、reasoning_effort（如 DeepSeek 思考模式）。"""
-    api_messages = _messages_to_params_for_client(client, messages)
-    kwargs: Dict[str, Any] = dict(
-        model=model,
-        messages=api_messages,
-        max_tokens=max_tokens,
-        parallel_tool_calls=parallel_tool_calls,
-    )
-    if not omit_temperature:
-        kwargs["temperature"] = temperature
-    if tools:
-        kwargs["tools"] = tools
-        kwargs["tool_choice"] = "auto"
-    if extra_body and not _is_glm_model(model):
-        kwargs["extra_body"] = extra_body
-    if reasoning_effort and not _is_glm_model(model):
-        kwargs["reasoning_effort"] = reasoning_effort
-
-    last_exc: Optional[BaseException] = None
-    media_fallback_done = False
-    attempt = 0
-    while attempt < OPENAI_MAX_RETRIES:
-        t0 = time.monotonic()
-        try:
-            r = client.chat.completions.create(**kwargs)
-            dt = time.monotonic() - t0
-            u = getattr(r, "usage", None)
-            if u:
-                ud = extract_usage_dict(u)
-                pt = ud.get("prompt_tokens", 0)
-                ct = ud.get("completion_tokens", 0)
-                prompt_cache_hit_tokens = ud.get("prompt_cache_hit_tokens", 0)
-                prompt_cache_miss_tokens = ud.get("prompt_cache_miss_tokens", 0)
-                cache_total = prompt_cache_hit_tokens + prompt_cache_miss_tokens
-                hit_pct = (
-                    prompt_cache_hit_tokens / cache_total * 100 if cache_total > 0 else None
-                )
-                extra = ""
-                if hit_pct is not None:
-                    extra = f" hit_rate={hit_pct:.1f}%"
-                logger.info(
-                    "chat.completions 成功 model=%s 耗时=%.2fs "
-                    "prompt_tokens=%s completion_tokens=%s "
-                    "prompt_cache_hit_tokens=%s prompt_cache_miss_tokens=%s%s",
-                    _masked_model_label(model),
-                    dt,
-                    pt,
-                    ct,
-                    prompt_cache_hit_tokens,
-                    prompt_cache_miss_tokens,
-                    extra,
-                )
-            else:
-                logger.info("chat.completions 成功 model=%s 耗时=%.2fs", _masked_model_label(model), dt)
-            return r
-        except Exception as e:
-            last_exc = e
-            dt = time.monotonic() - t0
-            if _is_media_input_error(e) and not media_fallback_done:
-                media_fallback_done = True
-                requested_modalities = _api_messages_required_modalities(
-                    list(kwargs.get("messages") or [])
-                )
-                _mark_client_modalities_failed(
-                    client,
-                    _media_error_modalities(e, requested_modalities),
-                    e,
-                )
-                logger.warning(
-                    "模型 %s 不支持多媒体输入，去掉图片/音频/视频后重试: %s",
-                    _masked_model_label(model),
-                    _redact_runtime_log_text(e),
-                )
-                kwargs["messages"] = _messages_to_text_only_params(messages)
-                continue
-            if not _is_retriable_openai_error(e) or attempt >= OPENAI_MAX_RETRIES - 1:
-                logger.warning(
-                    "chat.completions 失败 model=%s 耗时=%.2fs: %s",
-                    _masked_model_label(model),
-                    dt,
-                    _redact_runtime_log_text(e),
-                )
-                raise
-            delay = OPENAI_RETRY_BASE_SEC * (2**attempt)
-            logger.warning(
-                "chat.completions 可重试错误 model=%s (%.2fs)：%s；%.1fs 后重试 %s/%s",
-                _masked_model_label(model),
-                dt,
-                _redact_runtime_log_text(e),
-                delay,
-                attempt + 1,
-                OPENAI_MAX_RETRIES,
+    """Return one buffered completion using first-token streaming underneath."""
+    budget = recovery_budget or _LogicalRequestBudget()
+    t0 = time.monotonic()
+    validation_attempt = 0
+    while True:
+        r = _buffered_chat_completion_via_stream(
+            client,
+            model,
+            messages,
+            tools=tools,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            extra_body=extra_body,
+            parallel_tool_calls=parallel_tool_calls,
+            reasoning_effort=reasoning_effort,
+            omit_temperature=omit_temperature,
+            recovery_budget=budget,
+            request_timeout=request_timeout,
+        )
+        if response_validator is None or response_validator(r):
+            break
+        validation_attempt += 1
+        if validation_attempt >= OPENAI_MAX_RETRIES or budget.exhausted:
+            raise _InvalidLLMResponseError(
+                f"chat.completions[{_masked_model_label(model)}] returned an invalid response"
             )
-            time.sleep(delay)
-            attempt += 1
-    assert last_exc is not None
-    raise last_exc
+        logger.warning(
+            "chat.completions[%s] 返回无效结果，使用统一预算重试 %s/%s",
+            _masked_model_label(model),
+            validation_attempt,
+            OPENAI_MAX_RETRIES - 1,
+        )
+    dt = time.monotonic() - t0
+    u = getattr(r, "usage", None)
+    if u:
+        ud = extract_usage_dict(u)
+        pt = ud.get("prompt_tokens", 0)
+        ct = ud.get("completion_tokens", 0)
+        prompt_cache_hit_tokens = ud.get("prompt_cache_hit_tokens", 0)
+        prompt_cache_miss_tokens = ud.get("prompt_cache_miss_tokens", 0)
+        cache_total = prompt_cache_hit_tokens + prompt_cache_miss_tokens
+        hit_pct = prompt_cache_hit_tokens / cache_total * 100 if cache_total > 0 else None
+        extra = f" hit_rate={hit_pct:.1f}%" if hit_pct is not None else ""
+        logger.info(
+            "chat.completions 成功 model=%s 耗时=%.2fs prompt_tokens=%s "
+            "completion_tokens=%s prompt_cache_hit_tokens=%s "
+            "prompt_cache_miss_tokens=%s%s",
+            _masked_model_label(model),
+            dt,
+            pt,
+            ct,
+            prompt_cache_hit_tokens,
+            prompt_cache_miss_tokens,
+            extra,
+        )
+    else:
+        logger.info(
+            "chat.completions 成功 model=%s 耗时=%.2fs",
+            _masked_model_label(model),
+            dt,
+        )
+    return r
 
 
 def _accumulate_tool_call_delta(
@@ -1618,6 +1863,9 @@ def run_chat_completion_stream_worker(
     omit_temperature: bool = False,
     should_abort: Optional[Callable[[], bool]] = None,
     transport_observer: Optional[Any] = None,
+    emit_deltas: bool = True,
+    recovery_budget: Optional[_LogicalRequestBudget] = None,
+    request_timeout: Optional[float] = None,
 ) -> None:
     """
     在后台线程中跑 chat.completions(stream=True)。
@@ -1647,6 +1895,8 @@ def run_chat_completion_stream_worker(
             parallel_tool_calls=parallel_tool_calls,
             stream=True,
         )
+        if request_timeout is not None:
+            kwargs["timeout"] = float(request_timeout)
         if not omit_temperature:
             kwargs["temperature"] = temperature
         if tools:
@@ -1693,12 +1943,15 @@ def run_chat_completion_stream_worker(
         )
         attempt = 0
         hedges_used = 0
+        request_budget = recovery_budget or _LogicalRequestBudget()
+        logical_deadline_at = request_budget.deadline_at
         while attempt < OPENAI_MAX_RETRIES:
             if abort_requested():
                 put_stream_timing("aborted_before_create", attempt=attempt + 1)
                 return
             active_streams: Dict[str, Any] = {}
             active_streams_lock = threading.Lock()
+            in_flight_roles: set[str] = set()
             race_cancelled = threading.Event()
             race_results: "Queue[Tuple[str, str, Any]]" = Queue()
 
@@ -1711,6 +1964,7 @@ def run_chat_completion_stream_worker(
                 request_kwargs: Dict[str, Any] = kwargs.copy(),
                 attempt_number: int = attempt + 1,
             ) -> None:
+                _bind_recovery_budget(request_budget)
                 local_stream = None
                 local_iter = None
                 chunks: List[Any] = []
@@ -1728,6 +1982,10 @@ def run_chat_completion_stream_worker(
                             "流式 create 无 stream_options 或端点不支持: %s",
                             _redact_runtime_log_text(stream_options_exc),
                         )
+                        if not _claim_additional_recovery_request():
+                            raise RuntimeError(
+                                "LLM request budget exhausted before stream-options fallback"
+                            )
                         local_stream = client.chat.completions.create(**request_kwargs)
                     with active_lock:
                         active[request_role] = local_stream
@@ -1740,7 +1998,13 @@ def run_chat_completion_stream_worker(
                         close_stream_quietly(local_stream)
                         results.put((request_role, "aborted", None))
                         return
-                    local_iter = iter(local_stream)
+                    try:
+                        local_iter = iter(local_stream)
+                    except TypeError:
+                        # Compatibility endpoints and lightweight test clients
+                        # may ignore stream=True and return a complete response.
+                        results.put((request_role, "complete", local_stream))
+                        return
                     for chunk in local_iter:
                         chunks.append(chunk)
                         if _stream_chunk_has_first_token(chunk):
@@ -1767,22 +2031,35 @@ def run_chat_completion_stream_worker(
                     close_stream_quietly(local_stream)
                     results.put((request_role, "error", exc))
 
-            def start_first_token_request(request_role: str) -> None:
+            def start_first_token_request(request_role: str) -> bool:
+                with active_streams_lock:
+                    if len(in_flight_roles) >= OPENAI_MAX_INFLIGHT_REQUESTS:
+                        return False
+                    if not request_budget.claim():
+                        return False
+                    in_flight_roles.add(request_role)
                 threading.Thread(
                     target=open_until_first_token,
                     args=(request_role,),
                     name=f"llm-first-token-{request_role}",
                     daemon=True,
                 ).start()
+                return True
 
             try:
                 put_stream_timing("create_attempt_start", attempt=attempt + 1)
-                start_first_token_request("primary")
+                if not start_first_token_request("primary"):
+                    raise RuntimeError("LLM request budget exhausted before retry")
                 race_started_at = time.monotonic()
                 attempt_hedges_started = 0
                 outcomes: Dict[str, Tuple[str, Any]] = {}
                 winner: Optional[Tuple[str, str, Any]] = None
                 while winner is None:
+                    if time.monotonic() >= logical_deadline_at:
+                        raise TimeoutError(
+                            "streaming chat.completions exceeded total deadline "
+                            f"{OPENAI_TOTAL_DEADLINE_SEC:.1f}s"
+                        )
                     if abort_requested():
                         race_cancelled.set()
                         with active_streams_lock:
@@ -1802,24 +2079,25 @@ def run_chat_completion_stream_worker(
                             >= OPENAI_FIRST_TOKEN_HEDGE_TIMEOUT_SEC
                             * (attempt_hedges_started + 1)
                         ):
-                            attempt_hedges_started += 1
-                            hedges_used += 1
-                            hedge_role = f"hedge_{hedges_used}"
-                            put_stream_timing(
-                                "first_token_hedge_started",
-                                attempt=attempt + 1,
-                                timeout_ms=int(OPENAI_FIRST_TOKEN_HEDGE_TIMEOUT_SEC * 1000),
-                                hedge_index=hedges_used,
-                                hedge_max=OPENAI_FIRST_TOKEN_HEDGE_MAX_RETRIES,
-                                request_role=hedge_role,
-                            )
-                            logger.warning(
-                                "模型 %s 首 token 持续等待，已发起并行 API 重试 %s/%s",
-                                _masked_model_label(model),
-                                hedges_used,
-                                OPENAI_FIRST_TOKEN_HEDGE_MAX_RETRIES,
-                            )
-                            start_first_token_request(hedge_role)
+                            next_hedge_index = hedges_used + 1
+                            hedge_role = f"hedge_{next_hedge_index}"
+                            if start_first_token_request(hedge_role):
+                                attempt_hedges_started += 1
+                                hedges_used += 1
+                                put_stream_timing(
+                                    "first_token_hedge_started",
+                                    attempt=attempt + 1,
+                                    timeout_ms=int(OPENAI_FIRST_TOKEN_HEDGE_TIMEOUT_SEC * 1000),
+                                    hedge_index=hedges_used,
+                                    hedge_max=OPENAI_FIRST_TOKEN_HEDGE_MAX_RETRIES,
+                                    request_role=hedge_role,
+                                )
+                                logger.warning(
+                                    "模型 %s 首 token 持续等待，已发起并行 API 重试 %s/%s",
+                                    _masked_model_label(model),
+                                    hedges_used,
+                                    OPENAI_FIRST_TOKEN_HEDGE_MAX_RETRIES,
+                                )
                         wait_timeout = 0.05
                         if (
                             hedges_used < OPENAI_FIRST_TOKEN_HEDGE_MAX_RETRIES
@@ -1838,8 +2116,10 @@ def run_chat_completion_stream_worker(
                         except Empty:
                             continue
                     role, outcome, payload = result
+                    with active_streams_lock:
+                        in_flight_roles.discard(role)
                     outcomes[role] = (outcome, payload)
-                    if outcome == "token":
+                    if outcome in {"token", "complete"}:
                         winner = result
                         break
                     if attempt_hedges_started == 0:
@@ -1874,9 +2154,11 @@ def run_chat_completion_stream_worker(
 
                 assert winner is not None
                 winner_role, winner_outcome, winner_payload = winner
-                if winner_outcome not in {"token", "exhausted"}:
+                if winner_outcome not in {"token", "exhausted", "complete"}:
                     raise RuntimeError("流式请求未产生可用结果")
-                stream, stream_iter, prefetched_stream_chunks = winner_payload
+                complete_response = winner_payload if winner_outcome == "complete" else None
+                if winner_outcome != "complete":
+                    stream, stream_iter, prefetched_stream_chunks = winner_payload
                 race_cancelled.set()
                 with active_streams_lock:
                     losing_streams = [
@@ -1934,6 +2216,9 @@ def run_chat_completion_stream_worker(
                 put_stream_timing("retry_sleep", attempt=attempt + 1, delay_ms=int(delay * 1000), error=type(e).__name__)
                 time.sleep(delay)
                 attempt += 1
+        if complete_response is not None:
+            sync_q.put(("complete_response", complete_response))
+            return
         if stream is None:
             raise RuntimeError("stream 创建失败")
         reasoning_parts: List[str] = []
@@ -2055,7 +2340,7 @@ def run_chat_completion_stream_worker(
                 if visible_piece and not first_reasoning_seen:
                     first_reasoning_seen = True
                     put_stream_timing("first_reasoning_delta", chars=len(visible_piece), chunk_count=chunk_count)
-                if visible_piece:
+                if visible_piece and emit_deltas:
                     sync_q.put(("reasoning", visible_piece))
             ct = getattr(delta, "content", None)
             if ct:
@@ -2074,7 +2359,7 @@ def run_chat_completion_stream_worker(
                 if visible_piece and not first_content_seen:
                     first_content_seen = True
                     put_stream_timing("first_content_delta", chars=len(visible_piece), chunk_count=chunk_count)
-                if visible_piece:
+                if visible_piece and emit_deltas:
                     sync_q.put(("content", visible_piece))
             delta_tool_calls = getattr(delta, "tool_calls", None)
             tool_delta_payloads = _tool_call_delta_payloads(delta_tool_calls)
@@ -2093,7 +2378,8 @@ def run_chat_completion_stream_worker(
                 if not first_tool_delta_seen:
                     first_tool_delta_seen = True
                     put_stream_timing("first_tool_call_delta", chunk_count=chunk_count)
-                sync_q.put(("tool_call_delta", payload))
+                if emit_deltas:
+                    sync_q.put(("tool_call_delta", payload))
             _accumulate_tool_call_delta(tool_acc, delta_tool_calls)
         put_stream_timing("stream_exhausted", chunk_count=chunk_count)
         if transport_observer is not None:
@@ -2115,11 +2401,11 @@ def run_chat_completion_stream_worker(
             return
         reasoning_tail = reasoning_dsml_filter.feed(reasoning_boundary_filter.finish())
         reasoning_tail += reasoning_dsml_filter.finish()
-        if reasoning_tail:
+        if reasoning_tail and emit_deltas:
             sync_q.put(("reasoning", reasoning_tail))
         content_tail = content_dsml_filter.feed(content_boundary_filter.finish())
         content_tail += content_dsml_filter.finish()
-        if content_tail:
+        if content_tail and emit_deltas:
             sync_q.put(("content", content_tail))
         tool_calls_list = _tool_acc_to_parsed_list(tool_acc)
         content_final, reasoning_final, tool_calls_list, recovered_dsml_calls = _repair_dsml_turn(
@@ -2131,21 +2417,22 @@ def run_chat_completion_stream_worker(
         if recovered_dsml_calls:
             start_index = len(tool_acc)
             for offset, call in enumerate(recovered_dsml_calls):
-                sync_q.put(
-                    (
-                        "tool_call_delta",
-                        {
-                            "index": start_index + offset,
-                            "id": str(call.get("id") or ""),
-                            "name_delta": str(call.get("name") or ""),
-                            "arguments_delta": json.dumps(
-                                call.get("args") or {},
-                                ensure_ascii=False,
-                                separators=(",", ":"),
-                            ),
-                        },
+                if emit_deltas:
+                    sync_q.put(
+                        (
+                            "tool_call_delta",
+                            {
+                                "index": start_index + offset,
+                                "id": str(call.get("id") or ""),
+                                "name_delta": str(call.get("name") or ""),
+                                "arguments_delta": json.dumps(
+                                    call.get("args") or {},
+                                    ensure_ascii=False,
+                                    separators=(",", ":"),
+                                ),
+                            },
+                        )
                     )
-                )
             finish_meta["finish_reason"] = "tool_calls"
             logger.warning(
                 "已从模型原始 DSML 文本安全恢复 %s 个工具调用 model=%s",
@@ -2205,6 +2492,123 @@ def run_chat_completion_stream_worker(
         sync_q.put(None)
 
 
+def _buffered_chat_completion_via_stream(
+    client: OpenAI,
+    model: str,
+    messages: List[Any],
+    *,
+    tools: Optional[List[Dict[str, Any]]],
+    temperature: float,
+    max_tokens: int,
+    extra_body: Optional[Dict[str, Any]],
+    parallel_tool_calls: bool,
+    reasoning_effort: Optional[str],
+    omit_temperature: bool,
+    recovery_budget: _LogicalRequestBudget,
+    request_timeout: Optional[float],
+) -> ChatCompletion:
+    """Use a streaming transport but expose one buffered completion upstream.
+
+    The transport-level race is decided by the first useful reasoning/content/
+    tool-call delta. Only the winning stream is then consumed to completion.
+    """
+    sync_q: "Queue[Optional[Tuple[str, Any]]]" = Queue()
+    run_chat_completion_stream_worker(
+        sync_q,
+        client,
+        model,
+        messages,
+        tools=tools,
+        temperature=temperature,
+        max_tokens=max_tokens,
+        extra_body=extra_body,
+        parallel_tool_calls=parallel_tool_calls,
+        reasoning_effort=reasoning_effort,
+        omit_temperature=omit_temperature,
+        emit_deltas=False,
+        recovery_budget=recovery_budget,
+        request_timeout=request_timeout,
+    )
+
+    turn: Optional[AssistantTurn] = None
+    finish_meta: Dict[str, Any] = {}
+    usage: Optional[Dict[str, Any]] = None
+    error: Optional[BaseException] = None
+    complete_response: Optional[Any] = None
+    while not sync_q.empty():
+        item = sync_q.get()
+        if item is None:
+            continue
+        kind, payload = item
+        if kind == "turn":
+            turn = payload
+        elif kind == "finish" and isinstance(payload, dict):
+            finish_meta = dict(payload)
+        elif kind == "usage" and isinstance(payload, dict):
+            usage = dict(payload)
+        elif kind == "complete_response":
+            complete_response = payload
+        elif kind == "err" and isinstance(payload, BaseException):
+            error = payload
+    if error is not None:
+        raise error
+    if complete_response is not None:
+        return complete_response
+    if turn is None:
+        raise _InvalidLLMResponseError("stream ended without an assistant response")
+
+    message: Dict[str, Any] = {
+        "role": "assistant",
+        "content": turn.content or "",
+    }
+    if turn.reasoning_content:
+        message[turn.reasoning_field or "reasoning_content"] = turn.reasoning_content
+    if turn.tool_calls:
+        message["tool_calls"] = [
+            {
+                "id": str(call.get("id") or ""),
+                "type": "function",
+                "function": {
+                    "name": str(call.get("name") or ""),
+                    "arguments": json.dumps(
+                        call.get("args") or {},
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    ),
+                },
+            }
+            for call in turn.tool_calls
+        ]
+
+    finish_reason = str(finish_meta.get("finish_reason") or "").strip()
+    if finish_reason not in {"stop", "length", "tool_calls", "content_filter", "function_call"}:
+        finish_reason = "tool_calls" if turn.tool_calls else "stop"
+    choice: Dict[str, Any] = {
+        "index": 0,
+        "finish_reason": finish_reason,
+        "message": message,
+    }
+    stop_reason = finish_meta.get("stop_reason")
+    if stop_reason is not None:
+        choice["stop_reason"] = stop_reason
+
+    usage_payload: Optional[Dict[str, Any]] = None
+    if usage is not None:
+        usage_payload = {
+            key: value
+            for key, value in usage.items()
+            if key not in {"_timing", "model"}
+        }
+    return ChatCompletion(
+        id="buffered-stream",
+        choices=[choice],
+        created=int(time.time()),
+        model=str(finish_meta.get("model") or model),
+        object="chat.completion",
+        usage=usage_payload,
+    )
+
+
 def single_turn_text_completion(
     client: OpenAI,
     model: str,
@@ -2212,27 +2616,24 @@ def single_turn_text_completion(
     *,
     temperature: float,
     max_tokens: int,
+    text_validator: Optional[Callable[[str], bool]] = None,
 ) -> Tuple[str, Optional[Dict[str, int]]]:
     """单条 user 消息的非流式补全（会话标题、压缩摘要等）。返回 (文本, usage 或 None)。"""
-    last_exc: Optional[BaseException] = None
-    r = None
-    for attempt in range(OPENAI_MAX_RETRIES):
-        try:
-            r = client.chat.completions.create(
-                model=model,
-                messages=[{"role": "user", "content": user_text}],
-                temperature=temperature,
-                max_tokens=max_tokens,
-            )
-            break
-        except Exception as e:
-            last_exc = e
-            if not _is_retriable_openai_error(e) or attempt >= OPENAI_MAX_RETRIES - 1:
-                raise
-            time.sleep(OPENAI_RETRY_BASE_SEC * (2**attempt))
-    if r is None:
-        assert last_exc is not None
-        raise last_exc
+    def _response_validator(response: Any) -> bool:
+        choices = getattr(response, "choices", None) or []
+        if not choices or getattr(choices[0], "message", None) is None:
+            return False
+        text = _normalize_content_text(getattr(choices[0].message, "content", ""))
+        return bool(text_validator(text)) if text_validator is not None else True
+
+    r = chat_completion(
+        client,
+        model,
+        [UserMessage(content=user_text)],
+        temperature=temperature,
+        max_tokens=max_tokens,
+        response_validator=_response_validator,
+    )
     msg = r.choices[0].message
     text = _normalize_content_text(getattr(msg, "content", ""))
     usage: Optional[Dict[str, int]] = None
