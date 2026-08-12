@@ -59,8 +59,10 @@ if __name__ == "__main__":
         schedule_runtime_auto_migration,
         start_feishu_adapter,
         start_goal_runner,
+        start_react_recovery_runner,
         stop_feishu_adapter,
         stop_goal_runner,
+        stop_react_recovery_runner,
     )
     from agent_harness import refresh_executor_client_from_env
     from agent_subagent import reconcile_orphaned_subagent_runs, subagent_registry
@@ -76,6 +78,7 @@ if __name__ == "__main__":
         import cpu_pressure
 
         cpu_pressure.start()
+        pressure_probe_task = asyncio.create_task(cpu_pressure.event_loop_lag_probe())
         # 启动时打开浏览器
         _schedule_browser_open("127.0.0.1", _listen_port)
         await asyncio.to_thread(reconcile_orphaned_subagent_runs)
@@ -137,11 +140,17 @@ if __name__ == "__main__":
 
         await start_auto_scheduler()
         await start_goal_runner()
+        await start_react_recovery_runner()
         try:
             await start_feishu_adapter()
             yield
         finally:
             cpu_pressure.stop()
+            pressure_probe_task.cancel()
+            try:
+                await pressure_probe_task
+            except asyncio.CancelledError:
+                pass
             watchdog_stop.set()
             watchdog_task.cancel()
             try:
@@ -150,6 +159,7 @@ if __name__ == "__main__":
                 pass
             await stop_auto_scheduler()
             await stop_feishu_adapter()
+            await stop_react_recovery_runner()
             await stop_goal_runner()
         
     fastapi_app.router.lifespan_context = lifespan

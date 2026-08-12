@@ -103,6 +103,41 @@ _VIEWABLE_IMAGE_SUFFIXES = {
     ".avif",
     ".jfif",
 }
+_PLAYABLE_AUDIO_SUFFIXES = {
+    ".mp3",
+    ".wav",
+    ".ogg",
+    ".oga",
+    ".opus",
+    ".m4a",
+    ".aac",
+    ".flac",
+}
+_PLAYABLE_VIDEO_SUFFIXES = {
+    ".mp4",
+    ".webm",
+    ".ogv",
+    ".mov",
+}
+_VIEWABLE_MEDIA_SUFFIXES = (
+    _VIEWABLE_IMAGE_SUFFIXES
+    | _PLAYABLE_AUDIO_SUFFIXES
+    | _PLAYABLE_VIDEO_SUFFIXES
+)
+_WORKSPACE_MEDIA_MIME_OVERRIDES = {
+    ".mp3": "audio/mpeg",
+    ".wav": "audio/wav",
+    ".ogg": "audio/ogg",
+    ".oga": "audio/ogg",
+    ".opus": "audio/ogg",
+    ".m4a": "audio/mp4",
+    ".aac": "audio/aac",
+    ".flac": "audio/flac",
+    ".mp4": "video/mp4",
+    ".webm": "video/webm",
+    ".ogv": "video/ogg",
+    ".mov": "video/quicktime",
+}
 
 # SSE 响应头：降低反向代理/浏览器对小块的缓冲
 _SSE_HEADERS = {
@@ -161,8 +196,15 @@ _history_op_locks: dict[str, threading.Lock] = {}
 _history_op_locks_guard = threading.Lock()
 _goal_runner_task: Optional[asyncio.Task] = None
 _goal_runner_workers: dict[str, asyncio.Task] = {}
+_react_recovery_scan_task: Optional[asyncio.Task] = None
+_react_recovery_workers: dict[str, asyncio.Task] = {}
+_react_recovery_attempt_at: dict[str, float] = {}
 _human_interaction_recovery_workers: dict[str, asyncio.Task] = {}
 _GOAL_RUNNER_POLL_SECONDS = max(0.5, float(os.getenv("GOAL_RUNNER_POLL_SECONDS", "2")))
+_REACT_RECOVERY_RETRY_SECONDS = max(
+    5.0,
+    float(os.getenv("REACT_RECOVERY_RETRY_SECONDS", "30")),
+)
 _RUNTIME_SYNC_CANCEL = threading.Event()
 _RUNTIME_SYNC_SLEEP_SEC = float(os.getenv("RUNTIME_SYNC_QUEUE_SLEEP_SEC", "0.2"))
 _RUNTIME_AUTO_MIGRATION_SCAN_STARTED = False
@@ -894,6 +936,135 @@ async def stop_goal_runner() -> None:
     if pending:
         await asyncio.gather(*pending, return_exceptions=True)
     _goal_runner_workers.clear()
+
+
+def _discover_recoverable_react_sessions() -> list[str]:
+    """Return every non-archived interrupted ReAct session safe to resume."""
+    try:
+        from agent_goal import manager_for
+
+        goal_manager = manager_for(session_manager)
+    except Exception:
+        goal_manager = None
+    recoverable: list[str] = []
+    for row in session_manager.list_sessions(include_archived=False):
+        sid = str((row or {}).get("id") or "").strip()
+        if (
+            not sid
+            or _has_local_worker_activity(sid)
+            or int(_active_chat_by_session.get(sid, 0) or 0) > 0
+        ):
+            continue
+        try:
+            # Active goals have their own durable server-side scheduler and
+            # must not be started a second time by generic ReAct recovery.
+            if goal_manager is not None and goal_manager.should_continue(sid):
+                continue
+            # The normal app lifespan reconciles orphan runs before this scan.
+            # Keep direct `uvicorn webui:fastapi_app` startup equally correct.
+            _cleanup_orphan_runtime_v2_active_runs(sid, reason="no_local_activity")
+            if not _runtime_v2_auto_resume_pending(sid):
+                continue
+            if session_manager.can_continue_react_session(sid):
+                recoverable.append(sid)
+        except Exception:
+            logger.debug("ReAct recovery discovery failed for %s", sid, exc_info=True)
+    return recoverable
+
+
+async def _run_react_recovery_background(session_id: str) -> None:
+    """Drain a recovered run on the server so it is independent of the UI."""
+    sid = str(session_id or "").strip()
+    if not sid:
+        return
+    recovery_run_id = "react-recovery-" + uuid.uuid4().hex
+    start_token = _reserve_session_chat_start(sid, recovery_run_id) or ""
+    if not start_token:
+        return
+    try:
+        if not _runtime_v2_auto_resume_pending(sid):
+            return
+        if not session_manager.can_continue_react_session(sid):
+            return
+
+        def should_stop(sid_: str) -> bool:
+            return session_manager.is_interrupt_requested(sid_)
+
+        async for _event in astream_events_continuation(
+            sid,
+            should_stop=should_stop,
+            require_pending_subagents=False,
+            recovery_reason="process_or_network_interruption",
+            run_id=recovery_run_id,
+            continuation_source="recovery",
+        ):
+            # The agent loop persists durable events and publishes them to all
+            # observers. This worker only owns/drains execution.
+            pass
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        logger.warning("Background ReAct recovery failed for %s: %s", sid, exc)
+    finally:
+        _release_session_chat_start(sid, start_token)
+
+
+def _schedule_react_recovery(session_id: str) -> bool:
+    sid = str(session_id or "").strip()
+    if not sid:
+        return False
+    existing = _react_recovery_workers.get(sid)
+    if existing is not None and not existing.done():
+        return False
+    now = time.monotonic()
+    if now - float(_react_recovery_attempt_at.get(sid) or 0.0) < _REACT_RECOVERY_RETRY_SECONDS:
+        return False
+    _react_recovery_attempt_at[sid] = now
+    task = asyncio.create_task(
+        _run_react_recovery_background(sid),
+        name=f"react-recovery-{sid}",
+    )
+    _react_recovery_workers[sid] = task
+
+    def cleanup(done: asyncio.Task, session_id_: str = sid) -> None:
+        if _react_recovery_workers.get(session_id_) is done:
+            _react_recovery_workers.pop(session_id_, None)
+
+    task.add_done_callback(cleanup)
+    return True
+
+
+async def recover_interrupted_react_sessions() -> list[str]:
+    """Discover and schedule all recoverable sessions without changing UI state."""
+    session_ids = await asyncio.to_thread(_discover_recoverable_react_sessions)
+    return [sid for sid in session_ids if _schedule_react_recovery(sid)]
+
+
+async def start_react_recovery_runner() -> bool:
+    """Start one non-blocking recovery scan; safe to call more than once."""
+    global _react_recovery_scan_task
+    if _react_recovery_scan_task and not _react_recovery_scan_task.done():
+        return False
+    _react_recovery_scan_task = asyncio.create_task(
+        recover_interrupted_react_sessions(),
+        name="react-recovery-scan",
+    )
+    return True
+
+
+async def stop_react_recovery_runner() -> None:
+    global _react_recovery_scan_task
+    scan = _react_recovery_scan_task
+    _react_recovery_scan_task = None
+    if scan and not scan.done():
+        scan.cancel()
+    workers = [task for task in _react_recovery_workers.values() if task and not task.done()]
+    for task in workers:
+        task.cancel()
+    pending = [task for task in [scan, *workers] if task is not None]
+    if pending:
+        await asyncio.gather(*pending, return_exceptions=True)
+    _react_recovery_workers.clear()
 
 
 def _runtime_v2_timestamp_age_seconds(value: Any) -> Optional[float]:
@@ -1631,9 +1802,11 @@ def _resolve_workspace_view_path(raw_value: str) -> Path:
     return _resolve_allowed_local_path(raw, True)
 
 
-@fastapi_app.get("/api/workspace-image")
-async def workspace_image(
-    rel: str = Query("", description="Image path relative to workspace, or a native absolute path"),
+async def _workspace_media_response(
+    rel: str,
+    *,
+    allowed_suffixes: set[str],
+    kind_label: str,
 ):
     try:
         cand = await run_in_threadpool(_resolve_workspace_view_path, rel)
@@ -1642,17 +1815,52 @@ async def workspace_image(
     except PermissionError:
         return JSONResponse({"ok": False, "error": "path outside allowed roots"}, status_code=403)
     except FileNotFoundError:
-        return JSONResponse({"ok": False, "error": "image not found"}, status_code=404)
+        return JSONResponse({"ok": False, "error": f"{kind_label} not found"}, status_code=404)
     except Exception as exc:
-        logger.warning("workspace image resolve failed: %s", exc)
-        return JSONResponse({"ok": False, "error": "invalid image path"}, status_code=400)
-    if cand.suffix.lower() not in _VIEWABLE_IMAGE_SUFFIXES:
-        return JSONResponse({"ok": False, "error": "not a supported image"}, status_code=415)
-    media_type = mimetypes.guess_type(str(cand))[0] or "application/octet-stream"
+        logger.warning("workspace %s resolve failed: %s", kind_label, exc)
+        return JSONResponse({"ok": False, "error": f"invalid {kind_label} path"}, status_code=400)
+    suffix = cand.suffix.lower()
+    if suffix not in allowed_suffixes:
+        return JSONResponse(
+            {"ok": False, "error": f"not a supported {kind_label}"},
+            status_code=415,
+        )
+    media_type = (
+        _WORKSPACE_MEDIA_MIME_OVERRIDES.get(suffix)
+        or mimetypes.guess_type(str(cand))[0]
+        or "application/octet-stream"
+    )
     return FileResponse(
         str(cand),
         media_type=media_type,
-        headers={"Cache-Control": "no-store"},
+        filename=cand.name,
+        content_disposition_type="inline",
+        headers={
+            "Cache-Control": "no-store",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
+
+
+@fastapi_app.get("/api/workspace-media")
+async def workspace_media(
+    rel: str = Query("", description="Media path relative to workspace, or a native absolute path"),
+):
+    return await _workspace_media_response(
+        rel,
+        allowed_suffixes=_VIEWABLE_MEDIA_SUFFIXES,
+        kind_label="media",
+    )
+
+
+@fastapi_app.get("/api/workspace-image")
+async def workspace_image(
+    rel: str = Query("", description="Image path relative to workspace, or a native absolute path"),
+):
+    return await _workspace_media_response(
+        rel,
+        allowed_suffixes=_VIEWABLE_IMAGE_SUFFIXES,
+        kind_label="image",
     )
 
 
@@ -2091,6 +2299,13 @@ async def list_sessions(
 async def sessions_state(include_archived: bool = Query(False)):
     payload = await asyncio.to_thread(_build_sessions_state_snapshot, include_archived=include_archived)
     return JSONResponse(content=payload)
+
+
+@fastapi_app.post("/sessions/recover")
+async def recover_sessions():
+    """Resume every interrupted recoverable session in server-owned workers."""
+    scheduled = await recover_interrupted_react_sessions()
+    return JSONResponse(content={"ok": True, "scheduled": scheduled, "count": len(scheduled)})
 
 
 @fastapi_app.get("/state")
@@ -3378,6 +3593,7 @@ async def analyze_session_approval(session_id: str, approval_id: str):
         review = await review_request(
             context["request"],
             user_intent=str(context.get("user_intent") or ""),
+            session_id=session_id,
         )
         return JSONResponse(
             content={
@@ -3386,6 +3602,8 @@ async def analyze_session_approval(session_id: str, approval_id: str):
                     "recommendation": "allow" if review.approved else "deny",
                     "risk": review.risk,
                     "reason": review.reason,
+                    "risk_analysis": getattr(review, "risk_analysis", ""),
+                    "command_purpose": getattr(review, "command_purpose", ""),
                     "available": review.available,
                 },
             }
@@ -3431,16 +3649,22 @@ async def resolve_session_approval(session_id: str, approval_id: str, request: R
         security_digest = str(record.get("security_request_digest") or "").strip()
         if not security_digest:
             raise ValueError("approval is not bound to a security request")
-        if decision_value == "allow_external_workspace":
-            # Grant ONLY the workspace-outside handling permission. The command
-            # itself is not approved here: the Agent Loop re-prompts a
-            # command-only approval card (two independent authorization axes).
-            from security import update_security_settings
+        if decision_value in {
+            "allow_external_workspace",
+            "allow_external_workspace_once",
+        }:
+            # Resolve ONLY the workspace-outside authorization axis. The tool
+            # itself is not approved here: the Agent Loop always re-prompts a
+            # tool-only approval card. Only the durable choice changes the
+            # global workspace setting.
             from tool_approval_gate import resolve_tool_approval_decision
 
-            update_security_settings(allow_external_workspace_ops=True)
+            if decision_value == "allow_external_workspace":
+                from security import update_security_settings
+
+                update_security_settings(allow_external_workspace_ops=True)
             resolve_tool_approval_decision(
-                session_id, approval_id, "allow_external_workspace"
+                session_id, approval_id, decision_value
             )
         else:
             from security import add_approval_grant, add_permission_rule
@@ -4042,6 +4266,7 @@ async def chat(
     ui_message: str = Form(""),
     ui_language: str = Form("zh-CN"),
     attachments: str = Form(""),
+    preserve_unread_result: bool = Form(False),
 ):
     sid = (session_id or "").strip() or None
     prompt_language = normalize_prompt_language(ui_language)
@@ -4221,6 +4446,7 @@ async def chat(
                     user_operation_id=steer_operation_id,
                     prompt_language=prompt_language,
                     user_content=structured_user_content,
+                    preserve_unread_result=preserve_unread_result,
                 ):
                     put_from_worker(event)
             except asyncio.CancelledError:
@@ -4532,7 +4758,9 @@ async def continue_react_session(
         goal_can_continue = False
     if not session_manager.can_continue_react_session(sid) and not goal_can_continue:
         return Response(status_code=204)
-    if _is_session_stream_active(sid):
+    continuation_run_id = "react-continue-" + uuid.uuid4().hex
+    start_token = _reserve_session_chat_start(sid, continuation_run_id) or ""
+    if not start_token:
         return JSONResponse(content={"ok": False, "reason": "busy"}, status_code=409)
 
     def should_stop(sid_: str) -> bool:
@@ -4549,6 +4777,7 @@ async def continue_react_session(
                     should_stop=should_stop,
                     require_pending_subagents=False,
                     recovery_reason="process_or_network_interruption" if recovery and not goal_can_continue else "",
+                    run_id=continuation_run_id,
                     continuation_source=(
                         "goal" if goal_can_continue else ("recovery" if recovery else "subagent")
                     ),
@@ -4567,6 +4796,7 @@ async def continue_react_session(
                 _active_chat_by_session.pop(sid, None)
             else:
                 _active_chat_by_session[sid] = n
+            _release_session_chat_start(sid, start_token)
 
     return StreamingResponse(
         event_generator(),
@@ -5922,6 +6152,9 @@ _ENV_GROUP_ORDER: list[tuple[str, str, list[str]]] = [
             "OPENAI_MAX_RETRIES",
             "OPENAI_FIRST_TOKEN_HEDGE_TIMEOUT_SEC",
             "OPENAI_FIRST_TOKEN_HEDGE_MAX_RETRIES",
+            "OPENAI_TOTAL_REQUEST_BUDGET",
+            "OPENAI_TOTAL_DEADLINE_SEC",
+            "OPENAI_MAX_INFLIGHT_REQUESTS",
             "NETWORK_RECONNECT_MAX_ATTEMPTS",
             "LOCAL_NETWORK_POLL_SECONDS",
             "OPENAI_RETRY_BASE_SEC",
@@ -5953,6 +6186,14 @@ _ENV_GROUP_ORDER: list[tuple[str, str, list[str]]] = [
             "VERBOSE_LOGGING",
             "TODO_MAX_ITEMS",
             "MAX_PARALLEL_TOOLS",
+            "CPU_PRESSURE_ENABLED",
+            "CPU_PRESSURE_BUSY_PERCENT",
+            "CPU_PRESSURE_SEVERE_PERCENT",
+            "CPU_PRESSURE_RECOVERY_PERCENT",
+            "CPU_PRESSURE_SAMPLE_SECONDS",
+            "CPU_PRESSURE_ENTER_SAMPLES",
+            "CPU_PRESSURE_RECOVERY_SECONDS",
+            "CPU_PRESSURE_TOOL_CONCURRENCY",
             "SECURITY_ENABLED",
             "MCP_REGISTRATION_APPROVAL_ENABLED",
             "ASK_USER_ENABLED",
@@ -6068,9 +6309,12 @@ _ENV_HINTS: dict[str, str] = {
     "TOOL_UI_APPROVAL": "中央权限策略需要用户审批时在浏览器显示确认；该安全路径不可由环境变量关闭。",
     "TOOL_UI_APPROVAL_WAIT_SEC": "可选：留空或 0 表示工具审批不限时等待用户确认；设置正整数（秒）则超时视为拒绝。",
     "OPENAI_HTTP_TIMEOUT": "兼容 API 请求超时（秒）。",
-    "OPENAI_MAX_RETRIES": "可重试错误时的最大重试次数。",
-    "OPENAI_FIRST_TOKEN_HEDGE_TIMEOUT_SEC": "每等待首 token 达到该秒数便追加一路并行 API 重试；首个返回有效增量的连接胜出，设为 0 关闭。",
-    "OPENAI_FIRST_TOKEN_HEDGE_MAX_RETRIES": "单次模型调用最多追加的并行 API 重试数，默认 2；设为 0 关闭并行重试。",
+    "OPENAI_MAX_RETRIES": "显式可重试错误路径允许的请求尝试数（含首次），默认 4；全部计入统一请求总预算。",
+    "OPENAI_FIRST_TOKEN_HEDGE_TIMEOUT_SEC": "所有 Chat Completions 均在传输层等待首个有效 token；达到该秒数后追加一路并行 API 请求，首个有效 token 的连接胜出。非流式调用仅在上层缓冲赢家的完整结果；设为 0 关闭。",
+    "OPENAI_FIRST_TOKEN_HEDGE_MAX_RETRIES": "单次逻辑模型调用因慢响应最多追加的并行 API 请求数，默认 2；设为 0 关闭并行重试。",
+    "OPENAI_TOTAL_REQUEST_BUDGET": "单次逻辑模型调用中 hedge、错误重试和模型回退共享的物理 API 请求总预算，默认 6。",
+    "OPENAI_TOTAL_DEADLINE_SEC": "单次逻辑模型调用包含全部并行与串行尝试的总截止时间（秒），默认 600。",
+    "OPENAI_MAX_INFLIGHT_REQUESTS": "单次逻辑模型调用同时存在的 API 请求连接上限，默认 3。",
     "NETWORK_RECONNECT_MAX_ATTEMPTS": "模型网络错误的快速重连次数；本机离线时等待网络恢复，其他错误达到上限后进入常规模型回退。",
     "LOCAL_NETWORK_POLL_SECONDS": "本机断网后 Agent 沉睡期间的网络状态检测间隔秒数，默认 5，最小 1。",
     "OPENAI_RETRY_BASE_SEC": "重试基础退避时间（秒）。",
@@ -6086,6 +6330,14 @@ _ENV_HINTS: dict[str, str] = {
     "VERBOSE_LOGGING": "是否输出更详细的运行日志。",
     "TODO_MAX_ITEMS": "Todo 列表展示/跟踪条数上限。",
     "MAX_PARALLEL_TOOLS": "允许的并行工具调用数量上限。",
+    "CPU_PRESSURE_ENABLED": "启用正常/繁忙/严重三级系统压力控制器；繁忙保持流式，严重才整段输出。修改后需重启 Agent。",
+    "CPU_PRESSURE_BUSY_PERCENT": "CPU 滑动均值进入繁忙状态的阈值，默认 60%；不会关闭流式输出。",
+    "CPU_PRESSURE_SEVERE_PERCENT": "CPU 滑动均值进入严重状态的阈值，默认 90%；需连续多轮确认。",
+    "CPU_PRESSURE_RECOVERY_PERCENT": "恢复到正常状态所需的 CPU 上限，默认 65%。",
+    "CPU_PRESSURE_SAMPLE_SECONDS": "CPU/内存/进程压力采样周期，默认 10 秒。",
+    "CPU_PRESSURE_ENTER_SAMPLES": "升档前连续满足条件的采样次数，默认 12；即持续至少约 2 分钟。",
+    "CPU_PRESSURE_RECOVERY_SECONDS": "降档前连续稳定时间，默认 120 秒；用于避免恢复后立即再次升档。",
+    "CPU_PRESSURE_TOOL_CONCURRENCY": "严重压力下本地资源型只读工具的并发上限，默认 2；网络工具不受此限制。",
     "CONTEXT_KEEP_RECENT_TURNS": "第 1 轮摘要尾窗完整保留的 user 轮数；Phase E 微压范围为其 3 倍 user 轮之前的区间。",
     "CONTEXT_MICRO_WORK_ROUNDS": "每轮摘要重组时，紧挨 tail 边界之前的 legacy 块数（块=user 或 assistant+tools），做微压；随 prefix/tail 切点滑动。",
     "CONTEXT_COMPRESS_MAX_ROUNDS": "摘要 LLM 最多调用轮数（第 2/3 轮尾窗逐轮放宽）。",
@@ -6942,3 +7194,13 @@ async def _schedule_ui_cache_warmup() -> None:
 async def _capture_ui_attention_main_loop() -> None:
     global _UI_ATTENTION_MAIN_LOOP
     _UI_ATTENTION_MAIN_LOOP = asyncio.get_running_loop()
+
+
+@fastapi_app.on_event("startup")
+async def _start_react_recovery_on_app_start() -> None:
+    await start_react_recovery_runner()
+
+
+@fastapi_app.on_event("shutdown")
+async def _stop_react_recovery_on_app_stop() -> None:
+    await stop_react_recovery_runner()

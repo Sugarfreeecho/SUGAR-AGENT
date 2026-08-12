@@ -1576,6 +1576,7 @@ function persistInputDraft(sessionId, value) {
         if (text) localStorage.setItem(key, text);
         else localStorage.removeItem(key);
     } catch (e) { /* ignore */ }
+    if (typeof syncSessionDraftBadges === 'function') syncSessionDraftBadges(sessionId);
 }
 
 function readStoredInputDraft(sessionId) {
@@ -1591,6 +1592,7 @@ function removeStoredInputDraft(sessionId) {
     if (!sessionId) return;
     delete draftBySession[sessionId];
     try { localStorage.removeItem(inputDraftStorageKey(sessionId)); } catch (e) { /* ignore */ }
+    if (typeof syncSessionDraftBadges === 'function') syncSessionDraftBadges(sessionId);
 }
 
 function clearStreamPoll() {

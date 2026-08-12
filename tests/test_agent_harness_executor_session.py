@@ -1,3 +1,6 @@
+import pytest
+
+
 def test_executor_chat_complete_uses_session_model(monkeypatch):
     import agent_harness
 
@@ -284,3 +287,43 @@ def test_chat_completion_does_not_replace_preferred_text_profile_for_image():
     system = next(message for message in sent if message["role"] == "system")["content"]
     assert "task 工具" in system
     assert "model_profile_id" in system
+
+
+def test_fallback_candidates_consume_shared_logical_request_budget(monkeypatch):
+    import agent_harness
+    import agent_openai
+    from agent_messages import UserMessage
+
+    monkeypatch.setattr(agent_openai, "OPENAI_FIRST_TOKEN_HEDGE_TIMEOUT_SEC", 0)
+    monkeypatch.setattr(agent_openai, "OPENAI_MAX_RETRIES", 1)
+    monkeypatch.setattr(agent_openai, "OPENAI_TOTAL_REQUEST_BUDGET", 2)
+    calls = []
+
+    class _Completions:
+        def __init__(self, name):
+            self.name = name
+
+        def create(self, **_kwargs):
+            calls.append(self.name)
+            raise RuntimeError(f"{self.name} failed")
+
+    class _Client:
+        def __init__(self, name):
+            self.chat = type("Chat", (), {"completions": _Completions(name)})()
+
+    client = agent_harness.FallbackOpenAIClient([
+        {"client": _Client("one"), "model": "one", "max_output_tokens": 128},
+        {"client": _Client("two"), "model": "two", "max_output_tokens": 128},
+        {"client": _Client("three"), "model": "three", "max_output_tokens": 128},
+    ])
+
+    with pytest.raises(RuntimeError, match="budget"):
+        agent_openai.chat_completion(
+            client,
+            "one",
+            [UserMessage(content="hello")],
+            temperature=0,
+            max_tokens=32,
+        )
+
+    assert calls == ["one", "two"]

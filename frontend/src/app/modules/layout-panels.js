@@ -51,6 +51,12 @@ async function init() {
     }
     if (targetSession) await switchSession(targetSession);
     else await createNewSession();
+    // Recovery is server-owned and session-wide. Trigger a scan after the
+    // initial view is ready so interrupted background sessions resume without
+    // temporarily switching them into the visible chat.
+    void fetch('/sessions/recover', { method: 'POST' }).catch(function (error) {
+        console.warn('恢复后台会话失败:', error);
+    });
     bindExistingLogs();
 }
 init();
