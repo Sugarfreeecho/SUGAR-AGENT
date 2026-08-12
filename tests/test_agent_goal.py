@@ -106,15 +106,25 @@ class GoalManagerTests(unittest.TestCase):
         self.assertEqual(goal["status"], "blocked")
 
     def test_completion_request_waits_for_independent_judge_verdict(self):
-        self.manager.create("judge-goal", "Ship verified goal support")
+        self.manager.create(
+            "judge-goal",
+            "Ship verified goal support",
+            run_id="run-1",
+        )
         self.assertFalse(self.manager.should_judge("judge-goal"))
 
-        requested = self.manager.update_status("judge-goal", "completed")
+        requested = self.manager.update_status(
+            "judge-goal",
+            "completed",
+            run_id="run-1",
+        )
         self.assertEqual(requested["status"], "active")
         self.assertTrue(requested["completion_pending_judge"])
         self.assertTrue(requested["completion_judge_requested"])
         self.assertTrue(requested["completion_request_id"].startswith("goal_completion_"))
         self.assertIsNotNone(requested["completion_requested_at"])
+        self.assertEqual(requested["completion_requested_run_id"], "run-1")
+        self.assertEqual(requested["origin_run_id"], "run-1")
 
         duplicate = self.manager.update_status("judge-goal", "completed")
         self.assertTrue(duplicate["completion_request_duplicate"])
@@ -132,6 +142,7 @@ class GoalManagerTests(unittest.TestCase):
         self.assertEqual(completed["last_judge_verdict"], "done")
         self.assertEqual(completed["judge_count"], 1)
         self.assertEqual(completed["review_status"], "pending")
+        self.assertIsNone(completed["completion_requested_run_id"])
         self.assertFalse(self.manager.should_judge("judge-goal"))
 
     def test_completed_goal_review_can_save_then_approve_and_remove_card_state(self):
@@ -543,6 +554,8 @@ def test_goal_judge_response_contract_and_prompt():
     assert "independent Goal completion judge" in prompt
     assert "A worker's claim" in prompt
     assert '"verdict":"done|continue"' in prompt
+    assert "Goal lifecycle dialogue (complete; not clipped):" in prompt
+    assert "Recent auxiliary execution evidence" in prompt
     assert "pytest: 10 passed" in prompt
 
 

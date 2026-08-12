@@ -274,6 +274,7 @@ class GoalManager:
                 "objective": objective,
                 "status": "active",
                 "completion_request_id": None,
+                "completion_requested_run_id": None,
                 "completion_requested_at": None,
                 "completion_requested_by": None,
                 "completion_request_reason": None,
@@ -311,6 +312,7 @@ class GoalManager:
                 "updated_at": now,
                 "created_by": str(actor or "model"),
                 "updated_by": str(actor or "model"),
+                "origin_run_id": str(run_id or "").strip() or None,
                 "last_run_id": str(run_id or "").strip() or None,
             }
             stored = self._stored(goal)
@@ -351,6 +353,7 @@ class GoalManager:
                     return "", self._stored(goal), response
                 goal.update({
                     "completion_request_id": completion_request_id,
+                    "completion_requested_run_id": str(run_id or report_id or "") or None,
                     "completion_requested_at": _now_iso(),
                     "completion_requested_by": str(actor or "model"),
                     "completion_request_reason": reason or None,
@@ -469,6 +472,7 @@ class GoalManager:
                 goal["next_retry_at"] = None
                 goal["completion_requested_at"] = None
                 goal["completion_request_id"] = None
+                goal["completion_requested_run_id"] = None
                 goal["completion_requested_by"] = None
                 goal["completion_request_reason"] = None
                 goal["judge_parse_failures"] = 0
@@ -482,6 +486,7 @@ class GoalManager:
             elif verdict == "continue":
                 goal["completion_requested_at"] = None
                 goal["completion_request_id"] = None
+                goal["completion_requested_run_id"] = None
                 goal["completion_requested_by"] = None
                 goal["completion_request_reason"] = None
                 goal["judge_parse_failures"] = 0
@@ -584,6 +589,7 @@ class GoalManager:
                 goal["current_run_id"] = None
                 goal["consecutive_failures"] = 0
                 goal["completion_request_id"] = None
+                goal["completion_requested_run_id"] = None
                 goal["completion_requested_at"] = None
                 goal["completion_requested_by"] = None
                 goal["completion_request_reason"] = None
@@ -652,6 +658,7 @@ class GoalManager:
                 goal["pause_reason"] = str(reason or "cancelled_by_user")
                 goal["next_retry_at"] = None
                 goal["completion_request_id"] = None
+                goal["completion_requested_run_id"] = None
                 goal["completion_requested_at"] = None
                 goal["completion_requested_by"] = None
                 goal["completion_request_reason"] = None
@@ -664,6 +671,7 @@ class GoalManager:
                 goal["pause_reason"] = "deleted_by_user"
                 goal["next_retry_at"] = None
                 goal["completion_request_id"] = None
+                goal["completion_requested_run_id"] = None
                 goal["completion_requested_at"] = None
                 goal["completion_requested_by"] = None
                 goal["completion_request_reason"] = None

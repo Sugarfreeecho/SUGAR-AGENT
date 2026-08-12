@@ -152,11 +152,13 @@ def test_pending_goal_judge_is_keyed_to_the_completion_request(monkeypatch):
     import agent_loop
 
     recorded = []
+    evaluated = []
     pending = {
         "id": "g1",
         "status": "active",
         "completion_request_id": "request-2",
         "completion_requested_at": "2026-08-11T00:00:00Z",
+        "completion_requested_run_id": "completion-run",
         "accounted_judge_run_ids": [],
     }
 
@@ -182,15 +184,30 @@ def test_pending_goal_judge_is_keyed_to_the_completion_request(monkeypatch):
 
     monkeypatch.setattr(agent_loop, "goal_enabled", lambda: True)
     monkeypatch.setattr(agent_loop, "goal_manager_for", lambda _session_manager: Manager())
-    monkeypatch.setattr(
-        agent_goal_judge,
-        "evaluate_goal",
-        lambda *_args: {
+    def evaluate_goal(_session_id, _goal, evidence):
+        evaluated.append(evidence)
+        return {
             "verdict": "continue",
             "reason": "Add the missing verification.",
             "raw": '{"verdict":"continue"}',
             "usage": {},
-        },
+        }
+
+    monkeypatch.setattr(agent_goal_judge, "evaluate_goal", evaluate_goal)
+    monkeypatch.setattr(
+        agent_loop,
+        "_load_goal_judge_dialogue_for_goal",
+        lambda session_id, goal: [
+            {
+                "role": "user" if index % 2 == 0 else "assistant",
+                "kind": "question" if index == 0 else (
+                    "followup" if index % 2 == 0 else "response"
+                ),
+                "content": f"recovered-dialogue-{index}",
+                "run_id": "goal-run",
+            }
+            for index in range(40)
+        ] if session_id == "s1" and goal.get("id") == "g1" else [],
     )
 
     goal, applied = asyncio.run(
@@ -198,6 +215,10 @@ def test_pending_goal_judge_is_keyed_to_the_completion_request(monkeypatch):
             {
                 "session_id": "s1",
                 "_runtime_v2_run_id": "run-7",
+                "_goal_judge_current_dialogue": [
+                    {"role": "user", "kind": "question", "content": "next-run-question"}
+                ],
+                "_goal_judge_prior_work_messages": [],
                 "work_messages": [],
                 "stream_events": [],
             }
@@ -207,6 +228,81 @@ def test_pending_goal_judge_is_keyed_to_the_completion_request(monkeypatch):
     assert applied is True
     assert goal["last_judge_verdict"] == "continue"
     assert recorded[0][3]["run_id"] == "run-7:judge:request-2"
+    assert "recovered-dialogue-0" in evaluated[0]["goal_dialogue"]
+    assert "recovered-dialogue-39" in evaluated[0]["goal_dialogue"]
+    assert evaluated[0]["goal_dialogue"].count("recovered-dialogue-") == 40
+    assert "next-run-question" not in evaluated[0]["goal_dialogue"]
+
+
+def test_goal_judge_reconstructs_complete_goal_lifecycle_across_runs(monkeypatch):
+    import agent_loop
+
+    class Event:
+        def __init__(self, seq, event_type, run_id, payload):
+            self.seq = seq
+            self.type = event_type
+            self.run_id = run_id
+            self.payload = payload
+
+    events = [
+        Event(1, "user_turn_committed", "before-goal", {"content": "unrelated-before-goal"}),
+        Event(2, "user_turn_committed", "origin-run", {
+            "content": "model-transformed-origin-question",
+            "ui_content": "goal-origin-question",
+        }),
+        Event(3, "model_assistant", "origin-run", {"content": "pre-create-response"}),
+        Event(4, "goal_created", "origin-run", {"id": "g1"}),
+        Event(5, "model_assistant", "origin-run", {"content": "origin-run-final"}),
+        Event(6, "assistant_final_committed", "origin-run", {"content": "origin-run-final"}),
+        Event(7, "user_turn_committed", "continuation-1", {
+            "content": "<user_followup>goal-followup</user_followup>",
+            "ui_content": "goal-followup",
+        }),
+        Event(8, "model_assistant", "continuation-1", {"content": "continuation-final"}),
+        Event(9, "user_turn_committed", "completion-run", {"content": "last-followup"}),
+        Event(10, "model_assistant", "completion-run", {"content": "completion-response"}),
+        Event(11, "goal_completion_requested", "completion-run", {
+            "id": "g1",
+            "completion_request_id": "request-2",
+        }),
+        Event(12, "user_turn_committed", "next-run", {"content": "unrelated-next-run"}),
+    ]
+
+    class EventLog:
+        @staticmethod
+        def iter_events(session_id):
+            assert session_id == "s1"
+            return iter(events)
+
+    class Ops:
+        event_log = EventLog()
+
+    monkeypatch.setattr(agent_loop, "_runtime_v2_is_primary", lambda: True)
+    monkeypatch.setattr(agent_loop, "_runtime_v2_react_history_ops", lambda: Ops())
+
+    rows = agent_loop._load_goal_judge_dialogue_for_goal("s1", {
+        "id": "g1",
+        "origin_run_id": "origin-run",
+        "completion_request_id": "request-2",
+        "completion_requested_run_id": "completion-run",
+    })
+
+    contents = [row["content"] for row in rows]
+    assert contents == [
+        "goal-origin-question",
+        "pre-create-response",
+        "origin-run-final",
+        "goal-followup",
+        "continuation-final",
+        "last-followup",
+        "completion-response",
+    ]
+    assert rows[0]["kind"] == "question"
+    assert rows[3]["kind"] == "followup"
+    assert "unrelated-before-goal" not in contents
+    assert "unrelated-next-run" not in contents
+    assert "model-transformed-origin-question" not in contents
+    assert not any("<user_followup>" in content for content in contents)
 
 
 def test_applied_goal_judge_is_appended_to_current_model_history(monkeypatch):
@@ -241,6 +337,150 @@ def test_applied_goal_judge_is_appended_to_current_model_history(monkeypatch):
     assert state["llm_history"][0] is persisted[0]
     assert "Verdict: continue" in state["llm_history"][0].content
     assert "Run the end-to-end test." in state["llm_history"][0].content
+
+
+def test_goal_judge_keeps_complete_goal_dialogue_beyond_recent_32(monkeypatch):
+    import agent_loop
+    from agent_messages import AssistantMessage, ToolMessage, UserMessage
+
+    state = {
+        "work_messages": [],
+        "_goal_judge_current_dialogue": [],
+        "final_response": "",
+    }
+    for index in range(40):
+        if index % 2 == 0:
+            role = "user"
+            content = f"user-message-{index}"
+            message = UserMessage(content=content)
+            kind = "question" if index == 0 else "followup"
+        else:
+            role = "assistant"
+            content = f"assistant-message-{index}"
+            message = AssistantMessage(content=content)
+            kind = "response"
+        agent_loop._capture_goal_judge_dialogue(state, role, content, kind=kind)
+        state["work_messages"].append(message)
+        state["work_messages"].append(
+            ToolMessage(content=f"tool-evidence-{index}", tool_call_id=f"tool-{index}")
+        )
+
+    evidence = agent_loop._goal_judge_evidence(state)
+
+    assert "user-message-0" in evidence["goal_dialogue"]
+    assert "assistant-message-39" in evidence["goal_dialogue"]
+    assert evidence["goal_dialogue"].count("message-") == 40
+    assert "tool-evidence-39" in evidence["recent_evidence"]
+    assert "tool-evidence-8" in evidence["recent_evidence"]
+    assert evidence["recent_evidence"].count("tool-evidence-") == 32
+    assert "tool-evidence-7" not in evidence["recent_evidence"]
+    assert "tool-evidence-0" not in evidence["recent_evidence"]
+    assert "assistant-message-39" not in evidence["recent_evidence"]
+
+
+def test_goal_judge_prompt_does_not_clip_goal_dialogue(monkeypatch):
+    from agent_goal_judge import build_judge_prompt
+
+    goal_dialogue = "GOAL-DIALOGUE-START\n" + ("x" * 5000) + "\nGOAL-DIALOGUE-END"
+    recent_evidence = "AUXILIARY-START\n" + ("y" * 5000) + "\nAUXILIARY-END"
+    monkeypatch.setenv("GOAL_JUDGE_EVIDENCE_MAX_CHARS", "2000")
+
+    prompt = build_judge_prompt(
+        {
+            "id": "g1",
+            "objective": "Verify the complete current dialogue",
+            "completion_requested_at": "2026-08-12T00:00:00Z",
+        },
+        {
+            "goal_dialogue": goal_dialogue,
+            "recent_evidence": recent_evidence,
+        },
+    )
+
+    assert "GOAL-DIALOGUE-START" in prompt
+    assert "GOAL-DIALOGUE-END" in prompt
+    assert "AUXILIARY-START" not in prompt
+    assert "AUXILIARY-END" in prompt
+
+
+def test_tool_review_context_keeps_all_followups_last_10_assistant_entries_and_args(monkeypatch):
+    import agent_loop
+
+    class Event:
+        def __init__(self, seq, event_type, run_id, payload):
+            self.seq = seq
+            self.type = event_type
+            self.run_id = run_id
+            self.payload = payload
+
+    events = [
+        Event(1, "user_turn_committed", "run-1", {
+            "content": "transformed question",
+            "ui_content": "initial question",
+            "ui_type": "user",
+        }),
+    ]
+    seq = 2
+    for index in range(6):
+        events.append(Event(seq, "model_assistant", "run-1", {
+            "content": f"response-{index}",
+            "additional_kwargs": {"reasoning_content": f"reasoning-{index}"},
+        }))
+        seq += 1
+        events.append(Event(seq, "user_turn_committed", "run-1", {
+            "content": f"<user_followup>followup-{index}</user_followup>",
+            "ui_content": f"followup-{index}",
+            "ui_type": "user_steer",
+        }))
+        seq += 1
+    events.append(Event(seq, "user_turn_committed", "run-1", {
+        "content": "same-followup",
+        "ui_content": "same-followup",
+        "ui_type": "user_steer",
+    }))
+    events.append(Event(seq + 1, "user_turn_committed", "run-1", {
+        "content": "same-followup",
+        "ui_content": "same-followup",
+        "ui_type": "user_steer",
+    }))
+
+    class EventLog:
+        @staticmethod
+        def iter_events(session_id):
+            assert session_id == "s1"
+            return iter(events)
+
+    class Ops:
+        event_log = EventLog()
+
+    monkeypatch.setattr(agent_loop, "_runtime_v2_is_primary", lambda: True)
+    monkeypatch.setattr(agent_loop, "_runtime_v2_react_history_ops", lambda: Ops())
+    arguments = {
+        "command": "Remove-Item -LiteralPath D:/outside/file.txt",
+        "options": {"recursive": False, "force": True},
+    }
+
+    context = agent_loop._build_tool_review_context(
+        {"session_id": "s1", "_submitted_user_input": "wrong fallback"},
+        arguments,
+    )
+    arguments["options"]["force"] = False
+
+    assert context["initial_user_question"] == "initial question"
+    assert context["user_followups"] == [
+        *[f"followup-{index}" for index in range(6)],
+        "same-followup",
+        "same-followup",
+    ]
+    assert context["assistant_context"] == [
+        {"kind": kind, "content": f"{kind}-{index}"}
+        for index in range(1, 6)
+        for kind in ("reasoning", "response")
+    ]
+    assert context["tool_arguments"] == {
+        "command": "Remove-Item -LiteralPath D:/outside/file.txt",
+        "options": {"recursive": False, "force": True},
+    }
 
 
 def test_goal_control_forwards_budget_and_publishes_live_state(monkeypatch):

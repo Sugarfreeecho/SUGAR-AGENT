@@ -14,14 +14,24 @@ class JudgeParseError(ValueError):
     pass
 
 
-def build_judge_prompt(goal: Dict[str, Any], evidence: str) -> str:
+def build_judge_prompt(goal: Dict[str, Any], evidence: Any) -> str:
     objective = str(goal.get("objective") or "").strip()
     completion_requested = bool(goal.get("completion_requested_at"))
     evidence_limit = max(
         2000,
         int(os.getenv("GOAL_JUDGE_EVIDENCE_MAX_CHARS", "24000") or 24000),
     )
-    clipped_evidence = str(evidence or "")[-evidence_limit:]
+    if isinstance(evidence, dict):
+        goal_dialogue = str(
+            evidence.get("goal_dialogue")
+            or evidence.get("current_dialogue")
+            or ""
+        ).strip()
+        recent_evidence = str(evidence.get("recent_evidence") or "").strip()
+    else:
+        goal_dialogue = ""
+        recent_evidence = str(evidence or "").strip()
+    clipped_recent_evidence = recent_evidence[-evidence_limit:]
     return (
         "You are an independent Goal completion judge. Evaluate only whether the entire "
         "objective is demonstrably complete from the supplied execution evidence.\n\n"
@@ -36,7 +46,10 @@ def build_judge_prompt(goal: Dict[str, Any], evidence: str) -> str:
         f"Goal ID: {goal.get('id')}\n"
         f"Worker requested completion: {str(completion_requested).lower()}\n"
         f"Objective:\n{objective}\n\n"
-        f"Execution evidence:\n{clipped_evidence or '(no evidence supplied)'}"
+        "Goal lifecycle dialogue (complete; not clipped):\n"
+        f"{goal_dialogue or '(no Goal-lifecycle dialogue supplied)'}\n\n"
+        "Recent auxiliary execution evidence (up to the configured limit):\n"
+        f"{clipped_recent_evidence or '(no auxiliary evidence supplied)'}"
     )
 
 
@@ -71,7 +84,7 @@ def parse_judge_response(raw: str) -> Tuple[str, str]:
 def evaluate_goal(
     session_id: str,
     goal: Dict[str, Any],
-    evidence: str,
+    evidence: Any,
 ) -> Dict[str, Any]:
     """Run one independent, tool-free judge call and parse its verdict."""
     from agent_harness import EXECUTOR_TEMPERATURE, resolve_executor_config_for_session

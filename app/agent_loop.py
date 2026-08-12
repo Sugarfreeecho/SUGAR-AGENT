@@ -439,9 +439,326 @@ def _sync_goal_unread_result(session_id: str, goal: Optional[Dict[str, Any]], ou
         logger.debug("Goal unread-result sync failed: %s", exc)
 
 
-def _goal_judge_evidence(state: Dict[str, Any]) -> str:
+def _goal_judge_text(value: Any) -> str:
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, (list, dict)):
+        try:
+            return json.dumps(value, ensure_ascii=False, default=str).strip()
+        except Exception:
+            pass
+    return str(value or "").strip()
+
+
+def _capture_goal_judge_dialogue(
+    state: Dict[str, Any],
+    role: str,
+    content: Any,
+    *,
+    kind: str = "",
+) -> None:
+    text = _goal_judge_text(content)
+    normalized_role = str(role or "").strip().lower()
+    if not text or normalized_role not in {"user", "assistant"}:
+        return
+    state.setdefault("_goal_judge_current_dialogue", []).append({
+        "role": normalized_role,
+        "kind": str(kind or "").strip().lower(),
+        "content": text,
+    })
+
+
+def _capture_tool_review_assistant_context(
+    state: Dict[str, Any],
+    reasoning: Any,
+    response: Any,
+) -> None:
+    rows = state.setdefault("_tool_review_assistant_context", [])
+    reasoning_text = _goal_judge_text(reasoning)
+    response_text = _goal_judge_text(response)
+    if reasoning_text:
+        rows.append({"kind": "reasoning", "content": reasoning_text})
+    if response_text:
+        rows.append({"kind": "response", "content": response_text})
+
+
+def _tool_review_conversation_from_events(session_id: str) -> Dict[str, Any]:
+    sid = str(session_id or "").strip()
+    if not sid or not _runtime_v2_is_primary():
+        return {}
+    try:
+        events = list(_runtime_v2_react_history_ops().event_log.iter_events(sid))
+    except Exception:
+        logger.debug(
+            "Could not reconstruct tool-review conversation for session=%s",
+            sid,
+            exc_info=True,
+        )
+        return {}
+
+    visible_user_event_types = {"message_user", "user_turn_committed"}
+    user_event_types = {*visible_user_event_types, "model_user"}
+    assistant_event_types = {
+        "message_assistant_final",
+        "assistant_final_committed",
+        "model_assistant",
+    }
+    origin_index = -1
+    for index, event in enumerate(events):
+        event_type = str(getattr(event, "type", "") or "").strip()
+        if event_type not in visible_user_event_types:
+            continue
+        payload = dict(getattr(event, "payload", {}) or {})
+        if event_type == "user_turn_committed" and str(payload.get("ui_type") or "user") == "user_steer":
+            continue
+        origin_index = index
+    if origin_index < 0:
+        for index, event in enumerate(events):
+            if str(getattr(event, "type", "") or "").strip() == "model_user":
+                origin_index = index
+    if origin_index < 0:
+        return {}
+
+    initial_user_question: Any = ""
+    user_followups: List[Any] = []
+    assistant_context: List[Dict[str, str]] = []
+    last_user_entry: Optional[Tuple[str, str, str]] = None
+    last_assistant_entry: Optional[Tuple[str, str]] = None
+    for event in events[origin_index:]:
+        event_type = str(getattr(event, "type", "") or "").strip()
+        payload = dict(getattr(event, "payload", {}) or {})
+        event_run_id = str(getattr(event, "run_id", "") or "").strip()
+        if event_type in user_event_types:
+            content_value = payload.get("ui_content")
+            if content_value is None:
+                content_value = payload.get("content")
+            text = _goal_judge_text(content_value)
+            if not text:
+                continue
+            if (
+                last_user_entry is not None
+                and last_user_entry[:2] == (event_run_id, text)
+                and last_user_entry[2] != event_type
+            ):
+                continue
+            last_user_entry = (event_run_id, text, event_type)
+            if initial_user_question in (None, ""):
+                initial_user_question = content_value
+            else:
+                user_followups.append(content_value)
+            continue
+        if event_type not in assistant_event_types:
+            continue
+        additional = payload.get("additional_kwargs")
+        if not isinstance(additional, dict):
+            additional = {}
+        reasoning = (
+            additional.get("reasoning_content")
+            or additional.get("reasoning")
+            or payload.get("reasoning_content")
+            or payload.get("reasoning")
+        )
+        for kind, value in (("reasoning", reasoning), ("response", payload.get("content"))):
+            text = _goal_judge_text(value)
+            if not text:
+                continue
+            entry_key = (kind, text)
+            if entry_key == last_assistant_entry:
+                continue
+            assistant_context.append({"kind": kind, "content": text})
+            last_assistant_entry = entry_key
+    return {
+        "initial_user_question": initial_user_question,
+        "user_followups": user_followups,
+        "assistant_context": assistant_context[-10:],
+    }
+
+
+def _build_tool_review_context(
+    state: Dict[str, Any],
+    tool_arguments: Any,
+) -> Dict[str, Any]:
+    context = _tool_review_conversation_from_events(
+        str(state.get("session_id") or "")
+    )
+    if not context:
+        followups: List[Any] = []
+        for item in list(state.get("_goal_judge_current_dialogue") or []):
+            if not isinstance(item, dict):
+                continue
+            if str(item.get("role") or "").strip().lower() != "user":
+                continue
+            if str(item.get("kind") or "").strip().lower() != "followup":
+                continue
+            followups.append(item.get("content"))
+        context = {
+            "initial_user_question": state.get("_submitted_user_input") or state.get("user_input") or "",
+            "user_followups": followups,
+            "assistant_context": list(
+                state.get("_tool_review_assistant_context") or []
+            )[-10:],
+        }
+    try:
+        frozen_arguments = json.loads(
+            json.dumps(tool_arguments, ensure_ascii=False, default=str)
+        )
+    except Exception:
+        frozen_arguments = str(tool_arguments)
+    return {
+        **context,
+        "tool_arguments": frozen_arguments,
+    }
+
+
+def _load_goal_judge_dialogue_for_goal(
+    session_id: str,
+    goal: Dict[str, Any],
+) -> List[Dict[str, str]]:
+    sid = str(session_id or "").strip()
+    goal_id = str(goal.get("id") or "").strip()
+    completion_request_id = str(goal.get("completion_request_id") or "").strip()
+    completion_run_id = str(goal.get("completion_requested_run_id") or "").strip()
+    if not sid or not goal_id or not _runtime_v2_is_primary():
+        return []
+    role_by_event = {
+        "message_user": "user",
+        "user_turn_committed": "user",
+        "message_assistant_final": "assistant",
+        "assistant_final_committed": "assistant",
+        "model_user": "user",
+        "model_assistant": "assistant",
+    }
+    try:
+        events = list(_runtime_v2_react_history_ops().event_log.iter_events(sid))
+        created_event = None
+        completion_event = None
+        for event in events:
+            event_type = str(getattr(event, "type", "") or "").strip()
+            payload = dict(getattr(event, "payload", {}) or {})
+            if event_type == "goal_created" and str(payload.get("id") or "") == goal_id:
+                created_event = event
+            if event_type != "goal_completion_requested":
+                continue
+            if str(payload.get("id") or "") != goal_id:
+                continue
+            if completion_request_id and str(payload.get("completion_request_id") or "") != completion_request_id:
+                continue
+            completion_event = event
+
+        origin_run_id = str(goal.get("origin_run_id") or "").strip()
+        created_seq = 0
+        if created_event is not None:
+            created_seq = int(getattr(created_event, "seq", 0) or 0)
+            origin_run_id = str(getattr(created_event, "run_id", "") or origin_run_id).strip()
+        elif origin_run_id:
+            created_seq = min(
+                (
+                    int(getattr(event, "seq", 0) or 0)
+                    for event in events
+                    if str(getattr(event, "run_id", "") or "").strip() == origin_run_id
+                ),
+                default=0,
+            )
+        cutoff_seq = int(getattr(completion_event, "seq", 0) or 0)
+        if cutoff_seq <= 0 and completion_run_id:
+            cutoff_seq = max(
+                (
+                    int(getattr(event, "seq", 0) or 0)
+                    for event in events
+                    if str(getattr(event, "run_id", "") or "").strip() == completion_run_id
+                ),
+                default=0,
+            )
+        if cutoff_seq <= 0:
+            cutoff_seq = max(
+                (int(getattr(event, "seq", 0) or 0) for event in events),
+                default=0,
+            )
+
+        rows: List[Dict[str, str]] = []
+        user_count = 0
+        for event in events:
+            seq = int(getattr(event, "seq", 0) or 0)
+            event_run_id = str(getattr(event, "run_id", "") or "").strip()
+            if cutoff_seq and seq > cutoff_seq:
+                continue
+            if created_seq and seq < created_seq and event_run_id != origin_run_id:
+                continue
+            event_type = str(getattr(event, "type", "") or "").strip()
+            payload = dict(getattr(event, "payload", {}) or {})
+            role = role_by_event.get(event_type) or str(payload.get("role") or "").strip().lower()
+            if role not in {"user", "assistant"}:
+                continue
+            content_value = payload.get("content")
+            if role == "user" and payload.get("ui_content") is not None:
+                content_value = payload.get("ui_content")
+            content = _goal_judge_text(content_value)
+            if not content:
+                continue
+            if (
+                rows
+                and rows[-1]["role"] == role
+                and rows[-1]["content"] == content
+                and rows[-1].get("run_id") == event_run_id
+                and rows[-1].get("event_type") != event_type
+            ):
+                continue
+            if role == "user":
+                kind = "question" if user_count == 0 else "followup"
+                user_count += 1
+            else:
+                kind = "response"
+            rows.append({
+                "role": role,
+                "kind": kind,
+                "content": content,
+                "run_id": event_run_id,
+                "event_type": event_type,
+            })
+        return [
+            {key: str(item.get(key) or "") for key in ("role", "kind", "content", "run_id")}
+            for item in rows
+        ]
+    except Exception:
+        logger.debug(
+            "Could not reconstruct Goal Judge dialogue for session=%s goal=%s",
+            sid,
+            goal_id,
+            exc_info=True,
+        )
+    return []
+
+
+def _goal_judge_evidence(state: Dict[str, Any]) -> Dict[str, str]:
+    dialogue_rows: List[str] = []
+    captured_keys: List[Tuple[str, str]] = []
+    goal_dialogue = list(
+        state.get("_goal_judge_goal_dialogue")
+        or state.get("_goal_judge_current_dialogue")
+        or []
+    )
+    for index, item in enumerate(goal_dialogue):
+        if not isinstance(item, dict):
+            continue
+        role = str(item.get("role") or "").strip().lower()
+        content = _goal_judge_text(item.get("content"))
+        if role not in {"user", "assistant"} or not content:
+            continue
+        kind = str(item.get("kind") or "").strip().lower()
+        if role == "user":
+            label = "user follow-up" if kind == "followup" or index > 0 else "goal-origin user question"
+        else:
+            label = "assistant response"
+        run_id = str(item.get("run_id") or "").strip()
+        run_suffix = f" (run {run_id})" if run_id else ""
+        dialogue_rows.append(f"[{label}{run_suffix}]\n{content}")
+        captured_keys.append((role, content))
+
     rows: List[str] = []
-    for message in list(state.get("work_messages") or [])[-32:]:
+    auxiliary_reversed: List[str] = []
+    for message in reversed(list(state.get("work_messages") or [])):
+        if len(auxiliary_reversed) >= 32:
+            break
         try:
             item = _message_to_dict(message)
         except Exception:
@@ -451,14 +768,23 @@ def _goal_judge_evidence(state: Dict[str, Any]) -> str:
         role = str(item.get("role") or item.get("type") or "").strip().lower()
         if role not in {"user", "assistant", "tool", "human", "ai"}:
             continue
-        content = str(item.get("content") or "").strip()
+        content = _goal_judge_text(item.get("content"))
         if not content:
             continue
-        rows.append(f"[{role}]\n{content[-4000:]}")
+        canonical_role = "user" if role in {"user", "human"} else (
+            "assistant" if role in {"assistant", "ai"} else role
+        )
+        if canonical_role in {"user", "assistant"}:
+            continue
+        auxiliary_reversed.append(f"[{role}]\n{content[-4000:]}")
+    rows.extend(reversed(auxiliary_reversed))
     final_response = str(state.get("final_response") or "").strip()
-    if final_response:
+    if final_response and ("assistant", final_response) not in set(captured_keys):
         rows.append(f"[final response]\n{final_response[-6000:]}")
-    return "\n\n".join(rows)
+    return {
+        "goal_dialogue": "\n\n".join(dialogue_rows),
+        "recent_evidence": "\n\n".join(rows),
+    }
 
 
 async def _run_pending_goal_judge(
@@ -490,6 +816,22 @@ async def _run_pending_goal_judge(
         f"{str(state.get('_runtime_v2_run_id') or uuid.uuid4().hex)}"
         f":judge:{judge_request_identity}"
     )
+    evidence_state = dict(state)
+    goal_dialogue = _load_goal_judge_dialogue_for_goal(session_id, goal)
+    if goal_dialogue:
+        evidence_state["_goal_judge_goal_dialogue"] = goal_dialogue
+    completion_run_id = str(goal.get("completion_requested_run_id") or "").strip()
+    current_run_id = str(state.get("_runtime_v2_run_id") or "").strip()
+    if completion_run_id and completion_run_id != current_run_id:
+        evidence_state = dict(state)
+        if goal_dialogue:
+            evidence_state["_goal_judge_goal_dialogue"] = goal_dialogue
+        evidence_state["work_messages"] = list(
+            state.get("_goal_judge_prior_work_messages")
+            or state.get("work_messages")
+            or []
+        )
+        evidence_state["final_response"] = ""
     if emit:
         await _push_stream_event(
             state,
@@ -509,7 +851,7 @@ async def _run_pending_goal_judge(
             evaluate_goal,
             session_id,
             goal,
-            _goal_judge_evidence(state),
+            _goal_judge_evidence(evidence_state),
         )
     except Exception as exc:
         logger.warning("Goal Judge transport failed for %s: %s", session_id, exc)
@@ -714,10 +1056,19 @@ async def _authorize_hook_before_execute(
         return True, decision.reason
 
     if context.mode == PermissionMode.APPROVE_FOR_ME:
+        hook_review_context = _build_tool_review_context(
+            state,
+            {
+                "command": request.resource,
+                "hook": dict(request.metadata or {}),
+                "payload": payload,
+            },
+        )
         review = await review_request(
             request,
             user_intent=str(state.get("_submitted_user_input") or ""),
             session_id=session_id,
+            review_context=hook_review_context,
         )
         if not review.approved:
             return False, review.reason
@@ -769,6 +1120,14 @@ async def _authorize_hook_before_execute(
             review_context={
                 "request": request,
                 "user_intent": str(state.get("_submitted_user_input") or ""),
+                "review_context": _build_tool_review_context(
+                    state,
+                    {
+                        "command": request.resource,
+                        "hook": dict(request.metadata or {}),
+                        "payload": payload,
+                    },
+                ),
             },
         )
         if not approved:
@@ -2829,6 +3188,12 @@ async def _consume_steer_messages(
             work_messages.append(msg)
             llm_history.append(msg)
         state["user_input"] = text
+        _capture_goal_judge_dialogue(
+            state,
+            "user",
+            ui_text,
+            kind="followup",
+        )
         state["dialogue"] = derive_dialogue_from_assistant_history(llm_history)
         state["work_messages"] = work_messages
         state["llm_history"] = llm_history
@@ -4379,6 +4744,10 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                     arguments=tool_args if isinstance(tool_args, dict) else {},
                     workspace=security_workspace,
                 )
+                tool_review_context = _build_tool_review_context(
+                    state,
+                    tool_args,
+                )
                 hook_approval_spec = tool_call.get("_hook_approval_spec")
                 if sec_context.mode == PermissionMode.FULL_ACCESS:
                     hook_approval_spec = None
@@ -4437,6 +4806,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                             sec_request,
                             user_intent=str(state.get("_submitted_user_input") or ""),
                             session_id=str(state.get("session_id") or ""),
+                            review_context=tool_review_context,
                         )
                         approved = review.approved
                         await _push_stream_event(
@@ -4576,6 +4946,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                                             "user_intent": str(
                                                 state.get("_submitted_user_input") or ""
                                             ),
+                                            "review_context": tool_review_context,
                                         },
                                     ),
                                     emit,
@@ -4682,6 +5053,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                                             "user_intent": str(
                                                 state.get("_submitted_user_input") or ""
                                             ),
+                                            "review_context": tool_review_context,
                                         },
                                     ),
                                     emit,
@@ -5791,6 +6163,27 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                 tc = _early_tool_call_from_acc(idx)
                 if not tc or not _can_execute_closed_stream_tool(str(tc.get("name") or "")):
                     return
+                if tc.get("_hook_approval_spec"):
+                    return
+                try:
+                    early_workspace = Path(
+                        session_meta.get("subagent_work_dir")
+                        or session_meta.get("git_worktree_path")
+                        or WORK_DIR
+                    ).resolve()
+                    _early_request, early_decision, _early_context = authorize_tool(
+                        session_id=state["session_id"],
+                        tool_name=str(tc.get("name") or ""),
+                        arguments=(tc.get("args") if isinstance(tc.get("args"), dict) else {}),
+                        workspace=early_workspace,
+                    )
+                    if early_decision.outcome != DecisionOutcome.ALLOW:
+                        return
+                except Exception:
+                    # If authorization cannot be classified yet, defer to the
+                    # normal post-response path instead of reviewing against a
+                    # partial assistant turn.
+                    return
                 # JSON parsing above is the completeness boundary. Tool category
                 # controls concurrency/approval/cancellation, not start timing.
                 early_tool_tasks[idx] = asyncio.create_task(_run_early_tool_call(idx, tc))
@@ -6807,6 +7200,17 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
             work_messages.append(interim_msg)
             state["llm_history"] = llm_history
             state["work_messages"] = work_messages
+            _capture_goal_judge_dialogue(
+                state,
+                "assistant",
+                response_text,
+                kind="response",
+            )
+            _capture_tool_review_assistant_context(
+                state,
+                reasoning_text,
+                response_text,
+            )
             _persist_state_with_model_append(state, interim_msg)
 
             # Checkpoint every completed tool before another tool is awaited.
@@ -8190,10 +8594,19 @@ async def astream_events(
         "key_context": key_context,
         "_runtime_v2_run_id": runtime_v2_run_id,
         "_submitted_user_input": submitted_user_input,
+        "_goal_judge_current_dialogue": [],
+        "_goal_judge_prior_work_messages": list(prev_work_messages),
+        "_tool_review_assistant_context": [],
         "_pre_run_timings": pre_run_timings,
         "_context_token_mode": context_token_mode,
         "_prompt_language": prompt_language,
     }
+    _capture_goal_judge_dialogue(
+        state,
+        "user",
+        user_message.content,
+        kind="question",
+    )
     todo_manager.sync_session_from_key_context(session_id, key_context or "")
     session_manager.clear_interrupt(session_id, runtime_v2_run_id)
     steer_control = _register_steer_run_control(session_id, runtime_v2_run_id)
@@ -8700,6 +9113,7 @@ async def astream_events_continuation(
         "sanitize_unclosed_tool_calls_before_continuation",
     )
     _pre_api_timing_mark(pre_run_timings, "sanitize_histories", _t_pre)
+    prior_work_messages_for_judge = list(prev_work_messages)
 
     if str(recovery_reason or "").strip():
         recovery_note = SystemMessage(content=(
@@ -8736,6 +9150,9 @@ async def astream_events_continuation(
         "llm_calls": [],
         "key_context": key_context,
         "_runtime_v2_run_id": runtime_v2_run_id,
+        "_goal_judge_current_dialogue": [],
+        "_goal_judge_prior_work_messages": prior_work_messages_for_judge,
+        "_tool_review_assistant_context": [],
         "_pre_run_timings": pre_run_timings,
         "_prompt_language": prompt_language,
     }
