@@ -479,8 +479,14 @@ def test_analyze_approval_returns_advice_without_resolving(monkeypatch):
 
     calls = []
 
-    async def fake_review(review_request, *, user_intent, session_id=""):
-        calls.append((review_request, user_intent, session_id))
+    async def fake_review(
+        review_request,
+        *,
+        user_intent,
+        session_id="",
+        review_context=None,
+    ):
+        calls.append((review_request, user_intent, session_id, review_context))
         return SimpleNamespace(
             approved=True,
             risk="low",
@@ -496,7 +502,16 @@ def test_analyze_approval_returns_advice_without_resolving(monkeypatch):
     monkeypatch.setattr(
         tool_approval_gate,
         "get_live_approval_review_context",
-        lambda *_args: {"request": request, "user_intent": "inspect repository"},
+        lambda *_args: {
+            "request": request,
+            "user_intent": "inspect repository",
+            "review_context": {
+                "initial_user_question": "inspect repository",
+                "user_followups": ["include ignored files"],
+                "assistant_context": [],
+                "tool_arguments": {"command": "git status --ignored"},
+            },
+        },
     )
     monkeypatch.setattr(security.reviewer, "review_request", fake_review)
 
@@ -516,7 +531,17 @@ def test_analyze_approval_returns_advice_without_resolving(monkeypatch):
             "available": True,
         },
     }
-    assert calls == [(request, "inspect repository", "session-analysis")]
+    assert calls == [(
+        request,
+        "inspect repository",
+        "session-analysis",
+        {
+            "initial_user_question": "inspect repository",
+            "user_followups": ["include ignored files"],
+            "assistant_context": [],
+            "tool_arguments": {"command": "git status --ignored"},
+        },
+    )]
     assert record == {
         "approval_id": "approval-analysis",
         "status": "pending",

@@ -653,6 +653,63 @@ def test_reviewer_uses_the_current_session_model_profile(monkeypatch):
     }
 
 
+def test_reviewer_prompt_includes_full_frozen_tool_context(monkeypatch):
+    import agent_harness
+    import agent_openai
+    from security import reviewer as reviewer_module
+
+    captured = {}
+    monkeypatch.setattr(
+        agent_harness,
+        "resolve_executor_config_for_session",
+        lambda _session_id: (object(), "review-model", 2048, 32768),
+    )
+
+    def complete(_client, _model, messages, **_kwargs):
+        captured["prompt"] = json.loads(messages[1].content)
+        message = type("Message", (), {"content": (
+            '{"decision":"approve","risk":"low",'
+            '"risk_analysis":"参数与用户请求一致。",'
+            '"command_purpose":"执行用户要求的操作。"}'
+        )})()
+        choice = type("Choice", (), {"message": message, "finish_reason": "stop"})()
+        return type("Response", (), {"choices": [choice]})()
+
+    monkeypatch.setattr(agent_openai, "chat_completion", complete)
+    long_value = "x" * 5000
+    context = {
+        "initial_user_question": "最初问题",
+        "user_followups": [f"追问-{index}" for index in range(15)],
+        "assistant_context": [
+            {"kind": "reasoning" if index % 2 == 0 else "response", "content": f"模型-{index}"}
+            for index in range(12)
+        ],
+        "tool_arguments": {
+            "command": f"do-something {long_value}",
+            "nested": {"path": "D:/outside/file.txt", "password": "do-not-send"},
+        },
+    }
+
+    result = reviewer_module._review_with_model(
+        _request("process.exec", "do-something", "workspace_write"),
+        "legacy intent",
+        "session-review-context",
+        context,
+    )
+
+    assert result.approved is True
+    prompt = captured["prompt"]
+    assert prompt["initial_user_question"] == "最初问题"
+    assert prompt["user_followups"] == [f"追问-{index}" for index in range(15)]
+    assert [row["content"] for row in prompt["assistant_context"]] == [
+        f"模型-{index}" for index in range(2, 12)
+    ]
+    assert prompt["request"]["tool_arguments"]["command"].endswith(long_value)
+    assert len(prompt["request"]["tool_arguments"]["command"]) > 4000
+    assert prompt["request"]["tool_arguments"]["nested"]["path"] == "D:/outside/file.txt"
+    assert prompt["request"]["tool_arguments"]["nested"]["password"] == "[REDACTED]"
+
+
 def test_full_access_does_not_require_a_settings_enablement():
     assert security_settings()["full_access_enabled"] is True
 

@@ -3594,6 +3594,11 @@ async def analyze_session_approval(session_id: str, approval_id: str):
             context["request"],
             user_intent=str(context.get("user_intent") or ""),
             session_id=session_id,
+            review_context=(
+                dict(context.get("review_context") or {})
+                if isinstance(context.get("review_context"), dict)
+                else None
+            ),
         )
         return JSONResponse(
             content={
