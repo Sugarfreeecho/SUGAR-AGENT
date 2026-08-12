@@ -325,11 +325,12 @@ class HumanInteractionService:
             "allow_session",
             "allow_always",
             "allow_external_workspace",
+            "allow_external_workspace_once",
             "deny",
         }:
             raise HumanInteractionValidationError(
                 "decision must be allow_once, allow_session, allow_always, "
-                "allow_external_workspace, or deny"
+                "allow_external_workspace, allow_external_workspace_once, or deny"
             )
         with self.mirror.event_log.session_transaction(sid):
             record = dict(self._snapshot(sid).get("approvals") or {}).get(aid)
@@ -340,7 +341,12 @@ class HumanInteractionService:
             if (
                 bool(record.get("force_approval"))
                 and normalized_decision
-                in {"allow_session", "allow_always", "allow_external_workspace"}
+                in {
+                    "allow_session",
+                    "allow_always",
+                    "allow_external_workspace",
+                    "allow_external_workspace_once",
+                }
             ):
                 raise HumanInteractionValidationError(
                     "Dangerous approvals only support allow_once or deny"

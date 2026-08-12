@@ -398,6 +398,22 @@ function autoReviewStatusElement(stream, toolCallId) {
     return el;
 }
 
+function appendApprovalReviewExplanation(container, riskAnalysis, commandPurpose, fallbackReason) {
+    if (!container) return;
+    var riskText = String(riskAnalysis || fallbackReason || '未提供具体风险说明。').trim();
+    var purposeText = String(commandPurpose || '未提供命令用途说明。').trim();
+    var explanation = humanElement('div', 'approval-review-explanation');
+    var riskRow = humanElement('div', 'approval-review-section');
+    riskRow.appendChild(humanElement('strong', 'approval-review-section-label', '【命令风险】'));
+    riskRow.appendChild(humanElement('span', 'approval-review-section-text', riskText));
+    explanation.appendChild(riskRow);
+    var purposeRow = humanElement('div', 'approval-review-section');
+    purposeRow.appendChild(humanElement('strong', 'approval-review-section-label', '【命令目的】'));
+    purposeRow.appendChild(humanElement('span', 'approval-review-section-text', purposeText));
+    explanation.appendChild(purposeRow);
+    container.appendChild(explanation);
+}
+
 function renderAutoReviewStatusEvent(ctx, event, runSessionId) {
     var stream = ctx && ctx.stream
         ? ctx.stream
@@ -415,6 +431,10 @@ function renderAutoReviewStatusEvent(ctx, event, runSessionId) {
     if (!el) return;
     el.className = 'auto-review-status';
     el.setAttribute('data-status', status);
+    // Status events update one persistent row. Clear the previous loading or
+    // result content before rendering the new state so in-progress copy and
+    // its spinner do not remain beside the final decision.
+    el.textContent = '';
     if (status === 'in_progress') {
         el.classList.add('is-in-progress');
         el.appendChild(humanElement('span', 'auto-review-spin'));
@@ -428,9 +448,11 @@ function renderAutoReviewStatusEvent(ctx, event, runSessionId) {
     var approved = status === 'approved';
     var risk = String((event && event.risk) || 'unknown');
     var reason = String((event && event.reason) || '');
+    var riskAnalysis = String((event && event.risk_analysis) || '');
+    var commandPurpose = String((event && event.command_purpose) || '');
     var unknown = risk === 'unknown' || risk === 'timed_out';
     el.classList.add(approved ? 'is-approved' : (unknown ? 'is-timedout' : 'is-denied'));
-    var text = humanElement('span', 'auto-review-text');
+    var text = humanElement('div', 'auto-review-text');
     var title = humanElement(
         'span',
         'auto-review-title',
@@ -442,10 +464,7 @@ function renderAutoReviewStatusEvent(ctx, event, runSessionId) {
         title.appendChild(humanElement('span', 'auto-review-risk', risk));
     }
     text.appendChild(title);
-    if (reason) {
-        text.appendChild(document.createTextNode('：'));
-        text.appendChild(humanElement('span', 'auto-review-reason', reason));
-    }
+    appendApprovalReviewExplanation(text, riskAnalysis, commandPurpose, reason);
     if (!approved && !unknown) {
         text.appendChild(humanElement(
             'div',
@@ -563,7 +582,6 @@ function setHumanQuestionStep(card, index) {
     var panes = Array.from(card.querySelectorAll('.human-question-pane'));
     if (!panes.length) return;
     var next = Math.max(0, Math.min(Number(index) || 0, panes.length - 1));
-    card.dataset.review = '0';
     card.dataset.step = String(next);
     panes.forEach(function (pane, idx) { pane.classList.toggle('is-active', idx === next); });
     card.querySelectorAll('.human-question-tab').forEach(function (tab, idx) {
@@ -576,71 +594,29 @@ function setHumanQuestionStep(card, index) {
     if (tabs) tabs.classList.remove('hidden');
     var body = card.querySelector('.human-card-body');
     if (body) body.classList.remove('hidden');
-    var review = card.querySelector('.human-question-review');
-    if (review) review.classList.add('hidden');
     var progress = card.querySelector('.human-question-progress');
     if (progress) progress.textContent = '问题 ' + (next + 1) + '/' + panes.length + ' · ' + String(panes[next].dataset.questionHeader || '');
     var back = card.querySelector('.human-back-btn');
     var nextBtn = card.querySelector('.human-next-btn');
-    var reviewBtn = card.querySelector('.human-review-btn');
+    var confirmBtn = card.querySelector('.human-confirm-btn');
     var submit = card.querySelector('.human-submit-btn');
+    var cancel = card.querySelector('.human-cancel-btn');
+    var multipleQuestions = panes.length > 1;
+    var lastQuestion = next >= panes.length - 1;
     if (back) {
-        back.textContent = '上一步';
-        back.classList.toggle('hidden', panes.length === 1);
+        back.textContent = '上一题';
+        back.classList.toggle('hidden', !multipleQuestions);
         back.disabled = next === 0;
     }
-    if (nextBtn) nextBtn.classList.toggle('hidden', next >= panes.length - 1);
-    if (reviewBtn) reviewBtn.classList.toggle('hidden', panes.length === 1 || next < panes.length - 1);
-    if (submit) submit.classList.toggle('hidden', panes.length > 1);
+    if (nextBtn) {
+        nextBtn.textContent = '下一题';
+        nextBtn.classList.toggle('hidden', !multipleQuestions);
+        nextBtn.disabled = lastQuestion;
+    }
+    if (confirmBtn) confirmBtn.classList.toggle('hidden', !multipleQuestions || lastQuestion);
+    if (submit) submit.classList.toggle('hidden', multipleQuestions && !lastQuestion);
+    if (cancel) cancel.classList.toggle('hidden', multipleQuestions);
     if (card.dataset.draftReady === '1') persistHumanInteractionDraft(card);
-}
-
-function showHumanQuestionReview(card) {
-    var panes = Array.from(card.querySelectorAll('.human-question-pane'));
-    var invalidIndex = panes.findIndex(function (pane) { return !validateHumanQuestionPane(card, pane); });
-    if (invalidIndex >= 0) {
-        setHumanQuestionStep(card, invalidIndex);
-        return false;
-    }
-    var review = card.querySelector('.human-question-review');
-    if (!review) return false;
-    review.innerHTML = '';
-    review.appendChild(humanElement('h4', 'human-review-title', '确认回答'));
-    panes.forEach(function (pane) {
-        var state = humanQuestionPaneState(pane);
-        var row = humanElement('div', 'human-review-row');
-        row.appendChild(humanElement('div', 'human-review-label', pane.dataset.questionHeader || '问题'));
-        var labels = state.selected.map(function (input) {
-            var option = input.closest('.human-option');
-            var label = option && option.querySelector('.human-option-label');
-            return label ? label.textContent : input.dataset.optionId;
-        });
-        if (state.otherText) labels.push(state.otherText);
-        row.appendChild(humanElement('div', 'human-review-value', labels.join('、')));
-        review.appendChild(row);
-    });
-    card.dataset.review = '1';
-    var tabs = card.querySelector('.human-question-tabs');
-    if (tabs) tabs.classList.add('hidden');
-    var body = card.querySelector('.human-card-body');
-    if (body) body.classList.add('hidden');
-    review.classList.remove('hidden');
-    var back = card.querySelector('.human-back-btn');
-    if (back) {
-        back.classList.remove('hidden');
-        back.disabled = false;
-        back.textContent = '返回修改';
-    }
-    var nextBtn = card.querySelector('.human-next-btn');
-    if (nextBtn) nextBtn.classList.add('hidden');
-    var reviewBtn = card.querySelector('.human-review-btn');
-    if (reviewBtn) reviewBtn.classList.add('hidden');
-    var submit = card.querySelector('.human-submit-btn');
-    if (submit) submit.classList.remove('hidden');
-    review.setAttribute('tabindex', '-1');
-    review.focus();
-    persistHumanInteractionDraft(card);
-    return true;
 }
 
 function createHumanQuestionCard(record, sessionId) {
@@ -698,6 +674,13 @@ function createHumanQuestionCard(record, sessionId) {
             input.type = question.multi_select ? 'checkbox' : 'radio';
             input.name = 'human-' + record.interaction_id + '-' + pane.dataset.questionId;
             input.dataset.optionId = String(option.option_id || '');
+            input.addEventListener('change', function () {
+                persistHumanInteractionDraft(card);
+                if (question.multi_select || !input.checked || qIndex >= questions.length - 1) return;
+                // A normal single-choice answer is complete immediately. The
+                // free-form "Other" option deliberately has no auto-advance.
+                setHumanQuestionStep(card, qIndex + 1);
+            });
             var copy = humanElement('span', 'human-option-copy');
             copy.appendChild(humanElement('span', 'human-option-label', option.label || ''));
             var description = humanElement('span', 'human-option-description', option.description || '');
@@ -720,7 +703,14 @@ function createHumanQuestionCard(record, sessionId) {
         otherMark.name = 'human-' + record.interaction_id + '-' + pane.dataset.questionId;
         otherMark.className = 'human-other-mark';
         var otherCopy = humanElement('span', 'human-option-copy');
-        otherCopy.appendChild(humanElement('span', 'human-option-label', '其他'));
+        var otherHeader = humanElement('span', 'human-other-header');
+        otherHeader.appendChild(humanElement('span', 'human-option-label', '其他'));
+        otherHeader.appendChild(humanElement(
+            'span',
+            'input-shortcut-hint human-other-shortcut',
+            qIndex < questions.length - 1 ? 'Ctrl/Cmd + Enter 确认并进入下一题' : 'Ctrl/Cmd + Enter 提交答案'
+        ));
+        otherCopy.appendChild(otherHeader);
         var otherInput = document.createElement('textarea');
         otherInput.className = 'human-other-input';
         otherInput.rows = 2;
@@ -738,40 +728,40 @@ function createHumanQuestionCard(record, sessionId) {
         body.appendChild(pane);
     });
     card.appendChild(body);
-    var review = humanElement('section', 'human-question-review hidden');
-    review.setAttribute('aria-label', '回答摘要');
-    card.appendChild(review);
     var error = humanElement('div', 'human-card-error');
     error.setAttribute('role', 'alert');
     card.appendChild(error);
-    var actions = humanElement('div', 'human-card-actions');
-    var cancel = humanElement('button', 'human-secondary-btn', '不回答');
+    var actions = humanElement('div', 'human-card-actions human-question-actions');
+    var cancel = humanElement('button', 'human-secondary-btn human-cancel-btn', '不回答');
     cancel.type = 'button';
     cancel.title = '取消当前问题并让 Agent 继续';
     cancel.addEventListener('click', function () { void cancelHumanQuestion(card); });
     var nav = humanElement('div', 'human-card-nav');
-    var back = humanElement('button', 'human-secondary-btn human-back-btn', '上一步');
+    var back = humanElement('button', 'human-secondary-btn human-back-btn', '上一题');
     back.type = 'button';
     back.addEventListener('click', function () {
-        if (card.dataset.review === '1') setHumanQuestionStep(card, questions.length - 1);
-        else setHumanQuestionStep(card, Number(card.dataset.step || 0) - 1);
+        setHumanQuestionStep(card, Number(card.dataset.step || 0) - 1);
     });
-    var next = humanElement('button', 'human-primary-btn human-next-btn', '下一步');
+    var next = humanElement('button', 'human-secondary-btn human-next-btn', '下一题');
     next.type = 'button';
     next.addEventListener('click', function () {
         var current = Number(card.dataset.step || 0);
         var pane = card.querySelectorAll('.human-question-pane')[current];
         if (validateHumanQuestionPane(card, pane)) setHumanQuestionStep(card, current + 1);
     });
-    var reviewButton = humanElement('button', 'human-primary-btn human-review-btn', '确认回答');
-    reviewButton.type = 'button';
-    reviewButton.addEventListener('click', function () { showHumanQuestionReview(card); });
+    var confirmButton = humanElement('button', 'human-primary-btn human-confirm-btn', '确认');
+    confirmButton.type = 'button';
+    confirmButton.addEventListener('click', function () {
+        var current = Number(card.dataset.step || 0);
+        var pane = card.querySelectorAll('.human-question-pane')[current];
+        if (validateHumanQuestionPane(card, pane)) setHumanQuestionStep(card, current + 1);
+    });
     var submit = humanElement('button', 'human-primary-btn human-submit-btn', '提交答案');
     submit.type = 'button';
     submit.addEventListener('click', function () { void submitHumanQuestion(card); });
     nav.appendChild(back);
     nav.appendChild(next);
-    nav.appendChild(reviewButton);
+    nav.appendChild(confirmButton);
     nav.appendChild(submit);
     actions.appendChild(cancel);
     actions.appendChild(nav);
@@ -781,9 +771,16 @@ function createHumanQuestionCard(record, sessionId) {
     card.dataset.draftReady = '1';
     card.addEventListener('keydown', function (event) {
         if (!isInputSubmitShortcut(event, 'editor')) return;
+        var current = Number(card.dataset.step || 0);
         event.preventDefault();
-        if (questions.length > 1 && card.dataset.review !== '1') showHumanQuestionReview(card);
-        else void submitHumanQuestion(card);
+        if (questions.length > 1 && current < questions.length - 1) {
+            var pane = card.querySelectorAll('.human-question-pane')[current];
+            if (validateHumanQuestionPane(card, pane)) setHumanQuestionStep(card, current + 1);
+        } else {
+            // Ctrl/Cmd+Enter is an explicit user submit action, equivalent to
+            // clicking Submit on the final (or only) question.
+            void submitHumanQuestion(card);
+        }
     });
     return card;
 }
@@ -906,6 +903,7 @@ function resumeRecoveredHumanInteractionStream(sessionId, afterIndex) {
 function createHumanApprovalCard(record, sessionId) {
     var danger = record.approval_level === 'danger';
     var forced = !!record.force_approval;
+    var workspaceApproval = !forced && !!record.external_workspace_grantable;
     var card = humanElement('article', 'human-interaction-card human-approval-card' + (danger ? ' is-danger' : ''));
     card.dataset.kind = 'approval';
     card.dataset.sessionId = sessionId;
@@ -923,12 +921,12 @@ function createHumanApprovalCard(record, sessionId) {
         detail.appendChild(humanElement('code', '', record.tool));
         body.appendChild(detail);
     }
-    if (!forced && record.rule_pattern) {
+    if (!forced && !workspaceApproval && record.rule_pattern) {
         body.appendChild(
             humanElement(
                 'div',
                 'human-approval-rule-hint',
-                '“始终允许此类操作”将保存为长期规则：' + record.rule_pattern
+                '“始终允许”将保存为长期规则：' + record.rule_pattern
             )
         );
     }
@@ -946,61 +944,33 @@ function createHumanApprovalCard(record, sessionId) {
     analyze.title = '调用独立审查模型给出风险解读和审批建议，不会替你执行审批';
     analyze.addEventListener('click', function () { void analyzeHumanApproval(card); });
     actions.appendChild(analyze);
-    var deny = humanElement('button', 'human-secondary-btn human-deny-btn', danger ? '拒绝执行' : '拒绝');
+    var deny = humanElement('button', 'human-secondary-btn human-deny-btn', '拒绝执行');
     deny.type = 'button';
     deny.addEventListener('click', function () { void resolveHumanApproval(card, 'deny'); });
     actions.appendChild(deny);
-    var cmdRow = null;
-    var wsRow = null;
-    if (!forced && record.external_workspace_grantable) {
-        var cmdGroup = humanElement('div', 'human-approval-group');
-        cmdGroup.appendChild(humanElement('span', 'human-approval-group-label', '命令授权'));
-        cmdRow = humanElement('div', 'human-approval-group-row');
-        cmdGroup.appendChild(cmdRow);
-        actions.appendChild(cmdGroup);
-        var wsGroup = humanElement('div', 'human-approval-group');
-        wsGroup.appendChild(humanElement('span', 'human-approval-group-label', '工作区沙箱外处理权限'));
-        wsRow = humanElement('div', 'human-approval-group-row');
-        wsGroup.appendChild(wsRow);
-        actions.appendChild(wsGroup);
-    }
     if (!forced) {
-        var sessionAllow = humanElement('button', 'human-secondary-btn', '本任务内允许相同请求');
-        sessionAllow.type = 'button';
-        sessionAllow.title = '仅在当前任务中，对命令、参数、路径和工作目录完全相同的请求自动放行';
-        sessionAllow.addEventListener('click', function () { void resolveHumanApproval(card, 'allow_session'); });
-        (cmdRow || actions).appendChild(sessionAllow);
-    }
-    if (!forced && record.allow_always_available && record.rule_pattern) {
-        var always = humanElement('button', 'human-secondary-btn', '始终允许此类操作');
+        var durableRuleAvailable = !!record.allow_always_available && !!record.rule_pattern;
+        var alwaysDecision = workspaceApproval
+            ? 'allow_external_workspace'
+            : (durableRuleAvailable ? 'allow_always' : 'allow_session');
+        var always = humanElement('button', 'human-secondary-btn human-always-btn', '始终允许');
         always.type = 'button';
-        if (record.rule_pattern) always.title = '保存为长期规则，后续匹配时自动放行：' + record.rule_pattern;
-        always.addEventListener('click', function () { void resolveHumanApproval(card, 'allow_always'); });
-        (cmdRow || actions).appendChild(always);
+        always.title = workspaceApproval
+            ? '持续允许写入、删除和 Shell 处理工作区沙箱外内容；随后仍会单独审批本次工具操作'
+            : (durableRuleAvailable
+                ? '保存为长期规则，后续匹配时自动放行：' + record.rule_pattern
+                : '无法生成长期规则；改为在当前任务内自动允许完全相同的请求');
+        always.addEventListener('click', function () { void resolveHumanApproval(card, alwaysDecision); });
+        actions.appendChild(always);
     }
-    var allowPrimary = !record.external_workspace_grantable;
-    if (!forced && record.external_workspace_grantable) {
-        var externalGrant = humanElement('button', 'human-primary-btn human-external-grant-btn', '授权工作区沙箱外处理权限');
-        externalGrant.type = 'button';
-        externalGrant.title = '一次性授权：写、删除和 Shell 在工作区外的操作以后自动放行';
-        externalGrant.addEventListener('click', function () { void resolveHumanApproval(card, 'allow_external_workspace'); });
-        wsRow.appendChild(externalGrant);
-        var allowOnce = humanElement('button', 'human-secondary-btn human-allow-btn', '允许一次');
-        allowOnce.type = 'button';
-        allowOnce.title = '仅放行这一次；下一次工作区外操作仍会询问';
-        allowOnce.addEventListener('click', function () { void resolveHumanApproval(card, 'allow_once'); });
-        cmdRow.appendChild(allowOnce);
-    } else {
-        var allow = humanElement(
-            'button',
-            (allowPrimary ? 'human-primary-btn human-allow-btn' : 'human-secondary-btn human-allow-btn'),
-            '允许一次'
-        );
-        allow.type = 'button';
-        allow.title = '仅放行这一次；执行后授权立即失效';
-        allow.addEventListener('click', function () { void resolveHumanApproval(card, 'allow_once'); });
-        actions.appendChild(allow);
-    }
+    var onceDecision = workspaceApproval ? 'allow_external_workspace_once' : 'allow_once';
+    var allow = humanElement('button', 'human-primary-btn human-allow-btn', '本次允许');
+    allow.type = 'button';
+    allow.title = workspaceApproval
+        ? '仅允许本次处理工作区沙箱外内容；随后仍会单独审批本次工具操作'
+        : '仅放行这一次；执行后授权立即失效';
+    allow.addEventListener('click', function () { void resolveHumanApproval(card, onceDecision); });
+    actions.appendChild(allow);
     card.appendChild(actions);
     return card;
 }
@@ -1036,7 +1006,12 @@ async function analyzeHumanApproval(card) {
         var risk = humanElement('span', 'human-approval-analysis-risk', '风险：' + String(result.risk || 'unknown'));
         heading.appendChild(risk);
         panel.appendChild(heading);
-        panel.appendChild(humanElement('div', 'human-approval-analysis-reason', String(result.reason || '审查模型未提供理由。')));
+        appendApprovalReviewExplanation(
+            panel,
+            result.risk_analysis,
+            result.command_purpose,
+            result.reason || '审查模型未提供理由。'
+        );
         panel.appendChild(humanElement('div', 'human-approval-analysis-hint', '以上仅为分析建议，审批仍由你决定。'));
     } catch (err) {
         if (panel) panel.hidden = true;
@@ -1086,11 +1061,15 @@ function createHumanTerminalCard(record, sessionId) {
     } else if (kind === 'approval') {
         summary.textContent = record.decision === 'deny'
             ? '你已拒绝本次操作。'
-            : (record.decision === 'allow_always'
-                ? ('已保存长期规则，后续匹配的操作将自动放行。' + (record.rule_pattern ? '（规则：' + record.rule_pattern + '）' : ''))
-                : (record.decision === 'allow_session'
-                    ? '当前任务内将自动允许完全相同的请求。'
-                    : '已允许这一次；执行后授权失效。'));
+            : (record.decision === 'allow_external_workspace'
+                ? '已始终允许工作区沙箱外处理；本次工具操作仍需单独审批。'
+                : (record.decision === 'allow_external_workspace_once'
+                    ? '已允许本次工作区沙箱外处理；本次工具操作仍需单独审批。'
+                    : (record.decision === 'allow_always'
+                        ? ('已保存长期规则，后续匹配的操作将自动放行。' + (record.rule_pattern ? '（规则：' + record.rule_pattern + '）' : ''))
+                        : (record.decision === 'allow_session'
+                            ? '当前任务内将自动允许完全相同的请求。'
+                            : '已允许这一次；执行后授权失效。'))));
     } else {
         var answers = Array.isArray(record.answers) ? record.answers : [];
         var questionsById = Object.create(null);

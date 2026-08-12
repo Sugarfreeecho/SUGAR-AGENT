@@ -562,7 +562,7 @@ def test_reviewer_retries_then_reports_unavailable(monkeypatch):
 
     calls = {"n": 0}
 
-    def boom(request, user_intent):
+    def boom(request, user_intent, session_id=""):
         calls["n"] += 1
         raise ValueError("reviewer returned an empty response")
 
@@ -582,7 +582,7 @@ def test_reviewer_recovers_on_second_attempt(monkeypatch):
 
     calls = {"n": 0}
 
-    def flaky(request, user_intent):
+    def flaky(request, user_intent, session_id=""):
         calls["n"] += 1
         if calls["n"] == 1:
             raise ValueError("empty response")
@@ -595,6 +595,62 @@ def test_reviewer_recovers_on_second_attempt(monkeypatch):
     assert calls["n"] == 2
     assert result.available is True
     assert result.approved is True
+
+
+def test_reviewer_uses_the_current_session_model_profile(monkeypatch):
+    import agent_harness
+    import agent_openai
+    from security import reviewer as reviewer_module
+
+    selected_client = object()
+    captured = {}
+
+    def resolve(session_id):
+        captured["session_id"] = session_id
+        return selected_client, "session-selected-model", 2048, 32768
+
+    def complete(client, model, messages, **kwargs):
+        captured.update(
+            client=client,
+            model=model,
+            max_tokens=kwargs["max_tokens"],
+        )
+        message = type(
+            "Message",
+            (),
+            {
+                "content": (
+                    '{"decision":"approve","risk":"low",'
+                    '"risk_analysis":"只读取时间，不修改系统。",'
+                    '"command_purpose":"读取当前日期时间，用于回答用户。"}'
+                )
+            },
+        )()
+        choice = type("Choice", (), {"message": message, "finish_reason": "stop"})()
+        return type("Response", (), {"choices": [choice]})()
+
+    monkeypatch.setattr(agent_harness, "resolve_executor_config_for_session", resolve)
+    monkeypatch.setattr(agent_openai, "chat_completion", complete)
+
+    result = reviewer_module._review_with_model(
+        _request("process.exec", "date", "workspace_write"),
+        "check time",
+        "session-with-nonfirst-profile",
+    )
+
+    assert result.approved is True
+    assert result.risk_analysis == "只读取时间，不修改系统。"
+    assert result.command_purpose == "读取当前日期时间，用于回答用户。"
+    assert result.reason == (
+        "【命令风险】只读取时间，不修改系统。\n"
+        "【命令目的】读取当前日期时间，用于回答用户。"
+    )
+    assert captured == {
+        "session_id": "session-with-nonfirst-profile",
+        "client": selected_client,
+        "model": "session-selected-model",
+        "max_tokens": 2048,
+    }
 
 
 def test_full_access_does_not_require_a_settings_enablement():
@@ -1821,11 +1877,11 @@ def test_suggest_rule_pattern_generates_safe_prefix(tmp_path):
     assert suggested["pattern"].endswith("**")
 
 
-def test_approval_spec_hides_always_allow_when_no_rule_can_be_generated(
+def test_approval_spec_marks_when_persistent_rule_can_be_generated(
     tmp_path, monkeypatch
 ):
-    """Claude Code alignment: no generated rule pattern -> no
-    "始终允许同类操作" button, only "仅本次允许 / 拒绝"."""
+    """The frontend uses this flag to decide whether its single
+    "始终允许" action persists a rule or falls back to a task grant."""
     from agent_loop import _security_approval_spec
 
     workspace = tmp_path / "workspace"
@@ -1847,8 +1903,8 @@ def test_approval_spec_hides_always_allow_when_no_rule_can_be_generated(
     assert spec["rule_action"] == "process.exec"
     assert spec["rule_pattern"] == "git push:*"
 
-    # A dangerous command that cannot produce a durable rule only gets
-    # "本次允许 / 拒绝".
+    # A dangerous command cannot produce a durable rule and remains restricted
+    # to one-time approval or denial.
     req2, decision2, _ = authorize_tool(
         session_id="spec-test",
         tool_name="run_shell",

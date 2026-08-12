@@ -397,7 +397,7 @@ async function refreshSecurityRules() {
         if (rules.length === 0) {
             var empty = document.createElement('div');
             empty.className = 'settings-feature-status';
-            empty.textContent = '暂无长期规则。审批时选择“始终允许此类操作”会自动添加。';
+            empty.textContent = '暂无长期规则。审批时选择“始终允许”可自动添加可生成的长期规则。';
             listEl.appendChild(empty);
             return;
         }

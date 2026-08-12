@@ -10,8 +10,12 @@ const UI_TRANSLATIONS_EN = {
     '当前计划': 'Current plan', 'Goal 与当前计划': 'Goal and current plan', '清除计划': 'Clear plan', '清除当前计划': 'Clear current plan',
     '消息': 'Messages', '历史记录': 'History', '折叠计划面板': 'Collapse plan panel',
     '折叠历史面板': 'Collapse history panel', '折叠 Goal 与计划面板': 'Collapse Goal and plan panel', '继续综合子任务': 'Continue synthesizing subtasks',
-    '撤销': 'Undo', '说说你想做什么…（Shift/Ctrl+Enter换行）': 'What would you like to do? (Shift/Ctrl+Enter for a new line)', 'Agent运行中，输入后续任务': 'Agent is running; enter a follow-up task', '点击`立即发送`插入提示': 'Click `Send now` to insert the prompt', '选择文件': 'Choose file',
+    '撤销': 'Undo', '说说你想做什么…（Enter 发送 · Shift/Ctrl/Cmd + Enter 换行）': 'What would you like to do? (Enter to send · Shift/Ctrl/Cmd + Enter for a new line)', 'Agent运行中，输入后续任务': 'Agent is running; enter a follow-up task', '按 Enter 发送第一条待发送任务': 'Press Enter to send the first pending task', '选择文件': 'Choose file',
     '选择 Skill': 'Select Skill', '发送 / 停止': 'Send / Stop', '发送': 'Send', '停止': 'Stop',
+    'Enter 提交': 'Enter to submit', 'Ctrl/Cmd + Enter 提交': 'Ctrl/Cmd + Enter to submit',
+    'Ctrl/Cmd + Enter 保存修改': 'Ctrl/Cmd + Enter to save changes',
+    'Ctrl/Cmd + Enter 确认回答': 'Ctrl/Cmd + Enter to confirm', 'Ctrl/Cmd + Enter 确认并进入下一题': 'Ctrl/Cmd + Enter to confirm and continue', 'Ctrl/Cmd + Enter 提交答案': 'Ctrl/Cmd + Enter to submit answers',
+    '搜索工作区文件（↑↓ 移动 · Enter 选择 · Esc 关闭）': 'Search workspace files (↑↓ Move · Enter to select · Esc to close)',
     '模型': 'Model', '正在加载模型配置': 'Loading model configuration', '模型配置': 'Model configuration',
     '操作提示': 'Notifications', '已复制': 'Copied', '提示': 'Notice', '取消': 'Cancel', '确定': 'Confirm',
     '暂停': 'Pause', '继续': 'Resume', '增加预算并继续': 'Add budget and resume', '无限制': 'Unlimited', '分钟': 'min',
@@ -61,7 +65,9 @@ const UI_TRANSLATIONS_EN = {
     'Hooks': 'Hooks', 'Plugins': 'Plugins', '正在加载扩展': 'Loading extensions', '当前没有已注册 Hook': 'No registered hooks', '当前没有已发现插件': 'No plugins found', '扩展加载失败': 'Failed to load extensions', '无': 'None',
     '加载详情中…': 'Loading details…', '知道了': 'Got it', '允许执行': 'Allow', '拒绝': 'Deny',
     '需要确认': 'Confirmation required', '任务已中断': 'Task interrupted', '已请求停止当前任务': 'Stop requested',
-    '展开': 'Expand', '收起': 'Collapse', '复制': 'Copy', '导出': 'Export', '导出选项': 'Export options', '导出图片': 'Export image', '导出文本': 'Export text', '改写': 'Rewrite', '重试': 'Retry'
+    '展开': 'Expand', '收起': 'Collapse', '复制': 'Copy', '导出': 'Export', '导出选项': 'Export options', '导出图片': 'Export image', '导出文本': 'Export text', '改写': 'Rewrite', '重试': 'Retry',
+    '点击查看图片': 'Click to view image', '使用系统应用打开': 'Open with system app',
+    '无法在浏览器中播放此媒体，可使用系统应用打开。': 'This media cannot be played in the browser. Open it with a system app instead.'
 };
 Object.assign(UI_TRANSLATIONS_EN, {
     // Todo / goal panel
@@ -204,14 +210,14 @@ Object.assign(UI_TRANSLATIONS_EN, {
     '安全审批': 'Safety approval', '需要你的回答': 'Your response is required', '确认下一步': 'Confirm next step',
     '等待中': 'Waiting', '待回答': 'Waiting for answer', '待审批': 'Waiting for approval', '已处理': 'Processed', '已过期': 'Expired', '可多选': 'Select multiple', '单选': 'Select one',
     '查看预览': 'View preview', '其他': 'Other', '其他答案': 'Other answer', '输入你的答案…': 'Enter your answer…', '取消提问': 'Cancel question', '不回答': 'Skip answering',
-    '上一步': 'Back', '下一步': 'Next', '返回修改': 'Edit answers', '确认回答': 'Review answers', '提交答案': 'Submit answers', '正在提交…': 'Submitting…', '正在取消…': 'Cancelling…', '正在处理…': 'Processing…',
+    '上一步': 'Back', '下一步': 'Next', '上一题': 'Previous question', '下一题': 'Next question', '确认': 'Confirm', '返回修改': 'Edit answers', '确认回答': 'Review answers', '提交答案': 'Submit answers', '正在提交…': 'Submitting…', '正在取消…': 'Cancelling…', '正在处理…': 'Processing…',
     '请选择一个选项。': 'Select an option.', '请至少选择一个选项。': 'Select at least one option.', '请输入其他答案。': 'Enter the other answer.', '请完成当前问题后再提交。': 'Complete the current question before submitting.',
     '返回回答问题': 'Return to question',
     'Agent 主动提问': 'Agent questions', 'Agent 主动提问功能开关': 'Agent question feature toggle',
     '已启用；Agent 可在确实需要选择时暂停并向你提问。': 'Enabled; the Agent may pause and ask when your choice is required.',
     '已关闭；Agent 不会创建结构化提问卡片。': 'Disabled; the Agent will not create structured question cards.',
     '取消失败：': 'Cancellation failed: ', '提交失败：': 'Submission failed: ', '处理失败：': 'Failed to process: ',
-    '是否允许 Agent 执行此操作？': 'Allow Agent to perform this action?', '工具': 'Tool', '始终允许': 'Always allow',
+    '是否允许 Agent 执行此操作？': 'Allow Agent to perform this action?', '工具': 'Tool', '始终允许': 'Always allow', '本次允许': 'Allow this time',
     '允许一次': 'Allow once', '本任务内允许相同请求': 'Allow identical requests in this task', '始终允许此类操作': 'Always allow this kind of operation', '拒绝执行': 'Deny execution', '已取消': 'Cancelled', '该请求已取消。': 'This request was cancelled.', '该请求已过期。': 'This request expired.',
     '你已拒绝本次操作。': 'You denied this action.', '你已允许同类操作。': 'You allowed similar actions.', '你已允许本次操作。': 'You allowed this action.', '已回答': 'Answered',
     // Session grouping and subagent continuation
@@ -264,7 +270,7 @@ Object.assign(UI_TRANSLATIONS_EN, {
     '加载更早记录': 'Load earlier records', '加载更早消息': 'Load earlier messages', '保存失败：': 'Save failed: ',
     '置顶会话': 'Pin session', '归档会话': 'Archive session', '重命名': 'Rename', '重命名会话': 'Rename session',
     '编辑会话名称': 'Edit the session name', '会话名称': 'Session name', '保存名称': 'Save name',
-    '导出会话': 'Export session', '下载会话文件': 'Download session files', '确认导出': 'Export', '输入内容': 'Input'
+    '导出会话': 'Export session', '下载会话文件': 'Download session files', '确认导出': 'Export', '输入内容': 'Input', '草稿': 'Draft'
 });
 Object.assign(UI_TRANSLATIONS_EN, {
     // Agent runtime status events (including compression and recovery)
@@ -337,6 +343,10 @@ Object.assign(UI_TRANSLATIONS_EN, {
     '暂时无法给出可靠建议': 'Unable to provide reliable advice right now',
     '建议允许': 'Recommend allowing',
     '建议拒绝': 'Recommend denying',
+    '【命令风险】': '[Command risk]',
+    '【命令目的】': '[Command purpose]',
+    '未提供具体风险说明。': 'No specific risk explanation was provided.',
+    '未提供命令用途说明。': 'No command-purpose explanation was provided.',
     '审查模型未提供理由。': 'The reviewer model did not provide a reason.',
     '以上仅为分析建议，审批仍由你决定。': 'This is analysis only; the approval decision remains yours.',
     '可人工覆盖本次请求（只此一次，不沉淀规则）': 'You can override this once for this exact request (this time only; no rule is saved)',
@@ -379,7 +389,7 @@ Object.assign(UI_TRANSLATIONS_EN, {
     '保存': 'Save',
     '权限模式': 'Permission mode',
     '预批准域名操作': 'Pre-approved domain actions',
-    '暂无长期规则。审批时选择“始终允许此类操作”会自动添加。': 'No persistent rules yet. Choosing "Always allow this kind of operation" while approving will add one automatically.',
+    '暂无长期规则。审批时选择“始终允许”可自动添加可生成的长期规则。': 'No persistent rules yet. Choosing "Always allow" adds a persistent rule when one can be generated.',
     '未选择会话。': 'No session selected.',
     '清除当前会话的所有权限规则？用户级“始终允许”规则不受影响。': 'Clear all permission rules for the current session? User-level "Always allow" rules are unaffected.',
     '规则已删除。': 'Rule deleted.',

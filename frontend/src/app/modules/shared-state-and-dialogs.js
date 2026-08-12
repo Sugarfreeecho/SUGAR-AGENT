@@ -225,10 +225,23 @@ function closeUiModal(result) {
     var cancelBtn = document.getElementById('ui-modal-cancel');
     var inputEl = document.getElementById('ui-modal-input');
     var selectEl = document.getElementById('ui-modal-select');
+    var selectControlEl = document.getElementById('ui-modal-select-control');
+    var selectTriggerEl = document.getElementById('ui-modal-select-trigger');
+    var selectMenuEl = document.getElementById('ui-modal-select-menu');
     if (okBtn) okBtn.onclick = null;
     if (cancelBtn) cancelBtn.onclick = null;
     if (inputEl) inputEl.oninput = null;
     if (selectEl) selectEl.onchange = null;
+    if (selectTriggerEl) {
+        selectTriggerEl.onclick = null;
+        selectTriggerEl.onkeydown = null;
+        selectTriggerEl.setAttribute('aria-expanded', 'false');
+    }
+    if (selectMenuEl) {
+        selectMenuEl.hidden = true;
+        selectMenuEl.innerHTML = '';
+    }
+    if (selectControlEl) selectControlEl.classList.remove('is-open');
     if (uiModalKeyHandler) {
         document.removeEventListener('keydown', uiModalKeyHandler);
         uiModalKeyHandler = null;
@@ -253,8 +266,14 @@ function openUiModal(options) {
         var cancelBtn = document.getElementById('ui-modal-cancel');
         var inputLabelEl = document.getElementById('ui-modal-input-label');
         var inputEl = document.getElementById('ui-modal-input');
+        var inputHintEl = document.getElementById('ui-modal-input-hint');
         var selectLabelEl = document.getElementById('ui-modal-select-label');
         var selectEl = document.getElementById('ui-modal-select');
+        var selectControlEl = document.getElementById('ui-modal-select-control');
+        var selectTriggerEl = document.getElementById('ui-modal-select-trigger');
+        var selectCurrentEl = document.getElementById('ui-modal-select-current');
+        var selectCurrentMetaEl = document.getElementById('ui-modal-select-current-meta');
+        var selectMenuEl = document.getElementById('ui-modal-select-menu');
         if (!root || !titleEl || !bodyEl || !okBtn || !cancelBtn || !iconEl) {
             resolve(false);
             return;
@@ -274,6 +293,12 @@ function openUiModal(options) {
         cancelBtn.textContent = o.cancelText || '取消';
 
         var hasSelect = !!(selectEl && selectLabelEl && Array.isArray(o.selectOptions));
+        var hasCustomSelect = !!(
+            hasSelect && selectControlEl && selectTriggerEl
+            && selectCurrentEl && selectCurrentMetaEl && selectMenuEl
+        );
+        var selectItems = [];
+        var selectOptionRows = [];
         var hasInput = !hasSelect && !!(inputEl && inputLabelEl && Object.prototype.hasOwnProperty.call(o, 'inputValue'));
         var inputRequired = hasInput && o.inputRequired !== false;
         if (inputEl && inputLabelEl) {
@@ -285,9 +310,10 @@ function openUiModal(options) {
             inputEl.maxLength = hasInput && Number(o.inputMaxLength) > 0 ? Number(o.inputMaxLength) : 524288;
             inputEl.removeAttribute('aria-invalid');
         }
+        if (inputHintEl) inputHintEl.hidden = !hasInput;
         if (selectEl && selectLabelEl) {
             selectLabelEl.hidden = !hasSelect;
-            selectEl.hidden = !hasSelect;
+            selectEl.hidden = hasCustomSelect || !hasSelect;
             selectLabelEl.textContent = hasSelect ? (o.selectLabel || '选择一项') : '';
             selectEl.innerHTML = '';
             selectEl.removeAttribute('aria-invalid');
@@ -295,14 +321,141 @@ function openUiModal(options) {
                 o.selectOptions.forEach(function (item) {
                     var option = document.createElement('option');
                     var normalized = item && typeof item === 'object' ? item : { value: item, label: item };
-                    option.value = String(normalized.value == null ? '' : normalized.value);
-                    option.textContent = String(normalized.label == null ? option.value : normalized.label);
-                    option.disabled = normalized.disabled === true;
+                    var normalizedItem = {
+                        value: String(normalized.value == null ? '' : normalized.value),
+                        label: String(normalized.label == null ? normalized.value : normalized.label),
+                        meta: String(normalized.meta || ''),
+                        title: String(normalized.title || ''),
+                        disabled: normalized.disabled === true,
+                    };
+                    selectItems.push(normalizedItem);
+                    option.value = normalizedItem.value;
+                    option.textContent = normalizedItem.label;
+                    option.disabled = normalizedItem.disabled;
+                    if (normalizedItem.title) option.title = normalizedItem.title;
                     selectEl.appendChild(option);
                 });
                 selectEl.value = String(o.selectValue == null ? '' : o.selectValue);
                 if (!selectEl.value && selectEl.options.length) selectEl.selectedIndex = 0;
             }
+        }
+        if (selectControlEl) {
+            selectControlEl.hidden = !hasCustomSelect;
+            selectControlEl.classList.remove('is-open');
+        }
+        if (selectMenuEl) {
+            selectMenuEl.hidden = true;
+            selectMenuEl.innerHTML = '';
+        }
+
+        function setSelectMenuOpen(open) {
+            if (!hasCustomSelect) return;
+            var nextOpen = !!open;
+            selectControlEl.classList.toggle('is-open', nextOpen);
+            selectMenuEl.hidden = !nextOpen;
+            selectTriggerEl.setAttribute('aria-expanded', nextOpen ? 'true' : 'false');
+            if (nextOpen) {
+                var selectedRow = selectOptionRows.find(function (row) { return row.getAttribute('aria-selected') === 'true'; });
+                var focusRow = selectedRow || selectOptionRows.find(function (row) { return !row.disabled; });
+                if (focusRow) requestAnimationFrame(function () { focusRow.focus(); });
+            }
+        }
+
+        function syncCustomSelect() {
+            if (!hasCustomSelect) return;
+            var selectedValue = String(selectEl.value || '');
+            var selectedItem = selectItems.find(function (item) { return item.value === selectedValue; }) || selectItems[0];
+            selectCurrentEl.textContent = selectedItem ? selectedItem.label : '';
+            selectCurrentMetaEl.textContent = selectedItem ? selectedItem.meta : '';
+            selectOptionRows.forEach(function (row) {
+                var selected = row.dataset.value === selectedValue;
+                row.classList.toggle('is-selected', selected);
+                row.setAttribute('aria-selected', selected ? 'true' : 'false');
+            });
+        }
+
+        function commitSelectValue(value, closeMenu) {
+            if (!hasSelect) return;
+            selectEl.value = String(value || '');
+            syncCustomSelect();
+            syncInputValidity();
+            if (closeMenu) {
+                setSelectMenuOpen(false);
+                selectTriggerEl.focus();
+            }
+        }
+
+        function moveSelectFocus(row, delta) {
+            var enabledRows = selectOptionRows.filter(function (item) { return !item.disabled; });
+            var index = enabledRows.indexOf(row);
+            if (!enabledRows.length) return;
+            var nextIndex = index < 0 ? 0 : (index + delta + enabledRows.length) % enabledRows.length;
+            enabledRows[nextIndex].focus();
+        }
+
+        if (hasCustomSelect) {
+            selectItems.forEach(function (item, index) {
+                var row = document.createElement('button');
+                row.type = 'button';
+                row.id = 'ui-modal-select-option-' + index;
+                row.className = 'ui-modal-select-option';
+                row.setAttribute('role', 'option');
+                row.dataset.value = item.value;
+                row.disabled = item.disabled;
+                if (item.title) row.title = item.title;
+
+                var copy = document.createElement('span');
+                copy.className = 'ui-modal-select-option-copy';
+                var name = document.createElement('span');
+                name.className = 'ui-modal-select-option-name';
+                name.textContent = item.label;
+                var meta = document.createElement('span');
+                meta.className = 'ui-modal-select-option-meta';
+                meta.textContent = item.meta;
+                copy.appendChild(name);
+                if (item.meta) copy.appendChild(meta);
+                var check = document.createElement('span');
+                check.className = 'ui-modal-select-option-check';
+                check.textContent = '✓';
+                check.setAttribute('aria-hidden', 'true');
+                row.appendChild(copy);
+                row.appendChild(check);
+                row.onclick = function (event) {
+                    event.stopPropagation();
+                    commitSelectValue(item.value, true);
+                };
+                row.onkeydown = function (event) {
+                    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+                        event.preventDefault(); event.stopPropagation();
+                        moveSelectFocus(row, event.key === 'ArrowDown' ? 1 : -1);
+                    } else if (event.key === 'Home' || event.key === 'End') {
+                        event.preventDefault(); event.stopPropagation();
+                        var enabledRows = selectOptionRows.filter(function (optionRow) { return !optionRow.disabled; });
+                        var targetRow = event.key === 'Home' ? enabledRows[0] : enabledRows[enabledRows.length - 1];
+                        if (targetRow) targetRow.focus();
+                    } else if (event.key === 'Enter' || event.key === ' ') {
+                        event.preventDefault(); event.stopPropagation();
+                        commitSelectValue(item.value, true);
+                    } else if (event.key === 'Escape') {
+                        event.preventDefault(); event.stopPropagation();
+                        setSelectMenuOpen(false);
+                        selectTriggerEl.focus();
+                    }
+                };
+                selectOptionRows.push(row);
+                selectMenuEl.appendChild(row);
+            });
+            selectTriggerEl.onclick = function (event) {
+                event.stopPropagation();
+                setSelectMenuOpen(selectMenuEl.hidden);
+            };
+            selectTriggerEl.onkeydown = function (event) {
+                if (event.key === 'ArrowDown' || event.key === 'ArrowUp' || event.key === 'Enter' || event.key === ' ') {
+                    event.preventDefault(); event.stopPropagation();
+                    setSelectMenuOpen(true);
+                }
+            };
+            syncCustomSelect();
         }
 
         var danger = !!o.danger;
@@ -317,13 +470,14 @@ function openUiModal(options) {
             okBtn.disabled = invalid;
             if (hasInput) inputEl.setAttribute('aria-invalid', invalid ? 'true' : 'false');
             if (hasSelect) selectEl.setAttribute('aria-invalid', invalid ? 'true' : 'false');
+            if (hasCustomSelect) selectTriggerEl.setAttribute('aria-invalid', invalid ? 'true' : 'false');
         }
         function onOk() {
             if (hasSelect) {
                 var selectedValue = String(selectEl.value || '').trim();
                 if (!selectedValue) {
                     syncInputValidity();
-                    selectEl.focus();
+                    (hasCustomSelect ? selectTriggerEl : selectEl).focus();
                     return;
                 }
                 closeUiModal(selectedValue);
@@ -346,12 +500,23 @@ function openUiModal(options) {
         cancelBtn.onclick = onCancel;
         okBtn.disabled = false;
         if (inputEl) inputEl.oninput = syncInputValidity;
-        if (selectEl) selectEl.onchange = syncInputValidity;
+        if (selectEl) selectEl.onchange = function () { syncCustomSelect(); syncInputValidity(); };
         syncInputValidity();
-        root.onclick = function (e) { if (e.target === root) onCancel(); };
+        root.onclick = function (e) {
+            if (e.target === root) onCancel();
+            else if (hasCustomSelect && !selectControlEl.contains(e.target)) setSelectMenuOpen(false);
+        };
 
         uiModalKeyHandler = function (e) {
-            if (e.key === 'Escape') { e.preventDefault(); onCancel(); }
+            if (e.key === 'Escape') {
+                e.preventDefault();
+                if (hasCustomSelect && !selectMenuEl.hidden) {
+                    setSelectMenuOpen(false);
+                    selectTriggerEl.focus();
+                } else {
+                    onCancel();
+                }
+            }
             else if (isInputSubmitShortcut(e, 'single-line') && document.activeElement !== cancelBtn) {
                 e.preventDefault();
                 onOk();
@@ -364,7 +529,7 @@ function openUiModal(options) {
         document.body.style.overflow = 'hidden';
         requestAnimationFrame(function () {
             if (hasSelect) {
-                selectEl.focus();
+                (hasCustomSelect ? selectTriggerEl : selectEl).focus();
             } else if (hasInput) {
                 inputEl.focus();
                 inputEl.select();

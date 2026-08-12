@@ -11,7 +11,11 @@ from app.human_interaction.service import (
 from app.runtime_v2.ui_projection import RuntimeUiProjection
 
 
-def test_approval_gate_returns_raw_decision_for_two_step_flow():
+@pytest.mark.parametrize(
+    "decision",
+    ["allow_external_workspace", "allow_external_workspace_once"],
+)
+def test_approval_gate_returns_raw_decision_for_two_step_flow(decision):
     """wait_tool_ui_approval_after_emit(return_decision=True) returns the raw
     decision token so the Agent Loop can re-prompt the command after the
     workspace permission is granted (two independent authorization axes)."""
@@ -34,11 +38,11 @@ def test_approval_gate_returns_raw_decision_for_two_step_flow():
             )
         )
         await asyncio.sleep(0.05)
-        resolve_tool_approval_decision(sid, aid, "allow_external_workspace")
+        resolve_tool_approval_decision(sid, aid, decision)
         return await waiter
 
     result = asyncio.run(flow())
-    assert result == "allow_external_workspace"
+    assert result == decision
 
 
 def test_approval_review_context_lives_only_while_approval_is_pending():
@@ -231,6 +235,10 @@ def test_dangerous_approval_rejects_session_and_always_grants(tmp_path):
         service.resolve_approval("session-1", "danger-1", "allow_session")
     with pytest.raises(HumanInteractionValidationError, match="allow_once or deny"):
         service.resolve_approval("session-1", "danger-1", "allow_always")
+    with pytest.raises(HumanInteractionValidationError, match="allow_once or deny"):
+        service.resolve_approval(
+            "session-1", "danger-1", "allow_external_workspace_once"
+        )
     resolved = service.resolve_approval("session-1", "danger-1", "allow_once")
     assert resolved["decision"] == "allow_once"
 
@@ -244,6 +252,23 @@ def test_non_dangerous_approval_still_supports_session_grant(tmp_path):
     )
     resolved = service.resolve_approval("session-1", "normal-1", "allow_session")
     assert resolved["decision"] == "allow_session"
+
+
+def test_workspace_approval_supports_one_time_scope_without_approving_tool(tmp_path):
+    service = _service(tmp_path)
+    service.create_approval(
+        "session-1",
+        approval_id="workspace-1",
+        metadata={
+            "tool": "write_file",
+            "force_approval": False,
+            "external_workspace_grantable": True,
+        },
+    )
+    resolved = service.resolve_approval(
+        "session-1", "workspace-1", "allow_external_workspace_once"
+    )
+    assert resolved["decision"] == "allow_external_workspace_once"
 
 
 def test_resolved_approval_keeps_rule_metadata_for_rule_creation(tmp_path):
@@ -317,15 +342,23 @@ def test_frontend_human_interaction_contract_is_wired():
     assert "attachHumanInteractionCardsForToolCall" in module
     assert "attachHumanInteractionCardsForToolCall" in rendering
     assert "attachAllHumanInteractionCards" in module
-    assert "允许一次" in module
+    assert "本次允许" in module
     assert "替我分析" in module
     assert "analyzeHumanApproval(card)" in module
     assert "/analyze'" in module
     assert "以上仅为分析建议，审批仍由你决定。" in module
-    assert "本任务内允许相同请求" in module
-    assert "始终允许此类操作" in module
-    assert "resolveHumanApproval(card, 'allow_session')" in module
+    assert "human-always-btn', '始终允许'" in module
+    assert "当前任务内自动允许完全相同的请求" in module
+    assert "durableRuleAvailable ? 'allow_always' : 'allow_session'" in module
+    assert "allow_external_workspace_once" in module
+    assert "human-approval-group" not in module
     assert "if (!forced)" in module
+    approval_renderer = module.split("function createHumanApprovalCard", 1)[1].split(
+        "async function analyzeHumanApproval", 1
+    )[0]
+    assert approval_renderer.count("humanElement('button'") == 4
+    assert "本任务内允许相同请求" not in approval_renderer
+    assert "始终允许此类操作" not in approval_renderer
     # Tool rows fold as a whole (command + approval card). They stay expanded
     # until the tool result arrives, then auto-fold to a compact preview;
     # manual fold takes priority, clicking the command text toggles the same
@@ -354,6 +387,8 @@ def test_frontend_human_interaction_contract_is_wired():
     assert "createProcessFeedRow(ctx, 'tool-call', text, so, runSessionId, tid)" in upsert_fn
     assert "attachHumanInteractionCardsForToolCall(ctx && ctx.stream, tid)" in upsert_fn
     css = (root / "frontend/src/styles/app.css").read_text(encoding="utf-8")
+    assert ".human-approval-actions > .human-analyze-btn { margin-right: auto; }" in css
+    assert ".human-approval-actions > .human-analyze-btn { flex: 0 0 auto; }" in css
     slot_card = css.split(".human-interaction-tool-slot .human-interaction-card {", 1)[1].split("}", 1)[0]
     assert "width: min(720px, calc(100% - 1rem));" in slot_card
     assert "margin: 0.65rem auto;" in slot_card
@@ -372,8 +407,29 @@ def test_frontend_human_interaction_contract_is_wired():
     assert "if (badge) badge.remove();" in badge_update
     assert "hasQuestions && hasApprovals" in badge_update
     assert "String(count)" in badge_update
-    assert "function showHumanQuestionReview" in module
+    assert "function showHumanQuestionReview" not in module
     assert "function validateHumanQuestionPane" in module
+    assert "input.addEventListener('change'" in module
+    assert "question.multi_select || !input.checked || qIndex >= questions.length - 1" in module
+    assert "back.disabled = next === 0" in module
+    assert "nextBtn.disabled = lastQuestion" in module
+    assert "back.textContent = '上一题'" in module
+    assert "nextBtn.textContent = '下一题'" in module
+    assert "human-confirm-btn', '确认'" in module
+    assert "human-submit-btn', '提交答案'" in module
+    assert "if (confirmBtn) confirmBtn.classList.toggle('hidden', !multipleQuestions || lastQuestion)" in module
+    assert "if (submit) submit.classList.toggle('hidden', multipleQuestions && !lastQuestion)" in module
+    assert "if (cancel) cancel.classList.toggle('hidden', multipleQuestions)" in module
+    assert "human-question-review" not in module
+    keydown = module.split("card.addEventListener('keydown'", 1)[1].split("return card;", 1)[0]
+    assert "if (questions.length > 1 && current < questions.length - 1)" in keydown
+    assert "void submitHumanQuestion(card);" in keydown
+    assert "Ctrl/Cmd + Enter 提交答案" in module
+    submit_validation = module.split("async function submitHumanQuestion", 1)[1].split(
+        "async function cancelHumanQuestion", 1
+    )[0]
+    assert "if (collected.invalidPane)" in submit_validation
+    assert "setHumanQuestionStep(card, panes.indexOf(collected.invalidPane))" in submit_validation
     assert "aria-busy" in module
     assert "confirmAndCancelPendingHumanQuestionsForMessage" not in module
     assert "confirmAndCancelPendingHumanQuestionsForHistoryMutation" in module
@@ -423,12 +479,14 @@ def test_analyze_approval_returns_advice_without_resolving(monkeypatch):
 
     calls = []
 
-    async def fake_review(review_request, *, user_intent):
-        calls.append((review_request, user_intent))
+    async def fake_review(review_request, *, user_intent, session_id=""):
+        calls.append((review_request, user_intent, session_id))
         return SimpleNamespace(
             approved=True,
             risk="low",
-            reason="Matches the requested repository inspection.",
+            reason="【命令风险】Read-only repository inspection.\n【命令目的】Show repository state.",
+            risk_analysis="Read-only repository inspection.",
+            command_purpose="Show repository state.",
             available=True,
         )
 
@@ -452,16 +510,100 @@ def test_analyze_approval_returns_advice_without_resolving(monkeypatch):
         "analysis": {
             "recommendation": "allow",
             "risk": "low",
-            "reason": "Matches the requested repository inspection.",
+            "reason": "【命令风险】Read-only repository inspection.\n【命令目的】Show repository state.",
+            "risk_analysis": "Read-only repository inspection.",
+            "command_purpose": "Show repository state.",
             "available": True,
         },
     }
-    assert calls == [(request, "inspect repository")]
+    assert calls == [(request, "inspect repository", "session-analysis")]
     assert record == {
         "approval_id": "approval-analysis",
         "status": "pending",
         "decision": None,
     }
+
+
+@pytest.mark.parametrize(
+    ("decision", "expected_global_grant"),
+    [
+        ("allow_external_workspace", True),
+        ("allow_external_workspace_once", False),
+    ],
+)
+def test_workspace_scope_resolution_reprompts_tool_without_approving_it(
+    monkeypatch, decision, expected_global_grant
+):
+    import json
+
+    import human_interaction
+    import security
+    import tool_approval_gate
+    import webui
+
+    class Request:
+        headers = {}
+
+        async def json(self):
+            return {"decision": decision}
+
+    class Service:
+        def resolve_approval(
+            self, session_id, approval_id, received_decision, *, resolver
+        ):
+            assert (session_id, approval_id, received_decision) == (
+                "workspace-session",
+                "workspace-approval",
+                decision,
+            )
+            assert resolver["channel"] == "webui"
+            return {
+                "approval_id": approval_id,
+                "status": "resolved",
+                "decision": decision,
+                "security_request_digest": "sha256:test",
+            }
+
+    raw_decisions = []
+    global_grants = []
+
+    monkeypatch.setattr(
+        human_interaction, "get_human_interaction_service", lambda: Service()
+    )
+    monkeypatch.setattr(tool_approval_gate, "has_live_approval_waiter", lambda *_: True)
+    monkeypatch.setattr(
+        tool_approval_gate,
+        "resolve_tool_approval_decision",
+        lambda session_id, approval_id, value: raw_decisions.append(
+            (session_id, approval_id, value)
+        )
+        or True,
+    )
+    monkeypatch.setattr(
+        security,
+        "update_security_settings",
+        lambda **values: global_grants.append(values) or values,
+    )
+
+    async def ignore_event(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(webui, "publish_session_event", ignore_event)
+
+    response = asyncio.run(
+        webui.resolve_session_approval(
+            "workspace-session", "workspace-approval", Request()
+        )
+    )
+    payload = json.loads(response.body)
+
+    assert payload["ok"] is True
+    assert raw_decisions == [
+        ("workspace-session", "workspace-approval", decision)
+    ]
+    assert bool(global_grants) is expected_global_grant
+    if global_grants:
+        assert global_grants == [{"allow_external_workspace_ops": True}]
 
 
 def test_tool_pending_is_emitted_before_approval_dialog():

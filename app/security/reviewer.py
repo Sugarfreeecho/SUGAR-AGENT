@@ -27,6 +27,8 @@ class ReviewResult:
     approved: bool
     reason: str
     risk: str
+    risk_analysis: str = ""
+    command_purpose: str = ""
     # False when the automatic reviewer could not produce a decision at all
     # (model failure/timeout/invalid output). The request is still fail-closed
     # (never auto-approved), but the UI must present it as "reviewer
@@ -34,31 +36,79 @@ class ReviewResult:
     available: bool = True
 
 
-async def review_request(request: CapabilityRequest, *, user_intent: str) -> ReviewResult:
+def _command_purpose_fallback(request: CapabilityRequest) -> str:
+    action = str(request.action or "requested action")
+    resource = str(redact_security_value(request.resource or ""))[:1000]
+    if resource:
+        return f"该请求要执行 {action}，目标或命令为：{resource}。"
+    return f"该请求要执行 {action}；当前请求没有提供更具体的目标说明。"
+
+
+def _structured_review_result(
+    approved: bool,
+    risk: str,
+    risk_analysis: str,
+    command_purpose: str,
+    *,
+    available: bool = True,
+) -> ReviewResult:
+    risk_text = str(risk_analysis or "未提供具体风险说明。").strip()[:1500]
+    purpose_text = str(command_purpose or "未提供命令用途说明。").strip()[:1500]
+    return ReviewResult(
+        approved=bool(approved),
+        reason=f"【命令风险】{risk_text}\n【命令目的】{purpose_text}",
+        risk=str(risk or "unknown").lower(),
+        risk_analysis=risk_text,
+        command_purpose=purpose_text,
+        available=bool(available),
+    )
+
+
+async def review_request(
+    request: CapabilityRequest,
+    *,
+    user_intent: str,
+    session_id: str = "",
+) -> ReviewResult:
     """Review one immutable request. Failure is deliberately fail-closed."""
     if request.effect in {"credential", "policy_change"} or _CRITICAL.search(request.resource):
-        return ReviewResult(
-            False, "Critical credential, policy, or system risk.", "critical"
+        return _structured_review_result(
+            False,
+            "critical",
+            "该请求涉及凭据、安全策略或系统关键区域，执行后可能泄露敏感信息、削弱安全防护或破坏系统，因此被强制拦截。",
+            _command_purpose_fallback(request),
         )
     last_error: Exception | None = None
     for _attempt in range(2):
         try:
             return await asyncio.wait_for(
-                asyncio.to_thread(_review_with_model, request, user_intent),
+                asyncio.to_thread(
+                    _review_with_model,
+                    request,
+                    user_intent,
+                    str(session_id or "").strip(),
+                ),
                 timeout=_REVIEWER_TIMEOUT_SECONDS,
             )
         except Exception as exc:
             last_error = exc
-    return ReviewResult(
+    return _structured_review_result(
         False,
-        f"Automatic reviewer unavailable: {last_error}",
         "unknown",
+        f"审查模型暂时不可用，无法可靠核对具体影响；在风险未确认前不会自动放行。错误：{last_error}",
+        _command_purpose_fallback(request),
         available=False,
     )
 
 
-def _review_with_model(request: CapabilityRequest, user_intent: str) -> ReviewResult:
-    from agent_harness import executor_client, executor_model
+def _review_with_model(
+    request: CapabilityRequest,
+    user_intent: str,
+    session_id: str = "",
+) -> ReviewResult:
+    from agent_harness import resolve_executor_config_for_session
+    from agent_messages import SystemMessage, UserMessage
+    from agent_openai import _LogicalRequestBudget, chat_completion
 
     prompt = {
         "user_intent": str(redact_security_value(user_intent or ""))[:4000],
@@ -71,27 +121,43 @@ def _review_with_model(request: CapabilityRequest, user_intent: str) -> ReviewRe
         },
     }
     messages = [
-        {
-            "role": "system",
-            "content": (
+        SystemMessage(
+            content=(
                 "You are a read-only security reviewer. You cannot change the request. "
                 "Approve only when the exact action is clearly required by the user's "
                 "stated intent and does not exfiltrate data, access credentials, persistently "
-                "weaken security, or cause disproportionate destruction. Return JSON only: "
-                '{"decision":"approve|deny","risk":"low|medium|high|critical","reason":"..."}.'
-            ),
-        },
-        {"role": "user", "content": json.dumps(prompt, ensure_ascii=False)},
+                "weaken security, or cause disproportionate destruction. Explain the command "
+                "in plain language: what its executable, flags, operands, paths, hosts, or targets "
+                "actually do; what result it is intended to produce; and why that result is needed "
+                "for the user's task. Identify the concrete reason it was intercepted and the "
+                "specific possible harm (such as deletion scope, overwrite, data exposure, network "
+                "destination, permission expansion, or persistence). Never give a vague statement "
+                "such as 'this is risky' without naming the risky behavior. Use the same language as "
+                "user_intent. Return JSON only: "
+                '{"decision":"approve|deny","risk":"low|medium|high|critical",'
+                '"risk_analysis":"why intercepted and concrete risks",'
+                '"command_purpose":"what the command does, its useful result, and why it is needed"}.'
+            )
+        ),
+        UserMessage(content=json.dumps(prompt, ensure_ascii=False)),
     ]
 
+    reviewer_client, reviewer_model, reviewer_max_tokens, _context_window = (
+        resolve_executor_config_for_session(session_id)
+    )
+    recovery_budget = _LogicalRequestBudget()
+
     def _call(extra_body: dict | None = None):
-        return executor_client.chat.completions.create(
-            model=executor_model,
-            messages=messages,
+        return chat_completion(
+            reviewer_client,
+            reviewer_model,
+            messages,
             temperature=0,
-            max_tokens=_REVIEWER_MAX_TOKENS,
-            timeout=_REVIEWER_TIMEOUT_SECONDS,
-            **({"extra_body": extra_body} if extra_body else {}),
+            max_tokens=min(int(reviewer_max_tokens), _REVIEWER_MAX_TOKENS),
+            extra_body=extra_body,
+            response_validator=lambda response: bool(getattr(response, "choices", None)),
+            recovery_budget=recovery_budget,
+            request_timeout=_REVIEWER_TIMEOUT_SECONDS,
         )
 
     def _extract_text(response) -> str:
@@ -125,13 +191,28 @@ def _review_with_model(request: CapabilityRequest, user_intent: str) -> ReviewRe
     decision = str(data.get("decision") or "deny").lower()
     if decision not in {"approve", "deny"}:
         raise ValueError(f"reviewer returned unknown decision {decision!r}")
-    reason = str(data.get("reason") or "Reviewer supplied no rationale.")[:1000]
+    legacy_reason = str(data.get("reason") or "").strip()
+    risk_analysis = str(
+        data.get("risk_analysis")
+        or legacy_reason
+        or "审查模型未提供具体风险说明。"
+    )
+    command_purpose = str(
+        data.get("command_purpose")
+        or data.get("purpose")
+        or _command_purpose_fallback(request)
+    )
     if risk == "critical":
-        return ReviewResult(False, reason, risk)
-    if risk == "high" and not _EXPLICIT_HIGH_RISK.search(str(user_intent or "")):
-        return ReviewResult(
-            False,
-            "High-risk requests require explicit authorization in the user's task.",
-            risk,
+        return _structured_review_result(
+            False, risk, risk_analysis, command_purpose
         )
-    return ReviewResult(decision == "approve", reason, risk)
+    if risk == "high" and not _EXPLICIT_HIGH_RISK.search(str(user_intent or "")):
+        return _structured_review_result(
+            False,
+            risk,
+            "用户任务没有明确授权这项高风险操作，因此不能自动批准。" + risk_analysis,
+            command_purpose,
+        )
+    return _structured_review_result(
+        decision == "approve", risk, risk_analysis, command_purpose
+    )
