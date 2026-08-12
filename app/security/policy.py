@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Iterable
 from urllib.parse import urlsplit
 
-from trusted_domains import is_trusted_host, is_trusted_url, trusted_network_command
+from trusted_domains import is_trusted_host, is_trusted_url
 
 from .models import (
     CapabilityRequest,
@@ -314,6 +314,12 @@ def suggest_rule_pattern(
     """Generate a safe, reusable pattern for the 'allow same kind' button."""
     action = str(request.action or "")
     if action == "process.exec":
+        egress_intent = str(request.metadata.get("egress_intent") or "none")
+        # Upload and opaque-network approvals are intentionally task/once
+        # scoped. A broad process.exec allow rule would silently authorize
+        # future data transmission with different arguments.
+        if egress_intent in {"upload", "unknown", "interactive"}:
+            return None
         prefix = safe_command_prefix(request.resource)
         if prefix is None:
             return None
@@ -548,6 +554,27 @@ class PolicyEngine:
             # ``curl:*``/``powershell:*`` allow rule.
             if request.metadata.get("destructive"):
                 return result(DecisionOutcome.ASK, "process.destructive", "Destructive command requires approval.")
+            egress_intent = str(request.metadata.get("egress_intent") or "none")
+            confidence = str(request.metadata.get("analysis_confidence") or "low")
+            destinations = list(request.metadata.get("destinations") or [])
+            if egress_intent == "upload":
+                return result(
+                    DecisionOutcome.ASK,
+                    "process.network.upload",
+                    "Command sends data to an external destination.",
+                    session_only=True,
+                    one_time_only=bool(
+                        request.metadata.get("sensitive_source")
+                        or request.metadata.get("unknown_target")
+                    ),
+                )
+            if egress_intent in {"unknown", "interactive"}:
+                return result(
+                    DecisionOutcome.ASK,
+                    "process.network.unknown",
+                    "Command may create an opaque or interactive network connection.",
+                    one_time_only=True,
+                )
             if _DYNAMIC_SHELL.search(request.resource):
                 return result(DecisionOutcome.ASK, "process.dynamic", "Dynamically constructed shell code requires review.")
             if request.metadata.get("credential_read"):
@@ -558,14 +585,19 @@ class PolicyEngine:
                 )
             if request.metadata.get("external_workspace"):
                 return result(DecisionOutcome.ASK, "process.external", "Command requests access outside the workspace.")
-            if request.metadata.get("network"):
-                if trusted_network_command(request.resource):
+            if egress_intent == "read":
+                trusted_targets = bool(destinations) and all(
+                    is_trusted_host(str(item.get("host") or ""))
+                    for item in destinations
+                    if isinstance(item, dict)
+                )
+                if confidence == "high" and trusted_targets:
                     return result(
                         DecisionOutcome.ALLOW,
                         "process.trusted_network",
-                        "Command only contacts trusted built-in Huawei domains.",
+                        "High-confidence read-only command only contacts trusted built-in domains.",
                     )
-                return result(DecisionOutcome.ASK, "process.network", "Command may access the network.")
+                return result(DecisionOutcome.ASK, "process.network.read", "Command reads from the network.")
             return result(
                 DecisionOutcome.ALLOW,
                 "process.app_restricted",

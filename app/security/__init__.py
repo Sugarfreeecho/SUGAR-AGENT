@@ -3,6 +3,12 @@ from .models import (
     ApprovalReviewer,
     CapabilityRequest,
     DecisionOutcome,
+    EgressConstraint,
+    EgressDestination,
+    EgressIntent,
+    CommandSegment,
+    SandboxHealth,
+    ShellAnalysis,
     PermissionContext,
     PermissionMode,
     SandboxProfile,
@@ -32,12 +38,19 @@ from .runtime import (
     update_security_settings,
     web_fetch_preapproved_domains,
 )
+from .egress_guard import egress_helper_enabled, prepare_egress_launch, sandbox_health
 
 __all__ = [
     "ApprovalPolicy",
     "ApprovalReviewer",
     "CapabilityRequest",
     "DecisionOutcome",
+    "EgressConstraint",
+    "EgressDestination",
+    "EgressIntent",
+    "CommandSegment",
+    "SandboxHealth",
+    "ShellAnalysis",
     "PermissionContext",
     "PermissionMode",
     "SandboxProfile",
@@ -64,4 +77,7 @@ __all__ = [
     "set_session_permission_mode",
     "update_security_settings",
     "web_fetch_preapproved_domains",
+    "prepare_egress_launch",
+    "sandbox_health",
+    "egress_helper_enabled",
 ]

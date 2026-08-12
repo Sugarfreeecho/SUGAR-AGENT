@@ -22,6 +22,7 @@ from .models import (
     SecurityDecision,
     normalize_permission_mode,
 )
+from .shell_analysis import analyze_shell_command, egress_rule_fingerprint
 from .policy import (
     FORCED_APPROVAL_RULES,
     PolicyEngine,
@@ -50,11 +51,6 @@ EXTERNAL_OPS_GRANTABLE_RULES = frozenset(
     {"external.write", "delete.review", "process.external"}
 )
 
-_NETWORK_COMMAND = re.compile(
-    r"(?i)(?:https?://|\b(?:curl|wget|invoke-webrequest|invoke-restmethod|iwr|irm)\b|"
-    r"\bgit\s+(?:clone|fetch|pull|push)\b|\b(?:pip|pip3|npm|pnpm|yarn)\s+install\b|"
-    r"\b(?:ssh|scp|sftp|ftp|telnet|nc|ncat)\b)"
-)
 _POLICY_TAMPER = re.compile(
     r"(?i)(?:app[\\/]+security|security\.sqlite3|windows-sandbox\.json|"
     r"hooks\.json|HOOKS_(?:PATH|CONFIG_PATH|ENABLED)|"
@@ -132,13 +128,12 @@ def security_store() -> SecurityStore:
 def security_enabled(source: Any = None) -> bool:
     """Return whether application-level security controls are enabled.
 
-    Missing or empty values default to ``0`` (full access with permission
-    controls hidden). Any configured non-zero value enables the normal
-    three-mode permission system.
+    Missing or empty values default to ``1`` (the normal three-mode permission
+    system). An explicit ``0`` forces full access and hides permission controls.
     """
 
     env = os.environ if source is None else source
-    return str(env.get(SECURITY_ENABLED_ENV_VAR, "0") or "0").strip() != "0"
+    return str(env.get(SECURITY_ENABLED_ENV_VAR, "1") or "1").strip() != "0"
 
 
 def permission_context_for_mode(mode: object) -> PermissionContext:
@@ -251,6 +246,13 @@ def classify_tool(tool_name: str, arguments: dict[str, Any], workspace: Path) ->
         )
     if name == "run_shell":
         command = str(args.get("command") or "")
+        shell_analysis = analyze_shell_command(command)
+        egress_fingerprint = egress_rule_fingerprint(shell_analysis) or ""
+        session_grant_digest = (
+            hashlib.sha256(egress_fingerprint.encode("utf-8")).hexdigest()
+            if egress_fingerprint
+            else ""
+        )
         try:
             from agent_tools import (
                 _agent_self_protection_reason,
@@ -298,11 +300,13 @@ def classify_tool(tool_name: str, arguments: dict[str, Any], workspace: Path) ->
                 # may still send it, but the central policy derives scope from
                 # the final command and working directory.
                 "external_workspace": external,
-                "network": bool(_NETWORK_COMMAND.search(command)),
                 "destructive": destructive,
                 "credential_export": credential_export,
                 "credential_read": credential_read,
                 "policy_change": policy_change,
+                **shell_analysis.as_metadata(),
+                "egress_rule_fingerprint": egress_fingerprint,
+                "session_grant_digest": session_grant_digest,
             },
         )
     if name == "web_search":
@@ -490,6 +494,9 @@ def _audit_resource(request: CapabilityRequest) -> dict[str, Any]:
             base["command_prefix"] = safe_command_prefix(request.resource) or "dynamic"
         except Exception:
             base["command_prefix"] = "unknown"
+        base["egress_intent"] = str(request.metadata.get("egress_intent") or "none")
+        base["destinations"] = list(request.metadata.get("destinations") or [])
+        base["analysis_confidence"] = str(request.metadata.get("analysis_confidence") or "")
     elif request.action in {"network.connect", "web.search"}:
         try:
             parsed = urlsplit(str(request.resource or ""))
@@ -523,7 +530,11 @@ def authorize_request(
         if rule_decision is not None:
             if rule_decision.outcome in {DecisionOutcome.DENY, DecisionOutcome.ASK}:
                 decision = rule_decision
-            elif not always_ask_for(decision):
+            elif (
+                not always_ask_for(decision)
+                and str(request.metadata.get("egress_intent") or "none")
+                not in {"upload", "unknown", "interactive"}
+            ):
                 decision = rule_decision
     if (
         decision.outcome == DecisionOutcome.ASK
@@ -549,6 +560,13 @@ def authorize_request(
                 decision.request_digest,
                 once_only=forced,
             )
+            semantic_digest = str(request.metadata.get("session_grant_digest") or "")
+            if not grant and semantic_digest and not forced:
+                grant = store.consume_matching_grant(
+                    session_id,
+                    semantic_digest,
+                    once_only=False,
+                )
             if grant:
                 decision = SecurityDecision(
                     DecisionOutcome.ALLOW,
@@ -743,6 +761,21 @@ def security_status_for_session(session_id: str) -> dict[str, Any]:
     enabled = security_enabled()
     mode = session_permission_mode(session_id)
     context = permission_context_for_mode(mode)
+    from .egress_guard import sandbox_health
+
+    guard = sandbox_health()
+    restricted = context.sandbox_profile != SandboxProfile.NO_RESTRICTION
+    helper_disabled = guard.level == "disabled"
+    if not restricted:
+        restriction_label = "不受限制"
+    elif helper_disabled:
+        restriction_label = "出站助手已关闭"
+    elif guard.level == "strong":
+        restriction_label = "系统级出站防护"
+    elif guard.available:
+        restriction_label = "系统级出站防护（部分）"
+    else:
+        restriction_label = "降级防护（应用层识别）"
     return {
         "mode": mode.value,
         "mode_scope": "global",
@@ -754,17 +787,12 @@ def security_status_for_session(session_id: str) -> dict[str, Any]:
         "security_enabled": enabled,
         "permission_controls_visible": enabled,
         "restriction": {
-            "implementation": (
-                "none"
-                if context.sandbox_profile == SandboxProfile.NO_RESTRICTION
-                else "application-policy"
-            ),
-            "label": (
-                "不受限制"
-                if context.sandbox_profile == SandboxProfile.NO_RESTRICTION
-                else "应用层受限"
-            ),
-            "hard_sandbox": False,
+            "implementation": "none" if (not restricted or helper_disabled) else guard.backend,
+            "label": restriction_label,
+            "hard_sandbox": bool(restricted and guard.available),
+            "enforcement_level": "disabled" if (not restricted or helper_disabled) else guard.level,
+            "reason": "" if not restricted else guard.reason,
+            "capabilities": list(guard.capabilities),
             "os_user": "current",
         },
         "available_modes": {

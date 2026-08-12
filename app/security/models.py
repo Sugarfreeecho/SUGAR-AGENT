@@ -55,6 +55,103 @@ class DecisionOutcome(_ValueEnum):
     DENY = "deny"
 
 
+class EgressIntent(_ValueEnum):
+    NONE = "none"
+    READ = "read"
+    UPLOAD = "upload"
+    INTERACTIVE = "interactive"
+    UNKNOWN = "unknown"
+
+
+@dataclass(frozen=True)
+class EgressDestination:
+    host: str
+    port: int | None = None
+    scheme: str = ""
+    resource: str = ""
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "host": self.host,
+            "port": self.port,
+            "scheme": self.scheme,
+            "resource": self.resource,
+        }
+
+
+@dataclass(frozen=True)
+class CommandSegment:
+    text: str
+    executable: str = ""
+    family: str = ""
+    operation: str = ""
+    intent: EgressIntent = EgressIntent.NONE
+    destinations: tuple[EgressDestination, ...] = ()
+    data_sources: tuple[str, ...] = ()
+    dynamic: bool = False
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "text": self.text,
+            "executable": self.executable,
+            "family": self.family,
+            "operation": self.operation,
+            "intent": self.intent.value,
+            "destinations": [item.as_dict() for item in self.destinations],
+            "data_sources": list(self.data_sources),
+            "dynamic": self.dynamic,
+        }
+
+
+@dataclass(frozen=True)
+class ShellAnalysis:
+    intent: EgressIntent
+    segments: tuple[CommandSegment, ...] = ()
+    destinations: tuple[EgressDestination, ...] = ()
+    data_sources: tuple[str, ...] = ()
+    confidence: str = "high"
+    command_family: str = ""
+    operation: str = ""
+    sensitive_source: bool = False
+    unknown_target: bool = False
+    parse_errors: tuple[str, ...] = ()
+
+    @property
+    def network(self) -> bool:
+        return self.intent != EgressIntent.NONE
+
+    def as_metadata(self) -> dict[str, Any]:
+        return {
+            "egress_intent": self.intent.value,
+            "network": self.network,
+            "destinations": [item.as_dict() for item in self.destinations],
+            "data_sources": list(self.data_sources),
+            "analysis_confidence": self.confidence,
+            "command_family": self.command_family,
+            "egress_operation": self.operation,
+            "sensitive_source": self.sensitive_source,
+            "unknown_target": self.unknown_target,
+            "segments": [item.as_dict() for item in self.segments],
+            "parse_errors": list(self.parse_errors),
+        }
+
+
+@dataclass(frozen=True)
+class EgressConstraint:
+    mode: str
+    destinations: tuple[EgressDestination, ...] = ()
+    wildcard: bool = False
+
+
+@dataclass(frozen=True)
+class SandboxHealth:
+    level: str
+    backend: str
+    available: bool
+    reason: str = ""
+    capabilities: tuple[str, ...] = ()
+
+
 @dataclass(frozen=True)
 class PermissionContext:
     sandbox_profile: SandboxProfile

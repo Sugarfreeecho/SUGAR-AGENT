@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 
-CURRENT_POLICY_VERSION = 3
+CURRENT_POLICY_VERSION = 4
 logger = logging.getLogger(__name__)
 
 
@@ -181,7 +181,8 @@ class SecurityStore:
                 disabled = db.execute(
                     """
                     UPDATE permission_rules SET enabled=0
-                    WHERE source='project' AND behavior='allow' AND enabled=1
+                    WHERE behavior='allow' AND enabled=1
+                      AND (source='project' OR action='process.exec')
                     """
                 ).rowcount
                 db.execute("DELETE FROM grants")
@@ -204,7 +205,7 @@ class SecurityStore:
                                 "from_version": stored_version,
                                 "to_version": CURRENT_POLICY_VERSION,
                                 "grants_cleared": True,
-                                "project_allow_rules_disabled": int(disabled),
+                                "unsafe_allow_rules_disabled": int(disabled),
                                 "global_permission_mode_preserved": True,
                             },
                             separators=(",", ":"),
