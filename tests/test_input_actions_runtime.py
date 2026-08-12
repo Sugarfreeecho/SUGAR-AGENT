@@ -40,9 +40,13 @@ def test_frontend_inputs_share_submission_helpers():
     assert "const state = readComposerActionState();" in sse
     assert "dispatchComposerAction(false)" in sse
     assert "dispatchComposerAction(true)" in sse
-    assert "getFollowupQueue(state.sessionId).find" in sse
+    assert "recentComposerQueuedFollowup = { sessionId: sid, itemId: String(item.id) };" in sse
+    assert "recentComposerQueuedFollowup = null;" in message
+    assert "messageInput.addEventListener('blur'" in message
+    assert "const preferredPending = recent && recent.sessionId === state.sessionId" in sse
     assert "return item && !item.status;" in sse
-    assert "sendFollowupNow(String(firstPending.id), state.sessionId, { manual: true })" in sse
+    assert "const pendingToSend = preferredPending || queue.find" in sse
+    assert "sendFollowupNow(String(pendingToSend.id), state.sessionId, { manual: true })" in sse
     assert "isInputSubmitShortcut(e, 'editor')" in message
     assert "isInputSubmitShortcut(event, 'editor')" in human
     assert "isInputSubmitShortcut(event, 'editor')" in goal

@@ -205,7 +205,8 @@ def test_advanced_env_api_synthesizes_feature_switches_when_missing(tmp_path, mo
     }
 
     assert variables["GOAL_ENABLED"]["value"] == "1"
-    assert variables["SECURITY_ENABLED"]["value"] == "0"
+    assert variables["SECURITY_ENABLED"]["value"] == "1"
+    assert variables["EGRESS_HELPER_ENABLED"]["value"] == "1"
     assert variables["HOOKS_ENABLED"]["value"] == "1"
     assert variables["PLUGINS_ENABLED"]["value"] == "1"
     assert "EXECUTOR_LLM" not in variables

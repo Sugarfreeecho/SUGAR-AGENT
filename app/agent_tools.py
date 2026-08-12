@@ -53,7 +53,12 @@ _tool_work_dir_override: ContextVar[Optional[Path]] = ContextVar(
     "myagent_tool_work_dir_override",
     default=None,
 )
-from security import PermissionMode, active_security_context, enforce_leaf
+from security import (
+    PermissionMode,
+    active_security_context,
+    enforce_leaf,
+    prepare_egress_launch,
+)
 
 
 def active_tool_work_dir() -> Path:
@@ -1911,6 +1916,13 @@ def _run_cli_should_use_bash_on_windows() -> bool:
     """
     if platform.system() != "Windows":
         return False
+    try:
+        from security import egress_helper_enabled
+
+        if egress_helper_enabled():
+            return False
+    except Exception:
+        pass
     raw = (os.getenv("RUN_SHELL_USE_BASH") or "").strip().lower()
     if raw in ("0", "false", "no", "off"):
         return False
@@ -2116,6 +2128,11 @@ async def run_shell(
 
             bash_exe: Optional[str] = None
             if platform.system() == "Windows":
+                # Git Bash installations outside the application tree are not
+                # generally executable from an AppContainer without an
+                # administrator changing Git's ACLs.  The system PowerShell
+                # binary is AppContainer-readable and preserves the helper's
+                # network boundary, so prefer it while egress isolation is on.
                 if _run_cli_should_use_bash_on_windows():
                     bash_exe = _windows_bash_executable()
             else:
@@ -2138,12 +2155,18 @@ async def run_shell(
                 bash_argv = (
                     [bash_exe, "-lc", bash_wrapped] if use_login else [bash_exe, "-c", bash_wrapped]
                 )
+                prepared = prepare_egress_launch(
+                    bash_argv,
+                    shell_env,
+                    command=full_cmd,
+                    active_context=active_security_context(),
+                )
                 process = await asyncio.create_subprocess_exec(
-                    *bash_argv,
+                    *prepared.argv,
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
                     cwd=cwd,
-                    env=shell_env,
+                    env=prepared.env,
                     **spawn_kw,
                 )
             elif platform.system() == "Windows":
@@ -2161,9 +2184,12 @@ async def run_shell(
                     "on",
                     "force",
                 ):
-                    logger.warning(
-                        "RUN_SHELL_USE_BASH requested but no bash.exe found; using PowerShell"
-                    )
+                    from security import egress_helper_enabled
+
+                    if not egress_helper_enabled():
+                        logger.warning(
+                            "RUN_SHELL_USE_BASH requested but no bash.exe found; using PowerShell"
+                        )
                 win_env = _run_shell_env_with_prepended_agent_python_dir(child_env)
                 ps_enc = _powershell_encoded_command_b64(full_cmd)
                 ps_argv = [
@@ -2175,24 +2201,36 @@ async def run_shell(
                     "-EncodedCommand",
                     ps_enc,
                 ]
+                prepared = prepare_egress_launch(
+                    ps_argv,
+                    win_env,
+                    command=full_cmd,
+                    active_context=active_security_context(),
+                )
                 process = await asyncio.create_subprocess_exec(
-                    *ps_argv,
+                    *prepared.argv,
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
                     cwd=cwd,
-                    env=win_env,
+                    env=prepared.env,
                     **spawn_kw,
                 )
             else:
                 sh_path = shutil.which("sh") or "/bin/sh"
                 sh_env = _run_shell_env_with_prepended_agent_python_dir(child_env)
                 sh_argv = [sh_path, "-c", _posix_shell_eval_wrapper(full_cmd)]
+                prepared = prepare_egress_launch(
+                    sh_argv,
+                    sh_env,
+                    command=full_cmd,
+                    active_context=active_security_context(),
+                )
                 process = await asyncio.create_subprocess_exec(
-                    *sh_argv,
+                    *prepared.argv,
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
                     cwd=cwd,
-                    env=sh_env,
+                    env=prepared.env,
                     **spawn_kw,
                 )
             process_job = _assign_windows_run_shell_job(int(process.pid or 0))
@@ -4835,7 +4873,8 @@ OPENAI_TOOL_DEFINITIONS: List[Dict[str, Any]] = [
                     "profile supplies the subagent's endpoint, credentials, model, limits, and reasoning settings. Never guess, abbreviate, "
                     "or pass a raw model name; an unregistered model must first become a profile. Existing subagents keep their current "
                     "profile on ordinary resume; use action=switch_model to change it. A multimodal capability tag is only a routing hint; "
-                    "the effective input modalities and endpoint behavior determine whether media is actually sent."
+                    "the current message/attachment chain actually accept image input only when the endpoint supports it; the effective input "
+                    "modalities and endpoint behavior determine whether media is actually sent."
                 ),
                 "default": "",
             },

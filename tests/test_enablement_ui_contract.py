@@ -73,6 +73,9 @@ def test_pending_followup_mode_uses_custom_picker_instead_of_native_select():
     assert ".followup-mode-hit-target" in styles
     assert ".followup-mode-direction" in styles
     assert "rotate(225deg)" in styles
+    assert ".followup-mode-picker { position: relative; min-width: 3.7rem; height: 1.55rem; }" in styles
+    assert "height: 1.55rem;" in styles
+    assert "padding: 0 1.2rem 0 0.48rem;" in styles
     assert "function followupQueueRenderSignature" in frontend
     render_source = frontend[frontend.index("function renderFollowupQueue"):frontend.index("function getFollowupStatusText")]
     assert render_source.index("panel.dataset.renderSignature === renderSignature") < render_source.index("closeActiveFollowupModePicker();")

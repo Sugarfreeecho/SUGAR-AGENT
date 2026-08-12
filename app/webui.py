@@ -3694,9 +3694,14 @@ async def resolve_session_approval(session_id: str, approval_id: str, request: R
                         session_id=session_id,
                     )
                 else:
+                    grant_digest = (
+                        str(record.get("security_grant_digest") or "").strip()
+                        if decision_value == "allow_session"
+                        else ""
+                    ) or security_digest
                     add_approval_grant(
                         session_id,
-                        security_digest,
+                        grant_digest,
                         decision_value,
                     )
                 resolve_tool_approval(session_id, approval_id, True)
@@ -6200,6 +6205,7 @@ _ENV_GROUP_ORDER: list[tuple[str, str, list[str]]] = [
             "CPU_PRESSURE_RECOVERY_SECONDS",
             "CPU_PRESSURE_TOOL_CONCURRENCY",
             "SECURITY_ENABLED",
+            "EGRESS_HELPER_ENABLED",
             "MCP_REGISTRATION_APPROVAL_ENABLED",
             "ASK_USER_ENABLED",
             "GOAL_ENABLED",
@@ -6276,7 +6282,8 @@ for _gid, _title, _keys in _ENV_GROUP_ORDER:
         _ENV_KEY_ORDER_IN_GROUP[_k] = _i
 
 _ENV_HINTS: dict[str, str] = {
-    "SECURITY_ENABLED": "0（默认）强制使用完全访问并隐藏前端权限选择；设为 1 时启用请求批准 / 替我审批 / 完全访问三档权限，并恢复此前保存的全局权限模式。保存后立即生效，页面刷新后更新界面。",
+    "EGRESS_HELPER_ENABLED": "1（默认）启用系统出站助手；设为 0 时完全跳过助手，仅保留命令识别和审批。修改后立即影响新命令。",
+    "SECURITY_ENABLED": "1（默认）启用请求批准 / 替我审批 / 完全访问三档权限，并恢复此前保存的全局权限模式；设为 0 时强制使用完全访问并隐藏前端权限选择。保存后立即生效，页面刷新后更新界面。",
     "MCP_REGISTRATION_APPROVAL_ENABLED": "0（默认）关闭 MCP 注册审批：新配置直接连接、无需人工确认；1/true/yes/on 启用首次注册或配置摘要变化后的人工确认。保存后立即刷新 MCP。",
     "ASK_USER_ENABLED": "1（默认）允许主 Agent 创建 ask_user 问题；0/false/no/off 禁止。已有待回答问题仍可处理，工具审批不受影响。保存后立即生效。",
     "GOAL_ENABLED": "1（默认）启用持久 Goal、Goal 工具和服务端自动续跑；0/false/no/off 禁用。修改后需重启 Agent。",
@@ -6733,7 +6740,8 @@ async def get_env_snapshot():
     flat = [row for row in _parse_env_entries(raw) if row.get("key") not in _MODEL_ENV_KEYS]
     existing_keys = {str(row.get("key") or "") for row in flat}
     for key, default in {
-        "SECURITY_ENABLED": "0",
+        "SECURITY_ENABLED": "1",
+        "EGRESS_HELPER_ENABLED": "1",
         "MCP_REGISTRATION_APPROVAL_ENABLED": "0",
         "ASK_USER_ENABLED": "1",
         "GOAL_ENABLED": "1",

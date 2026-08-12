@@ -1704,6 +1704,7 @@ function enqueueCurrentInputAsFollowup(options) {
     }
     var item = appendFollowupQueueItem(sid, rawMessage, visibleMessage, selectedSkills);
     if (!item) return false;
+    recentComposerQueuedFollowup = { sessionId: sid, itemId: String(item.id) };
     if (options.pendingQuestion) {
         item.awaitingRunEnd = true;
         item.deferUntilRunEnd = true;
@@ -2757,6 +2758,7 @@ async function sendFollowupNow(itemId, sessionId, options) {
     var dispatchOptions = Object.assign({}, options);
     var observedManualEpoch = Number(followupManualDispatchEpochBySession[sid] || 0);
     if (options.manual) {
+        recentComposerQueuedFollowup = null;
         observedManualEpoch += 1;
         followupManualDispatchEpochBySession[sid] = observedManualEpoch;
         cancelFollowupQueueDrain(sid);
@@ -3226,11 +3228,19 @@ function dispatchComposerAction(allowStop) {
         return false;
     }
     if (!allowStop && !state.sendable && state.sessionId) {
-        const firstPending = getFollowupQueue(state.sessionId).find(function (item) {
+        const queue = getFollowupQueue(state.sessionId);
+        const recent = recentComposerQueuedFollowup;
+        recentComposerQueuedFollowup = null;
+        const preferredPending = recent && recent.sessionId === state.sessionId
+            ? queue.find(function (item) {
+                return item && !item.status && String(item.id) === recent.itemId;
+            })
+            : null;
+        const pendingToSend = preferredPending || queue.find(function (item) {
             return item && !item.status;
         });
-        if (firstPending) {
-            void sendFollowupNow(String(firstPending.id), state.sessionId, { manual: true });
+        if (pendingToSend) {
+            void sendFollowupNow(String(pendingToSend.id), state.sessionId, { manual: true });
             return true;
         }
     }

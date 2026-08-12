@@ -1525,10 +1525,14 @@ function repinStreamScrollAfterComposerResize() {
 function syncComposerInputState() {
     autoResizeTextarea();
     rewriteInputWorkspacePaths();
+    if (hasSendableText(messageInput.value)) recentComposerQueuedFollowup = null;
     if (currentSessionId) persistInputDraft(currentSessionId, messageInput.value);
     if (typeof setSendButtonState === 'function') setSendButtonState();
 }
 messageInput.addEventListener('input', syncComposerInputState);
+messageInput.addEventListener('blur', function () {
+    recentComposerQueuedFollowup = null;
+});
 autoResizeTextarea();
 refreshInputPathChips();
 

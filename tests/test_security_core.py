@@ -315,7 +315,7 @@ def test_permission_mode_is_kept_in_external_security_store(tmp_path):
     assert store.get_session_mode("any-session") == "full_access"
 
 
-def test_v3_migration_preserves_global_mode_and_disables_project_allow(tmp_path):
+def test_v4_migration_preserves_global_mode_and_disables_unsafe_process_allow(tmp_path):
     database = tmp_path / "security.sqlite3"
     store = SecurityStore(database)
     store.set_global_permission_mode("full_access")
@@ -333,7 +333,7 @@ def test_v3_migration_preserves_global_mode_and_disables_project_allow(tmp_path)
         db.execute("UPDATE security_meta SET value='2' WHERE key='policy_version'")
     migrated = SecurityStore(database)
 
-    assert migrated.policy_version() == 3
+    assert migrated.policy_version() == 4
     assert migrated.get_global_permission_mode() == "full_access"
     assert migrated.consume_matching_grant("session", "old-digest") is None
     rules = migrated.list_permission_rules(workspace="workspace")
@@ -503,7 +503,7 @@ def test_security_env_switch_only_zero_disables(monkeypatch):
     from security.runtime import security_enabled
 
     monkeypatch.delenv("SECURITY_ENABLED", raising=False)
-    assert security_enabled() is False
+    assert security_enabled() is True
     monkeypatch.setenv("SECURITY_ENABLED", "invalid")
     assert security_enabled() is True
     monkeypatch.setenv("SECURITY_ENABLED", "0")
@@ -977,7 +977,7 @@ def test_external_workspace_ops_permission_grants_write_delete_shell(
     # Network and dynamic shell are not covered by the grant.
     assert (
         decide("run_shell", {"command": "curl https://example.com", "args": []}).rule_id
-        == "process.network"
+            == "process.network.read"
     )
     assert (
         decide("run_shell", {"command": 'python -c "print(1)"', "args": []}).rule_id
@@ -1183,7 +1183,7 @@ def test_permission_enums_stringify_as_value_on_all_python_versions():
 
 def _isolated_security_store(tmp_path, monkeypatch):
     # Security policy tests exercise the restricted modes explicitly. The
-    # product default is full access when SECURITY_ENABLED is not configured.
+    # Product security is enabled by default when SECURITY_ENABLED is not configured.
     # Import first because agent_harness loads app/.env with override=True.
     import agent_harness  # noqa: F401
 
@@ -1438,7 +1438,7 @@ def test_shell_credential_read_outside_workspace_asks(tmp_path):
     assert decision.rule_id == "process.credential_read"
 
 
-def test_allow_prefix_rule_covers_same_kind_commands(tmp_path, monkeypatch):
+def test_allow_prefix_rule_covers_same_kind_read_commands(tmp_path, monkeypatch):
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     _isolated_security_store(tmp_path, monkeypatch)
@@ -1447,13 +1447,13 @@ def test_allow_prefix_rule_covers_same_kind_commands(tmp_path, monkeypatch):
     from security import add_permission_rule
 
     add_permission_rule(
-        behavior="allow", action="process.exec", pattern="git push:*"
+        behavior="allow", action="process.exec", pattern="curl:*"
     )
 
     _, decision, _ = authorize_tool(
         session_id="session",
         tool_name="run_shell",
-        arguments={"command": "git push origin main"},
+        arguments={"command": "curl https://example.com/api"},
         workspace=workspace,
     )
     assert decision.outcome == DecisionOutcome.ALLOW
@@ -1866,7 +1866,7 @@ def test_session_rule_scope_and_expiry(tmp_path, monkeypatch):
     add_permission_rule(
         behavior="allow",
         action="process.exec",
-        pattern="git push:*",
+        pattern="curl:*",
         source="session",
         session_id="session-a",
     )
@@ -1881,12 +1881,12 @@ def test_session_rule_scope_and_expiry(tmp_path, monkeypatch):
     rules_a = store.active_permission_rules(
         session_id="session-a", workspace=workspace
     )
-    assert [r["pattern"] for r in rules_a] == ["git push:*"]
+    assert [r["pattern"] for r in rules_a] == ["curl:*"]
 
     _, decision, _ = authorize_tool(
         session_id="session-b",
         tool_name="run_shell",
-        arguments={"command": "git push origin main"},
+        arguments={"command": "curl https://example.com/api"},
         workspace=workspace,
     )
     assert decision.outcome == DecisionOutcome.ASK
@@ -1894,7 +1894,7 @@ def test_session_rule_scope_and_expiry(tmp_path, monkeypatch):
     _, own, _ = authorize_tool(
         session_id="session-a",
         tool_name="run_shell",
-        arguments={"command": "git push origin main"},
+        arguments={"command": "curl https://example.com/api"},
         workspace=workspace,
     )
     assert own.outcome == DecisionOutcome.ALLOW
@@ -1915,10 +1915,7 @@ def test_suggest_rule_pattern_generates_safe_prefix(tmp_path):
     shell = classify_tool(
         "run_shell", {"command": "git push origin main"}, workspace
     )
-    assert suggest_rule_pattern(shell, workspace) == {
-        "action": "process.exec",
-        "pattern": "git push:*",
-    }
+    assert suggest_rule_pattern(shell, workspace) is None
 
     risky = classify_tool(
         "run_shell", {"command": "sudo rm -rf /"}, workspace
@@ -1946,7 +1943,7 @@ def test_approval_spec_marks_when_persistent_rule_can_be_generated(
     _isolated_security_store(tmp_path, monkeypatch)
     monkeypatch.delenv("TOOL_UI_APPROVAL", raising=False)
 
-    # A routine command with a suggestible pattern offers "always allow".
+    # Uploads are task-scoped and never create a cross-task process rule.
     req, decision, _ = authorize_tool(
         session_id="spec-test",
         tool_name="run_shell",
@@ -1956,9 +1953,11 @@ def test_approval_spec_marks_when_persistent_rule_can_be_generated(
     spec = _security_approval_spec(
         "run_shell", {"command": "git push origin main"}, decision, req, workspace
     )
-    assert spec["allow_always_available"] is True
-    assert spec["rule_action"] == "process.exec"
-    assert spec["rule_pattern"] == "git push:*"
+    assert spec["allow_always_available"] is False
+    assert spec["allow_session_available"] is True
+    assert spec["rule_action"] == ""
+    assert spec["rule_pattern"] == ""
+    assert spec["egress_intent"] == "upload"
 
     # A dangerous command cannot produce a durable rule and remains restricted
     # to one-time approval or denial.

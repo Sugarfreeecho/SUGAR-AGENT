@@ -254,6 +254,26 @@ def test_non_dangerous_approval_still_supports_session_grant(tmp_path):
     assert resolved["decision"] == "allow_session"
 
 
+def test_once_only_approval_rejects_session_and_durable_grants(tmp_path):
+    service = _service(tmp_path)
+    service.create_approval(
+        "session-1",
+        approval_id="egress-once",
+        metadata={
+            "tool": "run_shell",
+            "force_approval": False,
+            "allow_always_available": False,
+            "allow_session_available": False,
+        },
+    )
+    with pytest.raises(HumanInteractionValidationError):
+        service.resolve_approval("session-1", "egress-once", "allow_session")
+    with pytest.raises(HumanInteractionValidationError):
+        service.resolve_approval("session-1", "egress-once", "allow_always")
+    resolved = service.resolve_approval("session-1", "egress-once", "allow_once")
+    assert resolved["decision"] == "allow_once"
+
+
 def test_workspace_approval_supports_one_time_scope_without_approving_tool(tmp_path):
     service = _service(tmp_path)
     service.create_approval(
@@ -352,7 +372,7 @@ def test_frontend_human_interaction_contract_is_wired():
     assert "durableRuleAvailable ? 'allow_always' : 'allow_session'" in module
     assert "allow_external_workspace_once" in module
     assert "human-approval-group" not in module
-    assert "if (!forced)" in module
+    assert "if (!forced && record.allow_session_available !== false)" in module
     approval_renderer = module.split("function createHumanApprovalCard", 1)[1].split(
         "async function analyzeHumanApproval", 1
     )[0]
@@ -387,7 +407,8 @@ def test_frontend_human_interaction_contract_is_wired():
     assert "createProcessFeedRow(ctx, 'tool-call', text, so, runSessionId, tid)" in upsert_fn
     assert "attachHumanInteractionCardsForToolCall(ctx && ctx.stream, tid)" in upsert_fn
     css = (root / "frontend/src/styles/app.css").read_text(encoding="utf-8")
-    assert ".human-approval-actions > .human-analyze-btn { margin-right: auto; }" in css
+    assert ".human-approval-actions > .human-analyze-btn { flex: 0 0 auto; }" in css
+    assert ".human-approval-decisions" in css
     assert ".human-approval-actions > .human-analyze-btn { flex: 0 0 auto; }" in css
     slot_card = css.split(".human-interaction-tool-slot .human-interaction-card {", 1)[1].split("}", 1)[0]
     assert "width: min(720px, calc(100% - 1rem));" in slot_card

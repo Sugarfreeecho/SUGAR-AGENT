@@ -2798,6 +2798,8 @@ body {
     white-space: nowrap;
 }
 .followup-queue-action {
+    height: 1.55rem;
+    box-sizing: border-box;
     border: 1px solid var(--border-glass);
     border-radius: 8px;
     background: rgba(255,255,255,0.04);
@@ -2806,11 +2808,14 @@ body {
     font-size: 0.72rem;
     font-weight: 700;
     line-height: 1;
-    padding: 0.34rem 0.48rem;
+    padding: 0 0.48rem;
     cursor: pointer;
 }
-.followup-mode-picker { position: relative; min-width: 3.7rem; }
+.followup-mode-picker { position: relative; min-width: 3.7rem; height: 1.55rem; }
 .followup-queue-mode {
+    width: 100%;
+    height: 100%;
+    box-sizing: border-box;
     min-width: 3.7rem;
     appearance: none;
     -webkit-appearance: none;
@@ -2822,7 +2827,7 @@ body {
     font-size: 0.72rem;
     font-weight: 700;
     line-height: 1;
-    padding: 0.28rem 1.2rem 0.28rem 0.34rem;
+    padding: 0 1.2rem 0 0.48rem;
     cursor: pointer;
     pointer-events: none;
 }
@@ -4477,8 +4482,17 @@ body {
 }
 .human-card-nav, .human-approval-actions { display: flex; align-items: center; justify-content: flex-end; gap: 0.5rem; }
 .human-question-card .human-card-nav { margin-left: auto; }
-.human-approval-actions { flex-wrap: wrap; }
-.human-approval-actions > .human-analyze-btn { margin-right: auto; }
+.human-approval-actions { flex-wrap: nowrap; justify-content: space-between; }
+.human-approval-actions > .human-analyze-btn { flex: 0 0 auto; }
+.human-approval-decisions { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 0.5rem; }
+.human-egress-summary { margin-top: 0.75rem; padding: 0.65rem 0.72rem; border: 1px solid rgba(137, 180, 250, 0.2); border-radius: 8px; background: rgba(137, 180, 250, 0.045); }
+.human-egress-label { margin-bottom: 0.35rem; color: var(--text-primary); font-weight: 650; font-size: 0.78rem; }
+.human-egress-row { color: var(--text-soft); font-size: 0.74rem; line-height: 1.45; overflow-wrap: anywhere; }
+.human-egress-row.is-warning { color: var(--amber-accent); }
+.human-egress-enforcement { margin-top: 0.42rem; font-size: 0.7rem; }
+.human-egress-enforcement.is-strong { color: var(--green-accent); }
+.human-egress-enforcement.is-partial { color: var(--amber-accent); }
+.human-egress-enforcement.is-degraded { color: var(--amber-accent); }
 .human-secondary-btn, .human-primary-btn {
     min-height: 40px;
     border-radius: 9px;
@@ -4568,9 +4582,11 @@ body {
     .human-interaction-tool-slot .human-interaction-card { width: calc(100% - 0.35rem); }
     .human-card-actions { align-items: stretch; flex-direction: column-reverse; }
     .human-card-nav, .human-approval-actions { width: 100%; }
-    .human-card-nav > button, .human-approval-actions > button { flex: 1; }
-    .human-approval-actions { align-items: center; flex-direction: row; }
-    .human-approval-actions > .human-analyze-btn { flex: 0 0 auto; }
+    .human-card-nav > button { flex: 1; }
+    .human-approval-actions { align-items: stretch; flex-direction: column; }
+    .human-approval-actions > .human-analyze-btn { align-self: flex-start; }
+    .human-approval-decisions { width: 100%; justify-content: flex-end; }
+    .human-approval-decisions > button { flex: 1 1 auto; }
     .human-interaction-banner {
         width: calc(100vw - 1rem);
         max-width: calc(100vw - 1rem);

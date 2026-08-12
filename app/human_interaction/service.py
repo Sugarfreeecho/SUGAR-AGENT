@@ -351,6 +351,18 @@ class HumanInteractionService:
                 raise HumanInteractionValidationError(
                     "Dangerous approvals only support allow_once or deny"
                 )
+            if normalized_decision == "allow_always" and not bool(
+                record.get("allow_always_available")
+            ):
+                raise HumanInteractionValidationError(
+                    "This approval does not support a durable allow rule"
+                )
+            if normalized_decision == "allow_session" and record.get(
+                "allow_session_available", True
+            ) is False:
+                raise HumanInteractionValidationError(
+                    "This approval only supports allow_once or deny"
+                )
             payload = {
                 "approval_id": aid,
                 "status": "resolved",

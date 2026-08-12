@@ -23,7 +23,7 @@
 
 const MESSAGE_INPUT_PLACEHOLDER_DEFAULT = '说说你想做什么…（Enter 发送 · Shift/Ctrl/Cmd + Enter 换行）';
 const MESSAGE_INPUT_PLACEHOLDER_RUNNING = 'Agent运行中，输入后续任务';
-const MESSAGE_INPUT_PLACEHOLDER_QUEUED = '按 Enter 发送第一条待发送任务';
+const MESSAGE_INPUT_PLACEHOLDER_QUEUED = '按 Enter 发送刚加入或第一条待发送任务';
 
 function syncMessageInputPlaceholder() {
     if (!messageInput) return;
@@ -1414,6 +1414,7 @@ async function switchSession(sessionId, opts) {
     );
     clearSessionUnreadState(sessionId);
     const leaving = currentSessionId;
+    recentComposerQueuedFollowup = null;
     saveChatScrollForSession(leaving);
     stashInputDraft(leaving);
     if (typeof stashSkillPickerDraft === 'function') stashSkillPickerDraft(leaving);

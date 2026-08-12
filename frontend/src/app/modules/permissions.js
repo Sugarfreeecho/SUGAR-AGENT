@@ -50,10 +50,44 @@ function maybeShowGlobalFullAccessNotice(status) {
     window.setTimeout(function () { notice.remove(); }, 9000);
 }
 
+function maybeShowEgressDegradedNotice(status) {
+    var restriction = status && status.restriction;
+    if (!restriction || restriction.enforcement_level !== 'degraded') return;
+    var key = 'sugaragent-egress-degraded:' + String(restriction.reason || 'missing-helper');
+    try {
+        if (window.sessionStorage.getItem(key) === '1') return;
+        window.sessionStorage.setItem(key, '1');
+    } catch (_) {}
+    var notice = document.createElement('div');
+    notice.className = 'permission-global-warning-toast';
+    notice.textContent = '出站防护处于降级状态：命令仍会按上传/读取规则审批，但当前没有系统级网络隔离。';
+    var host = document.querySelector('.chat-stage') || document.querySelector('.main-center') || document.body;
+    host.appendChild(notice);
+    window.setTimeout(function () { notice.remove(); }, 9000);
+}
+
+function maybeShowEgressPartialNotice(status) {
+    var restriction = status && status.restriction;
+    if (!restriction || restriction.enforcement_level !== 'partial') return;
+    var key = 'sugaragent-egress-partial:' + String(restriction.implementation || 'helper');
+    try {
+        if (window.sessionStorage.getItem(key) === '1') return;
+        window.sessionStorage.setItem(key, '1');
+    } catch (_) {}
+    var notice = document.createElement('div');
+    notice.className = 'permission-global-warning-toast';
+    notice.textContent = '出站助手已启用：无网络命令会被系统强制断网；获批联网命令当前仍可访问审批目标之外的地址。';
+    var host = document.querySelector('.chat-stage') || document.querySelector('.main-center') || document.body;
+    host.appendChild(notice);
+    window.setTimeout(function () { notice.remove(); }, 9000);
+}
+
 function renderPermissionMode(status) {
     currentPermissionStatus = status || null;
     var controlsEnabled = syncPermissionControlVisibility(status);
     maybeShowGlobalFullAccessNotice(status);
+    maybeShowEgressDegradedNotice(status);
+    maybeShowEgressPartialNotice(status);
     var trigger = document.getElementById('permission-mode-trigger');
     var label = document.getElementById('permission-mode-current');
     var triggerIco = document.getElementById('permission-mode-ico');
@@ -69,9 +103,12 @@ function renderPermissionMode(status) {
     }
     var settingsStatus = document.getElementById('settings-security-status');
     if (settingsStatus && status) {
+        var restrictionLabel = status.restriction && status.restriction.label
+            ? ' · ' + status.restriction.label
+            : '';
         settingsStatus.textContent = status.mode === 'full_access'
             ? '警告：完全访问已开启，Agent 可直接操作文件、终端和网络，重启后不会自动关闭，直到你手动切换。'
-            : permissionModeLabel(status.mode) + '（全局统一，对所有任务生效）';
+            : permissionModeLabel(status.mode) + '（全局统一，对所有任务生效）' + restrictionLabel;
     }
     if (triggerIco) {
         var mode = status && status.mode;

@@ -14,6 +14,8 @@ const followupDrainTimers = Object.create(null);
 const followupDispatchChain = Object.create(null);
 /** 手动“立即发送”代次；用于淘汰已排队但尚未开始的旧自动队首发送。 */
 const followupManualDispatchEpochBySession = Object.create(null);
+/** 输入框刚加入队列的任务；仅供下一次空输入 Enter 优先立即发送。 */
+let recentComposerQueuedFollowup = null;
 let followupSnapshotRecoveryInitialized = false;
 /** 会话在后台跑完后未点开过：侧栏绿点，点开即清除（localStorage 持久化，刷新不丢） */
 const sessionUnreadComplete = new Set();

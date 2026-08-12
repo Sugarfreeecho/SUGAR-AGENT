@@ -921,12 +921,53 @@ function createHumanApprovalCard(record, sessionId) {
         detail.appendChild(humanElement('code', '', record.tool));
         body.appendChild(detail);
     }
+    var egressIntent = String(record.egress_intent || 'none');
+    if (egressIntent !== 'none') {
+        var egress = humanElement('div', 'human-egress-summary');
+        var intentLabel = egressIntent === 'upload'
+            ? '数据发送'
+            : (egressIntent === 'read' ? '网络读取' : '未知网络操作');
+        egress.appendChild(humanElement('div', 'human-egress-label', intentLabel));
+        var destinations = Array.isArray(record.destinations) ? record.destinations : [];
+        if (destinations.length) {
+            egress.appendChild(humanElement('div', 'human-egress-row', '目标：' + destinations.map(function (item) {
+                var host = String((item && item.host) || '未知');
+                var port = Number(item && item.port) || 0;
+                return host + (port ? ':' + port : '');
+            }).join('、')));
+        } else {
+            egress.appendChild(humanElement('div', 'human-egress-row is-warning', '目标：运行时动态确定'));
+        }
+        var sources = Array.isArray(record.data_sources) ? record.data_sources : [];
+        if (sources.length) egress.appendChild(humanElement('div', 'human-egress-row', '数据来源：' + sources.join('、')));
+        var enforcement = String(record.enforcement_level || '');
+        if (enforcement) {
+            egress.appendChild(humanElement(
+                'div',
+                'human-egress-enforcement ' + (enforcement === 'strong' ? 'is-strong' : (enforcement === 'partial' ? 'is-partial' : 'is-degraded')),
+                enforcement === 'strong'
+                    ? '系统级出站防护已启用（目标受限）'
+                    : (enforcement === 'partial'
+                        ? '系统级出站防护已启用（无网络命令强制断网；获批联网暂不限制目标）'
+                        : (enforcement === 'disabled' ? '系统出站助手已关闭' : '降级防护：当前仅使用应用层识别'))
+            ));
+        }
+        body.appendChild(egress);
+    }
     if (!forced && !workspaceApproval && record.rule_pattern) {
         body.appendChild(
             humanElement(
                 'div',
                 'human-approval-rule-hint',
                 '“始终允许”将保存为长期规则：' + record.rule_pattern
+            )
+        );
+    } else if (!forced && !workspaceApproval && record.grant_scope === 'task') {
+        body.appendChild(
+            humanElement(
+                'div',
+                'human-approval-rule-hint',
+                '“始终允许”仅在当前任务内允许同类操作和相同目标，不会保存跨任务规则。'
             )
         );
     }
@@ -944,11 +985,12 @@ function createHumanApprovalCard(record, sessionId) {
     analyze.title = '调用独立审查模型给出风险解读和审批建议，不会替你执行审批';
     analyze.addEventListener('click', function () { void analyzeHumanApproval(card); });
     actions.appendChild(analyze);
+    var decisions = humanElement('div', 'human-approval-decisions');
     var deny = humanElement('button', 'human-secondary-btn human-deny-btn', '拒绝执行');
     deny.type = 'button';
     deny.addEventListener('click', function () { void resolveHumanApproval(card, 'deny'); });
-    actions.appendChild(deny);
-    if (!forced) {
+    decisions.appendChild(deny);
+    if (!forced && record.allow_session_available !== false) {
         var durableRuleAvailable = !!record.allow_always_available && !!record.rule_pattern;
         var alwaysDecision = workspaceApproval
             ? 'allow_external_workspace'
@@ -959,9 +1001,11 @@ function createHumanApprovalCard(record, sessionId) {
             ? '持续允许写入、删除和 Shell 处理工作区沙箱外内容；随后仍会单独审批本次工具操作'
             : (durableRuleAvailable
                 ? '保存为长期规则，后续匹配时自动放行：' + record.rule_pattern
-                : '无法生成长期规则；改为在当前任务内自动允许完全相同的请求');
+                : (record.grant_scope === 'task'
+                    ? '仅在当前任务内自动允许同类操作和相同目标，不会保存跨任务规则'
+                    : '无法生成长期规则；改为在当前任务内自动允许完全相同的请求'));
         always.addEventListener('click', function () { void resolveHumanApproval(card, alwaysDecision); });
-        actions.appendChild(always);
+        decisions.appendChild(always);
     }
     var onceDecision = workspaceApproval ? 'allow_external_workspace_once' : 'allow_once';
     var allow = humanElement('button', 'human-primary-btn human-allow-btn', '本次允许');
@@ -970,7 +1014,8 @@ function createHumanApprovalCard(record, sessionId) {
         ? '仅允许本次处理工作区沙箱外内容；随后仍会单独审批本次工具操作'
         : '仅放行这一次；执行后授权立即失效';
     allow.addEventListener('click', function () { void resolveHumanApproval(card, onceDecision); });
-    actions.appendChild(allow);
+    decisions.appendChild(allow);
+    actions.appendChild(decisions);
     card.appendChild(actions);
     return card;
 }
@@ -1068,7 +1113,9 @@ function createHumanTerminalCard(record, sessionId) {
                     : (record.decision === 'allow_always'
                         ? ('已保存长期规则，后续匹配的操作将自动放行。' + (record.rule_pattern ? '（规则：' + record.rule_pattern + '）' : ''))
                         : (record.decision === 'allow_session'
-                            ? '当前任务内将自动允许完全相同的请求。'
+                            ? (record.grant_scope === 'task'
+                                ? '当前任务内将自动允许同类操作和相同目标。'
+                                : '当前任务内将自动允许完全相同的请求。')
                             : '已允许这一次；执行后授权失效。'))));
     } else {
         var answers = Array.isArray(record.answers) ? record.answers : [];

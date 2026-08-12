@@ -3474,6 +3474,9 @@ def _security_approval_spec(
     preview = _tool_command_preview(tool_name, tool_args)
     danger = forced_approval_for(decision)
     force_ask = always_ask_for(decision)
+    metadata = dict(getattr(request, "metadata", {}) or {})
+    egress_intent = str(metadata.get("egress_intent") or "none")
+    one_time_only = bool(decision.constraints.get("one_time_only"))
     # Only forced-approval operations (destructive/dynamic commands) reject a
     # persistent rule. Everything else may be granted "same kind" (删除、网络、
     # 外部路径、MCP/插件均按普通审批处理，与 Claude Code 的规则层一致)。
@@ -3493,11 +3496,28 @@ def _security_approval_spec(
         and not danger
         and not force_ask
     )
+    if egress_intent == "upload":
+        approval_title = "数据发送需要确认"
+    elif egress_intent == "read":
+        approval_title = "网络读取需要确认"
+    elif egress_intent in {"unknown", "interactive"}:
+        approval_title = "未知网络操作需要确认"
+    else:
+        approval_title = "危险命令，需要确认" if danger else "安全权限请求"
+    try:
+        from security import sandbox_health
+
+        guard = sandbox_health()
+        enforcement_level = guard.level
+        enforcement_reason = guard.reason
+    except Exception:
+        enforcement_level = "degraded"
+        enforcement_reason = "Native egress helper health is unavailable."
     return {
         "title": (
             "是否授权工作区沙箱外处理权限？"
             if external_grantable
-            else ("危险命令，需要确认" if danger else "安全权限请求")
+            else approval_title
         ),
         "subtitle": (
             "该操作将处理工作区沙箱外的文件/路径。授权后，写、删除和 Shell 在工作区外的操作将自动放行，不再逐次询问。"
@@ -3513,6 +3533,7 @@ def _security_approval_spec(
         # actually be generated (Claude Code alignment: no suggestion, no
         # "don't ask again" button).
         "allow_always_available": bool(rule_info) and not unsafe_persistent,
+        "allow_session_available": not force_ask and not one_time_only,
         "force_approval": force_ask,
         # External write/delete/shell approvals may offer the one-time
         # "workspace-outside handling permission" instead of asking every time.
@@ -3520,6 +3541,14 @@ def _security_approval_spec(
         "approval_level": "danger" if danger else "warning",
         "rule_action": rule_info.get("action", ""),
         "rule_pattern": rule_info.get("pattern", ""),
+        "security_grant_digest": str(metadata.get("session_grant_digest") or ""),
+        "egress_intent": egress_intent,
+        "destinations": list(metadata.get("destinations") or []),
+        "data_sources": list(metadata.get("data_sources") or []),
+        "analysis_confidence": str(metadata.get("analysis_confidence") or ""),
+        "enforcement_level": enforcement_level,
+        "enforcement_reason": enforcement_reason,
+        "grant_scope": "once" if one_time_only else ("task" if egress_intent == "upload" else "durable"),
     }
 
 
@@ -4892,6 +4921,16 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                                         "rule_pattern": str(
                                             override_spec.get("rule_pattern") or ""
                                         ),
+                                        "allow_session_available": bool(
+                                            override_spec.get("allow_session_available", True)
+                                        ),
+                                        "egress_intent": str(override_spec.get("egress_intent") or "none"),
+                                        "destinations": list(override_spec.get("destinations") or []),
+                                        "data_sources": list(override_spec.get("data_sources") or []),
+                                        "analysis_confidence": str(override_spec.get("analysis_confidence") or ""),
+                                        "enforcement_level": str(override_spec.get("enforcement_level") or ""),
+                                        "enforcement_reason": str(override_spec.get("enforcement_reason") or ""),
+                                        "grant_scope": str(override_spec.get("grant_scope") or ""),
                                         "auto_review_override": True,
                                     },
                                 )
@@ -4914,6 +4953,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                                         ),
                                         "subtitle": redact_sensitive_tool_text(review.reason),
                                         "security_request_digest": sec_decision.request_digest,
+                                        "security_grant_digest": str(override_spec.get("security_grant_digest") or ""),
                                         "security_rule_id": sec_decision.rule_id,
                                         # The override window offers the same
                                         # "始终允许同类操作" choice as a normal
@@ -4939,6 +4979,16 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                                         "rule_pattern": str(
                                             override_spec.get("rule_pattern") or ""
                                         ),
+                                        "allow_session_available": bool(
+                                            override_spec.get("allow_session_available", True)
+                                        ),
+                                        "egress_intent": str(override_spec.get("egress_intent") or "none"),
+                                        "destinations": list(override_spec.get("destinations") or []),
+                                        "data_sources": list(override_spec.get("data_sources") or []),
+                                        "analysis_confidence": str(override_spec.get("analysis_confidence") or ""),
+                                        "enforcement_level": str(override_spec.get("enforcement_level") or ""),
+                                        "enforcement_reason": str(override_spec.get("enforcement_reason") or ""),
+                                        "grant_scope": str(override_spec.get("grant_scope") or ""),
                                         "auto_review_override": True,
                                         },
                                         review_context={
@@ -5008,6 +5058,16 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                                         "rule_pattern": str(
                                             spec.get("rule_pattern") or ""
                                         ),
+                                        "allow_session_available": bool(
+                                            spec.get("allow_session_available", True)
+                                        ),
+                                        "egress_intent": str(spec.get("egress_intent") or "none"),
+                                        "destinations": list(spec.get("destinations") or []),
+                                        "data_sources": list(spec.get("data_sources") or []),
+                                        "analysis_confidence": str(spec.get("analysis_confidence") or ""),
+                                        "enforcement_level": str(spec.get("enforcement_level") or ""),
+                                        "enforcement_reason": str(spec.get("enforcement_reason") or ""),
+                                        "grant_scope": str(spec.get("grant_scope") or ""),
                                     },
                                 )
 
@@ -5027,6 +5087,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                                         "message": redact_sensitive_tool_text(spec["message"]),
                                         "subtitle": redact_sensitive_tool_text(spec.get("subtitle") or ""),
                                         "security_request_digest": sec_decision.request_digest,
+                                        "security_grant_digest": str(spec.get("security_grant_digest") or ""),
                                         "security_rule_id": sec_decision.rule_id,
                                         "allow_always_available": bool(
                                             spec.get("allow_always_available", False)
@@ -5046,6 +5107,16 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                                         "rule_pattern": str(
                                             spec.get("rule_pattern") or ""
                                         ),
+                                        "allow_session_available": bool(
+                                            spec.get("allow_session_available", True)
+                                        ),
+                                        "egress_intent": str(spec.get("egress_intent") or "none"),
+                                        "destinations": list(spec.get("destinations") or []),
+                                        "data_sources": list(spec.get("data_sources") or []),
+                                        "analysis_confidence": str(spec.get("analysis_confidence") or ""),
+                                        "enforcement_level": str(spec.get("enforcement_level") or ""),
+                                        "enforcement_reason": str(spec.get("enforcement_reason") or ""),
+                                        "grant_scope": str(spec.get("grant_scope") or ""),
                                         },
                                         return_decision=True,
                                         review_context={

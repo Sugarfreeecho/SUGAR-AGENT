@@ -42,7 +42,7 @@ def test_index_html_injects_default_feature_values(monkeypatch):
         "followupRestart": False,
         "streamReconnect": False,
         "finalReconcile": True,
-        "security": False,
+        "security": True,
     }
 
 
@@ -65,7 +65,7 @@ def test_index_html_injects_independent_feature_overrides(monkeypatch):
         "followupRestart": True,
         "streamReconnect": True,
         "finalReconcile": False,
-        "security": False,
+        "security": True,
     }
 
 
@@ -173,6 +173,9 @@ def test_permission_mode_ui_regressions():
     # description per mode, and a trigger icon that follows the active mode.
     assert "permission-mode-title" in css
     assert "permission-mode-option" in css
+    assert "enforcement === 'partial'" in interactions
+    assert "系统级出站防护已启用（无网络命令强制断网；获批联网暂不限制目标）" in interactions
+    assert "maybeShowEgressPartialNotice" in permissions
     assert "permission-mode-ico" in css
     assert "permission-mode-desc" in css
     assert "Agent 的操作应如何获得审批？" in html
