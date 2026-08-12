@@ -1,5 +1,15 @@
 var subagentModelSwitchBusy = Object.create(null);
 
+function subagentModelProfileOptionMeta(profile) {
+    var name = profileLabel(profile);
+    var model = String((profile && profile.model) || '').trim();
+    var details = [];
+    if (model && String(name).toLowerCase().indexOf(model.toLowerCase()) < 0) details.push(model);
+    details.push(profileEffortValue(profile));
+    if (profile && profile.context_window) details.push(formatContextWindow(profile.context_window) + ' ctx');
+    return details.filter(Boolean).join(' · ');
+}
+
 async function chooseSubagentModelProfile(card, sessionId) {
     if (!card || !sessionId) return;
     var agentId = card.getAttribute('data-agent-id') || '';
@@ -23,7 +33,9 @@ async function chooseSubagentModelProfile(card, sessionId) {
             selectOptions: profiles.map(function (profile) {
                 return {
                     value: String(profile.id || ''),
-                    label: profileLabel(profile) + ' · ' + profileMeta(profile),
+                    label: profileLabel(profile),
+                    meta: subagentModelProfileOptionMeta(profile),
+                    title: profileMeta(profile),
                 };
             }),
             confirmText: '切换并继续',

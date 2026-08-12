@@ -316,6 +316,101 @@ def test_subagent_prompt_is_self_contained_and_has_a_completion_contract():
     assert "最终输出必须自包含" in instruction
 
 
+def test_subagent_prompt_and_file_attachment_share_image_modality_routing(tmp_path):
+    import agent_openai
+    import agent_subagent
+    from agent_messages import UserMessage
+
+    image_path = tmp_path / "screen shot.png"
+    image_path.write_bytes(b"\x89PNG\r\n")
+    quoted_path = f'"{image_path}"'
+    prompt_text = agent_subagent.build_subagent_user_message(
+        prompt=f"请识别图片 {quoted_path}",
+        description="Inspect prompt image",
+        subagent_type="generalPurpose",
+    )
+    attachment_text = agent_subagent.build_subagent_user_message(
+        prompt="请识别附件图片",
+        description="Inspect attached image",
+        subagent_type="generalPurpose",
+        file_attachments=[str(image_path)],
+    )
+    remote_url = "https://cdn.example.com/signed-image?id=123"
+    remote_attachment_text = agent_subagent.build_subagent_user_message(
+        prompt="请识别远程附件图片",
+        description="Inspect remote attached image",
+        subagent_type="generalPurpose",
+        file_attachments=[remote_url],
+    )
+    image_client = type(
+        "ImageClient",
+        (),
+        {"_myagent_input_modalities": ["text", "image"]},
+    )()
+    text_client = type(
+        "TextClient",
+        (),
+        {"_myagent_input_modalities": ["text"]},
+    )()
+
+    for user_text, expected_reference in (
+        (prompt_text, str(image_path)),
+        (attachment_text, str(image_path)),
+        (remote_attachment_text, remote_url),
+    ):
+        messages = [UserMessage(content=user_text)]
+        image_params = agent_openai._messages_to_params_for_client(
+            image_client,
+            messages,
+        )
+        text_params = agent_openai._messages_to_params_for_client(
+            text_client,
+            messages,
+        )
+
+        assert agent_openai._api_messages_required_modalities(image_params) == {
+            "image"
+        }
+        assert not agent_openai._api_messages_have_media(text_params)
+        fallback_user = next(
+            message for message in text_params if message.get("role") == "user"
+        )
+        fallback_system = next(
+            message for message in text_params if message.get("role") == "system"
+        )
+        assert expected_reference in fallback_user["content"]
+        assert "task 工具" in fallback_system["content"]
+
+
+def test_task_tool_description_explains_uniform_multimodal_routing():
+    from agent_tools import OPENAI_TOOL_DEFINITIONS
+
+    task_tool = next(
+        item
+        for item in OPENAI_TOOL_DEFINITIONS
+        if item.get("function", {}).get("name") == "task"
+    )["function"]
+    properties = task_tool["parameters"]["properties"]
+
+    assert "In prompt" in task_tool["description"]
+    assert "file_attachments" in task_tool["description"]
+    assert "image_url content" in task_tool["description"]
+    assert "text-only profile" in task_tool["description"]
+    assert "always wrap each exact local image path in double quotes" in task_tool[
+        "description"
+    ]
+    assert "Always wrap every exact local image path in double quotes" in properties[
+        "prompt"
+    ]["description"]
+    assert "effective input_modalities are authoritative" in properties[
+        "model_profile_id"
+    ]["description"]
+    assert "same modality routing" in properties["file_attachments"]["description"]
+    assert "automatically wrapped in double quotes" in properties[
+        "file_attachments"
+    ]["description"]
+
+
 def test_runtime_v2_subagent_run_uses_projection_not_legacy(monkeypatch, tmp_path):
     import agent_loop
     import agent_subagent
