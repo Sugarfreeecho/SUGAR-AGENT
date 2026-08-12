@@ -70,26 +70,26 @@ if _bypass_enabled is True:
     print("[ssl_bypass] SSL bypass enabled")
 
     # ── httpx.Client SSL bypass（OpenAI SDK 使用）────────────────
-        try:
-            import httpx
-            _original_httpx_init = httpx.Client.__init__
+    try:
+        import httpx
+        _original_httpx_init = httpx.Client.__init__
 
-            def _patched_httpx_init(self, *args, **kwargs):
-                if 'verify' not in kwargs:
-                    kwargs['verify'] = False
-                return _original_httpx_init(self, *args, **kwargs)
+        def _patched_httpx_init(self, *args, **kwargs):
+            if 'verify' not in kwargs:
+                kwargs['verify'] = False
+            return _original_httpx_init(self, *args, **kwargs)
 
-            httpx.Client.__init__ = _patched_httpx_init
-            print("[ssl_bypass] httpx.Client SSL bypass enabled")
-            # ── httpx.AsyncClient SSL bypass（web_fetch / web_download 等异步工具使用）──
-            _original_async_init = httpx.AsyncClient.__init__
+        httpx.Client.__init__ = _patched_httpx_init
+        print("[ssl_bypass] httpx.Client SSL bypass enabled")
+        # ── httpx.AsyncClient SSL bypass（web_fetch / web_download 等异步工具使用）──
+        _original_async_init = httpx.AsyncClient.__init__
 
-            def _patched_async_init(self, *args, **kwargs):
-                if 'verify' not in kwargs:
-                    kwargs['verify'] = False
-                return _original_async_init(self, *args, **kwargs)
+        def _patched_async_init(self, *args, **kwargs):
+            if 'verify' not in kwargs:
+                kwargs['verify'] = False
+            return _original_async_init(self, *args, **kwargs)
 
-            httpx.AsyncClient.__init__ = _patched_async_init
-            print("[ssl_bypass] httpx.AsyncClient SSL bypass enabled")
-        except ImportError:
-            pass
+        httpx.AsyncClient.__init__ = _patched_async_init
+        print("[ssl_bypass] httpx.AsyncClient SSL bypass enabled")
+    except ImportError:
+        pass
