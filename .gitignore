@@ -37,6 +37,8 @@ workspace/
 
 # Bundled/interpreter/runtime folders
 python/
+# Windows egress helper is reproducibly built from the checked-in C# source.
+app/native/sugaragent-egress-helper.exe
 
 # Local archives/backups
 *.zip
