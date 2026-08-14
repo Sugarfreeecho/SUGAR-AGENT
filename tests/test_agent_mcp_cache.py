@@ -13,6 +13,48 @@ if str(APP_DIR) not in sys.path:
     sys.path.insert(0, str(APP_DIR))
 
 
+def test_mcp_sdk_exposes_all_configured_transports():
+    import agent_mcp
+
+    assert agent_mcp._MCP_IMPORT_OK is True
+
+
+def test_mcp_headers_expand_environment_references_at_connection_time(monkeypatch):
+    import agent_mcp
+
+    monkeypatch.setenv("TEST_MCP_TOKEN", "secret-value")
+
+    assert agent_mcp._headers_from_config(
+        {
+            "headers": {
+                "Authorization": "Bearer ${TEST_MCP_TOKEN}",
+                "X-Static": "stable",
+            }
+        }
+    ) == {
+        "Authorization": "Bearer secret-value",
+        "X-Static": "stable",
+    }
+
+
+def test_mcp_headers_reject_missing_environment_references_without_secret_values(monkeypatch):
+    import agent_mcp
+
+    monkeypatch.delenv("MISSING_MCP_TOKEN", raising=False)
+
+    try:
+        agent_mcp._headers_from_config(
+            {"headers": {"Authorization": "Bearer ${MISSING_MCP_TOKEN}"}}
+        )
+    except ValueError as exc:
+        message = str(exc)
+    else:
+        raise AssertionError("missing MCP header environment variable was accepted")
+
+    assert "MISSING_MCP_TOKEN" in message
+    assert "Bearer" not in message
+
+
 def test_mcp_config_signature_uses_short_cache(monkeypatch):
     import agent_mcp
 
@@ -302,8 +344,12 @@ def test_mcp_tools_endpoint_returns_registered_tools(monkeypatch):
     def list_registered_tools():
         return [{"function_name": "mcp_demo_x", "server": "demo", "tool_name": "x"}]
 
+    def list_configured_servers():
+        return [{"server": "demo", "connected": True, "discovered": True, "tool_count": 1}]
+
     monkeypatch.setattr(webui.agent_mcp, "ensure_started", ensure_started)
     monkeypatch.setattr(webui.agent_mcp, "list_registered_tools", list_registered_tools)
+    monkeypatch.setattr(webui.agent_mcp, "list_configured_servers", list_configured_servers)
 
     response = asyncio.run(webui.list_mcp_tools())
 
@@ -311,6 +357,104 @@ def test_mcp_tools_endpoint_returns_registered_tools(monkeypatch):
     body = json.loads(response.body)
     assert body["ok"] is True
     assert body["tools"] == [{"function_name": "mcp_demo_x", "server": "demo", "tool_name": "x"}]
+    assert body["servers"] == [
+        {"server": "demo", "connected": True, "discovered": True, "tool_count": 1}
+    ]
+
+
+def test_list_configured_servers_keeps_servers_without_discovered_tools(monkeypatch):
+    import agent_mcp
+
+    monkeypatch.setattr(
+        agent_mcp,
+        "_load_servers_dict_from_config",
+        lambda: (
+            {
+                "context7": {"command": "context7"},
+                "github": {"transport": "streamable-http", "url": "https://example.test/mcp"},
+            },
+            None,
+        ),
+    )
+    monkeypatch.setattr(agent_mcp, "_servers", {"context7": object()})
+    monkeypatch.setattr(agent_mcp, "_fname_to_tool", {"mcp_context7_docs": ("context7", "docs")})
+
+    servers = agent_mcp.list_configured_servers()
+
+    assert servers == [
+        {
+            "server": "context7",
+            "transport": "stdio",
+            "connected": True,
+            "discovered": True,
+            "tool_count": 1,
+            "error": "",
+        },
+        {
+            "server": "github",
+            "transport": "streamable-http",
+            "connected": False,
+            "discovered": False,
+            "tool_count": 0,
+            "error": "",
+        },
+    ]
+
+
+def test_register_server_retries_only_requested_server(monkeypatch):
+    import agent_mcp
+
+    calls = []
+
+    async def start_server(alias, _cfg):
+        calls.append(alias)
+        agent_mcp._servers[alias] = object()
+        agent_mcp._fname_to_tool["mcp_target_tool"] = (alias, "tool")
+
+    monkeypatch.setattr(agent_mcp, "_MCP_IMPORT_OK", True)
+    monkeypatch.setattr(
+        agent_mcp,
+        "_load_servers_dict_from_config",
+        lambda: ({"target": {"command": "target"}, "other": {"command": "other"}}, None),
+    )
+    monkeypatch.setattr(agent_mcp, "_start_configured_server_unlocked", start_server)
+    monkeypatch.setattr(agent_mcp, "_servers", {})
+    monkeypatch.setattr(agent_mcp, "_fname_to_tool", {})
+    monkeypatch.setattr(agent_mcp, "_defs_snapshot", [])
+    monkeypatch.setattr(agent_mcp, "_tool_contracts", {})
+    monkeypatch.setattr(agent_mcp, "_server_start_errors", {})
+
+    server = asyncio.run(agent_mcp.register_server("target"))
+
+    assert calls == ["target"]
+    assert server["server"] == "target"
+    assert server["connected"] is True
+    assert server["discovered"] is True
+    assert server["tool_count"] == 1
+
+
+def test_register_mcp_server_endpoint_reports_incomplete_registration(monkeypatch):
+    import webui
+
+    async def register_server(server_name):
+        assert server_name == "github"
+        return {
+            "server": "github",
+            "connected": False,
+            "discovered": False,
+            "tool_count": 0,
+            "error": "missing GITHUB_MCP_PAT",
+        }
+
+    monkeypatch.setattr(webui.agent_mcp, "register_server", register_server)
+
+    response = asyncio.run(webui.register_mcp_server_api("github"))
+    body = json.loads(response.body)
+
+    assert response.status_code == 200
+    assert body["ok"] is True
+    assert body["registered"] is False
+    assert body["server"]["error"] == "missing GITHUB_MCP_PAT"
 
 
 def test_mcp_tool_enablement_persists_and_filters_definitions(monkeypatch, tmp_path):
