@@ -21995,14 +21995,15 @@ function composerCssLengthPx(rawValue, fallback) {
 }
 
 function syncComposerSideControlLayout() {
+    var mainCenter = document.querySelector('.main-center');
     var panel = document.querySelector('.panel');
     var composer = panel && panel.querySelector('.panel-inner');
     var permission = panel && panel.querySelector('.composer-permission-bar');
     var model = panel && panel.querySelector('.composer-model-bar');
-    if (!panel || !composer || !permission || !model) return;
+    if (!mainCenter || !panel || !composer || !permission || !model) return;
 
     var panelRect = panel.getBoundingClientRect();
-    var composerRect = composer.getBoundingClientRect();
+    var mainCenterRect = mainCenter.getBoundingClientRect();
     var panelStyle = getComputedStyle(panel);
     var endGutter = composerCssLengthPx(panelStyle.paddingRight, 0);
     var preferredWidth = composerCssLengthPx(
@@ -22010,8 +22011,12 @@ function syncComposerSideControlLayout() {
         Math.max(permission.offsetWidth, model.offsetWidth)
     );
     var safeGap = 8;
-    var leftAvailable = Math.max(0, composerRect.left - panelRect.left);
-    var rightAvailable = Math.max(0, panelRect.right - endGutter - composerRect.right);
+    /* Always test against the normal 68cqi column, even while the real column is expanded. */
+    var naturalComposerWidth = Math.min(mainCenterRect.width * 0.68, panelRect.width - endGutter);
+    var naturalComposerLeft = panelRect.left + (panelRect.width - endGutter - naturalComposerWidth) / 2;
+    var naturalComposerRight = naturalComposerLeft + naturalComposerWidth;
+    var leftAvailable = Math.max(0, naturalComposerLeft - panelRect.left);
+    var rightAvailable = Math.max(0, panelRect.right - endGutter - naturalComposerRight);
     var permissionVisible = !permission.hidden && getComputedStyle(permission).display !== 'none';
     var modelVisible = getComputedStyle(model).display !== 'none';
     var leftOverlap = permissionVisible && preferredWidth + safeGap > leftAvailable;
@@ -22019,6 +22024,7 @@ function syncComposerSideControlLayout() {
     var overlaps = leftOverlap || rightOverlap;
 
     panel.classList.toggle('composer-side-controls-stacked', overlaps);
+    mainCenter.classList.toggle('content-column-expanded', overlaps);
     panel.dataset.composerControlsOverlap = overlaps ? 'true' : 'false';
     panel.dataset.composerLeftOverlap = leftOverlap ? 'true' : 'false';
     panel.dataset.composerRightOverlap = rightOverlap ? 'true' : 'false';
