@@ -1,7 +1,13 @@
 {
   "version": 1,
   "skills": {
+    "agent-browser": {
+      "enabled": false
+    },
     "code-refactoring": {
+      "enabled": false
+    },
+    "finance-report-analysis": {
       "enabled": false
     },
     "frontend-design": {
