@@ -761,9 +761,13 @@ body {
     margin: 0; padding: 0; flex: 1; min-height: 0;
     display: flex; flex-direction: column;
     container-type: inline-size; container-name: main;
+    --content-column-width: min(68cqi, 100%);
     --panel-edge-dock-left: max(0.225rem, calc(0.1rem + 6px + env(safe-area-inset-left, 0px)));
     --panel-edge-dock-right: max(0.45rem, calc(0.2rem + 12px + env(safe-area-inset-right, 0px)));
     --panel-edge-slide-width: 9.5rem;
+}
+.main-center.content-column-expanded {
+    --content-column-width: min(calc(100cqi - 2rem), 100%);
 }
 
 /* ── 标题栏 ── */
@@ -1191,7 +1195,7 @@ body {
 .msg-wrap--assistant { align-items: flex-start; }
 .msg-wrap, .process-aggregate { flex-shrink: 0; }
 .msg-wrap, .process-aggregate, .welcome {
-    width: min(68cqi, 100%); max-width: 100%; box-sizing: border-box;
+    width: var(--content-column-width, min(68cqi, 100%)); max-width: 100%; box-sizing: border-box;
 }
 
 .msg-toolbar {
@@ -2859,7 +2863,7 @@ body {
 
 /* ═══════════════ 输入面板 ═══════════════ */
 .panel {
-    --composer-input-width: min(68cqi, 100%);
+    --composer-input-width: var(--content-column-width, min(68cqi, 100%));
     --composer-panel-end-gutter: 0.5rem;
     position: relative;
     z-index: 300;
