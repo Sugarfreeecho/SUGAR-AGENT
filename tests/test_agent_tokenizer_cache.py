@@ -28,3 +28,16 @@ def test_full_input_token_cache_key_changes_when_early_message_changes():
     assert agent_tokenizer._full_input_token_cache_key("s1", before, "") != (
         agent_tokenizer._full_input_token_cache_key("s1", after, "")
     )
+
+
+def test_full_input_token_cache_key_changes_when_tools_change():
+    import agent_tokenizer
+    from agent_harness import UserMessage
+
+    messages = [UserMessage(content="hello")]
+    first = [{"type": "function", "function": {"name": "first", "parameters": {"type": "object"}}}]
+    second = [{"type": "function", "function": {"name": "second", "parameters": {"type": "object"}}}]
+
+    assert agent_tokenizer._full_input_token_cache_key("s1", messages, "", first) != (
+        agent_tokenizer._full_input_token_cache_key("s1", messages, "", second)
+    )

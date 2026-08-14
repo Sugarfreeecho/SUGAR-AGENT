@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 
 _TOKENIZER: Any = None
 _LOAD_FAILED: bool = False
-_FULL_INPUT_TOKEN_CACHE: Dict[Tuple[str, int, str, str, str], Tuple[float, int]] = {}
+_FULL_INPUT_TOKEN_CACHE: Dict[Tuple[str, int, str, str, str, str], Tuple[float, int]] = {}
 _FULL_INPUT_TOKEN_CACHE_LOCK = threading.Lock()
 _FULL_INPUT_TOKEN_CACHE_TTL_SEC = 30.0
 _FULL_INPUT_TOKEN_CACHE_MAX = 256
@@ -46,7 +46,24 @@ def _token_cache_text_hash(text: Any) -> str:
     return hashlib.sha1(str(text or "").encode("utf-8", errors="ignore")).hexdigest()
 
 
-def _full_input_token_cache_key(session_id: str, llm_history: List[Any], key_context: str) -> Tuple[str, int, str, str]:
+def _tool_definitions_fingerprint(tools: Optional[List[Dict[str, Any]]]) -> str:
+    if not tools:
+        return ""
+    raw = json_dumps_stable(list(tools))
+    return hashlib.sha1(raw.encode("utf-8", errors="ignore")).hexdigest()
+
+
+def _request_token_fingerprint(message_fingerprint: str, tool_fingerprint: str) -> str:
+    raw = f"{message_fingerprint}\n{tool_fingerprint}"
+    return hashlib.sha1(raw.encode("ascii", errors="ignore")).hexdigest()
+
+
+def _full_input_token_cache_key(
+    session_id: str,
+    llm_history: List[Any],
+    key_context: str,
+    tools: Optional[List[Dict[str, Any]]] = None,
+) -> Tuple[str, int, str, str, str]:
     message_fingerprint = _messages_token_fingerprint_from_hashes(
         _messages_token_hashes(list(llm_history or []))
     )
@@ -55,6 +72,7 @@ def _full_input_token_cache_key(session_id: str, llm_history: List[Any], key_con
         len(llm_history or []),
         _token_cache_text_hash(key_context or ""),
         message_fingerprint,
+        _tool_definitions_fingerprint(tools),
     )
 
 
@@ -198,10 +216,18 @@ def count_message_tokens(messages: List[Any]) -> int:
     return count_text_tokens(_flatten_messages_for_count(messages))
 
 
+def count_tool_definition_tokens(tools: Optional[List[Dict[str, Any]]]) -> int:
+    """Estimate the serialized tool-schema portion of one model request."""
+    if not tools:
+        return 0
+    return count_text_tokens(json_dumps_stable(list(tools)))
+
+
 def record_prompt_tokens_for_messages(
     session_id: str,
     messages: List[Any],
     prompt_tokens: int,
+    tools: Optional[List[Dict[str, Any]]] = None,
 ) -> None:
     """Record provider-reported input tokens for an exact request package."""
     sid = str(session_id or "").strip()
@@ -215,16 +241,20 @@ def record_prompt_tokens_for_messages(
 
     stripped = strip_reasoning_for_api_request(list(messages or []))
     hashes = _messages_token_hashes(stripped)
-    fingerprint = _messages_token_fingerprint_from_hashes(hashes)
+    message_fingerprint = _messages_token_fingerprint_from_hashes(hashes)
+    tool_fingerprint = _tool_definitions_fingerprint(tools)
+    fingerprint = _request_token_fingerprint(message_fingerprint, tool_fingerprint)
     now = time.monotonic()
     with _PROMPT_USAGE_CACHE_LOCK:
         _PROMPT_USAGE_BASELINE_CACHE[sid] = {
             "ts": now,
             "hashes": hashes,
-            "fingerprint": fingerprint,
+            "message_fingerprint": message_fingerprint,
+            "tool_fingerprint": tool_fingerprint,
             "count": len(hashes),
             "tokens": tokens,
             "messages": list(stripped),
+            "tool_tokens": count_tool_definition_tokens(tools),
         }
         _PROMPT_USAGE_EXACT_CACHE[(sid, fingerprint)] = (now, tokens, "provider_exact")
         _evict_prompt_usage_exact_cache_locked(now)
@@ -234,6 +264,7 @@ def estimate_full_input_tokens_for_messages(
     session_id: str,
     messages: List[Any],
     *,
+    tools: Optional[List[Dict[str, Any]]] = None,
     return_source: bool = False,
 ) -> Any:
     """
@@ -247,7 +278,9 @@ def estimate_full_input_tokens_for_messages(
     sid = str(session_id or "").strip()
     stripped = strip_reasoning_for_api_request(list(messages or []))
     hashes = _messages_token_hashes(stripped)
-    fingerprint = _messages_token_fingerprint_from_hashes(hashes)
+    message_fingerprint = _messages_token_fingerprint_from_hashes(hashes)
+    tool_fingerprint = _tool_definitions_fingerprint(tools)
+    fingerprint = _request_token_fingerprint(message_fingerprint, tool_fingerprint)
     now = time.monotonic()
     calibration = None
     with _PROMPT_USAGE_CACHE_LOCK:
@@ -262,10 +295,12 @@ def estimate_full_input_tokens_for_messages(
         if baseline:
             base_count = int(baseline.get("count") or 0)
             base_tokens = int(baseline.get("tokens") or 0)
-            base_fingerprint = str(baseline.get("fingerprint") or "")
+            base_fingerprint = str(baseline.get("message_fingerprint") or "")
+            base_tool_fingerprint = str(baseline.get("tool_fingerprint") or "")
             if (
                 base_count > 0
                 and base_tokens > 0
+                and base_tool_fingerprint == tool_fingerprint
                 and base_count <= len(hashes)
                 and _messages_token_fingerprint_from_hashes(hashes[:base_count]) == base_fingerprint
             ):
@@ -285,17 +320,24 @@ def estimate_full_input_tokens_for_messages(
                 common += 1
             changed_tail = (len(base_hashes) - common) + (len(hashes) - common)
             if (
-                common > 0
+                base_tool_fingerprint == tool_fingerprint
+                and common > 0
                 and common >= max(1, min(len(base_hashes), len(hashes)) // 2)
                 and changed_tail <= 4
             ):
                 calibration = dict(baseline)
-    estimated = int(estimate_tokens(stripped))
+    tool_tokens = count_tool_definition_tokens(tools)
+    estimated = int(estimate_tokens(stripped)) + tool_tokens
     source = "local_estimate"
     if calibration:
         base_tokens = int(calibration.get("tokens") or 0)
         base_messages = list(calibration.get("messages") or [])
-        base_local_tokens = int(estimate_tokens(base_messages)) if base_messages else 0
+        base_local_tokens = (
+            int(estimate_tokens(base_messages))
+            + int(calibration.get("tool_tokens") or 0)
+            if base_messages
+            else 0
+        )
         if base_tokens > 0 and base_local_tokens > 0:
             estimated = max(0, int(round(estimated * (base_tokens / base_local_tokens))))
             source = "provider_calibrated"
@@ -307,7 +349,10 @@ def estimate_full_input_tokens_for_messages(
     return result if return_source else result[0]
 
 
-def estimate_calculated_input_tokens_for_messages(messages: List[Any]) -> int:
+def estimate_calculated_input_tokens_for_messages(
+    messages: List[Any],
+    tools: Optional[List[Dict[str, Any]]] = None,
+) -> int:
     """Estimate an assembled API request locally, without provider-usage caches.
 
     This is deliberately the same pure-tokenizer path used by the history
@@ -318,7 +363,7 @@ def estimate_calculated_input_tokens_for_messages(messages: List[Any]) -> int:
     from agent_harness import estimate_tokens, strip_reasoning_for_api_request
 
     stripped = strip_reasoning_for_api_request(list(messages or []))
-    return int(estimate_tokens(stripped))
+    return int(estimate_tokens(stripped)) + count_tool_definition_tokens(tools)
 
 
 # ==================== 整包输入 token（与主模型上送一致）====================
@@ -502,6 +547,7 @@ def estimate_full_input_tokens_for_llm_history(
     llm_history: List[Any],
     key_context: str,
     language: str = "zh-CN",
+    tools: Optional[List[Dict[str, Any]]] = None,
 ) -> int:
     """
     与 react_node 发往主模型前、`compute_context_tokens_for_session`（右上角）一致的整包 token：
@@ -515,7 +561,10 @@ def estimate_full_input_tokens_for_llm_history(
     from agent_tools import get_skills_catalog
 
     sid = str(session_id or "").strip()
-    cache_key = (*_full_input_token_cache_key(sid, llm_history, key_context or ""), str(language or "zh-CN"))
+    cache_key = (
+        *_full_input_token_cache_key(sid, llm_history, key_context or "", tools),
+        str(language or "zh-CN"),
+    )
     now = time.monotonic()
     with _FULL_INPUT_TOKEN_CACHE_LOCK:
         cached = _FULL_INPUT_TOKEN_CACHE.get(cache_key)
@@ -531,7 +580,7 @@ def estimate_full_input_tokens_for_llm_history(
         llm_messages.append(SystemMessage(content=kc_body))
     llm_messages.extend(turn_msgs)
     _for_est = strip_reasoning_for_api_request(llm_messages)
-    estimated = int(estimate_tokens(_for_est))
+    estimated = int(estimate_tokens(_for_est)) + count_tool_definition_tokens(tools)
     with _FULL_INPUT_TOKEN_CACHE_LOCK:
         if len(_FULL_INPUT_TOKEN_CACHE) >= _FULL_INPUT_TOKEN_CACHE_MAX:
             oldest = min(_FULL_INPUT_TOKEN_CACHE.items(), key=lambda item: item[1][0])[0]
@@ -545,6 +594,7 @@ def estimate_hybrid_input_tokens_for_llm_history(
     llm_history: List[Any],
     key_context: str,
     language: str = "zh-CN",
+    tools: Optional[List[Dict[str, Any]]] = None,
 ) -> Tuple[int, str]:
     """Estimate a persisted session using the same provider-calibrated path as a live request."""
     from agent_harness import key_context_body_for_system_prompt
@@ -563,6 +613,7 @@ def estimate_hybrid_input_tokens_for_llm_history(
     estimated, source = estimate_full_input_tokens_for_messages(
         sid,
         llm_messages,
+        tools=tools,
         return_source=True,
     )
     return int(estimated), str(source)

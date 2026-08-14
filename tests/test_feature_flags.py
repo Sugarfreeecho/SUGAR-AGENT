@@ -263,20 +263,20 @@ def test_permission_mode_ui_regressions():
     panel = css.split(".panel {", 1)[1].split("}", 1)[0]
     assert "padding: 0.6rem 0.5rem 0.6rem 0;" in panel
 
-    # Permission dropdown options use the same frame as the model selector
-    # (mauve border + tint on hover/active).
+    # Permission dropdown options use the same theme-aware frame as the model
+    # selector (accent border + tint on hover/active).
     option_frame = css.split(".permission-mode-option:hover,", 1)[1].split("}", 1)[0]
-    assert "rgba(203, 166, 247, 0.14)" in option_frame
-    assert "border-color: rgba(203, 166, 247, 0.24);" in option_frame
+    assert "rgba(var(--accent-rgb), 0.14)" in option_frame
+    assert "border-color: rgba(var(--accent-rgb), 0.24);" in option_frame
 
     # Approval dialogs use an opaque dialog surface, not the glass layer.
     modal = css.split(".ui-modal {", 1)[1].split("}", 1)[0]
-    assert "background: #26263a;" in modal
+    assert "background: var(--modal-bg);" in modal
 
     # Approval cards in the feed are opaque too (the component the user
     # actually sees when approving a tool call).
     approval_card = css.split(".human-interaction-card {", 1)[1].split("}", 1)[0]
-    assert "background: #26263a;" in approval_card
+    assert "background: var(--modal-bg);" in approval_card
     light_card = css.split(":root.theme-light .human-interaction-card {", 1)[1].split("}", 1)[0]
     assert "background: #ffffff;" in light_card
 

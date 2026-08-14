@@ -522,11 +522,12 @@ def test_runtime_v2_context_token_compute_uses_projection_not_legacy(monkeypatch
         def get_or_create_session(self, session_id):
             raise AssertionError("Runtime V2 context token compute must not read legacy session history")
 
-    def fake_estimate(session_id, messages, key_context, prompt_language):
+    def fake_estimate(session_id, messages, key_context, prompt_language, tools=None):
         captured["session_id"] = session_id
         captured["messages"] = messages
         captured["key_context"] = key_context
         captured["prompt_language"] = prompt_language
+        captured["tools"] = tools
         return 123, "provider_calibrated"
 
     monkeypatch.setattr(agent_loop, "session_manager", _SessionManager())
@@ -539,7 +540,8 @@ def test_runtime_v2_context_token_compute_uses_projection_not_legacy(monkeypatch
     monkeypatch.setattr(agent_loop, "estimate_hybrid_input_tokens_for_llm_history", fake_estimate)
     monkeypatch.setattr(agent_loop, "resolve_executor_config_for_session", lambda _sid: (None, "m", 1024, 4096))
 
-    result = agent_loop.compute_context_tokens_for_session("s1")
+    tool_definitions = [{"type": "function", "function": {"name": "demo"}}]
+    result = agent_loop.compute_context_tokens_for_session("s1", tool_definitions)
 
     assert result == {
         "ok": True,
@@ -553,6 +555,7 @@ def test_runtime_v2_context_token_compute_uses_projection_not_legacy(monkeypatch
     assert captured["session_id"] == "s1"
     assert captured["messages"][0].content == "hello"
     assert captured["key_context"] == "summary"
+    assert captured["tools"] == tool_definitions
 
 
 def test_react_resolves_model_config_at_each_llm_boundary():

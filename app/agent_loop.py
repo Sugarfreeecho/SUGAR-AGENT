@@ -2029,7 +2029,10 @@ def _wrap_read_only_tool_output_lines(text: Any, max_chars: int = READ_ONLY_TOOL
     return "".join(out) if out else raw
 
 
-def compute_context_tokens_for_session(session_id: str) -> Dict[str, Any]:
+def compute_context_tokens_for_session(
+    session_id: str,
+    tool_definitions: Optional[List[Dict[str, Any]]] = None,
+) -> Dict[str, Any]:
     """
     与 react_node 中发往模型前的整包输入 token 估算一致；不依赖前端缓存。
 
@@ -2061,6 +2064,7 @@ def compute_context_tokens_for_session(session_id: str) -> Dict[str, Any]:
             llm_history,
             key_context or "",
             prompt_language,
+            tools=tool_definitions,
         )
         token_source = "local_calculated"
     else:
@@ -2069,6 +2073,7 @@ def compute_context_tokens_for_session(session_id: str) -> Dict[str, Any]:
             llm_history,
             key_context or "",
             prompt_language,
+            tools=tool_definitions,
         )
     _client, active_model, _max_out, active_context_window = resolve_executor_config_for_session(
         sid
@@ -2989,6 +2994,133 @@ async def _await_steerable(
             task.add_done_callback(_discard_task_result)
             task.cancel()
         raise
+
+
+async def build_combined_tool_definitions_for_session(
+    session_id: str,
+    *,
+    session_meta: Optional[Dict[str, Any]] = None,
+    awaiter: Optional[Callable[[Any, str], Any]] = None,
+    timing_callback: Optional[Callable[[str, float], None]] = None,
+) -> List[Dict[str, Any]]:
+    """Build the exact tool list advertised by a main-model request.
+
+    The context-token preview and the live ReAct request share this builder so
+    tool schemas cannot silently disappear from the pre-send estimate.
+    """
+    sid = str(session_id or "").strip()
+    if session_meta is None:
+        try:
+            session_meta = session_manager._load_metadata(sid) or {}
+        except Exception:
+            session_meta = {}
+    if not isinstance(session_meta, dict):
+        session_meta = {}
+
+    combined_tools: List[Dict[str, Any]] = list(OPENAI_TOOL_DEFINITIONS)
+    try:
+        from agent_team import agent_team_enabled
+
+        if not agent_team_enabled():
+            combined_tools = [
+                item
+                for item in combined_tools
+                if str(((item.get("function") or {}).get("name") or "")) != "team"
+            ]
+    except Exception:
+        combined_tools = [
+            item
+            for item in combined_tools
+            if str(((item.get("function") or {}).get("name") or "")) != "team"
+        ]
+    if not goal_enabled():
+        combined_tools = [
+            item
+            for item in combined_tools
+            if str(((item.get("function") or {}).get("name") or ""))
+            not in {"create_goal", "get_goal", "update_goal"}
+        ]
+
+    async def _load_optional_tools(
+        timing_stage: str,
+        factory,
+        *,
+        await_stage: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        started = time.perf_counter()
+        try:
+            pending = factory()
+            rows = (
+                await awaiter(pending, await_stage or timing_stage)
+                if awaiter is not None
+                else await pending
+            )
+            return [dict(item) for item in (rows or []) if isinstance(item, dict)]
+        except _SteerRestartRequested:
+            raise
+        except Exception as exc:
+            logger.warning(
+                "%s tool definitions failed and were skipped: %s",
+                timing_stage,
+                exc,
+            )
+            return []
+        finally:
+            if timing_callback is not None:
+                timing_callback(timing_stage, started)
+
+    combined_tools.extend(
+        await _load_optional_tools(
+            "mcp_tool_definitions",
+            agent_mcp.get_tool_definitions,
+            await_stage="tool_definitions",
+        )
+    )
+    try:
+        from agent_extensions import plugin_tool_definitions
+
+        combined_tools.extend(
+            await _load_optional_tools("plugin_tool_definitions", plugin_tool_definitions)
+        )
+    except _SteerRestartRequested:
+        raise
+    except Exception as exc:
+        logger.warning("plugin_tool_definitions tool definitions failed and were skipped: %s", exc)
+
+    started = time.perf_counter()
+    try:
+        from agent_subagent import filter_tools_for_session, inject_task_model_profiles
+
+        combined_tools = filter_tools_for_session(combined_tools, session_meta)
+        combined_tools = inject_task_model_profiles(combined_tools)
+    except Exception as exc:
+        logger.warning("subagent tool filtering failed and was skipped: %s", exc)
+    finally:
+        if timing_callback is not None:
+            timing_callback("subagent_tool_filter", started)
+
+    if not ask_user_enabled():
+        combined_tools = [
+            item
+            for item in combined_tools
+            if str(((item.get("function") or {}).get("name") or "")) != "ask_user"
+        ]
+
+    fork_runtime_config = session_meta.get("fork_runtime_config")
+    inherited_tools = (
+        fork_runtime_config.get("tools")
+        if isinstance(fork_runtime_config, dict)
+        else None
+    )
+    if isinstance(inherited_tools, list) and inherited_tools:
+        try:
+            combined_tools = json.loads(json.dumps(inherited_tools, ensure_ascii=False))
+        except (TypeError, ValueError):
+            logger.warning(
+                "Ignoring invalid inherited fork tool definitions for session=%s",
+                sid,
+            )
+    return combined_tools
 
 
 async def _await_retry_delay_or_interrupt(
@@ -4266,6 +4398,28 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
             _pre_api_timing_mark(pre_api_timings, "build_messages", _t_pre_api)
             _t_pre_api = time.perf_counter()
 
+            async def _live_tool_definition_awaiter(awaitable, stage: str):
+                return await _await_steerable(state, awaitable, emit, stage)
+
+            def _record_tool_definition_timing(stage: str, started: float) -> None:
+                _pre_api_timing_mark(pre_api_timings, stage, started)
+
+            combined_tools = await build_combined_tool_definitions_for_session(
+                state["session_id"],
+                session_meta=session_meta,
+                awaiter=_live_tool_definition_awaiter,
+                timing_callback=_record_tool_definition_timing,
+            )
+            state["_last_prompt_runtime_config"] = {
+                "version": 1,
+                "system_segments": list(static_segments),
+                "tools": json.loads(json.dumps(combined_tools, ensure_ascii=False)),
+                "model_runtime": executor_runtime_snapshot_for_session(
+                    state["session_id"]
+                ),
+            }
+            _t_pre_api = time.perf_counter()
+
             # 调试：仅记录多轮消息数量与首段截断（避免整段 XML 日志）
             logger.debug(
                 "LLM 多轮 messages: count=%s, last_roles=%s",
@@ -4280,12 +4434,14 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
             if state.get("_context_token_mode") == "calculated":
                 full_input_est = estimate_calculated_input_tokens_for_messages(
                     llm_messages,
+                    tools=combined_tools,
                 )
                 token_estimate_source = "local_calculated"
             else:
                 full_input_est, token_estimate_source = estimate_full_input_tokens_for_messages(
                     state["session_id"],
                     llm_messages,
+                    tools=combined_tools,
                     return_source=True,
                 )
             _pre_api_timing_mark(pre_api_timings, "token_estimate", _t_pre_api)
@@ -4447,12 +4603,14 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                             llm_history,
                             kcur,
                             state.get("_prompt_language", "zh-CN"),
+                            tools=combined_tools,
                         )
                         after_recovery_tokens = estimate_full_input_tokens_for_llm_history(
                             state["session_id"],
                             nl,
                             nk,
                             state.get("_prompt_language", "zh-CN"),
+                            tools=combined_tools,
                         )
                         if after_recovery_tokens >= before_recovery_tokens:
                             emergency_history, emergency_changed, _ = compress_tail_fallback(
@@ -4465,6 +4623,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                                 emergency_history,
                                 nk,
                                 state.get("_prompt_language", "zh-CN"),
+                                tools=combined_tools,
                             )
                             if emergency_changed and emergency_tokens < before_recovery_tokens:
                                 nl = emergency_history
@@ -4555,6 +4714,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                         nl,
                         nk or "",
                         state.get("_prompt_language", "zh-CN"),
+                        tools=combined_tools,
                     )
                     post_compress_token_source = "local_calculated"
                 else:
@@ -4563,6 +4723,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                         nl,
                         nk or "",
                         state.get("_prompt_language", "zh-CN"),
+                        tools=combined_tools,
                     )
                 post_compress_tokens = {
                     "estimated": int(post_compress_est),
@@ -4607,6 +4768,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                         llm_history,
                         state.get("key_context", "") or "",
                         state.get("_prompt_language", "zh-CN"),
+                        tools=combined_tools,
                     )
                     new_llm_history, did_shrink, _ = compress_tail_fallback(
                         llm_history, reason="emergency"
@@ -4616,6 +4778,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                         new_llm_history,
                         state.get("key_context", "") or "",
                         state.get("_prompt_language", "zh-CN"),
+                        tools=combined_tools,
                     ) < old_tok:
                         llm_history = new_llm_history
                         state["llm_history"] = llm_history
@@ -4628,106 +4791,6 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
             else:
                 compress_attempts = 0
 
-            combined_tools: List[Dict[str, Any]] = list(OPENAI_TOOL_DEFINITIONS)
-            try:
-                from agent_team import agent_team_enabled
-
-                if not agent_team_enabled():
-                    combined_tools = [
-                        item for item in combined_tools
-                        if str(((item.get("function") or {}).get("name") or "")) != "team"
-                    ]
-            except Exception:
-                combined_tools = [
-                    item for item in combined_tools
-                    if str(((item.get("function") or {}).get("name") or "")) != "team"
-                ]
-            if not goal_enabled():
-                combined_tools = [
-                    item for item in combined_tools
-                    if str(((item.get("function") or {}).get("name") or ""))
-                    not in {"create_goal", "get_goal", "update_goal"}
-                ]
-            _t_pre_api = time.perf_counter()
-            try:
-                combined_tools.extend(
-                    await _await_steerable(
-                        state,
-                        agent_mcp.get_tool_definitions(),
-                        emit,
-                        "tool_definitions",
-                    )
-                )
-                _pre_api_timing_mark(pre_api_timings, "mcp_tool_definitions", _t_pre_api)
-            except _SteerRestartRequested:
-                raise
-            except Exception as _mcp_ex:
-                _pre_api_timing_mark(pre_api_timings, "mcp_tool_definitions", _t_pre_api)
-                logger.warning("MCP 工具列表加载失败（忽略）: %s", _mcp_ex)
-            _t_pre_api = time.perf_counter()
-            try:
-                from agent_extensions import plugin_tool_definitions
-
-                combined_tools.extend(
-                    await _await_steerable(
-                        state,
-                        plugin_tool_definitions(),
-                        emit,
-                        "plugin_tool_definitions",
-                    )
-                )
-                _pre_api_timing_mark(
-                    pre_api_timings, "plugin_tool_definitions", _t_pre_api
-                )
-            except _SteerRestartRequested:
-                raise
-            except Exception as _plugin_ex:
-                _pre_api_timing_mark(
-                    pre_api_timings, "plugin_tool_definitions", _t_pre_api
-                )
-                logger.warning(
-                    "Plugin tool definitions failed and were skipped: %s", _plugin_ex
-                )
-            _t_pre_api = time.perf_counter()
-            try:
-                from agent_subagent import filter_tools_for_session, inject_task_model_profiles
-
-                combined_tools = filter_tools_for_session(combined_tools, session_meta)
-                combined_tools = inject_task_model_profiles(combined_tools)
-                _pre_api_timing_mark(pre_api_timings, "subagent_tool_filter", _t_pre_api)
-            except Exception as _sub_ex:
-                _pre_api_timing_mark(pre_api_timings, "subagent_tool_filter", _t_pre_api)
-                logger.warning("subagent 工具过滤失败（忽略）: %s", _sub_ex)
-            # Apply this after built-in, MCP, plugin, and session-level tool
-            # composition so no same-named external definition can bypass it.
-            if not ask_user_enabled():
-                combined_tools = [
-                    item for item in combined_tools
-                    if str(((item.get("function") or {}).get("name") or "")) != "ask_user"
-                ]
-            inherited_tools = (
-                fork_runtime_config.get("tools")
-                if isinstance(fork_runtime_config, dict)
-                else None
-            )
-            if isinstance(inherited_tools, list) and inherited_tools:
-                try:
-                    combined_tools = json.loads(
-                        json.dumps(inherited_tools, ensure_ascii=False)
-                    )
-                except (TypeError, ValueError):
-                    logger.warning(
-                        "Ignoring invalid inherited fork tool definitions for session=%s",
-                        state.get("session_id"),
-                    )
-            state["_last_prompt_runtime_config"] = {
-                "version": 1,
-                "system_segments": list(static_segments),
-                "tools": json.loads(json.dumps(combined_tools, ensure_ascii=False)),
-                "model_runtime": executor_runtime_snapshot_for_session(
-                    state["session_id"]
-                ),
-            }
             advertised_tool_names = {
                 str(((item.get("function") or {}).get("name") or "")).strip()
                 for item in combined_tools
@@ -6428,6 +6491,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                                 state["session_id"],
                                 llm_messages_to_send,
                                 int((payload or {}).get("prompt_tokens", 0) or 0),
+                                tools=combined_tools,
                             )
                             actual_response_model = str((payload or {}).get("model") or actual_response_model or "").strip()
                             ch = int((payload or {}).get("prompt_cache_hit_tokens", 0) or 0)
@@ -6872,6 +6936,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                             state["session_id"],
                             llm_messages_to_send,
                             int((llm_call_usage or {}).get("prompt_tokens", 0) or 0),
+                            tools=combined_tools,
                         )
                         ch = llm_call_usage.get("prompt_cache_hit_tokens", 0)
                         cm = llm_call_usage.get("prompt_cache_miss_tokens", 0)

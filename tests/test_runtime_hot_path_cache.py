@@ -306,6 +306,51 @@ def test_calculated_prebuilt_token_estimate_ignores_provider_usage(monkeypatch):
     assert agent_tokenizer.estimate_calculated_input_tokens_for_messages(messages) == 17
 
 
+def test_prebuilt_token_estimate_counts_tool_schemas(monkeypatch):
+    import agent_tokenizer
+    from agent_messages import SystemMessage, UserMessage
+    import agent_harness
+
+    agent_tokenizer._PROMPT_USAGE_BASELINE_CACHE.clear()
+    agent_tokenizer._PROMPT_USAGE_EXACT_CACHE.clear()
+    monkeypatch.setattr(agent_harness, "estimate_tokens", lambda _messages: 17)
+    monkeypatch.setattr(agent_harness, "strip_reasoning_for_api_request", lambda messages: messages)
+    monkeypatch.setattr(agent_tokenizer, "count_tool_definition_tokens", lambda tools: 41 if tools else 0)
+
+    messages = [SystemMessage(content="sys"), UserMessage(content="hello")]
+    tools = [{"type": "function", "function": {"name": "demo"}}]
+
+    estimated = agent_tokenizer.estimate_full_input_tokens_for_messages(
+        "s1", messages, tools=tools
+    )
+
+    assert estimated == 58
+
+
+def test_provider_usage_cache_is_scoped_to_tool_schema(monkeypatch):
+    import agent_tokenizer
+    from agent_messages import SystemMessage, UserMessage
+    import agent_harness
+
+    agent_tokenizer._PROMPT_USAGE_BASELINE_CACHE.clear()
+    agent_tokenizer._PROMPT_USAGE_EXACT_CACHE.clear()
+    monkeypatch.setattr(agent_harness, "estimate_tokens", lambda _messages: 17)
+    monkeypatch.setattr(agent_harness, "strip_reasoning_for_api_request", lambda messages: messages)
+    monkeypatch.setattr(agent_tokenizer, "count_tool_definition_tokens", lambda tools: 41 if tools else 0)
+
+    messages = [SystemMessage(content="sys"), UserMessage(content="hello")]
+    old_tools = [{"type": "function", "function": {"name": "old"}}]
+    new_tools = [{"type": "function", "function": {"name": "new"}}]
+    agent_tokenizer.record_prompt_tokens_for_messages("s1", messages, 88, tools=old_tools)
+
+    estimated, source = agent_tokenizer.estimate_full_input_tokens_for_messages(
+        "s1", messages, tools=new_tools, return_source=True
+    )
+
+    assert estimated == 58
+    assert source == "local_estimate"
+
+
 def test_prebuilt_token_estimate_uses_provider_prefix_baseline(monkeypatch):
     import agent_tokenizer
     from agent_messages import AssistantMessage, SystemMessage, UserMessage
