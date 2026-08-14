@@ -728,7 +728,7 @@ def test_pending_approval_refresh_restores_card_badge_and_banner_contract(tmp_pa
 
     root = Path(__file__).resolve().parents[1]
     layout = (root / "frontend/src/app/modules/layout-panels.js").read_text(encoding="utf-8")
-    restore_call = "void refreshHumanInteractions(targetSession, { render: false });"
+    restore_call = "await refreshHumanInteractions(targetSession, { render: false });"
     switch_call = "if (targetSession) await switchSession(targetSession);"
     assert layout.index(restore_call) < layout.index(switch_call)
 
@@ -764,3 +764,5 @@ def test_pending_question_switch_and_history_mutation_frontend_contract():
     assert "superseded_by_history_mutation" in interactions
     assert "if (!opts.force && !isServerStreamActive(sessionId)) return;" in sse
     assert "Number.isFinite(Number(opts.afterIndex))" in sse
+    assert "detail.pending_human_interactions || {}" in sse
+    assert "pendingHumanInteractionRecords(sid).length > 0" in sse

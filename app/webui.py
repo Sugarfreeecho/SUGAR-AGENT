@@ -678,6 +678,33 @@ def _has_local_worker_activity(sid: str) -> bool:
         return sid in _chat_starting_by_session
 
 
+def _session_pending_human_counts(session_id: str) -> dict[str, int]:
+    """Return durable pending interaction counts for recovery gating."""
+    try:
+        from human_interaction import get_human_interaction_service
+
+        counts = get_human_interaction_service().pending_counts(str(session_id))
+        questions = max(0, int(counts.get("questions") or 0))
+        approvals = max(0, int(counts.get("approvals") or 0))
+        return {
+            "questions": questions,
+            "approvals": approvals,
+            "total": questions + approvals,
+        }
+    except Exception:
+        return {"questions": 0, "approvals": 0, "total": 0}
+
+
+def _session_pending_human_count(session_id: str) -> int:
+    """Total pending ask_user questions + tool approvals for one session."""
+    return int(_session_pending_human_counts(session_id).get("total") or 0)
+
+
+def _session_pending_human_question_count(session_id: str) -> int:
+    """Pending ask_user questions only; storage failures preserve old behavior."""
+    return int(_session_pending_human_counts(session_id).get("questions") or 0)
+
+
 def _discover_runnable_goal_sessions(
     candidate_session_ids: Optional[list[str]] = None,
 ) -> list[str]:
@@ -700,6 +727,8 @@ def _discover_runnable_goal_sessions(
                 continue
             try:
                 if manager.should_continue(sid):
+                    if _session_pending_human_count(sid) > 0:
+                        continue
                     runnable.append(sid)
             except Exception:
                 logger.debug("Goal runner discovery failed for %s", sid, exc_info=True)
@@ -724,6 +753,8 @@ async def _run_goal_continuation_background(session_id: str) -> None:
 
         manager = manager_for(session_manager)
         if not manager.should_continue(sid):
+            return
+        if _session_pending_human_count(sid) > 0:
             return
         get_goal = getattr(manager, "get", None)
         current_goal = get_goal(sid) if callable(get_goal) else {}
@@ -964,6 +995,8 @@ def _discover_recoverable_react_sessions() -> list[str]:
             # The normal app lifespan reconciles orphan runs before this scan.
             # Keep direct `uvicorn webui:fastapi_app` startup equally correct.
             _cleanup_orphan_runtime_v2_active_runs(sid, reason="no_local_activity")
+            if _session_pending_human_count(sid) > 0:
+                continue
             if not _runtime_v2_auto_resume_pending(sid):
                 continue
             if session_manager.can_continue_react_session(sid):
@@ -983,6 +1016,8 @@ async def _run_react_recovery_background(session_id: str) -> None:
     if not start_token:
         return
     try:
+        if _session_pending_human_count(sid) > 0:
+            return
         if not _runtime_v2_auto_resume_pending(sid):
             return
         if not session_manager.can_continue_react_session(sid):
@@ -1240,6 +1275,10 @@ def _runtime_v2_context_snapshot(sid: str) -> dict:
 
 
 def _runtime_v2_auto_resume_pending(sid: str) -> bool:
+    # A pending durable interaction is an intentional pause. Only the
+    # interaction resolve/cancel path may append its tool result and resume.
+    if _session_pending_human_count(sid) > 0:
+        return False
     try:
         from runtime_v2 import runtime_v2_primary
 
@@ -1654,6 +1693,9 @@ def get_index_html():
     default_steer_mode = str(os.getenv("MYAGENT_STEER_MODE", "append") or "append").strip().lower()
     if default_steer_mode not in {"interrupt", "append"}:
         default_steer_mode = "append"
+    frontend_version = str(os.getenv("MYAGENT_FRONTEND_VERSION", "v1") or "v1").strip().lower()
+    if frontend_version not in {"v1", "v2"}:
+        frontend_version = "v1"
     from security import security_enabled
 
     feature_flags = {
@@ -1673,6 +1715,8 @@ def get_index_html():
         f"window.__SESSIONS_DIR__={json.dumps(sessions_dir)};"
         f"window.__APP_DOTENV_PATH__={json.dumps(app_dotenv)};"
         f"window.__MYAGENT_STEER_MODE__={json.dumps(default_steer_mode)};"
+        f"window.__MYAGENT_FRONTEND_VERSION__={json.dumps(frontend_version)};"
+        "document.documentElement.dataset.frontendVersion=window.__MYAGENT_FRONTEND_VERSION__;"
         f"window.__MYAGENT_FEATURES__={json.dumps(feature_flags)};"
         "</script>"
     )
@@ -2463,6 +2507,7 @@ async def get_session_detail(
             s["run_active"] = bool(run_state["run_active"])
             s["run_started_at"] = run_state["run_started_at"]
             s["title_generation_pending"] = is_session_title_generation_pending(str(sid))
+            s["pending_human_interactions"] = _session_pending_human_counts(str(sid))
             try:
                 s["react_can_continue"] = session_manager.can_continue_react_session(str(sid))
             except Exception:
@@ -2480,6 +2525,7 @@ async def get_session_detail(
             s["react_auto_resume"] = bool(
                 not goal_can_continue
                 and s["react_can_continue"]
+                and int(s["pending_human_interactions"].get("total") or 0) == 0
                 and _runtime_v2_auto_resume_pending(str(sid))
             )
             s["goal_server_runner"] = bool(goal_can_continue)
@@ -2490,6 +2536,7 @@ async def get_session_detail(
             s["run_active"] = False
             s["run_started_at"] = None
             s["title_generation_pending"] = False
+            s["pending_human_interactions"] = {"questions": 0, "approvals": 0, "total": 0}
             s["react_can_continue"] = False
             s["react_auto_resume"] = False
             s["goal_server_runner"] = False
@@ -4031,30 +4078,6 @@ def _cancel_pending_ui_attention_notify() -> None:
         _ui_attention_notify_reasons.clear()
 
 
-def _session_pending_human_count(session_id: str) -> int:
-    """Total pending ask_user questions + tool approvals for one session."""
-
-    try:
-        from human_interaction import get_human_interaction_service
-
-        counts = get_human_interaction_service().pending_counts(str(session_id))
-        return int(counts.get("total") or 0)
-    except Exception:
-        return 0
-
-
-def _session_pending_human_question_count(session_id: str) -> int:
-    """Pending ask_user questions only; storage failures preserve old behavior."""
-
-    try:
-        from human_interaction import get_human_interaction_service
-
-        counts = get_human_interaction_service().pending_counts(str(session_id))
-        return int(counts.get("questions") or 0)
-    except Exception:
-        return 0
-
-
 def _schedule_ui_attention_notify(session_id: str, reason: str) -> None:
     """Schedule a desktop notification when the UI is not being actively used.
 
@@ -4762,6 +4785,16 @@ async def continue_react_session(
     sid = (session_id or "").strip()
     if not sid:
         return JSONResponse(content={"error": "missing session_id"}, status_code=400)
+    pending_human = _session_pending_human_counts(sid)
+    if int(pending_human.get("total") or 0) > 0:
+        return JSONResponse(
+            content={
+                "ok": False,
+                "reason": "pending_human_interaction",
+                "pending_human_interactions": pending_human,
+            },
+            status_code=409,
+        )
     try:
         from agent_goal import manager_for
         goal_can_continue = manager_for(session_manager).should_continue(sid)

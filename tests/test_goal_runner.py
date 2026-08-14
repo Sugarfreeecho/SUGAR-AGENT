@@ -19,15 +19,16 @@ def test_discover_runnable_goal_sessions(monkeypatch):
     class Manager:
         @staticmethod
         def should_continue(session_id):
-            return session_id == "active"
+            return session_id in {"active", "waiting"}
 
     monkeypatch.setattr(agent_goal, "goal_enabled", lambda: True)
     monkeypatch.setattr(agent_goal, "manager_for", lambda _session_manager: Manager())
     monkeypatch.setattr(
         webui.session_manager,
         "list_sessions",
-        lambda include_archived=True: [{"id": "active"}, {"id": "paused"}],
+        lambda include_archived=True: [{"id": "active"}, {"id": "paused"}, {"id": "waiting"}],
     )
+    monkeypatch.setattr(webui, "_session_pending_human_count", lambda sid: 1 if sid == "waiting" else 0)
 
     assert webui._discover_runnable_goal_sessions() == ["active"]
 
@@ -53,6 +54,7 @@ def test_background_goal_runner_drains_continuation_without_browser(monkeypatch)
         yield {"type": "status"}
 
     monkeypatch.setattr(agent_goal, "manager_for", lambda _session_manager: Manager())
+    monkeypatch.setattr(webui, "_session_pending_human_count", lambda _sid: 0)
     monkeypatch.setattr(webui, "astream_events_continuation", continuation)
     monkeypatch.setattr(webui, "_reserve_session_chat_start", lambda _sid, _run_id="": "lease")
     monkeypatch.setattr(webui, "_release_session_chat_start", lambda sid, token="": releases.append((sid, token)))
@@ -64,6 +66,36 @@ def test_background_goal_runner_drains_continuation_without_browser(monkeypatch)
     assert events[1][2] == events[0][2]
     assert events[1][3] == "goal"
     assert releases == [("s1", "lease")]
+
+
+def test_background_goal_runner_stops_for_pending_human_interaction(monkeypatch):
+    import agent_goal
+    import webui
+
+    events = []
+
+    class Manager:
+        @staticmethod
+        def should_continue(_session_id):
+            return True
+
+        @staticmethod
+        def mark_continuation_started(*_args, **_kwargs):
+            events.append("started")
+
+    async def continuation(*_args, **_kwargs):
+        events.append("continued")
+        yield {"type": "status"}
+
+    monkeypatch.setattr(agent_goal, "manager_for", lambda _session_manager: Manager())
+    monkeypatch.setattr(webui, "_session_pending_human_count", lambda _sid: 1)
+    monkeypatch.setattr(webui, "astream_events_continuation", continuation)
+    monkeypatch.setattr(webui, "_reserve_session_chat_start", lambda _sid, _run_id="": "lease")
+    monkeypatch.setattr(webui, "_release_session_chat_start", lambda _sid, token="": None)
+
+    asyncio.run(webui._run_goal_continuation_background("waiting"))
+
+    assert events == []
 
 
 def test_background_goal_runner_accounts_empty_continuation_as_failure(monkeypatch):
@@ -94,6 +126,7 @@ def test_background_goal_runner_accounts_empty_continuation_as_failure(monkeypat
             yield {}
 
     monkeypatch.setattr(agent_goal, "manager_for", lambda _session_manager: Manager())
+    monkeypatch.setattr(webui, "_session_pending_human_count", lambda _sid: 0)
     monkeypatch.setattr(webui, "astream_events_continuation", continuation)
     monkeypatch.setattr(webui, "_reserve_session_chat_start", lambda _sid, _run_id="": "lease")
     monkeypatch.setattr(webui, "_release_session_chat_start", lambda _sid, token="": None)
