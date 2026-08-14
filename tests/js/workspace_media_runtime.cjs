@@ -9,6 +9,17 @@ const source = fs.readFileSync(
   path.join(root, 'frontend/src/app/modules/workspace-media.js'),
   'utf8',
 );
+const renderingSource = fs.readFileSync(
+  path.join(root, 'frontend/src/app/modules/message-rendering.js'),
+  'utf8',
+);
+
+function between(sourceText, startMarker, endMarker) {
+  const start = sourceText.indexOf(startMarker);
+  const end = sourceText.indexOf(endMarker, start);
+  assert.ok(start >= 0 && end > start, `missing source section: ${startMarker}`);
+  return sourceText.slice(start, end);
+}
 
 class FakeElement {
   constructor(tagName) {
@@ -63,13 +74,22 @@ const context = vm.createContext({
       .replace(/>/g, '&gt;');
   },
   markdownHrefToWorkspaceOpenRel(value) {
-    const text = String(value || '');
+    let text = String(value || '');
     if (!text || /^(?:https?|mailto|tel|data|blob):/i.test(text)) return '';
+    try { text = decodeURIComponent(text); } catch (_error) { /* keep raw */ }
     return text.replace(/\\/g, '/');
   },
   workspaceOpenTipPath(raw, rel) { return String(raw || rel || ''); },
 });
 vm.runInContext(source, context);
+vm.runInContext(
+  between(
+    renderingSource,
+    'function stripMarkdownPathLinkWrapper',
+    'function escapeMarkdownSingleTildes',
+  ),
+  context,
+);
 
 async function main() {
   const markedUrl = pathToFileURL(
@@ -77,6 +97,49 @@ async function main() {
   ).href;
   const { marked } = await import(markedUrl);
   context.configureWorkspaceMarkdownRenderer(marked);
+
+  const normalize = (markdown) => context.normalizeExplicitMarkdownPathLinksOutsideFences(markdown);
+  const encodedMarkdownPath = (value) => String(value).replace(/\\/g, '%5C');
+
+  const windowsPath = String.raw`D:\AI\AI Agent\MyAgent Developer\workspace\C盘清理扫描\C盘清理报告.md`;
+  const windowsLink = normalize(`[C盘清理扫描/C盘清理报告.md]("${windowsPath}")`);
+  assert.equal(windowsLink, `[C盘清理扫描/C盘清理报告.md](<${encodedMarkdownPath(windowsPath)}>)`);
+  const windowsHtml = marked.parse(windowsLink);
+  assert.match(windowsHtml, /data-workspace-markdown-link="1"/);
+  assert.match(windowsHtml, /data-workspace-open="D:\/AI\/AI Agent\/MyAgent Developer\/workspace\/C盘清理扫描\/C盘清理报告\.md"/);
+  assert.doesNotMatch(windowsHtml, /C盘清理报告\.md\)<\/a>/);
+
+  const relativeLink = normalize('[报告]("workspace/C盘清理扫描/清理 报告.md")');
+  assert.equal(relativeLink, '[报告](<workspace/C盘清理扫描/清理 报告.md>)');
+  assert.match(marked.parse(relativeLink), /data-workspace-open="workspace\/C盘清理扫描\/清理 报告\.md"/);
+
+  const parenthesizedPath = String.raw`D:\reports\C盘清理(最终版).md`;
+  const parenthesizedLink = normalize(`[报告]("${parenthesizedPath}")`);
+  assert.equal(parenthesizedLink, `[报告](<${encodedMarkdownPath(parenthesizedPath)}>)`);
+  assert.match(marked.parse(parenthesizedLink), /data-workspace-open="D:\/reports\/C盘清理\(最终版\)\.md"/);
+
+  const uncPath = String.raw`\\fileserver\shared reports\清理报告.md`;
+  const uncLink = normalize(`[共享报告]("${uncPath}")`);
+  assert.equal(uncLink, `[共享报告](<${encodedMarkdownPath(uncPath)}>)`);
+  assert.match(marked.parse(uncLink), /data-workspace-open="\/\/fileserver\/shared reports\/清理报告\.md"/);
+
+  const apostrophePath = String.raw`D:\Team's Files\report.md`;
+  assert.equal(
+    normalize(`[报告](${apostrophePath})`),
+    `[报告](<${encodedMarkdownPath(apostrophePath)}>)`,
+  );
+
+  const spacedImage = normalize('![预览]("media/清理 报告.gif")');
+  assert.equal(spacedImage, '![预览](<media/清理 报告.gif>)');
+  assert.match(marked.parse(spacedImage), /class="msg-workspace-image"/);
+
+  const titledImage = normalize('![预览](media/demo.gif "动画")');
+  assert.equal(titledImage, '![预览](media/demo.gif "动画")');
+  assert.equal(normalize('[站点](https://example.com/a_(b).md)'), '[站点](https://example.com/a_(b).md)');
+  assert.equal(
+    normalize('```md\n[报告]("workspace/清理 报告.md")\n```'),
+    '```md\n[报告]("workspace/清理 报告.md")\n```',
+  );
 
   const gif = marked.parse('![预览](media/demo.gif "动画")');
   assert.match(gif, /<img [^>]*class="msg-workspace-image"/);

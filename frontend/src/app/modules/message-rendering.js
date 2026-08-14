@@ -3270,13 +3270,108 @@ function stripMarkdownPathLinkWrapper(s) {
 
 function normalizeExplicitMarkdownPathLinkMatch(match, label, dest) {
     var cleanLabel = stripMarkdownPathLinkWrapper(label);
-    var cleanDest = stripMarkdownPathLinkWrapper(dest);
+    var rawDest = String(dest || '').trim();
+    // A regular CommonMark destination may be followed by a quoted title.
+    // It is already valid Markdown and must not be mistaken for one path with spaces.
+    if (/^(?:<[^>\r\n]+>|\S+)\s+(?:"[^"\r\n]*"|'[^'\r\n]*'|\([^\)\r\n]*\))$/.test(rawDest)) return match;
+    var angleWrapped = rawDest.length >= 2 && rawDest.charAt(0) === '<' && rawDest.charAt(rawDest.length - 1) === '>';
+    var cleanDest = angleWrapped
+        ? rawDest.slice(1, -1).trim()
+        : stripMarkdownPathLinkWrapper(rawDest);
     if (!cleanDest || !markdownHrefToWorkspaceOpenRel(cleanDest)) return match;
-    return '[' + cleanLabel + '](' + cleanDest + ')';
+    // Quotes around a destination are parsed by CommonMark as a title when the
+    // path contains spaces. Angle destinations preserve spaces and parentheses
+    // while still giving Marked a normal link/image token.
+    var needsAngleWrapper = angleWrapped || /[\s()<>]/.test(cleanDest);
+    var markdownDest = needsAngleWrapper
+        ? '<' + cleanDest.replace(/\\/g, '%5C').replace(/</g, '%3C').replace(/>/g, '%3E') + '>'
+        : cleanDest;
+    return '[' + cleanLabel + '](' + markdownDest + ')';
+}
+
+function findExplicitMarkdownLabelEnd(src, start) {
+    var depth = 0;
+    for (var i = start; i < src.length; i += 1) {
+        var ch = src.charAt(i);
+        if (ch === '\\') {
+            i += 1;
+            continue;
+        }
+        if (ch === '[') depth += 1;
+        else if (ch === ']') {
+            depth -= 1;
+            if (depth === 0) return i;
+        }
+    }
+    return -1;
+}
+
+function findExplicitMarkdownDestinationEnd(src, openParen) {
+    var depth = 1;
+    var quote = '';
+    var inAngle = false;
+    for (var i = openParen + 1; i < src.length; i += 1) {
+        var ch = src.charAt(i);
+        if (quote) {
+            if (ch === quote) quote = '';
+            continue;
+        }
+        if (inAngle) {
+            if (ch === '>') inAngle = false;
+            continue;
+        }
+        var beforeQuote = src.slice(openParen + 1, i);
+        var quoteCanOpen = !beforeQuote.trim() || /\s/.test(src.charAt(i - 1));
+        if (quoteCanOpen && (ch === '"' || ch === "'" || ch === '\u201c' || ch === '\u2018')) {
+            quote = ch === '\u201c' ? '\u201d' : (ch === '\u2018' ? '\u2019' : ch);
+            continue;
+        }
+        if (ch === '<') {
+            inAngle = true;
+            continue;
+        }
+        if (ch === '(') depth += 1;
+        else if (ch === ')') {
+            depth -= 1;
+            if (depth === 0) return i;
+        }
+    }
+    return -1;
+}
+
+function normalizeExplicitMarkdownPathLinksByScan(text) {
+    var src = String(text || '');
+    var out = '';
+    var copiedUntil = 0;
+    var pos = 0;
+    while (pos < src.length) {
+        var start = src.indexOf('[', pos);
+        if (start < 0) break;
+        var labelEnd = findExplicitMarkdownLabelEnd(src, start);
+        if (labelEnd < 0 || src.charAt(labelEnd + 1) !== '(') {
+            pos = start + 1;
+            continue;
+        }
+        var destEnd = findExplicitMarkdownDestinationEnd(src, labelEnd + 1);
+        if (destEnd < 0) {
+            pos = start + 1;
+            continue;
+        }
+        var match = src.slice(start, destEnd + 1);
+        var label = src.slice(start + 1, labelEnd);
+        var dest = src.slice(labelEnd + 2, destEnd);
+        var normalized = normalizeExplicitMarkdownPathLinkMatch(match, label, dest);
+        if (normalized !== match) {
+            out += src.slice(copiedUntil, start) + normalized;
+            copiedUntil = destEnd + 1;
+        }
+        pos = destEnd + 1;
+    }
+    return out + src.slice(copiedUntil);
 }
 
 function normalizeExplicitMarkdownPathLinksInPlainText(text) {
-    return String(text || '')
+    var normalized = String(text || '')
         .replace(/([`*_~]{1,2})\[([^\]\r\n]+)\]\(([^)\r\n]+)\)\1/g, function (match, wrap, label, dest) {
             return normalizeExplicitMarkdownPathLinkMatch(match, label, dest);
         })
@@ -3285,8 +3380,8 @@ function normalizeExplicitMarkdownPathLinksInPlainText(text) {
         })
         .replace(/\[([^\]\r\n]+)\]([`*_~]{1,2})\(([^)\r\n]+)\)\2/g, function (match, label, wrap, dest) {
             return normalizeExplicitMarkdownPathLinkMatch(match, label, dest);
-        })
-        .replace(/\[([^\]\r\n]+)\]\(([^)\r\n]+)\)/g, normalizeExplicitMarkdownPathLinkMatch);
+        });
+    return normalizeExplicitMarkdownPathLinksByScan(normalized);
 }
 
 function normalizeExplicitMarkdownPathLinksOutsideFences(text) {
