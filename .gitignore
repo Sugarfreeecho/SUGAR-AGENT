@@ -68,3 +68,6 @@ review/
 mcp_servers.json
 extension-picker-demo.html
 frontend/ux-optimization-concept.html
+
+# Local skill enable/disable state (runtime-writable)
+skill_states.json
