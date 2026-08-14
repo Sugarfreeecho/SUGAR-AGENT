@@ -56,6 +56,7 @@ def _schedule_browser_open(host: str, port: int) -> None:
 if __name__ == "__main__":
     from webui import (
         fastapi_app,
+        initialize_ui_attention_notifications,
         schedule_runtime_auto_migration,
         start_feishu_adapter,
         start_goal_runner,
@@ -77,6 +78,9 @@ if __name__ == "__main__":
     async def lifespan(app: FastAPI):
         import cpu_pressure
 
+        # A custom lifespan replaces FastAPI's on_event startup callbacks.
+        # Bind event-bus attention notifications to this long-lived loop.
+        initialize_ui_attention_notifications()
         cpu_pressure.start()
         pressure_probe_task = asyncio.create_task(cpu_pressure.event_loop_lag_probe())
         # 启动时打开浏览器

@@ -26,6 +26,13 @@
                 <button id="new-session-btn" type="button" class="new-session-btn" data-ui-tip="新建会话">新建对话</button>
             </div>
             <div id="sessions-list" class="sessions-list" role="listbox"></div>
+            <div class="sidebar-runtime" role="status" aria-live="polite">
+                <a id="sidebar-runtime-link" class="sidebar-runtime-link" href="/execution-dashboard" target="myagent-execution-dashboard" aria-label="打开执行状态看板" data-ui-tip="打开执行状态看板">
+                    <span class="sidebar-runtime-dot" aria-hidden="true"></span>
+                    <span id="sidebar-runtime-status">Runtime 在线</span>
+                </a>
+                <span id="sidebar-runtime-version" class="sidebar-runtime-version">v4.20260814</span>
+            </div>
         </aside>
 
         <div class="sash" id="sash" role="separator" aria-orientation="vertical" aria-label="拖动调整侧栏宽度" tabindex="0"></div>
@@ -298,6 +305,7 @@
                     <div class="settings-modal__label">界面风格</div>
                     <div class="settings-theme-row" role="group" aria-label="界面风格">
                         <button type="button" id="settings-theme-dark" class="settings-theme-btn">深色</button>
+                        <button type="button" id="settings-theme-purple" class="settings-theme-btn">紫色</button>
                         <button type="button" id="settings-theme-light" class="settings-theme-btn">浅色（默认）</button>
                     </div>
                 </div>
@@ -317,18 +325,6 @@
                     <div id="settings-agent-team-status" class="settings-feature-status" role="status" aria-live="polite">正在读取状态…</div>
                     <button type="button" id="settings-agent-team-manage" class="settings-advanced-btn" disabled>管理当前会话团队</button>
                 </div>
-                <div class="settings-modal__section">
-                    <div class="settings-modal__label">Agent 主动提问</div>
-                    <div class="settings-theme-row" role="group" aria-label="Agent 主动提问功能开关">
-                        <button type="button" id="settings-ask-user-off" class="settings-theme-btn">关闭</button>
-                        <button type="button" id="settings-ask-user-on" class="settings-theme-btn">启用</button>
-                    </div>
-                    <div id="settings-ask-user-status" class="settings-feature-status" role="status" aria-live="polite">正在读取状态…</div>
-                </div>
-            <div class="settings-modal__section">
-                <div class="settings-modal__label">运行诊断</div>
-                <button type="button" id="settings-execution-dashboard" class="settings-advanced-btn">执行状态看板</button>
-            </div>
             <div class="settings-modal__section">
                 <div class="settings-modal__label">环境与 API</div>
                     <button type="button" id="settings-env-advanced" class="settings-advanced-btn">高级设置</button>

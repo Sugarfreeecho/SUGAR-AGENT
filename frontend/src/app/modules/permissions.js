@@ -317,11 +317,11 @@ async function setExtensionTrust(item, trust) {
     }
     if (trust) {
         var accepted = await openUiModal({
-            title: '信任可执行扩展',
+            title: '注册可执行扩展',
             subtitle: extensionTrustLabel(item),
-            message: '该扩展将以当前操作系统用户权限运行。能力声明只用于审批分类，不能阻止扩展代码读取文件或联网。确认信任当前内容摘要？',
+            message: '该扩展将以当前操作系统用户权限运行。能力声明只用于审批分类，不能阻止扩展代码读取文件或联网。确认注册当前内容摘要？',
             danger: true,
-            confirmText: '信任当前版本',
+            confirmText: '确认注册',
             cancelText: '取消',
         });
         if (!accepted) return;
@@ -333,14 +333,14 @@ async function setExtensionTrust(item, trust) {
         if (!response.ok || !data.ok) throw new Error(data.error || ('HTTP ' + response.status));
         if (statusEl) {
             statusEl.textContent = trust
-                ? '扩展已信任；当前摘要可以启动。'
+                ? '扩展已注册；当前摘要可以启动。'
                 : (item.kind === 'mcp'
                     ? 'MCP 注册已撤销，运行中的服务器已停止。'
-                    : '扩展信任已撤销，运行中的 worker 已停止。');
+                    : '扩展注册已撤销，运行中的 worker 已停止。');
         }
         await refreshSecurityExtensions();
     } catch (error) {
-        if (statusEl) statusEl.textContent = '更新扩展信任失败：' + String(error && error.message ? error.message : error);
+        if (statusEl) statusEl.textContent = '更新扩展注册失败：' + String(error && error.message ? error.message : error);
     }
 }
 
@@ -363,11 +363,11 @@ async function refreshSecurityExtensions() {
             var row = document.createElement('div');
             row.className = 'settings-security-rule-row';
             var badge = document.createElement('span');
-            var mcpStatus = String(item.registration_status || '');
+            var registrationStatus = String(item.registration_status || '');
             badge.className = item.trusted ? 'settings-security-rule-allow' : 'settings-security-rule-ask';
-            badge.textContent = item.kind === 'mcp'
-                ? (mcpStatus === 'registered' ? '已注册' : (mcpStatus === 'rejected' ? '已拒绝' : '待确认'))
-                : (item.trusted ? '已信任' : '待信任');
+            badge.textContent = registrationStatus === 'registered'
+                ? '已注册'
+                : (registrationStatus === 'rejected' ? '已拒绝' : '待确认');
             var label = document.createElement('span');
             label.className = 'settings-security-rule-label';
             label.textContent = extensionTrustLabel(item) + ' · ' + String(item.runtime || 'runtime');
@@ -377,7 +377,7 @@ async function refreshSecurityExtensions() {
             action.className = 'settings-security-rule-delete';
             action.textContent = item.trusted
                 ? '撤销'
-                : (item.kind === 'mcp' ? '确认注册' : '信任');
+                : '确认注册';
             action.addEventListener('click', function () { void setExtensionTrust(item, !item.trusted); });
             row.appendChild(badge);
             row.appendChild(label);
@@ -388,7 +388,7 @@ async function refreshSecurityExtensions() {
         void promptPendingMcpRegistrations(rows);
     } catch (error) {
         listEl.textContent = '';
-        if (statusEl) statusEl.textContent = '读取扩展信任失败：' + String(error && error.message ? error.message : error);
+        if (statusEl) statusEl.textContent = '读取扩展注册失败：' + String(error && error.message ? error.message : error);
     }
 }
 

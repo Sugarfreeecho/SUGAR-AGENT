@@ -1,0 +1,37 @@
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_sidebar_runtime_footer_is_present_in_source_markup() -> None:
+    for relative_path in ("frontend/index.html", "frontend/src/shell-body.html"):
+        markup = (ROOT / relative_path).read_text(encoding="utf-8")
+        assert 'class="sidebar-runtime"' in markup
+        assert 'id="sidebar-runtime-link"' in markup
+        assert 'href="/execution-dashboard"' in markup
+        assert 'id="sidebar-runtime-status"' in markup
+        assert 'id="sidebar-runtime-version"' in markup
+
+
+def test_sidebar_runtime_status_tracks_session_connectivity() -> None:
+    source = (ROOT / "frontend/src/app/modules/session-management.js").read_text(encoding="utf-8")
+
+    assert "function updateSidebarRuntimeStatus(isOnline)" in source
+    assert "updateSidebarRuntimeStatus(true);" in source
+    assert "updateSidebarRuntimeStatus(false);" in source
+
+
+def test_sidebar_uses_dated_product_version() -> None:
+    for relative_path in ("frontend/index.html", "frontend/src/shell-body.html"):
+        markup = (ROOT / relative_path).read_text(encoding="utf-8")
+        assert 'class="sidebar-runtime-version">v4.20260814</span>' in markup
+
+
+def test_sidebar_runtime_footer_has_theme_aware_styles() -> None:
+    styles = (ROOT / "frontend/src/styles/app.css").read_text(encoding="utf-8")
+
+    assert ".sidebar-runtime {" in styles
+    assert ".sidebar-runtime-link:hover" in styles
+    assert ".sidebar-runtime.is-offline .sidebar-runtime-dot" in styles
+    assert ":root.theme-light .sidebar-runtime" in styles

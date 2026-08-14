@@ -460,9 +460,9 @@ def test_frontend_human_interaction_contract_is_wired():
     assert "submitComposerWithPendingQuestionGuard" not in sse
     settings = (root / "frontend/src/app/modules/settings.js").read_text(encoding="utf-8")
     webui = (root / "app/webui.py").read_text(encoding="utf-8")
-    assert 'id="settings-ask-user-on"' in shell
-    assert 'id="settings-ask-user-on"' in index_html
-    assert "saveAskUserFeature" in settings
+    assert 'id="settings-ask-user-on"' not in shell
+    assert 'id="settings-ask-user-on"' not in index_html
+    assert "saveAskUserFeature" not in settings
     assert '"/api/features/ask-user"' in webui
     assert 'approvals/{approval_id}/analyze' in webui
     assert '"recommendation": "allow" if review.approved else "deny"' in webui

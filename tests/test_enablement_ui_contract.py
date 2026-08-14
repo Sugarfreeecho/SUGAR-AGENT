@@ -86,6 +86,8 @@ def test_pending_followup_mode_uses_custom_picker_instead_of_native_select():
 
 def test_skill_picker_exposes_enablement_controls():
     picker = (ROOT / "frontend/src/app/modules/skill-picker.js").read_text(encoding="utf-8")
+    styles = (ROOT / "frontend/src/styles/app.css").read_text(encoding="utf-8")
+    i18n = (ROOT / "frontend/src/app/modules/i18n.js").read_text(encoding="utf-8")
     backend = (ROOT / "app/webui.py").read_text(encoding="utf-8")
 
     assert "skill-picker-toggle" in picker
@@ -95,13 +97,37 @@ def test_skill_picker_exposes_enablement_controls():
     assert 'data-skill-picker-tab="hooks"' in picker
     assert 'data-skill-picker-tab="plugins"' in picker
     assert "loadSkillPickerMcpTools" in picker
+    assert "mcpServersCache" in picker
+    assert "当前没有已配置的 MCP 服务器" in picker
+    assert "is-undiscovered" in picker
+    assert "'未注册'" in picker
+    assert "'未注册': 'Not registered'" in i18n
+    assert "mcp-server-register-btn" in picker
+    assert "registerMcpServer" in picker
+    assert "/api/mcp/servers/" in picker
+    assert "服务器尚未完成工具注册；请检查连接、凭据或服务配置。" in picker
     assert "mcp-tool-toggle" in picker
     assert "setMcpToolEnabled" in picker
     assert "loadSkillPickerExtensions" in picker
     assert '/api/mcp/tools' in picker
     assert '/api/extensions' in picker
+    assert "skillPickerCollapsedGroups" in picker
+    assert "skillPickerGroupHtml" in picker
+    assert "data-skill-picker-group" in picker
+    assert "skill-picker-group-toggle" in picker
+    assert ".skill-picker-group" in styles
+    assert ".skill-picker-group.is-collapsed .skill-picker-group-chevron" in styles
+    assert ".skill-picker-group-items[hidden]" in styles
+    assert ".skill-picker-group-summary.is-undiscovered" in styles
+    assert ".mcp-server-register-btn" in styles
+    assert "grid-auto-rows: max-content" in styles
+    assert "align-content: start" in styles
+    assert "共 (\\d+) 个工具" in i18n
+    assert "个服务器 · (\\d+) 个工具" in i18n
+    assert "'未命名服务器': 'Unnamed server'" in i18n
     assert '@fastapi_app.post("/api/skills/{skill_name}/enabled")' in backend
     assert '@fastapi_app.get("/api/mcp/tools")' in backend
+    assert '@fastapi_app.post("/api/mcp/servers/{server_name:path}/register")' in backend
     assert '@fastapi_app.post("/api/mcp/tools/{function_name}/enabled")' in backend
 
 
@@ -132,3 +158,11 @@ def test_ui_presence_tracks_foreground_state_and_attention_notifications():
     assert '"interaction_requested"' in backend
     assert "show_desktop_notification" in notify
     assert "add_event_listener" in bus
+
+    # The production entrypoint replaces FastAPI's startup callbacks with a
+    # custom lifespan, so it must bind attention notifications explicitly.
+    main = (ROOT / "app/main.py").read_text(encoding="utf-8")
+    assert "initialize_ui_attention_notifications" in backend
+    lifespan_start = main.index("async def lifespan(app: FastAPI):")
+    lifespan_end = main.index("fastapi_app.router.lifespan_context = lifespan", lifespan_start)
+    assert "initialize_ui_attention_notifications()" in main[lifespan_start:lifespan_end]

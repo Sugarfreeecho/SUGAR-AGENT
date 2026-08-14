@@ -835,6 +835,15 @@ async function fetchSessionsStateSnapshot(opts) {
     return snapshot;
 }
 
+function updateSidebarRuntimeStatus(isOnline) {
+    var footer = document.querySelector('.sidebar-runtime');
+    var status = document.getElementById('sidebar-runtime-status');
+    if (!footer || !status) return;
+    var online = isOnline !== false;
+    footer.classList.toggle('is-offline', !online);
+    setUiRuntimeText(status, online ? 'Runtime 在线' : 'Runtime 离线');
+}
+
 async function fetchWithTimeout(url, options, timeoutMs) {
     options = options || {};
     const ms = Number(timeoutMs) > 0 ? Number(timeoutMs) : 15000;
@@ -966,6 +975,7 @@ async function loadSessionsInner(opts) {
         try {
             snapshot = await fetchSessionsStateSnapshot();
             if (loadEpoch !== sessionListLoadEpoch) return;
+            updateSidebarRuntimeStatus(true);
             allSessions = Array.isArray(snapshot.sessions) ? snapshot.sessions : [];
         } catch (stateErr) {
             console.error('加载会话状态快照失败，回退至旧接口', stateErr);
@@ -980,6 +990,7 @@ async function loadSessionsInner(opts) {
             }
             const sessions = await response.json();
             if (loadEpoch !== sessionListLoadEpoch) return;
+            updateSidebarRuntimeStatus(true);
             allSessions = Array.isArray(sessions) ? sessions : [];
             snapshot = {
                 sessions: allSessions,
@@ -1008,6 +1019,7 @@ async function loadSessionsInner(opts) {
         return true;
     } catch (error) {
         sessionStore.ui.loadingSessions = false;
+        updateSidebarRuntimeStatus(false);
         console.error('加载会话列表失败:', error);
         if (sessionStore.list().length > 0) {
             renderSessionListIfChanged(true);

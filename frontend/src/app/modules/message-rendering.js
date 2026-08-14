@@ -409,7 +409,7 @@ async function saveMessageAsImage(wrap) {
     var targetStyle = getComputedStyle(target);
     var background = targetStyle.backgroundColor;
     if (!background || background === 'rgba(0, 0, 0, 0)') {
-        background = document.documentElement.classList.contains('theme-light') ? '#ffffff' : '#1e1e2e';
+        background = getUiThemeCanvasBackground();
     }
     if (typeof globalThis.loadMyAgentHtml2Canvas !== 'function') {
         throw new Error('当前版本未加载图片导出组件');
@@ -2530,7 +2530,7 @@ function downloadMermaidPng(sourceEl) {
             var ctx = canvas.getContext('2d');
             if (!ctx) throw new Error('canvas unavailable');
             ctx.scale(scale, scale);
-            ctx.fillStyle = document.documentElement.classList.contains('theme-light') ? '#ffffff' : '#1e1e2e';
+            ctx.fillStyle = getUiThemeCanvasBackground();
             ctx.fillRect(0, 0, size.width, size.height);
             ctx.drawImage(img, 0, 0, size.width, size.height);
             canvas.toBlob(function (blob) {
