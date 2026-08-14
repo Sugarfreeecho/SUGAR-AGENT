@@ -599,12 +599,19 @@ def test_context_tokens_snapshot_miss_uses_runtime_v2_compute_not_legacy(monkeyp
     monkeypatch.setattr(webui, "session_manager", _NoLegacyContextSessionManager())
     monkeypatch.setattr(webui, "_runtime_v2_context_snapshot", lambda _sid: {})
     monkeypatch.setattr(webui, "get_context_token_mode", lambda: "hybrid")
-    monkeypatch.setattr(webui, "compute_context_tokens_for_session", lambda sid: {
+    tools = [{"type": "function", "function": {"name": "demo"}}]
+    monkeypatch.setattr(
+        webui,
+        "build_combined_tool_definitions_for_session",
+        lambda _sid: asyncio.sleep(0, result=tools),
+    )
+    monkeypatch.setattr(webui, "compute_context_tokens_for_session", lambda sid, defs: {
         "ok": True,
         "estimated": 321,
         "threshold": 4096,
         "model": "m",
         "source": "runtime_v2_projection",
+        "tools_matched": defs == tools,
     })
 
     response = asyncio.run(webui.get_session_context_tokens("s1"))
@@ -616,6 +623,7 @@ def test_context_tokens_snapshot_miss_uses_runtime_v2_compute_not_legacy(monkeyp
         "threshold": 4096,
         "model": "m",
         "source": "runtime_v2_projection",
+        "tools_matched": True,
         "token_mode": "hybrid",
     }
 

@@ -1,0 +1,18 @@
+{
+  "name": "repo-engineering",
+  "version": "0.1.0",
+  "description": "Repository review, testing, documentation, and release-check workflows.",
+  "author": {
+    "name": "Local developer"
+  },
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Repo Engineering",
+    "shortDescription": "Review, test, document, and release repositories safely.",
+    "longDescription": "Adds repository-aware review, testing, changelog, and release-check workflows.",
+    "developerName": "Local developer",
+    "category": "Productivity",
+    "capabilities": [],
+    "defaultPrompt": "Inspect this repository task, preserve unrelated changes, implement the smallest safe change, run focused verification, and report the result."
+  }
+}

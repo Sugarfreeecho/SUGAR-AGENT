@@ -1,0 +1,4 @@
+interface:
+  display_name: "Repo Engineering"
+  short_description: "Review, test, document, and release repositories safely."
+  default_prompt: "Inspect this repository task, preserve unrelated changes, implement the smallest safe change, run focused verification, and report the result."

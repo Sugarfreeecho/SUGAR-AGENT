@@ -1,6 +1,6 @@
 """
 MCP（Model Context Protocol）桥：支持 stdio / SSE / Streamable HTTP，配置变更热重载，
-默认免注册确认（MCP_REGISTRATION_APPROVAL_ENABLED=1 时恢复摘要绑定人工确认），
+默认免注册确认（EXTENSION_REGISTRATION_APPROVAL_ENABLED=1 时启用摘要绑定的统一扩展注册审批），
 工具调用走中央权限策略，结构化日志。
 
 配置：`PROJECT_ROOT/mcp_servers.json` 或 `MCP_SERVERS_JSON`；路径可用 `MCP_SERVERS_PATH`。
@@ -45,12 +45,14 @@ except ImportError:
     _MCP_IMPORT_OK = False
 
 _TOOL_NAME_SAFE = re.compile(r"[^a-zA-Z0-9_-]+")
+_ENV_REFERENCE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
 _STOP = object()
 
 _fname_to_tool: Dict[str, Tuple[str, str]] = {}
 _servers: Dict[str, Any] = {}
 _defs_snapshot: List[Dict[str, Any]] = []
 _tool_contracts: Dict[str, Dict[str, Any]] = {}
+_server_start_errors: Dict[str, str] = {}
 _start_lock = asyncio.Lock()
 _loaded_signature: Optional[str] = None
 _signature_cache: Optional[Tuple[float, str]] = None
@@ -66,6 +68,32 @@ _T = TypeVar("_T")
 _mcp_loop: Optional[asyncio.AbstractEventLoop] = None
 _mcp_loop_thread: Optional[threading.Thread] = None
 _mcp_loop_init_lock = threading.Lock()
+
+
+def _expand_env_references(value: str, *, field: str) -> str:
+    """Resolve ${NAME} at connection time without persisting secret values."""
+    missing = sorted(
+        {
+            match.group(1)
+            for match in _ENV_REFERENCE.finditer(value)
+            if match.group(1) not in os.environ
+        }
+    )
+    if missing:
+        raise ValueError(
+            f"{field} references missing environment variable(s): {', '.join(missing)}"
+        )
+    return _ENV_REFERENCE.sub(lambda match: os.environ[match.group(1)], value)
+
+
+def _headers_from_config(cfg: dict) -> Optional[Dict[str, str]]:
+    headers_raw = cfg.get("headers")
+    if not isinstance(headers_raw, dict):
+        return None
+    return {
+        str(key): _expand_env_references(str(value), field=f"MCP header {key!s}")
+        for key, value in headers_raw.items()
+    }
 
 
 def _get_mcp_loop() -> asyncio.AbstractEventLoop:
@@ -662,10 +690,7 @@ def _make_stdio_connector(alias: str, cfg: dict) -> _PersistentMcpServer:
 
 def _make_sse_connector(alias: str, cfg: dict) -> _PersistentMcpServer:
     url = str(cfg.get("url") or "").strip()
-    headers_raw = cfg.get("headers")
-    headers: Optional[Dict[str, str]] = None
-    if isinstance(headers_raw, dict):
-        headers = {str(k): str(v) for k, v in headers_raw.items()}
+    headers = _headers_from_config(cfg)
     timeout = float(cfg.get("timeout", 30))
     sse_read = float(cfg.get("sse_read_timeout", cfg.get("sseReadTimeout", 300)))
     call_timeout = float(cfg.get("tool_timeout", cfg.get("call_timeout", cfg.get("callTimeout", 120))))
@@ -704,10 +729,7 @@ def _make_sse_connector(alias: str, cfg: dict) -> _PersistentMcpServer:
 
 def _make_streamable_connector(alias: str, cfg: dict) -> _PersistentMcpServer:
     url = str(cfg.get("url") or "").strip()
-    headers_raw = cfg.get("headers")
-    headers: Optional[Dict[str, str]] = None
-    if isinstance(headers_raw, dict):
-        headers = {str(k): str(v) for k, v in headers_raw.items()}
+    headers = _headers_from_config(cfg)
     timeout_sec = float(cfg.get("timeout", 30))
     read_sec = float(cfg.get("sse_read_timeout", cfg.get("read_timeout", 300)))
     call_timeout = float(cfg.get("tool_timeout", cfg.get("call_timeout", cfg.get("callTimeout", 120))))
@@ -738,6 +760,66 @@ async def _shutdown_servers_unlocked() -> None:
     _tool_contracts.clear()
 
 
+def _remove_server_tools_unlocked(alias: str) -> None:
+    """Remove one server's tool mappings without disturbing other servers."""
+    global _defs_snapshot
+    names = {
+        function_name
+        for function_name, pair in _fname_to_tool.items()
+        if pair[0] == alias
+    }
+    for function_name in names:
+        _fname_to_tool.pop(function_name, None)
+        _tool_contracts.pop(function_name, None)
+    if names:
+        _defs_snapshot = [
+            item
+            for item in _defs_snapshot
+            if str((item.get("function") or {}).get("name") or "") not in names
+        ]
+
+
+async def _start_configured_server_unlocked(alias: str, cfg: dict) -> None:
+    """Start one approved server and register its discovered tool contracts."""
+    from security.extensions import mcp_descriptor, mcp_registration_is_approved
+
+    if not mcp_registration_is_approved(mcp_descriptor(alias, cfg)):
+        raise PermissionError("registration approval is required")
+
+    transport = _resolve_transport(cfg)
+    if transport == "stdio":
+        if not str(cfg.get("command") or "").strip():
+            raise ValueError("stdio transport requires command")
+        srv = _make_stdio_connector(alias, cfg)
+    elif transport == "sse":
+        if not str(cfg.get("url") or "").strip():
+            raise ValueError("SSE transport requires url")
+        srv = _make_sse_connector(alias, cfg)
+    elif transport == "streamable-http":
+        if not str(cfg.get("url") or "").strip():
+            raise ValueError("Streamable HTTP transport requires url")
+        srv = _make_streamable_connector(alias, cfg)
+    else:
+        raise ValueError("unknown transport")
+
+    try:
+        await srv.start()
+    except BaseException:
+        await srv.stop()
+        raise
+
+    _servers[alias] = srv
+    for function_name, pair in list(_fname_to_tool.items()):
+        if pair[0] == alias:
+            _tool_contracts[function_name] = _tool_contract_from_config(cfg, pair[1])
+    logger.info(
+        "MCP: server `%s` OK transport=%s mapped_tools=%s",
+        alias,
+        getattr(srv, "transport_label", "?"),
+        sum(1 for pair in _fname_to_tool.values() if pair[0] == alias),
+    )
+
+
 async def _force_reload_impl() -> None:
     """写入新配置后调用：关闭连接并于下次 ensure_started 重建。"""
     global _loaded_signature, _signature_cache
@@ -761,6 +843,7 @@ async def _ensure_started_impl() -> None:
             return
 
         await _shutdown_servers_unlocked()
+        _server_start_errors.clear()
 
         servers_cfg, err = _load_servers_dict_from_config()
         if not servers_cfg:
@@ -775,65 +858,54 @@ async def _ensure_started_impl() -> None:
 
         for alias, cfg in servers_cfg.items():
             if not isinstance(cfg, dict):
-                logger.warning("MCP: skip server `%s` (not an object)", alias)
+                error = "server configuration must be an object"
+                _server_start_errors[str(alias)] = error
+                logger.warning("MCP: skip server `%s` (%s)", alias, error)
                 continue
-            transport = _resolve_transport(cfg)
-            srv: Optional[_PersistentMcpServer] = None
             try:
-                from security.extensions import mcp_descriptor, mcp_registration_is_approved
-
-                if not mcp_registration_is_approved(mcp_descriptor(str(alias), cfg)):
-                    logger.warning(
-                        "MCP: `%s` is awaiting registration confirmation, was rejected, "
-                        "or its config changed; skipping startup",
-                        alias,
-                    )
-                    continue
-                if transport == "stdio":
-                    if not str(cfg.get("command") or "").strip():
-                        logger.warning("MCP: skip `%s` (stdio needs command)", alias)
-                        continue
-                    srv = _make_stdio_connector(alias, cfg)
-                elif transport == "sse":
-                    if not str(cfg.get("url") or "").strip():
-                        logger.warning("MCP: skip `%s` (sse needs url)", alias)
-                        continue
-                    srv = _make_sse_connector(alias, cfg)
-                elif transport == "streamable-http":
-                    if not str(cfg.get("url") or "").strip():
-                        logger.warning("MCP: skip `%s` (streamable-http needs url)", alias)
-                        continue
-                    srv = _make_streamable_connector(alias, cfg)
-                else:
-                    logger.warning("MCP: skip `%s` (unknown transport)", alias)
-                    continue
-                await srv.start()
+                await _start_configured_server_unlocked(str(alias), cfg)
             except Exception as e:
+                _server_start_errors[str(alias)] = str(e)
                 logger.warning("MCP: failed to start `%s`: %s", alias, e)
-                if srv:
-                    await srv.stop()
                 continue
-
-            _servers[alias] = srv
-            for function_name, pair in list(_fname_to_tool.items()):
-                if pair[0] == alias:
-                    _tool_contracts[function_name] = _tool_contract_from_config(
-                        cfg,
-                        pair[1],
-                    )
-
-            logger.info(
-                "MCP: server `%s` OK transport=%s mapped_tools=%s",
-                alias,
-                getattr(srv, "transport_label", "?"),
-                sum(1 for pair in _fname_to_tool.values() if pair[0] == alias),
-            )
 
         _loaded_signature = sig
 
 
 async def ensure_started() -> None:
     await _run_on_mcp_loop(_ensure_started_impl())
+
+
+async def _register_server_impl(alias: str) -> Dict[str, Any]:
+    if not _MCP_IMPORT_OK:
+        raise RuntimeError("Python package `mcp` is not installed")
+    async with _start_lock:
+        servers_cfg, _ = _load_servers_dict_from_config()
+        cfg = (servers_cfg or {}).get(alias) if isinstance(servers_cfg, dict) else None
+        if not isinstance(cfg, dict):
+            raise KeyError(alias)
+
+        previous = _servers.pop(alias, None)
+        if previous is not None:
+            await previous.stop()
+        _remove_server_tools_unlocked(alias)
+        _server_start_errors.pop(alias, None)
+        try:
+            await _start_configured_server_unlocked(alias, cfg)
+        except Exception as exc:
+            _server_start_errors[alias] = str(exc)
+            logger.warning("MCP: manual registration failed `%s`: %s", alias, exc)
+
+        rows = [row for row in list_configured_servers() if row["server"] == alias]
+        return rows[0] if rows else {"server": alias, "connected": False, "discovered": False, "tool_count": 0}
+
+
+async def register_server(alias: str) -> Dict[str, Any]:
+    """Retry connection and tool registration for one configured MCP server."""
+    name = str(alias or "").strip()
+    if not name:
+        raise ValueError("MCP server name is required")
+    return await _run_on_mcp_loop(_register_server_impl(name))
 
 
 async def get_tool_definitions() -> List[Dict[str, Any]]:
@@ -867,6 +939,34 @@ def list_registered_tools() -> List[Dict[str, Any]]:
     ]
     tools.sort(key=lambda item: (str(item["server"]).lower(), str(item["tool_name"]).lower()))
     return tools
+
+
+def list_configured_servers() -> List[Dict[str, Any]]:
+    """Return every configured MCP server, including ones with no discovered tools."""
+    servers_cfg, _ = _load_servers_dict_from_config()
+    configured = servers_cfg if isinstance(servers_cfg, dict) else {}
+    tool_counts: Dict[str, int] = {}
+    for alias, _tool_name in _fname_to_tool.values():
+        tool_counts[alias] = tool_counts.get(alias, 0) + 1
+
+    aliases = set(str(alias) for alias in configured)
+    aliases.update(str(alias) for alias in _servers)
+    aliases.update(tool_counts)
+    servers = []
+    for alias in sorted(aliases, key=str.lower):
+        cfg = configured.get(alias)
+        tool_count = int(tool_counts.get(alias, 0))
+        servers.append(
+            {
+                "server": alias,
+                "transport": _resolve_transport(cfg) if isinstance(cfg, dict) else "",
+                "connected": alias in _servers,
+                "discovered": tool_count > 0,
+                "tool_count": tool_count,
+                "error": str(_server_start_errors.get(alias) or ""),
+            }
+        )
+    return servers
 
 
 def format_call_tool_result(result: Any) -> str:

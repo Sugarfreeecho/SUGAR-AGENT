@@ -36,7 +36,6 @@ const LS_SESSION_LIST_MODE = 'myagent-session-list-mode';
 const UI_FONT_PX = [14, 16, 17];
 var settingsModalKeyHandler = null;
 var agentTeamFeatureSaving = false;
-var askUserFeatureSaving = false;
 
 function setAgentTeamFeatureUi(enabled, options) {
     options = options || {};
@@ -114,66 +113,6 @@ async function saveAgentTeamFeature(enabled) {
     }
 }
 
-function setAskUserFeatureUi(enabled, options) {
-    options = options || {};
-    var off = document.getElementById('settings-ask-user-off');
-    var on = document.getElementById('settings-ask-user-on');
-    var status = document.getElementById('settings-ask-user-status');
-    var known = typeof enabled === 'boolean';
-    if (off) {
-        off.classList.toggle('is-active', known && !enabled);
-        off.disabled = !!options.busy;
-    }
-    if (on) {
-        on.classList.toggle('is-active', known && enabled);
-        on.disabled = !!options.busy;
-    }
-    if (status) {
-        status.classList.toggle('is-error', !!options.error);
-        if (options.message) status.textContent = options.message;
-        else if (options.busy) status.textContent = '正在保存…';
-        else if (enabled) status.textContent = '已启用；Agent 可在确实需要选择时暂停并向你提问。';
-        else if (known) status.textContent = '已关闭；Agent 不会创建结构化提问卡片。';
-        else status.textContent = '正在读取状态…';
-    }
-}
-
-async function refreshAskUserFeature() {
-    setAskUserFeatureUi(null, { busy: askUserFeatureSaving });
-    try {
-        var response = await fetch('/api/features/ask-user', { cache: 'no-store' });
-        var data = await response.json();
-        if (!response.ok || !data || data.ok !== true) throw new Error((data && data.error) || ('HTTP ' + response.status));
-        window.__MYAGENT_FEATURES__ = window.__MYAGENT_FEATURES__ || {};
-        window.__MYAGENT_FEATURES__.askUser = data.enabled === true;
-        setAskUserFeatureUi(data.enabled === true);
-    } catch (error) {
-        setAskUserFeatureUi(null, { error: true, message: '读取失败：' + String(error && error.message ? error.message : error) });
-    }
-}
-
-async function saveAskUserFeature(enabled) {
-    if (askUserFeatureSaving) return;
-    askUserFeatureSaving = true;
-    setAskUserFeatureUi(enabled, { busy: true });
-    try {
-        var response = await fetch('/api/features/ask-user', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ enabled: enabled === true }),
-        });
-        var data = await response.json();
-        if (!response.ok || !data || data.ok !== true) throw new Error((data && data.error) || ('HTTP ' + response.status));
-        window.__MYAGENT_FEATURES__ = window.__MYAGENT_FEATURES__ || {};
-        window.__MYAGENT_FEATURES__.askUser = data.enabled === true;
-        setAskUserFeatureUi(data.enabled === true);
-    } catch (error) {
-        setAskUserFeatureUi(null, { error: true, message: '保存失败：' + String(error && error.message ? error.message : error) });
-    } finally {
-        askUserFeatureSaving = false;
-    }
-}
-
 function getStoredFontLevel() {
     var n = parseInt(localStorage.getItem(LS_UI_FONT), 10);
     if (isNaN(n) || n < 0 || n > 2) return 1;
@@ -185,17 +124,30 @@ function getStoredSessionListMode() {
     return m === 'compact' ? 'compact' : 'detailed';
 }
 
+function getActiveUiTheme() {
+    var root = document.documentElement;
+    if (root.classList.contains('theme-light')) return 'light';
+    if (root.classList.contains('theme-dark')) return 'dark';
+    return 'purple';
+}
+
+function getUiThemeCanvasBackground() {
+    return getComputedStyle(document.documentElement).getPropertyValue('--export-bg').trim() || '#ffffff';
+}
+
 function syncSettingsModalForm() {
     var lvl = getStoredFontLevel();
     for (var i = 0; i < 3; i++) {
         var b = document.getElementById('settings-font-' + i);
         if (b) b.classList.toggle('is-active', i === lvl);
     }
-    var light = document.documentElement.classList.contains('theme-light');
+    var theme = getActiveUiTheme();
     var bd = document.getElementById('settings-theme-dark');
+    var bp = document.getElementById('settings-theme-purple');
     var bl = document.getElementById('settings-theme-light');
-    if (bd) bd.classList.toggle('is-active', !light);
-    if (bl) bl.classList.toggle('is-active', light);
+    if (bd) bd.classList.toggle('is-active', theme === 'dark');
+    if (bp) bp.classList.toggle('is-active', theme === 'purple');
+    if (bl) bl.classList.toggle('is-active', theme === 'light');
     var compact = getStoredSessionListMode() === 'compact';
     var sc = document.getElementById('settings-session-compact');
     var sd = document.getElementById('settings-session-detailed');
@@ -212,9 +164,11 @@ function applyFontLevel(level, persist) {
 }
 
 function applyUiTheme(theme, persist) {
-    var light = theme === 'light';
-    document.documentElement.classList.toggle('theme-light', light);
-    if (persist) localStorage.setItem(LS_UI_THEME, light ? 'light' : 'dark');
+    var next = theme === 'dark' || theme === 'purple' ? theme : 'light';
+    document.documentElement.classList.remove('theme-light', 'theme-dark', 'theme-purple');
+    document.documentElement.classList.add('theme-' + next);
+    document.documentElement.setAttribute('data-theme', next);
+    if (persist) localStorage.setItem(LS_UI_THEME, next === 'dark' ? 'deep-dark' : next);
     syncSettingsModalForm();
 }
 
@@ -228,7 +182,9 @@ function applySessionListMode(mode, persist) {
 function restoreUiPreferences() {
     applyFontLevel(getStoredFontLevel(), false);
     var t = localStorage.getItem(LS_UI_THEME);
-    applyUiTheme(t === 'dark' ? 'dark' : 'light', false);
+    if (t === 'deep-dark') applyUiTheme('dark', false);
+    else if (t === 'dark' || t === 'purple') applyUiTheme('purple', false);
+    else applyUiTheme('light', false);
     applySessionListMode(getStoredSessionListMode(), false);
 }
 restoreUiPreferences();
@@ -239,7 +195,6 @@ function openSettingsModal() {
     if (!root || !panel) return;
     syncSettingsModalForm();
     void refreshAgentTeamFeature();
-    void refreshAskUserFeature();
     root.classList.add('is-open');
     root.setAttribute('aria-hidden', 'false');
     document.body.style.overflow = 'hidden';
@@ -287,8 +242,10 @@ function initUiSettingsControls() {
         })(i);
     }
     var bd = document.getElementById('settings-theme-dark');
+    var bp = document.getElementById('settings-theme-purple');
     var bl = document.getElementById('settings-theme-light');
     if (bd) bd.addEventListener('click', function () { applyUiTheme('dark', true); });
+    if (bp) bp.addEventListener('click', function () { applyUiTheme('purple', true); });
     if (bl) bl.addEventListener('click', function () { applyUiTheme('light', true); });
     var sc = document.getElementById('settings-session-compact');
     var sd = document.getElementById('settings-session-detailed');
@@ -298,10 +255,6 @@ function initUiSettingsControls() {
     var agentTeamOn = document.getElementById('settings-agent-team-on');
     if (agentTeamOff) agentTeamOff.addEventListener('click', function () { void saveAgentTeamFeature(false); });
     if (agentTeamOn) agentTeamOn.addEventListener('click', function () { void saveAgentTeamFeature(true); });
-    var askUserOff = document.getElementById('settings-ask-user-off');
-    var askUserOn = document.getElementById('settings-ask-user-on');
-    if (askUserOff) askUserOff.addEventListener('click', function () { void saveAskUserFeature(false); });
-    if (askUserOn) askUserOn.addEventListener('click', function () { void saveAskUserFeature(true); });
     var agentTeamManage = document.getElementById('settings-agent-team-manage');
     if (agentTeamManage) agentTeamManage.addEventListener('click', function () {
         closeSettingsModal();
@@ -329,12 +282,5 @@ function initUiSettingsControls() {
             }
         });
     }
-    var dashboardBtn = document.getElementById('settings-execution-dashboard');
-    if (dashboardBtn) dashboardBtn.addEventListener('click', function () {
-        closeSettingsModal();
-        var w = window.open('/execution-dashboard', 'myagent-execution-dashboard');
-        if (w) { try { w.focus(); } catch (e) {} }
-        else window.location.href = '/execution-dashboard';
-    });
 }
 initUiSettingsControls();

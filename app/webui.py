@@ -49,6 +49,7 @@ from agent_team.service import AgentTeamService
 from human_interaction import ASK_USER_ENV_VAR, ask_user_enabled
 from agent_loop import (
     abort_session_steer_run,
+    build_combined_tool_definitions_for_session,
     compute_context_tokens_for_session,
     enqueue_session_steer,
     get_context_token_mode,
@@ -5747,7 +5748,12 @@ async def get_session_context_tokens(session_id: str):
         if not snap.get("ok", True):
             return JSONResponse(content=snap, status_code=500)
         return JSONResponse(content=snap)
-    out = await run_in_threadpool(compute_context_tokens_for_session, session_id)
+    tool_definitions = await build_combined_tool_definitions_for_session(session_id)
+    out = await run_in_threadpool(
+        compute_context_tokens_for_session,
+        session_id,
+        tool_definitions,
+    )
     if not out.get("ok"):
         return JSONResponse(content=out, status_code=400)
     # Snapshot misses retain the configured accounting mode. In hybrid mode
@@ -6206,7 +6212,7 @@ _ENV_GROUP_ORDER: list[tuple[str, str, list[str]]] = [
             "CPU_PRESSURE_TOOL_CONCURRENCY",
             "SECURITY_ENABLED",
             "EGRESS_HELPER_ENABLED",
-            "MCP_REGISTRATION_APPROVAL_ENABLED",
+            "EXTENSION_REGISTRATION_APPROVAL_ENABLED",
             "ASK_USER_ENABLED",
             "GOAL_ENABLED",
             "GOAL_RUNNER_POLL_SECONDS",
@@ -6284,7 +6290,7 @@ for _gid, _title, _keys in _ENV_GROUP_ORDER:
 _ENV_HINTS: dict[str, str] = {
     "EGRESS_HELPER_ENABLED": "1（默认）启用系统出站助手；设为 0 时完全跳过助手，仅保留命令识别和审批。修改后立即影响新命令。",
     "SECURITY_ENABLED": "1（默认）启用请求批准 / 替我审批 / 完全访问三档权限，并恢复此前保存的全局权限模式；设为 0 时强制使用完全访问并隐藏前端权限选择。保存后立即生效，页面刷新后更新界面。",
-    "MCP_REGISTRATION_APPROVAL_ENABLED": "0（默认）关闭 MCP 注册审批：新配置直接连接、无需人工确认；1/true/yes/on 启用首次注册或配置摘要变化后的人工确认。保存后立即刷新 MCP。",
+    "EXTENSION_REGISTRATION_APPROVAL_ENABLED": "0（默认）关闭统一扩展注册审批：MCP 与可执行插件工具、Hook、命令可直接注册；1/true/yes/on 启用首次注册或内容/配置摘要变化后的人工确认。保存后立即刷新扩展。",
     "ASK_USER_ENABLED": "1（默认）允许主 Agent 创建 ask_user 问题；0/false/no/off 禁止。已有待回答问题仍可处理，工具审批不受影响。保存后立即生效。",
     "GOAL_ENABLED": "1（默认）启用持久 Goal、Goal 工具和服务端自动续跑；0/false/no/off 禁用。修改后需重启 Agent。",
     "GOAL_RUNNER_POLL_SECONDS": "服务端 Goal 调度器扫描 active Goal 的间隔秒数，默认 2，最小 0.5。修改后需重启 Agent。",
@@ -6656,9 +6662,28 @@ async def list_mcp_tools():
     try:
         await agent_mcp.ensure_started()
         tools = await asyncio.to_thread(agent_mcp.list_registered_tools)
-        return JSONResponse({"ok": True, "tools": tools})
+        servers = await asyncio.to_thread(agent_mcp.list_configured_servers)
+        return JSONResponse({"ok": True, "tools": tools, "servers": servers})
     except Exception as exc:
         logger.warning("MCP tools snapshot failed: %s", exc)
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
+
+
+@fastapi_app.post("/api/mcp/servers/{server_name:path}/register")
+async def register_mcp_server_api(server_name: str):
+    try:
+        server = await agent_mcp.register_server(server_name)
+        return JSONResponse(
+            {
+                "ok": True,
+                "registered": bool(server.get("discovered")),
+                "server": server,
+            }
+        )
+    except KeyError:
+        return JSONResponse({"ok": False, "error": "unknown MCP server"}, status_code=404)
+    except Exception as exc:
+        logger.warning("MCP manual registration failed: %s", exc)
         return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
 
 
@@ -6742,7 +6767,7 @@ async def get_env_snapshot():
     for key, default in {
         "SECURITY_ENABLED": "1",
         "EGRESS_HELPER_ENABLED": "1",
-        "MCP_REGISTRATION_APPROVAL_ENABLED": "0",
+        "EXTENSION_REGISTRATION_APPROVAL_ENABLED": "0",
         "ASK_USER_ENABLED": "1",
         "GOAL_ENABLED": "1",
         "GOAL_RUNNER_POLL_SECONDS": "2",
@@ -6936,9 +6961,9 @@ async def save_env_snapshot(req: _Request):
     env_path.parent.mkdir(parents=True, exist_ok=True)
     env_path.write_text(merged, encoding="utf-8")
     refresh_executor_client_from_env()
-    if "MCP_REGISTRATION_APPROVAL_ENABLED" in normalized:
-        os.environ["MCP_REGISTRATION_APPROVAL_ENABLED"] = normalized[
-            "MCP_REGISTRATION_APPROVAL_ENABLED"
+    if "EXTENSION_REGISTRATION_APPROVAL_ENABLED" in normalized:
+        os.environ["EXTENSION_REGISTRATION_APPROVAL_ENABLED"] = normalized[
+            "EXTENSION_REGISTRATION_APPROVAL_ENABLED"
         ]
     extension_keys = {
         "HOOKS_ENABLED",
@@ -6948,7 +6973,7 @@ async def save_env_snapshot(req: _Request):
         "PLUGINS_DIRS",
         "PLUGINS_STATE_PATH",
         "MCP_ENABLED",
-        "MCP_REGISTRATION_APPROVAL_ENABLED",
+        "EXTENSION_REGISTRATION_APPROVAL_ENABLED",
     }
     if extension_keys.intersection(normalized):
         try:
@@ -7203,10 +7228,22 @@ async def _schedule_ui_cache_warmup() -> None:
     _warm_ui_caches()
 
 
-@fastapi_app.on_event("startup")
-async def _capture_ui_attention_main_loop() -> None:
+def initialize_ui_attention_notifications() -> None:
+    """Bind attention notifications to the running ASGI server loop.
+
+    The production entrypoint installs a custom FastAPI lifespan, which
+    replaces legacy ``on_event('startup')`` handlers.  Keeping this explicit
+    lets that lifespan initialize the event-bus notification bridge directly.
+    """
+
     global _UI_ATTENTION_MAIN_LOOP
     _UI_ATTENTION_MAIN_LOOP = asyncio.get_running_loop()
+
+
+@fastapi_app.on_event("startup")
+async def _capture_ui_attention_main_loop() -> None:
+    # Alternate launchers using FastAPI's default lifespan still work.
+    initialize_ui_attention_notifications()
 
 
 @fastapi_app.on_event("startup")

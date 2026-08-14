@@ -97,11 +97,32 @@ def test_application_registry_does_not_start_untrusted_plugin(tmp_path, monkeypa
         "security.extensions.descriptor_is_trusted",
         lambda _descriptor: False,
     )
+    monkeypatch.setenv("EXTENSION_REGISTRATION_APPROVAL_ENABLED", "1")
     registry = PluginRuntimeRegistry(enforce_trust=True)
 
     assert registry.tool_definitions([plugin]) == []
     assert registry.snapshot()["workers"][0]["running"] is False
-    assert "not trusted" in registry.errors[0]
+    assert "not approved" in registry.errors[0]
+    registry.close()
+
+
+def test_application_registry_starts_untrusted_plugin_when_approval_is_disabled(
+    tmp_path, monkeypatch
+):
+    from plugins import PluginRuntimeRegistry, load_plugin
+
+    plugin = load_plugin(_make_python_plugin(tmp_path))
+    monkeypatch.setattr(
+        "security.extensions.descriptor_is_trusted",
+        lambda _descriptor: False,
+    )
+    monkeypatch.setenv("EXTENSION_REGISTRATION_APPROVAL_ENABLED", "0")
+    registry = PluginRuntimeRegistry(enforce_trust=True)
+
+    definitions = registry.tool_definitions([plugin])
+    assert len(definitions) == 1
+    assert definitions[0]["function"]["name"] == "plugin_demo_runtime__greet"
+    assert registry.errors == ()
     registry.close()
 
 
@@ -562,7 +583,8 @@ def test_non_native_runtime_is_reported_unsupported(tmp_path):
 def test_agent_loop_wires_runtime_definitions_and_invocation():
     source = (APP_DIR / "agent_loop.py").read_text(encoding="utf-8")
 
-    assert "plugin_tool_definitions()" in source
+    assert "build_combined_tool_definitions_for_session(" in source
+    assert '"plugin_tool_definitions", plugin_tool_definitions' in source
     assert "invoke_plugin_tool(" in source
     assert '"tool_plugin"' in source
     assert "dispatch_plugin_command(" in source

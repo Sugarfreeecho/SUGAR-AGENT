@@ -422,12 +422,15 @@ class PluginRuntimeRegistry:
             key = (plugin.plugin_id, plugin.content_signature)
             try:
                 if self._enforce_trust:
-                    from security.extensions import descriptor_is_trusted, plugin_descriptor
+                    from security.extensions import (
+                        extension_registration_is_approved,
+                        plugin_descriptor,
+                    )
 
-                    if not descriptor_is_trusted(plugin_descriptor(plugin)):
+                    if not extension_registration_is_approved(plugin_descriptor(plugin)):
                         self._errors_by_plugin[plugin.plugin_id] = (
-                            "Plugin is not trusted, or its content changed; approve "
-                            "the current digest in Security settings before it can start."
+                            "Plugin registration is not approved, or its content changed; "
+                            "approve the current digest in Security settings before it can start."
                         )
                         continue
                 description = self._describe_cache.get(key)

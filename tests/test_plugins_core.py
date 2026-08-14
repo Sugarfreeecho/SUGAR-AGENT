@@ -42,6 +42,34 @@ def _make_skill(root: Path, directory: str = "review", name: str = "review") -> 
     return path
 
 
+def test_repository_engineering_plugin_contract(tmp_path):
+    plugin_root = Path(__file__).resolve().parents[1] / "plugins" / "repo-engineering"
+    manager = PluginManager([plugin_root.parent], tmp_path / "plugin-state.json")
+
+    loaded = manager.load_enabled()
+
+    assert len(loaded.plugins) == 1
+    plugin = loaded.plugins[0]
+    assert plugin.id == "repo-engineering"
+    assert plugin.source_format == "codex"
+    assert plugin.compatibility.status == "compatible"
+    assert set(loaded.skill_directories) == {"repo-engineering:repo-engineering"}
+    assert loaded.mcp_servers == {}
+
+
+def test_repository_global_mcp_contract():
+    root = Path(__file__).resolve().parents[1]
+    config = json.loads((root / "mcp_servers.json").read_text(encoding="utf-8"))
+    servers = config["servers"]
+
+    assert set(servers) == {"context7", "github", "playwright"}
+    assert servers["context7"]["command"] == "npx.cmd"
+    assert servers["playwright"]["args"][-2:] == ["--headless", "--isolated"]
+    assert servers["github"]["headers"] == {
+        "Authorization": "Bearer ${GITHUB_MCP_PAT}"
+    }
+
+
 @pytest.mark.parametrize("value", ["0", "false", "FALSE", "no", "off", " Off "])
 def test_plugins_environment_switch_defaults_on_and_accepts_false_values(monkeypatch, value):
     monkeypatch.delenv("PLUGINS_ENABLED", raising=False)

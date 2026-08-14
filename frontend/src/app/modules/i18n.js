@@ -45,7 +45,7 @@ const UI_TRANSLATIONS_EN = {
     '确认删除': 'Delete',
     '关闭': 'Close', '语言': 'Language', '中文': 'Chinese', '英文': 'English',
     '字体大小': 'Font size', '小号': 'Small', '标准': 'Default', '大号': 'Large',
-    '界面风格': 'Appearance', '深色': 'Dark', '浅色（默认）': 'Light (default)',
+    '界面风格': 'Appearance', '深色': 'Dark', '紫色': 'Purple', '浅色（默认）': 'Light (default)',
     '会话目录': 'Session list', '会话目录风格': 'Session list style', '会话目录显示模式': 'Session list display mode',
     '紧凑': 'Compact', '详细': 'Detailed', '环境与 API': 'Environment & API', '高级设置': 'Advanced settings',
     '编辑完整 .env，保存后立即写回磁盘（部分项需重启服务）。': 'Edit the complete .env file. Changes are saved to disk immediately (some require a service restart).',
@@ -60,8 +60,8 @@ const UI_TRANSLATIONS_EN = {
     '已发送': 'Sent', '提交中': 'Submitting', '撤回中': 'Withdrawing', '已接收，等待插入': 'Received, waiting to insert',
     '正在接管当前任务': 'Taking over the current task', '选择 Skill ': 'Select Skill ', '清空': 'Clear',
     '当前没有已注册 Skill': 'No registered skills', '正在加载 Skill': 'Loading skills',
-    'MCP 工具': 'MCP Tools', '正在加载 MCP 工具': 'Loading MCP tools', '当前没有已注册的 MCP 工具': 'No registered MCP tools', 'MCP 工具加载失败': 'Failed to load MCP tools',
-    'MCP 工具启停失败': 'Failed to change MCP tool status',
+    'MCP 工具': 'MCP Tools', '正在加载 MCP 工具': 'Loading MCP tools', '当前没有已注册的 MCP 工具': 'No registered MCP tools', '当前没有已配置的 MCP 服务器': 'No configured MCP servers', 'MCP 工具加载失败': 'Failed to load MCP tools', '未命名服务器': 'Unnamed server', '未注册': 'Not registered', '服务器尚未完成工具注册；请检查连接、凭据或服务配置。': 'The server has not completed tool registration. Check the connection, credentials, or server configuration.', '未命名 Plugin': 'Unnamed plugin',
+    'MCP 工具启停失败': 'Failed to change MCP tool status', '注册': 'Register', '注册中…': 'Registering…', 'MCP 注册失败': 'MCP registration failed', 'MCP 注册未完成': 'MCP registration incomplete',
     'Hooks': 'Hooks', 'Plugins': 'Plugins', '正在加载扩展': 'Loading extensions', '当前没有已注册 Hook': 'No registered hooks', '当前没有已发现插件': 'No plugins found', '扩展加载失败': 'Failed to load extensions', '无': 'None',
     '加载详情中…': 'Loading details…', '知道了': 'Got it', '允许执行': 'Allow', '拒绝': 'Deny',
     '需要确认': 'Confirmation required', '任务已中断': 'Task interrupted', '已请求停止当前任务': 'Stop requested',
@@ -70,6 +70,7 @@ const UI_TRANSLATIONS_EN = {
     '无法在浏览器中播放此媒体，可使用系统应用打开。': 'This media cannot be played in the browser. Open it with a system app instead.'
 };
 Object.assign(UI_TRANSLATIONS_EN, {
+    'Runtime 在线': 'Runtime online', 'Runtime 离线': 'Runtime offline', '打开执行状态看板': 'Open execution dashboard',
     // Todo / goal panel
     '已完成': 'Completed', '进行中': 'In progress', '待处理': 'Pending', '已暂停': 'Paused', '已阻塞': 'Blocked', '已取消': 'Cancelled',
     '无限制': 'Unlimited', '分钟': 'min', '续跑': 'Continue run', '增加预算并继续': 'Increase budget and continue',
@@ -560,6 +561,9 @@ function translateUiString(value) {
         .replace(/发生未知错误。/g, 'An unknown error occurred.')
         .replace(/^已选 (\d+) \/ 共 (\d+)$/, '$1 selected / $2 total')
         .replace(/^已选 (\d+) \/ 已启用 (\d+) \/ 共 (\d+)$/, '$1 selected / $2 enabled / $3 total')
+        .replace(/^共 (\d+) 个服务器 · (\d+) 个工具$/, '$1 servers · $2 tools')
+        .replace(/^已启用 (\d+) \/ 共 (\d+) 个工具$/, '$1 enabled / $2 tools')
+        .replace(/^已启用 (\d+) \/ 共 (\d+) 个$/, '$1 enabled / $2 total')
         .replace(/^共 (\d+)$/, '$1 total')
         .replace(/已启用/g, 'Enabled')
         .replace(/已禁用/g, 'Disabled')

@@ -377,7 +377,7 @@ def test_extension_trust_is_bound_to_exact_digests(tmp_path):
 def test_mcp_registration_decision_is_bound_to_exact_config(tmp_path, monkeypatch):
     import security.extensions as extensions
 
-    monkeypatch.setenv("MCP_REGISTRATION_APPROVAL_ENABLED", "1")
+    monkeypatch.setenv("EXTENSION_REGISTRATION_APPROVAL_ENABLED", "1")
     store = SecurityStore(tmp_path / "security.sqlite3")
     descriptor = extensions.mcp_descriptor(
         "demo",

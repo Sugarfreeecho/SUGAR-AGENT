@@ -37,7 +37,7 @@ _SECRET_MARKERS = (
     "CREDENTIAL",
     "COOKIE",
 )
-MCP_REGISTRATION_APPROVAL_ENV = "MCP_REGISTRATION_APPROVAL_ENABLED"
+EXTENSION_REGISTRATION_APPROVAL_ENV = "EXTENSION_REGISTRATION_APPROVAL_ENABLED"
 
 
 def minimal_extension_environment(
@@ -162,25 +162,31 @@ def _descriptor_source_is_trusted(descriptor: Mapping[str, Any]) -> bool:
     return is_trusted_url(source) or is_trusted_host(source)
 
 
-def mcp_registration_approval_enabled() -> bool:
-    """Whether MCP registration requires one human confirmation per config.
+def extension_registration_approval_enabled() -> bool:
+    """Whether executable extension registration requires human approval.
 
-    ``MCP_REGISTRATION_APPROVAL_ENABLED`` defaults to off: MCP servers start
-    without a registration prompt. Set it to ``1``/``true``/``yes``/``on`` to
-    restore the one-time per-config human confirmation gate.
+    The gate covers MCP servers and executable Plugin API capabilities (tools,
+    hooks, and commands). It defaults to off.
     """
-    value = (os.getenv(MCP_REGISTRATION_APPROVAL_ENV) or "0").strip().lower()
+    value = (os.getenv(EXTENSION_REGISTRATION_APPROVAL_ENV) or "0").strip().lower()
     return value not in ("0", "false", "no", "off")
+
+
+def extension_registration_is_approved(descriptor: Mapping[str, Any]) -> bool:
+    kind = str(descriptor.get("kind") or "").strip().lower()
+    if kind not in {"mcp", "plugin"}:
+        return False
+    if not extension_registration_approval_enabled():
+        return True
+    if kind == "mcp" and _descriptor_source_is_trusted(descriptor):
+        return True
+    return descriptor_is_trusted(descriptor)
 
 
 def mcp_registration_is_approved(descriptor: Mapping[str, Any]) -> bool:
     if str(descriptor.get("kind") or "").strip().lower() != "mcp":
         return False
-    if not mcp_registration_approval_enabled():
-        return True
-    if _descriptor_source_is_trusted(descriptor):
-        return True
-    return descriptor_is_trusted(descriptor)
+    return extension_registration_is_approved(descriptor)
 
 
 def descriptor_decision(descriptor: Mapping[str, Any]) -> str:
@@ -189,9 +195,10 @@ def descriptor_decision(descriptor: Mapping[str, Any]) -> str:
     ``pending`` includes both first-seen extensions and extensions whose
     executable content/configuration changed after an earlier decision.
     """
-    if descriptor.get("kind") == "mcp" and not mcp_registration_approval_enabled():
+    kind = str(descriptor.get("kind") or "").strip().lower()
+    if kind in {"mcp", "plugin"} and not extension_registration_approval_enabled():
         return "trusted"
-    if descriptor.get("kind") == "mcp" and _descriptor_source_is_trusted(descriptor):
+    if kind == "mcp" and _descriptor_source_is_trusted(descriptor):
         return "trusted"
     row = security_store().get_extension_trust(
         kind=str(descriptor.get("kind") or ""),
@@ -213,10 +220,9 @@ def _decorate_decision(descriptor: dict[str, Any]) -> dict[str, Any]:
     decision = descriptor_decision(descriptor)
     descriptor["trusted"] = decision == "trusted"
     descriptor["decision"] = decision
-    if descriptor.get("kind") == "mcp":
-        descriptor["registration_status"] = (
-            "registered" if decision == "trusted" else decision
-        )
+    descriptor["registration_status"] = (
+        "registered" if decision == "trusted" else decision
+    )
     return descriptor
 
 
@@ -268,8 +274,7 @@ def trust_current_extension(kind: str, extension_id: str) -> dict[str, Any]:
     )
     descriptor["trusted"] = True
     descriptor["decision"] = "trusted"
-    if descriptor["kind"] == "mcp":
-        descriptor["registration_status"] = "registered"
+    descriptor["registration_status"] = "registered"
     return descriptor
 
 

@@ -24,7 +24,7 @@ PLUGINS_STATE_PATH=../workspace/.sugaragent/plugins-state.json
 - 关闭 Plugins：所有插件组件都从运行时注册表移除；项目自己的 `hooks.json` 仍可使用。
 - 插件 Hook 需要两个开关同时开启。
 - `MCP_ENABLED` 仍是 MCP 层的独立总开关。
-- `MCP_REGISTRATION_APPROVAL_ENABLED` 默认 `0`：MCP 注册免人工确认，配置直接连接；设为 `1` 后恢复“首次注册或配置摘要变化需人工确认一次”。
+- `EXTENSION_REGISTRATION_APPROVAL_ENABLED` 默认 `0`：MCP 与可执行插件工具、Hook、命令免人工确认直接注册；设为 `1` 后，首次注册或内容/配置摘要变化需人工确认。项目级命令 Hook 不属于扩展注册，执行时仍逐次经过中央权限策略；Skill、Agent、Prompt 和声明式命令是静态资源，不启动代码。
 
 `HOOKS_PATH` 留空时使用 `WORK_DIR/hooks.json`。`PLUGINS_DIRS` 可替代 `PLUGINS_DIR` 指定多个目录，Windows 用分号分隔。环境配置可在“设置 → 高级设置”编辑，扩展状态可在“设置 → 扩展管理”查看。
 
@@ -136,6 +136,16 @@ Manifest 示例：
 
 插件启用状态写入原子 JSON。管理页支持单插件启停和重新发现/热重载；Skill、Hook 与 MCP 缓存会同步失效，下一次 Agent 边界立即使用新注册表。
 
+### 仓库工程 Plugin 与全局 MCP
+
+仓库内置的 `plugins/repo-engineering` 是一个 Codex 兼容声明式 Plugin，只提供仓库审查、实现、聚焦测试、变更日志和发布检查 Skill。通用工具独立配置在仓库根目录的 `mcp_servers.json`，不会随该 Plugin 的启停而增删：
+
+- `context7`：查询当前库文档，默认只读。
+- `playwright`：无头、隔离的本地浏览器验证，按外部写入能力执行权限策略。
+- `github`：GitHub 远程 MCP，按外部写入能力执行权限策略。
+
+GitHub 凭据不写入配置文件。启动 Agent 前设置 `GITHUB_MCP_PAT`，配置中的 `Authorization: Bearer ${GITHUB_MCP_PAT}` 会在连接时解析；变量缺失时只跳过 GitHub MCP，Context7 与 Playwright 仍可正常注册。stdio MCP 需要系统 PATH 中存在 `npx.cmd`。
+
 ## Claude / Codex / Hermes / OpenCode 兼容范围
 
 MyAgent 会识别：
@@ -157,8 +167,9 @@ host 专属 App、认证流程和 UI 扩展会出现在诊断中。因此这不�
 - 插件代码只在按插件隔离的 Worker 进程中导入，不进入 MyAgent 主进程。
 - 复制或安装的插件只会进入“待信任”列表，不会执行 Runtime `describe` 或代码 Hook。
   插件内容摘要变化会自动失效，自动审查 Agent 不能建立持久插件信任。
-- 插件附带或独立配置的 MCP 在首次注册或配置摘要变化后弹出一次人工确认。确认前不会
-  启动 stdio 进程或连接远程服务器；确认后发现并注册工具，每次工具调用继续执行
+- `EXTENSION_REGISTRATION_APPROVAL_ENABLED=0`（默认）时，MCP 与可执行 Plugin 能力直接注册；
+  设为 `1` 后，Plugin 内容摘要或 MCP 配置摘要首次出现/变化时弹出人工确认。确认前不会
+  启动代码、stdio 进程或远程连接；确认后发现并注册能力，每次工具调用继续执行
   `allow/ask/deny`，注册确认不能替代调用审批。
 - 已信任插件和已注册 MCP 以当前操作系统用户权限运行。能力声明用于每次调用的 `allow/ask/deny`
   分类，不是硬隔离；Worker 只继承最小环境和用户明确确认的变量。
