@@ -278,9 +278,9 @@ def test_permission_mode_ui_regressions():
     # The permission selector docks on the left edge of the input panel,
     # mirroring the model selector on the right edge.
     bar = css.split(".composer-permission-bar {", 1)[1].split("}", 1)[0]
-    assert "left: var(--panel-edge-dock-left);" in bar
+    assert "left: calc((100% - var(--composer-panel-end-gutter) - var(--composer-input-width)) / 4);" in bar
     assert "top: 50%;" in bar
-    assert "transform: translateY(-50%);" in bar
+    assert "transform: translate(-50%, -50%);" in bar
     panel = css.split(".panel {", 1)[1].split("}", 1)[0]
     assert "padding: 0.6rem 0.5rem 0.6rem 0;" in panel
 
