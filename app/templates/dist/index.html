@@ -9,10 +9,10 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:ital,wght@0,400;0,500;0,600;0,700;0,800;1,400;1,500&family=JetBrains+Mono:ital,wght@0,400;0,500;0,600;1,400&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
-    <script>try { if (localStorage.getItem('myagent-theme') !== 'dark') document.documentElement.classList.add('theme-light'); } catch (e) { document.documentElement.classList.add('theme-light'); }</script>
-  <script type="module" crossorigin src="/assets/main-D2-ojI4a.js"></script>
+    <script>try { var savedTheme = localStorage.getItem('myagent-theme'); document.documentElement.classList.add(savedTheme === 'deep-dark' ? 'theme-dark' : (savedTheme === 'dark' || savedTheme === 'purple' ? 'theme-purple' : 'theme-light')); } catch (e) { document.documentElement.classList.add('theme-light'); }</script>
+  <script type="module" crossorigin src="/assets/main-DuCXEiW4.js"></script>
   <link rel="modulepreload" crossorigin href="/assets/modulepreload-polyfill-B5Qt9EMX.js">
-  <link rel="stylesheet" crossorigin href="/assets/main-BSOpY8EO.css">
+  <link rel="stylesheet" crossorigin href="/assets/main-Cu3v7Ulj.css">
 </head>
 <body>
 <div class="app">
@@ -42,8 +42,15 @@
         <div class="sidebar-new-chat-wrap">
             <button id="new-session-btn" type="button" class="new-session-btn" data-ui-tip="新建会话">新建对话</button>
         </div>
-        <div id="sessions-list" class="sessions-list" role="listbox"></div>
-    </aside>
+            <div id="sessions-list" class="sessions-list" role="listbox"></div>
+            <div class="sidebar-runtime" role="status" aria-live="polite">
+                <a id="sidebar-runtime-link" class="sidebar-runtime-link" href="/execution-dashboard" target="myagent-execution-dashboard" aria-label="打开执行状态看板" data-ui-tip="打开执行状态看板">
+                    <span class="sidebar-runtime-dot" aria-hidden="true"></span>
+                    <span id="sidebar-runtime-status">Runtime 在线</span>
+                </a>
+                <span id="sidebar-runtime-version" class="sidebar-runtime-version">v4.20260814</span>
+            </div>
+        </aside>
 
     <div class="sash" id="sash" role="separator" aria-orientation="vertical" aria-label="拖动调整侧栏宽度" tabindex="0"></div>
 
@@ -316,6 +323,7 @@
                 <div class="settings-modal__label">界面风格</div>
                 <div class="settings-theme-row" role="group" aria-label="界面风格">
                     <button type="button" id="settings-theme-dark" class="settings-theme-btn">深色</button>
+                    <button type="button" id="settings-theme-purple" class="settings-theme-btn">紫色</button>
                     <button type="button" id="settings-theme-light" class="settings-theme-btn">浅色（默认）</button>
                 </div>
             </div>
@@ -325,18 +333,6 @@
                     <button type="button" id="settings-session-compact" class="settings-theme-btn">紧凑</button>
                     <button type="button" id="settings-session-detailed" class="settings-theme-btn">详细</button>
                 </div>
-            </div>
-            <div class="settings-modal__section">
-                <div class="settings-modal__label">Agent 主动提问</div>
-                <div class="settings-theme-row" role="group" aria-label="Agent 主动提问功能开关">
-                    <button type="button" id="settings-ask-user-off" class="settings-theme-btn">关闭</button>
-                    <button type="button" id="settings-ask-user-on" class="settings-theme-btn">启用</button>
-                </div>
-                <div id="settings-ask-user-status" class="settings-feature-status" role="status" aria-live="polite">正在读取状态…</div>
-            </div>
-            <div class="settings-modal__section">
-                <div class="settings-modal__label">运行诊断</div>
-                <button type="button" id="settings-execution-dashboard" class="settings-advanced-btn">执行状态看板</button>
             </div>
             <div class="settings-modal__section">
                 <div class="settings-modal__label">环境与 API</div>
