@@ -27,7 +27,7 @@ function buildSubagentCardSummaryHtml(previewText, muted) {
     var t = formatSubagentSummaryText(previewText);
     if (!t) {
         return '<div class="subagent-card-summary subagent-card-summary--muted">'
-            + escapeHtml(muted ? String(muted) : '展开查看执行过程') + '</div>';
+            + escapeHtml(muted ? String(muted) : '展开查看执行轨迹') + '</div>';
     }
     if (t.length > 1200) t = t.slice(0, 1199) + '\u2026';
     return '<div class="subagent-card-summary">' + escapeHtml(t) + '</div>';

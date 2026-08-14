@@ -80,7 +80,7 @@ Object.assign(UI_TRANSLATIONS_EN, {
     '规划': 'Plan', '计划': 'Plan', '清除当前计划': 'Clear current plan',
     // Runtime status lines
     '正在思考中...': 'Thinking...', '正在重连': 'Reconnecting', '任务已中断': 'Task interrupted',
-    '展开执行过程高度': 'Expand process height', '收起执行过程高度': 'Collapse process height',
+    '展开执行轨迹高度': 'Expand trace height', '收起执行轨迹高度': 'Collapse trace height',
     'Goal 自动续跑开始': 'Goal auto-continuation started', '任务已恢复，流程重启': 'Task restored; restarting workflow',
     '已请求停止当前任务': 'Stop requested for the current task', '解析事件失败': 'Failed to parse event',
     '验证': 'Verification', '正在根据对话更新要点': 'Updating key points from the conversation',
@@ -153,7 +153,7 @@ Object.assign(UI_TRANSLATIONS_EN, {
     '在左侧侧栏新建或选择会话。Enter 发送，Ctrl+Enter / Shift+Enter 换行。': 'Create or select a session in the sidebar. Press Enter to send; Ctrl+Enter or Shift+Enter for a new line.',
     '分支': 'Fork', '创建分支': 'Create fork', '创建失败': 'Creation failed',
     '将在当前回答之后创建独立分支会话。分支点之前的内容与原会话相同，可在分支中继续提问且不影响原会话。': 'A separate fork session will be created after this response. Earlier messages remain the same, and continuing in the fork will not affect the original session.',
-    '创建分支未生效。': 'The fork was not created.', '工具': 'Tool', '执行过程': 'Execution process',
+    '创建分支未生效。': 'The fork was not created.', '工具': 'Tool', '执行轨迹': 'Execution trace',
     '本段过程已折叠': 'This process section is collapsed', '信息': 'Info', '错误': 'Error', '回复': 'Response',
     '思考': 'Reasoning', '压缩': 'Compression', '裁剪': 'Trim', '要点': 'Key points', '状态': 'Status',
     '工具调用生成中...': 'Preparing tool call...', '执行中...': 'Running...', '执行结果': 'Result',
@@ -229,7 +229,7 @@ Object.assign(UI_TRANSLATIONS_EN, {
     '任务': 'Tasks', '会话': 'Sessions', '成员 · ': ' members · ', '允许一次': 'Allow once', '拒绝': 'Deny',
     '暂无任务': 'No tasks', '暂无成员': 'No members', '暂无权限请求': 'No permission requests',
     '请让 Agent 使用 team spawn_member': 'Ask the Agent to use team spawn_member', '收起 Subagent 面板': 'Collapse Subagent panel',
-    '展开查看执行过程': 'Expand to view execution process', '退出全屏': 'Exit full screen', '停止': 'Stop',
+    '展开查看执行轨迹': 'Expand to view execution trace', '退出全屏': 'Exit full screen', '停止': 'Stop',
     // Dashboard-specific labels and errors
     '请求至首 token': 'Request to first token', 'Transport 总耗时': 'Total transport duration', '请求流量': 'Request traffic',
     '响应流量（估算）': 'Estimated response traffic', '加载失败': 'Load failed',

@@ -115,7 +115,7 @@ function setScrollTopImmediate(el, y) {
     });
 }
 
-/** 当前运行会话对应的执行过程框滚动容器（.process-aggregate-body） */
+/** 当前运行会话对应的执行轨迹框滚动容器（.process-aggregate-body） */
 function getProcessBodyElForCurrentRun() {
     var sid = currentSessionId;
     var run = sid && getSessionRunState(sid);
@@ -132,7 +132,7 @@ function getProcessBodyElForCurrentRun() {
 var STREAM_PROC_NEAR_BOTTOM_PX = 96;
 var STREAM_CHAT_NEAR_BOTTOM_PX = 72;
 
-/** 生成中时：对话区与当前执行过程区均在底部附近时才允许自动跟随流式滚动 */
+/** 生成中时：对话区与当前执行轨迹区均在底部附近时才允许自动跟随流式滚动 */
 function refreshLiveAutoFollowPins() {
     if (!chatContainer) return;
     if (isSessionRunning(currentSessionId)) {
@@ -196,7 +196,7 @@ function refreshFeedChunksInCtx(ctx, selector) {
 }
 
 function ensureSubagentTurnProcessOpen(ctx) {
-    /* 默认折叠执行过程，不在自动滚动时强制展开 */
+    /* 默认折叠执行轨迹，不在自动滚动时强制展开 */
 }
 
 function shouldDeferSubagentProcessDom(ctx) {

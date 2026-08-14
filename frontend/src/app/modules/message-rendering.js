@@ -949,7 +949,7 @@ function syncProcessAggregateHeightUi(agg) {
     if (expanded && hasOverflow) agg.classList.add('is-height-expanded');
     else expanded = false;
     btn.hidden = !hasOverflow;
-    var label = expanded ? '收起执行过程高度' : '展开执行过程高度';
+    var label = expanded ? '收起执行轨迹高度' : '展开执行轨迹高度';
     btn.setAttribute('aria-expanded', expanded ? 'true' : 'false');
     btn.setAttribute('aria-label', label);
     btn.setAttribute('data-ui-tip', label);
@@ -1424,7 +1424,7 @@ function refreshProcessAggregateStats(agg) {
 
 function ensureProcessGroup(ctx) {
     if (!ctx || !ctx.stream) return null;
-    /* DocumentFragment 或未挂上 document 的节点 isConnected 为 false；回放或「加载更早消息」预挂载时需保留同一执行过程框 */
+    /* DocumentFragment 或未挂上 document 的节点 isConnected 为 false；回放或「加载更早消息」预挂载时需保留同一执行轨迹框 */
     if (ctx.currentProcessGroup && !ctx.currentProcessGroup.isConnected && !replayingMessages) ctx.currentProcessGroup = null;
     if (ctx.currentProcessGroup) return ctx.currentProcessGroup;
     stripWelcome(ctx);
@@ -1436,13 +1436,13 @@ function ensureProcessGroup(ctx) {
     wrap.innerHTML = '<div class="process-aggregate-top" role="button" tabindex="0" aria-expanded="' + (replayCollapsed ? 'false' : 'true') + '">'
         + '<div class="process-aggregate-top-line">'
         + '<span class="process-aggregate-title-wrap">'
-        + '<span class="process-aggregate-title">执行过程</span>'
+        + '<span class="process-aggregate-title">执行轨迹</span>'
         + '<span class="process-aggregate-stats" aria-live="polite"></span>'
         + '</span>'
         + '<span class="process-chev" aria-hidden="true">▼</span></div>'
         + '<div class="process-aggregate-brief"></div></div>'
         + '<div class="process-aggregate-body"></div>'
-        + '<button type="button" class="process-aggregate-resize" aria-label="展开执行过程高度" aria-expanded="false" data-ui-tip="展开执行过程高度" hidden>'
+        + '<button type="button" class="process-aggregate-resize" aria-label="展开执行轨迹高度" aria-expanded="false" data-ui-tip="展开执行轨迹高度" hidden>'
         + '<span class="process-aggregate-chevron" aria-hidden="true"></span></button>';
     if (!replayingMessages) {
         if (ctx.runStartedAt) applyRunStartedAtToProcessGroup(wrap, ctx.runStartedAt);
@@ -1513,7 +1513,7 @@ function autoResizeTextarea() {
     repinStreamScrollAfterComposerResize();
 }
 
-/** 输入框增高会压缩工作区高度；若正在跟随底部，立即把聊天区/执行过程区重新钉到底部，避免与流式滚动互相拉扯。 */
+/** 输入框增高会压缩工作区高度；若正在跟随底部，立即把聊天区/执行轨迹区重新钉到底部，避免与流式滚动互相拉扯。 */
 function repinStreamScrollAfterComposerResize() {
     if (!liveAutoFollow || !chatContainer) return;
     if (typeof setScrollTopImmediate === 'function') {

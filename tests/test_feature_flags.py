@@ -23,6 +23,12 @@ def _extract_steer_mode(html: str) -> str:
     return json.loads(match.group(1))
 
 
+def _extract_frontend_version(html: str) -> str:
+    match = re.search(r"window\.__MYAGENT_FRONTEND_VERSION__=([^<;]+);", html)
+    assert match, "frontend version injection missing"
+    return json.loads(match.group(1))
+
+
 def test_index_html_injects_default_feature_values(monkeypatch):
     import webui
 
@@ -121,6 +127,21 @@ def test_index_html_injects_security_env_override(monkeypatch):
     assert _extract_feature_flags(str(webui.get_index_html()))["security"] is False
     monkeypatch.setenv("SECURITY_ENABLED", "1")
     assert _extract_feature_flags(str(webui.get_index_html()))["security"] is True
+
+
+def test_index_html_injects_normalized_frontend_version(monkeypatch):
+    import webui
+
+    monkeypatch.delenv("MYAGENT_FRONTEND_VERSION", raising=False)
+    default_html = str(webui.get_index_html())
+    assert _extract_frontend_version(default_html) == "v1"
+    assert "document.documentElement.dataset.frontendVersion=" in default_html
+
+    monkeypatch.setenv("MYAGENT_FRONTEND_VERSION", "V2")
+    assert _extract_frontend_version(str(webui.get_index_html())) == "v2"
+
+    monkeypatch.setenv("MYAGENT_FRONTEND_VERSION", "unknown")
+    assert _extract_frontend_version(str(webui.get_index_html())) == "v1"
 
 
 def test_permission_mode_ui_regressions():

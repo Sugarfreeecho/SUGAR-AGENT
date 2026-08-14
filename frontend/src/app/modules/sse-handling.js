@@ -734,6 +734,10 @@ function maybeAutoResumeInterruptedReact(sessionId, sessionDetail) {
     var detail = sessionDetail || {};
     if (!sid || sid !== currentSessionId) return;
     if (typeof navigator !== 'undefined' && navigator.onLine === false) return;
+    var pendingHuman = detail.pending_human_interactions || {};
+    if (Number(pendingHuman.total || 0) > 0) return;
+    if (typeof pendingHumanInteractionRecords === 'function'
+        && pendingHumanInteractionRecords(sid).length > 0) return;
     if (!detail.react_auto_resume || !detail.react_can_continue || detail.run_active || detail.stream_active) return;
     if (isSessionRunning(sid) || subagentContinueInFlight) return;
     var now = Date.now();

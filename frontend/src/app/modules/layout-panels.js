@@ -47,7 +47,7 @@ async function init() {
     // Restore durable approvals/questions before switchSession decides whether
     // the global pending banner should be hidden for the selected session.
     if (targetSession && typeof refreshHumanInteractions === 'function') {
-        void refreshHumanInteractions(targetSession, { render: false });
+        await refreshHumanInteractions(targetSession, { render: false });
     }
     if (targetSession) await switchSession(targetSession);
     else await createNewSession();

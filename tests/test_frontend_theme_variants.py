@@ -78,3 +78,74 @@ def test_neutral_dark_process_replies_blend_into_the_process_panel() -> None:
     assert "border-left-color: rgba(130, 182, 230, 0.68);" in response
     assert "background: transparent;" in response
     assert "linear-gradient" not in response
+
+
+def test_execution_process_v2_is_version_scoped_and_enabled_locally() -> None:
+    styles = (ROOT / "frontend/src/styles/app.css").read_text(encoding="utf-8")
+    env_text = (ROOT / "app/.env").read_text(encoding="utf-8")
+    env_example = (ROOT / "app/.env.example").read_text(encoding="utf-8")
+
+    assert "MYAGENT_FRONTEND_VERSION=v2" in env_text
+    assert "MYAGENT_FRONTEND_VERSION=v1" in env_example
+    assert ':root[data-frontend-version="v2"] .process-aggregate:not(.subagent-grid-card)' in styles
+    assert "--process-v2-panel: #1b1b1d;" in styles
+    assert ".is-collapsed .process-aggregate-brief," in styles
+    assert "display: none !important;" in styles
+    assert "> .process-aggregate-body > .feed-item:nth-child(even)" not in styles
+    assert "--process-v2-row-status: #1c1c1e;" in styles
+    assert "--process-v2-row-thinking: #1e2226;" in styles
+    assert "--process-v2-row-reply: #20252b;" in styles
+    assert "--process-v2-row-tool: #202022;" in styles
+    stats = styles.split(
+        ':root[data-frontend-version="v2"] .process-aggregate:not(.subagent-grid-card) .process-aggregate-stats {',
+        1,
+    )[1].split("}", 1)[0]
+    assert "font-family: var(--sans);" in stats
+    assert "font-size: 0.58rem;" in stats
+    assert "gap: 1rem;" in stats
+    top = styles.split(
+        ':root[data-frontend-version="v2"] .process-aggregate:not(.subagent-grid-card) > .process-aggregate-top {',
+        1,
+    )[1].split("}", 1)[0]
+    assert "padding: 0.7rem 0.82rem;" in top
+    collapsed_top = styles.split(
+        ':root[data-frontend-version="v2"] .process-aggregate:not(.subagent-grid-card).is-collapsed > .process-aggregate-top {',
+        1,
+    )[1].split("}", 1)[0]
+    assert "padding-top: 0.62rem;" in collapsed_top
+    assert "padding-bottom: 0.62rem;" in collapsed_top
+    title_wrap = styles.split(
+        ':root[data-frontend-version="v2"] .process-aggregate:not(.subagent-grid-card) .process-aggregate-title-wrap {',
+        1,
+    )[1].split("}", 1)[0]
+    assert "gap: 0.12rem;" in title_wrap
+    chevron = styles.split(
+        ':root[data-frontend-version="v2"] .process-aggregate:not(.subagent-grid-card) .process-chev {',
+        1,
+    )[1].split("}", 1)[0]
+    assert "position: absolute;" in chevron
+    assert "top: 50%;" in chevron
+    assert "transform: translateY(-50%);" in chevron
+    assert "background:" not in chevron
+    assert "border:" not in chevron
+    assert ".process-chev::before" in styles
+    chevron_shape = styles.split(
+        ':root[data-frontend-version="v2"] .process-aggregate:not(.subagent-grid-card) .process-chev::before {',
+        1,
+    )[1].split("}", 1)[0]
+    assert "transform: rotate(45deg);" in chevron_shape
+    assert "translateY" not in chevron_shape
+    assert "@keyframes processV2Progress" in styles
+
+
+def test_execution_process_copy_is_renamed_to_execution_trace() -> None:
+    rendering = (ROOT / "frontend/src/app/modules/message-rendering.js").read_text(encoding="utf-8")
+    translations = (ROOT / "frontend/src/app/modules/i18n.js").read_text(encoding="utf-8")
+    subagent = (ROOT / "frontend/src/app/modules/subagent.js").read_text(encoding="utf-8")
+
+    assert '<span class="process-aggregate-title">执行轨迹</span>' in rendering
+    assert "'执行轨迹': 'Execution trace'" in translations
+    assert "展开执行轨迹高度" in rendering
+    assert "收起执行轨迹高度" in rendering
+    assert "展开查看执行轨迹" in subagent
+    assert '<span class="process-aggregate-title">执行过程</span>' not in rendering

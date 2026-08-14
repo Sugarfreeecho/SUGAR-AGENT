@@ -34,7 +34,7 @@ const LS_SESSION_SECTION_PREFIX = 'myagent-session-section-';
 let streamPollTimer = null;
 const messageRawMarkdown = new WeakMap();
 let liveAutoFollow = true;
-/** 生成中：对话区 / 执行过程区是否在底部附近（二者同时满足才跟流，见 refreshLiveAutoFollowPins） */
+/** 生成中：对话区 / 执行轨迹区是否在底部附近（二者同时满足才跟流，见 refreshLiveAutoFollowPins） */
 let streamChatNearBottom = true;
 let streamProcNearBottom = true;
 let mermaidInitialized = false;
