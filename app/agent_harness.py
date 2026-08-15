@@ -2180,6 +2180,8 @@ class SessionManager:
                 updated_at = meta.get("updated_at") or created_at
                 archived = bool(meta.get("archived", False))
                 pinned = bool(meta.get("pinned", False))
+                todo = bool(meta.get("todo", False))
+                goal_review_pending = bool(meta.get("goal_review_pending", False))
                 pinned_at = meta.get("pinned_at")
                 if pinned and not pinned_at:
                     pinned_at = updated_at
@@ -2190,6 +2192,8 @@ class SessionManager:
                     "updated_at": updated_at,
                     "archived": archived,
                     "pinned": pinned,
+                    "todo": todo,
+                    "goal_review_pending": goal_review_pending,
                     "pinned_at": pinned_at if pinned else None,
                     "unread_result": bool(meta.get("unread_result", False)),
                     "unread_result_at": meta.get("unread_result_at"),
@@ -4315,6 +4319,8 @@ class SessionManager:
                 meta["updated_at"] = now_iso
                 meta["archived"] = False
                 meta["pinned"] = False
+                meta["todo"] = False
+                meta["goal_review_pending"] = False
                 meta.pop("pinned_at", None)
                 meta["branched_from"] = sid
                 meta["branch_before_index"] = before_index
@@ -4368,6 +4374,8 @@ class SessionManager:
                     "updated_at": now_iso,
                     "archived": False,
                     "pinned": False,
+                    "todo": False,
+                    "goal_review_pending": False,
                     "pinned_at": None,
                 })
                 self._save_index()
@@ -4382,6 +4390,8 @@ class SessionManager:
                         "updated_at": now_iso,
                         "archived": False,
                         "pinned": False,
+                        "todo": False,
+                        "goal_review_pending": False,
                         "pinned_at": None,
                     },
                 }
@@ -4413,6 +4423,8 @@ class SessionManager:
             meta["updated_at"] = now_iso
             meta["archived"] = False
             meta["pinned"] = False
+            meta["todo"] = False
+            meta["goal_review_pending"] = False
             meta.pop("pinned_at", None)
             meta["branched_from"] = sid
             meta["branch_before_index"] = before_index
@@ -4436,6 +4448,8 @@ class SessionManager:
                 "updated_at": now_iso,
                 "archived": False,
                 "pinned": False,
+                "todo": False,
+                "goal_review_pending": False,
                 "pinned_at": None,
             })
             self._save_index()
@@ -4453,6 +4467,8 @@ class SessionManager:
                 "updated_at": now_iso,
                 "archived": False,
                 "pinned": False,
+                "todo": False,
+                "goal_review_pending": False,
                 "pinned_at": None,
             }
             return {"ok": True, "session_id": new_id, "name": branch_name, "session": summary}
@@ -4899,6 +4915,8 @@ class SessionManager:
             "updated_at": now_iso,
             "archived": False,
             "pinned": False,
+            "todo": False,
+            "goal_review_pending": False,
             "is_subagent": True,
             "parent_session_id": parent_id,
             "subagent_type": stype,
@@ -5220,6 +5238,8 @@ class SessionManager:
                 "updated_at": now_iso,
                 "archived": False,
                 "pinned": False,
+                "todo": False,
+                "goal_review_pending": False,
             }
             dialogue: List[dict] = []  # 与 dialogue_history.json 均由 ui_events 主链写入
             self._save_metadata(session_id, metadata)
@@ -5243,6 +5263,8 @@ class SessionManager:
                 "updated_at": metadata.get("updated_at") or metadata["created_at"],
                 "archived": bool(metadata.get("archived", False)),
                 "pinned": bool(metadata.get("pinned", False)),
+                "todo": bool(metadata.get("todo", False)),
+                "goal_review_pending": bool(metadata.get("goal_review_pending", False)),
                 "pinned_at": metadata.get("pinned_at") if metadata.get("pinned") else None,
             })
             self._save_index()
@@ -5308,6 +5330,10 @@ class SessionManager:
                         sess["archived"] = bool(metadata["archived"])
                     if "pinned" in metadata:
                         sess["pinned"] = bool(metadata["pinned"])
+                    if "todo" in metadata:
+                        sess["todo"] = bool(metadata["todo"])
+                    if "goal_review_pending" in metadata:
+                        sess["goal_review_pending"] = bool(metadata["goal_review_pending"])
                     if "pinned_at" in metadata:
                         sess["pinned_at"] = metadata.get("pinned_at")
                     elif metadata.get("pinned") is False:
@@ -5338,6 +5364,10 @@ class SessionManager:
                         sess["archived"] = bool(metadata["archived"])
                     if "pinned" in metadata:
                         sess["pinned"] = bool(metadata["pinned"])
+                    if "todo" in metadata:
+                        sess["todo"] = bool(metadata["todo"])
+                    if "goal_review_pending" in metadata:
+                        sess["goal_review_pending"] = bool(metadata["goal_review_pending"])
                     if "pinned_at" in metadata:
                         sess["pinned_at"] = metadata.get("pinned_at")
                     elif metadata.get("pinned") is False:
@@ -5446,6 +5476,8 @@ class SessionManager:
         d = dict(base)
         d.setdefault("archived", False)
         d.setdefault("pinned", False)
+        d["todo"] = bool(d.get("todo", False))
+        d["goal_review_pending"] = bool(d.get("goal_review_pending", False))
         d["unread_result"] = bool(d.get("unread_result", False))
         d["unread_result_status"] = str(d.get("unread_result_status") or "success")
         if d.get("pinned") and not d.get("pinned_at"):
@@ -5604,6 +5636,57 @@ class SessionManager:
             if sess.get("id") == session_id:
                 sess["pinned"] = pinned
                 sess["pinned_at"] = metadata.get("pinned_at") if pinned else None
+                sess["updated_at"] = metadata["updated_at"]
+                break
+        else:
+            self.refresh_sessions_index_from_disk()
+            return
+        self._save_index()
+
+    def set_session_todo(self, session_id: str, todo: bool) -> None:
+        meta_path = self._get_metadata_path(session_id)
+        if not meta_path.exists():
+            self.refresh_sessions_index_from_disk()
+            return
+        with self._session_metadata_lock(session_id):
+            metadata = self._load_metadata_unlocked(session_id)
+            if not isinstance(metadata, dict):
+                metadata = {}
+            metadata["todo"] = bool(todo)
+            metadata["updated_at"] = datetime.now().isoformat()
+            self._save_metadata_unlocked(session_id, metadata)
+        for sess in self.index:
+            if sess.get("id") == session_id:
+                sess["todo"] = bool(todo)
+                sess["updated_at"] = metadata["updated_at"]
+                break
+        else:
+            self.refresh_sessions_index_from_disk()
+            return
+        self._save_index()
+
+    def set_session_goal_review_pending(self, session_id: str, pending: bool) -> None:
+        sid = str(session_id or "").strip()
+        if not sid:
+            return
+        pending = bool(pending)
+        target = next((sess for sess in self.index if sess.get("id") == sid), None)
+        if target is not None and bool(target.get("goal_review_pending", False)) == pending:
+            return
+        meta_path = self._get_metadata_path(sid)
+        if not meta_path.exists():
+            self.refresh_sessions_index_from_disk()
+            return
+        with self._session_metadata_lock(sid):
+            metadata = self._load_metadata_unlocked(sid)
+            if not isinstance(metadata, dict):
+                metadata = {}
+            metadata["goal_review_pending"] = pending
+            metadata["updated_at"] = datetime.now().isoformat()
+            self._save_metadata_unlocked(sid, metadata)
+        for sess in self.index:
+            if sess.get("id") == sid:
+                sess["goal_review_pending"] = pending
                 sess["updated_at"] = metadata["updated_at"]
                 break
         else:
@@ -6437,11 +6520,37 @@ def is_conversation_compress_boundary_system(m: Any) -> bool:
     return is_conversation_compacted_boundary_system(m) or is_conversation_truncated_boundary_system(m)
 
 
+
+def _message_content_text(m: Any) -> str:
+    """Return the plain-text projection of a message content.
+
+    Content may be a str or a multimodal list ([{"type": "text", ...},
+    {"type": "local_file", ...}, ...]); text parts are concatenated and
+    non-text parts are ignored so string helpers never crash on lists.
+    """
+    content = getattr(m, "content", None)
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: List[str] = []
+        for item in content:
+            if isinstance(item, str):
+                parts.append(item)
+            elif isinstance(item, dict):
+                if item.get("type") == "text":
+                    parts.append(str(item.get("text") or ""))
+                elif item.get("type") in ("input_text", "output_text"):
+                    parts.append(str(item.get("text") or ""))
+        return "".join(parts)
+    return str(content or "")
+
+
 def is_compress_recap_user_message(m: Any) -> bool:
+
     """压缩产生的前情提要 user，不参与主对话派生。"""
     if not isinstance(m, UserMessage):
         return False
-    c = (m.content or "") or ""
+    c = _message_content_text(m)
     return c.lstrip().startswith(COMPACT_RECAP_USER_PREFIX)
 
 
@@ -6487,7 +6596,7 @@ def is_assistant_message_micro_shrunk(m: Any) -> bool:
     md = getattr(m, "metadata", None) or {}
     if md.get("micro_shrink"):
         return True
-    c = (m.content or "").lstrip()
+    c = _message_content_text(m).lstrip()
     return c.startswith("【微压工作块】")
 
 
