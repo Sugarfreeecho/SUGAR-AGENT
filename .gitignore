@@ -53,6 +53,8 @@ question list/
 日志 20260529.txt
 更新日志 202605.md
 
+tool/
+
 # OS and editor files
 .DS_Store
 Thumbs.db
@@ -63,7 +65,9 @@ desktop.ini
 # Local backup files (editor/tool backups, not source)
 *.bak
 *.bak_fix
+# Personal change-request / review notes (local only)
 review/
+docs/Change Request（CR）/
 
 mcp_servers.json
 extension-picker-demo.html
