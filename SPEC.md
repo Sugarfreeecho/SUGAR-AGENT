@@ -146,6 +146,9 @@ npm run build
 - 管理子 Agent 列表、输出、停止和删除。
 - 提供首次配置、高级环境变量配置和 MCP 配置页面。
 - 对未配置状态进行中间件拦截，引导用户进入 `/setup`。
+- 扫描并后台恢复所有未归档的中断会话（`react-recovery-*` 恢复 run，失败按 `REACT_RECOVERY_RETRY_SECONDS` 重试）。
+- 处理审批卡片的“替我分析”请求（只返回审查建议，不执行授权）。
+- 存在 pending 提问/审批时禁止自动恢复、Goal 续跑与删除会话。
 
 ### 5.2 `app/agent.py`
 
@@ -185,6 +188,10 @@ ReAct 执行循环，负责：
 - 清理临时写入文件。
 - 处理 API 错误分类和最终输出校验。
 - 提供普通运行和 continuation 运行。
+- 维护进程级 CPU 压力策略：严重压力下切为非流式输出、限制本地只读工具并发。
+- 流式文本增量按帧合并（`LLM_STREAM_COALESCE_MS`），首 token 立即推送。
+- 目标：Goal 完成申请当轮立即执行 Judge，并把完整 Goal 对话证据注入下一轮上下文。
+- 集成请求恢复预算（`_LogicalRequestBudget`）与工具审查上下文构建。
 
 ### 5.5 `app/agent_tools.py`
 
@@ -198,8 +205,15 @@ ReAct 执行循环，负责：
 - 任务管理：`update_todo`
 - 上下文管理：`context_manage`
 - 子 Agent 入口：`task`
+- Goal 工具：`create_goal`、`get_goal`、`update_goal`
 
 工具层必须继续承担路径限制、敏感信息脱敏、输出截断、SSRF 防护、危险命令判断和 shell 超时控制。
+`ls` 行为约定：
+
+- 仅对已识别的文本/源码文件统计行数（白名单后缀与文件名）。
+- 压缩包（zip/7z/rar/tar/gz 等）不显示大小与行数（均为 `—`）。
+- 单文件行数统计上限 `LS_LINE_COUNT_MAX_BYTES`（默认 5 MiB），超限显示 `— (>5.0 MiB)`。
+- 执行层保留 `list_dir` → `ls` 兼容映射，LLM 工具定义只暴露 `ls`。
 
 ### 5.6 `app/agent_subagent.py`
 
@@ -234,6 +248,7 @@ MCP 扩展层，负责：
 - 调用 MCP 工具。
 - 格式化 MCP 工具返回结果。
 - 支持强制重载和统一关闭。
+- 所有 MCP 异步操作（`force_reload`/`ensure_started`/工具调用）固定运行在专用长期事件循环（`_run_on_mcp_loop`），避免 asyncio 原语跨循环绑定错误，并正确传播取消。
 
 ### 5.9 会话生命周期模块
 
@@ -252,6 +267,38 @@ MCP 扩展层，负责：
 - 关闭指定会话的流。
 
 ## 6. 前端模块规格
+### 5.10 `app/cpu_pressure.py`
+
+进程级 CPU/内存/事件循环延迟复合监测（psutil）：
+
+- 采样间隔 `CPU_PRESSURE_SAMPLE_SECONDS`（默认 10s），滑动窗口均值。
+- 阈值：`CPU_PRESSURE_HIGH_PERCENT`（默认 85）进入繁忙、`CPU_PRESSURE_SEVERE_PERCENT`（默认 90）进入严重、`CPU_PRESSURE_RECOVERY_PERCENT`（默认 65）恢复；连续 12 次升档确认 + 120s 恢复稳定期防抖。
+- 严重压力下 LLM 输出切换为非流式，本地资源型只读工具并发降为 `CPU_PRESSURE_TOOL_CONCURRENCY`（默认 2）；繁忙状态保持流式。
+
+### 5.11 `app/agent_goal.py` / `agent_goal_judge.py`
+
+持久 Goal 生命周期与完成裁决：
+
+- 双阶段完成流程：`update_goal(completed)` 只登记申请，独立 Judge 裁决 `done/continue`。
+- Judge 证据 = 完整 Goal 生命周期对话（不裁剪）+ 裁剪后近期辅助证据；可从 `events.jsonl` 重建。
+- Goal 元数据跟踪 `completion_requested_run_id`/`origin_run_id`；GoalManager 单例缓存；活动 Goal 会话状态可订阅。
+
+### 5.12 `app/security/`（权限、审批、egress）
+
+- `policy.py`/`runtime.py`/`store.py`：权限模式、能力策略、审批记录持久化。
+- `reviewer.py`：审查模型（“替我分析/替我审批”），审查上下文携带请求与用户意图。
+- `egress_guard.py` + `shell_analysis.py`：网络出口守卫——发现并健康检查系统 helper（`SUGAR_AGENT_EGRESS_HELPER` → `app/native/` → `PATH`），按策略对命令执行网络放行/隔离；helper 报告 `strong`/`partial`，缺失时 `degraded`。协议见 `docs/egress_helper_protocol.md`。
+- `extensions.py`：插件/MCP 注册信任与审批门（`EXTENSION_REGISTRATION_APPROVAL_ENABLED`）。
+
+### 5.13 `app/runtime_observability.py` / `execution_metrics.py`
+
+- Runtime V2 可观测性：内存缓存 + 防抖整文件写盘（`RUNTIME_OBSERVABILITY_FLUSH_DELAY_MS`/`EXECUTION_METRICS_FLUSH_DELAY_MS`，默认 200ms）、终端状态立即落盘、`atexit` 兜底、60s 全量扫描上限。
+- 执行指标看板：运行/工具耗时、心跳、挂起恢复时长（`runtime_power.py` 共享挂起监视器）。
+
+### 5.14 `app/agent_team/`
+
+Agent 团队调度：活动团队会话跟踪 + 事件驱动调度器（状态变化唤醒，避免轮询自我唤醒）。
+
 
 ### 6.1 页面结构
 
@@ -342,6 +389,7 @@ MCP 扩展层，负责：
 | GET | `/sessions/{parent_id}/subagents/{task_id}/output` | 获取子 Agent 输出 |
 | POST | `/sessions/{parent_id}/subagents/{child_id}/interrupt` | 中断子 Agent |
 | DELETE | `/sessions/{parent_id}/subagents/{child_id}` | 删除子 Agent |
+| POST | `/sessions/{parent_id}/subagents/{child_id}/model-profile` | 运行时切换子 Agent 模型 profile（保留 child ID/历史/worktree） |
 
 ### 7.6 配置
 
@@ -353,6 +401,7 @@ MCP 扩展层，负责：
 | GET | `/api/mcp_config` | 获取 MCP 配置 |
 | POST | `/api/mcp_config` | 保存 MCP 配置 |
 | POST | `/api/pick-path` | 调用本机路径选择 |
+| GET/POST | `/api/security/settings` | 读取/更新安全设置（含工作区外许可撤销） |
 | GET | `/api/open-workspace-file` | 打开 workspace 文件 |
 
 ### 7.7 工具审批
@@ -502,6 +551,24 @@ SSE 是后端向前端展示 Agent 过程的主通道。事件至少应覆盖以
 - MCP 工具名必须经过安全映射，避免函数名冲突或非法字符。
 - MCP 工具是否需要 UI 审批由 `agent_mcp.py` 和审批层共同决定。
 
+### 11.5 稳定性与安全配置
+
+| 变量 | 默认 | 说明 |
+| --- | --- | --- |
+| `OPENAI_HTTP_TIMEOUT` | `300` | LLM 请求超时（秒） |
+| `OPENAI_MAX_RETRIES` | `4` | LLM 最大重试次数 |
+| `OPENAI_FIRST_TOKEN_HEDGE_TIMEOUT_SEC` | `30` | 首 token 竞速阈值（0=关闭） |
+| `OPENAI_FIRST_TOKEN_HEDGE_MAX_RETRIES` | `2` | 每次调用最多竞速次数 |
+| `CPU_PRESSURE_*` | 见 5.10 | CPU 压力监测参数 |
+| `LLM_STREAM_COALESCE_MS` | `12` | 流式增量合并窗口 |
+| `SECURITY_ENABLED` | `1` | 安全审批总开关（`0` 关闭） |
+| `EXTENSION_REGISTRATION_APPROVAL_ENABLED` | `0` | 插件/MCP 注册人工确认 |
+| `EGRESS_HELPER_ENABLED` | `1` | 系统级网络出口助手（`0` 关闭） |
+| `SUGAR_AGENT_EGRESS_HELPER` | 自动发现 | 指定 helper 路径 |
+| `REACT_RECOVERY_RETRY_SECONDS` | `30` | 后台会话恢复重试间隔 |
+| `MYAGENT_FRONTEND_VERSION` | `v1` | 前端版本标识 |
+| `LS_INCLUDE_LINE_COUNTS` / `LS_LINE_COUNT_MAX_BYTES` | `1` / `5242880` | `ls` 行数统计开关与上限 |
+
 ## 12. 安全规格
 
 ### 12.1 文件系统
@@ -535,6 +602,23 @@ SSE 是后端向前端展示 Agent 过程的主通道。事件至少应覆盖以
 - 工具审批通过 `/sessions/{session_id}/tool-approval` 完成。
 - 审批状态必须绑定具体 session 和 tool call，避免跨会话串扰。
 - 用户拒绝时，Agent 应收到结构化的拒绝结果，而不是静默失败。
+
+### 12.6 网络出口控制（egress）
+
+- `EGRESS_HELPER_ENABLED=1` 时，命令执行前通过 helper 健康握手（`health --json`）获取强制级别；`strong` 可按目标约束网络，`partial` 仅可整体拒绝，缺失/未启用为 `degraded`。
+- helper 通过 `SUGAR_AGENT_EGRESS_HELPER` → `app/native/` → `PATH` 顺序发现；Windows 助手由 C# 源码可复现构建，`.exe` 不入库。
+- 降级时前端必须提示“当前没有系统级网络隔离”，命令仍按应用层审批执行。
+- 协议细节与后端命名见 `docs/egress_helper_protocol.md`。
+
+### 12.7 注册审批与恢复门禁
+
+- `EXTENSION_REGISTRATION_APPROVAL_ENABLED=1` 时：可执行 Plugin 首次启用/内容摘要变化、MCP 首次注册/配置摘要变化必须人工确认；确认只授权加载/连接/能力发现，工具调用仍走中央审批。
+- 存在 pending 提问或审批的会话不得被通用恢复、Goal 续跑或 HTTP continuation 启动；仅回答/取消交互的专用恢复链可继续（发现与执行阶段双门禁）。
+
+### 12.8 审批卡片
+
+- 手动审批卡提供“替我分析”（复用审查模型，返回风险等级与建议，不执行授权；上下文仅存于待审批期间）。
+- 工作区外操作与工具执行分开审批：先批准工作区处理（始终允许/本次允许），之后仍需单独审批工具操作。
 
 ## 13. 上下文管理规格
 
@@ -604,6 +688,14 @@ SSE 是后端向前端展示 Agent 过程的主通道。事件至少应覆盖以
 - 流式文本应批量 flush，避免每个 token 都触发布局。
 - TOC/Todo/上下文 token 刷新应异步调度，避免切换会话卡顿。
 
+### 17.3 自适应与可观测性性能
+
+- CPU 严重压力下 LLM 请求整体切换为非流式，减少逐 token 解析/持久化开销；恢复后自动还原。
+- 流式正文累积使用 list + join，避免字符串平方级复制；增量按 12ms 帧合并后再渲染。
+- 可观测性文件采用防抖整文件重写（默认 200ms），终端状态与显式快照立即落盘。
+- 前端构建将 Mermaid 预构建为本地 vendor，生产构建从约 5 分钟降至约 2 秒。
+- Provider token 缓存加入工具指纹，工具启停后不会误用旧缓存；发送前估算计入工具 Schema，避免首轮 token 突跳。
+
 ## 18. 验收标准
 
 ### 18.1 启动验收
@@ -651,6 +743,16 @@ SSE 是后端向前端展示 Agent 过程的主通道。事件至少应覆盖以
 - 会话切换不残留上一会话的 TOC/Todo/子 Agent 状态。
 - SSE 流式输出、工具过程、最终回答均能正确渲染。
 - 长消息、长工具输出、子 Agent 历史不会造成明显卡顿。
+
+### 18.7 新功能验收
+
+- CPU 压力升至严重阈值后输出切为非流式，恢复后还原；阈值可通过环境变量调整。
+- 首 token 超过竞速阈值时发起并行请求，先到者胜出，另一路被关闭且不产生重复副作用。
+- Goal 申请完成当轮即执行 Judge；Judge 证据包含完整 Goal 对话（可从 `events.jsonl` 重建）。
+- 存在 pending 提问/审批时，通用恢复、Goal 续跑与删除会话均被拒绝。
+- egress helper 缺失时显示降级提示；helper 健康检查通过时按策略放行/隔离网络。
+- 深色主题、执行轨迹折叠/展开高度、工作区 GIF/图片/音视频渲染在 360px 与桌面宽度下均可正常使用。
+- 中断会话在页面刷新/重启后由服务端后台自动恢复（无 pending 交互时）。
 
 ## 19. 变更约束
 
