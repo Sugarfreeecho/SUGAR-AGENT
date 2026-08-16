@@ -1909,17 +1909,20 @@ def _run_shell_env_with_prepended_agent_python_dir(base: Dict[str, str]) -> Dict
     return env
 
 
-def _run_cli_should_use_bash_on_windows() -> bool:
+def _run_cli_should_use_bash_on_windows(*, full_access: bool = False) -> bool:
     """
     Windows：若配置允许则经 ``bash -lc`` 执行（POSIX），否则走 PowerShell。
     RUN_SHELL_USE_BASH：未设或 1 / true = 若找到 bash 则使用；0 / false = 跳过 bash 仅用 PowerShell。
+
+    FULL_ACCESS 会跳过 AppContainer 出网隔离；此时 Git Bash 即使位于应用目录外也可正常执行。
+    因此仅在“隔离不生效”（helper 关闭或 FULL_ACCESS）时允许选用 bash，隔离生效时仍回退 PowerShell。
     """
     if platform.system() != "Windows":
         return False
     try:
         from security import egress_helper_enabled
 
-        if egress_helper_enabled():
+        if egress_helper_enabled() and not full_access:
             return False
     except Exception:
         pass
@@ -2002,13 +2005,13 @@ def _read_file_sniff_unreadable_text(path: Path) -> Optional[str]:
         return f"Failed to read file: {e}"
     # 先识别常见格式（其头部可能含 \\x00，如 JPEG APP0）
     if len(head) >= 3 and head[:3] == b"\xff\xd8\xff":
-        return "File appears to be JPEG. read_file is for text; use image tools or download and convert."
+        return "File appears to be a JPEG image. The image was already attached to the conversation as an image part; describe the attached image directly, do not read or convert the file."
     if head.startswith(b"\x89PNG\r\n\x1a\n"):
-        return "File appears to be PNG. read_file is for text; use image tools or download and convert."
+        return "File appears to be a PNG image. The image was already attached to the conversation as an image part; describe the attached image directly, do not read or convert the file."
     if head.startswith((b"GIF87a", b"GIF89a")):
-        return "File appears to be GIF. read_file is for text; use image tools or download and convert."
+        return "File appears to be a GIF image. The image was already attached to the conversation as an image part; describe the attached image directly, do not read or convert the file."
     if head.startswith(b"RIFF") and b"WEBP" in head[:16]:
-        return "File appears to be WebP. read_file is for text; use image tools or download and convert."
+        return "File appears to be a WebP image. The image was already attached to the conversation as an image part; describe the attached image directly, do not read or convert the file."
     if head.startswith(b"%PDF"):
         return "File appears to be PDF. Convert to text or Markdown first; do not read as plain text."
     if b"\x00" in head:
@@ -2133,7 +2136,7 @@ async def run_shell(
                 # administrator changing Git's ACLs.  The system PowerShell
                 # binary is AppContainer-readable and preserves the helper's
                 # network boundary, so prefer it while egress isolation is on.
-                if _run_cli_should_use_bash_on_windows():
+                if _run_cli_should_use_bash_on_windows(full_access=full_access):
                     bash_exe = _windows_bash_executable()
             else:
                 if _posix_use_bash_shell():

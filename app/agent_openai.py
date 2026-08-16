@@ -1175,9 +1175,9 @@ def _annotate_local_media_paths(value: str, *, mode: str) -> str:
     """
     if mode == "vision":
         labels = {
-            "image": "[图片附件（示意图片所在路径）]",
-            "audio": "[音频附件（示意音频所在路径）]",
-            "video": "[视频附件（示意视频所在路径）]",
+            "image": "[图片附件（图片已随消息附上，请直接查看描述，无需读取文件）]",
+            "audio": "[音频附件（音频已随消息附上，请直接收听，无需读取文件）]",
+            "video": "[视频附件（视频已随消息附上，请直接观看，无需读取文件）]",
         }
     else:
         labels = {

@@ -17,7 +17,7 @@ from agent_openai import (  # noqa: E402
 )
 
 IMG = r"D:/AI/AI Agent/MyAgent Developer/workspace/uploads/chat/test_image.png"
-VISION_LABEL = "[图片附件（示意图片所在路径）]"
+VISION_LABEL = "[图片附件（图片已随消息附上，请直接查看描述，无需读取文件）]"
 DELEGATE_LABEL = "[图片附件（如需要识图请委派给多模态子代理）]"
 
 
