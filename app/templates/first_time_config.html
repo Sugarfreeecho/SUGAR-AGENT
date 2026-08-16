@@ -393,10 +393,6 @@
     font-size: 0.72rem;
     line-height: 1.4;
   }
-  .model-context-warning {
-    width: 100%; color: #f9c74f; font-size: 0.7rem; line-height: 1.45;
-  }
-  :root.theme-light .model-context-warning { color: #9a6700; }
   .model-list {
     display: grid;
     gap: 0.45rem;
@@ -567,6 +563,96 @@
   @media (max-width: 480px) {
     .card { padding: 1.75rem 1.25rem 1.5rem; }
   }
+
+  /* ═══ 确认弹窗（与设计系统一致） ═══ */
+  .modal-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 1000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 1rem;
+    background: rgba(10, 10, 20, 0.55);
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
+    opacity: 0;
+    transition: opacity 0.22s var(--ease-out-expo);
+  }
+  .modal-overlay[hidden] { display: none; }
+  .modal-overlay.is-open { opacity: 1; }
+  .modal-card {
+    width: min(92vw, 22rem);
+    background: var(--surface-glass2);
+    border: 1px solid var(--border-glass);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-soft);
+    padding: 1.5rem 1.4rem 1.2rem;
+    text-align: center;
+    transform: translateY(10px) scale(0.97);
+    transition: transform 0.25s var(--ease-out-expo);
+  }
+  .modal-overlay.is-open .modal-card {
+    transform: translateY(0) scale(1);
+  }
+  .modal-icon {
+    width: 3rem;
+    height: 3rem;
+    margin: 0 auto 0.85rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 50%;
+    font-size: 1.5rem;
+    color: #f9c74f;
+    background: rgba(249, 199, 79, 0.12);
+    border: 1px solid rgba(249, 199, 79, 0.28);
+  }
+  .modal-title {
+    font-size: 1rem;
+    font-weight: 800;
+    color: var(--text-primary);
+    margin-bottom: 0.5rem;
+  }
+  .modal-desc {
+    font-size: 0.8rem;
+    color: var(--text-secondary);
+    line-height: 1.6;
+    margin-bottom: 1.15rem;
+  }
+  .modal-actions {
+    display: flex;
+    gap: 0.6rem;
+  }
+  .modal-btn {
+    flex: 1;
+    padding: 0.6rem 0;
+    border-radius: var(--radius-sm);
+    font-family: var(--sans);
+    font-size: 0.8rem;
+    font-weight: 700;
+    cursor: pointer;
+    border: 1px solid var(--border-glass);
+    background: rgba(255, 255, 255, 0.05);
+    color: var(--text-secondary);
+    transition: all 0.2s var(--ease-out-expo);
+  }
+  .modal-btn:hover {
+    color: var(--text-primary);
+    border-color: rgba(99, 102, 241, 0.36);
+    background: rgba(99, 102, 241, 0.1);
+  }
+  .modal-btn-ok {
+    border: none;
+    background: var(--accent-brand-gradient);
+    color: #fff;
+    box-shadow: 0 4px 16px rgba(108, 92, 231, 0.32);
+  }
+  .modal-btn-ok:hover {
+    background: var(--accent-brand-gradient);
+    color: #fff;
+    filter: brightness(1.08);
+  }
 </style>
 </head>
 <body>
@@ -608,9 +694,8 @@
       <div class="model-discovery" aria-label="模型发现">
         <div class="model-discovery-row">
           <button type="button" class="model-fetch-btn" id="modelFetchBtn">获取模型列表</button>
-          <button type="button" class="model-fetch-btn" id="modelContextBtn" aria-describedby="modelContextWarning">获取模型上下文</button>
+          <button type="button" class="model-fetch-btn" id="modelContextBtn">获取上下文长度</button>
           <span class="model-discovery-status" id="modelDiscoveryStatus"></span>
-          <div class="model-context-warning" id="modelContextWarning" role="note">⚠ 获取模型上下文会向模型 API 发送探测请求，可能消耗 API 额度。</div>
         </div>
         <div id="modelDiscoveryList" class="model-list"></div>
       </div>
@@ -809,7 +894,50 @@
     };
   }
 
+  function askConfirmDialog(title, message) {
+    return new Promise(function (resolve) {
+      const overlay = document.getElementById('confirmOverlay');
+      const titleEl = document.getElementById('confirmTitle');
+      const descEl = document.getElementById('confirmDesc');
+      const okBtn = document.getElementById('confirmOk');
+      const cancelBtn = document.getElementById('confirmCancel');
+      if (!overlay || !okBtn || !cancelBtn) { resolve(false); return; }
+
+      titleEl.textContent = title;
+      descEl.textContent = message;
+      overlay.hidden = false;
+      requestAnimationFrame(function () {
+        requestAnimationFrame(function () { overlay.classList.add('is-open'); });
+      });
+      okBtn.focus();
+
+      function cleanup(result) {
+        overlay.classList.remove('is-open');
+        okBtn.removeEventListener('click', onOk);
+        cancelBtn.removeEventListener('click', onCancel);
+        overlay.removeEventListener('click', onOverlay);
+        document.removeEventListener('keydown', onKey);
+        setTimeout(function () { overlay.hidden = true; }, 230);
+        resolve(result);
+      }
+      function onOk() { cleanup(true); }
+      function onCancel() { cleanup(false); }
+      function onOverlay(e) { if (e.target === overlay) cleanup(false); }
+      function onKey(e) { if (e.key === 'Escape') cleanup(false); }
+
+      okBtn.addEventListener('click', onOk);
+      cancelBtn.addEventListener('click', onCancel);
+      overlay.addEventListener('click', onOverlay);
+      document.addEventListener('keydown', onKey);
+    });
+  }
+
   async function probeCurrentModelContext() {
+    const confirmed = await askConfirmDialog(
+      '获取上下文长度',
+      '获取上下文长度会向模型 API 发送探测请求，可能消耗 API 额度。是否继续？'
+    );
+    if (!confirmed) return;
     const model = currentModelMetadata();
     const modelId = String(model.model || model.id || (modelName && modelName.value) || '').trim();
     if (!baseUrl.value.trim() || !apiKey.value.trim() || !modelId) {
@@ -835,10 +963,10 @@
       const merged = Object.assign({}, model, result.model || {});
       applyDiscoveredModel(merged);
       setModelDiscoveryStatus(result.model && result.model.probe_succeeded
-        ? '已获取模型上下文；探测请求可能已消耗 API 额度。'
+        ? '已获取上下文长度；探测请求可能已消耗 API 额度。'
         : '未从 API 错误消息取得真实上下文窗口，已保留列表/默认窗口；探测请求可能已消耗 API 额度。');
     } catch (err) {
-      setModelDiscoveryStatus('获取模型上下文失败：' + String(err.message || err));
+      setModelDiscoveryStatus('获取上下文长度失败：' + String(err.message || err));
     } finally {
       if (modelContextBtn) modelContextBtn.disabled = false;
     }
@@ -871,7 +999,7 @@
           const model = JSON.parse(row.getAttribute('data-model') || '{}');
           selectedDiscoveredModelId = String(model.id || model.model || '').trim();
           applyDiscoveredModel(model);
-          setModelDiscoveryStatus('已选择模型；如需探测真实上下文窗口，请点击“获取模型上下文”。');
+          setModelDiscoveryStatus('已选择模型；如需探测真实上下文窗口，请点击“获取上下文长度”。');
         } catch (err) {}
       });
     });
@@ -1086,5 +1214,17 @@
   }
 </script>
 <script src="/static/setup_i18n.js"></script>
+
+<div class="modal-overlay" id="confirmOverlay" hidden>
+  <div class="modal-card" role="alertdialog" aria-modal="true" aria-labelledby="confirmTitle" aria-describedby="confirmDesc">
+    <div class="modal-icon" aria-hidden="true">⚠</div>
+    <div class="modal-title" id="confirmTitle">获取上下文长度</div>
+    <div class="modal-desc" id="confirmDesc"></div>
+    <div class="modal-actions">
+      <button type="button" class="modal-btn" id="confirmCancel">取消</button>
+      <button type="button" class="modal-btn modal-btn-ok" id="confirmOk">确定</button>
+    </div>
+  </div>
+</div>
 </body>
 </html>
