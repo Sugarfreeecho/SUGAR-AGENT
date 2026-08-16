@@ -5714,19 +5714,20 @@ class SessionManager:
         text = str((event or {}).get("content") or "").strip()
         if not text:
             return True
-        if "工具执行异常" in text:
-            return False
-        failure_markers = (
-            "任务已由用户中断",
-            "调用失败",
-            "请求失败",
-            "执行步骤达到最大迭代",
-            "检测到连续重复行为",
-            "No result",
-            "工具执行异常",
-            "missing final",
-        )
-        return any(marker in text for marker in failure_markers)
+        # final 事件的 content 是模型最终回复的完整正文，不能用泛化关键词做子串匹配：
+        # 正常回答中复述/解释「调用失败」「请求失败」「No result」等字样会被误判为失败。
+        # 这里只精确/前缀匹配 agent_loop 真实生成的终止或失败文案。
+        if text == "No result":
+            return True
+        if text.startswith("任务已由用户中断"):
+            return True
+        if text.startswith("检测到连续重复行为"):
+            return True
+        if text.startswith("本轮执行步骤已达到最大迭代次数"):
+            return True
+        if text.startswith("LLM 调用失败"):
+            return True
+        return False
 
     def mark_session_unread_result(self, session_id: str, status: str = "success") -> None:
         sid = self._normalize_session_id(session_id)
