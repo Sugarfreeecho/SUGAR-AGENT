@@ -1174,13 +1174,18 @@ def _annotate_local_media_paths(value: str, *, mode: str) -> str:
     delegate inspection to a multimodal subagent via the task tool.
     """
     if mode == "vision":
-        labels = {
-            "image": "[图片附件（图片已随消息附上，请直接查看描述，无需读取文件）]",
-            "audio": "[音频附件（音频已随消息附上，请直接收听，无需读取文件）]",
-            "video": "[视频附件（视频已随消息附上，请直接观看，无需读取文件）]",
+        # Aligned with mainstream agent UIs (opencode/hermes): the local path
+        # is replaced by a placeholder in the text part; the media itself is
+        # already attached as image_url/audio/video parts.
+        replacements = {
+            "image": "[图片附件]",
+            "audio": "[音频附件]",
+            "video": "[视频附件]",
         }
     else:
-        labels = {
+        # Text-only fallback: the path must stay so the model can delegate the
+        # media inspection to a multimodal subagent via the task tool.
+        replacements = {
             "image": "[图片附件（如需要识图请委派给多模态子代理）]",
             "audio": "[音频附件（如需要播放请委派给多模态子代理）]",
             "video": "[视频附件（如需要播放请委派给多模态子代理）]",
@@ -1192,7 +1197,9 @@ def _annotate_local_media_paths(value: str, *, mode: str) -> str:
         kind = _media_kind_for_path(p)
         if not kind:
             return match.group(0)
-        label = labels.get(kind, "")
+        label = replacements.get(kind, "")
+        if mode == "vision":
+            return label
         return label + match.group(0)
 
     return _ANNOTATE_MEDIA_PATH_RE.sub(_repl, str(value or ""))

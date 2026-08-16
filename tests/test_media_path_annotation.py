@@ -17,7 +17,7 @@ from agent_openai import (  # noqa: E402
 )
 
 IMG = r"D:/AI/AI Agent/MyAgent Developer/workspace/uploads/chat/test_image.png"
-VISION_LABEL = "[图片附件（图片已随消息附上，请直接查看描述，无需读取文件）]"
+VISION_PLACEHOLDER = "[图片附件]"
 DELEGATE_LABEL = "[图片附件（如需要识图请委派给多模态子代理）]"
 
 
@@ -38,10 +38,10 @@ class _TextOnlyClient:
     _myagent_input_modalities = ["text"]
 
 
-def test_annotate_vision_mode_keeps_path():
+def test_annotate_vision_mode_replaces_path_with_placeholder():
     out = _annotate_local_media_paths('"%s"这是啥' % IMG, mode="vision")
-    assert VISION_LABEL in out
-    assert IMG in out  # 路径保留
+    assert VISION_PLACEHOLDER in out
+    assert IMG not in out  # 路径不显示（与主流方案对齐）
 
 
 def test_annotate_text_only_mode_uses_delegate_label():
@@ -57,11 +57,12 @@ def test_text_only_media_part_has_label_and_quoted_path():
     assert '"%s"' % IMG in part["text"]
 
 
-def test_multimodal_serialization_has_label_and_image_url():
+def test_multimodal_serialization_has_placeholder_and_image_url():
     params = _messages_to_params_for_client(_VisionClient(), [_image_message()])
     user = [p for p in params if p.get("role") == "user"][0]
     texts = [p.get("text", "") for p in user["content"] if p.get("type") == "text"]
-    assert any(VISION_LABEL in t and IMG in t for t in texts)
+    assert any(VISION_PLACEHOLDER in t for t in texts)
+    assert all(IMG not in t for t in texts)  # 路径不进入模型文本
     assert any(p.get("type") == "image_url" for p in user["content"])
 
 
