@@ -12,8 +12,8 @@
     fails, the script falls back to an AUMID of an already installed app
     (PowerShell, Windows Terminal, ...) so the toast still shows.
 
-    Clicking the toast (or its action button) opens the WebUI through the
-    sugaragent:// URL protocol.  The protocol delegates directly to the
+    Clicking the toast opens the WebUI through the sugaragent:// URL protocol.
+    The protocol delegates directly to the
     windowless Windows URL handler so no console window is created.
 #>
 
@@ -28,14 +28,6 @@ $Message = if ($env:SUGARAGENT_NOTIFY_MESSAGE) {
 } else {
     "SugarAgent is running in the background; tasks will not be interrupted."
 }
-$ActionLabel = if ($env:SUGARAGENT_NOTIFY_ACTION) {
-    $env:SUGARAGENT_NOTIFY_ACTION
-} else {
-    # Keep the script source ASCII-safe for Windows PowerShell 5.1, which reads
-    # UTF-8 files without a BOM using the legacy system code page.
-    ([char]0x6253).ToString() + ([char]0x5F00).ToString() + " SugarAgent"
-}
-
 $SugarAgentAumid = "SugarAgent.MyAgent.UI"
 $AumidRegistryPath = "HKCU:\Software\Classes\AppUserModelId\$SugarAgentAumid"
 $TrayIconPath = Join-Path $Root "app\assets\sugar_tray.ico"
@@ -118,7 +110,6 @@ function Get-AvailableAppIds {
 function New-SugarAgentToastXml {
     $safeTitle = [System.Security.SecurityElement]::Escape($Title)
     $safeMessage = [System.Security.SecurityElement]::Escape($Message)
-    $safeActionLabel = [System.Security.SecurityElement]::Escape($ActionLabel)
     $xml = New-Object Windows.Data.Xml.Dom.XmlDocument
     $xml.LoadXml(@"
 <toast activationType="protocol" launch="$OpenUiLaunchUri">
@@ -128,9 +119,6 @@ function New-SugarAgentToastXml {
       <text id="2">$safeMessage</text>
     </binding>
   </visual>
-  <actions>
-    <action activationType="protocol" arguments="$OpenUiLaunchUri" content="$safeActionLabel"/>
-  </actions>
 </toast>
 "@)
     return $xml

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import ctypes
 import argparse
+import json
 import os
 import socket
 import subprocess
@@ -10,6 +11,8 @@ import threading
 import time
 import webbrowser
 from pathlib import Path
+from urllib import error as urllib_error
+from urllib import request as urllib_request
 
 import win32api
 import win32con
@@ -19,6 +22,7 @@ import winerror
 import dotenv
 
 from python_runtime import configure_agent_python_environment, preferred_python
+from desktop_notify import show_desktop_notification
 
 
 APP_NAME = "Agent \u667a\u80fd\u4f1a\u8bdd\u52a9\u624b"
@@ -66,17 +70,7 @@ BASE_URL = f"http://{HOST}:{PORT}"
 WM_TRAY = win32con.WM_USER + 20
 WM_RESTORE_TRAY = win32con.WM_USER + 21
 WM_RESTART_AGENT = win32con.WM_USER + 22
-WM_UI_CLOSED_NOTIFY = win32con.WM_USER + 23
 TASKBAR_CREATED = win32gui.RegisterWindowMessage("TaskbarCreated")
-
-NIF_INFO = 0x00000010
-NIIF_INFO = 0x00000001
-
-NOTIFY_UI_CLOSED_TITLE = "SugarAgent"
-NOTIFY_UI_CLOSED_MESSAGE = (
-    "SugarAgent 正在后台运行，任务不会中断。"
-    "可从系统托盘重新打开 WebUI。"
-)
 
 MENU_OPEN_WEBUI = 1001
 MENU_OPEN_ENV = 1002
@@ -156,6 +150,52 @@ def _open_url_in_browser(path: str = "/", refresh: bool = True) -> None:
         os.startfile(url)
     except OSError:
         webbrowser.open(url, new=0, autoraise=True)
+
+
+def _request_existing_ui_activation(path: str = "/") -> bool:
+    """Ask a live WebUI page to foreground itself instead of opening a duplicate."""
+
+    payload = json.dumps({"path": path}).encode("utf-8")
+    req = urllib_request.Request(
+        f"{BASE_URL}/api/ui-activation",
+        data=payload,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib_request.urlopen(req, timeout=0.8) as response:
+            data = json.loads(response.read().decode("utf-8"))
+        return bool(data.get("reused"))
+    except (OSError, ValueError, urllib_error.URLError):
+        return False
+
+
+def _focus_existing_webui_window() -> bool:
+    """Best-effort foregrounding for a browser whose active tab is SugarAgent."""
+
+    matches: list[int] = []
+
+    def collect(hwnd, _extra):
+        try:
+            title = str(win32gui.GetWindowText(hwnd) or "")
+            if win32gui.IsWindowVisible(hwnd) and (
+                "General Agent" in title or "SugarAgent" in title
+            ):
+                matches.append(int(hwnd))
+        except win32gui.error:
+            return True
+        return True
+
+    try:
+        win32gui.EnumWindows(collect, None)
+        if not matches:
+            return False
+        hwnd = matches[0]
+        win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
+        win32gui.SetForegroundWindow(hwnd)
+        return True
+    except win32gui.error:
+        return False
 
 
 def _find_existing_tray_window() -> int:
@@ -305,8 +345,8 @@ class TrayLauncher:
     def run(self) -> int:
         if self.already_running:
             _append_log(MSG_RUNNING)
-            _notify_existing_instance(open_browser=True)
-            _open_url_in_browser("/", refresh=True)
+            if not _notify_existing_instance(open_browser=True):
+                _open_url_in_browser("/", refresh=False)
             return 0
         if not self._check_files():
             return 1
@@ -344,7 +384,6 @@ class TrayLauncher:
             WM_TRAY: self._on_tray,
             WM_RESTORE_TRAY: self._on_restore_tray,
             WM_RESTART_AGENT: self._on_external_restart,
-            WM_UI_CLOSED_NOTIFY: self._on_ui_closed_notify,
             TASKBAR_CREATED: self._on_taskbar_created,
             win32con.WM_COMMAND: self._on_command,
             win32con.WM_DESTROY: self._on_destroy,
@@ -543,34 +582,6 @@ class TrayLauncher:
             _append_log(f"Tray restore error: {exc}")
         return True
 
-    def _on_ui_closed_notify(self, hwnd, msg, wparam, lparam):
-        try:
-            self._show_balloon(NOTIFY_UI_CLOSED_TITLE, NOTIFY_UI_CLOSED_MESSAGE)
-        except Exception as exc:
-            _append_log(f"UI closed notification error: {exc}")
-            try:
-                self._show_message(NOTIFY_UI_CLOSED_MESSAGE)
-            except Exception as message_exc:
-                _append_log(f"UI closed fallback message error: {message_exc}")
-        return True
-
-    def _show_balloon(self, title: str, message: str) -> None:
-        nid = (
-            self.hwnd,
-            0,
-            NIF_INFO,
-            0,
-            self.hicon or 0,
-            APP_NAME,
-            0,
-            0,
-            message,
-            5000,
-            title,
-            NIIF_INFO,
-        )
-        win32gui.Shell_NotifyIcon(win32gui.NIM_MODIFY, nid)
-
     def _on_taskbar_created(self, hwnd, msg, wparam, lparam):
         try:
             self._add_tray_icon()
@@ -646,6 +657,9 @@ class TrayLauncher:
             self._show_console()
             print(MSG_NOT_READY)
             return
+        if path == "/" and _request_existing_ui_activation(path):
+            _focus_existing_webui_window()
+            return
         url = f"{BASE_URL}{path}"
         if refresh:
             url = f"{url}{'&' if '?' in url else '?'}_={int(time.time())}"
@@ -701,8 +715,13 @@ class TrayLauncher:
         return result == win32con.IDYES
 
     def _show_message(self, message: str, *, error: bool = False) -> None:
-        icon = win32con.MB_ICONERROR if error else win32con.MB_ICONINFORMATION
-        win32gui.MessageBox(self.hwnd, message, APP_NAME, win32con.MB_OK | icon)
+        title = "SugarAgent 错误" if error else "SugarAgent"
+        threading.Thread(
+            target=show_desktop_notification,
+            args=(title, message),
+            name="tray-system-notification",
+            daemon=True,
+        ).start()
 
     def _claim_lifecycle_action(self) -> bool:
         with self._lifecycle_lock:

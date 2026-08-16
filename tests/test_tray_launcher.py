@@ -177,6 +177,61 @@ def test_menu_dispatches_returned_command_directly(monkeypatch):
     assert selected == [tray_launcher.MENU_RESTART]
 
 
+def test_open_main_ui_reuses_live_frontend_page(monkeypatch):
+    launcher = make_launcher()
+    launcher._is_listening = lambda: True
+    opened = []
+    focused = []
+    launcher._open_named_browser_window = lambda url: opened.append(url)
+    monkeypatch.setattr(tray_launcher, "_request_existing_ui_activation", lambda path: path == "/")
+    monkeypatch.setattr(tray_launcher, "_focus_existing_webui_window", lambda: focused.append(True) or True)
+
+    launcher._open_url("/", refresh=True)
+
+    assert focused == [True]
+    assert opened == []
+
+
+def test_open_main_ui_falls_back_to_browser_without_live_page(monkeypatch):
+    launcher = make_launcher()
+    launcher._is_listening = lambda: True
+    opened = []
+    launcher._open_named_browser_window = lambda url: opened.append(url)
+    monkeypatch.setattr(tray_launcher, "_request_existing_ui_activation", lambda _path: False)
+
+    launcher._open_url("/", refresh=False)
+
+    assert opened == [tray_launcher.BASE_URL + "/"]
+
+
+def test_tray_information_is_delivered_as_system_notification(monkeypatch):
+    launcher = make_launcher()
+    delivered = []
+
+    class ImmediateThread:
+        def __init__(self, *, target, args, **_kwargs):
+            self.target = target
+            self.args = args
+
+        def start(self):
+            self.target(*self.args)
+
+    monkeypatch.setattr(tray_launcher.threading, "Thread", ImmediateThread)
+    monkeypatch.setattr(
+        tray_launcher,
+        "show_desktop_notification",
+        lambda title, message: delivered.append((title, message)),
+    )
+
+    launcher._show_message("重启完成")
+    launcher._show_message("重启失败", error=True)
+
+    assert delivered == [
+        ("SugarAgent", "重启完成"),
+        ("SugarAgent 错误", "重启失败"),
+    ]
+
+
 def test_real_restart_replaces_process_and_restores_listener(tmp_path, monkeypatch):
     with socket.socket() as probe:
         probe.bind((tray_launcher.HOST, 0))

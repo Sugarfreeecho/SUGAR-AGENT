@@ -35,6 +35,26 @@ function syncPermissionControlVisibility(status) {
     return enabled;
 }
 
+function showGlobalWarningBanner(message, options) {
+    options = options || {};
+    var host = document.querySelector('.chat-stage') || document.querySelector('.main-center') || document.body;
+    var notice = host.querySelector('.permission-global-warning-toast[data-global-warning-banner="true"]');
+    if (!notice) {
+        notice = document.createElement('div');
+        notice.className = 'permission-global-warning-toast';
+        notice.dataset.globalWarningBanner = 'true';
+        notice.setAttribute('role', 'alert');
+        notice.setAttribute('aria-live', 'assertive');
+        host.appendChild(notice);
+    }
+    notice.textContent = String(message || '操作失败');
+    if (notice._dismissTimer) window.clearTimeout(notice._dismissTimer);
+    notice._dismissTimer = window.setTimeout(function () {
+        notice.remove();
+    }, Math.max(1000, Number(options.durationMs || 9000)));
+    return notice;
+}
+
 function maybeShowGlobalFullAccessNotice(status) {
     if (!status || status.mode !== 'full_access' || status.security_enabled === false) return;
     var key = 'myagent-full-access-notice:' + String(status.updated_at || 'legacy');
@@ -290,11 +310,9 @@ async function promptPendingMcpRegistrations(rows) {
             try {
                 changed = (await confirmMcpRegistration(item)) || changed;
             } catch (error) {
-                showUiAlert({
-                    title: 'MCP 注册失败',
-                    message: String(error && error.message ? error.message : error),
-                    confirmText: '知道了',
-                });
+                showGlobalWarningBanner(
+                    'MCP 注册失败：' + String(error && error.message ? error.message : error)
+                );
             }
         }
     } finally {
@@ -311,7 +329,9 @@ async function setExtensionTrust(item, trust) {
             if (statusEl && confirmed) statusEl.textContent = 'MCP 已注册并连接；工具调用继续正常审批。';
             if (confirmed) await refreshSecurityExtensions();
         } catch (error) {
-            if (statusEl) statusEl.textContent = 'MCP 注册失败：' + String(error && error.message ? error.message : error);
+            var mcpError = String(error && error.message ? error.message : error);
+            if (statusEl) statusEl.textContent = 'MCP 注册失败：' + mcpError;
+            showGlobalWarningBanner('MCP 注册失败：' + mcpError);
         }
         return;
     }
@@ -340,7 +360,9 @@ async function setExtensionTrust(item, trust) {
         }
         await refreshSecurityExtensions();
     } catch (error) {
-        if (statusEl) statusEl.textContent = '更新扩展注册失败：' + String(error && error.message ? error.message : error);
+        var extensionError = String(error && error.message ? error.message : error);
+        if (statusEl) statusEl.textContent = '更新扩展注册失败：' + extensionError;
+        showGlobalWarningBanner('扩展注册失败：' + extensionError);
     }
 }
 

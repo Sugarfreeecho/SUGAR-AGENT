@@ -44,7 +44,7 @@ General Agent 是一个本地运行的 AI Agent 开发与使用平台。系统�
 5. `app/main.py` 调用 `refresh_executor_client_from_env()` 刷新 LLM 配置。
 6. 服务监听后自动打开浏览器，除非 `OPEN_BROWSER=0/false/no/off`。
 
-Windows、Ubuntu 和 macOS 的托盘/菜单栏均提供 WebUI、设置、MCP、日志、重启、更新和退出入口。重启与更新操作默认隐藏，由 `MYAGENT_TRAY_SHOW_UPDATE_RESTART` 启用。更新操作由独立进程执行 `git pull --ff-only`，仅在 `app/requirements.txt` 变化时同步 Python 依赖，完成后通过对应生命周期后端恢复服务。更新不得强制覆盖本地修改；失败时必须恢复启动并记录到 `logs/agent_update.log`。
+Windows、Ubuntu 和 macOS 的常驻图标（Windows 任务栏右下角 / macOS 菜单栏 / Ubuntu 顶部栏）均提供 WebUI、设置、MCP、日志、重启、更新和退出入口。重启与更新操作默认隐藏，由 `MYAGENT_TRAY_SHOW_UPDATE_RESTART` 启用。更新操作由独立进程执行 `git pull --ff-only`，仅在 `app/requirements.txt` 变化时同步 Python 依赖，完成后通过对应生命周期后端恢复服务。更新不得强制覆盖本地修改；失败时必须恢复启动并记录到 `logs/agent_update.log`。
 
 WebUI 必须继续只监听 `127.0.0.1:8192`。Ubuntu Server 的远程访问通过 SSH 本地端口转发完成，不得因平台适配默认开放局域网或公网监听。
 

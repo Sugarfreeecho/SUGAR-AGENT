@@ -29,7 +29,7 @@ SugarAgent 是一个**本地运行**的 AI Agent 开发与使用平台。它通�
 | 🛡️ **安全边界** | 工作区路径限制、Shell 危险命令拦截、SSRF 防护、敏感信息脱敏、工具审批、**网络出口控制（egress）** |
 | 🖥️ **前端体验** | 深色/紫色主题、执行轨迹 V2（可折叠/展开高度）、工作区媒体渲染（GIF/图片/视频/音频）、会话自动恢复 |
 | 💾 **会话持久化** | 完整会话状态落盘（元数据、事件流、LLM 历史、对话历史、Todo 计划） |
-| 🖥️ **系统托盘** | Windows Win32、Ubuntu Ayatana 和 macOS 原生菜单栏集成 |
+| 🖥️ **常驻图标** | Windows 任务栏右下角 / macOS 顶部菜单栏 / Ubuntu 顶部栏图标，集成开关菜单与更新/重启 |
 
 ### 工具权限与应用层限制
 
@@ -260,11 +260,11 @@ Ubuntu Server 使用 `bash scripts/install_unix.sh --mode server` 安装，并�
 SSH 隧道访问 WebUI；macOS 使用 LaunchAgent 和原生菜单栏。完整安装、运维、
 卸载与故障排查见 [Linux 与 macOS 安装和运维](docs/cross_platform.md)。
 
-### 5. 托盘启动器（可选）
+### 5. 常驻图标启动器（可选）
 
-`RUN.bat` 默认通过 `tray_launcher.py` 启动，提供 Windows 系统托盘集成：
+`RUN.bat` 默认通过 `tray_launcher.py` 启动，提供系统常驻图标（Windows 任务栏右下角 / macOS 菜单栏 / Ubuntu 顶部栏）集成：
 
-- 🖱️ 右键托盘图标：打开 WebUI / 高级设置 / MCP 配置 / 查看日志 / 重启 / 更新 / 退出
+- 🖱️ 右键常驻图标：打开 WebUI / 高级设置 / MCP 配置 / 查看日志 / 重启 / 更新 / 退出
 - 🔄 “重启 Agent”会停止并重新拉起后端；“更新 Agent”会执行安全的 Git 快进更新，按需同步 Python 依赖，然后自动重启
 - 🛡️ 更新不会强制覆盖本地修改；更新冲突或失败时会保留现场、恢复启动 Agent，并将详情写入 `logs/agent_update.log`
 - 📋 终端窗口自动隐藏，减少桌面干扰
@@ -272,7 +272,7 @@ SSH 隧道访问 WebUI；macOS 使用 LaunchAgent 和原生菜单栏。完整安
 
 Ubuntu Desktop 使用 Ayatana AppIndicator，macOS 使用原生菜单栏；两者由
 `platform_tray.py` 调用 systemd/launchd 生命周期后端，菜单能力与 Windows
-保持一致。Headless Ubuntu 不启动托盘，改用 `scripts/agentctl` 管理服务。
+保持一致。Headless Ubuntu 不启动常驻图标，改用 `scripts/agentctl` 管理服务。
 
 ---
 

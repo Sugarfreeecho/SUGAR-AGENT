@@ -71,9 +71,9 @@ import execution_metrics
 from path_picker_util import pick_native_path
 
 try:
-    from .desktop_notify import show_desktop_notification, show_ui_closed_notification
+    from .desktop_notify import show_desktop_notification
 except ImportError:
-    from desktop_notify import show_desktop_notification, show_ui_closed_notification
+    from desktop_notify import show_desktop_notification
 
 _PATH_PICKER_JS_PATH = Path(__file__).resolve().parent / "templates" / "static" / "myagent_path_picker.js"
 _SETUP_I18N_JS_PATH = Path(__file__).resolve().parent / "templates" / "static" / "setup_i18n.js"
@@ -225,6 +225,9 @@ _UI_CLOSED_NOTIFY_GRACE_SEC = max(
 _UI_PRESENCE_TOKEN_TTL_SEC = max(90.0, float(os.getenv("MYAGENT_UI_PRESENCE_TTL_SEC", "300")))
 _ui_presence_lock = threading.Lock()
 _ui_presence_tokens: dict[str, dict[str, Any]] = {}
+_ui_activation_seq = 0
+_ui_activation_path = "/"
+_last_ui_session_id = ""
 _ui_closed_notify_task: Optional[asyncio.Task] = None
 _ui_attention_notify_lock = threading.Lock()
 _ui_attention_notify_reasons: dict[str, set[str]] = {}
@@ -2914,6 +2917,8 @@ async def create_session():
         "last_activity_at": (metadata or {}).get("updated_at") or (metadata or {}).get("created_at"),
         "archived": bool((metadata or {}).get("archived", False)),
         "pinned": bool((metadata or {}).get("pinned", False)),
+        "todo": bool((metadata or {}).get("todo", False)),
+        "goal_review_pending": bool((metadata or {}).get("goal_review_pending", False)),
         "pinned_at": (metadata or {}).get("pinned_at") if (metadata or {}).get("pinned") else None,
         "last_user_preview": "",
         "stream_active": False,
@@ -4060,6 +4065,107 @@ def _ui_presence_has_active() -> bool:
     return any(bool(entry.get("active")) for entry in _ui_presence_tokens.values())
 
 
+def _ui_presence_has_reusable(now: Optional[float] = None) -> bool:
+    """Return whether a page heartbeat is fresh enough for tray activation."""
+
+    stamp = time.time() if now is None else float(now)
+    return any(
+        stamp - float(entry.get("seen_at") or 0) <= 20.0
+        for entry in _ui_presence_tokens.values()
+    )
+
+
+def _notification_context(session_id: str, status: str, pending_count: int = 0) -> tuple[str, str]:
+    """Build the stable status/session/question layout used by system notices."""
+
+    sid = str(session_id or "").strip()
+    try:
+        summary = session_manager.get_session_summary(sid) if sid else None
+    except Exception:
+        summary = None
+    summary = summary if isinstance(summary, dict) else {}
+    name = str(summary.get("name") or "未命名会话").strip() or "未命名会话"
+    preview = str(summary.get("last_user_preview") or "").strip() or "暂无"
+    labels = {
+        "completed": "已完成",
+        "failed": "失败",
+        "interrupted": "已中断",
+        "pending": "待处理",
+        "running": "后台运行中",
+        "idle": "后台待命",
+    }
+    label = labels.get(str(status or ""), str(status or "后台待命"))
+    if status == "pending" and pending_count > 0:
+        label = f"{label}（{pending_count} 项）"
+    return "SugarAgent", f"状态：{label}\n会话：{name}\n最近问题：{preview}"
+
+
+def _runtime_status_payload() -> dict[str, Any]:
+    """Return a lightweight UI/tray status without materializing chat history."""
+
+    try:
+        with session_manager._lock:
+            sessions = [
+                dict(row)
+                for row in session_manager.index
+                if isinstance(row, dict) and not row.get("archived")
+            ]
+    except Exception:
+        sessions = []
+    active_count = 0
+    for row in sessions:
+        sid = str((row or {}).get("id") or "").strip()
+        if not sid:
+            continue
+        try:
+            if _session_run_state_fields_light(sid).get("run_active"):
+                active_count += 1
+        except Exception:
+            logger.debug("runtime status read failed for session %s", sid, exc_info=True)
+    if active_count:
+        status = "busy"
+    else:
+        # Alert: CPU severe pressure, or any non-archived session whose latest
+        # run ended in a failed/interrupted state.
+        alert = False
+        try:
+            from cpu_pressure import snapshot as cpu_snapshot
+
+            alert = cpu_snapshot().mode == "severe"
+        except Exception:
+            logger.debug("runtime status cpu probe failed", exc_info=True)
+        if not alert:
+            try:
+                from runtime_observability import snapshot as run_snapshot
+
+                for row in sessions:
+                    sid = str((row or {}).get("id") or "").strip()
+                    if not sid:
+                        continue
+                    try:
+                        data = run_snapshot(sid)
+                        latest = (data.get("runs") or [None])[-1]
+                    except Exception:
+                        latest = None
+                    if latest and str(latest.get("status") or "") in {"failed", "interrupted"}:
+                        alert = True
+                        break
+            except Exception:
+                logger.debug("runtime status run-probe failed", exc_info=True)
+        status = "alert" if alert else "online"
+
+    with _ui_presence_lock:
+        activation_seq = int(_ui_activation_seq)
+        activation_path = str(_ui_activation_path or "/")
+    return {
+        "ok": True,
+        "status": status,
+        "active_run_count": active_count,
+        "activation_seq": activation_seq,
+        "activation_path": activation_path,
+    }
+
+
 def _cancel_pending_ui_closed_notify() -> None:
     global _ui_closed_notify_task
     task = _ui_closed_notify_task
@@ -4117,35 +4223,34 @@ async def _delayed_ui_attention_notify() -> None:
             if _ui_presence_has_active():
                 return
 
-        terminal_messages = {
-            "completed": "对话已完成",
-            "failed": "对话已结束（失败）",
-            "interrupted": "对话已中断",
-        }
-        terminal_seen: set[str] = set()
-        pending_total = 0
+        notifications: list[tuple[str, str]] = []
         for sid, reasons in pending.items():
+            pending_total = 0
             if "pending" in reasons:
                 pending_total += await run_in_threadpool(
                     _session_pending_human_count, sid
                 )
-            for reason in terminal_messages:
-                if reason in reasons:
-                    terminal_seen.add(reason)
-
-        parts: list[str] = []
-        for reason in terminal_messages:
-            if reason in terminal_seen:
-                parts.append(terminal_messages[reason])
-        if pending_total > 0:
-            parts.append(f"有 {pending_total} 项待处理事项")
-        if not parts:
+            if pending_total > 0:
+                status = "pending"
+            elif "failed" in reasons:
+                status = "failed"
+            elif "interrupted" in reasons:
+                status = "interrupted"
+            elif "completed" in reasons:
+                status = "completed"
+            else:
+                continue
+            notifications.append(
+                await run_in_threadpool(
+                    _notification_context, sid, status, pending_total
+                )
+            )
+        if not notifications:
             return
         global _last_ui_attention_notify_at
         _last_ui_attention_notify_at = time.time()
-        await run_in_threadpool(
-            show_desktop_notification, "SugarAgent", "；".join(parts)
-        )
+        for title, message in notifications:
+            await run_in_threadpool(show_desktop_notification, title, message)
     except asyncio.CancelledError:
         return
     finally:
@@ -4209,7 +4314,10 @@ async def _schedule_ui_closed_notify() -> None:
             with _ui_presence_lock:
                 if _ui_presence_tokens:
                     return
-            await run_in_threadpool(show_ui_closed_notification)
+            # Page-closed notice is session-agnostic: restore the original
+            # "still running in the background" copy instead of a
+            # status/session/question summary.
+            await run_in_threadpool(show_desktop_notification)
         except asyncio.CancelledError:
             return
         finally:
@@ -4240,14 +4348,24 @@ async def ui_presence(request: Request):
 
     active = bool(data.get("active", True))
     now = time.time()
+    global _last_ui_session_id
+    session_id = str(data.get("session_id") or "").strip()
     with _ui_presence_lock:
+        if session_id:
+            _last_ui_session_id = session_id
         if action == "register":
-            _ui_presence_tokens[token] = {"seen_at": now, "active": active}
+            _ui_presence_tokens[token] = {
+                "seen_at": now,
+                "active": active,
+                "session_id": session_id,
+            }
         elif action == "update":
             entry = _ui_presence_tokens.get(token)
             if entry is not None:
                 entry["seen_at"] = now
                 entry["active"] = active
+                if session_id:
+                    entry["session_id"] = session_id
         else:
             _ui_presence_tokens.pop(token, None)
         _ui_presence_prune(now)
@@ -4268,6 +4386,34 @@ async def ui_presence(request: Request):
     if not has_open_pages:
         await _schedule_ui_closed_notify()
     return JSONResponse(content={"ok": True, "action": "unregister"})
+
+
+@fastapi_app.get("/api/runtime-status")
+async def runtime_status():
+    return JSONResponse(content=await asyncio.to_thread(_runtime_status_payload))
+
+
+@fastapi_app.post("/api/ui-activation")
+async def request_ui_activation(request: Request):
+    """Signal an existing main WebUI page before the tray opens another tab."""
+
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    path = str((data or {}).get("path") or "/").strip()
+    if path != "/":
+        path = "/"
+    now = time.time()
+    global _ui_activation_seq, _ui_activation_path
+    with _ui_presence_lock:
+        _ui_presence_prune(now)
+        reused = _ui_presence_has_reusable(now)
+        if reused:
+            _ui_activation_seq += 1
+            _ui_activation_path = path
+        seq = int(_ui_activation_seq)
+    return JSONResponse(content={"ok": True, "reused": reused, "activation_seq": seq})
 
 
 @fastapi_app.delete("/sessions/{session_id}/steer")
@@ -5883,6 +6029,12 @@ async def pin_session(session_id: str, pinned: bool = Form(...)):
     return JSONResponse(content={"status": "ok"})
 
 
+@fastapi_app.put("/sessions/{session_id}/todo")
+async def todo_session(session_id: str, todo: bool = Form(...)):
+    session_manager.set_session_todo(session_id, todo)
+    return JSONResponse(content={"status": "ok"})
+
+
 @fastapi_app.post("/sessions/{session_id}/unread-result/clear")
 async def clear_session_unread_result(session_id: str):
     session_manager.clear_session_unread_result(session_id)
@@ -6421,6 +6573,8 @@ _ENV_HINTS: dict[str, str] = {
 _NON_SENSITIVE = frozenset({
     "CONTEXT_TOKEN_MODE",
     "CONTEXT_TOKEN_ACCOUNTING_MODE",
+    "OPENAI_FIRST_TOKEN_HEDGE_TIMEOUT_SEC",
+    "OPENAI_FIRST_TOKEN_HEDGE_MAX_RETRIES",
 })
 
 _ENV_PATH_KIND_FILE = frozenset(

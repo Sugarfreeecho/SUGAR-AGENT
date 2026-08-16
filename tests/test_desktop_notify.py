@@ -34,7 +34,7 @@ class _TimedOutProcess:
         self.killed = True
 
 
-def test_windows_toast_passes_unicode_action_through_environment(monkeypatch, tmp_path):
+def test_windows_toast_does_not_add_action_button_environment(monkeypatch, tmp_path):
     script = tmp_path / "notify.ps1"
     script.write_text("exit 0", encoding="ascii")
     process = _SuccessfulProcess()
@@ -49,7 +49,7 @@ def test_windows_toast_passes_unicode_action_through_environment(monkeypatch, tm
     monkeypatch.setattr(desktop_notify.subprocess, "Popen", fake_popen)
 
     assert desktop_notify._notify_windows_toast("SugarAgent", "message") is True
-    assert captured["env"]["SUGARAGENT_NOTIFY_ACTION"] == "打开 SugarAgent"
+    assert "SUGARAGENT_NOTIFY_ACTION" not in captured["env"]
     assert process.wait_timeouts == [20]
 
 
@@ -89,12 +89,12 @@ def test_windows_toast_kills_helper_that_ignores_terminate(monkeypatch, tmp_path
     assert process.wait_timeouts == [20, 2.0, 2.0]
 
 
-def test_powershell_toast_uses_environment_action_label():
+def test_powershell_toast_has_no_action_button():
     source = desktop_notify._UI_CLOSED_TOAST_SCRIPT.read_text(encoding="utf-8")
 
-    assert "$env:SUGARAGENT_NOTIFY_ACTION" in source
-    assert 'content="$safeActionLabel"' in source
-    assert 'content="打开 SugarAgent"' not in source
+    assert "$env:SUGARAGENT_NOTIFY_ACTION" not in source
+    assert "<actions>" not in source
+    assert "<action " not in source
 
 
 def test_toast_protocol_opens_webui_without_console_process():

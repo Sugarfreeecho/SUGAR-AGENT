@@ -65,8 +65,8 @@ The backend serves `app/templates/dist/index.html`. If it is missing, the app sh
 The main chat page reports tab close to the backend with `sendBeacon` in its
 `pagehide` handler. The backend waits a short grace period (default 3s) and then
 asks the native notification layer to show "SugarAgent is still running in the
-background" as a Windows system notification (Action Center toast), with the
-tray balloon and message box as fallbacks. Refreshing or opening another UI tab
+background" as a Windows system notification (Action Center toast), with a
+native message box fallback. Refreshing or opening another UI tab
 inside the grace window cancels the notification. Set
 `MYAGENT_UI_CLOSED_NOTIFY=0` in `app/.env` to disable this behavior.
 
@@ -77,6 +77,6 @@ page reports visibility/focus changes to `/api/ui-presence`, so switching to
 another application or tab cancels the "in use" state and lets the toast fire;
 focusing any WebUI tab again cancels a pending toast.
 
-Clicking a toast (or its "打开 SugarAgent" button) opens the WebUI in the
-default browser via the registered `sugaragent://` URL protocol; the handler is
+Clicking a toast opens the WebUI in the default browser via the registered
+`sugaragent://` URL protocol; the handler is
 `app/open_ui_from_notify.ps1`.

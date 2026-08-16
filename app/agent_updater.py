@@ -135,7 +135,7 @@ def wait_for_launcher_exit(pid: int, timeout_seconds: float = 30.0) -> None:
     try:
         result = ctypes.windll.kernel32.WaitForSingleObject(handle, int(timeout_seconds * 1000))
         if result == WAIT_TIMEOUT:
-            raise TimeoutError("等待旧托盘启动器退出超时")
+            raise TimeoutError("等待旧的常驻图标进程退出超时")
     finally:
         ctypes.windll.kernel32.CloseHandle(handle)
 

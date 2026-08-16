@@ -588,10 +588,10 @@ def _agent_server_port() -> int:
 def _agent_lifecycle_guidance() -> str:
     system_name = platform.system()
     if system_name == "Linux":
-        return "请在 Agent 外部运行 `scripts/agentctl restart`，或使用 Linux 托盘“重启”。"
+        return "请在 Agent 外部运行 `scripts/agentctl restart`，或使用 Ubuntu 顶部栏图标“重启”。"
     if system_name == "Darwin":
         return "请在 Agent 外部运行 `scripts/agentctl restart`，或使用 macOS 菜单栏“重启”。"
-    return "请在 Agent 外部运行 RUN.bat，或使用 Windows 托盘“重启”。"
+    return "请在 Agent 外部运行 RUN.bat，或使用 Windows 任务栏右下角图标“重启”。"
 
 
 def _mentions_number_token(text: str, value: int) -> bool:

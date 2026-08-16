@@ -3,7 +3,7 @@
 
 Browsers cannot reliably run JavaScript after a tab/window is destroyed, so the
 WebUI reports page close through sendBeacon and this module is responsible for
-the actual system-level popup (tray balloon, OS notification or message box).
+the actual system-level popup (OS notification or message box fallback).
 """
 
 from __future__ import annotations
@@ -19,15 +19,23 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 NOTIFY_TITLE = "SugarAgent"
+
+
+def _tray_location_phrase() -> str:
+    """User-facing location of the resident icon for the current OS."""
+
+    system = platform.system()
+    if system == "Darwin":
+        return "macOS 顶部菜单栏"
+    if system == "Linux":
+        return "Ubuntu 顶部栏"
+    return "Windows 任务栏右下角"
+
+
 NOTIFY_MESSAGE = (
     "SugarAgent 正在后台运行，任务不会中断。"
-    "可从系统托盘重新打开 WebUI。"
+    f"可从{_tray_location_phrase()}的 SugarAgent 图标重新打开。"
 )
-NOTIFY_ACTION = "打开 SugarAgent"
-
-# WM_USER + 23; must stay in sync with app/tray_launcher.py.
-WM_UI_CLOSED_NOTIFY = 0x0400 + 23
-
 # Real Windows 10/11 Action Center toast (not a tray balloon).
 _UI_CLOSED_TOAST_SCRIPT = Path(__file__).resolve().parent / "notify_ui_closed.ps1"
 
@@ -48,8 +56,6 @@ def show_desktop_notification(
     if system == "Windows":
         if _notify_windows_toast(title, message):
             return
-        if _notify_windows_tray():
-            return
         _notify_windows_message_box(title, message)
     elif system == "Darwin":
         _notify_macos(title, message)
@@ -63,8 +69,8 @@ def _notify_windows_toast(title: str, message: str) -> bool:
     """Show a system toast in the Windows notification center.
 
     The actual toast is rendered by app/notify_ui_closed.ps1 so it works even
-    after every browser page is gone; tray balloon and message box remain as
-    fallbacks when no interactive Windows session is available.
+    after every browser page is gone; a message box remains as the last fallback
+    when no interactive Windows notification session is available.
     """
 
     if not _UI_CLOSED_TOAST_SCRIPT.is_file():
@@ -75,7 +81,6 @@ def _notify_windows_toast(title: str, message: str) -> bool:
     # Windows PowerShell 5.1 decodes UTF-8 scripts without a BOM using the
     # legacy system code page. Pass localized text through the Unicode Windows
     # environment block so the PowerShell file itself can remain ASCII-safe.
-    env["SUGARAGENT_NOTIFY_ACTION"] = NOTIFY_ACTION
     proc: subprocess.Popen | None = None
     try:
         proc = subprocess.Popen(
@@ -125,24 +130,6 @@ def _terminate_process(proc: subprocess.Popen, timeout: float = 2.0) -> None:
         proc.wait(timeout=timeout)
     except Exception:
         logger.debug("Unable to kill notification helper", exc_info=True)
-
-
-def _notify_windows_tray() -> bool:
-    """Ask the existing Win32 tray launcher to show a balloon notification."""
-
-    try:
-        import win32gui
-    except Exception:
-        return False
-    try:
-        hwnd = win32gui.FindWindow("MyAgentTrayLauncherWindow", None)
-        if not hwnd:
-            return False
-        win32gui.PostMessage(hwnd, WM_UI_CLOSED_NOTIFY, 0, 0)
-        return True
-    except Exception as exc:
-        logger.warning("Unable to notify Windows tray: %s", exc)
-        return False
 
 
 def _notify_windows_message_box(title: str, message: str) -> None:
