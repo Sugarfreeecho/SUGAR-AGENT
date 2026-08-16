@@ -17,7 +17,11 @@ def test_sidebar_runtime_footer_is_present_in_source_markup() -> None:
 def test_sidebar_runtime_status_tracks_session_connectivity() -> None:
     source = (ROOT / "frontend/src/app/modules/session-management.js").read_text(encoding="utf-8")
 
-    assert "function updateSidebarRuntimeStatus(isOnline)" in source
+    assert "function updateSidebarRuntimeStatus(nextStatus)" in source
+    assert "function startRuntimeStatusHeartbeat()" in source
+    assert "'/api/runtime-status'" in source
+    assert "Runtime 繁忙" in source
+    assert "Runtime 待处理" in source
     assert "updateSidebarRuntimeStatus(true);" in source
     assert "updateSidebarRuntimeStatus(false);" in source
 
@@ -33,5 +37,7 @@ def test_sidebar_runtime_footer_has_theme_aware_styles() -> None:
 
     assert ".sidebar-runtime {" in styles
     assert ".sidebar-runtime-link:hover" in styles
+    assert ".sidebar-runtime.is-busy .sidebar-runtime-dot" in styles
+    assert ".sidebar-runtime.is-waiting .sidebar-runtime-dot" in styles
     assert ".sidebar-runtime.is-offline .sidebar-runtime-dot" in styles
     assert ":root.theme-light .sidebar-runtime" in styles

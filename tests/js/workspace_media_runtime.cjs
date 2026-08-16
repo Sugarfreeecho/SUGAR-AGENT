@@ -82,6 +82,15 @@ const context = vm.createContext({
   workspaceOpenTipPath(raw, rel) { return String(raw || rel || ''); },
 });
 vm.runInContext(source, context);
+context.LINKIFY_EXT_FRAGMENT = 'md|png|gif|mp3|mp4';
+vm.runInContext(
+  between(
+    renderingSource,
+    'function trimTrailingPathPunct',
+    '/** 可链转「工作区下文件」的已知后缀',
+  ),
+  context,
+);
 vm.runInContext(
   between(
     renderingSource,
@@ -100,6 +109,13 @@ async function main() {
 
   const normalize = (markdown) => context.normalizeExplicitMarkdownPathLinksOutsideFences(markdown);
   const encodedMarkdownPath = (value) => String(value).replace(/\\/g, '%5C');
+
+  const parenthesizedDirectory = String.raw`D:\AI\AI Agent\MyAgent Developer\docs\Change Request（CR）`;
+  assert.equal(context.cleanPathTokenForLink(`"${parenthesizedDirectory}"`), parenthesizedDirectory);
+  assert.equal(context.cleanPathTokenForLink(parenthesizedDirectory), parenthesizedDirectory);
+  assert.equal(context.cleanPathTokenForLink(String.raw`D:\docs\Change Request(CR)`), String.raw`D:\docs\Change Request(CR)`);
+  assert.equal(context.cleanPathTokenForLink(String.raw`D:\docs\report.md)`), String.raw`D:\docs\report.md`);
+  assert.equal(context.cleanPathTokenForLink(String.raw`D:\docs\report.md。`), String.raw`D:\docs\report.md`);
 
   const windowsPath = String.raw`D:\AI\AI Agent\MyAgent Developer\workspace\C盘清理扫描\C盘清理报告.md`;
   const windowsLink = normalize(`[C盘清理扫描/C盘清理报告.md]("${windowsPath}")`);

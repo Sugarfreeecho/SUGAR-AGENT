@@ -50,6 +50,12 @@ function renderEvent(ctx, event, eventIndex, runSessionId) {
         }
     } else if (event.type === 'final') {
         var finalStream = ctx && ctx.stream ? ctx.stream : getVisibleChatStream();
+        // Mark the last llm-response trace row as the final answer so its
+        // collapsed height gets the special 2.5-line treatment.
+        if (finalStream && finalStream.querySelectorAll) {
+            var finalAnswerRows = finalStream.querySelectorAll('.feed-item[data-log-type="llm-response"]');
+            if (finalAnswerRows.length) finalAnswerRows[finalAnswerRows.length - 1].classList.add('feed--final');
+        }
         var userIdx = (ctx && Number.isFinite(Number(ctx.lastUserEventIndex))) ? Number(ctx.lastUserEventIndex) : latestVisibleUserEventIndex(finalStream);
         if (typeof hasDuplicateVisibleFinal === 'function' && hasDuplicateVisibleFinal(finalStream, userIdx, event.content)) return;
         var finalContent = event.content || '';

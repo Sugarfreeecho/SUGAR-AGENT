@@ -42,3 +42,15 @@ def test_content_column_uses_side_space_after_controls_stack() -> None:
     assert "--content-column-width: min(calc(100cqi - 2rem), 100%);" in styles
     assert "width: var(--content-column-width, min(68cqi, 100%));" in styles
     assert "--composer-input-width: var(--content-column-width, min(68cqi, 100%));" in styles
+
+
+def test_operation_toast_follows_the_real_composer_height() -> None:
+    styles = (ROOT / "frontend/src/styles/app.css").read_text(encoding="utf-8")
+    layout = (ROOT / "frontend/src/app/modules/layout-panels.js").read_text(encoding="utf-8")
+
+    assert "bottom: calc(var(--toast-composer-height, 4.75rem) + 0.75rem)" in styles
+    assert "function syncToastComposerOffset()" in layout
+    assert "Math.ceil(panel.getBoundingClientRect().height) + 'px'" in layout
+    assert "new ResizeObserver(syncToastComposerOffset)" in layout
+    assert "toastComposerHeightObserver.observe(panel)" in layout
+    assert "initToastComposerOffset();" in layout

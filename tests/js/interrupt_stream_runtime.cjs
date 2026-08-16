@@ -154,6 +154,71 @@ function testReplayedSnapshotReplacesInsteadOfAppending() {
   assert.strictEqual(ctx.llm.llmPendingResponseDelta, ' + next');
 }
 
+function testReasoningCollapsesAsSoonAsResponseStarts() {
+  let reasoningStreaming = true;
+  let reasoningCollapsed = false;
+  const reasoningChunk = {
+    classList: {
+      remove(name) { if (name === 'is-streaming') reasoningStreaming = false; },
+    },
+  };
+  const reasoningRow = {
+    querySelector(selector) { return selector === '.feed-chunk' ? reasoningChunk : null; },
+  };
+  const reasoningScroller = {
+    isConnected: true,
+    closest(selector) { return selector === '.feed-item.feed--llm' ? reasoningRow : null; },
+  };
+  const responseScroller = { isConnected: true, textContent: '' };
+  const ctx = {
+    llm: {
+      llmDeltaLastSeq: null,
+      llmStreamReasoningIter: 1,
+      llmStreamReasoningScroller: reasoningScroller,
+      llmStreamResponseIter: 1,
+      llmStreamResponseScroller: responseScroller,
+      llmPendingReasoningDelta: '',
+      llmPendingResponseDelta: '',
+      llmThinkTagMode: 'response',
+      llmThinkTagCarry: '',
+      llmThinkTagAllowLeading: true,
+    },
+  };
+  const sandbox = vm.createContext({
+    console,
+    removeTemporaryStatus() {},
+    finalizeLlmStreamChunks() {},
+    hasSeenStreamDelta: () => false,
+    getProcessBody: () => null,
+    bumpAggregateMaxReactIter() {},
+    feedThinkTaggedResponseDelta: (_state, text) => [{ part: 'response', text }],
+    findExistingLlmFeedRow: () => null,
+    createProcessFeedRow: () => responseScroller,
+    scheduleLlmDeltaFlush() {},
+    scheduleFeedChunkOverflowRefresh() {},
+    flushLlmDeltaText() {},
+    autoCollapseLlmReasoningRow(row) { reasoningCollapsed = row === reasoningRow; },
+    truncateLogTextForUi: (text) => String(text),
+  });
+  vm.runInContext(
+    between(renderingSource, 'function appendLlmStreamDelta', 'function upsertLlmFeedRow'),
+    sandbox,
+  );
+  sandbox.appendLlmStreamDelta(ctx, {
+    type: 'llm_response_delta',
+    delta: 'answer begins',
+    react_iter: 1,
+    stream_seq: 2,
+    delta_seq: 1,
+  }, 'session-1');
+
+  assert.strictEqual(reasoningStreaming, false, 'reasoning must stop streaming when answer starts');
+  assert.strictEqual(reasoningCollapsed, true, 'reasoning must collapse before the turn finishes');
+  assert.strictEqual(ctx.llm.llmStreamReasoningScroller, null);
+  assert.strictEqual(ctx.llm.llmPendingResponseDelta, 'answer begins');
+}
+
 testAbortCleanupKeepsCommittedRows();
 testReplayedSnapshotReplacesInsteadOfAppending();
+testReasoningCollapsesAsSoonAsResponseStarts();
 console.log('interrupt stream runtime checks passed');

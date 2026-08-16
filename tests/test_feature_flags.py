@@ -507,10 +507,23 @@ def test_chat_input_supports_clipboard_files_and_images_as_paths():
     session_management = (ROOT / "frontend/src/app/modules/session-management.js").read_text(encoding="utf-8")
     sse = (ROOT / "frontend/src/app/modules/sse-handling.js").read_text(encoding="utf-8")
     assert "function isChatFileUploadBusy()" in session_management
-    assert "sendBtn.disabled = uploadBusy;" in session_management
-    assert "&& !uploadBusy" in session_management
+    assert "sendBtn.textContent = '上传中';" in session_management
+    assert "sendBtn.disabled = true;" in session_management
     assert "isChatFileUploadBusy()) return;" in sse
     assert "if (isChatFileUploadBusy()) return false;" in sse
+    assert "if (state.uploadBusy) return false;" in sse
+
+
+def test_image_followup_waits_for_run_end_and_keeps_structured_attachments():
+    sse = (ROOT / "frontend/src/app/modules/sse-handling.js").read_text(encoding="utf-8")
+    picker = (ROOT / "frontend/src/vendor/myagent_path_picker.js").read_text(encoding="utf-8")
+
+    assert "attachments: Array.isArray(attachments) ? attachments.slice() : []" in sse
+    assert "if (options.pendingQuestion || attachments.length)" in sse
+    assert "attachments: Array.isArray(item.attachments) ? item.attachments : []" in sse
+    assert "attachments: item.attachments || []" in sse
+    assert "const rememberedAttachments = Array.isArray(options.attachments)" in sse
+    assert "function addChatAttachments(textarea, attachments)" in picker
 
 
 def test_branch_completion_does_not_hijack_a_later_session_switch():

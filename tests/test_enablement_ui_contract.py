@@ -40,7 +40,8 @@ def test_running_subagent_model_switch_is_exposed_in_tool_api_and_ui():
     assert ".ui-modal-select-trigger" in styles
     assert ".ui-modal-select-menu" in styles
     assert ".ui-modal-select-option.is-selected" in styles
-    assert ":root.theme-light .ui-modal-select-menu" in styles
+    assert "background: var(--floating-surface); box-shadow: var(--floating-shadow);" in styles
+    assert "--floating-surface: rgba(255, 255, 255, 0.99);" in styles
     assert "subagentModelProfileOptionMeta" in actions
     assert "ui-modal-select-control" in dialogs
     assert "setSelectMenuOpen" in dialogs
@@ -64,7 +65,8 @@ def test_pending_followup_mode_uses_custom_picker_instead_of_native_select():
     assert ".followup-mode-picker" in styles
     assert ".followup-mode-menu" in styles
     assert ".followup-mode-option.is-selected" in styles
-    assert ":root.theme-light .followup-mode-menu" in styles
+    assert "background: var(--floating-surface); box-shadow: var(--floating-shadow);" in styles
+    assert "--floating-surface: rgba(255, 255, 255, 0.99);" in styles
     assert "position: fixed; z-index: 390" in styles
     assert "document.body.appendChild(menu)" in frontend
     assert "getBoundingClientRect()" in frontend
@@ -143,11 +145,14 @@ def test_ui_presence_tracks_foreground_state_and_attention_notifications():
     assert "active: getUiPresenceActive()" in frontend
     assert "sendUiPresence('update')" in frontend
     assert "window.addEventListener('blur'" in frontend
+    assert "setTimeout(registerUiPresence, 10000)" in frontend
 
     # The backend accepts register/update/unregister and tracks the active flag.
     assert '@fastapi_app.post("/api/ui-presence")' in backend
     assert '"register", "update", "unregister"' in backend
     assert "_ui_presence_has_active" in backend
+    assert '@fastapi_app.post("/api/ui-activation")' in backend
+    assert '@fastapi_app.get("/api/runtime-status")' in backend
 
     # Conversation completion and pending human interactions feed the same
     # desktop notification path when no UI tab is actively used.

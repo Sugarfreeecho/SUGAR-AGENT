@@ -56,3 +56,72 @@ def test_attention_listener_ignores_unrelated_and_forwarded_events(monkeypatch):
         assert scheduled == []
 
     asyncio.run(scenario())
+
+
+def test_notification_context_contains_status_session_and_latest_question(monkeypatch):
+    import webui
+
+    monkeypatch.setattr(
+        webui.session_manager,
+        "get_session_summary",
+        lambda session_id: {
+            "id": session_id,
+            "name": "提醒优化",
+            "last_user_preview": "托盘能否复用已有页面？",
+        },
+    )
+
+    title, message = webui._notification_context("session-1", "completed")
+
+    assert title == "SugarAgent"
+    assert "状态：已完成" in message
+    assert "会话：提醒优化" in message
+    assert "最近问题：托盘能否复用已有页面？" in message
+
+
+def test_pending_notification_context_includes_count(monkeypatch):
+    import webui
+
+    monkeypatch.setattr(webui.session_manager, "get_session_summary", lambda _sid: {})
+
+    _title, message = webui._notification_context("session-1", "pending", 2)
+
+    assert "状态：待处理（2 项）" in message
+    assert "会话：未命名会话" in message
+    assert "最近问题：暂无" in message
+
+
+def test_runtime_status_reports_busy_when_any_session_is_running(monkeypatch):
+    import webui
+
+    monkeypatch.setattr(
+        webui.session_manager,
+        "index",
+        [{"id": "idle"}, {"id": "running"}],
+    )
+    monkeypatch.setattr(
+        webui,
+        "_session_run_state_fields_light",
+        lambda sid: {"run_active": sid == "running"},
+    )
+
+    payload = webui._runtime_status_payload()
+
+    assert payload["status"] == "busy"
+    assert payload["active_run_count"] == 1
+
+
+def test_ui_presence_reuse_requires_recent_heartbeat(monkeypatch):
+    import webui
+
+    monkeypatch.setattr(
+        webui,
+        "_ui_presence_tokens",
+        {
+            "fresh": {"seen_at": 95.0, "active": False},
+            "stale": {"seen_at": 1.0, "active": True},
+        },
+    )
+
+    assert webui._ui_presence_has_reusable(100.0) is True
+    assert webui._ui_presence_has_reusable(120.0) is False

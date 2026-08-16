@@ -5,6 +5,15 @@ const vm = require('node:vm');
 
 const root = path.resolve(__dirname, '..', '..');
 const source = fs.readFileSync(path.join(root, 'frontend/src/app/modules/input-actions.js'), 'utf8');
+const sseSource = fs.readFileSync(path.join(root, 'frontend/src/app/modules/sse-handling.js'), 'utf8');
+
+function between(text, start, end) {
+  const from = text.indexOf(start);
+  const to = text.indexOf(end, from + start.length);
+  assert.notEqual(from, -1, `missing start marker: ${start}`);
+  assert.notEqual(to, -1, `missing end marker: ${end}`);
+  return text.slice(from, to);
+}
 
 const context = vm.createContext({});
 vm.runInContext(source, context);
@@ -35,5 +44,22 @@ assert.equal(textarea.value, 'a\nb');
 assert.equal(textarea.selectionStart, 2);
 assert.equal(textarea.selectionEnd, 2);
 assert.equal(prevented, true);
+
+let pausedDuringUpload = 0;
+let sentDuringUpload = 0;
+const composerContext = vm.createContext({
+  readComposerActionState() {
+    return { uploadBusy: true, running: true, sendable: false, sessionId: 's' };
+  },
+  pauseCurrentRun() { pausedDuringUpload += 1; },
+  sendMessage() { sentDuringUpload += 1; },
+});
+vm.runInContext(
+  between(sseSource, 'function dispatchComposerAction', "messageInput.addEventListener('keydown'"),
+  composerContext,
+);
+assert.equal(composerContext.dispatchComposerAction(true), false);
+assert.equal(pausedDuringUpload, 0);
+assert.equal(sentDuringUpload, 0);
 
 console.log('input action runtime checks passed');

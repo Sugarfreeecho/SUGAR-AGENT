@@ -49,6 +49,39 @@ function isUiHoverTipTriggerHovered(el) {
     return !!(el && el.isConnected && el.matches(':hover'));
 }
 
+function isUiHoverTipPointerOverTrigger(el, ev) {
+    if (!el || !el.isConnected) return false;
+    if (
+        ev
+        && Number.isFinite(Number(ev.clientX))
+        && Number.isFinite(Number(ev.clientY))
+        && typeof document.elementFromPoint === 'function'
+    ) {
+        var hit = document.elementFromPoint(Number(ev.clientX), Number(ev.clientY));
+        return !!(hit && (hit === el || el.contains(hit)));
+    }
+    return isUiHoverTipTriggerHovered(el);
+}
+
+function reconcileVisibleUiHoverTooltipAfterScroll() {
+    if (!uiHoverTooltipEl || !uiHoverTooltipEl.classList.contains('is-visible')) return;
+    if (uiHoverTipScrollReconcileScheduled) return;
+    uiHoverTipScrollReconcileScheduled = true;
+    requestAnimationFrame(function () {
+        uiHoverTipScrollReconcileScheduled = false;
+        var active = uiHoverTipActiveEl;
+        var pointer = uiHoverTipLastEv;
+        if (!active || !pointer || !isUiHoverTipPointerOverTrigger(active, pointer)) {
+            hideUiHoverTooltip();
+            return;
+        }
+        // A streaming answer scrolls the chat whenever a new visual line is
+        // appended. If that scroll is unrelated to the hovered composer item,
+        // keep its tooltip open and merely refresh the fixed-position layout.
+        positionUiHoverTooltip(pointer);
+    });
+}
+
 function bindUiHoverTipGlobalCleanup() {
     if (document._uiHoverTipGlobalCleanupBound) return;
     document._uiHoverTipGlobalCleanupBound = true;
@@ -62,15 +95,15 @@ function bindUiHoverTipGlobalCleanup() {
         if (!active.isConnected || !active.contains(ev.target)) hideUiHoverTooltip();
     }, true);
 
-    // Scrolling and viewport changes can move a trigger without producing a
-    // mouseleave event. Only dismiss an already-visible tooltip here; the delayed
-    // show path performs its own :hover validation.
+    // Scrolling can move a trigger without producing mouseleave. Reconcile the
+    // pointer after layout instead of closing unconditionally: live generation
+    // also scrolls the chat behind composer popovers on every newly wrapped line.
     function hideVisibleUiHoverTooltip() {
         if (uiHoverTooltipEl && uiHoverTooltipEl.classList.contains('is-visible')) {
             hideUiHoverTooltip();
         }
     }
-    document.addEventListener('scroll', hideVisibleUiHoverTooltip, true);
+    document.addEventListener('scroll', reconcileVisibleUiHoverTooltipAfterScroll, true);
     window.addEventListener('resize', hideVisibleUiHoverTooltip, { passive: true });
     window.addEventListener('blur', hideUiHoverTooltip);
     document.addEventListener('visibilitychange', function () {
@@ -219,10 +252,15 @@ function clearTocForSessionLoad() {
 
 function clearTodoForSessionLoad() {
     const root = document.getElementById('chat-todo-plan');
+    const todoCard = document.getElementById('chat-todo-card');
     const statsEl = document.getElementById('chat-todo-plan-stats');
     const listEl = document.getElementById('chat-todo-plan-list');
     todoRefreshEpoch += 1;
     if (currentSessionId) clearTodoPlanState(currentSessionId);
+    // Do not leave the previous session's card visible during the panel's
+    // closing transition. The target session will render its cached snapshot
+    // synchronously as soon as currentSessionId changes.
+    if (todoCard) todoCard.hidden = true;
     if (statsEl) statsEl.textContent = '';
     if (listEl) listEl.textContent = '';
     if (root) root.classList.remove('is-open');
@@ -517,9 +555,18 @@ function setGoalStateForSession(sessionId, goal) {
         : null;
     goalStateBySession.set(sid, normalized);
     const sess = sessionStore.get(sid);
+    const goalReviewPending = !!(
+        normalized
+        && normalized.deleted !== true
+        && String(normalized.status || '') === 'completed'
+        && String(normalized.review_status || '') !== 'approved'
+    );
+    let goalReviewBadgeChanged = false;
     if (sess) {
+        goalReviewBadgeChanged = !!sess.goal_review_pending !== goalReviewPending;
         sess.goal = normalized;
         sess.goal_server_runner = !!(normalized && String(normalized.status || '') === 'active');
+        sess.goal_review_pending = goalReviewPending;
     }
     if (normalized) {
         let elapsedSeconds = Math.max(0, Number(normalized.elapsed_seconds || 0));
@@ -548,6 +595,9 @@ function setGoalStateForSession(sessionId, goal) {
     if (normalized && String(normalized.status || '') === 'active') {
         clearSessionUnreadState(sid, { server: false });
         syncSessionListIndicatorClasses();
+    }
+    if (goalReviewBadgeChanged && typeof renderSessionListIfChanged === 'function') {
+        renderSessionListIfChanged(true);
     }
     if (sid === String(currentSessionId || '')) {
         renderGoalCard(normalized, sid);

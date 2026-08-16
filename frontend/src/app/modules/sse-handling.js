@@ -1064,6 +1064,17 @@ function normalizeStoredFollowupItem(item) {
     var skills = Array.isArray(item.skills)
         ? item.skills.map(function (skill) { return String(skill || '').trim(); }).filter(Boolean)
         : [];
+    var attachments = Array.isArray(item.attachments)
+        ? item.attachments.filter(function (attachment) {
+            return attachment && String(attachment.path || '').trim();
+        }).map(function (attachment) {
+            return {
+                path: String(attachment.path),
+                name: String(attachment.name || ''),
+                size: Number(attachment.size || 0),
+            };
+        })
+        : [];
     var restoredStatus = String(item.status || '');
     if (restoredStatus === 'submitting' || restoredStatus === 'sending') restoredStatus = '';
     // A browser reload cannot resume the in-flight DELETE request. If the
@@ -1077,6 +1088,7 @@ function normalizeStoredFollowupItem(item) {
         text: text,
         display: display || text,
         skills: skills,
+        attachments: attachments,
         createdAt: Number(item.createdAt) || Date.now(),
         order: Number.isFinite(Number(item.order)) ? Number(item.order) : undefined,
         steerMode: String(item.steerMode || item.mode || defaultSteerMode()) === 'interrupt' ? 'interrupt' : 'append',
@@ -1123,6 +1135,7 @@ function persistFollowupQueue(sessionId) {
             text: item.text,
             display: item.display || item.text,
             skills: Array.isArray(item.skills) ? item.skills : [],
+            attachments: Array.isArray(item.attachments) ? item.attachments : [],
             createdAt: item.createdAt || Date.now(),
             order: item.order,
             steerMode: item.steerMode === 'append' ? 'append' : 'interrupt',
@@ -1663,7 +1676,7 @@ function getFollowupStatusText(item) {
     return '待发送';
 }
 
-function appendFollowupQueueItem(sessionId, text, display, selectedSkills) {
+function appendFollowupQueueItem(sessionId, text, display, selectedSkills, attachments) {
     const sid = String(sessionId || '');
     if (!sid || !hasSendableText(text)) return null;
     const item = {
@@ -1671,6 +1684,7 @@ function appendFollowupQueueItem(sessionId, text, display, selectedSkills) {
         text: String(text),
         display: String(display || text),
         skills: Array.isArray(selectedSkills) ? selectedSkills.slice() : [],
+        attachments: Array.isArray(attachments) ? attachments.slice() : [],
         createdAt: Date.now(),
         steerMode: defaultSteerMode(),
         awaitingRunEnd: isSessionRunning(sid) || isServerStreamActive(sid),
@@ -1706,14 +1720,24 @@ function enqueueCurrentInputAsFollowup(options) {
     if (typeof window.consumeSelectedSkillsForSend === 'function') {
         selectedSkills = window.consumeSelectedSkillsForSend();
     }
-    var item = appendFollowupQueueItem(sid, rawMessage, visibleMessage, selectedSkills);
+    var attachments = window.MyAgentPathPicker
+        && typeof window.MyAgentPathPicker.chatAttachments === 'function'
+        ? window.MyAgentPathPicker.chatAttachments(messageInput).filter(function (attachment) {
+            return attachment && attachment.path && rawMessage.indexOf(String(attachment.path)) >= 0;
+        })
+        : [];
+    var item = appendFollowupQueueItem(sid, rawMessage, visibleMessage, selectedSkills, attachments);
     if (!item) return false;
     recentComposerQueuedFollowup = { sessionId: sid, itemId: String(item.id) };
-    if (options.pendingQuestion) {
+    if (options.pendingQuestion || attachments.length) {
         item.awaitingRunEnd = true;
         item.deferUntilRunEnd = true;
         persistFollowupQueue(sid);
         renderFollowupQueue(sid);
+    }
+    if (attachments.length && window.MyAgentPathPicker
+            && typeof window.MyAgentPathPicker.clearChatAttachments === 'function') {
+        window.MyAgentPathPicker.clearChatAttachments(messageInput);
     }
     messageInput.value = '';
     persistInputDraft(sid, '');
@@ -1841,6 +1865,10 @@ function returnFollowupToInput(sid, item) {
     messageInput.value = existing.trim() ? (returned + '\n' + existing) : returned;
     if (typeof window.setSelectedSkillsForCurrentSession === 'function') {
         window.setSelectedSkillsForCurrentSession(item.skills || []);
+    }
+    if (window.MyAgentPathPicker
+            && typeof window.MyAgentPathPicker.addChatAttachments === 'function') {
+        window.MyAgentPathPicker.addChatAttachments(messageInput, item.attachments || []);
     }
     rewriteInputWorkspacePaths();
     persistInputDraft(sid, messageInput.value);
@@ -2337,6 +2365,7 @@ function scheduleAcceptedFollowupWatch(sid, itemId) {
                     message: latest.text,
                     displayMessage: latest.display || latest.text,
                     selectedSkills: latest.skills || [],
+                    attachments: latest.attachments || [],
                     fromQueue: true,
                     sessionId: sid,
                     forceStart: true,
@@ -2478,6 +2507,7 @@ async function sendQueuedFollowupAsChat(sessionId, item, itemId, dispatchEpoch) 
         message: item.text,
         displayMessage: item.display || item.text,
         selectedSkills: item.skills || [],
+        attachments: item.attachments || [],
         fromQueue: true,
         sessionId: sid,
         forceStart: true,
@@ -2598,6 +2628,7 @@ async function sendFollowupNowImpl(itemId, sessionId, options) {
                 message: item.text,
                 displayMessage: item.display || item.text,
                 selectedSkills: item.skills || [],
+                attachments: item.attachments || [],
                 fromQueue: true,
                 sessionId: sid,
                 forceStart: true,
@@ -2734,6 +2765,7 @@ async function sendFollowupNowImpl(itemId, sessionId, options) {
         message: item.text,
         displayMessage: item.display || item.text,
         selectedSkills: item.skills || [],
+        attachments: item.attachments || [],
         fromQueue: true,
         sessionId: sid,
         forceStart: true,
@@ -3012,17 +3044,19 @@ async function sendMessage(options) {
     _clientStepStart = nowPipelineMs();
     const formData = new FormData();
     formData.append('message', rawMessage);
-    const rememberedAttachments = window.MyAgentPathPicker
-        && typeof window.MyAgentPathPicker.chatAttachments === 'function'
-        ? window.MyAgentPathPicker.chatAttachments(messageInput)
-        : [];
+    const rememberedAttachments = Array.isArray(options.attachments)
+        ? options.attachments
+        : (window.MyAgentPathPicker
+            && typeof window.MyAgentPathPicker.chatAttachments === 'function'
+            ? window.MyAgentPathPicker.chatAttachments(messageInput)
+            : []);
     const attachmentsForRun = rememberedAttachments.filter(function (item) {
         return item && item.path && rawMessage.indexOf(String(item.path)) >= 0;
     });
     if (attachmentsForRun.length) {
         formData.append('attachments', JSON.stringify(attachmentsForRun));
     }
-    if (window.MyAgentPathPicker
+    if (!Array.isArray(options.attachments) && window.MyAgentPathPicker
             && typeof window.MyAgentPathPicker.clearChatAttachments === 'function') {
         window.MyAgentPathPicker.clearChatAttachments(messageInput);
     }
@@ -3075,7 +3109,8 @@ async function sendMessage(options) {
                     runSessionId,
                     rawMessage,
                     displayMessage,
-                    selectedSkillsForRun
+                    selectedSkillsForRun,
+                    attachmentsForRun
                 );
             } else if (!options.fromQueue && runSessionId === currentSessionId) {
                 messageInput.value = visibleMessage;
@@ -3227,6 +3262,7 @@ function queueComposerBehindPendingQuestion(state) {
 
 function dispatchComposerAction(allowStop) {
     const state = readComposerActionState();
+    if (state.uploadBusy) return false;
     if (!state.sessionId && optimisticNewSessionRun) {
         if (allowStop) pauseCurrentRun();
         return false;
@@ -3249,7 +3285,6 @@ function dispatchComposerAction(allowStop) {
         }
     }
     if (queueComposerBehindPendingQuestion(state)) return true;
-    if (state.uploadBusy && !state.running) return false;
     if (state.running) {
         const canQueueFollowup = isMyAgentFeatureEnabled('followupRestart', false)
             && state.sendable

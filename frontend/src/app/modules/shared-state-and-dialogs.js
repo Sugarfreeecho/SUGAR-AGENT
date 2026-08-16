@@ -62,6 +62,7 @@ let messageLoadEpoch = 0;
 /** 右侧「历史记录」链接悬停浮层（替代浏览器原生 title） */
 let uiHoverTooltipEl = null;
 let hoverTooltipMoveScheduled = false;
+let uiHoverTipScrollReconcileScheduled = false;
 const UI_HOVER_TIP_DELAY_MS = 500;
 let uiHoverTipTimer = null;
 let uiHoverTipActiveEl = null;
@@ -223,6 +224,9 @@ function closeUiModal(result) {
     root.classList.remove('is-open');
     root.setAttribute('aria-hidden', 'true');
     root.onclick = null;
+    root.onpointerdown = null;
+    root.onpointerup = null;
+    root.onpointercancel = null;
     var okBtn = document.getElementById('ui-modal-ok');
     var cancelBtn = document.getElementById('ui-modal-cancel');
     var inputEl = document.getElementById('ui-modal-input');
@@ -504,9 +508,24 @@ function openUiModal(options) {
         if (inputEl) inputEl.oninput = syncInputValidity;
         if (selectEl) selectEl.onchange = function () { syncCustomSelect(); syncInputValidity(); };
         syncInputValidity();
+        var backdropPressStarted = false;
+        var backdropPressCompleted = false;
+        root.onpointerdown = function (e) {
+            backdropPressStarted = e.target === root;
+            backdropPressCompleted = false;
+        };
+        root.onpointerup = function (e) {
+            backdropPressCompleted = backdropPressStarted && e.target === root;
+        };
+        root.onpointercancel = function () {
+            backdropPressStarted = false;
+            backdropPressCompleted = false;
+        };
         root.onclick = function (e) {
-            if (e.target === root) onCancel();
+            if (e.target === root && backdropPressCompleted) onCancel();
             else if (hasCustomSelect && !selectControlEl.contains(e.target)) setSelectMenuOpen(false);
+            backdropPressStarted = false;
+            backdropPressCompleted = false;
         };
 
         uiModalKeyHandler = function (e) {
