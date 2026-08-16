@@ -163,6 +163,58 @@ def test_question_validation_rejects_other_and_bad_answers(tmp_path):
         )
 
 
+def test_question_can_be_skipped_without_cancelling_interaction(tmp_path):
+    service = _service(tmp_path)
+    request = _questions()
+    request["questions"].append(
+        {
+            "header": "后续范围",
+            "question": "后续怎么处理？",
+            "options": [
+                {"label": "继续", "description": "继续处理。"},
+                {"label": "停止", "description": "停止处理。"},
+            ],
+            "multi_select": False,
+        }
+    )
+    service.create_question("session-1", request, interaction_id="ask-1")
+
+    resolved = service.resolve_question(
+        "session-1",
+        "ask-1",
+        {
+            "answers": [
+                {"question_id": "q1", "skipped": True},
+                {"question_id": "q2", "selected_option_ids": ["q2o1"]},
+            ]
+        },
+    )
+
+    assert resolved["status"] == "resolved"
+    assert resolved["answers"][0] == {
+        "question_id": "q1",
+        "selected_option_ids": [],
+        "selected_labels": [],
+        "other_text": None,
+        "notes": None,
+        "skipped": True,
+    }
+    assert resolved["answers"][1]["selected_labels"] == ["继续"]
+    assert resolved["answers"][1]["skipped"] is False
+
+
+def test_skipped_question_rejects_answer_content(tmp_path):
+    service = _service(tmp_path)
+    service.create_question("session-1", _questions(), interaction_id="ask-1")
+
+    with pytest.raises(HumanInteractionValidationError, match="cannot include an answer when skipped"):
+        service.resolve_question(
+            "session-1",
+            "ask-1",
+            {"answers": [{"question_id": "q1", "selected_option_ids": ["q1o1"], "skipped": True}]},
+        )
+
+
 def test_question_header_allows_fifty_characters(tmp_path):
     service = _service(tmp_path)
     request = _questions()
@@ -430,24 +482,30 @@ def test_frontend_human_interaction_contract_is_wired():
     assert "String(count)" in badge_update
     assert "function showHumanQuestionReview" not in module
     assert "function validateHumanQuestionPane" in module
-    assert "input.addEventListener('change'" in module
-    assert "question.multi_select || !input.checked || qIndex >= questions.length - 1" in module
+    assert "question.multi_select || !input.checked || qIndex >= questions.length - 1" not in module
+    assert "human-next-btn" not in module
     assert "back.disabled = next === 0" in module
-    assert "nextBtn.disabled = lastQuestion" in module
     assert "back.textContent = '上一题'" in module
-    assert "nextBtn.textContent = '下一题'" in module
     assert "human-confirm-btn', '确认'" in module
     assert "human-submit-btn', '提交答案'" in module
-    assert "if (confirmBtn) confirmBtn.classList.toggle('hidden', !multipleQuestions || lastQuestion)" in module
-    assert "if (submit) submit.classList.toggle('hidden', multipleQuestions && !lastQuestion)" in module
-    assert "if (cancel) cancel.classList.toggle('hidden', multipleQuestions)" in module
+    assert "var allComplete = panes.every(isHumanQuestionPaneComplete)" in module
+    assert "if (confirmBtn) confirmBtn.classList.toggle('hidden', allComplete)" in module
+    assert "if (submit) submit.classList.toggle('hidden', !allComplete)" in module
+    assert "function nextIncompleteHumanQuestionIndex" in module
+    assert "confirmCurrentHumanQuestion(card)" in module
+    assert "human-skip-btn', '不回答'" in module
+    assert "pane.dataset.skipped = '1'" in module
+    assert "setHumanQuestionStep(card, nextIncompleteHumanQuestionIndex(Array.from(panes), current))" in module
+    assert "else void submitHumanQuestion(card)" not in module
+    assert "skipped: skipped" in module
+    assert "cancelHumanQuestion" not in module
     assert "human-question-review" not in module
     keydown = module.split("card.addEventListener('keydown'", 1)[1].split("return card;", 1)[0]
-    assert "if (questions.length > 1 && current < questions.length - 1)" in keydown
-    assert "void submitHumanQuestion(card);" in keydown
+    assert "if (allHumanQuestionsComplete(card)) void submitHumanQuestion(card)" in keydown
+    assert "else confirmCurrentHumanQuestion(card)" in keydown
     assert "Ctrl/Cmd + Enter 提交答案" in module
     submit_validation = module.split("async function submitHumanQuestion", 1)[1].split(
-        "async function cancelHumanQuestion", 1
+        "function resumeRecoveredHumanInteractionStream", 1
     )[0]
     assert "if (collected.invalidPane)" in submit_validation
     assert "setHumanQuestionStep(card, panes.indexOf(collected.invalidPane))" in submit_validation
@@ -766,3 +824,16 @@ def test_pending_question_switch_and_history_mutation_frontend_contract():
     assert "Number.isFinite(Number(opts.afterIndex))" in sse
     assert "detail.pending_human_interactions || {}" in sse
     assert "pendingHumanInteractionRecords(sid).length > 0" in sse
+
+
+def test_pending_human_card_auto_reveals_on_live_sse() -> None:
+    """A freshly inserted pending approval/question card scrolls into view on
+    live SSE, but never during history replay."""
+    interactions = (Path(__file__).resolve().parents[1] / "frontend/src/app/modules/human-interactions.js").read_text(encoding="utf-8")
+
+    assert "function autoRevealPendingHumanCard(card)" in interactions
+    assert "card.scrollIntoView({ behavior: 'smooth', block: 'nearest' })" in interactions
+    assert "humanCardVisibleInViewport(card)" in interactions
+    assert "record.status === 'pending'" in interactions
+    assert "replayingMessages" in interactions
+    assert "autoRevealPendingHumanCard(card)" in interactions

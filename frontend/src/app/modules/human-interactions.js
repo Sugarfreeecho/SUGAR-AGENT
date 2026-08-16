@@ -477,7 +477,7 @@ function renderAutoReviewStatusEvent(ctx, event, runSessionId) {
 
 function persistHumanInteractionDraft(card) {
     if (!card || card.dataset.kind !== 'question') return;
-    var draft = { selections: {}, others: {}, step: Number(card.dataset.step || 0), updatedAt: Date.now() };
+    var draft = { selections: {}, others: {}, skipped: {}, step: Number(card.dataset.step || 0), updatedAt: Date.now() };
     card.querySelectorAll('.human-question-pane').forEach(function (pane) {
         var qid = pane.dataset.questionId || '';
         draft.selections[qid] = Array.from(pane.querySelectorAll('input[data-option-id]:checked')).map(function (input) {
@@ -485,6 +485,7 @@ function persistHumanInteractionDraft(card) {
         });
         var other = pane.querySelector('.human-other-input');
         draft.others[qid] = other ? other.value : '';
+        draft.skipped[qid] = pane.dataset.skipped === '1';
     });
     try { sessionStorage.setItem(humanInteractionDraftKey(card.dataset.sessionId, card.dataset.interactionId, card.dataset.requestVersion), JSON.stringify(draft)); } catch (e) { /* ignore */ }
 }
@@ -506,6 +507,7 @@ function restoreHumanInteractionDraft(card) {
             var otherMark = pane.querySelector('.human-other-mark');
             if (otherMark && other.value) otherMark.checked = true;
         }
+        pane.dataset.skipped = draft.skipped && draft.skipped[qid] ? '1' : '0';
     });
     return draft;
 }
@@ -550,18 +552,24 @@ function humanQuestionPaneState(pane) {
     var otherInput = pane.querySelector('.human-other-input');
     var otherSelected = !!(otherMark && otherMark.checked);
     var otherText = otherSelected && otherInput ? normalizeSendableText(otherInput.value) : '';
+    var skipped = pane.dataset.skipped === '1';
     return {
         selected: selected,
         otherSelected: otherSelected,
         otherText: otherText,
         answered: selected.length > 0 || !!otherText,
         invalidOther: otherSelected && !otherText,
+        skipped: skipped,
     };
 }
 
 function validateHumanQuestionPane(card, pane) {
     var error = card.querySelector('.human-card-error');
     var state = humanQuestionPaneState(pane);
+    if (state.skipped) {
+        if (error) error.textContent = '';
+        return true;
+    }
     if (state.invalidOther) {
         if (error) error.textContent = '请输入其他答案。';
         var other = pane.querySelector('.human-other-input');
@@ -578,6 +586,32 @@ function validateHumanQuestionPane(card, pane) {
     return true;
 }
 
+function isHumanQuestionPaneComplete(pane) {
+    var state = humanQuestionPaneState(pane);
+    return state.skipped || (state.answered && !state.invalidOther);
+}
+
+function allHumanQuestionsComplete(card) {
+    var panes = Array.from(card.querySelectorAll('.human-question-pane'));
+    return panes.length > 0 && panes.every(isHumanQuestionPaneComplete);
+}
+
+function nextIncompleteHumanQuestionIndex(panes, current) {
+    for (var offset = 1; offset <= panes.length; offset += 1) {
+        var index = (current + offset) % panes.length;
+        if (!isHumanQuestionPaneComplete(panes[index])) return index;
+    }
+    return current;
+}
+
+function confirmCurrentHumanQuestion(card) {
+    var panes = Array.from(card.querySelectorAll('.human-question-pane'));
+    var current = Number(card.dataset.step || 0);
+    var pane = panes[current];
+    if (!pane || !validateHumanQuestionPane(card, pane)) return;
+    setHumanQuestionStep(card, nextIncompleteHumanQuestionIndex(panes, current));
+}
+
 function setHumanQuestionStep(card, index) {
     var panes = Array.from(card.querySelectorAll('.human-question-pane'));
     if (!panes.length) return;
@@ -585,8 +619,10 @@ function setHumanQuestionStep(card, index) {
     card.dataset.step = String(next);
     panes.forEach(function (pane, idx) { pane.classList.toggle('is-active', idx === next); });
     card.querySelectorAll('.human-question-tab').forEach(function (tab, idx) {
+        var state = humanQuestionPaneState(panes[idx]);
         tab.classList.toggle('is-active', idx === next);
-        tab.classList.toggle('is-answered', humanQuestionPaneState(panes[idx]).answered);
+        tab.classList.toggle('is-answered', state.answered);
+        tab.classList.toggle('is-skipped', state.skipped);
         tab.setAttribute('aria-selected', idx === next ? 'true' : 'false');
         tab.setAttribute('tabindex', idx === next ? '0' : '-1');
     });
@@ -597,25 +633,19 @@ function setHumanQuestionStep(card, index) {
     var progress = card.querySelector('.human-question-progress');
     if (progress) progress.textContent = '问题 ' + (next + 1) + '/' + panes.length + ' · ' + String(panes[next].dataset.questionHeader || '');
     var back = card.querySelector('.human-back-btn');
-    var nextBtn = card.querySelector('.human-next-btn');
     var confirmBtn = card.querySelector('.human-confirm-btn');
     var submit = card.querySelector('.human-submit-btn');
-    var cancel = card.querySelector('.human-cancel-btn');
     var multipleQuestions = panes.length > 1;
-    var lastQuestion = next >= panes.length - 1;
+    var allComplete = panes.every(isHumanQuestionPaneComplete);
     if (back) {
         back.textContent = '上一题';
         back.classList.toggle('hidden', !multipleQuestions);
         back.disabled = next === 0;
     }
-    if (nextBtn) {
-        nextBtn.textContent = '下一题';
-        nextBtn.classList.toggle('hidden', !multipleQuestions);
-        nextBtn.disabled = lastQuestion;
-    }
-    if (confirmBtn) confirmBtn.classList.toggle('hidden', !multipleQuestions || lastQuestion);
-    if (submit) submit.classList.toggle('hidden', multipleQuestions && !lastQuestion);
-    if (cancel) cancel.classList.toggle('hidden', multipleQuestions);
+    if (confirmBtn) confirmBtn.classList.toggle('hidden', allComplete);
+    if (submit) submit.classList.toggle('hidden', !allComplete);
+    var shortcut = panes[next].querySelector('.human-other-shortcut');
+    if (shortcut) shortcut.textContent = allComplete ? 'Ctrl/Cmd + Enter 提交答案' : 'Ctrl/Cmd + Enter 确认回答';
     if (card.dataset.draftReady === '1') persistHumanInteractionDraft(card);
 }
 
@@ -674,13 +704,6 @@ function createHumanQuestionCard(record, sessionId) {
             input.type = question.multi_select ? 'checkbox' : 'radio';
             input.name = 'human-' + record.interaction_id + '-' + pane.dataset.questionId;
             input.dataset.optionId = String(option.option_id || '');
-            input.addEventListener('change', function () {
-                persistHumanInteractionDraft(card);
-                if (question.multi_select || !input.checked || qIndex >= questions.length - 1) return;
-                // A normal single-choice answer is complete immediately. The
-                // free-form "Other" option deliberately has no auto-advance.
-                setHumanQuestionStep(card, qIndex + 1);
-            });
             var copy = humanElement('span', 'human-option-copy');
             copy.appendChild(humanElement('span', 'human-option-label', option.label || ''));
             var description = humanElement('span', 'human-option-description', option.description || '');
@@ -708,7 +731,7 @@ function createHumanQuestionCard(record, sessionId) {
         otherHeader.appendChild(humanElement(
             'span',
             'input-shortcut-hint human-other-shortcut',
-            qIndex < questions.length - 1 ? 'Ctrl/Cmd + Enter 确认并进入下一题' : 'Ctrl/Cmd + Enter 提交答案'
+            'Ctrl/Cmd + Enter 确认回答'
         ));
         otherCopy.appendChild(otherHeader);
         var otherInput = document.createElement('textarea');
@@ -717,13 +740,23 @@ function createHumanQuestionCard(record, sessionId) {
         otherInput.maxLength = 2000;
         otherInput.placeholder = '输入你的答案…';
         otherInput.setAttribute('aria-label', '其他答案');
-        otherInput.addEventListener('focus', function () { otherMark.checked = true; persistHumanInteractionDraft(card); });
+        otherInput.addEventListener('focus', function () {
+            pane.dataset.skipped = '0';
+            otherMark.checked = true;
+            setHumanQuestionStep(card, Number(card.dataset.step || 0));
+        });
         otherCopy.appendChild(otherInput);
         other.appendChild(otherMark);
         other.appendChild(otherCopy);
         options.appendChild(other);
-        options.addEventListener('change', function () { persistHumanInteractionDraft(card); });
-        options.addEventListener('input', function () { persistHumanInteractionDraft(card); });
+        options.addEventListener('change', function () {
+            pane.dataset.skipped = '0';
+            setHumanQuestionStep(card, Number(card.dataset.step || 0));
+        });
+        options.addEventListener('input', function () {
+            pane.dataset.skipped = '0';
+            setHumanQuestionStep(card, Number(card.dataset.step || 0));
+        });
         pane.appendChild(options);
         body.appendChild(pane);
     });
@@ -732,38 +765,39 @@ function createHumanQuestionCard(record, sessionId) {
     error.setAttribute('role', 'alert');
     card.appendChild(error);
     var actions = humanElement('div', 'human-card-actions human-question-actions');
-    var cancel = humanElement('button', 'human-secondary-btn human-cancel-btn', '不回答');
-    cancel.type = 'button';
-    cancel.title = '取消当前问题并让 Agent 继续';
-    cancel.addEventListener('click', function () { void cancelHumanQuestion(card); });
+    var skip = humanElement('button', 'human-secondary-btn human-skip-btn', '不回答');
+    skip.type = 'button';
+    skip.title = '只跳过当前题目';
+    skip.addEventListener('click', function () {
+        var current = Number(card.dataset.step || 0);
+        var panes = card.querySelectorAll('.human-question-pane');
+        var pane = panes[current];
+        if (!pane) return;
+        pane.querySelectorAll('input').forEach(function (input) { input.checked = false; });
+        var otherInput = pane.querySelector('.human-other-input');
+        if (otherInput) otherInput.value = '';
+        pane.dataset.skipped = '1';
+        var error = card.querySelector('.human-card-error');
+        if (error) error.textContent = '';
+        persistHumanInteractionDraft(card);
+        setHumanQuestionStep(card, nextIncompleteHumanQuestionIndex(Array.from(panes), current));
+    });
     var nav = humanElement('div', 'human-card-nav');
     var back = humanElement('button', 'human-secondary-btn human-back-btn', '上一题');
     back.type = 'button';
     back.addEventListener('click', function () {
         setHumanQuestionStep(card, Number(card.dataset.step || 0) - 1);
     });
-    var next = humanElement('button', 'human-secondary-btn human-next-btn', '下一题');
-    next.type = 'button';
-    next.addEventListener('click', function () {
-        var current = Number(card.dataset.step || 0);
-        var pane = card.querySelectorAll('.human-question-pane')[current];
-        if (validateHumanQuestionPane(card, pane)) setHumanQuestionStep(card, current + 1);
-    });
     var confirmButton = humanElement('button', 'human-primary-btn human-confirm-btn', '确认');
     confirmButton.type = 'button';
-    confirmButton.addEventListener('click', function () {
-        var current = Number(card.dataset.step || 0);
-        var pane = card.querySelectorAll('.human-question-pane')[current];
-        if (validateHumanQuestionPane(card, pane)) setHumanQuestionStep(card, current + 1);
-    });
+    confirmButton.addEventListener('click', function () { confirmCurrentHumanQuestion(card); });
     var submit = humanElement('button', 'human-primary-btn human-submit-btn', '提交答案');
     submit.type = 'button';
     submit.addEventListener('click', function () { void submitHumanQuestion(card); });
     nav.appendChild(back);
-    nav.appendChild(next);
     nav.appendChild(confirmButton);
     nav.appendChild(submit);
-    actions.appendChild(cancel);
+    actions.appendChild(skip);
     actions.appendChild(nav);
     card.appendChild(actions);
     var draft = restoreHumanInteractionDraft(card);
@@ -771,16 +805,9 @@ function createHumanQuestionCard(record, sessionId) {
     card.dataset.draftReady = '1';
     card.addEventListener('keydown', function (event) {
         if (!isInputSubmitShortcut(event, 'editor')) return;
-        var current = Number(card.dataset.step || 0);
         event.preventDefault();
-        if (questions.length > 1 && current < questions.length - 1) {
-            var pane = card.querySelectorAll('.human-question-pane')[current];
-            if (validateHumanQuestionPane(card, pane)) setHumanQuestionStep(card, current + 1);
-        } else {
-            // Ctrl/Cmd+Enter is an explicit user submit action, equivalent to
-            // clicking Submit on the final (or only) question.
-            void submitHumanQuestion(card);
-        }
+        if (allHumanQuestionsComplete(card)) void submitHumanQuestion(card);
+        else confirmCurrentHumanQuestion(card);
     });
     return card;
 }
@@ -792,13 +819,15 @@ function collectHumanQuestionAnswers(card) {
         var selected = Array.from(pane.querySelectorAll('input[data-option-id]:checked')).map(function (input) { return input.dataset.optionId; });
         var otherMark = pane.querySelector('.human-other-mark');
         var otherInput = pane.querySelector('.human-other-input');
-        var otherText = otherMark && otherMark.checked && otherInput ? normalizeSendableText(otherInput.value) : '';
-        if ((!selected.length && !otherText || (otherMark && otherMark.checked && !otherText)) && !invalidPane) invalidPane = pane;
+        var skipped = pane.dataset.skipped === '1';
+        var otherText = !skipped && otherMark && otherMark.checked && otherInput ? normalizeSendableText(otherInput.value) : '';
+        if (!skipped && ((!selected.length && !otherText) || (otherMark && otherMark.checked && !otherText)) && !invalidPane) invalidPane = pane;
         answers.push({
             question_id: pane.dataset.questionId || '',
-            selected_option_ids: selected,
+            selected_option_ids: skipped ? [] : selected,
             other_text: otherText || null,
             notes: null,
+            skipped: skipped,
         });
     });
     return { answers: answers, invalidPane: invalidPane };
@@ -850,31 +879,6 @@ async function submitHumanQuestion(card) {
     } catch (err) {
         setHumanInteractionSubmitting(card, false);
         if (error) error.textContent = '提交失败：' + String(err && err.message ? err.message : err);
-    }
-}
-
-async function cancelHumanQuestion(card) {
-    if (!card || card.dataset.submitting === '1') return;
-    setHumanInteractionSubmitting(card, true, '正在取消…');
-    try {
-        var recoveryAfterIndex = typeof getUiEventCount === 'function'
-            ? await getUiEventCount(card.dataset.sessionId, { timeoutMs: 5000 })
-            : 0;
-        var response = await fetch('/sessions/' + encodeURIComponent(card.dataset.sessionId) + '/interactions/' + encodeURIComponent(card.dataset.interactionId) + '/cancel', {
-            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ reason: 'user_cancelled' }),
-        });
-        var data = await response.json();
-        if (!response.ok || !data.ok) throw new Error(data.error || ('HTTP ' + response.status));
-        clearHumanInteractionDraft(card.dataset.sessionId, card.dataset.interactionId, card.dataset.requestVersion);
-        var record = applyHumanInteractionEvent(card.dataset.sessionId, Object.assign({ type: 'interaction_cancelled' }, data.interaction || {}));
-        renderHumanInteractionRecord(record, card.dataset.sessionId, card.parentNode);
-        if (data.recovery_scheduled) {
-            resumeRecoveredHumanInteractionStream(card.dataset.sessionId, recoveryAfterIndex);
-        }
-    } catch (err) {
-        setHumanInteractionSubmitting(card, false);
-        var error = card.querySelector('.human-card-error');
-        if (error) error.textContent = '取消失败：' + String(err && err.message ? err.message : err);
     }
 }
 
@@ -1129,7 +1133,7 @@ function createHumanTerminalCard(record, sessionId) {
             if (answer.other_text) values.push(answer.other_text);
             var question = questionsById[String(answer.question_id || '')] || {};
             line.appendChild(humanElement('span', 'human-terminal-answer-label', question.header || '回答'));
-            line.appendChild(humanElement('span', 'human-terminal-answer-value', values.join('、') || '已回答'));
+            line.appendChild(humanElement('span', 'human-terminal-answer-value', answer.skipped ? '未回答' : (values.join('、') || '已回答')));
             summary.appendChild(line);
         });
     }
@@ -1170,12 +1174,33 @@ function renderHumanInteractionRecord(record, sessionId, stream) {
     return card;
 }
 
+function humanCardVisibleInViewport(card) {
+    if (!card || !card.getBoundingClientRect) return true;
+    var r = card.getBoundingClientRect();
+    if (!r.width && !r.height) return false;
+    var vh = window.innerHeight || document.documentElement.clientHeight || 0;
+    return r.top >= -8 && r.bottom <= vh + 8;
+}
+
+function autoRevealPendingHumanCard(card) {
+    if (!card || card.dataset.status !== 'pending') return;
+    requestAnimationFrame(function () {
+        if (humanCardVisibleInViewport(card)) return;
+        card.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    });
+}
+
 function renderHumanInteractionEvent(ctx, event, runSessionId) {
     var sid = String(runSessionId || event.session_id || currentSessionId || '');
     var record = applyHumanInteractionEvent(sid, event);
     var stream = ctx && ctx.stream ? ctx.stream : null;
     ensurePendingQuestionToolRow(ctx, record, sid);
-    return renderHumanInteractionRecord(record, sid, stream);
+    var card = renderHumanInteractionRecord(record, sid, stream);
+    // Live SSE only: bring a freshly-inserted pending card into view.
+    if (card && record.status === 'pending' && !(typeof replayingMessages !== 'undefined' && replayingMessages)) {
+        autoRevealPendingHumanCard(card);
+    }
+    return card;
 }
 
 function renderPendingHumanInteractions(sessionId) {
