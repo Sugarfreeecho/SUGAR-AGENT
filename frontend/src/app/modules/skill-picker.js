@@ -578,14 +578,18 @@ async function registerMcpServer(serverName) {
         var data = await response.json();
         if (!data || !data.ok) throw new Error((data && data.error) || 'MCP 注册失败');
         await loadSkillPickerMcpTools();
-        if (!data.registered && typeof appendLogVisible === 'function') {
-            appendLogVisible('MCP 注册未完成：' + String((data.server && data.server.error) || serverName), 'error-log');
+        if (!data.registered && typeof showGlobalWarningBanner === 'function') {
+            showGlobalWarningBanner(
+                'MCP 注册未完成：' + String((data.server && data.server.error) || serverName)
+            );
         }
     } catch (err) {
         (mcpServersCache || []).forEach(function (server) {
             if (String(server && server.server || '') === serverName) server.error = String(err.message || err);
         });
-        if (typeof appendLogVisible === 'function') appendLogVisible('MCP 注册失败：' + String(err.message || err), 'error-log');
+        if (typeof showGlobalWarningBanner === 'function') {
+            showGlobalWarningBanner('MCP 注册失败：' + String(err.message || err));
+        }
     } finally {
         delete mcpServerRegisterBusy[serverName];
         renderSkillPicker();

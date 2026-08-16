@@ -1239,6 +1239,8 @@ function finalizeLlmStreamChunks(ctx) {
     flushLlmDeltaText(ctx);
     queryFeedChunksInCtx(ctx, '.feed-chunk.is-streaming').forEach(function (ch) {
         ch.classList.remove('is-streaming');
+        var row = ch.closest ? ch.closest('.feed-item') : null;
+        if (row && row.classList.contains('feed--llm')) autoCollapseLlmReasoningRow(row);
         scheduleFeedChunkOverflowRefresh(ch);
     });
     if (ctx.llm) {

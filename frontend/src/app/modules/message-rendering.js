@@ -1824,7 +1824,7 @@ function sendUiPresence(action) {
 function registerUiPresence() {
     sendUiPresence('register');
     stopUiPresenceHeartbeat();
-    uiPresenceHeartbeatTimer = setTimeout(registerUiPresence, 60000);
+    uiPresenceHeartbeatTimer = setTimeout(registerUiPresence, 10000);
 }
 function stopUiPresenceHeartbeat() {
     if (uiPresenceHeartbeatTimer) {
@@ -2023,7 +2023,36 @@ function joinWorkDirAndRelativeSlashPath(workDir, slashPath) {
 }
 
 function trimTrailingPathPunct(s) {
-    return String(s || '').replace(/[，。、；：）】』」\]\)\.,;:!?'"」]+$/g, '').trim();
+    var t = String(s || '').trim();
+    var closerPairs = {
+        ')': '(',
+        ']': '[',
+        '\uFF09': '\uFF08',
+        '\u3011': '\u3010'
+    };
+    var changed = true;
+    while (changed && t) {
+        changed = false;
+        var withoutPunct = t.replace(/[，。、；：』」\.,;:!?'" ]+$/g, '').trimEnd();
+        if (withoutPunct !== t) {
+            t = withoutPunct;
+            changed = true;
+        }
+        var close = t.charAt(t.length - 1);
+        var open = closerPairs[close];
+        if (!open) continue;
+        var openCount = 0;
+        var closeCount = 0;
+        for (var i = 0; i < t.length; i += 1) {
+            if (t.charAt(i) === open) openCount += 1;
+            else if (t.charAt(i) === close) closeCount += 1;
+        }
+        if (closeCount > openCount) {
+            t = t.slice(0, -1).trimEnd();
+            changed = true;
+        }
+    }
+    return t;
 }
 
 function stripPathWrappingQuotes(s) {
@@ -4064,6 +4093,35 @@ function insertReactOrderedFeedRow(body, row, type, reactIter, reactGeneration) 
     appendProcessRowBeforePendingAppendSteer(body, row, type);
 }
 
+function feedRowCollapseAriaLabel(row, collapsed) {
+    var noun = row && row.classList && row.classList.contains('feed--llm')
+        ? '思考'
+        : (row && row.classList && row.classList.contains('feed--llm2') ? '回答' : '工具行');
+    return (collapsed ? '展开' : '收起') + noun;
+}
+
+function syncFeedRowCollapseButton(row) {
+    if (!row) return;
+    var collapsed = row.classList.contains('is-collapsed');
+    var button = row.querySelector('.feed-row-collapse');
+    if (!button) return;
+    button.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+    button.setAttribute('aria-label', feedRowCollapseAriaLabel(row, collapsed));
+}
+
+function toggleCollapsibleFeedRow(row, manual) {
+    if (!row) return;
+    row.classList.toggle('is-collapsed');
+    if (manual) row.dataset.manualToggle = '1';
+    syncFeedRowCollapseButton(row);
+}
+
+function autoCollapseLlmReasoningRow(row) {
+    if (!row || !row.classList.contains('feed--llm') || row.dataset.manualToggle === '1') return;
+    row.classList.add('is-collapsed');
+    syncFeedRowCollapseButton(row);
+}
+
 function createProcessFeedRow(ctx, type, initialText, streamOpts, runSessionId, toolCallIdOpt) {
     streamOpts = streamOpts || {};
     if (type == null) type = 'log-entry';
@@ -4077,29 +4135,28 @@ function createProcessFeedRow(ctx, type, initialText, streamOpts, runSessionId, 
     row.setAttribute('data-react-generation', String(reactGenerationForContext(ctx)));
     if (ctx && ctx.runId) row.setAttribute('data-run-id', String(ctx.runId));
     if (toolCallIdOpt != null && String(toolCallIdOpt) !== '') row.setAttribute('data-tool-call-id', String(toolCallIdOpt));
-    var toolCollapseBtn = type === 'tool-call'
-        ? '<button type="button" class="feed-row-collapse" aria-expanded="true" aria-label="收起工具行">'
+    var rowCanCollapse = type === 'tool-call' || type === 'llm-reasoning';
+    var initialCollapseLabel = type === 'llm-reasoning' ? '收起思考' : '收起工具行';
+    var rowCollapseBtn = rowCanCollapse
+        ? '<button type="button" class="feed-row-collapse" aria-expanded="true" aria-label="' + initialCollapseLabel + '">'
             + '<span class="feed-row-collapse-chevron" aria-hidden="true"></span></button>'
         : '';
     row.innerHTML = '<div class="feed-row">'
         + '<span class="feed-label">' + meta.label + '</span>'
         + '<div class="feed-chunk">'
         + '<div class="feed-chunk-scroller"></div></div>'
-        + toolCollapseBtn
+        + rowCollapseBtn
         + '</div>';
     const chunk = row.querySelector('.feed-chunk');
     const sc = row.querySelector('.feed-chunk-scroller');
-    if (type === 'tool-call') {
+    if (type === 'llm-reasoning') chunk.classList.add('expanded');
+    if (rowCanCollapse) {
         const collapseBtn = row.querySelector('.feed-row-collapse');
         if (collapseBtn) {
             collapseBtn.addEventListener('click', function (e) {
                 e.preventDefault();
                 e.stopPropagation();
-                row.classList.toggle('is-collapsed');
-                var isCollapsed = row.classList.contains('is-collapsed');
-                collapseBtn.setAttribute('aria-expanded', isCollapsed ? 'false' : 'true');
-                collapseBtn.setAttribute('aria-label', isCollapsed ? '展开工具行' : '收起工具行');
-                row.dataset.manualToggle = '1';
+                toggleCollapsibleFeedRow(row, true);
             });
         }
     }
@@ -4119,6 +4176,7 @@ function createProcessFeedRow(ctx, type, initialText, streamOpts, runSessionId, 
         chunk.classList.add('is-streaming');
         row.setAttribute('data-llm-live-row', '1');
     }
+    if (type === 'llm-reasoning' && !streamOpts.streaming) autoCollapseLlmReasoningRow(row);
     bindFeedChunkInteraction(chunk);
     bindFeedChunkScrollChain(sc);
     insertReactOrderedFeedRow(body, row, type, streamOpts.reactIter, reactGenerationForContext(ctx));
@@ -4174,6 +4232,10 @@ function appendLlmStreamDelta(ctx, ev, runSessionId) {
     const streamOpt = { streaming: true };
     if (iter != null && Number.isFinite(Number(iter))) streamOpt.reactIter = Number(iter);
     var pieces = part === 'response' ? feedThinkTaggedResponseDelta(l, delta) : [{ part: 'reasoning', text: delta }];
+    var responseStarted = pieces.some(function (piece) {
+        return piece && piece.part !== 'reasoning' && String(piece.text || '') !== '';
+    });
+    if (responseStarted) finalizeActiveLlmReasoningRow(ctx);
     for (var pi = 0; pi < pieces.length; pi += 1) {
         var piece = pieces[pi] || {};
         var piecePart = piece.part === 'reasoning' ? 'reasoning' : 'response';
@@ -4234,6 +4296,22 @@ function appendLlmStreamDelta(ctx, ev, runSessionId) {
     scheduleLlmDeltaFlush(ctx, runSessionId);
 }
 
+function finalizeActiveLlmReasoningRow(ctx) {
+    var l = ctx && ctx.llm;
+    var scroller = l && l.llmStreamReasoningScroller;
+    if (!scroller || !scroller.isConnected) return;
+    flushLlmDeltaText(ctx);
+    var row = scroller.closest ? scroller.closest('.feed-item.feed--llm') : null;
+    var chunk = row && row.querySelector ? row.querySelector('.feed-chunk') : null;
+    if (chunk) {
+        chunk.classList.remove('is-streaming');
+        scheduleFeedChunkOverflowRefresh(chunk);
+    }
+    autoCollapseLlmReasoningRow(row);
+    l.llmStreamReasoningScroller = null;
+    l.llmStreamReasoningIter = null;
+}
+
 function upsertLlmFeedRow(ctx, content, logType, runSessionId, reactIter) {
     if (!ctx) return null;
     if (logType === 'llm-response') {
@@ -4253,10 +4331,12 @@ function upsertLlmFeedRow(ctx, content, logType, runSessionId, reactIter) {
         if (sc) sc.textContent = txt;
         if (ch) {
             ch.classList.remove('is-streaming');
+            
             scheduleFeedChunkOverflowRefresh(ch);
         }
         existing.removeAttribute('data-llm-live-row');
         existing.setAttribute('data-event-committed', '1');
+        if (logType === 'llm-reasoning') autoCollapseLlmReasoningRow(existing);
         removeDuplicateLlmFeedRows(ctx, existing, logType, ri);
         if (ctx.llm) resetLlmState(ctx);
         var agg = existing.closest && existing.closest('.process-aggregate');
@@ -4510,25 +4590,30 @@ function handleToolRowChunkClick(e) {
     if (e) e.stopPropagation();
     var row = this.closest ? this.closest('.feed-item') : null;
     if (!row) return;
-    row.classList.toggle('is-collapsed');
-    row.dataset.manualToggle = '1';
-    var btn = row.querySelector('.feed-row-collapse');
-    if (btn) {
-        var isCollapsed = row.classList.contains('is-collapsed');
-        btn.setAttribute('aria-expanded', isCollapsed ? 'false' : 'true');
-        btn.setAttribute('aria-label', isCollapsed ? '展开工具行' : '收起工具行');
-    }
+    toggleCollapsibleFeedRow(row, true);
+}
+
+function handleLlmRowChunkClick(e) {
+    if (e) e.stopPropagation();
+    var row = this.closest ? this.closest('.feed-item') : null;
+    if (!row) return;
+    toggleCollapsibleFeedRow(row, true);
 }
 
 function bindFeedChunkInteraction(ch) {
     ch.removeEventListener('click', handleTraceChunkClick);
     ch.removeEventListener('click', handleToolRowChunkClick);
+    ch.removeEventListener('click', handleLlmRowChunkClick);
     // Tool rows use the row-level fold (feed-row-collapse) as their single
     // collapse affordance; clicking the command text toggles the same fold.
     // Keep the content-height expand for LLM/log/etc. rows.
     var row = ch.closest ? ch.closest('.feed-item') : null;
     if (row && row.classList.contains('feed--tool')) {
         ch.addEventListener('click', handleToolRowChunkClick);
+        return;
+    }
+    if (row && row.classList.contains('feed--llm')) {
+        ch.addEventListener('click', handleLlmRowChunkClick);
         return;
     }
     ch.addEventListener('click', handleTraceChunkClick);

@@ -36,6 +36,7 @@ function initSidebarSash() {
 async function init() {
     loadUnreadFromStorage();
     initSidebarSash();
+    if (typeof startRuntimeStatusHeartbeat === 'function') startRuntimeStatusHeartbeat();
     showLoading();
     const sessionsLoaded = await loadSessions();
     const sessions = sessionStore.list();
@@ -328,6 +329,23 @@ function initPanelAutoCollapse() {
 var composerSideControlsObserver = null;
 var composerSideControlsMutationObserver = null;
 var composerSideControlsRaf = null;
+var toastComposerHeightObserver = null;
+
+function syncToastComposerOffset() {
+    var panel = document.querySelector('.panel');
+    var toastHost = document.querySelector('.toast-host');
+    if (!panel || !toastHost) return;
+    toastHost.style.setProperty('--toast-composer-height', Math.ceil(panel.getBoundingClientRect().height) + 'px');
+}
+
+function initToastComposerOffset() {
+    var panel = document.querySelector('.panel');
+    if (!panel || toastComposerHeightObserver) return;
+    toastComposerHeightObserver = new ResizeObserver(syncToastComposerOffset);
+    toastComposerHeightObserver.observe(panel);
+    window.addEventListener('resize', syncToastComposerOffset, { passive: true });
+    syncToastComposerOffset();
+}
 
 function composerCssLengthPx(rawValue, fallback) {
     var value = String(rawValue || '').trim().toLowerCase();
@@ -406,6 +424,7 @@ function initComposerSideControlLayout() {
 initPanelAutoCollapse();
 initPanelEdgeTabsLayout();
 initComposerSideControlLayout();
+initToastComposerOffset();
 
 // Inline HTML (onclick) still expects these on globalThis.
 if (typeof globalThis !== 'undefined') {
