@@ -447,11 +447,16 @@ class HumanInteractionService:
             if any(option_id not in option_map for option_id in selected_ids):
                 raise HumanInteractionValidationError(f"{qid} contains an unknown option id")
             other_text = _clean_text(raw.get("other_text"), f"{qid}.other_text", maximum=2000, required=False) or None
-            if not selected_ids and not other_text:
+            skipped = raw.get("skipped", False)
+            if not isinstance(skipped, bool):
+                raise HumanInteractionValidationError(f"{qid}.skipped must be a boolean")
+            notes = _clean_text(raw.get("notes"), f"{qid}.notes", maximum=2000, required=False) or None
+            if skipped and (selected_ids or other_text or notes):
+                raise HumanInteractionValidationError(f"{qid} cannot include an answer when skipped")
+            if not skipped and not selected_ids and not other_text:
                 raise HumanInteractionValidationError(f"{qid} requires an option or Other text")
             if not question.get("multi_select") and len(selected_ids) + (1 if other_text else 0) > 1:
                 raise HumanInteractionValidationError(f"{qid} is single-select")
-            notes = _clean_text(raw.get("notes"), f"{qid}.notes", maximum=2000, required=False) or None
             normalized.append(
                 {
                     "question_id": qid,
@@ -459,6 +464,7 @@ class HumanInteractionService:
                     "selected_labels": [str(option_map[option_id].get("label") or "") for option_id in selected_ids],
                     "other_text": other_text,
                     "notes": notes,
+                    "skipped": skipped,
                 }
             )
         return normalized
