@@ -70,7 +70,7 @@ const UI_TRANSLATIONS_EN = {
     '无法在浏览器中播放此媒体，可使用系统应用打开。': 'This media cannot be played in the browser. Open it with a system app instead.'
 };
 Object.assign(UI_TRANSLATIONS_EN, {
-    'Runtime 在线': 'Runtime online', 'Runtime 离线': 'Runtime offline', '打开执行状态看板': 'Open execution dashboard',
+    'Runtime 在线': 'Runtime online', 'Runtime 繁忙': 'Runtime busy', 'Runtime 待处理': 'Runtime awaiting input', 'Runtime 离线': 'Runtime offline', '打开执行状态看板': 'Open execution dashboard',
     // Todo / goal panel
     '已完成': 'Completed', '进行中': 'In progress', '待处理': 'Pending', '已暂停': 'Paused', '已阻塞': 'Blocked', '已取消': 'Cancelled',
     '无限制': 'Unlimited', '分钟': 'min', '续跑': 'Continue run', '增加预算并继续': 'Increase budget and continue',
@@ -210,7 +210,7 @@ Object.assign(UI_TRANSLATIONS_EN, {
     '待处理事项': 'Pending items', '全局待办': 'Global pending', '当前会话': 'Current session', '立即处理': 'Handle now',
     '安全审批': 'Safety approval', '需要你的回答': 'Your response is required', '确认下一步': 'Confirm next step',
     '等待中': 'Waiting', '待回答': 'Waiting for answer', '待审批': 'Waiting for approval', '已处理': 'Processed', '已过期': 'Expired', '可多选': 'Select multiple', '单选': 'Select one',
-    '查看预览': 'View preview', '其他': 'Other', '其他答案': 'Other answer', '输入你的答案…': 'Enter your answer…', '取消提问': 'Cancel question', '不回答': 'Skip answering',
+    '查看预览': 'View preview', '其他': 'Other', '其他答案': 'Other answer', '输入你的答案…': 'Enter your answer…', '取消提问': 'Cancel question', '不回答': 'Skip answering', '只跳过当前题目': 'Skip only this question',
     '上一步': 'Back', '下一步': 'Next', '上一题': 'Previous question', '下一题': 'Next question', '确认': 'Confirm', '返回修改': 'Edit answers', '确认回答': 'Review answers', '提交答案': 'Submit answers', '正在提交…': 'Submitting…', '正在取消…': 'Cancelling…', '正在处理…': 'Processing…',
     '请选择一个选项。': 'Select an option.', '请至少选择一个选项。': 'Select at least one option.', '请输入其他答案。': 'Enter the other answer.', '请完成当前问题后再提交。': 'Complete the current question before submitting.',
     '返回回答问题': 'Return to question',
@@ -220,7 +220,7 @@ Object.assign(UI_TRANSLATIONS_EN, {
     '取消失败：': 'Cancellation failed: ', '提交失败：': 'Submission failed: ', '处理失败：': 'Failed to process: ',
     '是否允许 Agent 执行此操作？': 'Allow Agent to perform this action?', '工具': 'Tool', '始终允许': 'Always allow', '本次允许': 'Allow this time',
     '允许一次': 'Allow once', '本任务内允许相同请求': 'Allow identical requests in this task', '始终允许此类操作': 'Always allow this kind of operation', '拒绝执行': 'Deny execution', '已取消': 'Cancelled', '该请求已取消。': 'This request was cancelled.', '该请求已过期。': 'This request expired.',
-    '你已拒绝本次操作。': 'You denied this action.', '你已允许同类操作。': 'You allowed similar actions.', '你已允许本次操作。': 'You allowed this action.', '已回答': 'Answered',
+    '你已拒绝本次操作。': 'You denied this action.', '你已允许同类操作。': 'You allowed similar actions.', '你已允许本次操作。': 'You allowed this action.', '已回答': 'Answered', '未回答': 'Not answered',
     // Session grouping and subagent continuation
     '刷新归档目录': 'Refresh archived sessions', '加载归档目录': 'Load archived sessions', '加载更多': 'Load more', '加载中...': 'Loading...',
     '个子任务已完成，点击继续让主 Agent 综合子任务结果（不会自动续跑）。': ' subtasks completed. Click continue to let the main Agent synthesize their results (no automatic continuation).',
@@ -267,9 +267,9 @@ Object.assign(UI_TRANSLATIONS_EN, {
     '任务失败，点击查看': 'Task failed — click to view', '有新回复，点击查看': 'New response — click to view',
     'Agent 请求执行操作': 'Agent requests permission to perform an action', '请选择操作': 'Choose an action', '复制文本': 'Copy text', '保存图片': 'Save image', '执行': 'Run',
     '原因：': 'Reason: ', '找不到可保存的 Final 卡片': 'No Final card is available to save', '操作失败': 'Operation failed', '确认': 'Confirm',
-    '加载会话状态快照失败，回退至旧接口': 'Failed to load the session state snapshot; falling back to the legacy endpoint', '归档失败': 'Archive failed', '置顶失败': 'Pin failed', '重命名失败': 'Rename failed',
+    '加载会话状态快照失败，回退至旧接口': 'Failed to load the session state snapshot; falling back to the legacy endpoint', '归档失败': 'Archive failed', '置顶失败': 'Pin failed', '待办设置失败': 'Failed to update todo status', '重命名失败': 'Rename failed',
     '加载更早记录': 'Load earlier records', '加载更早消息': 'Load earlier messages', '保存失败：': 'Save failed: ',
-    '置顶会话': 'Pin session', '归档会话': 'Archive session', '重命名': 'Rename', '重命名会话': 'Rename session',
+    '置顶会话': 'Pin session', '设为待办': 'Mark as todo', '取消待办': 'Remove todo', '待办': 'Todo', '待审核': 'Pending review', '归档会话': 'Archive session', '重命名': 'Rename', '重命名会话': 'Rename session',
     '编辑会话名称': 'Edit the session name', '会话名称': 'Session name', '保存名称': 'Save name',
     '导出会话': 'Export session', '下载会话文件': 'Download session files', '确认导出': 'Export', '输入内容': 'Input', '草稿': 'Draft'
 });

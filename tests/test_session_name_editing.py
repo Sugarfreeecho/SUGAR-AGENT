@@ -58,3 +58,14 @@ def test_session_rename_uses_modal_input_for_menu_and_double_click():
     assert "renameSessionFromMenu(current)" in sessions
     assert all('id="ui-modal-input"' in shell for shell in shells)
     assert "closeUiModal(value);" in dialogs
+
+
+def test_modal_backdrop_ignores_text_selection_drag_from_input():
+    dialogs = SHARED_DIALOGS.read_text(encoding="utf-8")
+
+    assert "root.onpointerdown = function (e)" in dialogs
+    assert "backdropPressStarted = e.target === root;" in dialogs
+    assert "root.onpointerup = function (e)" in dialogs
+    assert "backdropPressCompleted = backdropPressStarted && e.target === root;" in dialogs
+    assert "if (e.target === root && backdropPressCompleted) onCancel();" in dialogs
+    assert "root.onpointercancel = function ()" in dialogs

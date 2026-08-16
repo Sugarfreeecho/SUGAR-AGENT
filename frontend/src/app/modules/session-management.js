@@ -3,6 +3,13 @@
     sendBtn.disabled = false;
     const uploadBusy = isChatFileUploadBusy();
     const newSessionPreflight = !currentSessionId && optimisticNewSessionRun;
+    if (uploadBusy) {
+        sendBtn.textContent = '上传中';
+        sendBtn.classList.remove('is-stop');
+        sendBtn.classList.remove('is-followup');
+        sendBtn.disabled = true;
+        return;
+    }
     if (isSessionRunning(currentSessionId) || newSessionPreflight) {
         const run = newSessionPreflight || (typeof getSessionRunState === 'function' ? getSessionRunState(currentSessionId) : null);
         const suppressFollowup = !!(run && run.suppressFollowupButton);
@@ -10,14 +17,14 @@
             ? inputHasSendableText()
             : !!(messageInput && String(messageInput.value || '').trim());
         const followupEnabled = (typeof isMyAgentFeatureEnabled === 'function') && isMyAgentFeatureEnabled('followupRestart', false);
-        sendBtn.innerHTML = (followupEnabled && hasDraft && !suppressFollowup && !uploadBusy) ? '追问' : '停止 <span class="loader" aria-hidden="true"></span>';
+        sendBtn.innerHTML = (followupEnabled && hasDraft && !suppressFollowup) ? '追问' : '停止 <span class="loader" aria-hidden="true"></span>';
         sendBtn.classList.add('is-stop');
-        sendBtn.classList.toggle('is-followup', followupEnabled && hasDraft && !suppressFollowup && !uploadBusy);
+        sendBtn.classList.toggle('is-followup', followupEnabled && hasDraft && !suppressFollowup);
     } else {
         sendBtn.textContent = '发送';
         sendBtn.classList.remove('is-stop');
         sendBtn.classList.remove('is-followup');
-        sendBtn.disabled = uploadBusy;
+        sendBtn.disabled = false;
     }
 }
 
@@ -176,6 +183,18 @@ function syncSessionDraftBadges(sessionId) {
     });
 }
 
+function sessionNeedsGoalReview(sess) {
+    if (!sess) return false;
+    if (sess.goal_review_pending) return true;
+    var goal = sess.goal;
+    return !!(
+        goal
+        && goal.deleted !== true
+        && String(goal.status || '') === 'completed'
+        && String(goal.review_status || '') !== 'approved'
+    );
+}
+
 /** 根据 sessionStore / 服务端 stream_active / sessionUnreadComplete 更新红点、绿点 */
 function applySessionItemIndicators(itemDiv, sessionId, opts) {
     opts = opts || {};
@@ -281,6 +300,7 @@ function buildSessionMoreMenuMarkup() {
         + '<span class="session-more-dots" aria-hidden="true"><span></span><span></span><span></span></span></button>'
         + '<div class="session-more-menu" role="menu">'
         + '<button type="button" class="session-menu-pin" role="menuitem"></button>'
+        + '<button type="button" class="session-menu-todo" role="menuitem"></button>'
         + '<button type="button" class="session-menu-rename" role="menuitem">重命名</button>'
         + '<button type="button" class="session-menu-archive" role="menuitem"></button>'
         + '<div class="session-menu-separator" role="separator"></div>'
@@ -305,8 +325,10 @@ function syncSessionMenuLabels(wrap, sess) {
     if (!wrap || !sess) return;
     wrap._sessionMenuSession = sess;
     var pin = wrap.querySelector('.session-menu-pin');
+    var todo = wrap.querySelector('.session-menu-todo');
     var archive = wrap.querySelector('.session-menu-archive');
     if (pin) pin.textContent = sess.pinned ? '取消置顶' : '置顶会话';
+    if (todo) todo.textContent = sess.todo ? '取消待办' : '设为待办';
     if (archive) archive.textContent = sess.archived ? '取消归档' : '归档会话';
 }
 
@@ -323,6 +345,21 @@ async function toggleSessionPinnedFromMenu(sess) {
         }
         await refreshSingleSessionRow(sess.id);
     } catch (err) { console.error('置顶失败', err); }
+}
+
+async function toggleSessionTodoFromMenu(sess) {
+    try {
+        const formData = new FormData();
+        const nextTodo = !sess.todo;
+        const previous = applyOptimisticSessionUpdate(sess.id, { todo: nextTodo });
+        formData.append('todo', nextTodo ? 'true' : 'false');
+        const response = await fetch('/sessions/' + encodeURIComponent(sess.id) + '/todo', { method: 'PUT', body: formData });
+        if (!response.ok) {
+            if (previous) applyOptimisticSessionUpdate(sess.id, previous);
+            throw new Error('todo failed: ' + response.status);
+        }
+        await refreshSingleSessionRow(sess.id);
+    } catch (err) { console.error('待办设置失败', err); }
 }
 
 async function toggleSessionArchivedFromMenu(sess) {
@@ -482,11 +519,12 @@ function bindSessionActionMenu(wrap, getSession, rowDiv) {
         var target = e.target && e.target.closest ? e.target.closest('[role="menuitem"]') : null;
         if (!target || !wrap.contains(target)) return;
         var handler = target.classList.contains('session-menu-pin') ? toggleSessionPinnedFromMenu
-            : target.classList.contains('session-menu-rename') ? renameSessionFromMenu
-                : target.classList.contains('session-menu-archive') ? toggleSessionArchivedFromMenu
-                    : target.classList.contains('session-menu-export') ? exportSessionFromMenu
-                        : target.classList.contains('session-menu-delete') ? deleteSessionFromMenu
-                            : null;
+            : target.classList.contains('session-menu-todo') ? toggleSessionTodoFromMenu
+                : target.classList.contains('session-menu-rename') ? renameSessionFromMenu
+                    : target.classList.contains('session-menu-archive') ? toggleSessionArchivedFromMenu
+                        : target.classList.contains('session-menu-export') ? exportSessionFromMenu
+                            : target.classList.contains('session-menu-delete') ? deleteSessionFromMenu
+                                : null;
         if (!handler) return;
         e.stopPropagation();
         closeAllSessionMenus();
@@ -543,6 +581,8 @@ function buildAndBindSessionRow(sess, allSessions, nextStreamMap) {
         + '<div class="session-item-main">'
         + '<div class="session-item-title-row">'
         + '<span class="session-name" data-id="' + sess.id + '" data-original="' + escapeHtml(sess.name) + '">' + escapeHtml(displayName) + '</span>'
+        + '<span class="session-review-badge" aria-label="待审核"' + (sessionNeedsGoalReview(sess) ? '' : ' hidden') + '>待审核</span>'
+        + '<span class="session-todo-badge" aria-label="待办"' + (sess.todo ? '' : ' hidden') + '>待办</span>'
         + '<span class="session-draft-badge" aria-label="草稿" hidden>草稿</span>'
         + '<span class="session-item-date"></span>'
         + '</div>'
@@ -680,6 +720,8 @@ function computeSessionListRenderKey() {
             s.id,
             s.name || '',
             s.pinned ? 'p' : '',
+            s.todo ? 't' : '',
+            sessionNeedsGoalReview(s) ? 'r' : '',
             s.archived ? 'a' : '',
             s.last_activity_at || s.updated_at || '',
             s.last_user_preview || '',
@@ -693,6 +735,8 @@ function computeSessionListRenderKey() {
             a.id,
             a.name || '',
             a.pinned ? 'p' : '',
+            a.todo ? 't' : '',
+            sessionNeedsGoalReview(a) ? 'r' : '',
             a.last_activity_at || a.updated_at || '',
             a.last_user_preview || '',
         ].join('\u001f'));
@@ -835,13 +879,59 @@ async function fetchSessionsStateSnapshot(opts) {
     return snapshot;
 }
 
-function updateSidebarRuntimeStatus(isOnline) {
+function deriveSidebarRuntimeStatus() {
+    var busy = false;
+    sessionStore.runsBySession.forEach(function () { busy = true; });
+    if (!busy) {
+        sessionStore.activeRunInfoBySession.forEach(function (info) {
+            if (!info || info.run_active !== false) busy = true;
+        });
+    }
+    if (busy) return 'busy';
+    return 'online';
+}
+
+function updateSidebarRuntimeStatus(nextStatus) {
     var footer = document.querySelector('.sidebar-runtime');
     var status = document.getElementById('sidebar-runtime-status');
     if (!footer || !status) return;
-    var online = isOnline !== false;
-    footer.classList.toggle('is-offline', !online);
-    setUiRuntimeText(status, online ? 'Runtime 在线' : 'Runtime 离线');
+    var state = nextStatus === false ? 'offline'
+        : (nextStatus === true || !nextStatus ? deriveSidebarRuntimeStatus() : String(nextStatus));
+    if (['online', 'busy', 'alert', 'offline'].indexOf(state) < 0) state = 'online';
+    footer.classList.remove('is-online', 'is-busy', 'is-alert', 'is-offline');
+    footer.classList.add('is-' + state);
+    var labels = {
+        online: 'Runtime 在线',
+        busy: 'Runtime 繁忙',
+        alert: 'Runtime 告警',
+        offline: 'Runtime 离线'
+    };
+    setUiRuntimeText(status, labels[state]);
+    footer.dataset.runtimeStatus = state;
+}
+
+var runtimeStatusHeartbeatTimer = null;
+var lastUiActivationSeq = 0;
+async function refreshRuntimeStatus() {
+    try {
+        var response = await fetchWithTimeout('/api/runtime-status', { cache: 'no-store' }, 5000);
+        if (!response.ok) throw new Error('runtime status failed: ' + response.status);
+        var payload = await response.json();
+        updateSidebarRuntimeStatus(payload && payload.status ? payload.status : true);
+        var activationSeq = Number(payload && payload.activation_seq) || 0;
+        if (activationSeq > lastUiActivationSeq) {
+            lastUiActivationSeq = activationSeq;
+            try { window.focus(); } catch (e) { /* browser policy may reject focus */ }
+        }
+    } catch (error) {
+        updateSidebarRuntimeStatus(false);
+    }
+}
+
+function startRuntimeStatusHeartbeat() {
+    if (runtimeStatusHeartbeatTimer) clearInterval(runtimeStatusHeartbeatTimer);
+    void refreshRuntimeStatus();
+    runtimeStatusHeartbeatTimer = setInterval(refreshRuntimeStatus, 5000);
 }
 
 async function fetchWithTimeout(url, options, timeoutMs) {
@@ -1049,10 +1139,12 @@ async function reconcileRunStateFromServer(opts) {
             includeArchived: !!(sessionStore.archivedLoaded || (cur && cur.archived)),
         });
     } catch (e) {
+        updateSidebarRuntimeStatus(false);
         if (!opts.silent) console.error('reconcile run state failed:', e);
         return;
     }
     applySessionSnapshot(snapshot);
+    updateSidebarRuntimeStatus(true);
     if (opts.respectStopSuppress) {
         suppressedBeforeFetch.forEach(function (sid) {
             if (isSessionStreamStopSuppressed(sid)) {
@@ -1435,6 +1527,14 @@ async function switchSession(sessionId, opts) {
     resetSubagentPanelForSession();
     if (typeof closeGoalEditModal === 'function') closeGoalEditModal(false);
     setCurrentSessionState(sessionId);
+    // The session identity and its side-panel contents must cross the switch
+    // boundary together. Waiting for history/Goal requests leaves the previous
+    // session title or plan visible for a frame (and sometimes much longer on
+    // a cold load).
+    updateSessionTitle();
+    if (typeof renderTodoPlanSnapshot === 'function' && typeof selectTodoPlan === 'function') {
+        renderTodoPlanSnapshot(selectTodoPlan(sessionId));
+    }
     if (typeof renderGoalForCurrentSession === 'function') renderGoalForCurrentSession();
     if (typeof refreshGoalCard === 'function') void refreshGoalCard();
     if (typeof updateHumanInteractionBanner === 'function') updateHumanInteractionBanner(sessionId);

@@ -54,6 +54,7 @@ function applySessionEvent(event, opts) {
                 ? null
                 : (event.started_at || event.startedAt || sess.run_started_at || new Date().toISOString());
         }
+        if (typeof updateSidebarRuntimeStatus === 'function') updateSidebarRuntimeStatus(true);
         return { handled: true, runStateChanged: true, messageRecord: messageRecord };
     }
     if (type === 'run_finished' || type === 'run_interrupted' || type === 'run_failed') {

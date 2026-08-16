@@ -17,6 +17,7 @@ def test_session_menu_has_requested_groups_and_order():
 
     ordered = [
         "session-menu-pin",
+        "session-menu-todo",
         "session-menu-rename",
         "session-menu-archive",
         "session-menu-separator",

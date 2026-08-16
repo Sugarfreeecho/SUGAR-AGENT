@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import threading
 import time
@@ -29,6 +30,7 @@ _GOAL_ACTIVITY_LOCK = threading.Lock()
 _GOAL_ACTIVITY_LISTENERS: set[tuple[asyncio.AbstractEventLoop, asyncio.Event]] = set()
 _MANAGER_CACHE: "weakref.WeakKeyDictionary[Any, GoalManager]" = weakref.WeakKeyDictionary()
 _MANAGER_CACHE_LOCK = threading.Lock()
+logger = logging.getLogger(__name__)
 
 
 def _track_goal_state(
@@ -112,10 +114,42 @@ class GoalError(ValueError):
 
 
 class GoalManager:
-    def __init__(self, sessions_dir: Any, path_resolver: Optional[Callable[[str], Any]] = None):
+    def __init__(
+        self,
+        sessions_dir: Any,
+        path_resolver: Optional[Callable[[str], Any]] = None,
+        goal_review_state_callback: Optional[Callable[[str, bool], None]] = None,
+    ):
         self.sessions_dir = sessions_dir
         self.path_resolver = path_resolver
+        self.goal_review_state_callback = goal_review_state_callback
         self._ops_instance = None
+
+    def _publish_state(
+        self,
+        session_id: str,
+        goal: Optional[Dict[str, Any]],
+        *,
+        notify: bool = True,
+    ) -> None:
+        _track_goal_state(session_id, goal, notify=notify)
+        callback = self.goal_review_state_callback
+        if not callable(callback):
+            return
+        pending_review = bool(
+            isinstance(goal, dict)
+            and goal.get("deleted") is not True
+            and str(goal.get("status") or "") == "completed"
+            and str(goal.get("review_status") or "") != "approved"
+        )
+        try:
+            callback(str(session_id or "").strip(), pending_review)
+        except Exception:
+            logger.warning(
+                "Failed to sync Goal review state for session %s",
+                session_id,
+                exc_info=True,
+            )
 
     def _require_enabled(self) -> None:
         if not goal_enabled():
@@ -190,7 +224,7 @@ class GoalManager:
         if self._runtime_v2_primary():
             _event, response = self._ops().mutate_goal(sid, mutator, run_id=str(run_id or "").strip() or None)
             result = self._with_computed_fields(response)
-            _track_goal_state(sid, result)
+            self._publish_state(sid, result)
             return result
         path = self._legacy_goal_path(sid)
         with self._legacy_lock(path):
@@ -199,7 +233,7 @@ class GoalManager:
             if str(event_type or "").strip():
                 self._write_legacy(path, dict(persisted))
             result = self._with_computed_fields(response or persisted or current or {})
-            _track_goal_state(sid, result)
+            self._publish_state(sid, result)
             return result
 
     @staticmethod
@@ -233,10 +267,10 @@ class GoalManager:
         else:
             goal = self._read_legacy(self._legacy_goal_path(sid))
         if not isinstance(goal, dict) or not goal.get("id") or goal.get("deleted") is True:
-            _track_goal_state(sid, None, notify=False)
+            self._publish_state(sid, None, notify=False)
             return None
         result = self._with_computed_fields(goal)
-        _track_goal_state(sid, result, notify=False)
+        self._publish_state(sid, result, notify=False)
         return result
 
     def create(
@@ -875,6 +909,11 @@ def manager_for(session_manager: Any) -> GoalManager:
             manager = GoalManager(
                 session_manager.sessions_dir,
                 path_resolver=getattr(session_manager, "_resolve_session_path", None),
+                goal_review_state_callback=getattr(
+                    session_manager,
+                    "set_session_goal_review_pending",
+                    None,
+                ),
             )
             _MANAGER_CACHE[session_manager] = manager
         return manager

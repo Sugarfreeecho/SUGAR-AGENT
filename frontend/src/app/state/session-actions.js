@@ -66,6 +66,7 @@ function setSessionRunState(sessionId, run) {
     const sid = String(sessionId || '');
     if (!sid) return;
     sessionStore.setRun(sid, run || null);
+    if (typeof updateSidebarRuntimeStatus === 'function') updateSidebarRuntimeStatus(true);
 }
 
 function getSessionRunState(sessionId) {
@@ -103,6 +104,7 @@ function markSessionRunInactive(sessionId) {
         sess.run_started_at = null;
         sess.stream_active = false;
     }
+    if (typeof updateSidebarRuntimeStatus === 'function') updateSidebarRuntimeStatus(true);
 }
 
 function markRunAbortReason(run, reason) {
