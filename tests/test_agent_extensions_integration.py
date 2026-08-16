@@ -213,6 +213,23 @@ def test_advanced_env_api_synthesizes_feature_switches_when_missing(tmp_path, mo
     assert "OPENAI_API_KEY" not in variables
 
 
+def test_first_token_hedge_settings_are_not_masked_as_secrets():
+    import webui
+
+    entries = {
+        row["key"]: row
+        for row in webui._parse_env_entries(
+            "OPENAI_FIRST_TOKEN_HEDGE_TIMEOUT_SEC=30\n"
+            "OPENAI_FIRST_TOKEN_HEDGE_MAX_RETRIES=2\n"
+            "OPENAI_API_KEY=secret\n"
+        )
+    }
+
+    assert entries["OPENAI_FIRST_TOKEN_HEDGE_TIMEOUT_SEC"]["sensitive"] is False
+    assert entries["OPENAI_FIRST_TOKEN_HEDGE_MAX_RETRIES"]["sensitive"] is False
+    assert entries["OPENAI_API_KEY"]["sensitive"] is True
+
+
 def test_setup_gate_depends_only_on_usable_model_profile(monkeypatch):
     import webui
 
