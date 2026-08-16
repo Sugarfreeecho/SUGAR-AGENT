@@ -686,9 +686,18 @@ def test_goal_card_is_present_in_the_vite_entry_and_shell_source():
         ROOT / "frontend" / "src" / "app" / "modules" / "session-management.js"
     ).read_text(encoding="utf-8")
     assert "closeGoalEditModal(false)" in session_management
-    switch_boundary = session_management.split("setCurrentSessionState(sessionId);", 1)[1][:300]
+    switch_boundary = session_management.split("setCurrentSessionState(sessionId);", 1)[1].split(
+        "localStorage.setItem('lastSessionId', sessionId);", 1
+    )[0]
+    assert "updateSessionTitle()" in switch_boundary
+    assert "renderTodoPlanSnapshot(selectTodoPlan(sessionId))" in switch_boundary
     assert "renderGoalForCurrentSession()" in switch_boundary
     assert "refreshGoalCard()" in switch_boundary
+
+    clear_boundary = renderer.split("function clearTodoForSessionLoad()", 1)[1].split(
+        "const tocTurnsCacheBySession", 1
+    )[0]
+    assert "todoCard.hidden = true" in clear_boundary
 
 
 if __name__ == "__main__":
