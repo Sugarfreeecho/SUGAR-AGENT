@@ -1144,6 +1144,71 @@ def _is_glm_model(model: str) -> bool:
     return s.startswith("glm-")
 
 
+
+_ANNOTATE_MEDIA_PATH_RE = re.compile(
+    r'"([^"]+?\.(?:png|jpe?g|gif|webp|bmp|svg|ico|tiff?|avif|jfif|'
+    r'mp3|wav|m4a|ogg|flac|aac|mp4|webm|mov|mkv))"|'
+    r'([^\s"\']+?\.(?:png|jpe?g|gif|webp|bmp|svg|ico|tiff?|avif|jfif|'
+    r'mp3|wav|m4a|ogg|flac|aac|mp4|webm|mov|mkv))',
+    re.IGNORECASE,
+)
+
+
+def _media_kind_for_path(p: str) -> str:
+    ext = "." + str(p or "").rsplit(".", 1)[-1].lower() if "." in str(p) else ""
+    if ext in _IMAGE_EXTS:
+        return "image"
+    if ext in _AUDIO_EXTS:
+        return "audio"
+    if ext in _VIDEO_EXTS:
+        return "video"
+    return ""
+
+
+def _annotate_local_media_paths(value: str, *, mode: str) -> str:
+    """Prefix local media paths with an attachment label.
+
+    vision mode: media is already attached as image_url/audio/video parts, so the
+    label tells the model the path is only informative.
+    text_only mode: the media was stripped, so the label tells the model to
+    delegate inspection to a multimodal subagent via the task tool.
+    """
+    if mode == "vision":
+        labels = {
+            "image": "[图片附件（示意图片所在路径）]",
+            "audio": "[音频附件（示意音频所在路径）]",
+            "video": "[视频附件（示意视频所在路径）]",
+        }
+    else:
+        labels = {
+            "image": "[图片附件（如需要识图请委派给多模态子代理）]",
+            "audio": "[音频附件（如需要播放请委派给多模态子代理）]",
+            "video": "[视频附件（如需要播放请委派给多模态子代理）]",
+        }
+
+    def _repl(match: "re.Match[str]") -> str:
+        raw = match.group(1) or match.group(2) or ""
+        p = raw.strip()
+        kind = _media_kind_for_path(p)
+        if not kind:
+            return match.group(0)
+        label = labels.get(kind, "")
+        return label + match.group(0)
+
+    return _ANNOTATE_MEDIA_PATH_RE.sub(_repl, str(value or ""))
+
+
+def _text_only_media_part(local_path: str) -> Dict[str, str]:
+    """Build the delegated text part for a stripped local media attachment."""
+    kind = _media_kind_for_path(local_path)
+    label = {
+        "image": "[图片附件（如需要识图请委派给多模态子代理）]",
+        "audio": "[音频附件（如需要播放请委派给多模态子代理）]",
+        "video": "[视频附件（如需要播放请委派给多模态子代理）]",
+    }.get(kind, "[附件（如需要处理请委派给多模态子代理）]")
+    return {"type": "text", "text": '%s"%s"' % (label, local_path)}
+
+
 def messages_to_openai_params(
     messages: List[Any],
     *,
@@ -1172,14 +1237,26 @@ def messages_to_openai_params(
                         content_parts.append({"type": "text", "text": str(raw_part)})
                         continue
                     part_type = str(raw_part.get("type") or "").strip().lower()
-                    if part_type == "text" and expand_media_paths:
-                        remote_parts = _expand_remote_image_urls_in_text(
-                            str(raw_part.get("text") or "")
-                        )
-                        if isinstance(remote_parts, list):
-                            content_parts.extend(remote_parts)
+                    if part_type == "text":
+                        raw_text = str(raw_part.get("text") or "")
+                        if expand_media_paths:
+                            annotated_text = _annotate_local_media_paths(
+                                raw_text, mode="vision"
+                            )
+                            remote_parts = _expand_remote_image_urls_in_text(annotated_text)
+                            if isinstance(remote_parts, list):
+                                content_parts.extend(remote_parts)
+                            else:
+                                content_parts.append({"type": "text", "text": annotated_text})
                         else:
-                            content_parts.append(raw_part)
+                            content_parts.append(
+                                {
+                                    "type": "text",
+                                    "text": _annotate_local_media_paths(
+                                        raw_text, mode="text_only"
+                                    ),
+                                }
+                            )
                         continue
                     if part_type != "local_file":
                         content_parts.append(raw_part)
@@ -1193,7 +1270,13 @@ def messages_to_openai_params(
                     if not local_path:
                         continue
                     if not expand_media_paths:
-                        content_parts.append({"type": "text", "text": local_path})
+                        seen_text = "".join(
+                            str(p.get("text") or "")
+                            for p in content_parts
+                            if isinstance(p, dict) and p.get("type") == "text"
+                        )
+                        if local_path not in seen_text:
+                            content_parts.append(_text_only_media_part(local_path))
                         continue
                     expanded_local = _expand_local_media_paths_in_text(
                         json.dumps(local_path, ensure_ascii=False)
