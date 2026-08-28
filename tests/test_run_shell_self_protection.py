@@ -10,6 +10,14 @@ if str(APP) not in sys.path:
     sys.path.insert(0, str(APP))
 
 import agent_tools  # noqa: E402
+from security.models import (  # noqa: E402
+    CapabilityRequest,
+    DecisionOutcome,
+    PERMISSION_PRESETS,
+    PermissionMode,
+    SecurityDecision,
+)
+from security.runtime import execution_scope  # noqa: E402
 
 
 def test_agent_process_targets_and_broad_python_kills_are_blocked(monkeypatch):
@@ -73,6 +81,41 @@ def test_run_shell_blocks_self_termination_before_spawning(monkeypatch):
     assert "Stop-Process -Id <非 Agent PID> -Force" in result
 
 
+def test_full_access_run_shell_still_blocks_self_termination_before_spawning(
+    monkeypatch, tmp_path
+):
+    async def fail_spawn(*_args, **_kwargs):
+        raise AssertionError("blocked command must not spawn a subprocess")
+
+    command = "Get-Process -Name python | Stop-Process -Force"
+    request = CapabilityRequest.create(
+        action="process.exec",
+        resource=command,
+        effect="policy_change",
+        arguments={"command": command},
+        metadata={"tool": "run_shell", "policy_change": True},
+    )
+    decision = SecurityDecision(
+        DecisionOutcome.ALLOW,
+        "test execution-layer defense",
+        "test.full_access",
+        request.digest(1),
+    )
+    monkeypatch.setattr(agent_tools.asyncio, "create_subprocess_exec", fail_spawn)
+    monkeypatch.setattr(agent_tools.platform, "system", lambda: "Windows")
+
+    with execution_scope(
+        session_id="full-access-session",
+        context=PERMISSION_PRESETS[PermissionMode.FULL_ACCESS],
+        request=request,
+        decision=decision,
+        workspace=tmp_path,
+    ):
+        result = asyncio.run(agent_tools.run_shell(command))
+
+    assert "Agent self-protection" in result
+
+
 def test_normal_shell_command_still_executes():
     result = asyncio.run(
         agent_tools.run_shell("echo self-protection-ok", restrict_to_workspace=False)
@@ -89,6 +132,45 @@ def test_shell_child_environment_hides_controller_identity(monkeypatch):
     monkeypatch.setenv("MYAGENT_PROTECTED_PIDS", "12345,43210")
 
     child_env = agent_tools._subprocess_env_for_shell()
+
+    assert "MYAGENT_TRAY_PID" not in child_env
+    assert "MYAGENT_SUPERVISOR_PID" not in child_env
+    assert "MYAGENT_SERVER_PID" not in child_env
+    assert "MYAGENT_PROTECTED_PIDS" not in child_env
+
+
+def test_full_access_shell_environment_still_hides_controller_identity(
+    monkeypatch, tmp_path
+):
+    command = "echo ok"
+    request = CapabilityRequest.create(
+        action="process.exec",
+        resource=command,
+        effect="workspace_write",
+        arguments={"command": command},
+    )
+    decision = SecurityDecision(
+        DecisionOutcome.ALLOW,
+        "test",
+        "preset.full_access",
+        request.digest(1),
+    )
+    for key, value in {
+        "MYAGENT_TRAY_PID": "43210",
+        "MYAGENT_SUPERVISOR_PID": "43210",
+        "MYAGENT_SERVER_PID": "12345",
+        "MYAGENT_PROTECTED_PIDS": "12345,43210",
+    }.items():
+        monkeypatch.setenv(key, value)
+
+    with execution_scope(
+        session_id="full-access-session",
+        context=PERMISSION_PRESETS[PermissionMode.FULL_ACCESS],
+        request=request,
+        decision=decision,
+        workspace=tmp_path,
+    ):
+        child_env = agent_tools._subprocess_env_for_shell()
 
     assert "MYAGENT_TRAY_PID" not in child_env
     assert "MYAGENT_SUPERVISOR_PID" not in child_env
