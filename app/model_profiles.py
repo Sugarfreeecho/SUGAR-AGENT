@@ -12,6 +12,15 @@ from urllib.parse import urlsplit
 
 import httpx
 
+from llm import (
+    LLMProvider,
+    PROVIDER_SEMANTICS_VERSION,
+    normalize_provider,
+    normalize_responses_state_mode,
+    resolve_profile_provider,
+    resolve_provider,
+)
+
 
 DEFAULT_UNKNOWN_MODEL_CONTEXT_WINDOW = 128_000
 DEFAULT_UNKNOWN_CONTEXT_WINDOW = 119_808
@@ -61,6 +70,32 @@ def _safe_int(value: Any, default: int = 0) -> int:
         return n if n > 0 else default
     except (TypeError, ValueError):
         return default
+
+
+def _safe_bool(value: Any, default: bool = False) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    text = str(value or "").strip().lower()
+    if text in {"1", "true", "yes", "on", "enabled"}:
+        return True
+    if text in {"0", "false", "no", "off", "disabled"}:
+        return False
+    return bool(default)
+
+
+def responses_store_disabled(profile: Optional[dict]) -> bool:
+    """Read the privacy flag, migrating legacy stateless profiles in place."""
+    item = profile if isinstance(profile, dict) else {}
+    if "responses_store_disabled" in item:
+        return _safe_bool(item.get("responses_store_disabled"))
+    try:
+        return normalize_responses_state_mode(
+            item.get("responses_state_mode")
+        ).value == "stateless"
+    except ValueError:
+        return False
 
 
 def _parse_token_count(value: Any) -> int:
@@ -604,6 +639,24 @@ def chat_completions_url_for_base(base_url: str) -> str:
     return base + "/chat/completions"
 
 
+def responses_url_for_base(base_url: str) -> str:
+    base = _normalize_base_url(base_url)
+    if not base:
+        return ""
+    return base if base.endswith("/responses") else base + "/responses"
+
+
+def anthropic_messages_url_for_base(base_url: str) -> str:
+    base = _normalize_base_url(base_url)
+    if not base:
+        return ""
+    if base.endswith("/messages"):
+        return base
+    if base.endswith("/v1"):
+        return base + "/messages"
+    return base + "/v1/messages"
+
+
 def extract_context_window_from_error(error_body: Any) -> int:
     if isinstance(error_body, (dict, list)):
         text = json.dumps(error_body, ensure_ascii=False)
@@ -625,17 +678,32 @@ def probe_context_window_from_error(
     headers: dict[str, str],
     model_id: str,
     timeout: float = CONTEXT_PROBE_TIMEOUT,
+    llm_type: str = "openai-compatible",
 ) -> int:
-    url = chat_completions_url_for_base(base_url)
+    provider = resolve_provider(llm_type, base_url, model_id)
+    if provider is LLMProvider.OPENAI:
+        url = responses_url_for_base(base_url)
+    elif provider is LLMProvider.ANTHROPIC:
+        url = anthropic_messages_url_for_base(base_url)
+    else:
+        url = chat_completions_url_for_base(base_url)
     if not url or not str(model_id or "").strip():
         return 0
     probe_text = "x " * CONTEXT_PROBE_TOKEN_COUNT
-    payload = {
-        "model": model_id,
-        "messages": [{"role": "user", "content": probe_text}],
-        "max_tokens": 1,
-        "stream": False,
-    }
+    if provider is LLMProvider.OPENAI:
+        payload = {
+            "model": model_id,
+            "input": [{"role": "user", "content": probe_text}],
+            "max_output_tokens": 1,
+            "stream": False,
+        }
+    else:
+        payload = {
+            "model": model_id,
+            "messages": [{"role": "user", "content": probe_text}],
+            "max_tokens": 1,
+            "stream": False,
+        }
     try:
         resp = client.post(url, headers=headers, json=payload, timeout=timeout)
     except httpx.HTTPError:
@@ -660,6 +728,7 @@ def probe_model_context(
     model_id: str,
     fallback: Optional[dict] = None,
     timeout: float = 20.0,
+    llm_type: Optional[str] = None,
 ) -> Dict[str, Any]:
     base = _normalize_base_url(base_url)
     if not base:
@@ -668,14 +737,28 @@ def probe_model_context(
     if not mid:
         raise ValueError("missing model")
     fallback = fallback if isinstance(fallback, dict) else {}
+    requested_provider = str(
+        llm_type or fallback.get("llm_type") or "auto"
+    ).strip().lower() or "auto"
+    provider = resolve_provider(requested_provider, base, mid)
     limits = infer_model_limits(mid, fallback, base_url=base)
     headers = {}
     if str(api_key or "").strip():
-        headers["Authorization"] = "Bearer " + str(api_key).strip()
+        if provider is LLMProvider.ANTHROPIC:
+            headers["x-api-key"] = str(api_key).strip()
+            headers["anthropic-version"] = "2023-06-01"
+        else:
+            headers["Authorization"] = "Bearer " + str(api_key).strip()
     probed_context = 0
-    if headers.get("Authorization"):
+    if headers:
         with httpx.Client(timeout=timeout) as client:
-            probed_context = probe_context_window_from_error(client, base, headers, mid)
+            probed_context = probe_context_window_from_error(
+                client,
+                base,
+                headers,
+                mid,
+                llm_type=provider.value,
+            )
     if probed_context > 0:
         limits["context_window"] = probed_context
         limits["context_source"] = "probe"
@@ -690,7 +773,7 @@ def probe_model_context(
         "limit_source": limits["context_source"],
         "context_window_source": limits["context_source"],
         "output_limit_source": limits["output_source"],
-        "probe_attempted": bool(headers.get("Authorization")),
+        "probe_attempted": bool(headers),
         "probe_succeeded": probed_context > 0,
     }
 
@@ -736,6 +819,13 @@ def save_store(project_root: Path, data: dict) -> None:
 
 def public_profile(profile: dict) -> dict:
     out = dict(profile)
+    effective_provider = resolve_profile_provider(profile)
+    out["llm_type"] = effective_provider.value
+    storage_disabled = responses_store_disabled(profile)
+    out["responses_store_disabled"] = storage_disabled
+    # Kept for one compatibility cycle; callers must not use it to force a
+    # stateful chain.  The only durable user choice is the privacy flag above.
+    out["responses_state_mode"] = "stateless" if storage_disabled else "auto"
     out["enabled"] = profile.get("enabled") is not False
     out["api_key_set"] = bool(str(profile.get("api_key") or "").strip())
     out["usable"] = is_usable_profile(profile)
@@ -814,9 +904,14 @@ def is_usable_profile(profile: object) -> bool:
         return False
     if not str(profile.get("base_url") or "").strip():
         return False
-    llm_type = str(profile.get("llm_type") or "openai").strip().lower()
+    try:
+        provider = resolve_profile_provider(profile)
+    except ValueError:
+        return False
     api_key = str(profile.get("api_key") or "").strip()
-    if llm_type != "local" and (not api_key or "YOUR_API_KEY" in api_key.upper()):
+    if provider is not LLMProvider.OPENAI_COMPATIBLE and (
+        not api_key or "YOUR_API_KEY" in api_key.upper()
+    ):
         return False
     if _safe_int(profile.get("context_window"), 0) <= 0:
         return False
@@ -827,7 +922,13 @@ def is_usable_profile(profile: object) -> bool:
 
 def _legacy_env_profile_payload(env: dict[str, Any]) -> Optional[dict]:
     """Translate a complete legacy .env model configuration into a profile payload."""
-    llm_type = str(env.get("EXECUTOR_LLM_TYPE") or "openai").strip().lower() or "openai"
+    llm_type = str(env.get("EXECUTOR_LLM_TYPE") or "auto").strip().lower() or "auto"
+    # This importer only handles the legacy .env schema, where `openai`
+    # historically meant "use the OpenAI SDK against any compatible endpoint".
+    # Preserve that behavior while allowing the profile UI's explicit `openai`
+    # value to retain its new Responses API meaning.
+    if llm_type in {"openai", "@ai-sdk/openai"}:
+        llm_type = "auto"
     if llm_type == "local":
         model = str(env.get("LOCAL_LLM") or env.get("EXECUTOR_LLM") or "").strip()
         local_host = str(env.get("LOCAL_LLM_HOST") or "").strip()
@@ -840,7 +941,10 @@ def _legacy_env_profile_payload(env: dict[str, Any]) -> Optional[dict]:
     api_key = str(env.get("OPENAI_API_KEY") or "").strip()
     if not model or not base_url:
         return None
-    if llm_type != "local" and (not api_key or "YOUR_API_KEY" in api_key.upper()):
+    provider = resolve_provider(llm_type, base_url, model)
+    if provider is not LLMProvider.OPENAI_COMPATIBLE and (
+        not api_key or "YOUR_API_KEY" in api_key.upper()
+    ):
         return None
 
     limits = infer_model_limits(model, base_url=base_url)
@@ -871,7 +975,7 @@ def _legacy_env_profile_payload(env: dict[str, Any]) -> Optional[dict]:
 def _legacy_env_profile_identity(profile: dict) -> tuple[str, ...]:
     return (
         str(profile.get("model") or "").strip(),
-        str(profile.get("llm_type") or "openai").strip().lower(),
+        str(profile.get("llm_type") or "auto").strip().lower(),
         _normalize_base_url(str(profile.get("base_url") or "")),
         str(profile.get("api_key") or "").strip(),
         str(_safe_int(profile.get("context_window"), 0)),
@@ -950,8 +1054,13 @@ def upsert_profile(project_root: Path, payload: dict) -> dict:
         raise ValueError("missing model")
     if not base_url:
         raise ValueError("missing base_url")
-    llm_type = str(payload.get("llm_type") or "openai").strip().lower() or "openai"
-    if llm_type != "local" and not incoming_api_key and not existing_api_key:
+    llm_type = normalize_provider(payload.get("llm_type") or "auto").value
+    provider = resolve_provider(llm_type, base_url, model)
+    if (
+        provider is not LLMProvider.OPENAI_COMPATIBLE
+        and not incoming_api_key
+        and not existing_api_key
+    ):
         raise ValueError("missing api_key")
     profile = dict(old or {})
     priority_default = _safe_int((old or {}).get("priority"), len(profiles) + 1)
@@ -976,12 +1085,24 @@ def upsert_profile(project_root: Path, payload: dict) -> dict:
             ),
         ),
     )
+    if "responses_store_disabled" in payload:
+        storage_disabled = _safe_bool(payload.get("responses_store_disabled"))
+    elif "responses_state_mode" in payload:
+        storage_disabled = (
+            normalize_responses_state_mode(payload.get("responses_state_mode")).value
+            == "stateless"
+        )
+    else:
+        storage_disabled = responses_store_disabled(old)
     profile.update(
         {
             "id": pid,
             "name": name,
             "model": model,
             "llm_type": llm_type,
+            "provider_semantics_version": PROVIDER_SEMANTICS_VERSION,
+            "responses_store_disabled": storage_disabled,
+            "responses_state_mode": "stateless" if storage_disabled else "auto",
             "base_url": base_url,
             "context_window": context_window,
             "max_output_tokens": max_output_tokens,
@@ -1126,7 +1247,9 @@ def profile_cache_key(profile: dict) -> str:
         {
             "id": profile.get("id"),
             "model": profile.get("model"),
-            "llm_type": profile.get("llm_type"),
+            "llm_type": resolve_profile_provider(profile).value,
+            "provider_semantics_version": profile.get("provider_semantics_version"),
+            "responses_store_disabled": responses_store_disabled(profile),
             "base_url": profile.get("base_url"),
             "api_key": profile.get("api_key"),
             "thinking_mode": profile.get("thinking_mode"),

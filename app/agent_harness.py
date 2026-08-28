@@ -24,6 +24,7 @@ import copy
 import tempfile
 import time
 import ctypes
+import socket
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
@@ -34,6 +35,13 @@ from openai import OpenAI
 import threading
 import model_profiles
 import cpu_pressure
+from llm import (
+    LLMRequestContext,
+    LLMRequestPurpose,
+    TransportEvent,
+    build_transport,
+    resolve_profile_provider,
+)
 
 from agent_messages import UserMessage, AssistantMessage, ToolMessage, SystemMessage
 from agent_openai import (
@@ -41,6 +49,7 @@ from agent_openai import (
     _api_messages_required_modalities,
     _is_media_input_error,
     _media_error_modalities,
+    _messages_to_params_for_client,
     _claim_additional_recovery_request,
     _serialized_messages_to_text_only,
     chat_completion,
@@ -178,7 +187,11 @@ VERBOSE_LOGGING = os.getenv("VERBOSE_LOGGING", "True").lower() == "true"
 TODO_MAX_ITEMS = int(os.getenv("TODO_MAX_ITEMS", "30"))
 
 EXECUTOR_LLM = str(_INITIAL_MODEL_PROFILE.get("model") or "").strip()
-EXECUTOR_LLM_TYPE = str(_INITIAL_MODEL_PROFILE.get("llm_type") or "openai").strip().lower()
+EXECUTOR_LLM_TYPE = (
+    resolve_profile_provider(_INITIAL_MODEL_PROFILE).value
+    if _INITIAL_MODEL_PROFILE
+    else "openai"
+)
 try:
     EXECUTOR_TEMPERATURE = float(str(_INITIAL_MODEL_PROFILE.get("temperature") or "0.7"))
 except ValueError:
@@ -364,6 +377,11 @@ def _profile_extra_body(profile: dict) -> Optional[Dict[str, Any]]:
             logging.getLogger(__name__).warning("模型配置 LLM_EXTRA_BODY_JSON 须为 JSON 对象，已忽略")
             return None
         return _sanitize_extra_body_drop_reasoning_when_thinking_off(data)
+    # Responses profiles are safest when an empty setting means "automatic":
+    # do not synthesize provider-specific fields.  Compatible profiles retain
+    # the historical thinking defaults used by DeepSeek-style endpoints.
+    if not thinking_mode and resolve_profile_provider(profile).value == "openai":
+        return None
     if not thinking_mode:
         thinking_mode = "enabled"
     if thinking_mode == "enabled":
@@ -374,9 +392,13 @@ def _profile_extra_body(profile: dict) -> Optional[Dict[str, Any]]:
 
 
 def _profile_reasoning_effort(profile: dict, extra_body: Optional[Dict[str, Any]]) -> Optional[str]:
+    v = str(profile.get("reasoning_effort") or "").strip()
+    if resolve_profile_provider(profile).value == "openai":
+        # Responses has a native `reasoning.effort` field.  Never invent an
+        # effort when the profile leaves it on automatic.
+        return v or None
     if not _thinking_enabled_from_extra_dict(extra_body):
         return None
-    v = str(profile.get("reasoning_effort") or "").strip()
     return v if v else "high"
 
 
@@ -698,6 +720,20 @@ def load_prompt_template(template_name: str, language: str = "zh-CN") -> str:
         logger.error(f"加载提示词模板失败: {e}")
         raise
 
+
+def prompt_template_revision(language: str = "zh-CN") -> tuple[str, int, int]:
+    """Return a cheap stat signature for the selected prompt template."""
+    path = resolve_prompt_md_path()
+    if normalize_prompt_language(language) == "en":
+        english_path = path.with_name("prompt.en.md")
+        if english_path.is_file():
+            path = english_path
+    try:
+        stat = path.stat()
+        return str(path), int(stat.st_mtime_ns), int(stat.st_size)
+    except OSError:
+        return str(path), 0, 0
+
 # ==================== 自定义 HTTP 客户端（记录 OpenAI 请求/响应，供日志中的 token 统计）====================
 class RequestResponseLogger(httpx.Client):
     """包装 httpx.Client，在 interactions 中追加脱敏后的请求与 usage。"""
@@ -845,6 +881,36 @@ class LocalNetworkUnavailableError(ConnectionError):
     """The machine is offline, so provider fallback must not fan out."""
 
 
+def _probe_network_connectivity(timeout: float = 0.75) -> bool:
+    """Resolve WinINet false negatives with a small, configurable TCP probe."""
+    configured = str(
+        os.getenv("LOCAL_NETWORK_PROBE_TARGETS", "1.1.1.1:443,8.8.8.8:53")
+        or ""
+    )
+    endpoints: List[Tuple[str, int]] = []
+    for raw in configured.split(","):
+        item = raw.strip()
+        if not item:
+            continue
+        host, separator, port_text = item.rpartition(":")
+        if not separator or not host:
+            continue
+        try:
+            port = int(port_text)
+        except (TypeError, ValueError):
+            continue
+        if 0 < port <= 65535:
+            endpoints.append((host.strip(), port))
+    for endpoint in endpoints:
+        try:
+            connection = socket.create_connection(endpoint, timeout=max(0.05, float(timeout)))
+            connection.close()
+            return True
+        except OSError:
+            continue
+    return False
+
+
 def machine_network_available() -> bool:
     """Return False only when the operating system positively reports offline."""
     if os.name != "nt":
@@ -855,7 +921,12 @@ def machine_network_available() -> bool:
             ctypes.byref(flags),
             0,
         )
-        return bool(connected)
+        if connected:
+            return True
+        # WinINet can report offline while VPN/proxy routes are usable.  Only
+        # suspend provider fallback when both the OS hint and an active probe
+        # say the machine has no external route.
+        return _probe_network_connectivity()
     except Exception:
         # An unavailable probe is not evidence of an outage. Keep the normal
         # provider/model fallback behavior in that case.
@@ -924,10 +995,10 @@ def create_openai_client_for_profile(
 ) -> Tuple[OpenAI, str]:
     """Create an OpenAI-compatible client from a saved model profile."""
     model_name = str(profile.get("model") or "").strip()
-    model_type = str(profile.get("llm_type") or "openai").strip().lower()
     base_url = str(profile.get("base_url") or "").strip().rstrip("/") or None
     api_key = str(profile.get("api_key") or "").strip()
-    if model_type == "local" and not api_key:
+    provider = resolve_profile_provider(profile)
+    if provider.value == "openai-compatible" and not api_key:
         api_key = _LOCAL_OPENAI_DUMMY_KEY
     logger.info(
         "创建 %s 客户端 (模型档案): model=%s, base_url=%s",
@@ -1038,13 +1109,11 @@ class _FallbackCompletions:
                 item.get("thinking_format") or "deepseek",
             )
             call_kwargs["model"] = item["model"]
-            requested_max_tokens = int(call_kwargs.get("max_tokens") or 0)
             candidate_max_tokens = int(item.get("max_output_tokens") or MAX_OUTPUT_TOKENS)
-            call_kwargs["max_tokens"] = (
-                min(requested_max_tokens, candidate_max_tokens)
-                if requested_max_tokens > 0
-                else candidate_max_tokens
-            )
+            # The model profile that actually handles this attempt owns the
+            # output budget.  Do not carry a smaller scenario/primary-model
+            # limit into a fallback candidate.
+            call_kwargs["max_tokens"] = candidate_max_tokens
             call_kwargs["temperature"] = float(item.get("temperature", EXECUTOR_TEMPERATURE))
             if item.get("extra_body") is not None:
                 call_kwargs["extra_body"] = item.get("extra_body")
@@ -1163,12 +1232,33 @@ class _FallbackChat:
         self.completions.set_status_callback(status_callback)
 
 
-class FallbackOpenAIClient:
-    """OpenAI-compatible facade that retries model profiles in priority order."""
+class ExecutorLLMClient:
+    """Executor facade that retries provider-neutral model transports."""
 
-    def __init__(self, candidates: List[Dict[str, Any]]):
+    def __init__(
+        self,
+        candidates: List[Dict[str, Any]],
+        *,
+        failure_lock: Optional[Any] = None,
+        failed_candidates_by_scope: Optional[Dict[str, set[str]]] = None,
+    ):
         self.candidates = candidates
         self.chat = _FallbackChat(candidates)
+        self._failure_lock = failure_lock or threading.RLock()
+        self._request_scope = ""
+        self._failed_candidates_by_scope = (
+            failed_candidates_by_scope
+            if failed_candidates_by_scope is not None
+            else {}
+        )
+        self._last_successful_candidate_key = ""
+        # The facade, not the outer first-token race, owns provider/model
+        # fallback.  Launching several copies of this iterator would let every
+        # physical hedge switch models and emit duplicate status messages.
+        self._myagent_logical_fallback_owner = True
+        self._myagent_transport_enabled = bool(
+            candidates and all(item.get("transport") is not None for item in candidates)
+        )
         first = candidates[0] if candidates else {}
         # 规范序列化标记：先保留 <think> 内容 + reasoning_content 字段，
         # 具体目标格式在 _FallbackCompletions.create 内按候选 remap。
@@ -1181,11 +1271,306 @@ class FallbackOpenAIClient:
         self._myagent_mark_multimodal_failed = None
         self._myagent_mark_modalities_failed = lambda _modalities, _error: None
 
+    def set_request_scope(self, scope: str) -> None:
+        """Select the run whose failed-provider circuit should be reused."""
+        value = str(scope or "").strip()
+        with self._failure_lock:
+            self._request_scope = value
+            if value:
+                self._failed_candidates_by_scope.setdefault(value, set())
+            while len(self._failed_candidates_by_scope) > 128:
+                oldest = next(iter(self._failed_candidates_by_scope))
+                self._failed_candidates_by_scope.pop(oldest, None)
+
+    def current_candidate(self) -> Dict[str, Any]:
+        """Return the model that most recently completed a main-agent request."""
+        with self._failure_lock:
+            successful_key = self._last_successful_candidate_key
+        if successful_key:
+            for index, item in enumerate(self.candidates):
+                if self._candidate_circuit_key(index, item) == successful_key:
+                    return dict(item)
+        return dict(self.candidates[0]) if self.candidates else {}
+
+    def next_candidate(self) -> Dict[str, Any]:
+        """Return the candidate the next main request will try first."""
+        with self._failure_lock:
+            failed = set(
+                self._failed_candidates_by_scope.get(self._request_scope, set())
+            )
+        for index, item in enumerate(self.candidates):
+            if self._candidate_circuit_key(index, item) not in failed:
+                return dict(item)
+        return dict(self.candidates[0]) if self.candidates else {}
+
+    def compact_history(self, **kwargs: Any) -> Any:
+        """Use the active provider's native compaction without cross-provider fallback."""
+        candidate = self.next_candidate()
+        transport = candidate.get("transport") if isinstance(candidate, dict) else None
+        compact = getattr(transport, "compact_history", None)
+        if not callable(compact):
+            raise NotImplementedError("active LLM provider has no native compaction")
+        call_kwargs = dict(kwargs)
+        call_kwargs["model"] = str(candidate.get("model") or call_kwargs.get("model") or "")
+        call_kwargs["messages"] = _remap_serialized_reasoning_format(
+            list(call_kwargs.get("messages") or []),
+            candidate.get("thinking_format") or "deepseek",
+        )
+        return compact(**call_kwargs)
+
+    def complete_text(
+        self,
+        *,
+        response_validator: Optional[Callable[[Dict[str, Any]], bool]] = None,
+        include_candidate_controls: bool = True,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        """Run one stateless text request through each candidate's native protocol.
+
+        One-shot background work must not share the main ReAct retry budget: a
+        failing primary profile should not consume every retry before a healthy
+        backup profile gets a chance to answer.
+        """
+        last_error: Optional[BaseException] = None
+        last_model = ""
+        for index, item in enumerate(self.candidates):
+            model = str(item.get("model") or "")
+            transport = item.get("transport")
+            if transport is None:
+                last_error = RuntimeError("model candidate has no LLM transport")
+                continue
+            call_kwargs = dict(kwargs)
+            call_kwargs["messages"] = _messages_to_params_for_client(
+                item.get("client"),
+                list(call_kwargs.get("messages") or []),
+                thinking_format=item.get("thinking_format") or "deepseek",
+            )
+            call_kwargs["model"] = model
+            candidate_max_tokens = int(
+                item.get("max_output_tokens") or MAX_OUTPUT_TOKENS
+            )
+            call_kwargs["max_tokens"] = candidate_max_tokens
+            if call_kwargs.get("temperature") is None:
+                call_kwargs["temperature"] = float(
+                    item.get("temperature", EXECUTOR_TEMPERATURE)
+                )
+            if include_candidate_controls:
+                if item.get("extra_body") is not None:
+                    call_kwargs["extra_body"] = item.get("extra_body")
+                if item.get("reasoning_effort"):
+                    call_kwargs["reasoning_effort"] = item.get("reasoning_effort")
+            else:
+                call_kwargs.pop("extra_body", None)
+                call_kwargs.pop("reasoning_effort", None)
+            try:
+                if index > 0:
+                    if last_error is not None:
+                        self.chat.completions._emit_model_switch_status(
+                            last_model,
+                            model,
+                            last_error,
+                        )
+                    logger.warning(
+                        "一次性模型请求自动切换: from=%s to=%s purpose=%s",
+                        _masked_model_label(last_model),
+                        _masked_model_label(model),
+                        LLMRequestContext.from_value(
+                            call_kwargs.get("request_context")
+                        ).purpose.value,
+                    )
+                result = transport.complete_text(**call_kwargs)
+                if not isinstance(result, dict):
+                    raise ValueError("LLM transport returned a non-object completion")
+                if response_validator is not None and not response_validator(result):
+                    raise ValueError("LLM transport returned an unusable completion")
+                result = dict(result)
+                result["_myagent_candidate"] = {
+                    "profile_id": str(item.get("profile_id") or ""),
+                    "provider": str(item.get("provider") or ""),
+                    "model": model,
+                }
+                return result
+            except Exception as exc:
+                if _is_network_connectivity_error(exc) and not machine_network_available():
+                    raise LocalNetworkUnavailableError(
+                        "The local machine is offline; waiting for network recovery."
+                    ) from exc
+                last_error = exc
+                last_model = model
+                logger.warning(
+                    "一次性模型请求失败: model=%s provider=%s error=%s",
+                    _masked_model_label(model),
+                    item.get("provider") or "unknown",
+                    _redact_runtime_log_text(exc),
+                )
+        if last_error is not None:
+            raise last_error
+        raise RuntimeError("no model candidates configured")
+
+    @staticmethod
+    def _candidate_circuit_key(index: int, item: Dict[str, Any]) -> str:
+        return str(item.get("profile_id") or f"candidate:{index}")
+
+    def stream_completion(self, **kwargs: Any) -> Any:
+        """Return a normalized stream, switching profiles only before first output."""
+        return self._stream_completion_iter(dict(kwargs))
+
+    def _stream_completion_iter(self, kwargs: Dict[str, Any]) -> Any:
+        last_error: Optional[BaseException] = None
+        last_model = ""
+        request_context = LLMRequestContext.from_value(kwargs.get("request_context"))
+        background_text_request = request_context.purpose is not LLMRequestPurpose.MAIN
+        with self._failure_lock:
+            request_scope = self._request_scope
+            failed_candidates = set(
+                self._failed_candidates_by_scope.get(request_scope, set())
+            )
+        required_modalities = _api_messages_required_modalities(
+            list(kwargs.get("messages") or [])
+        )
+        attempted_candidates = 0
+        for idx, item in enumerate(self.candidates):
+            circuit_key = self._candidate_circuit_key(idx, item)
+            if circuit_key in failed_candidates:
+                logger.info(
+                    "本轮运行跳过已失败模型: model=%s provider=%s",
+                    _masked_model_label(str(item.get("model") or "")),
+                    item.get("provider") or "unknown",
+                )
+                continue
+            if attempted_candidates > 0 and not _claim_additional_recovery_request():
+                raise RuntimeError("LLM request budget exhausted before model fallback")
+            call_kwargs = dict(kwargs)
+            call_kwargs["messages"] = _remap_serialized_reasoning_format(
+                list(call_kwargs.get("messages") or []),
+                item.get("thinking_format") or "deepseek",
+            )
+            call_kwargs["model"] = item["model"]
+            candidate_max_tokens = int(item.get("max_output_tokens") or MAX_OUTPUT_TOKENS)
+            call_kwargs["max_tokens"] = candidate_max_tokens
+            call_kwargs["temperature"] = float(
+                item.get("temperature", EXECUTOR_TEMPERATURE)
+            )
+            if item.get("extra_body") is not None:
+                call_kwargs["extra_body"] = item.get("extra_body")
+            else:
+                call_kwargs.pop("extra_body", None)
+            if item.get("reasoning_effort"):
+                call_kwargs["reasoning_effort"] = item.get("reasoning_effort")
+            else:
+                call_kwargs.pop("reasoning_effort", None)
+            request_has_media = _api_messages_have_media(
+                list(call_kwargs.get("messages") or [])
+            )
+            if request_has_media and not required_modalities.issubset(
+                _candidate_input_modalities(item)
+            ):
+                call_kwargs["messages"] = _serialized_messages_to_text_only(
+                    list(call_kwargs.get("messages") or [])
+                )
+            transport = item.get("transport")
+            if transport is None:
+                raise RuntimeError("model candidate has no LLM transport")
+            emitted_output = False
+            try:
+                if attempted_candidates > 0:
+                    if last_error is not None:
+                        self.chat.completions._emit_model_switch_status(
+                            last_model,
+                            str(item.get("model") or ""),
+                            last_error,
+                        )
+                    logger.warning(
+                        "当前模型故障，按优先级切换到备用模型: %s",
+                        _masked_model_label(str(item.get("model") or "")),
+                    )
+                attempted_candidates += 1
+                pending_events: List[TransportEvent] = []
+                emitted_content = False
+                for event in transport.stream_completion(**call_kwargs):
+                    if background_text_request and not emitted_content:
+                        pending_events.append(event)
+                        if (
+                            isinstance(event, TransportEvent)
+                            and event.kind == "content_delta"
+                            and bool(event.text)
+                        ):
+                            emitted_content = True
+                            emitted_output = True
+                            yield from pending_events
+                            pending_events = []
+                        continue
+                    if isinstance(event, TransportEvent) and event.is_first_token:
+                        emitted_output = True
+                    yield event
+                if background_text_request and not emitted_content:
+                    raise ValueError("background LLM stream returned no text content")
+                with self._failure_lock:
+                    self._last_successful_candidate_key = circuit_key
+                return
+            except Exception as exc:
+                # Once visible output exists, switching providers would splice two
+                # different answers into one assistant turn.
+                if emitted_output:
+                    raise
+                if (
+                    request_has_media
+                    and required_modalities.issubset(_candidate_input_modalities(item))
+                    and _is_media_input_error(exc)
+                ):
+                    rejected_modalities = _media_error_modalities(exc, required_modalities)
+                    item["input_modalities"] = [
+                        modality
+                        for modality in (item.get("input_modalities") or [])
+                        if modality not in rejected_modalities
+                    ]
+                    item["multimodal_input"] = any(
+                        modality in {"image", "audio", "video", "file"}
+                        for modality in item["input_modalities"]
+                    )
+                    mark_failed = item.get("mark_modalities_failed")
+                    if callable(mark_failed):
+                        mark_failed(sorted(rejected_modalities), exc)
+                    self.chat.completions._emit_multimodal_fallback_status(
+                        str(item.get("model") or "")
+                    )
+                if _is_network_connectivity_error(exc) and not machine_network_available():
+                    raise LocalNetworkUnavailableError(
+                        "The local machine is offline; waiting for network recovery."
+                    ) from exc
+                media_only_failure = request_has_media and _is_media_input_error(exc)
+                if request_scope and not media_only_failure:
+                    with self._failure_lock:
+                        scoped_failures = self._failed_candidates_by_scope.setdefault(
+                            request_scope,
+                            set(),
+                        )
+                        scoped_failures.add(circuit_key)
+                    failed_candidates.add(circuit_key)
+                last_error = exc
+                last_model = str(item.get("model") or "")
+                logger.warning(
+                    "模型调用失败: model=%s provider=%s error=%s",
+                    _masked_model_label(last_model),
+                    item.get("provider") or "unknown",
+                    _redact_runtime_log_text(exc),
+                )
+        if last_error is not None:
+            raise last_error
+        if failed_candidates:
+            raise RuntimeError("all model candidates are unavailable for this run")
+        raise RuntimeError("no model candidates configured")
+
     def set_status_callback(
         self,
         status_callback: Optional[Callable[[Dict[str, Any]], None]],
     ) -> None:
         self.chat.set_status_callback(status_callback)
+
+
+# Backward-compatible public name for plugins/tests that imported the old
+# OpenAI-specific facade before the transport layer became provider-neutral.
+FallbackOpenAIClient = ExecutorLLMClient
 
 
 if _INITIAL_MODEL_PROFILE:
@@ -1220,7 +1605,7 @@ def refresh_executor_client_from_env() -> None:
 
     profile = model_profiles.top_profile(PROJECT_ROOT) or {}
     EXECUTOR_LLM = str(profile.get("model") or "").strip()
-    EXECUTOR_LLM_TYPE = str(profile.get("llm_type") or "openai").strip().lower()
+    EXECUTOR_LLM_TYPE = resolve_profile_provider(profile).value if profile else "openai"
     MAX_OUTPUT_TOKENS = model_profiles._safe_int(profile.get("max_output_tokens"), 8192)
     CONTEXT_WINDOW = model_profiles._safe_int(profile.get("context_window"), 128000)
     try:
@@ -1288,31 +1673,66 @@ def refresh_executor_client_from_env() -> None:
     _invalidate_executor_config_cache()
 
 
+def executor_one_shot_complete(
+    messages: List[Any],
+    *,
+    session_id: str = "",
+    purpose: LLMRequestPurpose = LLMRequestPurpose.SUMMARY,
+    temperature: Optional[float] = None,
+    timeout: Optional[float] = None,
+    response_validator: Optional[Callable[[Dict[str, Any]], bool]] = None,
+    include_candidate_controls: bool = True,
+) -> Dict[str, Any]:
+    """Complete independent background work without exposing session identity."""
+    candidates = resolve_executor_candidates_for_session(session_id)
+    if not candidates:
+        raise RuntimeError("no usable model profile configured")
+    client = ExecutorLLMClient(candidates)
+    kwargs: Dict[str, Any] = {
+        "messages": messages,
+        "request_context": LLMRequestContext(
+            session_id=str(session_id or "").strip(),
+            purpose=purpose,
+            server_storage_allowed=False,
+        ),
+    }
+    if temperature is not None:
+        kwargs["temperature"] = float(temperature)
+    if timeout is not None:
+        kwargs["timeout"] = float(timeout)
+    if response_validator is None:
+        response_validator = lambda value: bool(
+            str(value.get("text") or "").strip()
+            and not str(value.get("refusal") or "").strip()
+            and not str(value.get("error") or "").strip()
+        )
+    return client.complete_text(
+        response_validator=response_validator,
+        include_candidate_controls=include_candidate_controls,
+        **kwargs,
+    )
+
+
 def executor_text_complete(prompt: str, session_id: str = "") -> str:
     """单轮补全，走执行端（压缩摘要、key_context 条目、会话标题等）。"""
-    client, model, max_tokens, _ctx = resolve_executor_config_for_session(session_id)
-    text, _ = single_turn_text_completion(
-        client,
-        model,
-        prompt,
+    result = executor_one_shot_complete(
+        [UserMessage(content=prompt)],
+        session_id=session_id,
+        purpose=LLMRequestPurpose.SUMMARY,
         temperature=EXECUTOR_TEMPERATURE,
-        max_tokens=max_tokens,
     )
-    return text
+    return str(result.get("text") or "").strip()
 
 
 def executor_chat_complete(messages: List[Any], session_id: str = "") -> str:
     """多轮 chat，走执行端（compress_history_and_key 等结构化上送）。"""
-    client, model, max_tokens, _ctx = resolve_executor_config_for_session(session_id)
-    r = chat_completion(
-        client,
-        model,
+    result = executor_one_shot_complete(
         messages,
-        tools=None,
+        session_id=session_id,
+        purpose=LLMRequestPurpose.SUMMARY,
         temperature=EXECUTOR_TEMPERATURE,
-        max_tokens=max_tokens,
     )
-    return (parse_assistant_message(r.choices[0].message).content or "").strip()
+    return str(result.get("text") or "").strip()
 
 
 def executor_chat_complete_stream(
@@ -1341,6 +1761,11 @@ def executor_chat_complete_stream(
             temperature=EXECUTOR_TEMPERATURE,
             max_tokens=max_tokens,
             emit_deltas=not buffer_only,
+            request_context=LLMRequestContext(
+                session_id=str(session_id or "").strip(),
+                purpose=LLMRequestPurpose.SUMMARY,
+                server_storage_allowed=False,
+            ),
         )
 
     t = threading.Thread(target=_worker, daemon=True)
@@ -1382,13 +1807,16 @@ def executor_text_and_usage(
     session_id: str = "",
 ) -> Tuple[str, Optional[Dict[str, int]]]:
     """与 executor_text_complete 相同，返回 usage。"""
-    client, model, max_tokens, _ctx = resolve_executor_config_for_session(session_id)
-    return single_turn_text_completion(
-        client,
-        model,
-        prompt,
+    result = executor_one_shot_complete(
+        [UserMessage(content=prompt)],
+        session_id=session_id,
+        purpose=LLMRequestPurpose.SUMMARY,
         temperature=EXECUTOR_TEMPERATURE,
-        max_tokens=max_tokens,
+    )
+    usage = result.get("usage")
+    return (
+        str(result.get("text") or "").strip(),
+        dict(usage) if isinstance(usage, dict) else None,
     )
 
 # ==================== 从 ui_events 还原主对话链（与 SSE 同源）====================
@@ -2065,10 +2493,9 @@ class SessionManager:
         self._subagent_index_cache_signature: Optional[Tuple[bool, int, int]] = None
         self._known_root_session_ids: set[str] = set()
         self._load_index()
-        if os.getenv("REPAIR_SESSIONS_INDEX_ON_START", "0").strip().lower() in {"1", "true", "yes", "on"}:
-            self.refresh_sessions_index_from_disk()
-        elif not self.index_file.exists():
-            self.refresh_sessions_index_from_disk()
+        # 每次 Agent 启动都以磁盘上的会话目录为准重建索引，避免已存在但陈旧的
+        # sessions.json 隐藏新增会话，或继续展示已从磁盘移除的会话。
+        self.refresh_sessions_index_from_disk()
 
     @staticmethod
     def _normalize_session_id(session_id: str) -> str:
@@ -3845,6 +4272,15 @@ class SessionManager:
 
     def get_todo_plan_snapshot(self, session_id: str) -> dict:
         """从 todo_plan.md 解析「## Todo 计划」，供左侧「当前计划」浮层展示。"""
+        if self._runtime_v2_primary():
+            try:
+                from session_todo_extension import read_todo_extension
+
+                extension = read_todo_extension(self, session_id)
+                if isinstance(extension, dict):
+                    return extension
+            except Exception as exc:
+                logger.debug("Runtime V2 Todo extension read failed for %s: %s", session_id, exc)
         raw = self.load_todo_plan(session_id)
         if not (raw or "").strip():
             kc_path = self._get_key_context_path(session_id)
@@ -3875,27 +4311,14 @@ class SessionManager:
         todo_manager._by_session.pop(sid, None)
         if self._runtime_v2_primary():
             try:
-                from runtime_v2 import RuntimeHistoryOps, SnapshotStore
+                from session_todo_extension import read_todo_extension, write_todo_extension
 
-                snapshot = SnapshotStore(
-                    self.repository.sessions_dir,
-                    path_resolver=getattr(self.repository, "_path_resolver", None),
-                ).read(sid)
-                previous = snapshot.get("todo") if isinstance(snapshot, dict) else None
-                RuntimeHistoryOps(
-                    self.repository.sessions_dir,
-                    path_resolver=getattr(self.repository, "_path_resolver", None),
-                ).update_todo(
-                    sid,
-                    {
-                        "has_plan": False,
-                        "items": [],
-                        "done": 0,
-                        "total": 0,
-                        "cleared": True,
-                    },
+                previous = read_todo_extension(self, sid)
+                write_todo_extension(self, sid, [], cleared=True)
+                return bool(
+                    isinstance(previous, dict)
+                    and (previous.get("has_plan") or previous.get("items"))
                 )
-                return bool(previous)
             except Exception as exc:
                 logger.warning("Runtime V2 clear todo failed for %s: %s", sid, exc)
                 return False
@@ -5889,14 +6312,18 @@ class SessionManager:
 session_manager = SessionManager(SESSIONS_DIR, INDEX_FILE)
 
 _executor_override_cache: Dict[str, Tuple[Any, str]] = {}
+_executor_transport_cache: Dict[str, Any] = {}
 _executor_config_cache: Dict[str, Tuple[float, Tuple[Any, str, int, int]]] = {}
 _executor_profile_catalog_cache: Optional[Tuple[float, Dict[str, dict], List[str], str]] = None
+_executor_config_generation = 0
 _executor_config_cache_lock = threading.Lock()
+_executor_failure_lock = threading.RLock()
+_executor_failed_candidates_by_scope: Dict[str, set[str]] = {}
 _EXECUTOR_CONFIG_CACHE_TTL_SEC = 10.0
 
 
 def _invalidate_executor_config_cache(session_id: str = "") -> None:
-    global _executor_profile_catalog_cache
+    global _executor_profile_catalog_cache, _executor_config_generation
     sid = str(session_id or "").strip()
     with _executor_config_cache_lock:
         if sid:
@@ -5904,6 +6331,12 @@ def _invalidate_executor_config_cache(session_id: str = "") -> None:
         else:
             _executor_config_cache.clear()
             _executor_profile_catalog_cache = None
+        _executor_config_generation += 1
+
+
+def executor_config_generation() -> int:
+    with _executor_config_cache_lock:
+        return int(_executor_config_generation)
 
 
 def _executor_profile_catalog(now: Optional[float] = None) -> Tuple[Dict[str, dict], List[str], str]:
@@ -5941,13 +6374,20 @@ def list_executor_model_profile_choices() -> List[Dict[str, Any]]:
             "id": pid,
             "name": str(profile.get("name") or profile.get("model") or pid),
             "model": str(profile.get("model") or ""),
-            "llm_type": str(profile.get("llm_type") or "openai"),
+            "llm_type": resolve_profile_provider(profile).value,
             "context_window": int(profile.get("context_window") or CONTEXT_WINDOW),
             "max_output_tokens": int(profile.get("max_output_tokens") or MAX_OUTPUT_TOKENS),
         }
         choice.update(model_profiles.infer_model_task_capabilities(
             choice["model"], choice["name"], choice["context_window"]
         ))
+        custom_description = str(
+            profile.get("capability_description") or ""
+        ).strip()
+        if custom_description:
+            choice["capability_description"] = custom_description
+            choice["capability_description_en"] = custom_description
+            choice["capability_source"] = "manual"
         choice["table_input_modalities"] = list(choice.get("input_modalities") or [])
         choice["input_modalities"] = model_profiles.profile_input_modalities(profile)
         choice["multimodal_input"] = model_profiles.profile_multimodal_input(profile)
@@ -6038,6 +6478,15 @@ def _profile_candidate(profile: dict) -> Dict[str, Any]:
     profile_id = str(profile.get("id") or "")
     input_modalities = model_profiles.profile_input_modalities(profile)
     multimodal_input = model_profiles.profile_multimodal_input(profile)
+    provider = resolve_profile_provider(profile)
+    transport = _executor_transport_cache.get(cache_key)
+    if transport is None:
+        transport = build_transport(
+            profile,
+            openai_client=cached[0],
+            http_client=executor_http_client,
+        )
+        _executor_transport_cache[cache_key] = transport
     mark_multimodal_failed = (
         lambda error, pid=profile_id: _record_profile_multimodal_failure(pid, error)
     )
@@ -6064,6 +6513,8 @@ def _profile_candidate(profile: dict) -> Dict[str, Any]:
     return {
         "profile_id": profile_id,
         "client": cached[0],
+        "transport": transport,
+        "provider": provider.value,
         "model": cached[1],
         "max_output_tokens": int(profile.get("max_output_tokens") or MAX_OUTPUT_TOKENS),
         "context_window": int(profile.get("context_window") or CONTEXT_WINDOW),
@@ -6187,9 +6638,16 @@ def resolve_executor_config_for_session(session_id: str) -> Tuple[Any, str, int,
     if not candidates:
         raise RuntimeError("no usable model profile configured")
     first = candidates[0]
+    # Always keep the provider-neutral facade at the executor boundary.  This
+    # makes a single-profile session use the same protocol selection as model
+    # fallback and the Goal judge.
     client = (
-        FallbackOpenAIClient(candidates)
-        if profile_id or len(candidates) > 1
+        FallbackOpenAIClient(
+            candidates,
+            failure_lock=_executor_failure_lock,
+            failed_candidates_by_scope=_executor_failed_candidates_by_scope,
+        )
+        if profile_id or len(candidates) > 1 or first.get("transport") is not None
         else first.get("client")
     )
     result = (
@@ -6354,12 +6812,17 @@ class TodoManager:
     def _load_runtime_v2_items(self, session_id: str) -> List[Dict]:
         try:
             from runtime_v2 import SnapshotStore
+            from session_todo_extension import read_todo_extension
+
+            extension = read_todo_extension(session_manager, session_id)
 
             snapshot = SnapshotStore(
                 session_manager.sessions_dir,
                 path_resolver=getattr(session_manager, "_resolve_session_path", None),
             ).read(session_id)
-            todo = snapshot.get("todo") if isinstance(snapshot, dict) else {}
+            todo = extension if isinstance(extension, dict) else (
+                snapshot.get("todo") if isinstance(snapshot, dict) else {}
+            )
             if not isinstance(todo, dict):
                 todo = {}
             items = todo.get("items")
@@ -6482,12 +6945,15 @@ class TodoManager:
     def has_active_plan(self, session_id: str) -> bool:
         if not session_id:
             return False
+        if self._runtime_v2_primary():
+            self._by_session[session_id] = self._load_runtime_v2_items(session_id)
         items = self._by_session.get(session_id, [])
         if not items:
             return False
         return not all(t["status"] == "completed" for t in items)
 
 todo_manager = TodoManager()
+session_plan_store = todo_manager
 
 # ==================== 压缩辅助函数 ====================
 def estimate_tokens(messages: List) -> int:

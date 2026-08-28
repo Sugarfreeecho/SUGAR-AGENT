@@ -449,6 +449,15 @@ def test_early_tool_completion_waits_for_llm_commit_before_ui_emit():
     )
 
 
+def test_early_tool_path_normalizes_names_and_records_short_circuit_failures():
+    import agent_loop
+
+    react_source = inspect.getsource(agent_loop._react_node_once)
+    assert "row[\"name\"] = merge_streamed_tool_name(" in react_source
+    assert "return short_circuit(" in react_source
+    assert "_unknown_tool_result(tool_name, tool_args, tool_id)" in react_source
+
+
 def test_consecutive_side_effecting_tools_reuse_the_previous_workspace_snapshot():
     import agent_loop
 

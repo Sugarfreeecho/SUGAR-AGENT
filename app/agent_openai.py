@@ -1,8 +1,9 @@
 """
-OpenAI Chat Completions 适配层。
+Agent LLM 调用层（历史文件名保留为 agent_openai）。
 
-负责把 agent_messages 中的消息转为 API 的 messages 列表，并解析 assistant 消息中的
-content / tool_calls / reasoning_content。
+负责消息序列化、统一重试/首 token 竞速、流式事件聚合，以及把 provider-neutral
+TransportEvent 解析为 AssistantTurn。具体 OpenAI Responses、OpenAI-compatible Chat
+Completions 与 Anthropic Messages 线协议集中在 llm/ 包。
 
 主模型在思考开时由 harness 传 extra_body.thinking、reasoning_effort，并继续传 temperature；
 messages_to_openai_params 按目标模型的 thinking_format 输出思考字段：
@@ -25,6 +26,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from queue import Empty, Queue
+from types import SimpleNamespace
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from openai import OpenAI
@@ -32,8 +34,29 @@ from openai.types.chat import ChatCompletion
 
 from agent_messages import AssistantMessage, SystemMessage, ToolMessage, UserMessage
 from agent_think import strip_think_blocks
+from llm import TransportEvent, merge_streamed_tool_name
 
 logger = logging.getLogger(__name__)
+
+
+def compact_responses_history(
+    client: Any,
+    model: str,
+    messages: List[Any],
+    *,
+    request_context: Any,
+    source_estimated_tokens: int,
+) -> Any:
+    """Serialize model history once and invoke the active native compact adapter."""
+    compact = getattr(client, "compact_history", None)
+    if not callable(compact):
+        raise NotImplementedError("LLM client has no native compaction")
+    return compact(
+        model=model,
+        messages=_messages_to_params_for_client(client, messages),
+        request_context=request_context,
+        source_estimated_tokens=max(0, int(source_estimated_tokens or 0)),
+    )
 
 def _env_value(primary: str, legacy: str, default: str) -> str:
     primary_value = os.getenv(primary)
@@ -178,6 +201,10 @@ def extract_usage_dict(usage_obj: Any) -> Dict[str, int]:
     reasoning_tokens = _safe_int(
         _get_nested_attr_or_key(usage_obj, "completion_tokens_details", "reasoning_tokens")
     )
+    if reasoning_tokens <= 0:
+        reasoning_tokens = _safe_int(
+            _get_nested_attr_or_key(usage_obj, "reasoning_tokens")
+        )
     accepted_prediction_tokens = _safe_int(
         _get_nested_attr_or_key(
             usage_obj, "completion_tokens_details", "accepted_prediction_tokens"
@@ -221,12 +248,13 @@ def _is_retriable_openai_error(exc: BaseException) -> bool:
 
 @dataclass
 class AssistantTurn:
-    """单次 chat.completions 中 assistant 消息的已解析结果。"""
+    """单次 provider 调用中 assistant 消息的统一结果。"""
 
     content: str
     tool_calls: Optional[List[Dict[str, Any]]]
     reasoning_content: Optional[str]
     reasoning_field: Optional[str] = None
+    provider_data: Optional[Dict[str, Any]] = None
 
 
 _DSML_SEP = r"[|｜]"
@@ -1333,6 +1361,9 @@ def messages_to_openai_params(
                 rc = ak.get("reasoning_content", None)
                 if rc is None:
                     rc = ak.get("reasoning", None)
+                responses_state = ak.get("_myagent_responses")
+                if isinstance(responses_state, dict):
+                    item["_myagent_responses"] = dict(responses_state)
             if rc is not None and reasoning_field is not None:
                 item[reasoning_field] = str(rc)
             api_msgs.append(item)
@@ -1785,6 +1816,7 @@ def chat_completion(
     response_validator: Optional[Callable[[Any], bool]] = None,
     recovery_budget: Optional[_LogicalRequestBudget] = None,
     request_timeout: Optional[float] = None,
+    request_context: Optional[Any] = None,
 ) -> ChatCompletion:
     """Return one buffered completion using first-token streaming underneath."""
     budget = recovery_budget or _LogicalRequestBudget()
@@ -1804,6 +1836,7 @@ def chat_completion(
             omit_temperature=omit_temperature,
             recovery_budget=budget,
             request_timeout=request_timeout,
+            request_context=request_context,
         )
         if response_validator is None or response_validator(r):
             break
@@ -1870,7 +1903,10 @@ def _accumulate_tool_call_delta(
         if fn:
             name = getattr(fn, "name", None)
             if name:
-                tool_acc[idx]["name"] = str(name)
+                tool_acc[idx]["name"] = merge_streamed_tool_name(
+                    tool_acc[idx].get("name"),
+                    name,
+                )
             args = getattr(fn, "arguments", None)
             if args:
                 tool_acc[idx]["arguments"] += str(args)
@@ -1923,6 +1959,8 @@ def _tool_acc_to_parsed_list(tool_acc: Dict[int, Dict[str, str]]) -> Optional[Li
 
 def _stream_chunk_has_first_token(chunk: Any) -> bool:
     """Whether a chunk contains the first useful model delta."""
+    if isinstance(chunk, TransportEvent):
+        return chunk.is_first_token
     choices = getattr(chunk, "choices", None) or []
     for choice in choices:
         delta = getattr(choice, "delta", None)
@@ -1956,6 +1994,7 @@ def run_chat_completion_stream_worker(
     emit_deltas: bool = True,
     recovery_budget: Optional[_LogicalRequestBudget] = None,
     request_timeout: Optional[float] = None,
+    request_context: Optional[Any] = None,
 ) -> None:
     """
     在后台线程中跑 chat.completions(stream=True)。
@@ -1987,6 +2026,10 @@ def run_chat_completion_stream_worker(
         )
         if request_timeout is not None:
             kwargs["timeout"] = float(request_timeout)
+        if request_context is not None and bool(
+            getattr(client, "_myagent_transport_enabled", False)
+        ):
+            kwargs["request_context"] = request_context
         if not omit_temperature:
             kwargs["temperature"] = temperature
         if tools:
@@ -2033,6 +2076,11 @@ def run_chat_completion_stream_worker(
         )
         attempt = 0
         hedges_used = 0
+        first_token_hedge_limit = (
+            0
+            if bool(getattr(client, "_myagent_logical_fallback_owner", False))
+            else OPENAI_FIRST_TOKEN_HEDGE_MAX_RETRIES
+        )
         request_budget = recovery_budget or _LogicalRequestBudget()
         logical_deadline_at = request_budget.deadline_at
         while attempt < OPENAI_MAX_RETRIES:
@@ -2059,24 +2107,31 @@ def run_chat_completion_stream_worker(
                 local_iter = None
                 chunks: List[Any] = []
                 try:
-                    try:
-                        local_stream = client.chat.completions.create(
-                            **request_kwargs, stream_options={"include_usage": True}
-                        )
-                    except Exception as stream_options_exc:
-                        if _is_media_input_error(stream_options_exc) or not _is_stream_options_error(
-                            stream_options_exc
-                        ):
-                            raise
-                        logger.debug(
-                            "流式 create 无 stream_options 或端点不支持: %s",
-                            _redact_runtime_log_text(stream_options_exc),
-                        )
-                        if not _claim_additional_recovery_request():
-                            raise RuntimeError(
-                                "LLM request budget exhausted before stream-options fallback"
+                    stream_completion = getattr(client, "stream_completion", None)
+                    if callable(stream_completion) and bool(
+                        getattr(client, "_myagent_transport_enabled", False)
+                    ):
+                        request_kwargs.pop("stream", None)
+                        local_stream = stream_completion(**request_kwargs)
+                    else:
+                        try:
+                            local_stream = client.chat.completions.create(
+                                **request_kwargs, stream_options={"include_usage": True}
                             )
-                        local_stream = client.chat.completions.create(**request_kwargs)
+                        except Exception as stream_options_exc:
+                            if _is_media_input_error(stream_options_exc) or not _is_stream_options_error(
+                                stream_options_exc
+                            ):
+                                raise
+                            logger.debug(
+                                "流式 create 无 stream_options 或端点不支持: %s",
+                                _redact_runtime_log_text(stream_options_exc),
+                            )
+                            if not _claim_additional_recovery_request():
+                                raise RuntimeError(
+                                    "LLM request budget exhausted before stream-options fallback"
+                                )
+                            local_stream = client.chat.completions.create(**request_kwargs)
                     with active_lock:
                         active[request_role] = local_stream
                     put_stream_timing(
@@ -2163,7 +2218,7 @@ def run_chat_completion_stream_worker(
                         result = race_results.get_nowait()
                     except Empty:
                         if (
-                            hedges_used < OPENAI_FIRST_TOKEN_HEDGE_MAX_RETRIES
+                            hedges_used < first_token_hedge_limit
                             and OPENAI_FIRST_TOKEN_HEDGE_TIMEOUT_SEC > 0
                             and elapsed
                             >= OPENAI_FIRST_TOKEN_HEDGE_TIMEOUT_SEC
@@ -2179,18 +2234,18 @@ def run_chat_completion_stream_worker(
                                     attempt=attempt + 1,
                                     timeout_ms=int(OPENAI_FIRST_TOKEN_HEDGE_TIMEOUT_SEC * 1000),
                                     hedge_index=hedges_used,
-                                    hedge_max=OPENAI_FIRST_TOKEN_HEDGE_MAX_RETRIES,
+                                    hedge_max=first_token_hedge_limit,
                                     request_role=hedge_role,
                                 )
                                 logger.warning(
                                     "模型 %s 首 token 持续等待，已发起并行 API 重试 %s/%s",
                                     _masked_model_label(model),
                                     hedges_used,
-                                    OPENAI_FIRST_TOKEN_HEDGE_MAX_RETRIES,
+                                    first_token_hedge_limit,
                                 )
                         wait_timeout = 0.05
                         if (
-                            hedges_used < OPENAI_FIRST_TOKEN_HEDGE_MAX_RETRIES
+                            hedges_used < first_token_hedge_limit
                             and OPENAI_FIRST_TOKEN_HEDGE_TIMEOUT_SEC > 0
                         ):
                             next_hedge_at = (
@@ -2320,6 +2375,7 @@ def run_chat_completion_stream_worker(
         content_dsml_filter = _DsmlStreamFilter(enabled=bool(tools))
         reasoning_dsml_filter = _DsmlStreamFilter(enabled=bool(tools))
         last_usage: Optional[Dict[str, int]] = None
+        provider_data: Optional[Dict[str, Any]] = None
         actual_model = ""
         finish_meta: Dict[str, Any] = {"finish_reason": None, "stop_reason": None}
         first_chunk_seen = False
@@ -2378,6 +2434,44 @@ def run_chat_completion_stream_worker(
                 put_stream_timing("aborted_during_stream")
                 return
             chunk_count += 1
+            if isinstance(chunk, TransportEvent):
+                if chunk.kind == "provider_state":
+                    if isinstance(chunk.provider_data, dict):
+                        provider_data = dict(chunk.provider_data)
+                    continue
+                delta = SimpleNamespace(content=None, tool_calls=None)
+                choices: List[Any] = []
+                if chunk.kind == "reasoning_delta":
+                    setattr(delta, "reasoning_content", chunk.text)
+                    choices = [SimpleNamespace(delta=delta, finish_reason=None, stop_reason=None)]
+                elif chunk.kind == "content_delta":
+                    delta.content = chunk.text
+                    choices = [SimpleNamespace(delta=delta, finish_reason=None, stop_reason=None)]
+                elif chunk.kind == "tool_call_delta":
+                    delta.tool_calls = [
+                        SimpleNamespace(
+                            index=chunk.index,
+                            id=chunk.tool_call_id or None,
+                            function=SimpleNamespace(
+                                name=chunk.tool_name or None,
+                                arguments=chunk.arguments_delta or None,
+                            ),
+                        )
+                    ]
+                    choices = [SimpleNamespace(delta=delta, finish_reason=None, stop_reason=None)]
+                elif chunk.kind == "finish":
+                    choices = [
+                        SimpleNamespace(
+                            delta=None,
+                            finish_reason=chunk.finish_reason,
+                            stop_reason=chunk.stop_reason,
+                        )
+                    ]
+                chunk = SimpleNamespace(
+                    model=chunk.model or None,
+                    usage=chunk.usage if chunk.kind == "usage" else None,
+                    choices=choices,
+                )
             # This is intentionally an estimate: serializing the complete SDK
             # object for every token chunk is far more expensive than the
             # dashboard metric is worth.  Account for lightweight SSE/JSON
@@ -2534,6 +2628,7 @@ def run_chat_completion_stream_worker(
             tool_calls=tool_calls_list,
             reasoning_content=reasoning_final,
             reasoning_field=reasoning_field,
+            provider_data=provider_data,
         )
         if last_usage:
             usage_payload: Dict[str, Any] = dict(last_usage)
@@ -2596,6 +2691,7 @@ def _buffered_chat_completion_via_stream(
     omit_temperature: bool,
     recovery_budget: _LogicalRequestBudget,
     request_timeout: Optional[float],
+    request_context: Optional[Any],
 ) -> ChatCompletion:
     """Use a streaming transport but expose one buffered completion upstream.
 
@@ -2618,6 +2714,7 @@ def _buffered_chat_completion_via_stream(
         emit_deltas=False,
         recovery_budget=recovery_budget,
         request_timeout=request_timeout,
+        request_context=request_context,
     )
 
     turn: Optional[AssistantTurn] = None
@@ -2708,15 +2805,17 @@ def single_turn_text_completion(
     max_tokens: int,
     text_validator: Optional[Callable[[str], bool]] = None,
 ) -> Tuple[str, Optional[Dict[str, int]]]:
-    """单条 user 消息的非流式补全（会话标题、压缩摘要等）。返回 (文本, usage 或 None)。"""
+    """Single buffered text completion used by titles and summaries."""
     def _response_validator(response: Any) -> bool:
         choices = getattr(response, "choices", None) or []
         if not choices or getattr(choices[0], "message", None) is None:
             return False
         text = _normalize_content_text(getattr(choices[0].message, "content", ""))
+        if not text.strip():
+            return False
         return bool(text_validator(text)) if text_validator is not None else True
 
-    r = chat_completion(
+    response = chat_completion(
         client,
         model,
         [UserMessage(content=user_text)],
@@ -2724,10 +2823,7 @@ def single_turn_text_completion(
         max_tokens=max_tokens,
         response_validator=_response_validator,
     )
-    msg = r.choices[0].message
-    text = _normalize_content_text(getattr(msg, "content", ""))
-    usage: Optional[Dict[str, int]] = None
-    u = getattr(r, "usage", None)
-    if u is not None:
-        usage = extract_usage_dict(u)
-    return (text, usage)
+    text = _normalize_content_text(getattr(response.choices[0].message, "content", ""))
+    usage_obj = getattr(response, "usage", None)
+    usage = extract_usage_dict(usage_obj) if usage_obj is not None else None
+    return text, usage

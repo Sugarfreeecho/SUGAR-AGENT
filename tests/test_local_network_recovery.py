@@ -113,6 +113,60 @@ def test_non_windows_network_probe_is_conservative(monkeypatch):
     assert agent_harness.machine_network_available() is True
 
 
+@pytest.mark.parametrize(("probe_result", "expected"), [(True, True), (False, False)])
+def test_windows_offline_hint_is_confirmed_by_active_probe(
+    monkeypatch, probe_result, expected
+):
+    import agent_harness
+
+    class _Wininet:
+        @staticmethod
+        def InternetGetConnectedState(_flags, _reserved):
+            return 0
+
+    class _Windll:
+        wininet = _Wininet()
+
+    monkeypatch.setattr(agent_harness.os, "name", "nt")
+    monkeypatch.setattr(agent_harness.ctypes, "windll", _Windll())
+    monkeypatch.setattr(
+        agent_harness,
+        "_probe_network_connectivity",
+        lambda: probe_result,
+    )
+
+    assert agent_harness.machine_network_available() is expected
+
+
+def test_network_probe_uses_configured_targets(monkeypatch):
+    import agent_harness
+
+    calls = []
+
+    class _Connection:
+        def close(self):
+            calls.append("closed")
+
+    def connect(endpoint, timeout):
+        calls.append((endpoint, timeout))
+        if endpoint[0] == "unreachable.test":
+            raise OSError("unreachable")
+        return _Connection()
+
+    monkeypatch.setenv(
+        "LOCAL_NETWORK_PROBE_TARGETS",
+        "unreachable.test:443,reachable.test:8443",
+    )
+    monkeypatch.setattr(agent_harness.socket, "create_connection", connect)
+
+    assert agent_harness._probe_network_connectivity(timeout=0.2) is True
+    assert calls == [
+        (("unreachable.test", 443), 0.2),
+        (("reachable.test", 8443), 0.2),
+        "closed",
+    ]
+
+
 def test_local_network_sleep_resumes_without_probing_a_provider(monkeypatch):
     import agent_loop
 
