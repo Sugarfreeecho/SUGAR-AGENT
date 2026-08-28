@@ -55,7 +55,7 @@ class RuntimeProjectorTests(unittest.TestCase):
         self.assertEqual(snapshot["runs"]["newer"]["status"], "finished")
         self.assertEqual(snapshot["active_runs"], [])
 
-    def test_projects_context_tokens_and_todo_snapshot(self):
+    def test_projects_context_tokens_and_legacy_todo_as_extension_state(self):
         projector = RuntimeProjector()
         events = [
             RuntimeEvent(seq=1, type="context_tokens", session_id="s1", payload={"estimated": 123, "threshold": 1000}),
@@ -71,9 +71,12 @@ class RuntimeProjectorTests(unittest.TestCase):
 
         self.assertEqual(snapshot["context"]["tokens"]["estimated"], 123)
         self.assertEqual(snapshot["context"]["tokens"]["seq"], 1)
-        self.assertEqual(snapshot["todo"]["total"], 1)
-        self.assertEqual(snapshot["todo"]["seq"], 2)
-        self.assertEqual(snapshot["context"]["todo"]["items"][0]["id"], "t1")
+        todo = snapshot["extensions"]["session-todo"]["plan"]
+        self.assertEqual(todo["value"]["total"], 1)
+        self.assertEqual(todo["seq"], 2)
+        self.assertEqual(todo["value"]["items"][0]["id"], "t1")
+        self.assertNotIn("todo", snapshot)
+        self.assertNotIn("todo", snapshot["context"])
 
     def test_projects_goal_accounting_delta_on_top_of_checkpoint(self):
         projector = RuntimeProjector()
@@ -96,12 +99,14 @@ class RuntimeProjectorTests(unittest.TestCase):
 
         snapshot = projector.project(events)
 
-        self.assertEqual(snapshot["goal"]["objective"], "Ship it")
-        self.assertEqual(snapshot["goal"]["version"], 2)
-        self.assertEqual(snapshot["goal"]["used_tokens"], 9)
-        self.assertEqual(snapshot["goal"]["accounted_usage_ids"], ["run-1:llm:0"])
-        self.assertEqual(snapshot["goal"]["seq"], 2)
-        self.assertEqual(snapshot["context"]["goal"], snapshot["goal"])
+        goal = snapshot["extensions"]["agent-goal"]["goal"]
+        self.assertEqual(goal["value"]["objective"], "Ship it")
+        self.assertEqual(goal["value"]["version"], 2)
+        self.assertEqual(goal["value"]["used_tokens"], 9)
+        self.assertEqual(goal["value"]["accounted_usage_ids"], ["run-1:llm:0"])
+        self.assertEqual(goal["seq"], 2)
+        self.assertNotIn("goal", snapshot)
+        self.assertNotIn("goal", snapshot["context"])
 
     def test_gateway_rebuilds_and_reads_snapshot(self):
         async def scenario():
@@ -150,6 +155,92 @@ class RuntimeProjectorTests(unittest.TestCase):
         self.assertEqual(snapshot["model_messages"][1]["payload"]["tool_calls"][0]["id"], "tc1")
         self.assertEqual(snapshot["model_messages"][2]["payload"]["tool_call_id"], "tc1")
 
+    def test_model_history_generation_changes_only_for_non_append_semantics(self):
+        projector = RuntimeProjector()
+        events = [
+            RuntimeEvent(seq=1, type="model_user", session_id="s1", payload={"content": "append"}),
+            RuntimeEvent(
+                seq=2,
+                type="model_history_replaced",
+                session_id="s1",
+                payload={"messages": [{"type": "user", "content": "replacement"}]},
+            ),
+            RuntimeEvent(seq=3, type="model_assistant", session_id="s1", payload={"content": "append"}),
+            RuntimeEvent(
+                seq=4,
+                type="context_summary_committed",
+                session_id="s1",
+                payload={"summary": "metadata only"},
+            ),
+            RuntimeEvent(
+                seq=5,
+                type="history_compacted",
+                session_id="s1",
+                payload={"summary": "compact", "compacted_before_seq": 2},
+            ),
+            RuntimeEvent(
+                seq=6,
+                type="visible_range_changed",
+                session_id="s1",
+                payload={"to_seq": 2, "apply_model": True},
+            ),
+        ]
+
+        generations = []
+        snapshot = projector.empty_snapshot()
+        for event in events:
+            projector.apply(snapshot, event)
+            generations.append(snapshot["model_history_generation"])
+
+        self.assertEqual(generations, [0, 1, 1, 1, 2, 3])
+
+    def test_branch_model_seed_keeps_replay_items_but_strips_server_anchor(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ops = RuntimeHistoryOps(tmp)
+            ops.replace_model_history(
+                "source",
+                [
+                    {"type": "user", "content": "first"},
+                    {
+                        "type": "assistant",
+                        "content": "answer",
+                        "additional_kwargs": {
+                            "_myagent_responses": {
+                                "schema_version": 2,
+                                "issuer": "issuer-1",
+                                "response_id": "resp_parent",
+                                "continuation_anchor": {"response_id": "resp_parent"},
+                                "canonical_output_items": [
+                                    {
+                                        "schema_version": 1,
+                                        "issuer": "issuer-1",
+                                        "replayability": "native",
+                                        "raw_item": {
+                                            "type": "message",
+                                            "role": "assistant",
+                                            "content": [],
+                                        },
+                                    }
+                                ],
+                            }
+                        },
+                    },
+                ],
+            )
+            source_tail = ops.event_log.read_all("source")[-1].seq
+            ops.create_branch("branch", "source", source_tail)
+
+            messages = RuntimeModelProjection(tmp).read_message_dicts("branch")
+            state = messages[1]["additional_kwargs"]["_myagent_responses"]
+            context = RuntimeModelProjection(tmp).read_request_context("branch")
+
+            self.assertNotIn("response_id", state)
+            self.assertNotIn("continuation_anchor", state)
+            self.assertEqual(state["state_mode"], "stateless")
+            self.assertEqual(len(state["canonical_output_items"]), 1)
+            self.assertEqual(context["lineage_id"], "source")
+            self.assertGreaterEqual(context["history_generation"], 1)
+
     def test_model_projection_reads_message_dicts(self):
         with tempfile.TemporaryDirectory() as tmp:
             ops = RuntimeHistoryOps(tmp)
@@ -169,6 +260,26 @@ class RuntimeProjectorTests(unittest.TestCase):
             self.assertEqual(messages[1]["tool_calls"][0]["id"], "tc1")
             self.assertEqual(messages[1]["additional_kwargs"]["reasoning_content"], "why")
             self.assertEqual(messages[2]["tool_call_id"], "tc1")
+
+    def test_run_bootstrap_uses_snapshot_without_scanning_root_event_log(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ops = RuntimeHistoryOps(tmp)
+            ops.append_model_message("s1", "user", "hello")
+            ops.commit_context_summary("s1", "remember this")
+            projection = RuntimeModelProjection(tmp)
+
+            with patch.object(
+                projection.event_log,
+                "iter_events",
+                side_effect=AssertionError("ordinary bootstrap must not scan events.jsonl"),
+            ):
+                bootstrap = projection.read_run_bootstrap("s1")
+
+            self.assertEqual(bootstrap["context_summary"], "remember this")
+            self.assertEqual(
+                [message["content"] for message in bootstrap["messages"]],
+                ["hello"],
+            )
 
     def test_model_projection_backfills_legacy_once(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -80,7 +80,7 @@ class RuntimeUiProjection:
     def _normalize_react_process_order(cls, events: List[dict]) -> List[dict]:
         """Stably repair legacy completion-order rows without moving UI chrome.
 
-        Only ReAct process slots are exchanged. Status, metrics, goal and user
+        Only ReAct process slots are exchanged. Status, metrics, extensions and user
         rows retain their exact positions, and user/final/interrupt boundaries
         prevent equal ``react_iter`` values from different runs being mixed.
         """
@@ -1124,33 +1124,22 @@ class RuntimeUiProjection:
             # after an interrupted steer) attach a stale "Compression" row to
             # the last process group whenever history is reloaded.
             return None
-        if event.type == "todo_updated":
-            data = dict(payload)
-            data["type"] = data.get("type") or "todo_plan"
-            data.setdefault("created_at", event.timestamp)
-            return data
+        if event.type == "extension_event":
+            # Optional feature events remain domain-neutral in Runtime.  The
+            # main frontend resolves their plugin-owned event_name against a
+            # validated declarative renderer contribution at display time.
+            return {
+                "type": "extension_event",
+                "plugin_id": str(payload.get("plugin_id") or ""),
+                "event_name": str(payload.get("event_name") or ""),
+                "data": payload.get("data"),
+                "created_at": event.timestamp,
+            }
         if event.type.startswith("interaction_") or event.type.startswith("approval_"):
             data = dict(payload)
             data["type"] = event.type
             data["runtime_event_type"] = event.type
             data.setdefault("created_at", event.timestamp)
-            return data
-        if event.type.startswith("goal_"):
-            # Persisted Goal events are audit/recovery facts, not chat rows.
-            # Keep their UI position and runtime sequence without sending the
-            # repeated objective and accounting-id arrays in history pages.
-            source = payload.get("set") if payload.get("_goal_delta") and isinstance(payload.get("set"), dict) else payload
-            data = {
-                "type": "goal_state",
-                "goal_event": event.type,
-                "created_at": event.timestamp,
-            }
-            goal_id = payload.get("id") or source.get("id")
-            if goal_id:
-                data["id"] = goal_id
-            for key in ("version", "status", "used_tokens", "token_budget", "pause_reason", "deleted"):
-                if key in source:
-                    data[key] = source.get(key)
             return data
         if event.type.startswith("hook_"):
             data = dict(payload)

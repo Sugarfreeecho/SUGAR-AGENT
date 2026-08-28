@@ -45,13 +45,22 @@ class SnapshotStore:
         return self.root / safe_id / "snapshots" / "latest.json"
 
     def read(self, session_id: str) -> Dict[str, Any]:
+        return copy.deepcopy(self._read_published(session_id))
+
+    def _read_published(self, session_id: str) -> Dict[str, Any]:
+        """Return the immutable, process-published snapshot object.
+
+        Runtime projector updates are copy-on-write, so internal readers that
+        only project data out of a snapshot can avoid deep-copying several
+        duplicated message arrays. Public callers continue to use ``read``.
+        """
         path = self.path(session_id)
         signature = self._file_signature(path)
         key = self._cache_key(path)
         with self._memory_cache_lock:
             cached = self._memory_cache.get(key)
             if cached and cached[0] == signature:
-                return copy.deepcopy(cached[1])
+                return cached[1]
         if not path.exists():
             return {}
         try:
@@ -63,14 +72,14 @@ class SnapshotStore:
             return {}
         with self._memory_cache_lock:
             current = self._memory_cache.get(key)
-            if current and self._snapshot_seq(current[1]) > self._snapshot_seq(data):
+            if current and self._snapshot_seq(current[1]) >= self._snapshot_seq(data):
                 # A deferred checkpoint may have advanced the in-memory
                 # projection beyond the latest disk checkpoint.
                 self._memory_cache[key] = (signature, current[1])
                 data = current[1]
             else:
                 self._memory_cache[key] = (signature, data)
-        return copy.deepcopy(data)
+        return data
 
     def read_for_update(self, session_id: str) -> Dict[str, Any]:
         """Return the published cache object for projector copy-on-write use."""
@@ -81,7 +90,7 @@ class SnapshotStore:
             cached = self._memory_cache.get(key)
             if cached and cached[0] == signature:
                 return cached[1]
-        self.read(session_id)
+        self._read_published(session_id)
         with self._memory_cache_lock:
             cached = self._memory_cache.get(key)
             return cached[1] if cached else {}
@@ -112,7 +121,18 @@ class SnapshotStore:
                 json.dump(snapshot, fh, ensure_ascii=False, separators=(",", ":"))
                 fh.flush()
                 os.fsync(fh.fileno())
-            os.replace(tmp, path)
+            # Windows can transiently reject replacement while another thread
+            # or an indexer has the destination open without delete sharing.
+            # The event log remains authoritative, so retry this narrow,
+            # recoverable sharing race before surfacing the write failure.
+            for attempt in range(7):
+                try:
+                    os.replace(tmp, path)
+                    break
+                except PermissionError:
+                    if attempt >= 6:
+                        raise
+                    time.sleep(0.005 * (2 ** attempt))
         finally:
             try:
                 tmp.unlink(missing_ok=True)
@@ -157,10 +177,10 @@ class SnapshotStore:
             try:
                 grace_ms = max(
                     0.0,
-                    float(os.getenv("RUNTIME_V2_SNAPSHOT_INLINE_GRACE_MS", "50")),
+                    float(os.getenv("RUNTIME_V2_SNAPSHOT_INLINE_GRACE_MS", "10")),
                 )
             except (TypeError, ValueError):
-                grace_ms = 50.0
+                grace_ms = 10.0
             if grace_ms:
                 self.wait_for_checkpoint(session_id, timeout_seconds=grace_ms / 1000.0)
             return True
@@ -317,7 +337,7 @@ class SnapshotStore:
         signature = self._file_signature(path)
         with self._memory_cache_lock:
             current = self._memory_cache.get(key)
-            if current and self._snapshot_seq(current[1]) > self._snapshot_seq(snapshot):
+            if current and self._snapshot_seq(current[1]) >= self._snapshot_seq(snapshot):
                 self._memory_cache[key] = (signature, current[1])
             else:
                 self._memory_cache[key] = (signature, snapshot)
@@ -468,16 +488,26 @@ class SnapshotStore:
         reserved for crash recovery, old snapshots without signatures, or
         external log edits.
         """
+        return copy.deepcopy(
+            self.read_consistent_view(session_id, event_log=event_log, projector=projector)
+        )
+
+    def read_consistent_view(self, session_id: str, event_log=None, projector=None) -> Dict[str, Any]:
+        """Return a read-only view of the current consistent projection.
+
+        Callers must never mutate the returned mapping or nested values. This
+        hot path relies on the projectors' copy-on-write publication contract.
+        """
         if event_log is None or projector is None:
             from .event_log import SessionEventLog
             from .projector import RuntimeProjector
             event_log = event_log or SessionEventLog(self.root, path_resolver=self._path_resolver)
             projector = projector or RuntimeProjector()
-        snapshot = self.read(session_id)
+        snapshot = self._read_published(session_id)
         if self._signature_matches(snapshot, event_log.event_path(session_id)):
             return snapshot
         with event_log.session_transaction(session_id):
-            snapshot = self.read(session_id)
+            snapshot = self._read_published(session_id)
             if self._signature_matches(snapshot, event_log.event_path(session_id)):
                 return snapshot
             if self._projection_version_matches(snapshot):

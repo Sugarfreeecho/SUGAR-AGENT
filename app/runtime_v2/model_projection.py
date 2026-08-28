@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
@@ -8,6 +9,39 @@ from .event_log import SessionEventLog
 from .history_ops import RuntimeHistoryOps
 from .projector import RuntimeProjector
 from .snapshot_store import SnapshotStore
+
+
+def strip_responses_continuation_from_message(message: Dict[str, Any]) -> Dict[str, Any]:
+    """Copy a branch seed while retaining replay facts but no server anchor."""
+    item = copy.deepcopy(dict(message or {}))
+
+    def replay_only(state: Dict[str, Any]) -> Dict[str, Any]:
+        replay_state = dict(state)
+        for key in (
+            "continuation_anchor",
+            "response_id",
+            "stateful_supported",
+            "fallback_reason",
+            "responses_mode",
+            "full_replay_reason",
+        ):
+            replay_state.pop(key, None)
+        replay_state["state_mode"] = "stateless"
+        return replay_state
+
+    top_level_state = item.get("_myagent_responses")
+    if isinstance(top_level_state, dict):
+        item["_myagent_responses"] = replay_only(top_level_state)
+    additional = item.get("additional_kwargs")
+    if not isinstance(additional, dict):
+        return item
+    state = additional.get("_myagent_responses")
+    if not isinstance(state, dict):
+        return item
+    additional = dict(additional)
+    additional["_myagent_responses"] = replay_only(state)
+    item["additional_kwargs"] = additional
+    return item
 
 
 class RuntimeModelProjection:
@@ -27,7 +61,85 @@ class RuntimeModelProjection:
     def read_message_dicts(self, session_id: str) -> List[Dict[str, Any]]:
         if not runtime_v2_enabled():
             return []
-        return self._read_message_dicts(session_id, None, set())
+        return list(self.read_run_bootstrap(session_id).get("messages") or [])
+
+    def read_run_bootstrap(self, session_id: str) -> Dict[str, Any]:
+        """Read model history and run context from one snapshot view."""
+        if not runtime_v2_enabled():
+            return {
+                "messages": [],
+                "context_summary": "",
+                "history_generation": 0,
+            }
+        snapshot = self.snapshots.read_consistent_view(
+            session_id,
+            self.event_log,
+            self.projector,
+        )
+        messages = self._messages_with_snapshot_branch(
+            snapshot,
+            seen={(str(session_id), None)},
+        )
+        context = snapshot.get("context") if isinstance(snapshot, dict) else {}
+        summary = context.get("summary") if isinstance(context, dict) else {}
+        return {
+            "messages": messages,
+            "context_summary": (
+                str(summary.get("summary") or "")
+                if isinstance(summary, dict)
+                else ""
+            ),
+            "history_generation": (
+                int(snapshot.get("model_history_generation") or 0)
+                if isinstance(snapshot, dict)
+                else 0
+            ),
+        }
+
+    def read_request_context(self, session_id: str) -> Dict[str, Any]:
+        """Return deterministic transport identity derived from Runtime V2."""
+        if not runtime_v2_enabled():
+            return {
+                "session_id": str(session_id or ""),
+                "lineage_id": "",
+                "history_generation": 0,
+            }
+        snapshot = self.snapshots.read_consistent_view(
+            session_id,
+            self.event_log,
+            self.projector,
+        )
+        context = snapshot.get("context") if isinstance(snapshot, dict) else {}
+        compaction_row = (
+            context.get("responses_compaction") if isinstance(context, dict) else None
+        )
+        compaction = (
+            compaction_row.get("checkpoint")
+            if isinstance(compaction_row, dict)
+            else {}
+        )
+        return {
+            "session_id": str(session_id or ""),
+            "lineage_id": str(
+                (
+                    context.get("responses_lineage_id")
+                    if isinstance(context, dict)
+                    else ""
+                )
+                or ""
+            ),
+            "history_generation": int(
+                (
+                    snapshot.get("model_history_generation")
+                    if isinstance(snapshot, dict)
+                    else 0
+                )
+                or 0
+            ),
+            "responses_compaction": copy.deepcopy(compaction)
+            if isinstance(compaction, dict)
+            else {},
+        }
 
     def _read_message_dicts(
         self,
@@ -39,21 +151,64 @@ class RuntimeModelProjection:
         if key in seen:
             return []
         seen.add(key)
-        all_events = list(self.event_log.iter_events(session_id))
-        events = [
-            event
-            for event in all_events
-            if through_seq is None or int(event.seq) <= int(through_seq)
-        ]
         if through_seq is None:
-            snapshot = self.snapshots.read_consistent(
+            snapshot = self.snapshots.read_consistent_view(
                 session_id,
                 self.event_log,
                 self.projector,
             )
-        else:
-            snapshot = self.projector.project(events)
-        local = self._messages_from_snapshot(snapshot)
+            return self._messages_with_snapshot_branch(snapshot, seen)
+        events = [
+            event
+            for event in self.event_log.iter_events(session_id)
+            if int(event.seq) <= int(through_seq)
+        ]
+        snapshot = self.projector.project(events)
+        return self._messages_with_events_branch(snapshot, events, seen)
+
+    def _messages_with_snapshot_branch(
+        self,
+        snapshot: Dict[str, Any],
+        seen: set[tuple[str, Optional[int]]],
+    ) -> List[Dict[str, Any]]:
+        history_ops = (
+            list(snapshot.get("history_ops") or [])
+            if isinstance(snapshot, dict)
+            else []
+        )
+        reference = next(
+            (
+                row
+                for row in history_ops
+                if isinstance(row, dict)
+                and row.get("type") == "history_branch_created"
+                and str((row.get("payload") or {}).get("reference_mode") or "")
+                == "immutable_model_prefix"
+            ),
+            None,
+        )
+        if reference is None:
+            return self._messages_from_snapshot(snapshot)
+        reference_seq = int(reference.get("seq") or 0)
+        materialized = any(
+            isinstance(row, dict)
+            and row.get("type") == "model_history_replaced"
+            and int(row.get("seq") or 0) > reference_seq
+            for row in history_ops
+        )
+        return self._messages_with_branch_reference(
+            snapshot,
+            reference.get("payload") or {},
+            materialized,
+            seen,
+        )
+
+    def _messages_with_events_branch(
+        self,
+        snapshot: Dict[str, Any],
+        events: List[Any],
+        seen: set[tuple[str, Optional[int]]],
+    ) -> List[Dict[str, Any]]:
         reference = next(
             (
                 event
@@ -65,14 +220,29 @@ class RuntimeModelProjection:
             None,
         )
         if reference is None:
-            return local
+            return self._messages_from_snapshot(snapshot)
         materialized = any(
             event.type == "model_history_replaced" and int(event.seq) > int(reference.seq)
             for event in events
         )
+        return self._messages_with_branch_reference(
+            snapshot,
+            reference.payload or {},
+            materialized,
+            seen,
+        )
+
+    def _messages_with_branch_reference(
+        self,
+        snapshot: Dict[str, Any],
+        reference_payload: Dict[str, Any],
+        materialized: bool,
+        seen: set[tuple[str, Optional[int]]],
+    ) -> List[Dict[str, Any]]:
+        local = self._messages_from_snapshot(snapshot)
         if materialized:
             return local
-        payload = dict(reference.payload or {})
+        payload = dict(reference_payload or {})
         source_id = str(payload.get("source_session_id") or "").strip()
         try:
             source_seq = int(payload.get("branch_from_seq") or 0)
@@ -81,7 +251,10 @@ class RuntimeModelProjection:
         if not source_id or source_seq <= 0:
             return local
         prefix = self._read_message_dicts(source_id, source_seq, seen)
-        return [*prefix, *local]
+        return [
+            *(strip_responses_continuation_from_message(item) for item in prefix),
+            *local,
+        ]
 
     def _messages_from_snapshot(self, snapshot: dict) -> List[Dict[str, Any]]:
         rows = snapshot.get("model_messages") if isinstance(snapshot, dict) else None

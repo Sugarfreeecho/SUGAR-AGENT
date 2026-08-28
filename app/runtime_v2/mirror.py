@@ -41,6 +41,23 @@ class RuntimeMirror:
         mapped = self._map_ui_event(session_id, event)
         if not mapped:
             return None
+        if mapped.pop("_set_extension_latest", False):
+            from .extension_state import SessionExtensionStateStore
+
+            self.event_log.session_dir(session_id).mkdir(parents=True, exist_ok=True)
+            payload = dict(mapped.get("payload") or {})
+            row = SessionExtensionStateStore(
+                self.sessions_dir,
+                path_resolver=self._path_resolver,
+            ).set_latest(
+                session_id,
+                str(payload.get("plugin_id") or ""),
+                str(payload.get("namespace") or ""),
+                payload.get("value"),
+                run_id=str((event or {}).get("run_id") or ""),
+            )
+            latest = self.event_log.read_latest(session_id, 1)
+            return latest[-1] if latest and latest[-1].seq == row.get("seq") else None
         if not mapped.get("run_id"):
             mapped["run_id"] = str((event or {}).get("run_id") or "").strip() or None
         return self.append(session_id, mapped["type"], mapped.get("payload") or {}, run_id=mapped.get("run_id"))
@@ -114,11 +131,32 @@ class RuntimeMirror:
 
     def mirror_ui_events_batch(self, session_id: str, ui_events: Iterable[dict]) -> List[RuntimeEvent]:
         rows: List[dict] = []
+        snapshot = self.snapshots.read(session_id)
+        extensions = snapshot.get("extensions") if isinstance(snapshot, dict) else {}
+        revisions: Dict[tuple[str, str], int] = {}
+        if isinstance(extensions, dict):
+            for plugin_id, namespaces in extensions.items():
+                if not isinstance(namespaces, dict):
+                    continue
+                for namespace, state_row in namespaces.items():
+                    if isinstance(state_row, dict):
+                        revisions[(str(plugin_id), str(namespace))] = int(
+                            state_row.get("revision") or 0
+                        )
         for event in ui_events or []:
             if not isinstance(event, dict):
                 continue
             mapped = self._map_ui_event(session_id, dict(event))
             if mapped:
+                if mapped.pop("_set_extension_latest", False):
+                    payload = dict(mapped.get("payload") or {})
+                    key = (
+                        str(payload.get("plugin_id") or ""),
+                        str(payload.get("namespace") or ""),
+                    )
+                    revisions[key] = revisions.get(key, 0) + 1
+                    payload["revision"] = revisions[key]
+                    mapped["payload"] = payload
                 rows.append({
                     "type": mapped["type"],
                     "payload": mapped.get("payload") or {},
@@ -153,6 +191,11 @@ class RuntimeMirror:
         event_type = str((event or {}).get("type") or "")
         if not event_type:
             return None
+        from .legacy_compat import map_legacy_ui_optional_event
+
+        legacy_optional = map_legacy_ui_optional_event(event)
+        if legacy_optional is not None:
+            return legacy_optional
         if event_type == "user":
             return {"type": "message_user", "payload": {"content": event.get("content") or ""}}
         if event_type == "user_steer":
@@ -171,8 +214,6 @@ class RuntimeMirror:
             return {"type": "message_assistant_final", "payload": {"content": event.get("content") or ""}}
         if event_type == "context_tokens":
             return {"type": "context_tokens", "payload": dict(event)}
-        if event_type == "todo_plan":
-            return {"type": "todo_updated", "payload": dict(event)}
         if event_type == "context_summary_body":
             return {
                 "type": "context_summary_committed",

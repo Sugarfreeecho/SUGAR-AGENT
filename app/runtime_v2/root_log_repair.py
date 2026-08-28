@@ -48,7 +48,6 @@ class RuntimeV2RootEventLogRepairService:
             ("restore_history_compaction", "changed_at_seq"),
             ("restore_context_tokens", "seq"),
             ("restore_context_tokens", "stale_at_seq"),
-            ("restore_todo", "seq"),
         ),
     }
 

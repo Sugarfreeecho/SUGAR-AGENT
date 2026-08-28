@@ -1,12 +1,17 @@
 import tempfile
 import unittest
 
-from app.runtime_v2 import RuntimeHistoryOps, RuntimeMirror, RuntimeUiProjection
+from app.runtime_v2 import (
+    RuntimeHistoryOps,
+    RuntimeMirror,
+    RuntimeUiProjection,
+    SessionExtensionStateStore,
+)
 from app.runtime_v2.blob_store import BlobStore
 
 
 class RuntimeUiProjectionTests(unittest.TestCase):
-    def test_goal_history_projection_omits_repeated_heavy_state(self):
+    def test_extension_state_is_not_projected_as_a_chat_row(self):
         with tempfile.TemporaryDirectory() as tmp:
             goal = {
                 "id": "goal-1",
@@ -18,21 +23,14 @@ class RuntimeUiProjectionTests(unittest.TestCase):
                 "accounted_usage_ids": [f"usage-{index}" for index in range(500)],
                 "accounted_run_ids": [f"run-{index}" for index in range(100)],
             }
-            RuntimeHistoryOps(tmp).update_goal("s1", goal)
+            from pathlib import Path
 
-            event = RuntimeUiProjection(tmp).read_ui_events("s1")[0]
+            (Path(tmp) / "s1").mkdir()
+            SessionExtensionStateStore(tmp).set_latest("s1", "agent-goal", "goal", goal)
 
-            self.assertEqual(event["type"], "goal_state")
-            self.assertEqual(event["goal_event"], "goal_updated")
-            self.assertEqual(event["id"], "goal-1")
-            self.assertEqual(event["version"], 7)
-            self.assertEqual(event["status"], "active")
-            self.assertEqual(event["used_tokens"], 123)
-            self.assertEqual(event["token_budget"], 1000)
-            self.assertEqual(event["runtime_seq"], 1)
-            self.assertNotIn("objective", event)
-            self.assertNotIn("accounted_usage_ids", event)
-            self.assertNotIn("accounted_run_ids", event)
+            events = RuntimeUiProjection(tmp).read_ui_events("s1")
+
+            self.assertEqual(events, [])
 
     def test_projects_runtime_events_to_legacy_ui_events(self):
         with tempfile.TemporaryDirectory() as tmp:

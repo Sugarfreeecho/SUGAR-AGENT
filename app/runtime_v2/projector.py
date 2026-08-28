@@ -4,6 +4,7 @@ import copy
 from typing import Iterable, Optional
 
 from .event_schema import RuntimeEvent
+from .legacy_compat import normalize_legacy_optional_event
 from .versions import PROJECTOR_VERSION
 
 
@@ -37,11 +38,6 @@ _FULL_MESSAGE_REPROJECTION_TYPES = {
 }
 
 _HOOK_RECENT_LIMIT = 50
-_GOAL_APPEND_LIMITS = {
-    "accounted_judge_run_ids": 512,
-    "accounted_run_ids": 512,
-    "accounted_usage_ids": 2048,
-}
 _HOOK_SNAPSHOT_FIELDS = {
     "hook_id",
     "hook_event",
@@ -56,7 +52,6 @@ _HOOK_SNAPSHOT_FIELDS = {
     "tool_call_id",
     "tool_name",
     "subagent_id",
-    "goal_id",
     "matcher",
     "status",
     "success",
@@ -92,13 +87,11 @@ class RuntimeProjector:
             "active_runs": [],
             "messages": [],
             "raw_model_messages": [],
+            "model_history_generation": 0,
             "visible_messages": [],
             "model_messages": [],
             "subagents": {},
-            "team": None,
             "context": {},
-            "todo": None,
-            "goal": None,
             "hooks": {
                 "recent": [],
                 "stats": {
@@ -114,6 +107,8 @@ class RuntimeProjector:
                 },
             },
             "plugins": {},
+            "extensions": {},
+            "extension_events": [],
             "interactions": {},
             "approvals": {},
             "pending_interactions": [],
@@ -133,6 +128,7 @@ class RuntimeProjector:
         return snapshot
 
     def project_incremental(self, snapshot: dict, event: RuntimeEvent) -> dict:
+        event = normalize_legacy_optional_event(event, snapshot)
         if not snapshot:
             snapshot = self.empty_snapshot()
         else:
@@ -155,37 +151,6 @@ class RuntimeProjector:
             if run.get("status") not in {"finished", "failed", "interrupted"}
         ]
         return snapshot
-
-    @staticmethod
-    def _project_goal(snapshot: dict, event: RuntimeEvent) -> dict:
-        payload = dict(event.payload or {})
-        if not payload.get("_goal_delta"):
-            return payload
-
-        current = snapshot.get("goal") if isinstance(snapshot, dict) else None
-        goal = dict(current) if isinstance(current, dict) else {}
-        goal_id = payload.get("id")
-        if goal_id and goal.get("id") not in {None, goal_id}:
-            goal = {}
-        if goal_id:
-            goal["id"] = goal_id
-        changed = payload.get("set")
-        if isinstance(changed, dict):
-            goal.update(copy.deepcopy(changed))
-        removed = payload.get("unset")
-        if isinstance(removed, list):
-            for key in removed:
-                goal.pop(str(key), None)
-        appended = payload.get("append")
-        if isinstance(appended, dict):
-            for key, values in appended.items():
-                limit = _GOAL_APPEND_LIMITS.get(str(key))
-                if not limit or not isinstance(values, list):
-                    continue
-                existing = list(goal.get(key) or [])
-                existing.extend(copy.deepcopy(values))
-                goal[str(key)] = existing[-limit:]
-        return goal
 
     def _copy_for_incremental(self, snapshot: dict, event: RuntimeEvent) -> dict:
         """Copy only mutable containers touched by an incremental apply.
@@ -220,6 +185,11 @@ class RuntimeProjector:
             key: dict(value) if isinstance(value, dict) else value
             for key, value in dict(snapshot.get("plugins") or {}).items()
         }
+        if event.type.startswith("extension_"):
+            out["extensions"] = copy.deepcopy(snapshot.get("extensions") or {})
+            out["extension_events"] = copy.deepcopy(
+                snapshot.get("extension_events") or []
+            )
         out["interactions"] = {
             key: copy.deepcopy(value) if isinstance(value, dict) else value
             for key, value in dict(snapshot.get("interactions") or {}).items()
@@ -235,69 +205,10 @@ class RuntimeProjector:
             copy.deepcopy(value) for value in list(snapshot.get("pending_approvals") or [])
         ]
         out["hooks"] = copy.deepcopy(snapshot.get("hooks") or {})
-        if isinstance(snapshot.get("todo"), dict):
-            out["todo"] = dict(snapshot["todo"])
-        if isinstance(snapshot.get("goal"), dict):
-            out["goal"] = dict(snapshot["goal"])
-        if event.type.startswith("team_") and isinstance(snapshot.get("team"), dict):
-            out["team"] = self._copy_team_for_incremental(snapshot["team"], event)
         if event.type == "message_assistant_delta" and out["messages"]:
             latest = dict(out["messages"][-1])
             latest["payload"] = dict(latest.get("payload") or {})
             out["messages"][-1] = latest
-        return out
-
-    @staticmethod
-    def _copy_team_for_incremental(team: dict, event: RuntimeEvent) -> dict:
-        """Copy only the Team collection and row mutated by ``event``.
-
-        A full ``deepcopy(team)`` made mailbox growth quadratic in both copied
-        bytes and allocation pressure. Runtime snapshots remain immutable to
-        concurrent readers while unrelated member/task/message collections are
-        structurally shared.
-        """
-
-        out = dict(team)
-        payload = event.payload if isinstance(event.payload, dict) else {}
-        event_type = event.type
-        if event_type.startswith("team_member_") or event_type == "team_shutdown_completed":
-            members = dict(team.get("members") or {})
-            if event_type == "team_shutdown_completed":
-                members = {
-                    key: dict(value) if isinstance(value, dict) else value
-                    for key, value in members.items()
-                }
-            else:
-                member_id = str(payload.get("member_id") or "")
-                if member_id in members and isinstance(members[member_id], dict):
-                    members[member_id] = dict(members[member_id])
-            out["members"] = members
-        elif event_type.startswith("team_task_"):
-            tasks = dict(team.get("tasks") or {})
-            task_id = str(payload.get("task_id") or "")
-            if task_id in tasks and isinstance(tasks[task_id], dict):
-                tasks[task_id] = dict(tasks[task_id])
-            out["tasks"] = tasks
-        elif event_type.startswith("team_message_"):
-            messages = dict(team.get("messages") or {})
-            message_id = str(payload.get("message_id") or "")
-            if message_id in messages and isinstance(messages[message_id], dict):
-                message = dict(messages[message_id])
-                deliveries = message.get("deliveries")
-                if isinstance(deliveries, dict):
-                    deliveries = dict(deliveries)
-                    recipient_id = str(payload.get("recipient_id") or "")
-                    if recipient_id in deliveries and isinstance(deliveries[recipient_id], dict):
-                        deliveries[recipient_id] = dict(deliveries[recipient_id])
-                    message["deliveries"] = deliveries
-                messages[message_id] = message
-            out["messages"] = messages
-        elif event_type.startswith("team_permission_"):
-            permissions = dict(team.get("permissions") or {})
-            permission_id = str(payload.get("permission_id") or "")
-            if permission_id in permissions and isinstance(permissions[permission_id], dict):
-                permissions[permission_id] = dict(permissions[permission_id])
-            out["permissions"] = permissions
         return out
 
     def _update_incremental_message_projections(
@@ -311,7 +222,7 @@ class RuntimeProjector:
         """Maintain derived message lists in O(number of appended rows).
 
         History/window operations still take the full, deterministic rebuild
-        path. Normal run, tool, token, todo, hook and subagent events do not
+        path. Normal run, tool, token, extension, hook and subagent events do not
         touch either projection.
         """
         messages = snapshot.get("messages") or []
@@ -368,6 +279,7 @@ class RuntimeProjector:
         snapshot["projector_version"] = PROJECTOR_VERSION
 
     def apply(self, snapshot: dict, event: RuntimeEvent) -> dict:
+        event = normalize_legacy_optional_event(event, snapshot)
         self._ensure_shape(snapshot)
         operation_id = str((event.payload or {}).get("operation_id") or "").strip()
         if operation_id and operation_id in set(snapshot.get("operation_ids") or []):
@@ -382,6 +294,16 @@ class RuntimeProjector:
         snapshot["last_seq"] = max(int(snapshot.get("last_seq") or 0), event.seq)
         snapshot["updated_at"] = event.timestamp
         event_type = event.type
+        if self._event_changes_model_history(event):
+            snapshot["model_history_generation"] = int(
+                snapshot.get("model_history_generation") or 0
+            ) + 1
+            # A compact checkpoint proves one exact generation/prefix.  Do not
+            # carry an opaque provider item after rewrite/delete/branch/local
+            # compaction, even though transport validation would also reject it.
+            context = snapshot.get("context")
+            if isinstance(context, dict):
+                context.pop("responses_compaction", None)
 
         if event_type == "session_meta":
             snapshot["session"] = dict(event.payload or {})
@@ -417,33 +339,27 @@ class RuntimeProjector:
             self._upsert_run(snapshot, event, TERMINAL_RUN_TYPES[event_type])
         elif event_type.startswith("subagent_"):
             self._apply_subagent(snapshot, event)
-        elif event_type.startswith("team_"):
-            self._apply_team_event(snapshot, event)
         elif event_type == "context_tokens":
             payload = dict(event.payload or {})
             payload["updated_at"] = event.timestamp
             payload["seq"] = event.seq
             snapshot["context"]["tokens"] = payload
-        elif event_type == "todo_updated":
-            payload = dict(event.payload or {}) if isinstance(event.payload, dict) else {}
-            if "todo" in payload and isinstance(payload.get("todo"), dict):
-                todo = dict(payload.get("todo") or {})
-            else:
-                todo = payload
-            todo["updated_at"] = event.timestamp
-            todo["seq"] = event.seq
-            snapshot["todo"] = todo
-            snapshot["context"]["todo"] = todo
-        elif event_type.startswith("goal_"):
-            goal = self._project_goal(snapshot, event)
-            goal["updated_at"] = goal.get("updated_at") or event.timestamp
-            goal["seq"] = event.seq
-            snapshot["goal"] = goal
-            snapshot["context"]["goal"] = goal
+        elif event_type == "responses_compaction_committed":
+            checkpoint = (event.payload or {}).get("checkpoint")
+            if isinstance(checkpoint, dict):
+                snapshot["context"]["responses_compaction"] = {
+                    "checkpoint": copy.deepcopy(checkpoint),
+                    "reason": str((event.payload or {}).get("reason") or ""),
+                    "changed_at_seq": event.seq,
+                }
         elif event_type in HOOK_EVENT_TYPES:
             self._apply_hook_event(snapshot, event)
         elif event_type in PLUGIN_EVENT_TYPES:
             self._apply_plugin_event(snapshot, event)
+        elif event_type == "extension_state_changed":
+            self._apply_extension_state(snapshot, event)
+        elif event_type == "extension_event":
+            self._apply_extension_event(snapshot, event)
         elif event_type.startswith("interaction_"):
             self._apply_human_interaction(snapshot, event, kind="question")
         elif event_type.startswith("approval_"):
@@ -461,6 +377,94 @@ class RuntimeProjector:
         elif event_type.startswith("legacy_") and event_type.endswith("_observed"):
             self._apply_legacy_observation(snapshot, event)
         return snapshot
+
+    @staticmethod
+    def _event_changes_model_history(event: RuntimeEvent) -> bool:
+        if event.type in {
+            "model_history_replaced",
+            "message_deleted",
+            "message_rewritten",
+            "history_branch_created",
+            "history_compacted",
+            "model_window_changed",
+        }:
+            return True
+        if event.type != "visible_range_changed":
+            return False
+        payload = dict(event.payload or {})
+        return bool(
+            payload.get("apply_model")
+            or "restore_model_messages" in payload
+            or payload.get("reason") == "runtime_v2_truncate"
+        )
+
+    @staticmethod
+    def _apply_extension_state(snapshot: dict, event: RuntimeEvent) -> None:
+        payload = dict(event.payload or {})
+        plugin_id = str(payload.get("plugin_id") or "").strip()
+        namespace = str(payload.get("namespace") or "").strip()
+        try:
+            revision = int(payload.get("revision"))
+        except (TypeError, ValueError):
+            return
+        if not plugin_id or not namespace or revision <= 0:
+            return
+        extensions = snapshot.setdefault("extensions", {})
+        plugin_state = extensions.setdefault(plugin_id, {})
+        current = plugin_state.get(namespace)
+        if isinstance(current, dict) and revision <= int(current.get("revision") or 0):
+            return
+        value = copy.deepcopy(payload.get("value"))
+        patch = payload.get("patch")
+        if "value" not in payload and isinstance(patch, list):
+            value = copy.deepcopy(current.get("value")) if isinstance(current, dict) else None
+            for operation in patch:
+                if not isinstance(operation, dict):
+                    return
+                op = str(operation.get("op") or "").strip().lower()
+                path = str(operation.get("path") or "")
+                if path == "":
+                    if op == "remove":
+                        value = None
+                    elif op in {"add", "replace"} and "value" in operation:
+                        value = copy.deepcopy(operation.get("value"))
+                    else:
+                        return
+                    continue
+                if not path.startswith("/") or "/" in path[1:] or not isinstance(value, dict):
+                    return
+                key = path[1:].replace("~1", "/").replace("~0", "~")
+                if op == "remove":
+                    value.pop(key, None)
+                elif op in {"add", "replace"} and "value" in operation:
+                    value[key] = copy.deepcopy(operation.get("value"))
+                else:
+                    return
+        plugin_state[namespace] = {
+            "revision": revision,
+            "value": value,
+            "updated_at": event.timestamp,
+            "seq": event.seq,
+        }
+
+    @staticmethod
+    def _apply_extension_event(snapshot: dict, event: RuntimeEvent) -> None:
+        payload = dict(event.payload or {})
+        plugin_id = str(payload.get("plugin_id") or "").strip()
+        event_name = str(payload.get("event_name") or "").strip()
+        if not plugin_id or not event_name:
+            return
+        rows = list(snapshot.get("extension_events") or [])
+        rows.append(
+            {
+                "plugin_id": plugin_id,
+                "event_name": event_name,
+                "data": copy.deepcopy(payload.get("data")),
+                "timestamp": event.timestamp,
+                "seq": event.seq,
+            }
+        )
+        snapshot["extension_events"] = rows[-100:]
 
     @staticmethod
     def _apply_human_interaction(snapshot: dict, event: RuntimeEvent, *, kind: str) -> None:
@@ -498,214 +502,6 @@ class RuntimeProjector:
             for item in collection.values()
             if isinstance(item, dict) and item.get("status") == "pending"
         ]
-
-    @staticmethod
-    def _new_team_projection(event: RuntimeEvent) -> dict:
-        payload = dict(event.payload or {})
-        return {
-            "team_id": str(payload.get("team_id") or ""),
-            "title": str(payload.get("title") or ""),
-            "status": str(payload.get("status") or "active"),
-            "max_members": int(payload.get("max_members") or 4),
-            "created_at": event.timestamp,
-            "updated_at": event.timestamp,
-            "seq": event.seq,
-            "members": {},
-            "tasks": {},
-            "messages": {},
-            "permissions": {},
-        }
-
-    def _apply_team_event(self, snapshot: dict, event: RuntimeEvent) -> None:
-        payload = dict(event.payload or {})
-        event_type = event.type
-        if event_type == "team_created":
-            team = self._new_team_projection(event)
-            snapshot["team"] = team
-            return
-
-        team = snapshot.get("team")
-        if not isinstance(team, dict):
-            # Keep orphan/corrupt Team audit events in events.jsonl without
-            # synthesizing an active team that was never explicitly created.
-            return
-        team["updated_at"] = event.timestamp
-        team["seq"] = event.seq
-        team["last_event"] = event_type
-
-        if event_type == "team_status_changed":
-            if payload.get("status"):
-                team["status"] = str(payload["status"])
-            if "detail" in payload:
-                team["status_detail"] = payload.get("detail")
-            return
-
-        if event_type == "team_member_added":
-            member_id = str(payload.get("member_id") or "").strip()
-            if not member_id:
-                return
-            member = dict(payload)
-            member["member_id"] = member_id
-            member["state"] = str(member.get("state") or "starting")
-            member["created_at"] = event.timestamp
-            member["updated_at"] = event.timestamp
-            member["seq"] = event.seq
-            team.setdefault("members", {})[member_id] = member
-            return
-
-        if event_type in {"team_member_updated", "team_member_state_changed", "team_member_removed"}:
-            member_id = str(payload.get("member_id") or "").strip()
-            member = (team.get("members") or {}).get(member_id)
-            if not isinstance(member, dict):
-                return
-            if event_type == "team_member_removed":
-                member["state"] = "stopped"
-                member["removed"] = True
-                member["removed_at"] = event.timestamp
-            elif event_type == "team_member_updated":
-                for key, value in payload.items():
-                    if key != "member_id":
-                        member[key] = value
-            else:
-                member["state"] = str(payload.get("state") or member.get("state") or "idle")
-                if "detail" in payload:
-                    member["detail"] = payload.get("detail")
-            member["updated_at"] = event.timestamp
-            member["seq"] = event.seq
-            return
-
-        if event_type == "team_task_created":
-            task_id = str(payload.get("task_id") or "").strip()
-            if not task_id:
-                return
-            task = dict(payload)
-            task["task_id"] = task_id
-            task["status"] = str(task.get("status") or "pending")
-            task["created_at"] = event.timestamp
-            task["updated_at"] = event.timestamp
-            task["seq"] = event.seq
-            team.setdefault("tasks", {})[task_id] = task
-            return
-
-        if event_type in {"team_task_updated", "team_task_claimed", "team_task_released"}:
-            task_id = str(payload.get("task_id") or "").strip()
-            task = (team.get("tasks") or {}).get(task_id)
-            if not isinstance(task, dict):
-                return
-            if event_type == "team_task_claimed":
-                task["assignee_id"] = str(payload.get("member_id") or "") or None
-                task["status"] = "in_progress"
-                task["claimed_at"] = event.timestamp
-            elif event_type == "team_task_released":
-                task["assignee_id"] = None
-                task["status"] = "pending"
-                task["released_at"] = event.timestamp
-                task["release_reason"] = payload.get("reason") or ""
-            else:
-                for key, value in payload.items():
-                    if key != "task_id":
-                        task[key] = value
-                if task.get("status") in {"completed", "cancelled"}:
-                    task["completed_at"] = event.timestamp
-            task["updated_at"] = event.timestamp
-            task["seq"] = event.seq
-            return
-
-        if event_type == "team_message_enqueued":
-            message_id = str(payload.get("message_id") or "").strip()
-            if not message_id:
-                return
-            message = dict(payload)
-            recipients = [str(x) for x in message.get("recipient_ids") or [] if str(x)]
-            message["recipient_ids"] = recipients
-            message["status"] = "queued"
-            message["deliveries"] = {
-                recipient: {"status": "queued", "updated_at": event.timestamp}
-                for recipient in recipients
-            }
-            message["created_at"] = event.timestamp
-            message["updated_at"] = event.timestamp
-            message["seq"] = event.seq
-            team.setdefault("messages", {})[message_id] = message
-            return
-
-        delivery_states = {
-            "team_message_delivery_started": "delivering",
-            "team_message_delivered": "delivered",
-            "team_message_consumed": "consumed",
-            "team_message_delivery_failed": "failed",
-        }
-        if event_type in delivery_states:
-            message_id = str(payload.get("message_id") or "").strip()
-            recipient_id = str(payload.get("recipient_id") or "").strip()
-            message = (team.get("messages") or {}).get(message_id)
-            if not isinstance(message, dict) or not recipient_id:
-                return
-            delivery = message.setdefault("deliveries", {}).setdefault(recipient_id, {})
-            delivery["status"] = delivery_states[event_type]
-            delivery["updated_at"] = event.timestamp
-            delivery["seq"] = event.seq
-            if payload.get("error"):
-                delivery["error"] = payload["error"]
-            states = [str(x.get("status") or "queued") for x in message["deliveries"].values()]
-            if states and all(state == "consumed" for state in states):
-                message["status"] = "consumed"
-            elif "failed" in states:
-                message["status"] = "failed"
-            elif states and all(state in {"delivered", "consumed"} for state in states):
-                message["status"] = "delivered"
-            elif "delivering" in states:
-                message["status"] = "delivering"
-            else:
-                message["status"] = "queued"
-            message["updated_at"] = event.timestamp
-            message["seq"] = event.seq
-            return
-
-        if event_type == "team_permission_requested":
-            permission_id = str(payload.get("permission_id") or "").strip()
-            if not permission_id:
-                return
-            permission = dict(payload)
-            permission["permission_id"] = permission_id
-            permission["status"] = "pending"
-            permission["created_at"] = event.timestamp
-            permission["updated_at"] = event.timestamp
-            permission["seq"] = event.seq
-            team.setdefault("permissions", {})[permission_id] = permission
-            return
-
-        if event_type in {"team_permission_resolved", "team_permission_consumed"}:
-            permission_id = str(payload.get("permission_id") or "").strip()
-            permission = (team.get("permissions") or {}).get(permission_id)
-            if not isinstance(permission, dict):
-                return
-            permission.update({key: value for key, value in payload.items() if key != "permission_id"})
-            permission["updated_at"] = event.timestamp
-            if event_type == "team_permission_resolved":
-                permission["resolved_at"] = event.timestamp
-            else:
-                permission["status"] = "consumed"
-                permission["consumed_at"] = event.timestamp
-            permission["seq"] = event.seq
-            return
-
-        if event_type == "team_shutdown_requested":
-            team["status"] = "shutting_down"
-            team["shutdown_requested_at"] = event.timestamp
-            team["shutdown_reason"] = payload.get("reason") or ""
-            return
-        if event_type == "team_shutdown_completed":
-            team["status"] = "stopped"
-            team["shutdown_completed_at"] = event.timestamp
-            for member in (team.get("members") or {}).values():
-                if isinstance(member, dict) and member.get("state") not in {"failed", "stopped"}:
-                    member["state"] = "stopped"
-                    member["updated_at"] = event.timestamp
-            return
-        if event_type == "team_archived":
-            team["status"] = "archived"
-            team["archived_at"] = event.timestamp
 
     @staticmethod
     def _compact_hook_value(value):
@@ -899,6 +695,10 @@ class RuntimeProjector:
             "payload": payload,
         }
         snapshot["history_ops"].append(row)
+        if event.type == "history_branch_created":
+            lineage_id = str(payload.get("lineage_id") or payload.get("source_session_id") or "").strip()
+            if lineage_id:
+                snapshot["context"]["responses_lineage_id"] = lineage_id
         if event.type in {"message_deleted", "message_rewritten"}:
             self._apply_message_op_to_model(snapshot, event)
             self._mark_context_tokens_stale(snapshot, event.type, event.seq)
@@ -967,15 +767,13 @@ class RuntimeProjector:
                     snapshot["context"].pop("tokens", None)
             elif payload.get("apply_model") or payload.get("reason") == "runtime_v2_truncate":
                 self._mark_context_tokens_stale(snapshot, "visible_range_changed", event.seq)
-            if "restore_todo" in payload:
-                restored_todo = payload.get("restore_todo")
-                if isinstance(restored_todo, dict):
-                    todo = dict(restored_todo)
-                    snapshot["todo"] = todo
-                    snapshot["context"]["todo"] = todo
-                else:
-                    snapshot["todo"] = None
-                    snapshot["context"].pop("todo", None)
+            if "restore_extensions" in payload:
+                restored_extensions = payload.get("restore_extensions")
+                snapshot["extensions"] = (
+                    copy.deepcopy(restored_extensions)
+                    if isinstance(restored_extensions, dict)
+                    else {}
+                )
         elif event.type == "model_window_changed":
             snapshot["model_window"] = {
                 "from_seq": payload.get("from_seq"),

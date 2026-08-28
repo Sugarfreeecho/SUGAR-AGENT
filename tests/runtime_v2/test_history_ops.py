@@ -2,12 +2,90 @@ import tempfile
 import threading
 import time
 import unittest
+from pathlib import Path
 
-from app.runtime_v2 import RuntimeHistoryOps, RuntimeMirror, RuntimeUiProjection
+from app.runtime_v2 import (
+    RuntimeHistoryOps,
+    RuntimeMirror,
+    RuntimeModelProjection,
+    RuntimeUiProjection,
+    SessionExtensionStateStore,
+)
 from app.runtime_v2.blob_store import BlobStore
 
 
 class RuntimeHistoryOpsTests(unittest.TestCase):
+    def test_responses_compaction_survives_append_and_is_cleared_by_replacement(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ops = RuntimeHistoryOps(tmp)
+            ops.append_model_message("s1", "user", "first")
+            generation = ops.snapshots.read("s1")["model_history_generation"]
+            checkpoint = {
+                "schema_version": 1,
+                "issuer": "issuer-1",
+                "model": "gpt-test",
+                "source_history_generation": generation,
+                "covered_item_count": 1,
+                "covered_prefix_hash": "hash",
+                "covered_item_hashes": ["item-hash"],
+                "compacted_output_items": [],
+                "usage": {},
+                "source_estimated_tokens": 100,
+                "created_at": "2026-08-25T00:00:00.000Z",
+            }
+            ops.commit_responses_compaction("s1", checkpoint, reason="automatic")
+            ops.append_model_message("s1", "user", "second")
+
+            context = RuntimeModelProjection(tmp).read_request_context("s1")
+            self.assertEqual(context["responses_compaction"]["issuer"], "issuer-1")
+            self.assertEqual(context["history_generation"], generation)
+
+            ops.replace_model_history(
+                "s1",
+                [{"type": "user", "content": "rewritten"}],
+                reason="manual_rewrite",
+            )
+            rewritten = RuntimeModelProjection(tmp).read_request_context("s1")
+            self.assertEqual(rewritten["responses_compaction"], {})
+            self.assertGreater(rewritten["history_generation"], generation)
+
+    def test_model_history_replacement_strips_responses_continuation_anchor(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ops = RuntimeHistoryOps(tmp)
+            ops.replace_model_history(
+                "s1",
+                [{
+                    "type": "assistant",
+                    "content": "answer",
+                    "additional_kwargs": {
+                        "_myagent_responses": {
+                            "schema_version": 2,
+                            "issuer": "issuer-1",
+                            "response_id": "resp_old",
+                            "continuation_anchor": {"response_id": "resp_old"},
+                            "canonical_output_items": [{
+                                "schema_version": 1,
+                                "issuer": "issuer-1",
+                                "replayability": "native",
+                                "raw_item": {
+                                    "type": "message",
+                                    "role": "assistant",
+                                    "content": [],
+                                },
+                            }],
+                        }
+                    },
+                }],
+                reason="automatic_compaction",
+            )
+
+            message = RuntimeModelProjection(tmp).read_message_dicts("s1")[0]
+            state = message["additional_kwargs"]["_myagent_responses"]
+            self.assertNotIn("response_id", state)
+            self.assertNotIn("continuation_anchor", state)
+            self.assertEqual(state["state_mode"], "stateless")
+            self.assertEqual(len(state["canonical_output_items"]), 1)
+
     def test_large_branch_materializes_under_ten_seconds(self):
         with tempfile.TemporaryDirectory() as tmp:
             ops = RuntimeHistoryOps(tmp)
@@ -339,9 +417,11 @@ class RuntimeHistoryOpsTests(unittest.TestCase):
                 "done": 0,
                 "total": 1,
             }
-            ops.update_todo("s1", before)
+            (Path(tmp) / "s1").mkdir()
+            extensions = SessionExtensionStateStore(tmp)
+            extensions.set_latest("s1", "session-todo", "plan", before)
             target = ops.commit_user_turn("s1", "rewrite me")
-            ops.update_todo("s1", after)
+            extensions.set_latest("s1", "session-todo", "plan", after)
 
             ops.truncate_visible_history_before_seq(
                 "s1",
@@ -349,7 +429,7 @@ class RuntimeHistoryOpsTests(unittest.TestCase):
                 keep_to_seq=target.seq - 1,
                 reason="runtime_v2_truncate",
             )
-            todo = ops.snapshots.read("s1")["todo"]
+            todo = ops.snapshots.read("s1")["extensions"]["session-todo"]["plan"]["value"]
 
             self.assertEqual(todo["items"][0]["text"], "before")
             self.assertEqual(todo["total"], 1)
@@ -575,7 +655,8 @@ class RuntimeHistoryOpsTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             ops = RuntimeHistoryOps(tmp)
             mirror = RuntimeMirror(tmp)
-            ops.update_todo("root", {
+            (Path(tmp) / "root").mkdir()
+            SessionExtensionStateStore(tmp).set_latest("root", "session-todo", "plan", {
                 "has_plan": True,
                 "items": [{"id": "1", "text": "branch task", "status": "pending"}],
                 "done": 0,
@@ -585,7 +666,7 @@ class RuntimeHistoryOpsTests(unittest.TestCase):
 
             ops.create_branch("branch", "root", final.seq)
 
-            todo = ops.snapshots.read("branch")["todo"]
+            todo = ops.snapshots.read("branch")["extensions"]["session-todo"]["plan"]["value"]
             self.assertEqual(todo["items"][0]["text"], "branch task")
 
     def test_branch_does_not_duplicate_existing_legacy_seed(self):
@@ -667,6 +748,51 @@ class RuntimeHistoryOpsTests(unittest.TestCase):
             child_log = RuntimeHistoryOps(tmp).event_log.session_dir("branch") / "subagents" / "agent-1" / "events.jsonl"
             self.assertTrue(child_log.is_file())
             self.assertIn("subagent_started", child_log.read_text(encoding="utf-8"))
+
+    def test_reference_branch_batches_context_and_extension_inheritance(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ops = RuntimeHistoryOps(tmp)
+            ops.append_model_message("parent", "user", "task")
+            ops.commit_context_summary("parent", "summary", source_seq=1)
+            ops.checkpoint_context_tokens(
+                "parent", {"estimated": 42, "token_source": "test"}
+            )
+            SessionExtensionStateStore(tmp).set_latest(
+                "parent", "demo", "state", {"enabled": True}
+            )
+            anchor = ops.event_log.next_seq("parent") - 1
+            calls = []
+            original = ops.event_log._append_many_unlocked
+
+            def record_batch(session_id, rows):
+                materialized = list(rows)
+                calls.append((session_id, [row["type"] for row in materialized]))
+                return original(session_id, materialized)
+
+            ops.event_log._append_many_unlocked = record_batch
+            reference = ops.create_reference_branch(
+                "child", "parent", anchor, name="worker"
+            )
+            child = ops.snapshots.read("child")
+
+            self.assertEqual(reference.type, "history_branch_created")
+            self.assertEqual(len(calls), 1)
+            self.assertEqual(calls[0][0], "child")
+            self.assertEqual(
+                calls[0][1],
+                [
+                    "history_branch_created",
+                    "context_summary_committed",
+                    "context_tokens",
+                    "extension_state_changed",
+                ],
+            )
+            self.assertEqual(child["context"]["summary"]["summary"], "summary")
+            self.assertEqual(child["context"]["tokens"]["estimated"], 42)
+            self.assertEqual(
+                child["extensions"]["demo"]["state"]["value"],
+                {"enabled": True},
+            )
 
 
 if __name__ == "__main__":

@@ -414,7 +414,8 @@ def test_migration_backfills_legacy_context_and_todo_without_writing_legacy(monk
     assert result["context_v2_from_v1"]["action"] == "backfill"
     assert result["todo_v2_from_v1"]["action"] == "backfill"
     assert projected["context"]["summary"]["summary"] == "legacy summary"
-    assert projected["todo"]["items"] == todo["items"]
+    assert projected["extensions"]["session-todo"]["plan"]["value"]["items"] == todo["items"]
+    assert "todo" not in projected
     assert snapshot.event_path("s1").is_file()
 
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import logging
 import shutil
 import time
@@ -26,12 +27,6 @@ HOOK_EVENT_TYPES = {
 
 PLUGIN_EVENT_TYPES = {"plugin_state_changed", "plugin_reloaded"}
 
-_GOAL_CHECKPOINT_INTERVAL = 64
-_GOAL_APPEND_LIMITS = {
-    "accounted_judge_run_ids": 512,
-    "accounted_run_ids": 512,
-    "accounted_usage_ids": 2048,
-}
 
 
 def _rt2_step_ms(start: float, end: Optional[float] = None) -> int:
@@ -91,9 +86,13 @@ class RuntimeHistoryOps:
         source_tokens = source_context.get("tokens") if isinstance(source_context, dict) else None
         if not isinstance(source_tokens, dict):
             source_tokens = None
-        source_todo = source_checkpoint.get("todo") if isinstance(source_checkpoint, dict) else None
-        if not isinstance(source_todo, dict):
-            source_todo = None
+        source_extensions = (
+            source_checkpoint.get("extensions")
+            if isinstance(source_checkpoint, dict)
+            else None
+        )
+        if not isinstance(source_extensions, dict):
+            source_extensions = {}
         t_after_model = time.perf_counter()
         seed_rows = self._branch_ui_seed_rows(session_id, source_session_id, ui_events)
         t_after_map = time.perf_counter()
@@ -110,7 +109,11 @@ class RuntimeHistoryOps:
             has_model = bool(snapshot.get("raw_model_messages") if isinstance(snapshot, dict) else None)
             existing_context = snapshot.get("context") if isinstance(snapshot, dict) else None
             has_tokens = bool(existing_context.get("tokens")) if isinstance(existing_context, dict) else False
-            has_todo = isinstance(snapshot.get("todo"), dict) if isinstance(snapshot, dict) else False
+            target_extensions = (
+                snapshot.get("extensions") if isinstance(snapshot, dict) else None
+            )
+            if not isinstance(target_extensions, dict):
+                target_extensions = {}
             rows = [{
                 "type": "history_branch_created",
                 "payload": {
@@ -140,14 +143,14 @@ class RuntimeHistoryOps:
                     "type": "context_tokens",
                     "payload": token_payload,
                 })
-            if not has_todo and source_todo is not None:
-                todo_payload = dict(source_todo)
-                todo_payload.pop("seq", None)
-                todo_payload.pop("updated_at", None)
-                rows.append({
-                    "type": "todo_updated",
-                    "payload": todo_payload,
-                })
+            rows.extend(
+                self._extension_seed_rows(
+                    source_extensions,
+                    target_extensions,
+                    source_session_id=source_session_id,
+                    source_seq=branch_from_seq,
+                )
+            )
             appended = self.event_log._append_many_unlocked(session_id, rows)
             if not appended:
                 raise RuntimeError("branch batch append produced no events")
@@ -193,50 +196,117 @@ class RuntimeHistoryOps:
         replacement materializes the effective history and detaches the
         reference, which keeps compaction/rewrite semantics straightforward.
         """
-        reference = self._append_and_snapshot(
-            session_id,
-            "history_branch_created",
-            {
-                "source_session_id": str(source_session_id),
-                "branch_from_seq": int(branch_from_seq),
-                "name": str(name or ""),
-                "reference_mode": "immutable_model_prefix",
-            },
-        )
         source = self._source_snapshot_at_seq(source_session_id, int(branch_from_seq))
         context = source.get("context") if isinstance(source, dict) else {}
         summary = context.get("summary") if isinstance(context, dict) else {}
-        summary_text = (
-            str(summary.get("summary") or "")
-            if isinstance(summary, dict)
-            else ""
-        )
-        if summary_text:
-            self.commit_context_summary(
-                session_id,
-                summary_text,
-                source_seq=(
-                    summary.get("source_seq")
-                    if isinstance(summary, dict)
-                    and summary.get("source_seq") is not None
-                    else branch_from_seq
-                ),
-            )
+        summary_text = str(summary.get("summary") or "") if isinstance(summary, dict) else ""
         tokens = context.get("tokens") if isinstance(context, dict) else None
-        if isinstance(tokens, dict) and tokens:
-            inherited_tokens = dict(tokens)
-            inherited_tokens.pop("seq", None)
-            inherited_tokens.pop("updated_at", None)
-            inherited_tokens["inherited_from_session_id"] = source_session_id
-            inherited_tokens["inherited_from_runtime_seq"] = int(branch_from_seq)
-            self.checkpoint_context_tokens(session_id, inherited_tokens)
-        todo = source.get("todo") if isinstance(source, dict) else None
-        if isinstance(todo, dict):
-            inherited_todo = dict(todo)
-            inherited_todo.pop("seq", None)
-            inherited_todo.pop("updated_at", None)
-            self.update_todo(session_id, inherited_todo)
-        return reference
+        source_extensions = source.get("extensions") if isinstance(source, dict) else {}
+        if not isinstance(source_extensions, dict):
+            source_extensions = {}
+
+        with self._session_transaction(session_id):
+            existing_events = self.event_log.read_all(session_id)
+            snapshot = self.snapshots.read(session_id)
+            if int(snapshot.get("last_seq") or 0) != max(
+                (int(event.seq) for event in existing_events), default=0
+            ):
+                snapshot = self.projector.project(existing_events)
+            target_extensions = (
+                snapshot.get("extensions") if isinstance(snapshot, dict) else {}
+            )
+            if not isinstance(target_extensions, dict):
+                target_extensions = {}
+            rows = [{
+                "type": "history_branch_created",
+                "payload": {
+                    "source_session_id": str(source_session_id),
+                    "branch_from_seq": int(branch_from_seq),
+                    "name": str(name or ""),
+                    "reference_mode": "immutable_model_prefix",
+                },
+            }]
+            if summary_text:
+                rows.append({
+                    "type": "context_summary_committed",
+                    "payload": {
+                        "summary": summary_text,
+                        "source_seq": (
+                            summary.get("source_seq")
+                            if isinstance(summary, dict)
+                            and summary.get("source_seq") is not None
+                            else branch_from_seq
+                        ),
+                    },
+                })
+            if isinstance(tokens, dict) and tokens:
+                inherited_tokens = dict(tokens)
+                inherited_tokens.pop("seq", None)
+                inherited_tokens.pop("updated_at", None)
+                inherited_tokens.pop("ephemeral", None)
+                inherited_tokens["stale"] = False
+                inherited_tokens["inherited_from_session_id"] = source_session_id
+                inherited_tokens["inherited_from_runtime_seq"] = int(branch_from_seq)
+                rows.append({"type": "context_tokens", "payload": inherited_tokens})
+            rows.extend(
+                self._extension_seed_rows(
+                    source_extensions,
+                    target_extensions,
+                    source_session_id=source_session_id,
+                    source_seq=int(branch_from_seq),
+                )
+            )
+            appended = self.event_log._append_many_unlocked(session_id, rows)
+            if not appended:
+                raise RuntimeError("reference branch batch append produced no events")
+            if int(snapshot.get("last_seq") or 0) == int(appended[0].seq) - 1:
+                if not snapshot:
+                    snapshot = self.projector.empty_snapshot()
+                for event in appended:
+                    self.projector.apply(snapshot, event)
+                self.projector.finalize(snapshot)
+            else:
+                snapshot = self.projector.project(self.event_log.read_all(session_id))
+            self.snapshots.stamp_event_log(
+                session_id,
+                snapshot,
+                self.event_log.event_path(session_id),
+            )
+            self.snapshots.write(session_id, snapshot)
+        return appended[0]
+
+    @staticmethod
+    def _extension_seed_rows(
+        source_extensions: dict,
+        target_extensions: dict,
+        *,
+        source_session_id: str,
+        source_seq: int,
+    ) -> list[dict]:
+        rows: list[dict] = []
+        for plugin_id, raw_namespaces in source_extensions.items():
+            if not isinstance(raw_namespaces, dict):
+                continue
+            target_namespaces = target_extensions.get(plugin_id)
+            if not isinstance(target_namespaces, dict):
+                target_namespaces = {}
+            for namespace, raw_row in raw_namespaces.items():
+                if namespace in target_namespaces or not isinstance(raw_row, dict):
+                    continue
+                rows.append(
+                    {
+                        "type": "extension_state_changed",
+                        "payload": {
+                            "plugin_id": str(plugin_id),
+                            "namespace": str(namespace),
+                            "revision": 1,
+                            "value": copy.deepcopy(raw_row.get("value")),
+                            "inherited_from_session_id": str(source_session_id),
+                            "inherited_from_runtime_seq": int(source_seq),
+                        },
+                    }
+                )
+        return rows
 
     def _branch_ui_events(self, source_session_id: str, branch_from_seq: int) -> list[dict]:
         from .ui_projection import RuntimeUiProjection
@@ -356,8 +426,24 @@ class RuntimeHistoryOps:
             payload["source_seq"] = int(source_seq)
         return self._append_and_snapshot(session_id, "context_summary_committed", payload)
 
-    def update_todo(self, session_id: str, todo: dict) -> RuntimeEvent:
-        return self._append_and_snapshot(session_id, "todo_updated", dict(todo or {}))
+    def commit_responses_compaction(
+        self,
+        session_id: str,
+        checkpoint: dict,
+        *,
+        reason: str = "",
+    ) -> RuntimeEvent:
+        payload = {
+            "checkpoint": copy.deepcopy(dict(checkpoint or {})),
+            "reason": str(reason or ""),
+        }
+        if not payload["checkpoint"].get("issuer"):
+            raise ValueError("Responses compaction checkpoint requires issuer")
+        return self._append_and_snapshot(
+            session_id,
+            "responses_compaction_committed",
+            payload,
+        )
 
     def checkpoint_context_tokens(self, session_id: str, tokens: dict) -> RuntimeEvent:
         """Persist the current request-size checkpoint after a context rewrite."""
@@ -365,94 +451,6 @@ class RuntimeHistoryOps:
         payload.pop("ephemeral", None)
         payload["stale"] = False
         return self._append_and_snapshot(session_id, "context_tokens", payload)
-
-    def update_goal(self, session_id: str, goal: dict, event_type: str = "goal_updated") -> RuntimeEvent:
-        if not str(event_type or "").startswith("goal_"):
-            raise ValueError("goal event_type must start with goal_")
-        return self._append_and_snapshot(session_id, str(event_type), dict(goal or {}))
-
-    @staticmethod
-    def _compact_goal_payload(current: Optional[dict], goal: dict) -> dict:
-        """Encode frequent Goal accounting writes as replayable field deltas.
-
-        The snapshot store still receives the complete projected Goal.  Full
-        events are retained periodically so event-log recovery never needs to
-        replay an unbounded chain of deltas.
-        """
-
-        previous = dict(current or {})
-        persisted = dict(goal or {})
-        version = max(0, int(persisted.get("version") or 0))
-        if not previous or version % _GOAL_CHECKPOINT_INTERVAL == 0:
-            return persisted
-
-        changed: dict = {}
-        appended: dict = {}
-        removed = []
-        for key in sorted(set(previous) | set(persisted)):
-            if key == "seq" or previous.get(key) == persisted.get(key):
-                continue
-            if key not in persisted:
-                removed.append(key)
-                continue
-            limit = _GOAL_APPEND_LIMITS.get(key)
-            old_value = previous.get(key)
-            new_value = persisted.get(key)
-            if limit and isinstance(old_value, list) and isinstance(new_value, list):
-                additions = new_value[-1:] if new_value else []
-                if additions and (old_value + additions)[-limit:] == new_value:
-                    appended[key] = additions
-                    continue
-            changed[key] = new_value
-
-        payload = {
-            "_goal_delta": True,
-            "id": persisted.get("id"),
-            "set": changed,
-        }
-        if appended:
-            payload["append"] = appended
-        if removed:
-            payload["unset"] = removed
-        return payload
-
-    def mutate_goal(
-        self,
-        session_id: str,
-        mutator: Callable[[Optional[dict]], tuple[str, dict, dict]],
-        *,
-        run_id: Optional[str] = None,
-    ) -> tuple[Optional[RuntimeEvent], dict]:
-        """Atomically read, mutate, append, and project one Goal state change."""
-
-        with self._session_transaction(session_id):
-            snapshot = self.snapshots.read(session_id)
-            latest_seq = self.event_log.next_seq(session_id) - 1
-            if int(snapshot.get("last_seq") or 0) != int(latest_seq):
-                snapshot = self.projector.project(self.event_log.read_all(session_id))
-            current = snapshot.get("goal") if isinstance(snapshot, dict) else None
-            current_goal = dict(current) if isinstance(current, dict) else None
-            event_type, persisted_goal, response_goal = mutator(current_goal)
-            normalized_type = str(event_type or "").strip()
-            if not normalized_type:
-                return None, dict(response_goal or persisted_goal or current_goal or {})
-            if not normalized_type.startswith("goal_"):
-                raise ValueError("goal event_type must start with goal_")
-            if not isinstance(persisted_goal, dict) or not persisted_goal.get("id"):
-                raise ValueError("goal mutation must return a persisted goal with an id")
-            event_payload = dict(persisted_goal)
-            if normalized_type in {"goal_usage_updated", "goal_judge_evaluated"}:
-                event_payload = self._compact_goal_payload(current_goal, persisted_goal)
-            event = self.event_log._append_unlocked(
-                session_id,
-                normalized_type,
-                payload=event_payload,
-                run_id=run_id,
-            )
-            snapshot = self.projector.project_incremental(snapshot, event)
-            self.snapshots.stamp_event_log(session_id, snapshot, self.event_log.event_path(session_id))
-            self.snapshots.write(session_id, snapshot)
-            return event, dict(response_goal or persisted_goal)
 
     def append_hook_event(
         self,
@@ -582,9 +580,9 @@ class RuntimeHistoryOps:
         context_tokens = context.get("tokens")
         if not isinstance(context_tokens, dict):
             context_tokens = None
-        todo = checkpoint.get("todo") if isinstance(checkpoint, dict) else None
-        if not isinstance(todo, dict):
-            todo = None
+        extensions = checkpoint.get("extensions") if isinstance(checkpoint, dict) else None
+        if not isinstance(extensions, dict):
+            extensions = {}
         checkpoint_model_rows = self.projector._truncate_rows(
             list(checkpoint.get("raw_model_messages") or []),
             {"target_seq": int(target_seq), "to_seq": max(0, int(keep_to_seq))},
@@ -599,7 +597,7 @@ class RuntimeHistoryOps:
             "restore_context_summary": dict(summary),
             "restore_history_compaction": dict(history_compaction) if history_compaction else None,
             "restore_context_tokens": dict(context_tokens) if context_tokens else None,
-            "restore_todo": dict(todo) if todo is not None else None,
+            "restore_extensions": copy.deepcopy(extensions),
         }
 
     def change_model_window(self, session_id: str, *, from_seq: Optional[int] = None, to_seq: Optional[int] = None, reason: str = "") -> RuntimeEvent:
@@ -706,8 +704,17 @@ class RuntimeHistoryOps:
         summary: Optional[str] = None,
         source_seq: Optional[int] = None,
     ) -> RuntimeEvent:
+        # A replacement means the old list is no longer an append-only prefix.
+        # Keep lossless replay material, but never let a response ID/anchor from
+        # the superseded generation survive into the new history head.
+        from .model_projection import strip_responses_continuation_from_message
+
         payload = {
-            "messages": list(messages or []),
+            "messages": [
+                strip_responses_continuation_from_message(item)
+                for item in list(messages or [])
+                if isinstance(item, dict)
+            ],
             "reason": reason,
         }
         if summary is not None:
@@ -1008,6 +1015,8 @@ class RuntimeHistoryOps:
         return self._model_message_dicts_from_snapshot(snapshot)
 
     def _model_message_dicts_from_snapshot(self, snapshot: dict) -> list[dict]:
+        from .model_projection import strip_responses_continuation_from_message
+
         rows = snapshot.get("model_messages") if isinstance(snapshot, dict) else None
         if not isinstance(rows, list):
             return []
@@ -1015,7 +1024,7 @@ class RuntimeHistoryOps:
         for row in rows:
             item = self._model_row_to_message_dict(row)
             if item:
-                messages.append(item)
+                messages.append(strip_responses_continuation_from_message(item))
         return messages
 
     def _branch_origin_at_seq(self, source_session_id: str, branch_from_seq: int) -> Optional[tuple[str, int]]:
@@ -1163,7 +1172,7 @@ class RuntimeHistoryOps:
             "tool_started",
             "tool_finished",
             "context_summary_committed",
-            "todo_updated",
+            "extension_state_changed",
             "context_tokens",
             "ui_event",
             "legacy_ui_event",

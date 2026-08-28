@@ -292,7 +292,10 @@ class RuntimeV2MigrationService:
         context = snapshot.get("context") if isinstance(snapshot, dict) else {}
         summary = context.get("summary") if isinstance(context, dict) else {}
         current_context = str(summary.get("summary") or "") if isinstance(summary, dict) else ""
-        current_todo = snapshot.get("todo") if isinstance(snapshot, dict) else {}
+        extensions = snapshot.get("extensions") if isinstance(snapshot, dict) else {}
+        todo_plugin = extensions.get("session-todo") if isinstance(extensions, dict) else {}
+        todo_row = todo_plugin.get("plan") if isinstance(todo_plugin, dict) else {}
+        current_todo = todo_row.get("value") if isinstance(todo_row, dict) else {}
         current_todo = dict(current_todo) if isinstance(current_todo, dict) else {}
         clean_legacy_todo = self._canonical_todo(legacy_todo)
         clean_current_todo = self._canonical_todo(current_todo)
@@ -303,7 +306,17 @@ class RuntimeV2MigrationService:
         if context_action["action"] == "backfill":
             ops.commit_context_summary(session_id, legacy_context)
         if todo_action["action"] == "backfill":
-            ops.update_todo(session_id, clean_legacy_todo)
+            from .extension_state import SessionExtensionStateStore
+
+            SessionExtensionStateStore(
+                self.sessions_dir,
+                path_resolver=self.path_resolver,
+            ).set_latest(
+                session_id,
+                "session-todo",
+                "plan",
+                clean_legacy_todo,
+            )
         return context_action, todo_action
 
     @staticmethod

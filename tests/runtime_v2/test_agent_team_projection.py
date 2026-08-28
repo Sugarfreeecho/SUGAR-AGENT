@@ -26,7 +26,7 @@ def test_team_event_types_are_registered_and_projected():
         "team_shutdown_requested",
         "team_archived",
     }
-    assert required <= CORE_EVENT_TYPES
+    assert required.isdisjoint(CORE_EVENT_TYPES)
 
     snapshot = RuntimeProjector().project(
         [
@@ -57,9 +57,10 @@ def test_team_event_types_are_registered_and_projected():
         ]
     )
 
-    assert snapshot["team"]["team_id"] == "team_1"
-    assert snapshot["team"]["members"]["member_1"]["state"] == "starting"
-    task = snapshot["team"]["tasks"]["task_1"]
+    team = snapshot["extensions"]["agent-team"]["team"]["value"]
+    assert team["team_id"] == "team_1"
+    assert team["members"]["member_1"]["state"] == "starting"
+    task = team["tasks"]["task_1"]
     assert task["status"] == "in_progress"
     assert task["assignee_id"] == "member_1"
 
@@ -137,7 +138,7 @@ def test_team_projection_does_not_synthesize_team_from_orphan_event():
     snapshot = RuntimeProjector().project(
         [RuntimeEvent(seq=1, type="team_task_created", session_id="root", payload={"task_id": "x"})]
     )
-    assert snapshot["team"] is None
+    assert "team" not in snapshot
 
 
 def test_agent_team_api_is_guarded_and_supports_control_plane(tmp_path, monkeypatch):
@@ -221,9 +222,11 @@ def test_incremental_team_projection_preserves_published_snapshot():
         ),
     )
 
-    assert original["team"]["messages"]["m"]["status"] == "queued"
-    assert original["team"]["messages"]["m"]["deliveries"]["member"]["status"] == "queued"
-    assert updated["team"]["messages"]["m"]["status"] == "delivered"
+    original_message = original["extensions"]["agent-team"]["team"]["value"]["messages"]["m"]
+    updated_message = updated["extensions"]["agent-team"]["team"]["value"]["messages"]["m"]
+    assert original_message["status"] == "queued"
+    assert original_message["deliveries"]["member"]["status"] == "queued"
+    assert updated_message["status"] == "delivered"
 
 
 def test_invalid_limit_environment_falls_back_safely(tmp_path, monkeypatch):
