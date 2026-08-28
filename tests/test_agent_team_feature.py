@@ -40,42 +40,19 @@ def test_agent_team_config_is_fail_closed():
 
 
 def test_agent_team_feature_api_persists_and_applies_immediately(tmp_path, monkeypatch):
-    import webui
-
-    env_path = tmp_path / ".env"
-    env_path.write_text("EXISTING=value\n", encoding="utf-8")
-    monkeypatch.setattr(webui, "dotenv_file_path", lambda: env_path)
-
-    monkeypatch.delenv("AGENT_TEAM_ENABLED", raising=False)
-
-    initial = _response_json(asyncio.run(webui.get_agent_team_feature()))
-    assert initial["enabled"] is False
-    assert initial["experimental"] is True
-
-    enabled = _response_json(
-        asyncio.run(webui.set_agent_team_feature(_JsonRequest({"enabled": True})))
-    )
-    assert enabled == {"ok": True, "enabled": True}
-    assert "EXISTING=value" in env_path.read_text(encoding="utf-8")
-    assert "AGENT_TEAM_ENABLED=1" in env_path.read_text(encoding="utf-8")
-
-    disabled = _response_json(
-        asyncio.run(webui.set_agent_team_feature(_JsonRequest({"enabled": False})))
-    )
-    assert disabled == {"ok": True, "enabled": False}
-    assert env_path.read_text(encoding="utf-8").count("AGENT_TEAM_ENABLED=") == 1
-    assert "AGENT_TEAM_ENABLED=0" in env_path.read_text(encoding="utf-8")
+    source = (ROOT / "app/webui.py").read_text(encoding="utf-8")
+    assert "/api/features/agent-team" not in source
+    manifest = json.loads((ROOT / "plugins/agent-team/.myagent-plugin/plugin.json").read_text(encoding="utf-8"))
+    assert manifest["id"] == "agent-team"
+    assert manifest["capabilities"]["trusted_host"]["entry"] == "host.py"
 
 
 def test_agent_team_feature_api_rejects_non_boolean():
-    import webui
-
-    response = asyncio.run(webui.set_agent_team_feature(_JsonRequest({"enabled": "yes"})))
-    assert response.status_code == 400
-    assert _response_json(response)["error"] == "enabled must be boolean"
+    source = (ROOT / "app/agent_extensions.py").read_text(encoding="utf-8")
+    assert "def set_plugin_enabled(plugin_id: str, enabled: bool)" in source
 
 
-def test_advanced_env_exposes_agent_team_defaults(tmp_path, monkeypatch):
+def test_advanced_env_does_not_synthesize_agent_team_defaults(tmp_path, monkeypatch):
     import webui
 
     env_path = tmp_path / ".env"
@@ -86,27 +63,16 @@ def test_advanced_env_exposes_agent_team_defaults(tmp_path, monkeypatch):
         for group in payload["groups"]
         for row in group["vars"]
     }
-    assert values["AGENT_TEAM_ENABLED"] == "0"
     assert values["SECURITY_ENABLED"] == "1"
     assert values["EGRESS_HELPER_ENABLED"] == "1"
-    assert values["AGENT_TEAM_MAX_MEMBERS"] == "4"
-    assert values["AGENT_TEAM_MAX_MESSAGES"] == "2000"
-    assert values["AGENT_TEAM_PERMISSION_TOOLS"] == "delete_file,web_download"
+    assert not any(key.startswith("AGENT_TEAM_") for key in values)
 
 
 def test_agent_team_controls_are_present_and_wired():
     shell = (ROOT / "frontend/src/shell-body.html").read_text(encoding="utf-8")
     settings = (ROOT / "frontend/src/app/modules/settings.js").read_text(encoding="utf-8")
-    panel = (ROOT / "frontend/src/app/modules/agent-team.js").read_text(encoding="utf-8")
     index = (ROOT / "frontend/src/app/index.js").read_text(encoding="utf-8")
-
-    assert 'id="settings-agent-team-off"' in shell
-    assert 'id="settings-agent-team-on"' in shell
-    assert "fetch('/api/features/agent-team'" in settings
-    assert "void saveAgentTeamFeature(false)" in settings
-    assert "void saveAgentTeamFeature(true)" in settings
-    assert 'id="settings-agent-team-manage"' in shell
-    assert 'id="agent-team-modal-root"' in shell
-    assert "async function refreshAgentTeamPanel()" in panel
-    assert "resolveAgentTeamPermission" in panel
-    assert "agentTeamSource" in index
+    assert "agent-team" not in shell.lower()
+    assert "agent-team" not in settings.lower()
+    assert "agentTeamSource" not in index
+    assert (ROOT / "plugins/agent-team/web/index.html").is_file()

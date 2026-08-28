@@ -31,7 +31,6 @@ def test_frontend_inputs_share_submission_helpers():
     message = (ROOT / "frontend/src/app/modules/message-rendering.js").read_text(encoding="utf-8")
     human = (ROOT / "frontend/src/app/modules/human-interactions.js").read_text(encoding="utf-8")
     goal = (ROOT / "frontend/src/app/modules/toc-todo.js").read_text(encoding="utf-8")
-    team = (ROOT / "frontend/src/app/modules/agent-team.js").read_text(encoding="utf-8")
 
     assert "inputActionsSource" in app_index
     assert "isInputSubmitShortcut(e, 'single-line')" in shared
@@ -49,8 +48,7 @@ def test_frontend_inputs_share_submission_helpers():
     assert "sendFollowupNow(String(pendingToSend.id), state.sessionId, { manual: true })" in sse
     assert "isInputSubmitShortcut(e, 'editor')" in message
     assert "isInputSubmitShortcut(event, 'editor')" in human
-    assert "isInputSubmitShortcut(event, 'editor')" in goal
-    assert team.count("bindInputSubmit(") == 2
+    assert (ROOT / "plugins/agent-team/web/app.js").is_file()
 
 
 def test_send_preflight_does_not_consume_state_before_lock():
@@ -68,6 +66,5 @@ def test_send_preflight_does_not_consume_state_before_lock():
 def test_agent_team_controls_are_present_in_both_html_sources():
     for relative in ("frontend/index.html", "frontend/src/shell-body.html"):
         html = (ROOT / relative).read_text(encoding="utf-8")
-        assert 'id="agent-team-modal-root"' in html
-        assert 'id="agent-team-title-input"' in html
-        assert 'id="agent-team-task-title"' in html
+        assert 'id="agent-team-modal-root"' not in html
+    assert (ROOT / "plugins/agent-team/web/index.html").is_file()

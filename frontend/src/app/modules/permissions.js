@@ -64,7 +64,7 @@ function maybeShowGlobalFullAccessNotice(status) {
     } catch (_) {}
     var notice = document.createElement('div');
     notice.className = 'permission-global-warning-toast';
-    notice.textContent = '完全访问已开启：Agent 可以直接读写文件、执行命令和联网，不再逐项询问。重启后依然有效，直到你手动切回“请求批准”。';
+    notice.textContent = '完全访问已开启：普通文件、工作区删除、命令和联网不再逐项询问；高危系统命令仍需确认，Agent 自保红线始终拦截。';
     var host = document.querySelector('.chat-stage') || document.querySelector('.main-center') || document.body;
     host.appendChild(notice);
     window.setTimeout(function () { notice.remove(); }, 9000);
@@ -118,7 +118,7 @@ function renderPermissionMode(status) {
         var fullAccess = !!status && status.mode === 'full_access';
         trigger.classList.toggle('is-global-full-access', fullAccess);
         trigger.title = fullAccess
-            ? '完全访问已开启；Agent 可读写文件、执行命令和联网，不会自动关闭。'
+            ? '完全访问已开启；普通操作和工作区删除免审批，高危系统命令和 Agent 自保红线仍受保护。'
             : '更改权限';
     }
     var settingsStatus = document.getElementById('settings-security-status');
@@ -127,7 +127,7 @@ function renderPermissionMode(status) {
             ? ' · ' + status.restriction.label
             : '';
         settingsStatus.textContent = status.mode === 'full_access'
-            ? '警告：完全访问已开启，Agent 可直接操作文件、终端和网络，重启后不会自动关闭，直到你手动切换。'
+            ? '完全访问已开启：普通操作和工作区删除免审批；高危系统命令仍需确认，Agent 自保红线始终拦截。'
             : permissionModeLabel(status.mode) + '（全局统一，对所有任务生效）' + restrictionLabel;
     }
     if (triggerIco) {
@@ -172,7 +172,7 @@ async function selectPermissionMode(mode) {
         var accepted = await openUiModal({
             title: '完全访问权限',
             subtitle: '仅在信任 Agent 时才建议开启',
-            message: '完全访问开启后，Agent 可以直接读写文件、执行命令和联网，不再逐项征求你的同意。它拥有你当前账号能做的权限，可能会读取凭据、修改系统或删除文件。此设置对所有会话生效，重启后也不会自动关闭，直到你手动切回“请求批准”。是否继续？',
+            message: '完全访问开启后，普通文件、工作区内删除、Shell 和网络操作不再逐项征求你的同意；格式化、磁盘写入、关机等高危系统命令仍需一次性人工确认，终止 Agent 或篡改控制器始终拒绝。此设置对所有会话生效，重启后也不会自动关闭，直到你手动切回“请求批准”。是否继续？',
             danger: true,
             confirmText: '确认切换',
             cancelText: '取消',

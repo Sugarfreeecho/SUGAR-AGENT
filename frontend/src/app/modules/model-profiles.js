@@ -45,7 +45,8 @@ function formatContextWindow(value) {
 function profileEffortValue(profile) {
     var p = profile || {};
     var thinkingDisabled = String(p.thinking_mode || '').toLowerCase() === 'disabled';
-    return String(p.reasoning_effort || (thinkingDisabled ? 'none' : 'high')).toLowerCase();
+    var usesResponses = String(p.llm_type || '').toLowerCase() === 'openai';
+    return String(p.reasoning_effort || (usesResponses ? 'auto' : (thinkingDisabled ? 'none' : 'high'))).toLowerCase();
 }
 
 function profileMeta(profile) {

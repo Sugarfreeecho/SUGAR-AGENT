@@ -171,6 +171,10 @@ function upgradeWorkspaceMedia(root) {
         if (rel) wrapWorkspaceImageElement(img, rel);
     });
     root.querySelectorAll('a[data-workspace-markdown-link="1"][data-workspace-open]').forEach(function (link) {
+        // These links are emitted directly by the Markdown renderer after the
+        // document-wide tooltip initialization has already run. Bind their
+        // data-ui-tip here even when they are ordinary (non-media) files.
+        bindUiHoverTip(link);
         if (link.dataset.workspaceMediaPreview === '1') return;
         var rel = link.getAttribute('data-workspace-open') || '';
         var kind = workspaceMediaKind(rel);

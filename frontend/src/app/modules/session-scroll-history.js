@@ -132,16 +132,31 @@ function getProcessBodyElForCurrentRun() {
 var STREAM_PROC_NEAR_BOTTOM_PX = 96;
 var STREAM_CHAT_NEAR_BOTTOM_PX = 72;
 
+function isSmoothStreamPortNearBottom(port, thresholdPx) {
+    if (!port) return false;
+    if (!isSmoothStreamActive()) return isNearBottom(port, thresholdPx);
+    if (smoothFollowController.isReaderDetached(port)) {
+        // An intentional upward gesture must win over the legacy broad
+        // near-bottom threshold. Re-arm only once the reader reaches the floor.
+        if (!isNearBottom(port, 2)) return false;
+        smoothFollowController.clearReaderDetached(port);
+    }
+    return smoothFollowController.isFollowing(port) || isNearBottom(port, thresholdPx);
+}
+
 /** 生成中时：对话区与当前执行轨迹区均在底部附近时才允许自动跟随流式滚动 */
 function refreshLiveAutoFollowPins() {
     if (!chatContainer) return;
     if (isSessionRunning(currentSessionId)) {
-        streamChatNearBottom = isNearBottom(chatContainer, STREAM_CHAT_NEAR_BOTTOM_PX);
+        streamChatNearBottom = isSmoothStreamPortNearBottom(
+            chatContainer,
+            STREAM_CHAT_NEAR_BOTTOM_PX
+        );
         var pb = getProcessBodyElForCurrentRun();
-        streamProcNearBottom = !pb || isNearBottom(pb, STREAM_PROC_NEAR_BOTTOM_PX);
+        streamProcNearBottom = !pb || isSmoothStreamPortNearBottom(pb, STREAM_PROC_NEAR_BOTTOM_PX);
         liveAutoFollow = streamChatNearBottom && streamProcNearBottom;
     } else {
-        liveAutoFollow = isNearBottom(chatContainer, STREAM_CHAT_NEAR_BOTTOM_PX);
+        liveAutoFollow = isSmoothStreamPortNearBottom(chatContainer, STREAM_CHAT_NEAR_BOTTOM_PX);
     }
 }
 
@@ -467,7 +482,10 @@ function bindSubagentCardBodyScrollFollow(body) {
     var aid = body.getAttribute('data-agent-id') || ('body-' + Math.random());
     if (subagentCardNearBottom[aid] == null) subagentCardNearBottom[aid] = true;
     body.addEventListener('scroll', function () {
-        subagentCardNearBottom[aid] = isNearBottom(body, SUBAGENT_CARD_NEAR_BOTTOM_PX);
+        subagentCardNearBottom[aid] = isSmoothStreamPortNearBottom(
+            body,
+            SUBAGENT_CARD_NEAR_BOTTOM_PX
+        );
     }, { passive: true });
 }
 
@@ -484,8 +502,15 @@ function scrollSubagentCardBodyToBottom(ctx) {
     });
 }
 
-function scrollContentAreaIfFollow(ctx, runSessionId) {
+function scrollContentAreaIfFollow(ctx, runSessionId, channel) {
     if (shouldGateScrollByRunSession(ctx, runSessionId)) return;
+    // Non-token trace events (status/tool/result/etc.) arrive through this
+    // generic path and default to the whole-row motion profile.
+    if (isSmoothStreamActive()) {
+        if (typeof isHistorySmoothScrollActive === 'function' && isHistorySmoothScrollActive()) return;
+        followStreamProcessScroll(ctx, runSessionId, channel || 'row');
+        return;
+    }
     if (isSubagentStreamCtx(ctx)) {
         if (!shouldFollowSubagentCard(ctx)) return;
         scrollSubagentCardBodyToBottom(ctx);
@@ -513,10 +538,38 @@ function scrollProcessBodyToBottom(ctx, runSessionId) {
     }
 }
 
-function followStreamProcessScroll(ctx, runSessionId) {
+function followStreamProcessScroll(ctx, runSessionId, channel) {
     if (shouldGateScrollByRunSession(ctx, runSessionId)) return;
+    var followChannel = channel === 'text' ? 'text' : 'row';
+    if (
+        isSmoothStreamActive()
+        && typeof isHistorySmoothScrollActive === 'function'
+        && isHistorySmoothScrollActive()
+    ) return;
     if (isSubagentStreamCtx(ctx)) {
         if (!shouldFollowSubagentCard(ctx)) return;
+        if (isSmoothStreamActive()) {
+            var smoothSubagentBody = ctx && ctx._subagentBody;
+            if (!smoothSubagentBody || !smoothSubagentBody.isConnected) return;
+            var smoothAgentId = smoothSubagentBody.getAttribute('data-agent-id') || '';
+            smoothFollowController.request(smoothSubagentBody, {
+                speedCps: ctx && ctx.llm ? ctx.llm.llmRevealCpsEma : 35,
+                channel: followChannel,
+                traceHeightSource: ctx && ctx._subagentTurnProcess
+                    ? ctx._subagentTurnProcess
+                    : smoothSubagentBody,
+                onUnpin: function () {
+                    if (smoothAgentId) subagentCardNearBottom[smoothAgentId] = false;
+                },
+            });
+            if (!subagentScrollFollowRaf) {
+                subagentScrollFollowRaf = requestAnimationFrame(function () {
+                    subagentScrollFollowRaf = 0;
+                    refreshFeedChunksInCtx(ctx, '.feed-chunk.is-streaming');
+                });
+            }
+            return;
+        }
         if (subagentScrollFollowRaf) return;
         subagentScrollFollowRaf = requestAnimationFrame(function () {
             subagentScrollFollowRaf = 0;
@@ -526,6 +579,45 @@ function followStreamProcessScroll(ctx, runSessionId) {
         return;
     }
     if (!liveAutoFollow) return;
+    if (isSmoothStreamActive()) {
+        if (ctx && ctx.currentProcessGroup && ctx.currentProcessGroup.isConnected
+            && ctx.currentProcessGroup.classList.contains('is-collapsed')) {
+            ctx.currentProcessGroup.classList.remove('is-collapsed');
+            var smoothTop = ctx.currentProcessGroup.querySelector('.process-aggregate-top');
+            if (smoothTop) smoothTop.setAttribute('aria-expanded', 'true');
+        }
+        var smoothSpeed = ctx && ctx.llm ? ctx.llm.llmRevealCpsEma : 35;
+        var smoothProcessBody = getProcessBodyElForCurrentRun();
+        var releaseMainFollow = function (port) {
+            if (port === chatContainer) streamChatNearBottom = false;
+            else streamProcNearBottom = false;
+            liveAutoFollow = false;
+        };
+        if (smoothProcessBody) {
+            smoothFollowController.request(smoothProcessBody, {
+                speedCps: smoothSpeed,
+                channel: followChannel,
+                traceHeightSource: smoothProcessBody,
+                onUnpin: releaseMainFollow,
+            });
+        }
+        if (chatContainer) {
+            smoothFollowController.request(chatContainer, {
+                speedCps: smoothSpeed,
+                channel: followChannel,
+                traceHeightSource: smoothProcessBody,
+                onUnpin: releaseMainFollow,
+            });
+        }
+        if (!streamScrollFollowRaf) {
+            streamScrollFollowRaf = requestAnimationFrame(function () {
+                streamScrollFollowRaf = 0;
+                refreshFeedChunksInCtx(ctx, '.feed-chunk.is-streaming');
+                refreshLiveAutoFollowPins();
+            });
+        }
+        return;
+    }
     if (streamScrollFollowRaf) return;
     streamScrollFollowRaf = requestAnimationFrame(function () {
         streamScrollFollowRaf = 0;
@@ -541,6 +633,50 @@ function followStreamProcessScroll(ctx, runSessionId) {
         scrollChatToBottomIfFollow(runSessionId, {});
         refreshLiveAutoFollowPins();
     });
+}
+
+/** Finish without a long easing tail once no more stream content can arrive. */
+function finishStreamScrollIfFollow(ctx, runSessionId) {
+    if (isSmoothStreamActive()) {
+        if (shouldGateScrollByRunSession(ctx, runSessionId)) return;
+        if (isSubagentStreamCtx(ctx)) {
+            if (shouldFollowSubagentCard(ctx) && ctx._subagentBody) {
+                settleSmoothTraceHeightAnimations(ctx._subagentBody);
+                smoothFollowController.snapToBottom(ctx._subagentBody);
+            }
+            return;
+        }
+        if (!liveAutoFollow) return;
+        var processBody = getProcessBodyElForCurrentRun();
+        if (processBody) {
+            settleSmoothTraceHeightAnimations(processBody);
+            smoothFollowController.snapToBottom(processBody);
+        }
+        if (chatContainer) smoothFollowController.snapToBottom(chatContainer);
+        return;
+    }
+    scrollProcessBodyToBottom(ctx, runSessionId);
+    scrollChatToBottomIfFollow(runSessionId, {});
+}
+
+/** Final answer cards keep the legacy snap and must not race an active glide. */
+function cancelSmoothStreamFollowForFinal(ctx) {
+    if (!isSmoothStreamActive()) return;
+    smoothFollowController.cancel(chatContainer);
+    var processBody = null;
+    if (ctx && ctx._subagentBody && ctx._subagentBody.isConnected) {
+        processBody = ctx._subagentBody;
+    } else if (ctx && ctx.currentProcessGroup && ctx.currentProcessGroup.isConnected) {
+        processBody = ctx.currentProcessGroup.querySelector('.process-aggregate-body');
+    }
+    if (processBody) smoothFollowController.cancel(processBody);
+}
+
+/** Keep the native history-load animation isolated from the live follower. */
+function cancelSmoothStreamFollowForHistoryLoad() {
+    smoothFollowController.cancel(chatContainer);
+    var processBody = getProcessBodyElForCurrentRun();
+    if (processBody) smoothFollowController.cancel(processBody);
 }
 
 function getVisibleChatStream() { return document.getElementById('chat-stream'); }
@@ -1125,6 +1261,8 @@ function newLlmState() {
         llmPendingReasoningDelta: '',
         llmPendingResponseDelta: '',
         llmDeltaFlushRaf: 0,
+        llmRevealLastTs: 0,
+        llmRevealCpsEma: 35,
         llmThinkTagMode: 'response',
         llmThinkTagCarry: '',
         llmThinkTagAllowLeading: true,
@@ -1250,6 +1388,8 @@ function finalizeLlmStreamChunks(ctx) {
         l.llmStreamReasoningScroller = null;
         l.llmStreamResponseScroller = null;
         l.llmDeltaLastSeq = null;
+        l.llmRevealLastTs = 0;
+        l.llmRevealCpsEma = 35;
         l.llmThinkTagMode = 'response';
         l.llmThinkTagCarry = '';
         l.llmThinkTagAllowLeading = true;
@@ -1299,6 +1439,8 @@ function discardLlmStreamChunks(ctx, ev) {
         l.llmStreamReasoningScroller = null;
         l.llmStreamResponseScroller = null;
         l.llmDeltaLastSeq = null;
+        l.llmRevealLastTs = 0;
+        l.llmRevealCpsEma = 35;
         l.llmThinkTagMode = 'response';
         l.llmThinkTagCarry = '';
         l.llmThinkTagAllowLeading = true;
@@ -1340,19 +1482,32 @@ function discardLlmStreamChunks(ctx, ev) {
     });
 }
 
-function flushLlmDeltaText(ctx) {
+function flushLlmDeltaText(ctx, opts) {
     if (!ctx || !ctx.llm) return;
+    opts = opts || {};
     const l = ctx.llm;
     if (typeof flushThinkTagCarry === 'function') flushThinkTagCarry(ctx);
-    if (l.llmDeltaFlushRaf) {
+    var smoothCommit = opts.smooth === true && isSmoothStreamActive();
+    if (!smoothCommit && l.llmDeltaFlushRaf) {
         cancelAnimationFrame(l.llmDeltaFlushRaf);
         l.llmDeltaFlushRaf = 0;
     }
+    var revealedChars = 0;
     if (l.llmPendingReasoningDelta && l.llmStreamReasoningScroller) {
-        var rs = trimSurroundingBlankLines((l.llmStreamReasoningScroller.textContent || '') + l.llmPendingReasoningDelta);
+        var reasoningPending = String(l.llmPendingReasoningDelta || '');
+        var reasoningTake = smoothCommit
+            ? takeSmoothTextPrefix(
+                reasoningPending,
+                computeSmoothRevealCount(reasoningPending.length, opts.dtMs || 16.67)
+            )
+            : { segment: reasoningPending, rest: '', count: reasoningPending.length };
+        var rs = trimSurroundingBlankLines((l.llmStreamReasoningScroller.textContent || '') + reasoningTake.segment);
         l.llmStreamReasoningScroller.textContent = truncateLogTextForUi(rs);
+        l.llmPendingReasoningDelta = reasoningTake.rest;
+        revealedChars += reasoningTake.count;
+    } else if (l.llmPendingReasoningDelta && !l.llmStreamReasoningScroller && !smoothCommit) {
+        l.llmPendingReasoningDelta = '';
     }
-    l.llmPendingReasoningDelta = '';
     if (l.llmPendingResponseDelta && l.llmStreamResponseScroller) {
         var responseRow = l.llmStreamResponseScroller.closest
             ? l.llmStreamResponseScroller.closest('.feed-item')
@@ -1360,20 +1515,49 @@ function flushLlmDeltaText(ctx) {
         var responseHead = responseRow && typeof responseRow._processBriefRawText === 'string'
             ? responseRow._processBriefRawText
             : (l.llmStreamResponseScroller.textContent || '');
-        var rsp = trimSurroundingBlankLines(responseHead + l.llmPendingResponseDelta);
+        var responsePending = String(l.llmPendingResponseDelta || '');
+        var responseTake = smoothCommit
+            ? takeSmoothTextPrefix(
+                responsePending,
+                computeSmoothRevealCount(responsePending.length, opts.dtMs || 16.67)
+            )
+            : { segment: responsePending, rest: '', count: responsePending.length };
+        var rsp = trimSurroundingBlankLines(responseHead + responseTake.segment);
         if (responseRow) responseRow._processBriefRawText = rsp;
         l.llmStreamResponseScroller.textContent = truncateLogTextForUi(rsp);
+        l.llmPendingResponseDelta = responseTake.rest;
+        revealedChars += responseTake.count;
+    } else if (l.llmPendingResponseDelta && !l.llmStreamResponseScroller && !smoothCommit) {
+        l.llmPendingResponseDelta = '';
     }
-    l.llmPendingResponseDelta = '';
+    return revealedChars;
 }
 
 function scheduleLlmDeltaFlush(ctx, runSessionId) {
     const l = ctx.llm;
     if (!l || l.llmDeltaFlushRaf) return;
-    l.llmDeltaFlushRaf = requestAnimationFrame(function () {
+    l.llmDeltaFlushRaf = requestAnimationFrame(function (now) {
         l.llmDeltaFlushRaf = 0;
-        flushLlmDeltaText(ctx);
-        followStreamProcessScroll(ctx, runSessionId);
+        if (!isSmoothStreamActive()) {
+            flushLlmDeltaText(ctx);
+            followStreamProcessScroll(ctx, runSessionId, 'text');
+            return;
+        }
+        var dtMs = l.llmRevealLastTs > 0
+            ? smoothStreamClamp(now - l.llmRevealLastTs, 1, 120)
+            : SMOOTH_STREAM_CONFIG.referenceFrameMs;
+        l.llmRevealLastTs = now;
+        var revealed = flushLlmDeltaText(ctx, { smooth: true, dtMs: dtMs }) || 0;
+        if (revealed > 0 && dtMs > 0) {
+            var instantCps = revealed * 1000 / dtMs;
+            l.llmRevealCpsEma = l.llmRevealCpsEma * 0.92 + instantCps * 0.08;
+        }
+        followStreamProcessScroll(ctx, runSessionId, 'text');
+        if (l.llmPendingReasoningDelta || l.llmPendingResponseDelta) {
+            scheduleLlmDeltaFlush(ctx, runSessionId);
+        } else {
+            l.llmRevealLastTs = 0;
+        }
     });
 }
 
@@ -1386,6 +1570,8 @@ function resetLlmState(ctx) {
     l.llmStreamReasoningScroller = null;
     l.llmStreamResponseScroller = null;
     l.llmDeltaLastSeq = null;
+    l.llmRevealLastTs = 0;
+    l.llmRevealCpsEma = 35;
     l.llmThinkTagMode = 'response';
     l.llmThinkTagCarry = '';
     l.llmThinkTagAllowLeading = true;

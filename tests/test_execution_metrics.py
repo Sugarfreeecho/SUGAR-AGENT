@@ -102,10 +102,13 @@ def test_execution_metrics_record_phase_explicit_total_overwrites(tmp_path):
     execution_metrics._sessions.clear()
 
 
-def test_execution_metrics_list_sessions_is_lightweight(tmp_path):
+def test_execution_metrics_list_sessions_is_lightweight(tmp_path, monkeypatch):
     import execution_metrics
 
     old_root = execution_metrics._root
+    # Windows can return the same wall-clock timestamp for consecutive starts.
+    # The persisted ordering key must still keep the later run first.
+    monkeypatch.setattr(execution_metrics, "_now", lambda: "2026-08-21T00:00:00.000000Z")
     execution_metrics.configure(tmp_path / "sessions")
     execution_metrics._sessions.clear()
     execution_metrics.start_run("s4", "r1", "chat", "会话甲")

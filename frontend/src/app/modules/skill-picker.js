@@ -14,6 +14,7 @@ let extensionsError = null;
 const skillPickerToggleBusy = Object.create(null);
 const mcpToolToggleBusy = Object.create(null);
 const mcpServerRegisterBusy = Object.create(null);
+const pluginToggleBusy = Object.create(null);
 const skillPickerCollapsedGroups = {
     mcp: Object.create(null),
     plugins: Object.create(null),
@@ -154,6 +155,10 @@ function skillPickerToggleHtml(enabled) {
     return '<span class="skill-picker-toggle-ico" aria-hidden="true">' + skillPickerToggleIcon(enabled ? 'disable' : 'enable') + '</span>';
 }
 
+function skillPickerOpenPageHtml() {
+    return '<span class="skill-picker-toggle-ico" aria-hidden="true"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M14 5h5v5"/><path d="m10 14 9-9"/><path d="M19 13v6H5V5h6"/></svg></span>';
+}
+
 function skillPickerGroupChevronHtml() {
     return '<svg viewBox="0 0 20 20" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m7 5 5 5-5 5"/></svg>';
 }
@@ -199,7 +204,7 @@ function renderSkillPickerSkillsHtml() {
             + '<span class="skill-picker-option-desc">' + skillPickerEscape(skill && skill.description || '') + '</span>'
             + '</span>'
             + '</label>'
-            + '<button type="button" class="skill-picker-toggle" data-skill-name="' + skillPickerEscape(name) + '" data-enabled="' + (enabled ? 'true' : 'false') + '" data-ui-tip="' + (enabled ? '禁用' : '启用') + '" aria-label="' + (enabled ? '禁用' : '启用') + '">' + skillPickerToggleHtml(enabled) + '</button>'
+            + '<button type="button" class="skill-picker-toggle skill-toggle-action" data-skill-name="' + skillPickerEscape(name) + '" data-enabled="' + (enabled ? 'true' : 'false') + '" data-ui-tip="' + (enabled ? '禁用' : '启用') + '" aria-label="' + (enabled ? '禁用' : '启用') + '">' + skillPickerToggleHtml(enabled) + '</button>'
             + '</div>';
     });
     return html;
@@ -309,6 +314,19 @@ function renderSkillPickerHooksHtml() {
     }).join('');
 }
 
+function skillPickerPluginPageHref(plugin) {
+    var id = String(plugin && plugin.id || '').trim();
+    if (!/^[a-z0-9][a-z0-9._-]{0,127}$/.test(id)) return '';
+    var expectedHref = '/plugins/' + id;
+    var rows = Array.isArray(plugin && plugin.ui) ? plugin.ui : [];
+    var hasPage = rows.some(function (row) {
+        if (!row || String(row.href || '') !== expectedHref || String(row.target || '') !== 'plugin-page') return false;
+        var slot = String(row.slot || '');
+        return slot === 'navigation' || slot === 'settings.section';
+    });
+    return hasPage ? '/plugins/' + encodeURIComponent(id) : '';
+}
+
 function renderSkillPickerPluginsHtml() {
     if (extensionsLoading && !extensionsCache) {
         return '<div class="skill-picker-empty">正在加载扩展</div>';
@@ -331,19 +349,26 @@ function renderSkillPickerPluginsHtml() {
         var enabledCount = namedPlugins.filter(function (plugin) {
             return plugin && (plugin.configured_enabled === undefined ? !!plugin.enabled : !!plugin.configured_enabled);
         }).length;
+        var globalOn = !!(extensionsCache && extensionsCache.enabled && extensionsCache.enabled.plugins);
         var body = namedPlugins.map(function (plugin) {
             var id = String(plugin && plugin.id || '');
             var version = String(plugin && plugin.version || '');
             var enabled = plugin && (plugin.configured_enabled === undefined ? !!plugin.enabled : !!plugin.configured_enabled);
             var type = String(plugin && (plugin.source_format || plugin.format) || 'native');
             var compatibility = plugin && plugin.compatibility && plugin.compatibility.status || 'unknown';
+            var pageHref = skillPickerPluginPageHref(plugin);
+            var busy = !!pluginToggleBusy[id];
             var detail = ['插件：' + name, 'ID：' + id, '版本：' + version, '格式：' + type, '兼容性：' + compatibility, '状态：' + (enabled ? '已启用' : '已禁用')].join('\n');
-            return '<div class="skill-picker-option ext-option" data-ui-tip="' + skillPickerEscape(detail) + '">'
+            return '<div class="skill-picker-option ext-option plugin-option' + (enabled ? '' : ' is-disabled') + (pageHref ? ' has-page' : '') + '" data-ui-tip="' + skillPickerEscape(detail) + '">'
                 + '<span class="plugin-type-badge">' + skillPickerEscape(type) + '</span>'
                 + '<span class="skill-picker-option-body">'
                 + '<span class="skill-picker-option-name">' + skillPickerEscape(id || name) + ' <span class="plugin-state' + (enabled ? '' : ' is-off') + '">' + (enabled ? '已启用' : '已禁用') + '</span></span>'
                 + '<span class="skill-picker-option-desc">' + skillPickerEscape((version ? 'v' + version + ' · ' : '') + type + ' · ' + compatibility) + '</span>'
                 + '<span class="ext-pills">' + skillPickerComponentPills(plugin) + '</span>'
+                + '</span>'
+                + '<span class="plugin-option-actions">'
+                + '<button type="button" class="skill-picker-toggle plugin-toggle-action" data-plugin-id="' + skillPickerEscape(id) + '" data-enabled="' + (enabled ? 'true' : 'false') + '" data-ui-tip="' + (busy ? '处理中…' : (enabled ? '停用' : '启用')) + '" aria-label="' + (busy ? '处理中…' : (enabled ? '停用' : '启用')) + '"' + ((busy || !globalOn) ? ' disabled' : '') + (!globalOn ? ' title="PLUGINS_ENABLED is disabled"' : '') + '>' + skillPickerToggleHtml(enabled) + '</button>'
+                + (pageHref ? '<a class="skill-picker-toggle plugin-open-action" href="' + skillPickerEscape(pageHref) + '" target="_blank" rel="noopener noreferrer" data-ui-tip="打开页面" aria-label="打开页面">' + skillPickerOpenPageHtml() + '</a>' : '')
                 + '</span>'
                 + '</div>';
         }).join('');
@@ -366,7 +391,7 @@ function renderSkillPicker(opts) {
     var focusedToggleName = '';
     if (document.activeElement && e.popover.contains(document.activeElement)) {
         var active = document.activeElement;
-        if (active.classList && active.classList.contains('skill-picker-toggle')) {
+        if (active.classList && active.classList.contains('skill-toggle-action')) {
             focusedToggleName = String(active.getAttribute('data-skill-name') || '');
         }
     }
@@ -413,7 +438,7 @@ function renderSkillPicker(opts) {
     if (nextList && prevScrollTop > 0) nextList.scrollTop = prevScrollTop;
     if (focusedToggleName) {
         var focusTarget = null;
-        e.popover.querySelectorAll('.skill-picker-toggle').forEach(function (btn) {
+        e.popover.querySelectorAll('.skill-toggle-action').forEach(function (btn) {
             if (String(btn.getAttribute('data-skill-name') || '') === focusedToggleName) focusTarget = btn;
         });
         if (focusTarget) focusTarget.focus();
@@ -466,7 +491,7 @@ function renderSkillPicker(opts) {
             renderSkillPicker();
         });
     }
-    e.popover.querySelectorAll('.skill-picker-toggle').forEach(function (button) {
+    e.popover.querySelectorAll('.skill-toggle-action').forEach(function (button) {
         button.addEventListener('click', function (ev) {
             ev.preventDefault();
             ev.stopPropagation();
@@ -490,6 +515,16 @@ function renderSkillPicker(opts) {
             ev.stopPropagation();
             registerMcpServer(String(button.getAttribute('data-mcp-server') || ''));
         });
+    });
+    e.popover.querySelectorAll('.plugin-toggle-action').forEach(function (button) {
+        button.addEventListener('click', function (ev) {
+            ev.preventDefault();
+            ev.stopPropagation();
+            toggleSkillPickerPlugin(button);
+        });
+    });
+    e.popover.querySelectorAll('.plugin-open-action').forEach(function (link) {
+        link.addEventListener('click', function (ev) { ev.stopPropagation(); });
     });
 }
 
@@ -626,6 +661,37 @@ async function loadSkillPickerExtensions() {
     extensionsCache = data;
     extensionsError = null;
     return data;
+}
+
+async function toggleSkillPickerPlugin(button) {
+    var id = String(button && button.getAttribute('data-plugin-id') || '').trim();
+    if (!id || pluginToggleBusy[id]) return;
+    var enabled = button.getAttribute('data-enabled') !== 'true';
+    pluginToggleBusy[id] = true;
+    renderSkillPicker();
+    try {
+        var response = await fetch('/api/plugins/' + encodeURIComponent(id) + '/enabled', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'same-origin',
+            body: JSON.stringify({ enabled: enabled, session_id: currentSessionId || '' }),
+        });
+        var data = await response.json();
+        if (!data || !data.ok) throw new Error((data && data.error) || '插件状态更新失败');
+        await loadSkillPickerExtensions();
+        document.dispatchEvent(new CustomEvent('myagent:extension-state-changed', {
+            detail: { sessionId: currentSessionId || '', pluginId: id },
+        }));
+    } catch (err) {
+        if (typeof showGlobalWarningBanner === 'function') {
+            showGlobalWarningBanner('插件状态更新失败：' + String(err.message || err));
+        } else if (typeof appendLogVisible === 'function') {
+            appendLogVisible('插件状态更新失败：' + String(err.message || err), 'error-log');
+        }
+    } finally {
+        delete pluginToggleBusy[id];
+        renderSkillPicker();
+    }
 }
 
 function refreshSkillPickerExtensions() {

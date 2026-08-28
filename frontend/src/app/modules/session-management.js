@@ -183,18 +183,6 @@ function syncSessionDraftBadges(sessionId) {
     });
 }
 
-function sessionNeedsGoalReview(sess) {
-    if (!sess) return false;
-    if (sess.goal_review_pending) return true;
-    var goal = sess.goal;
-    return !!(
-        goal
-        && goal.deleted !== true
-        && String(goal.status || '') === 'completed'
-        && String(goal.review_status || '') !== 'approved'
-    );
-}
-
 /** 根据 sessionStore / 服务端 stream_active / sessionUnreadComplete 更新红点、绿点 */
 function applySessionItemIndicators(itemDiv, sessionId, opts) {
     opts = opts || {};
@@ -207,8 +195,7 @@ function applySessionItemIndicators(itemDiv, sessionId, opts) {
     var localUnreadResult = sessionUnreadComplete.has(sessionId);
     var hasUnreadResult = sess ? !!sess.unread_result : localUnreadResult;
     var failed = !!(sess && sess.unread_result_status === 'failed');
-    var running = isSessionRunning(sessionId)
-        || (typeof isGoalActiveForSession === 'function' && isGoalActiveForSession(sessionId));
+    var running = isSessionRunning(sessionId);
     if (running) {
         itemDiv.classList.add('is-generating');
         if (hasUnreadResult) {
@@ -581,7 +568,6 @@ function buildAndBindSessionRow(sess, allSessions, nextStreamMap) {
         + '<div class="session-item-main">'
         + '<div class="session-item-title-row">'
         + '<span class="session-name" data-id="' + sess.id + '" data-original="' + escapeHtml(sess.name) + '">' + escapeHtml(displayName) + '</span>'
-        + '<span class="session-review-badge" aria-label="待审核"' + (sessionNeedsGoalReview(sess) ? '' : ' hidden') + '>待审核</span>'
         + '<span class="session-todo-badge" aria-label="待办"' + (sess.todo ? '' : ' hidden') + '>待办</span>'
         + '<span class="session-draft-badge" aria-label="草稿" hidden>草稿</span>'
         + '<span class="session-item-date"></span>'
@@ -666,10 +652,6 @@ async function refreshSingleSessionRow(sessionId) {
             session_id: sess.id,
             stream_active: !!sess.stream_active,
         });
-        if (Object.prototype.hasOwnProperty.call(sess, 'goal')
-            && typeof setGoalStateForSession === 'function') {
-            setGoalStateForSession(sess.id, sess.goal || null);
-        }
         setSessionServerStreamActive(sess.id, !!sess.stream_active);
         if (sess.unread_result) {
             if (!sessionUnreadComplete.has(sess.id)) {
@@ -721,7 +703,6 @@ function computeSessionListRenderKey() {
             s.name || '',
             s.pinned ? 'p' : '',
             s.todo ? 't' : '',
-            sessionNeedsGoalReview(s) ? 'r' : '',
             s.archived ? 'a' : '',
             s.last_activity_at || s.updated_at || '',
             s.last_user_preview || '',
@@ -736,7 +717,6 @@ function computeSessionListRenderKey() {
             a.name || '',
             a.pinned ? 'p' : '',
             a.todo ? 't' : '',
-            sessionNeedsGoalReview(a) ? 'r' : '',
             a.last_activity_at || a.updated_at || '',
             a.last_user_preview || '',
         ].join('\u001f'));
@@ -897,12 +877,13 @@ function updateSidebarRuntimeStatus(nextStatus) {
     if (!footer || !status) return;
     var state = nextStatus === false ? 'offline'
         : (nextStatus === true || !nextStatus ? deriveSidebarRuntimeStatus() : String(nextStatus));
-    if (['online', 'busy', 'alert', 'offline'].indexOf(state) < 0) state = 'online';
-    footer.classList.remove('is-online', 'is-busy', 'is-alert', 'is-offline');
+    if (['online', 'busy', 'waiting', 'alert', 'offline'].indexOf(state) < 0) state = 'online';
+    footer.classList.remove('is-online', 'is-busy', 'is-waiting', 'is-alert', 'is-offline');
     footer.classList.add('is-' + state);
     var labels = {
         online: 'Runtime 在线',
         busy: 'Runtime 繁忙',
+        waiting: 'Runtime 待处理',
         alert: 'Runtime 告警',
         offline: 'Runtime 离线'
     };
@@ -1230,11 +1211,13 @@ async function loadSessionMessages(sessionId, scrollBehavior, opts) {
     sessionStore.ui.loadingMessages = true;
     suppressTocDuringSessionLoad = true;
     replayingMessages = true;
+    if (typeof cancelSmoothStreamFollowForHistoryLoad === 'function') {
+        cancelSmoothStreamFollowForHistoryLoad();
+    }
     resetSessionHistoryPaging();
     try {
         let raw;
         let snapshotTocTurns = null;
-        let snapshotTodoPlan = null;
         let historySource = 'messages';
         let snapshotTiming = null;
         const canUseSnapshot = !opts.full && opts.useSnapshot !== false && beforeSessionMessageSnapshotAvailable();
@@ -1266,10 +1249,6 @@ async function loadSessionMessages(sessionId, scrollBehavior, opts) {
                         if (Array.isArray(snapshot.user_turns)) {
                             snapshotTocTurns = snapshot.user_turns;
                             if (typeof setTocTurnsForSession === 'function') setTocTurnsForSession(sessionId, snapshot.user_turns);
-                        }
-                        if (snapshot.todo_plan && typeof snapshot.todo_plan === 'object') {
-                            snapshotTodoPlan = snapshot.todo_plan;
-                            if (typeof setTodoPlanForSession === 'function') setTodoPlanForSession(sessionId, snapshot.todo_plan);
                         }
                         if (snapshot.context_tokens && snapshot.context_tokens.estimated != null) {
                             recordContextTokens(sessionId, snapshot.context_tokens.estimated, snapshot.context_tokens.threshold);
@@ -1353,11 +1332,6 @@ async function loadSessionMessages(sessionId, scrollBehavior, opts) {
             scheduleContextTokensAfterPaint(sessionId);
             applyChatScrollAfterHistoryLoad(sessionId, scrollBehavior);
             markVisibleSessionStreamLoadState(sessionId, 'ok');
-            if (typeof renderLoadedTodoPlanForSession === 'function') {
-                renderLoadedTodoPlanForSession(sessionId, snapshotTodoPlan, opts.todoAlreadyStarted);
-            } else {
-                renderTodoPlanForCurrentSession();
-            }
             logOpenSessionTiming(sessionId, {
                 source: historySource,
                 events: 0,
@@ -1392,11 +1366,6 @@ async function loadSessionMessages(sessionId, scrollBehavior, opts) {
             scheduleContextTokensAfterPaint(sessionId);
             applyChatScrollAfterHistoryLoad(sessionId, scrollBehavior);
             markVisibleSessionStreamLoadState(sessionId, 'ok');
-            if (typeof renderLoadedTodoPlanForSession === 'function') {
-                renderLoadedTodoPlanForSession(sessionId, snapshotTodoPlan, opts.todoAlreadyStarted);
-            } else {
-                renderTodoPlanForCurrentSession();
-            }
             logOpenSessionTiming(sessionId, {
                 source: historySource,
                 events: events.length,
@@ -1433,11 +1402,6 @@ async function loadSessionMessages(sessionId, scrollBehavior, opts) {
         }
         scheduleTocActiveUpdate();
         scheduleContextTokensAfterPaint(sessionId);
-        if (typeof renderLoadedTodoPlanForSession === 'function') {
-            renderLoadedTodoPlanForSession(sessionId, snapshotTodoPlan, opts.todoAlreadyStarted);
-        } else {
-            renderTodoPlanForCurrentSession();
-        }
         markVisibleSessionStreamLoadState(sessionId, 'ok');
         logOpenSessionTiming(sessionId, {
             source: historySource,
@@ -1507,7 +1471,7 @@ async function switchSession(sessionId, opts) {
     const switchToken = ++switchSessionEpoch;
     suppressTocDuringSessionLoad = true;
     clearTocForSessionLoad();
-    clearTodoForSessionLoad();
+    clearOptionalPanelsForSessionLoad();
     pendingRewriteTruncate = null;
     hideRewriteUndoToast();
     // A green-dot session represents an unread completed result. Opening it
@@ -1525,18 +1489,12 @@ async function switchSession(sessionId, opts) {
     prepareStashLeaving(leaving);
     hideSubagentContinueBanner();
     resetSubagentPanelForSession();
-    if (typeof closeGoalEditModal === 'function') closeGoalEditModal(false);
     setCurrentSessionState(sessionId);
     // The session identity and its side-panel contents must cross the switch
-    // boundary together. Waiting for history/Goal requests leaves the previous
+    // boundary together. Waiting for history requests leaves the previous
     // session title or plan visible for a frame (and sometimes much longer on
     // a cold load).
     updateSessionTitle();
-    if (typeof renderTodoPlanSnapshot === 'function' && typeof selectTodoPlan === 'function') {
-        renderTodoPlanSnapshot(selectTodoPlan(sessionId));
-    }
-    if (typeof renderGoalForCurrentSession === 'function') renderGoalForCurrentSession();
-    if (typeof refreshGoalCard === 'function') void refreshGoalCard();
     if (typeof updateHumanInteractionBanner === 'function') updateHumanInteractionBanner(sessionId);
     localStorage.setItem('lastSessionId', sessionId);
     if (typeof applyContextTokenLabelForCurrentSession === 'function') applyContextTokenLabelForCurrentSession();
@@ -1546,13 +1504,17 @@ async function switchSession(sessionId, opts) {
     if (typeof syncFollowupQueueFromServer === 'function') syncFollowupQueueFromServer(sessionId);
     if (typeof refreshModelProfileSelector === 'function') refreshModelProfileSelector(sessionId);
     syncSessionListIndicatorClasses();
+    // Refresh extension panels only after the new row owns the active marker;
+    // otherwise the projection request can render the session we just left.
+    document.dispatchEvent(new CustomEvent('myagent:extension-state-changed', {
+        detail: { sessionId: sessionId },
+    }));
     setSendButtonState();
     var restoredFromCache = false;
     var restoredRunningStream = false;
     var sessionHasActiveServerRun = !!(
         isSessionRunning(sessionId)
         || (typeof isServerStreamActive === 'function' && isServerStreamActive(sessionId))
-        || (typeof isGoalActiveForSession === 'function' && isGoalActiveForSession(sessionId))
     );
     if (!opts.forceReload && (
         (restoredRunningStream = restoreStreamForRunningSession(sessionId))
@@ -1584,8 +1546,6 @@ async function switchSession(sessionId, opts) {
                 scrollCurrentRunningProcessToBottom(sessionId);
             }
         }
-        if (typeof refreshTodoPlanPanel === 'function') void refreshTodoPlanPanel();
-        else renderTodoPlanForCurrentSession();
         if (typeof refreshHumanInteractions === 'function') void refreshHumanInteractions(sessionId);
         if (switchToken !== switchSessionEpoch || sessionId !== currentSessionId) return;
         /* 让 rebuildToc 的 /user_turns fetch 先发出，subagent 面板（含 N 个 /messages）顺序后置，
@@ -1596,6 +1556,9 @@ async function switchSession(sessionId, opts) {
             }
         }, 0);
         void refreshSingleSessionRow(sessionId);
+        document.dispatchEvent(new CustomEvent('myagent:extension-state-changed', {
+            detail: { sessionId: sessionId, phase: 'loaded' },
+        }));
         setSendButtonState();
         maybeStartStreamPollForSession(sessionId, { skipInitialLoad: true });
         return;
@@ -1610,7 +1573,6 @@ async function switchSession(sessionId, opts) {
     showLoading();
     const tocAlreadyStarted = opts.useSnapshot === false && typeof startTocForSessionLoad === 'function';
     if (tocAlreadyStarted) startTocForSessionLoad(sessionId);
-    if (tocAlreadyStarted && typeof startTodoForSessionLoad === 'function') startTodoForSessionLoad(sessionId);
     return new Promise(function (resolve) {
         setTimeout(async function () {
         if (switchToken !== switchSessionEpoch || sessionId !== currentSessionId) { resolve(false); return; }
@@ -1622,7 +1584,6 @@ async function switchSession(sessionId, opts) {
                 preloadOlderIfShort: isServerStreamActive(sessionId),
                 allowDuringRun: isServerStreamActive(sessionId),
                 tocAlreadyStarted: tocAlreadyStarted,
-                todoAlreadyStarted: tocAlreadyStarted,
             });
             if (!loadedOk) { resolve(false); return; }
         } catch (error) {
@@ -1646,6 +1607,9 @@ async function switchSession(sessionId, opts) {
             }
         }, 0);
         void refreshSingleSessionRow(sessionId);
+        document.dispatchEvent(new CustomEvent('myagent:extension-state-changed', {
+            detail: { sessionId: sessionId, phase: 'loaded' },
+        }));
         setSendButtonState();
         maybeStartStreamPollForSession(sessionId, { skipInitialLoad: true });
         if (typeof refreshHumanInteractions === 'function') void refreshHumanInteractions(sessionId);
@@ -1693,6 +1657,9 @@ async function createNewSessionInner() {
         } else {
             await loadSessions();
         }
+        document.dispatchEvent(new CustomEvent('myagent:extension-state-changed', {
+            detail: { sessionId: currentSessionId, phase: 'created' },
+        }));
         setSendButtonState();
         maybeStartStreamPollForSession(currentSessionId);
         scheduleContextTokensAfterPaint(currentSessionId);

@@ -146,7 +146,7 @@ def test_unix_update_stops_service_then_restores_it(tmp_path, monkeypatch):
         or True,
     )
     monkeypatch.setattr(agent_updater, "show_result", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(agent_updater.webbrowser, "open", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(agent_updater, "open_webui", lambda *_args, **_kwargs: True)
     monkeypatch.setattr(
         agent_updater.sys,
         "argv",

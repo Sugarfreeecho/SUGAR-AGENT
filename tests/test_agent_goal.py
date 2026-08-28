@@ -1,4 +1,5 @@
 import os
+import json
 import tempfile
 import unittest
 from concurrent.futures import ThreadPoolExecutor
@@ -66,21 +67,20 @@ class GoalManagerTests(unittest.TestCase):
 
         ops = RuntimeHistoryOps(self.tmp.name)
         events = ops.event_log.read_all("compact-goal")
-        usage_events = [event for event in events if event.type == "goal_usage_updated"]
+        usage_events = [
+            event
+            for event in events
+            if event.type == "extension_state_changed"
+            and event.payload.get("action") == "goal_usage_updated"
+        ]
         self.assertEqual(len(usage_events), 2)
         for event in usage_events:
-            self.assertTrue(event.payload["_goal_delta"])
-            self.assertNotIn("objective", event.payload)
-            self.assertNotIn("accounted_usage_ids", event.payload)
-            self.assertNotIn("accounted_run_ids", event.payload)
-        self.assertEqual(
-            usage_events[0].payload["append"]["accounted_usage_ids"],
-            ["run-1:llm:0"],
-        )
-        self.assertEqual(
-            usage_events[1].payload["append"]["accounted_run_ids"],
-            ["run-1"],
-        )
+            self.assertIn("patch", event.payload)
+            self.assertNotIn("objective", str(event.payload))
+        first_paths = {row["path"] for row in usage_events[0].payload["patch"]}
+        second_paths = {row["path"] for row in usage_events[1].payload["patch"]}
+        self.assertIn("/accounted_usage_ids", first_paths)
+        self.assertIn("/accounted_run_ids", second_paths)
 
         snapshot_path = Path(self.tmp.name) / "compact-goal" / "snapshots" / "latest.json"
         snapshot_path.unlink()
@@ -496,43 +496,19 @@ class GoalManagerTests(unittest.TestCase):
 
 
 def test_goal_tool_pushes_live_state_and_frontend_consumes_it_immediately():
-    agent_loop = (ROOT / "app" / "agent_loop.py").read_text(encoding="utf-8")
-    goal_branch = agent_loop.split(
-        'if tool_name in {"create_goal", "get_goal", "update_goal"}:', 1
-    )[1].split('if tool_name == "update_todo":', 1)[0]
-    assert '"type": "goal_state"' in goal_branch
-    assert '"ephemeral": True' in goal_branch
-    assert "await _push_stream_event(" in goal_branch
-
-    frontend = (
-        ROOT / "frontend" / "src" / "app" / "modules" / "sse-handling.js"
-    ).read_text(encoding="utf-8")
-    live_handler = frontend.split("if (parsed.type === 'goal_state')", 1)[1].split(
-        "if (parsed.type === 'user_steer'", 1
-    )[0]
-    assert "setGoalStateForSession(eventSessionId, goal)" in live_handler
-    assert "continue;" in live_handler
-    assert "completedTool === 'create_goal'" in frontend
-    assert "completedTool === 'update_goal'" in frontend
+    host_tools = (ROOT / "plugins/agent-goal/host.py").read_text(encoding="utf-8")
+    assert '"type": "extension_state_changed"' in host_tools
+    assert '"plugin_id": "agent-goal"' in host_tools
+    assert "await context.publish(" in host_tools
+    assert "agent_goal" not in (ROOT / "app/builtin_host_tools.py").read_text(encoding="utf-8")
 
 
 def test_active_goal_round_final_stays_dynamic_in_frontend():
-    reducer = (ROOT / "frontend/src/app/state/session-event-reducer.js").read_text(encoding="utf-8")
-    sse = (ROOT / "frontend/src/app/modules/sse-handling.js").read_text(encoding="utf-8")
-    sessions = (ROOT / "frontend/src/app/modules/session-management.js").read_text(encoding="utf-8")
-    goal_ui = (ROOT / "frontend/src/app/modules/toc-todo.js").read_text(encoding="utf-8")
-
-    assert "function isGoalActiveForSession(sessionId)" in goal_ui
-    assert "const goalContinues = typeof isGoalActiveForSession" in reducer
-    assert "clearSessionUnreadState(sessionId, { server: false })" in reducer
-    final_branch = reducer.split("if (type === 'final' && source === 'sse')", 1)[1].split(
-        "if (type === 'context_tokens')", 1
-    )[0]
-    assert "markSessionRunInactive" not in final_branch
-    assert "drainFollowup: !reduced.goalContinues" in sse
-    assert "&& !(typeof isGoalActiveForSession" in sse
-    assert "!sessionHadUnreadResult" in sessions
-    assert "isGoalActiveForSession(sessionId)" in sessions
+    manifest = json.loads((ROOT / "plugins/agent-goal/.myagent-plugin/plugin.json").read_text(encoding="utf-8"))
+    slots = manifest["capabilities"]["ui"]
+    assert slots["session.panel"][0]["namespace"] == "goal"
+    assert slots["session.badge"][0]["equals"] == "active"
+    assert "agent-goal" not in (ROOT / "frontend/src/app/index.js").read_text(encoding="utf-8")
 
 
 def test_goal_judge_response_contract_and_prompt():
@@ -548,75 +524,141 @@ def test_goal_judge_response_contract_and_prompt():
         {
             "id": "goal_1",
             "objective": "Ship the feature and pass tests",
+            "completion_request_reason": "pytest -q: 10 passed",
         },
         "pytest: 10 passed",
     )
     assert "independent Goal completion judge" in prompt
     assert "A worker's claim" in prompt
     assert '"verdict":"done|continue"' in prompt
+    assert "Worker-submitted completion evidence" in prompt
+    assert "pytest -q: 10 passed" in prompt
     assert "Goal lifecycle dialogue (complete; not clipped):" in prompt
     assert "Recent auxiliary execution evidence" in prompt
     assert "pytest: 10 passed" in prompt
 
 
+def test_goal_judge_uses_one_direct_request_on_current_candidate(monkeypatch):
+    import agent_goal_judge
+    import agent_harness
+
+    captured = {}
+    calls = []
+
+    class _Transport:
+        @staticmethod
+        def complete_text(**kwargs):
+            calls.append(dict(kwargs))
+            captured.update(kwargs)
+            return {
+                "text": '{"verdict":"continue","reason":"verification missing"}',
+                "usage": {"total_tokens": 3},
+                "model": "fallback-model",
+                "response_id": "resp-judge",
+                "status": "completed",
+                "finish_reason": "stop",
+            }
+
+    class _Client:
+        @staticmethod
+        def current_candidate():
+            return {
+                "profile_id": "fallback-profile",
+                "provider": "openai-compatible",
+                "model": "fallback-model",
+                "max_output_tokens": 50000,
+                "transport": _Transport(),
+            }
+
+    monkeypatch.setattr(
+        agent_harness,
+        "resolve_executor_config_for_session",
+        lambda _session_id: (_Client(), "configured-model", 2048, 4096),
+    )
+
+    result = agent_goal_judge.evaluate_goal(
+        "session-1",
+        {"id": "goal-1", "objective": "Ship safely"},
+        {"goal_dialogue": "work", "recent_evidence": "tests"},
+    )
+
+    assert result["verdict"] == "continue"
+    assert len(calls) == 1
+    assert captured["model"] == "fallback-model"
+    assert captured["max_tokens"] == 50000
+    assert len(captured["messages"]) == 1
+    assert result["model"] == "fallback-model"
+    assert result["diagnostics"]["requested_model"] == "fallback-model"
+    assert result["diagnostics"]["max_output_tokens"] == 50000
+    assert result["diagnostics"]["profile_id"] == "fallback-profile"
+    assert result["diagnostics"]["response_id"] == "resp-judge"
+
+
+def test_goal_judge_reports_reasoning_only_as_parse_failure(monkeypatch):
+    import agent_goal_judge
+    import agent_harness
+
+    class _Transport:
+        @staticmethod
+        def complete_text(**_kwargs):
+            return {
+                "text": "",
+                "usage": {"completion_tokens": 512, "reasoning_tokens": 512},
+                "model": "judge-model",
+                "response_id": "resp-reasoning-only",
+                "status": "completed",
+                "finish_reason": "stop",
+            }
+
+    class _Client:
+        @staticmethod
+        def current_candidate():
+            return {
+                "profile_id": "judge-profile",
+                "provider": "openai",
+                "model": "judge-model",
+                "max_output_tokens": 1024,
+                "transport": _Transport(),
+            }
+
+    monkeypatch.setattr(
+        agent_harness,
+        "resolve_executor_config_for_session",
+        lambda _session_id: (_Client(), "judge-model", 1024, 4096),
+    )
+
+    result = agent_goal_judge.evaluate_goal(
+        "session-1",
+        {"id": "goal-1", "objective": "Ship safely"},
+        {"goal_dialogue": "work", "recent_evidence": "tests"},
+    )
+
+    assert result["failure_kind"] == "parse"
+    assert result["error"] == "reasoning_only"
+    assert result["usage"]["reasoning_tokens"] == 512
+
+
 def test_goal_judge_runs_at_completion_boundary_with_startup_recovery_only():
     source = (ROOT / "app" / "agent_loop.py").read_text(encoding="utf-8")
+    runtime = (ROOT / "plugins/agent-goal/runtime.py").read_text(encoding="utf-8")
     assert "_run_goal_judge_after_turn" not in source
-    assert source.count("await _judge_pending_goal_and_append_context(state, emit)") == 3
-    tool_boundary = source.split("completion_judge_requested = any(", 1)[1].split(
-        "if await _consume_steer_messages", 1
-    )[0]
-    assert "if completion_judge_requested:" in tool_boundary
-    assert "await _judge_pending_goal_and_append_context(state, emit)" in tool_boundary
-    assert source.count("completion_judge_requested = any(") == 1
-    assert '"[Goal Judge result]\\n"' in source
-    assert "manager.record_judge_result(" in source
-    assert 'Previous independent Judge verdict: continue' in source
-    assert "Prioritize correcting the identified gap" in source
-    assert 'last_judge_verdict' in source
-    assert 'last_judge_reason' in source
-    assert 'Human completion review: changes requested' in source
+    assert 'call_async("completion_boundary"' in source
+    assert '"[Goal Judge result]\\n"' in runtime
+    assert "manager.record_judge_result(" in runtime
+    assert 'Previous independent Judge verdict: continue' in runtime
+    assert "Prioritize correcting the identified gap" in runtime
+    assert 'Human completion review: changes requested' in runtime
     tools_source = (ROOT / "app" / "agent_tools.py").read_text(encoding="utf-8")
     assert '"completion_mode"' not in tools_source
     assert '"enum": ["explicit", "judge", "hybrid"]' not in tools_source
 
 
-def test_goal_card_is_present_in_the_vite_entry_and_shell_source():
+def test_goal_ui_is_plugin_owned_not_built_into_the_main_shell():
     for relative_path in ("frontend/index.html", "frontend/src/shell-body.html"):
         markup = (ROOT / relative_path).read_text(encoding="utf-8")
-        assert 'id="chat-goal-card"' in markup
-        assert 'id="chat-goal-status"' in markup
-        assert 'id="chat-goal-objective"' in markup
-        assert 'id="chat-goal-meta"' in markup
-        assert 'class="chat-goal-icon-btn chat-goal-stats-btn"' in markup
-        assert markup.index('id="chat-goal-meta"') < markup.index('id="chat-goal-toggle"')
-        assert 'id="chat-goal-toggle"' in markup
-        assert 'id="chat-goal-edit"' in markup
-        assert 'id="chat-goal-delete"' in markup
-        assert 'id="chat-goal-review"' in markup
-        assert '>结果审核</button>' in markup
-        assert 'class="chat-goal-icon-pause"' in markup
-        assert 'class="chat-goal-icon-play"' in markup
-        assert 'id="goal-edit-modal-root"' in markup
-        assert 'id="goal-edit-textarea"' in markup
-        assert 'id="goal-edit-completion-mode"' not in markup
-        assert 'maxlength="12000"' in markup
-        assert 'id="goal-edit-char-count"' in markup
-        assert 'id="goal-edit-save"' in markup
-        assert 'id="goal-review-modal-root"' in markup
-        assert 'id="goal-review-objective"' in markup
-        assert 'id="goal-review-judge-result"' in markup
-        assert 'id="goal-review-approve"' in markup
-        assert 'id="goal-review-save"' in markup
-        assert 'id="goal-review-continue"' in markup
-        assert 'id="chat-todo-card"' in markup
-        assert markup.index('id="chat-goal-card"') < markup.index('id="chat-todo-card"')
-
-    renderer = (
-        ROOT / "frontend" / "src" / "app" / "modules" / "toc-todo.js"
-    ).read_text(encoding="utf-8")
-    assert "card.hidden = !has" in renderer
-    assert "todoCard.hidden = !has" in renderer
+        assert 'id="chat-goal-card"' not in markup
+    assert "Completion review" in (ROOT / "plugins/agent-goal/web/index.html").read_text(encoding="utf-8")
+    return
     assert "syncGoalTodoPanelVisibility()" in renderer
     assert "当前会话暂无 Goal" not in renderer
     assert "const goalStateBySession = new Map()" in renderer
@@ -690,14 +732,14 @@ def test_goal_card_is_present_in_the_vite_entry_and_shell_source():
         "localStorage.setItem('lastSessionId', sessionId);", 1
     )[0]
     assert "updateSessionTitle()" in switch_boundary
-    assert "renderTodoPlanSnapshot(selectTodoPlan(sessionId))" in switch_boundary
+    assert "myagent:extension-state-changed" in switch_boundary
     assert "renderGoalForCurrentSession()" in switch_boundary
     assert "refreshGoalCard()" in switch_boundary
 
-    clear_boundary = renderer.split("function clearTodoForSessionLoad()", 1)[1].split(
+    clear_boundary = renderer.split("function clearOptionalPanelsForSessionLoad()", 1)[1].split(
         "const tocTurnsCacheBySession", 1
     )[0]
-    assert "todoCard.hidden = true" in clear_boundary
+    assert "pluginPanels.hidden = true" in clear_boundary
 
 
 if __name__ == "__main__":

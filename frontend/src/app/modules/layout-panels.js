@@ -77,6 +77,7 @@ function toggleTodoPlanPanel() {
     const root = document.getElementById('chat-todo-plan');
     if (!root) return;
     const isOpening = !root.classList.contains('is-open');
+    panelUserCollapsedTodo = !isOpening;
     panelManualOverlapTodo = isOpening;
     panelAutoCollapsedTodo = false;
     panelWasAutoCollapsed = panelAutoCollapsedToc;
@@ -100,17 +101,13 @@ function syncEdgeTabArrows() {
 
 function updatePanelToggles() {
     const tocList = document.getElementById('chat-toc-list');
-    const todoList = document.getElementById('chat-todo-plan-list');
-    const goalCard = document.getElementById('chat-goal-card');
-    const todoCard = document.getElementById('chat-todo-card');
+    const pluginPanels = document.getElementById('plugin-session-panels');
     const tocTab = document.getElementById('toc-edge-tab');
     const todoTab = document.getElementById('todo-edge-tab');
     if (tocTab) tocTab.classList.toggle('visible', !!(tocList && tocList.children.length));
     if (todoTab) {
         const hasTodoPanelContent = !!(
-            (goalCard && !goalCard.hidden)
-            || (todoCard && !todoCard.hidden)
-            || (todoList && todoList.children.length)
+            pluginPanels && !pluginPanels.hidden && pluginPanels.children.length
         );
         todoTab.classList.toggle('visible', hasTodoPanelContent);
     }
@@ -187,12 +184,25 @@ var panelAutoCollapsedTodo = false;
 var panelAutoCollapsedToc = false;
 var panelManualOverlapTodo = false;
 var panelManualOverlapToc = false;
+var panelUserCollapsedTodo = false;
 
+function syncTodoPanelContentVisibility(hasVisibleContent) {
+    var todo = document.getElementById('chat-todo-plan');
+    if (!todo) return;
+    if (!hasVisibleContent) {
+        todo.classList.remove('is-open');
+        return;
+    }
+    // Content refreshes only decide whether the panel may be shown. The user's
+    // choice and the overlap controller own its open/closed state, otherwise a
+    // delayed extension refresh can reopen a panel that was just collapsed.
+    if (!panelUserCollapsedTodo && !panelAutoCollapsedTodo) {
+        todo.classList.add('is-open');
+    }
+}
 function todoPanelHasVisibleContent() {
-    var goal = document.getElementById('chat-goal-card');
-    var plan = document.getElementById('chat-todo-card');
-    var list = document.getElementById('chat-todo-plan-list');
-    return !!((goal && !goal.hidden) || (plan && !plan.hidden) || (list && list.children.length));
+    var pluginPanels = document.getElementById('plugin-session-panels');
+    return !!(pluginPanels && !pluginPanels.hidden && pluginPanels.children.length);
 }
 
 function mainContentColumnRect(fallbackElement) {
@@ -268,7 +278,7 @@ function runPanelAutoCollapseCheck() {
     }
 
     if (now >= panelAutoCollapseCooldownUntil) {
-        if (panelAutoCollapsedTodo && todo && todoPanelHasVisibleContent()
+        if (panelAutoCollapsedTodo && !panelUserCollapsedTodo && todo && todoPanelHasVisibleContent()
                 && todoHasRecoveryRoom) {
             todo.classList.add('is-open');
             panelAutoCollapsedTodo = false;
@@ -312,17 +322,11 @@ function initPanelAutoCollapse() {
     panelAutoCollapseMutationObserver = new MutationObserver(schedule);
     var todo = document.getElementById('chat-todo-plan');
     var toc = document.getElementById('chat-toc');
-    var goal = document.getElementById('chat-goal-card');
-    var plan = document.getElementById('chat-todo-card');
-    var todoList = document.getElementById('chat-todo-plan-list');
     var tocList = document.getElementById('chat-toc-list');
     if (todo) panelAutoCollapseObserver.observe(todo);
     if (toc) panelAutoCollapseObserver.observe(toc);
     if (todo) panelAutoCollapseMutationObserver.observe(todo, { attributes: true, attributeFilter: ['class'] });
     if (toc) panelAutoCollapseMutationObserver.observe(toc, { attributes: true, attributeFilter: ['class'] });
-    if (goal) panelAutoCollapseMutationObserver.observe(goal, { attributes: true, attributeFilter: ['hidden'] });
-    if (plan) panelAutoCollapseMutationObserver.observe(plan, { attributes: true, attributeFilter: ['hidden'] });
-    if (todoList) panelAutoCollapseMutationObserver.observe(todoList, { childList: true });
     if (tocList) panelAutoCollapseMutationObserver.observe(tocList, { childList: true });
 }
 
@@ -428,7 +432,6 @@ initToastComposerOffset();
 
 // Inline HTML (onclick) still expects these on globalThis.
 if (typeof globalThis !== 'undefined') {
-    globalThis.clearTodoPlan = clearTodoPlan;
     globalThis.toggleTodoPlanPanel = toggleTodoPlanPanel;
     globalThis.toggleTocPanel = toggleTocPanel;
 }

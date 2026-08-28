@@ -10,9 +10,8 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:ital,wght@0,400;0,500;0,600;0,700;0,800;1,400;1,500&family=JetBrains+Mono:ital,wght@0,400;0,500;0,600;1,400&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
     <script>try { var savedTheme = localStorage.getItem('myagent-theme'); document.documentElement.classList.add(savedTheme === 'deep-dark' ? 'theme-dark' : (savedTheme === 'dark' || savedTheme === 'purple' ? 'theme-purple' : 'theme-light')); } catch (e) { document.documentElement.classList.add('theme-light'); }</script>
-  <script type="module" crossorigin src="/assets/main-zBrnyYGm.js"></script>
-  <link rel="modulepreload" crossorigin href="/assets/modulepreload-polyfill-B5Qt9EMX.js">
-  <link rel="stylesheet" crossorigin href="/assets/main-BKOEq9oe.css">
+  <script type="module" crossorigin src="/assets/main-DH4RjKBZ.js"></script>
+  <link rel="stylesheet" crossorigin href="/assets/main-DTzZgu70.css">
 </head>
 <body>
 <div class="app">
@@ -44,11 +43,11 @@
         </div>
             <div id="sessions-list" class="sessions-list" role="listbox"></div>
             <div class="sidebar-runtime" role="status" aria-live="polite">
-                <a id="sidebar-runtime-link" class="sidebar-runtime-link" href="/execution-dashboard" target="myagent-execution-dashboard" aria-label="打开执行状态看板" data-ui-tip="打开执行状态看板">
+                <span id="sidebar-runtime-link" class="sidebar-runtime-link">
                     <span class="sidebar-runtime-dot" aria-hidden="true"></span>
                     <span id="sidebar-runtime-status">Runtime 在线</span>
-                </a>
-                <span id="sidebar-runtime-version" class="sidebar-runtime-version">v4.20260816</span>
+                </span>
+                <span id="sidebar-runtime-version" class="sidebar-runtime-version">v4.20260828</span>
             </div>
         </aside>
 
@@ -109,33 +108,9 @@
                     </div>
                 </div>
                 <div class="chat-stage">
-                    <aside id="chat-todo-plan" class="chat-todo-plan" aria-label="Goal 与当前计划">
+                    <aside id="chat-todo-plan" class="chat-todo-plan" aria-label="会话扩展面板">
                         <div class="chat-todo-plan-inner">
-                            <section id="chat-goal-card" class="chat-goal-card" hidden>
-                                <div class="chat-goal-heading"><span>GOAL</span><span id="chat-goal-status"></span></div>
-                                <div id="chat-goal-objective" class="chat-goal-objective" tabindex="0"></div>
-                                <div class="chat-goal-actions" role="toolbar" aria-label="Goal 操作">
-                                    <button type="button" id="chat-goal-meta" class="chat-goal-icon-btn chat-goal-stats-btn" data-ui-tip="统计信息" aria-label="统计信息">
-                                        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 20V10M12 20V4M19 20v-7"/></svg>
-                                    </button>
-                                    <button type="button" id="chat-goal-toggle" class="chat-goal-icon-btn" data-ui-tip="暂停 Goal" aria-label="暂停 Goal" onclick="toggleCurrentGoalState()">
-                                        <svg class="chat-goal-icon-pause" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 5v14M15 5v14"/></svg>
-                                        <svg class="chat-goal-icon-play" viewBox="0 0 24 24" aria-hidden="true" hidden><path d="m8 5 11 7-11 7Z"/></svg>
-                                    </button>
-                                    <button type="button" id="chat-goal-edit" class="chat-goal-icon-btn" data-ui-tip="编辑 Goal" aria-label="编辑 Goal" onclick="editCurrentGoal()">
-                                        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m4 20 4.5-1 10-10a2.1 2.1 0 0 0-3-3l-10 10Z"/><path d="m14 7 3 3"/></svg>
-                                    </button>
-                                    <button type="button" id="chat-goal-delete" class="chat-goal-icon-btn chat-goal-icon-btn--danger" data-ui-tip="删除 Goal" aria-label="删除 Goal" onclick="deleteCurrentGoal()">
-                                        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3M7 7l1 13h8l1-13M10 11v5M14 11v5"/></svg>
-                                    </button>
-                                    <button type="button" id="chat-goal-review" class="chat-goal-review-btn" onclick="openGoalReviewModal()" hidden>结果审核</button>
-                                </div>
-                            </section>
-                            <div id="chat-todo-card" class="chat-todo-plan-panel" hidden>
-                                <div class="chat-todo-plan-title">当前计划<button class="chat-todo-plan-close" type="button" aria-label="清除计划" data-ui-tip="清除当前计划" onclick="clearTodoPlan()">×</button></div>
-                                <div id="chat-todo-plan-stats" class="chat-todo-plan-stats" aria-live="polite"></div>
-                                <ul id="chat-todo-plan-list" class="chat-todo-plan-list"></ul>
-                            </div>
+                            <div id="plugin-session-panels" class="plugin-session-panels" hidden></div>
                         </div>
                     </aside>
                     <div id="chat-container" class="chat-container">
@@ -149,7 +124,7 @@
                             </div>
                         </div>
                     </aside>
-                    <button type="button" class="panel-edge-handle todo-handle" id="todo-edge-tab" onclick="toggleTodoPlanPanel()" aria-label="折叠 Goal 与计划面板">▶</button>
+                    <button type="button" class="panel-edge-handle todo-handle" id="todo-edge-tab" onclick="toggleTodoPlanPanel()" aria-label="折叠会话扩展面板">▶</button>
                     <button type="button" class="panel-edge-handle toc-handle" id="toc-edge-tab" onclick="toggleTocPanel()" aria-label="折叠历史面板">◀</button>
                 </div>
             </div>
@@ -165,6 +140,7 @@
                         <span class="rewrite-undo-msg"></span>
                         <button type="button" class="rewrite-undo-btn">撤销</button>
                     </div>
+                    <div id="plugin-composer-actions" class="plugin-composer-actions" role="toolbar" aria-label="插件动作" hidden></div>
                     <div class="composer-row">
                         <div class="input-wrapper">
                             <button type="button" id="skill-picker-btn" class="skill-picker-btn" aria-label="选择 Skill" aria-haspopup="dialog" aria-expanded="false" data-ui-tip="选择 Skill"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button>
@@ -195,7 +171,7 @@
                             <svg class="permission-mode-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l7 3v5c0 4.5-3 8.3-7 10-4-1.7-7-5.5-7-10V6z"/></svg>
                             <span class="permission-mode-body">
                                 <span class="permission-mode-label">请求批准</span>
-                                <span class="permission-mode-desc">工作区内自动执行；联网、出项目、永久删除等会先问你</span>
+                                <span class="permission-mode-desc">工作区内写入自动执行；删除、联网、出项目按普通审批</span>
                             </span>
                         </button>
                         <button type="button" class="permission-mode-option" data-permission-mode="approve_for_me" role="option">
@@ -209,7 +185,7 @@
                             <svg class="permission-mode-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="10" width="16" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 7.6-1.6"/><circle cx="12" cy="15" r="1" fill="currentColor"/></svg>
                             <span class="permission-mode-body">
                                 <span class="permission-mode-label">完全访问权限</span>
-                                <span class="permission-mode-desc">关闭限制与审批，Agent 拥有你的全部权限</span>
+                                <span class="permission-mode-desc">普通操作和工作区删除免审批；高危系统命令仍确认</span>
                             </span>
                         </button>
                     </div>
@@ -257,53 +233,6 @@
     </div>
 </div>
 
-    <div id="goal-edit-modal-root" class="goal-edit-modal-overlay" aria-hidden="true">
-    <div class="goal-edit-modal" role="dialog" aria-modal="true" aria-labelledby="goal-edit-modal-title" aria-describedby="goal-edit-modal-subtitle">
-        <div class="goal-edit-modal__head">
-            <div>
-                <h2 id="goal-edit-modal-title" class="goal-edit-modal__title">编辑 Goal 内容</h2>
-                <p id="goal-edit-modal-subtitle" class="goal-edit-modal__subtitle">支持多行编辑，保存后会立即同步到当前会话。</p>
-            </div>
-            <button type="button" id="goal-edit-modal-close" class="goal-edit-modal__close" aria-label="关闭">×</button>
-        </div>
-        <label class="goal-edit-modal__label" for="goal-edit-textarea">Goal 内容</label>
-        <textarea id="goal-edit-textarea" class="goal-edit-modal__textarea" maxlength="12000" rows="14" spellcheck="false"></textarea>
-        <div class="goal-edit-modal__meta">
-            <span>Ctrl/Cmd + Enter 保存</span>
-            <span id="goal-edit-char-count" aria-live="polite">0 / 12000</span>
-        </div>
-        <div class="goal-edit-modal__actions">
-            <button type="button" id="goal-edit-cancel" class="ui-modal-btn ui-modal-btn--ghost">取消</button>
-            <button type="button" id="goal-edit-save" class="ui-modal-btn ui-modal-btn--primary">保存修改</button>
-        </div>
-    </div>
-    </div>
-
-    <div id="goal-review-modal-root" class="goal-review-modal-overlay" aria-hidden="true">
-        <div class="goal-review-modal" role="dialog" aria-modal="true" aria-labelledby="goal-review-modal-title" aria-describedby="goal-review-modal-subtitle">
-            <div class="goal-review-modal__head">
-                <div>
-                    <h2 id="goal-review-modal-title" class="goal-review-modal__title">Goal 结果审核</h2>
-                    <p id="goal-review-modal-subtitle" class="goal-review-modal__subtitle">核对目标与 Judge 结论，再决定是否通过或继续执行。</p>
-                </div>
-                <button type="button" id="goal-review-modal-close" class="goal-review-modal__close" aria-label="关闭">×</button>
-            </div>
-            <label class="goal-review-modal__label" for="goal-review-objective">当前 Goal 描述</label>
-            <textarea id="goal-review-objective" class="goal-review-modal__textarea" maxlength="12000" rows="8" spellcheck="false"></textarea>
-            <label class="goal-review-modal__label goal-review-modal__judge-label" for="goal-review-judge-result">本次 Judge 结果</label>
-            <textarea id="goal-review-judge-result" class="goal-review-modal__textarea goal-review-modal__textarea--judge" maxlength="12000" rows="8" spellcheck="false"></textarea>
-            <div class="goal-review-modal__meta">
-                <div id="goal-review-modal-status" class="goal-review-modal__status" aria-live="polite"></div>
-                <span class="input-shortcut-hint goal-review-shortcut-hint">Ctrl/Cmd + Enter 保存修改</span>
-            </div>
-            <div class="goal-review-modal__actions">
-                <button type="button" id="goal-review-approve" class="ui-modal-btn goal-review-btn--approve">审核通过</button>
-                <button type="button" id="goal-review-save" class="ui-modal-btn ui-modal-btn--ghost">保存修改</button>
-                <button type="button" id="goal-review-continue" class="ui-modal-btn ui-modal-btn--primary">继续 Goal 任务</button>
-            </div>
-        </div>
-    </div>
-
     <div id="settings-modal-root" class="settings-modal-overlay" aria-hidden="true">
     <div class="settings-modal" role="dialog" aria-modal="true" aria-labelledby="settings-modal-title" tabindex="-1">
         <div class="settings-modal__head">
@@ -340,57 +269,11 @@
                 <div style="margin-top:.45rem;color:var(--text-tertiary);font-size:0.72rem;line-height:1.45;">编辑完整 .env，保存后立即写回磁盘（部分项需重启服务）。</div>
                 <div style="margin-top:.45rem;color:var(--text-tertiary);font-size:0.72rem;line-height:1.45;">如需帮助或反馈，请联系GitHub @sugarfreeecho</div>
             </div>
+            <div id="plugin-settings-sections" class="plugin-settings-sections" hidden></div>
         </div>
     </div>
 </div>
 
-    <div id="agent-team-modal-root" class="settings-modal-overlay" aria-hidden="true">
-        <div class="settings-modal agent-team-modal" role="dialog" aria-modal="true" aria-labelledby="agent-team-modal-title" tabindex="-1">
-            <div class="settings-modal__head">
-                <div>
-                    <h2 id="agent-team-modal-title" class="settings-modal__title">Agent Team</h2>
-                    <div id="agent-team-modal-subtitle" class="settings-feature-status">当前会话团队控制面板</div>
-                </div>
-                <button type="button" id="agent-team-modal-close" class="settings-modal__close" aria-label="关闭">×</button>
-            </div>
-            <div class="agent-team-toolbar">
-                <button type="button" id="agent-team-refresh" class="settings-theme-btn">刷新</button>
-                <button type="button" id="agent-team-shutdown" class="settings-theme-btn">请求关停</button>
-                <button type="button" id="agent-team-complete-shutdown" class="settings-theme-btn">完成关停</button>
-                <button type="button" id="agent-team-archive" class="settings-theme-btn">归档</button>
-            </div>
-            <div id="agent-team-error" class="settings-feature-status is-error hidden" role="alert"></div>
-            <div id="agent-team-empty" class="agent-team-empty hidden">
-                <p>当前会话还没有团队。</p>
-                <div class="agent-team-inline-form">
-                    <input id="agent-team-title-input" class="agent-team-input" type="text" maxlength="200" placeholder="团队名称（可选）">
-                    <span class="input-shortcut-hint agent-team-shortcut-hint">Enter 提交</span>
-                    <button type="button" id="agent-team-create" class="settings-advanced-btn">创建团队</button>
-                </div>
-            </div>
-            <div id="agent-team-content" class="agent-team-content hidden">
-                <div id="agent-team-summary" class="agent-team-summary"></div>
-                <section class="agent-team-section">
-                    <h3>成员</h3>
-                    <div id="agent-team-members" class="agent-team-list"></div>
-                    <p class="agent-team-help">持久成员由 Agent 调用 team(action="spawn_member") 创建和派工。</p>
-                </section>
-                <section class="agent-team-section">
-                    <h3>共享任务</h3>
-                    <div class="agent-team-inline-form">
-                        <input id="agent-team-task-title" class="agent-team-input" type="text" maxlength="300" placeholder="新任务标题">
-                        <span class="input-shortcut-hint agent-team-shortcut-hint">Enter 提交</span>
-                        <button type="button" id="agent-team-task-create" class="settings-advanced-btn">添加任务</button>
-                    </div>
-                    <div id="agent-team-tasks" class="agent-team-list"></div>
-                </section>
-                <section class="agent-team-section">
-                    <h3>权限请求</h3>
-                    <div id="agent-team-permissions" class="agent-team-list"></div>
-                </section>
-            </div>
-        </div>
-    </div>
-
+
 </body>
 </html>

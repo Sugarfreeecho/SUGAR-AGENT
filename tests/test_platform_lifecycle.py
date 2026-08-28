@@ -1,7 +1,22 @@
 import subprocess
+import json
 from pathlib import Path
 
 from app import platform_lifecycle
+
+
+class _ActivationResponse:
+    def __init__(self, payload):
+        self.payload = payload
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        return False
+
+    def read(self):
+        return json.dumps(self.payload).encode("utf-8")
 
 
 class FakeRunner:
@@ -67,3 +82,56 @@ def test_update_command_preserves_root_with_spaces(tmp_path):
     assert command[1] == str(root / "app" / "agent_updater.py")
     assert command[command.index("--root") + 1] == str(root)
     assert command[-1] == "systemd-user"
+
+
+def test_open_main_webui_reuses_live_page(monkeypatch):
+    opened = []
+    monkeypatch.setattr(
+        platform_lifecycle.urllib_request,
+        "urlopen",
+        lambda request, timeout: _ActivationResponse({"ok": True, "reused": True}),
+    )
+    monkeypatch.setattr(
+        platform_lifecycle.webbrowser,
+        "open",
+        lambda *args, **kwargs: opened.append((args, kwargs)),
+    )
+
+    assert platform_lifecycle.open_webui("/") is True
+    assert opened == []
+
+
+def test_open_main_webui_falls_back_when_no_page_is_reusable(monkeypatch):
+    opened = []
+    monkeypatch.setattr(
+        platform_lifecycle,
+        "request_webui_activation",
+        lambda *_args, **_kwargs: False,
+    )
+    monkeypatch.setattr(
+        platform_lifecycle.webbrowser,
+        "open",
+        lambda *args, **kwargs: opened.append((args, kwargs)) or True,
+    )
+
+    assert platform_lifecycle.open_webui("/") is False
+    assert opened == [(('http://127.0.0.1:8192/',), {'new': 0, 'autoraise': True})]
+
+
+def test_open_non_root_webui_does_not_reuse_main_page(monkeypatch):
+    requests = []
+    opened = []
+    monkeypatch.setattr(
+        platform_lifecycle,
+        "request_webui_activation",
+        lambda *args, **kwargs: requests.append((args, kwargs)) or True,
+    )
+    monkeypatch.setattr(
+        platform_lifecycle.webbrowser,
+        "open",
+        lambda *args, **kwargs: opened.append((args, kwargs)) or True,
+    )
+
+    assert platform_lifecycle.open_webui("/setup/env") is False
+    assert requests == []
+    assert opened[0][0] == ('http://127.0.0.1:8192/setup/env',)

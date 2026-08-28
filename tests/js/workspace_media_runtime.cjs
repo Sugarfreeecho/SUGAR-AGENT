@@ -62,10 +62,11 @@ class FakeElement {
   }
 }
 
+const hoverTipBindings = [];
 const context = vm.createContext({
   console,
   document: { createElement: (tagName) => new FakeElement(tagName) },
-  bindUiHoverTip() {},
+  bindUiHoverTip(element) { hoverTipBindings.push(element); },
   escapeHtmlAttr(value) {
     return String(value)
       .replace(/&/g, '&amp;')
@@ -172,6 +173,23 @@ async function main() {
   const audioLink = marked.parse('[试听](media/demo.mp3)');
   assert.match(audioLink, /data-workspace-markdown-link="1"/);
   assert.match(audioLink, /data-workspace-open="media\/demo\.mp3"/);
+
+  const markdownFileLink = new FakeElement('a');
+  markdownFileLink.setAttribute('data-workspace-markdown-link', '1');
+  markdownFileLink.setAttribute('data-workspace-open', 'docs/report.md');
+  markdownFileLink.setAttribute('data-ui-tip', 'docs/report.md');
+  context.upgradeWorkspaceMedia({
+    querySelectorAll(selector) {
+      if (selector === 'a[data-workspace-markdown-link="1"][data-workspace-open]') {
+        return [markdownFileLink];
+      }
+      return [];
+    },
+  });
+  assert.ok(
+    hoverTipBindings.includes(markdownFileLink),
+    'standard Markdown file links must bind their hover tooltip after rendering',
+  );
 
   const inlineCode = marked.parse('`[试听](media/demo.mp3)`');
   const fencedCode = marked.parse('```md\n[试听](media/demo.mp3)\n```');

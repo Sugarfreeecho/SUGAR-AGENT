@@ -290,6 +290,34 @@ def test_prebuilt_token_estimate_uses_exact_provider_usage(monkeypatch):
     assert agent_tokenizer.estimate_full_input_tokens_for_messages("s1", messages) == 88
 
 
+def test_provider_usage_prefix_baseline_survives_process_cache_reset(monkeypatch, tmp_path):
+    import agent_tokenizer
+    from agent_messages import SystemMessage, UserMessage
+    import agent_harness
+
+    baseline_path = tmp_path / "prompt_tokens.json"
+    monkeypatch.setattr(
+        agent_tokenizer,
+        "_prompt_usage_baseline_path",
+        lambda _session_id: baseline_path,
+    )
+    monkeypatch.setattr(agent_harness, "strip_reasoning_for_api_request", lambda messages: messages)
+    monkeypatch.setattr(agent_harness, "estimate_tokens", lambda _messages: 17)
+    agent_tokenizer._PROMPT_USAGE_BASELINE_CACHE.clear()
+    agent_tokenizer._PROMPT_USAGE_EXACT_CACHE.clear()
+
+    messages = [SystemMessage(content="sys"), UserMessage(content="hello")]
+    agent_tokenizer.record_prompt_tokens_for_messages("s1", messages, 88)
+    agent_tokenizer._PROMPT_USAGE_BASELINE_CACHE.clear()
+    agent_tokenizer._PROMPT_USAGE_EXACT_CACHE.clear()
+
+    estimated, source = agent_tokenizer.estimate_full_input_tokens_for_messages(
+        "s1", messages, return_source=True
+    )
+    assert estimated == 88
+    assert source == "provider_prefix"
+
+
 def test_calculated_prebuilt_token_estimate_ignores_provider_usage(monkeypatch):
     import agent_tokenizer
     from agent_messages import SystemMessage, UserMessage

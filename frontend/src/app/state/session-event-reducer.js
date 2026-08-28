@@ -70,11 +70,7 @@ function applySessionEvent(event, opts) {
         if (type === 'run_finished' && typeof clearSessionStreamStopSuppress === 'function') clearSessionStreamStopSuppress(sessionId);
         markSessionRunInactive(sessionId);
         const sess = sessionStore.get(sessionId);
-        const goalContinues = typeof isGoalActiveForSession === 'function'
-            && isGoalActiveForSession(sessionId);
-        if (goalContinues && typeof clearSessionUnreadState === 'function') {
-            clearSessionUnreadState(sessionId, { server: false });
-        } else if (sess) {
+        if (sess) {
             sess.unread_result = true;
             sess.unread_result_status = (type === 'run_interrupted' || type === 'run_failed') ? 'failed' : 'success';
             sess.unread_result_at = new Date().toISOString();
@@ -82,7 +78,6 @@ function applySessionEvent(event, opts) {
         return {
             handled: true,
             runStateChanged: true,
-            goalContinues: goalContinues,
             messageRecord: messageRecord,
         };
     }
@@ -99,10 +94,6 @@ function applySessionEvent(event, opts) {
     }
     if (type === 'key_context_delta') {
         appendContextProgressForSession(sessionId, 'key-context', event.delta);
-        return { handled: false, contextStateChanged: true, messageRecord: messageRecord };
-    }
-    if (type === 'todo_plan') {
-        applyTodoPlanToStore(sessionId, event);
         return { handled: false, contextStateChanged: true, messageRecord: messageRecord };
     }
     if (type === 'subagent_start' || type === 'subagent_finish'

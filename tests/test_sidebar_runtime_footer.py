@@ -9,9 +9,10 @@ def test_sidebar_runtime_footer_is_present_in_source_markup() -> None:
         markup = (ROOT / relative_path).read_text(encoding="utf-8")
         assert 'class="sidebar-runtime"' in markup
         assert 'id="sidebar-runtime-link"' in markup
-        assert 'href="/execution-dashboard"' in markup
+        assert 'href="/execution-dashboard"' not in markup
         assert 'id="sidebar-runtime-status"' in markup
         assert 'id="sidebar-runtime-version"' in markup
+    assert (ROOT / "plugins/execution-dashboard/web/index.html").is_file()
 
 
 def test_sidebar_runtime_status_tracks_session_connectivity() -> None:
@@ -29,7 +30,7 @@ def test_sidebar_runtime_status_tracks_session_connectivity() -> None:
 def test_sidebar_uses_dated_product_version() -> None:
     for relative_path in ("frontend/index.html", "frontend/src/shell-body.html"):
         markup = (ROOT / relative_path).read_text(encoding="utf-8")
-        assert 'class="sidebar-runtime-version">v4.20260814</span>' in markup
+        assert 'class="sidebar-runtime-version">v4.20260816</span>' in markup
 
 
 def test_sidebar_runtime_footer_has_theme_aware_styles() -> None:

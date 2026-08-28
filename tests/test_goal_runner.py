@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import importlib.util
 import json
 import sys
 from pathlib import Path
@@ -12,6 +13,37 @@ if str(APP_DIR) not in sys.path:
     sys.path.insert(0, str(APP_DIR))
 
 
+def _load_plugin_module(name: str, relative: str):
+    spec = importlib.util.spec_from_file_location(name, ROOT / relative)
+    module = importlib.util.module_from_spec(spec)
+    assert spec and spec.loader
+    spec.loader.exec_module(module)
+    return module
+
+
+_GOAL_RUNTIME = _load_plugin_module("test_goal_runtime", "plugins/agent-goal/runtime.py")
+_GOAL_RUNNER = _load_plugin_module("test_goal_runner_plugin", "plugins/agent-goal/runner.py")
+goal_host = _load_plugin_module("test_goal_host", "plugins/agent-goal/host.py")
+
+
+class _RuntimeProxy:
+    def __getattr__(self, name):
+        import agent_loop
+        _GOAL_RUNTIME.initialize(agent_loop)
+        return getattr(_GOAL_RUNTIME, name)
+
+
+class _RunnerProxy:
+    def __getattr__(self, name):
+        import webui
+        _GOAL_RUNNER._host = webui
+        return getattr(_GOAL_RUNNER, name)
+
+
+goal_runtime = _RuntimeProxy()
+goal_runner = _RunnerProxy()
+
+
 def test_discover_runnable_goal_sessions(monkeypatch):
     import agent_goal
     import webui
@@ -19,18 +51,24 @@ def test_discover_runnable_goal_sessions(monkeypatch):
     class Manager:
         @staticmethod
         def should_continue(session_id):
-            return session_id in {"active", "waiting"}
+            return session_id in {"active", "waiting", "stopped"}
 
     monkeypatch.setattr(agent_goal, "goal_enabled", lambda: True)
     monkeypatch.setattr(agent_goal, "manager_for", lambda _session_manager: Manager())
     monkeypatch.setattr(
         webui.session_manager,
         "list_sessions",
-        lambda include_archived=True: [{"id": "active"}, {"id": "paused"}, {"id": "waiting"}],
+        lambda include_archived=True: [
+            {"id": "active"},
+            {"id": "paused"},
+            {"id": "waiting"},
+            {"id": "stopped"},
+        ],
     )
     monkeypatch.setattr(webui, "_session_pending_human_count", lambda sid: 1 if sid == "waiting" else 0)
+    monkeypatch.setattr(webui, "_session_was_manually_stopped", lambda sid: sid == "stopped")
 
-    assert webui._discover_runnable_goal_sessions() == ["active"]
+    assert goal_runner._discover() == ["active"]
 
 
 def test_background_goal_runner_drains_continuation_without_browser(monkeypatch):
@@ -46,6 +84,10 @@ def test_background_goal_runner_drains_continuation_without_browser(monkeypatch)
             return True
 
         @staticmethod
+        def get(_session_id):
+            return {}
+
+        @staticmethod
         def mark_continuation_started(session_id, *, run_id=""):
             events.append(("started", session_id, run_id))
 
@@ -59,12 +101,12 @@ def test_background_goal_runner_drains_continuation_without_browser(monkeypatch)
     monkeypatch.setattr(webui, "_reserve_session_chat_start", lambda _sid, _run_id="": "lease")
     monkeypatch.setattr(webui, "_release_session_chat_start", lambda sid, token="": releases.append((sid, token)))
 
-    asyncio.run(webui._run_goal_continuation_background("s1"))
+    asyncio.run(goal_runner._continue("s1"))
 
     assert events[0][0] == "started"
     assert events[1][0:2] == ("event", "s1")
     assert events[1][2] == events[0][2]
-    assert events[1][3] == "goal"
+    assert events[1][3] == "agent-goal"
     assert releases == [("s1", "lease")]
 
 
@@ -93,7 +135,38 @@ def test_background_goal_runner_stops_for_pending_human_interaction(monkeypatch)
     monkeypatch.setattr(webui, "_reserve_session_chat_start", lambda _sid, _run_id="": "lease")
     monkeypatch.setattr(webui, "_release_session_chat_start", lambda _sid, token="": None)
 
-    asyncio.run(webui._run_goal_continuation_background("waiting"))
+    asyncio.run(goal_runner._continue("waiting"))
+
+    assert events == []
+
+
+def test_background_goal_runner_does_not_restart_a_manually_stopped_session(monkeypatch):
+    import agent_goal
+    import webui
+
+    events = []
+
+    class Manager:
+        @staticmethod
+        def should_continue(_session_id):
+            return True
+
+        @staticmethod
+        def mark_continuation_started(*_args, **_kwargs):
+            events.append("started")
+
+    async def continuation(*_args, **_kwargs):
+        events.append("continued")
+        yield {"type": "status"}
+
+    monkeypatch.setattr(agent_goal, "manager_for", lambda _session_manager: Manager())
+    monkeypatch.setattr(webui, "_session_was_manually_stopped", lambda _sid: True)
+    monkeypatch.setattr(webui, "_session_pending_human_count", lambda _sid: 0)
+    monkeypatch.setattr(webui, "astream_events_continuation", continuation)
+    monkeypatch.setattr(webui, "_reserve_session_chat_start", lambda _sid, _run_id="": "lease")
+    monkeypatch.setattr(webui, "_release_session_chat_start", lambda _sid, token="": None)
+
+    asyncio.run(goal_runner._continue("stopped"))
 
     assert events == []
 
@@ -131,17 +204,15 @@ def test_background_goal_runner_accounts_empty_continuation_as_failure(monkeypat
     monkeypatch.setattr(webui, "_reserve_session_chat_start", lambda _sid, _run_id="": "lease")
     monkeypatch.setattr(webui, "_release_session_chat_start", lambda _sid, token="": None)
 
-    asyncio.run(webui._run_goal_continuation_background("s1"))
+    asyncio.run(goal_runner._continue("s1"))
 
     assert len(recorded) == 1
     assert recorded[0][2]["outcome"] == "failed"
     assert recorded[0][2]["continuation"] is True
-    assert recorded[0][2]["run_id"].startswith("goal-runner-")
+    assert recorded[0][2]["run_id"].startswith("workflow-runner-")
 
 
 def test_hook_stop_persists_goal_pause_and_pushes_live_state(monkeypatch):
-    import agent_loop
-
     actions = []
     emitted = []
 
@@ -162,11 +233,11 @@ def test_hook_stop_persists_goal_pause_and_pushes_live_state(monkeypatch):
     async def emit(event):
         emitted.append(event)
 
-    monkeypatch.setattr(agent_loop, "goal_enabled", lambda: True)
-    monkeypatch.setattr(agent_loop, "goal_manager_for", lambda _session_manager: Manager())
+    monkeypatch.setattr(_GOAL_RUNTIME, "goal_enabled", lambda: True)
+    monkeypatch.setattr(_GOAL_RUNTIME, "goal_manager_for", lambda _session_manager: Manager())
 
     result = asyncio.run(
-        agent_loop._pause_active_goal_for_hook(
+        goal_runtime._pause_active_goal_for_hook(
             {"session_id": "s1", "_runtime_v2_run_id": "run-1", "stream_events": []},
             "policy denied",
             emit,
@@ -177,7 +248,8 @@ def test_hook_stop_persists_goal_pause_and_pushes_live_state(monkeypatch):
     assert actions[0][1] == "pause"
     assert actions[0][2]["actor"] == "hook"
     assert actions[0][2]["reason"] == "hook:policy denied"
-    assert emitted[-1]["type"] == "goal_state"
+    assert emitted[-1]["type"] == "extension_state_changed"
+    assert emitted[-1]["plugin_id"] == "agent-goal"
 
 
 def test_pending_goal_judge_is_keyed_to_the_completion_request(monkeypatch):
@@ -215,8 +287,8 @@ def test_pending_goal_judge_is_keyed_to_the_completion_request(monkeypatch):
                 "accounted_judge_run_ids": [judge_run_id],
             }
 
-    monkeypatch.setattr(agent_loop, "goal_enabled", lambda: True)
-    monkeypatch.setattr(agent_loop, "goal_manager_for", lambda _session_manager: Manager())
+    monkeypatch.setattr(_GOAL_RUNTIME, "goal_enabled", lambda: True)
+    monkeypatch.setattr(_GOAL_RUNTIME, "goal_manager_for", lambda _session_manager: Manager())
     def evaluate_goal(_session_id, _goal, evidence):
         evaluated.append(evidence)
         return {
@@ -228,7 +300,7 @@ def test_pending_goal_judge_is_keyed_to_the_completion_request(monkeypatch):
 
     monkeypatch.setattr(agent_goal_judge, "evaluate_goal", evaluate_goal)
     monkeypatch.setattr(
-        agent_loop,
+        _GOAL_RUNTIME,
         "_load_goal_judge_dialogue_for_goal",
         lambda session_id, goal: [
             {
@@ -243,8 +315,13 @@ def test_pending_goal_judge_is_keyed_to_the_completion_request(monkeypatch):
         ] if session_id == "s1" and goal.get("id") == "g1" else [],
     )
 
+    emitted = []
+
+    async def emit(event):
+        emitted.append(event)
+
     goal, applied = asyncio.run(
-        agent_loop._run_pending_goal_judge(
+        goal_runtime._run_pending_goal_judge(
             {
                 "session_id": "s1",
                 "_runtime_v2_run_id": "run-7",
@@ -254,7 +331,8 @@ def test_pending_goal_judge_is_keyed_to_the_completion_request(monkeypatch):
                 "_goal_judge_prior_work_messages": [],
                 "work_messages": [],
                 "stream_events": [],
-            }
+            },
+            emit,
         )
     )
 
@@ -265,6 +343,15 @@ def test_pending_goal_judge_is_keyed_to_the_completion_request(monkeypatch):
     assert "recovered-dialogue-39" in evaluated[0]["goal_dialogue"]
     assert evaluated[0]["goal_dialogue"].count("recovered-dialogue-") == 40
     assert "next-run-question" not in evaluated[0]["goal_dialogue"]
+    review = next(
+        event
+        for event in emitted
+        if event["type"] == "extension_event" and event["event_name"] == "judge_result"
+    )
+    assert review["data"]["verdict"] == "continue"
+    assert review["data"]["reason"] == "Add the missing verification."
+    assert review["data"]["judge_run_id"] == "run-7:judge:request-2"
+    assert "ephemeral" not in review
 
 
 def test_goal_judge_reconstructs_complete_goal_lifecycle_across_runs(monkeypatch):
@@ -313,7 +400,7 @@ def test_goal_judge_reconstructs_complete_goal_lifecycle_across_runs(monkeypatch
     monkeypatch.setattr(agent_loop, "_runtime_v2_is_primary", lambda: True)
     monkeypatch.setattr(agent_loop, "_runtime_v2_react_history_ops", lambda: Ops())
 
-    rows = agent_loop._load_goal_judge_dialogue_for_goal("s1", {
+    rows = goal_runtime._load_goal_judge_dialogue_for_goal("s1", {
         "id": "g1",
         "origin_run_id": "origin-run",
         "completion_request_id": "request-2",
@@ -351,7 +438,7 @@ def test_applied_goal_judge_is_appended_to_current_model_history(monkeypatch):
             "last_judge_reason": "Run the end-to-end test.",
         }, True)
 
-    monkeypatch.setattr(agent_loop, "_run_pending_goal_judge", judge)
+    monkeypatch.setattr(_GOAL_RUNTIME, "_run_pending_goal_judge", judge)
     monkeypatch.setattr(
         agent_loop,
         "_persist_state_with_model_append",
@@ -363,7 +450,7 @@ def test_applied_goal_judge_is_appended_to_current_model_history(monkeypatch):
         "llm_history": [],
     }
 
-    asyncio.run(agent_loop._judge_pending_goal_and_append_context(state))
+    asyncio.run(goal_runtime._judge_pending_goal_and_append_context(state))
 
     assert len(state["work_messages"]) == 1
     assert state["work_messages"][0] is state["llm_history"][0]
@@ -392,13 +479,13 @@ def test_goal_judge_keeps_complete_goal_dialogue_beyond_recent_32(monkeypatch):
             content = f"assistant-message-{index}"
             message = AssistantMessage(content=content)
             kind = "response"
-        agent_loop._capture_goal_judge_dialogue(state, role, content, kind=kind)
+        goal_runtime._capture_goal_judge_dialogue(state, role, content, kind=kind)
         state["work_messages"].append(message)
         state["work_messages"].append(
             ToolMessage(content=f"tool-evidence-{index}", tool_call_id=f"tool-{index}")
         )
 
-    evidence = agent_loop._goal_judge_evidence(state)
+    evidence = goal_runtime._goal_judge_evidence(state)
 
     assert "user-message-0" in evidence["goal_dialogue"]
     assert "assistant-message-39" in evidence["goal_dialogue"]
@@ -493,7 +580,7 @@ def test_tool_review_context_keeps_all_followups_last_10_assistant_entries_and_a
         "options": {"recursive": False, "force": True},
     }
 
-    context = agent_loop._build_tool_review_context(
+    context = goal_runtime._build_tool_review_context(
         {"session_id": "s1", "_submitted_user_input": "wrong fallback"},
         arguments,
     )
@@ -538,9 +625,9 @@ def test_goal_control_forwards_budget_and_publishes_live_state(monkeypatch):
         published.append((session_id, event))
 
     monkeypatch.setattr(agent_goal, "manager_for", lambda _session_manager: Manager())
-    monkeypatch.setattr(webui, "publish_session_event", publish)
+    monkeypatch.setattr(goal_host, "publish_session_event", publish)
 
-    response = asyncio.run(webui.control_session_goal("s1", "resume", Request()))
+    response = asyncio.run(goal_host.control_goal(webui.session_manager, "s1", "resume", Request()))
     body = json.loads(response.body)
 
     assert response.status_code == 200
@@ -553,7 +640,8 @@ def test_goal_control_forwards_budget_and_publishes_live_state(monkeypatch):
         )
     ]
     assert published[0][0] == "s1"
-    assert published[0][1]["type"] == "goal_state"
+    assert published[0][1]["type"] == "extension_state_changed"
+    assert published[0][1]["plugin_id"] == "agent-goal"
 
 
 def test_goal_edit_and_delete_routes_publish_session_scoped_state(monkeypatch):
@@ -562,6 +650,7 @@ def test_goal_edit_and_delete_routes_publish_session_scoped_state(monkeypatch):
 
     calls = []
     published = []
+    interrupts = []
 
     class Manager:
         @staticmethod
@@ -588,21 +677,25 @@ def test_goal_edit_and_delete_routes_publish_session_scoped_state(monkeypatch):
         published.append((session_id, event))
 
     monkeypatch.setattr(agent_goal, "manager_for", lambda _session_manager: Manager())
-    monkeypatch.setattr(webui, "publish_session_event", publish)
-    monkeypatch.setattr(webui.session_manager, "request_interrupt", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(goal_host, "publish_session_event", publish)
+    monkeypatch.setattr(
+        webui.session_manager,
+        "request_interrupt",
+        lambda *args, **kwargs: interrupts.append((args, kwargs)),
+    )
 
-    edited = asyncio.run(webui.control_session_goal("s1", "edit", EditRequest()))
-    deleted = asyncio.run(webui.control_session_goal("s1", "delete", DeleteRequest()))
+    edited = asyncio.run(goal_host.control_goal(webui.session_manager, "s1", "edit", EditRequest()))
+    deleted = asyncio.run(goal_host.control_goal(webui.session_manager, "s1", "delete", DeleteRequest()))
     edited_body = json.loads(edited.body)
     deleted_body = json.loads(deleted.body)
 
     assert edited_body["goal"]["objective"] == "Edited objective"
     assert calls[0][2]["objective"] == "Edited objective"
-    assert published[0][1]["goal"]["id"] == "g1"
+    assert published[0][1]["action"] == "user_edit"
     assert deleted_body["goal"] is None
     assert published[1][0] == "s1"
-    assert published[1][1]["goal"] is None
-    assert published[1][1]["goal_event"] == "user_delete"
+    assert published[1][1]["action"] == "user_delete"
+    assert interrupts == []
 
 
 def test_goal_review_route_reopens_or_removes_completed_goal(monkeypatch):
@@ -648,7 +741,7 @@ def test_goal_review_route_reopens_or_removes_completed_goal(monkeypatch):
         published.append((session_id, event))
 
     monkeypatch.setattr(agent_goal, "manager_for", lambda _session_manager: Manager())
-    monkeypatch.setattr(webui, "publish_session_event", publish)
+    monkeypatch.setattr(goal_host, "publish_session_event", publish)
     monkeypatch.setattr(
         webui.session_manager,
         "clear_interrupt",
@@ -656,10 +749,10 @@ def test_goal_review_route_reopens_or_removes_completed_goal(monkeypatch):
     )
 
     continued = asyncio.run(
-        webui.control_session_goal("s1", "review", ContinueRequest())
+        goal_host.control_goal(webui.session_manager, "s1", "review", ContinueRequest())
     )
     approved = asyncio.run(
-        webui.control_session_goal("s1", "review", ApproveRequest())
+        goal_host.control_goal(webui.session_manager, "s1", "review", ApproveRequest())
     )
     continued_body = json.loads(continued.body)
     approved_body = json.loads(approved.body)
@@ -668,6 +761,6 @@ def test_goal_review_route_reopens_or_removes_completed_goal(monkeypatch):
     assert calls[0][1] == "continue"
     assert calls[0][2]["additional_budget"] == 50
     assert cleared == ["s1"]
-    assert published[0][1]["goal_event"] == "user_review_continue"
+    assert published[0][1]["action"] == "user_review_continue"
     assert approved_body["goal"] is None
-    assert published[1][1]["goal_event"] == "user_review_approve"
+    assert published[1][1]["action"] == "user_review_approve"

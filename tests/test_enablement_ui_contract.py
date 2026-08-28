@@ -88,11 +88,15 @@ def test_pending_followup_mode_uses_custom_picker_instead_of_native_select():
 
 def test_skill_picker_exposes_enablement_controls():
     picker = (ROOT / "frontend/src/app/modules/skill-picker.js").read_text(encoding="utf-8")
+    settings = (ROOT / "app/templates/advance_config.html").read_text(encoding="utf-8")
     styles = (ROOT / "frontend/src/styles/app.css").read_text(encoding="utf-8")
     i18n = (ROOT / "frontend/src/app/modules/i18n.js").read_text(encoding="utf-8")
     backend = (ROOT / "app/webui.py").read_text(encoding="utf-8")
 
     assert "skill-picker-toggle" in picker
+    assert "skill-toggle-action" in picker
+    assert "querySelectorAll('.skill-toggle-action')" in picker
+    assert "querySelectorAll('.skill-picker-toggle').forEach(function (button)" not in picker
     assert "setSkillPickerEnabled" in picker
     assert "reconcileSelectedSkillsWithEnabledCatalog" in picker
     assert "data-skill-picker-tab" in picker
@@ -111,6 +115,20 @@ def test_skill_picker_exposes_enablement_controls():
     assert "mcp-tool-toggle" in picker
     assert "setMcpToolEnabled" in picker
     assert "loadSkillPickerExtensions" in picker
+    assert "plugin-toggle-action" in picker
+    assert "plugin-state" in picker
+    assert "enabled ? '已启用' : '已禁用'" in picker
+    assert "toggleSkillPickerPlugin" in picker
+    assert "skillPickerPluginPageHref" in picker
+    assert "skillPickerOpenPageHtml" in picker
+    assert 'class="skill-picker-toggle plugin-toggle-action"' in picker
+    assert "plugin-open-action" in picker
+    assert 'plugin-open-action" href="' in picker
+    assert 'target="_blank" rel="noopener noreferrer"' in picker
+    assert "window.location.assign(link.href)" not in picker
+    assert "advanced-plugin-open' href='\"+esc(pageHref)+\"'" in settings
+    assert "advanced-plugin-open' href='\"+esc(pageHref)+\"' target='_blank'" not in settings
+    assert "'/api/plugins/' + encodeURIComponent(id) + '/enabled'" in picker
     assert '/api/mcp/tools' in picker
     assert '/api/extensions' in picker
     assert "skillPickerCollapsedGroups" in picker
@@ -122,6 +140,13 @@ def test_skill_picker_exposes_enablement_controls():
     assert ".skill-picker-group-items[hidden]" in styles
     assert ".skill-picker-group-summary.is-undiscovered" in styles
     assert ".mcp-server-register-btn" in styles
+    assert ".plugin-option-actions" in styles
+    assert ".plugin-option-actions .skill-picker-toggle" in styles
+    plugin_actions_css = styles[styles.index(".plugin-option-actions {"):styles.index(".plugin-option-actions .skill-picker-toggle")]
+    assert "opacity: 1;" in plugin_actions_css
+    assert "pointer-events: auto;" in plugin_actions_css
+    assert "pointer-events: none;" not in plugin_actions_css
+    assert ".plugin-option-action {" not in styles
     assert "grid-auto-rows: max-content" in styles
     assert "align-content: start" in styles
     assert "共 (\\d+) 个工具" in i18n
@@ -164,10 +189,11 @@ def test_ui_presence_tracks_foreground_state_and_attention_notifications():
     assert "show_desktop_notification" in notify
     assert "add_event_listener" in bus
 
-    # The production entrypoint replaces FastAPI's startup callbacks with a
-    # custom lifespan, so it must bind attention notifications explicitly.
+    # The production entrypoint replaces the app's default lifespan, so it
+    # must reuse the shared Web UI lifecycle explicitly.
     main = (ROOT / "app/main.py").read_text(encoding="utf-8")
     assert "initialize_ui_attention_notifications" in backend
     lifespan_start = main.index("async def lifespan(app: FastAPI):")
     lifespan_end = main.index("fastapi_app.router.lifespan_context = lifespan", lifespan_start)
-    assert "initialize_ui_attention_notifications()" in main[lifespan_start:lifespan_end]
+    assert "await start_webui_lifecycle()" in main[lifespan_start:lifespan_end]
+    assert "await stop_webui_lifecycle()" in main[lifespan_start:lifespan_end]

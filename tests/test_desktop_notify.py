@@ -97,11 +97,12 @@ def test_powershell_toast_has_no_action_button():
     assert "<action " not in source
 
 
-def test_toast_protocol_opens_webui_without_console_process():
+def test_toast_protocol_reuses_webui_through_windowless_tray_activation():
     source = desktop_notify._UI_CLOSED_TOAST_SCRIPT.read_text(encoding="utf-8")
 
-    assert 'System32\\rundll32.exe' in source
-    assert "url.dll,FileProtocolHandler" in source
+    assert 'python\\pythonw.exe' in source
+    assert 'app\\tray_launcher.py' in source
+    assert "--activate-ui" in source
     assert '$WebUiUrl = "http://127.0.0.1:8192/"' in source
     assert "powershell.exe -NoProfile" not in source
     assert "cmd.exe /c start" not in source

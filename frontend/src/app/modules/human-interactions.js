@@ -912,6 +912,7 @@ function createHumanApprovalCard(record, sessionId) {
     card.dataset.kind = 'approval';
     card.dataset.sessionId = sessionId;
     card.dataset.interactionId = String(record.approval_id || '');
+    card.dataset.rejectionReasonSuggestion = String(record.rejection_reason_suggestion || '').trim();
     appendHumanCardHeader(card, record, 'approval');
     var body = humanElement('div', 'human-card-body');
     if (record.subtitle) body.appendChild(humanElement('div', 'human-approval-subtitle', record.subtitle));
@@ -980,6 +981,18 @@ function createHumanApprovalCard(record, sessionId) {
     analysis.hidden = true;
     analysis.setAttribute('role', 'status');
     card.appendChild(analysis);
+    var rejectionEditor = humanElement('div', 'human-approval-rejection-editor');
+    rejectionEditor.hidden = true;
+    var rejectionLabel = humanElement('label', 'human-approval-rejection-label', '拒绝原因');
+    var rejectionInput = document.createElement('textarea');
+    rejectionInput.className = 'human-approval-rejection-input';
+    rejectionInput.rows = 3;
+    rejectionInput.maxLength = 2000;
+    rejectionInput.placeholder = '请填写拒绝原因，Agent 会根据原因调整后续操作';
+    rejectionLabel.appendChild(rejectionInput);
+    rejectionEditor.appendChild(rejectionLabel);
+    rejectionEditor.appendChild(humanElement('div', 'human-approval-rejection-hint', '拒绝原因会随审批结果返回给 Agent。'));
+    card.appendChild(rejectionEditor);
     var error = humanElement('div', 'human-card-error');
     error.setAttribute('role', 'alert');
     card.appendChild(error);
@@ -992,7 +1005,7 @@ function createHumanApprovalCard(record, sessionId) {
     var decisions = humanElement('div', 'human-approval-decisions');
     var deny = humanElement('button', 'human-secondary-btn human-deny-btn', '拒绝执行');
     deny.type = 'button';
-    deny.addEventListener('click', function () { void resolveHumanApproval(card, 'deny'); });
+    deny.addEventListener('click', function () { void requestHumanApprovalDenial(card); });
     decisions.appendChild(deny);
     if (!forced && record.allow_session_available !== false) {
         var durableRuleAvailable = !!record.allow_always_available && !!record.rule_pattern;
@@ -1061,6 +1074,13 @@ async function analyzeHumanApproval(card) {
             result.command_purpose,
             result.reason || '审查模型未提供理由。'
         );
+        if (!recommendAllow && result.available !== false && String(result.reason || '').trim()) {
+            card.dataset.rejectionReasonSuggestion = String(result.reason).trim();
+            var rejectionInput = card.querySelector('.human-approval-rejection-input');
+            if (rejectionInput && !String(rejectionInput.value || '').trim()) {
+                rejectionInput.value = card.dataset.rejectionReasonSuggestion;
+            }
+        }
         panel.appendChild(humanElement('div', 'human-approval-analysis-hint', '以上仅为分析建议，审批仍由你决定。'));
     } catch (err) {
         if (panel) panel.hidden = true;
@@ -1070,12 +1090,40 @@ async function analyzeHumanApproval(card) {
     }
 }
 
-async function resolveHumanApproval(card, decision) {
+async function requestHumanApprovalDenial(card) {
+    if (!card || card.dataset.submitting === '1') return;
+    var suggestedReason = String(card.dataset.rejectionReasonSuggestion || '').trim();
+    if (suggestedReason) {
+        await resolveHumanApproval(card, 'deny', suggestedReason);
+        return;
+    }
+    var editor = card.querySelector('.human-approval-rejection-editor');
+    var input = card.querySelector('.human-approval-rejection-input');
+    var deny = card.querySelector('.human-deny-btn');
+    if (editor && editor.hidden) {
+        editor.hidden = false;
+        if (deny) deny.textContent = '确认拒绝';
+        if (input) input.focus();
+        return;
+    }
+    var reason = String((input && input.value) || '').trim();
+    if (!reason) {
+        var error = card.querySelector('.human-card-error');
+        if (error) error.textContent = '请填写拒绝原因。';
+        if (input) input.focus();
+        return;
+    }
+    await resolveHumanApproval(card, 'deny', reason);
+}
+
+async function resolveHumanApproval(card, decision, rejectionReason) {
     if (!card || card.dataset.submitting === '1') return;
     setHumanInteractionSubmitting(card, true, '正在处理…');
     try {
+        var payload = { decision: decision };
+        if (decision === 'deny') payload.rejection_reason = String(rejectionReason || '').trim();
         var response = await fetch('/sessions/' + encodeURIComponent(card.dataset.sessionId) + '/approvals/' + encodeURIComponent(card.dataset.interactionId) + '/resolve', {
-            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ decision: decision }),
+            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
         });
         var data = await response.json();
         if (!response.ok || !data.ok) {
@@ -1121,6 +1169,13 @@ function createHumanTerminalCard(record, sessionId) {
                                 ? '当前任务内将自动允许同类操作和相同目标。'
                                 : '当前任务内将自动允许完全相同的请求。')
                             : '已允许这一次；执行后授权失效。'))));
+        if (record.decision === 'deny' && record.rejection_reason) {
+            summary.appendChild(humanElement(
+                'div',
+                'human-terminal-rejection-reason',
+                '拒绝原因：' + String(record.rejection_reason)
+            ));
+        }
     } else {
         var answers = Array.isArray(record.answers) ? record.answers : [];
         var questionsById = Object.create(null);

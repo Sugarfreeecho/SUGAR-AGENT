@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 
@@ -25,3 +26,15 @@ def test_execution_trace_rows_have_readable_text_weight_and_size() -> None:
     assert label_selector in styles
     assert "font-size: 0.69rem;\n    font-weight: 700;" in styles
     assert "color-mix(in srgb, var(--process-v2-text-muted) 72%, var(--process-v2-text))" in styles
+
+
+def test_goal_judge_result_has_a_dedicated_execution_trace_row() -> None:
+    dispatcher = (ROOT / "frontend/src/app/modules/event-dispatch.js").read_text(encoding="utf-8")
+    renderer = (ROOT / "frontend/src/app/modules/message-rendering.js").read_text(encoding="utf-8")
+    styles = (ROOT / "frontend/src/styles/app.css").read_text(encoding="utf-8")
+
+    manifest = json.loads((ROOT / "plugins/agent-goal/.myagent-plugin/plugin.json").read_text(encoding="utf-8"))
+    renderer_slot = manifest["capabilities"]["ui"]["message.renderer"][0]
+    assert renderer_slot["event_name"] == "judge_result"
+    assert "applyPluginExtensionEventView" in dispatcher
+    assert "renderPluginExtensionEvent" in dispatcher

@@ -198,10 +198,82 @@ def test_open_main_ui_falls_back_to_browser_without_live_page(monkeypatch):
     opened = []
     launcher._open_named_browser_window = lambda url: opened.append(url)
     monkeypatch.setattr(tray_launcher, "_request_existing_ui_activation", lambda _path: False)
+    monkeypatch.setattr(tray_launcher, "_focus_existing_webui_window", lambda: False)
 
     launcher._open_url("/", refresh=False)
 
     assert opened == [tray_launcher.BASE_URL + "/"]
+
+
+def test_open_main_ui_reuses_visible_window_before_presence_recovers(monkeypatch):
+    launcher = make_launcher()
+    launcher._is_listening = lambda: True
+    opened = []
+    launcher._open_named_browser_window = lambda url: opened.append(url)
+    monkeypatch.setattr(tray_launcher, "_request_existing_ui_activation", lambda _path: False)
+    monkeypatch.setattr(tray_launcher, "_focus_existing_webui_window", lambda: True)
+
+    launcher._open_url("/", refresh=True)
+
+    assert opened == []
+
+
+def test_external_ui_activation_delegates_to_resident_tray(monkeypatch):
+    events = []
+    monkeypatch.setattr(
+        tray_launcher,
+        "_notify_existing_instance",
+        lambda open_browser=True: events.append(("tray", open_browser)) or True,
+    )
+    monkeypatch.setattr(
+        tray_launcher,
+        "_request_existing_ui_activation",
+        lambda path: events.append(("request", path)) or False,
+    )
+    monkeypatch.setattr(
+        tray_launcher,
+        "_open_url_in_browser",
+        lambda *args, **kwargs: events.append(("open", args, kwargs)),
+    )
+
+    assert tray_launcher._activate_webui_from_external() is True
+    assert events == [("tray", True)]
+
+
+def test_external_ui_activation_reuses_page_without_tray(monkeypatch):
+    focused = []
+    opened = []
+    monkeypatch.setattr(tray_launcher, "_notify_existing_instance", lambda **_kwargs: False)
+    monkeypatch.setattr(tray_launcher, "_request_existing_ui_activation", lambda path: path == "/")
+    monkeypatch.setattr(
+        tray_launcher,
+        "_focus_existing_webui_window",
+        lambda: focused.append(True) or True,
+    )
+    monkeypatch.setattr(
+        tray_launcher,
+        "_open_url_in_browser",
+        lambda *args, **kwargs: opened.append((args, kwargs)),
+    )
+
+    assert tray_launcher._activate_webui_from_external() is True
+    assert focused == [True]
+    assert opened == []
+
+
+def test_external_ui_activation_opens_page_only_when_none_is_reusable(monkeypatch):
+    opened = []
+    monkeypatch.setattr(tray_launcher, "_notify_existing_instance", lambda **_kwargs: False)
+    monkeypatch.setattr(tray_launcher, "_request_existing_ui_activation", lambda _path: False)
+    monkeypatch.setattr(tray_launcher, "_focus_existing_webui_window", lambda: False)
+    monkeypatch.setattr(
+        tray_launcher,
+        "_open_url_in_browser",
+        lambda path, refresh=True: opened.append((path, refresh)),
+    )
+
+    assert tray_launcher._activate_webui_from_external() is False
+    assert opened == [("/", False)]
 
 
 def test_tray_information_is_delivered_as_system_notification(monkeypatch):

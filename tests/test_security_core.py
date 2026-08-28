@@ -135,22 +135,23 @@ def test_external_reads_are_allowed_by_default(tmp_path):
     assert decision.rule_id == "app_restricted.read"
 
 
-def test_workspace_soft_delete_is_allowed_but_external_delete_asks(tmp_path):
+def test_workspace_delete_is_ordinary_approval_but_external_delete_asks(tmp_path):
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     outside = tmp_path / "outside.txt"
     engine = PolicyEngine(workspace)
     context = PERMISSION_PRESETS[PermissionMode.ASK_FOR_APPROVAL]
 
-    # delete_file inside the workspace is a recoverable soft delete and is
-    # allowed like any other workspace write.
+    # Every workspace deletion is an ordinary yellow approval. It is not a
+    # red forced-confirmation category.
     decision = engine.decide(
         _request("fs.delete", workspace / "old.txt", "destructive"),
         context,
         sandbox_available=False,
     )
-    assert decision.outcome == DecisionOutcome.ALLOW
-    assert decision.rule_id == "app_restricted.delete"
+    assert decision.outcome == DecisionOutcome.ASK
+    assert decision.rule_id == "delete.workspace"
+    assert forced_approval_for(decision) is False
 
     # Permanent deletion outside the workspace still requires approval.
     decision = engine.decide(
@@ -280,6 +281,37 @@ def test_full_access_bypasses_workspace_policy(tmp_path):
     )
     assert decision.outcome == DecisionOutcome.ALLOW
     assert decision.rule_id == "preset.full_access"
+
+
+def test_full_access_preserves_process_safety_red_lines(tmp_path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    engine = PolicyEngine(workspace)
+    context = PERMISSION_PRESETS[PermissionMode.FULL_ACCESS]
+
+    self_kill = classify_tool(
+        "run_shell",
+        {"command": "Get-Process python | Stop-Process -Force"},
+        workspace,
+    )
+    self_kill_decision = engine.decide(self_kill, context)
+    assert self_kill.metadata["policy_change"] is True
+    assert self_kill_decision.outcome == DecisionOutcome.DENY
+    assert self_kill_decision.rule_id == "effect.policy_change.deny"
+
+    destructive = classify_tool(
+        "run_shell", {"command": "format C:"}, workspace
+    )
+    destructive_decision = engine.decide(destructive, context)
+    assert destructive.metadata["destructive"] is True
+    assert destructive_decision.outcome == DecisionOutcome.ASK
+    assert destructive_decision.rule_id == "process.destructive"
+    assert forced_approval_for(destructive_decision) is True
+
+    ordinary = classify_tool("run_shell", {"command": "echo ok"}, workspace)
+    ordinary_decision = engine.decide(ordinary, context)
+    assert ordinary_decision.outcome == DecisionOutcome.ALLOW
+    assert ordinary_decision.rule_id == "preset.full_access"
 
 
 def test_allow_once_grant_is_atomically_consumed(tmp_path):
@@ -499,6 +531,34 @@ def test_security_env_switch_forces_full_access_without_overwriting_saved_mode(t
     assert session_permission_mode("any-session") == PermissionMode.APPROVE_FOR_ME
 
 
+def test_security_env_switch_cannot_disable_process_safety_red_lines(
+    tmp_path, monkeypatch
+):
+    _isolated_security_store(tmp_path, monkeypatch)
+    monkeypatch.setenv("SECURITY_ENABLED", "0")
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    _, self_kill, self_kill_context = authorize_tool(
+        session_id="session",
+        tool_name="run_shell",
+        arguments={"command": "taskkill /IM python.exe /T /F"},
+        workspace=workspace,
+    )
+    assert self_kill_context.mode == PermissionMode.FULL_ACCESS
+    assert self_kill.outcome == DecisionOutcome.DENY
+    assert self_kill.rule_id == "effect.policy_change.deny"
+
+    _, destructive, destructive_context = authorize_tool(
+        session_id="session",
+        tool_name="run_shell",
+        arguments={"command": "format C:"},
+        workspace=workspace,
+    )
+    assert destructive_context.mode == PermissionMode.FULL_ACCESS
+    assert destructive.outcome == DecisionOutcome.ASK
+    assert destructive.rule_id == "process.destructive"
+
 def test_security_env_switch_only_zero_disables(monkeypatch):
     from security.runtime import security_enabled
 
@@ -599,38 +659,19 @@ def test_reviewer_recovers_on_second_attempt(monkeypatch):
 
 def test_reviewer_uses_the_current_session_model_profile(monkeypatch):
     import agent_harness
-    import agent_openai
     from security import reviewer as reviewer_module
 
-    selected_client = object()
     captured = {}
 
-    def resolve(session_id):
-        captured["session_id"] = session_id
-        return selected_client, "session-selected-model", 2048, 32768
+    def complete(messages, **kwargs):
+        captured.update(messages=messages, **kwargs)
+        return {"text": (
+            '{"decision":"approve","risk":"low",'
+            '"risk_analysis":"只读取时间，不修改系统。",'
+            '"command_purpose":"读取当前日期时间，用于回答用户。"}'
+        )}
 
-    def complete(client, model, messages, **kwargs):
-        captured.update(
-            client=client,
-            model=model,
-            max_tokens=kwargs["max_tokens"],
-        )
-        message = type(
-            "Message",
-            (),
-            {
-                "content": (
-                    '{"decision":"approve","risk":"low",'
-                    '"risk_analysis":"只读取时间，不修改系统。",'
-                    '"command_purpose":"读取当前日期时间，用于回答用户。"}'
-                )
-            },
-        )()
-        choice = type("Choice", (), {"message": message, "finish_reason": "stop"})()
-        return type("Response", (), {"choices": [choice]})()
-
-    monkeypatch.setattr(agent_harness, "resolve_executor_config_for_session", resolve)
-    monkeypatch.setattr(agent_openai, "chat_completion", complete)
+    monkeypatch.setattr(agent_harness, "executor_one_shot_complete", complete)
 
     result = reviewer_module._review_with_model(
         _request("process.exec", "date", "workspace_write"),
@@ -645,37 +686,30 @@ def test_reviewer_uses_the_current_session_model_profile(monkeypatch):
         "【命令风险】只读取时间，不修改系统。\n"
         "【命令目的】读取当前日期时间，用于回答用户。"
     )
-    assert captured == {
-        "session_id": "session-with-nonfirst-profile",
-        "client": selected_client,
-        "model": "session-selected-model",
-        "max_tokens": 2048,
-    }
+    assert captured["session_id"] == "session-with-nonfirst-profile"
+    assert captured["purpose"].value == "security_review"
+    assert captured["temperature"] == 0
+    assert "max_tokens" not in captured
+    assert captured["timeout"] == reviewer_module._REVIEWER_TIMEOUT_SECONDS
+    assert callable(captured["response_validator"])
+    assert captured["include_candidate_controls"] is False
 
 
 def test_reviewer_prompt_includes_full_frozen_tool_context(monkeypatch):
     import agent_harness
-    import agent_openai
     from security import reviewer as reviewer_module
 
     captured = {}
-    monkeypatch.setattr(
-        agent_harness,
-        "resolve_executor_config_for_session",
-        lambda _session_id: (object(), "review-model", 2048, 32768),
-    )
 
-    def complete(_client, _model, messages, **_kwargs):
+    def complete(messages, **_kwargs):
         captured["prompt"] = json.loads(messages[1].content)
-        message = type("Message", (), {"content": (
+        return {"text": (
             '{"decision":"approve","risk":"low",'
             '"risk_analysis":"参数与用户请求一致。",'
             '"command_purpose":"执行用户要求的操作。"}'
-        )})()
-        choice = type("Choice", (), {"message": message, "finish_reason": "stop"})()
-        return type("Response", (), {"choices": [choice]})()
+        )}
 
-    monkeypatch.setattr(agent_openai, "chat_completion", complete)
+    monkeypatch.setattr(agent_harness, "executor_one_shot_complete", complete)
     long_value = "x" * 5000
     context = {
         "initial_user_question": "最初问题",
@@ -850,10 +884,13 @@ def test_shell_file_deletion_is_classified_as_destructive(tmp_path):
         PERMISSION_PRESETS[PermissionMode.ASK_FOR_APPROVAL],
     )
     assert request.metadata["destructive"] is True
+    assert request.metadata["workspace_delete"] is True
     assert decision.outcome == DecisionOutcome.ASK
+    assert decision.rule_id == "process.workspace_delete"
+    assert forced_approval_for(decision) is False
 
 
-def test_apply_patch_delete_section_inside_workspace_is_allowed(tmp_path):
+def test_apply_patch_delete_section_inside_workspace_is_ordinary_approval(tmp_path):
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     request = classify_tool(
@@ -866,8 +903,9 @@ def test_apply_patch_delete_section_inside_workspace_is_allowed(tmp_path):
         PERMISSION_PRESETS[PermissionMode.ASK_FOR_APPROVAL],
     )
     assert request.action == "fs.delete"
-    assert decision.outcome == DecisionOutcome.ALLOW
-    assert decision.rule_id == "app_restricted.delete"
+    assert decision.outcome == DecisionOutcome.ASK
+    assert decision.rule_id == "delete.workspace"
+    assert forced_approval_for(decision) is False
 
     # Deleting a file outside the workspace via apply_patch still asks.
     outside = tmp_path / "outside.txt"
@@ -1245,6 +1283,99 @@ def test_dynamic_shell_is_ordinary_approval_and_session_grantable(tmp_path, monk
     assert repeated.rule_id == "grant.session"
 
 
+def test_workspace_shell_delete_is_yellow_and_session_grantable(
+    tmp_path, monkeypatch
+):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    _isolated_security_store(tmp_path, monkeypatch)
+
+    request, first, _ = authorize_tool(
+        session_id="session",
+        tool_name="run_shell",
+        arguments={"command": "rm -rf old-output"},
+        workspace=workspace,
+    )
+    assert request.metadata["workspace_delete"] is True
+    assert first.outcome == DecisionOutcome.ASK
+    assert first.rule_id == "process.workspace_delete"
+    assert forced_approval_for(first) is False
+    assert always_ask_for(first) is False
+
+    add_approval_grant("session", first.request_digest, "allow_session")
+    _, repeated, _ = authorize_tool(
+        session_id="session",
+        tool_name="run_shell",
+        arguments={"command": "rm -rf old-output"},
+        workspace=workspace,
+    )
+    assert repeated.outcome == DecisionOutcome.ALLOW
+    assert repeated.rule_id == "grant.session"
+
+
+def test_full_access_does_not_prompt_for_workspace_delete(tmp_path, monkeypatch):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    store = _isolated_security_store(tmp_path, monkeypatch)
+    store.set_global_permission_mode("full_access")
+
+    request, decision, _ = authorize_tool(
+        session_id="session",
+        tool_name="run_shell",
+        arguments={"command": "rm -rf old-output"},
+        workspace=workspace,
+    )
+    assert request.metadata["workspace_delete"] is True
+    assert decision.outcome == DecisionOutcome.ALLOW
+    assert decision.rule_id == "preset.full_access"
+
+    _, file_delete, _ = authorize_tool(
+        session_id="session",
+        tool_name="delete_file",
+        arguments={"path": str(workspace / "old.txt")},
+        workspace=workspace,
+    )
+    assert file_delete.outcome == DecisionOutcome.ALLOW
+    assert file_delete.rule_id == "preset.full_access"
+
+
+def test_shell_delete_outside_workspace_stays_forced(tmp_path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    outside = (tmp_path / "outside" / "old-output").resolve()
+    request = classify_tool(
+        "run_shell",
+        {"command": f'rm -rf "{outside.as_posix()}"'},
+        workspace,
+    )
+    decision = PolicyEngine(workspace).decide(
+        request,
+        PERMISSION_PRESETS[PermissionMode.ASK_FOR_APPROVAL],
+    )
+    assert request.metadata["external_workspace"] is True
+    assert request.metadata["workspace_delete"] is False
+    assert decision.rule_id == "process.destructive"
+    assert forced_approval_for(decision) is True
+
+
+def test_workspace_delete_compounded_with_non_delete_danger_stays_forced(tmp_path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    request = classify_tool(
+        "run_shell",
+        {"command": "rm -rf old-output && reboot"},
+        workspace,
+    )
+    decision = PolicyEngine(workspace).decide(
+        request,
+        PERMISSION_PRESETS[PermissionMode.ASK_FOR_APPROVAL],
+    )
+    assert request.metadata["deletion"] is True
+    assert request.metadata["workspace_delete"] is False
+    assert decision.rule_id == "process.destructive"
+    assert forced_approval_for(decision) is True
+
+
 def test_dangerous_command_accepts_one_atomic_human_grant(tmp_path, monkeypatch):
     workspace = tmp_path / "workspace"
     workspace.mkdir()
@@ -1254,7 +1385,7 @@ def test_dangerous_command_accepts_one_atomic_human_grant(tmp_path, monkeypatch)
     _, first, _ = authorize_tool(
         session_id="session",
         tool_name="run_shell",
-        arguments={"command": "rm -rf old.txt"},
+        arguments={"command": "format C:"},
         workspace=workspace,
     )
     assert first.outcome == DecisionOutcome.ASK
@@ -1265,7 +1396,7 @@ def test_dangerous_command_accepts_one_atomic_human_grant(tmp_path, monkeypatch)
     _, second, _ = authorize_tool(
         session_id="session",
         tool_name="run_shell",
-        arguments={"command": "rm -rf old.txt"},
+        arguments={"command": "format C:"},
         workspace=workspace,
     )
     assert second.outcome == DecisionOutcome.ALLOW
@@ -1274,7 +1405,44 @@ def test_dangerous_command_accepts_one_atomic_human_grant(tmp_path, monkeypatch)
     _, third, _ = authorize_tool(
         session_id="session",
         tool_name="run_shell",
-        arguments={"command": "rm -rf old.txt"},
+        arguments={"command": "format C:"},
+        workspace=workspace,
+    )
+    assert third.outcome == DecisionOutcome.ASK
+    assert third.rule_id == "process.destructive"
+
+
+def test_full_access_dangerous_command_still_consumes_one_atomic_grant(
+    tmp_path, monkeypatch
+):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    store = _isolated_security_store(tmp_path, monkeypatch)
+    store.set_global_permission_mode("full_access")
+
+    _, first, _ = authorize_tool(
+        session_id="session",
+        tool_name="run_shell",
+        arguments={"command": "format C:"},
+        workspace=workspace,
+    )
+    assert first.outcome == DecisionOutcome.ASK
+    assert first.rule_id == "process.destructive"
+
+    add_approval_grant("session", first.request_digest, "allow_once")
+    _, second, _ = authorize_tool(
+        session_id="session",
+        tool_name="run_shell",
+        arguments={"command": "format C:"},
+        workspace=workspace,
+    )
+    assert second.outcome == DecisionOutcome.ALLOW
+    assert second.rule_id == "grant.once"
+
+    _, third, _ = authorize_tool(
+        session_id="session",
+        tool_name="run_shell",
+        arguments={"command": "format C:"},
         workspace=workspace,
     )
     assert third.outcome == DecisionOutcome.ASK
@@ -1533,12 +1701,12 @@ def test_dangerous_command_ignores_allow_rule(tmp_path, monkeypatch):
     from security import add_permission_rule
 
     add_permission_rule(
-        behavior="allow", action="process.exec", pattern="rm -rf:*"
+        behavior="allow", action="process.exec", pattern="format:*"
     )
     _, decision, _ = authorize_tool(
         session_id="session",
         tool_name="run_shell",
-        arguments={"command": "rm -rf old.txt"},
+        arguments={"command": "format C:"},
         workspace=workspace,
     )
     assert decision.outcome == DecisionOutcome.ASK

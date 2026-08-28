@@ -430,7 +430,10 @@ def test_delete_session_removes_subagent_descendants_and_index(tmp_path, monkeyp
     for sid in (root_id, other_id):
         path = sessions_dir / sid
         path.mkdir(parents=True)
-        (path / "metadata.json").write_text("{}", encoding="utf-8")
+        (path / "metadata.json").write_text(
+            json.dumps({"name": sid}),
+            encoding="utf-8",
+        )
     nested_child = sessions_dir / root_id / "subagents" / child_id
     nested_grandchild = nested_child / "subagents" / grandchild_id
     nested_grandchild.mkdir(parents=True)
@@ -502,27 +505,28 @@ def test_delete_tombstone_prevents_failed_rmtree_from_resurrecting_session(tmp_p
 
 def test_runtime_v2_clear_todo_writes_empty_snapshot(tmp_path):
     import agent_harness
-    from runtime_v2 import RuntimeHistoryOps, SnapshotStore
+    from runtime_v2 import SnapshotStore
+    from session_todo_extension import write_todo_extension
 
-    ops = RuntimeHistoryOps(tmp_path)
-    ops._append_and_snapshot("s1", "todo_updated", {
-        "has_plan": True,
-        "items": [{"id": "1", "text": "todo", "status": "pending"}],
-        "done": 0,
-        "total": 1,
-    })
     mgr = _manager_with(
         repository=_Repository(tmp_path),
         _runtime_v2_primary=lambda: True,
     )
+    (tmp_path / "s1").mkdir()
+    write_todo_extension(
+        mgr,
+        "s1",
+        [{"id": "1", "text": "todo", "status": "pending"}],
+    )
 
     changed = agent_harness.SessionManager.clear_todo_plan(mgr, "s1")
-    todo = SnapshotStore(tmp_path).read("s1")["todo"]
+    snapshot = SnapshotStore(tmp_path).read("s1")
 
     assert changed is True
-    assert todo["has_plan"] is False
-    assert todo["items"] == []
-    assert todo["cleared"] is True
+    extension = snapshot["extensions"]["session-todo"]["plan"]
+    assert extension["revision"] == 2
+    assert extension["value"]["items"] == []
+    assert extension["value"]["cleared"] is True
 
 
 def test_runtime_v2_repair_and_reconcile_skip_legacy_rebuilds():

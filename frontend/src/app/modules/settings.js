@@ -35,84 +35,6 @@ const LS_SESSION_LIST_MODE = 'myagent-session-list-mode';
 /** 三档 root 字号(px)：在「降一档」基准上整体 ×1.2 */
 const UI_FONT_PX = [14, 16, 17];
 var settingsModalKeyHandler = null;
-var agentTeamFeatureSaving = false;
-
-function setAgentTeamFeatureUi(enabled, options) {
-    options = options || {};
-    var off = document.getElementById('settings-agent-team-off');
-    var on = document.getElementById('settings-agent-team-on');
-    var status = document.getElementById('settings-agent-team-status');
-    var manage = document.getElementById('settings-agent-team-manage');
-    var known = typeof enabled === 'boolean';
-    if (off) {
-        off.classList.toggle('is-active', known && !enabled);
-        off.disabled = !!options.busy;
-    }
-    if (on) {
-        on.classList.toggle('is-active', known && enabled);
-        on.disabled = !!options.busy;
-    }
-    if (status) {
-        status.classList.toggle('is-error', !!options.error);
-        if (options.message) status.textContent = options.message;
-        else if (options.busy) status.textContent = '正在保存…';
-        else if (enabled) status.textContent = '已启用；Agent Team 入口和团队运行时可用。';
-        else if (known) status.textContent = '已关闭；现有 task/subagent 行为不受影响。';
-        else status.textContent = '正在读取状态…';
-    }
-    if (manage) manage.disabled = !known || !enabled || !!options.busy;
-}
-
-async function refreshAgentTeamFeature() {
-    setAgentTeamFeatureUi(null, { busy: agentTeamFeatureSaving });
-    try {
-        var response = await fetch('/api/features/agent-team', { cache: 'no-store' });
-        var data = await response.json();
-        if (!response.ok || !data || data.ok !== true) {
-            throw new Error((data && data.error) || ('HTTP ' + response.status));
-        }
-        window.__MYAGENT_FEATURES__ = window.__MYAGENT_FEATURES__ || {};
-        window.__MYAGENT_FEATURES__.agentTeam = data.enabled === true;
-        setAgentTeamFeatureUi(data.enabled === true);
-    } catch (error) {
-        setAgentTeamFeatureUi(null, {
-            error: true,
-            message: '读取失败：' + String(error && error.message ? error.message : error),
-        });
-    }
-}
-
-async function saveAgentTeamFeature(enabled) {
-    if (agentTeamFeatureSaving) return;
-    agentTeamFeatureSaving = true;
-    setAgentTeamFeatureUi(enabled, { busy: true });
-    try {
-        var response = await fetch('/api/features/agent-team', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ enabled: enabled === true }),
-        });
-        var data = await response.json();
-        if (!response.ok || !data || data.ok !== true) {
-            throw new Error((data && data.error) || ('HTTP ' + response.status));
-        }
-        window.__MYAGENT_FEATURES__ = window.__MYAGENT_FEATURES__ || {};
-        window.__MYAGENT_FEATURES__.agentTeam = data.enabled === true;
-        setAgentTeamFeatureUi(data.enabled === true);
-    } catch (error) {
-        setAgentTeamFeatureUi(null, {
-            error: true,
-            message: '保存失败：' + String(error && error.message ? error.message : error),
-        });
-    } finally {
-        agentTeamFeatureSaving = false;
-        var off = document.getElementById('settings-agent-team-off');
-        var on = document.getElementById('settings-agent-team-on');
-        if (off) off.disabled = false;
-        if (on) on.disabled = false;
-    }
-}
-
 function getStoredFontLevel() {
     var n = parseInt(localStorage.getItem(LS_UI_FONT), 10);
     if (isNaN(n) || n < 0 || n > 2) return 1;
@@ -194,7 +116,6 @@ function openSettingsModal() {
     var panel = root && root.querySelector('.settings-modal');
     if (!root || !panel) return;
     syncSettingsModalForm();
-    void refreshAgentTeamFeature();
     root.classList.add('is-open');
     root.setAttribute('aria-hidden', 'false');
     document.body.style.overflow = 'hidden';
@@ -251,15 +172,6 @@ function initUiSettingsControls() {
     var sd = document.getElementById('settings-session-detailed');
     if (sc) sc.addEventListener('click', function () { applySessionListMode('compact', true); });
     if (sd) sd.addEventListener('click', function () { applySessionListMode('detailed', true); });
-    var agentTeamOff = document.getElementById('settings-agent-team-off');
-    var agentTeamOn = document.getElementById('settings-agent-team-on');
-    if (agentTeamOff) agentTeamOff.addEventListener('click', function () { void saveAgentTeamFeature(false); });
-    if (agentTeamOn) agentTeamOn.addEventListener('click', function () { void saveAgentTeamFeature(true); });
-    var agentTeamManage = document.getElementById('settings-agent-team-manage');
-    if (agentTeamManage) agentTeamManage.addEventListener('click', function () {
-        closeSettingsModal();
-        if (typeof openAgentTeamModal === 'function') void openAgentTeamModal();
-    });
     var languageBtn = document.getElementById('sidebar-language-btn');
     if (languageBtn) {
         languageBtn.addEventListener('click', function () {

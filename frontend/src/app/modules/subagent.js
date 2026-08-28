@@ -517,6 +517,18 @@ function toggleSubagentCardExpanded(card) {
     setSubagentCardExpanded(card, !card.classList.contains('is-expanded'));
 }
 
+function subagentEventSmoothFollowChannel(event) {
+    var type = String((event && event.type) || '');
+    return (
+        type === 'llm_reasoning_delta'
+        || type === 'llm_response_delta'
+        || type === 'context_summary_delta'
+        || type === 'key_context_delta'
+        || type === 'tool_call_delta'
+        || type === 'tool_command_delta'
+    ) ? 'text' : 'row';
+}
+
 function appendSubagentStreamEvent(agentId, event, eventIndex) {
     if (!agentId || !event || typeof event !== 'object') return false;
     var t = event.type;
@@ -635,14 +647,14 @@ function appendSubagentStreamEvent(agentId, event, eventIndex) {
         markSubagentTurnHasProcess(ctx.currentTurn);
         bumpSubagentCardEventCount(agentId, eventIndex, false);
         scheduleSubagentCardStats(card);
-        followStreamProcessScroll(ctx, agentId);
+        followStreamProcessScroll(ctx, agentId, subagentEventSmoothFollowChannel(event));
         return true;
     } else {
         dispatchSubagentCardEvent(ctx, card, event, eventIndex, agentId);
     }
     bumpSubagentCardEventCount(agentId, eventIndex, true);
     scheduleSubagentCardStats(card);
-    followStreamProcessScroll(ctx, agentId);
+    followStreamProcessScroll(ctx, agentId, subagentEventSmoothFollowChannel(event));
     return true;
 }
 

@@ -51,10 +51,7 @@ export default defineConfig({
     emptyOutDir: true,
     reportCompressedSize: false,
     rollupOptions: {
-      input: {
-        main: resolve(__dirname, 'index.html'),
-        executionDashboard: resolve(__dirname, 'execution-dashboard.html'),
-      },
+      input: { main: resolve(__dirname, 'index.html') },
     },
   },
   server: {

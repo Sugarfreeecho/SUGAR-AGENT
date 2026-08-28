@@ -12,39 +12,37 @@ if str(APP_DIR) not in sys.path:
 
 
 def _team_definition():
-    from agent_tools import OPENAI_TOOL_DEFINITIONS
+    from agent_extensions import bundled_host_tool_definitions
 
     return next(
         row
-        for row in OPENAI_TOOL_DEFINITIONS
+        for row in bundled_host_tool_definitions(session_meta={})
         if (row.get("function") or {}).get("name") == "team"
     )
 
 
 def test_team_tool_schema_and_feature_gate_are_wired():
-    from agent_subagent import filter_tools_for_session
+    from agent_extensions import bundled_host_tool_definitions
 
     definition = _team_definition()
     actions = definition["function"]["parameters"]["properties"]["action"]["enum"]
     assert {"create", "spawn_member", "dispatch", "send_message", "shutdown"} <= set(actions)
 
-    assert definition in filter_tools_for_session([definition], {})
-    assert definition not in filter_tools_for_session(
-        [definition], {"is_subagent": True, "subagent_type": "generalPurpose"}
-    )
-    assert definition in filter_tools_for_session(
-        [definition],
-        {
-            "is_subagent": True,
-            "subagent_type": "generalPurpose",
-            "agent_team_member_id": "member_1",
-        },
-    )
+    assert not any((row.get("function") or {}).get("name") == "team" for row in
+        bundled_host_tool_definitions(session_meta={"is_subagent": True, "subagent_type": "generalPurpose"}))
+    assert any((row.get("function") or {}).get("name") == "team" for row in
+        bundled_host_tool_definitions(session_meta={
+                "is_subagent": True,
+                "subagent_type": "generalPurpose",
+                "agent_team_member_id": "member_1",
+        }))
 
     loop = (APP_DIR / "agent_loop.py").read_text(encoding="utf-8")
-    assert "if not agent_team_enabled():" in loop
-    assert 'if tool_name == "team":' in loop
-    assert '"tool_team"' in loop
+    assert "agent_team" not in loop
+    host_tools = (APP_DIR / "builtin_host_tools.py").read_text(encoding="utf-8")
+    assert '_invoke_team' not in host_tools
+    assert '"task",\n            _invoke_task' in host_tools
+    assert '_invoke_team' in (ROOT / "plugins/agent-team/host.py").read_text(encoding="utf-8")
 
 
 def test_team_tool_uses_session_derived_identity(tmp_path, monkeypatch):

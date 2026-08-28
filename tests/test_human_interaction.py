@@ -84,6 +84,37 @@ def test_approval_review_context_lives_only_while_approval_is_pending():
     asyncio.run(flow())
 
 
+def test_approval_gate_returns_rejection_reason_to_waiting_agent():
+    from app.tool_approval_gate import (
+        resolve_tool_approval,
+        wait_tool_ui_approval_after_emit,
+    )
+
+    async def flow():
+        waiter = asyncio.create_task(
+            wait_tool_ui_approval_after_emit(
+                "reason-session",
+                "reason-approval",
+                lambda: asyncio.sleep(0),
+                return_resolution=True,
+            )
+        )
+        await asyncio.sleep(0.05)
+        assert resolve_tool_approval(
+            "reason-session",
+            "reason-approval",
+            False,
+            "目标目录不正确，请先检查路径。",
+        ) is True
+        return await waiter
+
+    assert asyncio.run(flow()) == {
+        "approved": False,
+        "decision": "deny",
+        "rejection_reason": "目标目录不正确，请先检查路径。",
+    }
+
+
 @pytest.fixture(autouse=True)
 def _enable_ask_user_for_interaction_tests(monkeypatch):
     monkeypatch.setenv("ASK_USER_ENABLED", "1")
@@ -246,9 +277,11 @@ def test_ask_user_switch_defaults_enabled(monkeypatch):
 
 
 def test_agent_loop_filters_ask_user_tool_when_switch_is_disabled():
-    source = (Path(__file__).resolve().parents[1] / "app/agent_loop.py").read_text(encoding="utf-8")
-    assert "if not ask_user_enabled():" in source
-    assert ') != "ask_user"' in source
+    root = Path(__file__).resolve().parents[1]
+    source = (root / "app/builtin_host_tools.py").read_text(encoding="utf-8")
+    loop = (root / "app/agent_loop.py").read_text(encoding="utf-8")
+    assert "enabled=ask_user_enabled" in source
+    assert "ask_user_enabled" not in loop
 
 
 def test_approval_is_durable_and_terminal_transition_is_idempotent(tmp_path):
@@ -267,6 +300,41 @@ def test_approval_is_durable_and_terminal_transition_is_idempotent(tmp_path):
     assert resolved["decision"] == "allow_once"
     assert duplicate["decision"] == "allow_once"
     assert service.pending_counts("session-1")["total"] == 0
+
+
+def test_denied_approval_persists_rejection_reason(tmp_path):
+    service = _service(tmp_path)
+    service.create_approval(
+        "session-1",
+        approval_id="approval-denied",
+        metadata={"tool": "run_shell"},
+    )
+
+    resolved = service.resolve_approval(
+        "session-1",
+        "approval-denied",
+        "deny",
+        rejection_reason="命令会覆盖仍需保留的文件。",
+    )
+
+    assert resolved["decision"] == "deny"
+    assert resolved["rejection_reason"] == "命令会覆盖仍需保留的文件。"
+
+
+def test_rejection_reason_is_rejected_for_allow_decision(tmp_path):
+    service = _service(tmp_path)
+    service.create_approval("session-1", approval_id="approval-allowed")
+
+    with pytest.raises(
+        HumanInteractionValidationError,
+        match="only valid when decision is deny",
+    ):
+        service.resolve_approval(
+            "session-1",
+            "approval-allowed",
+            "allow_once",
+            rejection_reason="不应出现在允许决定中",
+        )
 
 
 def test_dangerous_approval_rejects_session_and_always_grants(tmp_path):
@@ -417,6 +485,10 @@ def test_frontend_human_interaction_contract_is_wired():
     assert "本次允许" in module
     assert "替我分析" in module
     assert "analyzeHumanApproval(card)" in module
+    assert "requestHumanApprovalDenial(card)" in module
+    assert "payload.rejection_reason = String(rejectionReason || '').trim()" in module
+    assert "请填写拒绝原因。" in module
+    assert "拒绝原因会随审批结果返回给 Agent。" in module
     assert "/analyze'" in module
     assert "以上仅为分析建议，审批仍由你决定。" in module
     assert "human-always-btn', '始终允许'" in module
@@ -710,6 +782,92 @@ def test_workspace_scope_resolution_reprompts_tool_without_approving_it(
         assert global_grants == [{"allow_external_workspace_ops": True}]
 
 
+def test_denial_resolution_returns_reason_to_agent_waiter(monkeypatch):
+    import json
+
+    import human_interaction
+    import tool_approval_gate
+    import webui
+
+    class Request:
+        headers = {}
+
+        async def json(self):
+            return {
+                "decision": "deny",
+                "rejection_reason": "请改用只读命令。",
+            }
+
+    class Service:
+        def resolve_approval(
+            self,
+            session_id,
+            approval_id,
+            decision,
+            *,
+            resolver,
+            rejection_reason,
+        ):
+            assert (session_id, approval_id, decision) == (
+                "deny-session",
+                "deny-approval",
+                "deny",
+            )
+            assert rejection_reason == "请改用只读命令。"
+            return {
+                "approval_id": approval_id,
+                "status": "resolved",
+                "decision": "deny",
+                "rejection_reason": rejection_reason,
+                "security_request_digest": "sha256:test",
+            }
+
+    resolutions = []
+    monkeypatch.setattr(
+        human_interaction,
+        "get_human_interaction_service",
+        lambda: Service(),
+    )
+    monkeypatch.setattr(
+        tool_approval_gate,
+        "has_live_approval_waiter",
+        lambda *_args: True,
+    )
+    monkeypatch.setattr(
+        tool_approval_gate,
+        "resolve_tool_approval",
+        lambda session_id, approval_id, approved, reason="": resolutions.append(
+            (session_id, approval_id, approved, reason)
+        )
+        or True,
+    )
+
+    async def ignore_event(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(webui, "publish_session_event", ignore_event)
+
+    response = asyncio.run(
+        webui.resolve_session_approval(
+            "deny-session",
+            "deny-approval",
+            Request(),
+        )
+    )
+    payload = json.loads(response.body)
+
+    assert payload["ok"] is True
+    assert payload["approval"]["rejection_reason"] == "请改用只读命令。"
+    assert resolutions == [
+        (
+            "deny-session",
+            "deny-approval",
+            False,
+            "请改用只读命令。",
+        )
+    ]
+
+
 def test_tool_pending_is_emitted_before_approval_dialog():
     """The tool row must exist before the approval card renders so the card
     anchors inside the row instead of jumping from the bottom of the stream."""
@@ -721,7 +879,9 @@ def test_tool_pending_is_emitted_before_approval_dialog():
     approval_wait = core.index("wait_tool_ui_approval_after_emit(")
     assert pending_call < approval_wait
     pre_approval = core[: core.index("if sec_decision.outcome == DecisionOutcome.ASK or hook_approval_spec:")]
-    assert 'tool_name != "context_manage"' in pre_approval
+    assert "tool_descriptor.emit_pending" in pre_approval
+    host_tools = (root / "app/builtin_host_tools.py").read_text(encoding="utf-8")
+    assert '"context_manage",\n            _invoke_context_manage,\n            emit_pending=False' in host_tools
     assert 'tool_name not in ("context_manage", "ask_user")' not in pre_approval
     # The old post-approval emit was removed in favor of the pre-approval row.
     assert "Arguments are closed and any required approval has completed" not in source
@@ -765,7 +925,7 @@ def test_approval_card_is_not_emitted_when_durable_persistence_fails(monkeypatch
     )
 
 
-def test_pending_approval_refresh_restores_card_badge_and_banner_contract(tmp_path):
+def test_pending_approval_refresh_restores_card_badge_and_banner_contract(tmp_path, monkeypatch):
     service = _service(tmp_path)
     service.create_approval(
         "session-refresh",
@@ -776,11 +936,20 @@ def test_pending_approval_refresh_restores_card_badge_and_banner_contract(tmp_pa
     # Reconstructing the service simulates a browser/server refresh: the
     # approval must come from the durable event log, not an in-memory waiter.
     restored = _service(tmp_path)
-    assert restored.pending_counts("session-refresh") == {
-        "questions": 0,
-        "approvals": 1,
-        "total": 1,
-    }
+    assert service._pending_counts_path("session-refresh").is_file()
+    with monkeypatch.context() as context:
+        context.setattr(
+            restored,
+            "_snapshot",
+            lambda _sid: (_ for _ in ()).throw(
+                AssertionError("pending count index must avoid the Runtime snapshot")
+            ),
+        )
+        assert restored.pending_counts("session-refresh") == {
+            "questions": 0,
+            "approvals": 1,
+            "total": 1,
+        }
     pending = restored.list("session-refresh", kind="approval", status="pending")
     assert [row["approval_id"] for row in pending] == ["approval-refresh"]
 

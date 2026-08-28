@@ -1,6 +1,5 @@
 const contextStore = {
     tokensBySession: new Map(),
-    todoBySession: new Map(),
     progressBySession: new Map(),
 
     setTokens(sessionId, estimated, threshold) {
@@ -23,34 +22,6 @@ const contextStore = {
 
     clearTokens(sessionId) {
         this.tokensBySession.delete(String(sessionId || ''));
-    },
-
-    setTodo(sessionId, payload) {
-        const sid = String(sessionId || '');
-        if (!sid) return null;
-        const data = payload && typeof payload === 'object' ? payload : {};
-        const items = Array.isArray(data.items) ? data.items.slice() : [];
-        const done = typeof data.done === 'number'
-            ? data.done
-            : items.filter(function (x) { return x && x.status === 'completed'; }).length;
-        const total = typeof data.total === 'number' ? data.total : items.length;
-        const snapshot = {
-            has_plan: !!(data.has_plan && items.length > 0),
-            items: items,
-            done: done,
-            total: total,
-            updatedAt: Date.now(),
-        };
-        this.todoBySession.set(sid, snapshot);
-        return snapshot;
-    },
-
-    getTodo(sessionId) {
-        return this.todoBySession.get(String(sessionId || '')) || null;
-    },
-
-    clearTodo(sessionId) {
-        this.todoBySession.delete(String(sessionId || ''));
     },
 
     appendProgress(sessionId, kind, delta) {
@@ -82,7 +53,6 @@ const contextStore = {
         const sid = String(sessionId || '');
         if (!sid) return;
         this.clearTokens(sid);
-        this.clearTodo(sid);
         this.clearProgress(sid);
     },
 };
@@ -97,18 +67,6 @@ function selectContextTokens(sessionId) {
 
 function clearContextStateForSession(sessionId) {
     contextStore.clearSession(sessionId);
-}
-
-function applyTodoPlanToStore(sessionId, payload) {
-    return contextStore.setTodo(sessionId, payload);
-}
-
-function selectTodoPlan(sessionId) {
-    return contextStore.getTodo(sessionId);
-}
-
-function clearTodoPlanState(sessionId) {
-    contextStore.clearTodo(sessionId);
 }
 
 function appendContextProgressForSession(sessionId, kind, delta) {

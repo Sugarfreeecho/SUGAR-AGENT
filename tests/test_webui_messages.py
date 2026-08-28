@@ -465,7 +465,7 @@ def test_history_snapshot_combines_v2_messages_count_and_toc(monkeypatch, tmp_pa
 
     assert payload["ok"] is True
     assert payload["source"] == "runtime_v2_snapshot"
-    assert payload["count"] == 6
+    assert payload["count"] == 5
     assert payload["count_source"] == "runtime_v2_page"
     assert payload["elapsed_ms"] >= 0
     assert set(payload["timing"]) == {"read_page", "count", "user_turns", "context_tokens", "todo_plan", "total"}
@@ -479,9 +479,9 @@ def test_history_snapshot_combines_v2_messages_count_and_toc(monkeypatch, tmp_pa
     ]
     assert payload["user_turns"] == [
         {"event_index": 0, "preview": "first question"},
-        {"event_index": 3, "preview": "second question"},
+        {"event_index": 2, "preview": "second question"},
     ]
-    assert payload["todo_plan"]["source"] == "runtime_v2_snapshot"
+    assert payload["todo_plan"]["source"] == "extension_state"
     assert payload["todo_plan"]["items"][0]["text"] == "task"
     assert payload["context_tokens"]["estimated"] == 1234
     assert payload["context_tokens"]["token_source"] == "provider_exact"
@@ -726,7 +726,7 @@ def test_todo_plan_prefers_runtime_v2_snapshot(monkeypatch, tmp_path):
     response = asyncio.run(webui.get_session_todo_plan("s1"))
     payload = _json_response_payload(response)
 
-    assert payload["source"] == "runtime_v2_snapshot"
+    assert payload["source"] == "extension_state"
     assert payload["has_plan"] is True
     assert payload["items"][0]["text"] == "task"
 

@@ -52,7 +52,6 @@ const HISTORY_EVENT_BUDGET = 500;
 
 /** 右侧「历史记录」重建序号：防止切换会话后旧 fetch 与当前 DOM 合并导致目录串台 */
 let tocRebuildEpoch = 0;
-let todoRefreshEpoch = 0;
 let tocActiveUpdateRaf = 0;
 let tocScrollBottomOnNextBuild = false;
 let suppressTocDuringSessionLoad = false;

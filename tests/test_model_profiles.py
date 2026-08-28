@@ -495,6 +495,69 @@ def test_probe_model_context_uses_context_probe_for_one_selected_model(monkeypat
     assert model["probe_succeeded"] is True
 
 
+def test_probe_model_context_uses_responses_protocol(monkeypatch):
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["path"] = request.url.path
+        seen["body"] = json.loads(request.content)
+        return httpx.Response(
+            400,
+            json={"error": {"message": "maximum context length is 200000 tokens"}},
+        )
+
+    class MockClient(httpx.Client):
+        def __init__(self, *args, **kwargs):
+            super().__init__(transport=httpx.MockTransport(handler))
+
+    monkeypatch.setattr(model_profiles.httpx, "Client", MockClient)
+    model = model_profiles.probe_model_context(
+        "https://api.openai.com/v1",
+        "test-key",
+        "gpt-test",
+        {"llm_type": "openai"},
+    )
+
+    assert seen["path"] == "/v1/responses"
+    assert "input" in seen["body"]
+    assert "messages" not in seen["body"]
+    assert seen["body"]["max_output_tokens"] == 1
+    assert model["context_window"] == 200000
+
+
+def test_probe_model_context_uses_anthropic_messages_protocol(monkeypatch):
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["path"] = request.url.path
+        seen["headers"] = request.headers
+        seen["body"] = json.loads(request.content)
+        return httpx.Response(
+            400,
+            json={"error": {"message": "context window limit is 180000 tokens"}},
+        )
+
+    class MockClient(httpx.Client):
+        def __init__(self, *args, **kwargs):
+            super().__init__(transport=httpx.MockTransport(handler))
+
+    monkeypatch.setattr(model_profiles.httpx, "Client", MockClient)
+    model = model_profiles.probe_model_context(
+        "https://api.anthropic.com",
+        "test-key",
+        "claude-test",
+        {"llm_type": "anthropic"},
+    )
+
+    assert seen["path"] == "/v1/messages"
+    assert seen["headers"]["x-api-key"] == "test-key"
+    assert seen["headers"]["anthropic-version"] == "2023-06-01"
+    assert "messages" in seen["body"]
+    assert "input" not in seen["body"]
+    assert seen["body"]["max_tokens"] == 1
+    assert model["context_window"] == 180000
+
+
 def test_model_order_contains_only_saved_profiles(tmp_path):
     saved = model_profiles.upsert_profile(
         tmp_path,
@@ -563,6 +626,7 @@ def test_legacy_dotenv_model_config_is_registered_once(tmp_path):
     assert profiles[0]["model"] == "legacy-model"
     assert profiles[0]["name"] == "legacy-model"
     assert profiles[0]["api_key"] == "legacy-key"
+    assert profiles[0]["llm_type"] == "auto"
     assert profiles[0]["temperature"] == "0.2"
     assert profiles[0][model_profiles.LEGACY_ENV_IMPORT_MARKER] is True
     assert model_profiles.is_usable_profile(profiles[0]) is True

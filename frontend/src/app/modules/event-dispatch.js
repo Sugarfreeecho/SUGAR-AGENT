@@ -1,3 +1,51 @@
+function applyPluginExtensionEventView(row, event) {
+    if (!row || !event || typeof globalThis.resolvePluginExtensionEvent !== 'function') return;
+    var view = globalThis.resolvePluginExtensionEvent(event);
+    if (!view || !view.handled || view.pending) {
+        row.hidden = true;
+        return;
+    }
+    if (view.hidden) {
+        row.remove();
+        return;
+    }
+    row.hidden = false;
+    row.classList.remove(
+        'feed--plugin-neutral',
+        'feed--plugin-info',
+        'feed--plugin-success',
+        'feed--plugin-warning',
+        'feed--plugin-danger'
+    );
+    row.classList.add('feed--plugin-' + String(view.variant || 'neutral'));
+    var label = row.querySelector('.feed-label');
+    var content = row.querySelector('.feed-chunk-scroller');
+    if (label) label.textContent = String(view.title || 'Extension');
+    if (content) content.textContent = String(view.content || view.description || '');
+    if (view.description) row.title = String(view.description);
+}
+
+function renderPluginExtensionEvent(ctx, event, runSessionId) {
+    if (!event || event.type !== 'extension_event') return false;
+    if (typeof globalThis.resolvePluginExtensionEvent !== 'function') return true;
+    var view = globalThis.resolvePluginExtensionEvent(event);
+    if (!view || !view.handled || view.hidden) return true;
+    var scroller = appendLog(ctx, '', 'plugin-extension', runSessionId);
+    var row = scroller && scroller.closest ? scroller.closest('.feed-item') : null;
+    if (!row) return true;
+    row._pluginExtensionEvent = event;
+    row.dataset.pluginId = String(event.plugin_id || '');
+    row.dataset.extensionEventName = String(event.event_name || '');
+    applyPluginExtensionEventView(row, event);
+    return true;
+}
+
+document.addEventListener('myagent:plugin-ui-ready', function () {
+    document.querySelectorAll('.feed-item.feed--plugin-extension').forEach(function (row) {
+        if (row._pluginExtensionEvent) applyPluginExtensionEventView(row, row._pluginExtensionEvent);
+    });
+});
+
 function renderEvent(ctx, event, eventIndex, runSessionId) {
     if (!event || typeof event !== 'object') return;
     var eventSessionId = runSessionId || currentSessionId || '';
@@ -7,6 +55,17 @@ function renderEvent(ctx, event, eventIndex, runSessionId) {
     }
     if (typeof isHumanInteractionEventType === 'function' && isHumanInteractionEventType(event.type)) {
         renderHumanInteractionEvent(ctx, event, eventSessionId);
+        return;
+    }
+    if (renderPluginExtensionEvent(ctx, event, eventSessionId)) return;
+    if (event.type === 'extension_state_changed') {
+        document.dispatchEvent(new CustomEvent('myagent:extension-state-changed', {
+            detail: {
+                sessionId: eventSessionId,
+                pluginId: String(event.plugin_id || ''),
+                namespace: String(event.namespace || ''),
+            },
+        }));
         return;
     }
     if (eventSessionId && !event.__storeApplied) {

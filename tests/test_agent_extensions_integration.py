@@ -156,8 +156,11 @@ def test_extensions_management_page_and_routes_are_wired():
 
     assert "HOOKS_ENABLED" in html and "PLUGINS_ENABLED" in html
     assert '@fastapi_app.get("/api/extensions")' in webui
+    assert '@fastapi_app.post("/api/extensions/session-ui")' in webui
     assert '@fastapi_app.post("/api/extensions/reload")' in webui
     assert '@fastapi_app.post("/api/plugins/{plugin_id}/enabled")' in webui
+    assert '@fastapi_app.get("/api/plugins/{plugin_id}/settings")' in webui
+    assert '@fastapi_app.patch("/api/plugins/{plugin_id}/settings")' in webui
     assert '@fastapi_app.post("/api/security/mcp/{extension_id}/registration")' in webui
     assert "settings-extensions" not in frontend
     advanced = (ROOT / "app/templates/advance_config.html").read_text(encoding="utf-8")
@@ -172,6 +175,9 @@ def test_extensions_management_page_and_routes_are_wired():
     assert 'data-advanced-panel="mcp"' in advanced
     assert 'h==="#extensions"' in advanced
     assert "async function loadExtensions()" in advanced
+    assert "advancedPluginPageHref" in advanced
+    assert "advanced-plugin-open" in advanced
+    assert 'extText("停用","Disable")' in advanced
     assert "async function loadMcpConfig()" in advanced
     assert "promptAdvancedMcpRegistrations" in advanced
     assert 'fetch("/api/mcp_config"' in advanced
@@ -186,7 +192,204 @@ def test_extensions_management_page_and_routes_are_wired():
     assert 'extText("正在加载扩展…","Loading extensions…")' in advanced
 
 
-def test_advanced_env_api_synthesizes_feature_switches_when_missing(tmp_path, monkeypatch):
+def test_bundled_plugin_catalog_visibility_matches_product_surfaces():
+    system_plugin_ids = {
+        "agent-team",
+        "agent-goal",
+        "session-todo",
+    }
+    visible_plugin_ids = {
+        "desktop-notifications",
+        "execution-dashboard",
+        "feishu-transport",
+        "web-search-providers",
+    }
+
+    for plugin_id in system_plugin_ids:
+        manifest = json.loads(
+            (ROOT / "plugins" / plugin_id / ".myagent-plugin" / "plugin.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        assert manifest["system_builtin"] is True
+
+    for plugin_id in visible_plugin_ids:
+        manifest = json.loads(
+            (ROOT / "plugins" / plugin_id / ".myagent-plugin" / "plugin.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        assert "system_builtin" not in manifest
+
+    assert "system_builtin" not in json.loads(
+        (ROOT / "plugins" / "game-arena" / ".myagent-plugin" / "plugin.json").read_text(
+            encoding="utf-8"
+        )
+    )
+
+
+def test_session_ui_endpoint_filters_unknown_sessions(monkeypatch):
+    import agent_extensions
+    import webui
+
+    class Request:
+        async def json(self):
+            return {"session_ids": ["known", "missing", "known", ""]}
+
+    class Manager:
+        @staticmethod
+        def list_sessions(include_archived=False):
+            assert include_archived is True
+            return [{"id": "known"}]
+
+    captured = {}
+
+    def project(session_ids, *, snapshot_reader):
+        captured["session_ids"] = list(session_ids)
+        captured["snapshot_reader"] = snapshot_reader
+        return {"ok": True, "sessions": {"known": {"badges": [], "panels": []}}}
+
+    monkeypatch.setattr(webui, "session_manager", Manager())
+    monkeypatch.setattr(agent_extensions, "plugin_session_ui_snapshot", project)
+
+    response = asyncio.run(webui.get_plugin_session_ui(Request()))
+    payload = json.loads(response.body.decode("utf-8"))
+
+    assert response.status_code == 200
+    assert payload["ok"] is True
+    assert captured == {
+        "session_ids": ["known"],
+        "snapshot_reader": webui._runtime_v2_extensions_snapshot,
+    }
+
+
+def test_session_action_endpoint_uses_manifest_fixed_value(monkeypatch, tmp_path):
+    import agent_extensions
+    import runtime_v2
+    import webui
+
+    class Request:
+        method = "POST"
+        headers = {}
+        url = type("Url", (), {"scheme": "https", "netloc": "testserver"})()
+
+        async def json(self):
+            return {
+                "session_id": "known",
+                "plugin_id": "session-todo",
+                "action_id": "clear-plan",
+                "value": {"has_plan": True, "items": ["untrusted"]},
+            }
+
+    class Repository:
+        sessions_dir = tmp_path
+        _path_resolver = None
+
+    class Manager:
+        repository = Repository()
+
+        @staticmethod
+        def list_sessions(include_archived=False):
+            assert include_archived is True
+            return [{"id": "known"}]
+
+    captured = {}
+
+    class Store:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def set_latest(self, session_id, plugin_id, namespace, value):
+            captured.update(
+                session_id=session_id,
+                plugin_id=plugin_id,
+                namespace=namespace,
+                value=value,
+            )
+            return {"revision": 2}
+
+    monkeypatch.setattr(webui, "session_manager", Manager())
+    monkeypatch.setattr(runtime_v2, "SessionExtensionStateStore", Store)
+    monkeypatch.setattr(
+        agent_extensions,
+        "plugin_session_action",
+        lambda plugin_id, action_id: {
+            "plugin_id": plugin_id,
+            "namespace": "plan",
+            "action_id": action_id,
+            "operation": "set_state",
+            "state_value": {"has_plan": False, "items": []},
+        },
+    )
+    monkeypatch.setattr(
+        agent_extensions,
+        "plugin_session_ui_snapshot",
+        lambda session_ids, *, snapshot_reader: {
+            "ok": True,
+            "sessions": {"known": {"badges": [], "panels": []}},
+        },
+    )
+
+    response = asyncio.run(webui.invoke_plugin_session_action(Request()))
+    payload = json.loads(response.body.decode("utf-8"))
+
+    assert response.status_code == 200
+    assert payload["revision"] == 2
+    assert captured["value"] == {"has_plan": False, "items": []}
+
+
+def test_plugin_settings_routes_delegate_only_valid_value_objects(monkeypatch):
+    import agent_extensions
+    import webui
+
+    class Request:
+        def __init__(self, payload, headers=None):
+            self.payload = payload
+            self.method = "PATCH"
+            self.headers = dict(headers or {})
+            self.url = type("Url", (), {"scheme": "https", "netloc": "testserver"})()
+
+        async def json(self):
+            return self.payload
+
+    captured = {}
+    monkeypatch.setattr(
+        agent_extensions,
+        "plugin_settings_snapshot",
+        lambda plugin_id: {"ok": True, "settings": {"plugin_id": plugin_id}},
+    )
+
+    def update(plugin_id, values):
+        captured.update({"plugin_id": plugin_id, "values": dict(values)})
+        return {"ok": True, "settings": {"plugin_id": plugin_id}}
+
+    monkeypatch.setattr(agent_extensions, "update_plugin_settings", update)
+
+    get_response = asyncio.run(webui.get_plugin_settings_api("demo.plugin"))
+    patch_response = asyncio.run(
+        webui.update_plugin_settings_api("demo.plugin", Request({"values": {"enabled": True}}))
+    )
+    invalid_response = asyncio.run(
+        webui.update_plugin_settings_api("demo.plugin", Request({"values": []}))
+    )
+    cross_origin = asyncio.run(
+        webui.update_plugin_settings_api(
+            "demo.plugin",
+            Request(
+                {"values": {"enabled": False}},
+                {"origin": "https://evil.example", "host": "testserver"},
+            ),
+        )
+    )
+
+    assert json.loads(get_response.body)["settings"]["plugin_id"] == "demo.plugin"
+    assert patch_response.status_code == 200
+    assert captured == {"plugin_id": "demo.plugin", "values": {"enabled": True}}
+    assert invalid_response.status_code == 400
+    assert cross_origin.status_code == 403
+
+
+def test_advanced_env_api_synthesizes_core_switches_when_missing(tmp_path, monkeypatch):
     import webui
 
     env_path = tmp_path / ".env"
@@ -204,7 +407,7 @@ def test_advanced_env_api_synthesizes_feature_switches_when_missing(tmp_path, mo
         for row in group["vars"]
     }
 
-    assert variables["GOAL_ENABLED"]["value"] == "1"
+    assert "GOAL_ENABLED" not in variables
     assert variables["SECURITY_ENABLED"]["value"] == "1"
     assert variables["EGRESS_HELPER_ENABLED"]["value"] == "1"
     assert variables["HOOKS_ENABLED"]["value"] == "1"
@@ -258,7 +461,7 @@ def test_setup_saves_model_to_profile_not_dotenv(tmp_path, monkeypatch):
     class Request:
         async def json(self):
             return {
-                "llm_provider": "openai",
+                "llm_provider": "auto",
                 "llm_base_url": "https://api.example.com/v1",
                 "api_key": "profile-key",
                 "model_name": "model-a",
@@ -285,6 +488,7 @@ def test_setup_saves_model_to_profile_not_dotenv(tmp_path, monkeypatch):
     assert len(profiles) == 1
     assert profiles[0]["model"] == "model-a"
     assert profiles[0]["api_key"] == "profile-key"
+    assert profiles[0]["llm_type"] == "auto"
 
 
 def test_setup_without_runtime_fields_preserves_existing_env(tmp_path, monkeypatch):
@@ -325,6 +529,14 @@ def test_setup_without_runtime_fields_preserves_existing_env(tmp_path, monkeypat
 
 def test_agent_loop_wires_hooks_before_safety_approval_and_across_lifecycles():
     source = (ROOT / "app/agent_loop.py").read_text(encoding="utf-8")
+    lifecycle_source = source + "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in (
+            ROOT / "app/builtin_host_tools.py",
+            ROOT / "plugins/agent-goal/host.py",
+            ROOT / "plugins/agent-goal/runtime.py",
+        )
+    )
     wrapper = source.split("async def execute_one(tool_call):", 1)[1].split(
         "# ---------- 2.6 调用 LLM", 1
     )[0]
@@ -358,7 +570,7 @@ def test_agent_loop_wires_hooks_before_safety_approval_and_across_lifecycles():
         "Stop",
         "RunFailed",
     ):
-        assert f'"{event}"' in source
+        assert f'"{event}"' in lifecycle_source
 
 
 def test_auto_review_override_window_keeps_always_allow_choice():

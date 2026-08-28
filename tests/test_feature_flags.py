@@ -38,16 +38,16 @@ def test_index_html_injects_default_feature_values(monkeypatch):
     monkeypatch.setenv("MYAGENT_ENABLE_FOLLOWUP_RESTART", "0")
     monkeypatch.setenv("MYAGENT_ENABLE_STREAM_RECONNECT", "0")
     monkeypatch.setenv("MYAGENT_ENABLE_FINAL_RECONCILE", "1")
+    monkeypatch.delenv("MYAGENT_SMOOTH_STREAM_ENABLED", raising=False)
 
     flags = _extract_feature_flags(str(webui.get_index_html()))
 
     assert flags == {
-        "goal": True,
         "askUser": True,
-        "agentTeam": False,
         "followupRestart": False,
         "streamReconnect": False,
         "finalReconcile": True,
+        "smoothStream": False,
         "security": True,
     }
 
@@ -61,16 +61,16 @@ def test_index_html_injects_independent_feature_overrides(monkeypatch):
     monkeypatch.setenv("MYAGENT_ENABLE_FOLLOWUP_RESTART", "1")
     monkeypatch.setenv("MYAGENT_ENABLE_STREAM_RECONNECT", "true")
     monkeypatch.setenv("MYAGENT_ENABLE_FINAL_RECONCILE", "0")
+    monkeypatch.setenv("MYAGENT_SMOOTH_STREAM_ENABLED", "yes")
 
     flags = _extract_feature_flags(str(webui.get_index_html()))
 
     assert flags == {
-        "goal": True,
         "askUser": True,
-        "agentTeam": True,
         "followupRestart": True,
         "streamReconnect": True,
         "finalReconcile": False,
+        "smoothStream": True,
         "security": True,
     }
 
@@ -80,7 +80,7 @@ def test_index_html_injects_goal_feature_override(monkeypatch):
 
     monkeypatch.setenv("GOAL_ENABLED", "0")
     flags = _extract_feature_flags(str(webui.get_index_html()))
-    assert flags["goal"] is False
+    assert "goal" not in flags
 
 
 def test_index_html_injects_ask_user_feature_override(monkeypatch):
@@ -96,7 +96,7 @@ def test_index_html_defaults_agent_team_disabled(monkeypatch):
 
     monkeypatch.delenv("AGENT_TEAM_ENABLED", raising=False)
     flags = _extract_feature_flags(str(webui.get_index_html()))
-    assert flags["agentTeam"] is False
+    assert "agentTeam" not in flags
 
 
 def test_index_html_defaults_stream_reconnect_enabled(monkeypatch):
@@ -107,6 +107,19 @@ def test_index_html_defaults_stream_reconnect_enabled(monkeypatch):
     flags = _extract_feature_flags(str(webui.get_index_html()))
 
     assert flags["streamReconnect"] is True
+
+
+def test_index_html_injects_smooth_stream_environment_switch(monkeypatch):
+    import webui
+
+    monkeypatch.delenv("MYAGENT_SMOOTH_STREAM_ENABLED", raising=False)
+    assert _extract_feature_flags(str(webui.get_index_html()))["smoothStream"] is False
+
+    monkeypatch.setenv("MYAGENT_SMOOTH_STREAM_ENABLED", "on")
+    assert _extract_feature_flags(str(webui.get_index_html()))["smoothStream"] is True
+
+    monkeypatch.setenv("MYAGENT_SMOOTH_STREAM_ENABLED", "off")
+    assert _extract_feature_flags(str(webui.get_index_html()))["smoothStream"] is False
 
 
 def test_index_html_injects_append_steer_default_and_environment_override(monkeypatch):
@@ -168,9 +181,9 @@ def test_permission_mode_ui_regressions():
         "应用层受限",
         "更改权限",
         "Agent 的操作应如何获得审批？",
-        "工作区内自动执行；联网、出项目、永久删除等会先问你",
+        "工作区内写入自动执行；删除、联网、出项目按普通审批",
         "低风险自动放行，高风险仍转给你确认",
-        "关闭限制与审批，Agent 拥有你的全部权限",
+        "普通操作和工作区删除免审批；高危系统命令仍确认",
         "自动审查中：审查 Agent 正在核对你的任务意图与请求风险。",
         "自动审批已批准",
         "自动审批已拒绝",
@@ -584,20 +597,15 @@ def test_frontend_session_load_lets_snapshot_own_toc_build():
     toc = (ROOT / "frontend/src/app/modules/toc-todo.js").read_text(encoding="utf-8")
 
     assert "function startTocForSessionLoad(sessionId)" in toc
-    assert "function startTodoForSessionLoad(sessionId)" in toc
-    assert "function setTodoPlanForSession(sessionId, snapshot)" in toc
-    assert "function renderLoadedTodoPlanForSession(sessionId, snapshot, alreadyStarted)" in toc
     assert "startTocForSessionLoad(sessionId)" in sessions
-    assert "startTodoForSessionLoad(sessionId)" in sessions
     assert "const tocAlreadyStarted = opts.useSnapshot === false" in sessions
     assert "tocAlreadyStarted: tocAlreadyStarted" in sessions
-    assert "todoAlreadyStarted: tocAlreadyStarted" in sessions
     assert "tocAlreadyStarted: true" not in sessions
     assert "if (!opts.tocAlreadyStarted) rebuildToc();" in sessions
     assert "/history_snapshot?turns=" in sessions
     assert "setTocTurnsForSession(sessionId, snapshot.user_turns)" in sessions
-    assert "setTodoPlanForSession(sessionId, snapshot.todo_plan)" in sessions
-    assert "renderLoadedTodoPlanForSession(sessionId, snapshotTodoPlan, opts.todoAlreadyStarted)" in sessions
+    assert "snapshot.todo_plan" not in sessions
+    assert "renderLoadedTodoPlanForSession" not in sessions
     assert "opts.useSnapshot === false && typeof startTocForSessionLoad === 'function'" in sessions
 
 
@@ -768,7 +776,15 @@ def test_tool_pending_switches_generated_draft_to_executing():
     rendering = (ROOT / "frontend/src/app/modules/message-rendering.js").read_text(encoding="utf-8")
 
     assert "await _emit_tool_pending_sse(" in agent_loop
-    assert 'if emit and tool_name != "context_manage":' in agent_loop
+    assert "tool_descriptor.emit_pending" in agent_loop
+    wrapper = agent_loop.split("async def execute_one(tool_call):", 1)[1].split(
+        "# ---------- 2.6 调用 LLM ----------", 1
+    )[0]
+    resolve_at = wrapper.index("tool_descriptor = tool_registry.resolve(tool_name)")
+    first_use_at = wrapper.index("if tool_descriptor is not None")
+    assert resolve_at < first_use_at
+    host_tools = (ROOT / "app/builtin_host_tools.py").read_text(encoding="utf-8")
+    assert "emit_pending=False" in host_tools
     assert "if (parsed.type === 'tool_pending')" in sse
     assert "appendToolPendingRow(runCtx, parsed, runSessionId);" in sse
     assert "row.getAttribute('data-tool-pending') === '1'" in rendering
@@ -794,8 +810,6 @@ def test_ui_translation_does_not_mutate_conversation_content():
         ".feed-chunk-scroller",
         ".followup-queue-text",
         ".session-name",
-        "#chat-goal-objective",
-        ".todo-plan-item > span:last-child",
         ".human-question-text",
         ".human-option-label",
         ".human-option-description",
@@ -839,7 +853,7 @@ def test_followup_pending_queue_supports_manual_drag_reorder():
 def test_ui_cache_warmup_delay_runs_inside_background_worker():
     source = (ROOT / "app/webui.py").read_text(encoding="utf-8")
     warmup = source.split("def _warm_ui_caches()", 1)[1].split(
-        '@fastapi_app.on_event("startup")', 1
+        "def initialize_ui_attention_notifications()", 1
     )[0]
 
     worker_start = warmup.index("def _run()")
@@ -907,10 +921,11 @@ def test_live_history_owner_is_never_replaced_by_target_window():
 
 
 def test_runtime_v2_todo_plan_events_are_persistable():
-    agent_loop = (ROOT / "app/agent_loop.py").read_text(encoding="utf-8")
+    host_tools = (ROOT / "plugins/session-todo/host.py").read_text(encoding="utf-8")
 
-    assert '"type": "todo_plan"' in agent_loop
-    assert '"ephemeral": not _runtime_v2_is_primary()' in agent_loop
+    assert '"type": "extension_state_changed"' in host_tools
+    assert '"plugin_id": "session-todo"' in host_tools
+    assert "write_todo_extension" in host_tools
 
 
 def test_frontend_suppressed_toc_rebuild_does_not_clear_started_toc():

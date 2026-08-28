@@ -15,18 +15,11 @@ I18N = ROOT / "frontend/src/app/modules/i18n.js"
 
 
 def test_completed_goal_review_badge_is_rendered_and_refreshed():
-    sessions = SESSION_MANAGEMENT.read_text(encoding="utf-8")
-    goal_ui = TODO_GOAL.read_text(encoding="utf-8")
-    css = APP_CSS.read_text(encoding="utf-8")
-    i18n = I18N.read_text(encoding="utf-8")
-
-    assert "function sessionNeedsGoalReview(sess)" in sessions
-    assert 'class="session-review-badge"' in sessions
-    assert "sessionNeedsGoalReview(s) ? 'r' : ''" in sessions
-    assert "sess.goal_review_pending = goalReviewPending" in goal_ui
-    assert "renderSessionListIfChanged(true)" in goal_ui
-    assert ".session-review-badge[hidden] { display: none; }" in css
-    assert "'待审核': 'Pending review'" in i18n
+    manifest = json.loads(
+        (ROOT / "plugins/agent-goal/.myagent-plugin/plugin.json").read_text(encoding="utf-8")
+    )
+    assert manifest["capabilities"]["ui"]["session.badge"][0]["namespace"] == "goal"
+    assert "goal_review_pending" not in SESSION_MANAGEMENT.read_text(encoding="utf-8")
 
 
 def test_goal_completion_persists_pending_review_until_reviewed(tmp_path, monkeypatch):

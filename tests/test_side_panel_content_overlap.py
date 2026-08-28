@@ -38,11 +38,19 @@ def test_manual_reopen_overrides_the_auto_collapse_until_space_recovers() -> Non
     assert "panelManualOverlapToc && (!(tocList && tocList.children.length) || tocHasRecoveryRoom)" in layout
 
 
-def test_panel_transitions_and_goal_todo_content_are_observed() -> None:
+def test_panel_transitions_and_plugin_content_are_observed() -> None:
     layout = (ROOT / "frontend/src/app/modules/layout-panels.js").read_text(encoding="utf-8")
 
     assert "panelAutoCollapseObserver.observe(todo)" in layout
     assert "panelAutoCollapseObserver.observe(toc)" in layout
-    assert "attributeFilter: ['hidden']" in layout
-    assert "(goalCard && !goalCard.hidden)" in layout
-    assert "(todoCard && !todoCard.hidden)" in layout
+    assert "(pluginPanels && !pluginPanels.hidden && pluginPanels.children.length)" in layout
+
+
+def test_goal_refresh_does_not_override_manual_or_automatic_collapse() -> None:
+    layout = (ROOT / "frontend/src/app/modules/layout-panels.js").read_text(encoding="utf-8")
+    goal_ui = (ROOT / "frontend/src/app/modules/toc-todo.js").read_text(encoding="utf-8")
+
+    assert "panelUserCollapsedTodo = !isOpening" in layout
+    assert "!panelUserCollapsedTodo && !panelAutoCollapsedTodo" in layout
+    assert "syncTodoPanelContentVisibility(hasVisibleCard)" in goal_ui
+    assert "root.classList.toggle('is-open', hasVisibleCard)" not in goal_ui

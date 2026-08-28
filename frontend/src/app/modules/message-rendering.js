@@ -23,14 +23,15 @@ function applyClientHistoryTruncate(sessionId, beforeIndex, anchor) {
     }
     if (typeof contextStore !== 'undefined') {
         contextStore.clearTokens(sid);
-        contextStore.clearTodo(sid);
     }
     if (sid !== currentSessionId) return;
     if (anchor) removeMessagesFromNode(anchor);
     syncDisconnectedProcessGroups();
     rebuildToc({ localOnly: true });
     scheduleContextTokensAfterPaint(sid);
-    if (typeof refreshTodoPlanPanel === 'function') void refreshTodoPlanPanel();
+    document.dispatchEvent(new CustomEvent('myagent:extension-state-changed', {
+        detail: { sessionId: sid },
+    }));
 }
 
 async function historyOperationJson(url, options, timeoutMs) {
@@ -1670,6 +1671,9 @@ function clampChatScrollTop(y) {
 var historySmoothScrollSessionId = '';
 
 function beginHistorySmoothScroll(sessionId) {
+    if (typeof cancelSmoothStreamFollowForHistoryLoad === 'function') {
+        cancelSmoothStreamFollowForHistoryLoad();
+    }
     historySmoothScrollSessionId = String(sessionId || '');
 }
 
@@ -1973,7 +1977,6 @@ function setWelcome() {
         else chatContainer.innerHTML = WELCOME_HTML;
     }
     rebuildToc();
-    renderTodoPlanForCurrentSession();
 }
 
 function stripWelcome(ctx) {
@@ -3670,6 +3673,7 @@ const TRACE_ROW = {
     'context-trim': { label: '裁剪', c: 'feed--trim' },
     'context-summary': { label: '压缩', c: 'feed--cmp' },
     'key-context': { label: '要点', c: 'feed--key' },
+    'plugin-extension': { label: '扩展', c: 'feed--plugin-extension' },
     'user-steer':  { label: '追问', c: 'feed--answer' },
     'status':      { label: '状态', c: 'feed--st' },
 };
@@ -3736,7 +3740,7 @@ function setToolRowText(row, text, ctx, runSessionId) {
         refreshFeedChunkOverflow(ch);
     }
     // 遵守自动跟随，不强制拖拽
-    if (!replayingMessages) scrollContentAreaIfFollow(ctx, runSessionId);
+    if (!replayingMessages) scrollContentAreaIfFollow(ctx, runSessionId, 'text');
 }
 
 // 移除临时状态消息（移除整个 feed-item 条目）
@@ -3905,7 +3909,7 @@ function appendToolPendingRow(ctx, parsed, runSessionId) {
             draftChunk.classList.remove('is-streaming');
             refreshFeedChunkOverflow(draftChunk);
         }
-        if (!replayingMessages) scrollContentAreaIfFollow(ctx, runSessionId);
+        if (!replayingMessages) scrollContentAreaIfFollow(ctx, runSessionId, 'text');
         if (typeof attachHumanInteractionCardsForToolCall === 'function') {
             attachHumanInteractionCardsForToolCall(ctx && ctx.stream, parsed.tool_call_id);
         }
@@ -3948,7 +3952,7 @@ function appendToolCommandDelta(ctx, parsed, runSessionId) {
     }
     var ch = row.querySelector('.feed-chunk');
     if (ch) refreshFeedChunkOverflow(ch);
-    if (!replayingMessages) scrollContentAreaIfFollow(ctx, runSessionId);
+    if (!replayingMessages) scrollContentAreaIfFollow(ctx, runSessionId, 'text');
 }
 function upsertToolCallResult(ctx, parsed, runSessionId) {
     var tid = parsed.tool_call_id != null ? String(parsed.tool_call_id) : '';
@@ -3978,7 +3982,7 @@ function upsertToolCallResult(ctx, parsed, runSessionId) {
         if (ch) refreshFeedChunkOverflow(ch);
         var agg = body.closest('.process-aggregate');
         refreshAggregateStatsSmart(agg);
-        if (!replayingMessages) scrollContentAreaIfFollow(ctx, runSessionId);
+        if (!replayingMessages) scrollContentAreaIfFollow(ctx, runSessionId, 'text');
         if (typeof attachHumanInteractionCardsForToolCall === 'function') {
             attachHumanInteractionCardsForToolCall(ctx && ctx.stream, tid);
         }
@@ -4118,8 +4122,15 @@ function toggleCollapsibleFeedRow(row, manual) {
 
 function autoCollapseLlmReasoningRow(row) {
     if (!row || !row.classList.contains('feed--llm') || row.dataset.manualToggle === '1') return;
-    row.classList.add('is-collapsed');
-    syncFeedRowCollapseButton(row);
+    var collapse = function () {
+        row.classList.add('is-collapsed');
+        syncFeedRowCollapseButton(row);
+    };
+    if (row.isConnected && row.getAttribute('data-llm-live-row') === '1') {
+        mutateSmoothTraceRowHeight(row, collapse);
+    } else {
+        collapse();
+    }
 }
 
 function createProcessFeedRow(ctx, type, initialText, streamOpts, runSessionId, toolCallIdOpt) {
@@ -4181,6 +4192,14 @@ function createProcessFeedRow(ctx, type, initialText, streamOpts, runSessionId, 
     bindFeedChunkScrollChain(sc);
     insertReactOrderedFeedRow(body, row, type, streamOpts.reactIter, reactGenerationForContext(ctx));
     if (typeof translateUiNode === 'function') translateUiNode(row);
+    var isHistoryHydrate = !!(
+        replayingMessages
+        || (ctx && ctx.currentTurn && ctx.currentTurn.dataset.processLoading === '1')
+    );
+    var isInitialLiveStatusRow = !isHistoryHydrate && type === 'status'
+        && body.querySelectorAll('.feed-item[data-log-type="status"]').length === 1;
+    if (!isHistoryHydrate && !isInitialLiveStatusRow) animateSmoothTraceRowInsertion(row);
+    if (isInitialLiveStatusRow) finishStreamScrollIfFollow(ctx, runSessionId);
     if (ctx && ctx.currentTurn && body.classList && body.classList.contains('subagent-turn-process')) {
         markSubagentTurnHasProcess(ctx.currentTurn);
     }
@@ -4200,7 +4219,7 @@ function createProcessFeedRow(ctx, type, initialText, streamOpts, runSessionId, 
     }
     else requestAnimationFrame(function () { scheduleFeedChunkOverflowRefresh(chunk); });
     refreshAggregateStatsSmart(agg);
-    if (!streamOpts.streaming) scrollContentAreaIfFollow(ctx, runSessionId);
+    if (!streamOpts.streaming && !isInitialLiveStatusRow) scrollContentAreaIfFollow(ctx, runSessionId);
     return sc;
 }
 
@@ -4344,7 +4363,7 @@ function upsertLlmFeedRow(ctx, content, logType, runSessionId, reactIter) {
             refreshAggregateStatsSmart(agg);
             if (!ctx.currentProcessGroup || !ctx.currentProcessGroup.isConnected) ctx.currentProcessGroup = agg;
         }
-        scrollContentAreaIfFollow(ctx, runSessionId);
+        scrollContentAreaIfFollow(ctx, runSessionId, 'text');
         return sc;
     }
     if (ctx.llm) resetLlmState(ctx);
@@ -4572,7 +4591,10 @@ function appendMessage(ctx, role, content, meta, runSessionId) {
     if (role === 'user' && !replayingMessages) rebuildToc({ localOnly: true });
     if (!replayingMessages) {
         if (role === 'user') scrollChatToBottomIfFollow(runSessionId, { force: true });
-        else scrollChatToBottomIfFollow(runSessionId, {});
+        else {
+            cancelSmoothStreamFollowForFinal(ctx);
+            scrollChatToBottomIfFollow(runSessionId, {});
+        }
     }
 }
 
@@ -4698,7 +4720,7 @@ function appendModelSwitchStatus(ctx, event, runSessionId) {
         refreshFeedChunkOverflow(ch);
         requestAnimationFrame(function () { refreshFeedChunkOverflow(ch); });
     }
-    scrollContentAreaIfFollow(ctx, runSessionId);
+    scrollContentAreaIfFollow(ctx, runSessionId, 'text');
     return sc;
 }
 
@@ -4776,7 +4798,7 @@ function scheduleProgressDeltaFlush(ctx, runSessionId, logType) {
     st.flushRaf = requestAnimationFrame(function () {
         st.flushRaf = 0;
         flushProgressDeltaText(ctx, logType);
-        followStreamProcessScroll(ctx, runSessionId);
+        followStreamProcessScroll(ctx, runSessionId, 'text');
     });
 }
 
@@ -4821,7 +4843,7 @@ function applyProgressPersistedBody(ctx, content, logType, runSessionId) {
         requestAnimationFrame(function () { refreshFeedChunkOverflow(chSet); });
     }
     ctx.progressScrollers[logType] = sc;
-    scrollContentAreaIfFollow(ctx, runSessionId);
+    scrollContentAreaIfFollow(ctx, runSessionId, 'text');
 }
 
 /** 压缩/要点执行端输出：在同一 feed 内流式追加正文（不另起 feed 块） */
@@ -4870,7 +4892,7 @@ function appendProgressLog(ctx, content, logType, runSessionId) {
             refreshFeedChunkOverflow(chMerge);
             requestAnimationFrame(function () { refreshFeedChunkOverflow(chMerge); });
         }
-        scrollContentAreaIfFollow(ctx, runSessionId);
+        scrollContentAreaIfFollow(ctx, runSessionId, 'text');
         return;
     }
     var sc = ensureProgressScroller(ctx, logType, runSessionId);

@@ -1,5 +1,6 @@
 import asyncio
 import sys
+import threading
 from pathlib import Path
 
 
@@ -180,11 +181,15 @@ def test_task_schema_injects_registered_profiles_without_mutating_static_schema(
                 "name": "Fast profile",
                 "model": "fast-model",
                 "capability_description": "低成本/多并发：批量总结和并行探索",
+                "input_modalities": ["text"],
+                "multimodal_mode": "disabled",
             },
             {
                 "id": "profile-deep",
                 "name": "Deep profile",
                 "model": "deep-model",
+                "input_modalities": ["text", "image"],
+                "multimodal_mode": "enabled",
             },
         ],
     )
@@ -203,6 +208,8 @@ def test_task_schema_injects_registered_profiles_without_mutating_static_schema(
     assert injected_profile["enum"] == ["profile-fast", "profile-deep"]
     assert "profile-fast: Fast profile (model=fast-model)" in injected_profile["description"]
     assert "低成本/多并发：批量总结和并行探索" in injected_profile["description"]
+    assert "Inputs: text only; multimodal: manually disabled" in injected_profile["description"]
+    assert "profile-deep: Deep profile (model=deep-model) — Inputs: text, image" in injected_profile["description"]
     assert "omit by default" in injected_profile["description"]
     assert "enum" not in static_profile
     assert "switch_model" in injected_task["parameters"]["properties"]["action"]["enum"]
@@ -581,6 +588,57 @@ def test_registry_reservation_is_visible_and_release_is_run_identity_safe():
     asyncio.run(scenario())
 
 
+def test_registry_cancels_task_on_foreign_worker_loop(monkeypatch):
+    import agent_subagent
+
+    registry = agent_subagent.SubagentTaskRegistry()
+    ready = threading.Event()
+    cancelled = threading.Event()
+    worker_done = threading.Event()
+    requested = []
+
+    monkeypatch.setattr(
+        agent_subagent.session_manager,
+        "request_interrupt",
+        lambda child_id, *args, **kwargs: requested.append(child_id),
+    )
+
+    def worker():
+        async def run():
+            async def wait_forever():
+                try:
+                    ready.set()
+                    await asyncio.Event().wait()
+                finally:
+                    cancelled.set()
+
+            task = asyncio.create_task(wait_forever())
+            assert await registry.attach("child", "run-a", task) is True
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+            finally:
+                worker_done.set()
+
+        asyncio.run(run())
+
+    async def scenario():
+        assert await registry.reserve("child", "run-a", parent_session_id="parent") is True
+        thread = threading.Thread(target=worker, daemon=True)
+        thread.start()
+        assert await asyncio.to_thread(ready.wait, 1.0) is True
+        assert await registry.cancel("child") is True
+        await asyncio.to_thread(thread.join, 1.0)
+        assert thread.is_alive() is False
+
+    asyncio.run(scenario())
+
+    assert cancelled.is_set()
+    assert worker_done.is_set()
+    assert requested == ["child"]
+
+
 def test_subagent_tool_filter_reuses_bounded_identity_cache(monkeypatch):
     import agent_subagent
 
@@ -678,6 +736,149 @@ def test_same_subagent_cannot_enter_two_foreground_model_runs(monkeypatch, tmp_p
         assert calls == 1
         release.set()
         assert "done" in await first
+        assert agent_subagent.subagent_registry.is_running("child") is False
+
+    asyncio.run(scenario())
+
+
+def test_deleting_foreground_subagent_does_not_cancel_parent_task(monkeypatch, tmp_path):
+    import agent_loop
+    import agent_subagent
+
+    entered = asyncio.Event()
+    interrupted = []
+
+    class _SessionManager:
+        sessions_dir = tmp_path
+
+        def clear_interrupt(self, session_id):
+            pass
+
+        def request_interrupt(self, session_id, *args, **kwargs):
+            interrupted.append(session_id)
+
+        def append_ui_event(self, *args, **kwargs):
+            pass
+
+        def upsert_subagent_task(self, *args, **kwargs):
+            pass
+
+        def append_pending_subagent_result(self, *args, **kwargs):
+            pass
+
+        def patch_subagent_metadata(self, *args, **kwargs):
+            pass
+
+        def write_subagent_output(self, child_session_id, text):
+            return str(tmp_path / child_session_id / "output.md")
+
+        def _load_metadata(self, child_session_id):
+            return {}
+
+    async def fake_react_node(state, emit=None):
+        entered.set()
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(agent_subagent, "session_manager", _SessionManager())
+    monkeypatch.setattr(agent_subagent, "subagent_registry", agent_subagent.SubagentTaskRegistry())
+    monkeypatch.setattr(agent_subagent, "_load_subagent_run_histories", lambda child_id: ([], [], ""))
+    monkeypatch.setattr(agent_subagent.todo_manager, "sync_session_from_key_context", lambda *args, **kwargs: None)
+    monkeypatch.setattr(agent_subagent, "cleanup_git_worktree_for_session", lambda *args, **kwargs: None)
+    monkeypatch.setattr(agent_loop, "react_node", fake_react_node)
+
+    async def scenario():
+        parent_task = asyncio.create_task(
+            agent_subagent._execute_subagent_run(
+                child_id="child",
+                parent_session_id="parent",
+                user_text="task",
+                description="desc",
+                subagent_type="generalPurpose",
+                resumed=False,
+            )
+        )
+        await entered.wait()
+
+        registered_child_task = agent_subagent.subagent_registry._tasks["child"]
+        assert registered_child_task is not parent_task
+
+        assert await agent_subagent.subagent_registry.cancel("child") is True
+        result = await parent_task
+
+        assert parent_task.cancelled() is False
+        assert "Subagent 已中断" in result
+        assert "interrupted or deleted" in result
+        assert interrupted == ["child"]
+
+    asyncio.run(scenario())
+
+
+def test_cancelling_parent_still_cancels_foreground_subagent(monkeypatch, tmp_path):
+    import agent_loop
+    import agent_subagent
+
+    entered = asyncio.Event()
+    child_cancelled = asyncio.Event()
+
+    class _SessionManager:
+        sessions_dir = tmp_path
+
+        def clear_interrupt(self, session_id):
+            pass
+
+        def append_ui_event(self, *args, **kwargs):
+            pass
+
+        def upsert_subagent_task(self, *args, **kwargs):
+            pass
+
+        def append_pending_subagent_result(self, *args, **kwargs):
+            pass
+
+        def patch_subagent_metadata(self, *args, **kwargs):
+            pass
+
+        def write_subagent_output(self, child_session_id, text):
+            return str(tmp_path / child_session_id / "output.md")
+
+        def _load_metadata(self, child_session_id):
+            return {}
+
+    async def fake_react_node(state, emit=None):
+        entered.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            child_cancelled.set()
+
+    monkeypatch.setattr(agent_subagent, "session_manager", _SessionManager())
+    monkeypatch.setattr(agent_subagent, "subagent_registry", agent_subagent.SubagentTaskRegistry())
+    monkeypatch.setattr(agent_subagent, "_load_subagent_run_histories", lambda child_id: ([], [], ""))
+    monkeypatch.setattr(agent_subagent.todo_manager, "sync_session_from_key_context", lambda *args, **kwargs: None)
+    monkeypatch.setattr(agent_subagent, "cleanup_git_worktree_for_session", lambda *args, **kwargs: None)
+    monkeypatch.setattr(agent_loop, "react_node", fake_react_node)
+
+    async def scenario():
+        parent_task = asyncio.create_task(
+            agent_subagent._execute_subagent_run(
+                child_id="child",
+                parent_session_id="parent",
+                user_text="task",
+                description="desc",
+                subagent_type="generalPurpose",
+                resumed=False,
+            )
+        )
+        await entered.wait()
+        parent_task.cancel()
+        try:
+            await parent_task
+        except asyncio.CancelledError:
+            pass
+        else:
+            raise AssertionError("parent cancellation was swallowed")
+
+        assert child_cancelled.is_set()
         assert agent_subagent.subagent_registry.is_running("child") is False
 
     asyncio.run(scenario())

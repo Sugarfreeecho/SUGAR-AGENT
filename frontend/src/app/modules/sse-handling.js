@@ -147,6 +147,13 @@ function endRunForClient(sessionId, ctx, opts) {
         scheduleFinalVisibleAfterRunIfEnabled(sid, ctx, { delayMs: opts.finalDelayMs != null ? opts.finalDelayMs : 80 });
     }
     sealProcessGroup(ctx);
+    // The process viewport is resolved through the active run context. Finish
+    // its pending row-height animation and bottom pin before clearing that
+    // context, otherwise end-of-run status rows can be left below the visible
+    // edge while only the outer chat viewport is snapped.
+    if (liveAutoFollow && opts.scroll !== false) {
+        finishStreamScrollIfFollow(ctx, sid);
+    }
     markSessionRunInactive(sid);
     resetStreamReconnectState(sid);
     if (getSessionRunState(sid)) {
@@ -154,7 +161,6 @@ function endRunForClient(sessionId, ctx, opts) {
     }
     syncSessionListIndicatorClasses();
     setSendButtonState();
-    if (sid === currentSessionId) renderTodoPlanForCurrentSession();
     if (opts.syncFollowup !== false && typeof syncFollowupQueueFromServer === 'function') {
         // 终止边界必须先与服务端对账，再决定是否自动续发队首 pending。
         // 入队和普通同步本身都不具备发送权限。
@@ -169,10 +175,6 @@ function endRunForClient(sessionId, ctx, opts) {
         }
     } else if (allowFollowupDrain) {
         scheduleFollowupQueueDrain(sid, opts.followupDelayMs || 0);
-    }
-    if (liveAutoFollow && opts.scroll !== false) {
-        scrollProcessBodyToBottom(ctx, sid);
-        scrollChatToBottomIfFollow(sid, {});
     }
 }
 
@@ -244,12 +246,10 @@ async function consumeAgentSseResponseInner(response, runCtx, runSessionId, stre
                 if (runCtx && runCtx.streamCompletedSuccessfully !== false) {
                     runCtx.streamCompletedSuccessfully = true;
                 }
-                var goalContinuesAfterDone = typeof isGoalActiveForSession === 'function'
-                    && isGoalActiveForSession(runSessionId);
                 endRunForClient(runSessionId, runCtx, {
                     finalDelayMs: 80,
                     followupDelayMs: 0,
-                    drainFollowup: !goalContinuesAfterDone,
+                    drainFollowup: true,
                 });
                 return streamEventIdx;
             }
@@ -276,11 +276,6 @@ async function consumeAgentSseResponseInner(response, runCtx, runSessionId, stre
                 const eventSessionId = parsed.session_id || parsed.sessionId || runSessionId;
                 if (shouldApplySseSeqFilter(parsed)
                     && !sessionStore.shouldAcceptSseEvent(eventSessionId, parsed.seq, parsed.seq_scope || 'legacy')) continue;
-                if (parsed.type === 'goal_state') {
-                    const goal = parsed.goal && typeof parsed.goal === 'object' ? parsed.goal : parsed;
-                    setGoalStateForSession(eventSessionId, goal);
-                    continue;
-                }
                 if (parsed.type === 'user_steer' && parsed.steer) {
                     var steerOpId = String(parsed.client_id || parsed.steer_id || '');
                     var optimisticSteerRow = steerOpId ? findSteerProcessRow(runCtx, steerOpId) : null;
@@ -337,7 +332,7 @@ async function consumeAgentSseResponseInner(response, runCtx, runSessionId, stre
                             runId: parsed.run_id || parsed.runId || (runCtx && runCtx.runId),
                             reconcileFinal: parsed.type === 'run_finished',
                             discardPartialStreams: parsed.type !== 'run_finished',
-                            drainFollowup: !reduced.goalContinues,
+                            drainFollowup: true,
                         });
                         streamEventIdx += 1;
                         continue;
@@ -347,8 +342,7 @@ async function consumeAgentSseResponseInner(response, runCtx, runSessionId, stre
                 }
                 if (reduced.contextStateChanged && eventSessionId === currentSessionId) {
                     if (parsed.type === 'context_tokens') applyContextTokenLabelForCurrentSession();
-                    else if (parsed.type === 'todo_plan') renderTodoPlanForCurrentSession();
-                    if (parsed.type === 'context_tokens' || parsed.type === 'todo_plan') continue;
+                    if (parsed.type === 'context_tokens') continue;
                 }
                 if (parsed.ephemeral) {
                     /* 任何携带 agent_id 的 ephemeral 都属于子 agent；无论投递成功与否都不能 fall-through
@@ -415,7 +409,6 @@ async function consumeAgentSseResponseInner(response, runCtx, runSessionId, stre
                     else if (parsed.type === 'key_context_delta') appendKeyContextStreamDelta(runCtx, parsed.delta, runSessionId);
                     else if (parsed.type === 'context_tokens' && eventSessionId === currentSessionId) applyContextTokenLabelForCurrentSession();
                     else if (parsed.type === 'cache_stats' && eventSessionId === currentSessionId) applyCacheStatsFromEvent(runCtx, parsed, runSessionId);
-                    else if (parsed.type === 'todo_plan' && runSessionId === currentSessionId) renderTodoPlanForCurrentSession();
                     else if (parsed.type === 'runtime_resumed') {
                         removeTemporaryStatus(runCtx);
                         var resumeSeconds = Math.max(0, Number(parsed.suspended_seconds || 0));
@@ -455,11 +448,6 @@ async function consumeAgentSseResponseInner(response, runCtx, runSessionId, stre
                 finalizeLlmStreamChunks(runCtx);
                 if (parsed.type === 'tool_call') {
                     upsertToolCallResult(runCtx, parsed, runSessionId);
-                    const completedTool = String(parsed.tool || parsed.tool_name || '');
-                    if ((completedTool === 'create_goal' || completedTool === 'update_goal')
-                        && eventSessionId === currentSessionId) {
-                        void refreshGoalCard();
-                    }
                     streamEventIdx += 1;
                     continue;
                 }
@@ -477,10 +465,7 @@ async function consumeAgentSseResponseInner(response, runCtx, runSessionId, stre
                     event: parsed,
                     source: 'sse',
                 }, runSessionId);
-                if (parsed.type === 'final'
-                    && eventSessionId === runSessionId
-                    && !(typeof isGoalActiveForSession === 'function'
-                        && isGoalActiveForSession(runSessionId))) {
+                if (parsed.type === 'final' && eventSessionId === runSessionId) {
                     endRunForClient(runSessionId, runCtx, {
                         reconcileFinal: false,
                         followupDelayMs: 250,
@@ -693,10 +678,8 @@ async function startContinueAfterSubagents(sessionId, forcedMode) {
                 && !isServerStreamActive(runSessionId)) {
                 scheduleFinalVisibleAfterRunIfEnabled(runSessionId, runCtx, { delayMs: 120 });
             }
-            if (runSessionId === currentSessionId) renderTodoPlanForCurrentSession();
             if (liveAutoFollow) {
-                scrollProcessBodyToBottom(runCtx, runSessionId);
-                scrollChatToBottomIfFollow(runSessionId, {});
+                finishStreamScrollIfFollow(runCtx, runSessionId);
             }
             if (getSessionRunState(runSessionId)) clearSessionRunState(runSessionId);
             setSendButtonState();
@@ -3156,10 +3139,8 @@ async function sendMessage(options) {
         if (!switchedAway && runSessionId === currentSessionId && getRunAbortReason(runSessionId, runCtx) !== 'user') {
             scheduleFinalVisibleAfterRunIfEnabled(runSessionId, runCtx, { delayMs: 120 });
         }
-        if (runSessionId === currentSessionId) renderTodoPlanForCurrentSession();
         if (liveAutoFollow && !switchedAway) {
-            scrollProcessBodyToBottom(runCtx, runSessionId);
-            scrollChatToBottomIfFollow(runSessionId, {});
+            finishStreamScrollIfFollow(runCtx, runSessionId);
         }
         if (runSessionId !== currentSessionId) {
             void tryMarkSessionUnreadComplete(runSessionId);

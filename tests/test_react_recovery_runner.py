@@ -11,8 +11,8 @@ if str(APP_DIR) not in sys.path:
 
 
 def test_discover_recoverable_react_sessions_finds_background_sessions(monkeypatch):
-    import agent_goal
     import webui
+    from workflow_extensions import session_workflows
 
     class FakeSessionManager:
         def list_sessions(self, include_archived=False):
@@ -22,12 +22,8 @@ def test_discover_recoverable_react_sessions_finds_background_sessions(monkeypat
         def can_continue_react_session(self, sid):
             return sid in {"current", "background", "running", "goal", "waiting"}
 
-    class FakeGoalManager:
-        def should_continue(self, sid):
-            return sid == "goal"
-
     monkeypatch.setattr(webui, "session_manager", FakeSessionManager())
-    monkeypatch.setattr(agent_goal, "manager_for", lambda _manager: FakeGoalManager())
+    monkeypatch.setattr(session_workflows, "continuation_source", lambda sid: "agent-goal" if sid == "goal" else "")
     monkeypatch.setattr(webui, "_has_local_worker_activity", lambda sid: sid == "running")
     monkeypatch.setattr(webui, "_active_chat_by_session", {})
     monkeypatch.setattr(webui, "_cleanup_orphan_runtime_v2_active_runs", lambda _sid, reason: 0)
@@ -69,6 +65,42 @@ def test_auto_resume_is_not_pending_while_human_interaction_waits(monkeypatch):
     )
 
     assert webui._runtime_v2_auto_resume_pending("waiting") is False
+
+
+def test_auto_resume_is_not_pending_after_manual_stop_even_if_latest_event_is_cancelled(monkeypatch):
+    import webui
+
+    monkeypatch.setattr(webui, "_session_pending_human_count", lambda _sid: 0)
+    monkeypatch.setattr(webui, "_session_was_manually_stopped", lambda _sid: True)
+    monkeypatch.setattr(
+        webui,
+        "_runtime_v2_snapshot",
+        lambda _sid: (_ for _ in ()).throw(AssertionError("run state must not override manual stop")),
+    )
+
+    assert webui._runtime_v2_auto_resume_pending("stopped") is False
+
+
+def test_manual_stop_uses_the_durable_interrupt_reason(monkeypatch):
+    import webui
+
+    class FakeSessionManager:
+        reason = "user_button"
+
+        @staticmethod
+        def is_interrupt_requested(_sid):
+            return True
+
+        @classmethod
+        def get_interrupt_reason(cls, _sid):
+            return cls.reason
+
+    manager = FakeSessionManager()
+    monkeypatch.setattr(webui, "session_manager", manager)
+
+    assert webui._session_was_manually_stopped("stopped") is True
+    FakeSessionManager.reason = "runtime_watchdog"
+    assert webui._session_was_manually_stopped("recoverable") is False
 
 
 def test_background_recovery_drains_generator_without_a_ui(monkeypatch):
@@ -153,8 +185,8 @@ def test_recover_sessions_endpoint_reports_all_scheduled_sessions(monkeypatch):
 
 
 def test_http_continue_uses_same_start_reservation_as_background_recovery(monkeypatch):
-    import agent_goal
     import webui
+    from workflow_extensions import session_workflows
 
     released = []
 
@@ -169,10 +201,6 @@ def test_http_continue_uses_same_start_reservation_as_background_recovery(monkey
         async def is_disconnected(self):
             return False
 
-    class FakeGoalManager:
-        def should_continue(self, _sid):
-            return False
-
     async def fake_continuation(_session_id, **_kwargs):
         yield {"type": "status", "content": "running"}
 
@@ -182,7 +210,7 @@ def test_http_continue_uses_same_start_reservation_as_background_recovery(monkey
         "_session_pending_human_counts",
         lambda _sid: {"questions": 0, "approvals": 0, "total": 0},
     )
-    monkeypatch.setattr(agent_goal, "manager_for", lambda _manager: FakeGoalManager())
+    monkeypatch.setattr(session_workflows, "continuation_source", lambda _sid: "")
     monkeypatch.setattr(webui, "_reserve_session_chat_start", lambda _sid, _run_id: "token")
     monkeypatch.setattr(webui, "_release_session_chat_start", lambda sid, token: released.append((sid, token)))
     monkeypatch.setattr(webui, "astream_events_continuation", fake_continuation)
@@ -220,3 +248,23 @@ def test_http_continue_rejects_pending_human_interaction(monkeypatch):
     assert response.status_code == 409
     assert payload["reason"] == "pending_human_interaction"
     assert payload["pending_human_interactions"]["questions"] == 1
+
+
+def test_http_auto_recovery_rejects_manually_stopped_session(monkeypatch):
+    import webui
+
+    class FakeRequest:
+        pass
+
+    monkeypatch.setattr(
+        webui,
+        "_session_pending_human_counts",
+        lambda _sid: {"questions": 0, "approvals": 0, "total": 0},
+    )
+    monkeypatch.setattr(webui, "_session_was_manually_stopped", lambda _sid: True)
+
+    response = asyncio.run(webui.continue_react_session("stopped", FakeRequest(), recovery=True))
+    payload = json.loads(response.body.decode("utf-8"))
+
+    assert response.status_code == 409
+    assert payload["reason"] == "manually_stopped"

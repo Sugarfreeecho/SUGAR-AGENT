@@ -34,8 +34,14 @@ def test_runtime_v2_event_activity_moves_old_session_to_front(tmp_path):
         },
     ]
     index_file.write_text(json.dumps({"sessions": rows}), encoding="utf-8")
+    rows_by_id = {row["id"]: row for row in rows}
     for sid in (old_id, new_id):
-        (sessions_dir / sid).mkdir()
+        session_dir = sessions_dir / sid
+        session_dir.mkdir()
+        (session_dir / "metadata.json").write_text(
+            json.dumps(rows_by_id[sid]),
+            encoding="utf-8",
+        )
 
     event_path = sessions_dir / old_id / "events.jsonl"
     event_path.write_text('{"seq":1,"type":"message_user"}\n', encoding="utf-8")
@@ -43,7 +49,7 @@ def test_runtime_v2_event_activity_moves_old_session_to_front(tmp_path):
     os.utime(event_path, (activity_ts, activity_ts))
 
     manager = agent_harness.SessionManager(sessions_dir, index_file)
-    listed = manager.list_sessions()
+    listed = manager.list_sessions(include_archived=True)
 
     assert [row["id"] for row in listed] == [old_id, new_id]
     assert manager._iso_ts(listed[0]["last_activity_at"]) == activity_ts

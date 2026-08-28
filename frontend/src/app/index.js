@@ -1,9 +1,9 @@
 import { marked } from 'marked';
+import { initPluginUiSlots } from './plugin-ui-slots.js';
 import i18nSource from './modules/i18n.js?raw';
 import settingsSource from './modules/settings.js?raw';
 import inputActionsSource from './modules/input-actions.js?raw';
 import sharedStateAndDialogsSource from './modules/shared-state-and-dialogs.js?raw';
-import agentTeamSource from './modules/agent-team.js?raw';
 import sessionStoreSource from './state/session-store.js?raw';
 import sessionSelectorsSource from './state/session-selectors.js?raw';
 import sessionActionsSource from './state/session-actions.js?raw';
@@ -23,6 +23,7 @@ import contextStoreSource from './state/context-store.js?raw';
 import sessionEventReducerSource from './state/session-event-reducer.js?raw';
 import modelProfilesSource from './modules/model-profiles.js?raw';
 import skillPickerSource from './modules/skill-picker.js?raw';
+import smoothStreamSource from './modules/smooth-stream.js?raw';
 import sessionScrollHistorySource from './modules/session-scroll-history.js?raw';
 import tocTodoSource from './modules/toc-todo.js?raw';
 import workspaceMediaSource from './modules/workspace-media.js?raw';
@@ -83,7 +84,6 @@ const uiSources = [
     settingsSource,
     inputActionsSource,
     sharedStateAndDialogsSource,
-    agentTeamSource,
     sessionStoreSource,
     sessionSelectorsSource,
     sessionActionsSource,
@@ -103,6 +103,7 @@ const uiSources = [
     sessionEventReducerSource,
     modelProfilesSource,
     skillPickerSource,
+    smoothStreamSource,
     sessionScrollHistorySource,
     tocTodoSource,
     workspaceMediaSource,
@@ -117,6 +118,8 @@ const uiSources = [
 ];
 
 Function('"use strict";\n' + uiSources.join('\n\n') + '\n//# sourceURL=myagent-ui.js')();
+
+void initPluginUiSlots();
 
 if (typeof initUiHoverTips === 'function') {
     initUiHoverTips(document);

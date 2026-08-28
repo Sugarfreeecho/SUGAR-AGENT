@@ -40,6 +40,52 @@ def test_react_history_ops_uses_online_lock_budget(monkeypatch, tmp_path):
     assert ops._transaction_timeout_seconds == 3.5
 
 
+def test_responses_compaction_estimate_is_scoped_and_counts_only_new_tail():
+    import agent_loop
+    from llm.types import LLMRequestContext
+
+    transport = type("Transport", (), {"issuer": "issuer-1"})()
+    client = type(
+        "Client",
+        (),
+        {
+            "next_candidate": lambda self: {
+                "transport": transport,
+                "model": "gpt-test",
+            }
+        },
+    )()
+    checkpoint = {
+        "issuer": "issuer-1",
+        "model": "gpt-test",
+        "source_history_generation": 4,
+        "source_estimated_tokens": 900,
+        "usage": {"completion_tokens": 100},
+    }
+    context = LLMRequestContext(
+        session_id="s1",
+        history_generation=4,
+        responses_compaction=checkpoint,
+    )
+
+    assert agent_loop._responses_compacted_input_estimate(
+        client, "gpt-test", context, 950
+    ) == 150
+    wrong_client = type(
+        "Client",
+        (),
+        {
+            "next_candidate": lambda self: {
+                "transport": transport,
+                "model": "other-model",
+            }
+        },
+    )()
+    assert agent_loop._responses_compacted_input_estimate(
+        wrong_client, "gpt-test", context, 950
+    ) is None
+
+
 def test_steer_inbox_is_persistent_and_client_idempotent(monkeypatch, tmp_path):
     import agent_loop
 
@@ -733,13 +779,44 @@ def test_todo_accepts_multiple_in_progress_items(monkeypatch, tmp_path):
 
 
 def test_todo_update_reminder_starts_after_twenty_rounds_and_repeats_every_five():
+    source = (ROOT / "plugins/session-todo/runtime.py").read_text(encoding="utf-8")
+    assert "rounds < 25" in source
+    assert "(rounds - 25) % 5" in source
+    assert '"before_round": before_round' in source
+
+
+def test_workflow_round_reminder_mapping_type_is_imported():
     import agent_loop
 
-    assert not agent_loop._todo_update_reminder_due(20)
-    assert agent_loop._todo_update_reminder_due(21)
-    assert not agent_loop._todo_update_reminder_due(25)
-    assert agent_loop._todo_update_reminder_due(26)
-    assert agent_loop._todo_update_reminder_due(31)
+    assert agent_loop.Mapping is not None
+
+
+def test_tool_review_context_survives_workflow_plugin_extraction(monkeypatch):
+    import agent_loop
+
+    monkeypatch.setattr(agent_loop, "_runtime_v2_is_primary", lambda: False)
+    state = {
+        "session_id": "review-session",
+        "_submitted_user_input": "original question",
+        "_tool_review_assistant_context": [],
+        "_tool_review_user_followups": [],
+    }
+
+    agent_loop._capture_tool_review_assistant_context(
+        state, "private reasoning", "assistant response"
+    )
+    agent_loop._capture_tool_review_user_followup(state, "follow-up question")
+    context = agent_loop._build_tool_review_context(state, {"command": "echo ok"})
+
+    assert context == {
+        "initial_user_question": "original question",
+        "user_followups": ["follow-up question"],
+        "assistant_context": [
+            {"kind": "reasoning", "content": "private reasoning"},
+            {"kind": "response", "content": "assistant response"},
+        ],
+        "tool_arguments": {"command": "echo ok"},
+    }
 
 
 def test_runtime_v2_persist_does_not_save_legacy_histories(monkeypatch, tmp_path):
@@ -898,7 +975,7 @@ def test_title_worker_uses_first_persisted_user_and_latest_persisted_final(monke
         return "stable title", None
 
     monkeypatch.setattr(agent_loop, "session_manager", _SessionManager())
-    monkeypatch.setattr(agent_loop, "_session_goal_is_active_for_title", lambda _sid: False)
+    monkeypatch.setattr(agent_loop, "_session_workflow_is_active_for_title", lambda _sid: False)
     monkeypatch.setattr(agent_loop, "_generate_session_title_with_diagnostics", fake_generate_title)
 
     agent_loop._run_session_title_generation(
@@ -928,7 +1005,7 @@ def test_title_first_user_fallback_uses_dialogue_head_not_current_user_input():
 def test_title_generation_waits_while_goal_is_active(monkeypatch):
     import agent_loop
 
-    monkeypatch.setattr(agent_loop, "_session_goal_is_active_for_title", lambda _sid: True)
+    monkeypatch.setattr(agent_loop, "_session_workflow_is_active_for_title", lambda _sid: True)
     state = {
         "session_id": "s-active-goal",
         "dialogue": [agent_loop.UserMessage(content="original request")],
@@ -953,99 +1030,72 @@ def test_generated_session_title_strips_leading_think_block():
 def test_title_generation_switches_model_when_response_is_truncated(monkeypatch):
     import agent_loop
 
-    calls = []
+    captured = {}
 
-    class _Completions:
-        def __init__(self, model, content, finish_reason):
-            self.model = model
-            self.content = content
-            self.finish_reason = finish_reason
-
-        def create(self, **kwargs):
-            calls.append((
-                self.model,
-                kwargs["model"],
-                kwargs["max_tokens"],
-                kwargs.get("extra_body"),
-                kwargs.get("reasoning_effort"),
-            ))
-            message = type("Message", (), {"content": self.content, "reasoning_content": "", "tool_calls": None})()
-            choice = type("Choice", (), {"message": message, "finish_reason": self.finish_reason})()
-            return type("Response", (), {"choices": [choice], "usage": None})()
-
-    class _Client:
-        def __init__(self, completions):
-            self.chat = type("Chat", (), {"completions": completions})()
+    def complete(messages, **kwargs):
+        captured.update(messages=messages, **kwargs)
+        assert kwargs["response_validator"]({
+            "text": "",
+            "status": "incomplete",
+            "finish_reason": "length",
+        }) is False
+        assert kwargs["response_validator"]({
+            "text": "仓库七月功能总结",
+            "status": "completed",
+            "finish_reason": "stop",
+        }) is True
+        return {
+            "text": "仓库七月功能总结",
+            "usage": None,
+            "status": "completed",
+            "finish_reason": "stop",
+            "_myagent_candidate": {
+                "model": "backup",
+                "provider": "openai-compatible",
+            },
+        }
 
     monkeypatch.setattr(agent_loop, "load_prompt_template", lambda _name: "{first_user}\n{final_response}")
     monkeypatch.setattr(
         agent_loop,
-        "resolve_executor_candidates_for_session",
-        lambda _sid: [
-            {
-                "client": _Client(_Completions("primary", "<think>unfinished reasoning", "length")),
-                "model": "primary",
-                "max_output_tokens": 4096,
-            },
-            {
-                "client": _Client(_Completions("backup", "仓库七月功能总结", "stop")),
-                "model": "backup",
-                "max_output_tokens": 1024,
-            },
-        ],
+        "executor_one_shot_complete",
+        complete,
     )
 
     title, usage = agent_loop._generate_session_title_with_diagnostics("s1", "分析仓库", "完成")
 
     assert title == "仓库七月功能总结"
     assert usage is None
-    assert calls == [
-        ("primary", "primary", 256, {"thinking": {"type": "disabled"}}, None),
-        ("backup", "backup", 256, {"thinking": {"type": "disabled"}}, None),
-    ]
+    assert captured["session_id"] == "s1"
+    assert captured["purpose"] is agent_loop.LLMRequestPurpose.TITLE
+    assert "max_tokens" not in captured
+    assert captured["include_candidate_controls"] is False
 
 
-def test_title_generation_retries_without_toggle_when_provider_rejects_it(monkeypatch):
+def test_title_generation_does_not_inject_provider_specific_controls(monkeypatch):
     import agent_loop
 
-    calls = []
+    captured = {}
 
-    class _Completions:
-        def create(self, **kwargs):
-            calls.append(dict(kwargs))
-            if kwargs.get("extra_body", {}).get("thinking") == {"type": "disabled"}:
-                raise RuntimeError("unknown field: thinking")
-            message = type("Message", (), {"content": "兼容模型标题", "reasoning_content": "", "tool_calls": None})()
-            choice = type("Choice", (), {"message": message, "finish_reason": "stop"})()
-            return type("Response", (), {"choices": [choice], "usage": None})()
-
-    class _Client:
-        def __init__(self):
-            self.chat = type("Chat", (), {"completions": _Completions()})()
+    def complete(_messages, **kwargs):
+        captured.update(kwargs)
+        return {
+            "text": "兼容模型标题",
+            "status": "completed",
+            "finish_reason": "stop",
+        }
 
     monkeypatch.setattr(agent_loop, "load_prompt_template", lambda _name: "{first_user}\n{final_response}")
     monkeypatch.setattr(
         agent_loop,
-        "resolve_executor_candidates_for_session",
-        lambda _sid: [{
-            "client": _Client(),
-            "model": "compatible-model",
-            "max_output_tokens": 1024,
-            "extra_body": {"vendor_option": True},
-            "reasoning_effort": "max",
-        }],
+        "executor_one_shot_complete",
+        complete,
     )
 
     title, _usage = agent_loop._generate_session_title_with_diagnostics("s1", "用户问题", "回答")
 
     assert title == "兼容模型标题"
-    assert calls[0]["extra_body"] == {
-        "vendor_option": True,
-        "thinking": {"type": "disabled"},
-    }
-    assert "reasoning_effort" not in calls[0]
-    assert calls[1]["extra_body"] == {"vendor_option": True}
-    assert "reasoning_effort" not in calls[1]
+    assert captured["include_candidate_controls"] is False
 
 
 def test_title_worker_uses_user_text_when_all_models_fail(monkeypatch):
@@ -1167,7 +1217,7 @@ def test_astream_finishes_while_title_generation_is_still_running(monkeypatch, t
     monkeypatch.setattr(agent_loop, "_load_model_history_dicts_v2_primary", lambda session_id, reconcile_legacy=True: [])
     monkeypatch.setattr(agent_loop, "_load_work_history_dicts_for_run", lambda session_id: [])
     monkeypatch.setattr(agent_loop, "_sanitize_loaded_histories_for_new_run", lambda sid, work, llm, key, reason: (work, llm))
-    monkeypatch.setattr(agent_loop.todo_manager, "sync_session_from_key_context", lambda *args, **kwargs: None)
+    monkeypatch.setattr(agent_loop.session_plan_store, "sync_session_from_key_context", lambda *args, **kwargs: None)
     monkeypatch.setattr(agent_loop, "setup_logging", lambda *args, **kwargs: None)
     monkeypatch.setattr(agent_loop, "_runtime_v2_append_model_message", lambda *args, **kwargs: None)
     monkeypatch.setattr(agent_loop, "_persist_state", lambda *args, **kwargs: None)
@@ -1228,7 +1278,7 @@ def test_astream_can_record_initial_ui_message_as_user_steer(monkeypatch, tmp_pa
     monkeypatch.setattr(agent_loop, "_load_model_history_dicts_v2_primary", lambda session_id, reconcile_legacy=True: [])
     monkeypatch.setattr(agent_loop, "_load_work_history_dicts_for_run", lambda session_id: [])
     monkeypatch.setattr(agent_loop, "_sanitize_loaded_histories_for_new_run", lambda sid, work, llm, key, reason: (work, llm))
-    monkeypatch.setattr(agent_loop.todo_manager, "sync_session_from_key_context", lambda *args, **kwargs: None)
+    monkeypatch.setattr(agent_loop.session_plan_store, "sync_session_from_key_context", lambda *args, **kwargs: None)
     monkeypatch.setattr(agent_loop, "setup_logging", lambda *args, **kwargs: None)
     monkeypatch.setattr(agent_loop, "_runtime_v2_append_model_message", lambda *args, **kwargs: None)
     monkeypatch.setattr(agent_loop, "_persist_state", lambda *args, **kwargs: None)

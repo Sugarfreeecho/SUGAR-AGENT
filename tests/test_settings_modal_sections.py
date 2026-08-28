@@ -17,4 +17,6 @@ def test_runtime_footer_remains_the_dashboard_entrypoint() -> None:
     markup = (ROOT / "frontend/src/shell-body.html").read_text(encoding="utf-8")
 
     assert 'id="sidebar-runtime-link"' in markup
-    assert 'href="/execution-dashboard"' in markup
+    assert 'href="/execution-dashboard"' not in markup
+    manifest = (ROOT / "plugins/execution-dashboard/.myagent-plugin/plugin.json").read_text(encoding="utf-8")
+    assert '"navigation"' in manifest
