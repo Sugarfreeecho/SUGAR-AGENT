@@ -148,7 +148,7 @@ def _persist_subagent_run_state(child_id: str, state_out: Dict[str, Any]) -> Non
             path_resolver=getattr(session_manager, "_resolve_session_path", None),
             transaction_timeout_seconds=runtime_v2_react_transaction_timeout_seconds(),
         )
-        ops.replace_model_history(child_id, llm_history, reason="subagent_run_finished")
+        ops.reconcile_model_history(child_id, llm_history, reason="subagent_run_finished")
         if key_context.strip():
             ops.commit_context_summary(child_id, key_context)
         return

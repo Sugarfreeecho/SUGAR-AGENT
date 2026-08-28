@@ -16,6 +16,7 @@ from .model_projection import RuntimeModelProjection
 from .migration import RuntimeV2MigrationService, RuntimeV2VerificationError
 from .repair import RuntimeV2SubagentRepairService
 from .root_log_repair import RuntimeV2RootEventLogRepairService
+from .log_compaction import RuntimeV2LogCompactionError, RuntimeV2LogCompactionService
 from .extension_state import (
     ExtensionStateConflict,
     ExtensionStateError,
@@ -52,6 +53,8 @@ __all__ = [
     "RuntimeV2VerificationError",
     "RuntimeV2SubagentRepairService",
     "RuntimeV2RootEventLogRepairService",
+    "RuntimeV2LogCompactionError",
+    "RuntimeV2LogCompactionService",
     "ExtensionStateConflict",
     "ExtensionStateError",
     "ExtensionStateNotFound",

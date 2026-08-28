@@ -187,6 +187,98 @@ class RuntimeHistoryOpsTests(unittest.TestCase):
             self.assertEqual(RuntimeUiProjection(tmp).read_ui_events("s1")[0]["content"], "done")
             self.assertEqual(snapshot["model_messages"][0]["payload"]["content"], "done")
 
+    def test_atomic_final_promotes_matching_model_response_without_duplicate(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ops = RuntimeHistoryOps(tmp)
+            ops.append_model_message(
+                "s1",
+                "assistant",
+                "done",
+                metadata={"is_assistant_response": True},
+                run_id="run-1",
+            )
+            ops.commit_assistant_final(
+                "s1", "done", operation_id="final-1", run_id="run-1"
+            )
+
+            snapshot = ops.snapshots.read("s1")
+            self.assertEqual(len(snapshot["model_messages"]), 1)
+            self.assertTrue(snapshot["model_messages"][0]["payload"]["metadata"]["is_final"])
+            self.assertFalse(snapshot["model_messages"][0]["payload"]["metadata"]["is_assistant_response"])
+            self.assertEqual(
+                [event.type for event in ops.event_log.read_all("s1")],
+                ["model_assistant", "assistant_final_committed"],
+            )
+            reconciled = ops.reconcile_model_history(
+                "s1",
+                [{
+                    "type": "assistant",
+                    "content": "done",
+                    "metadata": {"is_assistant_response": False, "is_final": True},
+                }],
+                reason="finish",
+            )
+            self.assertIsNone(reconciled)
+            self.assertNotIn(
+                "model_history_replaced",
+                [event.type for event in ops.event_log.read_all("s1")],
+            )
+
+    def test_reconcile_model_history_uses_tail_truncate(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ops = RuntimeHistoryOps(tmp)
+            ops.append_model_message("s1", "user", "u")
+            ops.append_model_message("s1", "assistant", "a")
+            ops.append_model_message("s1", "tool", "unfinished", tool_call_id="tc")
+
+            event = ops.reconcile_model_history(
+                "s1",
+                [{"type": "user", "content": "u"}, {"type": "assistant", "content": "a"}],
+                reason="sanitize",
+            )
+
+            self.assertEqual(event.type, "model_tail_truncated")
+            self.assertEqual(
+                [row["payload"]["content"] for row in ops.snapshots.read("s1")["model_messages"]],
+                ["u", "a"],
+            )
+
+    def test_reconcile_model_history_uses_prefix_compaction(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ops = RuntimeHistoryOps(tmp)
+            for role, content in (("user", "old"), ("assistant", "old answer"), ("user", "keep")):
+                ops.append_model_message("s1", role, content)
+
+            event = ops.reconcile_model_history(
+                "s1",
+                [{"type": "system", "content": "summary"}, {"type": "user", "content": "keep"}],
+                reason="auto_context_policy",
+                summary="summary",
+            )
+
+            self.assertEqual(event.type, "model_prefix_compacted")
+            snapshot = ops.snapshots.read("s1")
+            self.assertEqual(
+                [row["payload"]["content"] for row in snapshot["model_messages"]],
+                ["summary", "keep"],
+            )
+            self.assertEqual(snapshot["context"]["summary"]["summary"], "summary")
+
+    def test_reconcile_model_history_appends_missing_suffix_in_one_event(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ops = RuntimeHistoryOps(tmp)
+            ops.append_model_message("s1", "user", "u")
+            event = ops.reconcile_model_history(
+                "s1",
+                [{"type": "user", "content": "u"}, {"type": "assistant", "content": "a"}],
+                reason="subagent_run_finished",
+            )
+            self.assertEqual(event.type, "model_messages_appended")
+            self.assertEqual(
+                [row["payload"]["content"] for row in ops.snapshots.read("s1")["model_messages"]],
+                ["u", "a"],
+            )
+
     def test_model_read_repairs_snapshot_left_behind_log(self):
         with tempfile.TemporaryDirectory() as tmp:
             ops = RuntimeHistoryOps(tmp)

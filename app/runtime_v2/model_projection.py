@@ -192,7 +192,7 @@ class RuntimeModelProjection:
         reference_seq = int(reference.get("seq") or 0)
         materialized = any(
             isinstance(row, dict)
-            and row.get("type") == "model_history_replaced"
+            and row.get("type") in {"model_history_replaced", "model_prefix_compacted"}
             and int(row.get("seq") or 0) > reference_seq
             for row in history_ops
         )
@@ -222,7 +222,8 @@ class RuntimeModelProjection:
         if reference is None:
             return self._messages_from_snapshot(snapshot)
         materialized = any(
-            event.type == "model_history_replaced" and int(event.seq) > int(reference.seq)
+            event.type in {"model_history_replaced", "model_prefix_compacted"}
+            and int(event.seq) > int(reference.seq)
             for event in events
         )
         return self._messages_with_branch_reference(

@@ -29,6 +29,9 @@ PLUGIN_EVENT_TYPES = {"plugin_state_changed", "plugin_reloaded"}
 
 _FULL_MESSAGE_REPROJECTION_TYPES = {
     "model_history_replaced",
+    "model_tail_truncated",
+    "model_prefix_compacted",
+    "runtime_snapshot_compacted",
     "message_deleted",
     "message_rewritten",
     "history_branch_created",
@@ -137,7 +140,11 @@ class RuntimeProjector:
         message_count = len(snapshot.get("messages") or [])
         raw_model_count = len(snapshot.get("raw_model_messages") or [])
         self.apply(snapshot, event)
-        if event.type in _FULL_MESSAGE_REPROJECTION_TYPES:
+        assistant_final_reconciled = (
+            event.type == "assistant_final_committed"
+            and isinstance((event.payload or {}).get("model_finalize"), dict)
+        )
+        if event.type in _FULL_MESSAGE_REPROJECTION_TYPES or assistant_final_reconciled:
             self._rebuild_projected_messages(snapshot)
         else:
             self._update_incremental_message_projections(
@@ -305,7 +312,15 @@ class RuntimeProjector:
             if isinstance(context, dict):
                 context.pop("responses_compaction", None)
 
-        if event_type == "session_meta":
+        if event_type == "runtime_snapshot_compacted":
+            baseline = (event.payload or {}).get("snapshot")
+            if isinstance(baseline, dict):
+                snapshot.clear()
+                snapshot.update(copy.deepcopy(baseline))
+                self._ensure_shape(snapshot)
+                snapshot["session_id"] = snapshot.get("session_id") or event.session_id
+                snapshot["last_seq"] = int(event.seq)
+        elif event_type == "session_meta":
             snapshot["session"] = dict(event.payload or {})
         elif event_type == "message_user":
             self._append_message(snapshot, event, "user")
@@ -314,13 +329,16 @@ class RuntimeProjector:
             self._append_model_message(snapshot, event)
         elif event_type == "assistant_final_committed":
             self._append_message(snapshot, event, "assistant")
-            self._append_model_message(snapshot, event)
+            self._commit_assistant_final_model(snapshot, event)
         elif event_type in {"message_assistant_delta", "message_assistant_final"}:
             self._append_or_update_assistant(snapshot, event)
         elif event_type in {"model_user", "model_assistant", "model_tool", "model_system"}:
             self._append_model_message(snapshot, event)
+        elif event_type == "model_messages_appended":
+            self._append_model_messages(snapshot, event)
         elif event_type == "model_history_replaced":
             self._replace_model_messages(snapshot, event)
+            self._record_history_op(snapshot, event)
         elif event_type == "run_started":
             self._upsert_run(snapshot, event, "running")
         elif event_type == "run_heartbeat":
@@ -374,6 +392,9 @@ class RuntimeProjector:
             "model_window_changed",
         }:
             self._apply_history_op(snapshot, event)
+        elif event_type in {"model_tail_truncated", "model_prefix_compacted"}:
+            self._apply_model_reconcile_op(snapshot, event)
+            self._record_history_op(snapshot, event)
         elif event_type.startswith("legacy_") and event_type.endswith("_observed"):
             self._apply_legacy_observation(snapshot, event)
         return snapshot
@@ -382,6 +403,8 @@ class RuntimeProjector:
     def _event_changes_model_history(event: RuntimeEvent) -> bool:
         if event.type in {
             "model_history_replaced",
+            "model_tail_truncated",
+            "model_prefix_compacted",
             "message_deleted",
             "message_rewritten",
             "history_branch_created",
@@ -640,11 +663,54 @@ class RuntimeProjector:
         row["payload"]["role"] = role
         snapshot["raw_model_messages"].append(row)
 
-    def _replace_model_messages(self, snapshot: dict, event: RuntimeEvent) -> None:
-        payload = dict(event.payload or {})
-        messages = payload.get("messages")
+    def _append_model_messages(self, snapshot: dict, event: RuntimeEvent) -> None:
+        messages = (event.payload or {}).get("messages")
         if not isinstance(messages, list):
             return
+        snapshot["raw_model_messages"].extend(
+            self._model_message_items_to_rows(messages, event, marker="append_index")
+        )
+
+    def _commit_assistant_final_model(self, snapshot: dict, event: RuntimeEvent) -> None:
+        finalize = (event.payload or {}).get("model_finalize")
+        if not isinstance(finalize, dict) or finalize.get("mode") != "promote":
+            self._append_model_message(snapshot, event)
+            return
+        rows = list(snapshot.get("raw_model_messages") or [])
+        try:
+            keep_index = int(finalize.get("keep_index"))
+        except (TypeError, ValueError):
+            self._append_model_message(snapshot, event)
+            return
+        if keep_index < 0 or keep_index >= len(rows):
+            self._append_model_message(snapshot, event)
+            return
+        expected = str(finalize.get("expected_content") or "").strip()
+        target = rows[keep_index] if isinstance(rows[keep_index], dict) else {}
+        target_payload = target.get("payload") if isinstance(target.get("payload"), dict) else {}
+        if str(target.get("role") or "") != "assistant" or str(target_payload.get("content") or "").strip() != expected:
+            self._append_model_message(snapshot, event)
+            return
+        drop_indexes = set()
+        for value in finalize.get("drop_indexes") or []:
+            try:
+                drop_indexes.add(int(value))
+            except (TypeError, ValueError):
+                continue
+        changed = self._copy_message(target)
+        metadata = dict(changed["payload"].get("metadata") or {})
+        metadata["is_final"] = True
+        metadata["is_assistant_response"] = False
+        changed["payload"]["metadata"] = metadata
+        changed["finalized_by_seq"] = int(event.seq)
+        rows[keep_index] = changed
+        snapshot["raw_model_messages"] = [
+            row for index, row in enumerate(rows)
+            if index == keep_index or index not in drop_indexes
+        ]
+
+    @staticmethod
+    def _model_message_items_to_rows(messages: list, event: RuntimeEvent, *, marker: str) -> list:
         rows = []
         for index, item in enumerate(messages):
             if not isinstance(item, dict):
@@ -661,15 +727,25 @@ class RuntimeProjector:
             msg_payload = dict(item)
             msg_payload["role"] = role
             msg_payload["content"] = str(item.get("content") or "")
-            rows.append({
+            row = {
                 "seq": event.seq,
                 "timestamp": event.timestamp,
                 "role": role,
                 "run_id": event.run_id,
                 "payload": msg_payload,
-                "replacement_index": index,
-                "replaced_by_seq": event.seq,
-            })
+                marker: index,
+            }
+            if marker == "replacement_index":
+                row["replaced_by_seq"] = event.seq
+            rows.append(row)
+        return rows
+
+    def _replace_model_messages(self, snapshot: dict, event: RuntimeEvent) -> None:
+        payload = dict(event.payload or {})
+        messages = payload.get("messages")
+        if not isinstance(messages, list):
+            return
+        rows = self._model_message_items_to_rows(messages, event, marker="replacement_index")
         # A replacement is the caller's canonical, already-reconciled model
         # context (compression, branch seeding, or a post-rewrite run).  Do
         # not apply an older visible-range operation a second time: its event
@@ -686,15 +762,53 @@ class RuntimeProjector:
         # stops before the next model response supplies fresh usage.
         self._mark_context_tokens_stale(snapshot, "model_history_replaced", event.seq)
 
+    def _apply_model_reconcile_op(self, snapshot: dict, event: RuntimeEvent) -> None:
+        payload = dict(event.payload or {})
+        rows = list(snapshot.get("raw_model_messages") or [])
+        if event.type == "model_tail_truncated":
+            try:
+                keep_count = max(0, int(payload.get("keep_count")))
+            except (TypeError, ValueError):
+                return
+            snapshot["raw_model_messages"] = [
+                self._strip_row_responses_continuation(row) for row in rows[:keep_count]
+            ]
+        else:
+            try:
+                drop_prefix_count = max(0, int(payload.get("drop_prefix_count")))
+            except (TypeError, ValueError):
+                return
+            replacement = payload.get("replacement_prefix")
+            if not isinstance(replacement, list) or drop_prefix_count > len(rows):
+                return
+            replacement_rows = self._model_message_items_to_rows(
+                replacement, event, marker="compacted_index"
+            )
+            retained = [
+                self._strip_row_responses_continuation(row)
+                for row in rows[drop_prefix_count:]
+            ]
+            snapshot["raw_model_messages"] = replacement_rows + retained
+        if "summary" in payload:
+            snapshot["context"]["summary"] = {
+                "summary": str(payload.get("summary") or ""),
+                "source_seq": payload.get("source_seq"),
+                "changed_at_seq": event.seq,
+            }
+        snapshot["context"].pop("responses_compaction", None)
+        self._mark_context_tokens_stale(snapshot, event.type, event.seq)
+
+    @classmethod
+    def _strip_row_responses_continuation(cls, row: dict) -> dict:
+        from .model_projection import strip_responses_continuation_from_message
+
+        copied = cls._copy_message(row)
+        copied["payload"] = strip_responses_continuation_from_message(copied["payload"])
+        return copied
+
     def _apply_history_op(self, snapshot: dict, event: RuntimeEvent) -> None:
         payload = dict(event.payload or {})
-        row = {
-            "seq": event.seq,
-            "timestamp": event.timestamp,
-            "type": event.type,
-            "payload": payload,
-        }
-        snapshot["history_ops"].append(row)
+        self._record_history_op(snapshot, event)
         if event.type == "history_branch_created":
             lineage_id = str(payload.get("lineage_id") or payload.get("source_session_id") or "").strip()
             if lineage_id:
@@ -798,6 +912,16 @@ class RuntimeProjector:
                 "changed_at_seq": event.seq,
             }
             self._mark_context_tokens_stale(snapshot, "context_summary_committed", event.seq)
+
+    @staticmethod
+    def _record_history_op(snapshot: dict, event: RuntimeEvent) -> None:
+        row = {
+            "seq": event.seq,
+            "timestamp": event.timestamp,
+            "type": event.type,
+            "payload": dict(event.payload or {}),
+        }
+        snapshot["history_ops"].append(row)
 
     @staticmethod
     def _mark_context_tokens_stale(snapshot: dict, reason: str, changed_at_seq: int) -> None:

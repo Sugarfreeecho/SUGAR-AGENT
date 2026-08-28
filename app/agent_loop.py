@@ -2149,21 +2149,22 @@ def _runtime_v2_replace_model_history(state: State, messages: List[Any], reason:
         return
     t0 = time.perf_counter()
     try:
-        _runtime_v2_react_history_ops().replace_model_history(
+        event = _runtime_v2_react_history_ops().reconcile_model_history(
             sid,
             [_message_to_dict(m) for m in list(messages or [])],
             reason=reason,
             summary=str(state.get("key_context") or ""),
         )
         logger.info(
-            "runtime_v2_write_timing session=%s op=replace_model_history reason=%s messages=%s ms=%s",
+            "runtime_v2_write_timing session=%s op=reconcile_model_history event=%s reason=%s messages=%s ms=%s",
             sid,
+            getattr(event, "type", "unchanged") if event is not None else "unchanged",
             reason,
             len(list(messages or [])),
             _timing_ms(t0),
         )
     except Exception as exc:
-        logger.warning("Runtime V2 model replace failed for %s: %s", sid, exc)
+        logger.warning("Runtime V2 model reconciliation failed for %s: %s", sid, exc)
         raise
 
 

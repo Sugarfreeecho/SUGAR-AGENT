@@ -682,6 +682,38 @@ class RuntimeHistoryOps:
                 return None
             payload = dict(model_payload or {})
             payload.update({"role": "assistant", "content": str(content or "")})
+            rows = list(snapshot.get("raw_model_messages") or [])
+            normalized_content = str(content or "").strip()
+            matching = []
+            for index, row in enumerate(rows):
+                if not isinstance(row, dict) or str(row.get("role") or "") != "assistant":
+                    continue
+                row_payload = row.get("payload") if isinstance(row.get("payload"), dict) else {}
+                if row_payload.get("tool_calls"):
+                    continue
+                if str(row_payload.get("content") or "").strip() == normalized_content:
+                    matching.append(index)
+            if matching:
+                keep_index = None
+                for index in matching:
+                    metadata = dict((rows[index].get("payload") or {}).get("metadata") or {})
+                    if metadata.get("is_assistant_response") and not metadata.get("is_final"):
+                        keep_index = index
+                        break
+                if keep_index is None:
+                    for index in matching:
+                        metadata = dict((rows[index].get("payload") or {}).get("metadata") or {})
+                        if not metadata.get("is_final"):
+                            keep_index = index
+                            break
+                if keep_index is None:
+                    keep_index = matching[-1]
+                payload["model_finalize"] = {
+                    "mode": "promote",
+                    "keep_index": int(keep_index),
+                    "drop_indexes": [int(index) for index in matching if index != keep_index],
+                    "expected_content": normalized_content,
+                }
             if op_id:
                 payload["operation_id"] = op_id
             event = self.event_log._append_unlocked(
@@ -690,6 +722,70 @@ class RuntimeHistoryOps:
                 payload=payload,
                 run_id=run_id,
             )
+            snapshot = self.projector.project_incremental(snapshot, event)
+            self.snapshots.stamp_event_log(session_id, snapshot, self.event_log.event_path(session_id))
+            self.snapshots.write_checkpointed(session_id, snapshot)
+            return event
+
+    def reconcile_model_history(
+        self,
+        session_id: str,
+        messages: list[dict],
+        reason: str = "",
+        *,
+        summary: Optional[str] = None,
+        allow_full_replace: bool = True,
+    ) -> Optional[RuntimeEvent]:
+        """Persist the smallest safe delta from the projected model history.
+
+        Normal append, finalization, tail rollback, and prefix compaction remain
+        append-only facts.  A full replacement is retained only as a recovery
+        fallback when no shared prefix or suffix proves a bounded edit.
+        """
+        from .model_projection import strip_responses_continuation_from_message
+
+        target = [
+            strip_responses_continuation_from_message(item)
+            for item in list(messages or [])
+            if isinstance(item, dict)
+        ]
+        with self._session_transaction(session_id):
+            snapshot = self.snapshots.read_for_update(session_id)
+            if int(snapshot.get("last_seq") or 0) != self.event_log.next_seq(session_id) - 1:
+                snapshot = self.projector.project(self.event_log.read_all(session_id))
+            current = self._model_message_dicts_from_snapshot(snapshot)
+            if current == target:
+                return None
+
+            event_type = ""
+            payload: dict = {"reason": str(reason or "")}
+            if len(target) <= len(current) and current[:len(target)] == target:
+                event_type = "model_tail_truncated"
+                payload["keep_count"] = len(target)
+            elif len(current) <= len(target) and target[:len(current)] == current:
+                event_type = "model_messages_appended"
+                payload["messages"] = target[len(current):]
+            else:
+                suffix_count = 0
+                limit = min(len(current), len(target))
+                while suffix_count < limit and current[-1 - suffix_count] == target[-1 - suffix_count]:
+                    suffix_count += 1
+                if suffix_count > 0:
+                    event_type = "model_prefix_compacted"
+                    payload["drop_prefix_count"] = len(current) - suffix_count
+                    payload["replacement_prefix"] = target[:len(target) - suffix_count]
+                elif allow_full_replace:
+                    event_type = "model_history_replaced"
+                    payload["messages"] = target
+                else:
+                    raise RuntimeError(
+                        f"model history reconciliation has no safe delta: session={session_id} reason={reason}"
+                    )
+            if summary is not None and event_type in {
+                "model_tail_truncated", "model_prefix_compacted", "model_history_replaced"
+            }:
+                payload["summary"] = str(summary)
+            event = self.event_log._append_unlocked(session_id, event_type, payload=payload)
             snapshot = self.projector.project_incremental(snapshot, event)
             self.snapshots.stamp_event_log(session_id, snapshot, self.event_log.event_path(session_id))
             self.snapshots.write_checkpointed(session_id, snapshot)

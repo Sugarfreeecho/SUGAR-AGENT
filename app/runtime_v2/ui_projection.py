@@ -319,6 +319,10 @@ class RuntimeUiProjection:
         latest_truncate_seq = 0
         has_history_ops = False
         for event in self.event_log.iter_events(session_id):
+            if event.type == "runtime_snapshot_compacted":
+                baseline_ui = (event.payload or {}).get("ui_events")
+                out = [dict(item) for item in baseline_ui or [] if isinstance(item, dict)]
+                continue
             if event.type == "legacy_truncate_observed":
                 out = self._normalize_before_history_op(out)
                 payload = dict(event.payload or {})
@@ -549,6 +553,7 @@ class RuntimeUiProjection:
             # append-only extension. Rebuild rather than trusting stale offsets.
             return None
         semantic_ops = {
+            "runtime_snapshot_compacted",
             "legacy_truncate_observed",
             "visible_range_changed",
             "message_deleted",
@@ -734,6 +739,7 @@ class RuntimeUiProjection:
         projected: List[dict] = []
         last_runtime_seq = int(after_runtime_seq)
         history_types = {
+            "runtime_snapshot_compacted",
             "legacy_truncate_observed",
             "visible_range_changed",
             "message_deleted",
@@ -828,6 +834,7 @@ class RuntimeUiProjection:
         runtime_seqs = [int(value) for value in index.get("runtime_seqs") or []]
         index_last_runtime_seq = max(0, int(index.get("last_runtime_seq") or 0))
         semantic_ops = {
+            "runtime_snapshot_compacted",
             "legacy_truncate_observed",
             "visible_range_changed",
             "message_deleted",
@@ -980,6 +987,10 @@ class RuntimeUiProjection:
     def events_to_ui(cls, events: Iterable[RuntimeEvent]) -> List[dict]:
         out: List[dict] = []
         for event in events:
+            if event.type == "runtime_snapshot_compacted":
+                baseline_ui = (event.payload or {}).get("ui_events")
+                out = [dict(item) for item in baseline_ui or [] if isinstance(item, dict)]
+                continue
             if event.type == "legacy_truncate_observed":
                 out = cls._normalize_before_history_op(out)
                 payload = dict(event.payload or {})
@@ -1011,6 +1022,10 @@ class RuntimeUiProjection:
     def _events_to_ui(self, session_id: str, events: Iterable[RuntimeEvent]) -> List[dict]:
         out: List[dict] = []
         for event in events:
+            if event.type == "runtime_snapshot_compacted":
+                baseline_ui = (event.payload or {}).get("ui_events")
+                out = [dict(item) for item in baseline_ui or [] if isinstance(item, dict)]
+                continue
             if event.type == "legacy_truncate_observed":
                 out = self._normalize_before_history_op(out)
                 payload = dict(event.payload or {})
