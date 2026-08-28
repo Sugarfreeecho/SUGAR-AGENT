@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "id": "web-search-providers",
+  "name": "Web Search Providers",
+  "version": "1.0.0",
+  "description": "Optional DuckDuckGo, Brave, Tavily, SearXNG and Jina search transports.",
+  "permissions": {
+    "secrets": ["BRAVE_API_KEY", "TAVILY_API_KEY", "JINA_API_KEY"]
+  },
+  "capabilities": {
+    "trusted_host": {"entry": "host.py"}
+  }
+}

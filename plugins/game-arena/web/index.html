@@ -1,0 +1,608 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Game Arena · 五子棋对战</title>
+  <link rel="icon" type="image/png" href="/assets/sugar-logo.png">
+  <style>
+    *{box-sizing:border-box;margin:0;padding:0}
+    body{font-family:ui-sans,system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial;color:#1f2937;background:#f8fafc}
+    .topbar{display:flex;align-items:center;justify-content:space-between;padding:14px 20px;background:#fff;border-bottom:1px solid #e5e7eb;position:sticky;top:0;z-index:10}
+    .topbar h1{font-size:18px;font-weight:700;display:flex;gap:10px;align-items:center}
+    .topbar h1 span{font-size:12px;font-weight:600;background:#111;color:#fff;padding:2px 8px;border-radius:999px}
+    .topbar a{color:#2563eb;text-decoration:none;font-size:14px}
+    .wrap{max-width:1440px;margin:0 auto;padding:18px;display:grid;gap:16px}
+    .card{background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:16px}
+    .card h2{font-size:14px;font-weight:700;margin-bottom:12px;display:flex;align-items:center;gap:8px}
+    .row{display:flex;gap:12px;flex-wrap:wrap;align-items:end}
+    .field{display:flex;flex-direction:column;gap:6px;min-width:180px;flex:1}
+    .field label{font-size:12px;color:#6b7280;font-weight:600}
+    .field select,.field input{border:1px solid #d1d5db;border-radius:8px;padding:9px 10px;font-size:14px;background:#fff}
+    .btn{border:0;border-radius:8px;padding:10px 16px;font-weight:700;cursor:pointer}
+    .btn-primary{background:#111;color:#fff}
+    .btn-primary:disabled{opacity:.5;cursor:not-allowed}
+    .btn-ghost{background:#f3f4f6;color:#111}
+    .btn-sm{padding:6px 10px;font-size:13px}
+    .pill{font-size:12px;padding:3px 8px;border-radius:999px;background:#eef2ff;color:#3730a3;font-weight:700}
+    .pill.waiting{background:#fef3c7;color:#92400e}
+    .pill.playing{background:#dcfce7;color:#166534}
+    .pill.finished{background:#fee2e2;color:#991b1b}
+    .muted{color:#6b7280;font-size:12px}
+    .lobby{max-height:220px;overflow:auto}
+    .lobby table{width:100%;border-collapse:collapse;font-size:13px}
+    .lobby th{font-size:12px;color:#6b7280;text-align:left;padding:6px;border-bottom:1px solid #e5e7eb}
+    .lobby td{padding:6px;border-bottom:1px solid #f3f4f6}
+    .lobby tr{cursor:pointer}
+    .lobby tr:hover{background:#f9fafb}
+    /* main arena: left trace | center board | right trace - fixed height, no page stretch */
+    .arena{display:grid;grid-template-columns:320px minmax(460px,1fr) 320px;gap:16px;align-items:start}
+    @media(max-width:1100px){.arena{grid-template-columns:1fr;}}
+    .arena > .card{overflow:hidden}
+    .arena > .card.board-card{display:flex;flex-direction:column;align-items:center;gap:10px;max-height:720px;overflow:auto}
+    .trace-head{flex-shrink:0;position:sticky;top:0;background:#fff;padding:10px 12px;border-bottom:1px solid #e5e7eb;display:flex;align-items:center;justify-content:space-between;z-index:1}
+    .trace-head b{font-size:13px}
+    .trace-body{height:620px;max-height:620px;overflow:auto;padding:8px 10px;display:grid;gap:8px;align-content:start}
+    .trace-empty{color:#9ca3af;text-align:center;padding:24px 8px;font-size:13px}
+    /* ---- native Agent feed-item replication ---- */
+    .feed-item{--feed-item-bg:#f2f5fa;border-left:3px solid #45475a;background:var(--feed-item-bg);font-size:13px}
+    .feed-row{display:flex;flex-direction:row;align-items:flex-start;gap:0.4rem;padding:0.32rem 0.5rem 0.38rem 0.5rem;min-width:0}
+    .feed-label{flex:0 0 auto;font-size:0.68rem;font-weight:700;text-transform:uppercase;letter-spacing:0.04em;color:#6b7280;line-height:1.5;padding-top:0.08rem;min-width:2.2rem}
+    .feed-chunk{flex:1 1 auto;min-width:0;line-height:1.5}
+    .feed-chunk-scroller{white-space:pre-wrap;word-break:break-word;color:#1f2937;max-height:calc(1.5em * 20);overflow:hidden}
+    .feed-chunk.expanded .feed-chunk-scroller{max-height:none;overflow:visible}
+    .feed-item.feed--llm{border-left-color:#89b4fa;--feed-item-bg:#e8f4fc;background:var(--feed-item-bg)}
+    .feed-item.feed--llm .feed-chunk-scroller{color:#0f172a}
+    .feed-item.feed--llm2{border-left-color:#6366f1;--feed-item-bg:#eceeff;background:var(--feed-item-bg)}
+    .feed-item.feed--tool{border-left-color:#8a92a3;--feed-item-bg:#e8ecf2;background:var(--feed-item-bg)}
+    .feed-item.feed--tool .feed-chunk-scroller{color:#374151}
+    .feed-item.feed--final .feed-chunk-scroller{max-height:calc(1.5em * 2.5)}
+    .feed-item.is-collapsed .feed-chunk{max-height:calc(1.5em * 1);overflow:hidden}
+    .feed-item.is-collapsed .feed-chunk-scroller{white-space:nowrap;text-overflow:ellipsis;overflow:hidden;max-height:calc(1.5em * 1)}
+    .feed-row-collapse{flex:0 0 auto;width:0;height:18px;margin-top:0.1rem;padding:0;border:0;background:transparent;color:#6b7280;opacity:0;overflow:hidden;cursor:pointer;font-size:0;transition:width .16s ease,opacity .16s ease}
+    .feed-item:not(.is-collapsed) .feed-row-collapse{width:18px;opacity:0.55}
+    .feed-item:hover .feed-row-collapse{width:18px;opacity:0.75}
+    .feed-row-collapse-chevron{display:inline-block;width:0;height:0;border-left:4px solid transparent;border-right:4px solid transparent;border-bottom:5px solid currentColor;transition:transform .18s ease}
+    .feed-item.is-collapsed .feed-row-collapse-chevron{transform:rotate(180deg)}
+    .feed-user{display:flex;justify-content:flex-end;padding:0.4rem 0.5rem}
+    .feed-user-bubble{background:#2563eb;color:#fff;border-radius:14px 14px 4px 14px;padding:0.42rem 0.7rem;font-size:13px;line-height:1.5;max-width:85%;white-space:pre-wrap;word-break:break-word}
+    .board-card svg{max-width:100%;height:auto;border-radius:12px;box-shadow:0 4px 18px rgba(0,0,0,.08)}
+    .board-placeholder{width:100%;min-height:380px;display:flex;align-items:center;justify-content:center;color:#9ca3af;border:2px dashed #e5e7eb;border-radius:12px;background:#fafafa}
+    #boardSvg{width:100%;display:flex;justify-content:center;flex-shrink:0}
+    .meta{display:flex;gap:10px;flex-wrap:wrap;font-size:13px;color:#374151;justify-content:center}
+    .meta b{color:#111}
+    .controls{display:flex;gap:8px;flex-wrap:wrap;align-items:center;justify-content:center}
+    .history{max-height:360px;overflow:auto;border:1px solid #e5e7eb;border-radius:10px}
+    .history table{width:100%;border-collapse:collapse;font-size:13px}
+    .history th{position:sticky;top:0;background:#f9fafb;text-align:left;padding:8px;border-bottom:1px solid #e5e7eb;font-size:12px;color:#6b7280}
+    .history td{padding:7px 8px;border-bottom:1px solid #f3f4f6}
+    .history tr.active{background:#fef3c7}
+    .history tr{cursor:pointer}
+    .range{width:100%}
+    .ascii{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;line-height:1.35;white-space:pre;overflow:auto;background:#0b1220;color:#e5e7eb;padding:12px;border-radius:10px;max-height:300px}
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <h1>🎮 Game Arena <span>五子棋 Gomoku</span></h1>
+    <div style="display:flex;gap:12px;align-items:center">
+      <a href="/">← 返回聊天</a>
+      <a href="/plugins/execution-dashboard" target="_blank">执行看板</a>
+    </div>
+  </header>
+  <div class="wrap">
+    <div class="card">
+      <h2>⚙️ 对战配置</h2>
+      <div class="row">
+        <div class="field"><label>会话 A（黑先）</label><select id="sessionA"></select></div>
+        <div class="field"><label>会话 B（白）</label><select id="sessionB"></select></div>
+        <div class="field" style="max-width:160px"><label>棋盘大小</label>
+          <select id="boardSize"><option value="15" selected>15 × 15</option><option value="13">13 × 13</option><option value="19">19 × 19</option><option value="9">9 × 9</option></select>
+        </div>
+        <div class="field" style="max-width:200px"><label>游戏ID（可选）</label><input id="gameId" placeholder="自动生成如 g_a1b2c3"></div>
+      </div>
+      <div style="display:flex;gap:10px;margin-top:14px;align-items:center;flex-wrap:wrap">
+        <button id="startBtn" class="btn btn-primary">创建并开始对战</button>
+        <button id="refreshSessions" class="btn btn-ghost">刷新会话</button>
+        <span id="startMsg" class="muted"></span>
+      </div>
+      <div class="muted" style="margin-top:8px">将向两会话自动注入对战 Prompt，Agent 会通过延迟结果工具 <code>gomoku_create / gomoku_join / gomoku_place</code> 轮流落子（每次等待对手最长 5 分钟，等待期间插件仍可响应其他请求）。</div>
+    </div>
+
+    <div class="card">
+      <h2>🏟️ 大厅 <span id="lobbyCount" class="muted"></span></h2>
+      <div style="display:flex;gap:8px;margin-bottom:8px">
+        <select id="lobbyFilter"><option value="">全部</option><option value="waiting">等待中</option><option value="playing">进行中</option><option value="finished">已结束</option></select>
+        <button id="refreshLobby" class="btn btn-ghost btn-sm">刷新</button>
+      </div>
+      <div class="lobby"><table><thead><tr><th>游戏ID</th><th>大小</th><th>状态</th><th>回合</th><th>步数</th><th>更新</th></tr></thead><tbody id="lobbyBody"></tbody></table></div>
+    </div>
+
+    <!-- 主对战区：左轨迹 | 中棋盘(常驻) | 右轨迹 -->
+    <div class="arena">
+      <div class="card" style="padding:0;overflow:hidden">
+        <div class="trace-head"><b>● 黑方轨迹 <span id="blackName" class="muted"></span></b><button id="refreshBlack" class="btn btn-ghost btn-sm">刷新</button></div>
+        <div id="traceBlack" class="trace-body"><div class="trace-empty">未选择对局</div></div>
+      </div>
+
+      <div class="card board-card">
+        <h2 style="width:100%;justify-content:center">🧩 棋盘 <span id="gameTitle" class="muted" style="cursor:pointer" title="点击退出回放"></span> <span id="statusPill" class="pill waiting">未选择</span></h2>
+        <div id="boardSvg" style="width:100%;display:flex;justify-content:center">
+          <div class="board-placeholder">选择或创建一个游戏后显示棋盘</div>
+        </div>
+        <div class="meta">
+          <span>回合: <b id="turnVal">-</b></span>
+          <span>步数: <b id="moveCount">-</b></span>
+          <span>胜者: <b id="winnerVal">-</b></span>
+          <span id="lastMoveVal" class="muted"></span>
+        </div>
+        <div class="controls">
+          <button id="viewBtn" class="btn btn-ghost btn-sm">刷新棋盘</button>
+          <button id="exportSvgBtn" class="btn btn-ghost btn-sm">导出SVG</button>
+          <button id="copyAsciiBtn" class="btn btn-ghost btn-sm">复制ASCII</button>
+        </div>
+        <details style="width:100%;margin-top:4px"><summary style="cursor:pointer;font-weight:700;font-size:13px">ASCII 棋盘</summary><pre id="asciiBoard" class="ascii" style="margin-top:8px"></pre></details>
+      </div>
+
+      <div class="card" style="padding:0;overflow:hidden">
+        <div class="trace-head"><b>○ 白方轨迹 <span id="whiteName" class="muted"></span></b><button id="refreshWhite" class="btn btn-ghost btn-sm">刷新</button></div>
+        <div id="traceWhite" class="trace-body"><div class="trace-empty">未选择对局</div></div>
+      </div>
+    </div>
+
+    <!-- 底部：对弈记录与回放 -->
+    <div class="card">
+      <h2>📜 对弈记录与回放</h2>
+      <div class="controls" style="justify-content:flex-start;margin-bottom:8px">
+        <button id="firstBtn" class="btn btn-ghost btn-sm">◀◀</button>
+        <button id="prevBtn" class="btn btn-ghost btn-sm">◀</button>
+        <button id="nextBtn" class="btn btn-ghost btn-sm">▶</button>
+        <button id="lastBtn" class="btn btn-ghost btn-sm">▶▶ 回到实时</button>
+        <button id="playBtn" class="btn btn-ghost btn-sm">播放</button>
+        <span id="replayInfo" class="muted"></span>
+        <span id="replayHint" class="muted" style="margin-left:auto">回放时棋盘常驻，轮询不覆盖</span>
+      </div>
+      <input id="replayRange" class="range" type="range" min="0" max="0" value="0">
+      <div class="history" style="margin-top:8px"><table><thead><tr><th>#</th><th>颜色</th><th>坐标</th><th>时间</th></tr></thead><tbody id="historyBody"></tbody></table></div>
+    </div>
+  </div>
+<script type="module">
+const $ = s=>document.querySelector(s);
+const sessionA=$('#sessionA'), sessionB=$('#sessionB'), boardSize=$('#boardSize'), gameId=$('#gameId');
+const startBtn=$('#startBtn'), startMsg=$('#startMsg');
+const lobbyFilter=$('#lobbyFilter'), lobbyBody=$('#lobbyBody'), lobbyCount=$('#lobbyCount');
+const boardSvg=$('#boardSvg'), asciiBoard=$('#asciiBoard');
+const turnVal=$('#turnVal'), moveCountEl=$('#moveCount'), winnerVal=$('#winnerVal'), lastMoveVal=$('#lastMoveVal'), gameTitle=$('#gameTitle'), statusPill=$('#statusPill');
+const historyBody=$('#historyBody'), replayRange=$('#replayRange'), replayInfo=$('#replayInfo');
+const traceBlack=$('#traceBlack'), traceWhite=$('#traceWhite'), blackName=$('#blackName'), whiteName=$('#whiteName');
+let currentGameId="", currentData=null, replayIndex=0, playTimer=null, pollTimer=null;
+let replayMode=false;
+let sessionAId="", sessionBId=""; // bound session ids for trace
+let traceTimer=null;
+
+function esc(v){ return String(v||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+
+async function fetchSessions(){
+  try{
+    const r=await fetch('/sessions');
+    if(!r.ok) throw new Error('HTTP '+r.status);
+    const j=await r.json();
+    const list = Array.isArray(j) ? j : (j.sessions || j.data || []);
+    if(!Array.isArray(list) || list.length===0){
+      sessionA.innerHTML='<option value="">暂无会话，请先新建会话</option>';
+      sessionB.innerHTML='<option value="">暂无会话，请先新建会话</option>';
+      return;
+    }
+    const opts = list.map(s=>{ const nm = (s.name||s.title||'新会话'); const shortId = String(s.id||'').slice(0,8); return `<option value="${s.id}">${esc(nm)} — ${shortId}</option>`; }).join('');
+    sessionA.innerHTML='<option value="">选择会话A</option>'+opts;
+    sessionB.innerHTML='<option value="">选择会话B</option>'+opts;
+    // restore previous selection if still exists
+    if(sessionAId) sessionA.value=sessionAId;
+    if(sessionBId) sessionB.value=sessionBId;
+  }catch(e){
+    console.error('fetchSessions failed', e);
+    sessionA.innerHTML='<option>加载失败，请刷新重试</option>';
+    sessionB.innerHTML='<option>加载失败，请刷新重试</option>';
+  }
+}
+async function fetchLobby(){
+  const st=lobbyFilter.value;
+  const r=await fetch(`/api/plugins/game-arena/games?status=${encodeURIComponent(st)}&limit=50`);
+  const j=await r.json();
+  const games=j.games||[];
+  lobbyCount.textContent=`${j.count||games.length} 局`;
+  lobbyBody.innerHTML=games.map(g=>`<tr data-gid="${g.game_id}"><td><code>${g.game_id}</code></td><td>${g.board_size}</td><td><span class="pill ${g.status}">${g.status}</span></td><td>${g.turn||'-'}</td><td>${g.move_count}</td><td>${g.updated_at? new Date(g.updated_at*1000).toLocaleString(): '-'}</td></tr>`).join('') || `<tr><td colspan="6" class="muted" style="text-align:center;padding:16px">暂无对局</td></tr>`;
+  lobbyBody.querySelectorAll('tr[data-gid]').forEach(tr=> tr.addEventListener('click', ()=> selectGame(tr.dataset.gid)));
+}
+async function selectGame(gid){
+  currentGameId=gid; gameTitle.textContent=gid; replayMode=false;
+  // clear old trace immediately and reset incremental cache
+  traceBlack.innerHTML='<div class="trace-empty">加载中...</div>';
+  traceWhite.innerHTML='<div class="trace-empty">加载中...</div>';
+  traceBlack.dataset.prevCount='0';
+  traceWhite.dataset.prevCount='0';
+  traceBlack.dataset.firstRender='0';
+  traceWhite.dataset.firstRender='0';
+  // don't delete cache here - keep for incremental, but reset if players change
+  await refreshState();
+  startPolling();
+  startTracePolling();
+  if(sessionAId) fetchTrace(sessionAId, traceBlack);
+  if(sessionBId) fetchTrace(sessionBId, traceWhite);
+}
+async function refreshState(){
+  if(!currentGameId) return;
+  if(replayMode) return;
+  try{
+    const r=await fetch(`/api/plugins/game-arena/state?game_id=${encodeURIComponent(currentGameId)}`);
+    const j=await r.json();
+    if(!j.ok){ boardSvg.innerHTML=`<div style="padding:20px;color:#ef4444">${esc(j.error||'加载失败')}</div>`; return; }
+    currentData=j.game;
+    // bind session ids from game players for trace
+    let playersChanged=false;
+    if(currentData.players){
+      const newA = currentData.players.black || '';
+      const newB = currentData.players.white || '';
+      if(newA && newA !== sessionAId){ if(sessionAId) resetTraceCache(sessionAId); sessionAId=newA; playersChanged=true; traceBlack.dataset.prevCount='0'; traceBlack.dataset.firstRender='0'; }
+      if(newB && newB !== sessionBId){ if(sessionBId) resetTraceCache(sessionBId); sessionBId=newB; playersChanged=true; traceWhite.dataset.prevCount='0'; traceWhite.dataset.firstRender='0'; }
+      // update trace headers
+      const bn = currentData.player_names?.black || (sessionAId? sessionAId.slice(0,8): '');
+      const wn = currentData.player_names?.white || (sessionBId? sessionBId.slice(0,8): '');
+      blackName.textContent = bn ? `(${bn})` : '';
+      whiteName.textContent = wn ? `(${wn})` : '';
+      // NOTE: do NOT force sessionA/sessionB dropdowns here - that would
+      // overwrite the user's manual selection while polling. Only trace
+      // headers reflect the bound players.
+      if(playersChanged){
+        // immediately refresh trace for new players
+        if(sessionAId) fetchTrace(sessionAId, traceBlack);
+        if(sessionBId) fetchTrace(sessionBId, traceWhite);
+      }
+    }
+    renderBoard(currentData);
+    renderHistory(currentData);
+    const total=(currentData.history||[]).length;
+    if(!replayMode){
+      replayIndex = total;
+      replayRange.max = total;
+      replayRange.value = total;
+      replayInfo.textContent = `${total} / ${total}`;
+    } else {
+      replayRange.max = total;
+      replayInfo.textContent = `${replayIndex} / ${total}`;
+    }
+  }catch(e){ console.error('refreshState failed', e); }
+}
+function renderBoard(data){
+  const svg=(data.board_svg||'').trim();
+  if(svg && svg.includes('<svg')){
+    boardSvg.innerHTML=svg;
+  } else if(data.board && Array.isArray(data.board) && data.board.length>0){
+    // fallback client-side render if server svg missing
+    try{
+      const n=data.board.length;
+      const cell=28, pad=20;
+      const size=n*cell+pad*2;
+      let html=`<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 ${size} ${size}" style="max-width:100%;height:auto"><rect width="100%" height="100%" fill="#e8c07a" rx="12"/>`;
+      for(let i=0;i<n;i++){
+        const x=pad+i*cell+cell/2, y=pad+i*cell+cell/2;
+        html+=`<line x1="${pad+cell/2}" y1="${y}" x2="${pad+(n-1)*cell+cell/2}" y2="${y}" stroke="#6b4a2b" stroke-width="1"/>`;
+        html+=`<line x1="${x}" y1="${pad+cell/2}" x2="${x}" y2="${pad+(n-1)*cell+cell/2}" stroke="#6b4a2b" stroke-width="1"/>`;
+      }
+      for(let y=0;y<n;y++) for(let x=0;x<n;x++){
+        const v=data.board[y][x];
+        if(!v) continue;
+        const cx=pad+x*cell+cell/2, cy=pad+y*cell+cell/2;
+        const fill=v===1?'#111':'#fff', stroke=v===1?'#000':'#333';
+        html+=`<circle cx="${cx}" cy="${cy}" r="11" fill="${fill}" stroke="${stroke}" stroke-width="1.2"/>`;
+      }
+      html+='</svg>';
+      boardSvg.innerHTML=html;
+    }catch(e){
+      boardSvg.innerHTML=`<div class="board-placeholder">棋盘数据存在但渲染失败: ${String(e).slice(0,100)}</div>`;
+    }
+  } else {
+    const hint = data.board_ascii ? 'SVG渲染失败，请查看下方ASCII棋盘' : '无棋盘数据 (board为空)';
+    boardSvg.innerHTML=`<div class="board-placeholder">${hint}<br><small style="color:#9ca3af">game_id=${data.game_id||currentGameId}</small></div>`;
+  }
+  asciiBoard.textContent=data.board_ascii||'(无ASCII数据)';
+  turnVal.textContent=data.turn||'-';
+  moveCountEl.textContent=String((data.history||[]).length);
+  winnerVal.textContent=data.winner|| (data.status==='finished'?'平局':'-');
+  lastMoveVal.textContent=data.last_move? `最后: (${data.last_move[0]},${data.last_move[1]})` : '';
+  statusPill.textContent=data.status||'-';
+  statusPill.className='pill '+(data.status||'waiting');
+}
+function renderHistory(data){
+  const h=data.history||[];
+  historyBody.innerHTML=h.map((m,i)=>`<tr data-idx="${i+1}" class="${i+1===replayIndex?'active':''}"><td>${m.move_no||i+1}</td><td>${m.color==='black'?'● 黑':'○ 白'}</td><td>(${m.x},${m.y})</td><td>${m.ts? new Date(m.ts*1000).toLocaleTimeString(): '-'}</td></tr>`).join('') || `<tr><td colspan="4" class="muted" style="text-align:center">暂无落子</td></tr>`;
+  historyBody.querySelectorAll('tr[data-idx]').forEach(tr=> tr.addEventListener('click', async ()=>{
+    const idx=parseInt(tr.dataset.idx,10);
+    await gotoReplay(idx);
+  }));
+}
+async function gotoReplay(idx){
+  if(!currentGameId) return;
+  const total = parseInt(replayRange.max||'0',10) || (currentData?.history?.length||0);
+  if(idx < total) replayMode = true; else replayMode = false;
+  try{
+    const r=await fetch(`/api/plugins/game-arena/replay?game_id=${encodeURIComponent(currentGameId)}&move_no=${idx}`);
+    const j=await r.json();
+    if(!j.ok) return;
+    replayIndex=idx; replayRange.value=idx; replayInfo.textContent=`${idx} / ${j.total}`;
+    if(j.board_svg && j.board_svg.includes('<svg')){
+      boardSvg.innerHTML=j.board_svg;
+    } else {
+      boardSvg.innerHTML=`<div class="board-placeholder">回放无SVG</div>`;
+    }
+    asciiBoard.textContent=j.board_ascii||'';
+    historyBody.querySelectorAll('tr').forEach(tr=> tr.classList.toggle('active', parseInt(tr.dataset.idx||'0',10)===idx));
+    lastMoveVal.textContent=j.last_move? `回放: (${j.last_move[0]},${j.last_move[1]})` : '回放: 起始';
+    if(idx === j.total) replayMode = false;
+  }catch(e){ console.error('gotoReplay failed', e); }
+}
+function startPolling(){
+  stopPolling();
+  pollTimer=setInterval(()=>{ if(currentGameId) refreshState(); }, 2000);
+}
+function stopPolling(){ if(pollTimer) clearInterval(pollTimer); pollTimer=null; }
+
+// trace: fetch UI events via /sessions/{id}/messages (same source as main chat)
+// render exactly as Agent does: llm_reasoning->思考, llm_response->回复, tool_call->工具, user->用户, final->最终
+function renderTrace(container, events, gameId){
+  // slice events to current game's turn only
+  const sliced = sliceByGame(events, gameId);
+  if(!sliced || sliced.length===0){
+    container.innerHTML='<div class="trace-empty">暂无轨迹</div>';
+    return;
+  }
+  events = sliced;
+  // events are UI events already in write order (same as main chat history replay)
+  let html = '';
+  for(const ev of events){
+    if(!ev || typeof ev !== 'object') continue;
+    const type = ev.type || '';
+    const content = String(ev.content != null ? ev.content : '');
+    if(type === 'llm_reasoning'){
+      if(!content.trim()) continue;
+      html += feedRow('思考', 'llm-reasoning', content, true);
+    } else if(type === 'llm_response'){
+      if(!content.trim()) continue;
+      html += feedRow('回复', 'llm-response', content, false);
+    } else if(type === 'tool_call'){
+      const tool = ev.tool || ev.tool_name || '工具';
+      const args = ev.args ? JSON.stringify(ev.args) : '';
+      html += feedRow('工具', 'tool-call', tool + (args ? '(' + args + ')' : ''), true);
+    } else if(type === 'user'){
+      if(!content.trim()) continue;
+      html += '<div class="feed-user"><div class="feed-user-bubble">' + esc(content) + '</div></div>';
+    } else if(type === 'final'){
+      if(!content.trim()) continue;
+      html += feedRow('最终', 'llm-response feed--final', content, false);
+    }
+    // other types (status/process_metrics/cache_stats) ignored - same as Agent's compact trace
+  }
+  container.innerHTML = html || '<div class="trace-empty">暂无轨迹</div>';
+  // bind collapse buttons
+  container.querySelectorAll('.feed-row-collapse').forEach(function(btn){
+    btn.addEventListener('click', function(e){
+      e.preventDefault(); e.stopPropagation();
+      var row = btn.closest('.feed-item');
+      if(row) row.classList.toggle('is-collapsed');
+    });
+  });
+  // scroll behavior: first render always bottom; later only follow when user
+  // is already near bottom (like Agent's live auto-follow)
+  const firstRender = container.dataset.firstRender !== '1';
+  if(firstRender){
+    container.dataset.firstRender = '1';
+    requestAnimationFrame(function(){ container.scrollTop = container.scrollHeight; });
+  } else {
+    const nearBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 80;
+    const prevCount = parseInt(container.dataset.prevCount||'0',10);
+    const isNew = events.length !== prevCount;
+    container.dataset.prevCount = String(events.length);
+    if(isNew && nearBottom){
+      requestAnimationFrame(function(){ container.scrollTop = container.scrollHeight; });
+    }
+  }
+}
+// Slice events to the turn(s) belonging to gameId.
+// Match source of truth: tool_call.args.game_id === gameId (exact), plus
+// user prompt content containing the game id as fallback. Start at the first
+// matching event, end at the next user prompt that starts a different game.
+function sliceByGame(events, gameId){
+  if(!gameId) return events;
+  const gid = String(gameId).trim();
+  if(!gid) return events;
+  let start = -1;
+  const matchTool = [];
+  // pass 1: collect exact tool_call matches
+  for(let i=0;i<events.length;i++){
+    const ev = events[i];
+    if(!ev || typeof ev !== 'object') continue;
+    if(ev.type === 'tool_call' && ev.args && typeof ev.args === 'object'){
+      if(String(ev.args.game_id || '') === gid) matchTool.push(i);
+    }
+  }
+  if(matchTool.length > 0){
+    start = matchTool[0];
+  } else {
+    // pass 2: user prompt content contains the game id
+    for(let i=0;i<events.length;i++){
+      const ev = events[i];
+      if(!ev || typeof ev !== 'object') continue;
+      if(ev.type === 'user'){
+        const c = String(ev.content || ev.message || '');
+        if(c.indexOf(gid) >= 0){ start = i; break; }
+      }
+    }
+    // pass 3: any event mentioning the id
+    if(start === -1){
+      for(let i=0;i<events.length;i++){
+        const ev = events[i];
+        if(!ev || typeof ev !== 'object') continue;
+        if(JSON.stringify(ev).indexOf(gid) >= 0){ start = i; break; }
+      }
+    }
+  }
+  if(start === -1){
+    console.warn('[trace] gameId', gid, 'not found in events, showing all');
+    return events;
+  }
+  // end: next user prompt that starts a different game
+  let end = events.length;
+  for(let i=start+1;i<events.length;i++){
+    const ev = events[i];
+    if(!ev || typeof ev !== 'object') continue;
+    if(ev.type === 'user'){
+      const c = String(ev.content || '');
+      if(c.indexOf(gid) < 0 && c.indexOf('游戏ID') >= 0){ end = i; break; }
+    }
+  }
+  console.log('[trace] gameId', gid, 'slice', start, '->', end, 'of', events.length);
+  return events.slice(start, end);
+}
+function feedRow(label, logType, text, collapsible){
+  const meta = {
+    '思考':['llm-reasoning','思考'],
+    '回复':['llm-response','回复'],
+    '工具':['tool-call','工具'],
+    '最终':['llm-response feed--final','最终']
+  }[label] || [logType,label];
+  const collapseBtn = collapsible
+    ? '<button type="button" class="feed-row-collapse" aria-expanded="true" aria-label="收起' + meta[1] + '"><span class="feed-row-collapse-chevron"></span></button>'
+    : '';
+  return '<div class="feed-item ' + meta[0] + '" data-log-type="' + logType + '">'
+    + '<div class="feed-row"><span class="feed-label">' + meta[1] + '</span>'
+    + '<div class="feed-chunk"><div class="feed-chunk-scroller">' + esc(text) + '</div></div>'
+    + collapseBtn + '</div></div>';
+}
+// incremental cache: sessionId -> {events:[], lastIndex}
+const traceCache = new Map();
+async function fetchTrace(sessionId, container, gameId){
+  if(!sessionId){ container.innerHTML='<div class="trace-empty">未绑定会话</div>'; return; }
+  try{
+    let cache = traceCache.get(sessionId);
+    if(!cache){ cache={events:[], lastIndex:-1}; traceCache.set(sessionId, cache); }
+    // fetch UI events from messages endpoint (same as main chat), incremental via after_index
+    // after_index semantics: returns events AFTER index (first call: -1 = from start)
+    let events = null;
+    let nextIndex = cache.lastIndex;
+    try{
+      const url = '/sessions/' + encodeURIComponent(sessionId) + '/messages?limit=500'
+        + (cache.lastIndex >= 0 ? '&after_index=' + encodeURIComponent(String(cache.lastIndex)) : '');
+      const r = await fetch(url);
+      if(r.ok){
+        const j = await r.json();
+        if(Array.isArray(j)){ events = j; nextIndex = cache.lastIndex + j.length; }
+        else if(j && Array.isArray(j.events)){
+          events = j.events;
+          nextIndex = (typeof j.range_end === 'number' && j.range_end > 0) ? j.range_end - 1 : (cache.lastIndex + j.events.length);
+        }
+        else if(j && Array.isArray(j.messages)){ events = j.messages; nextIndex = cache.lastIndex + j.messages.length; }
+      }
+    }catch(e){ console.warn('messages fetch failed', e); }
+    if(!events) events = [];
+    if(events.length > 0){
+      cache.events.push(...events);
+      cache.lastIndex = nextIndex;
+    }
+    // If reloaded fresh (after_index reset), refetch full
+    if(cache.events.length === 0 && cache.lastIndex === 0 && events.length === 0){
+      try{
+        const r2 = await fetch('/sessions/' + encodeURIComponent(sessionId) + '/messages?limit=500');
+        if(r2.ok){
+          const j2 = await r2.json();
+          const full = Array.isArray(j2) ? j2 : (j2 && Array.isArray(j2.events) ? j2.events : []);
+          if(full.length){ cache.events = full; cache.lastIndex = full.length; }
+        }
+      }catch(_){}
+    }
+    renderTrace(container, cache.events, gameId || currentGameId);
+  }catch(e){
+    container.innerHTML='<div class="trace-empty">加载失败: ' + esc(e.message) + '</div>';
+  }
+}
+function resetTraceCache(sessionId){
+  if(sessionId) traceCache.delete(sessionId);
+}
+function startTracePolling(){
+  stopTracePolling();
+  const tick=()=>{
+    if(sessionAId) fetchTrace(sessionAId, traceBlack, currentGameId);
+    if(sessionBId) fetchTrace(sessionBId, traceWhite, currentGameId);
+  };
+  tick();
+  traceTimer=setInterval(tick, 3000);
+}
+function stopTracePolling(){ if(traceTimer) clearInterval(traceTimer); traceTimer=null; }
+
+startBtn.addEventListener('click', async ()=>{
+  const a=sessionA.value.trim(), b=sessionB.value.trim();
+  if(!a||!b){ startMsg.textContent='请选择两个不同会话'; return; }
+  if(a===b){ startMsg.textContent='两会话不能相同'; return; }
+  sessionAId=a; sessionBId=b;
+  startBtn.disabled=true; startMsg.textContent='创建中...';
+  try{
+    const grantResponse=await fetch('/api/extensions/session-run-grant',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({plugin_id:'game-arena',session_ids:[a,b]})});
+    const grant=await grantResponse.json();
+    if(!grantResponse.ok||!grant.ok){ startMsg.textContent='授权失败: '+(grant.error||'unknown'); return; }
+    const r=await fetch('/api/plugins/game-arena/start',{method:'POST',headers:{'Content-Type':'application/json','X-Plugin-Session-Run-Grant':grant.token},body:JSON.stringify({session_a:a, session_b:b, board_size: parseInt(boardSize.value,10), game_id: gameId.value.trim()})});
+    const j=await r.json();
+    if(!j.ok){ startMsg.textContent='失败: '+(j.error||'unknown'); return; }
+    startMsg.textContent=`已创建 ${j.game_id}，已向两会话注入 Prompt，等待开局...`;
+    currentGameId=j.game_id; gameTitle.textContent=j.game_id;
+    await fetchLobby(); await refreshState(); startPolling(); startTracePolling();
+  }catch(e){ startMsg.textContent='请求失败: '+e.message; }
+  finally{ startBtn.disabled=false; }
+});
+$('#refreshSessions').addEventListener('click', fetchSessions);
+$('#refreshLobby').addEventListener('click', fetchLobby);
+lobbyFilter.addEventListener('change', fetchLobby);
+$('#viewBtn').addEventListener('click', async ()=>{ replayMode=false; await refreshState(); });
+$('#refreshBlack').addEventListener('click', ()=>{ if(sessionAId) fetchTrace(sessionAId, traceBlack, currentGameId); });
+$('#refreshWhite').addEventListener('click', ()=>{ if(sessionBId) fetchTrace(sessionBId, traceWhite, currentGameId); });
+$('#exportSvgBtn').addEventListener('click', ()=>{
+  const svg=currentData?.board_svg || boardSvg.innerHTML;
+  if(!svg || !svg.includes('<svg')) return;
+  const blob=new Blob([svg],{type:'image/svg+xml'});
+  const url=URL.createObjectURL(blob); const a=document.createElement('a'); a.href=url; a.download=`${currentGameId||'gomoku'}.svg`; a.click(); URL.revokeObjectURL(url);
+});
+$('#copyAsciiBtn').addEventListener('click', async ()=>{
+  const t=asciiBoard.textContent||''; if(!t) return;
+  await navigator.clipboard.writeText(t); const b=$('#copyAsciiBtn'); const old=b.textContent; b.textContent='已复制'; setTimeout(()=> b.textContent=old, 1200);
+});
+$('#firstBtn').addEventListener('click', ()=> gotoReplay(0));
+$('#prevBtn').addEventListener('click', ()=> gotoReplay(Math.max(0, replayIndex-1)));
+$('#nextBtn').addEventListener('click', ()=> gotoReplay(Math.min(parseInt(replayRange.max,10), replayIndex+1)));
+$('#lastBtn').addEventListener('click', async ()=>{ replayMode=false; await refreshState(); });
+replayRange.addEventListener('input', ()=> gotoReplay(parseInt(replayRange.value,10)));
+gameTitle.addEventListener('click', async ()=>{ if(replayMode){ replayMode=false; await refreshState(); } });
+$('#playBtn').addEventListener('click', ()=>{
+  if(playTimer){ clearInterval(playTimer); playTimer=null; $('#playBtn').textContent='播放'; return; }
+  const max=parseInt(replayRange.max,10);
+  if(replayIndex >= max) gotoReplay(0);
+  $('#playBtn').textContent='暂停';
+  playTimer=setInterval(()=>{
+    const m=parseInt(replayRange.max,10);
+    let nxt=replayIndex+1;
+    if(nxt>m){ clearInterval(playTimer); playTimer=null; $('#playBtn').textContent='播放'; replayMode=false; refreshState(); return; }
+    gotoReplay(nxt);
+  }, 900);
+});
+
+fetchSessions(); fetchLobby();
+// auto-select latest game if exists
+(async()=>{
+  try{
+    const r=await fetch('/api/plugins/game-arena/games?limit=1');
+    const j=await r.json();
+    if(j.games && j.games[0]){
+      selectGame(j.games[0].game_id);
+    }
+  }catch(_){}
+})();
+</script>
+</body>
+</html>

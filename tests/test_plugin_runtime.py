@@ -32,6 +32,7 @@ def _make_python_plugin(
     *,
     plugin_id: str = "demo.runtime",
     source: str | None = None,
+    permissions: dict | None = None,
 ) -> Path:
     root = discovery / plugin_id.replace(".", "-")
     _write_json(
@@ -47,6 +48,7 @@ def _make_python_plugin(
                 "api_version": "1",
                 "timeout_seconds": 5,
             },
+            **({"permissions": permissions} if permissions is not None else {}),
         },
     )
     (root / "plugin.py").write_text(
@@ -301,6 +303,75 @@ def next_value():
     assert registry.snapshot()["workers"] == []
 
 
+def test_worker_uses_one_event_loop_for_its_entire_lifecycle(tmp_path):
+    from plugins import PluginRuntimeRegistry, load_plugin
+
+    deactivation_state = tmp_path / "deactivation-state.json"
+    source = """
+import asyncio
+import json
+from pathlib import Path
+
+from myagent_plugin_sdk import Plugin
+
+plugin = Plugin()
+state = {"activation_loop": None, "last_call_loop": None}
+deactivation_state = Path(__DEACTIVATION_STATE__)
+
+@plugin.on_activate
+async def activate(context):
+    state["activation_loop"] = asyncio.get_running_loop()
+
+@plugin.tool(name="loop_state")
+async def loop_state():
+    current_loop = asyncio.get_running_loop()
+    result = {
+        "same_as_activation": current_loop is state["activation_loop"],
+        "activation_loop_closed": state["activation_loop"].is_closed(),
+        "same_as_previous_call": (
+            None
+            if state["last_call_loop"] is None
+            else current_loop is state["last_call_loop"]
+        ),
+    }
+    state["last_call_loop"] = current_loop
+    return result
+
+@plugin.on_deactivate
+async def deactivate(context):
+    current_loop = asyncio.get_running_loop()
+    deactivation_state.write_text(
+        json.dumps({
+            "same_as_activation": current_loop is state["activation_loop"],
+            "activation_loop_closed": state["activation_loop"].is_closed(),
+        }),
+        encoding="utf-8",
+    )
+""".lstrip().replace("__DEACTIVATION_STATE__", repr(str(deactivation_state)))
+    plugin = load_plugin(_make_python_plugin(tmp_path, source=source))
+    registry = PluginRuntimeRegistry()
+    name = registry.tool_definitions([plugin])[0]["function"]["name"]
+
+    first = registry.invoke(name, {}, [plugin])
+    second = registry.invoke(name, {}, [plugin])
+    registry.close()
+
+    assert first == {
+        "same_as_activation": True,
+        "activation_loop_closed": False,
+        "same_as_previous_call": None,
+    }
+    assert second == {
+        "same_as_activation": True,
+        "activation_loop_closed": False,
+        "same_as_previous_call": True,
+    }
+    assert json.loads(deactivation_state.read_text(encoding="utf-8")) == {
+        "same_as_activation": True,
+        "activation_loop_closed": False,
+    }
+
+
 def test_timed_out_worker_restarts_cleanly_for_next_call(tmp_path):
     from plugins import PluginRuntimeError, PluginRuntimeRegistry, load_plugin
 
@@ -365,6 +436,252 @@ def test_agent_extensions_exposes_runtime_tools(tmp_path, monkeypatch):
     result = asyncio.run(agent_extensions.invoke_plugin_tool(name, {"name": "Lin"}))
 
     assert result["message"] == "hello Lin"
+
+
+def test_plugin_tool_host_actions_use_trusted_session_scope(tmp_path, monkeypatch):
+    import agent_extensions
+    import agent_harness
+    from plugins import PluginManager
+    from runtime_v2 import SnapshotStore
+
+    source = """
+from myagent_plugin_sdk import Plugin
+
+plugin = Plugin()
+
+@plugin.tool(name="save", input_schema={"type": "object", "properties": {}})
+def save():
+    return {
+        "ok": True,
+        "_host_actions": [{
+            "service": "session_state.compare_and_set",
+            "namespace": "prefs",
+            "expected_revision": 0,
+            "value": {"theme": "dark"},
+        }],
+    }
+""".lstrip()
+    discovery = tmp_path / "plugins"
+    _make_python_plugin(
+        discovery,
+        source=source,
+        permissions={
+            "services": ["session_state.compare_and_set"],
+            "context": ["session_id"],
+        },
+    )
+    sessions_dir = tmp_path / "sessions"
+    (sessions_dir / "s1").mkdir(parents=True)
+
+    class FakeSessionManager:
+        pass
+
+    FakeSessionManager.sessions_dir = sessions_dir
+    FakeSessionManager._resolve_session_path = staticmethod(
+        lambda session_id: sessions_dir / session_id
+    )
+
+    monkeypatch.setattr(agent_harness, "session_manager", FakeSessionManager())
+    manager = PluginManager([discovery], tmp_path / "plugin-state.json")
+    monkeypatch.setattr(agent_extensions, "plugin_manager", lambda: manager)
+    monkeypatch.setenv("PLUGINS_ENABLED", "1")
+    agent_extensions.invalidate_extension_caches()
+
+    name = asyncio.run(agent_extensions.plugin_tool_definitions())[0]["function"]["name"]
+    result = asyncio.run(
+        agent_extensions.invoke_plugin_tool(name, {}, session_id="s1", run_id="run-1")
+    )
+
+    assert "_host_actions" not in result
+    assert result["_host_action_results"][0]["state"]["revision"] == 1
+    snapshot = SnapshotStore(sessions_dir).read("s1")
+    assert snapshot["extensions"]["demo.runtime"]["prefs"]["value"] == {
+        "theme": "dark"
+    }
+
+
+def test_plugin_extension_event_is_committed_once_and_published_live(tmp_path, monkeypatch):
+    import agent_extensions
+    import agent_harness
+    from plugins import PluginManager
+    from runtime_v2 import SessionEventLog
+    from runtime_v2.ui_projection import RuntimeUiProjection
+
+    source = """
+from myagent_plugin_sdk import Plugin, with_host_actions
+
+plugin = Plugin()
+
+@plugin.tool(name="notify", input_schema={"type": "object", "properties": {}})
+def notify():
+    return with_host_actions(
+        {"ok": True},
+        [
+            {
+                "service": "session_state.set_latest",
+                "namespace": "job",
+                "value": {"status": "done"},
+            },
+            {
+                "service": "session_events.append",
+                "event_name": "job_changed",
+                "data": {"status": "done"},
+            },
+        ],
+    )
+""".lstrip()
+    discovery = tmp_path / "plugins"
+    _make_python_plugin(
+        discovery,
+        source=source,
+        permissions={
+            "services": ["session_state.set_latest", "session_events.append"],
+            "context": ["session_id"],
+        },
+    )
+    sessions_dir = tmp_path / "sessions"
+    (sessions_dir / "s1").mkdir(parents=True)
+
+    class FakeSessionManager:
+        pass
+
+    FakeSessionManager.sessions_dir = sessions_dir
+    FakeSessionManager._resolve_session_path = staticmethod(
+        lambda session_id: sessions_dir / session_id
+    )
+    monkeypatch.setattr(agent_harness, "session_manager", FakeSessionManager())
+    manager = PluginManager([discovery], tmp_path / "plugin-state.json")
+    monkeypatch.setattr(agent_extensions, "plugin_manager", lambda: manager)
+    monkeypatch.setenv("PLUGINS_ENABLED", "1")
+    agent_extensions.invalidate_extension_caches()
+    published = []
+
+    async def publish(event):
+        published.append(dict(event))
+
+    name = asyncio.run(agent_extensions.plugin_tool_definitions())[0]["function"]["name"]
+    result = asyncio.run(
+        agent_extensions.invoke_plugin_tool(
+            name,
+            {},
+            session_id="s1",
+            run_id="run-1",
+            publish_event=publish,
+        )
+    )
+
+    assert result["ok"] is True
+    assert "_host_actions" not in result
+    assert published == [
+        {
+            "type": "extension_state_changed",
+            "plugin_id": "demo.runtime",
+            "namespace": "job",
+            "revision": 1,
+            "_runtime_v2_committed": True,
+        },
+        {
+            "type": "extension_event",
+            "plugin_id": "demo.runtime",
+            "event_name": "job_changed",
+            "data": {"status": "done"},
+            "created_at": published[1]["created_at"],
+            "runtime_seq": 2,
+            "_runtime_v2_committed": True,
+        }
+    ]
+    runtime_events = SessionEventLog(sessions_dir).read_all("s1")
+    assert [event.type for event in runtime_events] == [
+        "extension_state_changed",
+        "extension_event",
+    ]
+    assert RuntimeUiProjection(sessions_dir).read_ui_events("s1")[0]["data"] == {
+        "status": "done"
+    }
+
+
+def test_plugin_tool_receives_trusted_session_context_without_argument_injection(
+    tmp_path,
+    monkeypatch,
+):
+    import agent_extensions
+    from plugins import PluginManager
+
+    source = """
+from myagent_plugin_sdk import Plugin, current_tool_context
+
+plugin = Plugin()
+
+@plugin.tool(
+    name="whoami",
+    input_schema={
+        "type": "object",
+        "properties": {"value": {"type": "string"}},
+        "required": ["value"],
+        "additionalProperties": False,
+    },
+)
+def whoami(value):
+    context = current_tool_context()
+    return {
+        "value": value,
+        "session_id": context.session_id,
+        "run_id": context.run_id,
+        "workspace_root": context.workspace_root,
+        "cancellation_id": context.cancellation_id,
+    }
+""".lstrip()
+    discovery = tmp_path / "plugins"
+    _make_python_plugin(
+        discovery,
+        source=source,
+        permissions={
+            "context": [
+                "session_id",
+                "run_id",
+                "workspace_root",
+                "cancellation_id",
+            ]
+        },
+    )
+    manager = PluginManager([discovery], tmp_path / "plugin-state.json")
+    monkeypatch.setattr(agent_extensions, "plugin_manager", lambda: manager)
+    monkeypatch.setenv("PLUGINS_ENABLED", "1")
+    agent_extensions.invalidate_extension_caches()
+
+    definition = asyncio.run(agent_extensions.plugin_tool_definitions())[0]
+    name = definition["function"]["name"]
+    assert "session_id" not in definition["function"]["parameters"]["properties"]
+
+    result = asyncio.run(
+        agent_extensions.invoke_plugin_tool(
+            name,
+            {
+                "value": "ok",
+                "_session_id": "spoofed-private",
+                "session_id": "spoofed-public",
+                "run_id": "spoofed-run",
+                "workspace_root": "spoofed-workspace",
+                "plugin_id": "spoofed-plugin",
+                "plugin_data_dir": "spoofed-data",
+                "plugin_cache_dir": "spoofed-cache",
+                "plugin_temp_dir": "spoofed-temp",
+                "cancellation_id": "spoofed-call",
+            },
+            session_id="trusted-session",
+            run_id="trusted-run",
+            work_dir=str(tmp_path / "trusted-workspace"),
+            cancellation_id="trusted-call",
+        )
+    )
+
+    assert result == {
+        "value": "ok",
+        "session_id": "trusted-session",
+        "run_id": "trusted-run",
+        "workspace_root": str((tmp_path / "trusted-workspace")),
+        "cancellation_id": "trusted-call",
+    }
 
 
 def test_plugin_workspace_write_contract_is_enforced(tmp_path, monkeypatch):
@@ -532,7 +849,11 @@ def review(arguments, context):
     }
 """.lstrip()
     discovery = tmp_path / "plugins"
-    _make_python_plugin(discovery, source=source)
+    _make_python_plugin(
+        discovery,
+        source=source,
+        permissions={"context": ["session_id"]},
+    )
     manager = PluginManager([discovery], tmp_path / "plugin-state.json")
     monkeypatch.setattr(agent_extensions, "plugin_manager", lambda: manager)
     monkeypatch.setenv("PLUGINS_ENABLED", "1")

@@ -1,0 +1,104 @@
+{
+  "schema_version": 1,
+  "id": "game-arena",
+  "name": "Game Arena",
+  "version": "1.0.0",
+    "description": "Game Arena - Gomoku (Five in a Row) battle plugin with blocking turn-based PK for two sessions. Configurable board 9-19, 5min timeout.",
+    "settings_schema": {
+        "type": "object",
+        "schema_version": 1,
+        "title": "Game Arena defaults",
+        "description": "Defaults used when a new match does not specify a board size.",
+        "properties": {
+            "default_board_size": {
+                "type": "integer",
+                "title": "Default board size",
+                "description": "Board width and height for new matches (9-19).",
+                "minimum": 9,
+                "maximum": 19,
+                "default": 15
+            }
+        }
+    },
+  "runtime": {
+    "type": "python",
+    "entrypoint": "./plugin.py",
+    "api_version": "1",
+    "timeout_seconds": 60
+  },
+  "capabilities": {
+    "web": {
+      "entry": "web/index.html",
+      "assets": "web",
+      "api": true
+    },
+    "ui": {
+            "settings.section": [],
+            "navigation": [
+        {
+          "id": "main",
+          "label": "Game Arena",
+          "description": "Open the session battle arena.",
+          "order": 50
+                }
+            ],
+            "message.renderer": [
+        {
+          "id": "game-update",
+          "event_name": "game_updated",
+          "title": "Game Arena",
+          "description": "Gomoku match state changed.",
+          "variant": "info",
+          "fields": [
+            {"path": "/game_id", "label": "Game"},
+            {"path": "/status", "label": "Status"},
+            {"path": "/turn", "label": "Turn", "optional": true},
+            {"path": "/winner", "label": "Winner", "optional": true},
+            {"path": "/last_move", "label": "Last move", "format": "json", "optional": true},
+            {"path": "/message", "label": "Update", "optional": true}
+          ]
+        }
+      ],
+      "session.badge": [
+        {
+          "id": "active-game",
+          "namespace": "current-game",
+          "path": "/game_id",
+          "label": "Game",
+          "description": "This session has Game Arena state.",
+          "variant": "info",
+          "when": "truthy"
+        }
+      ],
+      "session.panel": [
+        {
+          "id": "current-game",
+          "namespace": "current-game",
+          "title": "Game Arena",
+          "description": "Current Gomoku match for this session.",
+          "variant": "info",
+          "fields": [
+            {"path": "/game_id", "label": "Game"},
+            {"path": "/status", "label": "Status"},
+            {"path": "/turn", "label": "Turn", "optional": true},
+            {"path": "/winner", "label": "Winner", "optional": true},
+            {"path": "/last_move", "label": "Last move", "format": "json", "optional": true},
+            {"path": "/move_count", "label": "Moves", "format": "number", "optional": true}
+          ]
+        }
+      ]
+    }
+  },
+  "permissions": {
+    "context": [
+            "session_id",
+            "workspace_root",
+            "settings"
+    ],
+    "services": [
+      "sessions.run_many",
+      "session_state.set_latest",
+      "session_events.append"
+    ]
+  }
+}

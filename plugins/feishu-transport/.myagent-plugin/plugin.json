@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "id": "feishu-transport",
+  "name": "Feishu Remote Transport",
+  "version": "1.0.0",
+  "description": "Optional Feishu transport for the authenticated remote-control service.",
+  "capabilities": {"trusted_host": {"entry": "host.py"}}
+}

@@ -1,0 +1,49 @@
+.plugin-session-panel--custom.session-todo-panel-host {
+    padding:0; border:0; background:transparent; box-shadow:none; backdrop-filter:none;
+}
+.session-todo-panel-host .chat-todo-plan-panel {
+    border:none; border-radius:var(--radius-sm); background:var(--surface-glass3);
+    backdrop-filter:blur(18px); -webkit-backdrop-filter:blur(18px);
+    padding:.35rem .35rem .4rem .2rem; max-height:min(70vh,28rem);
+    display:flex; flex:1 1 auto; min-height:0; flex-direction:column; overflow:hidden;
+    box-shadow:0 6px 28px rgba(0,0,0,.22),0 2px 8px rgba(0,0,0,.1);
+}
+.session-todo-panel-host .chat-todo-plan-title {
+    font-size:.62rem; font-weight:600; color:var(--text-tertiary); letter-spacing:.05em;
+    text-transform:uppercase; margin-bottom:.25rem; padding:0 .15rem;
+    display:flex; justify-content:space-between; align-items:center;
+}
+.session-todo-panel-host .chat-todo-plan-close {
+    display:inline-flex; align-items:center; justify-content:center; width:16px; height:16px;
+    padding:0; border:1px solid rgba(255,255,255,.08); border-radius:3px;
+    background:transparent; color:var(--text-tertiary); font-size:.7rem; line-height:1; cursor:pointer;
+}
+.session-todo-panel-host .chat-todo-plan-close:hover { color:var(--text-primary); background:rgba(255,255,255,.08); }
+.session-todo-panel-host .chat-todo-plan-stats {
+    font-size:.65rem; color:var(--text-secondary); font-variant-numeric:tabular-nums;
+    padding:0 .15rem .35rem; border-bottom:1px solid rgba(255,255,255,.05); margin-bottom:.25rem;
+}
+.session-todo-panel-host .chat-todo-plan-list {
+    margin:0; padding:0; list-style:none; display:flex; flex-direction:column; gap:.35rem;
+    overflow-x:hidden; overflow-y:auto; max-height:min(52vh,22rem);
+}
+.session-todo-panel-host .todo-plan-item {
+    font-size:.68rem; line-height:1.45; padding:.32rem .35rem; border-radius:6px;
+    border:1px solid transparent; word-break:break-word; overflow-wrap:break-word; transition:all .2s ease;
+}
+.session-todo-panel-host .todo-plan--pending { background:rgba(255,255,255,.03); color:var(--text-secondary); border-color:rgba(255,255,255,.04); }
+.session-todo-panel-host .todo-plan--in_progress { background:rgba(var(--accent-rgb),.14); border-color:rgba(var(--accent-rgb),.25); color:var(--text-primary); }
+.session-todo-panel-host .todo-plan--completed { background:rgba(166,227,161,.08); border-color:rgba(166,227,161,.18); color:var(--text-placeholder); text-decoration:line-through; }
+.session-todo-panel-host .todo-plan-status-tag {
+    display:block; font-size:.58rem; font-weight:600; text-transform:uppercase;
+    letter-spacing:.06em; color:var(--text-tertiary); margin-bottom:.15rem;
+}
+.session-todo-panel-host .todo-plan--in_progress .todo-plan-status-tag { color:var(--accent-2); }
+:root.theme-light .session-todo-panel-host .todo-plan--pending { background:rgba(0,0,0,.03); border-color:rgba(0,0,0,.06); }
+:root.theme-light .session-todo-panel-host .todo-plan--completed { color:var(--text-tertiary); }
+:root.theme-light .session-todo-panel-host .chat-todo-plan-title { color:var(--text-secondary); }
+:root.theme-light .session-todo-panel-host .chat-todo-plan-close { border-color:rgba(0,0,0,.1); color:var(--text-secondary); }
+:root.theme-light .session-todo-panel-host .chat-todo-plan-close:hover { background:rgba(0,0,0,.05); color:var(--text-primary); }
+:root.theme-light .session-todo-panel-host .chat-todo-plan-stats { border-bottom-color:rgba(0,0,0,.06); }
+.plugin-session-badge[data-plugin-id="session-todo"] { border-color:rgba(var(--accent-rgb),.36); background:rgba(var(--accent-rgb),.16); color:var(--accent-2); }
+:root.theme-light .plugin-session-badge[data-plugin-id="session-todo"] { border-color:rgba(var(--brand-accent-rgb),.3); background:rgba(var(--brand-accent-rgb),.12); color:var(--accent-1); }

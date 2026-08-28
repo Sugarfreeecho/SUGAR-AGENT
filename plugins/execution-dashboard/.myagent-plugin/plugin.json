@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "id": "execution-dashboard",
+  "name": "Execution Dashboard",
+  "version": "1.0.0",
+  "description": "Optional runtime metrics dashboard.",
+  "capabilities": {
+    "web": {"entry": "web/index.html", "assets": "web"},
+    "ui": {"navigation": [{"id": "main", "label": "Execution Dashboard", "order": 80}]}
+  }
+}

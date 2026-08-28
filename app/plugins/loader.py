@@ -67,12 +67,16 @@ _COMMON_FIELDS = {
     "runtime",
     "dependencies",
     "commands",
+    "capabilities",
+    "settings_schema",
+    "settingsSchema",
     "slash_commands",
     "kind",
     "requires_env",
     "provides_tools",
     "provides_hooks",
     "platforms",
+    "system_builtin",
 }
 _UNSUPPORTED_COMPONENT_KEYS = {
     "lsp",
@@ -633,6 +637,8 @@ def _supported_component_names(
     prompts: Sequence[Path],
     runtime: Optional[PluginRuntimeSpec],
     commands: Mapping[str, PluginCommand],
+    settings_declared: bool = False,
+    ui_declared: bool = False,
 ) -> list[str]:
     return [
         name
@@ -644,6 +650,8 @@ def _supported_component_names(
             ("prompts", bool(prompts)),
             ("runtime", runtime is not None),
             ("commands", bool(commands)),
+            ("settings", settings_declared),
+            ("ui", ui_declared),
         )
         if present
     ]
@@ -773,8 +781,27 @@ def load_plugin(path: Path | str) -> PluginDefinition:
         if source_format == "opencode"
         else _normalise_dependencies(manifest.get("dependencies"), warnings)
     )
+    raw_capabilities = manifest.get("capabilities")
+    settings_declared = bool(
+        "settings_schema" in manifest
+        or "settingsSchema" in manifest
+        or (isinstance(raw_capabilities, Mapping) and "settings" in raw_capabilities)
+    )
+    ui_declared = bool(
+        isinstance(raw_capabilities, Mapping)
+        and isinstance(raw_capabilities.get("ui"), Mapping)
+        and raw_capabilities.get("ui")
+    )
     supported = _supported_component_names(
-        skills, hooks, mcp_servers, agents, prompts, runtime, commands
+        skills,
+        hooks,
+        mcp_servers,
+        agents,
+        prompts,
+        runtime,
+        commands,
+        settings_declared,
+        ui_declared,
     )
     manifest_components = _component_container(manifest)
     unsupported = sorted(
@@ -809,6 +836,11 @@ def load_plugin(path: Path | str) -> PluginDefinition:
     if unknown:
         warnings.append("Unrecognized manifest fields were ignored: " + ", ".join(unknown))
 
+    requested_system_builtin = manifest.get("system_builtin", False)
+    if not isinstance(requested_system_builtin, bool):
+        warnings.append("system_builtin must be a boolean; treating the plugin as user-visible")
+        requested_system_builtin = False
+
     unsupported = sorted(set(unsupported))
     if source_format == "native" and not unsupported:
         compatibility_status = "native"
@@ -826,7 +858,7 @@ def load_plugin(path: Path | str) -> PluginDefinition:
         supported_components=tuple(supported),
         unsupported_components=tuple(unsupported),
     )
-    return PluginDefinition(
+    definition = PluginDefinition(
         plugin_id=namespace,
         name=name,
         namespace=namespace,
@@ -836,6 +868,7 @@ def load_plugin(path: Path | str) -> PluginDefinition:
         root=root,
         manifest_path=manifest_path,
         source_format=source_format,
+        system_builtin=bool(requested_system_builtin),
         skills=tuple(skills),
         hooks=tuple(hooks),
         mcp_sources=tuple(mcp_sources),
@@ -850,6 +883,11 @@ def load_plugin(path: Path | str) -> PluginDefinition:
         compatibility=compatibility,
         raw_manifest=copy.deepcopy(manifest),
     )
+    if settings_declared:
+        from .settings import plugin_settings_schema
+
+        plugin_settings_schema(definition)
+    return definition
 
 
 def _manifest_candidates(discovery_root: Path) -> list[Path]:

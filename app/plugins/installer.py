@@ -45,6 +45,7 @@ class PluginInstaller:
         self,
         discovery_dirs: Iterable[Path | str],
         *,
+        install_root: Optional[Path | str] = None,
         runner: Optional[CommandRunner] = None,
     ) -> None:
         self.discovery_dirs = tuple(
@@ -52,11 +53,18 @@ class PluginInstaller:
         )
         if not self.discovery_dirs:
             raise PluginInstallError("At least one plugin discovery directory is required")
+        self._install_root = (
+            Path(install_root).expanduser().resolve()
+            if install_root is not None
+            else self.discovery_dirs[0]
+        )
+        if self._install_root not in self.discovery_dirs:
+            raise PluginInstallError("install_root must be one of the discovery directories")
         self.runner = runner or _default_runner
 
     @property
     def install_root(self) -> Path:
-        return self.discovery_dirs[0]
+        return self._install_root
 
     def _run(
         self,
@@ -230,6 +238,11 @@ class PluginInstaller:
                     f"Plugin {source_plugin.plugin_id!r} is already installed "
                     f"at {existing.root}"
                 )
+            if existing is not None and existing.root.resolve() != target:
+                raise PluginInstallError(
+                    f"Plugin {source_plugin.plugin_id!r} is managed outside the writable "
+                    "install directory and cannot be replaced"
+                )
             if target.exists() and (existing is None or existing.root != target):
                 raise PluginInstallError(f"Plugin target already exists: {target}")
 
@@ -277,6 +290,10 @@ class PluginInstaller:
 
     def uninstall(self, plugin_id: str) -> Dict[str, Any]:
         plugin = self._find_installed(plugin_id)
+        if not is_path_within(plugin.root, self.install_root):
+            raise PluginInstallError(
+                f"Plugin {plugin.plugin_id!r} is outside the writable install directory"
+            )
         owner_root = next(
             (
                 root
@@ -336,6 +353,10 @@ class PluginInstaller:
 
     def install_dependencies(self, plugin_id: str) -> Dict[str, Any]:
         plugin = self._find_installed(plugin_id)
+        if not is_path_within(plugin.root, self.install_root):
+            raise PluginInstallError(
+                f"Plugin {plugin.plugin_id!r} is outside the writable install directory"
+            )
         self._check_plugin_dependencies(plugin)
         operations = []
 

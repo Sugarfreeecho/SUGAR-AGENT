@@ -50,6 +50,20 @@ from .runtime import (
 )
 from .installer import PluginInstallError, PluginInstaller
 from .state import PluginStateStore
+from .ui import plugin_ui_contributions, project_plugin_session_ui
+from .storage import (
+    PluginStorageLayout,
+    default_plugin_storage_root,
+    default_workspace_root,
+    plugin_storage_layout,
+)
+from .settings import (
+    PluginSettingsStore,
+    default_plugin_settings_path,
+    plugin_settings_schema,
+    public_plugin_settings,
+    resolve_plugin_settings_context,
+)
 
 __all__ = [
     "COMPATIBILITY_STATUSES",
@@ -73,9 +87,12 @@ __all__ = [
     "PluginSecurityError",
     "PluginStateError",
     "PluginStateStore",
+    "PluginStorageLayout",
     "PluginValidationError",
     "default_discovery_dirs",
+    "default_plugin_storage_root",
     "default_state_path",
+    "default_workspace_root",
     "discover_plugins",
     "get_plugin_manager",
     "get_plugin_runtime_registry",
@@ -84,7 +101,15 @@ __all__ = [
     "normalize_namespace",
     "path_resources",
     "plugin_content_signature",
+    "plugin_ui_contributions",
+    "project_plugin_session_ui",
     "plugins_enabled",
+    "plugin_storage_layout",
+    "PluginSettingsStore",
+    "default_plugin_settings_path",
+    "plugin_settings_schema",
+    "public_plugin_settings",
+    "resolve_plugin_settings_context",
     "runtime_tool_name",
     "safe_plugin_path",
     "skill_resources",

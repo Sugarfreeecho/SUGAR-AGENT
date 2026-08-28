@@ -109,6 +109,7 @@ class PluginDefinition:
     root: Path
     manifest_path: Path
     source_format: str
+    system_builtin: bool = False
     skills: Tuple[Path, ...] = ()
     hooks: Tuple[Path, ...] = ()
     mcp_sources: Tuple[Path, ...] = ()
@@ -163,6 +164,7 @@ class PluginDefinition:
             "root": str(self.root),
             "manifest_path": str(self.manifest_path),
             "source_format": self.source_format,
+            "system_builtin": self.system_builtin,
             "components": {
                 "skills": [str(path) for path in self.skills],
                 "hooks": [str(path) for path in self.hooks],

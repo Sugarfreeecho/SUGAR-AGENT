@@ -1,0 +1,8 @@
+'use strict';
+const sessionInput=document.getElementById('session');const error=document.getElementById('error');const team=document.getElementById('team');const state=document.getElementById('state');
+function sid(){return sessionInput.value.trim()} async function api(path,options){const response=await fetch('/api/agent-team/'+encodeURIComponent(sid())+path,{credentials:'same-origin',headers:{'Content-Type':'application/json'},...options});const body=await response.json();if(!response.ok||body.ok!==true)throw new Error(body.error||'Request failed');return body.data}
+async function refresh(){error.textContent='';try{const value=await api('');team.hidden=false;state.textContent=JSON.stringify(value,null,2)}catch(e){team.hidden=true;error.textContent=e.message}}
+document.getElementById('select').addEventListener('submit',e=>{e.preventDefault();void refresh()});document.getElementById('refresh').onclick=()=>void refresh();
+document.getElementById('create').addEventListener('submit',async e=>{e.preventDefault();try{await api('',{method:'POST',body:JSON.stringify({title:document.getElementById('title').value})});await refresh()}catch(x){error.textContent=x.message}});
+document.getElementById('task').addEventListener('submit',async e=>{e.preventDefault();try{await api('/tasks',{method:'POST',body:JSON.stringify({title:document.getElementById('task-title').value})});await refresh()}catch(x){error.textContent=x.message}});
+document.getElementById('shutdown').onclick=async()=>{try{await api('/shutdown',{method:'POST',body:'{}'});await refresh()}catch(x){error.textContent=x.message}};document.getElementById('archive').onclick=async()=>{try{await api('/archive',{method:'POST',body:'{}'});await refresh()}catch(x){error.textContent=x.message}};

@@ -199,6 +199,24 @@ def test_unsatisfied_plugin_dependency_blocks_install(tmp_path):
         PluginInstaller([tmp_path / "installed"]).install(source)
 
 
+def test_managed_install_root_cannot_replace_or_remove_bundled_plugin(tmp_path):
+    from plugins import PluginInstallError, PluginInstaller
+
+    bundled = tmp_path / "bundled"
+    user = tmp_path / "user"
+    _plugin_source(bundled / "demo.install")
+    replacement = _plugin_source(tmp_path / "replacement", version="2.0.0")
+    installer = PluginInstaller([bundled, user], install_root=user)
+
+    with pytest.raises(PluginInstallError, match="outside the writable"):
+        installer.install(replacement, replace=True)
+    with pytest.raises(PluginInstallError, match="outside the writable"):
+        installer.uninstall("demo.install")
+
+    assert (bundled / "demo.install" / "plugin.py").is_file()
+    assert not (user / "demo.install").exists()
+
+
 def test_webui_exposes_plugin_lifecycle_routes():
     source = (APP_DIR / "webui.py").read_text(encoding="utf-8")
     template = (APP_DIR / "templates" / "extensions_config.html").read_text(

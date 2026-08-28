@@ -1,0 +1,9 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Agent Team</title><link rel="stylesheet" href="style.css"></head>
+<body><main><h1>Agent Team</h1><p>Manage a session's optional collaboration workflow.</p>
+<form id="select"><label>Session ID <input id="session" required maxlength="256"></label><button>Open</button></form>
+<div id="error" role="alert"></div><section id="team" hidden><div class="toolbar"><button id="refresh">Refresh</button><button id="shutdown">Request shutdown</button><button id="archive">Archive</button></div><pre id="state"></pre></section>
+<section><h2>Create team</h2><form id="create"><label>Title <input id="title" maxlength="200"></label><button>Create</button></form></section>
+<section><h2>Add task</h2><form id="task"><label>Task <input id="task-title" required maxlength="300"></label><button>Add</button></form></section>
+</main><script src="app.js"></script></body></html>

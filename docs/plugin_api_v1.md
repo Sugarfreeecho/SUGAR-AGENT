@@ -35,6 +35,10 @@ Hook 和 Slash Command。声明式 Skill、Hook、Command、MCP、Agent、Prompt
 }
 ```
 
+宿主随应用发布的原生插件可以声明 `"system_builtin": true`。宿主只有在插件实际位于内置
+`plugins/` 目录时才认可该标记，并将其从用户插件目录列表隐藏；插件已有的导航、设置、消息渲染、
+会话徽章和面板贡献仍正常生效。用户目录中的插件不能靠该字段隐藏自身。
+
 `runtime.type` 支持 `python` 和 `node`。插件工具会转换成稳定、无冲突的模型工具名：
 
 ```text
@@ -168,6 +172,41 @@ def write_report(path, workspace_root):
 `plugin.describe`。未来可选的原生 OS 沙箱可作为额外纵深防御，而不是插件正常运行的
 前置条件。
 
+### 会话 UI 插槽
+
+插件可通过 `capabilities.ui` 声明 `session.badge` 和 `session.panel`。宿主只投影
+Manifest 明确列出的扩展状态字段，并默认使用通用安全组件渲染。面板动作通过
+`set_state` 或 `invoke_tool` 声明，浏览器不能自行指定工具名或固定参数。
+`session.badge` 默认显示文字徽章；内置工作流可使用 `"display": "activity"` 将匹配
+状态投影为会话运行圆点，而不把领域判断重新写回宿主会话代码。
+
+仓库自带的原生系统插件可为面板声明专用渲染资源：
+
+```json
+{
+  "capabilities": {
+    "web": {"assets": "web"},
+    "ui": {
+      "session.panel": [{
+        "id": "current-plan",
+        "namespace": "plan",
+        "title": "Current plan",
+        "renderer": {
+          "module": "session-panel.js",
+          "style": "session-panel.css"
+        },
+        "fields": [{"path": "/items", "label": "Items"}]
+      }]
+    }
+  }
+}
+```
+
+专用渲染器运行在宿主页，拥有页面 DOM 权限，因此不是普通插件能力。宿主会同时校验
+`system_builtin`、原生格式、插件真实路径位于随应用发布的 `plugins/` 目录，以及资源
+确实位于 `capabilities.web.assets` 中；用户插件即使伪造相同 Manifest 字段，也只会回退
+到通用面板。资源 URL 由宿主生成并附带内容签名用于缓存失效。
+
 ## Node.js 插件
 
 CommonJS、ES Module 均可导出 `setup(plugin)` 或默认 setup 函数：
@@ -246,6 +285,6 @@ Content-Type: application/json
 ## v1 边界
 
 v1 已稳定统一能力模型、持久 Worker、Tool/Hook/Command 注册、安装/卸载、依赖准备、
-热重载和跨宿主兼容诊断。外部工具仍可通过 MCP 注册。尚未包含中央插件市场索引、
-发布/签名服务、宿主私有 UI 扩展的通用抽象，也不承诺任意 Claude、Codex、Hermes 或
-OpenCode 插件无需修改即可运行。
+热重载、声明式宿主 UI 插槽和跨宿主兼容诊断。外部工具仍可通过 MCP 注册。尚未包含
+中央插件市场索引、发布/签名服务，也不承诺任意 Claude、Codex、Hermes 或 OpenCode
+插件无需修改即可运行。

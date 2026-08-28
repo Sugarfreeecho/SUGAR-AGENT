@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "id": "agent-team",
+  "name": "Agent Team",
+  "version": "1.0.0",
+  "system_builtin": true,
+  "description": "Optional multi-session collaboration workflow.",
+  "capabilities": {
+    "trusted_host": {"entry": "host.py"},
+    "web": {"entry": "web/index.html", "assets": "web"},
+    "ui": {
+      "navigation": [{"id": "main", "label": "Agent Team", "order": 60}],
+      "session.badge": [{
+        "id": "active-team", "namespace": "team", "path": "/status",
+        "label": "Team", "variant": "info", "when": "equals", "equals": "active"
+      }],
+      "session.panel": [{
+        "id": "current-team", "namespace": "team", "title": "Agent Team",
+        "description": "Members and tasks coordinated for this session.", "variant": "info",
+        "fields": [
+          {"path": "/title", "label": "Team", "optional": true},
+          {"path": "/status", "label": "Status"},
+          {"path": "/members", "label": "Members", "format": "list", "optional": true,
+           "columns": [{"path": "/name", "label": "Name"}, {"path": "/state", "label": "State"}]},
+          {"path": "/tasks", "label": "Tasks", "format": "list", "optional": true,
+           "columns": [{"path": "/title", "label": "Task"}, {"path": "/status", "label": "Status"}]}
+        ]
+      }]
+    }
+  }
+}

@@ -48,13 +48,15 @@ def test_repository_engineering_plugin_contract(tmp_path):
 
     loaded = manager.load_enabled()
 
-    assert len(loaded.plugins) == 1
-    plugin = loaded.plugins[0]
+    plugin = next(
+        item for item in loaded.plugins if item.id == "repo-engineering"
+    )
     assert plugin.id == "repo-engineering"
     assert plugin.source_format == "codex"
     assert plugin.compatibility.status == "compatible"
-    assert set(loaded.skill_directories) == {"repo-engineering:repo-engineering"}
-    assert loaded.mcp_servers == {}
+    assert len(plugin.skills) == 1
+    assert "repo-engineering:repo-engineering" in loaded.skill_directories
+    assert plugin.mcp_servers == {}
 
 
 def test_repository_global_mcp_contract():

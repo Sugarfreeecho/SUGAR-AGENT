@@ -1,0 +1,48 @@
+{
+  "schema_version": 1,
+  "id": "agent-goal",
+  "name": "Goal Workflow",
+  "version": "1.0.0",
+  "system_builtin": true,
+  "description": "Durable goals with independent completion review and continuation.",
+  "capabilities": {
+    "trusted_host": {"entry": "host.py", "workflow_runtime": "runtime.py"},
+    "web": {"entry": "web/index.html", "assets": "web"},
+    "ui": {
+      "navigation": [{"id": "main", "label": "Goals", "order": 55}],
+      "message.renderer": [{
+        "id": "judge-result", "event_name": "judge_result", "title": "Goal Judge",
+        "description": "Independent completion evaluation.", "variant": "info",
+        "fields": [
+          {"path": "/verdict", "label": "Verdict"},
+          {"path": "/reason", "label": "Reason", "optional": true},
+          {"path": "/model", "label": "Model", "optional": true},
+          {"path": "/failure_kind", "label": "Failure", "optional": true}
+        ]
+      }],
+      "session.badge": [{
+        "id": "active-goal", "namespace": "goal", "path": "/status",
+        "label": "Goal", "variant": "info", "display": "activity",
+        "when": "equals", "equals": "active"
+      }, {
+        "id": "review-goal", "namespace": "goal", "path": "/review_status",
+        "label": "待审核", "variant": "success", "when": "equals", "equals": "pending"
+      }],
+      "session.panel": [{
+        "id": "current-goal", "namespace": "goal", "title": "Goal",
+        "description": "Durable objective and completion-review state.", "variant": "info",
+        "order": 10,
+        "visible_when": {"path": "/deleted", "when": "not_truthy"},
+        "renderer": {"module": "session-panel.js", "style": "session-panel.css"},
+        "fields": [
+          {"path": "/objective", "label": "Objective"},
+          {"path": "/status", "label": "Status"},
+          {"path": "/used_tokens", "label": "Used tokens", "format": "number", "optional": true},
+          {"path": "/remaining_tokens", "label": "Remaining", "format": "number", "optional": true},
+          {"path": "/last_judge_verdict", "label": "Judge", "optional": true},
+          {"path": "/last_judge_reason", "label": "Judge reason", "optional": true}
+        ]
+      }]
+    }
+  }
+}

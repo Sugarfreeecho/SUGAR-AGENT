@@ -38,6 +38,12 @@ class PluginRegistry {
     this.commands = new Map();
     this.activateHandlers = [];
     this.deactivateHandlers = [];
+    this.deferredPollHandler = null;
+    this.deferredCancelHandler = null;
+    this.httpHandler = null;
+    this.backgroundServices = new Map();
+    this.backgroundTasks = new Map();
+    this.backgroundStatus = new Map();
   }
 
   registerTool(spec, handler) {
@@ -214,6 +220,163 @@ class PluginRegistry {
     return handler;
   }
 
+  onDeferredPoll(handler) {
+    if (typeof handler !== "function") {
+      throw new Error("Deferred poll handler must be a function");
+    }
+    if (this.deferredPollHandler) {
+      throw new Error("Only one deferred poll handler may be registered");
+    }
+    this.deferredPollHandler = handler;
+    return handler;
+  }
+
+  onDeferredCancel(handler) {
+    if (typeof handler !== "function") {
+      throw new Error("Deferred cancel handler must be a function");
+    }
+    if (this.deferredCancelHandler) {
+      throw new Error("Only one deferred cancel handler may be registered");
+    }
+    this.deferredCancelHandler = handler;
+    return handler;
+  }
+
+  onHttpRequest(handler) {
+    if (typeof handler !== "function") {
+      throw new Error("HTTP handler must be a function");
+    }
+    if (this.httpHandler) {
+      throw new Error("Only one HTTP handler may be registered");
+    }
+    this.httpHandler = handler;
+    return handler;
+  }
+
+  registerBackgroundService(spec, handler) {
+    if (typeof spec === "string") {
+      spec = { name: spec };
+    }
+    if (!spec || typeof spec !== "object" || typeof handler !== "function") {
+      throw new Error("Background service requires a specification and handler");
+    }
+    const name = String(spec.name || "").trim();
+    if (!TOOL_NAME.test(name) || this.backgroundServices.has(name)) {
+      throw new Error(`Invalid or duplicate background service: ${name}`);
+    }
+    const failurePolicy = String(
+      spec.failurePolicy || spec.failure_policy || "restart"
+    ).toLowerCase();
+    if (!["restart", "stop"].includes(failurePolicy)) {
+      throw new Error("Background service failurePolicy must be restart or stop");
+    }
+    const intervalSeconds = Math.max(
+      0.05,
+      Math.min(86400, Number(spec.intervalSeconds || spec.interval_seconds || 60))
+    );
+    const registration = {
+      name,
+      handler,
+      interval_seconds: intervalSeconds,
+      run_on_start: spec.runOnStart !== false && spec.run_on_start !== false,
+      failure_policy: failurePolicy,
+    };
+    this.backgroundServices.set(name, registration);
+    this.backgroundStatus.set(name, {
+      name,
+      state: "registered",
+      runs: 0,
+      failures: 0,
+      last_error: "",
+      last_started_monotonic: 0,
+      last_finished_monotonic: 0,
+    });
+    return handler;
+  }
+
+  backgroundService(spec, handler) {
+    return this.registerBackgroundService(spec, handler);
+  }
+
+  describeBackgroundServices() {
+    return [...this.backgroundServices.values()]
+      .sort((left, right) => left.name.localeCompare(right.name))
+      .map(({ name, interval_seconds, run_on_start, failure_policy }) => ({
+        name, interval_seconds, run_on_start, failure_policy,
+      }));
+  }
+
+  async runBackgroundService(registration, context, control) {
+    if (!registration.run_on_start) {
+      await control.sleep(registration.interval_seconds * 1000);
+    }
+    while (!control.cancelled) {
+      const status = this.backgroundStatus.get(registration.name);
+      status.state = "running";
+      status.last_started_monotonic = Number(process.hrtime.bigint()) / 1e9;
+      try {
+        await registration.handler({ ...(context || {}) });
+        status.runs += 1;
+        status.last_error = "";
+        status.state = "sleeping";
+      } catch (error) {
+        status.failures += 1;
+        status.last_error = String(error && error.message ? error.message : error).slice(0, 2000);
+        status.state = "failed";
+        if (registration.failure_policy === "stop") {
+          return;
+        }
+      } finally {
+        status.last_finished_monotonic = Number(process.hrtime.bigint()) / 1e9;
+      }
+      await control.sleep(registration.interval_seconds * 1000);
+    }
+    this.backgroundStatus.get(registration.name).state = "stopped";
+  }
+
+  startBackgroundServices(context) {
+    if (!context || !context.background_services_enabled) {
+      return;
+    }
+    for (const registration of this.backgroundServices.values()) {
+      if (this.backgroundTasks.has(registration.name)) continue;
+      let wake = null;
+      const control = {
+        cancelled: false,
+        sleep: (milliseconds) => new Promise((resolve) => {
+          const timer = setTimeout(() => {
+            wake = null;
+            resolve();
+          }, milliseconds);
+          wake = () => {
+            clearTimeout(timer);
+            wake = null;
+            resolve();
+          };
+        }),
+        cancel: () => {
+          control.cancelled = true;
+          if (wake) wake();
+        },
+      };
+      const promise = this.runBackgroundService(registration, context, control);
+      this.backgroundTasks.set(registration.name, { control, promise });
+    }
+  }
+
+  async stopBackgroundServices() {
+    const tasks = [...this.backgroundTasks.values()];
+    this.backgroundTasks.clear();
+    for (const task of tasks) task.control.cancel();
+    await Promise.allSettled(tasks.map((task) => task.promise));
+  }
+
+  backgroundServiceStatus() {
+    return [...this.backgroundStatus.keys()]
+      .sort()
+      .map((name) => ({ ...this.backgroundStatus.get(name) }));
+  }
+
   describeHooks() {
     return [...this.hooks.values()]
       .sort((left, right) =>
@@ -230,12 +393,15 @@ class PluginRegistry {
       .map(({ name, description, usage }) => ({ name, description, usage }));
   }
 
-  async invokeTool(name, argumentsObject) {
+  async invokeTool(name, argumentsObject, context) {
     const registration = this.tools.get(String(name || ""));
     if (!registration) {
       throw new Error(`Unknown plugin tool: ${name}`);
     }
-    return await registration.handler({ ...(argumentsObject || {}) });
+    return await registration.handler(
+      { ...(argumentsObject || {}) },
+      { ...(context || {}) }
+    );
   }
 
   async invokeHook(event, id, payload) {
@@ -254,13 +420,40 @@ class PluginRegistry {
     return await registration.handler(String(argumentsText || ""), { ...(context || {}) });
   }
 
+  async pollDeferred(token, context) {
+    if (!this.deferredPollHandler) {
+      throw new Error("Plugin did not register a deferred poll handler");
+    }
+    return await this.deferredPollHandler(String(token || ""), { ...(context || {}) });
+  }
+
+  async cancelDeferred(token, reason, context) {
+    if (!this.deferredCancelHandler) {
+      return null;
+    }
+    return await this.deferredCancelHandler(
+      String(token || ""),
+      String(reason || "cancelled"),
+      { ...(context || {}) }
+    );
+  }
+
+  async handleHttp(request, context) {
+    if (!this.httpHandler) {
+      throw new Error("Plugin did not register an HTTP handler");
+    }
+    return await this.httpHandler({ ...(request || {}) }, { ...(context || {}) });
+  }
+
   async activate(context) {
     for (const handler of this.activateHandlers) {
       await handler({ ...(context || {}) });
     }
+    this.startBackgroundServices(context || {});
   }
 
   async deactivate(context) {
+    await this.stopBackgroundServices();
     for (const handler of [...this.deactivateHandlers].reverse()) {
       await handler({ ...(context || {}) });
     }
@@ -475,6 +668,9 @@ async function handle(registry, request) {
       tools: registry.describeTools(),
       hooks: registry.describeHooks(),
       commands: registry.describeCommands(),
+      deferred_results: Boolean(registry.deferredPollHandler),
+      http: Boolean(registry.httpHandler),
+      background_services: registry.describeBackgroundServices(),
     };
   }
   if (method === "plugin.ping") {
@@ -482,6 +678,9 @@ async function handle(registry, request) {
   }
   if (method === "plugin.shutdown") {
     return { status: "stopping" };
+  }
+  if (method === "background.status") {
+    return { services: registry.backgroundServiceStatus() };
   }
   if (method === "tool.call") {
     const params = request.params;
@@ -492,7 +691,11 @@ async function handle(registry, request) {
     if (!args || typeof args !== "object" || Array.isArray(args)) {
       throw new Error("tool.call arguments must be an object");
     }
-    return await registry.invokeTool(params.name, args);
+    const context = params.context === undefined ? {} : params.context;
+    if (!context || typeof context !== "object" || Array.isArray(context)) {
+      throw new Error("tool.call context must be an object");
+    }
+    return await registry.invokeTool(params.name, args, context);
   }
   if (method === "hook.call") {
     const params = request.params;
@@ -516,6 +719,39 @@ async function handle(registry, request) {
     }
     return await registry.invokeCommand(params.name, params.arguments, context);
   }
+  if (method === "deferred.poll" || method === "deferred.cancel") {
+    const params = request.params;
+    if (!params || typeof params !== "object" || Array.isArray(params)) {
+      throw new Error(`${method} params must be an object`);
+    }
+    const context = params.context === undefined ? {} : params.context;
+    if (!context || typeof context !== "object" || Array.isArray(context)) {
+      throw new Error(`${method} context must be an object`);
+    }
+    const token = String(params.token || "");
+    if (!token) {
+      throw new Error(`${method} token must not be empty`);
+    }
+    if (method === "deferred.poll") {
+      return await registry.pollDeferred(token, context);
+    }
+    return await registry.cancelDeferred(token, params.reason, context);
+  }
+  if (method === "http.handle") {
+    const params = request.params;
+    if (!params || typeof params !== "object" || Array.isArray(params)) {
+      throw new Error("http.handle params must be an object");
+    }
+    const httpRequest = params.request;
+    if (!httpRequest || typeof httpRequest !== "object" || Array.isArray(httpRequest)) {
+      throw new Error("http.handle request must be an object");
+    }
+    const context = params.context === undefined ? {} : params.context;
+    if (!context || typeof context !== "object" || Array.isArray(context)) {
+      throw new Error("http.handle context must be an object");
+    }
+    return await registry.handleHttp(httpRequest, context);
+  }
   throw new Error(`Unknown worker method: ${method}`);
 }
 
@@ -526,6 +762,7 @@ function writeResponse(payload) {
 async function main() {
   let requestId = null;
   let registry = null;
+  let hostContext = {};
   try {
     const args = parseArgs(process.argv.slice(2));
     const root = fs.realpathSync(args["plugin-root"]);
@@ -538,7 +775,17 @@ async function main() {
       String(args.adapter || "native") === "opencode"
         ? await loadOpenCodeRegistry(entrypoint, root)
         : await loadRegistry(entrypoint);
-    await registry.activate({ plugin_root: root, entrypoint });
+    hostContext = {
+      plugin_id: String(args["plugin-id"] || ""),
+      plugin_data_dir: String(args["plugin-data-dir"] || ""),
+      plugin_cache_dir: String(args["plugin-cache-dir"] || ""),
+      plugin_temp_dir: String(args["plugin-temp-dir"] || ""),
+      workspace_root: String(args["workspace-root"] || ""),
+      background_services_enabled: ["1", "true", "yes", "on"].includes(
+        String(args["background-services-enabled"] || "0").toLowerCase()
+      ),
+    };
+    await registry.activate({ plugin_root: root, entrypoint, ...hostContext });
     const reader = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
     for await (const line of reader) {
       requestId = null;
@@ -581,7 +828,7 @@ async function main() {
   } finally {
     if (registry) {
       try {
-        await registry.deactivate({ reason: "worker_exit" });
+        await registry.deactivate({ ...hostContext, reason: "worker_exit" });
       } catch (error) {
         console.error(error && error.stack ? error.stack : String(error));
       }

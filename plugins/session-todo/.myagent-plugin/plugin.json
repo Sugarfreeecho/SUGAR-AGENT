@@ -1,0 +1,81 @@
+{
+    "schema_version": 1,
+    "id": "session-todo",
+    "name": "Session Todo",
+    "version": "1.0.0",
+    "system_builtin": true,
+    "description": "Declarative session plan UI backed by generic extension state.",
+    "capabilities": {
+        "trusted_host": {"entry": "host.py", "workflow_runtime": "runtime.py"},
+        "web": {"assets": "web"},
+        "ui": {
+            "session.badge": [
+                {
+                    "id": "active-plan",
+                    "namespace": "plan",
+                    "path": "/has_plan",
+                    "label": "Todo",
+                    "description": "This session has an active plan.",
+                    "variant": "info",
+                    "when": "truthy"
+                }
+            ],
+            "session.panel": [
+                {
+                    "id": "current-plan",
+                    "namespace": "plan",
+                    "title": "Current plan",
+                    "description": "The plan maintained for this session.",
+                    "variant": "info",
+                    "order": 20,
+                    "visible_when": {"path": "/has_plan", "when": "truthy"},
+                    "renderer": {"module": "session-panel.js", "style": "session-panel.css"},
+                    "actions": [
+                        {
+                            "id": "clear-plan",
+                            "label": "Clear",
+                            "variant": "danger",
+                            "operation": "set_state",
+                            "confirm": "Clear the current plan?",
+                            "value": {
+                                "schema_version": 1,
+                                "has_plan": false,
+                                "items": [],
+                                "done": 0,
+                                "total": 0,
+                                "cleared": true
+                            }
+                        }
+                    ],
+                    "fields": [
+                        {
+                            "path": "/done",
+                            "label": "Completed",
+                            "format": "number"
+                        },
+                        {
+                            "path": "/total",
+                            "label": "Total",
+                            "format": "number"
+                        },
+                        {
+                            "path": "/items",
+                            "label": "Items",
+                            "format": "list",
+                            "columns": [
+                                {
+                                    "path": "/status",
+                                    "label": "Status"
+                                },
+                                {
+                                    "path": "/text",
+                                    "label": "Task"
+                                }
+                            ]
+                        }
+                    ]
+                }
+            ]
+        }
+    }
+}
