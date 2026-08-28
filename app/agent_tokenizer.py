@@ -21,6 +21,7 @@ import platform
 import re
 import threading
 import time
+from collections import OrderedDict
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -40,6 +41,9 @@ _PROMPT_USAGE_EXACT_CACHE: Dict[Tuple[str, str], Tuple[float, int, str]] = {}
 _PROMPT_USAGE_CACHE_LOCK = threading.Lock()
 _PROMPT_USAGE_CACHE_TTL_SEC = 300.0
 _PROMPT_USAGE_EXACT_CACHE_MAX = 256
+_TOOL_SCHEMA_CACHE: "OrderedDict[int, tuple[Any, str, int]]" = OrderedDict()
+_TOOL_SCHEMA_CACHE_LOCK = threading.Lock()
+_TOOL_SCHEMA_CACHE_MAX = 32
 
 
 def _token_cache_text_hash(text: Any) -> str:
@@ -49,8 +53,25 @@ def _token_cache_text_hash(text: Any) -> str:
 def _tool_definitions_fingerprint(tools: Optional[List[Dict[str, Any]]]) -> str:
     if not tools:
         return ""
+    return _tool_schema_cache_values(tools)[0]
+
+
+def _tool_schema_cache_values(tools: List[Dict[str, Any]]) -> tuple[str, int]:
+    key = id(tools)
+    with _TOOL_SCHEMA_CACHE_LOCK:
+        cached = _TOOL_SCHEMA_CACHE.get(key)
+        if cached is not None and cached[0] is tools:
+            _TOOL_SCHEMA_CACHE.move_to_end(key)
+            return cached[1], int(cached[2])
     raw = json_dumps_stable(list(tools))
-    return hashlib.sha1(raw.encode("utf-8", errors="ignore")).hexdigest()
+    fingerprint = hashlib.sha1(raw.encode("utf-8", errors="ignore")).hexdigest()
+    tokens = count_text_tokens(raw)
+    with _TOOL_SCHEMA_CACHE_LOCK:
+        _TOOL_SCHEMA_CACHE[key] = (tools, fingerprint, tokens)
+        _TOOL_SCHEMA_CACHE.move_to_end(key)
+        while len(_TOOL_SCHEMA_CACHE) > _TOOL_SCHEMA_CACHE_MAX:
+            _TOOL_SCHEMA_CACHE.popitem(last=False)
+    return fingerprint, tokens
 
 
 def _request_token_fingerprint(message_fingerprint: str, tool_fingerprint: str) -> str:
@@ -220,7 +241,91 @@ def count_tool_definition_tokens(tools: Optional[List[Dict[str, Any]]]) -> int:
     """Estimate the serialized tool-schema portion of one model request."""
     if not tools:
         return 0
-    return count_text_tokens(json_dumps_stable(list(tools)))
+    return _tool_schema_cache_values(tools)[1]
+
+
+def _prompt_usage_baseline_path(session_id: str) -> Optional[Path]:
+    try:
+        from agent_harness import session_manager
+
+        session_path = Path(session_manager._resolve_session_path(session_id))
+        if not session_path.is_dir():
+            return None
+        return session_path / "snapshots" / "prompt_tokens.json"
+    except Exception:
+        return None
+
+
+def _load_prompt_usage_baseline(session_id: str) -> Optional[Dict[str, Any]]:
+    path = _prompt_usage_baseline_path(session_id)
+    if path is None:
+        return None
+    try:
+        import json
+
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    hashes = payload.get("hashes")
+    if not isinstance(hashes, list) or not all(isinstance(item, str) for item in hashes):
+        return None
+    try:
+        if int(payload.get("version") or 0) != 1:
+            return None
+        tokens = int(payload.get("tokens") or 0)
+        count = int(payload.get("count") or 0)
+    except (TypeError, ValueError):
+        return None
+    if tokens <= 0 or count != len(hashes):
+        return None
+    return {
+        "ts": time.monotonic(),
+        "hashes": list(hashes),
+        "message_fingerprint": str(payload.get("message_fingerprint") or ""),
+        "tool_fingerprint": str(payload.get("tool_fingerprint") or ""),
+        "count": count,
+        "tokens": tokens,
+        "tool_tokens": max(0, int(payload.get("tool_tokens") or 0)),
+    }
+
+
+def _persist_prompt_usage_baseline(session_id: str, baseline: Dict[str, Any]) -> None:
+    path = _prompt_usage_baseline_path(session_id)
+    if path is None:
+        return
+    tmp = path.with_name(
+        f".prompt-tokens-{os.getpid()}-{threading.get_ident()}-{time.time_ns()}"
+    )
+    try:
+        import json
+
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp.write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "hashes": list(baseline.get("hashes") or []),
+                    "message_fingerprint": baseline.get("message_fingerprint") or "",
+                    "tool_fingerprint": baseline.get("tool_fingerprint") or "",
+                    "count": int(baseline.get("count") or 0),
+                    "tokens": int(baseline.get("tokens") or 0),
+                    "tool_tokens": int(baseline.get("tool_tokens") or 0),
+                },
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ),
+            encoding="utf-8",
+        )
+        os.replace(tmp, path)
+    except OSError:
+        pass
+    finally:
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
 
 
 def record_prompt_tokens_for_messages(
@@ -245,19 +350,21 @@ def record_prompt_tokens_for_messages(
     tool_fingerprint = _tool_definitions_fingerprint(tools)
     fingerprint = _request_token_fingerprint(message_fingerprint, tool_fingerprint)
     now = time.monotonic()
+    baseline = {
+        "ts": now,
+        "hashes": hashes,
+        "message_fingerprint": message_fingerprint,
+        "tool_fingerprint": tool_fingerprint,
+        "count": len(hashes),
+        "tokens": tokens,
+        "messages": list(stripped),
+        "tool_tokens": count_tool_definition_tokens(tools),
+    }
     with _PROMPT_USAGE_CACHE_LOCK:
-        _PROMPT_USAGE_BASELINE_CACHE[sid] = {
-            "ts": now,
-            "hashes": hashes,
-            "message_fingerprint": message_fingerprint,
-            "tool_fingerprint": tool_fingerprint,
-            "count": len(hashes),
-            "tokens": tokens,
-            "messages": list(stripped),
-            "tool_tokens": count_tool_definition_tokens(tools),
-        }
+        _PROMPT_USAGE_BASELINE_CACHE[sid] = baseline
         _PROMPT_USAGE_EXACT_CACHE[(sid, fingerprint)] = (now, tokens, "provider_exact")
         _evict_prompt_usage_exact_cache_locked(now)
+    _persist_prompt_usage_baseline(sid, baseline)
 
 
 def estimate_full_input_tokens_for_messages(
@@ -292,6 +399,12 @@ def estimate_full_input_tokens_for_messages(
         if baseline and now - float(baseline.get("ts") or 0) > _PROMPT_USAGE_CACHE_TTL_SEC:
             _PROMPT_USAGE_BASELINE_CACHE.pop(sid, None)
             baseline = None
+    if baseline is None and sid:
+        baseline = _load_prompt_usage_baseline(sid)
+        if baseline:
+            with _PROMPT_USAGE_CACHE_LOCK:
+                _PROMPT_USAGE_BASELINE_CACHE.setdefault(sid, baseline)
+    with _PROMPT_USAGE_CACHE_LOCK:
         if baseline:
             base_count = int(baseline.get("count") or 0)
             base_tokens = int(baseline.get("tokens") or 0)

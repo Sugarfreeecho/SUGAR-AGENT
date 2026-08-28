@@ -711,9 +711,9 @@
 
       <div class="form-row-2">
         <div class="form-group">
-          <label>LLM 供应商（支持OpenAI SDK） <span class="required">*</span></label>
+          <label>LLM 供应商（自动识别协议） <span class="required">*</span></label>
           <div class="select-wrap">
-          <input type="hidden" id="llmProvider" value="openai">
+          <input type="hidden" id="llmProvider" value="auto">
           </div>
         </div>
         <div class="form-group">
@@ -756,12 +756,12 @@
       defaultModel: 'deepseek-v4-flash',
       modelHint: 'DeepSeek 常用：deepseek-v4-flash、deepseek-v4-pro',
     },
-    openai: {
+    auto: {
       baseUrl: 'http://models.ascend.huawei.com/v1',
       keyPlaceholder: 'sk-...',
-      keyHint: 'OpenAI',
+      keyHint: '自动识别',
       defaultModel: 'deepseek-v4-flash',
-      modelHint: 'OpenAI SDK 兼容接口，默认 deepseek-v4-flash',
+      modelHint: '根据地址自动选择 Responses、Anthropic Messages 或 OpenAI 兼容协议',
     },
     local: {
       baseUrl: 'http://localhost:11434/v1',
@@ -964,6 +964,7 @@
           base_url: baseUrl.value.trim(),
           api_key: apiKey.value.trim(),
           model: modelId,
+          llm_type: llmProvider.value || 'auto',
           metadata: model,
         }),
       });
@@ -1081,7 +1082,7 @@
   var hasPrefill = prefill && typeof prefill === 'object' && Object.keys(prefill).length > 0;
 
   if (hasPrefill) {
-    llmProvider.value = 'openai';
+    llmProvider.value = 'auto';
     syncProviderUi(llmProvider.value);
     lastProvider = llmProvider.value;
     if (prefill.model_name) modelName.value = prefill.model_name;
@@ -1103,7 +1104,7 @@
   if (maxOutputTokensEl && !String(maxOutputTokensEl.value).trim()) maxOutputTokensEl.value = '8192';
   setupReady = true;
 
-  llmProvider.value = 'openai';
+  llmProvider.value = 'auto';
   baseUrl.addEventListener('input', scheduleModelDiscovery);
   baseUrl.addEventListener('change', scheduleModelDiscovery);
   apiKey.addEventListener('input', scheduleModelDiscovery);

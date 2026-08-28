@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import ctypes
 import argparse
-import json
 import os
 import socket
 import subprocess
@@ -11,8 +10,6 @@ import threading
 import time
 import webbrowser
 from pathlib import Path
-from urllib import error as urllib_error
-from urllib import request as urllib_request
 
 import win32api
 import win32con
@@ -23,6 +20,7 @@ import dotenv
 
 from python_runtime import configure_agent_python_environment, preferred_python
 from desktop_notify import show_desktop_notification
+from platform_lifecycle import request_webui_activation
 
 
 APP_NAME = "Agent \u667a\u80fd\u4f1a\u8bdd\u52a9\u624b"
@@ -155,19 +153,7 @@ def _open_url_in_browser(path: str = "/", refresh: bool = True) -> None:
 def _request_existing_ui_activation(path: str = "/") -> bool:
     """Ask a live WebUI page to foreground itself instead of opening a duplicate."""
 
-    payload = json.dumps({"path": path}).encode("utf-8")
-    req = urllib_request.Request(
-        f"{BASE_URL}/api/ui-activation",
-        data=payload,
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
-    try:
-        with urllib_request.urlopen(req, timeout=0.8) as response:
-            data = json.loads(response.read().decode("utf-8"))
-        return bool(data.get("reused"))
-    except (OSError, ValueError, urllib_error.URLError):
-        return False
+    return request_webui_activation(path, base_url=BASE_URL)
 
 
 def _focus_existing_webui_window() -> bool:
@@ -215,6 +201,27 @@ def _notify_existing_instance(open_browser: bool = True) -> bool:
     except win32gui.error as exc:
         _append_log(f"Unable to notify existing tray launcher: {exc}")
         return False
+
+
+def _activate_webui_from_external() -> bool:
+    """Reuse a live WebUI for notification/protocol activation when possible."""
+
+    # The resident launcher owns the strongest activation path: it signals the
+    # browser page through the backend and then foregrounds the browser window.
+    if _notify_existing_instance(open_browser=True):
+        return True
+    # Direct backend launches may not have a tray process. Reuse the same page
+    # heartbeat contract before falling back to the default browser handler.
+    if _request_existing_ui_activation("/"):
+        _focus_existing_webui_window()
+        return True
+    # During a backend restart the old page can still be visible before its
+    # first presence heartbeat reaches the new process. The browser title is an
+    # immediate secondary reuse signal on Windows.
+    if _focus_existing_webui_window():
+        return True
+    _open_url_in_browser("/", refresh=False)
+    return False
 
 
 def _request_existing_restart() -> bool:
@@ -292,7 +299,7 @@ def run_starter() -> int:
         print(MSG_RESTARTING)
         _append_log(MSG_RESTARTING)
         if _request_existing_restart():
-            _open_url_in_browser("/", refresh=True)
+            _activate_webui_from_external()
             return 0
         _stop_listener_on_port()
         stop_deadline = time.monotonic() + 5
@@ -315,7 +322,7 @@ def run_starter() -> int:
         if _is_port_listening():
             print(f"\n{MSG_READY}")
             _append_log(MSG_READY)
-            _open_url_in_browser("/", refresh=True)
+            _activate_webui_from_external()
             return 0
         print("." if dots else MSG_LOADING, end="", flush=True)
         dots = (dots + 1) % 24
@@ -660,6 +667,8 @@ class TrayLauncher:
         if path == "/" and _request_existing_ui_activation(path):
             _focus_existing_webui_window()
             return
+        if path == "/" and _focus_existing_webui_window():
+            return
         url = f"{BASE_URL}{path}"
         if refresh:
             url = f"{url}{'&' if '?' in url else '?'}_={int(time.time())}"
@@ -901,8 +910,12 @@ class TrayLauncher:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument("--daemon", action="store_true")
+    parser.add_argument("--activate-ui", action="store_true")
     args, _ = parser.parse_known_args()
     try:
+        if args.activate_ui:
+            _activate_webui_from_external()
+            raise SystemExit(0)
         if args.daemon:
             raise SystemExit(TrayLauncher().run())
         raise SystemExit(run_starter())

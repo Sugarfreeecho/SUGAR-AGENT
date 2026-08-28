@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import hashlib
 import json
 import os
@@ -40,7 +41,7 @@ def ask_user_enabled() -> bool:
 _TERMINAL = {"resolved", "cancelled", "expired"}
 _WAITERS: Dict[tuple[str, str, str], asyncio.Future] = {}
 _WAITERS_LOCK = threading.RLock()
-_PENDING_COUNTS_TTL_SECONDS = 1.0
+_PENDING_COUNTS_INDEX_VERSION = 1
 
 
 def _clean_text(value: Any, field: str, *, maximum: int, required: bool = True) -> str:
@@ -147,7 +148,7 @@ class HumanInteractionService:
         root = root or session_manager.repository.sessions_dir
         path_resolver = path_resolver or getattr(session_manager, "_resolve_session_path", None)
         self.mirror = RuntimeMirror(root, path_resolver=path_resolver)
-        self._pending_counts_cache: Dict[str, tuple[float, dict]] = {}
+        self._pending_counts_cache: Dict[str, tuple[tuple[bool, int, int], dict]] = {}
         self._pending_counts_lock = threading.RLock()
 
     def _snapshot(self, session_id: str) -> dict:
@@ -168,9 +169,89 @@ class HumanInteractionService:
             session_id, snapshot, self.mirror.event_log.event_path(session_id)
         )
         self.mirror.snapshots.write_checkpointed(session_id, snapshot)
-        with self._pending_counts_lock:
-            self._pending_counts_cache.pop(str(session_id or "").strip(), None)
+        self._publish_pending_counts(session_id, self._counts_from_snapshot(snapshot))
         return event, snapshot
+
+    @staticmethod
+    def _counts_from_snapshot(snapshot: dict) -> dict:
+        questions = len(list((snapshot or {}).get("pending_interactions") or []))
+        approvals = len(list((snapshot or {}).get("pending_approvals") or []))
+        return {
+            "questions": questions,
+            "approvals": approvals,
+            "total": questions + approvals,
+        }
+
+    def _pending_counts_path(self, session_id: str):
+        return self.mirror.snapshots.path(session_id).with_name("pending_counts.json")
+
+    @staticmethod
+    def _pending_counts_signature(path) -> tuple[bool, int, int]:
+        try:
+            stat = path.stat()
+            return True, int(stat.st_size), int(stat.st_mtime_ns)
+        except OSError:
+            return False, 0, 0
+
+    def _publish_pending_counts(self, session_id: str, counts: dict) -> None:
+        sid = str(session_id or "").strip()
+        normalized = {
+            "questions": max(0, int(counts.get("questions") or 0)),
+            "approvals": max(0, int(counts.get("approvals") or 0)),
+        }
+        normalized["total"] = normalized["questions"] + normalized["approvals"]
+        path = self._pending_counts_path(sid)
+        tmp = path.with_name(f".pending-{uuid.uuid4().hex[:8]}")
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp.write_text(
+                json.dumps(
+                    {
+                        "version": _PENDING_COUNTS_INDEX_VERSION,
+                        **normalized,
+                    },
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                ),
+                encoding="utf-8",
+            )
+            os.replace(tmp, path)
+        except OSError:
+            # The index is an optimization only. The Runtime event and
+            # in-memory count remain authoritative for this process.
+            pass
+        finally:
+            try:
+                tmp.unlink(missing_ok=True)
+            except OSError:
+                pass
+        with self._pending_counts_lock:
+            self._pending_counts_cache[sid] = (
+                self._pending_counts_signature(path),
+                dict(normalized),
+            )
+
+    def _read_pending_counts_index(self, session_id: str) -> Optional[dict]:
+        try:
+            payload = json.loads(
+                self._pending_counts_path(session_id).read_text(encoding="utf-8")
+            )
+        except (OSError, ValueError, TypeError):
+            return None
+        if not isinstance(payload, dict):
+            return None
+        try:
+            if int(payload.get("version") or 0) != _PENDING_COUNTS_INDEX_VERSION:
+                return None
+            questions = max(0, int(payload.get("questions") or 0))
+            approvals = max(0, int(payload.get("approvals") or 0))
+        except (TypeError, ValueError):
+            return None
+        return {
+            "questions": questions,
+            "approvals": approvals,
+            "total": questions + approvals,
+        }
 
     def create_question(
         self,
@@ -280,18 +361,47 @@ class HumanInteractionService:
 
     def pending_counts(self, session_id: str) -> dict:
         sid = str(session_id or "").strip()
-        now = time.monotonic()
+        path = self._pending_counts_path(sid)
+        signature = self._pending_counts_signature(path)
         with self._pending_counts_lock:
             cached = self._pending_counts_cache.get(sid)
-            if cached is not None and now - cached[0] <= _PENDING_COUNTS_TTL_SECONDS:
+            if cached is not None and cached[0] == signature:
                 return dict(cached[1])
-        snapshot = self._snapshot(session_id)
-        questions = len(list(snapshot.get("pending_interactions") or []))
-        approvals = len(list(snapshot.get("pending_approvals") or []))
-        counts = {"questions": questions, "approvals": approvals, "total": questions + approvals}
+        counts = self._read_pending_counts_index(sid)
+        if counts is None:
+            # One-time upgrade path for sessions created before the lightweight
+            # index existed. All subsequent reads are O(1) and do not touch the
+            # multi-megabyte Runtime snapshot.
+            counts = self._counts_from_snapshot(self._snapshot(sid))
+            self._publish_pending_counts(sid, counts)
+            return dict(counts)
         with self._pending_counts_lock:
-            self._pending_counts_cache[sid] = (now, counts)
+            self._pending_counts_cache[sid] = (signature, dict(counts))
         return dict(counts)
+
+    def pending_counts_many(self, session_ids: Iterable[str]) -> Dict[str, dict]:
+        """Read lightweight indexes, parallelizing only one-time upgrades."""
+        ids = list(dict.fromkeys(str(item or "").strip() for item in session_ids if str(item or "").strip()))
+        ready: Dict[str, dict] = {}
+        missing: list[str] = []
+        for sid in ids:
+            if self._pending_counts_path(sid).is_file():
+                ready[sid] = self.pending_counts(sid)
+            else:
+                missing.append(sid)
+        if not missing:
+            return ready
+        workers = min(8, len(missing))
+        with concurrent.futures.ThreadPoolExecutor(
+            max_workers=workers,
+            thread_name_prefix="pending-counts",
+        ) as pool:
+            futures = {
+                pool.submit(self.pending_counts, sid): sid for sid in missing
+            }
+            for future, sid in ((future, futures[future]) for future in futures):
+                ready[sid] = future.result()
+        return ready
 
     def resolve_question(self, session_id: str, interaction_id: str, answers: Any, *, resolver: Optional[dict] = None) -> dict:
         sid = str(session_id or "").strip()
@@ -316,7 +426,15 @@ class HumanInteractionService:
         _wake_waiter(sid, "question", iid, dict(resolved))
         return dict(resolved)
 
-    def resolve_approval(self, session_id: str, approval_id: str, decision: str, *, resolver: Optional[dict] = None) -> dict:
+    def resolve_approval(
+        self,
+        session_id: str,
+        approval_id: str,
+        decision: str,
+        *,
+        resolver: Optional[dict] = None,
+        rejection_reason: str = "",
+    ) -> dict:
         sid = str(session_id or "").strip()
         aid = str(approval_id or "").strip()
         normalized_decision = str(decision or "").strip().lower().replace("-", "_")
@@ -331,6 +449,16 @@ class HumanInteractionService:
             raise HumanInteractionValidationError(
                 "decision must be allow_once, allow_session, allow_always, "
                 "allow_external_workspace, allow_external_workspace_once, or deny"
+            )
+        normalized_rejection_reason = _clean_text(
+            rejection_reason,
+            "rejection_reason",
+            maximum=2000,
+            required=False,
+        )
+        if normalized_decision != "deny" and normalized_rejection_reason:
+            raise HumanInteractionValidationError(
+                "rejection_reason is only valid when decision is deny"
             )
         with self.mirror.event_log.session_transaction(sid):
             record = dict(self._snapshot(sid).get("approvals") or {}).get(aid)
@@ -371,6 +499,8 @@ class HumanInteractionService:
                 "resolver": dict(resolver or {}),
                 "request_digest": record.get("request_digest"),
             }
+            if normalized_decision == "deny" and normalized_rejection_reason:
+                payload["rejection_reason"] = normalized_rejection_reason
             _event, snapshot = self._append_locked(sid, "approval_resolved", payload, str(record.get("run_id") or ""))
             resolved = dict(snapshot.get("approvals") or {}).get(aid) or payload
         _wake_waiter(sid, "approval", aid, dict(resolved))

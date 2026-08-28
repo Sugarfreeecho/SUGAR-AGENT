@@ -22,6 +22,7 @@ logger = logging.getLogger(__name__)
 _PENDING: Dict[Tuple[str, str], asyncio.Future] = {}
 _PENDING_META: Dict[Tuple[str, str], Dict[str, Any]] = {}
 _PENDING_REVIEW_CONTEXT: Dict[Tuple[str, str], Dict[str, Any]] = {}
+_PENDING_RESOLUTION: Dict[Tuple[str, str], Dict[str, Any]] = {}
 _PENDING_LOCK = threading.RLock()
 
 class ApprovalPersistenceError(RuntimeError):
@@ -120,14 +121,20 @@ def list_pending_approvals(session_id: str | None = None) -> list[dict]:
     return rows
 
 
-def resolve_tool_approval(session_id: str, approval_id: str, approved: bool) -> bool:
+def resolve_tool_approval(
+    session_id: str,
+    approval_id: str,
+    approved: bool,
+    rejection_reason: str = "",
+) -> bool:
     """由 HTTP 路由调用：释放等待中的 Future。"""
     sid = str(session_id or "").strip()
     aid = str(approval_id or "").strip()
     if not sid or not aid:
         return False
+    key = (sid, aid)
     with _PENDING_LOCK:
-        fut = _PENDING.get((sid, aid))
+        fut = _PENDING.get(key)
     live_matched = bool(fut and not fut.done())
     if not live_matched:
         # A durable record can outlive the coroutine that owned the protected
@@ -139,13 +146,23 @@ def resolve_tool_approval(session_id: str, approval_id: str, approved: bool) -> 
         from human_interaction import HumanInteractionNotFound, get_human_interaction_service
 
         get_human_interaction_service().resolve_approval(
-            sid, aid, "allow_once" if approved else "deny", resolver={"channel": "legacy_api"}
+            sid,
+            aid,
+            "allow_once" if approved else "deny",
+            resolver={"channel": "legacy_api"},
+            rejection_reason=str(rejection_reason or "") if not approved else "",
         )
         durable_matched = True
     except HumanInteractionNotFound:
         pass
     except Exception:
         pass
+    with _PENDING_LOCK:
+        _PENDING_RESOLUTION[key] = {
+            "approved": bool(approved),
+            "decision": "allow_once" if approved else "deny",
+            "rejection_reason": str(rejection_reason or "").strip() if not approved else "",
+        }
     try:
         fut.get_loop().call_soon_threadsafe(fut.set_result, bool(approved))
     except RuntimeError:
@@ -154,7 +171,10 @@ def resolve_tool_approval(session_id: str, approval_id: str, approved: bool) -> 
 
 
 def resolve_tool_approval_decision(
-    session_id: str, approval_id: str, decision: str
+    session_id: str,
+    approval_id: str,
+    decision: str,
+    rejection_reason: str = "",
 ) -> bool:
     """Resolve a pending approval with a raw decision token.
 
@@ -167,21 +187,41 @@ def resolve_tool_approval_decision(
     aid = str(approval_id or "").strip()
     if not sid or not aid:
         return False
+    key = (sid, aid)
+    normalized_decision = str(decision or "deny")
     with _PENDING_LOCK:
-        fut = _PENDING.get((sid, aid))
+        fut = _PENDING.get(key)
     live_matched = bool(fut and not fut.done())
     if not live_matched:
         try:
             from human_interaction import get_human_interaction_service
 
             get_human_interaction_service().resolve_approval(
-                sid, aid, str(decision or "deny"), resolver={"channel": "decision_api"}
+                sid,
+                aid,
+                normalized_decision,
+                resolver={"channel": "decision_api"},
+                rejection_reason=(
+                    str(rejection_reason or "")
+                    if normalized_decision == "deny"
+                    else ""
+                ),
             )
         except Exception:
             pass
         return False
+    with _PENDING_LOCK:
+        _PENDING_RESOLUTION[key] = {
+            "approved": normalized_decision != "deny",
+            "decision": normalized_decision,
+            "rejection_reason": (
+                str(rejection_reason or "").strip()
+                if normalized_decision == "deny"
+                else ""
+            ),
+        }
     try:
-        fut.get_loop().call_soon_threadsafe(fut.set_result, str(decision))
+        fut.get_loop().call_soon_threadsafe(fut.set_result, normalized_decision)
     except RuntimeError:
         live_matched = False
     return live_matched
@@ -208,8 +248,9 @@ async def wait_tool_ui_approval_after_emit(
     emit_coro,
     metadata: Dict[str, Any] | None = None,
     return_decision: bool = False,
+    return_resolution: bool = False,
     review_context: Dict[str, Any] | None = None,
-) -> bool | str:
+) -> bool | str | Dict[str, Any]:
     """先登记 Future，再执行 emit_coro（发送 SSE），避免客户端极快 POST 时未命中 pending。"""
     loop = asyncio.get_running_loop()
     fut: asyncio.Future = loop.create_future()
@@ -220,6 +261,7 @@ async def wait_tool_ui_approval_after_emit(
         _PENDING[key] = fut
         _PENDING_META[key] = {"created_at": time.time(), **dict(metadata or {})}
         _PENDING_REVIEW_CONTEXT.pop(key, None)
+        _PENDING_RESOLUTION.pop(key, None)
         if isinstance(review_context, dict):
             _PENDING_REVIEW_CONTEXT[key] = dict(review_context)
     durable = bool((metadata or {}).get("_durable"))
@@ -277,6 +319,18 @@ async def wait_tool_ui_approval_after_emit(
                 durable_service.cancel(key[0], key[1], kind="approval", reason="approval_wait_ended")
             except Exception:
                 pass
+        with _PENDING_LOCK:
+            resolution = dict(_PENDING_RESOLUTION.get(key) or {})
+        if return_resolution:
+            if not resolution:
+                raw_decision = str(allowed) if isinstance(allowed, str) else ""
+                decision = raw_decision or ("allow_once" if bool(allowed) else "deny")
+                resolution = {
+                    "approved": decision != "deny",
+                    "decision": decision,
+                    "rejection_reason": "",
+                }
+            return resolution
         return allowed if return_decision else bool(allowed)
     except asyncio.CancelledError:
         if durable_service is not None:
@@ -295,3 +349,4 @@ async def wait_tool_ui_approval_after_emit(
             _PENDING.pop(key, None)
             _PENDING_META.pop(key, None)
             _PENDING_REVIEW_CONTEXT.pop(key, None)
+            _PENDING_RESOLUTION.pop(key, None)

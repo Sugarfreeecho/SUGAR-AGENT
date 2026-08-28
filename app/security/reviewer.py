@@ -19,7 +19,6 @@ _EXPLICIT_HIGH_RISK = re.compile(
     r".{0,80}(?:删除|覆盖|清空|系统|外部|上传|发送|delete|overwrite|destroy|system|external|upload|send)"
 )
 
-_REVIEWER_MAX_TOKENS = 8192
 _REVIEWER_TIMEOUT_SECONDS = 180.0
 
 
@@ -112,9 +111,9 @@ def _review_with_model(
     session_id: str = "",
     review_context: Mapping[str, Any] | None = None,
 ) -> ReviewResult:
-    from agent_harness import resolve_executor_config_for_session
+    from agent_harness import executor_one_shot_complete
     from agent_messages import SystemMessage, UserMessage
-    from agent_openai import _LogicalRequestBudget, chat_completion
+    from llm import LLMRequestPurpose
 
     supplied_context = dict(review_context or {})
     initial_user_question = supplied_context.get("initial_user_question")
@@ -171,43 +170,27 @@ def _review_with_model(
         UserMessage(content=json.dumps(prompt, ensure_ascii=False)),
     ]
 
-    reviewer_client, reviewer_model, reviewer_max_tokens, _context_window = (
-        resolve_executor_config_for_session(session_id)
+    def _usable_review(result: dict[str, Any]) -> bool:
+        return bool(
+            str(result.get("text") or "").strip()
+            and str(result.get("finish_reason") or "").lower() != "length"
+            and str(result.get("status") or "completed").lower() != "incomplete"
+            and not str(result.get("refusal") or "").strip()
+            and not str(result.get("error") or "").strip()
+        )
+
+    completion = executor_one_shot_complete(
+        messages,
+        session_id=session_id,
+        purpose=LLMRequestPurpose.SECURITY_REVIEW,
+        temperature=0,
+        timeout=_REVIEWER_TIMEOUT_SECONDS,
+        response_validator=_usable_review,
+        # Security review must be portable across providers and must not add a
+        # vendor-specific thinking switch to otherwise valid requests.
+        include_candidate_controls=False,
     )
-    recovery_budget = _LogicalRequestBudget()
-
-    def _call(extra_body: dict | None = None):
-        return chat_completion(
-            reviewer_client,
-            reviewer_model,
-            messages,
-            temperature=0,
-            max_tokens=min(int(reviewer_max_tokens), _REVIEWER_MAX_TOKENS),
-            extra_body=extra_body,
-            response_validator=lambda response: bool(getattr(response, "choices", None)),
-            recovery_budget=recovery_budget,
-            request_timeout=_REVIEWER_TIMEOUT_SECONDS,
-        )
-
-    def _extract_text(response) -> str:
-        text = str(response.choices[0].message.content or "").strip()
-        if text and response.choices[0].finish_reason == "length":
-            # Reasoning models can spend the whole budget before emitting the
-            # JSON body; a truncated blob is as unusable as an empty one.
-            return ""
-        return text
-
-    raw = _extract_text(_call())
-    if not raw:
-        # Retry once with thinking disabled: reasoning-only output (content
-        # empty) is common on DeepSeek-style free endpoints with a small
-        # max_tokens, and disabling thinking makes the JSON body come back
-        # directly instead of after a long chain of thought.
-        raw = _extract_text(
-            _call(extra_body={"thinking": {"type": "disabled"}})
-        )
-    if not raw:
-        raise ValueError("reviewer returned an empty response")
+    raw = str(completion.get("text") or "").strip()
     if raw.startswith("```"):
         raw = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw, flags=re.I)
     try:

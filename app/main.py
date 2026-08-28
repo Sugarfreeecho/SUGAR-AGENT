@@ -56,14 +56,9 @@ def _schedule_browser_open(host: str, port: int) -> None:
 if __name__ == "__main__":
     from webui import (
         fastapi_app,
-        initialize_ui_attention_notifications,
         schedule_runtime_auto_migration,
-        start_feishu_adapter,
-        start_goal_runner,
-        start_react_recovery_runner,
-        stop_feishu_adapter,
-        stop_goal_runner,
-        stop_react_recovery_runner,
+        start_webui_lifecycle,
+        stop_webui_lifecycle,
     )
     from agent_harness import refresh_executor_client_from_env
     from agent_subagent import reconcile_orphaned_subagent_runs, subagent_registry
@@ -78,9 +73,6 @@ if __name__ == "__main__":
     async def lifespan(app: FastAPI):
         import cpu_pressure
 
-        # A custom lifespan replaces FastAPI's on_event startup callbacks.
-        # Bind event-bus attention notifications to this long-lived loop.
-        initialize_ui_attention_notifications()
         cpu_pressure.start()
         pressure_probe_task = asyncio.create_task(cpu_pressure.event_loop_lag_probe())
         # 启动时打开浏览器
@@ -143,10 +135,8 @@ if __name__ == "__main__":
         from agent_team.tools import start_auto_scheduler, stop_auto_scheduler
 
         await start_auto_scheduler()
-        await start_goal_runner()
-        await start_react_recovery_runner()
         try:
-            await start_feishu_adapter()
+            await start_webui_lifecycle()
             yield
         finally:
             cpu_pressure.stop()
@@ -162,9 +152,7 @@ if __name__ == "__main__":
             except asyncio.CancelledError:
                 pass
             await stop_auto_scheduler()
-            await stop_feishu_adapter()
-            await stop_react_recovery_runner()
-            await stop_goal_runner()
+            await stop_webui_lifecycle()
         
     fastapi_app.router.lifespan_context = lifespan
 

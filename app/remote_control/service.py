@@ -299,7 +299,12 @@ class SessionControlService:
         approval_id = str(params.get("approval_id") or "").strip()
         if not approval_id:
             raise RemoteControlError("invalid_params", "approval_id is required")
-        matched = resolve_tool_approval(sid, approval_id, bool(params.get("approve")))
+        matched = resolve_tool_approval(
+            sid,
+            approval_id,
+            bool(params.get("approve")),
+            str(params.get("rejection_reason") or ""),
+        )
         if not matched:
             raise RemoteControlError("approval_not_pending", "approval is no longer pending")
         return {"ok": True, "session_id": sid, "approval_id": approval_id}

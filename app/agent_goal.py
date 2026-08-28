@@ -123,7 +123,7 @@ class GoalManager:
         self.sessions_dir = sessions_dir
         self.path_resolver = path_resolver
         self.goal_review_state_callback = goal_review_state_callback
-        self._ops_instance = None
+        self._state_store_instance = None
 
     def _publish_state(
         self,
@@ -155,19 +155,18 @@ class GoalManager:
         if not goal_enabled():
             raise GoalError("Goal feature is disabled by GOAL_ENABLED.")
 
-    def _ops(self):
+    def _state_store(self):
         from runtime_v2 import (
-            RuntimeHistoryOps,
-            runtime_v2_react_transaction_timeout_seconds,
+            SessionExtensionStateStore,
         )
 
-        if self._ops_instance is None:
-            self._ops_instance = RuntimeHistoryOps(
+        if self._state_store_instance is None:
+            self._state_store_instance = SessionExtensionStateStore(
                 self.sessions_dir,
                 path_resolver=self.path_resolver,
-                transaction_timeout_seconds=runtime_v2_react_transaction_timeout_seconds(),
+                require_existing_session=False,
             )
-        return self._ops_instance
+        return self._state_store_instance
 
     @staticmethod
     def _runtime_v2_primary() -> bool:
@@ -222,7 +221,13 @@ class GoalManager:
         if not sid:
             raise GoalError("session_id is required")
         if self._runtime_v2_primary():
-            _event, response = self._ops().mutate_goal(sid, mutator, run_id=str(run_id or "").strip() or None)
+            _event, response = self._state_store().mutate(
+                sid,
+                "agent-goal",
+                "goal",
+                mutator,
+                run_id=str(run_id or "").strip(),
+            )
             result = self._with_computed_fields(response)
             self._publish_state(sid, result)
             return result
@@ -257,13 +262,16 @@ class GoalManager:
             # stop it may be missing or behind events.jsonl, so a plain cache
             # read can incorrectly make a durable Goal look absent after
             # restart.  Always reconcile against the append-only event log.
-            ops = self._ops()
-            snapshot = ops.snapshots.read_consistent(
+            store = self._state_store()
+            snapshot = store.snapshots.read_consistent(
                 sid,
-                event_log=ops.event_log,
-                projector=ops.projector,
+                event_log=store.event_log,
+                projector=store.projector,
             )
-            goal = snapshot.get("goal") if isinstance(snapshot, dict) else None
+            extensions = snapshot.get("extensions") if isinstance(snapshot, dict) else {}
+            plugin_state = extensions.get("agent-goal") if isinstance(extensions, dict) else {}
+            row = plugin_state.get("goal") if isinstance(plugin_state, dict) else {}
+            goal = row.get("value") if isinstance(row, dict) else None
         else:
             goal = self._read_legacy(self._legacy_goal_path(sid))
         if not isinstance(goal, dict) or not goal.get("id") or goal.get("deleted") is True:
@@ -318,6 +326,7 @@ class GoalManager:
                 "last_judge_verdict": None,
                 "last_judge_reason": None,
                 "last_judge_raw": None,
+                "last_judge_diagnostics": None,
                 "last_judged_at": None,
                 "accounted_judge_run_ids": [],
                 "review_status": None,
@@ -447,6 +456,7 @@ class GoalManager:
         *,
         run_id: str,
         raw: str = "",
+        diagnostics: Optional[Dict[str, Any]] = None,
         failure_kind: str = "",
         expected_goal_id: str = "",
         expected_completion_request_id: str = "",
@@ -462,6 +472,7 @@ class GoalManager:
             raise GoalError("Judge run_id is required.")
         reason = str(reason or "").strip()[:2000]
         raw = str(raw or "").strip()[:4000]
+        diagnostics = dict(diagnostics) if isinstance(diagnostics, dict) else {}
         expected_goal_id = str(expected_goal_id or "").strip()
         expected_completion_request_id = str(expected_completion_request_id or "").strip()
 
@@ -497,6 +508,7 @@ class GoalManager:
             goal["last_judge_verdict"] = verdict
             goal["last_judge_reason"] = reason or None
             goal["last_judge_raw"] = raw or None
+            goal["last_judge_diagnostics"] = diagnostics or None
 
             event_type = "goal_judge_evaluated"
             if verdict == "done":

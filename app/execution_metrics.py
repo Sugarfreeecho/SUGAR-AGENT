@@ -4,6 +4,7 @@ import atexit
 import json
 import os
 import threading
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional
@@ -13,6 +14,7 @@ _lock = threading.RLock()
 _root: Optional[Path] = None
 _path_resolver: Optional[Callable[[str], str | Path]] = None
 _sessions: Dict[str, dict] = {}
+_last_started_order_ns = 0
 _MAX_RUNS = max(1, int(os.getenv("EXECUTION_DASHBOARD_MAX_RUNS", "100")))
 _heartbeat_controls: Dict[tuple[str, str], threading.Event] = {}
 _flush_timers: Dict[str, threading.Timer] = {}
@@ -28,6 +30,22 @@ _HEARTBEAT_INTERVAL_SEC = max(
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="microseconds").replace("+00:00", "Z")
+
+
+def _next_started_order_ns() -> int:
+    """Return a wall-clock-based, process-monotonic run ordering key."""
+    global _last_started_order_ns
+    value = time.time_ns()
+    _last_started_order_ns = max(value, _last_started_order_ns + 1)
+    return _last_started_order_ns
+
+
+def _run_sort_key(run: dict) -> tuple[str, int]:
+    try:
+        order = int(run.get("started_order_ns") or 0)
+    except (TypeError, ValueError):
+        order = 0
+    return str(run.get("started_at") or ""), order
 
 
 def configure(
@@ -132,7 +150,13 @@ def _run(data: dict, run_id: str, create: bool = True) -> Optional[dict]:
             return row
     if not create:
         return None
-    row = {"run_id": run_id, "status": "running", "started_at": _now(), "requests": []}
+    row = {
+        "run_id": run_id,
+        "status": "running",
+        "started_at": _now(),
+        "started_order_ns": _next_started_order_ns(),
+        "requests": [],
+    }
     data.setdefault("runs", []).append(row)
     data["runs"] = data["runs"][-_MAX_RUNS:]
     return row
@@ -166,6 +190,8 @@ def start_run(
     with _lock:
         data = _load(session_id)
         run = _run(data, run_id)
+        if not run.get("started_order_ns"):
+            run["started_order_ns"] = _next_started_order_ns()
         run.update({
             "status": "running",
             "mode": mode,
@@ -406,10 +432,7 @@ def snapshot_all(session_names: Optional[Dict[str, str]] = None) -> dict:
             except Exception:
                 pass
             sessions.append(row)
-        sessions.sort(
-            key=lambda row: str(((row.get("runs") or [{}])[-1]).get("started_at") or ""),
-            reverse=True,
-        )
+        sessions.sort(key=lambda row: _run_sort_key((row.get("runs") or [{}])[-1]), reverse=True)
         return {"version": 1, "sessions": sessions}
 
 
@@ -441,6 +464,12 @@ def list_sessions(session_names: Optional[Dict[str, str]] = None) -> dict:
                 "last_started_at": str(last.get("started_at") or ""),
                 "last_finished_at": str(last.get("finished_at") or ""),
                 "status": str(last.get("status") or ""),
+                "_last_started_order_ns": _run_sort_key(last)[1],
             })
-        sessions.sort(key=lambda row: row["last_started_at"], reverse=True)
+        sessions.sort(
+            key=lambda row: (row["last_started_at"], row["_last_started_order_ns"]),
+            reverse=True,
+        )
+        for row in sessions:
+            row.pop("_last_started_order_ns", None)
         return {"sessions": sessions}

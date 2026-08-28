@@ -77,6 +77,7 @@ page reports visibility/focus changes to `/api/ui-presence`, so switching to
 another application or tab cancels the "in use" state and lets the toast fire;
 focusing any WebUI tab again cancels a pending toast.
 
-Clicking a toast opens the WebUI in the default browser via the registered
-`sugaragent://` URL protocol; the handler is
-`app/open_ui_from_notify.ps1`.
+Clicking a toast activates the WebUI through the registered `sugaragent://`
+URL protocol. On Windows the protocol runs the windowless tray activation
+entrypoint, which reuses and foregrounds a live WebUI page; it opens the default
+browser only when no reusable page is present.

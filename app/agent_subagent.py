@@ -21,6 +21,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
+import model_profiles
 from agent_harness import (
     SUBAGENT_BEST_OF_N,
     SUBAGENT_MAX_DEPTH,
@@ -180,17 +181,20 @@ _TEXT_SUFFIXES = frozenset(
 
 
 class SubagentTaskRegistry:
-    """跟踪后台 subagent asyncio 任务，支持 interrupt / 等待。"""
+    """跟踪 subagent asyncio 任务，支持 interrupt / 等待。"""
 
     def __init__(self) -> None:
         self._tasks: Dict[str, asyncio.Task] = {}
         self._run_ids: Dict[str, str] = {}
         self._parent_by_child: Dict[str, str] = {}
-        self._lock = asyncio.Lock()
+        # Chat runs live on per-session worker event loops while Web API
+        # cancellation runs on the ASGI loop.  The registry is therefore
+        # cross-thread state and must not use a loop-bound asyncio.Lock.
+        self._lock = threading.RLock()
 
     async def reserve(self, child_id: str, run_id: str, *, parent_session_id: str = "") -> bool:
         """Atomically reserve the single execution slot for a subagent."""
-        async with self._lock:
+        with self._lock:
             current_run_id = self._run_ids.get(child_id)
             current_task = self._tasks.get(child_id)
             if current_run_id and (current_task is None or not current_task.done()):
@@ -204,7 +208,7 @@ class SubagentTaskRegistry:
 
     async def attach(self, child_id: str, run_id: str, task: asyncio.Task) -> bool:
         """Attach a task to a reservation without replacing another run."""
-        async with self._lock:
+        with self._lock:
             if self._run_ids.get(child_id) != run_id:
                 return False
             self._tasks[child_id] = task
@@ -233,7 +237,7 @@ class SubagentTaskRegistry:
         return True
 
     async def unregister(self, child_id: str, run_id: str) -> bool:
-        async with self._lock:
+        with self._lock:
             if run_id and self._run_ids.get(child_id) != run_id:
                 return False
             self._tasks.pop(child_id, None)
@@ -242,25 +246,57 @@ class SubagentTaskRegistry:
             return True
 
     def is_running(self, child_id: str) -> bool:
-        if child_id in self._run_ids and child_id not in self._tasks:
-            return True
-        t = self._tasks.get(child_id)
+        with self._lock:
+            if child_id in self._run_ids and child_id not in self._tasks:
+                return True
+            t = self._tasks.get(child_id)
         return t is not None and not t.done()
 
     async def cancel(self, child_id: str) -> bool:
-        async with self._lock:
+        with self._lock:
             t = self._tasks.get(child_id)
             run_id = self._run_ids.get(child_id, "")
         if t is None or t.done():
             return False
         session_manager.request_interrupt(child_id)
-        t.cancel()
-        try:
-            await t
-        except asyncio.CancelledError:
-            pass
-        except Exception:
-            pass
+        current_loop = asyncio.get_running_loop()
+        task_loop = t.get_loop()
+        if task_loop is current_loop:
+            t.cancel()
+            try:
+                await t
+            except asyncio.CancelledError:
+                pass
+            except Exception:
+                pass
+        elif task_loop.is_running():
+            settled = asyncio.Event()
+
+            def _notify_settled(_task: asyncio.Task) -> None:
+                try:
+                    current_loop.call_soon_threadsafe(settled.set)
+                except RuntimeError:
+                    pass
+
+            def _cancel_on_owner_loop() -> None:
+                if t.done():
+                    _notify_settled(t)
+                    return
+                t.add_done_callback(_notify_settled)
+                t.cancel()
+
+            try:
+                task_loop.call_soon_threadsafe(_cancel_on_owner_loop)
+                await asyncio.wait_for(settled.wait(), timeout=8.0)
+            except asyncio.TimeoutError:
+                logger.warning("subagent task cancel timeout: %s", child_id)
+            except RuntimeError:
+                # The owner loop stopped between the liveness check and the
+                # thread-safe callback.  Best effort is sufficient here.
+                if not t.done():
+                    t.cancel()
+        else:
+            t.cancel()
         await self.unregister(child_id, run_id)
         return True
 
@@ -272,7 +308,7 @@ class SubagentTaskRegistry:
     ) -> None:
         pid = (parent_session_id or "").strip()
         extra = set(also_ids or ())
-        async with self._lock:
+        with self._lock:
             ids = [
                 cid
                 for cid in self._tasks
@@ -285,7 +321,7 @@ class SubagentTaskRegistry:
                 pass
 
     async def wait(self, child_id: str, timeout: Optional[float] = None) -> Optional[Any]:
-        async with self._lock:
+        with self._lock:
             t = self._tasks.get(child_id)
         if t is None:
             return None
@@ -572,9 +608,20 @@ def inject_task_model_profiles(
         name = str(row.get("name") or pid).strip()
         model = str(row.get("model") or "").strip()
         capability = str(row.get("capability_description") or "").strip()
+        input_modalities = model_profiles.normalize_input_modalities(
+            row.get("input_modalities")
+        )
+        modality_parts: List[str] = []
+        if input_modalities == ["text"]:
+            modality_parts.append("Inputs: text only")
+        elif input_modalities:
+            modality_parts.append("Inputs: " + ", ".join(input_modalities))
+        if str(row.get("multimodal_mode") or "").strip().lower() == "disabled":
+            modality_parts.append("multimodal: manually disabled")
+        selection_details = [value for value in (capability, *modality_parts) if value]
         details.append(
             f"- {pid}: {name} (model={model or 'unspecified'})"
-            + (f" — {capability}" if capability else "")
+            + (f" — {'; '.join(selection_details)}" if selection_details else "")
         )
 
     out: List[Dict[str, Any]] = []
@@ -659,8 +706,6 @@ def filter_tools_for_session(
             if depth >= SUBAGENT_MAX_DEPTH or stype == "best-of-n-runner":
                 continue
             out.append(defn)
-            continue
-        if name == "team" and meta.get("is_subagent") and not meta.get("agent_team_member_id"):
             continue
         if meta.get("is_subagent"):
             if allowed is not None and name not in allowed:
@@ -989,7 +1034,12 @@ def _format_subagent_result(
             f"Use task(action='collect', resume={child_session_id!r}) to collect the result when finished, "
             f"or task(action='status') for overall status."
         )
-    tag = "续接完成" if resumed else "完成"
+    if status == "interrupted":
+        tag = "续接已中断" if resumed else "已中断"
+    elif status == "failed":
+        tag = "续接失败" if resumed else "失败"
+    else:
+        tag = "续接完成" if resumed else "完成"
     header = (
         f"Subagent {tag} (ID: {child_session_id}, type: {subagent_type}, "
         f"description: {description})"
@@ -1804,6 +1854,8 @@ async def _execute_subagent_run(
         async def _bg_done(t: asyncio.Task) -> None:
             try:
                 await t
+            except asyncio.CancelledError:
+                pass
             except Exception:
                 pass
 
@@ -1817,12 +1869,44 @@ async def _execute_subagent_run(
             status="running",
         )
 
-    current_task = asyncio.current_task()
-    if current_task is not None:
-        if not await subagent_registry.attach(child_id, subagent_run_id, current_task):
-            await subagent_registry.unregister(child_id, subagent_run_id)
-            return f"Error: subagent {child_id} execution reservation was lost before start."
-    return await _run_owned(background=False, emit_start=True)
+    # A foreground subagent still needs its own Task.  Registering the current
+    # task here aliases the child to the parent Agent run, so deleting the child
+    # cancels the entire parent conversation.  Shield the dedicated child task
+    # and translate child-only cancellation into a normal tool result; a real
+    # cancellation of the parent still propagates after cleaning up the child.
+    task = asyncio.create_task(_run_owned(background=False, emit_start=True))
+    if not await subagent_registry.attach(child_id, subagent_run_id, task):
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        await subagent_registry.unregister(child_id, subagent_run_id)
+        return f"Error: subagent {child_id} execution reservation was lost before start."
+    try:
+        return await asyncio.shield(task)
+    except asyncio.CancelledError:
+        # shield is cancelled immediately when its caller is cancelled, while
+        # child-originated cancellation reaches us only after the child Task is
+        # done.  This distinction works on the bundled Python 3.10 as well as
+        # newer runtimes that expose Task.cancelling().
+        parent_was_cancelled = not task.done()
+        if parent_was_cancelled:
+            if not task.done():
+                task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+            raise
+        return _format_subagent_result(
+            child_session_id=child_id,
+            description=description,
+            subagent_type=subagent_type,
+            final_response="Subagent was interrupted or deleted before completion.",
+            resumed=resumed,
+            status="interrupted",
+        )
 
 
 async def _run_single_subagent(

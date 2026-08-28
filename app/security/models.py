@@ -186,6 +186,8 @@ PERMISSION_PRESETS = {
     ),
     PermissionMode.FULL_ACCESS: PermissionContext(
         SandboxProfile.NO_RESTRICTION,
+        # NEVER applies to ordinary capability approvals. Forced destructive
+        # approval and controller-integrity denial are cross-mode invariants.
         ApprovalPolicy.NEVER,
         ApprovalReviewer.NONE,
         PermissionMode.FULL_ACCESS,

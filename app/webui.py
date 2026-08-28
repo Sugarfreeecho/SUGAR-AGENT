@@ -10,12 +10,14 @@ import logging
 import mimetypes
 import os
 import re
+import sys
 import tempfile
 import threading
 import time
 import uuid
 import zipfile
 from collections import defaultdict, deque
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
@@ -43,9 +45,6 @@ from agent_harness import (
     normalize_prompt_language,
     refresh_executor_client_from_env,
 )
-from agent_team import AGENT_TEAM_ENV_VAR, agent_team_enabled
-from agent_team.api import create_agent_team_router
-from agent_team.service import AgentTeamService
 from human_interaction import ASK_USER_ENV_VAR, ask_user_enabled
 from agent_loop import (
     abort_session_steer_run,
@@ -70,20 +69,16 @@ import model_profiles
 import execution_metrics
 from path_picker_util import pick_native_path
 
-try:
-    from .desktop_notify import show_desktop_notification
-except ImportError:
-    from desktop_notify import show_desktop_notification
+from notification_providers import notify_user
 
 _PATH_PICKER_JS_PATH = Path(__file__).resolve().parent / "templates" / "static" / "myagent_path_picker.js"
 _SETUP_I18N_JS_PATH = Path(__file__).resolve().parent / "templates" / "static" / "setup_i18n.js"
 _TEMPLATES_DIR = Path(__file__).resolve().parent / "templates"
 _DIST_INDEX = _TEMPLATES_DIR / "dist" / "index.html"
-_DIST_EXECUTION_DASHBOARD = _TEMPLATES_DIR / "dist" / "execution-dashboard.html"
 _DIST_ASSETS = _TEMPLATES_DIR / "dist" / "assets"
 _EXECUTION_METRICS_PAYLOAD_TTL_SEC = max(
     1.0,
-    float(os.getenv("EXECUTION_DASHBOARD_PAYLOAD_TTL_SEC", "3")),
+    float(os.getenv("EXECUTION_METRICS_PAYLOAD_TTL_SEC", "3")),
 )
 _execution_metrics_payload_lock = threading.Lock()
 _execution_metrics_payload_cached_at = 0.0
@@ -151,18 +146,31 @@ CHAT_UPLOAD_MAX_FILE_BYTES = 100 * 1024 * 1024
 CHAT_UPLOAD_MAX_TOTAL_BYTES = 200 * 1024 * 1024
 _CHAT_UPLOAD_MULTIPART_OVERHEAD_BYTES = 4 * 1024 * 1024
 
-fastapi_app = FastAPI()
-fastapi_app.include_router(
-    create_agent_team_router(
-        lambda: AgentTeamService(
-            session_manager.repository.sessions_dir,
-            path_resolver=session_manager._resolve_session_path,
-        ),
-        session_exists=lambda session_id: bool(
-            session_manager.get_session_summary(session_id)
-        ),
+@asynccontextmanager
+async def _webui_lifespan(_app: FastAPI):
+    """Default lifecycle for tests and alternate ASGI launchers."""
+    await start_webui_lifecycle()
+    try:
+        yield
+    finally:
+        await stop_webui_lifecycle()
+
+
+fastapi_app = FastAPI(lifespan=_webui_lifespan)
+try:
+    from agent_extensions import load_plugins
+    from plugins.host import install_bundled_host_extensions
+
+    install_bundled_host_extensions(
+        fastapi_app,
+        load_plugins(force=True).plugins,
+        {"session_manager": session_manager, "project_root": PROJECT_ROOT},
     )
-)
+    from workflow_extensions import activate_bundled_workflow_callbacks
+
+    activate_bundled_workflow_callbacks(sys.modules["agent_loop"])
+except Exception:
+    logging.getLogger(__name__).exception("Bundled host plugin installation failed")
 
 if _DIST_ASSETS.is_dir():
     fastapi_app.mount(
@@ -195,13 +203,10 @@ _RUNTIME_SYNC_WORKER: Optional[threading.Thread] = None
 _RUNTIME_SYNC_EXTRA_WORKERS: set[threading.Thread] = set()
 _history_op_locks: dict[str, threading.Lock] = {}
 _history_op_locks_guard = threading.Lock()
-_goal_runner_task: Optional[asyncio.Task] = None
-_goal_runner_workers: dict[str, asyncio.Task] = {}
 _react_recovery_scan_task: Optional[asyncio.Task] = None
 _react_recovery_workers: dict[str, asyncio.Task] = {}
 _react_recovery_attempt_at: dict[str, float] = {}
 _human_interaction_recovery_workers: dict[str, asyncio.Task] = {}
-_GOAL_RUNNER_POLL_SECONDS = max(0.5, float(os.getenv("GOAL_RUNNER_POLL_SECONDS", "2")))
 _REACT_RECOVERY_RETRY_SECONDS = max(
     5.0,
     float(os.getenv("REACT_RECOVERY_RETRY_SECONDS", "30")),
@@ -708,105 +713,18 @@ def _session_pending_human_question_count(session_id: str) -> int:
     return int(_session_pending_human_counts(session_id).get("questions") or 0)
 
 
-def _discover_runnable_goal_sessions(
-    candidate_session_ids: Optional[list[str]] = None,
-) -> list[str]:
-    try:
-        from agent_goal import goal_enabled, manager_for
-
-        if not goal_enabled():
-            return []
-        manager = manager_for(session_manager)
-        runnable: list[str] = []
-        if candidate_session_ids is None:
-            session_ids = [
-                str((row or {}).get("id") or "").strip()
-                for row in session_manager.list_sessions(include_archived=True)
-            ]
-        else:
-            session_ids = [str(value or "").strip() for value in candidate_session_ids]
-        for sid in session_ids:
-            if not sid:
-                continue
-            try:
-                if manager.should_continue(sid):
-                    if _session_pending_human_count(sid) > 0:
-                        continue
-                    runnable.append(sid)
-            except Exception:
-                logger.debug("Goal runner discovery failed for %s", sid, exc_info=True)
-        return runnable
-    except Exception:
-        logger.debug("Goal runner discovery failed", exc_info=True)
-        return []
-
-
-async def _run_goal_continuation_background(session_id: str) -> None:
+def _session_was_manually_stopped(session_id: str) -> bool:
+    """Return whether the durable interrupt marker represents an explicit user stop."""
     sid = str(session_id or "").strip()
     if not sid:
-        return
-    scheduler_run_id = "goal-runner-" + uuid.uuid4().hex
-    start_token = _reserve_session_chat_start(sid, scheduler_run_id) or ""
-    if not start_token:
-        return
-    manager = None
-    saw_event = False
+        return False
     try:
-        from agent_goal import manager_for
-
-        manager = manager_for(session_manager)
-        if not manager.should_continue(sid):
-            return
-        if _session_pending_human_count(sid) > 0:
-            return
-        get_goal = getattr(manager, "get", None)
-        current_goal = get_goal(sid) if callable(get_goal) else {}
-        current_goal = current_goal if isinstance(current_goal, dict) else {}
-        recovery_reason = "process_or_network_interruption" if current_goal.get("current_run_id") else ""
-        manager.mark_continuation_started(sid, run_id=scheduler_run_id)
-
-        def should_stop(sid_: str) -> bool:
-            return session_manager.is_interrupt_requested(sid_)
-
-        async for _event in astream_events_continuation(
-            sid,
-            should_stop=should_stop,
-            require_pending_subagents=False,
-            recovery_reason=recovery_reason,
-            run_id=scheduler_run_id,
-            continuation_source="goal",
-        ):
-            # The agent loop already publishes every event to observers and
-            # persists durable Runtime V2 events; the server runner only drains
-            # the generator so execution does not depend on an HTTP client.
-            saw_event = True
-        if not saw_event:
-            manager.record_run(
-                sid,
-                0,
-                continuation=True,
-                run_id=scheduler_run_id,
-                outcome="failed",
-                error="goal_continuation_produced_no_events",
-            )
-    except asyncio.CancelledError:
-        raise
-    except Exception as exc:
-        logger.warning("Background Goal continuation failed for %s: %s", sid, exc)
-        if manager is not None:
-            try:
-                manager.record_run(
-                    sid,
-                    0,
-                    continuation=True,
-                    run_id=scheduler_run_id,
-                    outcome="failed",
-                    error=str(exc),
-                )
-            except Exception:
-                logger.debug("Goal runner fallback failure accounting failed for %s", sid, exc_info=True)
-    finally:
-        _release_session_chat_start(sid, start_token)
+        if not session_manager.is_interrupt_requested(sid):
+            return False
+        reason = str(session_manager.get_interrupt_reason(sid) or "").strip().lower()
+    except Exception:
+        return False
+    return reason in {"user", "user_button", "manual", "manual_stop", "stop_button"}
 
 
 def _append_recovered_question_tool_result(record: dict) -> bool:
@@ -900,87 +818,9 @@ def _schedule_human_interaction_recovery(session_id: str) -> bool:
     return True
 
 
-async def _goal_runner_loop() -> None:
-    from agent_goal import active_goal_session_ids, subscribe_goal_activity
-
-    activity, unsubscribe = subscribe_goal_activity(asyncio.get_running_loop())
-    next_full_scan = 0.0
-    try:
-        while True:
-            try:
-                now = time.monotonic()
-                candidates = None if now >= next_full_scan else active_goal_session_ids()
-                if candidates is None:
-                    next_full_scan = now + 60.0
-                runnable = await asyncio.to_thread(
-                    _discover_runnable_goal_sessions,
-                    candidates,
-                )
-                for sid in runnable:
-                    existing = _goal_runner_workers.get(sid)
-                    if existing and not existing.done():
-                        continue
-                    if _has_local_worker_activity(sid):
-                        continue
-                    task = asyncio.create_task(
-                        _run_goal_continuation_background(sid),
-                        name=f"goal-runner-{sid}",
-                    )
-                    _goal_runner_workers[sid] = task
-
-                    def cleanup(done: asyncio.Task, session_id: str = sid) -> None:
-                        if _goal_runner_workers.get(session_id) is done:
-                            _goal_runner_workers.pop(session_id, None)
-
-                    task.add_done_callback(cleanup)
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                logger.exception("Goal runner scheduling tick failed")
-            try:
-                await asyncio.wait_for(activity.wait(), timeout=_GOAL_RUNNER_POLL_SECONDS)
-                activity.clear()
-            except asyncio.TimeoutError:
-                pass
-    finally:
-        unsubscribe()
-
-
-async def start_goal_runner() -> bool:
-    global _goal_runner_task
-    from agent_goal import goal_enabled
-
-    if not goal_enabled():
-        return False
-    if _goal_runner_task and not _goal_runner_task.done():
-        return False
-    _goal_runner_task = asyncio.create_task(_goal_runner_loop(), name="goal-runner-scheduler")
-    return True
-
-
-async def stop_goal_runner() -> None:
-    global _goal_runner_task
-    scheduler = _goal_runner_task
-    _goal_runner_task = None
-    if scheduler and not scheduler.done():
-        scheduler.cancel()
-    workers = [task for task in _goal_runner_workers.values() if task and not task.done()]
-    for task in workers:
-        task.cancel()
-    pending = [task for task in [scheduler, *workers] if task is not None]
-    if pending:
-        await asyncio.gather(*pending, return_exceptions=True)
-    _goal_runner_workers.clear()
-
-
 def _discover_recoverable_react_sessions() -> list[str]:
     """Return every non-archived interrupted ReAct session safe to resume."""
-    try:
-        from agent_goal import manager_for
-
-        goal_manager = manager_for(session_manager)
-    except Exception:
-        goal_manager = None
+    from workflow_extensions import session_workflows
     recoverable: list[str] = []
     for row in session_manager.list_sessions(include_archived=False):
         sid = str((row or {}).get("id") or "").strip()
@@ -991,9 +831,9 @@ def _discover_recoverable_react_sessions() -> list[str]:
         ):
             continue
         try:
-            # Active goals have their own durable server-side scheduler and
+            # Optional workflows own their durable continuation scheduling and
             # must not be started a second time by generic ReAct recovery.
-            if goal_manager is not None and goal_manager.should_continue(sid):
+            if session_workflows.continuation_source(sid):
                 continue
             # The normal app lifespan reconciles orphan runs before this scan.
             # Keep direct `uvicorn webui:fastapi_app` startup equally correct.
@@ -1182,6 +1022,25 @@ def _runtime_v2_snapshot(sid: str, *, fail_closed: bool = False) -> dict:
         return {}
 
 
+def _runtime_v2_extensions_snapshot(sid: str) -> dict:
+    """Read the small plugin-owned projection used by session badges and panels."""
+
+    sid = str(sid or "").strip()
+    if not sid:
+        return {"extensions": {}}
+    from runtime_v2 import SessionExtensionStateStore
+
+    store = SessionExtensionStateStore(
+        session_manager.repository.sessions_dir,
+        path_resolver=getattr(
+            session_manager,
+            "_resolve_session_path",
+            getattr(session_manager.repository, "_path_resolver", None),
+        ),
+    )
+    return {"extensions": store.read_all_lightweight(sid)}
+
+
 def _runtime_v2_filtered_active_runs(sid: str) -> list[dict]:
     snapshot = _runtime_v2_snapshot(sid)
     active_runs = snapshot.get("active_runs") if isinstance(snapshot, dict) else None
@@ -1282,6 +1141,11 @@ def _runtime_v2_auto_resume_pending(sid: str) -> bool:
     # interaction resolve/cancel path may append its tool result and resume.
     if _session_pending_human_count(sid) > 0:
         return False
+    # Runtime cancellation can append a later generic `cancelled` event after
+    # the stop endpoint persisted `user_button`. The durable session marker is
+    # authoritative so that this event-order race cannot restart the session.
+    if _session_was_manually_stopped(sid):
+        return False
     try:
         from runtime_v2 import runtime_v2_primary
 
@@ -1320,10 +1184,21 @@ def _empty_todo_plan_snapshot(source: str) -> dict:
 
 
 def _runtime_v2_todo_plan_snapshot(session_id: str) -> dict:
-    todo = _runtime_v2_context_snapshot(session_id).get("todo")
+    snapshot = _runtime_v2_snapshot(session_id, fail_closed=True)
+    extensions = snapshot.get("extensions") if isinstance(snapshot, dict) else None
+    plugin_state = extensions.get("session-todo") if isinstance(extensions, dict) else None
+    row = plugin_state.get("plan") if isinstance(plugin_state, dict) else None
+    todo = row.get("value") if isinstance(row, dict) else None
     if isinstance(todo, dict):
         out = dict(todo)
-        out.setdefault("source", "runtime_v2_snapshot")
+        out.setdefault("source", "extension_state")
+        return out
+    # Transitional read compatibility for snapshots produced before Todo moved
+    # to the domain-neutral extension-state service. New writes never use it.
+    legacy_todo = snapshot.get("todo") if isinstance(snapshot, dict) else None
+    if isinstance(legacy_todo, dict):
+        out = dict(legacy_todo)
+        out.setdefault("source", "legacy_runtime_v2_snapshot")
         return out
     return _empty_todo_plan_snapshot("runtime_v2_snapshot")
 
@@ -1640,6 +1515,14 @@ def _build_sessions_state_snapshot(include_archived: bool = False) -> dict:
     except Exception:
         logger.exception("Failed to initialize pending human-interaction state for /sessions/state")
         human_interaction_service = None
+    pending_counts_by_session = {}
+    if human_interaction_service is not None:
+        try:
+            pending_counts_by_session = human_interaction_service.pending_counts_many(
+                str(item.get("id") or "") for item in sessions if item.get("id")
+            )
+        except Exception:
+            logger.exception("Failed to batch pending human-interaction state for /sessions/state")
     for s in sessions:
         sid = s.get("id")
         if not sid:
@@ -1654,7 +1537,8 @@ def _build_sessions_state_snapshot(include_archived: bool = False) -> dict:
         s["title_generation_pending"] = is_session_title_generation_pending(sid)
         try:
             pending_counts = (
-                human_interaction_service.pending_counts(sid)
+                pending_counts_by_session.get(sid)
+                or human_interaction_service.pending_counts(sid)
                 if human_interaction_service is not None
                 else {"questions": 0, "approvals": 0, "total": 0}
             )
@@ -1702,12 +1586,11 @@ def get_index_html():
     from security import security_enabled
 
     feature_flags = {
-        "goal": os.getenv("GOAL_ENABLED", "1").strip().lower() not in {"0", "false", "no", "off"},
         "askUser": ask_user_enabled(),
-        "agentTeam": agent_team_enabled(),
         "followupRestart": os.getenv("MYAGENT_ENABLE_FOLLOWUP_RESTART", "1").strip().lower() in {"1", "true", "yes", "on"},
         "streamReconnect": os.getenv("MYAGENT_ENABLE_STREAM_RECONNECT", "1").strip().lower() in {"1", "true", "yes", "on"},
         "finalReconcile": os.getenv("MYAGENT_ENABLE_FINAL_RECONCILE", "1").strip().lower() in {"1", "true", "yes", "on"},
+        "smoothStream": os.getenv("MYAGENT_SMOOTH_STREAM_ENABLED", "0").strip().lower() in {"1", "true", "yes", "on"},
         "security": security_enabled(),
     }
     inject = (
@@ -1743,16 +1626,6 @@ async def get_index(request: Request):
             "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
             "Pragma": "no-cache",
         },
-    )
-
-
-@fastapi_app.get("/execution-dashboard", response_class=HTMLResponse)
-async def get_execution_dashboard():
-    if not _DIST_EXECUTION_DASHBOARD.is_file():
-        return HTMLResponse("<h1>Execution dashboard is not built</h1>", status_code=503)
-    return HTMLResponse(
-        _DIST_EXECUTION_DASHBOARD.read_text(encoding="utf-8"),
-        headers={"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0"},
     )
 
 
@@ -2515,23 +2388,15 @@ async def get_session_detail(
                 s["react_can_continue"] = session_manager.can_continue_react_session(str(sid))
             except Exception:
                 s["react_can_continue"] = False
-            try:
-                from agent_goal import goal_enabled, manager_for
-                s["goal_enabled"] = goal_enabled()
-                s["goal"] = manager_for(session_manager).get(str(sid)) if s["goal_enabled"] else None
-                goal_can_continue = bool(s["goal"] and s["goal"].get("status") == "active")
-            except Exception:
-                s["goal_enabled"] = False
-                s["goal"] = None
-                goal_can_continue = False
-            s["react_can_continue"] = bool(s["react_can_continue"] or goal_can_continue)
+            from workflow_extensions import session_workflows
+            workflow_source = session_workflows.continuation_source(str(sid))
+            s["react_can_continue"] = bool(s["react_can_continue"] or workflow_source)
             s["react_auto_resume"] = bool(
-                not goal_can_continue
+                not workflow_source
                 and s["react_can_continue"]
                 and int(s["pending_human_interactions"].get("total") or 0) == 0
                 and _runtime_v2_auto_resume_pending(str(sid))
             )
-            s["goal_server_runner"] = bool(goal_can_continue)
             if include_subagents:
                 _attach_subagent_sidebar_fields(s, str(sid))
         else:
@@ -2542,7 +2407,6 @@ async def get_session_detail(
             s["pending_human_interactions"] = {"questions": 0, "approvals": 0, "total": 0}
             s["react_can_continue"] = False
             s["react_auto_resume"] = False
-            s["goal_server_runner"] = False
         return JSONResponse(content=s)
 
     return await asyncio.to_thread(_build_detail_response)
@@ -2918,7 +2782,6 @@ async def create_session():
         "archived": bool((metadata or {}).get("archived", False)),
         "pinned": bool((metadata or {}).get("pinned", False)),
         "todo": bool((metadata or {}).get("todo", False)),
-        "goal_review_pending": bool((metadata or {}).get("goal_review_pending", False)),
         "pinned_at": (metadata or {}).get("pinned_at") if (metadata or {}).get("pinned") else None,
         "last_user_preview": "",
         "stream_active": False,
@@ -3051,7 +2914,9 @@ async def probe_model_profile(req: Request):
     base_url = str(data.get("base_url") or "").strip()
     api_key = str(data.get("api_key") or "").strip()
     model_id = str(data.get("model") or data.get("id") or "").strip()
-    fallback = data.get("metadata") if isinstance(data.get("metadata"), dict) else data
+    fallback = dict(data.get("metadata")) if isinstance(data.get("metadata"), dict) else dict(data)
+    if data.get("llm_type"):
+        fallback["llm_type"] = str(data.get("llm_type") or "").strip()
     try:
         model = await run_in_threadpool(model_profiles.probe_model_context, base_url, api_key, model_id, fallback)
     except Exception as e:
@@ -3459,6 +3324,7 @@ async def post_tool_approval(session_id: str, request: Request):
         return JSONResponse(content={"ok": False, "error": "invalid json"}, status_code=400)
     aid = str((body or {}).get("approval_id") or "").strip()
     approve = bool((body or {}).get("approve"))
+    rejection_reason = str((body or {}).get("rejection_reason") or "").strip()
 
     from tool_approval_gate import resolve_tool_approval
 
@@ -3477,7 +3343,7 @@ async def post_tool_approval(session_id: str, request: Request):
             )
     except Exception:
         record = {}
-    matched = resolve_tool_approval(session_id, aid, approve)
+    matched = resolve_tool_approval(session_id, aid, approve, rejection_reason)
     if matched and record:
         try:
             await publish_session_event(session_id, {"type": "approval_resolved", **record})
@@ -3675,6 +3541,7 @@ async def resolve_session_approval(session_id: str, approval_id: str, request: R
     try:
         body = await request.json()
         decision = str((body or {}).get("decision") or "")
+        rejection_reason = str((body or {}).get("rejection_reason") or "").strip()
         from human_interaction import get_human_interaction_service
         from tool_approval_gate import has_live_approval_waiter
 
@@ -3696,12 +3563,15 @@ async def resolve_session_approval(session_id: str, approval_id: str, request: R
                 },
                 status_code=409,
             )
+        resolve_kwargs = {"resolver": _interaction_resolver_metadata(request)}
+        if decision.strip().lower().replace("-", "_") == "deny":
+            resolve_kwargs["rejection_reason"] = rejection_reason
         record = await asyncio.to_thread(
             service.resolve_approval,
             session_id,
             approval_id,
             decision,
-            resolver=_interaction_resolver_metadata(request),
+            **resolve_kwargs,
         )
         decision_value = str(record.get("decision") or "")
         security_digest = str(record.get("security_request_digest") or "").strip()
@@ -3759,7 +3629,12 @@ async def resolve_session_approval(session_id: str, approval_id: str, request: R
                     )
                 resolve_tool_approval(session_id, approval_id, True)
             else:
-                resolve_tool_approval(session_id, approval_id, False)
+                resolve_tool_approval(
+                    session_id,
+                    approval_id,
+                    False,
+                    str(record.get("rejection_reason") or ""),
+                )
         await publish_session_event(session_id, {"type": "approval_resolved", **record})
         return JSONResponse(content={"ok": True, "approval": record})
     except Exception as exc:
@@ -4250,7 +4125,7 @@ async def _delayed_ui_attention_notify() -> None:
         global _last_ui_attention_notify_at
         _last_ui_attention_notify_at = time.time()
         for title, message in notifications:
-            await run_in_threadpool(show_desktop_notification, title, message)
+            await notify_user(title, message)
     except asyncio.CancelledError:
         return
     finally:
@@ -4317,7 +4192,7 @@ async def _schedule_ui_closed_notify() -> None:
             # Page-closed notice is session-agnostic: restore the original
             # "still running in the background" copy instead of a
             # status/session/question summary.
-            await run_in_threadpool(show_desktop_notification)
+            await notify_user()
         except asyncio.CancelledError:
             return
         finally:
@@ -4941,12 +4816,14 @@ async def continue_react_session(
             },
             status_code=409,
         )
-    try:
-        from agent_goal import manager_for
-        goal_can_continue = manager_for(session_manager).should_continue(sid)
-    except Exception:
-        goal_can_continue = False
-    if not session_manager.can_continue_react_session(sid) and not goal_can_continue:
+    if recovery and _session_was_manually_stopped(sid):
+        return JSONResponse(
+            content={"ok": False, "reason": "manually_stopped"},
+            status_code=409,
+        )
+    from workflow_extensions import session_workflows
+    workflow_source = session_workflows.continuation_source(sid)
+    if not session_manager.can_continue_react_session(sid) and not workflow_source:
         return Response(status_code=204)
     continuation_run_id = "react-continue-" + uuid.uuid4().hex
     start_token = _reserve_session_chat_start(sid, continuation_run_id) or ""
@@ -4966,10 +4843,10 @@ async def continue_react_session(
                     sid,
                     should_stop=should_stop,
                     require_pending_subagents=False,
-                    recovery_reason="process_or_network_interruption" if recovery and not goal_can_continue else "",
+                    recovery_reason="process_or_network_interruption" if recovery and not workflow_source else "",
                     run_id=continuation_run_id,
                     continuation_source=(
-                        "goal" if goal_can_continue else ("recovery" if recovery else "subagent")
+                        workflow_source if workflow_source else ("recovery" if recovery else "subagent")
                     ),
                 ):
                     if await request.is_disconnected():
@@ -4993,67 +4870,6 @@ async def continue_react_session(
         media_type="text/event-stream",
         headers=_SSE_HEADERS,
     )
-
-
-@fastapi_app.get("/sessions/{session_id}/goal")
-async def get_session_goal(session_id: str):
-    try:
-        from agent_goal import goal_enabled, manager_for
-        return JSONResponse(content={"enabled": goal_enabled(), "goal": manager_for(session_manager).get(session_id) if goal_enabled() else None})
-    except Exception as exc:
-        return JSONResponse(content={"enabled": False, "goal": None, "error": str(exc)}, status_code=503)
-
-
-@fastapi_app.post("/sessions/{session_id}/goal/{action}")
-async def control_session_goal(session_id: str, action: str, request: Request):
-    if action not in {"pause", "resume", "cancel", "edit", "delete", "review"}:
-        return JSONResponse(content={"ok": False, "error": "action must be pause, resume, cancel, edit, delete, or review"}, status_code=400)
-    try:
-        from agent_goal import manager_for
-
-        try:
-            body = await request.json()
-        except Exception:
-            body = {}
-        if not isinstance(body, dict):
-            body = {}
-        manager = manager_for(session_manager)
-        if action == "review":
-            goal = manager.review_completion(
-                session_id,
-                str(body.get("decision") or ""),
-                objective=str(body.get("objective") or ""),
-                judge_result=str(body.get("judge_result") or ""),
-                additional_budget=body.get("additional_budget"),
-                actor="user",
-            )
-        else:
-            action_kwargs = {
-                "additional_budget": body.get("additional_budget"),
-                "reason": str(body.get("reason") or ""),
-                "actor": "user",
-            }
-            if action == "edit":
-                action_kwargs["objective"] = body.get("objective")
-            goal = manager.user_action(session_id, action, **action_kwargs)
-        if action in {"pause", "cancel", "delete"}:
-            session_manager.request_interrupt(session_id, reason=f"goal_{action}")
-        if action == "review" and str(body.get("decision") or "").strip().lower() == "continue":
-            session_manager.clear_interrupt(session_id)
-        public_goal = None if action == "delete" or goal.get("deleted") is True else goal
-        goal_event = f"user_{action}"
-        if action == "review":
-            goal_event += "_" + str(body.get("decision") or "").strip().lower()
-        event = {"type": "goal_state", "goal": public_goal, "goal_event": goal_event, "ephemeral": True}
-        if public_goal:
-            event.update(public_goal)
-        await publish_session_event(
-            session_id,
-            event,
-        )
-        return JSONResponse(content={"ok": True, "goal": public_goal})
-    except Exception as exc:
-        return JSONResponse(content={"ok": False, "error": str(exc)}, status_code=409)
 
 
 @fastapi_app.post("/sessions/{session_id}/continue-subagents")
@@ -5362,12 +5178,7 @@ async def get_session_history_snapshot(
                     context_tokens["source"] = "runtime_v2_snapshot_stale"
                 timings["context_tokens"] = int((_time.perf_counter() - t_phase) * 1000)
                 t_phase = _time.perf_counter()
-                raw_todo_plan = runtime_context.get("todo")
-                if isinstance(raw_todo_plan, dict):
-                    todo_plan = dict(raw_todo_plan)
-                    todo_plan.setdefault("source", "runtime_v2_snapshot")
-                else:
-                    todo_plan = _empty_todo_plan_snapshot("runtime_v2_snapshot")
+                todo_plan = _runtime_v2_todo_plan_snapshot(session_id)
                 timings["todo_plan"] = int((_time.perf_counter() - t_phase) * 1000)
             else:
                 # The browser fetches these panels after the chat's first paint.
@@ -6399,21 +6210,6 @@ _ENV_GROUP_ORDER: list[tuple[str, str, list[str]]] = [
             "EGRESS_HELPER_ENABLED",
             "EXTENSION_REGISTRATION_APPROVAL_ENABLED",
             "ASK_USER_ENABLED",
-            "GOAL_ENABLED",
-            "GOAL_RUNNER_POLL_SECONDS",
-            "GOAL_MAX_CONSECUTIVE_FAILURES",
-            "GOAL_JUDGE_MAX_OUTPUT_TOKENS",
-            "GOAL_JUDGE_EVIDENCE_MAX_CHARS",
-            "GOAL_JUDGE_MAX_PARSE_FAILURES",
-            "GOAL_JUDGE_MAX_TRANSPORT_FAILURES",
-            "AGENT_TEAM_ENABLED",
-            "AGENT_TEAM_MAX_MEMBERS",
-            "AGENT_TEAM_MAX_TASKS",
-            "AGENT_TEAM_MAX_MESSAGES",
-            "AGENT_TEAM_MAX_PERMISSIONS",
-            "AGENT_TEAM_MAX_MESSAGE_CHARS",
-            "AGENT_TEAM_SERIAL_WRITE_TOOLS",
-            "AGENT_TEAM_PERMISSION_TOOLS",
             "HOOKS_ENABLED",
             "PLUGINS_ENABLED",
         ],
@@ -6477,21 +6273,6 @@ _ENV_HINTS: dict[str, str] = {
     "SECURITY_ENABLED": "1（默认）启用请求批准 / 替我审批 / 完全访问三档权限，并恢复此前保存的全局权限模式；设为 0 时强制使用完全访问并隐藏前端权限选择。保存后立即生效，页面刷新后更新界面。",
     "EXTENSION_REGISTRATION_APPROVAL_ENABLED": "0（默认）关闭统一扩展注册审批：MCP 与可执行插件工具、Hook、命令可直接注册；1/true/yes/on 启用首次注册或内容/配置摘要变化后的人工确认。保存后立即刷新扩展。",
     "ASK_USER_ENABLED": "1（默认）允许主 Agent 创建 ask_user 问题；0/false/no/off 禁止。已有待回答问题仍可处理，工具审批不受影响。保存后立即生效。",
-    "GOAL_ENABLED": "1（默认）启用持久 Goal、Goal 工具和服务端自动续跑；0/false/no/off 禁用。修改后需重启 Agent。",
-    "GOAL_RUNNER_POLL_SECONDS": "服务端 Goal 调度器扫描 active Goal 的间隔秒数，默认 2，最小 0.5。修改后需重启 Agent。",
-    "GOAL_MAX_CONSECUTIVE_FAILURES": "Goal 连续运行失败多少次后自动暂停，默认 3；用于避免无限失败重试。",
-    "GOAL_JUDGE_MAX_OUTPUT_TOKENS": "独立 Goal Judge 单次输出 token 上限，默认 512。",
-    "GOAL_JUDGE_EVIDENCE_MAX_CHARS": "送给独立 Goal Judge 的最近执行证据字符上限，默认 24000。",
-    "GOAL_JUDGE_MAX_PARSE_FAILURES": "Judge 输出连续解析失败达到此次数后暂停 Goal，默认 3。",
-    "GOAL_JUDGE_MAX_TRANSPORT_FAILURES": "Judge 模型连续调用失败达到此次数后暂停 Goal，默认 5。",
-    "AGENT_TEAM_ENABLED": "实验功能。1/true/yes/on 启用 Agent Team；其他值或未配置均禁用。保存后立即生效，默认关闭。",
-    "AGENT_TEAM_MAX_MEMBERS": "单个根会话团队的非终态成员上限，默认 4。",
-    "AGENT_TEAM_MAX_TASKS": "单个团队的共享任务投影上限，默认 1000。",
-    "AGENT_TEAM_MAX_MESSAGES": "单个团队的持久邮箱消息上限，默认 2000。",
-    "AGENT_TEAM_MAX_PERMISSIONS": "单个团队的权限请求记录上限，默认 500。",
-    "AGENT_TEAM_MAX_MESSAGE_CHARS": "单条团队消息的字符上限，默认 32000。",
-    "AGENT_TEAM_SERIAL_WRITE_TOOLS": "逗号分隔；团队成员调用这些写工具时按根团队串行执行。",
-    "AGENT_TEAM_PERMISSION_TOOLS": "逗号分隔；团队成员调用这些高风险工具前必须消费 lead 的一次性授权。",
     "HOOKS_ENABLED": "1（默认）启用生命周期 Hook；0/false/no/off 会跳过项目与插件 Hook。按次读取，保存后立即生效。",
     "PLUGINS_ENABLED": "1（默认）启用插件发现、组件合并与 Worker Runtime；0/false/no/off 会移除插件 Tool、Hook、Command、MCP、Skill、Agent 与 Prompt。",
     "HOOKS_PATH": "可选 hooks.json 路径；留空时使用 WORK_DIR/hooks.json。",
@@ -6737,6 +6518,207 @@ async def get_extensions_snapshot():
         return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
 
 
+@fastapi_app.post("/api/extensions/session-ui")
+async def get_plugin_session_ui(request: Request):
+    """Batch-project only manifest-whitelisted plugin session state fields."""
+
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"ok": False, "error": "invalid json"}, status_code=400)
+    raw_ids = body.get("session_ids") if isinstance(body, dict) else None
+    if not isinstance(raw_ids, list) or len(raw_ids) > 200:
+        return JSONResponse(
+            {"ok": False, "error": "session_ids must be a list of at most 200 items"},
+            status_code=400,
+        )
+    requested = []
+    for value in raw_ids:
+        session_id = str(value or "").strip()
+        if not session_id or len(session_id) > 256 or session_id in requested:
+            continue
+        requested.append(session_id)
+    get_summary = getattr(session_manager, "get_session_summary", None)
+    if callable(get_summary):
+        session_ids = [
+            session_id for session_id in requested if get_summary(session_id) is not None
+        ]
+    else:
+        known = {
+            str(item.get("id") or "")
+            for item in await asyncio.to_thread(
+                session_manager.list_sessions,
+                include_archived=True,
+            )
+            if isinstance(item, dict) and item.get("id")
+        }
+        session_ids = [session_id for session_id in requested if session_id in known]
+    try:
+        from agent_extensions import plugin_session_ui_snapshot
+
+        data = await asyncio.to_thread(
+            plugin_session_ui_snapshot,
+            session_ids,
+            snapshot_reader=_runtime_v2_extensions_snapshot,
+        )
+        return JSONResponse(content=data)
+    except Exception as exc:
+        logger.exception("Plugin session UI projection failed")
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
+
+
+@fastapi_app.post("/api/extensions/session-run-grant")
+async def create_plugin_session_run_grant(request: Request):
+    """Authorize one plugin to start one explicit set of sessions once."""
+
+    try:
+        from plugin_web_gateway import validate_plugin_write_origin
+
+        validate_plugin_write_origin(
+            request.method,
+            origin=str(request.headers.get("origin") or ""),
+            scheme=request.url.scheme,
+            host=str(request.headers.get("host") or request.url.netloc),
+            fetch_site=str(request.headers.get("sec-fetch-site") or ""),
+            require_origin=True,
+        )
+    except Exception as exc:
+        return _plugin_web_error_response(exc)
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"ok": False, "error": "invalid json"}, status_code=400)
+    plugin_id = str(body.get("plugin_id") or "").strip() if isinstance(body, dict) else ""
+    session_ids = body.get("session_ids") if isinstance(body, dict) else None
+    if not plugin_id or not isinstance(session_ids, list):
+        return JSONResponse(
+            {"ok": False, "error": "plugin_id and session_ids are required"},
+            status_code=400,
+        )
+    try:
+        from agent_extensions import load_plugins
+        from plugin_host_services import issue_session_run_grant
+
+        plugin = next(
+            (item for item in load_plugins(force=True).plugins if item.plugin_id == plugin_id),
+            None,
+        )
+        if plugin is None:
+            return JSONResponse({"ok": False, "error": "plugin not found"}, status_code=404)
+        grant = await asyncio.to_thread(issue_session_run_grant, plugin, session_ids)
+        return JSONResponse({"ok": True, **grant})
+    except Exception as exc:
+        return _plugin_web_error_response(exc)
+
+
+@fastapi_app.post("/api/extensions/session-action")
+async def invoke_plugin_session_action(request: Request):
+    """Execute a fixed, manifest-declared state action for one session panel."""
+
+    try:
+        from plugin_web_gateway import validate_plugin_write_origin
+
+        validate_plugin_write_origin(
+            request.method,
+            origin=str(request.headers.get("origin") or ""),
+            scheme=request.url.scheme,
+            host=str(request.headers.get("host") or request.url.netloc),
+            fetch_site=str(request.headers.get("sec-fetch-site") or ""),
+        )
+    except Exception as exc:
+        return _plugin_web_error_response(exc)
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"ok": False, "error": "invalid json"}, status_code=400)
+    if not isinstance(body, dict):
+        return JSONResponse({"ok": False, "error": "body must be an object"}, status_code=400)
+    session_id = str(body.get("session_id") or "").strip()
+    plugin_id = str(body.get("plugin_id") or "").strip()
+    action_id = str(body.get("action_id") or "").strip()
+    if not session_id or not plugin_id or not action_id:
+        return JSONResponse(
+            {"ok": False, "error": "session_id, plugin_id and action_id are required"},
+            status_code=400,
+        )
+    known = {
+        str(item.get("id") or "")
+        for item in await asyncio.to_thread(
+            session_manager.list_sessions,
+            include_archived=True,
+        )
+        if isinstance(item, dict) and item.get("id")
+    }
+    if session_id not in known:
+        return JSONResponse({"ok": False, "error": "unknown session"}, status_code=404)
+    try:
+        from agent_extensions import (
+            invoke_plugin_tool,
+            plugin_session_action,
+            plugin_session_ui_snapshot,
+        )
+        from plugins.runtime import runtime_tool_name
+        from plugins.ui import plugin_session_action_arguments
+        from runtime_v2 import SessionExtensionStateStore
+
+        definition = await asyncio.to_thread(
+            plugin_session_action,
+            plugin_id,
+            action_id,
+        )
+        if not isinstance(definition, dict):
+            return JSONResponse({"ok": False, "error": "unknown session action"}, status_code=404)
+        operation = str(definition.get("operation") or "")
+        revision = 0
+        result = None
+        if operation == "set_state":
+            row = await asyncio.to_thread(
+                SessionExtensionStateStore(
+                    session_manager.repository.sessions_dir,
+                    path_resolver=getattr(
+                        session_manager,
+                        "_resolve_session_path",
+                        getattr(session_manager.repository, "_path_resolver", None),
+                    ),
+                ).set_latest,
+                session_id,
+                str(definition["plugin_id"]),
+                str(definition["namespace"]),
+                definition.get("state_value"),
+            )
+            revision = int(row.get("revision") or 0)
+        elif operation == "invoke_tool":
+            arguments = plugin_session_action_arguments(definition, body.get("inputs"))
+            result = await invoke_plugin_tool(
+                runtime_tool_name(plugin_id, str(definition.get("tool") or "")),
+                arguments,
+                session_id=session_id,
+                run_id=f"ui-action-{uuid.uuid4().hex}",
+            )
+        else:
+            return JSONResponse({"ok": False, "error": "unsupported session action"}, status_code=400)
+        projected = await asyncio.to_thread(
+            plugin_session_ui_snapshot,
+            [session_id],
+            snapshot_reader=_runtime_v2_extensions_snapshot,
+        )
+        return JSONResponse(
+            {
+                "ok": True,
+                "plugin_id": plugin_id,
+                "action_id": action_id,
+                "revision": revision,
+                "result": result,
+                "session": (projected.get("sessions") or {}).get(session_id, {}),
+            }
+        )
+    except ValueError as exc:
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+    except Exception as exc:
+        logger.exception("Plugin session action failed")
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
+
+
 @fastapi_app.post("/api/plugins/{plugin_id}/enabled")
 async def set_plugin_enabled_api(plugin_id: str, request: Request):
     try:
@@ -6750,6 +6732,7 @@ async def set_plugin_enabled_api(plugin_id: str, request: Request):
         from agent_extensions import set_plugin_enabled
 
         state = await asyncio.to_thread(set_plugin_enabled, plugin_id, enabled)
+        await refresh_web_plugin_lifecycle()
         await agent_mcp.force_reload()
         session_id = str(data.get("session_id") or "").strip()
         if session_id:
@@ -6766,12 +6749,66 @@ async def set_plugin_enabled_api(plugin_id: str, request: Request):
         return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
 
 
+@fastapi_app.get("/api/plugins/{plugin_id}/settings")
+async def get_plugin_settings_api(plugin_id: str):
+    try:
+        from agent_extensions import plugin_settings_snapshot
+
+        data = await asyncio.to_thread(plugin_settings_snapshot, plugin_id)
+        return JSONResponse(content=data)
+    except Exception as exc:
+        from plugins import PluginStateError, PluginValidationError
+
+        status = 404 if isinstance(exc, PluginValidationError) and "Unknown plugin" in str(exc) else 400
+        if isinstance(exc, PluginStateError):
+            status = 500
+            logger.exception("Plugin settings read failed")
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=status)
+
+
+@fastapi_app.patch("/api/plugins/{plugin_id}/settings")
+async def update_plugin_settings_api(plugin_id: str, request: Request):
+    try:
+        from plugin_web_gateway import validate_plugin_write_origin
+
+        validate_plugin_write_origin(
+            request.method,
+            origin=str(request.headers.get("origin") or ""),
+            scheme=request.url.scheme,
+            host=str(request.headers.get("host") or request.url.netloc),
+            fetch_site=str(request.headers.get("sec-fetch-site") or ""),
+        )
+    except Exception as exc:
+        return _plugin_web_error_response(exc)
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"ok": False, "error": "invalid json"}, status_code=400)
+    changes = body.get("values") if isinstance(body, dict) else None
+    if not isinstance(changes, dict):
+        return JSONResponse({"ok": False, "error": "values must be an object"}, status_code=400)
+    try:
+        from agent_extensions import update_plugin_settings
+
+        data = await asyncio.to_thread(update_plugin_settings, plugin_id, changes)
+        return JSONResponse(content=data)
+    except Exception as exc:
+        from plugins import PluginStateError, PluginValidationError
+
+        status = 404 if isinstance(exc, PluginValidationError) and "Unknown plugin" in str(exc) else 400
+        if isinstance(exc, PluginStateError):
+            status = 500
+            logger.exception("Plugin settings update failed")
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=status)
+
+
 @fastapi_app.post("/api/extensions/reload")
 async def reload_extensions_api(request: Request):
     try:
         from agent_extensions import reload_extensions
 
         result = await asyncio.to_thread(reload_extensions)
+        await refresh_web_plugin_lifecycle()
         await agent_mcp.force_reload()
         try:
             data = await request.json()
@@ -6812,6 +6849,7 @@ async def install_plugin_api(request: Request):
             ref=str(data.get("ref") or "").strip(),
             install_dependencies=bool(data.get("install_dependencies", False)),
         )
+        await refresh_web_plugin_lifecycle()
         await agent_mcp.force_reload()
         return JSONResponse({"ok": True, **result})
     except Exception as exc:
@@ -6825,6 +6863,7 @@ async def uninstall_plugin_api(plugin_id: str):
         from agent_extensions import uninstall_plugin
 
         result = await asyncio.to_thread(uninstall_plugin, plugin_id)
+        await refresh_web_plugin_lifecycle()
         await agent_mcp.force_reload()
         return JSONResponse({"ok": True, **result})
     except Exception as exc:
@@ -6956,21 +6995,6 @@ async def get_env_snapshot():
         "EGRESS_HELPER_ENABLED": "1",
         "EXTENSION_REGISTRATION_APPROVAL_ENABLED": "0",
         "ASK_USER_ENABLED": "1",
-        "GOAL_ENABLED": "1",
-        "GOAL_RUNNER_POLL_SECONDS": "2",
-        "GOAL_MAX_CONSECUTIVE_FAILURES": "3",
-        "GOAL_JUDGE_MAX_OUTPUT_TOKENS": "512",
-        "GOAL_JUDGE_EVIDENCE_MAX_CHARS": "24000",
-        "GOAL_JUDGE_MAX_PARSE_FAILURES": "3",
-        "GOAL_JUDGE_MAX_TRANSPORT_FAILURES": "5",
-        "AGENT_TEAM_ENABLED": "0",
-        "AGENT_TEAM_MAX_MEMBERS": "4",
-        "AGENT_TEAM_MAX_TASKS": "1000",
-        "AGENT_TEAM_MAX_MESSAGES": "2000",
-        "AGENT_TEAM_MAX_PERMISSIONS": "500",
-        "AGENT_TEAM_MAX_MESSAGE_CHARS": "32000",
-        "AGENT_TEAM_SERIAL_WRITE_TOOLS": "write_file,apply_patch,edit_file,delete_file,run_shell,web_download",
-        "AGENT_TEAM_PERMISSION_TOOLS": "delete_file,web_download",
         "HOOKS_ENABLED": "1",
         "PLUGINS_ENABLED": "1",
     }.items():
@@ -7005,56 +7029,6 @@ async def get_env_snapshot():
         title = next((t for x, t, _ in _ENV_GROUP_ORDER if x == gid), gid)
         groups_out.append({"id": gid, "title": title, "vars": arr})
     return JSONResponse(content={"ok": True, "path": str(path.resolve()), "groups": groups_out})
-
-
-@fastapi_app.get("/api/features/agent-team")
-async def get_agent_team_feature():
-    """Return the authoritative, fail-closed Agent Team feature state."""
-
-    return JSONResponse(
-        {
-            "ok": True,
-            "enabled": agent_team_enabled(),
-            "env_var": AGENT_TEAM_ENV_VAR,
-            "experimental": True,
-        }
-    )
-
-
-@fastapi_app.post("/api/features/agent-team")
-async def set_agent_team_feature(req: _Request):
-    """Persist and immediately apply the Agent Team feature switch."""
-
-    try:
-        data = await req.json()
-    except Exception:
-        return JSONResponse({"ok": False, "error": "invalid json"}, status_code=400)
-    enabled = data.get("enabled")
-    if not isinstance(enabled, bool):
-        return JSONResponse(
-            {"ok": False, "error": "enabled must be boolean"},
-            status_code=400,
-        )
-    env_path = dotenv_file_path()
-    previous = env_path.read_text(encoding="utf-8") if env_path.is_file() else ""
-    tmp_path = env_path.with_suffix(env_path.suffix + ".agent-team.tmp")
-    try:
-        merged = _apply_env_updates(
-            previous,
-            {AGENT_TEAM_ENV_VAR: "1" if enabled else "0"},
-        )
-        env_path.parent.mkdir(parents=True, exist_ok=True)
-        tmp_path.write_text(merged, encoding="utf-8")
-        tmp_path.replace(env_path)
-        os.environ[AGENT_TEAM_ENV_VAR] = "1" if enabled else "0"
-    except (OSError, ValueError) as exc:
-        try:
-            tmp_path.unlink(missing_ok=True)
-        except OSError:
-            pass
-        logger.exception("Failed to persist Agent Team feature state")
-        return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
-    return JSONResponse({"ok": True, "enabled": agent_team_enabled()})
 
 
 @fastapi_app.get("/api/features/ask-user")
@@ -7206,7 +7180,18 @@ async def save_config(req: _Request):
         mn = str(data.get("model_name", "") or "").strip()
         _validate_model_name_in_discovered_list(data, mn)
         prov = str(data.get("llm_provider", "") or "").strip().lower()
-        exec_type = "local" if prov == "local" else "openai"
+        provider_aliases = {
+            "local": "local",
+            "openai": "openai",
+            "responses": "openai",
+            "@ai-sdk/openai": "openai",
+            "openai-compatible": "openai-compatible",
+            "compatible": "openai-compatible",
+            "anthropic": "anthropic",
+            "@ai-sdk/anthropic": "anthropic",
+            "auto": "auto",
+        }
+        exec_type = provider_aliases.get(prov, "auto")
 
         if not mn:
             raise ValueError("missing model")
@@ -7299,26 +7284,6 @@ _remote_control_gateway = _register_remote_control(
     _control_dependencies,
 )
 
-from remote_control.transports.feishu.config import FeishuConfig as _FeishuConfig
-from remote_control.transports.feishu.runtime import FeishuRuntimeManager as _FeishuRuntimeManager
-
-_feishu_runtime = _FeishuRuntimeManager(
-    _FeishuConfig.from_env(PROJECT_ROOT),
-    _control_dependencies,
-    shared_service=(
-        _remote_control_gateway.service if _remote_control_gateway is not None else None
-    ),
-)
-
-
-async def start_feishu_adapter() -> None:
-    await asyncio.to_thread(_feishu_runtime.start)
-
-
-async def stop_feishu_adapter() -> None:
-    await asyncio.to_thread(_feishu_runtime.stop)
-
-
 from fastapi.responses import RedirectResponse as _RedirectResponse
 @fastapi_app.middleware("http")
 async def _config_check(req: _Request, call_next):
@@ -7348,11 +7313,154 @@ async def _config_check(req: _Request, call_next):
         "/api/pick-path",
         "/api/upload-chat-files",
         "/api/workspace-files",
-    ) or p.startswith("/static/") or p.startswith("/assets/") or p.startswith("/api/model_profiles/") or p.startswith("/api/plugins/") or p.startswith("/api/remote/v1/"):
+    ) or p.startswith("/static/") or p.startswith("/assets/") or p.startswith("/api/model_profiles/") or p.startswith("/api/plugins/") or p.startswith("/api/extensions/") or p.startswith("/api/remote/v1/"):
         return await call_next(req)
     if not _is_configured():
         return _RedirectResponse(url="/setup")
     return await call_next(req)
+
+
+def _plugin_web_error_response(exc: Exception) -> JSONResponse:
+    from plugin_web_gateway import PluginWebError
+
+    if isinstance(exc, PluginWebError):
+        return JSONResponse(
+            {"ok": False, "error": exc.code, "message": str(exc)},
+            status_code=exc.status,
+        )
+    logger.warning("Plugin Web gateway failed", exc_info=True)
+    return JSONResponse(
+        {"ok": False, "error": "plugin_gateway_error"},
+        status_code=500,
+    )
+
+
+@fastapi_app.get("/plugins/{plugin_id}")
+async def plugin_web_page(plugin_id: str):
+    from plugin_web_gateway import plugin_page
+
+    try:
+        path = await run_in_threadpool(plugin_page, plugin_id)
+    except Exception as exc:
+        return _plugin_web_error_response(exc)
+    return FileResponse(
+        str(path),
+        media_type="text/html",
+        headers={
+            "Cache-Control": "no-cache",
+            "Content-Security-Policy": (
+                "default-src 'self'; object-src 'none'; base-uri 'none'; "
+                "frame-ancestors 'self'; script-src 'self' 'unsafe-inline'; "
+                "style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; "
+                "connect-src 'self'"
+            ),
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
+
+
+@fastapi_app.get("/plugin-assets/{plugin_id}/{asset_path:path}")
+async def plugin_web_asset(plugin_id: str, asset_path: str):
+    from plugin_web_gateway import plugin_asset
+
+    try:
+        path = await run_in_threadpool(plugin_asset, plugin_id, asset_path)
+    except Exception as exc:
+        return _plugin_web_error_response(exc)
+    return FileResponse(
+        str(path),
+        headers={
+            "Cache-Control": "public, max-age=3600",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
+
+
+@fastapi_app.api_route(
+    "/api/plugins/{plugin_id}/{api_path:path}",
+    methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
+)
+async def plugin_web_api(plugin_id: str, api_path: str, req: _Request):
+    from plugin_web_gateway import (
+        MAX_PLUGIN_REQUEST_BODY,
+        invoke_plugin_http,
+        validate_plugin_write_origin,
+    )
+
+    try:
+        validate_plugin_write_origin(
+            req.method,
+            origin=str(req.headers.get("origin") or ""),
+            scheme=req.url.scheme,
+            host=str(req.headers.get("host") or req.url.netloc),
+            fetch_site=str(req.headers.get("sec-fetch-site") or ""),
+        )
+    except Exception as exc:
+        return _plugin_web_error_response(exc)
+
+    try:
+        content_length = int(req.headers.get("content-length") or 0)
+    except (TypeError, ValueError):
+        content_length = 0
+    if content_length > MAX_PLUGIN_REQUEST_BODY:
+        return JSONResponse(
+            {"ok": False, "error": "request_too_large"},
+            status_code=413,
+        )
+    body = await req.body()
+    query: Dict[str, Any] = {}
+    for key, value in req.query_params.multi_items():
+        previous = query.get(key)
+        if previous is None:
+            query[key] = value
+        elif isinstance(previous, list):
+            previous.append(value)
+        else:
+            query[key] = [previous, value]
+    try:
+        result = await run_in_threadpool(
+            invoke_plugin_http,
+            plugin_id,
+            method=req.method,
+            path="/" + str(api_path or "").lstrip("/"),
+            query=query,
+            headers=dict(req.headers),
+            body=body,
+            session_run_grant=str(req.headers.get("x-plugin-session-run-grant") or ""),
+        )
+    except Exception as exc:
+        return _plugin_web_error_response(exc)
+    return Response(
+        content=result.body,
+        status_code=result.status,
+        headers=dict(result.headers),
+    )
+
+
+@fastapi_app.get("/{legacy_plugin_id}", include_in_schema=False)
+async def legacy_plugin_web_page(legacy_plugin_id: str):
+    """Keep pre-migration top-level plugin page URLs working.
+
+    Existing application routes are registered before this fallback.  A
+    remaining single-segment path is redirected only when it names an enabled
+    plugin with a valid Web entry, so disabling or uninstalling the plugin
+    still removes both its canonical page and its compatibility alias.
+    """
+
+    from plugin_web_gateway import plugin_page
+
+    try:
+        await run_in_threadpool(plugin_page, legacy_plugin_id)
+    except Exception as exc:
+        return _plugin_web_error_response(exc)
+    return _RedirectResponse(
+        url=f"/plugins/{legacy_plugin_id}",
+        status_code=307,
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+
 
 
 def _warm_ui_caches() -> None:
@@ -7410,34 +7518,63 @@ def _warm_ui_caches() -> None:
     threading.Thread(target=_run, name="ui-cache-warmup", daemon=True).start()
 
 
-@fastapi_app.on_event("startup")
-async def _schedule_ui_cache_warmup() -> None:
-    _warm_ui_caches()
-
-
 def initialize_ui_attention_notifications() -> None:
     """Bind attention notifications to the running ASGI server loop.
 
-    The production entrypoint installs a custom FastAPI lifespan, which
-    replaces legacy ``on_event('startup')`` handlers.  Keeping this explicit
-    lets that lifespan initialize the event-bus notification bridge directly.
+    The production entrypoint installs a custom FastAPI lifespan. Keeping this
+    explicit lets both lifespans initialize the event-bus notification bridge.
     """
 
     global _UI_ATTENTION_MAIN_LOOP
     _UI_ATTENTION_MAIN_LOOP = asyncio.get_running_loop()
 
 
-@fastapi_app.on_event("startup")
-async def _capture_ui_attention_main_loop() -> None:
-    # Alternate launchers using FastAPI's default lifespan still work.
+async def start_webui_lifecycle() -> None:
+    """Start Web UI services shared by the default and production lifespans."""
+    _warm_ui_caches()
     initialize_ui_attention_notifications()
-
-
-@fastapi_app.on_event("startup")
-async def _start_react_recovery_on_app_start() -> None:
     await start_react_recovery_runner()
+    try:
+        from agent_extensions import start_plugin_background_services
+        from plugins.host import start_bundled_host_extensions
+
+        await start_plugin_background_services()
+        await start_bundled_host_extensions(
+            load_plugins(force=True).plugins,
+            {"session_manager": session_manager, "project_root": PROJECT_ROOT},
+        )
+    except Exception:
+        logger.warning("Plugin background service startup failed", exc_info=True)
 
 
-@fastapi_app.on_event("shutdown")
-async def _stop_react_recovery_on_app_stop() -> None:
-    await stop_react_recovery_runner()
+async def refresh_web_plugin_lifecycle() -> None:
+    """Reconcile generic plugin routes, workers, and trusted lifecycles."""
+
+    from agent_extensions import load_plugins, start_plugin_background_services
+    from plugins.host import (
+        install_bundled_host_extensions,
+        start_bundled_host_extensions,
+    )
+
+    loaded = load_plugins(force=True).plugins
+    context = {"session_manager": session_manager, "project_root": PROJECT_ROOT}
+    install_bundled_host_extensions(fastapi_app, loaded, context)
+    from workflow_extensions import activate_bundled_workflow_callbacks
+
+    activate_bundled_workflow_callbacks(sys.modules["agent_loop"], force=True)
+    await start_plugin_background_services()
+    await start_bundled_host_extensions(loaded, context)
+
+
+async def stop_webui_lifecycle() -> None:
+    """Stop Web UI services shared by the default and production lifespans."""
+    try:
+        from agent_extensions import stop_plugin_runtime
+        from plugins.host import stop_bundled_host_extensions
+
+        await stop_bundled_host_extensions(
+            {"session_manager": session_manager, "project_root": PROJECT_ROOT}
+        )
+        await stop_plugin_runtime()
+    finally:
+        await stop_react_recovery_runner()

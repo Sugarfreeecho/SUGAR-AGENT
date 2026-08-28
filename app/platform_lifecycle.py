@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import platform
+import json
 import socket
 import subprocess
 import sys
@@ -12,6 +13,8 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Mapping, Sequence
+from urllib import error as urllib_error
+from urllib import request as urllib_request
 
 
 HOST = "127.0.0.1"
@@ -39,9 +42,47 @@ def port_is_listening(host: str = HOST, port: int = PORT) -> bool:
         return False
 
 
-def open_webui(path: str = "/") -> None:
+def request_webui_activation(
+    path: str = "/",
+    *,
+    base_url: str = BASE_URL,
+    timeout: float = 0.8,
+) -> bool:
+    """Ask a live main WebUI page to activate itself."""
+
     suffix = path if str(path).startswith("/") else f"/{path}"
-    webbrowser.open(f"{BASE_URL}{suffix}", new=0, autoraise=True)
+    payload = json.dumps({"path": suffix}).encode("utf-8")
+    request = urllib_request.Request(
+        f"{str(base_url).rstrip('/')}/api/ui-activation",
+        data=payload,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib_request.urlopen(request, timeout=float(timeout)) as response:
+            data = json.loads(response.read().decode("utf-8"))
+        return bool(data.get("reused"))
+    except (OSError, ValueError, urllib_error.URLError):
+        return False
+
+
+def open_webui(
+    path: str = "/",
+    *,
+    base_url: str = BASE_URL,
+    reuse_existing: bool = True,
+) -> bool:
+    """Activate the main WebUI when open, otherwise launch the requested URL."""
+
+    suffix = path if str(path).startswith("/") else f"/{path}"
+    normalized_base = str(base_url).rstrip("/")
+    if reuse_existing and suffix == "/" and request_webui_activation(
+        suffix,
+        base_url=normalized_base,
+    ):
+        return True
+    webbrowser.open(f"{normalized_base}{suffix}", new=0, autoraise=True)
+    return False
 
 
 def _run(

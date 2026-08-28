@@ -11,15 +11,14 @@ import socket
 import subprocess
 import sys
 import time
-import webbrowser
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Sequence
 
 try:
-    from .platform_lifecycle import backend_for, lifecycle_name
+    from .platform_lifecycle import backend_for, lifecycle_name, open_webui
 except ImportError:
-    from platform_lifecycle import backend_for, lifecycle_name
+    from platform_lifecycle import backend_for, lifecycle_name, open_webui
 
 
 APP_NAME = "Agent 智能会话助手"
@@ -285,7 +284,7 @@ def main() -> int:
         message += "\nPython 依赖也已同步。"
     show_result(message)
     try:
-        webbrowser.open(f"http://{HOST}:{PORT}/?_={int(time.time())}", new=0, autoraise=True)
+        open_webui("/", base_url=f"http://{HOST}:{PORT}")
     except Exception:
         pass
     return 0

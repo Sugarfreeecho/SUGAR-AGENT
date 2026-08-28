@@ -13,8 +13,8 @@
     (PowerShell, Windows Terminal, ...) so the toast still shows.
 
     Clicking the toast opens the WebUI through the sugaragent:// URL protocol.
-    The protocol delegates directly to the
-    windowless Windows URL handler so no console window is created.
+    The protocol delegates to the windowless tray activation entrypoint, which
+    focuses an existing WebUI page before opening a new browser tab.
 #>
 
 $ErrorActionPreference = "Stop"
@@ -36,8 +36,14 @@ $OpenUiProtocol = "sugaragent"
 $OpenUiProtocolRoot = "HKCU:\Software\Classes\$OpenUiProtocol"
 $OpenUiLaunchUri = "sugaragent://open-ui"
 $WebUiUrl = "http://127.0.0.1:8192/"
+$PythonwPath = Join-Path $Root "python\pythonw.exe"
+$TrayLauncherPath = Join-Path $Root "app\tray_launcher.py"
 $Rundll32Path = Join-Path $env:SystemRoot "System32\rundll32.exe"
-$OpenUiCommand = "`"$Rundll32Path`" url.dll,FileProtocolHandler `"$WebUiUrl`""
+$OpenUiCommand = if ((Test-Path -LiteralPath $PythonwPath) -and (Test-Path -LiteralPath $TrayLauncherPath)) {
+    "`"$PythonwPath`" `"$TrayLauncherPath`" --activate-ui"
+} else {
+    "`"$Rundll32Path`" url.dll,FileProtocolHandler `"$WebUiUrl`""
+}
 
 # Fallback: the well-known AppID of Windows PowerShell.  Get-StartApps normally
 # returns the real registered AppIDs, but keep a hardcoded one as a last resort.

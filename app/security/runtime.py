@@ -45,8 +45,8 @@ SECURITY_ENABLED_ENV_VAR = "SECURITY_ENABLED"
 
 # Policy ASK categories that the one-time "workspace-outside handling
 # permission" (write / delete / shell) may auto-allow once the user grants it.
-# Read (fs.read), network, dynamic/destructive shell, credential export and
-# policy tampering stay on their own paths and are never covered by it.
+# Read (fs.read), network, dynamic/non-delete destructive shell, credential
+# export and policy tampering stay on their own paths and are never covered.
 EXTERNAL_OPS_GRANTABLE_RULES = frozenset(
     {"external.write", "delete.review", "process.external"}
 )
@@ -129,7 +129,9 @@ def security_enabled(source: Any = None) -> bool:
     """Return whether application-level security controls are enabled.
 
     Missing or empty values default to ``1`` (the normal three-mode permission
-    system). An explicit ``0`` forces full access and hides permission controls.
+    system). An explicit ``0`` forces full access and hides ordinary permission
+    controls; non-delete high-risk approval and controller-integrity red lines
+    remain.
     """
 
     env = os.environ if source is None else source
@@ -141,7 +143,7 @@ def permission_context_for_mode(mode: object) -> PermissionContext:
 
 
 def forced_approval_for(decision: SecurityDecision) -> bool:
-    """Dangerous commands always require a fresh human approval.
+    """Non-delete high-risk commands require a fresh human approval.
 
     Rules in ``FORCED_APPROVAL_RULES`` cannot be satisfied by reusable rules,
     session/always grants, or the automatic reviewer. A human-created atomic
@@ -256,6 +258,7 @@ def classify_tool(tool_name: str, arguments: dict[str, Any], workspace: Path) ->
         try:
             from agent_tools import (
                 _agent_self_protection_reason,
+                _has_non_delete_dangerous_pattern,
                 _is_dangerous,
                 _paths_inside_workspace,
                 _readonly_git_scope_ok,
@@ -271,7 +274,13 @@ def classify_tool(tool_name: str, arguments: dict[str, Any], workspace: Path) ->
             workdir = str(args.get("workdir") or args.get("working_dir") or "").strip()
             if workdir:
                 external = external or not is_within(canonical_path(workdir, workspace), workspace)
-            destructive = bool(_is_dangerous(command) or _DELETE_COMMAND.search(command))
+            deletion = bool(_DELETE_COMMAND.search(command))
+            destructive = bool(_is_dangerous(command) or deletion)
+            workspace_delete = bool(
+                deletion
+                and not external
+                and not _has_non_delete_dangerous_pattern(command)
+            )
             credential_export = bool(
                 _text_mentions_sensitive_tool_resource(command)
                 or _text_mentions_sensitive_tool_resource(workdir)
@@ -285,6 +294,8 @@ def classify_tool(tool_name: str, arguments: dict[str, Any], workspace: Path) ->
         except Exception:
             external = True
             destructive = False
+            deletion = False
+            workspace_delete = False
             credential_export = False
             credential_read = False
             policy_change = False
@@ -301,6 +312,8 @@ def classify_tool(tool_name: str, arguments: dict[str, Any], workspace: Path) ->
                 # the final command and working directory.
                 "external_workspace": external,
                 "destructive": destructive,
+                "deletion": deletion,
+                "workspace_delete": workspace_delete,
                 "credential_export": credential_export,
                 "credential_read": credential_read,
                 "policy_change": policy_change,
@@ -767,7 +780,7 @@ def security_status_for_session(session_id: str) -> dict[str, Any]:
     restricted = context.sandbox_profile != SandboxProfile.NO_RESTRICTION
     helper_disabled = guard.level == "disabled"
     if not restricted:
-        restriction_label = "不受限制"
+        restriction_label = "普通操作不受限制（安全红线保留）"
     elif helper_disabled:
         restriction_label = "出站助手已关闭"
     elif guard.level == "strong":

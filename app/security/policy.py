@@ -59,8 +59,9 @@ _DANGEROUS_ALLOW_PREFIXES = frozenset(
     }
 )
 
-# Dangerous command categories that can never be auto-allowed by a grant or by
-# the automatic reviewer: they must surface a fresh human approval every time.
+# Non-delete high-risk command categories that can never be auto-allowed by a
+# grant or the automatic reviewer: they surface a fresh human approval every
+# time. Workspace deletion uses its own ordinary yellow rules.
 # Dynamic code (`python -c`, `-EncodedCommand`, eval, ...) is an ordinary
 # (yellow) approval: it may be granted once or for the session, but never
 # becomes an "always allow" rule because its command prefixes are in
@@ -438,18 +439,55 @@ class PolicyEngine:
         def result(outcome: DecisionOutcome, rule: str, reason: str, **constraints):
             return SecurityDecision(outcome, reason, rule, digest, constraints)
 
+        # Controller integrity is a safety invariant, not an approval setting.
+        # Full access may bypass ordinary workspace/network approvals, but it
+        # must never authorize a tool to terminate or tamper with the Agent.
+        if request.effect == "policy_change":
+            return result(
+                DecisionOutcome.DENY,
+                "effect.policy_change.deny",
+                "policy_change is denied by the application security policy.",
+            )
+
+        # Non-delete destructive shell commands retain their atomic human-
+        # approval gate in every mode. Workspace-scoped deletion is an
+        # ordinary yellow permission, so full access and auto review can
+        # handle it without a forced human dialog. Credential export remains
+        # a hard process boundary. These checks precede the full-access path.
+        if request.action == "process.exec":
+            if request.metadata.get("credential_export"):
+                return result(
+                    DecisionOutcome.DENY,
+                    "process.credential",
+                    "Credential export is denied.",
+                )
+            if request.metadata.get("policy_change"):
+                return result(
+                    DecisionOutcome.DENY,
+                    "process.policy_change",
+                    "Security policy or Agent controller tampering is denied.",
+                )
+            if request.metadata.get("destructive") and not request.metadata.get(
+                "workspace_delete"
+            ):
+                return result(
+                    DecisionOutcome.ASK,
+                    "process.destructive",
+                    "Destructive command requires approval.",
+                )
+
         if context.sandbox_profile == SandboxProfile.NO_RESTRICTION:
             return result(
                 DecisionOutcome.ALLOW,
                 "preset.full_access",
-                "Full access bypasses application restrictions and approvals.",
+                "Full access bypasses ordinary application restrictions and approvals; safety red lines remain enforced.",
             )
 
-        if request.effect in {"credential", "policy_change"}:
+        if request.effect == "credential":
             return result(
                 DecisionOutcome.DENY,
-                f"effect.{request.effect}.deny",
-                f"{request.effect} is denied by the application security policy.",
+                "effect.credential.deny",
+                "credential is denied by the application security policy.",
             )
 
         resource_path = None
@@ -513,21 +551,22 @@ class PolicyEngine:
             return result(DecisionOutcome.ASK, "external.write", "Writing outside the workspace requires approval.")
         if request.action == "fs.delete":
             soft_delete = bool(request.metadata.get("soft_delete"))
-            if inside or soft_delete:
+            if inside:
+                return result(
+                    DecisionOutcome.ASK,
+                    "delete.workspace",
+                    "Deleting content inside the workspace requires ordinary approval.",
+                )
+            if soft_delete:
                 # delete_file is a recoverable soft delete (moves to
                 # WORK_DIR/.trash/) and the tool itself refuses sensitive
-                # resources, sessions/skills/.trash, and oversized targets;
-                # it is an ordinary recoverable write even outside the
-                # workspace. Permanent deletion (apply_patch delete sections,
-                # shell rm/os.remove/shutil.rmtree/...) keeps asking outside.
+                # resources, sessions/skills/.trash, and oversized targets.
+                # Preserve the existing outside-workspace soft-delete policy;
+                # permanent deletion outside continues to ask separately.
                 return result(
                     DecisionOutcome.ALLOW,
                     "app_restricted.delete",
-                    (
-                        "Recoverable soft delete is allowed by the application policy."
-                        if soft_delete and not inside
-                        else "Workspace soft delete is allowed by the application policy."
-                    ),
+                    "Recoverable soft delete is allowed by the application policy.",
                 )
             return result(
                 DecisionOutcome.ASK,
@@ -536,24 +575,10 @@ class PolicyEngine:
                 outside_workspace=True,
             )
         if request.action == "process.exec":
-            if request.metadata.get("credential_export"):
-                return result(
-                    DecisionOutcome.DENY,
-                    "process.credential",
-                    "Credential export is denied.",
-                )
-            if request.metadata.get("policy_change"):
-                return result(
-                    DecisionOutcome.DENY,
-                    "process.policy_change",
-                    "Security policy or Agent controller tampering is denied.",
-                )
             # Forced-review risks must win over ordinary approval categories.
             # Otherwise a networked ``python -c``/encoded command would be
             # classified only as network access and could receive a reusable
             # ``curl:*``/``powershell:*`` allow rule.
-            if request.metadata.get("destructive"):
-                return result(DecisionOutcome.ASK, "process.destructive", "Destructive command requires approval.")
             egress_intent = str(request.metadata.get("egress_intent") or "none")
             confidence = str(request.metadata.get("analysis_confidence") or "low")
             destinations = list(request.metadata.get("destinations") or [])
@@ -574,6 +599,12 @@ class PolicyEngine:
                     "process.network.unknown",
                     "Command may create an opaque or interactive network connection.",
                     one_time_only=True,
+                )
+            if request.metadata.get("workspace_delete"):
+                return result(
+                    DecisionOutcome.ASK,
+                    "process.workspace_delete",
+                    "Deleting content inside the workspace requires ordinary approval.",
                 )
             if _DYNAMIC_SHELL.search(request.resource):
                 return result(DecisionOutcome.ASK, "process.dynamic", "Dynamically constructed shell code requires review.")

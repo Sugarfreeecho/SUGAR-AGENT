@@ -56,6 +56,7 @@ _server_start_errors: Dict[str, str] = {}
 _start_lock = asyncio.Lock()
 _loaded_signature: Optional[str] = None
 _signature_cache: Optional[Tuple[float, str]] = None
+_tool_catalog_generation = 0
 _SIGNATURE_CACHE_TTL_SEC = 1.0
 _last_config_error: Optional[str] = None
 
@@ -231,8 +232,16 @@ def set_mcp_tool_enabled(function_name: str, enabled: bool) -> bool:
             encoding="utf-8",
         )
         tmp.replace(_MCP_TOOLS_STATE_PATH)
+        changed = disabled != _disabled_mcp_tools
         _disabled_mcp_tools = disabled
+        if changed:
+            _bump_tool_catalog_generation()
     return True
+
+
+def _bump_tool_catalog_generation() -> None:
+    global _tool_catalog_generation
+    _tool_catalog_generation += 1
 
 
 def _register_tools_globally(alias: str, tools: List[Any]) -> int:
@@ -263,6 +272,8 @@ def _register_tools_globally(alias: str, tools: List[Any]) -> int:
         ]
         _defs_snapshot.append(od)
         registered += 1
+    if registered:
+        _bump_tool_catalog_generation()
     return registered
 
 
@@ -397,9 +408,16 @@ def _resolve_transport(cfg: dict) -> str:
 
 
 def _safe_function_key(alias: str, tool_name: str) -> str:
-    a = _TOOL_NAME_SAFE.sub("_", alias).strip("_").lower() or "srv"
     t = _TOOL_NAME_SAFE.sub("_", tool_name).strip("_").lower() or "tool"
-    base = f"mcp_{a}_{t}"
+    if "/" in alias:
+        # plugin server: alias = "namespace/local_alias"
+        namespace, local_alias = alias.split("/", 1)
+        ns = _TOOL_NAME_SAFE.sub("_", namespace).strip("_").lower() or "plugin"
+        la = _TOOL_NAME_SAFE.sub("_", local_alias).strip("_").lower() or "srv"
+        base = f"mcp_{ns}_{la}_{t}"
+    else:
+        a = _TOOL_NAME_SAFE.sub("_", alias).strip("_").lower() or "srv"
+        base = f"mcp_{a}_{t}"
     if len(base) > 120:
         base = base[:120].rstrip("_")
     return base
@@ -651,6 +669,18 @@ class _PersistentMcpServer:
             self._task.cancel()
 
 
+def _resolve_stdio_cwd(cwd: Any) -> Optional[str]:
+    if not cwd:
+        return None
+    raw = str(cwd).strip()
+    if not raw:
+        return None
+    p = Path(raw)
+    if p.is_absolute():
+        return raw
+    return str((PROJECT_ROOT / p).resolve())
+
+
 def _make_stdio_connector(alias: str, cfg: dict) -> _PersistentMcpServer:
     cmd = str(cfg.get("command") or "").strip()
     args = cfg.get("args") or []
@@ -675,8 +705,7 @@ def _make_stdio_connector(alias: str, cfg: dict) -> _PersistentMcpServer:
         allow_names=allow_names,
         explicit=explicit_env,
     )
-    cwd = cfg.get("cwd") or cfg.get("workingDirectory")
-    cwd_s = str(cwd).strip() if cwd else None
+    cwd_s = _resolve_stdio_cwd(cfg.get("cwd") or cfg.get("workingDirectory"))
     params = StdioServerParameters(command=cmd, args=args, env=env_d, cwd=cwd_s or None)
 
     @asynccontextmanager
@@ -749,6 +778,7 @@ def _make_streamable_connector(alias: str, cfg: dict) -> _PersistentMcpServer:
 
 async def _shutdown_servers_unlocked() -> None:
     global _fname_to_tool, _servers, _defs_snapshot, _tool_contracts
+    had_tools = bool(_defs_snapshot or _fname_to_tool)
     for srv in list(_servers.values()):
         try:
             await srv.stop()
@@ -758,6 +788,8 @@ async def _shutdown_servers_unlocked() -> None:
     _fname_to_tool.clear()
     _defs_snapshot.clear()
     _tool_contracts.clear()
+    if had_tools:
+        _bump_tool_catalog_generation()
 
 
 def _remove_server_tools_unlocked(alias: str) -> None:
@@ -777,6 +809,7 @@ def _remove_server_tools_unlocked(alias: str) -> None:
             for item in _defs_snapshot
             if str((item.get("function") or {}).get("name") or "") not in names
         ]
+        _bump_tool_catalog_generation()
 
 
 async def _start_configured_server_unlocked(alias: str, cfg: dict) -> None:
@@ -916,6 +949,14 @@ async def get_tool_definitions() -> List[Dict[str, Any]]:
         for d in _defs_snapshot
         if str((d.get("function") or {}).get("name") or "") not in disabled
     ]
+
+
+async def get_tool_catalog_revision() -> tuple[int, str, tuple[str, ...]]:
+    """Return the cheap revision used by the per-run combined registry cache."""
+    await ensure_started()
+    with _mcp_tool_state_lock:
+        disabled = tuple(sorted(_load_disabled_mcp_tools()))
+    return int(_tool_catalog_generation), str(_loaded_signature or ""), disabled
 
 
 def list_registered_tools() -> List[Dict[str, Any]]:
