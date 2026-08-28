@@ -755,7 +755,7 @@ function pushBriefLine(lines, line, type) {
     lines.push(type ? { text: t, type: type } : t);
 }
 
-function refreshFeedChunkOverflow(chunk) {
+function measureFeedChunkOverflow(chunk) {
     if (!chunk || !chunk.isConnected) return;
     const sc = chunk.querySelector('.feed-chunk-scroller');
     if (!sc) return;
@@ -764,32 +764,38 @@ function refreshFeedChunkOverflow(chunk) {
         chunk.classList.remove('is-overflowing');
         return;
     }
-    function measure() {
-        if (!chunk.isConnected || chunk.classList.contains('expanded')) return;
-        var collapsedMax = feedChunkCollapsedMax(chunk);
-        var contentH = sc.scrollHeight;
-        if (contentH < 2) contentH = measureFeedChunkScrollerHeight(sc, chunk);
-        if (chunk.classList.contains('is-streaming') || sc.clientHeight < 2) {
-            chunk.classList.toggle('is-overflowing', contentH > collapsedMax + 1);
-            return;
-        }
-        chunk.classList.toggle('is-overflowing', sc.scrollHeight > sc.clientHeight + 1);
+    if (!chunk.isConnected || chunk.classList.contains('expanded')) return;
+    var collapsedMax = feedChunkCollapsedMax(chunk);
+    var contentH = sc.scrollHeight;
+    if (contentH < 2) contentH = measureFeedChunkScrollerHeight(sc, chunk);
+    if (chunk.classList.contains('is-streaming') || sc.clientHeight < 2) {
+        chunk.classList.toggle('is-overflowing', contentH > collapsedMax + 1);
+        return;
     }
-    requestAnimationFrame(function () { requestAnimationFrame(measure); });
+    chunk.classList.toggle('is-overflowing', sc.scrollHeight > sc.clientHeight + 1);
 }
+
+var feedChunkOverflowQueue = new Set();
+var feedChunkOverflowRaf = 0;
 
 function scheduleFeedChunkOverflowRefresh(chunk) {
     if (!chunk) return;
     var card = chunk.closest && chunk.closest('.subagent-grid-card');
     if (card && subagentPanelOpen && !card.classList.contains('is-expanded') && card.dataset.viewportVisible !== '1') return;
-    /* streaming 中的块每个 delta 都会触发本函数；measure 是 layout 重操作，
-       3 次 RAF × 每个 delta = 主线程灾难。streaming 时只 set class、不 measure。 */
-    if (chunk.classList && chunk.classList.contains('is-streaming')) {
-        refreshFeedChunkOverflow(chunk);
-        return;
-    }
-    refreshFeedChunkOverflow(chunk);
-    requestAnimationFrame(function () { refreshFeedChunkOverflow(chunk); });
+    feedChunkOverflowQueue.add(chunk);
+    if (feedChunkOverflowRaf) return;
+    feedChunkOverflowRaf = requestAnimationFrame(function () {
+        feedChunkOverflowRaf = requestAnimationFrame(function () {
+            feedChunkOverflowRaf = 0;
+            var queued = Array.from(feedChunkOverflowQueue);
+            feedChunkOverflowQueue.clear();
+            queued.forEach(measureFeedChunkOverflow);
+        });
+    });
+}
+
+function refreshFeedChunkOverflow(chunk) {
+    scheduleFeedChunkOverflowRefresh(chunk);
 }
 
 function bindFeedChunkScrollChain(sc) {
@@ -873,6 +879,70 @@ function setBriefRows(brief, texts) {
 
 function normalizeProcessBriefComparableText(value) {
     return String(value == null ? '' : value).replace(/\s+/g, ' ').trim();
+}
+
+var processAggregateStateByElement = new WeakMap();
+
+function emptyProcessAggregateState() {
+    return {
+        rows: new WeakSet(),
+        maxReactIter: 0,
+        llmResponses: 0,
+        toolCalls: 0,
+    };
+}
+
+function ensureProcessAggregateState(agg) {
+    if (!agg) return null;
+    var state = processAggregateStateByElement.get(agg);
+    if (!state) {
+        state = emptyProcessAggregateState();
+        processAggregateStateByElement.set(agg, state);
+    }
+    return state;
+}
+
+function registerProcessAggregateRow(agg, row) {
+    var state = ensureProcessAggregateState(agg);
+    if (!state || !row || state.rows.has(row)) return;
+    state.rows.add(row);
+    var reactIter = parseInt(row.getAttribute('data-react-iter'), 10);
+    if (Number.isFinite(reactIter) && reactIter > state.maxReactIter) state.maxReactIter = reactIter;
+    var type = row.getAttribute('data-log-type');
+    if (type === 'llm-response') state.llmResponses += 1;
+    else if (type === 'tool-call') state.toolCalls += 1;
+}
+
+function unregisterProcessAggregateRow(row) {
+    if (!row || !row.closest) return;
+    var agg = row.closest('.process-aggregate');
+    var state = agg && processAggregateStateByElement.get(agg);
+    if (!state || !state.rows.has(row)) return;
+    state.rows.delete(row);
+    var type = row.getAttribute('data-log-type');
+    if (type === 'llm-response') state.llmResponses = Math.max(0, state.llmResponses - 1);
+    else if (type === 'tool-call') state.toolCalls = Math.max(0, state.toolCalls - 1);
+}
+
+function hydrateProcessAggregateState(agg) {
+    if (!agg) return null;
+    var state = emptyProcessAggregateState();
+    processAggregateStateByElement.set(agg, state);
+    var body = agg.querySelector('.process-aggregate-body');
+    var tailKey = null;
+    if (body) body.querySelectorAll('.feed-item').forEach(function (row) {
+        registerProcessAggregateRow(agg, row);
+        var phase = reactFeedPhase(row.getAttribute('data-log-type'));
+        var iter = Number(row.getAttribute('data-react-iter'));
+        var generation = Math.max(0, Number(row.getAttribute('data-react-generation')) || 0);
+        if (phase == null || !Number.isFinite(iter)) return;
+        var key = [generation, iter, phase];
+        if (!tailKey || key[0] > tailKey[0]
+            || (key[0] === tailKey[0] && (key[1] > tailKey[1]
+                || (key[1] === tailKey[1] && key[2] >= tailKey[2])))) tailKey = key;
+    });
+    if (body) body._reactOrderTailKey = tailKey;
+    return state;
 }
 
 function updateProcessBrief(agg) {
@@ -999,7 +1069,6 @@ function bindProcessAggregateHeightButton(agg) {
         });
         agg._processHeightMutationObserver.observe(body, {
             childList: true,
-            characterData: true,
             subtree: true,
         });
     }
@@ -1376,18 +1445,15 @@ function refreshProcessAggregateStats(agg) {
         ? parseInt(agg.dataset.procToolCalls, 10) : NaN;
     var pFails = agg.dataset.procToolFails != null && agg.dataset.procToolFails !== ''
         ? parseInt(agg.dataset.procToolFails, 10) : NaN;
-    var maxFromRows = 0;
-    body.querySelectorAll('.feed-item[data-react-iter]').forEach(function (row) {
-        var v = parseInt(row.getAttribute('data-react-iter'), 10);
-        if (Number.isFinite(v) && v > maxFromRows) maxFromRows = v;
-    });
+    var aggregateState = processAggregateStateByElement.get(agg) || hydrateProcessAggregateState(agg);
+    var maxFromRows = aggregateState ? aggregateState.maxReactIter : 0;
     var dsRi = agg.dataset.maxReactIter ? parseInt(agg.dataset.maxReactIter, 10) : 0;
     var reactLoops = Math.max(maxFromRows, dsRi);
     if (!reactLoops) {
-        reactLoops = body.querySelectorAll('.feed-item[data-log-type="llm-response"]').length;
+        reactLoops = aggregateState ? aggregateState.llmResponses : 0;
     }
     if (Number.isFinite(pLoops) && pLoops >= 0) reactLoops = pLoops;
-    var toolN = body.querySelectorAll('.feed-item[data-log-type="tool-call"]').length;
+    var toolN = aggregateState ? aggregateState.toolCalls : 0;
     if (Number.isFinite(pTools) && pTools >= 0) toolN = pTools;
     var failN = 0;
     if (Number.isFinite(pFails) && pFails >= 0) failN = pFails;
@@ -3831,6 +3897,7 @@ function removeAbortedToolDraftRows(ctx, ev) {
         }
         var rowRunId = String(row.getAttribute('data-run-id') || '');
         if (runId && rowRunId && rowRunId !== runId) return;
+        unregisterProcessAggregateRow(row);
         row.remove();
     });
     var agg = body.closest('.process-aggregate');
@@ -4057,10 +4124,11 @@ function appendProcessRowBeforePendingAppendSteer(body, row, type) {
     // the current LLM/tool round finishes; once the server commits user_steer,
     // data-steer-pending is removed and subsequent rows naturally append below.
     if (type !== 'user-steer') {
-        var pendingAppendSteer = body.querySelector(
+        var pendingAppendSteer = body.lastElementChild;
+        if (!pendingAppendSteer || !pendingAppendSteer.matches(
             '.feed-item[data-log-type="user-steer"]'
             + '[data-steer-mode="append"][data-steer-pending="1"]'
-        );
+        )) pendingAppendSteer = null;
         if (pendingAppendSteer) {
             body.insertBefore(row, pendingAppendSteer);
             return;
@@ -4069,17 +4137,30 @@ function appendProcessRowBeforePendingAppendSteer(body, row, type) {
     body.appendChild(row);
 }
 
+function appendMonotonicProcessRow(body, row, type) {
+    appendProcessRowBeforePendingAppendSteer(body, row, type);
+}
+
 function insertReactOrderedFeedRow(body, row, type, reactIter, reactGeneration) {
     var phase = reactFeedPhase(type);
     var iter = Number(reactIter);
     if (phase == null || !Number.isFinite(iter)) {
-        appendProcessRowBeforePendingAppendSteer(body, row, type);
+        appendMonotonicProcessRow(body, row, type);
         return;
     }
     iter = Math.max(1, Math.floor(iter));
     var generation = Math.max(0, Math.floor(Number(reactGeneration) || 0));
     row.setAttribute('data-react-iter', String(iter));
     row.setAttribute('data-react-generation', String(generation));
+    var orderKey = [generation, iter, phase];
+    var tailKey = body._reactOrderTailKey;
+    if (!tailKey || generation > tailKey[0]
+        || (generation === tailKey[0] && (iter > tailKey[1]
+            || (iter === tailKey[1] && phase >= tailKey[2])))) {
+        appendProcessRowBeforePendingAppendSteer(body, row, type);
+        body._reactOrderTailKey = orderKey;
+        return;
+    }
     var rows = body.querySelectorAll('.feed-item[data-react-iter]');
     for (var i = 0; i < rows.length; i += 1) {
         var existing = rows[i];
@@ -4095,6 +4176,7 @@ function insertReactOrderedFeedRow(body, row, type, reactIter, reactGeneration) 
         }
     }
     appendProcessRowBeforePendingAppendSteer(body, row, type);
+    body._reactOrderTailKey = orderKey;
 }
 
 function feedRowCollapseAriaLabel(row, collapsed) {
@@ -4210,15 +4292,16 @@ function createProcessFeedRow(ctx, type, initialText, streamOpts, runSessionId, 
         body.appendChild(errHint);
     }
     const agg = body.closest('.process-aggregate');
+    registerProcessAggregateRow(agg, row);
     if (streamOpts.reactIter != null && Number.isFinite(Number(streamOpts.reactIter))) {
         var ri = Math.max(1, Math.floor(Number(streamOpts.reactIter)));
         bumpAggregateMaxReactIter(agg, ri);
     }
-    if (agg && agg.classList.contains('is-collapsed')) {
+    if (!replayingMessages && agg && agg.classList.contains('is-collapsed')) {
         updateProcessBrief(agg);
     }
-    else requestAnimationFrame(function () { scheduleFeedChunkOverflowRefresh(chunk); });
-    refreshAggregateStatsSmart(agg);
+    else if (!replayingMessages) requestAnimationFrame(function () { scheduleFeedChunkOverflowRefresh(chunk); });
+    if (!replayingMessages) refreshAggregateStatsSmart(agg);
     if (!streamOpts.streaming && !isInitialLiveStatusRow) scrollContentAreaIfFollow(ctx, runSessionId);
     return sc;
 }
@@ -4402,7 +4485,10 @@ function removeDuplicateLlmFeedRows(ctx, keepRow, logType, reactIter) {
     var rows = ctx.stream.querySelectorAll(selector);
     if (!rows || rows.length <= 1) return;
     rows.forEach(function (row) {
-        if (row !== keepRow && row.getAttribute('data-llm-live-row') === '1') row.remove();
+        if (row !== keepRow && row.getAttribute('data-llm-live-row') === '1') {
+            unregisterProcessAggregateRow(row);
+            row.remove();
+        }
     });
 }
 
