@@ -510,7 +510,7 @@ Slash Command 和生命周期回调，也可在同一插件包中携带 Skill、
 | `ASK_USER_ENABLED` | 提问工具开关（默认开） |
 | `GOAL_ENABLED` | 持久 Goal 开关（默认开，`0` 禁用） |
 | `MYAGENT_FRONTEND_VERSION` | 前端版本标识（`v1`） |
-| `MYAGENT_SMOOTH_STREAM_ENABLED` | 丝滑流式文本揭示与自动跟底（默认 `0`；修改后需重启） |
+| `MYAGENT_SMOOTH_STREAM_ENABLED` | 丝滑流式文本揭示与自动跟底（默认 `1`；修改后需重启） |
 | `LS_INCLUDE_LINE_COUNTS` | `ls` 是否统计文本行数（默认开） |
 | `LS_LINE_COUNT_MAX_BYTES` | `ls` 单文件行数统计上限（默认 5 MiB） |
 

@@ -47,7 +47,7 @@ def test_index_html_injects_default_feature_values(monkeypatch):
         "followupRestart": False,
         "streamReconnect": False,
         "finalReconcile": True,
-        "smoothStream": False,
+        "smoothStream": True,
         "security": True,
     }
 
@@ -113,7 +113,7 @@ def test_index_html_injects_smooth_stream_environment_switch(monkeypatch):
     import webui
 
     monkeypatch.delenv("MYAGENT_SMOOTH_STREAM_ENABLED", raising=False)
-    assert _extract_feature_flags(str(webui.get_index_html()))["smoothStream"] is False
+    assert _extract_feature_flags(str(webui.get_index_html()))["smoothStream"] is True
 
     monkeypatch.setenv("MYAGENT_SMOOTH_STREAM_ENABLED", "on")
     assert _extract_feature_flags(str(webui.get_index_html()))["smoothStream"] is True

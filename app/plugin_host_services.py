@@ -18,7 +18,15 @@ _session_reservations: Dict[str, str] = {}
 _owner_runs: Dict[str, list[SessionRunRequest]] = {}
 _session_run_grants: Dict[str, tuple[str, frozenset[str], float]] = {}
 _TERMINAL_RUN_STATUSES = frozenset(
-    {"completed", "failed", "cancelled", "interrupted", "stale"}
+    {
+        "completed",
+        "finished",
+        "failed",
+        "cancelled",
+        "interrupted",
+        "orphaned",
+        "stale",
+    }
 )
 
 

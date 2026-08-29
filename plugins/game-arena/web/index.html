@@ -3,25 +3,29 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Game Arena · 五子棋对战</title>
+  <title>Game Arena · 五子棋 & 围棋对战</title>
   <link rel="icon" type="image/png" href="/assets/sugar-logo.png">
   <style>
     *{box-sizing:border-box;margin:0;padding:0}
-    body{font-family:ui-sans,system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial;color:#1f2937;background:#f8fafc}
+    body{font-family:ui-sans,system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial;color:#1f2937;background:#f8fafc;overflow-x:hidden}
     .topbar{display:flex;align-items:center;justify-content:space-between;padding:14px 20px;background:#fff;border-bottom:1px solid #e5e7eb;position:sticky;top:0;z-index:10}
     .topbar h1{font-size:18px;font-weight:700;display:flex;gap:10px;align-items:center}
     .topbar h1 span{font-size:12px;font-weight:600;background:#111;color:#fff;padding:2px 8px;border-radius:999px}
     .topbar a{color:#2563eb;text-decoration:none;font-size:14px}
-    .wrap{max-width:1440px;margin:0 auto;padding:18px;display:grid;gap:16px}
-    .card{background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:16px}
+    .wrap{width:100%;max-width:1440px;min-width:0;margin:0 auto;padding:18px;display:grid;gap:16px}
+    .card{min-width:0;background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:16px}
     .card h2{font-size:14px;font-weight:700;margin-bottom:12px;display:flex;align-items:center;gap:8px}
     .row{display:flex;gap:12px;flex-wrap:wrap;align-items:end}
-    .field{display:flex;flex-direction:column;gap:6px;min-width:180px;flex:1}
+    .field{display:flex;flex:1 1 220px;min-width:0;flex-direction:column;gap:6px}
+    .field.session-field{flex-basis:300px}
+    .field.compact-field{flex:0 1 200px}
     .field label{font-size:12px;color:#6b7280;font-weight:600}
-    .field select,.field input{border:1px solid #d1d5db;border-radius:8px;padding:9px 10px;font-size:14px;background:#fff}
+    .field select,.field input{width:100%;min-width:0;border:1px solid #d1d5db;border-radius:8px;padding:9px 10px;font-size:14px;background:#fff}
+    .session-picker{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.35fr);gap:6px}
+    .session-search{background:#f8fafc!important}
     .btn{border:0;border-radius:8px;padding:10px 16px;font-weight:700;cursor:pointer}
     .btn-primary{background:#111;color:#fff}
-    .btn-primary:disabled{opacity:.5;cursor:not-allowed}
+    .btn:disabled{opacity:.5;cursor:not-allowed}
     .btn-ghost{background:#f3f4f6;color:#111}
     .btn-sm{padding:6px 10px;font-size:13px}
     .pill{font-size:12px;padding:3px 8px;border-radius:999px;background:#eef2ff;color:#3730a3;font-weight:700}
@@ -35,21 +39,33 @@
     .lobby td{padding:6px;border-bottom:1px solid #f3f4f6}
     .lobby tr{cursor:pointer}
     .lobby tr:hover{background:#f9fafb}
+    .lobby tr.selected{background:#eef2ff;box-shadow:inset 3px 0 #4f46e5}
+    .lobby tr:focus-visible{outline:2px solid #2563eb;outline-offset:-2px}
     /* main arena: left trace | center board | right trace - fixed height, no page stretch */
-    .arena{display:grid;grid-template-columns:320px minmax(460px,1fr) 320px;gap:16px;align-items:start}
-    @media(max-width:1100px){.arena{grid-template-columns:1fr;}}
-    .arena > .card{overflow:hidden}
+    .arena{width:100%;min-width:0;display:grid;grid-template-areas:"black board white";grid-template-columns:minmax(250px,300px) minmax(0,1fr) minmax(250px,300px);gap:16px;align-items:start}
+    .trace-card.black{grid-area:black}
+    .trace-card.white{grid-area:white}
+    .board-card{grid-area:board}
+    .arena > .card{min-width:0;overflow:hidden}
     .arena > .card.board-card{display:flex;flex-direction:column;align-items:center;gap:10px;max-height:720px;overflow:auto}
-    .trace-head{flex-shrink:0;position:sticky;top:0;background:#fff;padding:10px 12px;border-bottom:1px solid #e5e7eb;display:flex;align-items:center;justify-content:space-between;z-index:1}
-    .trace-head b{font-size:13px}
-    .trace-body{height:620px;max-height:620px;overflow:auto;padding:8px 10px;display:grid;gap:8px;align-content:start}
+    .trace-card{position:relative}
+    .trace-head{flex-shrink:0;position:sticky;top:0;background:#fff;padding:10px 12px;border-bottom:1px solid #e5e7eb;display:flex;align-items:flex-start;justify-content:space-between;gap:8px;z-index:2}
+    .trace-title{display:grid;flex:1 1 auto;min-width:0;gap:2px;font-size:13px}
+    .trace-session-name{max-width:100%;color:#374151;font-size:12px;font-weight:600;line-height:1.35;overflow-wrap:anywhere}
+    .trace-actions{display:flex;align-items:center;gap:6px}
+    .trace-toggle{min-width:54px}
+    .trace-card.is-turn{border-color:#4f46e5;box-shadow:0 0 0 2px rgba(79,70,229,.12)}
+    .trace-card.is-collapsed .trace-body{display:none}
+    .trace-body{height:620px;max-height:620px;min-width:0;overflow:auto;padding:8px 10px 42px;display:grid;grid-auto-rows:max-content;gap:8px;align-content:start;overscroll-behavior:contain}
+    .trace-latest{display:none;position:absolute;right:12px;bottom:10px;z-index:3;border:1px solid #c7d2fe;background:#eef2ff;color:#3730a3;box-shadow:0 4px 12px rgba(15,23,42,.16)}
+    .trace-latest.visible{display:block}
     .trace-empty{color:#9ca3af;text-align:center;padding:24px 8px;font-size:13px}
     /* ---- native Agent feed-item replication ---- */
-    .feed-item{--feed-item-bg:#f2f5fa;border-left:3px solid #45475a;background:var(--feed-item-bg);font-size:13px}
-    .feed-row{display:flex;flex-direction:row;align-items:flex-start;gap:0.4rem;padding:0.32rem 0.5rem 0.38rem 0.5rem;min-width:0}
+    .feed-item{width:100%;min-width:0;max-width:100%;align-self:start;--feed-item-bg:#f2f5fa;border-left:3px solid #45475a;background:var(--feed-item-bg);font-size:13px}
+    .feed-row{width:100%;max-width:100%;display:flex;flex-direction:row;align-items:flex-start;gap:0.4rem;padding:0.32rem 0.5rem 0.38rem 0.5rem;min-width:0}
     .feed-label{flex:0 0 auto;font-size:0.68rem;font-weight:700;text-transform:uppercase;letter-spacing:0.04em;color:#6b7280;line-height:1.5;padding-top:0.08rem;min-width:2.2rem}
     .feed-chunk{flex:1 1 auto;min-width:0;line-height:1.5}
-    .feed-chunk-scroller{white-space:pre-wrap;word-break:break-word;color:#1f2937;max-height:calc(1.5em * 20);overflow:hidden}
+    .feed-chunk-scroller{width:100%;max-width:100%;white-space:pre-wrap;word-break:break-word;overflow-wrap:anywhere;color:#1f2937;max-height:calc(1.5em * 20);overflow:hidden}
     .feed-chunk.expanded .feed-chunk-scroller{max-height:none;overflow:visible}
     .feed-item.feed--llm{border-left-color:#89b4fa;--feed-item-bg:#e8f4fc;background:var(--feed-item-bg)}
     .feed-item.feed--llm .feed-chunk-scroller{color:#0f172a}
@@ -60,12 +76,25 @@
     .feed-item.is-collapsed .feed-chunk{max-height:calc(1.5em * 1);overflow:hidden}
     .feed-item.is-collapsed .feed-chunk-scroller{white-space:nowrap;text-overflow:ellipsis;overflow:hidden;max-height:calc(1.5em * 1)}
     .feed-row-collapse{flex:0 0 auto;width:0;height:18px;margin-top:0.1rem;padding:0;border:0;background:transparent;color:#6b7280;opacity:0;overflow:hidden;cursor:pointer;font-size:0;transition:width .16s ease,opacity .16s ease}
-    .feed-item:not(.is-collapsed) .feed-row-collapse{width:18px;opacity:0.55}
+    .feed-item .feed-row-collapse{width:18px;opacity:0.55}
     .feed-item:hover .feed-row-collapse{width:18px;opacity:0.75}
     .feed-row-collapse-chevron{display:inline-block;width:0;height:0;border-left:4px solid transparent;border-right:4px solid transparent;border-bottom:5px solid currentColor;transition:transform .18s ease}
     .feed-item.is-collapsed .feed-row-collapse-chevron{transform:rotate(180deg)}
     .feed-user{display:flex;justify-content:flex-end;padding:0.4rem 0.5rem}
-    .feed-user-bubble{background:#2563eb;color:#fff;border-radius:14px 14px 4px 14px;padding:0.42rem 0.7rem;font-size:13px;line-height:1.5;max-width:85%;white-space:pre-wrap;word-break:break-word}
+    .feed-user-bubble{min-width:0;background:#2563eb;color:#fff;border-radius:14px 14px 4px 14px;padding:0.42rem 0.7rem;font-size:13px;line-height:1.5;max-width:85%;white-space:pre-wrap;word-break:break-word;overflow-wrap:anywhere}
+    .matchup{width:100%;display:grid;grid-template-columns:minmax(0,1fr) auto minmax(0,1fr);gap:10px;align-items:stretch}
+    .player-card{min-width:0;border:1px solid #e5e7eb;border-radius:10px;padding:9px 10px;display:grid;gap:3px;background:#fafafa}
+    .player-card.black{border-color:#374151;background:#111827;color:#fff}
+    .player-card.white{background:#fff;color:#111827}
+    .player-card.is-turn{box-shadow:0 0 0 3px rgba(79,70,229,.28);border-color:#6366f1}
+    .player-role{display:flex;align-items:center;justify-content:space-between;gap:6px;font-size:12px;font-weight:800}
+    .player-session-name{font-size:13px;font-weight:700;line-height:1.35;overflow-wrap:anywhere}
+    .player-session-id{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:10px;opacity:.7;overflow-wrap:anywhere}
+    .player-state{font-size:11px;font-weight:700;color:#4f46e5}
+    .player-card.black .player-state{color:#a5b4fc}
+    .matchup-center{display:flex;min-width:54px;flex-direction:column;align-items:center;justify-content:center;gap:3px;text-align:center}
+    .matchup-vs{font-size:12px;font-weight:900;color:#9ca3af}
+    .match-phase{font-size:11px;font-weight:800;color:#4f46e5}
     .board-card svg{max-width:100%;height:auto;border-radius:12px;box-shadow:0 4px 18px rgba(0,0,0,.08)}
     .board-placeholder{width:100%;min-height:380px;display:flex;align-items:center;justify-content:center;color:#9ca3af;border:2px dashed #e5e7eb;border-radius:12px;background:#fafafa}
     #boardSvg{width:100%;display:flex;justify-content:center;flex-shrink:0}
@@ -80,53 +109,93 @@
     .history tr{cursor:pointer}
     .range{width:100%}
     .ascii{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;line-height:1.35;white-space:pre;overflow:auto;background:#0b1220;color:#e5e7eb;padding:12px;border-radius:10px;max-height:300px}
+    .status-message{min-height:18px}
+    @media(max-width:1100px){
+      .arena{grid-template-areas:"board" "black" "white";grid-template-columns:minmax(0,1fr)}
+      .trace-body{height:360px;max-height:360px}
+      .arena > .card.board-card{max-height:none}
+    }
+    @media(max-width:640px){
+      .topbar{align-items:flex-start;padding:12px 16px;gap:12px}
+      .topbar h1{max-width:180px;flex-wrap:wrap;gap:5px;font-size:17px}
+      .topbar nav{justify-content:flex-end;flex-wrap:wrap;gap:6px!important}
+      .wrap{padding:12px;gap:12px}
+      .card{padding:14px}
+      .row{gap:10px}
+      .field,.field.session-field,.field.compact-field{flex:1 1 100%}
+      .session-picker{grid-template-columns:1fr}
+      .trace-body{height:300px;max-height:300px}
+      .controls{justify-content:flex-start}
+      #replayHint{width:100%;margin-left:0!important}
+      .matchup{gap:6px}
+      .player-card{padding:8px}
+      .player-session-name{font-size:12px}
+      .matchup-center{min-width:40px}
+    }
   </style>
 </head>
 <body>
   <header class="topbar">
-    <h1>🎮 Game Arena <span>五子棋 Gomoku</span></h1>
-    <div style="display:flex;gap:12px;align-items:center">
+    <h1>🎮 Game Arena <span id="topGameTypeLabel">五子棋 Gomoku</span></h1>
+    <nav style="display:flex;gap:12px;align-items:center">
       <a href="/">← 返回聊天</a>
       <a href="/plugins/execution-dashboard" target="_blank">执行看板</a>
-    </div>
+    </nav>
   </header>
   <div class="wrap">
     <div class="card">
       <h2>⚙️ 对战配置</h2>
       <div class="row">
-        <div class="field"><label>会话 A（黑先）</label><select id="sessionA"></select></div>
-        <div class="field"><label>会话 B（白）</label><select id="sessionB"></select></div>
-        <div class="field" style="max-width:160px"><label>棋盘大小</label>
+        <div class="field session-field"><label for="sessionA">会话 A（黑先）</label><div class="session-picker"><input id="sessionSearchA" class="session-search" placeholder="搜索会话 A" aria-label="搜索黑方会话"><select id="sessionA"></select></div></div>
+        <div class="field session-field"><label for="sessionB">会话 B（白）</label><div class="session-picker"><input id="sessionSearchB" class="session-search" placeholder="搜索会话 B" aria-label="搜索白方会话"><select id="sessionB"></select></div></div>
+        <div class="field compact-field"><label for="gameType">游戏模式</label>
+          <select id="gameType"><option value="gomoku" selected>五子棋 Gomoku</option><option value="go">围棋 Go / 围棋</option></select>
+        </div>
+        <div class="field compact-field"><label for="boardSize">棋盘大小</label>
           <select id="boardSize"><option value="15" selected>15 × 15</option><option value="13">13 × 13</option><option value="19">19 × 19</option><option value="9">9 × 9</option></select>
         </div>
-        <div class="field" style="max-width:200px"><label>游戏ID（可选）</label><input id="gameId" placeholder="自动生成如 g_a1b2c3"></div>
+        <div class="field compact-field" id="komiField" style="display:none"><label for="komi">贴目 Komi</label>
+          <input id="komi" type="number" step="0.5" value="6.5" min="0" max="10">
+        </div>
+        <div class="field compact-field"><label for="gameId">游戏ID（可选）</label><input id="gameId" placeholder="自动生成如 g_a1b2c3"></div>
       </div>
       <div style="display:flex;gap:10px;margin-top:14px;align-items:center;flex-wrap:wrap">
         <button id="startBtn" class="btn btn-primary">创建并开始对战</button>
+        <button id="swapSessions" class="btn btn-ghost" type="button">交换黑白</button>
         <button id="refreshSessions" class="btn btn-ghost">刷新会话</button>
-        <span id="startMsg" class="muted"></span>
+        <span id="startMsg" class="muted status-message" role="status" aria-live="polite"></span>
       </div>
-      <div class="muted" style="margin-top:8px">将向两会话自动注入对战 Prompt，Agent 会通过延迟结果工具 <code>gomoku_create / gomoku_join / gomoku_place</code> 轮流落子（每次等待对手最长 5 分钟，等待期间插件仍可响应其他请求）。</div>
-    </div>
-
-    <div class="card">
-      <h2>🏟️ 大厅 <span id="lobbyCount" class="muted"></span></h2>
-      <div style="display:flex;gap:8px;margin-bottom:8px">
-        <select id="lobbyFilter"><option value="">全部</option><option value="waiting">等待中</option><option value="playing">进行中</option><option value="finished">已结束</option></select>
-        <button id="refreshLobby" class="btn btn-ghost btn-sm">刷新</button>
-      </div>
-      <div class="lobby"><table><thead><tr><th>游戏ID</th><th>大小</th><th>状态</th><th>回合</th><th>步数</th><th>更新</th></tr></thead><tbody id="lobbyBody"></tbody></table></div>
+      <div class="muted" style="margin-top:8px">将向两会话自动注入对战 Prompt，Agent 会通过延迟结果工具轮流落子<br>五子棋: <code>gomoku_create / gomoku_join / gomoku_place</code> &nbsp;|&nbsp; 围棋: <code>go_create / go_join / go_place / go_pass</code>（提子、打劫、虚手计分）（每次等待对手最长 5 分钟，等待期间插件仍可响应其他请求）。</div>
     </div>
 
     <!-- 主对战区：左轨迹 | 中棋盘(常驻) | 右轨迹 -->
     <div class="arena">
-      <div class="card" style="padding:0;overflow:hidden">
-        <div class="trace-head"><b>● 黑方轨迹 <span id="blackName" class="muted"></span></b><button id="refreshBlack" class="btn btn-ghost btn-sm">刷新</button></div>
+      <div id="blackTraceCard" class="card trace-card black" style="padding:0;overflow:hidden">
+        <div class="trace-head"><b class="trace-title"><span>● 黑方轨迹</span><span id="blackName" class="trace-session-name">未绑定会话</span></b><div class="trace-actions"><button id="toggleBlack" class="btn btn-ghost btn-sm trace-toggle" type="button">收起</button><button id="refreshBlack" class="btn btn-ghost btn-sm">刷新</button></div></div>
         <div id="traceBlack" class="trace-body"><div class="trace-empty">未选择对局</div></div>
+        <button id="latestBlack" class="btn btn-sm trace-latest" type="button">↓ 最新进展</button>
       </div>
 
       <div class="card board-card">
         <h2 style="width:100%;justify-content:center">🧩 棋盘 <span id="gameTitle" class="muted" style="cursor:pointer" title="点击退出回放"></span> <span id="statusPill" class="pill waiting">未选择</span></h2>
+        <div class="matchup" aria-label="对局双方">
+          <div id="blackPlayerCard" class="player-card black">
+            <div class="player-role"><span>● 黑方</span><span id="blackPlayerState" class="player-state">未开始</span></div>
+            <div id="blackPlayerName" class="player-session-name">未绑定会话</div>
+            <div id="blackPlayerId" class="player-session-id"></div>
+          </div>
+          <div class="matchup-center"><span class="matchup-vs">VS</span><span id="matchPhase" class="match-phase">等待选择</span></div>
+          <div id="whitePlayerCard" class="player-card white">
+            <div class="player-role"><span>○ 白方</span><span id="whitePlayerState" class="player-state">未开始</span></div>
+            <div id="whitePlayerName" class="player-session-name">未绑定会话</div>
+            <div id="whitePlayerId" class="player-session-id"></div>
+          </div>
+        </div>
+        <div id="postgameActions" class="controls" hidden>
+          <button id="rematchBtn" class="btn btn-primary btn-sm" type="button">再来一局</button>
+          <button id="swapRematchBtn" class="btn btn-ghost btn-sm" type="button">交换黑白再来</button>
+          <span id="matchActionMsg" class="muted status-message" role="status" aria-live="polite"></span>
+        </div>
         <div id="boardSvg" style="width:100%;display:flex;justify-content:center">
           <div class="board-placeholder">选择或创建一个游戏后显示棋盘</div>
         </div>
@@ -136,6 +205,12 @@
           <span>胜者: <b id="winnerVal">-</b></span>
           <span id="lastMoveVal" class="muted"></span>
         </div>
+        <div id="goMeta" class="meta" style="display:none; background:#f8fafc; padding:8px 12px; border-radius:8px; border:1px dashed #e5e7eb;">
+          <span>提子: <b id="captureBlack">B 0</b> / <b id="captureWhite">W 0</b></span>
+          <span>贴目: <b id="komiVal">6.5</b></span>
+          <span id="koVal" class="muted"></span>
+          <span id="scoreVal" class="muted" style="font-weight:700; color:#1e40af;"></span>
+        </div>
         <div class="controls">
           <button id="viewBtn" class="btn btn-ghost btn-sm">刷新棋盘</button>
           <button id="exportSvgBtn" class="btn btn-ghost btn-sm">导出SVG</button>
@@ -144,9 +219,10 @@
         <details style="width:100%;margin-top:4px"><summary style="cursor:pointer;font-weight:700;font-size:13px">ASCII 棋盘</summary><pre id="asciiBoard" class="ascii" style="margin-top:8px"></pre></details>
       </div>
 
-      <div class="card" style="padding:0;overflow:hidden">
-        <div class="trace-head"><b>○ 白方轨迹 <span id="whiteName" class="muted"></span></b><button id="refreshWhite" class="btn btn-ghost btn-sm">刷新</button></div>
+      <div id="whiteTraceCard" class="card trace-card white" style="padding:0;overflow:hidden">
+        <div class="trace-head"><b class="trace-title"><span>○ 白方轨迹</span><span id="whiteName" class="trace-session-name">未绑定会话</span></b><div class="trace-actions"><button id="toggleWhite" class="btn btn-ghost btn-sm trace-toggle" type="button">收起</button><button id="refreshWhite" class="btn btn-ghost btn-sm">刷新</button></div></div>
         <div id="traceWhite" class="trace-body"><div class="trace-empty">未选择对局</div></div>
+        <button id="latestWhite" class="btn btn-sm trace-latest" type="button">↓ 最新进展</button>
       </div>
     </div>
 
@@ -154,21 +230,32 @@
     <div class="card">
       <h2>📜 对弈记录与回放</h2>
       <div class="controls" style="justify-content:flex-start;margin-bottom:8px">
-        <button id="firstBtn" class="btn btn-ghost btn-sm">◀◀</button>
-        <button id="prevBtn" class="btn btn-ghost btn-sm">◀</button>
-        <button id="nextBtn" class="btn btn-ghost btn-sm">▶</button>
+        <button id="firstBtn" class="btn btn-ghost btn-sm" aria-label="回到开局">◀◀</button>
+        <button id="prevBtn" class="btn btn-ghost btn-sm" aria-label="上一步">◀</button>
+        <button id="nextBtn" class="btn btn-ghost btn-sm" aria-label="下一步">▶</button>
         <button id="lastBtn" class="btn btn-ghost btn-sm">▶▶ 回到实时</button>
         <button id="playBtn" class="btn btn-ghost btn-sm">播放</button>
         <span id="replayInfo" class="muted"></span>
         <span id="replayHint" class="muted" style="margin-left:auto">回放时棋盘常驻，轮询不覆盖</span>
       </div>
       <input id="replayRange" class="range" type="range" min="0" max="0" value="0">
-      <div class="history" style="margin-top:8px"><table><thead><tr><th>#</th><th>颜色</th><th>坐标</th><th>时间</th></tr></thead><tbody id="historyBody"></tbody></table></div>
+      <div class="history" style="margin-top:8px"><table><thead><tr><th>#</th><th>颜色</th><th>坐标</th><th>提子/虚手</th><th>时间</th></tr></thead><tbody id="historyBody"></tbody></table></div>
+    </div>
+
+    <div class="card">
+      <h2>🏟️ 大厅 <span id="lobbyCount" class="muted"></span></h2>
+      <div style="display:flex;gap:8px;margin-bottom:8px">
+        <select id="lobbyFilter" aria-label="筛选对局"><option value="">全部状态</option><option value="waiting">等待中</option><option value="playing">进行中</option><option value="finished">已结束</option></select>
+        <select id="lobbyGameTypeFilter" aria-label="筛选模式"><option value="">全部模式</option><option value="gomoku">五子棋</option><option value="go">围棋</option></select>
+        <button id="refreshLobby" class="btn btn-ghost btn-sm">刷新</button>
+      </div>
+      <div class="lobby"><table><thead><tr><th>游戏ID</th><th>模式</th><th>大小</th><th>状态</th><th>回合</th><th>步数</th><th>更新</th></tr></thead><tbody id="lobbyBody"></tbody></table></div>
     </div>
   </div>
 <script type="module">
 const $ = s=>document.querySelector(s);
-const sessionA=$('#sessionA'), sessionB=$('#sessionB'), boardSize=$('#boardSize'), gameId=$('#gameId');
+const sessionA=$('#sessionA'), sessionB=$('#sessionB'), sessionSearchA=$('#sessionSearchA'), sessionSearchB=$('#sessionSearchB'), boardSize=$('#boardSize'), gameId=$('#gameId');
+const gameType=$('#gameType'), komiInput=$('#komi'), komiField=$('#komiField'), lobbyGameTypeFilter=$('#lobbyGameTypeFilter');
 const startBtn=$('#startBtn'), startMsg=$('#startMsg');
 const lobbyFilter=$('#lobbyFilter'), lobbyBody=$('#lobbyBody'), lobbyCount=$('#lobbyCount');
 const boardSvg=$('#boardSvg'), asciiBoard=$('#asciiBoard');
@@ -179,43 +266,271 @@ let currentGameId="", currentData=null, replayIndex=0, playTimer=null, pollTimer
 let replayMode=false;
 let sessionAId="", sessionBId=""; // bound session ids for trace
 let traceTimer=null;
+let stateRefreshInFlight=false;
+let matchStartInFlight=false;
+let allSessions=[];
+let sessionActivityTimer=null;
+let rematchStatusGameId='';
+let rematchStatusKnown=false;
+let rematchIdleSamples=0;
+let replayRequestSeq=0;
+const REMATCH_IDLE_SAMPLES_REQUIRED=2;
+const MAX_BUSY_RETRIES=20;
+const statusLabels={waiting:'等待中',playing:'进行中',finished:'已结束'};
+const colorLabels={black:'黑方',white:'白方',draw:'平局'};
 
 function esc(v){ return String(v||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+function sessionInfo(sessionId){ return allSessions.find(session=>String(session.id||'')===String(sessionId||''))||null; }
+function currentGameType(){ return (gameType && gameType.value) || 'gomoku'; }
+function updateGameTypeUI(){
+  const gt = currentGameType();
+  const isGo = gt === 'go';
+  if(komiField) komiField.style.display = isGo ? '' : 'none';
+  const topLabel = document.getElementById('topGameTypeLabel');
+  if(topLabel) topLabel.textContent = isGo ? '围棋 Go' : '五子棋 Gomoku';
+  // Update boardSize options
+  const currentSize = boardSize.value;
+  const gomokuOptions = [{v:'15',t:'15 × 15'},{v:'13',t:'13 × 13'},{v:'19',t:'19 × 19'},{v:'9',t:'9 × 9'}];
+  const goOptions = [{v:'19',t:'19 × 19'},{v:'13',t:'13 × 13'},{v:'9',t:'9 × 9'}];
+  const opts = isGo ? goOptions : gomokuOptions;
+  const defaultSize = isGo ? '19' : '15';
+  boardSize.innerHTML = opts.map(o=>`<option value="${o.v}" ${o.v===currentSize?'selected':''}>${o.t}</option>`).join('');
+  if(!opts.some(o=>o.v===currentSize)) boardSize.value = defaultSize;
+  // Update lobby filter label if needed
+}
 
-async function fetchSessions(){
+function sessionIsBusy(session){ return Boolean(session&&(session.run_active||session.stream_active)); }
+function sessionDisplayName(session){
+  if(!session) return '未知会话';
+  return String(session.name||session.title||session.id||'未知会话');
+}
+function busySessions(sessionIds){
+  return [...new Set((sessionIds||[]).map(id=>String(id||'')).filter(Boolean))]
+    .map(id=>sessionInfo(id))
+    .filter(session=>sessionIsBusy(session));
+}
+function setActivityNotice(element,text){
+  element.textContent=text;
+  element.dataset.activityNotice='1';
+}
+function clearActivityNotice(element){
+  if(element.dataset.activityNotice==='1'){
+    element.textContent='';
+    delete element.dataset.activityNotice;
+  }
+}
+function playerDisplayName(color,data=currentData){
+  const id=String(data?.players?.[color]||'');
+  const session=sessionInfo(id);
+  return String(session?.name||session?.title||data?.player_names?.[color]||id.slice(0,8)||'未绑定会话');
+}
+function updatePlayerIdentity(data=currentData){
+  const blackId=String(data?.players?.black||'');
+  const whiteId=String(data?.players?.white||'');
+  const blackDisplay=playerDisplayName('black',data);
+  const whiteDisplay=playerDisplayName('white',data);
+  blackName.textContent=blackId?`${blackDisplay} · ${blackId.slice(0,8)}`:'未绑定会话';
+  whiteName.textContent=whiteId?`${whiteDisplay} · ${whiteId.slice(0,8)}`:'未绑定会话';
+  $('#blackPlayerName').textContent=blackDisplay;
+  $('#whitePlayerName').textContent=whiteDisplay;
+  $('#blackPlayerId').textContent=blackId?`会话 ${blackId.slice(0,8)}`:'';
+  $('#whitePlayerId').textContent=whiteId?`会话 ${whiteId.slice(0,8)}`:'';
+  let blackState='未开始',whiteState='未开始',phase='等待选择';
+  if(data?.status==='waiting'){
+    blackState='等待白方'; whiteState=whiteId?'已加入':'尚未加入'; phase='等待加入';
+  }else if(data?.status==='playing'){
+    blackState=data.turn==='black'?'当前行动':'等待对手';
+    whiteState=data.turn==='white'?'当前行动':'等待对手';
+    phase=`轮到${colorLabels[data.turn]||data.turn}`;
+  }else if(data?.status==='finished'){
+    if(data.winner==='draw'){ blackState='平局'; whiteState='平局'; phase='本局平局'; }
+    else{
+      blackState=data.winner==='black'?'本局胜者':'本局结束';
+      whiteState=data.winner==='white'?'本局胜者':'本局结束';
+      phase=`${colorLabels[data.winner]||data.winner||''}获胜`;
+    }
+  }
+  $('#blackPlayerState').textContent=blackState;
+  $('#whitePlayerState').textContent=whiteState;
+  $('#matchPhase').textContent=phase;
+  $('#blackPlayerCard').classList.toggle('is-turn',data?.status==='playing'&&data.turn==='black');
+  $('#whitePlayerCard').classList.toggle('is-turn',data?.status==='playing'&&data.turn==='white');
+}
+
+function renderSessionSelect(select, query, preferred, placeholder){
+  const normalized=String(query||'').trim().toLocaleLowerCase();
+  const fragment=document.createDocumentFragment();
+  const empty=document.createElement('option');
+  empty.value=''; empty.textContent=placeholder; fragment.appendChild(empty);
+  for(const s of allSessions){
+    const id=String(s.id||'');
+    const name=String(s.name||s.title||'新会话');
+    const haystack=`${name} ${id}`.toLocaleLowerCase();
+    if(normalized && !haystack.includes(normalized) && id!==preferred) continue;
+    const option=document.createElement('option');
+    option.value=id;
+    const busy=sessionIsBusy(s);
+    option.dataset.busy=String(busy);
+    option.textContent=`${name} — ${id.slice(0,8)}${busy?' · 忙碌中':''}`;
+    fragment.appendChild(option);
+  }
+  select.replaceChildren(fragment);
+  if(preferred && [...select.options].some(option=>option.value===preferred)) select.value=preferred;
+}
+function syncSessionAvailability(){
+  const a=sessionA.value, b=sessionB.value;
+  for(const option of sessionA.options) option.disabled=Boolean(option.value&&(option.value===b||option.dataset.busy==='true'));
+  for(const option of sessionB.options) option.disabled=Boolean(option.value&&(option.value===a||option.dataset.busy==='true'));
+}
+function refreshSessionPicker(which){
+  if(which==='A') renderSessionSelect(sessionA,sessionSearchA.value,sessionA.value,'选择会话 A');
+  else renderSessionSelect(sessionB,sessionSearchB.value,sessionB.value,'选择会话 B');
+  syncSessionAvailability();
+}
+function stopSessionActivityPolling(){
+  if(sessionActivityTimer) clearInterval(sessionActivityTimer);
+  sessionActivityTimer=null;
+}
+function resetRematchReadiness(gameId=''){
+  stopSessionActivityPolling();
+  rematchStatusGameId=String(gameId||'');
+  rematchStatusKnown=false;
+  rematchIdleSamples=0;
+}
+function updateRematchAvailability(){
+  const finished=Boolean(currentData&&currentData.status==='finished');
+  const buttons=[$('#rematchBtn'),$('#swapRematchBtn')];
+  if(!finished){
+    buttons.forEach(button=>{ button.disabled=true; });
+    clearActivityNotice($('#matchActionMsg'));
+    return;
+  }
+  const playerIds=[...new Set([currentData?.players?.black,currentData?.players?.white].map(id=>String(id||'')).filter(Boolean))];
+  const unavailable=playerIds.filter(id=>!sessionInfo(id));
+  const busy=busySessions(playerIds);
+  const stableIdle=rematchStatusKnown&&playerIds.length===2&&unavailable.length===0&&busy.length===0&&rematchIdleSamples>=REMATCH_IDLE_SAMPLES_REQUIRED;
+  buttons.forEach(button=>{ button.disabled=matchStartInFlight||!stableIdle; });
+  if(matchStartInFlight) return;
+  if(!rematchStatusKnown){
+    setActivityNotice($('#matchActionMsg'),'正在确认双方会话状态...');
+  }else if(unavailable.length){
+    setActivityNotice($('#matchActionMsg'),'原对局会话已不可用，无法直接再来一局');
+  }else if(busy.length){
+    setActivityNotice($('#matchActionMsg'),`${busy.map(sessionDisplayName).join('、')}仍在完成上一局，空闲后即可再来一局`);
+  }else if(!stableIdle){
+    setActivityNotice($('#matchActionMsg'),'双方正在结束上一局，马上可以再来一局...');
+  }else{
+    setActivityNotice($('#matchActionMsg'),'双方会话已空闲，可以开始下一局');
+  }
+}
+async function refreshSessionActivity({renderPickers=false}={}){
   try{
     const r=await fetch('/sessions');
     if(!r.ok) throw new Error('HTTP '+r.status);
     const j=await r.json();
     const list = Array.isArray(j) ? j : (j.sessions || j.data || []);
-    if(!Array.isArray(list) || list.length===0){
-      sessionA.innerHTML='<option value="">暂无会话，请先新建会话</option>';
-      sessionB.innerHTML='<option value="">暂无会话，请先新建会话</option>';
-      return;
+    const requiredIds=currentData?.status==='finished'
+      ? [...new Set([currentData?.players?.black,currentData?.players?.white].map(id=>String(id||'')).filter(Boolean))]
+      : [];
+    const listedIds=new Set((Array.isArray(list)?list:[]).map(session=>String(session?.id||'')));
+    const missingIds=requiredIds.filter(id=>!listedIds.has(id));
+    if(Array.isArray(list)&&missingIds.length){
+      const details=await Promise.all(missingIds.map(async id=>{
+        try{
+          const detailResponse=await fetch(`/sessions/${encodeURIComponent(id)}`);
+          return detailResponse.ok?await detailResponse.json():null;
+        }catch(_){ return null; }
+      }));
+      details.filter(Boolean).forEach(session=>list.push(session));
     }
-    const opts = list.map(s=>{ const nm = (s.name||s.title||'新会话'); const shortId = String(s.id||'').slice(0,8); return `<option value="${s.id}">${esc(nm)} — ${shortId}</option>`; }).join('');
-    sessionA.innerHTML='<option value="">选择会话A</option>'+opts;
-    sessionB.innerHTML='<option value="">选择会话B</option>'+opts;
-    // restore previous selection if still exists
-    if(sessionAId) sessionA.value=sessionAId;
-    if(sessionBId) sessionB.value=sessionBId;
+    if(!Array.isArray(list) || list.length===0){
+      if(renderPickers){
+        sessionA.innerHTML='<option value="">暂无会话，请先新建会话</option>';
+        sessionB.innerHTML='<option value="">暂无会话，请先新建会话</option>';
+      }
+      return false;
+    }
+    const selectedA=sessionA.value, selectedB=sessionB.value;
+    allSessions=list;
+    if(renderPickers){
+      renderSessionSelect(sessionA,sessionSearchA.value,selectedA,'选择会话 A');
+      renderSessionSelect(sessionB,sessionSearchB.value,selectedB,'选择会话 B');
+      syncSessionAvailability();
+    }
+    if(currentData?.status==='finished'&&rematchStatusGameId===currentGameId){
+      rematchStatusKnown=true;
+      const playerIds=[...new Set([currentData?.players?.black,currentData?.players?.white].map(id=>String(id||'')).filter(Boolean))];
+      const allAvailable=playerIds.length===2&&playerIds.every(id=>sessionInfo(id));
+      const busy=busySessions(playerIds);
+      rematchIdleSamples=allAvailable&&busy.length===0?rematchIdleSamples+1:0;
+      if(rematchIdleSamples>=REMATCH_IDLE_SAMPLES_REQUIRED) stopSessionActivityPolling();
+    }
+    updateStartAvailability();
+    updateRematchAvailability();
+    updatePlayerIdentity();
+    return true;
   }catch(e){
     console.error('fetchSessions failed', e);
-    sessionA.innerHTML='<option>加载失败，请刷新重试</option>';
-    sessionB.innerHTML='<option>加载失败，请刷新重试</option>';
+    if(renderPickers){
+      sessionA.innerHTML='<option>加载失败，请刷新重试</option>';
+      sessionB.innerHTML='<option>加载失败，请刷新重试</option>';
+    }
+    return false;
   }
 }
+async function fetchSessions(){ return refreshSessionActivity({renderPickers:true}); }
+function startSessionActivityPolling(){
+  if(currentData?.status!=='finished') return;
+  if(rematchStatusGameId!==currentGameId) resetRematchReadiness(currentGameId);
+  updateRematchAvailability();
+  if(!sessionActivityTimer){
+    sessionActivityTimer=setInterval(()=>{
+      if(!document.hidden) refreshSessionActivity();
+    },1000);
+  }
+  refreshSessionActivity();
+}
 async function fetchLobby(){
-  const st=lobbyFilter.value;
-  const r=await fetch(`/api/plugins/game-arena/games?status=${encodeURIComponent(st)}&limit=50`);
-  const j=await r.json();
-  const games=j.games||[];
-  lobbyCount.textContent=`${j.count||games.length} 局`;
-  lobbyBody.innerHTML=games.map(g=>`<tr data-gid="${g.game_id}"><td><code>${g.game_id}</code></td><td>${g.board_size}</td><td><span class="pill ${g.status}">${g.status}</span></td><td>${g.turn||'-'}</td><td>${g.move_count}</td><td>${g.updated_at? new Date(g.updated_at*1000).toLocaleString(): '-'}</td></tr>`).join('') || `<tr><td colspan="6" class="muted" style="text-align:center;padding:16px">暂无对局</td></tr>`;
-  lobbyBody.querySelectorAll('tr[data-gid]').forEach(tr=> tr.addEventListener('click', ()=> selectGame(tr.dataset.gid)));
+  try{
+    const st=lobbyFilter.value;
+    const gt=lobbyGameTypeFilter ? lobbyGameTypeFilter.value : '';
+    const r=await fetch(`/api/plugins/game-arena/games?status=${encodeURIComponent(st)}&game_type=${encodeURIComponent(gt)}&limit=50`);
+    if(!r.ok) throw new Error('HTTP '+r.status);
+    const j=await r.json();
+    const games=j.games||[];
+    lobbyCount.textContent=`${j.count||games.length} 局`;
+    lobbyBody.innerHTML=games.map(g=>{
+      const gid=esc(g.game_id), status=String(g.status||'');
+      const gt=esc(g.game_type||'gomoku');
+      const gtLabel=gt==='go'?'围棋':'五子棋';
+      const gtPill=gt==='go'?'#fef3c7':'#e0e7ff';
+      const result=status==='finished' ? (g.winner ? `${colorLabels[g.winner]||g.winner}` : '已结束') : (statusLabels[status]||status||'-');
+      return `<tr data-gid="${gid}" tabindex="0" aria-selected="${String(g.game_id)===currentGameId}" class="${String(g.game_id)===currentGameId?'selected':''}"><td><code>${gid}</code></td><td><span class="pill" style="background:${gtPill}">${gtLabel}</span></td><td>${esc(g.board_size)}</td><td><span class="pill ${esc(status)}">${esc(result)}</span></td><td>${esc(colorLabels[g.turn]||g.turn||'-')}</td><td>${esc(g.move_count)}</td><td>${g.updated_at? new Date(g.updated_at*1000).toLocaleString(): '-'}</td></tr>`;
+    }).join('') || `<tr><td colspan="7" class="muted" style="text-align:center;padding:16px">暂无对局</td></tr>`;
+    lobbyBody.querySelectorAll('tr[data-gid]').forEach(tr=>{
+      tr.addEventListener('click',()=>selectGame(tr.dataset.gid));
+      tr.addEventListener('keydown',event=>{ if(event.key==='Enter'||event.key===' '){ event.preventDefault(); selectGame(tr.dataset.gid); } });
+    });
+  }catch(e){
+    lobbyCount.textContent='加载失败';
+    lobbyBody.innerHTML=`<tr><td colspan="7" class="muted" style="text-align:center;padding:16px">大厅加载失败，请重试</td></tr>`;
+  }
+}
+function updateSelectedLobby(){
+  lobbyBody.querySelectorAll('tr[data-gid]').forEach(tr=>{
+    const selected=tr.dataset.gid===currentGameId;
+    tr.classList.toggle('selected',selected);
+    tr.setAttribute('aria-selected',String(selected));
+  });
 }
 async function selectGame(gid){
+  stopReplayPlayback();
+  if(currentGameId&&currentGameId!==gid&&!matchStartInFlight) $('#matchActionMsg').textContent='';
+  if(currentGameId!==gid) resetRematchReadiness(gid);
+  const preserveProvisional=currentData?.id===gid&&currentData?.status==='waiting'&&matchStartInFlight;
+  if(!preserveProvisional){ currentData=null; updatePlayerIdentity(null); }
   currentGameId=gid; gameTitle.textContent=gid; replayMode=false;
+  updateSelectedLobby();
   // clear old trace immediately and reset incremental cache
   traceBlack.innerHTML='<div class="trace-empty">加载中...</div>';
   traceWhite.innerHTML='<div class="trace-empty">加载中...</div>';
@@ -223,20 +538,31 @@ async function selectGame(gid){
   traceWhite.dataset.prevCount='0';
   traceBlack.dataset.firstRender='0';
   traceWhite.dataset.firstRender='0';
-  // don't delete cache here - keep for incremental, but reset if players change
+  traceBlack.dataset.renderKey='';
+  traceWhite.dataset.renderKey='';
+  traceBlack.dataset.autoFollow='1';
+  traceWhite.dataset.autoFollow='1';
+  $('#latestBlack').classList.remove('visible');
+  $('#latestWhite').classList.remove('visible');
   await refreshState();
-  startPolling();
+  if(currentData?.status==='finished') stopPolling();
+  else startPolling();
   startTracePolling();
-  if(sessionAId) fetchTrace(sessionAId, traceBlack);
-  if(sessionBId) fetchTrace(sessionBId, traceWhite);
 }
 async function refreshState(){
   if(!currentGameId) return;
   if(replayMode) return;
+  if(stateRefreshInFlight) return;
+  stateRefreshInFlight=true;
   try{
     const r=await fetch(`/api/plugins/game-arena/state?game_id=${encodeURIComponent(currentGameId)}`);
     const j=await r.json();
-    if(!j.ok){ boardSvg.innerHTML=`<div style="padding:20px;color:#ef4444">${esc(j.error||'加载失败')}</div>`; return; }
+    if(replayMode) return;
+    if(!j.ok){
+      if(currentData?.id===currentGameId&&currentData?.status==='waiting') boardSvg.innerHTML='<div class="board-placeholder">新对局已发起，正在等待双方会话进入...</div>';
+      else boardSvg.innerHTML=`<div style="padding:20px;color:#ef4444">${esc(j.error||'加载失败')}</div>`;
+      return;
+    }
     currentData=j.game;
     // bind session ids from game players for trace
     let playersChanged=false;
@@ -245,35 +571,61 @@ async function refreshState(){
       const newB = currentData.players.white || '';
       if(newA && newA !== sessionAId){ if(sessionAId) resetTraceCache(sessionAId); sessionAId=newA; playersChanged=true; traceBlack.dataset.prevCount='0'; traceBlack.dataset.firstRender='0'; }
       if(newB && newB !== sessionBId){ if(sessionBId) resetTraceCache(sessionBId); sessionBId=newB; playersChanged=true; traceWhite.dataset.prevCount='0'; traceWhite.dataset.firstRender='0'; }
-      // update trace headers
-      const bn = currentData.player_names?.black || (sessionAId? sessionAId.slice(0,8): '');
-      const wn = currentData.player_names?.white || (sessionBId? sessionBId.slice(0,8): '');
-      blackName.textContent = bn ? `(${bn})` : '';
-      whiteName.textContent = wn ? `(${wn})` : '';
-      // NOTE: do NOT force sessionA/sessionB dropdowns here - that would
-      // overwrite the user's manual selection while polling. Only trace
-      // headers reflect the bound players.
-      if(playersChanged){
-        // immediately refresh trace for new players
-        if(sessionAId) fetchTrace(sessionAId, traceBlack);
-        if(sessionBId) fetchTrace(sessionBId, traceWhite);
-      }
+      updatePlayerIdentity(currentData);
+      if(playersChanged && traceTimer){ startTracePolling(); }
     }
-    renderBoard(currentData);
-    renderHistory(currentData);
     const total=(currentData.history||[]).length;
     if(!replayMode){
       replayIndex = total;
       replayRange.max = total;
       replayRange.value = total;
-      replayInfo.textContent = `${total} / ${total}`;
+      replayInfo.textContent = `实时 · ${total} / ${total}`;
     } else {
       replayRange.max = total;
       replayInfo.textContent = `${replayIndex} / ${total}`;
     }
+    renderBoard(currentData);
+    renderHistory(currentData);
+    updateReplayControls(total);
+    const playing=currentData.status==='playing';
+    $('#blackTraceCard').classList.toggle('is-turn',playing&&currentData.turn==='black');
+    $('#whiteTraceCard').classList.toggle('is-turn',playing&&currentData.turn==='white');
+    const finished=currentData.status==='finished';
+    $('#postgameActions').hidden=!finished;
+    $('#rematchBtn').hidden=!finished;
+    $('#swapRematchBtn').hidden=!finished;
+    if(currentData.status==='finished'){
+      stopPolling();
+      startSessionActivityPolling();
+    }else{
+      stopSessionActivityPolling();
+      updateRematchAvailability();
+    }
   }catch(e){ console.error('refreshState failed', e); }
+  finally{ stateRefreshInFlight=false; }
 }
 function renderBoard(data){
+  const isGo = (data.game_type||'gomoku')==='go';
+  const goMetaEl = document.getElementById('goMeta');
+  if(goMetaEl) goMetaEl.style.display = isGo ? 'flex' : 'none';
+  if(isGo){
+    const cap = data.captures || {black:0,white:0};
+    document.getElementById('captureBlack').textContent = 'B ' + (cap.black||0);
+    document.getElementById('captureWhite').textContent = 'W ' + (cap.white||0);
+    document.getElementById('komiVal').textContent = data.komi!=null ? data.komi : '6.5';
+    const koEl = document.getElementById('koVal');
+    if(data.ko) koEl.textContent = '打劫: (' + data.ko[0] + ',' + data.ko[1] + ')';
+    else koEl.textContent = '打劫: -';
+    const scoreEl = document.getElementById('scoreVal');
+    if(data.score){
+      const sc=data.score;
+      scoreEl.textContent = `计分 ${sc.result||''} B:${sc.black_score} W:${sc.white_score} (目 B:${sc.black_territory} W:${sc.white_territory})`;
+    } else if(data.status==='finished' && data.winner){
+      scoreEl.textContent = '胜者: ' + (colorLabels[data.winner]||data.winner);
+    } else {
+      scoreEl.textContent = '';
+    }
+  }
   const svg=(data.board_svg||'').trim();
   if(svg && svg.includes('<svg')){
     boardSvg.innerHTML=svg;
@@ -306,16 +658,22 @@ function renderBoard(data){
     boardSvg.innerHTML=`<div class="board-placeholder">${hint}<br><small style="color:#9ca3af">game_id=${data.game_id||currentGameId}</small></div>`;
   }
   asciiBoard.textContent=data.board_ascii||'(无ASCII数据)';
-  turnVal.textContent=data.turn||'-';
-  moveCountEl.textContent=String((data.history||[]).length);
-  winnerVal.textContent=data.winner|| (data.status==='finished'?'平局':'-');
+  turnVal.textContent=colorLabels[data.turn]||data.turn||'-';
+  moveCountEl.textContent=String(data.move_count ?? (data.history||[]).length);
+  winnerVal.textContent=colorLabels[data.winner]||data.winner|| (data.status==='finished'?'平局':'-');
   lastMoveVal.textContent=data.last_move? `最后: (${data.last_move[0]},${data.last_move[1]})` : '';
-  statusPill.textContent=data.status||'-';
+  statusPill.textContent=statusLabels[data.status]||data.status||'-';
   statusPill.className='pill '+(data.status||'waiting');
 }
 function renderHistory(data){
+  const isGo = (data.game_type||'gomoku')==='go';
   const h=data.history||[];
-  historyBody.innerHTML=h.map((m,i)=>`<tr data-idx="${i+1}" class="${i+1===replayIndex?'active':''}"><td>${m.move_no||i+1}</td><td>${m.color==='black'?'● 黑':'○ 白'}</td><td>(${m.x},${m.y})</td><td>${m.ts? new Date(m.ts*1000).toLocaleTimeString(): '-'}</td></tr>`).join('') || `<tr><td colspan="4" class="muted" style="text-align:center">暂无落子</td></tr>`;
+  historyBody.innerHTML=h.map((m,i)=>{
+    const isPass = m.pass || (m.x===-1 && m.y===-1);
+    const coord = isPass ? '虚手' : `(${m.x},${m.y})`;
+    const extra = isPass ? 'pass' : (m.captured ? `提${m.captured}` : '-');
+    return `<tr data-idx="${i+1}" class="${i+1===replayIndex?'active':''}"><td>${m.move_no||i+1}</td><td>${m.color==='black'?'● 黑':'○ 白'}</td><td>${coord}</td><td>${isGo?extra:'-'}</td><td>${m.ts? new Date(m.ts*1000).toLocaleTimeString(): '-'}</td></tr>`;
+  }).join('') || `<tr><td colspan="5" class="muted" style="text-align:center">暂无落子</td></tr>`;
   historyBody.querySelectorAll('tr[data-idx]').forEach(tr=> tr.addEventListener('click', async ()=>{
     const idx=parseInt(tr.dataset.idx,10);
     await gotoReplay(idx);
@@ -324,39 +682,95 @@ function renderHistory(data){
 async function gotoReplay(idx){
   if(!currentGameId) return;
   const total = parseInt(replayRange.max||'0',10) || (currentData?.history?.length||0);
-  if(idx < total) replayMode = true; else replayMode = false;
+  idx=Math.max(0,Math.min(total,Number(idx)||0));
+  const wantsReplay=idx<total;
+  replayMode=wantsReplay;
+  const requestSeq=++replayRequestSeq;
   try{
     const r=await fetch(`/api/plugins/game-arena/replay?game_id=${encodeURIComponent(currentGameId)}&move_no=${idx}`);
     const j=await r.json();
-    if(!j.ok) return;
-    replayIndex=idx; replayRange.value=idx; replayInfo.textContent=`${idx} / ${j.total}`;
+    if(!j.ok || requestSeq!==replayRequestSeq) return;
+    replayIndex=idx; replayRange.value=idx; replayInfo.textContent=idx<j.total?`回放 · ${idx} / ${j.total}`:`实时 · ${idx} / ${j.total}`;
     if(j.board_svg && j.board_svg.includes('<svg')){
       boardSvg.innerHTML=j.board_svg;
     } else {
       boardSvg.innerHTML=`<div class="board-placeholder">回放无SVG</div>`;
     }
     asciiBoard.textContent=j.board_ascii||'';
+    // Update Go meta for replay
+    const isGoReplay = (j.game_type||currentData?.game_type||'gomoku')==='go';
+    const goMetaEl2 = document.getElementById('goMeta');
+    if(goMetaEl2) goMetaEl2.style.display = isGoReplay ? 'flex' : 'none';
+    if(isGoReplay){
+      const cap = j.captures || {black:0,white:0};
+      document.getElementById('captureBlack').textContent = 'B ' + (cap.black||0);
+      document.getElementById('captureWhite').textContent = 'W ' + (cap.white||0);
+      const koEl2 = document.getElementById('koVal');
+      if(j.ko) koEl2.textContent = '打劫: (' + j.ko[0] + ',' + j.ko[1] + ')';
+      else koEl2.textContent = '打劫: -';
+      const scoreEl2 = document.getElementById('scoreVal');
+      if(j.score) scoreEl2.textContent = `计分 ${j.score.result||''} B:${j.score.black_score} W:${j.score.white_score}`;
+      else scoreEl2.textContent = '';
+    }
     historyBody.querySelectorAll('tr').forEach(tr=> tr.classList.toggle('active', parseInt(tr.dataset.idx||'0',10)===idx));
     lastMoveVal.textContent=j.last_move? `回放: (${j.last_move[0]},${j.last_move[1]})` : '回放: 起始';
+    turnVal.textContent=colorLabels[j.turn]||j.turn||'-';
+    moveCountEl.textContent=String(j.move_no);
+    winnerVal.textContent=colorLabels[j.winner]||j.winner||'-';
+    statusPill.textContent=idx<j.total?'回放中':(statusLabels[j.status]||j.status||'-');
+    statusPill.className='pill '+(idx<j.total?'waiting':(j.status||'waiting'));
+    updateReplayControls(j.total);
     if(idx === j.total) replayMode = false;
-  }catch(e){ console.error('gotoReplay failed', e); }
+  }catch(e){
+    console.error('gotoReplay failed', e);
+    replayMode=false;
+    replayInfo.textContent='回放加载失败，请重试';
+  }
+}
+function updateReplayControls(total){
+  const max=Number(total)||0;
+  $('#firstBtn').disabled=replayIndex<=0;
+  $('#prevBtn').disabled=replayIndex<=0;
+  $('#nextBtn').disabled=replayIndex>=max;
+  $('#lastBtn').disabled=!replayMode&&replayIndex>=max;
+  $('#playBtn').disabled=max===0;
 }
 function startPolling(){
   stopPolling();
-  pollTimer=setInterval(()=>{ if(currentGameId) refreshState(); }, 2000);
+  pollTimer=setInterval(()=>{ if(currentGameId&&!document.hidden) refreshState(); }, 2000);
 }
 function stopPolling(){ if(pollTimer) clearInterval(pollTimer); pollTimer=null; }
 
 // trace: fetch UI events via /sessions/{id}/messages (same source as main chat)
 // render exactly as Agent does: llm_reasoning->思考, llm_response->回复, tool_call->工具, user->用户, final->最终
+function latestButtonFor(container){ return container===traceBlack?$('#latestBlack'):$('#latestWhite'); }
+function scrollTraceToLatest(container){
+  container.dataset.autoFollow='1';
+  latestButtonFor(container).classList.remove('visible');
+  requestAnimationFrame(()=>{ container.scrollTop=container.scrollHeight; });
+}
+function bindTraceFollow(container){
+  container.dataset.autoFollow='1';
+  container.addEventListener('scroll',()=>{
+    const atBottom=container.scrollHeight-container.scrollTop-container.clientHeight<48;
+    container.dataset.autoFollow=atBottom?'1':'0';
+    if(atBottom) latestButtonFor(container).classList.remove('visible');
+  },{passive:true});
+}
 function renderTrace(container, events, gameId){
   // slice events to current game's turn only
   const sliced = sliceByGame(events, gameId);
   if(!sliced || sliced.length===0){
     container.innerHTML='<div class="trace-empty">暂无轨迹</div>';
+    container.dataset.renderKey=`${gameId||''}:empty`;
     return;
   }
   events = sliced;
+  const renderKey=`${gameId||''}|${events.map(eventKey).join('|')}`;
+  if(container.dataset.renderKey===renderKey) return;
+  const shouldFollow=container.dataset.autoFollow!=='0';
+  const prevCount=parseInt(container.dataset.prevCount||'0',10);
+  const isNew=events.length>prevCount;
   // events are UI events already in write order (same as main chat history replay)
   let html = '';
   for(const ev of events){
@@ -383,29 +797,24 @@ function renderTrace(container, events, gameId){
     // other types (status/process_metrics/cache_stats) ignored - same as Agent's compact trace
   }
   container.innerHTML = html || '<div class="trace-empty">暂无轨迹</div>';
+  container.dataset.renderKey=renderKey;
+  container.dataset.prevCount=String(events.length);
   // bind collapse buttons
   container.querySelectorAll('.feed-row-collapse').forEach(function(btn){
     btn.addEventListener('click', function(e){
       e.preventDefault(); e.stopPropagation();
       var row = btn.closest('.feed-item');
-      if(row) row.classList.toggle('is-collapsed');
+      if(row){
+        const collapsed=row.classList.toggle('is-collapsed');
+        btn.setAttribute('aria-expanded',String(!collapsed));
+        btn.setAttribute('aria-label',(collapsed?'展开':'收起')+(btn.getAttribute('aria-label')||'内容').replace(/^(展开|收起)/,''));
+      }
     });
   });
-  // scroll behavior: first render always bottom; later only follow when user
-  // is already near bottom (like Agent's live auto-follow)
-  const firstRender = container.dataset.firstRender !== '1';
-  if(firstRender){
-    container.dataset.firstRender = '1';
-    requestAnimationFrame(function(){ container.scrollTop = container.scrollHeight; });
-  } else {
-    const nearBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 80;
-    const prevCount = parseInt(container.dataset.prevCount||'0',10);
-    const isNew = events.length !== prevCount;
-    container.dataset.prevCount = String(events.length);
-    if(isNew && nearBottom){
-      requestAnimationFrame(function(){ container.scrollTop = container.scrollHeight; });
-    }
-  }
+  const firstRender=container.dataset.firstRender!=='1';
+  container.dataset.firstRender='1';
+  if(firstRender||shouldFollow) scrollTraceToLatest(container);
+  else if(isNew) latestButtonFor(container).classList.add('visible');
 }
 // Slice events to the turn(s) belonging to gameId.
 // Match source of truth: tool_call.args.game_id === gameId (exact), plus
@@ -470,21 +879,40 @@ function feedRow(label, logType, text, collapsible){
     '工具':['tool-call','工具'],
     '最终':['llm-response feed--final','最终']
   }[label] || [logType,label];
+  const initiallyCollapsed=collapsible&&label==='思考';
   const collapseBtn = collapsible
-    ? '<button type="button" class="feed-row-collapse" aria-expanded="true" aria-label="收起' + meta[1] + '"><span class="feed-row-collapse-chevron"></span></button>'
+    ? '<button type="button" class="feed-row-collapse" aria-expanded="' + String(!initiallyCollapsed) + '" aria-label="' + (initiallyCollapsed?'展开':'收起') + meta[1] + '"><span class="feed-row-collapse-chevron"></span></button>'
     : '';
-  return '<div class="feed-item ' + meta[0] + '" data-log-type="' + logType + '">'
+  return '<div class="feed-item ' + meta[0] + (initiallyCollapsed?' is-collapsed':'') + '" data-log-type="' + logType + '">'
     + '<div class="feed-row"><span class="feed-label">' + meta[1] + '</span>'
     + '<div class="feed-chunk"><div class="feed-chunk-scroller">' + esc(text) + '</div></div>'
     + collapseBtn + '</div></div>';
 }
-// incremental cache: sessionId -> {events:[], lastIndex}
+function eventKey(event){
+  if(event && event.runtime_seq!=null) return `seq:${event.runtime_seq}`;
+  return JSON.stringify([event?.type,event?.created_at,event?.react_iter,event?.tool||event?.tool_name,event?.args,event?.content]);
+}
+function appendUniqueEvents(cache, events){
+  for(const event of events){
+    const key=eventKey(event);
+    if(cache.keys.has(key)) continue;
+    cache.keys.add(key);
+    cache.events.push(event);
+  }
+  if(cache.events.length>300){
+    cache.events=cache.events.slice(-300);
+    cache.keys=new Set(cache.events.map(eventKey));
+  }
+}
+// incremental cache: sessionId -> {events:[], keys:Set, lastIndex, inFlight}
 const traceCache = new Map();
 async function fetchTrace(sessionId, container, gameId){
   if(!sessionId){ container.innerHTML='<div class="trace-empty">未绑定会话</div>'; return; }
+  let cache = traceCache.get(sessionId);
+  if(!cache){ cache={events:[],keys:new Set(),lastIndex:-1,inFlight:false}; traceCache.set(sessionId,cache); }
+  if(cache.inFlight) return;
+  cache.inFlight=true;
   try{
-    let cache = traceCache.get(sessionId);
-    if(!cache){ cache={events:[], lastIndex:-1}; traceCache.set(sessionId, cache); }
     // fetch UI events from messages endpoint (same as main chat), incremental via after_index
     // after_index semantics: returns events AFTER index (first call: -1 = from start)
     let events = null;
@@ -505,7 +933,7 @@ async function fetchTrace(sessionId, container, gameId){
     }catch(e){ console.warn('messages fetch failed', e); }
     if(!events) events = [];
     if(events.length > 0){
-      cache.events.push(...events);
+      appendUniqueEvents(cache,events);
       cache.lastIndex = nextIndex;
     }
     // If reloaded fresh (after_index reset), refetch full
@@ -515,13 +943,15 @@ async function fetchTrace(sessionId, container, gameId){
         if(r2.ok){
           const j2 = await r2.json();
           const full = Array.isArray(j2) ? j2 : (j2 && Array.isArray(j2.events) ? j2.events : []);
-          if(full.length){ cache.events = full; cache.lastIndex = full.length; }
+          if(full.length){ appendUniqueEvents(cache,full); cache.lastIndex = full.length-1; }
         }
       }catch(_){}
     }
     renderTrace(container, cache.events, gameId || currentGameId);
   }catch(e){
     container.innerHTML='<div class="trace-empty">加载失败: ' + esc(e.message) + '</div>';
+  }finally{
+    cache.inFlight=false;
   }
 }
 function resetTraceCache(sessionId){
@@ -530,39 +960,133 @@ function resetTraceCache(sessionId){
 function startTracePolling(){
   stopTracePolling();
   const tick=()=>{
+    if(document.hidden) return;
     if(sessionAId) fetchTrace(sessionAId, traceBlack, currentGameId);
     if(sessionBId) fetchTrace(sessionBId, traceWhite, currentGameId);
   };
   tick();
-  traceTimer=setInterval(tick, 3000);
+  traceTimer=setInterval(tick, 1500);
 }
 function stopTracePolling(){ if(traceTimer) clearInterval(traceTimer); traceTimer=null; }
-
-startBtn.addEventListener('click', async ()=>{
-  const a=sessionA.value.trim(), b=sessionB.value.trim();
-  if(!a||!b){ startMsg.textContent='请选择两个不同会话'; return; }
-  if(a===b){ startMsg.textContent='两会话不能相同'; return; }
+function updateStartAvailability(){
+  const a=sessionA.value, b=sessionB.value;
+  const busy=busySessions([a,b]);
+  startBtn.disabled=matchStartInFlight||!(a&&b&&a!==b)||busy.length>0;
+  if(!matchStartInFlight&&busy.length){
+    setActivityNotice(startMsg,`${busy.map(sessionDisplayName).join('、')}正在运行，请选择空闲会话`);
+  }else if(!matchStartInFlight){
+    clearActivityNotice(startMsg);
+  }
+}
+function setTraceCollapsed(card,button,collapsed){
+  card.classList.toggle('is-collapsed',collapsed);
+  button.textContent=collapsed?'展开':'收起';
+  button.setAttribute('aria-expanded',String(!collapsed));
+  if(!collapsed){ const body=card.querySelector('.trace-body'); if(body) scrollTraceToLatest(body); }
+}
+function setMatchStartBusy(busy){
+  matchStartInFlight=busy;
+  updateStartAvailability();
+  updateRematchAvailability();
+}
+async function startMatch(a,b,size,requestedGameId,messageEl,forcedGameType,{waitForBusy=false}={}){
+  const gt = forcedGameType || currentGameType();
+  const komiVal = komiInput ? komiInput.value : '6.5';
+  a=String(a||'').trim(); b=String(b||'').trim();
+  if(!a||!b||a===b){ messageEl.textContent='请选择两个不同会话'; return; }
+  if(matchStartInFlight) return;
+  const sourceGameId=currentGameId;
   sessionAId=a; sessionBId=b;
-  startBtn.disabled=true; startMsg.textContent='创建中...';
+  setMatchStartBusy(true);
+  delete messageEl.dataset.activityNotice;
+  messageEl.textContent='正在确认双方会话状态...';
   try{
-    const grantResponse=await fetch('/api/extensions/session-run-grant',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({plugin_id:'game-arena',session_ids:[a,b]})});
-    const grant=await grantResponse.json();
-    if(!grantResponse.ok||!grant.ok){ startMsg.textContent='授权失败: '+(grant.error||'unknown'); return; }
-    const r=await fetch('/api/plugins/game-arena/start',{method:'POST',headers:{'Content-Type':'application/json','X-Plugin-Session-Run-Grant':grant.token},body:JSON.stringify({session_a:a, session_b:b, board_size: parseInt(boardSize.value,10), game_id: gameId.value.trim()})});
-    const j=await r.json();
-    if(!j.ok){ startMsg.textContent='失败: '+(j.error||'unknown'); return; }
-    startMsg.textContent=`已创建 ${j.game_id}，已向两会话注入 Prompt，等待开局...`;
-    currentGameId=j.game_id; gameTitle.textContent=j.game_id;
-    await fetchLobby(); await refreshState(); startPolling(); startTracePolling();
-  }catch(e){ startMsg.textContent='请求失败: '+e.message; }
-  finally{ startBtn.disabled=false; }
+    for(let attempt=0;attempt<=MAX_BUSY_RETRIES;attempt++){
+      if(waitForBusy&&currentGameId!==sourceGameId){ messageEl.textContent='已取消启动：当前对局已切换'; return; }
+      const activityLoaded=await refreshSessionActivity();
+      if(!activityLoaded){ messageEl.textContent='暂时无法读取会话状态，请稍后重试'; return; }
+      const busy=busySessions([a,b]);
+      if(busy.length){
+        if(!waitForBusy){
+          setActivityNotice(messageEl,`${busy.map(sessionDisplayName).join('、')}仍在运行，空闲后即可开始`);
+          return;
+        }
+        messageEl.textContent=`${busy.map(sessionDisplayName).join('、')}正在完成上一局，自动等待中（${attempt+1}/${MAX_BUSY_RETRIES}）`;
+        await new Promise(resolve=>setTimeout(resolve,1000));
+        continue;
+      }
+      messageEl.textContent=attempt?`会话已空闲，正在重试创建下一局（${attempt}/${MAX_BUSY_RETRIES}）...`:'正在创建新对局...';
+      const grantResponse=await fetch('/api/extensions/session-run-grant',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({plugin_id:'game-arena',session_ids:[a,b]})});
+      const grant=await grantResponse.json();
+      if(!grantResponse.ok||!grant.ok){ messageEl.textContent='授权失败: '+(grant.error||'unknown'); return; }
+      const payload={session_a:a,session_b:b,board_size:parseInt(size,10),game_id:String(requestedGameId||'').trim(),game_type:gt};
+      if(gt==='go') payload.komi=parseFloat(komiVal)||6.5;
+      const r=await fetch('/api/plugins/game-arena/start',{method:'POST',headers:{'Content-Type':'application/json','X-Plugin-Session-Run-Grant':grant.token},body:JSON.stringify(payload)});
+      const j=await r.json();
+      if(!j.ok){
+        if(j.error==='session_busy'&&waitForBusy&&attempt<MAX_BUSY_RETRIES){
+          rematchStatusKnown=false;
+          rematchIdleSamples=0;
+          messageEl.textContent=`宿主正在释放上一局，自动重试中（${attempt+1}/${MAX_BUSY_RETRIES}）`;
+          await new Promise(resolve=>setTimeout(resolve,1000));
+          continue;
+        }
+        messageEl.textContent=j.error==='session_busy'?'会话仍在运行，请稍后重试':'创建失败: '+(j.message||j.error||'unknown');
+        return;
+      }
+      messageEl.textContent=`新对局 ${j.game_id} 已发起，正在等待双方进入...`;
+      sessionSearchA.value=''; sessionSearchB.value='';
+      renderSessionSelect(sessionA,'',a,'选择会话 A');
+      renderSessionSelect(sessionB,'',b,'选择会话 B');
+      syncSessionAvailability();
+      currentData={id:j.game_id,game_type:j.game_type||gt,board_size:j.board_size,players:{black:a,white:b},player_names:{black:'',white:''},status:'waiting',turn:'black',history:[],winner:null,last_move:null};
+      resetRematchReadiness(j.game_id);
+      updatePlayerIdentity(currentData);
+      $('#postgameActions').hidden=messageEl!==$('#matchActionMsg');
+      $('#rematchBtn').hidden=true;
+      $('#swapRematchBtn').hidden=true;
+      gameId.value='';
+      await fetchLobby(); await selectGame(j.game_id);
+      document.querySelector('.arena').scrollIntoView({behavior:'smooth',block:'start'});
+      return;
+    }
+    messageEl.textContent='等待双方会话结束超时，请稍后重试';
+  }catch(e){ messageEl.textContent='请求失败: '+e.message; }
+  finally{ setMatchStartBusy(false); }
+}
+
+if(gameType) gameType.addEventListener('change', ()=>{ updateGameTypeUI(); });
+if(lobbyGameTypeFilter) lobbyGameTypeFilter.addEventListener('change', fetchLobby);
+startBtn.addEventListener('click', async ()=>{
+  await startMatch(sessionA.value,sessionB.value,boardSize.value,gameId.value,startMsg);
 });
 $('#refreshSessions').addEventListener('click', fetchSessions);
+sessionSearchA.addEventListener('input',()=>refreshSessionPicker('A'));
+sessionSearchB.addEventListener('input',()=>refreshSessionPicker('B'));
+sessionA.addEventListener('change',()=>{ syncSessionAvailability(); updateStartAvailability(); });
+sessionB.addEventListener('change',()=>{ syncSessionAvailability(); updateStartAvailability(); });
+$('#swapSessions').addEventListener('click',()=>{
+  const a=sessionA.value, b=sessionB.value;
+  sessionSearchA.value=''; sessionSearchB.value='';
+  renderSessionSelect(sessionA,'',b,'选择会话 A');
+  renderSessionSelect(sessionB,'',a,'选择会话 B');
+  syncSessionAvailability(); updateStartAvailability();
+});
 $('#refreshLobby').addEventListener('click', fetchLobby);
 lobbyFilter.addEventListener('change', fetchLobby);
 $('#viewBtn').addEventListener('click', async ()=>{ replayMode=false; await refreshState(); });
 $('#refreshBlack').addEventListener('click', ()=>{ if(sessionAId) fetchTrace(sessionAId, traceBlack, currentGameId); });
 $('#refreshWhite').addEventListener('click', ()=>{ if(sessionBId) fetchTrace(sessionBId, traceWhite, currentGameId); });
+$('#toggleBlack').addEventListener('click',()=>setTraceCollapsed($('#blackTraceCard'),$('#toggleBlack'),!$('#blackTraceCard').classList.contains('is-collapsed')));
+$('#toggleWhite').addEventListener('click',()=>setTraceCollapsed($('#whiteTraceCard'),$('#toggleWhite'),!$('#whiteTraceCard').classList.contains('is-collapsed')));
+$('#latestBlack').addEventListener('click',()=>scrollTraceToLatest(traceBlack));
+$('#latestWhite').addEventListener('click',()=>scrollTraceToLatest(traceWhite));
+$('#rematchBtn').addEventListener('click',async()=>{
+  await startMatch(currentData?.players?.black,currentData?.players?.white,currentData?.board_size||boardSize.value,'',$('#matchActionMsg'),currentData?.game_type||currentGameType(),{waitForBusy:true});
+});
+$('#swapRematchBtn').addEventListener('click',async()=>{
+  await startMatch(currentData?.players?.white,currentData?.players?.black,currentData?.board_size||boardSize.value,'',$('#matchActionMsg'),currentData?.game_type||currentGameType(),{waitForBusy:true});
+});
 $('#exportSvgBtn').addEventListener('click', ()=>{
   const svg=currentData?.board_svg || boardSvg.innerHTML;
   if(!svg || !svg.includes('<svg')) return;
@@ -576,23 +1100,48 @@ $('#copyAsciiBtn').addEventListener('click', async ()=>{
 $('#firstBtn').addEventListener('click', ()=> gotoReplay(0));
 $('#prevBtn').addEventListener('click', ()=> gotoReplay(Math.max(0, replayIndex-1)));
 $('#nextBtn').addEventListener('click', ()=> gotoReplay(Math.min(parseInt(replayRange.max,10), replayIndex+1)));
-$('#lastBtn').addEventListener('click', async ()=>{ replayMode=false; await refreshState(); });
-replayRange.addEventListener('input', ()=> gotoReplay(parseInt(replayRange.value,10)));
+$('#lastBtn').addEventListener('click', async ()=>{ replayRequestSeq++; replayMode=false; await refreshState(); });
+replayRange.addEventListener('input',()=>{ replayMode=Number(replayRange.value)<Number(replayRange.max); replayInfo.textContent=`预览 · ${replayRange.value} / ${replayRange.max}`; });
+replayRange.addEventListener('change', ()=> gotoReplay(parseInt(replayRange.value,10)));
 gameTitle.addEventListener('click', async ()=>{ if(replayMode){ replayMode=false; await refreshState(); } });
-$('#playBtn').addEventListener('click', ()=>{
-  if(playTimer){ clearInterval(playTimer); playTimer=null; $('#playBtn').textContent='播放'; return; }
+function stopReplayPlayback(){
+  if(playTimer) clearTimeout(playTimer);
+  playTimer=null;
+  $('#playBtn').textContent='播放';
+}
+$('#playBtn').addEventListener('click', async ()=>{
+  if(playTimer){ stopReplayPlayback(); return; }
   const max=parseInt(replayRange.max,10);
-  if(replayIndex >= max) gotoReplay(0);
+  if(replayIndex >= max) await gotoReplay(0);
   $('#playBtn').textContent='暂停';
-  playTimer=setInterval(()=>{
+  const advance=async()=>{
     const m=parseInt(replayRange.max,10);
-    let nxt=replayIndex+1;
-    if(nxt>m){ clearInterval(playTimer); playTimer=null; $('#playBtn').textContent='播放'; replayMode=false; refreshState(); return; }
-    gotoReplay(nxt);
-  }, 900);
+    if(replayIndex>=m){ stopReplayPlayback(); replayMode=false; await refreshState(); return; }
+    await gotoReplay(replayIndex+1);
+    if(playTimer) playTimer=setTimeout(advance,900);
+  };
+  playTimer=setTimeout(advance,250);
+});
+document.addEventListener('keydown',event=>{
+  if(event.target.matches('input,select,textarea,button')) return;
+  if(event.key==='ArrowLeft'){ event.preventDefault(); gotoReplay(Math.max(0,replayIndex-1)); }
+  if(event.key==='ArrowRight'){ event.preventDefault(); gotoReplay(Math.min(parseInt(replayRange.max,10),replayIndex+1)); }
+});
+document.addEventListener('visibilitychange',()=>{
+  if(!document.hidden&&currentGameId){
+    refreshState();
+    if(traceTimer) startTracePolling();
+    if(currentData?.status==='finished') startSessionActivityPolling();
+  }
 });
 
-fetchSessions(); fetchLobby();
+bindTraceFollow(traceBlack);
+bindTraceFollow(traceWhite);
+if(window.matchMedia('(max-width:1100px)').matches){
+  setTraceCollapsed($('#blackTraceCard'),$('#toggleBlack'),true);
+  setTraceCollapsed($('#whiteTraceCard'),$('#toggleWhite'),true);
+}
+updateGameTypeUI(); updateStartAvailability(); fetchSessions(); fetchLobby();
 // auto-select latest game if exists
 (async()=>{
   try{

@@ -363,6 +363,99 @@ def test_game_arena_deferred_wait_survives_worker_restart(tmp_path):
     assert token not in waits["waits"]
 
 
+def test_game_arena_replay_reports_state_at_selected_move(tmp_path):
+    from plugins import PluginRuntimeRegistry, load_plugin
+
+    plugin = load_plugin(PLUGIN_ROOT)
+    registry = PluginRuntimeRegistry(storage_root=tmp_path / "plugin-storage")
+    names = {
+        item["function"]["name"].rsplit("__", 1)[-1]: item["function"]["name"]
+        for item in registry.tool_definitions([plugin])
+    }
+    registry.invoke(
+        names["gomoku_create"],
+        {"game_id": "replay_state", "board_size": 9},
+        [plugin],
+        context={"session_id": "black-replay"},
+    )
+    registry.invoke(
+        names["gomoku_join"],
+        {"game_id": "replay_state"},
+        [plugin],
+        context={"session_id": "white-replay"},
+    )
+    registry.invoke(
+        names["gomoku_place"],
+        {"game_id": "replay_state", "x": 4, "y": 4},
+        [plugin],
+        context={"session_id": "black-replay"},
+    )
+
+    at_start = registry.handle_http(
+        "game-arena",
+        {
+            "method": "GET",
+            "path": "/replay",
+            "query": {"game_id": "replay_state", "move_no": "0"},
+            "headers": {},
+            "body_base64": "",
+        },
+        [plugin],
+    )["json"]
+    after_black = registry.handle_http(
+        "game-arena",
+        {
+            "method": "GET",
+            "path": "/replay",
+            "query": {"game_id": "replay_state", "move_no": "1"},
+            "headers": {},
+            "body_base64": "",
+        },
+        [plugin],
+    )["json"]
+    registry.close()
+
+    assert at_start["status"] == "playing"
+    assert at_start["turn"] == "black"
+    assert at_start["winner"] is None
+    assert after_black["status"] == "playing"
+    assert after_black["turn"] == "white"
+    assert after_black["winner"] is None
+
+
+def test_game_arena_frontend_interaction_contracts():
+    source = (PLUGIN_ROOT / "web" / "index.html").read_text(encoding="utf-8")
+
+    assert 'grid-template-areas:"board" "black" "white"' in source
+    assert 'id="sessionSearchA"' in source
+    assert 'id="swapSessions"' in source
+    assert 'aria-live="polite"' in source
+    assert "if(cache.inFlight) return" in source
+    assert "appendUniqueEvents(cache,events)" in source
+    assert "回放中" in source
+    assert "updateReplayControls" in source
+    assert "tr.classList.toggle('selected',selected)" in source
+    assert 'id="blackPlayerName"' in source
+    assert 'id="whitePlayerName"' in source
+    assert 'id="latestBlack"' in source
+    assert 'id="latestWhite"' in source
+    assert "scrollTraceToLatest" in source
+    assert "container.dataset.autoFollow" in source
+    assert "grid-auto-rows:max-content" in source
+    assert 'id="rematchBtn"' in source
+    assert 'id="swapRematchBtn"' in source
+    assert "async function startMatch" in source
+    assert "overflow-wrap:anywhere" in source
+    assert "session.run_active||session.stream_active" in source
+    assert "option.dataset.busy=String(busy)" in source
+    assert "REMATCH_IDLE_SAMPLES_REQUIRED=2" in source
+    assert "MAX_BUSY_RETRIES=20" in source
+    assert "j.error==='session_busy'" in source
+    assert "{waitForBusy:true}" in source
+    assert "missingIds.map(async id" in source
+    assert "双方会话已空闲，可以开始下一局" in source
+
+
 def test_core_no_longer_generates_game_arena_python_sources():
     source = "\n".join(
         (APP_DIR / name).read_text(encoding="utf-8")
