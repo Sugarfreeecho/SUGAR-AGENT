@@ -370,9 +370,57 @@ def suggest_rule_pattern(
 
 
 class PolicyEngine:
-    def __init__(self, workspace: Path, policy_version: int = 1):
+    def __init__(self, workspace: Path, policy_version: int = 1, authorized_dirs: list[Path] | None = None):
         self.workspace = workspace.resolve()
         self.policy_version = max(1, int(policy_version))
+        if authorized_dirs:
+            self.authorized_dirs = [Path(d).resolve() for d in authorized_dirs]
+        else:
+            self.authorized_dirs = [self.workspace]
+
+    def _is_authorized(self, path: Path) -> bool:
+        try:
+            cp = path.resolve()
+        except Exception:
+            cp = path
+        for auth in self.authorized_dirs:
+            if is_within(cp, auth):
+                return True
+        return False
+
+    def _required_dirs_for_paths(self, paths: list[Path]) -> list[str]:
+        req: list[str] = []
+        seen: set[str] = set()
+        for raw in paths or []:
+            try:
+                cp = Path(raw).resolve()
+            except Exception:
+                cp = Path(str(raw))
+            if self._is_authorized(cp):
+                continue
+            try:
+                if cp.is_file():
+                    cand = cp.parent.resolve()
+                elif cp.is_dir():
+                    cand = cp.resolve()
+                else:
+                    if cp.suffix:
+                        cand = cp.parent.resolve()
+                    else:
+                        cand = cp.resolve()
+            except Exception:
+                cand = cp.parent if cp.suffix else cp
+            try:
+                cand = cand.resolve()
+            except Exception:
+                pass
+            s = str(cand)
+            low = s.lower() if __import__('os').name == 'nt' else s
+            if low in seen:
+                continue
+            seen.add(low)
+            req.append(s)
+        return req
 
     def rule_decision(
         self,
@@ -546,33 +594,32 @@ class PolicyEngine:
                 "Read access is allowed by the application policy.",
             )
         if request.action == "fs.write":
-            if inside:
+            authorized = all(self._is_authorized(p) for p in resource_paths)
+            if authorized:
                 return result(DecisionOutcome.ALLOW, "app_restricted.write", "Workspace write is allowed.")
-            return result(DecisionOutcome.ASK, "external.write", "Writing outside the workspace requires approval.")
+            required = self._required_dirs_for_paths(resource_paths)
+            return result(DecisionOutcome.ASK, "external.write", "Writing outside the authorized directories requires approval.", required_dirs=required, outside_authorized=True)
         if request.action == "fs.delete":
             soft_delete = bool(request.metadata.get("soft_delete"))
-            if inside:
+            authorized = all(self._is_authorized(p) for p in resource_paths)
+            if authorized:
                 return result(
                     DecisionOutcome.ASK,
                     "delete.workspace",
-                    "Deleting content inside the workspace requires ordinary approval.",
+                    "Deleting content inside the authorized directories requires ordinary approval.",
                 )
             if soft_delete:
-                # delete_file is a recoverable soft delete (moves to
-                # WORK_DIR/.trash/) and the tool itself refuses sensitive
-                # resources, sessions/skills/.trash, and oversized targets.
-                # Preserve the existing outside-workspace soft-delete policy;
-                # permanent deletion outside continues to ask separately.
                 return result(
                     DecisionOutcome.ALLOW,
                     "app_restricted.delete",
                     "Recoverable soft delete is allowed by the application policy.",
                 )
+            required = self._required_dirs_for_paths(resource_paths)
             return result(
                 DecisionOutcome.ASK,
                 "delete.review",
-                "Permanent deletion outside the workspace requires approval.",
-                outside_workspace=True,
+                "Permanent deletion outside the authorized directories requires approval.",
+                required_dirs=required, outside_authorized=True, outside_workspace=True,
             )
         if request.action == "process.exec":
             # Forced-review risks must win over ordinary approval categories.
@@ -604,7 +651,7 @@ class PolicyEngine:
                 return result(
                     DecisionOutcome.ASK,
                     "process.workspace_delete",
-                    "Deleting content inside the workspace requires ordinary approval.",
+                    "Deleting content inside the authorized directories requires ordinary approval.",
                 )
             if _DYNAMIC_SHELL.search(request.resource):
                 return result(DecisionOutcome.ASK, "process.dynamic", "Dynamically constructed shell code requires review.")
@@ -614,8 +661,11 @@ class PolicyEngine:
                     "process.credential_read",
                     "Reading credential-bearing files via shell requires approval.",
                 )
+            required_dirs = request.metadata.get("required_dirs")
+            if isinstance(required_dirs, list) and required_dirs:
+                return result(DecisionOutcome.ASK, "process.external", "Command requests access outside the authorized directories.", required_dirs=required_dirs, outside_authorized=True)
             if request.metadata.get("external_workspace"):
-                return result(DecisionOutcome.ASK, "process.external", "Command requests access outside the workspace.")
+                return result(DecisionOutcome.ASK, "process.external", "Command requests access outside the authorized directories.", required_dirs=request.metadata.get("required_dirs") or [], outside_authorized=True)
             if egress_intent == "read":
                 trusted_targets = bool(destinations) and all(
                     is_trusted_host(str(item.get("host") or ""))
