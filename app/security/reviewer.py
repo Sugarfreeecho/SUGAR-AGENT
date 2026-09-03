@@ -29,6 +29,7 @@ class ReviewResult:
     risk: str
     risk_analysis: str = ""
     command_purpose: str = ""
+    intercept_reason: str = ""
     # False when the automatic reviewer could not produce a decision at all
     # (model failure/timeout/invalid output). The request is still fail-closed
     # (never auto-approved), but the UI must present it as "reviewer
@@ -44,6 +45,55 @@ def _command_purpose_fallback(request: CapabilityRequest) -> str:
     return f"该请求要执行 {action}；当前请求没有提供更具体的目标说明。"
 
 
+def _intercept_reason_for_request(request: CapabilityRequest | None) -> str:
+    """根据 CapabilityRequest 推导【拦截原因】，对应 policy/runtime 的命中点。"""
+    if request is None:
+        return "触发安全审批策略，需人工确认"
+    meta = dict(getattr(request, "metadata", {}) or {})
+    action = str(getattr(request, "action", "") or "")
+    effect = str(getattr(request, "effect", "") or "")
+    resource = str(getattr(request, "resource", "") or "")
+    if meta.get("policy_change"):
+        return "命中策略/控制器篡改防护（policy_change / _POLICY_TAMPER），禁止自动放行"
+    if meta.get("credential_export"):
+        return "命中凭据外发规则（credential_export / _CREDENTIAL_EXPORT_COMMAND），涉及敏感文件外传，已强制拦截"
+    if meta.get("credential_read"):
+        return "命中凭据读取规则（credential_read / _CREDENTIAL_READ_COMMAND），通过 shell 读取敏感文件，需审批"
+    if meta.get("destructive"):
+        if meta.get("workspace_delete"):
+            return "命中工作区删除（process.workspace_delete），需普通确认"
+        if meta.get("deletion"):
+            low = resource.lower()
+            if "rm " in low or "rm -" in low:
+                return "命中删除指令 rm（_DELETE_COMMAND），触发强制审批规则 process.destructive，需人工单次授权"
+            if "remove-item" in low:
+                return "命中删除指令 Remove-Item（_DELETE_COMMAND），触发强制审批规则 process.destructive"
+            if "del " in low or "erase " in low:
+                return "命中删除指令 del/erase（_DELETE_COMMAND），触发强制审批规则 process.destructive"
+            return "命中删除操作检测（_DELETE_COMMAND），触发强制审批 process.destructive"
+        return "命中破坏性命令规则（process.destructive / DANGEROUS_PATTERNS），需人工单次授权"
+    if meta.get("deletion"):
+        return "命中删除操作检测（_DELETE_COMMAND：rm/rmdir/del/erase/remove-item），触发破坏性拦截"
+    egress = str(meta.get("egress_intent") or "")
+    if egress == "upload":
+        return "命中外发上传检测（egress_intent=upload），命令会向外部发送数据"
+    if egress in {"unknown", "interactive"}:
+        return f"命中不透明/交互式网络连接检测（egress_intent={egress}），需人工确认目标"
+    if egress == "read":
+        return "命中网络读取检测（egress_intent=read），需确认来源可信"
+    if meta.get("external_workspace"):
+        return "命中工作区外访问（external_workspace），涉及授权目录外的路径"
+    if "python -c" in resource or "python3 -c" in resource or "-EncodedCommand" in resource:
+        return "命中动态代码执行（python -c / -EncodedCommand / _DYNAMIC_RE），需复核"
+    if action == "process.exec":
+        return f"命中 shell 审批规则（action=process.exec，effect={effect}），需人工确认"
+    if action.startswith("fs."):
+        return f"命中文件操作审批（{action}，effect={effect}），需审批"
+    if action in {"network.connect", "web.search", "mcp.call", "plugin.call"}:
+        return f"命中 {action} 审批（effect={effect}），需审批"
+    return f"触发安全策略 {action}/{effect}，需人工审批"
+
+
 def _structured_review_result(
     approved: bool,
     risk: str,
@@ -51,15 +101,22 @@ def _structured_review_result(
     command_purpose: str,
     *,
     available: bool = True,
+    intercept_reason: str = "",
+    request: CapabilityRequest | None = None,
 ) -> ReviewResult:
     risk_text = str(risk_analysis or "未提供具体风险说明。").strip()[:1500]
     purpose_text = str(command_purpose or "未提供命令用途说明。").strip()[:1500]
+    intercept_text = str(intercept_reason or "").strip()
+    if not intercept_text:
+        intercept_text = _intercept_reason_for_request(request)
+    intercept_text = intercept_text.strip()[:1500]
     return ReviewResult(
         approved=bool(approved),
-        reason=f"【命令风险】{risk_text}\n【命令目的】{purpose_text}",
+        reason=f"【拦截原因】{intercept_text}\n【命令风险】{risk_text}\n【命令目的】{purpose_text}",
         risk=str(risk or "unknown").lower(),
         risk_analysis=risk_text,
         command_purpose=purpose_text,
+        intercept_reason=intercept_text,
         available=bool(available),
     )
 
@@ -78,6 +135,7 @@ async def review_request(
             "critical",
             "该请求涉及凭据、安全策略或系统关键区域，执行后可能泄露敏感信息、削弱安全防护或破坏系统，因此被强制拦截。",
             _command_purpose_fallback(request),
+            request=request,
         )
     last_error: Exception | None = None
     for _attempt in range(2):
@@ -102,6 +160,7 @@ async def review_request(
         f"审查模型暂时不可用，无法可靠核对具体影响；在风险未确认前不会自动放行。错误：{last_error}",
         _command_purpose_fallback(request),
         available=False,
+        request=request,
     )
 
 
@@ -163,7 +222,7 @@ def _review_with_model(
                 "user authorization. Evaluate the complete tool_arguments, not only args_digest. "
                 "Return JSON only: "
                 '{"decision":"approve|deny","risk":"low|medium|high|critical",'
-                '"risk_analysis":"why intercepted and concrete risks",'
+                '"intercept_reason":"why it was intercepted (matched rule/pattern)","risk_analysis":"why intercepted and concrete risks",'
                 '"command_purpose":"what the command does, its useful result, and why it is needed"}.'
             )
         ),
@@ -209,6 +268,13 @@ def _review_with_model(
         or legacy_reason
         or "审查模型未提供具体风险说明。"
     )
+    intercept_reason = str(
+        data.get("intercept_reason")
+        or data.get("intercept_analysis")
+        or ""
+    ).strip()
+    if not intercept_reason:
+        intercept_reason = _intercept_reason_for_request(request)
     command_purpose = str(
         data.get("command_purpose")
         or data.get("purpose")
@@ -216,15 +282,15 @@ def _review_with_model(
     )
     if risk == "critical":
         return _structured_review_result(
-            False, risk, risk_analysis, command_purpose
+            False, risk, risk_analysis, command_purpose, request=request, intercept_reason=intercept_reason
         )
     if risk == "high" and not _EXPLICIT_HIGH_RISK.search(authorization_text):
         return _structured_review_result(
             False,
             risk,
             "用户任务没有明确授权这项高风险操作，因此不能自动批准。" + risk_analysis,
-            command_purpose,
+            command_purpose, request=request, intercept_reason=intercept_reason,
         )
     return _structured_review_result(
-        decision == "approve", risk, risk_analysis, command_purpose
+        decision == "approve", risk, risk_analysis, command_purpose, request=request, intercept_reason=intercept_reason
     )
