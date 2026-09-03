@@ -1909,7 +1909,7 @@ def _accumulate_tool_call_delta(
                 )
             args = getattr(fn, "arguments", None)
             if args:
-                tool_acc[idx]["arguments"] += str(args)
+                tool_acc[idx]["arguments"] += (json.dumps(args, ensure_ascii=False) if isinstance(args, dict) else str(args))
 
 
 def _tool_call_delta_payloads(delta_tool_calls: Any) -> List[Dict[str, str]]:
@@ -1931,7 +1931,7 @@ def _tool_call_delta_payloads(delta_tool_calls: Any) -> List[Dict[str, str]]:
                 payload["name_delta"] = str(name)
             args = getattr(fn, "arguments", None)
             if args:
-                payload["arguments_delta"] = str(args)
+                payload["arguments_delta"] = (json.dumps(args, ensure_ascii=False) if isinstance(args, dict) else str(args))
         if len(payload) > 1:
             out.append(payload)
     return out

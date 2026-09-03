@@ -231,6 +231,9 @@ def merge_streamed_tool_name(current: Any, incoming: Any) -> str:
 
 
 def _merge_streamed_piece(current: Any, incoming: Any) -> tuple[str, str]:
+    if isinstance(incoming, dict):
+        import json as _js2
+        incoming = _js2.dumps(incoming, ensure_ascii=False)
     """Return (complete value, new suffix) for delta-or-snapshot stream data."""
     previous = str(current or "")
     value = str(incoming or "")
