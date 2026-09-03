@@ -1952,6 +1952,13 @@ function waitForChatScrollAfterHistoryLoad(sessionId, mode) {
             var lastTop = chatContainer.scrollTop;
             var retargetCount = 0;
             var userEvents = ['wheel', 'touchstart', 'pointerdown'];
+            function isRunningNow() {
+                try {
+                    if (typeof isSessionRunning === 'function' && isSessionRunning(sessionId)) return true;
+                    if (typeof isServerStreamActive === 'function' && isServerStreamActive(sessionId)) return true;
+                } catch (e) {}
+                return false;
+            }
             function cleanup(reachedBottom) {
                 if (settled) return;
                 settled = true;
@@ -1973,11 +1980,16 @@ function waitForChatScrollAfterHistoryLoad(sessionId, mode) {
                     cleanup(false);
                     return;
                 }
+                if (isRunningNow()) {
+                    if (chatContainer) setScrollTopImmediate(chatContainer, chatContainer.scrollHeight);
+                    cleanup(true);
+                    return;
+                }
                 if (isAtBottom()) {
                     cleanup(true);
                     return;
                 }
-                if (retargetCount < 3) {
+                if (retargetCount < 1) {
                     retargetCount += 1;
                     lastMovementAt = performance.now();
                     chatContainer.scrollTo({ top: chatContainer.scrollHeight, behavior: 'smooth' });
@@ -2001,12 +2013,17 @@ function waitForChatScrollAfterHistoryLoad(sessionId, mode) {
                     cleanup(true);
                     return;
                 }
-                if (!isAtBottom() && now - lastMovementAt >= 160 && retargetCount < 3) {
+                if (isRunningNow()) {
+                    if (chatContainer) setScrollTopImmediate(chatContainer, chatContainer.scrollHeight);
+                    cleanup(true);
+                    return;
+                }
+                if (!isAtBottom() && now - lastMovementAt >= 180 && retargetCount < 1) {
                     retargetCount += 1;
                     lastMovementAt = now;
                     chatContainer.scrollTo({ top: chatContainer.scrollHeight, behavior: 'smooth' });
                 }
-                if (now - startedAt >= 5000) {
+                if (now - startedAt >= 3200) {
                     cleanup(isAtBottom());
                     return;
                 }

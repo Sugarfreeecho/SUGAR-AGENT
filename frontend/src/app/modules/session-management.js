@@ -1253,6 +1253,17 @@ async function loadSessionMessages(sessionId, scrollBehavior, opts) {
                         if (snapshot.context_tokens && snapshot.context_tokens.estimated != null) {
                             recordContextTokens(sessionId, snapshot.context_tokens.estimated, snapshot.context_tokens.threshold);
                         }
+                        if (typeof snapshot.stream_active === 'boolean' || typeof snapshot.run_active === 'boolean') {
+                            const __snapActive = !!(snapshot.stream_active || snapshot.run_active);
+                            if (typeof setSessionServerStreamActive === 'function') setSessionServerStreamActive(sessionId, __snapActive);
+                            if (typeof applySessionPatch === 'function') {
+                                try { applySessionPatch({ session_id: sessionId, stream_active: __snapActive }); } catch (e) {}
+                            }
+                            try {
+                                const __sess = sessionStore.get(sessionId);
+                                if (__sess) { __sess.stream_active = __snapActive; __sess.run_active = __snapActive; }
+                            } catch (e) {}
+                        }
                     }
                     }
                     break;
@@ -1510,6 +1521,24 @@ async function switchSession(sessionId, opts) {
         detail: { sessionId: sessionId },
     }));
     setSendButtonState();
+    if (!isSessionRunning(sessionId) && !(typeof isServerStreamActive === 'function' && isServerStreamActive(sessionId))) {
+        let __shouldPreflight = true;
+        try {
+            const __sess = sessionStore.get(sessionId);
+            const __last = __sess ? Date.parse(__sess.last_activity_at || __sess.updated_at || __sess.created_at || "") : 0;
+            if (Number.isFinite(__last) && Date.now() - __last > 12 * 60 * 1000) __shouldPreflight = false;
+        } catch (e) {}
+        if (__shouldPreflight) {
+            try {
+                await Promise.race([
+                    (async () => {
+                        if (typeof refreshSingleSessionRow === 'function') await refreshSingleSessionRow(sessionId);
+                    })(),
+                    new Promise(resolve => setTimeout(resolve, 450))
+                ]);
+            } catch (e) { /* preflight best-effort */ }
+        }
+    }
     var restoredFromCache = false;
     var restoredRunningStream = false;
     var sessionHasActiveServerRun = !!(

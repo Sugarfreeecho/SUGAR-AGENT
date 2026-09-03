@@ -5215,6 +5215,10 @@ async def get_session_history_snapshot(
                     timings["user_turns"],
                     timings["context_tokens"],
                 )
+            try:
+                run_state = _session_run_state_fields_light(session_id)
+            except Exception:
+                run_state = {"stream_active": False, "run_active": False, "run_started_at": None}
             return JSONResponse(content={
                 "ok": True,
                 "source": "runtime_v2_snapshot",
@@ -5227,6 +5231,9 @@ async def get_session_history_snapshot(
                 "context_tokens": context_tokens,
                 "elapsed_ms": elapsed_ms,
                 "timing": timings,
+                "stream_active": bool(run_state.get("stream_active")),
+                "run_active": bool(run_state.get("run_active")),
+                "run_started_at": run_state.get("run_started_at"),
             })
         except Exception as exc:
             logger.warning("Runtime V2 history snapshot failed for %s: %s", session_id, exc)
