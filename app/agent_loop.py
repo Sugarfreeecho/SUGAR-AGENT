@@ -3336,10 +3336,12 @@ def _security_approval_spec(
                 rule_info = suggested
         except Exception:
             rule_info = {}
+    required_dirs = list(decision.constraints.get("required_dirs") or metadata.get("required_dirs") or [])
     external_grantable = (
         decision.rule_id in {"external.write", "delete.review", "process.external"}
         and not danger
         and not force_ask
+        and bool(required_dirs)
     )
     if egress_intent == "upload":
         approval_title = "数据发送需要确认"
@@ -3358,14 +3360,17 @@ def _security_approval_spec(
     except Exception:
         enforcement_level = "degraded"
         enforcement_reason = "Native egress helper health is unavailable."
+    def _format_dirs(dirs: list[str]) -> str:
+        return ", ".join(dirs[:3]) + (f" 等{len(dirs)}个目录" if len(dirs) > 3 else "")
+    dir_hint = _format_dirs(required_dirs) if external_grantable and required_dirs else ""
     return {
         "title": (
-            "是否授权工作区沙箱外处理权限？"
+            f"是否授权目录 {dir_hint}？"
             if external_grantable
             else approval_title
         ),
         "subtitle": (
-            "该操作将处理工作区沙箱外的文件/路径。授权后，写、删除和 Shell 在工作区外的操作将自动放行，不再逐次询问。"
+            f"该操作需访问未授权目录 {dir_hint}。授权后，该目录及子目录的读写、删除和 Shell 操作将在本会话中自动放行（分支/子Agent可继承），同级或上层目录仍需单独授权。"
             if external_grantable
             else decision.reason
         ),
@@ -3394,6 +3399,8 @@ def _security_approval_spec(
         "enforcement_level": enforcement_level,
         "enforcement_reason": enforcement_reason,
         "grant_scope": "once" if one_time_only else ("task" if egress_intent == "upload" else "durable"),
+        "required_dirs": required_dirs,
+        "required_dirs_hint": dir_hint if external_grantable else "",
     }
 
 
@@ -4998,6 +5005,8 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                                         "enforcement_level": str(spec.get("enforcement_level") or ""),
                                         "enforcement_reason": str(spec.get("enforcement_reason") or ""),
                                         "grant_scope": str(spec.get("grant_scope") or ""),
+                                        "required_dirs": list(spec.get("required_dirs") or []),
+                                        "required_dirs_hint": str(spec.get("required_dirs_hint") or ""),
                                     },
                                 )
 
@@ -5047,6 +5056,8 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                                         "enforcement_level": str(spec.get("enforcement_level") or ""),
                                         "enforcement_reason": str(spec.get("enforcement_reason") or ""),
                                         "grant_scope": str(spec.get("grant_scope") or ""),
+                                        "required_dirs": list(spec.get("required_dirs") or []),
+                                        "required_dirs_hint": str(spec.get("required_dirs_hint") or ""),
                                         },
                                         return_decision=True,
                                         return_resolution=True,
@@ -5081,23 +5092,42 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                                 "allow_external_workspace",
                                 "allow_external_workspace_once",
                             }:
-                                # Workspace axis granted; the command axis still
-                                # needs its own approval (two independent axes,
-                                # per the user's separation requirement).
+                                try:
+                                    from session_authorized_dirs import add_authorized_dir
+                                    req_dirs = list(spec.get("required_dirs") or [])
+                                    if not req_dirs:
+                                        req_dirs = list(sec_decision.constraints.get("required_dirs") or [])
+                                    for rd in req_dirs:
+                                        add_authorized_dir(state["session_id"], rd)
+                                except Exception as e:
+                                    import logging
+                                    logging.getLogger(__name__).warning("add_authorized_dir failed: %s", e)
                                 spec = dict(spec)
                                 spec["external_workspace_grantable"] = False
                                 durable_workspace_grant = (
                                     approval_decision == "allow_external_workspace"
                                 )
+                                hint = ", ".join(req_dirs[:2]) if req_dirs else "目录"
                                 spec["title"] = (
-                                    "确认执行工具（已始终允许工作区外处理）"
+                                    f"确认执行工具（已授权目录 {hint}）"
                                     if durable_workspace_grant
-                                    else "确认执行工具（已允许本次工作区外处理）"
+                                    else f"确认执行工具（已允许本次目录 {hint}）"
                                 )
                                 spec["subtitle"] = (
-                                    "工作区沙箱外处理已单独允许；"
-                                    "请继续确认本次工具操作本身。"
+                                    "目录授权已单独允许；"
+                                    "请继续确认本次工具操作本身。（同级或上层目录仍需单独授权）"
                                 )
+                                sec_request2, sec_decision2, sec_context2 = authorize_tool(
+                                    session_id=state["session_id"],
+                                    tool_name=tool_name,
+                                    arguments=tool_args if isinstance(tool_args, dict) else {},
+                                    workspace=security_workspace,
+                                )
+                                if sec_decision2.outcome == DecisionOutcome.ALLOW:
+                                    approved = True
+                                    sec_request, sec_decision, sec_context = sec_request2, sec_decision2, sec_context2
+                                    break
+                                sec_request, sec_decision, sec_context = sec_request2, sec_decision2, sec_context2
                                 continue
                             approved = (
                                 bool(approval_resolution.get("approved"))

@@ -7,6 +7,7 @@ import json
 import os
 import re
 from pathlib import Path
+import pathlib
 from typing import Any, Iterator
 from urllib.parse import urlsplit
 
@@ -260,20 +261,68 @@ def classify_tool(tool_name: str, arguments: dict[str, Any], workspace: Path) ->
                 _agent_self_protection_reason,
                 _has_non_delete_dangerous_pattern,
                 _is_dangerous,
-                _paths_inside_workspace,
-                _readonly_git_scope_ok,
                 _text_mentions_sensitive_tool_resource,
             )
-
-            external = not _paths_inside_workspace(command, workspace)
-            # Read-only git invocations (log/status/rev-parse/...) may point at
-            # a repository outside the workspace via -C/--git-dir/--work-tree.
-            # That is a pure read and should not count as external access.
-            if external and _readonly_git_scope_ok(command, workspace):
-                external = False
+            try:
+                from session_authorized_dirs import get_authorized_dirs_for_session
+            except Exception:
+                get_authorized_dirs_for_session = None
+            _session_id_for_auth = None
+            try:
+                from security.runtime import active_security_context
+                _active = active_security_context()
+                if _active and isinstance(_active, dict):
+                    _session_id_for_auth = str(_active.get("session_id") or "").strip()
+            except Exception:
+                pass
+            if _session_id_for_auth and get_authorized_dirs_for_session:
+                try:
+                    _auth_dirs = get_authorized_dirs_for_session(_session_id_for_auth, workspace)
+                except Exception:
+                    _auth_dirs = [workspace.resolve()]
+            else:
+                _auth_dirs = [workspace.resolve()]
+            def _is_authorized_path(p: Path) -> bool:
+                for ad in _auth_dirs:
+                    if is_within(p.resolve() if p.exists() else p, ad):
+                        return True
+                return False
+            try:
+                from agent_tools import _outside_workspace_tokens, _readonly_git_scope_ok, _resolve_shell_token_for_workspace_restrict
+                raw_outside = _outside_workspace_tokens(command, workspace)
+                outside_tokens = []
+                for raw in raw_outside:
+                    try:
+                        pp = _resolve_shell_token_for_workspace_restrict(raw, workspace)
+                    except Exception:
+                        outside_tokens.append(raw)
+                        continue
+                    if not _is_authorized_path(pp):
+                        outside_tokens.append(raw)
+                workdir_val = str(args.get("workdir") or args.get("working_dir") or "").strip()
+                if workdir_val:
+                    try:
+                        wd_path = canonical_path(workdir_val, workspace)
+                        if not _is_authorized_path(wd_path):
+                            outside_tokens.append(workdir_val)
+                    except Exception:
+                        outside_tokens.append(workdir_val)
+                external = bool(outside_tokens)
+                if external and _readonly_git_scope_ok(command, workspace):
+                    external = False
+            except Exception:
+                from agent_tools import _paths_inside_workspace, _readonly_git_scope_ok
+                external = not _paths_inside_workspace(command, workspace)
+                if external and _readonly_git_scope_ok(command, workspace):
+                    external = False
             workdir = str(args.get("workdir") or args.get("working_dir") or "").strip()
-            if workdir:
-                external = external or not is_within(canonical_path(workdir, workspace), workspace)
+            if workdir and not external:
+                try:
+                    wd_path = canonical_path(workdir, workspace)
+                    if not _is_authorized_path(wd_path):
+                        external = True
+                except Exception:
+                    external = True
             deletion = bool(_DELETE_COMMAND.search(command))
             destructive = bool(_is_dangerous(command) or deletion)
             workspace_delete = bool(
@@ -377,11 +426,61 @@ def classify_tool(tool_name: str, arguments: dict[str, Any], workspace: Path) ->
         resource = paths[0]
         metadata: dict[str, Any] = {"tool": name, "paths": paths}
         if name == "delete_file":
-            # delete_file is a recoverable soft delete (moves the target into
-            # WORK_DIR/.trash/). Mark it so the policy can auto-allow it even
-            # outside the workspace; apply_patch deletions stay permanent and
-            # keep asking outside.
             metadata["soft_delete"] = True
+        try:
+            from session_authorized_dirs import get_authorized_dirs_for_session
+            _sess = None
+            try:
+                from security.runtime import active_security_context as _asc
+                _act = _asc()
+                if _act:
+                    _sess = str(_act.get("session_id") or "").strip()
+            except Exception:
+                _sess = None
+            if _sess:
+                _auth_dirs = get_authorized_dirs_for_session(_sess, workspace)
+            else:
+                _auth_dirs = [workspace.resolve()]
+            _required = []
+            _seen_req = set()
+            for pp_str in paths:
+                try:
+                    pp = pathlib.Path(pp_str).resolve()
+                except Exception:
+                    pp = pathlib.Path(pp_str)
+                authorized = False
+                for ad in _auth_dirs:
+                    if is_within(pp, ad):
+                        authorized = True
+                        break
+                if authorized:
+                    continue
+                try:
+                    if pp.is_file():
+                        cand = pp.parent.resolve()
+                    elif pp.is_dir():
+                        cand = pp.resolve()
+                    else:
+                        if pp.suffix:
+                            cand = pp.parent.resolve()
+                        else:
+                            cand = pp.resolve()
+                except Exception:
+                    cand = pp.parent if pp.suffix else pp
+                try:
+                    cand = cand.resolve()
+                except Exception:
+                    pass
+                s = str(cand)
+                low = s.lower() if __import__("os").name == "nt" else s
+                if low in _seen_req:
+                    continue
+                _seen_req.add(low)
+                _required.append(s)
+            if _required:
+                metadata["required_dirs"] = _required
+        except Exception:
+            pass
         return CapabilityRequest.create(
             action=action, resource=resource, effect=effect, arguments=args,
             metadata=metadata,
@@ -533,7 +632,96 @@ def authorize_request(
 ) -> tuple[SecurityDecision, PermissionContext]:
     context = permission_context_for_mode(session_permission_mode(session_id))
     store = security_store()
-    engine = PolicyEngine(workspace, store.policy_version())
+    try:
+        from session_authorized_dirs import get_authorized_dirs_for_session
+        authorized_dirs = get_authorized_dirs_for_session(session_id, workspace)
+    except Exception:
+        authorized_dirs = [workspace.resolve()]
+    engine = PolicyEngine(workspace, store.policy_version(), authorized_dirs=authorized_dirs)
+    if request.action.startswith("fs."):
+        try:
+            paths = list(request.metadata.get("paths") or [request.resource])
+            req_fs = []
+            seen_fs = set()
+            for pp_str in paths:
+                try:
+                    pp = pathlib.Path(pp_str).resolve()
+                except Exception:
+                    pp = pathlib.Path(str(pp_str))
+                if any(is_within(pp, ad) for ad in authorized_dirs):
+                    continue
+                try:
+                    if pp.is_file():
+                        cand = pp.parent.resolve()
+                    elif pp.is_dir():
+                        cand = pp.resolve()
+                    else:
+                        cand = pp.parent.resolve() if pp.suffix else pp.resolve()
+                except Exception:
+                    cand = pp.parent if pp.suffix else pp
+                try:
+                    cand = cand.resolve()
+                except Exception:
+                    pass
+                s = str(cand)
+                low = s.lower() if __import__("os").name == "nt" else s
+                if low in seen_fs:
+                    continue
+                seen_fs.add(low)
+                req_fs.append(s)
+            new_meta_fs = dict(request.metadata)
+            if req_fs != request.metadata.get("required_dirs"):
+                new_meta_fs["required_dirs"] = req_fs
+                request = CapabilityRequest(action=request.action, resource=request.resource, effect=request.effect, principal=request.principal, args_digest=request.args_digest, metadata=new_meta_fs)
+        except Exception:
+            pass
+    if request.action == "process.exec":
+        has_required = "required_dirs" in request.metadata
+        needs_recompute = (not has_required) or request.metadata.get("external_workspace")
+        if needs_recompute:
+            try:
+                from agent_tools import _extract_absolute_paths, _resolve_shell_token_for_workspace_restrict, _is_posix_special_path_skip_workspace_check
+                cmd = str(request.resource or "")
+                req = []
+                seen = set()
+                for raw_path in _extract_absolute_paths(cmd):
+                    if _is_posix_special_path_skip_workspace_check(raw_path):
+                        continue
+                    try:
+                        pp = _resolve_shell_token_for_workspace_restrict(raw_path, workspace)
+                    except Exception:
+                        continue
+                    authorized = any(is_within(pp, ad) for ad in authorized_dirs)
+                    if authorized:
+                        continue
+                    cand = pp.parent if pp.suffix else pp
+                    try:
+                        cand = cand.resolve()
+                    except Exception:
+                        pass
+                    s = str(cand)
+                    low = s.lower() if __import__("os").name == "nt" else s
+                    if low in seen:
+                        continue
+                    seen.add(low)
+                    req.append(s)
+                new_meta = dict(request.metadata)
+                new_meta["required_dirs"] = req
+                new_meta["external_workspace"] = bool(req)
+                try:
+                    _deletion = bool(new_meta.get("deletion"))
+                    _has_non_delete = False
+                    try:
+                        from agent_tools import _has_non_delete_dangerous_pattern
+                        _has_non_delete = bool(_has_non_delete_dangerous_pattern(str(request.resource or "")))
+                    except Exception:
+                        pass
+                    new_meta["workspace_delete"] = bool(_deletion and not bool(req) and not _has_non_delete)
+                except Exception:
+                    pass
+                request = CapabilityRequest(action=request.action, resource=request.resource, effect=request.effect, principal=request.principal, args_digest=request.args_digest, metadata=new_meta)
+            except Exception:
+                pass
     decision = engine.decide(request, context)
     if decision.outcome != DecisionOutcome.DENY:
         rules = store.active_permission_rules(
@@ -553,13 +741,30 @@ def authorize_request(
         decision.outcome == DecisionOutcome.ASK
         and not decision.constraints.get("user_rule")
     ):
-        if (
-            decision.rule_id in EXTERNAL_OPS_GRANTABLE_RULES
-            and store.get_setting("allow_external_workspace_ops")
-        ):
-            # One-time user grant: write / delete / shell operations outside
-            # the workspace run automatically from now on. Explicit user rules
-            # (deny/ask) and forced approvals already returned above.
+        required_dirs = decision.constraints.get("required_dirs") or request.metadata.get("required_dirs")
+        if required_dirs and decision.rule_id in EXTERNAL_OPS_GRANTABLE_RULES:
+            try:
+                from session_authorized_dirs import get_authorized_dirs_for_session
+                auth_dirs = get_authorized_dirs_for_session(session_id, workspace)
+                all_authorized = True
+                for rd in required_dirs:
+                    try:
+                        rp = pathlib.Path(str(rd)).resolve()
+                    except Exception:
+                        rp = pathlib.Path(str(rd))
+                    if not any(is_within(rp, ad) for ad in auth_dirs):
+                        all_authorized = False
+                        break
+                if all_authorized:
+                    decision = SecurityDecision(
+                        DecisionOutcome.ALLOW,
+                        "Allowed by directory authorization.",
+                        "grant.directory_authorized",
+                        decision.request_digest,
+                    )
+            except Exception:
+                pass
+        if decision.outcome == DecisionOutcome.ASK and decision.rule_id in EXTERNAL_OPS_GRANTABLE_RULES and store.get_setting("allow_external_workspace_ops"):
             decision = SecurityDecision(
                 DecisionOutcome.ALLOW,
                 "Allowed by the workspace-outside handling permission (write/delete/shell).",
