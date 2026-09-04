@@ -5,6 +5,7 @@ out of ``agent_loop.py`` while preserving the host's authorization boundary.
 """
 from __future__ import annotations
 
+import json
 import queue
 from typing import Any, Mapping
 

@@ -634,7 +634,6 @@ function setHumanQuestionStep(card, index) {
     if (progress) progress.textContent = '问题 ' + (next + 1) + '/' + panes.length + ' · ' + String(panes[next].dataset.questionHeader || '');
     var back = card.querySelector('.human-back-btn');
     var confirmBtn = card.querySelector('.human-confirm-btn');
-    var submit = card.querySelector('.human-submit-btn');
     var multipleQuestions = panes.length > 1;
     var allComplete = panes.every(isHumanQuestionPaneComplete);
     if (back) {
@@ -642,8 +641,12 @@ function setHumanQuestionStep(card, index) {
         back.classList.toggle('hidden', !multipleQuestions);
         back.disabled = next === 0;
     }
-    if (confirmBtn) confirmBtn.classList.toggle('hidden', allComplete);
-    if (submit) submit.classList.toggle('hidden', !allComplete);
+    // 单按钮语义：未全部回答时是「确认」，全部回答完后变为「提交答案」
+    if (confirmBtn) {
+        confirmBtn.textContent = allComplete ? '提交答案' : '确认';
+        confirmBtn.classList.toggle('is-ready', allComplete);
+        confirmBtn.title = allComplete ? '全部问题已回答，提交答案' : '确认当前回答并进入下一题';
+    }
     var shortcut = panes[next].querySelector('.human-other-shortcut');
     if (shortcut) shortcut.textContent = allComplete ? 'Ctrl/Cmd + Enter 提交答案' : 'Ctrl/Cmd + Enter 确认回答';
     if (card.dataset.draftReady === '1') persistHumanInteractionDraft(card);
@@ -790,13 +793,12 @@ function createHumanQuestionCard(record, sessionId) {
     });
     var confirmButton = humanElement('button', 'human-primary-btn human-confirm-btn', '确认');
     confirmButton.type = 'button';
-    confirmButton.addEventListener('click', function () { confirmCurrentHumanQuestion(card); });
-    var submit = humanElement('button', 'human-primary-btn human-submit-btn', '提交答案');
-    submit.type = 'button';
-    submit.addEventListener('click', function () { void submitHumanQuestion(card); });
+    confirmButton.addEventListener('click', function () {
+        if (allHumanQuestionsComplete(card)) void submitHumanQuestion(card);
+        else confirmCurrentHumanQuestion(card);
+    });
     nav.appendChild(back);
     nav.appendChild(confirmButton);
-    nav.appendChild(submit);
     actions.appendChild(skip);
     actions.appendChild(nav);
     card.appendChild(actions);
@@ -843,7 +845,7 @@ function setHumanInteractionSubmitting(card, submitting, label) {
         if (!status.dataset.defaultLabel) status.dataset.defaultLabel = status.textContent || '';
         status.textContent = submitting ? (label || '正在提交…') : status.dataset.defaultLabel;
     }
-    var primary = card.querySelector('.human-submit-btn, .human-allow-btn');
+    var primary = card.querySelector('.human-confirm-btn, .human-allow-btn');
     if (!primary) return;
     if (!primary.dataset.defaultLabel) primary.dataset.defaultLabel = primary.textContent || '';
     primary.textContent = submitting ? (label || '正在提交…') : primary.dataset.defaultLabel;

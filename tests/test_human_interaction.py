@@ -559,10 +559,10 @@ def test_frontend_human_interaction_contract_is_wired():
     assert "back.disabled = next === 0" in module
     assert "back.textContent = '上一题'" in module
     assert "human-confirm-btn', '确认'" in module
-    assert "human-submit-btn', '提交答案'" in module
+    assert "confirmBtn.textContent = allComplete ? '提交答案' : '确认'" in module
+    assert "confirmBtn.classList.toggle('is-ready', allComplete)" in module
     assert "var allComplete = panes.every(isHumanQuestionPaneComplete)" in module
-    assert "if (confirmBtn) confirmBtn.classList.toggle('hidden', allComplete)" in module
-    assert "if (submit) submit.classList.toggle('hidden', !allComplete)" in module
+    assert "human-submit-btn" not in module
     assert "function nextIncompleteHumanQuestionIndex" in module
     assert "confirmCurrentHumanQuestion(card)" in module
     assert "human-skip-btn', '不回答'" in module

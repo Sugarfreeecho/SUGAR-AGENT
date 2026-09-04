@@ -1,5 +1,5 @@
-var ot=Object.defineProperty;var lt=(n,e,t)=>e in n?ot(n,e,{enumerable:!0,configurable:!0,writable:!0,value:t}):n[e]=t;var H=(n,e,t)=>lt(n,typeof e!="symbol"?e+"":e,t);(function(){const e=document.createElement("link").relList;if(e&&e.supports&&e.supports("modulepreload"))return;for(const s of document.querySelectorAll('link[rel="modulepreload"]'))r(s);new MutationObserver(s=>{for(const a of s)if(a.type==="childList")for(const c of a.addedNodes)c.tagName==="LINK"&&c.rel==="modulepreload"&&r(c)}).observe(document,{childList:!0,subtree:!0});function t(s){const a={};return s.integrity&&(a.integrity=s.integrity),s.referrerPolicy&&(a.referrerPolicy=s.referrerPolicy),s.crossOrigin==="use-credentials"?a.credentials="include":s.crossOrigin==="anonymous"?a.credentials="omit":a.credentials="same-origin",a}function r(s){if(s.ep)return;s.ep=!0;const a=t(s);fetch(s.href,a)}})();(function(n){var e=104857600,t=200*1024*1024,r='<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"></path></svg>';function s(){if(!document.getElementById("myagent-path-picker-styles")){var d=document.createElement("style");d.id="myagent-path-picker-styles",d.textContent='.path-input-row{display:flex;align-items:stretch;gap:.35rem;width:100%;}.path-input-row>.ip,.path-input-row>.tx,.path-input-row>input[type="text"],.path-input-row>input:not([type]){flex:1;min-width:0;}.path-browse-btn{flex-shrink:0;width:2.35rem;padding:0;border:1px solid var(--border-glass,rgba(255,255,255,.08));border-radius:var(--radius-sm,8px);background:var(--surface-glass2,rgba(40,40,60,.94));color:var(--text-secondary,#a6adc8);cursor:pointer;display:inline-flex;align-items:center;justify-content:center;transition:color .18s,border-color .18s,background .18s;}.path-browse-btn:hover{color:var(--text-primary,#cdd6f4);border-color:var(--border-brand-accent,rgba(124,111,247,.35));background:rgba(108,92,231,.12);}.path-browse-btn:disabled{opacity:.45;cursor:not-allowed;}.path-browse-btn--ghost{background:transparent;border-color:transparent;box-shadow:none;width:2.1rem;}.path-browse-btn--ghost:hover{background:rgba(108,92,231,.1);border-color:transparent;color:var(--accent-2,#d4b8fc);}.input-wrapper .path-browse-btn--ghost{align-self:center;margin-right:-.15rem;}.input-wrapper.is-drag-over{border-color:rgba(203,166,247,.62);box-shadow:0 0 0 3px rgba(203,166,247,.12),0 0 28px rgba(139,92,246,.18);}.input-wrapper.is-file-uploading{border-color:rgba(99,102,241,.52);}.chat-upload-status{box-sizing:border-box;width:100%;margin:.38rem 0 0;padding:.42rem .58rem;border:1px solid rgba(99,102,241,.22);border-radius:10px;background:rgba(99,102,241,.08);color:var(--text-secondary,#a6adc8);font-size:.72rem;}.chat-upload-status-row{display:flex;align-items:center;gap:.5rem;}.chat-upload-status-label{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}.chat-upload-cancel{flex:none;border:0;background:transparent;color:var(--accent-2,#d4b8fc);font:inherit;font-weight:700;cursor:pointer;padding:.08rem .2rem;}.chat-upload-cancel:hover{color:var(--text-primary,#fff);}.chat-upload-progress{height:4px;margin-top:.36rem;border-radius:999px;overflow:hidden;background:rgba(255,255,255,.1);}.chat-upload-progress-bar{display:block;width:0;height:100%;border-radius:inherit;background:linear-gradient(90deg,#6366f1,#a78bfa);transition:width .12s linear;}.workspace-file-popover{position:fixed;display:none;z-index:260;width:min(46rem,calc(100vw - 1.2rem));height:min(44rem,82vh);max-height:min(44rem,82vh);border:1px solid var(--border-glass,rgba(255,255,255,.08));border:1px solid var(--floating-border,var(--border-glass,rgba(255,255,255,.08)));border-radius:var(--radius-sm,8px);background:var(--surface-glass2,rgba(40,40,60,.96));background:var(--floating-surface,var(--surface-glass2,rgba(40,40,60,.96)));box-shadow:var(--shadow-soft,0 18px 50px rgba(0,0,0,.34));box-shadow:var(--floating-shadow,var(--shadow-soft,0 18px 50px rgba(0,0,0,.34)));overflow:hidden;backdrop-filter:blur(22px);-webkit-backdrop-filter:blur(22px);}.workspace-file-popover.is-open{display:flex;flex-direction:column;}.workspace-file-search{position:relative;width:100%;box-sizing:border-box;border:0;border-bottom:1px solid var(--border-glass,rgba(255,255,255,.08));background:var(--surface-glass3,rgba(255,255,255,.035));color:var(--text-primary,#cdd6f4);padding:.56rem .72rem;font:inherit;font-size:.78rem;outline:none;}.workspace-file-search::placeholder{color:var(--text-muted,#6c7086);}.workspace-file-list{position:relative;flex:1;min-height:0;overflow:auto;padding:.36rem .38rem .2rem;}.workspace-file-item{width:100%;display:grid;grid-template-columns:1.05rem minmax(0,1fr) auto;gap:.2rem .38rem;align-items:center;text-align:left;border:0;border-radius:8px;background:transparent;color:var(--text-secondary,#a6adc8);padding:.22rem .36rem;cursor:pointer;font:inherit;font-size:.74rem;}.workspace-file-item:hover,.workspace-file-item.is-active{background:rgba(255,255,255,.055);color:var(--text-primary,#cdd6f4);}.workspace-file-item.is-selected{background:rgba(var(--accent-rgb,137,180,250),.12);color:var(--text-primary,#cdd6f4);}.workspace-file-check{width:.82rem;height:.82rem;border:1px solid var(--border-glass,rgba(255,255,255,.14));border-radius:4px;display:inline-flex;align-items:center;justify-content:center;color:#fff;font-size:.62rem;line-height:1;background:transparent;}.workspace-file-item.is-selected .workspace-file-check{background:rgb(var(--brand-accent-rgb,99,102,241));border-color:transparent;color:#fff;}.workspace-file-dir-row{grid-template-columns:1.05rem minmax(0,1fr) auto;color:var(--text-primary,#cdd6f4);font-weight:650;}.workspace-file-dir-row .workspace-file-tree{grid-column:2/3;}.workspace-file-file-row{grid-template-columns:1.05rem minmax(0,1fr) auto;}.workspace-file-tree{min-width:0;display:flex;align-items:center;gap:.24rem;}.workspace-file-indent{flex:0 0 auto;width:var(--indent,0);}.workspace-file-chevron{width:.8rem;min-width:.8rem;color:var(--text-muted,#6c7086);font-size:.72rem;text-align:center;border:0;background:transparent;padding:0;cursor:pointer;}.workspace-file-icon{position:relative;width:.98rem;min-width:.98rem;height:.74rem;margin-top:.04rem;border-radius:3px;border:1px solid rgba(203,166,247,.28);background:linear-gradient(135deg,rgba(203,166,247,.18),rgba(99,102,241,.1));box-shadow:inset 0 .12rem .26rem rgba(255,255,255,.08);}.workspace-file-icon:before{content:"";position:absolute;left:.06rem;right:.06rem;top:.12rem;height:.16rem;border-radius:999px;background:rgba(203,166,247,.34);}.workspace-file-icon:after{content:"";position:absolute;left:.06rem;right:.06rem;bottom:.11rem;height:.24rem;border-radius:2px;background:rgba(99,102,241,.16);}.workspace-file-icon.is-file{width:.82rem;min-width:.82rem;height:1rem;margin-top:0;border-radius:3px;background:transparent;border:1.5px solid rgba(166,173,200,.58);box-shadow:none;color:var(--text-muted,#6c7086);}.workspace-file-icon.is-file:before{left:auto;right:-1.5px;top:-1.5px;width:.3rem;height:.3rem;border:0;border-left:1.5px solid rgba(166,173,200,.58);border-bottom:1.5px solid rgba(166,173,200,.58);border-radius:0 3px 0 3px;background:var(--surface-glass2,rgba(40,40,60,.94));}.workspace-file-icon.is-file:after{display:none;}.workspace-file-icon.is-folder-svg{width:1rem;min-width:1rem;height:1rem;margin-top:0;border:0;background:transparent;box-shadow:none;color:var(--text-muted,#6c7086);display:inline-flex;align-items:center;justify-content:center;}.workspace-file-icon.is-folder-svg:before,.workspace-file-icon.is-folder-svg:after{display:none;}.workspace-file-icon.is-folder-svg svg{width:1rem;height:1rem;display:block;}.workspace-file-icon.is-image{border-color:rgba(45,212,191,.72);}.workspace-file-icon.is-image:after{display:block;left:.12rem;right:.12rem;bottom:.15rem;height:.24rem;clip-path:polygon(0 100%,38% 38%,56% 66%,76% 24%,100% 100%);background:rgba(45,212,191,.72);}.workspace-file-icon.is-audio{border-color:rgba(251,191,36,.76);}.workspace-file-icon.is-audio:after{display:block;left:.17rem;right:auto;bottom:.18rem;width:.36rem;height:.4rem;border-radius:0;background:rgba(251,191,36,.76);clip-path:polygon(0 32%,45% 32%,100% 0,100% 100%,45% 68%,0 68%);}.workspace-file-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:.74rem;}.workspace-file-dir{grid-column:2/-1;color:var(--text-muted,#6c7086);font-size:.68rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}.workspace-file-meta{color:var(--text-muted,#6c7086);font-size:.68rem;white-space:nowrap;}.workspace-file-footer{position:relative;display:flex;align-items:center;justify-content:space-between;gap:.5rem;padding:.42rem .52rem;border-top:1px solid var(--border-glass,rgba(255,255,255,.08));background:var(--surface-glass3,rgba(255,255,255,.025));font-size:.72rem;color:var(--text-muted,#6c7086);}.workspace-file-outside{flex-shrink:0;border:1px solid var(--border-glass,rgba(255,255,255,.1));border-radius:8px;padding:.28rem .58rem;background:rgba(255,255,255,.035);color:var(--text-secondary,#a6adc8);font:inherit;font-size:.7rem;font-weight:700;cursor:pointer;transition:background .16s,border-color .16s,color .16s;}.workspace-file-outside:hover{background:rgba(255,255,255,.07);border-color:var(--border-brand-accent,rgba(124,111,247,.35));color:var(--text-primary,#fff);}.workspace-file-insert{border:0;border-radius:8px;padding:.34rem .62rem;background:linear-gradient(135deg,#6366f1,#8b5cf6);color:#fff;font-size:.72rem;font-weight:700;cursor:pointer;}.workspace-file-insert:disabled{opacity:.45;cursor:not-allowed;}.workspace-file-empty{padding:1rem;text-align:center;color:var(--text-muted,#6c7086);font-size:.78rem;}.theme-light .workspace-file-popover{background:rgba(255,255,255,.98);}.theme-light .workspace-file-search,.theme-light .workspace-file-footer{background:rgba(15,23,42,.025);}.theme-light .workspace-file-item:hover,.theme-light .workspace-file-item.is-active{background:rgba(15,23,42,.05);}.theme-light .workspace-file-outside{background:rgba(15,23,42,.025);}',document.head.appendChild(d)}}async function a(d,v,f){var y=typeof AbortController<"u"?new AbortController:null,b=y?setTimeout(function(){y.abort()},5e4):null,A;try{A=await fetch("/api/pick-path",{method:"POST",headers:{"Content-Type":"application/json"},credentials:"same-origin",body:JSON.stringify({kind:d||"directory",initial:v||"",multiple:!!f}),signal:y?y.signal:void 0})}finally{b&&clearTimeout(b)}var I=await A.json().catch(function(){return{ok:!1,error:"请求失败"}});if(!A.ok||!I.ok){if(I&&I.cancelled)return null;var p=I&&I.error||"无法打开选择对话框";if(/取消|cancelled|800704c7|2147023673/i.test(p))return null;throw new Error(p)}return f?Array.isArray(I.paths)?I.paths:I.path?[I.path]:[]:I.path||null}async function c(d,v,f,y,b){d.disabled=!0;try{var A=await a(v,f||"",!!b);y&&y(A)}catch{return}finally{d.disabled=!1}}function i(d){var v=String(d||"").trim();return v?((v.charAt(0)==='"'&&v.charAt(v.length-1)==='"'||v.charAt(0)==="'"&&v.charAt(v.length-1)==="'")&&(v=v.slice(1,-1)),'"'+v.replace(/"/g,'\\"')+'"'):""}function u(d){var v=String(d||"").toLowerCase().split(".").pop()||"";return/^(png|jpe?g|gif|webp|bmp|svg|tiff?|ico|avif)$/.test(v)?"is-image":/^(mp3|wav|flac|aac|m4a|ogg|oga|opus|wma|aiff?)$/.test(v)?"is-audio":""}function o(d,v){var f=d.selectionStart,y=d.selectionEnd,b=d.value.slice(0,f),A=d.value.slice(y),I=String(v||"");b.length&&!/\s$/.test(b)&&(I=" "+I),A.length&&!/^\s/.test(A)&&(I=I+" "),d.value=b+I+A;var p=b.length+I.length;d.selectionStart=d.selectionEnd=p,d.dispatchEvent(new Event("input",{bubbles:!0})),d.focus()}function l(d){var v=Array.prototype.slice.call(d||[]).filter(Boolean),f=0;if(v.forEach(function(y){var b=Number(y&&y.size||0);if(b>e)throw new Error("文件“"+String(y&&y.name||"未命名文件")+"”超过 "+h(e)+" 限制。");f+=Math.max(0,b)}),f>t)throw new Error("本次上传总大小超过 "+h(t)+" 限制。");return v}function S(d,v){var f;try{f=l(d)}catch(b){return Promise.reject(b)}if(!f.length)return Promise.resolve([]);v=v||{};var y=new FormData;return f.forEach(function(b){y.append("files",b,b.name||"upload.bin")}),new Promise(function(b,A){var I=new XMLHttpRequest;I.open("POST","/api/upload-chat-files",!0),I.withCredentials=!0,I.timeout=600*1e3,I.upload&&typeof v.onProgress=="function"&&(I.upload.onprogress=function(p){v.onProgress(p.loaded||0,p.lengthComputable?p.total:0)}),typeof v.registerAbort=="function"&&v.registerAbort(function(){I.abort()}),I.onload=function(){var p;try{p=JSON.parse(I.responseText||"{}")}catch{p={ok:!1,error:"上传失败"}}if(I.status<200||I.status>=300||!p.ok){A(new Error(p&&p.error||"上传失败"));return}b(Array.isArray(p.files)?p.files:[])},I.onerror=function(){A(new Error("上传失败：网络连接异常。"))},I.ontimeout=function(){A(new Error("上传超时，请重试。"))},I.onabort=function(){var p=new Error("上传已取消。");p.name="AbortError",A(p)},I.send(y)})}function h(d){return d=Number(d||0),!isFinite(d)||d<=0?"":d<1024?d+" B":d<1024*1024?Math.round(d/102.4)/10+" KB":d<1024*1024*1024?Math.round(d/104857.6)/10+" MB":Math.round(d/1073741824e-1)/10+" GB"}async function P(d,v,f){var y=[];d?y.push("q="+encodeURIComponent(d)):v&&y.push("dir="+encodeURIComponent(v));var b="/api/workspace-files"+(y.length?"?"+y.join("&"):""),A=await fetch(b,{credentials:"same-origin",signal:f}),I=await A.json().catch(function(){return{ok:!1,error:"读取工作区文件失败"}});if(!A.ok||!I.ok)throw new Error(I&&I.error||"读取工作区文件失败");return Array.isArray(I.files)?I.files:[]}function E(){try{return typeof currentSessionId<"u"?String(currentSessionId||""):""}catch{return""}}function k(d,v,f){if(v){var y=E();if(f&&y&&f!==y){try{if(typeof persistInputDraft=="function"){var b="";typeof draftBySession<"u"&&Object.prototype.hasOwnProperty.call(draftBySession,f)?b=String(draftBySession[f]||""):typeof readStoredInputDraft=="function"&&(b=String(readStoredInputDraft(f)||"")),persistInputDraft(f,b.trim()?b+" "+v:v);return}}catch{}return}o(d,v)}}function O(d,v,f){var y=E();return S(v,f).then(function(b){var A=Array.isArray(d._myAgentStructuredAttachments)?d._myAgentStructuredAttachments.slice():[];b.forEach(function(p){!p||!p.path||A.some(function(W){return W.path===p.path})||A.push({path:p.path,name:p.name||"",size:Number(p.size||0)})}),d._myAgentStructuredAttachments=A;var I=b.map(function(p){return i(p.path||p.rel||p.name)}).join(" ");k(d,I,y)})}function $(d){return Array.isArray(d&&d._myAgentStructuredAttachments)?d._myAgentStructuredAttachments.slice():[]}function L(d){d&&(d._myAgentStructuredAttachments=[])}function z(d,v){if(d){var f=Array.isArray(d._myAgentStructuredAttachments)?d._myAgentStructuredAttachments.slice():[];Array.prototype.slice.call(v||[]).forEach(function(y){!y||!y.path||f.some(function(b){return b.path===y.path})||f.push({path:y.path,name:y.name||"",size:Number(y.size||0)})}),d._myAgentStructuredAttachments=f}}function _(d,v){console.error("chat file upload failed:",v),d.dispatchEvent(new CustomEvent("myagent:file-paste-error",{bubbles:!0,detail:{message:String(v&&v.message||v||"上传失败")}}))}function V(d,v){var f=d.closest?d.closest(".input-wrapper"):null;v?d.dataset.fileUploadBusy="1":delete d.dataset.fileUploadBusy,f&&(f.classList.toggle("is-file-uploading",!!v),v?f.setAttribute("aria-busy","true"):f.removeAttribute("aria-busy")),d.dispatchEvent(new CustomEvent("myagent:file-upload-state",{bubbles:!0,detail:{busy:!!v}}))}function j(d,v){var f=d.closest?d.closest(".input-wrapper"):null,y=document.createElement("div");y.className="chat-upload-status",y.setAttribute("role","status"),y.innerHTML='<div class="chat-upload-status-row"><span class="chat-upload-status-label"></span><button type="button" class="chat-upload-cancel">取消</button></div><div class="chat-upload-progress" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><span class="chat-upload-progress-bar"></span></div>';var b=v.length;return y.querySelector(".chat-upload-status-label").textContent="正在上传 "+b+" 个文件… 0%",f&&f.parentNode&&f.parentNode.insertBefore(y,f.nextSibling),y}function R(d,v){var f;try{f=l(v)}catch(G){return _(d,G),Promise.reject(G)}if(!f.length)return Promise.resolve();if(d._myAgentActiveUpload){var y=new Error("已有文件正在上传，请等待完成或先取消。");return _(d,y),Promise.reject(y)}var b=j(d,f),A=b.querySelector(".chat-upload-status-label"),I=b.querySelector(".chat-upload-progress"),p=b.querySelector(".chat-upload-progress-bar"),W=b.querySelector(".chat-upload-cancel"),X=null,Z=d._myAgentActiveUpload={};return V(d,!0),W.addEventListener("click",function(){W.disabled=!0,A.textContent="正在取消上传…",X&&X()}),O(d,f,{registerAbort:function(G){X=G},onProgress:function(G,ce){if(d._myAgentActiveUpload===Z){var de=ce>0?Math.min(100,Math.round(G*100/ce)):0;A.textContent="正在上传 "+f.length+" 个文件… "+de+"%",p.style.width=de+"%",I.setAttribute("aria-valuenow",String(de))}}}).catch(function(G){throw(!G||G.name!=="AbortError")&&_(d,G),G}).finally(function(){d._myAgentActiveUpload===Z&&(delete d._myAgentActiveUpload,V(d,!1)),b.parentNode&&b.parentNode.removeChild(b)})}function D(d){var v=d&&d.clipboardData;if(!v)return[];var f=[],y=Array.prototype.slice.call(v.items||[]);return y.forEach(function(b){if(!(!b||b.kind!=="file"||typeof b.getAsFile!="function")){var A=b.getAsFile();A&&f.push(A)}}),f.length||(f=Array.prototype.slice.call(v.files||[]).filter(Boolean)),f.map(function(b,A){if(String(b&&b.name||"").trim())return b;var I=String(b&&b.type||"").split("/")[1]||"bin";I=I.replace(/[^a-z0-9.+-]/gi,"")||"bin";var p="clipboard-"+Date.now()+"-"+(A+1)+"."+I;try{return new File([b],p,{type:b.type||"application/octet-stream",lastModified:Date.now()})}catch{return b}})}function Q(d){var v=d&&d.clipboardData;if(!v||typeof v.getData!="function")return!1;try{return String(v.getData("text/plain")||"").trim().length>0}catch{return!1}}function se(d){!d||d.dataset.filePasteBound==="1"||(d.dataset.filePasteBound="1",d.addEventListener("paste",function(v){if(!Q(v)){var f=D(v);f.length&&(v.preventDefault(),R(d,f).catch(function(){}))}}))}function Vn(d,v){var f=document.createElement("div");f.className="workspace-file-popover",f.setAttribute("aria-hidden","true"),f.innerHTML='<input class="workspace-file-search" type="text" autocomplete="off" spellcheck="false" placeholder="搜索工作区文件（↑↓ 移动 · Enter 选择 · Esc 关闭）"><div class="workspace-file-list" role="listbox"></div><div class="workspace-file-footer"><span class="workspace-file-count">未选择文件</span><button type="button" class="workspace-file-outside">选择工作目录外文件</button></div>',document.body.appendChild(f);var y=f.querySelector(".workspace-file-search"),b=f.querySelector(".workspace-file-list"),A=f.querySelector(".workspace-file-count"),I=f.querySelector(".workspace-file-outside"),p={items:[],visible:[],active:0,open:!1,debounce:null,controller:null,selected:Object.create(null),expanded:Object.create(null),loadedDirs:Object.create(null),itemMap:Object.create(null)};function W(){var m=d.closest?d.closest(".input-wrapper"):d,g=m.getBoundingClientRect(),w=8,T=Math.min(Math.max(g.width,520),window.innerWidth-16),x=Math.max(8,Math.min(g.left,window.innerWidth-T-8)),B=document.querySelector(".titlebar"),C=B?B.getBoundingClientRect().bottom:44,M=parseFloat(getComputedStyle(document.documentElement).fontSize||"16")||16,U=Math.min(44*M,window.innerHeight*.82),J=Math.max(1,g.top-C-w),Y=Math.min(U,J),ue=g.top-Y-w;if(Y<96){var ge=Math.max(1,window.innerHeight-g.bottom-w-8);Y=Math.min(U,ge),ue=g.bottom+w}f.style.left=x+"px",f.style.top=Math.max(C,ue)+"px",f.style.width=T+"px",f.style.height=Math.max(1,Math.floor(Y))+"px",f.style.maxHeight=Math.max(1,Math.floor(Y))+"px"}function X(){var m=Object.keys(p.selected).length;A.textContent=m?"已选择 "+m+" 项":"未选择文件",b.querySelectorAll(".workspace-file-item").forEach(function(g){var w=g.getAttribute("data-path-key")||"",T=!!p.selected[w];g.classList.toggle("is-selected",T);var x=g.querySelector(".workspace-file-check");x&&(x.textContent=T?"✓":"")})}function Z(m){var g=b.querySelectorAll(".workspace-file-item");if(!g.length){p.active=0;return}p.active=Math.max(0,Math.min(m,g.length-1));for(var w=0;w<g.length;w++)g[w].classList.toggle("is-active",w===p.active),g[w].setAttribute("aria-selected",w===p.active?"true":"false");var T=g[p.active];T&&typeof T.scrollIntoView=="function"&&T.scrollIntoView({block:"nearest"})}function G(){p.open=!1,f.classList.remove("is-open"),f.setAttribute("aria-hidden","true"),p.debounce&&clearTimeout(p.debounce),p.controller&&p.controller.abort()}function ce(m){return m&&(m.path||m.rel||m.name)||""}function de(m){return i(ce(m))}function Qn(m,g){var w=ce(m);if(!w)return!1;var T=String(m&&m.rel||"");return g.indexOf(de(m))>=0||g.indexOf(w)>=0||T&&g.indexOf(i(T))>=0||T&&g.indexOf(T)>=0}function Kn(m,g){m=String(m||""),g=String(g||"");for(var w=0;w<m.length&&w<g.length&&m.charAt(w)===g.charAt(w);)w++;for(var T=m.length-1,x=g.length-1;T>=w&&x>=w&&m.charAt(T)===g.charAt(x);)T--,x--;return g.slice(w,x+1).trim()}function Yn(m,g){if(g){var w=String(d.value||"");if(!(w.indexOf(g)>=0)){var T=d.value;o(d,g);var x=Kn(T,d.value);m&&x&&(m._inputToken=x)}}}function Xn(m,g){if(!g&&!m)return;var w=String(d.value||""),T=[];function x(C){C=String(C||"").trim(),C&&T.indexOf(C)<0&&T.push(C)}x(m&&m._inputToken),x(g),x(m&&m.path),x(m&&m.rel),x(m&&m.path&&i(m.path)),x(m&&m.rel&&i(m.rel));var B=w;T.sort(function(C,M){return M.length-C.length}).forEach(function(C){var M=C.replace(/[.*+?^${}()|[\]\\]/g,"\\$&"),U=new RegExp("(?:^|\\s)"+M+"(?=\\s|$)","g");B=B.replace(U,function(J){return J.charAt(0)&&/\s/.test(J.charAt(0))?" ":""})}),B=B.replace(/[ \t]{2,}/g," ").trim(),B!==w&&(d.value=B,d.selectionStart=d.selectionEnd=d.value.length,d.dispatchEvent(new Event("input",{bubbles:!0})))}function we(m){if(m){var g=ce(m);if(g){var w=de(m);if(p.selected[g]){var T=p.selected[g];delete p.selected[g],Xn(T,w)}else p.selected[g]=m,Yn(m,w);X()}}}function sn(){var m=String(d.value||"");Object.keys(p.selected).forEach(function(g){var w=p.selected[g];Qn(w,m)||delete p.selected[g]})}function Zn(){sn(),X()}d.addEventListener("input",Zn),I&&I.addEventListener("click",function(m){m.preventDefault(),m.stopPropagation(),typeof v=="function"&&v()});function an(){var m=String(n.__WORK_DIR__||"workspace"),g=m.split(/[\\/]+/).filter(Boolean);return g[g.length-1]||"workspace"}function on(m,g,w){return{type:"dir",name:m,rel:g,root:!!w,path:"",dirs:Object.create(null),files:[],children:[],loaded:!1}}function Jn(m,g){var w=String(m&&m.path||""),T=String(g||"").replace(/\//g,"\\");return w&&T&&w.toLowerCase().slice(-T.length)===T.toLowerCase()?w.slice(0,Math.max(0,w.length-T.length)).replace(/[\\/]+$/,""):String(n.__WORK_DIR__||"").replace(/[\\/]+$/,"")}function ln(m,g){var w=String(m||"").replace(/[\\/]+$/,""),T=String(g||"").replace(/[\\/]+/g,"/");if(!T)return w;var x=w.indexOf("\\")>=0?"\\":"/";return w?w+x+T.replace(/\//g,x):T}function me(m){return{kind:"directory",name:m.name||m.rel||an(),rel:m.rel||"",path:m.path||ln(String(n.__WORK_DIR__||""),m.rel||"")}}function et(m){var g=on(an(),"",!0);g.path=String(n.__WORK_DIR__||"").replace(/[\\/]+$/,""),g.loaded=!!p.loadedDirs.__root__;function w(x,B){for(var C=g,M=[],U=0;U<x.length;U++)M.push(x[U]),C.dirs[x[U]]||(C.dirs[x[U]]=on(x[U],M.join("/"),!1),C.dirs[x[U]].path=ln(B||g.path,M.join("/"))),C=C.dirs[x[U]],C.loaded=!!p.loadedDirs[C.rel||"__root__"];return C}(m||[]).forEach(function(x){var B=String(x.rel||x.path||x.name||"").replace(/\\/g,"/"),C=B.split("/").filter(Boolean);if(C.length){var M=Jn(x,B);if(!g.path&&M&&(g.path=M),x.kind==="directory"){var U=w(C,M||g.path);U.name=x.name||U.name,U.path=x.path||U.path;return}var J=w(C.slice(0,-1),M||g.path);J.files.push({type:"file",name:x.name||C[C.length-1]||B,rel:B,item:x})}});function T(x){var B=Object.keys(x.dirs).map(function(C){return x.dirs[C]}).sort(function(C,M){return C.name.localeCompare(M.name,void 0,{sensitivity:"base"})});B.forEach(T),x.files.sort(function(C,M){return C.name.localeCompare(M.name,void 0,{sensitivity:"base"})}),x.children=B.concat(x.files)}return T(g),g}function cn(m,g,w){if(!(!m||m.type!=="dir")){w=Number(w||0);var T=m.rel||"__root__";g?p.expanded[T]=!0:typeof p.expanded[T]>"u"&&(p.expanded[T]=w===0),g&&m.children.forEach(function(x){x.type==="dir"&&cn(x,g,w+1)})}}function nt(m){var g=[];function w(T,x){g.push({type:"dir",node:T,depth:x}),p.expanded[T.rel||"__root__"]&&T.children.forEach(function(B){B.type==="dir"?w(B,x+1):g.push({type:"file",node:B,depth:x+1})})}return w(m,0),g}function tt(m){return String(m&&(m.kind||"file")||"file")+":"+String(m&&(m.rel||m.path||m.name)||"")}function dn(m){(m||[]).forEach(function(g){var w=tt(g);w!==":"&&(p.itemMap[w]=g)}),p.items=Object.keys(p.itemMap).map(function(g){return p.itemMap[g]}),p.items.sort(function(g,w){return String(g.rel||"").localeCompare(String(w.rel||""),void 0,{sensitivity:"base"})})}function rt(m){if(m){var g=m.rel||"__root__";p.expanded[g]=!p.expanded[g],ae(p.items,!1),p.expanded[g]&&!y.value&&!p.loadedDirs[g]&&st(m.rel||"")}}function ae(m,g,w){if(sn(),p.items=(m||[]).slice().sort(function(x,B){return String(x.rel||"").localeCompare(String(B.rel||""),void 0,{sensitivity:"base"})}),b.innerHTML="",p.visible=[],g){b.innerHTML='<div class="workspace-file-empty">加载中</div>';return}if(w){b.innerHTML='<div class="workspace-file-empty">'+String(w)+"</div>";return}if(!p.items.length){b.innerHTML='<div class="workspace-file-empty">没有匹配文件</div>';return}var T=et(p.items);cn(T,!!y.value),p.visible=nt(T),p.visible.forEach(function(x,B){var C=x.node,M=document.createElement("button");M.type="button",M.className="workspace-file-item "+(x.type==="dir"?"workspace-file-dir-row":"workspace-file-file-row"),M.setAttribute("role","option"),M.setAttribute("data-row-index",String(B)),M.setAttribute("data-path-key",x.type==="dir"?me(C).path||me(C).rel||me(C).name||"":C.item.path||C.item.rel||C.item.name||"");var U=document.createElement("div");U.className="workspace-file-tree";var J=document.createElement("span");J.className="workspace-file-indent",J.style.setProperty("--indent",Math.min(x.depth,10)*.86+"rem");var Y=document.createElement("span");Y.className="workspace-file-chevron",Y.textContent=x.type==="dir"?p.expanded[C.rel||"__root__"]?"▾":"▸":"",x.type==="dir"?(Y.setAttribute("aria-label",p.expanded[C.rel||"__root__"]?"折叠文件夹":"展开文件夹"),Y.setAttribute("role","button"),Y.addEventListener("click",function(fe){fe.preventDefault(),fe.stopPropagation(),rt(C)})):Y.setAttribute("tabindex","-1");var ue=document.createElement("span");ue.className="workspace-file-icon"+(x.type==="file"?" is-file "+u(C.item&&C.item.name):" is-folder-svg"),x.type==="dir"&&(ue.innerHTML=r);var ge=document.createElement("div");ge.className="workspace-file-name",ge.textContent=C.name||C.rel||"";var Ne=document.createElement("div");Ne.className="workspace-file-meta",Ne.textContent=x.type==="dir"?"":h(C.item.size),U.appendChild(J),U.appendChild(Y),U.appendChild(ue),U.appendChild(ge);var mn=document.createElement("span");mn.className="workspace-file-check",M.appendChild(mn),M.appendChild(U),M.appendChild(Ne),M.addEventListener("mouseenter",function(){Z(B)}),M.addEventListener("click",function(fe){fe.preventDefault(),fe.stopPropagation(),x.type==="dir"?we(me(C)):we(C.item)}),b.appendChild(M)}),Z(0),X()}function un(){var m=y.value||"";p.controller&&p.controller.abort(),p.controller=typeof AbortController<"u"?new AbortController:null,ae(p.items,!0),P(m,"",p.controller?p.controller.signal:void 0).then(function(g){p.open&&(m?ae(g,!1):(p.loadedDirs.__root__=!0,dn(g),ae(p.items,!1)))}).catch(function(g){g&&g.name==="AbortError"||p.open&&ae([],!1,g&&g.message||"读取失败")})}function st(m){var g=m||"__root__";p.loadedDirs[g]||(p.loadedDirs[g]=!0,P("",m||"",void 0).then(function(w){!p.open||y.value||(dn(w),ae(p.items,!1))}).catch(function(){delete p.loadedDirs[g]}))}function at(){p.debounce&&clearTimeout(p.debounce),p.debounce=setTimeout(un,120)}function pn(){if(p.open){W();try{y.focus(),y.select()}catch{}return}p.open=!0,f.classList.add("is-open"),f.setAttribute("aria-hidden","false"),y.value="",p.expanded=Object.create(null),p.loadedDirs=Object.create(null),p.itemMap=Object.create(null),p.items=[],ae([],!0),W(),un(),setTimeout(function(){W();try{y.focus()}catch{}},0)}function it(){p.open?G():pn()}return y.addEventListener("input",at),y.addEventListener("keydown",function(m){if(m.key==="ArrowDown")m.preventDefault(),Z(p.active+1);else if(m.key==="ArrowUp")m.preventDefault(),Z(p.active-1);else if(m.key==="Enter"){if(m.isComposing||m.keyCode===229||m.which===229)return;m.preventDefault();var g=p.visible[p.active];g&&g.type==="dir"?we(me(g.node)):g&&g.type==="file"&&we(g.node.item)}else m.key==="Escape"&&(m.preventDefault(),G(),d.focus())}),document.addEventListener("click",function(m){p.open&&(f.contains(m.target)||G())}),window.addEventListener("resize",function(){p.open&&W()}),window.addEventListener("scroll",function(){p.open&&W()},!0),{panel:f,open:pn,close:G,toggle:it}}function rn(d,v,f){if(!d||d.dataset.pathBrowseWrapped==="1")return d;s();var y=document.createElement("div");y.className="path-input-row";var b=d.parentNode;if(!b)return d;b.insertBefore(y,d),y.appendChild(d);var A=document.createElement("button");A.type="button",A.className="path-browse-btn",A.innerHTML=r;var I=f||"浏览路径";return A.setAttribute("aria-label",I),typeof bindUiHoverTip=="function"?(A.setAttribute("data-ui-tip",I),A.removeAttribute("title"),bindUiHoverTip(A)):A.title=I,A.addEventListener("click",function(p){p.stopPropagation();var W=d.getAttribute("data-path-kind")||v;W!=="file"&&W!=="directory"&&(W="directory"),c(A,W,d.value||"",function(X){if(X){var Z=Array.isArray(X)?X[0]||"":String(X);Z&&(d.value=Z,d.dispatchEvent(new Event("input",{bubbles:!0})),d.dispatchEvent(new Event("change",{bubbles:!0})))}})}),y.appendChild(A),d.dataset.pathBrowseWrapped="1",d}function Wn(d){var v=d.closest?d.closest(".input-wrapper"):d;!v||v.dataset.fileDropBound==="1"||(v.dataset.fileDropBound="1",["dragenter","dragover"].forEach(function(f){v.addEventListener(f,function(y){!y.dataTransfer||!y.dataTransfer.files||!y.dataTransfer.files.length||(y.preventDefault(),v.classList.add("is-drag-over"))})}),["dragleave","drop"].forEach(function(f){v.addEventListener(f,function(){v.classList.remove("is-drag-over")})}),v.addEventListener("drop",function(f){!f.dataTransfer||!f.dataTransfer.files||!f.dataTransfer.files.length||(f.preventDefault(),R(d,f.dataTransfer.files).catch(function(){}))}))}function Gn(d,v){if(!(!d||!v)){s(),Wn(v),se(v),d.classList.add("path-browse-btn","path-browse-btn--ghost"),d.innerHTML=r,d.setAttribute("aria-label","工作区文件"),d.setAttribute("data-ui-tip","工作区文件"),d.dataset.silentPickerUnavailable="1",d.removeAttribute("title");var f=document.createElement("input");f.type="file",f.multiple=!0,f.style.display="none",f.setAttribute("aria-hidden","true"),document.body.appendChild(f),f.addEventListener("change",function(){var b=f.files;!b||!b.length||(d.disabled=!0,R(v,b).catch(function(){}).finally(function(){f.value="",d.disabled=!1}))});var y=Vn(v,function(){f.click()});d.addEventListener("click",function(b){if(b.stopPropagation(),b.preventDefault(),b.altKey){f.click();return}if(!b.shiftKey){y.toggle();return}var A=n&&typeof n.__WORK_DIR__=="string"?n.__WORK_DIR__:"";c(d,"file",A,function(I){var p=Array.isArray(I)?I:I?[I]:[];p.length&&o(v,p.map(function(W){return i(W)}).join(" "))},!1)})}}function Fe(d){d=d||document;for(var v=d.querySelectorAll("[data-path-kind]"),f=0;f<v.length;f++){var y=v[f],b=y.getAttribute("data-path-kind");(b==="file"||b==="directory")&&rn(y,b)}}n.MyAgentPathPicker={pickPath:a,wrapInputWithBrowse:rn,attachChatPicker:Gn,uploadChatFiles:S,insertUploadedFiles:O,startChatFileUpload:R,clipboardFilesFromEvent:D,clipboardHasUsableText:Q,chatAttachments:$,clearChatAttachments:L,addChatAttachments:z,scan:Fe},document.readyState==="loading"?document.addEventListener("DOMContentLoaded",function(){Fe(document)}):Fe(document)})(typeof window<"u"?window:globalThis);const ct="modulepreload",dt=function(n){return"/"+n},gn={},ut=function(e,t,r){let s=Promise.resolve();if(t&&t.length>0){let c=function(o){return Promise.all(o.map(l=>Promise.resolve(l).then(S=>({status:"fulfilled",value:S}),S=>({status:"rejected",reason:S}))))};document.getElementsByTagName("link");const i=document.querySelector("meta[property=csp-nonce]"),u=(i==null?void 0:i.nonce)||(i==null?void 0:i.getAttribute("nonce"));s=c(t.map(o=>{if(o=dt(o),o in gn)return;gn[o]=!0;const l=o.endsWith(".css"),S=l?'[rel="stylesheet"]':"";if(document.querySelector(`link[href="${o}"]${S}`))return;const h=document.createElement("link");if(h.rel=l?"stylesheet":ct,l||(h.as="script"),h.crossOrigin="",h.href=o,u&&h.setAttribute("nonce",u),document.head.appendChild(h),l)return new Promise((P,E)=>{h.addEventListener("load",P),h.addEventListener("error",()=>E(new Error(`Unable to preload CSS for ${o}`)))})}))}function a(c){const i=new Event("vite:preloadError",{cancelable:!0});if(i.payload=c,window.dispatchEvent(i),!i.defaultPrevented)throw c}return s.then(c=>{for(const i of c||[])i.status==="rejected"&&a(i.reason);return e().catch(a)})};function Qe(){return{async:!1,breaks:!1,extensions:null,gfm:!0,hooks:null,pedantic:!1,renderer:null,silent:!1,tokenizer:null,walkTokens:null}}var le=Qe();function An(n){le=n}var Se={exec:()=>null};function F(n,e=""){let t=typeof n=="string"?n:n.source;const r={replace:(s,a)=>{let c=typeof a=="string"?a:a.source;return c=c.replace(K.caret,"$1"),t=t.replace(s,c),r},getRegex:()=>new RegExp(t,e)};return r}var K={codeRemoveIndent:/^(?: {1,4}| {0,3}\t)/gm,outputLinkReplace:/\\([\[\]])/g,indentCodeCompensation:/^(\s+)(?:```)/,beginningSpace:/^\s+/,endingHash:/#$/,startingSpaceChar:/^ /,endingSpaceChar:/ $/,nonSpaceChar:/[^ ]/,newLineCharGlobal:/\n/g,tabCharGlobal:/\t/g,multipleSpaceGlobal:/\s+/g,blankLine:/^[ \t]*$/,doubleBlankLine:/\n[ \t]*\n[ \t]*$/,blockquoteStart:/^ {0,3}>/,blockquoteSetextReplace:/\n {0,3}((?:=+|-+) *)(?=\n|$)/g,blockquoteSetextReplace2:/^ {0,3}>[ \t]?/gm,listReplaceTabs:/^\t+/,listReplaceNesting:/^ {1,4}(?=( {4})*[^ ])/g,listIsTask:/^\[[ xX]\] /,listReplaceTask:/^\[[ xX]\] +/,anyLine:/\n.*\n/,hrefBrackets:/^<(.*)>$/,tableDelimiter:/[:|]/,tableAlignChars:/^\||\| *$/g,tableRowBlankLine:/\n[ \t]*$/,tableAlignRight:/^ *-+: *$/,tableAlignCenter:/^ *:-+: *$/,tableAlignLeft:/^ *:-+ *$/,startATag:/^<a /i,endATag:/^<\/a>/i,startPreScriptTag:/^<(pre|code|kbd|script)(\s|>)/i,endPreScriptTag:/^<\/(pre|code|kbd|script)(\s|>)/i,startAngleBracket:/^</,endAngleBracket:/>$/,pedanticHrefTitle:/^([^'"]*[^\s])\s+(['"])(.*)\2/,unicodeAlphaNumeric:/[\p{L}\p{N}]/u,escapeTest:/[&<>"']/,escapeReplace:/[&<>"']/g,escapeTestNoEncode:/[<>"']|&(?!(#\d{1,7}|#[Xx][a-fA-F0-9]{1,6}|\w+);)/,escapeReplaceNoEncode:/[<>"']|&(?!(#\d{1,7}|#[Xx][a-fA-F0-9]{1,6}|\w+);)/g,unescapeTest:/&(#(?:\d+)|(?:#x[0-9A-Fa-f]+)|(?:\w+));?/ig,caret:/(^|[^\[])\^/g,percentDecode:/%25/g,findPipe:/\|/g,splitPipe:/ \|/,slashPipe:/\\\|/g,carriageReturn:/\r\n|\r/g,spaceLine:/^ +$/gm,notSpaceStart:/^\S*/,endingNewline:/\n$/,listItemRegex:n=>new RegExp(`^( {0,3}${n})((?:[	 ][^\\n]*)?(?:\\n|$))`),nextBulletRegex:n=>new RegExp(`^ {0,${Math.min(3,n-1)}}(?:[*+-]|\\d{1,9}[.)])((?:[ 	][^\\n]*)?(?:\\n|$))`),hrRegex:n=>new RegExp(`^ {0,${Math.min(3,n-1)}}((?:- *){3,}|(?:_ *){3,}|(?:\\* *){3,})(?:\\n+|$)`),fencesBeginRegex:n=>new RegExp(`^ {0,${Math.min(3,n-1)}}(?:\`\`\`|~~~)`),headingBeginRegex:n=>new RegExp(`^ {0,${Math.min(3,n-1)}}#`),htmlBeginRegex:n=>new RegExp(`^ {0,${Math.min(3,n-1)}}<(?:[a-z].*>|!--)`,"i")},pt=/^(?:[ \t]*(?:\n|$))+/,mt=/^((?: {4}| {0,3}\t)[^\n]+(?:\n(?:[ \t]*(?:\n|$))*)?)+/,gt=/^ {0,3}(`{3,}(?=[^`\n]*(?:\n|$))|~{3,})([^\n]*)(?:\n|$)(?:|([\s\S]*?)(?:\n|$))(?: {0,3}\1[~`]* *(?=\n|$)|$)/,be=/^ {0,3}((?:-[\t ]*){3,}|(?:_[ \t]*){3,}|(?:\*[ \t]*){3,})(?:\n+|$)/,ft=/^ {0,3}(#{1,6})(?=\s|$)(.*)(?:\n+|$)/,Ke=/(?:[*+-]|\d{1,9}[.)])/,Rn=/^(?!bull |blockCode|fences|blockquote|heading|html|table)((?:.|\n(?!\s*?\n|bull |blockCode|fences|blockquote|heading|html|table))+?)\n {0,3}(=+|-+) *(?:\n+|$)/,Pn=F(Rn).replace(/bull/g,Ke).replace(/blockCode/g,/(?: {4}| {0,3}\t)/).replace(/fences/g,/ {0,3}(?:`{3,}|~{3,})/).replace(/blockquote/g,/ {0,3}>/).replace(/heading/g,/ {0,3}#{1,6}/).replace(/html/g,/ {0,3}<[^\n>]+>\n/).replace(/\|table/g,"").getRegex(),ht=F(Rn).replace(/bull/g,Ke).replace(/blockCode/g,/(?: {4}| {0,3}\t)/).replace(/fences/g,/ {0,3}(?:`{3,}|~{3,})/).replace(/blockquote/g,/ {0,3}>/).replace(/heading/g,/ {0,3}#{1,6}/).replace(/html/g,/ {0,3}<[^\n>]+>\n/).replace(/table/g,/ {0,3}\|?(?:[:\- ]*\|)+[\:\- ]*\n/).getRegex(),Ye=/^([^\n]+(?:\n(?!hr|heading|lheading|blockquote|fences|list|html|table| +\n)[^\n]+)*)/,vt=/^[^\n]+/,Xe=/(?!\s*\])(?:\\.|[^\[\]\\])+/,St=F(/^ {0,3}\[(label)\]: *(?:\n[ \t]*)?([^<\s][^\s]*|<.*?>)(?:(?: +(?:\n[ \t]*)?| *\n[ \t]*)(title))? *(?:\n+|$)/).replace("label",Xe).replace("title",/(?:"(?:\\"?|[^"\\])*"|'[^'\n]*(?:\n[^'\n]+)*\n?'|\([^()]*\))/).getRegex(),bt=F(/^( {0,3}bull)([ \t][^\n]+?)?(?:\n|$)/).replace(/bull/g,Ke).getRegex(),Le="address|article|aside|base|basefont|blockquote|body|caption|center|col|colgroup|dd|details|dialog|dir|div|dl|dt|fieldset|figcaption|figure|footer|form|frame|frameset|h[1-6]|head|header|hr|html|iframe|legend|li|link|main|menu|menuitem|meta|nav|noframes|ol|optgroup|option|p|param|search|section|summary|table|tbody|td|tfoot|th|thead|title|tr|track|ul",Ze=/<!--(?:-?>|[\s\S]*?(?:-->|$))/,yt=F("^ {0,3}(?:<(script|pre|style|textarea)[\\s>][\\s\\S]*?(?:</\\1>[^\\n]*\\n+|$)|comment[^\\n]*(\\n+|$)|<\\?[\\s\\S]*?(?:\\?>\\n*|$)|<![A-Z][\\s\\S]*?(?:>\\n*|$)|<!\\[CDATA\\[[\\s\\S]*?(?:\\]\\]>\\n*|$)|</?(tag)(?: +|\\n|/?>)[\\s\\S]*?(?:(?:\\n[ 	]*)+\\n|$)|<(?!script|pre|style|textarea)([a-z][\\w-]*)(?:attribute)*? */?>(?=[ \\t]*(?:\\n|$))[\\s\\S]*?(?:(?:\\n[ 	]*)+\\n|$)|</(?!script|pre|style|textarea)[a-z][\\w-]*\\s*>(?=[ \\t]*(?:\\n|$))[\\s\\S]*?(?:(?:\\n[ 	]*)+\\n|$))","i").replace("comment",Ze).replace("tag",Le).replace("attribute",/ +[a-zA-Z:_][\w.:-]*(?: *= *"[^"\n]*"| *= *'[^'\n]*'| *= *[^\s"'=<>`]+)?/).getRegex(),_n=F(Ye).replace("hr",be).replace("heading"," {0,3}#{1,6}(?:\\s|$)").replace("|lheading","").replace("|table","").replace("blockquote"," {0,3}>").replace("fences"," {0,3}(?:`{3,}(?=[^`\\n]*\\n)|~{3,})[^\\n]*\\n").replace("list"," {0,3}(?:[*+-]|1[.)]) ").replace("html","</?(?:tag)(?: +|\\n|/?>)|<(?:script|pre|style|textarea|!--)").replace("tag",Le).getRegex(),wt=F(/^( {0,3}> ?(paragraph|[^\n]*)(?:\n|$))+/).replace("paragraph",_n).getRegex(),Je={blockquote:wt,code:mt,def:St,fences:gt,heading:ft,hr:be,html:yt,lheading:Pn,list:bt,newline:pt,paragraph:_n,table:Se,text:vt},fn=F("^ *([^\\n ].*)\\n {0,3}((?:\\| *)?:?-+:? *(?:\\| *:?-+:? *)*(?:\\| *)?)(?:\\n((?:(?! *\\n|hr|heading|blockquote|code|fences|list|html).*(?:\\n|$))*)\\n*|$)").replace("hr",be).replace("heading"," {0,3}#{1,6}(?:\\s|$)").replace("blockquote"," {0,3}>").replace("code","(?: {4}| {0,3}	)[^\\n]").replace("fences"," {0,3}(?:`{3,}(?=[^`\\n]*\\n)|~{3,})[^\\n]*\\n").replace("list"," {0,3}(?:[*+-]|1[.)]) ").replace("html","</?(?:tag)(?: +|\\n|/?>)|<(?:script|pre|style|textarea|!--)").replace("tag",Le).getRegex(),xt={...Je,lheading:ht,table:fn,paragraph:F(Ye).replace("hr",be).replace("heading"," {0,3}#{1,6}(?:\\s|$)").replace("|lheading","").replace("table",fn).replace("blockquote"," {0,3}>").replace("fences"," {0,3}(?:`{3,}(?=[^`\\n]*\\n)|~{3,})[^\\n]*\\n").replace("list"," {0,3}(?:[*+-]|1[.)]) ").replace("html","</?(?:tag)(?: +|\\n|/?>)|<(?:script|pre|style|textarea|!--)").replace("tag",Le).getRegex()},It={...Je,html:F(`^ *(?:comment *(?:\\n|\\s*$)|<(tag)[\\s\\S]+?</\\1> *(?:\\n{2,}|\\s*$)|<tag(?:"[^"]*"|'[^']*'|\\s[^'"/>\\s]*)*?/?> *(?:\\n{2,}|\\s*$))`).replace("comment",Ze).replace(/tag/g,"(?!(?:a|em|strong|small|s|cite|q|dfn|abbr|data|time|code|var|samp|kbd|sub|sup|i|b|u|mark|ruby|rt|rp|bdi|bdo|span|br|wbr|ins|del|img)\\b)\\w+(?!:|[^\\w\\s@]*@)\\b").getRegex(),def:/^ *\[([^\]]+)\]: *<?([^\s>]+)>?(?: +(["(][^\n]+[")]))? *(?:\n+|$)/,heading:/^(#{1,6})(.*)(?:\n+|$)/,fences:Se,lheading:/^(.+?)\n {0,3}(=+|-+) *(?:\n+|$)/,paragraph:F(Ye).replace("hr",be).replace("heading",` *#{1,6} *[^
-]`).replace("lheading",Pn).replace("|table","").replace("blockquote"," {0,3}>").replace("|fences","").replace("|list","").replace("|html","").replace("|tag","").getRegex()},kt=/^\\([!"#$%&'()*+,\-./:;<=>?@\[\]\\^_`{|}~])/,Ct=/^(`+)([^`]|[^`][\s\S]*?[^`])\1(?!`)/,Ln=/^( {2,}|\\)\n(?!\s*$)/,Tt=/^(`+|[^`])(?:(?= {2,}\n)|[\s\S]*?(?:(?=[\\<!\[`*_]|\b_|$)|[^ ](?= {2,}\n)))/,Me=/[\p{P}\p{S}]/u,en=/[\s\p{P}\p{S}]/u,Mn=/[^\s\p{P}\p{S}]/u,Et=F(/^((?![*_])punctSpace)/,"u").replace(/punctSpace/g,en).getRegex(),Fn=/(?!~)[\p{P}\p{S}]/u,At=/(?!~)[\s\p{P}\p{S}]/u,Rt=/(?:[^\s\p{P}\p{S}]|~)/u,Pt=/\[[^[\]]*?\]\((?:\\.|[^\\\(\)]|\((?:\\.|[^\\\(\)])*\))*\)|`[^`]*?`|<[^<>]*?>/g,Nn=/^(?:\*+(?:((?!\*)punct)|[^\s*]))|^_+(?:((?!_)punct)|([^\s_]))/,_t=F(Nn,"u").replace(/punct/g,Me).getRegex(),Lt=F(Nn,"u").replace(/punct/g,Fn).getRegex(),Bn="^[^_*]*?__[^_*]*?\\*[^_*]*?(?=__)|[^*]+(?=[^*])|(?!\\*)punct(\\*+)(?=[\\s]|$)|notPunctSpace(\\*+)(?!\\*)(?=punctSpace|$)|(?!\\*)punctSpace(\\*+)(?=notPunctSpace)|[\\s](\\*+)(?!\\*)(?=punct)|(?!\\*)punct(\\*+)(?!\\*)(?=punct)|notPunctSpace(\\*+)(?=notPunctSpace)",Mt=F(Bn,"gu").replace(/notPunctSpace/g,Mn).replace(/punctSpace/g,en).replace(/punct/g,Me).getRegex(),Ft=F(Bn,"gu").replace(/notPunctSpace/g,Rt).replace(/punctSpace/g,At).replace(/punct/g,Fn).getRegex(),Nt=F("^[^_*]*?\\*\\*[^_*]*?_[^_*]*?(?=\\*\\*)|[^_]+(?=[^_])|(?!_)punct(_+)(?=[\\s]|$)|notPunctSpace(_+)(?!_)(?=punctSpace|$)|(?!_)punctSpace(_+)(?=notPunctSpace)|[\\s](_+)(?!_)(?=punct)|(?!_)punct(_+)(?!_)(?=punct)","gu").replace(/notPunctSpace/g,Mn).replace(/punctSpace/g,en).replace(/punct/g,Me).getRegex(),Bt=F(/\\(punct)/,"gu").replace(/punct/g,Me).getRegex(),Ot=F(/^<(scheme:[^\s\x00-\x1f<>]*|email)>/).replace("scheme",/[a-zA-Z][a-zA-Z0-9+.-]{1,31}/).replace("email",/[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+(@)[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)+(?![-_])/).getRegex(),Ht=F(Ze).replace("(?:-->|$)","-->").getRegex(),qt=F("^comment|^</[a-zA-Z][\\w:-]*\\s*>|^<[a-zA-Z][\\w-]*(?:attribute)*?\\s*/?>|^<\\?[\\s\\S]*?\\?>|^<![a-zA-Z]+\\s[\\s\\S]*?>|^<!\\[CDATA\\[[\\s\\S]*?\\]\\]>").replace("comment",Ht).replace("attribute",/\s+[a-zA-Z:_][\w.:-]*(?:\s*=\s*"[^"]*"|\s*=\s*'[^']*'|\s*=\s*[^\s"'=<>`]+)?/).getRegex(),Ae=/(?:\[(?:\\.|[^\[\]\\])*\]|\\.|`[^`]*`|[^\[\]\\`])*?/,Dt=F(/^!?\[(label)\]\(\s*(href)(?:(?:[ \t]*(?:\n[ \t]*)?)(title))?\s*\)/).replace("label",Ae).replace("href",/<(?:\\.|[^\n<>\\])+>|[^ \t\n\x00-\x1f]*/).replace("title",/"(?:\\"?|[^"\\])*"|'(?:\\'?|[^'\\])*'|\((?:\\\)?|[^)\\])*\)/).getRegex(),On=F(/^!?\[(label)\]\[(ref)\]/).replace("label",Ae).replace("ref",Xe).getRegex(),Hn=F(/^!?\[(ref)\](?:\[\])?/).replace("ref",Xe).getRegex(),Ut=F("reflink|nolink(?!\\()","g").replace("reflink",On).replace("nolink",Hn).getRegex(),nn={_backpedal:Se,anyPunctuation:Bt,autolink:Ot,blockSkip:Pt,br:Ln,code:Ct,del:Se,emStrongLDelim:_t,emStrongRDelimAst:Mt,emStrongRDelimUnd:Nt,escape:kt,link:Dt,nolink:Hn,punctuation:Et,reflink:On,reflinkSearch:Ut,tag:qt,text:Tt,url:Se},jt={...nn,link:F(/^!?\[(label)\]\((.*?)\)/).replace("label",Ae).getRegex(),reflink:F(/^!?\[(label)\]\s*\[([^\]]*)\]/).replace("label",Ae).getRegex()},je={...nn,emStrongRDelimAst:Ft,emStrongLDelim:Lt,url:F(/^((?:ftp|https?):\/\/|www\.)(?:[a-zA-Z0-9\-]+\.?)+[^\s<]*|^email/,"i").replace("email",/[A-Za-z0-9._+-]+(@)[a-zA-Z0-9-_]+(?:\.[a-zA-Z0-9-_]*[a-zA-Z0-9])+(?![-_])/).getRegex(),_backpedal:/(?:[^?!.,:;*_'"~()&]+|\([^)]*\)|&(?![a-zA-Z0-9]+;$)|[?!.,:;*_'"~)]+(?!$))+/,del:/^(~~?)(?=[^\s~])((?:\\.|[^\\])*?(?:\\.|[^\s~\\]))\1(?=[^~]|$)/,text:/^([`~]+|[^`~])(?:(?= {2,}\n)|(?=[a-zA-Z0-9.!#$%&'*+\/=?_`{\|}~-]+@)|[\s\S]*?(?:(?=[\\<!\[`*~_]|\b_|https?:\/\/|ftp:\/\/|www\.|$)|[^ ](?= {2,}\n)|[^a-zA-Z0-9.!#$%&'*+\/=?_`{\|}~-](?=[a-zA-Z0-9.!#$%&'*+\/=?_`{\|}~-]+@)))/},$t={...je,br:F(Ln).replace("{2,}","*").getRegex(),text:F(je.text).replace("\\b_","\\b_| {2,}\\n").replace(/\{2,\}/g,"*").getRegex()},xe={normal:Je,gfm:xt,pedantic:It},he={normal:nn,gfm:je,breaks:$t,pedantic:jt},zt={"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"},hn=n=>zt[n];function ee(n,e){if(e){if(K.escapeTest.test(n))return n.replace(K.escapeReplace,hn)}else if(K.escapeTestNoEncode.test(n))return n.replace(K.escapeReplaceNoEncode,hn);return n}function vn(n){try{n=encodeURI(n).replace(K.percentDecode,"%")}catch{return null}return n}function Sn(n,e){var a;const t=n.replace(K.findPipe,(c,i,u)=>{let o=!1,l=i;for(;--l>=0&&u[l]==="\\";)o=!o;return o?"|":" |"}),r=t.split(K.splitPipe);let s=0;if(r[0].trim()||r.shift(),r.length>0&&!((a=r.at(-1))!=null&&a.trim())&&r.pop(),e)if(r.length>e)r.splice(e);else for(;r.length<e;)r.push("");for(;s<r.length;s++)r[s]=r[s].trim().replace(K.slashPipe,"|");return r}function ve(n,e,t){const r=n.length;if(r===0)return"";let s=0;for(;s<r&&n.charAt(r-s-1)===e;)s++;return n.slice(0,r-s)}function Vt(n,e){if(n.indexOf(e[1])===-1)return-1;let t=0;for(let r=0;r<n.length;r++)if(n[r]==="\\")r++;else if(n[r]===e[0])t++;else if(n[r]===e[1]&&(t--,t<0))return r;return t>0?-2:-1}function bn(n,e,t,r,s){const a=e.href,c=e.title||null,i=n[1].replace(s.other.outputLinkReplace,"$1");r.state.inLink=!0;const u={type:n[0].charAt(0)==="!"?"image":"link",raw:t,href:a,title:c,text:i,tokens:r.inlineTokens(i)};return r.state.inLink=!1,u}function Wt(n,e,t){const r=n.match(t.other.indentCodeCompensation);if(r===null)return e;const s=r[1];return e.split(`
+var ot=Object.defineProperty;var lt=(n,e,t)=>e in n?ot(n,e,{enumerable:!0,configurable:!0,writable:!0,value:t}):n[e]=t;var H=(n,e,t)=>lt(n,typeof e!="symbol"?e+"":e,t);(function(){const e=document.createElement("link").relList;if(e&&e.supports&&e.supports("modulepreload"))return;for(const s of document.querySelectorAll('link[rel="modulepreload"]'))r(s);new MutationObserver(s=>{for(const a of s)if(a.type==="childList")for(const c of a.addedNodes)c.tagName==="LINK"&&c.rel==="modulepreload"&&r(c)}).observe(document,{childList:!0,subtree:!0});function t(s){const a={};return s.integrity&&(a.integrity=s.integrity),s.referrerPolicy&&(a.referrerPolicy=s.referrerPolicy),s.crossOrigin==="use-credentials"?a.credentials="include":s.crossOrigin==="anonymous"?a.credentials="omit":a.credentials="same-origin",a}function r(s){if(s.ep)return;s.ep=!0;const a=t(s);fetch(s.href,a)}})();(function(n){var e=104857600,t=200*1024*1024,r='<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"></path></svg>';function s(){if(!document.getElementById("myagent-path-picker-styles")){var d=document.createElement("style");d.id="myagent-path-picker-styles",d.textContent='.path-input-row{display:flex;align-items:stretch;gap:.35rem;width:100%;}.path-input-row>.ip,.path-input-row>.tx,.path-input-row>input[type="text"],.path-input-row>input:not([type]){flex:1;min-width:0;}.path-browse-btn{flex-shrink:0;width:2.35rem;padding:0;border:1px solid var(--border-glass,rgba(255,255,255,.08));border-radius:var(--radius-sm,8px);background:var(--surface-glass2,rgba(40,40,60,.94));color:var(--text-secondary,#a6adc8);cursor:pointer;display:inline-flex;align-items:center;justify-content:center;transition:color .18s,border-color .18s,background .18s;}.path-browse-btn:hover{color:var(--text-primary,#cdd6f4);border-color:var(--border-brand-accent,rgba(124,111,247,.35));background:rgba(108,92,231,.12);}.path-browse-btn:disabled{opacity:.45;cursor:not-allowed;}.path-browse-btn--ghost{background:transparent;border-color:transparent;box-shadow:none;width:2.1rem;}.path-browse-btn--ghost:hover{background:rgba(108,92,231,.1);border-color:transparent;color:var(--accent-2,#d4b8fc);}.input-wrapper .path-browse-btn--ghost{align-self:center;margin-right:-.15rem;}.input-wrapper.is-drag-over{border-color:rgba(203,166,247,.62);box-shadow:0 0 0 3px rgba(203,166,247,.12),0 0 28px rgba(139,92,246,.18);}.input-wrapper.is-file-uploading{border-color:rgba(99,102,241,.52);}.chat-upload-status{box-sizing:border-box;width:100%;margin:.38rem 0 0;padding:.42rem .58rem;border:1px solid rgba(99,102,241,.22);border-radius:10px;background:rgba(99,102,241,.08);color:var(--text-secondary,#a6adc8);font-size:.72rem;}.chat-upload-status-row{display:flex;align-items:center;gap:.5rem;}.chat-upload-status-label{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}.chat-upload-cancel{flex:none;border:0;background:transparent;color:var(--accent-2,#d4b8fc);font:inherit;font-weight:700;cursor:pointer;padding:.08rem .2rem;}.chat-upload-cancel:hover{color:var(--text-primary,#fff);}.chat-upload-progress{height:4px;margin-top:.36rem;border-radius:999px;overflow:hidden;background:rgba(255,255,255,.1);}.chat-upload-progress-bar{display:block;width:0;height:100%;border-radius:inherit;background:linear-gradient(90deg,#6366f1,#a78bfa);transition:width .12s linear;}.workspace-file-popover{position:fixed;display:none;z-index:260;width:min(46rem,calc(100vw - 1.2rem));height:min(44rem,82vh);max-height:min(44rem,82vh);border:1px solid var(--border-glass,rgba(255,255,255,.08));border:1px solid var(--floating-border,var(--border-glass,rgba(255,255,255,.08)));border-radius:var(--radius-sm,8px);background:var(--surface-glass2,rgba(40,40,60,.96));background:var(--floating-surface,var(--surface-glass2,rgba(40,40,60,.96)));box-shadow:var(--shadow-soft,0 18px 50px rgba(0,0,0,.34));box-shadow:var(--floating-shadow,var(--shadow-soft,0 18px 50px rgba(0,0,0,.34)));overflow:hidden;backdrop-filter:blur(22px);-webkit-backdrop-filter:blur(22px);}.workspace-file-popover.is-open{display:flex;flex-direction:column;}.workspace-file-search{position:relative;width:100%;box-sizing:border-box;border:0;border-bottom:1px solid var(--border-glass,rgba(255,255,255,.08));background:var(--surface-glass3,rgba(255,255,255,.035));color:var(--text-primary,#cdd6f4);padding:.56rem .72rem;font:inherit;font-size:.78rem;outline:none;}.workspace-file-search::placeholder{color:var(--text-muted,#6c7086);}.workspace-file-list{position:relative;flex:1;min-height:0;overflow:auto;padding:.36rem .38rem .2rem;}.workspace-file-item{width:100%;display:grid;grid-template-columns:1.05rem minmax(0,1fr) auto;gap:.2rem .38rem;align-items:center;text-align:left;border:0;border-radius:8px;background:transparent;color:var(--text-secondary,#a6adc8);padding:.22rem .36rem;cursor:pointer;font:inherit;font-size:.74rem;}.workspace-file-item:hover,.workspace-file-item.is-active{background:rgba(255,255,255,.055);color:var(--text-primary,#cdd6f4);}.workspace-file-item.is-selected{background:rgba(var(--accent-rgb,137,180,250),.12);color:var(--text-primary,#cdd6f4);}.workspace-file-check{width:.82rem;height:.82rem;border:1px solid var(--border-glass,rgba(255,255,255,.14));border-radius:4px;display:inline-flex;align-items:center;justify-content:center;color:#fff;font-size:.62rem;line-height:1;background:transparent;}.workspace-file-item.is-selected .workspace-file-check{background:rgb(var(--brand-accent-rgb,99,102,241));border-color:transparent;color:#fff;}.workspace-file-dir-row{grid-template-columns:1.05rem minmax(0,1fr) auto;color:var(--text-primary,#cdd6f4);font-weight:650;}.workspace-file-dir-row .workspace-file-tree{grid-column:2/3;}.workspace-file-file-row{grid-template-columns:1.05rem minmax(0,1fr) auto;}.workspace-file-tree{min-width:0;display:flex;align-items:center;gap:.24rem;}.workspace-file-indent{flex:0 0 auto;width:var(--indent,0);}.workspace-file-chevron{width:.8rem;min-width:.8rem;color:var(--text-muted,#6c7086);font-size:.72rem;text-align:center;border:0;background:transparent;padding:0;cursor:pointer;}.workspace-file-icon{position:relative;width:.98rem;min-width:.98rem;height:.74rem;margin-top:.04rem;border-radius:3px;border:1px solid rgba(203,166,247,.28);background:linear-gradient(135deg,rgba(203,166,247,.18),rgba(99,102,241,.1));box-shadow:inset 0 .12rem .26rem rgba(255,255,255,.08);}.workspace-file-icon:before{content:"";position:absolute;left:.06rem;right:.06rem;top:.12rem;height:.16rem;border-radius:999px;background:rgba(203,166,247,.34);}.workspace-file-icon:after{content:"";position:absolute;left:.06rem;right:.06rem;bottom:.11rem;height:.24rem;border-radius:2px;background:rgba(99,102,241,.16);}.workspace-file-icon.is-file{width:.82rem;min-width:.82rem;height:1rem;margin-top:0;border-radius:3px;background:transparent;border:1.5px solid rgba(166,173,200,.58);box-shadow:none;color:var(--text-muted,#6c7086);}.workspace-file-icon.is-file:before{left:auto;right:-1.5px;top:-1.5px;width:.3rem;height:.3rem;border:0;border-left:1.5px solid rgba(166,173,200,.58);border-bottom:1.5px solid rgba(166,173,200,.58);border-radius:0 3px 0 3px;background:var(--surface-glass2,rgba(40,40,60,.94));}.workspace-file-icon.is-file:after{display:none;}.workspace-file-icon.is-folder-svg{width:1rem;min-width:1rem;height:1rem;margin-top:0;border:0;background:transparent;box-shadow:none;color:var(--text-muted,#6c7086);display:inline-flex;align-items:center;justify-content:center;}.workspace-file-icon.is-folder-svg:before,.workspace-file-icon.is-folder-svg:after{display:none;}.workspace-file-icon.is-folder-svg svg{width:1rem;height:1rem;display:block;}.workspace-file-icon.is-image{border-color:rgba(45,212,191,.72);}.workspace-file-icon.is-image:after{display:block;left:.12rem;right:.12rem;bottom:.15rem;height:.24rem;clip-path:polygon(0 100%,38% 38%,56% 66%,76% 24%,100% 100%);background:rgba(45,212,191,.72);}.workspace-file-icon.is-audio{border-color:rgba(251,191,36,.76);}.workspace-file-icon.is-audio:after{display:block;left:.17rem;right:auto;bottom:.18rem;width:.36rem;height:.4rem;border-radius:0;background:rgba(251,191,36,.76);clip-path:polygon(0 32%,45% 32%,100% 0,100% 100%,45% 68%,0 68%);}.workspace-file-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:.74rem;}.workspace-file-dir{grid-column:2/-1;color:var(--text-muted,#6c7086);font-size:.68rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}.workspace-file-meta{color:var(--text-muted,#6c7086);font-size:.68rem;white-space:nowrap;}.workspace-file-footer{position:relative;display:flex;align-items:center;justify-content:space-between;gap:.5rem;padding:.42rem .52rem;border-top:1px solid var(--border-glass,rgba(255,255,255,.08));background:var(--surface-glass3,rgba(255,255,255,.025));font-size:.72rem;color:var(--text-muted,#6c7086);}.workspace-file-outside{flex-shrink:0;border:1px solid var(--border-glass,rgba(255,255,255,.1));border-radius:8px;padding:.28rem .58rem;background:rgba(255,255,255,.035);color:var(--text-secondary,#a6adc8);font:inherit;font-size:.7rem;font-weight:700;cursor:pointer;transition:background .16s,border-color .16s,color .16s;}.workspace-file-outside:hover{background:rgba(255,255,255,.07);border-color:var(--border-brand-accent,rgba(124,111,247,.35));color:var(--text-primary,#fff);}.workspace-file-insert{border:0;border-radius:8px;padding:.34rem .62rem;background:linear-gradient(135deg,#6366f1,#8b5cf6);color:#fff;font-size:.72rem;font-weight:700;cursor:pointer;}.workspace-file-insert:disabled{opacity:.45;cursor:not-allowed;}.workspace-file-empty{padding:1rem;text-align:center;color:var(--text-muted,#6c7086);font-size:.78rem;}.theme-light .workspace-file-popover{background:rgba(255,255,255,.98);}.theme-light .workspace-file-search,.theme-light .workspace-file-footer{background:rgba(15,23,42,.025);}.theme-light .workspace-file-item:hover,.theme-light .workspace-file-item.is-active{background:rgba(15,23,42,.05);}.theme-light .workspace-file-outside{background:rgba(15,23,42,.025);}',document.head.appendChild(d)}}async function a(d,v,f){var y=typeof AbortController<"u"?new AbortController:null,b=y?setTimeout(function(){y.abort()},5e4):null,A;try{A=await fetch("/api/pick-path",{method:"POST",headers:{"Content-Type":"application/json"},credentials:"same-origin",body:JSON.stringify({kind:d||"directory",initial:v||"",multiple:!!f}),signal:y?y.signal:void 0})}finally{b&&clearTimeout(b)}var I=await A.json().catch(function(){return{ok:!1,error:"请求失败"}});if(!A.ok||!I.ok){if(I&&I.cancelled)return null;var p=I&&I.error||"无法打开选择对话框";if(/取消|cancelled|800704c7|2147023673/i.test(p))return null;throw new Error(p)}return f?Array.isArray(I.paths)?I.paths:I.path?[I.path]:[]:I.path||null}async function c(d,v,f,y,b){d.disabled=!0;try{var A=await a(v,f||"",!!b);y&&y(A)}catch{return}finally{d.disabled=!1}}function i(d){var v=String(d||"").trim();return v?((v.charAt(0)==='"'&&v.charAt(v.length-1)==='"'||v.charAt(0)==="'"&&v.charAt(v.length-1)==="'")&&(v=v.slice(1,-1)),'"'+v.replace(/"/g,'\\"')+'"'):""}function u(d){var v=String(d||"").toLowerCase().split(".").pop()||"";return/^(png|jpe?g|gif|webp|bmp|svg|tiff?|ico|avif)$/.test(v)?"is-image":/^(mp3|wav|flac|aac|m4a|ogg|oga|opus|wma|aiff?)$/.test(v)?"is-audio":""}function o(d,v){var f=d.selectionStart,y=d.selectionEnd,b=d.value.slice(0,f),A=d.value.slice(y),I=String(v||"");b.length&&!/\s$/.test(b)&&(I=" "+I),A.length&&!/^\s/.test(A)&&(I=I+" "),d.value=b+I+A;var p=b.length+I.length;d.selectionStart=d.selectionEnd=p,d.dispatchEvent(new Event("input",{bubbles:!0})),d.focus()}function l(d){var v=Array.prototype.slice.call(d||[]).filter(Boolean),f=0;if(v.forEach(function(y){var b=Number(y&&y.size||0);if(b>e)throw new Error("文件“"+String(y&&y.name||"未命名文件")+"”超过 "+h(e)+" 限制。");f+=Math.max(0,b)}),f>t)throw new Error("本次上传总大小超过 "+h(t)+" 限制。");return v}function S(d,v){var f;try{f=l(d)}catch(b){return Promise.reject(b)}if(!f.length)return Promise.resolve([]);v=v||{};var y=new FormData;return f.forEach(function(b){y.append("files",b,b.name||"upload.bin")}),new Promise(function(b,A){var I=new XMLHttpRequest;I.open("POST","/api/upload-chat-files",!0),I.withCredentials=!0,I.timeout=600*1e3,I.upload&&typeof v.onProgress=="function"&&(I.upload.onprogress=function(p){v.onProgress(p.loaded||0,p.lengthComputable?p.total:0)}),typeof v.registerAbort=="function"&&v.registerAbort(function(){I.abort()}),I.onload=function(){var p;try{p=JSON.parse(I.responseText||"{}")}catch{p={ok:!1,error:"上传失败"}}if(I.status<200||I.status>=300||!p.ok){A(new Error(p&&p.error||"上传失败"));return}b(Array.isArray(p.files)?p.files:[])},I.onerror=function(){A(new Error("上传失败：网络连接异常。"))},I.ontimeout=function(){A(new Error("上传超时，请重试。"))},I.onabort=function(){var p=new Error("上传已取消。");p.name="AbortError",A(p)},I.send(y)})}function h(d){return d=Number(d||0),!isFinite(d)||d<=0?"":d<1024?d+" B":d<1024*1024?Math.round(d/102.4)/10+" KB":d<1024*1024*1024?Math.round(d/104857.6)/10+" MB":Math.round(d/1073741824e-1)/10+" GB"}async function _(d,v,f){var y=[];d?y.push("q="+encodeURIComponent(d)):v&&y.push("dir="+encodeURIComponent(v));var b="/api/workspace-files"+(y.length?"?"+y.join("&"):""),A=await fetch(b,{credentials:"same-origin",signal:f}),I=await A.json().catch(function(){return{ok:!1,error:"读取工作区文件失败"}});if(!A.ok||!I.ok)throw new Error(I&&I.error||"读取工作区文件失败");return Array.isArray(I.files)?I.files:[]}function E(){try{return typeof currentSessionId<"u"?String(currentSessionId||""):""}catch{return""}}function k(d,v,f){if(v){var y=E();if(f&&y&&f!==y){try{if(typeof persistInputDraft=="function"){var b="";typeof draftBySession<"u"&&Object.prototype.hasOwnProperty.call(draftBySession,f)?b=String(draftBySession[f]||""):typeof readStoredInputDraft=="function"&&(b=String(readStoredInputDraft(f)||"")),persistInputDraft(f,b.trim()?b+" "+v:v);return}}catch{}return}o(d,v)}}function O(d,v,f){var y=E();return S(v,f).then(function(b){var A=Array.isArray(d._myAgentStructuredAttachments)?d._myAgentStructuredAttachments.slice():[];b.forEach(function(p){!p||!p.path||A.some(function(W){return W.path===p.path})||A.push({path:p.path,name:p.name||"",size:Number(p.size||0)})}),d._myAgentStructuredAttachments=A;var I=b.map(function(p){return i(p.path||p.rel||p.name)}).join(" ");k(d,I,y)})}function $(d){return Array.isArray(d&&d._myAgentStructuredAttachments)?d._myAgentStructuredAttachments.slice():[]}function L(d){d&&(d._myAgentStructuredAttachments=[])}function z(d,v){if(d){var f=Array.isArray(d._myAgentStructuredAttachments)?d._myAgentStructuredAttachments.slice():[];Array.prototype.slice.call(v||[]).forEach(function(y){!y||!y.path||f.some(function(b){return b.path===y.path})||f.push({path:y.path,name:y.name||"",size:Number(y.size||0)})}),d._myAgentStructuredAttachments=f}}function P(d,v){console.error("chat file upload failed:",v),d.dispatchEvent(new CustomEvent("myagent:file-paste-error",{bubbles:!0,detail:{message:String(v&&v.message||v||"上传失败")}}))}function V(d,v){var f=d.closest?d.closest(".input-wrapper"):null;v?d.dataset.fileUploadBusy="1":delete d.dataset.fileUploadBusy,f&&(f.classList.toggle("is-file-uploading",!!v),v?f.setAttribute("aria-busy","true"):f.removeAttribute("aria-busy")),d.dispatchEvent(new CustomEvent("myagent:file-upload-state",{bubbles:!0,detail:{busy:!!v}}))}function j(d,v){var f=d.closest?d.closest(".input-wrapper"):null,y=document.createElement("div");y.className="chat-upload-status",y.setAttribute("role","status"),y.innerHTML='<div class="chat-upload-status-row"><span class="chat-upload-status-label"></span><button type="button" class="chat-upload-cancel">取消</button></div><div class="chat-upload-progress" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><span class="chat-upload-progress-bar"></span></div>';var b=v.length;return y.querySelector(".chat-upload-status-label").textContent="正在上传 "+b+" 个文件… 0%",f&&f.parentNode&&f.parentNode.insertBefore(y,f.nextSibling),y}function R(d,v){var f;try{f=l(v)}catch(Q){return P(d,Q),Promise.reject(Q)}if(!f.length)return Promise.resolve();if(d._myAgentActiveUpload){var y=new Error("已有文件正在上传，请等待完成或先取消。");return P(d,y),Promise.reject(y)}var b=j(d,f),A=b.querySelector(".chat-upload-status-label"),I=b.querySelector(".chat-upload-progress"),p=b.querySelector(".chat-upload-progress-bar"),W=b.querySelector(".chat-upload-cancel"),X=null,Z=d._myAgentActiveUpload={};return V(d,!0),W.addEventListener("click",function(){W.disabled=!0,A.textContent="正在取消上传…",X&&X()}),O(d,f,{registerAbort:function(Q){X=Q},onProgress:function(Q,ce){if(d._myAgentActiveUpload===Z){var de=ce>0?Math.min(100,Math.round(Q*100/ce)):0;A.textContent="正在上传 "+f.length+" 个文件… "+de+"%",p.style.width=de+"%",I.setAttribute("aria-valuenow",String(de))}}}).catch(function(Q){throw(!Q||Q.name!=="AbortError")&&P(d,Q),Q}).finally(function(){d._myAgentActiveUpload===Z&&(delete d._myAgentActiveUpload,V(d,!1)),b.parentNode&&b.parentNode.removeChild(b)})}function D(d){var v=d&&d.clipboardData;if(!v)return[];var f=[],y=Array.prototype.slice.call(v.items||[]);return y.forEach(function(b){if(!(!b||b.kind!=="file"||typeof b.getAsFile!="function")){var A=b.getAsFile();A&&f.push(A)}}),f.length||(f=Array.prototype.slice.call(v.files||[]).filter(Boolean)),f.map(function(b,A){if(String(b&&b.name||"").trim())return b;var I=String(b&&b.type||"").split("/")[1]||"bin";I=I.replace(/[^a-z0-9.+-]/gi,"")||"bin";var p="clipboard-"+Date.now()+"-"+(A+1)+"."+I;try{return new File([b],p,{type:b.type||"application/octet-stream",lastModified:Date.now()})}catch{return b}})}function G(d){var v=d&&d.clipboardData;if(!v||typeof v.getData!="function")return!1;try{return String(v.getData("text/plain")||"").trim().length>0}catch{return!1}}function se(d){!d||d.dataset.filePasteBound==="1"||(d.dataset.filePasteBound="1",d.addEventListener("paste",function(v){if(!G(v)){var f=D(v);f.length&&(v.preventDefault(),R(d,f).catch(function(){}))}}))}function Vn(d,v){var f=document.createElement("div");f.className="workspace-file-popover",f.setAttribute("aria-hidden","true"),f.innerHTML='<input class="workspace-file-search" type="text" autocomplete="off" spellcheck="false" placeholder="搜索工作区文件（↑↓ 移动 · Enter 选择 · Esc 关闭）"><div class="workspace-file-list" role="listbox"></div><div class="workspace-file-footer"><span class="workspace-file-count">未选择文件</span><button type="button" class="workspace-file-outside">选择工作目录外文件</button></div>',document.body.appendChild(f);var y=f.querySelector(".workspace-file-search"),b=f.querySelector(".workspace-file-list"),A=f.querySelector(".workspace-file-count"),I=f.querySelector(".workspace-file-outside"),p={items:[],visible:[],active:0,open:!1,debounce:null,controller:null,selected:Object.create(null),expanded:Object.create(null),loadedDirs:Object.create(null),itemMap:Object.create(null)};function W(){var m=d.closest?d.closest(".input-wrapper"):d,g=m.getBoundingClientRect(),w=8,T=Math.min(Math.max(g.width,520),window.innerWidth-16),x=Math.max(8,Math.min(g.left,window.innerWidth-T-8)),B=document.querySelector(".titlebar"),C=B?B.getBoundingClientRect().bottom:44,M=parseFloat(getComputedStyle(document.documentElement).fontSize||"16")||16,U=Math.min(44*M,window.innerHeight*.82),J=Math.max(1,g.top-C-w),Y=Math.min(U,J),ue=g.top-Y-w;if(Y<96){var ge=Math.max(1,window.innerHeight-g.bottom-w-8);Y=Math.min(U,ge),ue=g.bottom+w}f.style.left=x+"px",f.style.top=Math.max(C,ue)+"px",f.style.width=T+"px",f.style.height=Math.max(1,Math.floor(Y))+"px",f.style.maxHeight=Math.max(1,Math.floor(Y))+"px"}function X(){var m=Object.keys(p.selected).length;A.textContent=m?"已选择 "+m+" 项":"未选择文件",b.querySelectorAll(".workspace-file-item").forEach(function(g){var w=g.getAttribute("data-path-key")||"",T=!!p.selected[w];g.classList.toggle("is-selected",T);var x=g.querySelector(".workspace-file-check");x&&(x.textContent=T?"✓":"")})}function Z(m){var g=b.querySelectorAll(".workspace-file-item");if(!g.length){p.active=0;return}p.active=Math.max(0,Math.min(m,g.length-1));for(var w=0;w<g.length;w++)g[w].classList.toggle("is-active",w===p.active),g[w].setAttribute("aria-selected",w===p.active?"true":"false");var T=g[p.active];T&&typeof T.scrollIntoView=="function"&&T.scrollIntoView({block:"nearest"})}function Q(){p.open=!1,f.classList.remove("is-open"),f.setAttribute("aria-hidden","true"),p.debounce&&clearTimeout(p.debounce),p.controller&&p.controller.abort()}function ce(m){return m&&(m.path||m.rel||m.name)||""}function de(m){return i(ce(m))}function Gn(m,g){var w=ce(m);if(!w)return!1;var T=String(m&&m.rel||"");return g.indexOf(de(m))>=0||g.indexOf(w)>=0||T&&g.indexOf(i(T))>=0||T&&g.indexOf(T)>=0}function Kn(m,g){m=String(m||""),g=String(g||"");for(var w=0;w<m.length&&w<g.length&&m.charAt(w)===g.charAt(w);)w++;for(var T=m.length-1,x=g.length-1;T>=w&&x>=w&&m.charAt(T)===g.charAt(x);)T--,x--;return g.slice(w,x+1).trim()}function Yn(m,g){if(g){var w=String(d.value||"");if(!(w.indexOf(g)>=0)){var T=d.value;o(d,g);var x=Kn(T,d.value);m&&x&&(m._inputToken=x)}}}function Xn(m,g){if(!g&&!m)return;var w=String(d.value||""),T=[];function x(C){C=String(C||"").trim(),C&&T.indexOf(C)<0&&T.push(C)}x(m&&m._inputToken),x(g),x(m&&m.path),x(m&&m.rel),x(m&&m.path&&i(m.path)),x(m&&m.rel&&i(m.rel));var B=w;T.sort(function(C,M){return M.length-C.length}).forEach(function(C){var M=C.replace(/[.*+?^${}()|[\]\\]/g,"\\$&"),U=new RegExp("(?:^|\\s)"+M+"(?=\\s|$)","g");B=B.replace(U,function(J){return J.charAt(0)&&/\s/.test(J.charAt(0))?" ":""})}),B=B.replace(/[ \t]{2,}/g," ").trim(),B!==w&&(d.value=B,d.selectionStart=d.selectionEnd=d.value.length,d.dispatchEvent(new Event("input",{bubbles:!0})))}function we(m){if(m){var g=ce(m);if(g){var w=de(m);if(p.selected[g]){var T=p.selected[g];delete p.selected[g],Xn(T,w)}else p.selected[g]=m,Yn(m,w);X()}}}function sn(){var m=String(d.value||"");Object.keys(p.selected).forEach(function(g){var w=p.selected[g];Gn(w,m)||delete p.selected[g]})}function Zn(){sn(),X()}d.addEventListener("input",Zn),I&&I.addEventListener("click",function(m){m.preventDefault(),m.stopPropagation(),typeof v=="function"&&v()});function an(){var m=String(n.__WORK_DIR__||"workspace"),g=m.split(/[\\/]+/).filter(Boolean);return g[g.length-1]||"workspace"}function on(m,g,w){return{type:"dir",name:m,rel:g,root:!!w,path:"",dirs:Object.create(null),files:[],children:[],loaded:!1}}function Jn(m,g){var w=String(m&&m.path||""),T=String(g||"").replace(/\//g,"\\");return w&&T&&w.toLowerCase().slice(-T.length)===T.toLowerCase()?w.slice(0,Math.max(0,w.length-T.length)).replace(/[\\/]+$/,""):String(n.__WORK_DIR__||"").replace(/[\\/]+$/,"")}function ln(m,g){var w=String(m||"").replace(/[\\/]+$/,""),T=String(g||"").replace(/[\\/]+/g,"/");if(!T)return w;var x=w.indexOf("\\")>=0?"\\":"/";return w?w+x+T.replace(/\//g,x):T}function me(m){return{kind:"directory",name:m.name||m.rel||an(),rel:m.rel||"",path:m.path||ln(String(n.__WORK_DIR__||""),m.rel||"")}}function et(m){var g=on(an(),"",!0);g.path=String(n.__WORK_DIR__||"").replace(/[\\/]+$/,""),g.loaded=!!p.loadedDirs.__root__;function w(x,B){for(var C=g,M=[],U=0;U<x.length;U++)M.push(x[U]),C.dirs[x[U]]||(C.dirs[x[U]]=on(x[U],M.join("/"),!1),C.dirs[x[U]].path=ln(B||g.path,M.join("/"))),C=C.dirs[x[U]],C.loaded=!!p.loadedDirs[C.rel||"__root__"];return C}(m||[]).forEach(function(x){var B=String(x.rel||x.path||x.name||"").replace(/\\/g,"/"),C=B.split("/").filter(Boolean);if(C.length){var M=Jn(x,B);if(!g.path&&M&&(g.path=M),x.kind==="directory"){var U=w(C,M||g.path);U.name=x.name||U.name,U.path=x.path||U.path;return}var J=w(C.slice(0,-1),M||g.path);J.files.push({type:"file",name:x.name||C[C.length-1]||B,rel:B,item:x})}});function T(x){var B=Object.keys(x.dirs).map(function(C){return x.dirs[C]}).sort(function(C,M){return C.name.localeCompare(M.name,void 0,{sensitivity:"base"})});B.forEach(T),x.files.sort(function(C,M){return C.name.localeCompare(M.name,void 0,{sensitivity:"base"})}),x.children=B.concat(x.files)}return T(g),g}function cn(m,g,w){if(!(!m||m.type!=="dir")){w=Number(w||0);var T=m.rel||"__root__";g?p.expanded[T]=!0:typeof p.expanded[T]>"u"&&(p.expanded[T]=w===0),g&&m.children.forEach(function(x){x.type==="dir"&&cn(x,g,w+1)})}}function nt(m){var g=[];function w(T,x){g.push({type:"dir",node:T,depth:x}),p.expanded[T.rel||"__root__"]&&T.children.forEach(function(B){B.type==="dir"?w(B,x+1):g.push({type:"file",node:B,depth:x+1})})}return w(m,0),g}function tt(m){return String(m&&(m.kind||"file")||"file")+":"+String(m&&(m.rel||m.path||m.name)||"")}function dn(m){(m||[]).forEach(function(g){var w=tt(g);w!==":"&&(p.itemMap[w]=g)}),p.items=Object.keys(p.itemMap).map(function(g){return p.itemMap[g]}),p.items.sort(function(g,w){return String(g.rel||"").localeCompare(String(w.rel||""),void 0,{sensitivity:"base"})})}function rt(m){if(m){var g=m.rel||"__root__";p.expanded[g]=!p.expanded[g],ae(p.items,!1),p.expanded[g]&&!y.value&&!p.loadedDirs[g]&&st(m.rel||"")}}function ae(m,g,w){if(sn(),p.items=(m||[]).slice().sort(function(x,B){return String(x.rel||"").localeCompare(String(B.rel||""),void 0,{sensitivity:"base"})}),b.innerHTML="",p.visible=[],g){b.innerHTML='<div class="workspace-file-empty">加载中</div>';return}if(w){b.innerHTML='<div class="workspace-file-empty">'+String(w)+"</div>";return}if(!p.items.length){b.innerHTML='<div class="workspace-file-empty">没有匹配文件</div>';return}var T=et(p.items);cn(T,!!y.value),p.visible=nt(T),p.visible.forEach(function(x,B){var C=x.node,M=document.createElement("button");M.type="button",M.className="workspace-file-item "+(x.type==="dir"?"workspace-file-dir-row":"workspace-file-file-row"),M.setAttribute("role","option"),M.setAttribute("data-row-index",String(B)),M.setAttribute("data-path-key",x.type==="dir"?me(C).path||me(C).rel||me(C).name||"":C.item.path||C.item.rel||C.item.name||"");var U=document.createElement("div");U.className="workspace-file-tree";var J=document.createElement("span");J.className="workspace-file-indent",J.style.setProperty("--indent",Math.min(x.depth,10)*.86+"rem");var Y=document.createElement("span");Y.className="workspace-file-chevron",Y.textContent=x.type==="dir"?p.expanded[C.rel||"__root__"]?"▾":"▸":"",x.type==="dir"?(Y.setAttribute("aria-label",p.expanded[C.rel||"__root__"]?"折叠文件夹":"展开文件夹"),Y.setAttribute("role","button"),Y.addEventListener("click",function(fe){fe.preventDefault(),fe.stopPropagation(),rt(C)})):Y.setAttribute("tabindex","-1");var ue=document.createElement("span");ue.className="workspace-file-icon"+(x.type==="file"?" is-file "+u(C.item&&C.item.name):" is-folder-svg"),x.type==="dir"&&(ue.innerHTML=r);var ge=document.createElement("div");ge.className="workspace-file-name",ge.textContent=C.name||C.rel||"";var Ne=document.createElement("div");Ne.className="workspace-file-meta",Ne.textContent=x.type==="dir"?"":h(C.item.size),U.appendChild(J),U.appendChild(Y),U.appendChild(ue),U.appendChild(ge);var mn=document.createElement("span");mn.className="workspace-file-check",M.appendChild(mn),M.appendChild(U),M.appendChild(Ne),M.addEventListener("mouseenter",function(){Z(B)}),M.addEventListener("click",function(fe){fe.preventDefault(),fe.stopPropagation(),x.type==="dir"?we(me(C)):we(C.item)}),b.appendChild(M)}),Z(0),X()}function un(){var m=y.value||"";p.controller&&p.controller.abort(),p.controller=typeof AbortController<"u"?new AbortController:null,ae(p.items,!0),_(m,"",p.controller?p.controller.signal:void 0).then(function(g){p.open&&(m?ae(g,!1):(p.loadedDirs.__root__=!0,dn(g),ae(p.items,!1)))}).catch(function(g){g&&g.name==="AbortError"||p.open&&ae([],!1,g&&g.message||"读取失败")})}function st(m){var g=m||"__root__";p.loadedDirs[g]||(p.loadedDirs[g]=!0,_("",m||"",void 0).then(function(w){!p.open||y.value||(dn(w),ae(p.items,!1))}).catch(function(){delete p.loadedDirs[g]}))}function at(){p.debounce&&clearTimeout(p.debounce),p.debounce=setTimeout(un,120)}function pn(){if(p.open){W();try{y.focus(),y.select()}catch{}return}p.open=!0,f.classList.add("is-open"),f.setAttribute("aria-hidden","false"),y.value="",p.expanded=Object.create(null),p.loadedDirs=Object.create(null),p.itemMap=Object.create(null),p.items=[],ae([],!0),W(),un(),setTimeout(function(){W();try{y.focus()}catch{}},0)}function it(){p.open?Q():pn()}return y.addEventListener("input",at),y.addEventListener("keydown",function(m){if(m.key==="ArrowDown")m.preventDefault(),Z(p.active+1);else if(m.key==="ArrowUp")m.preventDefault(),Z(p.active-1);else if(m.key==="Enter"){if(m.isComposing||m.keyCode===229||m.which===229)return;m.preventDefault();var g=p.visible[p.active];g&&g.type==="dir"?we(me(g.node)):g&&g.type==="file"&&we(g.node.item)}else m.key==="Escape"&&(m.preventDefault(),Q(),d.focus())}),document.addEventListener("click",function(m){p.open&&(f.contains(m.target)||Q())}),window.addEventListener("resize",function(){p.open&&W()}),window.addEventListener("scroll",function(){p.open&&W()},!0),{panel:f,open:pn,close:Q,toggle:it}}function rn(d,v,f){if(!d||d.dataset.pathBrowseWrapped==="1")return d;s();var y=document.createElement("div");y.className="path-input-row";var b=d.parentNode;if(!b)return d;b.insertBefore(y,d),y.appendChild(d);var A=document.createElement("button");A.type="button",A.className="path-browse-btn",A.innerHTML=r;var I=f||"浏览路径";return A.setAttribute("aria-label",I),typeof bindUiHoverTip=="function"?(A.setAttribute("data-ui-tip",I),A.removeAttribute("title"),bindUiHoverTip(A)):A.title=I,A.addEventListener("click",function(p){p.stopPropagation();var W=d.getAttribute("data-path-kind")||v;W!=="file"&&W!=="directory"&&(W="directory"),c(A,W,d.value||"",function(X){if(X){var Z=Array.isArray(X)?X[0]||"":String(X);Z&&(d.value=Z,d.dispatchEvent(new Event("input",{bubbles:!0})),d.dispatchEvent(new Event("change",{bubbles:!0})))}})}),y.appendChild(A),d.dataset.pathBrowseWrapped="1",d}function Wn(d){var v=d.closest?d.closest(".input-wrapper"):d;!v||v.dataset.fileDropBound==="1"||(v.dataset.fileDropBound="1",["dragenter","dragover"].forEach(function(f){v.addEventListener(f,function(y){!y.dataTransfer||!y.dataTransfer.files||!y.dataTransfer.files.length||(y.preventDefault(),v.classList.add("is-drag-over"))})}),["dragleave","drop"].forEach(function(f){v.addEventListener(f,function(){v.classList.remove("is-drag-over")})}),v.addEventListener("drop",function(f){!f.dataTransfer||!f.dataTransfer.files||!f.dataTransfer.files.length||(f.preventDefault(),R(d,f.dataTransfer.files).catch(function(){}))}))}function Qn(d,v){if(!(!d||!v)){s(),Wn(v),se(v),d.classList.add("path-browse-btn","path-browse-btn--ghost"),d.innerHTML=r,d.setAttribute("aria-label","工作区文件"),d.setAttribute("data-ui-tip","工作区文件"),d.dataset.silentPickerUnavailable="1",d.removeAttribute("title");var f=document.createElement("input");f.type="file",f.multiple=!0,f.style.display="none",f.setAttribute("aria-hidden","true"),document.body.appendChild(f),f.addEventListener("change",function(){var b=f.files;!b||!b.length||(d.disabled=!0,R(v,b).catch(function(){}).finally(function(){f.value="",d.disabled=!1}))});var y=Vn(v,function(){f.click()});d.addEventListener("click",function(b){if(b.stopPropagation(),b.preventDefault(),b.altKey){f.click();return}if(!b.shiftKey){y.toggle();return}var A=n&&typeof n.__WORK_DIR__=="string"?n.__WORK_DIR__:"";c(d,"file",A,function(I){var p=Array.isArray(I)?I:I?[I]:[];p.length&&o(v,p.map(function(W){return i(W)}).join(" "))},!1)})}}function Fe(d){d=d||document;for(var v=d.querySelectorAll("[data-path-kind]"),f=0;f<v.length;f++){var y=v[f],b=y.getAttribute("data-path-kind");(b==="file"||b==="directory")&&rn(y,b)}}n.MyAgentPathPicker={pickPath:a,wrapInputWithBrowse:rn,attachChatPicker:Qn,uploadChatFiles:S,insertUploadedFiles:O,startChatFileUpload:R,clipboardFilesFromEvent:D,clipboardHasUsableText:G,chatAttachments:$,clearChatAttachments:L,addChatAttachments:z,scan:Fe},document.readyState==="loading"?document.addEventListener("DOMContentLoaded",function(){Fe(document)}):Fe(document)})(typeof window<"u"?window:globalThis);const ct="modulepreload",dt=function(n){return"/"+n},gn={},ut=function(e,t,r){let s=Promise.resolve();if(t&&t.length>0){let c=function(o){return Promise.all(o.map(l=>Promise.resolve(l).then(S=>({status:"fulfilled",value:S}),S=>({status:"rejected",reason:S}))))};document.getElementsByTagName("link");const i=document.querySelector("meta[property=csp-nonce]"),u=(i==null?void 0:i.nonce)||(i==null?void 0:i.getAttribute("nonce"));s=c(t.map(o=>{if(o=dt(o),o in gn)return;gn[o]=!0;const l=o.endsWith(".css"),S=l?'[rel="stylesheet"]':"";if(document.querySelector(`link[href="${o}"]${S}`))return;const h=document.createElement("link");if(h.rel=l?"stylesheet":ct,l||(h.as="script"),h.crossOrigin="",h.href=o,u&&h.setAttribute("nonce",u),document.head.appendChild(h),l)return new Promise((_,E)=>{h.addEventListener("load",_),h.addEventListener("error",()=>E(new Error(`Unable to preload CSS for ${o}`)))})}))}function a(c){const i=new Event("vite:preloadError",{cancelable:!0});if(i.payload=c,window.dispatchEvent(i),!i.defaultPrevented)throw c}return s.then(c=>{for(const i of c||[])i.status==="rejected"&&a(i.reason);return e().catch(a)})};function Ge(){return{async:!1,breaks:!1,extensions:null,gfm:!0,hooks:null,pedantic:!1,renderer:null,silent:!1,tokenizer:null,walkTokens:null}}var le=Ge();function An(n){le=n}var Se={exec:()=>null};function F(n,e=""){let t=typeof n=="string"?n:n.source;const r={replace:(s,a)=>{let c=typeof a=="string"?a:a.source;return c=c.replace(K.caret,"$1"),t=t.replace(s,c),r},getRegex:()=>new RegExp(t,e)};return r}var K={codeRemoveIndent:/^(?: {1,4}| {0,3}\t)/gm,outputLinkReplace:/\\([\[\]])/g,indentCodeCompensation:/^(\s+)(?:```)/,beginningSpace:/^\s+/,endingHash:/#$/,startingSpaceChar:/^ /,endingSpaceChar:/ $/,nonSpaceChar:/[^ ]/,newLineCharGlobal:/\n/g,tabCharGlobal:/\t/g,multipleSpaceGlobal:/\s+/g,blankLine:/^[ \t]*$/,doubleBlankLine:/\n[ \t]*\n[ \t]*$/,blockquoteStart:/^ {0,3}>/,blockquoteSetextReplace:/\n {0,3}((?:=+|-+) *)(?=\n|$)/g,blockquoteSetextReplace2:/^ {0,3}>[ \t]?/gm,listReplaceTabs:/^\t+/,listReplaceNesting:/^ {1,4}(?=( {4})*[^ ])/g,listIsTask:/^\[[ xX]\] /,listReplaceTask:/^\[[ xX]\] +/,anyLine:/\n.*\n/,hrefBrackets:/^<(.*)>$/,tableDelimiter:/[:|]/,tableAlignChars:/^\||\| *$/g,tableRowBlankLine:/\n[ \t]*$/,tableAlignRight:/^ *-+: *$/,tableAlignCenter:/^ *:-+: *$/,tableAlignLeft:/^ *:-+ *$/,startATag:/^<a /i,endATag:/^<\/a>/i,startPreScriptTag:/^<(pre|code|kbd|script)(\s|>)/i,endPreScriptTag:/^<\/(pre|code|kbd|script)(\s|>)/i,startAngleBracket:/^</,endAngleBracket:/>$/,pedanticHrefTitle:/^([^'"]*[^\s])\s+(['"])(.*)\2/,unicodeAlphaNumeric:/[\p{L}\p{N}]/u,escapeTest:/[&<>"']/,escapeReplace:/[&<>"']/g,escapeTestNoEncode:/[<>"']|&(?!(#\d{1,7}|#[Xx][a-fA-F0-9]{1,6}|\w+);)/,escapeReplaceNoEncode:/[<>"']|&(?!(#\d{1,7}|#[Xx][a-fA-F0-9]{1,6}|\w+);)/g,unescapeTest:/&(#(?:\d+)|(?:#x[0-9A-Fa-f]+)|(?:\w+));?/ig,caret:/(^|[^\[])\^/g,percentDecode:/%25/g,findPipe:/\|/g,splitPipe:/ \|/,slashPipe:/\\\|/g,carriageReturn:/\r\n|\r/g,spaceLine:/^ +$/gm,notSpaceStart:/^\S*/,endingNewline:/\n$/,listItemRegex:n=>new RegExp(`^( {0,3}${n})((?:[	 ][^\\n]*)?(?:\\n|$))`),nextBulletRegex:n=>new RegExp(`^ {0,${Math.min(3,n-1)}}(?:[*+-]|\\d{1,9}[.)])((?:[ 	][^\\n]*)?(?:\\n|$))`),hrRegex:n=>new RegExp(`^ {0,${Math.min(3,n-1)}}((?:- *){3,}|(?:_ *){3,}|(?:\\* *){3,})(?:\\n+|$)`),fencesBeginRegex:n=>new RegExp(`^ {0,${Math.min(3,n-1)}}(?:\`\`\`|~~~)`),headingBeginRegex:n=>new RegExp(`^ {0,${Math.min(3,n-1)}}#`),htmlBeginRegex:n=>new RegExp(`^ {0,${Math.min(3,n-1)}}<(?:[a-z].*>|!--)`,"i")},pt=/^(?:[ \t]*(?:\n|$))+/,mt=/^((?: {4}| {0,3}\t)[^\n]+(?:\n(?:[ \t]*(?:\n|$))*)?)+/,gt=/^ {0,3}(`{3,}(?=[^`\n]*(?:\n|$))|~{3,})([^\n]*)(?:\n|$)(?:|([\s\S]*?)(?:\n|$))(?: {0,3}\1[~`]* *(?=\n|$)|$)/,be=/^ {0,3}((?:-[\t ]*){3,}|(?:_[ \t]*){3,}|(?:\*[ \t]*){3,})(?:\n+|$)/,ft=/^ {0,3}(#{1,6})(?=\s|$)(.*)(?:\n+|$)/,Ke=/(?:[*+-]|\d{1,9}[.)])/,Rn=/^(?!bull |blockCode|fences|blockquote|heading|html|table)((?:.|\n(?!\s*?\n|bull |blockCode|fences|blockquote|heading|html|table))+?)\n {0,3}(=+|-+) *(?:\n+|$)/,_n=F(Rn).replace(/bull/g,Ke).replace(/blockCode/g,/(?: {4}| {0,3}\t)/).replace(/fences/g,/ {0,3}(?:`{3,}|~{3,})/).replace(/blockquote/g,/ {0,3}>/).replace(/heading/g,/ {0,3}#{1,6}/).replace(/html/g,/ {0,3}<[^\n>]+>\n/).replace(/\|table/g,"").getRegex(),ht=F(Rn).replace(/bull/g,Ke).replace(/blockCode/g,/(?: {4}| {0,3}\t)/).replace(/fences/g,/ {0,3}(?:`{3,}|~{3,})/).replace(/blockquote/g,/ {0,3}>/).replace(/heading/g,/ {0,3}#{1,6}/).replace(/html/g,/ {0,3}<[^\n>]+>\n/).replace(/table/g,/ {0,3}\|?(?:[:\- ]*\|)+[\:\- ]*\n/).getRegex(),Ye=/^([^\n]+(?:\n(?!hr|heading|lheading|blockquote|fences|list|html|table| +\n)[^\n]+)*)/,vt=/^[^\n]+/,Xe=/(?!\s*\])(?:\\.|[^\[\]\\])+/,St=F(/^ {0,3}\[(label)\]: *(?:\n[ \t]*)?([^<\s][^\s]*|<.*?>)(?:(?: +(?:\n[ \t]*)?| *\n[ \t]*)(title))? *(?:\n+|$)/).replace("label",Xe).replace("title",/(?:"(?:\\"?|[^"\\])*"|'[^'\n]*(?:\n[^'\n]+)*\n?'|\([^()]*\))/).getRegex(),bt=F(/^( {0,3}bull)([ \t][^\n]+?)?(?:\n|$)/).replace(/bull/g,Ke).getRegex(),Le="address|article|aside|base|basefont|blockquote|body|caption|center|col|colgroup|dd|details|dialog|dir|div|dl|dt|fieldset|figcaption|figure|footer|form|frame|frameset|h[1-6]|head|header|hr|html|iframe|legend|li|link|main|menu|menuitem|meta|nav|noframes|ol|optgroup|option|p|param|search|section|summary|table|tbody|td|tfoot|th|thead|title|tr|track|ul",Ze=/<!--(?:-?>|[\s\S]*?(?:-->|$))/,yt=F("^ {0,3}(?:<(script|pre|style|textarea)[\\s>][\\s\\S]*?(?:</\\1>[^\\n]*\\n+|$)|comment[^\\n]*(\\n+|$)|<\\?[\\s\\S]*?(?:\\?>\\n*|$)|<![A-Z][\\s\\S]*?(?:>\\n*|$)|<!\\[CDATA\\[[\\s\\S]*?(?:\\]\\]>\\n*|$)|</?(tag)(?: +|\\n|/?>)[\\s\\S]*?(?:(?:\\n[ 	]*)+\\n|$)|<(?!script|pre|style|textarea)([a-z][\\w-]*)(?:attribute)*? */?>(?=[ \\t]*(?:\\n|$))[\\s\\S]*?(?:(?:\\n[ 	]*)+\\n|$)|</(?!script|pre|style|textarea)[a-z][\\w-]*\\s*>(?=[ \\t]*(?:\\n|$))[\\s\\S]*?(?:(?:\\n[ 	]*)+\\n|$))","i").replace("comment",Ze).replace("tag",Le).replace("attribute",/ +[a-zA-Z:_][\w.:-]*(?: *= *"[^"\n]*"| *= *'[^'\n]*'| *= *[^\s"'=<>`]+)?/).getRegex(),Pn=F(Ye).replace("hr",be).replace("heading"," {0,3}#{1,6}(?:\\s|$)").replace("|lheading","").replace("|table","").replace("blockquote"," {0,3}>").replace("fences"," {0,3}(?:`{3,}(?=[^`\\n]*\\n)|~{3,})[^\\n]*\\n").replace("list"," {0,3}(?:[*+-]|1[.)]) ").replace("html","</?(?:tag)(?: +|\\n|/?>)|<(?:script|pre|style|textarea|!--)").replace("tag",Le).getRegex(),wt=F(/^( {0,3}> ?(paragraph|[^\n]*)(?:\n|$))+/).replace("paragraph",Pn).getRegex(),Je={blockquote:wt,code:mt,def:St,fences:gt,heading:ft,hr:be,html:yt,lheading:_n,list:bt,newline:pt,paragraph:Pn,table:Se,text:vt},fn=F("^ *([^\\n ].*)\\n {0,3}((?:\\| *)?:?-+:? *(?:\\| *:?-+:? *)*(?:\\| *)?)(?:\\n((?:(?! *\\n|hr|heading|blockquote|code|fences|list|html).*(?:\\n|$))*)\\n*|$)").replace("hr",be).replace("heading"," {0,3}#{1,6}(?:\\s|$)").replace("blockquote"," {0,3}>").replace("code","(?: {4}| {0,3}	)[^\\n]").replace("fences"," {0,3}(?:`{3,}(?=[^`\\n]*\\n)|~{3,})[^\\n]*\\n").replace("list"," {0,3}(?:[*+-]|1[.)]) ").replace("html","</?(?:tag)(?: +|\\n|/?>)|<(?:script|pre|style|textarea|!--)").replace("tag",Le).getRegex(),xt={...Je,lheading:ht,table:fn,paragraph:F(Ye).replace("hr",be).replace("heading"," {0,3}#{1,6}(?:\\s|$)").replace("|lheading","").replace("table",fn).replace("blockquote"," {0,3}>").replace("fences"," {0,3}(?:`{3,}(?=[^`\\n]*\\n)|~{3,})[^\\n]*\\n").replace("list"," {0,3}(?:[*+-]|1[.)]) ").replace("html","</?(?:tag)(?: +|\\n|/?>)|<(?:script|pre|style|textarea|!--)").replace("tag",Le).getRegex()},It={...Je,html:F(`^ *(?:comment *(?:\\n|\\s*$)|<(tag)[\\s\\S]+?</\\1> *(?:\\n{2,}|\\s*$)|<tag(?:"[^"]*"|'[^']*'|\\s[^'"/>\\s]*)*?/?> *(?:\\n{2,}|\\s*$))`).replace("comment",Ze).replace(/tag/g,"(?!(?:a|em|strong|small|s|cite|q|dfn|abbr|data|time|code|var|samp|kbd|sub|sup|i|b|u|mark|ruby|rt|rp|bdi|bdo|span|br|wbr|ins|del|img)\\b)\\w+(?!:|[^\\w\\s@]*@)\\b").getRegex(),def:/^ *\[([^\]]+)\]: *<?([^\s>]+)>?(?: +(["(][^\n]+[")]))? *(?:\n+|$)/,heading:/^(#{1,6})(.*)(?:\n+|$)/,fences:Se,lheading:/^(.+?)\n {0,3}(=+|-+) *(?:\n+|$)/,paragraph:F(Ye).replace("hr",be).replace("heading",` *#{1,6} *[^
+]`).replace("lheading",_n).replace("|table","").replace("blockquote"," {0,3}>").replace("|fences","").replace("|list","").replace("|html","").replace("|tag","").getRegex()},kt=/^\\([!"#$%&'()*+,\-./:;<=>?@\[\]\\^_`{|}~])/,Ct=/^(`+)([^`]|[^`][\s\S]*?[^`])\1(?!`)/,Ln=/^( {2,}|\\)\n(?!\s*$)/,Tt=/^(`+|[^`])(?:(?= {2,}\n)|[\s\S]*?(?:(?=[\\<!\[`*_]|\b_|$)|[^ ](?= {2,}\n)))/,Me=/[\p{P}\p{S}]/u,en=/[\s\p{P}\p{S}]/u,Mn=/[^\s\p{P}\p{S}]/u,Et=F(/^((?![*_])punctSpace)/,"u").replace(/punctSpace/g,en).getRegex(),Fn=/(?!~)[\p{P}\p{S}]/u,At=/(?!~)[\s\p{P}\p{S}]/u,Rt=/(?:[^\s\p{P}\p{S}]|~)/u,_t=/\[[^[\]]*?\]\((?:\\.|[^\\\(\)]|\((?:\\.|[^\\\(\)])*\))*\)|`[^`]*?`|<[^<>]*?>/g,Nn=/^(?:\*+(?:((?!\*)punct)|[^\s*]))|^_+(?:((?!_)punct)|([^\s_]))/,Pt=F(Nn,"u").replace(/punct/g,Me).getRegex(),Lt=F(Nn,"u").replace(/punct/g,Fn).getRegex(),Bn="^[^_*]*?__[^_*]*?\\*[^_*]*?(?=__)|[^*]+(?=[^*])|(?!\\*)punct(\\*+)(?=[\\s]|$)|notPunctSpace(\\*+)(?!\\*)(?=punctSpace|$)|(?!\\*)punctSpace(\\*+)(?=notPunctSpace)|[\\s](\\*+)(?!\\*)(?=punct)|(?!\\*)punct(\\*+)(?!\\*)(?=punct)|notPunctSpace(\\*+)(?=notPunctSpace)",Mt=F(Bn,"gu").replace(/notPunctSpace/g,Mn).replace(/punctSpace/g,en).replace(/punct/g,Me).getRegex(),Ft=F(Bn,"gu").replace(/notPunctSpace/g,Rt).replace(/punctSpace/g,At).replace(/punct/g,Fn).getRegex(),Nt=F("^[^_*]*?\\*\\*[^_*]*?_[^_*]*?(?=\\*\\*)|[^_]+(?=[^_])|(?!_)punct(_+)(?=[\\s]|$)|notPunctSpace(_+)(?!_)(?=punctSpace|$)|(?!_)punctSpace(_+)(?=notPunctSpace)|[\\s](_+)(?!_)(?=punct)|(?!_)punct(_+)(?!_)(?=punct)","gu").replace(/notPunctSpace/g,Mn).replace(/punctSpace/g,en).replace(/punct/g,Me).getRegex(),Bt=F(/\\(punct)/,"gu").replace(/punct/g,Me).getRegex(),Ot=F(/^<(scheme:[^\s\x00-\x1f<>]*|email)>/).replace("scheme",/[a-zA-Z][a-zA-Z0-9+.-]{1,31}/).replace("email",/[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+(@)[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)+(?![-_])/).getRegex(),Ht=F(Ze).replace("(?:-->|$)","-->").getRegex(),qt=F("^comment|^</[a-zA-Z][\\w:-]*\\s*>|^<[a-zA-Z][\\w-]*(?:attribute)*?\\s*/?>|^<\\?[\\s\\S]*?\\?>|^<![a-zA-Z]+\\s[\\s\\S]*?>|^<!\\[CDATA\\[[\\s\\S]*?\\]\\]>").replace("comment",Ht).replace("attribute",/\s+[a-zA-Z:_][\w.:-]*(?:\s*=\s*"[^"]*"|\s*=\s*'[^']*'|\s*=\s*[^\s"'=<>`]+)?/).getRegex(),Ae=/(?:\[(?:\\.|[^\[\]\\])*\]|\\.|`[^`]*`|[^\[\]\\`])*?/,Dt=F(/^!?\[(label)\]\(\s*(href)(?:(?:[ \t]*(?:\n[ \t]*)?)(title))?\s*\)/).replace("label",Ae).replace("href",/<(?:\\.|[^\n<>\\])+>|[^ \t\n\x00-\x1f]*/).replace("title",/"(?:\\"?|[^"\\])*"|'(?:\\'?|[^'\\])*'|\((?:\\\)?|[^)\\])*\)/).getRegex(),On=F(/^!?\[(label)\]\[(ref)\]/).replace("label",Ae).replace("ref",Xe).getRegex(),Hn=F(/^!?\[(ref)\](?:\[\])?/).replace("ref",Xe).getRegex(),Ut=F("reflink|nolink(?!\\()","g").replace("reflink",On).replace("nolink",Hn).getRegex(),nn={_backpedal:Se,anyPunctuation:Bt,autolink:Ot,blockSkip:_t,br:Ln,code:Ct,del:Se,emStrongLDelim:Pt,emStrongRDelimAst:Mt,emStrongRDelimUnd:Nt,escape:kt,link:Dt,nolink:Hn,punctuation:Et,reflink:On,reflinkSearch:Ut,tag:qt,text:Tt,url:Se},jt={...nn,link:F(/^!?\[(label)\]\((.*?)\)/).replace("label",Ae).getRegex(),reflink:F(/^!?\[(label)\]\s*\[([^\]]*)\]/).replace("label",Ae).getRegex()},je={...nn,emStrongRDelimAst:Ft,emStrongLDelim:Lt,url:F(/^((?:ftp|https?):\/\/|www\.)(?:[a-zA-Z0-9\-]+\.?)+[^\s<]*|^email/,"i").replace("email",/[A-Za-z0-9._+-]+(@)[a-zA-Z0-9-_]+(?:\.[a-zA-Z0-9-_]*[a-zA-Z0-9])+(?![-_])/).getRegex(),_backpedal:/(?:[^?!.,:;*_'"~()&]+|\([^)]*\)|&(?![a-zA-Z0-9]+;$)|[?!.,:;*_'"~)]+(?!$))+/,del:/^(~~?)(?=[^\s~])((?:\\.|[^\\])*?(?:\\.|[^\s~\\]))\1(?=[^~]|$)/,text:/^([`~]+|[^`~])(?:(?= {2,}\n)|(?=[a-zA-Z0-9.!#$%&'*+\/=?_`{\|}~-]+@)|[\s\S]*?(?:(?=[\\<!\[`*~_]|\b_|https?:\/\/|ftp:\/\/|www\.|$)|[^ ](?= {2,}\n)|[^a-zA-Z0-9.!#$%&'*+\/=?_`{\|}~-](?=[a-zA-Z0-9.!#$%&'*+\/=?_`{\|}~-]+@)))/},$t={...je,br:F(Ln).replace("{2,}","*").getRegex(),text:F(je.text).replace("\\b_","\\b_| {2,}\\n").replace(/\{2,\}/g,"*").getRegex()},xe={normal:Je,gfm:xt,pedantic:It},he={normal:nn,gfm:je,breaks:$t,pedantic:jt},zt={"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"},hn=n=>zt[n];function ee(n,e){if(e){if(K.escapeTest.test(n))return n.replace(K.escapeReplace,hn)}else if(K.escapeTestNoEncode.test(n))return n.replace(K.escapeReplaceNoEncode,hn);return n}function vn(n){try{n=encodeURI(n).replace(K.percentDecode,"%")}catch{return null}return n}function Sn(n,e){var a;const t=n.replace(K.findPipe,(c,i,u)=>{let o=!1,l=i;for(;--l>=0&&u[l]==="\\";)o=!o;return o?"|":" |"}),r=t.split(K.splitPipe);let s=0;if(r[0].trim()||r.shift(),r.length>0&&!((a=r.at(-1))!=null&&a.trim())&&r.pop(),e)if(r.length>e)r.splice(e);else for(;r.length<e;)r.push("");for(;s<r.length;s++)r[s]=r[s].trim().replace(K.slashPipe,"|");return r}function ve(n,e,t){const r=n.length;if(r===0)return"";let s=0;for(;s<r&&n.charAt(r-s-1)===e;)s++;return n.slice(0,r-s)}function Vt(n,e){if(n.indexOf(e[1])===-1)return-1;let t=0;for(let r=0;r<n.length;r++)if(n[r]==="\\")r++;else if(n[r]===e[0])t++;else if(n[r]===e[1]&&(t--,t<0))return r;return t>0?-2:-1}function bn(n,e,t,r,s){const a=e.href,c=e.title||null,i=n[1].replace(s.other.outputLinkReplace,"$1");r.state.inLink=!0;const u={type:n[0].charAt(0)==="!"?"image":"link",raw:t,href:a,title:c,text:i,tokens:r.inlineTokens(i)};return r.state.inLink=!1,u}function Wt(n,e,t){const r=n.match(t.other.indentCodeCompensation);if(r===null)return e;const s=r[1];return e.split(`
 `).map(a=>{const c=a.match(t.other.beginningSpace);if(c===null)return a;const[i]=c;return i.length>=s.length?a.slice(s.length):a}).join(`
 `)}var Re=class{constructor(n){H(this,"options");H(this,"rules");H(this,"lexer");this.options=n||le}space(n){const e=this.rules.block.newline.exec(n);if(e&&e[0].length>0)return{type:"space",raw:e[0]}}code(n){const e=this.rules.block.code.exec(n);if(e){const t=e[0].replace(this.rules.other.codeRemoveIndent,"");return{type:"code",raw:e[0],codeBlockStyle:"indented",text:this.options.pedantic?t:ve(t,`
 `)}}}fences(n){const e=this.rules.block.fences.exec(n);if(e){const t=e[0],r=Wt(t,e[3]||"",this.rules);return{type:"code",raw:t,lang:e[2]?e[2].trim().replace(this.rules.inline.anyPunctuation,"$1"):e[2],text:r}}}heading(n){const e=this.rules.block.heading.exec(n);if(e){let t=e[2].trim();if(this.rules.other.endingHash.test(t)){const r=ve(t,"#");(this.options.pedantic||!r||this.rules.other.endingSpaceChar.test(r))&&(t=r.trim())}return{type:"heading",raw:e[0],depth:e[1].length,text:t,tokens:this.lexer.inline(t)}}}hr(n){const e=this.rules.block.hr.exec(n);if(e)return{type:"hr",raw:ve(e[0],`
@@ -9,21 +9,21 @@ var ot=Object.defineProperty;var lt=(n,e,t)=>e in n?ot(n,e,{enumerable:!0,config
 `),l=o.replace(this.rules.other.blockquoteSetextReplace,`
     $1`).replace(this.rules.other.blockquoteSetextReplace2,"");r=r?`${r}
 ${o}`:o,s=s?`${s}
-${l}`:l;const S=this.lexer.state.top;if(this.lexer.state.top=!0,this.lexer.blockTokens(l,a,!0),this.lexer.state.top=S,t.length===0)break;const h=a.at(-1);if((h==null?void 0:h.type)==="code")break;if((h==null?void 0:h.type)==="blockquote"){const P=h,E=P.raw+`
+${l}`:l;const S=this.lexer.state.top;if(this.lexer.state.top=!0,this.lexer.blockTokens(l,a,!0),this.lexer.state.top=S,t.length===0)break;const h=a.at(-1);if((h==null?void 0:h.type)==="code")break;if((h==null?void 0:h.type)==="blockquote"){const _=h,E=_.raw+`
 `+t.join(`
-`),k=this.blockquote(E);a[a.length-1]=k,r=r.substring(0,r.length-P.raw.length)+k.raw,s=s.substring(0,s.length-P.text.length)+k.text;break}else if((h==null?void 0:h.type)==="list"){const P=h,E=P.raw+`
+`),k=this.blockquote(E);a[a.length-1]=k,r=r.substring(0,r.length-_.raw.length)+k.raw,s=s.substring(0,s.length-_.text.length)+k.text;break}else if((h==null?void 0:h.type)==="list"){const _=h,E=_.raw+`
 `+t.join(`
-`),k=this.list(E);a[a.length-1]=k,r=r.substring(0,r.length-h.raw.length)+k.raw,s=s.substring(0,s.length-P.raw.length)+k.raw,t=E.substring(a.at(-1).raw.length).split(`
+`),k=this.list(E);a[a.length-1]=k,r=r.substring(0,r.length-h.raw.length)+k.raw,s=s.substring(0,s.length-_.raw.length)+k.raw,t=E.substring(a.at(-1).raw.length).split(`
 `);continue}}return{type:"blockquote",raw:r,tokens:a,text:s}}}list(n){let e=this.rules.block.list.exec(n);if(e){let t=e[1].trim();const r=t.length>1,s={type:"list",raw:"",ordered:r,start:r?+t.slice(0,-1):"",loose:!1,items:[]};t=r?`\\d{1,9}\\${t.slice(-1)}`:`\\${t}`,this.options.pedantic&&(t=r?t:"[*+-]");const a=this.rules.other.listItemRegex(t);let c=!1;for(;n;){let u=!1,o="",l="";if(!(e=a.exec(n))||this.rules.block.hr.test(n))break;o=e[0],n=n.substring(o.length);let S=e[2].split(`
 `,1)[0].replace(this.rules.other.listReplaceTabs,$=>" ".repeat(3*$.length)),h=n.split(`
-`,1)[0],P=!S.trim(),E=0;if(this.options.pedantic?(E=2,l=S.trimStart()):P?E=e[1].length+1:(E=e[2].search(this.rules.other.nonSpaceChar),E=E>4?1:E,l=S.slice(E),E+=e[1].length),P&&this.rules.other.blankLine.test(h)&&(o+=h+`
-`,n=n.substring(h.length+1),u=!0),!u){const $=this.rules.other.nextBulletRegex(E),L=this.rules.other.hrRegex(E),z=this.rules.other.fencesBeginRegex(E),_=this.rules.other.headingBeginRegex(E),V=this.rules.other.htmlBeginRegex(E);for(;n;){const j=n.split(`
-`,1)[0];let R;if(h=j,this.options.pedantic?(h=h.replace(this.rules.other.listReplaceNesting,"  "),R=h):R=h.replace(this.rules.other.tabCharGlobal,"    "),z.test(h)||_.test(h)||V.test(h)||$.test(h)||L.test(h))break;if(R.search(this.rules.other.nonSpaceChar)>=E||!h.trim())l+=`
-`+R.slice(E);else{if(P||S.replace(this.rules.other.tabCharGlobal,"    ").search(this.rules.other.nonSpaceChar)>=4||z.test(S)||_.test(S)||L.test(S))break;l+=`
-`+h}!P&&!h.trim()&&(P=!0),o+=j+`
+`,1)[0],_=!S.trim(),E=0;if(this.options.pedantic?(E=2,l=S.trimStart()):_?E=e[1].length+1:(E=e[2].search(this.rules.other.nonSpaceChar),E=E>4?1:E,l=S.slice(E),E+=e[1].length),_&&this.rules.other.blankLine.test(h)&&(o+=h+`
+`,n=n.substring(h.length+1),u=!0),!u){const $=this.rules.other.nextBulletRegex(E),L=this.rules.other.hrRegex(E),z=this.rules.other.fencesBeginRegex(E),P=this.rules.other.headingBeginRegex(E),V=this.rules.other.htmlBeginRegex(E);for(;n;){const j=n.split(`
+`,1)[0];let R;if(h=j,this.options.pedantic?(h=h.replace(this.rules.other.listReplaceNesting,"  "),R=h):R=h.replace(this.rules.other.tabCharGlobal,"    "),z.test(h)||P.test(h)||V.test(h)||$.test(h)||L.test(h))break;if(R.search(this.rules.other.nonSpaceChar)>=E||!h.trim())l+=`
+`+R.slice(E);else{if(_||S.replace(this.rules.other.tabCharGlobal,"    ").search(this.rules.other.nonSpaceChar)>=4||z.test(S)||P.test(S)||L.test(S))break;l+=`
+`+h}!_&&!h.trim()&&(_=!0),o+=j+`
 `,n=n.substring(j.length+1),S=R.slice(E)}}s.loose||(c?s.loose=!0:this.rules.other.doubleBlankLine.test(o)&&(c=!0));let k=null,O;this.options.gfm&&(k=this.rules.other.listIsTask.exec(l),k&&(O=k[0]!=="[ ] ",l=l.replace(this.rules.other.listReplaceTask,""))),s.items.push({type:"list_item",raw:o,task:!!k,checked:O,loose:!1,text:l,tokens:[]}),s.raw+=o}const i=s.items.at(-1);if(i)i.raw=i.raw.trimEnd(),i.text=i.text.trimEnd();else return;s.raw=s.raw.trimEnd();for(let u=0;u<s.items.length;u++)if(this.lexer.state.top=!1,s.items[u].tokens=this.lexer.blockTokens(s.items[u].text,[]),!s.loose){const o=s.items[u].tokens.filter(S=>S.type==="space"),l=o.length>0&&o.some(S=>this.rules.other.anyLine.test(S.raw));s.loose=l}if(s.loose)for(let u=0;u<s.items.length;u++)s.items[u].loose=!0;return s}}html(n){const e=this.rules.block.html.exec(n);if(e)return{type:"html",block:!0,raw:e[0],pre:e[1]==="pre"||e[1]==="script"||e[1]==="style",text:e[0]}}def(n){const e=this.rules.block.def.exec(n);if(e){const t=e[1].toLowerCase().replace(this.rules.other.multipleSpaceGlobal," "),r=e[2]?e[2].replace(this.rules.other.hrefBrackets,"$1").replace(this.rules.inline.anyPunctuation,"$1"):"",s=e[3]?e[3].substring(1,e[3].length-1).replace(this.rules.inline.anyPunctuation,"$1"):e[3];return{type:"def",tag:t,raw:e[0],href:r,title:s}}}table(n){var c;const e=this.rules.block.table.exec(n);if(!e||!this.rules.other.tableDelimiter.test(e[2]))return;const t=Sn(e[1]),r=e[2].replace(this.rules.other.tableAlignChars,"").split("|"),s=(c=e[3])!=null&&c.trim()?e[3].replace(this.rules.other.tableRowBlankLine,"").split(`
 `):[],a={type:"table",raw:e[0],header:[],align:[],rows:[]};if(t.length===r.length){for(const i of r)this.rules.other.tableAlignRight.test(i)?a.align.push("right"):this.rules.other.tableAlignCenter.test(i)?a.align.push("center"):this.rules.other.tableAlignLeft.test(i)?a.align.push("left"):a.align.push(null);for(let i=0;i<t.length;i++)a.header.push({text:t[i],tokens:this.lexer.inline(t[i]),header:!0,align:a.align[i]});for(const i of s)a.rows.push(Sn(i,a.header.length).map((u,o)=>({text:u,tokens:this.lexer.inline(u),header:!1,align:a.align[o]})));return a}}lheading(n){const e=this.rules.block.lheading.exec(n);if(e)return{type:"heading",raw:e[0],depth:e[2].charAt(0)==="="?1:2,text:e[1],tokens:this.lexer.inline(e[1])}}paragraph(n){const e=this.rules.block.paragraph.exec(n);if(e){const t=e[1].charAt(e[1].length-1)===`
-`?e[1].slice(0,-1):e[1];return{type:"paragraph",raw:e[0],text:t,tokens:this.lexer.inline(t)}}}text(n){const e=this.rules.block.text.exec(n);if(e)return{type:"text",raw:e[0],text:e[0],tokens:this.lexer.inline(e[0])}}escape(n){const e=this.rules.inline.escape.exec(n);if(e)return{type:"escape",raw:e[0],text:e[1]}}tag(n){const e=this.rules.inline.tag.exec(n);if(e)return!this.lexer.state.inLink&&this.rules.other.startATag.test(e[0])?this.lexer.state.inLink=!0:this.lexer.state.inLink&&this.rules.other.endATag.test(e[0])&&(this.lexer.state.inLink=!1),!this.lexer.state.inRawBlock&&this.rules.other.startPreScriptTag.test(e[0])?this.lexer.state.inRawBlock=!0:this.lexer.state.inRawBlock&&this.rules.other.endPreScriptTag.test(e[0])&&(this.lexer.state.inRawBlock=!1),{type:"html",raw:e[0],inLink:this.lexer.state.inLink,inRawBlock:this.lexer.state.inRawBlock,block:!1,text:e[0]}}link(n){const e=this.rules.inline.link.exec(n);if(e){const t=e[2].trim();if(!this.options.pedantic&&this.rules.other.startAngleBracket.test(t)){if(!this.rules.other.endAngleBracket.test(t))return;const a=ve(t.slice(0,-1),"\\");if((t.length-a.length)%2===0)return}else{const a=Vt(e[2],"()");if(a===-2)return;if(a>-1){const i=(e[0].indexOf("!")===0?5:4)+e[1].length+a;e[2]=e[2].substring(0,a),e[0]=e[0].substring(0,i).trim(),e[3]=""}}let r=e[2],s="";if(this.options.pedantic){const a=this.rules.other.pedanticHrefTitle.exec(r);a&&(r=a[1],s=a[3])}else s=e[3]?e[3].slice(1,-1):"";return r=r.trim(),this.rules.other.startAngleBracket.test(r)&&(this.options.pedantic&&!this.rules.other.endAngleBracket.test(t)?r=r.slice(1):r=r.slice(1,-1)),bn(e,{href:r&&r.replace(this.rules.inline.anyPunctuation,"$1"),title:s&&s.replace(this.rules.inline.anyPunctuation,"$1")},e[0],this.lexer,this.rules)}}reflink(n,e){let t;if((t=this.rules.inline.reflink.exec(n))||(t=this.rules.inline.nolink.exec(n))){const r=(t[2]||t[1]).replace(this.rules.other.multipleSpaceGlobal," "),s=e[r.toLowerCase()];if(!s){const a=t[0].charAt(0);return{type:"text",raw:a,text:a}}return bn(t,s,t[0],this.lexer,this.rules)}}emStrong(n,e,t=""){let r=this.rules.inline.emStrongLDelim.exec(n);if(!r||r[3]&&t.match(this.rules.other.unicodeAlphaNumeric))return;if(!(r[1]||r[2]||"")||!t||this.rules.inline.punctuation.exec(t)){const a=[...r[0]].length-1;let c,i,u=a,o=0;const l=r[0][0]==="*"?this.rules.inline.emStrongRDelimAst:this.rules.inline.emStrongRDelimUnd;for(l.lastIndex=0,e=e.slice(-1*n.length+a);(r=l.exec(e))!=null;){if(c=r[1]||r[2]||r[3]||r[4]||r[5]||r[6],!c)continue;if(i=[...c].length,r[3]||r[4]){u+=i;continue}else if((r[5]||r[6])&&a%3&&!((a+i)%3)){o+=i;continue}if(u-=i,u>0)continue;i=Math.min(i,i+u+o);const S=[...r[0]][0].length,h=n.slice(0,a+r.index+S+i);if(Math.min(a,i)%2){const E=h.slice(1,-1);return{type:"em",raw:h,text:E,tokens:this.lexer.inlineTokens(E)}}const P=h.slice(2,-2);return{type:"strong",raw:h,text:P,tokens:this.lexer.inlineTokens(P)}}}}codespan(n){const e=this.rules.inline.code.exec(n);if(e){let t=e[2].replace(this.rules.other.newLineCharGlobal," ");const r=this.rules.other.nonSpaceChar.test(t),s=this.rules.other.startingSpaceChar.test(t)&&this.rules.other.endingSpaceChar.test(t);return r&&s&&(t=t.substring(1,t.length-1)),{type:"codespan",raw:e[0],text:t}}}br(n){const e=this.rules.inline.br.exec(n);if(e)return{type:"br",raw:e[0]}}del(n){const e=this.rules.inline.del.exec(n);if(e)return{type:"del",raw:e[0],text:e[2],tokens:this.lexer.inlineTokens(e[2])}}autolink(n){const e=this.rules.inline.autolink.exec(n);if(e){let t,r;return e[2]==="@"?(t=e[1],r="mailto:"+t):(t=e[1],r=t),{type:"link",raw:e[0],text:t,href:r,tokens:[{type:"text",raw:t,text:t}]}}}url(n){var t;let e;if(e=this.rules.inline.url.exec(n)){let r,s;if(e[2]==="@")r=e[0],s="mailto:"+r;else{let a;do a=e[0],e[0]=((t=this.rules.inline._backpedal.exec(e[0]))==null?void 0:t[0])??"";while(a!==e[0]);r=e[0],e[1]==="www."?s="http://"+e[0]:s=e[0]}return{type:"link",raw:e[0],text:r,href:s,tokens:[{type:"text",raw:r,text:r}]}}}inlineText(n){const e=this.rules.inline.text.exec(n);if(e){const t=this.lexer.state.inRawBlock;return{type:"text",raw:e[0],text:e[0],escaped:t}}}},ne=class $e{constructor(e){H(this,"tokens");H(this,"options");H(this,"state");H(this,"tokenizer");H(this,"inlineQueue");this.tokens=[],this.tokens.links=Object.create(null),this.options=e||le,this.options.tokenizer=this.options.tokenizer||new Re,this.tokenizer=this.options.tokenizer,this.tokenizer.options=this.options,this.tokenizer.lexer=this,this.inlineQueue=[],this.state={inLink:!1,inRawBlock:!1,top:!0};const t={other:K,block:xe.normal,inline:he.normal};this.options.pedantic?(t.block=xe.pedantic,t.inline=he.pedantic):this.options.gfm&&(t.block=xe.gfm,this.options.breaks?t.inline=he.breaks:t.inline=he.gfm),this.tokenizer.rules=t}static get rules(){return{block:xe,inline:he}}static lex(e,t){return new $e(t).lex(e)}static lexInline(e,t){return new $e(t).inlineTokens(e)}lex(e){e=e.replace(K.carriageReturn,`
+`?e[1].slice(0,-1):e[1];return{type:"paragraph",raw:e[0],text:t,tokens:this.lexer.inline(t)}}}text(n){const e=this.rules.block.text.exec(n);if(e)return{type:"text",raw:e[0],text:e[0],tokens:this.lexer.inline(e[0])}}escape(n){const e=this.rules.inline.escape.exec(n);if(e)return{type:"escape",raw:e[0],text:e[1]}}tag(n){const e=this.rules.inline.tag.exec(n);if(e)return!this.lexer.state.inLink&&this.rules.other.startATag.test(e[0])?this.lexer.state.inLink=!0:this.lexer.state.inLink&&this.rules.other.endATag.test(e[0])&&(this.lexer.state.inLink=!1),!this.lexer.state.inRawBlock&&this.rules.other.startPreScriptTag.test(e[0])?this.lexer.state.inRawBlock=!0:this.lexer.state.inRawBlock&&this.rules.other.endPreScriptTag.test(e[0])&&(this.lexer.state.inRawBlock=!1),{type:"html",raw:e[0],inLink:this.lexer.state.inLink,inRawBlock:this.lexer.state.inRawBlock,block:!1,text:e[0]}}link(n){const e=this.rules.inline.link.exec(n);if(e){const t=e[2].trim();if(!this.options.pedantic&&this.rules.other.startAngleBracket.test(t)){if(!this.rules.other.endAngleBracket.test(t))return;const a=ve(t.slice(0,-1),"\\");if((t.length-a.length)%2===0)return}else{const a=Vt(e[2],"()");if(a===-2)return;if(a>-1){const i=(e[0].indexOf("!")===0?5:4)+e[1].length+a;e[2]=e[2].substring(0,a),e[0]=e[0].substring(0,i).trim(),e[3]=""}}let r=e[2],s="";if(this.options.pedantic){const a=this.rules.other.pedanticHrefTitle.exec(r);a&&(r=a[1],s=a[3])}else s=e[3]?e[3].slice(1,-1):"";return r=r.trim(),this.rules.other.startAngleBracket.test(r)&&(this.options.pedantic&&!this.rules.other.endAngleBracket.test(t)?r=r.slice(1):r=r.slice(1,-1)),bn(e,{href:r&&r.replace(this.rules.inline.anyPunctuation,"$1"),title:s&&s.replace(this.rules.inline.anyPunctuation,"$1")},e[0],this.lexer,this.rules)}}reflink(n,e){let t;if((t=this.rules.inline.reflink.exec(n))||(t=this.rules.inline.nolink.exec(n))){const r=(t[2]||t[1]).replace(this.rules.other.multipleSpaceGlobal," "),s=e[r.toLowerCase()];if(!s){const a=t[0].charAt(0);return{type:"text",raw:a,text:a}}return bn(t,s,t[0],this.lexer,this.rules)}}emStrong(n,e,t=""){let r=this.rules.inline.emStrongLDelim.exec(n);if(!r||r[3]&&t.match(this.rules.other.unicodeAlphaNumeric))return;if(!(r[1]||r[2]||"")||!t||this.rules.inline.punctuation.exec(t)){const a=[...r[0]].length-1;let c,i,u=a,o=0;const l=r[0][0]==="*"?this.rules.inline.emStrongRDelimAst:this.rules.inline.emStrongRDelimUnd;for(l.lastIndex=0,e=e.slice(-1*n.length+a);(r=l.exec(e))!=null;){if(c=r[1]||r[2]||r[3]||r[4]||r[5]||r[6],!c)continue;if(i=[...c].length,r[3]||r[4]){u+=i;continue}else if((r[5]||r[6])&&a%3&&!((a+i)%3)){o+=i;continue}if(u-=i,u>0)continue;i=Math.min(i,i+u+o);const S=[...r[0]][0].length,h=n.slice(0,a+r.index+S+i);if(Math.min(a,i)%2){const E=h.slice(1,-1);return{type:"em",raw:h,text:E,tokens:this.lexer.inlineTokens(E)}}const _=h.slice(2,-2);return{type:"strong",raw:h,text:_,tokens:this.lexer.inlineTokens(_)}}}}codespan(n){const e=this.rules.inline.code.exec(n);if(e){let t=e[2].replace(this.rules.other.newLineCharGlobal," ");const r=this.rules.other.nonSpaceChar.test(t),s=this.rules.other.startingSpaceChar.test(t)&&this.rules.other.endingSpaceChar.test(t);return r&&s&&(t=t.substring(1,t.length-1)),{type:"codespan",raw:e[0],text:t}}}br(n){const e=this.rules.inline.br.exec(n);if(e)return{type:"br",raw:e[0]}}del(n){const e=this.rules.inline.del.exec(n);if(e)return{type:"del",raw:e[0],text:e[2],tokens:this.lexer.inlineTokens(e[2])}}autolink(n){const e=this.rules.inline.autolink.exec(n);if(e){let t,r;return e[2]==="@"?(t=e[1],r="mailto:"+t):(t=e[1],r=t),{type:"link",raw:e[0],text:t,href:r,tokens:[{type:"text",raw:t,text:t}]}}}url(n){var t;let e;if(e=this.rules.inline.url.exec(n)){let r,s;if(e[2]==="@")r=e[0],s="mailto:"+r;else{let a;do a=e[0],e[0]=((t=this.rules.inline._backpedal.exec(e[0]))==null?void 0:t[0])??"";while(a!==e[0]);r=e[0],e[1]==="www."?s="http://"+e[0]:s=e[0]}return{type:"link",raw:e[0],text:r,href:s,tokens:[{type:"text",raw:r,text:r}]}}}inlineText(n){const e=this.rules.inline.text.exec(n);if(e){const t=this.lexer.state.inRawBlock;return{type:"text",raw:e[0],text:e[0],escaped:t}}}},ne=class $e{constructor(e){H(this,"tokens");H(this,"options");H(this,"state");H(this,"tokenizer");H(this,"inlineQueue");this.tokens=[],this.tokens.links=Object.create(null),this.options=e||le,this.options.tokenizer=this.options.tokenizer||new Re,this.tokenizer=this.options.tokenizer,this.tokenizer.options=this.options,this.tokenizer.lexer=this,this.inlineQueue=[],this.state={inLink:!1,inRawBlock:!1,top:!0};const t={other:K,block:xe.normal,inline:he.normal};this.options.pedantic?(t.block=xe.pedantic,t.inline=he.pedantic):this.options.gfm&&(t.block=xe.gfm,this.options.breaks?t.inline=he.breaks:t.inline=he.gfm),this.tokenizer.rules=t}static get rules(){return{block:xe,inline:he}}static lex(e,t){return new $e(t).lex(e)}static lexInline(e,t){return new $e(t).inlineTokens(e)}lex(e){e=e.replace(K.carriageReturn,`
 `),this.blockTokens(e,this.tokens);for(let t=0;t<this.inlineQueue.length;t++){const r=this.inlineQueue[t];this.inlineTokens(r.src,r.tokens)}return this.inlineQueue=[],this.tokens}blockTokens(e,t=[],r=!1){var s,a,c;for(this.options.pedantic&&(e=e.replace(K.tabCharGlobal,"    ").replace(K.spaceLine,""));e;){let i;if((a=(s=this.options.extensions)==null?void 0:s.block)!=null&&a.some(o=>(i=o.call({lexer:this},e,t))?(e=e.substring(i.raw.length),t.push(i),!0):!1))continue;if(i=this.tokenizer.space(e)){e=e.substring(i.raw.length);const o=t.at(-1);i.raw.length===1&&o!==void 0?o.raw+=`
 `:t.push(i);continue}if(i=this.tokenizer.code(e)){e=e.substring(i.raw.length);const o=t.at(-1);(o==null?void 0:o.type)==="paragraph"||(o==null?void 0:o.type)==="text"?(o.raw+=`
 `+i.raw,o.text+=`
@@ -33,7 +33,7 @@ ${l}`:l;const S=this.lexer.state.top;if(this.lexer.state.top=!0,this.lexer.block
 `+i.raw,o.text+=`
 `+i.text,this.inlineQueue.pop(),this.inlineQueue.at(-1).src=o.text):t.push(i),r=u.length!==e.length,e=e.substring(i.raw.length);continue}if(i=this.tokenizer.text(e)){e=e.substring(i.raw.length);const o=t.at(-1);(o==null?void 0:o.type)==="text"?(o.raw+=`
 `+i.raw,o.text+=`
-`+i.text,this.inlineQueue.pop(),this.inlineQueue.at(-1).src=o.text):t.push(i);continue}if(e){const o="Infinite loop on byte: "+e.charCodeAt(0);if(this.options.silent){console.error(o);break}else throw new Error(o)}}return this.state.top=!0,t}inline(e,t=[]){return this.inlineQueue.push({src:e,tokens:t}),t}inlineTokens(e,t=[]){var i,u,o;let r=e,s=null;if(this.tokens.links){const l=Object.keys(this.tokens.links);if(l.length>0)for(;(s=this.tokenizer.rules.inline.reflinkSearch.exec(r))!=null;)l.includes(s[0].slice(s[0].lastIndexOf("[")+1,-1))&&(r=r.slice(0,s.index)+"["+"a".repeat(s[0].length-2)+"]"+r.slice(this.tokenizer.rules.inline.reflinkSearch.lastIndex))}for(;(s=this.tokenizer.rules.inline.anyPunctuation.exec(r))!=null;)r=r.slice(0,s.index)+"++"+r.slice(this.tokenizer.rules.inline.anyPunctuation.lastIndex);for(;(s=this.tokenizer.rules.inline.blockSkip.exec(r))!=null;)r=r.slice(0,s.index)+"["+"a".repeat(s[0].length-2)+"]"+r.slice(this.tokenizer.rules.inline.blockSkip.lastIndex);let a=!1,c="";for(;e;){a||(c=""),a=!1;let l;if((u=(i=this.options.extensions)==null?void 0:i.inline)!=null&&u.some(h=>(l=h.call({lexer:this},e,t))?(e=e.substring(l.raw.length),t.push(l),!0):!1))continue;if(l=this.tokenizer.escape(e)){e=e.substring(l.raw.length),t.push(l);continue}if(l=this.tokenizer.tag(e)){e=e.substring(l.raw.length),t.push(l);continue}if(l=this.tokenizer.link(e)){e=e.substring(l.raw.length),t.push(l);continue}if(l=this.tokenizer.reflink(e,this.tokens.links)){e=e.substring(l.raw.length);const h=t.at(-1);l.type==="text"&&(h==null?void 0:h.type)==="text"?(h.raw+=l.raw,h.text+=l.text):t.push(l);continue}if(l=this.tokenizer.emStrong(e,r,c)){e=e.substring(l.raw.length),t.push(l);continue}if(l=this.tokenizer.codespan(e)){e=e.substring(l.raw.length),t.push(l);continue}if(l=this.tokenizer.br(e)){e=e.substring(l.raw.length),t.push(l);continue}if(l=this.tokenizer.del(e)){e=e.substring(l.raw.length),t.push(l);continue}if(l=this.tokenizer.autolink(e)){e=e.substring(l.raw.length),t.push(l);continue}if(!this.state.inLink&&(l=this.tokenizer.url(e))){e=e.substring(l.raw.length),t.push(l);continue}let S=e;if((o=this.options.extensions)!=null&&o.startInline){let h=1/0;const P=e.slice(1);let E;this.options.extensions.startInline.forEach(k=>{E=k.call({lexer:this},P),typeof E=="number"&&E>=0&&(h=Math.min(h,E))}),h<1/0&&h>=0&&(S=e.substring(0,h+1))}if(l=this.tokenizer.inlineText(S)){e=e.substring(l.raw.length),l.raw.slice(-1)!=="_"&&(c=l.raw.slice(-1)),a=!0;const h=t.at(-1);(h==null?void 0:h.type)==="text"?(h.raw+=l.raw,h.text+=l.text):t.push(l);continue}if(e){const h="Infinite loop on byte: "+e.charCodeAt(0);if(this.options.silent){console.error(h);break}else throw new Error(h)}}return t}},Pe=class{constructor(n){H(this,"options");H(this,"parser");this.options=n||le}space(n){return""}code({text:n,lang:e,escaped:t}){var a;const r=(a=(e||"").match(K.notSpaceStart))==null?void 0:a[0],s=n.replace(K.endingNewline,"")+`
+`+i.text,this.inlineQueue.pop(),this.inlineQueue.at(-1).src=o.text):t.push(i);continue}if(e){const o="Infinite loop on byte: "+e.charCodeAt(0);if(this.options.silent){console.error(o);break}else throw new Error(o)}}return this.state.top=!0,t}inline(e,t=[]){return this.inlineQueue.push({src:e,tokens:t}),t}inlineTokens(e,t=[]){var i,u,o;let r=e,s=null;if(this.tokens.links){const l=Object.keys(this.tokens.links);if(l.length>0)for(;(s=this.tokenizer.rules.inline.reflinkSearch.exec(r))!=null;)l.includes(s[0].slice(s[0].lastIndexOf("[")+1,-1))&&(r=r.slice(0,s.index)+"["+"a".repeat(s[0].length-2)+"]"+r.slice(this.tokenizer.rules.inline.reflinkSearch.lastIndex))}for(;(s=this.tokenizer.rules.inline.anyPunctuation.exec(r))!=null;)r=r.slice(0,s.index)+"++"+r.slice(this.tokenizer.rules.inline.anyPunctuation.lastIndex);for(;(s=this.tokenizer.rules.inline.blockSkip.exec(r))!=null;)r=r.slice(0,s.index)+"["+"a".repeat(s[0].length-2)+"]"+r.slice(this.tokenizer.rules.inline.blockSkip.lastIndex);let a=!1,c="";for(;e;){a||(c=""),a=!1;let l;if((u=(i=this.options.extensions)==null?void 0:i.inline)!=null&&u.some(h=>(l=h.call({lexer:this},e,t))?(e=e.substring(l.raw.length),t.push(l),!0):!1))continue;if(l=this.tokenizer.escape(e)){e=e.substring(l.raw.length),t.push(l);continue}if(l=this.tokenizer.tag(e)){e=e.substring(l.raw.length),t.push(l);continue}if(l=this.tokenizer.link(e)){e=e.substring(l.raw.length),t.push(l);continue}if(l=this.tokenizer.reflink(e,this.tokens.links)){e=e.substring(l.raw.length);const h=t.at(-1);l.type==="text"&&(h==null?void 0:h.type)==="text"?(h.raw+=l.raw,h.text+=l.text):t.push(l);continue}if(l=this.tokenizer.emStrong(e,r,c)){e=e.substring(l.raw.length),t.push(l);continue}if(l=this.tokenizer.codespan(e)){e=e.substring(l.raw.length),t.push(l);continue}if(l=this.tokenizer.br(e)){e=e.substring(l.raw.length),t.push(l);continue}if(l=this.tokenizer.del(e)){e=e.substring(l.raw.length),t.push(l);continue}if(l=this.tokenizer.autolink(e)){e=e.substring(l.raw.length),t.push(l);continue}if(!this.state.inLink&&(l=this.tokenizer.url(e))){e=e.substring(l.raw.length),t.push(l);continue}let S=e;if((o=this.options.extensions)!=null&&o.startInline){let h=1/0;const _=e.slice(1);let E;this.options.extensions.startInline.forEach(k=>{E=k.call({lexer:this},_),typeof E=="number"&&E>=0&&(h=Math.min(h,E))}),h<1/0&&h>=0&&(S=e.substring(0,h+1))}if(l=this.tokenizer.inlineText(S)){e=e.substring(l.raw.length),l.raw.slice(-1)!=="_"&&(c=l.raw.slice(-1)),a=!0;const h=t.at(-1);(h==null?void 0:h.type)==="text"?(h.raw+=l.raw,h.text+=l.text):t.push(l);continue}if(e){const h="Infinite loop on byte: "+e.charCodeAt(0);if(this.options.silent){console.error(h);break}else throw new Error(h)}}return t}},_e=class{constructor(n){H(this,"options");H(this,"parser");this.options=n||le}space(n){return""}code({text:n,lang:e,escaped:t}){var a;const r=(a=(e||"").match(K.notSpaceStart))==null?void 0:a[0],s=n.replace(K.endingNewline,"")+`
 `;return r?'<pre><code class="language-'+ee(r)+'">'+(t?s:ee(s,!0))+`</code></pre>
 `:"<pre><code>"+(t?s:ee(s,!0))+`</code></pre>
 `}blockquote({tokens:n}){return`<blockquote>
@@ -51,10 +51,10 @@ ${this.parser.parse(n)}</blockquote>
 `}tablerow({text:n}){return`<tr>
 ${n}</tr>
 `}tablecell(n){const e=this.parser.parseInline(n.tokens),t=n.header?"th":"td";return(n.align?`<${t} align="${n.align}">`:`<${t}>`)+e+`</${t}>
-`}strong({tokens:n}){return`<strong>${this.parser.parseInline(n)}</strong>`}em({tokens:n}){return`<em>${this.parser.parseInline(n)}</em>`}codespan({text:n}){return`<code>${ee(n,!0)}</code>`}br(n){return"<br>"}del({tokens:n}){return`<del>${this.parser.parseInline(n)}</del>`}link({href:n,title:e,tokens:t}){const r=this.parser.parseInline(t),s=vn(n);if(s===null)return r;n=s;let a='<a href="'+n+'"';return e&&(a+=' title="'+ee(e)+'"'),a+=">"+r+"</a>",a}image({href:n,title:e,text:t,tokens:r}){r&&(t=this.parser.parseInline(r,this.parser.textRenderer));const s=vn(n);if(s===null)return ee(t);n=s;let a=`<img src="${n}" alt="${t}"`;return e&&(a+=` title="${ee(e)}"`),a+=">",a}text(n){return"tokens"in n&&n.tokens?this.parser.parseInline(n.tokens):"escaped"in n&&n.escaped?n.text:ee(n.text)}},tn=class{strong({text:n}){return n}em({text:n}){return n}codespan({text:n}){return n}del({text:n}){return n}html({text:n}){return n}text({text:n}){return n}link({text:n}){return""+n}image({text:n}){return""+n}br(){return""}},te=class ze{constructor(e){H(this,"options");H(this,"renderer");H(this,"textRenderer");this.options=e||le,this.options.renderer=this.options.renderer||new Pe,this.renderer=this.options.renderer,this.renderer.options=this.options,this.renderer.parser=this,this.textRenderer=new tn}static parse(e,t){return new ze(t).parse(e)}static parseInline(e,t){return new ze(t).parseInline(e)}parse(e,t=!0){var s,a;let r="";for(let c=0;c<e.length;c++){const i=e[c];if((a=(s=this.options.extensions)==null?void 0:s.renderers)!=null&&a[i.type]){const o=i,l=this.options.extensions.renderers[o.type].call({parser:this},o);if(l!==!1||!["space","hr","heading","code","table","blockquote","list","html","paragraph","text"].includes(o.type)){r+=l||"";continue}}const u=i;switch(u.type){case"space":{r+=this.renderer.space(u);continue}case"hr":{r+=this.renderer.hr(u);continue}case"heading":{r+=this.renderer.heading(u);continue}case"code":{r+=this.renderer.code(u);continue}case"table":{r+=this.renderer.table(u);continue}case"blockquote":{r+=this.renderer.blockquote(u);continue}case"list":{r+=this.renderer.list(u);continue}case"html":{r+=this.renderer.html(u);continue}case"paragraph":{r+=this.renderer.paragraph(u);continue}case"text":{let o=u,l=this.renderer.text(o);for(;c+1<e.length&&e[c+1].type==="text";)o=e[++c],l+=`
-`+this.renderer.text(o);t?r+=this.renderer.paragraph({type:"paragraph",raw:l,text:l,tokens:[{type:"text",raw:l,text:l,escaped:!0}]}):r+=l;continue}default:{const o='Token with "'+u.type+'" type was not found.';if(this.options.silent)return console.error(o),"";throw new Error(o)}}}return r}parseInline(e,t=this.renderer){var s,a;let r="";for(let c=0;c<e.length;c++){const i=e[c];if((a=(s=this.options.extensions)==null?void 0:s.renderers)!=null&&a[i.type]){const o=this.options.extensions.renderers[i.type].call({parser:this},i);if(o!==!1||!["escape","html","link","image","strong","em","codespan","br","del","text"].includes(i.type)){r+=o||"";continue}}const u=i;switch(u.type){case"escape":{r+=t.text(u);break}case"html":{r+=t.html(u);break}case"link":{r+=t.link(u);break}case"image":{r+=t.image(u);break}case"strong":{r+=t.strong(u);break}case"em":{r+=t.em(u);break}case"codespan":{r+=t.codespan(u);break}case"br":{r+=t.br(u);break}case"del":{r+=t.del(u);break}case"text":{r+=t.text(u);break}default:{const o='Token with "'+u.type+'" type was not found.';if(this.options.silent)return console.error(o),"";throw new Error(o)}}}return r}},Ue,Te=(Ue=class{constructor(n){H(this,"options");H(this,"block");this.options=n||le}preprocess(n){return n}postprocess(n){return n}processAllTokens(n){return n}provideLexer(){return this.block?ne.lex:ne.lexInline}provideParser(){return this.block?te.parse:te.parseInline}},H(Ue,"passThroughHooks",new Set(["preprocess","postprocess","processAllTokens"])),Ue),Gt=class{constructor(...n){H(this,"defaults",Qe());H(this,"options",this.setOptions);H(this,"parse",this.parseMarkdown(!0));H(this,"parseInline",this.parseMarkdown(!1));H(this,"Parser",te);H(this,"Renderer",Pe);H(this,"TextRenderer",tn);H(this,"Lexer",ne);H(this,"Tokenizer",Re);H(this,"Hooks",Te);this.use(...n)}walkTokens(n,e){var r,s;let t=[];for(const a of n)switch(t=t.concat(e.call(this,a)),a.type){case"table":{const c=a;for(const i of c.header)t=t.concat(this.walkTokens(i.tokens,e));for(const i of c.rows)for(const u of i)t=t.concat(this.walkTokens(u.tokens,e));break}case"list":{const c=a;t=t.concat(this.walkTokens(c.items,e));break}default:{const c=a;(s=(r=this.defaults.extensions)==null?void 0:r.childTokens)!=null&&s[c.type]?this.defaults.extensions.childTokens[c.type].forEach(i=>{const u=c[i].flat(1/0);t=t.concat(this.walkTokens(u,e))}):c.tokens&&(t=t.concat(this.walkTokens(c.tokens,e)))}}return t}use(...n){const e=this.defaults.extensions||{renderers:{},childTokens:{}};return n.forEach(t=>{const r={...t};if(r.async=this.defaults.async||r.async||!1,t.extensions&&(t.extensions.forEach(s=>{if(!s.name)throw new Error("extension name required");if("renderer"in s){const a=e.renderers[s.name];a?e.renderers[s.name]=function(...c){let i=s.renderer.apply(this,c);return i===!1&&(i=a.apply(this,c)),i}:e.renderers[s.name]=s.renderer}if("tokenizer"in s){if(!s.level||s.level!=="block"&&s.level!=="inline")throw new Error("extension level must be 'block' or 'inline'");const a=e[s.level];a?a.unshift(s.tokenizer):e[s.level]=[s.tokenizer],s.start&&(s.level==="block"?e.startBlock?e.startBlock.push(s.start):e.startBlock=[s.start]:s.level==="inline"&&(e.startInline?e.startInline.push(s.start):e.startInline=[s.start]))}"childTokens"in s&&s.childTokens&&(e.childTokens[s.name]=s.childTokens)}),r.extensions=e),t.renderer){const s=this.defaults.renderer||new Pe(this.defaults);for(const a in t.renderer){if(!(a in s))throw new Error(`renderer '${a}' does not exist`);if(["options","parser"].includes(a))continue;const c=a,i=t.renderer[c],u=s[c];s[c]=(...o)=>{let l=i.apply(s,o);return l===!1&&(l=u.apply(s,o)),l||""}}r.renderer=s}if(t.tokenizer){const s=this.defaults.tokenizer||new Re(this.defaults);for(const a in t.tokenizer){if(!(a in s))throw new Error(`tokenizer '${a}' does not exist`);if(["options","rules","lexer"].includes(a))continue;const c=a,i=t.tokenizer[c],u=s[c];s[c]=(...o)=>{let l=i.apply(s,o);return l===!1&&(l=u.apply(s,o)),l}}r.tokenizer=s}if(t.hooks){const s=this.defaults.hooks||new Te;for(const a in t.hooks){if(!(a in s))throw new Error(`hook '${a}' does not exist`);if(["options","block"].includes(a))continue;const c=a,i=t.hooks[c],u=s[c];Te.passThroughHooks.has(a)?s[c]=o=>{if(this.defaults.async)return Promise.resolve(i.call(s,o)).then(S=>u.call(s,S));const l=i.call(s,o);return u.call(s,l)}:s[c]=(...o)=>{let l=i.apply(s,o);return l===!1&&(l=u.apply(s,o)),l}}r.hooks=s}if(t.walkTokens){const s=this.defaults.walkTokens,a=t.walkTokens;r.walkTokens=function(c){let i=[];return i.push(a.call(this,c)),s&&(i=i.concat(s.call(this,c))),i}}this.defaults={...this.defaults,...r}}),this}setOptions(n){return this.defaults={...this.defaults,...n},this}lexer(n,e){return ne.lex(n,e??this.defaults)}parser(n,e){return te.parse(n,e??this.defaults)}parseMarkdown(n){return(t,r)=>{const s={...r},a={...this.defaults,...s},c=this.onError(!!a.silent,!!a.async);if(this.defaults.async===!0&&s.async===!1)return c(new Error("marked(): The async option was set to true by an extension. Remove async: false from the parse options object to return a Promise."));if(typeof t>"u"||t===null)return c(new Error("marked(): input parameter is undefined or null"));if(typeof t!="string")return c(new Error("marked(): input parameter is of type "+Object.prototype.toString.call(t)+", string expected"));a.hooks&&(a.hooks.options=a,a.hooks.block=n);const i=a.hooks?a.hooks.provideLexer():n?ne.lex:ne.lexInline,u=a.hooks?a.hooks.provideParser():n?te.parse:te.parseInline;if(a.async)return Promise.resolve(a.hooks?a.hooks.preprocess(t):t).then(o=>i(o,a)).then(o=>a.hooks?a.hooks.processAllTokens(o):o).then(o=>a.walkTokens?Promise.all(this.walkTokens(o,a.walkTokens)).then(()=>o):o).then(o=>u(o,a)).then(o=>a.hooks?a.hooks.postprocess(o):o).catch(c);try{a.hooks&&(t=a.hooks.preprocess(t));let o=i(t,a);a.hooks&&(o=a.hooks.processAllTokens(o)),a.walkTokens&&this.walkTokens(o,a.walkTokens);let l=u(o,a);return a.hooks&&(l=a.hooks.postprocess(l)),l}catch(o){return c(o)}}}onError(n,e){return t=>{if(t.message+=`
-Please report this to https://github.com/markedjs/marked.`,n){const r="<p>An error occurred:</p><pre>"+ee(t.message+"",!0)+"</pre>";return e?Promise.resolve(r):r}if(e)return Promise.reject(t);throw t}}},oe=new Gt;function N(n,e){return oe.parse(n,e)}N.options=N.setOptions=function(n){return oe.setOptions(n),N.defaults=oe.defaults,An(N.defaults),N};N.getDefaults=Qe;N.defaults=le;N.use=function(...n){return oe.use(...n),N.defaults=oe.defaults,An(N.defaults),N};N.walkTokens=function(n,e){return oe.walkTokens(n,e)};N.parseInline=oe.parseInline;N.Parser=te;N.parser=te.parse;N.Renderer=Pe;N.TextRenderer=tn;N.Lexer=ne;N.lexer=ne.lex;N.Tokenizer=Re;N.Hooks=Te;N.parse=N;N.options;N.setOptions;N.use;N.walkTokens;N.parseInline;te.parse;ne.lex;const ye=/^[a-z0-9][a-z0-9._-]{0,127}$/,re=/^[a-z][a-z0-9._-]{0,63}$/,Ve=new Set(["neutral","info","success","warning","danger"]),We=new Set(["text","number","boolean","json"]),Qt=new Set(["__proto__","prototype","constructor"]);let qn=new Map,Dn=!1,ie=typeof globalThis.fetch=="function"?globalThis.fetch.bind(globalThis):null,Be=null,Ie=null,Kt=0,ke=!1,pe=new Set,Ee=new Map,_e=new Map,Un=new Map,Oe=[];function Yt(n){if(!Array.isArray(n))return[];const e=new Set;return n.slice(0,128).flatMap(function(t){if(!t||typeof t!="object"||t.slot!=="session.panel"||!t.renderer||typeof t.renderer!="object")return[];const r=String(t.plugin_id||"").trim(),s=String(t.id||"").trim(),a=String(t.renderer.module||"").trim(),c=String(t.renderer.style||"").trim(),i=`/plugin-assets/${r}/`,u=function(l,S){if(!l||!l.startsWith(i)||l.includes("..")||l.includes("\\"))return!1;const h=l.split("?",1)[0].toLowerCase();return S.some(function(P){return h.endsWith(P)})},o=`${r}:${s}`;return!ye.test(r)||!re.test(s)||!u(a,[".js",".mjs"])||c&&!u(c,[".css"])||e.has(o)?[]:(e.add(o),[{pluginId:r,id:s,moduleUrl:a,styleUrl:c}])})}async function Xt(n){const e=Yt(n),t=new Map;await Promise.all(e.map(async function(r){try{if(r.styleUrl&&!document.querySelector(`link[data-plugin-panel-style="${r.pluginId}:${r.id}"]`)){const a=document.createElement("link");a.rel="stylesheet",a.href=r.styleUrl,a.dataset.pluginPanelStyle=`${r.pluginId}:${r.id}`,document.head.appendChild(a)}const s=await import(r.moduleUrl);s&&typeof s.renderSessionPanel=="function"&&t.set(`${r.pluginId}:${r.id}`,s.renderSessionPanel)}catch(s){console.warn(`Plugin session panel renderer failed to load (${r.pluginId})`,s)}})),Un=t}function jn(n){const e=Number(n&&n.order);return Number.isFinite(e)?Math.max(-1e4,Math.min(1e4,e)):100}function Zt(n){if(!Array.isArray(n))return[];const e=new Set;return n.slice(0,64).flatMap(function(t){if(!t||typeof t!="object"||t.slot!=="settings.section")return[];const r=String(t.plugin_id||"").trim(),s=String(t.id||"").trim(),a=q(t.title,64),c=q(t.label,64),i=q(t.description,200),u=String(t.target||"").trim(),o=`/plugins/${r}`,l=`/api/plugins/${r}/settings`,S=`${r}:${s}`;if(!ye.test(r)||!re.test(s)||!a||!c||!new Set(["plugin-page","plugin-settings"]).has(u)||u==="plugin-page"&&String(t.href||"")!==o||u==="plugin-settings"&&String(t.endpoint||"")!==l||e.has(S))return[];e.add(S);const h={pluginId:r,id:s,title:a,label:c,description:i,target:u,order:jn(t)};return u==="plugin-page"?h.href=o:h.endpoint=l,[h]}).sort(function(t,r){return t.order-r.order||t.title.localeCompare(r.title)||t.pluginId.localeCompare(r.pluginId)||t.id.localeCompare(r.id)})}function Jt(n){if(!Array.isArray(n))return[];const e=new Set;return n.slice(0,64).flatMap(function(t){if(!t||typeof t!="object"||t.slot!=="composer.action")return[];const r=String(t.plugin_id||"").trim(),s=String(t.id||"").trim(),a=q(t.label,64),c=q(t.description,200),i=String(t.action||"").trim(),u=`${r}:${s}`;if(!ye.test(r)||!re.test(s)||!a||!new Set(["insert_text","open_plugin_page"]).has(i)||e.has(u))return[];const o={pluginId:r,id:s,label:a,description:c,action:i,order:jn(t)};if(i==="insert_text"){const l=String(t.text||"");if(!l.trim()||l.length>2e3)return[];o.text=l}else{const l=`/plugins/${r}`;if(String(t.href||"")!==l)return[];o.href=l}return e.add(u),[o]}).sort(function(t,r){return t.order-r.order||t.label.localeCompare(r.label)||t.pluginId.localeCompare(r.pluginId)||t.id.localeCompare(r.id)})}function er(n){if(!n||typeof n!="object")return null;const e=String(n.path||"").trim(),t=String(n.label||"").trim(),r=String(n.format||"text").trim().toLowerCase();return!e.startsWith("/")||e.length>160||!t||t.length>64||!We.has(r)||e.slice(1).split("/").map(function(a){return a.replace(/~1/g,"/").replace(/~0/g,"~")}).some(function(a){return!a||Qt.has(a)})?null:{path:e,label:t,format:r,optional:n.optional!==!1}}function nr(n){if(!Array.isArray(n))return[];const e=new Set,t=new Set;return n.slice(0,128).flatMap(function(r){if(!r||typeof r!="object"||r.slot!=="message.renderer")return[];const s=String(r.plugin_id||"").trim(),a=String(r.id||"").trim(),c=String(r.event_name||"").trim(),i=String(r.title||"").trim(),u=String(r.description||"").trim(),o=String(r.variant||"neutral").trim().toLowerCase(),l=Array.isArray(r.fields)?r.fields:[],S=l.map(er),h=`${s}:${a}`,P=`${s}:${c}`;return!ye.test(s)||!re.test(a)||!re.test(c)||!i||i.length>64||u.length>200||!Ve.has(o)||l.length<1||l.length>12||S.some(function(E){return!E})||new Set(S.map(function(E){return E.path})).size!==S.length||e.has(h)||t.has(P)?[]:(e.add(h),t.add(P),[{pluginId:s,id:a,eventName:c,title:i,description:u,variant:o,fields:S}])})}function tr(n,e){const t=e.slice(1).split("/").map(function(s){return s.replace(/~1/g,"/").replace(/~0/g,"~")});let r=n;for(const s of t){if(r==null||typeof r!="object"||!Object.prototype.hasOwnProperty.call(r,s))return{found:!1,value:void 0};r=r[s]}return{found:!0,value:r}}function q(n,e){const t=String(n??"").replace(/[\r\n]+/g," ").trim();return t.length>e?`${t.slice(0,e)}…`:t}function rr(n,e){if(e==="number"){const t=Number(n);return Number.isFinite(t)?String(t):""}if(e==="boolean")return typeof n=="boolean"?n?"true":"false":"";if(e==="json"||n!==null&&typeof n=="object")try{return q(JSON.stringify(n),2e3)}catch{return""}return q(n,1e3)}function yn(n){const e=nr(n);return qn=new Map(e.map(function(t){return[`${t.pluginId}:${t.eventName}`,t]})),Dn=!0,e}function sr(n){if(!n||typeof n!="object"||n.type!=="extension_event")return{handled:!1};if(!Dn)return{handled:!0,pending:!0};const e=String(n.plugin_id||"").trim(),t=String(n.event_name||"").trim(),r=qn.get(`${e}:${t}`);if(!r)return{handled:!0,title:"Extension",description:"No active declarative renderer is available for this historical event.",variant:"neutral",content:`${q(e,128)} / ${q(t,64)}`,fallback:!0};const s=n.data&&typeof n.data=="object"?n.data:{},a=[];return r.fields.forEach(function(c){const i=tr(s,c.path),u=i.found?rr(i.value,c.format):"";!u&&c.optional||a.push(`${c.label}: ${u||"—"}`)}),{handled:!0,title:r.title,description:r.description,variant:r.variant,content:a.join(`
-`)}}globalThis.resolvePluginExtensionEvent=sr;function wn(n,e){if(!n)return;const t=Zt(e),r=document.createDocumentFragment();t.forEach(function(s){const a=document.createElement("div");a.className="settings-modal__section plugin-settings-section",a.dataset.pluginId=s.pluginId,a.dataset.contributionId=s.id;const c=document.createElement("div");if(c.className="settings-modal__label",c.textContent=s.title,a.appendChild(c),s.description){const i=document.createElement("div");i.className="plugin-settings-description",i.textContent=s.description,a.appendChild(i)}if(s.target==="plugin-page"){const i=document.createElement("a");i.className="settings-advanced-btn plugin-settings-link",i.href=s.href,i.target="_blank",i.rel="noopener noreferrer",i.textContent=s.label,a.appendChild(i)}else{const i=document.createElement("form");i.className="plugin-settings-form",i.dataset.endpoint=s.endpoint,i.dataset.saveLabel=s.label;const u=document.createElement("div");u.className="plugin-settings-status",u.setAttribute("role","status"),u.textContent="Loading…",i.appendChild(u),i.addEventListener("submit",function(o){o.preventDefault(),cr(i,s)}),a.appendChild(i),or(i,s)}r.appendChild(a)}),n.replaceChildren(r),n.hidden=t.length===0}function ar(n){if(!n||typeof n!="object")return null;const e=String(n.id||"").trim(),t=String(n.type||"").trim(),r=q(n.title,64),s=q(n.description,200),a=String(n.format||"").trim();if(!re.test(e)||!new Set(["string","boolean","integer","number"]).has(t)||!r||a&&!new Set(["text","multiline","secret"]).has(a))return null;const c={id:e,type:t,title:r,description:s,format:a,required:n.required===!0};return a==="secret"?(c.configured=n.configured===!0,c.reference=q(n.reference,128),c):(c.value=n.value,Array.isArray(n.enum)&&n.enum.length<=32&&(c.enum=n.enum.slice()),Number.isFinite(Number(n.minimum))&&(c.minimum=Number(n.minimum)),Number.isFinite(Number(n.maximum))&&(c.maximum=Number(n.maximum)),Number.isInteger(Number(n.min_length))&&(c.minLength=Number(n.min_length)),Number.isInteger(Number(n.max_length))&&(c.maxLength=Number(n.max_length)),c)}function $n(n,e){const t=n&&n.ok===!0&&n.settings&&typeof n.settings=="object"?n.settings:null;if(!t||String(t.plugin_id||"")!==e||!Array.isArray(t.fields)||t.fields.length>64)return null;const r=t.fields.map(ar);return r.some(function(s){return!s})||new Set(r.map(function(s){return s.id})).size!==r.length?null:{pluginId:e,title:q(t.title,64),description:q(t.description,200),valid:t.valid===!0,missingRequired:Array.isArray(t.missing_required)?t.missing_required.slice(0,64).map(String):[],fields:r}}function ir(n){if(n.format==="secret"){const t=document.createElement("div");return t.className=`plugin-setting-secret ${n.configured?"is-configured":"is-missing"}`,t.textContent=n.configured?`Configured via ${n.reference||"host secret reference"}`:`Missing host secret ${n.reference||"reference"}`,t}let e;return n.enum?(e=document.createElement("select"),n.enum.forEach(function(t){const r=document.createElement("option");r.value=String(t),r.textContent=String(t),r.selected=t===n.value,e.appendChild(r)})):n.type==="boolean"?(e=document.createElement("input"),e.type="checkbox",e.checked=n.value===!0):n.format==="multiline"?(e=document.createElement("textarea"),e.rows=3,e.value=n.value==null?"":String(n.value)):(e=document.createElement("input"),e.type=n.type==="integer"||n.type==="number"?"number":"text",e.value=n.value==null?"":String(n.value),n.type==="integer"&&(e.step="1"),n.type==="number"&&(e.step="any")),e.className="plugin-setting-control",e.dataset.settingId=n.id,e.dataset.settingType=n.type,e.required=n.required,n.minimum!==void 0&&(e.min=String(n.minimum)),n.maximum!==void 0&&(e.max=String(n.maximum)),n.minLength!==void 0&&(e.minLength=n.minLength),n.maxLength!==void 0&&(e.maxLength=n.maxLength),e}function zn(n,e,t){const r=document.createDocumentFragment();e.fields.forEach(function(c){const i=document.createElement("label");i.className="plugin-setting-field";const u=document.createElement("span");if(u.className="plugin-setting-label",u.textContent=c.title,i.appendChild(u),c.description){const o=document.createElement("span");o.className="plugin-setting-description",o.textContent=c.description,i.appendChild(o)}i.appendChild(ir(c)),r.appendChild(i)});const s=document.createElement("button");s.type="submit",s.className="settings-advanced-btn plugin-settings-save",s.textContent=t.label;const a=document.createElement("div");a.className="plugin-settings-status",a.setAttribute("role","status"),!e.valid&&e.missingRequired.length&&(a.textContent=`Missing required settings: ${e.missingRequired.join(", ")}`,a.classList.add("is-error")),r.append(s,a),n.replaceChildren(r)}async function or(n,e){try{const t=await ie(e.endpoint,{method:"GET",credentials:"same-origin",cache:"no-store",headers:{Accept:"application/json"}}),r=await t.json(),s=t.ok?$n(r,e.pluginId):null;if(!s)throw new Error(r&&r.error||`HTTP ${t.status}`);zn(n,s,e)}catch(t){const r=n.querySelector(".plugin-settings-status");r&&(r.textContent=`Settings unavailable: ${String(t&&t.message?t.message:t)}`,r.classList.add("is-error"))}}function lr(n){const e={};return n.querySelectorAll(".plugin-setting-control[data-setting-id]").forEach(function(t){const r=String(t.dataset.settingId||""),s=String(t.dataset.settingType||"string");t.tagName==="SELECT"&&s==="boolean"?e[r]=t.value==="true":t.tagName==="SELECT"&&s==="integer"?e[r]=Number.parseInt(t.value,10):t.tagName==="SELECT"&&s==="number"?e[r]=Number(t.value):s==="boolean"?e[r]=t.checked===!0:(s==="integer"||s==="number")&&t.value===""?e[r]=null:s==="integer"?e[r]=Number.parseInt(t.value,10):s==="number"?e[r]=Number(t.value):e[r]=t.value}),e}async function cr(n,e){const t=n.querySelector(".plugin-settings-save"),r=n.querySelector(".plugin-settings-status");t&&(t.disabled=!0),r&&(r.textContent="Saving…",r.classList.remove("is-error"));try{const s=await ie(e.endpoint,{method:"PATCH",credentials:"same-origin",cache:"no-store",headers:{Accept:"application/json","Content-Type":"application/json"},body:JSON.stringify({values:lr(n)})}),a=await s.json(),c=s.ok?$n(a,e.pluginId):null;if(!c)throw new Error(a&&a.error||`HTTP ${s.status}`);zn(n,c,e);const i=n.querySelector(".plugin-settings-status");i&&c.valid&&(i.textContent="Saved")}catch(s){r&&(r.textContent=`Save failed: ${String(s&&s.message?s.message:s)}`,r.classList.add("is-error"))}finally{t&&t.isConnected&&(t.disabled=!1)}}function dr(n,e){if(!n)return;const t=Number.isInteger(n.selectionStart)?n.selectionStart:n.value.length,r=Number.isInteger(n.selectionEnd)?n.selectionEnd:t;typeof n.setRangeText=="function"?n.setRangeText(e,t,r,"end"):n.value=`${n.value.slice(0,t)}${e}${n.value.slice(r)}`,n.dispatchEvent(new Event("input",{bubbles:!0})),n.focus()}function xn(n,e){if(!n)return;const t=Jt(e),r=document.createDocumentFragment();t.forEach(function(s){const a=document.createElement("button");a.type="button",a.className="plugin-composer-action",a.dataset.pluginId=s.pluginId,a.dataset.contributionId=s.id,a.textContent=s.label,s.description&&(a.title=s.description,a.setAttribute("aria-label",`${s.label}: ${s.description}`)),a.addEventListener("click",function(){if(s.action==="insert_text"){dr(document.getElementById("message-input"),s.text);return}if(typeof globalThis.open!="function")return;const c=globalThis.open(s.href,"_blank","noopener,noreferrer");c&&(c.opener=null)}),r.appendChild(a)}),n.replaceChildren(r),n.hidden=t.length===0}function In(n,e){if(!n||typeof n!="object")return null;const t=String(n.plugin_id||"").trim(),r=String(n.id||"").trim(),s=String(n.variant||"neutral").trim().toLowerCase();if(!ye.test(t)||!re.test(r)||!Ve.has(s))return null;if(e==="badge"){const o=q(n.label,64),l=q(n.description,200),S=String(n.display||"badge").trim().toLowerCase();return!o||!new Set(["badge","activity"]).has(S)?null:{pluginId:t,id:r,label:o,description:l,variant:s,display:S}}const a=q(n.title,64),c=q(n.description,200);if(!a||!Array.isArray(n.fields)||n.fields.length>12)return null;const i=n.fields.flatMap(function(o){if(!o||typeof o!="object")return[];const l=q(o.label,64),S=String(o.format||"text").toLowerCase();if(S==="list"){if(!l||!Array.isArray(o.columns)||!Array.isArray(o.rows)||o.columns.length<1||o.columns.length>4||o.rows.length>100)return[];const P=o.columns.map(function(k){const O=q(k&&k.label,64),$=String(k&&k.format||"text").toLowerCase();return O&&We.has($)?{label:O,format:$}:null});if(P.some(function(k){return!k}))return[];const E=o.rows.flatMap(function(k){return!k||!Array.isArray(k.values)||k.values.length!==P.length?[]:[{values:k.values.map(function(O){return q(O,1e3)})}]});return E.length!==o.rows.length?[]:[{label:l,format:S,columns:P,rows:E}]}const h=q(o.value,4e3);return!l||!We.has(S)?[]:[{label:l,value:h,format:S}]}),u=(Array.isArray(n.actions)?n.actions:[]).slice(0,4).flatMap(function(o){if(!o||typeof o!="object")return[];const l=String(o.id||"").trim(),S=q(o.label,64),h=String(o.variant||"neutral").trim().toLowerCase(),P=q(o.confirm,200);if(!re.test(l)||!S||!Ve.has(h))return[];const E=Array.isArray(o.inputs)?o.inputs.slice(0,8):[],k=new Set,O=E.flatMap(function(L){if(!L||typeof L!="object")return[];const z=String(L.id||"").trim(),_=q(L.label||z,64),V=q(L.description,200),j=String(L.type||"string").trim().toLowerCase();if(!re.test(z)||k.has(z)||!_||!new Set(["string","boolean","integer","number"]).has(j))return[];k.add(z);const R={id:z,label:_,description:V,type:j,required:L.required===!0};return Array.isArray(L.enum)&&L.enum.length>0&&L.enum.length<=32&&(R.enum=L.enum.slice()),["minimum","maximum","min_length","max_length"].forEach(function(D){Number.isFinite(Number(L[D]))&&(R[D]=Number(L[D]))}),[R]});if(O.length!==E.length)return[];const $={id:l,label:S,variant:h,confirm:P};return O.length&&($.inputs=O),[$]});return{pluginId:t,id:r,title:a,description:c,variant:s,fields:i,actions:u}}function ur(n,e){const t=n&&n.ok===!0&&n.sessions&&typeof n.sessions=="object"?n.sessions:{},r=Object.create(null);return(Array.isArray(e)?e:[]).slice(0,200).forEach(function(s){const a=String(s||"").trim();if(!a||a.length>256||Object.prototype.hasOwnProperty.call(r,a))return;const c=Object.prototype.hasOwnProperty.call(t,a)&&t[a]&&typeof t[a]=="object"?t[a]:{};r[a]={badges:(Array.isArray(c.badges)?c.badges:[]).slice(0,16).map(function(i){return In(i,"badge")}).filter(Boolean),panels:(Array.isArray(c.panels)?c.panels:[]).slice(0,16).map(function(i){return In(i,"panel")}).filter(Boolean)}}),r}function kn(){return Array.from(document.querySelectorAll("#sessions-list .session-item[data-session-id]")).slice(0,200)}function Cn(n,e){n.forEach(function(t){const r=t.querySelector(".plugin-session-badges");r&&r.remove();const s=String(t.dataset.sessionId||""),a=e[s],c=!!(a&&a.badges.some(function(S){return S.display==="activity"}));t.classList.toggle("has-plugin-activity",c);const i=a?a.badges.filter(function(S){return S.display!=="activity"}):[];if(!i.length)return;const u=t.querySelector(".session-item-title-row");if(!u)return;const o=document.createElement("span");o.className="plugin-session-badges",i.forEach(function(S){const h=document.createElement("span");h.className=`plugin-session-badge plugin-session-badge--${S.variant}`,h.dataset.pluginId=S.pluginId,h.dataset.contributionId=S.id,h.textContent=S.label,S.description&&(h.title=S.description),o.appendChild(h)});const l=u.querySelector(".session-item-date");u.insertBefore(o,l||null)})}function Tn(n,e){const t=document.getElementById("plugin-session-panels");if(!t)return;const r=n.find(function(l){return l.classList.contains("active")}),s=r?String(r.dataset.sessionId||""):"",a=[];Oe.forEach(function(l){try{l({nextSessionId:s})===!1&&a.push(l)}catch(S){console.warn("Plugin session panel cleanup failed",S)}}),Oe=a;const c=e[s],i=c?c.panels:[],u=document.createDocumentFragment();i.forEach(function(l){const S=document.createElement("section");S.className=`plugin-session-panel plugin-session-panel--${l.variant}`,S.dataset.pluginId=l.pluginId,S.dataset.contributionId=l.id;const h=Un.get(`${l.pluginId}:${l.id}`);if(h){S.classList.add("plugin-session-panel--custom");try{const k=h({container:S,item:l,sessionId:s,request:ie,refresh:Ge,invokeAction:async function(O,$={}){const L=await ie("/api/extensions/session-action",{method:"POST",credentials:"same-origin",cache:"no-store",headers:{Accept:"application/json","Content-Type":"application/json"},body:JSON.stringify({session_id:s,plugin_id:l.pluginId,action_id:O,inputs:$})});if(!L.ok)throw new Error(`Session extension action failed (${L.status})`);return L},notifyStateChanged:function(){document.dispatchEvent(new CustomEvent("myagent:extension-state-changed",{detail:{sessionId:s}}))}});typeof k=="function"&&Oe.push(k),u.appendChild(S);return}catch(k){console.warn(`Plugin session panel renderer failed (${l.pluginId})`,k),S.replaceChildren(),S.classList.remove("plugin-session-panel--custom")}}const P=document.createElement("div");if(P.className="plugin-session-panel-title",P.textContent=l.title,S.appendChild(P),l.description){const k=document.createElement("div");k.className="plugin-session-panel-description",k.textContent=l.description,S.appendChild(k)}const E=document.createElement("dl");if(E.className="plugin-session-panel-fields",l.fields.forEach(function(k){const O=document.createElement("div");O.className="plugin-session-panel-field";const $=document.createElement("dt");$.textContent=k.label;const L=document.createElement("dd");k.format==="list"?(L.className="plugin-session-panel-list",k.rows.forEach(function(z){const _=document.createElement("div");_.className="plugin-session-panel-list-row",z.values.forEach(function(V,j){const R=document.createElement("span");R.className="plugin-session-panel-list-cell";const D=k.columns[j];R.title=D.label;const Q=document.createElement("span");Q.className="plugin-session-panel-list-key",Q.textContent=`${D.label}: `;const se=document.createElement("span");se.textContent=V||"—",R.append(Q,se),_.appendChild(R)}),L.appendChild(_)})):L.textContent=k.value,O.append($,L),E.appendChild(O)}),S.appendChild(E),l.actions.length){const k=document.createElement("div");k.className="plugin-session-panel-actions",l.actions.forEach(function(O){const $=document.createElement("div");$.className="plugin-session-panel-action-group";const L=new Map;(O.inputs||[]).forEach(function(_){const V=document.createElement("label");V.className="plugin-session-panel-action-field";const j=document.createElement("span");j.textContent=_.label;let R;if(Array.isArray(_.enum)){if(R=document.createElement("select"),!_.required){const D=document.createElement("option");D.value="",D.textContent="—",R.appendChild(D)}_.enum.forEach(function(D,Q){const se=document.createElement("option");se.value=String(Q+1),se.textContent=q(D,200),R.appendChild(se)})}else _.type==="boolean"?(R=document.createElement("input"),R.type="checkbox"):_.type==="string"&&Number(_.max_length||0)>200?R=document.createElement("textarea"):(R=document.createElement("input"),R.type=_.type==="string"?"text":"number",_.type==="integer"&&(R.step="1"),_.type==="number"&&(R.step="any"));R.name=_.id,R.required=_.required,_.description&&(R.title=_.description),Number.isFinite(_.minimum)&&(R.min=String(_.minimum)),Number.isFinite(_.maximum)&&(R.max=String(_.maximum)),Number.isFinite(_.min_length)&&(R.minLength=_.min_length),Number.isFinite(_.max_length)&&(R.maxLength=_.max_length),V.append(j,R),$.appendChild(V),L.set(_.id,{control:R,definition:_})});const z=document.createElement("button");z.type="button",z.className=`plugin-session-panel-action plugin-session-panel-action--${O.variant}`,z.textContent=O.label,z.addEventListener("click",async function(){if(O.confirm&&typeof globalThis.confirm=="function"&&!globalThis.confirm(O.confirm))return;const _=ie;if(typeof _!="function")return;const V={};for(const[j,R]of L){const D=R.control,Q=R.definition;if(typeof D.checkValidity=="function"&&!D.checkValidity()){typeof D.reportValidity=="function"&&D.reportValidity();return}if(Q.type==="boolean"){V[j]=!!D.checked;continue}D.value===""&&!Q.required||(Array.isArray(Q.enum)?V[j]=Q.enum[Number(D.value)-1]:Q.type==="integer"?V[j]=Number.parseInt(D.value,10):Q.type==="number"?V[j]=Number(D.value):V[j]=D.value)}z.disabled=!0;try{const j=await _("/api/extensions/session-action",{method:"POST",credentials:"same-origin",cache:"no-store",headers:{Accept:"application/json","Content-Type":"application/json"},body:JSON.stringify({session_id:s,plugin_id:l.pluginId,action_id:O.id,inputs:V})});if(!j.ok)throw new Error(`Session extension action failed (${j.status})`);await Ge([s])}catch(j){console.warn("Plugin session action failed",j)}finally{z.disabled=!1}}),$.appendChild(z),k.appendChild($)}),S.appendChild(k)}u.appendChild(S)}),t.replaceChildren(u);const o=Array.from(t.children).filter(function(l){return!l.hidden}).length;t.hidden=o===0,document.dispatchEvent(new CustomEvent("myagent:plugin-session-ui-rendered",{detail:{sessionId:s,panelCount:o}}))}function He(n){const e=Object.create(null);return n.forEach(function(t){const r=String(t.dataset.sessionId||"");r&&_e.has(r)&&(e[r]=_e.get(r))}),e}async function Ge(n){const e=ie;if(typeof e!="function")return;const t=kn(),r=t.map(function(u){return String(u.dataset.sessionId||"")}).filter(Boolean),s=new Set(r),a=Array.isArray(n)?n.map(function(u){return String(u||"").trim()}):r,c=Array.from(new Set(a)).filter(function(u){return u&&s.has(u)}).slice(0,200),i=++Kt;if(c.forEach(function(u){Ee.set(u,i)}),!c.length){Cn(t,He(t)),Tn(t,He(t));return}try{const u=await e("/api/extensions/session-ui",{method:"POST",credentials:"same-origin",cache:"no-store",headers:{Accept:"application/json","Content-Type":"application/json"},body:JSON.stringify({session_ids:c})});if(!u.ok)throw new Error(`Session extension UI failed (${u.status})`);const o=await u.json(),l=ur(o,c);c.forEach(function(P){Ee.get(P)===i&&_e.set(P,l[P])});const S=kn(),h=He(S);Cn(S,h),Tn(S,h)}catch(u){c.some(function(l){return Ee.get(l)===i})&&console.warn("Plugin session UI refresh failed",u)}}function qe(n){if(n&&n.full===!0)ke=!0,pe.clear();else if(!ke&&((Array.isArray(n)?n:[n&&n.detail?n.detail.sessionId:n]).forEach(function(t){const r=String(t||"").trim();r&&pe.add(r)}),!pe.size)){const t=document.querySelector("#sessions-list .session-item.active[data-session-id]");t&&pe.add(String(t.dataset.sessionId||""))}Ie!=null&&clearTimeout(Ie),Ie=setTimeout(function(){Ie=null;const e=ke,t=Array.from(pe);ke=!1,pe.clear(),Ge(e?void 0:t)},30)}function En(n){if(!n||n.nodeType!==1)return[];const e=[];return n.matches&&n.matches(".session-item[data-session-id]")&&e.push(n),n.querySelectorAll&&e.push(...n.querySelectorAll(".session-item[data-session-id]")),e.map(function(t){return String(t.dataset.sessionId||"")}).filter(Boolean)}function pr(){const n=document.getElementById("sessions-list");n&&!Be&&typeof MutationObserver<"u"&&(Be=new MutationObserver(function(e){const t=new Set;e.forEach(function(r){Array.from(r.addedNodes||[]).forEach(function(s){En(s).forEach(function(a){t.add(a)})}),Array.from(r.removedNodes||[]).forEach(function(s){En(s).forEach(function(a){_e.delete(a),Ee.delete(a)})})}),t.size&&qe(Array.from(t))}),Be.observe(n,{childList:!0,subtree:!0})),document.addEventListener("myagent:extension-state-changed",qe),qe({full:!0})}async function mr(n={}){const e=typeof n.fetch=="function"?n.fetch:typeof globalThis.fetch=="function"?globalThis.fetch.bind(globalThis):null;if(typeof e=="function"){ie=e;try{const t=await e("/api/extensions",{method:"GET",credentials:"same-origin",cache:"no-store",headers:{Accept:"application/json"}});if(!t.ok)throw new Error(`Extension discovery failed (${t.status})`);const r=await t.json(),s=r&&r.ui_contributions;yn(s),wn(document.getElementById("plugin-settings-sections"),s),xn(document.getElementById("plugin-composer-actions"),s),await Xt(s),pr()}catch(t){yn([]),wn(document.getElementById("plugin-settings-sections"),[]),xn(document.getElementById("plugin-composer-actions"),[]),console.warn("Plugin UI discovery failed",t)}finally{document.dispatchEvent(new CustomEvent("myagent:plugin-ui-ready"))}}}const gr=`// Lightweight UI internationalisation. The UI is rendered by several legacy
+`}strong({tokens:n}){return`<strong>${this.parser.parseInline(n)}</strong>`}em({tokens:n}){return`<em>${this.parser.parseInline(n)}</em>`}codespan({text:n}){return`<code>${ee(n,!0)}</code>`}br(n){return"<br>"}del({tokens:n}){return`<del>${this.parser.parseInline(n)}</del>`}link({href:n,title:e,tokens:t}){const r=this.parser.parseInline(t),s=vn(n);if(s===null)return r;n=s;let a='<a href="'+n+'"';return e&&(a+=' title="'+ee(e)+'"'),a+=">"+r+"</a>",a}image({href:n,title:e,text:t,tokens:r}){r&&(t=this.parser.parseInline(r,this.parser.textRenderer));const s=vn(n);if(s===null)return ee(t);n=s;let a=`<img src="${n}" alt="${t}"`;return e&&(a+=` title="${ee(e)}"`),a+=">",a}text(n){return"tokens"in n&&n.tokens?this.parser.parseInline(n.tokens):"escaped"in n&&n.escaped?n.text:ee(n.text)}},tn=class{strong({text:n}){return n}em({text:n}){return n}codespan({text:n}){return n}del({text:n}){return n}html({text:n}){return n}text({text:n}){return n}link({text:n}){return""+n}image({text:n}){return""+n}br(){return""}},te=class ze{constructor(e){H(this,"options");H(this,"renderer");H(this,"textRenderer");this.options=e||le,this.options.renderer=this.options.renderer||new _e,this.renderer=this.options.renderer,this.renderer.options=this.options,this.renderer.parser=this,this.textRenderer=new tn}static parse(e,t){return new ze(t).parse(e)}static parseInline(e,t){return new ze(t).parseInline(e)}parse(e,t=!0){var s,a;let r="";for(let c=0;c<e.length;c++){const i=e[c];if((a=(s=this.options.extensions)==null?void 0:s.renderers)!=null&&a[i.type]){const o=i,l=this.options.extensions.renderers[o.type].call({parser:this},o);if(l!==!1||!["space","hr","heading","code","table","blockquote","list","html","paragraph","text"].includes(o.type)){r+=l||"";continue}}const u=i;switch(u.type){case"space":{r+=this.renderer.space(u);continue}case"hr":{r+=this.renderer.hr(u);continue}case"heading":{r+=this.renderer.heading(u);continue}case"code":{r+=this.renderer.code(u);continue}case"table":{r+=this.renderer.table(u);continue}case"blockquote":{r+=this.renderer.blockquote(u);continue}case"list":{r+=this.renderer.list(u);continue}case"html":{r+=this.renderer.html(u);continue}case"paragraph":{r+=this.renderer.paragraph(u);continue}case"text":{let o=u,l=this.renderer.text(o);for(;c+1<e.length&&e[c+1].type==="text";)o=e[++c],l+=`
+`+this.renderer.text(o);t?r+=this.renderer.paragraph({type:"paragraph",raw:l,text:l,tokens:[{type:"text",raw:l,text:l,escaped:!0}]}):r+=l;continue}default:{const o='Token with "'+u.type+'" type was not found.';if(this.options.silent)return console.error(o),"";throw new Error(o)}}}return r}parseInline(e,t=this.renderer){var s,a;let r="";for(let c=0;c<e.length;c++){const i=e[c];if((a=(s=this.options.extensions)==null?void 0:s.renderers)!=null&&a[i.type]){const o=this.options.extensions.renderers[i.type].call({parser:this},i);if(o!==!1||!["escape","html","link","image","strong","em","codespan","br","del","text"].includes(i.type)){r+=o||"";continue}}const u=i;switch(u.type){case"escape":{r+=t.text(u);break}case"html":{r+=t.html(u);break}case"link":{r+=t.link(u);break}case"image":{r+=t.image(u);break}case"strong":{r+=t.strong(u);break}case"em":{r+=t.em(u);break}case"codespan":{r+=t.codespan(u);break}case"br":{r+=t.br(u);break}case"del":{r+=t.del(u);break}case"text":{r+=t.text(u);break}default:{const o='Token with "'+u.type+'" type was not found.';if(this.options.silent)return console.error(o),"";throw new Error(o)}}}return r}},Ue,Te=(Ue=class{constructor(n){H(this,"options");H(this,"block");this.options=n||le}preprocess(n){return n}postprocess(n){return n}processAllTokens(n){return n}provideLexer(){return this.block?ne.lex:ne.lexInline}provideParser(){return this.block?te.parse:te.parseInline}},H(Ue,"passThroughHooks",new Set(["preprocess","postprocess","processAllTokens"])),Ue),Qt=class{constructor(...n){H(this,"defaults",Ge());H(this,"options",this.setOptions);H(this,"parse",this.parseMarkdown(!0));H(this,"parseInline",this.parseMarkdown(!1));H(this,"Parser",te);H(this,"Renderer",_e);H(this,"TextRenderer",tn);H(this,"Lexer",ne);H(this,"Tokenizer",Re);H(this,"Hooks",Te);this.use(...n)}walkTokens(n,e){var r,s;let t=[];for(const a of n)switch(t=t.concat(e.call(this,a)),a.type){case"table":{const c=a;for(const i of c.header)t=t.concat(this.walkTokens(i.tokens,e));for(const i of c.rows)for(const u of i)t=t.concat(this.walkTokens(u.tokens,e));break}case"list":{const c=a;t=t.concat(this.walkTokens(c.items,e));break}default:{const c=a;(s=(r=this.defaults.extensions)==null?void 0:r.childTokens)!=null&&s[c.type]?this.defaults.extensions.childTokens[c.type].forEach(i=>{const u=c[i].flat(1/0);t=t.concat(this.walkTokens(u,e))}):c.tokens&&(t=t.concat(this.walkTokens(c.tokens,e)))}}return t}use(...n){const e=this.defaults.extensions||{renderers:{},childTokens:{}};return n.forEach(t=>{const r={...t};if(r.async=this.defaults.async||r.async||!1,t.extensions&&(t.extensions.forEach(s=>{if(!s.name)throw new Error("extension name required");if("renderer"in s){const a=e.renderers[s.name];a?e.renderers[s.name]=function(...c){let i=s.renderer.apply(this,c);return i===!1&&(i=a.apply(this,c)),i}:e.renderers[s.name]=s.renderer}if("tokenizer"in s){if(!s.level||s.level!=="block"&&s.level!=="inline")throw new Error("extension level must be 'block' or 'inline'");const a=e[s.level];a?a.unshift(s.tokenizer):e[s.level]=[s.tokenizer],s.start&&(s.level==="block"?e.startBlock?e.startBlock.push(s.start):e.startBlock=[s.start]:s.level==="inline"&&(e.startInline?e.startInline.push(s.start):e.startInline=[s.start]))}"childTokens"in s&&s.childTokens&&(e.childTokens[s.name]=s.childTokens)}),r.extensions=e),t.renderer){const s=this.defaults.renderer||new _e(this.defaults);for(const a in t.renderer){if(!(a in s))throw new Error(`renderer '${a}' does not exist`);if(["options","parser"].includes(a))continue;const c=a,i=t.renderer[c],u=s[c];s[c]=(...o)=>{let l=i.apply(s,o);return l===!1&&(l=u.apply(s,o)),l||""}}r.renderer=s}if(t.tokenizer){const s=this.defaults.tokenizer||new Re(this.defaults);for(const a in t.tokenizer){if(!(a in s))throw new Error(`tokenizer '${a}' does not exist`);if(["options","rules","lexer"].includes(a))continue;const c=a,i=t.tokenizer[c],u=s[c];s[c]=(...o)=>{let l=i.apply(s,o);return l===!1&&(l=u.apply(s,o)),l}}r.tokenizer=s}if(t.hooks){const s=this.defaults.hooks||new Te;for(const a in t.hooks){if(!(a in s))throw new Error(`hook '${a}' does not exist`);if(["options","block"].includes(a))continue;const c=a,i=t.hooks[c],u=s[c];Te.passThroughHooks.has(a)?s[c]=o=>{if(this.defaults.async)return Promise.resolve(i.call(s,o)).then(S=>u.call(s,S));const l=i.call(s,o);return u.call(s,l)}:s[c]=(...o)=>{let l=i.apply(s,o);return l===!1&&(l=u.apply(s,o)),l}}r.hooks=s}if(t.walkTokens){const s=this.defaults.walkTokens,a=t.walkTokens;r.walkTokens=function(c){let i=[];return i.push(a.call(this,c)),s&&(i=i.concat(s.call(this,c))),i}}this.defaults={...this.defaults,...r}}),this}setOptions(n){return this.defaults={...this.defaults,...n},this}lexer(n,e){return ne.lex(n,e??this.defaults)}parser(n,e){return te.parse(n,e??this.defaults)}parseMarkdown(n){return(t,r)=>{const s={...r},a={...this.defaults,...s},c=this.onError(!!a.silent,!!a.async);if(this.defaults.async===!0&&s.async===!1)return c(new Error("marked(): The async option was set to true by an extension. Remove async: false from the parse options object to return a Promise."));if(typeof t>"u"||t===null)return c(new Error("marked(): input parameter is undefined or null"));if(typeof t!="string")return c(new Error("marked(): input parameter is of type "+Object.prototype.toString.call(t)+", string expected"));a.hooks&&(a.hooks.options=a,a.hooks.block=n);const i=a.hooks?a.hooks.provideLexer():n?ne.lex:ne.lexInline,u=a.hooks?a.hooks.provideParser():n?te.parse:te.parseInline;if(a.async)return Promise.resolve(a.hooks?a.hooks.preprocess(t):t).then(o=>i(o,a)).then(o=>a.hooks?a.hooks.processAllTokens(o):o).then(o=>a.walkTokens?Promise.all(this.walkTokens(o,a.walkTokens)).then(()=>o):o).then(o=>u(o,a)).then(o=>a.hooks?a.hooks.postprocess(o):o).catch(c);try{a.hooks&&(t=a.hooks.preprocess(t));let o=i(t,a);a.hooks&&(o=a.hooks.processAllTokens(o)),a.walkTokens&&this.walkTokens(o,a.walkTokens);let l=u(o,a);return a.hooks&&(l=a.hooks.postprocess(l)),l}catch(o){return c(o)}}}onError(n,e){return t=>{if(t.message+=`
+Please report this to https://github.com/markedjs/marked.`,n){const r="<p>An error occurred:</p><pre>"+ee(t.message+"",!0)+"</pre>";return e?Promise.resolve(r):r}if(e)return Promise.reject(t);throw t}}},oe=new Qt;function N(n,e){return oe.parse(n,e)}N.options=N.setOptions=function(n){return oe.setOptions(n),N.defaults=oe.defaults,An(N.defaults),N};N.getDefaults=Ge;N.defaults=le;N.use=function(...n){return oe.use(...n),N.defaults=oe.defaults,An(N.defaults),N};N.walkTokens=function(n,e){return oe.walkTokens(n,e)};N.parseInline=oe.parseInline;N.Parser=te;N.parser=te.parse;N.Renderer=_e;N.TextRenderer=tn;N.Lexer=ne;N.lexer=ne.lex;N.Tokenizer=Re;N.Hooks=Te;N.parse=N;N.options;N.setOptions;N.use;N.walkTokens;N.parseInline;te.parse;ne.lex;const ye=/^[a-z0-9][a-z0-9._-]{0,127}$/,re=/^[a-z][a-z0-9._-]{0,63}$/,Ve=new Set(["neutral","info","success","warning","danger"]),We=new Set(["text","number","boolean","json"]),Gt=new Set(["__proto__","prototype","constructor"]);let qn=new Map,Dn=!1,ie=typeof globalThis.fetch=="function"?globalThis.fetch.bind(globalThis):null,Be=null,Ie=null,Kt=0,ke=!1,pe=new Set,Ee=new Map,Pe=new Map,Un=new Map,Oe=[];function Yt(n){if(!Array.isArray(n))return[];const e=new Set;return n.slice(0,128).flatMap(function(t){if(!t||typeof t!="object"||t.slot!=="session.panel"||!t.renderer||typeof t.renderer!="object")return[];const r=String(t.plugin_id||"").trim(),s=String(t.id||"").trim(),a=String(t.renderer.module||"").trim(),c=String(t.renderer.style||"").trim(),i=`/plugin-assets/${r}/`,u=function(l,S){if(!l||!l.startsWith(i)||l.includes("..")||l.includes("\\"))return!1;const h=l.split("?",1)[0].toLowerCase();return S.some(function(_){return h.endsWith(_)})},o=`${r}:${s}`;return!ye.test(r)||!re.test(s)||!u(a,[".js",".mjs"])||c&&!u(c,[".css"])||e.has(o)?[]:(e.add(o),[{pluginId:r,id:s,moduleUrl:a,styleUrl:c}])})}async function Xt(n){const e=Yt(n),t=new Map;await Promise.all(e.map(async function(r){try{if(r.styleUrl&&!document.querySelector(`link[data-plugin-panel-style="${r.pluginId}:${r.id}"]`)){const a=document.createElement("link");a.rel="stylesheet",a.href=r.styleUrl,a.dataset.pluginPanelStyle=`${r.pluginId}:${r.id}`,document.head.appendChild(a)}const s=await import(r.moduleUrl);s&&typeof s.renderSessionPanel=="function"&&t.set(`${r.pluginId}:${r.id}`,s.renderSessionPanel)}catch(s){console.warn(`Plugin session panel renderer failed to load (${r.pluginId})`,s)}})),Un=t}function jn(n){const e=Number(n&&n.order);return Number.isFinite(e)?Math.max(-1e4,Math.min(1e4,e)):100}function Zt(n){if(!Array.isArray(n))return[];const e=new Set;return n.slice(0,64).flatMap(function(t){if(!t||typeof t!="object"||t.slot!=="settings.section")return[];const r=String(t.plugin_id||"").trim(),s=String(t.id||"").trim(),a=q(t.title,64),c=q(t.label,64),i=q(t.description,200),u=String(t.target||"").trim(),o=`/plugins/${r}`,l=`/api/plugins/${r}/settings`,S=`${r}:${s}`;if(!ye.test(r)||!re.test(s)||!a||!c||!new Set(["plugin-page","plugin-settings"]).has(u)||u==="plugin-page"&&String(t.href||"")!==o||u==="plugin-settings"&&String(t.endpoint||"")!==l||e.has(S))return[];e.add(S);const h={pluginId:r,id:s,title:a,label:c,description:i,target:u,order:jn(t)};return u==="plugin-page"?h.href=o:h.endpoint=l,[h]}).sort(function(t,r){return t.order-r.order||t.title.localeCompare(r.title)||t.pluginId.localeCompare(r.pluginId)||t.id.localeCompare(r.id)})}function Jt(n){if(!Array.isArray(n))return[];const e=new Set;return n.slice(0,64).flatMap(function(t){if(!t||typeof t!="object"||t.slot!=="composer.action")return[];const r=String(t.plugin_id||"").trim(),s=String(t.id||"").trim(),a=q(t.label,64),c=q(t.description,200),i=String(t.action||"").trim(),u=`${r}:${s}`;if(!ye.test(r)||!re.test(s)||!a||!new Set(["insert_text","open_plugin_page"]).has(i)||e.has(u))return[];const o={pluginId:r,id:s,label:a,description:c,action:i,order:jn(t)};if(i==="insert_text"){const l=String(t.text||"");if(!l.trim()||l.length>2e3)return[];o.text=l}else{const l=`/plugins/${r}`;if(String(t.href||"")!==l)return[];o.href=l}return e.add(u),[o]}).sort(function(t,r){return t.order-r.order||t.label.localeCompare(r.label)||t.pluginId.localeCompare(r.pluginId)||t.id.localeCompare(r.id)})}function er(n){if(!n||typeof n!="object")return null;const e=String(n.path||"").trim(),t=String(n.label||"").trim(),r=String(n.format||"text").trim().toLowerCase();return!e.startsWith("/")||e.length>160||!t||t.length>64||!We.has(r)||e.slice(1).split("/").map(function(a){return a.replace(/~1/g,"/").replace(/~0/g,"~")}).some(function(a){return!a||Gt.has(a)})?null:{path:e,label:t,format:r,optional:n.optional!==!1}}function nr(n){if(!Array.isArray(n))return[];const e=new Set,t=new Set;return n.slice(0,128).flatMap(function(r){if(!r||typeof r!="object"||r.slot!=="message.renderer")return[];const s=String(r.plugin_id||"").trim(),a=String(r.id||"").trim(),c=String(r.event_name||"").trim(),i=String(r.title||"").trim(),u=String(r.description||"").trim(),o=String(r.variant||"neutral").trim().toLowerCase(),l=Array.isArray(r.fields)?r.fields:[],S=l.map(er),h=`${s}:${a}`,_=`${s}:${c}`;return!ye.test(s)||!re.test(a)||!re.test(c)||!i||i.length>64||u.length>200||!Ve.has(o)||l.length<1||l.length>12||S.some(function(E){return!E})||new Set(S.map(function(E){return E.path})).size!==S.length||e.has(h)||t.has(_)?[]:(e.add(h),t.add(_),[{pluginId:s,id:a,eventName:c,title:i,description:u,variant:o,fields:S}])})}function tr(n,e){const t=e.slice(1).split("/").map(function(s){return s.replace(/~1/g,"/").replace(/~0/g,"~")});let r=n;for(const s of t){if(r==null||typeof r!="object"||!Object.prototype.hasOwnProperty.call(r,s))return{found:!1,value:void 0};r=r[s]}return{found:!0,value:r}}function q(n,e){const t=String(n??"").replace(/[\r\n]+/g," ").trim();return t.length>e?`${t.slice(0,e)}…`:t}function rr(n,e){if(e==="number"){const t=Number(n);return Number.isFinite(t)?String(t):""}if(e==="boolean")return typeof n=="boolean"?n?"true":"false":"";if(e==="json"||n!==null&&typeof n=="object")try{return q(JSON.stringify(n),2e3)}catch{return""}return q(n,1e3)}function yn(n){const e=nr(n);return qn=new Map(e.map(function(t){return[`${t.pluginId}:${t.eventName}`,t]})),Dn=!0,e}function sr(n){if(!n||typeof n!="object"||n.type!=="extension_event")return{handled:!1};if(!Dn)return{handled:!0,pending:!0};const e=String(n.plugin_id||"").trim(),t=String(n.event_name||"").trim(),r=qn.get(`${e}:${t}`);if(!r)return{handled:!0,title:"Extension",description:"No active declarative renderer is available for this historical event.",variant:"neutral",content:`${q(e,128)} / ${q(t,64)}`,fallback:!0};const s=n.data&&typeof n.data=="object"?n.data:{},a=[];return r.fields.forEach(function(c){const i=tr(s,c.path),u=i.found?rr(i.value,c.format):"";!u&&c.optional||a.push(`${c.label}: ${u||"—"}`)}),{handled:!0,title:r.title,description:r.description,variant:r.variant,content:a.join(`
+`)}}globalThis.resolvePluginExtensionEvent=sr;function wn(n,e){if(!n)return;const t=Zt(e),r=document.createDocumentFragment();t.forEach(function(s){const a=document.createElement("div");a.className="settings-modal__section plugin-settings-section",a.dataset.pluginId=s.pluginId,a.dataset.contributionId=s.id;const c=document.createElement("div");if(c.className="settings-modal__label",c.textContent=s.title,a.appendChild(c),s.description){const i=document.createElement("div");i.className="plugin-settings-description",i.textContent=s.description,a.appendChild(i)}if(s.target==="plugin-page"){const i=document.createElement("a");i.className="settings-advanced-btn plugin-settings-link",i.href=s.href,i.target="_blank",i.rel="noopener noreferrer",i.textContent=s.label,a.appendChild(i)}else{const i=document.createElement("form");i.className="plugin-settings-form",i.dataset.endpoint=s.endpoint,i.dataset.saveLabel=s.label;const u=document.createElement("div");u.className="plugin-settings-status",u.setAttribute("role","status"),u.textContent="Loading…",i.appendChild(u),i.addEventListener("submit",function(o){o.preventDefault(),cr(i,s)}),a.appendChild(i),or(i,s)}r.appendChild(a)}),n.replaceChildren(r),n.hidden=t.length===0}function ar(n){if(!n||typeof n!="object")return null;const e=String(n.id||"").trim(),t=String(n.type||"").trim(),r=q(n.title,64),s=q(n.description,200),a=String(n.format||"").trim();if(!re.test(e)||!new Set(["string","boolean","integer","number"]).has(t)||!r||a&&!new Set(["text","multiline","secret"]).has(a))return null;const c={id:e,type:t,title:r,description:s,format:a,required:n.required===!0};return a==="secret"?(c.configured=n.configured===!0,c.reference=q(n.reference,128),c):(c.value=n.value,Array.isArray(n.enum)&&n.enum.length<=32&&(c.enum=n.enum.slice()),Number.isFinite(Number(n.minimum))&&(c.minimum=Number(n.minimum)),Number.isFinite(Number(n.maximum))&&(c.maximum=Number(n.maximum)),Number.isInteger(Number(n.min_length))&&(c.minLength=Number(n.min_length)),Number.isInteger(Number(n.max_length))&&(c.maxLength=Number(n.max_length)),c)}function $n(n,e){const t=n&&n.ok===!0&&n.settings&&typeof n.settings=="object"?n.settings:null;if(!t||String(t.plugin_id||"")!==e||!Array.isArray(t.fields)||t.fields.length>64)return null;const r=t.fields.map(ar);return r.some(function(s){return!s})||new Set(r.map(function(s){return s.id})).size!==r.length?null:{pluginId:e,title:q(t.title,64),description:q(t.description,200),valid:t.valid===!0,missingRequired:Array.isArray(t.missing_required)?t.missing_required.slice(0,64).map(String):[],fields:r}}function ir(n){if(n.format==="secret"){const t=document.createElement("div");return t.className=`plugin-setting-secret ${n.configured?"is-configured":"is-missing"}`,t.textContent=n.configured?`Configured via ${n.reference||"host secret reference"}`:`Missing host secret ${n.reference||"reference"}`,t}let e;return n.enum?(e=document.createElement("select"),n.enum.forEach(function(t){const r=document.createElement("option");r.value=String(t),r.textContent=String(t),r.selected=t===n.value,e.appendChild(r)})):n.type==="boolean"?(e=document.createElement("input"),e.type="checkbox",e.checked=n.value===!0):n.format==="multiline"?(e=document.createElement("textarea"),e.rows=3,e.value=n.value==null?"":String(n.value)):(e=document.createElement("input"),e.type=n.type==="integer"||n.type==="number"?"number":"text",e.value=n.value==null?"":String(n.value),n.type==="integer"&&(e.step="1"),n.type==="number"&&(e.step="any")),e.className="plugin-setting-control",e.dataset.settingId=n.id,e.dataset.settingType=n.type,e.required=n.required,n.minimum!==void 0&&(e.min=String(n.minimum)),n.maximum!==void 0&&(e.max=String(n.maximum)),n.minLength!==void 0&&(e.minLength=n.minLength),n.maxLength!==void 0&&(e.maxLength=n.maxLength),e}function zn(n,e,t){const r=document.createDocumentFragment();e.fields.forEach(function(c){const i=document.createElement("label");i.className="plugin-setting-field";const u=document.createElement("span");if(u.className="plugin-setting-label",u.textContent=c.title,i.appendChild(u),c.description){const o=document.createElement("span");o.className="plugin-setting-description",o.textContent=c.description,i.appendChild(o)}i.appendChild(ir(c)),r.appendChild(i)});const s=document.createElement("button");s.type="submit",s.className="settings-advanced-btn plugin-settings-save",s.textContent=t.label;const a=document.createElement("div");a.className="plugin-settings-status",a.setAttribute("role","status"),!e.valid&&e.missingRequired.length&&(a.textContent=`Missing required settings: ${e.missingRequired.join(", ")}`,a.classList.add("is-error")),r.append(s,a),n.replaceChildren(r)}async function or(n,e){try{const t=await ie(e.endpoint,{method:"GET",credentials:"same-origin",cache:"no-store",headers:{Accept:"application/json"}}),r=await t.json(),s=t.ok?$n(r,e.pluginId):null;if(!s)throw new Error(r&&r.error||`HTTP ${t.status}`);zn(n,s,e)}catch(t){const r=n.querySelector(".plugin-settings-status");r&&(r.textContent=`Settings unavailable: ${String(t&&t.message?t.message:t)}`,r.classList.add("is-error"))}}function lr(n){const e={};return n.querySelectorAll(".plugin-setting-control[data-setting-id]").forEach(function(t){const r=String(t.dataset.settingId||""),s=String(t.dataset.settingType||"string");t.tagName==="SELECT"&&s==="boolean"?e[r]=t.value==="true":t.tagName==="SELECT"&&s==="integer"?e[r]=Number.parseInt(t.value,10):t.tagName==="SELECT"&&s==="number"?e[r]=Number(t.value):s==="boolean"?e[r]=t.checked===!0:(s==="integer"||s==="number")&&t.value===""?e[r]=null:s==="integer"?e[r]=Number.parseInt(t.value,10):s==="number"?e[r]=Number(t.value):e[r]=t.value}),e}async function cr(n,e){const t=n.querySelector(".plugin-settings-save"),r=n.querySelector(".plugin-settings-status");t&&(t.disabled=!0),r&&(r.textContent="Saving…",r.classList.remove("is-error"));try{const s=await ie(e.endpoint,{method:"PATCH",credentials:"same-origin",cache:"no-store",headers:{Accept:"application/json","Content-Type":"application/json"},body:JSON.stringify({values:lr(n)})}),a=await s.json(),c=s.ok?$n(a,e.pluginId):null;if(!c)throw new Error(a&&a.error||`HTTP ${s.status}`);zn(n,c,e);const i=n.querySelector(".plugin-settings-status");i&&c.valid&&(i.textContent="Saved")}catch(s){r&&(r.textContent=`Save failed: ${String(s&&s.message?s.message:s)}`,r.classList.add("is-error"))}finally{t&&t.isConnected&&(t.disabled=!1)}}function dr(n,e){if(!n)return;const t=Number.isInteger(n.selectionStart)?n.selectionStart:n.value.length,r=Number.isInteger(n.selectionEnd)?n.selectionEnd:t;typeof n.setRangeText=="function"?n.setRangeText(e,t,r,"end"):n.value=`${n.value.slice(0,t)}${e}${n.value.slice(r)}`,n.dispatchEvent(new Event("input",{bubbles:!0})),n.focus()}function xn(n,e){if(!n)return;const t=Jt(e),r=document.createDocumentFragment();t.forEach(function(s){const a=document.createElement("button");a.type="button",a.className="plugin-composer-action",a.dataset.pluginId=s.pluginId,a.dataset.contributionId=s.id,a.textContent=s.label,s.description&&(a.title=s.description,a.setAttribute("aria-label",`${s.label}: ${s.description}`)),a.addEventListener("click",function(){if(s.action==="insert_text"){dr(document.getElementById("message-input"),s.text);return}if(typeof globalThis.open!="function")return;const c=globalThis.open(s.href,"_blank","noopener,noreferrer");c&&(c.opener=null)}),r.appendChild(a)}),n.replaceChildren(r),n.hidden=t.length===0}function In(n,e){if(!n||typeof n!="object")return null;const t=String(n.plugin_id||"").trim(),r=String(n.id||"").trim(),s=String(n.variant||"neutral").trim().toLowerCase();if(!ye.test(t)||!re.test(r)||!Ve.has(s))return null;if(e==="badge"){const o=q(n.label,64),l=q(n.description,200),S=String(n.display||"badge").trim().toLowerCase();return!o||!new Set(["badge","activity"]).has(S)?null:{pluginId:t,id:r,label:o,description:l,variant:s,display:S}}const a=q(n.title,64),c=q(n.description,200);if(!a||!Array.isArray(n.fields)||n.fields.length>12)return null;const i=n.fields.flatMap(function(o){if(!o||typeof o!="object")return[];const l=q(o.label,64),S=String(o.format||"text").toLowerCase();if(S==="list"){if(!l||!Array.isArray(o.columns)||!Array.isArray(o.rows)||o.columns.length<1||o.columns.length>4||o.rows.length>100)return[];const _=o.columns.map(function(k){const O=q(k&&k.label,64),$=String(k&&k.format||"text").toLowerCase();return O&&We.has($)?{label:O,format:$}:null});if(_.some(function(k){return!k}))return[];const E=o.rows.flatMap(function(k){return!k||!Array.isArray(k.values)||k.values.length!==_.length?[]:[{values:k.values.map(function(O){return q(O,1e3)})}]});return E.length!==o.rows.length?[]:[{label:l,format:S,columns:_,rows:E}]}const h=q(o.value,4e3);return!l||!We.has(S)?[]:[{label:l,value:h,format:S}]}),u=(Array.isArray(n.actions)?n.actions:[]).slice(0,4).flatMap(function(o){if(!o||typeof o!="object")return[];const l=String(o.id||"").trim(),S=q(o.label,64),h=String(o.variant||"neutral").trim().toLowerCase(),_=q(o.confirm,200);if(!re.test(l)||!S||!Ve.has(h))return[];const E=Array.isArray(o.inputs)?o.inputs.slice(0,8):[],k=new Set,O=E.flatMap(function(L){if(!L||typeof L!="object")return[];const z=String(L.id||"").trim(),P=q(L.label||z,64),V=q(L.description,200),j=String(L.type||"string").trim().toLowerCase();if(!re.test(z)||k.has(z)||!P||!new Set(["string","boolean","integer","number"]).has(j))return[];k.add(z);const R={id:z,label:P,description:V,type:j,required:L.required===!0};return Array.isArray(L.enum)&&L.enum.length>0&&L.enum.length<=32&&(R.enum=L.enum.slice()),["minimum","maximum","min_length","max_length"].forEach(function(D){Number.isFinite(Number(L[D]))&&(R[D]=Number(L[D]))}),[R]});if(O.length!==E.length)return[];const $={id:l,label:S,variant:h,confirm:_};return O.length&&($.inputs=O),[$]});return{pluginId:t,id:r,title:a,description:c,variant:s,fields:i,actions:u}}function ur(n,e){const t=n&&n.ok===!0&&n.sessions&&typeof n.sessions=="object"?n.sessions:{},r=Object.create(null);return(Array.isArray(e)?e:[]).slice(0,200).forEach(function(s){const a=String(s||"").trim();if(!a||a.length>256||Object.prototype.hasOwnProperty.call(r,a))return;const c=Object.prototype.hasOwnProperty.call(t,a)&&t[a]&&typeof t[a]=="object"?t[a]:{};r[a]={badges:(Array.isArray(c.badges)?c.badges:[]).slice(0,16).map(function(i){return In(i,"badge")}).filter(Boolean),panels:(Array.isArray(c.panels)?c.panels:[]).slice(0,16).map(function(i){return In(i,"panel")}).filter(Boolean)}}),r}function kn(){return Array.from(document.querySelectorAll("#sessions-list .session-item[data-session-id]")).slice(0,200)}function Cn(n,e){n.forEach(function(t){const r=t.querySelector(".plugin-session-badges");r&&r.remove();const s=String(t.dataset.sessionId||""),a=e[s],c=!!(a&&a.badges.some(function(S){return S.display==="activity"}));t.classList.toggle("has-plugin-activity",c);const i=a?a.badges.filter(function(S){return S.display!=="activity"}):[];if(!i.length)return;const u=t.querySelector(".session-item-title-row");if(!u)return;const o=document.createElement("span");o.className="plugin-session-badges",i.forEach(function(S){const h=document.createElement("span");h.className=`plugin-session-badge plugin-session-badge--${S.variant}`,h.dataset.pluginId=S.pluginId,h.dataset.contributionId=S.id,h.textContent=S.label,S.description&&(h.title=S.description),o.appendChild(h)});const l=u.querySelector(".session-item-date");u.insertBefore(o,l||null)})}function Tn(n,e){const t=document.getElementById("plugin-session-panels");if(!t)return;const r=n.find(function(l){return l.classList.contains("active")}),s=r?String(r.dataset.sessionId||""):"",a=[];Oe.forEach(function(l){try{l({nextSessionId:s})===!1&&a.push(l)}catch(S){console.warn("Plugin session panel cleanup failed",S)}}),Oe=a;const c=e[s],i=c?c.panels:[],u=document.createDocumentFragment();i.forEach(function(l){const S=document.createElement("section");S.className=`plugin-session-panel plugin-session-panel--${l.variant}`,S.dataset.pluginId=l.pluginId,S.dataset.contributionId=l.id;const h=Un.get(`${l.pluginId}:${l.id}`);if(h){S.classList.add("plugin-session-panel--custom");try{const k=h({container:S,item:l,sessionId:s,request:ie,refresh:Qe,invokeAction:async function(O,$={}){const L=await ie("/api/extensions/session-action",{method:"POST",credentials:"same-origin",cache:"no-store",headers:{Accept:"application/json","Content-Type":"application/json"},body:JSON.stringify({session_id:s,plugin_id:l.pluginId,action_id:O,inputs:$})});if(!L.ok)throw new Error(`Session extension action failed (${L.status})`);return L},notifyStateChanged:function(){document.dispatchEvent(new CustomEvent("myagent:extension-state-changed",{detail:{sessionId:s}}))}});typeof k=="function"&&Oe.push(k),u.appendChild(S);return}catch(k){console.warn(`Plugin session panel renderer failed (${l.pluginId})`,k),S.replaceChildren(),S.classList.remove("plugin-session-panel--custom")}}const _=document.createElement("div");if(_.className="plugin-session-panel-title",_.textContent=l.title,S.appendChild(_),l.description){const k=document.createElement("div");k.className="plugin-session-panel-description",k.textContent=l.description,S.appendChild(k)}const E=document.createElement("dl");if(E.className="plugin-session-panel-fields",l.fields.forEach(function(k){const O=document.createElement("div");O.className="plugin-session-panel-field";const $=document.createElement("dt");$.textContent=k.label;const L=document.createElement("dd");k.format==="list"?(L.className="plugin-session-panel-list",k.rows.forEach(function(z){const P=document.createElement("div");P.className="plugin-session-panel-list-row",z.values.forEach(function(V,j){const R=document.createElement("span");R.className="plugin-session-panel-list-cell";const D=k.columns[j];R.title=D.label;const G=document.createElement("span");G.className="plugin-session-panel-list-key",G.textContent=`${D.label}: `;const se=document.createElement("span");se.textContent=V||"—",R.append(G,se),P.appendChild(R)}),L.appendChild(P)})):L.textContent=k.value,O.append($,L),E.appendChild(O)}),S.appendChild(E),l.actions.length){const k=document.createElement("div");k.className="plugin-session-panel-actions",l.actions.forEach(function(O){const $=document.createElement("div");$.className="plugin-session-panel-action-group";const L=new Map;(O.inputs||[]).forEach(function(P){const V=document.createElement("label");V.className="plugin-session-panel-action-field";const j=document.createElement("span");j.textContent=P.label;let R;if(Array.isArray(P.enum)){if(R=document.createElement("select"),!P.required){const D=document.createElement("option");D.value="",D.textContent="—",R.appendChild(D)}P.enum.forEach(function(D,G){const se=document.createElement("option");se.value=String(G+1),se.textContent=q(D,200),R.appendChild(se)})}else P.type==="boolean"?(R=document.createElement("input"),R.type="checkbox"):P.type==="string"&&Number(P.max_length||0)>200?R=document.createElement("textarea"):(R=document.createElement("input"),R.type=P.type==="string"?"text":"number",P.type==="integer"&&(R.step="1"),P.type==="number"&&(R.step="any"));R.name=P.id,R.required=P.required,P.description&&(R.title=P.description),Number.isFinite(P.minimum)&&(R.min=String(P.minimum)),Number.isFinite(P.maximum)&&(R.max=String(P.maximum)),Number.isFinite(P.min_length)&&(R.minLength=P.min_length),Number.isFinite(P.max_length)&&(R.maxLength=P.max_length),V.append(j,R),$.appendChild(V),L.set(P.id,{control:R,definition:P})});const z=document.createElement("button");z.type="button",z.className=`plugin-session-panel-action plugin-session-panel-action--${O.variant}`,z.textContent=O.label,z.addEventListener("click",async function(){if(O.confirm&&typeof globalThis.confirm=="function"&&!globalThis.confirm(O.confirm))return;const P=ie;if(typeof P!="function")return;const V={};for(const[j,R]of L){const D=R.control,G=R.definition;if(typeof D.checkValidity=="function"&&!D.checkValidity()){typeof D.reportValidity=="function"&&D.reportValidity();return}if(G.type==="boolean"){V[j]=!!D.checked;continue}D.value===""&&!G.required||(Array.isArray(G.enum)?V[j]=G.enum[Number(D.value)-1]:G.type==="integer"?V[j]=Number.parseInt(D.value,10):G.type==="number"?V[j]=Number(D.value):V[j]=D.value)}z.disabled=!0;try{const j=await P("/api/extensions/session-action",{method:"POST",credentials:"same-origin",cache:"no-store",headers:{Accept:"application/json","Content-Type":"application/json"},body:JSON.stringify({session_id:s,plugin_id:l.pluginId,action_id:O.id,inputs:V})});if(!j.ok)throw new Error(`Session extension action failed (${j.status})`);await Qe([s])}catch(j){console.warn("Plugin session action failed",j)}finally{z.disabled=!1}}),$.appendChild(z),k.appendChild($)}),S.appendChild(k)}u.appendChild(S)}),t.replaceChildren(u);const o=Array.from(t.children).filter(function(l){return!l.hidden}).length;t.hidden=o===0,document.dispatchEvent(new CustomEvent("myagent:plugin-session-ui-rendered",{detail:{sessionId:s,panelCount:o}}))}function He(n){const e=Object.create(null);return n.forEach(function(t){const r=String(t.dataset.sessionId||"");r&&Pe.has(r)&&(e[r]=Pe.get(r))}),e}async function Qe(n){const e=ie;if(typeof e!="function")return;const t=kn(),r=t.map(function(u){return String(u.dataset.sessionId||"")}).filter(Boolean),s=new Set(r),a=Array.isArray(n)?n.map(function(u){return String(u||"").trim()}):r,c=Array.from(new Set(a)).filter(function(u){return u&&s.has(u)}).slice(0,200),i=++Kt;if(c.forEach(function(u){Ee.set(u,i)}),!c.length){Cn(t,He(t)),Tn(t,He(t));return}try{const u=await e("/api/extensions/session-ui",{method:"POST",credentials:"same-origin",cache:"no-store",headers:{Accept:"application/json","Content-Type":"application/json"},body:JSON.stringify({session_ids:c})});if(!u.ok)throw new Error(`Session extension UI failed (${u.status})`);const o=await u.json(),l=ur(o,c);c.forEach(function(_){Ee.get(_)===i&&Pe.set(_,l[_])});const S=kn(),h=He(S);Cn(S,h),Tn(S,h)}catch(u){c.some(function(l){return Ee.get(l)===i})&&console.warn("Plugin session UI refresh failed",u)}}function qe(n){if(n&&n.full===!0)ke=!0,pe.clear();else if(!ke&&((Array.isArray(n)?n:[n&&n.detail?n.detail.sessionId:n]).forEach(function(t){const r=String(t||"").trim();r&&pe.add(r)}),!pe.size)){const t=document.querySelector("#sessions-list .session-item.active[data-session-id]");t&&pe.add(String(t.dataset.sessionId||""))}Ie!=null&&clearTimeout(Ie),Ie=setTimeout(function(){Ie=null;const e=ke,t=Array.from(pe);ke=!1,pe.clear(),Qe(e?void 0:t)},30)}function En(n){if(!n||n.nodeType!==1)return[];const e=[];return n.matches&&n.matches(".session-item[data-session-id]")&&e.push(n),n.querySelectorAll&&e.push(...n.querySelectorAll(".session-item[data-session-id]")),e.map(function(t){return String(t.dataset.sessionId||"")}).filter(Boolean)}function pr(){const n=document.getElementById("sessions-list");n&&!Be&&typeof MutationObserver<"u"&&(Be=new MutationObserver(function(e){const t=new Set;e.forEach(function(r){Array.from(r.addedNodes||[]).forEach(function(s){En(s).forEach(function(a){t.add(a)})}),Array.from(r.removedNodes||[]).forEach(function(s){En(s).forEach(function(a){Pe.delete(a),Ee.delete(a)})})}),t.size&&qe(Array.from(t))}),Be.observe(n,{childList:!0,subtree:!0})),document.addEventListener("myagent:extension-state-changed",qe),qe({full:!0})}async function mr(n={}){const e=typeof n.fetch=="function"?n.fetch:typeof globalThis.fetch=="function"?globalThis.fetch.bind(globalThis):null;if(typeof e=="function"){ie=e;try{const t=await e("/api/extensions",{method:"GET",credentials:"same-origin",cache:"no-store",headers:{Accept:"application/json"}});if(!t.ok)throw new Error(`Extension discovery failed (${t.status})`);const r=await t.json(),s=r&&r.ui_contributions;yn(s),wn(document.getElementById("plugin-settings-sections"),s),xn(document.getElementById("plugin-composer-actions"),s),await Xt(s),pr()}catch(t){yn([]),wn(document.getElementById("plugin-settings-sections"),[]),xn(document.getElementById("plugin-composer-actions"),[]),console.warn("Plugin UI discovery failed",t)}finally{document.dispatchEvent(new CustomEvent("myagent:plugin-ui-ready"))}}}const gr=`// Lightweight UI internationalisation. The UI is rendered by several legacy
 // modules, so translations are applied at the DOM boundary (including nodes
 // added later) instead of coupling every renderer to a framework.
 const LS_UI_LANGUAGE = 'myagent-language';
@@ -3683,7 +3683,7 @@ async function loadSubagentDetailInto(el, agentId, hostEl, sessionIdOpt) {
         delete el.dataset.loading;
     }
 }
-`,Pr=`var subagentCardSyncTimer = null;
+`,_r=`var subagentCardSyncTimer = null;
 var subagentContextFetchInFlight = Object.create(null);
 var subagentTreeRefreshTimer = null;
 var subagentTreeRefreshTarget = null;
@@ -3991,7 +3991,7 @@ async function refreshSubagentTreePanelInner(sessionId) {
         stopSubagentIncrementalSync();
     }
 }
-`,_r=`var subagentModelSwitchBusy = Object.create(null);
+`,Pr=`var subagentModelSwitchBusy = Object.create(null);
 
 function subagentModelProfileOptionMeta(profile) {
     var name = profileLabel(profile);
@@ -6354,31 +6354,31 @@ function getProcessBodyElForCurrentRun() {
 var STREAM_PROC_NEAR_BOTTOM_PX = 96;
 var STREAM_CHAT_NEAR_BOTTOM_PX = 72;
 
-function isSmoothStreamPortNearBottom(port, thresholdPx) {\r
-    if (!port) return false;\r
-    if (!isSmoothStreamActive()) return isNearBottom(port, thresholdPx);\r
-    if (smoothFollowController.isReaderDetached(port)) {\r
-        // An intentional upward gesture must win over the legacy broad\r
-        // near-bottom threshold. Re-arm only once the reader reaches the floor.\r
-        if (!isNearBottom(port, 2)) return false;\r
-        smoothFollowController.clearReaderDetached(port);\r
-    }\r
-    return smoothFollowController.isFollowing(port) || isNearBottom(port, thresholdPx);\r
-}\r
-\r
+function isSmoothStreamPortNearBottom(port, thresholdPx) {
+    if (!port) return false;
+    if (!isSmoothStreamActive()) return isNearBottom(port, thresholdPx);
+    if (smoothFollowController.isReaderDetached(port)) {
+        // An intentional upward gesture must win over the legacy broad
+        // near-bottom threshold. Re-arm only once the reader reaches the floor.
+        if (!isNearBottom(port, 2)) return false;
+        smoothFollowController.clearReaderDetached(port);
+    }
+    return smoothFollowController.isFollowing(port) || isNearBottom(port, thresholdPx);
+}
+
 /** 生成中时：对话区与当前执行轨迹区均在底部附近时才允许自动跟随流式滚动 */
 function refreshLiveAutoFollowPins() {
     if (!chatContainer) return;
     if (isSessionRunning(currentSessionId)) {
-        streamChatNearBottom = isSmoothStreamPortNearBottom(\r
-            chatContainer,\r
-            STREAM_CHAT_NEAR_BOTTOM_PX\r
-        );\r
+        streamChatNearBottom = isSmoothStreamPortNearBottom(
+            chatContainer,
+            STREAM_CHAT_NEAR_BOTTOM_PX
+        );
         var pb = getProcessBodyElForCurrentRun();
-        streamProcNearBottom = !pb || isSmoothStreamPortNearBottom(pb, STREAM_PROC_NEAR_BOTTOM_PX);\r
+        streamProcNearBottom = !pb || isSmoothStreamPortNearBottom(pb, STREAM_PROC_NEAR_BOTTOM_PX);
         liveAutoFollow = streamChatNearBottom && streamProcNearBottom;
     } else {
-        liveAutoFollow = isSmoothStreamPortNearBottom(chatContainer, STREAM_CHAT_NEAR_BOTTOM_PX);\r
+        liveAutoFollow = isSmoothStreamPortNearBottom(chatContainer, STREAM_CHAT_NEAR_BOTTOM_PX);
     }
 }
 
@@ -6704,10 +6704,10 @@ function bindSubagentCardBodyScrollFollow(body) {
     var aid = body.getAttribute('data-agent-id') || ('body-' + Math.random());
     if (subagentCardNearBottom[aid] == null) subagentCardNearBottom[aid] = true;
     body.addEventListener('scroll', function () {
-        subagentCardNearBottom[aid] = isSmoothStreamPortNearBottom(\r
-            body,\r
-            SUBAGENT_CARD_NEAR_BOTTOM_PX\r
-        );\r
+        subagentCardNearBottom[aid] = isSmoothStreamPortNearBottom(
+            body,
+            SUBAGENT_CARD_NEAR_BOTTOM_PX
+        );
     }, { passive: true });
 }
 
@@ -6731,8 +6731,8 @@ function scrollContentAreaIfFollow(ctx, runSessionId, channel) {
     if (isSmoothStreamActive()) {
         if (typeof isHistorySmoothScrollActive === 'function' && isHistorySmoothScrollActive()) return;
         followStreamProcessScroll(ctx, runSessionId, channel || 'row');
-        return;\r
-    }\r
+        return;
+    }
     if (isSubagentStreamCtx(ctx)) {
         if (!shouldFollowSubagentCard(ctx)) return;
         scrollSubagentCardBodyToBottom(ctx);
@@ -6770,10 +6770,10 @@ function followStreamProcessScroll(ctx, runSessionId, channel) {
     ) return;
     if (isSubagentStreamCtx(ctx)) {
         if (!shouldFollowSubagentCard(ctx)) return;
-        if (isSmoothStreamActive()) {\r
-            var smoothSubagentBody = ctx && ctx._subagentBody;\r
-            if (!smoothSubagentBody || !smoothSubagentBody.isConnected) return;\r
-            var smoothAgentId = smoothSubagentBody.getAttribute('data-agent-id') || '';\r
+        if (isSmoothStreamActive()) {
+            var smoothSubagentBody = ctx && ctx._subagentBody;
+            if (!smoothSubagentBody || !smoothSubagentBody.isConnected) return;
+            var smoothAgentId = smoothSubagentBody.getAttribute('data-agent-id') || '';
             smoothFollowController.request(smoothSubagentBody, {
                 speedCps: ctx && ctx.llm ? ctx.llm.llmRevealCpsEma : 35,
                 channel: followChannel,
@@ -6781,17 +6781,17 @@ function followStreamProcessScroll(ctx, runSessionId, channel) {
                     ? ctx._subagentTurnProcess
                     : smoothSubagentBody,
                 onUnpin: function () {
-                    if (smoothAgentId) subagentCardNearBottom[smoothAgentId] = false;\r
-                },\r
-            });\r
-            if (!subagentScrollFollowRaf) {\r
-                subagentScrollFollowRaf = requestAnimationFrame(function () {\r
-                    subagentScrollFollowRaf = 0;\r
-                    refreshFeedChunksInCtx(ctx, '.feed-chunk.is-streaming');\r
-                });\r
-            }\r
-            return;\r
-        }\r
+                    if (smoothAgentId) subagentCardNearBottom[smoothAgentId] = false;
+                },
+            });
+            if (!subagentScrollFollowRaf) {
+                subagentScrollFollowRaf = requestAnimationFrame(function () {
+                    subagentScrollFollowRaf = 0;
+                    refreshFeedChunksInCtx(ctx, '.feed-chunk.is-streaming');
+                });
+            }
+            return;
+        }
         if (subagentScrollFollowRaf) return;
         subagentScrollFollowRaf = requestAnimationFrame(function () {
             subagentScrollFollowRaf = 0;
@@ -6801,20 +6801,20 @@ function followStreamProcessScroll(ctx, runSessionId, channel) {
         return;
     }
     if (!liveAutoFollow) return;
-    if (isSmoothStreamActive()) {\r
-        if (ctx && ctx.currentProcessGroup && ctx.currentProcessGroup.isConnected\r
-            && ctx.currentProcessGroup.classList.contains('is-collapsed')) {\r
-            ctx.currentProcessGroup.classList.remove('is-collapsed');\r
-            var smoothTop = ctx.currentProcessGroup.querySelector('.process-aggregate-top');\r
-            if (smoothTop) smoothTop.setAttribute('aria-expanded', 'true');\r
-        }\r
-        var smoothSpeed = ctx && ctx.llm ? ctx.llm.llmRevealCpsEma : 35;\r
-        var smoothProcessBody = getProcessBodyElForCurrentRun();\r
-        var releaseMainFollow = function (port) {\r
-            if (port === chatContainer) streamChatNearBottom = false;\r
-            else streamProcNearBottom = false;\r
-            liveAutoFollow = false;\r
-        };\r
+    if (isSmoothStreamActive()) {
+        if (ctx && ctx.currentProcessGroup && ctx.currentProcessGroup.isConnected
+            && ctx.currentProcessGroup.classList.contains('is-collapsed')) {
+            ctx.currentProcessGroup.classList.remove('is-collapsed');
+            var smoothTop = ctx.currentProcessGroup.querySelector('.process-aggregate-top');
+            if (smoothTop) smoothTop.setAttribute('aria-expanded', 'true');
+        }
+        var smoothSpeed = ctx && ctx.llm ? ctx.llm.llmRevealCpsEma : 35;
+        var smoothProcessBody = getProcessBodyElForCurrentRun();
+        var releaseMainFollow = function (port) {
+            if (port === chatContainer) streamChatNearBottom = false;
+            else streamProcNearBottom = false;
+            liveAutoFollow = false;
+        };
         if (smoothProcessBody) {
             smoothFollowController.request(smoothProcessBody, {
                 speedCps: smoothSpeed,
@@ -6822,24 +6822,24 @@ function followStreamProcessScroll(ctx, runSessionId, channel) {
                 traceHeightSource: smoothProcessBody,
                 onUnpin: releaseMainFollow,
             });
-        }\r
-        if (chatContainer) {\r
+        }
+        if (chatContainer) {
             smoothFollowController.request(chatContainer, {
                 speedCps: smoothSpeed,
                 channel: followChannel,
                 traceHeightSource: smoothProcessBody,
                 onUnpin: releaseMainFollow,
             });
-        }\r
-        if (!streamScrollFollowRaf) {\r
-            streamScrollFollowRaf = requestAnimationFrame(function () {\r
-                streamScrollFollowRaf = 0;\r
-                refreshFeedChunksInCtx(ctx, '.feed-chunk.is-streaming');\r
-                refreshLiveAutoFollowPins();\r
-            });\r
-        }\r
-        return;\r
-    }\r
+        }
+        if (!streamScrollFollowRaf) {
+            streamScrollFollowRaf = requestAnimationFrame(function () {
+                streamScrollFollowRaf = 0;
+                refreshFeedChunksInCtx(ctx, '.feed-chunk.is-streaming');
+                refreshLiveAutoFollowPins();
+            });
+        }
+        return;
+    }
     if (streamScrollFollowRaf) return;
     streamScrollFollowRaf = requestAnimationFrame(function () {
         streamScrollFollowRaf = 0;
@@ -6876,21 +6876,21 @@ function finishStreamScrollIfFollow(ctx, runSessionId) {
         }
         if (chatContainer) smoothFollowController.snapToBottom(chatContainer);
         return;
-    }\r
-    scrollProcessBodyToBottom(ctx, runSessionId);\r
-    scrollChatToBottomIfFollow(runSessionId, {});\r
-}\r
-\r
-/** Final answer cards keep the legacy snap and must not race an active glide. */\r
+    }
+    scrollProcessBodyToBottom(ctx, runSessionId);
+    scrollChatToBottomIfFollow(runSessionId, {});
+}
+
+/** Final answer cards keep the legacy snap and must not race an active glide. */
 function cancelSmoothStreamFollowForFinal(ctx) {
-    if (!isSmoothStreamActive()) return;\r
-    smoothFollowController.cancel(chatContainer);\r
-    var processBody = null;\r
-    if (ctx && ctx._subagentBody && ctx._subagentBody.isConnected) {\r
-        processBody = ctx._subagentBody;\r
-    } else if (ctx && ctx.currentProcessGroup && ctx.currentProcessGroup.isConnected) {\r
-        processBody = ctx.currentProcessGroup.querySelector('.process-aggregate-body');\r
-    }\r
+    if (!isSmoothStreamActive()) return;
+    smoothFollowController.cancel(chatContainer);
+    var processBody = null;
+    if (ctx && ctx._subagentBody && ctx._subagentBody.isConnected) {
+        processBody = ctx._subagentBody;
+    } else if (ctx && ctx.currentProcessGroup && ctx.currentProcessGroup.isConnected) {
+        processBody = ctx.currentProcessGroup.querySelector('.process-aggregate-body');
+    }
     if (processBody) smoothFollowController.cancel(processBody);
 }
 
@@ -6900,7 +6900,7 @@ function cancelSmoothStreamFollowForHistoryLoad() {
     var processBody = getProcessBodyElForCurrentRun();
     if (processBody) smoothFollowController.cancel(processBody);
 }
-\r
+
 function getVisibleChatStream() { return document.getElementById('chat-stream'); }
 
 function ensureVisibleChatStreamSlot() {
@@ -7706,29 +7706,29 @@ function discardLlmStreamChunks(ctx, ev) {
 
 function flushLlmDeltaText(ctx, opts) {
     if (!ctx || !ctx.llm) return;
-    opts = opts || {};\r
+    opts = opts || {};
     const l = ctx.llm;
     if (typeof flushThinkTagCarry === 'function') flushThinkTagCarry(ctx);
     var smoothCommit = opts.smooth === true && isSmoothStreamActive();
-    if (!smoothCommit && l.llmDeltaFlushRaf) {\r
+    if (!smoothCommit && l.llmDeltaFlushRaf) {
         cancelAnimationFrame(l.llmDeltaFlushRaf);
         l.llmDeltaFlushRaf = 0;
     }
-    var revealedChars = 0;\r
+    var revealedChars = 0;
     if (l.llmPendingReasoningDelta && l.llmStreamReasoningScroller) {
-        var reasoningPending = String(l.llmPendingReasoningDelta || '');\r
+        var reasoningPending = String(l.llmPendingReasoningDelta || '');
         var reasoningTake = smoothCommit
             ? takeSmoothTextPrefix(
                 reasoningPending,
                 computeSmoothRevealCount(reasoningPending.length, opts.dtMs || 16.67)
             )
-            : { segment: reasoningPending, rest: '', count: reasoningPending.length };\r
+            : { segment: reasoningPending, rest: '', count: reasoningPending.length };
         var rs = trimSurroundingBlankLines((l.llmStreamReasoningScroller.textContent || '') + reasoningTake.segment);
         l.llmStreamReasoningScroller.textContent = truncateLogTextForUi(rs);
         l.llmPendingReasoningDelta = reasoningTake.rest;
         revealedChars += reasoningTake.count;
-    } else if (l.llmPendingReasoningDelta && !l.llmStreamReasoningScroller && !smoothCommit) {\r
-        l.llmPendingReasoningDelta = '';\r
+    } else if (l.llmPendingReasoningDelta && !l.llmStreamReasoningScroller && !smoothCommit) {
+        l.llmPendingReasoningDelta = '';
     }
     if (l.llmPendingResponseDelta && l.llmStreamResponseScroller) {
         var responseRow = l.llmStreamResponseScroller.closest
@@ -7737,46 +7737,46 @@ function flushLlmDeltaText(ctx, opts) {
         var responseHead = responseRow && typeof responseRow._processBriefRawText === 'string'
             ? responseRow._processBriefRawText
             : (l.llmStreamResponseScroller.textContent || '');
-        var responsePending = String(l.llmPendingResponseDelta || '');\r
+        var responsePending = String(l.llmPendingResponseDelta || '');
         var responseTake = smoothCommit
             ? takeSmoothTextPrefix(
                 responsePending,
                 computeSmoothRevealCount(responsePending.length, opts.dtMs || 16.67)
             )
-            : { segment: responsePending, rest: '', count: responsePending.length };\r
+            : { segment: responsePending, rest: '', count: responsePending.length };
         var rsp = trimSurroundingBlankLines(responseHead + responseTake.segment);
         if (responseRow) responseRow._processBriefRawText = rsp;
         l.llmStreamResponseScroller.textContent = truncateLogTextForUi(rsp);
-        l.llmPendingResponseDelta = responseTake.rest;\r
-        revealedChars += responseTake.count;\r
-    } else if (l.llmPendingResponseDelta && !l.llmStreamResponseScroller && !smoothCommit) {\r
-        l.llmPendingResponseDelta = '';\r
+        l.llmPendingResponseDelta = responseTake.rest;
+        revealedChars += responseTake.count;
+    } else if (l.llmPendingResponseDelta && !l.llmStreamResponseScroller && !smoothCommit) {
+        l.llmPendingResponseDelta = '';
     }
-    return revealedChars;\r
+    return revealedChars;
 }
 
 function scheduleLlmDeltaFlush(ctx, runSessionId) {
     const l = ctx.llm;
     if (!l || l.llmDeltaFlushRaf) return;
-    l.llmDeltaFlushRaf = requestAnimationFrame(function (now) {\r
+    l.llmDeltaFlushRaf = requestAnimationFrame(function (now) {
         l.llmDeltaFlushRaf = 0;
         if (!isSmoothStreamActive()) {
-            flushLlmDeltaText(ctx);\r
+            flushLlmDeltaText(ctx);
             followStreamProcessScroll(ctx, runSessionId, 'text');
-            return;\r
+            return;
         }
         var dtMs = l.llmRevealLastTs > 0
-            ? smoothStreamClamp(now - l.llmRevealLastTs, 1, 120)\r
-            : SMOOTH_STREAM_CONFIG.referenceFrameMs;\r
+            ? smoothStreamClamp(now - l.llmRevealLastTs, 1, 120)
+            : SMOOTH_STREAM_CONFIG.referenceFrameMs;
         l.llmRevealLastTs = now;
         var revealed = flushLlmDeltaText(ctx, { smooth: true, dtMs: dtMs }) || 0;
-        if (revealed > 0 && dtMs > 0) {\r
-            var instantCps = revealed * 1000 / dtMs;\r
-            l.llmRevealCpsEma = l.llmRevealCpsEma * 0.92 + instantCps * 0.08;\r
-        }\r
+        if (revealed > 0 && dtMs > 0) {
+            var instantCps = revealed * 1000 / dtMs;
+            l.llmRevealCpsEma = l.llmRevealCpsEma * 0.92 + instantCps * 0.08;
+        }
         followStreamProcessScroll(ctx, runSessionId, 'text');
-        if (l.llmPendingReasoningDelta || l.llmPendingResponseDelta) {\r
-            scheduleLlmDeltaFlush(ctx, runSessionId);\r
+        if (l.llmPendingReasoningDelta || l.llmPendingResponseDelta) {
+            scheduleLlmDeltaFlush(ctx, runSessionId);
         } else {
             l.llmRevealLastTs = 0;
         }
@@ -8827,5019 +8827,5036 @@ function upgradeWorkspaceMedia(root) {
         }
     });
 }
-`,Ur=`function removeMessagesFromNode(startWrap) {
-    const stream = getVisibleChatStream() || chatContainer;
-    if (!stream) return;
-    const kids = Array.from(stream.children);
-    const i = kids.indexOf(startWrap);
-    if (i < 0) return;
-    for (let j = kids.length - 1; j >= i; j--) kids[j].remove();
-    syncDisconnectedProcessGroups();
-}
-
-function applyClientHistoryTruncate(sessionId, beforeIndex, anchor) {
-    const sid = String(sessionId || '');
-    const before = Math.max(0, Number(beforeIndex) || 0);
-    if (!sid) return;
-    if (typeof truncateMessageStateForSession === 'function') {
-        truncateMessageStateForSession(sid, before);
-    }
-    if (typeof uiEventCountCache !== 'undefined') {
-        uiEventCountCache.updateFromServer(sid, before);
-    }
-    if (typeof truncateTocTurnsForSession === 'function') {
-        truncateTocTurnsForSession(sid, before);
-    }
-    if (typeof contextStore !== 'undefined') {
-        contextStore.clearTokens(sid);
-    }
-    if (sid !== currentSessionId) return;
-    if (anchor) removeMessagesFromNode(anchor);
-    syncDisconnectedProcessGroups();
-    rebuildToc({ localOnly: true });
-    scheduleContextTokensAfterPaint(sid);
+`,Ur=`function removeMessagesFromNode(startWrap) {\r
+    const stream = getVisibleChatStream() || chatContainer;\r
+    if (!stream) return;\r
+    const kids = Array.from(stream.children);\r
+    const i = kids.indexOf(startWrap);\r
+    if (i < 0) return;\r
+    for (let j = kids.length - 1; j >= i; j--) kids[j].remove();\r
+    syncDisconnectedProcessGroups();\r
+}\r
+\r
+function applyClientHistoryTruncate(sessionId, beforeIndex, anchor) {\r
+    const sid = String(sessionId || '');\r
+    const before = Math.max(0, Number(beforeIndex) || 0);\r
+    if (!sid) return;\r
+    if (typeof truncateMessageStateForSession === 'function') {\r
+        truncateMessageStateForSession(sid, before);\r
+    }\r
+    if (typeof uiEventCountCache !== 'undefined') {\r
+        uiEventCountCache.updateFromServer(sid, before);\r
+    }\r
+    if (typeof truncateTocTurnsForSession === 'function') {\r
+        truncateTocTurnsForSession(sid, before);\r
+    }\r
+    if (typeof contextStore !== 'undefined') {\r
+        contextStore.clearTokens(sid);\r
+    }\r
+    if (sid !== currentSessionId) return;\r
+    if (anchor) removeMessagesFromNode(anchor);\r
+    syncDisconnectedProcessGroups();\r
+    rebuildToc({ localOnly: true });\r
+    scheduleContextTokensAfterPaint(sid);\r
     document.dispatchEvent(new CustomEvent('myagent:extension-state-changed', {\r
         detail: { sessionId: sid },\r
     }));\r
-}
-
-async function historyOperationJson(url, options, timeoutMs) {
-    options = options || {};
-    var ms = Number(timeoutMs) > 0 ? Number(timeoutMs) : 45000;
-    var controller = (typeof AbortController !== 'undefined') ? new AbortController() : null;
-    var timer = null;
-    var requestOptions = Object.assign({}, options);
-    if (controller && !requestOptions.signal) {
-        requestOptions.signal = controller.signal;
-        timer = setTimeout(function () { controller.abort(); }, ms);
-    }
-    try {
-        var r = await fetch(url, requestOptions);
-        var j = await r.json().catch(function () { return {}; });
-        if (!j || typeof j !== 'object') j = {};
-        j.ok = !!r.ok && j.ok !== false;
-        if (!j.error && !r.ok) j.error = 'http_' + r.status;
-        return j;
-    } catch (e) {
-        var isAbort = e && (e.name === 'AbortError' || String(e.message || e).indexOf('aborted') >= 0);
-        return { ok: false, error: isAbort ? 'request_timeout' : ((e && e.message) || String(e)) };
-    } finally {
-        if (timer) clearTimeout(timer);
-    }
-}
-
-async function truncateSessionOnServer(beforeIndex, options) {
-    options = options || {};
-    const sid = options.sessionId || currentSessionId;
-    if (!sid) return { ok: false, error: 'no_session' };
-    if (!Number.isFinite(Number(beforeIndex)) || Number(beforeIndex) < 0) {
-        return { ok: false, error: 'invalid_before_index' };
-    }
-    var url = '/sessions/' + encodeURIComponent(sid) + '/truncate'
-        + '?before_index=' + encodeURIComponent(String(beforeIndex))
-        + '&backup=' + (options.backup ? '1' : '0');
-    if (Number.isFinite(Number(options.beforeSeq)) && Number(options.beforeSeq) > 0) {
-        url += '&before_seq=' + encodeURIComponent(String(Math.floor(Number(options.beforeSeq))));
-    }
-    return historyOperationJson(url, { method: 'POST' }, options.timeoutMs || 45000);
-}
-
-function describeServerSyncFailure(res, fallback) {
-    var base = fallback || '无法同步服务器。';
-    var err = res && res.error ? String(res.error).trim() : '';
-    if (!err) return base;
-    var friendly = err;
-    if (err === 'no_session') friendly = '当前没有选中的会话。';
-    else if (err === 'invalid_before_index' || err === 'invalid before_index') friendly = '消息定位索引无效，可能需要刷新当前会话。';
-    else if (err === 'refuse empty truncation') friendly = '服务端拒绝清空整个会话。';
-    else if (err === 'truncation failed') friendly = '服务端裁剪历史失败，可能是历史索引已变化或会话文件暂时不一致。';
-    return base + '\\n原因：' + friendly;
-}
-
-function hasPreviousUserMessageBefore(wrap) {
-    var node = wrap ? wrap.previousElementSibling : null;
-    while (node) {
-        if (node.classList && node.classList.contains('msg-wrap--user')) return true;
-        node = node.previousElementSibling;
-    }
-    return false;
-}
-
-let activeInlineRewriteWrap = null;
-
-function restoreUserMessageBubble(wrap, rawText) {
-    if (!wrap) return;
-    const div = wrap.querySelector('.message.user');
-    if (!div) return;
-    wrap.classList.remove('is-inline-rewriting', 'user-msg-expanded', 'has-turn-process');
-    div.className = 'message user';
-    div.textContent = '';
-    messageRawMarkdown.set(wrap, String(rawText || ''));
-    renderUserMessageContent(wrap, div, String(rawText || ''), linkifyAssistantTextNodes);
-}
-
-function closeInlineRewriteEditor(wrap, rawText) {
-    restoreUserMessageBubble(wrap, rawText);
-    if (activeInlineRewriteWrap === wrap) activeInlineRewriteWrap = null;
-}
-
-function autoResizeInlineRewriteTextarea(textarea) {
-    if (!textarea) return;
-    textarea.style.height = 'auto';
-    textarea.style.height = Math.min(Math.max(textarea.scrollHeight, 84), 260) + 'px';
-}
-
-function openInlineRewriteEditor(wrap, rawText, beforeIndex) {
-    if (!wrap) return;
-    if (activeInlineRewriteWrap && activeInlineRewriteWrap !== wrap) {
-        const prevRaw = messageRawMarkdown.get(activeInlineRewriteWrap) || '';
-        closeInlineRewriteEditor(activeInlineRewriteWrap, prevRaw);
-    }
-    const div = wrap.querySelector('.message.user');
-    if (!div) return;
-    activeInlineRewriteWrap = wrap;
-    wrap.classList.add('is-inline-rewriting');
-    wrap.classList.remove('user-msg-expanded', 'has-turn-process');
-    div.className = 'message user user-inline-rewrite';
-    div.textContent = '';
-
-    const editor = document.createElement('div');
-    editor.className = 'user-inline-rewrite-box';
-    const textarea = document.createElement('textarea');
-    textarea.className = 'user-inline-rewrite-input';
-    textarea.value = String(rawText || '');
-    textarea.rows = 3;
-    const actions = document.createElement('div');
-    actions.className = 'user-inline-rewrite-actions';
-    const shortcutHint = document.createElement('span');
-    shortcutHint.className = 'input-shortcut-hint user-inline-rewrite-shortcut';
-    shortcutHint.textContent = 'Ctrl/Cmd + Enter 提交';
-    const cancelBtn = document.createElement('button');
-    cancelBtn.type = 'button';
-    cancelBtn.className = 'user-inline-rewrite-btn user-inline-rewrite-btn--ghost';
-    cancelBtn.textContent = '取消';
-    const confirmBtn = document.createElement('button');
-    confirmBtn.type = 'button';
-    confirmBtn.className = 'user-inline-rewrite-btn user-inline-rewrite-btn--primary';
-    confirmBtn.textContent = '确认';
-    actions.appendChild(shortcutHint);
-    actions.appendChild(cancelBtn);
-    actions.appendChild(confirmBtn);
-    editor.appendChild(textarea);
-    editor.appendChild(actions);
-    div.appendChild(editor);
-
-    function cancel() {
-        closeInlineRewriteEditor(wrap, rawText);
-    }
-
-    async function confirm() {
-        const nextText = String(textarea.value || '');
-        if (!hasSendableText(nextText)) {
-            showUiAlert({
-                title: '无法改写',
-                message: '改写内容不能为空。',
-                variant: 'warning',
-            });
-            return;
-        }
-        if (!currentSessionId || !Number.isFinite(Number(beforeIndex))) return;
-        if (typeof confirmAndCancelPendingHumanQuestionsForHistoryMutation === 'function') {
-            var canRewrite = await confirmAndCancelPendingHumanQuestionsForHistoryMutation(currentSessionId);
-            if (!canRewrite) return;
-        }
-        confirmBtn.disabled = true;
-        cancelBtn.disabled = true;
-        pendingRewriteTruncate = {
-            sessionId: currentSessionId,
-            before: Number(beforeIndex),
-            beforeSeq: Number.isFinite(Number(wrap.dataset.runtimeSeq)) ? Math.floor(Number(wrap.dataset.runtimeSeq)) : null,
-            prevInput: ''
-        };
-        try {
-            await sendMessage({
-                message: nextText,
-                sessionId: currentSessionId,
-                preserveInput: true,
-                fromInlineRewrite: true,
-            });
-        } finally {
-            if (wrap.isConnected) {
-                confirmBtn.disabled = false;
-                cancelBtn.disabled = false;
-            }
-        }
-    }
-
-    textarea.addEventListener('input', function () {
-        autoResizeInlineRewriteTextarea(textarea);
-    });
-    textarea.addEventListener('keydown', function (e) {
-        if (e.key === 'Escape') {
-            e.preventDefault();
-            cancel();
-            return;
-        }
-        if (isInputSubmitShortcut(e, 'editor')) {
-            e.preventDefault();
-            void confirm();
-        }
-    });
-    cancelBtn.addEventListener('click', function (e) {
-        e.preventDefault();
-        cancel();
-    });
-    confirmBtn.addEventListener('click', function (e) {
-        e.preventDefault();
-        void confirm();
-    });
-    autoResizeInlineRewriteTextarea(textarea);
-    textarea.focus();
-    try {
-        textarea.setSelectionRange(textarea.value.length, textarea.value.length);
-    } catch (e) { /* ignore */ }
-}
-
-async function branchSessionOnServer(beforeIndex, sessionId, afterSeq) {
-    const sid = sessionId || currentSessionId;
-    if (!sid) return { ok: false, error: 'no_session' };
-    var url = '/sessions/' + encodeURIComponent(sid) + '/branch'
-        + '?before_index=' + encodeURIComponent(String(beforeIndex));
-    if (Number.isFinite(Number(afterSeq)) && Number(afterSeq) > 0) {
-        url += '&after_seq=' + encodeURIComponent(String(Math.floor(Number(afterSeq))));
-    }
-    return historyOperationJson(url, { method: 'POST' }, 60000);
-}
-
-function normalizeBranchFinalText(text) {
-    return String(text || '').replace(/\\s+/g, ' ').trim();
-}
-
-function branchFinalTextMatches(eventContent, expectedText) {
-    var a = normalizeBranchFinalText(eventContent);
-    var b = normalizeBranchFinalText(expectedText);
-    if (!a || !b) return false;
-    if (a === b) return true;
-    if (a.length > 80 && b.length > 80) {
-        return a.indexOf(b.slice(0, 80)) >= 0 || b.indexOf(a.slice(0, 80)) >= 0;
-    }
-    return false;
-}
-
-async function waitForBranchFinalPersisted(sessionId, beforeIndex, expectedText) {
-    if (!sessionId || !Number.isFinite(beforeIndex) || beforeIndex <= 0) {
-        return { ready: true, beforeIndex: beforeIndex };
-    }
-    var deadline = Date.now() + 2600;
-    while (Date.now() < deadline) {
-        try {
-            var url = '/sessions/' + encodeURIComponent(sessionId)
-                + '/messages?limit=1&before_index=' + encodeURIComponent(String(beforeIndex));
-            var r = await fetch(url);
-            var j = await r.json().catch(function () { return null; });
-            var events = Array.isArray(j) ? j : (j && Array.isArray(j.events) ? j.events : []);
-            if (events.length && events[events.length - 1] && events[events.length - 1].type === 'final') {
-                return { ready: true, beforeIndex: beforeIndex };
-            }
-            var recentUrl = '/sessions/' + encodeURIComponent(sessionId) + '/messages?limit=80';
-            var rr = await fetch(recentUrl);
-            var jj = await rr.json().catch(function () { return null; });
-            var recent = Array.isArray(jj) ? jj : (jj && Array.isArray(jj.events) ? jj.events : []);
-            var base = jj && typeof jj.range_start === 'number' ? jj.range_start : 0;
-            for (var i = recent.length - 1; i >= 0; i -= 1) {
-                var ev = recent[i];
-                if (!ev || ev.type !== 'final') continue;
-                if (branchFinalTextMatches(ev.content, expectedText)) {
-                    return { ready: true, beforeIndex: base + i + 1 };
-                }
-            }
-        } catch (e) { /* retry */ }
-        await new Promise(function (resolve) { setTimeout(resolve, 180); });
-    }
-    return { ready: false, beforeIndex: beforeIndex };
-}
-
-function copyMessageText(wrap) {
-    const msg = wrap && wrap.querySelector('.message');
-    const plain = msg ? (msg.innerText || '') : '';
-    const raw = messageRawMarkdown.get(wrap);
-    const toCopy = raw !== undefined ? String(raw) : plain;
-    const done = function () {
-        showCopyFeedback();
-        return true;
-    };
-    if (navigator.clipboard && navigator.clipboard.writeText) {
-        return navigator.clipboard.writeText(toCopy).then(done).catch(function () {
-            try {
-                const ta = document.createElement('textarea');
-                ta.value = toCopy;
-                ta.setAttribute('readonly', 'readonly');
-                ta.style.position = 'fixed';
-                ta.style.opacity = '0';
-                document.body.appendChild(ta);
-                ta.select();
-                document.execCommand('copy');
-                document.body.removeChild(ta);
-                return done();
-            } catch (e) {
-                throw e;
-            }
-        });
-    }
-    return Promise.reject(new Error('当前浏览器不支持复制文本'));
-}
-
-function buildFinalExportFilename(extension) {
-    var sess = typeof selectCurrentSession === 'function' ? selectCurrentSession() : null;
-    var nameEl = currentSessionId
-        ? document.querySelector('.session-name[data-id="' + currentSessionId + '"]')
-        : null;
-    var rawName = sess && sess.name != null
-        ? String(sess.name)
-        : (nameEl ? String(nameEl.getAttribute('data-original') || nameEl.textContent || '') : '');
-    var safeName = (rawName.trim() || 'Session')
-        .replace(/[<>:"/\\\\|?*\\u0000-\\u001F]/g, '_')
-        .replace(/[.\\s]+$/g, '')
-        .slice(0, 100) || 'Session';
-    var timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-    return safeName + '-' + timestamp + '.' + String(extension || '').replace(/^\\./, '');
-}
-
-function saveMessageAsMarkdown(wrap) {
-    var msg = wrap && wrap.querySelector('.message');
-    if (!msg) throw new Error('找不到可导出的 Final 内容');
-    var raw = messageRawMarkdown.get(wrap);
-    var markdown = raw !== undefined ? String(raw) : String(msg.innerText || '');
-    var filename = buildFinalExportFilename('md');
-    triggerDownloadBlob(new Blob([markdown], { type: 'text/markdown;charset=utf-8' }), filename);
-    return true;
-}
-
-function waitForImageExportImages(target) {
-    var images = target ? Array.prototype.slice.call(target.querySelectorAll('img')) : [];
-    return Promise.all(images.map(function (img) {
-        if (!img.complete) {
-            return new Promise(function (resolve) {
-                img.addEventListener('load', resolve, { once: true });
-                img.addEventListener('error', resolve, { once: true });
-            });
-        }
-        return img.decode ? img.decode().catch(function () {}) : Promise.resolve();
-    }));
-}
-
-function imageExportCanvasToBlob(canvas) {
-    return new Promise(function (resolve, reject) {
-        try {
-            canvas.toBlob(function (blob) {
-                if (blob) resolve(blob);
-                else reject(new Error('Final 卡片图片保存失败'));
-            }, 'image/png');
-        } catch (error) {
-            reject(error);
-        }
-    });
-}
-
-function sanitizeImageExportDocument(clonedDocument, exportId) {
-    var clone = clonedDocument.querySelector('[data-image-export-id="' + exportId + '"]');
-    if (!clone) return;
-    clone.querySelectorAll('img, svg, video, iframe, object, embed, canvas').forEach(function (node) {
-        node.remove();
-    });
-    [clone].concat(Array.prototype.slice.call(clone.querySelectorAll('*'))).forEach(function (node) {
-        node.style.setProperty('background-image', 'none', 'important');
-        node.style.setProperty('border-image', 'none', 'important');
-        node.style.setProperty('list-style-image', 'none', 'important');
-        node.style.setProperty('mask-image', 'none', 'important');
-        node.style.setProperty('-webkit-mask-image', 'none', 'important');
-    });
-    var safeStyle = clonedDocument.createElement('style');
-    safeStyle.textContent = '[data-image-export-id="' + exportId + '"],'
-        + '[data-image-export-id="' + exportId + '"] *,'
-        + '[data-image-export-id="' + exportId + '"]::before,'
-        + '[data-image-export-id="' + exportId + '"]::after,'
-        + '[data-image-export-id="' + exportId + '"] *::before,'
-        + '[data-image-export-id="' + exportId + '"] *::after'
-        + '{background-image:none!important;border-image:none!important;'
-        + 'list-style-image:none!important;mask-image:none!important;'
-        + '-webkit-mask-image:none!important;}';
-    clonedDocument.head.appendChild(safeStyle);
-}
-
-async function saveMessageAsImage(wrap) {
-    var target = wrap && wrap.querySelector('.message');
-    if (!target) throw new Error('找不到可保存的 Final 卡片');
-    await waitForImageExportImages(target);
-    await new Promise(function (resolve) { requestAnimationFrame(resolve); });
-
-    var rect = target.getBoundingClientRect();
-    var width = Math.max(1, Math.ceil(target.scrollWidth || rect.width));
-    var height = Math.max(1, Math.ceil(target.scrollHeight || rect.height));
-    var targetStyle = getComputedStyle(target);
-    var background = targetStyle.backgroundColor;
-    if (!background || background === 'rgba(0, 0, 0, 0)') {
-        background = getUiThemeCanvasBackground();
-    }
-    if (typeof globalThis.loadMyAgentHtml2Canvas !== 'function') {
-        throw new Error('当前版本未加载图片导出组件');
-    }
-    var html2canvas = await globalThis.loadMyAgentHtml2Canvas();
-    var scale = Math.min(2, 16384 / width, 16384 / height, Math.sqrt(100000000 / (width * height)));
-    var exportId = 'final-' + Date.now() + '-' + Math.random().toString(36).slice(2);
-    target.setAttribute('data-image-export-id', exportId);
-    var baseOptions = {
-        backgroundColor: background,
-        scale: scale,
-        width: width,
-        height: height,
-        useCORS: true,
-        allowTaint: false,
-        imageTimeout: 12000,
-        logging: false,
-        removeContainer: true,
-        ignoreElements: function (node) {
-            return !!(node.matches && node.matches('button, .mermaid-download-btn, .mermaid-zoom-btn'));
-        }
-    };
-    var png;
-    try {
-        try {
-            var canvas = await html2canvas(target, baseOptions);
-            png = await imageExportCanvasToBlob(canvas);
-        } catch (firstError) {
-            var fallbackOptions = Object.assign({}, baseOptions, {
-                useCORS: false,
-                imageTimeout: 0,
-                onclone: function (clonedDocument) {
-                    sanitizeImageExportDocument(clonedDocument, exportId);
-                }
-            });
-            canvas = await html2canvas(target, fallbackOptions);
-            png = await imageExportCanvasToBlob(canvas);
-        }
-    } finally {
-        target.removeAttribute('data-image-export-id');
-    }
-    var downloadUrl = URL.createObjectURL(png);
-    var link = document.createElement('a');
-    link.href = downloadUrl;
-    link.download = buildFinalExportFilename('png');
-    link.click();
-    setTimeout(function () { URL.revokeObjectURL(downloadUrl); }, 1000);
-}
-
-function closeAllMessageCopyPopovers() {
-    document.querySelectorAll('.msg-copy-popover.is-open').forEach(function (popover) {
-        popover.classList.remove('is-open');
-        var wrap = popover.closest('.msg-wrap');
-        var button = wrap && wrap.querySelector('.msg-tb[data-act="copy"]');
-        if (button) button.setAttribute('aria-expanded', 'false');
-    });
-}
-
-(function bindMessageCopyPopoverCloserOnce() {
-    if (window.__myAgentMessageCopyPopoverCloser) return;
-    window.__myAgentMessageCopyPopoverCloser = true;
-    document.addEventListener('click', closeAllMessageCopyPopovers);
-})();
-
-function toggleMessageCopyPopover(wrap) {
-    var popover = wrap && wrap.querySelector('.msg-copy-popover');
-    var button = wrap && wrap.querySelector('.msg-tb[data-act="copy"]');
-    if (!popover) return;
-    var open = !popover.classList.contains('is-open');
-    closeAllMessageCopyPopovers();
-    popover.classList.toggle('is-open', open);
-    if (button) button.setAttribute('aria-expanded', open ? 'true' : 'false');
-}
-
-function applyMessageCopyOption(wrap, role, option) {
-    closeAllMessageCopyPopovers();
-    var button = wrap.querySelector('.msg-tb[data-act="copy"]');
-    if (button) button.setAttribute('aria-expanded', 'false');
-    var tasks = [];
-    if (role === 'assistant' && option === 'text') tasks.push(Promise.resolve().then(function () {
-        saveMessageAsMarkdown(wrap);
-        showOpenFileFeedback('Markdown 已导出');
-        return true;
-    }));
-    if (role === 'assistant' && option === 'image') tasks.push(saveMessageAsImage(wrap).then(function () {
-        showOpenFileFeedback('图片已保存');
-        return true;
-    }));
-    if (!tasks.length) return;
-    Promise.all(tasks).catch(function (err) {
-        showUiAlert({ title: '操作失败', message: String((err && err.message) || err || '无法完成导出'), variant: 'error' });
-    });
-}
-
-function onMessageToolbarClick(wrap, role, act) {
-    const msg = wrap.querySelector('.message');
-    const plain = msg ? (msg.innerText || '') : '';
-    const tf = wrap.dataset.truncateFrom;
-    const eiRaw = wrap.dataset.eventIndex;
-    const runtimeSeqRaw = wrap.dataset.runtimeSeq;
-    const truncateBeforeSeqRaw = wrap.dataset.truncateBeforeSeq;
-    const eventIndex = eiRaw !== undefined && eiRaw !== '' ? parseInt(eiRaw, 10) : NaN;
-    const runtimeSeq = runtimeSeqRaw !== undefined && runtimeSeqRaw !== '' ? parseInt(runtimeSeqRaw, 10) : NaN;
-    const truncateBeforeSeq = truncateBeforeSeqRaw !== undefined && truncateBeforeSeqRaw !== '' ? parseInt(truncateBeforeSeqRaw, 10) : NaN;
-    const truncateFrom = tf !== undefined && tf !== '' ? parseInt(tf, 10) : NaN;
-    const before = role === 'user' ? eventIndex : truncateFrom;
-    const beforeSeq = role === 'user' ? runtimeSeq : truncateBeforeSeq;
-    if ((act === 'delete' || act === 'rewrite') && isSessionRunning(currentSessionId)) {
-        showUiAlert({
-            title: '生成中不可操作',
-            message: '当前会话仍在生成。请等待完成或停止后再修改历史。',
-            variant: 'warning',
-        });
-        return;
-    }
-    if (act === 'copy') {
-        if (role === 'assistant') {
-            toggleMessageCopyPopover(wrap);
-        } else {
-            copyMessageText(wrap).catch(function () { /* preserve the original silent copy behavior */ });
-        }
-        return;
-    }
-    if (act === 'delete') {
-        if (!Number.isFinite(before) || before < 0 || (before === 0 && hasPreviousUserMessageBefore(wrap))) {
-            if (Number.isFinite(before) && (before < 0 || (before === 0 && hasPreviousUserMessageBefore(wrap)))) {
-                showUiAlert({
-                    title: '无法删除该条',
-                    message: '消息索引异常，已阻止清空整个会话。请刷新后再试。',
-                    variant: 'error'
-                });
-                return;
-            }
-            removeMessagesFromNode(wrap);
-            syncDisconnectedProcessGroups();
-            rebuildToc();
-            return;
-        }
-        openUiModal({
-            title: '删除消息',
-            subtitle: '将同步到服务器',
-            message: '确定删除本条及之后的所有对话内容吗？',
-            danger: true,
-            confirmText: '删除',
-            cancelText: '取消',
-        }).then(function (ok) {
-            if (!ok) return;
-            var guard = typeof confirmAndCancelPendingHumanQuestionsForHistoryMutation === 'function'
-                ? confirmAndCancelPendingHumanQuestionsForHistoryMutation(currentSessionId)
-                : Promise.resolve(true);
-            guard.then(function (canMutate) {
-                if (!canMutate) return;
-                truncateSessionOnServer(before, { beforeSeq: beforeSeq }).then(function (res) {
-                    if (!res || !res.ok) {
-                        showUiAlert({
-                            title: '同步失败',
-                            message: describeServerSyncFailure(res, '删除未生效。'),
-                            variant: 'error'
-                        });
-                        return;
-                    }
-                    applyClientHistoryTruncate(currentSessionId, before, wrap);
-                });
-            });
-        });
-        return;
-    }
-    if (act === 'rewrite' && role === 'user') {
-        const raw = messageRawMarkdown.get(wrap);
-        const toFill = raw !== undefined ? String(raw) : plain;
-        if (Number.isFinite(before) && before === 0 && hasPreviousUserMessageBefore(wrap)) {
-            showUiAlert({
-                title: '无法改写该条',
-                message: '消息索引异常，已阻止从错误位置清空会话。请刷新后再试。',
-                variant: 'error'
-            });
-            return;
-        }
-        if (!Number.isFinite(before)) {
-            showUiAlert({
-                title: '无法改写该条',
-                message: '该消息尚未与服务器索引对齐，请刷新当前会话后再试。',
-                variant: 'warning',
-            });
-            return;
-        }
-        openInlineRewriteEditor(wrap, toFill, before);
-        return;
-    }
-    if (act === 'branch' && role === 'assistant') {
-        if (wrap.dataset.branching === '1') return;
-        const sourceSessionId = currentSessionId;
-        const sourceSwitchEpoch = (typeof switchSessionEpoch === 'number') ? switchSessionEpoch : null;
-        const eiRaw = wrap.dataset.eventIndex;
-        const eventIdx = eiRaw !== undefined && eiRaw !== '' ? parseInt(eiRaw, 10) : NaN;
-        if (!Number.isFinite(eventIdx) || eventIdx < 0) {
-            showUiAlert({
-                title: '无法分支',
-                message: '该回答尚未与服务器同步，请刷新页面后重试。',
-                variant: 'error',
-            });
-            return;
-        }
-        const branchBefore = eventIdx + 1;
-        openUiModal({
-            title: '创建分支会话',
-            subtitle: '原会话不会被修改',
-            message: '将在当前回答之后创建独立分支会话。分支点之前的内容与原会话相同，可在分支中继续提问且不影响原会话。',
-            confirmText: '创建分支',
-            cancelText: '取消',
-        }).then(function (ok) {
-            if (!ok) return;
-            wrap.dataset.branching = '1';
-            (async function () {
-                var runtimeEventType = String(wrap.dataset.runtimeEventType || '');
-                var branchAfterSeq = runtimeEventType && runtimeEventType !== 'message_assistant_final'
-                    ? null
-                    : runtimeSeq;
-                var res = await branchSessionOnServer(branchBefore, sourceSessionId, branchAfterSeq);
-                if (!res || !res.ok || !res.session_id) {
-                    showUiAlert({
-                        title: '创建失败',
-                        message: describeServerSyncFailure(res, '创建分支未生效。'),
-                        variant: 'error',
-                    });
-                    return;
-                }
-                if (res.session && typeof sessionStore !== 'undefined') {
-                    sessionStore.upsert(res.session);
-                    renderSessionListIfChanged(true);
-                }
-                if (typeof discardCachedSessionStream === 'function') discardCachedSessionStream(res.session_id);
-                const sourceStillActive = currentSessionId === sourceSessionId
-                    && (sourceSwitchEpoch == null || sourceSwitchEpoch === switchSessionEpoch);
-                if (!sourceStillActive) {
-                    setTimeout(function () { void loadSessions({ forceRender: true }); }, 0);
-                    return;
-                }
-                await switchSession(res.session_id, { forceReload: true });
-                setTimeout(function () { void loadSessions({ forceRender: true }); }, 0);
-                delete wrap.dataset.branching;
-            })().catch(function (err) {
-                console.error('branch session failed:', err);
-                showUiAlert({
-                    title: '创建失败',
-                    message: String((err && err.message) || err || 'unknown error'),
-                    variant: 'error',
-                });
-            }).finally(function () {
-                delete wrap.dataset.branching;
-            });
-        });
-        return;
-    }
-}
-
-function attachMessageToolbar(wrap, role) {
-    const bar = document.createElement('div');
-    bar.className = 'msg-toolbar';
-    if (role === 'user') {
-        var createdAt = wrap && wrap.dataset ? (wrap.dataset.createdAt || '') : '';
-        if (createdAt) {
-            var timeEl = document.createElement('span');
-            timeEl.className = 'user-message-time';
-            timeEl.setAttribute('data-created-at', createdAt);
-            timeEl.title = createdAt;
-            timeEl.textContent = formatUserMessageTimestamp(createdAt);
-            bar.appendChild(timeEl);
-        }
-    }
-    var copyButtonLabel = role === 'assistant' ? '导出' : '复制';
-    var copyButtonTip = role === 'assistant' ? '导出选项' : '复制';
-    var html = '<button type="button" class="msg-tb" data-act="copy" data-ui-tip="' + copyButtonTip + '" aria-haspopup="true" aria-expanded="false">' + copyButtonLabel + '</button>'
-        + '<button type="button" class="msg-tb" data-act="delete" data-ui-tip="删除">删除</button>';
-    if (role === 'assistant') {
-        html += '<button type="button" class="msg-tb" data-act="branch" data-ui-tip="分支">分支</button>';
-    }
-    if (role === 'user') html += '<button type="button" class="msg-tb" data-act="rewrite" data-ui-tip="改写">改写</button>';
-    bar.insertAdjacentHTML('beforeend', html);
-    if (role === 'assistant') {
-        var copyPopover = document.createElement('div');
-        copyPopover.className = 'msg-copy-popover';
-        copyPopover.setAttribute('role', 'menu');
-        copyPopover.innerHTML = '<button type="button" class="msg-copy-menu-item" data-copy-option="image" role="menuitem">导出图片</button>'
-            + '<button type="button" class="msg-copy-menu-item" data-copy-option="text" role="menuitem">导出文本</button>';
-        bar.appendChild(copyPopover);
-        bar.querySelectorAll('[data-copy-option]').forEach(function (item) {
-            item.addEventListener('click', function (e) {
-                e.preventDefault();
-                e.stopPropagation();
-                applyMessageCopyOption(wrap, role, item.getAttribute('data-copy-option'));
-            });
-        });
-        copyPopover.addEventListener('click', function (e) {
-            e.stopPropagation();
-        });
-    }
-    bar.querySelectorAll('.msg-tb').forEach(bindUiHoverTip);
-    bar.addEventListener('click', function (e) {
-        var t = e.target;
-        if (!t || t.tagName !== 'BUTTON' || !t.getAttribute) return;
-        e.preventDefault();
-        e.stopPropagation();
-        var a = t.getAttribute('data-act');
-        if (a) onMessageToolbarClick(wrap, role, a);
-    });
-    wrap.appendChild(bar);
-}
-
-function getFeedItemText(row) {
-    const sc = row.querySelector('.feed-chunk-scroller');
-    if (sc) return sc.textContent.trim();
-    const ch = row.querySelector('.feed-chunk');
-    return ch ? ch.textContent.trim() : '';
-}
-
-function getProcessBriefComparableText(row) {
-    if (row && typeof row._processBriefRawText === 'string') {
-        return normalizeProcessBriefComparableText(row._processBriefRawText);
-    }
-    return normalizeProcessBriefComparableText(getFeedItemText(row));
-}
-
-function extractToolNameFromLog(text) {
-    if (!text) return '工具';
-    const line = (text.split(/\\n/)[0] || text).trim();
-    var m = line.match(/^([A-Za-z_][\\w-]*)\\s*\\(/);
-    if (m) return m[1];
-    m = line.match(/^([^\\s(]+)\\s*\\(/);
-    if (m) return m[1];
-    m = line.match(/^(\\S+?)(?:\\(|：)/);
-    if (m) return m[1];
-    return '工具';
-}
-
-function pushBriefLine(lines, line, type) {
-    if (!line || !String(line).trim()) return;
-    var t = String(line);
-    var previous = lines.length ? lines[lines.length - 1] : null;
-    var previousText = previous && typeof previous === 'object' ? previous.text : previous;
-    if (previousText === t) return;
-    lines.push(type ? { text: t, type: type } : t);
-}
-
-function measureFeedChunkOverflow(chunk) {
-    if (!chunk || !chunk.isConnected) return;
-    const sc = chunk.querySelector('.feed-chunk-scroller');
-    if (!sc) return;
-    if (feedChunkInHiddenSubagentProcess(chunk)) return;
-    if (chunk.classList.contains('expanded')) {
-        chunk.classList.remove('is-overflowing');
-        return;
-    }
-    if (!chunk.isConnected || chunk.classList.contains('expanded')) return;
-    var collapsedMax = feedChunkCollapsedMax(chunk);
-    var contentH = sc.scrollHeight;
-    if (contentH < 2) contentH = measureFeedChunkScrollerHeight(sc, chunk);
-    if (chunk.classList.contains('is-streaming') || sc.clientHeight < 2) {
-        chunk.classList.toggle('is-overflowing', contentH > collapsedMax + 1);
-        return;
-    }
-    chunk.classList.toggle('is-overflowing', sc.scrollHeight > sc.clientHeight + 1);
-}
-
-var feedChunkOverflowQueue = new Set();
-var feedChunkOverflowRaf = 0;
-
-function scheduleFeedChunkOverflowRefresh(chunk) {
-    if (!chunk) return;
-    var card = chunk.closest && chunk.closest('.subagent-grid-card');
-    if (card && subagentPanelOpen && !card.classList.contains('is-expanded') && card.dataset.viewportVisible !== '1') return;
-    feedChunkOverflowQueue.add(chunk);
-    if (feedChunkOverflowRaf) return;
-    feedChunkOverflowRaf = requestAnimationFrame(function () {
-        feedChunkOverflowRaf = requestAnimationFrame(function () {
-            feedChunkOverflowRaf = 0;
-            var queued = Array.from(feedChunkOverflowQueue);
-            feedChunkOverflowQueue.clear();
-            queued.forEach(measureFeedChunkOverflow);
-        });
-    });
-}
-
-function refreshFeedChunkOverflow(chunk) {
-    scheduleFeedChunkOverflowRefresh(chunk);
-}
-
-function bindFeedChunkScrollChain(sc) {
-    if (!sc || sc._wheelScrollChainBound) return;
-    sc._wheelScrollChainBound = true;
-    sc.addEventListener('wheel', onFeedChunkScrollerWheel, { passive: false });
-}
-
-function onFeedChunkScrollerWheel(e) {
-    const sc = e.currentTarget;
-    const chunk = sc.closest && sc.closest('.feed-chunk');
-    if (!chunk || !chunk.classList.contains('expanded')) return;
-    const dy = e.deltaY;
-    const eps = 2;
-    const st = sc.scrollTop;
-    const ch = sc.clientHeight;
-    const sh = sc.scrollHeight;
-    const canScrollY = sh > ch + eps;
-    if (canScrollY) {
-        if (dy < 0 && st > eps) return;
-        if (dy > 0 && st < sh - ch - eps) return;
-    }
-    e.preventDefault();
-    e.stopPropagation();
-    const body = sc.closest('.process-aggregate-body');
-    const chat = document.getElementById('chat-container');
-    if (body) {
-        const bPrev = body.scrollTop;
-        const bMax = Math.max(0, body.scrollHeight - body.clientHeight);
-        var bt = bPrev + dy;
-        if (bt < 0) bt = 0;
-        if (bt > bMax) bt = bMax;
-        if (bt !== bPrev) { smoothScrollBy(body, dy); return; }
-    }
-    if (chat) smoothScrollBy(chat, dy);
-}
-
-function bindProcessBriefScrollChain(brief) {
-    if (!brief || brief._briefWheelBound) return;
-    brief._briefWheelBound = true;
-    brief.addEventListener('wheel', onProcessBriefWheel, { passive: false });
-}
-
-function onProcessBriefWheel(e) {
-    const brief = e.currentTarget;
-    const agg = brief.closest && brief.closest('.process-aggregate');
-    if (!agg || !agg.classList.contains('is-collapsed')) return;
-    const dy = e.deltaY;
-    const eps = 2;
-    const st = brief.scrollTop;
-    const ch = brief.clientHeight;
-    const sh = brief.scrollHeight;
-    const canScrollY = sh > ch + eps;
-    if (canScrollY) {
-        if (dy < 0 && st > eps) return;
-        if (dy > 0 && st < sh - ch - eps) return;
-    }
-    e.preventDefault();
-    e.stopPropagation();
-    const chat = document.getElementById('chat-container');
-    if (chat) smoothScrollBy(chat, dy);
-}
-
-function setBriefRows(brief, texts) {
-    brief.textContent = '';
-    texts.forEach(function (t) {
-        var rowType = t && typeof t === 'object' ? String(t.type || '') : '';
-        var sourceText = t && typeof t === 'object' ? String(t.text || '') : String(t || '');
-        if (!sourceText.trim()) return;
-        const row = document.createElement('div');
-        row.className = 'process-brief-item';
-        if (rowType === 'response') row.classList.add('process-brief-item--response');
-        else if (sourceText.indexOf('Tool calls: ') === 0) row.classList.add('process-brief-item--tool');
-        // The collapsed response line is model output and must stay verbatim;
-        // only generated tool/status summary lines are runtime-owned UI copy.
-        if (rowType !== 'response' && typeof setUiRuntimeText === 'function') setUiRuntimeText(row, sourceText);
-        else row.textContent = sourceText;
-        brief.appendChild(row);
-    });
-}
-
-function normalizeProcessBriefComparableText(value) {
-    return String(value == null ? '' : value).replace(/\\s+/g, ' ').trim();
-}
-
-var processAggregateStateByElement = new WeakMap();
-
-function emptyProcessAggregateState() {
-    return {
-        rows: new WeakSet(),
-        maxReactIter: 0,
-        llmResponses: 0,
-        toolCalls: 0,
-    };
-}
-
-function ensureProcessAggregateState(agg) {
-    if (!agg) return null;
-    var state = processAggregateStateByElement.get(agg);
-    if (!state) {
-        state = emptyProcessAggregateState();
-        processAggregateStateByElement.set(agg, state);
-    }
-    return state;
-}
-
-function registerProcessAggregateRow(agg, row) {
-    var state = ensureProcessAggregateState(agg);
-    if (!state || !row || state.rows.has(row)) return;
-    state.rows.add(row);
-    var reactIter = parseInt(row.getAttribute('data-react-iter'), 10);
-    if (Number.isFinite(reactIter) && reactIter > state.maxReactIter) state.maxReactIter = reactIter;
-    var type = row.getAttribute('data-log-type');
-    if (type === 'llm-response') state.llmResponses += 1;
-    else if (type === 'tool-call') state.toolCalls += 1;
-}
-
-function unregisterProcessAggregateRow(row) {
-    if (!row || !row.closest) return;
-    var agg = row.closest('.process-aggregate');
-    var state = agg && processAggregateStateByElement.get(agg);
-    if (!state || !state.rows.has(row)) return;
-    state.rows.delete(row);
-    var type = row.getAttribute('data-log-type');
-    if (type === 'llm-response') state.llmResponses = Math.max(0, state.llmResponses - 1);
-    else if (type === 'tool-call') state.toolCalls = Math.max(0, state.toolCalls - 1);
-}
-
-function hydrateProcessAggregateState(agg) {
-    if (!agg) return null;
-    var state = emptyProcessAggregateState();
-    processAggregateStateByElement.set(agg, state);
-    var body = agg.querySelector('.process-aggregate-body');
-    var tailKey = null;
-    if (body) body.querySelectorAll('.feed-item').forEach(function (row) {
-        registerProcessAggregateRow(agg, row);
-        var phase = reactFeedPhase(row.getAttribute('data-log-type'));
-        var iter = Number(row.getAttribute('data-react-iter'));
-        var generation = Math.max(0, Number(row.getAttribute('data-react-generation')) || 0);
-        if (phase == null || !Number.isFinite(iter)) return;
-        var key = [generation, iter, phase];
-        if (!tailKey || key[0] > tailKey[0]
-            || (key[0] === tailKey[0] && (key[1] > tailKey[1]
-                || (key[1] === tailKey[1] && key[2] >= tailKey[2])))) tailKey = key;
-    });
-    if (body) body._reactOrderTailKey = tailKey;
-    return state;
-}
-
-function updateProcessBrief(agg) {
-    if (!agg || !agg.isConnected) return;
-    const body = agg.querySelector('.process-aggregate-body');
-    const brief = agg.querySelector('.process-aggregate-brief');
-    if (!body || !brief) return;
-    const items = Array.from(body.querySelectorAll('.feed-item'));
-    const lines = [];
-    const finalComparable = String(agg._processFinalResponseComparable || '');
-    var toolCountMap = {};
-    var toolOrder = [];
-    function flushBriefTools() {
-        if (!toolOrder.length) return;
-        var toolParts = [];
-        for (var oi = 0; oi < toolOrder.length; oi += 1) {
-            var toolName = toolOrder[oi];
-            var toolCount = toolCountMap[toolName] || 0;
-            if (toolCount > 0) toolParts.push(toolName + ' ×' + toolCount);
-        }
-        if (toolParts.length) pushBriefLine(lines, 'Tool calls: ' + toolParts.join(', '));
-        toolCountMap = {};
-        toolOrder = [];
-    }
-    items.forEach(function (el) {
-        var raw = getFeedItemText(el);
-        /* 摘要只保留模型 response；reasoning 仍完整保留在展开内容中。 */
-        if (el.classList.contains('feed--llm2')) {
-            flushBriefTools();
-            var responseComparable = getProcessBriefComparableText(el);
-            if (raw && (!finalComparable || responseComparable !== finalComparable)) {
-                pushBriefLine(lines, raw, 'response');
-            }
-        } else if (el.classList.contains('feed--tool')) {
-            var tname = extractToolNameFromLog(raw);
-            if (toolCountMap[tname] === undefined) toolOrder.push(tname);
-            toolCountMap[tname] = (toolCountMap[tname] || 0) + 1;
-        }
-        /* status/reasoning 不进入摘要；工具会在下一个 response 前统一落成一行。 */
-    });
-    flushBriefTools();
-    if (lines.length) setBriefRows(brief, lines);
-    else {
-        // A collapsed process block must not surface runtime status rows. Keep
-        // the fallback useful for other process output, otherwise show only the
-        // neutral collapsed placeholder.
-        var any = body.querySelector('.feed-item:not(.feed--llm):not(.feed--llm2):not(.feed--st) .feed-chunk-scroller, .feed-item:not(.feed--llm):not(.feed--llm2):not(.feed--st) .feed-chunk');
-        var tAny = any ? (typeof getUiRuntimeText === 'function' ? getUiRuntimeText(any) : any.textContent).trim() : '';
-        setBriefRows(brief, [tAny || '本段过程已折叠']);
-    }
-    scheduleProcessAggregateHeightUi(agg);
-}
-
-function syncProcessAggregateHeightUi(agg) {
-    if (!agg) return;
-    var btn = agg.querySelector('.process-aggregate-resize');
-    if (!btn) return;
-    if (!agg.isConnected) {
-        btn.hidden = true;
-        return;
-    }
-    if (!agg.classList.contains('is-collapsed')) {
-        agg.classList.remove('is-height-expanded');
-        agg.classList.remove('has-height-overflow');
-        btn.hidden = true;
-        btn.setAttribute('aria-expanded', 'false');
-        return;
-    }
-    var expanded = agg.classList.contains('is-height-expanded');
-    agg.classList.remove('is-height-expanded');
-    agg.classList.remove('has-height-overflow');
-    var target = agg.querySelector('.process-aggregate-brief');
-    var hasOverflow = !!(target && target.scrollHeight > target.clientHeight + 1);
-    agg.classList.toggle('has-height-overflow', hasOverflow);
-    if (expanded && hasOverflow) agg.classList.add('is-height-expanded');
-    else expanded = false;
-    btn.hidden = !hasOverflow;
-    var label = expanded ? '收起执行轨迹高度' : '展开执行轨迹高度';
-    btn.setAttribute('aria-expanded', expanded ? 'true' : 'false');
-    btn.setAttribute('aria-label', label);
-    btn.setAttribute('data-ui-tip', label);
-    var tip = btn._uiHoverTipBound;
-    if (!tip && typeof bindUiHoverTip === 'function') bindUiHoverTip(btn);
-}
-
-function scheduleProcessAggregateHeightUi(agg) {
-    if (!agg || agg.classList.contains('subagent-grid-card')) return;
-    if (agg._processHeightUiRaf) cancelAnimationFrame(agg._processHeightUiRaf);
-    agg._processHeightUiRaf = requestAnimationFrame(function () {
-        agg._processHeightUiRaf = 0;
-        syncProcessAggregateHeightUi(agg);
-    });
-}
-
-function bindProcessAggregateHeightButton(agg) {
-    if (!agg || agg.classList.contains('subagent-grid-card')) return;
-    var btn = agg.querySelector('.process-aggregate-resize');
-    if (!btn) {
-        btn = document.createElement('button');
-        btn.type = 'button';
-        btn.className = 'process-aggregate-resize';
-        btn.hidden = true;
-        btn.innerHTML = '<span class="process-aggregate-chevron" aria-hidden="true"></span>';
-        agg.appendChild(btn);
-    }
-    if (!btn.dataset.bound) {
-        btn.dataset.bound = '1';
-        btn.addEventListener('click', function (e) {
-            e.preventDefault();
-            e.stopPropagation();
-            agg.classList.toggle('is-height-expanded');
-            if (agg.classList.contains('is-collapsed')) updateProcessBrief(agg);
-            requestAnimationFrame(function () {
-                syncProcessAggregateHeightUi(agg);
-                agg.querySelectorAll('.process-aggregate-body .feed-chunk').forEach(refreshFeedChunkOverflow);
-                registerMermaidLazy(agg);
-            });
-        });
-    }
-    var body = agg.querySelector('.process-aggregate-body');
-    if (body && !agg._processHeightMutationObserver && typeof MutationObserver !== 'undefined') {
-        agg._processHeightMutationObserver = new MutationObserver(function () {
-            scheduleProcessAggregateHeightUi(agg);
-        });
-        agg._processHeightMutationObserver.observe(body, {
-            childList: true,
-            subtree: true,
-        });
-    }
-    if (!agg._processHeightResizeObserver && typeof ResizeObserver !== 'undefined') {
-        agg._processHeightResizeObserver = new ResizeObserver(function () {
-            scheduleProcessAggregateHeightUi(agg);
-        });
-        if (body) agg._processHeightResizeObserver.observe(body);
-        var brief = agg.querySelector('.process-aggregate-brief');
-        if (brief) agg._processHeightResizeObserver.observe(brief);
-    }
-    scheduleProcessAggregateHeightUi(agg);
-}
-
-function alignProcessAggregateToViewportTop(agg) {
-    if (!agg || !agg.isConnected) return;
-    var viewport = document.getElementById('chat-container');
-    if (!viewport) return;
-    var viewportRect = viewport.getBoundingClientRect();
-    var aggregateRect = agg.getBoundingClientRect();
-    var targetTop = viewport.scrollTop + aggregateRect.top - viewportRect.top;
-    var maxTop = Math.max(0, viewport.scrollHeight - viewport.clientHeight);
-    targetTop = Math.max(0, Math.min(maxTop, targetTop));
-    if (typeof setScrollTopImmediate === 'function') setScrollTopImmediate(viewport, targetTop);
-    else viewport.scrollTop = targetTop;
-}
-
-function bindProcessAggregateInteractions(agg) {
-    const procBody = agg.querySelector('.process-aggregate-body, .subagent-card-body');
-    if (procBody && !procBody._streamFollowScrollBound) {
-        procBody._streamFollowScrollBound = true;
-        procBody.addEventListener('scroll', function () {
-            if (!isSessionRunning(currentSessionId)) return;
-            var active = getProcessBodyElForCurrentRun();
-            if (active !== procBody) return;
-            refreshLiveAutoFollowPins();
-        }, { passive: true });
-    }
-    if (agg.classList.contains('subagent-grid-card')) return;
-    const top = agg.querySelector('.process-aggregate-top');
-    if (top && !top.dataset.bound) {
-        top.dataset.bound = '1';
-        top.addEventListener('click', function () {
-            var openingDetail = agg.classList.contains('is-collapsed');
-            agg.classList.toggle('is-collapsed');
-            const expanded = !agg.classList.contains('is-collapsed');
-            top.setAttribute('aria-expanded', expanded ? 'true' : 'false');
-            if (agg.classList.contains('is-collapsed')) {
-                updateProcessBrief(agg);
-            } else {
-                requestAnimationFrame(function () {
-                    requestAnimationFrame(function () {
-                        syncProcessAggregateHeightUi(agg);
-                        agg.querySelectorAll('.process-aggregate-body .feed-chunk').forEach(refreshFeedChunkOverflow);
-                        registerMermaidLazy(agg);
-                        if (openingDetail) alignProcessAggregateToViewportTop(agg);
-                    });
-                });
-            }
-        });
-        top.addEventListener('keydown', function (e) {
-            if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); top.click(); }
-        });
-    }
-    const briefEl = agg.querySelector('.process-aggregate-brief');
-    if (briefEl) bindProcessBriefScrollChain(briefEl);
-}
-
-function bindProcessAggregate(agg) {
-    bindProcessAggregateInteractions(agg);
-    if (!agg || agg.classList.contains('subagent-grid-card')) return;
-    bindProcessAggregateHeightButton(agg);
-}
-
-function procNow() {
-    return (typeof performance !== 'undefined' && typeof performance.now === 'function') ? performance.now() : Date.now();
-}
-
-var processAggregateStatsTimer = null;
-
-function processAggregateNeedsLiveStats(agg) {
-    if (!agg || !agg.isConnected || !agg.dataset) return false;
-    if (!agg.dataset.procStartedAt || agg.dataset.procEndedAt) return false;
-    return !(agg.dataset.procDurationMs != null && agg.dataset.procDurationMs !== '');
-}
-
-function refreshLiveProcessAggregateStats() {
-    if (typeof document === 'undefined') return false;
-    var live = Array.from(document.querySelectorAll('.process-aggregate[data-proc-started-at]'))
-        .filter(processAggregateNeedsLiveStats);
-    live.forEach(refreshAggregateStatsSmart);
-    return live.length > 0;
-}
-
-function stopLiveProcessAggregateStats() {
-    if (!processAggregateStatsTimer) return;
-    clearInterval(processAggregateStatsTimer);
-    processAggregateStatsTimer = null;
-}
-
-function scheduleLiveProcessAggregateStats() {
-    if (processAggregateStatsTimer) return;
-    if (!refreshLiveProcessAggregateStats()) return;
-    processAggregateStatsTimer = setInterval(function () {
-        if (!refreshLiveProcessAggregateStats()) stopLiveProcessAggregateStats();
-    }, 1000);
-}
-
-function formatProcDurationMs(ms) {
-    if (ms == null || !Number.isFinite(ms) || ms < 0) return null;
-    if (ms < 800) return Math.max(0, Math.round(ms)) + 'ms';
-    if (ms < 60000) {
-        var s = ms / 1000;
-        return (s < 10 ? s.toFixed(1) : Math.round(s)) + 's';
-    }
-    var mi = Math.floor(ms / 60000);
-    var sec = Math.round((ms % 60000) / 1000);
-    return mi + '分' + sec + '秒';
-}
-
-function processStartedAtToProcNow(startedAt) {
-    if (!startedAt) return null;
-    var startedMs = Date.parse(String(startedAt));
-    if (!Number.isFinite(startedMs)) return null;
-    return procNow() - Math.max(0, Date.now() - startedMs);
-}
-
-function applyRunStartedAtToProcessGroup(agg, startedAt) {
-    if (!agg || !startedAt) return;
-    var t0 = processStartedAtToProcNow(startedAt);
-    if (!Number.isFinite(Number(t0))) return;
-    agg.dataset.procStartedAt = String(t0);
-    delete agg.dataset.procEndedAt;
-    if (!agg.dataset.procDurationMs) refreshProcessAggregateStats(agg);
-    scheduleLiveProcessAggregateStats();
-}
-
-function bumpAggregateMaxReactIter(agg, reactIter) {
-    if (!agg) return;
-    var n = Number(reactIter);
-    if (!Number.isFinite(n) || n < 1) return;
-    var flo = Math.floor(n);
-    var cur = parseInt(agg.dataset.maxReactIter || '0', 10);
-    if (flo > cur) agg.dataset.maxReactIter = String(flo);
-}
-
-function resolveSubagentAggFromCtx(ctx) {
-    if (!ctx) return null;
-    if (ctx.currentProcessGroup && ctx.currentProcessGroup.isConnected
-        && ctx.currentProcessGroup.classList.contains('subagent-grid-card')) {
-        return ctx.currentProcessGroup;
-    }
-    if (ctx._subagentBody && ctx._subagentBody.isConnected) {
-        var card = ctx._subagentBody.closest('.subagent-grid-card');
-        if (card) return card;
-    }
-    return null;
-}
-
-function applySubagentSessionMetricsToCard(card, metrics) {
-    if (!card || !metrics || typeof metrics !== 'object') return;
-    if (metrics.duration_ms != null && Number.isFinite(Number(metrics.duration_ms))) {
-        card.dataset.procDurationMs = String(Math.max(0, Math.floor(Number(metrics.duration_ms))));
-    }
-    if (metrics.react_loops != null && Number.isFinite(Number(metrics.react_loops))) {
-        card.dataset.procReactLoops = String(Math.max(0, Math.floor(Number(metrics.react_loops))));
-    }
-    if (metrics.tool_calls != null && Number.isFinite(Number(metrics.tool_calls))) {
-        card.dataset.procToolCalls = String(Math.max(0, Math.floor(Number(metrics.tool_calls))));
-    }
-    if (metrics.tool_failures != null && Number.isFinite(Number(metrics.tool_failures))) {
-        card.dataset.procToolFails = String(Math.max(0, Math.floor(Number(metrics.tool_failures))));
-    }
-}
-
-function applySubagentProcessMetricsToCard(card, event) {
-    if (!card || !event) return;
-    var isRunEnd = event.duration_ms != null && Number.isFinite(Number(event.duration_ms));
-    if (isRunEnd) {
-        var runDur = Math.max(0, Math.round(Number(event.duration_ms)));
-        var runLoops = event.react_loops != null && Number.isFinite(Number(event.react_loops))
-            ? Math.max(0, Math.floor(Number(event.react_loops))) : 0;
-        var runTools = event.tool_calls != null && Number.isFinite(Number(event.tool_calls))
-            ? Math.max(0, Math.floor(Number(event.tool_calls))) : 0;
-        var runFails = event.tool_failures != null && Number.isFinite(Number(event.tool_failures))
-            ? Math.max(0, Math.floor(Number(event.tool_failures))) : 0;
-        card.dataset.procDurationMs = String((parseInt(card.dataset.procDurationMs || '0', 10) || 0) + runDur);
-        card.dataset.procReactLoops = String((parseInt(card.dataset.procReactLoops || '0', 10) || 0) + runLoops);
-        card.dataset.procToolCalls = String((parseInt(card.dataset.procToolCalls || '0', 10) || 0) + runTools);
-        card.dataset.procToolFails = String((parseInt(card.dataset.procToolFails || '0', 10) || 0) + runFails);
-        delete card.dataset.procLiveToolCalls;
-        delete card.dataset.procLiveToolFails;
-    } else {
-        if (event.tool_calls != null && Number.isFinite(Number(event.tool_calls))) {
-            var liveTools = Math.max(0, Math.floor(Number(event.tool_calls)));
-            var prevTools = parseInt(card.dataset.procLiveToolCalls || '0', 10) || 0;
-            card.dataset.procLiveToolCalls = String(Math.max(prevTools, liveTools));
-        }
-        if (event.tool_failures != null && Number.isFinite(Number(event.tool_failures))) {
-            var liveFails = Math.max(0, Math.floor(Number(event.tool_failures)));
-            var prevFails = parseInt(card.dataset.procLiveToolFails || '0', 10) || 0;
-            card.dataset.procLiveToolFails = String(Math.max(prevFails, liveFails));
-        }
-    }
-}
-
-function uiEventReactIter(ev) {
-    if (!ev || ev.react_iter == null) return null;
-    var n = Number(ev.react_iter);
-    if (!Number.isFinite(n) || n < 1) return null;
-    return n;
-}
-
-function applyCacheStatsFromEvent(ctx, event, runSessionId) {
-    if (!event || typeof event !== 'object') return;
-    var agg = resolveSubagentAggFromCtx(ctx);
-    if (!agg || !agg.isConnected) {
-        agg = ctx && ctx.currentProcessGroup;
-        if (!agg || !agg.isConnected) {
-            var st = (ctx && ctx.stream) ? ctx.stream : getVisibleChatStream();
-            if (st) agg = st.querySelector('.process-aggregate:last-of-type');
-        }
-    }
-    if (!agg) return;
-    if (event.cache_hit != null) agg.dataset.procCacheHit = String(Math.max(0, Math.floor(Number(event.cache_hit))));
-    if (event.cache_miss != null) agg.dataset.procCacheMiss = String(Math.max(0, Math.floor(Number(event.cache_miss))));
-    if (event.hit_rate != null) agg.dataset.procCacheRate = String(Math.max(0, Number(event.hit_rate)));
-    if (event.model != null) agg.dataset.procCacheModel = String(event.model);
-    if (event.input_tokens != null) agg.dataset.procCacheInput = String(Math.max(0, Math.floor(Number(event.input_tokens))));
-    if (event.output_tokens != null) agg.dataset.procCacheOutput = String(Math.max(0, Math.floor(Number(event.output_tokens))));
-    if (event.tokens_per_sec != null) agg.dataset.procCacheTps = String(Math.max(0, Number(event.tokens_per_sec)));
-    var tokenSessionId = runSessionId || event.session_id || event.sessionId || '';
-    var eventTokenMode = String(event.context_token_mode || event.token_mode || '').toLowerCase();
-    var allowApiTokenStats = eventTokenMode !== 'calculated';
-    if (allowApiTokenStats && tokenSessionId && event.input_tokens != null && Number.isFinite(Number(event.input_tokens))) {
-        recordContextTokens(tokenSessionId, Math.max(0, Math.floor(Number(event.input_tokens))), event.threshold);
-    }
-    refreshAggregateStatsSmart(agg);
-}
-
-function applyProcessMetricsFromEvent(ctx, event) {
-    if (!event || typeof event !== 'object') return;
-    var subCard = resolveSubagentAggFromCtx(ctx);
-    if (subCard && subCard.isConnected) {
-        applySubagentProcessMetricsToCard(subCard, event);
-        scheduleSubagentCardStats(subCard);
-        return;
-    }
-    var agg = ctx && ctx.currentProcessGroup;
-    if (!agg || !agg.isConnected) {
-        var st = (ctx && ctx.stream) ? ctx.stream : getVisibleChatStream();
-        if (st) agg = st.querySelector('.process-aggregate:last-of-type');
-    }
-    if (!agg) return;
-    if (event.duration_ms != null && Number.isFinite(Number(event.duration_ms))) {
-        if (!replayingMessages && agg.dataset.procStartedAt) {
-            agg.dataset.procEndedAt = String(procNow());
-            delete agg.dataset.procDurationMs;
-        } else {
-            agg.dataset.procDurationMs = String(Math.max(0, Math.round(Number(event.duration_ms))));
-        }
-    }
-    if (event.react_loops != null && Number.isFinite(Number(event.react_loops))) {
-        agg.dataset.procReactLoops = String(Math.max(0, Math.floor(Number(event.react_loops))));
-    }
-    if (event.tool_calls != null && Number.isFinite(Number(event.tool_calls))) {
-        agg.dataset.procToolCalls = String(Math.max(0, Math.floor(Number(event.tool_calls))));
-    }
-    if (event.tool_failures != null && Number.isFinite(Number(event.tool_failures))) {
-        agg.dataset.procToolFails = String(Math.max(0, Math.floor(Number(event.tool_failures))));
-    }
-    refreshAggregateStatsSmart(agg);
-    if (processAggregateNeedsLiveStats(agg)) scheduleLiveProcessAggregateStats();
-    else if (!refreshLiveProcessAggregateStats()) stopLiveProcessAggregateStats();
-}
-
-function refreshAggregateStatsSmart(agg) {
-    if (agg && agg.classList && agg.classList.contains('subagent-grid-card')) refreshSubagentCardStats(agg);
-    else refreshProcessAggregateStats(agg);
-}
-
-function renderProcessAggregateStats(el, sourceText, tailText) {
-    if (!el) return;
-    el.textContent = '';
-    var head = document.createElement('span');
-    if (typeof setUiRuntimeText === 'function') setUiRuntimeText(head, sourceText);
-    else head.textContent = typeof translateUiString === 'function' ? translateUiString(sourceText) : sourceText;
-    var tail = document.createElement('span');
-    // Model/profile names and cache values are data, not UI copy.
-    tail.setAttribute('data-i18n-skip', 'true');
-    tail.textContent = String(tailText == null ? '' : tailText);
-    el.appendChild(head);
-    el.appendChild(tail);
-}
-
-function refreshSubagentCardStats(card) {
-    if (!card) return;
-    var el = card.querySelector('.process-aggregate-stats');
-    if (!el) return;
-    var body = card.querySelector('.subagent-card-body');
-    var pDur = card.dataset.procDurationMs != null && card.dataset.procDurationMs !== ''
-        ? parseInt(card.dataset.procDurationMs, 10) : NaN;
-    var pLoops = card.dataset.procReactLoops != null && card.dataset.procReactLoops !== ''
-        ? parseInt(card.dataset.procReactLoops, 10) : NaN;
-    var pTools = card.dataset.procToolCalls != null && card.dataset.procToolCalls !== ''
-        ? parseInt(card.dataset.procToolCalls, 10) : NaN;
-    var pFails = card.dataset.procToolFails != null && card.dataset.procToolFails !== ''
-        ? parseInt(card.dataset.procToolFails, 10) : NaN;
-    var maxFromRows = 0;
-    var bodyLoaded = subagentBodyIsLoaded(body) && body.dataset.stashed !== '1';
-    if (bodyLoaded) {
-        body.querySelectorAll('.subagent-turn-process .feed-item[data-react-iter]').forEach(function (row) {
-            var v = parseInt(row.getAttribute('data-react-iter'), 10);
-            if (Number.isFinite(v) && v > maxFromRows) maxFromRows = v;
-        });
-    }
-    var dsRi = card.dataset.maxReactIter ? parseInt(card.dataset.maxReactIter, 10) : 0;
-    var reactLoops = Math.max(maxFromRows, dsRi);
-    if (!reactLoops && bodyLoaded) {
-        reactLoops = body.querySelectorAll('.subagent-turn-process .feed-item[data-log-type="llm-response"]').length;
-    }
-    if (Number.isFinite(pLoops) && pLoops > 0) reactLoops = pLoops;
-    var sessionTools = Number.isFinite(pTools) && pTools >= 0 ? pTools : 0;
-    var liveTools = parseInt(card.dataset.procLiveToolCalls || '0', 10) || 0;
-    var toolN = sessionTools + liveTools;
-    if (!toolN && bodyLoaded) {
-        toolN = body.querySelectorAll('.subagent-turn-process .feed-item[data-log-type="tool-call"]').length;
-    }
-    var sessionFails = Number.isFinite(pFails) && pFails >= 0 ? pFails : 0;
-    var liveFails = parseInt(card.dataset.procLiveToolFails || '0', 10) || 0;
-    var failN = sessionFails + liveFails;
-    if (!failN && bodyLoaded) {
-        body.querySelectorAll('.subagent-turn-process .feed-item[data-log-type="tool-call"]').forEach(function (row) {
-            var sc = row.querySelector('.feed-chunk-scroller');
-            var txt = sc ? String(sc.textContent || '') : '';
-            if (/Error:|失败|异常|error executing command:/i.test(txt)) failN += 1;
-        });
-    }
-    var t0s = card.dataset.procStartedAt;
-    var t0 = (t0s != null && t0s !== '') ? Number(t0s) : NaN;
-    var parts = [];
-    var durStr = null;
-    if (Number.isFinite(pDur) && pDur >= 0) durStr = formatProcDurationMs(pDur);
-    else if (Number.isFinite(t0)) {
-        var t1s = card.dataset.procEndedAt;
-        var t1 = (t1s != null && t1s !== '') ? Number(t1s) : procNow();
-        durStr = formatProcDurationMs(t1 - t0);
-    }
-    if (durStr) parts.push(durStr);
-    parts.push(String(reactLoops) + ' 轮');
-    parts.push('工具 ' + String(toolN) + ' 次');
-    parts.push('失败 ' + String(failN) + ' 次');
-    var modelStr = card.dataset.procCacheModel || card.dataset.executorModel || '—';
-    var est = card.dataset.procCtxEstimated;
-    var thr = card.dataset.procCtxThreshold;
-    var pctStr = '—';
-    if (est != null && est !== '' && thr != null && thr !== '' && Number(thr) > 0) {
-        pctStr = (Math.round(Number(est) / Number(thr) * 1000) / 10) + '%';
-    }
-    renderProcessAggregateStats(el, parts.join(' · '), modelStr + ' · ' + pctStr);
-}
-
-function refreshProcessAggregateStats(agg) {
-    if (!agg) return;
-    var el = agg.querySelector('.process-aggregate-stats');
-    if (!el) return;
-    var body = agg.querySelector('.process-aggregate-body');
-    if (!body) { el.textContent = ''; return; }
-    var pDur = agg.dataset.procDurationMs != null && agg.dataset.procDurationMs !== ''
-        ? parseInt(agg.dataset.procDurationMs, 10) : NaN;
-    var pLoops = agg.dataset.procReactLoops != null && agg.dataset.procReactLoops !== ''
-        ? parseInt(agg.dataset.procReactLoops, 10) : NaN;
-    var pTools = agg.dataset.procToolCalls != null && agg.dataset.procToolCalls !== ''
-        ? parseInt(agg.dataset.procToolCalls, 10) : NaN;
-    var pFails = agg.dataset.procToolFails != null && agg.dataset.procToolFails !== ''
-        ? parseInt(agg.dataset.procToolFails, 10) : NaN;
-    var aggregateState = processAggregateStateByElement.get(agg) || hydrateProcessAggregateState(agg);
-    var maxFromRows = aggregateState ? aggregateState.maxReactIter : 0;
-    var dsRi = agg.dataset.maxReactIter ? parseInt(agg.dataset.maxReactIter, 10) : 0;
-    var reactLoops = Math.max(maxFromRows, dsRi);
-    if (!reactLoops) {
-        reactLoops = aggregateState ? aggregateState.llmResponses : 0;
-    }
-    if (Number.isFinite(pLoops) && pLoops >= 0) reactLoops = pLoops;
-    var toolN = aggregateState ? aggregateState.toolCalls : 0;
-    if (Number.isFinite(pTools) && pTools >= 0) toolN = pTools;
-    var failN = 0;
-    if (Number.isFinite(pFails) && pFails >= 0) failN = pFails;
-    var t0s = agg.dataset.procStartedAt;
-    var t0 = (t0s != null && t0s !== '') ? Number(t0s) : NaN;
-    var parts = [];
-    var durStr = null;
-    if (Number.isFinite(pDur) && pDur >= 0) durStr = formatProcDurationMs(pDur);
-    else if (Number.isFinite(t0)) {
-        var t1s = agg.dataset.procEndedAt;
-        var t1 = (t1s != null && t1s !== '') ? Number(t1s) : procNow();
-        durStr = formatProcDurationMs(t1 - t0);
-    }
-    if (durStr) parts.push(durStr);
-    parts.push(String(reactLoops) + ' 轮');
-    parts.push('工具 ' + String(toolN) + ' 次');
-        parts.push('失败 ' + String(failN) + ' 次');
-    var ch = agg.dataset.procCacheHit != null && agg.dataset.procCacheHit !== '' ? parseInt(agg.dataset.procCacheHit, 10) : 0;
-    var cm = agg.dataset.procCacheMiss != null && agg.dataset.procCacheMiss !== '' ? parseInt(agg.dataset.procCacheMiss, 10) : 0;
-    var cr = agg.dataset.procCacheRate != null && agg.dataset.procCacheRate !== '' ? parseFloat(agg.dataset.procCacheRate) : 0;
-    var modelStr = agg.dataset.procCacheModel || '';
-    var inputStr = agg.dataset.procCacheInput || '0';
-    var outputStr = agg.dataset.procCacheOutput || '0';
-    var tps = agg.dataset.procCacheTps;
-    var cacheParts = [];
-    if (modelStr) cacheParts.push(modelStr);
-    cacheParts.push('input=' + inputStr);
-    cacheParts.push('output=' + outputStr);
-    if (tps && tps !== '0') cacheParts.push(tps + ' tok/s');
-    var rateStr = (ch + cm > 0) ? (cr % 1 === 0 ? cr.toFixed(0) : cr.toFixed(1)) + '%' : '0%';
-    cacheParts.push('hit_rate=' + rateStr);
-    var cacheLine = cacheParts.join(' · ');
-    renderProcessAggregateStats(el, parts.join(' · '), cacheLine);
-}
-
-function ensureProcessGroup(ctx) {
-    if (!ctx || !ctx.stream) return null;
-    /* DocumentFragment 或未挂上 document 的节点 isConnected 为 false；回放或「加载更早消息」预挂载时需保留同一执行轨迹框 */
-    if (ctx.currentProcessGroup && !ctx.currentProcessGroup.isConnected && !replayingMessages) ctx.currentProcessGroup = null;
-    if (ctx.currentProcessGroup) return ctx.currentProcessGroup;
-    stripWelcome(ctx);
-    const wrap = document.createElement('div');
-    wrap.className = 'process-aggregate';
-    var replayCollapsed = !!replayingMessages;
-    if (replayCollapsed) wrap.classList.add('is-collapsed');
-    if (!replayingMessages) wrap.classList.add('is-running');
-    wrap.innerHTML = '<div class="process-aggregate-top" role="button" tabindex="0" aria-expanded="' + (replayCollapsed ? 'false' : 'true') + '">'
-        + '<div class="process-aggregate-top-line">'
-        + '<span class="process-aggregate-title-wrap">'
-        + '<span class="process-aggregate-title">执行轨迹</span>'
-        + '<span class="process-aggregate-stats" aria-live="polite"></span>'
-        + '</span>'
-        + '<span class="process-chev" aria-hidden="true">▼</span></div>'
-        + '<div class="process-aggregate-brief"></div></div>'
-        + '<div class="process-aggregate-body"></div>'
-        + '<button type="button" class="process-aggregate-resize" aria-label="展开执行轨迹高度" aria-expanded="false" data-ui-tip="展开执行轨迹高度" hidden>'
-        + '<span class="process-aggregate-chevron" aria-hidden="true"></span></button>';
-    if (!replayingMessages) {
-        if (ctx.runStartedAt) applyRunStartedAtToProcessGroup(wrap, ctx.runStartedAt);
-        else {
-            wrap.dataset.procStartedAt = String(procNow());
-        }
-    }
-    delete wrap.dataset.maxReactIter;
-    (ctx.stream || chatContainer).appendChild(wrap);
-    bindProcessAggregate(wrap);
-    ctx.currentProcessGroup = wrap;
-    refreshProcessAggregateStats(wrap);
-    if (processAggregateNeedsLiveStats(wrap)) scheduleLiveProcessAggregateStats();
-    return wrap;
-}
-
-function sealProcessGroup(ctx) {
-    if (!ctx) return;
-    if (!ctx.currentProcessGroup) return;
-    const agg = ctx.currentProcessGroup;
-    if (agg.isConnected) {
-        agg.classList.remove('is-running');
-        updateProcessBrief(agg);
-        if (agg.dataset.procStartedAt) agg.dataset.procEndedAt = String(procNow());
-        refreshProcessAggregateStats(agg);
-        if (!refreshLiveProcessAggregateStats()) stopLiveProcessAggregateStats();
-    }
-    ctx.currentProcessGroup = null;
-    ctx.progressScrollers = {};
-    resetKeyContextStreamFilter(ctx);
-    finalizeProgressStreamChunks(ctx);
-}
-
-function getProcessBody(ctx) {
-    if (ctx && ctx._subagentTurnProcess && ctx._subagentTurnProcess.isConnected) return ctx._subagentTurnProcess;
-    if (ctx && ctx.currentTurn && ctx.currentTurn.isConnected) {
-        var subProc = ctx.currentTurn.querySelector('.subagent-turn-process');
-        if (subProc) {
-            ctx._subagentTurnProcess = subProc;
-            return subProc;
-        }
-    }
-    if (ctx && ctx._subagentBody && ctx._subagentBody.isConnected) return null;
-    const w = ensureProcessGroup(ctx);
-    if (!w) return null;
-    return w.querySelector('.process-aggregate-body');
-}
-
-function getExistingProcessBody(ctx) {
-    if (!ctx) return null;
-    if (ctx._subagentTurnProcess && ctx._subagentTurnProcess.isConnected) return ctx._subagentTurnProcess;
-    if (ctx.currentTurn && ctx.currentTurn.isConnected) {
-        var subProc = ctx.currentTurn.querySelector('.subagent-turn-process');
-        if (subProc) {
-            ctx._subagentTurnProcess = subProc;
-            return subProc;
-        }
-    }
-    if (ctx._subagentBody && ctx._subagentBody.isConnected) return null;
-    var current = ctx.currentProcessGroup;
-    if (!current || !current.isConnected) return null;
-    return current.querySelector('.process-aggregate-body');
-}
-
-function autoResizeTextarea() {
-    messageInput.style.height = 'auto';
-    messageInput.style.height = Math.min(messageInput.scrollHeight, Math.floor(window.innerHeight * 0.5)) + 'px';
-    repinStreamScrollAfterComposerResize();
-}
-
-/** 输入框增高会压缩工作区高度；若正在跟随底部，立即把聊天区/执行轨迹区重新钉到底部，避免与流式滚动互相拉扯。 */
-function repinStreamScrollAfterComposerResize() {
-    if (!liveAutoFollow || !chatContainer) return;
-    if (typeof setScrollTopImmediate === 'function') {
-        setScrollTopImmediate(chatContainer, chatContainer.scrollHeight);
-    }
-    var pb = typeof getProcessBodyElForCurrentRun === 'function' ? getProcessBodyElForCurrentRun() : null;
-    if (pb) pb.scrollTop = pb.scrollHeight;
-}
-function syncComposerInputState() {
-    autoResizeTextarea();
-    rewriteInputWorkspacePaths();
-    if (hasSendableText(messageInput.value)) recentComposerQueuedFollowup = null;
-    if (currentSessionId) persistInputDraft(currentSessionId, messageInput.value);
-    if (typeof setSendButtonState === 'function') setSendButtonState();
-}
-messageInput.addEventListener('input', syncComposerInputState);
-messageInput.addEventListener('blur', function () {
-    recentComposerQueuedFollowup = null;
-});
-autoResizeTextarea();
-refreshInputPathChips();
-
-function escapeHtml(str) {
-    if (!str) return '';
-    return str.replace(/[&<>]/g, function(m) {
-        if (m === '&') return '&amp;';
-        if (m === '<') return '&lt;';
-        if (m === '>') return '&gt;';
-        return m;
-    });
-}
-
-function escapeHtmlAttr(str) {
-    return escapeHtml(String(str || '')).replace(/"/g, '&quot;').replace(/'/g, '&#39;');
-}
-
-function scrollToBottom(opts) {
-    opts = opts || {};
-    if (!chatContainer) return;
-    if (opts.smooth && typeof chatContainer.scrollTo === 'function') {
-        chatContainer.scrollTo({ top: chatContainer.scrollHeight, behavior: 'smooth' });
-        return;
-    }
-    setScrollTopImmediate(chatContainer, chatContainer.scrollHeight);
-    requestAnimationFrame(function () {
-        if (chatContainer) chatContainer.scrollTop = chatContainer.scrollHeight;
-    });
-}
-
-// 滚动位置存储
-const LS_SCROLL_POSITION_PREFIX = 'myagent-scroll-';
-const LS_SCROLL_ANCHOR_PREFIX = 'myagent-scroll-anchor-';
-const LS_SCROLL_ANCHOR_OFFSET_PREFIX = 'myagent-scroll-anchor-offset-';
-
-function getScrollPositionKey(sessionId) {
-    return LS_SCROLL_POSITION_PREFIX + sessionId;
-}
-
-function getScrollAnchorKey(sessionId) {
-    return LS_SCROLL_ANCHOR_PREFIX + sessionId;
-}
-
-function getScrollAnchorOffsetKey(sessionId) {
-    return LS_SCROLL_ANCHOR_OFFSET_PREFIX + sessionId;
-}
-
-function saveScrollPosition(sessionId, scrollTop) {
-    if (!sessionId) return;
-    try {
-        localStorage.setItem(getScrollPositionKey(sessionId), String(Math.round(scrollTop)));
-    } catch (e) { /* ignore */ }
-}
-
-function saveScrollAnchorPosition(sessionId) {
-    if (!chatContainer || !sessionId) return;
-    try {
-        if (isNearBottom(chatContainer, STREAM_CHAT_NEAR_BOTTOM_PX)) {
-            localStorage.removeItem(getScrollAnchorKey(sessionId));
-            localStorage.removeItem(getScrollAnchorOffsetKey(sessionId));
-            return;
-        }
-        var rect = chatContainer.getBoundingClientRect();
-        var wraps = chatContainer.querySelectorAll('.msg-wrap--user[data-event-index]');
-        var best = null;
-        var bestWrap = null;
-        for (var i = 0; i < wraps.length; i += 1) {
-            var wr = wraps[i];
-            var ei = Number(wr.getAttribute('data-event-index'));
-            if (!Number.isFinite(ei)) continue;
-            var top = wr.getBoundingClientRect().top;
-            if (top <= rect.top + 8) {
-                best = ei;
-                bestWrap = wr;
-            }
-            else if (best == null) {
-                best = ei;
-                bestWrap = wr;
-                break;
-            }
-        }
-        if (best != null && bestWrap) {
-            localStorage.setItem(getScrollAnchorKey(sessionId), String(best));
-            localStorage.setItem(
-                getScrollAnchorOffsetKey(sessionId),
-                String(Math.round(bestWrap.getBoundingClientRect().top - rect.top))
-            );
-        } else {
-            localStorage.removeItem(getScrollAnchorKey(sessionId));
-            localStorage.removeItem(getScrollAnchorOffsetKey(sessionId));
-        }
-    } catch (e) { /* ignore */ }
-}
-
-function getSavedScrollAnchorPosition(sessionId) {
-    if (!sessionId) return null;
-    try {
-        var saved = localStorage.getItem(getScrollAnchorKey(sessionId));
-        if (saved == null || saved === '') return null;
-        var n = Number(saved);
-        return Number.isFinite(n) ? n : null;
-    } catch (e) { return null; }
-}
-
-function getSavedScrollAnchorOffset(sessionId) {
-    if (!sessionId) return null;
-    try {
-        var saved = localStorage.getItem(getScrollAnchorOffsetKey(sessionId));
-        if (saved == null || saved === '') return null;
-        var n = Number(saved);
-        return Number.isFinite(n) ? n : null;
-    } catch (e) { return null; }
-}
-
-function getSavedScrollPosition(sessionId) {
-    if (!sessionId) return null;
-    try {
-        var saved = localStorage.getItem(getScrollPositionKey(sessionId));
-        return saved ? parseInt(saved, 10) : null;
-    } catch (e) { return null; }
-}
-
-function saveChatScrollForSession(sid) {
-    if (!chatContainer || !sid) return;
-    saveScrollPosition(sid, chatContainer.scrollTop);
-    saveScrollAnchorPosition(sid);
-}
-
-function clampChatScrollTop(y) {
-    if (!chatContainer) return 0;
-    const max = Math.max(0, chatContainer.scrollHeight - chatContainer.clientHeight);
-    return Math.min(Math.max(0, y), max);
-}
-
-var historySmoothScrollSessionId = '';
-
-function beginHistorySmoothScroll(sessionId) {
-    if (typeof cancelSmoothStreamFollowForHistoryLoad === 'function') {
-        cancelSmoothStreamFollowForHistoryLoad();
-    }
-    historySmoothScrollSessionId = String(sessionId || '');
-}
-
-function endHistorySmoothScroll(sessionId) {
-    var sid = String(sessionId || '');
-    if (!sid || historySmoothScrollSessionId === sid) historySmoothScrollSessionId = '';
-}
-
-function isHistorySmoothScrollActive() {
-    return !!(
-        historySmoothScrollSessionId
-        && historySmoothScrollSessionId === String(currentSessionId || '')
-    );
-}
-
-/**
- * @param {string} sessionId
- * @param {'saved-or-bottom'|'saved-smooth-or-bottom'|'bottom'|'smooth-bottom'} mode
- */
-function applyChatScrollAfterHistoryLoad(sessionId, mode) {
-    if (!chatContainer || !sessionId) return;
-    if (mode === 'smooth-bottom') beginHistorySmoothScroll(sessionId);
-    else endHistorySmoothScroll();
-    var running = isSessionRunning(sessionId)
-        || (typeof isServerStreamActive === 'function' && isServerStreamActive(sessionId));
-
-    // Running sessions always show the newest generated content.
-    if (running) {
-        endHistorySmoothScroll(sessionId);
-        if (typeof scrollCurrentRunningProcessToBottom === 'function') {
-            scrollCurrentRunningProcessToBottom(sessionId);
-        }
-        streamChatNearBottom = true;
-        streamProcNearBottom = true;
-        liveAutoFollow = true;
-        scrollToBottom();
-        return;
-    }
-
-    if (mode === 'saved-or-bottom' || mode === 'saved-smooth-or-bottom') {
-        var smoothRestore = mode === 'saved-smooth-or-bottom';
-        var savedPosition = getSavedScrollPosition(sessionId);
-        var savedAnchor = getSavedScrollAnchorPosition(sessionId);
-        var savedAnchorOffset = getSavedScrollAnchorOffset(sessionId);
-        if (savedAnchor != null && typeof scrollToUserTurnOrLoadOlder === 'function') {
-            requestAnimationFrame(function () {
-                if (sessionId !== currentSessionId) return;
-                void scrollToUserTurnOrLoadOlder(savedAnchor, {
-                    silent: true,
-                    allowFullReload: false,
-                    maxOlderLoads: 2,
-                    instant: !smoothRestore,
-                    viewportOffset: savedAnchorOffset,
-                }).then(function (ok) {
-                    if (ok || sessionId !== currentSessionId || !chatContainer) return;
-                    if (savedPosition !== null && Number.isFinite(Number(savedPosition))) {
-                        var fallbackTop = clampChatScrollTop(Number(savedPosition));
-                        if (smoothRestore && typeof chatContainer.scrollTo === 'function') {
-                            chatContainer.scrollTo({ top: fallbackTop, behavior: 'smooth' });
-                        } else {
-                            setScrollTopImmediate(chatContainer, fallbackTop);
-                        }
-                        streamChatNearBottom = isNearBottom(chatContainer, STREAM_CHAT_NEAR_BOTTOM_PX);
-                        liveAutoFollow = streamChatNearBottom;
-                    } else {
-                        scrollToBottom();
-                    }
-                });
-            });
-            streamChatNearBottom = false;
-            streamProcNearBottom = true;
-            liveAutoFollow = false;
-            return;
-        }
-        if (savedPosition !== null && Number.isFinite(Number(savedPosition))) {
-            var targetTop = clampChatScrollTop(Number(savedPosition));
-            if (smoothRestore && typeof chatContainer.scrollTo === 'function') {
-                chatContainer.scrollTo({ top: targetTop, behavior: 'smooth' });
-            } else {
-                setScrollTopImmediate(chatContainer, targetTop);
-            }
-            streamChatNearBottom = isNearBottom(chatContainer, STREAM_CHAT_NEAR_BOTTOM_PX);
-            streamProcNearBottom = true;
-            liveAutoFollow = streamChatNearBottom;
-            return;
-        }
-    }
-    
-    streamChatNearBottom = true;
-    streamProcNearBottom = true;
-    liveAutoFollow = true;
-    scrollToBottom({ smooth: mode === 'smooth-bottom' });
-}
-
-window.addEventListener('beforeunload', function () {
-    saveChatScrollForSession(currentSessionId);
-});
-document.addEventListener('visibilitychange', function () {
-    if (document.visibilityState === 'hidden') saveChatScrollForSession(currentSessionId);
-    else if (typeof reconcileRunStateFromServer === 'function') {
-        void reconcileRunStateFromServer({ silent: true });
-    }
-    updateUiPresenceActive();
-});
-
-var uiPresenceToken = null;
-var uiPresenceHeartbeatTimer = null;
-function getUiPresenceToken() {
-    if (uiPresenceToken) return uiPresenceToken;
-    var KEY = 'myagent-ui-presence-token';
-    try {
-        var stored = sessionStorage.getItem(KEY);
-        if (stored) {
-            uiPresenceToken = stored;
-            return stored;
-        }
-    } catch (e) { /* private mode / storage disabled */ }
-    uiPresenceToken = 'ui-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 12);
-    try {
-        sessionStorage.setItem(KEY, uiPresenceToken);
-    } catch (e) { /* best effort */ }
-    return uiPresenceToken;
-}
-function getUiPresenceActive() {
-    return document.visibilityState === 'visible' && document.hasFocus();
-}
-function updateUiPresenceActive() {
-    sendUiPresence('update');
-}
-function sendUiPresence(action) {
-    var token = getUiPresenceToken();
-    var payload = JSON.stringify({
-        action: action,
-        token: token,
-        active: getUiPresenceActive(),
-        session_id: typeof currentSessionId === 'string' ? currentSessionId : ''
-    });
-    try {
-        var blob = new Blob([payload], { type: 'application/json' });
-        if (navigator.sendBeacon('/api/ui-presence', blob)) return;
-    } catch (e) { /* fall through to keepalive fetch */ }
-    try {
-        fetch('/api/ui-presence', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: payload,
-            keepalive: true,
-            credentials: 'same-origin'
-        }).catch(function () { /* page is closing; best effort */ });
-    } catch (e) { /* ignore */ }
-}
-function registerUiPresence() {
-    sendUiPresence('register');
-    stopUiPresenceHeartbeat();
-    uiPresenceHeartbeatTimer = setTimeout(registerUiPresence, 10000);
-}
-function stopUiPresenceHeartbeat() {
-    if (uiPresenceHeartbeatTimer) {
-        clearTimeout(uiPresenceHeartbeatTimer);
-        uiPresenceHeartbeatTimer = null;
-    }
-}
-if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', registerUiPresence);
-} else {
-    registerUiPresence();
-}
-window.addEventListener('pagehide', function () {
-    stopUiPresenceHeartbeat();
-    sendUiPresence('unregister');
-});
-window.addEventListener('pageshow', function () {
-    registerUiPresence();
-    if (typeof reconcileRunStateFromServer === 'function') {
-        void reconcileRunStateFromServer({ silent: true });
-    }
-});
-window.addEventListener('focus', function () {
-    if (typeof reconcileRunStateFromServer === 'function') {
-        void reconcileRunStateFromServer({ silent: true });
-    }
-    updateUiPresenceActive();
-});
-window.addEventListener('blur', function () {
-    updateUiPresenceActive();
-});
-
-const WELCOME_HTML = \`<div class="welcome" role="status"><div class="welcome-icon" aria-hidden="true"><img src="/assets/sugar-logo.png" alt="" draggable="false"></div><strong>开始一段新的对话</strong><p>在左侧侧栏新建或选择会话。Enter 发送，Ctrl+Enter / Shift+Enter 换行。</p></div>\`;
-
-function historyLoadScrollsToBottom(sessionId, mode) {
-    if (mode === 'bottom') return true;
-    if (mode === 'saved-or-bottom' || mode === 'saved-smooth-or-bottom') {
-        var savedAnchor = getSavedScrollAnchorPosition(sessionId);
-        if (savedAnchor != null) return false;
-        var savedPosition = getSavedScrollPosition(sessionId);
-        if (savedPosition !== null && Number.isFinite(Number(savedPosition))) return false;
-    }
-    return true;
-}
-
-function waitForChatScrollAfterHistoryLoad(sessionId, mode) {
-    if (!chatContainer || !sessionId) return Promise.resolve(false);
-    if (sessionId !== currentSessionId) return Promise.resolve(false);
-    if (mode === 'smooth-bottom') {
-        return new Promise(function (resolve) {
-            var settled = false;
-            var raf = 0;
-            var startedAt = performance.now();
-            var lastMovementAt = startedAt;
-            var lastTop = chatContainer.scrollTop;
-            var retargetCount = 0;
-            var userEvents = ['wheel', 'touchstart', 'pointerdown'];
-            function cleanup(reachedBottom) {
-                if (settled) return;
-                settled = true;
-                if (raf) cancelAnimationFrame(raf);
-                chatContainer.removeEventListener('scrollend', onScrollEnd);
-                userEvents.forEach(function (eventName) {
-                    chatContainer.removeEventListener(eventName, onUserInterrupt);
-                });
-                endHistorySmoothScroll(sessionId);
-                resolve(!!reachedBottom);
-            }
-            function isAtBottom() {
-                if (!chatContainer) return false;
-                var maxTop = Math.max(0, chatContainer.scrollHeight - chatContainer.clientHeight);
-                return maxTop - chatContainer.scrollTop <= 2;
-            }
-            function onScrollEnd() {
-                if (sessionId !== currentSessionId) {
-                    cleanup(false);
-                    return;
-                }
-                if (isAtBottom()) {
-                    cleanup(true);
-                    return;
-                }
-                if (retargetCount < 3) {
-                    retargetCount += 1;
-                    lastMovementAt = performance.now();
-                    chatContainer.scrollTo({ top: chatContainer.scrollHeight, behavior: 'smooth' });
-                }
-            }
-            function onUserInterrupt() {
-                cleanup(false);
-            }
-            function check(now) {
-                if (settled) return;
-                if (!chatContainer || sessionId !== currentSessionId) {
-                    cleanup(false);
-                    return;
-                }
-                var top = chatContainer.scrollTop;
-                if (Math.abs(top - lastTop) > 0.5) {
-                    lastTop = top;
-                    lastMovementAt = now;
-                }
-                if (isAtBottom() && now - lastMovementAt >= 96) {
-                    cleanup(true);
-                    return;
-                }
-                if (!isAtBottom() && now - lastMovementAt >= 160 && retargetCount < 3) {
-                    retargetCount += 1;
-                    lastMovementAt = now;
-                    chatContainer.scrollTo({ top: chatContainer.scrollHeight, behavior: 'smooth' });
-                }
-                if (now - startedAt >= 5000) {
-                    cleanup(isAtBottom());
-                    return;
-                }
-                raf = requestAnimationFrame(check);
-            }
-            chatContainer.addEventListener('scrollend', onScrollEnd);
-            userEvents.forEach(function (eventName) {
-                chatContainer.addEventListener(eventName, onUserInterrupt, { passive: true });
-            });
-            raf = requestAnimationFrame(check);
-        });
-    }
-    if (historyLoadScrollsToBottom(sessionId, mode)) {
-        return new Promise(function (resolve) {
-            requestAnimationFrame(function () {
-                resolve(true);
-            });
-        });
-    }
-    return Promise.resolve(false);
-}
-
-function setWelcome() {
-    resetSessionHistoryPaging();
-    const vs = getVisibleChatStream();
-    if (vs) {
-        emptyChatStreamKeepingStrip(vs);
-        vs.insertAdjacentHTML('beforeend', WELCOME_HTML);
-    } else {
-        chatContainer.innerHTML = '';
-        ensureVisibleChatStreamSlot();
-        const vs2 = getVisibleChatStream();
-        if (vs2) vs2.insertAdjacentHTML('beforeend', WELCOME_HTML);
-        else chatContainer.innerHTML = WELCOME_HTML;
-    }
-    rebuildToc();
-}
-
-function stripWelcome(ctx) {
-    if (ctx && ctx._subagentBody) return;
-    const root = (ctx && ctx.stream) ? ctx.stream : (getVisibleChatStream() || chatContainer);
-    if (root) root.querySelector('.welcome')?.remove();
-}
-
-function clearChat() { setWelcome(); }
-
-function pathJoinBaseName(baseDir, name) {
-    if (!baseDir) return name || '';
-    if (!name) return baseDir;
-    var d = String(baseDir).replace(/[\\\\/]+$/, '');
-    var useBack = d.indexOf('\\\\') !== -1;
-    return d + (useBack ? '\\\\' : '/') + name;
-}
-
-/** 将「工作区绝对路径」转为 file:// URL（Windows / Unix）；分段编码以支持空格、中文等。 */
-function fileUrlFromFsPath(fsPath) {
-    var norm = String(fsPath || '').replace(/\\\\/g, '/');
-    if (/^\\/\\//.test(norm)) return 'file:' + norm.replace(/\\//g, '/');
-    var encRest = function (rel) {
-        if (!rel) return '';
-        return rel.split('/').map(function (seg) {
-            return encodeURIComponent(seg);
-        }).join('/');
-    };
-    if (/^[A-Za-z]:\\//.test(norm)) {
-        return 'file:///' + norm.slice(0, 3) + encRest(norm.slice(3));
-    }
-    return 'file:///' + encRest(norm.replace(/^\\/+/, ''));
-}
-
-/**
- * 助手常写「保存至：📄 /报告.md」——以 / 开头表示相对工作区根目录的路径（非 URL）。
- */
-function joinWorkDirAndRelativeSlashPath(workDir, slashPath) {
-    var rel = String(slashPath || '').replace(/^\\/+/, '');
-    if (!rel || !workDir) return null;
-    var d = String(workDir).replace(/[\\\\/]+$/, '');
-    var useBack = d.indexOf('\\\\') !== -1;
-    var segs = rel.split(/\\/+/).filter(Boolean);
-    if (!segs.length) return null;
-    var tail = segs.join(useBack ? '\\\\' : '/');
-    return d + (useBack ? '\\\\' : '/') + tail;
-}
-
-function trimTrailingPathPunct(s) {
-    var t = String(s || '').trim();
-    var closerPairs = {
-        ')': '(',
-        ']': '[',
-        '\\uFF09': '\\uFF08',
-        '\\u3011': '\\u3010'
-    };
-    var changed = true;
-    while (changed && t) {
-        changed = false;
-        var withoutPunct = t.replace(/[，。、；：』」\\.,;:!?'" ]+$/g, '').trimEnd();
-        if (withoutPunct !== t) {
-            t = withoutPunct;
-            changed = true;
-        }
-        var close = t.charAt(t.length - 1);
-        var open = closerPairs[close];
-        if (!open) continue;
-        var openCount = 0;
-        var closeCount = 0;
-        for (var i = 0; i < t.length; i += 1) {
-            if (t.charAt(i) === open) openCount += 1;
-            else if (t.charAt(i) === close) closeCount += 1;
-        }
-        if (closeCount > openCount) {
-            t = t.slice(0, -1).trimEnd();
-            changed = true;
-        }
-    }
-    return t;
-}
-
-function stripPathWrappingQuotes(s) {
-    var t = String(s || '').trim();
-    if (t.length >= 2) {
-        var a = t.charAt(0);
-        var b = t.charAt(t.length - 1);
-        if ((a === '"' && b === '"') || (a === "'" && b === "'") || (a === '\`' && b === '\`')) {
-            return t.slice(1, -1).trim();
-        }
-    }
-    return t;
-}
-
-function stripPathLineSuffix(s) {
-    var t = String(s || '').trim();
-    return t.replace(new RegExp('(\\\\.(' + LINKIFY_EXT_FRAGMENT + ')):(\\\\d+)(?::\\\\d+)?$', 'i'), '.$2');
-}
-
-function decodePathPercentEscapes(s) {
-    var t = String(s || '');
-    if (t.indexOf('%') < 0) return t;
-    return t.replace(/(?:%[0-9A-Fa-f]{2})+/g, function (part) {
-        try {
-            return decodeURIComponent(part);
-        } catch (e) {
-            return part;
-        }
-    });
-}
-
-function cleanPathTokenForLink(s) {
-    var t = linkifyNormalizePathToken(String(s || '').trim());
-    if (!/^https?:\\/\\//i.test(t)) t = decodePathPercentEscapes(t);
-    if (!t) return '';
-    var a = t.charAt(0);
-    var b = t.charAt(t.length - 1);
-    if (t.length >= 2 && ((a === '"' && b === '"') || (a === "'" && b === "'") || (a === '\`' && b === '\`'))) {
-        return stripPathLineSuffix(trimTrailingPathPunct(t.slice(1, -1).trim()));
-    }
-    return stripPathLineSuffix(stripPathWrappingQuotes(trimTrailingPathPunct(t)));
-}
-
-/** 统一全角标点/数字等，便于识别「．xlsx」「路径：／」等变体 */
-function linkifyNormalizePathToken(s) {
-    return String(s || '')
-        .replace(/\\uFF0F/g, '/')
-        .replace(/\\uFF3C/g, '\\\\')
-        .replace(/\\uFF1A/g, ':')
-        .replace(/\\uFF0E/g, '.')
-        .replace(/[\\u2018\\u2019\\u201B\\u2032\\uFF07]/g, "'")
-        .replace(/[\\u201C\\u201D\\u201E\\u2033\\uFF02]/g, '"');
-}
-
-/** 可链转「工作区下文件」的已知后缀（与 linkify / 虚拟路径规则共用） */
-var LINKIFY_EXT_FRAGMENT = (
-    'md|markdown|txt|py|jsx?|tsx?|mjs|cjs|json|ya?ml|toml|xml|html?|htm|css|s?css|less|sass|scss|' +
-    'xlsx?|xlsm?|xlsb?|xlt|csv|tsv|ods|numbers|et|' +
-    'pdf|docx?|docm?|dotx?|rtf|odt|pages|' +
-    'pptx?|pptm?|potx?|odp|key|' +
-    'png|jpe?g|gif|webp|svg|ico|bmp|tiff?|heic|avif|jfif|raw|' +
-    'zip|7z|rar|gz|tgz|tar|bz2|xz|lz4|zst|' +
-    'mp3|mp4|m4a|aac|flac|wav|ogg|webm|mov|avi|mkv|' +
-    'log|ini|env|cfg|conf|properties|plist|' +
-    'sh|bash|zsh|fish|bat|cmd|ps1|' +
-    'rs|go|java|kt|kts|swift|scala|rb|php|pl|pm|' +
-    '[ch]pp?|cc|hh|mm|hpp|cs|fs|fsx|vb|' +
-    'vue|svelte|elm|dart|ex|exs|erl|hrl|' +
-    'ipynb|rmd|qmd|tex|bib|cls|sty|rst|adoc|org|' +
-    'sql|graphql|proto|thrift|cmake|gradle|mk|' +
-    'wasm|wat|lock|patch|diff|rej|har|drawio|vsix|' +
-    'sqlite3?|db|duckdb|mdb|accdb|parquet|feather|arrow|orc|ndjson|' +
-    'ttf|otf|woff2?|eot|apk|ipa|exe|msi|dmg|iso|pkg|deb|rpm|bin|so|dylib|dll|lib|o|a|map|' +
-    'epub|mobi|azw3|chm|cert|pem|crt|cer|pub|asc|p12|pfx|keystore'
-);
-
-var _linkifyKnownExtRe = null;
-function linkifyKnownExtRegex() {
-    if (!_linkifyKnownExtRe) {
-        _linkifyKnownExtRe = new RegExp('\\\\.(' + LINKIFY_EXT_FRAGMENT + ')\\\\b', 'i');
-    }
-    return _linkifyKnownExtRe;
-}
-
-/**
- * 以 / 开头的「工作区相对路径」是否做成可点击链接。
- * 仅允许带常见文件后缀的路径，避免 ARPU/DOU/MOU、日期 2024/01 等内联斜杠被当成目录。
- * （仍排除明显的 POSIX/Git Bash 根路径，以免误链。）
- */
-function workspaceRelativePathAutoLinkOk(slashPath) {
-    var t = linkifyNormalizePathToken(String(slashPath || '').trim());
-    if (!t || t.charAt(0) !== '/' || t.charAt(1) === '/') return false;
-    var posixTop = /^\\/(mingw\\d*|usr|bin|etc|proc|dev|sys|opt|var|run|lib|lib64|snap|sbin|boot|srv|tmp|media|mnt)(\\/|$)/i;
-    var msysDrive = /^\\/[a-z](\\/|$)/i;
-    var webish = /^\\/(api|v\\d+|static|assets|node_modules)(\\/|$)/i;
-    if (posixTop.test(t) || msysDrive.test(t) || webish.test(t)) return false;
-    return linkifyKnownExtRegex().test(t);
-}
-
-function workspaceRelativePathNoSlashAutoLinkOk(relPath) {
-    var t = linkifyNormalizePathToken(String(relPath || '').trim());
-    if (!t || t.charAt(0) === '/' || t.charAt(0) === '\\\\' || /^https?:\\/\\//i.test(t)) return false;
-    if (/^([A-Za-z]):[\\\\/]/.test(t) || /^\\\\\\\\/.test(t)) return false;
-    if (!/[\\\\/]/.test(t)) return false;
-    if (/[<>:'"|\\r\\n]/.test(t)) return false;
-    if (/(^|[\\\\/])\\.{1,2}([\\\\/]|$)/.test(t)) return false;
-    return linkifyKnownExtRegex().test(t);
-}
-
-function workspaceRelFromNormalizedAbs(absNorm, workDir) {
-    if (!absNorm || !workDir) return null;
-    var base = String(workDir).replace(/\\\\/g, '/').replace(/\\/+$/, '');
-    var absLower = absNorm.toLowerCase();
-    var baseLower = base.toLowerCase();
-    if (absLower === baseLower) return '';
-    if (absLower.indexOf(baseLower + '/') === 0) {
-        return absNorm.slice(base.length).replace(/^\\/+/, '');
-    }
-    return null;
-}
-
-function workspaceRelFromForeignWorkspaceAbs(absNorm, workDir) {
-    if (!absNorm || !workDir) return null;
-    var baseName = String(workDir || '').replace(/\\\\/g, '/').replace(/\\/+$/, '').split('/').filter(Boolean).pop();
-    if (!baseName) return null;
-    var parts = String(absNorm || '').replace(/\\\\/g, '/').split('/').filter(Boolean);
-    for (var i = parts.length - 2; i >= 0; i -= 1) {
-        if (parts[i].toLowerCase() === baseName.toLowerCase()) {
-            return parts.slice(i + 1).join('/');
-        }
-    }
-    return null;
-}
-
-function stripWorkspaceRootPrefixFromRelPath(relPath) {
-    var t = String(relPath || '').replace(/\\\\/g, '/').replace(/^\\/+/, '');
-    var w = (typeof window.__WORK_DIR__ === 'string') ? window.__WORK_DIR__ : '';
-    var baseName = String(w || '').replace(/\\\\/g, '/').replace(/\\/+$/, '').split('/').filter(Boolean).pop();
-    if (baseName && t.toLowerCase().indexOf(baseName.toLowerCase() + '/') === 0) {
-        return t.slice(baseName.length + 1);
-    }
-    return t;
-}
-
-function getCurrentSessionDataPath() {
-    var sdir = (typeof window.__SESSIONS_DIR__ === 'string') ? window.__SESSIONS_DIR__ : '';
-    if (sdir && currentSessionId) return pathJoinBaseName(sdir, currentSessionId);
-    var w = (typeof window.__WORK_DIR__ === 'string') ? window.__WORK_DIR__ : '';
-    if (w && currentSessionId) return pathJoinBaseName(pathJoinBaseName(w, 'sessions'), currentSessionId);
-    return '';
-}
-
-/** 标题栏与侧栏：工作目录绝对路径与会话 ID（与服务端 window.__WORK_DIR__ 一致） */
-function buildSessionWorkspaceSubtitle(sessionId) {
-    var w = (typeof window.__WORK_DIR__ === 'string') ? window.__WORK_DIR__ : '';
-    if (!sessionId) return w || '';
-    if (w) {
-        var workspaceLink = '<a href="#" data-workspace-open="' + w + '" class="msg-link-workspace-open" style="color:inherit;text-decoration:inherit;cursor:pointer;" data-ui-tip="打开工作目录">' + w + '</a>';
-        var sessionPath = 'sessions/' + sessionId;
-        var sessionLink = '<a href="#" data-workspace-open="' + sessionPath + '" class="msg-link-workspace-open" style="color:inherit;text-decoration:inherit;cursor:pointer;" data-ui-tip="打开会话目录">' + sessionId + '</a>';
-        return workspaceLink + ' | ' + sessionLink;
-    }
-    return String(sessionId);
-}
-
-/** 侧栏每条会话标题下方：最近一次用户提问（服务端字段 last_user_preview） */
-function formatSessionListSubtitle(sess) {
-    if (!sess) return '暂无提问';
-    var t = sess.last_user_preview != null ? String(sess.last_user_preview).trim() : '';
-    return t || '暂无提问';
-}
-
-/** 侧栏每条会话标题下方第二行：最后修改日期时间 */
-function sessionListUiEnglish() {
-    return (document.documentElement && document.documentElement.getAttribute('data-language') === 'en')
-        || String(localStorage.getItem('myagent-language') || '') === 'en';
-}
-
-function localizeSessionPlaceholderName(name) {
-    var s = String(name == null ? '' : name);
-    if (sessionListUiEnglish()) {
-        if (s === '新会话' || s === '新对话' || s === '新建对话') return 'New session';
-        if (s === '未命名') return 'Untitled';
-        return s;
-    }
-    if (s === 'New session' || s === 'New chat') return '新会话';
-    if (s === 'Untitled') return '未命名';
-    return s;
-}
-
-function formatSessionListDate(sess) {
-    if (!sess) return '';
-    var raw = sess.last_activity_at || sess.updated_at || sess.created_at || '';
-    var ts = Date.parse(String(raw));
-    if (!Number.isFinite(ts)) {
-        var numeric = Number(raw);
-        if (Number.isFinite(numeric) && numeric > 0) ts = numeric;
-    }
-    if (!Number.isFinite(ts) || ts <= 0) return '';
-    var d = new Date(ts);
-    var now = new Date();
-    var english = sessionListUiEnglish();
-    var pad = function (v) { return String(v).padStart(2, '0'); };
-    var time = pad(d.getHours()) + ':' + pad(d.getMinutes());
-    if (d.toDateString() === now.toDateString()) return (english ? 'Today ' : '今天 ') + time;
-    var yesterday = new Date(now.getTime() - 86400000);
-    if (d.toDateString() === yesterday.toDateString()) return (english ? 'Yesterday ' : '昨天 ') + time;
-    if (english) {
-        var months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-        var yearSuffix = d.getFullYear() === now.getFullYear() ? '' : (' ' + d.getFullYear());
-        return months[d.getMonth()] + ' ' + d.getDate() + yearSuffix + ' ' + time;
-    }
-    var prefix = d.getFullYear() === now.getFullYear() ? '' : (d.getFullYear() + '年');
-    return prefix + (d.getMonth() + 1) + '月' + d.getDate() + '日 ' + time;
-}
-
-function sessionDateIcon() {
-    return '<svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>';
-}
-
-function buildSessionItemTooltipFromParts(name, dateLine, question) {
-    var english = sessionListUiEnglish();
-    var lines = [];
-    lines.push((english ? 'Session: ' : '会话名称：') + String(name == null ? '' : name));
-    if (dateLine) lines.push((english ? 'Time: ' : '时间：') + dateLine);
-    lines.push((english ? 'Last question: ' : '最近提问：') + String(question == null ? '' : question));
-    return lines.join('\\n');
-}
-
-function buildSessionItemTooltip(sess) {
-    if (!sess) return '';
-    var english = sessionListUiEnglish();
-    var name = localizeSessionPlaceholderName(sess.name);
-    var dateLine = formatSessionListDate(sess);
-    var question = sess.last_user_preview != null ? String(sess.last_user_preview).trim() : '';
-    return buildSessionItemTooltipFromParts(
-        name || (english ? 'Untitled' : '未命名'),
-        dateLine,
-        question || (english ? 'No questions yet' : '暂无提问')
-    );
-}
-
-/** 与服务端 _normalize_sidebar_preview_text 对齐：折叠空白、180 字符、省略号 */
-function normalizeSidebarPreviewText(text, maxLen) {
-    maxLen = maxLen || 180;
-    var s = String(text || '').trim();
-    if (!s) return '';
-    var oneLine = s.split(/\\s+/).join(' ');
-    if (oneLine.length > maxLen) return oneLine.slice(0, maxLen - 1) + '\\u2026';
-    return oneLine;
-}
-
-/** 发送后立即更新侧栏「最近提问」（与服务器摘要规则一致）；稍后 refreshSingleSessionRow 仍会校正 */
-function updateSidebarLastUserPreviewImmediate(sessionId, questionText) {
-    if (!sessionId || !sessionsList) return;
-    var nameEl = sessionsList.querySelector('.session-name[data-id="' + sessionId + '"]');
-    var div = nameEl && nameEl.closest('.session-item');
-    if (!div) return;
-    var wsEl = div.querySelector('.session-last-query');
-    if (!wsEl) return;
-    var line = normalizeSidebarPreviewText(questionText, 180);
-    if (!line) line = '暂无提问';
-    wsEl.textContent = line;
-    var dateEl = div.querySelector('.session-item-date');
-    var dateLine = '';
-    if (dateEl) {
-        dateLine = formatSessionListDate({ last_activity_at: new Date().toISOString() });
-        if (dateLine) {
-            dateEl.innerHTML = sessionDateIcon() + dateLine;
-        } else {
-            dateEl.textContent = '';
-        }
-    }
-    var nameText = nameEl ? (nameEl.getAttribute('data-original') || nameEl.textContent || '') : '';
-    nameText = localizeSessionPlaceholderName(nameText);
-    var itemTip = buildSessionItemTooltipFromParts(nameText, dateLine, line);
-    div.setAttribute('data-ui-tip', itemTip);
-    bindUiHoverTip(div);
-}
-
-function updateSessionTitle() {
-    const br = document.getElementById('breadcrumb-text');
-    const sub = document.getElementById('breadcrumb-sub');
-    if (!br || !sub) return;
-    if (!currentSessionId) {
-        br.textContent = '未选择会话';
-        sub.textContent = '';
-        if (typeof syncTitlebarSessionMenu === 'function') syncTitlebarSessionMenu(null);
-        setContextTokenLabel(null, null);
-        return;
-    }
-    const sess = selectCurrentSession();
-    const el = document.querySelector('.session-name[data-id="' + currentSessionId + '"]');
-    const raw = sess && sess.name != null ? String(sess.name) : (el ? (el.getAttribute('data-original') || el.textContent || '') : '');
-    const name = localizeSessionPlaceholderName((raw && raw.trim()) ? raw.trim() : 'Session');
-    br.textContent = name;
-    sub.innerHTML = buildSessionWorkspaceSubtitle(currentSessionId);
-    if (typeof syncTitlebarSessionMenu === 'function') syncTitlebarSessionMenu(sess || { id: currentSessionId, name: raw });
-    initUiHoverTips(sub);
-}
-
-function ensureMermaidInitialized(api) {
-    var mermaidApi = api || window.mermaid;
-    if (mermaidInitialized || !mermaidApi) return;
-    try {
-        var light = document.documentElement.classList.contains('theme-light');
-        mermaidApi.initialize({
-            startOnLoad: false,
-            theme: light ? 'neutral' : 'dark',
-            securityLevel: 'loose',
-            themeVariables: {
-                fontSize: '11px',
-                fontFamily: 'Plus Jakarta Sans, system-ui, sans-serif',
-            },
-            flowchart: { htmlLabels: true, curve: 'basis' },
-            sequence: { useMaxWidth: true },
-        });
-        mermaidInitialized = true;
-    } catch (e) { /* ignore */ }
-}
-
-/**
- * flowchart 节点 E[文本] 内若含 <br> 且又含裸引号 "，Mermaid 10.9 会报 got 'STR'。
- * 将此类标签整体包成 ["..."] 并转义内部 ASCII 引号。
- */
-function fixFlowchartBracketLabelsWithLineBreak(text) {
-    return text.replace(/\\[[^\\]\\n\\r]*<br\\s*\\/?[^\\]\\n\\r]*\\]/gi, function (match) {
-        var inner = match.slice(1, -1);
-        var s = inner.trim();
-        if (!s) return match;
-        if (s.charAt(0) === '"' && s.charAt(s.length - 1) === '"') return match;
-        var escaped = s.replace(/\\\\/g, '\\\\\\\\').replace(/"/g, '\\\\"');
-        return '["' + escaped + '"]';
-    });
-}
-
-/** 未用引号包裹的 [] 节点里出现裸 " 时同样会触发词法错误 */
-function fixFlowchartBracketLabelsWithRawQuotes(text) {
-    return text.replace(/\\[[^\\]\\n\\r]*"[^\\]\\n\\r]*\\]/g, function (match) {
-        var inner = match.slice(1, -1);
-        var s = inner.trim();
-        if (!s) return match;
-        if (s.charAt(0) === '"' && s.charAt(s.length - 1) === '"') return match;
-        var escaped = s.replace(/\\\\/g, '\\\\\\\\').replace(/"/g, '\\\\"');
-        return '["' + escaped + '"]';
-    });
-}
-
-/** 去除 LLM/粘贴带来的杂讯，减少 Mermaid 10.9+ 报 Syntax error in text */
-function normalizeMermaidSource(raw) {
-    var t = String(raw || '')
-        .replace(/^\\uFEFF/, '')
-        .replace(/\\u200b|\\u200c|\\u200d/g, '')
-        .replace(/\\r\\n/g, '\\n')
-        .replace(/\\r/g, '\\n');
-    t = t.replace(/^\\s*\`\`\`(?:mermaid)?\\s*\\n/i, '');
-    t = t.replace(/\\n\\s*\`\`\`\\s*$/i, '');
-    t = t.replace(/[\\u201C\\u201D\\u201E\\u00AB\\u00BB]/g, '"');
-    t = t.replace(/<br\\s*\\/?>/gi, '<br/>');
-    t = fixFlowchartBracketLabelsWithLineBreak(t);
-    t = fixFlowchartBracketLabelsWithRawQuotes(t);
-    var lines = t.split('\\n');
-    if (lines.length && lines[0]) {
-        lines[0] = lines[0].replace(/\\s*[\\uFF1A：]\\s*$/, '');
-    }
-    t = lines.map(function (line) { return line.replace(/\\s+$/g, ''); }).join('\\n').trim();
-    return t;
-}
-
-function showMermaidRenderError(el, source, err) {
-    el.classList.add('mermaid-error');
-    el.removeAttribute('data-processed');
-    var msg = 'Mermaid 无法解析此图';
-    if (err) {
-        if (typeof err === 'string') msg = err;
-        else if (err.str) msg = String(err.str);
-        else if (err.message) msg = String(err.message);
-    }
-    el.innerHTML = '<div class="mermaid-error-msg">' + escapeHtml(msg) + '</div>'
-        + '<pre class="mermaid-raw">' + escapeHtml(source) + '</pre>';
-}
-
-var MERMAID_DOWNLOAD_SVG = '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/></svg>';
-var MERMAID_ZOOM_SVG = '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 3h6v6"/><path d="M21 3l-7 7"/><path d="M9 21H3v-6"/><path d="M3 21l7-7"/></svg>';
-var mermaidZoomKeyHandler = null;
-
-function closeMermaidZoom() {
-    var root = document.getElementById('mermaid-zoom-root');
-    if (!root) return;
-    root.classList.remove('is-open');
-    root.setAttribute('aria-hidden', 'true');
-    root.innerHTML = '';
-    if (mermaidZoomKeyHandler) {
-        document.removeEventListener('keydown', mermaidZoomKeyHandler);
-        mermaidZoomKeyHandler = null;
-    }
-}
-
-function ensureMermaidZoomRoot() {
-    var root = document.getElementById('mermaid-zoom-root');
-    if (root) return root;
-    root = document.createElement('div');
-    root.id = 'mermaid-zoom-root';
-    root.className = 'mermaid-zoom-overlay';
-    root.setAttribute('aria-hidden', 'true');
-    document.body.appendChild(root);
-    return root;
-}
-
-function openMermaidZoom(sourceEl) {
-    if (!sourceEl) return;
-    var svg = sourceEl.querySelector('svg');
-    if (!svg) return;
-    var root = ensureMermaidZoomRoot();
-    var clone = svg.cloneNode(true);
-    clone.removeAttribute('style');
-    clone.setAttribute('preserveAspectRatio', 'xMidYMid meet');
-    clone.classList.add('mermaid-zoom-svg');
-    root.innerHTML = '';
-
-    var panel = document.createElement('div');
-    panel.className = 'mermaid-zoom-panel';
-    panel.setAttribute('role', 'dialog');
-    panel.setAttribute('aria-modal', 'true');
-    panel.setAttribute('aria-label', 'Mermaid 流程图放大预览');
-
-    var closeBtn = document.createElement('button');
-    closeBtn.type = 'button';
-    closeBtn.className = 'mermaid-zoom-close';
-    closeBtn.setAttribute('aria-label', '关闭放大预览');
-    closeBtn.setAttribute('data-ui-tip', '关闭');
-    closeBtn.innerHTML = '<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>';
-
-    var stage = document.createElement('div');
-    stage.className = 'mermaid-zoom-stage';
-    stage.appendChild(clone);
-    panel.appendChild(closeBtn);
-    panel.appendChild(stage);
-    root.appendChild(panel);
-
-    closeBtn.onclick = closeMermaidZoom;
-    root.onclick = function (e) {
-        if (e.target === root) closeMermaidZoom();
-    };
-    mermaidZoomKeyHandler = function (e) {
-        if (e.key === 'Escape') {
-            e.preventDefault();
-            closeMermaidZoom();
-        }
-    };
-    document.addEventListener('keydown', mermaidZoomKeyHandler);
-    root.classList.add('is-open');
-    root.setAttribute('aria-hidden', 'false');
-    initUiHoverTips(root);
-    requestAnimationFrame(function () { closeBtn.focus(); });
-}
-
-function getMermaidSvgSize(svg) {
-    var box = svg && svg.viewBox && svg.viewBox.baseVal ? svg.viewBox.baseVal : null;
-    var w = box && box.width ? box.width : 0;
-    var h = box && box.height ? box.height : 0;
-    if (!w || !h) {
-        var rect = svg.getBoundingClientRect ? svg.getBoundingClientRect() : null;
-        w = rect && rect.width ? rect.width : w;
-        h = rect && rect.height ? rect.height : h;
-    }
-    w = Math.max(1, Math.ceil(w || 1200));
-    h = Math.max(1, Math.ceil(h || 800));
-    return { width: w, height: h };
-}
-
-function triggerDownloadBlob(blob, filename) {
-    if (!blob) return;
-    var url = URL.createObjectURL(blob);
-    var a = document.createElement('a');
-    a.href = url;
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
-}
-
-function downloadMermaidPng(sourceEl) {
-    if (!sourceEl) return;
-    var svg = sourceEl.querySelector('svg');
-    if (!svg) return;
-    var size = getMermaidSvgSize(svg);
-    var clone = svg.cloneNode(true);
-    clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
-    clone.setAttribute('width', String(size.width));
-    clone.setAttribute('height', String(size.height));
-    if (!clone.getAttribute('viewBox')) clone.setAttribute('viewBox', '0 0 ' + size.width + ' ' + size.height);
-    var xml = new XMLSerializer().serializeToString(clone);
-    var svgBlob = new Blob([xml], { type: 'image/svg+xml;charset=utf-8' });
-    var url = URL.createObjectURL(svgBlob);
-    var img = new Image();
-    img.onload = function () {
-        try {
-            var scale = Math.min(3, Math.max(1, window.devicePixelRatio || 1));
-            var canvas = document.createElement('canvas');
-            canvas.width = Math.ceil(size.width * scale);
-            canvas.height = Math.ceil(size.height * scale);
-            var ctx = canvas.getContext('2d');
-            if (!ctx) throw new Error('canvas unavailable');
-            ctx.scale(scale, scale);
-            ctx.fillStyle = getUiThemeCanvasBackground();
-            ctx.fillRect(0, 0, size.width, size.height);
-            ctx.drawImage(img, 0, 0, size.width, size.height);
-            canvas.toBlob(function (blob) {
-                triggerDownloadBlob(blob, 'mermaid-' + new Date().toISOString().replace(/[:.]/g, '-') + '.png');
-            }, 'image/png');
-        } catch (e) {
-            triggerDownloadBlob(svgBlob, 'mermaid-' + new Date().toISOString().replace(/[:.]/g, '-') + '.svg');
-        } finally {
-            URL.revokeObjectURL(url);
-        }
-    };
-    img.onerror = function () {
-        URL.revokeObjectURL(url);
-        triggerDownloadBlob(svgBlob, 'mermaid-' + new Date().toISOString().replace(/[:.]/g, '-') + '.svg');
-    };
-    img.src = url;
-}
-
-function enhanceMermaidZoom(el) {
-    if (!el || el.classList.contains('mermaid-error')) return;
-    if (el.querySelector('.mermaid-zoom-btn')) return;
-    if (!el.querySelector('svg')) return;
-    el.classList.add('mermaid-has-zoom');
-    var downloadBtn = document.createElement('button');
-    downloadBtn.type = 'button';
-    downloadBtn.className = 'mermaid-download-btn';
-    downloadBtn.setAttribute('aria-label', '下载保存 Mermaid 流程图为图片');
-    downloadBtn.setAttribute('data-ui-tip', '下载图片');
-    downloadBtn.innerHTML = MERMAID_DOWNLOAD_SVG;
-    downloadBtn.addEventListener('click', function (e) {
-        e.preventDefault();
-        e.stopPropagation();
-        downloadMermaidPng(el);
-    });
-    var btn = document.createElement('button');
-    btn.type = 'button';
-    btn.className = 'mermaid-zoom-btn';
-    btn.setAttribute('aria-label', '放大显示 Mermaid 流程图');
-    btn.setAttribute('data-ui-tip', '放大显示');
-    btn.innerHTML = MERMAID_ZOOM_SVG;
-    btn.addEventListener('click', function (e) {
-        e.preventDefault();
-        e.stopPropagation();
-        openMermaidZoom(el);
-    });
-    el.appendChild(downloadBtn);
-    el.appendChild(btn);
-    initUiHoverTips(el);
-}
-
-function upgradeMermaidBlocks(root) {
-    if (!root) return;
-    root.querySelectorAll('pre > code').forEach(function (codeEl) {
-        var cls = codeEl.getAttribute('class') || '';
-        if (!/\\bmermaid\\b/.test(cls)) return;
-        var pre = codeEl.parentNode;
-        if (!pre || pre.tagName !== 'PRE') return;
-        var div = document.createElement('div');
-        div.className = 'mermaid';
-        div.textContent = normalizeMermaidSource(codeEl.textContent || '');
-        pre.parentNode.replaceChild(div, pre);
-    });
-}
-
-/** 无盘符、无路径分隔符的「纯文件名 + 已知后缀」→ 相对工作区根解析 */
-function makeHrefFromAutoLinkToken(s) {
-    var t = cleanPathTokenForLink(s);
-    if (!t) return null;
-    if (/^https?:\\/\\//i.test(t)) return t;
-    var m = /^([A-Za-z]):[\\\\/](.*)$/.exec(t);
-    if (m) {
-        var rest = (m[2] || '').replace(/\\\\/g, '/');
-        return fileUrlFromFsPath(m[1].toUpperCase() + ':/' + rest);
-    }
-    if (t.charAt(0) === '/' && t.charAt(1) !== '/') {
-        var unixWorkDir = (typeof window.__WORK_DIR__ === 'string') ? window.__WORK_DIR__.replace(/\\/+$/, '') : '';
-        if (unixWorkDir.charAt(0) === '/' && (t === unixWorkDir || t.indexOf(unixWorkDir + '/') === 0)) {
-            return fileUrlFromFsPath(t);
-        }
-        if (!workspaceRelativePathAutoLinkOk(t)) return null;
-        var w = (typeof window.__WORK_DIR__ === 'string') ? window.__WORK_DIR__ : '';
-        var abs = joinWorkDirAndRelativeSlashPath(w, t);
-        if (abs) return fileUrlFromFsPath(abs);
-    }
-    if (workspaceRelativePathNoSlashAutoLinkOk(t)) {
-        var wr = (typeof window.__WORK_DIR__ === 'string') ? window.__WORK_DIR__ : '';
-        if (!wr) return null;
-        var absRel = pathJoinBaseName(wr, t.replace(/\\\\/g, '/'));
-        if (absRel) return fileUrlFromFsPath(absRel);
-    }
-    return null;
-}
-
-/**
- * 解析为可交给 /api/open-workspace-file 的路径：工作区相对、Windows/UNC 绝对路径（均由服务端校验须在 WORK_DIR 内）。
- */
-function pathTokenToWorkspaceOpenRel(token) {
-    var t = cleanPathTokenForLink(token);
-    if (!t || /^https?:\\/\\//i.test(t)) return null;
-    var w = (typeof window.__WORK_DIR__ === 'string') ? window.__WORK_DIR__ : '';
-    var uncFlat = t.replace(/\\//g, '\\\\');
-    if (/^\\\\\\\\([^\\\\]+)\\\\([^\\\\]+)/i.test(uncFlat)) {
-        return uncFlat;
-    }
-    var win = /^([A-Za-z]):[\\\\/](.*)$/.exec(t);
-    if (win) {
-        var rest = (win[2] || '').replace(/\\\\/g, '/');
-        var absNorm = (win[1].toUpperCase() + ':/' + rest).replace(/\\/+/g, '/');
-        if (w) {
-            var absRel = workspaceRelFromNormalizedAbs(absNorm, w);
-            if (absRel != null) return absRel;
-            var foreignRel = workspaceRelFromForeignWorkspaceAbs(absNorm, w);
-            if (foreignRel != null) return foreignRel;
-        }
-        return absNorm;
-    }
-    if (!w) return null;
-    var slashRooted = t.replace(/\\\\/g, '/');
-    if (slashRooted.charAt(0) === '/' && slashRooted.charAt(1) !== '/') {
-        var unixRoot = String(w || '').replace(/\\\\/g, '/').replace(/\\/+$/, '');
-        if (unixRoot.charAt(0) === '/'
-            && (slashRooted === unixRoot || slashRooted.indexOf(unixRoot + '/') === 0)) {
-            return slashRooted;
-        }
-        var wDrive = /^([A-Za-z]):[\\\\/]/.exec(String(w || ''));
-        if (wDrive) {
-            var rootedAbs = (wDrive[1].toUpperCase() + ':' + slashRooted).replace(/\\/+/g, '/');
-            var rootedRel = workspaceRelFromNormalizedAbs(rootedAbs, w);
-            if (rootedRel != null) return rootedRel;
-        }
-        if (!workspaceRelativePathAutoLinkOk(slashRooted)) return null;
-        return slashRooted.replace(/^\\/+/, '');
-    }
-    if (t === '.env' && typeof window.__APP_DOTENV_PATH__ === 'string' && window.__APP_DOTENV_PATH__) {
-        return window.__APP_DOTENV_PATH__;
-    }
-    var relPath = stripWorkspaceRootPrefixFromRelPath(t);
-    if (workspaceRelativePathNoSlashAutoLinkOk(relPath)) return relPath;
-    return null;
-}
-
-function decodeMarkdownHrefPathTarget(href) {
-    var raw = String(href || '').trim();
-    if (!raw) return '';
-    try { raw = decodeURI(raw); } catch (e) { /* keep raw */ }
-    raw = decodePathPercentEscapes(raw);
-    try { raw = decodeURIComponent(raw); } catch (e2) { /* keep partially decoded raw */ }
-    return stripPathWrappingQuotes(trimTrailingPathPunct(raw));
-}
-
-function markdownHrefToWorkspaceOpenRel(href) {
-    var raw = decodeMarkdownHrefPathTarget(href);
-    if (!raw || raw.charAt(0) === '#') return null;
-    if (/^(https?|mailto|tel|javascript|data|blob):/i.test(raw)) return null;
-    if (/^[A-Za-z][A-Za-z0-9+.-]*:/i.test(raw) && !/^[A-Za-z]:[\\\\/]/.test(raw) && !/^file:\\/\\//i.test(raw)) {
-        return null;
-    }
-    var rel = pathTokenToWorkspaceOpenRel(raw);
-    if (rel) return rel;
-    if (/^file:\\/\\//i.test(raw)) {
-        var fsPath = raw.replace(/^file:\\/\\/\\/?/i, '');
-        fsPath = decodePathPercentEscapes(fsPath);
-        if (/^[A-Za-z]:[\\\\/]/.test(fsPath)) return fsPath.replace(/\\\\/g, '/');
-        return '/' + fsPath.replace(/^\\/+/, '').replace(/\\\\/g, '/');
-    }
-    if (/^[A-Za-z]:[\\\\/]/.test(raw) || /^\\\\\\\\/.test(raw)) return raw.replace(/\\\\/g, '/');
-    if (/[\\\\/]/.test(raw)) return stripWorkspaceRootPrefixFromRelPath(raw);
-    return stripWorkspaceRootPrefixFromRelPath(raw);
-}
-
-function workspaceOpenDisplayLabel(original, wsRel) {
-    var rel = String(wsRel || '').replace(/\\\\/g, '/').replace(/\\/+$/, '');
-    var name = rel.split('/').filter(Boolean).pop();
-    if (name) return '@' + name;
-    var raw = stripPathWrappingQuotes(trimTrailingPathPunct(original || ''));
-    name = raw.replace(/\\\\/g, '/').replace(/\\/+$/, '').split('/').filter(Boolean).pop();
-    return name ? ('@' + name) : raw;
-}
-
-function normalizeInputPathTokenIdentity(path) {
-    var s = stripPathWrappingQuotes(String(path || '').trim()).replace(/\\\\/g, '/').replace(/\\/+$/, '');
-    if (/^[A-Za-z]:\\//.test(s) || /^\\/\\//.test(s)) return s.toLowerCase();
-    return s;
-}
-
-function uniqueInputPathDisplayLabel(original, wsRel, preferredLabel) {
-    var stored = stripPathWrappingQuotes(original || '');
-    var storedIdentity = normalizeInputPathTokenIdentity(stored);
-    if (!preferredLabel) preferredLabel = workspaceOpenDisplayLabel(original, wsRel);
-    if (!preferredLabel) return '';
-    if (!inputPathTokenMap[preferredLabel]
-        || normalizeInputPathTokenIdentity(inputPathTokenMap[preferredLabel]) === storedIdentity) {
-        return preferredLabel;
-    }
-
-    var rel = String(wsRel || '').replace(/\\\\/g, '/').replace(/^\\/+/, '').replace(/\\/+$/, '');
-    var parts = rel.split('/').filter(Boolean);
-    var candidates = [];
-    if (parts.length >= 2) candidates.push('@' + parts.slice(-2).join('/'));
-    if (parts.length >= 3) candidates.push('@' + parts.join('/'));
-    candidates.push(preferredLabel + '#' + String(Object.keys(inputPathTokenMap).length + 1));
-
-    for (var i = 0; i < candidates.length; i += 1) {
-        var label = candidates[i];
-        if (!inputPathTokenMap[label]
-            || normalizeInputPathTokenIdentity(inputPathTokenMap[label]) === storedIdentity) {
-            return label;
-        }
-    }
-    return candidates[candidates.length - 1];
-}
-
-function workspaceOpenTipPath(original, wsRel) {
-    var raw = cleanPathTokenForLink(original || '');
-    if (/^[A-Za-z]:[\\\\/]/.test(raw) || /^\\\\\\\\/.test(raw)) return raw;
-    if (raw.charAt(0) === '/' && raw.charAt(1) !== '/') return raw;
-    var rel = String(wsRel || raw || '').replace(/\\\\/g, '/').replace(/^\\/+/, '');
-    if (/^[A-Za-z]:\\//.test(rel) || /^\\\\\\\\/.test(rel)) return rel.replace(/\\//g, '\\\\');
-    var w = (typeof window.__WORK_DIR__ === 'string') ? window.__WORK_DIR__ : '';
-    if (!w || !rel) return rel || raw;
-    var joined = pathJoinBaseName(w, rel);
-    return String(w).charAt(0) === '/' ? joined : joined.replace(/\\//g, '\\\\');
-}
-
-function escapeRegExpLiteral(s) {
-    return String(s || '').replace(/[.*+?^\${}()|[\\]\\\\]/g, '\\\\$&');
-}
-
-function quotePromptPath(p) {
-    var t = stripPathWrappingQuotes(String(p || '').trim());
-    if (!t) return '';
-    return '"' + t.replace(/"/g, '\\\\"') + '"';
-}
-
-function inputQuotedWindowsPathRegex() {
-    return /(["'])([A-Za-z]:[\\\\/][^"'\\r\\n]+)\\1/g;
-}
-
-var _inputKnownExtWinPathRe = null;
-function inputKnownExtWindowsPathRegex() {
-    if (!_inputKnownExtWinPathRe) {
-        _inputKnownExtWinPathRe = new RegExp('(^|[\\\\s(（\\\\[])([A-Za-z]:[\\\\\\\\/][^\\\\r\\\\n"\\\\\\'<>|]+?\\\\.(' + LINKIFY_EXT_FRAGMENT + '))(?=$|[\\\\s,，。;；:：)）\\\\]】])', 'gi');
-    }
-    _inputKnownExtWinPathRe.lastIndex = 0;
-    return _inputKnownExtWinPathRe;
-}
-
-function inputSimpleWindowsPathRegex() {
-    return /(^|[\\s(（\\[])([A-Za-z]:(?:\\\\|\\/)(?:(?:[^\\\\/:*?"<>|\\s\\r\\n]+)(?:\\\\|\\/))*[^\\\\/:*?"<>|\\s\\r\\n]+)(?=$|[\\s,，。;；:：)）\\]】])/g;
-}
-
-function ensureInputPathChipHost() {
-    var host = document.getElementById('input-path-chips');
-    if (host || !messageInput) return host;
-    var wrapper = messageInput.closest ? messageInput.closest('.input-wrapper') : null;
-    var panel = wrapper && wrapper.parentNode;
-    if (!panel || !wrapper) return null;
-    host = document.createElement('div');
-    host.id = 'input-path-chips';
-    host.className = 'input-path-chips';
-    panel.insertBefore(host, wrapper);
-    return host;
-}
-
-function clearInputPathTokens() {
-    Object.keys(inputPathTokenMap).forEach(function (k) { delete inputPathTokenMap[k]; });
-    refreshInputPathChips();
-}
-
-function removeInputPathToken(label) {
-    if (!label || !messageInput) return;
-    delete inputPathTokenMap[label];
-    var text = String(messageInput.value || '');
-    var re = new RegExp('(?:\\\\s*)' + escapeRegExpLiteral(label), 'g');
-    messageInput.value = text.replace(re, '').replace(/[ \\t]{2,}/g, ' ').trimStart();
-    refreshInputPathChips();
-    autoResizeTextarea();
-    try { messageInput.focus(); } catch (e) {}
-}
-
-function refreshInputPathChips() {
-    var host = ensureInputPathChipHost();
-    if (!host || !messageInput) return;
-    var text = String(messageInput.value || '');
-    var labels = Object.keys(inputPathTokenMap).filter(function (label) {
-        return label && text.indexOf(label) >= 0;
-    });
-    if (!labels.length) {
-        host.innerHTML = '';
-        host.classList.remove('is-visible');
-        return;
-    }
-    host.innerHTML = '';
-    labels.forEach(function (label) {
-        var stored = inputPathTokenMap[label];
-        var rel = pathTokenToWorkspaceOpenRel(stored);
-        if (!rel) return;
-        var chip = document.createElement('span');
-        chip.className = 'input-path-chip';
-        var a = document.createElement('a');
-        a.href = '#';
-        a.className = 'input-path-chip-link msg-link-workspace-open';
-        a.dataset.workspaceOpen = rel;
-        a.textContent = label;
-        a.setAttribute('data-ui-tip', String(stored || rel));
-        var rm = document.createElement('button');
-        rm.type = 'button';
-        rm.className = 'input-path-chip-remove';
-        rm.setAttribute('aria-label', '移除 ' + label);
-        rm.setAttribute('data-ui-tip', '移除文件路径');
-        rm.textContent = '×';
-        rm.addEventListener('click', function (ev) {
-            ev.preventDefault();
-            ev.stopPropagation();
-            removeInputPathToken(label);
-        });
-        chip.appendChild(a);
-        chip.appendChild(rm);
-        host.appendChild(chip);
-    });
-    host.classList.toggle('is-visible', !!host.children.length);
-}
-
-function rewriteInputWorkspacePaths() {
-    if (!messageInput || inputPathRewriteGuard) return;
-    var raw = String(messageInput.value || '');
-    var changed = false;
-    function replacePathToken(match, prefix, path) {
-        var rel = pathTokenToWorkspaceOpenRel(path);
-        if (!rel) return match;
-        var label = uniqueInputPathDisplayLabel(path, rel, workspaceOpenDisplayLabel(path, rel));
-        if (!label) return match;
-        inputPathTokenMap[label] = stripPathWrappingQuotes(path);
-        changed = true;
-        return (prefix || '') + label;
-    }
-    var next = raw.replace(inputQuotedWindowsPathRegex(), function (match, q, path) {
-        return replacePathToken(match, '', path);
-    });
-    next = next.replace(inputKnownExtWindowsPathRegex(), function (match, prefix, path) {
-        return replacePathToken(match, prefix, path);
-    });
-    next = next.replace(inputSimpleWindowsPathRegex(), function (match, prefix, path) {
-        return replacePathToken(match, prefix, path);
-    });
-    if (changed && next !== raw) {
-        var wasFocused = document.activeElement === messageInput;
-        inputPathRewriteGuard = true;
-        messageInput.value = next;
-        if (wasFocused) {
-            var pos = next.length;
-            try { messageInput.setSelectionRange(pos, pos); } catch (e) {}
-        }
-        inputPathRewriteGuard = false;
-    }
-    refreshInputPathChips();
-}
-
-function expandInputPathTokens(text) {
-    var out = String(text || '');
-    Object.keys(inputPathTokenMap)
-        .sort(function (a, b) { return b.length - a.length; })
-        .forEach(function (label) {
-            var stored = inputPathTokenMap[label];
-            if (!stored || out.indexOf(label) < 0) return;
-            out = out.replace(new RegExp(escapeRegExpLiteral(label), 'g'), quotePromptPath(stored));
-        });
-    return out;
-}
-
-/** 整段文本是否仅为可链转的 Windows 绝对路径（用于行内 code 内路径） */
-function isEntireTextNodeWindowsPath(raw) {
-    var t = cleanPathTokenForLink(raw);
-    if (!t) return false;
-    return /^([A-Za-z]):[\\\\/](?:(?:[^\\\\/:*?"<>|\\r\\n]+)(?:\\\\|\\/))*[^\\\\/:*?"<>|\\r\\n]+$/i.test(t);
-}
-
-
-/** 行内 code 内整段为 \`/工作区相对/路径.ext\` 时亦允许链转（否则反引号路径永不可点） */
-function isEntireWorkspaceSlashPathLinkable(raw) {
-    var t = cleanPathTokenForLink(raw);
-    return workspaceRelativePathAutoLinkOk(t);
-}
-
-function isEntireWorkspaceRelativePathLinkable(raw) {
-    var t = cleanPathTokenForLink(raw);
-    return workspaceRelativePathNoSlashAutoLinkOk(t);
-}
-
-/** 行内 code 内整段为 UNC \\\\server\\share\\... 时允许「本机打开」链转 */
-function isEntireTextNodeUncPath(raw) {
-    var t = cleanPathTokenForLink(raw);
-    if (!t) return false;
-    var u = t.replace(/\\//g, '\\\\');
-    return /^\\\\\\\\[^\\\\]+\\\\[^\\\\]+(?:\\\\[^\\\\]*)*$/i.test(u);
-}
-
-var _assistMsgLinkifyRe = null;
-function getAssistMsgLinkifyRegex() {
-    if (!_assistMsgLinkifyRe) {
-        // 「/路径」前仅排除 ASCII 字母，避免 2023/文件、中文后接 / 等无法匹配；仍可抑制 ARPU/DOU（U 为字母）
-        _assistMsgLinkifyRe = new RegExp(
-            '((["\\'])(?:(?:[A-Za-z]:(?:\\\\\\\\|\\\\/)|\\\\\\\\\\\\\\\\|\\\\/(?![\\\\s\\\\/]))|(?=[^"\\'\\\\r\\\\n]*[\\\\\\\\/]))[^"\\'\\\\r\\\\n]+?\\\\.(?:' + LINKIFY_EXT_FRAGMENT + ')\\\\b\\\\2|' +
-            'https?:\\\\/\\\\/[^\\\\s<>\\'"]+|' +
-            '\\\\\\\\\\\\\\\\(?:(?:[^\\\\\\\\\\\\/:*?"<>|\\\\r\\\\n]+)\\\\\\\\)+(?:[^\\\\\\\\\\\\/:*?"<>|\\\\r\\\\n]+)|' +
-            '[A-Za-z]:(?:\\\\\\\\|\\\\/)(?:(?:[^\\\\\\\\/:*?"<>|\\\\r\\\\n]+)(?:\\\\\\\\|\\\\/))*[^\\\\\\\\/:*?"<>|\\\\r\\\\n]+|' +
-            '(?<![A-Za-z])\\\\/(?![\\\\s\\\\/])[^\\\\s<>\\'"]+|' +
-            '(?<![A-Za-z0-9./\\\\\\\\])(?:[^\\\\s<>\\'"/\\\\\\\\:]+(?:[\\\\\\\\/][^\\\\s<>\\'"/\\\\\\\\:]+)+\\\\.(' + LINKIFY_EXT_FRAGMENT + ')\\\\b))',
-            'gi'
-        );
-    }
-    return _assistMsgLinkifyRe;
-}
-
-function tryLinkifyEntirePathTextNode(textNode, raw) {
-    var token = String(raw || '').trim();
-    if (!token) return false;
-    var wsRel = pathTokenToWorkspaceOpenRel(token);
-    var href = wsRel ? null : makeHrefFromAutoLinkToken(token);
-    if (!wsRel && !href) return false;
-    var a = document.createElement('a');
-    a.className = wsRel ? 'msg-link-auto msg-link-workspace-open' : 'msg-link-auto';
-    a.textContent = cleanPathTokenForLink(token) || token;
-    if (wsRel) {
-        a.href = '#';
-        a.setAttribute('data-workspace-open', wsRel);
-        a.setAttribute('data-ui-tip', workspaceOpenTipPath(token, wsRel));
-        bindUiHoverTip(a);
-    } else {
-        a.href = href;
-        a.target = '_blank';
-        a.rel = 'noopener noreferrer';
-    }
-    textNode.parentNode.replaceChild(a, textNode);
-    return true;
-}
-
-function linkifySingleTextNode(textNode) {
-    var raw = textNode.nodeValue;
-    if (!raw) return;
-    var parent = textNode.parentElement;
-    if (!parent || parent.closest('a, pre, script, style, textarea, svg')) return;
-    var inInlineCode = !!parent.closest('code');
-    if (inInlineCode) {
-        if (!isEntireTextNodeWindowsPath(raw) && !isEntireWorkspaceSlashPathLinkable(raw) && !isEntireWorkspaceRelativePathLinkable(raw) && !isEntireTextNodeUncPath(raw)) return;
-        if (tryLinkifyEntirePathTextNode(textNode, raw)) return;
-    }
-    var rawForLink = linkifyNormalizePathToken(raw);
-    var re = getAssistMsgLinkifyRegex();
-    re.lastIndex = 0;
-    var parts = [];
-    var last = 0;
-    var m;
-    while ((m = re.exec(rawForLink)) !== null) {
-        var matchStart = m.index;
-        var matchEnd = m.index + m[0].length;
-        var qBefore = rawForLink.charAt(matchStart - 1);
-        var qAfter = rawForLink.charAt(matchEnd);
-        if ((qBefore === '"' || qBefore === "'") && qAfter === qBefore) {
-            matchStart -= 1;
-            matchEnd += 1;
-        }
-        if (matchStart > last) parts.push({ k: 't', s: rawForLink.slice(last, matchStart) });
-        parts.push({ k: 'l', s: m[0] });
-        last = matchEnd;
-    }
-    if (last < rawForLink.length) parts.push({ k: 't', s: rawForLink.slice(last) });
-    var hasLink = false;
-    for (var pi = 0; pi < parts.length; pi++) {
-        if (parts[pi].k === 'l') { hasLink = true; break; }
-    }
-    if (!hasLink) return;
-    var frag = document.createDocumentFragment();
-    parts.forEach(function (p) {
-        if (p.k === 't') frag.appendChild(document.createTextNode(p.s));
-        else {
-            var wsRel = pathTokenToWorkspaceOpenRel(p.s);
-            var show = cleanPathTokenForLink(p.s);
-            if (wsRel) {
-                var aw = document.createElement('a');
-                aw.href = '#';
-                aw.setAttribute('data-workspace-open', wsRel);
-                aw.className = 'msg-link-auto msg-link-workspace-open';
-                aw.setAttribute('data-ui-tip', workspaceOpenTipPath(p.s, wsRel));
-                bindUiHoverTip(aw);
-                aw.textContent = show || p.s;
-                frag.appendChild(aw);
-            } else {
-                var href = makeHrefFromAutoLinkToken(p.s);
-                if (!href) frag.appendChild(document.createTextNode(p.s));
-                else {
-                    var ah = document.createElement('a');
-                    ah.href = href;
-                    ah.target = '_blank';
-                    ah.rel = 'noopener noreferrer';
-                    ah.className = 'msg-link-auto';
-                    ah.textContent = show || p.s;
-                    frag.appendChild(ah);
-                }
-            }
-        }
-    });
-    textNode.parentNode.replaceChild(frag, textNode);
-}
-
-function upgradeWorkspacePathMarkdownLinks(root) {
-    if (!root) return;
-    root.querySelectorAll('span[data-ga-workspace-link]').forEach(function (span) {
-        var rel = span.getAttribute('data-ga-workspace-link') || '';
-        var raw = span.getAttribute('data-ga-workspace-raw') || rel;
-        if (!rel) return;
-        var a = document.createElement('a');
-        a.href = '#';
-        a.setAttribute('data-workspace-open', rel);
-        a.className = 'msg-link-workspace-open';
-        a.setAttribute('data-ui-tip', workspaceOpenTipPath(raw, rel));
-        a.textContent = span.textContent || raw || rel;
-        bindUiHoverTip(a);
-        if (span.parentNode) span.parentNode.replaceChild(a, span);
-    });
-    root.querySelectorAll('a[href]').forEach(function (a) {
-        if (!a || a.classList.contains('msg-link-workspace-open')) return;
-        var href = a.getAttribute('href') || '';
-        var originalPathForTip = '';
-        var marker = /^#ga-workspace-path=(.+)$/i.exec(href);
-        if (marker) {
-            var markerValue = marker[1];
-            var rawIdx = markerValue.indexOf('&raw=');
-            if (rawIdx >= 0) {
-                var relPart = markerValue.slice(0, rawIdx);
-                var rawPart = markerValue.slice(rawIdx + 5);
-                try { href = decodeURIComponent(relPart); } catch (e0) { href = relPart; }
-                try { originalPathForTip = decodeURIComponent(rawPart); } catch (e1) { originalPathForTip = rawPart; }
-            } else {
-                try { href = decodeURIComponent(markerValue); } catch (e2) { href = markerValue; }
-            }
-        }
-        var raw = href;
-        try { raw = decodeURI(raw); } catch (e) {}
-        var rel = markdownHrefToWorkspaceOpenRel(href);
-        if (!rel && /^file:\\/\\//i.test(raw)) {
-            var fsPath = raw.replace(/^file:\\/\\/\\/?/i, '');
-            try { fsPath = decodeURIComponent(fsPath); } catch (e2) {}
-            if (/^[A-Za-z]:\\//.test(fsPath)) rel = pathTokenToWorkspaceOpenRel(fsPath);
-            else rel = pathTokenToWorkspaceOpenRel('/' + fsPath.replace(/^\\/+/, ''));
-        }
-        if (!rel) return;
-        a.href = '#';
-        a.setAttribute('data-workspace-open', rel);
-        a.classList.add('msg-link-workspace-open');
-        a.setAttribute('data-ui-tip', workspaceOpenTipPath(originalPathForTip || raw, rel));
-        bindUiHoverTip(a);
-    });
-}
-
-function linkifyAssistantTextNodes(root) {
-    if (!root) return;
-    upgradeWorkspacePathMarkdownLinks(root);
-    var walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
-    var batch = [];
-    var n;
-    while ((n = walker.nextNode())) {
-        var p = n.parentElement;
-        if (!p || p.closest('a, pre, script, style, textarea, .mermaid')) continue;
-        if (p.closest('code') && !isEntireTextNodeWindowsPath(n.nodeValue) && !isEntireWorkspaceSlashPathLinkable(n.nodeValue) && !isEntireWorkspaceRelativePathLinkable(n.nodeValue) && !isEntireTextNodeUncPath(n.nodeValue)) continue;
-        var nv = n.nodeValue;
-        var nvNorm = linkifyNormalizePathToken(nv);
-        if (!nv || (!/https?:\\/\\/|["'][A-Za-z]:[\\\\/]|[A-Za-z]:[\\\\/]|\\/\\S/.test(nvNorm) && !nvNorm.startsWith('\\\\\\\\') && !linkifyKnownExtRegex().test(nvNorm))) continue;
-        batch.push(n);
-    }
-    batch.forEach(linkifySingleTextNode);
-}
-
-function ensureExternalMessageLinksOpenInNewTab(root) {
-    if (!root || !root.querySelectorAll) return;
-    root.querySelectorAll('a[href]').forEach(function (a) {
-        if (!a || a.hasAttribute('data-workspace-open')) return;
-        var href = String(a.getAttribute('href') || '').trim();
-        if (!/^(https?:)?\\/\\//i.test(href)) return;
-        a.target = '_blank';
-        var rel = String(a.getAttribute('rel') || '').trim();
-        var tokens = rel ? rel.split(/\\s+/) : [];
-        ['noopener', 'noreferrer'].forEach(function (token) {
-            if (tokens.indexOf(token) < 0) tokens.push(token);
-        });
-        a.setAttribute('rel', tokens.join(' '));
-    });
-}
-
-function scheduleMermaidRun(root) {
-    registerMermaidLazy(root);
-}
-
-async function runMermaidElementOnce(el) {
-    if (!el || !el.isConnected) return;
-    if (el.getAttribute('data-processed') === 'true'
-        || el.getAttribute('data-mermaid-loading') === 'true'
-        || el.classList.contains('mermaid-error')) return;
-    el.setAttribute('data-mermaid-loading', 'true');
-    try {
-        var mermaidApi = window.mermaid;
-        if (!mermaidApi) {
-            if (typeof globalThis.loadMyAgentMermaid !== 'function') {
-                throw new Error('Mermaid renderer is unavailable');
-            }
-            mermaidApi = await globalThis.loadMyAgentMermaid();
-        }
-        if (!el.isConnected) return;
-        ensureMermaidInitialized(mermaidApi);
-        var cleaned = normalizeMermaidSource(el.textContent || '');
-        if (!cleaned) return;
-        el.textContent = cleaned;
-        if (!el.id) el.id = 'mermaid-embed-' + (++mermaidIdSeq);
-        try {
-            await mermaidApi.parse(cleaned);
-        } catch (errParse) {
-            showMermaidRenderError(el, cleaned, errParse);
-            return;
-        }
-        try {
-            await mermaidApi.run({ nodes: [el], suppressErrors: false });
-            enhanceMermaidZoom(el);
-        } catch (errRun) {
-            showMermaidRenderError(el, cleaned, errRun);
-        }
-    } catch (errLoad) {
-        showMermaidRenderError(el, normalizeMermaidSource(el.textContent || ''), errLoad);
-    } finally {
-        el.removeAttribute('data-mermaid-loading');
-    }
-}
-
-function ensureMermaidIoObserver() {
-    if (mermaidIoObserver || typeof IntersectionObserver === 'undefined') return null;
-    mermaidIoObserver = new IntersectionObserver(function (entries) {
-        entries.forEach(function (en) {
-            if (!en.isIntersecting) return;
-            var el = en.target;
-            if (!el.classList.contains('mermaid') || el.getAttribute('data-processed') === 'true') {
-                if (mermaidIoObserver) mermaidIoObserver.unobserve(el);
-                return;
-            }
-            if (mermaidIoObserver) mermaidIoObserver.unobserve(el);
-            runMermaidElementOnce(el);
-        });
-    }, { root: null, rootMargin: '100px 0px 160px 0px', threshold: 0 });
-    return mermaidIoObserver;
-}
-
-function registerMermaidLazy(root) {
-    if (!root) return;
-    var nodes = Array.from(root.querySelectorAll('.mermaid:not([data-processed]):not(.mermaid-error)'));
-    if (!nodes.length) return;
-    var obs = ensureMermaidIoObserver();
-    if (!obs) {
-        requestAnimationFrame(function () {
-            (async function () {
-                for (var i = 0; i < nodes.length; i += 1) {
-                    await runMermaidElementOnce(nodes[i]);
-                }
-            })();
-        });
-        return;
-    }
-    nodes.forEach(function (el) {
-        try {
-            obs.observe(el);
-        } catch (e) {
-            runMermaidElementOnce(el);
-        }
-    });
-}
-
-function wrapMessageTables(container) {
-    if (!container) return;
-    container.querySelectorAll('table').forEach(function (table) {
-        var parent = table.parentElement;
-        if (parent && parent.classList && parent.classList.contains('msg-table-scroll')) return;
-        var wrap = document.createElement('div');
-        wrap.className = 'msg-table-scroll';
-        if (table.parentNode) table.parentNode.insertBefore(wrap, table);
-        wrap.appendChild(table);
-    });
-}
-
-function unwrapMarkdownDelTags(container) {
-    if (!container) return;
-    container.querySelectorAll('del').forEach(function (el) {
-        var parent = el.parentNode;
-        if (!parent) return;
-        while (el.firstChild) parent.insertBefore(el.firstChild, el);
-        parent.removeChild(el);
-    });
-}
-
-function enhanceAssistantMessageContent(div) {
-    if (!div) return;
-    unwrapMarkdownDelTags(div);
-    wrapMessageTables(div);
-    upgradeMermaidBlocks(div);
-    linkifyAssistantTextNodes(div);
-    upgradeWorkspaceMedia(div);
-    ensureExternalMessageLinksOpenInNewTab(div);
-    scheduleMermaidRun(div);
-}
-
-let markedOptionsApplied = false;
-function stripMarkdownPathLinkWrapper(s) {
-    var t = String(s || '').trim();
-    var changed = true;
-    var pairs = [
-        ['**', '**'],
-        ['__', '__'],
-        ['~~', '~~'],
-        ['\`', '\`'],
-        ['*', '*'],
-        ['_', '_'],
-        ['"', '"'],
-        ["'", "'"],
-        ['“', '”'],
-        ['‘', '’']
-    ];
-    while (changed && t.length >= 2) {
-        changed = false;
-        for (var i = 0; i < pairs.length; i += 1) {
-            var open = pairs[i][0];
-            var close = pairs[i][1];
-            if (t.length > open.length + close.length && t.indexOf(open) === 0 && t.slice(-close.length) === close) {
-                t = t.slice(open.length, t.length - close.length).trim();
-                changed = true;
-                break;
-            }
-        }
-    }
-    return t;
-}
-
-function normalizeExplicitMarkdownPathLinkMatch(match, label, dest) {
-    var cleanLabel = stripMarkdownPathLinkWrapper(label);
-    var rawDest = String(dest || '').trim();
-    // A regular CommonMark destination may be followed by a quoted title.
-    // It is already valid Markdown and must not be mistaken for one path with spaces.
-    if (/^(?:<[^>\\r\\n]+>|\\S+)\\s+(?:"[^"\\r\\n]*"|'[^'\\r\\n]*'|\\([^\\)\\r\\n]*\\))$/.test(rawDest)) return match;
-    var angleWrapped = rawDest.length >= 2 && rawDest.charAt(0) === '<' && rawDest.charAt(rawDest.length - 1) === '>';
-    var cleanDest = angleWrapped
-        ? rawDest.slice(1, -1).trim()
-        : stripMarkdownPathLinkWrapper(rawDest);
-    if (!cleanDest || !markdownHrefToWorkspaceOpenRel(cleanDest)) return match;
-    // Quotes around a destination are parsed by CommonMark as a title when the
-    // path contains spaces. Angle destinations preserve spaces and parentheses
-    // while still giving Marked a normal link/image token.
-    var needsAngleWrapper = angleWrapped || /[\\s()<>]/.test(cleanDest);
-    var markdownDest = needsAngleWrapper
-        ? '<' + cleanDest.replace(/\\\\/g, '%5C').replace(/</g, '%3C').replace(/>/g, '%3E') + '>'
-        : cleanDest;
-    return '[' + cleanLabel + '](' + markdownDest + ')';
-}
-
-function findExplicitMarkdownLabelEnd(src, start) {
-    var depth = 0;
-    for (var i = start; i < src.length; i += 1) {
-        var ch = src.charAt(i);
-        if (ch === '\\\\') {
-            i += 1;
-            continue;
-        }
-        if (ch === '[') depth += 1;
-        else if (ch === ']') {
-            depth -= 1;
-            if (depth === 0) return i;
-        }
-    }
-    return -1;
-}
-
-function findExplicitMarkdownDestinationEnd(src, openParen) {
-    var depth = 1;
-    var quote = '';
-    var inAngle = false;
-    for (var i = openParen + 1; i < src.length; i += 1) {
-        var ch = src.charAt(i);
-        if (quote) {
-            if (ch === quote) quote = '';
-            continue;
-        }
-        if (inAngle) {
-            if (ch === '>') inAngle = false;
-            continue;
-        }
-        var beforeQuote = src.slice(openParen + 1, i);
-        var quoteCanOpen = !beforeQuote.trim() || /\\s/.test(src.charAt(i - 1));
-        if (quoteCanOpen && (ch === '"' || ch === "'" || ch === '\\u201c' || ch === '\\u2018')) {
-            quote = ch === '\\u201c' ? '\\u201d' : (ch === '\\u2018' ? '\\u2019' : ch);
-            continue;
-        }
-        if (ch === '<') {
-            inAngle = true;
-            continue;
-        }
-        if (ch === '(') depth += 1;
-        else if (ch === ')') {
-            depth -= 1;
-            if (depth === 0) return i;
-        }
-    }
-    return -1;
-}
-
-function normalizeExplicitMarkdownPathLinksByScan(text) {
-    var src = String(text || '');
-    var out = '';
-    var copiedUntil = 0;
-    var pos = 0;
-    while (pos < src.length) {
-        var start = src.indexOf('[', pos);
-        if (start < 0) break;
-        var labelEnd = findExplicitMarkdownLabelEnd(src, start);
-        if (labelEnd < 0 || src.charAt(labelEnd + 1) !== '(') {
-            pos = start + 1;
-            continue;
-        }
-        var destEnd = findExplicitMarkdownDestinationEnd(src, labelEnd + 1);
-        if (destEnd < 0) {
-            pos = start + 1;
-            continue;
-        }
-        var match = src.slice(start, destEnd + 1);
-        var label = src.slice(start + 1, labelEnd);
-        var dest = src.slice(labelEnd + 2, destEnd);
-        var normalized = normalizeExplicitMarkdownPathLinkMatch(match, label, dest);
-        if (normalized !== match) {
-            out += src.slice(copiedUntil, start) + normalized;
-            copiedUntil = destEnd + 1;
-        }
-        pos = destEnd + 1;
-    }
-    return out + src.slice(copiedUntil);
-}
-
-function normalizeExplicitMarkdownPathLinksInPlainText(text) {
-    var normalized = String(text || '')
-        .replace(/([\`*_~]{1,2})\\[([^\\]\\r\\n]+)\\]\\(([^)\\r\\n]+)\\)\\1/g, function (match, wrap, label, dest) {
-            return normalizeExplicitMarkdownPathLinkMatch(match, label, dest);
-        })
-        .replace(/([\`*_~]{1,2})\\[([^\\]\\r\\n]+)\\]\\1\\(([^)\\r\\n]+)\\)/g, function (match, wrap, label, dest) {
-            return normalizeExplicitMarkdownPathLinkMatch(match, label, dest);
-        })
-        .replace(/\\[([^\\]\\r\\n]+)\\]([\`*_~]{1,2})\\(([^)\\r\\n]+)\\)\\2/g, function (match, label, wrap, dest) {
-            return normalizeExplicitMarkdownPathLinkMatch(match, label, dest);
-        });
-    return normalizeExplicitMarkdownPathLinksByScan(normalized);
-}
-
-function normalizeExplicitMarkdownPathLinksOutsideFences(text) {
-    var src = String(text || '');
-    var out = '';
-    var buf = '';
-    var inFence = false;
-    var fenceMarker = '';
-    var lineStart = true;
-    function flushPlain() {
-        if (buf) {
-            out += normalizeExplicitMarkdownPathLinksInPlainText(buf);
-            buf = '';
-        }
-    }
-    for (var i = 0; i < src.length; i += 1) {
-        var ch = src.charAt(i);
-        var rest = src.slice(i);
-        if (lineStart) {
-            var fence = /^([ \\t]{0,3})(\`{3,}|~{3,})/.exec(rest);
-            if (fence) {
-                flushPlain();
-                var fenceText = fence[0];
-                var marker = fence[2].charAt(0);
-                if (!inFence) {
-                    inFence = true;
-                    fenceMarker = marker;
-                } else if (marker === fenceMarker) {
-                    inFence = false;
-                    fenceMarker = '';
-                }
-                out += fenceText;
-                i += fenceText.length - 1;
-                lineStart = false;
-                continue;
-            }
-        }
-        if (inFence) out += ch;
-        else buf += ch;
-        lineStart = ch === '\\n' || ch === '\\r';
-    }
-    flushPlain();
-    return out;
-}
-
-function escapeMarkdownSingleTildes(text) {
-    var src = String(text || '');
-    var out = '';
-    var inFence = false;
-    var fenceMarker = '';
-    var inCode = false;
-    var lineStart = true;
-    for (var i = 0; i < src.length; i += 1) {
-        var ch = src.charAt(i);
-        var rest = src.slice(i);
-        if (lineStart) {
-            var fence = /^([ \\t]{0,3})(\`{3,}|~{3,})/.exec(rest);
-            if (fence) {
-                var marker = fence[2].charAt(0);
-                if (!inFence) {
-                    inFence = true;
-                    fenceMarker = marker;
-                } else if (marker === fenceMarker) {
-                    inFence = false;
-                    fenceMarker = '';
-                }
-            }
-        }
-        if (!inFence && ch === '\`') {
-            var tickEnd = i + 1;
-            while (tickEnd < src.length && src.charAt(tickEnd) === '\`') tickEnd += 1;
-            out += src.slice(i, tickEnd);
-            i = tickEnd - 1;
-            inCode = !inCode;
-            lineStart = false;
-            continue;
-        }
-        if (!inFence && !inCode && ch === '~') {
-            out += '&#126;';
-        } else {
-            out += ch;
-        }
-        lineStart = ch === '\\n' || ch === '\\r';
-    }
-    return out;
-}
-
-function renderMarkdown(text) {
-    if (!text) return '';
-    var markdownParser = globalThis.marked;
-    if (!markdownParser || typeof markdownParser.parse !== 'function') {
-        return '<pre class="markdown-fallback">' + escapeHtml(String(text)) + '</pre>';
-    }
-    if (!markedOptionsApplied) {
-        markedOptionsApplied = true;
-        try {
-            markdownParser.setOptions({ breaks: true, mangle: false, headerIds: false });
-            configureWorkspaceMarkdownRenderer(markdownParser);
-        } catch (e) { /* ignore */ }
-    }
-    try {
-        return markdownParser.parse(escapeMarkdownSingleTildes(normalizeExplicitMarkdownPathLinksOutsideFences(text)), { mangle: false, headerIds: false });
-    } catch (e) {
-        return '<pre class="markdown-fallback">' + escapeHtml(String(text)) + '</pre>';
-    }
-}
-
-const THINK_OPEN_TAG = '<think>';
-const THINK_CLOSE_TAG = '</think>';
-
-function appendThinkReasoning(parts, text) {
-    var t = String(text || '').trim();
-    if (t) parts.push(t);
-}
-
-function findTagOutsideBackticks(text, tag, start) {
-    var src = String(text || '');
-    var target = String(tag || '').toLowerCase();
-    var lower = src.toLowerCase();
-    var i = Math.max(0, Number(start) || 0);
-    var codeTickLen = 0;
-    while (i < src.length) {
-        if (src.charAt(i) === '\`') {
-            var j = i + 1;
-            while (j < src.length && src.charAt(j) === '\`') j += 1;
-            var runLen = j - i;
-            if (!codeTickLen) codeTickLen = runLen;
-            else if (runLen >= codeTickLen) codeTickLen = 0;
-            i = j;
-            continue;
-        }
-        if (!codeTickLen && lower.slice(i, i + target.length) === target) return i;
-        i += 1;
-    }
-    return -1;
-}
-
-function removeTagOutsideBackticks(text, tag) {
-    var src = String(text || '');
-    var out = '';
-    var pos = 0;
-    while (pos < src.length) {
-        var idx = findTagOutsideBackticks(src, tag, pos);
-        if (idx < 0) {
-            out += src.slice(pos);
-            break;
-        }
-        out += src.slice(pos, idx);
-        pos = idx + String(tag || '').length;
-    }
-    return out;
-}
-
-function splitThinkTagsForUi(raw) {
-    var text = String(raw || '');
-    var reasoning = [];
-    var content = '';
-    var pos = 0;
-    while (pos < text.length) {
-        var openIdx = findTagOutsideBackticks(text, THINK_OPEN_TAG, pos);
-        if (openIdx < 0) {
-            content += text.slice(pos);
-            break;
-        }
-        content += text.slice(pos, openIdx);
-        var bodyStart = openIdx + THINK_OPEN_TAG.length;
-        var closeIdx = findTagOutsideBackticks(text, THINK_CLOSE_TAG, bodyStart);
-        if (closeIdx < 0) {
-            appendThinkReasoning(reasoning, text.slice(bodyStart));
-            pos = text.length;
-            break;
-        }
-        appendThinkReasoning(reasoning, text.slice(bodyStart, closeIdx));
-        pos = closeIdx + THINK_CLOSE_TAG.length;
-    }
-    return {
-        content: content,
-        reasoning: reasoning.join('\\n\\n'),
-        changed: reasoning.length > 0 || content !== text,
-    };
-}
-
-function stripOrphanThinkCloseForFinalCard(raw) {
-    return removeTagOutsideBackticks(raw, THINK_CLOSE_TAG);
-}
-
-function tagSuffixPrefixLen(text, tag) {
-    var max = Math.min(String(text || '').length, tag.length - 1);
-    for (var n = max; n > 0; n -= 1) {
-        if (tag.indexOf(text.slice(text.length - n)) === 0) return n;
-    }
-    return 0;
-}
-
-function feedThinkTaggedResponseDelta(llmState, delta) {
-    var l = llmState || {};
-    if (!l.llmThinkTagMode) l.llmThinkTagMode = 'response';
-    if (typeof l.llmThinkTagAllowLeading !== 'boolean') l.llmThinkTagAllowLeading = true;
-    l.llmThinkTagCarry = (l.llmThinkTagCarry || '') + String(delta || '');
-    var out = [];
-    while (l.llmThinkTagCarry) {
-        if (l.llmThinkTagMode === 'reasoning') {
-            var closeIdx = findTagOutsideBackticks(l.llmThinkTagCarry, THINK_CLOSE_TAG, 0);
-            if (closeIdx >= 0) {
-                var reasoningText = l.llmThinkTagCarry.slice(0, closeIdx);
-                if (reasoningText) out.push({ part: 'reasoning', text: reasoningText });
-                l.llmThinkTagCarry = l.llmThinkTagCarry.slice(closeIdx + THINK_CLOSE_TAG.length);
-                l.llmThinkTagMode = 'response';
-                continue;
-            }
-            var lowerReasoning = l.llmThinkTagCarry.toLowerCase();
-            var keepReasoning = tagSuffixPrefixLen(lowerReasoning, THINK_CLOSE_TAG);
-            var emitReasoning = keepReasoning ? l.llmThinkTagCarry.slice(0, l.llmThinkTagCarry.length - keepReasoning) : l.llmThinkTagCarry;
-            l.llmThinkTagCarry = l.llmThinkTagCarry.slice(emitReasoning.length);
-            if (emitReasoning) out.push({ part: 'reasoning', text: emitReasoning });
-            break;
-        }
-        var openIdx = findTagOutsideBackticks(l.llmThinkTagCarry, THINK_OPEN_TAG, 0);
-        if (openIdx >= 0 && l.llmThinkTagAllowLeading && !l.llmThinkTagCarry.slice(0, openIdx).trim()) {
-            var responseText = l.llmThinkTagCarry.slice(0, openIdx);
-            if (responseText) out.push({ part: 'response', text: responseText });
-            l.llmThinkTagCarry = l.llmThinkTagCarry.slice(openIdx + THINK_OPEN_TAG.length);
-            l.llmThinkTagMode = 'reasoning';
-            continue;
-        }
-        var lowerResponse = l.llmThinkTagCarry.toLowerCase();
-        var keepResponse = l.llmThinkTagAllowLeading ? tagSuffixPrefixLen(lowerResponse, THINK_OPEN_TAG) : 0;
-        var emitResponse = keepResponse ? l.llmThinkTagCarry.slice(0, l.llmThinkTagCarry.length - keepResponse) : l.llmThinkTagCarry;
-        l.llmThinkTagCarry = l.llmThinkTagCarry.slice(emitResponse.length);
-        if (emitResponse) {
-            out.push({ part: 'response', text: emitResponse });
-            if (emitResponse.trim()) l.llmThinkTagAllowLeading = false;
-        }
-        break;
-    }
-    return out;
-}
-
-function flushThinkTagCarry(ctx) {
-    if (!ctx || !ctx.llm || !ctx.llm.llmThinkTagCarry) return;
-    var l = ctx.llm;
-    if (l.llmThinkTagMode === 'reasoning') l.llmPendingReasoningDelta = (l.llmPendingReasoningDelta || '') + l.llmThinkTagCarry;
-    else {
-        l.llmPendingResponseDelta = (l.llmPendingResponseDelta || '') + l.llmThinkTagCarry;
-        if (String(l.llmThinkTagCarry || '').trim()) l.llmThinkTagAllowLeading = false;
-    }
-    l.llmThinkTagCarry = '';
-}
-
-const TRACE_ROW = {
-    'log-entry':   { label: '信息', c: 'feed--log' },
-    'tool-call':   { label: '工具', c: 'feed--tool' },
-    'error-log':   { label: '错误', c: 'feed--err' },
-    'llm-response':{ label: '回复', c: 'feed--llm2' },
-    'llm-reasoning':{ label: '思考', c: 'feed--llm' },
-    'compact-summary': { label: '压缩', c: 'feed--cmp' },
-    'context-trim': { label: '裁剪', c: 'feed--trim' },
-    'context-summary': { label: '压缩', c: 'feed--cmp' },
-    'key-context': { label: '要点', c: 'feed--key' },
+}\r
+\r
+async function historyOperationJson(url, options, timeoutMs) {\r
+    options = options || {};\r
+    var ms = Number(timeoutMs) > 0 ? Number(timeoutMs) : 45000;\r
+    var controller = (typeof AbortController !== 'undefined') ? new AbortController() : null;\r
+    var timer = null;\r
+    var requestOptions = Object.assign({}, options);\r
+    if (controller && !requestOptions.signal) {\r
+        requestOptions.signal = controller.signal;\r
+        timer = setTimeout(function () { controller.abort(); }, ms);\r
+    }\r
+    try {\r
+        var r = await fetch(url, requestOptions);\r
+        var j = await r.json().catch(function () { return {}; });\r
+        if (!j || typeof j !== 'object') j = {};\r
+        j.ok = !!r.ok && j.ok !== false;\r
+        if (!j.error && !r.ok) j.error = 'http_' + r.status;\r
+        return j;\r
+    } catch (e) {\r
+        var isAbort = e && (e.name === 'AbortError' || String(e.message || e).indexOf('aborted') >= 0);\r
+        return { ok: false, error: isAbort ? 'request_timeout' : ((e && e.message) || String(e)) };\r
+    } finally {\r
+        if (timer) clearTimeout(timer);\r
+    }\r
+}\r
+\r
+async function truncateSessionOnServer(beforeIndex, options) {\r
+    options = options || {};\r
+    const sid = options.sessionId || currentSessionId;\r
+    if (!sid) return { ok: false, error: 'no_session' };\r
+    if (!Number.isFinite(Number(beforeIndex)) || Number(beforeIndex) < 0) {\r
+        return { ok: false, error: 'invalid_before_index' };\r
+    }\r
+    var url = '/sessions/' + encodeURIComponent(sid) + '/truncate'\r
+        + '?before_index=' + encodeURIComponent(String(beforeIndex))\r
+        + '&backup=' + (options.backup ? '1' : '0');\r
+    if (Number.isFinite(Number(options.beforeSeq)) && Number(options.beforeSeq) > 0) {\r
+        url += '&before_seq=' + encodeURIComponent(String(Math.floor(Number(options.beforeSeq))));\r
+    }\r
+    return historyOperationJson(url, { method: 'POST' }, options.timeoutMs || 45000);\r
+}\r
+\r
+function describeServerSyncFailure(res, fallback) {\r
+    var base = fallback || '无法同步服务器。';\r
+    var err = res && res.error ? String(res.error).trim() : '';\r
+    if (!err) return base;\r
+    var friendly = err;\r
+    if (err === 'no_session') friendly = '当前没有选中的会话。';\r
+    else if (err === 'invalid_before_index' || err === 'invalid before_index') friendly = '消息定位索引无效，可能需要刷新当前会话。';\r
+    else if (err === 'refuse empty truncation') friendly = '服务端拒绝清空整个会话。';\r
+    else if (err === 'truncation failed') friendly = '服务端裁剪历史失败，可能是历史索引已变化或会话文件暂时不一致。';\r
+    return base + '\\n原因：' + friendly;\r
+}\r
+\r
+function hasPreviousUserMessageBefore(wrap) {\r
+    var node = wrap ? wrap.previousElementSibling : null;\r
+    while (node) {\r
+        if (node.classList && node.classList.contains('msg-wrap--user')) return true;\r
+        node = node.previousElementSibling;\r
+    }\r
+    return false;\r
+}\r
+\r
+let activeInlineRewriteWrap = null;\r
+\r
+function restoreUserMessageBubble(wrap, rawText) {\r
+    if (!wrap) return;\r
+    const div = wrap.querySelector('.message.user');\r
+    if (!div) return;\r
+    wrap.classList.remove('is-inline-rewriting', 'user-msg-expanded', 'has-turn-process');\r
+    div.className = 'message user';\r
+    div.textContent = '';\r
+    messageRawMarkdown.set(wrap, String(rawText || ''));\r
+    renderUserMessageContent(wrap, div, String(rawText || ''), linkifyAssistantTextNodes);\r
+}\r
+\r
+function closeInlineRewriteEditor(wrap, rawText) {\r
+    restoreUserMessageBubble(wrap, rawText);\r
+    if (activeInlineRewriteWrap === wrap) activeInlineRewriteWrap = null;\r
+}\r
+\r
+function autoResizeInlineRewriteTextarea(textarea) {\r
+    if (!textarea) return;\r
+    textarea.style.height = 'auto';\r
+    textarea.style.height = Math.min(Math.max(textarea.scrollHeight, 84), 260) + 'px';\r
+}\r
+\r
+function openInlineRewriteEditor(wrap, rawText, beforeIndex) {\r
+    if (!wrap) return;\r
+    if (activeInlineRewriteWrap && activeInlineRewriteWrap !== wrap) {\r
+        const prevRaw = messageRawMarkdown.get(activeInlineRewriteWrap) || '';\r
+        closeInlineRewriteEditor(activeInlineRewriteWrap, prevRaw);\r
+    }\r
+    const div = wrap.querySelector('.message.user');\r
+    if (!div) return;\r
+    activeInlineRewriteWrap = wrap;\r
+    wrap.classList.add('is-inline-rewriting');\r
+    wrap.classList.remove('user-msg-expanded', 'has-turn-process');\r
+    div.className = 'message user user-inline-rewrite';\r
+    div.textContent = '';\r
+\r
+    const editor = document.createElement('div');\r
+    editor.className = 'user-inline-rewrite-box';\r
+    const textarea = document.createElement('textarea');\r
+    textarea.className = 'user-inline-rewrite-input';\r
+    textarea.value = String(rawText || '');\r
+    textarea.rows = 3;\r
+    const actions = document.createElement('div');\r
+    actions.className = 'user-inline-rewrite-actions';\r
+    const shortcutHint = document.createElement('span');\r
+    shortcutHint.className = 'input-shortcut-hint user-inline-rewrite-shortcut';\r
+    shortcutHint.textContent = 'Ctrl/Cmd + Enter 提交';\r
+    const cancelBtn = document.createElement('button');\r
+    cancelBtn.type = 'button';\r
+    cancelBtn.className = 'user-inline-rewrite-btn user-inline-rewrite-btn--ghost';\r
+    cancelBtn.textContent = '取消';\r
+    const confirmBtn = document.createElement('button');\r
+    confirmBtn.type = 'button';\r
+    confirmBtn.className = 'user-inline-rewrite-btn user-inline-rewrite-btn--primary';\r
+    confirmBtn.textContent = '确认';\r
+    actions.appendChild(shortcutHint);\r
+    actions.appendChild(cancelBtn);\r
+    actions.appendChild(confirmBtn);\r
+    editor.appendChild(textarea);\r
+    editor.appendChild(actions);\r
+    div.appendChild(editor);\r
+\r
+    function cancel() {\r
+        closeInlineRewriteEditor(wrap, rawText);\r
+    }\r
+\r
+    async function confirm() {\r
+        const nextText = String(textarea.value || '');\r
+        if (!hasSendableText(nextText)) {\r
+            showUiAlert({\r
+                title: '无法改写',\r
+                message: '改写内容不能为空。',\r
+                variant: 'warning',\r
+            });\r
+            return;\r
+        }\r
+        if (!currentSessionId || !Number.isFinite(Number(beforeIndex))) return;\r
+        if (typeof confirmAndCancelPendingHumanQuestionsForHistoryMutation === 'function') {\r
+            var canRewrite = await confirmAndCancelPendingHumanQuestionsForHistoryMutation(currentSessionId);\r
+            if (!canRewrite) return;\r
+        }\r
+        confirmBtn.disabled = true;\r
+        cancelBtn.disabled = true;\r
+        pendingRewriteTruncate = {\r
+            sessionId: currentSessionId,\r
+            before: Number(beforeIndex),\r
+            beforeSeq: Number.isFinite(Number(wrap.dataset.runtimeSeq)) ? Math.floor(Number(wrap.dataset.runtimeSeq)) : null,\r
+            prevInput: ''\r
+        };\r
+        try {\r
+            await sendMessage({\r
+                message: nextText,\r
+                sessionId: currentSessionId,\r
+                preserveInput: true,\r
+                fromInlineRewrite: true,\r
+            });\r
+        } finally {\r
+            if (wrap.isConnected) {\r
+                confirmBtn.disabled = false;\r
+                cancelBtn.disabled = false;\r
+            }\r
+        }\r
+    }\r
+\r
+    textarea.addEventListener('input', function () {\r
+        autoResizeInlineRewriteTextarea(textarea);\r
+    });\r
+    textarea.addEventListener('keydown', function (e) {\r
+        if (e.key === 'Escape') {\r
+            e.preventDefault();\r
+            cancel();\r
+            return;\r
+        }\r
+        if (isInputSubmitShortcut(e, 'editor')) {\r
+            e.preventDefault();\r
+            void confirm();\r
+        }\r
+    });\r
+    cancelBtn.addEventListener('click', function (e) {\r
+        e.preventDefault();\r
+        cancel();\r
+    });\r
+    confirmBtn.addEventListener('click', function (e) {\r
+        e.preventDefault();\r
+        void confirm();\r
+    });\r
+    autoResizeInlineRewriteTextarea(textarea);\r
+    textarea.focus();\r
+    try {\r
+        textarea.setSelectionRange(textarea.value.length, textarea.value.length);\r
+    } catch (e) { /* ignore */ }\r
+}\r
+\r
+async function branchSessionOnServer(beforeIndex, sessionId, afterSeq) {\r
+    const sid = sessionId || currentSessionId;\r
+    if (!sid) return { ok: false, error: 'no_session' };\r
+    var url = '/sessions/' + encodeURIComponent(sid) + '/branch'\r
+        + '?before_index=' + encodeURIComponent(String(beforeIndex));\r
+    if (Number.isFinite(Number(afterSeq)) && Number(afterSeq) > 0) {\r
+        url += '&after_seq=' + encodeURIComponent(String(Math.floor(Number(afterSeq))));\r
+    }\r
+    return historyOperationJson(url, { method: 'POST' }, 60000);\r
+}\r
+\r
+function normalizeBranchFinalText(text) {\r
+    return String(text || '').replace(/\\s+/g, ' ').trim();\r
+}\r
+\r
+function branchFinalTextMatches(eventContent, expectedText) {\r
+    var a = normalizeBranchFinalText(eventContent);\r
+    var b = normalizeBranchFinalText(expectedText);\r
+    if (!a || !b) return false;\r
+    if (a === b) return true;\r
+    if (a.length > 80 && b.length > 80) {\r
+        return a.indexOf(b.slice(0, 80)) >= 0 || b.indexOf(a.slice(0, 80)) >= 0;\r
+    }\r
+    return false;\r
+}\r
+\r
+async function waitForBranchFinalPersisted(sessionId, beforeIndex, expectedText) {\r
+    if (!sessionId || !Number.isFinite(beforeIndex) || beforeIndex <= 0) {\r
+        return { ready: true, beforeIndex: beforeIndex };\r
+    }\r
+    var deadline = Date.now() + 2600;\r
+    while (Date.now() < deadline) {\r
+        try {\r
+            var url = '/sessions/' + encodeURIComponent(sessionId)\r
+                + '/messages?limit=1&before_index=' + encodeURIComponent(String(beforeIndex));\r
+            var r = await fetch(url);\r
+            var j = await r.json().catch(function () { return null; });\r
+            var events = Array.isArray(j) ? j : (j && Array.isArray(j.events) ? j.events : []);\r
+            if (events.length && events[events.length - 1] && events[events.length - 1].type === 'final') {\r
+                return { ready: true, beforeIndex: beforeIndex };\r
+            }\r
+            var recentUrl = '/sessions/' + encodeURIComponent(sessionId) + '/messages?limit=80';\r
+            var rr = await fetch(recentUrl);\r
+            var jj = await rr.json().catch(function () { return null; });\r
+            var recent = Array.isArray(jj) ? jj : (jj && Array.isArray(jj.events) ? jj.events : []);\r
+            var base = jj && typeof jj.range_start === 'number' ? jj.range_start : 0;\r
+            for (var i = recent.length - 1; i >= 0; i -= 1) {\r
+                var ev = recent[i];\r
+                if (!ev || ev.type !== 'final') continue;\r
+                if (branchFinalTextMatches(ev.content, expectedText)) {\r
+                    return { ready: true, beforeIndex: base + i + 1 };\r
+                }\r
+            }\r
+        } catch (e) { /* retry */ }\r
+        await new Promise(function (resolve) { setTimeout(resolve, 180); });\r
+    }\r
+    return { ready: false, beforeIndex: beforeIndex };\r
+}\r
+\r
+function copyMessageText(wrap) {\r
+    const msg = wrap && wrap.querySelector('.message');\r
+    const plain = msg ? (msg.innerText || '') : '';\r
+    const raw = messageRawMarkdown.get(wrap);\r
+    const toCopy = raw !== undefined ? String(raw) : plain;\r
+    const done = function () {\r
+        showCopyFeedback();\r
+        return true;\r
+    };\r
+    if (navigator.clipboard && navigator.clipboard.writeText) {\r
+        return navigator.clipboard.writeText(toCopy).then(done).catch(function () {\r
+            try {\r
+                const ta = document.createElement('textarea');\r
+                ta.value = toCopy;\r
+                ta.setAttribute('readonly', 'readonly');\r
+                ta.style.position = 'fixed';\r
+                ta.style.opacity = '0';\r
+                document.body.appendChild(ta);\r
+                ta.select();\r
+                document.execCommand('copy');\r
+                document.body.removeChild(ta);\r
+                return done();\r
+            } catch (e) {\r
+                throw e;\r
+            }\r
+        });\r
+    }\r
+    return Promise.reject(new Error('当前浏览器不支持复制文本'));\r
+}\r
+\r
+function buildFinalExportFilename(extension) {\r
+    var sess = typeof selectCurrentSession === 'function' ? selectCurrentSession() : null;\r
+    var nameEl = currentSessionId\r
+        ? document.querySelector('.session-name[data-id="' + currentSessionId + '"]')\r
+        : null;\r
+    var rawName = sess && sess.name != null\r
+        ? String(sess.name)\r
+        : (nameEl ? String(nameEl.getAttribute('data-original') || nameEl.textContent || '') : '');\r
+    var safeName = (rawName.trim() || 'Session')\r
+        .replace(/[<>:"/\\\\|?*\\u0000-\\u001F]/g, '_')\r
+        .replace(/[.\\s]+$/g, '')\r
+        .slice(0, 100) || 'Session';\r
+    var timestamp = new Date().toISOString().replace(/[:.]/g, '-');\r
+    return safeName + '-' + timestamp + '.' + String(extension || '').replace(/^\\./, '');\r
+}\r
+\r
+function saveMessageAsMarkdown(wrap) {\r
+    var msg = wrap && wrap.querySelector('.message');\r
+    if (!msg) throw new Error('找不到可导出的 Final 内容');\r
+    var raw = messageRawMarkdown.get(wrap);\r
+    var markdown = raw !== undefined ? String(raw) : String(msg.innerText || '');\r
+    var filename = buildFinalExportFilename('md');\r
+    triggerDownloadBlob(new Blob([markdown], { type: 'text/markdown;charset=utf-8' }), filename);\r
+    return true;\r
+}\r
+\r
+function waitForImageExportImages(target) {\r
+    var images = target ? Array.prototype.slice.call(target.querySelectorAll('img')) : [];\r
+    return Promise.all(images.map(function (img) {\r
+        if (!img.complete) {\r
+            return new Promise(function (resolve) {\r
+                img.addEventListener('load', resolve, { once: true });\r
+                img.addEventListener('error', resolve, { once: true });\r
+            });\r
+        }\r
+        return img.decode ? img.decode().catch(function () {}) : Promise.resolve();\r
+    }));\r
+}\r
+\r
+function imageExportCanvasToBlob(canvas) {\r
+    return new Promise(function (resolve, reject) {\r
+        try {\r
+            canvas.toBlob(function (blob) {\r
+                if (blob) resolve(blob);\r
+                else reject(new Error('Final 卡片图片保存失败'));\r
+            }, 'image/png');\r
+        } catch (error) {\r
+            reject(error);\r
+        }\r
+    });\r
+}\r
+\r
+function sanitizeImageExportDocument(clonedDocument, exportId) {\r
+    var clone = clonedDocument.querySelector('[data-image-export-id="' + exportId + '"]');\r
+    if (!clone) return;\r
+    clone.querySelectorAll('img, svg, video, iframe, object, embed, canvas').forEach(function (node) {\r
+        node.remove();\r
+    });\r
+    [clone].concat(Array.prototype.slice.call(clone.querySelectorAll('*'))).forEach(function (node) {\r
+        node.style.setProperty('background-image', 'none', 'important');\r
+        node.style.setProperty('border-image', 'none', 'important');\r
+        node.style.setProperty('list-style-image', 'none', 'important');\r
+        node.style.setProperty('mask-image', 'none', 'important');\r
+        node.style.setProperty('-webkit-mask-image', 'none', 'important');\r
+    });\r
+    var safeStyle = clonedDocument.createElement('style');\r
+    safeStyle.textContent = '[data-image-export-id="' + exportId + '"],'\r
+        + '[data-image-export-id="' + exportId + '"] *,'\r
+        + '[data-image-export-id="' + exportId + '"]::before,'\r
+        + '[data-image-export-id="' + exportId + '"]::after,'\r
+        + '[data-image-export-id="' + exportId + '"] *::before,'\r
+        + '[data-image-export-id="' + exportId + '"] *::after'\r
+        + '{background-image:none!important;border-image:none!important;'\r
+        + 'list-style-image:none!important;mask-image:none!important;'\r
+        + '-webkit-mask-image:none!important;}';\r
+    clonedDocument.head.appendChild(safeStyle);\r
+}\r
+\r
+async function saveMessageAsImage(wrap) {\r
+    var target = wrap && wrap.querySelector('.message');\r
+    if (!target) throw new Error('找不到可保存的 Final 卡片');\r
+    await waitForImageExportImages(target);\r
+    await new Promise(function (resolve) { requestAnimationFrame(resolve); });\r
+\r
+    var rect = target.getBoundingClientRect();\r
+    var width = Math.max(1, Math.ceil(target.scrollWidth || rect.width));\r
+    var height = Math.max(1, Math.ceil(target.scrollHeight || rect.height));\r
+    var targetStyle = getComputedStyle(target);\r
+    var background = targetStyle.backgroundColor;\r
+    if (!background || background === 'rgba(0, 0, 0, 0)') {\r
+        background = getUiThemeCanvasBackground();\r
+    }\r
+    if (typeof globalThis.loadMyAgentHtml2Canvas !== 'function') {\r
+        throw new Error('当前版本未加载图片导出组件');\r
+    }\r
+    var html2canvas = await globalThis.loadMyAgentHtml2Canvas();\r
+    var scale = Math.min(2, 16384 / width, 16384 / height, Math.sqrt(100000000 / (width * height)));\r
+    var exportId = 'final-' + Date.now() + '-' + Math.random().toString(36).slice(2);\r
+    target.setAttribute('data-image-export-id', exportId);\r
+    var baseOptions = {\r
+        backgroundColor: background,\r
+        scale: scale,\r
+        width: width,\r
+        height: height,\r
+        useCORS: true,\r
+        allowTaint: false,\r
+        imageTimeout: 12000,\r
+        logging: false,\r
+        removeContainer: true,\r
+        ignoreElements: function (node) {\r
+            return !!(node.matches && node.matches('button, .mermaid-download-btn, .mermaid-zoom-btn'));\r
+        }\r
+    };\r
+    var png;\r
+    try {\r
+        try {\r
+            var canvas = await html2canvas(target, baseOptions);\r
+            png = await imageExportCanvasToBlob(canvas);\r
+        } catch (firstError) {\r
+            var fallbackOptions = Object.assign({}, baseOptions, {\r
+                useCORS: false,\r
+                imageTimeout: 0,\r
+                onclone: function (clonedDocument) {\r
+                    sanitizeImageExportDocument(clonedDocument, exportId);\r
+                }\r
+            });\r
+            canvas = await html2canvas(target, fallbackOptions);\r
+            png = await imageExportCanvasToBlob(canvas);\r
+        }\r
+    } finally {\r
+        target.removeAttribute('data-image-export-id');\r
+    }\r
+    var downloadUrl = URL.createObjectURL(png);\r
+    var link = document.createElement('a');\r
+    link.href = downloadUrl;\r
+    link.download = buildFinalExportFilename('png');\r
+    link.click();\r
+    setTimeout(function () { URL.revokeObjectURL(downloadUrl); }, 1000);\r
+}\r
+\r
+function closeAllMessageCopyPopovers() {\r
+    document.querySelectorAll('.msg-copy-popover.is-open').forEach(function (popover) {\r
+        popover.classList.remove('is-open');\r
+        var wrap = popover.closest('.msg-wrap');\r
+        var button = wrap && wrap.querySelector('.msg-tb[data-act="copy"]');\r
+        if (button) button.setAttribute('aria-expanded', 'false');\r
+    });\r
+}\r
+\r
+(function bindMessageCopyPopoverCloserOnce() {\r
+    if (window.__myAgentMessageCopyPopoverCloser) return;\r
+    window.__myAgentMessageCopyPopoverCloser = true;\r
+    document.addEventListener('click', closeAllMessageCopyPopovers);\r
+})();\r
+\r
+function toggleMessageCopyPopover(wrap) {\r
+    var popover = wrap && wrap.querySelector('.msg-copy-popover');\r
+    var button = wrap && wrap.querySelector('.msg-tb[data-act="copy"]');\r
+    if (!popover) return;\r
+    var open = !popover.classList.contains('is-open');\r
+    closeAllMessageCopyPopovers();\r
+    popover.classList.toggle('is-open', open);\r
+    if (button) button.setAttribute('aria-expanded', open ? 'true' : 'false');\r
+}\r
+\r
+function applyMessageCopyOption(wrap, role, option) {\r
+    closeAllMessageCopyPopovers();\r
+    var button = wrap.querySelector('.msg-tb[data-act="copy"]');\r
+    if (button) button.setAttribute('aria-expanded', 'false');\r
+    var tasks = [];\r
+    if (role === 'assistant' && option === 'text') tasks.push(Promise.resolve().then(function () {\r
+        saveMessageAsMarkdown(wrap);\r
+        showOpenFileFeedback('Markdown 已导出');\r
+        return true;\r
+    }));\r
+    if (role === 'assistant' && option === 'image') tasks.push(saveMessageAsImage(wrap).then(function () {\r
+        showOpenFileFeedback('图片已保存');\r
+        return true;\r
+    }));\r
+    if (!tasks.length) return;\r
+    Promise.all(tasks).catch(function (err) {\r
+        showUiAlert({ title: '操作失败', message: String((err && err.message) || err || '无法完成导出'), variant: 'error' });\r
+    });\r
+}\r
+\r
+function onMessageToolbarClick(wrap, role, act) {\r
+    const msg = wrap.querySelector('.message');\r
+    const plain = msg ? (msg.innerText || '') : '';\r
+    const tf = wrap.dataset.truncateFrom;\r
+    const eiRaw = wrap.dataset.eventIndex;\r
+    const runtimeSeqRaw = wrap.dataset.runtimeSeq;\r
+    const truncateBeforeSeqRaw = wrap.dataset.truncateBeforeSeq;\r
+    const eventIndex = eiRaw !== undefined && eiRaw !== '' ? parseInt(eiRaw, 10) : NaN;\r
+    const runtimeSeq = runtimeSeqRaw !== undefined && runtimeSeqRaw !== '' ? parseInt(runtimeSeqRaw, 10) : NaN;\r
+    const truncateBeforeSeq = truncateBeforeSeqRaw !== undefined && truncateBeforeSeqRaw !== '' ? parseInt(truncateBeforeSeqRaw, 10) : NaN;\r
+    const truncateFrom = tf !== undefined && tf !== '' ? parseInt(tf, 10) : NaN;\r
+    const before = role === 'user' ? eventIndex : truncateFrom;\r
+    const beforeSeq = role === 'user' ? runtimeSeq : truncateBeforeSeq;\r
+    if ((act === 'delete' || act === 'rewrite') && isSessionRunning(currentSessionId)) {\r
+        showUiAlert({\r
+            title: '生成中不可操作',\r
+            message: '当前会话仍在生成。请等待完成或停止后再修改历史。',\r
+            variant: 'warning',\r
+        });\r
+        return;\r
+    }\r
+    if (act === 'copy') {\r
+        if (role === 'assistant') {\r
+            toggleMessageCopyPopover(wrap);\r
+        } else {\r
+            copyMessageText(wrap).catch(function () { /* preserve the original silent copy behavior */ });\r
+        }\r
+        return;\r
+    }\r
+    if (act === 'delete') {\r
+        if (!Number.isFinite(before) || before < 0 || (before === 0 && hasPreviousUserMessageBefore(wrap))) {\r
+            if (Number.isFinite(before) && (before < 0 || (before === 0 && hasPreviousUserMessageBefore(wrap)))) {\r
+                showUiAlert({\r
+                    title: '无法删除该条',\r
+                    message: '消息索引异常，已阻止清空整个会话。请刷新后再试。',\r
+                    variant: 'error'\r
+                });\r
+                return;\r
+            }\r
+            removeMessagesFromNode(wrap);\r
+            syncDisconnectedProcessGroups();\r
+            rebuildToc();\r
+            return;\r
+        }\r
+        openUiModal({\r
+            title: '删除消息',\r
+            subtitle: '将同步到服务器',\r
+            message: '确定删除本条及之后的所有对话内容吗？',\r
+            danger: true,\r
+            confirmText: '删除',\r
+            cancelText: '取消',\r
+        }).then(function (ok) {\r
+            if (!ok) return;\r
+            var guard = typeof confirmAndCancelPendingHumanQuestionsForHistoryMutation === 'function'\r
+                ? confirmAndCancelPendingHumanQuestionsForHistoryMutation(currentSessionId)\r
+                : Promise.resolve(true);\r
+            guard.then(function (canMutate) {\r
+                if (!canMutate) return;\r
+                truncateSessionOnServer(before, { beforeSeq: beforeSeq }).then(function (res) {\r
+                    if (!res || !res.ok) {\r
+                        showUiAlert({\r
+                            title: '同步失败',\r
+                            message: describeServerSyncFailure(res, '删除未生效。'),\r
+                            variant: 'error'\r
+                        });\r
+                        return;\r
+                    }\r
+                    applyClientHistoryTruncate(currentSessionId, before, wrap);\r
+                });\r
+            });\r
+        });\r
+        return;\r
+    }\r
+    if (act === 'rewrite' && role === 'user') {\r
+        const raw = messageRawMarkdown.get(wrap);\r
+        const toFill = raw !== undefined ? String(raw) : plain;\r
+        if (Number.isFinite(before) && before === 0 && hasPreviousUserMessageBefore(wrap)) {\r
+            showUiAlert({\r
+                title: '无法改写该条',\r
+                message: '消息索引异常，已阻止从错误位置清空会话。请刷新后再试。',\r
+                variant: 'error'\r
+            });\r
+            return;\r
+        }\r
+        if (!Number.isFinite(before)) {\r
+            showUiAlert({\r
+                title: '无法改写该条',\r
+                message: '该消息尚未与服务器索引对齐，请刷新当前会话后再试。',\r
+                variant: 'warning',\r
+            });\r
+            return;\r
+        }\r
+        openInlineRewriteEditor(wrap, toFill, before);\r
+        return;\r
+    }\r
+    if (act === 'branch' && role === 'assistant') {\r
+        if (wrap.dataset.branching === '1') return;\r
+        const sourceSessionId = currentSessionId;\r
+        const sourceSwitchEpoch = (typeof switchSessionEpoch === 'number') ? switchSessionEpoch : null;\r
+        const eiRaw = wrap.dataset.eventIndex;\r
+        const eventIdx = eiRaw !== undefined && eiRaw !== '' ? parseInt(eiRaw, 10) : NaN;\r
+        if (!Number.isFinite(eventIdx) || eventIdx < 0) {\r
+            showUiAlert({\r
+                title: '无法分支',\r
+                message: '该回答尚未与服务器同步，请刷新页面后重试。',\r
+                variant: 'error',\r
+            });\r
+            return;\r
+        }\r
+        const branchBefore = eventIdx + 1;\r
+        openUiModal({\r
+            title: '创建分支会话',\r
+            subtitle: '原会话不会被修改',\r
+            message: '将在当前回答之后创建独立分支会话。分支点之前的内容与原会话相同，可在分支中继续提问且不影响原会话。',\r
+            confirmText: '创建分支',\r
+            cancelText: '取消',\r
+        }).then(function (ok) {\r
+            if (!ok) return;\r
+            wrap.dataset.branching = '1';\r
+            (async function () {\r
+                var runtimeEventType = String(wrap.dataset.runtimeEventType || '');\r
+                var branchAfterSeq = runtimeEventType && runtimeEventType !== 'message_assistant_final'\r
+                    ? null\r
+                    : runtimeSeq;\r
+                var res = await branchSessionOnServer(branchBefore, sourceSessionId, branchAfterSeq);\r
+                if (!res || !res.ok || !res.session_id) {\r
+                    showUiAlert({\r
+                        title: '创建失败',\r
+                        message: describeServerSyncFailure(res, '创建分支未生效。'),\r
+                        variant: 'error',\r
+                    });\r
+                    return;\r
+                }\r
+                if (res.session && typeof sessionStore !== 'undefined') {\r
+                    sessionStore.upsert(res.session);\r
+                    renderSessionListIfChanged(true);\r
+                }\r
+                if (typeof discardCachedSessionStream === 'function') discardCachedSessionStream(res.session_id);\r
+                const sourceStillActive = currentSessionId === sourceSessionId\r
+                    && (sourceSwitchEpoch == null || sourceSwitchEpoch === switchSessionEpoch);\r
+                if (!sourceStillActive) {\r
+                    setTimeout(function () { void loadSessions({ forceRender: true }); }, 0);\r
+                    return;\r
+                }\r
+                await switchSession(res.session_id, { forceReload: true });\r
+                setTimeout(function () { void loadSessions({ forceRender: true }); }, 0);\r
+                delete wrap.dataset.branching;\r
+            })().catch(function (err) {\r
+                console.error('branch session failed:', err);\r
+                showUiAlert({\r
+                    title: '创建失败',\r
+                    message: String((err && err.message) || err || 'unknown error'),\r
+                    variant: 'error',\r
+                });\r
+            }).finally(function () {\r
+                delete wrap.dataset.branching;\r
+            });\r
+        });\r
+        return;\r
+    }\r
+}\r
+\r
+function attachMessageToolbar(wrap, role) {\r
+    const bar = document.createElement('div');\r
+    bar.className = 'msg-toolbar';\r
+    if (role === 'user') {\r
+        var createdAt = wrap && wrap.dataset ? (wrap.dataset.createdAt || '') : '';\r
+        if (createdAt) {\r
+            var timeEl = document.createElement('span');\r
+            timeEl.className = 'user-message-time';\r
+            timeEl.setAttribute('data-created-at', createdAt);\r
+            timeEl.title = createdAt;\r
+            timeEl.textContent = formatUserMessageTimestamp(createdAt);\r
+            bar.appendChild(timeEl);\r
+        }\r
+    }\r
+    var copyButtonLabel = role === 'assistant' ? '导出' : '复制';\r
+    var copyButtonTip = role === 'assistant' ? '导出选项' : '复制';\r
+    var html = '<button type="button" class="msg-tb" data-act="copy" data-ui-tip="' + copyButtonTip + '" aria-haspopup="true" aria-expanded="false">' + copyButtonLabel + '</button>'\r
+        + '<button type="button" class="msg-tb" data-act="delete" data-ui-tip="删除">删除</button>';\r
+    if (role === 'assistant') {\r
+        html += '<button type="button" class="msg-tb" data-act="branch" data-ui-tip="分支">分支</button>';\r
+    }\r
+    if (role === 'user') html += '<button type="button" class="msg-tb" data-act="rewrite" data-ui-tip="改写">改写</button>';\r
+    bar.insertAdjacentHTML('beforeend', html);\r
+    if (role === 'assistant') {\r
+        var copyPopover = document.createElement('div');\r
+        copyPopover.className = 'msg-copy-popover';\r
+        copyPopover.setAttribute('role', 'menu');\r
+        copyPopover.innerHTML = '<button type="button" class="msg-copy-menu-item" data-copy-option="image" role="menuitem">导出图片</button>'\r
+            + '<button type="button" class="msg-copy-menu-item" data-copy-option="text" role="menuitem">导出文本</button>';\r
+        bar.appendChild(copyPopover);\r
+        bar.querySelectorAll('[data-copy-option]').forEach(function (item) {\r
+            item.addEventListener('click', function (e) {\r
+                e.preventDefault();\r
+                e.stopPropagation();\r
+                applyMessageCopyOption(wrap, role, item.getAttribute('data-copy-option'));\r
+            });\r
+        });\r
+        copyPopover.addEventListener('click', function (e) {\r
+            e.stopPropagation();\r
+        });\r
+    }\r
+    bar.querySelectorAll('.msg-tb').forEach(bindUiHoverTip);\r
+    bar.addEventListener('click', function (e) {\r
+        var t = e.target;\r
+        if (!t || t.tagName !== 'BUTTON' || !t.getAttribute) return;\r
+        e.preventDefault();\r
+        e.stopPropagation();\r
+        var a = t.getAttribute('data-act');\r
+        if (a) onMessageToolbarClick(wrap, role, a);\r
+    });\r
+    wrap.appendChild(bar);\r
+}\r
+\r
+function getFeedItemText(row) {\r
+    const sc = row.querySelector('.feed-chunk-scroller');\r
+    if (sc) return sc.textContent.trim();\r
+    const ch = row.querySelector('.feed-chunk');\r
+    return ch ? ch.textContent.trim() : '';\r
+}\r
+\r
+function getProcessBriefComparableText(row) {\r
+    if (row && typeof row._processBriefRawText === 'string') {\r
+        return normalizeProcessBriefComparableText(row._processBriefRawText);\r
+    }\r
+    return normalizeProcessBriefComparableText(getFeedItemText(row));\r
+}\r
+\r
+function extractToolNameFromLog(text) {\r
+    if (!text) return '工具';\r
+    const line = (text.split(/\\n/)[0] || text).trim();\r
+    var m = line.match(/^([A-Za-z_][\\w-]*)\\s*\\(/);\r
+    if (m) return m[1];\r
+    m = line.match(/^([^\\s(]+)\\s*\\(/);\r
+    if (m) return m[1];\r
+    m = line.match(/^(\\S+?)(?:\\(|：)/);\r
+    if (m) return m[1];\r
+    return '工具';\r
+}\r
+\r
+function pushBriefLine(lines, line, type) {\r
+    if (!line || !String(line).trim()) return;\r
+    var t = String(line);\r
+    var previous = lines.length ? lines[lines.length - 1] : null;\r
+    var previousText = previous && typeof previous === 'object' ? previous.text : previous;\r
+    if (previousText === t) return;\r
+    lines.push(type ? { text: t, type: type } : t);\r
+}\r
+\r
+function measureFeedChunkOverflow(chunk) {\r
+    if (!chunk || !chunk.isConnected) return;\r
+    const sc = chunk.querySelector('.feed-chunk-scroller');\r
+    if (!sc) return;\r
+    if (feedChunkInHiddenSubagentProcess(chunk)) return;\r
+    if (chunk.classList.contains('expanded')) {\r
+        chunk.classList.remove('is-overflowing');\r
+        return;\r
+    }\r
+    if (!chunk.isConnected || chunk.classList.contains('expanded')) return;\r
+    var collapsedMax = feedChunkCollapsedMax(chunk);\r
+    var contentH = sc.scrollHeight;\r
+    if (contentH < 2) contentH = measureFeedChunkScrollerHeight(sc, chunk);\r
+    if (chunk.classList.contains('is-streaming') || sc.clientHeight < 2) {\r
+        chunk.classList.toggle('is-overflowing', contentH > collapsedMax + 1);\r
+        return;\r
+    }\r
+    chunk.classList.toggle('is-overflowing', sc.scrollHeight > sc.clientHeight + 1);\r
+}\r
+\r
+var feedChunkOverflowQueue = new Set();\r
+var feedChunkOverflowRaf = 0;\r
+\r
+function scheduleFeedChunkOverflowRefresh(chunk) {\r
+    if (!chunk) return;\r
+    var card = chunk.closest && chunk.closest('.subagent-grid-card');\r
+    if (card && subagentPanelOpen && !card.classList.contains('is-expanded') && card.dataset.viewportVisible !== '1') return;\r
+    feedChunkOverflowQueue.add(chunk);\r
+    if (feedChunkOverflowRaf) return;\r
+    feedChunkOverflowRaf = requestAnimationFrame(function () {\r
+        feedChunkOverflowRaf = requestAnimationFrame(function () {\r
+            feedChunkOverflowRaf = 0;\r
+            var queued = Array.from(feedChunkOverflowQueue);\r
+            feedChunkOverflowQueue.clear();\r
+            queued.forEach(measureFeedChunkOverflow);\r
+        });\r
+    });\r
+}\r
+\r
+function refreshFeedChunkOverflow(chunk) {\r
+    scheduleFeedChunkOverflowRefresh(chunk);\r
+}\r
+\r
+function bindFeedChunkScrollChain(sc) {\r
+    if (!sc || sc._wheelScrollChainBound) return;\r
+    sc._wheelScrollChainBound = true;\r
+    sc.addEventListener('wheel', onFeedChunkScrollerWheel, { passive: false });\r
+}\r
+\r
+function onFeedChunkScrollerWheel(e) {\r
+    const sc = e.currentTarget;\r
+    const chunk = sc.closest && sc.closest('.feed-chunk');\r
+    if (!chunk || !chunk.classList.contains('expanded')) return;\r
+    const dy = e.deltaY;\r
+    const eps = 2;\r
+    const st = sc.scrollTop;\r
+    const ch = sc.clientHeight;\r
+    const sh = sc.scrollHeight;\r
+    const canScrollY = sh > ch + eps;\r
+    if (canScrollY) {\r
+        if (dy < 0 && st > eps) return;\r
+        if (dy > 0 && st < sh - ch - eps) return;\r
+    }\r
+    e.preventDefault();\r
+    e.stopPropagation();\r
+    const body = sc.closest('.process-aggregate-body');\r
+    const chat = document.getElementById('chat-container');\r
+    if (body) {\r
+        const bPrev = body.scrollTop;\r
+        const bMax = Math.max(0, body.scrollHeight - body.clientHeight);\r
+        var bt = bPrev + dy;\r
+        if (bt < 0) bt = 0;\r
+        if (bt > bMax) bt = bMax;\r
+        if (bt !== bPrev) { smoothScrollBy(body, dy); return; }\r
+    }\r
+    if (chat) smoothScrollBy(chat, dy);\r
+}\r
+\r
+function bindProcessBriefScrollChain(brief) {\r
+    if (!brief || brief._briefWheelBound) return;\r
+    brief._briefWheelBound = true;\r
+    brief.addEventListener('wheel', onProcessBriefWheel, { passive: false });\r
+}\r
+\r
+function onProcessBriefWheel(e) {\r
+    const brief = e.currentTarget;\r
+    const agg = brief.closest && brief.closest('.process-aggregate');\r
+    if (!agg || !agg.classList.contains('is-collapsed')) return;\r
+    const dy = e.deltaY;\r
+    const eps = 2;\r
+    const st = brief.scrollTop;\r
+    const ch = brief.clientHeight;\r
+    const sh = brief.scrollHeight;\r
+    const canScrollY = sh > ch + eps;\r
+    if (canScrollY) {\r
+        if (dy < 0 && st > eps) return;\r
+        if (dy > 0 && st < sh - ch - eps) return;\r
+    }\r
+    e.preventDefault();\r
+    e.stopPropagation();\r
+    const chat = document.getElementById('chat-container');\r
+    if (chat) smoothScrollBy(chat, dy);\r
+}\r
+\r
+function setBriefRows(brief, texts) {\r
+    brief.textContent = '';\r
+    texts.forEach(function (t) {\r
+        var rowType = t && typeof t === 'object' ? String(t.type || '') : '';\r
+        var sourceText = t && typeof t === 'object' ? String(t.text || '') : String(t || '');\r
+        if (!sourceText.trim()) return;\r
+        const row = document.createElement('div');\r
+        row.className = 'process-brief-item';\r
+        if (rowType === 'response') row.classList.add('process-brief-item--response');\r
+        else if (sourceText.indexOf('Tool calls: ') === 0) row.classList.add('process-brief-item--tool');\r
+        // The collapsed response line is model output and must stay verbatim;\r
+        // only generated tool/status summary lines are runtime-owned UI copy.\r
+        if (rowType !== 'response' && typeof setUiRuntimeText === 'function') setUiRuntimeText(row, sourceText);\r
+        else row.textContent = sourceText;\r
+        brief.appendChild(row);\r
+    });\r
+}\r
+\r
+function normalizeProcessBriefComparableText(value) {\r
+    return String(value == null ? '' : value).replace(/\\s+/g, ' ').trim();\r
+}\r
+\r
+var processAggregateStateByElement = new WeakMap();\r
+\r
+function emptyProcessAggregateState() {\r
+    return {\r
+        rows: new WeakSet(),\r
+        maxReactIter: 0,\r
+        llmResponses: 0,\r
+        toolCalls: 0,\r
+    };\r
+}\r
+\r
+function ensureProcessAggregateState(agg) {\r
+    if (!agg) return null;\r
+    var state = processAggregateStateByElement.get(agg);\r
+    if (!state) {\r
+        state = emptyProcessAggregateState();\r
+        processAggregateStateByElement.set(agg, state);\r
+    }\r
+    return state;\r
+}\r
+\r
+function registerProcessAggregateRow(agg, row) {\r
+    var state = ensureProcessAggregateState(agg);\r
+    if (!state || !row || state.rows.has(row)) return;\r
+    state.rows.add(row);\r
+    var reactIter = parseInt(row.getAttribute('data-react-iter'), 10);\r
+    if (Number.isFinite(reactIter) && reactIter > state.maxReactIter) state.maxReactIter = reactIter;\r
+    var type = row.getAttribute('data-log-type');\r
+    if (type === 'llm-response') state.llmResponses += 1;\r
+    else if (type === 'tool-call') state.toolCalls += 1;\r
+}\r
+\r
+function unregisterProcessAggregateRow(row) {\r
+    if (!row || !row.closest) return;\r
+    var agg = row.closest('.process-aggregate');\r
+    var state = agg && processAggregateStateByElement.get(agg);\r
+    if (!state || !state.rows.has(row)) return;\r
+    state.rows.delete(row);\r
+    var type = row.getAttribute('data-log-type');\r
+    if (type === 'llm-response') state.llmResponses = Math.max(0, state.llmResponses - 1);\r
+    else if (type === 'tool-call') state.toolCalls = Math.max(0, state.toolCalls - 1);\r
+}\r
+\r
+function hydrateProcessAggregateState(agg) {\r
+    if (!agg) return null;\r
+    var state = emptyProcessAggregateState();\r
+    processAggregateStateByElement.set(agg, state);\r
+    var body = agg.querySelector('.process-aggregate-body');\r
+    var tailKey = null;\r
+    if (body) body.querySelectorAll('.feed-item').forEach(function (row) {\r
+        registerProcessAggregateRow(agg, row);\r
+        var phase = reactFeedPhase(row.getAttribute('data-log-type'));\r
+        var iter = Number(row.getAttribute('data-react-iter'));\r
+        var generation = Math.max(0, Number(row.getAttribute('data-react-generation')) || 0);\r
+        if (phase == null || !Number.isFinite(iter)) return;\r
+        var key = [generation, iter, phase];\r
+        if (!tailKey || key[0] > tailKey[0]\r
+            || (key[0] === tailKey[0] && (key[1] > tailKey[1]\r
+                || (key[1] === tailKey[1] && key[2] >= tailKey[2])))) tailKey = key;\r
+    });\r
+    if (body) body._reactOrderTailKey = tailKey;\r
+    return state;\r
+}\r
+\r
+function updateProcessBrief(agg) {\r
+    if (!agg || !agg.isConnected) return;\r
+    const body = agg.querySelector('.process-aggregate-body');\r
+    const brief = agg.querySelector('.process-aggregate-brief');\r
+    if (!body || !brief) return;\r
+    const items = Array.from(body.querySelectorAll('.feed-item'));\r
+    const lines = [];\r
+    const finalComparable = String(agg._processFinalResponseComparable || '');\r
+    var toolCountMap = {};\r
+    var toolOrder = [];\r
+    function flushBriefTools() {\r
+        if (!toolOrder.length) return;\r
+        var toolParts = [];\r
+        for (var oi = 0; oi < toolOrder.length; oi += 1) {\r
+            var toolName = toolOrder[oi];\r
+            var toolCount = toolCountMap[toolName] || 0;\r
+            if (toolCount > 0) toolParts.push(toolName + ' ×' + toolCount);\r
+        }\r
+        if (toolParts.length) pushBriefLine(lines, 'Tool calls: ' + toolParts.join(', '));\r
+        toolCountMap = {};\r
+        toolOrder = [];\r
+    }\r
+    items.forEach(function (el) {\r
+        var raw = getFeedItemText(el);\r
+        /* 摘要只保留模型 response；reasoning 仍完整保留在展开内容中。 */\r
+        if (el.classList.contains('feed--llm2')) {\r
+            flushBriefTools();\r
+            var responseComparable = getProcessBriefComparableText(el);\r
+            if (raw && (!finalComparable || responseComparable !== finalComparable)) {\r
+                pushBriefLine(lines, raw, 'response');\r
+            }\r
+        } else if (el.classList.contains('feed--tool')) {\r
+            var tname = extractToolNameFromLog(raw);\r
+            if (toolCountMap[tname] === undefined) toolOrder.push(tname);\r
+            toolCountMap[tname] = (toolCountMap[tname] || 0) + 1;\r
+        }\r
+        /* status/reasoning 不进入摘要；工具会在下一个 response 前统一落成一行。 */\r
+    });\r
+    flushBriefTools();\r
+    if (lines.length) setBriefRows(brief, lines);\r
+    else {\r
+        // A collapsed process block must not surface runtime status rows. Keep\r
+        // the fallback useful for other process output, otherwise show only the\r
+        // neutral collapsed placeholder.\r
+        var any = body.querySelector('.feed-item:not(.feed--llm):not(.feed--llm2):not(.feed--st) .feed-chunk-scroller, .feed-item:not(.feed--llm):not(.feed--llm2):not(.feed--st) .feed-chunk');\r
+        var tAny = any ? (typeof getUiRuntimeText === 'function' ? getUiRuntimeText(any) : any.textContent).trim() : '';\r
+        setBriefRows(brief, [tAny || '本段过程已折叠']);\r
+    }\r
+    scheduleProcessAggregateHeightUi(agg);\r
+}\r
+\r
+function syncProcessAggregateHeightUi(agg) {\r
+    if (!agg) return;\r
+    var btn = agg.querySelector('.process-aggregate-resize');\r
+    if (!btn) return;\r
+    if (!agg.isConnected) {\r
+        btn.hidden = true;\r
+        return;\r
+    }\r
+    if (!agg.classList.contains('is-collapsed')) {\r
+        agg.classList.remove('is-height-expanded');\r
+        agg.classList.remove('has-height-overflow');\r
+        btn.hidden = true;\r
+        btn.setAttribute('aria-expanded', 'false');\r
+        return;\r
+    }\r
+    var expanded = agg.classList.contains('is-height-expanded');\r
+    agg.classList.remove('is-height-expanded');\r
+    agg.classList.remove('has-height-overflow');\r
+    var target = agg.querySelector('.process-aggregate-brief');\r
+    var hasOverflow = !!(target && target.scrollHeight > target.clientHeight + 1);\r
+    agg.classList.toggle('has-height-overflow', hasOverflow);\r
+    if (expanded && hasOverflow) agg.classList.add('is-height-expanded');\r
+    else expanded = false;\r
+    btn.hidden = !hasOverflow;\r
+    var label = expanded ? '收起执行轨迹高度' : '展开执行轨迹高度';\r
+    btn.setAttribute('aria-expanded', expanded ? 'true' : 'false');\r
+    btn.setAttribute('aria-label', label);\r
+    btn.setAttribute('data-ui-tip', label);\r
+    var tip = btn._uiHoverTipBound;\r
+    if (!tip && typeof bindUiHoverTip === 'function') bindUiHoverTip(btn);\r
+}\r
+\r
+function scheduleProcessAggregateHeightUi(agg) {\r
+    if (!agg || agg.classList.contains('subagent-grid-card')) return;\r
+    if (agg._processHeightUiRaf) cancelAnimationFrame(agg._processHeightUiRaf);\r
+    agg._processHeightUiRaf = requestAnimationFrame(function () {\r
+        agg._processHeightUiRaf = 0;\r
+        syncProcessAggregateHeightUi(agg);\r
+    });\r
+}\r
+\r
+function bindProcessAggregateHeightButton(agg) {\r
+    if (!agg || agg.classList.contains('subagent-grid-card')) return;\r
+    var btn = agg.querySelector('.process-aggregate-resize');\r
+    if (!btn) {\r
+        btn = document.createElement('button');\r
+        btn.type = 'button';\r
+        btn.className = 'process-aggregate-resize';\r
+        btn.hidden = true;\r
+        btn.innerHTML = '<span class="process-aggregate-chevron" aria-hidden="true"></span>';\r
+        agg.appendChild(btn);\r
+    }\r
+    if (!btn.dataset.bound) {\r
+        btn.dataset.bound = '1';\r
+        btn.addEventListener('click', function (e) {\r
+            e.preventDefault();\r
+            e.stopPropagation();\r
+            agg.classList.toggle('is-height-expanded');\r
+            if (agg.classList.contains('is-collapsed')) updateProcessBrief(agg);\r
+            requestAnimationFrame(function () {\r
+                syncProcessAggregateHeightUi(agg);\r
+                agg.querySelectorAll('.process-aggregate-body .feed-chunk').forEach(refreshFeedChunkOverflow);\r
+                registerMermaidLazy(agg);\r
+            });\r
+        });\r
+    }\r
+    var body = agg.querySelector('.process-aggregate-body');\r
+    if (body && !agg._processHeightMutationObserver && typeof MutationObserver !== 'undefined') {\r
+        agg._processHeightMutationObserver = new MutationObserver(function () {\r
+            scheduleProcessAggregateHeightUi(agg);\r
+        });\r
+        agg._processHeightMutationObserver.observe(body, {\r
+            childList: true,\r
+            subtree: true,\r
+        });\r
+    }\r
+    if (!agg._processHeightResizeObserver && typeof ResizeObserver !== 'undefined') {\r
+        agg._processHeightResizeObserver = new ResizeObserver(function () {\r
+            scheduleProcessAggregateHeightUi(agg);\r
+        });\r
+        if (body) agg._processHeightResizeObserver.observe(body);\r
+        var brief = agg.querySelector('.process-aggregate-brief');\r
+        if (brief) agg._processHeightResizeObserver.observe(brief);\r
+    }\r
+    scheduleProcessAggregateHeightUi(agg);\r
+}\r
+\r
+function alignProcessAggregateToViewportTop(agg) {\r
+    if (!agg || !agg.isConnected) return;\r
+    var viewport = document.getElementById('chat-container');\r
+    if (!viewport) return;\r
+    var viewportRect = viewport.getBoundingClientRect();\r
+    var aggregateRect = agg.getBoundingClientRect();\r
+    var targetTop = viewport.scrollTop + aggregateRect.top - viewportRect.top;\r
+    var maxTop = Math.max(0, viewport.scrollHeight - viewport.clientHeight);\r
+    targetTop = Math.max(0, Math.min(maxTop, targetTop));\r
+    if (typeof setScrollTopImmediate === 'function') setScrollTopImmediate(viewport, targetTop);\r
+    else viewport.scrollTop = targetTop;\r
+}\r
+\r
+function bindProcessAggregateInteractions(agg) {\r
+    const procBody = agg.querySelector('.process-aggregate-body, .subagent-card-body');\r
+    if (procBody && !procBody._streamFollowScrollBound) {\r
+        procBody._streamFollowScrollBound = true;\r
+        procBody.addEventListener('scroll', function () {\r
+            if (!isSessionRunning(currentSessionId)) return;\r
+            var active = getProcessBodyElForCurrentRun();\r
+            if (active !== procBody) return;\r
+            refreshLiveAutoFollowPins();\r
+        }, { passive: true });\r
+    }\r
+    if (agg.classList.contains('subagent-grid-card')) return;\r
+    const top = agg.querySelector('.process-aggregate-top');\r
+    if (top && !top.dataset.bound) {\r
+        top.dataset.bound = '1';\r
+        top.addEventListener('click', function () {\r
+            var openingDetail = agg.classList.contains('is-collapsed');\r
+            agg.classList.toggle('is-collapsed');\r
+            const expanded = !agg.classList.contains('is-collapsed');\r
+            top.setAttribute('aria-expanded', expanded ? 'true' : 'false');\r
+            if (agg.classList.contains('is-collapsed')) {\r
+                updateProcessBrief(agg);\r
+            } else {\r
+                requestAnimationFrame(function () {\r
+                    requestAnimationFrame(function () {\r
+                        syncProcessAggregateHeightUi(agg);\r
+                        agg.querySelectorAll('.process-aggregate-body .feed-chunk').forEach(refreshFeedChunkOverflow);\r
+                        registerMermaidLazy(agg);\r
+                        if (openingDetail) alignProcessAggregateToViewportTop(agg);\r
+                    });\r
+                });\r
+            }\r
+        });\r
+        top.addEventListener('keydown', function (e) {\r
+            if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); top.click(); }\r
+        });\r
+    }\r
+    const briefEl = agg.querySelector('.process-aggregate-brief');\r
+    if (briefEl) bindProcessBriefScrollChain(briefEl);\r
+}\r
+\r
+function bindProcessAggregate(agg) {\r
+    bindProcessAggregateInteractions(agg);\r
+    if (!agg || agg.classList.contains('subagent-grid-card')) return;\r
+    bindProcessAggregateHeightButton(agg);\r
+}\r
+\r
+function procNow() {\r
+    return (typeof performance !== 'undefined' && typeof performance.now === 'function') ? performance.now() : Date.now();\r
+}\r
+\r
+var processAggregateStatsTimer = null;\r
+\r
+function processAggregateNeedsLiveStats(agg) {\r
+    if (!agg || !agg.isConnected || !agg.dataset) return false;\r
+    if (!agg.dataset.procStartedAt || agg.dataset.procEndedAt) return false;\r
+    return !(agg.dataset.procDurationMs != null && agg.dataset.procDurationMs !== '');\r
+}\r
+\r
+function refreshLiveProcessAggregateStats() {\r
+    if (typeof document === 'undefined') return false;\r
+    var live = Array.from(document.querySelectorAll('.process-aggregate[data-proc-started-at]'))\r
+        .filter(processAggregateNeedsLiveStats);\r
+    live.forEach(refreshAggregateStatsSmart);\r
+    return live.length > 0;\r
+}\r
+\r
+function stopLiveProcessAggregateStats() {\r
+    if (!processAggregateStatsTimer) return;\r
+    clearInterval(processAggregateStatsTimer);\r
+    processAggregateStatsTimer = null;\r
+}\r
+\r
+function scheduleLiveProcessAggregateStats() {\r
+    if (processAggregateStatsTimer) return;\r
+    if (!refreshLiveProcessAggregateStats()) return;\r
+    processAggregateStatsTimer = setInterval(function () {\r
+        if (!refreshLiveProcessAggregateStats()) stopLiveProcessAggregateStats();\r
+    }, 1000);\r
+}\r
+\r
+function formatProcDurationMs(ms) {\r
+    if (ms == null || !Number.isFinite(ms) || ms < 0) return null;\r
+    if (ms < 800) return Math.max(0, Math.round(ms)) + 'ms';\r
+    if (ms < 60000) {\r
+        var s = ms / 1000;\r
+        return (s < 10 ? s.toFixed(1) : Math.round(s)) + 's';\r
+    }\r
+    var mi = Math.floor(ms / 60000);\r
+    var sec = Math.round((ms % 60000) / 1000);\r
+    return mi + '分' + sec + '秒';\r
+}\r
+\r
+function processStartedAtToProcNow(startedAt) {\r
+    if (!startedAt) return null;\r
+    var startedMs = Date.parse(String(startedAt));\r
+    if (!Number.isFinite(startedMs)) return null;\r
+    return procNow() - Math.max(0, Date.now() - startedMs);\r
+}\r
+\r
+function applyRunStartedAtToProcessGroup(agg, startedAt) {\r
+    if (!agg || !startedAt) return;\r
+    var t0 = processStartedAtToProcNow(startedAt);\r
+    if (!Number.isFinite(Number(t0))) return;\r
+    agg.dataset.procStartedAt = String(t0);\r
+    delete agg.dataset.procEndedAt;\r
+    if (!agg.dataset.procDurationMs) refreshProcessAggregateStats(agg);\r
+    scheduleLiveProcessAggregateStats();\r
+}\r
+\r
+function bumpAggregateMaxReactIter(agg, reactIter) {\r
+    if (!agg) return;\r
+    var n = Number(reactIter);\r
+    if (!Number.isFinite(n) || n < 1) return;\r
+    var flo = Math.floor(n);\r
+    var cur = parseInt(agg.dataset.maxReactIter || '0', 10);\r
+    if (flo > cur) agg.dataset.maxReactIter = String(flo);\r
+}\r
+\r
+function resolveSubagentAggFromCtx(ctx) {\r
+    if (!ctx) return null;\r
+    if (ctx.currentProcessGroup && ctx.currentProcessGroup.isConnected\r
+        && ctx.currentProcessGroup.classList.contains('subagent-grid-card')) {\r
+        return ctx.currentProcessGroup;\r
+    }\r
+    if (ctx._subagentBody && ctx._subagentBody.isConnected) {\r
+        var card = ctx._subagentBody.closest('.subagent-grid-card');\r
+        if (card) return card;\r
+    }\r
+    return null;\r
+}\r
+\r
+function applySubagentSessionMetricsToCard(card, metrics) {\r
+    if (!card || !metrics || typeof metrics !== 'object') return;\r
+    if (metrics.duration_ms != null && Number.isFinite(Number(metrics.duration_ms))) {\r
+        card.dataset.procDurationMs = String(Math.max(0, Math.floor(Number(metrics.duration_ms))));\r
+    }\r
+    if (metrics.react_loops != null && Number.isFinite(Number(metrics.react_loops))) {\r
+        card.dataset.procReactLoops = String(Math.max(0, Math.floor(Number(metrics.react_loops))));\r
+    }\r
+    if (metrics.tool_calls != null && Number.isFinite(Number(metrics.tool_calls))) {\r
+        card.dataset.procToolCalls = String(Math.max(0, Math.floor(Number(metrics.tool_calls))));\r
+    }\r
+    if (metrics.tool_failures != null && Number.isFinite(Number(metrics.tool_failures))) {\r
+        card.dataset.procToolFails = String(Math.max(0, Math.floor(Number(metrics.tool_failures))));\r
+    }\r
+}\r
+\r
+function applySubagentProcessMetricsToCard(card, event) {\r
+    if (!card || !event) return;\r
+    var isRunEnd = event.duration_ms != null && Number.isFinite(Number(event.duration_ms));\r
+    if (isRunEnd) {\r
+        var runDur = Math.max(0, Math.round(Number(event.duration_ms)));\r
+        var runLoops = event.react_loops != null && Number.isFinite(Number(event.react_loops))\r
+            ? Math.max(0, Math.floor(Number(event.react_loops))) : 0;\r
+        var runTools = event.tool_calls != null && Number.isFinite(Number(event.tool_calls))\r
+            ? Math.max(0, Math.floor(Number(event.tool_calls))) : 0;\r
+        var runFails = event.tool_failures != null && Number.isFinite(Number(event.tool_failures))\r
+            ? Math.max(0, Math.floor(Number(event.tool_failures))) : 0;\r
+        card.dataset.procDurationMs = String((parseInt(card.dataset.procDurationMs || '0', 10) || 0) + runDur);\r
+        card.dataset.procReactLoops = String((parseInt(card.dataset.procReactLoops || '0', 10) || 0) + runLoops);\r
+        card.dataset.procToolCalls = String((parseInt(card.dataset.procToolCalls || '0', 10) || 0) + runTools);\r
+        card.dataset.procToolFails = String((parseInt(card.dataset.procToolFails || '0', 10) || 0) + runFails);\r
+        delete card.dataset.procLiveToolCalls;\r
+        delete card.dataset.procLiveToolFails;\r
+    } else {\r
+        if (event.tool_calls != null && Number.isFinite(Number(event.tool_calls))) {\r
+            var liveTools = Math.max(0, Math.floor(Number(event.tool_calls)));\r
+            var prevTools = parseInt(card.dataset.procLiveToolCalls || '0', 10) || 0;\r
+            card.dataset.procLiveToolCalls = String(Math.max(prevTools, liveTools));\r
+        }\r
+        if (event.tool_failures != null && Number.isFinite(Number(event.tool_failures))) {\r
+            var liveFails = Math.max(0, Math.floor(Number(event.tool_failures)));\r
+            var prevFails = parseInt(card.dataset.procLiveToolFails || '0', 10) || 0;\r
+            card.dataset.procLiveToolFails = String(Math.max(prevFails, liveFails));\r
+        }\r
+    }\r
+}\r
+\r
+function uiEventReactIter(ev) {\r
+    if (!ev || ev.react_iter == null) return null;\r
+    var n = Number(ev.react_iter);\r
+    if (!Number.isFinite(n) || n < 1) return null;\r
+    return n;\r
+}\r
+\r
+function applyCacheStatsFromEvent(ctx, event, runSessionId) {\r
+    if (!event || typeof event !== 'object') return;\r
+    var agg = resolveSubagentAggFromCtx(ctx);\r
+    if (!agg || !agg.isConnected) {\r
+        agg = ctx && ctx.currentProcessGroup;\r
+        if (!agg || !agg.isConnected) {\r
+            var st = (ctx && ctx.stream) ? ctx.stream : getVisibleChatStream();\r
+            if (st) agg = st.querySelector('.process-aggregate:last-of-type');\r
+        }\r
+    }\r
+    if (!agg) return;\r
+    if (event.cache_hit != null) agg.dataset.procCacheHit = String(Math.max(0, Math.floor(Number(event.cache_hit))));\r
+    if (event.cache_miss != null) agg.dataset.procCacheMiss = String(Math.max(0, Math.floor(Number(event.cache_miss))));\r
+    if (event.hit_rate != null) agg.dataset.procCacheRate = String(Math.max(0, Number(event.hit_rate)));\r
+    if (event.model != null) agg.dataset.procCacheModel = String(event.model);\r
+    if (event.input_tokens != null) agg.dataset.procCacheInput = String(Math.max(0, Math.floor(Number(event.input_tokens))));\r
+    if (event.output_tokens != null) agg.dataset.procCacheOutput = String(Math.max(0, Math.floor(Number(event.output_tokens))));\r
+    if (event.tokens_per_sec != null) agg.dataset.procCacheTps = String(Math.max(0, Number(event.tokens_per_sec)));\r
+    var tokenSessionId = runSessionId || event.session_id || event.sessionId || '';\r
+    var eventTokenMode = String(event.context_token_mode || event.token_mode || '').toLowerCase();\r
+    var allowApiTokenStats = eventTokenMode !== 'calculated';\r
+    if (allowApiTokenStats && tokenSessionId && event.input_tokens != null && Number.isFinite(Number(event.input_tokens))) {\r
+        recordContextTokens(tokenSessionId, Math.max(0, Math.floor(Number(event.input_tokens))), event.threshold);\r
+    }\r
+    refreshAggregateStatsSmart(agg);\r
+}\r
+\r
+function applyProcessMetricsFromEvent(ctx, event) {\r
+    if (!event || typeof event !== 'object') return;\r
+    var subCard = resolveSubagentAggFromCtx(ctx);\r
+    if (subCard && subCard.isConnected) {\r
+        applySubagentProcessMetricsToCard(subCard, event);\r
+        scheduleSubagentCardStats(subCard);\r
+        return;\r
+    }\r
+    var agg = ctx && ctx.currentProcessGroup;\r
+    if (!agg || !agg.isConnected) {\r
+        var st = (ctx && ctx.stream) ? ctx.stream : getVisibleChatStream();\r
+        if (st) agg = st.querySelector('.process-aggregate:last-of-type');\r
+    }\r
+    if (!agg) return;\r
+    if (event.duration_ms != null && Number.isFinite(Number(event.duration_ms))) {\r
+        if (!replayingMessages && agg.dataset.procStartedAt) {\r
+            agg.dataset.procEndedAt = String(procNow());\r
+            delete agg.dataset.procDurationMs;\r
+        } else {\r
+            agg.dataset.procDurationMs = String(Math.max(0, Math.round(Number(event.duration_ms))));\r
+        }\r
+    }\r
+    if (event.react_loops != null && Number.isFinite(Number(event.react_loops))) {\r
+        agg.dataset.procReactLoops = String(Math.max(0, Math.floor(Number(event.react_loops))));\r
+    }\r
+    if (event.tool_calls != null && Number.isFinite(Number(event.tool_calls))) {\r
+        agg.dataset.procToolCalls = String(Math.max(0, Math.floor(Number(event.tool_calls))));\r
+    }\r
+    if (event.tool_failures != null && Number.isFinite(Number(event.tool_failures))) {\r
+        agg.dataset.procToolFails = String(Math.max(0, Math.floor(Number(event.tool_failures))));\r
+    }\r
+    refreshAggregateStatsSmart(agg);\r
+    if (processAggregateNeedsLiveStats(agg)) scheduleLiveProcessAggregateStats();\r
+    else if (!refreshLiveProcessAggregateStats()) stopLiveProcessAggregateStats();\r
+}\r
+\r
+function refreshAggregateStatsSmart(agg) {\r
+    if (agg && agg.classList && agg.classList.contains('subagent-grid-card')) refreshSubagentCardStats(agg);\r
+    else refreshProcessAggregateStats(agg);\r
+}\r
+\r
+function renderProcessAggregateStats(el, sourceText, tailText) {\r
+    if (!el) return;\r
+    el.textContent = '';\r
+    var head = document.createElement('span');\r
+    if (typeof setUiRuntimeText === 'function') setUiRuntimeText(head, sourceText);\r
+    else head.textContent = typeof translateUiString === 'function' ? translateUiString(sourceText) : sourceText;\r
+    var tail = document.createElement('span');\r
+    // Model/profile names and cache values are data, not UI copy.\r
+    tail.setAttribute('data-i18n-skip', 'true');\r
+    tail.textContent = String(tailText == null ? '' : tailText);\r
+    el.appendChild(head);\r
+    el.appendChild(tail);\r
+}\r
+\r
+function refreshSubagentCardStats(card) {\r
+    if (!card) return;\r
+    var el = card.querySelector('.process-aggregate-stats');\r
+    if (!el) return;\r
+    var body = card.querySelector('.subagent-card-body');\r
+    var pDur = card.dataset.procDurationMs != null && card.dataset.procDurationMs !== ''\r
+        ? parseInt(card.dataset.procDurationMs, 10) : NaN;\r
+    var pLoops = card.dataset.procReactLoops != null && card.dataset.procReactLoops !== ''\r
+        ? parseInt(card.dataset.procReactLoops, 10) : NaN;\r
+    var pTools = card.dataset.procToolCalls != null && card.dataset.procToolCalls !== ''\r
+        ? parseInt(card.dataset.procToolCalls, 10) : NaN;\r
+    var pFails = card.dataset.procToolFails != null && card.dataset.procToolFails !== ''\r
+        ? parseInt(card.dataset.procToolFails, 10) : NaN;\r
+    var maxFromRows = 0;\r
+    var bodyLoaded = subagentBodyIsLoaded(body) && body.dataset.stashed !== '1';\r
+    if (bodyLoaded) {\r
+        body.querySelectorAll('.subagent-turn-process .feed-item[data-react-iter]').forEach(function (row) {\r
+            var v = parseInt(row.getAttribute('data-react-iter'), 10);\r
+            if (Number.isFinite(v) && v > maxFromRows) maxFromRows = v;\r
+        });\r
+    }\r
+    var dsRi = card.dataset.maxReactIter ? parseInt(card.dataset.maxReactIter, 10) : 0;\r
+    var reactLoops = Math.max(maxFromRows, dsRi);\r
+    if (!reactLoops && bodyLoaded) {\r
+        reactLoops = body.querySelectorAll('.subagent-turn-process .feed-item[data-log-type="llm-response"]').length;\r
+    }\r
+    if (Number.isFinite(pLoops) && pLoops > 0) reactLoops = pLoops;\r
+    var sessionTools = Number.isFinite(pTools) && pTools >= 0 ? pTools : 0;\r
+    var liveTools = parseInt(card.dataset.procLiveToolCalls || '0', 10) || 0;\r
+    var toolN = sessionTools + liveTools;\r
+    if (!toolN && bodyLoaded) {\r
+        toolN = body.querySelectorAll('.subagent-turn-process .feed-item[data-log-type="tool-call"]').length;\r
+    }\r
+    var sessionFails = Number.isFinite(pFails) && pFails >= 0 ? pFails : 0;\r
+    var liveFails = parseInt(card.dataset.procLiveToolFails || '0', 10) || 0;\r
+    var failN = sessionFails + liveFails;\r
+    if (!failN && bodyLoaded) {\r
+        body.querySelectorAll('.subagent-turn-process .feed-item[data-log-type="tool-call"]').forEach(function (row) {\r
+            var sc = row.querySelector('.feed-chunk-scroller');\r
+            var txt = sc ? String(sc.textContent || '') : '';\r
+            if (/Error:|失败|异常|error executing command:/i.test(txt)) failN += 1;\r
+        });\r
+    }\r
+    var t0s = card.dataset.procStartedAt;\r
+    var t0 = (t0s != null && t0s !== '') ? Number(t0s) : NaN;\r
+    var parts = [];\r
+    var durStr = null;\r
+    if (Number.isFinite(pDur) && pDur >= 0) durStr = formatProcDurationMs(pDur);\r
+    else if (Number.isFinite(t0)) {\r
+        var t1s = card.dataset.procEndedAt;\r
+        var t1 = (t1s != null && t1s !== '') ? Number(t1s) : procNow();\r
+        durStr = formatProcDurationMs(t1 - t0);\r
+    }\r
+    if (durStr) parts.push(durStr);\r
+    parts.push(String(reactLoops) + ' 轮');\r
+    parts.push('工具 ' + String(toolN) + ' 次');\r
+    parts.push('失败 ' + String(failN) + ' 次');\r
+    var modelStr = card.dataset.procCacheModel || card.dataset.executorModel || '—';\r
+    var est = card.dataset.procCtxEstimated;\r
+    var thr = card.dataset.procCtxThreshold;\r
+    var pctStr = '—';\r
+    if (est != null && est !== '' && thr != null && thr !== '' && Number(thr) > 0) {\r
+        pctStr = (Math.round(Number(est) / Number(thr) * 1000) / 10) + '%';\r
+    }\r
+    renderProcessAggregateStats(el, parts.join(' · '), modelStr + ' · ' + pctStr);\r
+}\r
+\r
+function refreshProcessAggregateStats(agg) {\r
+    if (!agg) return;\r
+    var el = agg.querySelector('.process-aggregate-stats');\r
+    if (!el) return;\r
+    var body = agg.querySelector('.process-aggregate-body');\r
+    if (!body) { el.textContent = ''; return; }\r
+    var pDur = agg.dataset.procDurationMs != null && agg.dataset.procDurationMs !== ''\r
+        ? parseInt(agg.dataset.procDurationMs, 10) : NaN;\r
+    var pLoops = agg.dataset.procReactLoops != null && agg.dataset.procReactLoops !== ''\r
+        ? parseInt(agg.dataset.procReactLoops, 10) : NaN;\r
+    var pTools = agg.dataset.procToolCalls != null && agg.dataset.procToolCalls !== ''\r
+        ? parseInt(agg.dataset.procToolCalls, 10) : NaN;\r
+    var pFails = agg.dataset.procToolFails != null && agg.dataset.procToolFails !== ''\r
+        ? parseInt(agg.dataset.procToolFails, 10) : NaN;\r
+    var aggregateState = processAggregateStateByElement.get(agg) || hydrateProcessAggregateState(agg);\r
+    var maxFromRows = aggregateState ? aggregateState.maxReactIter : 0;\r
+    var dsRi = agg.dataset.maxReactIter ? parseInt(agg.dataset.maxReactIter, 10) : 0;\r
+    var reactLoops = Math.max(maxFromRows, dsRi);\r
+    if (!reactLoops) {\r
+        reactLoops = aggregateState ? aggregateState.llmResponses : 0;\r
+    }\r
+    if (Number.isFinite(pLoops) && pLoops >= 0) reactLoops = pLoops;\r
+    var toolN = aggregateState ? aggregateState.toolCalls : 0;\r
+    if (Number.isFinite(pTools) && pTools >= 0) toolN = pTools;\r
+    var failN = 0;\r
+    if (Number.isFinite(pFails) && pFails >= 0) failN = pFails;\r
+    var t0s = agg.dataset.procStartedAt;\r
+    var t0 = (t0s != null && t0s !== '') ? Number(t0s) : NaN;\r
+    var parts = [];\r
+    var durStr = null;\r
+    if (Number.isFinite(pDur) && pDur >= 0) durStr = formatProcDurationMs(pDur);\r
+    else if (Number.isFinite(t0)) {\r
+        var t1s = agg.dataset.procEndedAt;\r
+        var t1 = (t1s != null && t1s !== '') ? Number(t1s) : procNow();\r
+        durStr = formatProcDurationMs(t1 - t0);\r
+    }\r
+    if (durStr) parts.push(durStr);\r
+    parts.push(String(reactLoops) + ' 轮');\r
+    parts.push('工具 ' + String(toolN) + ' 次');\r
+        parts.push('失败 ' + String(failN) + ' 次');\r
+    var ch = agg.dataset.procCacheHit != null && agg.dataset.procCacheHit !== '' ? parseInt(agg.dataset.procCacheHit, 10) : 0;\r
+    var cm = agg.dataset.procCacheMiss != null && agg.dataset.procCacheMiss !== '' ? parseInt(agg.dataset.procCacheMiss, 10) : 0;\r
+    var cr = agg.dataset.procCacheRate != null && agg.dataset.procCacheRate !== '' ? parseFloat(agg.dataset.procCacheRate) : 0;\r
+    var modelStr = agg.dataset.procCacheModel || '';\r
+    var inputStr = agg.dataset.procCacheInput || '0';\r
+    var outputStr = agg.dataset.procCacheOutput || '0';\r
+    var tps = agg.dataset.procCacheTps;\r
+    var cacheParts = [];\r
+    if (modelStr) cacheParts.push(modelStr);\r
+    cacheParts.push('input=' + inputStr);\r
+    cacheParts.push('output=' + outputStr);\r
+    if (tps && tps !== '0') cacheParts.push(tps + ' tok/s');\r
+    var rateStr = (ch + cm > 0) ? (cr % 1 === 0 ? cr.toFixed(0) : cr.toFixed(1)) + '%' : '0%';\r
+    cacheParts.push('hit_rate=' + rateStr);\r
+    var cacheLine = cacheParts.join(' · ');\r
+    renderProcessAggregateStats(el, parts.join(' · '), cacheLine);\r
+}\r
+\r
+function ensureProcessGroup(ctx) {\r
+    if (!ctx || !ctx.stream) return null;\r
+    /* DocumentFragment 或未挂上 document 的节点 isConnected 为 false；回放或「加载更早消息」预挂载时需保留同一执行轨迹框 */\r
+    if (ctx.currentProcessGroup && !ctx.currentProcessGroup.isConnected && !replayingMessages) ctx.currentProcessGroup = null;\r
+    if (ctx.currentProcessGroup) return ctx.currentProcessGroup;\r
+    stripWelcome(ctx);\r
+    const wrap = document.createElement('div');\r
+    wrap.className = 'process-aggregate';\r
+    var replayCollapsed = !!replayingMessages;\r
+    if (replayCollapsed) wrap.classList.add('is-collapsed');\r
+    if (!replayingMessages) wrap.classList.add('is-running');\r
+    wrap.innerHTML = '<div class="process-aggregate-top" role="button" tabindex="0" aria-expanded="' + (replayCollapsed ? 'false' : 'true') + '">'\r
+        + '<div class="process-aggregate-top-line">'\r
+        + '<span class="process-aggregate-title-wrap">'\r
+        + '<span class="process-aggregate-title">执行轨迹</span>'\r
+        + '<span class="process-aggregate-stats" aria-live="polite"></span>'\r
+        + '</span>'\r
+        + '<span class="process-chev" aria-hidden="true">▼</span></div>'\r
+        + '<div class="process-aggregate-brief"></div></div>'\r
+        + '<div class="process-aggregate-body"></div>'\r
+        + '<button type="button" class="process-aggregate-resize" aria-label="展开执行轨迹高度" aria-expanded="false" data-ui-tip="展开执行轨迹高度" hidden>'\r
+        + '<span class="process-aggregate-chevron" aria-hidden="true"></span></button>';\r
+    if (!replayingMessages) {\r
+        if (ctx.runStartedAt) applyRunStartedAtToProcessGroup(wrap, ctx.runStartedAt);\r
+        else {\r
+            wrap.dataset.procStartedAt = String(procNow());\r
+        }\r
+    }\r
+    delete wrap.dataset.maxReactIter;\r
+    (ctx.stream || chatContainer).appendChild(wrap);\r
+    bindProcessAggregate(wrap);\r
+    ctx.currentProcessGroup = wrap;\r
+    refreshProcessAggregateStats(wrap);\r
+    if (processAggregateNeedsLiveStats(wrap)) scheduleLiveProcessAggregateStats();\r
+    return wrap;\r
+}\r
+\r
+function sealProcessGroup(ctx) {\r
+    if (!ctx) return;\r
+    if (!ctx.currentProcessGroup) return;\r
+    const agg = ctx.currentProcessGroup;\r
+    if (agg.isConnected) {\r
+        agg.classList.remove('is-running');\r
+        updateProcessBrief(agg);\r
+        if (agg.dataset.procStartedAt) agg.dataset.procEndedAt = String(procNow());\r
+        refreshProcessAggregateStats(agg);\r
+        if (!refreshLiveProcessAggregateStats()) stopLiveProcessAggregateStats();\r
+    }\r
+    ctx.currentProcessGroup = null;\r
+    ctx.progressScrollers = {};\r
+    resetKeyContextStreamFilter(ctx);\r
+    finalizeProgressStreamChunks(ctx);\r
+}\r
+\r
+function getProcessBody(ctx) {\r
+    if (ctx && ctx._subagentTurnProcess && ctx._subagentTurnProcess.isConnected) return ctx._subagentTurnProcess;\r
+    if (ctx && ctx.currentTurn && ctx.currentTurn.isConnected) {\r
+        var subProc = ctx.currentTurn.querySelector('.subagent-turn-process');\r
+        if (subProc) {\r
+            ctx._subagentTurnProcess = subProc;\r
+            return subProc;\r
+        }\r
+    }\r
+    if (ctx && ctx._subagentBody && ctx._subagentBody.isConnected) return null;\r
+    const w = ensureProcessGroup(ctx);\r
+    if (!w) return null;\r
+    return w.querySelector('.process-aggregate-body');\r
+}\r
+\r
+function getExistingProcessBody(ctx) {\r
+    if (!ctx) return null;\r
+    if (ctx._subagentTurnProcess && ctx._subagentTurnProcess.isConnected) return ctx._subagentTurnProcess;\r
+    if (ctx.currentTurn && ctx.currentTurn.isConnected) {\r
+        var subProc = ctx.currentTurn.querySelector('.subagent-turn-process');\r
+        if (subProc) {\r
+            ctx._subagentTurnProcess = subProc;\r
+            return subProc;\r
+        }\r
+    }\r
+    if (ctx._subagentBody && ctx._subagentBody.isConnected) return null;\r
+    var current = ctx.currentProcessGroup;\r
+    if (!current || !current.isConnected) return null;\r
+    return current.querySelector('.process-aggregate-body');\r
+}\r
+\r
+function autoResizeTextarea() {\r
+    messageInput.style.height = 'auto';\r
+    messageInput.style.height = Math.min(messageInput.scrollHeight, Math.floor(window.innerHeight * 0.5)) + 'px';\r
+    repinStreamScrollAfterComposerResize();\r
+}\r
+\r
+/** 输入框增高会压缩工作区高度；若正在跟随底部，立即把聊天区/执行轨迹区重新钉到底部，避免与流式滚动互相拉扯。 */\r
+function repinStreamScrollAfterComposerResize() {\r
+    if (!liveAutoFollow || !chatContainer) return;\r
+    if (typeof setScrollTopImmediate === 'function') {\r
+        setScrollTopImmediate(chatContainer, chatContainer.scrollHeight);\r
+    }\r
+    var pb = typeof getProcessBodyElForCurrentRun === 'function' ? getProcessBodyElForCurrentRun() : null;\r
+    if (pb) pb.scrollTop = pb.scrollHeight;\r
+}\r
+function syncComposerInputState() {\r
+    autoResizeTextarea();\r
+    rewriteInputWorkspacePaths();\r
+    if (hasSendableText(messageInput.value)) recentComposerQueuedFollowup = null;\r
+    if (currentSessionId) persistInputDraft(currentSessionId, messageInput.value);\r
+    if (typeof setSendButtonState === 'function') setSendButtonState();\r
+}\r
+messageInput.addEventListener('input', syncComposerInputState);\r
+messageInput.addEventListener('blur', function () {\r
+    recentComposerQueuedFollowup = null;\r
+});\r
+autoResizeTextarea();\r
+refreshInputPathChips();\r
+\r
+function escapeHtml(str) {\r
+    if (!str) return '';\r
+    return str.replace(/[&<>]/g, function(m) {\r
+        if (m === '&') return '&amp;';\r
+        if (m === '<') return '&lt;';\r
+        if (m === '>') return '&gt;';\r
+        return m;\r
+    });\r
+}\r
+\r
+function escapeHtmlAttr(str) {\r
+    return escapeHtml(String(str || '')).replace(/"/g, '&quot;').replace(/'/g, '&#39;');\r
+}\r
+\r
+function scrollToBottom(opts) {\r
+    opts = opts || {};\r
+    if (!chatContainer) return;\r
+    if (opts.smooth && typeof chatContainer.scrollTo === 'function') {\r
+        chatContainer.scrollTo({ top: chatContainer.scrollHeight, behavior: 'smooth' });\r
+        return;\r
+    }\r
+    setScrollTopImmediate(chatContainer, chatContainer.scrollHeight);\r
+    requestAnimationFrame(function () {\r
+        if (chatContainer) chatContainer.scrollTop = chatContainer.scrollHeight;\r
+    });\r
+}\r
+\r
+// 滚动位置存储\r
+const LS_SCROLL_POSITION_PREFIX = 'myagent-scroll-';\r
+const LS_SCROLL_ANCHOR_PREFIX = 'myagent-scroll-anchor-';\r
+const LS_SCROLL_ANCHOR_OFFSET_PREFIX = 'myagent-scroll-anchor-offset-';\r
+\r
+function getScrollPositionKey(sessionId) {\r
+    return LS_SCROLL_POSITION_PREFIX + sessionId;\r
+}\r
+\r
+function getScrollAnchorKey(sessionId) {\r
+    return LS_SCROLL_ANCHOR_PREFIX + sessionId;\r
+}\r
+\r
+function getScrollAnchorOffsetKey(sessionId) {\r
+    return LS_SCROLL_ANCHOR_OFFSET_PREFIX + sessionId;\r
+}\r
+\r
+function saveScrollPosition(sessionId, scrollTop) {\r
+    if (!sessionId) return;\r
+    try {\r
+        localStorage.setItem(getScrollPositionKey(sessionId), String(Math.round(scrollTop)));\r
+    } catch (e) { /* ignore */ }\r
+}\r
+\r
+function saveScrollAnchorPosition(sessionId) {\r
+    if (!chatContainer || !sessionId) return;\r
+    try {\r
+        if (isNearBottom(chatContainer, STREAM_CHAT_NEAR_BOTTOM_PX)) {\r
+            localStorage.removeItem(getScrollAnchorKey(sessionId));\r
+            localStorage.removeItem(getScrollAnchorOffsetKey(sessionId));\r
+            return;\r
+        }\r
+        var rect = chatContainer.getBoundingClientRect();\r
+        var wraps = chatContainer.querySelectorAll('.msg-wrap--user[data-event-index]');\r
+        var best = null;\r
+        var bestWrap = null;\r
+        for (var i = 0; i < wraps.length; i += 1) {\r
+            var wr = wraps[i];\r
+            var ei = Number(wr.getAttribute('data-event-index'));\r
+            if (!Number.isFinite(ei)) continue;\r
+            var top = wr.getBoundingClientRect().top;\r
+            if (top <= rect.top + 8) {\r
+                best = ei;\r
+                bestWrap = wr;\r
+            }\r
+            else if (best == null) {\r
+                best = ei;\r
+                bestWrap = wr;\r
+                break;\r
+            }\r
+        }\r
+        if (best != null && bestWrap) {\r
+            localStorage.setItem(getScrollAnchorKey(sessionId), String(best));\r
+            localStorage.setItem(\r
+                getScrollAnchorOffsetKey(sessionId),\r
+                String(Math.round(bestWrap.getBoundingClientRect().top - rect.top))\r
+            );\r
+        } else {\r
+            localStorage.removeItem(getScrollAnchorKey(sessionId));\r
+            localStorage.removeItem(getScrollAnchorOffsetKey(sessionId));\r
+        }\r
+    } catch (e) { /* ignore */ }\r
+}\r
+\r
+function getSavedScrollAnchorPosition(sessionId) {\r
+    if (!sessionId) return null;\r
+    try {\r
+        var saved = localStorage.getItem(getScrollAnchorKey(sessionId));\r
+        if (saved == null || saved === '') return null;\r
+        var n = Number(saved);\r
+        return Number.isFinite(n) ? n : null;\r
+    } catch (e) { return null; }\r
+}\r
+\r
+function getSavedScrollAnchorOffset(sessionId) {\r
+    if (!sessionId) return null;\r
+    try {\r
+        var saved = localStorage.getItem(getScrollAnchorOffsetKey(sessionId));\r
+        if (saved == null || saved === '') return null;\r
+        var n = Number(saved);\r
+        return Number.isFinite(n) ? n : null;\r
+    } catch (e) { return null; }\r
+}\r
+\r
+function getSavedScrollPosition(sessionId) {\r
+    if (!sessionId) return null;\r
+    try {\r
+        var saved = localStorage.getItem(getScrollPositionKey(sessionId));\r
+        return saved ? parseInt(saved, 10) : null;\r
+    } catch (e) { return null; }\r
+}\r
+\r
+function saveChatScrollForSession(sid) {\r
+    if (!chatContainer || !sid) return;\r
+    saveScrollPosition(sid, chatContainer.scrollTop);\r
+    saveScrollAnchorPosition(sid);\r
+}\r
+\r
+function clampChatScrollTop(y) {\r
+    if (!chatContainer) return 0;\r
+    const max = Math.max(0, chatContainer.scrollHeight - chatContainer.clientHeight);\r
+    return Math.min(Math.max(0, y), max);\r
+}\r
+\r
+var historySmoothScrollSessionId = '';\r
+\r
+function beginHistorySmoothScroll(sessionId) {\r
+    if (typeof cancelSmoothStreamFollowForHistoryLoad === 'function') {\r
+        cancelSmoothStreamFollowForHistoryLoad();\r
+    }\r
+    historySmoothScrollSessionId = String(sessionId || '');\r
+}\r
+\r
+function endHistorySmoothScroll(sessionId) {\r
+    var sid = String(sessionId || '');\r
+    if (!sid || historySmoothScrollSessionId === sid) historySmoothScrollSessionId = '';\r
+}\r
+\r
+function isHistorySmoothScrollActive() {\r
+    return !!(\r
+        historySmoothScrollSessionId\r
+        && historySmoothScrollSessionId === String(currentSessionId || '')\r
+    );\r
+}\r
+\r
+/**\r
+ * @param {string} sessionId\r
+ * @param {'saved-or-bottom'|'saved-smooth-or-bottom'|'bottom'|'smooth-bottom'} mode\r
+ */\r
+function applyChatScrollAfterHistoryLoad(sessionId, mode) {\r
+    if (!chatContainer || !sessionId) return;\r
+    if (mode === 'smooth-bottom') beginHistorySmoothScroll(sessionId);\r
+    else endHistorySmoothScroll();\r
+    var running = isSessionRunning(sessionId)\r
+        || (typeof isServerStreamActive === 'function' && isServerStreamActive(sessionId));\r
+\r
+    // Running sessions always show the newest generated content.\r
+    if (running) {\r
+        endHistorySmoothScroll(sessionId);\r
+        if (typeof scrollCurrentRunningProcessToBottom === 'function') {\r
+            scrollCurrentRunningProcessToBottom(sessionId);\r
+        }\r
+        streamChatNearBottom = true;\r
+        streamProcNearBottom = true;\r
+        liveAutoFollow = true;\r
+        scrollToBottom();\r
+        return;\r
+    }\r
+\r
+    if (mode === 'saved-or-bottom' || mode === 'saved-smooth-or-bottom') {\r
+        var smoothRestore = mode === 'saved-smooth-or-bottom';\r
+        var savedPosition = getSavedScrollPosition(sessionId);\r
+        var savedAnchor = getSavedScrollAnchorPosition(sessionId);\r
+        var savedAnchorOffset = getSavedScrollAnchorOffset(sessionId);\r
+        if (savedAnchor != null && typeof scrollToUserTurnOrLoadOlder === 'function') {\r
+            requestAnimationFrame(function () {\r
+                if (sessionId !== currentSessionId) return;\r
+                void scrollToUserTurnOrLoadOlder(savedAnchor, {\r
+                    silent: true,\r
+                    allowFullReload: false,\r
+                    maxOlderLoads: 2,\r
+                    instant: !smoothRestore,\r
+                    viewportOffset: savedAnchorOffset,\r
+                }).then(function (ok) {\r
+                    if (ok || sessionId !== currentSessionId || !chatContainer) return;\r
+                    if (savedPosition !== null && Number.isFinite(Number(savedPosition))) {\r
+                        var fallbackTop = clampChatScrollTop(Number(savedPosition));\r
+                        if (smoothRestore && typeof chatContainer.scrollTo === 'function') {\r
+                            chatContainer.scrollTo({ top: fallbackTop, behavior: 'smooth' });\r
+                        } else {\r
+                            setScrollTopImmediate(chatContainer, fallbackTop);\r
+                        }\r
+                        streamChatNearBottom = isNearBottom(chatContainer, STREAM_CHAT_NEAR_BOTTOM_PX);\r
+                        liveAutoFollow = streamChatNearBottom;\r
+                    } else {\r
+                        scrollToBottom();\r
+                    }\r
+                });\r
+            });\r
+            streamChatNearBottom = false;\r
+            streamProcNearBottom = true;\r
+            liveAutoFollow = false;\r
+            return;\r
+        }\r
+        if (savedPosition !== null && Number.isFinite(Number(savedPosition))) {\r
+            var targetTop = clampChatScrollTop(Number(savedPosition));\r
+            if (smoothRestore && typeof chatContainer.scrollTo === 'function') {\r
+                chatContainer.scrollTo({ top: targetTop, behavior: 'smooth' });\r
+            } else {\r
+                setScrollTopImmediate(chatContainer, targetTop);\r
+            }\r
+            streamChatNearBottom = isNearBottom(chatContainer, STREAM_CHAT_NEAR_BOTTOM_PX);\r
+            streamProcNearBottom = true;\r
+            liveAutoFollow = streamChatNearBottom;\r
+            return;\r
+        }\r
+    }\r
+    \r
+    streamChatNearBottom = true;\r
+    streamProcNearBottom = true;\r
+    liveAutoFollow = true;\r
+    scrollToBottom({ smooth: mode === 'smooth-bottom' });\r
+}\r
+\r
+window.addEventListener('beforeunload', function () {\r
+    saveChatScrollForSession(currentSessionId);\r
+});\r
+document.addEventListener('visibilitychange', function () {\r
+    if (document.visibilityState === 'hidden') saveChatScrollForSession(currentSessionId);\r
+    else if (typeof reconcileRunStateFromServer === 'function') {\r
+        void reconcileRunStateFromServer({ silent: true });\r
+    }\r
+    updateUiPresenceActive();\r
+});\r
+\r
+var uiPresenceToken = null;\r
+var uiPresenceHeartbeatTimer = null;\r
+function getUiPresenceToken() {\r
+    if (uiPresenceToken) return uiPresenceToken;\r
+    var KEY = 'myagent-ui-presence-token';\r
+    try {\r
+        var stored = sessionStorage.getItem(KEY);\r
+        if (stored) {\r
+            uiPresenceToken = stored;\r
+            return stored;\r
+        }\r
+    } catch (e) { /* private mode / storage disabled */ }\r
+    uiPresenceToken = 'ui-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 12);\r
+    try {\r
+        sessionStorage.setItem(KEY, uiPresenceToken);\r
+    } catch (e) { /* best effort */ }\r
+    return uiPresenceToken;\r
+}\r
+function getUiPresenceActive() {\r
+    return document.visibilityState === 'visible' && document.hasFocus();\r
+}\r
+function updateUiPresenceActive() {\r
+    sendUiPresence('update');\r
+}\r
+function sendUiPresence(action) {\r
+    var token = getUiPresenceToken();\r
+    var payload = JSON.stringify({\r
+        action: action,\r
+        token: token,\r
+        active: getUiPresenceActive(),\r
+        session_id: typeof currentSessionId === 'string' ? currentSessionId : ''\r
+    });\r
+    try {\r
+        var blob = new Blob([payload], { type: 'application/json' });\r
+        if (navigator.sendBeacon('/api/ui-presence', blob)) return;\r
+    } catch (e) { /* fall through to keepalive fetch */ }\r
+    try {\r
+        fetch('/api/ui-presence', {\r
+            method: 'POST',\r
+            headers: { 'Content-Type': 'application/json' },\r
+            body: payload,\r
+            keepalive: true,\r
+            credentials: 'same-origin'\r
+        }).catch(function () { /* page is closing; best effort */ });\r
+    } catch (e) { /* ignore */ }\r
+}\r
+function registerUiPresence() {\r
+    sendUiPresence('register');\r
+    stopUiPresenceHeartbeat();\r
+    uiPresenceHeartbeatTimer = setTimeout(registerUiPresence, 10000);\r
+}\r
+function stopUiPresenceHeartbeat() {\r
+    if (uiPresenceHeartbeatTimer) {\r
+        clearTimeout(uiPresenceHeartbeatTimer);\r
+        uiPresenceHeartbeatTimer = null;\r
+    }\r
+}\r
+if (document.readyState === 'loading') {\r
+    document.addEventListener('DOMContentLoaded', registerUiPresence);\r
+} else {\r
+    registerUiPresence();\r
+}\r
+window.addEventListener('pagehide', function () {\r
+    stopUiPresenceHeartbeat();\r
+    sendUiPresence('unregister');\r
+});\r
+window.addEventListener('pageshow', function () {\r
+    registerUiPresence();\r
+    if (typeof reconcileRunStateFromServer === 'function') {\r
+        void reconcileRunStateFromServer({ silent: true });\r
+    }\r
+});\r
+window.addEventListener('focus', function () {\r
+    if (typeof reconcileRunStateFromServer === 'function') {\r
+        void reconcileRunStateFromServer({ silent: true });\r
+    }\r
+    updateUiPresenceActive();\r
+});\r
+window.addEventListener('blur', function () {\r
+    updateUiPresenceActive();\r
+});\r
+\r
+const WELCOME_HTML = \`<div class="welcome" role="status"><div class="welcome-icon" aria-hidden="true"><img src="/assets/sugar-logo.png" alt="" draggable="false"></div><strong>开始一段新的对话</strong><p>在左侧侧栏新建或选择会话。Enter 发送，Ctrl+Enter / Shift+Enter 换行。</p></div>\`;\r
+\r
+function historyLoadScrollsToBottom(sessionId, mode) {\r
+    if (mode === 'bottom') return true;\r
+    if (mode === 'saved-or-bottom' || mode === 'saved-smooth-or-bottom') {\r
+        var savedAnchor = getSavedScrollAnchorPosition(sessionId);\r
+        if (savedAnchor != null) return false;\r
+        var savedPosition = getSavedScrollPosition(sessionId);\r
+        if (savedPosition !== null && Number.isFinite(Number(savedPosition))) return false;\r
+    }\r
+    return true;\r
+}\r
+\r
+function waitForChatScrollAfterHistoryLoad(sessionId, mode) {\r
+    if (!chatContainer || !sessionId) return Promise.resolve(false);\r
+    if (sessionId !== currentSessionId) return Promise.resolve(false);\r
+    if (mode === 'smooth-bottom') {\r
+        return new Promise(function (resolve) {\r
+            var settled = false;\r
+            var raf = 0;\r
+            var startedAt = performance.now();\r
+            var lastMovementAt = startedAt;\r
+            var lastTop = chatContainer.scrollTop;\r
+            var retargetCount = 0;\r
+            var userEvents = ['wheel', 'touchstart', 'pointerdown'];\r
+            function isRunningNow() {\r
+                try {\r
+                    if (typeof isSessionRunning === 'function' && isSessionRunning(sessionId)) return true;\r
+                    if (typeof isServerStreamActive === 'function' && isServerStreamActive(sessionId)) return true;\r
+                } catch (e) {}\r
+                return false;\r
+            }\r
+            function cleanup(reachedBottom) {\r
+                if (settled) return;\r
+                settled = true;\r
+                if (raf) cancelAnimationFrame(raf);\r
+                chatContainer.removeEventListener('scrollend', onScrollEnd);\r
+                userEvents.forEach(function (eventName) {\r
+                    chatContainer.removeEventListener(eventName, onUserInterrupt);\r
+                });\r
+                endHistorySmoothScroll(sessionId);\r
+                resolve(!!reachedBottom);\r
+            }\r
+            function isAtBottom() {\r
+                if (!chatContainer) return false;\r
+                var maxTop = Math.max(0, chatContainer.scrollHeight - chatContainer.clientHeight);\r
+                return maxTop - chatContainer.scrollTop <= 2;\r
+            }\r
+            function onScrollEnd() {\r
+                if (sessionId !== currentSessionId) {\r
+                    cleanup(false);\r
+                    return;\r
+                }\r
+                if (isRunningNow()) {\r
+                    if (chatContainer) setScrollTopImmediate(chatContainer, chatContainer.scrollHeight);\r
+                    cleanup(true);\r
+                    return;\r
+                }\r
+                if (isAtBottom()) {\r
+                    cleanup(true);\r
+                    return;\r
+                }\r
+                if (retargetCount < 1) {\r
+                    retargetCount += 1;\r
+                    lastMovementAt = performance.now();\r
+                    chatContainer.scrollTo({ top: chatContainer.scrollHeight, behavior: 'smooth' });\r
+                }\r
+            }\r
+            function onUserInterrupt() {\r
+                cleanup(false);\r
+            }\r
+            function check(now) {\r
+                if (settled) return;\r
+                if (!chatContainer || sessionId !== currentSessionId) {\r
+                    cleanup(false);\r
+                    return;\r
+                }\r
+                var top = chatContainer.scrollTop;\r
+                if (Math.abs(top - lastTop) > 0.5) {\r
+                    lastTop = top;\r
+                    lastMovementAt = now;\r
+                }\r
+                if (isAtBottom() && now - lastMovementAt >= 96) {\r
+                    cleanup(true);\r
+                    return;\r
+                }\r
+                if (isRunningNow()) {\r
+                    if (chatContainer) setScrollTopImmediate(chatContainer, chatContainer.scrollHeight);\r
+                    cleanup(true);\r
+                    return;\r
+                }\r
+                if (!isAtBottom() && now - lastMovementAt >= 180 && retargetCount < 1) {\r
+                    retargetCount += 1;\r
+                    lastMovementAt = now;\r
+                    chatContainer.scrollTo({ top: chatContainer.scrollHeight, behavior: 'smooth' });\r
+                }\r
+                if (now - startedAt >= 3200) {\r
+                    cleanup(isAtBottom());\r
+                    return;\r
+                }\r
+                raf = requestAnimationFrame(check);\r
+            }\r
+            chatContainer.addEventListener('scrollend', onScrollEnd);\r
+            userEvents.forEach(function (eventName) {\r
+                chatContainer.addEventListener(eventName, onUserInterrupt, { passive: true });\r
+            });\r
+            raf = requestAnimationFrame(check);\r
+        });\r
+    }\r
+    if (historyLoadScrollsToBottom(sessionId, mode)) {\r
+        return new Promise(function (resolve) {\r
+            requestAnimationFrame(function () {\r
+                resolve(true);\r
+            });\r
+        });\r
+    }\r
+    return Promise.resolve(false);\r
+}\r
+\r
+function setWelcome() {\r
+    resetSessionHistoryPaging();\r
+    const vs = getVisibleChatStream();\r
+    if (vs) {\r
+        emptyChatStreamKeepingStrip(vs);\r
+        vs.insertAdjacentHTML('beforeend', WELCOME_HTML);\r
+    } else {\r
+        chatContainer.innerHTML = '';\r
+        ensureVisibleChatStreamSlot();\r
+        const vs2 = getVisibleChatStream();\r
+        if (vs2) vs2.insertAdjacentHTML('beforeend', WELCOME_HTML);\r
+        else chatContainer.innerHTML = WELCOME_HTML;\r
+    }\r
+    rebuildToc();\r
+}\r
+\r
+function stripWelcome(ctx) {\r
+    if (ctx && ctx._subagentBody) return;\r
+    const root = (ctx && ctx.stream) ? ctx.stream : (getVisibleChatStream() || chatContainer);\r
+    if (root) root.querySelector('.welcome')?.remove();\r
+}\r
+\r
+function clearChat() { setWelcome(); }\r
+\r
+function pathJoinBaseName(baseDir, name) {\r
+    if (!baseDir) return name || '';\r
+    if (!name) return baseDir;\r
+    var d = String(baseDir).replace(/[\\\\/]+$/, '');\r
+    var useBack = d.indexOf('\\\\') !== -1;\r
+    return d + (useBack ? '\\\\' : '/') + name;\r
+}\r
+\r
+/** 将「工作区绝对路径」转为 file:// URL（Windows / Unix）；分段编码以支持空格、中文等。 */\r
+function fileUrlFromFsPath(fsPath) {\r
+    var norm = String(fsPath || '').replace(/\\\\/g, '/');\r
+    if (/^\\/\\//.test(norm)) return 'file:' + norm.replace(/\\//g, '/');\r
+    var encRest = function (rel) {\r
+        if (!rel) return '';\r
+        return rel.split('/').map(function (seg) {\r
+            return encodeURIComponent(seg);\r
+        }).join('/');\r
+    };\r
+    if (/^[A-Za-z]:\\//.test(norm)) {\r
+        return 'file:///' + norm.slice(0, 3) + encRest(norm.slice(3));\r
+    }\r
+    return 'file:///' + encRest(norm.replace(/^\\/+/, ''));\r
+}\r
+\r
+/**\r
+ * 助手常写「保存至：📄 /报告.md」——以 / 开头表示相对工作区根目录的路径（非 URL）。\r
+ */\r
+function joinWorkDirAndRelativeSlashPath(workDir, slashPath) {\r
+    var rel = String(slashPath || '').replace(/^\\/+/, '');\r
+    if (!rel || !workDir) return null;\r
+    var d = String(workDir).replace(/[\\\\/]+$/, '');\r
+    var useBack = d.indexOf('\\\\') !== -1;\r
+    var segs = rel.split(/\\/+/).filter(Boolean);\r
+    if (!segs.length) return null;\r
+    var tail = segs.join(useBack ? '\\\\' : '/');\r
+    return d + (useBack ? '\\\\' : '/') + tail;\r
+}\r
+\r
+function trimTrailingPathPunct(s) {\r
+    var t = String(s || '').trim();\r
+    var closerPairs = {\r
+        ')': '(',\r
+        ']': '[',\r
+        '\\uFF09': '\\uFF08',\r
+        '\\u3011': '\\u3010'\r
+    };\r
+    var changed = true;\r
+    while (changed && t) {\r
+        changed = false;\r
+        var withoutPunct = t.replace(/[，。、；：』」\\.,;:!?'" ]+$/g, '').trimEnd();\r
+        if (withoutPunct !== t) {\r
+            t = withoutPunct;\r
+            changed = true;\r
+        }\r
+        var close = t.charAt(t.length - 1);\r
+        var open = closerPairs[close];\r
+        if (!open) continue;\r
+        var openCount = 0;\r
+        var closeCount = 0;\r
+        for (var i = 0; i < t.length; i += 1) {\r
+            if (t.charAt(i) === open) openCount += 1;\r
+            else if (t.charAt(i) === close) closeCount += 1;\r
+        }\r
+        if (closeCount > openCount) {\r
+            t = t.slice(0, -1).trimEnd();\r
+            changed = true;\r
+        }\r
+    }\r
+    return t;\r
+}\r
+\r
+function stripPathWrappingQuotes(s) {\r
+    var t = String(s || '').trim();\r
+    if (t.length >= 2) {\r
+        var a = t.charAt(0);\r
+        var b = t.charAt(t.length - 1);\r
+        if ((a === '"' && b === '"') || (a === "'" && b === "'") || (a === '\`' && b === '\`')) {\r
+            return t.slice(1, -1).trim();\r
+        }\r
+    }\r
+    return t;\r
+}\r
+\r
+function stripPathLineSuffix(s) {\r
+    var t = String(s || '').trim();\r
+    return t.replace(new RegExp('(\\\\.(' + LINKIFY_EXT_FRAGMENT + ')):(\\\\d+)(?::\\\\d+)?$', 'i'), '.$2');\r
+}\r
+\r
+function decodePathPercentEscapes(s) {\r
+    var t = String(s || '');\r
+    if (t.indexOf('%') < 0) return t;\r
+    return t.replace(/(?:%[0-9A-Fa-f]{2})+/g, function (part) {\r
+        try {\r
+            return decodeURIComponent(part);\r
+        } catch (e) {\r
+            return part;\r
+        }\r
+    });\r
+}\r
+\r
+function cleanPathTokenForLink(s) {\r
+    var t = linkifyNormalizePathToken(String(s || '').trim());\r
+    if (!/^https?:\\/\\//i.test(t)) t = decodePathPercentEscapes(t);\r
+    if (!t) return '';\r
+    var a = t.charAt(0);\r
+    var b = t.charAt(t.length - 1);\r
+    if (t.length >= 2 && ((a === '"' && b === '"') || (a === "'" && b === "'") || (a === '\`' && b === '\`'))) {\r
+        return stripPathLineSuffix(trimTrailingPathPunct(t.slice(1, -1).trim()));\r
+    }\r
+    return stripPathLineSuffix(stripPathWrappingQuotes(trimTrailingPathPunct(t)));\r
+}\r
+\r
+/** 统一全角标点/数字等，便于识别「．xlsx」「路径：／」等变体 */\r
+function linkifyNormalizePathToken(s) {\r
+    return String(s || '')\r
+        .replace(/\\uFF0F/g, '/')\r
+        .replace(/\\uFF3C/g, '\\\\')\r
+        .replace(/\\uFF1A/g, ':')\r
+        .replace(/\\uFF0E/g, '.')\r
+        .replace(/[\\u2018\\u2019\\u201B\\u2032\\uFF07]/g, "'")\r
+        .replace(/[\\u201C\\u201D\\u201E\\u2033\\uFF02]/g, '"');\r
+}\r
+\r
+/** 可链转「工作区下文件」的已知后缀（与 linkify / 虚拟路径规则共用） */\r
+var LINKIFY_EXT_FRAGMENT = (\r
+    'md|markdown|txt|py|jsx?|tsx?|mjs|cjs|json|ya?ml|toml|xml|html?|htm|css|s?css|less|sass|scss|' +\r
+    'xlsx?|xlsm?|xlsb?|xlt|csv|tsv|ods|numbers|et|' +\r
+    'pdf|docx?|docm?|dotx?|rtf|odt|pages|' +\r
+    'pptx?|pptm?|potx?|odp|key|' +\r
+    'png|jpe?g|gif|webp|svg|ico|bmp|tiff?|heic|avif|jfif|raw|' +\r
+    'zip|7z|rar|gz|tgz|tar|bz2|xz|lz4|zst|' +\r
+    'mp3|mp4|m4a|aac|flac|wav|ogg|webm|mov|avi|mkv|' +\r
+    'log|ini|env|cfg|conf|properties|plist|' +\r
+    'sh|bash|zsh|fish|bat|cmd|ps1|' +\r
+    'rs|go|java|kt|kts|swift|scala|rb|php|pl|pm|' +\r
+    '[ch]pp?|cc|hh|mm|hpp|cs|fs|fsx|vb|' +\r
+    'vue|svelte|elm|dart|ex|exs|erl|hrl|' +\r
+    'ipynb|rmd|qmd|tex|bib|cls|sty|rst|adoc|org|' +\r
+    'sql|graphql|proto|thrift|cmake|gradle|mk|' +\r
+    'wasm|wat|lock|patch|diff|rej|har|drawio|vsix|' +\r
+    'sqlite3?|db|duckdb|mdb|accdb|parquet|feather|arrow|orc|ndjson|' +\r
+    'ttf|otf|woff2?|eot|apk|ipa|exe|msi|dmg|iso|pkg|deb|rpm|bin|so|dylib|dll|lib|o|a|map|' +\r
+    'epub|mobi|azw3|chm|cert|pem|crt|cer|pub|asc|p12|pfx|keystore'\r
+);\r
+\r
+var _linkifyKnownExtRe = null;\r
+function linkifyKnownExtRegex() {\r
+    if (!_linkifyKnownExtRe) {\r
+        _linkifyKnownExtRe = new RegExp('\\\\.(' + LINKIFY_EXT_FRAGMENT + ')\\\\b', 'i');\r
+    }\r
+    return _linkifyKnownExtRe;\r
+}\r
+\r
+/**\r
+ * 以 / 开头的「工作区相对路径」是否做成可点击链接。\r
+ * 仅允许带常见文件后缀的路径，避免 ARPU/DOU/MOU、日期 2024/01 等内联斜杠被当成目录。\r
+ * （仍排除明显的 POSIX/Git Bash 根路径，以免误链。）\r
+ */\r
+function workspaceRelativePathAutoLinkOk(slashPath) {\r
+    var t = linkifyNormalizePathToken(String(slashPath || '').trim());\r
+    if (!t || t.charAt(0) !== '/' || t.charAt(1) === '/') return false;\r
+    var posixTop = /^\\/(mingw\\d*|usr|bin|etc|proc|dev|sys|opt|var|run|lib|lib64|snap|sbin|boot|srv|tmp|media|mnt)(\\/|$)/i;\r
+    var msysDrive = /^\\/[a-z](\\/|$)/i;\r
+    var webish = /^\\/(api|v\\d+|static|assets|node_modules)(\\/|$)/i;\r
+    if (posixTop.test(t) || msysDrive.test(t) || webish.test(t)) return false;\r
+    return linkifyKnownExtRegex().test(t);\r
+}\r
+\r
+function workspaceRelativePathNoSlashAutoLinkOk(relPath) {\r
+    var t = linkifyNormalizePathToken(String(relPath || '').trim());\r
+    if (!t || t.charAt(0) === '/' || t.charAt(0) === '\\\\' || /^https?:\\/\\//i.test(t)) return false;\r
+    if (/^([A-Za-z]):[\\\\/]/.test(t) || /^\\\\\\\\/.test(t)) return false;\r
+    if (!/[\\\\/]/.test(t)) return false;\r
+    if (/[<>:'"|\\r\\n]/.test(t)) return false;\r
+    if (/(^|[\\\\/])\\.{1,2}([\\\\/]|$)/.test(t)) return false;\r
+    return linkifyKnownExtRegex().test(t);\r
+}\r
+\r
+function workspaceRelFromNormalizedAbs(absNorm, workDir) {\r
+    if (!absNorm || !workDir) return null;\r
+    var base = String(workDir).replace(/\\\\/g, '/').replace(/\\/+$/, '');\r
+    var absLower = absNorm.toLowerCase();\r
+    var baseLower = base.toLowerCase();\r
+    if (absLower === baseLower) return '';\r
+    if (absLower.indexOf(baseLower + '/') === 0) {\r
+        return absNorm.slice(base.length).replace(/^\\/+/, '');\r
+    }\r
+    return null;\r
+}\r
+\r
+function workspaceRelFromForeignWorkspaceAbs(absNorm, workDir) {\r
+    if (!absNorm || !workDir) return null;\r
+    var baseName = String(workDir || '').replace(/\\\\/g, '/').replace(/\\/+$/, '').split('/').filter(Boolean).pop();\r
+    if (!baseName) return null;\r
+    var parts = String(absNorm || '').replace(/\\\\/g, '/').split('/').filter(Boolean);\r
+    for (var i = parts.length - 2; i >= 0; i -= 1) {\r
+        if (parts[i].toLowerCase() === baseName.toLowerCase()) {\r
+            return parts.slice(i + 1).join('/');\r
+        }\r
+    }\r
+    return null;\r
+}\r
+\r
+function stripWorkspaceRootPrefixFromRelPath(relPath) {\r
+    var t = String(relPath || '').replace(/\\\\/g, '/').replace(/^\\/+/, '');\r
+    var w = (typeof window.__WORK_DIR__ === 'string') ? window.__WORK_DIR__ : '';\r
+    var baseName = String(w || '').replace(/\\\\/g, '/').replace(/\\/+$/, '').split('/').filter(Boolean).pop();\r
+    if (baseName && t.toLowerCase().indexOf(baseName.toLowerCase() + '/') === 0) {\r
+        return t.slice(baseName.length + 1);\r
+    }\r
+    return t;\r
+}\r
+\r
+function getCurrentSessionDataPath() {\r
+    var sdir = (typeof window.__SESSIONS_DIR__ === 'string') ? window.__SESSIONS_DIR__ : '';\r
+    if (sdir && currentSessionId) return pathJoinBaseName(sdir, currentSessionId);\r
+    var w = (typeof window.__WORK_DIR__ === 'string') ? window.__WORK_DIR__ : '';\r
+    if (w && currentSessionId) return pathJoinBaseName(pathJoinBaseName(w, 'sessions'), currentSessionId);\r
+    return '';\r
+}\r
+\r
+/** 标题栏与侧栏：工作目录绝对路径与会话 ID（与服务端 window.__WORK_DIR__ 一致） */\r
+function buildSessionWorkspaceSubtitle(sessionId) {\r
+    var w = (typeof window.__WORK_DIR__ === 'string') ? window.__WORK_DIR__ : '';\r
+    if (!sessionId) return w || '';\r
+    if (w) {\r
+        var workspaceLink = '<a href="#" data-workspace-open="' + w + '" class="msg-link-workspace-open" style="color:inherit;text-decoration:inherit;cursor:pointer;" data-ui-tip="打开工作目录">' + w + '</a>';\r
+        var sessionPath = 'sessions/' + sessionId;\r
+        var sessionLink = '<a href="#" data-workspace-open="' + sessionPath + '" class="msg-link-workspace-open" style="color:inherit;text-decoration:inherit;cursor:pointer;" data-ui-tip="打开会话目录">' + sessionId + '</a>';\r
+        return workspaceLink + ' | ' + sessionLink;\r
+    }\r
+    return String(sessionId);\r
+}\r
+\r
+/** 侧栏每条会话标题下方：最近一次用户提问（服务端字段 last_user_preview） */\r
+function formatSessionListSubtitle(sess) {\r
+    if (!sess) return '暂无提问';\r
+    var t = sess.last_user_preview != null ? String(sess.last_user_preview).trim() : '';\r
+    return t || '暂无提问';\r
+}\r
+\r
+/** 侧栏每条会话标题下方第二行：最后修改日期时间 */\r
+function sessionListUiEnglish() {\r
+    return (document.documentElement && document.documentElement.getAttribute('data-language') === 'en')\r
+        || String(localStorage.getItem('myagent-language') || '') === 'en';\r
+}\r
+\r
+function localizeSessionPlaceholderName(name) {\r
+    var s = String(name == null ? '' : name);\r
+    if (sessionListUiEnglish()) {\r
+        if (s === '新会话' || s === '新对话' || s === '新建对话') return 'New session';\r
+        if (s === '未命名') return 'Untitled';\r
+        return s;\r
+    }\r
+    if (s === 'New session' || s === 'New chat') return '新会话';\r
+    if (s === 'Untitled') return '未命名';\r
+    return s;\r
+}\r
+\r
+function formatSessionListDate(sess) {\r
+    if (!sess) return '';\r
+    var raw = sess.last_activity_at || sess.updated_at || sess.created_at || '';\r
+    var ts = Date.parse(String(raw));\r
+    if (!Number.isFinite(ts)) {\r
+        var numeric = Number(raw);\r
+        if (Number.isFinite(numeric) && numeric > 0) ts = numeric;\r
+    }\r
+    if (!Number.isFinite(ts) || ts <= 0) return '';\r
+    var d = new Date(ts);\r
+    var now = new Date();\r
+    var english = sessionListUiEnglish();\r
+    var pad = function (v) { return String(v).padStart(2, '0'); };\r
+    var time = pad(d.getHours()) + ':' + pad(d.getMinutes());\r
+    if (d.toDateString() === now.toDateString()) return (english ? 'Today ' : '今天 ') + time;\r
+    var yesterday = new Date(now.getTime() - 86400000);\r
+    if (d.toDateString() === yesterday.toDateString()) return (english ? 'Yesterday ' : '昨天 ') + time;\r
+    if (english) {\r
+        var months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];\r
+        var yearSuffix = d.getFullYear() === now.getFullYear() ? '' : (' ' + d.getFullYear());\r
+        return months[d.getMonth()] + ' ' + d.getDate() + yearSuffix + ' ' + time;\r
+    }\r
+    var prefix = d.getFullYear() === now.getFullYear() ? '' : (d.getFullYear() + '年');\r
+    return prefix + (d.getMonth() + 1) + '月' + d.getDate() + '日 ' + time;\r
+}\r
+\r
+function sessionDateIcon() {\r
+    return '<svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>';\r
+}\r
+\r
+function buildSessionItemTooltipFromParts(name, dateLine, question) {\r
+    var english = sessionListUiEnglish();\r
+    var lines = [];\r
+    lines.push((english ? 'Session: ' : '会话名称：') + String(name == null ? '' : name));\r
+    if (dateLine) lines.push((english ? 'Time: ' : '时间：') + dateLine);\r
+    lines.push((english ? 'Last question: ' : '最近提问：') + String(question == null ? '' : question));\r
+    return lines.join('\\n');\r
+}\r
+\r
+function buildSessionItemTooltip(sess) {\r
+    if (!sess) return '';\r
+    var english = sessionListUiEnglish();\r
+    var name = localizeSessionPlaceholderName(sess.name);\r
+    var dateLine = formatSessionListDate(sess);\r
+    var question = sess.last_user_preview != null ? String(sess.last_user_preview).trim() : '';\r
+    return buildSessionItemTooltipFromParts(\r
+        name || (english ? 'Untitled' : '未命名'),\r
+        dateLine,\r
+        question || (english ? 'No questions yet' : '暂无提问')\r
+    );\r
+}\r
+\r
+/** 与服务端 _normalize_sidebar_preview_text 对齐：折叠空白、180 字符、省略号 */\r
+function normalizeSidebarPreviewText(text, maxLen) {\r
+    maxLen = maxLen || 180;\r
+    var s = String(text || '').trim();\r
+    if (!s) return '';\r
+    var oneLine = s.split(/\\s+/).join(' ');\r
+    if (oneLine.length > maxLen) return oneLine.slice(0, maxLen - 1) + '\\u2026';\r
+    return oneLine;\r
+}\r
+\r
+/** 发送后立即更新侧栏「最近提问」（与服务器摘要规则一致）；稍后 refreshSingleSessionRow 仍会校正 */\r
+function updateSidebarLastUserPreviewImmediate(sessionId, questionText) {\r
+    if (!sessionId || !sessionsList) return;\r
+    var nameEl = sessionsList.querySelector('.session-name[data-id="' + sessionId + '"]');\r
+    var div = nameEl && nameEl.closest('.session-item');\r
+    if (!div) return;\r
+    var wsEl = div.querySelector('.session-last-query');\r
+    if (!wsEl) return;\r
+    var line = normalizeSidebarPreviewText(questionText, 180);\r
+    if (!line) line = '暂无提问';\r
+    wsEl.textContent = line;\r
+    var dateEl = div.querySelector('.session-item-date');\r
+    var dateLine = '';\r
+    if (dateEl) {\r
+        dateLine = formatSessionListDate({ last_activity_at: new Date().toISOString() });\r
+        if (dateLine) {\r
+            dateEl.innerHTML = sessionDateIcon() + dateLine;\r
+        } else {\r
+            dateEl.textContent = '';\r
+        }\r
+    }\r
+    var nameText = nameEl ? (nameEl.getAttribute('data-original') || nameEl.textContent || '') : '';\r
+    nameText = localizeSessionPlaceholderName(nameText);\r
+    var itemTip = buildSessionItemTooltipFromParts(nameText, dateLine, line);\r
+    div.setAttribute('data-ui-tip', itemTip);\r
+    bindUiHoverTip(div);\r
+}\r
+\r
+function updateSessionTitle() {\r
+    const br = document.getElementById('breadcrumb-text');\r
+    const sub = document.getElementById('breadcrumb-sub');\r
+    if (!br || !sub) return;\r
+    if (!currentSessionId) {\r
+        br.textContent = '未选择会话';\r
+        sub.textContent = '';\r
+        if (typeof syncTitlebarSessionMenu === 'function') syncTitlebarSessionMenu(null);\r
+        setContextTokenLabel(null, null);\r
+        return;\r
+    }\r
+    const sess = selectCurrentSession();\r
+    const el = document.querySelector('.session-name[data-id="' + currentSessionId + '"]');\r
+    const raw = sess && sess.name != null ? String(sess.name) : (el ? (el.getAttribute('data-original') || el.textContent || '') : '');\r
+    const name = localizeSessionPlaceholderName((raw && raw.trim()) ? raw.trim() : 'Session');\r
+    br.textContent = name;\r
+    sub.innerHTML = buildSessionWorkspaceSubtitle(currentSessionId);\r
+    if (typeof syncTitlebarSessionMenu === 'function') syncTitlebarSessionMenu(sess || { id: currentSessionId, name: raw });\r
+    initUiHoverTips(sub);\r
+}\r
+\r
+function ensureMermaidInitialized(api) {\r
+    var mermaidApi = api || window.mermaid;\r
+    if (mermaidInitialized || !mermaidApi) return;\r
+    try {\r
+        var light = document.documentElement.classList.contains('theme-light');\r
+        mermaidApi.initialize({\r
+            startOnLoad: false,\r
+            theme: light ? 'neutral' : 'dark',\r
+            securityLevel: 'loose',\r
+            themeVariables: {\r
+                fontSize: '11px',\r
+                fontFamily: 'Plus Jakarta Sans, system-ui, sans-serif',\r
+            },\r
+            flowchart: { htmlLabels: true, curve: 'basis' },\r
+            sequence: { useMaxWidth: true },\r
+        });\r
+        mermaidInitialized = true;\r
+    } catch (e) { /* ignore */ }\r
+}\r
+\r
+/**\r
+ * flowchart 节点 E[文本] 内若含 <br> 且又含裸引号 "，Mermaid 10.9 会报 got 'STR'。\r
+ * 将此类标签整体包成 ["..."] 并转义内部 ASCII 引号。\r
+ */\r
+function fixFlowchartBracketLabelsWithLineBreak(text) {\r
+    return text.replace(/\\[[^\\]\\n\\r]*<br\\s*\\/?[^\\]\\n\\r]*\\]/gi, function (match) {\r
+        var inner = match.slice(1, -1);\r
+        var s = inner.trim();\r
+        if (!s) return match;\r
+        if (s.charAt(0) === '"' && s.charAt(s.length - 1) === '"') return match;\r
+        var escaped = s.replace(/\\\\/g, '\\\\\\\\').replace(/"/g, '\\\\"');\r
+        return '["' + escaped + '"]';\r
+    });\r
+}\r
+\r
+/** 未用引号包裹的 [] 节点里出现裸 " 时同样会触发词法错误 */\r
+function fixFlowchartBracketLabelsWithRawQuotes(text) {\r
+    return text.replace(/\\[[^\\]\\n\\r]*"[^\\]\\n\\r]*\\]/g, function (match) {\r
+        var inner = match.slice(1, -1);\r
+        var s = inner.trim();\r
+        if (!s) return match;\r
+        if (s.charAt(0) === '"' && s.charAt(s.length - 1) === '"') return match;\r
+        var escaped = s.replace(/\\\\/g, '\\\\\\\\').replace(/"/g, '\\\\"');\r
+        return '["' + escaped + '"]';\r
+    });\r
+}\r
+\r
+/** 去除 LLM/粘贴带来的杂讯，减少 Mermaid 10.9+ 报 Syntax error in text */\r
+function normalizeMermaidSource(raw) {\r
+    var t = String(raw || '')\r
+        .replace(/^\\uFEFF/, '')\r
+        .replace(/\\u200b|\\u200c|\\u200d/g, '')\r
+        .replace(/\\r\\n/g, '\\n')\r
+        .replace(/\\r/g, '\\n');\r
+    t = t.replace(/^\\s*\`\`\`(?:mermaid)?\\s*\\n/i, '');\r
+    t = t.replace(/\\n\\s*\`\`\`\\s*$/i, '');\r
+    t = t.replace(/[\\u201C\\u201D\\u201E\\u00AB\\u00BB]/g, '"');\r
+    t = t.replace(/<br\\s*\\/?>/gi, '<br/>');\r
+    t = fixFlowchartBracketLabelsWithLineBreak(t);\r
+    t = fixFlowchartBracketLabelsWithRawQuotes(t);\r
+    var lines = t.split('\\n');\r
+    if (lines.length && lines[0]) {\r
+        lines[0] = lines[0].replace(/\\s*[\\uFF1A：]\\s*$/, '');\r
+    }\r
+    t = lines.map(function (line) { return line.replace(/\\s+$/g, ''); }).join('\\n').trim();\r
+    return t;\r
+}\r
+\r
+function showMermaidRenderError(el, source, err) {\r
+    el.classList.add('mermaid-error');\r
+    el.removeAttribute('data-processed');\r
+    var msg = 'Mermaid 无法解析此图';\r
+    if (err) {\r
+        if (typeof err === 'string') msg = err;\r
+        else if (err.str) msg = String(err.str);\r
+        else if (err.message) msg = String(err.message);\r
+    }\r
+    el.innerHTML = '<div class="mermaid-error-msg">' + escapeHtml(msg) + '</div>'\r
+        + '<pre class="mermaid-raw">' + escapeHtml(source) + '</pre>';\r
+}\r
+\r
+var MERMAID_DOWNLOAD_SVG = '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/></svg>';\r
+var MERMAID_ZOOM_SVG = '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 3h6v6"/><path d="M21 3l-7 7"/><path d="M9 21H3v-6"/><path d="M3 21l7-7"/></svg>';\r
+var mermaidZoomKeyHandler = null;\r
+\r
+function closeMermaidZoom() {\r
+    var root = document.getElementById('mermaid-zoom-root');\r
+    if (!root) return;\r
+    root.classList.remove('is-open');\r
+    root.setAttribute('aria-hidden', 'true');\r
+    root.innerHTML = '';\r
+    if (mermaidZoomKeyHandler) {\r
+        document.removeEventListener('keydown', mermaidZoomKeyHandler);\r
+        mermaidZoomKeyHandler = null;\r
+    }\r
+}\r
+\r
+function ensureMermaidZoomRoot() {\r
+    var root = document.getElementById('mermaid-zoom-root');\r
+    if (root) return root;\r
+    root = document.createElement('div');\r
+    root.id = 'mermaid-zoom-root';\r
+    root.className = 'mermaid-zoom-overlay';\r
+    root.setAttribute('aria-hidden', 'true');\r
+    document.body.appendChild(root);\r
+    return root;\r
+}\r
+\r
+function openMermaidZoom(sourceEl) {\r
+    if (!sourceEl) return;\r
+    var svg = sourceEl.querySelector('svg');\r
+    if (!svg) return;\r
+    var root = ensureMermaidZoomRoot();\r
+    var clone = svg.cloneNode(true);\r
+    clone.removeAttribute('style');\r
+    clone.setAttribute('preserveAspectRatio', 'xMidYMid meet');\r
+    clone.classList.add('mermaid-zoom-svg');\r
+    root.innerHTML = '';\r
+\r
+    var panel = document.createElement('div');\r
+    panel.className = 'mermaid-zoom-panel';\r
+    panel.setAttribute('role', 'dialog');\r
+    panel.setAttribute('aria-modal', 'true');\r
+    panel.setAttribute('aria-label', 'Mermaid 流程图放大预览');\r
+\r
+    var closeBtn = document.createElement('button');\r
+    closeBtn.type = 'button';\r
+    closeBtn.className = 'mermaid-zoom-close';\r
+    closeBtn.setAttribute('aria-label', '关闭放大预览');\r
+    closeBtn.setAttribute('data-ui-tip', '关闭');\r
+    closeBtn.innerHTML = '<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>';\r
+\r
+    var stage = document.createElement('div');\r
+    stage.className = 'mermaid-zoom-stage';\r
+    stage.appendChild(clone);\r
+    panel.appendChild(closeBtn);\r
+    panel.appendChild(stage);\r
+    root.appendChild(panel);\r
+\r
+    closeBtn.onclick = closeMermaidZoom;\r
+    root.onclick = function (e) {\r
+        if (e.target === root) closeMermaidZoom();\r
+    };\r
+    mermaidZoomKeyHandler = function (e) {\r
+        if (e.key === 'Escape') {\r
+            e.preventDefault();\r
+            closeMermaidZoom();\r
+        }\r
+    };\r
+    document.addEventListener('keydown', mermaidZoomKeyHandler);\r
+    root.classList.add('is-open');\r
+    root.setAttribute('aria-hidden', 'false');\r
+    initUiHoverTips(root);\r
+    requestAnimationFrame(function () { closeBtn.focus(); });\r
+}\r
+\r
+function getMermaidSvgSize(svg) {\r
+    var box = svg && svg.viewBox && svg.viewBox.baseVal ? svg.viewBox.baseVal : null;\r
+    var w = box && box.width ? box.width : 0;\r
+    var h = box && box.height ? box.height : 0;\r
+    if (!w || !h) {\r
+        var rect = svg.getBoundingClientRect ? svg.getBoundingClientRect() : null;\r
+        w = rect && rect.width ? rect.width : w;\r
+        h = rect && rect.height ? rect.height : h;\r
+    }\r
+    w = Math.max(1, Math.ceil(w || 1200));\r
+    h = Math.max(1, Math.ceil(h || 800));\r
+    return { width: w, height: h };\r
+}\r
+\r
+function triggerDownloadBlob(blob, filename) {\r
+    if (!blob) return;\r
+    var url = URL.createObjectURL(blob);\r
+    var a = document.createElement('a');\r
+    a.href = url;\r
+    a.download = filename;\r
+    document.body.appendChild(a);\r
+    a.click();\r
+    a.remove();\r
+    setTimeout(function () { URL.revokeObjectURL(url); }, 1000);\r
+}\r
+\r
+function downloadMermaidPng(sourceEl) {\r
+    if (!sourceEl) return;\r
+    var svg = sourceEl.querySelector('svg');\r
+    if (!svg) return;\r
+    var size = getMermaidSvgSize(svg);\r
+    var clone = svg.cloneNode(true);\r
+    clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');\r
+    clone.setAttribute('width', String(size.width));\r
+    clone.setAttribute('height', String(size.height));\r
+    if (!clone.getAttribute('viewBox')) clone.setAttribute('viewBox', '0 0 ' + size.width + ' ' + size.height);\r
+    var xml = new XMLSerializer().serializeToString(clone);\r
+    var svgBlob = new Blob([xml], { type: 'image/svg+xml;charset=utf-8' });\r
+    var url = URL.createObjectURL(svgBlob);\r
+    var img = new Image();\r
+    img.onload = function () {\r
+        try {\r
+            var scale = Math.min(3, Math.max(1, window.devicePixelRatio || 1));\r
+            var canvas = document.createElement('canvas');\r
+            canvas.width = Math.ceil(size.width * scale);\r
+            canvas.height = Math.ceil(size.height * scale);\r
+            var ctx = canvas.getContext('2d');\r
+            if (!ctx) throw new Error('canvas unavailable');\r
+            ctx.scale(scale, scale);\r
+            ctx.fillStyle = getUiThemeCanvasBackground();\r
+            ctx.fillRect(0, 0, size.width, size.height);\r
+            ctx.drawImage(img, 0, 0, size.width, size.height);\r
+            canvas.toBlob(function (blob) {\r
+                triggerDownloadBlob(blob, 'mermaid-' + new Date().toISOString().replace(/[:.]/g, '-') + '.png');\r
+            }, 'image/png');\r
+        } catch (e) {\r
+            triggerDownloadBlob(svgBlob, 'mermaid-' + new Date().toISOString().replace(/[:.]/g, '-') + '.svg');\r
+        } finally {\r
+            URL.revokeObjectURL(url);\r
+        }\r
+    };\r
+    img.onerror = function () {\r
+        URL.revokeObjectURL(url);\r
+        triggerDownloadBlob(svgBlob, 'mermaid-' + new Date().toISOString().replace(/[:.]/g, '-') + '.svg');\r
+    };\r
+    img.src = url;\r
+}\r
+\r
+function enhanceMermaidZoom(el) {\r
+    if (!el || el.classList.contains('mermaid-error')) return;\r
+    if (el.querySelector('.mermaid-zoom-btn')) return;\r
+    if (!el.querySelector('svg')) return;\r
+    el.classList.add('mermaid-has-zoom');\r
+    var downloadBtn = document.createElement('button');\r
+    downloadBtn.type = 'button';\r
+    downloadBtn.className = 'mermaid-download-btn';\r
+    downloadBtn.setAttribute('aria-label', '下载保存 Mermaid 流程图为图片');\r
+    downloadBtn.setAttribute('data-ui-tip', '下载图片');\r
+    downloadBtn.innerHTML = MERMAID_DOWNLOAD_SVG;\r
+    downloadBtn.addEventListener('click', function (e) {\r
+        e.preventDefault();\r
+        e.stopPropagation();\r
+        downloadMermaidPng(el);\r
+    });\r
+    var btn = document.createElement('button');\r
+    btn.type = 'button';\r
+    btn.className = 'mermaid-zoom-btn';\r
+    btn.setAttribute('aria-label', '放大显示 Mermaid 流程图');\r
+    btn.setAttribute('data-ui-tip', '放大显示');\r
+    btn.innerHTML = MERMAID_ZOOM_SVG;\r
+    btn.addEventListener('click', function (e) {\r
+        e.preventDefault();\r
+        e.stopPropagation();\r
+        openMermaidZoom(el);\r
+    });\r
+    el.appendChild(downloadBtn);\r
+    el.appendChild(btn);\r
+    initUiHoverTips(el);\r
+}\r
+\r
+function upgradeMermaidBlocks(root) {\r
+    if (!root) return;\r
+    root.querySelectorAll('pre > code').forEach(function (codeEl) {\r
+        var cls = codeEl.getAttribute('class') || '';\r
+        if (!/\\bmermaid\\b/.test(cls)) return;\r
+        var pre = codeEl.parentNode;\r
+        if (!pre || pre.tagName !== 'PRE') return;\r
+        var div = document.createElement('div');\r
+        div.className = 'mermaid';\r
+        div.textContent = normalizeMermaidSource(codeEl.textContent || '');\r
+        pre.parentNode.replaceChild(div, pre);\r
+    });\r
+}\r
+\r
+/** 无盘符、无路径分隔符的「纯文件名 + 已知后缀」→ 相对工作区根解析 */\r
+function makeHrefFromAutoLinkToken(s) {\r
+    var t = cleanPathTokenForLink(s);\r
+    if (!t) return null;\r
+    if (/^https?:\\/\\//i.test(t)) return t;\r
+    var m = /^([A-Za-z]):[\\\\/](.*)$/.exec(t);\r
+    if (m) {\r
+        var rest = (m[2] || '').replace(/\\\\/g, '/');\r
+        return fileUrlFromFsPath(m[1].toUpperCase() + ':/' + rest);\r
+    }\r
+    if (t.charAt(0) === '/' && t.charAt(1) !== '/') {\r
+        var unixWorkDir = (typeof window.__WORK_DIR__ === 'string') ? window.__WORK_DIR__.replace(/\\/+$/, '') : '';\r
+        if (unixWorkDir.charAt(0) === '/' && (t === unixWorkDir || t.indexOf(unixWorkDir + '/') === 0)) {\r
+            return fileUrlFromFsPath(t);\r
+        }\r
+        if (!workspaceRelativePathAutoLinkOk(t)) return null;\r
+        var w = (typeof window.__WORK_DIR__ === 'string') ? window.__WORK_DIR__ : '';\r
+        var abs = joinWorkDirAndRelativeSlashPath(w, t);\r
+        if (abs) return fileUrlFromFsPath(abs);\r
+    }\r
+    if (workspaceRelativePathNoSlashAutoLinkOk(t)) {\r
+        var wr = (typeof window.__WORK_DIR__ === 'string') ? window.__WORK_DIR__ : '';\r
+        if (!wr) return null;\r
+        var absRel = pathJoinBaseName(wr, t.replace(/\\\\/g, '/'));\r
+        if (absRel) return fileUrlFromFsPath(absRel);\r
+    }\r
+    return null;\r
+}\r
+\r
+/**\r
+ * 解析为可交给 /api/open-workspace-file 的路径：工作区相对、Windows/UNC 绝对路径（均由服务端校验须在 WORK_DIR 内）。\r
+ */\r
+function pathTokenToWorkspaceOpenRel(token) {\r
+    var t = cleanPathTokenForLink(token);\r
+    if (!t || /^https?:\\/\\//i.test(t)) return null;\r
+    var w = (typeof window.__WORK_DIR__ === 'string') ? window.__WORK_DIR__ : '';\r
+    var uncFlat = t.replace(/\\//g, '\\\\');\r
+    if (/^\\\\\\\\([^\\\\]+)\\\\([^\\\\]+)/i.test(uncFlat)) {\r
+        return uncFlat;\r
+    }\r
+    var win = /^([A-Za-z]):[\\\\/](.*)$/.exec(t);\r
+    if (win) {\r
+        var rest = (win[2] || '').replace(/\\\\/g, '/');\r
+        var absNorm = (win[1].toUpperCase() + ':/' + rest).replace(/\\/+/g, '/');\r
+        if (w) {\r
+            var absRel = workspaceRelFromNormalizedAbs(absNorm, w);\r
+            if (absRel != null) return absRel;\r
+            var foreignRel = workspaceRelFromForeignWorkspaceAbs(absNorm, w);\r
+            if (foreignRel != null) return foreignRel;\r
+        }\r
+        return absNorm;\r
+    }\r
+    if (!w) return null;\r
+    var slashRooted = t.replace(/\\\\/g, '/');\r
+    if (slashRooted.charAt(0) === '/' && slashRooted.charAt(1) !== '/') {\r
+        var unixRoot = String(w || '').replace(/\\\\/g, '/').replace(/\\/+$/, '');\r
+        if (unixRoot.charAt(0) === '/'\r
+            && (slashRooted === unixRoot || slashRooted.indexOf(unixRoot + '/') === 0)) {\r
+            return slashRooted;\r
+        }\r
+        var wDrive = /^([A-Za-z]):[\\\\/]/.exec(String(w || ''));\r
+        if (wDrive) {\r
+            var rootedAbs = (wDrive[1].toUpperCase() + ':' + slashRooted).replace(/\\/+/g, '/');\r
+            var rootedRel = workspaceRelFromNormalizedAbs(rootedAbs, w);\r
+            if (rootedRel != null) return rootedRel;\r
+        }\r
+        if (!workspaceRelativePathAutoLinkOk(slashRooted)) return null;\r
+        return slashRooted.replace(/^\\/+/, '');\r
+    }\r
+    if (t === '.env' && typeof window.__APP_DOTENV_PATH__ === 'string' && window.__APP_DOTENV_PATH__) {\r
+        return window.__APP_DOTENV_PATH__;\r
+    }\r
+    var relPath = stripWorkspaceRootPrefixFromRelPath(t);\r
+    if (workspaceRelativePathNoSlashAutoLinkOk(relPath)) return relPath;\r
+    return null;\r
+}\r
+\r
+function decodeMarkdownHrefPathTarget(href) {\r
+    var raw = String(href || '').trim();\r
+    if (!raw) return '';\r
+    try { raw = decodeURI(raw); } catch (e) { /* keep raw */ }\r
+    raw = decodePathPercentEscapes(raw);\r
+    try { raw = decodeURIComponent(raw); } catch (e2) { /* keep partially decoded raw */ }\r
+    return stripPathWrappingQuotes(trimTrailingPathPunct(raw));\r
+}\r
+\r
+function markdownHrefToWorkspaceOpenRel(href) {\r
+    var raw = decodeMarkdownHrefPathTarget(href);\r
+    if (!raw || raw.charAt(0) === '#') return null;\r
+    if (/^(https?|mailto|tel|javascript|data|blob):/i.test(raw)) return null;\r
+    if (/^[A-Za-z][A-Za-z0-9+.-]*:/i.test(raw) && !/^[A-Za-z]:[\\\\/]/.test(raw) && !/^file:\\/\\//i.test(raw)) {\r
+        return null;\r
+    }\r
+    var rel = pathTokenToWorkspaceOpenRel(raw);\r
+    if (rel) return rel;\r
+    if (/^file:\\/\\//i.test(raw)) {\r
+        var fsPath = raw.replace(/^file:\\/\\/\\/?/i, '');\r
+        fsPath = decodePathPercentEscapes(fsPath);\r
+        if (/^[A-Za-z]:[\\\\/]/.test(fsPath)) return fsPath.replace(/\\\\/g, '/');\r
+        return '/' + fsPath.replace(/^\\/+/, '').replace(/\\\\/g, '/');\r
+    }\r
+    if (/^[A-Za-z]:[\\\\/]/.test(raw) || /^\\\\\\\\/.test(raw)) return raw.replace(/\\\\/g, '/');\r
+    if (/[\\\\/]/.test(raw)) return stripWorkspaceRootPrefixFromRelPath(raw);\r
+    return stripWorkspaceRootPrefixFromRelPath(raw);\r
+}\r
+\r
+function workspaceOpenDisplayLabel(original, wsRel) {\r
+    var rel = String(wsRel || '').replace(/\\\\/g, '/').replace(/\\/+$/, '');\r
+    var name = rel.split('/').filter(Boolean).pop();\r
+    if (name) return '@' + name;\r
+    var raw = stripPathWrappingQuotes(trimTrailingPathPunct(original || ''));\r
+    name = raw.replace(/\\\\/g, '/').replace(/\\/+$/, '').split('/').filter(Boolean).pop();\r
+    return name ? ('@' + name) : raw;\r
+}\r
+\r
+function normalizeInputPathTokenIdentity(path) {\r
+    var s = stripPathWrappingQuotes(String(path || '').trim()).replace(/\\\\/g, '/').replace(/\\/+$/, '');\r
+    if (/^[A-Za-z]:\\//.test(s) || /^\\/\\//.test(s)) return s.toLowerCase();\r
+    return s;\r
+}\r
+\r
+function uniqueInputPathDisplayLabel(original, wsRel, preferredLabel) {\r
+    var stored = stripPathWrappingQuotes(original || '');\r
+    var storedIdentity = normalizeInputPathTokenIdentity(stored);\r
+    if (!preferredLabel) preferredLabel = workspaceOpenDisplayLabel(original, wsRel);\r
+    if (!preferredLabel) return '';\r
+    if (!inputPathTokenMap[preferredLabel]\r
+        || normalizeInputPathTokenIdentity(inputPathTokenMap[preferredLabel]) === storedIdentity) {\r
+        return preferredLabel;\r
+    }\r
+\r
+    var rel = String(wsRel || '').replace(/\\\\/g, '/').replace(/^\\/+/, '').replace(/\\/+$/, '');\r
+    var parts = rel.split('/').filter(Boolean);\r
+    var candidates = [];\r
+    if (parts.length >= 2) candidates.push('@' + parts.slice(-2).join('/'));\r
+    if (parts.length >= 3) candidates.push('@' + parts.join('/'));\r
+    candidates.push(preferredLabel + '#' + String(Object.keys(inputPathTokenMap).length + 1));\r
+\r
+    for (var i = 0; i < candidates.length; i += 1) {\r
+        var label = candidates[i];\r
+        if (!inputPathTokenMap[label]\r
+            || normalizeInputPathTokenIdentity(inputPathTokenMap[label]) === storedIdentity) {\r
+            return label;\r
+        }\r
+    }\r
+    return candidates[candidates.length - 1];\r
+}\r
+\r
+function workspaceOpenTipPath(original, wsRel) {\r
+    var raw = cleanPathTokenForLink(original || '');\r
+    if (/^[A-Za-z]:[\\\\/]/.test(raw) || /^\\\\\\\\/.test(raw)) return raw;\r
+    if (raw.charAt(0) === '/' && raw.charAt(1) !== '/') return raw;\r
+    var rel = String(wsRel || raw || '').replace(/\\\\/g, '/').replace(/^\\/+/, '');\r
+    if (/^[A-Za-z]:\\//.test(rel) || /^\\\\\\\\/.test(rel)) return rel.replace(/\\//g, '\\\\');\r
+    var w = (typeof window.__WORK_DIR__ === 'string') ? window.__WORK_DIR__ : '';\r
+    if (!w || !rel) return rel || raw;\r
+    var joined = pathJoinBaseName(w, rel);\r
+    return String(w).charAt(0) === '/' ? joined : joined.replace(/\\//g, '\\\\');\r
+}\r
+\r
+function escapeRegExpLiteral(s) {\r
+    return String(s || '').replace(/[.*+?^\${}()|[\\]\\\\]/g, '\\\\$&');\r
+}\r
+\r
+function quotePromptPath(p) {\r
+    var t = stripPathWrappingQuotes(String(p || '').trim());\r
+    if (!t) return '';\r
+    return '"' + t.replace(/"/g, '\\\\"') + '"';\r
+}\r
+\r
+function inputQuotedWindowsPathRegex() {\r
+    return /(["'])([A-Za-z]:[\\\\/][^"'\\r\\n]+)\\1/g;\r
+}\r
+\r
+var _inputKnownExtWinPathRe = null;\r
+function inputKnownExtWindowsPathRegex() {\r
+    if (!_inputKnownExtWinPathRe) {\r
+        _inputKnownExtWinPathRe = new RegExp('(^|[\\\\s(（\\\\[])([A-Za-z]:[\\\\\\\\/][^\\\\r\\\\n"\\\\\\'<>|]+?\\\\.(' + LINKIFY_EXT_FRAGMENT + '))(?=$|[\\\\s,，。;；:：)）\\\\]】])', 'gi');\r
+    }\r
+    _inputKnownExtWinPathRe.lastIndex = 0;\r
+    return _inputKnownExtWinPathRe;\r
+}\r
+\r
+function inputSimpleWindowsPathRegex() {\r
+    return /(^|[\\s(（\\[])([A-Za-z]:(?:\\\\|\\/)(?:(?:[^\\\\/:*?"<>|\\s\\r\\n]+)(?:\\\\|\\/))*[^\\\\/:*?"<>|\\s\\r\\n]+)(?=$|[\\s,，。;；:：)）\\]】])/g;\r
+}\r
+\r
+function ensureInputPathChipHost() {\r
+    var host = document.getElementById('input-path-chips');\r
+    if (host || !messageInput) return host;\r
+    var wrapper = messageInput.closest ? messageInput.closest('.input-wrapper') : null;\r
+    var panel = wrapper && wrapper.parentNode;\r
+    if (!panel || !wrapper) return null;\r
+    host = document.createElement('div');\r
+    host.id = 'input-path-chips';\r
+    host.className = 'input-path-chips';\r
+    panel.insertBefore(host, wrapper);\r
+    return host;\r
+}\r
+\r
+function clearInputPathTokens() {\r
+    Object.keys(inputPathTokenMap).forEach(function (k) { delete inputPathTokenMap[k]; });\r
+    refreshInputPathChips();\r
+}\r
+\r
+function removeInputPathToken(label) {\r
+    if (!label || !messageInput) return;\r
+    delete inputPathTokenMap[label];\r
+    var text = String(messageInput.value || '');\r
+    var re = new RegExp('(?:\\\\s*)' + escapeRegExpLiteral(label), 'g');\r
+    messageInput.value = text.replace(re, '').replace(/[ \\t]{2,}/g, ' ').trimStart();\r
+    refreshInputPathChips();\r
+    autoResizeTextarea();\r
+    try { messageInput.focus(); } catch (e) {}\r
+}\r
+\r
+function refreshInputPathChips() {\r
+    var host = ensureInputPathChipHost();\r
+    if (!host || !messageInput) return;\r
+    var text = String(messageInput.value || '');\r
+    var labels = Object.keys(inputPathTokenMap).filter(function (label) {\r
+        return label && text.indexOf(label) >= 0;\r
+    });\r
+    if (!labels.length) {\r
+        host.innerHTML = '';\r
+        host.classList.remove('is-visible');\r
+        return;\r
+    }\r
+    host.innerHTML = '';\r
+    labels.forEach(function (label) {\r
+        var stored = inputPathTokenMap[label];\r
+        var rel = pathTokenToWorkspaceOpenRel(stored);\r
+        if (!rel) return;\r
+        var chip = document.createElement('span');\r
+        chip.className = 'input-path-chip';\r
+        var a = document.createElement('a');\r
+        a.href = '#';\r
+        a.className = 'input-path-chip-link msg-link-workspace-open';\r
+        a.dataset.workspaceOpen = rel;\r
+        a.textContent = label;\r
+        a.setAttribute('data-ui-tip', String(stored || rel));\r
+        var rm = document.createElement('button');\r
+        rm.type = 'button';\r
+        rm.className = 'input-path-chip-remove';\r
+        rm.setAttribute('aria-label', '移除 ' + label);\r
+        rm.setAttribute('data-ui-tip', '移除文件路径');\r
+        rm.textContent = '×';\r
+        rm.addEventListener('click', function (ev) {\r
+            ev.preventDefault();\r
+            ev.stopPropagation();\r
+            removeInputPathToken(label);\r
+        });\r
+        chip.appendChild(a);\r
+        chip.appendChild(rm);\r
+        host.appendChild(chip);\r
+    });\r
+    host.classList.toggle('is-visible', !!host.children.length);\r
+}\r
+\r
+function rewriteInputWorkspacePaths() {\r
+    if (!messageInput || inputPathRewriteGuard) return;\r
+    var raw = String(messageInput.value || '');\r
+    var changed = false;\r
+    function replacePathToken(match, prefix, path) {\r
+        var rel = pathTokenToWorkspaceOpenRel(path);\r
+        if (!rel) return match;\r
+        var label = uniqueInputPathDisplayLabel(path, rel, workspaceOpenDisplayLabel(path, rel));\r
+        if (!label) return match;\r
+        inputPathTokenMap[label] = stripPathWrappingQuotes(path);\r
+        changed = true;\r
+        return (prefix || '') + label;\r
+    }\r
+    var next = raw.replace(inputQuotedWindowsPathRegex(), function (match, q, path) {\r
+        return replacePathToken(match, '', path);\r
+    });\r
+    next = next.replace(inputKnownExtWindowsPathRegex(), function (match, prefix, path) {\r
+        return replacePathToken(match, prefix, path);\r
+    });\r
+    next = next.replace(inputSimpleWindowsPathRegex(), function (match, prefix, path) {\r
+        return replacePathToken(match, prefix, path);\r
+    });\r
+    if (changed && next !== raw) {\r
+        var wasFocused = document.activeElement === messageInput;\r
+        inputPathRewriteGuard = true;\r
+        messageInput.value = next;\r
+        if (wasFocused) {\r
+            var pos = next.length;\r
+            try { messageInput.setSelectionRange(pos, pos); } catch (e) {}\r
+        }\r
+        inputPathRewriteGuard = false;\r
+    }\r
+    refreshInputPathChips();\r
+}\r
+\r
+function expandInputPathTokens(text) {\r
+    var out = String(text || '');\r
+    Object.keys(inputPathTokenMap)\r
+        .sort(function (a, b) { return b.length - a.length; })\r
+        .forEach(function (label) {\r
+            var stored = inputPathTokenMap[label];\r
+            if (!stored || out.indexOf(label) < 0) return;\r
+            out = out.replace(new RegExp(escapeRegExpLiteral(label), 'g'), quotePromptPath(stored));\r
+        });\r
+    return out;\r
+}\r
+\r
+/** 整段文本是否仅为可链转的 Windows 绝对路径（用于行内 code 内路径） */\r
+function isEntireTextNodeWindowsPath(raw) {\r
+    var t = cleanPathTokenForLink(raw);\r
+    if (!t) return false;\r
+    return /^([A-Za-z]):[\\\\/](?:(?:[^\\\\/:*?"<>|\\r\\n]+)(?:\\\\|\\/))*[^\\\\/:*?"<>|\\r\\n]+$/i.test(t);\r
+}\r
+\r
+\r
+/** 行内 code 内整段为 \`/工作区相对/路径.ext\` 时亦允许链转（否则反引号路径永不可点） */\r
+function isEntireWorkspaceSlashPathLinkable(raw) {\r
+    var t = cleanPathTokenForLink(raw);\r
+    return workspaceRelativePathAutoLinkOk(t);\r
+}\r
+\r
+function isEntireWorkspaceRelativePathLinkable(raw) {\r
+    var t = cleanPathTokenForLink(raw);\r
+    return workspaceRelativePathNoSlashAutoLinkOk(t);\r
+}\r
+\r
+/** 行内 code 内整段为 UNC \\\\server\\share\\... 时允许「本机打开」链转 */\r
+function isEntireTextNodeUncPath(raw) {\r
+    var t = cleanPathTokenForLink(raw);\r
+    if (!t) return false;\r
+    var u = t.replace(/\\//g, '\\\\');\r
+    return /^\\\\\\\\[^\\\\]+\\\\[^\\\\]+(?:\\\\[^\\\\]*)*$/i.test(u);\r
+}\r
+\r
+var _assistMsgLinkifyRe = null;\r
+function getAssistMsgLinkifyRegex() {\r
+    if (!_assistMsgLinkifyRe) {\r
+        // 「/路径」前仅排除 ASCII 字母，避免 2023/文件、中文后接 / 等无法匹配；仍可抑制 ARPU/DOU（U 为字母）\r
+        _assistMsgLinkifyRe = new RegExp(\r
+            '((["\\'])(?:(?:[A-Za-z]:(?:\\\\\\\\|\\\\/)|\\\\\\\\\\\\\\\\|\\\\/(?![\\\\s\\\\/]))|(?=[^"\\'\\\\r\\\\n]*[\\\\\\\\/]))[^"\\'\\\\r\\\\n]+?\\\\.(?:' + LINKIFY_EXT_FRAGMENT + ')\\\\b\\\\2|' +\r
+            'https?:\\\\/\\\\/[^\\\\s<>\\'"]+|' +\r
+            '\\\\\\\\\\\\\\\\(?:(?:[^\\\\\\\\\\\\/:*?"<>|\\\\r\\\\n]+)\\\\\\\\)+(?:[^\\\\\\\\\\\\/:*?"<>|\\\\r\\\\n]+)|' +\r
+            '[A-Za-z]:(?:\\\\\\\\|\\\\/)(?:(?:[^\\\\\\\\/:*?"<>|\\\\r\\\\n]+)(?:\\\\\\\\|\\\\/))*[^\\\\\\\\/:*?"<>|\\\\r\\\\n]+|' +\r
+            '(?<![A-Za-z])\\\\/(?![\\\\s\\\\/])[^\\\\s<>\\'"]+|' +\r
+            '(?<![A-Za-z0-9./\\\\\\\\])(?:[^\\\\s<>\\'"/\\\\\\\\:]+(?:[\\\\\\\\/][^\\\\s<>\\'"/\\\\\\\\:]+)+\\\\.(' + LINKIFY_EXT_FRAGMENT + ')\\\\b))',\r
+            'gi'\r
+        );\r
+    }\r
+    return _assistMsgLinkifyRe;\r
+}\r
+\r
+function tryLinkifyEntirePathTextNode(textNode, raw) {\r
+    var token = String(raw || '').trim();\r
+    if (!token) return false;\r
+    var wsRel = pathTokenToWorkspaceOpenRel(token);\r
+    var href = wsRel ? null : makeHrefFromAutoLinkToken(token);\r
+    if (!wsRel && !href) return false;\r
+    var a = document.createElement('a');\r
+    a.className = wsRel ? 'msg-link-auto msg-link-workspace-open' : 'msg-link-auto';\r
+    a.textContent = cleanPathTokenForLink(token) || token;\r
+    if (wsRel) {\r
+        a.href = '#';\r
+        a.setAttribute('data-workspace-open', wsRel);\r
+        a.setAttribute('data-ui-tip', workspaceOpenTipPath(token, wsRel));\r
+        bindUiHoverTip(a);\r
+    } else {\r
+        a.href = href;\r
+        a.target = '_blank';\r
+        a.rel = 'noopener noreferrer';\r
+    }\r
+    textNode.parentNode.replaceChild(a, textNode);\r
+    return true;\r
+}\r
+\r
+function linkifySingleTextNode(textNode) {\r
+    var raw = textNode.nodeValue;\r
+    if (!raw) return;\r
+    var parent = textNode.parentElement;\r
+    if (!parent || parent.closest('a, pre, script, style, textarea, svg')) return;\r
+    var inInlineCode = !!parent.closest('code');\r
+    if (inInlineCode) {\r
+        if (!isEntireTextNodeWindowsPath(raw) && !isEntireWorkspaceSlashPathLinkable(raw) && !isEntireWorkspaceRelativePathLinkable(raw) && !isEntireTextNodeUncPath(raw)) return;\r
+        if (tryLinkifyEntirePathTextNode(textNode, raw)) return;\r
+    }\r
+    var rawForLink = linkifyNormalizePathToken(raw);\r
+    var re = getAssistMsgLinkifyRegex();\r
+    re.lastIndex = 0;\r
+    var parts = [];\r
+    var last = 0;\r
+    var m;\r
+    while ((m = re.exec(rawForLink)) !== null) {\r
+        var matchStart = m.index;\r
+        var matchEnd = m.index + m[0].length;\r
+        var qBefore = rawForLink.charAt(matchStart - 1);\r
+        var qAfter = rawForLink.charAt(matchEnd);\r
+        if ((qBefore === '"' || qBefore === "'") && qAfter === qBefore) {\r
+            matchStart -= 1;\r
+            matchEnd += 1;\r
+        }\r
+        if (matchStart > last) parts.push({ k: 't', s: rawForLink.slice(last, matchStart) });\r
+        parts.push({ k: 'l', s: m[0] });\r
+        last = matchEnd;\r
+    }\r
+    if (last < rawForLink.length) parts.push({ k: 't', s: rawForLink.slice(last) });\r
+    var hasLink = false;\r
+    for (var pi = 0; pi < parts.length; pi++) {\r
+        if (parts[pi].k === 'l') { hasLink = true; break; }\r
+    }\r
+    if (!hasLink) return;\r
+    var frag = document.createDocumentFragment();\r
+    parts.forEach(function (p) {\r
+        if (p.k === 't') frag.appendChild(document.createTextNode(p.s));\r
+        else {\r
+            var wsRel = pathTokenToWorkspaceOpenRel(p.s);\r
+            var show = cleanPathTokenForLink(p.s);\r
+            if (wsRel) {\r
+                var aw = document.createElement('a');\r
+                aw.href = '#';\r
+                aw.setAttribute('data-workspace-open', wsRel);\r
+                aw.className = 'msg-link-auto msg-link-workspace-open';\r
+                aw.setAttribute('data-ui-tip', workspaceOpenTipPath(p.s, wsRel));\r
+                bindUiHoverTip(aw);\r
+                aw.textContent = show || p.s;\r
+                frag.appendChild(aw);\r
+            } else {\r
+                var href = makeHrefFromAutoLinkToken(p.s);\r
+                if (!href) frag.appendChild(document.createTextNode(p.s));\r
+                else {\r
+                    var ah = document.createElement('a');\r
+                    ah.href = href;\r
+                    ah.target = '_blank';\r
+                    ah.rel = 'noopener noreferrer';\r
+                    ah.className = 'msg-link-auto';\r
+                    ah.textContent = show || p.s;\r
+                    frag.appendChild(ah);\r
+                }\r
+            }\r
+        }\r
+    });\r
+    textNode.parentNode.replaceChild(frag, textNode);\r
+}\r
+\r
+function upgradeWorkspacePathMarkdownLinks(root) {\r
+    if (!root) return;\r
+    root.querySelectorAll('span[data-ga-workspace-link]').forEach(function (span) {\r
+        var rel = span.getAttribute('data-ga-workspace-link') || '';\r
+        var raw = span.getAttribute('data-ga-workspace-raw') || rel;\r
+        if (!rel) return;\r
+        var a = document.createElement('a');\r
+        a.href = '#';\r
+        a.setAttribute('data-workspace-open', rel);\r
+        a.className = 'msg-link-workspace-open';\r
+        a.setAttribute('data-ui-tip', workspaceOpenTipPath(raw, rel));\r
+        a.textContent = span.textContent || raw || rel;\r
+        bindUiHoverTip(a);\r
+        if (span.parentNode) span.parentNode.replaceChild(a, span);\r
+    });\r
+    root.querySelectorAll('a[href]').forEach(function (a) {\r
+        if (!a || a.classList.contains('msg-link-workspace-open')) return;\r
+        var href = a.getAttribute('href') || '';\r
+        var originalPathForTip = '';\r
+        var marker = /^#ga-workspace-path=(.+)$/i.exec(href);\r
+        if (marker) {\r
+            var markerValue = marker[1];\r
+            var rawIdx = markerValue.indexOf('&raw=');\r
+            if (rawIdx >= 0) {\r
+                var relPart = markerValue.slice(0, rawIdx);\r
+                var rawPart = markerValue.slice(rawIdx + 5);\r
+                try { href = decodeURIComponent(relPart); } catch (e0) { href = relPart; }\r
+                try { originalPathForTip = decodeURIComponent(rawPart); } catch (e1) { originalPathForTip = rawPart; }\r
+            } else {\r
+                try { href = decodeURIComponent(markerValue); } catch (e2) { href = markerValue; }\r
+            }\r
+        }\r
+        var raw = href;\r
+        try { raw = decodeURI(raw); } catch (e) {}\r
+        var rel = markdownHrefToWorkspaceOpenRel(href);\r
+        if (!rel && /^file:\\/\\//i.test(raw)) {\r
+            var fsPath = raw.replace(/^file:\\/\\/\\/?/i, '');\r
+            try { fsPath = decodeURIComponent(fsPath); } catch (e2) {}\r
+            if (/^[A-Za-z]:\\//.test(fsPath)) rel = pathTokenToWorkspaceOpenRel(fsPath);\r
+            else rel = pathTokenToWorkspaceOpenRel('/' + fsPath.replace(/^\\/+/, ''));\r
+        }\r
+        if (!rel) return;\r
+        a.href = '#';\r
+        a.setAttribute('data-workspace-open', rel);\r
+        a.classList.add('msg-link-workspace-open');\r
+        a.setAttribute('data-ui-tip', workspaceOpenTipPath(originalPathForTip || raw, rel));\r
+        bindUiHoverTip(a);\r
+    });\r
+}\r
+\r
+function linkifyAssistantTextNodes(root) {\r
+    if (!root) return;\r
+    upgradeWorkspacePathMarkdownLinks(root);\r
+    var walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);\r
+    var batch = [];\r
+    var n;\r
+    while ((n = walker.nextNode())) {\r
+        var p = n.parentElement;\r
+        if (!p || p.closest('a, pre, script, style, textarea, .mermaid')) continue;\r
+        if (p.closest('code') && !isEntireTextNodeWindowsPath(n.nodeValue) && !isEntireWorkspaceSlashPathLinkable(n.nodeValue) && !isEntireWorkspaceRelativePathLinkable(n.nodeValue) && !isEntireTextNodeUncPath(n.nodeValue)) continue;\r
+        var nv = n.nodeValue;\r
+        var nvNorm = linkifyNormalizePathToken(nv);\r
+        if (!nv || (!/https?:\\/\\/|["'][A-Za-z]:[\\\\/]|[A-Za-z]:[\\\\/]|\\/\\S/.test(nvNorm) && !nvNorm.startsWith('\\\\\\\\') && !linkifyKnownExtRegex().test(nvNorm))) continue;\r
+        batch.push(n);\r
+    }\r
+    batch.forEach(linkifySingleTextNode);\r
+}\r
+\r
+function ensureExternalMessageLinksOpenInNewTab(root) {\r
+    if (!root || !root.querySelectorAll) return;\r
+    root.querySelectorAll('a[href]').forEach(function (a) {\r
+        if (!a || a.hasAttribute('data-workspace-open')) return;\r
+        var href = String(a.getAttribute('href') || '').trim();\r
+        if (!/^(https?:)?\\/\\//i.test(href)) return;\r
+        a.target = '_blank';\r
+        var rel = String(a.getAttribute('rel') || '').trim();\r
+        var tokens = rel ? rel.split(/\\s+/) : [];\r
+        ['noopener', 'noreferrer'].forEach(function (token) {\r
+            if (tokens.indexOf(token) < 0) tokens.push(token);\r
+        });\r
+        a.setAttribute('rel', tokens.join(' '));\r
+    });\r
+}\r
+\r
+function scheduleMermaidRun(root) {\r
+    registerMermaidLazy(root);\r
+}\r
+\r
+async function runMermaidElementOnce(el) {\r
+    if (!el || !el.isConnected) return;\r
+    if (el.getAttribute('data-processed') === 'true'\r
+        || el.getAttribute('data-mermaid-loading') === 'true'\r
+        || el.classList.contains('mermaid-error')) return;\r
+    el.setAttribute('data-mermaid-loading', 'true');\r
+    try {\r
+        var mermaidApi = window.mermaid;\r
+        if (!mermaidApi) {\r
+            if (typeof globalThis.loadMyAgentMermaid !== 'function') {\r
+                throw new Error('Mermaid renderer is unavailable');\r
+            }\r
+            mermaidApi = await globalThis.loadMyAgentMermaid();\r
+        }\r
+        if (!el.isConnected) return;\r
+        ensureMermaidInitialized(mermaidApi);\r
+        var cleaned = normalizeMermaidSource(el.textContent || '');\r
+        if (!cleaned) return;\r
+        el.textContent = cleaned;\r
+        if (!el.id) el.id = 'mermaid-embed-' + (++mermaidIdSeq);\r
+        try {\r
+            await mermaidApi.parse(cleaned);\r
+        } catch (errParse) {\r
+            showMermaidRenderError(el, cleaned, errParse);\r
+            return;\r
+        }\r
+        try {\r
+            await mermaidApi.run({ nodes: [el], suppressErrors: false });\r
+            enhanceMermaidZoom(el);\r
+        } catch (errRun) {\r
+            showMermaidRenderError(el, cleaned, errRun);\r
+        }\r
+    } catch (errLoad) {\r
+        showMermaidRenderError(el, normalizeMermaidSource(el.textContent || ''), errLoad);\r
+    } finally {\r
+        el.removeAttribute('data-mermaid-loading');\r
+    }\r
+}\r
+\r
+function ensureMermaidIoObserver() {\r
+    if (mermaidIoObserver || typeof IntersectionObserver === 'undefined') return null;\r
+    mermaidIoObserver = new IntersectionObserver(function (entries) {\r
+        entries.forEach(function (en) {\r
+            if (!en.isIntersecting) return;\r
+            var el = en.target;\r
+            if (!el.classList.contains('mermaid') || el.getAttribute('data-processed') === 'true') {\r
+                if (mermaidIoObserver) mermaidIoObserver.unobserve(el);\r
+                return;\r
+            }\r
+            if (mermaidIoObserver) mermaidIoObserver.unobserve(el);\r
+            runMermaidElementOnce(el);\r
+        });\r
+    }, { root: null, rootMargin: '100px 0px 160px 0px', threshold: 0 });\r
+    return mermaidIoObserver;\r
+}\r
+\r
+function registerMermaidLazy(root) {\r
+    if (!root) return;\r
+    var nodes = Array.from(root.querySelectorAll('.mermaid:not([data-processed]):not(.mermaid-error)'));\r
+    if (!nodes.length) return;\r
+    var obs = ensureMermaidIoObserver();\r
+    if (!obs) {\r
+        requestAnimationFrame(function () {\r
+            (async function () {\r
+                for (var i = 0; i < nodes.length; i += 1) {\r
+                    await runMermaidElementOnce(nodes[i]);\r
+                }\r
+            })();\r
+        });\r
+        return;\r
+    }\r
+    nodes.forEach(function (el) {\r
+        try {\r
+            obs.observe(el);\r
+        } catch (e) {\r
+            runMermaidElementOnce(el);\r
+        }\r
+    });\r
+}\r
+\r
+function wrapMessageTables(container) {\r
+    if (!container) return;\r
+    container.querySelectorAll('table').forEach(function (table) {\r
+        var parent = table.parentElement;\r
+        if (parent && parent.classList && parent.classList.contains('msg-table-scroll')) return;\r
+        var wrap = document.createElement('div');\r
+        wrap.className = 'msg-table-scroll';\r
+        if (table.parentNode) table.parentNode.insertBefore(wrap, table);\r
+        wrap.appendChild(table);\r
+    });\r
+}\r
+\r
+function unwrapMarkdownDelTags(container) {\r
+    if (!container) return;\r
+    container.querySelectorAll('del').forEach(function (el) {\r
+        var parent = el.parentNode;\r
+        if (!parent) return;\r
+        while (el.firstChild) parent.insertBefore(el.firstChild, el);\r
+        parent.removeChild(el);\r
+    });\r
+}\r
+\r
+function enhanceAssistantMessageContent(div) {\r
+    if (!div) return;\r
+    unwrapMarkdownDelTags(div);\r
+    wrapMessageTables(div);\r
+    upgradeMermaidBlocks(div);\r
+    linkifyAssistantTextNodes(div);\r
+    upgradeWorkspaceMedia(div);\r
+    ensureExternalMessageLinksOpenInNewTab(div);\r
+    scheduleMermaidRun(div);\r
+}\r
+\r
+let markedOptionsApplied = false;\r
+function stripMarkdownPathLinkWrapper(s) {\r
+    var t = String(s || '').trim();\r
+    var changed = true;\r
+    var pairs = [\r
+        ['**', '**'],\r
+        ['__', '__'],\r
+        ['~~', '~~'],\r
+        ['\`', '\`'],\r
+        ['*', '*'],\r
+        ['_', '_'],\r
+        ['"', '"'],\r
+        ["'", "'"],\r
+        ['“', '”'],\r
+        ['‘', '’']\r
+    ];\r
+    while (changed && t.length >= 2) {\r
+        changed = false;\r
+        for (var i = 0; i < pairs.length; i += 1) {\r
+            var open = pairs[i][0];\r
+            var close = pairs[i][1];\r
+            if (t.length > open.length + close.length && t.indexOf(open) === 0 && t.slice(-close.length) === close) {\r
+                t = t.slice(open.length, t.length - close.length).trim();\r
+                changed = true;\r
+                break;\r
+            }\r
+        }\r
+    }\r
+    return t;\r
+}\r
+\r
+function normalizeExplicitMarkdownPathLinkMatch(match, label, dest) {\r
+    var cleanLabel = stripMarkdownPathLinkWrapper(label);\r
+    var rawDest = String(dest || '').trim();\r
+    // A regular CommonMark destination may be followed by a quoted title.\r
+    // It is already valid Markdown and must not be mistaken for one path with spaces.\r
+    if (/^(?:<[^>\\r\\n]+>|\\S+)\\s+(?:"[^"\\r\\n]*"|'[^'\\r\\n]*'|\\([^\\)\\r\\n]*\\))$/.test(rawDest)) return match;\r
+    var angleWrapped = rawDest.length >= 2 && rawDest.charAt(0) === '<' && rawDest.charAt(rawDest.length - 1) === '>';\r
+    var cleanDest = angleWrapped\r
+        ? rawDest.slice(1, -1).trim()\r
+        : stripMarkdownPathLinkWrapper(rawDest);\r
+    if (!cleanDest || !markdownHrefToWorkspaceOpenRel(cleanDest)) return match;\r
+    // Quotes around a destination are parsed by CommonMark as a title when the\r
+    // path contains spaces. Angle destinations preserve spaces and parentheses\r
+    // while still giving Marked a normal link/image token.\r
+    var needsAngleWrapper = angleWrapped || /[\\s()<>]/.test(cleanDest);\r
+    var markdownDest = needsAngleWrapper\r
+        ? '<' + cleanDest.replace(/\\\\/g, '%5C').replace(/</g, '%3C').replace(/>/g, '%3E') + '>'\r
+        : cleanDest;\r
+    return '[' + cleanLabel + '](' + markdownDest + ')';\r
+}\r
+\r
+function findExplicitMarkdownLabelEnd(src, start) {\r
+    var depth = 0;\r
+    for (var i = start; i < src.length; i += 1) {\r
+        var ch = src.charAt(i);\r
+        if (ch === '\\\\') {\r
+            i += 1;\r
+            continue;\r
+        }\r
+        if (ch === '[') depth += 1;\r
+        else if (ch === ']') {\r
+            depth -= 1;\r
+            if (depth === 0) return i;\r
+        }\r
+    }\r
+    return -1;\r
+}\r
+\r
+function findExplicitMarkdownDestinationEnd(src, openParen) {\r
+    var depth = 1;\r
+    var quote = '';\r
+    var inAngle = false;\r
+    for (var i = openParen + 1; i < src.length; i += 1) {\r
+        var ch = src.charAt(i);\r
+        if (quote) {\r
+            if (ch === quote) quote = '';\r
+            continue;\r
+        }\r
+        if (inAngle) {\r
+            if (ch === '>') inAngle = false;\r
+            continue;\r
+        }\r
+        var beforeQuote = src.slice(openParen + 1, i);\r
+        var quoteCanOpen = !beforeQuote.trim() || /\\s/.test(src.charAt(i - 1));\r
+        if (quoteCanOpen && (ch === '"' || ch === "'" || ch === '\\u201c' || ch === '\\u2018')) {\r
+            quote = ch === '\\u201c' ? '\\u201d' : (ch === '\\u2018' ? '\\u2019' : ch);\r
+            continue;\r
+        }\r
+        if (ch === '<') {\r
+            inAngle = true;\r
+            continue;\r
+        }\r
+        if (ch === '(') depth += 1;\r
+        else if (ch === ')') {\r
+            depth -= 1;\r
+            if (depth === 0) return i;\r
+        }\r
+    }\r
+    return -1;\r
+}\r
+\r
+function normalizeExplicitMarkdownPathLinksByScan(text) {\r
+    var src = String(text || '');\r
+    var out = '';\r
+    var copiedUntil = 0;\r
+    var pos = 0;\r
+    while (pos < src.length) {\r
+        var start = src.indexOf('[', pos);\r
+        if (start < 0) break;\r
+        var labelEnd = findExplicitMarkdownLabelEnd(src, start);\r
+        if (labelEnd < 0 || src.charAt(labelEnd + 1) !== '(') {\r
+            pos = start + 1;\r
+            continue;\r
+        }\r
+        var destEnd = findExplicitMarkdownDestinationEnd(src, labelEnd + 1);\r
+        if (destEnd < 0) {\r
+            pos = start + 1;\r
+            continue;\r
+        }\r
+        var match = src.slice(start, destEnd + 1);\r
+        var label = src.slice(start + 1, labelEnd);\r
+        var dest = src.slice(labelEnd + 2, destEnd);\r
+        var normalized = normalizeExplicitMarkdownPathLinkMatch(match, label, dest);\r
+        if (normalized !== match) {\r
+            out += src.slice(copiedUntil, start) + normalized;\r
+            copiedUntil = destEnd + 1;\r
+        }\r
+        pos = destEnd + 1;\r
+    }\r
+    return out + src.slice(copiedUntil);\r
+}\r
+\r
+function normalizeExplicitMarkdownPathLinksInPlainText(text) {\r
+    var normalized = String(text || '')\r
+        .replace(/([\`*_~]{1,2})\\[([^\\]\\r\\n]+)\\]\\(([^)\\r\\n]+)\\)\\1/g, function (match, wrap, label, dest) {\r
+            return normalizeExplicitMarkdownPathLinkMatch(match, label, dest);\r
+        })\r
+        .replace(/([\`*_~]{1,2})\\[([^\\]\\r\\n]+)\\]\\1\\(([^)\\r\\n]+)\\)/g, function (match, wrap, label, dest) {\r
+            return normalizeExplicitMarkdownPathLinkMatch(match, label, dest);\r
+        })\r
+        .replace(/\\[([^\\]\\r\\n]+)\\]([\`*_~]{1,2})\\(([^)\\r\\n]+)\\)\\2/g, function (match, label, wrap, dest) {\r
+            return normalizeExplicitMarkdownPathLinkMatch(match, label, dest);\r
+        });\r
+    return normalizeExplicitMarkdownPathLinksByScan(normalized);\r
+}\r
+\r
+function normalizeExplicitMarkdownPathLinksOutsideFences(text) {\r
+    var src = String(text || '');\r
+    var out = '';\r
+    var buf = '';\r
+    var inFence = false;\r
+    var fenceMarker = '';\r
+    var lineStart = true;\r
+    function flushPlain() {\r
+        if (buf) {\r
+            out += normalizeExplicitMarkdownPathLinksInPlainText(buf);\r
+            buf = '';\r
+        }\r
+    }\r
+    for (var i = 0; i < src.length; i += 1) {\r
+        var ch = src.charAt(i);\r
+        var rest = src.slice(i);\r
+        if (lineStart) {\r
+            var fence = /^([ \\t]{0,3})(\`{3,}|~{3,})/.exec(rest);\r
+            if (fence) {\r
+                flushPlain();\r
+                var fenceText = fence[0];\r
+                var marker = fence[2].charAt(0);\r
+                if (!inFence) {\r
+                    inFence = true;\r
+                    fenceMarker = marker;\r
+                } else if (marker === fenceMarker) {\r
+                    inFence = false;\r
+                    fenceMarker = '';\r
+                }\r
+                out += fenceText;\r
+                i += fenceText.length - 1;\r
+                lineStart = false;\r
+                continue;\r
+            }\r
+        }\r
+        if (inFence) out += ch;\r
+        else buf += ch;\r
+        lineStart = ch === '\\n' || ch === '\\r';\r
+    }\r
+    flushPlain();\r
+    return out;\r
+}\r
+\r
+function escapeMarkdownSingleTildes(text) {\r
+    var src = String(text || '');\r
+    var out = '';\r
+    var inFence = false;\r
+    var fenceMarker = '';\r
+    var inCode = false;\r
+    var lineStart = true;\r
+    for (var i = 0; i < src.length; i += 1) {\r
+        var ch = src.charAt(i);\r
+        var rest = src.slice(i);\r
+        if (lineStart) {\r
+            var fence = /^([ \\t]{0,3})(\`{3,}|~{3,})/.exec(rest);\r
+            if (fence) {\r
+                var marker = fence[2].charAt(0);\r
+                if (!inFence) {\r
+                    inFence = true;\r
+                    fenceMarker = marker;\r
+                } else if (marker === fenceMarker) {\r
+                    inFence = false;\r
+                    fenceMarker = '';\r
+                }\r
+            }\r
+        }\r
+        if (!inFence && ch === '\`') {\r
+            var tickEnd = i + 1;\r
+            while (tickEnd < src.length && src.charAt(tickEnd) === '\`') tickEnd += 1;\r
+            out += src.slice(i, tickEnd);\r
+            i = tickEnd - 1;\r
+            inCode = !inCode;\r
+            lineStart = false;\r
+            continue;\r
+        }\r
+        if (!inFence && !inCode && ch === '~') {\r
+            out += '&#126;';\r
+        } else {\r
+            out += ch;\r
+        }\r
+        lineStart = ch === '\\n' || ch === '\\r';\r
+    }\r
+    return out;\r
+}\r
+\r
+function renderMarkdown(text) {\r
+    if (!text) return '';\r
+    var markdownParser = globalThis.marked;\r
+    if (!markdownParser || typeof markdownParser.parse !== 'function') {\r
+        return '<pre class="markdown-fallback">' + escapeHtml(String(text)) + '</pre>';\r
+    }\r
+    if (!markedOptionsApplied) {\r
+        markedOptionsApplied = true;\r
+        try {\r
+            markdownParser.setOptions({ breaks: true, mangle: false, headerIds: false });\r
+            configureWorkspaceMarkdownRenderer(markdownParser);\r
+        } catch (e) { /* ignore */ }\r
+    }\r
+    try {\r
+        return markdownParser.parse(escapeMarkdownSingleTildes(normalizeExplicitMarkdownPathLinksOutsideFences(text)), { mangle: false, headerIds: false });\r
+    } catch (e) {\r
+        return '<pre class="markdown-fallback">' + escapeHtml(String(text)) + '</pre>';\r
+    }\r
+}\r
+\r
+const THINK_OPEN_TAG = '<think>';\r
+const THINK_CLOSE_TAG = '</think>';\r
+\r
+function appendThinkReasoning(parts, text) {\r
+    var t = String(text || '').trim();\r
+    if (t) parts.push(t);\r
+}\r
+\r
+function findTagOutsideBackticks(text, tag, start) {\r
+    var src = String(text || '');\r
+    var target = String(tag || '').toLowerCase();\r
+    var lower = src.toLowerCase();\r
+    var i = Math.max(0, Number(start) || 0);\r
+    var codeTickLen = 0;\r
+    while (i < src.length) {\r
+        if (src.charAt(i) === '\`') {\r
+            var j = i + 1;\r
+            while (j < src.length && src.charAt(j) === '\`') j += 1;\r
+            var runLen = j - i;\r
+            if (!codeTickLen) codeTickLen = runLen;\r
+            else if (runLen >= codeTickLen) codeTickLen = 0;\r
+            i = j;\r
+            continue;\r
+        }\r
+        if (!codeTickLen && lower.slice(i, i + target.length) === target) return i;\r
+        i += 1;\r
+    }\r
+    return -1;\r
+}\r
+\r
+function removeTagOutsideBackticks(text, tag) {\r
+    var src = String(text || '');\r
+    var out = '';\r
+    var pos = 0;\r
+    while (pos < src.length) {\r
+        var idx = findTagOutsideBackticks(src, tag, pos);\r
+        if (idx < 0) {\r
+            out += src.slice(pos);\r
+            break;\r
+        }\r
+        out += src.slice(pos, idx);\r
+        pos = idx + String(tag || '').length;\r
+    }\r
+    return out;\r
+}\r
+\r
+function splitThinkTagsForUi(raw) {\r
+    var text = String(raw || '');\r
+    var reasoning = [];\r
+    var content = '';\r
+    var pos = 0;\r
+    while (pos < text.length) {\r
+        var openIdx = findTagOutsideBackticks(text, THINK_OPEN_TAG, pos);\r
+        if (openIdx < 0) {\r
+            content += text.slice(pos);\r
+            break;\r
+        }\r
+        content += text.slice(pos, openIdx);\r
+        var bodyStart = openIdx + THINK_OPEN_TAG.length;\r
+        var closeIdx = findTagOutsideBackticks(text, THINK_CLOSE_TAG, bodyStart);\r
+        if (closeIdx < 0) {\r
+            appendThinkReasoning(reasoning, text.slice(bodyStart));\r
+            pos = text.length;\r
+            break;\r
+        }\r
+        appendThinkReasoning(reasoning, text.slice(bodyStart, closeIdx));\r
+        pos = closeIdx + THINK_CLOSE_TAG.length;\r
+    }\r
+    return {\r
+        content: content,\r
+        reasoning: reasoning.join('\\n\\n'),\r
+        changed: reasoning.length > 0 || content !== text,\r
+    };\r
+}\r
+\r
+function stripOrphanThinkCloseForFinalCard(raw) {\r
+    return removeTagOutsideBackticks(raw, THINK_CLOSE_TAG);\r
+}\r
+\r
+function tagSuffixPrefixLen(text, tag) {\r
+    var max = Math.min(String(text || '').length, tag.length - 1);\r
+    for (var n = max; n > 0; n -= 1) {\r
+        if (tag.indexOf(text.slice(text.length - n)) === 0) return n;\r
+    }\r
+    return 0;\r
+}\r
+\r
+function feedThinkTaggedResponseDelta(llmState, delta) {\r
+    var l = llmState || {};\r
+    if (!l.llmThinkTagMode) l.llmThinkTagMode = 'response';\r
+    if (typeof l.llmThinkTagAllowLeading !== 'boolean') l.llmThinkTagAllowLeading = true;\r
+    l.llmThinkTagCarry = (l.llmThinkTagCarry || '') + String(delta || '');\r
+    var out = [];\r
+    while (l.llmThinkTagCarry) {\r
+        if (l.llmThinkTagMode === 'reasoning') {\r
+            var closeIdx = findTagOutsideBackticks(l.llmThinkTagCarry, THINK_CLOSE_TAG, 0);\r
+            if (closeIdx >= 0) {\r
+                var reasoningText = l.llmThinkTagCarry.slice(0, closeIdx);\r
+                if (reasoningText) out.push({ part: 'reasoning', text: reasoningText });\r
+                l.llmThinkTagCarry = l.llmThinkTagCarry.slice(closeIdx + THINK_CLOSE_TAG.length);\r
+                l.llmThinkTagMode = 'response';\r
+                continue;\r
+            }\r
+            var lowerReasoning = l.llmThinkTagCarry.toLowerCase();\r
+            var keepReasoning = tagSuffixPrefixLen(lowerReasoning, THINK_CLOSE_TAG);\r
+            var emitReasoning = keepReasoning ? l.llmThinkTagCarry.slice(0, l.llmThinkTagCarry.length - keepReasoning) : l.llmThinkTagCarry;\r
+            l.llmThinkTagCarry = l.llmThinkTagCarry.slice(emitReasoning.length);\r
+            if (emitReasoning) out.push({ part: 'reasoning', text: emitReasoning });\r
+            break;\r
+        }\r
+        var openIdx = findTagOutsideBackticks(l.llmThinkTagCarry, THINK_OPEN_TAG, 0);\r
+        if (openIdx >= 0 && l.llmThinkTagAllowLeading && !l.llmThinkTagCarry.slice(0, openIdx).trim()) {\r
+            var responseText = l.llmThinkTagCarry.slice(0, openIdx);\r
+            if (responseText) out.push({ part: 'response', text: responseText });\r
+            l.llmThinkTagCarry = l.llmThinkTagCarry.slice(openIdx + THINK_OPEN_TAG.length);\r
+            l.llmThinkTagMode = 'reasoning';\r
+            continue;\r
+        }\r
+        var lowerResponse = l.llmThinkTagCarry.toLowerCase();\r
+        var keepResponse = l.llmThinkTagAllowLeading ? tagSuffixPrefixLen(lowerResponse, THINK_OPEN_TAG) : 0;\r
+        var emitResponse = keepResponse ? l.llmThinkTagCarry.slice(0, l.llmThinkTagCarry.length - keepResponse) : l.llmThinkTagCarry;\r
+        l.llmThinkTagCarry = l.llmThinkTagCarry.slice(emitResponse.length);\r
+        if (emitResponse) {\r
+            out.push({ part: 'response', text: emitResponse });\r
+            if (emitResponse.trim()) l.llmThinkTagAllowLeading = false;\r
+        }\r
+        break;\r
+    }\r
+    return out;\r
+}\r
+\r
+function flushThinkTagCarry(ctx) {\r
+    if (!ctx || !ctx.llm || !ctx.llm.llmThinkTagCarry) return;\r
+    var l = ctx.llm;\r
+    if (l.llmThinkTagMode === 'reasoning') l.llmPendingReasoningDelta = (l.llmPendingReasoningDelta || '') + l.llmThinkTagCarry;\r
+    else {\r
+        l.llmPendingResponseDelta = (l.llmPendingResponseDelta || '') + l.llmThinkTagCarry;\r
+        if (String(l.llmThinkTagCarry || '').trim()) l.llmThinkTagAllowLeading = false;\r
+    }\r
+    l.llmThinkTagCarry = '';\r
+}\r
+\r
+const TRACE_ROW = {\r
+    'log-entry':   { label: '信息', c: 'feed--log' },\r
+    'tool-call':   { label: '工具', c: 'feed--tool' },\r
+    'error-log':   { label: '错误', c: 'feed--err' },\r
+    'llm-response':{ label: '回复', c: 'feed--llm2' },\r
+    'llm-reasoning':{ label: '思考', c: 'feed--llm' },\r
+    'compact-summary': { label: '压缩', c: 'feed--cmp' },\r
+    'context-trim': { label: '裁剪', c: 'feed--trim' },\r
+    'context-summary': { label: '压缩', c: 'feed--cmp' },\r
+    'key-context': { label: '要点', c: 'feed--key' },\r
     'plugin-extension': { label: '扩展', c: 'feed--plugin-extension' },\r
-    'user-steer':  { label: '追问', c: 'feed--answer' },
-    'status':      { label: '状态', c: 'feed--st' },
-};
-
-const envKeepLines = Number(window.__UI_LOG_TRUNCATE_KEEP_LINES__);
-const LOG_TRUNCATE_KEEP_LINES = Number.isFinite(envKeepLines) && envKeepLines > 0 ? Math.floor(envKeepLines) : 100;
-const LOG_TRUNCATE_HEAD_LINES = LOG_TRUNCATE_KEEP_LINES;
-const LOG_TRUNCATE_TAIL_LINES = LOG_TRUNCATE_KEEP_LINES;
-const LOG_TRUNCATE_HEAD_CHARS = 12000;
-const LOG_TRUNCATE_TAIL_CHARS = 12000;
-
-function reactGenerationForContext(ctx) {
-    return Math.max(0, Math.floor(Number(ctx && ctx.reactGeneration) || 0));
-}
-
-function toolCallDraftKey(ctx, parsed) {
-    var generation = reactGenerationForContext(ctx);
-    var ri = parsed && parsed.react_iter != null ? String(parsed.react_iter) : '';
-    var idx = parsed && parsed.tool_call_index != null ? String(parsed.tool_call_index) : (parsed && parsed.index != null ? String(parsed.index) : '0');
-    return generation + ':' + ri + ':' + idx;
-}
-
-function findToolDraftRow(ctx, parsed) {
-    var key = toolCallDraftKey(ctx, parsed);
-    if (!key) return null;
-    var body = getProcessBody(ctx);
-    if (!body || typeof CSS === 'undefined' || !CSS.escape) return null;
-    try { return body.querySelector('.feed-item.feed--tool[data-tool-draft-key="' + CSS.escape(key) + '"]'); } catch (e) { return null; }
-}
-
-function deltaDedupeKey(ctx, parsed, scope) {
-    if (!parsed || parsed.delta_seq == null) return '';
-    var ds = Number(parsed.delta_seq);
-    if (!Number.isFinite(ds) || ds <= 0) return '';
-    var ss = Number(parsed.stream_seq || 0);
-    var ri = parsed.react_iter != null ? String(parsed.react_iter) : '';
-    var part = String(scope || parsed.type || '');
-    var id = String(parsed.tool_call_id || parsed.id || parsed.index || parsed.tool_call_index || '');
-    return reactGenerationForContext(ctx) + ':' + part + ':' + (Number.isFinite(ss) ? Math.floor(ss) : 0) + ':' + ri + ':' + id + ':' + Math.floor(ds);
-}
-
-function hasSeenStreamDelta(ctx, parsed, scope) {
-    if (!ctx) return false;
-    var key = deltaDedupeKey(ctx, parsed, scope);
-    if (!key) return false;
-    if (!ctx._seenStreamDeltaKeys) ctx._seenStreamDeltaKeys = new Set();
-    if (ctx._seenStreamDeltaKeys.has(key)) return true;
-    ctx._seenStreamDeltaKeys.add(key);
-    return false;
-}
-
-function setToolRowText(row, text, ctx, runSessionId) {
-    if (!row) return;
-    var sc = row.querySelector('.feed-chunk-scroller');
-    if (sc) {
-        var nextText = truncateLogTextForUi(text);
-        if (typeof setUiRuntimeText === 'function') setUiRuntimeText(sc, nextText);
-        else sc.textContent = nextText;
-    }
-    var ch = row.querySelector('.feed-chunk');
-    if (ch) {
-        // 工具条目流式生成时也放开高度限制
-        ch.classList.add('is-streaming');
-        refreshFeedChunkOverflow(ch);
-    }
-    // 遵守自动跟随，不强制拖拽
-    if (!replayingMessages) scrollContentAreaIfFollow(ctx, runSessionId, 'text');
-}
-
-// 移除临时状态消息（移除整个 feed-item 条目）
-function removeTemporaryStatus(ctx) {
-    // Cleanup must never create a new process group. Terminal signals can be
-    // delivered more than once (final, run_finished, and [DONE]).
-    var body = getExistingProcessBody(ctx);
-    if (!body) return;
-    var tempStatuses = body.querySelectorAll('[data-temporary-status="1"]');
-    tempStatuses.forEach(function(el) {
-        var row = el.closest ? el.closest('.feed-item') : null;
-        if (row) row.remove(); else el.remove();
-    });
-}
-
-function appendToolCallDelta(ctx, parsed, runSessionId) {
-    if (hasSeenStreamDelta(ctx, parsed, 'tool_call_delta')) return;
-    var key = toolCallDraftKey(ctx, parsed);
-    if (!key) return;
-    var row = findToolDraftRow(ctx, parsed);
-    if (!row) {
-        var so = null;
-        if (parsed.react_iter != null && Number.isFinite(Number(parsed.react_iter))) so = { reactIter: Number(parsed.react_iter) };
-        var scNew = createProcessFeedRow(ctx, 'tool-call', '工具调用生成中...', so, runSessionId, '');
-        row = scNew && scNew.closest ? scNew.closest('.feed-item') : null;
-        if (row) row.setAttribute('data-tool-draft-key', key);
-    }
-    if (!row) return;
-    // A valid call may start executing before the provider finishes emitting
-    // metadata-only deltas. Never let those late deltas revert the row to
-    // "generating" or create a duplicate draft.
-    if (row.getAttribute('data-tool-pending') === '1') return;
-    if (parsed.id) row.dataset.pendingToolCallId = String(parsed.id);
-    
-    // Tool-call generation should still reveal the process group; only the later
-    // "executing" placeholder should avoid forcing expand/collapse changes.
-    removeTemporaryStatus(ctx);
-    var agg = row.closest('.process-aggregate');
-    if (agg && agg.classList.contains('is-collapsed')) {
-        agg.classList.remove('is-collapsed');
-        var topN = agg.querySelector('.process-aggregate-top');
-        if (topN) topN.setAttribute('aria-expanded', 'true');
-    }
-    
-    // 累积工具名称和参数
-    if (parsed.name_delta) {
-        row.dataset.pendingToolName = (row.dataset.pendingToolName || '') + String(parsed.name_delta);
-    }
-    if (parsed.arguments_delta) {
-        row.dataset.pendingToolArgs = (row.dataset.pendingToolArgs || '') + String(parsed.arguments_delta);
-    }
-    
-    // 生成显示文本
-    var toolName = row.dataset.pendingToolName || '';
-    var argsRaw = row.dataset.pendingToolArgs || '';
-    var displayText = '工具调用生成中...';
-    
-    if (toolName) {
-        // 流式显示：工具名 + 参数原始文本（逐步增长）
-        var argsPreview = argsRaw;
-        displayText = toolName + '(' + argsPreview + '\\n生成中...';
-    }
-    setToolRowText(row, displayText, ctx, runSessionId);
-}
-
-function removeAbortedToolDraftRows(ctx, ev) {
-    // Like temporary-status cleanup, this may run after the final response has
-    // already sealed the process group, so only inspect an existing body.
-    var body = getExistingProcessBody(ctx);
-    if (!body) return;
-    var iter = ev && ev.react_iter != null && Number.isFinite(Number(ev.react_iter))
-        ? Math.max(1, Math.floor(Number(ev.react_iter)))
-        : null;
-    var runId = String((ev && (ev.run_id || ev.runId)) || '');
-    var hasScopedAbort = !!(iter != null || runId || (ev && ev.react_generation != null));
-    var generation = ev && ev.react_generation != null && Number.isFinite(Number(ev.react_generation))
-        ? Math.max(0, Math.floor(Number(ev.react_generation)))
-        : (hasScopedAbort ? reactGenerationForContext(ctx) : null);
-    var rows = body.querySelectorAll('.feed-item.feed--tool[data-tool-draft-key], .feed-item.feed--tool[data-tool-pending="1"]');
-    rows.forEach(function (row) {
-        if (iter != null) {
-            var rowIter = Number(row.getAttribute('data-react-iter'));
-            if (!Number.isFinite(rowIter) || Math.floor(rowIter) !== iter) return;
-        }
-        if (generation != null) {
-            var rowGeneration = Math.max(0, Math.floor(Number(row.getAttribute('data-react-generation')) || 0));
-            if (rowGeneration !== generation) return;
-        }
-        var rowRunId = String(row.getAttribute('data-run-id') || '');
-        if (runId && rowRunId && rowRunId !== runId) return;
-        unregisterProcessAggregateRow(row);
-        row.remove();
-    });
-    var agg = body.closest('.process-aggregate');
-    if (agg) refreshAggregateStatsSmart(agg);
-}
-
-function formatToolCommandLine(tool, args, commandPreview) {
-    if (commandPreview != null && String(commandPreview).trim()) return String(commandPreview).trim();
-    var name = String(tool || 'tool');
-    var a = args && typeof args === 'object' && !Array.isArray(args) ? args : {};
-    function j(v) { try { return JSON.stringify(v); } catch (e) { return String(v); } }
-    function pair(k, v) {
-        if ((k === 'content' || k === 'contents' || k === 'patch') && typeof v === 'string' && v.length > 240) v = '<' + v.length + ' chars>';
-        return j(k) + ': ' + j(v);
-    }
-    var preferred = ['path','target_directory','file_path','directory','root','command','args','url','start_line','end_line','pattern','query','search','replace','old_string','new_string','workdir','timeout_ms','login','working_dir','timeout','temporary','patch','content','contents'];
-    var keys = [];
-    // 路径参数去重：只保留第一个存在的路径参数
-    var pathKeys = ['path', 'target_directory', 'file_path', 'directory', 'root'];
-    var firstPathKey = null;
-    pathKeys.forEach(function (k) {
-        if (!firstPathKey && Object.prototype.hasOwnProperty.call(a, k)) firstPathKey = k;
-    });
-    preferred.forEach(function (k) {
-        if (Object.prototype.hasOwnProperty.call(a, k)) {
-            if (pathKeys.indexOf(k) >= 0) {
-                if (k === firstPathKey) keys.push(k);
-            } else {
-                keys.push(k);
-            }
-        }
-    });
-    Object.keys(a).sort().forEach(function (k) { if (keys.indexOf(k) < 0) keys.push(k); });
-    if (name === 'run_shell') {
-        var b = {};
-        Object.keys(a).forEach(function (k) { b[k] = a[k]; });
-        var cmd = b.command != null ? String(b.command) : '';
-        if (Array.isArray(b.args) && b.args.length) cmd += ' ' + b.args.map(function (x) { return String(x); }).join(' ');
-        b.command = cmd.trim();
-        delete b.args;
-        a = b;
-        keys = [];
-        preferred.forEach(function (k) { if (Object.prototype.hasOwnProperty.call(a, k)) keys.push(k); });
-        Object.keys(a).sort().forEach(function (k) { if (keys.indexOf(k) < 0) keys.push(k); });
-    }
-    return name + '(' + keys.map(function (k) { return pair(k, a[k]); }).join(', ') + ')';
-}
-
-function formatToolPendingLine(tool, args, commandPreview) {
-    var cmd = commandPreview != null ? String(commandPreview).trim() : '';
-    if (!cmd) return '执行中...';
-    return cmd + '\\n执行中...';
-}
-
-function formatToolDoneLine(tool, args, result, commandPreview) {
-    return formatToolCommandLine(tool, args, commandPreview) + '\\n执行结果\\n' + String(result != null ? result : '');
-}
-
-function appendToolPendingRow(ctx, parsed, runSessionId) {
-    var line = formatToolPendingLine(parsed.tool, parsed.args, parsed.command_preview);
-    var so = null;
-    if (parsed.react_iter != null && Number.isFinite(Number(parsed.react_iter))) so = { reactIter: Number(parsed.react_iter) };
-    var draft = findToolDraftRow(ctx, parsed);
-    if (draft) {
-        if (parsed.tool_call_id != null && String(parsed.tool_call_id) !== '') draft.setAttribute('data-tool-call-id', String(parsed.tool_call_id));
-        draft.setAttribute('data-tool-pending', '1');
-        draft.dataset.commandPreview = parsed.command_preview != null ? String(parsed.command_preview) : '';
-        var draftScroller = draft.querySelector('.feed-chunk-scroller');
-        if (draftScroller) {
-            var draftText = truncateLogTextForUi(line);
-            if (typeof setUiRuntimeText === 'function') setUiRuntimeText(draftScroller, draftText);
-            else draftScroller.textContent = draftText;
-        }
-        var draftChunk = draft.querySelector('.feed-chunk');
-        if (draftChunk) {
-            draftChunk.classList.remove('is-streaming');
-            refreshFeedChunkOverflow(draftChunk);
-        }
-        if (!replayingMessages) scrollContentAreaIfFollow(ctx, runSessionId, 'text');
-        if (typeof attachHumanInteractionCardsForToolCall === 'function') {
-            attachHumanInteractionCardsForToolCall(ctx && ctx.stream, parsed.tool_call_id);
-        }
-        return;
-    }
-    var sc = createProcessFeedRow(ctx, 'tool-call', line, so, runSessionId, parsed.tool_call_id);
-    var row = sc && sc.closest ? sc.closest('.feed-item') : null;
-    if (row) {
-        row.setAttribute('data-tool-draft-key', toolCallDraftKey(ctx, parsed));
-        row.setAttribute('data-tool-pending', '1');
-        row.dataset.commandPreview = parsed.command_preview != null ? String(parsed.command_preview) : '';
-        var chunk = row.querySelector('.feed-chunk');
-        if (chunk) {
-            chunk.classList.remove('is-streaming');
-            refreshFeedChunkOverflow(chunk);
-        }
-        if (typeof attachHumanInteractionCardsForToolCall === 'function') {
-            attachHumanInteractionCardsForToolCall(ctx && ctx.stream, parsed.tool_call_id);
-        }
-    }
-}
-
-function appendToolCommandDelta(ctx, parsed, runSessionId) {
-    if (hasSeenStreamDelta(ctx, parsed, 'tool_command_delta')) return;
-    var tid = parsed.tool_call_id != null ? String(parsed.tool_call_id) : '';
-    if (!tid) return;
-    var body = getProcessBody(ctx);
-    var row = null;
-    if (body && typeof CSS !== 'undefined' && CSS.escape) {
-        try { row = body.querySelector('.feed-item.feed--tool[data-tool-call-id="' + CSS.escape(tid) + '"]'); } catch (e) { row = null; }
-    }
-    if (!row) return;
-    row.dataset.commandPreview = (row.dataset.commandPreview || '') + String(parsed.delta || '');
-    var text = formatToolPendingLine(parsed.tool, parsed.args, row.dataset.commandPreview);
-    var sc = row.querySelector('.feed-chunk-scroller');
-    if (sc) {
-        var pendingText = truncateLogTextForUi(text);
-        if (typeof setUiRuntimeText === 'function') setUiRuntimeText(sc, pendingText);
-        else sc.textContent = pendingText;
-    }
-    var ch = row.querySelector('.feed-chunk');
-    if (ch) refreshFeedChunkOverflow(ch);
-    if (!replayingMessages) scrollContentAreaIfFollow(ctx, runSessionId, 'text');
-}
-function upsertToolCallResult(ctx, parsed, runSessionId) {
-    var tid = parsed.tool_call_id != null ? String(parsed.tool_call_id) : '';
-    var body = getProcessBody(ctx);
-    var row = null;
-    if (tid && body && typeof CSS !== 'undefined' && CSS.escape) {
-        try { row = body.querySelector('.feed-item.feed--tool[data-tool-call-id="' + CSS.escape(tid) + '"]'); } catch (e) { row = null; }
-    }
-    if (!row) row = findToolDraftRow(ctx, parsed);
-    var cmdPreview = parsed.command_preview;
-    if ((!cmdPreview || !String(cmdPreview).trim()) && row && row.dataset.commandPreview) cmdPreview = row.dataset.commandPreview;
-    var rawContent = parsed.raw_content != null ? String(parsed.raw_content) : '';
-    var text = rawContent ? rawContent : formatToolDoneLine(parsed.tool, parsed.args, parsed.result, cmdPreview);
-    if (row) {
-        if (tid) row.setAttribute('data-tool-call-id', tid);
-        row.removeAttribute('data-tool-draft-key');
-        row.removeAttribute('data-tool-pending');
-        row.setAttribute('data-event-committed', '1');
-        row.dataset.commandPreview = cmdPreview != null ? String(cmdPreview) : '';
-        var sc = row.querySelector('.feed-chunk-scroller');
-        if (sc) {
-            var doneText = truncateLogTextForUi(text);
-            if (typeof setUiRuntimeText === 'function') setUiRuntimeText(sc, doneText);
-            else sc.textContent = doneText;
-        }
-        var ch = row.querySelector('.feed-chunk');
-        if (ch) refreshFeedChunkOverflow(ch);
-        var agg = body.closest('.process-aggregate');
-        refreshAggregateStatsSmart(agg);
-        if (!replayingMessages) scrollContentAreaIfFollow(ctx, runSessionId, 'text');
-        if (typeof attachHumanInteractionCardsForToolCall === 'function') {
-            attachHumanInteractionCardsForToolCall(ctx && ctx.stream, tid);
-        }
-        autoCollapseToolRowAfterResult(row);
-        return;
-    }
-    var ri = uiEventReactIter(parsed);
-    var so = null;
-    if (ri != null && Number.isFinite(Number(ri))) so = { reactIter: ri };
-    var scNew = createProcessFeedRow(ctx, 'tool-call', text, so, runSessionId, tid);
-    var newRow = scNew && scNew.closest ? scNew.closest('.feed-item') : null;
-    if (newRow && tid && typeof attachHumanInteractionCardsForToolCall === 'function') {
-        attachHumanInteractionCardsForToolCall(ctx && ctx.stream, tid);
-    }
-    if (newRow) autoCollapseToolRowAfterResult(newRow);
-}
-
-function autoCollapseToolRowAfterResult(row) {
-    if (!row || row.dataset.manualToggle === '1') return;
-    if (row.querySelector('.human-interaction-card[data-kind="approval"][data-status="pending"]')) return;
-    row.classList.add('is-collapsed');
-    var btn = row.querySelector('.feed-row-collapse');
-    if (btn) {
-        btn.setAttribute('aria-expanded', 'false');
-        btn.setAttribute('aria-label', '展开工具行');
-    }
-}
-
-/** 去掉首尾「空白行」（整行仅空格/制表也不保留），保留首行正文缩进与中间空行 */
-function trimSurroundingBlankLines(raw) {
-    var text = (raw == null) ? '' : String(raw);
-    if (!text) return text;
-    var lines = text.split('\\n');
-    var start = 0;
-    var end = lines.length;
-    while (start < end && lines[start].trim() === '') start++;
-    while (end > start && lines[end - 1].trim() === '') end--;
-    if (start >= end) return '';
-    return lines.slice(start, end).join('\\n');
-}
-
-function truncateLogTextForUi(raw) {
-    const text = (raw == null) ? '' : String(raw);
-    if (!text) return text;
-    const lines = text.split('\\n');
-    if (lines.length > LOG_TRUNCATE_HEAD_LINES + LOG_TRUNCATE_TAIL_LINES) {
-        const head = lines.slice(0, LOG_TRUNCATE_HEAD_LINES).join('\\n');
-        const tail = lines.slice(-LOG_TRUNCATE_TAIL_LINES).join('\\n');
-        const omitted = lines.length - LOG_TRUNCATE_HEAD_LINES - LOG_TRUNCATE_TAIL_LINES;
-        return head + '\\n\\n... [中间省略 ' + omitted + ' 行] ...\\n\\n' + tail;
-    }
-    if (text.length > LOG_TRUNCATE_HEAD_CHARS + LOG_TRUNCATE_TAIL_CHARS) {
-        const head = text.slice(0, LOG_TRUNCATE_HEAD_CHARS);
-        const tail = text.slice(-LOG_TRUNCATE_TAIL_CHARS);
-        const omitted = text.length - LOG_TRUNCATE_HEAD_CHARS - LOG_TRUNCATE_TAIL_CHARS;
-        return head + '\\n\\n... [中间省略约 ' + omitted + ' 字符] ...\\n\\n' + tail;
-    }
-    return text;
-}
-
-function reactFeedPhase(type) {
-    if (type === 'llm-reasoning') return 0;
-    if (type === 'llm-response') return 1;
-    if (type === 'tool-call') return 2;
-    return null;
-}
-
-function appendProcessRowBeforePendingAppendSteer(body, row, type) {
-    if (!body || !row) return;
-    // An accepted append-mode follow-up is the visual boundary between the
-    // current round and the next one.  Keep its pending row at the tail while
-    // the current LLM/tool round finishes; once the server commits user_steer,
-    // data-steer-pending is removed and subsequent rows naturally append below.
-    if (type !== 'user-steer') {
-        var pendingAppendSteer = body.lastElementChild;
-        if (!pendingAppendSteer || !pendingAppendSteer.matches(
-            '.feed-item[data-log-type="user-steer"]'
-            + '[data-steer-mode="append"][data-steer-pending="1"]'
-        )) pendingAppendSteer = null;
-        if (pendingAppendSteer) {
-            body.insertBefore(row, pendingAppendSteer);
-            return;
-        }
-    }
-    body.appendChild(row);
-}
-
-function appendMonotonicProcessRow(body, row, type) {
-    appendProcessRowBeforePendingAppendSteer(body, row, type);
-}
-
-function insertReactOrderedFeedRow(body, row, type, reactIter, reactGeneration) {
-    var phase = reactFeedPhase(type);
-    var iter = Number(reactIter);
-    if (phase == null || !Number.isFinite(iter)) {
-        appendMonotonicProcessRow(body, row, type);
-        return;
-    }
-    iter = Math.max(1, Math.floor(iter));
-    var generation = Math.max(0, Math.floor(Number(reactGeneration) || 0));
-    row.setAttribute('data-react-iter', String(iter));
-    row.setAttribute('data-react-generation', String(generation));
-    var orderKey = [generation, iter, phase];
-    var tailKey = body._reactOrderTailKey;
-    if (!tailKey || generation > tailKey[0]
-        || (generation === tailKey[0] && (iter > tailKey[1]
-            || (iter === tailKey[1] && phase >= tailKey[2])))) {
-        appendProcessRowBeforePendingAppendSteer(body, row, type);
-        body._reactOrderTailKey = orderKey;
-        return;
-    }
-    var rows = body.querySelectorAll('.feed-item[data-react-iter]');
-    for (var i = 0; i < rows.length; i += 1) {
-        var existing = rows[i];
-        var existingPhase = reactFeedPhase(existing.getAttribute('data-log-type'));
-        var existingIter = Number(existing.getAttribute('data-react-iter'));
-        var existingGeneration = Math.max(0, Number(existing.getAttribute('data-react-generation')) || 0);
-        if (existingPhase == null || !Number.isFinite(existingIter)) continue;
-        if (existingGeneration > generation
-            || (existingGeneration === generation
-                && (existingIter > iter || (existingIter === iter && existingPhase > phase)))) {
-            body.insertBefore(row, existing);
-            return;
-        }
-    }
-    appendProcessRowBeforePendingAppendSteer(body, row, type);
-    body._reactOrderTailKey = orderKey;
-}
-
-function feedRowCollapseAriaLabel(row, collapsed) {
-    var noun = row && row.classList && row.classList.contains('feed--llm')
-        ? '思考'
-        : (row && row.classList && row.classList.contains('feed--llm2') ? '回答' : '工具行');
-    return (collapsed ? '展开' : '收起') + noun;
-}
-
-function syncFeedRowCollapseButton(row) {
-    if (!row) return;
-    var collapsed = row.classList.contains('is-collapsed');
-    var button = row.querySelector('.feed-row-collapse');
-    if (!button) return;
-    button.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
-    button.setAttribute('aria-label', feedRowCollapseAriaLabel(row, collapsed));
-}
-
-function toggleCollapsibleFeedRow(row, manual) {
-    if (!row) return;
-    row.classList.toggle('is-collapsed');
-    if (manual) row.dataset.manualToggle = '1';
-    syncFeedRowCollapseButton(row);
-}
-
-function autoCollapseLlmReasoningRow(row) {
-    if (!row || !row.classList.contains('feed--llm') || row.dataset.manualToggle === '1') return;
-    var collapse = function () {
-        row.classList.add('is-collapsed');
-        syncFeedRowCollapseButton(row);
-    };
-    if (row.isConnected && row.getAttribute('data-llm-live-row') === '1') {
-        mutateSmoothTraceRowHeight(row, collapse);
-    } else {
-        collapse();
-    }
-}
-
-function createProcessFeedRow(ctx, type, initialText, streamOpts, runSessionId, toolCallIdOpt) {
-    streamOpts = streamOpts || {};
-    if (type == null) type = 'log-entry';
-    stripWelcome(ctx);
-    const body = getProcessBody(ctx);
-    if (!body) return;
-    const meta = TRACE_ROW[type] || TRACE_ROW['log-entry'];
-    const row = document.createElement('div');
-    row.className = 'feed-item ' + meta.c;
-    row.setAttribute('data-log-type', type);
-    row.setAttribute('data-react-generation', String(reactGenerationForContext(ctx)));
-    if (ctx && ctx.runId) row.setAttribute('data-run-id', String(ctx.runId));
-    if (toolCallIdOpt != null && String(toolCallIdOpt) !== '') row.setAttribute('data-tool-call-id', String(toolCallIdOpt));
-    var rowCanCollapse = type === 'tool-call' || type === 'llm-reasoning';
-    var initialCollapseLabel = type === 'llm-reasoning' ? '收起思考' : '收起工具行';
-    var rowCollapseBtn = rowCanCollapse
-        ? '<button type="button" class="feed-row-collapse" aria-expanded="true" aria-label="' + initialCollapseLabel + '">'
-            + '<span class="feed-row-collapse-chevron" aria-hidden="true"></span></button>'
-        : '';
-    row.innerHTML = '<div class="feed-row">'
-        + '<span class="feed-label">' + meta.label + '</span>'
-        + '<div class="feed-chunk">'
-        + '<div class="feed-chunk-scroller"></div></div>'
-        + rowCollapseBtn
-        + '</div>';
-    const chunk = row.querySelector('.feed-chunk');
-    const sc = row.querySelector('.feed-chunk-scroller');
-    if (type === 'llm-reasoning') chunk.classList.add('expanded');
-    if (rowCanCollapse) {
-        const collapseBtn = row.querySelector('.feed-row-collapse');
-        if (collapseBtn) {
-            collapseBtn.addEventListener('click', function (e) {
-                e.preventDefault();
-                e.stopPropagation();
-                toggleCollapsibleFeedRow(row, true);
-            });
-        }
-    }
-    var txtForUi = initialText;
-    if (type === 'llm-reasoning' || type === 'llm-response') txtForUi = trimSurroundingBlankLines(txtForUi);
-    if (type === 'llm-response') row._processBriefRawText = String(txtForUi || '');
-    var initialUiText = truncateLogTextForUi(txtForUi);
-    if (type === 'status' || type === 'error-log' || type === 'tool-call'
-        || type === 'compact-summary' || type === 'context-trim'
-        || type === 'context-summary' || type === 'key-context') {
-        if (typeof setUiRuntimeText === 'function') setUiRuntimeText(sc, initialUiText);
-        else sc.textContent = initialUiText;
-    } else {
-        sc.textContent = initialUiText;
-    }
-    if (streamOpts.streaming && (type === 'llm-reasoning' || type === 'llm-response')) {
-        chunk.classList.add('is-streaming');
-        row.setAttribute('data-llm-live-row', '1');
-    }
-    if (type === 'llm-reasoning' && !streamOpts.streaming) autoCollapseLlmReasoningRow(row);
-    bindFeedChunkInteraction(chunk);
-    bindFeedChunkScrollChain(sc);
-    insertReactOrderedFeedRow(body, row, type, streamOpts.reactIter, reactGenerationForContext(ctx));
-    if (typeof translateUiNode === 'function') translateUiNode(row);
-    var isHistoryHydrate = !!(
-        replayingMessages
-        || (ctx && ctx.currentTurn && ctx.currentTurn.dataset.processLoading === '1')
-    );
-    var isInitialLiveStatusRow = !isHistoryHydrate && type === 'status'
-        && body.querySelectorAll('.feed-item[data-log-type="status"]').length === 1;
-    if (!isHistoryHydrate && !isInitialLiveStatusRow) animateSmoothTraceRowInsertion(row);
-    if (isInitialLiveStatusRow) finishStreamScrollIfFollow(ctx, runSessionId);
-    if (ctx && ctx.currentTurn && body.classList && body.classList.contains('subagent-turn-process')) {
-        markSubagentTurnHasProcess(ctx.currentTurn);
-    }
-    if (type === 'error-log') {
-        var errHint = document.createElement('div');
-        errHint.className = 'feed-error-contact-hint';
-        errHint.textContent = '如需帮助或反馈，请联系GitHub @sugarfreeecho';
-        body.appendChild(errHint);
-    }
-    const agg = body.closest('.process-aggregate');
-    registerProcessAggregateRow(agg, row);
-    if (streamOpts.reactIter != null && Number.isFinite(Number(streamOpts.reactIter))) {
-        var ri = Math.max(1, Math.floor(Number(streamOpts.reactIter)));
-        bumpAggregateMaxReactIter(agg, ri);
-    }
-    if (!replayingMessages && agg && agg.classList.contains('is-collapsed')) {
-        updateProcessBrief(agg);
-    }
-    else if (!replayingMessages) requestAnimationFrame(function () { scheduleFeedChunkOverflowRefresh(chunk); });
-    if (!replayingMessages) refreshAggregateStatsSmart(agg);
-    if (!streamOpts.streaming && !isInitialLiveStatusRow) scrollContentAreaIfFollow(ctx, runSessionId);
-    return sc;
-}
-
-function appendLlmStreamDelta(ctx, ev, runSessionId) {
-    if (!ctx || !ctx.llm) return;
-    // 收到 reasoning/content 增量时，移除"正在思考中..."条目
-    removeTemporaryStatus(ctx);
-    const l = ctx.llm;
-    const iter = ev.react_iter;
-    const seq = Number(ev.stream_seq || 0);
-    if (Number.isFinite(seq) && seq > 0) {
-        if (l.llmDeltaLastSeq !== null && seq < l.llmDeltaLastSeq) finalizeLlmStreamChunks(ctx);
-        l.llmDeltaLastSeq = seq;
-    }
-    const part = ev.type === 'llm_reasoning_delta' ? 'reasoning' : 'response';
-    if (hasSeenStreamDelta(ctx, ev, 'llm_' + part)) return;
-    const delta = String(ev.delta || '');
-    if (!delta) return;
-    const replayedSnapshot = !!ev.replayed_snapshot;
-    if (replayedSnapshot && part === 'response') {
-        l.llmThinkTagMode = 'response';
-        l.llmThinkTagCarry = '';
-        l.llmThinkTagAllowLeading = true;
-    }
-    if (iter != null) {
-        var body0 = getProcessBody(ctx);
-        if (body0) bumpAggregateMaxReactIter(body0.closest('.process-aggregate'), iter);
-    }
-    const streamOpt = { streaming: true };
-    if (iter != null && Number.isFinite(Number(iter))) streamOpt.reactIter = Number(iter);
-    var pieces = part === 'response' ? feedThinkTaggedResponseDelta(l, delta) : [{ part: 'reasoning', text: delta }];
-    var responseStarted = pieces.some(function (piece) {
-        return piece && piece.part !== 'reasoning' && String(piece.text || '') !== '';
-    });
-    if (responseStarted) finalizeActiveLlmReasoningRow(ctx);
-    for (var pi = 0; pi < pieces.length; pi += 1) {
-        var piece = pieces[pi] || {};
-        var piecePart = piece.part === 'reasoning' ? 'reasoning' : 'response';
-        var pieceText = String(piece.text || '');
-        if (!pieceText) continue;
-        if (piecePart === 'reasoning') {
-        if (l.llmStreamReasoningScroller && !l.llmStreamReasoningScroller.isConnected) {
-            l.llmStreamReasoningScroller = null;
-        }
-        if (l.llmStreamReasoningIter !== iter) {
-            flushLlmDeltaText(ctx);
-            l.llmStreamReasoningIter = iter;
-            var existingReasoning = findExistingLlmFeedRow(ctx, 'llm-reasoning', Number.isFinite(Number(iter)) ? Math.max(1, Math.floor(Number(iter))) : null, { liveOnly: true });
-            l.llmStreamReasoningScroller = existingReasoning
-                ? existingReasoning.querySelector('.feed-chunk-scroller')
-                : createProcessFeedRow(ctx, 'llm-reasoning', '', streamOpt, runSessionId);
-        }
-        if (!l.llmStreamReasoningScroller) {
-            var recoveredReasoning = findExistingLlmFeedRow(ctx, 'llm-reasoning', Number.isFinite(Number(iter)) ? Math.max(1, Math.floor(Number(iter))) : null, { liveOnly: true });
-            l.llmStreamReasoningScroller = recoveredReasoning
-                ? recoveredReasoning.querySelector('.feed-chunk-scroller')
-                : createProcessFeedRow(ctx, 'llm-reasoning', '', streamOpt, runSessionId);
-        }
-        if (!l.llmStreamReasoningScroller) return;
-        if (replayedSnapshot) {
-            l.llmPendingReasoningDelta = '';
-            l.llmStreamReasoningScroller.textContent = truncateLogTextForUi(pieceText);
-        } else {
-            l.llmPendingReasoningDelta = (l.llmPendingReasoningDelta || '') + pieceText;
-        }
-        } else {
-        if (l.llmStreamResponseScroller && !l.llmStreamResponseScroller.isConnected) {
-            l.llmStreamResponseScroller = null;
-        }
-        if (l.llmStreamResponseIter !== iter) {
-            flushLlmDeltaText(ctx);
-            l.llmStreamResponseIter = iter;
-            var existingResponse = findExistingLlmFeedRow(ctx, 'llm-response', Number.isFinite(Number(iter)) ? Math.max(1, Math.floor(Number(iter))) : null, { liveOnly: true });
-            l.llmStreamResponseScroller = existingResponse
-                ? existingResponse.querySelector('.feed-chunk-scroller')
-                : createProcessFeedRow(ctx, 'llm-response', '', streamOpt, runSessionId);
-        }
-        if (!l.llmStreamResponseScroller) {
-            var recoveredResponse = findExistingLlmFeedRow(ctx, 'llm-response', Number.isFinite(Number(iter)) ? Math.max(1, Math.floor(Number(iter))) : null, { liveOnly: true });
-            l.llmStreamResponseScroller = recoveredResponse
-                ? recoveredResponse.querySelector('.feed-chunk-scroller')
-                : createProcessFeedRow(ctx, 'llm-response', '', streamOpt, runSessionId);
-        }
-        if (!l.llmStreamResponseScroller) return;
-        if (replayedSnapshot) {
-            l.llmPendingResponseDelta = '';
-            l.llmStreamResponseScroller.textContent = truncateLogTextForUi(pieceText);
-        } else {
-            l.llmPendingResponseDelta = (l.llmPendingResponseDelta || '') + pieceText;
-        }
-        }
-    }
-    scheduleLlmDeltaFlush(ctx, runSessionId);
-}
-
-function finalizeActiveLlmReasoningRow(ctx) {
-    var l = ctx && ctx.llm;
-    var scroller = l && l.llmStreamReasoningScroller;
-    if (!scroller || !scroller.isConnected) return;
-    flushLlmDeltaText(ctx);
-    var row = scroller.closest ? scroller.closest('.feed-item.feed--llm') : null;
-    var chunk = row && row.querySelector ? row.querySelector('.feed-chunk') : null;
-    if (chunk) {
-        chunk.classList.remove('is-streaming');
-        scheduleFeedChunkOverflowRefresh(chunk);
-    }
-    autoCollapseLlmReasoningRow(row);
-    l.llmStreamReasoningScroller = null;
-    l.llmStreamReasoningIter = null;
-}
-
-function upsertLlmFeedRow(ctx, content, logType, runSessionId, reactIter) {
-    if (!ctx) return null;
-    if (logType === 'llm-response') {
-        var split = splitThinkTagsForUi(content);
-        if (split.reasoning && split.reasoning.trim()) upsertLlmFeedRow(ctx, split.reasoning, 'llm-reasoning', runSessionId, reactIter);
-        content = split.content;
-    }
-    var ri = reactIter != null && Number.isFinite(Number(reactIter)) ? Math.max(1, Math.floor(Number(reactIter))) : null;
-    var rawText = trimSurroundingBlankLines(String(content || ''));
-    var txt = truncateLogTextForUi(rawText);
-    if (!txt.trim()) return null;
-    var existing = findExistingLlmFeedRow(ctx, logType, ri);
-    if (existing) {
-        var sc = existing.querySelector('.feed-chunk-scroller');
-        var ch = existing.querySelector('.feed-chunk');
-        if (logType === 'llm-response') existing._processBriefRawText = rawText;
-        if (sc) sc.textContent = txt;
-        if (ch) {
-            ch.classList.remove('is-streaming');
-            
-            scheduleFeedChunkOverflowRefresh(ch);
-        }
-        existing.removeAttribute('data-llm-live-row');
-        existing.setAttribute('data-event-committed', '1');
-        if (logType === 'llm-reasoning') autoCollapseLlmReasoningRow(existing);
-        removeDuplicateLlmFeedRows(ctx, existing, logType, ri);
-        if (ctx.llm) resetLlmState(ctx);
-        var agg = existing.closest && existing.closest('.process-aggregate');
-        if (agg) {
-            refreshAggregateStatsSmart(agg);
-            if (!ctx.currentProcessGroup || !ctx.currentProcessGroup.isConnected) ctx.currentProcessGroup = agg;
-        }
-        scrollContentAreaIfFollow(ctx, runSessionId, 'text');
-        return sc;
-    }
-    if (ctx.llm) resetLlmState(ctx);
-    return appendLog(ctx, content, logType, runSessionId, ri);
-}
-
-function findExistingLlmFeedRow(ctx, logType, reactIter, opts) {
-    if (!ctx) return null;
-    opts = opts || {};
-    var selector = '.feed-item[data-log-type="' + logType + '"]';
-    selector += '[data-react-generation="' + reactGenerationForContext(ctx) + '"]';
-    if (reactIter != null) selector += '[data-react-iter="' + reactIter + '"]';
-    else selector += '[data-llm-live-row="1"]';
-    if (opts.liveOnly) selector += '[data-llm-live-row="1"]';
-    var roots = [];
-    if (ctx.currentProcessGroup && ctx.currentProcessGroup.isConnected) {
-        // react_iter restarts at 1 for a replacement run. Once a new process
-        // block exists, never reuse an identically numbered LLM row from an
-        // older block or reasoning and response will be split across runs.
-        roots.push(ctx.currentProcessGroup);
-    } else if (!replayingMessages && ctx.stream && ctx.stream.querySelectorAll) {
-        roots.push(ctx.stream);
-    }
-    for (var r = 0; r < roots.length; r += 1) {
-        var matches = roots[r].querySelectorAll(selector);
-        if (matches && matches.length) return matches[matches.length - 1];
-    }
-    return null;
-}
-
-function removeDuplicateLlmFeedRows(ctx, keepRow, logType, reactIter) {
-    if (!ctx || !ctx.stream || !ctx.stream.querySelectorAll || !keepRow) return;
-    var selector = '.feed-item[data-log-type="' + logType + '"]';
-    selector += '[data-react-generation="' + reactGenerationForContext(ctx) + '"]';
-    if (reactIter != null) selector += '[data-react-iter="' + reactIter + '"]';
-    var rows = ctx.stream.querySelectorAll(selector);
-    if (!rows || rows.length <= 1) return;
-    rows.forEach(function (row) {
-        if (row !== keepRow && row.getAttribute('data-llm-live-row') === '1') {
-            unregisterProcessAggregateRow(row);
-            row.remove();
-        }
-    });
-}
-
-function parseMessageTimestamp(value) {
-    if (value == null || value === '') return null;
-    if (typeof value === 'number' && isFinite(value)) {
-        return new Date(value > 100000000000 ? value : value * 1000);
-    }
-    var d = new Date(String(value));
-    return isNaN(d.getTime()) ? null : d;
-}
-
-function formatUserMessageTimestamp(value) {
-    var d = parseMessageTimestamp(value);
-    if (!d) return '';
-    try {
-        return new Intl.DateTimeFormat(undefined, {
-            year: 'numeric',
-            month: '2-digit',
-            day: '2-digit',
-            hour: '2-digit',
-            minute: '2-digit',
-            timeZoneName: 'short',
-            hour12: false,
-        }).format(d);
-    } catch (e) {
-        return d.toLocaleString();
-    }
-}
-
-function refreshUserMessageTimes(root) {
-    var scope = root || document;
-    if (!scope || !scope.querySelectorAll) return;
-    scope.querySelectorAll('.user-message-time[data-created-at]').forEach(function (el) {
-        var raw = el.getAttribute('data-created-at') || '';
-        var txt = formatUserMessageTimestamp(raw);
-        if (txt) el.textContent = txt;
-    });
-}
-
-function ensureUserMessageTimeAutoRefresh() {
-    if (window.__userMessageTimeAutoRefreshBound) return;
-    window.__userMessageTimeAutoRefreshBound = true;
-    window.addEventListener('focus', function () { refreshUserMessageTimes(document); });
-    document.addEventListener('visibilitychange', function () {
-        if (!document.hidden) refreshUserMessageTimes(document);
-    });
-    setInterval(function () { refreshUserMessageTimes(document); }, 60000);
-}
-
-function appendMessage(ctx, role, content, meta, runSessionId) {
-    meta = meta || {};
-    ensureUserMessageTimeAutoRefresh();
-    stripWelcome(ctx);
-    if (role === 'user' && meta.eventIndex != null && Number.isFinite(Number(meta.eventIndex))) {
-        var streamRoot = (ctx && ctx.stream) || chatContainer;
-        var existingUser = null;
-        if (streamRoot && streamRoot.querySelector && typeof CSS !== 'undefined' && CSS.escape) {
-            try {
-                existingUser = streamRoot.querySelector('.msg-wrap--user[data-event-index="' + CSS.escape(String(meta.eventIndex)) + '"]');
-            } catch (e) { existingUser = null; }
-        }
-        if (existingUser) {
-            var existingMessage = existingUser.querySelector('.message');
-            var rawStrExisting = content == null ? '' : String(content);
-            if (existingMessage && messageRawMarkdown.get(existingUser) !== rawStrExisting) {
-                messageRawMarkdown.set(existingUser, rawStrExisting);
-                existingMessage.textContent = rawStrExisting;
-                linkifyAssistantTextNodes(existingMessage);
-                renderUserMessageContent(existingUser, existingMessage, rawStrExisting, linkifyAssistantTextNodes);
-            }
-            if (meta.runtimeSeq != null && Number.isFinite(Number(meta.runtimeSeq)) && Number(meta.runtimeSeq) > 0) {
-                existingUser.setAttribute('data-runtime-seq', String(Math.floor(Number(meta.runtimeSeq))));
-            }
-            if (meta.runtimeEventType) {
-                existingUser.setAttribute('data-runtime-event-type', String(meta.runtimeEventType));
-            }
-            if (meta.createdAt || meta.created_at || meta.timestamp) {
-                existingUser.setAttribute('data-created-at', String(meta.createdAt || meta.created_at || meta.timestamp));
-            }
-            if (!replayingMessages) rebuildToc({ localOnly: true });
-            return existingUser;
-        }
-    }
-    const wrap = document.createElement('div');
-    wrap.className = 'msg-wrap msg-wrap--' + (role === 'user' ? 'user' : 'assistant');
-    if (role === 'assistant') wrap.classList.add('msg-wrap--answer-frame');
-    if (meta.eventIndex != null) wrap.setAttribute('data-event-index', String(meta.eventIndex));
-    if (meta.runtimeSeq != null && Number.isFinite(Number(meta.runtimeSeq)) && Number(meta.runtimeSeq) > 0) {
-        wrap.setAttribute('data-runtime-seq', String(Math.floor(Number(meta.runtimeSeq))));
-    }
-    if (meta.runtimeEventType) {
-        wrap.setAttribute('data-runtime-event-type', String(meta.runtimeEventType));
-    }
-    if (meta.truncateBeforeSeq != null && Number.isFinite(Number(meta.truncateBeforeSeq)) && Number(meta.truncateBeforeSeq) > 0) {
-        wrap.setAttribute('data-truncate-before-seq', String(Math.floor(Number(meta.truncateBeforeSeq))));
-    }
-    var tTrunc = meta.turnTruncateIdx;
-    if (tTrunc == null) { if (role === 'user' && meta.eventIndex != null) tTrunc = meta.eventIndex; }
-    if (tTrunc != null && tTrunc >= 0) wrap.setAttribute('data-truncate-from', String(tTrunc));
-    if (role === 'user') {
-        if (meta.eventIndex != null && meta.eventIndex >= 0) {
-            wrap.id = 'user-msg-' + meta.eventIndex;
-        } else {
-            const n = (ctx.stream || chatContainer).querySelectorAll('.msg-wrap--user').length;
-            wrap.id = 'user-msg-' + n;
-        }
-    }
-    const div = document.createElement('div');
-    div.className = 'message ' + (role === 'user' ? 'user' : 'assistant');
-    var rawStr = content == null ? '' : String(content);
-    var displayStr = rawStr;
-    if (role === 'assistant') {
-        var assistantSplit = splitThinkTagsForUi(rawStr);
-        displayStr = stripOrphanThinkCloseForFinalCard(assistantSplit.content);
-    }
-    messageRawMarkdown.set(wrap, displayStr);
-    if (role === 'user') {
-        if (userMessageShouldCollapse(rawStr)) {
-            wrap.classList.add('has-turn-process');
-            div.classList.add('is-collapsible');
-            // 摘要
-            var sum = document.createElement('div');
-            sum.className = 'user-msg-summary';
-            if (typeof renderSelectedSkillsUiMessage === 'function') renderSelectedSkillsUiMessage(sum, buildUserMessageSummary(rawStr), linkifyAssistantTextNodes);
-            else {
-                sum.textContent = buildUserMessageSummary(rawStr);
-                linkifyAssistantTextNodes(sum);
-            }
-            // 完整
-            var ful = document.createElement('div');
-            ful.className = 'user-msg-full';
-            if (typeof renderSelectedSkillsUiMessage === 'function') renderSelectedSkillsUiMessage(ful, rawStr, linkifyAssistantTextNodes);
-            else {
-                ful.textContent = rawStr;
-                linkifyAssistantTextNodes(ful);
-            }
-            // chevron
-            var ch = document.createElement('div');
-            ch.className = 'user-msg-chevron';
-            var arrow = document.createElement('span');
-            arrow.className = 'chevron-arrow';
-            ch.appendChild(arrow);
-            ch.addEventListener('click', function(e) {
-                e.stopPropagation();
-                wrap.classList.toggle('user-msg-expanded');
-            });
-            div.appendChild(sum);
-            div.appendChild(ful);
-            div.appendChild(ch);
-        } else {
-            div.textContent = rawStr;
-            linkifyAssistantTextNodes(div);
-        }
-    } else if (role === 'assistant' && meta.uiRuntimeText && typeof setUiRuntimeText === 'function') {
-        // System terminal statuses are plain text, not model markdown. Keep
-        // their source in the runtime i18n store so language toggles restore
-        // the original Chinese text exactly.
-        setUiRuntimeText(div, displayStr);
-    } else {
-        div.innerHTML = renderMarkdown(displayStr);
-        enhanceAssistantMessageContent(div);
-    }
-    wrap.appendChild(div);
-    if (role === 'user') {
-        var createdAt = meta.createdAt || meta.created_at || meta.timestamp || new Date().toISOString();
-        wrap.setAttribute('data-created-at', String(createdAt));
-    }
-    if (role === 'user' && !div.classList.contains('is-collapsible')) {
-        renderUserMessageContent(wrap, div, rawStr, linkifyAssistantTextNodes);
-    }
-    attachMessageToolbar(wrap, role);
-    (ctx.stream || chatContainer).appendChild(wrap);
-    if (role === 'assistant') {
-        if (ctx.currentProcessGroup) {
-            ctx.currentProcessGroup._processFinalResponseComparable = normalizeProcessBriefComparableText(displayStr);
-            if (ctx.currentProcessGroup.isConnected) {
-                ctx.currentProcessGroup.classList.add('is-collapsed');
-                const ttop = ctx.currentProcessGroup.querySelector('.process-aggregate-top');
-                if (ttop) ttop.setAttribute('aria-expanded', 'false');
-                updateProcessBrief(ctx.currentProcessGroup);
-            }
-        }
-        sealProcessGroup(ctx);
-    }
-    if (role === 'user' && !replayingMessages) rebuildToc({ localOnly: true });
-    if (!replayingMessages) {
-        if (role === 'user') scrollChatToBottomIfFollow(runSessionId, { force: true });
+    'user-steer':  { label: '追问', c: 'feed--answer' },\r
+    'status':      { label: '状态', c: 'feed--st' },\r
+};\r
+\r
+const envKeepLines = Number(window.__UI_LOG_TRUNCATE_KEEP_LINES__);\r
+const LOG_TRUNCATE_KEEP_LINES = Number.isFinite(envKeepLines) && envKeepLines > 0 ? Math.floor(envKeepLines) : 100;\r
+const LOG_TRUNCATE_HEAD_LINES = LOG_TRUNCATE_KEEP_LINES;\r
+const LOG_TRUNCATE_TAIL_LINES = LOG_TRUNCATE_KEEP_LINES;\r
+const LOG_TRUNCATE_HEAD_CHARS = 12000;\r
+const LOG_TRUNCATE_TAIL_CHARS = 12000;\r
+\r
+function reactGenerationForContext(ctx) {\r
+    return Math.max(0, Math.floor(Number(ctx && ctx.reactGeneration) || 0));\r
+}\r
+\r
+function toolCallDraftKey(ctx, parsed) {\r
+    var generation = reactGenerationForContext(ctx);\r
+    var ri = parsed && parsed.react_iter != null ? String(parsed.react_iter) : '';\r
+    var idx = parsed && parsed.tool_call_index != null ? String(parsed.tool_call_index) : (parsed && parsed.index != null ? String(parsed.index) : '0');\r
+    return generation + ':' + ri + ':' + idx;\r
+}\r
+\r
+function findToolDraftRow(ctx, parsed) {\r
+    var key = toolCallDraftKey(ctx, parsed);\r
+    if (!key) return null;\r
+    var body = getProcessBody(ctx);\r
+    if (!body || typeof CSS === 'undefined' || !CSS.escape) return null;\r
+    try { return body.querySelector('.feed-item.feed--tool[data-tool-draft-key="' + CSS.escape(key) + '"]'); } catch (e) { return null; }\r
+}\r
+\r
+function deltaDedupeKey(ctx, parsed, scope) {\r
+    if (!parsed || parsed.delta_seq == null) return '';\r
+    var ds = Number(parsed.delta_seq);\r
+    if (!Number.isFinite(ds) || ds <= 0) return '';\r
+    var ss = Number(parsed.stream_seq || 0);\r
+    var ri = parsed.react_iter != null ? String(parsed.react_iter) : '';\r
+    var part = String(scope || parsed.type || '');\r
+    var id = String(parsed.tool_call_id || parsed.id || parsed.index || parsed.tool_call_index || '');\r
+    return reactGenerationForContext(ctx) + ':' + part + ':' + (Number.isFinite(ss) ? Math.floor(ss) : 0) + ':' + ri + ':' + id + ':' + Math.floor(ds);\r
+}\r
+\r
+function hasSeenStreamDelta(ctx, parsed, scope) {\r
+    if (!ctx) return false;\r
+    var key = deltaDedupeKey(ctx, parsed, scope);\r
+    if (!key) return false;\r
+    if (!ctx._seenStreamDeltaKeys) ctx._seenStreamDeltaKeys = new Set();\r
+    if (ctx._seenStreamDeltaKeys.has(key)) return true;\r
+    ctx._seenStreamDeltaKeys.add(key);\r
+    return false;\r
+}\r
+\r
+function setToolRowText(row, text, ctx, runSessionId) {\r
+    if (!row) return;\r
+    var sc = row.querySelector('.feed-chunk-scroller');\r
+    if (sc) {\r
+        var nextText = truncateLogTextForUi(text);\r
+        if (typeof setUiRuntimeText === 'function') setUiRuntimeText(sc, nextText);\r
+        else sc.textContent = nextText;\r
+    }\r
+    var ch = row.querySelector('.feed-chunk');\r
+    if (ch) {\r
+        // 工具条目流式生成时也放开高度限制\r
+        ch.classList.add('is-streaming');\r
+        refreshFeedChunkOverflow(ch);\r
+    }\r
+    // 遵守自动跟随，不强制拖拽\r
+    if (!replayingMessages) scrollContentAreaIfFollow(ctx, runSessionId, 'text');\r
+}\r
+\r
+// 移除临时状态消息（移除整个 feed-item 条目）\r
+function removeTemporaryStatus(ctx) {\r
+    // Cleanup must never create a new process group. Terminal signals can be\r
+    // delivered more than once (final, run_finished, and [DONE]).\r
+    var body = getExistingProcessBody(ctx);\r
+    if (!body) return;\r
+    var tempStatuses = body.querySelectorAll('[data-temporary-status="1"]');\r
+    tempStatuses.forEach(function(el) {\r
+        var row = el.closest ? el.closest('.feed-item') : null;\r
+        if (row) row.remove(); else el.remove();\r
+    });\r
+}\r
+\r
+function appendToolCallDelta(ctx, parsed, runSessionId) {\r
+    if (hasSeenStreamDelta(ctx, parsed, 'tool_call_delta')) return;\r
+    var key = toolCallDraftKey(ctx, parsed);\r
+    if (!key) return;\r
+    var row = findToolDraftRow(ctx, parsed);\r
+    if (!row) {\r
+        var so = null;\r
+        if (parsed.react_iter != null && Number.isFinite(Number(parsed.react_iter))) so = { reactIter: Number(parsed.react_iter) };\r
+        var scNew = createProcessFeedRow(ctx, 'tool-call', '工具调用生成中...', so, runSessionId, '');\r
+        row = scNew && scNew.closest ? scNew.closest('.feed-item') : null;\r
+        if (row) row.setAttribute('data-tool-draft-key', key);\r
+    }\r
+    if (!row) return;\r
+    // A valid call may start executing before the provider finishes emitting\r
+    // metadata-only deltas. Never let those late deltas revert the row to\r
+    // "generating" or create a duplicate draft.\r
+    if (row.getAttribute('data-tool-pending') === '1') return;\r
+    if (parsed.id) row.dataset.pendingToolCallId = String(parsed.id);\r
+    \r
+    // Tool-call generation should still reveal the process group; only the later\r
+    // "executing" placeholder should avoid forcing expand/collapse changes.\r
+    removeTemporaryStatus(ctx);\r
+    var agg = row.closest('.process-aggregate');\r
+    if (agg && agg.classList.contains('is-collapsed')) {\r
+        agg.classList.remove('is-collapsed');\r
+        var topN = agg.querySelector('.process-aggregate-top');\r
+        if (topN) topN.setAttribute('aria-expanded', 'true');\r
+    }\r
+    \r
+    // 累积工具名称和参数\r
+    if (parsed.name_delta) {\r
+        row.dataset.pendingToolName = (row.dataset.pendingToolName || '') + String(parsed.name_delta);\r
+    }\r
+    if (parsed.arguments_delta) {\r
+        row.dataset.pendingToolArgs = (row.dataset.pendingToolArgs || '') + String(parsed.arguments_delta);\r
+    }\r
+    \r
+    // 生成显示文本\r
+    var toolName = row.dataset.pendingToolName || '';\r
+    var argsRaw = row.dataset.pendingToolArgs || '';\r
+    var displayText = '工具调用生成中...';\r
+    \r
+    if (toolName) {\r
+        // 流式显示：工具名 + 参数原始文本（逐步增长）\r
+        var argsPreview = argsRaw;\r
+        displayText = toolName + '(' + argsPreview + '\\n生成中...';\r
+    }\r
+    setToolRowText(row, displayText, ctx, runSessionId);\r
+}\r
+\r
+function removeAbortedToolDraftRows(ctx, ev) {\r
+    // Like temporary-status cleanup, this may run after the final response has\r
+    // already sealed the process group, so only inspect an existing body.\r
+    var body = getExistingProcessBody(ctx);\r
+    if (!body) return;\r
+    var iter = ev && ev.react_iter != null && Number.isFinite(Number(ev.react_iter))\r
+        ? Math.max(1, Math.floor(Number(ev.react_iter)))\r
+        : null;\r
+    var runId = String((ev && (ev.run_id || ev.runId)) || '');\r
+    var hasScopedAbort = !!(iter != null || runId || (ev && ev.react_generation != null));\r
+    var generation = ev && ev.react_generation != null && Number.isFinite(Number(ev.react_generation))\r
+        ? Math.max(0, Math.floor(Number(ev.react_generation)))\r
+        : (hasScopedAbort ? reactGenerationForContext(ctx) : null);\r
+    var rows = body.querySelectorAll('.feed-item.feed--tool[data-tool-draft-key], .feed-item.feed--tool[data-tool-pending="1"]');\r
+    rows.forEach(function (row) {\r
+        if (iter != null) {\r
+            var rowIter = Number(row.getAttribute('data-react-iter'));\r
+            if (!Number.isFinite(rowIter) || Math.floor(rowIter) !== iter) return;\r
+        }\r
+        if (generation != null) {\r
+            var rowGeneration = Math.max(0, Math.floor(Number(row.getAttribute('data-react-generation')) || 0));\r
+            if (rowGeneration !== generation) return;\r
+        }\r
+        var rowRunId = String(row.getAttribute('data-run-id') || '');\r
+        if (runId && rowRunId && rowRunId !== runId) return;\r
+        unregisterProcessAggregateRow(row);\r
+        row.remove();\r
+    });\r
+    var agg = body.closest('.process-aggregate');\r
+    if (agg) refreshAggregateStatsSmart(agg);\r
+}\r
+\r
+function formatToolCommandLine(tool, args, commandPreview) {\r
+    if (commandPreview != null && String(commandPreview).trim()) return String(commandPreview).trim();\r
+    var name = String(tool || 'tool');\r
+    var a = args && typeof args === 'object' && !Array.isArray(args) ? args : {};\r
+    function j(v) { try { return JSON.stringify(v); } catch (e) { return String(v); } }\r
+    function pair(k, v) {\r
+        if ((k === 'content' || k === 'contents' || k === 'patch') && typeof v === 'string' && v.length > 240) v = '<' + v.length + ' chars>';\r
+        return j(k) + ': ' + j(v);\r
+    }\r
+    var preferred = ['path','target_directory','file_path','directory','root','command','args','url','start_line','end_line','pattern','query','search','replace','old_string','new_string','workdir','timeout_ms','login','working_dir','timeout','temporary','patch','content','contents'];\r
+    var keys = [];\r
+    // 路径参数去重：只保留第一个存在的路径参数\r
+    var pathKeys = ['path', 'target_directory', 'file_path', 'directory', 'root'];\r
+    var firstPathKey = null;\r
+    pathKeys.forEach(function (k) {\r
+        if (!firstPathKey && Object.prototype.hasOwnProperty.call(a, k)) firstPathKey = k;\r
+    });\r
+    preferred.forEach(function (k) {\r
+        if (Object.prototype.hasOwnProperty.call(a, k)) {\r
+            if (pathKeys.indexOf(k) >= 0) {\r
+                if (k === firstPathKey) keys.push(k);\r
+            } else {\r
+                keys.push(k);\r
+            }\r
+        }\r
+    });\r
+    Object.keys(a).sort().forEach(function (k) { if (keys.indexOf(k) < 0) keys.push(k); });\r
+    if (name === 'run_shell') {\r
+        var b = {};\r
+        Object.keys(a).forEach(function (k) { b[k] = a[k]; });\r
+        var cmd = b.command != null ? String(b.command) : '';\r
+        if (Array.isArray(b.args) && b.args.length) cmd += ' ' + b.args.map(function (x) { return String(x); }).join(' ');\r
+        b.command = cmd.trim();\r
+        delete b.args;\r
+        a = b;\r
+        keys = [];\r
+        preferred.forEach(function (k) { if (Object.prototype.hasOwnProperty.call(a, k)) keys.push(k); });\r
+        Object.keys(a).sort().forEach(function (k) { if (keys.indexOf(k) < 0) keys.push(k); });\r
+    }\r
+    return name + '(' + keys.map(function (k) { return pair(k, a[k]); }).join(', ') + ')';\r
+}\r
+\r
+function formatToolPendingLine(tool, args, commandPreview) {\r
+    var cmd = commandPreview != null ? String(commandPreview).trim() : '';\r
+    if (!cmd) return '执行中...';\r
+    return cmd + '\\n执行中...';\r
+}\r
+\r
+function formatToolDoneLine(tool, args, result, commandPreview) {\r
+    return formatToolCommandLine(tool, args, commandPreview) + '\\n执行结果\\n' + String(result != null ? result : '');\r
+}\r
+\r
+function appendToolPendingRow(ctx, parsed, runSessionId) {\r
+    var line = formatToolPendingLine(parsed.tool, parsed.args, parsed.command_preview);\r
+    var so = null;\r
+    if (parsed.react_iter != null && Number.isFinite(Number(parsed.react_iter))) so = { reactIter: Number(parsed.react_iter) };\r
+    var draft = findToolDraftRow(ctx, parsed);\r
+    if (draft) {\r
+        if (parsed.tool_call_id != null && String(parsed.tool_call_id) !== '') draft.setAttribute('data-tool-call-id', String(parsed.tool_call_id));\r
+        draft.setAttribute('data-tool-pending', '1');\r
+        draft.dataset.commandPreview = parsed.command_preview != null ? String(parsed.command_preview) : '';\r
+        var draftScroller = draft.querySelector('.feed-chunk-scroller');\r
+        if (draftScroller) {\r
+            var draftText = truncateLogTextForUi(line);\r
+            if (typeof setUiRuntimeText === 'function') setUiRuntimeText(draftScroller, draftText);\r
+            else draftScroller.textContent = draftText;\r
+        }\r
+        var draftChunk = draft.querySelector('.feed-chunk');\r
+        if (draftChunk) {\r
+            draftChunk.classList.remove('is-streaming');\r
+            refreshFeedChunkOverflow(draftChunk);\r
+        }\r
+        if (!replayingMessages) scrollContentAreaIfFollow(ctx, runSessionId, 'text');\r
+        if (typeof attachHumanInteractionCardsForToolCall === 'function') {\r
+            attachHumanInteractionCardsForToolCall(ctx && ctx.stream, parsed.tool_call_id);\r
+        }\r
+        return;\r
+    }\r
+    var sc = createProcessFeedRow(ctx, 'tool-call', line, so, runSessionId, parsed.tool_call_id);\r
+    var row = sc && sc.closest ? sc.closest('.feed-item') : null;\r
+    if (row) {\r
+        row.setAttribute('data-tool-draft-key', toolCallDraftKey(ctx, parsed));\r
+        row.setAttribute('data-tool-pending', '1');\r
+        row.dataset.commandPreview = parsed.command_preview != null ? String(parsed.command_preview) : '';\r
+        var chunk = row.querySelector('.feed-chunk');\r
+        if (chunk) {\r
+            chunk.classList.remove('is-streaming');\r
+            refreshFeedChunkOverflow(chunk);\r
+        }\r
+        if (typeof attachHumanInteractionCardsForToolCall === 'function') {\r
+            attachHumanInteractionCardsForToolCall(ctx && ctx.stream, parsed.tool_call_id);\r
+        }\r
+    }\r
+}\r
+\r
+function appendToolCommandDelta(ctx, parsed, runSessionId) {\r
+    if (hasSeenStreamDelta(ctx, parsed, 'tool_command_delta')) return;\r
+    var tid = parsed.tool_call_id != null ? String(parsed.tool_call_id) : '';\r
+    if (!tid) return;\r
+    var body = getProcessBody(ctx);\r
+    var row = null;\r
+    if (body && typeof CSS !== 'undefined' && CSS.escape) {\r
+        try { row = body.querySelector('.feed-item.feed--tool[data-tool-call-id="' + CSS.escape(tid) + '"]'); } catch (e) { row = null; }\r
+    }\r
+    if (!row) return;\r
+    row.dataset.commandPreview = (row.dataset.commandPreview || '') + String(parsed.delta || '');\r
+    var text = formatToolPendingLine(parsed.tool, parsed.args, row.dataset.commandPreview);\r
+    var sc = row.querySelector('.feed-chunk-scroller');\r
+    if (sc) {\r
+        var pendingText = truncateLogTextForUi(text);\r
+        if (typeof setUiRuntimeText === 'function') setUiRuntimeText(sc, pendingText);\r
+        else sc.textContent = pendingText;\r
+    }\r
+    var ch = row.querySelector('.feed-chunk');\r
+    if (ch) refreshFeedChunkOverflow(ch);\r
+    if (!replayingMessages) scrollContentAreaIfFollow(ctx, runSessionId, 'text');\r
+}\r
+function upsertToolCallResult(ctx, parsed, runSessionId) {\r
+    var tid = parsed.tool_call_id != null ? String(parsed.tool_call_id) : '';\r
+    var body = getProcessBody(ctx);\r
+    var row = null;\r
+    if (tid && body && typeof CSS !== 'undefined' && CSS.escape) {\r
+        try { row = body.querySelector('.feed-item.feed--tool[data-tool-call-id="' + CSS.escape(tid) + '"]'); } catch (e) { row = null; }\r
+    }\r
+    if (!row) row = findToolDraftRow(ctx, parsed);\r
+    var cmdPreview = parsed.command_preview;\r
+    if ((!cmdPreview || !String(cmdPreview).trim()) && row && row.dataset.commandPreview) cmdPreview = row.dataset.commandPreview;\r
+    var rawContent = parsed.raw_content != null ? String(parsed.raw_content) : '';\r
+    var text = rawContent ? rawContent : formatToolDoneLine(parsed.tool, parsed.args, parsed.result, cmdPreview);\r
+    if (row) {\r
+        if (tid) row.setAttribute('data-tool-call-id', tid);\r
+        row.removeAttribute('data-tool-draft-key');\r
+        row.removeAttribute('data-tool-pending');\r
+        row.setAttribute('data-event-committed', '1');\r
+        row.dataset.commandPreview = cmdPreview != null ? String(cmdPreview) : '';\r
+        var sc = row.querySelector('.feed-chunk-scroller');\r
+        if (sc) {\r
+            var doneText = truncateLogTextForUi(text);\r
+            if (typeof setUiRuntimeText === 'function') setUiRuntimeText(sc, doneText);\r
+            else sc.textContent = doneText;\r
+        }\r
+        var ch = row.querySelector('.feed-chunk');\r
+        if (ch) refreshFeedChunkOverflow(ch);\r
+        var agg = body.closest('.process-aggregate');\r
+        refreshAggregateStatsSmart(agg);\r
+        if (!replayingMessages) scrollContentAreaIfFollow(ctx, runSessionId, 'text');\r
+        if (typeof attachHumanInteractionCardsForToolCall === 'function') {\r
+            attachHumanInteractionCardsForToolCall(ctx && ctx.stream, tid);\r
+        }\r
+        autoCollapseToolRowAfterResult(row);\r
+        return;\r
+    }\r
+    var ri = uiEventReactIter(parsed);\r
+    var so = null;\r
+    if (ri != null && Number.isFinite(Number(ri))) so = { reactIter: ri };\r
+    var scNew = createProcessFeedRow(ctx, 'tool-call', text, so, runSessionId, tid);\r
+    var newRow = scNew && scNew.closest ? scNew.closest('.feed-item') : null;\r
+    if (newRow && tid && typeof attachHumanInteractionCardsForToolCall === 'function') {\r
+        attachHumanInteractionCardsForToolCall(ctx && ctx.stream, tid);\r
+    }\r
+    if (newRow) autoCollapseToolRowAfterResult(newRow);\r
+}\r
+\r
+function autoCollapseToolRowAfterResult(row) {\r
+    if (!row || row.dataset.manualToggle === '1') return;\r
+    if (row.querySelector('.human-interaction-card[data-kind="approval"][data-status="pending"]')) return;\r
+    row.classList.add('is-collapsed');\r
+    var btn = row.querySelector('.feed-row-collapse');\r
+    if (btn) {\r
+        btn.setAttribute('aria-expanded', 'false');\r
+        btn.setAttribute('aria-label', '展开工具行');\r
+    }\r
+}\r
+\r
+/** 去掉首尾「空白行」（整行仅空格/制表也不保留），保留首行正文缩进与中间空行 */\r
+function trimSurroundingBlankLines(raw) {\r
+    var text = (raw == null) ? '' : String(raw);\r
+    if (!text) return text;\r
+    var lines = text.split('\\n');\r
+    var start = 0;\r
+    var end = lines.length;\r
+    while (start < end && lines[start].trim() === '') start++;\r
+    while (end > start && lines[end - 1].trim() === '') end--;\r
+    if (start >= end) return '';\r
+    return lines.slice(start, end).join('\\n');\r
+}\r
+\r
+function truncateLogTextForUi(raw) {\r
+    const text = (raw == null) ? '' : String(raw);\r
+    if (!text) return text;\r
+    const lines = text.split('\\n');\r
+    if (lines.length > LOG_TRUNCATE_HEAD_LINES + LOG_TRUNCATE_TAIL_LINES) {\r
+        const head = lines.slice(0, LOG_TRUNCATE_HEAD_LINES).join('\\n');\r
+        const tail = lines.slice(-LOG_TRUNCATE_TAIL_LINES).join('\\n');\r
+        const omitted = lines.length - LOG_TRUNCATE_HEAD_LINES - LOG_TRUNCATE_TAIL_LINES;\r
+        return head + '\\n\\n... [中间省略 ' + omitted + ' 行] ...\\n\\n' + tail;\r
+    }\r
+    if (text.length > LOG_TRUNCATE_HEAD_CHARS + LOG_TRUNCATE_TAIL_CHARS) {\r
+        const head = text.slice(0, LOG_TRUNCATE_HEAD_CHARS);\r
+        const tail = text.slice(-LOG_TRUNCATE_TAIL_CHARS);\r
+        const omitted = text.length - LOG_TRUNCATE_HEAD_CHARS - LOG_TRUNCATE_TAIL_CHARS;\r
+        return head + '\\n\\n... [中间省略约 ' + omitted + ' 字符] ...\\n\\n' + tail;\r
+    }\r
+    return text;\r
+}\r
+\r
+function reactFeedPhase(type) {\r
+    if (type === 'llm-reasoning') return 0;\r
+    if (type === 'llm-response') return 1;\r
+    if (type === 'tool-call') return 2;\r
+    return null;\r
+}\r
+\r
+function appendProcessRowBeforePendingAppendSteer(body, row, type) {\r
+    if (!body || !row) return;\r
+    // An accepted append-mode follow-up is the visual boundary between the\r
+    // current round and the next one.  Keep its pending row at the tail while\r
+    // the current LLM/tool round finishes; once the server commits user_steer,\r
+    // data-steer-pending is removed and subsequent rows naturally append below.\r
+    if (type !== 'user-steer') {\r
+        var pendingAppendSteer = body.lastElementChild;\r
+        if (!pendingAppendSteer || !pendingAppendSteer.matches(\r
+            '.feed-item[data-log-type="user-steer"]'\r
+            + '[data-steer-mode="append"][data-steer-pending="1"]'\r
+        )) pendingAppendSteer = null;\r
+        if (pendingAppendSteer) {\r
+            body.insertBefore(row, pendingAppendSteer);\r
+            return;\r
+        }\r
+    }\r
+    body.appendChild(row);\r
+}\r
+\r
+function appendMonotonicProcessRow(body, row, type) {\r
+    appendProcessRowBeforePendingAppendSteer(body, row, type);\r
+}\r
+\r
+function insertReactOrderedFeedRow(body, row, type, reactIter, reactGeneration) {\r
+    var phase = reactFeedPhase(type);\r
+    var iter = Number(reactIter);\r
+    if (phase == null || !Number.isFinite(iter)) {\r
+        appendMonotonicProcessRow(body, row, type);\r
+        return;\r
+    }\r
+    iter = Math.max(1, Math.floor(iter));\r
+    var generation = Math.max(0, Math.floor(Number(reactGeneration) || 0));\r
+    row.setAttribute('data-react-iter', String(iter));\r
+    row.setAttribute('data-react-generation', String(generation));\r
+    var orderKey = [generation, iter, phase];\r
+    var tailKey = body._reactOrderTailKey;\r
+    if (!tailKey || generation > tailKey[0]\r
+        || (generation === tailKey[0] && (iter > tailKey[1]\r
+            || (iter === tailKey[1] && phase >= tailKey[2])))) {\r
+        appendProcessRowBeforePendingAppendSteer(body, row, type);\r
+        body._reactOrderTailKey = orderKey;\r
+        return;\r
+    }\r
+    var rows = body.querySelectorAll('.feed-item[data-react-iter]');\r
+    for (var i = 0; i < rows.length; i += 1) {\r
+        var existing = rows[i];\r
+        var existingPhase = reactFeedPhase(existing.getAttribute('data-log-type'));\r
+        var existingIter = Number(existing.getAttribute('data-react-iter'));\r
+        var existingGeneration = Math.max(0, Number(existing.getAttribute('data-react-generation')) || 0);\r
+        if (existingPhase == null || !Number.isFinite(existingIter)) continue;\r
+        if (existingGeneration > generation\r
+            || (existingGeneration === generation\r
+                && (existingIter > iter || (existingIter === iter && existingPhase > phase)))) {\r
+            body.insertBefore(row, existing);\r
+            return;\r
+        }\r
+    }\r
+    appendProcessRowBeforePendingAppendSteer(body, row, type);\r
+    body._reactOrderTailKey = orderKey;\r
+}\r
+\r
+function feedRowCollapseAriaLabel(row, collapsed) {\r
+    var noun = row && row.classList && row.classList.contains('feed--llm')\r
+        ? '思考'\r
+        : (row && row.classList && row.classList.contains('feed--llm2') ? '回答' : '工具行');\r
+    return (collapsed ? '展开' : '收起') + noun;\r
+}\r
+\r
+function syncFeedRowCollapseButton(row) {\r
+    if (!row) return;\r
+    var collapsed = row.classList.contains('is-collapsed');\r
+    var button = row.querySelector('.feed-row-collapse');\r
+    if (!button) return;\r
+    button.setAttribute('aria-expanded', collapsed ? 'false' : 'true');\r
+    button.setAttribute('aria-label', feedRowCollapseAriaLabel(row, collapsed));\r
+}\r
+\r
+function toggleCollapsibleFeedRow(row, manual) {\r
+    if (!row) return;\r
+    row.classList.toggle('is-collapsed');\r
+    if (manual) row.dataset.manualToggle = '1';\r
+    syncFeedRowCollapseButton(row);\r
+}\r
+\r
+function autoCollapseLlmReasoningRow(row) {\r
+    if (!row || !row.classList.contains('feed--llm') || row.dataset.manualToggle === '1') return;\r
+    var collapse = function () {\r
+        row.classList.add('is-collapsed');\r
+        syncFeedRowCollapseButton(row);\r
+    };\r
+    if (row.isConnected && row.getAttribute('data-llm-live-row') === '1') {\r
+        mutateSmoothTraceRowHeight(row, collapse);\r
+    } else {\r
+        collapse();\r
+    }\r
+}\r
+\r
+function createProcessFeedRow(ctx, type, initialText, streamOpts, runSessionId, toolCallIdOpt) {\r
+    streamOpts = streamOpts || {};\r
+    if (type == null) type = 'log-entry';\r
+    stripWelcome(ctx);\r
+    const body = getProcessBody(ctx);\r
+    if (!body) return;\r
+    const meta = TRACE_ROW[type] || TRACE_ROW['log-entry'];\r
+    const row = document.createElement('div');\r
+    row.className = 'feed-item ' + meta.c;\r
+    row.setAttribute('data-log-type', type);\r
+    row.setAttribute('data-react-generation', String(reactGenerationForContext(ctx)));\r
+    if (ctx && ctx.runId) row.setAttribute('data-run-id', String(ctx.runId));\r
+    if (toolCallIdOpt != null && String(toolCallIdOpt) !== '') row.setAttribute('data-tool-call-id', String(toolCallIdOpt));\r
+    var rowCanCollapse = type === 'tool-call' || type === 'llm-reasoning';\r
+    var initialCollapseLabel = type === 'llm-reasoning' ? '收起思考' : '收起工具行';\r
+    var rowCollapseBtn = rowCanCollapse\r
+        ? '<button type="button" class="feed-row-collapse" aria-expanded="true" aria-label="' + initialCollapseLabel + '">'\r
+            + '<span class="feed-row-collapse-chevron" aria-hidden="true"></span></button>'\r
+        : '';\r
+    row.innerHTML = '<div class="feed-row">'\r
+        + '<span class="feed-label">' + meta.label + '</span>'\r
+        + '<div class="feed-chunk">'\r
+        + '<div class="feed-chunk-scroller"></div></div>'\r
+        + rowCollapseBtn\r
+        + '</div>';\r
+    const chunk = row.querySelector('.feed-chunk');\r
+    const sc = row.querySelector('.feed-chunk-scroller');\r
+    if (type === 'llm-reasoning') chunk.classList.add('expanded');\r
+    if (rowCanCollapse) {\r
+        const collapseBtn = row.querySelector('.feed-row-collapse');\r
+        if (collapseBtn) {\r
+            collapseBtn.addEventListener('click', function (e) {\r
+                e.preventDefault();\r
+                e.stopPropagation();\r
+                toggleCollapsibleFeedRow(row, true);\r
+            });\r
+        }\r
+    }\r
+    var txtForUi = initialText;\r
+    if (type === 'llm-reasoning' || type === 'llm-response') txtForUi = trimSurroundingBlankLines(txtForUi);\r
+    if (type === 'llm-response') row._processBriefRawText = String(txtForUi || '');\r
+    var initialUiText = truncateLogTextForUi(txtForUi);\r
+    if (type === 'status' || type === 'error-log' || type === 'tool-call'\r
+        || type === 'compact-summary' || type === 'context-trim'\r
+        || type === 'context-summary' || type === 'key-context') {\r
+        if (typeof setUiRuntimeText === 'function') setUiRuntimeText(sc, initialUiText);\r
+        else sc.textContent = initialUiText;\r
+    } else {\r
+        sc.textContent = initialUiText;\r
+    }\r
+    if (streamOpts.streaming && (type === 'llm-reasoning' || type === 'llm-response')) {\r
+        chunk.classList.add('is-streaming');\r
+        row.setAttribute('data-llm-live-row', '1');\r
+    }\r
+    if (type === 'llm-reasoning' && !streamOpts.streaming) autoCollapseLlmReasoningRow(row);\r
+    bindFeedChunkInteraction(chunk);\r
+    bindFeedChunkScrollChain(sc);\r
+    insertReactOrderedFeedRow(body, row, type, streamOpts.reactIter, reactGenerationForContext(ctx));\r
+    if (typeof translateUiNode === 'function') translateUiNode(row);\r
+    var isHistoryHydrate = !!(\r
+        replayingMessages\r
+        || (ctx && ctx.currentTurn && ctx.currentTurn.dataset.processLoading === '1')\r
+    );\r
+    var isInitialLiveStatusRow = !isHistoryHydrate && type === 'status'\r
+        && body.querySelectorAll('.feed-item[data-log-type="status"]').length === 1;\r
+    if (!isHistoryHydrate && !isInitialLiveStatusRow) animateSmoothTraceRowInsertion(row);\r
+    if (isInitialLiveStatusRow) finishStreamScrollIfFollow(ctx, runSessionId);\r
+    if (ctx && ctx.currentTurn && body.classList && body.classList.contains('subagent-turn-process')) {\r
+        markSubagentTurnHasProcess(ctx.currentTurn);\r
+    }\r
+    if (type === 'error-log') {\r
+        var errHint = document.createElement('div');\r
+        errHint.className = 'feed-error-contact-hint';\r
+        errHint.textContent = '如需帮助或反馈，请联系GitHub @sugarfreeecho';\r
+        body.appendChild(errHint);\r
+    }\r
+    const agg = body.closest('.process-aggregate');\r
+    registerProcessAggregateRow(agg, row);\r
+    if (streamOpts.reactIter != null && Number.isFinite(Number(streamOpts.reactIter))) {\r
+        var ri = Math.max(1, Math.floor(Number(streamOpts.reactIter)));\r
+        bumpAggregateMaxReactIter(agg, ri);\r
+    }\r
+    if (!replayingMessages && agg && agg.classList.contains('is-collapsed')) {\r
+        updateProcessBrief(agg);\r
+    }\r
+    else if (!replayingMessages) requestAnimationFrame(function () { scheduleFeedChunkOverflowRefresh(chunk); });\r
+    if (!replayingMessages) refreshAggregateStatsSmart(agg);\r
+    if (!streamOpts.streaming && !isInitialLiveStatusRow) scrollContentAreaIfFollow(ctx, runSessionId);\r
+    return sc;\r
+}\r
+\r
+function appendLlmStreamDelta(ctx, ev, runSessionId) {\r
+    if (!ctx || !ctx.llm) return;\r
+    // 收到 reasoning/content 增量时，移除"正在思考中..."条目\r
+    removeTemporaryStatus(ctx);\r
+    const l = ctx.llm;\r
+    const iter = ev.react_iter;\r
+    const seq = Number(ev.stream_seq || 0);\r
+    if (Number.isFinite(seq) && seq > 0) {\r
+        if (l.llmDeltaLastSeq !== null && seq < l.llmDeltaLastSeq) finalizeLlmStreamChunks(ctx);\r
+        l.llmDeltaLastSeq = seq;\r
+    }\r
+    const part = ev.type === 'llm_reasoning_delta' ? 'reasoning' : 'response';\r
+    if (hasSeenStreamDelta(ctx, ev, 'llm_' + part)) return;\r
+    const delta = String(ev.delta || '');\r
+    if (!delta) return;\r
+    const replayedSnapshot = !!ev.replayed_snapshot;\r
+    if (replayedSnapshot && part === 'response') {\r
+        l.llmThinkTagMode = 'response';\r
+        l.llmThinkTagCarry = '';\r
+        l.llmThinkTagAllowLeading = true;\r
+    }\r
+    if (iter != null) {\r
+        var body0 = getProcessBody(ctx);\r
+        if (body0) bumpAggregateMaxReactIter(body0.closest('.process-aggregate'), iter);\r
+    }\r
+    const streamOpt = { streaming: true };\r
+    if (iter != null && Number.isFinite(Number(iter))) streamOpt.reactIter = Number(iter);\r
+    var pieces = part === 'response' ? feedThinkTaggedResponseDelta(l, delta) : [{ part: 'reasoning', text: delta }];\r
+    var responseStarted = pieces.some(function (piece) {\r
+        return piece && piece.part !== 'reasoning' && String(piece.text || '') !== '';\r
+    });\r
+    if (responseStarted) finalizeActiveLlmReasoningRow(ctx);\r
+    for (var pi = 0; pi < pieces.length; pi += 1) {\r
+        var piece = pieces[pi] || {};\r
+        var piecePart = piece.part === 'reasoning' ? 'reasoning' : 'response';\r
+        var pieceText = String(piece.text || '');\r
+        if (!pieceText) continue;\r
+        if (piecePart === 'reasoning') {\r
+        if (l.llmStreamReasoningScroller && !l.llmStreamReasoningScroller.isConnected) {\r
+            l.llmStreamReasoningScroller = null;\r
+        }\r
+        if (l.llmStreamReasoningIter !== iter) {\r
+            flushLlmDeltaText(ctx);\r
+            l.llmStreamReasoningIter = iter;\r
+            var existingReasoning = findExistingLlmFeedRow(ctx, 'llm-reasoning', Number.isFinite(Number(iter)) ? Math.max(1, Math.floor(Number(iter))) : null, { liveOnly: true });\r
+            l.llmStreamReasoningScroller = existingReasoning\r
+                ? existingReasoning.querySelector('.feed-chunk-scroller')\r
+                : createProcessFeedRow(ctx, 'llm-reasoning', '', streamOpt, runSessionId);\r
+        }\r
+        if (!l.llmStreamReasoningScroller) {\r
+            var recoveredReasoning = findExistingLlmFeedRow(ctx, 'llm-reasoning', Number.isFinite(Number(iter)) ? Math.max(1, Math.floor(Number(iter))) : null, { liveOnly: true });\r
+            l.llmStreamReasoningScroller = recoveredReasoning\r
+                ? recoveredReasoning.querySelector('.feed-chunk-scroller')\r
+                : createProcessFeedRow(ctx, 'llm-reasoning', '', streamOpt, runSessionId);\r
+        }\r
+        if (!l.llmStreamReasoningScroller) return;\r
+        if (replayedSnapshot) {\r
+            l.llmPendingReasoningDelta = '';\r
+            l.llmStreamReasoningScroller.textContent = truncateLogTextForUi(pieceText);\r
+        } else {\r
+            l.llmPendingReasoningDelta = (l.llmPendingReasoningDelta || '') + pieceText;\r
+        }\r
+        } else {\r
+        if (l.llmStreamResponseScroller && !l.llmStreamResponseScroller.isConnected) {\r
+            l.llmStreamResponseScroller = null;\r
+        }\r
+        if (l.llmStreamResponseIter !== iter) {\r
+            flushLlmDeltaText(ctx);\r
+            l.llmStreamResponseIter = iter;\r
+            var existingResponse = findExistingLlmFeedRow(ctx, 'llm-response', Number.isFinite(Number(iter)) ? Math.max(1, Math.floor(Number(iter))) : null, { liveOnly: true });\r
+            l.llmStreamResponseScroller = existingResponse\r
+                ? existingResponse.querySelector('.feed-chunk-scroller')\r
+                : createProcessFeedRow(ctx, 'llm-response', '', streamOpt, runSessionId);\r
+        }\r
+        if (!l.llmStreamResponseScroller) {\r
+            var recoveredResponse = findExistingLlmFeedRow(ctx, 'llm-response', Number.isFinite(Number(iter)) ? Math.max(1, Math.floor(Number(iter))) : null, { liveOnly: true });\r
+            l.llmStreamResponseScroller = recoveredResponse\r
+                ? recoveredResponse.querySelector('.feed-chunk-scroller')\r
+                : createProcessFeedRow(ctx, 'llm-response', '', streamOpt, runSessionId);\r
+        }\r
+        if (!l.llmStreamResponseScroller) return;\r
+        if (replayedSnapshot) {\r
+            l.llmPendingResponseDelta = '';\r
+            l.llmStreamResponseScroller.textContent = truncateLogTextForUi(pieceText);\r
+        } else {\r
+            l.llmPendingResponseDelta = (l.llmPendingResponseDelta || '') + pieceText;\r
+        }\r
+        }\r
+    }\r
+    scheduleLlmDeltaFlush(ctx, runSessionId);\r
+}\r
+\r
+function finalizeActiveLlmReasoningRow(ctx) {\r
+    var l = ctx && ctx.llm;\r
+    var scroller = l && l.llmStreamReasoningScroller;\r
+    if (!scroller || !scroller.isConnected) return;\r
+    flushLlmDeltaText(ctx);\r
+    var row = scroller.closest ? scroller.closest('.feed-item.feed--llm') : null;\r
+    var chunk = row && row.querySelector ? row.querySelector('.feed-chunk') : null;\r
+    if (chunk) {\r
+        chunk.classList.remove('is-streaming');\r
+        scheduleFeedChunkOverflowRefresh(chunk);\r
+    }\r
+    autoCollapseLlmReasoningRow(row);\r
+    l.llmStreamReasoningScroller = null;\r
+    l.llmStreamReasoningIter = null;\r
+}\r
+\r
+function upsertLlmFeedRow(ctx, content, logType, runSessionId, reactIter) {\r
+    if (!ctx) return null;\r
+    if (logType === 'llm-response') {\r
+        var split = splitThinkTagsForUi(content);\r
+        if (split.reasoning && split.reasoning.trim()) upsertLlmFeedRow(ctx, split.reasoning, 'llm-reasoning', runSessionId, reactIter);\r
+        content = split.content;\r
+    }\r
+    var ri = reactIter != null && Number.isFinite(Number(reactIter)) ? Math.max(1, Math.floor(Number(reactIter))) : null;\r
+    var rawText = trimSurroundingBlankLines(String(content || ''));\r
+    var txt = truncateLogTextForUi(rawText);\r
+    if (!txt.trim()) return null;\r
+    var existing = findExistingLlmFeedRow(ctx, logType, ri);\r
+    if (existing) {\r
+        var sc = existing.querySelector('.feed-chunk-scroller');\r
+        var ch = existing.querySelector('.feed-chunk');\r
+        if (logType === 'llm-response') existing._processBriefRawText = rawText;\r
+        if (sc) sc.textContent = txt;\r
+        if (ch) {\r
+            ch.classList.remove('is-streaming');\r
+            \r
+            scheduleFeedChunkOverflowRefresh(ch);\r
+        }\r
+        existing.removeAttribute('data-llm-live-row');\r
+        existing.setAttribute('data-event-committed', '1');\r
+        if (logType === 'llm-reasoning') autoCollapseLlmReasoningRow(existing);\r
+        removeDuplicateLlmFeedRows(ctx, existing, logType, ri);\r
+        if (ctx.llm) resetLlmState(ctx);\r
+        var agg = existing.closest && existing.closest('.process-aggregate');\r
+        if (agg) {\r
+            refreshAggregateStatsSmart(agg);\r
+            if (!ctx.currentProcessGroup || !ctx.currentProcessGroup.isConnected) ctx.currentProcessGroup = agg;\r
+        }\r
+        scrollContentAreaIfFollow(ctx, runSessionId, 'text');\r
+        return sc;\r
+    }\r
+    if (ctx.llm) resetLlmState(ctx);\r
+    return appendLog(ctx, content, logType, runSessionId, ri);\r
+}\r
+\r
+function findExistingLlmFeedRow(ctx, logType, reactIter, opts) {\r
+    if (!ctx) return null;\r
+    opts = opts || {};\r
+    var selector = '.feed-item[data-log-type="' + logType + '"]';\r
+    selector += '[data-react-generation="' + reactGenerationForContext(ctx) + '"]';\r
+    if (reactIter != null) selector += '[data-react-iter="' + reactIter + '"]';\r
+    else selector += '[data-llm-live-row="1"]';\r
+    if (opts.liveOnly) selector += '[data-llm-live-row="1"]';\r
+    var roots = [];\r
+    if (ctx.currentProcessGroup && ctx.currentProcessGroup.isConnected) {\r
+        // react_iter restarts at 1 for a replacement run. Once a new process\r
+        // block exists, never reuse an identically numbered LLM row from an\r
+        // older block or reasoning and response will be split across runs.\r
+        roots.push(ctx.currentProcessGroup);\r
+    } else if (!replayingMessages && ctx.stream && ctx.stream.querySelectorAll) {\r
+        roots.push(ctx.stream);\r
+    }\r
+    for (var r = 0; r < roots.length; r += 1) {\r
+        var matches = roots[r].querySelectorAll(selector);\r
+        if (matches && matches.length) return matches[matches.length - 1];\r
+    }\r
+    return null;\r
+}\r
+\r
+function removeDuplicateLlmFeedRows(ctx, keepRow, logType, reactIter) {\r
+    if (!ctx || !ctx.stream || !ctx.stream.querySelectorAll || !keepRow) return;\r
+    var selector = '.feed-item[data-log-type="' + logType + '"]';\r
+    selector += '[data-react-generation="' + reactGenerationForContext(ctx) + '"]';\r
+    if (reactIter != null) selector += '[data-react-iter="' + reactIter + '"]';\r
+    var rows = ctx.stream.querySelectorAll(selector);\r
+    if (!rows || rows.length <= 1) return;\r
+    rows.forEach(function (row) {\r
+        if (row !== keepRow && row.getAttribute('data-llm-live-row') === '1') {\r
+            unregisterProcessAggregateRow(row);\r
+            row.remove();\r
+        }\r
+    });\r
+}\r
+\r
+function parseMessageTimestamp(value) {\r
+    if (value == null || value === '') return null;\r
+    if (typeof value === 'number' && isFinite(value)) {\r
+        return new Date(value > 100000000000 ? value : value * 1000);\r
+    }\r
+    var d = new Date(String(value));\r
+    return isNaN(d.getTime()) ? null : d;\r
+}\r
+\r
+function formatUserMessageTimestamp(value) {\r
+    var d = parseMessageTimestamp(value);\r
+    if (!d) return '';\r
+    try {\r
+        return new Intl.DateTimeFormat(undefined, {\r
+            year: 'numeric',\r
+            month: '2-digit',\r
+            day: '2-digit',\r
+            hour: '2-digit',\r
+            minute: '2-digit',\r
+            timeZoneName: 'short',\r
+            hour12: false,\r
+        }).format(d);\r
+    } catch (e) {\r
+        return d.toLocaleString();\r
+    }\r
+}\r
+\r
+function refreshUserMessageTimes(root) {\r
+    var scope = root || document;\r
+    if (!scope || !scope.querySelectorAll) return;\r
+    scope.querySelectorAll('.user-message-time[data-created-at]').forEach(function (el) {\r
+        var raw = el.getAttribute('data-created-at') || '';\r
+        var txt = formatUserMessageTimestamp(raw);\r
+        if (txt) el.textContent = txt;\r
+    });\r
+}\r
+\r
+function ensureUserMessageTimeAutoRefresh() {\r
+    if (window.__userMessageTimeAutoRefreshBound) return;\r
+    window.__userMessageTimeAutoRefreshBound = true;\r
+    window.addEventListener('focus', function () { refreshUserMessageTimes(document); });\r
+    document.addEventListener('visibilitychange', function () {\r
+        if (!document.hidden) refreshUserMessageTimes(document);\r
+    });\r
+    setInterval(function () { refreshUserMessageTimes(document); }, 60000);\r
+}\r
+\r
+function appendMessage(ctx, role, content, meta, runSessionId) {\r
+    meta = meta || {};\r
+    ensureUserMessageTimeAutoRefresh();\r
+    stripWelcome(ctx);\r
+    if (role === 'user' && meta.eventIndex != null && Number.isFinite(Number(meta.eventIndex))) {\r
+        var streamRoot = (ctx && ctx.stream) || chatContainer;\r
+        var existingUser = null;\r
+        if (streamRoot && streamRoot.querySelector && typeof CSS !== 'undefined' && CSS.escape) {\r
+            try {\r
+                existingUser = streamRoot.querySelector('.msg-wrap--user[data-event-index="' + CSS.escape(String(meta.eventIndex)) + '"]');\r
+            } catch (e) { existingUser = null; }\r
+        }\r
+        if (existingUser) {\r
+            var existingMessage = existingUser.querySelector('.message');\r
+            var rawStrExisting = content == null ? '' : String(content);\r
+            if (existingMessage && messageRawMarkdown.get(existingUser) !== rawStrExisting) {\r
+                messageRawMarkdown.set(existingUser, rawStrExisting);\r
+                existingMessage.textContent = rawStrExisting;\r
+                linkifyAssistantTextNodes(existingMessage);\r
+                renderUserMessageContent(existingUser, existingMessage, rawStrExisting, linkifyAssistantTextNodes);\r
+            }\r
+            if (meta.runtimeSeq != null && Number.isFinite(Number(meta.runtimeSeq)) && Number(meta.runtimeSeq) > 0) {\r
+                existingUser.setAttribute('data-runtime-seq', String(Math.floor(Number(meta.runtimeSeq))));\r
+            }\r
+            if (meta.runtimeEventType) {\r
+                existingUser.setAttribute('data-runtime-event-type', String(meta.runtimeEventType));\r
+            }\r
+            if (meta.createdAt || meta.created_at || meta.timestamp) {\r
+                existingUser.setAttribute('data-created-at', String(meta.createdAt || meta.created_at || meta.timestamp));\r
+            }\r
+            if (!replayingMessages) rebuildToc({ localOnly: true });\r
+            return existingUser;\r
+        }\r
+    }\r
+    const wrap = document.createElement('div');\r
+    wrap.className = 'msg-wrap msg-wrap--' + (role === 'user' ? 'user' : 'assistant');\r
+    if (role === 'assistant') wrap.classList.add('msg-wrap--answer-frame');\r
+    if (meta.eventIndex != null) wrap.setAttribute('data-event-index', String(meta.eventIndex));\r
+    if (meta.runtimeSeq != null && Number.isFinite(Number(meta.runtimeSeq)) && Number(meta.runtimeSeq) > 0) {\r
+        wrap.setAttribute('data-runtime-seq', String(Math.floor(Number(meta.runtimeSeq))));\r
+    }\r
+    if (meta.runtimeEventType) {\r
+        wrap.setAttribute('data-runtime-event-type', String(meta.runtimeEventType));\r
+    }\r
+    if (meta.truncateBeforeSeq != null && Number.isFinite(Number(meta.truncateBeforeSeq)) && Number(meta.truncateBeforeSeq) > 0) {\r
+        wrap.setAttribute('data-truncate-before-seq', String(Math.floor(Number(meta.truncateBeforeSeq))));\r
+    }\r
+    var tTrunc = meta.turnTruncateIdx;\r
+    if (tTrunc == null) { if (role === 'user' && meta.eventIndex != null) tTrunc = meta.eventIndex; }\r
+    if (tTrunc != null && tTrunc >= 0) wrap.setAttribute('data-truncate-from', String(tTrunc));\r
+    if (role === 'user') {\r
+        if (meta.eventIndex != null && meta.eventIndex >= 0) {\r
+            wrap.id = 'user-msg-' + meta.eventIndex;\r
+        } else {\r
+            const n = (ctx.stream || chatContainer).querySelectorAll('.msg-wrap--user').length;\r
+            wrap.id = 'user-msg-' + n;\r
+        }\r
+    }\r
+    const div = document.createElement('div');\r
+    div.className = 'message ' + (role === 'user' ? 'user' : 'assistant');\r
+    var rawStr = content == null ? '' : String(content);\r
+    var displayStr = rawStr;\r
+    if (role === 'assistant') {\r
+        var assistantSplit = splitThinkTagsForUi(rawStr);\r
+        displayStr = stripOrphanThinkCloseForFinalCard(assistantSplit.content);\r
+    }\r
+    messageRawMarkdown.set(wrap, displayStr);\r
+    if (role === 'user') {\r
+        if (userMessageShouldCollapse(rawStr)) {\r
+            wrap.classList.add('has-turn-process');\r
+            div.classList.add('is-collapsible');\r
+            // 摘要\r
+            var sum = document.createElement('div');\r
+            sum.className = 'user-msg-summary';\r
+            if (typeof renderSelectedSkillsUiMessage === 'function') renderSelectedSkillsUiMessage(sum, buildUserMessageSummary(rawStr), linkifyAssistantTextNodes);\r
+            else {\r
+                sum.textContent = buildUserMessageSummary(rawStr);\r
+                linkifyAssistantTextNodes(sum);\r
+            }\r
+            // 完整\r
+            var ful = document.createElement('div');\r
+            ful.className = 'user-msg-full';\r
+            if (typeof renderSelectedSkillsUiMessage === 'function') renderSelectedSkillsUiMessage(ful, rawStr, linkifyAssistantTextNodes);\r
+            else {\r
+                ful.textContent = rawStr;\r
+                linkifyAssistantTextNodes(ful);\r
+            }\r
+            // chevron\r
+            var ch = document.createElement('div');\r
+            ch.className = 'user-msg-chevron';\r
+            var arrow = document.createElement('span');\r
+            arrow.className = 'chevron-arrow';\r
+            ch.appendChild(arrow);\r
+            ch.addEventListener('click', function(e) {\r
+                e.stopPropagation();\r
+                wrap.classList.toggle('user-msg-expanded');\r
+            });\r
+            div.appendChild(sum);\r
+            div.appendChild(ful);\r
+            div.appendChild(ch);\r
+        } else {\r
+            div.textContent = rawStr;\r
+            linkifyAssistantTextNodes(div);\r
+        }\r
+    } else if (role === 'assistant' && meta.uiRuntimeText && typeof setUiRuntimeText === 'function') {\r
+        // System terminal statuses are plain text, not model markdown. Keep\r
+        // their source in the runtime i18n store so language toggles restore\r
+        // the original Chinese text exactly.\r
+        setUiRuntimeText(div, displayStr);\r
+    } else {\r
+        div.innerHTML = renderMarkdown(displayStr);\r
+        enhanceAssistantMessageContent(div);\r
+    }\r
+    wrap.appendChild(div);\r
+    if (role === 'user') {\r
+        var createdAt = meta.createdAt || meta.created_at || meta.timestamp || new Date().toISOString();\r
+        wrap.setAttribute('data-created-at', String(createdAt));\r
+    }\r
+    if (role === 'user' && !div.classList.contains('is-collapsible')) {\r
+        renderUserMessageContent(wrap, div, rawStr, linkifyAssistantTextNodes);\r
+    }\r
+    attachMessageToolbar(wrap, role);\r
+    (ctx.stream || chatContainer).appendChild(wrap);\r
+    if (role === 'assistant') {\r
+        if (ctx.currentProcessGroup) {\r
+            ctx.currentProcessGroup._processFinalResponseComparable = normalizeProcessBriefComparableText(displayStr);\r
+            if (ctx.currentProcessGroup.isConnected) {\r
+                ctx.currentProcessGroup.classList.add('is-collapsed');\r
+                const ttop = ctx.currentProcessGroup.querySelector('.process-aggregate-top');\r
+                if (ttop) ttop.setAttribute('aria-expanded', 'false');\r
+                updateProcessBrief(ctx.currentProcessGroup);\r
+            }\r
+        }\r
+        sealProcessGroup(ctx);\r
+    }\r
+    if (role === 'user' && !replayingMessages) rebuildToc({ localOnly: true });\r
+    if (!replayingMessages) {\r
+        if (role === 'user') scrollChatToBottomIfFollow(runSessionId, { force: true });\r
         else {\r
             cancelSmoothStreamFollowForFinal(ctx);\r
             scrollChatToBottomIfFollow(runSessionId, {});\r
         }\r
-    }
-}
-
-function handleTraceChunkClick(e) {
-    if (e) e.stopPropagation();
-    this.classList.toggle('expanded');
-    var self = this;
-    requestAnimationFrame(function () {
-        refreshFeedChunkOverflow(self);
-        registerMermaidLazy(self);
-    });
-}
-
-function handleToolRowChunkClick(e) {
-    if (e) e.stopPropagation();
-    var row = this.closest ? this.closest('.feed-item') : null;
-    if (!row) return;
-    toggleCollapsibleFeedRow(row, true);
-}
-
-function handleLlmRowChunkClick(e) {
-    if (e) e.stopPropagation();
-    var row = this.closest ? this.closest('.feed-item') : null;
-    if (!row) return;
-    toggleCollapsibleFeedRow(row, true);
-}
-
-function bindFeedChunkInteraction(ch) {
-    ch.removeEventListener('click', handleTraceChunkClick);
-    ch.removeEventListener('click', handleToolRowChunkClick);
-    ch.removeEventListener('click', handleLlmRowChunkClick);
-    // Tool rows use the row-level fold (feed-row-collapse) as their single
-    // collapse affordance; clicking the command text toggles the same fold.
-    // Keep the content-height expand for LLM/log/etc. rows.
-    var row = ch.closest ? ch.closest('.feed-item') : null;
-    if (row && row.classList.contains('feed--tool')) {
-        ch.addEventListener('click', handleToolRowChunkClick);
-        return;
-    }
-    if (row && row.classList.contains('feed--llm')) {
-        ch.addEventListener('click', handleLlmRowChunkClick);
-        return;
-    }
-    ch.addEventListener('click', handleTraceChunkClick);
-}
-
-function bindExistingLogInteractions(root) {
-    const el = root || getVisibleChatStream() || chatContainer;
-    if (!el) return;
-    el.querySelectorAll('.feed-chunk').forEach(function (ch) {
-        bindFeedChunkInteraction(ch);
-        const sc = ch.querySelector('.feed-chunk-scroller');
-        if (sc) bindFeedChunkScrollChain(sc);
-    });
-    el.querySelectorAll('.process-aggregate').forEach(function (agg) {
-        bindProcessAggregateInteractions(agg);
-    });
-    el.querySelectorAll('.process-aggregate-brief').forEach(bindProcessBriefScrollChain);
-}
-
-function finalizeExistingLogLayout(root) {
-    const el = root || getVisibleChatStream() || chatContainer;
-    if (!el) return;
-    el.querySelectorAll('.feed-chunk').forEach(function (ch) {
-        scheduleFeedChunkOverflowRefresh(ch);
-    });
-    el.querySelectorAll('.process-aggregate').forEach(function (agg) {
-        if (!agg.classList.contains('subagent-grid-card')) bindProcessAggregateHeightButton(agg);
-        if (agg.classList.contains('is-collapsed')) updateProcessBrief(agg);
-        refreshAggregateStatsSmart(agg);
-    });
-}
-
-function bindExistingLogs(root) {
-    bindExistingLogInteractions(root);
-    finalizeExistingLogLayout(root);
-}
-
-function appendLog(ctx, content, type, runSessionId, reactIter) {
-    if (type == null) type = 'log-entry';
-    const tStr = (content == null) ? '' : String(content);
-    if ((type === 'llm-reasoning' || type === 'llm-response') && !trimSurroundingBlankLines(tStr).trim()) return null;
-    var so = null;
-    if (reactIter != null && Number.isFinite(Number(reactIter))) so = { reactIter: Number(reactIter) };
-    return createProcessFeedRow(ctx, type, tStr, so, runSessionId);
-}
-
-function getLastProcessFeedItem(body) {
-    if (!body || !body.querySelectorAll) return null;
-    var rows = body.querySelectorAll('.feed-item');
-    return rows && rows.length ? rows[rows.length - 1] : null;
-}
-
-function appendModelSwitchStatus(ctx, event, runSessionId) {
-    if (!ctx) return null;
-    var content = String((event && event.content) || '').trim();
-    if (!content) return null;
-    var sc = ctx._modelSwitchStatusScroller;
-    var body = getProcessBody(ctx);
-    var lastRow = getLastProcessFeedItem(body);
-    var row = sc && sc.isConnected && sc.closest ? sc.closest('.feed-item') : null;
-    var canReuse = !!(row && row === lastRow && row.getAttribute('data-model-switch-status') === '1');
-    if (!canReuse && lastRow && lastRow.getAttribute('data-model-switch-status') === '1') {
-        sc = lastRow.querySelector('.feed-chunk-scroller');
-        row = lastRow;
-        canReuse = !!(sc && sc.isConnected);
-    }
-    if (!canReuse) {
-        sc = appendLog(ctx, content, 'status', runSessionId);
-        var newRow = sc && sc.closest ? sc.closest('.feed-item') : null;
-        if (newRow) newRow.setAttribute('data-model-switch-status', '1');
-        ctx._modelSwitchStatusScroller = sc;
-        return sc;
-    }
-    var prev = (typeof getUiRuntimeText === 'function' ? getUiRuntimeText(sc) : String(sc.textContent || '')).trim();
-    if (prev.indexOf(content) < 0) {
-        var merged = truncateLogTextForUi(prev ? (prev + '\\n' + content) : content);
-        if (typeof setUiRuntimeText === 'function') setUiRuntimeText(sc, merged);
-        else sc.textContent = merged;
-    }
-    var ch = sc.closest && sc.closest('.feed-chunk');
-    if (ch) {
-        refreshFeedChunkOverflow(ch);
-        requestAnimationFrame(function () { refreshFeedChunkOverflow(ch); });
-    }
-    scrollContentAreaIfFollow(ctx, runSessionId, 'text');
-    return sc;
-}
-
-function flushProgressDeltaText(ctx, logType) {
-    if (!ctx || !ctx.progressStream) return;
-    var st = ctx.progressStream[logType];
-    if (!st) return;
-    if (st.flushRaf) {
-        cancelAnimationFrame(st.flushRaf);
-        st.flushRaf = 0;
-    }
-    if (st.pending && st.scroller && st.scroller.isConnected) {
-        var current = typeof getUiRuntimeText === 'function' ? getUiRuntimeText(st.scroller) : String(st.scroller.textContent || '');
-        var merged = truncateLogTextForUi(current + st.pending);
-        if (typeof setUiRuntimeText === 'function') setUiRuntimeText(st.scroller, merged);
-        else st.scroller.textContent = merged;
-        var ch = st.scroller.closest('.feed-chunk');
-        if (ch) refreshFeedChunkOverflow(ch);
-    }
-    st.pending = '';
-}
-
-function finalizeProgressStreamChunks(ctx) {
-    if (!ctx) return;
-    var types = ctx.progressStream ? Object.keys(ctx.progressStream) : [];
-    for (var i = 0; i < types.length; i += 1) flushProgressDeltaText(ctx, types[i]);
-    var streamRoot = (ctx._subagentBody && ctx._subagentBody.isConnected) ? ctx._subagentBody : ctx.stream;
-    if (streamRoot) {
-        streamRoot.querySelectorAll('.feed-item .feed-chunk.is-streaming').forEach(function (ch) {
-            ch.classList.remove('is-streaming');
-            refreshFeedChunkOverflow(ch);
-        });
-    }
-    ctx.progressStream = {};
-}
-
-function discardProgressStreamChunks(ctx) {
-    if (!ctx) return;
-    var streamRoot = (ctx._subagentBody && ctx._subagentBody.isConnected) ? ctx._subagentBody : ctx.stream;
-    var rows = [];
-    var types = ctx.progressStream ? Object.keys(ctx.progressStream) : [];
-    for (var i = 0; i < types.length; i += 1) {
-        var st = ctx.progressStream[types[i]];
-        if (!st) continue;
-        if (st.flushRaf) cancelAnimationFrame(st.flushRaf);
-        var row = st.scroller && st.scroller.closest ? st.scroller.closest('.feed-item') : null;
-        if (row && rows.indexOf(row) < 0) rows.push(row);
-    }
-    if (streamRoot) {
-        streamRoot.querySelectorAll(
-            '.feed-item[data-log-type="context-trim"] .feed-chunk.is-streaming, '
-            + '.feed-item[data-log-type="context-summary"] .feed-chunk.is-streaming, '
-            + '.feed-item[data-log-type="key-context"] .feed-chunk.is-streaming'
-        ).forEach(function (chunk) {
-            var row = chunk.closest('.feed-item');
-            if (row && rows.indexOf(row) < 0) rows.push(row);
-        });
-    }
-    rows.forEach(function (row) {
-        if (row && row.parentNode) row.remove();
-    });
-    ctx.progressStream = {};
-    if (ctx.progressScrollers) {
-        ['context-trim', 'context-summary', 'key-context'].forEach(function (type) {
-            var scroller = ctx.progressScrollers[type];
-            if (!scroller || !scroller.isConnected) delete ctx.progressScrollers[type];
-        });
-    }
-}
-
-function scheduleProgressDeltaFlush(ctx, runSessionId, logType) {
-    if (!ctx || !ctx.progressStream) return;
-    var st = ctx.progressStream[logType];
-    if (!st || st.flushRaf) return;
-    st.flushRaf = requestAnimationFrame(function () {
-        st.flushRaf = 0;
-        flushProgressDeltaText(ctx, logType);
-        followStreamProcessScroll(ctx, runSessionId, 'text');
-    });
-}
-
-/** 每个压缩阶段（裁剪/压缩/要点）共用一条 feed，状态行与正文在同一 scroller */
-function ensureProgressScroller(ctx, logType, runSessionId) {
-    if (!ctx) return null;
-    if (!ctx.progressScrollers) ctx.progressScrollers = {};
-    var sc = ctx.progressScrollers[logType];
-    if (sc && sc.isConnected) return sc;
-    sc = appendLog(ctx, '', logType, runSessionId);
-    if (sc) ctx.progressScrollers[logType] = sc;
-    return sc;
-}
-
-/** 落盘正文：替换流式段或追加到状态行后，与刷新后 ui_events 回放一致 */
-function applyProgressPersistedBody(ctx, content, logType, runSessionId) {
-    if (!ctx) return;
-    var text = String(content || '').trim();
-    if (!text) return;
-    var st = ctx.progressStream && ctx.progressStream[logType];
-    var bodyOffset = st && typeof st.bodyOffset === 'number' ? st.bodyOffset : null;
-    var hadStream = bodyOffset != null;
-    finalizeProgressStreamForType(ctx, logType);
-    var sc = ensureProgressScroller(ctx, logType, runSessionId);
-    if (!sc) return;
-    var prevTxt = typeof getUiRuntimeText === 'function' ? getUiRuntimeText(sc) : (sc.textContent || '');
-    var merged;
-    if (hadStream) {
-        merged = prevTxt.slice(0, bodyOffset).replace(/\\s+$/, '') + '\\n\\n' + text;
-    } else if (prevTxt.trim()) {
-        merged = prevTxt.trim() + '\\n\\n' + text;
-    } else {
-        merged = text;
-    }
-    var persistedText = truncateLogTextForUi(merged);
-    if (typeof setUiRuntimeText === 'function') setUiRuntimeText(sc, persistedText);
-    else sc.textContent = persistedText;
-    var chSet = sc.closest('.feed-chunk');
-    if (chSet) {
-        chSet.classList.remove('is-streaming');
-        refreshFeedChunkOverflow(chSet);
-        requestAnimationFrame(function () { refreshFeedChunkOverflow(chSet); });
-    }
-    ctx.progressScrollers[logType] = sc;
-    scrollContentAreaIfFollow(ctx, runSessionId, 'text');
-}
-
-/** 压缩/要点执行端输出：在同一 feed 内流式追加正文（不另起 feed 块） */
-function appendProgressStreamDelta(ctx, delta, logType, runSessionId) {
-    if (!ctx || !delta) return;
-    if (!ctx.progressStream) ctx.progressStream = {};
-    var piece = String(delta);
-    if (!piece) return;
-    var sc = ensureProgressScroller(ctx, logType, runSessionId);
-    if (!sc) return;
-    var chunk = sc.closest('.feed-chunk');
-    if (chunk) chunk.classList.add('is-streaming');
-    var st = ctx.progressStream[logType];
-    if (!st) {
-        var sourceText = typeof getUiRuntimeText === 'function' ? getUiRuntimeText(sc) : (sc.textContent || '');
-        var head = sourceText.trim();
-        var bodyOffset = sourceText.length;
-        if (head) {
-            var streamHead = head + '\\n\\n';
-            if (typeof setUiRuntimeText === 'function') setUiRuntimeText(sc, streamHead);
-            else sc.textContent = streamHead;
-            bodyOffset = streamHead.length;
-        }
-        st = { scroller: sc, pending: '', flushRaf: 0, bodyOffset: bodyOffset };
-        ctx.progressStream[logType] = st;
-    }
-    st.pending += piece;
-    scheduleProgressDeltaFlush(ctx, runSessionId, logType);
-}
-
-/** 同类型进度行合并追加，实现裁剪/压缩/要点分轨流式展示 */
-function appendProgressLog(ctx, content, logType, runSessionId) {
-    if (!ctx) return;
-    finalizeProgressStreamForType(ctx, logType);
-    if (!ctx.progressScrollers) ctx.progressScrollers = {};
-    var line = String(content || '');
-    if (!line.trim()) return;
-    var prev = ctx.progressScrollers[logType];
-    if (prev && prev.isConnected) {
-        var prevTxt = typeof getUiRuntimeText === 'function' ? getUiRuntimeText(prev) : (prev.textContent || '');
-        var progressText = truncateLogTextForUi(prevTxt ? (prevTxt + '\\n' + line) : line);
-        if (typeof setUiRuntimeText === 'function') setUiRuntimeText(prev, progressText);
-        else prev.textContent = progressText;
-        var chMerge = prev.closest('.feed-chunk');
-        if (chMerge) {
-            refreshFeedChunkOverflow(chMerge);
-            requestAnimationFrame(function () { refreshFeedChunkOverflow(chMerge); });
-        }
-        scrollContentAreaIfFollow(ctx, runSessionId, 'text');
-        return;
-    }
-    var sc = ensureProgressScroller(ctx, logType, runSessionId);
-    if (!sc) return;
-    var firstProgressText = truncateLogTextForUi(line);
-    if (typeof setUiRuntimeText === 'function') setUiRuntimeText(sc, firstProgressText);
-    else sc.textContent = firstProgressText;
-    var chNew = sc.closest('.feed-chunk');
-    if (chNew) {
-        refreshFeedChunkOverflow(chNew);
-        requestAnimationFrame(function () { refreshFeedChunkOverflow(chNew); });
-    }
-    scrollContentAreaIfFollow(ctx, runSessionId);
-}
-
-function finalizeProgressStreamForType(ctx, logType) {
-    if (!ctx || !logType) return;
-    flushProgressDeltaText(ctx, logType);
-    if (ctx.progressStream && ctx.progressStream[logType]) {
-        var st = ctx.progressStream[logType];
-        if (st.scroller && st.scroller.isConnected) {
-            var ch = st.scroller.closest('.feed-chunk');
-            if (ch) {
-                ch.classList.remove('is-streaming');
-                refreshFeedChunkOverflow(ch);
-            }
-        }
-        delete ctx.progressStream[logType];
-    }
-}
-
-/* ── Subagent 浮层 / 过程块 ── */
+    }\r
+}\r
+\r
+function handleTraceChunkClick(e) {\r
+    if (e) e.stopPropagation();\r
+    this.classList.toggle('expanded');\r
+    var self = this;\r
+    requestAnimationFrame(function () {\r
+        refreshFeedChunkOverflow(self);\r
+        registerMermaidLazy(self);\r
+    });\r
+}\r
+\r
+function handleToolRowChunkClick(e) {\r
+    if (e) e.stopPropagation();\r
+    var row = this.closest ? this.closest('.feed-item') : null;\r
+    if (!row) return;\r
+    toggleCollapsibleFeedRow(row, true);\r
+}\r
+\r
+function handleLlmRowChunkClick(e) {\r
+    if (e) e.stopPropagation();\r
+    var row = this.closest ? this.closest('.feed-item') : null;\r
+    if (!row) return;\r
+    toggleCollapsibleFeedRow(row, true);\r
+}\r
+\r
+function bindFeedChunkInteraction(ch) {\r
+    ch.removeEventListener('click', handleTraceChunkClick);\r
+    ch.removeEventListener('click', handleToolRowChunkClick);\r
+    ch.removeEventListener('click', handleLlmRowChunkClick);\r
+    // Tool rows use the row-level fold (feed-row-collapse) as their single\r
+    // collapse affordance; clicking the command text toggles the same fold.\r
+    // Keep the content-height expand for LLM/log/etc. rows.\r
+    var row = ch.closest ? ch.closest('.feed-item') : null;\r
+    if (row && row.classList.contains('feed--tool')) {\r
+        ch.addEventListener('click', handleToolRowChunkClick);\r
+        return;\r
+    }\r
+    if (row && row.classList.contains('feed--llm')) {\r
+        ch.addEventListener('click', handleLlmRowChunkClick);\r
+        return;\r
+    }\r
+    ch.addEventListener('click', handleTraceChunkClick);\r
+}\r
+\r
+function bindExistingLogInteractions(root) {\r
+    const el = root || getVisibleChatStream() || chatContainer;\r
+    if (!el) return;\r
+    el.querySelectorAll('.feed-chunk').forEach(function (ch) {\r
+        bindFeedChunkInteraction(ch);\r
+        const sc = ch.querySelector('.feed-chunk-scroller');\r
+        if (sc) bindFeedChunkScrollChain(sc);\r
+    });\r
+    el.querySelectorAll('.process-aggregate').forEach(function (agg) {\r
+        bindProcessAggregateInteractions(agg);\r
+    });\r
+    el.querySelectorAll('.process-aggregate-brief').forEach(bindProcessBriefScrollChain);\r
+}\r
+\r
+function finalizeExistingLogLayout(root) {\r
+    const el = root || getVisibleChatStream() || chatContainer;\r
+    if (!el) return;\r
+    el.querySelectorAll('.feed-chunk').forEach(function (ch) {\r
+        scheduleFeedChunkOverflowRefresh(ch);\r
+    });\r
+    el.querySelectorAll('.process-aggregate').forEach(function (agg) {\r
+        if (!agg.classList.contains('subagent-grid-card')) bindProcessAggregateHeightButton(agg);\r
+        if (agg.classList.contains('is-collapsed')) updateProcessBrief(agg);\r
+        refreshAggregateStatsSmart(agg);\r
+    });\r
+}\r
+\r
+function bindExistingLogs(root) {\r
+    bindExistingLogInteractions(root);\r
+    finalizeExistingLogLayout(root);\r
+}\r
+\r
+function appendLog(ctx, content, type, runSessionId, reactIter) {\r
+    if (type == null) type = 'log-entry';\r
+    const tStr = (content == null) ? '' : String(content);\r
+    if ((type === 'llm-reasoning' || type === 'llm-response') && !trimSurroundingBlankLines(tStr).trim()) return null;\r
+    var so = null;\r
+    if (reactIter != null && Number.isFinite(Number(reactIter))) so = { reactIter: Number(reactIter) };\r
+    return createProcessFeedRow(ctx, type, tStr, so, runSessionId);\r
+}\r
+\r
+function getLastProcessFeedItem(body) {\r
+    if (!body || !body.querySelectorAll) return null;\r
+    var rows = body.querySelectorAll('.feed-item');\r
+    return rows && rows.length ? rows[rows.length - 1] : null;\r
+}\r
+\r
+function appendModelSwitchStatus(ctx, event, runSessionId) {\r
+    if (!ctx) return null;\r
+    var content = String((event && event.content) || '').trim();\r
+    if (!content) return null;\r
+    var sc = ctx._modelSwitchStatusScroller;\r
+    var body = getProcessBody(ctx);\r
+    var lastRow = getLastProcessFeedItem(body);\r
+    var row = sc && sc.isConnected && sc.closest ? sc.closest('.feed-item') : null;\r
+    var canReuse = !!(row && row === lastRow && row.getAttribute('data-model-switch-status') === '1');\r
+    if (!canReuse && lastRow && lastRow.getAttribute('data-model-switch-status') === '1') {\r
+        sc = lastRow.querySelector('.feed-chunk-scroller');\r
+        row = lastRow;\r
+        canReuse = !!(sc && sc.isConnected);\r
+    }\r
+    if (!canReuse) {\r
+        sc = appendLog(ctx, content, 'status', runSessionId);\r
+        var newRow = sc && sc.closest ? sc.closest('.feed-item') : null;\r
+        if (newRow) newRow.setAttribute('data-model-switch-status', '1');\r
+        ctx._modelSwitchStatusScroller = sc;\r
+        return sc;\r
+    }\r
+    var prev = (typeof getUiRuntimeText === 'function' ? getUiRuntimeText(sc) : String(sc.textContent || '')).trim();\r
+    if (prev.indexOf(content) < 0) {\r
+        var merged = truncateLogTextForUi(prev ? (prev + '\\n' + content) : content);\r
+        if (typeof setUiRuntimeText === 'function') setUiRuntimeText(sc, merged);\r
+        else sc.textContent = merged;\r
+    }\r
+    var ch = sc.closest && sc.closest('.feed-chunk');\r
+    if (ch) {\r
+        refreshFeedChunkOverflow(ch);\r
+        requestAnimationFrame(function () { refreshFeedChunkOverflow(ch); });\r
+    }\r
+    scrollContentAreaIfFollow(ctx, runSessionId, 'text');\r
+    return sc;\r
+}\r
+\r
+function flushProgressDeltaText(ctx, logType) {\r
+    if (!ctx || !ctx.progressStream) return;\r
+    var st = ctx.progressStream[logType];\r
+    if (!st) return;\r
+    if (st.flushRaf) {\r
+        cancelAnimationFrame(st.flushRaf);\r
+        st.flushRaf = 0;\r
+    }\r
+    if (st.pending && st.scroller && st.scroller.isConnected) {\r
+        var current = typeof getUiRuntimeText === 'function' ? getUiRuntimeText(st.scroller) : String(st.scroller.textContent || '');\r
+        var merged = truncateLogTextForUi(current + st.pending);\r
+        if (typeof setUiRuntimeText === 'function') setUiRuntimeText(st.scroller, merged);\r
+        else st.scroller.textContent = merged;\r
+        var ch = st.scroller.closest('.feed-chunk');\r
+        if (ch) refreshFeedChunkOverflow(ch);\r
+    }\r
+    st.pending = '';\r
+}\r
+\r
+function finalizeProgressStreamChunks(ctx) {\r
+    if (!ctx) return;\r
+    var types = ctx.progressStream ? Object.keys(ctx.progressStream) : [];\r
+    for (var i = 0; i < types.length; i += 1) flushProgressDeltaText(ctx, types[i]);\r
+    var streamRoot = (ctx._subagentBody && ctx._subagentBody.isConnected) ? ctx._subagentBody : ctx.stream;\r
+    if (streamRoot) {\r
+        streamRoot.querySelectorAll('.feed-item .feed-chunk.is-streaming').forEach(function (ch) {\r
+            ch.classList.remove('is-streaming');\r
+            refreshFeedChunkOverflow(ch);\r
+        });\r
+    }\r
+    ctx.progressStream = {};\r
+}\r
+\r
+function discardProgressStreamChunks(ctx) {\r
+    if (!ctx) return;\r
+    var streamRoot = (ctx._subagentBody && ctx._subagentBody.isConnected) ? ctx._subagentBody : ctx.stream;\r
+    var rows = [];\r
+    var types = ctx.progressStream ? Object.keys(ctx.progressStream) : [];\r
+    for (var i = 0; i < types.length; i += 1) {\r
+        var st = ctx.progressStream[types[i]];\r
+        if (!st) continue;\r
+        if (st.flushRaf) cancelAnimationFrame(st.flushRaf);\r
+        var row = st.scroller && st.scroller.closest ? st.scroller.closest('.feed-item') : null;\r
+        if (row && rows.indexOf(row) < 0) rows.push(row);\r
+    }\r
+    if (streamRoot) {\r
+        streamRoot.querySelectorAll(\r
+            '.feed-item[data-log-type="context-trim"] .feed-chunk.is-streaming, '\r
+            + '.feed-item[data-log-type="context-summary"] .feed-chunk.is-streaming, '\r
+            + '.feed-item[data-log-type="key-context"] .feed-chunk.is-streaming'\r
+        ).forEach(function (chunk) {\r
+            var row = chunk.closest('.feed-item');\r
+            if (row && rows.indexOf(row) < 0) rows.push(row);\r
+        });\r
+    }\r
+    rows.forEach(function (row) {\r
+        if (row && row.parentNode) row.remove();\r
+    });\r
+    ctx.progressStream = {};\r
+    if (ctx.progressScrollers) {\r
+        ['context-trim', 'context-summary', 'key-context'].forEach(function (type) {\r
+            var scroller = ctx.progressScrollers[type];\r
+            if (!scroller || !scroller.isConnected) delete ctx.progressScrollers[type];\r
+        });\r
+    }\r
+}\r
+\r
+function scheduleProgressDeltaFlush(ctx, runSessionId, logType) {\r
+    if (!ctx || !ctx.progressStream) return;\r
+    var st = ctx.progressStream[logType];\r
+    if (!st || st.flushRaf) return;\r
+    st.flushRaf = requestAnimationFrame(function () {\r
+        st.flushRaf = 0;\r
+        flushProgressDeltaText(ctx, logType);\r
+        followStreamProcessScroll(ctx, runSessionId, 'text');\r
+    });\r
+}\r
+\r
+/** 每个压缩阶段（裁剪/压缩/要点）共用一条 feed，状态行与正文在同一 scroller */\r
+function ensureProgressScroller(ctx, logType, runSessionId) {\r
+    if (!ctx) return null;\r
+    if (!ctx.progressScrollers) ctx.progressScrollers = {};\r
+    var sc = ctx.progressScrollers[logType];\r
+    if (sc && sc.isConnected) return sc;\r
+    sc = appendLog(ctx, '', logType, runSessionId);\r
+    if (sc) ctx.progressScrollers[logType] = sc;\r
+    return sc;\r
+}\r
+\r
+/** 落盘正文：替换流式段或追加到状态行后，与刷新后 ui_events 回放一致 */\r
+function applyProgressPersistedBody(ctx, content, logType, runSessionId) {\r
+    if (!ctx) return;\r
+    var text = String(content || '').trim();\r
+    if (!text) return;\r
+    var st = ctx.progressStream && ctx.progressStream[logType];\r
+    var bodyOffset = st && typeof st.bodyOffset === 'number' ? st.bodyOffset : null;\r
+    var hadStream = bodyOffset != null;\r
+    finalizeProgressStreamForType(ctx, logType);\r
+    var sc = ensureProgressScroller(ctx, logType, runSessionId);\r
+    if (!sc) return;\r
+    var prevTxt = typeof getUiRuntimeText === 'function' ? getUiRuntimeText(sc) : (sc.textContent || '');\r
+    var merged;\r
+    if (hadStream) {\r
+        merged = prevTxt.slice(0, bodyOffset).replace(/\\s+$/, '') + '\\n\\n' + text;\r
+    } else if (prevTxt.trim()) {\r
+        merged = prevTxt.trim() + '\\n\\n' + text;\r
+    } else {\r
+        merged = text;\r
+    }\r
+    var persistedText = truncateLogTextForUi(merged);\r
+    if (typeof setUiRuntimeText === 'function') setUiRuntimeText(sc, persistedText);\r
+    else sc.textContent = persistedText;\r
+    var chSet = sc.closest('.feed-chunk');\r
+    if (chSet) {\r
+        chSet.classList.remove('is-streaming');\r
+        refreshFeedChunkOverflow(chSet);\r
+        requestAnimationFrame(function () { refreshFeedChunkOverflow(chSet); });\r
+    }\r
+    ctx.progressScrollers[logType] = sc;\r
+    scrollContentAreaIfFollow(ctx, runSessionId, 'text');\r
+}\r
+\r
+/** 压缩/要点执行端输出：在同一 feed 内流式追加正文（不另起 feed 块） */\r
+function appendProgressStreamDelta(ctx, delta, logType, runSessionId) {\r
+    if (!ctx || !delta) return;\r
+    if (!ctx.progressStream) ctx.progressStream = {};\r
+    var piece = String(delta);\r
+    if (!piece) return;\r
+    var sc = ensureProgressScroller(ctx, logType, runSessionId);\r
+    if (!sc) return;\r
+    var chunk = sc.closest('.feed-chunk');\r
+    if (chunk) chunk.classList.add('is-streaming');\r
+    var st = ctx.progressStream[logType];\r
+    if (!st) {\r
+        var sourceText = typeof getUiRuntimeText === 'function' ? getUiRuntimeText(sc) : (sc.textContent || '');\r
+        var head = sourceText.trim();\r
+        var bodyOffset = sourceText.length;\r
+        if (head) {\r
+            var streamHead = head + '\\n\\n';\r
+            if (typeof setUiRuntimeText === 'function') setUiRuntimeText(sc, streamHead);\r
+            else sc.textContent = streamHead;\r
+            bodyOffset = streamHead.length;\r
+        }\r
+        st = { scroller: sc, pending: '', flushRaf: 0, bodyOffset: bodyOffset };\r
+        ctx.progressStream[logType] = st;\r
+    }\r
+    st.pending += piece;\r
+    scheduleProgressDeltaFlush(ctx, runSessionId, logType);\r
+}\r
+\r
+/** 同类型进度行合并追加，实现裁剪/压缩/要点分轨流式展示 */\r
+function appendProgressLog(ctx, content, logType, runSessionId) {\r
+    if (!ctx) return;\r
+    finalizeProgressStreamForType(ctx, logType);\r
+    if (!ctx.progressScrollers) ctx.progressScrollers = {};\r
+    var line = String(content || '');\r
+    if (!line.trim()) return;\r
+    var prev = ctx.progressScrollers[logType];\r
+    if (prev && prev.isConnected) {\r
+        var prevTxt = typeof getUiRuntimeText === 'function' ? getUiRuntimeText(prev) : (prev.textContent || '');\r
+        var progressText = truncateLogTextForUi(prevTxt ? (prevTxt + '\\n' + line) : line);\r
+        if (typeof setUiRuntimeText === 'function') setUiRuntimeText(prev, progressText);\r
+        else prev.textContent = progressText;\r
+        var chMerge = prev.closest('.feed-chunk');\r
+        if (chMerge) {\r
+            refreshFeedChunkOverflow(chMerge);\r
+            requestAnimationFrame(function () { refreshFeedChunkOverflow(chMerge); });\r
+        }\r
+        scrollContentAreaIfFollow(ctx, runSessionId, 'text');\r
+        return;\r
+    }\r
+    var sc = ensureProgressScroller(ctx, logType, runSessionId);\r
+    if (!sc) return;\r
+    var firstProgressText = truncateLogTextForUi(line);\r
+    if (typeof setUiRuntimeText === 'function') setUiRuntimeText(sc, firstProgressText);\r
+    else sc.textContent = firstProgressText;\r
+    var chNew = sc.closest('.feed-chunk');\r
+    if (chNew) {\r
+        refreshFeedChunkOverflow(chNew);\r
+        requestAnimationFrame(function () { refreshFeedChunkOverflow(chNew); });\r
+    }\r
+    scrollContentAreaIfFollow(ctx, runSessionId);\r
+}\r
+\r
+function finalizeProgressStreamForType(ctx, logType) {\r
+    if (!ctx || !logType) return;\r
+    flushProgressDeltaText(ctx, logType);\r
+    if (ctx.progressStream && ctx.progressStream[logType]) {\r
+        var st = ctx.progressStream[logType];\r
+        if (st.scroller && st.scroller.isConnected) {\r
+            var ch = st.scroller.closest('.feed-chunk');\r
+            if (ch) {\r
+                ch.classList.remove('is-streaming');\r
+                refreshFeedChunkOverflow(ch);\r
+            }\r
+        }\r
+        delete ctx.progressStream[logType];\r
+    }\r
+}\r
+\r
+/* ── Subagent 浮层 / 过程块 ── */\r
 `,jr=`var subagentPanelOpen = false;
 var subagentPanelBound = false;
 var subagentDockExpanded = false;
@@ -15277,7 +15294,6 @@ function setHumanQuestionStep(card, index) {
     if (progress) progress.textContent = '问题 ' + (next + 1) + '/' + panes.length + ' · ' + String(panes[next].dataset.questionHeader || '');
     var back = card.querySelector('.human-back-btn');
     var confirmBtn = card.querySelector('.human-confirm-btn');
-    var submit = card.querySelector('.human-submit-btn');
     var multipleQuestions = panes.length > 1;
     var allComplete = panes.every(isHumanQuestionPaneComplete);
     if (back) {
@@ -15285,8 +15301,12 @@ function setHumanQuestionStep(card, index) {
         back.classList.toggle('hidden', !multipleQuestions);
         back.disabled = next === 0;
     }
-    if (confirmBtn) confirmBtn.classList.toggle('hidden', allComplete);
-    if (submit) submit.classList.toggle('hidden', !allComplete);
+    // 单按钮语义：未全部回答时是「确认」，全部回答完后变为「提交答案」
+    if (confirmBtn) {
+        confirmBtn.textContent = allComplete ? '提交答案' : '确认';
+        confirmBtn.classList.toggle('is-ready', allComplete);
+        confirmBtn.title = allComplete ? '全部问题已回答，提交答案' : '确认当前回答并进入下一题';
+    }
     var shortcut = panes[next].querySelector('.human-other-shortcut');
     if (shortcut) shortcut.textContent = allComplete ? 'Ctrl/Cmd + Enter 提交答案' : 'Ctrl/Cmd + Enter 确认回答';
     if (card.dataset.draftReady === '1') persistHumanInteractionDraft(card);
@@ -15433,13 +15453,12 @@ function createHumanQuestionCard(record, sessionId) {
     });
     var confirmButton = humanElement('button', 'human-primary-btn human-confirm-btn', '确认');
     confirmButton.type = 'button';
-    confirmButton.addEventListener('click', function () { confirmCurrentHumanQuestion(card); });
-    var submit = humanElement('button', 'human-primary-btn human-submit-btn', '提交答案');
-    submit.type = 'button';
-    submit.addEventListener('click', function () { void submitHumanQuestion(card); });
+    confirmButton.addEventListener('click', function () {
+        if (allHumanQuestionsComplete(card)) void submitHumanQuestion(card);
+        else confirmCurrentHumanQuestion(card);
+    });
     nav.appendChild(back);
     nav.appendChild(confirmButton);
-    nav.appendChild(submit);
     actions.appendChild(skip);
     actions.appendChild(nav);
     card.appendChild(actions);
@@ -15486,7 +15505,7 @@ function setHumanInteractionSubmitting(card, submitting, label) {
         if (!status.dataset.defaultLabel) status.dataset.defaultLabel = status.textContent || '';
         status.textContent = submitting ? (label || '正在提交…') : status.dataset.defaultLabel;
     }
-    var primary = card.querySelector('.human-submit-btn, .human-allow-btn');
+    var primary = card.querySelector('.human-confirm-btn, .human-allow-btn');
     if (!primary) return;
     if (!primary.dataset.defaultLabel) primary.dataset.defaultLabel = primary.textContent || '';
     primary.textContent = submitting ? (label || '正在提交…') : primary.dataset.defaultLabel;
@@ -16779,1677 +16798,1706 @@ function renderEvent(ctx, event, eventIndex, runSessionId) {
         if (fallbackContent.trim()) appendLog(ctx, fallbackContent, 'log-entry', runSessionId);
     }
 }
-`,Wr=`\uFEFFfunction setSendButtonState() {
-    syncMessageInputPlaceholder();
-    sendBtn.disabled = false;
-    const uploadBusy = isChatFileUploadBusy();
-    const newSessionPreflight = !currentSessionId && optimisticNewSessionRun;
-    if (uploadBusy) {
-        sendBtn.textContent = '上传中';
-        sendBtn.classList.remove('is-stop');
-        sendBtn.classList.remove('is-followup');
-        sendBtn.disabled = true;
-        return;
-    }
-    if (isSessionRunning(currentSessionId) || newSessionPreflight) {
-        const run = newSessionPreflight || (typeof getSessionRunState === 'function' ? getSessionRunState(currentSessionId) : null);
-        const suppressFollowup = !!(run && run.suppressFollowupButton);
-        const hasDraft = (typeof inputHasSendableText === 'function')
-            ? inputHasSendableText()
-            : !!(messageInput && String(messageInput.value || '').trim());
-        const followupEnabled = (typeof isMyAgentFeatureEnabled === 'function') && isMyAgentFeatureEnabled('followupRestart', false);
-        sendBtn.innerHTML = (followupEnabled && hasDraft && !suppressFollowup) ? '追问' : '停止 <span class="loader" aria-hidden="true"></span>';
-        sendBtn.classList.add('is-stop');
-        sendBtn.classList.toggle('is-followup', followupEnabled && hasDraft && !suppressFollowup);
-    } else {
-        sendBtn.textContent = '发送';
-        sendBtn.classList.remove('is-stop');
-        sendBtn.classList.remove('is-followup');
-        sendBtn.disabled = false;
-    }
-}
-
-const MESSAGE_INPUT_PLACEHOLDER_DEFAULT = '说说你想做什么…（Enter 发送 · Shift/Ctrl/Cmd + Enter 换行）';
-const MESSAGE_INPUT_PLACEHOLDER_RUNNING = 'Agent运行中，输入后续任务';
-const MESSAGE_INPUT_PLACEHOLDER_QUEUED = '按 Enter 发送刚加入或第一条待发送任务';
-
-function syncMessageInputPlaceholder() {
-    if (!messageInput) return;
-    var queue = currentSessionId && typeof getFollowupQueue === 'function'
-        ? getFollowupQueue(currentSessionId)
-        : [];
-    var running = !!(optimisticNewSessionRun || isSessionRunning(currentSessionId));
-    var value = queue.some(function (item) { return item && !item.status; })
-        ? MESSAGE_INPUT_PLACEHOLDER_QUEUED
-        : (running ? MESSAGE_INPUT_PLACEHOLDER_RUNNING : MESSAGE_INPUT_PLACEHOLDER_DEFAULT);
-    messageInput.placeholder = typeof translateUiString === 'function'
-        ? translateUiString(value)
-        : value;
-}
-
-function isChatFileUploadBusy() {
-    return !!(messageInput && messageInput.dataset.fileUploadBusy === '1');
-}
-
-document.addEventListener('myagent:language-change', syncMessageInputPlaceholder);
-document.addEventListener('myagent:language-change', function () {
-    if (typeof renderSessionListIfChanged === 'function') renderSessionListIfChanged(true);
-});
-
-async function requestInterrupt(sessionId, runId, reason) {
-    if (!sessionId) return;
-    try {
-        await fetch('/sessions/' + sessionId + '/interrupt', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ run_id: runId || '', reason: reason || '' }),
-        });
-    }
-    catch (e) { /* ignore */ }
-}
-
-function pauseCurrentRun() {
-    if (!currentSessionId) {
-        if (optimisticNewSessionRun) {
-            markRunAbortReason(optimisticNewSessionRun, 'user');
-            try { optimisticNewSessionRun.controller.abort(); } catch (e) { /* ignore */ }
-            optimisticNewSessionRun = null;
-            setSendButtonState();
-        }
-        return;
-    }
-    const run = getSessionRunState(currentSessionId);
-    const sid = currentSessionId;
-    const activeInfo = sessionStore.getActiveRunInfo(sid) || {};
-    const runId = run && run.runId ? run.runId : (activeInfo.run_id || activeInfo.runId || '');
-    if (typeof markFollowupQueueManualOnly === 'function') markFollowupQueueManualOnly(sid);
-    suppressSessionServerStreamActive(sid);
-    if (!run) {
-        setSendButtonState();
-        syncSessionListIndicatorClasses();
-        renderSessionListIfChanged(false);
-        void requestInterrupt(sid, runId, 'user_button');
-        setTimeout(function () { reconcileRunStateFromServer({ silent: true, respectStopSuppress: true }); }, 3000);
-        return;
-    }
-    const ctx = run.ctx;
-    const reachedServer = run.submitted !== false;
-    /* 先同步 abort 本地 fetch 与从 sessionStore 摘除，UI 立即反映「已停止」状态；
-       后端 interrupt 走 fire-and-forget，避免被主线程阻塞时按钮响应卡顿。*/
-    abortSessionRun(sid, 'user');
-    setSendButtonState();
-    syncSessionListIndicatorClasses();
-    renderSessionListIfChanged(false);
-    appendLog(ctx, '已请求停止当前任务', 'status', sid);
-    sealProcessGroup(ctx);
-    if (reachedServer) void requestInterrupt(sid, runId, 'user_button');
-    setTimeout(function () { reconcileRunStateFromServer({ silent: true, respectStopSuppress: true }); }, 3000);
-}
-
-/** 在当前会话中定位最近一条用户消息并重新发送。返回 true 表示已触发展开发送。*/
-function resendLastUserMessage() {
-    if (!currentSessionId) return false;
-    if (isSessionRunning(currentSessionId)) return false;
-    var lastMsg = lastUserMessageBySession[currentSessionId];
-    if (!lastMsg || !String(lastMsg).trim()) {
-        var chatStream = getVisibleChatStream();
-        if (chatStream) {
-            var wraps = chatStream.querySelectorAll('.msg-wrap--user');
-            if (wraps.length) {
-                var lastWrap = wraps[wraps.length - 1];
-                lastMsg = messageRawMarkdown.get(lastWrap) || (lastWrap.querySelector('.message.user') && lastWrap.querySelector('.message.user').textContent);
-            }
-        }
-    }
-    if (!lastMsg || !String(lastMsg).trim()) {
-        lastMsg = draftBySession[currentSessionId];
-    }
-    if (!lastMsg || !String(lastMsg).trim()) return false;
-    messageInput.value = String(lastMsg);
-    rewriteInputWorkspacePaths();
-    autoResizeTextarea();
-    sendMessage();
-    return true;
-}
-
-function showLoading() {
-    resetSessionHistoryPaging();
-    clearTocForSessionLoad();
-    if (!getVisibleChatStream()) ensureVisibleChatStreamSlot();
-    const vs = getVisibleChatStream();
-    if (vs) emptyChatStreamKeepingStrip(vs);
-    const box = document.createElement('div');
-    box.className = 'skeleton';
-    box.id = 'chat-loading';
-    box.setAttribute('role', 'status');
-    box.innerHTML = ''
-        + '<div class="skeleton-page" aria-hidden="true">'
-        + '<div class="skeleton-mast"><span></span><span></span></div>'
-        + '<div class="skeleton-hero"><div class="skeleton-image"></div><div class="skeleton-column"><span></span><span></span><span></span><span></span></div></div>'
-        + '<div class="skeleton-grid"><div><span></span><span></span><span></span></div><div><span></span><span></span><span></span></div><div><span></span><span></span><span></span></div></div>'
-        + '</div><div class="skeleton-copy">加载中...</div>';
-    box.setAttribute('data-ui-tip', '加载会话');
-    bindUiHoverTip(box);
-    (getVisibleChatStream() || chatContainer).appendChild(box);
-    scrollToBottom();
-}
-
-function hideLoading() { const loader = document.getElementById('chat-loading'); if (loader) loader.remove(); }
-
-function sessionHasUnsentDraft(sessionId) {
-    if (!sessionId) return false;
-    var draft = Object.prototype.hasOwnProperty.call(draftBySession, sessionId)
-        ? draftBySession[sessionId]
-        : readStoredInputDraft(sessionId);
-    return !!String(draft || '').trim();
-}
-
-function syncSessionDraftBadge(itemDiv, sessionId) {
-    if (!itemDiv || !sessionId) return;
-    var badge = itemDiv.querySelector('.session-draft-badge');
-    if (!badge) return;
-    var visible = String(sessionId) !== String(currentSessionId || '') && sessionHasUnsentDraft(sessionId);
-    badge.hidden = !visible;
-    itemDiv.classList.toggle('has-unsent-draft', visible);
-}
-
-/** 只同步草稿标签，不重绘会话列表；传入 sessionId 时仅更新对应行。 */
-function syncSessionDraftBadges(sessionId) {
-    if (!sessionsList) return;
-    var targetId = sessionId ? String(sessionId) : '';
-    sessionsList.querySelectorAll('.session-item').forEach(function (div) {
-        var sid = String(div.dataset.sessionId || '');
-        if (!sid || (targetId && sid !== targetId)) return;
-        syncSessionDraftBadge(div, sid);
-    });
-}
-
-/** 根据 sessionStore / 服务端 stream_active / sessionUnreadComplete 更新红点、绿点 */
-function applySessionItemIndicators(itemDiv, sessionId, opts) {
-    opts = opts || {};
-    if (!itemDiv || !sessionId) return;
-    syncSessionDraftBadge(itemDiv, sessionId);
-    itemDiv.classList.remove('is-generating', 'is-unread-result', 'is-unread-failed');
-    var nameEl = itemDiv.querySelector('.session-name');
-    if (nameEl) nameEl.removeAttribute('data-ui-tip');
-    var sess = sessionStore.get(sessionId);
-    var localUnreadResult = sessionUnreadComplete.has(sessionId);
-    var hasUnreadResult = sess ? !!sess.unread_result : localUnreadResult;
-    var failed = !!(sess && sess.unread_result_status === 'failed');
-    var running = isSessionRunning(sessionId);
-    if (running) {
-        itemDiv.classList.add('is-generating');
-        if (hasUnreadResult) {
-            // A completed queued turn is still unread while the next pending
-            // turn is running. Combining the classes keeps the pulse animation
-            // but changes the dot to the result color.
-            itemDiv.classList.add(failed ? 'is-unread-failed' : 'is-unread-result');
-        }
-        if (nameEl) {
-            nameEl.setAttribute(
-                'data-ui-tip',
-                hasUnreadResult
-                    ? (failed ? '已有任务失败，仍在生成' : '已有任务完成，仍在生成')
-                    : '生成中'
-            );
-        }
-    } else {
-        if (!hasUnreadResult) return;
-        itemDiv.classList.add(failed ? 'is-unread-failed' : 'is-unread-result');
-        if (nameEl) nameEl.setAttribute('data-ui-tip', failed ? '任务失败，点击查看' : '有新回复，点击查看');
-    }
-    if (nameEl) bindUiHoverTip(nameEl);
-}
-
-/** 立即刷新侧栏全部指示点与当前选中项；不依赖 loadSessions 网络回流，与是否切换会话无关 */
-function syncSessionListIndicatorClasses() {
-    if (!sessionsList) return;
-    sessionsList.querySelectorAll('.session-item').forEach(function (div) {
-        var el = div.querySelector('.session-name[data-id]');
-        if (!el) return;
-        var sid = el.getAttribute('data-id');
-        div.classList.toggle('active', !!sid && sid === currentSessionId);
-        applySessionItemIndicators(div, sid);
-    });
-    if (typeof updateAllHumanInteractionSessionBadges === 'function') updateAllHumanInteractionSessionBadges();
-}
-
-function sessionSectionExpanded(key) {
-    try {
-        return localStorage.getItem(LS_SESSION_SECTION_PREFIX + key) !== '0';
-    } catch (e) {
-        return true;
-    }
-}
-function persistSessionSectionExpanded(key, expanded) {
-    try {
-        localStorage.setItem(LS_SESSION_SECTION_PREFIX + key, expanded ? '1' : '0');
-    } catch (e) { /* ignore */ }
-}
-function closeAllSessionMenus() {
-    document.querySelectorAll('.session-more-wrap.is-open').forEach(function (w) {
-        w.classList.remove('is-open');
-        var b = w.querySelector('.session-more-btn');
-        if (b) b.setAttribute('aria-expanded', 'false');
-    });
-}
-(function bindSessionMenuDocumentCloserOnce() {
-    if (window.__myAgentSessionMenuCloser) return;
-    window.__myAgentSessionMenuCloser = true;
-    document.addEventListener('click', closeAllSessionMenus);
-})();
-
-(function bindSessionListDelegatedSwitcherOnce() {
-    if (!sessionsList || window.__myAgentSessionListSwitcher) return;
-    window.__myAgentSessionListSwitcher = true;
-    sessionsList.addEventListener('click', function (e) {
-        var target = e.target;
-        if (!target || !target.closest) return;
-        if (target.closest('button, .session-more-wrap, .session-more-menu, input, textarea, a')) return;
-        if (target.isContentEditable) return;
-        var row = target.closest('.session-item');
-        if (!row || !sessionsList.contains(row)) return;
-        var sid = row.dataset.sessionId;
-        if (!sid) {
-            var nameEl = row.querySelector('.session-name[data-id]');
-            sid = nameEl ? nameEl.getAttribute('data-id') : '';
-        }
-        if (sid && sid !== currentSessionId) {
-            Promise.resolve(switchSession(sid)).catch(function (err) {
-                console.error('切换会话失败:', err);
-            });
-        }
-    });
-})();
-
-function buildSessionMoreMenuMarkup() {
-    return '<div class="session-more-wrap">'
-        + '<button type="button" class="session-more-btn" aria-label="更多操作" aria-expanded="false" aria-haspopup="true" data-ui-tip="更多">'
-        + '<span class="session-more-dots" aria-hidden="true"><span></span><span></span><span></span></span></button>'
-        + '<div class="session-more-menu" role="menu">'
-        + '<button type="button" class="session-menu-pin" role="menuitem"></button>'
-        + '<button type="button" class="session-menu-todo" role="menuitem"></button>'
-        + '<button type="button" class="session-menu-rename" role="menuitem">重命名</button>'
-        + '<button type="button" class="session-menu-archive" role="menuitem"></button>'
-        + '<div class="session-menu-separator" role="separator"></div>'
-        + '<button type="button" class="session-menu-export" role="menuitem">导出会话</button>'
-        + '<button type="button" class="session-menu-delete" role="menuitem">删除会话</button>'
-        + '</div></div>';
-}
-
-function findSessionForActions(sessionId, fallback) {
-    var sid = String(sessionId || '');
-    var current = sessionStore.get(sid);
-    if (current) return current;
-    if (sessionStore.archivedLoaded) {
-        current = (sessionStore.archivedSessions || []).find(function (item) {
-            return item && String(item.id) === sid;
-        });
-    }
-    return current || fallback || null;
-}
-
-function syncSessionMenuLabels(wrap, sess) {
-    if (!wrap || !sess) return;
-    wrap._sessionMenuSession = sess;
-    var pin = wrap.querySelector('.session-menu-pin');
-    var todo = wrap.querySelector('.session-menu-todo');
-    var archive = wrap.querySelector('.session-menu-archive');
-    if (pin) pin.textContent = sess.pinned ? '取消置顶' : '置顶会话';
-    if (todo) todo.textContent = sess.todo ? '取消待办' : '设为待办';
-    if (archive) archive.textContent = sess.archived ? '取消归档' : '归档会话';
-}
-
-async function toggleSessionPinnedFromMenu(sess) {
-    try {
-        const formData = new FormData();
-        const nextPinned = !sess.pinned;
-        const previous = applyOptimisticSessionUpdate(sess.id, { pinned: nextPinned });
-        formData.append('pinned', nextPinned ? 'true' : 'false');
-        const response = await fetch('/sessions/' + encodeURIComponent(sess.id) + '/pin', { method: 'PUT', body: formData });
-        if (!response.ok) {
-            if (previous) applyOptimisticSessionUpdate(sess.id, previous);
-            throw new Error('pin failed: ' + response.status);
-        }
-        await refreshSingleSessionRow(sess.id);
-    } catch (err) { console.error('置顶失败', err); }
-}
-
-async function toggleSessionTodoFromMenu(sess) {
-    try {
-        const formData = new FormData();
-        const nextTodo = !sess.todo;
-        const previous = applyOptimisticSessionUpdate(sess.id, { todo: nextTodo });
-        formData.append('todo', nextTodo ? 'true' : 'false');
-        const response = await fetch('/sessions/' + encodeURIComponent(sess.id) + '/todo', { method: 'PUT', body: formData });
-        if (!response.ok) {
-            if (previous) applyOptimisticSessionUpdate(sess.id, previous);
-            throw new Error('todo failed: ' + response.status);
-        }
-        await refreshSingleSessionRow(sess.id);
-    } catch (err) { console.error('待办设置失败', err); }
-}
-
-async function toggleSessionArchivedFromMenu(sess) {
-    try {
-        const formData = new FormData();
-        const nextArchived = !sess.archived;
-        const previous = applyOptimisticSessionUpdate(sess.id, { archived: nextArchived });
-        formData.append('archived', nextArchived ? 'true' : 'false');
-        const response = await fetch('/sessions/' + encodeURIComponent(sess.id) + '/archive', { method: 'PUT', body: formData });
-        if (!response.ok) {
-            if (previous) applyOptimisticSessionUpdate(sess.id, previous);
-            throw new Error('archive failed: ' + response.status);
-        }
-        await refreshSingleSessionRow(sess.id);
-        if (!nextArchived && sessionStore.archivedLoaded) {
-            await loadArchivedSessions({ background: true, refresh: true, forceRender: true });
-        }
-    } catch (err) { console.error('归档失败', err); }
-}
-
-async function renameSessionFromMenu(sess) {
-    var requestedName = await openUiModal({
-        title: '重命名会话',
-        subtitle: '编辑会话名称',
-        message: '',
-        inputLabel: '会话名称',
-        inputValue: String(sess.name || ''),
-        inputMaxLength: 160,
-        inputRequired: true,
-        confirmText: '保存名称',
-        cancelText: '取消',
-    });
-    if (typeof requestedName !== 'string') return;
-    var newName = requestedName.trim().slice(0, 160);
-    if (!newName || newName === String(sess.name || '')) return;
-    const previous = applyOptimisticSessionUpdate(sess.id, { name: newName });
-    if (currentSessionId === sess.id) updateSessionTitle();
-    try {
-        const formData = new FormData();
-        formData.append('name', newName);
-        const response = await fetch('/sessions/' + encodeURIComponent(sess.id) + '/name', { method: 'PUT', body: formData });
-        if (!response.ok) throw new Error('rename failed: ' + response.status);
-        await refreshSingleSessionRow(sess.id);
-        if (currentSessionId === sess.id) updateSessionTitle();
-    } catch (err) {
-        console.error('重命名失败', err);
-        if (previous) applyOptimisticSessionUpdate(sess.id, previous);
-        if (currentSessionId === sess.id) updateSessionTitle();
-    }
-}
-
-async function exportSessionFromMenu(sess) {
-    var confirmed = await openUiModal({
-        title: '导出会话',
-        subtitle: '下载会话文件',
-        message: '将会话「' + String(sess.name || '未命名') + '」对应的 session 文件夹压缩为 ZIP 并下载。',
-        confirmText: '确认导出',
-        cancelText: '取消',
-    });
-    if (!confirmed) return;
-    var link = document.createElement('a');
-    link.href = '/sessions/' + encodeURIComponent(sess.id) + '/export';
-    link.download = 'session-' + String(sess.id || 'export') + '.zip';
-    link.hidden = true;
-    document.body.appendChild(link);
-    link.click();
-    link.remove();
-}
-
-async function deleteSessionFromMenu(sess, rowDiv) {
-    const okDel = await openUiModal({
-        title: '删除会话',
-        subtitle: '此操作不可恢复',
-        message: '确定删除会话「' + String(sess.name || '未命名') + '」吗？其中的消息与记录将被移除。',
-        danger: true,
-        confirmText: '删除会话',
-        cancelText: '取消',
-    });
-    if (!okDel) return;
-    const wasArchivedLoaded = sessionStore.archivedLoaded;
-    const deletedSessionId = String(sess.id || '');
-    const nextSession = sessionStore.list().find(function (s) {
-        return s && s.id && String(s.id) !== deletedSessionId && !s.archived;
-    }) || null;
-    sessionStore.markDeletedSession(deletedSessionId);
-    if (wasArchivedLoaded && sess.archived) {
-        const archivedBeforeDelete = sessionStore.archivedSessions || [];
-        const deletedArchiveIndex = archivedBeforeDelete.findIndex(function (s) {
-            return s && String(s.id) === deletedSessionId;
-        });
-        sessionStore.setArchivedLoaded(archivedBeforeDelete.filter(function (s) {
-            return s && String(s.id) !== deletedSessionId;
-        }), {
-            visibleCount: Math.max(
-                0,
-                sessionStore.archivedVisibleCount
-                    - (deletedArchiveIndex >= 0 && deletedArchiveIndex < sessionStore.archivedVisibleCount ? 1 : 0)
-            ),
-            totalCount: Math.max(0, sessionStore.archivedCount - 1),
-        });
-        syncArchivedSessionStateFromStore();
-    }
-    renderSessionListIfChanged(true);
-    if (rowDiv && rowDiv.parentNode) rowDiv.remove();
-    sessionUnreadComplete.delete(deletedSessionId);
-    scheduleTitleGenerationRefresh(deletedSessionId, false);
-    persistSessionUnread();
-    delete draftBySession[deletedSessionId];
-    removeStoredInputDraft(deletedSessionId);
-    if (typeof removeStoredFollowupQueue === 'function') removeStoredFollowupQueue(deletedSessionId);
-    delete lastUserMessageBySession[deletedSessionId];
-    clearContextStateForSession(deletedSessionId);
-    if (typeof discardCachedSessionStream === 'function') discardCachedSessionStream(deletedSessionId);
-    if (isSessionRunning(sess.id)) {
-        const r = abortSessionRun(sess.id, 'delete');
-        if (r && r.ctx && r.ctx.stream && r.ctx.stream.parentNode) r.ctx.stream.remove();
-        setSendButtonState();
-        syncSessionListIndicatorClasses();
-    }
-    if (currentSessionId === deletedSessionId) {
-        if (nextSession) await switchSession(nextSession.id);
-        else await createNewSession();
-    }
-    void requestInterrupt(deletedSessionId, '', 'session_deleted');
-    void fetch('/sessions/' + encodeURIComponent(deletedSessionId), { method: 'DELETE' })
-        .then(function (resp) {
-            if (!resp.ok) throw new Error('delete failed: ' + resp.status);
-        })
-        .catch(function (err) {
-            console.error('删除会话失败:', err);
-            sessionStore.clearDeletedSessionTombstone(deletedSessionId);
-            void loadSessions({ skipArchivedRefresh: true });
-            if (wasArchivedLoaded) void loadArchivedSessions({ background: true });
-        });
-}
-
-function bindSessionActionMenu(wrap, getSession, rowDiv) {
-    if (!wrap || wrap.dataset.sessionMenuBound === '1') return;
-    wrap.dataset.sessionMenuBound = '1';
-    var moreBtn = wrap.querySelector('.session-more-btn');
-    if (moreBtn) {
-        bindUiHoverTip(moreBtn);
-        moreBtn.addEventListener('click', function (e) {
-            e.stopPropagation();
-            var wasOpen = wrap.classList.contains('is-open');
-            closeAllSessionMenus();
-            var sess = getSession();
-            if (!sess) return;
-            syncSessionMenuLabels(wrap, sess);
-            if (!wasOpen) {
-                wrap.classList.add('is-open');
-                moreBtn.setAttribute('aria-expanded', 'true');
-            }
-        });
-    }
-    wrap.addEventListener('click', function (e) {
-        var target = e.target && e.target.closest ? e.target.closest('[role="menuitem"]') : null;
-        if (!target || !wrap.contains(target)) return;
-        var handler = target.classList.contains('session-menu-pin') ? toggleSessionPinnedFromMenu
-            : target.classList.contains('session-menu-todo') ? toggleSessionTodoFromMenu
-                : target.classList.contains('session-menu-rename') ? renameSessionFromMenu
-                    : target.classList.contains('session-menu-archive') ? toggleSessionArchivedFromMenu
-                        : target.classList.contains('session-menu-export') ? exportSessionFromMenu
-                            : target.classList.contains('session-menu-delete') ? deleteSessionFromMenu
-                                : null;
-        if (!handler) return;
-        e.stopPropagation();
-        closeAllSessionMenus();
-        var sess = getSession();
-        if (!sess) return;
-        Promise.resolve(handler(sess, rowDiv)).catch(function (err) {
-            console.error('会话菜单操作失败:', err);
-        });
-    });
-}
-
-var titlebarSessionMenuSnapshot = null;
-
-function getTitlebarSessionForActions(host, wrap) {
-    var sessionId = (host && host.dataset.sessionId) || currentSessionId;
-    return findSessionForActions(sessionId, wrap && wrap._sessionMenuSession)
-        || titlebarSessionMenuSnapshot;
-}
-
-function syncTitlebarSessionMenu(sess) {
-    var host = document.getElementById('breadcrumb-session-actions');
-    if (!host) return;
-    titlebarSessionMenuSnapshot = sess ? Object.assign({}, titlebarSessionMenuSnapshot || {}, sess) : null;
-    host.dataset.sessionId = titlebarSessionMenuSnapshot ? String(titlebarSessionMenuSnapshot.id || '') : '';
-    host.classList.toggle('hidden', !sess);
-    var wrap = host.querySelector('.session-more-wrap');
-    if (wrap && titlebarSessionMenuSnapshot) syncSessionMenuLabels(wrap, titlebarSessionMenuSnapshot);
-}
-
-(function mountTitlebarSessionMenu() {
-    var host = document.getElementById('breadcrumb-session-actions');
-    if (!host || host.dataset.sessionMenuMounted === '1') return;
-    host.dataset.sessionMenuMounted = '1';
-    host.innerHTML = buildSessionMoreMenuMarkup();
-    var wrap = host.querySelector('.session-more-wrap');
-    bindSessionActionMenu(wrap, function () {
-        return getTitlebarSessionForActions(host, wrap);
-    }, null);
-    syncTitlebarSessionMenu(currentSessionId ? findSessionForActions(currentSessionId, null) : null);
-})();
-
-/** 创建并绑定单条会话及其分区操作菜单。 */
-function buildAndBindSessionRow(sess, allSessions, nextStreamMap) {
-    const div = document.createElement('div');
-    div.className = 'session-item';
-    div.dataset.sessionId = sess.id || '';
-    if (currentSessionId === sess.id) div.classList.add('active');
-    if (sess.id) nextStreamMap[sess.id] = !!sess.stream_active;
-    if (sess.id) scheduleTitleGenerationRefresh(sess.id, !!sess.title_generation_pending);
-    var displayName = typeof localizeSessionPlaceholderName === 'function'
-        ? localizeSessionPlaceholderName(sess.name)
-        : (sess.name || '');
-    div.innerHTML = '<div class="session-item-head">'
-        + '<div class="session-item-main">'
-        + '<div class="session-item-title-row">'
-        + '<span class="session-name" data-id="' + sess.id + '" data-original="' + escapeHtml(sess.name) + '">' + escapeHtml(displayName) + '</span>'
-        + '<span class="session-todo-badge" aria-label="待办"' + (sess.todo ? '' : ' hidden') + '>待办</span>'
-        + '<span class="session-draft-badge" aria-label="草稿" hidden>草稿</span>'
-        + '<span class="session-item-date"></span>'
-        + '</div>'
-        + '<div class="session-last-query"></div>'
-        + '</div>'
-        + buildSessionMoreMenuMarkup()
-        + '</div>';
-    if (typeof updateHumanInteractionSessionBadge === 'function') {
-        setTimeout(function () { updateHumanInteractionSessionBadge(sess.id); }, 0);
-    }
-    var wsLine = formatSessionListSubtitle(sess);
-    var wsEl = div.querySelector('.session-last-query');
-    if (wsEl) wsEl.textContent = wsLine;
-    var dateEl = div.querySelector('.session-item-date');
-    var dateLine = '';
-    if (dateEl) {
-        dateLine = typeof formatSessionListDate === 'function' ? formatSessionListDate(sess) : '';
-        if (dateLine) {
-            dateEl.innerHTML = (typeof sessionDateIcon === 'function' ? sessionDateIcon() : '') + dateLine;
-        } else {
-            dateEl.textContent = '';
-        }
-    }
-    var itemTip = typeof buildSessionItemTooltip === 'function' ? buildSessionItemTooltip(sess) : '';
-    if (itemTip) {
-        div.setAttribute('data-ui-tip', itemTip);
-        bindUiHoverTip(div);
-    }
-    var moreWrap = div.querySelector('.session-more-wrap');
-    syncSessionMenuLabels(moreWrap, sess);
-    bindSessionActionMenu(moreWrap, function () {
-        return findSessionForActions(sess.id, sess);
-    }, div);
-    var nameEl = div.querySelector('.session-name');
-    if (nameEl) {
-        nameEl.addEventListener('dblclick', function (e) {
-            e.preventDefault();
-            e.stopPropagation();
-            var current = findSessionForActions(sess.id, sess);
-            if (!current) return;
-            Promise.resolve(renameSessionFromMenu(current)).catch(function (err) {
-                console.error('双击重命名会话失败:', err);
-            });
-        });
-    }
-    applySessionItemIndicators(div, sess.id, { serverStreamActive: !!sess.stream_active });
-    return div;
-}
-
-const sessionTitleRefreshState = Object.create(null);
-
-function scheduleTitleGenerationRefresh(sessionId, pending) {
-    const sid = String(sessionId || '');
-    if (!sid) return;
-    let state = sessionTitleRefreshState[sid];
-    if (!pending) {
-        if (state && state.timer) clearTimeout(state.timer);
-        delete sessionTitleRefreshState[sid];
-        return;
-    }
-    if (!state) state = sessionTitleRefreshState[sid] = { attempts: 0, timer: null };
-    if (state.timer || state.attempts >= 60) return;
-    const delayMs = Math.min(10000, Math.round(1000 * Math.pow(1.45, state.attempts)));
-    state.timer = setTimeout(function () {
-        state.timer = null;
-        state.attempts += 1;
-        void refreshSingleSessionRow(sid);
-    }, delayMs);
-}
-
-async function refreshSingleSessionRow(sessionId) {
-    if (!sessionId || !sessionsList) return;
-    try {
-        const response = await fetch('/sessions/' + encodeURIComponent(sessionId));
-        if (!response.ok) return;
-        const sess = await response.json();
-        if (!sess || !sess.id) return;
-        scheduleTitleGenerationRefresh(sess.id, !!sess.title_generation_pending);
-        applySessionPatch({
-            session: sess,
-            session_id: sess.id,
-            stream_active: !!sess.stream_active,
-        });
-        setSessionServerStreamActive(sess.id, !!sess.stream_active);
-        if (sess.unread_result) {
-            if (!sessionUnreadComplete.has(sess.id)) {
-                sessionUnreadComplete.add(sess.id);
-                persistSessionUnread();
-            }
-        } else if (sessionUnreadComplete.delete(sess.id)) {
-            persistSessionUnread();
-        }
-        if (Number(sess.subagent_running || 0) > 0) {
-            sessionUnreadComplete.delete(sess.id);
-            persistSessionUnread();
-        }
-        renderSessionListIfChanged(false);
-        if (typeof maybeAutoResumeInterruptedReact === 'function') {
-            maybeAutoResumeInterruptedReact(sessionId, sess);
-        }
-    } catch (e) {
-        console.error('刷新会话摘要失败:', e);
-    }
-}
-
-let sessionListLoadEpoch = 0;
-let sessionListLoadPromise = null;
-let sessionListRenderKey = '';
-let createNewSessionQueue = Promise.resolve();
-let archivedSessionsLoaded = false;
-let archivedSessionsCache = null;
-let archivedSessionsCount = 0;
-let archivedSessionsLoadEpoch = 0;
-
-function syncArchivedSessionStateFromStore() {
-    archivedSessionsLoaded = !!sessionStore.archivedLoaded;
-    archivedSessionsCache = sessionStore.archivedSessions;
-    archivedSessionsCount = sessionStore.archivedCount;
-}
-
-function computeSessionListRenderKey() {
-    const sessions = sessionStore.list();
-    const parts = [
-        'archivedLoaded=' + (sessionStore.archivedLoaded ? '1' : '0'),
-        'archivedCount=' + String(sessionStore.archivedCount || 0),
-    ];
-    for (let i = 0; i < sessions.length; i += 1) {
-        const s = sessions[i];
-        if (!s || !s.id) continue;
-        parts.push([
-            s.id,
-            s.name || '',
-            s.pinned ? 'p' : '',
-            s.todo ? 't' : '',
-            s.archived ? 'a' : '',
-            s.last_activity_at || s.updated_at || '',
-            s.last_user_preview || '',
-        ].join('\\u001f'));
-    }
-    const archived = sessionStore.archivedList();
-    for (let j = 0; j < archived.length; j += 1) {
-        const a = archived[j];
-        if (!a || !a.id) continue;
-        parts.push('arch=' + [
-            a.id,
-            a.name || '',
-            a.pinned ? 'p' : '',
-            a.todo ? 't' : '',
-            a.last_activity_at || a.updated_at || '',
-            a.last_user_preview || '',
-        ].join('\\u001f'));
-    }
-    return parts.join('\\u001e');
-}
-
-function renderSessionListIfChanged(force) {
-    const nextKey = computeSessionListRenderKey();
-    if (!force && nextKey === sessionListRenderKey) {
-        syncSessionListIndicatorClasses();
-        renderSessionTitleFromStore();
-        return;
-    }
-    sessionListRenderKey = nextKey;
-    const nextStreamMap = renderSessionListFromStore();
-    applyServerStreamActiveMap(nextStreamMap);
-    renderSessionTitleFromStore();
-}
-
-function clearSessionListError() {
-    if (!sessionsList) return;
-    sessionsList.classList.remove('sessions-list--error');
-    if (sessionsList.dataset.loadError === '1') delete sessionsList.dataset.loadError;
-}
-
-function renderSessionListError(message) {
-    if (!sessionsList) return;
-    sessionListRenderKey = '';
-    sessionsList.classList.add('sessions-list--error');
-    sessionsList.dataset.loadError = '1';
-    sessionsList.innerHTML = '';
-    const row = document.createElement('div');
-    row.className = 'session-list-error';
-    row.setAttribute('role', 'status');
-    row.textContent = message || '加载会话列表失败';
-    sessionsList.appendChild(row);
-}
-
-function applyOptimisticSessionUpdate(sessionId, patch) {
-    const sid = String(sessionId || '');
-    const current = sessionStore.get(sid) || (sessionStore.archivedLoaded
-        ? (sessionStore.archivedSessions || []).find(function (session) {
-            return session && String(session.id) === sid;
-        })
-        : null);
-    if (!current) return null;
-    const prev = Object.assign({}, current);
-    const next = Object.assign({}, current, patch || {});
-    if (Object.prototype.hasOwnProperty.call(patch || {}, 'pinned')) {
-        next.pinned_at = next.pinned ? (next.pinned_at || new Date().toISOString()) : null;
-    }
-    sessionStore.upsert(next);
-    if (prev.archived || next.archived) {
-        if (sessionStore.archivedLoaded) {
-            const archivedList = (sessionStore.archivedSessions || []).slice();
-            const archivedIndex = archivedList.findIndex(function (s) {
-                return s && String(s.id) === sid;
-            });
-            let visibleCount = sessionStore.archivedVisibleCount;
-            let totalCount = sessionStore.archivedCount;
-            if (prev.archived && next.archived) {
-                if (archivedIndex >= 0) archivedList[archivedIndex] = next;
-            } else if (prev.archived) {
-                if (archivedIndex >= 0) archivedList.splice(archivedIndex, 1);
-                if (archivedIndex >= 0 && archivedIndex < visibleCount) visibleCount -= 1;
-                totalCount = Math.max(0, totalCount - 1);
-            } else if (next.archived) {
-                archivedList.unshift(next);
-                visibleCount += 1;
-                totalCount += 1;
-            }
-            sessionStore.setArchivedLoaded(archivedList, {
-                visibleCount: visibleCount,
-                totalCount: totalCount,
-            });
-            syncArchivedSessionStateFromStore();
-        } else if (!!prev.archived !== !!next.archived) {
-            sessionStore.setArchivedCount(Math.max(
-                0,
-                sessionStore.archivedCount + (next.archived ? 1 : -1)
-            ));
-        }
-    }
-    renderSessionListIfChanged(true);
-    return prev;
-}
-
-// Event count cache for optimistic UI updates.
-const uiEventCountCache = {
-    cache: new Map(),
-    maxAgeMs: 10000,
-    
-    get(sessionId) {
-        var entry = this.cache.get(sessionId);
-        if (entry && typeof entry === 'object') return Number(entry.count) || 0;
-        return Number(entry) || 0;
-    },
-
-    has(sessionId) {
-        return this.cache.has(sessionId);
-    },
-
-    isFresh(sessionId, maxAgeMs) {
-        var entry = this.cache.get(sessionId);
-        if (!entry || typeof entry !== 'object') return false;
-        var age = Date.now() - Number(entry.updatedAt || 0);
-        var limit = Number(maxAgeMs) > 0 ? Number(maxAgeMs) : this.maxAgeMs;
-        return age >= 0 && age <= limit;
-    },
-    
-    set(sessionId, count) {
-        this.cache.set(sessionId, {
-            count: Math.max(0, Number(count) || 0),
-            updatedAt: Date.now(),
-        });
-    },
-    
-    increment(sessionId) {
-        const current = this.get(sessionId);
-        this.set(sessionId, current + 1);
-        return current + 1;
-    },
-    
-    updateFromServer(sessionId, count) {
-        this.set(sessionId, count);
-    }
-};
-
-async function fetchSessionsStateSnapshot(opts) {
-    opts = opts || {};
-    const url = '/sessions/state' + (opts.includeArchived ? '?include_archived=true' : '');
-    const response = await fetchWithTimeout(url, {}, 12000);
-    if (!response.ok) throw new Error('sessions state failed: ' + response.status);
-    const snapshot = await response.json();
-    if (!snapshot || !Array.isArray(snapshot.sessions)) {
-        throw new Error('invalid sessions state response');
-    }
-    snapshot.include_archived = !!opts.includeArchived;
-    return snapshot;
-}
-
-function deriveSidebarRuntimeStatus() {
-    var busy = false;
-    sessionStore.runsBySession.forEach(function () { busy = true; });
-    if (!busy) {
-        sessionStore.activeRunInfoBySession.forEach(function (info) {
-            if (!info || info.run_active !== false) busy = true;
-        });
-    }
-    if (busy) return 'busy';
-    return 'online';
-}
-
-function updateSidebarRuntimeStatus(nextStatus) {
-    var footer = document.querySelector('.sidebar-runtime');
-    var status = document.getElementById('sidebar-runtime-status');
-    if (!footer || !status) return;
-    var state = nextStatus === false ? 'offline'
-        : (nextStatus === true || !nextStatus ? deriveSidebarRuntimeStatus() : String(nextStatus));
-    if (['online', 'busy', 'waiting', 'alert', 'offline'].indexOf(state) < 0) state = 'online';
-    footer.classList.remove('is-online', 'is-busy', 'is-waiting', 'is-alert', 'is-offline');
-    footer.classList.add('is-' + state);
-    var labels = {
-        online: 'Runtime 在线',
-        busy: 'Runtime 繁忙',
-        waiting: 'Runtime 待处理',
-        alert: 'Runtime 告警',
-        offline: 'Runtime 离线'
-    };
-    setUiRuntimeText(status, labels[state]);
-    footer.dataset.runtimeStatus = state;
-}
-
-var runtimeStatusHeartbeatTimer = null;
-var lastUiActivationSeq = 0;
-async function refreshRuntimeStatus() {
-    try {
-        var response = await fetchWithTimeout('/api/runtime-status', { cache: 'no-store' }, 5000);
-        if (!response.ok) throw new Error('runtime status failed: ' + response.status);
-        var payload = await response.json();
-        updateSidebarRuntimeStatus(payload && payload.status ? payload.status : true);
-        var activationSeq = Number(payload && payload.activation_seq) || 0;
-        if (activationSeq > lastUiActivationSeq) {
-            lastUiActivationSeq = activationSeq;
-            try { window.focus(); } catch (e) { /* browser policy may reject focus */ }
-        }
-    } catch (error) {
-        updateSidebarRuntimeStatus(false);
-    }
-}
-
-function startRuntimeStatusHeartbeat() {
-    if (runtimeStatusHeartbeatTimer) clearInterval(runtimeStatusHeartbeatTimer);
-    void refreshRuntimeStatus();
-    runtimeStatusHeartbeatTimer = setInterval(refreshRuntimeStatus, 5000);
-}
-
-async function fetchWithTimeout(url, options, timeoutMs) {
-    options = options || {};
-    const ms = Number(timeoutMs) > 0 ? Number(timeoutMs) : 15000;
-    if (options.signal) return fetch(url, options);
-    const controller = new AbortController();
-    const timer = setTimeout(function () { controller.abort(); }, ms);
-    const nextOptions = Object.assign({}, options, { signal: controller.signal });
-    try {
-        return await fetch(url, nextOptions);
-    } finally {
-        clearTimeout(timer);
-    }
-}
-
-async function fetchArchivedSessionPage(offset, limit) {
-    const url = '/sessions?include_archived=true&archived_only=true&offset=' + String(offset)
-        + '&limit=' + String(limit);
-    const response = await fetchWithTimeout(url, {}, 15000);
-    if (!response.ok) throw new Error('archived sessions failed: ' + response.status);
-    const sessions = await response.json();
-    const countHeader = response.headers.get('X-Archived-Count');
-    const parsedCount = Number(countHeader);
-    return {
-        sessions: Array.isArray(sessions) ? sessions : [],
-        totalCount: Number.isFinite(parsedCount) && parsedCount >= 0
-            ? parsedCount
-            : Math.max(offset + (Array.isArray(sessions) ? sessions.length : 0), sessionStore.archivedCount),
-    };
-}
-
-function appendArchivedSessionPage(page, visibleCount) {
-    const combined = (sessionStore.archivedSessions || []).concat(page.sessions || []);
-    const seen = new Set();
-    const deduplicated = combined.filter(function (s) {
-        const sid = s && s.id ? String(s.id) : '';
-        if (!sid || seen.has(sid)) return false;
-        seen.add(sid);
-        return true;
-    });
-    sessionStore.setArchivedLoaded(deduplicated, {
-        visibleCount: visibleCount,
-        totalCount: page.totalCount,
-    });
-}
-
-async function prefetchNextArchivedPage(loadEpoch) {
-    const cachedCount = Array.isArray(sessionStore.archivedSessions)
-        ? sessionStore.archivedSessions.length
-        : 0;
-    const wantedCount = Math.min(
-        sessionStore.archivedCount,
-        sessionStore.archivedVisibleCount + ARCHIVED_SESSIONS_PAGE_SIZE
-    );
-    if (cachedCount >= wantedCount) return;
-    const page = await fetchArchivedSessionPage(cachedCount, wantedCount - cachedCount);
-    if (loadEpoch !== archivedSessionsLoadEpoch) return;
-    appendArchivedSessionPage(page, sessionStore.archivedVisibleCount);
-}
-
-async function loadArchivedSessions(opts) {
-    opts = opts || {};
-    const loadEpoch = ++archivedSessionsLoadEpoch;
-    try {
-        if (!sessionStore.archivedLoaded) {
-            const initialPage = await fetchArchivedSessionPage(0, ARCHIVED_SESSIONS_PAGE_SIZE * 2);
-            if (loadEpoch !== archivedSessionsLoadEpoch) return;
-            sessionStore.setArchivedLoaded(initialPage.sessions, {
-                visibleCount: ARCHIVED_SESSIONS_PAGE_SIZE,
-                totalCount: initialPage.totalCount,
-            });
-        } else if (opts.background || opts.refresh || !sessionStore.hasMoreArchivedSessions()) {
-            const refreshLimit = Math.max(
-                ARCHIVED_SESSIONS_PAGE_SIZE * 2,
-                sessionStore.archivedVisibleCount + ARCHIVED_SESSIONS_PAGE_SIZE
-            );
-            const refreshedPage = await fetchArchivedSessionPage(0, refreshLimit);
-            if (loadEpoch !== archivedSessionsLoadEpoch) return;
-            sessionStore.setArchivedLoaded(refreshedPage.sessions, {
-                visibleCount: sessionStore.archivedVisibleCount,
-                totalCount: refreshedPage.totalCount,
-            });
-        } else {
-            if (sessionStore.revealNextArchivedPage() === 0) {
-                const cachedCount = Array.isArray(sessionStore.archivedSessions)
-                    ? sessionStore.archivedSessions.length
-                    : 0;
-                const nextPage = await fetchArchivedSessionPage(cachedCount, ARCHIVED_SESSIONS_PAGE_SIZE);
-                if (loadEpoch !== archivedSessionsLoadEpoch) return;
-                appendArchivedSessionPage(nextPage, sessionStore.archivedVisibleCount);
-                sessionStore.revealNextArchivedPage();
-            }
-            syncArchivedSessionStateFromStore();
-            renderSessionListIfChanged(true);
-            clearSessionListError();
-            try {
-                await prefetchNextArchivedPage(loadEpoch);
-            } catch (prefetchErr) {
-                console.error('预加载下一批归档目录失败:', prefetchErr);
-            }
-        }
-        if (loadEpoch !== archivedSessionsLoadEpoch) return;
-        syncArchivedSessionStateFromStore();
-        renderSessionListIfChanged(!!opts.forceRender);
-        clearSessionListError();
-    } catch (err) {
-        console.error('加载归档目录失败:', err);
-        if (!opts.background) throw err;
-    }
-}
-
-async function loadSessions(opts) {
-    opts = opts || {};
-    if (sessionListLoadPromise && !opts.force) return sessionListLoadPromise;
-    sessionListLoadPromise = loadSessionsInner(opts);
-    try {
-        return await sessionListLoadPromise;
-    } finally {
-        sessionListLoadPromise = null;
-    }
-}
-
-async function loadSessionsInner(opts) {
-    const loadEpoch = ++sessionListLoadEpoch;
-    sessionStore.ui.loadingSessions = true;
-    try {
-        let allSessions;
-        let snapshot = null;
-        
-        try {
-            snapshot = await fetchSessionsStateSnapshot();
-            if (loadEpoch !== sessionListLoadEpoch) return;
-            updateSidebarRuntimeStatus(true);
-            allSessions = Array.isArray(snapshot.sessions) ? snapshot.sessions : [];
-        } catch (stateErr) {
-            console.error('加载会话状态快照失败，回退至旧接口', stateErr);
-            const response = await fetchWithTimeout('/sessions', {}, 12000);
-            const archivedCountHeader = response.headers.get('X-Archived-Count');
-            if (archivedCountHeader != null && archivedCountHeader !== '') {
-                const parsedArchivedCount = Number(archivedCountHeader);
-                if (Number.isFinite(parsedArchivedCount) && parsedArchivedCount >= 0) {
-                    sessionStore.setArchivedCount(parsedArchivedCount);
-                    syncArchivedSessionStateFromStore();
-                }
-            }
-            const sessions = await response.json();
-            if (loadEpoch !== sessionListLoadEpoch) return;
-            updateSidebarRuntimeStatus(true);
-            allSessions = Array.isArray(sessions) ? sessions : [];
-            snapshot = {
-                sessions: allSessions,
-                archived_count: archivedSessionsCount,
-            };
-        }
-        applySessionSnapshot(snapshot || { sessions: allSessions, archived_count: archivedSessionsCount });
-        syncArchivedSessionStateFromStore();
-        allSessions = sessionStore.list();
-        
-        const idSet = new Set();
-        for (let si = 0; si < allSessions.length; si += 1) {
-            if (allSessions[si] && allSessions[si].id) idSet.add(allSessions[si].id);
-        }
-        [...sessionUnreadComplete].forEach(function (uid) {
-            if (!idSet.has(uid)) sessionUnreadComplete.delete(uid);
-        });
-        persistSessionUnread();
-
-        renderSessionListIfChanged(!!opts.forceRender);
-        clearSessionListError();
-        sessionStore.ui.loadingSessions = false;
-        if (opts.refreshArchived && !opts.skipArchivedRefresh && sessionStore.archivedLoaded) {
-            void loadArchivedSessions({ background: true });
-        }
-        return true;
-    } catch (error) {
-        sessionStore.ui.loadingSessions = false;
-        updateSidebarRuntimeStatus(false);
-        console.error('加载会话列表失败:', error);
-        if (sessionStore.list().length > 0) {
-            renderSessionListIfChanged(true);
-            clearSessionListError();
-        } else {
-            renderSessionListError('加载会话列表失败');
-        }
-        return false;
-    }
-}
-
-async function reconcileRunStateFromServer(opts) {
-    opts = opts || {};
-    const suppressedBeforeFetch = new Set();
-    if (opts.respectStopSuppress) {
-        sessionStore.sessionOrder.forEach(function (sid) {
-            if (isSessionStreamStopSuppressed(sid)) suppressedBeforeFetch.add(String(sid));
-        });
-        if (currentSessionId && isSessionStreamStopSuppressed(currentSessionId)) {
-            suppressedBeforeFetch.add(String(currentSessionId));
-        }
-    }
-    let snapshot = null;
-    try {
-        const cur = currentSessionId ? sessionStore.get(currentSessionId) : null;
-        snapshot = await fetchSessionsStateSnapshot({
-            includeArchived: !!(sessionStore.archivedLoaded || (cur && cur.archived)),
-        });
-    } catch (e) {
-        updateSidebarRuntimeStatus(false);
-        if (!opts.silent) console.error('reconcile run state failed:', e);
-        return;
-    }
-    applySessionSnapshot(snapshot);
-    updateSidebarRuntimeStatus(true);
-    if (opts.respectStopSuppress) {
-        suppressedBeforeFetch.forEach(function (sid) {
-            if (isSessionStreamStopSuppressed(sid)) {
-                sessionStore.setStreamActive(sid, false);
-                const sess = sessionStore.get(sid);
-                if (sess) {
-                    sess.stream_active = false;
-                    sess.run_active = false;
-                    sess.run_started_at = null;
-                }
-                sessionStore.activeRunInfoBySession.delete(sid);
-            }
-        });
-    }
-    const active = new Set();
-    sessionStore.activeRunInfoBySession.forEach(function (info, sid) {
-        if (info && info.run_active === true) active.add(String(sid));
-    });
-    const localIds = [];
-    sessionStore.runsBySession.forEach(function (_run, sid) {
-        localIds.push(String(sid));
-    });
-    localIds.forEach(function (sid) {
-        if (!active.has(sid)) {
-            var run = getSessionRunState(sid);
-            if (run && run.reattached) {
-                abortSessionRun(sid, 'reconcile-finished');
-            }
-        }
-    });
-    if (currentSessionId && active.has(currentSessionId)) {
-        const info = sessionStore.getActiveRunInfo(currentSessionId) || {};
-        const run = getSessionRunState(currentSessionId);
-        const ctx = run && run.ctx;
-        const agg = ctx && ctx.currentProcessGroup && ctx.currentProcessGroup.isConnected
-            ? ctx.currentProcessGroup
-            : (getVisibleChatStream() && getVisibleChatStream().querySelector('.process-aggregate:last-of-type'));
-        if (agg && info.started_at) applyRunStartedAtToProcessGroup(agg, info.started_at);
-    }
-    syncSessionListIndicatorClasses();
-    setSendButtonState();
-    renderSessionListIfChanged(false);
-}
-
-function showSessionLoadRetry(sessionId) {
-    var sid = String(sessionId || '');
-    var stream = getVisibleChatStream();
-    if (!sid || !stream) return;
-    if (stream.querySelector('.session-load-retry')) return;
-    var row = document.createElement('div');
-    row.className = 'feed-item feed--err session-load-retry';
-    var btn = document.createElement('button');
-    btn.type = 'button';
-    btn.className = 'history-load-older-btn';
-    btn.textContent = '重新加载';
-    btn.addEventListener('click', function (e) {
-        e.preventDefault();
-        if (typeof discardCachedSessionStream === 'function') discardCachedSessionStream(sid);
-        void switchSession(sid, { forceReload: true });
-    });
-    row.appendChild(btn);
-    stream.appendChild(row);
-}
-
-async function loadSessionMessages(sessionId, scrollBehavior, opts) {
-    const openSessionStartedAt = (typeof performance !== 'undefined' && performance.now)
-        ? performance.now()
-        : Date.now();
-    scrollBehavior = scrollBehavior || 'saved-or-bottom';
-    opts = opts || {};
-    const loadToken = ++messageLoadEpoch;
-    let historyHydrationStream = null;
-    const finishHistoryHydration = function () {
-        if (historyHydrationStream) {
-            historyHydrationStream.hidden = false;
-            historyHydrationStream = null;
-        }
-        if (loadToken === messageLoadEpoch) hideLoading();
-        if (typeof attachAllHumanInteractionCards === 'function') {
-            attachAllHumanInteractionCards(getVisibleChatStream());
-        }
-    };
-    sessionStore.ui.loadingMessages = true;
-    suppressTocDuringSessionLoad = true;
-    replayingMessages = true;
-    if (typeof cancelSmoothStreamFollowForHistoryLoad === 'function') {
-        cancelSmoothStreamFollowForHistoryLoad();
-    }
-    resetSessionHistoryPaging();
-    try {
-        let raw;
-        let snapshotTocTurns = null;
-        let historySource = 'messages';
-        let snapshotTiming = null;
-        const canUseSnapshot = !opts.full && opts.useSnapshot !== false && beforeSessionMessageSnapshotAvailable();
-        if (canUseSnapshot) {
-            try {
-                const snapshotUrl = '/sessions/' + encodeURIComponent(sessionId)
-                    + '/history_snapshot?turns=' + encodeURIComponent(String(HISTORY_DIALOGUES_PER_PAGE))
-                    + '&event_budget=' + encodeURIComponent(String(HISTORY_EVENT_BUDGET))
-                    + '&include_aux=false';
-                for (let migrationAttempt = 0; migrationAttempt < 120; migrationAttempt += 1) {
-                    const snapshotResp = await fetchWithTimeout(snapshotUrl, {}, 15000);
-                    const snapshot = await snapshotResp.json().catch(function () { return null; });
-                    if (snapshot && snapshot.migration_pending) {
-                        if (loadToken !== messageLoadEpoch || sessionId !== currentSessionId) return;
-                        const retryMs = Math.max(100, Math.min(Number(snapshot.retry_after_ms) || 250, 1000));
-                        await new Promise(function (resolve) { setTimeout(resolve, retryMs); });
-                        continue;
-                    }
-                    if (snapshotResp.ok) {
-                    if (snapshot && snapshot.ok && snapshot.messages) {
-                        raw = snapshot.messages;
-                        historySource = 'history_snapshot';
-                        snapshotTiming = snapshot.timing && typeof snapshot.timing === 'object'
-                            ? snapshot.timing
-                            : null;
-                        if (typeof uiEventCountCache !== 'undefined' && typeof snapshot.count === 'number') {
-                            uiEventCountCache.updateFromServer(sessionId, snapshot.count);
-                        }
-                        if (Array.isArray(snapshot.user_turns)) {
-                            snapshotTocTurns = snapshot.user_turns;
-                            if (typeof setTocTurnsForSession === 'function') setTocTurnsForSession(sessionId, snapshot.user_turns);
-                        }
-                        if (snapshot.context_tokens && snapshot.context_tokens.estimated != null) {
-                            recordContextTokens(sessionId, snapshot.context_tokens.estimated, snapshot.context_tokens.threshold);
-                        }
-                    }
-                    }
-                    break;
-                }
-            } catch (snapshotErr) {
-                console.warn('history snapshot unavailable, falling back to messages:', snapshotErr);
-            }
-        }
-        if (!raw) {
-            let url = '/sessions/' + encodeURIComponent(sessionId) + '/messages';
-            if (!opts.full) {
-                url += '?turns=' + HISTORY_DIALOGUES_PER_PAGE
-                    + '&event_budget=' + encodeURIComponent(String(HISTORY_EVENT_BUDGET));
-            }
-            const response = await fetchWithTimeout(url, {}, 15000);
-            if (!response.ok) throw new Error('messages failed: ' + response.status);
-            raw = await response.json();
-        }
-        if (loadToken !== messageLoadEpoch || sessionId !== currentSessionId) return;
-        if (getSessionRunState(sessionId) && !opts.allowDuringRun) return;
-        if (!getVisibleChatStream()) ensureVisibleChatStreamSlot();
-        const vis = getVisibleChatStream();
-        if (vis) {
-            const loader = document.getElementById('chat-loading');
-            if (loader && loader.parentNode === vis && chatContainer) {
-                chatContainer.insertBefore(loader, vis);
-            }
-            vis.hidden = true;
-            historyHydrationStream = vis;
-            emptyChatStreamKeepingStrip(vis);
-        }
-        else {
-            chatContainer.innerHTML = '';
-            ensureVisibleChatStreamSlot();
-        }
-        markVisibleSessionStreamLoadState(sessionId, 'loading');
-        let events;
-        let pageMeta = null;
-        if (Array.isArray(raw)) {
-            events = raw;
-        } else if (raw && typeof raw === 'object' && Array.isArray(raw.events)) {
-            events = raw.events;
-            const pageTotal = Number(raw.total) || 0;
-            const pageRangeEnd = Number(raw.range_end) || 0;
-            pageMeta = {
-                total: pageTotal,
-                range_start: Number(raw.range_start) || 0,
-                range_end: pageRangeEnd,
-                has_older: !!raw.has_older,
-                has_newer: raw.has_newer == null ? pageRangeEnd < pageTotal : !!raw.has_newer,
-            };
-            uiEventCountCache.updateFromServer(sessionId, pageMeta.total);
-        } else {
-            events = [];
-        }
-        beginMessageReplay(sessionId, pageMeta || {
-            total: events.length,
-            range_start: 0,
-            range_end: events.length,
-        });
-        if (!opts.full && pageMeta) {
-            setSessionHistoryPaging({
-                sessionId: sessionId,
-                total: pageMeta.total,
-                range_start: pageMeta.range_start,
-                range_end: pageMeta.range_end,
-                has_older: !!pageMeta.has_older,
-                has_newer: !!pageMeta.has_newer,
-            });
-            ensureHistorySentinel(getVisibleChatStream());
-        }
-        if (events.length === 0) {
-            suppressTocDuringSessionLoad = false;
-            setWelcome();
-            finishHistoryHydration();
-            updateSessionTitle();
-            scheduleContextTokensAfterPaint(sessionId);
-            applyChatScrollAfterHistoryLoad(sessionId, scrollBehavior);
-            markVisibleSessionStreamLoadState(sessionId, 'ok');
-            logOpenSessionTiming(sessionId, {
-                source: historySource,
-                events: 0,
-                snapshotTiming: snapshotTiming,
-                totalMs: elapsedSince(openSessionStartedAt),
-            });
-            return true;
-        }
-        const loadCtx = newDomContext(getVisibleChatStream());
-        loadCtx.lastUserEventIndex = -1;
-        const indexBase = pageMeta ? pageMeta.range_start : 0;
-        const batchSize = opts.full ? 64 : 512;
-        for (let evi = 0; evi < events.length; evi += 1) {
-            const ev = events[evi];
-            if (ev && typeof ev === 'object' && ev.type) {
-                reduceAndRenderMessageEvent(loadCtx, ev, {
-                    sessionId: sessionId,
-                    eventIndex: indexBase + evi,
-                    source: 'history',
-                });
-            }
-            if (evi > 0 && evi % batchSize === 0) {
-                await new Promise(function (resolve) { setTimeout(resolve, 0); });
-                if (loadToken !== messageLoadEpoch || sessionId !== currentSessionId) return;
-            }
-        }
-        finishHistoryHydration();
-        if (!chatStreamHasConversationContent()) {
-            suppressTocDuringSessionLoad = false;
-            setWelcome();
-            updateSessionTitle();
-            scheduleContextTokensAfterPaint(sessionId);
-            applyChatScrollAfterHistoryLoad(sessionId, scrollBehavior);
-            markVisibleSessionStreamLoadState(sessionId, 'ok');
-            logOpenSessionTiming(sessionId, {
-                source: historySource,
-                events: events.length,
-                snapshotTiming: snapshotTiming,
-                totalMs: elapsedSince(openSessionStartedAt),
-            });
-            return true;
-        }
-        if (!opts.full && opts.preloadOlderIfShort && pageMeta && pageMeta.has_older && events.length <= 2) {
-            await loadOlderHistoryChunk({ keepTocStable: true });
-            if (loadToken !== messageLoadEpoch || sessionId !== currentSessionId) return;
-        }
-        if (historyLoadScrollsToBottom(sessionId, scrollBehavior)) {
-            tocScrollBottomOnNextBuild = true;
-        }
-        suppressTocDuringSessionLoad = false;
-        if (snapshotTocTurns) rebuildToc({ turns: snapshotTocTurns });
-        else if (!opts.tocAlreadyStarted) rebuildToc();
-        updateSessionTitle();
-        updateHistorySentinelVisibility();
-        bindExistingLogInteractions();
-        applyChatScrollAfterHistoryLoad(sessionId, scrollBehavior);
-        var initialSmoothReachedBottom = await waitForChatScrollAfterHistoryLoad(sessionId, scrollBehavior);
-        if (loadToken !== messageLoadEpoch || sessionId !== currentSessionId) return;
-        finalizeExistingLogLayout();
-        if (scrollBehavior === 'smooth-bottom' && initialSmoothReachedBottom) {
-            setScrollTopImmediate(chatContainer, chatContainer.scrollHeight);
-            requestAnimationFrame(function () {
-                requestAnimationFrame(function () {
-                    if (loadToken !== messageLoadEpoch || sessionId !== currentSessionId) return;
-                    setScrollTopImmediate(chatContainer, chatContainer.scrollHeight);
-                });
-            });
-        }
-        scheduleTocActiveUpdate();
-        scheduleContextTokensAfterPaint(sessionId);
-        markVisibleSessionStreamLoadState(sessionId, 'ok');
-        logOpenSessionTiming(sessionId, {
-            source: historySource,
-            events: events.length,
-            snapshotTiming: snapshotTiming,
-            totalMs: elapsedSince(openSessionStartedAt),
-        });
-        return true;
-    } catch (error) {
-        if (loadToken !== messageLoadEpoch || sessionId !== currentSessionId) return false;
-        console.error('加载会话消息失败:', error);
-        document.getElementById('chat-loading')?.remove();
-        appendLogVisible('加载历史消息失败', 'error-log');
-        markVisibleSessionStreamLoadState(sessionId, 'failed');
-        showSessionLoadRetry(sessionId);
-        return false;
-    } finally {
-        finishHistoryHydration();
-        if (loadToken === messageLoadEpoch) sessionStore.ui.loadingMessages = false;
-        if (loadToken === messageLoadEpoch) suppressTocDuringSessionLoad = false;
-        if (loadToken === messageLoadEpoch) replayingMessages = false;
-    }
-}
-
-function chatStreamHasConversationContent() {
-    var stream = getVisibleChatStream();
-    if (!stream) return false;
-    return !!stream.querySelector('.msg-wrap, .process-aggregate, .human-interaction-card, .human-interaction-banner');
-}
-
-function elapsedSince(startedAt) {
-    var now = (typeof performance !== 'undefined' && performance.now)
-        ? performance.now()
-        : Date.now();
-    return Math.max(0, Math.round(now - Number(startedAt || now)));
-}
-
-function logOpenSessionTiming(sessionId, data) {
-    data = data || {};
-    var timing = data.snapshotTiming && typeof data.snapshotTiming === 'object' ? data.snapshotTiming : {};
-    var backendTotal = Number(timing.total || 0);
-    var frontendTotal = Number(data.totalMs || 0);
-    if (frontendTotal < 500 && backendTotal < 500) return;
-    console.info(
-        'open_session_timing session=%s source=%s total=%sms events=%s backend_total=%sms read_page=%sms count=%sms user_turns=%sms context_tokens=%sms',
-        sessionId,
-        data.source || 'unknown',
-        frontendTotal,
-        Number(data.events || 0),
-        backendTotal,
-        Number(timing.read_page || 0),
-        Number(timing.count || 0),
-        Number(timing.user_turns || 0),
-        Number(timing.context_tokens || 0)
-    );
-}
-
-function beforeSessionMessageSnapshotAvailable() {
-    return true;
-}
-
-async function switchSession(sessionId, opts) {
-    opts = opts || {};
-    if (typeof endHistorySmoothScroll === 'function') endHistorySmoothScroll();
-    if (currentSessionId === sessionId && !opts.forceReload) return;
-    if (opts.forceReload && typeof discardCachedSessionStream === 'function') discardCachedSessionStream(sessionId);
-    const switchToken = ++switchSessionEpoch;
-    suppressTocDuringSessionLoad = true;
-    clearTocForSessionLoad();
-    clearOptionalPanelsForSessionLoad();
-    pendingRewriteTruncate = null;
-    hideRewriteUndoToast();
-    // A green-dot session represents an unread completed result. Opening it
-    // must land at the newest result, never at a stale reading anchor.
-    var sessionHadUnreadResult = !!(
-        (sessionStore.get(sessionId) && sessionStore.get(sessionId).unread_result)
-        || sessionUnreadComplete.has(sessionId)
-    );
-    clearSessionUnreadState(sessionId);
-    const leaving = currentSessionId;
-    recentComposerQueuedFollowup = null;
-    saveChatScrollForSession(leaving);
-    stashInputDraft(leaving);
-    if (typeof stashSkillPickerDraft === 'function') stashSkillPickerDraft(leaving);
-    prepareStashLeaving(leaving);
-    hideSubagentContinueBanner();
-    resetSubagentPanelForSession();
-    setCurrentSessionState(sessionId);
-    // The session identity and its side-panel contents must cross the switch
-    // boundary together. Waiting for history requests leaves the previous
-    // session title or plan visible for a frame (and sometimes much longer on
-    // a cold load).
-    updateSessionTitle();
-    if (typeof updateHumanInteractionBanner === 'function') updateHumanInteractionBanner(sessionId);
-    localStorage.setItem('lastSessionId', sessionId);
-    if (typeof applyContextTokenLabelForCurrentSession === 'function') applyContextTokenLabelForCurrentSession();
-    restoreInputDraft(sessionId);
-    if (typeof restoreSkillPickerDraft === 'function') restoreSkillPickerDraft(sessionId);
-    if (typeof renderFollowupQueue === 'function') renderFollowupQueue(sessionId);
-    if (typeof syncFollowupQueueFromServer === 'function') syncFollowupQueueFromServer(sessionId);
-    if (typeof refreshModelProfileSelector === 'function') refreshModelProfileSelector(sessionId);
-    syncSessionListIndicatorClasses();
-    // Refresh extension panels only after the new row owns the active marker;
-    // otherwise the projection request can render the session we just left.
-    document.dispatchEvent(new CustomEvent('myagent:extension-state-changed', {
-        detail: { sessionId: sessionId },
-    }));
-    setSendButtonState();
-    var restoredFromCache = false;
-    var restoredRunningStream = false;
-    var sessionHasActiveServerRun = !!(
-        isSessionRunning(sessionId)
-        || (typeof isServerStreamActive === 'function' && isServerStreamActive(sessionId))
-    );
-    if (!opts.forceReload && (
-        (restoredRunningStream = restoreStreamForRunningSession(sessionId))
-        || (!sessionHadUnreadResult
-            && !sessionHasActiveServerRun
-            && (restoredFromCache = restoreCachedSessionStream(sessionId)))
-    )) {
-        suppressTocDuringSessionLoad = false;
-        hideLoading();
-        rebuildToc({ localOnly: true });
-        updateSessionTitle();
-        scheduleContextTokensAfterPaint(sessionId);
-        // Only a complete, idle stream restored from the in-memory cache may
-        // return to its prior reading position. A live run and a green-dot
-        // completion always open on their newest content.
-        var sessionIsRunningNow = !!(
-            restoredRunningStream
-            || isSessionRunning(sessionId)
-            || (typeof isServerStreamActive === 'function' && isServerStreamActive(sessionId))
-        );
-        if (restoredFromCache && !sessionHadUnreadResult && !sessionIsRunningNow) {
-            restoreCachedSessionScrollPosition(sessionId);
-        } else {
-            streamChatNearBottom = true;
-            streamProcNearBottom = true;
-            liveAutoFollow = true;
-            scrollToBottom();
-            if (sessionIsRunningNow && typeof scrollCurrentRunningProcessToBottom === 'function') {
-                scrollCurrentRunningProcessToBottom(sessionId);
-            }
-        }
-        if (typeof refreshHumanInteractions === 'function') void refreshHumanInteractions(sessionId);
-        if (switchToken !== switchSessionEpoch || sessionId !== currentSessionId) return;
-        /* 让 rebuildToc 的 /user_turns fetch 先发出，subagent 面板（含 N 个 /messages）顺序后置，
-           避免抢占带宽与主线程，让目录最后才稳态。*/
-        setTimeout(function () {
-            if (switchToken === switchSessionEpoch && sessionId === currentSessionId) {
-                refreshSubagentTreePanel(sessionId);
-            }
-        }, 0);
-        void refreshSingleSessionRow(sessionId);
-        document.dispatchEvent(new CustomEvent('myagent:extension-state-changed', {
-            detail: { sessionId: sessionId, phase: 'loaded' },
-        }));
-        setSendButtonState();
-        maybeStartStreamPollForSession(sessionId, { skipInitialLoad: true });
-        return;
-    }
-    const vs = getVisibleChatStream();
-    resetSessionHistoryPaging();
-    if (vs) emptyChatStreamKeepingStrip(vs);
-    else {
-        chatContainer.innerHTML = '';
-        ensureVisibleChatStreamSlot();
-    }
-    showLoading();
-    const tocAlreadyStarted = opts.useSnapshot === false && typeof startTocForSessionLoad === 'function';
-    if (tocAlreadyStarted) startTocForSessionLoad(sessionId);
-    return new Promise(function (resolve) {
-        setTimeout(async function () {
-        if (switchToken !== switchSessionEpoch || sessionId !== currentSessionId) { resolve(false); return; }
-        try {
-            // A freshly loaded or force-reloaded stream does not restore a
-            // persisted reading position. Once its history is rendered, ease
-            // the viewport down to the newest message.
-            var loadedOk = await loadSessionMessages(sessionId, 'smooth-bottom', {
-                preloadOlderIfShort: isServerStreamActive(sessionId),
-                allowDuringRun: isServerStreamActive(sessionId),
-                tocAlreadyStarted: tocAlreadyStarted,
-            });
-            if (!loadedOk) { resolve(false); return; }
-        } catch (error) {
-            console.error('切换会话加载失败:', error);
-            resolve(false);
-            return;
-        } finally {
-            if (switchToken === switchSessionEpoch && sessionId === currentSessionId) {
-                hideLoading();
-                sessionStore.ui.loadingMessages = false;
-                suppressTocDuringSessionLoad = false;
-                replayingMessages = false;
-            }
-        }
-        if (switchToken !== switchSessionEpoch || sessionId !== currentSessionId) { resolve(false); return; }
-        /* loadSessionMessages 内部已发起 rebuildToc()；这里再延后一步调用 subagent panel
-           重建，保证「目录 → 消息 → 副 agent 按钮」的稳定顺序（无 subagent 的会话表现一致）。*/
-        setTimeout(function () {
-            if (switchToken === switchSessionEpoch && sessionId === currentSessionId) {
-                refreshSubagentTreePanel(sessionId);
-            }
-        }, 0);
-        void refreshSingleSessionRow(sessionId);
-        document.dispatchEvent(new CustomEvent('myagent:extension-state-changed', {
-            detail: { sessionId: sessionId, phase: 'loaded' },
-        }));
-        setSendButtonState();
-        maybeStartStreamPollForSession(sessionId, { skipInitialLoad: true });
-        if (typeof refreshHumanInteractions === 'function') void refreshHumanInteractions(sessionId);
-        resolve(true);
-        }, 20);
-    });
-}
-
-async function createNewSession() {
-    createNewSessionQueue = createNewSessionQueue.then(
-        function () { return createNewSessionInner(); },
-        function () { return createNewSessionInner(); }
-    );
-    return createNewSessionQueue;
-}
-
-async function createNewSessionInner() {
-    try {
-        saveChatScrollForSession(currentSessionId);
-        stashInputDraft(currentSessionId);
-        if (typeof stashSkillPickerDraft === 'function') stashSkillPickerDraft(currentSessionId);
-        prepareStashLeaving(currentSessionId);
-        const response = await fetch('/sessions', { method: 'POST' });
-        const data = await response.json();
-        if (data && data.session) sessionStore.upsert(data.session);
-        resetSubagentPanelForSession();
-        switchSessionEpoch += 1;
-        messageLoadEpoch += 1;
-        setCurrentSessionState(data.session_id);
-        if (typeof updateHumanInteractionBanner === 'function') updateHumanInteractionBanner(currentSessionId);
-        localStorage.setItem('lastSessionId', currentSessionId);
-        restoreInputDraft(currentSessionId);
-        if (typeof restoreSkillPickerDraft === 'function') restoreSkillPickerDraft(currentSessionId);
-        if (typeof renderFollowupQueue === 'function') renderFollowupQueue(currentSessionId);
-        if (typeof syncFollowupQueueFromServer === 'function') syncFollowupQueueFromServer(currentSessionId);
-        if (typeof refreshModelProfileSelector === 'function') refreshModelProfileSelector(currentSessionId);
-        if (typeof refreshPermissionModeSelector === 'function') refreshPermissionModeSelector(currentSessionId);
-        if (!getVisibleChatStream()) ensureVisibleChatStreamSlot();
-        setWelcome();
-        replayingMessages = false;
-        if (data && data.session) {
-            syncArchivedSessionStateFromStore();
-            renderSessionListIfChanged(true);
-            void refreshSingleSessionRow(data.session_id);
-        } else {
-            await loadSessions();
-        }
-        document.dispatchEvent(new CustomEvent('myagent:extension-state-changed', {
-            detail: { sessionId: currentSessionId, phase: 'created' },
-        }));
-        setSendButtonState();
-        maybeStartStreamPollForSession(currentSessionId);
-        scheduleContextTokensAfterPaint(currentSessionId);
-    } catch (error) {
-        console.error('创建新会话失败', error);
-        appendLogVisible('创建新会话失败', 'error-log');
-    }
-}
-`,Gr=`const SSE_IDLE_TIMEOUT_MS = 120000;
+`,Wr=`\uFEFFfunction setSendButtonState() {\r
+    syncMessageInputPlaceholder();\r
+    sendBtn.disabled = false;\r
+    const uploadBusy = isChatFileUploadBusy();\r
+    const newSessionPreflight = !currentSessionId && optimisticNewSessionRun;\r
+    if (uploadBusy) {\r
+        sendBtn.textContent = '上传中';\r
+        sendBtn.classList.remove('is-stop');\r
+        sendBtn.classList.remove('is-followup');\r
+        sendBtn.disabled = true;\r
+        return;\r
+    }\r
+    if (isSessionRunning(currentSessionId) || newSessionPreflight) {\r
+        const run = newSessionPreflight || (typeof getSessionRunState === 'function' ? getSessionRunState(currentSessionId) : null);\r
+        const suppressFollowup = !!(run && run.suppressFollowupButton);\r
+        const hasDraft = (typeof inputHasSendableText === 'function')\r
+            ? inputHasSendableText()\r
+            : !!(messageInput && String(messageInput.value || '').trim());\r
+        const followupEnabled = (typeof isMyAgentFeatureEnabled === 'function') && isMyAgentFeatureEnabled('followupRestart', false);\r
+        sendBtn.innerHTML = (followupEnabled && hasDraft && !suppressFollowup) ? '追问' : '停止 <span class="loader" aria-hidden="true"></span>';\r
+        sendBtn.classList.add('is-stop');\r
+        sendBtn.classList.toggle('is-followup', followupEnabled && hasDraft && !suppressFollowup);\r
+    } else {\r
+        sendBtn.textContent = '发送';\r
+        sendBtn.classList.remove('is-stop');\r
+        sendBtn.classList.remove('is-followup');\r
+        sendBtn.disabled = false;\r
+    }\r
+}\r
+\r
+const MESSAGE_INPUT_PLACEHOLDER_DEFAULT = '说说你想做什么…（Enter 发送 · Shift/Ctrl/Cmd + Enter 换行）';\r
+const MESSAGE_INPUT_PLACEHOLDER_RUNNING = 'Agent运行中，输入后续任务';\r
+const MESSAGE_INPUT_PLACEHOLDER_QUEUED = '按 Enter 发送刚加入或第一条待发送任务';\r
+\r
+function syncMessageInputPlaceholder() {\r
+    if (!messageInput) return;\r
+    var queue = currentSessionId && typeof getFollowupQueue === 'function'\r
+        ? getFollowupQueue(currentSessionId)\r
+        : [];\r
+    var running = !!(optimisticNewSessionRun || isSessionRunning(currentSessionId));\r
+    var value = queue.some(function (item) { return item && !item.status; })\r
+        ? MESSAGE_INPUT_PLACEHOLDER_QUEUED\r
+        : (running ? MESSAGE_INPUT_PLACEHOLDER_RUNNING : MESSAGE_INPUT_PLACEHOLDER_DEFAULT);\r
+    messageInput.placeholder = typeof translateUiString === 'function'\r
+        ? translateUiString(value)\r
+        : value;\r
+}\r
+\r
+function isChatFileUploadBusy() {\r
+    return !!(messageInput && messageInput.dataset.fileUploadBusy === '1');\r
+}\r
+\r
+document.addEventListener('myagent:language-change', syncMessageInputPlaceholder);\r
+document.addEventListener('myagent:language-change', function () {\r
+    if (typeof renderSessionListIfChanged === 'function') renderSessionListIfChanged(true);\r
+});\r
+\r
+async function requestInterrupt(sessionId, runId, reason) {\r
+    if (!sessionId) return;\r
+    try {\r
+        await fetch('/sessions/' + sessionId + '/interrupt', {\r
+            method: 'POST',\r
+            headers: { 'Content-Type': 'application/json' },\r
+            body: JSON.stringify({ run_id: runId || '', reason: reason || '' }),\r
+        });\r
+    }\r
+    catch (e) { /* ignore */ }\r
+}\r
+\r
+function pauseCurrentRun() {\r
+    if (!currentSessionId) {\r
+        if (optimisticNewSessionRun) {\r
+            markRunAbortReason(optimisticNewSessionRun, 'user');\r
+            try { optimisticNewSessionRun.controller.abort(); } catch (e) { /* ignore */ }\r
+            optimisticNewSessionRun = null;\r
+            setSendButtonState();\r
+        }\r
+        return;\r
+    }\r
+    const run = getSessionRunState(currentSessionId);\r
+    const sid = currentSessionId;\r
+    const activeInfo = sessionStore.getActiveRunInfo(sid) || {};\r
+    const runId = run && run.runId ? run.runId : (activeInfo.run_id || activeInfo.runId || '');\r
+    if (typeof markFollowupQueueManualOnly === 'function') markFollowupQueueManualOnly(sid);\r
+    suppressSessionServerStreamActive(sid);\r
+    if (!run) {\r
+        setSendButtonState();\r
+        syncSessionListIndicatorClasses();\r
+        renderSessionListIfChanged(false);\r
+        void requestInterrupt(sid, runId, 'user_button');\r
+        setTimeout(function () { reconcileRunStateFromServer({ silent: true, respectStopSuppress: true }); }, 3000);\r
+        return;\r
+    }\r
+    const ctx = run.ctx;\r
+    const reachedServer = run.submitted !== false;\r
+    /* 先同步 abort 本地 fetch 与从 sessionStore 摘除，UI 立即反映「已停止」状态；\r
+       后端 interrupt 走 fire-and-forget，避免被主线程阻塞时按钮响应卡顿。*/\r
+    abortSessionRun(sid, 'user');\r
+    setSendButtonState();\r
+    syncSessionListIndicatorClasses();\r
+    renderSessionListIfChanged(false);\r
+    appendLog(ctx, '已请求停止当前任务', 'status', sid);\r
+    sealProcessGroup(ctx);\r
+    if (reachedServer) void requestInterrupt(sid, runId, 'user_button');\r
+    setTimeout(function () { reconcileRunStateFromServer({ silent: true, respectStopSuppress: true }); }, 3000);\r
+}\r
+\r
+/** 在当前会话中定位最近一条用户消息并重新发送。返回 true 表示已触发展开发送。*/\r
+function resendLastUserMessage() {\r
+    if (!currentSessionId) return false;\r
+    if (isSessionRunning(currentSessionId)) return false;\r
+    var lastMsg = lastUserMessageBySession[currentSessionId];\r
+    if (!lastMsg || !String(lastMsg).trim()) {\r
+        var chatStream = getVisibleChatStream();\r
+        if (chatStream) {\r
+            var wraps = chatStream.querySelectorAll('.msg-wrap--user');\r
+            if (wraps.length) {\r
+                var lastWrap = wraps[wraps.length - 1];\r
+                lastMsg = messageRawMarkdown.get(lastWrap) || (lastWrap.querySelector('.message.user') && lastWrap.querySelector('.message.user').textContent);\r
+            }\r
+        }\r
+    }\r
+    if (!lastMsg || !String(lastMsg).trim()) {\r
+        lastMsg = draftBySession[currentSessionId];\r
+    }\r
+    if (!lastMsg || !String(lastMsg).trim()) return false;\r
+    messageInput.value = String(lastMsg);\r
+    rewriteInputWorkspacePaths();\r
+    autoResizeTextarea();\r
+    sendMessage();\r
+    return true;\r
+}\r
+\r
+function showLoading() {\r
+    resetSessionHistoryPaging();\r
+    clearTocForSessionLoad();\r
+    if (!getVisibleChatStream()) ensureVisibleChatStreamSlot();\r
+    const vs = getVisibleChatStream();\r
+    if (vs) emptyChatStreamKeepingStrip(vs);\r
+    const box = document.createElement('div');\r
+    box.className = 'skeleton';\r
+    box.id = 'chat-loading';\r
+    box.setAttribute('role', 'status');\r
+    box.innerHTML = ''\r
+        + '<div class="skeleton-page" aria-hidden="true">'\r
+        + '<div class="skeleton-mast"><span></span><span></span></div>'\r
+        + '<div class="skeleton-hero"><div class="skeleton-image"></div><div class="skeleton-column"><span></span><span></span><span></span><span></span></div></div>'\r
+        + '<div class="skeleton-grid"><div><span></span><span></span><span></span></div><div><span></span><span></span><span></span></div><div><span></span><span></span><span></span></div></div>'\r
+        + '</div><div class="skeleton-copy">加载中...</div>';\r
+    box.setAttribute('data-ui-tip', '加载会话');\r
+    bindUiHoverTip(box);\r
+    (getVisibleChatStream() || chatContainer).appendChild(box);\r
+    scrollToBottom();\r
+}\r
+\r
+function hideLoading() { const loader = document.getElementById('chat-loading'); if (loader) loader.remove(); }\r
+\r
+function sessionHasUnsentDraft(sessionId) {\r
+    if (!sessionId) return false;\r
+    var draft = Object.prototype.hasOwnProperty.call(draftBySession, sessionId)\r
+        ? draftBySession[sessionId]\r
+        : readStoredInputDraft(sessionId);\r
+    return !!String(draft || '').trim();\r
+}\r
+\r
+function syncSessionDraftBadge(itemDiv, sessionId) {\r
+    if (!itemDiv || !sessionId) return;\r
+    var badge = itemDiv.querySelector('.session-draft-badge');\r
+    if (!badge) return;\r
+    var visible = String(sessionId) !== String(currentSessionId || '') && sessionHasUnsentDraft(sessionId);\r
+    badge.hidden = !visible;\r
+    itemDiv.classList.toggle('has-unsent-draft', visible);\r
+}\r
+\r
+/** 只同步草稿标签，不重绘会话列表；传入 sessionId 时仅更新对应行。 */\r
+function syncSessionDraftBadges(sessionId) {\r
+    if (!sessionsList) return;\r
+    var targetId = sessionId ? String(sessionId) : '';\r
+    sessionsList.querySelectorAll('.session-item').forEach(function (div) {\r
+        var sid = String(div.dataset.sessionId || '');\r
+        if (!sid || (targetId && sid !== targetId)) return;\r
+        syncSessionDraftBadge(div, sid);\r
+    });\r
+}\r
+\r
+/** 根据 sessionStore / 服务端 stream_active / sessionUnreadComplete 更新红点、绿点 */\r
+function applySessionItemIndicators(itemDiv, sessionId, opts) {\r
+    opts = opts || {};\r
+    if (!itemDiv || !sessionId) return;\r
+    syncSessionDraftBadge(itemDiv, sessionId);\r
+    itemDiv.classList.remove('is-generating', 'is-unread-result', 'is-unread-failed');\r
+    var nameEl = itemDiv.querySelector('.session-name');\r
+    if (nameEl) nameEl.removeAttribute('data-ui-tip');\r
+    var sess = sessionStore.get(sessionId);\r
+    var localUnreadResult = sessionUnreadComplete.has(sessionId);\r
+    var hasUnreadResult = sess ? !!sess.unread_result : localUnreadResult;\r
+    var failed = !!(sess && sess.unread_result_status === 'failed');\r
+    var running = isSessionRunning(sessionId);\r
+    if (running) {\r
+        itemDiv.classList.add('is-generating');\r
+        if (hasUnreadResult) {\r
+            // A completed queued turn is still unread while the next pending\r
+            // turn is running. Combining the classes keeps the pulse animation\r
+            // but changes the dot to the result color.\r
+            itemDiv.classList.add(failed ? 'is-unread-failed' : 'is-unread-result');\r
+        }\r
+        if (nameEl) {\r
+            nameEl.setAttribute(\r
+                'data-ui-tip',\r
+                hasUnreadResult\r
+                    ? (failed ? '已有任务失败，仍在生成' : '已有任务完成，仍在生成')\r
+                    : '生成中'\r
+            );\r
+        }\r
+    } else {\r
+        if (!hasUnreadResult) return;\r
+        itemDiv.classList.add(failed ? 'is-unread-failed' : 'is-unread-result');\r
+        if (nameEl) nameEl.setAttribute('data-ui-tip', failed ? '任务失败，点击查看' : '有新回复，点击查看');\r
+    }\r
+    if (nameEl) bindUiHoverTip(nameEl);\r
+}\r
+\r
+/** 立即刷新侧栏全部指示点与当前选中项；不依赖 loadSessions 网络回流，与是否切换会话无关 */\r
+function syncSessionListIndicatorClasses() {\r
+    if (!sessionsList) return;\r
+    sessionsList.querySelectorAll('.session-item').forEach(function (div) {\r
+        var el = div.querySelector('.session-name[data-id]');\r
+        if (!el) return;\r
+        var sid = el.getAttribute('data-id');\r
+        div.classList.toggle('active', !!sid && sid === currentSessionId);\r
+        applySessionItemIndicators(div, sid);\r
+    });\r
+    if (typeof updateAllHumanInteractionSessionBadges === 'function') updateAllHumanInteractionSessionBadges();\r
+}\r
+\r
+function sessionSectionExpanded(key) {\r
+    try {\r
+        return localStorage.getItem(LS_SESSION_SECTION_PREFIX + key) !== '0';\r
+    } catch (e) {\r
+        return true;\r
+    }\r
+}\r
+function persistSessionSectionExpanded(key, expanded) {\r
+    try {\r
+        localStorage.setItem(LS_SESSION_SECTION_PREFIX + key, expanded ? '1' : '0');\r
+    } catch (e) { /* ignore */ }\r
+}\r
+function closeAllSessionMenus() {\r
+    document.querySelectorAll('.session-more-wrap.is-open').forEach(function (w) {\r
+        w.classList.remove('is-open');\r
+        var b = w.querySelector('.session-more-btn');\r
+        if (b) b.setAttribute('aria-expanded', 'false');\r
+    });\r
+}\r
+(function bindSessionMenuDocumentCloserOnce() {\r
+    if (window.__myAgentSessionMenuCloser) return;\r
+    window.__myAgentSessionMenuCloser = true;\r
+    document.addEventListener('click', closeAllSessionMenus);\r
+})();\r
+\r
+(function bindSessionListDelegatedSwitcherOnce() {\r
+    if (!sessionsList || window.__myAgentSessionListSwitcher) return;\r
+    window.__myAgentSessionListSwitcher = true;\r
+    sessionsList.addEventListener('click', function (e) {\r
+        var target = e.target;\r
+        if (!target || !target.closest) return;\r
+        if (target.closest('button, .session-more-wrap, .session-more-menu, input, textarea, a')) return;\r
+        if (target.isContentEditable) return;\r
+        var row = target.closest('.session-item');\r
+        if (!row || !sessionsList.contains(row)) return;\r
+        var sid = row.dataset.sessionId;\r
+        if (!sid) {\r
+            var nameEl = row.querySelector('.session-name[data-id]');\r
+            sid = nameEl ? nameEl.getAttribute('data-id') : '';\r
+        }\r
+        if (sid && sid !== currentSessionId) {\r
+            Promise.resolve(switchSession(sid)).catch(function (err) {\r
+                console.error('切换会话失败:', err);\r
+            });\r
+        }\r
+    });\r
+})();\r
+\r
+function buildSessionMoreMenuMarkup() {\r
+    return '<div class="session-more-wrap">'\r
+        + '<button type="button" class="session-more-btn" aria-label="更多操作" aria-expanded="false" aria-haspopup="true" data-ui-tip="更多">'\r
+        + '<span class="session-more-dots" aria-hidden="true"><span></span><span></span><span></span></span></button>'\r
+        + '<div class="session-more-menu" role="menu">'\r
+        + '<button type="button" class="session-menu-pin" role="menuitem"></button>'\r
+        + '<button type="button" class="session-menu-todo" role="menuitem"></button>'\r
+        + '<button type="button" class="session-menu-rename" role="menuitem">重命名</button>'\r
+        + '<button type="button" class="session-menu-archive" role="menuitem"></button>'\r
+        + '<div class="session-menu-separator" role="separator"></div>'\r
+        + '<button type="button" class="session-menu-export" role="menuitem">导出会话</button>'\r
+        + '<button type="button" class="session-menu-delete" role="menuitem">删除会话</button>'\r
+        + '</div></div>';\r
+}\r
+\r
+function findSessionForActions(sessionId, fallback) {\r
+    var sid = String(sessionId || '');\r
+    var current = sessionStore.get(sid);\r
+    if (current) return current;\r
+    if (sessionStore.archivedLoaded) {\r
+        current = (sessionStore.archivedSessions || []).find(function (item) {\r
+            return item && String(item.id) === sid;\r
+        });\r
+    }\r
+    return current || fallback || null;\r
+}\r
+\r
+function syncSessionMenuLabels(wrap, sess) {\r
+    if (!wrap || !sess) return;\r
+    wrap._sessionMenuSession = sess;\r
+    var pin = wrap.querySelector('.session-menu-pin');\r
+    var todo = wrap.querySelector('.session-menu-todo');\r
+    var archive = wrap.querySelector('.session-menu-archive');\r
+    if (pin) pin.textContent = sess.pinned ? '取消置顶' : '置顶会话';\r
+    if (todo) todo.textContent = sess.todo ? '取消待办' : '设为待办';\r
+    if (archive) archive.textContent = sess.archived ? '取消归档' : '归档会话';\r
+}\r
+\r
+async function toggleSessionPinnedFromMenu(sess) {\r
+    try {\r
+        const formData = new FormData();\r
+        const nextPinned = !sess.pinned;\r
+        const previous = applyOptimisticSessionUpdate(sess.id, { pinned: nextPinned });\r
+        formData.append('pinned', nextPinned ? 'true' : 'false');\r
+        const response = await fetch('/sessions/' + encodeURIComponent(sess.id) + '/pin', { method: 'PUT', body: formData });\r
+        if (!response.ok) {\r
+            if (previous) applyOptimisticSessionUpdate(sess.id, previous);\r
+            throw new Error('pin failed: ' + response.status);\r
+        }\r
+        await refreshSingleSessionRow(sess.id);\r
+    } catch (err) { console.error('置顶失败', err); }\r
+}\r
+\r
+async function toggleSessionTodoFromMenu(sess) {\r
+    try {\r
+        const formData = new FormData();\r
+        const nextTodo = !sess.todo;\r
+        const previous = applyOptimisticSessionUpdate(sess.id, { todo: nextTodo });\r
+        formData.append('todo', nextTodo ? 'true' : 'false');\r
+        const response = await fetch('/sessions/' + encodeURIComponent(sess.id) + '/todo', { method: 'PUT', body: formData });\r
+        if (!response.ok) {\r
+            if (previous) applyOptimisticSessionUpdate(sess.id, previous);\r
+            throw new Error('todo failed: ' + response.status);\r
+        }\r
+        await refreshSingleSessionRow(sess.id);\r
+    } catch (err) { console.error('待办设置失败', err); }\r
+}\r
+\r
+async function toggleSessionArchivedFromMenu(sess) {\r
+    try {\r
+        const formData = new FormData();\r
+        const nextArchived = !sess.archived;\r
+        const previous = applyOptimisticSessionUpdate(sess.id, { archived: nextArchived });\r
+        formData.append('archived', nextArchived ? 'true' : 'false');\r
+        const response = await fetch('/sessions/' + encodeURIComponent(sess.id) + '/archive', { method: 'PUT', body: formData });\r
+        if (!response.ok) {\r
+            if (previous) applyOptimisticSessionUpdate(sess.id, previous);\r
+            throw new Error('archive failed: ' + response.status);\r
+        }\r
+        await refreshSingleSessionRow(sess.id);\r
+        if (!nextArchived && sessionStore.archivedLoaded) {\r
+            await loadArchivedSessions({ background: true, refresh: true, forceRender: true });\r
+        }\r
+    } catch (err) { console.error('归档失败', err); }\r
+}\r
+\r
+async function renameSessionFromMenu(sess) {\r
+    var requestedName = await openUiModal({\r
+        title: '重命名会话',\r
+        subtitle: '编辑会话名称',\r
+        message: '',\r
+        inputLabel: '会话名称',\r
+        inputValue: String(sess.name || ''),\r
+        inputMaxLength: 160,\r
+        inputRequired: true,\r
+        confirmText: '保存名称',\r
+        cancelText: '取消',\r
+    });\r
+    if (typeof requestedName !== 'string') return;\r
+    var newName = requestedName.trim().slice(0, 160);\r
+    if (!newName || newName === String(sess.name || '')) return;\r
+    const previous = applyOptimisticSessionUpdate(sess.id, { name: newName });\r
+    if (currentSessionId === sess.id) updateSessionTitle();\r
+    try {\r
+        const formData = new FormData();\r
+        formData.append('name', newName);\r
+        const response = await fetch('/sessions/' + encodeURIComponent(sess.id) + '/name', { method: 'PUT', body: formData });\r
+        if (!response.ok) throw new Error('rename failed: ' + response.status);\r
+        await refreshSingleSessionRow(sess.id);\r
+        if (currentSessionId === sess.id) updateSessionTitle();\r
+    } catch (err) {\r
+        console.error('重命名失败', err);\r
+        if (previous) applyOptimisticSessionUpdate(sess.id, previous);\r
+        if (currentSessionId === sess.id) updateSessionTitle();\r
+    }\r
+}\r
+\r
+async function exportSessionFromMenu(sess) {\r
+    var confirmed = await openUiModal({\r
+        title: '导出会话',\r
+        subtitle: '下载会话文件',\r
+        message: '将会话「' + String(sess.name || '未命名') + '」对应的 session 文件夹压缩为 ZIP 并下载。',\r
+        confirmText: '确认导出',\r
+        cancelText: '取消',\r
+    });\r
+    if (!confirmed) return;\r
+    var link = document.createElement('a');\r
+    link.href = '/sessions/' + encodeURIComponent(sess.id) + '/export';\r
+    link.download = 'session-' + String(sess.id || 'export') + '.zip';\r
+    link.hidden = true;\r
+    document.body.appendChild(link);\r
+    link.click();\r
+    link.remove();\r
+}\r
+\r
+async function deleteSessionFromMenu(sess, rowDiv) {\r
+    const okDel = await openUiModal({\r
+        title: '删除会话',\r
+        subtitle: '此操作不可恢复',\r
+        message: '确定删除会话「' + String(sess.name || '未命名') + '」吗？其中的消息与记录将被移除。',\r
+        danger: true,\r
+        confirmText: '删除会话',\r
+        cancelText: '取消',\r
+    });\r
+    if (!okDel) return;\r
+    const wasArchivedLoaded = sessionStore.archivedLoaded;\r
+    const deletedSessionId = String(sess.id || '');\r
+    const nextSession = sessionStore.list().find(function (s) {\r
+        return s && s.id && String(s.id) !== deletedSessionId && !s.archived;\r
+    }) || null;\r
+    sessionStore.markDeletedSession(deletedSessionId);\r
+    if (wasArchivedLoaded && sess.archived) {\r
+        const archivedBeforeDelete = sessionStore.archivedSessions || [];\r
+        const deletedArchiveIndex = archivedBeforeDelete.findIndex(function (s) {\r
+            return s && String(s.id) === deletedSessionId;\r
+        });\r
+        sessionStore.setArchivedLoaded(archivedBeforeDelete.filter(function (s) {\r
+            return s && String(s.id) !== deletedSessionId;\r
+        }), {\r
+            visibleCount: Math.max(\r
+                0,\r
+                sessionStore.archivedVisibleCount\r
+                    - (deletedArchiveIndex >= 0 && deletedArchiveIndex < sessionStore.archivedVisibleCount ? 1 : 0)\r
+            ),\r
+            totalCount: Math.max(0, sessionStore.archivedCount - 1),\r
+        });\r
+        syncArchivedSessionStateFromStore();\r
+    }\r
+    renderSessionListIfChanged(true);\r
+    if (rowDiv && rowDiv.parentNode) rowDiv.remove();\r
+    sessionUnreadComplete.delete(deletedSessionId);\r
+    scheduleTitleGenerationRefresh(deletedSessionId, false);\r
+    persistSessionUnread();\r
+    delete draftBySession[deletedSessionId];\r
+    removeStoredInputDraft(deletedSessionId);\r
+    if (typeof removeStoredFollowupQueue === 'function') removeStoredFollowupQueue(deletedSessionId);\r
+    delete lastUserMessageBySession[deletedSessionId];\r
+    clearContextStateForSession(deletedSessionId);\r
+    if (typeof discardCachedSessionStream === 'function') discardCachedSessionStream(deletedSessionId);\r
+    if (isSessionRunning(sess.id)) {\r
+        const r = abortSessionRun(sess.id, 'delete');\r
+        if (r && r.ctx && r.ctx.stream && r.ctx.stream.parentNode) r.ctx.stream.remove();\r
+        setSendButtonState();\r
+        syncSessionListIndicatorClasses();\r
+    }\r
+    if (currentSessionId === deletedSessionId) {\r
+        if (nextSession) await switchSession(nextSession.id);\r
+        else await createNewSession();\r
+    }\r
+    void requestInterrupt(deletedSessionId, '', 'session_deleted');\r
+    void fetch('/sessions/' + encodeURIComponent(deletedSessionId), { method: 'DELETE' })\r
+        .then(function (resp) {\r
+            if (!resp.ok) throw new Error('delete failed: ' + resp.status);\r
+        })\r
+        .catch(function (err) {\r
+            console.error('删除会话失败:', err);\r
+            sessionStore.clearDeletedSessionTombstone(deletedSessionId);\r
+            void loadSessions({ skipArchivedRefresh: true });\r
+            if (wasArchivedLoaded) void loadArchivedSessions({ background: true });\r
+        });\r
+}\r
+\r
+function bindSessionActionMenu(wrap, getSession, rowDiv) {\r
+    if (!wrap || wrap.dataset.sessionMenuBound === '1') return;\r
+    wrap.dataset.sessionMenuBound = '1';\r
+    var moreBtn = wrap.querySelector('.session-more-btn');\r
+    if (moreBtn) {\r
+        bindUiHoverTip(moreBtn);\r
+        moreBtn.addEventListener('click', function (e) {\r
+            e.stopPropagation();\r
+            var wasOpen = wrap.classList.contains('is-open');\r
+            closeAllSessionMenus();\r
+            var sess = getSession();\r
+            if (!sess) return;\r
+            syncSessionMenuLabels(wrap, sess);\r
+            if (!wasOpen) {\r
+                wrap.classList.add('is-open');\r
+                moreBtn.setAttribute('aria-expanded', 'true');\r
+            }\r
+        });\r
+    }\r
+    wrap.addEventListener('click', function (e) {\r
+        var target = e.target && e.target.closest ? e.target.closest('[role="menuitem"]') : null;\r
+        if (!target || !wrap.contains(target)) return;\r
+        var handler = target.classList.contains('session-menu-pin') ? toggleSessionPinnedFromMenu\r
+            : target.classList.contains('session-menu-todo') ? toggleSessionTodoFromMenu\r
+                : target.classList.contains('session-menu-rename') ? renameSessionFromMenu\r
+                    : target.classList.contains('session-menu-archive') ? toggleSessionArchivedFromMenu\r
+                        : target.classList.contains('session-menu-export') ? exportSessionFromMenu\r
+                            : target.classList.contains('session-menu-delete') ? deleteSessionFromMenu\r
+                                : null;\r
+        if (!handler) return;\r
+        e.stopPropagation();\r
+        closeAllSessionMenus();\r
+        var sess = getSession();\r
+        if (!sess) return;\r
+        Promise.resolve(handler(sess, rowDiv)).catch(function (err) {\r
+            console.error('会话菜单操作失败:', err);\r
+        });\r
+    });\r
+}\r
+\r
+var titlebarSessionMenuSnapshot = null;\r
+\r
+function getTitlebarSessionForActions(host, wrap) {\r
+    var sessionId = (host && host.dataset.sessionId) || currentSessionId;\r
+    return findSessionForActions(sessionId, wrap && wrap._sessionMenuSession)\r
+        || titlebarSessionMenuSnapshot;\r
+}\r
+\r
+function syncTitlebarSessionMenu(sess) {\r
+    var host = document.getElementById('breadcrumb-session-actions');\r
+    if (!host) return;\r
+    titlebarSessionMenuSnapshot = sess ? Object.assign({}, titlebarSessionMenuSnapshot || {}, sess) : null;\r
+    host.dataset.sessionId = titlebarSessionMenuSnapshot ? String(titlebarSessionMenuSnapshot.id || '') : '';\r
+    host.classList.toggle('hidden', !sess);\r
+    var wrap = host.querySelector('.session-more-wrap');\r
+    if (wrap && titlebarSessionMenuSnapshot) syncSessionMenuLabels(wrap, titlebarSessionMenuSnapshot);\r
+}\r
+\r
+(function mountTitlebarSessionMenu() {\r
+    var host = document.getElementById('breadcrumb-session-actions');\r
+    if (!host || host.dataset.sessionMenuMounted === '1') return;\r
+    host.dataset.sessionMenuMounted = '1';\r
+    host.innerHTML = buildSessionMoreMenuMarkup();\r
+    var wrap = host.querySelector('.session-more-wrap');\r
+    bindSessionActionMenu(wrap, function () {\r
+        return getTitlebarSessionForActions(host, wrap);\r
+    }, null);\r
+    syncTitlebarSessionMenu(currentSessionId ? findSessionForActions(currentSessionId, null) : null);\r
+})();\r
+\r
+/** 创建并绑定单条会话及其分区操作菜单。 */\r
+function buildAndBindSessionRow(sess, allSessions, nextStreamMap) {\r
+    const div = document.createElement('div');\r
+    div.className = 'session-item';\r
+    div.dataset.sessionId = sess.id || '';\r
+    if (currentSessionId === sess.id) div.classList.add('active');\r
+    if (sess.id) nextStreamMap[sess.id] = !!sess.stream_active;\r
+    if (sess.id) scheduleTitleGenerationRefresh(sess.id, !!sess.title_generation_pending);\r
+    var displayName = typeof localizeSessionPlaceholderName === 'function'\r
+        ? localizeSessionPlaceholderName(sess.name)\r
+        : (sess.name || '');\r
+    div.innerHTML = '<div class="session-item-head">'\r
+        + '<div class="session-item-main">'\r
+        + '<div class="session-item-title-row">'\r
+        + '<span class="session-name" data-id="' + sess.id + '" data-original="' + escapeHtml(sess.name) + '">' + escapeHtml(displayName) + '</span>'\r
+        + '<span class="session-todo-badge" aria-label="待办"' + (sess.todo ? '' : ' hidden') + '>待办</span>'\r
+        + '<span class="session-draft-badge" aria-label="草稿" hidden>草稿</span>'\r
+        + '<span class="session-item-date"></span>'\r
+        + '</div>'\r
+        + '<div class="session-last-query"></div>'\r
+        + '</div>'\r
+        + buildSessionMoreMenuMarkup()\r
+        + '</div>';\r
+    if (typeof updateHumanInteractionSessionBadge === 'function') {\r
+        setTimeout(function () { updateHumanInteractionSessionBadge(sess.id); }, 0);\r
+    }\r
+    var wsLine = formatSessionListSubtitle(sess);\r
+    var wsEl = div.querySelector('.session-last-query');\r
+    if (wsEl) wsEl.textContent = wsLine;\r
+    var dateEl = div.querySelector('.session-item-date');\r
+    var dateLine = '';\r
+    if (dateEl) {\r
+        dateLine = typeof formatSessionListDate === 'function' ? formatSessionListDate(sess) : '';\r
+        if (dateLine) {\r
+            dateEl.innerHTML = (typeof sessionDateIcon === 'function' ? sessionDateIcon() : '') + dateLine;\r
+        } else {\r
+            dateEl.textContent = '';\r
+        }\r
+    }\r
+    var itemTip = typeof buildSessionItemTooltip === 'function' ? buildSessionItemTooltip(sess) : '';\r
+    if (itemTip) {\r
+        div.setAttribute('data-ui-tip', itemTip);\r
+        bindUiHoverTip(div);\r
+    }\r
+    var moreWrap = div.querySelector('.session-more-wrap');\r
+    syncSessionMenuLabels(moreWrap, sess);\r
+    bindSessionActionMenu(moreWrap, function () {\r
+        return findSessionForActions(sess.id, sess);\r
+    }, div);\r
+    var nameEl = div.querySelector('.session-name');\r
+    if (nameEl) {\r
+        nameEl.addEventListener('dblclick', function (e) {\r
+            e.preventDefault();\r
+            e.stopPropagation();\r
+            var current = findSessionForActions(sess.id, sess);\r
+            if (!current) return;\r
+            Promise.resolve(renameSessionFromMenu(current)).catch(function (err) {\r
+                console.error('双击重命名会话失败:', err);\r
+            });\r
+        });\r
+    }\r
+    applySessionItemIndicators(div, sess.id, { serverStreamActive: !!sess.stream_active });\r
+    return div;\r
+}\r
+\r
+const sessionTitleRefreshState = Object.create(null);\r
+\r
+function scheduleTitleGenerationRefresh(sessionId, pending) {\r
+    const sid = String(sessionId || '');\r
+    if (!sid) return;\r
+    let state = sessionTitleRefreshState[sid];\r
+    if (!pending) {\r
+        if (state && state.timer) clearTimeout(state.timer);\r
+        delete sessionTitleRefreshState[sid];\r
+        return;\r
+    }\r
+    if (!state) state = sessionTitleRefreshState[sid] = { attempts: 0, timer: null };\r
+    if (state.timer || state.attempts >= 60) return;\r
+    const delayMs = Math.min(10000, Math.round(1000 * Math.pow(1.45, state.attempts)));\r
+    state.timer = setTimeout(function () {\r
+        state.timer = null;\r
+        state.attempts += 1;\r
+        void refreshSingleSessionRow(sid);\r
+    }, delayMs);\r
+}\r
+\r
+async function refreshSingleSessionRow(sessionId) {\r
+    if (!sessionId || !sessionsList) return;\r
+    try {\r
+        const response = await fetch('/sessions/' + encodeURIComponent(sessionId));\r
+        if (!response.ok) return;\r
+        const sess = await response.json();\r
+        if (!sess || !sess.id) return;\r
+        scheduleTitleGenerationRefresh(sess.id, !!sess.title_generation_pending);\r
+        applySessionPatch({\r
+            session: sess,\r
+            session_id: sess.id,\r
+            stream_active: !!sess.stream_active,\r
+        });\r
+        setSessionServerStreamActive(sess.id, !!sess.stream_active);\r
+        if (sess.unread_result) {\r
+            if (!sessionUnreadComplete.has(sess.id)) {\r
+                sessionUnreadComplete.add(sess.id);\r
+                persistSessionUnread();\r
+            }\r
+        } else if (sessionUnreadComplete.delete(sess.id)) {\r
+            persistSessionUnread();\r
+        }\r
+        if (Number(sess.subagent_running || 0) > 0) {\r
+            sessionUnreadComplete.delete(sess.id);\r
+            persistSessionUnread();\r
+        }\r
+        renderSessionListIfChanged(false);\r
+        if (typeof maybeAutoResumeInterruptedReact === 'function') {\r
+            maybeAutoResumeInterruptedReact(sessionId, sess);\r
+        }\r
+    } catch (e) {\r
+        console.error('刷新会话摘要失败:', e);\r
+    }\r
+}\r
+\r
+let sessionListLoadEpoch = 0;\r
+let sessionListLoadPromise = null;\r
+let sessionListRenderKey = '';\r
+let createNewSessionQueue = Promise.resolve();\r
+let archivedSessionsLoaded = false;\r
+let archivedSessionsCache = null;\r
+let archivedSessionsCount = 0;\r
+let archivedSessionsLoadEpoch = 0;\r
+\r
+function syncArchivedSessionStateFromStore() {\r
+    archivedSessionsLoaded = !!sessionStore.archivedLoaded;\r
+    archivedSessionsCache = sessionStore.archivedSessions;\r
+    archivedSessionsCount = sessionStore.archivedCount;\r
+}\r
+\r
+function computeSessionListRenderKey() {\r
+    const sessions = sessionStore.list();\r
+    const parts = [\r
+        'archivedLoaded=' + (sessionStore.archivedLoaded ? '1' : '0'),\r
+        'archivedCount=' + String(sessionStore.archivedCount || 0),\r
+    ];\r
+    for (let i = 0; i < sessions.length; i += 1) {\r
+        const s = sessions[i];\r
+        if (!s || !s.id) continue;\r
+        parts.push([\r
+            s.id,\r
+            s.name || '',\r
+            s.pinned ? 'p' : '',\r
+            s.todo ? 't' : '',\r
+            s.archived ? 'a' : '',\r
+            s.last_activity_at || s.updated_at || '',\r
+            s.last_user_preview || '',\r
+        ].join('\\u001f'));\r
+    }\r
+    const archived = sessionStore.archivedList();\r
+    for (let j = 0; j < archived.length; j += 1) {\r
+        const a = archived[j];\r
+        if (!a || !a.id) continue;\r
+        parts.push('arch=' + [\r
+            a.id,\r
+            a.name || '',\r
+            a.pinned ? 'p' : '',\r
+            a.todo ? 't' : '',\r
+            a.last_activity_at || a.updated_at || '',\r
+            a.last_user_preview || '',\r
+        ].join('\\u001f'));\r
+    }\r
+    return parts.join('\\u001e');\r
+}\r
+\r
+function renderSessionListIfChanged(force) {\r
+    const nextKey = computeSessionListRenderKey();\r
+    if (!force && nextKey === sessionListRenderKey) {\r
+        syncSessionListIndicatorClasses();\r
+        renderSessionTitleFromStore();\r
+        return;\r
+    }\r
+    sessionListRenderKey = nextKey;\r
+    const nextStreamMap = renderSessionListFromStore();\r
+    applyServerStreamActiveMap(nextStreamMap);\r
+    renderSessionTitleFromStore();\r
+}\r
+\r
+function clearSessionListError() {\r
+    if (!sessionsList) return;\r
+    sessionsList.classList.remove('sessions-list--error');\r
+    if (sessionsList.dataset.loadError === '1') delete sessionsList.dataset.loadError;\r
+}\r
+\r
+function renderSessionListError(message) {\r
+    if (!sessionsList) return;\r
+    sessionListRenderKey = '';\r
+    sessionsList.classList.add('sessions-list--error');\r
+    sessionsList.dataset.loadError = '1';\r
+    sessionsList.innerHTML = '';\r
+    const row = document.createElement('div');\r
+    row.className = 'session-list-error';\r
+    row.setAttribute('role', 'status');\r
+    row.textContent = message || '加载会话列表失败';\r
+    sessionsList.appendChild(row);\r
+}\r
+\r
+function applyOptimisticSessionUpdate(sessionId, patch) {\r
+    const sid = String(sessionId || '');\r
+    const current = sessionStore.get(sid) || (sessionStore.archivedLoaded\r
+        ? (sessionStore.archivedSessions || []).find(function (session) {\r
+            return session && String(session.id) === sid;\r
+        })\r
+        : null);\r
+    if (!current) return null;\r
+    const prev = Object.assign({}, current);\r
+    const next = Object.assign({}, current, patch || {});\r
+    if (Object.prototype.hasOwnProperty.call(patch || {}, 'pinned')) {\r
+        next.pinned_at = next.pinned ? (next.pinned_at || new Date().toISOString()) : null;\r
+    }\r
+    sessionStore.upsert(next);\r
+    if (prev.archived || next.archived) {\r
+        if (sessionStore.archivedLoaded) {\r
+            const archivedList = (sessionStore.archivedSessions || []).slice();\r
+            const archivedIndex = archivedList.findIndex(function (s) {\r
+                return s && String(s.id) === sid;\r
+            });\r
+            let visibleCount = sessionStore.archivedVisibleCount;\r
+            let totalCount = sessionStore.archivedCount;\r
+            if (prev.archived && next.archived) {\r
+                if (archivedIndex >= 0) archivedList[archivedIndex] = next;\r
+            } else if (prev.archived) {\r
+                if (archivedIndex >= 0) archivedList.splice(archivedIndex, 1);\r
+                if (archivedIndex >= 0 && archivedIndex < visibleCount) visibleCount -= 1;\r
+                totalCount = Math.max(0, totalCount - 1);\r
+            } else if (next.archived) {\r
+                archivedList.unshift(next);\r
+                visibleCount += 1;\r
+                totalCount += 1;\r
+            }\r
+            sessionStore.setArchivedLoaded(archivedList, {\r
+                visibleCount: visibleCount,\r
+                totalCount: totalCount,\r
+            });\r
+            syncArchivedSessionStateFromStore();\r
+        } else if (!!prev.archived !== !!next.archived) {\r
+            sessionStore.setArchivedCount(Math.max(\r
+                0,\r
+                sessionStore.archivedCount + (next.archived ? 1 : -1)\r
+            ));\r
+        }\r
+    }\r
+    renderSessionListIfChanged(true);\r
+    return prev;\r
+}\r
+\r
+// Event count cache for optimistic UI updates.\r
+const uiEventCountCache = {\r
+    cache: new Map(),\r
+    maxAgeMs: 10000,\r
+    \r
+    get(sessionId) {\r
+        var entry = this.cache.get(sessionId);\r
+        if (entry && typeof entry === 'object') return Number(entry.count) || 0;\r
+        return Number(entry) || 0;\r
+    },\r
+\r
+    has(sessionId) {\r
+        return this.cache.has(sessionId);\r
+    },\r
+\r
+    isFresh(sessionId, maxAgeMs) {\r
+        var entry = this.cache.get(sessionId);\r
+        if (!entry || typeof entry !== 'object') return false;\r
+        var age = Date.now() - Number(entry.updatedAt || 0);\r
+        var limit = Number(maxAgeMs) > 0 ? Number(maxAgeMs) : this.maxAgeMs;\r
+        return age >= 0 && age <= limit;\r
+    },\r
+    \r
+    set(sessionId, count) {\r
+        this.cache.set(sessionId, {\r
+            count: Math.max(0, Number(count) || 0),\r
+            updatedAt: Date.now(),\r
+        });\r
+    },\r
+    \r
+    increment(sessionId) {\r
+        const current = this.get(sessionId);\r
+        this.set(sessionId, current + 1);\r
+        return current + 1;\r
+    },\r
+    \r
+    updateFromServer(sessionId, count) {\r
+        this.set(sessionId, count);\r
+    }\r
+};\r
+\r
+async function fetchSessionsStateSnapshot(opts) {\r
+    opts = opts || {};\r
+    const url = '/sessions/state' + (opts.includeArchived ? '?include_archived=true' : '');\r
+    const response = await fetchWithTimeout(url, {}, 12000);\r
+    if (!response.ok) throw new Error('sessions state failed: ' + response.status);\r
+    const snapshot = await response.json();\r
+    if (!snapshot || !Array.isArray(snapshot.sessions)) {\r
+        throw new Error('invalid sessions state response');\r
+    }\r
+    snapshot.include_archived = !!opts.includeArchived;\r
+    return snapshot;\r
+}\r
+\r
+function deriveSidebarRuntimeStatus() {\r
+    var busy = false;\r
+    sessionStore.runsBySession.forEach(function () { busy = true; });\r
+    if (!busy) {\r
+        sessionStore.activeRunInfoBySession.forEach(function (info) {\r
+            if (!info || info.run_active !== false) busy = true;\r
+        });\r
+    }\r
+    if (busy) return 'busy';\r
+    return 'online';\r
+}\r
+\r
+function updateSidebarRuntimeStatus(nextStatus) {\r
+    var footer = document.querySelector('.sidebar-runtime');\r
+    var status = document.getElementById('sidebar-runtime-status');\r
+    if (!footer || !status) return;\r
+    var state = nextStatus === false ? 'offline'\r
+        : (nextStatus === true || !nextStatus ? deriveSidebarRuntimeStatus() : String(nextStatus));\r
+    if (['online', 'busy', 'waiting', 'alert', 'offline'].indexOf(state) < 0) state = 'online';\r
+    footer.classList.remove('is-online', 'is-busy', 'is-waiting', 'is-alert', 'is-offline');\r
+    footer.classList.add('is-' + state);\r
+    var labels = {\r
+        online: 'Runtime 在线',\r
+        busy: 'Runtime 繁忙',\r
+        waiting: 'Runtime 待处理',\r
+        alert: 'Runtime 告警',\r
+        offline: 'Runtime 离线'\r
+    };\r
+    setUiRuntimeText(status, labels[state]);\r
+    footer.dataset.runtimeStatus = state;\r
+}\r
+\r
+var runtimeStatusHeartbeatTimer = null;\r
+var lastUiActivationSeq = 0;\r
+async function refreshRuntimeStatus() {\r
+    try {\r
+        var response = await fetchWithTimeout('/api/runtime-status', { cache: 'no-store' }, 5000);\r
+        if (!response.ok) throw new Error('runtime status failed: ' + response.status);\r
+        var payload = await response.json();\r
+        updateSidebarRuntimeStatus(payload && payload.status ? payload.status : true);\r
+        var activationSeq = Number(payload && payload.activation_seq) || 0;\r
+        if (activationSeq > lastUiActivationSeq) {\r
+            lastUiActivationSeq = activationSeq;\r
+            try { window.focus(); } catch (e) { /* browser policy may reject focus */ }\r
+        }\r
+    } catch (error) {\r
+        updateSidebarRuntimeStatus(false);\r
+    }\r
+}\r
+\r
+function startRuntimeStatusHeartbeat() {\r
+    if (runtimeStatusHeartbeatTimer) clearInterval(runtimeStatusHeartbeatTimer);\r
+    void refreshRuntimeStatus();\r
+    runtimeStatusHeartbeatTimer = setInterval(refreshRuntimeStatus, 5000);\r
+}\r
+\r
+async function fetchWithTimeout(url, options, timeoutMs) {\r
+    options = options || {};\r
+    const ms = Number(timeoutMs) > 0 ? Number(timeoutMs) : 15000;\r
+    if (options.signal) return fetch(url, options);\r
+    const controller = new AbortController();\r
+    const timer = setTimeout(function () { controller.abort(); }, ms);\r
+    const nextOptions = Object.assign({}, options, { signal: controller.signal });\r
+    try {\r
+        return await fetch(url, nextOptions);\r
+    } finally {\r
+        clearTimeout(timer);\r
+    }\r
+}\r
+\r
+async function fetchArchivedSessionPage(offset, limit) {\r
+    const url = '/sessions?include_archived=true&archived_only=true&offset=' + String(offset)\r
+        + '&limit=' + String(limit);\r
+    const response = await fetchWithTimeout(url, {}, 15000);\r
+    if (!response.ok) throw new Error('archived sessions failed: ' + response.status);\r
+    const sessions = await response.json();\r
+    const countHeader = response.headers.get('X-Archived-Count');\r
+    const parsedCount = Number(countHeader);\r
+    return {\r
+        sessions: Array.isArray(sessions) ? sessions : [],\r
+        totalCount: Number.isFinite(parsedCount) && parsedCount >= 0\r
+            ? parsedCount\r
+            : Math.max(offset + (Array.isArray(sessions) ? sessions.length : 0), sessionStore.archivedCount),\r
+    };\r
+}\r
+\r
+function appendArchivedSessionPage(page, visibleCount) {\r
+    const combined = (sessionStore.archivedSessions || []).concat(page.sessions || []);\r
+    const seen = new Set();\r
+    const deduplicated = combined.filter(function (s) {\r
+        const sid = s && s.id ? String(s.id) : '';\r
+        if (!sid || seen.has(sid)) return false;\r
+        seen.add(sid);\r
+        return true;\r
+    });\r
+    sessionStore.setArchivedLoaded(deduplicated, {\r
+        visibleCount: visibleCount,\r
+        totalCount: page.totalCount,\r
+    });\r
+}\r
+\r
+async function prefetchNextArchivedPage(loadEpoch) {\r
+    const cachedCount = Array.isArray(sessionStore.archivedSessions)\r
+        ? sessionStore.archivedSessions.length\r
+        : 0;\r
+    const wantedCount = Math.min(\r
+        sessionStore.archivedCount,\r
+        sessionStore.archivedVisibleCount + ARCHIVED_SESSIONS_PAGE_SIZE\r
+    );\r
+    if (cachedCount >= wantedCount) return;\r
+    const page = await fetchArchivedSessionPage(cachedCount, wantedCount - cachedCount);\r
+    if (loadEpoch !== archivedSessionsLoadEpoch) return;\r
+    appendArchivedSessionPage(page, sessionStore.archivedVisibleCount);\r
+}\r
+\r
+async function loadArchivedSessions(opts) {\r
+    opts = opts || {};\r
+    const loadEpoch = ++archivedSessionsLoadEpoch;\r
+    try {\r
+        if (!sessionStore.archivedLoaded) {\r
+            const initialPage = await fetchArchivedSessionPage(0, ARCHIVED_SESSIONS_PAGE_SIZE * 2);\r
+            if (loadEpoch !== archivedSessionsLoadEpoch) return;\r
+            sessionStore.setArchivedLoaded(initialPage.sessions, {\r
+                visibleCount: ARCHIVED_SESSIONS_PAGE_SIZE,\r
+                totalCount: initialPage.totalCount,\r
+            });\r
+        } else if (opts.background || opts.refresh || !sessionStore.hasMoreArchivedSessions()) {\r
+            const refreshLimit = Math.max(\r
+                ARCHIVED_SESSIONS_PAGE_SIZE * 2,\r
+                sessionStore.archivedVisibleCount + ARCHIVED_SESSIONS_PAGE_SIZE\r
+            );\r
+            const refreshedPage = await fetchArchivedSessionPage(0, refreshLimit);\r
+            if (loadEpoch !== archivedSessionsLoadEpoch) return;\r
+            sessionStore.setArchivedLoaded(refreshedPage.sessions, {\r
+                visibleCount: sessionStore.archivedVisibleCount,\r
+                totalCount: refreshedPage.totalCount,\r
+            });\r
+        } else {\r
+            if (sessionStore.revealNextArchivedPage() === 0) {\r
+                const cachedCount = Array.isArray(sessionStore.archivedSessions)\r
+                    ? sessionStore.archivedSessions.length\r
+                    : 0;\r
+                const nextPage = await fetchArchivedSessionPage(cachedCount, ARCHIVED_SESSIONS_PAGE_SIZE);\r
+                if (loadEpoch !== archivedSessionsLoadEpoch) return;\r
+                appendArchivedSessionPage(nextPage, sessionStore.archivedVisibleCount);\r
+                sessionStore.revealNextArchivedPage();\r
+            }\r
+            syncArchivedSessionStateFromStore();\r
+            renderSessionListIfChanged(true);\r
+            clearSessionListError();\r
+            try {\r
+                await prefetchNextArchivedPage(loadEpoch);\r
+            } catch (prefetchErr) {\r
+                console.error('预加载下一批归档目录失败:', prefetchErr);\r
+            }\r
+        }\r
+        if (loadEpoch !== archivedSessionsLoadEpoch) return;\r
+        syncArchivedSessionStateFromStore();\r
+        renderSessionListIfChanged(!!opts.forceRender);\r
+        clearSessionListError();\r
+    } catch (err) {\r
+        console.error('加载归档目录失败:', err);\r
+        if (!opts.background) throw err;\r
+    }\r
+}\r
+\r
+async function loadSessions(opts) {\r
+    opts = opts || {};\r
+    if (sessionListLoadPromise && !opts.force) return sessionListLoadPromise;\r
+    sessionListLoadPromise = loadSessionsInner(opts);\r
+    try {\r
+        return await sessionListLoadPromise;\r
+    } finally {\r
+        sessionListLoadPromise = null;\r
+    }\r
+}\r
+\r
+async function loadSessionsInner(opts) {\r
+    const loadEpoch = ++sessionListLoadEpoch;\r
+    sessionStore.ui.loadingSessions = true;\r
+    try {\r
+        let allSessions;\r
+        let snapshot = null;\r
+        \r
+        try {\r
+            snapshot = await fetchSessionsStateSnapshot();\r
+            if (loadEpoch !== sessionListLoadEpoch) return;\r
+            updateSidebarRuntimeStatus(true);\r
+            allSessions = Array.isArray(snapshot.sessions) ? snapshot.sessions : [];\r
+        } catch (stateErr) {\r
+            console.error('加载会话状态快照失败，回退至旧接口', stateErr);\r
+            const response = await fetchWithTimeout('/sessions', {}, 12000);\r
+            const archivedCountHeader = response.headers.get('X-Archived-Count');\r
+            if (archivedCountHeader != null && archivedCountHeader !== '') {\r
+                const parsedArchivedCount = Number(archivedCountHeader);\r
+                if (Number.isFinite(parsedArchivedCount) && parsedArchivedCount >= 0) {\r
+                    sessionStore.setArchivedCount(parsedArchivedCount);\r
+                    syncArchivedSessionStateFromStore();\r
+                }\r
+            }\r
+            const sessions = await response.json();\r
+            if (loadEpoch !== sessionListLoadEpoch) return;\r
+            updateSidebarRuntimeStatus(true);\r
+            allSessions = Array.isArray(sessions) ? sessions : [];\r
+            snapshot = {\r
+                sessions: allSessions,\r
+                archived_count: archivedSessionsCount,\r
+            };\r
+        }\r
+        applySessionSnapshot(snapshot || { sessions: allSessions, archived_count: archivedSessionsCount });\r
+        syncArchivedSessionStateFromStore();\r
+        allSessions = sessionStore.list();\r
+        \r
+        const idSet = new Set();\r
+        for (let si = 0; si < allSessions.length; si += 1) {\r
+            if (allSessions[si] && allSessions[si].id) idSet.add(allSessions[si].id);\r
+        }\r
+        [...sessionUnreadComplete].forEach(function (uid) {\r
+            if (!idSet.has(uid)) sessionUnreadComplete.delete(uid);\r
+        });\r
+        persistSessionUnread();\r
+\r
+        renderSessionListIfChanged(!!opts.forceRender);\r
+        clearSessionListError();\r
+        sessionStore.ui.loadingSessions = false;\r
+        if (opts.refreshArchived && !opts.skipArchivedRefresh && sessionStore.archivedLoaded) {\r
+            void loadArchivedSessions({ background: true });\r
+        }\r
+        return true;\r
+    } catch (error) {\r
+        sessionStore.ui.loadingSessions = false;\r
+        updateSidebarRuntimeStatus(false);\r
+        console.error('加载会话列表失败:', error);\r
+        if (sessionStore.list().length > 0) {\r
+            renderSessionListIfChanged(true);\r
+            clearSessionListError();\r
+        } else {\r
+            renderSessionListError('加载会话列表失败');\r
+        }\r
+        return false;\r
+    }\r
+}\r
+\r
+async function reconcileRunStateFromServer(opts) {\r
+    opts = opts || {};\r
+    const suppressedBeforeFetch = new Set();\r
+    if (opts.respectStopSuppress) {\r
+        sessionStore.sessionOrder.forEach(function (sid) {\r
+            if (isSessionStreamStopSuppressed(sid)) suppressedBeforeFetch.add(String(sid));\r
+        });\r
+        if (currentSessionId && isSessionStreamStopSuppressed(currentSessionId)) {\r
+            suppressedBeforeFetch.add(String(currentSessionId));\r
+        }\r
+    }\r
+    let snapshot = null;\r
+    try {\r
+        const cur = currentSessionId ? sessionStore.get(currentSessionId) : null;\r
+        snapshot = await fetchSessionsStateSnapshot({\r
+            includeArchived: !!(sessionStore.archivedLoaded || (cur && cur.archived)),\r
+        });\r
+    } catch (e) {\r
+        updateSidebarRuntimeStatus(false);\r
+        if (!opts.silent) console.error('reconcile run state failed:', e);\r
+        return;\r
+    }\r
+    applySessionSnapshot(snapshot);\r
+    updateSidebarRuntimeStatus(true);\r
+    if (opts.respectStopSuppress) {\r
+        suppressedBeforeFetch.forEach(function (sid) {\r
+            if (isSessionStreamStopSuppressed(sid)) {\r
+                sessionStore.setStreamActive(sid, false);\r
+                const sess = sessionStore.get(sid);\r
+                if (sess) {\r
+                    sess.stream_active = false;\r
+                    sess.run_active = false;\r
+                    sess.run_started_at = null;\r
+                }\r
+                sessionStore.activeRunInfoBySession.delete(sid);\r
+            }\r
+        });\r
+    }\r
+    const active = new Set();\r
+    sessionStore.activeRunInfoBySession.forEach(function (info, sid) {\r
+        if (info && info.run_active === true) active.add(String(sid));\r
+    });\r
+    const localIds = [];\r
+    sessionStore.runsBySession.forEach(function (_run, sid) {\r
+        localIds.push(String(sid));\r
+    });\r
+    localIds.forEach(function (sid) {\r
+        if (!active.has(sid)) {\r
+            var run = getSessionRunState(sid);\r
+            if (run && run.reattached) {\r
+                abortSessionRun(sid, 'reconcile-finished');\r
+            }\r
+        }\r
+    });\r
+    if (currentSessionId && active.has(currentSessionId)) {\r
+        const info = sessionStore.getActiveRunInfo(currentSessionId) || {};\r
+        const run = getSessionRunState(currentSessionId);\r
+        const ctx = run && run.ctx;\r
+        const agg = ctx && ctx.currentProcessGroup && ctx.currentProcessGroup.isConnected\r
+            ? ctx.currentProcessGroup\r
+            : (getVisibleChatStream() && getVisibleChatStream().querySelector('.process-aggregate:last-of-type'));\r
+        if (agg && info.started_at) applyRunStartedAtToProcessGroup(agg, info.started_at);\r
+    }\r
+    syncSessionListIndicatorClasses();\r
+    setSendButtonState();\r
+    renderSessionListIfChanged(false);\r
+}\r
+\r
+function showSessionLoadRetry(sessionId) {\r
+    var sid = String(sessionId || '');\r
+    var stream = getVisibleChatStream();\r
+    if (!sid || !stream) return;\r
+    if (stream.querySelector('.session-load-retry')) return;\r
+    var row = document.createElement('div');\r
+    row.className = 'feed-item feed--err session-load-retry';\r
+    var btn = document.createElement('button');\r
+    btn.type = 'button';\r
+    btn.className = 'history-load-older-btn';\r
+    btn.textContent = '重新加载';\r
+    btn.addEventListener('click', function (e) {\r
+        e.preventDefault();\r
+        if (typeof discardCachedSessionStream === 'function') discardCachedSessionStream(sid);\r
+        void switchSession(sid, { forceReload: true });\r
+    });\r
+    row.appendChild(btn);\r
+    stream.appendChild(row);\r
+}\r
+\r
+async function loadSessionMessages(sessionId, scrollBehavior, opts) {\r
+    const openSessionStartedAt = (typeof performance !== 'undefined' && performance.now)\r
+        ? performance.now()\r
+        : Date.now();\r
+    scrollBehavior = scrollBehavior || 'saved-or-bottom';\r
+    opts = opts || {};\r
+    const loadToken = ++messageLoadEpoch;\r
+    let historyHydrationStream = null;\r
+    const finishHistoryHydration = function () {\r
+        if (historyHydrationStream) {\r
+            historyHydrationStream.hidden = false;\r
+            historyHydrationStream = null;\r
+        }\r
+        if (loadToken === messageLoadEpoch) hideLoading();\r
+        if (typeof attachAllHumanInteractionCards === 'function') {\r
+            attachAllHumanInteractionCards(getVisibleChatStream());\r
+        }\r
+    };\r
+    sessionStore.ui.loadingMessages = true;\r
+    suppressTocDuringSessionLoad = true;\r
+    replayingMessages = true;\r
+    if (typeof cancelSmoothStreamFollowForHistoryLoad === 'function') {\r
+        cancelSmoothStreamFollowForHistoryLoad();\r
+    }\r
+    resetSessionHistoryPaging();\r
+    try {\r
+        let raw;\r
+        let snapshotTocTurns = null;\r
+        let historySource = 'messages';\r
+        let snapshotTiming = null;\r
+        const canUseSnapshot = !opts.full && opts.useSnapshot !== false && beforeSessionMessageSnapshotAvailable();\r
+        if (canUseSnapshot) {\r
+            try {\r
+                const snapshotUrl = '/sessions/' + encodeURIComponent(sessionId)\r
+                    + '/history_snapshot?turns=' + encodeURIComponent(String(HISTORY_DIALOGUES_PER_PAGE))\r
+                    + '&event_budget=' + encodeURIComponent(String(HISTORY_EVENT_BUDGET))\r
+                    + '&include_aux=false';\r
+                for (let migrationAttempt = 0; migrationAttempt < 120; migrationAttempt += 1) {\r
+                    const snapshotResp = await fetchWithTimeout(snapshotUrl, {}, 15000);\r
+                    const snapshot = await snapshotResp.json().catch(function () { return null; });\r
+                    if (snapshot && snapshot.migration_pending) {\r
+                        if (loadToken !== messageLoadEpoch || sessionId !== currentSessionId) return;\r
+                        const retryMs = Math.max(100, Math.min(Number(snapshot.retry_after_ms) || 250, 1000));\r
+                        await new Promise(function (resolve) { setTimeout(resolve, retryMs); });\r
+                        continue;\r
+                    }\r
+                    if (snapshotResp.ok) {\r
+                    if (snapshot && snapshot.ok && snapshot.messages) {\r
+                        raw = snapshot.messages;\r
+                        historySource = 'history_snapshot';\r
+                        snapshotTiming = snapshot.timing && typeof snapshot.timing === 'object'\r
+                            ? snapshot.timing\r
+                            : null;\r
+                        if (typeof uiEventCountCache !== 'undefined' && typeof snapshot.count === 'number') {\r
+                            uiEventCountCache.updateFromServer(sessionId, snapshot.count);\r
+                        }\r
+                        if (Array.isArray(snapshot.user_turns)) {\r
+                            snapshotTocTurns = snapshot.user_turns;\r
+                            if (typeof setTocTurnsForSession === 'function') setTocTurnsForSession(sessionId, snapshot.user_turns);\r
+                        }\r
+                        if (snapshot.context_tokens && snapshot.context_tokens.estimated != null) {\r
+                            recordContextTokens(sessionId, snapshot.context_tokens.estimated, snapshot.context_tokens.threshold);\r
+                        }\r
+                        if (typeof snapshot.stream_active === 'boolean' || typeof snapshot.run_active === 'boolean') {\r
+                            const __snapActive = !!(snapshot.stream_active || snapshot.run_active);\r
+                            if (typeof setSessionServerStreamActive === 'function') setSessionServerStreamActive(sessionId, __snapActive);\r
+                            if (typeof applySessionPatch === 'function') {\r
+                                try { applySessionPatch({ session_id: sessionId, stream_active: __snapActive }); } catch (e) {}\r
+                            }\r
+                            try {\r
+                                const __sess = sessionStore.get(sessionId);\r
+                                if (__sess) { __sess.stream_active = __snapActive; __sess.run_active = __snapActive; }\r
+                            } catch (e) {}\r
+                        }\r
+                    }\r
+                    }\r
+                    break;\r
+                }\r
+            } catch (snapshotErr) {\r
+                console.warn('history snapshot unavailable, falling back to messages:', snapshotErr);\r
+            }\r
+        }\r
+        if (!raw) {\r
+            let url = '/sessions/' + encodeURIComponent(sessionId) + '/messages';\r
+            if (!opts.full) {\r
+                url += '?turns=' + HISTORY_DIALOGUES_PER_PAGE\r
+                    + '&event_budget=' + encodeURIComponent(String(HISTORY_EVENT_BUDGET));\r
+            }\r
+            const response = await fetchWithTimeout(url, {}, 15000);\r
+            if (!response.ok) throw new Error('messages failed: ' + response.status);\r
+            raw = await response.json();\r
+        }\r
+        if (loadToken !== messageLoadEpoch || sessionId !== currentSessionId) return;\r
+        if (getSessionRunState(sessionId) && !opts.allowDuringRun) return;\r
+        if (!getVisibleChatStream()) ensureVisibleChatStreamSlot();\r
+        const vis = getVisibleChatStream();\r
+        if (vis) {\r
+            const loader = document.getElementById('chat-loading');\r
+            if (loader && loader.parentNode === vis && chatContainer) {\r
+                chatContainer.insertBefore(loader, vis);\r
+            }\r
+            vis.hidden = true;\r
+            historyHydrationStream = vis;\r
+            emptyChatStreamKeepingStrip(vis);\r
+        }\r
+        else {\r
+            chatContainer.innerHTML = '';\r
+            ensureVisibleChatStreamSlot();\r
+        }\r
+        markVisibleSessionStreamLoadState(sessionId, 'loading');\r
+        let events;\r
+        let pageMeta = null;\r
+        if (Array.isArray(raw)) {\r
+            events = raw;\r
+        } else if (raw && typeof raw === 'object' && Array.isArray(raw.events)) {\r
+            events = raw.events;\r
+            const pageTotal = Number(raw.total) || 0;\r
+            const pageRangeEnd = Number(raw.range_end) || 0;\r
+            pageMeta = {\r
+                total: pageTotal,\r
+                range_start: Number(raw.range_start) || 0,\r
+                range_end: pageRangeEnd,\r
+                has_older: !!raw.has_older,\r
+                has_newer: raw.has_newer == null ? pageRangeEnd < pageTotal : !!raw.has_newer,\r
+            };\r
+            uiEventCountCache.updateFromServer(sessionId, pageMeta.total);\r
+        } else {\r
+            events = [];\r
+        }\r
+        beginMessageReplay(sessionId, pageMeta || {\r
+            total: events.length,\r
+            range_start: 0,\r
+            range_end: events.length,\r
+        });\r
+        if (!opts.full && pageMeta) {\r
+            setSessionHistoryPaging({\r
+                sessionId: sessionId,\r
+                total: pageMeta.total,\r
+                range_start: pageMeta.range_start,\r
+                range_end: pageMeta.range_end,\r
+                has_older: !!pageMeta.has_older,\r
+                has_newer: !!pageMeta.has_newer,\r
+            });\r
+            ensureHistorySentinel(getVisibleChatStream());\r
+        }\r
+        if (events.length === 0) {\r
+            suppressTocDuringSessionLoad = false;\r
+            setWelcome();\r
+            finishHistoryHydration();\r
+            updateSessionTitle();\r
+            scheduleContextTokensAfterPaint(sessionId);\r
+            applyChatScrollAfterHistoryLoad(sessionId, scrollBehavior);\r
+            markVisibleSessionStreamLoadState(sessionId, 'ok');\r
+            logOpenSessionTiming(sessionId, {\r
+                source: historySource,\r
+                events: 0,\r
+                snapshotTiming: snapshotTiming,\r
+                totalMs: elapsedSince(openSessionStartedAt),\r
+            });\r
+            return true;\r
+        }\r
+        const loadCtx = newDomContext(getVisibleChatStream());\r
+        loadCtx.lastUserEventIndex = -1;\r
+        const indexBase = pageMeta ? pageMeta.range_start : 0;\r
+        const batchSize = opts.full ? 64 : 512;\r
+        for (let evi = 0; evi < events.length; evi += 1) {\r
+            const ev = events[evi];\r
+            if (ev && typeof ev === 'object' && ev.type) {\r
+                reduceAndRenderMessageEvent(loadCtx, ev, {\r
+                    sessionId: sessionId,\r
+                    eventIndex: indexBase + evi,\r
+                    source: 'history',\r
+                });\r
+            }\r
+            if (evi > 0 && evi % batchSize === 0) {\r
+                await new Promise(function (resolve) { setTimeout(resolve, 0); });\r
+                if (loadToken !== messageLoadEpoch || sessionId !== currentSessionId) return;\r
+            }\r
+        }\r
+        finishHistoryHydration();\r
+        if (!chatStreamHasConversationContent()) {\r
+            suppressTocDuringSessionLoad = false;\r
+            setWelcome();\r
+            updateSessionTitle();\r
+            scheduleContextTokensAfterPaint(sessionId);\r
+            applyChatScrollAfterHistoryLoad(sessionId, scrollBehavior);\r
+            markVisibleSessionStreamLoadState(sessionId, 'ok');\r
+            logOpenSessionTiming(sessionId, {\r
+                source: historySource,\r
+                events: events.length,\r
+                snapshotTiming: snapshotTiming,\r
+                totalMs: elapsedSince(openSessionStartedAt),\r
+            });\r
+            return true;\r
+        }\r
+        if (!opts.full && opts.preloadOlderIfShort && pageMeta && pageMeta.has_older && events.length <= 2) {\r
+            await loadOlderHistoryChunk({ keepTocStable: true });\r
+            if (loadToken !== messageLoadEpoch || sessionId !== currentSessionId) return;\r
+        }\r
+        if (historyLoadScrollsToBottom(sessionId, scrollBehavior)) {\r
+            tocScrollBottomOnNextBuild = true;\r
+        }\r
+        suppressTocDuringSessionLoad = false;\r
+        if (snapshotTocTurns) rebuildToc({ turns: snapshotTocTurns });\r
+        else if (!opts.tocAlreadyStarted) rebuildToc();\r
+        updateSessionTitle();\r
+        updateHistorySentinelVisibility();\r
+        bindExistingLogInteractions();\r
+        applyChatScrollAfterHistoryLoad(sessionId, scrollBehavior);\r
+        var initialSmoothReachedBottom = await waitForChatScrollAfterHistoryLoad(sessionId, scrollBehavior);\r
+        if (loadToken !== messageLoadEpoch || sessionId !== currentSessionId) return;\r
+        finalizeExistingLogLayout();\r
+        if (scrollBehavior === 'smooth-bottom' && initialSmoothReachedBottom) {\r
+            setScrollTopImmediate(chatContainer, chatContainer.scrollHeight);\r
+            requestAnimationFrame(function () {\r
+                requestAnimationFrame(function () {\r
+                    if (loadToken !== messageLoadEpoch || sessionId !== currentSessionId) return;\r
+                    setScrollTopImmediate(chatContainer, chatContainer.scrollHeight);\r
+                });\r
+            });\r
+        }\r
+        scheduleTocActiveUpdate();\r
+        scheduleContextTokensAfterPaint(sessionId);\r
+        markVisibleSessionStreamLoadState(sessionId, 'ok');\r
+        logOpenSessionTiming(sessionId, {\r
+            source: historySource,\r
+            events: events.length,\r
+            snapshotTiming: snapshotTiming,\r
+            totalMs: elapsedSince(openSessionStartedAt),\r
+        });\r
+        return true;\r
+    } catch (error) {\r
+        if (loadToken !== messageLoadEpoch || sessionId !== currentSessionId) return false;\r
+        console.error('加载会话消息失败:', error);\r
+        document.getElementById('chat-loading')?.remove();\r
+        appendLogVisible('加载历史消息失败', 'error-log');\r
+        markVisibleSessionStreamLoadState(sessionId, 'failed');\r
+        showSessionLoadRetry(sessionId);\r
+        return false;\r
+    } finally {\r
+        finishHistoryHydration();\r
+        if (loadToken === messageLoadEpoch) sessionStore.ui.loadingMessages = false;\r
+        if (loadToken === messageLoadEpoch) suppressTocDuringSessionLoad = false;\r
+        if (loadToken === messageLoadEpoch) replayingMessages = false;\r
+    }\r
+}\r
+\r
+function chatStreamHasConversationContent() {\r
+    var stream = getVisibleChatStream();\r
+    if (!stream) return false;\r
+    return !!stream.querySelector('.msg-wrap, .process-aggregate, .human-interaction-card, .human-interaction-banner');\r
+}\r
+\r
+function elapsedSince(startedAt) {\r
+    var now = (typeof performance !== 'undefined' && performance.now)\r
+        ? performance.now()\r
+        : Date.now();\r
+    return Math.max(0, Math.round(now - Number(startedAt || now)));\r
+}\r
+\r
+function logOpenSessionTiming(sessionId, data) {\r
+    data = data || {};\r
+    var timing = data.snapshotTiming && typeof data.snapshotTiming === 'object' ? data.snapshotTiming : {};\r
+    var backendTotal = Number(timing.total || 0);\r
+    var frontendTotal = Number(data.totalMs || 0);\r
+    if (frontendTotal < 500 && backendTotal < 500) return;\r
+    console.info(\r
+        'open_session_timing session=%s source=%s total=%sms events=%s backend_total=%sms read_page=%sms count=%sms user_turns=%sms context_tokens=%sms',\r
+        sessionId,\r
+        data.source || 'unknown',\r
+        frontendTotal,\r
+        Number(data.events || 0),\r
+        backendTotal,\r
+        Number(timing.read_page || 0),\r
+        Number(timing.count || 0),\r
+        Number(timing.user_turns || 0),\r
+        Number(timing.context_tokens || 0)\r
+    );\r
+}\r
+\r
+function beforeSessionMessageSnapshotAvailable() {\r
+    return true;\r
+}\r
+\r
+async function switchSession(sessionId, opts) {\r
+    opts = opts || {};\r
+    if (typeof endHistorySmoothScroll === 'function') endHistorySmoothScroll();\r
+    if (currentSessionId === sessionId && !opts.forceReload) return;\r
+    if (opts.forceReload && typeof discardCachedSessionStream === 'function') discardCachedSessionStream(sessionId);\r
+    const switchToken = ++switchSessionEpoch;\r
+    suppressTocDuringSessionLoad = true;\r
+    clearTocForSessionLoad();\r
+    clearOptionalPanelsForSessionLoad();\r
+    pendingRewriteTruncate = null;\r
+    hideRewriteUndoToast();\r
+    // A green-dot session represents an unread completed result. Opening it\r
+    // must land at the newest result, never at a stale reading anchor.\r
+    var sessionHadUnreadResult = !!(\r
+        (sessionStore.get(sessionId) && sessionStore.get(sessionId).unread_result)\r
+        || sessionUnreadComplete.has(sessionId)\r
+    );\r
+    clearSessionUnreadState(sessionId);\r
+    const leaving = currentSessionId;\r
+    recentComposerQueuedFollowup = null;\r
+    saveChatScrollForSession(leaving);\r
+    stashInputDraft(leaving);\r
+    if (typeof stashSkillPickerDraft === 'function') stashSkillPickerDraft(leaving);\r
+    prepareStashLeaving(leaving);\r
+    hideSubagentContinueBanner();\r
+    resetSubagentPanelForSession();\r
+    setCurrentSessionState(sessionId);\r
+    // The session identity and its side-panel contents must cross the switch\r
+    // boundary together. Waiting for history requests leaves the previous\r
+    // session title or plan visible for a frame (and sometimes much longer on\r
+    // a cold load).\r
+    updateSessionTitle();\r
+    if (typeof updateHumanInteractionBanner === 'function') updateHumanInteractionBanner(sessionId);\r
+    localStorage.setItem('lastSessionId', sessionId);\r
+    if (typeof applyContextTokenLabelForCurrentSession === 'function') applyContextTokenLabelForCurrentSession();\r
+    restoreInputDraft(sessionId);\r
+    if (typeof restoreSkillPickerDraft === 'function') restoreSkillPickerDraft(sessionId);\r
+    if (typeof renderFollowupQueue === 'function') renderFollowupQueue(sessionId);\r
+    if (typeof syncFollowupQueueFromServer === 'function') syncFollowupQueueFromServer(sessionId);\r
+    if (typeof refreshModelProfileSelector === 'function') refreshModelProfileSelector(sessionId);\r
+    syncSessionListIndicatorClasses();\r
+    // Refresh extension panels only after the new row owns the active marker;\r
+    // otherwise the projection request can render the session we just left.\r
+    document.dispatchEvent(new CustomEvent('myagent:extension-state-changed', {\r
+        detail: { sessionId: sessionId },\r
+    }));\r
+    setSendButtonState();\r
+    if (!isSessionRunning(sessionId) && !(typeof isServerStreamActive === 'function' && isServerStreamActive(sessionId))) {\r
+        let __shouldPreflight = true;\r
+        try {\r
+            const __sess = sessionStore.get(sessionId);\r
+            const __last = __sess ? Date.parse(__sess.last_activity_at || __sess.updated_at || __sess.created_at || "") : 0;\r
+            if (Number.isFinite(__last) && Date.now() - __last > 12 * 60 * 1000) __shouldPreflight = false;\r
+        } catch (e) {}\r
+        if (__shouldPreflight) {\r
+            try {\r
+                await Promise.race([\r
+                    (async () => {\r
+                        if (typeof refreshSingleSessionRow === 'function') await refreshSingleSessionRow(sessionId);\r
+                    })(),\r
+                    new Promise(resolve => setTimeout(resolve, 450))\r
+                ]);\r
+            } catch (e) { /* preflight best-effort */ }\r
+        }\r
+    }\r
+    var restoredFromCache = false;\r
+    var restoredRunningStream = false;\r
+    var sessionHasActiveServerRun = !!(\r
+        isSessionRunning(sessionId)\r
+        || (typeof isServerStreamActive === 'function' && isServerStreamActive(sessionId))\r
+    );\r
+    if (!opts.forceReload && (\r
+        (restoredRunningStream = restoreStreamForRunningSession(sessionId))\r
+        || (!sessionHadUnreadResult\r
+            && !sessionHasActiveServerRun\r
+            && (restoredFromCache = restoreCachedSessionStream(sessionId)))\r
+    )) {\r
+        suppressTocDuringSessionLoad = false;\r
+        hideLoading();\r
+        rebuildToc({ localOnly: true });\r
+        updateSessionTitle();\r
+        scheduleContextTokensAfterPaint(sessionId);\r
+        // Only a complete, idle stream restored from the in-memory cache may\r
+        // return to its prior reading position. A live run and a green-dot\r
+        // completion always open on their newest content.\r
+        var sessionIsRunningNow = !!(\r
+            restoredRunningStream\r
+            || isSessionRunning(sessionId)\r
+            || (typeof isServerStreamActive === 'function' && isServerStreamActive(sessionId))\r
+        );\r
+        if (restoredFromCache && !sessionHadUnreadResult && !sessionIsRunningNow) {\r
+            restoreCachedSessionScrollPosition(sessionId);\r
+        } else {\r
+            streamChatNearBottom = true;\r
+            streamProcNearBottom = true;\r
+            liveAutoFollow = true;\r
+            scrollToBottom();\r
+            if (sessionIsRunningNow && typeof scrollCurrentRunningProcessToBottom === 'function') {\r
+                scrollCurrentRunningProcessToBottom(sessionId);\r
+            }\r
+        }\r
+        if (typeof refreshHumanInteractions === 'function') void refreshHumanInteractions(sessionId);\r
+        if (switchToken !== switchSessionEpoch || sessionId !== currentSessionId) return;\r
+        /* 让 rebuildToc 的 /user_turns fetch 先发出，subagent 面板（含 N 个 /messages）顺序后置，\r
+           避免抢占带宽与主线程，让目录最后才稳态。*/\r
+        setTimeout(function () {\r
+            if (switchToken === switchSessionEpoch && sessionId === currentSessionId) {\r
+                refreshSubagentTreePanel(sessionId);\r
+            }\r
+        }, 0);\r
+        void refreshSingleSessionRow(sessionId);\r
+        document.dispatchEvent(new CustomEvent('myagent:extension-state-changed', {\r
+            detail: { sessionId: sessionId, phase: 'loaded' },\r
+        }));\r
+        setSendButtonState();\r
+        maybeStartStreamPollForSession(sessionId, { skipInitialLoad: true });\r
+        return;\r
+    }\r
+    const vs = getVisibleChatStream();\r
+    resetSessionHistoryPaging();\r
+    if (vs) emptyChatStreamKeepingStrip(vs);\r
+    else {\r
+        chatContainer.innerHTML = '';\r
+        ensureVisibleChatStreamSlot();\r
+    }\r
+    showLoading();\r
+    const tocAlreadyStarted = opts.useSnapshot === false && typeof startTocForSessionLoad === 'function';\r
+    if (tocAlreadyStarted) startTocForSessionLoad(sessionId);\r
+    return new Promise(function (resolve) {\r
+        setTimeout(async function () {\r
+        if (switchToken !== switchSessionEpoch || sessionId !== currentSessionId) { resolve(false); return; }\r
+        try {\r
+            // A freshly loaded or force-reloaded stream does not restore a\r
+            // persisted reading position. Once its history is rendered, ease\r
+            // the viewport down to the newest message.\r
+            var loadedOk = await loadSessionMessages(sessionId, 'smooth-bottom', {\r
+                preloadOlderIfShort: isServerStreamActive(sessionId),\r
+                allowDuringRun: isServerStreamActive(sessionId),\r
+                tocAlreadyStarted: tocAlreadyStarted,\r
+            });\r
+            if (!loadedOk) { resolve(false); return; }\r
+        } catch (error) {\r
+            console.error('切换会话加载失败:', error);\r
+            resolve(false);\r
+            return;\r
+        } finally {\r
+            if (switchToken === switchSessionEpoch && sessionId === currentSessionId) {\r
+                hideLoading();\r
+                sessionStore.ui.loadingMessages = false;\r
+                suppressTocDuringSessionLoad = false;\r
+                replayingMessages = false;\r
+            }\r
+        }\r
+        if (switchToken !== switchSessionEpoch || sessionId !== currentSessionId) { resolve(false); return; }\r
+        /* loadSessionMessages 内部已发起 rebuildToc()；这里再延后一步调用 subagent panel\r
+           重建，保证「目录 → 消息 → 副 agent 按钮」的稳定顺序（无 subagent 的会话表现一致）。*/\r
+        setTimeout(function () {\r
+            if (switchToken === switchSessionEpoch && sessionId === currentSessionId) {\r
+                refreshSubagentTreePanel(sessionId);\r
+            }\r
+        }, 0);\r
+        void refreshSingleSessionRow(sessionId);\r
+        document.dispatchEvent(new CustomEvent('myagent:extension-state-changed', {\r
+            detail: { sessionId: sessionId, phase: 'loaded' },\r
+        }));\r
+        setSendButtonState();\r
+        maybeStartStreamPollForSession(sessionId, { skipInitialLoad: true });\r
+        if (typeof refreshHumanInteractions === 'function') void refreshHumanInteractions(sessionId);\r
+        resolve(true);\r
+        }, 20);\r
+    });\r
+}\r
+\r
+async function createNewSession() {\r
+    createNewSessionQueue = createNewSessionQueue.then(\r
+        function () { return createNewSessionInner(); },\r
+        function () { return createNewSessionInner(); }\r
+    );\r
+    return createNewSessionQueue;\r
+}\r
+\r
+async function createNewSessionInner() {\r
+    try {\r
+        saveChatScrollForSession(currentSessionId);\r
+        stashInputDraft(currentSessionId);\r
+        if (typeof stashSkillPickerDraft === 'function') stashSkillPickerDraft(currentSessionId);\r
+        prepareStashLeaving(currentSessionId);\r
+        const response = await fetch('/sessions', { method: 'POST' });\r
+        const data = await response.json();\r
+        if (data && data.session) sessionStore.upsert(data.session);\r
+        resetSubagentPanelForSession();\r
+        switchSessionEpoch += 1;\r
+        messageLoadEpoch += 1;\r
+        setCurrentSessionState(data.session_id);\r
+        if (typeof updateHumanInteractionBanner === 'function') updateHumanInteractionBanner(currentSessionId);\r
+        localStorage.setItem('lastSessionId', currentSessionId);\r
+        restoreInputDraft(currentSessionId);\r
+        if (typeof restoreSkillPickerDraft === 'function') restoreSkillPickerDraft(currentSessionId);\r
+        if (typeof renderFollowupQueue === 'function') renderFollowupQueue(currentSessionId);\r
+        if (typeof syncFollowupQueueFromServer === 'function') syncFollowupQueueFromServer(currentSessionId);\r
+        if (typeof refreshModelProfileSelector === 'function') refreshModelProfileSelector(currentSessionId);\r
+        if (typeof refreshPermissionModeSelector === 'function') refreshPermissionModeSelector(currentSessionId);\r
+        if (!getVisibleChatStream()) ensureVisibleChatStreamSlot();\r
+        setWelcome();\r
+        replayingMessages = false;\r
+        if (data && data.session) {\r
+            syncArchivedSessionStateFromStore();\r
+            renderSessionListIfChanged(true);\r
+            void refreshSingleSessionRow(data.session_id);\r
+        } else {\r
+            await loadSessions();\r
+        }\r
+        document.dispatchEvent(new CustomEvent('myagent:extension-state-changed', {\r
+            detail: { sessionId: currentSessionId, phase: 'created' },\r
+        }));\r
+        setSendButtonState();\r
+        maybeStartStreamPollForSession(currentSessionId);\r
+        scheduleContextTokensAfterPaint(currentSessionId);\r
+    } catch (error) {\r
+        console.error('创建新会话失败', error);\r
+        appendLogVisible('创建新会话失败', 'error-log');\r
+    }\r
+}\r
+`,Qr=`const SSE_IDLE_TIMEOUT_MS = 120000;
 const STREAM_RECONNECT_MAX_ATTEMPTS = 10;
 const STREAM_RECONNECT_BASE_DELAY_MS = 500;
 const STREAM_RECONNECT_MAX_DELAY_MS = 15000;
@@ -21817,7 +21865,7 @@ window.addEventListener('scroll', positionFollowupQueuePanel, true);
     });
 })();
 initUiHoverTips(document);
-`,Qr=`newSessionBtn.addEventListener('click', async () => { await createNewSession(); });
+`,Gr=`newSessionBtn.addEventListener('click', async () => { await createNewSession(); });
 
 function initSidebarSash() {
     const side = document.getElementById('sidebar');
@@ -22254,7 +22302,7 @@ if (typeof globalThis !== 'undefined') {
     globalThis.toggleTodoPlanPanel = toggleTodoPlanPanel;
     globalThis.toggleTocPanel = toggleTocPanel;
 }
-`;globalThis.marked=N;const Kr="/assets/vendor/mermaid.min.js";let Ce=null;globalThis.loadMyAgentMermaid=function(){return globalThis.mermaid?Promise.resolve(globalThis.mermaid):(Ce||(Ce=new Promise(function(e,t){const r=document.createElement("script");r.src=Kr,r.async=!0,r.dataset.myagentMermaidVendor="true",r.onload=function(){if(!globalThis.mermaid){r.remove(),t(new Error("Mermaid vendor loaded without exposing its API"));return}e(globalThis.mermaid)},r.onerror=function(){r.remove(),t(new Error("Failed to load Mermaid vendor asset"))},document.head.appendChild(r)}).catch(function(e){throw Ce=null,e})),Ce)};let De=null;globalThis.loadMyAgentHtml2Canvas=function(){return De||(De=ut(()=>import("./html2canvas.esm-QH1iLAAe.js"),[]).then(function(e){return e.default||e})),De};const Yr=[gr,fr,hr,vr,Sr,br,yr,wr,xr,Ir,kr,Cr,Tr,Er,Ar,Rr,Pr,_r,Lr,Mr,Fr,Nr,Br,Or,Hr,qr,Dr,Ur,jr,$r,zr,Vr,Wr,Gr,Qr];Function(`"use strict";
+`;globalThis.marked=N;const Kr="/assets/vendor/mermaid.min.js";let Ce=null;globalThis.loadMyAgentMermaid=function(){return globalThis.mermaid?Promise.resolve(globalThis.mermaid):(Ce||(Ce=new Promise(function(e,t){const r=document.createElement("script");r.src=Kr,r.async=!0,r.dataset.myagentMermaidVendor="true",r.onload=function(){if(!globalThis.mermaid){r.remove(),t(new Error("Mermaid vendor loaded without exposing its API"));return}e(globalThis.mermaid)},r.onerror=function(){r.remove(),t(new Error("Failed to load Mermaid vendor asset"))},document.head.appendChild(r)}).catch(function(e){throw Ce=null,e})),Ce)};let De=null;globalThis.loadMyAgentHtml2Canvas=function(){return De||(De=ut(()=>import("./html2canvas.esm-QH1iLAAe.js"),[]).then(function(e){return e.default||e})),De};const Yr=[gr,fr,hr,vr,Sr,br,yr,wr,xr,Ir,kr,Cr,Tr,Er,Ar,Rr,_r,Pr,Lr,Mr,Fr,Nr,Br,Or,Hr,qr,Dr,Ur,jr,$r,zr,Vr,Wr,Qr,Gr];Function(`"use strict";
 `+Yr.join(`
 
 `)+`
