@@ -1590,7 +1590,7 @@ def get_index_html():
         "followupRestart": os.getenv("MYAGENT_ENABLE_FOLLOWUP_RESTART", "1").strip().lower() in {"1", "true", "yes", "on"},
         "streamReconnect": os.getenv("MYAGENT_ENABLE_STREAM_RECONNECT", "1").strip().lower() in {"1", "true", "yes", "on"},
         "finalReconcile": os.getenv("MYAGENT_ENABLE_FINAL_RECONCILE", "1").strip().lower() in {"1", "true", "yes", "on"},
-        "smoothStream": os.getenv("MYAGENT_SMOOTH_STREAM_ENABLED", "0").strip().lower() in {"1", "true", "yes", "on"},
+        "smoothStream": os.getenv("MYAGENT_SMOOTH_STREAM_ENABLED", "1").strip().lower() in {"1", "true", "yes", "on"},
         "security": security_enabled(),
     }
     inject = (

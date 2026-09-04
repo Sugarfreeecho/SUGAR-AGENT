@@ -34,6 +34,46 @@ def _plugin(tmp_path, services):
     return replace(plugin, permissions={"services": services})
 
 
+@pytest.mark.parametrize(
+    "status",
+    [
+        "completed",
+        "finished",
+        "failed",
+        "cancelled",
+        "interrupted",
+        "orphaned",
+        "stale",
+    ],
+)
+def test_session_activity_check_accepts_every_terminal_runtime_status(
+    monkeypatch, status
+):
+    import plugin_host_services as services
+    import runtime_observability
+
+    monkeypatch.setattr(
+        runtime_observability,
+        "snapshot",
+        lambda _session_id: {"runs": [{"status": status}]},
+    )
+
+    assert services._session_is_active("session-finished") is False
+
+
+def test_session_activity_check_rejects_a_running_runtime_status(monkeypatch):
+    import plugin_host_services as services
+    import runtime_observability
+
+    monkeypatch.setattr(
+        runtime_observability,
+        "snapshot",
+        lambda _session_id: {"runs": [{"status": "running"}]},
+    )
+
+    assert services._session_is_active("session-running") is True
+
+
 def test_sessions_run_many_reserves_every_session_atomically(tmp_path, monkeypatch):
     import agent_harness
     import plugin_host_services as services
