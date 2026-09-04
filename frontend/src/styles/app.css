@@ -5000,7 +5000,6 @@ body {
 .session-item.has-human-pending .session-name { color: var(--text-primary); }
 
 .human-interaction-card {
-    position: relative;
     width: min(720px, calc(100% - 1rem));
     align-self: center;
     margin: 0.45rem auto;
@@ -5011,19 +5010,6 @@ body {
     overflow: hidden;
     transition: border-color 0.2s ease, box-shadow 0.2s ease, opacity 0.2s ease;
 }
-.human-question-card::before,
-.human-approval-card::before {
-    content: '';
-    position: absolute;
-    top: 0;
-    left: 0;
-    right: 0;
-    height: 3px;
-    background: linear-gradient(90deg, rgba(var(--accent-rgb), 0.85), rgba(var(--accent-rgb), 0.18));
-    pointer-events: none;
-}
-.human-approval-card::before { background: linear-gradient(90deg, rgba(249, 226, 175, 0.85), rgba(249, 226, 175, 0.18)); }
-.human-approval-card.is-danger::before { background: linear-gradient(90deg, rgba(243, 139, 168, 0.85), rgba(243, 139, 168, 0.18)); }
 .human-interaction-card.is-highlighted {
     border-color: var(--amber-accent);
     box-shadow: 0 0 0 4px rgba(249, 226, 175, 0.12), 0 14px 42px rgba(0, 0, 0, 0.24);
