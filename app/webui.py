@@ -3581,16 +3581,30 @@ async def resolve_session_approval(session_id: str, approval_id: str, request: R
             "allow_external_workspace",
             "allow_external_workspace_once",
         }:
-            # Resolve ONLY the workspace-outside authorization axis. The tool
-            # itself is not approved here: the Agent Loop always re-prompts a
-            # tool-only approval card. Only the durable choice changes the
-            # global workspace setting.
             from tool_approval_gate import resolve_tool_approval_decision
-
-            if decision_value == "allow_external_workspace":
-                from security import update_security_settings
-
-                update_security_settings(allow_external_workspace_ops=True)
+            try:
+                from human_interaction.service import get_human_interaction_service
+                svc = get_human_interaction_service()
+                try:
+                    pending = svc.get(session_id, approval_id, kind="approval")
+                    req_dirs = list(pending.get("required_dirs") or [])
+                    if not req_dirs:
+                        req_dirs = list(record.get("required_dirs") or [])
+                except Exception:
+                    req_dirs = list(record.get("required_dirs") or [])
+                if req_dirs:
+                    from session_authorized_dirs import add_authorized_dir
+                    for rd in req_dirs:
+                        try:
+                            add_authorized_dir(session_id, rd)
+                        except Exception:
+                            pass
+                elif decision_value == "allow_external_workspace":
+                    from security import update_security_settings
+                    update_security_settings(allow_external_workspace_ops=True)
+            except Exception as e:
+                import logging
+                logging.getLogger(__name__).warning("directory grant failed: %s", e)
             resolve_tool_approval_decision(
                 session_id, approval_id, decision_value
             )

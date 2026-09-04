@@ -1,4 +1,4 @@
-﻿"""
+"""
 agent_harness — Agent 项目的中枢模块。
 
 内容概览
@@ -4745,6 +4745,15 @@ class SessionManager:
                 meta["todo"] = False
                 meta["goal_review_pending"] = False
                 meta.pop("pinned_at", None)
+                try:
+                    src_meta = self._load_metadata(sid) or {}
+                    src_auth = src_meta.get("authorized_dirs")
+                    if isinstance(src_auth, list) and src_auth:
+                        meta["authorized_dirs"] = [str(x) for x in src_auth if str(x).strip()]
+                    else:
+                        meta["authorized_dirs"] = [str(WORK_DIR.resolve())]
+                except Exception:
+                    meta["authorized_dirs"] = [str(WORK_DIR.resolve())]
                 meta["branched_from"] = sid
                 meta["branch_before_index"] = before_index
                 meta["ui_event_count"] = len(new_events)
@@ -5354,8 +5363,16 @@ class SessionManager:
             parent_prompt_language = parent_metadata.get("prompt_language")
             if parent_prompt_language:
                 metadata["prompt_language"] = normalize_prompt_language(parent_prompt_language)
+            parent_auth = parent_metadata.get("authorized_dirs")
+            if isinstance(parent_auth, list) and parent_auth:
+                metadata["authorized_dirs"] = [str(x) for x in parent_auth if str(x).strip()]
+            else:
+                metadata["authorized_dirs"] = [str(WORK_DIR.resolve())]
         except Exception:
-            pass
+            try:
+                metadata["authorized_dirs"] = [str(WORK_DIR.resolve())]
+            except Exception:
+                pass
         mpi = (model_profile_id or "").strip()
         if mpi:
             metadata["model_profile_id"] = mpi
@@ -5663,6 +5680,7 @@ class SessionManager:
                 "pinned": False,
                 "todo": False,
                 "goal_review_pending": False,
+                "authorized_dirs": [str(WORK_DIR.resolve())],
             }
             dialogue: List[dict] = []  # 与 dialogue_history.json 均由 ui_events 主链写入
             self._save_metadata(session_id, metadata)
