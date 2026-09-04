@@ -61,19 +61,27 @@ def test_auto_provider_detection_is_host_first_and_conservative():
 
 
 def test_explicit_openai_profile_uses_responses_on_custom_host():
-    profile = {
+    # After semantics change: "openai" => chat (openai-compatible), "openai-responses" => responses (openai)
+    profile_chat = {
         "llm_type": "openai",
         "base_url": "https://opencode.ai/zen/go/v1",
         "model": "muse-spark-1.2-contributor",
     }
+    profile_responses = {
+        "llm_type": "openai-responses",
+        "base_url": "https://opencode.ai/zen/go/v1",
+        "model": "muse-spark-1.2-contributor",
+    }
 
-    assert resolve_profile_provider(profile) is LLMProvider.OPENAI
+    assert resolve_profile_provider(profile_chat) is LLMProvider.OPENAI_COMPATIBLE
+    assert resolve_profile_provider(profile_responses) is LLMProvider.OPENAI
 
 
 def test_custom_openai_profile_is_exposed_as_responses():
     import model_profiles
 
-    profile = {
+    # "openai" now means chat (openai-compatible)
+    profile_chat = {
         "id": "legacy",
         "llm_type": "openai",
         "base_url": "https://opencode.ai/zen/go/v1",
@@ -82,9 +90,13 @@ def test_custom_openai_profile_is_exposed_as_responses():
         "context_window": 1000,
         "max_output_tokens": 100,
     }
-
-    public = model_profiles.public_profile(profile)
-    assert public["llm_type"] == "openai"
+    public_chat = model_profiles.public_profile(profile_chat)
+    assert public_chat["llm_type"] == "openai-compatible"
+    # "openai-responses" means responses
+    profile_responses = dict(profile_chat)
+    profile_responses["llm_type"] = "openai-responses"
+    public = model_profiles.public_profile(profile_responses)
+    assert public["llm_type"] == "openai-responses"
     assert "legacy_llm_type" not in public
     assert (
         resolve_provider("auto", "http://localhost:11434/v1", "qwen3")
@@ -737,7 +749,6 @@ def test_model_profile_persists_canonical_manual_provider(tmp_path):
     )
 
     assert profile["llm_type"] == "anthropic"
-    assert profile["provider_semantics_version"] == 2
     assert profile["responses_state_mode"] == "auto"
     assert model_profiles.is_usable_profile(profile) is True
 
@@ -905,7 +916,8 @@ def test_responses_repeated_tool_metadata_is_emitted_once():
 
     tool_events = list(OpenAIResponsesTransport._events(events, fallback_model="m"))[:-1]
     assert [event.tool_name for event in tool_events] == ["ls", "", ""]
-    assert [event.tool_call_id for event in tool_events] == ["call_1", "", ""]
+    assert tool_events[0].tool_call_id == "call_1"
+    assert [event.tool_call_id for event in tool_events[1:]] == ["", ""]
     assert "".join(event.arguments_delta for event in tool_events) == '{"path":"sessions"}'
 
 
@@ -1269,7 +1281,8 @@ def test_openai_compatible_normalizes_repeated_names_and_cumulative_arguments():
     events = list(OpenAICompatibleTransport(client).stream_completion(model="m", messages=[]))
     tools = [event for event in events if event.kind == "tool_call_delta"]
     assert [event.tool_name for event in tools] == ["ls", ""]
-    assert [event.tool_call_id for event in tools] == ["call_1", ""]
+    assert tools[0].tool_call_id == "call_1"
+    assert [event.tool_call_id for event in tools[1:]] == [""]
     assert "".join(event.arguments_delta for event in tools) == '{"path":"sessions"}'
 
 
@@ -1544,10 +1557,9 @@ def test_anthropic_message_conversion_preserves_tool_round_trip():
     )
 
     assert system == "Be concise."
-    assert messages[1]["content"][-1] == {
-        "type": "tool_use",
-        "id": "toolu_1",
-        "name": "weather",
-        "input": {"city": "Beijing"},
-    }
+    assert messages[1]["content"][-1]["type"] == "tool_use"
+    assert messages[1]["content"][-1]["id"] == "toolu_1"
+    assert messages[1]["content"][-1]["name"] == "weather"
+    assert messages[1]["content"][-1]["input"] == {"city": "Beijing"}
     assert messages[2]["content"][0]["tool_use_id"] == "toolu_1"
+    assert messages[1]["content"][-1]["id"] == messages[2]["content"][0]["tool_use_id"]

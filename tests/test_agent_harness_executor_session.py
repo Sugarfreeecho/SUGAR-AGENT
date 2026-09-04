@@ -5,7 +5,7 @@ def test_responses_profile_blank_thinking_is_automatic():
     import agent_harness
 
     profile = {
-        "llm_type": "openai",
+        "llm_type": "openai-responses",
         "base_url": "https://opencode.ai/zen/go/v1",
         "model": "muse-spark-1.2-contributor",
         "thinking_mode": "",

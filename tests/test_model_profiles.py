@@ -515,7 +515,7 @@ def test_probe_model_context_uses_responses_protocol(monkeypatch):
         "https://api.openai.com/v1",
         "test-key",
         "gpt-test",
-        {"llm_type": "openai"},
+        {"llm_type": "openai-responses"},
     )
 
     assert seen["path"] == "/v1/responses"

@@ -42,10 +42,24 @@ function formatContextWindow(value) {
     return String(Math.round(n));
 }
 
+function canonicalLlmType(raw) {
+    var k = String(raw || '').trim().toLowerCase();
+    if (k === 'openai-responses' || k === 'responses' || k === '@ai-sdk/openai') return 'openai-responses';
+    if (k === 'openai' || k === 'openai-compatible' || k === 'openai_compatible' || k === 'compatible' || k === 'chat-completions' || k === 'local' || k === '@ai-sdk/openai-compatible') return 'openai';
+    if (k === 'anthropic' || k === 'claude' || k === 'messages' || k === '@ai-sdk/anthropic') return 'anthropic';
+    if (k === 'auto' || k === '') return 'auto';
+    return k;
+}
+function isResponsesProfile(profile) {
+    return canonicalLlmType(profile && profile.llm_type) === 'openai-responses';
+}
+function isChatProfile(profile) {
+    return canonicalLlmType(profile && profile.llm_type) === 'openai';
+}
 function profileEffortValue(profile) {
     var p = profile || {};
     var thinkingDisabled = String(p.thinking_mode || '').toLowerCase() === 'disabled';
-    var usesResponses = String(p.llm_type || '').toLowerCase() === 'openai';
+    var usesResponses = isResponsesProfile(p);
     return String(p.reasoning_effort || (usesResponses ? 'auto' : (thinkingDisabled ? 'none' : 'high'))).toLowerCase();
 }
 
@@ -291,6 +305,47 @@ async function setCurrentSessionModelProfile(profileId) {
     const sid = String(currentSessionId || '');
     const selectedProfileId = String(profileId || '');
     if (!sid || modelProfileBusyBySession[sid]) return;
+    try {
+        var __oldId = String(activeModelProfileId || modelProfileIdBySession[sid] || '');
+        var __newId = String(selectedProfileId || '');
+        if (__oldId && __newId && __oldId !== __newId) {
+            var __profiles = (modelProfilesCache && modelProfilesCache.profiles) ? modelProfilesCache.profiles : storedProfiles();
+            var __oldProfile = null, __newProfile = null;
+            for (var __i = 0; __i < __profiles.length; __i++) {
+                var __pp = __profiles[__i] || {};
+                if (String(__pp.id || '') === __oldId) __oldProfile = __pp;
+                if (String(__pp.id || '') === __newId) __newProfile = __pp;
+            }
+            if (__oldProfile && __newProfile) {
+                var __oldType = canonicalLlmType(__oldProfile.llm_type);
+                var __newType = canonicalLlmType(__newProfile.llm_type);
+                if (__oldType !== __newType) {
+                    var __lang = (document.documentElement && document.documentElement.getAttribute('data-language')) || localStorage.getItem('myagent-language') || 'zh-CN';
+                    var __en = __lang === 'en';
+                    var __oldLabel = String(__oldProfile.name || __oldProfile.model || __oldId);
+                    var __newLabel = String(__newProfile.name || __newProfile.model || __newId);
+                    var __title = __en ? 'Model type mismatch' : '\u6a21\u578b\u7c7b\u578b\u4e0d\u4e00\u81f4';
+                    var __msg = __en
+                        ? 'Model type mismatch, risk of history/tool-call incompatibility. Current "' + __oldLabel + '" (' + __oldType + ') -> target "' + __newLabel + '" (' + __newType + ') may cause truncated history, tool_call_id mismatch and errors. Continue?'
+                        : '\u6a21\u578b\u7c7b\u578b\u4e0d\u4e00\u81f4\uff0c\u6709\u5386\u53f2\u4e0e\u5de5\u5177\u8c03\u7528\u4e0d\u517c\u5bb9\u98ce\u9669\u3002\u5f53\u524d\u201c' + __oldLabel + '\u201d\uff08' + __oldType + '\uff09\u2192\u76ee\u6807\u201c' + __newLabel + '\u201d\uff08' + __newType + '\uff09\uff0c\u8de8\u7c7b\u578b\u5207\u6362\u53ef\u80fd\u5bfc\u81f4\u5386\u53f2\u622a\u65ad\u3001tool_call_id\u9519\u4f4d\u800c\u62a5\u9519\uff0c\u662f\u5426\u7ee7\u7eed\u5207\u6362\uff1f';
+                    var __confirmed = false;
+                    if (typeof openUiModal === 'function') {
+                        __confirmed = await openUiModal({
+                            title: __title,
+                            message: __msg,
+                            confirmText: __en ? 'Continue' : '\u7ee7\u7eed\u5207\u6362',
+                            cancelText: __en ? 'Cancel' : '\u53d6\u6d88',
+                            danger: true,
+                            showCancel: true
+                        });
+                    } else if (typeof window !== 'undefined' && typeof window.confirm === 'function') {
+                        __confirmed = window.confirm(__title + '\n\n' + __msg);
+                    }
+                    if (!__confirmed) return;
+                }
+            }
+        }
+    } catch (__confirmErr) { }
     modelProfileBusyBySession[sid] = true;
     try {
         var response = await fetch('/sessions/' + encodeURIComponent(sid) + '/model_profile', {

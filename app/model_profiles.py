@@ -14,7 +14,6 @@ import httpx
 
 from llm import (
     LLMProvider,
-    PROVIDER_SEMANTICS_VERSION,
     normalize_provider,
     normalize_responses_state_mode,
     resolve_profile_provider,
@@ -1100,7 +1099,6 @@ def upsert_profile(project_root: Path, payload: dict) -> dict:
             "name": name,
             "model": model,
             "llm_type": llm_type,
-            "provider_semantics_version": PROVIDER_SEMANTICS_VERSION,
             "responses_store_disabled": storage_disabled,
             "responses_state_mode": "stateless" if storage_disabled else "auto",
             "base_url": base_url,
@@ -1232,11 +1230,34 @@ def fallback_chain(project_root: Path, selected_profile_id: str = "") -> list[di
     if is_usable_profile(selected):
         chain.append(selected)
         seen.add(str(selected.get("id") or ""))
+    # Determine primary provider for fallback filtering: only switch to same llm_type (provider)
+    primary_provider = None
+    if chain:
+        try:
+            primary_provider = resolve_profile_provider(chain[0])
+        except Exception:
+            primary_provider = None
+    else:
+        # No selected profile; primary will be the top priority profile
+        for profile in sorted_profiles(project_root):
+            if is_usable_profile(profile):
+                try:
+                    primary_provider = resolve_profile_provider(profile)
+                except Exception:
+                    primary_provider = None
+                break
     for profile in sorted_profiles(project_root):
         if not is_usable_profile(profile):
             continue
         pid = str(profile.get("id") or "")
         if pid and pid not in seen:
+            # Only fallback to same provider type (llm_type)
+            if primary_provider is not None:
+                try:
+                    if resolve_profile_provider(profile) != primary_provider:
+                        continue
+                except Exception:
+                    continue
             chain.append(dict(profile))
             seen.add(pid)
     return chain
@@ -1248,7 +1269,6 @@ def profile_cache_key(profile: dict) -> str:
             "id": profile.get("id"),
             "model": profile.get("model"),
             "llm_type": resolve_profile_provider(profile).value,
-            "provider_semantics_version": profile.get("provider_semantics_version"),
             "responses_store_disabled": responses_store_disabled(profile),
             "base_url": profile.get("base_url"),
             "api_key": profile.get("api_key"),
