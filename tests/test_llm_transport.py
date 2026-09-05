@@ -1563,3 +1563,57 @@ def test_anthropic_message_conversion_preserves_tool_round_trip():
     assert messages[1]["content"][-1]["input"] == {"city": "Beijing"}
     assert messages[2]["content"][0]["tool_use_id"] == "toolu_1"
     assert messages[1]["content"][-1]["id"] == messages[2]["content"][0]["tool_use_id"]
+
+
+def test_compatible_stream_usage_preserves_chat_completions_cache_tokens():
+    """Regression: transport must not drop Chat Completions cache fields.
+
+    openai-compatible endpoints (deepseek/glm/opencode zen) report cache usage
+    as flat prompt_cache_hit_tokens / prompt_cache_miss_tokens or nested
+    prompt_tokens_details.cached_tokens.  These were lost after the provider
+    transport refactor, so the cache hit rate always showed 0.
+    """
+    from llm.transport import _usage_dict
+
+    flat = _usage_dict(
+        {
+            "prompt_tokens": 1000,
+            "completion_tokens": 200,
+            "total_tokens": 1200,
+            "prompt_cache_hit_tokens": 700,
+            "prompt_cache_miss_tokens": 300,
+        }
+    )
+    assert flat["prompt_cache_hit_tokens"] == 700
+    assert flat["prompt_cache_miss_tokens"] == 300
+
+    nested = _usage_dict(
+        {
+            "prompt_tokens": 1000,
+            "completion_tokens": 200,
+            "total_tokens": 1200,
+            "prompt_tokens_details": {"cached_tokens": 800},
+        }
+    )
+    assert nested["prompt_cache_hit_tokens"] == 800
+
+    # Anthropic / Responses formats must keep working.
+    anthropic = _usage_dict(
+        {
+            "input_tokens": 900,
+            "output_tokens": 100,
+            "cache_read_input_tokens": 600,
+            "cache_creation_input_tokens": 300,
+        }
+    )
+    assert anthropic["prompt_cache_hit_tokens"] == 600
+    assert anthropic["prompt_cache_miss_tokens"] == 300
+
+    responses = _usage_dict(
+        {
+            "input_tokens": 900,
+            "output_tokens": 100,
+            "input_tokens_details": {"cached_tokens": 500},
+        }
+    )
+    assert responses["prompt_cache_hit_tokens"] == 500
