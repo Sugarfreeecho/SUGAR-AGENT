@@ -4,6 +4,9 @@
 The script builds the Vite frontend into a temporary directory and compares it
 with app/templates/dist. It catches both missing builds after source edits and
 manual dist edits that are not reproduced by the source build.
+
+The Vite build log is captured and printed only on failure so hook output stays
+quiet (no spurious stderr noise on every commit).
 """
 
 from __future__ import annotations
@@ -62,8 +65,20 @@ def main() -> int:
         env = os.environ.copy()
         env["GENERAL_AGENT_DIST_DIR"] = str(expected_dist)
         cmd = ["npm.cmd" if os.name == "nt" else "npm", "run", "build"]
-        proc = subprocess.run(cmd, cwd=FRONTEND, env=env, text=True)
+        proc = subprocess.run(
+            cmd,
+            cwd=FRONTEND,
+            env=env,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+        )
         if proc.returncode != 0:
+            # Surface the tail of the build log only on failure; success is silent.
+            tail = (proc.stdout or "")[-4000:]
+            if tail.strip():
+                print("Frontend build failed; tail of build log:", file=sys.stderr)
+                print(tail, file=sys.stderr)
             return proc.returncode
 
         diffs = _compare_dirs(expected_dist, backup_dist)
