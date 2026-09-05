@@ -27,7 +27,7 @@ SugarAgent 是一个**本地运行**的 AI Agent 开发与使用平台。它通�
 | 🧩 **插件生态** | Plugin API v1 支持 Python/Node 工具、Hook、Slash Command，可在插件包中携带 Skill/MCP/Agent |
 | ⚡ **稳定性自适应** | CPU 压力监测下自动降级为非流式输出；首 token 超时自动发起并行重试；可观测性防抖写盘 |
 | 🛡️ **安全边界** | 工作区路径限制、Shell 危险命令拦截、SSRF 防护、敏感信息脱敏、工具审批、**网络出口控制（egress）** |
-| 🖥️ **前端体验** | 深色/紫色主题、执行轨迹 V2（可折叠/展开高度）、工作区媒体渲染（GIF/图片/视频/音频）、会话自动恢复 |
+| 🖥️ **前端体验** | 深色/紫色主题、执行过程 V2（可折叠/展开高度）、工作区媒体渲染（GIF/图片/视频/音频）、会话自动恢复 |
 | 💾 **会话持久化** | 完整会话状态落盘（元数据、事件流、LLM 历史、对话历史、Todo 计划） |
 | 🖥️ **常驻图标** | Windows 任务栏右下角 / macOS 顶部菜单栏 / Ubuntu 顶部栏图标，集成开关菜单与更新/重启 |
 
@@ -153,7 +153,7 @@ SugarAgent/
 │       │   ├── index.js          # UI 模块初始化引导
 │       │   ├── config.js         # 运行时配置读取
 │       │   └── modules/          # 功能模块
-│       │       ├── message-rendering.js      # 消息与执行轨迹渲染（媒体渲染）
+│       │       ├── message-rendering.js      # 消息与执行过程渲染（媒体渲染）
 │       │       ├── workspace-media.js        # 工作区 GIF/图片/音视频渲染
 │       │       ├── sse-handling.js           # SSE 流处理与追问队列
 │       │       ├── session-management.js     # 会话管理（三点菜单/导出）

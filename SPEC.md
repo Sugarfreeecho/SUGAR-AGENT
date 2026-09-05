@@ -23,6 +23,13 @@ General Agent 是一个本地运行的 AI Agent 开发与使用平台。系统�
 
 本工程的目标是让用户在本机完成代码开发、文件处理、联网检索、研究分析、文档生成和多步骤自动化任务，同时保留可审计的会话记录、工具过程和运行日志。
 
+### 1.1 层级术语（全仓注释与文档统一使用）
+
+- 会话：侧边栏一条 = 一个会话（session）。
+- 轮：会话内一次对话 = 一轮（一条用户提问到最终回复完成；分页、TOC、`/user_turns` 中的「轮次」均指此，不用于 API 计数）。
+- 步：每次 API 发送 = 一步（对应 `react_iter`，执行过程面板统计中的「N 步」）。
+- 条：每一步期间产生的一条思考/回复/工具/状态记录（feed item，过程面板的行单位）。
+
 ## 2. 运行形态
 
 ### 2.1 生产运行
@@ -695,7 +702,7 @@ SSE 是后端向前端展示 Agent 过程的主通道。事件至少应覆盖以
 - 流式正文累积使用 list + join，避免字符串平方级复制；增量按 12ms 帧合并后再渲染。
 - 可观测性文件采用防抖整文件重写（默认 200ms），终端状态与显式快照立即落盘。
 - 前端构建将 Mermaid 预构建为本地 vendor，生产构建从约 5 分钟降至约 2 秒。
-- Provider token 缓存加入工具指纹，工具启停后不会误用旧缓存；发送前估算计入工具 Schema，避免首轮 token 突跳。
+- Provider token 缓存加入工具指纹，工具启停后不会误用旧缓存；发送前估算计入工具 Schema，避免首步 token 突跳。
 
 ## 18. 验收标准
 
@@ -752,7 +759,7 @@ SSE 是后端向前端展示 Agent 过程的主通道。事件至少应覆盖以
 - Goal 申请完成当轮即执行 Judge；Judge 证据包含完整 Goal 对话（可从 `events.jsonl` 重建）。
 - 存在 pending 提问/审批时，通用恢复、Goal 续跑与删除会话均被拒绝。
 - egress helper 缺失时显示降级提示；helper 健康检查通过时按策略放行/隔离网络。
-- 深色主题、执行轨迹折叠/展开高度、工作区 GIF/图片/音视频渲染在 360px 与桌面宽度下均可正常使用。
+- 深色主题、执行过程折叠/展开高度、工作区 GIF/图片/音视频渲染在 360px 与桌面宽度下均可正常使用。
 - 中断会话在页面刷新/重启后由服务端后台自动恢复（无 pending 交互时）。
 
 ## 19. 变更约束
@@ -766,14 +773,14 @@ SSE 是后端向前端展示 Agent 过程的主通道。事件至少应覆盖以
 
 ## Runtime V2 收敛补充规范
 
-- API 返回的 `prompt_tokens` 必须可作为下一轮 API 前 token 估算的基线；当前缀请求包一致时，只允许估算新增尾部，禁止每轮重新扫描完整长历史。
+- API 返回的 `prompt_tokens` 必须可作为下一步 API 前 token 估算的基线；当前缀请求包一致时，只允许估算新增尾部，禁止每步重新扫描完整长历史。
 - Runtime V2 下 `/messages`、`/messages/count`、`/user_turns`、TOC/Todo/context snapshot 等 UI 读取必须优先来自 Runtime V2 projection/snapshot；不得因 TOC 或滚动恢复自动读取 legacy UI 历史。
 - Runtime V2 下 `/todo_plan` 必须只读 Runtime V2 context snapshot；snapshot 无 Todo 时返回空 Todo 快照，不得回退读取 legacy `todo_plan.md` 或 `key_context.md`。
 - Runtime V2 下 `/context_tokens` 必须优先读 Runtime V2 snapshot；snapshot 无缓存时只能用 Runtime V2 model projection 与 context summary 估算，不得调用 legacy session history 合并路径。
 - Runtime V2 下 `/subagents` 普通展示必须只读 Runtime V2 subagent store / parent snapshot；V2 无 task/subagent 数据时返回空列表，不得回退扫描 legacy subagent 会话目录或 legacy task index。
 - Runtime V2 下 subagent output 与 pending/continue 状态必须只读写 Runtime V2 subagent store 与 V2 UI projection；output 缺失或 pending 为空时返回 V2 结果，不得回退读取或反写 legacy output、pending results、task index 或 `ui_events.json`。
 - Runtime V2 下 subagent task index 与虚拟 task output 写入必须只写 Runtime V2 subagent store；不得为了兼容同时反写 legacy `subagent_tasks.json` 或 `subagent_outputs/`。
-- Runtime V2 下普通 ReAct continue 可用性判断必须读取 Runtime V2 UI projection；不得为了判断最后一轮是否已有 final 而读取 legacy `ui_events.json`。
+- Runtime V2 下普通 ReAct continue 可用性判断必须读取 Runtime V2 UI projection；不得为了判断最后一步是否已有 final 而读取 legacy `ui_events.json`。
 - `RUNTIME_SYNC_ON_MESSAGES_OPEN` 不得在 Runtime V2 primary 正常打开会话时同步读取 legacy；检测到 legacy-only 会话时，可由独立后台 migration coordinator 按需排队执行可验证迁移。迁移未完成前快照返回 `migration_pending`，前端自动重试，不得把旧会话显示为空 V2 会话。为避免批量 JSON 解析阻塞主进程，启动全量扫描默认关闭，仅可通过 `RUNTIME_V2_AUTO_MIGRATE_STARTUP=1` 显式启用。
 - 显式 runtime sync/migration 可以导出 Runtime V2 UI projection 与 model projection 到 legacy 文件，用于备份、兼容和人工迁移；该导出不得出现在普通打开、发送、刷新、TOC 或滚动恢复路径。
 - legacy migration/export 必须集中在 Runtime V2 migration service；允许 startup/on-open coordinator 只做文件指纹检查、排队和状态查询，普通 webui/messages/agent_loop/projection read path 不得直接加载、合并或反写 legacy 历史。
@@ -812,4 +819,4 @@ SSE 是后端向前端展示 Agent 过程的主通道。事件至少应覆盖以
 - SSE 结束、`run_finished`、`final` 三条路径必须共用同一套前端 run-state 收口逻辑，避免一条路径清理运行态而另一条路径仍保持生成中。
 - SSE 读取必须支持 keepalive 和空闲超时；超时只能触发重连/恢复，不得直接追加错误执行块或把后台会话状态写入当前可见会话。
 - 修复 live LLM delta 拆行或重复时，应优先保持同一 `react_iter` 的 live row 可跨 process group 重建继续 upsert；不得通过全量刷新正文或重建会话历史兜底。
-- 同一 ReAct 运行的过程消息必须按 `(react_iter, phase, tool_call_index)` 展示，其中 `phase` 的唯一顺序为 `llm_reasoning -> llm_response -> tool_call/tool_result`。闭合参数的工具允许在模型流结束前提前执行，但完成事件的持久化与 SSE 发布必须等待本轮 LLM reasoning/response 提交；steer 打断保存 partial assistant 时也必须遵守同一提交屏障。Runtime V2 UI projection 必须稳定修复旧日志中按完成时间形成的倒序，并同步重建 projection index，且不得跨 `user/final/interrupt steer` 边界混排。
+- 同一 ReAct 运行的过程消息必须按 `(react_iter, phase, tool_call_index)` 展示，其中 `phase` 的唯一顺序为 `llm_reasoning -> llm_response -> tool_call/tool_result`。闭合参数的工具允许在模型流结束前提前执行，但完成事件的持久化与 SSE 发布必须等待本步 LLM reasoning/response 提交；steer 打断保存 partial assistant 时也必须遵守同一提交屏障。Runtime V2 UI projection 必须稳定修复旧日志中按完成时间形成的倒序，并同步重建 projection index，且不得跨 `user/final/interrupt steer` 边界混排。
