@@ -1002,16 +1002,26 @@ def test_frontend_loaded_session_defers_layout_refresh_until_smooth_bottom_finis
     assert "function bindExistingLogInteractions(root)" in rendering
     assert "function finalizeExistingLogLayout(root)" in rendering
     assert "function isHistorySmoothScrollActive()" in rendering
+    assert "function waitForHistoryImageLayout(sessionId, mode, root)" in rendering
+    assert "root.querySelectorAll('.message img')" in rendering
+    assert "img.loading = 'eager';" in rendering
+    assert "img.setAttribute('data-history-image-fallback', '1');" in rendering
+    assert "}, 2400);" in rendering
+    assert "function prepareWorkspaceImageLayout(root)" in (ROOT / "frontend/src/app/modules/workspace-media.js").read_text(encoding="utf-8")
     assert "chatContainer.addEventListener('scrollend', onScrollEnd);" in rendering
     assert "retargetCount < 1" in rendering
     assert "if (typeof isHistorySmoothScrollActive === 'function' && isHistorySmoothScrollActive()) return;" in scroll
     assert "&& !(typeof isHistorySmoothScrollActive === 'function' && isHistorySmoothScrollActive())" in scroll
-    interactions_at = sessions.index("bindExistingLogInteractions();")
-    smooth_at = sessions.index("applyChatScrollAfterHistoryLoad(sessionId, scrollBehavior);", interactions_at)
-    wait_at = sessions.index("await waitForChatScrollAfterHistoryLoad(sessionId, scrollBehavior);", smooth_at)
+    image_wait_at = sessions.index("await waitForHistoryImageLayout(")
+    metadata_wait_at = sessions.index("await prepareWorkspaceImageLayout(")
+    hydrate_at = sessions.index("finishHistoryHydration();", image_wait_at)
+    interactions_at = sessions.index("bindExistingLogInteractions();", hydrate_at)
+    smooth_at = sessions.index("applyChatScrollAfterHistoryLoad(sessionId, historyScrollBehavior);", interactions_at)
+    wait_at = sessions.index("await waitForChatScrollAfterHistoryLoad(sessionId, historyScrollBehavior);", smooth_at)
     layout_at = sessions.index("finalizeExistingLogLayout();", wait_at)
-    assert interactions_at < smooth_at < wait_at < layout_at
-    assert "scrollBehavior === 'smooth-bottom' && initialSmoothReachedBottom" in sessions
+    assert metadata_wait_at < image_wait_at < hydrate_at < interactions_at < smooth_at < wait_at < layout_at
+    assert "historyScrollBehavior === 'smooth-bottom' && initialSmoothReachedBottom" in sessions
+    assert "historyScrollBehavior = 'bottom';" in sessions
 
 
 def test_frontend_completed_background_stream_remains_reusable_for_green_dot_restore():

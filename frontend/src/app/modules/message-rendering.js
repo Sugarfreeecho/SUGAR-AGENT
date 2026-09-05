@@ -1946,6 +1946,73 @@ function historyLoadScrollsToBottom(sessionId, mode) {
     return true;
 }
 
+function waitForHistoryImageLayout(sessionId, mode, root) {
+    if (mode !== 'smooth-bottom' || !root || sessionId !== currentSessionId) {
+        return Promise.resolve(true);
+    }
+    var images = Array.prototype.slice.call(root.querySelectorAll('.message img'));
+    var pending = images.filter(function (img) {
+        // 冷加载的消息流仍处于隐藏状态，lazy 图片不会可靠地开始请求。
+        // 只在即将执行历史平滑滚动时提升优先级，先拿到固有尺寸再显示消息流。
+        img.loading = 'eager';
+        if (img.getAttribute('data-workspace-image-sized') === '1') return false;
+        return !img.complete;
+    });
+    if (!pending.length) {
+        return new Promise(function (resolve) {
+            requestAnimationFrame(function () {
+                requestAnimationFrame(function () { resolve(sessionId === currentSessionId); });
+            });
+        });
+    }
+    return new Promise(function (resolve) {
+        var settled = false;
+        var remaining = pending.length;
+        var listeners = [];
+        var timeout = 0;
+        function cleanup() {
+            if (timeout) clearTimeout(timeout);
+            listeners.forEach(function (entry) {
+                entry.img.removeEventListener('load', entry.done);
+                entry.img.removeEventListener('error', entry.done);
+            });
+        }
+        function finish(imagesReady) {
+            if (settled) return;
+            settled = true;
+            cleanup();
+            requestAnimationFrame(function () {
+                requestAnimationFrame(function () {
+                    resolve(!!imagesReady && sessionId === currentSessionId);
+                });
+            });
+        }
+        // 慢图或坏图不能无限阻塞打开会话；超时后由调用方降级为即时到底。
+        timeout = setTimeout(function () {
+            pending.forEach(function (img) {
+                // 无法预先取得尺寸的外链图使用固定画框；图片迟到或失败时都不再改变布局。
+                img.setAttribute('data-history-image-fallback', '1');
+            });
+            finish(false);
+        }, 2400);
+        pending.forEach(function (img) {
+            var entry = { img: img, done: null };
+            entry.done = function () {
+                if (settled) return;
+                img.removeEventListener('load', entry.done);
+                img.removeEventListener('error', entry.done);
+                remaining -= 1;
+                if (remaining <= 0) finish(true);
+            };
+            listeners.push(entry);
+            img.addEventListener('load', entry.done);
+            img.addEventListener('error', entry.done);
+            // complete 可能在筛选和绑定事件之间变为 true。
+            if (img.complete) entry.done();
+        });
+    });
+}
+
 function waitForChatScrollAfterHistoryLoad(sessionId, mode) {
     if (!chatContainer || !sessionId) return Promise.resolve(false);
     if (sessionId !== currentSessionId) return Promise.resolve(false);

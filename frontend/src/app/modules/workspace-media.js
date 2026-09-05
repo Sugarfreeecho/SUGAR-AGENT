@@ -21,6 +21,99 @@ function workspaceMediaUrl(rel) {
     return '/api/workspace-media?rel=' + encodeURIComponent(String(rel || ''));
 }
 
+var workspaceImageMetadataCache = new Map();
+
+function normalizeWorkspaceImageMetadata(raw) {
+    var width = Math.round(Number(raw && raw.width));
+    var height = Math.round(Number(raw && raw.height));
+    if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) return null;
+    return {
+        width: width,
+        height: height,
+        version: String(raw && raw.version || ''),
+    };
+}
+
+function applyWorkspaceImageMetadata(img, metadata) {
+    metadata = normalizeWorkspaceImageMetadata(metadata);
+    if (!img || !metadata) return false;
+    img.setAttribute('width', String(metadata.width));
+    img.setAttribute('height', String(metadata.height));
+    img.setAttribute('data-workspace-image-sized', '1');
+    if (img.style) {
+        var heightBoundWidth = Math.round(800000 * metadata.width / metadata.height) / 10000;
+        img.style.setProperty('--msg-image-width', metadata.width + 'px');
+        img.style.setProperty('--msg-image-height-bound-width', heightBoundWidth + 'vh');
+        img.style.aspectRatio = metadata.width + ' / ' + metadata.height;
+    }
+    return true;
+}
+
+function workspaceImageMetadataHtmlAttrs(rel) {
+    var metadata = normalizeWorkspaceImageMetadata(workspaceImageMetadataCache.get(String(rel || '')));
+    if (!metadata) return '';
+    var heightBoundWidth = Math.round(800000 * metadata.width / metadata.height) / 10000;
+    return ' width="' + metadata.width
+        + '" height="' + metadata.height
+        + '" data-workspace-image-sized="1" style="--msg-image-width:'
+        + metadata.width + 'px;--msg-image-height-bound-width:' + heightBoundWidth
+        + 'vh;aspect-ratio:' + metadata.width + ' / ' + metadata.height + '"';
+}
+
+function prepareWorkspaceImageLayout(root) {
+    if (!root) return Promise.resolve(false);
+    var images = Array.prototype.slice.call(
+        root.querySelectorAll('img.msg-workspace-image[data-workspace-open]')
+    );
+    if (!images.length || typeof fetch !== 'function') return Promise.resolve(true);
+    var imagesByRel = new Map();
+    images.forEach(function (img) {
+        var rel = String(img.getAttribute('data-workspace-open') || '').trim();
+        if (!rel) return;
+        if (!imagesByRel.has(rel)) imagesByRel.set(rel, []);
+        imagesByRel.get(rel).push(img);
+        applyWorkspaceImageMetadata(img, workspaceImageMetadataCache.get(rel));
+    });
+    var rels = Array.from(imagesByRel.keys());
+    if (!rels.length) return Promise.resolve(true);
+    var controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    var timeout = setTimeout(function () {
+        if (controller) controller.abort();
+    }, 1000);
+    var requests = [];
+    for (var offset = 0; offset < rels.length; offset += 128) {
+        var requestOptions = {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ rels: rels.slice(offset, offset + 128) }),
+        };
+        if (controller) requestOptions.signal = controller.signal;
+        requests.push(fetch('/api/workspace-image-metadata', requestOptions).then(function (response) {
+            if (!response.ok) return null;
+            return response.json().catch(function () { return null; });
+        }).catch(function () { return null; }));
+    }
+    return Promise.all(requests).then(function (responses) {
+        var applied = false;
+        responses.forEach(function (payload) {
+            var entries = payload && payload.ok && Array.isArray(payload.images) ? payload.images : [];
+            entries.forEach(function (entry) {
+                var rel = String(entry && entry.rel || '');
+                var metadata = normalizeWorkspaceImageMetadata(entry);
+                if (!rel || !metadata) return;
+                workspaceImageMetadataCache.set(rel, metadata);
+                (imagesByRel.get(rel) || []).forEach(function (img) {
+                    if (applyWorkspaceImageMetadata(img, metadata)) applied = true;
+                });
+            });
+        });
+        return applied;
+    }).finally(function () {
+        clearTimeout(timeout);
+    });
+}
+
 function workspaceMediaRelFromMarker(value, expectedKind) {
     var raw = String(value || '').trim();
     var marker = /^#ga-workspace-path=(.+)$/i.exec(raw);
@@ -63,13 +156,15 @@ function workspaceMarkdownImageHtml(token) {
     var title = token && token.title
         ? ' title="' + escapeHtmlAttr(String(token.title)) + '"'
         : '';
-    return '<img src="'
+    var dimensions = workspaceImageMetadataHtmlAttrs(rel);
+    return '<img loading="lazy" decoding="async" src="'
         + escapeHtmlAttr(workspaceMediaUrl(rel))
         + '" alt="'
         + escapeHtmlAttr(alt)
         + '" class="msg-workspace-image" data-workspace-open="'
         + escapeHtmlAttr(rel)
         + '" data-workspace-media-kind="image"'
+        + dimensions
         + title
         + '>';
 }
@@ -92,6 +187,7 @@ function wrapWorkspaceImageElement(img, rel) {
     if (!img || !rel || img.dataset.workspaceImageReady === '1') return;
     img.dataset.workspaceImageReady = '1';
     img.classList.add('msg-workspace-image');
+    applyWorkspaceImageMetadata(img, workspaceImageMetadataCache.get(String(rel || '')));
     img.loading = 'lazy';
     img.decoding = 'async';
     img.src = workspaceMediaUrl(rel);

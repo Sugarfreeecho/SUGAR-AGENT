@@ -1,4 +1,5 @@
 import asyncio
+import json
 import sys
 from pathlib import Path
 
@@ -9,6 +10,14 @@ ROOT = Path(__file__).resolve().parents[1]
 APP = ROOT / "app"
 if str(APP) not in sys.path:
     sys.path.insert(0, str(APP))
+
+
+class _JsonRequest:
+    def __init__(self, payload):
+        self.payload = payload
+
+    async def json(self):
+        return self.payload
 
 
 async def _render_response(response, range_value: str = ""):
@@ -128,3 +137,49 @@ def test_workspace_image_alias_only_accepts_images(tmp_path, monkeypatch):
     assert headers["content-type"] == "image/gif"
     assert body == b"GIF89a"
     assert asyncio.run(webui.workspace_image("sample.mp3")).status_code == 415
+
+
+def test_workspace_image_metadata_returns_raster_and_svg_dimensions(tmp_path, monkeypatch):
+    from PIL import Image
+    import webui
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    Image.new("RGB", (320, 180)).save(workspace / "preview.png")
+    (workspace / "diagram.svg").write_text(
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 360"></svg>',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(webui, "WORK_DIR", workspace)
+
+    response = asyncio.run(
+        webui.workspace_image_metadata(
+            _JsonRequest({"rels": ["preview.png", "diagram.svg", "missing.png"]})
+        )
+    )
+    payload = json.loads(response.body)
+    assert payload["ok"] is True
+    by_rel = {item["rel"]: item for item in payload["images"]}
+    assert (by_rel["preview.png"]["width"], by_rel["preview.png"]["height"]) == (320, 180)
+    assert (by_rel["diagram.svg"]["width"], by_rel["diagram.svg"]["height"]) == (640, 360)
+    assert "missing.png" not in by_rel
+    assert response.headers["cache-control"] == "no-store"
+
+
+def test_workspace_image_metadata_honors_exif_orientation(tmp_path, monkeypatch):
+    from PIL import Image
+    import webui
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    exif = Image.Exif()
+    exif[274] = 6
+    Image.new("RGB", (120, 80)).save(workspace / "rotated.jpg", exif=exif)
+    monkeypatch.setattr(webui, "WORK_DIR", workspace)
+
+    response = asyncio.run(
+        webui.workspace_image_metadata(_JsonRequest({"rels": ["rotated.jpg"]}))
+    )
+    payload = json.loads(response.body)
+    assert payload["images"][0]["width"] == 80
+    assert payload["images"][0]["height"] == 120

@@ -1404,6 +1404,20 @@ async function loadSessionMessages(sessionId, scrollBehavior, opts) {
                 if (loadToken !== messageLoadEpoch || sessionId !== currentSessionId) return;
             }
         }
+        var historyScrollBehavior = scrollBehavior;
+        if (scrollBehavior === 'smooth-bottom' && typeof prepareWorkspaceImageLayout === 'function') {
+            await prepareWorkspaceImageLayout(getVisibleChatStream());
+            if (loadToken !== messageLoadEpoch || sessionId !== currentSessionId) return;
+        }
+        var historyImagesReady = await waitForHistoryImageLayout(
+            sessionId,
+            scrollBehavior,
+            getVisibleChatStream()
+        );
+        if (loadToken !== messageLoadEpoch || sessionId !== currentSessionId) return;
+        if (scrollBehavior === 'smooth-bottom' && !historyImagesReady) {
+            historyScrollBehavior = 'bottom';
+        }
         finishHistoryHydration();
         if (!chatStreamHasConversationContent()) {
             suppressTocDuringSessionLoad = false;
@@ -1424,7 +1438,7 @@ async function loadSessionMessages(sessionId, scrollBehavior, opts) {
             await loadOlderHistoryChunk({ keepTocStable: true });
             if (loadToken !== messageLoadEpoch || sessionId !== currentSessionId) return;
         }
-        if (historyLoadScrollsToBottom(sessionId, scrollBehavior)) {
+        if (historyLoadScrollsToBottom(sessionId, historyScrollBehavior)) {
             tocScrollBottomOnNextBuild = true;
         }
         suppressTocDuringSessionLoad = false;
@@ -1433,11 +1447,11 @@ async function loadSessionMessages(sessionId, scrollBehavior, opts) {
         updateSessionTitle();
         updateHistorySentinelVisibility();
         bindExistingLogInteractions();
-        applyChatScrollAfterHistoryLoad(sessionId, scrollBehavior);
-        var initialSmoothReachedBottom = await waitForChatScrollAfterHistoryLoad(sessionId, scrollBehavior);
+        applyChatScrollAfterHistoryLoad(sessionId, historyScrollBehavior);
+        var initialSmoothReachedBottom = await waitForChatScrollAfterHistoryLoad(sessionId, historyScrollBehavior);
         if (loadToken !== messageLoadEpoch || sessionId !== currentSessionId) return;
         finalizeExistingLogLayout();
-        if (scrollBehavior === 'smooth-bottom' && initialSmoothReachedBottom) {
+        if (historyScrollBehavior === 'smooth-bottom' && initialSmoothReachedBottom) {
             setScrollTopImmediate(chatContainer, chatContainer.scrollHeight);
             requestAnimationFrame(function () {
                 requestAnimationFrame(function () {

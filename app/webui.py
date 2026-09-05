@@ -5,6 +5,7 @@
 """
 
 import asyncio
+import functools
 import json
 import logging
 import mimetypes
@@ -1762,6 +1763,105 @@ def _resolve_workspace_view_path(raw_value: str) -> Path:
     return _resolve_allowed_local_path(raw, True)
 
 
+def _svg_length_px(raw_value: Any) -> Optional[float]:
+    text = str(raw_value or "").strip()
+    match = re.fullmatch(
+        r"([0-9]+(?:\.[0-9]+)?|\.[0-9]+)\s*(px|pt|pc|mm|cm|in)?",
+        text,
+        flags=re.IGNORECASE,
+    )
+    if not match:
+        return None
+    value = float(match.group(1))
+    scale = {
+        "": 1.0,
+        "px": 1.0,
+        "pt": 96.0 / 72.0,
+        "pc": 16.0,
+        "mm": 96.0 / 25.4,
+        "cm": 96.0 / 2.54,
+        "in": 96.0,
+    }.get((match.group(2) or "").lower())
+    if scale is None or value <= 0:
+        return None
+    return value * scale
+
+
+def _svg_image_dimensions(path: Path) -> tuple[int, int]:
+    import xml.etree.ElementTree as ET
+
+    with path.open("rb") as source:
+        root = next(
+            (element for _event, element in ET.iterparse(source, events=("start",))),
+            None,
+        )
+    if root is None or str(root.tag).rsplit("}", 1)[-1].lower() != "svg":
+        raise ValueError("invalid SVG root")
+    width = _svg_length_px(root.attrib.get("width"))
+    height = _svg_length_px(root.attrib.get("height"))
+    if width is None or height is None:
+        view_box = re.split(r"[\s,]+", str(root.attrib.get("viewBox") or "").strip())
+        if len(view_box) == 4:
+            try:
+                view_width = float(view_box[2])
+                view_height = float(view_box[3])
+            except (TypeError, ValueError):
+                view_width = view_height = 0
+            if view_width > 0 and view_height > 0:
+                if width is None and height is None:
+                    width, height = view_width, view_height
+                elif width is None:
+                    width = height * view_width / view_height
+                elif height is None:
+                    height = width * view_height / view_width
+    if width is None or height is None or width <= 0 or height <= 0:
+        raise ValueError("SVG has no usable intrinsic dimensions")
+    return max(1, round(width)), max(1, round(height))
+
+
+@functools.lru_cache(maxsize=512)
+def _cached_workspace_image_dimensions(
+    path_value: str,
+    modified_ns: int,
+    file_size: int,
+) -> tuple[int, int]:
+    del modified_ns, file_size  # 这两个参数用于文件变化时自动生成新的缓存键。
+    path = Path(path_value)
+    if path.suffix.lower() == ".svg":
+        return _svg_image_dimensions(path)
+    from PIL import Image
+
+    with Image.open(path) as image:
+        width, height = image.size
+        try:
+            orientation = int(image.getexif().get(274, 1) or 1)
+        except Exception:
+            orientation = 1
+    if orientation in {5, 6, 7, 8}:
+        width, height = height, width
+    if width <= 0 or height <= 0:
+        raise ValueError("image has no usable intrinsic dimensions")
+    return int(width), int(height)
+
+
+def _workspace_image_metadata_item(rel: str) -> dict[str, Any]:
+    path = _resolve_workspace_view_path(rel)
+    if path.suffix.lower() not in _VIEWABLE_IMAGE_SUFFIXES:
+        raise ValueError("not a supported image")
+    stat = path.stat()
+    width, height = _cached_workspace_image_dimensions(
+        str(path),
+        int(stat.st_mtime_ns),
+        int(stat.st_size),
+    )
+    return {
+        "rel": rel,
+        "width": width,
+        "height": height,
+        "version": f"{stat.st_mtime_ns:x}-{stat.st_size:x}",
+    }
+
+
 async def _workspace_media_response(
     rel: str,
     *,
@@ -1810,6 +1910,44 @@ async def workspace_media(
         rel,
         allowed_suffixes=_VIEWABLE_MEDIA_SUFFIXES,
         kind_label="media",
+    )
+
+
+@fastapi_app.post("/api/workspace-image-metadata")
+async def workspace_image_metadata(request: Request):
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"ok": False, "error": "invalid JSON body"}, status_code=400)
+    rels = body.get("rels") if isinstance(body, dict) else None
+    if not isinstance(rels, list):
+        return JSONResponse({"ok": False, "error": "rels must be a list"}, status_code=400)
+    clean_rels = list(
+        dict.fromkeys(
+            str(rel).strip()
+            for rel in rels[:128]
+            if isinstance(rel, str) and str(rel).strip()
+        )
+    )
+
+    def _collect() -> list[dict[str, Any]]:
+        images: list[dict[str, Any]] = []
+        for rel in clean_rels:
+            try:
+                images.append(_workspace_image_metadata_item(rel))
+            except (ValueError, PermissionError, FileNotFoundError, OSError):
+                continue
+            except Exception as exc:
+                logger.debug("workspace image metadata failed for %s: %s", rel, exc)
+        return images
+
+    try:
+        images = await asyncio.wait_for(run_in_threadpool(_collect), timeout=5.0)
+    except asyncio.TimeoutError:
+        return JSONResponse({"ok": False, "error": "metadata timed out"}, status_code=504)
+    return JSONResponse(
+        {"ok": True, "images": images},
+        headers={"Cache-Control": "no-store"},
     )
 
 

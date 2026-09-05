@@ -38,6 +38,11 @@ class FakeElement {
     this.textContent = '';
     this.hidden = false;
     this.listeners = Object.create(null);
+    this.style = {
+      aspectRatio: '',
+      values: Object.create(null),
+      setProperty: (name, value) => { this.style.values[name] = String(value); },
+    };
   }
   appendChild(child) {
     child.parentElement = this;
@@ -60,12 +65,26 @@ class FakeElement {
   addEventListener(name, handler) {
     this.listeners[name] = handler;
   }
+  removeEventListener(name, handler) {
+    if (this.listeners[name] === handler) delete this.listeners[name];
+  }
 }
 
 const hoverTipBindings = [];
+let historyImageTimeout = null;
 const context = vm.createContext({
   console,
   document: { createElement: (tagName) => new FakeElement(tagName) },
+  currentSessionId: 'history-session',
+  requestAnimationFrame(callback) { callback(); return 1; },
+  setTimeout(callback, delay) {
+    assert.ok(delay === 1000 || delay === 2400);
+    if (delay === 2400) historyImageTimeout = callback;
+    return delay;
+  },
+  clearTimeout(timer) {
+    if (timer === 2400) historyImageTimeout = null;
+  },
   bindUiHoverTip(element) { hoverTipBindings.push(element); },
   escapeHtmlAttr(value) {
     return String(value)
@@ -89,6 +108,14 @@ vm.runInContext(
     renderingSource,
     'function trimTrailingPathPunct',
     '/** 可链转「工作区下文件」的已知后缀',
+  ),
+  context,
+);
+vm.runInContext(
+  between(
+    renderingSource,
+    'function waitForHistoryImageLayout',
+    'function waitForChatScrollAfterHistoryLoad',
   ),
   context,
 );
@@ -161,6 +188,8 @@ async function main() {
   const gif = marked.parse('![预览](media/demo.gif "动画")');
   assert.match(gif, /<img [^>]*class="msg-workspace-image"/);
   assert.match(gif, /data-workspace-media-kind="image"/);
+  assert.match(gif, /loading="lazy"/);
+  assert.match(gif, /decoding="async"/);
   assert.match(gif, /alt="预览"/);
   assert.match(gif, /title="动画"/);
   assert.match(gif, /\/api\/workspace-media\?rel=media%2Fdemo\.gif/);
@@ -169,6 +198,41 @@ async function main() {
   const external = marked.parse('![外部](https://example.com/demo.gif)');
   assert.match(external, /<img src="https:\/\/example\.com\/demo\.gif" alt="外部">/);
   assert.doesNotMatch(external, /data-workspace-media-kind/);
+
+  const metadataImage = new FakeElement('img');
+  metadataImage.className = 'msg-workspace-image';
+  metadataImage.setAttribute('data-workspace-open', 'media/sized.png');
+  context.fetch = async (url, options) => {
+    assert.equal(url, '/api/workspace-image-metadata');
+    assert.equal(options.method, 'POST');
+    assert.deepEqual(JSON.parse(options.body), { rels: ['media/sized.png'] });
+    return {
+      ok: true,
+      async json() {
+        return {
+          ok: true,
+          images: [{ rel: 'media/sized.png', width: 800, height: 600, version: 'v1' }],
+        };
+      },
+    };
+  };
+  assert.equal(await context.prepareWorkspaceImageLayout({
+    querySelectorAll(selector) {
+      assert.equal(selector, 'img.msg-workspace-image[data-workspace-open]');
+      return [metadataImage];
+    },
+  }), true);
+  assert.equal(metadataImage.getAttribute('width'), '800');
+  assert.equal(metadataImage.getAttribute('height'), '600');
+  assert.equal(metadataImage.getAttribute('data-workspace-image-sized'), '1');
+  assert.equal(metadataImage.style.values['--msg-image-width'], '800px');
+  assert.equal(metadataImage.style.values['--msg-image-height-bound-width'], '106.6667vh');
+  assert.equal(metadataImage.style.aspectRatio, '800 / 600');
+  const cachedSizedImage = context.workspaceMarkdownImageHtml({
+    href: 'media/sized.png', text: '尺寸图', title: null,
+  });
+  assert.match(cachedSizedImage, /width="800" height="600"/);
+  assert.match(cachedSizedImage, /data-workspace-image-sized="1"/);
 
   const audioLink = marked.parse('[试听](media/demo.mp3)');
   assert.match(audioLink, /data-workspace-markdown-link="1"/);
@@ -244,6 +308,32 @@ async function main() {
   assert.equal(audio.controls, true);
   assert.equal(audio.preload, 'metadata');
   assert.equal(audio.autoplay, false);
+
+  const pendingImage = new FakeElement('img');
+  pendingImage.complete = false;
+  const pendingLayout = context.waitForHistoryImageLayout('history-session', 'smooth-bottom', {
+    querySelectorAll(selector) {
+      assert.equal(selector, '.message img');
+      return [pendingImage];
+    },
+  });
+  assert.equal(pendingImage.loading, 'eager');
+  assert.equal(typeof pendingImage.listeners.load, 'function');
+  pendingImage.complete = true;
+  pendingImage.listeners.load();
+  assert.equal(await pendingLayout, true);
+  assert.equal(historyImageTimeout, null);
+
+  const slowImage = new FakeElement('img');
+  slowImage.complete = false;
+  const timedOutLayout = context.waitForHistoryImageLayout('history-session', 'smooth-bottom', {
+    querySelectorAll() { return [slowImage]; },
+  });
+  assert.equal(typeof historyImageTimeout, 'function');
+  historyImageTimeout();
+  assert.equal(await timedOutLayout, false);
+  assert.equal(slowImage.listeners.load, undefined);
+  assert.equal(slowImage.getAttribute('data-history-image-fallback'), '1');
 
   console.log('workspace media runtime checks passed');
 }
