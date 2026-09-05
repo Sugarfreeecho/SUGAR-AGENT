@@ -683,6 +683,7 @@ def test_reviewer_uses_the_current_session_model_profile(monkeypatch):
     assert result.risk_analysis == "只读取时间，不修改系统。"
     assert result.command_purpose == "读取当前日期时间，用于回答用户。"
     assert result.reason == (
+        "【拦截原因】命中 shell 审批规则（action=process.exec，effect=workspace_write），需人工确认\n"
         "【命令风险】只读取时间，不修改系统。\n"
         "【命令目的】读取当前日期时间，用于回答用户。"
     )

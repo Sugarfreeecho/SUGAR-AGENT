@@ -38,7 +38,10 @@ def test_team_tool_schema_and_feature_gate_are_wired():
         }))
 
     loop = (APP_DIR / "agent_loop.py").read_text(encoding="utf-8")
-    assert "agent_team" not in loop
+    # The team tool lives in plugins/agent-team; agent_loop may pass the
+    # session-identity field name through, but must not import/invoke it.
+    assert "import agent_team" not in loop
+    assert "from agent_team" not in loop
     host_tools = (APP_DIR / "builtin_host_tools.py").read_text(encoding="utf-8")
     assert '_invoke_team' not in host_tools
     assert '"task",\n            _invoke_task' in host_tools

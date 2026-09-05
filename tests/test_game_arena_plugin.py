@@ -91,6 +91,7 @@ def test_game_arena_uses_host_storage_and_does_not_modify_plugin_source(tmp_path
             "namespace": "current-game",
             "value": {
                 "game_id": "host_storage",
+                "game_type": "gomoku",
                 "status": "waiting",
                 "turn": "black",
                 "move_count": 0,
@@ -102,6 +103,7 @@ def test_game_arena_uses_host_storage_and_does_not_modify_plugin_source(tmp_path
             "event_name": "game_updated",
             "data": {
                 "game_id": "host_storage",
+                "game_type": "gomoku",
                 "status": "waiting",
                 "turn": "black",
                 "move_count": 0,

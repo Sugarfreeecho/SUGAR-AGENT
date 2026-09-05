@@ -183,7 +183,7 @@ def test_open_main_ui_reuses_live_frontend_page(monkeypatch):
     opened = []
     focused = []
     launcher._open_named_browser_window = lambda url: opened.append(url)
-    monkeypatch.setattr(tray_launcher, "_request_existing_ui_activation", lambda path: path == "/")
+    monkeypatch.setattr(tray_launcher, "_request_existing_ui_activation", lambda path, session="": path == "/")
     monkeypatch.setattr(tray_launcher, "_focus_existing_webui_window", lambda: focused.append(True) or True)
 
     launcher._open_url("/", refresh=True)
@@ -196,8 +196,9 @@ def test_open_main_ui_falls_back_to_browser_without_live_page(monkeypatch):
     launcher = make_launcher()
     launcher._is_listening = lambda: True
     opened = []
+    monkeypatch.setattr(tray_launcher, "_visible_webui_windows", lambda: [])
     launcher._open_named_browser_window = lambda url: opened.append(url)
-    monkeypatch.setattr(tray_launcher, "_request_existing_ui_activation", lambda _path: False)
+    monkeypatch.setattr(tray_launcher, "_request_existing_ui_activation", lambda _path, session="": False)
     monkeypatch.setattr(tray_launcher, "_focus_existing_webui_window", lambda: False)
 
     launcher._open_url("/", refresh=False)
@@ -209,8 +210,9 @@ def test_open_main_ui_reuses_visible_window_before_presence_recovers(monkeypatch
     launcher = make_launcher()
     launcher._is_listening = lambda: True
     opened = []
+    monkeypatch.setattr(tray_launcher, "_visible_webui_windows", lambda: [])
     launcher._open_named_browser_window = lambda url: opened.append(url)
-    monkeypatch.setattr(tray_launcher, "_request_existing_ui_activation", lambda _path: False)
+    monkeypatch.setattr(tray_launcher, "_request_existing_ui_activation", lambda _path, session="": False)
     monkeypatch.setattr(tray_launcher, "_focus_existing_webui_window", lambda: True)
 
     launcher._open_url("/", refresh=True)
@@ -228,7 +230,7 @@ def test_external_ui_activation_delegates_to_resident_tray(monkeypatch):
     monkeypatch.setattr(
         tray_launcher,
         "_request_existing_ui_activation",
-        lambda path: events.append(("request", path)) or False,
+        lambda path, session="": events.append(("request", path)) or False,
     )
     monkeypatch.setattr(
         tray_launcher,
@@ -244,7 +246,7 @@ def test_external_ui_activation_reuses_page_without_tray(monkeypatch):
     focused = []
     opened = []
     monkeypatch.setattr(tray_launcher, "_notify_existing_instance", lambda **_kwargs: False)
-    monkeypatch.setattr(tray_launcher, "_request_existing_ui_activation", lambda path: path == "/")
+    monkeypatch.setattr(tray_launcher, "_request_existing_ui_activation", lambda path, session="": path == "/")
     monkeypatch.setattr(
         tray_launcher,
         "_focus_existing_webui_window",
@@ -263,8 +265,9 @@ def test_external_ui_activation_reuses_page_without_tray(monkeypatch):
 
 def test_external_ui_activation_opens_page_only_when_none_is_reusable(monkeypatch):
     opened = []
+    monkeypatch.setattr(tray_launcher, "_visible_webui_windows", lambda: [])
     monkeypatch.setattr(tray_launcher, "_notify_existing_instance", lambda **_kwargs: False)
-    monkeypatch.setattr(tray_launcher, "_request_existing_ui_activation", lambda _path: False)
+    monkeypatch.setattr(tray_launcher, "_request_existing_ui_activation", lambda _path, session="": False)
     monkeypatch.setattr(tray_launcher, "_focus_existing_webui_window", lambda: False)
     monkeypatch.setattr(
         tray_launcher,
