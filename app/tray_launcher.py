@@ -150,14 +150,27 @@ def _open_url_in_browser(path: str = "/", refresh: bool = True) -> None:
         webbrowser.open(url, new=0, autoraise=True)
 
 
-def _request_existing_ui_activation(path: str = "/") -> bool:
+def _request_existing_ui_activation(path: str = "/", session: str = "") -> bool:
     """Ask a live WebUI page to foreground itself instead of opening a duplicate."""
 
-    return request_webui_activation(path, base_url=BASE_URL)
+    return request_webui_activation(path, base_url=BASE_URL, session=session)
 
 
-def _focus_existing_webui_window() -> bool:
-    """Best-effort foregrounding for a browser whose active tab is SugarAgent."""
+def _session_from_protocol_uri(raw_uri: str) -> str:
+    """Extract ``session`` from a ``sugaragent://open-ui?session=...`` URI."""
+    import re as _re
+    from urllib.parse import parse_qs, urlparse
+
+    try:
+        values = parse_qs(urlparse(str(raw_uri or "")).query).get("session") or []
+    except ValueError:
+        return ""
+    candidate = str(values[0] if values else "").strip()
+    return _re.sub(r"[^A-Za-z0-9\-]", "", candidate)[:64]
+
+
+def _visible_webui_windows() -> list[int]:
+    """Top-level visible windows whose active tab shows the WebUI."""
 
     matches: list[int] = []
 
@@ -174,12 +187,74 @@ def _focus_existing_webui_window() -> bool:
 
     try:
         win32gui.EnumWindows(collect, None)
-        if not matches:
-            return False
-        hwnd = matches[0]
-        win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
+    except win32gui.error:
+        pass
+    return matches
+
+
+def _bring_window_to_foreground(hwnd: int) -> bool:
+    """Raise ``hwnd`` to the foreground, verifying the system actually did it.
+
+    Escalates because the tray is a background process and Windows' foreground
+    lock commonly rejects a plain SetForegroundWindow from one:
+      1. SetForegroundWindow (allowed right after a user interaction).
+      2. SwitchToThisWindow (explicitly designed for programmatic switching).
+      3. A transient ALT key press, which makes Windows grant foreground
+         rights to this process — without touching window state.
+
+    Never state-changing: an already-foreground window is a strict no-op, and
+    the fallbacks above only raise — a window must never be sent backwards
+    (the previous minimize/restore hammer did exactly that).
+    """
+    try:
+        if int(win32gui.GetForegroundWindow() or 0) == int(hwnd):
+            return True  # already foreground: strict no-op
+        if win32gui.IsIconic(hwnd):
+            win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
         win32gui.SetForegroundWindow(hwnd)
+    except win32gui.error:
+        pass
+    if int(win32gui.GetForegroundWindow() or 0) == int(hwnd):
         return True
+    try:
+        import ctypes
+
+        ctypes.windll.user32.SwitchToThisWindow(int(hwnd), True)
+    except Exception:
+        pass
+    if int(win32gui.GetForegroundWindow() or 0) == int(hwnd):
+        return True
+    try:
+        import ctypes
+
+        user32 = ctypes.windll.user32
+        KEYEVENTF_KEYUP = 0x0002
+        VK_MENU = 0x12
+        user32.keybd_event(VK_MENU, 0, 0, 0)  # ALT down
+        try:
+            win32gui.SetForegroundWindow(hwnd)
+        finally:
+            user32.keybd_event(VK_MENU, 0, KEYEVENTF_KEYUP, 0)  # ALT up
+    except Exception:
+        pass
+    return int(win32gui.GetForegroundWindow() or 0) == int(hwnd)
+
+
+def _focus_existing_webui_window() -> bool:
+    """Foreground a visible browser window whose active tab is the WebUI.
+
+    Returns True only when the window is verifiably in the foreground.
+    Heartbeat pages hosted inside other applications (e.g. an embedded
+    automation browser pane) can match the title check but cannot be raised
+    for the user — reporting False for those lets callers fall back to
+    opening a real browser window instead of doing nothing.
+    """
+
+    try:
+        for hwnd in _visible_webui_windows():
+            if _bring_window_to_foreground(hwnd):
+                return True
+        return False
     except win32gui.error:
         return False
 
@@ -203,24 +278,42 @@ def _notify_existing_instance(open_browser: bool = True) -> bool:
         return False
 
 
-def _activate_webui_from_external() -> bool:
-    """Reuse a live WebUI for notification/protocol activation when possible."""
+def _activate_webui_from_external(session: str = "") -> bool:
+    """Reuse a live WebUI for notification/protocol activation when possible.
 
+    ``session`` deep-links the activation: an already-open page navigates to
+    that conversation (through the activation heartbeat channel); a fresh
+    browser window opens with ``/?session=...``.
+    """
+
+    session = str(session or "").strip()
     # The resident launcher owns the strongest activation path: it signals the
     # browser page through the backend and then foregrounds the browser window.
-    if _notify_existing_instance(open_browser=True):
+    # Its tray IPC cannot carry a session target, so session jumps bypass it.
+    if not session and _notify_existing_instance(open_browser=True):
         return True
     # Direct backend launches may not have a tray process. Reuse the same page
     # heartbeat contract before falling back to the default browser handler.
-    if _request_existing_ui_activation("/"):
-        _focus_existing_webui_window()
+    # Focus must verify success: a reused page inside an unfocusable host
+    # (embedded automation browser) falls through to a real browser window.
+    if _request_existing_ui_activation("/", session=session) and _focus_existing_webui_window():
         return True
     # During a backend restart the old page can still be visible before its
     # first presence heartbeat reaches the new process. The browser title is an
     # immediate secondary reuse signal on Windows.
     if _focus_existing_webui_window():
         return True
-    _open_url_in_browser("/", refresh=False)
+    if _visible_webui_windows():
+        # Same anti-duplication guard as the tray open path: a visible page
+        # exists even though foregrounding failed — never pile up windows.
+        _append_log(
+            "WebUI window visible but could not be foregrounded; not opening a duplicate"
+        )
+        return True
+    _open_url_in_browser(
+        f"/?session={session}" if session else "/",
+        refresh=False,
+    )
     return False
 
 
@@ -479,6 +572,29 @@ class TrayLauncher:
             )
         finally:
             log.close()
+        threading.Thread(
+            target=self._auto_open_webui_when_ready,
+            name="agent-auto-open-webui",
+            daemon=True,
+        ).start()
+
+    def _auto_open_webui_when_ready(self) -> None:
+        """Open the WebUI once the launched Agent port starts listening.
+
+        The spawned Agent runs with OPEN_BROWSER=0 (the tray owns UI
+        launch), so without this the frontend stays closed after every
+        tray-driven start.  ``_open_url`` reuses the activation path, so an
+        already-open page is foregrounded instead of duplicated.
+        """
+        deadline = time.monotonic() + 120.0
+        while time.monotonic() < deadline:
+            if self._is_listening():
+                try:
+                    self._open_url("/", refresh=True)
+                except Exception as exc:
+                    _append_log(f"Tray auto-open error: {exc}")
+                return
+            time.sleep(0.5)
 
     def _start_process_watchdog(self) -> None:
         if self._watchdog_thread and self._watchdog_thread.is_alive():
@@ -659,17 +775,42 @@ class TrayLauncher:
         elif command == MENU_EXIT:
             self._exit_agent()
 
-    def _open_url(self, path: str, refresh: bool = False) -> None:
+    def _open_url(self, path: str, refresh: bool = False, session: str = "") -> None:
         if not self._is_listening():
             self._show_console()
             print(MSG_NOT_READY)
             return
-        if path == "/" and _request_existing_ui_activation(path):
-            _focus_existing_webui_window()
+        session = str(session or "").strip()
+        activation_reused = (
+            path == "/" and _request_existing_ui_activation(path, session=session)
+        )
+        if _focus_existing_webui_window():
+            if session and not activation_reused:
+                # The page the user sees is already up; deliver the session
+                # target through the activation channel so it navigates.
+                _request_existing_ui_activation(path, session=session)
             return
-        if path == "/" and _focus_existing_webui_window():
+        if _visible_webui_windows():
+            # A visible WebUI window exists; opening another would pile up
+            # duplicate pages.  The focus escalation above has already
+            # flashed it (minimize/restore) — surface why nothing more
+            # happened instead of spawning duplicates.
+            _append_log(
+                "WebUI window visible but could not be foregrounded; not opening a duplicate"
+            )
             return
+        if activation_reused:
+            # The backend sees a live page heartbeat, but no visible browser
+            # window could be brought to the foreground (e.g. an embedded
+            # automation browser pane).  Short-circuiting here left users
+            # with a tray click that visibly did nothing — open a real
+            # browser window instead.
+            _append_log(
+                "WebUI activation reused but no focusable window; opening a new browser window"
+            )
         url = f"{BASE_URL}{path}"
+        if session:
+            url = f"{url}{'&' if '?' in url else '?'}session={session}"
         if refresh:
             url = f"{url}{'&' if '?' in url else '?'}_={int(time.time())}"
         self._open_named_browser_window(url)
@@ -911,10 +1052,13 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument("--daemon", action="store_true")
     parser.add_argument("--activate-ui", action="store_true")
+    parser.add_argument("protocol_uri", nargs="?", default="")
     args, _ = parser.parse_known_args()
     try:
         if args.activate_ui:
-            _activate_webui_from_external()
+            _activate_webui_from_external(
+                session=_session_from_protocol_uri(args.protocol_uri)
+            )
             raise SystemExit(0)
         if args.daemon:
             raise SystemExit(TrayLauncher().run())

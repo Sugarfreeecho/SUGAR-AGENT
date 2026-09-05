@@ -111,6 +111,110 @@ def test_runtime_status_reports_busy_when_any_session_is_running(monkeypatch):
     assert payload["active_run_count"] == 1
 
 
+def _patch_runtime_status_probes(monkeypatch, runs):
+    import webui
+
+    import cpu_pressure
+    import runtime_observability
+
+    monkeypatch.setattr(webui.session_manager, "index", [{"id": "session-1"}])
+    monkeypatch.setattr(
+        webui,
+        "_session_run_state_fields_light",
+        lambda _sid: {"run_active": False},
+    )
+    monkeypatch.setattr(
+        cpu_pressure,
+        "snapshot",
+        lambda: type("CpuSnapshot", (), {"mode": "ok"})(),
+    )
+    monkeypatch.setattr(
+        runtime_observability,
+        "snapshot",
+        lambda _sid: {"runs": runs},
+    )
+
+
+def _run_row(run_id, status, *, resolved=False, finished_at="2026-01-01T00:00:00Z"):
+    row = {"run_id": run_id, "status": status, "finished_at": finished_at}
+    if resolved:
+        row["resolved"] = True
+    return row
+
+
+def test_runtime_status_alert_while_manual_pause_unresolved(monkeypatch):
+    import webui
+
+    _patch_runtime_status_probes(monkeypatch, [_run_row("run-1", "interrupted")])
+
+    payload = webui._runtime_status_payload()
+
+    assert payload["status"] == "alert"
+
+
+def test_runtime_status_online_after_manual_pause_residue_deleted(monkeypatch):
+    import webui
+
+    _patch_runtime_status_probes(
+        monkeypatch, [_run_row("run-1", "interrupted", resolved=True)]
+    )
+
+    payload = webui._runtime_status_payload()
+
+    assert payload["status"] == "online"
+
+
+def test_runtime_status_online_when_newer_run_finished(monkeypatch):
+    import webui
+
+    _patch_runtime_status_probes(
+        monkeypatch,
+        [
+            _run_row("run-1", "interrupted", finished_at="2026-01-01T00:00:00Z"),
+            _run_row("run-2", "finished", finished_at="2026-01-01T01:00:00Z"),
+        ],
+    )
+
+    payload = webui._runtime_status_payload()
+
+    assert payload["status"] == "online"
+
+
+def test_runtime_status_alert_when_latest_run_failed(monkeypatch):
+    import webui
+
+    _patch_runtime_status_probes(monkeypatch, [_run_row("run-1", "failed")])
+
+    payload = webui._runtime_status_payload()
+
+    assert payload["status"] == "alert"
+
+
+def test_mark_runs_resolved_persists_and_is_idempotent(tmp_path, monkeypatch):
+    import runtime_observability
+
+    monkeypatch.setattr(runtime_observability, "_path_resolver", None)
+    monkeypatch.setattr(runtime_observability, "_sessions_root", tmp_path)
+    runtime_observability._cache.clear()
+    runtime_observability._flush_timers.clear()
+    try:
+        runtime_observability.start_run("session-resolve", "run-1", kind="chat")
+        runtime_observability.finish_run("session-resolve", "run-1", "interrupted")
+
+        marked = runtime_observability.mark_runs_resolved("session-resolve")
+
+        assert marked == 1
+        snap = runtime_observability.snapshot("session-resolve")
+        assert snap["runs"][0]["resolved"] is True
+        assert snap["runs"][0]["resolved_at"]
+
+        assert runtime_observability.mark_runs_resolved("session-resolve") == 1
+        assert runtime_observability.snapshot("session-resolve")["runs"][0]["resolved"] is True
+    finally:
+        runtime_observability._cache.clear()
+        runtime_observability._flush_timers.clear()
+
+
 def test_ui_presence_reuse_requires_recent_heartbeat(monkeypatch):
     import webui
 

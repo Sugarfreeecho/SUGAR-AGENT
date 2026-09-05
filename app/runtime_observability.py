@@ -237,6 +237,35 @@ def finish_run(session_id: str, run_id: str, status: str, *, reason: str = "") -
         return json.loads(json.dumps(row))
 
 
+def mark_runs_resolved(session_id: str) -> int:
+    """Mark failed/interrupted runs as resolved after a history rewrite.
+
+    Called when the user deletes the leftover of an interrupted/failed run
+    (session truncate). The runtime status probe must stop alerting on that
+    stale terminal state once the user has cleaned it up.
+    """
+    with _lock:
+        data = _read(session_id)
+        changed = False
+        for row in data.get("runs") or []:
+            if not isinstance(row, dict):
+                continue
+            if (
+                str(row.get("status") or "") in {"failed", "interrupted"}
+                and not row.get("resolved")
+            ):
+                row["resolved"] = True
+                row["resolved_at"] = _now()
+                changed = True
+        if changed:
+            _schedule_write(session_id, data, force=True)
+        return sum(
+            1
+            for row in data.get("runs") or []
+            if isinstance(row, dict) and row.get("resolved")
+        )
+
+
 def record_usage(
     session_id: str,
     run_id: str,

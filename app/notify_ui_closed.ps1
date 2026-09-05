@@ -35,12 +35,18 @@ $TrayIconPath = Join-Path $Root "app\assets\sugar_tray.ico"
 $OpenUiProtocol = "sugaragent"
 $OpenUiProtocolRoot = "HKCU:\Software\Classes\$OpenUiProtocol"
 $OpenUiLaunchUri = "sugaragent://open-ui"
+# Session deep link: the notify dispatcher passes the originating session id,
+# so clicking the toast jumps straight to that conversation.
+$NotifySession = if ($env:SUGARAGENT_NOTIFY_SESSION) { $env:SUGARAGENT_NOTIFY_SESSION } else { "" }
+if ($NotifySession -match '^[A-Za-z0-9][A-Za-z0-9\-]{0,63}$') {
+    $OpenUiLaunchUri = "sugaragent://open-ui?session=$NotifySession"
+}
 $WebUiUrl = "http://127.0.0.1:8192/"
 $PythonwPath = Join-Path $Root "python\pythonw.exe"
 $TrayLauncherPath = Join-Path $Root "app\tray_launcher.py"
 $Rundll32Path = Join-Path $env:SystemRoot "System32\rundll32.exe"
 $OpenUiCommand = if ((Test-Path -LiteralPath $PythonwPath) -and (Test-Path -LiteralPath $TrayLauncherPath)) {
-    "`"$PythonwPath`" `"$TrayLauncherPath`" --activate-ui"
+    "`"$PythonwPath`" `"$TrayLauncherPath`" --activate-ui `"%1`""
 } else {
     "`"$Rundll32Path`" url.dll,FileProtocolHandler `"$WebUiUrl`""
 }

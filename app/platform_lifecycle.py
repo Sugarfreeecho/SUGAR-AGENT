@@ -12,7 +12,7 @@ import webbrowser
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Mapping, Sequence
+from typing import Any, Callable, Mapping, Sequence
 from urllib import error as urllib_error
 from urllib import request as urllib_request
 
@@ -47,14 +47,18 @@ def request_webui_activation(
     *,
     base_url: str = BASE_URL,
     timeout: float = 0.8,
+    session: str = "",
 ) -> bool:
     """Ask a live main WebUI page to activate itself."""
 
     suffix = path if str(path).startswith("/") else f"/{path}"
-    payload = json.dumps({"path": suffix}).encode("utf-8")
+    payload: dict[str, Any] = {"path": suffix}
+    if str(session or "").strip():
+        payload["session"] = str(session).strip()
+    data = json.dumps(payload).encode("utf-8")
     request = urllib_request.Request(
         f"{str(base_url).rstrip('/')}/api/ui-activation",
-        data=payload,
+        data=data,
         headers={"Content-Type": "application/json"},
         method="POST",
     )

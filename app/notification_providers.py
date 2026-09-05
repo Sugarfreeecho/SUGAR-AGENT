@@ -24,11 +24,25 @@ def unregister_notification_provider(provider_id: str) -> None:
     _providers.pop(str(provider_id or "").strip(), None)
 
 
-async def notify_user(title: str = "", message: str = "") -> list[str]:
+async def notify_user(
+    title: str = "",
+    message: str = "",
+    session_id: str = "",
+) -> list[str]:
+    """Dispatch a notification; ``session_id`` lets providers deep-link to it.
+
+    Providers registered with the legacy two-argument signature keep working:
+    the session id is only appended when provided.
+    """
     failures: list[str] = []
     for provider_id, callback in tuple(_providers.items()):
         try:
-            value = callback(title, message) if title or message else callback()
+            if not (title or message):
+                value = callback()
+            elif session_id:
+                value = callback(title, message, str(session_id))
+            else:
+                value = callback(title, message)
             if inspect.isawaitable(value):
                 await value
         except Exception as exc:

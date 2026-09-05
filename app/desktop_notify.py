@@ -49,12 +49,13 @@ def show_ui_closed_notification() -> None:
 def show_desktop_notification(
     title: str = NOTIFY_TITLE,
     message: str = NOTIFY_MESSAGE,
+    session_id: str = "",
 ) -> None:
     """Show a native desktop notification with the given title and message."""
 
     system = platform.system()
     if system == "Windows":
-        if _notify_windows_toast(title, message):
+        if _notify_windows_toast(title, message, session_id):
             return
         _notify_windows_message_box(title, message)
     elif system == "Darwin":
@@ -65,7 +66,7 @@ def show_desktop_notification(
         logger.info("Desktop notification is not supported on %s", system)
 
 
-def _notify_windows_toast(title: str, message: str) -> bool:
+def _notify_windows_toast(title: str, message: str, session_id: str = "") -> bool:
     """Show a system toast in the Windows notification center.
 
     The actual toast is rendered by app/notify_ui_closed.ps1 so it works even
@@ -78,6 +79,10 @@ def _notify_windows_toast(title: str, message: str) -> bool:
     env = os.environ.copy()
     env["SUGARAGENT_NOTIFY_TITLE"] = title
     env["SUGARAGENT_NOTIFY_MESSAGE"] = message
+    if str(session_id or "").strip():
+        env["SUGARAGENT_NOTIFY_SESSION"] = str(session_id).strip()
+    else:
+        env.pop("SUGARAGENT_NOTIFY_SESSION", None)
     # Windows PowerShell 5.1 decodes UTF-8 scripts without a BOM using the
     # legacy system code page. Pass localized text through the Unicode Windows
     # environment block so the PowerShell file itself can remain ASCII-safe.

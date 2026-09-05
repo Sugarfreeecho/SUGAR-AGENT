@@ -1183,6 +1183,32 @@ def test_truncate_route_allows_missing_runtime_seq_boundary(monkeypatch, tmp_pat
     }]
 
 
+def test_truncate_route_resolves_runtime_alerts(monkeypatch, tmp_path):
+    import runtime_observability
+    import webui
+
+    fake = _FakeSessionManager(tmp_path, [])
+    monkeypatch.setattr(webui, "session_manager", fake)
+
+    resolved_sessions = []
+    monkeypatch.setattr(
+        runtime_observability,
+        "mark_runs_resolved",
+        lambda session_id: (resolved_sessions.append(session_id), 1)[1],
+    )
+
+    response = asyncio.run(webui.truncate_session_events(
+        "s1",
+        before_index=10,
+        before_seq=None,
+        backup=False,
+    ))
+    payload = _json_response_payload(response)
+
+    assert payload == {"ok": True}
+    assert resolved_sessions == ["s1"]
+
+
 def test_truncate_route_rejects_pending_ask_user(monkeypatch, tmp_path):
     import human_interaction
     import webui

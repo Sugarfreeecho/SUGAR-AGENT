@@ -232,6 +232,7 @@ _ui_presence_lock = threading.Lock()
 _ui_presence_tokens: dict[str, dict[str, Any]] = {}
 _ui_activation_seq = 0
 _ui_activation_path = "/"
+_ui_activation_session = ""
 _last_ui_session_id = ""
 _ui_closed_notify_task: Optional[asyncio.Task] = None
 _ui_attention_notify_lock = threading.Lock()
@@ -4015,7 +4016,10 @@ def _runtime_status_payload() -> dict[str, Any]:
         status = "busy"
     else:
         # Alert: CPU severe pressure, or any non-archived session whose latest
-        # run ended in a failed/interrupted state.
+        # run ended failed/interrupted (a manual pause ends the run as
+        # "interrupted" and may show red). The alert clears once the run is
+        # superseded by a newer run or the user resolved the residue, e.g. by
+        # truncating the interrupted tail.
         alert = False
         try:
             from cpu_pressure import snapshot as cpu_snapshot
@@ -4036,7 +4040,11 @@ def _runtime_status_payload() -> dict[str, Any]:
                         latest = (data.get("runs") or [None])[-1]
                     except Exception:
                         latest = None
-                    if latest and str(latest.get("status") or "") in {"failed", "interrupted"}:
+                    if (
+                        latest
+                        and not latest.get("resolved")
+                        and str(latest.get("status") or "") in {"failed", "interrupted"}
+                    ):
                         alert = True
                         break
             except Exception:
@@ -4046,12 +4054,14 @@ def _runtime_status_payload() -> dict[str, Any]:
     with _ui_presence_lock:
         activation_seq = int(_ui_activation_seq)
         activation_path = str(_ui_activation_path or "/")
+        activation_session = str(_ui_activation_session or "")
     return {
         "ok": True,
         "status": status,
         "active_run_count": active_count,
         "activation_seq": activation_seq,
         "activation_path": activation_path,
+        "activation_session": activation_session,
     }
 
 
@@ -4129,17 +4139,16 @@ async def _delayed_ui_attention_notify() -> None:
                 status = "completed"
             else:
                 continue
-            notifications.append(
-                await run_in_threadpool(
-                    _notification_context, sid, status, pending_total
-                )
+            ctx = await run_in_threadpool(
+                _notification_context, sid, status, pending_total
             )
+            notifications.append((ctx[0], ctx[1], sid))
         if not notifications:
             return
         global _last_ui_attention_notify_at
         _last_ui_attention_notify_at = time.time()
-        for title, message in notifications:
-            await notify_user(title, message)
+        for title, message, notify_session_id in notifications:
+            await notify_user(title, message, session_id=notify_session_id)
     except asyncio.CancelledError:
         return
     finally:
@@ -4293,14 +4302,17 @@ async def request_ui_activation(request: Request):
     path = str((data or {}).get("path") or "/").strip()
     if path != "/":
         path = "/"
+    raw_session = str((data or {}).get("session") or "").strip()
+    session = re.sub(r"[^A-Za-z0-9\-]", "", raw_session)[:64]
     now = time.time()
-    global _ui_activation_seq, _ui_activation_path
+    global _ui_activation_seq, _ui_activation_path, _ui_activation_session
     with _ui_presence_lock:
         _ui_presence_prune(now)
         reused = _ui_presence_has_reusable(now)
         if reused:
             _ui_activation_seq += 1
             _ui_activation_path = path
+            _ui_activation_session = session
         seq = int(_ui_activation_seq)
     return JSONResponse(content={"ok": True, "reused": reused, "activation_seq": seq})
 
@@ -4338,9 +4350,10 @@ async def chat(
     preserve_unread_result: bool = Form(False),
 ):
     sid = (session_id or "").strip() or None
-    prompt_language = normalize_prompt_language(ui_language)
     run_id = str(client_run_id or "").strip()
     steer_operation_id = str(steer_id or "").strip()
+    logger.info("chat_request_received sid=%s run_id=%s steer=%s", sid, run_id, steer_operation_id)
+    prompt_language = normalize_prompt_language(ui_language)
     use_runtime_v2_stream = _runtime_v2_chat_protocol_enabled(stream_protocol, sid)
     start_token = ""
     if sid:
@@ -5922,6 +5935,15 @@ async def truncate_session_events(
             content={"ok": False, "error": "truncation failed"},
             status_code=400,
         )
+    # The user just deleted the tail of the history (typically the leftover of
+    # an interrupted run). Acknowledge stale failed/interrupted runs so the
+    # runtime indicator stops alerting on them.
+    try:
+        from runtime_observability import mark_runs_resolved
+
+        await asyncio.to_thread(mark_runs_resolved, session_id)
+    except Exception:
+        logger.debug("runtime status resolve failed for session %s", session_id, exc_info=True)
     return JSONResponse(content={"ok": True})
 
 
@@ -5986,7 +6008,7 @@ async def append_ui_events_tail(session_id: str, request: Request):
     except Exception as e:
         return JSONResponse(content={"ok": False, "error": str(e)}, status_code=500)
     if not ok:
-        return JSONResponse(content={"ok": False, "error": "append failed"}, status_code=400)
+        return JSONResponse(content={"ok": False, "error": "truncation failed"}, status_code=400)
     return JSONResponse(content={"ok": True})
 
 
