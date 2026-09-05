@@ -431,11 +431,8 @@ async function consumeAgentSseResponseInner(response, runCtx, runSessionId, stre
                         }
                         var isTemporaryStatus = statusContent.indexOf('正在思考中...') >= 0;
                         isTemporaryStatus = isTemporaryStatus || !!parsed.ephemeral || statusContent.indexOf('正在重连') >= 0;
-                        if (isTemporaryStatus) removeTemporaryStatus(runCtx);
-                        var statusRow = appendLog(runCtx, statusContent, 'status', runSessionId);
-                        if (isTemporaryStatus && statusRow) {
-                            statusRow.dataset.temporaryStatus = '1';
-                        }
+                        if (isTemporaryStatus) upsertTemporaryStatus(runCtx, statusContent, runSessionId);
+                        else appendLog(runCtx, statusContent, 'status', runSessionId);
                     }
                     continue;
                 }
@@ -583,7 +580,7 @@ async function ensureFinalVisibleAfterRun(sessionId, ctx, opts) {
     return false;
 }
 
-async function startContinueAfterSubagents(sessionId, forcedMode) {
+async function startContinueAfterSubagents(sessionId) {
     if (!sessionId || sessionId !== currentSessionId) return;
     delete subagentContinueDismissedForSession[sessionId];
     if (isSessionRunning(sessionId) || subagentContinueInFlight) {
@@ -612,13 +609,7 @@ async function startContinueAfterSubagents(sessionId, forcedMode) {
             return;
         }
     }
-    var banner = document.getElementById('subagent-continue-banner');
-    var continueMode = forcedMode === 'react'
-        ? 'react'
-        : (banner && banner.dataset && banner.dataset.continueMode === 'react' ? 'react' : 'subagents');
-    var continueUrl = continueMode === 'react'
-        ? '/sessions/' + encodeURIComponent(sessionId) + '/continue' + (forcedMode === 'react' ? '?recovery=true' : '')
-        : '/sessions/' + encodeURIComponent(sessionId) + '/continue-subagents';
+    var continueUrl = '/sessions/' + encodeURIComponent(sessionId) + '/continue-subagents';
         const response = await fetch(continueUrl, { method: 'POST' });
         if (response.status === 204) {
             hideSubagentContinueBanner();
@@ -710,7 +701,33 @@ async function startContinueAfterSubagents(sessionId, forcedMode) {
     }
 }
 
-var autoResumeReactAttemptAt = Object.create(null);
+var serverRecoveryObservationBySession = Object.create(null);
+
+function observeServerOwnedReactRecovery(sessionId) {
+    var sid = String(sessionId || '');
+    if (!sid || serverRecoveryObservationBySession[sid]) return;
+    serverRecoveryObservationBySession[sid] = (async function () {
+        var delays = [0, 120, 350, 800, 1600];
+        for (var i = 0; i < delays.length; i += 1) {
+            if (delays[i]) await sleepMs(delays[i]);
+            if (sid !== String(currentSessionId || '')) return;
+            if (typeof reconcileRunStateFromServer === 'function') {
+                await reconcileRunStateFromServer({ silent: true });
+            }
+            if (sid !== String(currentSessionId || '')) return;
+            if (isServerStreamActive(sid) || isSessionRunning(sid)) {
+                if (typeof maybeStartStreamPollForSession === 'function') {
+                    maybeStartStreamPollForSession(sid, { skipInitialLoad: true });
+                }
+                return;
+            }
+        }
+    })().catch(function (error) {
+        console.warn('观察后端恢复流失败:', error);
+    }).finally(function () {
+        delete serverRecoveryObservationBySession[sid];
+    });
+}
 
 function maybeAutoResumeInterruptedReact(sessionId, sessionDetail) {
     var sid = String(sessionId || '');
@@ -723,14 +740,10 @@ function maybeAutoResumeInterruptedReact(sessionId, sessionDetail) {
         && pendingHumanInteractionRecords(sid).length > 0) return;
     if (!detail.react_auto_resume || !detail.react_can_continue || detail.run_active || detail.stream_active) return;
     if (isSessionRunning(sid) || subagentContinueInFlight) return;
-    var now = Date.now();
-    if (now - Number(autoResumeReactAttemptAt[sid] || 0) < 30000) return;
-    autoResumeReactAttemptAt[sid] = now;
-    if (getVisibleChatStream()) {
-        var ctx = newDomContext(getVisibleChatStream());
-        appendLog(ctx, '检测到上次运行未完成，正在自动恢复任务…', 'status', sid);
-    }
-    void startContinueAfterSubagents(sid, 'react');
+    // Recovery execution is server-owned. The browser only waits for the
+    // startup/background worker to publish an active run and then attaches an
+    // observer stream; it must never start a competing /continue producer.
+    observeServerOwnedReactRecovery(sid);
 }
 
 window.addEventListener('online', function () {

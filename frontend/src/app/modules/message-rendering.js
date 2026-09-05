@@ -3843,6 +3843,43 @@ function removeTemporaryStatus(ctx) {
         var row = el.closest ? el.closest('.feed-item') : null;
         if (row) row.remove(); else el.remove();
     });
+    if (ctx) ctx._temporaryStatusScroller = null;
+}
+
+// A thinking/reconnect heartbeat represents one piece of transient state, not
+// a new process item. Reuse the existing tail row so repeated heartbeats do not
+// remove and recreate DOM nodes (which also retriggers aggregate height and
+// scroll observers).
+function upsertTemporaryStatus(ctx, content, runSessionId) {
+    if (!ctx) return null;
+    var body = getExistingProcessBody(ctx);
+    var scroller = ctx._temporaryStatusScroller;
+    if (!scroller || !scroller.isConnected) {
+        scroller = body ? body.querySelector('[data-temporary-status="1"]') : null;
+    }
+    var row = scroller && scroller.closest ? scroller.closest('.feed-item') : null;
+    var lastRow = body ? getLastProcessFeedItem(body) : null;
+    if (scroller && row && row === lastRow) {
+        var nextText = String(content == null ? '' : content);
+        var currentText = typeof getUiRuntimeText === 'function'
+            ? getUiRuntimeText(scroller)
+            : String(scroller.textContent || '');
+        if (currentText !== nextText) {
+            if (typeof setUiRuntimeText === 'function') setUiRuntimeText(scroller, nextText);
+            else scroller.textContent = nextText;
+            var chunk = scroller.closest('.feed-chunk');
+            if (chunk) refreshFeedChunkOverflow(chunk);
+        }
+        ctx._temporaryStatusScroller = scroller;
+        return scroller;
+    }
+    removeTemporaryStatus(ctx);
+    scroller = appendLog(ctx, content, 'status', runSessionId);
+    if (scroller) {
+        scroller.dataset.temporaryStatus = '1';
+        ctx._temporaryStatusScroller = scroller;
+    }
+    return scroller;
 }
 
 function appendToolCallDelta(ctx, parsed, runSessionId) {

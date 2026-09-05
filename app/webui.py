@@ -189,7 +189,10 @@ _active_chat_last_seen: dict[str, float] = {}
 _observer_streams_by_session: dict[str, int] = {}
 
 _CHAT_ACTIVE_TIMEOUT_SEC = int(os.getenv("CHAT_ACTIVE_TIMEOUT_SEC", "300"))
-_RUNTIME_V2_ORPHAN_GRACE_SEC = int(os.getenv("RUNTIME_V2_ORPHAN_GRACE_SEC", "0"))
+_RUNTIME_V2_ORPHAN_GRACE_SEC = max(
+    0,
+    int(os.getenv("RUNTIME_V2_ORPHAN_GRACE_SEC", "30")),
+)
 _chat_start_lock = threading.RLock()
 _chat_starting_by_session: dict[str, tuple[float, str]] = {}
 logger = logging.getLogger(__name__)
@@ -839,7 +842,11 @@ def _discover_recoverable_react_sessions() -> list[str]:
                 continue
             # The normal app lifespan reconciles orphan runs before this scan.
             # Keep direct `uvicorn webui:fastapi_app` startup equally correct.
-            _cleanup_orphan_runtime_v2_active_runs(sid, reason="no_local_activity")
+            _cleanup_orphan_runtime_v2_active_runs(
+                sid,
+                reason="no_local_activity",
+                respect_grace=False,
+            )
             if _session_pending_human_count(sid) > 0:
                 continue
             if not _runtime_v2_auto_resume_pending(sid):
@@ -1086,7 +1093,12 @@ def _runtime_v2_filtered_active_runs(sid: str) -> list[dict]:
     return filtered
 
 
-def _cleanup_orphan_runtime_v2_active_runs(sid: str, reason: str = "orphaned") -> int:
+def _cleanup_orphan_runtime_v2_active_runs(
+    sid: str,
+    reason: str = "orphaned",
+    *,
+    respect_grace: bool = True,
+) -> int:
     try:
         from runtime_v2 import runtime_v2_primary
 
@@ -1101,7 +1113,7 @@ def _cleanup_orphan_runtime_v2_active_runs(sid: str, reason: str = "orphaned") -
     active_runs = snapshot.get("active_runs") if isinstance(snapshot, dict) else None
     if not isinstance(active_runs, list) or not active_runs:
         return 0
-    if _runtime_v2_active_runs_are_recent(snapshot):
+    if respect_grace and _runtime_v2_active_runs_are_recent(snapshot):
         logger.debug(
             "Skip orphan Runtime V2 cleanup for recent active run(s): session=%s grace=%ss",
             sid,
@@ -1428,7 +1440,9 @@ def _session_run_state_fields(sid: str) -> dict:
     except Exception:
         runtime_v2_primary = lambda: True
     if runtime_v2_primary():
-        _cleanup_orphan_runtime_v2_active_runs(sid, reason="no_local_activity")
+        # Status reads must be observational. Orphan reconciliation writes a
+        # durable run_interrupted event and therefore belongs only to explicit
+        # lifecycle/recovery paths, never to GET /sessions or busy checks.
         v2_info = _runtime_v2_active_run_info(sid)
         if not v2_info:
             return {

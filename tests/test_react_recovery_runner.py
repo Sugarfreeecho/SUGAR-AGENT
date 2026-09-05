@@ -14,6 +14,8 @@ def test_discover_recoverable_react_sessions_finds_background_sessions(monkeypat
     import webui
     from workflow_extensions import session_workflows
 
+    cleaned = []
+
     class FakeSessionManager:
         def list_sessions(self, include_archived=False):
             assert include_archived is False
@@ -26,7 +28,11 @@ def test_discover_recoverable_react_sessions_finds_background_sessions(monkeypat
     monkeypatch.setattr(session_workflows, "continuation_source", lambda sid: "agent-goal" if sid == "goal" else "")
     monkeypatch.setattr(webui, "_has_local_worker_activity", lambda sid: sid == "running")
     monkeypatch.setattr(webui, "_active_chat_by_session", {})
-    monkeypatch.setattr(webui, "_cleanup_orphan_runtime_v2_active_runs", lambda _sid, reason: 0)
+    monkeypatch.setattr(
+        webui,
+        "_cleanup_orphan_runtime_v2_active_runs",
+        lambda sid, reason, respect_grace: cleaned.append((sid, reason, respect_grace)) or 0,
+    )
     monkeypatch.setattr(webui, "_session_pending_human_count", lambda sid: 1 if sid == "waiting" else 0)
     monkeypatch.setattr(
         webui,
@@ -35,6 +41,47 @@ def test_discover_recoverable_react_sessions_finds_background_sessions(monkeypat
     )
 
     assert webui._discover_recoverable_react_sessions() == ["current", "background"]
+    assert cleaned
+    assert all(reason == "no_local_activity" and respect_grace is False for _, reason, respect_grace in cleaned)
+
+
+def test_runtime_state_read_is_observational_and_never_cleans_orphans(monkeypatch):
+    import runtime_v2
+    import webui
+
+    monkeypatch.setattr(runtime_v2, "runtime_v2_primary", lambda: True)
+    monkeypatch.setattr(webui, "_active_chat_by_session", {})
+    monkeypatch.setattr(
+        webui,
+        "_cleanup_orphan_runtime_v2_active_runs",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("a state read must not append run_interrupted")
+        ),
+    )
+    monkeypatch.setattr(
+        webui,
+        "_runtime_v2_active_run_info",
+        lambda sid: {
+            "session_id": sid,
+            "run_id": "run-live",
+            "run_active": True,
+            "started_at": "2026-09-05T00:00:00+00:00",
+        },
+    )
+
+    state = webui._session_run_state_fields("session-live")
+
+    assert state["run_active"] is True
+    assert state["stream_active"] is True
+    assert state["active_run"]["run_id"] == "run-live"
+
+
+def test_runtime_orphan_grace_default_is_nonzero():
+    source = (APP_DIR / "webui.py").read_text(encoding="utf-8")
+    env_example = (APP_DIR / ".env.example").read_text(encoding="utf-8")
+
+    assert 'os.getenv("RUNTIME_V2_ORPHAN_GRACE_SEC", "30")' in source
+    assert "RUNTIME_V2_ORPHAN_GRACE_SEC=30" in env_example
 
 
 def test_recover_interrupted_react_sessions_schedules_every_candidate(monkeypatch):

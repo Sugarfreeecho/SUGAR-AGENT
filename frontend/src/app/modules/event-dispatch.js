@@ -190,11 +190,8 @@ function renderEvent(ctx, event, eventIndex, runSessionId) {
         }
         // 临时状态消息处理：标记"正在思考中..."为临时状态
         var isTemporaryStatus = statusContent.indexOf('正在思考中...') >= 0;
-        if (isTemporaryStatus) removeTemporaryStatus(ctx);
-        var statusRow = appendLog(ctx, statusContent, 'status', runSessionId);
-        if (isTemporaryStatus && statusRow) {
-            statusRow.dataset.temporaryStatus = '1';
-        }
+        if (isTemporaryStatus) upsertTemporaryStatus(ctx, statusContent, runSessionId);
+        else appendLog(ctx, statusContent, 'status', runSessionId);
     } else if (event.type === 'auto_review_status') {
         renderAutoReviewStatusEvent(ctx, event, runSessionId);
     } else if (event.type === 'approval_required') {

@@ -66,8 +66,18 @@ async def publish_session_event(session_id: str, event: Dict[str, Any]) -> None:
         event["event_bus_seq"] = event_bus_seq
         event["seq_scope"] = "event_bus"
         event["seq"] = event_bus_seq
-        if event.get("ephemeral"):
-            event_type = str(event.get("type") or "")
+        event_type = str(event.get("type") or "")
+        if event_type in {"run_finished", "run_interrupted", "run_failed"}:
+            terminal_run_id = event.get("run_id") or event.get("runId")
+            if str(terminal_run_id or "").strip():
+                # Terminal events are live notifications, not reconnect state.
+                # Agent-loop terminal events are ephemeral, so this must run
+                # before the generic ephemeral branch.
+                _prune_recent_ephemeral_unlocked(
+                    sid,
+                    run_id=terminal_run_id,
+                )
+        elif event.get("ephemeral"):
             if event_type in _SNAPSHOT_DELTA_FIELDS:
                 # Delta events already have an accumulated reconnect snapshot.
                 # Keeping every raw chunk in the bounded recent deque used to
@@ -113,16 +123,6 @@ async def publish_session_event(session_id: str, event: Dict[str, Any]) -> None:
                 types={completed_type},
                 run_id=event.get("run_id") or event.get("runId"),
             )
-        elif event.get("type") in {"run_finished", "run_interrupted", "run_failed"}:
-            terminal_run_id = event.get("run_id") or event.get("runId")
-            if str(terminal_run_id or "").strip():
-                # A terminal boundary owns all transient UI state for that run.
-                # Remove it before delivery so reconnect cannot resurrect an
-                # abandoned tool call or partial compression row.
-                _prune_recent_ephemeral_unlocked(
-                    sid,
-                    run_id=terminal_run_id,
-                )
         subscribers = list(_subscribers.get(sid, ()))
     listeners = list(_event_listeners)
     for listener in listeners:

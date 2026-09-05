@@ -232,6 +232,41 @@ def test_terminal_event_prunes_only_the_terminated_run_ephemerals():
     assert replay["delta"] == "new"
 
 
+def test_ephemeral_terminal_event_is_not_replayed_and_prunes_run_state():
+    import session_event_bus as bus
+
+    async def scenario():
+        sid = "stream-replay-ephemeral-terminal"
+        await bus.close_session_stream(sid)
+        await bus.publish_session_event(
+            sid,
+            {
+                "type": "status",
+                "content": "正在思考中...",
+                "ephemeral": True,
+                "run_id": "finished-run",
+            },
+        )
+        await bus.publish_session_event(
+            sid,
+            {
+                "type": "run_interrupted",
+                "ephemeral": True,
+                "run_id": "finished-run",
+            },
+        )
+        replay = list(bus._recent_ephemeral.get(sid, ()))
+        snapshots = dict(bus._live_delta_snapshots.get(sid, {}))
+        states = dict(bus._live_state_snapshots.get(sid, {}))
+        await bus.close_session_stream(sid)
+        return replay, snapshots, states
+
+    replay, snapshots, states = asyncio.run(scenario())
+    assert replay == []
+    assert snapshots == {}
+    assert states == {}
+
+
 def test_refresh_replay_compacts_thinking_status_and_clears_it_on_delta():
     import session_event_bus as bus
 
@@ -413,6 +448,27 @@ def test_frontend_terminal_cleanup_never_creates_empty_process_groups():
     assert "getExistingProcessBody(ctx)" in temporary_cleanup
     assert "getProcessBody(ctx)" not in tool_cleanup
     assert "getExistingProcessBody(ctx)" in tool_cleanup
+
+
+def test_frontend_recovery_is_server_owned_and_transient_rows_are_stable():
+    sse_source = (ROOT / "frontend/src/app/modules/sse-handling.js").read_text(encoding="utf-8")
+    render_source = (ROOT / "frontend/src/app/modules/message-rendering.js").read_text(encoding="utf-8")
+    reducer_source = (ROOT / "frontend/src/app/state/session-event-reducer.js").read_text(encoding="utf-8")
+
+    auto_resume = sse_source.split("function maybeAutoResumeInterruptedReact", 1)[1].split(
+        "window.addEventListener('online'", 1
+    )[0]
+    temporary_upsert = render_source.split("function upsertTemporaryStatus", 1)[1].split(
+        "function appendToolCallDelta", 1
+    )[0]
+
+    assert "?recovery=true" not in sse_source
+    assert "startContinueAfterSubagents(sid, 'react')" not in sse_source
+    assert "observeServerOwnedReactRecovery(sid)" in auto_resume
+    assert "appendLog(ctx, '检测到上次运行未完成" not in auto_resume
+    assert "row === lastRow" in temporary_upsert
+    assert "setUiRuntimeText(scroller, nextText)" in temporary_upsert
+    assert "if (sessionId && !ephemeral" in reducer_source
 
 
 def test_all_closed_external_tools_can_start_before_finish_reason():

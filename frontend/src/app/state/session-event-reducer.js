@@ -35,7 +35,12 @@ function applySessionEvent(event, opts) {
         || type === 'context_summary_delta'
         || type === 'key_context_delta'
     );
-    if (sessionId && !isLiveOnlyDelta) {
+    // Ephemeral events belong to the live DOM only. Recording statuses,
+    // lifecycle heartbeats, or tool drafts in the durable message index lets
+    // reconnect-only event-bus sequence numbers collide with projected UI
+    // indexes. The later durable event then replaces/reorders that slot and
+    // makes the process panel jump.
+    if (sessionId && !ephemeral && !isLiveOnlyDelta) {
         messageRecord = applyMessageEvent(sessionId, event, eventIndex, source);
         markUiEventStoreApplied(event);
     }

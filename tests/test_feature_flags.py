@@ -315,6 +315,7 @@ def test_frontend_feature_entrypoints_are_flag_guarded():
     assert "maybeAutoResumeInterruptedReact" in sse
     layout = (ROOT / "frontend/src/app/modules/layout-panels.js").read_text(encoding="utf-8")
     assert "fetch('/sessions/recover', { method: 'POST' })" in layout
+    assert "observeServerOwnedReactRecovery(currentSessionId)" in layout
     refresh_row = sessions.split("async function refreshSingleSessionRow", 1)[1].split("let sessionListLoadEpoch", 1)[0]
     event_cache_set = sessions.split("const uiEventCountCache", 1)[1].split("increment(sessionId)", 1)[0]
     assert "maybeAutoResumeInterruptedReact(sessionId, sess)" in refresh_row
@@ -408,6 +409,8 @@ def test_followups_auto_continue_only_after_run_end_and_sync():
     assert "recoverFollowupQueueDrainsFromSessionSnapshot" in sse
     assert "async function isSessionAutoResumePending(sessionId)" in sse
     assert "react_auto_resume" in sse
+    assert "?recovery=true" not in sse
+    assert "observeServerOwnedReactRecovery" in sse
     assert "scheduleFollowupQueueDrain(sid, 1000)" in sse
     assert ".finally(function ()" not in drain
     # 定时器按会话合并，避免 final/run_finished/finally 重复触发多个请求。
