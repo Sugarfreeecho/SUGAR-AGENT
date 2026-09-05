@@ -86,20 +86,56 @@ class HostToolInvokerRegistry:
             raise ValueError("Host tool invoker_id cannot be empty")
         if not callable(invoker):
             raise TypeError("Host tool invoker must be callable")
-        if key in self._invokers and not replace:
+        owner_str = str(owner or "core.services").strip()
+        effect_str = str(effect or "").strip().lower()
+        new_policy = policy or ToolExecutionPolicy(effect=effect_str)
+        replacing = key in self._invokers
+        if replacing and not replace:
             raise ValueError(f"Host tool invoker is already registered: {key}")
+        if replacing and self._is_restatement(
+            key,
+            owner_str=owner_str,
+            emit_pending=bool(emit_pending),
+            effect_str=effect_str,
+            policy=new_policy,
+            has_before_hooks=before_hooks is not None,
+        ):
+            # Plugins re-declare their host tools on every catalog build.
+            # A restatement refreshes the binding but must not bump the
+            # generation, or every build invalidates the catalog for nothing.
+            self._invokers[key] = invoker
+            self._availability[key] = enabled or (lambda: True)
+            return key
         self._invokers[key] = invoker
-        self._owners[key] = str(owner or "core.services").strip()
+        self._owners[key] = owner_str
         self._emit_pending[key] = bool(emit_pending)
-        self._effects[key] = str(effect or "").strip().lower()
-        self._policies[key] = policy or ToolExecutionPolicy(effect=self._effects[key])
+        self._effects[key] = effect_str
+        self._policies[key] = new_policy
         self._availability[key] = enabled or (lambda: True)
         if before_hooks is not None:
             self._before_hooks[key] = before_hooks
-        elif replace:
+        elif replacing:
             self._before_hooks.pop(key, None)
         self._generation += 1
         return key
+
+    def _is_restatement(
+        self,
+        key: str,
+        *,
+        owner_str: str,
+        emit_pending: bool,
+        effect_str: str,
+        policy: ToolExecutionPolicy,
+        has_before_hooks: bool,
+    ) -> bool:
+        return (
+            self._owners.get(key) == owner_str
+            and self._emit_pending.get(key, True) == emit_pending
+            and self._effects.get(key, "control") == effect_str
+            and self._policies.get(key) == policy
+            and (key in self._before_hooks) == has_before_hooks
+        )
 
     def catalog_revision(self) -> tuple[int, tuple[tuple[str, bool], ...]]:
         """Return a cheap revision including dynamic availability switches."""

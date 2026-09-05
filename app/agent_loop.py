@@ -17,6 +17,7 @@ import queue
 import re
 import time
 import asyncio
+import gc
 import uuid
 import threading
 from datetime import datetime
@@ -1842,7 +1843,7 @@ def _load_runtime_v2_context_summary(session_id: str) -> str:
     snapshot = SnapshotStore(
         session_manager.sessions_dir,
         path_resolver=getattr(session_manager, "_resolve_session_path", None),
-    ).read_consistent(session_id)
+    ).read_consistent_view(session_id)
     context = snapshot.get("context") if isinstance(snapshot, dict) else {}
     summary = context.get("summary") if isinstance(context, dict) else {}
     if isinstance(summary, dict):
@@ -1878,15 +1879,51 @@ def _pre_api_timing_mark(timings: Dict[str, int], name: str, start: float) -> No
     timings[name] = int(max(0.0, (time.perf_counter() - start) * 1000.0))
 
 
+# Process-level cache for the static system prompt segments, keyed by
+# (session_id, skills/template revision, is_subagent, has_inherited_segments).
+_STATIC_SEGMENTS_PROCESS_CACHE: Dict[tuple, tuple] = {}
+
+
 def _pre_api_timing_log(session_id: str, timings: Dict[str, int], **extra: Any) -> None:
     try:
-        total = int(sum(int(v or 0) for v in timings.values()))
+        # build_messages is an aggregate (static_segments + turn_cache); it is
+        # printed but excluded from the total to avoid double counting.
+        total = int(sum(int(v or 0) for k, v in timings.items() if k != "build_messages"))
         parts = [f"{k}={int(v)}ms" for k, v in timings.items()]
         for k, v in extra.items():
             parts.append(f"{k}={v}")
         logger.info("pre_api_timing session=%s total=%sms %s", session_id, total, " ".join(parts))
     except Exception:
         logger.debug("pre_api_timing log failed", exc_info=True)
+
+
+def _gc_probe_extras(state: State) -> Dict[str, Any]:
+    """Gen2/GC deltas + event-loop stall + inter-round wall gap, since the last tool_to_next_api anchor."""
+    extras: Dict[str, Any] = {}
+    round_gap = int(state.get("_last_round_gap_ms") or 0)
+    if round_gap:
+        extras["round_gap_ms"] = round_gap
+    anchor = state.pop("_gc_round_anchor", None)
+    loop_anchor = state.pop("_loop_stall_anchor", None)
+    if loop_anchor:
+        try:
+            wall_delta = time.perf_counter() - loop_anchor[0]
+            loop_delta = asyncio.get_running_loop().time() - loop_anchor[1]
+            extras["loop_stall_ms"] = int(
+                max(0, round((wall_delta - loop_delta) * 1000))
+            )
+        except Exception:
+            pass
+    if not anchor:
+        return extras
+    try:
+        stats = gc.get_stats()
+        extras["gc2_runs"] = max(0, int(stats[2]["collections"]) - int(anchor[0]))
+        extras["gc2_objs"] = max(0, int(stats[2]["collected"]) - int(anchor[1]))
+        extras["gc0_runs"] = max(0, int(stats[0]["collections"]) - int(anchor[2]))
+    except Exception:
+        pass
+    return extras
 
 
 def _timing_ms(start: float, end: Optional[float] = None) -> int:
@@ -2177,10 +2214,13 @@ def _runtime_v2_commit_context_summary(state: State) -> None:
         from runtime_v2 import SnapshotStore
 
         resolver = getattr(session_manager, "_resolve_session_path", None)
+        # read_consistent_view returns the published projection without the
+        # full deep copy; we only compare the summary string here, and every
+        # persist in a ReAct run pays this path.
         snapshot = SnapshotStore(
             session_manager.sessions_dir,
             path_resolver=resolver,
-        ).read_consistent(sid)
+        ).read_consistent_view(sid)
         current = snapshot.get("context", {}).get("summary", {}) if isinstance(snapshot, dict) else {}
         if isinstance(current, dict) and str(current.get("summary") or "") == summary:
             return
@@ -2610,19 +2650,81 @@ async def _combined_tool_registry_revision(
     )
 
 
+def _short_registry_revision(revision: Any) -> str:
+    """Compact repr of a combined registry revision for drift diagnostics."""
+    try:
+        parts = [str(item) for item in tuple(revision)]
+    except Exception:
+        return repr(revision)[:120]
+    return "|".join(part[:48] for part in parts)
+
+
+def _schedule_tool_registry_revalidate(
+    state: State,
+    session_meta: Mapping[str, Any],
+    target_revision: tuple[Any, ...],
+) -> bool:
+    """Rebuild the combined tool registry off the critical path.
+
+    Called when the cached registry's revision no longer matches.  Returns
+    True so the caller may serve the stale catalog for the current request;
+    the rebuild lands in ``_combined_tool_registry_cache`` for the next one.
+    Only one rebuild per session state is in flight at a time.
+    """
+    sid = str(state.get("session_id") or "").strip()
+    if not sid or state.get("_tool_registry_revalidating"):
+        return True
+    state["_tool_registry_revalidating"] = True
+    rebuild_meta = dict(session_meta) if isinstance(session_meta, Mapping) else None
+
+    async def _rebuild() -> None:
+        started = time.perf_counter()
+        try:
+            registry = await build_combined_tool_registry_for_session(
+                sid,
+                session_meta=rebuild_meta,
+            )
+            state["_combined_tool_registry_cache"] = {
+                "revision": target_revision,
+                "registry": registry,
+                "definitions": registry.definitions(),
+            }
+            logger.info(
+                "background tool registry rebuilt: session=%s ms=%d",
+                sid,
+                int((time.perf_counter() - started) * 1000),
+            )
+        except Exception as exc:
+            logger.warning(
+                "background tool registry rebuild failed: session=%s error=%s",
+                sid,
+                exc,
+            )
+        finally:
+            state.pop("_tool_registry_revalidating", None)
+
+    task = asyncio.create_task(_rebuild())
+    state["_tool_registry_revalidate_task"] = task
+    return True
+
+
 async def build_combined_tool_registry_for_session(
     session_id: str,
     *,
     session_meta: Optional[Dict[str, Any]] = None,
     awaiter: Optional[Callable[[Any, str], Any]] = None,
     timing_callback: Optional[Callable[[str, float], None]] = None,
+    include_mcp: bool = True,
 ) -> ToolRegistry:
     """Build the exact source-aware tool catalog for a main-model request.
 
     The context-token preview and the live ReAct request share this builder so
     tool schemas cannot silently disappear from the pre-send estimate.  Tool
     ownership is recorded at registration time; execution must not infer it
-    from a model-visible function-name prefix.
+    from a model-visible function-name prefix.  ``include_mcp=False`` skips
+    the MCP section entirely: on a cold process start the stdio servers may
+    take tens of seconds to start, and the request must not block on them —
+    a background rebuild picks the MCP tools up once they are registered.
     """
     sid = str(session_id or "").strip()
     if session_meta is None:
@@ -2712,11 +2814,13 @@ async def build_combined_tool_registry_for_session(
             if timing_callback is not None:
                 timing_callback(timing_stage, started)
 
-    mcp_tools = await _load_optional_tools(
-        "mcp_tool_definitions",
-        agent_mcp.get_tool_definitions,
-        await_stage="tool_definitions",
-    )
+    mcp_tools: List[Dict[str, Any]] = []
+    if include_mcp:
+        mcp_tools = await _load_optional_tools(
+            "mcp_tool_definitions",
+            agent_mcp.get_tool_definitions,
+            await_stage="tool_definitions",
+        )
     _remember_sources(mcp_tools, ToolInvocationKind.MCP, "mcp")
     combined_tools.extend(mcp_tools)
     try:
@@ -2831,6 +2935,10 @@ async def build_combined_tool_definitions_for_session(
         session_meta=session_meta,
         awaiter=awaiter,
         timing_callback=timing_callback,
+        # Callers of this wrapper sit on user-facing paths (token preview);
+        # never block them on stdio MCP startup — the background rebuild adds
+        # the MCP tools once servers register.
+        include_mcp=agent_mcp.mcp_started(),
     )
     return registry.definitions()
 
@@ -3908,6 +4016,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
         llm_history.append(start_msg)
         state["llm_history"] = llm_history
         _persist_state_with_model_append(state, start_msg)
+    logger.info("react_init marker_done session=%s", state.get("session_id"))
 
 
     # ========== 2. 循环变量初始化 ==========
@@ -3937,7 +4046,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
     react_wall_start = time.monotonic()
     state["_react_ui_tool_count"] = 0
     state["_react_ui_tool_fail_count"] = 0
-    # 轮次墙钟/轮间缝隙是本次 run 内的一次性计时锚点，避免跨 run 复用残留值。
+    # 步进墙钟/步间缝隙是本次 run 内的一次性计时锚点，避免跨 run 复用残留值。
     state.pop("_req_wall_start", None)
     state.pop("_last_round_end_perf", None)
     state.pop("_round_gap_ms_total", None)
@@ -3945,6 +4054,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
     state.pop("_run_startup_ms", None)
 
     session_meta = dict(session_manager._load_metadata(state["session_id"]) or {})
+    logger.info("react_init meta_done session=%s", state.get("session_id"))
     session_meta["_active_session_id"] = str(state.get("session_id") or "")
     max_react_iter = MAX_REACT_ITER
     if isinstance(session_meta, dict) and session_meta.get("is_subagent"):
@@ -3997,7 +4107,13 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
             )
         return False
 
+    _t_initial_inject = time.perf_counter()
     _inject_pending_subagent_notes()
+    logger.info(
+        "react_init subagent_claim_done session=%s ms=%s",
+        state.get("session_id"),
+        int(max(0.0, (time.perf_counter() - _t_initial_inject) * 1000)),
+    )
 
     try:
         while iter_count < max_react_iter:
@@ -4031,6 +4147,8 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
             else:
                 state["_last_round_gap_ms"] = 0
             state["_req_wall_start"] = _req_wall_start
+            _pre_api_timing_mark(pre_api_timings, "inject_subagent_notes", _t_pre_api)
+            _t_pre_api = time.perf_counter()
             await _raise_if_steer_requested(state, emit, "react")
             if not _state_run_has_write_fence(state):
                 raise asyncio.CancelledError()
@@ -4075,6 +4193,9 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                     },
                     emit=emit,
                 )
+            _pre_api_timing_mark(pre_api_timings, "before_round", _t_pre_api)
+            _t_pre_api = time.perf_counter()
+            _t_build_start = _t_pre_api
 
             # ---------- 2.2 构建 LLM 输入（静态 system 多段 + key_context，优化前缀缓存与维护） ----------
             prompt_language = state.get("_prompt_language", "zh-CN")
@@ -4083,13 +4204,20 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                 prompt_template_revision(prompt_language),
                 str(prompt_language),
             )
-            static_cache = state.get("_prompt_static_segments_cache")
-            static_segments = (
-                static_cache.get("segments")
-                if isinstance(static_cache, dict)
-                and static_cache.get("revision") == static_revision
-                else None
+            # Process-level cache: static segments only depend on the session
+            # identity + skills/template revisions, so later runs of the same
+            # session skip the cold rebuild (skills scan + env assembly) that
+            # otherwise pays seconds on the first round of every user turn.
+            _static_key = (
+                str(state.get("session_id") or ""),
+                static_revision,
+                bool(session_meta.get("is_subagent")) if isinstance(session_meta, dict) else False,
+                isinstance(session_meta.get("fork_runtime_config"), dict)
+                and bool((session_meta.get("fork_runtime_config") or {}).get("system_segments"))
+                if isinstance(session_meta, dict)
+                else False,
             )
+            static_segments = _STATIC_SEGMENTS_PROCESS_CACHE.get(_static_key)
             static_segments_cached = isinstance(static_segments, tuple)
             if not static_segments_cached:
                 skills_catalog = get_skills_catalog()
@@ -4131,8 +4259,13 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                 "revision": static_revision,
                 "segments": tuple(static_segments),
             }
+            if len(_STATIC_SEGMENTS_PROCESS_CACHE) > 16:
+                _STATIC_SEGMENTS_PROCESS_CACHE.pop(next(iter(_STATIC_SEGMENTS_PROCESS_CACHE)))
+            _STATIC_SEGMENTS_PROCESS_CACHE[_static_key] = tuple(static_segments)
             # key_context body（随压缩变化）
             kc_body = key_context_body_for_system_prompt(state.get("key_context", "") or "")
+            _pre_api_timing_mark(pre_api_timings, "static_segments", _t_pre_api)
+            _t_pre_api = time.perf_counter()
 
             turn_cache = state.get("_prompt_turn_cache")
             if (
@@ -4160,8 +4293,9 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
             if kc_body:
                 llm_messages.append(SystemMessage(content=kc_body))
             llm_messages.extend(turn_msgs)
-            _pre_api_timing_mark(pre_api_timings, "build_messages", _t_pre_api)
+            _pre_api_timing_mark(pre_api_timings, "turn_cache", _t_pre_api)
             _t_pre_api = time.perf_counter()
+            pre_api_timings["build_messages"] = int(max(0.0, (_t_pre_api - _t_build_start) * 1000.0))
 
             async def _live_tool_definition_awaiter(awaitable, stage: str):
                 return await _await_steerable(state, awaitable, emit, stage)
@@ -4175,12 +4309,37 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                 tool_registry = tool_cache["registry"]
                 combined_tools = tool_cache["definitions"]
                 _record_tool_definition_timing("tool_registry_cache_hit", _t_pre_api)
+            elif (
+                isinstance(tool_cache, dict)
+                and tool_cache.get("definitions")
+                and _schedule_tool_registry_revalidate(state, session_meta, tool_revision)
+            ):
+                # Revision drifted mid-run (MCP server re-registered tools, a
+                # plugin/host tool toggle, ...).  Serve the last-known-good
+                # catalog for this request and rebuild in the background so the
+                # MCP/plugin definition round-trip never blocks the next ReAct
+                # step.  Drop the prompt runtime config so the rebuilt catalog
+                # is picked up on the following request.
+                tool_registry = tool_cache["registry"]
+                combined_tools = tool_cache["definitions"]
+                state.pop("_last_prompt_runtime_config", None)
+                _record_tool_definition_timing("tool_registry_stale_hit", _t_pre_api)
+                logger.info(
+                    "tool registry revision drift: session=%s cached=%s current=%s",
+                    state.get("session_id"),
+                    _short_registry_revision(tool_cache.get("revision")),
+                    _short_registry_revision(tool_revision),
+                )
             else:
                 tool_registry = await build_combined_tool_registry_for_session(
                     state["session_id"],
                     session_meta=session_meta,
                     awaiter=_live_tool_definition_awaiter,
                     timing_callback=_record_tool_definition_timing,
+                    # Cold process start: stdio MCP servers may take tens of
+                    # seconds; ship the built-in catalog now and let the
+                    # background rebuild add MCP tools once they register.
+                    include_mcp=agent_mcp.mcp_started(),
                 )
                 combined_tools = tool_registry.definitions()
                 state["_combined_tool_registry_cache"] = {
@@ -4287,7 +4446,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                     },
                     emit=emit,
                 )
-            # 上一轮已成功压缩时本轮不再压：key 追加后 system 变长，若再压会反复套娃并刷爆状态行
+            # 上一步已成功压缩时本步不再压：key 追加后 system 变长，若再压会反复套娃并刷爆状态行
             _skip_compress = state.pop("_compress_skip_next", False)
             # 仅按 token 策略自动压缩；是否主动压由模型调用 context_manage(compact) 决定
             if forced_context_limit_compress or not _skip_compress:
@@ -5746,7 +5905,9 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                 messages=len(llm_messages),
                 tools=len(combined_tools),
                 estimated_tokens=int(effective_input_est),
+                token_estimate_source=str(effective_token_source or ""),
                 model=iter_model,
+                **_gc_probe_extras(state),
             )
             _metrics_run_id = str(state.get("_runtime_v2_run_id") or "")
             _metrics_extra: Dict[str, int] = {}
@@ -6960,7 +7121,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
             else:
                 state.pop("_steer_rollback_marker", None)
 
-            # 将本轮助手输出写入历史（OpenAI 多轮：AssistantMessage，含 tool_calls）
+            # 将本步助手输出写入历史（OpenAI 多轮消息链：AssistantMessage，含 tool_calls）
             _ak = build_assistant_additional_kwargs(
                 reasoning_text,
                 getattr(turn, "reasoning_field", None),
@@ -7513,6 +7674,28 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                     tools=len(tool_calls_list or []),
                     outcome="next_react_iter",
                 )
+                # GC probe anchor: deltas reported in the next pre_api_timing
+                # cover the whole inter-round gap where unaccounted wall time
+                # was observed (suspected gen2 pauses over the large runtime
+                # projection).
+                try:
+                    _gc_stats = gc.get_stats()
+                    state["_gc_round_anchor"] = (
+                        int(_gc_stats[2]["collections"]),
+                        int(_gc_stats[2]["collected"]),
+                        int(_gc_stats[0]["collections"]),
+                    )
+                    # Event-loop stall anchor: (wall clock, loop clock) pair.
+                    # wall_delta - loop_delta at the next pre_api log is the
+                    # time the event loop was not running callbacks (GIL
+                    # starvation, blocking sync work) during the gap.
+                    state["_loop_stall_anchor"] = (
+                        time.perf_counter(),
+                        asyncio.get_running_loop().time(),
+                    )
+                except Exception:
+                    state.pop("_gc_round_anchor", None)
+                    state.pop("_loop_stall_anchor", None)
                 execution_metrics.record_phase(
                     state["session_id"], str(state.get("_runtime_v2_run_id") or ""), int(iter_count),
                     "tool_to_next_api", {"persist_state": persist_after_tools_ms, "steer_check": steer_check_ms},
@@ -7547,7 +7730,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
             # ---------- 2.8 重复检测（须在工具结果写入 llm_history 之后，避免 OpenAI 报 tool_calls 顺序错误） ----------
             # 文本重复检测只对比「正文」；思考单独存在于 reasoning 字段，不参与与 last_response 的混比
             current_content = (response_text or "").strip()
-            # 仅调工具、assistant 正文为空时，多轮会得到 ""==""，不能算作「重复输出」
+            # 仅调工具、assistant 正文为空时，多步会得到 ""==""，不能算作「重复输出」
             is_text_repeat = bool(current_content) and (current_content == last_response_content)
             current_tool_calls = tool_calls_list if tool_calls_list else []
             current_tool_signature = None
@@ -7658,8 +7841,8 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
     finally:
         pass
 
-    # 本回合 ReAct 统计：写入 ui_events，刷新页面后仍可显示耗时/轮数/工具次数
-    # 最后一轮（通常是无工具收尾轮）的轮次墙钟与 run 级对账字段。
+    # 本次运行 ReAct 统计：写入 ui_events，刷新页面后仍可显示耗时/步数/工具次数
+    # 最后一步（通常是无工具收尾步）的步进墙钟与 run 级对账字段。
     _final_react_iter = int(state.get("_current_react_iter") or iter_count or 1)
     _final_req_wall_start = state.pop("_req_wall_start", None)
     if _final_req_wall_start is not None:
@@ -8081,7 +8264,7 @@ def finish(state: State) -> State:
     if state.get("final_printed", False):
         return state
 
-    # 记录 LLM 调用详情及 token 统计（以各轮 call 上记录的 usage 为准）
+    # 记录 LLM 调用详情及 token 统计（以各步 call 上记录的 usage 为准）
     total_input_tokens = 0
     total_output_tokens = 0
     if state.get("llm_calls"):
@@ -8164,6 +8347,8 @@ async def astream_events(
     submitted_user_input = user_input
     pre_run_timings: Dict[str, int] = {}
     run_bootstrap: Optional[Dict[str, Any]] = None
+    _t_stream_entry = time.perf_counter()
+    logger.info("run_phase astream_entry session=%s", session_id)
 
     requested_prompt_language = str(prompt_language or "").strip()
     sid_in = str(session_id or "").strip()
@@ -8202,6 +8387,7 @@ async def astream_events(
         logger.debug("Unable to persist prompt language for session=%s", session_id, exc_info=True)
     runtime_v2_run_id = str(run_id or "").strip() or str(uuid.uuid4())
     plugin_command_context = ""
+    _t_plugin_dispatch = time.perf_counter()
     try:
         from agent_extensions import dispatch_plugin_command
 
@@ -8213,6 +8399,12 @@ async def astream_events(
                 "project_root": str(WORK_DIR),
                 "prompt_language": prompt_language,
             },
+        )
+        logger.info(
+            "run_phase plugin_dispatch_done session=%s ms=%s matched=%s",
+            session_id,
+            int(max(0.0, (time.perf_counter() - _t_plugin_dispatch) * 1000)),
+            bool(command_result.get("matched")),
         )
         if command_result.get("matched"):
             user_input = str(command_result.get("prompt") or "")
@@ -8258,6 +8450,12 @@ async def astream_events(
                 continue
             yield pre_hook_event
         prompt_hook = await prompt_hook_task
+        logger.info(
+            "run_phase prompt_hook_done session=%s ms=%s blocked=%s",
+            session_id,
+            int(max(0.0, (time.perf_counter() - _t_plugin_dispatch) * 1000)),
+            bool(getattr(prompt_hook, "blocked", False)),
+        )
         while not pre_hook_events.empty():
             yield pre_hook_events.get_nowait()
         if prompt_hook.updated_input is not None:
@@ -8488,6 +8686,11 @@ async def astream_events(
                 user_input,
             )
             state["_run_start_perf"] = time.perf_counter()
+            logger.info(
+                "run_phase runner_started session=%s since_entry_ms=%s",
+                session_id,
+                int(max(0.0, (state["_run_start_perf"] - _t_stream_entry) * 1000)),
+            )
             # 用户气泡由前端已画；此处只写入与流顺序一致的持久化，供刷新与 SSE 同源
             run_start_timings: Dict[str, int] = {}
             _t_run_start = time.perf_counter()

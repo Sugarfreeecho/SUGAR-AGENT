@@ -167,14 +167,32 @@ def resolve_provider(value: Any, base_url: Any, model: Any = "") -> LLMProvider:
 def resolve_profile_provider(profile: Dict[str, Any]) -> LLMProvider:
     """Resolve a saved profile while preserving an explicit provider choice.
 
-    In particular, ``openai`` always means Responses even for a custom proxy.
-    Only ``auto`` may infer a protocol from the endpoint.
+    Provider semantics v2: ``openai`` means chat-completions (openai-compatible)
+    even on a custom proxy; ``openai-responses`` opts into the Responses wire
+    protocol.  Only ``auto``/empty may infer a protocol from the endpoint.
     """
+    raw = str(profile.get("llm_type") or "").strip().lower()
+    if raw == "openai":
+        return LLMProvider.OPENAI_COMPATIBLE
     return resolve_provider(
         profile.get("llm_type"),
         profile.get("base_url"),
         profile.get("model"),
     )
+
+
+def canonical_llm_type(provider: LLMProvider) -> str:
+    """Canonical llm_type string shared with the frontend's canonicalLlmType.
+
+    The wire enum value for Responses is ``openai``, but profiles expose
+    ``openai-responses`` so it cannot be confused with the chat semantics of
+    plain ``openai``.
+    """
+    if provider is LLMProvider.OPENAI:
+        return "openai-responses"
+    if provider is LLMProvider.OPENAI_COMPATIBLE:
+        return "openai-compatible"
+    return provider.value
 
 
 def _normalized_issuer_base_url(value: Any) -> str:
@@ -287,13 +305,19 @@ def _usage_dict(value: Any) -> Dict[str, int]:
     total = number("total_tokens") or prompt + completion
     input_details = _get(value, "input_tokens_details", default={}) or {}
     output_details = _get(value, "output_tokens_details", default={}) or {}
+    prompt_details = _get(value, "prompt_tokens_details", default={}) or {}
     return {
         "prompt_tokens": prompt,
         "completion_tokens": completion,
         "total_tokens": total,
-        "prompt_cache_hit_tokens": number("cache_read_input_tokens")
-        or int(_get(input_details, "cached_tokens", default=0) or 0),
-        "prompt_cache_miss_tokens": number("cache_creation_input_tokens"),
+        "prompt_cache_hit_tokens": (
+            number("cache_read_input_tokens", "prompt_cache_hit_tokens")
+            or int(_get(input_details, "cached_tokens", default=0) or 0)
+            or int(_get(prompt_details, "cached_tokens", default=0) or 0)
+        ),
+        "prompt_cache_miss_tokens": number(
+            "cache_creation_input_tokens", "prompt_cache_miss_tokens"
+        ),
         "reasoning_tokens": int(_get(output_details, "reasoning_tokens", default=0) or 0),
     }
 
@@ -1815,6 +1839,7 @@ def _ensure_builtin_provider_registry() -> None:
                 api_key=str(profile.get("api_key") or ""),
                 base_url=str(profile.get("base_url") or "").rstrip("/") or None,
                 http_client=http_client,
+                max_retries=0,
             )
             return OpenAIResponsesTransport(
                 client,
@@ -1835,6 +1860,7 @@ def _ensure_builtin_provider_registry() -> None:
                 api_key=str(profile.get("api_key") or "local"),
                 base_url=str(profile.get("base_url") or "").rstrip("/") or None,
                 http_client=http_client,
+                max_retries=0,
             )
             return OpenAICompatibleTransport(client)
 

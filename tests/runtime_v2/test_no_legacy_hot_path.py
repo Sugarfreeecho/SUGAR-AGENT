@@ -108,7 +108,7 @@ def test_v2_context_projection_failure_is_not_converted_to_empty_summary(monkeyp
         def __init__(self, *_args, **_kwargs):
             pass
 
-        def read_consistent(self, _session_id):
+        def read_consistent_view(self, _session_id):
             raise OSError("context snapshot unavailable")
 
     monkeypatch.setattr(runtime_v2, "SnapshotStore", _BrokenStore)

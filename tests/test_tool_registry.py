@@ -393,3 +393,131 @@ def test_agent_loop_dispatches_external_tools_by_registry_kind():
     )
     assert 'if tool_name.startswith("mcp_"):' not in source
     assert 'if tool_name.startswith("plugin_"):' not in source
+
+
+def test_tool_registry_revalidate_runs_in_background(monkeypatch):
+    import types
+
+    import agent_loop
+
+    fresh_registry = types.SimpleNamespace(
+        definitions=lambda: [{"type": "function", "function": {"name": "fresh_tool"}}]
+    )
+    build_calls: list = []
+
+    async def fake_build(session_id, session_meta=None, **_kwargs):
+        build_calls.append(session_id)
+        return fresh_registry
+
+    monkeypatch.setattr(agent_loop, "build_combined_tool_registry_for_session", fake_build)
+
+    stale_registry = types.SimpleNamespace(
+        definitions=lambda: [{"type": "function", "function": {"name": "stale_tool"}}]
+    )
+    state = {
+        "session_id": "session-1",
+        "_combined_tool_registry_cache": {
+            "revision": ("old",),
+            "registry": stale_registry,
+            "definitions": stale_registry.definitions(),
+        },
+    }
+
+    async def driver():
+        scheduled = agent_loop._schedule_tool_registry_revalidate(state, {}, ("new",))
+        assert scheduled is True
+        assert state["_tool_registry_revalidating"] is True
+        # The stale cache must stay untouched until the background rebuild lands.
+        assert state["_combined_tool_registry_cache"]["revision"] == ("old",)
+        task = state.get("_tool_registry_revalidate_task")
+        assert task is not None
+        await task
+        assert state["_combined_tool_registry_cache"]["revision"] == ("new",)
+        assert state["_combined_tool_registry_cache"]["registry"] is fresh_registry
+        assert "_tool_registry_revalidating" not in state
+
+    asyncio.run(driver())
+    assert build_calls == ["session-1"]
+
+    # While a rebuild is already in flight, the helper must not schedule another.
+    state["_tool_registry_revalidating"] = True
+    assert agent_loop._schedule_tool_registry_revalidate(state, {}, ("newer",)) is True
+    assert build_calls == ["session-1"]
+
+
+def test_tool_registry_revalidate_swallows_build_failure(monkeypatch):
+    import types
+
+    import agent_loop
+
+    stale_registry = types.SimpleNamespace(
+        definitions=lambda: [{"type": "function", "function": {"name": "stale_tool"}}]
+    )
+    state = {
+        "session_id": "session-1",
+        "_combined_tool_registry_cache": {
+            "revision": ("old",),
+            "registry": stale_registry,
+            "definitions": stale_registry.definitions(),
+        },
+    }
+
+    async def failing_build(session_id, session_meta=None, **_kwargs):
+        raise RuntimeError("mcp unavailable")
+
+    monkeypatch.setattr(agent_loop, "build_combined_tool_registry_for_session", failing_build)
+
+    async def driver():
+        assert agent_loop._schedule_tool_registry_revalidate(state, {}, ("new",)) is True
+        await state["_tool_registry_revalidate_task"]
+        assert state["_combined_tool_registry_cache"]["revision"] == ("old",)
+        assert "_tool_registry_revalidating" not in state
+
+    asyncio.run(driver())
+
+
+def test_host_invoker_restatement_keeps_revision_stable():
+    from host_tool_registry import HostToolInvokerRegistry
+    from tool_execution_policy import ToolExecutionPolicy
+
+    registry = HostToolInvokerRegistry()
+
+    def make_invoker():
+        async def _invoke(_context):
+            return None
+        return _invoke
+
+    policy = ToolExecutionPolicy(effect="control", interruptibility="cooperative")
+    first = registry.register(
+        "demo_tool",
+        make_invoker(),
+        replace=True,
+        enabled=lambda: True,
+        owner="demo",
+        policy=policy,
+    )
+    gen_after_first = registry.catalog_revision()[0]
+    assert gen_after_first >= 1
+
+    for _ in range(5):
+        registry.register(
+            "demo_tool",
+            make_invoker(),
+            replace=True,
+            enabled=lambda: True,
+            owner="demo",
+            policy=policy,
+        )
+    assert registry.catalog_revision()[0] == gen_after_first
+
+    # A real change (different owner) must still bump the generation.
+    registry.register(
+        "demo_tool",
+        make_invoker(),
+        replace=True,
+        enabled=lambda: True,
+        owner="demo2",
+        policy=policy,
+    )
+    assert registry.catalog_revision()[0] == gen_after_first + 1
+    assert registry.resolve("demo_tool") is not None

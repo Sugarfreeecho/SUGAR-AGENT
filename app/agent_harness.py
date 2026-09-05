@@ -40,6 +40,7 @@ from llm import (
     LLMRequestPurpose,
     TransportEvent,
     build_transport,
+    canonical_llm_type,
     resolve_profile_provider,
 )
 
@@ -542,9 +543,9 @@ CONTEXT_COMPRESS_FAILURE_MAX_TOKENS = (
     if (_failure_cap_raw is not None and str(_failure_cap_raw).strip() != "")
     else max(4096, int(CONTEXT_WINDOW) // 2)
 )
-# 单次进入压缩后「并行摘要 + key + 微压」最大迭代轮数；用尽后仍超目标则按约 50% 窗口截尾
+# 单次进入压缩后「并行摘要 + key + 微压」最大迭代次数；用尽后仍超目标则按约 50% 窗口截尾
 CONTEXT_COMPRESS_MAX_ROUNDS = _context_env_int("CONTEXT_COMPRESS_MAX_ROUNDS", "3")
-# 摘要第 3 轮：完整保留「最后一条 user + 其后再多 N 次 assistant（ReAct 步）」
+# 摘要第 3 遍：完整保留「最后一条 user + 其后再多 N 条 assistant（ReAct 步）」
 CONTEXT_COMPRESS_ROUND3_MAX_REACT = _context_env_int("CONTEXT_COMPRESS_ROUND3_MAX_REACT", "10")
 # 达标：整包估算 token（与状态行同口径）≤ CONTEXT_WINDOW × 该比例
 CONTEXT_COMPRESS_TARGET_RATIO = float(os.getenv("CONTEXT_COMPRESS_TARGET_RATIO", "0.6"))
@@ -934,6 +935,11 @@ def machine_network_available() -> bool:
         return True
 
 
+# 应用层已有候选模型切换与运行级重试；SDK 内部重试（默认 2 次、遵守
+# Retry-After）只会把 429/5xx 的等待时间放大数倍，必须关闭。
+_OPENAI_SDK_KWARGS = {"max_retries": 0}
+
+
 def create_openai_client(
     model_name: str,
     model_type: str,
@@ -954,6 +960,7 @@ def create_openai_client(
                 base_url=_openai_sdk_base_url(False),
                 http_client=http_client,
                 timeout=OPENAI_HTTP_TIMEOUT,
+                **_OPENAI_SDK_KWARGS,
             )
             return client, model_name
         if model_type == "local":
@@ -969,6 +976,7 @@ def create_openai_client(
                 base_url=_openai_sdk_base_url(True),
                 http_client=http_client,
                 timeout=OPENAI_HTTP_TIMEOUT,
+                **_OPENAI_SDK_KWARGS,
             )
             return client, resolved
         raise ValueError(f"不支持的 LLM 类型: {model_type}（需 openai 或 local）")
@@ -984,6 +992,7 @@ def create_openai_client(
             base_url=_openai_sdk_base_url(True),
             http_client=http_client,
             timeout=OPENAI_HTTP_TIMEOUT,
+            **_OPENAI_SDK_KWARGS,
         )
         return client, resolved
 
@@ -1011,6 +1020,7 @@ def create_openai_client_for_profile(
         base_url=base_url,
         http_client=http_client,
         timeout=OPENAI_HTTP_TIMEOUT,
+        **_OPENAI_SDK_KWARGS,
     )
     try:
         setattr(
@@ -1487,6 +1497,7 @@ class ExecutorLLMClient:
                 attempted_candidates += 1
                 pending_events: List[TransportEvent] = []
                 emitted_content = False
+                _attempt_started = time.perf_counter()
                 for event in transport.stream_completion(**call_kwargs):
                     if background_text_request and not emitted_content:
                         pending_events.append(event)
@@ -1550,9 +1561,10 @@ class ExecutorLLMClient:
                 last_error = exc
                 last_model = str(item.get("model") or "")
                 logger.warning(
-                    "模型调用失败: model=%s provider=%s error=%s",
+                    "模型调用失败: model=%s provider=%s ms=%s error=%s",
                     _masked_model_label(last_model),
                     item.get("provider") or "unknown",
+                    int(max(0.0, (time.perf_counter() - _attempt_started) * 1000)),
                     _redact_runtime_log_text(exc),
                 )
         if last_error is not None:
@@ -6392,7 +6404,7 @@ def list_executor_model_profile_choices() -> List[Dict[str, Any]]:
             "id": pid,
             "name": str(profile.get("name") or profile.get("model") or pid),
             "model": str(profile.get("model") or ""),
-            "llm_type": resolve_profile_provider(profile).value,
+            "llm_type": canonical_llm_type(resolve_profile_provider(profile)),
             "context_window": int(profile.get("context_window") or CONTEXT_WINDOW),
             "max_output_tokens": int(profile.get("max_output_tokens") or MAX_OUTPUT_TOKENS),
         }
@@ -6834,10 +6846,13 @@ class TodoManager:
 
             extension = read_todo_extension(session_manager, session_id)
 
+            # read_consistent_view avoids the full deep copy of the published
+            # projection; this read happens on every ReAct round via
+            # has_active_plan and only reads the todo fields.
             snapshot = SnapshotStore(
                 session_manager.sessions_dir,
                 path_resolver=getattr(session_manager, "_resolve_session_path", None),
-            ).read(session_id)
+            ).read_consistent_view(session_id)
             todo = extension if isinstance(extension, dict) else (
                 snapshot.get("todo") if isinstance(snapshot, dict) else {}
             )

@@ -909,6 +909,17 @@ async def ensure_started() -> None:
     await _run_on_mcp_loop(_ensure_started_impl())
 
 
+def mcp_started() -> bool:
+    """True once configured servers finished their (re)discovery pass.
+
+    Cheap, non-blocking check: callers that must not wait on stdio startup
+    (which can take the full startup timeout) can use this to skip the MCP
+    catalog section for one request; a later registration bump invalidates
+    their caches through the normal revision path.
+    """
+    return _MCP_IMPORT_OK and _loaded_signature is not None
+
+
 async def _register_server_impl(alias: str) -> Dict[str, Any]:
     if not _MCP_IMPORT_OK:
         raise RuntimeError("Python package `mcp` is not installed")
@@ -952,11 +963,49 @@ async def get_tool_definitions() -> List[Dict[str, Any]]:
 
 
 async def get_tool_catalog_revision() -> tuple[int, str, tuple[str, ...]]:
-    """Return the cheap revision used by the per-run combined registry cache."""
-    await ensure_started()
+    """Return the cheap revision used by the per-run combined registry cache.
+
+    Deliberately non-blocking: it never waits for MCP server startup (a stdio
+    server may take up to its full startup timeout, and the MCP loop may be
+    busy with a hung server).  While servers have not finished starting, the
+    revision reflects the current (possibly empty) catalog and a background
+    startup refresh is scheduled; a late registration bumps the generation
+    and invalidates caches through the normal path.
+    """
+    if not _MCP_IMPORT_OK:
+        with _mcp_tool_state_lock:
+            disabled = tuple(sorted(_load_disabled_mcp_tools()))
+        return (0, "", disabled)
+    if _loaded_signature is None:
+        schedule_mcp_startup_refresh()
     with _mcp_tool_state_lock:
         disabled = tuple(sorted(_load_disabled_mcp_tools()))
-    return int(_tool_catalog_generation), str(_loaded_signature or ""), disabled
+    signature = str(_loaded_signature or "") or ("starting" if _startup_refresh_scheduled else "")
+    return int(_tool_catalog_generation), signature, disabled
+
+
+_startup_refresh_scheduled = False
+
+
+def schedule_mcp_startup_refresh() -> None:
+    """Fire-and-forget ensure_started on the MCP loop (never blocks callers)."""
+    global _startup_refresh_scheduled
+    with _mcp_tool_state_lock:
+        if _startup_refresh_scheduled:
+            return
+        _startup_refresh_scheduled = True
+
+    def _release(_future: Any = None) -> None:
+        global _startup_refresh_scheduled
+        with _mcp_tool_state_lock:
+            _startup_refresh_scheduled = False
+
+    try:
+        loop = _get_mcp_loop()
+        future = asyncio.run_coroutine_threadsafe(_ensure_started_impl(), loop)
+        future.add_done_callback(_release)
+    except Exception:
+        _release()
 
 
 def list_registered_tools() -> List[Dict[str, Any]]:

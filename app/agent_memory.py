@@ -159,7 +159,7 @@ def _load_active_key_context(session_id: str) -> str:
             snapshot = SnapshotStore(
                 session_manager.sessions_dir,
                 path_resolver=getattr(session_manager, "_resolve_session_path", None),
-            ).read(session_id)
+            ).read_consistent_view(session_id)
             summary = (snapshot.get("context") or {}).get("summary") if isinstance(snapshot, dict) else None
             return str((summary or {}).get("summary") or "") if isinstance(summary, dict) else ""
         except Exception as exc:

@@ -14,6 +14,7 @@ import httpx
 
 from llm import (
     LLMProvider,
+    canonical_llm_type,
     normalize_provider,
     normalize_responses_state_mode,
     resolve_profile_provider,
@@ -819,7 +820,7 @@ def save_store(project_root: Path, data: dict) -> None:
 def public_profile(profile: dict) -> dict:
     out = dict(profile)
     effective_provider = resolve_profile_provider(profile)
-    out["llm_type"] = effective_provider.value
+    out["llm_type"] = canonical_llm_type(effective_provider)
     storage_disabled = responses_store_disabled(profile)
     out["responses_store_disabled"] = storage_disabled
     # Kept for one compatibility cycle; callers must not use it to force a
