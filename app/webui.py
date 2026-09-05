@@ -1581,9 +1581,6 @@ def get_index_html():
     default_steer_mode = str(os.getenv("MYAGENT_STEER_MODE", "append") or "append").strip().lower()
     if default_steer_mode not in {"interrupt", "append"}:
         default_steer_mode = "append"
-    frontend_version = str(os.getenv("MYAGENT_FRONTEND_VERSION", "v1") or "v1").strip().lower()
-    if frontend_version not in {"v1", "v2"}:
-        frontend_version = "v1"
     from security import security_enabled
 
     feature_flags = {
@@ -1602,8 +1599,6 @@ def get_index_html():
         f"window.__SESSIONS_DIR__={json.dumps(sessions_dir)};"
         f"window.__APP_DOTENV_PATH__={json.dumps(app_dotenv)};"
         f"window.__MYAGENT_STEER_MODE__={json.dumps(default_steer_mode)};"
-        f"window.__MYAGENT_FRONTEND_VERSION__={json.dumps(frontend_version)};"
-        "document.documentElement.dataset.frontendVersion=window.__MYAGENT_FRONTEND_VERSION__;"
         f"window.__MYAGENT_FEATURES__={json.dumps(feature_flags)};"
         "</script>"
     )

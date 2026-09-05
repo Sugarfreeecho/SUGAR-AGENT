@@ -80,47 +80,43 @@ def test_neutral_dark_process_replies_blend_into_the_process_panel() -> None:
     assert "linear-gradient" not in response
 
 
-def test_execution_process_v2_is_version_scoped_and_enabled_locally() -> None:
+def test_execution_process_panel_styles_are_the_single_skin() -> None:
     styles = (ROOT / "frontend/src/styles/app.css").read_text(encoding="utf-8")
-    env_text = (ROOT / "app/.env").read_text(encoding="utf-8")
-    env_example = (ROOT / "app/.env.example").read_text(encoding="utf-8")
 
-    assert "MYAGENT_FRONTEND_VERSION=v2" in env_text
-    assert "MYAGENT_FRONTEND_VERSION=v1" in env_example
-    assert ':root[data-frontend-version="v2"] .process-aggregate:not(.subagent-grid-card)' in styles
-    assert "--process-v2-panel: #1b1b1d;" in styles
+    assert ':root .process-aggregate:not(.subagent-grid-card)' in styles
+    assert "--process-panel: #1b1b1d;" in styles
     assert ".is-collapsed .process-aggregate-brief," in styles
     assert "display: none !important;" in styles
     assert "> .process-aggregate-body > .feed-item:nth-child(even)" not in styles
-    assert "--process-v2-row-status: #1c1c1e;" in styles
-    assert "--process-v2-row-thinking: #1e2226;" in styles
-    assert "--process-v2-row-reply: #20252b;" in styles
-    assert "--process-v2-row-tool: #202022;" in styles
+    assert "--process-row-status: #1c1c1e;" in styles
+    assert "--process-row-thinking: #1e2226;" in styles
+    assert "--process-row-reply: #20252b;" in styles
+    assert "--process-row-tool: #202022;" in styles
     stats = styles.split(
-        ':root[data-frontend-version="v2"] .process-aggregate:not(.subagent-grid-card) .process-aggregate-stats {',
+        ':root .process-aggregate:not(.subagent-grid-card) .process-aggregate-stats {',
         1,
     )[1].split("}", 1)[0]
     assert "font-family: var(--sans);" in stats
     assert "font-size: 0.58rem;" in stats
     assert "gap: 1rem;" in stats
     top = styles.split(
-        ':root[data-frontend-version="v2"] .process-aggregate:not(.subagent-grid-card) > .process-aggregate-top {',
+        ':root .process-aggregate:not(.subagent-grid-card) > .process-aggregate-top {',
         1,
     )[1].split("}", 1)[0]
     assert "padding: 0.7rem 0.82rem;" in top
     collapsed_top = styles.split(
-        ':root[data-frontend-version="v2"] .process-aggregate:not(.subagent-grid-card).is-collapsed > .process-aggregate-top {',
+        ':root .process-aggregate:not(.subagent-grid-card).is-collapsed > .process-aggregate-top {',
         1,
     )[1].split("}", 1)[0]
     assert "padding-top: 0.62rem;" in collapsed_top
     assert "padding-bottom: 0.62rem;" in collapsed_top
     title_wrap = styles.split(
-        ':root[data-frontend-version="v2"] .process-aggregate:not(.subagent-grid-card) .process-aggregate-title-wrap {',
+        ':root .process-aggregate:not(.subagent-grid-card) .process-aggregate-title-wrap {',
         1,
     )[1].split("}", 1)[0]
     assert "gap: 0.12rem;" in title_wrap
     chevron = styles.split(
-        ':root[data-frontend-version="v2"] .process-aggregate:not(.subagent-grid-card) .process-chev {',
+        ':root .process-aggregate:not(.subagent-grid-card) .process-chev {',
         1,
     )[1].split("}", 1)[0]
     assert "position: absolute;" in chevron
@@ -130,12 +126,13 @@ def test_execution_process_v2_is_version_scoped_and_enabled_locally() -> None:
     assert "border:" not in chevron
     assert ".process-chev::before" in styles
     chevron_shape = styles.split(
-        ':root[data-frontend-version="v2"] .process-aggregate:not(.subagent-grid-card) .process-chev::before {',
+        ':root .process-aggregate:not(.subagent-grid-card) .process-chev::before {',
         1,
     )[1].split("}", 1)[0]
     assert "transform: rotate(45deg);" in chevron_shape
     assert "translateY" not in chevron_shape
-    assert "@keyframes processV2Progress" in styles
+    assert "@keyframes processProgress" in styles
+    assert "data-frontend-version" not in styles
 
 
 def test_execution_process_copy_uses_execution_process() -> None:

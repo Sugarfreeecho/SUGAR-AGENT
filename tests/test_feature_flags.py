@@ -23,12 +23,6 @@ def _extract_steer_mode(html: str) -> str:
     return json.loads(match.group(1))
 
 
-def _extract_frontend_version(html: str) -> str:
-    match = re.search(r"window\.__MYAGENT_FRONTEND_VERSION__=([^<;]+);", html)
-    assert match, "frontend version injection missing"
-    return json.loads(match.group(1))
-
-
 def test_index_html_injects_default_feature_values(monkeypatch):
     import webui
 
@@ -142,19 +136,12 @@ def test_index_html_injects_security_env_override(monkeypatch):
     assert _extract_feature_flags(str(webui.get_index_html()))["security"] is True
 
 
-def test_index_html_injects_normalized_frontend_version(monkeypatch):
+def test_index_html_no_longer_injects_frontend_version():
     import webui
 
-    monkeypatch.delenv("MYAGENT_FRONTEND_VERSION", raising=False)
-    default_html = str(webui.get_index_html())
-    assert _extract_frontend_version(default_html) == "v1"
-    assert "document.documentElement.dataset.frontendVersion=" in default_html
-
-    monkeypatch.setenv("MYAGENT_FRONTEND_VERSION", "V2")
-    assert _extract_frontend_version(str(webui.get_index_html())) == "v2"
-
-    monkeypatch.setenv("MYAGENT_FRONTEND_VERSION", "unknown")
-    assert _extract_frontend_version(str(webui.get_index_html())) == "v1"
+    html = str(webui.get_index_html())
+    assert "__MYAGENT_FRONTEND_VERSION__" not in html
+    assert "dataset.frontendVersion" not in html
 
 
 def test_permission_mode_ui_regressions():
@@ -273,9 +260,9 @@ def test_permission_mode_ui_regressions():
     assert "settings-external-ops" not in permissions
     assert "settings-external-ops" not in index_html
     assert "settings-external-ops" not in html
-    assert "是否授权工作区沙箱外处理权限？" in agent_loop
-    assert "确认执行工具（已始终允许工作区外处理）" in agent_loop
-    assert "确认执行工具（已允许本次工作区外处理）" in agent_loop
+    assert "是否授权目录 {dir_hint}？" in agent_loop
+    assert "确认执行工具（已授权目录 {hint}）" in agent_loop
+    assert "确认执行工具（已允许本次目录 {hint}）" in agent_loop
     assert "return_decision=True" in agent_loop
     assert "human-approval-group" not in interactions
     gate = (ROOT / "app/tool_approval_gate.py").read_text(encoding="utf-8")
@@ -1013,7 +1000,7 @@ def test_frontend_loaded_session_defers_layout_refresh_until_smooth_bottom_finis
     assert "function finalizeExistingLogLayout(root)" in rendering
     assert "function isHistorySmoothScrollActive()" in rendering
     assert "chatContainer.addEventListener('scrollend', onScrollEnd);" in rendering
-    assert "retargetCount < 3" in rendering
+    assert "retargetCount < 1" in rendering
     assert "if (typeof isHistorySmoothScrollActive === 'function' && isHistorySmoothScrollActive()) return;" in scroll
     assert "&& !(typeof isHistorySmoothScrollActive === 'function' && isHistorySmoothScrollActive())" in scroll
     interactions_at = sessions.index("bindExistingLogInteractions();")

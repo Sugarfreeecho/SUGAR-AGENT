@@ -573,7 +573,6 @@ SSE 是后端向前端展示 Agent 过程的主通道。事件至少应覆盖以
 | `EGRESS_HELPER_ENABLED` | `1` | 系统级网络出口助手（`0` 关闭） |
 | `SUGAR_AGENT_EGRESS_HELPER` | 自动发现 | 指定 helper 路径 |
 | `REACT_RECOVERY_RETRY_SECONDS` | `30` | 后台会话恢复重试间隔 |
-| `MYAGENT_FRONTEND_VERSION` | `v1` | 前端版本标识 |
 | `LS_INCLUDE_LINE_COUNTS` / `LS_LINE_COUNT_MAX_BYTES` | `1` / `5242880` | `ls` 行数统计开关与上限 |
 
 ## 12. 安全规格
