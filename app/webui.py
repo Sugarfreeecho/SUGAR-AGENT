@@ -229,6 +229,7 @@ _UI_CLOSED_NOTIFY_GRACE_SEC = max(
 )
 _UI_PRESENCE_TOKEN_TTL_SEC = max(90.0, float(os.getenv("MYAGENT_UI_PRESENCE_TTL_SEC", "300")))
 _ui_presence_lock = threading.Lock()
+_hook_pipeline_warmup_task: Optional[asyncio.Task] = None
 _ui_presence_tokens: dict[str, dict[str, Any]] = {}
 _ui_activation_seq = 0
 _ui_activation_path = "/"
@@ -1570,6 +1571,34 @@ def _build_sessions_state_snapshot(include_archived: bool = False) -> dict:
         )
     return out
 
+
+# The sidebar polls /sessions/state every few seconds.  A rebuild walks all
+# sessions (seconds on a busy disk) and a burst of polls then starves real
+# work like message startup, so serve a short-TTL snapshot in between.
+_SESSIONS_STATE_TTL_SEC = 2.0
+_sessions_state_cache: dict = {"key": None, "ts": 0.0, "payload": None}
+_sessions_state_cache_lock = threading.Lock()
+
+
+def _build_sessions_state_snapshot_cached(include_archived: bool = False) -> dict:
+    import time as _time
+
+    now = _time.monotonic()
+    key = bool(include_archived)
+    with _sessions_state_cache_lock:
+        cached = _sessions_state_cache
+        if (
+            cached["payload"] is not None
+            and cached["key"] == key
+            and now - float(cached["ts"] or 0.0) < _SESSIONS_STATE_TTL_SEC
+        ):
+            return cached["payload"]
+    payload = _build_sessions_state_snapshot(include_archived=include_archived)
+    with _sessions_state_cache_lock:
+        if now >= float(cached["ts"] or 0.0):
+            cached.update({"key": key, "ts": now, "payload": payload})
+    return payload
+
 def get_index_html():
     """读取并返回 Vite 构建产物 templates/dist/index.html。"""
     import agent_harness as _ui_ah
@@ -2214,7 +2243,9 @@ async def list_sessions(
 
 @fastapi_app.get("/sessions/state")
 async def sessions_state(include_archived: bool = Query(False)):
-    payload = await asyncio.to_thread(_build_sessions_state_snapshot, include_archived=include_archived)
+    payload = await asyncio.to_thread(
+        _build_sessions_state_snapshot_cached, include_archived=include_archived
+    )
     return JSONResponse(content=payload)
 
 
@@ -2227,7 +2258,9 @@ async def recover_sessions():
 
 @fastapi_app.get("/state")
 async def app_state(include_archived: bool = Query(False)):
-    payload = await asyncio.to_thread(_build_sessions_state_snapshot, include_archived=include_archived)
+    payload = await asyncio.to_thread(
+        _build_sessions_state_snapshot_cached, include_archived=include_archived
+    )
     return JSONResponse(content=payload)
 
 
@@ -7583,6 +7616,21 @@ async def start_webui_lifecycle() -> None:
         )
     except Exception:
         logger.warning("Plugin background service startup failed", exc_info=True)
+    # Warm the hook pipeline off the critical path: the first user message
+    # must not pay the plugin scan + hook manager build (observed 11s on a
+    # busy disk inside the request).
+    async def _warm_hook_pipeline_task() -> None:
+        await asyncio.sleep(3.0)
+        try:
+            from agent_extensions import warm_hook_pipeline
+
+            await warm_hook_pipeline()
+            logger.info("hook pipeline warmed at startup")
+        except Exception:
+            logger.warning("hook pipeline warmup failed", exc_info=True)
+
+    global _hook_pipeline_warmup_task
+    _hook_pipeline_warmup_task = asyncio.create_task(_warm_hook_pipeline_task())
 
 
 async def refresh_web_plugin_lifecycle() -> None:

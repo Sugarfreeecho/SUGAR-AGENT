@@ -1138,6 +1138,18 @@ def _audit_hook_dispatch_failure(
         logger.debug("Hook failure audit append failed", exc_info=True)
 
 
+async def warm_hook_pipeline() -> None:
+    """Pre-build the plugin scan + hook manager off the message path.
+
+    On a cold or recently-invalidated cache this costs seconds of disk
+    work; doing it at startup (background) keeps the first user message
+    from paying it inside its request.
+    """
+    loaded = load_plugins()
+    runtime_definitions = await asyncio.to_thread(_runtime_hook_definitions, loaded)
+    hook_manager_for_current_loop(runtime_definitions=runtime_definitions)
+
+
 async def dispatch_hook(
     event: str,
     payload: Optional[Mapping[str, Any]] = None,
@@ -1146,15 +1158,20 @@ async def dispatch_hook(
     session_id: str = "",
     run_id: str = "",
 ) -> HookDispatchResult:
+    _t0 = time.perf_counter()
     loaded = load_plugins()
+    _t_loaded = time.perf_counter()
     runtime_definitions = await asyncio.to_thread(
         _runtime_hook_definitions,
         loaded,
     )
+    _t_defs = time.perf_counter()
     manager = hook_manager_for_current_loop(
         runtime_definitions=runtime_definitions,
     )
-    audit_enabled = bool(manager.enabled and manager.hooks_for(event))
+    _t_manager = time.perf_counter()
+    event_hooks = tuple(manager.hooks_for(event) or ()) if manager.enabled else ()
+    audit_enabled = bool(manager.enabled and event_hooks)
     if session_manager is not None and audit_enabled:
         await asyncio.to_thread(
             _audit_hook_started,
@@ -1184,6 +1201,20 @@ async def dispatch_hook(
             str(run_id or ""),
             result,
         )
+    total_ms = int(max(0.0, (time.perf_counter() - _t0) * 1000))
+    record = logger.info if total_ms >= 500 else logger.debug
+    record(
+        "hook_dispatch_timing event=%s total=%dms load_plugins=%dms "
+        "runtime_defs=%dms manager=%dms hooks=%d session=%s run=%s",
+        event,
+        total_ms,
+        int((_t_loaded - _t0) * 1000),
+        int((_t_defs - _t_loaded) * 1000),
+        int((_t_manager - _t_defs) * 1000),
+        len(event_hooks),
+        str(session_id or ""),
+        str(run_id or ""),
+    )
     return result
 
 
