@@ -893,6 +893,27 @@ function updateSidebarRuntimeStatus(nextStatus) {
 
 var runtimeStatusHeartbeatTimer = null;
 var lastUiActivationSeq = 0;
+var pendingQuerySession = (function () {
+    // Deep link support: /?session=<id> selects that conversation once the
+    // session list is ready, then the parameter is stripped so a manual
+    // refresh does not yank the user back.
+    try {
+        var params = new URLSearchParams(window.location.search || '');
+        var sid = String(params.get('session') || '').trim();
+        if (sid && /^[A-Za-z0-9][A-Za-z0-9\-]{0,63}$/.test(sid)) {
+            params.delete('session');
+            var nextSearch = params.toString();
+            try {
+                window.history.replaceState(
+                    {}, '',
+                    window.location.pathname + (nextSearch ? '?' + nextSearch : '') + (window.location.hash || '')
+                );
+            } catch (e) { /* history may be unavailable */ }
+            return sid;
+        }
+    } catch (e) { /* ignore */ }
+    return '';
+})();
 async function refreshRuntimeStatus() {
     try {
         var response = await fetchWithTimeout('/api/runtime-status', { cache: 'no-store' }, 5000);
@@ -903,6 +924,11 @@ async function refreshRuntimeStatus() {
         if (activationSeq > lastUiActivationSeq) {
             lastUiActivationSeq = activationSeq;
             try { window.focus(); } catch (e) { /* browser policy may reject focus */ }
+            var activationSession = String((payload && payload.activation_session) || '').trim();
+            if (activationSession && activationSession !== currentSessionId
+                    && typeof switchSession === 'function') {
+                void Promise.resolve(switchSession(activationSession)).catch(function (err) { /* session may be gone */ });
+            }
         }
     } catch (error) {
         updateSidebarRuntimeStatus(false);
@@ -1080,6 +1106,15 @@ async function loadSessionsInner(opts) {
             if (!idSet.has(uid)) sessionUnreadComplete.delete(uid);
         });
         persistSessionUnread();
+
+        if (pendingQuerySession) {
+            var queryTarget = pendingQuerySession;
+            pendingQuerySession = '';
+            var known = allSessions.some(function (s) { return s && s.id === queryTarget; });
+            if (known && queryTarget !== currentSessionId && typeof switchSession === 'function') {
+                void Promise.resolve(switchSession(queryTarget)).catch(function (err) { /* ignore */ });
+            }
+        }
 
         renderSessionListIfChanged(!!opts.forceRender);
         clearSessionListError();

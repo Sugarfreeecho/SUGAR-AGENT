@@ -138,14 +138,14 @@ def test_execution_process_v2_is_version_scoped_and_enabled_locally() -> None:
     assert "@keyframes processV2Progress" in styles
 
 
-def test_execution_process_copy_is_renamed_to_execution_trace() -> None:
+def test_execution_process_copy_uses_execution_process() -> None:
     rendering = (ROOT / "frontend/src/app/modules/message-rendering.js").read_text(encoding="utf-8")
     translations = (ROOT / "frontend/src/app/modules/i18n.js").read_text(encoding="utf-8")
     subagent = (ROOT / "frontend/src/app/modules/subagent.js").read_text(encoding="utf-8")
 
-    assert '<span class="process-aggregate-title">执行轨迹</span>' in rendering
-    assert "'执行轨迹': 'Execution trace'" in translations
-    assert "展开执行轨迹高度" in rendering
-    assert "收起执行轨迹高度" in rendering
-    assert "展开查看执行轨迹" in subagent
-    assert '<span class="process-aggregate-title">执行过程</span>' not in rendering
+    assert '<span class="process-aggregate-title">执行过程</span>' in rendering
+    assert "'执行过程': 'Execution process'" in translations
+    assert "展开执行过程高度" in rendering
+    assert "收起执行过程高度" in rendering
+    assert "展开查看执行过程" in subagent
+    assert '<span class="process-aggregate-title">执行轨迹</span>' not in rendering

@@ -56,7 +56,7 @@ Object.assign(UI_TRANSLATIONS_EN, {
     '无限制': 'Unlimited', '分钟': 'min', '继续': 'Continue',
     // Runtime status lines
     '正在思考中...': 'Thinking...', '正在重连': 'Reconnecting', '任务已中断': 'Task interrupted',
-    '展开执行轨迹高度': 'Expand trace height', '收起执行轨迹高度': 'Collapse trace height',
+    '展开执行过程高度': 'Expand process height', '收起执行过程高度': 'Collapse process height',
     '任务已恢复，流程重启': 'Task restored; restarting workflow',
     '已请求停止当前任务': 'Stop requested for the current task', '解析事件失败': 'Failed to parse event',
     '验证': 'Verification', '正在根据对话更新要点': 'Updating key points from the conversation',
@@ -129,7 +129,7 @@ Object.assign(UI_TRANSLATIONS_EN, {
     '在左侧侧栏新建或选择会话。Enter 发送，Ctrl+Enter / Shift+Enter 换行。': 'Create or select a session in the sidebar. Press Enter to send; Ctrl+Enter or Shift+Enter for a new line.',
     '分支': 'Fork', '创建分支': 'Create fork', '创建失败': 'Creation failed',
     '将在当前回答之后创建独立分支会话。分支点之前的内容与原会话相同，可在分支中继续提问且不影响原会话。': 'A separate fork session will be created after this response. Earlier messages remain the same, and continuing in the fork will not affect the original session.',
-    '创建分支未生效。': 'The fork was not created.', '工具': 'Tool', '执行轨迹': 'Execution trace',
+    '创建分支未生效。': 'The fork was not created.', '工具': 'Tool', '执行过程': 'Execution process',
     '本段过程已折叠': 'This process section is collapsed', '信息': 'Info', '错误': 'Error', '回复': 'Response',
     '思考': 'Reasoning', '压缩': 'Compression', '裁剪': 'Trim', '要点': 'Key points', '状态': 'Status',
     '评审': 'Review', '结论': 'Verdict', '通过': 'Passed', '需要继续': 'More work required',
@@ -193,7 +193,7 @@ Object.assign(UI_TRANSLATIONS_EN, {
     // Subagent controls
     '任务': 'Tasks', '会话': 'Sessions', '允许一次': 'Allow once', '拒绝': 'Deny',
     '收起 Subagent 面板': 'Collapse Subagent panel',
-    '展开查看执行轨迹': 'Expand to view execution trace', '退出全屏': 'Exit full screen', '停止': 'Stop',
+    '展开查看执行过程': 'Expand to view process', '退出全屏': 'Exit full screen', '停止': 'Stop',
     '加载失败': 'Load failed',
     // File picker dynamic errors
     '无法打开选择对话框': 'Could not open the file picker', '上传失败：网络连接异常。': 'Upload failed: network connection error.',
@@ -609,6 +609,7 @@ function translateUiString(value) {
         .replace(/已完成上下文裁剪/g, 'Context trimming completed')
         .replace(/【自动·长度策略】/g, '[Automatic length policy]')
         .replace(/(\d+)\s*轮/g, '$1 rounds')
+        .replace(/(\d+)\s*步/g, '$1 steps')
         .replace(/正在根据对话更新要点/g, 'Updating key points from the conversation')
         .replace(/正在思考中\.\.\./g, 'Thinking...')
         .replace(/正在重连/g, 'Reconnecting')

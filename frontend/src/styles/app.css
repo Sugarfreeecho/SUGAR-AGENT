@@ -1769,7 +1769,7 @@ body {
 .welcome strong { display: block; color: var(--text-primary); font-size: 1.1rem; font-weight: 700; margin-bottom: 0.4rem; }
 .welcome p { color: var(--text-tertiary); font-size: 0.85rem; line-height: 1.6; max-width: 360px; margin: 0 auto; }
 
-/* ═══════════════ 执行轨迹 ═══════════════ */
+/* ═══════════════ 执行过程 ═══════════════ */
 .process-aggregate {
     position: relative;
     border: 1px solid rgba(var(--accent-rgb),0.13); border-radius: var(--radius-sm);
@@ -2511,7 +2511,7 @@ body {
     border-radius: 0;
 }
 
-/* 执行轨迹内 subagent 块（与 process-aggregate 统一） */
+/* 执行过程内 subagent 块（与 process-aggregate 统一） */
 .subagent-block {
     border: 1px solid var(--border-glass); border-radius: var(--radius-sm);
     margin: 0.35rem 0; background: var(--surface-glass3);
@@ -2851,6 +2851,30 @@ body {
 :root.theme-light .feed-item.feed--answer .feed-chunk-scroller { color: #0f172a; }
 :root.theme-light .feed-item.feed--err .feed-chunk-scroller { color: #7f1d1d; }
 :root.theme-light .feed-item.feed--st .feed-chunk-scroller { color: var(--text-secondary); }
+
+/* 执行过程：回复/追问保持原亮度；其他条目展开时中间亮度(80%)、
+   折叠时最底亮度(50%)。filter 只作用于无背景的文字容器，
+   不影响条目背景与边框。 */
+:root:root .feed-item:not(.feed--llm2):not(.feed--answer) .feed-label,
+:root:root .feed-item:not(.feed--llm2):not(.feed--answer) .feed-chunk-scroller {
+    filter: brightness(0.8);
+}
+:root:root .feed-item:not(.feed--llm2):not(.feed--answer).is-collapsed .feed-label,
+:root:root .feed-item:not(.feed--llm2):not(.feed--answer).is-collapsed .feed-chunk-scroller {
+    filter: brightness(0.5);
+}
+/* 浅色主题：文字本身是深色，brightness 压暗几乎不可见；
+   改用半透明让文字向浅色背景混合，实现同样的变淡效果。 */
+:root.theme-light .feed-item:not(.feed--llm2):not(.feed--answer) .feed-label,
+:root.theme-light .feed-item:not(.feed--llm2):not(.feed--answer) .feed-chunk-scroller {
+    filter: none;
+    opacity: 0.8;
+}
+:root.theme-light .feed-item:not(.feed--llm2):not(.feed--answer).is-collapsed .feed-label,
+:root.theme-light .feed-item:not(.feed--llm2):not(.feed--answer).is-collapsed .feed-chunk-scroller {
+    filter: none;
+    opacity: 0.5;
+}
 
 /* ═══════════════ Execution process UI v2 ═══════════════ */
 :root[data-frontend-version="v2"] .process-aggregate:not(.subagent-grid-card) {

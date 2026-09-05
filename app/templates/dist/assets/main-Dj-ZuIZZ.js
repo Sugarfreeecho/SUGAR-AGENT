@@ -112,7 +112,7 @@ Object.assign(UI_TRANSLATIONS_EN, {
     '无限制': 'Unlimited', '分钟': 'min', '继续': 'Continue',
     // Runtime status lines
     '正在思考中...': 'Thinking...', '正在重连': 'Reconnecting', '任务已中断': 'Task interrupted',
-    '展开执行轨迹高度': 'Expand trace height', '收起执行轨迹高度': 'Collapse trace height',
+    '展开执行过程高度': 'Expand process height', '收起执行过程高度': 'Collapse process height',
     '任务已恢复，流程重启': 'Task restored; restarting workflow',
     '已请求停止当前任务': 'Stop requested for the current task', '解析事件失败': 'Failed to parse event',
     '验证': 'Verification', '正在根据对话更新要点': 'Updating key points from the conversation',
@@ -185,7 +185,7 @@ Object.assign(UI_TRANSLATIONS_EN, {
     '在左侧侧栏新建或选择会话。Enter 发送，Ctrl+Enter / Shift+Enter 换行。': 'Create or select a session in the sidebar. Press Enter to send; Ctrl+Enter or Shift+Enter for a new line.',
     '分支': 'Fork', '创建分支': 'Create fork', '创建失败': 'Creation failed',
     '将在当前回答之后创建独立分支会话。分支点之前的内容与原会话相同，可在分支中继续提问且不影响原会话。': 'A separate fork session will be created after this response. Earlier messages remain the same, and continuing in the fork will not affect the original session.',
-    '创建分支未生效。': 'The fork was not created.', '工具': 'Tool', '执行轨迹': 'Execution trace',
+    '创建分支未生效。': 'The fork was not created.', '工具': 'Tool', '执行过程': 'Execution process',
     '本段过程已折叠': 'This process section is collapsed', '信息': 'Info', '错误': 'Error', '回复': 'Response',
     '思考': 'Reasoning', '压缩': 'Compression', '裁剪': 'Trim', '要点': 'Key points', '状态': 'Status',
     '评审': 'Review', '结论': 'Verdict', '通过': 'Passed', '需要继续': 'More work required',
@@ -249,7 +249,7 @@ Object.assign(UI_TRANSLATIONS_EN, {
     // Subagent controls
     '任务': 'Tasks', '会话': 'Sessions', '允许一次': 'Allow once', '拒绝': 'Deny',
     '收起 Subagent 面板': 'Collapse Subagent panel',
-    '展开查看执行轨迹': 'Expand to view execution trace', '退出全屏': 'Exit full screen', '停止': 'Stop',
+    '展开查看执行过程': 'Expand to view process', '退出全屏': 'Exit full screen', '停止': 'Stop',
     '加载失败': 'Load failed',
     // File picker dynamic errors
     '无法打开选择对话框': 'Could not open the file picker', '上传失败：网络连接异常。': 'Upload failed: network connection error.',
@@ -665,6 +665,7 @@ function translateUiString(value) {
         .replace(/已完成上下文裁剪/g, 'Context trimming completed')
         .replace(/【自动·长度策略】/g, '[Automatic length policy]')
         .replace(/(\\d+)\\s*轮/g, '$1 rounds')
+        .replace(/(\\d+)\\s*步/g, '$1 steps')
         .replace(/正在根据对话更新要点/g, 'Updating key points from the conversation')
         .replace(/正在思考中\\.\\.\\./g, 'Thinking...')
         .replace(/正在重连/g, 'Reconnecting')
@@ -1078,7 +1079,7 @@ const LS_SESSION_SECTION_PREFIX = 'myagent-session-section-';
 let streamPollTimer = null;
 const messageRawMarkdown = new WeakMap();
 let liveAutoFollow = true;
-/** 生成中：对话区 / 执行轨迹区是否在底部附近（二者同时满足才跟流，见 refreshLiveAutoFollowPins） */
+/** 生成中：对话区 / 执行过程区是否在底部附近（二者同时满足才跟流，见 refreshLiveAutoFollowPins） */
 let streamChatNearBottom = true;
 let streamProcNearBottom = true;
 let mermaidInitialized = false;
@@ -6392,7 +6393,7 @@ function setScrollTopImmediate(el, y) {
     });
 }
 
-/** 当前运行会话对应的执行轨迹框滚动容器（.process-aggregate-body） */
+/** 当前运行会话对应的执行过程框滚动容器（.process-aggregate-body） */
 function getProcessBodyElForCurrentRun() {
     var sid = currentSessionId;
     var run = sid && getSessionRunState(sid);
@@ -6421,7 +6422,7 @@ function isSmoothStreamPortNearBottom(port, thresholdPx) {
     return smoothFollowController.isFollowing(port) || isNearBottom(port, thresholdPx);
 }
 
-/** 生成中时：对话区与当前执行轨迹区均在底部附近时才允许自动跟随流式滚动 */
+/** 生成中时：对话区与当前执行过程区均在底部附近时才允许自动跟随流式滚动 */
 function refreshLiveAutoFollowPins() {
     if (!chatContainer) return;
     if (isSessionRunning(currentSessionId)) {
@@ -6488,7 +6489,7 @@ function refreshFeedChunksInCtx(ctx, selector) {
 }
 
 function ensureSubagentTurnProcessOpen(ctx) {
-    /* 默认折叠执行轨迹，不在自动滚动时强制展开 */
+    /* 默认折叠执行过程，不在自动滚动时强制展开 */
 }
 
 function shouldDeferSubagentProcessDom(ctx) {
@@ -6798,7 +6799,7 @@ function scrollContentAreaIfFollow(ctx, runSessionId, channel) {
     scrollChatToBottomIfFollow(runSessionId, {});
 }
 
-/** 将当前轮次的执行框滚到底（流式增量主要长在这里，必须滚 procBody 而不是只滚对话区） */
+/** 将当前步的执行框滚到底（流式增量主要长在这里，必须滚 procBody 而不是只滚对话区） */
 function scrollProcessBodyToBottom(ctx, runSessionId) {
     if (shouldGateScrollByRunSession(ctx, runSessionId)) return;
     if (isSubagentStreamCtx(ctx)) {
@@ -9904,7 +9905,7 @@ function syncProcessAggregateHeightUi(agg) {\r
     if (expanded && hasOverflow) agg.classList.add('is-height-expanded');\r
     else expanded = false;\r
     btn.hidden = !hasOverflow;\r
-    var label = expanded ? '收起执行轨迹高度' : '展开执行轨迹高度';\r
+    var label = expanded ? '收起执行过程高度' : '展开执行过程高度';\r
     btn.setAttribute('aria-expanded', expanded ? 'true' : 'false');\r
     btn.setAttribute('aria-label', label);\r
     btn.setAttribute('data-ui-tip', label);\r
@@ -10302,7 +10303,7 @@ function refreshSubagentCardStats(card) {\r
         durStr = formatProcDurationMs(t1 - t0);\r
     }\r
     if (durStr) parts.push(durStr);\r
-    parts.push(String(reactLoops) + ' 轮');\r
+    parts.push(String(reactLoops) + ' 步');\r
     parts.push('工具 ' + String(toolN) + ' 次');\r
     parts.push('失败 ' + String(failN) + ' 次');\r
     var modelStr = card.dataset.procCacheModel || card.dataset.executorModel || '—';\r
@@ -10352,7 +10353,7 @@ function refreshProcessAggregateStats(agg) {\r
         durStr = formatProcDurationMs(t1 - t0);\r
     }\r
     if (durStr) parts.push(durStr);\r
-    parts.push(String(reactLoops) + ' 轮');\r
+    parts.push(String(reactLoops) + ' 步');\r
     parts.push('工具 ' + String(toolN) + ' 次');\r
         parts.push('失败 ' + String(failN) + ' 次');\r
     var ch = agg.dataset.procCacheHit != null && agg.dataset.procCacheHit !== '' ? parseInt(agg.dataset.procCacheHit, 10) : 0;\r
@@ -10373,9 +10374,15 @@ function refreshProcessAggregateStats(agg) {\r
     renderProcessAggregateStats(el, parts.join(' · '), cacheLine);\r
 }\r
 \r
+/* ═══ 术语统一（执行过程面板） ═══\r
+   会话：侧边栏一条 = 一个会话（session）。\r
+   轮：会话内一次对话 = 一轮（一条用户提问到最终回复完成；\r
+       分页/TOC/user_turns 里的「轮次」均指此，不用于 API 计数）。\r
+   步：每次 API 发送 = 一步（对应 react_iter，面板统计「N 步」）。\r
+   条：每一步期间产生的一条思考/回复/工具/状态记录（feed item 行单位）。 */\r
 function ensureProcessGroup(ctx) {\r
     if (!ctx || !ctx.stream) return null;\r
-    /* DocumentFragment 或未挂上 document 的节点 isConnected 为 false；回放或「加载更早消息」预挂载时需保留同一执行轨迹框 */\r
+    /* DocumentFragment 或未挂上 document 的节点 isConnected 为 false；回放或「加载更早消息」预挂载时需保留同一执行过程框 */\r
     if (ctx.currentProcessGroup && !ctx.currentProcessGroup.isConnected && !replayingMessages) ctx.currentProcessGroup = null;\r
     if (ctx.currentProcessGroup) return ctx.currentProcessGroup;\r
     stripWelcome(ctx);\r
@@ -10387,13 +10394,13 @@ function ensureProcessGroup(ctx) {\r
     wrap.innerHTML = '<div class="process-aggregate-top" role="button" tabindex="0" aria-expanded="' + (replayCollapsed ? 'false' : 'true') + '">'\r
         + '<div class="process-aggregate-top-line">'\r
         + '<span class="process-aggregate-title-wrap">'\r
-        + '<span class="process-aggregate-title">执行轨迹</span>'\r
+        + '<span class="process-aggregate-title">执行过程</span>'\r
         + '<span class="process-aggregate-stats" aria-live="polite"></span>'\r
         + '</span>'\r
         + '<span class="process-chev" aria-hidden="true">▼</span></div>'\r
         + '<div class="process-aggregate-brief"></div></div>'\r
         + '<div class="process-aggregate-body"></div>'\r
-        + '<button type="button" class="process-aggregate-resize" aria-label="展开执行轨迹高度" aria-expanded="false" data-ui-tip="展开执行轨迹高度" hidden>'\r
+        + '<button type="button" class="process-aggregate-resize" aria-label="展开执行过程高度" aria-expanded="false" data-ui-tip="展开执行过程高度" hidden>'\r
         + '<span class="process-aggregate-chevron" aria-hidden="true"></span></button>';\r
     if (!replayingMessages) {\r
         if (ctx.runStartedAt) applyRunStartedAtToProcessGroup(wrap, ctx.runStartedAt);\r
@@ -10464,7 +10471,7 @@ function autoResizeTextarea() {\r
     repinStreamScrollAfterComposerResize();\r
 }\r
 \r
-/** 输入框增高会压缩工作区高度；若正在跟随底部，立即把聊天区/执行轨迹区重新钉到底部，避免与流式滚动互相拉扯。 */\r
+/** 输入框增高会压缩工作区高度；若正在跟随底部，立即把聊天区/执行过程区重新钉到底部，避免与流式滚动互相拉扯。 */\r
 function repinStreamScrollAfterComposerResize() {\r
     if (!liveAutoFollow || !chatContainer) return;\r
     if (typeof setScrollTopImmediate === 'function') {\r
@@ -13941,7 +13948,7 @@ function buildSubagentCardSummaryHtml(previewText, muted) {
     var t = formatSubagentSummaryText(previewText);
     if (!t) {
         return '<div class="subagent-card-summary subagent-card-summary--muted">'
-            + escapeHtml(muted ? String(muted) : '展开查看执行轨迹') + '</div>';
+            + escapeHtml(muted ? String(muted) : '展开查看执行过程') + '</div>';
     }
     if (t.length > 1200) t = t.slice(0, 1199) + '\\u2026';
     return '<div class="subagent-card-summary">' + escapeHtml(t) + '</div>';
@@ -17748,6 +17755,27 @@ function updateSidebarRuntimeStatus(nextStatus) {\r
 \r
 var runtimeStatusHeartbeatTimer = null;\r
 var lastUiActivationSeq = 0;\r
+var pendingQuerySession = (function () {\r
+    // Deep link support: /?session=<id> selects that conversation once the\r
+    // session list is ready, then the parameter is stripped so a manual\r
+    // refresh does not yank the user back.\r
+    try {\r
+        var params = new URLSearchParams(window.location.search || '');\r
+        var sid = String(params.get('session') || '').trim();\r
+        if (sid && /^[A-Za-z0-9][A-Za-z0-9\\-]{0,63}$/.test(sid)) {\r
+            params.delete('session');\r
+            var nextSearch = params.toString();\r
+            try {\r
+                window.history.replaceState(\r
+                    {}, '',\r
+                    window.location.pathname + (nextSearch ? '?' + nextSearch : '') + (window.location.hash || '')\r
+                );\r
+            } catch (e) { /* history may be unavailable */ }\r
+            return sid;\r
+        }\r
+    } catch (e) { /* ignore */ }\r
+    return '';\r
+})();\r
 async function refreshRuntimeStatus() {\r
     try {\r
         var response = await fetchWithTimeout('/api/runtime-status', { cache: 'no-store' }, 5000);\r
@@ -17758,6 +17786,11 @@ async function refreshRuntimeStatus() {\r
         if (activationSeq > lastUiActivationSeq) {\r
             lastUiActivationSeq = activationSeq;\r
             try { window.focus(); } catch (e) { /* browser policy may reject focus */ }\r
+            var activationSession = String((payload && payload.activation_session) || '').trim();\r
+            if (activationSession && activationSession !== currentSessionId\r
+                    && typeof switchSession === 'function') {\r
+                void Promise.resolve(switchSession(activationSession)).catch(function (err) { /* session may be gone */ });\r
+            }\r
         }\r
     } catch (error) {\r
         updateSidebarRuntimeStatus(false);\r
@@ -17935,6 +17968,15 @@ async function loadSessionsInner(opts) {\r
             if (!idSet.has(uid)) sessionUnreadComplete.delete(uid);\r
         });\r
         persistSessionUnread();\r
+\r
+        if (pendingQuerySession) {\r
+            var queryTarget = pendingQuerySession;\r
+            pendingQuerySession = '';\r
+            var known = allSessions.some(function (s) { return s && s.id === queryTarget; });\r
+            if (known && queryTarget !== currentSessionId && typeof switchSession === 'function') {\r
+                void Promise.resolve(switchSession(queryTarget)).catch(function (err) { /* ignore */ });\r
+            }\r
+        }\r
 \r
         renderSessionListIfChanged(!!opts.forceRender);\r
         clearSessionListError();\r

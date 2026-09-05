@@ -28,9 +28,16 @@ def test_sidebar_runtime_status_tracks_session_connectivity() -> None:
 
 
 def test_sidebar_uses_dated_product_version() -> None:
+    import re
+
+    pattern = re.compile(r'class="sidebar-runtime-version">(v4\.\d{8})</span>')
+    versions = []
     for relative_path in ("frontend/index.html", "frontend/src/shell-body.html"):
         markup = (ROOT / relative_path).read_text(encoding="utf-8")
-        assert 'class="sidebar-runtime-version">v4.20260816</span>' in markup
+        match = pattern.search(markup)
+        assert match, f"{relative_path} missing dated sidebar-runtime-version"
+        versions.append(match.group(1))
+    assert len(set(versions)) == 1, f"version mismatch across markup: {versions}"
 
 
 def test_sidebar_runtime_footer_has_theme_aware_styles() -> None:

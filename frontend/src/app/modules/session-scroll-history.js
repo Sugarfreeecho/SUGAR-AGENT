@@ -115,7 +115,7 @@ function setScrollTopImmediate(el, y) {
     });
 }
 
-/** 当前运行会话对应的执行轨迹框滚动容器（.process-aggregate-body） */
+/** 当前运行会话对应的执行过程框滚动容器（.process-aggregate-body） */
 function getProcessBodyElForCurrentRun() {
     var sid = currentSessionId;
     var run = sid && getSessionRunState(sid);
@@ -144,7 +144,7 @@ function isSmoothStreamPortNearBottom(port, thresholdPx) {
     return smoothFollowController.isFollowing(port) || isNearBottom(port, thresholdPx);
 }
 
-/** 生成中时：对话区与当前执行轨迹区均在底部附近时才允许自动跟随流式滚动 */
+/** 生成中时：对话区与当前执行过程区均在底部附近时才允许自动跟随流式滚动 */
 function refreshLiveAutoFollowPins() {
     if (!chatContainer) return;
     if (isSessionRunning(currentSessionId)) {
@@ -211,7 +211,7 @@ function refreshFeedChunksInCtx(ctx, selector) {
 }
 
 function ensureSubagentTurnProcessOpen(ctx) {
-    /* 默认折叠执行轨迹，不在自动滚动时强制展开 */
+    /* 默认折叠执行过程，不在自动滚动时强制展开 */
 }
 
 function shouldDeferSubagentProcessDom(ctx) {
@@ -521,7 +521,7 @@ function scrollContentAreaIfFollow(ctx, runSessionId, channel) {
     scrollChatToBottomIfFollow(runSessionId, {});
 }
 
-/** 将当前轮次的执行框滚到底（流式增量主要长在这里，必须滚 procBody 而不是只滚对话区） */
+/** 将当前步的执行框滚到底（流式增量主要长在这里，必须滚 procBody 而不是只滚对话区） */
 function scrollProcessBodyToBottom(ctx, runSessionId) {
     if (shouldGateScrollByRunSession(ctx, runSessionId)) return;
     if (isSubagentStreamCtx(ctx)) {
