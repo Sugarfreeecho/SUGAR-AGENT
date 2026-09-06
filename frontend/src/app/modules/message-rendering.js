@@ -2145,10 +2145,56 @@ function waitForChatScrollAfterHistoryLoad(sessionId, mode) {
         });
     }
     if (historyLoadScrollsToBottom(sessionId, mode)) {
-        return new Promise(function (resolve) {
-            requestAnimationFrame(function () {
-                resolve(true);
+        // Plain bottom-targeted loads ('bottom') have no glide loop above, but
+        // async hydration renders messages in batches that keep growing
+        // scrollHeight. Keep the viewport pinned to the current bottom with
+        // immediate (non-smooth) snaps until layout settles, so a green-dot or
+        // force-reloaded session never appears to crawl down line by line.
+        var pinSettled = false;
+        var pinRounds = 0;
+        var pinLastHeight = -1;
+        var pinStartedAt = performance.now();
+        var pinStopEvents = ['wheel', 'touchstart', 'pointerdown'];
+        var pinStop = function () {
+            if (pinSettled) return;
+            pinSettled = true;
+            pinStopEvents.forEach(function (ev) {
+                chatContainer.removeEventListener(ev, pinStop);
             });
+        };
+        var pinResolve = null;
+        return new Promise(function (resolve) {
+            pinResolve = resolve;
+            pinStopEvents.forEach(function (ev) {
+                chatContainer.addEventListener(ev, pinStop, { passive: true });
+            });
+            var pinBottom = function () {
+                if (pinSettled) {
+                    pinResolve(false);
+                    return;
+                }
+                if (!chatContainer || sessionId !== currentSessionId) {
+                    pinStop();
+                    pinResolve(false);
+                    return;
+                }
+                var h = chatContainer.scrollHeight;
+                var grew = pinLastHeight >= 0 && h > pinLastHeight + 4;
+                pinLastHeight = h;
+                setScrollTopImmediate(chatContainer, h);
+                var elapsed = performance.now() - pinStartedAt;
+                if (elapsed > 2600 || (!grew && pinRounds >= 8)) {
+                    setScrollTopImmediate(chatContainer, chatContainer.scrollHeight);
+                    pinStop();
+                    pinResolve(true);
+                    return;
+                }
+                pinRounds += 1;
+                requestAnimationFrame(function () {
+                    requestAnimationFrame(pinBottom);
+                });
+            };
+            requestAnimationFrame(pinBottom);
         });
     }
     return Promise.resolve(false);
