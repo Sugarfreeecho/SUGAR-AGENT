@@ -863,6 +863,18 @@ function applySkippedRuntimeV2EventMetadata(event, runCtx, sessionId) {
     }
 }
 
+function restoreReactGenerationFromProcessGroup(ctx, processGroup) {
+    if (!ctx || !processGroup || !processGroup.querySelectorAll) return 0;
+    var generation = Math.max(0, Math.floor(Number(ctx.reactGeneration) || 0));
+    var rows = processGroup.querySelectorAll('.feed-item[data-react-generation]');
+    rows.forEach(function (row) {
+        var value = Number(row.getAttribute('data-react-generation'));
+        if (Number.isFinite(value)) generation = Math.max(generation, Math.floor(value));
+    });
+    ctx.reactGeneration = generation;
+    return generation;
+}
+
 async function attachSessionEventStream(sessionId, opts) {
     opts = opts || {};
     if (!sessionId || getSessionRunState(sessionId)) return;
@@ -886,6 +898,9 @@ async function attachSessionEventStream(sessionId, opts) {
         var existingProcessGroup = runCtx.stream.querySelector('.process-aggregate:last-of-type');
         if (existingProcessGroup) {
             runCtx.currentProcessGroup = existingProcessGroup;
+            // History replay may contain interrupt generations greater than zero.
+            // Restore that ordering state before appending reconnected live rows.
+            restoreReactGenerationFromProcessGroup(runCtx, existingProcessGroup);
             existingProcessGroup.classList.add('is-running');
             bindProcessAggregate(existingProcessGroup);
             var activeInfo = sessionStore.getActiveRunInfo(runSessionId) || {};

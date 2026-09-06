@@ -614,6 +614,25 @@ function testStreamingFramesKeepFollowupRenderSignatureStable() {
   assert.notStrictEqual(runEnded, first, 'a run boundary must still refresh pending controls');
 }
 
+function testReattachRestoresReactGenerationFromHistory() {
+  const ctx = context();
+  vm.runInContext(
+    between('function restoreReactGenerationFromProcessGroup', 'async function attachSessionEventStream'),
+    ctx,
+  );
+  const rows = ['0', '1', '1'].map((generation) => ({
+    getAttribute(name) {
+      return name === 'data-react-generation' ? generation : null;
+    },
+  }));
+  const processGroup = { querySelectorAll: () => rows };
+  const runCtx = { reactGeneration: 0 };
+
+  assert.strictEqual(ctx.restoreReactGenerationFromProcessGroup(runCtx, processGroup), 1);
+  assert.strictEqual(runCtx.reactGeneration, 1,
+    'reconnected rows must continue after the latest historical interrupt generation');
+}
+
 (async () => {
   await testDispatcherDoesNotConsumePendingRows();
   await testAutoDrainRequiresACompleteIdleBoundary();
@@ -624,6 +643,7 @@ function testStreamingFramesKeepFollowupRenderSignatureStable() {
   await testAutoDrainDefersBehindSessionAutoResume();
   testAppendOptimisticRowCommitsInPlace();
   testStreamingFramesKeepFollowupRenderSignatureStable();
+  testReattachRestoresReactGenerationFromHistory();
   process.stdout.write('followup dispatcher runtime checks passed\n');
 })().catch((error) => {
   console.error(error);

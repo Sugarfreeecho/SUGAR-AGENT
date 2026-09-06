@@ -104,6 +104,131 @@ function flushText(c, sc, text, part = 'Response', smooth = true) {
   assert(steps < 2000);
   return sc.textContent;
 }
+function loadNavigationHelpers(c) {
+  vm.runInContext(between(scrolling, 'function setScrollTopImmediate(', '/** 当前运行会话'), c);
+  vm.runInContext(between(scrolling, 'function cancelSmoothStreamFollowForHistoryLoad(', 'function getVisibleChatStream('), c);
+  vm.runInContext(between(rendering, 'function scrollToBottom(', '// 滚动位置存储'), c);
+  vm.runInContext(between(rendering, 'var historySmoothScrollSessionId', "window.addEventListener('beforeunload'"), c);
+  vm.runInContext(between(rendering, 'function historyLoadScrollsToBottom(', 'function setWelcome('), c);
+  c.getProcessBodyElForCurrentRun = () => null;
+}
+// Model the CSS smooth default and browser clamping. A bare scrollTop write
+// after an immediate jump must not accidentally start another native glide.
+function navigationPort() {
+  const p = port();
+  let top = 120;
+  p.writes = [];
+  p.style.scrollBehavior = 'smooth';
+  Object.defineProperty(p, 'scrollTop', {
+    get: () => top,
+    set(y) {
+      p.writes.push(p.style.scrollBehavior);
+      top = Math.max(0, Math.min(y, p.scrollHeight - p.clientHeight));
+    },
+  });
+  p.scrollTo = ({ top: y, behavior }) => { p.writes.push(behavior); top = Math.min(y, p.scrollHeight - p.clientHeight); };
+  p.removeEventListener = (name, fn) => { if (p.listeners[name] === fn) delete p.listeners[name]; };
+  return p;
+}
+async function testUnreadNavigation() {
+  for (const badge of ['server', 'local', 'none']) {
+    const rt = switchFixture(), c = rt.context, timers = [], modes = [];
+    c.setTimeout = fn => { timers.push(fn); return timers.length; };
+    c.sessionStore.get = () => ({ last_activity_at: '2020-01-01', unread_result: badge === 'server' });
+    if (badge === 'local') c.sessionUnreadComplete.add('B');
+    c.clearSessionUnreadState = sid => { c.sessionUnreadComplete.delete(sid); };
+    c.restoreCachedSessionStream = () => { assert.equal(badge, 'none', 'unread must bypass old cached DOM'); return false; };
+    for (const name of ['resetSessionHistoryPaging', 'emptyChatStreamKeepingStrip', 'showLoading', 'refreshSubagentTreePanel']) c[name] = () => {};
+    c.loadSessionMessages = async (sid, mode) => { modes.push(mode); return true; };
+    const switched = c.switchSession('B');
+    await timers.shift()();
+    await switched;
+    assert.deepEqual(modes, [badge === 'none' ? 'smooth-bottom' : 'bottom']);
+  }
+
+  const rt = runtime({ currentSessionId: 's', switchSessionEpoch: 1,
+    isSessionRunning: () => false, isServerStreamActive: () => false,
+    chatContainer: navigationPort(), streamChatNearBottom: false, streamProcNearBottom: false, liveAutoFollow: false });
+  const c = rt.context;
+  loadNavigationHelpers(c);
+  c.getSavedScrollPosition = c.getSavedScrollAnchorPosition = () => { throw new Error('unread must not read old anchors'); };
+  vm.runInContext('smoothFollowController.request(chatContainer);', c);
+  c.applyChatScrollAfterHistoryLoad('s', 'bottom');
+  assert.equal(c.chatContainer.scrollTop, 900, 'first placement is immediate');
+  c.chatContainer.scrollHeight += 300; // queued overflow/layout work
+  rt.frame();
+  for (let i = 0; i < 120; i++) rt.frame();
+  assert.equal(c.chatContainer.scrollTop, 1200, 'layout correction stays at the newest result');
+  assert(c.chatContainer.writes.every(mode => mode === 'auto'), 'no CSS or native smooth restart');
+  assert.equal(vm.runInContext('smoothFollowController.isFollowing(chatContainer)', c), false);
+  assert.equal(rt.frames.size, 0, 'no lingering follower');
+  assert.equal(c.chatContainer.style.scrollBehavior, 'smooth', 'temporary style is restored');
+
+  c.scrollToBottom();
+  c.switchSessionEpoch += 2; // A -> B -> A before the old callback runs
+  c.chatContainer.scrollTop = 120;
+  rt.frame();
+  assert.equal(c.chatContainer.scrollTop, 120, 'stale bottom callback cannot override a new visit');
+  c.scrollToBottom();
+  c.chatContainer.scrollTop = 200;
+  rt.frame();
+  assert.equal(c.chatContainer.scrollTop, 200, 'reader movement cancels the layout correction');
+
+  c.beginHistorySmoothScroll('s');
+  c.chatContainer.scrollTop = 100;
+  const oldWait = c.waitForChatScrollAfterHistoryLoad('s', 'smooth-bottom');
+  c.switchSessionEpoch += 2;
+  c.beginHistorySmoothScroll('s');
+  c.chatContainer.listeners.scrollend();
+  assert.equal(await oldWait, false, 'old animation cannot retarget after A -> B -> A');
+  assert.equal(c.chatContainer.scrollTop, 100);
+  assert.equal(c.isHistorySmoothScrollActive(), true, 'old cleanup cannot release new scroll ownership');
+}
+
+async function testUnreadHistoryLoadLayout() {
+  const rt = runtime({ currentSessionId: 's', switchSessionEpoch: 1, messageLoadEpoch: 0,
+    sessionStore: { ui: {} }, replayingMessages: false, suppressTocDuringSessionLoad: false,
+    HISTORY_DIALOGUES_PER_PAGE: 20, HISTORY_EVENT_BUDGET: 1000,
+    chatContainer: navigationPort(), isSessionRunning: () => false, isServerStreamActive: () => false,
+    getSessionRunState: () => null, document: { getElementById: () => null },
+    beforeSessionMessageSnapshotAvailable: () => false,
+    fetchWithTimeout: async () => ({ ok: true, json: async () => [{ type: 'user' }, { type: 'final' }] }),
+    newDomContext: stream => ({ stream }), chatStreamHasConversationContent: () => true,
+    streamChatNearBottom: true, streamProcNearBottom: true, liveAutoFollow: true,
+    shouldGateScrollByRunSession: () => false, isSubagentStreamCtx: () => false,
+  });
+  const c = rt.context, stream = { hidden: false, querySelectorAll: () => [] }, order = [];
+  c.getVisibleChatStream = () => stream;
+  loadNavigationHelpers(c);
+  vm.runInContext(between(scrolling, 'function followStreamProcessScroll(', 'function finishStreamScrollIfFollow('), c);
+  for (const name of ['hideLoading', 'resetSessionHistoryPaging', 'emptyChatStreamKeepingStrip',
+    'markVisibleSessionStreamLoadState', 'beginMessageReplay', 'rebuildToc', 'updateSessionTitle',
+    'updateHistorySentinelVisibility', 'bindExistingLogInteractions', 'scheduleTocActiveUpdate',
+    'scheduleContextTokensAfterPaint', 'logOpenSessionTiming']) c[name] = () => {};
+  c.elapsedSince = () => 0;
+  c.prepareWorkspaceImageLayout = async () => { order.push('images'); assert(stream.hidden); };
+  c.reduceAndRenderMessageEvent = ctx => {
+    c.followStreamProcessScroll(ctx, 's', 'row');
+    assert.equal(vm.runInContext('smoothFollowController.isFollowing(chatContainer)', c), false,
+      'history replay cannot start the live row follower');
+  };
+  c.finalizeExistingLogLayout = () => {
+    order.push('layout');
+    c.chatContainer.scrollHeight = 1600;
+    c.requestAnimationFrame(() => { c.chatContainer.scrollHeight = 1800; });
+  };
+  vm.runInContext(between(source('session-management'), 'async function loadSessionMessages(', 'function chatStreamHasConversationContent('), c);
+  let done = false;
+  const loaded = c.loadSessionMessages('s', 'bottom').then(ok => { done = true; return ok; });
+  for (let i = 0; i < 50 && !done; i++) { await Promise.resolve(); rt.frame(); }
+  assert(done, 'instant history loading completes without waiting for an animation');
+  assert.equal(await loaded, true);
+  assert.deepEqual(order, ['images', 'layout']);
+  assert.equal(c.chatContainer.scrollTop, 1700);
+  assert(c.chatContainer.writes.every(mode => mode === 'auto'));
+  assert.equal(c.replayingMessages, false);
+  assert.equal(rt.frames.size, 0);
+}
 async function report() {
   const t = runtime(); loadTextHelpers(t.context);
   const newlineResult = flushText(t.context, scroller(), 'A\nB');
@@ -138,6 +263,8 @@ async function report() {
 async function main() {
   const result = await report();
   if (process.argv.includes('--report')) { console.log(JSON.stringify(result, null, 2)); return; }
+  await testUnreadNavigation();
+  await testUnreadHistoryLoadLayout();
   assert.equal(result.newlineResult, 'A\nB');
   assert.equal(result.staleRestores, 0);
   assert.equal(result.cachedScrollAfterFrames, 120);

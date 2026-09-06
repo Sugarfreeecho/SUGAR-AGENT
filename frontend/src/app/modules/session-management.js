@@ -1412,7 +1412,7 @@ async function loadSessionMessages(sessionId, scrollBehavior, opts) {
         }
         var imageLayoutStartedAt = performance.now();
         var historyScrollBehavior = scrollBehavior;
-        if (scrollBehavior === 'smooth-bottom' && typeof prepareWorkspaceImageLayout === 'function') {
+        if ((scrollBehavior === 'smooth-bottom' || scrollBehavior === 'bottom') && typeof prepareWorkspaceImageLayout === 'function') {
             await prepareWorkspaceImageLayout(getVisibleChatStream());
             if (loadToken !== messageLoadEpoch || sessionId !== currentSessionId) return;
         }
@@ -1459,10 +1459,13 @@ async function loadSessionMessages(sessionId, scrollBehavior, opts) {
         updateHistorySentinelVisibility();
         bindExistingLogInteractions();
         var historyScrollStartedAt = performance.now();
+        // Completed unread results have no animation phase. Settle the log
+        // layout before placing the viewport, including queued overflow work.
+        if (historyScrollBehavior === 'bottom') finalizeExistingLogLayout();
         applyChatScrollAfterHistoryLoad(sessionId, historyScrollBehavior);
         var initialSmoothReachedBottom = await waitForChatScrollAfterHistoryLoad(sessionId, historyScrollBehavior);
         if (loadToken !== messageLoadEpoch || sessionId !== currentSessionId) return;
-        finalizeExistingLogLayout();
+        if (historyScrollBehavior !== 'bottom') finalizeExistingLogLayout();
         if (typeof uiPerformance !== 'undefined') uiPerformance.sample(sessionId, 'history.scroll', performance.now() - historyScrollStartedAt);
         if (historyScrollBehavior === 'smooth-bottom' && initialSmoothReachedBottom) {
             setScrollTopImmediate(chatContainer, chatContainer.scrollHeight);
@@ -1688,10 +1691,9 @@ async function switchSession(sessionId, opts) {
         setTimeout(async function () {
         if (switchToken !== switchSessionEpoch || sessionId !== currentSessionId) { resolve(false); return; }
         try {
-            // A freshly loaded or force-reloaded stream does not restore a
-            // persisted reading position. Once its history is rendered, ease
-            // the viewport down to the newest message.
-            var loadedOk = await loadSessionMessages(sessionId, 'smooth-bottom', {
+            // Capture unread intent before clearing the badge and preserve it
+            // through the async load: completed results open without a glide.
+            var loadedOk = await loadSessionMessages(sessionId, sessionHadUnreadResult ? 'bottom' : 'smooth-bottom', {
                 preloadOlderIfShort: isServerStreamActive(sessionId),
                 allowDuringRun: isServerStreamActive(sessionId),
                 tocAlreadyStarted: tocAlreadyStarted,

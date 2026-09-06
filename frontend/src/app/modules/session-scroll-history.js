@@ -109,10 +109,13 @@ function setScrollTopImmediate(el, y) {
     if (!el) return;
     var prev = el.style.scrollBehavior;
     el.style.scrollBehavior = 'auto';
-    el.scrollTop = y;
-    requestAnimationFrame(function () {
-        if (el) el.style.scrollBehavior = prev;
-    });
+    try {
+        el.scrollTop = y;
+    } finally {
+        // Restore synchronously so overlapping writes cannot restore each
+        // other's temporary style on later frames.
+        el.style.scrollBehavior = prev;
+    }
 }
 
 /** 当前运行会话对应的执行过程框滚动容器（.process-aggregate-body） */
@@ -503,6 +506,7 @@ function scrollSubagentCardBodyToBottom(ctx) {
 }
 
 function scrollContentAreaIfFollow(ctx, runSessionId, channel) {
+    if (typeof replayingMessages !== 'undefined' && replayingMessages) return;
     if (shouldGateScrollByRunSession(ctx, runSessionId)) return;
     // Non-token trace events (status/tool/result/etc.) arrive through this
     // generic path and default to the whole-row motion profile.
@@ -539,6 +543,7 @@ function scrollProcessBodyToBottom(ctx, runSessionId) {
 }
 
 function followStreamProcessScroll(ctx, runSessionId, channel) {
+    if (typeof replayingMessages !== 'undefined' && replayingMessages) return;
     if (shouldGateScrollByRunSession(ctx, runSessionId)) return;
     var followChannel = channel === 'text' ? 'text' : 'row';
     if (
@@ -684,6 +689,10 @@ function cancelSmoothStreamFollowForHistoryLoad() {
 
 /** The shared viewport must not retain the previous session's animation. */
 function cancelSmoothStreamFollowForSessionSwitch() {
+    if (typeof streamScrollFollowRaf !== 'undefined' && streamScrollFollowRaf) {
+        cancelAnimationFrame(streamScrollFollowRaf);
+        streamScrollFollowRaf = 0;
+    }
     smoothFollowController.reset(chatContainer);
     var stream = getVisibleChatStream();
     if (stream) stream.querySelectorAll('.process-aggregate-body, .subagent-card-body').forEach(function (port) {
@@ -1209,6 +1218,7 @@ function scrollCurrentRunningProcessToBottom(sessionId) {
 function restoreCachedSessionScrollPosition(sessionId) {
     if (!chatContainer || !sessionId) return;
     if (sessionId !== currentSessionId) return;
+    var restoreEpoch = switchSessionEpoch;
     var running = isSessionRunning(sessionId)
         || (typeof isServerStreamActive === 'function' && isServerStreamActive(sessionId));
     var saved = (typeof getSavedScrollPosition === 'function') ? getSavedScrollPosition(sessionId) : null;
@@ -1226,7 +1236,7 @@ function restoreCachedSessionScrollPosition(sessionId) {
     refreshLiveAutoFollowPins();
     scheduleTocActiveUpdate();
     requestAnimationFrame(function () {
-        if (sessionId !== currentSessionId) return;
+        if (sessionId !== currentSessionId || restoreEpoch !== switchSessionEpoch) return;
         if (running) {
             setScrollTopImmediate(chatContainer, chatContainer.scrollHeight);
             scrollCurrentRunningProcessToBottom(sessionId);

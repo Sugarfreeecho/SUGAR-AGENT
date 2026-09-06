@@ -1636,13 +1636,19 @@ function escapeHtmlAttr(str) {
 function scrollToBottom(opts) {
     opts = opts || {};
     if (!chatContainer) return;
+    cancelSmoothStreamFollowForHistoryLoad();
     if (opts.smooth && typeof chatContainer.scrollTo === 'function') {
         chatContainer.scrollTo({ top: chatContainer.scrollHeight, behavior: 'smooth' });
         return;
     }
     setScrollTopImmediate(chatContainer, chatContainer.scrollHeight);
+    var scrollEpoch = switchSessionEpoch;
+    var placedTop = chatContainer.scrollTop;
     requestAnimationFrame(function () {
-        if (chatContainer) chatContainer.scrollTop = chatContainer.scrollHeight;
+        if (!chatContainer || scrollEpoch !== switchSessionEpoch) return;
+        // Let deliberate reader movement win over this layout correction.
+        if (Math.abs(chatContainer.scrollTop - placedTop) > 2) return;
+        setScrollTopImmediate(chatContainer, chatContainer.scrollHeight);
     });
 }
 
@@ -1957,13 +1963,13 @@ function historyLoadScrollsToBottom(sessionId, mode) {
 }
 
 function waitForHistoryImageLayout(sessionId, mode, root) {
-    if (mode !== 'smooth-bottom' || !root || sessionId !== currentSessionId) {
+    if ((mode !== 'smooth-bottom' && mode !== 'bottom') || !root || sessionId !== currentSessionId) {
         return Promise.resolve(true);
     }
     var images = Array.prototype.slice.call(root.querySelectorAll('.message img'));
     var pending = images.filter(function (img) {
         // 冷加载的消息流仍处于隐藏状态，lazy 图片不会可靠地开始请求。
-        // 只在即将执行历史平滑滚动时提升优先级，先拿到固有尺寸再显示消息流。
+        // 历史置底前先拿到固有尺寸，避免图片迟到后把最新结果挤出视口。
         img.loading = 'eager';
         if (img.getAttribute('data-workspace-image-sized') === '1') return false;
         return !img.complete;
@@ -2026,6 +2032,7 @@ function waitForHistoryImageLayout(sessionId, mode, root) {
 function waitForChatScrollAfterHistoryLoad(sessionId, mode) {
     if (!chatContainer || !sessionId) return Promise.resolve(false);
     if (sessionId !== currentSessionId) return Promise.resolve(false);
+    var scrollEpoch = switchSessionEpoch;
     if (mode === 'smooth-bottom') {
         return new Promise(function (resolve) {
             var settled = false;
@@ -2050,7 +2057,7 @@ function waitForChatScrollAfterHistoryLoad(sessionId, mode) {
                 userEvents.forEach(function (eventName) {
                     chatContainer.removeEventListener(eventName, onUserInterrupt);
                 });
-                endHistorySmoothScroll(sessionId);
+                if (scrollEpoch === switchSessionEpoch) endHistorySmoothScroll(sessionId);
                 resolve(!!reachedBottom);
             }
             function isAtBottom() {
@@ -2059,7 +2066,7 @@ function waitForChatScrollAfterHistoryLoad(sessionId, mode) {
                 return maxTop - chatContainer.scrollTop <= 2;
             }
             function onScrollEnd() {
-                if (sessionId !== currentSessionId) {
+                if (sessionId !== currentSessionId || scrollEpoch !== switchSessionEpoch) {
                     cleanup(false);
                     return;
                 }
@@ -2083,7 +2090,7 @@ function waitForChatScrollAfterHistoryLoad(sessionId, mode) {
             }
             function check(now) {
                 if (settled) return;
-                if (!chatContainer || sessionId !== currentSessionId) {
+                if (!chatContainer || sessionId !== currentSessionId || scrollEpoch !== switchSessionEpoch) {
                     cleanup(false);
                     return;
                 }

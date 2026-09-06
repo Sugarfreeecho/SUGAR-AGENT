@@ -989,7 +989,7 @@ def test_frontend_session_restore_distinguishes_loaded_cached_and_running_sessio
     assert "restoredFromCache && !sessionHadUnreadResult && !sessionIsRunningNow" in sessions
     assert "sessionIsRunningNow && typeof scrollCurrentRunningProcessToBottom" in sessions
     assert "var allAggs = stream.querySelectorAll('.process-aggregate');" in scroll
-    assert "var loadedOk = await loadSessionMessages(sessionId, 'smooth-bottom'" in sessions
+    assert "loadSessionMessages(sessionId, sessionHadUnreadResult ? 'bottom' : 'smooth-bottom'" in sessions
     assert "scrollToBottom({ smooth: mode === 'smooth-bottom' });" in rendering
     assert "sessionHadUnreadResult = !!(" in sessions
 
