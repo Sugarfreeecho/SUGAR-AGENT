@@ -2,7 +2,7 @@
 Agent 可调工具：实现函数 + OpenAI `tools` JSON Schema（`OPENAI_TOOL_DEFINITIONS`）。
 
 - `tools`：name -> 可调用对象（含 async，由 agent_loop 以 **kwargs 调用）
-- 路径限制：`write_file`、`web_download`、`edit_file`、`delete_file`、`run_shell`（受限时）均约束在 **`WORK_DIR`**（虚拟 `/` 映射工作区根）。`delete_file` 软删除至 **`WORK_DIR/.trash/`**，**禁止**对 `sessions`、`skills`、`.trash` 及其内部路径调用。read / ls / glob / grep 可按工具规则访问工作区外路径。
+- 路径默认根：`write_file`、`web_download`、`edit_file`、`delete_file`、`apply_patch`、`run_shell`（受限时）默认以 **`WORK_DIR`**（虚拟 `/` 映射工作区根）为基准；工作区外绝对路径在受限模式下会弹出审批卡片，经用户授权对应目录后即可正常读写/删除（授权目录会记录到会话并可供后续操作复用）。`delete_file` 软删除至 **`WORK_DIR/.trash/`**，**禁止**对 `sessions`、`skills`、`.trash` 及其内部路径调用。read / ls / glob / grep 可按工具规则访问工作区外路径。
 
 - 联网：`web_search`（通过启用的 Search Provider 插件执行）、`web_fetch`
 """
@@ -280,8 +280,10 @@ def resolve_default_download_path(url: str) -> Path:
 
 
 def safe_work_path(file_path: str) -> Path:
-    """将路径解析为绝对路径，仅允许 WORK_DIR。用于 edit / delete / shell（受限）及写入类工具。
-    虚拟工作区根：`/foo` → WORK_DIR/foo；无前导 slash 的相对路径 → WORK_DIR/foo。"""
+    """将路径解析为绝对路径。用于 edit / delete / shell（受限）及写入类工具。
+    虚拟工作区根：`/foo` → WORK_DIR/foo；无前导 slash 的相对路径 → WORK_DIR/foo。
+    绝对路径在工作区内直接放行；工作区外的绝对路径需要当前安全上下文已批准
+    （FULL_ACCESS，或受限模式下该路径已通过审批/目录授权），否则拒绝访问。"""
     raw = prepare_agent_workspace_path_literal(file_path)
     work_root = active_tool_work_dir()
     active = active_security_context()
@@ -3177,7 +3179,12 @@ def _apply_update_hunks(content: str, body: List[str], raw_path: str) -> str:
 
 
 def apply_patch(patch: str) -> str:
-    """Apply one Codex-style multi-file patch under WORK_DIR, with validation and rollback."""
+    """Apply one Codex-style multi-file patch, with validation and rollback.
+
+    补丁目标默认解析到 WORK_DIR（相对路径/`/segment` 虚拟路径）。工作区外的
+    绝对路径由审批策略管控：受限模式下首次访问会弹出审批卡片，用户授权对应
+    目录后即可正常修改；full_access 模式直接放行。
+    """
     try:
         operations = _parse_apply_patch(patch)
         planned: Dict[Path, Optional[str]] = {}
@@ -4392,10 +4399,13 @@ OPENAI_TOOL_DEFINITIONS: List[Dict[str, Any]] = [
         "apply_patch",
         "Preferred tool for ordinary text-file modifications; use it instead of constructing file rewrites through run_shell. "
         "It accepts exactly one argument named `patch`; there are no `before`, `after`, `path`, `search`, or `replace` arguments. "
-        "The patch string uses Codex patch syntax for one or more files under the runtime WORK_DIR. Read the target immediately "
-        "before editing and copy exact existing lines into each update hunk. All file sections are validated before writing; "
-        "stale, missing, malformed, or ambiguous context fails atomically without partial edits. If an update fails, re-read the "
-        "reported file and rebuild the hunk from its current contents instead of retrying the same patch.",
+        "The patch string uses Codex patch syntax for one or more files. Relative paths and `/segment` virtual paths resolve "
+        "under the runtime WORK_DIR; native absolute paths (e.g. `D:/repo/src/a.py` or an absolute path returned by read_file) "
+        "are allowed and, in restricted permission modes, prompt an approval card so the user can authorize the target directory "
+        "before the change is applied. Read the target immediately before editing and copy exact existing lines into each update "
+        "hunk. All file sections are validated before writing; stale, missing, malformed, or ambiguous context fails atomically "
+        "without partial edits. If an update fails, re-read the reported file and rebuild the hunk from its current contents "
+        "instead of retrying the same patch.",
         {
             "patch": {
                 "type": "string",
@@ -4403,9 +4413,9 @@ OPENAI_TOOL_DEFINITIONS: List[Dict[str, Any]] = [
                     "Complete raw patch text; do not pass a JSON object or separate before/after strings inside this value. "
                     "Use exactly `*** Begin Patch` and `*** End Patch` as boundary lines. Each section starts with exactly one of "
                     "`*** Add File: <path>`, `*** Update File: <path>`, or `*** Delete File: <path>`. Paths are resolved from the "
-                    "runtime WORK_DIR, not automatically from a repository/source root; reuse the exact absolute path returned by "
-                    "read_file only when it is under WORK_DIR. Files outside WORK_DIR cannot be patched. For multiple files, start a "
-                    "new Add/Update/Delete File section for every file. For Update File, use a plain `@@` hunk header (never `*** @@`). Every hunk "
+                    "runtime WORK_DIR unless they are native absolute paths, which are allowed (restricted modes ask for directory "
+                    "approval first); reuse the exact absolute path returned by read_file when the target lies outside WORK_DIR. "
+                    "For multiple files, start a new Add/Update/Delete File section for every file. For Update File, use a plain `@@` hunk header (never `*** @@`). Every hunk "
                     "body line must begin with exactly one prefix character: space for an unchanged existing line, `-` for an exact "
                     "existing line to remove, or `+` for a line to add. Each update hunk must contain at least one space- or minus-prefixed "
                     "existing line—the tool may describe this as required old, before, or context content. Include enough unchanged "

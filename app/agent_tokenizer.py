@@ -611,7 +611,7 @@ def build_env_static(session_id: Optional[str] = None) -> str:
   - When the user asks about "your" features, mechanisms, configuration, tool behavior, prompt behavior, self-checks, or asks you to inspect/check yourself, first use this root to read the relevant code and infer the agent's actual behavior before answering.
 - **Work root** (`WORK_DIR`): {wdir}
   - Virtual `/` maps to this directory. Relative paths and virtual paths like `/outputs/a.txt` resolve under `WORK_DIR`.
-  - `write_file`, `web_download`, `delete_file` (soft-delete target: `WORK_DIR/.trash/`), and restricted `run_shell` write or run inside this tree unless the UI approves broader access.
+  - `write_file`, `apply_patch`, `edit_file`, `web_download`, `delete_file` (soft-delete target: `WORK_DIR/.trash/`), and restricted `run_shell` resolve relative paths under this tree; **native absolute paths outside WORK_DIR are permitted** after the user approves the target directory through the approval card in restricted modes (full access allows them directly).
   - `delete_file` refuses protected tool state under `sessions/`, `skills/`, `.trash/`, and their children.
 
 ## This conversation's storage{session_lines}
