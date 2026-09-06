@@ -753,6 +753,136 @@ def test_model_profile_persists_canonical_manual_provider(tmp_path):
     assert model_profiles.is_usable_profile(profile) is True
 
 
+def test_model_profile_persists_provider_semantics_v2_values(tmp_path, monkeypatch):
+    import model_profiles
+
+    # Explicit choices must never hit the network; only ``auto`` probes.
+    probes = []
+
+    def _fake_detect(base_url, api_key, model_id, **_kwargs):
+        probes.append((base_url, model_id))
+        return None
+
+    monkeypatch.setattr(model_profiles, "detect_wire_protocol", _fake_detect)
+
+    responses = model_profiles.upsert_profile(
+        tmp_path,
+        {
+            "model": "muse-test",
+            "llm_type": "openai-responses",
+            "base_url": "https://opencode.ai/zen/go/v1",
+            "api_key": "secret",
+            "context_window": 1000,
+            "max_output_tokens": 100,
+        },
+    )
+
+    # The explicit Responses choice must survive persistence instead of
+    # being flattened onto the legacy ``openai`` enum value.
+    assert responses["llm_type"] == "openai-responses"
+
+    chat = model_profiles.upsert_profile(
+        tmp_path,
+        {
+            "model": "chat-test",
+            "llm_type": "openai",
+            "base_url": "https://opencode.ai/zen/go/v1",
+            "api_key": "secret",
+            "context_window": 1000,
+            "max_output_tokens": 100,
+        },
+    )
+
+    # Provider semantics v2: a bare explicit ``openai`` selects chat.
+    assert chat["llm_type"] == "openai-compatible"
+
+    compatible = model_profiles.upsert_profile(
+        tmp_path,
+        {
+            "model": "compat-test",
+            "llm_type": "openai-compatible",
+            "base_url": "https://opencode.ai/zen/go/v1",
+            "api_key": "secret",
+            "context_window": 1000,
+            "max_output_tokens": 100,
+        },
+    )
+
+    assert compatible["llm_type"] == "openai-compatible"
+
+    # Explicit selections never probe the endpoint.
+    assert probes == []
+
+    automatic = model_profiles.upsert_profile(
+        tmp_path,
+        {
+            "model": "auto-test",
+            "llm_type": "auto",
+            "base_url": "https://opencode.ai/zen/go/v1",
+            "api_key": "secret",
+            "context_window": 1000,
+            "max_output_tokens": 100,
+        },
+    )
+
+    # The fake detector cannot tell, so the profile keeps ``auto`` and the
+    # endpoint inference applies on every load.
+    assert automatic["llm_type"] == "auto"
+    assert probes == [("https://opencode.ai/zen/go/v1", "auto-test")]
+
+
+def test_auto_profile_persists_probed_wire_protocol(tmp_path, monkeypatch):
+    import model_profiles
+
+    def _fake_detect(base_url, api_key, model_id, **_kwargs):
+        return "openai-responses"
+
+    monkeypatch.setattr(model_profiles, "detect_wire_protocol", _fake_detect)
+
+    profile = model_profiles.upsert_profile(
+        tmp_path,
+        {
+            "model": "muse-probed",
+            "llm_type": "auto",
+            "base_url": "https://opencode.ai/zen/v1",
+            "api_key": "secret",
+            "context_window": 1000,
+            "max_output_tokens": 100,
+        },
+    )
+
+    assert profile["llm_type"] == "openai-responses"
+
+
+def test_detect_wire_protocol_judges_routes_by_error_shape(monkeypatch):
+    import httpx
+
+    import model_profiles
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/chat/completions"):
+            # A request-level complaint proves the route exists.
+            return httpx.Response(
+                400,
+                json={"error": {"message": "max_tokens is too large"}},
+            )
+        if request.url.path.endswith("/responses"):
+            return httpx.Response(404, json={"error": "Not found"})
+        return httpx.Response(500, text="boom")
+
+    real_client = httpx.Client
+
+    class MockClient(real_client):
+        def __init__(self, *args, **kwargs):
+            super().__init__(transport=httpx.MockTransport(handler))
+
+    monkeypatch.setattr(model_profiles.httpx, "Client", MockClient)
+    detected = model_profiles.detect_wire_protocol(
+        "https://gateway.example.com/v1", "k", "some-model"
+    )
+    assert detected == "openai-compatible"
+
+
 def test_legacy_stateless_profile_migrates_to_storage_privacy_flag(tmp_path):
     import model_profiles
 
@@ -1263,7 +1393,7 @@ def test_openai_compatible_normalizes_repeated_names_and_cumulative_arguments():
             "choices": [{"delta": {"tool_calls": [{
                 "index": 0,
                 "id": "call_1",
-                "function": {"name": "ls", "arguments": '{"path":"sessions"}'},
+                "function": {"name": "ls", "arguments": 'sessions"}'},
             }]}, "finish_reason": "tool_calls"}],
         },
     ]
@@ -1283,6 +1413,9 @@ def test_openai_compatible_normalizes_repeated_names_and_cumulative_arguments():
     assert [event.tool_name for event in tools] == ["ls", ""]
     assert tools[0].tool_call_id == "call_1"
     assert [event.tool_call_id for event in tools[1:]] == [""]
+    # Chat Completions arguments chunks are pure deltas and must be appended
+    # verbatim — a prefix-dropping merge would corrupt JSON whose fragments
+    # repeat (e.g. every nested object opening `{"`).
     assert "".join(event.arguments_delta for event in tools) == '{"path":"sessions"}'
 
 
@@ -1617,3 +1750,289 @@ def test_compatible_stream_usage_preserves_chat_completions_cache_tokens():
         }
     )
     assert responses["prompt_cache_hit_tokens"] == 500
+
+
+def test_classify_candidate_failure_buckets():
+    from agent_openai import _classify_candidate_failure
+
+    class WireError(Exception):
+        def __init__(self, status_code, message):
+            super().__init__(message)
+            self.status_code = status_code
+
+    # 确定性失败：4xx 参数/鉴权类 → 立即换模型
+    assert _classify_candidate_failure(WireError(400, "unknown parameter `thinking`")) == "switch"
+    assert _classify_candidate_failure(WireError(401, "invalid api key")) == "switch"
+    assert _classify_candidate_failure(WireError(404, "model not found")) == "switch"
+    assert _classify_candidate_failure(WireError(422, "invalid request")) == "switch"
+
+    # 瞬时故障：429 / 5xx / 超时 / 连接 → 同模型重试
+    assert _classify_candidate_failure(WireError(429, "rate limit exceeded")) == "retry"
+    assert _classify_candidate_failure(WireError(500, "Internal server error")) == "retry"
+    assert _classify_candidate_failure(WireError(503, "upstream unavailable")) == "retry"
+    assert _classify_candidate_failure(WireError(408, "request timeout")) == "retry"
+    assert _classify_candidate_failure(TimeoutError("request timed out")) == "retry"
+    # 连接类错误：换端点比重试同一端点更合理（既有契约）
+    assert _classify_candidate_failure(ConnectionError("connection reset")) == "switch"
+
+    # 断网等本机不可用错误不重试，交给上层暂停回退
+    class LocalNetworkUnavailableError(ConnectionError):
+        pass
+
+    assert _classify_candidate_failure(LocalNetworkUnavailableError("offline")) == "switch"
+
+    # 未知错误保守直接换模型
+    assert _classify_candidate_failure(RuntimeError("something weird")) == "fallback"
+
+
+def test_candidate_retry_policy_env_overrides(monkeypatch):
+    from agent_openai import _candidate_retry_policy
+
+    monkeypatch.delenv("LLM_CANDIDATE_RETRY_ATTEMPTS", raising=False)
+    monkeypatch.delenv("LLM_CANDIDATE_RETRY_BACKOFF_SEC", raising=False)
+    assert _candidate_retry_policy() == (10, 1.0)
+
+    monkeypatch.setenv("LLM_CANDIDATE_RETRY_ATTEMPTS", "0")
+    assert _candidate_retry_policy()[0] == 0
+
+    monkeypatch.setenv("LLM_CANDIDATE_RETRY_ATTEMPTS", "5")
+    monkeypatch.setenv("LLM_CANDIDATE_RETRY_BACKOFF_SEC", "0.5")
+    assert _candidate_retry_policy() == (5, 0.5)
+
+
+def test_manual_model_switch_resets_run_circuit_and_sticky_candidate():
+    import agent_harness
+
+    client = agent_harness.ExecutorLLMClient(
+        [
+            agent_harness._profile_candidate(
+                {
+                    "id": "p1",
+                    "model": "m1",
+                    "llm_type": "openai-compatible",
+                    "base_url": "https://api.example.com/v1",
+                    "api_key": "k",
+                    "context_window": 1000,
+                    "max_output_tokens": 100,
+                }
+            ),
+            agent_harness._profile_candidate(
+                {
+                    "id": "p2",
+                    "model": "m2",
+                    "llm_type": "openai-responses",
+                    "base_url": "https://api.example.com/v1",
+                    "api_key": "k",
+                    "context_window": 1000,
+                    "max_output_tokens": 100,
+                }
+            ),
+        ]
+    )
+
+    class _Item:
+        session_id = "sess-switch"
+
+        def get(self, key, default=None):
+            return {"session_id": self.session_id}.get(key, default)
+
+    client.set_request_scope("run-1")
+    client.note_scope_session("sess-switch")
+
+    # run 内 p1 失败 → 熔断记录 + fallback 接管成为“最近成功”。
+    with client._failure_lock:
+        client._failed_candidates_by_scope["run-1"].add(
+            client._candidate_circuit_key(0, client.candidates[0])
+        )
+        client._last_successful_candidate_key = client._candidate_circuit_key(
+            1, client.candidates[1]
+        )
+
+    # fallback 之后：下一个请求会跳过 p1。
+    assert client.next_candidate()["model"] == "m2"
+    assert client.current_candidate()["model"] == "m2"
+
+    # 用户手动切回 p1 → 会话重置必须让 p1 立即重新成为第一候选。
+    agent_harness.reset_executor_failure_state_for_session("sess-switch")
+
+    assert client.next_candidate()["model"] == "m1"
+    assert client.current_candidate()["model"] == "m1"
+
+
+def test_fallback_takeover_rebinds_session_profile(tmp_path, monkeypatch):
+    """fallback 接管成功后会话绑定改为实际服务的 profile(选择器跟随)。"""
+    import json as _json
+
+    import agent_harness
+
+    sid = "sess-adopt"
+    sessions_dir = tmp_path / "sessions" / sid
+    sessions_dir.mkdir(parents=True)
+    meta_path = sessions_dir / "metadata.json"
+    p1 = {"id": "p1", "model": "m1", "llm_type": "openai-compatible",
+          "base_url": "https://api.example.com/v1", "api_key": "k",
+          "context_window": 1000, "max_output_tokens": 100}
+    p2 = {**p1, "id": "p2", "model": "m2", "llm_type": "openai-responses"}
+    meta_path.write_text(_json.dumps({
+        "model_profile_id": "p1",
+        "profile_by_id": {"p1": p1, "p2": p2},
+    }), encoding="utf-8")
+
+    real_load = agent_harness.session_manager._load_metadata
+    real_save = agent_harness.session_manager._save_metadata_unlocked
+
+    def fake_load(target):
+        if str(target) == sid:
+            return _json.loads(meta_path.read_text(encoding="utf-8"))
+        return real_load(target)
+
+    saves = []
+
+    def fake_save(target, metadata):
+        if str(target) == sid:
+            saves.append(dict(metadata))
+            meta_path.write_text(_json.dumps(metadata), encoding="utf-8")
+            return
+        real_save(target, metadata)
+
+    monkeypatch.setattr(agent_harness.session_manager, "_load_metadata", fake_load)
+    monkeypatch.setattr(
+        agent_harness.session_manager, "_save_metadata_unlocked", fake_save
+    )
+
+    client = agent_harness.ExecutorLLMClient(
+        [
+            agent_harness._profile_candidate(p1),
+            agent_harness._profile_candidate(p2),
+        ]
+    )
+    client.set_request_scope("run-adopt")
+    client.note_scope_session(sid)
+
+    # p2(fallback)成功服务 → 会话绑定必须改写为 p2。
+    client._maybe_adopt_fallback_profile(client.candidates[1])
+    assert saves, "adopt must persist the takeover"
+    assert saves[-1]["model_profile_id"] == "p2"
+    assert saves[-1]["model_switch_history"][-1]["requested_by"] == "fallback"
+
+    # 绑定一致时不再重复写盘。
+    saves.clear()
+    client._maybe_adopt_fallback_profile(client.candidates[1])
+    assert not saves
+
+
+def _compatible_transport_with_chunks(chunks):
+    class _Completions:
+        @staticmethod
+        def create(**_kwargs):
+            return iter(chunks)
+
+    client = type(
+        "Client",
+        (),
+        {"chat": type("Chat", (), {"completions": _Completions()})()},
+    )()
+    return OpenAICompatibleTransport(client)
+
+
+def test_compatible_stream_arguments_survive_single_char_fragments():
+    """Regression: gateways that split arguments into 1-4 char fragments used
+    to lose every `{"` fragment to the snapshot-prefix heuristic, corrupting
+    the JSON and silently degrading ask_user to {} args."""
+    payload = (
+        '{"questions": [{"header": "代理", "question": "用哪个代理？", '
+        '"options": [{"label": "本机", "description": "127.0.0.1"}]}]}'
+    )
+    # Fragment exactly like the micro-fragmenting gateways: first chunk carries
+    # id+name with empty arguments, then 2-char slices.
+    chunks = [
+        {"model": "m", "choices": [{"delta": {"tool_calls": [{
+            "index": 0,
+            "id": "call_00_X",
+            "type": "function",
+            "function": {"name": "ask_user", "arguments": ""},
+        }]}}]},
+    ]
+    chunks += [
+        {"model": "m", "choices": [{"delta": {"tool_calls": [{
+            "index": 0,
+            "function": {"arguments": payload[i : i + 2]},
+        }]}}]}
+        for i in range(0, len(payload), 2)
+    ]
+    chunks.append(
+        {"model": "m", "choices": [{"delta": {}, "finish_reason": "tool_calls"}]}
+    )
+
+    events = list(_compatible_transport_with_chunks(chunks).stream_completion(model="m", messages=[]))
+    merged = "".join(event.arguments_delta for event in events if event.kind == "tool_call_delta")
+    assert json.loads(merged) == json.loads(payload)
+
+
+def test_stream_worker_parsed_args_reject_corrupt_json_instead_of_empty_object():
+    """Corrupt streamed arguments must surface as an identifiable transport
+    error, not as {} (which reads back to the model as 'you built the
+    arguments wrong' and triggers blind retries)."""
+    import agent_openai
+
+    acc = {0: {"id": "call_1", "name": "ask_user", "arguments": '{"questions": [label": broken'}}
+    parsed = agent_openai._tool_acc_to_parsed_list(acc)
+    assert parsed is not None
+    call = parsed[0]
+    assert call["name"] == "ask_user"
+    assert "_stream_corrupted_arguments" in call["args"]
+
+    # Empty-arguments calls (no args streamed at all) still parse to {}.
+    empty = agent_openai._tool_acc_to_parsed_list(
+        {0: {"id": "call_2", "name": "ask_user", "arguments": ""}}
+    )
+    assert empty[0]["args"] == {}
+
+
+def test_session_candidates_only_fallback_to_same_wire_protocol(tmp_path, monkeypatch):
+    """fallback 候选链只包含同 llm_type 的模型：responses 不切 chat,反之亦然。"""
+    import model_profiles
+    import agent_harness
+
+    model_profiles.upsert_profile(tmp_path, {
+        "model": "muse-responses", "llm_type": "openai-responses",
+        "base_url": "https://opencode.ai/zen/v1", "api_key": "k",
+        "context_window": 1000, "max_output_tokens": 100,
+    })
+    model_profiles.upsert_profile(tmp_path, {
+        "model": "deepseek-chat", "llm_type": "openai-compatible",
+        "base_url": "https://api.deepseek.com", "api_key": "k2",
+        "context_window": 1000, "max_output_tokens": 100,
+    })
+    model_profiles.upsert_profile(tmp_path, {
+        "model": "gpt-responses-2", "llm_type": "openai-responses",
+        "base_url": "https://opencode.ai/zen/v1", "api_key": "k",
+        "context_window": 1000, "max_output_tokens": 100,
+    })
+
+    monkeypatch.setattr(agent_harness, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(agent_harness, "_executor_profile_catalog_cache", None)
+
+    profiles, ordered_ids, _top = agent_harness._executor_profile_catalog()
+    monkeypatch.setattr(
+        agent_harness.session_manager, "_load_metadata", lambda _sid: {
+            "model_profile_id": ordered_ids[0]
+        }
+    )
+
+    candidates = agent_harness.resolve_executor_candidates_for_session("sess-x")
+    models = [str(c.get("model") or "") for c in candidates]
+    # 绑定 responses → 链里只能有 responses 模型
+    assert models == ["muse-responses", "gpt-responses-2"], models
+
+    # 绑定 chat → 链里只能有 chat 模型
+    chat_pid = next(
+        pid for pid, p in profiles.items() if str(p.get("model")) == "deepseek-chat"
+    )
+    monkeypatch.setattr(
+        agent_harness.session_manager, "_load_metadata", lambda _sid: {
+            "model_profile_id": chat_pid
+        }
+    )
+    candidates = agent_harness.resolve_executor_candidates_for_session("sess-y")
+    assert [str(c.get("model") or "") for c in candidates] == ["deepseek-chat"]

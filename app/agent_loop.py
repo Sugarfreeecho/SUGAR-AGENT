@@ -746,6 +746,43 @@ def _unknown_tool_result(
     }
 
 
+_STREAM_CORRUPTED_ARGUMENTS_KEY = "_stream_corrupted_arguments"
+
+
+def _corrupted_stream_args_result(
+    tool_name: str,
+    tool_id: str,
+    tool_call_index: Any = None,
+    corrupted_length: int = 0,
+) -> Dict[str, Any]:
+    """Tool-protocol error for arguments lost/corrupted in the LLM stream.
+
+    Marks the failure as a transport fault so the model retries the same call
+    instead of rewriting arguments it believes were wrong.
+    """
+    message = (
+        f"传输层错误：`{tool_name}` 的流式参数 JSON 损坏（收到 {corrupted_length} 字符但无法解析），"
+        "本次调用未执行。这不是参数构造问题；请直接重试同样的工具调用。"
+        "若连续失败，请改用参数更简单的替代方案。"
+    )
+    result = {
+        "type": "tool",
+        "tool_name": tool_name,
+        "tool_args": {},
+        "tool_id": tool_id,
+        "result": message,
+        "tool_detail_log": message,
+        "tool_detail_llm": message,
+        "tool_detail_ui": message,
+        "result_for_log": message,
+        "tool_failed": True,
+        "tool_status": _tool_result_status(tool_name, message, failed=True),
+    }
+    if tool_call_index is not None:
+        result["tool_call_index"] = tool_call_index
+    return result
+
+
 async def _apply_stop_hooks(
     state: Dict[str, Any],
     emit: Optional[Callable[[Dict[str, Any]], Any]],
@@ -4983,6 +5020,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                                 "session_id": state["session_id"],
                                 "risk": review.risk,
                                 "reason": review.reason,
+                                "intercept_reason": review.intercept_reason,
                                 "risk_analysis": review.risk_analysis,
                                 "command_purpose": review.command_purpose,
                                 "content": (
@@ -5700,6 +5738,14 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                     return short_circuit(
                         _unknown_tool_result(tool_name, tool_args, tool_id)
                     )
+                if isinstance(tool_args.get(_STREAM_CORRUPTED_ARGUMENTS_KEY), str):
+                    corrupted = _corrupted_stream_args_result(
+                        tool_name,
+                        tool_id,
+                        call.get("index"),
+                        corrupted_length=len(tool_args[_STREAM_CORRUPTED_ARGUMENTS_KEY]),
+                    )
+                    return short_circuit(corrupted)
                 pre = await _dispatch_state_hook(
                     "PreToolUse",
                     state,
@@ -6062,6 +6108,11 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
             request_scope_setter = getattr(iter_client, "set_request_scope", None)
             if callable(request_scope_setter):
                 request_scope_setter(str(state.get("_runtime_v2_run_id") or ""))
+                # 登记该会话的 live run scope，手动切换模型时可清空
+                # 该 run 的熔断记录，让新选择立即生效。
+                register_run_scope = getattr(iter_client, "note_scope_session", None)
+                if callable(register_run_scope):
+                    register_run_scope(str(state.get("session_id") or ""))
 
             def _early_tool_call_from_acc(idx: int) -> Optional[Dict[str, Any]]:
                 row = early_tool_acc.get(int(idx))

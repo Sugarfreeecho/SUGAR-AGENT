@@ -48,6 +48,8 @@ from agent_messages import UserMessage, AssistantMessage, ToolMessage, SystemMes
 from agent_openai import (
     _api_messages_have_media,
     _api_messages_required_modalities,
+    _classify_candidate_failure,
+    _candidate_retry_policy,
     _is_media_input_error,
     _media_error_modalities,
     _messages_to_params_for_client,
@@ -1154,40 +1156,72 @@ class _FallbackCompletions:
                         "当前模型故障，按优先级切换到备用模型: %s",
                         _masked_model_label(str(item.get("model") or "")),
                     )
-                try:
-                    return item["client"].chat.completions.create(**call_kwargs)
-                except Exception as exc:
-                    if (
-                        request_has_media
-                        and required_modalities.issubset(
-                            _candidate_input_modalities(item)
-                        )
-                        and _is_media_input_error(exc)
-                    ):
-                        rejected_modalities = _media_error_modalities(
-                            exc, required_modalities
-                        )
-                        item["input_modalities"] = [
-                            modality
-                            for modality in (item.get("input_modalities") or [])
-                            if modality not in rejected_modalities
-                        ]
-                        item["multimodal_input"] = any(
-                            modality in {"image", "audio", "video", "file"}
-                            for modality in item["input_modalities"]
-                        )
-                        mark_failed = item.get("mark_modalities_failed")
-                        if callable(mark_failed):
-                            mark_failed(sorted(rejected_modalities), exc)
-                        else:
-                            legacy_mark_failed = item.get("mark_multimodal_failed")
-                            if callable(legacy_mark_failed):
-                                legacy_mark_failed(exc)
-                        self._emit_multimodal_fallback_status(
-                            str(item.get("model") or "")
-                        )
-                    raise
+                retry_attempts, retry_backoff = _candidate_retry_policy()
+                retry_index = 0
+                while True:
+                    try:
+                        result = item["client"].chat.completions.create(**call_kwargs)
+                        adopt = getattr(self, "_maybe_adopt_fallback_profile", None)
+                        if callable(adopt):
+                            adopt(item)
+                        return result
+                    except Exception as exc:
+                        if _is_network_connectivity_error(exc) and not machine_network_available():
+                            raise LocalNetworkUnavailableError(
+                                "The local machine is offline; waiting for network recovery."
+                            ) from exc
+                        if (
+                            retry_index < retry_attempts
+                            and _classify_candidate_failure(exc) == "retry"
+                            and _claim_additional_recovery_request()
+                        ):
+                            retry_index += 1
+                            logger.warning(
+                                "模型瞬时故障，同模型重试 %s/%s: model=%s error=%s",
+                                retry_index,
+                                retry_attempts,
+                                _masked_model_label(str(item.get("model") or "")),
+                                _redact_runtime_log_text(exc),
+                            )
+                            if retry_backoff > 0:
+                                time.sleep(retry_backoff)
+                            continue
+                        if (
+                            request_has_media
+                            and required_modalities.issubset(
+                                _candidate_input_modalities(item)
+                            )
+                            and _is_media_input_error(exc)
+                        ):
+                            rejected_modalities = _media_error_modalities(
+                                exc, required_modalities
+                            )
+                            item["input_modalities"] = [
+                                modality
+                                for modality in (item.get("input_modalities") or [])
+                                if modality not in rejected_modalities
+                            ]
+                            item["multimodal_input"] = any(
+                                modality in {"image", "audio", "video", "file"}
+                                for modality in item["input_modalities"]
+                            )
+                            mark_failed = item.get("mark_modalities_failed")
+                            if callable(mark_failed):
+                                mark_failed(sorted(rejected_modalities), exc)
+                            else:
+                                legacy_mark_failed = item.get("mark_multimodal_failed")
+                                if callable(legacy_mark_failed):
+                                    legacy_mark_failed(exc)
+                            self._emit_multimodal_fallback_status(
+                                str(item.get("model") or "")
+                            )
+                        raise
+                raise
             except Exception as exc:
+                if isinstance(exc, LocalNetworkUnavailableError):
+                    # 内层重试循环已判定本机离线并包装；此处必须放行，
+                    # 不能把“暂停回退”信号当作普通候选失败继续切换。
+                    raise
                 if _is_network_connectivity_error(exc) and not machine_network_available():
                     logger.info(
                         "本机网络不可用，暂停模型回退: model=%s",
@@ -1227,6 +1261,120 @@ class _FallbackCompletions:
             logger.debug("多模态回退状态回调失败", exc_info=True)
 
 
+class _ScopeClientRegistry:
+    """Track which ExecutorLLMClient instances recently served each run scope.
+
+    The failure circuit map is keyed by run id, but a manual model switch
+    arrives with only the session id.  This registry bridges the two so the
+    switch endpoint can drop the run's circuit and sticky-model records.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        # scope -> weak-ish list of clients (bounded, deduplicated)
+        self._by_scope: Dict[str, List["ExecutorLLMClient"]] = {}
+
+    def register(self, scope: str, client: "ExecutorLLMClient") -> None:
+        key = str(scope or "").strip()
+        if not key:
+            return
+        with self._lock:
+            clients = [c for c in self._by_scope.get(key, []) if c is not client]
+            clients.append(client)
+            self._by_scope[key] = clients[-8:]
+            while len(self._by_scope) > 256:
+                oldest = next(iter(self._by_scope))
+                self._by_scope.pop(oldest, None)
+
+    def reset_scope(self, scope: str) -> int:
+        key = str(scope or "").strip()
+        if not key:
+            return 0
+        reset_count = 0
+        with self._lock:
+            clients = list(self._by_scope.get(key, []))
+        for client in clients:
+            reset = getattr(client, "reset_failure_state", None)
+            if callable(reset):
+                try:
+                    reset()
+                    reset_count += 1
+                except Exception:
+                    logger.debug("重置客户端模型熔断状态失败", exc_info=True)
+        with self._lock:
+            self._by_scope.pop(key, None)
+        return reset_count
+
+
+_scope_client_registry = _ScopeClientRegistry()
+
+# session_id -> {run scope, ...}：记录会话的 live run，供 fallback 接管后
+# 把会话绑定同步为实际服务的模型。
+_session_run_scopes: Dict[str, set] = {}
+
+
+def adopt_fallback_profile_for_session(session_id: str, profile_id: str) -> bool:
+    """Persist a fallback takeover as the session's bound model profile.
+
+    用户要求：右下角选择器与实际使用的模型绑定。fallback 接管后把会话的
+    ``model_profile_id`` 改写为实际服务的 profile，下一次请求以及前端
+    选择器都以它为准；原失败的模型留在候选链里仍可被再次兜底。
+    """
+    sid = str(session_id or "").strip()
+    pid = str(profile_id or "").strip()
+    if not sid or not pid:
+        return False
+    try:
+        meta = session_manager._load_metadata(sid)
+        if not isinstance(meta, dict):
+            meta = {}
+        previous_pid = str(meta.get("model_profile_id") or "").strip()
+        if previous_pid == pid:
+            return True
+        meta["model_profile_id"] = pid
+        meta["updated_at"] = datetime.now().isoformat()
+        history = meta.get("model_switch_history")
+        if not isinstance(history, list):
+            history = []
+        meta["model_switch_history"] = [
+            *history[-49:],
+            {
+                "switch_id": uuid.uuid4().hex,
+                "from_profile_id": previous_pid,
+                "to_profile_id": pid,
+                "requested_by": "fallback",
+                "switched_at": datetime.now(timezone.utc).isoformat(),
+            },
+        ]
+        with session_manager._session_metadata_lock(sid):
+            session_manager._save_metadata_unlocked(sid, meta)
+        _invalidate_executor_config_cache(sid)
+        return True
+    except Exception:
+        logger.debug("fallback 接管后同步会话模型绑定失败", exc_info=True)
+        return False
+
+
+def reset_executor_failure_state_for_session(session_id: str) -> int:
+    """Clear run-scoped model circuits for a session's live runs.
+
+    Manual profile switches keep the failure circuit and the sticky
+    last-successful candidate by design; this helper exists for paths that
+    explicitly need a clean slate (currently unused by the switch endpoint).
+    """
+    sid = str(session_id or "").strip()
+    if not sid:
+        return 0
+    scopes: List[str] = []
+    with _executor_failure_lock:
+        scopes = list(_session_run_scopes.get(sid, set()))
+    reset_count = 0
+    for scope in scopes:
+        reset_count += _scope_client_registry.reset_scope(scope)
+    _session_run_scopes.pop(sid, None)
+    return reset_count
+
+
 class _FallbackChat:
     def __init__(
         self,
@@ -1256,6 +1404,8 @@ class ExecutorLLMClient:
         self.chat = _FallbackChat(candidates)
         self._failure_lock = failure_lock or threading.RLock()
         self._request_scope = ""
+        self._bound_session_id = ""
+        self._fallback_adopted_callback: Optional[Callable[[str, str, str], None]] = None
         self._failed_candidates_by_scope = (
             failed_candidates_by_scope
             if failed_candidates_by_scope is not None
@@ -1288,9 +1438,72 @@ class ExecutorLLMClient:
             self._request_scope = value
             if value:
                 self._failed_candidates_by_scope.setdefault(value, set())
+                # 记录 scope → 最近使用该 scope 的客户端实例，供手动切换
+                # 模型时按会话清空熔断记录。
+                _scope_client_registry.register(value, self)
             while len(self._failed_candidates_by_scope) > 128:
                 oldest = next(iter(self._failed_candidates_by_scope))
                 self._failed_candidates_by_scope.pop(oldest, None)
+
+    def reset_failure_state(self) -> None:
+        """Drop run-scoped failure circuits and the sticky successful model.
+
+        Called when the user manually switches the session model: the new
+        choice must start clean instead of being skipped because the same
+        profile failed earlier in the current run, and UI-facing
+        ``current_candidate`` must not keep reporting a model the user just
+        replaced.
+        """
+        with self._failure_lock:
+            scope = self._request_scope
+            if scope:
+                self._failed_candidates_by_scope.pop(scope, None)
+            self._last_successful_candidate_key = ""
+
+    def note_scope_session(self, session_id: str) -> None:
+        """Associate the current run scope with its session for later resets."""
+        sid = str(session_id or "").strip()
+        with self._failure_lock:
+            scope = self._request_scope
+        if not sid or not scope:
+            return
+        self._bound_session_id = sid
+        with _executor_failure_lock:
+            scopes = _session_run_scopes.setdefault(sid, set())
+            scopes.add(scope)
+            while len(scopes) > 8:
+                scopes.discard(next(iter(scopes)))
+            while len(_session_run_scopes) > 512:
+                oldest = next(iter(_session_run_scopes))
+                _session_run_scopes.pop(oldest, None)
+
+    def _maybe_adopt_fallback_profile(self, candidate: Dict[str, Any]) -> None:
+        """Bind the session to the profile that actually served the request.
+
+        用户要求“使用模型与右下角选择绑定”：fallback 接管成功后把会话
+        绑定改写为实际服务的 profile，前端选择器随事件流同步刷新。
+        熔断记录与粘滞的“最近成功模型”保持不变——那是兜底机制的基石。
+        """
+        sid = str(self._bound_session_id or "").strip()
+        if not sid:
+            return
+        pid = str(candidate.get("profile_id") or "").strip()
+        if not pid:
+            return
+        try:
+            meta = session_manager._load_metadata(sid)
+            bound = str((meta or {}).get("model_profile_id") or "").strip()
+        except Exception:
+            bound = ""
+        if bound == pid:
+            return
+        if adopt_fallback_profile_for_session(sid, pid):
+            cb = self._fallback_adopted_callback
+            if callable(cb):
+                try:
+                    cb(sid, pid, str(candidate.get("model") or ""))
+                except Exception:
+                    logger.debug("fallback 接管通知回调失败", exc_info=True)
 
     def current_candidate(self) -> Dict[str, Any]:
         """Return the model that most recently completed a main-agent request."""
@@ -1482,91 +1695,114 @@ class ExecutorLLMClient:
             if transport is None:
                 raise RuntimeError("model candidate has no LLM transport")
             emitted_output = False
-            try:
-                if attempted_candidates > 0:
-                    if last_error is not None:
-                        self.chat.completions._emit_model_switch_status(
-                            last_model,
-                            str(item.get("model") or ""),
-                            last_error,
+            retry_attempts, retry_backoff = _candidate_retry_policy()
+            retry_index = 0
+            while True:
+                try:
+                    if attempted_candidates > 0:
+                        if last_error is not None:
+                            self.chat.completions._emit_model_switch_status(
+                                last_model,
+                                str(item.get("model") or ""),
+                                last_error,
+                            )
+                        logger.warning(
+                            "当前模型故障，按优先级切换到备用模型: %s",
+                            _masked_model_label(str(item.get("model") or "")),
                         )
-                    logger.warning(
-                        "当前模型故障，按优先级切换到备用模型: %s",
-                        _masked_model_label(str(item.get("model") or "")),
-                    )
-                attempted_candidates += 1
-                pending_events: List[TransportEvent] = []
-                emitted_content = False
-                _attempt_started = time.perf_counter()
-                for event in transport.stream_completion(**call_kwargs):
-                    if background_text_request and not emitted_content:
-                        pending_events.append(event)
-                        if (
-                            isinstance(event, TransportEvent)
-                            and event.kind == "content_delta"
-                            and bool(event.text)
-                        ):
-                            emitted_content = True
+                    attempted_candidates += 1
+                    pending_events: List[TransportEvent] = []
+                    emitted_content = False
+                    _attempt_started = time.perf_counter()
+                    for event in transport.stream_completion(**call_kwargs):
+                        if background_text_request and not emitted_content:
+                            pending_events.append(event)
+                            if (
+                                isinstance(event, TransportEvent)
+                                and event.kind == "content_delta"
+                                and bool(event.text)
+                            ):
+                                emitted_content = True
+                                emitted_output = True
+                                yield from pending_events
+                                pending_events = []
+                            continue
+                        if isinstance(event, TransportEvent) and event.is_first_token:
                             emitted_output = True
-                            yield from pending_events
-                            pending_events = []
-                        continue
-                    if isinstance(event, TransportEvent) and event.is_first_token:
-                        emitted_output = True
-                    yield event
-                if background_text_request and not emitted_content:
-                    raise ValueError("background LLM stream returned no text content")
-                with self._failure_lock:
-                    self._last_successful_candidate_key = circuit_key
-                return
-            except Exception as exc:
-                # Once visible output exists, switching providers would splice two
-                # different answers into one assistant turn.
-                if emitted_output:
-                    raise
-                if (
-                    request_has_media
-                    and required_modalities.issubset(_candidate_input_modalities(item))
-                    and _is_media_input_error(exc)
-                ):
-                    rejected_modalities = _media_error_modalities(exc, required_modalities)
-                    item["input_modalities"] = [
-                        modality
-                        for modality in (item.get("input_modalities") or [])
-                        if modality not in rejected_modalities
-                    ]
-                    item["multimodal_input"] = any(
-                        modality in {"image", "audio", "video", "file"}
-                        for modality in item["input_modalities"]
-                    )
-                    mark_failed = item.get("mark_modalities_failed")
-                    if callable(mark_failed):
-                        mark_failed(sorted(rejected_modalities), exc)
-                    self.chat.completions._emit_multimodal_fallback_status(
-                        str(item.get("model") or "")
-                    )
-                if _is_network_connectivity_error(exc) and not machine_network_available():
-                    raise LocalNetworkUnavailableError(
-                        "The local machine is offline; waiting for network recovery."
-                    ) from exc
-                media_only_failure = request_has_media and _is_media_input_error(exc)
-                if request_scope and not media_only_failure:
+                        yield event
+                    if background_text_request and not emitted_content:
+                        raise ValueError("background LLM stream returned no text content")
                     with self._failure_lock:
-                        scoped_failures = self._failed_candidates_by_scope.setdefault(
-                            request_scope,
-                            set(),
+                        self._last_successful_candidate_key = circuit_key
+                    # 会话绑定跟随实际服务者（右下角选择器同步）；仅在
+                    # fallback 接管（非第一候选）或绑定漂移时真正写盘。
+                    self._maybe_adopt_fallback_profile(item)
+                    return
+                except Exception as exc:
+                    # Once visible output exists, switching providers would splice two
+                    # different answers into one assistant turn.
+                    if emitted_output:
+                        raise
+                    if _is_network_connectivity_error(exc) and not machine_network_available():
+                        raise LocalNetworkUnavailableError(
+                            "The local machine is offline; waiting for network recovery."
+                        ) from exc
+                    if (
+                        retry_index < retry_attempts
+                        and _classify_candidate_failure(exc) == "retry"
+                        and _claim_additional_recovery_request()
+                    ):
+                        retry_index += 1
+                        logger.warning(
+                            "模型瞬时故障，同模型重试 %s/%s: model=%s error=%s",
+                            retry_index,
+                            retry_attempts,
+                            _masked_model_label(str(item.get("model") or "")),
+                            _redact_runtime_log_text(exc),
                         )
-                        scoped_failures.add(circuit_key)
-                    failed_candidates.add(circuit_key)
-                last_error = exc
-                last_model = str(item.get("model") or "")
-                logger.warning(
-                    "模型调用失败: model=%s provider=%s ms=%s error=%s",
-                    _masked_model_label(last_model),
-                    item.get("provider") or "unknown",
-                    int(max(0.0, (time.perf_counter() - _attempt_started) * 1000)),
-                    _redact_runtime_log_text(exc),
-                )
+                        if retry_backoff > 0:
+                            time.sleep(retry_backoff)
+                        continue
+                    if (
+                        request_has_media
+                        and required_modalities.issubset(_candidate_input_modalities(item))
+                        and _is_media_input_error(exc)
+                    ):
+                        rejected_modalities = _media_error_modalities(exc, required_modalities)
+                        item["input_modalities"] = [
+                            modality
+                            for modality in (item.get("input_modalities") or [])
+                            if modality not in rejected_modalities
+                        ]
+                        item["multimodal_input"] = any(
+                            modality in {"image", "audio", "video", "file"}
+                            for modality in item["input_modalities"]
+                        )
+                        mark_failed = item.get("mark_modalities_failed")
+                        if callable(mark_failed):
+                            mark_failed(sorted(rejected_modalities), exc)
+                        self.chat.completions._emit_multimodal_fallback_status(
+                            str(item.get("model") or "")
+                        )
+                    media_only_failure = request_has_media and _is_media_input_error(exc)
+                    if request_scope and not media_only_failure:
+                        with self._failure_lock:
+                            scoped_failures = self._failed_candidates_by_scope.setdefault(
+                                request_scope,
+                                set(),
+                            )
+                            scoped_failures.add(circuit_key)
+                        failed_candidates.add(circuit_key)
+                    last_error = exc
+                    last_model = str(item.get("model") or "")
+                    logger.warning(
+                        "模型调用失败: model=%s provider=%s ms=%s error=%s",
+                        _masked_model_label(last_model),
+                        item.get("provider") or "unknown",
+                        int(max(0.0, (time.perf_counter() - _attempt_started) * 1000)),
+                        _redact_runtime_log_text(exc),
+                    )
+                    break
         if last_error is not None:
             raise last_error
         if failed_candidates:
@@ -6598,7 +6834,26 @@ def resolve_executor_candidates_for_session(
 
     if profile_id:
         add_candidate(profile_id)
+    # fallback 只在同协议模型之间切换（chat↔chat、responses↔responses、
+    # anthropic↔anthropic）：跨类型切换意味着 wire 协议、思考字段与
+    # tool_call_id 形态全部改变，历史回放极易出错。以第一候选（会话
+    # 绑定的模型）的解析 provider 为基准过滤其余候选。
+    primary_provider = None
+    if candidates:
+        try:
+            primary_provider = resolve_profile_provider(
+                profiles.get(str(candidates[0].get("profile_id") or "")) or {}
+            )
+        except Exception:
+            primary_provider = None
     for pid in ordered_ids:
+        if primary_provider is not None:
+            profile = profiles.get(pid)
+            try:
+                if resolve_profile_provider(profile or {}) != primary_provider:
+                    continue
+            except Exception:
+                continue
         add_candidate(pid)
     if candidates and runtime_snapshot:
         frozen = dict(candidates[0])

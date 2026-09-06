@@ -1516,16 +1516,19 @@ class OpenAICompatibleTransport:
                     _get(fn, "name", default="") or "",
                 )
                 name_delta = state["name"] if state["name"] != previous_name else ""
-                state["arguments"], arguments_delta = _merge_streamed_piece(
-                    state["arguments"],
-                    _get(fn, "arguments", default="") or "",
-                )
+                # Chat Completions arguments are always pure deltas: every
+                # chunk carries a fragment to append, never a snapshot to
+                # dedupe.  Accumulate verbatim — a prefix-dropping merge would
+                # discard recurring fragments like `{"` (every nested object
+                # starts with one) and silently corrupt the JSON.
+                fragment = _get(fn, "arguments", default="") or ""
+                state["arguments"] += str(fragment)
                 yield TransportEvent(
                     "tool_call_delta",
                     index=index,
                     tool_call_id=id_delta,
                     tool_name=name_delta,
-                    arguments_delta=arguments_delta,
+                    arguments_delta=str(fragment),
                     model=model,
                 )
             finish = _get(choice, "finish_reason")

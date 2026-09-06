@@ -657,6 +657,123 @@ def anthropic_messages_url_for_base(base_url: str) -> str:
     return base + "/v1/messages"
 
 
+_WIRE_PROTOCOL_TIMEOUT = 12.0
+
+
+def _wire_probe_payload(provider_value: str, model_id: str) -> dict:
+    if provider_value == "openai-responses":
+        return {
+            "model": model_id,
+            "input": [{"role": "user", "content": "ping"}],
+            "max_output_tokens": 1,
+            "stream": False,
+        }
+    if provider_value == "anthropic":
+        return {
+            "model": model_id,
+            "messages": [{"role": "user", "content": "ping"}],
+            "max_tokens": 1,
+            "stream": False,
+        }
+    return {
+        "model": model_id,
+        "messages": [{"role": "user", "content": "ping"}],
+        "max_tokens": 1,
+        "stream": False,
+    }
+
+
+def _wire_probe_headers(provider_value: str, api_key: str) -> dict:
+    headers: dict[str, str] = {"Content-Type": "application/json"}
+    key = str(api_key or "").strip()
+    if not key:
+        return headers
+    if provider_value == "anthropic":
+        headers["x-api-key"] = key
+        headers["anthropic-version"] = "2023-06-01"
+    else:
+        headers["Authorization"] = "Bearer " + key
+    return headers
+
+
+def _wire_route_missing(provider_value: str, status: int, body: Any) -> bool:
+    """Whether the endpoint says this wire route does not exist at all."""
+    if status in (404, 405):
+        return True
+    if isinstance(body, (dict, list)):
+        text = json.dumps(body, ensure_ascii=False)
+    else:
+        text = str(body or "")
+    lowered = text.lower()
+    if status == 400 and ("not found" in lowered or "unknown route" in lowered):
+        return True
+    return False
+
+
+def detect_wire_protocol(
+    base_url: str,
+    api_key: str,
+    model_id: str,
+    timeout: float = _WIRE_PROTOCOL_TIMEOUT,
+) -> Optional[str]:
+    """Probe which wire protocol an endpoint actually serves for this model.
+
+    Sends a minimal request over each candidate route and judges by the
+    response: 2xx means supported; 4xx that argues about request fields
+    (auth, context, unknown parameter) means the route exists and speaks
+    that protocol; 404/405-style answers mean the route is absent.
+    Returns one of ``openai-responses`` / ``openai-compatible`` / ``anthropic``
+    or None when nothing could be determined (offline, quota walls, etc).
+    """
+    base = _normalize_base_url(base_url)
+    mid = str(model_id or "").strip()
+    if not base or not mid:
+        return None
+    candidates: list[tuple[str, str]] = [
+        ("openai-compatible", chat_completions_url_for_base(base)),
+        ("openai-responses", responses_url_for_base(base)),
+    ]
+    if mid.lower().startswith("claude"):
+        candidates.insert(0, ("anthropic", anthropic_messages_url_for_base(base)))
+    supported: list[str] = []
+    with httpx.Client(timeout=timeout) as client:
+        for provider_value, url in candidates:
+            if not url:
+                continue
+            try:
+                response = client.post(
+                    url,
+                    headers=_wire_probe_headers(provider_value, api_key),
+                    json=_wire_probe_payload(provider_value, mid),
+                )
+            except Exception:
+                continue
+            if 200 <= response.status_code < 300:
+                supported.append(provider_value)
+                continue
+            body: Any = None
+            try:
+                body = response.json()
+            except Exception:
+                body = response.text[:500]
+            if _wire_route_missing(provider_value, response.status_code, body):
+                continue
+            if 400 <= response.status_code < 500:
+                # The route answered with a request-level complaint (auth,
+                # quota, unknown field, context window) so it exists and
+                # parses this wire protocol.
+                supported.append(provider_value)
+    if len(supported) == 1:
+        return supported[0]
+    if len(supported) > 1:
+        # Chat Completions is the most widely shared dialect across
+        # aggregators; prefer it when a gateway mirrors multiple routes.
+        if "openai-compatible" in supported:
+            return "openai-compatible"
+        return supported[0]
+    return None
+
+
 def extract_context_window_from_error(error_body: Any) -> int:
     if isinstance(error_body, (dict, list)):
         text = json.dumps(error_body, ensure_ascii=False)
@@ -1054,8 +1171,33 @@ def upsert_profile(project_root: Path, payload: dict) -> dict:
         raise ValueError("missing model")
     if not base_url:
         raise ValueError("missing base_url")
-    llm_type = normalize_provider(payload.get("llm_type") or "auto").value
-    provider = resolve_provider(llm_type, base_url, model)
+    # Persist the provider semantics v2 canonical value so the stored
+    # ``llm_type`` cannot be re-interpreted differently by resolve time:
+    # explicit chat stays ``openai-compatible``; explicit Responses stays
+    # ``openai-responses``.  ``auto`` is kept as-is so the endpoint inference
+    # still applies on every load.  The raw string is mapped directly (not
+    # through LLMProvider, whose ``openai`` member predates the v2 split).
+    raw_llm_type = str(payload.get("llm_type") or "auto").strip().lower() or "auto"
+    provider = resolve_provider(raw_llm_type, base_url, model)
+    if raw_llm_type == "auto":
+        # A real probe beats hostname guessing: ask the endpoint which wire
+        # protocol it actually serves for this model.  Fall back to endpoint
+        # inference only when the probe cannot tell (offline, quota walls).
+        detected = detect_wire_protocol(base_url, incoming_api_key or existing_api_key, model)
+        if detected:
+            llm_type = detected
+            provider = resolve_provider(detected, base_url, model)
+        else:
+            llm_type = "auto"
+    elif raw_llm_type in {"openai-responses", "responses", "@ai-sdk/openai"}:
+        llm_type = "openai-responses"
+    elif raw_llm_type in {"openai-compatible", "openai_compatible", "compatible", "chat-completions", "local", "@ai-sdk/openai-compatible"}:
+        llm_type = "openai-compatible"
+    elif raw_llm_type == "openai":
+        # v2 UI semantics: a bare explicit ``openai`` selects chat-completions.
+        llm_type = "openai-compatible"
+    else:
+        llm_type = canonical_llm_type(normalize_provider(raw_llm_type))
     if (
         provider is not LLMProvider.OPENAI_COMPATIBLE
         and not incoming_api_key

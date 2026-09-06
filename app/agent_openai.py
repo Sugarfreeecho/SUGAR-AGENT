@@ -246,6 +246,61 @@ def _is_retriable_openai_error(exc: BaseException) -> bool:
         return False
 
 
+# 模型兜底前的错误分诊：
+#   "switch"   —— 确定性失败（4xx 参数/鉴权/内容类）与连接类错误，同模型重试无意义或
+#                 换端点更合理（既有契约：在线时 connect error 直接用 backup），立即换模型；
+#   "retry"    —— 瞬时故障（429 限流、超时、5xx），同模型退避重试更可能省一次切换；
+#   "fallback" —— 其余未知错误，保守起见直接换模型。
+# 本机断网由调用方先行检查（暂停回退），不到达本分类器。重试次数与退避可经环境变量调整。
+def _classify_candidate_failure(exc: BaseException) -> str:
+    status_code = getattr(exc, "status_code", None)
+    try:
+        status_code = int(status_code) if status_code is not None else None
+    except (TypeError, ValueError):
+        status_code = None
+    if status_code is not None:
+        if status_code == 429:
+            return "retry"
+        if 400 <= status_code < 500:
+            # 408/425 是超时类传输语义，与请求搁浅同性质。
+            if status_code in (408, 425):
+                return "retry"
+            return "switch"
+        if status_code >= 500:
+            return "retry"
+    if isinstance(exc, (KeyboardInterrupt, SystemExit)):
+        return "switch"
+    if type(exc).__name__ == "LocalNetworkUnavailableError":
+        return "switch"
+    if isinstance(exc, ConnectionError):
+        # 到该端点的连接建立失败：换一个端点（模型）比重试同一端点更合理。
+        return "switch"
+    msg = str(exc).lower()
+    if "timeout" in msg or "timed out" in msg:
+        return "retry"
+    if any(code in msg for code in ("429", "502", "503", "504", "529")):
+        return "retry"
+    try:
+        from openai import (
+            APITimeoutError,
+            InternalServerError,
+            RateLimitError,
+        )
+
+        if isinstance(exc, (APITimeoutError, RateLimitError, InternalServerError)):
+            return "retry"
+    except ImportError:
+        pass
+    return "fallback"
+
+
+def _candidate_retry_policy() -> tuple[int, float]:
+    """(同模型最大重试次数, 固定间隔秒)；环境变量可调，重试关闭时返回 (0, 0)。"""
+    attempts = max(0, int(os.getenv("LLM_CANDIDATE_RETRY_ATTEMPTS", "10")))
+    backoff = max(0.0, float(os.getenv("LLM_CANDIDATE_RETRY_BACKOFF_SEC", "1.0")))
+    return attempts, backoff
+
+
 @dataclass
 class AssistantTurn:
     """单次 provider 调用中 assistant 消息的统一结果。"""
@@ -1945,12 +2000,28 @@ def _tool_acc_to_parsed_list(tool_acc: Dict[int, Dict[str, str]]) -> Optional[Li
         row = tool_acc[i]
         name = (row.get("name") or "").strip()
         tid = row.get("id") or ""
-        raw_args = row.get("arguments") or "{}"
-        try:
-            args = json.loads(raw_args) if isinstance(raw_args, str) else (raw_args or {})
-        except json.JSONDecodeError:
-            logger.warning("流式工具参数 JSON 未完整或无效，使用空对象: %s", raw_args[:200])
-            args = {}
+        raw_args = row.get("arguments") or ""
+        if isinstance(raw_args, str) and raw_args.strip():
+            try:
+                args = json.loads(raw_args)
+            except json.JSONDecodeError as exc:
+                # Unreadable streamed arguments are a transport-layer fault,
+                # not a model request to validate. Keep the raw text so the
+                # tool layer can answer with an identifiable transport error
+                # instead of pretending the model sent an empty argument
+                # object (that misdirects the model into blind retries).
+                logger.warning(
+                    "流式工具参数 JSON 损坏（transport 层丢参或截断）: tool=%s error=%s args[:200]=%s",
+                    name or f"index{i}",
+                    exc,
+                    raw_args[:200],
+                )
+                tool_calls.append(
+                    {"name": name, "args": {"_stream_corrupted_arguments": raw_args}, "id": tid, "index": i}
+                )
+                continue
+        else:
+            args = raw_args if isinstance(raw_args, dict) else {}
         if not name and not args and not tid:
             continue
         tool_calls.append({"name": name, "args": args, "id": tid, "index": i})

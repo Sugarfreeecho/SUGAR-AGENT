@@ -414,4 +414,5 @@ document.addEventListener('myagent:language-change', function () {
     if (modelProfilesCache) renderModelProfileControl();
 });
 window.refreshModelProfileSelector = refreshModelProfileSelector;
+window.refreshModelProfileSelectorInBackground = refreshModelProfileSelectorInBackground;
 window.loadModelProfilesForSwitcher = loadModelProfilesForSwitcher;

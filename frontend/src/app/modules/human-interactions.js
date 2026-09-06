@@ -398,11 +398,49 @@ function autoReviewStatusElement(stream, toolCallId) {
     return el;
 }
 
-function appendApprovalReviewExplanation(container, riskAnalysis, commandPurpose, fallbackReason) {
+function interceptReasonFromReviewText(interceptReason, fallbackReason) {
+    var text = String(interceptReason || '').trim();
+    if (text) return text;
+    // 后端 reason 字段形如 "【拦截原因】…\n【命令风险】…\n【命令目的】…"。
+    // 旧事件未携带独立 intercept_reason 时，从这里把拦截原因摘出来。
+    var whole = String(fallbackReason || '').trim();
+    var match = /【拦截原因】\s*([\s\S]*?)(?:\n【命令风险】|$)/.exec(whole);
+    if (match) {
+        var extracted = match[1].trim();
+        if (extracted) return extracted;
+    }
+    return '';
+}
+
+function splitReviewExplanationText(interceptReason, riskAnalysis, commandPurpose, fallbackReason) {
+    // 把 review.reason / subtitle 这类 "【拦截原因】…\n【命令风险】…\n【命令目的】…"
+    // 文本拆成三段；已提供的独立字段优先。
+    var sections = { intercept: '', risk: '', purpose: '' };
+    var whole = String(fallbackReason || '').trim();
+    var interceptMatch = /【拦截原因】\s*([\s\S]*?)(?:\n【命令风险】|$)/.exec(whole);
+    var riskMatch = /【命令风险】\s*([\s\S]*?)(?:\n【命令目的】|$)/.exec(whole);
+    var purposeMatch = /【命令目的】\s*([\s\S]*)$/.exec(whole);
+    sections.intercept = String(interceptReason || '').trim()
+        || (interceptMatch && interceptMatch[1].trim() || '');
+    sections.risk = String(riskAnalysis || '').trim()
+        || (riskMatch && riskMatch[1].trim() || '');
+    sections.purpose = String(commandPurpose || '').trim()
+        || (purposeMatch && purposeMatch[1].trim() || '');
+    return sections;
+}
+
+function appendApprovalReviewExplanation(container, interceptReason, riskAnalysis, commandPurpose, fallbackReason) {
     if (!container) return;
+    var interceptText = interceptReasonFromReviewText(interceptReason, fallbackReason);
     var riskText = String(riskAnalysis || fallbackReason || '未提供具体风险说明。').trim();
     var purposeText = String(commandPurpose || '未提供命令用途说明。').trim();
     var explanation = humanElement('div', 'approval-review-explanation');
+    if (interceptText) {
+        var interceptRow = humanElement('div', 'approval-review-section');
+        interceptRow.appendChild(humanElement('strong', 'approval-review-section-label', '【拦截原因】'));
+        interceptRow.appendChild(humanElement('span', 'approval-review-section-text', interceptText));
+        explanation.appendChild(interceptRow);
+    }
     var riskRow = humanElement('div', 'approval-review-section');
     riskRow.appendChild(humanElement('strong', 'approval-review-section-label', '【命令风险】'));
     riskRow.appendChild(humanElement('span', 'approval-review-section-text', riskText));
@@ -448,6 +486,7 @@ function renderAutoReviewStatusEvent(ctx, event, runSessionId) {
     var approved = status === 'approved';
     var risk = String((event && event.risk) || 'unknown');
     var reason = String((event && event.reason) || '');
+    var interceptReason = String((event && event.intercept_reason) || '');
     var riskAnalysis = String((event && event.risk_analysis) || '');
     var commandPurpose = String((event && event.command_purpose) || '');
     var unknown = risk === 'unknown' || risk === 'timed_out';
@@ -464,7 +503,7 @@ function renderAutoReviewStatusEvent(ctx, event, runSessionId) {
         title.appendChild(humanElement('span', 'auto-review-risk', risk));
     }
     text.appendChild(title);
-    appendApprovalReviewExplanation(text, riskAnalysis, commandPurpose, reason);
+    appendApprovalReviewExplanation(text, interceptReason, riskAnalysis, commandPurpose, reason);
     if (!approved && !unknown) {
         text.appendChild(humanElement(
             'div',
@@ -917,7 +956,41 @@ function createHumanApprovalCard(record, sessionId) {
     card.dataset.rejectionReasonSuggestion = String(record.rejection_reason_suggestion || '').trim();
     appendHumanCardHeader(card, record, 'approval');
     var body = humanElement('div', 'human-card-body');
-    if (record.subtitle) body.appendChild(humanElement('div', 'human-approval-subtitle', record.subtitle));
+    // 拦截原因 / 命令风险 / 命令目的 三段结构化展示。普通审批卡的
+    // subtitle 就是策略给出的拦截原因；自动审查覆盖卡的 subtitle 是
+    // "【拦截原因】…\n【命令风险】…\n【命令目的】…" 拼接文本，这里拆开。
+    var subtitle = String(record.subtitle || '').trim();
+    var hasReviewSections = subtitle.indexOf('【命令风险】') >= 0 || subtitle.indexOf('【命令目的】') >= 0;
+    if (subtitle) {
+        if (hasReviewSections) {
+            var sections = splitReviewExplanationText(
+                String(record.intercept_reason || ''),
+                String(record.risk_analysis || ''),
+                String(record.command_purpose || ''),
+                subtitle
+            );
+            if (sections.intercept) {
+                var interceptBox = humanElement('div', 'human-approval-review human-approval-review--intercept');
+                interceptBox.appendChild(humanElement('div', 'human-approval-review-label', '拦截原因'));
+                interceptBox.appendChild(humanElement('div', 'human-approval-review-text', sections.intercept));
+                body.appendChild(interceptBox);
+            }
+            if (sections.risk) {
+                var riskBox = humanElement('div', 'human-approval-review human-approval-review--risk');
+                riskBox.appendChild(humanElement('div', 'human-approval-review-label', '命令风险'));
+                riskBox.appendChild(humanElement('div', 'human-approval-review-text', sections.risk));
+                body.appendChild(riskBox);
+            }
+            if (sections.purpose) {
+                var purposeBox = humanElement('div', 'human-approval-review human-approval-review--purpose');
+                purposeBox.appendChild(humanElement('div', 'human-approval-review-label', '命令目的'));
+                purposeBox.appendChild(humanElement('div', 'human-approval-review-text', sections.purpose));
+                body.appendChild(purposeBox);
+            }
+        } else {
+            body.appendChild(humanElement('div', 'human-approval-subtitle', subtitle));
+        }
+    }
     body.appendChild(humanElement('div', 'human-approval-message', record.message || '是否允许 Agent 执行此操作？'));
     if (danger && record.consequence) {
         body.appendChild(humanElement('div', 'human-approval-consequence', record.consequence));
@@ -1072,6 +1145,7 @@ async function analyzeHumanApproval(card) {
         panel.appendChild(heading);
         appendApprovalReviewExplanation(
             panel,
+            result.intercept_reason,
             result.risk_analysis,
             result.command_purpose,
             result.reason || '审查模型未提供理由。'

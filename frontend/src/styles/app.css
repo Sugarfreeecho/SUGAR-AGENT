@@ -5047,19 +5047,6 @@ body {
     overflow: hidden;
     transition: border-color 0.2s ease, box-shadow 0.2s ease, opacity 0.2s ease;
 }
-.human-question-card::before,
-.human-approval-card::before {
-    content: '';
-    position: absolute;
-    top: 0;
-    left: 0;
-    right: 0;
-    height: 3px;
-    background: linear-gradient(90deg, rgba(var(--accent-rgb), 0.85), rgba(var(--accent-rgb), 0.18));
-    pointer-events: none;
-}
-.human-approval-card::before { background: linear-gradient(90deg, rgba(249, 226, 175, 0.85), rgba(249, 226, 175, 0.18)); }
-.human-approval-card.is-danger::before { background: linear-gradient(90deg, rgba(243, 139, 168, 0.85), rgba(243, 139, 168, 0.18)); }
 .human-interaction-card.is-highlighted {
     border-color: var(--amber-accent);
     box-shadow: 0 0 0 4px rgba(249, 226, 175, 0.12), 0 14px 42px rgba(0, 0, 0, 0.24);
@@ -5180,6 +5167,9 @@ body {
 .human-approval-card.is-danger .human-approval-subtitle {
     color: var(--red-accent);
 }
+.human-approval-card.is-danger .human-approval-review--intercept { border-left-color: var(--red-accent, #f38ba8); }
+.human-approval-card.is-danger .human-approval-review--risk { border-left-color: var(--red-accent, #f38ba8); }
+.human-approval-card.is-danger .human-approval-review { border-color: rgba(243, 139, 168, 0.2); background: rgba(243, 139, 168, 0.06); }
 .human-approval-consequence {
     margin-top: 0.6rem;
     padding: 0.55rem 0.7rem;
@@ -5390,6 +5380,31 @@ body {
 .human-secondary-btn:disabled, .human-primary-btn:disabled { opacity: 0.38; cursor: default; filter: none; }
 .human-deny-btn { color: var(--red-accent); }
 .human-approval-subtitle { margin-bottom: 0.45rem; color: var(--amber-accent); font: 0.75rem var(--mono); }
+.human-approval-review {
+    margin: 0 0 0.5rem;
+    padding: 0.5rem 0.62rem;
+    border: 1px solid rgba(var(--accent-rgb), 0.14);
+    border-radius: 10px;
+    background: rgba(var(--accent-rgb), 0.05);
+}
+.human-approval-review--intercept { border-left: 3px solid var(--amber-accent, #f9e2af); }
+.human-approval-review--risk { border-left: 3px solid var(--red-accent, #f38ba8); }
+.human-approval-review--purpose { border-left: 3px solid var(--blue-accent, #89b4fa); }
+.human-approval-review-label {
+    margin-bottom: 0.22rem;
+    color: var(--text-tertiary);
+    font-size: 0.68rem;
+    font-weight: 750;
+    letter-spacing: 0.05em;
+}
+.human-approval-review-text {
+    color: var(--text-primary);
+    font-size: 0.8rem;
+    line-height: 1.5;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+:root.theme-light .human-approval-review { border-color: rgba(var(--brand-accent-rgb), 0.16); background: rgba(var(--brand-accent-rgb), 0.045); }
 .human-approval-message { color: var(--text-primary); line-height: 1.55; white-space: pre-wrap; }
 .human-approval-detail { display: flex; gap: 0.55rem; margin-top: 0.75rem; color: var(--text-tertiary); font-size: 0.75rem; }
 .human-approval-detail code { color: var(--text-soft); }

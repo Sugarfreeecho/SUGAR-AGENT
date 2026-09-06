@@ -427,6 +427,11 @@ async function consumeAgentSseResponseInner(response, runCtx, runSessionId, stre
                         var statusContent = String(parsed.content || '');
                         if (parsed.model_switch) {
                             appendModelSwitchStatus(runCtx, parsed, runSessionId);
+                            // 使用模型与选择器绑定：fallback 接管后服务端会把
+                            // 会话绑定改写为实际模型，静默刷新右下角选择器。
+                            if (typeof refreshModelProfileSelectorInBackground === 'function' && runSessionId) {
+                                refreshModelProfileSelectorInBackground(runSessionId, { silent: true });
+                            }
                             continue;
                         }
                         var isTemporaryStatus = statusContent.indexOf('正在思考中...') >= 0;
