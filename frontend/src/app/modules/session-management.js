@@ -1319,6 +1319,7 @@ async function loadSessionMessages(sessionId, scrollBehavior, opts) {
         }
         if (loadToken !== messageLoadEpoch || sessionId !== currentSessionId) return;
         if (getSessionRunState(sessionId) && !opts.allowDuringRun) return;
+        if (typeof uiPerformance !== 'undefined') uiPerformance.sample(sessionId, 'history.fetch', elapsedSince(openSessionStartedAt));
         if (!getVisibleChatStream()) ensureVisibleChatStreamSlot();
         const vis = getVisibleChatStream();
         if (vis) {
@@ -1387,6 +1388,7 @@ async function loadSessionMessages(sessionId, scrollBehavior, opts) {
             return true;
         }
         const loadCtx = newDomContext(getVisibleChatStream());
+        const hydrationStartedAt = performance.now();
         loadCtx.lastUserEventIndex = -1;
         const indexBase = pageMeta ? pageMeta.range_start : 0;
         const batchSize = opts.full ? 64 : 512;
@@ -1404,6 +1406,11 @@ async function loadSessionMessages(sessionId, scrollBehavior, opts) {
                 if (loadToken !== messageLoadEpoch || sessionId !== currentSessionId) return;
             }
         }
+        if (typeof uiPerformance !== 'undefined') {
+            uiPerformance.sample(sessionId, 'history.hydrate', performance.now() - hydrationStartedAt);
+            uiPerformance.count(sessionId, 'history.events', events.length);
+        }
+        var imageLayoutStartedAt = performance.now();
         var historyScrollBehavior = scrollBehavior;
         if (scrollBehavior === 'smooth-bottom' && typeof prepareWorkspaceImageLayout === 'function') {
             await prepareWorkspaceImageLayout(getVisibleChatStream());
@@ -1417,6 +1424,10 @@ async function loadSessionMessages(sessionId, scrollBehavior, opts) {
         if (loadToken !== messageLoadEpoch || sessionId !== currentSessionId) return;
         if (scrollBehavior === 'smooth-bottom' && !historyImagesReady) {
             historyScrollBehavior = 'bottom';
+        }
+        if (typeof uiPerformance !== 'undefined') {
+            uiPerformance.sample(sessionId, 'history.images', performance.now() - imageLayoutStartedAt);
+            if (!historyImagesReady) uiPerformance.count(sessionId, 'history.imageFallbacks');
         }
         finishHistoryHydration();
         if (!chatStreamHasConversationContent()) {
@@ -1447,10 +1458,12 @@ async function loadSessionMessages(sessionId, scrollBehavior, opts) {
         updateSessionTitle();
         updateHistorySentinelVisibility();
         bindExistingLogInteractions();
+        var historyScrollStartedAt = performance.now();
         applyChatScrollAfterHistoryLoad(sessionId, historyScrollBehavior);
         var initialSmoothReachedBottom = await waitForChatScrollAfterHistoryLoad(sessionId, historyScrollBehavior);
         if (loadToken !== messageLoadEpoch || sessionId !== currentSessionId) return;
         finalizeExistingLogLayout();
+        if (typeof uiPerformance !== 'undefined') uiPerformance.sample(sessionId, 'history.scroll', performance.now() - historyScrollStartedAt);
         if (historyScrollBehavior === 'smooth-bottom' && initialSmoothReachedBottom) {
             setScrollTopImmediate(chatContainer, chatContainer.scrollHeight);
             requestAnimationFrame(function () {
@@ -1504,6 +1517,12 @@ function logOpenSessionTiming(sessionId, data) {
     var timing = data.snapshotTiming && typeof data.snapshotTiming === 'object' ? data.snapshotTiming : {};
     var backendTotal = Number(timing.total || 0);
     var frontendTotal = Number(data.totalMs || 0);
+    if (typeof uiPerformance !== 'undefined') {
+        uiPerformance.sample(sessionId, 'history.total', frontendTotal);
+        if (timing.total != null && Number.isFinite(Number(timing.total))) {
+            uiPerformance.sample(sessionId, 'history.backend', backendTotal);
+        }
+    }
     if (frontendTotal < 500 && backendTotal < 500) return;
     console.info(
         'open_session_timing session=%s source=%s total=%sms events=%s backend_total=%sms read_page=%sms count=%sms user_turns=%sms context_tokens=%sms',
@@ -1527,8 +1546,15 @@ async function switchSession(sessionId, opts) {
     opts = opts || {};
     if (typeof endHistorySmoothScroll === 'function') endHistorySmoothScroll();
     if (currentSessionId === sessionId && !opts.forceReload) return;
+    const switchStartedAt = performance.now();
     if (opts.forceReload && typeof discardCachedSessionStream === 'function') discardCachedSessionStream(sessionId);
     const switchToken = ++switchSessionEpoch;
+    // Cached restores do not start a new message request. Invalidate the old
+    // request here as well, including A -> B -> A switches during hydration.
+    messageLoadEpoch += 1;
+    sessionStore.ui.loadingMessages = false;
+    replayingMessages = false;
+    cancelSmoothStreamFollowForSessionSwitch();
     suppressTocDuringSessionLoad = true;
     clearTocForSessionLoad();
     clearOptionalPanelsForSessionLoad();
@@ -1588,6 +1614,11 @@ async function switchSession(sessionId, opts) {
             } catch (e) { /* preflight best-effort */ }
         }
     }
+    if (switchToken !== switchSessionEpoch || sessionId !== currentSessionId) {
+        if (typeof uiPerformance !== 'undefined') uiPerformance.count(sessionId, 'switch.cancelled');
+        return false;
+    }
+    if (typeof uiPerformance !== 'undefined') uiPerformance.sample(sessionId, 'switch.prepare', performance.now() - switchStartedAt);
     var restoredFromCache = false;
     var restoredRunningStream = false;
     var sessionHasActiveServerRun = !!(
@@ -1639,6 +1670,8 @@ async function switchSession(sessionId, opts) {
         }));
         setSendButtonState();
         maybeStartStreamPollForSession(sessionId, { skipInitialLoad: true });
+        if (typeof uiPerformance !== 'undefined') uiPerformance.sample(sessionId,
+            restoredRunningStream ? 'switch.live' : 'switch.cached', performance.now() - switchStartedAt);
         return;
     }
     const vs = getVisibleChatStream();
@@ -1691,6 +1724,7 @@ async function switchSession(sessionId, opts) {
         setSendButtonState();
         maybeStartStreamPollForSession(sessionId, { skipInitialLoad: true });
         if (typeof refreshHumanInteractions === 'function') void refreshHumanInteractions(sessionId);
+        if (typeof uiPerformance !== 'undefined') uiPerformance.sample(sessionId, 'switch.loaded', performance.now() - switchStartedAt);
         resolve(true);
         }, 20);
     });
@@ -1706,6 +1740,7 @@ async function createNewSession() {
 
 async function createNewSessionInner() {
     try {
+        cancelSmoothStreamFollowForSessionSwitch();
         saveChatScrollForSession(currentSessionId);
         stashInputDraft(currentSessionId);
         if (typeof stashSkillPickerDraft === 'function') stashSkillPickerDraft(currentSessionId);

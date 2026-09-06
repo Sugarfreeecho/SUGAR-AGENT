@@ -592,6 +592,7 @@ function followStreamProcessScroll(ctx, runSessionId, channel) {
             if (port === chatContainer) streamChatNearBottom = false;
             else streamProcNearBottom = false;
             liveAutoFollow = false;
+            smoothFollowController.cancel(port === chatContainer ? smoothProcessBody : chatContainer);
         };
         if (smoothProcessBody) {
             smoothFollowController.request(smoothProcessBody, {
@@ -662,7 +663,9 @@ function finishStreamScrollIfFollow(ctx, runSessionId) {
 /** Final answer cards keep the legacy snap and must not race an active glide. */
 function cancelSmoothStreamFollowForFinal(ctx) {
     if (!isSmoothStreamActive()) return;
-    smoothFollowController.cancel(chatContainer);
+    if (ctx && ctx.stream === getVisibleChatStream() && !isSubagentStreamCtx(ctx)) {
+        smoothFollowController.cancel(chatContainer);
+    }
     var processBody = null;
     if (ctx && ctx._subagentBody && ctx._subagentBody.isConnected) {
         processBody = ctx._subagentBody;
@@ -677,6 +680,15 @@ function cancelSmoothStreamFollowForHistoryLoad() {
     smoothFollowController.cancel(chatContainer);
     var processBody = getProcessBodyElForCurrentRun();
     if (processBody) smoothFollowController.cancel(processBody);
+}
+
+/** The shared viewport must not retain the previous session's animation. */
+function cancelSmoothStreamFollowForSessionSwitch() {
+    smoothFollowController.reset(chatContainer);
+    var stream = getVisibleChatStream();
+    if (stream) stream.querySelectorAll('.process-aggregate-body, .subagent-card-body').forEach(function (port) {
+        smoothFollowController.reset(port);
+    });
 }
 
 function getVisibleChatStream() { return document.getElementById('chat-stream'); }
@@ -1482,6 +1494,39 @@ function discardLlmStreamChunks(ctx, ev) {
     });
 }
 
+/** Retain untrimmed source separately from its bounded UI projection. */
+function writeLlmStreamText(scroller, raw, part) {
+    if (!scroller) return;
+    scroller._llmRawText = String(raw || '');
+    var row = scroller.closest ? scroller.closest('.feed-item') : null;
+    if (part === 'response' && row) row._processBriefRawText = scroller._llmRawText;
+    var displayed = truncateLogTextForUi(trimSurroundingBlankLines(scroller._llmRawText));
+    var node = scroller.firstChild;
+    var previous = node && node === scroller._llmTextNode
+        ? scroller._llmRenderedText
+        : (scroller.textContent || '');
+    if (displayed !== previous) {
+        if (node && node === scroller.lastChild && node.nodeType === 3
+            && displayed.indexOf(previous) === 0) {
+            node.appendData(displayed.slice(previous.length));
+            if (typeof uiPerformance !== 'undefined') uiPerformance.count(currentSessionId, 'text.nodeAppends');
+        } else {
+            scroller.textContent = displayed;
+            if (typeof uiPerformance !== 'undefined') uiPerformance.count(currentSessionId, 'text.nodeReplacements');
+        }
+    }
+    scroller._llmTextNode = scroller.firstChild;
+    scroller._llmRenderedText = displayed;
+}
+
+function appendLlmRevealedText(scroller, segment, part) {
+    var row = scroller.closest ? scroller.closest('.feed-item') : null;
+    var head = typeof scroller._llmRawText === 'string' ? scroller._llmRawText
+        : (part === 'response' && row && typeof row._processBriefRawText === 'string'
+            ? row._processBriefRawText : (scroller.textContent || ''));
+    writeLlmStreamText(scroller, head + segment, part);
+}
+
 function flushLlmDeltaText(ctx, opts) {
     if (!ctx || !ctx.llm) return;
     opts = opts || {};
@@ -1501,20 +1546,13 @@ function flushLlmDeltaText(ctx, opts) {
                 computeSmoothRevealCount(reasoningPending.length, opts.dtMs || 16.67)
             )
             : { segment: reasoningPending, rest: '', count: reasoningPending.length };
-        var rs = trimSurroundingBlankLines((l.llmStreamReasoningScroller.textContent || '') + reasoningTake.segment);
-        l.llmStreamReasoningScroller.textContent = truncateLogTextForUi(rs);
+        appendLlmRevealedText(l.llmStreamReasoningScroller, reasoningTake.segment, 'reasoning');
         l.llmPendingReasoningDelta = reasoningTake.rest;
         revealedChars += reasoningTake.count;
     } else if (l.llmPendingReasoningDelta && !l.llmStreamReasoningScroller && !smoothCommit) {
         l.llmPendingReasoningDelta = '';
     }
     if (l.llmPendingResponseDelta && l.llmStreamResponseScroller) {
-        var responseRow = l.llmStreamResponseScroller.closest
-            ? l.llmStreamResponseScroller.closest('.feed-item')
-            : null;
-        var responseHead = responseRow && typeof responseRow._processBriefRawText === 'string'
-            ? responseRow._processBriefRawText
-            : (l.llmStreamResponseScroller.textContent || '');
         var responsePending = String(l.llmPendingResponseDelta || '');
         var responseTake = smoothCommit
             ? takeSmoothTextPrefix(
@@ -1522,9 +1560,7 @@ function flushLlmDeltaText(ctx, opts) {
                 computeSmoothRevealCount(responsePending.length, opts.dtMs || 16.67)
             )
             : { segment: responsePending, rest: '', count: responsePending.length };
-        var rsp = trimSurroundingBlankLines(responseHead + responseTake.segment);
-        if (responseRow) responseRow._processBriefRawText = rsp;
-        l.llmStreamResponseScroller.textContent = truncateLogTextForUi(rsp);
+        appendLlmRevealedText(l.llmStreamResponseScroller, responseTake.segment, 'response');
         l.llmPendingResponseDelta = responseTake.rest;
         revealedChars += responseTake.count;
     } else if (l.llmPendingResponseDelta && !l.llmStreamResponseScroller && !smoothCommit) {
@@ -1538,6 +1574,7 @@ function scheduleLlmDeltaFlush(ctx, runSessionId) {
     if (!l || l.llmDeltaFlushRaf) return;
     l.llmDeltaFlushRaf = requestAnimationFrame(function (now) {
         l.llmDeltaFlushRaf = 0;
+        var flushStartedAt = performance.now();
         if (!isSmoothStreamActive()) {
             flushLlmDeltaText(ctx);
             followStreamProcessScroll(ctx, runSessionId, 'text');
@@ -1546,8 +1583,15 @@ function scheduleLlmDeltaFlush(ctx, runSessionId) {
         var dtMs = l.llmRevealLastTs > 0
             ? smoothStreamClamp(now - l.llmRevealLastTs, 1, 120)
             : SMOOTH_STREAM_CONFIG.referenceFrameMs;
+        if (l.llmRevealLastTs > 0 && typeof uiPerformance !== 'undefined') {
+            uiPerformance.sample(runSessionId, 'stream.frameGap', now - l.llmRevealLastTs);
+        }
         l.llmRevealLastTs = now;
         var revealed = flushLlmDeltaText(ctx, { smooth: true, dtMs: dtMs }) || 0;
+        if (typeof uiPerformance !== 'undefined') {
+            uiPerformance.sample(runSessionId, 'stream.flush', performance.now() - flushStartedAt);
+            uiPerformance.count(runSessionId, 'stream.revealedCodePoints', revealed);
+        }
         if (revealed > 0 && dtMs > 0) {
             var instantCps = revealed * 1000 / dtMs;
             l.llmRevealCpsEma = l.llmRevealCpsEma * 0.92 + instantCps * 0.08;

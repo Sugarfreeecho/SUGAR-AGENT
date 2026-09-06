@@ -269,10 +269,24 @@ function createSmoothFollowController() {
 
     function frame(now) {
         rafId = 0;
+        var frameStartedAt = performance.now();
+        if (lastFrameMs > 0 && typeof uiPerformance !== 'undefined') {
+            uiPerformance.sample(currentSessionId, 'follow.frameGap', now - lastFrameMs);
+        }
         var dtMs = lastFrameMs > 0
             ? smoothStreamClamp(now - lastFrameMs, 1, 50)
             : SMOOTH_STREAM_CONFIG.referenceFrameMs;
         lastFrameMs = now;
+        // The inner process viewport and outer chat share a trace root.
+        // Read its row geometry once per frame, even when both follow it.
+        var traceMeasurements = new Map();
+        function measureTrace(root) {
+            if (!traceMeasurements.has(root)) {
+                traceMeasurements.set(root, measureSmoothTraceItemsHeight(root));
+                if (root && typeof uiPerformance !== 'undefined') uiPerformance.count(currentSessionId, 'follow.traceScans');
+            }
+            return traceMeasurements.get(root);
+        }
         activePorts.forEach(function (port) {
             var state = states.get(port);
             if (!state || !state.following || !port.isConnected) {
@@ -294,7 +308,7 @@ function createSmoothFollowController() {
                     : state.requestedChannel;
                 state.lastFloor = floor;
             }
-            var traceItemsHeight = measureSmoothTraceItemsHeight(state.traceHeightSource);
+            var traceItemsHeight = measureTrace(state.traceHeightSource);
             if (traceItemsHeight != null) {
                 if (
                     state.lastTraceItemsHeight == null
@@ -349,6 +363,7 @@ function createSmoothFollowController() {
             port.setAttribute('data-smooth-follow-owned', '1');
             port.scrollTop = state.animatedTop;
         });
+        if (typeof uiPerformance !== 'undefined') uiPerformance.sample(currentSessionId, 'follow.work', performance.now() - frameStartedAt);
         if (activePorts.size > 0) schedule();
         else lastFrameMs = 0;
     }
@@ -402,6 +417,26 @@ function createSmoothFollowController() {
         state.following = false;
         activePorts.delete(port);
         port.removeAttribute('data-smooth-follow-owned');
+        if (activePorts.size === 0) {
+            if (rafId) cancelAnimationFrame(rafId);
+            rafId = 0;
+            lastFrameMs = 0;
+        }
+    }
+
+    /** A session boundary clears both programmatic and reader ownership. */
+    function reset(port) {
+        cancel(port);
+        var state = port ? states.get(port) : null;
+        if (!state) return;
+        if (state.gestureTimer) clearTimeout(state.gestureTimer);
+        state.gestureTimer = 0;
+        state.readerDetached = false;
+        state.pointerDown = false;
+        state.touchY = null;
+        state.awayPx = 0;
+        state.traceHeightSource = null;
+        state.onUnpin = null;
     }
 
     /** End-of-stream convergence: no easing tail after generation is done. */
@@ -459,6 +494,7 @@ function createSmoothFollowController() {
         request: request,
         release: release,
         cancel: cancel,
+        reset: reset,
         snapToBottom: snapToBottom,
         isFollowing: isFollowing,
         isReaderDetached: isReaderDetached,

@@ -789,7 +789,12 @@ function scheduleFeedChunkOverflowRefresh(chunk) {
             feedChunkOverflowRaf = 0;
             var queued = Array.from(feedChunkOverflowQueue);
             feedChunkOverflowQueue.clear();
+            var measurementStartedAt = performance.now();
             queued.forEach(measureFeedChunkOverflow);
+            if (typeof uiPerformance !== 'undefined') {
+                uiPerformance.sample(currentSessionId, 'layout.overflowBatch', performance.now() - measurementStartedAt);
+                uiPerformance.count(currentSessionId, 'layout.overflowCandidates', queued.length);
+            }
         });
     });
 }
@@ -1536,6 +1541,11 @@ function sealProcessGroup(ctx) {
     if (!ctx) return;
     if (!ctx.currentProcessGroup) return;
     const agg = ctx.currentProcessGroup;
+    // Release the nested follower before the context loses its process group.
+    // A final message is a later sibling, so last-of-type cannot recover it.
+    if (typeof smoothFollowController !== 'undefined') {
+        smoothFollowController.cancel(agg.querySelector('.process-aggregate-body'));
+    }
     if (agg.isConnected) {
         agg.classList.remove('is-running');
         updateProcessBrief(agg);
@@ -4407,7 +4417,18 @@ function createProcessFeedRow(ctx, type, initialText, streamOpts, runSessionId, 
     );
     var isInitialLiveStatusRow = !isHistoryHydrate && type === 'status'
         && body.querySelectorAll('.feed-item[data-log-type="status"]').length === 1;
-    if (!isHistoryHydrate && !isInitialLiveStatusRow) animateSmoothTraceRowInsertion(row);
+    if (!isHistoryHydrate && !isInitialLiveStatusRow) {
+        /* 钉底跟随时（当前执行过程框正被平滑跟随器接管），新行直接以最终高度
+           落位：由跟随器把旧内容整体平滑上移，不再播放 0→实际高的“下伸”插入
+           动画，避免出现“框先向下伸长、随后又回弹上移”的抖动。 */
+        var pinnedProcessFollow = (typeof getProcessBodyElForCurrentRun === 'function')
+                && getProcessBodyElForCurrentRun() === body
+            && typeof smoothFollowController !== 'undefined'
+            && smoothFollowController
+            && typeof smoothFollowController.isFollowing === 'function'
+            && smoothFollowController.isFollowing(body);
+        if (!pinnedProcessFollow) animateSmoothTraceRowInsertion(row);
+    }
     if (isInitialLiveStatusRow) finishStreamScrollIfFollow(ctx, runSessionId);
     if (ctx && ctx.currentTurn && body.classList && body.classList.contains('subagent-turn-process')) {
         markSubagentTurnHasProcess(ctx.currentTurn);
@@ -4491,7 +4512,7 @@ function appendLlmStreamDelta(ctx, ev, runSessionId) {
         if (!l.llmStreamReasoningScroller) return;
         if (replayedSnapshot) {
             l.llmPendingReasoningDelta = '';
-            l.llmStreamReasoningScroller.textContent = truncateLogTextForUi(pieceText);
+            writeLlmStreamText(l.llmStreamReasoningScroller, pieceText, 'reasoning');
         } else {
             l.llmPendingReasoningDelta = (l.llmPendingReasoningDelta || '') + pieceText;
         }
@@ -4516,7 +4537,7 @@ function appendLlmStreamDelta(ctx, ev, runSessionId) {
         if (!l.llmStreamResponseScroller) return;
         if (replayedSnapshot) {
             l.llmPendingResponseDelta = '';
-            l.llmStreamResponseScroller.textContent = truncateLogTextForUi(pieceText);
+            writeLlmStreamText(l.llmStreamResponseScroller, pieceText, 'response');
         } else {
             l.llmPendingResponseDelta = (l.llmPendingResponseDelta || '') + pieceText;
         }
@@ -4554,10 +4575,12 @@ function upsertLlmFeedRow(ctx, content, logType, runSessionId, reactIter) {
     if (!txt.trim()) return null;
     var existing = findExistingLlmFeedRow(ctx, logType, ri);
     if (existing) {
+        // Drain the old reveal buffer before installing the authoritative text.
+        if (ctx.llm) resetLlmState(ctx);
         var sc = existing.querySelector('.feed-chunk-scroller');
         var ch = existing.querySelector('.feed-chunk');
         if (logType === 'llm-response') existing._processBriefRawText = rawText;
-        if (sc) sc.textContent = txt;
+        if (sc) writeLlmStreamText(sc, rawText, logType === 'llm-response' ? 'response' : 'reasoning');
         if (ch) {
             ch.classList.remove('is-streaming');
             
@@ -4567,7 +4590,6 @@ function upsertLlmFeedRow(ctx, content, logType, runSessionId, reactIter) {
         existing.setAttribute('data-event-committed', '1');
         if (logType === 'llm-reasoning') autoCollapseLlmReasoningRow(existing);
         removeDuplicateLlmFeedRows(ctx, existing, logType, ri);
-        if (ctx.llm) resetLlmState(ctx);
         var agg = existing.closest && existing.closest('.process-aggregate');
         if (agg) {
             refreshAggregateStatsSmart(agg);
