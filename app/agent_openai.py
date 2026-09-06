@@ -247,11 +247,11 @@ def _is_retriable_openai_error(exc: BaseException) -> bool:
 
 
 # 模型兜底前的错误分诊：
-#   "switch"   —— 确定性失败（4xx 参数/鉴权/内容类）与连接类错误，同模型重试无意义或
-#                 换端点更合理（既有契约：在线时 connect error 直接用 backup），立即换模型；
-#   "retry"    —— 瞬时故障（429 限流、超时、5xx），同模型退避重试更可能省一次切换；
+#   "switch"   —— 确定性失败（4xx 参数/鉴权/内容类），同模型重试无意义，立即换模型；
+#   "retry"    —— 瞬时故障（429 限流、超时、连接抖动、5xx），同模型重试吸收抖动；
 #   "fallback" —— 其余未知错误，保守起见直接换模型。
-# 本机断网由调用方先行检查（暂停回退），不到达本分类器。重试次数与退避可经环境变量调整。
+# 本机断网由调用方先行检查（暂停回退），不到达本分类器；重试次数与间隔可经
+# LLM_CANDIDATE_RETRY_ATTEMPTS / LLM_CANDIDATE_RETRY_BACKOFF_SEC 调整。
 def _classify_candidate_failure(exc: BaseException) -> str:
     status_code = getattr(exc, "status_code", None)
     try:
@@ -273,21 +273,25 @@ def _classify_candidate_failure(exc: BaseException) -> str:
     if type(exc).__name__ == "LocalNetworkUnavailableError":
         return "switch"
     if isinstance(exc, ConnectionError):
-        # 到该端点的连接建立失败：换一个端点（模型）比重试同一端点更合理。
-        return "switch"
+        # 连接抖动（含 SDK APIConnectionError 的底层原因链）优先同模型重试；
+        # 断网已由调用方先行检查，到达此处说明机器在线、只是端点链路抖动。
+        return "retry"
     msg = str(exc).lower()
     if "timeout" in msg or "timed out" in msg:
+        return "retry"
+    if "connection error" in msg or "connection reset" in msg or "connect failed" in msg:
         return "retry"
     if any(code in msg for code in ("429", "502", "503", "504", "529")):
         return "retry"
     try:
         from openai import (
+            APIConnectionError,
             APITimeoutError,
             InternalServerError,
             RateLimitError,
         )
 
-        if isinstance(exc, (APITimeoutError, RateLimitError, InternalServerError)):
+        if isinstance(exc, (APIConnectionError, APITimeoutError, RateLimitError, InternalServerError)):
             return "retry"
     except ImportError:
         pass

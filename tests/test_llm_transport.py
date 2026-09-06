@@ -1772,14 +1772,28 @@ def test_classify_candidate_failure_buckets():
     assert _classify_candidate_failure(WireError(503, "upstream unavailable")) == "retry"
     assert _classify_candidate_failure(WireError(408, "request timeout")) == "retry"
     assert _classify_candidate_failure(TimeoutError("request timed out")) == "retry"
-    # 连接类错误：换端点比重试同一端点更合理（既有契约）
-    assert _classify_candidate_failure(ConnectionError("connection reset")) == "switch"
+    # 连接抖动：同模型重试吸收（断网由调用方先行检查，不会到达分类器）
+    assert _classify_candidate_failure(ConnectionError("connection reset")) == "retry"
 
     # 断网等本机不可用错误不重试，交给上层暂停回退
     class LocalNetworkUnavailableError(ConnectionError):
         pass
 
     assert _classify_candidate_failure(LocalNetworkUnavailableError("offline")) == "switch"
+
+    # SDK 连接错误（消息 "Connection error."）必须重试而非直接切换
+    try:
+        from openai import APIConnectionError
+    except ImportError:
+        APIConnectionError = None
+    if APIConnectionError is not None:
+        import httpx as _httpx
+        sdk_conn = APIConnectionError(
+            message="Connection error.",
+            request=_httpx.Request("POST", "https://api.example.com/v1/chat/completions"),
+        )
+        assert _classify_candidate_failure(sdk_conn) == "retry"
+        assert _classify_candidate_failure(Exception("Connection error.")) == "retry"
 
     # 未知错误保守直接换模型
     assert _classify_candidate_failure(RuntimeError("something weird")) == "fallback"

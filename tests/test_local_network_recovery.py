@@ -74,11 +74,14 @@ def test_provider_connect_error_uses_backup_when_machine_is_online(monkeypatch):
         statuses.append,
     )
     monkeypatch.setattr(agent_harness, "machine_network_available", lambda: True)
+    # 连接抖动先同模型重试（默认 10 次太慢，压到 1 次验证重试→切换次序）
+    monkeypatch.setenv("LLM_CANDIDATE_RETRY_ATTEMPTS", "1")
+    monkeypatch.setenv("LLM_CANDIDATE_RETRY_BACKOFF_SEC", "0")
 
     result = completions.create(messages=[], max_tokens=10)
 
     assert result == {"ok": True}
-    assert calls == ["primary", "backup"]
+    assert calls == ["primary", "primary", "backup"]
     assert len(statuses) == 1
     assert statuses[0]["model_switch"] is True
     assert statuses[0]["network_error"] is True
