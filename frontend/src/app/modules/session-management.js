@@ -1464,12 +1464,10 @@ async function loadSessionMessages(sessionId, scrollBehavior, opts) {
         if (loadToken !== messageLoadEpoch || sessionId !== currentSessionId) return;
         finalizeExistingLogLayout();
         if (typeof uiPerformance !== 'undefined') uiPerformance.sample(sessionId, 'history.scroll', performance.now() - historyScrollStartedAt);
-        // A bottom-targeted load (plain 'bottom' or an undisturbed 'smooth-bottom')
-        // must end pinned to the newest content even when async layout (rows,
-        // images) grows scrollHeight after the first pass.
-        if ((historyScrollBehavior === 'bottom')
-            || (historyScrollBehavior === 'smooth-bottom' && initialSmoothReachedBottom)) {
-            setScrollTopImmediate(chatContainer, chatContainer.scrollHeight);
+        // After a bottom glide finishes undisturbed, re-snap over a few rAF
+        // rounds so async rows/images that still grow scrollHeight cannot leave
+        // the viewport short of the newest content.
+        if (historyScrollBehavior === 'smooth-bottom' && initialSmoothReachedBottom) {
             var settleRounds = 0;
             var snapAfterLayout = function () {
                 if (loadToken !== messageLoadEpoch || sessionId !== currentSessionId) return;
@@ -1705,10 +1703,10 @@ async function switchSession(sessionId, opts) {
             // A freshly loaded or force-reloaded stream does not restore a
             // persisted reading position. Once its history is rendered, ease
             // the viewport down to the newest message. A green-dot session
-            // (unread completed result, its cache is stale by definition) must
-            // land directly on the newest result instead of gliding.
-            var greenLoadMode = sessionHadUnreadResult ? 'bottom' : 'smooth-bottom';
-            var loadedOk = await loadSessionMessages(sessionId, greenLoadMode, {
+            // (unread completed result) must land on the newest result too; the
+            // bottom-targeted glide below keeps chasing async layout so both
+            // cases end up pinned at the newest content without flicker.
+            var loadedOk = await loadSessionMessages(sessionId, 'smooth-bottom', {
                 preloadOlderIfShort: isServerStreamActive(sessionId),
                 allowDuringRun: isServerStreamActive(sessionId),
                 tocAlreadyStarted: tocAlreadyStarted,

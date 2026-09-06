@@ -11308,56 +11308,10 @@ function waitForChatScrollAfterHistoryLoad(sessionId, mode) {\r
         });\r
     }\r
     if (historyLoadScrollsToBottom(sessionId, mode)) {\r
-        // Plain bottom-targeted loads ('bottom') have no glide loop above, but\r
-        // async hydration renders messages in batches that keep growing\r
-        // scrollHeight. Keep the viewport pinned to the current bottom with\r
-        // immediate (non-smooth) snaps until layout settles, so a green-dot or\r
-        // force-reloaded session never appears to crawl down line by line.\r
-        var pinSettled = false;\r
-        var pinRounds = 0;\r
-        var pinLastHeight = -1;\r
-        var pinStartedAt = performance.now();\r
-        var pinStopEvents = ['wheel', 'touchstart', 'pointerdown'];\r
-        var pinStop = function () {\r
-            if (pinSettled) return;\r
-            pinSettled = true;\r
-            pinStopEvents.forEach(function (ev) {\r
-                chatContainer.removeEventListener(ev, pinStop);\r
-            });\r
-        };\r
-        var pinResolve = null;\r
         return new Promise(function (resolve) {\r
-            pinResolve = resolve;\r
-            pinStopEvents.forEach(function (ev) {\r
-                chatContainer.addEventListener(ev, pinStop, { passive: true });\r
+            requestAnimationFrame(function () {\r
+                resolve(true);\r
             });\r
-            var pinBottom = function () {\r
-                if (pinSettled) {\r
-                    pinResolve(false);\r
-                    return;\r
-                }\r
-                if (!chatContainer || sessionId !== currentSessionId) {\r
-                    pinStop();\r
-                    pinResolve(false);\r
-                    return;\r
-                }\r
-                var h = chatContainer.scrollHeight;\r
-                var grew = pinLastHeight >= 0 && h > pinLastHeight + 4;\r
-                pinLastHeight = h;\r
-                setScrollTopImmediate(chatContainer, h);\r
-                var elapsed = performance.now() - pinStartedAt;\r
-                if (elapsed > 2600 || (!grew && pinRounds >= 8)) {\r
-                    setScrollTopImmediate(chatContainer, chatContainer.scrollHeight);\r
-                    pinStop();\r
-                    pinResolve(true);\r
-                    return;\r
-                }\r
-                pinRounds += 1;\r
-                requestAnimationFrame(function () {\r
-                    requestAnimationFrame(pinBottom);\r
-                });\r
-            };\r
-            requestAnimationFrame(pinBottom);\r
         });\r
     }\r
     return Promise.resolve(false);\r
@@ -18866,12 +18820,10 @@ async function loadSessionMessages(sessionId, scrollBehavior, opts) {\r
         if (loadToken !== messageLoadEpoch || sessionId !== currentSessionId) return;\r
         finalizeExistingLogLayout();\r
         if (typeof uiPerformance !== 'undefined') uiPerformance.sample(sessionId, 'history.scroll', performance.now() - historyScrollStartedAt);\r
-        // A bottom-targeted load (plain 'bottom' or an undisturbed 'smooth-bottom')\r
-        // must end pinned to the newest content even when async layout (rows,\r
-        // images) grows scrollHeight after the first pass.\r
-        if ((historyScrollBehavior === 'bottom')\r
-            || (historyScrollBehavior === 'smooth-bottom' && initialSmoothReachedBottom)) {\r
-            setScrollTopImmediate(chatContainer, chatContainer.scrollHeight);\r
+        // After a bottom glide finishes undisturbed, re-snap over a few rAF\r
+        // rounds so async rows/images that still grow scrollHeight cannot leave\r
+        // the viewport short of the newest content.\r
+        if (historyScrollBehavior === 'smooth-bottom' && initialSmoothReachedBottom) {\r
             var settleRounds = 0;\r
             var snapAfterLayout = function () {\r
                 if (loadToken !== messageLoadEpoch || sessionId !== currentSessionId) return;\r
@@ -19107,10 +19059,10 @@ async function switchSession(sessionId, opts) {\r
             // A freshly loaded or force-reloaded stream does not restore a\r
             // persisted reading position. Once its history is rendered, ease\r
             // the viewport down to the newest message. A green-dot session\r
-            // (unread completed result, its cache is stale by definition) must\r
-            // land directly on the newest result instead of gliding.\r
-            var greenLoadMode = sessionHadUnreadResult ? 'bottom' : 'smooth-bottom';\r
-            var loadedOk = await loadSessionMessages(sessionId, greenLoadMode, {\r
+            // (unread completed result) must land on the newest result too; the\r
+            // bottom-targeted glide below keeps chasing async layout so both\r
+            // cases end up pinned at the newest content without flicker.\r
+            var loadedOk = await loadSessionMessages(sessionId, 'smooth-bottom', {\r
                 preloadOlderIfShort: isServerStreamActive(sessionId),\r
                 allowDuringRun: isServerStreamActive(sessionId),\r
                 tocAlreadyStarted: tocAlreadyStarted,\r
