@@ -314,6 +314,34 @@ def test_full_access_preserves_process_safety_red_lines(tmp_path):
     assert ordinary_decision.rule_id == "preset.full_access"
 
 
+def test_loopback_shell_access_is_network_not_destructive(tmp_path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    engine = PolicyEngine(workspace)
+    request = classify_tool(
+        "run_shell",
+        {"command": "curl http://127.0.0.1:8765/index.html"},
+        workspace,
+    )
+
+    assert request.metadata["destructive"] is False
+    assert request.effect == "workspace_write"
+    ask_decision = engine.decide(
+        request,
+        PERMISSION_PRESETS[PermissionMode.ASK_FOR_APPROVAL],
+    )
+    assert ask_decision.outcome == DecisionOutcome.ASK
+    assert ask_decision.rule_id == "process.network.read"
+    assert forced_approval_for(ask_decision) is False
+
+    full_access_decision = engine.decide(
+        request,
+        PERMISSION_PRESETS[PermissionMode.FULL_ACCESS],
+    )
+    assert full_access_decision.outcome == DecisionOutcome.ALLOW
+    assert full_access_decision.rule_id == "preset.full_access"
+
+
 def test_allow_once_grant_is_atomically_consumed(tmp_path):
     store = SecurityStore(tmp_path / "security.sqlite3")
     store.add_grant("session", "digest", "once", ttl_seconds=300)

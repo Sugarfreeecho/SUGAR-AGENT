@@ -438,20 +438,11 @@ NON_DELETE_DANGEROUS_PATTERNS = [
 ]
 DANGEROUS_PATTERNS = DELETION_DANGEROUS_PATTERNS + NON_DELETE_DANGEROUS_PATTERNS
 
-# 简单内部 URL 检测（可根据需要扩展）
-INTERNAL_IP_PATTERNS = [
-    r"https?://(?:10\.\d+\.\d+\.\d+|172\.(?:1[6-9]|2\d|3[01])\.\d+\.\d+|192\.168\.\d+\.\d+|169\.254\.\d+\.\d+|127\.\d+\.\d+\.\d+|localhost)",
-]
-
-
 def _is_dangerous(command: str) -> bool:
-    """检测命令是否包含危险模式或内部 URL。"""
+    """检测命令是否包含会造成破坏性系统影响的模式。"""
     lower_cmd = command.lower()
     for pat in DANGEROUS_PATTERNS:
         if re.search(pat, lower_cmd):
-            return True
-    for pat in INTERNAL_IP_PATTERNS:
-        if re.search(pat, command):
             return True
     return False
 
@@ -459,9 +450,7 @@ def _is_dangerous(command: str) -> bool:
 def _has_non_delete_dangerous_pattern(command: str) -> bool:
     """Return whether a command has a red-line danger beyond file deletion."""
     lower_cmd = str(command or "").lower()
-    if any(re.search(pattern, lower_cmd) for pattern in NON_DELETE_DANGEROUS_PATTERNS):
-        return True
-    return any(re.search(pattern, str(command or "")) for pattern in INTERNAL_IP_PATTERNS)
+    return any(re.search(pattern, lower_cmd) for pattern in NON_DELETE_DANGEROUS_PATTERNS)
 
 
 def _safe_process_termination_guidance() -> str:
@@ -515,8 +504,6 @@ def _dangerous_command_guidance(command: str) -> str:
         )
     if any(token in lower for token in ("mkfs", "diskpart", "dd if=", "/dev/sd")) or re.search(r"(?:^|[;&|]\s*)format(?:\.exe)?\b(?![-])", lower):
         return "该操作涉及磁盘或分区，请备份后在 Agent 外部的管理员终端中手动执行。"
-    if any(re.search(pattern, command, re.IGNORECASE) for pattern in INTERNAL_IP_PATTERNS):
-        return "内部或本机网络地址不允许通过 run_shell 访问；请使用受控的应用接口。"
     return "请将命令改写为范围明确、可恢复且不会影响 Agent控制进程的操作。"
 
 
