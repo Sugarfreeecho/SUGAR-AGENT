@@ -1690,11 +1690,8 @@ async function switchSession(sessionId, opts) {
         try {
             // A freshly loaded or force-reloaded stream does not restore a
             // persisted reading position. Once its history is rendered, ease
-            // the viewport down to the newest message. A green-dot session
-            // (unread completed result, its cache is stale by definition) must
-            // land directly on the newest result instead of gliding.
-            var greenLoadMode = sessionHadUnreadResult ? 'bottom' : 'smooth-bottom';
-            var loadedOk = await loadSessionMessages(sessionId, greenLoadMode, {
+            // the viewport down to the newest message.
+            var loadedOk = await loadSessionMessages(sessionId, 'smooth-bottom', {
                 preloadOlderIfShort: isServerStreamActive(sessionId),
                 allowDuringRun: isServerStreamActive(sessionId),
                 tocAlreadyStarted: tocAlreadyStarted,
