@@ -1,0 +1,10 @@
+{
+  "environment": "Codex in-app Chromium; isolated DOM fixture using current frontend source",
+  "scope": "Correctness and MutationObserver verification, not a real agent session benchmark",
+  "text": "A\nB😀",
+  "childListMutations": 1,
+  "characterMutations": 2,
+  "scrollAfterReset": 120,
+  "following": false,
+  "passed": true
+}

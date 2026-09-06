@@ -1,0 +1,19 @@
+{
+  "ref": "28092678f4155f42f4f81e00103e8670068f5539",
+  "environment": "Node VM with simulated DOM; operation counts, not browser timings",
+  "newlineResult": "AB",
+  "staleRestores": 1,
+  "cachedScrollAfterFrames": 827.9160338869488,
+  "sharedTrace": {
+    "frames": 120,
+    "rows": 100,
+    "ports": 2,
+    "scans": 240,
+    "rowMeasurements": 24000
+  },
+  "textUpdates": {
+    "characters": 120,
+    "replacements": 120,
+    "appends": 0
+  }
+}

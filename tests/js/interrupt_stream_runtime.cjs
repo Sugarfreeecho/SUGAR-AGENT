@@ -129,7 +129,12 @@ function testReplayedSnapshotReplacesInsteadOfAppending() {
     createProcessFeedRow: () => scroller,
     scheduleLlmDeltaFlush() {},
     truncateLogTextForUi: (text) => String(text),
+    trimSurroundingBlankLines: (text) => String(text),
   });
+  vm.runInContext(
+    between(scrollSource, 'function writeLlmStreamText', 'function flushLlmDeltaText'),
+    sandbox,
+  );
   vm.runInContext(
     between(renderingSource, 'function appendLlmStreamDelta', 'function upsertLlmFeedRow'),
     sandbox,
@@ -143,6 +148,7 @@ function testReplayedSnapshotReplacesInsteadOfAppending() {
     replayed_snapshot: true,
   }, 'session-1');
   assert.strictEqual(scroller.textContent, 'authoritative snapshot');
+  assert.strictEqual(scroller._llmRawText, 'authoritative snapshot');
 
   sandbox.appendLlmStreamDelta(ctx, {
     type: 'llm_response_delta',

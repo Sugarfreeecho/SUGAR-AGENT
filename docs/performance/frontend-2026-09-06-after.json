@@ -1,0 +1,19 @@
+{
+  "ref": "working-tree",
+  "environment": "Node VM with simulated DOM; operation counts, not browser timings",
+  "newlineResult": "A\nB",
+  "staleRestores": 0,
+  "cachedScrollAfterFrames": 120,
+  "sharedTrace": {
+    "frames": 120,
+    "rows": 100,
+    "ports": 2,
+    "scans": 120,
+    "rowMeasurements": 12000
+  },
+  "textUpdates": {
+    "characters": 120,
+    "replacements": 1,
+    "appends": 119
+  }
+}
