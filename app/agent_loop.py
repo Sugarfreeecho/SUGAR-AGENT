@@ -1880,8 +1880,86 @@ def _pre_api_timing_mark(timings: Dict[str, int], name: str, start: float) -> No
 
 
 # Process-level cache for the static system prompt segments, keyed by
-# (session_id, skills/template revision, is_subagent, has_inherited_segments).
+# (session_id, is_subagent, has_inherited_segments).  Each value carries the
+# revision it was built at, so a revision drift (skill toggle, plugin change)
+# can serve the last-known-good segments while rebuilding off the critical
+# path (stale-while-revalidate).
 _STATIC_SEGMENTS_PROCESS_CACHE: Dict[tuple, tuple] = {}
+_STATIC_SEGMENTS_REBUILD_INFLIGHT: set = set()
+
+
+def _build_static_segments_for_session(
+    session_id: str,
+    session_meta: Any,
+    prompt_language: str,
+) -> tuple[str, ...]:
+    """Build static system segments exactly as the inline pre_api path would."""
+
+    skills_catalog = get_skills_catalog()
+    env_static = build_env_static(session_id or None)
+    segments = tuple(build_static_system_segments(
+        skills_catalog,
+        env_static,
+        prompt_language,
+    ))
+    fork_runtime_config = (
+        session_meta.get("fork_runtime_config") if isinstance(session_meta, dict) else None
+    )
+    inherited = (
+        fork_runtime_config.get("system_segments")
+        if isinstance(fork_runtime_config, dict)
+        else None
+    )
+    if isinstance(inherited, list) and inherited and all(isinstance(item, str) for item in inherited):
+        return tuple(inherited)
+    if isinstance(session_meta, dict) and session_meta.get("is_subagent"):
+        from agent_subagent import SUBAGENT_RUN_INSTRUCTION
+
+        return ("## Subagent 运行约束\n\n" + SUBAGENT_RUN_INSTRUCTION.strip(), *segments)
+    return segments
+
+
+def _schedule_static_segments_rebuild(
+    state: State,
+    session_meta: Any,
+    prompt_language: str,
+    target_revision: tuple,
+    static_key: tuple,
+) -> None:
+    """Rebuild the static system segments off the critical path.
+
+    Called when the cached segments' revision no longer matches.  The rebuild
+    lands in ``_STATIC_SEGMENTS_PROCESS_CACHE`` for the next request; only one
+    rebuild per cache key is in flight at a time.
+    """
+    if static_key in _STATIC_SEGMENTS_REBUILD_INFLIGHT:
+        return
+    _STATIC_SEGMENTS_REBUILD_INFLIGHT.add(static_key)
+    sid = str(state.get("session_id") or "")
+    rebuild_meta = dict(session_meta) if isinstance(session_meta, Mapping) else None
+
+    async def _rebuild() -> None:
+        started = time.perf_counter()
+        try:
+            segments = await asyncio.to_thread(
+                _build_static_segments_for_session, sid, rebuild_meta, prompt_language
+            )
+            _STATIC_SEGMENTS_PROCESS_CACHE[static_key] = (target_revision, segments)
+            logger.info(
+                "background static segments rebuilt: session=%s ms=%d",
+                sid,
+                int((time.perf_counter() - started) * 1000),
+            )
+        except Exception as exc:
+            logger.warning(
+                "background static segments rebuild failed: session=%s error=%s",
+                sid,
+                exc,
+            )
+        finally:
+            _STATIC_SEGMENTS_REBUILD_INFLIGHT.discard(static_key)
+
+    state["_static_segments_revalidate_task"] = asyncio.create_task(_rebuild())
 
 
 def _pre_api_timing_log(session_id: str, timings: Dict[str, int], **extra: Any) -> None:
@@ -4205,63 +4283,34 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                 str(prompt_language),
             )
             # Process-level cache: static segments only depend on the session
-            # identity + skills/template revisions, so later runs of the same
-            # session skip the cold rebuild (skills scan + env assembly) that
-            # otherwise pays seconds on the first round of every user turn.
+            # identity, so later runs of the same session skip the cold rebuild
+            # (skills scan + env assembly) that otherwise pays seconds on the
+            # first round of every user turn.  A revision drift serves the
+            # last-known-good segments and rebuilds off the critical path, so
+            # a skill/plugin change costs one request of staleness at most.
             _static_key = (
                 str(state.get("session_id") or ""),
-                static_revision,
                 bool(session_meta.get("is_subagent")) if isinstance(session_meta, dict) else False,
                 isinstance(session_meta.get("fork_runtime_config"), dict)
                 and bool((session_meta.get("fork_runtime_config") or {}).get("system_segments"))
                 if isinstance(session_meta, dict)
                 else False,
             )
-            static_segments = _STATIC_SEGMENTS_PROCESS_CACHE.get(_static_key)
-            static_segments_cached = isinstance(static_segments, tuple)
-            if not static_segments_cached:
-                skills_catalog = get_skills_catalog()
-                env_static = build_env_static(state.get("session_id"))
-                static_segments = tuple(build_static_system_segments(
-                    skills_catalog,
-                    env_static,
-                    prompt_language,
-                ))
-            fork_runtime_config = (
-                session_meta.get("fork_runtime_config")
-                if isinstance(session_meta, dict)
-                else None
-            )
-            inherited_system_segments = (
-                fork_runtime_config.get("system_segments")
-                if isinstance(fork_runtime_config, dict)
-                else None
-            )
-            if (
-                not static_segments_cached
-                and isinstance(inherited_system_segments, list)
-                and inherited_system_segments
-                and all(isinstance(item, str) for item in inherited_system_segments)
-            ):
-                static_segments = tuple(inherited_system_segments)
-            elif (
-                not static_segments_cached
-                and isinstance(session_meta, dict)
-                and session_meta.get("is_subagent")
-            ):
-                from agent_subagent import SUBAGENT_RUN_INSTRUCTION
-
-                static_segments = (
-                    "## Subagent 运行约束\n\n" + SUBAGENT_RUN_INSTRUCTION.strip(),
-                    *static_segments,
+            static_entry = _STATIC_SEGMENTS_PROCESS_CACHE.get(_static_key)
+            static_segments_cached = isinstance(static_entry, tuple)
+            static_segments: tuple
+            if static_segments_cached:
+                cached_revision, static_segments = static_entry
+                if cached_revision != static_revision:
+                    state["_prompt_static_segments_drift"] = True
+                    _schedule_static_segments_rebuild(
+                        state, session_meta, prompt_language, static_revision, _static_key
+                    )
+            else:
+                static_segments = _build_static_segments_for_session(
+                    str(state.get("session_id") or ""), session_meta, prompt_language
                 )
-            state["_prompt_static_segments_cache"] = {
-                "revision": static_revision,
-                "segments": tuple(static_segments),
-            }
-            if len(_STATIC_SEGMENTS_PROCESS_CACHE) > 16:
-                _STATIC_SEGMENTS_PROCESS_CACHE.pop(next(iter(_STATIC_SEGMENTS_PROCESS_CACHE)))
-            _STATIC_SEGMENTS_PROCESS_CACHE[_static_key] = tuple(static_segments)
+                _STATIC_SEGMENTS_PROCESS_CACHE[_static_key] = (static_revision, static_segments)
             # key_context body（随压缩变化）
             kc_body = key_context_body_for_system_prompt(state.get("key_context", "") or "")
             _pre_api_timing_mark(pre_api_timings, "static_segments", _t_pre_api)

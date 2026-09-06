@@ -44,8 +44,14 @@ except ImportError:  # pragma: no cover - import style depends on the launcher
 
 logger = logging.getLogger(__name__)
 
-_CACHE_TTL_SECONDS = 1.0
+# The TTL is deliberately long because every supported mutation path (enable/
+# disable, install, uninstall, settings change, extension env update) calls
+# invalidate_extension_caches(); ambient drift is bounded by the TTL itself.
+_CACHE_TTL_SECONDS = 30.0
 _lock = threading.RLock()
+# Serializes directory scans without blocking cache readers: _lock is only
+# ever held for cache reads/writes, never while walking plugin trees.
+_scan_lock = threading.Lock()
 _plugin_cache: Optional[Tuple[float, tuple[Any, ...], PluginLoadResult]] = None
 _extension_catalog_generation = 0
 _hook_managers: "weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, tuple[str, HookManager]]" = (
@@ -110,7 +116,12 @@ def plugin_manager() -> PluginManager:
 
 
 def load_plugins(*, force: bool = False) -> PluginLoadResult:
-    """Return enabled plugin resources with a short hot-path cache."""
+    """Return enabled plugin resources with a hot-path cache.
+
+    Cache readers never block on a directory scan: a stale entry is served
+    as-is and a single background refresh re-populates the cache (one scan
+    runs at a time via _scan_lock, other callers reuse the stale entry).
+    """
 
     global _plugin_cache
     now = time.monotonic()
@@ -121,17 +132,82 @@ def load_plugins(*, force: bool = False) -> PluginLoadResult:
         tuple(str(path) for path in manager.discovery_dirs),
         str(manager.state.path),
     )
-    with _lock:
-        if (
-            not force
-            and _plugin_cache
-            and _plugin_cache[1] == cache_key
-            and now - _plugin_cache[0] <= _CACHE_TTL_SECONDS
-        ):
-            return _plugin_cache[2]
+    if not force:
+        with _lock:
+            if (
+                _plugin_cache
+                and _plugin_cache[1] == cache_key
+                and now - _plugin_cache[0] <= _CACHE_TTL_SECONDS
+            ):
+                return _plugin_cache[2]
+            cached_entry = _plugin_cache if _plugin_cache and _plugin_cache[1] == cache_key else None
+            if cached_entry is not None:
+                # Stale serve: don't block the caller on a rescan; schedule it.
+                if _schedule_plugin_cache_refresh(manager, cache_key):
+                    return cached_entry[2]
+    with _scan_lock:
+        # Re-check under the scan lock: another thread's refresh may have
+        # already populated a fresh cache while we waited.
+        if not force:
+            with _lock:
+                if (
+                    _plugin_cache
+                    and _plugin_cache[1] == cache_key
+                    and time.monotonic() - _plugin_cache[0] <= _CACHE_TTL_SECONDS
+                ):
+                    return _plugin_cache[2]
         loaded = manager.load_enabled()
-        _plugin_cache = (now, cache_key, loaded)
+        with _lock:
+            _plugin_cache = (time.monotonic(), cache_key, loaded)
         return loaded
+
+
+def _schedule_plugin_cache_refresh(
+    manager: PluginManager,
+    cache_key: tuple[Any, ...],
+) -> bool:
+    """Kick off one background plugin rescan; returns False if impossible.
+
+    Must be called with _lock held and a stale cache entry present.  Off-loop
+    callers (sync contexts) fall back to False so the caller rescans inline.
+    Only one background refresh is in flight at a time (process-wide).
+    """
+
+    global _swr_refresh_in_flight
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return False
+    if _swr_refresh_in_flight:
+        return True
+    _swr_refresh_in_flight = True
+    _swr_work_begin()
+
+    def _refresh() -> None:
+        global _plugin_cache, _swr_refresh_in_flight
+        try:
+            with _scan_lock:
+                loaded = manager.load_enabled()
+            with _lock:
+                _plugin_cache = (time.monotonic(), cache_key, loaded)
+        except Exception:
+            logger.warning("Background plugin cache refresh failed", exc_info=True)
+        finally:
+            _swr_refresh_in_flight = False
+            _swr_work_end()
+
+    task = loop.run_in_executor(None, _refresh)
+    # Keep a reference so the task is not garbage-collected mid-scan.
+    _SWR_REFRESH_TASKS.add(task)
+    task.add_done_callback(_SWR_REFRESH_TASKS.discard)
+    return True
+
+
+_SWR_REFRESH_TASKS: set = set()
+_swr_refresh_in_flight = False
+_hook_manager_rebuild_in_flight = False
+_swr_condition = threading.Condition()
+_swr_active_count = 0
 
 
 def plugin_skill_directories() -> Mapping[str, Path]:
@@ -774,7 +850,15 @@ def hook_manager_for_current_loop(
     force: bool = False,
     runtime_definitions: Optional[tuple[Any, ...]] = None,
 ) -> HookManager:
-    """Return a manager whose asyncio locks belong to the current loop."""
+    """Return a manager whose asyncio locks belong to the current loop.
+
+    On a signature drift (plugin files touched, hooks toggled) the last
+    known-good manager is served immediately and exactly one background
+    rebuild is scheduled, so a hook-definition change costs one request of
+    staleness instead of a seconds-long rebuild on the message path.  Hook
+    managers are loop-agnostic: their per-event asyncio locks are created
+    lazily against whatever loop dispatches next.
+    """
 
     loop = asyncio.get_running_loop()
     loaded = load_plugins(force=force)
@@ -783,6 +867,10 @@ def hook_manager_for_current_loop(
     signature = _hook_signature(loaded, runtime_definitions)
     with _lock:
         cached = _hook_managers.get(loop)
+        if not force and cached is not None and cached[0] != signature:
+            # Stale-while-revalidate: serve the old manager, rebuild off path.
+            _schedule_hook_manager_rebuild(loop, signature, loaded, runtime_definitions)
+            return cached[1]
         if force or cached is None or cached[0] != signature:
             configured = str(os.getenv("HOOKS_PATH") or os.getenv("HOOKS_CONFIG_PATH") or "").strip()
             try:
@@ -804,6 +892,61 @@ def hook_manager_for_current_loop(
             _hook_managers[loop] = (signature, manager)
             return manager
         return cached[1]
+
+
+def _schedule_hook_manager_rebuild(
+    loop: asyncio.AbstractEventLoop,
+    signature: str,
+    loaded: PluginLoadResult,
+    runtime_definitions: tuple[Any, ...],
+) -> None:
+    """Rebuild this loop's hook manager off the critical path (deduplicated)."""
+
+    global _hook_manager_rebuild_in_flight
+    if _hook_manager_rebuild_in_flight:
+        return
+    _hook_manager_rebuild_in_flight = True
+    _swr_work_begin()
+
+    def _rebuild() -> None:
+        global _hook_manager_rebuild_in_flight
+        try:
+            manager = _build_hook_manager(loaded, runtime_definitions)
+            with _lock:
+                _hook_managers[loop] = (signature, manager)
+        except Exception:
+            logger.warning("Background hook manager rebuild failed", exc_info=True)
+        finally:
+            _hook_manager_rebuild_in_flight = False
+            _swr_work_end()
+
+    task = loop.run_in_executor(None, _rebuild)
+    _SWR_REFRESH_TASKS.add(task)
+    task.add_done_callback(_SWR_REFRESH_TASKS.discard)
+
+
+def _build_hook_manager(
+    loaded: PluginLoadResult,
+    runtime_definitions: tuple[Any, ...],
+) -> HookManager:
+    configured = str(os.getenv("HOOKS_PATH") or os.getenv("HOOKS_CONFIG_PATH") or "").strip()
+    try:
+        from plugins.host_hooks import PluginAwareHookExecutor
+    except ImportError:  # pragma: no cover - package import style
+        from .plugins.host_hooks import PluginAwareHookExecutor
+
+    manager = HookManager(
+        _project_root(),
+        config_path=hooks_config_path() if configured else None,
+        plugin_sources=_plugin_hook_sources(loaded) if plugins_enabled() else (),
+        executor=PluginAwareHookExecutor(
+            _project_root(),
+            get_plugin_runtime_registry(),
+            lambda: tuple(load_plugins(force=True).plugins),
+        ),
+    )
+    manager.extend_definitions(runtime_definitions)
+    return manager
 
 
 def hook_snapshot() -> Dict[str, Any]:
@@ -858,6 +1001,10 @@ def invalidate_extension_caches() -> None:
         _plugin_cache = None
         _hook_managers.clear()
         _bump_extension_catalog_generation()
+    # A stale-while-revalidate scan may be in flight with pre-invalidation
+    # data; wait it out (bounded by the scan itself) so its result cannot
+    # repopulate the cache after this point.
+    _drain_background_refreshes()
     try:
         from plugin_host_services import release_all_plugin_leases
 
@@ -871,6 +1018,36 @@ def invalidate_extension_caches() -> None:
     except Exception:
         logger.debug("Workflow callback cache cleanup failed", exc_info=True)
     get_plugin_runtime_registry().invalidate()
+
+
+def _drain_background_refreshes() -> None:
+    """Block until in-flight SWR refresh/rebuild work settles (bounded).
+
+    Uses a thread condition because invalidation may run on sync threads
+    with no event loop, while the refreshes run on executor threads.
+    """
+
+    deadline = time.monotonic() + 60.0
+    with _swr_condition:
+        while _swr_active_count > 0:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                logger.warning("SWR background refresh drain timed out")
+                return
+            _swr_condition.wait(remaining)
+
+
+def _swr_work_begin() -> None:
+    global _swr_active_count
+    with _swr_condition:
+        _swr_active_count += 1
+
+
+def _swr_work_end() -> None:
+    global _swr_active_count
+    with _swr_condition:
+        _swr_active_count -= 1
+        _swr_condition.notify_all()
 
 
 def reload_extensions() -> PluginReloadResult:

@@ -521,3 +521,78 @@ def test_host_invoker_restatement_keeps_revision_stable():
     )
     assert registry.catalog_revision()[0] == gen_after_first + 1
     assert registry.resolve("demo_tool") is not None
+
+
+def test_static_segments_revalidate_serves_stale_and_rebuilds(monkeypatch):
+    import types
+
+    import agent_loop
+
+    monkeypatch.setattr(agent_loop, "build_static_system_segments", lambda *a, **k: ["seg-v2"])
+    monkeypatch.setattr(agent_loop, "get_skills_catalog", lambda: "skills")
+    monkeypatch.setattr(agent_loop, "build_env_static", lambda sid=None: "env")
+    monkeypatch.setattr(
+        agent_loop,
+        "_build_static_segments_for_session",
+        lambda sid, meta, lang: ("seg-v2",),
+    )
+
+    state = {"session_id": "session-1"}
+    key = ("session-1", False, False)
+    agent_loop._STATIC_SEGMENTS_PROCESS_CACHE.clear()
+    agent_loop._STATIC_SEGMENTS_REBUILD_INFLIGHT.clear()
+
+    # Cold build populates the cache with the current revision.
+    segs = agent_loop._build_static_segments_for_session("session-1", {}, "zh-CN")
+    agent_loop._STATIC_SEGMENTS_PROCESS_CACHE[key] = (("rev1",), segs)
+
+    async def driver():
+        # Revision drift: helper schedules a background rebuild; the caller
+        # keeps serving the stale segments until the rebuild lands.
+        agent_loop._schedule_static_segments_rebuild(
+            state, {}, "zh-CN", ("rev2",), key
+        )
+        task = state.get("_static_segments_revalidate_task")
+        assert task is not None
+        await task
+        assert agent_loop._STATIC_SEGMENTS_PROCESS_CACHE[key][0] == ("rev2",)
+        assert agent_loop._STATIC_SEGMENTS_PROCESS_CACHE[key][1] == ("seg-v2",)
+
+    asyncio.run(driver())
+
+    # While a rebuild is in flight, no second one is scheduled for the key.
+    agent_loop._STATIC_SEGMENTS_REBUILD_INFLIGHT.add(key)
+    state2 = {"session_id": "session-1"}
+    agent_loop._schedule_static_segments_rebuild(state2, {}, "zh-CN", ("rev3",), key)
+    assert "_static_segments_revalidate_task" not in state2
+    agent_loop._STATIC_SEGMENTS_REBUILD_INFLIGHT.clear()
+    agent_loop._STATIC_SEGMENTS_PROCESS_CACHE.clear()
+
+
+def test_static_segments_rebuild_failure_keeps_stale_entry(monkeypatch):
+    import agent_loop
+
+    def failing_build(*_args, **_kwargs):
+        raise RuntimeError("disk busy")
+
+    monkeypatch.setattr(
+        agent_loop, "_build_static_segments_for_session", failing_build
+    )
+
+    state = {"session_id": "session-1"}
+    key = ("session-1", False, False)
+    agent_loop._STATIC_SEGMENTS_PROCESS_CACHE.clear()
+    agent_loop._STATIC_SEGMENTS_REBUILD_INFLIGHT.clear()
+    agent_loop._STATIC_SEGMENTS_PROCESS_CACHE[key] = (("rev1",), ("old",))
+
+    async def driver():
+        agent_loop._schedule_static_segments_rebuild(
+            state, {}, "zh-CN", ("rev2",), key
+        )
+        await state["_static_segments_revalidate_task"]
+        # The stale entry must remain untouched after a failed rebuild.
+        assert agent_loop._STATIC_SEGMENTS_PROCESS_CACHE[key] == (("rev1",), ("old",))
+        assert key not in agent_loop._STATIC_SEGMENTS_REBUILD_INFLIGHT
+
+    asyncio.run(driver())
+    agent_loop._STATIC_SEGMENTS_PROCESS_CACHE.clear()
