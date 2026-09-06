@@ -1628,7 +1628,103 @@ function showUiAlert(opts) {
     }
     return p;
 }
-`,Sr=`const ARCHIVED_SESSIONS_PAGE_SIZE = 20;
+`,Sr=`// Bounded local diagnostics. No message bodies, prompts or network uploads.
+const uiPerformance = (function () {
+    var storageKey = 'myagent-ui-performance-v1';
+    var limits = [0.5, 1, 2, 4, 8, 16.7, 25, 33.4, 50, 100, 250, 500, 1000, 3000, 10000];
+    var previous = [];
+    var timer = 0;
+    var visibleSince = 0;
+    var enabled = !(window.__MYAGENT_FEATURES__ && window.__MYAGENT_FEATURES__.uiPerformance === false);
+    try {
+        var saved = JSON.parse(localStorage.getItem(storageKey) || 'null');
+        if (saved && saved.version === 1 && Array.isArray(saved.reports)) previous = saved.reports.slice(-3);
+    } catch (_e) { /* Storage is optional. */ }
+    function newReport() {
+        return { revision: 'session-stream-2026-09-06-v1', startedAt: new Date().toISOString(),
+            updatedAt: '', sessions: [], sessionLimit: 12,
+            frameNote: 'Visible-page callback intervals, not display FPS; histogram p95 is an upper bound.' };
+    }
+    var report = newReport();
+    function session(sid) {
+        var id = String(sid || 'ui');
+        var entry = report.sessions.find(function (item) { return item.sessionId === id; });
+        if (!entry) {
+            entry = { sessionId: id, timings: {}, counters: {} };
+            if (report.sessions.length >= report.sessionLimit) report.sessions.shift();
+            report.sessions.push(entry);
+        }
+        if (!timer) timer = setTimeout(flush, 5000);
+        return entry;
+    }
+    function sample(sid, name, ms) {
+        if (!enabled || document.hidden || !Number.isFinite(ms) || ms < 0) return;
+        // A background-tab pause is not a visible rendering stall.
+        if (visibleSince && performance.now() - ms < visibleSince) return;
+        var timings = session(sid).timings;
+        var metric = timings[name];
+        if (!metric) metric = timings[name] = { count: 0, totalMs: 0, maxMs: 0, buckets: limits.map(function () { return 0; }).concat(0) };
+        metric.count += 1;
+        metric.totalMs += ms;
+        metric.maxMs = Math.max(metric.maxMs, ms);
+        var index = limits.findIndex(function (limit) { return ms <= limit; });
+        metric.buckets[index < 0 ? limits.length : index] += 1;
+    }
+    function count(sid, name, amount) {
+        if (!enabled || document.hidden) return;
+        var counters = session(sid).counters;
+        counters[name] = (counters[name] || 0) + (amount == null ? 1 : amount);
+    }
+    function snapshot() {
+        var current = JSON.parse(JSON.stringify(report));
+        current.updatedAt = new Date().toISOString();
+        current.sessions.forEach(function (entry) {
+            Object.keys(entry.timings).forEach(function (name) {
+                var metric = entry.timings[name], sum = 0;
+                metric.meanMs = metric.totalMs / metric.count;
+                for (var i = 0; i < metric.buckets.length; i += 1) {
+                    sum += metric.buckets[i];
+                    if (sum >= Math.ceil(metric.count * 0.95)) {
+                        metric.p95UpperMs = i < limits.length ? limits[i] : metric.maxMs;
+                        break;
+                    }
+                }
+                delete metric.buckets;
+            });
+        });
+        return { version: 1, reports: previous.concat(current) };
+    }
+    function flush() {
+        if (timer) clearTimeout(timer);
+        timer = 0;
+        if (!enabled || !report.sessions.length) return;
+        try { localStorage.setItem(storageKey, JSON.stringify(snapshot())); } catch (_e) { /* Quota/private mode. */ }
+    }
+    function reset() {
+        if (timer) clearTimeout(timer);
+        timer = 0;
+        previous = [];
+        report = newReport();
+        try { localStorage.removeItem(storageKey); } catch (_e) {}
+    }
+    function download() {
+        flush();
+        var url = URL.createObjectURL(new Blob([JSON.stringify(snapshot(), null, 2)], { type: 'application/json' }));
+        var link = document.createElement('a');
+        link.href = url;
+        link.download = 'myagent-ui-performance-' + Date.now() + '.json';
+        link.click();
+        setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+    }
+    window.addEventListener('pagehide', flush);
+    document.addEventListener('visibilitychange', function () {
+        if (document.hidden) flush();
+        else visibleSince = performance.now();
+    });
+    window.__MYAGENT_UI_PERF__ = { snapshot: snapshot, reset: reset, download: download, flush: flush };
+    return { sample: sample, count: count, flush: flush };
+})();
+`,br=`const ARCHIVED_SESSIONS_PAGE_SIZE = 20;
 
 const sessionStore = {
     seq: 0,\r
@@ -2017,7 +2113,7 @@ function applyServerStreamActiveMap(activeMap) {\r
     });\r
     sessionStore.applyStreamActiveMap(m);\r
 }\r
-`,br=`function selectCurrentSession() {
+`,yr=`function selectCurrentSession() {
     return sessionStore.get(sessionStore.currentSessionId);
 }
 
@@ -2099,7 +2195,7 @@ function selectIsSessionRunning(sessionId) {
 function selectRunForSession(sessionId) {
     return sessionStore.getRun(sessionId);
 }
-`,yr=`function applySessionSnapshot(snapshot) {\r
+`,wr=`function applySessionSnapshot(snapshot) {\r
     snapshot = snapshot || {};\r
     const sessions = Array.isArray(snapshot.sessions) ? snapshot.sessions : [];\r
     const archivedCount = snapshot.archived_count != null ? snapshot.archived_count : snapshot.archivedCount;\r
@@ -2229,7 +2325,7 @@ function abortSessionRun(sessionId, reason, opts) {\r
     if (opts.clear !== false) clearSessionRunState(sessionId);\r
     return run;\r
 }\r
-`,wr=`function renderSessionListFromStore() {
+`,xr=`function renderSessionListFromStore() {
     if (!sessionsList) return Object.create(null);
     const nextStreamMap = Object.create(null);
     const sections = selectSessionSections();
@@ -2341,7 +2437,7 @@ function maybeAutoLoadMoreArchivedSessions() {
 function renderSessionTitleFromStore() {
     updateSessionTitle();
 }
-`,xr=`const messageStore = {
+`,Ir=`const messageStore = {
     sessions: new Map(),
 
     ensureSession(sessionId) {
@@ -2487,7 +2583,7 @@ function selectMessageEventCount(sessionId) {
 function truncateMessageStateForSession(sessionId, beforeIndex) {
     return messageStore.truncateSession(sessionId, beforeIndex);
 }
-`,Ir=`function renderMessageRecord(ctx, record, sessionId) {
+`,kr=`function renderMessageRecord(ctx, record, sessionId) {
     if (!ctx || !record || !record.event) return null;
     const sid = sessionId || record.sessionId || currentSessionId;
     renderEvent(ctx, record.event, record.index, sid);
@@ -2517,7 +2613,7 @@ function renderMessageRecords(ctx, records, sessionId) {
         renderMessageRecord(ctx, list[i], sessionId);
     }
 }
-`,kr=`const subagentStore = {
+`,Cr=`const subagentStore = {
     sessions: new Map(),
 
     ensureSession(sessionId) {
@@ -2688,7 +2784,7 @@ function selectSubagentList(sessionId) {
 function selectSubagentRunningCount(sessionId) {
     return subagentStore.runningCount(sessionId);
 }
-`,Cr=`var subagentContinueInFlight = false;
+`,Tr=`var subagentContinueInFlight = false;
 var subagentContinueSessionId = null;
 var subagentContinueBannerTimer = null;
 var subagentContinueDismissedForSession = Object.create(null);
@@ -2781,7 +2877,7 @@ async function tryMarkSessionUnreadComplete(sessionId) {
         syncSessionListIndicatorClasses();
     } catch (e) { /* ignore */ }
 }
-`,Tr=`function setSubagentCardEventCount(agentId, count) {
+`,Er=`function setSubagentCardEventCount(agentId, count) {
     var aid = String(agentId || '');
     var n = Number(count);
     if (!aid || !Number.isFinite(n)) return;
@@ -2818,7 +2914,7 @@ function trackSubagentStreamEventLightweight(card, agentId, event, eventIndex) {
     if (event.react_iter != null) bumpAggregateMaxReactIter(card, event.react_iter);
     scheduleSubagentCardStats(card);
 }
-`,Er=`function subagentMoreDotsHtml() {
+`,Ar=`function subagentMoreDotsHtml() {
     return '<span class="session-more-dots" aria-hidden="true"><span></span><span></span><span></span></span>';
 }
 
@@ -3329,7 +3425,7 @@ function applySubagentBlockFinish(blk, event) {
         preview.textContent = txt ? String(txt).slice(0, 500) : '';
     }
 }
-`,Ar=`var subagentBodyHtmlCache = Object.create(null);
+`,_r=`var subagentBodyHtmlCache = Object.create(null);
 
 function subagentBodyCacheKey(sessionId, agentId) {
     return String(sessionId || '') + ':' + String(agentId || '');
@@ -3369,7 +3465,7 @@ function rememberSubagentBodyCache(sessionId, agentId, html) {
 function readSubagentBodyCache(sessionId, agentId) {
     return subagentBodyHtmlCache[subagentBodyCacheKey(sessionId, agentId)] || '';
 }
-`,_r=`var subagentCardViewportObserver = null;
+`,Rr=`var subagentCardViewportObserver = null;
 var subagentCardLoadQueue = [];
 var subagentCardLoadInflight = 0;
 var subagentCardLoadQueued = Object.create(null);
@@ -3684,7 +3780,7 @@ async function loadSubagentDetailInto(el, agentId, hostEl, sessionIdOpt) {
         delete el.dataset.loading;
     }
 }
-`,Rr=`var subagentCardSyncTimer = null;
+`,Pr=`var subagentCardSyncTimer = null;
 var subagentContextFetchInFlight = Object.create(null);
 var subagentTreeRefreshTimer = null;
 var subagentTreeRefreshTarget = null;
@@ -3992,7 +4088,7 @@ async function refreshSubagentTreePanelInner(sessionId) {
         stopSubagentIncrementalSync();
     }
 }
-`,Pr=`var subagentModelSwitchBusy = Object.create(null);
+`,Lr=`var subagentModelSwitchBusy = Object.create(null);
 
 function subagentModelProfileOptionMeta(profile) {
     var name = profileLabel(profile);
@@ -4236,7 +4332,7 @@ function bindSubagentGridActions(grid, sessionId) {
     syncSubagentExpandButtons(grid);
     initUiHoverTips(grid);
 }
-`,Lr=`function onSubagentDockWheel(e) {
+`,Mr=`function onSubagentDockWheel(e) {
     var dock = document.getElementById('subagent-dock');
     if (!dock || dock.classList.contains('hidden') || !dock.contains(e.target)) return;
     var dy = e.deltaY;
@@ -4342,7 +4438,7 @@ function bindSubagentPanelOnce() {
         closeSubagentPanel();
     });
 }
-`,Mr=`const contextStore = {
+`,Fr=`const contextStore = {
     tokensBySession: new Map(),
     progressBySession: new Map(),
 
@@ -4420,7 +4516,7 @@ function appendContextProgressForSession(sessionId, kind, delta) {
 function selectContextProgress(sessionId) {
     return contextStore.progressBySession.get(String(sessionId || '')) || null;
 }
-`,Fr=`function markUiEventStoreApplied(event) {
+`,Nr=`function markUiEventStoreApplied(event) {
     if (!event || typeof event !== 'object') return;
     try {
         Object.defineProperty(event, '__storeApplied', {
@@ -4530,7 +4626,7 @@ function applySessionEvent(event, opts) {
     }
     return { handled: false, messageRecord: messageRecord };
 }
-`,Nr=`let modelProfilesCache = null;
+`,Br=`let modelProfilesCache = null;
 const modelProfilesRefreshPromises = Object.create(null);
 const modelProfileBusyBySession = Object.create(null);
 const modelProfileIdBySession = Object.create(null);
@@ -4948,7 +5044,7 @@ document.addEventListener('myagent:language-change', function () {
 window.refreshModelProfileSelector = refreshModelProfileSelector;
 window.refreshModelProfileSelectorInBackground = refreshModelProfileSelectorInBackground;
 window.loadModelProfilesForSwitcher = loadModelProfilesForSwitcher;
-`,Br=`let skillPickerCache = null;
+`,Or=`let skillPickerCache = null;
 let skillPickerRefreshPromise = null;
 let selectedSkillNames = [];
 let skillPickerActiveTab = 'skills';
@@ -5743,7 +5839,7 @@ window.setSelectedSkillsForSession = setSelectedSkillsForSession;
 window.refreshSkillPickerSkills = refreshSkillPickerSkills;
 window.stashSkillPickerDraft = stashSkillPickerDraft;
 window.restoreSkillPickerDraft = restoreSkillPickerDraft;
-`,Or=`// Smooth streaming primitives. This file is concatenated into the shared UI
+`,qr=`// Smooth streaming primitives. This file is concatenated into the shared UI
 // runtime before session-scroll-history.js; keep the helpers dependency-free.
 
 const SMOOTH_STREAM_CONFIG = Object.freeze({
@@ -6014,10 +6110,24 @@ function createSmoothFollowController() {
 
     function frame(now) {
         rafId = 0;
+        var frameStartedAt = performance.now();
+        if (lastFrameMs > 0 && typeof uiPerformance !== 'undefined') {
+            uiPerformance.sample(currentSessionId, 'follow.frameGap', now - lastFrameMs);
+        }
         var dtMs = lastFrameMs > 0
             ? smoothStreamClamp(now - lastFrameMs, 1, 50)
             : SMOOTH_STREAM_CONFIG.referenceFrameMs;
         lastFrameMs = now;
+        // The inner process viewport and outer chat share a trace root.
+        // Read its row geometry once per frame, even when both follow it.
+        var traceMeasurements = new Map();
+        function measureTrace(root) {
+            if (!traceMeasurements.has(root)) {
+                traceMeasurements.set(root, measureSmoothTraceItemsHeight(root));
+                if (root && typeof uiPerformance !== 'undefined') uiPerformance.count(currentSessionId, 'follow.traceScans');
+            }
+            return traceMeasurements.get(root);
+        }
         activePorts.forEach(function (port) {
             var state = states.get(port);
             if (!state || !state.following || !port.isConnected) {
@@ -6039,7 +6149,7 @@ function createSmoothFollowController() {
                     : state.requestedChannel;
                 state.lastFloor = floor;
             }
-            var traceItemsHeight = measureSmoothTraceItemsHeight(state.traceHeightSource);
+            var traceItemsHeight = measureTrace(state.traceHeightSource);
             if (traceItemsHeight != null) {
                 if (
                     state.lastTraceItemsHeight == null
@@ -6094,6 +6204,7 @@ function createSmoothFollowController() {
             port.setAttribute('data-smooth-follow-owned', '1');
             port.scrollTop = state.animatedTop;
         });
+        if (typeof uiPerformance !== 'undefined') uiPerformance.sample(currentSessionId, 'follow.work', performance.now() - frameStartedAt);
         if (activePorts.size > 0) schedule();
         else lastFrameMs = 0;
     }
@@ -6147,6 +6258,26 @@ function createSmoothFollowController() {
         state.following = false;
         activePorts.delete(port);
         port.removeAttribute('data-smooth-follow-owned');
+        if (activePorts.size === 0) {
+            if (rafId) cancelAnimationFrame(rafId);
+            rafId = 0;
+            lastFrameMs = 0;
+        }
+    }
+
+    /** A session boundary clears both programmatic and reader ownership. */
+    function reset(port) {
+        cancel(port);
+        var state = port ? states.get(port) : null;
+        if (!state) return;
+        if (state.gestureTimer) clearTimeout(state.gestureTimer);
+        state.gestureTimer = 0;
+        state.readerDetached = false;
+        state.pointerDown = false;
+        state.touchY = null;
+        state.awayPx = 0;
+        state.traceHeightSource = null;
+        state.onUnpin = null;
     }
 
     /** End-of-stream convergence: no easing tail after generation is done. */
@@ -6204,6 +6335,7 @@ function createSmoothFollowController() {
         request: request,
         release: release,
         cancel: cancel,
+        reset: reset,
         snapToBottom: snapToBottom,
         isFollowing: isFollowing,
         isReaderDetached: isReaderDetached,
@@ -6282,7 +6414,7 @@ function settleSmoothTraceHeightAnimations(root) {
         cancelSmoothTraceLayoutAnimation(row);
     });
 }
-`,qr=`function formatTokenCompact(n) {
+`,Hr=`function formatTokenCompact(n) {
     if (n == null || !Number.isFinite(Number(n))) return '—';
     const x = Math.max(0, Math.round(Number(n)));
     if (x >= 1000000) return (x / 1000000).toFixed(1).replace(/\\.0$/, '') + 'M';
@@ -6876,6 +7008,7 @@ function followStreamProcessScroll(ctx, runSessionId, channel) {
             if (port === chatContainer) streamChatNearBottom = false;
             else streamProcNearBottom = false;
             liveAutoFollow = false;
+            smoothFollowController.cancel(port === chatContainer ? smoothProcessBody : chatContainer);
         };
         if (smoothProcessBody) {
             smoothFollowController.request(smoothProcessBody, {
@@ -6946,7 +7079,9 @@ function finishStreamScrollIfFollow(ctx, runSessionId) {
 /** Final answer cards keep the legacy snap and must not race an active glide. */
 function cancelSmoothStreamFollowForFinal(ctx) {
     if (!isSmoothStreamActive()) return;
-    smoothFollowController.cancel(chatContainer);
+    if (ctx && ctx.stream === getVisibleChatStream() && !isSubagentStreamCtx(ctx)) {
+        smoothFollowController.cancel(chatContainer);
+    }
     var processBody = null;
     if (ctx && ctx._subagentBody && ctx._subagentBody.isConnected) {
         processBody = ctx._subagentBody;
@@ -6961,6 +7096,15 @@ function cancelSmoothStreamFollowForHistoryLoad() {
     smoothFollowController.cancel(chatContainer);
     var processBody = getProcessBodyElForCurrentRun();
     if (processBody) smoothFollowController.cancel(processBody);
+}
+
+/** The shared viewport must not retain the previous session's animation. */
+function cancelSmoothStreamFollowForSessionSwitch() {
+    smoothFollowController.reset(chatContainer);
+    var stream = getVisibleChatStream();
+    if (stream) stream.querySelectorAll('.process-aggregate-body, .subagent-card-body').forEach(function (port) {
+        smoothFollowController.reset(port);
+    });
 }
 
 function getVisibleChatStream() { return document.getElementById('chat-stream'); }
@@ -7766,6 +7910,39 @@ function discardLlmStreamChunks(ctx, ev) {
     });
 }
 
+/** Retain untrimmed source separately from its bounded UI projection. */
+function writeLlmStreamText(scroller, raw, part) {
+    if (!scroller) return;
+    scroller._llmRawText = String(raw || '');
+    var row = scroller.closest ? scroller.closest('.feed-item') : null;
+    if (part === 'response' && row) row._processBriefRawText = scroller._llmRawText;
+    var displayed = truncateLogTextForUi(trimSurroundingBlankLines(scroller._llmRawText));
+    var node = scroller.firstChild;
+    var previous = node && node === scroller._llmTextNode
+        ? scroller._llmRenderedText
+        : (scroller.textContent || '');
+    if (displayed !== previous) {
+        if (node && node === scroller.lastChild && node.nodeType === 3
+            && displayed.indexOf(previous) === 0) {
+            node.appendData(displayed.slice(previous.length));
+            if (typeof uiPerformance !== 'undefined') uiPerformance.count(currentSessionId, 'text.nodeAppends');
+        } else {
+            scroller.textContent = displayed;
+            if (typeof uiPerformance !== 'undefined') uiPerformance.count(currentSessionId, 'text.nodeReplacements');
+        }
+    }
+    scroller._llmTextNode = scroller.firstChild;
+    scroller._llmRenderedText = displayed;
+}
+
+function appendLlmRevealedText(scroller, segment, part) {
+    var row = scroller.closest ? scroller.closest('.feed-item') : null;
+    var head = typeof scroller._llmRawText === 'string' ? scroller._llmRawText
+        : (part === 'response' && row && typeof row._processBriefRawText === 'string'
+            ? row._processBriefRawText : (scroller.textContent || ''));
+    writeLlmStreamText(scroller, head + segment, part);
+}
+
 function flushLlmDeltaText(ctx, opts) {
     if (!ctx || !ctx.llm) return;
     opts = opts || {};
@@ -7785,20 +7962,13 @@ function flushLlmDeltaText(ctx, opts) {
                 computeSmoothRevealCount(reasoningPending.length, opts.dtMs || 16.67)
             )
             : { segment: reasoningPending, rest: '', count: reasoningPending.length };
-        var rs = trimSurroundingBlankLines((l.llmStreamReasoningScroller.textContent || '') + reasoningTake.segment);
-        l.llmStreamReasoningScroller.textContent = truncateLogTextForUi(rs);
+        appendLlmRevealedText(l.llmStreamReasoningScroller, reasoningTake.segment, 'reasoning');
         l.llmPendingReasoningDelta = reasoningTake.rest;
         revealedChars += reasoningTake.count;
     } else if (l.llmPendingReasoningDelta && !l.llmStreamReasoningScroller && !smoothCommit) {
         l.llmPendingReasoningDelta = '';
     }
     if (l.llmPendingResponseDelta && l.llmStreamResponseScroller) {
-        var responseRow = l.llmStreamResponseScroller.closest
-            ? l.llmStreamResponseScroller.closest('.feed-item')
-            : null;
-        var responseHead = responseRow && typeof responseRow._processBriefRawText === 'string'
-            ? responseRow._processBriefRawText
-            : (l.llmStreamResponseScroller.textContent || '');
         var responsePending = String(l.llmPendingResponseDelta || '');
         var responseTake = smoothCommit
             ? takeSmoothTextPrefix(
@@ -7806,9 +7976,7 @@ function flushLlmDeltaText(ctx, opts) {
                 computeSmoothRevealCount(responsePending.length, opts.dtMs || 16.67)
             )
             : { segment: responsePending, rest: '', count: responsePending.length };
-        var rsp = trimSurroundingBlankLines(responseHead + responseTake.segment);
-        if (responseRow) responseRow._processBriefRawText = rsp;
-        l.llmStreamResponseScroller.textContent = truncateLogTextForUi(rsp);
+        appendLlmRevealedText(l.llmStreamResponseScroller, responseTake.segment, 'response');
         l.llmPendingResponseDelta = responseTake.rest;
         revealedChars += responseTake.count;
     } else if (l.llmPendingResponseDelta && !l.llmStreamResponseScroller && !smoothCommit) {
@@ -7822,6 +7990,7 @@ function scheduleLlmDeltaFlush(ctx, runSessionId) {
     if (!l || l.llmDeltaFlushRaf) return;
     l.llmDeltaFlushRaf = requestAnimationFrame(function (now) {
         l.llmDeltaFlushRaf = 0;
+        var flushStartedAt = performance.now();
         if (!isSmoothStreamActive()) {
             flushLlmDeltaText(ctx);
             followStreamProcessScroll(ctx, runSessionId, 'text');
@@ -7830,8 +7999,15 @@ function scheduleLlmDeltaFlush(ctx, runSessionId) {
         var dtMs = l.llmRevealLastTs > 0
             ? smoothStreamClamp(now - l.llmRevealLastTs, 1, 120)
             : SMOOTH_STREAM_CONFIG.referenceFrameMs;
+        if (l.llmRevealLastTs > 0 && typeof uiPerformance !== 'undefined') {
+            uiPerformance.sample(runSessionId, 'stream.frameGap', now - l.llmRevealLastTs);
+        }
         l.llmRevealLastTs = now;
         var revealed = flushLlmDeltaText(ctx, { smooth: true, dtMs: dtMs }) || 0;
+        if (typeof uiPerformance !== 'undefined') {
+            uiPerformance.sample(runSessionId, 'stream.flush', performance.now() - flushStartedAt);
+            uiPerformance.count(runSessionId, 'stream.revealedCodePoints', revealed);
+        }
         if (revealed > 0 && dtMs > 0) {
             var instantCps = revealed * 1000 / dtMs;
             l.llmRevealCpsEma = l.llmRevealCpsEma * 0.92 + instantCps * 0.08;
@@ -8257,7 +8433,7 @@ async function scrollToUserTurnOrLoadOlder(eventIndex, opts) {
         setTocJumpLoading(false);
     }
 }
-`,Hr=`function ensureUiHoverTooltipEl() {
+`,Dr=`function ensureUiHoverTooltipEl() {
     if (uiHoverTooltipEl) return uiHoverTooltipEl;
     uiHoverTooltipEl = document.getElementById('ui-hover-tooltip');
     if (!uiHoverTooltipEl) {
@@ -8697,7 +8873,7 @@ function syncExtensionPanelVisibility() {
 }
 
 document.addEventListener('myagent:plugin-session-ui-rendered', syncExtensionPanelVisibility);
-`,Dr=`var WORKSPACE_MEDIA_EXTENSIONS = Object.freeze({
+`,Ur=`var WORKSPACE_MEDIA_EXTENSIONS = Object.freeze({
     image: Object.freeze(['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg', 'ico', 'tif', 'tiff', 'avif', 'jfif']),
     audio: Object.freeze(['mp3', 'wav', 'ogg', 'oga', 'opus', 'm4a', 'aac', 'flac']),
     video: Object.freeze(['mp4', 'webm', 'ogv', 'mov']),
@@ -8985,7 +9161,7 @@ function upgradeWorkspaceMedia(root) {
         }
     });
 }
-`,Ur=`function removeMessagesFromNode(startWrap) {\r
+`,jr=`function removeMessagesFromNode(startWrap) {\r
     const stream = getVisibleChatStream() || chatContainer;\r
     if (!stream) return;\r
     const kids = Array.from(stream.children);\r
@@ -9776,7 +9952,12 @@ function scheduleFeedChunkOverflowRefresh(chunk) {\r
             feedChunkOverflowRaf = 0;\r
             var queued = Array.from(feedChunkOverflowQueue);\r
             feedChunkOverflowQueue.clear();\r
+            var measurementStartedAt = performance.now();\r
             queued.forEach(measureFeedChunkOverflow);\r
+            if (typeof uiPerformance !== 'undefined') {\r
+                uiPerformance.sample(currentSessionId, 'layout.overflowBatch', performance.now() - measurementStartedAt);\r
+                uiPerformance.count(currentSessionId, 'layout.overflowCandidates', queued.length);\r
+            }\r
         });\r
     });\r
 }\r
@@ -10523,6 +10704,11 @@ function sealProcessGroup(ctx) {\r
     if (!ctx) return;\r
     if (!ctx.currentProcessGroup) return;\r
     const agg = ctx.currentProcessGroup;\r
+    // Release the nested follower before the context loses its process group.\r
+    // A final message is a later sibling, so last-of-type cannot recover it.\r
+    if (typeof smoothFollowController !== 'undefined') {\r
+        smoothFollowController.cancel(agg.querySelector('.process-aggregate-body'));\r
+    }\r
     if (agg.isConnected) {\r
         agg.classList.remove('is-running');\r
         updateProcessBrief(agg);\r
@@ -10922,7 +11108,7 @@ window.addEventListener('blur', function () {\r
 \r
 const WELCOME_HTML = \`<div class="welcome" role="status"><div class="welcome-icon" aria-hidden="true"><img src="/assets/sugar-logo.png" alt="" draggable="false"></div><strong>开始一段新的对话</strong><p>在左侧侧栏新建或选择会话。Enter 发送，Ctrl+Enter / Shift+Enter 换行。</p></div>\`;\r
 \r
-function historyLoadScrollsToBottom(sessionId, mode) {
+function historyLoadScrollsToBottom(sessionId, mode) {\r
     if (mode === 'bottom') return true;\r
     if (mode === 'saved-or-bottom' || mode === 'saved-smooth-or-bottom') {\r
         var savedAnchor = getSavedScrollAnchorPosition(sessionId);\r
@@ -10930,77 +11116,77 @@ function historyLoadScrollsToBottom(sessionId, mode) {
         var savedPosition = getSavedScrollPosition(sessionId);\r
         if (savedPosition !== null && Number.isFinite(Number(savedPosition))) return false;\r
     }\r
-    return true;
-}
-
-function waitForHistoryImageLayout(sessionId, mode, root) {
-    if (mode !== 'smooth-bottom' || !root || sessionId !== currentSessionId) {
-        return Promise.resolve(true);
-    }
-    var images = Array.prototype.slice.call(root.querySelectorAll('.message img'));
-    var pending = images.filter(function (img) {
-        // 冷加载的消息流仍处于隐藏状态，lazy 图片不会可靠地开始请求。
-        // 只在即将执行历史平滑滚动时提升优先级，先拿到固有尺寸再显示消息流。
-        img.loading = 'eager';
-        if (img.getAttribute('data-workspace-image-sized') === '1') return false;
-        return !img.complete;
-    });
-    if (!pending.length) {
-        return new Promise(function (resolve) {
-            requestAnimationFrame(function () {
-                requestAnimationFrame(function () { resolve(sessionId === currentSessionId); });
-            });
-        });
-    }
-    return new Promise(function (resolve) {
-        var settled = false;
-        var remaining = pending.length;
-        var listeners = [];
-        var timeout = 0;
-        function cleanup() {
-            if (timeout) clearTimeout(timeout);
-            listeners.forEach(function (entry) {
-                entry.img.removeEventListener('load', entry.done);
-                entry.img.removeEventListener('error', entry.done);
-            });
-        }
-        function finish(imagesReady) {
-            if (settled) return;
-            settled = true;
-            cleanup();
-            requestAnimationFrame(function () {
-                requestAnimationFrame(function () {
-                    resolve(!!imagesReady && sessionId === currentSessionId);
-                });
-            });
-        }
-        // 慢图或坏图不能无限阻塞打开会话；超时后由调用方降级为即时到底。
-        timeout = setTimeout(function () {
-            pending.forEach(function (img) {
-                // 无法预先取得尺寸的外链图使用固定画框；图片迟到或失败时都不再改变布局。
-                img.setAttribute('data-history-image-fallback', '1');
-            });
-            finish(false);
-        }, 2400);
-        pending.forEach(function (img) {
-            var entry = { img: img, done: null };
-            entry.done = function () {
-                if (settled) return;
-                img.removeEventListener('load', entry.done);
-                img.removeEventListener('error', entry.done);
-                remaining -= 1;
-                if (remaining <= 0) finish(true);
-            };
-            listeners.push(entry);
-            img.addEventListener('load', entry.done);
-            img.addEventListener('error', entry.done);
-            // complete 可能在筛选和绑定事件之间变为 true。
-            if (img.complete) entry.done();
-        });
-    });
-}
-
-function waitForChatScrollAfterHistoryLoad(sessionId, mode) {
+    return true;\r
+}\r
+\r
+function waitForHistoryImageLayout(sessionId, mode, root) {\r
+    if (mode !== 'smooth-bottom' || !root || sessionId !== currentSessionId) {\r
+        return Promise.resolve(true);\r
+    }\r
+    var images = Array.prototype.slice.call(root.querySelectorAll('.message img'));\r
+    var pending = images.filter(function (img) {\r
+        // 冷加载的消息流仍处于隐藏状态，lazy 图片不会可靠地开始请求。\r
+        // 只在即将执行历史平滑滚动时提升优先级，先拿到固有尺寸再显示消息流。\r
+        img.loading = 'eager';\r
+        if (img.getAttribute('data-workspace-image-sized') === '1') return false;\r
+        return !img.complete;\r
+    });\r
+    if (!pending.length) {\r
+        return new Promise(function (resolve) {\r
+            requestAnimationFrame(function () {\r
+                requestAnimationFrame(function () { resolve(sessionId === currentSessionId); });\r
+            });\r
+        });\r
+    }\r
+    return new Promise(function (resolve) {\r
+        var settled = false;\r
+        var remaining = pending.length;\r
+        var listeners = [];\r
+        var timeout = 0;\r
+        function cleanup() {\r
+            if (timeout) clearTimeout(timeout);\r
+            listeners.forEach(function (entry) {\r
+                entry.img.removeEventListener('load', entry.done);\r
+                entry.img.removeEventListener('error', entry.done);\r
+            });\r
+        }\r
+        function finish(imagesReady) {\r
+            if (settled) return;\r
+            settled = true;\r
+            cleanup();\r
+            requestAnimationFrame(function () {\r
+                requestAnimationFrame(function () {\r
+                    resolve(!!imagesReady && sessionId === currentSessionId);\r
+                });\r
+            });\r
+        }\r
+        // 慢图或坏图不能无限阻塞打开会话；超时后由调用方降级为即时到底。\r
+        timeout = setTimeout(function () {\r
+            pending.forEach(function (img) {\r
+                // 无法预先取得尺寸的外链图使用固定画框；图片迟到或失败时都不再改变布局。\r
+                img.setAttribute('data-history-image-fallback', '1');\r
+            });\r
+            finish(false);\r
+        }, 2400);\r
+        pending.forEach(function (img) {\r
+            var entry = { img: img, done: null };\r
+            entry.done = function () {\r
+                if (settled) return;\r
+                img.removeEventListener('load', entry.done);\r
+                img.removeEventListener('error', entry.done);\r
+                remaining -= 1;\r
+                if (remaining <= 0) finish(true);\r
+            };\r
+            listeners.push(entry);\r
+            img.addEventListener('load', entry.done);\r
+            img.addEventListener('error', entry.done);\r
+            // complete 可能在筛选和绑定事件之间变为 true。\r
+            if (img.complete) entry.done();\r
+        });\r
+    });\r
+}\r
+\r
+function waitForChatScrollAfterHistoryLoad(sessionId, mode) {\r
     if (!chatContainer || !sessionId) return Promise.resolve(false);\r
     if (sessionId !== currentSessionId) return Promise.resolve(false);\r
     if (mode === 'smooth-bottom') {\r
@@ -12887,54 +13073,54 @@ function setToolRowText(row, text, ctx, runSessionId) {\r
 }\r
 \r
 // 移除临时状态消息（移除整个 feed-item 条目）\r
-function removeTemporaryStatus(ctx) {
+function removeTemporaryStatus(ctx) {\r
     // Cleanup must never create a new process group. Terminal signals can be\r
     // delivered more than once (final, run_finished, and [DONE]).\r
     var body = getExistingProcessBody(ctx);\r
     if (!body) return;\r
     var tempStatuses = body.querySelectorAll('[data-temporary-status="1"]');\r
-    tempStatuses.forEach(function(el) {
-        var row = el.closest ? el.closest('.feed-item') : null;
-        if (row) row.remove(); else el.remove();
-    });
-    if (ctx) ctx._temporaryStatusScroller = null;
-}
-
-// A thinking/reconnect heartbeat represents one piece of transient state, not
-// a new process item. Reuse the existing tail row so repeated heartbeats do not
-// remove and recreate DOM nodes (which also retriggers aggregate height and
-// scroll observers).
-function upsertTemporaryStatus(ctx, content, runSessionId) {
-    if (!ctx) return null;
-    var body = getExistingProcessBody(ctx);
-    var scroller = ctx._temporaryStatusScroller;
-    if (!scroller || !scroller.isConnected) {
-        scroller = body ? body.querySelector('[data-temporary-status="1"]') : null;
-    }
-    var row = scroller && scroller.closest ? scroller.closest('.feed-item') : null;
-    var lastRow = body ? getLastProcessFeedItem(body) : null;
-    if (scroller && row && row === lastRow) {
-        var nextText = String(content == null ? '' : content);
-        var currentText = typeof getUiRuntimeText === 'function'
-            ? getUiRuntimeText(scroller)
-            : String(scroller.textContent || '');
-        if (currentText !== nextText) {
-            if (typeof setUiRuntimeText === 'function') setUiRuntimeText(scroller, nextText);
-            else scroller.textContent = nextText;
-            var chunk = scroller.closest('.feed-chunk');
-            if (chunk) refreshFeedChunkOverflow(chunk);
-        }
-        ctx._temporaryStatusScroller = scroller;
-        return scroller;
-    }
-    removeTemporaryStatus(ctx);
-    scroller = appendLog(ctx, content, 'status', runSessionId);
-    if (scroller) {
-        scroller.dataset.temporaryStatus = '1';
-        ctx._temporaryStatusScroller = scroller;
-    }
-    return scroller;
-}
+    tempStatuses.forEach(function(el) {\r
+        var row = el.closest ? el.closest('.feed-item') : null;\r
+        if (row) row.remove(); else el.remove();\r
+    });\r
+    if (ctx) ctx._temporaryStatusScroller = null;\r
+}\r
+\r
+// A thinking/reconnect heartbeat represents one piece of transient state, not\r
+// a new process item. Reuse the existing tail row so repeated heartbeats do not\r
+// remove and recreate DOM nodes (which also retriggers aggregate height and\r
+// scroll observers).\r
+function upsertTemporaryStatus(ctx, content, runSessionId) {\r
+    if (!ctx) return null;\r
+    var body = getExistingProcessBody(ctx);\r
+    var scroller = ctx._temporaryStatusScroller;\r
+    if (!scroller || !scroller.isConnected) {\r
+        scroller = body ? body.querySelector('[data-temporary-status="1"]') : null;\r
+    }\r
+    var row = scroller && scroller.closest ? scroller.closest('.feed-item') : null;\r
+    var lastRow = body ? getLastProcessFeedItem(body) : null;\r
+    if (scroller && row && row === lastRow) {\r
+        var nextText = String(content == null ? '' : content);\r
+        var currentText = typeof getUiRuntimeText === 'function'\r
+            ? getUiRuntimeText(scroller)\r
+            : String(scroller.textContent || '');\r
+        if (currentText !== nextText) {\r
+            if (typeof setUiRuntimeText === 'function') setUiRuntimeText(scroller, nextText);\r
+            else scroller.textContent = nextText;\r
+            var chunk = scroller.closest('.feed-chunk');\r
+            if (chunk) refreshFeedChunkOverflow(chunk);\r
+        }\r
+        ctx._temporaryStatusScroller = scroller;\r
+        return scroller;\r
+    }\r
+    removeTemporaryStatus(ctx);\r
+    scroller = appendLog(ctx, content, 'status', runSessionId);\r
+    if (scroller) {\r
+        scroller.dataset.temporaryStatus = '1';\r
+        ctx._temporaryStatusScroller = scroller;\r
+    }\r
+    return scroller;\r
+}\r
 \r
 function appendToolCallDelta(ctx, parsed, runSessionId) {\r
     if (hasSeenStreamDelta(ctx, parsed, 'tool_call_delta')) return;\r
@@ -13394,7 +13580,18 @@ function createProcessFeedRow(ctx, type, initialText, streamOpts, runSessionId, 
     );\r
     var isInitialLiveStatusRow = !isHistoryHydrate && type === 'status'\r
         && body.querySelectorAll('.feed-item[data-log-type="status"]').length === 1;\r
-    if (!isHistoryHydrate && !isInitialLiveStatusRow) animateSmoothTraceRowInsertion(row);\r
+    if (!isHistoryHydrate && !isInitialLiveStatusRow) {\r
+        /* 钉底跟随时（当前执行过程框正被平滑跟随器接管），新行直接以最终高度\r
+           落位：由跟随器把旧内容整体平滑上移，不再播放 0→实际高的“下伸”插入\r
+           动画，避免出现“框先向下伸长、随后又回弹上移”的抖动。 */\r
+        var pinnedProcessFollow = (typeof getProcessBodyElForCurrentRun === 'function')\r
+                && getProcessBodyElForCurrentRun() === body\r
+            && typeof smoothFollowController !== 'undefined'\r
+            && smoothFollowController\r
+            && typeof smoothFollowController.isFollowing === 'function'\r
+            && smoothFollowController.isFollowing(body);\r
+        if (!pinnedProcessFollow) animateSmoothTraceRowInsertion(row);\r
+    }\r
     if (isInitialLiveStatusRow) finishStreamScrollIfFollow(ctx, runSessionId);\r
     if (ctx && ctx.currentTurn && body.classList && body.classList.contains('subagent-turn-process')) {\r
         markSubagentTurnHasProcess(ctx.currentTurn);\r
@@ -13478,7 +13675,7 @@ function appendLlmStreamDelta(ctx, ev, runSessionId) {\r
         if (!l.llmStreamReasoningScroller) return;\r
         if (replayedSnapshot) {\r
             l.llmPendingReasoningDelta = '';\r
-            l.llmStreamReasoningScroller.textContent = truncateLogTextForUi(pieceText);\r
+            writeLlmStreamText(l.llmStreamReasoningScroller, pieceText, 'reasoning');\r
         } else {\r
             l.llmPendingReasoningDelta = (l.llmPendingReasoningDelta || '') + pieceText;\r
         }\r
@@ -13503,7 +13700,7 @@ function appendLlmStreamDelta(ctx, ev, runSessionId) {\r
         if (!l.llmStreamResponseScroller) return;\r
         if (replayedSnapshot) {\r
             l.llmPendingResponseDelta = '';\r
-            l.llmStreamResponseScroller.textContent = truncateLogTextForUi(pieceText);\r
+            writeLlmStreamText(l.llmStreamResponseScroller, pieceText, 'response');\r
         } else {\r
             l.llmPendingResponseDelta = (l.llmPendingResponseDelta || '') + pieceText;\r
         }\r
@@ -13541,10 +13738,12 @@ function upsertLlmFeedRow(ctx, content, logType, runSessionId, reactIter) {\r
     if (!txt.trim()) return null;\r
     var existing = findExistingLlmFeedRow(ctx, logType, ri);\r
     if (existing) {\r
+        // Drain the old reveal buffer before installing the authoritative text.\r
+        if (ctx.llm) resetLlmState(ctx);\r
         var sc = existing.querySelector('.feed-chunk-scroller');\r
         var ch = existing.querySelector('.feed-chunk');\r
         if (logType === 'llm-response') existing._processBriefRawText = rawText;\r
-        if (sc) sc.textContent = txt;\r
+        if (sc) writeLlmStreamText(sc, rawText, logType === 'llm-response' ? 'response' : 'reasoning');\r
         if (ch) {\r
             ch.classList.remove('is-streaming');\r
             \r
@@ -13554,7 +13753,6 @@ function upsertLlmFeedRow(ctx, content, logType, runSessionId, reactIter) {\r
         existing.setAttribute('data-event-committed', '1');\r
         if (logType === 'llm-reasoning') autoCollapseLlmReasoningRow(existing);\r
         removeDuplicateLlmFeedRows(ctx, existing, logType, ri);\r
-        if (ctx.llm) resetLlmState(ctx);\r
         var agg = existing.closest && existing.closest('.process-aggregate');\r
         if (agg) {\r
             refreshAggregateStatsSmart(agg);\r
@@ -14125,7 +14323,7 @@ function finalizeProgressStreamForType(ctx, logType) {\r
 }\r
 \r
 /* ── Subagent 浮层 / 过程块 ── */\r
-`,jr=`var subagentPanelOpen = false;
+`,$r=`var subagentPanelOpen = false;
 var subagentPanelBound = false;
 var subagentDockExpanded = false;
 
@@ -14926,7 +15124,7 @@ function updateSubagentBlockFinish(ctx, event) {
     applySubagentBlockFinish(blk, event);
     handleSubagentLifecycleEvent(event);
 }
-`,$r=`const humanInteractionStoreBySession = Object.create(null);\r
+`,zr=`const humanInteractionStoreBySession = Object.create(null);\r
 const HUMAN_INTERACTION_DRAFT_PREFIX = 'myagent-human-interaction-draft:';\r
 \r
 function humanInteractionSessionState(sessionId) {\r
@@ -16313,7 +16511,7 @@ async function refreshHumanInteractions(sessionId, options) {\r
     var button = document.getElementById('human-interaction-banner-btn');\r
     if (button) button.addEventListener('click', function () { void handleHumanTodoFloaterAction(); });\r
 })();\r
-`,zr=`var permissionModeBusy = false;
+`,Wr=`var permissionModeBusy = false;
 var currentPermissionStatus = null;
 var mcpRegistrationPromptBusy = false;
 var mcpRegistrationPrompted = new Set();
@@ -16924,7 +17122,7 @@ if (document.readyState === 'loading') {
 } else {
     initPermissionControls();
 }
-`,Wr=`function applyPluginExtensionEventView(row, event) {
+`,Vr=`function applyPluginExtensionEventView(row, event) {
     if (!row || !event || typeof globalThis.resolvePluginExtensionEvent !== 'function') return;
     var view = globalThis.resolvePluginExtensionEvent(event);
     if (!view || !view.handled || view.pending) {
@@ -17142,7 +17340,7 @@ function renderEvent(ctx, event, eventIndex, runSessionId) {
         if (fallbackContent.trim()) appendLog(ctx, fallbackContent, 'log-entry', runSessionId);
     }
 }
-`,Vr=`\uFEFFfunction setSendButtonState() {\r
+`,Qr=`\uFEFFfunction setSendButtonState() {\r
     syncMessageInputPlaceholder();\r
     sendBtn.disabled = false;\r
     const uploadBusy = isChatFileUploadBusy();\r
@@ -18461,8 +18659,9 @@ async function loadSessionMessages(sessionId, scrollBehavior, opts) {\r
             if (!response.ok) throw new Error('messages failed: ' + response.status);\r
             raw = await response.json();\r
         }\r
-        if (loadToken !== messageLoadEpoch || sessionId !== currentSessionId) return;\r
-        if (getSessionRunState(sessionId) && !opts.allowDuringRun) return;\r
+        if (loadToken !== messageLoadEpoch || sessionId !== currentSessionId) return;
+        if (getSessionRunState(sessionId) && !opts.allowDuringRun) return;
+        if (typeof uiPerformance !== 'undefined') uiPerformance.sample(sessionId, 'history.fetch', elapsedSince(openSessionStartedAt));
         if (!getVisibleChatStream()) ensureVisibleChatStreamSlot();\r
         const vis = getVisibleChatStream();\r
         if (vis) {\r
@@ -18530,7 +18729,8 @@ async function loadSessionMessages(sessionId, scrollBehavior, opts) {\r
             });\r
             return true;\r
         }\r
-        const loadCtx = newDomContext(getVisibleChatStream());\r
+        const loadCtx = newDomContext(getVisibleChatStream());
+        const hydrationStartedAt = performance.now();
         loadCtx.lastUserEventIndex = -1;\r
         const indexBase = pageMeta ? pageMeta.range_start : 0;\r
         const batchSize = opts.full ? 64 : 512;\r
@@ -18548,6 +18748,11 @@ async function loadSessionMessages(sessionId, scrollBehavior, opts) {\r
                 if (loadToken !== messageLoadEpoch || sessionId !== currentSessionId) return;\r
             }\r
         }
+        if (typeof uiPerformance !== 'undefined') {
+            uiPerformance.sample(sessionId, 'history.hydrate', performance.now() - hydrationStartedAt);
+            uiPerformance.count(sessionId, 'history.events', events.length);
+        }
+        var imageLayoutStartedAt = performance.now();
         var historyScrollBehavior = scrollBehavior;
         if (scrollBehavior === 'smooth-bottom' && typeof prepareWorkspaceImageLayout === 'function') {
             await prepareWorkspaceImageLayout(getVisibleChatStream());
@@ -18561,6 +18766,10 @@ async function loadSessionMessages(sessionId, scrollBehavior, opts) {\r
         if (loadToken !== messageLoadEpoch || sessionId !== currentSessionId) return;
         if (scrollBehavior === 'smooth-bottom' && !historyImagesReady) {
             historyScrollBehavior = 'bottom';
+        }
+        if (typeof uiPerformance !== 'undefined') {
+            uiPerformance.sample(sessionId, 'history.images', performance.now() - imageLayoutStartedAt);
+            if (!historyImagesReady) uiPerformance.count(sessionId, 'history.imageFallbacks');
         }
         finishHistoryHydration();
         if (!chatStreamHasConversationContent()) {\r
@@ -18590,11 +18799,13 @@ async function loadSessionMessages(sessionId, scrollBehavior, opts) {\r
         else if (!opts.tocAlreadyStarted) rebuildToc();\r
         updateSessionTitle();\r
         updateHistorySentinelVisibility();\r
-        bindExistingLogInteractions();\r
+        bindExistingLogInteractions();
+        var historyScrollStartedAt = performance.now();
         applyChatScrollAfterHistoryLoad(sessionId, historyScrollBehavior);
         var initialSmoothReachedBottom = await waitForChatScrollAfterHistoryLoad(sessionId, historyScrollBehavior);
-        if (loadToken !== messageLoadEpoch || sessionId !== currentSessionId) return;\r
-        finalizeExistingLogLayout();\r
+        if (loadToken !== messageLoadEpoch || sessionId !== currentSessionId) return;
+        finalizeExistingLogLayout();
+        if (typeof uiPerformance !== 'undefined') uiPerformance.sample(sessionId, 'history.scroll', performance.now() - historyScrollStartedAt);
         if (historyScrollBehavior === 'smooth-bottom' && initialSmoothReachedBottom) {
             setScrollTopImmediate(chatContainer, chatContainer.scrollHeight);\r
             requestAnimationFrame(function () {\r
@@ -18643,11 +18854,17 @@ function elapsedSince(startedAt) {\r
     return Math.max(0, Math.round(now - Number(startedAt || now)));\r
 }\r
 \r
-function logOpenSessionTiming(sessionId, data) {\r
+function logOpenSessionTiming(sessionId, data) {
     data = data || {};\r
     var timing = data.snapshotTiming && typeof data.snapshotTiming === 'object' ? data.snapshotTiming : {};\r
     var backendTotal = Number(timing.total || 0);\r
-    var frontendTotal = Number(data.totalMs || 0);\r
+    var frontendTotal = Number(data.totalMs || 0);
+    if (typeof uiPerformance !== 'undefined') {
+        uiPerformance.sample(sessionId, 'history.total', frontendTotal);
+        if (timing.total != null && Number.isFinite(Number(timing.total))) {
+            uiPerformance.sample(sessionId, 'history.backend', backendTotal);
+        }
+    }
     if (frontendTotal < 500 && backendTotal < 500) return;\r
     console.info(\r
         'open_session_timing session=%s source=%s total=%sms events=%s backend_total=%sms read_page=%sms count=%sms user_turns=%sms context_tokens=%sms',\r
@@ -18670,9 +18887,16 @@ function beforeSessionMessageSnapshotAvailable() {\r
 async function switchSession(sessionId, opts) {\r
     opts = opts || {};\r
     if (typeof endHistorySmoothScroll === 'function') endHistorySmoothScroll();\r
-    if (currentSessionId === sessionId && !opts.forceReload) return;\r
-    if (opts.forceReload && typeof discardCachedSessionStream === 'function') discardCachedSessionStream(sessionId);\r
-    const switchToken = ++switchSessionEpoch;\r
+    if (currentSessionId === sessionId && !opts.forceReload) return;
+    const switchStartedAt = performance.now();
+    if (opts.forceReload && typeof discardCachedSessionStream === 'function') discardCachedSessionStream(sessionId);
+    const switchToken = ++switchSessionEpoch;
+    // Cached restores do not start a new message request. Invalidate the old
+    // request here as well, including A -> B -> A switches during hydration.
+    messageLoadEpoch += 1;
+    sessionStore.ui.loadingMessages = false;
+    replayingMessages = false;
+    cancelSmoothStreamFollowForSessionSwitch();
     suppressTocDuringSessionLoad = true;\r
     clearTocForSessionLoad();\r
     clearOptionalPanelsForSessionLoad();\r
@@ -18732,7 +18956,12 @@ async function switchSession(sessionId, opts) {\r
             } catch (e) { /* preflight best-effort */ }\r
         }\r
     }\r
-    var restoredFromCache = false;\r
+    if (switchToken !== switchSessionEpoch || sessionId !== currentSessionId) {
+        if (typeof uiPerformance !== 'undefined') uiPerformance.count(sessionId, 'switch.cancelled');
+        return false;
+    }
+    if (typeof uiPerformance !== 'undefined') uiPerformance.sample(sessionId, 'switch.prepare', performance.now() - switchStartedAt);
+    var restoredFromCache = false;
     var restoredRunningStream = false;\r
     var sessionHasActiveServerRun = !!(\r
         isSessionRunning(sessionId)\r
@@ -18782,7 +19011,9 @@ async function switchSession(sessionId, opts) {\r
             detail: { sessionId: sessionId, phase: 'loaded' },\r
         }));\r
         setSendButtonState();\r
-        maybeStartStreamPollForSession(sessionId, { skipInitialLoad: true });\r
+        maybeStartStreamPollForSession(sessionId, { skipInitialLoad: true });
+        if (typeof uiPerformance !== 'undefined') uiPerformance.sample(sessionId,
+            restoredRunningStream ? 'switch.live' : 'switch.cached', performance.now() - switchStartedAt);
         return;\r
     }\r
     const vs = getVisibleChatStream();\r
@@ -18834,8 +19065,9 @@ async function switchSession(sessionId, opts) {\r
         }));\r
         setSendButtonState();\r
         maybeStartStreamPollForSession(sessionId, { skipInitialLoad: true });\r
-        if (typeof refreshHumanInteractions === 'function') void refreshHumanInteractions(sessionId);\r
-        resolve(true);\r
+        if (typeof refreshHumanInteractions === 'function') void refreshHumanInteractions(sessionId);
+        if (typeof uiPerformance !== 'undefined') uiPerformance.sample(sessionId, 'switch.loaded', performance.now() - switchStartedAt);
+        resolve(true);
         }, 20);\r
     });\r
 }\r
@@ -18848,9 +19080,10 @@ async function createNewSession() {\r
     return createNewSessionQueue;\r
 }\r
 \r
-async function createNewSessionInner() {\r
-    try {\r
-        saveChatScrollForSession(currentSessionId);\r
+async function createNewSessionInner() {
+    try {
+        cancelSmoothStreamFollowForSessionSwitch();
+        saveChatScrollForSession(currentSessionId);
         stashInputDraft(currentSessionId);\r
         if (typeof stashSkillPickerDraft === 'function') stashSkillPickerDraft(currentSessionId);\r
         prepareStashLeaving(currentSessionId);\r
@@ -18890,7 +19123,7 @@ async function createNewSessionInner() {\r
         appendLogVisible('创建新会话失败', 'error-log');\r
     }\r
 }\r
-`,Qr=`const SSE_IDLE_TIMEOUT_MS = 120000;
+`,Gr=`const SSE_IDLE_TIMEOUT_MS = 120000;
 const STREAM_RECONNECT_MAX_ATTEMPTS = 10;
 const STREAM_RECONNECT_BASE_DELAY_MS = 500;
 const STREAM_RECONNECT_MAX_DELAY_MS = 15000;
@@ -22276,7 +22509,7 @@ window.addEventListener('scroll', positionFollowupQueuePanel, true);
     });
 })();
 initUiHoverTips(document);
-`,Gr=`newSessionBtn.addEventListener('click', async () => { await createNewSession(); });
+`,Kr=`newSessionBtn.addEventListener('click', async () => { await createNewSession(); });
 
 function initSidebarSash() {
     const side = document.getElementById('sidebar');
@@ -22717,8 +22950,8 @@ if (typeof globalThis !== 'undefined') {
     globalThis.toggleTodoPlanPanel = toggleTodoPlanPanel;
     globalThis.toggleTocPanel = toggleTocPanel;
 }
-`;globalThis.marked=N;const Kr="/assets/vendor/mermaid.min.js";let Ce=null;globalThis.loadMyAgentMermaid=function(){return globalThis.mermaid?Promise.resolve(globalThis.mermaid):(Ce||(Ce=new Promise(function(e,t){const r=document.createElement("script");r.src=Kr,r.async=!0,r.dataset.myagentMermaidVendor="true",r.onload=function(){if(!globalThis.mermaid){r.remove(),t(new Error("Mermaid vendor loaded without exposing its API"));return}e(globalThis.mermaid)},r.onerror=function(){r.remove(),t(new Error("Failed to load Mermaid vendor asset"))},document.head.appendChild(r)}).catch(function(e){throw Ce=null,e})),Ce)};let De=null;globalThis.loadMyAgentHtml2Canvas=function(){return De||(De=ut(()=>import("./html2canvas.esm-QH1iLAAe.js"),[]).then(function(e){return e.default||e})),De};const Yr=[fr,gr,hr,vr,Sr,br,yr,wr,xr,Ir,kr,Cr,Tr,Er,Ar,_r,Rr,Pr,Lr,Mr,Fr,Nr,Br,Or,qr,Hr,Dr,Ur,jr,$r,zr,Wr,Vr,Qr,Gr];Function(`"use strict";
-`+Yr.join(`
+`;globalThis.marked=N;const Yr="/assets/vendor/mermaid.min.js";let Ce=null;globalThis.loadMyAgentMermaid=function(){return globalThis.mermaid?Promise.resolve(globalThis.mermaid):(Ce||(Ce=new Promise(function(e,t){const r=document.createElement("script");r.src=Yr,r.async=!0,r.dataset.myagentMermaidVendor="true",r.onload=function(){if(!globalThis.mermaid){r.remove(),t(new Error("Mermaid vendor loaded without exposing its API"));return}e(globalThis.mermaid)},r.onerror=function(){r.remove(),t(new Error("Failed to load Mermaid vendor asset"))},document.head.appendChild(r)}).catch(function(e){throw Ce=null,e})),Ce)};let De=null;globalThis.loadMyAgentHtml2Canvas=function(){return De||(De=ut(()=>import("./html2canvas.esm-QH1iLAAe.js"),[]).then(function(e){return e.default||e})),De};const Xr=[fr,gr,hr,vr,Sr,br,yr,wr,xr,Ir,kr,Cr,Tr,Er,Ar,_r,Rr,Pr,Lr,Mr,Fr,Nr,Br,Or,qr,Hr,Dr,Ur,jr,$r,zr,Wr,Vr,Qr,Gr,Kr];Function(`"use strict";
+`+Xr.join(`
 
 `)+`
 //# sourceURL=myagent-ui.js`)();mr();typeof initUiHoverTips=="function"&&initUiHoverTips(document);
