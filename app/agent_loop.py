@@ -141,6 +141,7 @@ import execution_metrics
 from runtime_observability import capture_workspace_state, diff_workspace_states
 from agent_subagent_events import should_persist_ui_event
 from workflow_extensions import activate_bundled_workflow_callbacks, session_workflows
+from workspace_media_snapshots import snapshot_workspace_images
 
 
 LLM_FULL_CALL_TRACE = str(os.getenv("LLM_FULL_CALL_TRACE", "0")).strip().lower() in {
@@ -2264,7 +2265,20 @@ def _runtime_v2_commit_user_turn(
         raise
 
 
-def _runtime_v2_commit_assistant_final(state: State, content: str) -> bool:
+def _snapshot_assistant_ui_content(session_id: str, content: str) -> str:
+    try:
+        return snapshot_workspace_images(str(content or ""), WORK_DIR)
+    except Exception as exc:
+        logger.warning("Workspace image snapshot failed for %s: %s", session_id, exc)
+        return str(content or "")
+
+
+def _runtime_v2_commit_assistant_final(
+    state: State,
+    content: str,
+    *,
+    ui_content: Optional[str] = None,
+) -> bool:
     sid = str(state.get("session_id") or "").strip()
     if not sid or not _runtime_v2_is_primary():
         return False
@@ -2275,12 +2289,16 @@ def _runtime_v2_commit_assistant_final(state: State, content: str) -> bool:
         _runtime_v2_react_history_ops().commit_assistant_final(
             sid,
             str(content or ""),
+            ui_content=ui_content,
             operation_id=f"final:{run_id}" if run_id else "",
             run_id=run_id or None,
             model_payload={"metadata": {"is_final": True}},
         )
         side_effects = getattr(session_manager, "_apply_appended_ui_event_side_effects", None)
-        event = {"type": "final", "content": str(content or "")}
+        event = {
+            "type": "final",
+            "content": str(ui_content if ui_content is not None else content or ""),
+        }
         if callable(side_effects):
             side_effects(sid, event)
         else:
@@ -8708,8 +8726,16 @@ async def astream_events(
             )
             return
         runtime_committed = bool(ev.get("_runtime_v2_committed"))
-        if ev.get("type") == "final" and not runtime_committed:
-            runtime_committed = _runtime_v2_commit_assistant_final(state, str(ev.get("content") or ""))
+        if ev.get("type") == "final":
+            model_content = str(ev.get("content") or "")
+            ui_content = await asyncio.to_thread(
+                _snapshot_assistant_ui_content, session_id, model_content
+            )
+            ev["content"] = ui_content
+            if not runtime_committed:
+                runtime_committed = _runtime_v2_commit_assistant_final(
+                    state, model_content, ui_content=ui_content
+                )
         public_event = {k: v for k, v in ev.items() if k != "_runtime_v2_committed"}
         persist = should_persist_ui_event(ev) and not runtime_committed
         if persist and ev.get("type") != "tool_call":
@@ -9259,8 +9285,16 @@ async def astream_events_continuation(
             )
             return
         runtime_committed = bool(ev.get("_runtime_v2_committed"))
-        if ev.get("type") == "final" and not runtime_committed:
-            runtime_committed = _runtime_v2_commit_assistant_final(state, str(ev.get("content") or ""))
+        if ev.get("type") == "final":
+            model_content = str(ev.get("content") or "")
+            ui_content = await asyncio.to_thread(
+                _snapshot_assistant_ui_content, session_id, model_content
+            )
+            ev["content"] = ui_content
+            if not runtime_committed:
+                runtime_committed = _runtime_v2_commit_assistant_final(
+                    state, model_content, ui_content=ui_content
+                )
         public_event = {k: v for k, v in ev.items() if k != "_runtime_v2_committed"}
         persist = should_persist_ui_event(ev) and not runtime_committed
         if persist and ev.get("type") != "tool_call":

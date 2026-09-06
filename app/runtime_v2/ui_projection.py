@@ -1116,7 +1116,11 @@ class RuntimeUiProjection:
                 data["branch_source_runtime_seq"] = payload.get("branch_source_runtime_seq")
             return data
         if event.type in {"message_assistant_final", "assistant_final_committed"}:
-            data = {"type": "final", "content": payload.get("content") or "", "created_at": event.timestamp}
+            data = {
+                "type": "final",
+                "content": payload.get("ui_content") or payload.get("content") or "",
+                "created_at": event.timestamp,
+            }
             if payload.get("branch_source_session_id"):
                 data["branch_source_session_id"] = str(payload.get("branch_source_session_id"))
             if payload.get("branch_source_runtime_seq") is not None:

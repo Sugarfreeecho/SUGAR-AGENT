@@ -183,3 +183,30 @@ def test_workspace_image_metadata_honors_exif_orientation(tmp_path, monkeypatch)
     payload = json.loads(response.body)
     assert payload["images"][0]["width"] == 80
     assert payload["images"][0]["height"] == 120
+
+
+def test_workspace_image_overwrite_with_same_size_changes_version(tmp_path, monkeypatch):
+    import os
+    from PIL import Image
+    import webui
+
+    monkeypatch.setattr(webui, "WORK_DIR", tmp_path)
+    path = tmp_path / "preview.bmp"
+    Image.new("RGB", (32, 24), "red").save(path)
+    original = path.read_bytes()
+    original_stat = path.stat()
+    before = webui._workspace_image_metadata_item("preview.bmp")
+
+    Image.new("RGB", (32, 24), "blue").save(path)
+    os.utime(path, ns=(original_stat.st_atime_ns, original_stat.st_mtime_ns + 1_000_000_000))
+    after = webui._workspace_image_metadata_item("preview.bmp")
+    assert len(path.read_bytes()) == len(original)
+    assert path.read_bytes() != original
+    assert (before["width"], before["height"]) == (after["width"], after["height"])
+    assert before["version"] != after["version"]
+
+    response = asyncio.run(webui.workspace_media("preview.bmp"))
+    status, headers, body = asyncio.run(_render_response(response))
+    assert status == 200
+    assert headers["cache-control"] == "no-store"
+    assert body == path.read_bytes()

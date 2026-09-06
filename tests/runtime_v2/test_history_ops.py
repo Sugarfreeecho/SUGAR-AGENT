@@ -187,6 +187,36 @@ class RuntimeHistoryOpsTests(unittest.TestCase):
             self.assertEqual(RuntimeUiProjection(tmp).read_ui_events("s1")[0]["content"], "done")
             self.assertEqual(snapshot["model_messages"][0]["payload"]["content"], "done")
 
+    def test_atomic_final_keeps_model_content_separate_from_ui_media_snapshot(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ops = RuntimeHistoryOps(tmp)
+            ops.append_model_message(
+                "s1",
+                "assistant",
+                "![preview](preview.png)",
+                metadata={"is_assistant_response": True},
+            )
+            ops.commit_assistant_final(
+                "s1",
+                "![preview](preview.png)",
+                ui_content="![preview](<.sugaragent/history-media/hash.png>)",
+            )
+
+            ui = RuntimeUiProjection(tmp).read_ui_events("s1")
+            snapshot = ops.snapshots.read("s1")
+            self.assertEqual(
+                ui[0]["content"],
+                "![preview](<.sugaragent/history-media/hash.png>)",
+            )
+            self.assertEqual(
+                snapshot["messages"][0]["payload"]["content"],
+                "![preview](<.sugaragent/history-media/hash.png>)",
+            )
+            self.assertEqual(
+                snapshot["model_messages"][0]["payload"]["content"],
+                "![preview](preview.png)",
+            )
+
     def test_atomic_final_promotes_matching_model_response_without_duplicate(self):
         with tempfile.TemporaryDirectory() as tmp:
             ops = RuntimeHistoryOps(tmp)

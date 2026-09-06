@@ -28,7 +28,7 @@ class FakeElement {
     this.attributes = Object.create(null);
     this.dataset = Object.create(null);
     this.className = '';
-    this.classList = { add: (...names) => {
+    this.classList = { contains: (name) => this.className.split(/\s+/).includes(name), add: (...names) => {
       const tokens = new Set(this.className.split(/\s+/).filter(Boolean));
       names.forEach((name) => tokens.add(name));
       this.className = Array.from(tokens).join(' ');
@@ -38,6 +38,7 @@ class FakeElement {
     this.textContent = '';
     this.hidden = false;
     this.listeners = Object.create(null);
+    this.srcWrites = 0;
     this.style = {
       aspectRatio: '',
       values: Object.create(null),
@@ -51,6 +52,7 @@ class FakeElement {
     return child;
   }
   setAttribute(name, value) {
+    if (name === 'src') this.srcWrites += 1;
     this.attributes[name] = String(value);
     if (name.startsWith('data-')) {
       const key = name.slice(5).replace(/-([a-z])/g, (_, letter) => letter.toUpperCase());
@@ -62,6 +64,8 @@ class FakeElement {
       ? this.attributes[name]
       : '';
   }
+  set src(value) { this.setAttribute('src', value); }
+  get src() { return this.getAttribute('src'); }
   addEventListener(name, handler) {
     this.listeners[name] = handler;
   }
@@ -205,6 +209,7 @@ async function main() {
   context.fetch = async (url, options) => {
     assert.equal(url, '/api/workspace-image-metadata');
     assert.equal(options.method, 'POST');
+    assert.equal(options.cache, 'no-store');
     assert.deepEqual(JSON.parse(options.body), { rels: ['media/sized.png'] });
     return {
       ok: true,
@@ -233,6 +238,55 @@ async function main() {
   });
   assert.match(cachedSizedImage, /width="800" height="600"/);
   assert.match(cachedSizedImage, /data-workspace-image-sized="1"/);
+  assert.match(cachedSizedImage, /&amp;v=v1/);
+  assert.equal(metadataImage.src, '/api/workspace-media?rel=media%2Fsized.png&v=v1');
+
+  // Reusing a filename and dimensions must still refresh both inline and full-size URLs.
+  const fullSizeLink = new FakeElement('a');
+  fullSizeLink.className = 'msg-workspace-image-link';
+  fullSizeLink.appendChild(metadataImage);
+  const imageRoot = { querySelectorAll() { return [metadataImage]; } };
+  const requests = [];
+  context.fetch = (_url, options) => new Promise((resolve) => requests.push({ options, resolve }));
+  const older = context.prepareWorkspaceImageLayout(imageRoot);
+  const newer = context.prepareWorkspaceImageLayout(imageRoot);
+  const respond = (request, version) => request.resolve({
+    ok: true,
+    json: async () => ({ ok: true, images: [{ rel: 'media/sized.png', width: 800, height: 600, version }] }),
+  });
+  respond(requests[1], 'v3');
+  await newer;
+  assert.equal(metadataImage.src, '/api/workspace-media?rel=media%2Fsized.png&v=v3');
+  assert.equal(fullSizeLink.href, metadataImage.src);
+  const writesAfterNewVersion = metadataImage.srcWrites;
+  respond(requests[0], 'v2');
+  await older;
+  assert.equal(metadataImage.srcWrites, writesAfterNewVersion, 'late metadata must not reload or roll back an image');
+  assert.equal(context.workspaceMediaUrl('media/sized.png'), metadataImage.src);
+
+  // Live Markdown images request fresh metadata, coalesced across new elements.
+  requests.length = 0;
+  const liveImages = [new FakeElement('img'), new FakeElement('img')];
+  liveImages.forEach((img) => {
+    const link = new FakeElement('a');
+    link.className = 'msg-workspace-image-link';
+    link.appendChild(img);
+    context.wrapWorkspaceImageElement(img, 'media/sized.png');
+  });
+  await Promise.resolve();
+  assert.equal(requests.length, 1);
+  assert.deepEqual(JSON.parse(requests[0].options.body), { rels: ['media/sized.png'] });
+  respond(requests[0], 'v4');
+  await new Promise((resolve) => setImmediate(resolve));
+  liveImages.forEach((img) => {
+    assert.equal(img.src, '/api/workspace-media?rel=media%2Fsized.png&v=v4');
+    assert.equal(img.parentElement.href, img.src);
+  });
+
+  context.fetch = async () => { throw new Error('offline'); };
+  const usableSrc = liveImages[0].src;
+  await context.prepareWorkspaceImageLayout({ querySelectorAll() { return liveImages; } });
+  assert.equal(liveImages[0].src, usableSrc, 'metadata failure preserves the preview');
 
   const audioLink = marked.parse('[试听](media/demo.mp3)');
   assert.match(audioLink, /data-workspace-markdown-link="1"/);

@@ -611,12 +611,15 @@ class RuntimeProjector:
         plugins[plugin_id] = current
 
     def _append_message(self, snapshot: dict, event: RuntimeEvent, role: str) -> None:
+        payload = dict(event.payload or {})
+        if event.type == "assistant_final_committed" and "ui_content" in payload:
+            payload["content"] = payload.get("ui_content") or ""
         snapshot["messages"].append({
             "seq": event.seq,
             "timestamp": event.timestamp,
             "role": role,
             "run_id": event.run_id,
-            "payload": dict(event.payload or {}),
+            "payload": payload,
         })
 
     def _append_or_update_assistant(self, snapshot: dict, event: RuntimeEvent) -> None:

@@ -8903,10 +8903,25 @@ function workspaceMediaKind(path) {
 }
 
 function workspaceMediaUrl(rel) {
-    return '/api/workspace-media?rel=' + encodeURIComponent(String(rel || ''));
+    var url = '/api/workspace-media?rel=' + encodeURIComponent(String(rel || ''));
+    var metadata = workspaceImageMetadataCache.get(String(rel || ''));
+    return metadata && metadata.version ? url + '&v=' + encodeURIComponent(metadata.version) : url;
 }
 
 var workspaceImageMetadataCache = new Map();
+var workspaceImageMetadataRequestId = 0;
+var pendingWorkspaceImages = new Set();
+
+function queueWorkspaceImageRefresh(img) {
+    pendingWorkspaceImages.add(img);
+    if (pendingWorkspaceImages.size !== 1) return;
+    // Coalesce images from messages rendered in the same turn, including history.
+    Promise.resolve().then(function () {
+        var images = Array.from(pendingWorkspaceImages);
+        pendingWorkspaceImages.clear();
+        return prepareWorkspaceImages(images);
+    }).catch(function () { /* Keep the original image usable if metadata is unavailable. */ });
+}
 
 function normalizeWorkspaceImageMetadata(raw) {
     var width = Math.round(Number(raw && raw.width));
@@ -8931,6 +8946,15 @@ function applyWorkspaceImageMetadata(img, metadata) {
         img.style.setProperty('--msg-image-height-bound-width', heightBoundWidth + 'vh');
         img.style.aspectRatio = metadata.width + ' / ' + metadata.height;
     }
+    var rel = String(img.getAttribute('data-workspace-open') || '');
+    if (rel && metadata.version) {
+        var url = '/api/workspace-media?rel=' + encodeURIComponent(rel)
+            + '&v=' + encodeURIComponent(metadata.version);
+        // A changed URL also invalidates an already decoded, same-path image.
+        if (img.getAttribute('src') !== url) img.setAttribute('src', url);
+        var link = img.parentElement;
+        if (link && link.classList.contains('msg-workspace-image-link')) link.href = url;
+    }
     return true;
 }
 
@@ -8947,10 +8971,14 @@ function workspaceImageMetadataHtmlAttrs(rel) {
 
 function prepareWorkspaceImageLayout(root) {
     if (!root) return Promise.resolve(false);
-    var images = Array.prototype.slice.call(
+    return prepareWorkspaceImages(Array.prototype.slice.call(
         root.querySelectorAll('img.msg-workspace-image[data-workspace-open]')
-    );
+    ));
+}
+
+function prepareWorkspaceImages(images) {
     if (!images.length || typeof fetch !== 'function') return Promise.resolve(true);
+    var requestId = ++workspaceImageMetadataRequestId;
     var imagesByRel = new Map();
     images.forEach(function (img) {
         var rel = String(img.getAttribute('data-workspace-open') || '').trim();
@@ -8969,6 +8997,7 @@ function prepareWorkspaceImageLayout(root) {
     for (var offset = 0; offset < rels.length; offset += 128) {
         var requestOptions = {
             method: 'POST',
+            cache: 'no-store',
             credentials: 'same-origin',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ rels: rels.slice(offset, offset + 128) }),
@@ -8987,7 +9016,14 @@ function prepareWorkspaceImageLayout(root) {
                 var rel = String(entry && entry.rel || '');
                 var metadata = normalizeWorkspaceImageMetadata(entry);
                 if (!rel || !metadata) return;
-                workspaceImageMetadataCache.set(rel, metadata);
+                var cached = workspaceImageMetadataCache.get(rel);
+                // An older request can finish after a newer render's request.
+                if (cached && cached.requestId > requestId) {
+                    metadata = cached;
+                } else {
+                    metadata.requestId = requestId;
+                    workspaceImageMetadataCache.set(rel, metadata);
+                }
                 (imagesByRel.get(rel) || []).forEach(function (img) {
                     if (applyWorkspaceImageMetadata(img, metadata)) applied = true;
                 });
@@ -9077,6 +9113,7 @@ function wrapWorkspaceImageElement(img, rel) {
     img.decoding = 'async';
     img.src = workspaceMediaUrl(rel);
     img.setAttribute('data-workspace-open', rel);
+    queueWorkspaceImageRefresh(img);
     img.setAttribute('data-ui-tip', '点击查看图片');
     bindUiHoverTip(img);
     var parent = img.parentElement;

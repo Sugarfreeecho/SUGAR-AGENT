@@ -669,6 +669,7 @@ class RuntimeHistoryOps:
         session_id: str,
         content: str,
         *,
+        ui_content: Optional[str] = None,
         operation_id: str = "",
         run_id: Optional[str] = None,
         model_payload: Optional[dict] = None,
@@ -681,7 +682,11 @@ class RuntimeHistoryOps:
             if op_id and op_id in set(snapshot.get("operation_ids") or []):
                 return None
             payload = dict(model_payload or {})
-            payload.update({"role": "assistant", "content": str(content or "")})
+            payload.update({
+                "role": "assistant",
+                "content": str(content or ""),
+                "ui_content": str(ui_content if ui_content is not None else content or ""),
+            })
             rows = list(snapshot.get("raw_model_messages") or [])
             normalized_content = str(content or "").strip()
             matching = []
