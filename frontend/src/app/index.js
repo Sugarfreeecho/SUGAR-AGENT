@@ -4,6 +4,7 @@ import i18nSource from './modules/i18n.js?raw';
 import settingsSource from './modules/settings.js?raw';
 import inputActionsSource from './modules/input-actions.js?raw';
 import sharedStateAndDialogsSource from './modules/shared-state-and-dialogs.js?raw';
+import uiPerformanceSource from './modules/ui-performance.js?raw';
 import sessionStoreSource from './state/session-store.js?raw';
 import sessionSelectorsSource from './state/session-selectors.js?raw';
 import sessionActionsSource from './state/session-actions.js?raw';
@@ -84,6 +85,7 @@ const uiSources = [
     settingsSource,
     inputActionsSource,
     sharedStateAndDialogsSource,
+    uiPerformanceSource,
     sessionStoreSource,
     sessionSelectorsSource,
     sessionActionsSource,
